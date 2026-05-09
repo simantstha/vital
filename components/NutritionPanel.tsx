@@ -2,20 +2,19 @@
 
 import { useState } from 'react';
 import type { NutritionData, Meal } from '@/lib/types';
-import { TARGET_KM } from '@/lib/data';
 
 interface NutritionPanelProps {
   nutrition: NutritionData;
   meals: Meal[];
   relevantIdx: number;
-  totalKm: number;
+  generatedAt?: string | null;
 }
 
 export default function NutritionPanel({
   nutrition,
   meals,
   relevantIdx,
-  totalKm,
+  generatedAt,
 }: NutritionPanelProps) {
   const [focusedIdx, setFocusedIdx] = useState<number | null>(null);
   const shown = focusedIdx != null ? meals[focusedIdx] : meals[relevantIdx];
@@ -31,7 +30,11 @@ export default function NutritionPanel({
         <div className="panel-title">
           Nutrition &amp; Training <span className="src claude">CLAUDE</span>
         </div>
-        <div className="panel-meta">Updated 6:42 AM</div>
+        <div className="panel-meta">
+          Updated {generatedAt
+            ? new Date(generatedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+            : '6:42 AM'}
+        </div>
       </div>
 
       <div className="quote-card">
@@ -144,42 +147,6 @@ export default function NutritionPanel({
         ))}
       </div>
 
-      <div className="section-title">Marathon Block · Week 9 of 16</div>
-      <div className="training-grid">
-        <div className="train">
-          <div className="k">Week Target</div>
-          <div className="v">
-            64<span className="u">km</span>
-          </div>
-          <div className="s">Build phase · +8% vs last</div>
-          <div className="progress">
-            <span style={{ width: '100%' }} />
-          </div>
-        </div>
-        <div className="train">
-          <div className="k">Completed</div>
-          <div className="v">
-            {totalKm.toFixed(1)}
-            <span className="u">km</span>
-          </div>
-          <div className="s">{Math.round((totalKm / TARGET_KM) * 100)}% of target</div>
-          <div className="progress">
-            <span style={{ width: (totalKm / TARGET_KM) * 100 + '%' }} />
-          </div>
-        </div>
-        <div className="train">
-          <div className="k">Longest Run</div>
-          <div className="v">
-            22.4<span className="u">km</span>
-          </div>
-          <div className="s">Sun · Pollok Long</div>
-        </div>
-        <div className="train">
-          <div className="k">Race Day</div>
-          <div className="v">Oct 4</div>
-          <div className="s">149 days · Inverness</div>
-        </div>
-      </div>
     </div>
   );
 }

@@ -116,10 +116,10 @@ body {
   z-index: 2;
   height: 100vh;
   width: 100vw;
-  padding: 22px 32px 22px;
+  padding: 14px 24px 14px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 10px;
   overflow: hidden;
 }
 
@@ -147,7 +147,7 @@ body {
 
 .brand {
   font-weight: 900;
-  font-size: 38px;
+  font-size: 28px;
   letter-spacing: -0.04em;
   background: linear-gradient(120deg, var(--c3) 0%, var(--c1) 60%, var(--c2) 100%);
   -webkit-background-clip: text;
@@ -180,8 +180,8 @@ body {
 .countdown-pill {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
-  padding: 9px 16px;
+  gap: 8px;
+  padding: 6px 13px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -207,7 +207,7 @@ body {
 
 .clock {
   font-weight: 200;
-  font-size: 56px;
+  font-size: 40px;
   letter-spacing: -0.04em;
   line-height: 1;
   font-variant-numeric: tabular-nums;
@@ -292,7 +292,7 @@ body {
 
 /* ─── Hero / Morning Brief ─── */
 .hero {
-  padding: 20px 28px 20px;
+  padding: 13px 22px 13px;
   overflow: hidden;
   flex-shrink: 0;
   background:
@@ -330,8 +330,8 @@ body {
 .hero-head {
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin-bottom: 14px;
+  gap: 10px;
+  margin-bottom: 8px;
 }
 
 .live-dot {
@@ -376,7 +376,7 @@ body {
 }
 
 .hero-body {
-  font-size: 19px;
+  font-size: 15px;
   font-weight: 300;
   line-height: 1.45;
   color: rgba(255, 255, 255, 0.92);
@@ -390,16 +390,16 @@ body {
 
 .hero-chips {
   display: flex;
-  gap: 10px;
-  margin-top: 16px;
+  gap: 8px;
+  margin-top: 10px;
   flex-wrap: wrap;
 }
 
 .chip {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 16px;
+  gap: 8px;
+  padding: 7px 13px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.07);
@@ -422,12 +422,12 @@ body {
 .metrics {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
-  gap: 12px;
+  gap: 8px;
   flex-shrink: 0;
 }
 
 .metric {
-  padding: 18px 20px 14px;
+  padding: 12px 14px 10px;
   overflow: hidden;
 }
 
@@ -457,7 +457,7 @@ body {
 .metric-value {
   position: relative;
   font-weight: 900;
-  font-size: 56px;
+  font-size: 42px;
   line-height: 1;
   letter-spacing: -0.05em;
   color: #fff;
@@ -469,7 +469,7 @@ body {
 }
 
 .metric-value .unit {
-  font-size: 22px;
+  font-size: 16px;
   font-weight: 600;
   color: rgba(255, 255, 255, 0.4);
   letter-spacing: -0.02em;
@@ -523,13 +523,13 @@ body {
 .lower {
   display: grid;
   grid-template-columns: 1.15fr 1fr;
-  gap: 14px;
+  gap: 10px;
   flex: 1 1 0;
   min-height: 0;
 }
 
 .panel {
-  padding: 18px 22px;
+  padding: 14px 18px;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -607,7 +607,7 @@ body {
 }
 
 .mini .v {
-  font-size: 24px;
+  font-size: 18px;
   font-weight: 800;
   color: #fff;
   letter-spacing: -0.03em;
@@ -631,12 +631,12 @@ body {
 }
 
 .section-title {
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.2em;
   text-transform: uppercase;
   color: rgba(255, 255, 255, 0.42);
-  margin: 4px 0 10px;
+  margin: 3px 0 4px;
 }
 
 .routes {
@@ -789,22 +789,22 @@ body {
 
 
 .quote-card {
-  padding: 14px 16px;
+  padding: 8px 12px;
   border-radius: 14px;
   background: linear-gradient(180deg, rgba(217, 119, 87, 0.08), rgba(217, 119, 87, 0.02));
   border: 1px solid rgba(217, 119, 87, 0.16);
   display: flex;
-  gap: 14px;
-  margin-bottom: 14px;
+  gap: 10px;
+  margin-bottom: 8px;
   flex-shrink: 0;
 }
 
 .quote-mark {
-  font-size: 36px;
+  font-size: 28px;
   line-height: 0.5;
   color: #d97757;
   font-family: Georgia, serif;
-  padding-top: 12px;
+  padding-top: 8px;
   flex-shrink: 0;
 }
 
@@ -824,12 +824,12 @@ body {
   letter-spacing: 0.18em;
   text-transform: uppercase;
   color: #d97757;
-  margin-top: 8px;
+  margin-top: 4px;
 }
 
 .meal-feature {
   position: relative;
-  padding: 12px 16px 12px;
+  padding: 8px 12px;
   border-radius: 14px;
   background:
     radial-gradient(120% 200% at 0% 0%, rgba(var(--bg-tint), 0.16), transparent 55%),
@@ -838,7 +838,7 @@ body {
   box-shadow:
     0 0 0 1px rgba(var(--glow), 0.10) inset,
     0 18px 50px -25px rgba(var(--glow), 0.45);
-  margin-bottom: 12px;
+  margin-bottom: 8px;
   overflow: hidden;
   flex-shrink: 0;
 }
@@ -909,7 +909,7 @@ body {
 }
 
 .feat-kcal {
-  font-size: 30px;
+  font-size: 22px;
   font-weight: 900;
   letter-spacing: -0.04em;
   color: #fff;
@@ -944,14 +944,14 @@ body {
 }
 
 .feat-why {
-  font-size: 12px;
-  line-height: 1.45;
+  font-size: 11px;
+  line-height: 1.4;
   color: rgba(255, 255, 255, 0.65);
   font-weight: 400;
   text-wrap: pretty;
   padding-left: 10px;
   border-left: 2px solid rgba(var(--glow), 0.35);
-  margin-bottom: 8px;
+  margin-bottom: 6px;
 }
 
 .feat-why b  { color: #fff; font-weight: 600; }
@@ -1003,14 +1003,14 @@ body {
 .meal-strip {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 6px;
-  margin-bottom: 10px;
+  gap: 5px;
+  margin-bottom: 6px;
   flex-shrink: 0;
 }
 
 .strip-cell {
   position: relative;
-  padding: 6px 10px 8px;
+  padding: 4px 8px 6px;
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.02);
   border: 1px solid rgba(255, 255, 255, 0.04);
@@ -1102,14 +1102,14 @@ body {
 .macros {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
-  margin-bottom: 10px;
+  gap: 5px;
+  margin-bottom: 4px;
   flex-shrink: 0;
 }
 
 .macro {
-  padding: 10px 12px;
-  border-radius: 12px;
+  padding: 5px 8px;
+  border-radius: 10px;
   background: rgba(255, 255, 255, 0.025);
   border: 1px solid rgba(255, 255, 255, 0.05);
   position: relative;
@@ -1124,12 +1124,12 @@ body {
 }
 
 .macro .v {
-  font-size: 20px;
+  font-size: 16px;
   font-weight: 800;
   color: #fff;
   letter-spacing: -0.03em;
   line-height: 1;
-  margin-top: 3px;
+  margin-top: 2px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -1141,9 +1141,9 @@ body {
 }
 
 .macro .target {
-  font-size: 11px;
+  font-size: 10px;
   color: rgba(255, 255, 255, 0.45);
-  margin-top: 4px;
+  margin-top: 2px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -1188,19 +1188,19 @@ body {
 .training-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 6px;
-  margin-top: auto;
+  gap: 5px;
+  margin-top: 4px;
   flex-shrink: 0;
 }
 
 .train {
-  padding: 8px 12px 10px;
-  border-radius: 14px;
+  padding: 6px 10px 8px;
+  border-radius: 10px;
   background: rgba(255, 255, 255, 0.025);
   border: 1px solid rgba(255, 255, 255, 0.05);
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
 }
 
 .train .k {
@@ -1212,7 +1212,7 @@ body {
 }
 
 .train .v {
-  font-size: 18px;
+  font-size: 15px;
   font-weight: 800;
   color: #fff;
   letter-spacing: -0.03em;

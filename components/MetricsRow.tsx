@@ -40,7 +40,7 @@ export default function MetricsRow({ metrics }: MetricsRowProps) {
       prog: metrics.sleep.v as number,
     },
     {
-      label: "Yesterday's Strain",
+      label: metrics.strain.sub?.startsWith('Today') ? "Today's Strain" : "Yesterday's Strain",
       src: 'Whoop',
       value: metrics.strain.v,
       sub: metrics.strain.sub,

@@ -1,15 +1,17 @@
 'use client';
 
 import type { MileageDay, Route } from '@/lib/types';
-import { TARGET_KM } from '@/lib/data';
+import type { LastRun } from '@/lib/strava';
+import { TARGET_MI } from '@/lib/data';
 
 interface StravaPanelProps {
   mileage: MileageDay[];
   routes: Route[];
-  totalKm: number;
+  totalMi: number;
+  lastRun: LastRun | null;
 }
 
-export default function StravaPanel({ mileage, routes, totalKm }: StravaPanelProps) {
+export default function StravaPanel({ mileage, routes, totalMi, lastRun }: StravaPanelProps) {
 
   return (
     <div className="glass panel">
@@ -24,23 +26,23 @@ export default function StravaPanel({ mileage, routes, totalKm }: StravaPanelPro
         <div className="mini">
           <div className="k">Last Run · Distance</div>
           <div className="v">
-            8.4<span className="u">km</span>
+            {lastRun?.distanceMi ?? '–'}<span className="u">mi</span>
           </div>
-          <div className="s">Kelvingrove · Wed PM</div>
+          <div className="s">{lastRun ? `${lastRun.name} · ${lastRun.dayTime}` : '–'}</div>
         </div>
         <div className="mini">
           <div className="k">Pace</div>
           <div className="v">
-            4:58<span className="u">/km</span>
+            {lastRun?.pace ?? '–'}<span className="u">/mi</span>
           </div>
-          <div className="s">−12s vs avg</div>
+          <div className="s">avg pace</div>
         </div>
         <div className="mini">
           <div className="k">Avg HR</div>
           <div className="v">
-            154<span className="u">bpm</span>
+            {lastRun?.hr ?? '–'}<span className="u">bpm</span>
           </div>
-          <div className="s">Zone 3 · 78%</div>
+          <div className="s">{lastRun?.zone ?? '–'}</div>
         </div>
       </div>
 
@@ -61,19 +63,19 @@ export default function StravaPanel({ mileage, routes, totalKm }: StravaPanelPro
 
       <div className="mileage">
         <div className="mileage-head">
-          <span className="t">Weekly Mileage</span>
+          <span className="t">Weekly Miles</span>
           <span className="total">
-            {totalKm.toFixed(1)} <span>/ {TARGET_KM} km target</span>
+            {totalMi.toFixed(1)} <span>/ {TARGET_MI} mi target</span>
           </span>
         </div>
         <div className="bars">
           {mileage.map((b, i) => {
-            const h = b.km > 0 ? Math.max(8, (b.km / 18) * 100) : 6;
+            const h = b.mi > 0 ? Math.max(8, (b.mi / 11) * 100) : 6;
             return (
               <div key={i} className={`bar${b.today ? ' is-today' : ''}`}>
                 <div className="col">
                   <div
-                    className={`fill${b.km === 0 ? ' empty' : b.today ? ' today' : ''}`}
+                    className={`fill${b.mi === 0 ? ' empty' : b.today ? ' today' : ''}`}
                     style={{ height: h + '%' }}
                   />
                 </div>

@@ -1,7 +1,9 @@
 'use client';
 
 import { useState, useEffect, useMemo } from 'react';
-import type { RecoveryState } from '@/lib/types';
+import type { RecoveryState, MetricsData, DailyBrief } from '@/lib/types';
+import type { StravaData } from '@/lib/strava';
+import { parseMarkup } from '@/lib/markup';
 import { STATES, BRIEFS, NUTRITION, METRICS, MEALS, MEAL_WINDOWS, MILEAGE, ROUTES } from '@/lib/data';
 import AmbientOrbs from '@/components/AmbientOrbs';
 import StateToggle from '@/components/StateToggle';
@@ -21,28 +23,57 @@ function getRelevantMealIndex(hours: number): number {
 
 export default function DashboardPage() {
   const [state, setState] = useState<RecoveryState>('green');
+  const [whoopMetrics, setWhoopMetrics] = useState<MetricsData | null>(null);
+  const [stravaData, setStravaData] = useState<StravaData | null>(null);
+  const [dailyBrief, setDailyBrief] = useState<DailyBrief | null>(null);
+
+  useEffect(() => {
+    fetch('/api/whoop')
+      .then(r => r.json())
+      .then(({ metrics, recoveryScore }: { metrics: MetricsData; recoveryScore: number }) => {
+        setWhoopMetrics(metrics);
+        if (recoveryScore >= 67) setState('green');
+        else if (recoveryScore >= 34) setState('amber');
+        else setState('red');
+      })
+      .catch(() => {}); // keep mock data on error / missing env vars
+
+    fetch('/api/strava')
+      .then(r => r.json())
+      .then((data: StravaData & { error?: string }) => { if (!data.error) setStravaData(data); })
+      .catch(() => {});
+
+    fetch('/api/brief')
+      .then(r => r.json())
+      .then((data: DailyBrief) => { if (!('error' in data)) setDailyBrief(data); })
+      .catch(() => {});
+  }, []);
+
   const cfg = STATES[state];
   const brief = BRIEFS[state];
-  const metrics = METRICS[state];
+  const metrics = whoopMetrics ?? METRICS[state];
   const nutrition = NUTRITION[state];
 
   const now = useClock();
   const hours = now.getHours() + now.getMinutes() / 60;
   const relevantIdx = getRelevantMealIndex(hours);
 
-  const meals = useMemo(
-    () =>
-      MEALS[state].map((meal, i) => ({
-        ...meal,
-        status: (i < relevantIdx ? 'logged' : i === relevantIdx ? 'active' : 'upcoming') as
-          | 'logged'
-          | 'active'
-          | 'upcoming',
-      })),
-    [state, relevantIdx]
-  );
+  const meals = useMemo(() => {
+    const source = dailyBrief
+      ? dailyBrief.meals.map(m => ({ ...m, why: parseMarkup(m.why) }))
+      : MEALS[state];
+    return source.map((meal, i) => ({
+      ...meal,
+      status: (i < relevantIdx ? 'logged' : i === relevantIdx ? 'active' : 'upcoming') as
+        | 'logged'
+        | 'active'
+        | 'upcoming',
+    }));
+  }, [state, relevantIdx, dailyBrief]);
 
-  const totalKm = MILEAGE.reduce((a, b) => a + b.km, 0);
+  const mileage = stravaData?.mileage ?? MILEAGE;
+  const routes  = stravaData?.routes  ?? ROUTES;
+  const totalMi = stravaData?.totalMi ?? MILEAGE.reduce((a, b) => a + b.mi, 0);
 
   // Apply CSS variables on state change
   useEffect(() => {
@@ -60,15 +91,15 @@ export default function DashboardPage() {
       <StateToggle state={state} onStateChange={setState} />
       <div className="stage">
         <TopBar stateLabel={cfg.label} now={now} />
-        <MorningBrief brief={brief} />
+        <MorningBrief brief={brief} claudeBrief={dailyBrief} />
         <MetricsRow metrics={metrics} />
         <div className="lower">
-          <StravaPanel mileage={MILEAGE} routes={ROUTES} totalKm={totalKm} />
+          <StravaPanel mileage={mileage} routes={routes} totalMi={totalMi} lastRun={stravaData?.lastRun ?? null} />
           <NutritionPanel
             nutrition={nutrition}
             meals={meals}
             relevantIdx={relevantIdx}
-            totalKm={totalKm}
+            generatedAt={dailyBrief?.generatedAt ?? null}
           />
         </div>
       </div>

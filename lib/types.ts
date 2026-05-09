@@ -72,7 +72,7 @@ export interface Meal {
 
 export interface MileageDay {
   d: string;
-  km: number;
+  mi: number;
   today?: boolean;
 }
 
@@ -82,4 +82,24 @@ export interface Route {
   e: string;
   p: string;
   count: number;
+}
+
+export interface DailyBriefMeal {
+  k: string;
+  t: string;
+  h: number;
+  kcal: number;
+  c: number;
+  p: number;
+  f: number;
+  items: string;
+  why: string;
+}
+
+export interface DailyBrief {
+  date: string;
+  generatedAt: string;
+  body: string;
+  chips: Array<{ k: string; v: string }>;
+  meals: DailyBriefMeal[];
 }

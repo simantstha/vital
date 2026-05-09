@@ -194,7 +194,7 @@ export const MEALS: Record<string, Meal[]> = {
   ],
 };
 
-export const TARGET_KM = 64;
+export const TARGET_MI = 40;
 
 export const MEAL_WINDOWS = [
   { start: 0, end: 11 },
@@ -204,18 +204,18 @@ export const MEAL_WINDOWS = [
 ];
 
 export const MILEAGE: MileageDay[] = [
-  { d: 'M', km: 12.4 },
-  { d: 'T', km: 8.0 },
-  { d: 'W', km: 16.2 },
-  { d: 'Th', km: 6.4, today: true },
-  { d: 'F', km: 0 },
-  { d: 'S', km: 0 },
-  { d: 'S', km: 0 },
+  { d: 'M', mi: 7.7 },
+  { d: 'T', mi: 5.0 },
+  { d: 'W', mi: 10.1 },
+  { d: 'Th', mi: 4.0, today: true },
+  { d: 'F', mi: 0 },
+  { d: 'S', mi: 0 },
+  { d: 'S', mi: 0 },
 ];
 
 export const ROUTES: Route[] = [
-  { name: 'Kelvingrove Loop', d: '8.4 km', e: '54m', p: '5:02 / km', count: 47 },
-  { name: 'Pollok Park · Long', d: '14.2 km', e: '128m', p: '5:18 / km', count: 22 },
-  { name: 'Clyde Tow Path', d: '10.0 km', e: '12m', p: '4:48 / km', count: 31 },
-  { name: 'Cathkin Braes', d: '11.6 km', e: '212m', p: '5:34 / km', count: 9 },
+  { name: 'Kelvingrove Loop', d: '5.2 mi', e: '177ft', p: '8:06 / mi', count: 47 },
+  { name: 'Pollok Park · Long', d: '8.8 mi', e: '420ft', p: '8:32 / mi', count: 22 },
+  { name: 'Clyde Tow Path', d: '6.2 mi', e: '39ft', p: '7:43 / mi', count: 31 },
+  { name: 'Cathkin Braes', d: '7.2 mi', e: '695ft', p: '8:58 / mi', count: 9 },
 ];
