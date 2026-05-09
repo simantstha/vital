@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import type { NutritionData, Meal } from '@/lib/types';
+import { TARGET_KM } from '@/lib/data';
 
 interface NutritionPanelProps {
   nutrition: NutritionData;
@@ -23,7 +24,6 @@ export default function NutritionPanel({
     .filter((x) => x.status === 'logged')
     .reduce((a, b) => a + b.kcal, 0);
   const totalKcal = meals.reduce((a, b) => a + b.kcal, 0);
-  const targetKm = 64;
 
   return (
     <div className="glass panel">
@@ -42,10 +42,7 @@ export default function NutritionPanel({
         </div>
       </div>
 
-      <div
-        className="section-title"
-        style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}
-      >
+      <div className="section-title section-title-row">
         <span>
           {focusedIdx != null && focusedIdx !== relevantIdx
             ? 'Coming up'
@@ -53,17 +50,9 @@ export default function NutritionPanel({
             ? 'Logged'
             : 'Up next'}
         </span>
-        <span
-          style={{
-            color: 'rgba(255,255,255,0.55)',
-            fontWeight: 600,
-            letterSpacing: '0.04em',
-            textTransform: 'none',
-            fontSize: 11,
-          }}
-        >
-          <span style={{ color: '#fff', fontWeight: 700 }}>{consumedKcal.toLocaleString()}</span>
-          <span style={{ opacity: 0.5 }}> / {totalKcal.toLocaleString()} kcal today</span>
+        <span className="kcal-summary">
+          <span className="kcal-consumed">{consumedKcal.toLocaleString()}</span>
+          <span className="kcal-total"> / {totalKcal.toLocaleString()} kcal today</span>
         </span>
       </div>
 
@@ -114,7 +103,7 @@ export default function NutritionPanel({
       <div className="meal-strip">
         {meals.map((meal, i) => (
           <div
-            key={i}
+            key={meal.k}
             className={`strip-cell ${meal.status}${focusedIdx === i ? ' focused' : ''}`}
             onClick={() => setFocusedIdx(focusedIdx === i ? null : i)}
           >
@@ -173,9 +162,9 @@ export default function NutritionPanel({
             {totalKm.toFixed(1)}
             <span className="u">km</span>
           </div>
-          <div className="s">{Math.round((totalKm / targetKm) * 100)}% of target</div>
+          <div className="s">{Math.round((totalKm / TARGET_KM) * 100)}% of target</div>
           <div className="progress">
-            <span style={{ width: (totalKm / targetKm) * 100 + '%' }} />
+            <span style={{ width: (totalKm / TARGET_KM) * 100 + '%' }} />
           </div>
         </div>
         <div className="train">

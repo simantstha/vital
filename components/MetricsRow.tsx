@@ -50,8 +50,8 @@ export default function MetricsRow({ metrics }: MetricsRowProps) {
 
   return (
     <div className="metrics">
-      {cards.map((card, i) => (
-        <div key={i} className={`glass metric${card.isRecovery ? ' metric-recovery' : ''}`}>
+      {cards.map((card) => (
+        <div key={card.label} className={`glass metric${card.isRecovery ? ' metric-recovery' : ''}`}>
           <div className="metric-glow" />
           <div className="metric-head">
             <div className="metric-label">{card.label}</div>

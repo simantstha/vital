@@ -764,6 +764,30 @@ body {
 }
 
 /* ─── Nutrition panel ─── */
+.section-title-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.kcal-summary {
+  color: rgba(255, 255, 255, 0.55);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: none;
+  font-size: 11px;
+}
+
+.kcal-summary .kcal-consumed {
+  color: #fff;
+  font-weight: 700;
+}
+
+.kcal-summary .kcal-total {
+  opacity: 0.5;
+}
+
+
 .quote-card {
   padding: 14px 16px;
   border-radius: 14px;

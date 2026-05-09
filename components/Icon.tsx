@@ -1,5 +1,3 @@
-'use client';
-
 interface IconProps {
   name: 'bolt' | 'moon' | 'flame';
   className?: string;

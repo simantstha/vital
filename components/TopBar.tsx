@@ -1,15 +1,13 @@
 'use client';
 
 import { useMemo } from 'react';
-import { useClock } from '@/lib/hooks';
 
 interface TopBarProps {
   stateLabel: string;
+  now: Date;
 }
 
-export default function TopBar({ stateLabel }: TopBarProps) {
-  const now = useClock();
-
+export default function TopBar({ stateLabel, now }: TopBarProps) {
   const { h, min, ampm, dateStr } = useMemo(() => {
     let hours = now.getHours();
     const minutes = now.getMinutes();

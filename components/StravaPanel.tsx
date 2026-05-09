@@ -1,15 +1,15 @@
 'use client';
 
 import type { MileageDay, Route } from '@/lib/types';
+import { TARGET_KM } from '@/lib/data';
 
 interface StravaPanelProps {
   mileage: MileageDay[];
   routes: Route[];
+  totalKm: number;
 }
 
-export default function StravaPanel({ mileage, routes }: StravaPanelProps) {
-  const totalKm = mileage.reduce((a, b) => a + b.km, 0);
-  const targetKm = 64;
+export default function StravaPanel({ mileage, routes, totalKm }: StravaPanelProps) {
 
   return (
     <div className="glass panel">
@@ -63,7 +63,7 @@ export default function StravaPanel({ mileage, routes }: StravaPanelProps) {
         <div className="mileage-head">
           <span className="t">Weekly Mileage</span>
           <span className="total">
-            {totalKm.toFixed(1)} <span>/ {targetKm} km target</span>
+            {totalKm.toFixed(1)} <span>/ {TARGET_KM} km target</span>
           </span>
         </div>
         <div className="bars">

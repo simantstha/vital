@@ -1,5 +1,3 @@
-'use client';
-
 import type { BriefData } from '@/lib/types';
 import Icon from './Icon';
 
@@ -20,7 +18,7 @@ export default function MorningBrief({ brief }: MorningBriefProps) {
       <div className="hero-body">{brief.body}</div>
       <div className="hero-chips">
         {brief.chips.map((chip, i) => (
-          <div className="chip" key={i}>
+          <div className="chip" key={chip.k}>
             <Icon name={chip.icon} className="icon" />
             <span className="k">{chip.k}</span>
             <span className="v">{chip.v}</span>

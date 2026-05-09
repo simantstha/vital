@@ -59,11 +59,11 @@ export default function DashboardPage() {
       <AmbientOrbs />
       <StateToggle state={state} onStateChange={setState} />
       <div className="stage">
-        <TopBar stateLabel={cfg.label} />
+        <TopBar stateLabel={cfg.label} now={now} />
         <MorningBrief brief={brief} />
         <MetricsRow metrics={metrics} />
         <div className="lower">
-          <StravaPanel mileage={MILEAGE} routes={ROUTES} />
+          <StravaPanel mileage={MILEAGE} routes={ROUTES} totalKm={totalKm} />
           <NutritionPanel
             nutrition={nutrition}
             meals={meals}

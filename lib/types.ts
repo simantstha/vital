@@ -1,3 +1,5 @@
+import type { ReactNode } from 'react';
+
 export type RecoveryState = 'green' | 'amber' | 'red';
 
 export interface Palette {
@@ -21,7 +23,7 @@ export interface BriefChip {
 }
 
 export interface BriefData {
-  body: React.ReactNode;
+  body: ReactNode;
   chips: BriefChip[];
 }
 
@@ -31,7 +33,7 @@ export interface MacroTarget {
 }
 
 export interface NutritionData {
-  quote: React.ReactNode;
+  quote: ReactNode;
   macros: {
     c: MacroTarget;
     p: MacroTarget;
@@ -64,7 +66,7 @@ export interface Meal {
   p: number;
   f: number;
   items: string;
-  why: React.ReactNode;
+  why: ReactNode;
   status?: MealStatus;
 }
 

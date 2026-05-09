@@ -194,6 +194,8 @@ export const MEALS: Record<string, Meal[]> = {
   ],
 };
 
+export const TARGET_KM = 64;
+
 export const MEAL_WINDOWS = [
   { start: 0, end: 11 },
   { start: 11, end: 14 },
@@ -205,7 +207,7 @@ export const MILEAGE: MileageDay[] = [
   { d: 'M', km: 12.4 },
   { d: 'T', km: 8.0 },
   { d: 'W', km: 16.2 },
-  { d: 'T', km: 6.4, today: true },
+  { d: 'Th', km: 6.4, today: true },
   { d: 'F', km: 0 },
   { d: 'S', km: 0 },
   { d: 'S', km: 0 },
