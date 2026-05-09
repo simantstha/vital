@@ -3,10 +3,10 @@
 import { useState, useEffect, useMemo } from 'react';
 import type { RecoveryState, MetricsData, DailyBrief } from '@/lib/types';
 import type { StravaData } from '@/lib/strava';
+import type { MFPMacros } from '@/lib/mfp';
 import { parseMarkup } from '@/lib/markup';
 import { STATES, BRIEFS, NUTRITION, METRICS, MEALS, MEAL_WINDOWS, MILEAGE, ROUTES } from '@/lib/data';
 import AmbientOrbs from '@/components/AmbientOrbs';
-import StateToggle from '@/components/StateToggle';
 import TopBar from '@/components/TopBar';
 import MorningBrief from '@/components/MorningBrief';
 import MetricsRow from '@/components/MetricsRow';
@@ -26,6 +26,7 @@ export default function DashboardPage() {
   const [whoopMetrics, setWhoopMetrics] = useState<MetricsData | null>(null);
   const [stravaData, setStravaData] = useState<StravaData | null>(null);
   const [dailyBrief, setDailyBrief] = useState<DailyBrief | null>(null);
+  const [mfpMacros, setMfpMacros] = useState<MFPMacros | null>(null);
 
   useEffect(() => {
     fetch('/api/whoop')
@@ -46,6 +47,11 @@ export default function DashboardPage() {
     fetch('/api/brief')
       .then(r => r.json())
       .then((data: DailyBrief) => { if (!('error' in data)) setDailyBrief(data); })
+      .catch(() => {});
+
+    fetch('/api/mfp')
+      .then(r => r.json())
+      .then((data: MFPMacros & { error?: string }) => { if (!data.error) setMfpMacros(data); })
       .catch(() => {});
   }, []);
 
@@ -88,8 +94,7 @@ export default function DashboardPage() {
   return (
     <>
       <AmbientOrbs />
-      <StateToggle state={state} onStateChange={setState} />
-      <div className="stage">
+<div className="stage">
         <TopBar stateLabel={cfg.label} now={now} />
         <MorningBrief brief={brief} claudeBrief={dailyBrief} />
         <MetricsRow metrics={metrics} />
@@ -100,6 +105,7 @@ export default function DashboardPage() {
             meals={meals}
             relevantIdx={relevantIdx}
             generatedAt={dailyBrief?.generatedAt ?? null}
+            mfpMacros={mfpMacros}
           />
         </div>
       </div>

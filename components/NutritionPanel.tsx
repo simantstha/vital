@@ -2,12 +2,14 @@
 
 import { useState } from 'react';
 import type { NutritionData, Meal } from '@/lib/types';
+import type { MFPMacros } from '@/lib/mfp';
 
 interface NutritionPanelProps {
   nutrition: NutritionData;
   meals: Meal[];
   relevantIdx: number;
   generatedAt?: string | null;
+  mfpMacros?: MFPMacros | null;
 }
 
 export default function NutritionPanel({
@@ -15,6 +17,7 @@ export default function NutritionPanel({
   meals,
   relevantIdx,
   generatedAt,
+  mfpMacros,
 }: NutritionPanelProps) {
   const [focusedIdx, setFocusedIdx] = useState<number | null>(null);
   const shown = focusedIdx != null ? meals[focusedIdx] : meals[relevantIdx];
@@ -28,7 +31,9 @@ export default function NutritionPanel({
     <div className="glass panel">
       <div className="panel-head">
         <div className="panel-title">
-          Nutrition &amp; Training <span className="src claude">CLAUDE</span>
+          Nutrition &amp; Training{' '}
+          <span className="src claude">CLAUDE</span>
+          {mfpMacros && <span className="src" style={{ background: 'rgba(99,179,237,0.15)', color: '#63b3ed', marginLeft: 4 }}>MFP</span>}
         </div>
         <div className="panel-meta">
           Updated {generatedAt
@@ -37,12 +42,31 @@ export default function NutritionPanel({
         </div>
       </div>
 
-      <div className="quote-card">
-        <div className="quote-mark">&ldquo;</div>
-        <div>
-          <div className="quote-body">{nutrition.quote}</div>
-          <div className="quote-attr">Post-workout macro plan</div>
-        </div>
+      <div className="section-title">Today&apos;s Macros</div>
+      <div className="macros">
+        {(
+          [
+            ['carbs',   'Carbs',   nutrition.macros.c, mfpMacros?.carbs],
+            ['protein', 'Protein', nutrition.macros.p, mfpMacros?.protein],
+            ['fat',     'Fat',     nutrition.macros.f, mfpMacros?.fat],
+          ] as [string, string, { v: number; t: number }, number | undefined][]
+        ).map(([cls, label, mac, real]) => {
+          const consumed = real ?? mac.v;
+          return (
+            <div key={cls} className={`macro ${cls}`}>
+              <div className="ring" />
+              <div className="k">{label}</div>
+              <div className="v">
+                {consumed}
+                <span className="u">g</span>
+              </div>
+              <div className="target">of {mac.t}g target</div>
+              <div className="pbar">
+                <span style={{ width: Math.min((consumed / mac.t) * 100, 100) + '%' }} />
+              </div>
+            </div>
+          );
+        })}
       </div>
 
       <div className="section-title section-title-row">
@@ -123,29 +147,6 @@ export default function NutritionPanel({
         ))}
       </div>
 
-      <div className="section-title">Today&apos;s Macros</div>
-      <div className="macros">
-        {(
-          [
-            ['carbs', 'Carbs', nutrition.macros.c],
-            ['protein', 'Protein', nutrition.macros.p],
-            ['fat', 'Fat', nutrition.macros.f],
-          ] as [string, string, { v: number; t: number }][]
-        ).map(([cls, label, mac]) => (
-          <div key={cls} className={`macro ${cls}`}>
-            <div className="ring" />
-            <div className="k">{label}</div>
-            <div className="v">
-              {mac.v}
-              <span className="u">g</span>
-            </div>
-            <div className="target">of {mac.t}g target</div>
-            <div className="pbar">
-              <span style={{ width: (mac.v / mac.t) * 100 + '%' }} />
-            </div>
-          </div>
-        ))}
-      </div>
 
     </div>
   );
