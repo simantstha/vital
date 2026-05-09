@@ -129,25 +129,25 @@ function apiHeaders(s: Session) {
 export async function getDiaryMacros(date: string): Promise<MFPMacros> {
   const s = await getSession();
 
-  const res = await fetch(
-    `https://${API_BASE}/v2/diary/${s.mfpUsername}?date=${date}`,
-    { headers: apiHeaders(s) },
-  );
+  // No username in path — the API resolves the user from mfp-user-id header
+  const res = await fetch(`https://${API_BASE}/v2/diary?date=${date}`, { headers: apiHeaders(s) });
 
-  // 404 = no diary logged for this date (not an error)
-  if (res.status === 404) {
+  if (!res.ok) {
     return { calories: 0, carbs: 0, protein: 0, fat: 0, date, hasData: false };
   }
 
   const data = await res.json();
-  const items: unknown[] = data?.items ?? data?.data?.items ?? [];
+  // Only "diary_meal" items carry nutritional totals; skip exercise/steps entries
+  const meals = ((data?.items ?? []) as Record<string, unknown>[]).filter(
+    i => i.type === 'diary_meal',
+  );
 
   let calories = 0, carbs = 0, protein = 0, fat = 0;
-  for (const item of items) {
-    const nc = (item as Record<string, unknown>)?.nutritional_contents as Record<string, unknown> | undefined;
+  for (const meal of meals) {
+    const nc = meal.nutritional_contents as Record<string, unknown> | undefined;
     if (!nc) continue;
-    const energy = nc.energy as Record<string, number> | number | undefined;
-    calories += typeof energy === 'object' && energy !== null ? (energy.value ?? 0) : (energy ?? 0);
+    const energy = nc.energy as Record<string, number> | undefined;
+    calories += energy?.value ?? 0;
     carbs    += (nc.carbohydrates as number) ?? 0;
     protein  += (nc.protein      as number) ?? 0;
     fat      += (nc.fat          as number) ?? 0;
@@ -159,6 +159,6 @@ export async function getDiaryMacros(date: string): Promise<MFPMacros> {
     protein:  Math.round(protein),
     fat:      Math.round(fat),
     date,
-    hasData:  items.length > 0,
+    hasData:  meals.length > 0,
   };
 }
