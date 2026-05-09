@@ -33,7 +33,7 @@ export default function NutritionPanel({
         <div className="panel-title">
           Nutrition &amp; Training{' '}
           <span className="src claude">CLAUDE</span>
-          {mfpMacros && <span className="src" style={{ background: 'rgba(99,179,237,0.15)', color: '#63b3ed', marginLeft: 4 }}>MFP</span>}
+          {mfpMacros?.hasData && <span className="src" style={{ background: 'rgba(99,179,237,0.15)', color: '#63b3ed', marginLeft: 4 }}>MFP</span>}
         </div>
         <div className="panel-meta">
           Updated {generatedAt
@@ -46,9 +46,9 @@ export default function NutritionPanel({
       <div className="macros">
         {(
           [
-            ['carbs',   'Carbs',   nutrition.macros.c, mfpMacros?.carbs],
-            ['protein', 'Protein', nutrition.macros.p, mfpMacros?.protein],
-            ['fat',     'Fat',     nutrition.macros.f, mfpMacros?.fat],
+            ['carbs',   'Carbs',   nutrition.macros.c, mfpMacros?.hasData ? mfpMacros.carbs   : undefined],
+            ['protein', 'Protein', nutrition.macros.p, mfpMacros?.hasData ? mfpMacros.protein : undefined],
+            ['fat',     'Fat',     nutrition.macros.f, mfpMacros?.hasData ? mfpMacros.fat     : undefined],
           ] as [string, string, { v: number; t: number }, number | undefined][]
         ).map(([cls, label, mac, real]) => {
           const consumed = real ?? mac.v;
