@@ -4,3 +4,5 @@ node_modules/
 .next/
 .superpowers/
 .DS_Store
+.brief-cache/
+.whoop-refresh-token
