@@ -5,7 +5,8 @@ import type { RecoveryState, MetricsData, DailyBrief } from '@/lib/types';
 import type { StravaData } from '@/lib/strava';
 import type { MFPMacros } from '@/lib/mfp';
 import { parseMarkup } from '@/lib/markup';
-import { STATES, BRIEFS, NUTRITION, METRICS, MEALS, MEAL_WINDOWS, MILEAGE } from '@/lib/data';
+import { STATES, BRIEFS, NUTRITION, MEAL_WINDOWS, MILEAGE } from '@/lib/data';
+import type { MealOverride } from '@/lib/coachState';
 import AmbientOrbs from '@/components/AmbientOrbs';
 import TopBar from '@/components/TopBar';
 import MorningBrief from '@/components/MorningBrief';
@@ -42,6 +43,7 @@ export default function DashboardPage() {
   const [stravaStatus, setStravaStatus] = useState<DataStatus>('loading');
   const [briefStatus, setBriefStatus] = useState<DataStatus>('loading');
   const [mfpStatus, setMfpStatus] = useState<DataStatus>('loading');
+  const [mealOverrides, setMealOverrides] = useState<MealOverride[]>([]);
 
   useEffect(() => {
     fetch('/api/whoop')
@@ -81,6 +83,18 @@ export default function DashboardPage() {
         setMfpStatus('live');
       })
       .catch(() => setMfpStatus('error'));
+  }, []);
+
+  // Poll coach state (Telegram bot meal overrides) every 30s
+  useEffect(() => {
+    const poll = () =>
+      fetch('/api/coach-state')
+        .then(r => r.json())
+        .then((s: { mealOverrides?: MealOverride[] }) => setMealOverrides(s.mealOverrides ?? []))
+        .catch(() => {/* silent */});
+    poll();
+    const id = setInterval(poll, 30_000);
+    return () => clearInterval(id);
   }, []);
 
   useEffect(() => {
@@ -168,6 +182,7 @@ export default function DashboardPage() {
             mfpMacros={mfpMacros}
             briefStatus={briefStatus}
             mfpStatus={mfpStatus}
+            mealOverrides={mealOverrides}
           />
         </div>
       </div>

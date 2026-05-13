@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import type { NutritionData, Meal } from '@/lib/types';
 import type { MFPMacros } from '@/lib/mfp';
+import type { MealOverride } from '@/lib/coachState';
 
 type DataStatus = 'loading' | 'live' | 'error';
 
@@ -14,6 +15,7 @@ interface NutritionPanelProps {
   mfpMacros?: MFPMacros | null;
   briefStatus: DataStatus;
   mfpStatus: DataStatus;
+  mealOverrides?: MealOverride[];
 }
 
 export default function NutritionPanel({
@@ -24,13 +26,22 @@ export default function NutritionPanel({
   mfpMacros,
   briefStatus,
   mfpStatus,
+  mealOverrides = [],
 }: NutritionPanelProps) {
   const [focusedIdx, setFocusedIdx] = useState<number | null>(null);
 
   const hasMeals = meals.length > 0;
-  const shown = hasMeals
+  const baseShown = hasMeals
     ? (focusedIdx != null ? meals[focusedIdx] : meals[relevantIdx] ?? meals[0])
     : null;
+
+  // Apply coach override to the displayed meal if one exists
+  const shownOverride = baseShown
+    ? mealOverrides.find(o => o.meal === baseShown.k.toLowerCase())
+    : undefined;
+  const shown = baseShown && shownOverride
+    ? { ...baseShown, kcal: shownOverride.kcal, c: shownOverride.c, p: shownOverride.p, f: shownOverride.f, items: shownOverride.items }
+    : baseShown;
 
   const consumedKcal = meals
     .filter((x) => x.status === 'logged')
@@ -157,23 +168,27 @@ export default function NutritionPanel({
           </div>
 
           <div className="meal-strip">
-            {meals.map((meal, i) => (
-              <div
-                key={meal.k}
-                className={`strip-cell ${meal.status}${focusedIdx === i ? ' focused' : ''}`}
-                onClick={() => setFocusedIdx(focusedIdx === i ? null : i)}
-              >
-                <div className="strip-head">
-                  <span className="strip-dot" />
-                  <span className="strip-name">{meal.k}</span>
-                  <span className="strip-time">{meal.t}</span>
+            {meals.map((meal, i) => {
+              const override = mealOverrides.find(o => o.meal === meal.k.toLowerCase());
+              return (
+                <div
+                  key={meal.k}
+                  className={`strip-cell ${meal.status}${focusedIdx === i ? ' focused' : ''}${override ? ' overridden' : ''}`}
+                  onClick={() => setFocusedIdx(focusedIdx === i ? null : i)}
+                >
+                  <div className="strip-head">
+                    <span className="strip-dot" />
+                    <span className="strip-name">{meal.k}</span>
+                    <span className="strip-time">{meal.t}</span>
+                  </div>
+                  <div className="strip-kcal">
+                    {override ? override.kcal : meal.kcal}
+                    <span className="u">kcal</span>
+                  </div>
+                  {override && <span className="override-badge">ADJUSTED</span>}
                 </div>
-                <div className="strip-kcal">
-                  {meal.kcal}
-                  <span className="u">kcal</span>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </>
       ) : briefStatus === 'loading' ? (

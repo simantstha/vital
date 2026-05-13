@@ -30,7 +30,7 @@ const SEED_PROFILE = `# Vital — User Profile
 (Claude appends one-sentence insights here after each brief)
 `;
 
-function readUserProfile(): string {
+export function readUserProfile(): string {
   try {
     return fs.readFileSync(PROFILE_PATH, 'utf8');
   } catch {
