@@ -111,41 +111,35 @@ export async function POST(req: Request) {
     const currentHrv = whoopData?.hrv_rmssd_milli;
     const today = new Date().toISOString().split('T')[0];
 
-    if (!loadChatId()) {
+    if (!chatId) {
       console.warn('Whoop alerts: no Telegram chatId configured, skipping alerts');
     } else {
-      const alertChatId = loadChatId()!;
-
       // 1. Red day alert
       if (typeof recoveryScore === 'number' && recoveryScore < 33) {
-        await sendMessage(alertChatId, '🔴 Recovery is in the red today — your body is asking for rest. Easy day recommended.');
+        await sendMessage(chatId, '🔴 Recovery is in the red today — your body is asking for rest. Easy day recommended.');
       }
 
       // 2. HRV crash alert
       if (typeof currentHrv === 'number') {
         const baseline = readHrvBaseline();
         if (baseline !== null && currentHrv < baseline * 0.85) {
-          await sendMessage(alertChatId, '⚠️ HRV dropped significantly below your baseline — watch your load today.');
+          await sendMessage(chatId, '⚠️ HRV dropped significantly below your baseline — watch your load today.');
         }
       }
 
-      // 3. Green streak tracking + alert
+      // 3. Green streak tracking + alert (fires only when streak first reaches 3)
       const streak = readGreenStreak();
+      const wasStreaking = streak.dates.length >= 3;
       if (typeof recoveryScore === 'number' && recoveryScore >= 67) {
-        if (!streak.dates.includes(today)) {
-          streak.dates.push(today);
-        }
-        // Keep last 7 dates max
-        if (streak.dates.length > 7) {
-          streak.dates = streak.dates.slice(-7);
-        }
+        if (!streak.dates.includes(today)) streak.dates.push(today);
+        if (streak.dates.length > 7) streak.dates = streak.dates.slice(-7);
       } else {
         streak.dates = [];
       }
       writeGreenStreak(streak);
 
-      if (streak.dates.length >= 3) {
-        await sendMessage(alertChatId, '🟢 3 green days in a row — you\'re in a peak window. Good day for a hard effort if planned.');
+      if (!wasStreaking && streak.dates.length >= 3) {
+        await sendMessage(chatId, '🟢 3 green days in a row — you\'re in a peak window. Good day for a hard effort if planned.');
       }
     }
   } catch (err) {
