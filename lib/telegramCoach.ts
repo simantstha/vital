@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
+import type { MessageParam, Tool } from '@anthropic-ai/sdk/resources/messages';
 import { getCachedBrief } from '@/lib/briefCache';
-import { readUserProfile } from '@/lib/claude';
+import { loadAlwaysOnContext, MEMORY_TOOLS, handleToolCall } from '@/lib/memory';
 import { readCoachState, writeMealOverride, writePendingBarcode, clearPendingBarcode, type MealOverride, type PendingBarcode } from '@/lib/coachState';
 import { logWeight, readWeightLog } from '@/lib/weightLog';
 import { lookupBarcode } from '@/lib/openFoodFacts';
@@ -10,9 +11,17 @@ const client = new Anthropic();
 
 // ── System prompt ────────────────────────────────────────────────────────────
 
-function buildSystemPrompt(userProfile: string, healthCtx: string): string {
-  return `You are Vital Coach — personal AI coach for a marathon runner training for the Twin Cities Marathon (October 4, 2026).
-You're responding via Telegram. Keep answers SHORT and direct (under 120 words) unless the user asks for detail.
+function buildSystemPrompt(alwaysOnMemory: string, healthCtx: string): string {
+  return `You are Vital Coach — a personal fitness and nutrition AI coach.
+You respond via Telegram. Keep answers SHORT and direct (under 120 words) unless the user asks for detail.
+
+You have access to memory tools. On each message:
+1. Decide if you need more context from a domain file — check the Memory Index, then call read_memory if needed.
+2. Answer the user.
+3. If you learned a new fact (injury, food reaction, PR, allergy, supplement, travel, stress event), call write_memory to update the relevant file. Always read the file first, merge the new fact, then write the full updated JSON.
+4. If you noticed a pattern or insight worth remembering, call append_observation (under 20 words).
+
+NEVER display tool calls or memory operations to the user. They are silent background actions.
 
 ACTIONS — append these at the very end of your response, NEVER display them to the user:
 - If user reports eating something not in the plan:
@@ -22,9 +31,10 @@ ACTIONS — append these at the very end of your response, NEVER display them to
   <vital-action type="weight_log" weight="N" unit="lbs"/>
 Only append an action when clearly triggered. Never preemptively.
 
-## Long-term User Profile
-${userProfile}
+## Long-term Memory
+${alwaysOnMemory}
 
+## Today's Health Context
 ${healthCtx}`;
 }
 
@@ -170,9 +180,9 @@ export async function processMessage(
   chatId: number,
   image?: { base64: string; mimeType: string },
 ): Promise<string> {
-  const userProfile = readUserProfile();
+  const alwaysOnMemory = loadAlwaysOnContext();
   const healthCtx = await buildHealthContext();
-  const systemPrompt = buildSystemPrompt(userProfile, healthCtx);
+  const systemPrompt = buildSystemPrompt(alwaysOnMemory, healthCtx);
 
   let userContent: Anthropic.MessageParam['content'];
 
@@ -212,14 +222,39 @@ export async function processMessage(
     userContent = text;
   }
 
-  const msg = await client.messages.create({
-    model: 'claude-sonnet-4-6',
-    max_tokens: 400,
+  const messages: MessageParam[] = [{ role: 'user', content: userContent }];
+
+  let response = await client.messages.create({
+    model: 'claude-opus-4-5',
+    max_tokens: 1024,
     system: systemPrompt,
-    messages: [{ role: 'user', content: userContent }],
+    tools: [...MEMORY_TOOLS] as unknown as Tool[],
+    messages,
   });
 
-  const raw = (msg.content[0] as { text: string }).text;
+  while (response.stop_reason === 'tool_use') {
+    messages.push({ role: 'assistant', content: response.content });
+
+    const toolResults = response.content
+      .filter((b): b is Extract<typeof b, { type: 'tool_use' }> => b.type === 'tool_use')
+      .map(block => ({
+        type: 'tool_result' as const,
+        tool_use_id: block.id,
+        content: handleToolCall(block.name, block.input),
+      }));
+
+    messages.push({ role: 'user', content: toolResults });
+
+    response = await client.messages.create({
+      model: 'claude-opus-4-5',
+      max_tokens: 1024,
+      system: systemPrompt,
+      tools: [...MEMORY_TOOLS] as unknown as Tool[],
+      messages,
+    });
+  }
+
+  const raw = response.content.find((b): b is Extract<typeof b, { type: 'text' }> => b.type === 'text')?.text ?? '';
   const action = parseAction(raw);
   const clean = stripAction(raw);
 
