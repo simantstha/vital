@@ -8,7 +8,7 @@ interface TopBarProps {
 }
 
 export default function TopBar({ stateLabel, now }: TopBarProps) {
-  const { h, min, ampm, dateStr } = useMemo(() => {
+  const { h, min, ampm, dateStr, daysLeft } = useMemo(() => {
     let hours = now.getHours();
     const minutes = now.getMinutes();
     const period = hours >= 12 ? 'PM' : 'AM';
@@ -18,7 +18,10 @@ export default function TopBar({ stateLabel, now }: TopBarProps) {
       month: 'long',
       day: 'numeric',
     });
-    return { h: hours, min: minutes, ampm: period, dateStr: date };
+    const raceDate = new Date('2026-10-04T00:00:00');
+    const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const diff = Math.ceil((raceDate.getTime() - todayMidnight.getTime()) / (1000 * 60 * 60 * 24));
+    return { h: hours, min: minutes, ampm: period, dateStr: date, daysLeft: diff };
   }, [now]);
 
   return (
@@ -31,9 +34,9 @@ export default function TopBar({ stateLabel, now }: TopBarProps) {
       </div>
       <div className="top-right">
         <div className="countdown-pill">
-          <span className="days">149 days</span>
+          <span className="days">{daysLeft} days</span>
           <span className="sep">·</span>
-          <span className="label">Loch Ness Marathon · Oct 4</span>
+          <span className="label">Twin Cities Marathon · Oct 4</span>
         </div>
         <div className="clock">
           <span>{h}</span>

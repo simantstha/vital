@@ -3,9 +3,12 @@ import type { DailyBrief } from '@/lib/types';
 import { parseMarkup } from '@/lib/markup';
 import Icon from './Icon';
 
+type DataStatus = 'loading' | 'live' | 'error';
+
 interface MorningBriefProps {
   brief: BriefData;
   claudeBrief?: DailyBrief | null;
+  status: DataStatus;
 }
 
 const CHIP_ICONS: Record<string, 'bolt' | 'moon' | 'flame'> = {
@@ -14,7 +17,7 @@ const CHIP_ICONS: Record<string, 'bolt' | 'moon' | 'flame'> = {
   Strain: 'flame',
 };
 
-export default function MorningBrief({ brief, claudeBrief }: MorningBriefProps) {
+export default function MorningBrief({ brief, claudeBrief, status }: MorningBriefProps) {
   const body = claudeBrief ? parseMarkup(claudeBrief.body) : brief.body;
   const chips = claudeBrief
     ? claudeBrief.chips.map(c => ({ ...c, icon: CHIP_ICONS[c.k] ?? 'bolt' }))
@@ -27,14 +30,28 @@ export default function MorningBrief({ brief, claudeBrief }: MorningBriefProps) 
   return (
     <div className="glass hero">
       <div className="hero-head">
-        <span className="live-dot" />
+        <span className="live-dot" style={{ opacity: status === 'error' ? 0.3 : 1 }} />
         <span className="hero-label">
           Claude <span className="sep">·</span> Morning Brief
         </span>
-        <span className="hero-time">Generated {generatedAt} · Sources: Whoop, Strava</span>
+        {status === 'error' ? (
+          <span className="hero-time" style={{ color: 'rgba(255,180,100,0.85)' }}>
+            ⚠ Brief unavailable — check API keys
+          </span>
+        ) : (
+          <span className="hero-time" style={{ opacity: status === 'loading' ? 0.4 : 1 }}>
+            {status === 'loading' ? 'Generating…' : `Generated ${generatedAt} · Sources: Whoop, Strava`}
+          </span>
+        )}
       </div>
-      <div className="hero-body">{body}</div>
-      <div className="hero-chips">
+      <div className="hero-body" style={{ opacity: status === 'loading' ? 0.3 : 1 }}>
+        {status === 'error' ? (
+          <span style={{ opacity: 0.5 }}>Could not generate today&apos;s brief. Real-time data unavailable.</span>
+        ) : (
+          body
+        )}
+      </div>
+      <div className="hero-chips" style={{ opacity: status === 'loading' ? 0.2 : status === 'error' ? 0.25 : 1 }}>
         {chips.map((chip) => (
           <div className="chip" key={chip.k}>
             <Icon name={chip.icon} className="icon" />

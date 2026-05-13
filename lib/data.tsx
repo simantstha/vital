@@ -5,7 +5,6 @@ import type {
   MetricsData,
   Meal,
   MileageDay,
-  Route,
 } from './types';
 
 export const STATES: Record<string, StateConfig> = {
@@ -211,11 +210,4 @@ export const MILEAGE: MileageDay[] = [
   { d: 'F', mi: 0 },
   { d: 'S', mi: 0 },
   { d: 'S', mi: 0 },
-];
-
-export const ROUTES: Route[] = [
-  { name: 'Kelvingrove Loop', d: '5.2 mi', e: '177ft', p: '8:06 / mi', count: 47 },
-  { name: 'Pollok Park · Long', d: '8.8 mi', e: '420ft', p: '8:32 / mi', count: 22 },
-  { name: 'Clyde Tow Path', d: '6.2 mi', e: '39ft', p: '7:43 / mi', count: 31 },
-  { name: 'Cathkin Braes', d: '7.2 mi', e: '695ft', p: '8:58 / mi', count: 9 },
 ];

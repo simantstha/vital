@@ -11,7 +11,11 @@ function todayKey(): string {
 export function getCachedBrief(): DailyBrief | null {
   const file = path.join(CACHE_DIR, `${todayKey()}.json`);
   try {
-    return JSON.parse(fs.readFileSync(file, 'utf-8')) as DailyBrief;
+    const brief = JSON.parse(fs.readFileSync(file, 'utf-8')) as DailyBrief;
+    // Discard cache if it was generated before 5 AM — sleep data was incomplete
+    const generatedHour = new Date(brief.generatedAt).getHours();
+    if (generatedHour < 5) return null;
+    return brief;
   } catch {
     return null;
   }
