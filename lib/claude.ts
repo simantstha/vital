@@ -4,6 +4,7 @@ import path from 'path';
 import type { DailyBrief } from './types';
 import type { WhoopHistory } from './whoop';
 import type { RecentActivity, WeeklyLoad } from './strava';
+import { readMemoryFile, writeMemoryFile } from '@/lib/memory';
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -76,9 +77,27 @@ interface BriefContext {
   recentNutrition?: Array<{ date: string; calories: number; carbs: number; protein: number; fat: number }>;
 }
 
+function updateHrvBaseline(currentAvg: number): void {
+  const profile = readMemoryFile('core-profile.md');
+  if (!profile) return;
+
+  const match = /hrv baseline:\s*(\d+)\s*ms/i.exec(profile);
+  if (!match) return;
+
+  const stored = parseInt(match[1], 10);
+  if (Math.abs(currentAvg - stored) <= 3) return;
+
+  const date = new Date().toISOString().split('T')[0];
+  const updated = profile.replace(
+    /hrv baseline:\s*\d+\s*ms \(updated [^)]+\)/i,
+    `HRV baseline: ${currentAvg}ms (updated ${date})`
+  );
+  writeMemoryFile('core-profile.md', updated);
+}
+
 export async function generateDailyBrief(ctx: BriefContext): Promise<DailyBrief> {
   const today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
-  const userProfile = readUserProfile();
+  const userProfile = readMemoryFile('core-profile.md') ?? readUserProfile();
 
   const historySection = ctx.history?.days.length
     ? `\n## 7-Day Recovery Trend (newest first)\n` +
@@ -111,7 +130,7 @@ export async function generateDailyBrief(ctx: BriefContext): Promise<DailyBrief>
       ).join('\n')
     : '';
 
-  const prompt = `You are a personal coach AND nutritionist for a marathon runner training for the Twin Cities Marathon on October 4, 2026. Use their training history and recovery trends to:
+  const prompt = `You are a personal fitness and nutrition coach. Use the user's core profile (goals, activities, baselines) along with their training history and recovery trends to:
 1. Prescribe today's workout intensity based on recovery + recent training load
 2. Prescribe today's nutrition for recovery (post-workout if applicable) AND tomorrow's performance (carb-load if tomorrow looks like a hard day based on their pattern)
 3. Spot patterns worth calling out (e.g. "your HRV drops when sleep is under 7h")
@@ -165,6 +184,10 @@ Respond ONLY with valid JSON, no markdown, no explanation:
   const parsed = JSON.parse(text);
 
   if (parsed.profileUpdate) appendCoachNote(parsed.profileUpdate);
+
+  if (ctx.history?.avgHrv7d) {
+    updateHrvBaseline(ctx.history.avgHrv7d);
+  }
 
   return {
     date: new Date().toISOString().split('T')[0],
