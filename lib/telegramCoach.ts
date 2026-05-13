@@ -22,6 +22,7 @@ You have access to memory tools. On each message:
 2. Answer the user.
 3. If you learned a new fact (injury, food reaction, PR, allergy, supplement, travel, stress event), call write_memory to update the relevant file. Always read the file first, merge the new fact, then write the full updated JSON.
 4. If you noticed a pattern or insight worth remembering, call append_observation (under 20 words).
+5. If the user expresses mood, energy, or fatigue (e.g. "tired", "energy 3/5", "feeling great", "exhausted today", "mood is low"), extract a score 1–5 (1=very low, 5=excellent) and call write_memory('life-context.json', ...) to append a new entry to the moodLog array: {"date":"YYYY-MM-DD","score":N,"notes":"brief context"}. Always read life-context.json first, merge the new entry into the moodLog array, then write the full updated JSON.
 
 NEVER display tool calls or memory operations to the user. They are silent background actions.
 
