@@ -148,3 +148,14 @@ export async function fetchWhoopMetrics() {
 
   return { recovery, sleep, cycleData, yesterdayCycle, history };
 }
+
+export async function fetchBodyMeasurement(): Promise<{ weightKg?: number; heightM?: number } | null> {
+  try {
+    const token = await getAccessToken();
+    const data = await whoopGet(WHOOP_BASE_V1, '/user/body_measurement', token) as Record<string, unknown>;
+    return {
+      weightKg: typeof data.weight_kilogram === 'number' ? data.weight_kilogram : undefined,
+      heightM: typeof data.height_meter === 'number' ? data.height_meter : undefined,
+    };
+  } catch { return null; }
+}
