@@ -1,8 +1,33 @@
 import { NextResponse } from 'next/server';
 import { createHmac } from 'crypto';
+import fs from 'fs';
+import path from 'path';
 import { bustCache } from '@/lib/briefCache';
 import { loadChatId, sendMessage } from '@/lib/telegram';
 import { getCachedBrief } from '@/lib/briefCache';
+import { readHrvBaseline } from '@/lib/memory';
+
+const MEMORY_DIR = path.resolve(process.cwd(), '.vital-memory');
+const GREEN_STREAK_FILE = path.join(MEMORY_DIR, 'green-streak.json');
+
+interface GreenStreak {
+  dates: string[];
+}
+
+function readGreenStreak(): GreenStreak {
+  try {
+    return JSON.parse(fs.readFileSync(GREEN_STREAK_FILE, 'utf-8')) as GreenStreak;
+  } catch {
+    return { dates: [] };
+  }
+}
+
+function writeGreenStreak(streak: GreenStreak): void {
+  try {
+    fs.mkdirSync(MEMORY_DIR, { recursive: true });
+    fs.writeFileSync(GREEN_STREAK_FILE, JSON.stringify(streak), 'utf-8');
+  } catch { /* read-only fs on Vercel */ }
+}
 
 export const dynamic = 'force-dynamic';
 
@@ -45,8 +70,16 @@ export async function POST(req: Request) {
     return new Response('Forbidden', { status: 403 });
   }
 
-  let payload: { type?: string };
-  try { payload = JSON.parse(body) as { type?: string }; }
+  interface WhoopPayload {
+    type?: string;
+    data?: {
+      recovery_score?: number;
+      hrv_rmssd_milli?: number;
+    };
+  }
+
+  let payload: WhoopPayload;
+  try { payload = JSON.parse(body) as WhoopPayload; }
   catch { return NextResponse.json({ ok: true }); }
 
   // Only act on recovery.scored — acknowledge other events immediately
@@ -70,6 +103,50 @@ export async function POST(req: Request) {
     if (chatId) {
       const text = formatBrief();
       if (text) await sendMessage(chatId, text);
+    }
+
+    // --- Proactive alerts ---
+    const whoopData = payload.data;
+    const recoveryScore = whoopData?.recovery_score;
+    const currentHrv = whoopData?.hrv_rmssd_milli;
+    const today = new Date().toISOString().split('T')[0];
+
+    if (!loadChatId()) {
+      console.warn('Whoop alerts: no Telegram chatId configured, skipping alerts');
+    } else {
+      const alertChatId = loadChatId()!;
+
+      // 1. Red day alert
+      if (typeof recoveryScore === 'number' && recoveryScore < 33) {
+        await sendMessage(alertChatId, '🔴 Recovery is in the red today — your body is asking for rest. Easy day recommended.');
+      }
+
+      // 2. HRV crash alert
+      if (typeof currentHrv === 'number') {
+        const baseline = readHrvBaseline();
+        if (baseline !== null && currentHrv < baseline * 0.85) {
+          await sendMessage(alertChatId, '⚠️ HRV dropped significantly below your baseline — watch your load today.');
+        }
+      }
+
+      // 3. Green streak tracking + alert
+      const streak = readGreenStreak();
+      if (typeof recoveryScore === 'number' && recoveryScore >= 67) {
+        if (!streak.dates.includes(today)) {
+          streak.dates.push(today);
+        }
+        // Keep last 7 dates max
+        if (streak.dates.length > 7) {
+          streak.dates = streak.dates.slice(-7);
+        }
+      } else {
+        streak.dates = [];
+      }
+      writeGreenStreak(streak);
+
+      if (streak.dates.length >= 3) {
+        await sendMessage(alertChatId, '🟢 3 green days in a row — you\'re in a peak window. Good day for a hard effort if planned.');
+      }
     }
   } catch (err) {
     console.error('Whoop webhook handler error:', err);
