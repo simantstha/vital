@@ -16,6 +16,7 @@ interface NutritionPanelProps {
   briefStatus: DataStatus;
   mfpStatus: DataStatus;
   mealOverrides?: MealOverride[];
+  weightKg?: number | null;
 }
 
 export default function NutritionPanel({
@@ -27,6 +28,7 @@ export default function NutritionPanel({
   briefStatus,
   mfpStatus,
   mealOverrides = [],
+  weightKg,
 }: NutritionPanelProps) {
   const [focusedIdx, setFocusedIdx] = useState<number | null>(null);
 
@@ -107,6 +109,12 @@ export default function NutritionPanel({
           );
         })}
       </div>
+
+      {weightKg && (
+        <div style={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.35)', marginTop: 8, marginBottom: 2, letterSpacing: '0.04em' }}>
+          {(weightKg * 2.205).toFixed(1)} lbs · {weightKg.toFixed(1)} kg · Whoop
+        </div>
+      )}
 
       {/* Meal section — hidden when brief failed or no meals yet */}
       {briefStatus === 'error' ? (
