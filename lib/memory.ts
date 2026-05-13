@@ -38,29 +38,19 @@ export function writeMemoryFile(filename: string, content: string): void {
 }
 
 export function appendObservation(note: string): void {
-  const file = memoryPath('coach-observations.md');
   const date = new Date().toISOString().split('T')[0];
   const entry = `- [${date}] ${note}`;
-  let content: string;
-  try {
-    content = fs.readFileSync(file, 'utf-8');
-  } catch {
-    content = '# Coach Observations\n\n';
-  }
+  const content = readMemoryFile('coach-observations.md') ?? '# Coach Observations\n\n';
   const lines = content.split('\n').filter(l => l.startsWith('- ['));
   lines.unshift(entry);
-  const trimmed = lines.slice(0, 30);
-  const updated = '# Coach Observations\n\n' + trimmed.join('\n') + '\n';
-  try {
-    fs.mkdirSync(MEMORY_DIR, { recursive: true });
-    fs.writeFileSync(file, updated, 'utf-8');
-  } catch { /* read-only fs */ }
+  const updated = '# Coach Observations\n\n' + lines.slice(0, 30).join('\n') + '\n';
+  writeMemoryFile('coach-observations.md', updated);
 }
 
 export function readHrvBaseline(): number | null {
   const profile = readMemoryFile('core-profile.md');
   if (!profile) return null;
-  const match = /HRV baseline: (\d+)ms/.exec(profile);
+  const match = /hrv baseline:\s*(\d+)\s*ms/i.exec(profile);
   return match ? parseInt(match[1], 10) : null;
 }
 
@@ -106,6 +96,8 @@ export const MEMORY_TOOLS = [
       properties: {
         filename: {
           type: 'string',
+          // Intentionally excludes memory-index.md (managed manually) and
+          // coach-observations.md (use append_observation tool instead).
           enum: ['health-conditions.json', 'training-history.json', 'nutrition-habits.json', 'life-context.json', 'core-profile.md', 'lab-results.json'],
           description: 'The memory file to overwrite.',
         },
