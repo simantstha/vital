@@ -303,3 +303,17 @@ Current `weight-log.json` and `overrides.json` are unchanged.
 | `.vital-memory/training-history.json` | New |
 | `.vital-memory/nutrition-habits.json` | New |
 | `.vital-memory/life-context.json` | New |
+
+---
+
+## Phase 2 — Conversation History (Postgres)
+
+Deferred. To be designed separately after Phase 1 ships.
+
+**Core idea:** Store every Telegram message pair (user + assistant) in Postgres. On each new message, load last ~30 messages verbatim + an auto-generated weekly summary of older history. Coach gains true long-term conversational memory — can reference things said weeks ago, detect recurring patterns, and follow up on past commitments.
+
+**Key components:**
+- `conversations` table: `chat_id, role, content, timestamp`
+- Weekly summary job: collapses older messages into a summary paragraph stored per week
+- Context builder: loads recent messages + summaries into the `messages` array before each API call
+- Unlocks: "you mentioned knee soreness 6 weeks ago — still recurring?", week-over-week pattern detection, accountability follow-ups
