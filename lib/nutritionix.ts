@@ -1,11 +1,10 @@
-interface NutritionixFood {
-  food_name: string;
-  serving_qty: number;
-  serving_unit: string;
-  nf_calories: number;
-  nf_total_carbohydrate: number;
-  nf_protein: number;
-  nf_total_fat: number;
+interface CalorieNinjasFood {
+  name: string;
+  calories: number;
+  serving_size_g: number;
+  fat_total_g: number;
+  protein_g: number;
+  carbohydrates_total_g: number;
 }
 
 export interface NutritionixResult {
@@ -17,39 +16,37 @@ export interface NutritionixResult {
 }
 
 export async function lookupNutrition(query: string): Promise<NutritionixResult | null> {
-  const res = await fetch('https://trackapi.nutritionix.com/v2/natural/nutrients', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-app-id': process.env.NUTRITIONIX_APP_ID!,
-      'x-app-key': process.env.NUTRITIONIX_APP_KEY!,
-    },
-    body: JSON.stringify({ query }),
-  });
+  try {
+    const res = await fetch(
+      `https://api.calorieninjas.com/v1/nutrition?query=${encodeURIComponent(query)}`,
+      { headers: { 'X-Api-Key': process.env.CALORIENINJAS_API_KEY ?? '' } }
+    );
 
-  if (!res.ok) return null;
+    if (!res.ok) return null;
 
-  const data = await res.json() as { foods: NutritionixFood[] };
+    const data = await res.json() as { items: CalorieNinjasFood[] };
+    if (!data.items?.length) return null;
 
-  const totals = data.foods.reduce(
-    (acc, f) => ({
-      kcal: acc.kcal + Math.round(f.nf_calories),
-      c: acc.c + Math.round(f.nf_total_carbohydrate),
-      p: acc.p + Math.round(f.nf_protein),
-      f: acc.f + Math.round(f.nf_total_fat),
-    }),
-    { kcal: 0, c: 0, p: 0, f: 0 }
-  );
+    const totals = data.items.reduce(
+      (acc, f) => ({
+        kcal: acc.kcal + Math.round(f.calories),
+        c: acc.c + Math.round(f.carbohydrates_total_g),
+        p: acc.p + Math.round(f.protein_g),
+        f: acc.f + Math.round(f.fat_total_g),
+      }),
+      { kcal: 0, c: 0, p: 0, f: 0 }
+    );
 
-  return {
-    ...totals,
-    foods: data.foods.map(f => ({
-      name: f.food_name,
-      qty: f.serving_qty,
-      unit: f.serving_unit,
-      kcal: Math.round(f.nf_calories),
-    })),
-  };
+    return {
+      ...totals,
+      foods: data.items.map(f => ({
+        name: f.name,
+        qty: Math.round(f.serving_size_g),
+        unit: 'g',
+        kcal: Math.round(f.calories),
+      })),
+    };
+  } catch { return null; }
 }
 
 export interface SavedMeal {
