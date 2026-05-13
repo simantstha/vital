@@ -1,4 +1,4 @@
-import type { MileageDay, Route } from './types';
+import type { MileageDay, MinutesDay } from './types';
 
 const STRAVA_BASE = 'https://www.strava.com/api/v3';
 const TOKEN_URL = 'https://www.strava.com/oauth/token';
@@ -33,8 +33,6 @@ async function stravaGet(path: string, token: string) {
 }
 
 function metersToMiles(m: number) { return m / 1609.34; }
-function metersToFeet(m: number)  { return Math.round(m * 3.28084); }
-
 function speedToPace(mps: number): string {
   if (!mps) return '–';
   const secsPerMile = 1609.34 / mps;
@@ -59,6 +57,13 @@ function dayLabel(dateStr: string): string {
   return `${day} ${part}`;
 }
 
+function hasActivityType(activity: StravaActivity, types: Set<string>): boolean {
+  return (
+    (activity.type ? types.has(activity.type) : false) ||
+    (activity.sport_type ? types.has(activity.sport_type) : false)
+  );
+}
+
 export interface LastRun {
   distanceMi: string;
   name: string;
@@ -68,33 +73,84 @@ export interface LastRun {
   zone: string;
 }
 
+export interface LastWorkout {
+  name: string;
+  dayTime: string;
+  durationMin: number;
+  type: 'gym' | 'walk';
+}
+
+export interface RecentActivity {
+  date: string;
+  type: 'run' | 'gym' | 'walk';
+  name: string;
+  distanceMi?: number;
+  durationMin: number;
+  hr?: number;
+  pace?: string;
+  zone?: string;
+}
+
+export interface WeeklyLoad {
+  weekStart: string; // YYYY-MM-DD (Monday)
+  runMi: number;
+  walkMi: number;
+  gymMin: number;
+  gymSessions: number;
+}
+
 export interface StravaData {
   lastRun: LastRun | null;
-  routes: Route[];
+  lastWorkout: LastWorkout | null;
   mileage: MileageDay[];
+  walkMileage: MileageDay[];
+  gymMinutes: MinutesDay[];
   totalMi: number;
+  totalWalkMi: number;
+  totalGymMin: number;
+  gymSessionCount: number;
+  recentActivities: RecentActivity[];
+  weeklyMileage: WeeklyLoad[];
+}
+
+interface StravaActivity {
+  average_heartrate?: number;
+  average_speed: number;
+  distance: number;
+  moving_time?: number;
+  name: string;
+  sport_type?: string;
+  start_date_local: string;
+  type?: string;
 }
 
 export async function fetchStravaData(): Promise<StravaData> {
   const token = await getAccessToken();
 
   const fortyWeeksAgo = Math.floor(Date.now() / 1000) - 280 * 24 * 60 * 60;
-  const activities: any[] = [];
+  const activities: StravaActivity[] = [];
   let page = 1;
   while (true) {
-    const batch: any[] = await stravaGet(
+    const batch = await stravaGet(
       `/athlete/activities?after=${fortyWeeksAgo}&per_page=200&page=${page}`,
       token
-    );
+    ) as StravaActivity[];
     activities.push(...batch);
     if (batch.length < 200) break;
     page++;
   }
 
   const RUN_TYPES = new Set(['Run', 'TrailRun', 'VirtualRun']);
-  const runs = activities
-    .filter((a) => RUN_TYPES.has(a.type) || RUN_TYPES.has(a.sport_type))
-    .sort((a, b) => new Date(b.start_date_local).getTime() - new Date(a.start_date_local).getTime());
+  const GYM_TYPES = new Set(['WeightTraining', 'Workout', 'Crossfit', 'Elliptical', 'StairStepper', 'Yoga', 'Pilates', 'Swim', 'VirtualRide', 'Ride']);
+  const WALK_TYPES = new Set(['Walk', 'Hike']);
+
+  const sorted = [...activities].sort(
+    (a, b) => new Date(b.start_date_local).getTime() - new Date(a.start_date_local).getTime()
+  );
+
+  const runs = sorted.filter((a) => hasActivityType(a, RUN_TYPES));
+  const gyms = sorted.filter((a) => hasActivityType(a, GYM_TYPES));
+  const walks = sorted.filter((a) => hasActivityType(a, WALK_TYPES));
 
   // Last run stats
   const last = runs[0] ?? null;
@@ -109,28 +165,26 @@ export async function fetchStravaData(): Promise<StravaData> {
       }
     : null;
 
-  // Favorite routes — group by name, sort by frequency
-  const routeMap = new Map<string, { activity: any; count: number }>();
-  for (const run of runs) {
-    const existing = routeMap.get(run.name);
-    if (existing) {
-      existing.count++;
-    } else {
-      routeMap.set(run.name, { activity: run, count: 1 });
-    }
-  }
-  const routes: Route[] = [...routeMap.entries()]
-    .sort((a, b) => b[1].count - a[1].count)
-    .slice(0, 4)
-    .map(([name, { activity, count }]) => ({
-      name,
-      d: `${metersToMiles(activity.distance).toFixed(1)} mi`,
-      e: `${metersToFeet(activity.total_elevation_gain)}ft`,
-      p: `${speedToPace(activity.average_speed)} / mi`,
-      count,
-    }));
+  // Last gym or walk
+  const lastGym = gyms[0] ?? null;
+  const lastWalk = walks[0] ?? null;
+  const recentWorkout = (() => {
+    if (!lastGym && !lastWalk) return null;
+    const useGym =
+      lastGym &&
+      (!lastWalk ||
+        new Date(lastGym.start_date_local) > new Date(lastWalk.start_date_local));
+    const a = useGym ? lastGym : lastWalk!;
+    return {
+      name: a.name,
+      dayTime: dayLabel(a.start_date_local),
+      durationMin: Math.round((a.moving_time ?? 0) / 60),
+      type: useGym ? ('gym' as const) : ('walk' as const),
+    };
+  })();
+  const lastWorkout: LastWorkout | null = recentWorkout;
 
-  // Weekly mileage — Mon through today in current week
+  // Current week: Mon through today
   const now = new Date();
   const dayOfWeek = now.getDay(); // 0 = Sun
   const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
@@ -152,7 +206,91 @@ export async function fetchStravaData(): Promise<StravaData> {
     return { d, mi: parseFloat(dayMi.toFixed(1)), today: isToday };
   });
 
-  const totalMi = mileage.reduce((sum, d) => sum + d.mi, 0);
+  const walkMileage: MileageDay[] = weekDays.map((d, i) => {
+    const day = new Date(monday);
+    day.setDate(monday.getDate() + i);
+    const isToday = day.toDateString() === now.toDateString();
+    const isFuture = day > now;
 
-  return { lastRun, routes, mileage, totalMi };
+    const dayMi = isFuture ? 0 : walks
+      .filter((r) => new Date(r.start_date_local).toDateString() === day.toDateString())
+      .reduce((sum, r) => sum + metersToMiles(r.distance), 0);
+
+    return { d, mi: parseFloat(dayMi.toFixed(1)), today: isToday };
+  });
+
+  const gymMinutes: MinutesDay[] = weekDays.map((d, i) => {
+    const day = new Date(monday);
+    day.setDate(monday.getDate() + i);
+    const isToday = day.toDateString() === now.toDateString();
+    const isFuture = day > now;
+
+    const dayMin = isFuture ? 0 : gyms
+      .filter((g) => new Date(g.start_date_local).toDateString() === day.toDateString())
+      .reduce((sum, g) => sum + (g.moving_time ?? 0) / 60, 0);
+
+    return { d, min: Math.round(dayMin), today: isToday };
+  });
+
+  const totalMi = mileage.reduce((sum, d) => sum + d.mi, 0);
+  const totalWalkMi = walkMileage.reduce((sum, d) => sum + d.mi, 0);
+  const totalGymMin = gymMinutes.reduce((sum, d) => sum + d.min, 0);
+  const gymSessionCount = gymMinutes.filter((d) => d.min > 0).length;
+
+  // Last 7 days individual activities for AI context
+  const sevenDaysAgo = new Date(now);
+  sevenDaysAgo.setDate(now.getDate() - 7);
+  sevenDaysAgo.setHours(0, 0, 0, 0);
+
+  const recentActivities: RecentActivity[] = sorted
+    .filter(a => new Date(a.start_date_local) >= sevenDaysAgo)
+    .map(a => {
+      const isRun = hasActivityType(a, RUN_TYPES);
+      const isWalk = hasActivityType(a, WALK_TYPES);
+      const type: 'run' | 'gym' | 'walk' = isRun ? 'run' : isWalk ? 'walk' : 'gym';
+      return {
+        date: a.start_date_local.split('T')[0],
+        type,
+        name: a.name,
+        distanceMi: a.distance > 0 ? parseFloat(metersToMiles(a.distance).toFixed(1)) : undefined,
+        durationMin: Math.round((a.moving_time ?? 0) / 60),
+        hr: a.average_heartrate ? Math.round(a.average_heartrate) : undefined,
+        pace: isRun && a.average_speed ? speedToPace(a.average_speed) : undefined,
+        zone: isRun && a.average_heartrate ? hrZone(Math.round(a.average_heartrate)) : undefined,
+      };
+    });
+
+  // Last 8 weeks of training load (newest first)
+  const weeklyMileage: WeeklyLoad[] = [];
+  for (let w = 0; w < 8; w++) {
+    const weekMonday = new Date(monday);
+    weekMonday.setDate(monday.getDate() - w * 7);
+    const weekSunday = new Date(weekMonday);
+    weekSunday.setDate(weekMonday.getDate() + 6);
+    weekSunday.setHours(23, 59, 59, 999);
+
+    const weekActs = sorted.filter(a => {
+      const d = new Date(a.start_date_local);
+      return d >= weekMonday && d <= weekSunday;
+    });
+
+    const weekRuns = weekActs.filter(a => hasActivityType(a, RUN_TYPES));
+    const weekWalks = weekActs.filter(a => hasActivityType(a, WALK_TYPES));
+    const weekGyms = weekActs.filter(a => hasActivityType(a, GYM_TYPES));
+
+    weeklyMileage.push({
+      weekStart: weekMonday.toISOString().split('T')[0],
+      runMi: parseFloat(weekRuns.reduce((sum, a) => sum + metersToMiles(a.distance), 0).toFixed(1)),
+      walkMi: parseFloat(weekWalks.reduce((sum, a) => sum + metersToMiles(a.distance), 0).toFixed(1)),
+      gymMin: Math.round(weekGyms.reduce((sum, a) => sum + (a.moving_time ?? 0) / 60, 0)),
+      gymSessions: weekGyms.length,
+    });
+  }
+
+  return {
+    lastRun, lastWorkout,
+    mileage, walkMileage, gymMinutes,
+    totalMi, totalWalkMi, totalGymMin, gymSessionCount,
+    recentActivities, weeklyMileage,
+  };
 }

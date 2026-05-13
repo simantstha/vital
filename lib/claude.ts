@@ -1,7 +1,65 @@
 import Anthropic from '@anthropic-ai/sdk';
+import fs from 'fs';
+import path from 'path';
 import type { DailyBrief } from './types';
+import type { WhoopHistory } from './whoop';
+import type { RecentActivity, WeeklyLoad } from './strava';
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+const PROFILE_PATH = path.resolve(process.cwd(), '.vital-memory/user-profile.md');
+
+const SEED_PROFILE = `# Vital — User Profile
+
+## Goals
+- Primary: Twin Cities Marathon, October 4 2026
+- Body composition: [performance / weight-loss / muscle-gain — update this]
+- Weekly mileage target: ~35mi/week by race week
+
+## Baselines (update as patterns emerge)
+- HRV baseline: ~65ms
+- Resting HR: ~49 bpm
+- Recovery baseline: ~72%
+- Typical hard days: Tuesday, Thursday, Saturday, Sunday (runs)
+- Typical gym days: inferred from Strava
+
+## Dietary Preferences / Constraints
+- (Claude fills this in over time)
+
+## Coach Notes
+(Claude appends one-sentence insights here after each brief)
+`;
+
+function readUserProfile(): string {
+  try {
+    return fs.readFileSync(PROFILE_PATH, 'utf8');
+  } catch {
+    try {
+      fs.mkdirSync(path.dirname(PROFILE_PATH), { recursive: true });
+      fs.writeFileSync(PROFILE_PATH, SEED_PROFILE, 'utf8');
+    } catch { /* read-only fs on Vercel */ }
+    return SEED_PROFILE;
+  }
+}
+
+function appendCoachNote(note: string) {
+  try {
+    let content = fs.readFileSync(PROFILE_PATH, 'utf8');
+    const marker = '## Coach Notes';
+    const idx = content.indexOf(marker);
+    const date = new Date().toISOString().split('T')[0];
+    const entry = `\n- [${date}] ${note}`;
+    if (idx === -1) {
+      content += `\n${marker}${entry}\n`;
+    } else {
+      // Append before next section or end of file
+      const nextSection = content.indexOf('\n## ', idx + marker.length);
+      const insertAt = nextSection === -1 ? content.length : nextSection;
+      content = content.slice(0, insertAt) + entry + content.slice(insertAt);
+    }
+    fs.writeFileSync(PROFILE_PATH, content, 'utf8');
+  } catch { /* read-only fs */ }
+}
 
 interface BriefContext {
   recovery: number;
@@ -12,19 +70,57 @@ interface BriefContext {
   strain: number | string;
   weeklyMi: number;
   lastRun: { distanceMi: string; pace: string; dayTime: string; name: string } | null;
+  history?: WhoopHistory | null;
+  recentActivities?: RecentActivity[];
+  weeklyMileage?: WeeklyLoad[];
+  recentNutrition?: Array<{ date: string; calories: number; carbs: number; protein: number; fat: number }>;
 }
-
-const CHIP_WORKOUT_BY_RECOVERY = (score: number) =>
-  score >= 67 ? 'Quality intervals or tempo run' :
-  score >= 34 ? 'Zone 2 aerobic · 60min easy' :
-  'Walk 20min · mobility only';
 
 export async function generateDailyBrief(ctx: BriefContext): Promise<DailyBrief> {
   const today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+  const userProfile = readUserProfile();
 
-  const prompt = `You are a personal health AI for a marathon runner training for the Loch Ness Marathon on October 4, 2026.
+  const historySection = ctx.history?.days.length
+    ? `\n## 7-Day Recovery Trend (newest first)\n` +
+      ctx.history.days.map(d =>
+        `${d.date}: recovery ${d.recovery}%, HRV ${d.hrv}ms, sleep ${d.sleepPerf}% (${d.sleepDuration})`
+      ).join('\n') +
+      `\n7-day avg: recovery ${ctx.history.avgRecovery7d}%, HRV ${ctx.history.avgHrv7d}ms — trend: ${ctx.history.trend}`
+    : '';
 
-Today's data:
+  const activitiesSection = ctx.recentActivities?.length
+    ? `\n## Last 7 Days Activities\n` +
+      ctx.recentActivities.map(a => {
+        if (a.type === 'run') return `${a.date}: Run ${a.distanceMi}mi @ ${a.pace}/mi, HR ${a.hr}bpm (${a.zone}), "${a.name}"`;
+        if (a.type === 'gym') return `${a.date}: Gym ${a.durationMin}min, "${a.name}"`;
+        return `${a.date}: Walk ${a.distanceMi ?? 0}mi, ${a.durationMin}min`;
+      }).join('\n')
+    : '';
+
+  const weeklyLoadSection = ctx.weeklyMileage?.length
+    ? `\n## Weekly Training Load (last 8 weeks, newest first)\n` +
+      ctx.weeklyMileage.map(w =>
+        `${w.weekStart}: ${w.runMi}mi run · ${w.walkMi}mi walk · ${w.gymMin}min gym (${w.gymSessions} sessions)`
+      ).join('\n')
+    : '';
+
+  const nutritionSection = ctx.recentNutrition?.length
+    ? `\n## Recent Nutrition (last 3 days)\n` +
+      ctx.recentNutrition.map(n =>
+        `${n.date}: ${n.calories}kcal · ${n.carbs}g carbs · ${n.protein}g protein · ${n.fat}g fat`
+      ).join('\n')
+    : '';
+
+  const prompt = `You are a personal coach AND nutritionist for a marathon runner training for the Twin Cities Marathon on October 4, 2026. Use their training history and recovery trends to:
+1. Prescribe today's workout intensity based on recovery + recent training load
+2. Prescribe today's nutrition for recovery (post-workout if applicable) AND tomorrow's performance (carb-load if tomorrow looks like a hard day based on their pattern)
+3. Spot patterns worth calling out (e.g. "your HRV drops when sleep is under 7h")
+4. Keep meals specific and tied to actual training data — not generic advice
+
+## Long-term User Profile
+${userProfile}
+
+## Today's Snapshot
 - Date: ${today}
 - Recovery Score: ${ctx.recovery}% (${ctx.recovery >= 67 ? 'Green' : ctx.recovery >= 34 ? 'Amber' : 'Red'})
 - HRV: ${ctx.hrv}ms
@@ -33,13 +129,14 @@ Today's data:
 - Today's Strain so far: ${ctx.strain}
 - Weekly Miles: ${ctx.weeklyMi.toFixed(1)}mi this week
 ${ctx.lastRun ? `- Last Run: ${ctx.lastRun.distanceMi}mi at ${ctx.lastRun.pace}/mi (${ctx.lastRun.dayTime}) — "${ctx.lastRun.name}"` : '- No recent runs logged'}
+${historySection}${activitiesSection}${weeklyLoadSection}${nutritionSection}
 
-Generate a morning brief and meal plan. Respond ONLY with valid JSON, no markdown, no explanation:
+Respond ONLY with valid JSON, no markdown, no explanation:
 
 {
   "body": "2-3 sentences. Personal, specific to their numbers. Use **text** for bold emphasis and *text* for accent highlights.",
   "chips": [
-    {"k": "Workout", "v": "specific recommendation based on recovery"},
+    {"k": "Workout", "v": "specific recommendation based on recovery + load"},
     {"k": "Sleep", "v": "${ctx.sleepPerf}% · ${ctx.sleepDuration}"},
     {"k": "Strain", "v": "cap based on recovery"}
   ],
@@ -53,18 +150,21 @@ Generate a morning brief and meal plan. Respond ONLY with valid JSON, no markdow
     {"k": "Lunch", "t": "12:45 PM", "h": 12.75, "kcal": 0, "c": 0, "p": 0, "f": 0, "items": "...", "why": "..."},
     {"k": "Snack", "t": "3:30 PM", "h": 15.5, "kcal": 0, "c": 0, "p": 0, "f": 0, "items": "...", "why": "..."},
     {"k": "Dinner", "t": "7:30 PM", "h": 19.5, "kcal": 0, "c": 0, "p": 0, "f": 0, "items": "...", "why": "..."}
-  ]
+  ],
+  "profileUpdate": "one sentence insight worth remembering about this user's patterns, or null"
 }`;
 
   const message = await client.messages.create({
     model: 'claude-sonnet-4-6',
-    max_tokens: 1024,
+    max_tokens: 1500,
     messages: [{ role: 'user', content: prompt }],
   });
 
   const raw = message.content[0].type === 'text' ? message.content[0].text : '';
   const text = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
   const parsed = JSON.parse(text);
+
+  if (parsed.profileUpdate) appendCoachNote(parsed.profileUpdate);
 
   return {
     date: new Date().toISOString().split('T')[0],

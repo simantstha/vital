@@ -3,6 +3,7 @@ import { getCachedBrief, cacheBrief } from '@/lib/briefCache';
 import { generateDailyBrief } from '@/lib/claude';
 import { fetchWhoopMetrics } from '@/lib/whoop';
 import { fetchStravaData } from '@/lib/strava';
+import { getDiaryMacros, type MFPMacros } from '@/lib/mfp';
 
 export const dynamic = 'force-dynamic';
 
@@ -12,10 +13,15 @@ function msToHm(ms: number): string {
   return `${h}h ${m}m`;
 }
 
+function daysAgoDate(n: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return d.toISOString().split('T')[0];
+}
+
 export async function GET() {
   const cached = getCachedBrief();
   if (cached) return NextResponse.json(cached);
-
   return generate();
 }
 
@@ -25,9 +31,11 @@ export async function POST() {
 
 async function generate() {
   try {
-    const [whoopResult, stravaResult] = await Promise.allSettled([
+    const [whoopResult, stravaResult, mfpYesterdayResult, mfpDayBeforeResult] = await Promise.allSettled([
       fetchWhoopMetrics(),
       fetchStravaData(),
+      getDiaryMacros(daysAgoDate(1)),
+      getDiaryMacros(daysAgoDate(2)),
     ]);
 
     const whoop = whoopResult.status === 'fulfilled' ? whoopResult.value : null;
@@ -52,6 +60,11 @@ async function generate() {
 
     const strain = cycleData?.records?.[0]?.score?.strain?.toFixed(1) ?? '–';
 
+    // Last 3 days nutrition for AI context (today excluded — not yet logged)
+    const recentNutrition = [mfpYesterdayResult, mfpDayBeforeResult]
+      .filter((r): r is PromiseFulfilledResult<MFPMacros> => r.status === 'fulfilled' && r.value.hasData)
+      .map(r => ({ date: r.value.date, calories: r.value.calories, carbs: r.value.carbs, protein: r.value.protein, fat: r.value.fat }));
+
     const brief = await generateDailyBrief({
       recovery: recoveryScore,
       hrv,
@@ -61,6 +74,10 @@ async function generate() {
       strain,
       weeklyMi: strava?.totalMi ?? 0,
       lastRun: strava?.lastRun ?? null,
+      history: whoop?.history ?? null,
+      recentActivities: strava?.recentActivities ?? [],
+      weeklyMileage: strava?.weeklyMileage ?? [],
+      recentNutrition,
     });
 
     cacheBrief(brief);
