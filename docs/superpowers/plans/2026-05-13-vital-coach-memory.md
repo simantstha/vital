@@ -15,7 +15,8 @@
 | Action | Path | Responsibility |
 |--------|------|----------------|
 | Create | `lib/memory.ts` | All memory I/O helpers + Claude tool definitions |
-| Modify | `lib/telegramCoach.ts` | Tool_use agentic loop + new context loading |
+| Create | `lib/nutritionix.ts` | Nutritionix Natural Language API — food lookup by description |
+| Modify | `lib/telegramCoach.ts` | Tool_use agentic loop + new context loading + meal confirmation loop |
 | Modify | `lib/claude.ts` | Sport-agnostic brief prompt + HRV baseline drift |
 | Create | `.vital-memory/memory-index.md` | Manifest of all domain files |
 | Create | `.vital-memory/core-profile.md` | Migrated from user-profile.md |
@@ -622,21 +623,119 @@ git push -u origin feat/vital-telegram-coach
 
 ---
 
-## Task 6: Meal Photo → Macro Estimation
+## Task 6: Meal Photo → Cal AI-Accuracy Macro Tracking
 
 **Files:**
+- Create: `lib/nutritionix.ts`
 - Modify: `lib/telegramCoach.ts`
+- Modify: `lib/coachState.ts` (add pending meal state)
 
-Extend `classifyImage` to detect meal photos and estimate macros visually. When detected, coach responds with the estimate and logs it as a meal override.
+Three-step flow: Claude vision identifies food items + portions → Nutritionix DB lookup for real macro data → Telegram confirmation loop where user corrects portions before logging.
 
-- [ ] **Step 1: Extend `classifyImage` return type and prompt in `lib/telegramCoach.ts`**
+Sign up for a free Nutritionix account at https://developer.nutritionix.com — free tier gives 500 calls/day. Add `NUTRITIONIX_APP_ID` and `NUTRITIONIX_APP_KEY` to `.env.local`.
 
-Find the `classifyImage` function and replace its implementation:
+- [ ] **Step 1: Create `lib/nutritionix.ts`**
+
+```typescript
+export interface NutritionixFood {
+  food_name: string;
+  serving_qty: number;
+  serving_unit: string;
+  nf_calories: number;
+  nf_total_carbohydrate: number;
+  nf_protein: number;
+  nf_total_fat: number;
+}
+
+export interface NutritionixResult {
+  kcal: number;
+  c: number;
+  p: number;
+  f: number;
+  foods: { name: string; qty: number; unit: string; kcal: number }[];
+}
+
+export async function lookupNutrition(query: string): Promise<NutritionixResult | null> {
+  const res = await fetch('https://trackapi.nutritionix.com/v2/natural/nutrients', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-app-id': process.env.NUTRITIONIX_APP_ID!,
+      'x-app-key': process.env.NUTRITIONIX_APP_KEY!,
+    },
+    body: JSON.stringify({ query }),
+  });
+
+  if (!res.ok) return null;
+
+  const data = await res.json() as { foods: NutritionixFood[] };
+
+  const totals = data.foods.reduce(
+    (acc, f) => ({
+      kcal: acc.kcal + Math.round(f.nf_calories),
+      c: acc.c + Math.round(f.nf_total_carbohydrate),
+      p: acc.p + Math.round(f.nf_protein),
+      f: acc.f + Math.round(f.nf_total_fat),
+    }),
+    { kcal: 0, c: 0, p: 0, f: 0 }
+  );
+
+  return {
+    ...totals,
+    foods: data.foods.map(f => ({
+      name: f.food_name,
+      qty: f.serving_qty,
+      unit: f.serving_unit,
+      kcal: Math.round(f.nf_calories),
+    })),
+  };
+}
+```
+
+- [ ] **Step 2: Add `PendingMeal` state to `lib/coachState.ts`**
+
+Add after the existing `PendingBarcode` interface and functions:
+
+```typescript
+export interface PendingMeal {
+  chatId: number;
+  query: string;           // natural language string sent to Nutritionix
+  result: {
+    kcal: number; c: number; p: number; f: number;
+    foods: { name: string; qty: number; unit: string; kcal: number }[];
+  };
+  meal: string;            // breakfast | lunch | snack | dinner
+  expiresAt: number;       // epoch ms — 10-minute TTL
+}
+
+const PENDING_MEAL_FILE = path.join(MEMORY_DIR, 'pending-meal.json');
+
+export function readPendingMeal(chatId: number): PendingMeal | null {
+  try {
+    const p = JSON.parse(fs.readFileSync(PENDING_MEAL_FILE, 'utf-8')) as PendingMeal;
+    if (p.chatId !== chatId || Date.now() > p.expiresAt) return null;
+    return p;
+  } catch { return null; }
+}
+
+export function writePendingMeal(pending: PendingMeal) {
+  ensureDir();
+  try { fs.writeFileSync(PENDING_MEAL_FILE, JSON.stringify(pending), 'utf-8'); } catch { /* ok */ }
+}
+
+export function clearPendingMeal() {
+  try { fs.unlinkSync(PENDING_MEAL_FILE); } catch { /* ok */ }
+}
+```
+
+- [ ] **Step 3: Extend `classifyImage` in `lib/telegramCoach.ts` to identify food items + portions**
+
+Replace the existing `classifyImage` function:
 
 ```typescript
 async function classifyImage(base64: string, mimeType: string): Promise<
   | { type: 'barcode'; value: string }
-  | { type: 'meal_photo'; description: string; kcal: number; c: number; p: number; f: number }
+  | { type: 'meal_photo'; query: string; items: string[] }
   | { type: 'other' }
 > {
   const msg = await client.messages.create({
@@ -650,55 +749,109 @@ async function classifyImage(base64: string, mimeType: string): Promise<
           type: 'text',
           text: `Classify this image. Respond with JSON only, no markdown.
 
-If it shows a barcode or QR code: {"type":"barcode","value":"<barcode digits>"}
-If it shows food or a meal: {"type":"meal_photo","description":"<brief description>","kcal":<number>,"c":<carbs g>,"p":<protein g>,"f":<fat g>}
+If it shows a barcode or QR code: {"type":"barcode","value":"<digits>"}
+If it shows food or a meal: {"type":"meal_photo","query":"<natural language list for Nutritionix, e.g. '6oz grilled chicken breast, 1 cup brown rice, 1 cup steamed broccoli'>","items":["<item 1>","<item 2>"]}
 Otherwise: {"type":"other"}
 
-For meal_photo, estimate macros for the full plate/portion shown. Be concise with description (max 8 words).`,
+For meal_photo: estimate realistic portion sizes for each visible item. query must be a single comma-separated string of items with quantities and cooking method.`,
         },
       ],
     }],
   });
   const content = (msg.content[0] as { text: string }).text;
-  const json = JSON.parse(content.replace(/```json\n?|```/g, '').trim());
-  return json;
+  return JSON.parse(content.replace(/```json\n?|```/g, '').trim());
 }
 ```
 
-- [ ] **Step 2: Handle `meal_photo` case in `processMessage` in `lib/telegramCoach.ts`**
+- [ ] **Step 4: Add meal photo + confirmation loop handling to `processMessage` in `lib/telegramCoach.ts`**
 
-In `processMessage`, find the image handling block (currently handles barcode only). Add the meal photo case:
+Add imports at the top:
 
 ```typescript
-if (image) {
-  const classification = await classifyImage(image.base64, image.mimeType);
+import { lookupNutrition } from '@/lib/nutritionix';
+import { readPendingMeal, writePendingMeal, clearPendingMeal, type PendingMeal } from '@/lib/coachState';
+```
 
-  if (classification.type === 'barcode') {
-    // existing barcode logic — unchanged
-    const product = await lookupBarcode(classification.value);
-    // ... rest of barcode flow
-  } else if (classification.type === 'meal_photo') {
-    const { description, kcal, c, p, f } = classification;
-    const hour = new Date().getHours();
-    const meal = hour < 10 ? 'breakfast' : hour < 14 ? 'lunch' : hour < 17 ? 'snack' : 'dinner';
+In `processMessage`, add pending meal check **before** the image block (so text replies to a pending meal are caught first):
+
+```typescript
+// Check if user is confirming or correcting a pending meal estimate
+const pendingMeal = readPendingMeal(chatId);
+if (pendingMeal && !image) {
+  const text = update.message?.text?.toLowerCase() ?? '';
+  const isConfirm = /^(yes|yeah|yep|correct|log|ok|looks good|right)/i.test(text);
+
+  if (isConfirm) {
+    clearPendingMeal();
     writeMealOverride({
-      meal,
-      kcal,
-      c,
-      p,
-      f,
-      items: description,
-      reason: 'meal photo',
+      meal: pendingMeal.meal,
+      kcal: pendingMeal.result.kcal,
+      c: pendingMeal.result.c,
+      p: pendingMeal.result.p,
+      f: pendingMeal.result.f,
+      items: pendingMeal.query,
+      reason: 'meal photo + Nutritionix',
       updatedAt: new Date().toISOString(),
     });
-    userContent = `[Meal photo logged as ${meal}: ${description} — ${kcal}kcal, ${c}g carbs, ${p}g protein, ${f}g fat]\n\nUser sent a meal photo. Confirm what was logged and offer a brief nutrition comment.`;
+    await sendTelegram(chatId, `✅ Logged: ${pendingMeal.result.kcal}kcal · ${pendingMeal.result.p}g protein · ${pendingMeal.result.c}g carbs · ${pendingMeal.result.f}g fat`);
+    return;
   } else {
-    userContent = '[User sent an image that is not a barcode or meal photo. Acknowledge and ask what they need.]';
+    // User is correcting portions — treat their text as a new Nutritionix query
+    clearPendingMeal();
+    const corrected = await lookupNutrition(update.message?.text ?? '');
+    if (corrected) {
+      const hour = new Date().getHours();
+      const meal = hour < 10 ? 'breakfast' : hour < 14 ? 'lunch' : hour < 17 ? 'snack' : 'dinner';
+      const newPending: PendingMeal = {
+        chatId,
+        query: update.message?.text ?? '',
+        result: corrected,
+        meal,
+        expiresAt: Date.now() + 10 * 60 * 1000,
+      };
+      writePendingMeal(newPending);
+      const itemLines = corrected.foods.map(f => `  • ${f.qty} ${f.unit} ${f.name} — ${f.kcal}kcal`).join('\n');
+      await sendTelegram(chatId, `Updated estimate:\n${itemLines}\n\nTotal: ${corrected.kcal}kcal · ${corrected.p}g protein · ${corrected.c}g carbs · ${corrected.f}g fat\n\nLooks right? (yes / correct it)`);
+      return;
+    }
   }
 }
 ```
 
-- [ ] **Step 3: Verify TypeScript compiles**
+Then in the image block, add the meal photo case after the barcode case:
+
+```typescript
+} else if (classification.type === 'meal_photo') {
+  const nutrition = await lookupNutrition(classification.query);
+  if (!nutrition) {
+    await sendTelegram(chatId, "I could see the food but couldn't look up the nutrition data. Try describing what you ate in text.");
+    return;
+  }
+  const hour = new Date().getHours();
+  const meal = hour < 10 ? 'breakfast' : hour < 14 ? 'lunch' : hour < 17 ? 'snack' : 'dinner';
+  const pending: PendingMeal = {
+    chatId,
+    query: classification.query,
+    result: nutrition,
+    meal,
+    expiresAt: Date.now() + 10 * 60 * 1000,
+  };
+  writePendingMeal(pending);
+  const itemLines = nutrition.foods.map(f => `  • ${f.qty} ${f.unit} ${f.name} — ${f.kcal}kcal`).join('\n');
+  await sendTelegram(chatId, `I see:\n${itemLines}\n\nTotal: ${nutrition.kcal}kcal · ${nutrition.p}g protein · ${nutrition.c}g carbs · ${nutrition.f}g fat\n\nLooks right? Reply *yes* to log it, or correct the portions.`);
+  return;
+```
+
+- [ ] **Step 5: Add env vars to `.env.local`**
+
+```
+NUTRITIONIX_APP_ID=your_app_id_here
+NUTRITIONIX_APP_KEY=your_app_key_here
+```
+
+Get these from https://developer.nutritionix.com (free account, 500 calls/day).
+
+- [ ] **Step 6: Verify TypeScript compiles**
 
 ```bash
 cd /Users/simantstha/Documents/Playground/vital && npx tsc --noEmit
@@ -706,15 +859,19 @@ cd /Users/simantstha/Documents/Playground/vital && npx tsc --noEmit
 
 Expected: no errors.
 
-- [ ] **Step 4: Test — send a meal photo to @VayamBot**
+- [ ] **Step 7: Test the full flow**
 
-Send a photo of any meal. Expected: Coach replies confirming what was logged with estimated macros and a brief comment. Check `.vital-memory/overrides.json` — should contain an entry for the detected meal slot.
+Send a meal photo to @VayamBot. Expected sequence:
+1. Bot replies: "I see: • 6oz grilled chicken — 280kcal, • 1 cup brown rice — 216kcal..." with confirmation prompt
+2. Reply "the chicken was more like 8oz" → bot recalculates and asks again
+3. Reply "yes" → bot confirms logged + shows totals
+4. Check `.vital-memory/overrides.json` — entry for the correct meal slot with Nutritionix macros
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add lib/telegramCoach.ts
-git commit -m "feat: meal photo macro estimation via Claude vision"
+git add lib/nutritionix.ts lib/coachState.ts lib/telegramCoach.ts
+git commit -m "feat: Cal AI-accuracy meal photo tracking — vision + Nutritionix + confirmation loop"
 ```
 
 ---
