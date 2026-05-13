@@ -4,6 +4,7 @@ import { readUserProfile } from '@/lib/claude';
 import { readCoachState, writeMealOverride, writePendingBarcode, clearPendingBarcode, type MealOverride, type PendingBarcode } from '@/lib/coachState';
 import { logWeight, readWeightLog } from '@/lib/weightLog';
 import { lookupBarcode } from '@/lib/openFoodFacts';
+import { getDiaryMacros } from '@/lib/mfp';
 
 const client = new Anthropic();
 
@@ -27,12 +28,13 @@ ${userProfile}
 ${healthCtx}`;
 }
 
-// ── Health context from cache ────────────────────────────────────────────────
+// ── Health context from cache + live MFP ────────────────────────────────────
 
-function buildHealthContext(): string {
+async function buildHealthContext(): Promise<string> {
   const brief = getCachedBrief();
   const state = readCoachState();
   const weights = readWeightLog().slice(-7);
+  const today = new Date().toISOString().split('T')[0];
 
   let ctx = '';
 
@@ -42,13 +44,26 @@ function buildHealthContext(): string {
     for (const meal of brief.meals) {
       const override = state.mealOverrides.find(o => o.meal === meal.k.toLowerCase());
       if (override) {
-        ctx += `${meal.k} at ${meal.t}: ${override.items} — ${override.kcal}kcal [ADJUSTED]\n`;
+        ctx += `${meal.k} at ${meal.t}: ${override.items} — ${override.kcal}kcal [ADJUSTED via chat]\n`;
       } else {
         ctx += `${meal.k} at ${meal.t}: ${meal.items} — ${meal.kcal}kcal (${meal.c}g C/${meal.p}g P/${meal.f}g F)\n`;
       }
     }
   } else {
     ctx += `## Brief\nNo brief generated yet today.\n`;
+  }
+
+  // Live MFP diary — what was actually logged
+  try {
+    const mfp = await getDiaryMacros(today);
+    if (mfp.hasData) {
+      ctx += `\n## MyFitnessPal (actually logged today)\n`;
+      ctx += `Calories: ${mfp.calories} kcal · Carbs: ${mfp.carbs}g · Protein: ${mfp.protein}g · Fat: ${mfp.fat}g\n`;
+    } else {
+      ctx += `\n## MyFitnessPal\nNo diary entries logged yet today.\n`;
+    }
+  } catch {
+    ctx += `\n## MyFitnessPal\nUnavailable right now.\n`;
   }
 
   if (weights.length > 0) {
@@ -156,7 +171,7 @@ export async function processMessage(
   image?: { base64: string; mimeType: string },
 ): Promise<string> {
   const userProfile = readUserProfile();
-  const healthCtx = buildHealthContext();
+  const healthCtx = await buildHealthContext();
   const systemPrompt = buildSystemPrompt(userProfile, healthCtx);
 
   let userContent: Anthropic.MessageParam['content'];
