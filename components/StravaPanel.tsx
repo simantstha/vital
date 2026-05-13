@@ -31,13 +31,14 @@ export default function StravaPanel({
   lastWorkout,
   status,
 }: StravaPanelProps) {
+  const gymData = gymMinutes.map((d) => ({ d: d.d, mi: d.min, today: d.today }));
   const chartRows = [
     {
       key: 'run',
       title: 'Run Miles',
       total: `${totalMi.toFixed(1)} / ${TARGET_MI} mi target`,
       data: mileage,
-      max: 11,
+      max: Math.max(11, ...mileage.map(d => d.mi)),
       opacity: 1,
     },
     {
@@ -45,15 +46,15 @@ export default function StravaPanel({
       title: 'Walk Miles',
       total: `${totalWalkMi.toFixed(1)} mi`,
       data: walkMileage,
-      max: 5,
+      max: Math.max(5, ...walkMileage.map(d => d.mi)),
       opacity: 0.62,
     },
     {
       key: 'gym',
       title: 'Gym Minutes',
       total: `${totalGymMin} / ${gymSessionCount} sessions`,
-      data: gymMinutes.map((d) => ({ d: d.d, mi: d.min, today: d.today })),
-      max: 90,
+      data: gymData,
+      max: Math.max(90, ...gymData.map(d => d.mi)),
       opacity: 0.78,
     },
   ];
@@ -120,7 +121,7 @@ export default function StravaPanel({
             </div>
             <div className="bars">
               {row.data.map((b, i) => {
-                const h = b.mi > 0 ? Math.max(8, (b.mi / row.max) * 100) : 6;
+                const h = b.mi > 0 ? Math.min(100, Math.max(8, (b.mi / row.max) * 100)) : 6;
                 return (
                   <div key={i} className={`bar${b.today ? ' is-today' : ''}`}>
                     <div className="col">

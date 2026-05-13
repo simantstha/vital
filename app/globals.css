@@ -114,8 +114,6 @@ body {
 .stage {
   position: relative;
   z-index: 2;
-  height: 100vh;
-  width: 100vw;
   padding: 14px 24px 14px;
   display: flex;
   flex-direction: column;
@@ -372,7 +370,7 @@ body {
   font-weight: 500;
   letter-spacing: 0.18em;
   text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.4);
+  color: rgba(255, 255, 255, 0.55);
 }
 
 .hero-body {
@@ -451,7 +449,7 @@ body {
   font-weight: 600;
   letter-spacing: 0.16em;
   text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.32);
+  color: rgba(255, 255, 255, 0.52);
 }
 
 .metric-value {
@@ -577,7 +575,7 @@ body {
 .panel-meta {
   font-size: 11px;
   font-weight: 500;
-  color: rgba(255, 255, 255, 0.4);
+  color: rgba(255, 255, 255, 0.55);
   letter-spacing: 0.12em;
   text-transform: uppercase;
 }
@@ -626,16 +624,16 @@ body {
 
 .mini .s {
   font-size: 11px;
-  color: rgba(255, 255, 255, 0.5);
+  color: rgba(255, 255, 255, 0.6);
   margin-top: 4px;
 }
 
 .section-title {
   font-size: 10px;
-  font-weight: 600;
+  font-weight: 700;
   letter-spacing: 0.2em;
   text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.42);
+  color: rgba(255, 255, 255, 0.55);
   margin: 3px 0 4px;
 }
 
@@ -731,6 +729,7 @@ body {
   flex: 1;
   display: flex;
   align-items: end;
+  overflow: hidden;
 }
 
 .bar .fill {
@@ -752,15 +751,35 @@ body {
 }
 
 .bar .day {
-  font-size: 10px;
+  font-size: 11px;
   text-align: center;
-  color: rgba(255, 255, 255, 0.35);
+  color: rgba(255, 255, 255, 0.52);
   font-weight: 600;
   letter-spacing: 0.1em;
 }
 
 .bar.is-today .day {
   color: rgba(var(--glow), 1);
+}
+
+/* Walk bars — teal */
+.mileage-walk .bar .fill {
+  background: linear-gradient(180deg, #22d3ee, #0891b2);
+  box-shadow: 0 0 12px rgba(6, 182, 212, 0.3);
+}
+.mileage-walk .bar .fill.today {
+  background: linear-gradient(180deg, #67e8f9, #22d3ee);
+  box-shadow: 0 0 16px rgba(34, 211, 238, 0.5);
+}
+
+/* Gym bars — violet */
+.mileage-gym .bar .fill {
+  background: linear-gradient(180deg, #c084fc, #9333ea);
+  box-shadow: 0 0 12px rgba(147, 51, 234, 0.3);
+}
+.mileage-gym .bar .fill.today {
+  background: linear-gradient(180deg, #e879f9, #c026d3);
+  box-shadow: 0 0 16px rgba(192, 132, 252, 0.5);
 }
 
 /* ─── Nutrition panel ─── */
@@ -1075,8 +1094,8 @@ body {
 }
 
 .strip-time {
-  font-size: 9px;
-  color: rgba(255, 255, 255, 0.35);
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.52);
   margin-left: auto;
   font-variant-numeric: tabular-nums;
 }
@@ -1108,7 +1127,7 @@ body {
 }
 
 .macro {
-  padding: 5px 8px;
+  padding: 5px 8px 18px;
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.025);
   border: 1px solid rgba(255, 255, 255, 0.05);
@@ -1239,3 +1258,190 @@ body {
 
 /* ─── Scrollbar hide ─── */
 .panel::-webkit-scrollbar { display: none; }
+
+/* Refined dashboard density */
+.activity-panel,
+.nutrition-panel {
+  gap: 10px;
+}
+
+.activity-panel .panel-head,
+.nutrition-panel .panel-head {
+  margin-bottom: 2px;
+}
+
+.activity-overview {
+  display: grid;
+  grid-template-columns: 1.45fr 0.82fr 0.82fr 1fr;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.activity-overview .mini {
+  min-height: 96px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.mini-primary {
+  background:
+    radial-gradient(140% 180% at 0% 0%, rgba(252, 82, 0, 0.18), transparent 55%),
+    rgba(255, 255, 255, 0.03);
+  border-color: rgba(252, 82, 0, 0.18);
+}
+
+.training-board {
+  display: grid;
+  grid-template-rows: 1.18fr 1fr 1fr;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.activity-panel .mileage {
+  margin-top: 0;
+  padding: 10px 12px;
+  border-top: 0;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.023);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.activity-panel .mileage-run {
+  background:
+    radial-gradient(90% 160% at 12% 0%, rgba(var(--bg-tint), 0.1), transparent 62%),
+    rgba(255, 255, 255, 0.025);
+}
+
+.activity-panel .mileage-head {
+  margin-bottom: 8px;
+  flex-shrink: 0;
+}
+
+.activity-panel .bars {
+  height: auto;
+  flex: 1 1 auto;
+  min-height: 54px;
+}
+
+.activity-footer {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.activity-footer > div {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 9px 11px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.footer-k {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.footer-v {
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: #fff;
+  font-variant-numeric: tabular-nums;
+}
+
+.nutrition-note {
+  display: flex;
+  gap: 12px;
+  padding: 10px 13px;
+  border-radius: 14px;
+  background:
+    radial-gradient(100% 160% at 0% 0%, rgba(217, 119, 87, 0.12), transparent 58%),
+    rgba(255, 255, 255, 0.024);
+  border: 1px solid rgba(217, 119, 87, 0.14);
+  flex-shrink: 0;
+}
+
+.nutrition-note .quote-mark {
+  padding-top: 8px;
+}
+
+.nutrition-note .quote-body {
+  font-size: 12px;
+  line-height: 1.42;
+}
+
+.nutrition-panel .macros {
+  gap: 8px;
+  margin-bottom: 2px;
+}
+
+.nutrition-panel .macro {
+  min-height: 88px;
+  padding: 8px 10px 20px;
+}
+
+.nutrition-panel .meal-feature {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(178px, 0.55fr);
+  gap: 12px;
+  flex: 1 1 auto;
+  min-height: 0;
+  margin-bottom: 0;
+  padding: 13px 14px;
+}
+
+.meal-feature-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.nutrition-panel .feat-row {
+  margin-bottom: 8px;
+}
+
+.nutrition-panel .feat-kcal {
+  font-size: 30px;
+}
+
+.nutrition-panel .feat-items {
+  font-size: 15px;
+  margin-bottom: 10px;
+}
+
+.nutrition-panel .feat-why {
+  font-size: 12px;
+  line-height: 1.48;
+  margin-bottom: 0;
+}
+
+.nutrition-panel .feat-macros {
+  flex-direction: column;
+  gap: 8px;
+}
+
+.nutrition-panel .feat-macro {
+  min-height: 0;
+  padding: 9px 11px;
+}
+
+.nutrition-panel .meal-strip {
+  gap: 8px;
+  margin-bottom: 0;
+}
+
+.nutrition-panel .strip-cell {
+  padding: 7px 9px 8px;
+}
