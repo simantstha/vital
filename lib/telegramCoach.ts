@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { MessageParam, Tool } from '@anthropic-ai/sdk/resources/messages';
 import { getCachedBrief } from '@/lib/briefCache';
-import { loadAlwaysOnContext, MEMORY_TOOLS, handleToolCall, readMemoryFile } from '@/lib/memory';
+import { loadAlwaysOnContext, MEMORY_TOOLS, handleToolCall, readMemoryFile, writeMemoryFile } from '@/lib/memory';
 import { readCoachState, writeMealOverride, writePendingBarcode, clearPendingBarcode, readPendingMeal, writePendingMeal, clearPendingMeal, type MealOverride, type PendingBarcode, type PendingMeal } from '@/lib/coachState';
 import { logWeight, readWeightLog } from '@/lib/weightLog';
 import { lookupBarcode, searchFoodByName } from '@/lib/openFoodFacts';
@@ -188,6 +188,103 @@ export async function resolveQuantity(pending: PendingBarcode, quantityText: str
     clearPendingBarcode();
     return `Got it — logged ${pending.productName} as your meal. Couldn't parse exact quantity, but it's noted.`;
   }
+}
+
+// ── Lab Results PDF processor ────────────────────────────────────────────────
+
+interface LabResult {
+  marker: string;
+  value: number | null;
+  unit: string | null;
+  referenceRange: string | null;
+  status: 'normal' | 'low' | 'high' | null;
+  date: string | null;
+}
+
+interface LabResultsFile {
+  lastUpdated: string | null;
+  results: LabResult[];
+}
+
+export async function processPdf(pdfBase64: string, chatId: number): Promise<string> {
+  const today = new Date().toISOString().split('T')[0];
+
+  const response = await client.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 2048,
+    messages: [{
+      role: 'user',
+      content: [
+        {
+          type: 'document',
+          source: { type: 'base64', media_type: 'application/pdf', data: pdfBase64 },
+        },
+        {
+          type: 'text',
+          text: `Extract all lab test results from this document. Return JSON only, no markdown:
+{"lastUpdated":"YYYY-MM-DD","results":[{"marker":"...","value":N,"unit":"...","referenceRange":"...","status":"normal|low|high","date":"YYYY-MM-DD"}]}
+If a field is unknown, use null. Use today's date (${today}) as lastUpdated.`,
+        },
+      ],
+    }],
+  });
+
+  const rawText = (response.content[0] as { text: string }).text;
+  let extracted: LabResultsFile;
+  try {
+    extracted = JSON.parse(rawText.replace(/```json\n?|```/g, '').trim()) as LabResultsFile;
+  } catch {
+    return 'I received the PDF but could not extract structured lab results from it. Please make sure it is a standard lab report.';
+  }
+
+  if (!extracted.results || extracted.results.length === 0) {
+    return 'No lab markers were found in this document.';
+  }
+
+  // Merge with existing lab-results.json
+  const existing = readMemoryFile('lab-results.json');
+  let current: LabResultsFile = { lastUpdated: null, results: [] };
+  if (existing) {
+    try { current = JSON.parse(existing) as LabResultsFile; } catch { /* use empty */ }
+  }
+
+  // Deduplicate by marker + date — new entry wins
+  const mergedMap = new Map<string, LabResult>();
+  for (const r of current.results) {
+    mergedMap.set(`${r.marker}|${r.date}`, r);
+  }
+  for (const r of extracted.results) {
+    mergedMap.set(`${r.marker}|${r.date}`, r);
+  }
+
+  const merged: LabResultsFile = {
+    lastUpdated: extracted.lastUpdated ?? today,
+    results: Array.from(mergedMap.values()),
+  };
+
+  writeMemoryFile('lab-results.json', JSON.stringify(merged, null, 2));
+
+  // Build human-readable summary
+  const newCount = extracted.results.length;
+  const abnormal = extracted.results.filter(r => r.status === 'low' || r.status === 'high');
+  const lines = extracted.results.map(r => {
+    const statusIcon = r.status === 'low' ? ' ⬇️' : r.status === 'high' ? ' ⬆️' : '';
+    const val = r.value !== null ? `${r.value}${r.unit ? ' ' + r.unit : ''}` : 'N/A';
+    const ref = r.referenceRange ? ` (ref: ${r.referenceRange})` : '';
+    return `• ${r.marker}: ${val}${ref}${statusIcon}`;
+  });
+
+  let summary = `Lab results processed — ${newCount} marker${newCount !== 1 ? 's' : ''} extracted:\n\n${lines.join('\n')}`;
+  if (abnormal.length > 0) {
+    const flags = abnormal.map(r => r.marker).join(', ');
+    summary += `\n\nHeads up: ${flags} ${abnormal.length === 1 ? 'is' : 'are'} outside the reference range. Ask me if you'd like to discuss what this means for your health goals.`;
+  }
+  summary += '\n\nAll results saved to memory.';
+
+  // Suppress chatId warning — it's available if needed for future use
+  void chatId;
+
+  return summary;
 }
 
 // ── Main entry point ─────────────────────────────────────────────────────────
