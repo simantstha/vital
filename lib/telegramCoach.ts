@@ -1,13 +1,12 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { MessageParam, Tool } from '@anthropic-ai/sdk/resources/messages';
 import { getCachedBrief } from '@/lib/briefCache';
-import { loadAlwaysOnContext, MEMORY_TOOLS, handleToolCall } from '@/lib/memory';
+import { loadAlwaysOnContext, MEMORY_TOOLS, handleToolCall, readMemoryFile } from '@/lib/memory';
 import { readCoachState, writeMealOverride, writePendingBarcode, clearPendingBarcode, readPendingMeal, writePendingMeal, clearPendingMeal, type MealOverride, type PendingBarcode, type PendingMeal } from '@/lib/coachState';
 import { logWeight, readWeightLog } from '@/lib/weightLog';
 import { lookupBarcode, searchFoodByName } from '@/lib/openFoodFacts';
 import { getDiaryMacros } from '@/lib/mfp';
 import { lookupNutrition, findInSavedMeals, type SavedMeal, type NutritionixResult } from '@/lib/nutritionix';
-import { readMemoryFile } from '@/lib/memory';
 import { sendMessage } from '@/lib/telegram';
 
 const client = new Anthropic();
@@ -136,8 +135,17 @@ For meal_photo: estimate realistic portion sizes. query must be comma-separated 
       ],
     }],
   });
-  const content = (msg.content[0] as { text: string }).text;
-  return JSON.parse(content.replace(/```json\n?|```/g, '').trim());
+  try {
+    const content = (msg.content[0] as { text: string }).text;
+    return JSON.parse(content.replace(/```json\n?|```/g, '').trim());
+  } catch {
+    return { type: 'other' };
+  }
+}
+
+function mealFromHour(): string {
+  const h = new Date().getHours();
+  return h < 10 ? 'breakfast' : h < 14 ? 'lunch' : h < 17 ? 'snack' : 'dinner';
 }
 
 // ── Quantity resolver (pending barcode → macro calc) ─────────────────────────
@@ -192,13 +200,13 @@ export async function processMessage(
   const healthCtx = await buildHealthContext();
   const systemPrompt = buildSystemPrompt(alwaysOnMemory, healthCtx);
 
-  let userContent: Anthropic.MessageParam['content'];
+  let userContent: Anthropic.MessageParam['content'] = text;
 
   // Handle pending meal confirmation/correction
   const pendingMeal = readPendingMeal(chatId);
   if (pendingMeal && !image) {
     const txt = text ?? '';
-    const isConfirm = /^(yes|yeah|yep|correct|log|ok|looks good|right)/i.test(txt.trim());
+    const isConfirm = /^(yes|yeah|yep|log|ok|looks good|right)/i.test(txt.trim());
 
     if (isConfirm) {
       clearPendingMeal();
@@ -212,19 +220,22 @@ export async function processMessage(
         reason: 'meal photo + Nutritionix',
         updatedAt: new Date().toISOString(),
       });
-      await sendMessage(chatId, `✅ Logged: ${pendingMeal.result.kcal}kcal · ${pendingMeal.result.p}g protein · ${pendingMeal.result.c}g carbs · ${pendingMeal.result.f}g fat\n\nWant me to save "${pendingMeal.query}" to your food library for next time? Reply *save it* or give it a shorter name.`);
+      await sendMessage(chatId, `✅ Logged: ${pendingMeal.result.kcal}kcal · ${pendingMeal.result.p}g protein · ${pendingMeal.result.c}g carbs · ${pendingMeal.result.f}g fat`);
       return '';
     } else {
       // User correcting portions — re-lookup with corrected text
-      clearPendingMeal();
       const corrected = await lookupNutrition(txt);
       if (corrected) {
+        clearPendingMeal();
         const hour = new Date().getHours();
         const meal = hour < 10 ? 'breakfast' : hour < 14 ? 'lunch' : hour < 17 ? 'snack' : 'dinner';
         const newPending: PendingMeal = { chatId, query: txt, result: corrected, meal, expiresAt: Date.now() + 10 * 60 * 1000 };
         writePendingMeal(newPending);
         const itemLines = corrected.foods.map(f => `  • ${f.qty} ${f.unit} ${f.name} — ${f.kcal}kcal`).join('\n');
         await sendMessage(chatId, `Updated:\n${itemLines}\n\nTotal: ${corrected.kcal}kcal · ${corrected.p}g protein · ${corrected.c}g carbs · ${corrected.f}g fat\n\nLooks right? (yes / correct it)`);
+        return '';
+      } else {
+        await sendMessage(chatId, `Couldn't find "${txt}" in the database. Try describing portions differently, e.g. "200g chicken rice" or "1 cup dal".`);
         return '';
       }
     }
@@ -256,12 +267,12 @@ export async function processMessage(
         { type: 'text', text: `Barcode ${classification.value} wasn't found in the food database. Can you identify this product from the packaging and estimate the macros?` },
       ];
     } else if (classification.type === 'meal_photo') {
-      const hour = new Date().getHours();
-      const meal = hour < 10 ? 'breakfast' : hour < 14 ? 'lunch' : hour < 17 ? 'snack' : 'dinner';
+      const meal = mealFromHour();
 
       // Lookup chain: savedMeals → Nutritionix → Open Food Facts → Claude estimate
       const habitsRaw = readMemoryFile('nutrition-habits.json');
-      const habits = habitsRaw ? JSON.parse(habitsRaw) as { savedMeals?: SavedMeal[] } : null;
+      let habits: { savedMeals?: SavedMeal[] } | null = null;
+      try { habits = habitsRaw ? JSON.parse(habitsRaw) as { savedMeals?: SavedMeal[] } : null; } catch { /* use null */ }
       const savedMeals: SavedMeal[] = habits?.savedMeals ?? [];
       const savedMatch = findInSavedMeals(classification.query, savedMeals);
 
@@ -276,7 +287,7 @@ export async function processMessage(
         if (!nutrition) {
           const offResult = await searchFoodByName(classification.query);
           if (offResult) {
-            const factor = 1.5;
+            const factor = 1.5; // OFF returns per-100g; assume ~150g serving as rough default
             nutrition = {
               kcal: Math.round(offResult.per100g.kcal * factor),
               c: Math.round(offResult.per100g.c * factor),

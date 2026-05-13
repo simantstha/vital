@@ -71,13 +71,12 @@ export function clearPendingBarcode() {
   try { fs.unlinkSync(PENDING_FILE); } catch { /* ok */ }
 }
 
+import type { NutritionixResult } from './nutritionix';
+
 export interface PendingMeal {
   chatId: number;
   query: string;
-  result: {
-    kcal: number; c: number; p: number; f: number;
-    foods: { name: string; qty: number; unit: string; kcal: number }[];
-  };
+  result: NutritionixResult;
   meal: string;
   expiresAt: number;
 }

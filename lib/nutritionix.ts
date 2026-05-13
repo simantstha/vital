@@ -1,4 +1,4 @@
-export interface NutritionixFood {
+interface NutritionixFood {
   food_name: string;
   serving_qty: number;
   serving_unit: string;
