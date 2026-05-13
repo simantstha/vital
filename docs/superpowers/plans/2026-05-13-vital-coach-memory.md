@@ -856,7 +856,70 @@ Then in the image block, add the meal photo case after the barcode case:
   return;
 ```
 
-- [ ] **Step 5: Add `findInSavedMeals` helper to `lib/nutritionix.ts`**
+- [ ] **Step 5: Add `searchFoodByName` to `lib/openFoodFacts.ts`**
+
+Open Food Facts has a text search endpoint — better than Nutritionix for Asian packaged/branded items. Add this function at the bottom of the existing file:
+
+```typescript
+export interface OFFSearchResult {
+  productName: string;
+  per100g: { kcal: number; c: number; p: number; f: number };
+}
+
+export async function searchFoodByName(query: string): Promise<OFFSearchResult | null> {
+  try {
+    const params = new URLSearchParams({
+      search_terms: query,
+      json: '1',
+      page_size: '3',
+      search_simple: '1',
+      fields: 'product_name,nutriments',
+    });
+    const res = await fetch(
+      `https://world.openfoodfacts.org/cgi/search.pl?${params}`,
+      { headers: { 'User-Agent': 'VitalHealthDashboard/1.0' } }
+    );
+    if (!res.ok) return null;
+
+    const data = await res.json() as {
+      products?: {
+        product_name?: string;
+        nutriments?: {
+          'energy-kcal_100g'?: number;
+          energy_100g?: number;
+          carbohydrates_100g?: number;
+          proteins_100g?: number;
+          fat_100g?: number;
+        };
+      }[];
+    };
+
+    const product = data.products?.find(p => p.product_name && p.nutriments);
+    if (!product) return null;
+
+    const n = product.nutriments!;
+    const kcal = n['energy-kcal_100g'] ?? Math.round((n.energy_100g ?? 0) / 4.184);
+
+    return {
+      productName: product.product_name!,
+      per100g: {
+        kcal: Math.round(kcal),
+        c: Math.round(n.carbohydrates_100g ?? 0),
+        p: Math.round(n.proteins_100g ?? 0),
+        f: Math.round(n.fat_100g ?? 0),
+      },
+    };
+  } catch { return null; }
+}
+```
+
+- [ ] **Step 5b: Add import to `lib/telegramCoach.ts`**
+
+```typescript
+import { lookupBarcode, searchFoodByName } from '@/lib/openFoodFacts';
+```
+
+- [ ] **Step 5c: Add `findInSavedMeals` helper to `lib/nutritionix.ts`**
 
 This does a case-insensitive substring match against saved meal names and aliases:
 
@@ -900,20 +963,38 @@ Replace the `else if (classification.type === 'meal_photo')` block added in Step
   let source: 'saved' | 'nutritionix' | 'estimate' = 'nutritionix';
 
   if (savedMatch) {
-    // Use personal library — most accurate for this user's foods
+    // 1. Personal food library — fastest, most accurate for user's own foods
     nutrition = { kcal: savedMatch.kcal, c: savedMatch.c, p: savedMatch.p, f: savedMatch.f, foods: [{ name: savedMatch.name, qty: 1, unit: 'serving', kcal: savedMatch.kcal }] };
     source = 'saved';
   } else {
-    // Try Nutritionix
+    // 2. Nutritionix — best for Western/restaurant foods
     nutrition = await lookupNutrition(classification.query);
+
     if (!nutrition) {
-      // Fallback: Claude visual estimate (already has image in context from classifyImage)
+      // 3. Open Food Facts — better for Asian/packaged/branded items
+      const offResult = await searchFoodByName(classification.query);
+      if (offResult) {
+        // OFF returns per-100g — estimate a 150g serving by default
+        const factor = 1.5;
+        nutrition = {
+          kcal: Math.round(offResult.per100g.kcal * factor),
+          c: Math.round(offResult.per100g.c * factor),
+          p: Math.round(offResult.per100g.p * factor),
+          f: Math.round(offResult.per100g.f * factor),
+          foods: [{ name: offResult.productName, qty: 150, unit: 'g', kcal: Math.round(offResult.per100g.kcal * factor) }],
+        };
+        source = 'nutritionix'; // reuse label — user sees "database lookup"
+      }
+    }
+
+    if (!nutrition) {
+      // 4. Claude visual estimate — last resort for homemade/regional dishes
       source = 'estimate';
-      nutrition = { kcal: 0, c: 0, p: 0, f: 0, foods: [] }; // placeholder — coach will estimate in message
+      nutrition = { kcal: 0, c: 0, p: 0, f: 0, foods: [] };
     }
   }
 
-  const sourceTag = source === 'saved' ? '📚 from your food library' : source === 'nutritionix' ? '🔍 Nutritionix' : '🤖 estimated';
+  const sourceTag = source === 'saved' ? '📚 from your food library' : source === 'nutritionix' ? '🔍 database lookup' : '🤖 estimated';
 
   if (source === 'estimate') {
     // No data — ask Claude to estimate and offer to save
@@ -986,8 +1067,8 @@ Send a meal photo to @VayamBot. Expected sequence:
 - [ ] **Step 12: Commit**
 
 ```bash
-git add lib/nutritionix.ts lib/coachState.ts lib/telegramCoach.ts .vital-memory/nutrition-habits.json
-git commit -m "feat: Cal AI-accuracy meal photo — vision + Nutritionix + personal food library + confirmation loop"
+git add lib/nutritionix.ts lib/openFoodFacts.ts lib/coachState.ts lib/telegramCoach.ts .vital-memory/nutrition-habits.json
+git commit -m "feat: Cal AI-accuracy meal photo — vision + Nutritionix + OFF + personal food library + confirmation loop"
 ```
 
 ---
