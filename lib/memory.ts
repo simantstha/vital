@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import type { Tool } from '@anthropic-ai/sdk/resources/messages';
 
 const MEMORY_DIR = path.resolve(process.cwd(), '.vital-memory');
 
@@ -70,7 +71,7 @@ export function loadAlwaysOnContext(): string {
   ].join('\n\n---\n\n');
 }
 
-export const MEMORY_TOOLS = [
+export const MEMORY_TOOLS: Tool[] = [
   {
     name: 'read_memory',
     description:

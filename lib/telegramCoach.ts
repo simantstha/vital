@@ -225,14 +225,18 @@ export async function processMessage(
   const messages: MessageParam[] = [{ role: 'user', content: userContent }];
 
   let response = await client.messages.create({
-    model: 'claude-opus-4-5',
+    model: 'claude-sonnet-4-6',
     max_tokens: 1024,
     system: systemPrompt,
-    tools: [...MEMORY_TOOLS] as unknown as Tool[],
+    tools: MEMORY_TOOLS,
     messages,
   });
 
-  while (response.stop_reason === 'tool_use') {
+  let rounds = 0;
+  const MAX_ROUNDS = 10;
+
+  while (response.stop_reason === 'tool_use' && rounds < MAX_ROUNDS) {
+    rounds++;
     messages.push({ role: 'assistant', content: response.content });
 
     const toolResults = response.content
@@ -246,15 +250,19 @@ export async function processMessage(
     messages.push({ role: 'user', content: toolResults });
 
     response = await client.messages.create({
-      model: 'claude-opus-4-5',
+      model: 'claude-sonnet-4-6',
       max_tokens: 1024,
       system: systemPrompt,
-      tools: [...MEMORY_TOOLS] as unknown as Tool[],
+      tools: MEMORY_TOOLS,
       messages,
     });
   }
 
   const raw = response.content.find((b): b is Extract<typeof b, { type: 'text' }> => b.type === 'text')?.text ?? '';
+  if (!raw) {
+    console.error('[telegramCoach] No text block in final response', JSON.stringify(response.content));
+    return '';
+  }
   const action = parseAction(raw);
   const clean = stripAction(raw);
 
