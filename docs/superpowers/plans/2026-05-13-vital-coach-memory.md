@@ -300,7 +300,21 @@ Seed with any existing coach notes from the old `user-profile.md`. If no notes e
   "GITriggers": [],
   "preWorkoutMeals": [],
   "supplements": [],
-  "patterns": []
+  "patterns": [],
+  "savedMeals": []
+}
+```
+
+`savedMeals` entries look like:
+```json
+{
+  "name": "dal bhat",
+  "aliases": ["dal rice", "daal bhat", "dal bhat tarkari"],
+  "kcal": 520,
+  "c": 85,
+  "p": 18,
+  "f": 8,
+  "notes": "standard home serving — 1 cup rice, 1 cup dal, small sabji"
 }
 ```
 
@@ -842,7 +856,109 @@ Then in the image block, add the meal photo case after the barcode case:
   return;
 ```
 
-- [ ] **Step 5: Add env vars to `.env.local`**
+- [ ] **Step 5: Add `findInSavedMeals` helper to `lib/nutritionix.ts`**
+
+This does a case-insensitive substring match against saved meal names and aliases:
+
+```typescript
+export interface SavedMeal {
+  name: string;
+  aliases?: string[];
+  kcal: number;
+  c: number;
+  p: number;
+  f: number;
+  notes?: string;
+}
+
+export function findInSavedMeals(query: string, savedMeals: SavedMeal[]): SavedMeal | null {
+  const q = query.toLowerCase();
+  return savedMeals.find(meal =>
+    [meal.name, ...(meal.aliases ?? [])].some(alias =>
+      q.includes(alias.toLowerCase()) || alias.toLowerCase().includes(q)
+    )
+  ) ?? null;
+}
+```
+
+- [ ] **Step 6: Update the meal photo block in `processMessage` to check saved meals first**
+
+Replace the `else if (classification.type === 'meal_photo')` block added in Step 4 with this expanded version:
+
+```typescript
+} else if (classification.type === 'meal_photo') {
+  const hour = new Date().getHours();
+  const meal = hour < 10 ? 'breakfast' : hour < 14 ? 'lunch' : hour < 17 ? 'snack' : 'dinner';
+
+  // 1. Check personal food library first
+  const habitsRaw = readMemoryFile('nutrition-habits.json');
+  const habits = habitsRaw ? JSON.parse(habitsRaw) : null;
+  const savedMeals: SavedMeal[] = habits?.savedMeals ?? [];
+  const savedMatch = findInSavedMeals(classification.query, savedMeals);
+
+  let nutrition: NutritionixResult | null = null;
+  let source: 'saved' | 'nutritionix' | 'estimate' = 'nutritionix';
+
+  if (savedMatch) {
+    // Use personal library — most accurate for this user's foods
+    nutrition = { kcal: savedMatch.kcal, c: savedMatch.c, p: savedMatch.p, f: savedMatch.f, foods: [{ name: savedMatch.name, qty: 1, unit: 'serving', kcal: savedMatch.kcal }] };
+    source = 'saved';
+  } else {
+    // Try Nutritionix
+    nutrition = await lookupNutrition(classification.query);
+    if (!nutrition) {
+      // Fallback: Claude visual estimate (already has image in context from classifyImage)
+      source = 'estimate';
+      nutrition = { kcal: 0, c: 0, p: 0, f: 0, foods: [] }; // placeholder — coach will estimate in message
+    }
+  }
+
+  const sourceTag = source === 'saved' ? '📚 from your food library' : source === 'nutritionix' ? '🔍 Nutritionix' : '🤖 estimated';
+
+  if (source === 'estimate') {
+    // No data — ask Claude to estimate and offer to save
+    userContent = `[User sent a meal photo. Claude identified: "${classification.query}". Neither the personal food library nor Nutritionix had this food (likely a regional dish). Please visually estimate the macros, present them clearly, and ask the user to confirm or correct. Once confirmed, offer to save it to their food library for future use.]`;
+  } else {
+    const itemLines = nutrition.foods.map(f => `  • ${f.qty} ${f.unit} ${f.name} — ${f.kcal}kcal`).join('\n');
+    const confirmMsg = `I see ${classification.query} (${sourceTag}):\n${itemLines || '  • ' + nutrition.kcal + 'kcal total'}\n\nTotal: ${nutrition.kcal}kcal · ${nutrition.p}g protein · ${nutrition.c}g carbs · ${nutrition.f}g fat\n\nLooks right? Reply *yes* to log it, or correct the portions.${source !== 'saved' ? '\n\nFirst time logging this? I\'ll offer to save it to your food library after.' : ''}`;
+
+    const pending: PendingMeal = {
+      chatId,
+      query: classification.query,
+      result: nutrition,
+      meal,
+      expiresAt: Date.now() + 10 * 60 * 1000,
+    };
+    writePendingMeal(pending);
+    await sendTelegram(chatId, confirmMsg);
+    return;
+  }
+```
+
+- [ ] **Step 7: Update confirmation handler to offer saving new meals**
+
+In the confirmation block (Step 4), after `writeMealOverride` for a confirmed new meal (not from saved library), add:
+
+```typescript
+if (isConfirm) {
+  clearPendingMeal();
+  writeMealOverride({ ... }); // existing
+
+  // Offer to save to personal food library if it came from Nutritionix or estimate
+  if (!savedMatch) {
+    await sendTelegram(chatId,
+      `✅ Logged: ${pendingMeal.result.kcal}kcal · ${pendingMeal.result.p}g protein · ${pendingMeal.result.c}g carbs · ${pendingMeal.result.f}g fat\n\nWant me to save "${pendingMeal.query}" to your food library so I recognise it next time? Reply *save it* or give it a shorter name like "dal bhat".`
+    );
+  } else {
+    await sendTelegram(chatId, `✅ Logged: ${pendingMeal.result.kcal}kcal · ${pendingMeal.result.p}g protein · ${pendingMeal.result.c}g carbs · ${pendingMeal.result.f}g fat`);
+  }
+  return;
+}
+```
+
+When user replies "save it" or gives a name — the coach (via existing tool_use loop) reads `nutrition-habits.json`, adds the entry to `savedMeals`, and writes it back. No extra routing code needed since tool_use handles it.
+
+- [ ] **Step 9: Add env vars to `.env.local`**
 
 ```
 NUTRITIONIX_APP_ID=your_app_id_here
@@ -851,7 +967,7 @@ NUTRITIONIX_APP_KEY=your_app_key_here
 
 Get these from https://developer.nutritionix.com (free account, 500 calls/day).
 
-- [ ] **Step 6: Verify TypeScript compiles**
+- [ ] **Step 10: Verify TypeScript compiles**
 
 ```bash
 cd /Users/simantstha/Documents/Playground/vital && npx tsc --noEmit
@@ -859,7 +975,7 @@ cd /Users/simantstha/Documents/Playground/vital && npx tsc --noEmit
 
 Expected: no errors.
 
-- [ ] **Step 7: Test the full flow**
+- [ ] **Step 11: Test the full flow**
 
 Send a meal photo to @VayamBot. Expected sequence:
 1. Bot replies: "I see: • 6oz grilled chicken — 280kcal, • 1 cup brown rice — 216kcal..." with confirmation prompt
@@ -867,11 +983,11 @@ Send a meal photo to @VayamBot. Expected sequence:
 3. Reply "yes" → bot confirms logged + shows totals
 4. Check `.vital-memory/overrides.json` — entry for the correct meal slot with Nutritionix macros
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 12: Commit**
 
 ```bash
-git add lib/nutritionix.ts lib/coachState.ts lib/telegramCoach.ts
-git commit -m "feat: Cal AI-accuracy meal photo tracking — vision + Nutritionix + confirmation loop"
+git add lib/nutritionix.ts lib/coachState.ts lib/telegramCoach.ts .vital-memory/nutrition-habits.json
+git commit -m "feat: Cal AI-accuracy meal photo — vision + Nutritionix + personal food library + confirmation loop"
 ```
 
 ---
