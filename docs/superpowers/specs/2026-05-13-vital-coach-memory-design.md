@@ -306,6 +306,66 @@ Current `weight-log.json` and `overrides.json` are unchanged.
 
 ---
 
+## Phase 1 Additions — Proactive & Richer Inputs
+
+Three lightweight additions folded into Phase 1:
+
+### A — Meal Photo → Macro Estimation
+
+User sends a photo of their meal (not a barcode) → Claude estimates macros visually and logs as a meal override.
+
+**How:** Extend `classifyImage` in `lib/telegramCoach.ts` to return `type: 'meal_photo'` with `{ description, kcal, c, p, f }`. Coach responds with the estimate and asks for confirmation before logging. Stores as a meal override in `coachState.ts` (same as barcode flow).
+
+**No new memory file needed** — meal overrides already handled by `overrides.json`.
+
+### B — Mood / Energy Check-in
+
+User sends a message like "feeling exhausted today" or "energy 3/5" → coach extracts a score (1–5) and optional notes, stores in `life-context.json` under `moodLog`.
+
+**`life-context.json` addition:**
+```json
+{
+  "moodLog": [
+    { "date": "2026-05-13", "score": 3, "notes": "felt tired after poor sleep" }
+  ]
+}
+```
+
+Coach detects mood-related language via the existing tool_use flow — no special routing needed. Claude writes to `life-context.json` using `write_memory` when it detects a mood signal. Over time correlates with HRV/recovery trends in coach observations.
+
+### C — Whoop Webhook → Proactive Alerts
+
+Expand `app/api/webhooks/whoop/route.ts` beyond the morning brief to send targeted proactive Telegram messages for three conditions:
+
+| Condition | Trigger | Message |
+|---|---|---|
+| Red day | Recovery < 33% | "Recovery is in the red today — your body is asking for rest. Easy day recommended." |
+| Green streak | 3+ consecutive days ≥ 67% recovery | "3 green days in a row — you're in a peak window. Good day for a hard effort if planned." |
+| HRV crash | Current HRV < (baseline − 15%) | "HRV dropped significantly below your baseline — watch your load today." |
+
+Baseline for HRV crash detection comes from `core-profile.md` (already maintained by the drift updater in Phase 1).
+
+### D — Lab Results via Telegram
+
+User sends a PDF or photo of a lab report → Claude extracts structured markers → stored in `.vital-memory/lab-results.json` → always loaded alongside health conditions (safety-relevant).
+
+**`lab-results.json`:**
+```json
+{
+  "lastUpdated": "2026-05-13",
+  "results": [
+    { "marker": "Ferritin", "value": 12, "unit": "ng/mL", "referenceRange": "12-300", "status": "low", "date": "2026-05-01" },
+    { "marker": "Vitamin D", "value": 28, "unit": "ng/mL", "referenceRange": "30-100", "status": "low", "date": "2026-05-01" }
+  ]
+}
+```
+
+Added to `memory-index.md` and `loadAlwaysOnContext()`. Coach uses results to inform nutrition and supplement recommendations ("your ferritin is low — iron absorption is critical for your performance").
+
+PDF handling: Telegram sends documents as `file_id` → download via Bot API → send to Claude as base64 using the existing `classifyImage` pattern.
+
+---
+
 ## Phase 2 — Conversation History (Postgres)
 
 Deferred. To be designed separately after Phase 1 ships.
@@ -317,3 +377,25 @@ Deferred. To be designed separately after Phase 1 ships.
 - Weekly summary job: collapses older messages into a summary paragraph stored per week
 - Context builder: loads recent messages + summaries into the `messages` array before each API call
 - Unlocks: "you mentioned knee soreness 6 weeks ago — still recurring?", week-over-week pattern detection, accountability follow-ups
+
+---
+
+## Phase 3 — Proactive Intelligence
+
+Deferred. To be designed separately.
+
+- **Weekly Sunday summary** — cron job every Sunday, auto-generates a week-in-review Telegram message using Whoop + Strava + memory
+- **Strava post-activity analysis** — Strava webhook → coach auto-analyzes splits, effort, recovery implications
+- **Lab results deep analysis** — trend comparison across multiple lab reports over time
+
+---
+
+## Phase 4 — New Integrations
+
+Deferred. Each requires a separate design.
+
+- **Weather API** — real-time conditions inform workout and nutrition recommendations
+- **Race predictor / injury risk scoring / periodization** — complex reasoning over training history
+- **CGM (continuous glucose monitor)** — Libre/Dexcom data for real-time fueling strategy
+- **Voice notes** — Whisper transcription of Telegram voice memos
+- **Sleep debt tracker / goal drift alerts** — requires Postgres historical querying (Phase 2 prerequisite)

@@ -622,21 +622,410 @@ git push -u origin feat/vital-telegram-coach
 
 ---
 
+## Task 6: Meal Photo → Macro Estimation
+
+**Files:**
+- Modify: `lib/telegramCoach.ts`
+
+Extend `classifyImage` to detect meal photos and estimate macros visually. When detected, coach responds with the estimate and logs it as a meal override.
+
+- [ ] **Step 1: Extend `classifyImage` return type and prompt in `lib/telegramCoach.ts`**
+
+Find the `classifyImage` function and replace its implementation:
+
+```typescript
+async function classifyImage(base64: string, mimeType: string): Promise<
+  | { type: 'barcode'; value: string }
+  | { type: 'meal_photo'; description: string; kcal: number; c: number; p: number; f: number }
+  | { type: 'other' }
+> {
+  const msg = await client.messages.create({
+    model: 'claude-haiku-4-5',
+    max_tokens: 300,
+    messages: [{
+      role: 'user',
+      content: [
+        { type: 'image', source: { type: 'base64', media_type: mimeType as 'image/jpeg', data: base64 } },
+        {
+          type: 'text',
+          text: `Classify this image. Respond with JSON only, no markdown.
+
+If it shows a barcode or QR code: {"type":"barcode","value":"<barcode digits>"}
+If it shows food or a meal: {"type":"meal_photo","description":"<brief description>","kcal":<number>,"c":<carbs g>,"p":<protein g>,"f":<fat g>}
+Otherwise: {"type":"other"}
+
+For meal_photo, estimate macros for the full plate/portion shown. Be concise with description (max 8 words).`,
+        },
+      ],
+    }],
+  });
+  const content = (msg.content[0] as { text: string }).text;
+  const json = JSON.parse(content.replace(/```json\n?|```/g, '').trim());
+  return json;
+}
+```
+
+- [ ] **Step 2: Handle `meal_photo` case in `processMessage` in `lib/telegramCoach.ts`**
+
+In `processMessage`, find the image handling block (currently handles barcode only). Add the meal photo case:
+
+```typescript
+if (image) {
+  const classification = await classifyImage(image.base64, image.mimeType);
+
+  if (classification.type === 'barcode') {
+    // existing barcode logic — unchanged
+    const product = await lookupBarcode(classification.value);
+    // ... rest of barcode flow
+  } else if (classification.type === 'meal_photo') {
+    const { description, kcal, c, p, f } = classification;
+    const hour = new Date().getHours();
+    const meal = hour < 10 ? 'breakfast' : hour < 14 ? 'lunch' : hour < 17 ? 'snack' : 'dinner';
+    writeMealOverride({
+      meal,
+      kcal,
+      c,
+      p,
+      f,
+      items: description,
+      reason: 'meal photo',
+      updatedAt: new Date().toISOString(),
+    });
+    userContent = `[Meal photo logged as ${meal}: ${description} — ${kcal}kcal, ${c}g carbs, ${p}g protein, ${f}g fat]\n\nUser sent a meal photo. Confirm what was logged and offer a brief nutrition comment.`;
+  } else {
+    userContent = '[User sent an image that is not a barcode or meal photo. Acknowledge and ask what they need.]';
+  }
+}
+```
+
+- [ ] **Step 3: Verify TypeScript compiles**
+
+```bash
+cd /Users/simantstha/Documents/Playground/vital && npx tsc --noEmit
+```
+
+Expected: no errors.
+
+- [ ] **Step 4: Test — send a meal photo to @VayamBot**
+
+Send a photo of any meal. Expected: Coach replies confirming what was logged with estimated macros and a brief comment. Check `.vital-memory/overrides.json` — should contain an entry for the detected meal slot.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add lib/telegramCoach.ts
+git commit -m "feat: meal photo macro estimation via Claude vision"
+```
+
+---
+
+## Task 7: Mood / Energy Check-in
+
+**Files:**
+- Modify: `.vital-memory/life-context.json` (schema addition only — actual writes happen via Claude tool_use)
+- Modify: `lib/memory.ts` (update `MEMORY_TOOLS` write description to mention mood)
+
+The mood log is written automatically by Claude when it detects mood/energy signals in any message. No special routing code needed — it uses the existing `write_memory` tool.
+
+- [ ] **Step 1: Update `life-context.json` seed to include `moodLog`**
+
+Update `.vital-memory/life-context.json` to:
+
+```json
+{
+  "stressEvents": [],
+  "travelLog": [],
+  "motivationPatterns": [],
+  "moodLog": [],
+  "generalNotes": []
+}
+```
+
+- [ ] **Step 2: Update `write_memory` tool description in `lib/memory.ts` to mention mood**
+
+Find the `write_memory` tool description and extend it:
+
+```typescript
+description:
+  'Overwrite a structured JSON memory file with updated content. Use when you learn a new fact (injury, food reaction, PR, allergy, supplement, stress event, travel, mood/energy score). Always read the file first, merge the new fact, then write the full updated JSON. For mood: add to life-context.json moodLog as { date, score (1-5), notes }.',
+```
+
+- [ ] **Step 3: Verify TypeScript compiles**
+
+```bash
+cd /Users/simantstha/Documents/Playground/vital && npx tsc --noEmit
+```
+
+- [ ] **Step 4: Test — send a mood message to @VayamBot**
+
+Send: `"feeling really tired today, energy is maybe a 2/5"`
+
+Expected: Coach acknowledges and offers advice. Check `.vital-memory/life-context.json` — `moodLog` should contain a new entry with today's date, score 2, and notes.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add .vital-memory/life-context.json lib/memory.ts
+git commit -m "feat: mood/energy check-in stored in life-context moodLog"
+```
+
+---
+
+## Task 8: Whoop Webhook → Proactive Alerts
+
+**Files:**
+- Modify: `app/api/webhooks/whoop/route.ts`
+- Modify: `lib/memory.ts` (add `readHrvBaseline` helper)
+
+Expand the webhook beyond the morning brief to detect three conditions and send targeted Telegram messages.
+
+- [ ] **Step 1: Add `readHrvBaseline` to `lib/memory.ts`**
+
+```typescript
+export function readHrvBaseline(): number | null {
+  const profile = readMemoryFile('core-profile.md');
+  if (!profile) return null;
+  const match = /HRV baseline: (\d+)ms/.exec(profile);
+  return match ? parseInt(match[1], 10) : null;
+}
+```
+
+- [ ] **Step 2: Add `checkProactiveAlerts` function to `app/api/webhooks/whoop/route.ts`**
+
+Add this import at the top:
+
+```typescript
+import { readHrvBaseline } from '@/lib/memory';
+```
+
+Add this function:
+
+```typescript
+async function checkProactiveAlerts(recovery: number, hrv: number, chatId: number): Promise<void> {
+  const messages: string[] = [];
+
+  // Red day
+  if (recovery < 33) {
+    messages.push(`🔴 Recovery is ${recovery}% today — your body is asking for rest. Easy day or full rest recommended.`);
+  }
+
+  // HRV crash (>15% below baseline)
+  const baseline = readHrvBaseline();
+  if (baseline && hrv < baseline * 0.85) {
+    messages.push(`⚠️ HRV dropped to ${hrv}ms — significantly below your ${baseline}ms baseline. Watch your load today.`);
+  }
+
+  for (const msg of messages) {
+    await sendTelegram(chatId, msg);
+  }
+}
+```
+
+- [ ] **Step 3: Add green streak detection to `app/api/webhooks/whoop/route.ts`**
+
+Green streak requires knowing the last 3 recovery scores. Add a lightweight streak tracker using the existing `.vital-memory/` directory:
+
+```typescript
+import fs from 'fs';
+import path from 'path';
+
+const STREAK_FILE = path.resolve(process.cwd(), '.vital-memory/recovery-streak.json');
+
+function updateRecoveryStreak(recovery: number): number {
+  let streak: { date: string; recovery: number }[] = [];
+  try { streak = JSON.parse(fs.readFileSync(STREAK_FILE, 'utf-8')); } catch { /* ok */ }
+
+  const today = new Date().toISOString().split('T')[0];
+  streak = streak.filter(s => s.date !== today);
+  streak.push({ date: today, recovery });
+  streak.sort((a, b) => b.date.localeCompare(a.date));
+  streak = streak.slice(0, 7); // keep last 7 days
+
+  try { fs.writeFileSync(STREAK_FILE, JSON.stringify(streak), 'utf-8'); } catch { /* ok */ }
+
+  // Count consecutive green days
+  let count = 0;
+  for (const s of streak) {
+    if (s.recovery >= 67) count++;
+    else break;
+  }
+  return count;
+}
+```
+
+- [ ] **Step 4: Wire alerts into the existing webhook handler**
+
+In the existing webhook handler, after the brief is sent, add:
+
+```typescript
+// After sending the brief:
+const greenStreak = updateRecoveryStreak(recoveryScore);
+if (greenStreak >= 3 && greenStreak === Math.floor(greenStreak)) {
+  await sendTelegram(chatId, `💚 ${greenStreak} green days in a row — you're in a peak window. Good day for a hard effort if it's on your plan.`);
+}
+await checkProactiveAlerts(recoveryScore, hrvMs, chatId);
+```
+
+Note: you'll need to extract `recoveryScore`, `hrvMs`, and `chatId` from the existing webhook payload. Check `app/api/webhooks/whoop/route.ts` for the exact field names from the Whoop payload.
+
+- [ ] **Step 5: Verify TypeScript compiles**
+
+```bash
+cd /Users/simantstha/Documents/Playground/vital && npx tsc --noEmit
+```
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add app/api/webhooks/whoop/route.ts lib/memory.ts
+git commit -m "feat: proactive Whoop alerts — red day, HRV crash, green streak"
+```
+
+---
+
+## Task 9: Lab Results via Telegram
+
+**Files:**
+- Create: `.vital-memory/lab-results.json`
+- Modify: `lib/memory.ts` (add `lab-results.json` to allowed files + `loadAlwaysOnContext`)
+- Modify: `lib/telegramCoach.ts` (handle PDF documents + lab report detection)
+
+- [ ] **Step 1: Create `.vital-memory/lab-results.json`**
+
+```json
+{
+  "lastUpdated": null,
+  "results": []
+}
+```
+
+- [ ] **Step 2: Add `lab-results.json` to `ALLOWED_FILES` in `lib/memory.ts`**
+
+```typescript
+const ALLOWED_FILES = [
+  'memory-index.md',
+  'core-profile.md',
+  'coach-observations.md',
+  'health-conditions.json',
+  'training-history.json',
+  'nutrition-habits.json',
+  'life-context.json',
+  'lab-results.json',   // ← add this
+] as const;
+```
+
+Also add it to the `write_memory` tool's `enum`:
+
+```typescript
+enum: ['health-conditions.json', 'training-history.json', 'nutrition-habits.json', 'life-context.json', 'core-profile.md', 'lab-results.json'],
+```
+
+- [ ] **Step 3: Add lab results to `loadAlwaysOnContext` in `lib/memory.ts`**
+
+```typescript
+export function loadAlwaysOnContext(): string {
+  const index = readMemoryFile('memory-index.md') ?? '';
+  const core = readMemoryFile('core-profile.md') ?? '';
+  const conditions = readMemoryFile('health-conditions.json') ?? '{}';
+  const observations = readMemoryFile('coach-observations.md') ?? '';
+  const labs = readMemoryFile('lab-results.json') ?? '{}';
+
+  return [
+    '## Memory Index\n' + index,
+    '## Core Profile\n' + core,
+    '## Health Conditions (SAFETY — always follow these)\n```json\n' + conditions + '\n```',
+    '## Lab Results\n```json\n' + labs + '\n```',
+    observations,
+  ].join('\n\n---\n\n');
+}
+```
+
+- [ ] **Step 4: Update `memory-index.md` to include lab results**
+
+Add this line to `.vital-memory/memory-index.md`:
+
+```
+- lab-results.json: blood lab results — markers, values, reference ranges, status (always loaded)
+```
+
+- [ ] **Step 5: Add PDF document handling to `processMessage` in `lib/telegramCoach.ts`**
+
+The Telegram webhook sends documents differently from photos. In `processMessage`, add PDF detection before the existing image block:
+
+```typescript
+// Handle PDF documents (lab reports)
+const document = update.message?.document;
+if (document && document.mime_type === 'application/pdf') {
+  const fileUrl = await getTelegramFileUrl(document.file_id);
+  const res = await fetch(fileUrl);
+  const buffer = await res.arrayBuffer();
+  const base64 = Buffer.from(buffer).toString('base64');
+  userContent = `[User sent a PDF document — likely a lab report. Analyze it, extract all lab markers as structured data, and call write_memory("lab-results.json") with the results. Then summarize the key findings in plain language, highlighting anything outside the normal range.]`;
+  // Attach the PDF to the user message
+  userContent = [{
+    type: 'text' as const,
+    text: userContent,
+  }, {
+    type: 'document' as const,
+    source: { type: 'base64' as const, media_type: 'application/pdf' as const, data: base64 },
+  }];
+}
+```
+
+Add `getTelegramFileUrl` helper:
+
+```typescript
+async function getTelegramFileUrl(fileId: string): Promise<string> {
+  const token = process.env.TELEGRAM_BOT_TOKEN!;
+  const res = await fetch(`https://api.telegram.org/bot${token}/getFile?file_id=${fileId}`);
+  const json = await res.json() as { result: { file_path: string } };
+  return `https://api.telegram.org/file/bot${token}/${json.result.file_path}`;
+}
+```
+
+- [ ] **Step 6: Verify TypeScript compiles**
+
+```bash
+cd /Users/simantstha/Documents/Playground/vital && npx tsc --noEmit
+```
+
+- [ ] **Step 7: Test — send a lab report PDF to @VayamBot**
+
+Send a PDF lab report. Expected: Coach extracts markers and summarizes findings. Check `.vital-memory/lab-results.json` — should contain structured results with values and status flags.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add .vital-memory/lab-results.json lib/memory.ts lib/telegramCoach.ts
+git commit -m "feat: lab results via Telegram PDF — extracted, stored, always in coach context"
+```
+
+---
+
 ## Self-Review
 
 **Spec coverage check:**
-- ✅ 7 memory files with correct structure — Task 2
-- ✅ `memory-index.md` always loaded — Task 1 (`loadAlwaysOnContext`)
-- ✅ `health-conditions.json` always loaded — Task 1 (`loadAlwaysOnContext`)
-- ✅ `coach-observations.md` always loaded, rolling 30 — Task 1 (`appendObservation`)
-- ✅ Domain files on-demand via `read_memory` tool — Task 3
-- ✅ Auto-extraction via `write_memory` tool — Task 3 (Claude does this autonomously)
-- ✅ Explicit remember/forget via Telegram — Task 3 (Claude handles the intent)
+- ✅ 7 core memory files — Task 2
+- ✅ `memory-index.md` always loaded — Task 1
+- ✅ `health-conditions.json` always loaded — Task 1
+- ✅ `lab-results.json` always loaded — Task 9
+- ✅ `coach-observations.md` rolling 30 — Task 1
+- ✅ Domain files on-demand via `read_memory` — Task 3
+- ✅ Auto-extraction via `write_memory` — Task 3
+- ✅ Explicit remember/forget — Task 3
 - ✅ HRV baseline drift — Task 4
 - ✅ Sport-agnostic brief prompt — Task 4
-- ✅ Migration from `user-profile.md` (fallback in Task 4 Step 2)
+- ✅ Meal photo macro estimation — Task 6
+- ✅ Mood/energy check-in → `moodLog` — Task 7
+- ✅ Proactive alerts (red day, HRV crash, green streak) — Task 8
+- ✅ Lab results via PDF — Task 9
 
 **Type consistency:**
+- `MEMORY_TOOLS` / `handleToolCall` / `loadAlwaysOnContext` defined Task 1, used Tasks 3, 4, 9 ✅
+- `readHrvBaseline` defined Task 8 Step 1, used Task 8 Step 2 ✅
+- `updateRecoveryStreak` defined and used within Task 8 ✅
+- `getTelegramFileUrl` defined and used within Task 9 ✅
+- `writeMealOverride` imported from `coachState` (already exists), used Task 6 ✅
 - `MEMORY_TOOLS` defined in Task 1, imported in Task 3 ✅
 - `handleToolCall` defined in Task 1, imported in Task 3 ✅
 - `loadAlwaysOnContext` defined in Task 1, used in Task 3 ✅
