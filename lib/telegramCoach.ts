@@ -2,10 +2,13 @@ import Anthropic from '@anthropic-ai/sdk';
 import type { MessageParam, Tool } from '@anthropic-ai/sdk/resources/messages';
 import { getCachedBrief } from '@/lib/briefCache';
 import { loadAlwaysOnContext, MEMORY_TOOLS, handleToolCall } from '@/lib/memory';
-import { readCoachState, writeMealOverride, writePendingBarcode, clearPendingBarcode, type MealOverride, type PendingBarcode } from '@/lib/coachState';
+import { readCoachState, writeMealOverride, writePendingBarcode, clearPendingBarcode, readPendingMeal, writePendingMeal, clearPendingMeal, type MealOverride, type PendingBarcode, type PendingMeal } from '@/lib/coachState';
 import { logWeight, readWeightLog } from '@/lib/weightLog';
-import { lookupBarcode } from '@/lib/openFoodFacts';
+import { lookupBarcode, searchFoodByName } from '@/lib/openFoodFacts';
 import { getDiaryMacros } from '@/lib/mfp';
+import { lookupNutrition, findInSavedMeals, type SavedMeal, type NutritionixResult } from '@/lib/nutritionix';
+import { readMemoryFile } from '@/lib/memory';
+import { sendMessage } from '@/lib/telegram';
 
 const client = new Anthropic();
 
@@ -110,26 +113,31 @@ function parseAction(text: string): ParsedAction | null {
 
 async function classifyImage(base64: string, mimeType: string): Promise<
   | { type: 'barcode'; value: string }
-  | { type: 'meal' }
+  | { type: 'meal_photo'; query: string; items: string[] }
+  | { type: 'other' }
 > {
   const msg = await client.messages.create({
-    model: 'claude-sonnet-4-6',
-    max_tokens: 100,
+    model: 'claude-haiku-4-5',
+    max_tokens: 300,
     messages: [{
       role: 'user',
       content: [
         { type: 'image', source: { type: 'base64', media_type: mimeType as 'image/jpeg', data: base64 } },
-        { type: 'text', text: 'Is this image a barcode/product label, or a prepared meal/food? If barcode, extract the numeric barcode value. Reply with JSON only: {"type":"barcode","value":"..."} or {"type":"meal"}' },
+        {
+          type: 'text',
+          text: `Classify this image. Respond with JSON only, no markdown.
+
+If it shows a barcode or QR code: {"type":"barcode","value":"<digits>"}
+If it shows food or a meal: {"type":"meal_photo","query":"<natural language list, e.g. '6oz grilled chicken breast, 1 cup brown rice, 1 cup steamed broccoli'>","items":["<item 1>","<item 2>"]}
+Otherwise: {"type":"other"}
+
+For meal_photo: estimate realistic portion sizes. query must be comma-separated items with quantities and cooking method.`,
+        },
       ],
     }],
   });
-
-  try {
-    const content = (msg.content[0] as { text: string }).text;
-    const json = JSON.parse(content.replace(/```json\n?|```/g, '').trim()) as { type: string; value?: string };
-    if (json.type === 'barcode' && json.value) return { type: 'barcode', value: json.value };
-  } catch { /* fall through */ }
-  return { type: 'meal' };
+  const content = (msg.content[0] as { text: string }).text;
+  return JSON.parse(content.replace(/```json\n?|```/g, '').trim());
 }
 
 // ── Quantity resolver (pending barcode → macro calc) ─────────────────────────
@@ -186,6 +194,42 @@ export async function processMessage(
 
   let userContent: Anthropic.MessageParam['content'];
 
+  // Handle pending meal confirmation/correction
+  const pendingMeal = readPendingMeal(chatId);
+  if (pendingMeal && !image) {
+    const txt = text ?? '';
+    const isConfirm = /^(yes|yeah|yep|correct|log|ok|looks good|right)/i.test(txt.trim());
+
+    if (isConfirm) {
+      clearPendingMeal();
+      writeMealOverride({
+        meal: pendingMeal.meal,
+        kcal: pendingMeal.result.kcal,
+        c: pendingMeal.result.c,
+        p: pendingMeal.result.p,
+        f: pendingMeal.result.f,
+        items: pendingMeal.query,
+        reason: 'meal photo + Nutritionix',
+        updatedAt: new Date().toISOString(),
+      });
+      await sendMessage(chatId, `✅ Logged: ${pendingMeal.result.kcal}kcal · ${pendingMeal.result.p}g protein · ${pendingMeal.result.c}g carbs · ${pendingMeal.result.f}g fat\n\nWant me to save "${pendingMeal.query}" to your food library for next time? Reply *save it* or give it a shorter name.`);
+      return '';
+    } else {
+      // User correcting portions — re-lookup with corrected text
+      clearPendingMeal();
+      const corrected = await lookupNutrition(txt);
+      if (corrected) {
+        const hour = new Date().getHours();
+        const meal = hour < 10 ? 'breakfast' : hour < 14 ? 'lunch' : hour < 17 ? 'snack' : 'dinner';
+        const newPending: PendingMeal = { chatId, query: txt, result: corrected, meal, expiresAt: Date.now() + 10 * 60 * 1000 };
+        writePendingMeal(newPending);
+        const itemLines = corrected.foods.map(f => `  • ${f.qty} ${f.unit} ${f.name} — ${f.kcal}kcal`).join('\n');
+        await sendMessage(chatId, `Updated:\n${itemLines}\n\nTotal: ${corrected.kcal}kcal · ${corrected.p}g protein · ${corrected.c}g carbs · ${corrected.f}g fat\n\nLooks right? (yes / correct it)`);
+        return '';
+      }
+    }
+  }
+
   if (image) {
     // First classify: barcode or meal?
     const classification = await classifyImage(image.base64, image.mimeType);
@@ -211,11 +255,60 @@ export async function processMessage(
         { type: 'image', source: { type: 'base64', media_type: image.mimeType as 'image/jpeg', data: image.base64 } },
         { type: 'text', text: `Barcode ${classification.value} wasn't found in the food database. Can you identify this product from the packaging and estimate the macros?` },
       ];
+    } else if (classification.type === 'meal_photo') {
+      const hour = new Date().getHours();
+      const meal = hour < 10 ? 'breakfast' : hour < 14 ? 'lunch' : hour < 17 ? 'snack' : 'dinner';
+
+      // Lookup chain: savedMeals → Nutritionix → Open Food Facts → Claude estimate
+      const habitsRaw = readMemoryFile('nutrition-habits.json');
+      const habits = habitsRaw ? JSON.parse(habitsRaw) as { savedMeals?: SavedMeal[] } : null;
+      const savedMeals: SavedMeal[] = habits?.savedMeals ?? [];
+      const savedMatch = findInSavedMeals(classification.query, savedMeals);
+
+      let nutrition: NutritionixResult | null = null;
+      let source: 'saved' | 'db' | 'estimate' = 'db';
+
+      if (savedMatch) {
+        nutrition = { kcal: savedMatch.kcal, c: savedMatch.c, p: savedMatch.p, f: savedMatch.f, foods: [{ name: savedMatch.name, qty: 1, unit: 'serving', kcal: savedMatch.kcal }] };
+        source = 'saved';
+      } else {
+        nutrition = await lookupNutrition(classification.query);
+        if (!nutrition) {
+          const offResult = await searchFoodByName(classification.query);
+          if (offResult) {
+            const factor = 1.5;
+            nutrition = {
+              kcal: Math.round(offResult.per100g.kcal * factor),
+              c: Math.round(offResult.per100g.c * factor),
+              p: Math.round(offResult.per100g.p * factor),
+              f: Math.round(offResult.per100g.f * factor),
+              foods: [{ name: offResult.productName, qty: 150, unit: 'g', kcal: Math.round(offResult.per100g.kcal * factor) }],
+            };
+          }
+        }
+        if (!nutrition) source = 'estimate';
+      }
+
+      const sourceTag = source === 'saved' ? '📚 your food library' : source === 'db' ? '🔍 database' : '🤖 estimated';
+
+      if (source === 'estimate') {
+        userContent = [
+          { type: 'image', source: { type: 'base64', media_type: image.mimeType as 'image/jpeg', data: image.base64 } },
+          { type: 'text', text: `[User sent a meal photo. Identified: "${classification.query}". No database match found — likely a regional/homemade dish. Visually estimate the macros, present clearly, ask user to confirm or correct. Once confirmed, offer to save to food library.]` },
+        ];
+      } else {
+        const itemLines = nutrition!.foods.map(f => `  • ${f.qty} ${f.unit} ${f.name} — ${f.kcal}kcal`).join('\n');
+        const confirmMsg = `I see (${sourceTag}):\n${itemLines || `  • ${nutrition!.kcal}kcal total`}\n\nTotal: ${nutrition!.kcal}kcal · ${nutrition!.p}g protein · ${nutrition!.c}g carbs · ${nutrition!.f}g fat\n\nLooks right? Reply *yes* to log, or correct the portions.`;
+        const pending: PendingMeal = { chatId, query: classification.query, result: nutrition!, meal, expiresAt: Date.now() + 10 * 60 * 1000 };
+        writePendingMeal(pending);
+        await sendMessage(chatId, confirmMsg);
+        return '';
+      }
     } else {
-      // Meal photo
+      // other — fall through to Claude with the image
       userContent = [
         { type: 'image', source: { type: 'base64', media_type: image.mimeType as 'image/jpeg', data: image.base64 } },
-        { type: 'text', text: text || 'What is this meal and what are the estimated macros?' },
+        { type: 'text', text: text || 'What is this?' },
       ];
     }
   } else {
