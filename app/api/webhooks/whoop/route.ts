@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { createHmac } from 'crypto';
+import { createHmac, timingSafeEqual } from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { bustCache } from '@/lib/briefCache';
@@ -35,7 +35,10 @@ function verifySignature(body: string, signature: string | null, secret: string)
   if (!signature) return false;
   // Whoop sends HMAC-SHA256 hex digest in X-WHOOP-Signature
   const expected = createHmac('sha256', secret).update(body).digest('hex');
-  return signature === expected;
+  // Use timingSafeEqual to prevent timing attacks; buffers must be equal length
+  const a = Buffer.from(signature);
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
 }
 
 function formatBrief(): string {

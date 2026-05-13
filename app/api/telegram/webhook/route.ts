@@ -18,9 +18,11 @@ interface TelegramUpdate { message?: TelegramMessage; }
 
 async function downloadPdfAsBase64(fileId: string): Promise<string> {
   const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) throw new Error('TELEGRAM_BOT_TOKEN not set');
   const getFileRes = await fetch(`https://api.telegram.org/bot${token}/getFile?file_id=${fileId}`);
-  const getFileJson = await getFileRes.json() as { result: { file_path: string } };
-  const filePath = getFileJson.result.file_path;
+  const getFileJson = await getFileRes.json() as { result?: { file_path: string } };
+  const filePath = getFileJson.result?.file_path;
+  if (!filePath) throw new Error('Telegram getFile returned no file_path');
   const fileRes = await fetch(`https://api.telegram.org/file/bot${token}/${filePath}`);
   const buffer = await fileRes.arrayBuffer();
   return Buffer.from(buffer).toString('base64');
@@ -66,10 +68,10 @@ export async function POST(req: Request) {
       const fileId = msg.photo[msg.photo.length - 1].file_id;
       const { base64, mimeType } = await downloadFileAsBase64(fileId);
       const reply = await processMessage(msg.text ?? '', chatId, { base64, mimeType });
-      await sendMessage(chatId, reply);
+      if (reply) await sendMessage(chatId, reply);
     } else if (msg.text) {
       const reply = await processMessage(msg.text, chatId);
-      await sendMessage(chatId, reply);
+      if (reply) await sendMessage(chatId, reply);
     }
   } catch (err) {
     console.error('Telegram coach error:', err);

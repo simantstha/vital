@@ -167,8 +167,7 @@ export async function resolveQuantity(pending: PendingBarcode, quantityText: str
       grams: number; kcal: number; c: number; p: number; f: number; summary: string;
     };
 
-    const hour = new Date().getHours();
-    const meal = hour < 10 ? 'breakfast' : hour < 14 ? 'lunch' : hour < 17 ? 'snack' : 'dinner';
+    const meal = mealFromHour();
 
     const override: MealOverride = {
       meal,
