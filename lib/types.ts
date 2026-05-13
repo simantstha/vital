@@ -76,13 +76,12 @@ export interface MileageDay {
   today?: boolean;
 }
 
-export interface Route {
-  name: string;
+export interface MinutesDay {
   d: string;
-  e: string;
-  p: string;
-  count: number;
+  min: number;
+  today?: boolean;
 }
+
 
 export interface DailyBriefMeal {
   k: string;
