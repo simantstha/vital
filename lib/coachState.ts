@@ -70,3 +70,32 @@ export function writePendingBarcode(pending: PendingBarcode) {
 export function clearPendingBarcode() {
   try { fs.unlinkSync(PENDING_FILE); } catch { /* ok */ }
 }
+
+import type { NutritionixResult } from './nutritionix';
+
+export interface PendingMeal {
+  chatId: number;
+  query: string;
+  result: NutritionixResult;
+  meal: string;
+  expiresAt: number;
+}
+
+const PENDING_MEAL_FILE = path.join(MEMORY_DIR, 'pending-meal.json');
+
+export function readPendingMeal(chatId: number): PendingMeal | null {
+  try {
+    const p = JSON.parse(fs.readFileSync(PENDING_MEAL_FILE, 'utf-8')) as PendingMeal;
+    if (p.chatId !== chatId || Date.now() > p.expiresAt) return null;
+    return p;
+  } catch { return null; }
+}
+
+export function writePendingMeal(pending: PendingMeal) {
+  ensureDir();
+  try { fs.writeFileSync(PENDING_MEAL_FILE, JSON.stringify(pending), 'utf-8'); } catch { /* ok */ }
+}
+
+export function clearPendingMeal() {
+  try { fs.unlinkSync(PENDING_MEAL_FILE); } catch { /* ok */ }
+}

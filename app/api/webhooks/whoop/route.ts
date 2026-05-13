@@ -1,8 +1,33 @@
 import { NextResponse } from 'next/server';
-import { createHmac } from 'crypto';
+import { createHmac, timingSafeEqual } from 'crypto';
+import fs from 'fs';
+import path from 'path';
 import { bustCache } from '@/lib/briefCache';
 import { loadChatId, sendMessage } from '@/lib/telegram';
 import { getCachedBrief } from '@/lib/briefCache';
+import { readHrvBaseline } from '@/lib/memory';
+
+const MEMORY_DIR = path.resolve(process.cwd(), '.vital-memory');
+const GREEN_STREAK_FILE = path.join(MEMORY_DIR, 'green-streak.json');
+
+interface GreenStreak {
+  dates: string[];
+}
+
+function readGreenStreak(): GreenStreak {
+  try {
+    return JSON.parse(fs.readFileSync(GREEN_STREAK_FILE, 'utf-8')) as GreenStreak;
+  } catch {
+    return { dates: [] };
+  }
+}
+
+function writeGreenStreak(streak: GreenStreak): void {
+  try {
+    fs.mkdirSync(MEMORY_DIR, { recursive: true });
+    fs.writeFileSync(GREEN_STREAK_FILE, JSON.stringify(streak), 'utf-8');
+  } catch { /* read-only fs on Vercel */ }
+}
 
 export const dynamic = 'force-dynamic';
 
@@ -10,7 +35,10 @@ function verifySignature(body: string, signature: string | null, secret: string)
   if (!signature) return false;
   // Whoop sends HMAC-SHA256 hex digest in X-WHOOP-Signature
   const expected = createHmac('sha256', secret).update(body).digest('hex');
-  return signature === expected;
+  // Use timingSafeEqual to prevent timing attacks; buffers must be equal length
+  const a = Buffer.from(signature);
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
 }
 
 function formatBrief(): string {
@@ -45,8 +73,16 @@ export async function POST(req: Request) {
     return new Response('Forbidden', { status: 403 });
   }
 
-  let payload: { type?: string };
-  try { payload = JSON.parse(body) as { type?: string }; }
+  interface WhoopPayload {
+    type?: string;
+    data?: {
+      recovery_score?: number;
+      hrv_rmssd_milli?: number;
+    };
+  }
+
+  let payload: WhoopPayload;
+  try { payload = JSON.parse(body) as WhoopPayload; }
   catch { return NextResponse.json({ ok: true }); }
 
   // Only act on recovery.scored — acknowledge other events immediately
@@ -70,6 +106,44 @@ export async function POST(req: Request) {
     if (chatId) {
       const text = formatBrief();
       if (text) await sendMessage(chatId, text);
+    }
+
+    // --- Proactive alerts ---
+    const whoopData = payload.data;
+    const recoveryScore = whoopData?.recovery_score;
+    const currentHrv = whoopData?.hrv_rmssd_milli;
+    const today = new Date().toISOString().split('T')[0];
+
+    if (!chatId) {
+      console.warn('Whoop alerts: no Telegram chatId configured, skipping alerts');
+    } else {
+      // 1. Red day alert
+      if (typeof recoveryScore === 'number' && recoveryScore < 33) {
+        await sendMessage(chatId, '🔴 Recovery is in the red today — your body is asking for rest. Easy day recommended.');
+      }
+
+      // 2. HRV crash alert
+      if (typeof currentHrv === 'number') {
+        const baseline = readHrvBaseline();
+        if (baseline !== null && currentHrv < baseline * 0.85) {
+          await sendMessage(chatId, '⚠️ HRV dropped significantly below your baseline — watch your load today.');
+        }
+      }
+
+      // 3. Green streak tracking + alert (fires only when streak first reaches 3)
+      const streak = readGreenStreak();
+      const wasStreaking = streak.dates.length >= 3;
+      if (typeof recoveryScore === 'number' && recoveryScore >= 67) {
+        if (!streak.dates.includes(today)) streak.dates.push(today);
+        if (streak.dates.length > 7) streak.dates = streak.dates.slice(-7);
+      } else {
+        streak.dates = [];
+      }
+      writeGreenStreak(streak);
+
+      if (!wasStreaking && streak.dates.length >= 3) {
+        await sendMessage(chatId, '🟢 3 green days in a row — you\'re in a peak window. Good day for a hard effort if planned.');
+      }
     }
   } catch (err) {
     console.error('Whoop webhook handler error:', err);

@@ -1,17 +1,30 @@
 import Anthropic from '@anthropic-ai/sdk';
+import type { MessageParam, Tool } from '@anthropic-ai/sdk/resources/messages';
 import { getCachedBrief } from '@/lib/briefCache';
-import { readUserProfile } from '@/lib/claude';
-import { readCoachState, writeMealOverride, writePendingBarcode, clearPendingBarcode, type MealOverride, type PendingBarcode } from '@/lib/coachState';
+import { loadAlwaysOnContext, MEMORY_TOOLS, handleToolCall, readMemoryFile, writeMemoryFile } from '@/lib/memory';
+import { readCoachState, writeMealOverride, writePendingBarcode, clearPendingBarcode, readPendingMeal, writePendingMeal, clearPendingMeal, type MealOverride, type PendingBarcode, type PendingMeal } from '@/lib/coachState';
 import { logWeight, readWeightLog } from '@/lib/weightLog';
-import { lookupBarcode } from '@/lib/openFoodFacts';
+import { lookupBarcode, searchFoodByName } from '@/lib/openFoodFacts';
+import { getDiaryMacros } from '@/lib/mfp';
+import { lookupNutrition, findInSavedMeals, type SavedMeal, type NutritionixResult } from '@/lib/nutritionix';
+import { sendMessage } from '@/lib/telegram';
 
 const client = new Anthropic();
 
 // ── System prompt ────────────────────────────────────────────────────────────
 
-function buildSystemPrompt(userProfile: string, healthCtx: string): string {
-  return `You are Vital Coach — personal AI coach for a marathon runner training for the Twin Cities Marathon (October 4, 2026).
-You're responding via Telegram. Keep answers SHORT and direct (under 120 words) unless the user asks for detail.
+function buildSystemPrompt(alwaysOnMemory: string, healthCtx: string): string {
+  return `You are Vital Coach — a personal fitness and nutrition AI coach.
+You respond via Telegram. Keep answers SHORT and direct (under 120 words) unless the user asks for detail.
+
+You have access to memory tools. On each message:
+1. Decide if you need more context from a domain file — check the Memory Index, then call read_memory if needed.
+2. Answer the user.
+3. If you learned a new fact (injury, food reaction, PR, allergy, supplement, travel, stress event), call write_memory to update the relevant file. Always read the file first, merge the new fact, then write the full updated JSON.
+4. If you noticed a pattern or insight worth remembering, call append_observation (under 20 words).
+5. If the user expresses mood, energy, or fatigue (e.g. "tired", "energy 3/5", "feeling great", "exhausted today", "mood is low"), extract a score 1–5 (1=very low, 5=excellent) and call write_memory('life-context.json', ...) to append a new entry to the moodLog array: {"date":"YYYY-MM-DD","score":N,"notes":"brief context"}. Always read life-context.json first, merge the new entry into the moodLog array, then write the full updated JSON.
+
+NEVER display tool calls or memory operations to the user. They are silent background actions.
 
 ACTIONS — append these at the very end of your response, NEVER display them to the user:
 - If user reports eating something not in the plan:
@@ -21,18 +34,20 @@ ACTIONS — append these at the very end of your response, NEVER display them to
   <vital-action type="weight_log" weight="N" unit="lbs"/>
 Only append an action when clearly triggered. Never preemptively.
 
-## Long-term User Profile
-${userProfile}
+## Long-term Memory
+${alwaysOnMemory}
 
+## Today's Health Context
 ${healthCtx}`;
 }
 
-// ── Health context from cache ────────────────────────────────────────────────
+// ── Health context from cache + live MFP ────────────────────────────────────
 
-function buildHealthContext(): string {
+async function buildHealthContext(): Promise<string> {
   const brief = getCachedBrief();
   const state = readCoachState();
   const weights = readWeightLog().slice(-7);
+  const today = new Date().toISOString().split('T')[0];
 
   let ctx = '';
 
@@ -42,13 +57,26 @@ function buildHealthContext(): string {
     for (const meal of brief.meals) {
       const override = state.mealOverrides.find(o => o.meal === meal.k.toLowerCase());
       if (override) {
-        ctx += `${meal.k} at ${meal.t}: ${override.items} — ${override.kcal}kcal [ADJUSTED]\n`;
+        ctx += `${meal.k} at ${meal.t}: ${override.items} — ${override.kcal}kcal [ADJUSTED via chat]\n`;
       } else {
         ctx += `${meal.k} at ${meal.t}: ${meal.items} — ${meal.kcal}kcal (${meal.c}g C/${meal.p}g P/${meal.f}g F)\n`;
       }
     }
   } else {
     ctx += `## Brief\nNo brief generated yet today.\n`;
+  }
+
+  // Live MFP diary — what was actually logged
+  try {
+    const mfp = await getDiaryMacros(today);
+    if (mfp.hasData) {
+      ctx += `\n## MyFitnessPal (actually logged today)\n`;
+      ctx += `Calories: ${mfp.calories} kcal · Carbs: ${mfp.carbs}g · Protein: ${mfp.protein}g · Fat: ${mfp.fat}g\n`;
+    } else {
+      ctx += `\n## MyFitnessPal\nNo diary entries logged yet today.\n`;
+    }
+  } catch {
+    ctx += `\n## MyFitnessPal\nUnavailable right now.\n`;
   }
 
   if (weights.length > 0) {
@@ -85,26 +113,40 @@ function parseAction(text: string): ParsedAction | null {
 
 async function classifyImage(base64: string, mimeType: string): Promise<
   | { type: 'barcode'; value: string }
-  | { type: 'meal' }
+  | { type: 'meal_photo'; query: string; items: string[] }
+  | { type: 'other' }
 > {
   const msg = await client.messages.create({
-    model: 'claude-sonnet-4-6',
-    max_tokens: 100,
+    model: 'claude-haiku-4-5',
+    max_tokens: 300,
     messages: [{
       role: 'user',
       content: [
         { type: 'image', source: { type: 'base64', media_type: mimeType as 'image/jpeg', data: base64 } },
-        { type: 'text', text: 'Is this image a barcode/product label, or a prepared meal/food? If barcode, extract the numeric barcode value. Reply with JSON only: {"type":"barcode","value":"..."} or {"type":"meal"}' },
+        {
+          type: 'text',
+          text: `Classify this image. Respond with JSON only, no markdown.
+
+If it shows a barcode or QR code: {"type":"barcode","value":"<digits>"}
+If it shows food or a meal: {"type":"meal_photo","query":"<natural language list, e.g. '6oz grilled chicken breast, 1 cup brown rice, 1 cup steamed broccoli'>","items":["<item 1>","<item 2>"]}
+Otherwise: {"type":"other"}
+
+For meal_photo: estimate realistic portion sizes. query must be comma-separated items with quantities and cooking method.`,
+        },
       ],
     }],
   });
-
   try {
     const content = (msg.content[0] as { text: string }).text;
-    const json = JSON.parse(content.replace(/```json\n?|```/g, '').trim()) as { type: string; value?: string };
-    if (json.type === 'barcode' && json.value) return { type: 'barcode', value: json.value };
-  } catch { /* fall through */ }
-  return { type: 'meal' };
+    return JSON.parse(content.replace(/```json\n?|```/g, '').trim());
+  } catch {
+    return { type: 'other' };
+  }
+}
+
+function mealFromHour(): string {
+  const h = new Date().getHours();
+  return h < 10 ? 'breakfast' : h < 14 ? 'lunch' : h < 17 ? 'snack' : 'dinner';
 }
 
 // ── Quantity resolver (pending barcode → macro calc) ─────────────────────────
@@ -125,8 +167,7 @@ export async function resolveQuantity(pending: PendingBarcode, quantityText: str
       grams: number; kcal: number; c: number; p: number; f: number; summary: string;
     };
 
-    const hour = new Date().getHours();
-    const meal = hour < 10 ? 'breakfast' : hour < 14 ? 'lunch' : hour < 17 ? 'snack' : 'dinner';
+    const meal = mealFromHour();
 
     const override: MealOverride = {
       meal,
@@ -148,6 +189,103 @@ export async function resolveQuantity(pending: PendingBarcode, quantityText: str
   }
 }
 
+// ── Lab Results PDF processor ────────────────────────────────────────────────
+
+interface LabResult {
+  marker: string;
+  value: number | null;
+  unit: string | null;
+  referenceRange: string | null;
+  status: 'normal' | 'low' | 'high' | null;
+  date: string | null;
+}
+
+interface LabResultsFile {
+  lastUpdated: string | null;
+  results: LabResult[];
+}
+
+export async function processPdf(pdfBase64: string, chatId: number): Promise<string> {
+  const today = new Date().toISOString().split('T')[0];
+
+  const response = await client.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 2048,
+    messages: [{
+      role: 'user',
+      content: [
+        {
+          type: 'document',
+          source: { type: 'base64', media_type: 'application/pdf', data: pdfBase64 },
+        },
+        {
+          type: 'text',
+          text: `Extract all lab test results from this document. Return JSON only, no markdown:
+{"lastUpdated":"YYYY-MM-DD","results":[{"marker":"...","value":N,"unit":"...","referenceRange":"...","status":"normal|low|high","date":"YYYY-MM-DD"}]}
+If a field is unknown, use null. Use today's date (${today}) as lastUpdated.`,
+        },
+      ],
+    }],
+  });
+
+  const rawText = (response.content[0] as { text: string }).text;
+  let extracted: LabResultsFile;
+  try {
+    extracted = JSON.parse(rawText.replace(/```json\n?|```/g, '').trim()) as LabResultsFile;
+  } catch {
+    return 'I received the PDF but could not extract structured lab results from it. Please make sure it is a standard lab report.';
+  }
+
+  if (!extracted.results || extracted.results.length === 0) {
+    return 'No lab markers were found in this document.';
+  }
+
+  // Merge with existing lab-results.json
+  const existing = readMemoryFile('lab-results.json');
+  let current: LabResultsFile = { lastUpdated: null, results: [] };
+  if (existing) {
+    try { current = JSON.parse(existing) as LabResultsFile; } catch { /* use empty */ }
+  }
+
+  // Deduplicate by marker + date — new entry wins
+  const mergedMap = new Map<string, LabResult>();
+  for (const r of current.results) {
+    mergedMap.set(`${r.marker}|${r.date}`, r);
+  }
+  for (const r of extracted.results) {
+    mergedMap.set(`${r.marker}|${r.date}`, r);
+  }
+
+  const merged: LabResultsFile = {
+    lastUpdated: extracted.lastUpdated ?? today,
+    results: Array.from(mergedMap.values()),
+  };
+
+  writeMemoryFile('lab-results.json', JSON.stringify(merged, null, 2));
+
+  // Build human-readable summary
+  const newCount = extracted.results.length;
+  const abnormal = extracted.results.filter(r => r.status === 'low' || r.status === 'high');
+  const lines = extracted.results.map(r => {
+    const statusIcon = r.status === 'low' ? ' ⬇️' : r.status === 'high' ? ' ⬆️' : '';
+    const val = r.value !== null ? `${r.value}${r.unit ? ' ' + r.unit : ''}` : 'N/A';
+    const ref = r.referenceRange ? ` (ref: ${r.referenceRange})` : '';
+    return `• ${r.marker}: ${val}${ref}${statusIcon}`;
+  });
+
+  let summary = `Lab results processed — ${newCount} marker${newCount !== 1 ? 's' : ''} extracted:\n\n${lines.join('\n')}`;
+  if (abnormal.length > 0) {
+    const flags = abnormal.map(r => r.marker).join(', ');
+    summary += `\n\nHeads up: ${flags} ${abnormal.length === 1 ? 'is' : 'are'} outside the reference range. Ask me if you'd like to discuss what this means for your health goals.`;
+  }
+  summary += '\n\nAll results saved to memory.';
+
+  // Suppress chatId warning — it's available if needed for future use
+  void chatId;
+
+  return summary;
+}
+
 // ── Main entry point ─────────────────────────────────────────────────────────
 
 export async function processMessage(
@@ -155,11 +293,50 @@ export async function processMessage(
   chatId: number,
   image?: { base64: string; mimeType: string },
 ): Promise<string> {
-  const userProfile = readUserProfile();
-  const healthCtx = buildHealthContext();
-  const systemPrompt = buildSystemPrompt(userProfile, healthCtx);
+  const alwaysOnMemory = loadAlwaysOnContext();
+  const healthCtx = await buildHealthContext();
+  const systemPrompt = buildSystemPrompt(alwaysOnMemory, healthCtx);
 
-  let userContent: Anthropic.MessageParam['content'];
+  let userContent: Anthropic.MessageParam['content'] = text;
+
+  // Handle pending meal confirmation/correction
+  const pendingMeal = readPendingMeal(chatId);
+  if (pendingMeal && !image) {
+    const txt = text ?? '';
+    const isConfirm = /^(yes|yeah|yep|log|ok|looks good|right)/i.test(txt.trim());
+
+    if (isConfirm) {
+      clearPendingMeal();
+      writeMealOverride({
+        meal: pendingMeal.meal,
+        kcal: pendingMeal.result.kcal,
+        c: pendingMeal.result.c,
+        p: pendingMeal.result.p,
+        f: pendingMeal.result.f,
+        items: pendingMeal.query,
+        reason: 'meal photo + Nutritionix',
+        updatedAt: new Date().toISOString(),
+      });
+      await sendMessage(chatId, `✅ Logged: ${pendingMeal.result.kcal}kcal · ${pendingMeal.result.p}g protein · ${pendingMeal.result.c}g carbs · ${pendingMeal.result.f}g fat`);
+      return '';
+    } else {
+      // User correcting portions — re-lookup with corrected text
+      const corrected = await lookupNutrition(txt);
+      if (corrected) {
+        clearPendingMeal();
+        const hour = new Date().getHours();
+        const meal = hour < 10 ? 'breakfast' : hour < 14 ? 'lunch' : hour < 17 ? 'snack' : 'dinner';
+        const newPending: PendingMeal = { chatId, query: txt, result: corrected, meal, expiresAt: Date.now() + 10 * 60 * 1000 };
+        writePendingMeal(newPending);
+        const itemLines = corrected.foods.map(f => `  • ${f.qty} ${f.unit} ${f.name} — ${f.kcal}kcal`).join('\n');
+        await sendMessage(chatId, `Updated:\n${itemLines}\n\nTotal: ${corrected.kcal}kcal · ${corrected.p}g protein · ${corrected.c}g carbs · ${corrected.f}g fat\n\nLooks right? (yes / correct it)`);
+        return '';
+      } else {
+        await sendMessage(chatId, `Couldn't find "${txt}" in the database. Try describing portions differently, e.g. "200g chicken rice" or "1 cup dal".`);
+        return '';
+      }
+    }
+  }
 
   if (image) {
     // First classify: barcode or meal?
@@ -186,25 +363,107 @@ export async function processMessage(
         { type: 'image', source: { type: 'base64', media_type: image.mimeType as 'image/jpeg', data: image.base64 } },
         { type: 'text', text: `Barcode ${classification.value} wasn't found in the food database. Can you identify this product from the packaging and estimate the macros?` },
       ];
+    } else if (classification.type === 'meal_photo') {
+      const meal = mealFromHour();
+
+      // Lookup chain: savedMeals → Nutritionix → Open Food Facts → Claude estimate
+      const habitsRaw = readMemoryFile('nutrition-habits.json');
+      let habits: { savedMeals?: SavedMeal[] } | null = null;
+      try { habits = habitsRaw ? JSON.parse(habitsRaw) as { savedMeals?: SavedMeal[] } : null; } catch { /* use null */ }
+      const savedMeals: SavedMeal[] = habits?.savedMeals ?? [];
+      const savedMatch = findInSavedMeals(classification.query, savedMeals);
+
+      let nutrition: NutritionixResult | null = null;
+      let source: 'saved' | 'db' | 'estimate' = 'db';
+
+      if (savedMatch) {
+        nutrition = { kcal: savedMatch.kcal, c: savedMatch.c, p: savedMatch.p, f: savedMatch.f, foods: [{ name: savedMatch.name, qty: 1, unit: 'serving', kcal: savedMatch.kcal }] };
+        source = 'saved';
+      } else {
+        nutrition = await lookupNutrition(classification.query);
+        if (!nutrition) {
+          const offResult = await searchFoodByName(classification.query);
+          if (offResult) {
+            const factor = 1.5; // OFF returns per-100g; assume ~150g serving as rough default
+            nutrition = {
+              kcal: Math.round(offResult.per100g.kcal * factor),
+              c: Math.round(offResult.per100g.c * factor),
+              p: Math.round(offResult.per100g.p * factor),
+              f: Math.round(offResult.per100g.f * factor),
+              foods: [{ name: offResult.productName, qty: 150, unit: 'g', kcal: Math.round(offResult.per100g.kcal * factor) }],
+            };
+          }
+        }
+        if (!nutrition) source = 'estimate';
+      }
+
+      const sourceTag = source === 'saved' ? '📚 your food library' : source === 'db' ? '🔍 database' : '🤖 estimated';
+
+      if (source === 'estimate') {
+        userContent = [
+          { type: 'image', source: { type: 'base64', media_type: image.mimeType as 'image/jpeg', data: image.base64 } },
+          { type: 'text', text: `[User sent a meal photo. Identified: "${classification.query}". No database match found — likely a regional/homemade dish. Visually estimate the macros, present clearly, ask user to confirm or correct. Once confirmed, offer to save to food library.]` },
+        ];
+      } else {
+        const itemLines = nutrition!.foods.map(f => `  • ${f.qty} ${f.unit} ${f.name} — ${f.kcal}kcal`).join('\n');
+        const confirmMsg = `I see (${sourceTag}):\n${itemLines || `  • ${nutrition!.kcal}kcal total`}\n\nTotal: ${nutrition!.kcal}kcal · ${nutrition!.p}g protein · ${nutrition!.c}g carbs · ${nutrition!.f}g fat\n\nLooks right? Reply *yes* to log, or correct the portions.`;
+        const pending: PendingMeal = { chatId, query: classification.query, result: nutrition!, meal, expiresAt: Date.now() + 10 * 60 * 1000 };
+        writePendingMeal(pending);
+        await sendMessage(chatId, confirmMsg);
+        return '';
+      }
     } else {
-      // Meal photo
+      // other — fall through to Claude with the image
       userContent = [
         { type: 'image', source: { type: 'base64', media_type: image.mimeType as 'image/jpeg', data: image.base64 } },
-        { type: 'text', text: text || 'What is this meal and what are the estimated macros?' },
+        { type: 'text', text: text || 'What is this?' },
       ];
     }
   } else {
     userContent = text;
   }
 
-  const msg = await client.messages.create({
+  const messages: MessageParam[] = [{ role: 'user', content: userContent }];
+
+  let response = await client.messages.create({
     model: 'claude-sonnet-4-6',
-    max_tokens: 400,
+    max_tokens: 1024,
     system: systemPrompt,
-    messages: [{ role: 'user', content: userContent }],
+    tools: MEMORY_TOOLS,
+    messages,
   });
 
-  const raw = (msg.content[0] as { text: string }).text;
+  let rounds = 0;
+  const MAX_ROUNDS = 10;
+
+  while (response.stop_reason === 'tool_use' && rounds < MAX_ROUNDS) {
+    rounds++;
+    messages.push({ role: 'assistant', content: response.content });
+
+    const toolResults = response.content
+      .filter((b): b is Extract<typeof b, { type: 'tool_use' }> => b.type === 'tool_use')
+      .map(block => ({
+        type: 'tool_result' as const,
+        tool_use_id: block.id,
+        content: handleToolCall(block.name, block.input),
+      }));
+
+    messages.push({ role: 'user', content: toolResults });
+
+    response = await client.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 1024,
+      system: systemPrompt,
+      tools: MEMORY_TOOLS,
+      messages,
+    });
+  }
+
+  const raw = response.content.find((b): b is Extract<typeof b, { type: 'text' }> => b.type === 'text')?.text ?? '';
+  if (!raw) {
+    console.error('[telegramCoach] No text block in final response', JSON.stringify(response.content));
+    return '';
+  }
   const action = parseAction(raw);
   const clean = stripAction(raw);
 

@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { fetchWhoopMetrics } from '@/lib/whoop';
+import { fetchWhoopMetrics, fetchBodyMeasurement } from '@/lib/whoop';
 import type { MetricsData } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -59,7 +59,9 @@ export async function GET() {
       },
     };
 
-    return NextResponse.json({ metrics, recoveryScore });
+    const bodyMeasurement = await fetchBodyMeasurement();
+
+    return NextResponse.json({ metrics, recoveryScore, bodyMeasurement });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     return NextResponse.json({ error: message }, { status: 502 });

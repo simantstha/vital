@@ -35,6 +35,7 @@ export default function DashboardPage() {
   const [state, setState] = useState<RecoveryState>('green');
   const [scale, setScale] = useState(1);
   const [whoopMetrics, setWhoopMetrics] = useState<MetricsData | null>(null);
+  const [weightKg, setWeightKg] = useState<number | null>(null);
   const [stravaData, setStravaData] = useState<StravaData | null>(null);
   const [dailyBrief, setDailyBrief] = useState<DailyBrief | null>(null);
   const [mfpMacros, setMfpMacros] = useState<MFPMacros | null>(null);
@@ -48,8 +49,9 @@ export default function DashboardPage() {
   useEffect(() => {
     fetch('/api/whoop')
       .then(r => r.json())
-      .then(({ metrics, recoveryScore }: { metrics: MetricsData; recoveryScore: number }) => {
+      .then(({ metrics, recoveryScore, bodyMeasurement }: { metrics: MetricsData; recoveryScore: number; bodyMeasurement?: { weightKg?: number } }) => {
         setWhoopMetrics(metrics);
+        if (bodyMeasurement?.weightKg) setWeightKg(bodyMeasurement.weightKg);
         setWhoopStatus('live');
         if (recoveryScore >= 67) setState('green');
         else if (recoveryScore >= 34) setState('amber');
@@ -183,6 +185,7 @@ export default function DashboardPage() {
             briefStatus={briefStatus}
             mfpStatus={mfpStatus}
             mealOverrides={mealOverrides}
+            weightKg={weightKg}
           />
         </div>
       </div>
