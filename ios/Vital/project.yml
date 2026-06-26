@@ -1,0 +1,50 @@
+name: Vital
+options:
+  bundleIdPrefix: com.simantstha
+  deploymentTarget:
+    iOS: "26.0"
+  createIntermediateGroups: true
+  generateEmptyDirectories: false
+  xcodeVersion: "16.0"
+
+settings:
+  base:
+    SWIFT_VERSION: "5"
+
+targets:
+  Vital:
+    type: application
+    platform: iOS
+    deploymentTarget: "26.0"
+    sources:
+      - path: Sources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.simantstha.vital
+        PRODUCT_NAME: Vital
+        SWIFT_VERSION: "5"
+        ENABLE_PREVIEWS: "YES"
+        SWIFT_EMIT_LOC_STRINGS: "YES"
+    info:
+      path: Sources/App/Info.plist
+      properties:
+        CFBundleDisplayName: Vital
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+
+schemes:
+  Vital:
+    build:
+      targets:
+        Vital: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release
