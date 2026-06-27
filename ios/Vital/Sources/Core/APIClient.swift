@@ -53,6 +53,65 @@ struct APIClient {
         return e
     }()
 
+    // MARK: Coach (SSE streaming)
+
+    /// Streams coach reply tokens from `POST /api/coach` via Server-Sent Events.
+    ///
+    /// The backend emits `data: {"type":"text","delta":"…"}` lines as tokens arrive
+    /// and terminates with `data: {"type":"done","messageId":"…"}`.
+    /// Each yielded `String` is one text delta.
+    func streamCoach(message: String, imageBase64: String? = nil) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            Task {
+                do {
+                    guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/coach") else {
+                        continuation.finish(throwing: APIError.invalidURL)
+                        return
+                    }
+
+                    var request = URLRequest(url: url)
+                    request.httpMethod = "POST"
+                    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                    request.timeoutInterval = 60
+
+                    let body = CoachRequestBody(message: message, imageBase64: imageBase64)
+                    request.httpBody = try encoder.encode(body)
+
+                    let (bytes, response) = try await URLSession.shared.bytes(for: request)
+
+                    if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
+                        continuation.finish(throwing: APIError.serverError(http.statusCode))
+                        return
+                    }
+
+                    for try await line in bytes.lines {
+                        guard line.hasPrefix("data: ") else { continue }
+                        let jsonSlice = line.dropFirst(6) // strip "data: "
+                        guard let data = jsonSlice.data(using: .utf8),
+                              let event = try? JSONDecoder().decode(SSEEvent.self, from: data)
+                        else { continue }
+
+                        switch event.type {
+                        case "text":
+                            if let delta = event.delta {
+                                continuation.yield(delta)
+                            }
+                        case "done":
+                            continuation.finish()
+                            return
+                        default:
+                            break
+                        }
+                    }
+
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+        }
+    }
+
     // MARK: Ingest
 
     /// Posts an array of HealthKit deltas to `POST /api/ingest`.
@@ -93,4 +152,17 @@ enum APIError: Error, LocalizedError {
         case .serverError(let c):  return "Server returned HTTP \(c)."
         }
     }
+}
+
+// MARK: - Coach SSE types
+
+private struct CoachRequestBody: Encodable {
+    let message: String
+    let imageBase64: String?
+}
+
+private struct SSEEvent: Decodable {
+    let type: String
+    let delta: String?
+    let messageId: String?
 }

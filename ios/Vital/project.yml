@@ -37,6 +37,8 @@ targets:
           - UIInterfaceOrientationPortrait
         NSHealthShareUsageDescription: "Vital reads your health data to coach you."
         NSHealthUpdateUsageDescription: "Vital may write health data on your behalf."
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
 
 schemes:
   Vital:
