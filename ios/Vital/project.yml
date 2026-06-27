@@ -37,6 +37,10 @@ targets:
           - UIInterfaceOrientationPortrait
         NSHealthShareUsageDescription: "Vital reads your health data to coach you."
         NSHealthUpdateUsageDescription: "Vital may write health data on your behalf."
+        NSCameraUsageDescription: "Vital uses the camera to scan barcodes and identify food."
+        NSMicrophoneUsageDescription: "Vital uses the microphone to recognise spoken food names."
+        NSSpeechRecognitionUsageDescription: "Vital transcribes your voice to search for foods."
+        NSPhotoLibraryUsageDescription: "Vital accesses your photo library to identify food from images."
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
 

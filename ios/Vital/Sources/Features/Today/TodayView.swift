@@ -4,6 +4,7 @@ import SwiftUI
 
 struct TodayView: View {
     @StateObject private var vm = TodayViewModel()
+    @State private var showLogSheet = false
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -25,6 +26,9 @@ struct TodayView: View {
             }
             .scrollIndicators(.hidden)
             .task { await vm.loadHealthData() }
+        }
+        .sheet(isPresented: $showLogSheet) {
+            LogMealView()
         }
     }
 }
@@ -157,7 +161,7 @@ private extension TodayView {
         HStack(spacing: Theme.Spacing.md) {
             // Primary — lime filled
             Button {
-                // TODO: log food
+                showLogSheet = true
             } label: {
                 Text("Log it")
                     .font(.system(size: 16, weight: .semibold))

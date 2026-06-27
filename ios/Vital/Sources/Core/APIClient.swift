@@ -112,6 +112,91 @@ struct APIClient {
         }
     }
 
+    // MARK: Nutrition search
+
+    /// `POST /api/nutrition/search` — free-text food lookup.
+    func searchFood(_ query: String) async throws -> NutritionResult {
+        guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/nutrition/search") else {
+            throw APIError.invalidURL
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 15
+        struct Body: Encodable { let query: String }
+        request.httpBody = try encoder.encode(Body(query: query))
+        let (data, response) = try await URLSession.shared.data(for: request)
+        if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
+            throw APIError.serverError(http.statusCode)
+        }
+        return try JSONDecoder().decode(NutritionResult.self, from: data)
+    }
+
+    /// `POST /api/nutrition/barcode` — barcode product lookup.
+    func barcodeFood(_ barcode: String, grams: Double? = nil) async throws -> BarcodeResult {
+        guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/nutrition/barcode") else {
+            throw APIError.invalidURL
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 15
+        struct Body: Encodable { let barcode: String; let grams: Double? }
+        request.httpBody = try encoder.encode(Body(barcode: barcode, grams: grams))
+        let (data, response) = try await URLSession.shared.data(for: request)
+        if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
+            throw APIError.serverError(http.statusCode)
+        }
+        return try JSONDecoder().decode(BarcodeResult.self, from: data)
+    }
+
+    /// `POST /api/nutrition/photo` — AI food identification from a JPEG base-64 string.
+    func photoFood(imageBase64: String) async throws -> NutritionResult {
+        guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/nutrition/photo") else {
+            throw APIError.invalidURL
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 30
+        struct Body: Encodable { let imageBase64: String }
+        request.httpBody = try encoder.encode(Body(imageBase64: imageBase64))
+        let (data, response) = try await URLSession.shared.data(for: request)
+        if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
+            throw APIError.serverError(http.statusCode)
+        }
+        return try JSONDecoder().decode(NutritionResult.self, from: data)
+    }
+
+    /// `POST /api/meals/log` — persist a meal event; returns coach reaction.
+    @discardableResult
+    func logMeal(
+        name: String,
+        kcal: Double,
+        c: Double,
+        p: Double,
+        f: Double,
+        source: String
+    ) async throws -> LogMealResponse {
+        guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/meals/log") else {
+            throw APIError.invalidURL
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 15
+        struct Body: Encodable {
+            let name: String; let kcal: Double
+            let c: Double; let p: Double; let f: Double; let source: String
+        }
+        request.httpBody = try encoder.encode(Body(name: name, kcal: kcal, c: c, p: p, f: f, source: source))
+        let (data, response) = try await URLSession.shared.data(for: request)
+        if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
+            throw APIError.serverError(http.statusCode)
+        }
+        return try JSONDecoder().decode(LogMealResponse.self, from: data)
+    }
+
     // MARK: Ingest
 
     /// Posts an array of HealthKit deltas to `POST /api/ingest`.
@@ -152,6 +237,33 @@ enum APIError: Error, LocalizedError {
         case .serverError(let c):  return "Server returned HTTP \(c)."
         }
     }
+}
+
+// MARK: - Nutrition & Meal response types
+
+struct NutritionResult: Decodable {
+    let name: String
+    let kcal: Double
+    let c: Double    // carbs
+    let p: Double    // protein
+    let f: Double    // fat
+}
+
+struct BarcodeResult: Decodable {
+    let name: String
+    let brand: String?
+    let kcal: Double
+    let c: Double
+    let p: Double
+    let f: Double
+    let per100g: Bool?
+    let grams: Double?
+}
+
+struct LogMealResponse: Decodable {
+    let ok: Bool
+    let eventId: String
+    let coachReaction: String
 }
 
 // MARK: - Coach SSE types

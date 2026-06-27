@@ -20,6 +20,23 @@
 	<string>1.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<key>NSCameraUsageDescription</key>
+	<string>Vital uses the camera to scan barcodes and identify food.</string>
+	<key>NSHealthShareUsageDescription</key>
+	<string>Vital reads your health data to coach you.</string>
+	<key>NSHealthUpdateUsageDescription</key>
+	<string>Vital may write health data on your behalf.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Vital uses the microphone to recognise spoken food names.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Vital accesses your photo library to identify food from images.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Vital transcribes your voice to search for foods.</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>
