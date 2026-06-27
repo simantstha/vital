@@ -5,9 +5,11 @@ import { loadAlwaysOnContext, MEMORY_TOOLS, handleToolCall, readMemoryFile, writ
 import { readCoachState, writeMealOverride, writePendingBarcode, clearPendingBarcode, readPendingMeal, writePendingMeal, clearPendingMeal, type MealOverride, type PendingBarcode, type PendingMeal } from '@/lib/coachState';
 import { logWeight, readWeightLog } from '@/lib/weightLog';
 import { lookupBarcode, searchFoodByName } from '@/lib/openFoodFacts';
-import { getDiaryMacros } from '@/lib/mfp';
 import { lookupNutrition, findInSavedMeals, type SavedMeal, type NutritionixResult } from '@/lib/nutritionix';
 import { sendMessage } from '@/lib/telegram';
+import { db, schema } from '@/db';
+import { eq, and, gte } from 'drizzle-orm';
+import { getOrCreateDevUser } from '@/lib/brain/user';
 
 const client = new Anthropic();
 
@@ -66,17 +68,41 @@ async function buildHealthContext(): Promise<string> {
     ctx += `## Brief\nNo brief generated yet today.\n`;
   }
 
-  // Live MFP diary — what was actually logged
+  // Live meal data from Postgres (replaces MFP)
   try {
-    const mfp = await getDiaryMacros(today);
-    if (mfp.hasData) {
-      ctx += `\n## MyFitnessPal (actually logged today)\n`;
-      ctx += `Calories: ${mfp.calories} kcal · Carbs: ${mfp.carbs}g · Protein: ${mfp.protein}g · Fat: ${mfp.fat}g\n`;
+    const userId = await getOrCreateDevUser();
+    const mealStart = new Date(today + 'T00:00:00Z');
+    const mealRows = await db
+      .select({ payload: schema.events.payload })
+      .from(schema.events)
+      .where(
+        and(
+          eq(schema.events.user_id, userId),
+          eq(schema.events.type, 'meal_logged'),
+          gte(schema.events.timestamp, mealStart),
+        ),
+      );
+    if (mealRows.length > 0) {
+      const tot = mealRows.reduce(
+        (acc, r) => {
+          const p = r.payload as Record<string, number>;
+          return {
+            kcal: acc.kcal + (p.kcal ?? 0),
+            c:    acc.c    + (p.c    ?? 0),
+            p:    acc.p    + (p.p    ?? 0),
+            f:    acc.f    + (p.f    ?? 0),
+          };
+        },
+        { kcal: 0, c: 0, p: 0, f: 0 },
+      );
+      ctx += `\n## Today's Meals (logged via Vital)\n`;
+      ctx += `${mealRows.length} meal${mealRows.length !== 1 ? 's' : ''} · `;
+      ctx += `${tot.kcal}kcal · ${tot.c}g carbs · ${tot.p}g protein · ${tot.f}g fat\n`;
     } else {
-      ctx += `\n## MyFitnessPal\nNo diary entries logged yet today.\n`;
+      ctx += `\n## Today's Meals\nNo meals logged yet today.\n`;
     }
   } catch {
-    ctx += `\n## MyFitnessPal\nUnavailable right now.\n`;
+    ctx += `\n## Today's Meals\nData unavailable.\n`;
   }
 
   if (weights.length > 0) {

@@ -2,9 +2,44 @@ import Anthropic from '@anthropic-ai/sdk';
 import fs from 'fs';
 import path from 'path';
 import type { DailyBrief } from './types';
-import type { WhoopHistory } from './whoop';
-import type { RecentActivity, WeeklyLoad } from './strava';
 import { readMemoryFile, writeMemoryFile } from '@/lib/memory';
+
+// ── Inline types (formerly imported from lib/whoop + lib/strava) ──────────────
+
+interface BriefHistoryDay {
+  date: string;
+  recovery: number;
+  hrv: number;
+  rhr: number;
+  sleepPerf: number;
+  sleepDuration: string;
+}
+
+interface BriefHistory {
+  days: BriefHistoryDay[];
+  avgRecovery7d: number;
+  avgHrv7d: number;
+  trend: 'improving' | 'declining' | 'stable';
+}
+
+interface ActivityRecord {
+  type: 'run' | 'gym' | 'walk';
+  date: string;
+  distanceMi?: string;
+  pace?: string;
+  hr?: number;
+  zone?: string;
+  name: string;
+  durationMin?: number;
+}
+
+interface WeeklyLoadRecord {
+  weekStart: string;
+  runMi: number;
+  walkMi: number;
+  gymMin: number;
+  gymSessions: number;
+}
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -71,10 +106,11 @@ interface BriefContext {
   strain: number | string;
   weeklyMi: number;
   lastRun: { distanceMi: string; pace: string; dayTime: string; name: string } | null;
-  history?: WhoopHistory | null;
-  recentActivities?: RecentActivity[];
-  weeklyMileage?: WeeklyLoad[];
+  history?: BriefHistory | null;
+  recentActivities?: ActivityRecord[];
+  weeklyMileage?: WeeklyLoadRecord[];
   recentNutrition?: Array<{ date: string; calories: number; carbs: number; protein: number; fat: number }>;
+  weightKg?: number;
 }
 
 function updateHrvBaseline(currentAvg: number): void {

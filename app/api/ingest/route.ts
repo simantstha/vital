@@ -13,7 +13,7 @@
 
 import { NextResponse } from 'next/server';
 import { db, schema } from '@/db';
-import { eq } from 'drizzle-orm';
+import { getOrCreateDevUser } from '@/lib/brain/user';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -31,28 +31,6 @@ function isDelta(d: unknown): d is Delta {
     typeof o.timestamp === 'string' && o.timestamp.length > 0 &&
     o.payload !== null && typeof o.payload === 'object' && !Array.isArray(o.payload)
   );
-}
-
-// ─── Dev user helper ─────────────────────────────────────────────────────────
-
-const DEV_EMAIL = 'dev@vital.local';
-const DEV_NAME  = 'Dev User';
-
-async function getOrCreateDevUser(): Promise<string> {
-  const existing = await db
-    .select({ id: schema.users.id })
-    .from(schema.users)
-    .where(eq(schema.users.email, DEV_EMAIL))
-    .limit(1);
-
-  if (existing.length > 0) return existing[0].id;
-
-  const [created] = await db
-    .insert(schema.users)
-    .values({ email: DEV_EMAIL, name: DEV_NAME })
-    .returning({ id: schema.users.id });
-
-  return created.id;
 }
 
 // ─── Route handler ───────────────────────────────────────────────────────────

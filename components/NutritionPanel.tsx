@@ -2,17 +2,25 @@
 
 import { useState } from 'react';
 import type { NutritionData, Meal } from '@/lib/types';
-import type { MFPMacros } from '@/lib/mfp';
 import type { MealOverride } from '@/lib/coachState';
 
 type DataStatus = 'loading' | 'live' | 'error';
+
+/** Macro data logged today (previously from MFP, now sourced from Postgres). */
+interface LoggedMacros {
+  hasData: boolean;
+  calories: number;
+  carbs: number;
+  protein: number;
+  fat: number;
+}
 
 interface NutritionPanelProps {
   nutrition: NutritionData;
   meals: Meal[];
   relevantIdx: number;
   generatedAt?: string | null;
-  mfpMacros?: MFPMacros | null;
+  mfpMacros?: LoggedMacros | null;
   briefStatus: DataStatus;
   mfpStatus: DataStatus;
   mealOverrides?: MealOverride[];

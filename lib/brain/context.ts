@@ -1,0 +1,329 @@
+/**
+ * Vital Brain — context assembler
+ *
+ * assembleContext(userId) deterministically pulls structured data from Postgres
+ * and returns a CoachContext with both a structured object and a compact text
+ * block ready for Claude prompt injection.
+ *
+ * Design principle: numbers come from SQL, never from LLM inference.
+ */
+
+import { db, schema } from '@/db';
+import { eq, and, gte, desc } from 'drizzle-orm';
+import type { OntologyNode } from '@/db/schema';
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+export interface WorkoutSummary {
+  type: string;
+  durationS?: number;
+  distanceM?: number;
+  calories?: number;
+  avgHr?: number;
+}
+
+export interface MealSummary {
+  kcal: number;
+  c: number;   // carbs g
+  p: number;   // protein g
+  f: number;   // fat g
+  description?: string;
+}
+
+export interface DaySnapshot {
+  date: string;              // YYYY-MM-DD (UTC)
+  hrv?: number;              // ms
+  sleepDurationMs?: number;
+  sleepEfficiency?: number;  // 0–100
+  rhr?: number;              // bpm
+  steps?: number;
+  workouts: WorkoutSummary[];
+  meals: MealSummary[];
+  weight?: number;           // kg
+}
+
+export interface CoachContext {
+  userId: string;
+  today: DaySnapshot;
+  history: DaySnapshot[];    // last 7 days excluding today, newest first
+  recentMessages: Array<{ role: string; content: string; timestamp: Date }>;
+  hardConstraints: OntologyNode[];  // Allergy, Condition, Medication, Injury
+  softFacts: OntologyNode[];        // Goal, Habit, FoodPreference, etc.
+  promptText: string;               // compact text block ready for Claude
+}
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+const HARD_CONSTRAINT_TYPES = new Set(['Allergy', 'Condition', 'Medication', 'Injury']);
+
+// ── Payload helpers ───────────────────────────────────────────────────────────
+
+/** Safe JSONB → object cast. */
+function pl(payload: unknown): Record<string, unknown> {
+  return payload !== null && typeof payload === 'object' && !Array.isArray(payload)
+    ? (payload as Record<string, unknown>)
+    : {};
+}
+
+function num(v: unknown): number | undefined {
+  return typeof v === 'number' ? v : undefined;
+}
+
+function str(v: unknown): string | undefined {
+  return typeof v === 'string' ? v : undefined;
+}
+
+function msToHm(ms: number): string {
+  const h = Math.floor(ms / 3_600_000);
+  const m = Math.floor((ms % 3_600_000) / 60_000);
+  return `${h}h ${m < 10 ? '0' : ''}${m}m`;
+}
+
+// ── Day snapshot builder ──────────────────────────────────────────────────────
+
+/** Build a DaySnapshot from a set of events (expected ordered desc by timestamp). */
+function buildDaySnapshot(
+  dateStr: string,
+  events: Array<typeof schema.events.$inferSelect>,
+): DaySnapshot {
+  const snap: DaySnapshot = { date: dateStr, workouts: [], meals: [] };
+
+  for (const e of events) {
+    const p = pl(e.payload);
+
+    if (e.type === 'hrv_reading' && snap.hrv == null) {
+      const v = num(p.value) ?? num(p.hrv);
+      if (v != null) snap.hrv = Math.round(v);
+    }
+
+    if (e.type === 'sleep_session' && snap.sleepDurationMs == null) {
+      const dur =
+        num(p.duration_ms) ??
+        (num(p.duration_s) != null ? num(p.duration_s)! * 1_000 : undefined);
+      if (dur != null) snap.sleepDurationMs = dur;
+
+      const eff = num(p.efficiency) ?? num(p.sleep_efficiency);
+      if (eff != null) snap.sleepEfficiency = Math.round(eff);
+
+      const rhr = num(p.rhr) ?? num(p.resting_heart_rate);
+      if (rhr != null) snap.rhr = Math.round(rhr);
+    }
+
+    if (e.type === 'steps_recorded') {
+      // Take the largest value seen — HealthKit may send cumulative deltas
+      const c = num(p.count) ?? num(p.steps);
+      if (c != null && (snap.steps == null || c > snap.steps)) snap.steps = Math.round(c);
+    }
+
+    if (e.type === 'workout_completed') {
+      snap.workouts.push({
+        type:      str(p.type) ?? str(p.workout_type) ?? 'workout',
+        durationS: num(p.duration_s),
+        distanceM: num(p.distance_m),
+        calories:  num(p.calories) ?? num(p.active_calories),
+        avgHr:     num(p.avg_hr) ?? num(p.average_heart_rate),
+      });
+    }
+
+    if (e.type === 'meal_logged') {
+      snap.meals.push({
+        kcal:        Math.round(num(p.kcal) ?? num(p.calories) ?? 0),
+        c:           Math.round(num(p.c) ?? num(p.carbs) ?? 0),
+        p:           Math.round(num(p.p) ?? num(p.protein) ?? 0),
+        f:           Math.round(num(p.f) ?? num(p.fat) ?? 0),
+        description: str(p.description) ?? str(p.items),
+      });
+    }
+
+    if (e.type === 'weight_logged' && snap.weight == null) {
+      let wkg = num(p.value) ?? num(p.weight);
+      if (wkg != null) {
+        const unit = str(p.unit);
+        if (unit === 'lbs' || unit === 'lb') wkg *= 0.453592;
+        snap.weight = Math.round(wkg * 10) / 10;
+      }
+    }
+  }
+
+  return snap;
+}
+
+// ── Compact text builder ──────────────────────────────────────────────────────
+
+function formatDayLine(snap: DaySnapshot): string {
+  const parts: string[] = [];
+  if (snap.hrv != null)             parts.push(`HRV ${snap.hrv}ms`);
+  if (snap.sleepDurationMs != null) parts.push(`sleep ${msToHm(snap.sleepDurationMs)}`);
+  if (snap.steps != null)           parts.push(`steps ${snap.steps.toLocaleString()}`);
+  for (const w of snap.workouts) {
+    const km = w.distanceM != null ? ` ${(w.distanceM / 1000).toFixed(1)}km` : '';
+    const min = w.durationS != null ? ` ${Math.round(w.durationS / 60)}min` : '';
+    parts.push(`${w.type}${km || min}`);
+  }
+  if (snap.meals.length > 0) {
+    const kcal = snap.meals.reduce((s, m) => s + m.kcal, 0);
+    parts.push(`${snap.meals.length} meal${snap.meals.length !== 1 ? 's' : ''} ${kcal}kcal`);
+  }
+  if (snap.weight != null) parts.push(`weight ${snap.weight}kg`);
+  return `${snap.date}: ${parts.join(' · ') || 'no data'}`;
+}
+
+function buildPromptText(
+  ctx: Omit<CoachContext, 'promptText'>,
+): string {
+  const lines: string[] = ['## Vital Context'];
+
+  // ── Today ──────────────────────────────────────────────────────────────────
+  lines.push(`\n### Today — ${ctx.today.date}`);
+
+  if (ctx.today.hrv != null)
+    lines.push(`- HRV: ${ctx.today.hrv}ms`);
+  if (ctx.today.rhr != null)
+    lines.push(`- Resting HR: ${ctx.today.rhr}bpm`);
+  if (ctx.today.sleepDurationMs != null) {
+    const effStr =
+      ctx.today.sleepEfficiency != null
+        ? `, efficiency ${ctx.today.sleepEfficiency}%`
+        : '';
+    lines.push(`- Sleep: ${msToHm(ctx.today.sleepDurationMs)}${effStr}`);
+  }
+  if (ctx.today.steps != null)
+    lines.push(`- Steps so far: ${ctx.today.steps.toLocaleString()}`);
+  if (ctx.today.weight != null)
+    lines.push(`- Weight: ${ctx.today.weight}kg`);
+
+  if (ctx.today.workouts.length > 0) {
+    for (const w of ctx.today.workouts) {
+      const dist  = w.distanceM != null ? ` ${(w.distanceM / 1000).toFixed(1)}km` : '';
+      const dur   = w.durationS != null ? ` ${Math.round(w.durationS / 60)}min` : '';
+      const hr    = w.avgHr != null ? ` avg HR ${w.avgHr}bpm` : '';
+      const cal   = w.calories != null ? ` ~${w.calories}kcal` : '';
+      lines.push(`- Workout: ${w.type}${dist}${dur}${hr}${cal}`);
+    }
+  }
+
+  if (ctx.today.meals.length > 0) {
+    const tot = ctx.today.meals.reduce(
+      (a, m) => ({ kcal: a.kcal + m.kcal, c: a.c + m.c, p: a.p + m.p, f: a.f + m.f }),
+      { kcal: 0, c: 0, p: 0, f: 0 },
+    );
+    lines.push(
+      `- Meals logged today: ${ctx.today.meals.length}, ` +
+      `${tot.kcal}kcal (${tot.c}g C / ${tot.p}g P / ${tot.f}g F)`,
+    );
+  } else {
+    lines.push('- No meals logged today yet');
+  }
+
+  // ── 7-day history ──────────────────────────────────────────────────────────
+  if (ctx.history.length > 0) {
+    lines.push('\n### 7-Day History (newest first)');
+    for (const d of ctx.history) lines.push(formatDayLine(d));
+  }
+
+  // ── Recent conversation ────────────────────────────────────────────────────
+  if (ctx.recentMessages.length > 0) {
+    lines.push('\n### Recent Conversation (last 20 messages, chronological)');
+    for (const m of ctx.recentMessages) {
+      const preview =
+        m.content.length > 300 ? m.content.slice(0, 300) + '…' : m.content;
+      lines.push(`[${m.role}] ${preview}`);
+    }
+  }
+
+  // ── Ontology ───────────────────────────────────────────────────────────────
+  lines.push('\n### Ontology');
+  if (ctx.hardConstraints.length > 0) {
+    lines.push('HARD CONSTRAINTS (never violate):');
+    for (const n of ctx.hardConstraints) {
+      lines.push(`- ${n.type}: ${n.label} (weight ${n.weight.toFixed(2)})`);
+    }
+  } else {
+    lines.push('No hard constraints on file.');
+  }
+  if (ctx.softFacts.length > 0) {
+    lines.push('GOALS & PREFERENCES:');
+    for (const n of ctx.softFacts.slice(0, 20)) {
+      lines.push(`- ${n.type}: ${n.label} (weight ${n.weight.toFixed(2)})`);
+    }
+  }
+
+  return lines.join('\n');
+}
+
+// ── Main export ───────────────────────────────────────────────────────────────
+
+export async function assembleContext(userId: string): Promise<CoachContext> {
+  const now = new Date();
+  const todayStart = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
+  );
+  const sevenDaysAgo = new Date(todayStart);
+  sevenDaysAgo.setUTCDate(sevenDaysAgo.getUTCDate() - 7);
+
+  // Run all queries in parallel for minimal latency
+  const [allEvents, allNodes, rawMessages] = await Promise.all([
+    db.select()
+      .from(schema.events)
+      .where(
+        and(
+          eq(schema.events.user_id, userId),
+          gte(schema.events.timestamp, sevenDaysAgo),
+        ),
+      )
+      .orderBy(desc(schema.events.timestamp)),
+
+    db.select()
+      .from(schema.nodes)
+      .where(eq(schema.nodes.user_id, userId))
+      .orderBy(desc(schema.nodes.weight)),
+
+    db.select({
+        role:      schema.messages.role,
+        content:   schema.messages.content,
+        timestamp: schema.messages.timestamp,
+      })
+      .from(schema.messages)
+      .where(eq(schema.messages.user_id, userId))
+      .orderBy(desc(schema.messages.timestamp))
+      .limit(20),
+  ]);
+
+  // Partition events by today vs history
+  const todayEvents   = allEvents.filter(e => e.timestamp >= todayStart);
+  const historyEvents = allEvents.filter(e => e.timestamp < todayStart);
+
+  // Today snapshot
+  const todayStr = todayStart.toISOString().split('T')[0];
+  const today = buildDaySnapshot(todayStr, todayEvents);
+
+  // Per-day buckets for last 7 days
+  const dayBuckets = new Map<string, Array<typeof schema.events.$inferSelect>>();
+  for (const e of historyEvents) {
+    const key = e.timestamp.toISOString().split('T')[0];
+    if (!dayBuckets.has(key)) dayBuckets.set(key, []);
+    dayBuckets.get(key)!.push(e);
+  }
+  const history: DaySnapshot[] = Array.from(dayBuckets.entries())
+    .sort(([a], [b]) => b.localeCompare(a)) // newest first
+    .slice(0, 7)
+    .map(([date, evts]) => buildDaySnapshot(date, evts));
+
+  // Ontology partition
+  const hardConstraints = allNodes.filter(n => HARD_CONSTRAINT_TYPES.has(n.type));
+  const softFacts       = allNodes.filter(n => !HARD_CONSTRAINT_TYPES.has(n.type));
+
+  // Messages in chronological order for the prompt
+  const recentMessages = [...rawMessages].reverse();
+
+  const partial: Omit<CoachContext, 'promptText'> = {
+    userId,
+    today,
+    history,
+    recentMessages,
+    hardConstraints,
+    softFacts,
+  };
+
+  return { ...partial, promptText: buildPromptText(partial) };
+}
