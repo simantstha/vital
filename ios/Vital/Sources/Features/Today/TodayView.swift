@@ -14,6 +14,7 @@ struct TodayView: View {
                 VStack(alignment: .leading, spacing: Theme.Spacing.xl) {
                     greetingSection
                     chipRow
+                    pendingFactsBanner
                     CoachBubble(message: vm.coachInsight)
                     metricsGrid
                     dietBudgetCard
@@ -36,6 +37,67 @@ struct TodayView: View {
 // MARK: - Private sub-views
 
 private extension TodayView {
+
+    // ── Pending-fact banner ──────────────────────────────────────────────────
+
+    @ViewBuilder
+    var pendingFactsBanner: some View {
+        ForEach(vm.pendingFacts) { fact in
+            GlassCard(padding: Theme.Spacing.lg) {
+                VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                    HStack(spacing: Theme.Spacing.sm) {
+                        Image(systemName: "sparkles")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(Theme.Colors.accent)
+                        Text("Vital noticed")
+                            .font(Theme.Typography.labelSmall)
+                            .foregroundStyle(Theme.Colors.accent)
+                            .tracking(0.6)
+                        Spacer()
+                    }
+
+                    Text(fact.proposedNode.label)
+                        .font(Theme.Typography.bodyMedium)
+                        .fontWeight(.medium)
+                        .foregroundStyle(Theme.Colors.textPrimary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    HStack(spacing: Theme.Spacing.sm) {
+                        Button {
+                            Task { await vm.resolveFact(id: fact.id, action: "confirm") }
+                        } label: {
+                            Text("Confirm")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(Theme.Colors.canvas)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 8)
+                                .background(Theme.Colors.accent)
+                                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm,
+                                                            style: .continuous))
+                        }
+
+                        Button {
+                            Task { await vm.resolveFact(id: fact.id, action: "reject") }
+                        } label: {
+                            Text("Dismiss")
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(Theme.Colors.textSecondary)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 8)
+                                .background(Theme.Colors.glassFill)
+                                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm,
+                                                            style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: Theme.Radius.sm,
+                                                     style: .continuous)
+                                        .strokeBorder(Theme.Colors.glassBorder, lineWidth: 1)
+                                )
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     // ── Greeting ────────────────────────────────────────────────────────────
 

@@ -32,18 +32,13 @@ enum JSONValue: Encodable {
 
 /// A single health observation to be persisted in the event ledger.
 struct HealthDelta: Encodable {
-    /// Matches the `type` column in the `events` table (e.g. "hrv_reading", "sleep_session").
     let type: String
-    /// ISO8601 timestamp of when the reading was captured on-device.
     let timestamp: Date
-    /// Metric-specific key/value pairs (e.g. `{"valueMs": 71}`).
     let payload: [String: JSONValue]
 }
 
 // MARK: - APIClient
 
-/// Async URLSession client for the Vital Next.js backend.
-/// Methods are fire-and-forget friendly — callers typically wrap in `try?`.
 struct APIClient {
     static let shared = APIClient()
 
@@ -53,13 +48,71 @@ struct APIClient {
         return e
     }()
 
-    // MARK: Coach (SSE streaming)
+    private let decoder = JSONDecoder()
 
-    /// Streams coach reply tokens from `POST /api/coach` via Server-Sent Events.
-    ///
-    /// The backend emits `data: {"type":"text","delta":"…"}` lines as tokens arrive
-    /// and terminates with `data: {"type":"done","messageId":"…"}`.
-    /// Each yielded `String` is one text delta.
+    // MARK: - Generic GET
+
+    private func get<T: Decodable>(_ path: String) async throws -> T {
+        guard let url = URL(string: "\(AppConfig.apiBaseURL)\(path)") else {
+            throw APIError.invalidURL
+        }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 30
+        let (data, response) = try await URLSession.shared.data(for: request)
+        if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
+            throw APIError.serverError(http.statusCode)
+        }
+        return try decoder.decode(T.self, from: data)
+    }
+
+    // MARK: - Today dashboard
+
+    func fetchToday() async throws -> TodayResponse {
+        try await get("/api/today")
+    }
+
+    // MARK: - Trends
+
+    func fetchTrends(metric: String, days: Int) async throws -> TrendsResponse {
+        try await get("/api/trends?metric=\(metric)&days=\(days)")
+    }
+
+    // MARK: - Activity logs
+
+    func fetchLogs(days: Int = 7) async throws -> LogsResponse {
+        try await get("/api/logs?days=\(days)")
+    }
+
+    // MARK: - Profile
+
+    func fetchProfile() async throws -> ProfileResponse {
+        try await get("/api/profile")
+    }
+
+    // MARK: - Pending facts
+
+    func fetchPendingFacts() async throws -> PendingFactsResponse {
+        try await get("/api/pending-facts")
+    }
+
+    func resolvePendingFact(id: String, action: String) async throws {
+        guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/pending-facts/resolve") else {
+            throw APIError.invalidURL
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 10
+        struct Body: Encodable { let id: String; let action: String }
+        request.httpBody = try encoder.encode(Body(id: id, action: action))
+        let (_, response) = try await URLSession.shared.data(for: request)
+        if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
+            throw APIError.serverError(http.statusCode)
+        }
+    }
+
+    // MARK: - Coach (SSE streaming)
+
     func streamCoach(message: String, imageBase64: String? = nil) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             Task {
@@ -86,7 +139,7 @@ struct APIClient {
 
                     for try await line in bytes.lines {
                         guard line.hasPrefix("data: ") else { continue }
-                        let jsonSlice = line.dropFirst(6) // strip "data: "
+                        let jsonSlice = line.dropFirst(6)
                         guard let data = jsonSlice.data(using: .utf8),
                               let event = try? JSONDecoder().decode(SSEEvent.self, from: data)
                         else { continue }
@@ -112,9 +165,8 @@ struct APIClient {
         }
     }
 
-    // MARK: Nutrition search
+    // MARK: - Nutrition search
 
-    /// `POST /api/nutrition/search` — free-text food lookup.
     func searchFood(_ query: String) async throws -> NutritionResult {
         guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/nutrition/search") else {
             throw APIError.invalidURL
@@ -129,10 +181,9 @@ struct APIClient {
         if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
             throw APIError.serverError(http.statusCode)
         }
-        return try JSONDecoder().decode(NutritionResult.self, from: data)
+        return try decoder.decode(NutritionResult.self, from: data)
     }
 
-    /// `POST /api/nutrition/barcode` — barcode product lookup.
     func barcodeFood(_ barcode: String, grams: Double? = nil) async throws -> BarcodeResult {
         guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/nutrition/barcode") else {
             throw APIError.invalidURL
@@ -147,10 +198,9 @@ struct APIClient {
         if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
             throw APIError.serverError(http.statusCode)
         }
-        return try JSONDecoder().decode(BarcodeResult.self, from: data)
+        return try decoder.decode(BarcodeResult.self, from: data)
     }
 
-    /// `POST /api/nutrition/photo` — AI food identification from a JPEG base-64 string.
     func photoFood(imageBase64: String) async throws -> NutritionResult {
         guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/nutrition/photo") else {
             throw APIError.invalidURL
@@ -165,10 +215,9 @@ struct APIClient {
         if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
             throw APIError.serverError(http.statusCode)
         }
-        return try JSONDecoder().decode(NutritionResult.self, from: data)
+        return try decoder.decode(NutritionResult.self, from: data)
     }
 
-    /// `POST /api/meals/log` — persist a meal event; returns coach reaction.
     @discardableResult
     func logMeal(
         name: String,
@@ -194,38 +243,28 @@ struct APIClient {
         if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
             throw APIError.serverError(http.statusCode)
         }
-        return try JSONDecoder().decode(LogMealResponse.self, from: data)
+        return try decoder.decode(LogMealResponse.self, from: data)
     }
 
-    // MARK: Ingest
+    // MARK: - Ingest
 
-    /// Posts an array of HealthKit deltas to `POST /api/ingest`.
     func postIngest(_ deltas: [HealthDelta]) async throws {
         guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/ingest") else {
             throw APIError.invalidURL
         }
-
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 10
-
-        let body = IngestRequestBody(deltas: deltas)
-        request.httpBody = try encoder.encode(body)
-
+        request.httpBody = try encoder.encode(IngestRequestBody(deltas: deltas))
         let (_, response) = try await URLSession.shared.data(for: request)
-
         if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
             throw APIError.serverError(http.statusCode)
         }
     }
 }
 
-// MARK: - Supporting types
-
-private struct IngestRequestBody: Encodable {
-    let deltas: [HealthDelta]
-}
+// MARK: - Errors
 
 enum APIError: Error, LocalizedError {
     case invalidURL
@@ -233,20 +272,26 @@ enum APIError: Error, LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .invalidURL:          return "Invalid backend URL."
-        case .serverError(let c):  return "Server returned HTTP \(c)."
+        case .invalidURL:         return "Invalid backend URL."
+        case .serverError(let c): return "Server returned HTTP \(c)."
         }
     }
 }
 
-// MARK: - Nutrition & Meal response types
+// MARK: - Ingest body
+
+private struct IngestRequestBody: Encodable {
+    let deltas: [HealthDelta]
+}
+
+// MARK: - Nutrition & Meal
 
 struct NutritionResult: Decodable {
     let name: String
     let kcal: Double
-    let c: Double    // carbs
-    let p: Double    // protein
-    let f: Double    // fat
+    let c: Double
+    let p: Double
+    let f: Double
 }
 
 struct BarcodeResult: Decodable {
@@ -264,6 +309,107 @@ struct LogMealResponse: Decodable {
     let ok: Bool
     let eventId: String
     let coachReaction: String
+}
+
+// MARK: - Today dashboard types
+
+struct TodayMetricValue: Decodable {
+    let value: Double
+    let unit: String
+    let deltaPct: Int
+}
+
+struct TodayMetrics: Decodable {
+    let hrv: TodayMetricValue
+    let sleep: TodayMetricValue
+    let restingHr: TodayMetricValue
+}
+
+struct TodayDietBudget: Decodable {
+    let targetKcal: Int
+    let consumedKcal: Int
+    let remaining: Int
+    let protein: Int   // consumed grams
+    let carbs: Int     // consumed grams
+    let fat: Int       // consumed grams
+}
+
+struct TodayPlanItem: Decodable {
+    let name: String
+    let kcal: Int
+    let why: String
+}
+
+struct TodayResponse: Decodable {
+    let metrics: TodayMetrics
+    let dietBudget: TodayDietBudget
+    let insight: String
+    let plan: [TodayPlanItem]
+}
+
+// MARK: - Trends types
+
+struct TrendPoint: Decodable {
+    let date: String
+    let value: Double
+}
+
+struct TrendsResponse: Decodable {
+    let metric: String
+    let points: [TrendPoint]
+}
+
+// MARK: - Logs types
+
+struct LogItem: Decodable, Identifiable {
+    let id: String
+    let type: String
+    let timestamp: String
+    let title: String
+    let subtitle: String
+}
+
+struct LogsResponse: Decodable {
+    let items: [LogItem]
+}
+
+// MARK: - Profile types
+
+struct ProfileIntegration: Decodable {
+    let name: String
+    let status: String
+}
+
+struct ProfileStats: Decodable {
+    let loggedDays: Int
+    let mealsLogged: Int
+    let avgHrv: Double
+    let workouts: Int
+}
+
+struct ProfileResponse: Decodable {
+    let name: String
+    let integrations: [ProfileIntegration]
+    let stats: ProfileStats
+}
+
+// MARK: - Pending facts types
+
+struct ProposedNode: Decodable {
+    let type: String
+    let label: String
+}
+
+struct PendingFact: Decodable, Identifiable {
+    let id: String
+    let proposedNode: ProposedNode
+    let evidence: String
+    let salience: Double
+    let createdAt: String
+}
+
+struct PendingFactsResponse: Decodable {
+    let items: [PendingFact]
 }
 
 // MARK: - Coach SSE types

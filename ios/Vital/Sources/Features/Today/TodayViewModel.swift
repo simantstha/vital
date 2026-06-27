@@ -1,10 +1,10 @@
 import Foundation
 import Combine
 
-// MARK: - Mock models (also used as fallback when HealthKit returns nil)
+// MARK: - Local metric models (UI layer)
 
 struct HRVMetric {
-    let value: Int          // milliseconds
+    let value: Int
     let trend: TrendDirection
     let delta: String
 }
@@ -25,8 +25,8 @@ struct RestingHRMetric {
 }
 
 struct MacroProgress {
-    let current: Int        // grams consumed
-    let target: Int         // daily target grams
+    let current: Int
+    let target: Int
     var fraction: Double {
         guard target > 0 else { return 0 }
         return min(1.0, Double(current) / Double(target))
@@ -38,7 +38,7 @@ struct MacroProgress {
 struct DietCard {
     let kcalConsumed: Int
     let kcalTarget: Int
-    var kcalRemaining: Int { kcalTarget - kcalConsumed }
+    var kcalRemaining: Int { max(0, kcalTarget - kcalConsumed) }
     var kcalFraction: Double {
         guard kcalTarget > 0 else { return 0 }
         return min(1.0, Double(kcalConsumed) / Double(kcalTarget))
@@ -53,7 +53,7 @@ struct MealRow: Identifiable {
     let name: String
     let kcal: Int
     let reason: String
-    let icon: String        // SF Symbol name
+    let icon: String
 }
 
 // MARK: - ViewModel
@@ -66,16 +66,16 @@ final class TodayViewModel: ObservableObject {
     @Published var dateSubtitle: String = ""
     @Published var streakDays: Int = 12
 
-    // Coach
+    // Coach insight — overwritten from /api/today
     @Published var coachInsight: String =
         "HRV's up 8 % and you slept 7h 40m — green light for a hard session today."
 
-    // Biometrics — default values shown until HealthKit data loads
+    // Biometrics — fallback values shown until data loads
     @Published var hrv = HRVMetric(value: 71, trend: .upGood, delta: "+8 %")
     @Published var sleep = SleepMetric(hours: 7, minutes: 40, trend: .upGood, delta: "+18 m")
     @Published var restingHR = RestingHRMetric(bpm: 52, trend: .downGood, delta: "−3")
 
-    // Diet (mock — real nutrition pipeline is future work)
+    // Diet — driven from /api/today
     @Published var diet = DietCard(
         kcalConsumed: 1_160,
         kcalTarget:   2_400,
@@ -84,25 +84,11 @@ final class TodayViewModel: ObservableObject {
         fat:     MacroProgress(current: 44,  target: 80)
     )
 
-    // Meals (mock — MFP / Telegram pipeline is future work)
-    @Published var meals: [MealRow] = [
-        MealRow(name: "Oats + whey protein",
-                kcal: 420,
-                reason: "Slow carbs for sustained energy pre-training",
-                icon: "sunrise.fill"),
-        MealRow(name: "Grilled chicken bowl",
-                kcal: 680,
-                reason: "High protein midday — keeps muscle synthesis up",
-                icon: "fork.knife"),
-        MealRow(name: "Greek yoghurt + berries",
-                kcal: 260,
-                reason: "Antioxidants and probiotics post-workout",
-                icon: "leaf.fill"),
-        MealRow(name: "Salmon + roasted greens",
-                kcal: 580,
-                reason: "Omega-3 to support tonight's HRV recovery",
-                icon: "moon.fill"),
-    ]
+    // Today's plan — driven from /api/today
+    @Published var meals: [MealRow] = []
+
+    // Pending facts banner
+    @Published var pendingFacts: [PendingFact] = []
 
     // MARK: - Dependencies
 
@@ -117,12 +103,30 @@ final class TodayViewModel: ObservableObject {
 
     // MARK: - Called from TodayView.task
 
-    /// Requests HealthKit authorization, loads real readings into the metric tiles,
-    /// then posts the deltas to the backend (best-effort — network errors are swallowed).
     func loadHealthData() async {
+        // Run HealthKit + API calls concurrently
+        async let healthTask: () = loadFromHealthKit()
+        async let todayTask: () = loadTodayFromAPI()
+        async let factsTask: () = loadPendingFacts()
+        _ = await (healthTask, todayTask, factsTask)
+    }
+
+    // MARK: - Pending facts
+
+    func resolveFact(id: String, action: String) async {
+        do {
+            try await apiClient.resolvePendingFact(id: id, action: action)
+            pendingFacts.removeAll { $0.id == id }
+        } catch {
+            print("[Vital] resolvePendingFact failed: \(error.localizedDescription)")
+        }
+    }
+
+    // MARK: - Private loaders
+
+    private func loadFromHealthKit() async {
         await healthKit.requestAuthorization()
 
-        // Fetch all three readings concurrently
         async let hrvTask       = healthKit.fetchLatestHRV()
         async let sleepTask     = healthKit.fetchLastNightSleep()
         async let restingHRTask = healthKit.fetchLatestRestingHR()
@@ -132,8 +136,8 @@ final class TodayViewModel: ObservableObject {
 
         var deltas: [HealthDelta] = []
 
-        // HRV — update tile and queue delta
         if let r = hrvReading {
+            // Only override HRV tile if /api/today hasn't loaded yet
             hrv = HRVMetric(
                 value: Int(r.valueMs.rounded()),
                 trend: .upGood,
@@ -146,7 +150,6 @@ final class TodayViewModel: ObservableObject {
             ))
         }
 
-        // Sleep — update tile and queue delta
         if let r = sleepReading {
             sleep = SleepMetric(
                 hours: r.totalMinutes / 60,
@@ -161,7 +164,6 @@ final class TodayViewModel: ObservableObject {
             ))
         }
 
-        // Resting HR — update tile and queue delta
         if let r = restingHRReading {
             restingHR = RestingHRMetric(
                 bpm: Int(r.bpm.rounded()),
@@ -175,14 +177,114 @@ final class TodayViewModel: ObservableObject {
             ))
         }
 
-        // POST to backend — best-effort; a failed ingest never surfaces to the user
         if !deltas.isEmpty {
             do {
                 try await apiClient.postIngest(deltas)
             } catch {
-                print("[Vital] Ingest failed (will retry next launch): \(error.localizedDescription)")
+                print("[Vital] Ingest failed: \(error.localizedDescription)")
             }
         }
+    }
+
+    private func loadTodayFromAPI() async {
+        do {
+            let response = try await apiClient.fetchToday()
+            applyTodayResponse(response)
+        } catch {
+            print("[Vital] fetchToday failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func applyTodayResponse(_ r: TodayResponse) {
+        // Coach insight — keep the existing default if the brief isn't ready yet
+        if !r.insight.isEmpty {
+            coachInsight = r.insight
+        }
+
+        // Metrics — prefer API over HealthKit defaults
+        let m = r.metrics
+
+        // HRV
+        let hrvTrend: TrendDirection = m.hrv.deltaPct >= 0 ? .upGood : .downBad
+        let hrvSign = m.hrv.deltaPct >= 0 ? "+" : ""
+        hrv = HRVMetric(
+            value: Int(m.hrv.value.rounded()),
+            trend: hrvTrend,
+            delta: "\(hrvSign)\(m.hrv.deltaPct) %"
+        )
+
+        // Sleep — value is in hours (e.g. 7.8)
+        let totalSleepMins = Int((m.sleep.value * 60).rounded())
+        let sleepTrend: TrendDirection = m.sleep.deltaPct >= 0 ? .upGood : .downBad
+        let sleepSign = m.sleep.deltaPct >= 0 ? "+" : ""
+        sleep = SleepMetric(
+            hours: totalSleepMins / 60,
+            minutes: totalSleepMins % 60,
+            trend: sleepTrend,
+            delta: "\(sleepSign)\(m.sleep.deltaPct) %"
+        )
+
+        // Resting HR — lower is better
+        let hrTrend: TrendDirection = m.restingHr.deltaPct <= 0 ? .downGood : .upBad
+        let hrSign = m.restingHr.deltaPct >= 0 ? "+" : ""
+        restingHR = RestingHRMetric(
+            bpm: Int(m.restingHr.value.rounded()),
+            trend: hrTrend,
+            delta: "\(hrSign)\(m.restingHr.deltaPct) %"
+        )
+
+        // Diet budget
+        let db = r.dietBudget
+        // Derive macro targets from total kcal using standard splits: P 30%, C 40%, F 30%
+        let proteinTarget = Int((Double(db.targetKcal) * 0.30 / 4).rounded())
+        let carbsTarget   = Int((Double(db.targetKcal) * 0.40 / 4).rounded())
+        let fatTarget     = Int((Double(db.targetKcal) * 0.30 / 9).rounded())
+
+        diet = DietCard(
+            kcalConsumed: db.consumedKcal,
+            kcalTarget:   db.targetKcal,
+            protein: MacroProgress(current: db.protein, target: proteinTarget),
+            carbs:   MacroProgress(current: db.carbs,   target: carbsTarget),
+            fat:     MacroProgress(current: db.fat,     target: fatTarget)
+        )
+
+        // Today's plan — map to MealRow, picking an icon by name heuristics.
+        // Keep the existing default plan if the brief isn't ready yet.
+        if !r.plan.isEmpty {
+            meals = r.plan.map { item in
+                MealRow(
+                    name:   item.name,
+                    kcal:   item.kcal,
+                    reason: item.why,
+                    icon:   mealIcon(for: item.name)
+                )
+            }
+        }
+    }
+
+    private func loadPendingFacts() async {
+        do {
+            let response = try await apiClient.fetchPendingFacts()
+            pendingFacts = response.items
+        } catch {
+            print("[Vital] fetchPendingFacts failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func mealIcon(for name: String) -> String {
+        let lower = name.lowercased()
+        if lower.contains("breakfast") || lower.contains("oat") || lower.contains("egg") {
+            return "sunrise.fill"
+        } else if lower.contains("lunch") || lower.contains("chicken") || lower.contains("bowl") {
+            return "fork.knife"
+        } else if lower.contains("snack") || lower.contains("yogurt") || lower.contains("fruit") {
+            return "leaf.fill"
+        } else if lower.contains("dinner") || lower.contains("salmon") || lower.contains("pasta") {
+            return "moon.fill"
+        } else if lower.contains("run") || lower.contains("recovery") || lower.contains("post") {
+            return "figure.run"
+        }
+        return "fork.knife"
     }
 
     // MARK: - Private helpers
