@@ -146,7 +146,7 @@ private struct MessageBubbleView: View {
             if message.role == .user { Spacer(minLength: 48) }
 
             VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 0) {
-                Text(message.text.isEmpty ? " " : message.text) // keep height while streaming
+                Text(message.text.isEmpty ? AttributedString(" ") : message.text.asMarkdown) // keep height while streaming
                     .font(Theme.Typography.bodyMedium)
                     .foregroundStyle(message.role == .user ? Theme.Colors.canvas : Theme.Colors.textPrimary)
                     .lineSpacing(3)

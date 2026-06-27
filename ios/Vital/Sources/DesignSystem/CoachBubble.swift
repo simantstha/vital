@@ -16,7 +16,7 @@ struct CoachBubble: View {
                         .foregroundStyle(Theme.Colors.canvas)
                 )
 
-            Text(message)
+            Text(message.asMarkdown)
                 .font(Theme.Typography.bodyMedium)
                 .foregroundStyle(Theme.Colors.textPrimary)
                 .lineSpacing(3)

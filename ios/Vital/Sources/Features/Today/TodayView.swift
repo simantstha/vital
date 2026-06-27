@@ -329,7 +329,7 @@ private struct MealRowView: View {
                     .fontWeight(.medium)
                     .foregroundStyle(Theme.Colors.textPrimary)
                     .lineLimit(1)
-                Text(meal.reason)
+                Text(meal.reason.asMarkdown)
                     .font(Theme.Typography.labelSmall)
                     .foregroundStyle(Theme.Colors.textSecondary)
                     .lineLimit(2)
