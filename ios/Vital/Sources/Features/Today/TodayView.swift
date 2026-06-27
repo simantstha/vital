@@ -24,6 +24,7 @@ struct TodayView: View {
                 .padding(.bottom, 100)
             }
             .scrollIndicators(.hidden)
+            .task { await vm.loadHealthData() }
         }
     }
 }

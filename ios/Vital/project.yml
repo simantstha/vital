@@ -18,6 +18,8 @@ targets:
     deploymentTarget: "26.0"
     sources:
       - path: Sources
+    dependencies:
+      - sdk: HealthKit.framework
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.simantstha.vital
@@ -25,6 +27,7 @@ targets:
         SWIFT_VERSION: "5"
         ENABLE_PREVIEWS: "YES"
         SWIFT_EMIT_LOC_STRINGS: "YES"
+        CODE_SIGN_ENTITLEMENTS: Sources/App/Vital.entitlements
     info:
       path: Sources/App/Info.plist
       properties:
@@ -32,6 +35,8 @@ targets:
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
+        NSHealthShareUsageDescription: "Vital reads your health data to coach you."
+        NSHealthUpdateUsageDescription: "Vital may write health data on your behalf."
 
 schemes:
   Vital:
