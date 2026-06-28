@@ -87,14 +87,22 @@ private struct LogRowView: View {
 
     var body: some View {
         HStack(spacing: Theme.Spacing.md) {
-            // Icon badge
+            // Icon badge — or photo thumbnail when the log has one
             ZStack {
-                RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous)
-                    .fill(item.accentColor.opacity(0.15))
-                    .frame(width: 40, height: 40)
-                Image(systemName: item.sfSymbol)
-                    .font(.system(size: 16))
-                    .foregroundStyle(item.accentColor)
+                if let thumb = item.thumbnail {
+                    Image(uiImage: thumb)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: 40, height: 40)
+                        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous))
+                } else {
+                    RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous)
+                        .fill(item.accentColor.opacity(0.15))
+                        .frame(width: 40, height: 40)
+                    Image(systemName: item.sfSymbol)
+                        .font(.system(size: 16))
+                        .foregroundStyle(item.accentColor)
+                }
             }
 
             // Text stack

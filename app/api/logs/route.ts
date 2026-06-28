@@ -154,13 +154,17 @@ export async function GET(request: Request): Promise<NextResponse> {
     .orderBy(desc(schema.events.timestamp))
     .limit(200);
 
-  const items = events.map(e => ({
-    id:        e.id,
-    type:      e.type,
-    timestamp: e.timestamp.toISOString(),
-    title:     formatTitle(e.type, e.payload),
-    subtitle:  formatSubtitle(e.type, e.payload),
-  }));
+  const items = events.map(e => {
+    const thumb = str(pl(e.payload).imageThumb);
+    return {
+      id:        e.id,
+      type:      e.type,
+      timestamp: e.timestamp.toISOString(),
+      title:     formatTitle(e.type, e.payload),
+      subtitle:  formatSubtitle(e.type, e.payload),
+      ...(thumb ? { imageThumb: thumb } : {}),
+    };
+  });
 
   return NextResponse.json({ items });
 }

@@ -225,7 +225,8 @@ struct APIClient {
         c: Double,
         p: Double,
         f: Double,
-        source: String
+        source: String,
+        imageThumb: String? = nil
     ) async throws -> LogMealResponse {
         guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/meals/log") else {
             throw APIError.invalidURL
@@ -237,8 +238,9 @@ struct APIClient {
         struct Body: Encodable {
             let name: String; let kcal: Double
             let c: Double; let p: Double; let f: Double; let source: String
+            let imageThumb: String?
         }
-        request.httpBody = try encoder.encode(Body(name: name, kcal: kcal, c: c, p: p, f: f, source: source))
+        request.httpBody = try encoder.encode(Body(name: name, kcal: kcal, c: c, p: p, f: f, source: source, imageThumb: imageThumb))
         let (data, response) = try await URLSession.shared.data(for: request)
         if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
             throw APIError.serverError(http.statusCode)
@@ -367,6 +369,7 @@ struct LogItem: Decodable, Identifiable {
     let timestamp: String
     let title: String
     let subtitle: String
+    let imageThumb: String?
 }
 
 struct LogsResponse: Decodable {

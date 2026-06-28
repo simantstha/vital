@@ -1,7 +1,8 @@
 /**
  * POST /api/meals/log
  *
- * Body: { name: string, kcal: number, c: number, p: number, f: number, source: string }
+ * Body: { name: string, kcal: number, c: number, p: number, f: number, source: string,
+ *         imageThumb?: string }   — imageThumb: optional small base64 JPEG (no data-URL prefix)
  * Response: { ok: true, eventId: string, coachReaction: string }
  *
  * 1. Resolves the dev user (getOrCreateDevUser).
@@ -34,6 +35,7 @@ interface LogMealBody {
   p:      number;
   f:      number;
   source: string;
+  imageThumb?: string;
 }
 
 function isValidBody(b: unknown): b is LogMealBody {
@@ -45,7 +47,8 @@ function isValidBody(b: unknown): b is LogMealBody {
     typeof o.c      === 'number'  && Number.isFinite(o.c) &&
     typeof o.p      === 'number'  && Number.isFinite(o.p) &&
     typeof o.f      === 'number'  && Number.isFinite(o.f) &&
-    typeof o.source === 'string'  && o.source.trim().length > 0
+    typeof o.source === 'string'  && o.source.trim().length > 0 &&
+    (o.imageThumb === undefined || typeof o.imageThumb === 'string')
   );
 }
 
@@ -70,7 +73,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     );
   }
 
-  const { name, kcal, c, p, f, source } = body;
+  const { name, kcal, c, p, f, source, imageThumb } = body;
 
   // ── 1. Resolve user ────────────────────────────────────────────────────────
 
@@ -92,7 +95,7 @@ export async function POST(request: Request): Promise<NextResponse> {
         user_id:   userId,
         timestamp: new Date(),
         type:      'meal_logged',
-        payload:   { name, kcal, c, p, f, source },
+        payload:   { name, kcal, c, p, f, source, ...(imageThumb ? { imageThumb } : {}) },
         source,
       })
       .returning({ id: schema.events.id });

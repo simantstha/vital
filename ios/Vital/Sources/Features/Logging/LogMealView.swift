@@ -412,6 +412,21 @@ private extension LogMealView {
                     }
                 }
 
+                // Photo preview (photo method only)
+                if let image = vm.pendingImage {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 160)
+                        .clipped()
+                        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
+                                .strokeBorder(Theme.Colors.glassBorder, lineWidth: 0.5)
+                        )
+                }
+
                 // Editable name
                 VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
                     Text("Name")

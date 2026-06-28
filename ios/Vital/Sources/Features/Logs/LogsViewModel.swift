@@ -11,6 +11,7 @@ struct LogDisplayItem: Identifiable {
     let date: Date
     let sfSymbol: String
     let accentColor: Color
+    let thumbnail: UIImage?
 
     var relativeTime: String {
         let f = RelativeDateTimeFormatter()
@@ -68,6 +69,9 @@ final class LogsViewModel: ObservableObject {
             let date = isoParser.date(from: item.timestamp)
                     ?? isoParserNF.date(from: item.timestamp)
             guard let date else { return nil }
+            let thumbnail = item.imageThumb
+                .flatMap { Data(base64Encoded: $0) }
+                .flatMap { UIImage(data: $0) }
             return LogDisplayItem(
                 id:          item.id,
                 type:        item.type,
@@ -75,7 +79,8 @@ final class LogsViewModel: ObservableObject {
                 subtitle:    item.subtitle,
                 date:        date,
                 sfSymbol:    symbol(for: item.type),
-                accentColor: color(for: item.type)
+                accentColor: color(for: item.type),
+                thumbnail:   thumbnail
             )
         }
 
