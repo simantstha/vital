@@ -1,6 +1,11 @@
 import SwiftUI
 
-/// A frosted-glass card with a subtle border — the iOS 26 Liquid Glass look.
+/// A floating Liquid Glass surface — the primary container of the app.
+///
+/// Uses the real iOS 26 `.glassEffect()` (not a faux `.ultraThinMaterial`),
+/// so it refracts the content behind it and carries its own adaptive
+/// elevation in both light and dark mode. The effect is applied *after*
+/// padding so the glass hugs the content, per Apple's adoption guidance.
 struct GlassCard<Content: View>: View {
     var padding: CGFloat = Theme.Spacing.xl
     var cornerRadius: CGFloat = Theme.Radius.lg
@@ -9,14 +14,9 @@ struct GlassCard<Content: View>: View {
     var body: some View {
         content()
             .padding(padding)
-            .background(
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(.ultraThinMaterial)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                            .strokeBorder(Theme.Colors.glassBorder, lineWidth: 0.5)
-                    )
+            .glassEffect(
+                .regular,
+                in: .rect(cornerRadius: cornerRadius, style: .continuous)
             )
-            .shadow(color: .black.opacity(0.20), radius: 12, x: 0, y: 6)
     }
 }

@@ -13,7 +13,7 @@ struct Chip: View {
         isAccent ? Theme.Colors.accent.opacity(0.30) : Theme.Colors.glassBorder
     }
     private var foreground: Color {
-        isAccent ? Theme.Colors.accent : Theme.Colors.textSecondary
+        isAccent ? Theme.Colors.accentContent : Theme.Colors.textSecondary
     }
 
     var body: some View {

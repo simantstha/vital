@@ -54,7 +54,7 @@ private extension TrendsView {
                             .font(.system(size: 14, weight: vm.selectedMetric == metric ? .semibold : .regular))
                             .foregroundStyle(
                                 vm.selectedMetric == metric
-                                    ? Theme.Colors.canvas
+                                    ? Theme.Colors.onAccent
                                     : Theme.Colors.textSecondary
                             )
                             .padding(.horizontal, Theme.Spacing.lg)
@@ -138,7 +138,7 @@ private extension TrendsView {
                     HStack {
                         Spacer()
                         ProgressView()
-                            .tint(Theme.Colors.accent)
+                            .tint(Theme.Colors.accentContent)
                         Spacer()
                     }
                     .frame(height: 180)
@@ -192,7 +192,7 @@ private extension TrendsView {
                 y: .value("Value", pt.value)
             )
             .interpolationMethod(.catmullRom)
-            .foregroundStyle(Theme.Colors.accent)
+            .foregroundStyle(Theme.Colors.accentContent)
             .lineStyle(StrokeStyle(lineWidth: 2.5))
 
             // Point marks
@@ -200,7 +200,7 @@ private extension TrendsView {
                 x: .value("Date", pt.date),
                 y: .value("Value", pt.value)
             )
-            .foregroundStyle(Theme.Colors.accent)
+            .foregroundStyle(Theme.Colors.accentContent)
             .symbolSize(28)
         }
         .chartXAxis {

@@ -29,7 +29,7 @@ struct CoachView: View {
                 .overlay(
                     Image(systemName: "message.fill")
                         .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(Theme.Colors.accent)
+                        .foregroundStyle(Theme.Colors.accentContent)
                 )
 
             VStack(alignment: .leading, spacing: 2) {
@@ -101,7 +101,7 @@ struct CoachView: View {
                 TextField("Message your coach…", text: $vm.input, axis: .vertical)
                     .font(Theme.Typography.bodyMedium)
                     .foregroundStyle(Theme.Colors.textPrimary)
-                    .tint(Theme.Colors.accent)
+                    .tint(Theme.Colors.accentContent)
                     .lineLimit(1...5)
                     .padding(.vertical, Theme.Spacing.sm)
                     .onSubmit {
@@ -113,8 +113,8 @@ struct CoachView: View {
                         .font(.system(size: 14, weight: .bold))
                         .foregroundStyle(
                             vm.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || vm.isStreaming
-                                ? Theme.Colors.canvas
-                                : Theme.Colors.canvas
+                                ? Theme.Colors.onAccent
+                                : Theme.Colors.onAccent
                         )
                         .frame(width: 32, height: 32)
                         .background(
@@ -148,11 +148,11 @@ private struct MessageBubbleView: View {
             VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 0) {
                 Text(message.text.isEmpty ? AttributedString(" ") : message.text.asMarkdown) // keep height while streaming
                     .font(Theme.Typography.bodyMedium)
-                    .foregroundStyle(message.role == .user ? Theme.Colors.canvas : Theme.Colors.textPrimary)
+                    .foregroundStyle(message.role == .user ? Theme.Colors.onAccent : Theme.Colors.textPrimary)
                     .lineSpacing(3)
                     .padding(.horizontal, Theme.Spacing.lg)
                     .padding(.vertical, Theme.Spacing.md)
-                    .background(bubbleBackground)
+                    .bubbleSurface(isUser: message.role == .user)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
@@ -160,24 +160,22 @@ private struct MessageBubbleView: View {
         }
     }
 
+}
+
+/// Chat-bubble surface: a solid lime fill for the user, real Liquid Glass for the coach.
+private extension View {
     @ViewBuilder
-    private var bubbleBackground: some View {
-        if message.role == .user {
-            // Lime bubble, right-aligned
-            RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
-                .fill(Theme.Colors.accent)
-                .overlay(
-                    RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
-                        .strokeBorder(Theme.Colors.accent.opacity(0.6), lineWidth: 0.5)
-                )
+    func bubbleSurface(isUser: Bool) -> some View {
+        if isUser {
+            background(
+                RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
+                    .fill(Theme.Colors.accent)
+            )
         } else {
-            // Glass bubble, left-aligned
-            RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
-                .fill(.ultraThinMaterial)
-                .overlay(
-                    RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
-                        .strokeBorder(Theme.Colors.glassBorder, lineWidth: 0.5)
-                )
+            glassEffect(
+                .regular,
+                in: .rect(cornerRadius: Theme.Radius.lg, style: .continuous)
+            )
         }
     }
 }
@@ -205,13 +203,9 @@ private struct TypingIndicatorView: View {
             }
             .padding(.horizontal, Theme.Spacing.lg)
             .padding(.vertical, Theme.Spacing.md)
-            .background(
-                RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
-                    .fill(.ultraThinMaterial)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
-                            .strokeBorder(Theme.Colors.glassBorder, lineWidth: 0.5)
-                    )
+            .glassEffect(
+                .regular,
+                in: .rect(cornerRadius: Theme.Radius.lg, style: .continuous)
             )
 
             Spacer()

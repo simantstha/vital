@@ -45,7 +45,7 @@ private extension ProfileView {
 
                 Text(vm.avatarInitial)
                     .font(.system(size: 38, weight: .bold, design: .rounded))
-                    .foregroundStyle(Theme.Colors.canvas)
+                    .foregroundStyle(Theme.Colors.onAccent)
             }
 
             Text(vm.name)
@@ -70,7 +70,7 @@ private extension ProfileView {
                             HStack {
                                 Image(systemName: cell.sfSymbol)
                                     .font(.system(size: 14))
-                                    .foregroundStyle(Theme.Colors.accent)
+                                    .foregroundStyle(Theme.Colors.accentContent)
                                 Spacer()
                             }
                             Text(cell.value)

@@ -48,10 +48,10 @@ private extension TodayView {
                     HStack(spacing: Theme.Spacing.sm) {
                         Image(systemName: "sparkles")
                             .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(Theme.Colors.accent)
+                            .foregroundStyle(Theme.Colors.accentContent)
                         Text("Vital noticed")
                             .font(Theme.Typography.labelSmall)
-                            .foregroundStyle(Theme.Colors.accent)
+                            .foregroundStyle(Theme.Colors.accentContent)
                             .tracking(0.6)
                         Spacer()
                     }
@@ -68,7 +68,7 @@ private extension TodayView {
                         } label: {
                             Text("Confirm")
                                 .font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(Theme.Colors.canvas)
+                                .foregroundStyle(Theme.Colors.onAccent)
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 8)
                                 .background(Theme.Colors.accent)
@@ -227,7 +227,7 @@ private extension TodayView {
             } label: {
                 Text("Log it")
                     .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(Theme.Colors.canvas)
+                    .foregroundStyle(Theme.Colors.onAccent)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 16)
                     .background(Theme.Colors.accent)
@@ -319,7 +319,7 @@ private struct MealRowView: View {
                     .frame(width: 44, height: 44)
                 Image(systemName: meal.icon)
                     .font(.system(size: 18))
-                    .foregroundStyle(Theme.Colors.accent)
+                    .foregroundStyle(Theme.Colors.accentContent)
             }
 
             // Name + reason

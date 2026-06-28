@@ -13,7 +13,7 @@ struct CoachBubble: View {
                 .overlay(
                     Image(systemName: "message.fill")
                         .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(Theme.Colors.canvas)
+                        .foregroundStyle(Theme.Colors.onAccent)
                 )
 
             Text(message.asMarkdown)
@@ -23,13 +23,9 @@ struct CoachBubble: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(Theme.Spacing.lg)
-        .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
-                .fill(Theme.Colors.accent.opacity(0.10))
-                .overlay(
-                    RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
-                        .strokeBorder(Theme.Colors.accent.opacity(0.20), lineWidth: 0.5)
-                )
+        .glassEffect(
+            .regular.tint(Theme.Colors.accent.opacity(0.18)),
+            in: .rect(cornerRadius: Theme.Radius.lg, style: .continuous)
         )
     }
 }

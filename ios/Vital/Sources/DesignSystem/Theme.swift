@@ -4,21 +4,66 @@ enum Theme {
 
     // MARK: - Colors
     enum Colors {
-        /// Canvas background — #0B0F14
-        static let canvas = Color(red: 0.043, green: 0.059, blue: 0.078)
-        /// Lime accent — #C7F23B
+        /// Canvas background — dark: #0B0F14 / light: #F4F5F7
+        static let canvas = Color(uiColor: UIColor { tc in
+            tc.userInterfaceStyle == .dark
+                ? UIColor(red: 0.043, green: 0.059, blue: 0.078, alpha: 1)
+                : UIColor(red: 0.957, green: 0.961, blue: 0.969, alpha: 1)
+        })
+
+        /// Lime accent fill — #C7F23B (same in both modes; always use with dark text on top)
         static let accent = Color(red: 0.780, green: 0.949, blue: 0.231)
-        /// Alert / warning red — #FF6B6B
-        static let alert = Color(red: 1.000, green: 0.420, blue: 0.420)
-        /// Primary text — #F5F2EC
-        static let textPrimary = Color(red: 0.961, green: 0.949, blue: 0.925)
-        /// Secondary / muted text — #7A8694
-        static let textSecondary = Color(red: 0.478, green: 0.525, blue: 0.580)
-        /// Glass fill — white 5 % opacity
-        static let glassFill = Color.white.opacity(0.05)
-        /// Glass border — white 8 % opacity
-        static let glassBorder = Color.white.opacity(0.08)
-        /// Indigo for sleep / carbs — #8B93FF
+
+        /// Accent for TEXT / ICON / LINE use — dark: lime #C7F23B / light: deep green #3F6212
+        /// Use this instead of `accent` wherever lime appears as a foreground color, thin line,
+        /// or icon; lime on a light surface fails WCAG contrast.
+        static let accentContent = Color(uiColor: UIColor { tc in
+            tc.userInterfaceStyle == .dark
+                ? UIColor(red: 0.780, green: 0.949, blue: 0.231, alpha: 1)
+                : UIColor(red: 0.247, green: 0.384, blue: 0.071, alpha: 1)
+        })
+
+        /// Fixed foreground for content placed ON a lime accent fill — always near-black #0B0F14.
+        /// Do NOT use `canvas` here: canvas is light in light mode and would produce
+        /// a low-contrast white-on-lime combination.
+        static let onAccent = Color(red: 0.043, green: 0.059, blue: 0.078)
+
+        /// Alert / warning red — dark: #FF6B6B / light: #E5484D
+        static let alert = Color(uiColor: UIColor { tc in
+            tc.userInterfaceStyle == .dark
+                ? UIColor(red: 1.000, green: 0.420, blue: 0.420, alpha: 1)
+                : UIColor(red: 0.898, green: 0.282, blue: 0.302, alpha: 1)
+        })
+
+        /// Primary text — dark: #F5F2EC / light: #11151B
+        static let textPrimary = Color(uiColor: UIColor { tc in
+            tc.userInterfaceStyle == .dark
+                ? UIColor(red: 0.961, green: 0.949, blue: 0.925, alpha: 1)
+                : UIColor(red: 0.067, green: 0.082, blue: 0.106, alpha: 1)
+        })
+
+        /// Secondary / muted text — dark: #7A8694 / light: #6B7280
+        static let textSecondary = Color(uiColor: UIColor { tc in
+            tc.userInterfaceStyle == .dark
+                ? UIColor(red: 0.478, green: 0.525, blue: 0.580, alpha: 1)
+                : UIColor(red: 0.420, green: 0.447, blue: 0.502, alpha: 1)
+        })
+
+        /// Glass fill — dark: white 5% / light: black 4%
+        static let glassFill = Color(uiColor: UIColor { tc in
+            tc.userInterfaceStyle == .dark
+                ? UIColor(white: 1.0, alpha: 0.05)
+                : UIColor(white: 0.0, alpha: 0.04)
+        })
+
+        /// Glass border — dark: white 8% / light: black 8%
+        static let glassBorder = Color(uiColor: UIColor { tc in
+            tc.userInterfaceStyle == .dark
+                ? UIColor(white: 1.0, alpha: 0.08)
+                : UIColor(white: 0.0, alpha: 0.08)
+        })
+
+        /// Indigo for sleep / carbs — #8B93FF (fill-only; same in both modes)
         static let indigo = Color(red: 0.545, green: 0.576, blue: 1.000)
     }
 

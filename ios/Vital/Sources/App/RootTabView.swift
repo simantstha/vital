@@ -28,6 +28,6 @@ struct RootTabView: View {
                     Label("Profile", systemImage: "person.fill")
                 }
         }
-        .tint(Theme.Colors.accent)
+        .tint(Theme.Colors.accentContent)
     }
 }

@@ -15,7 +15,7 @@ struct LogsView: View {
                         HStack {
                             Spacer()
                             ProgressView()
-                                .tint(Theme.Colors.accent)
+                                .tint(Theme.Colors.accentContent)
                             Spacer()
                         }
                         .padding(.top, 60)
