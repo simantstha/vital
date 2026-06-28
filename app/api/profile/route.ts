@@ -8,7 +8,6 @@
  *   name: string,
  *   integrations: [
  *     { name: "Apple Health", status: "connected" | "disconnected" },
- *     { name: "Telegram",     status: "connected" | "disconnected" },
  *   ],
  *   stats: {
  *     loggedDays:  number,   // distinct UTC dates with at least one event
@@ -58,15 +57,6 @@ export async function GET(): Promise<NextResponse> {
   // Connected if any event came from healthkit source
   const hasHealthKit = allEvents.some(e => e.source === 'healthkit');
 
-  // ── Integration: Telegram ─────────────────────────────────────────────────
-  // Connected if any message has been stored (Telegram webhook writes messages)
-  const messageRows = await db
-    .select({ id: schema.messages.id })
-    .from(schema.messages)
-    .where(eq(schema.messages.user_id, userId))
-    .limit(1);
-  const hasTelegram = messageRows.length > 0;
-
   // ── Stats ─────────────────────────────────────────────────────────────────
 
   // loggedDays: distinct UTC calendar dates with any event
@@ -98,7 +88,6 @@ export async function GET(): Promise<NextResponse> {
     name: DEV_NAME,
     integrations: [
       { name: 'Apple Health', status: hasHealthKit ? 'connected' : 'disconnected' },
-      { name: 'Telegram',     status: hasTelegram  ? 'connected' : 'disconnected' },
     ],
     stats: {
       loggedDays:  dateSet.size,

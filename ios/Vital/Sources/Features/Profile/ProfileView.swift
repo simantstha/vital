@@ -119,7 +119,6 @@ private struct IntegrationRowView: View {
     private var icon: String {
         switch integration.name {
         case "Apple Health": return "heart.fill"
-        case "Telegram":     return "paperplane.fill"
         default:             return "link"
         }
     }

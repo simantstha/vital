@@ -4,7 +4,7 @@
  * Body: { imageBase64: string }   — raw base64 (or data-URL; prefix is stripped)
  * Response: { name, kcal, c, p, f, items[] }
  *
- * Two-step approach mirroring telegramCoach.ts classifyImage:
+ * Two-step approach:
  *   1. claude-haiku-4-5 classifies the image and extracts a food query with
  *      realistic portion estimates.
  *   2. CalorieNinjas lookup via lookupNutrition — fast, deterministic numbers.
@@ -30,7 +30,7 @@ function detectMimeType(b64: string): 'image/jpeg' | 'image/png' | 'image/webp' 
   return 'image/jpeg'; // default — covers most mobile photos
 }
 
-// ── Classification step (mirrors classifyImage in telegramCoach.ts) ──────────
+// ── Classification step ──────────────────────────────────────────────────────
 
 async function classifyMealPhoto(b64: string, mimeType: ReturnType<typeof detectMimeType>): Promise<{
   query: string;
