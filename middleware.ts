@@ -9,10 +9,23 @@ import type { NextRequest } from 'next/server';
  *
  * Behaviour:
  *   - /api/health is always public (used by Fly health checks).
- *   - If API_SHARED_SECRET is unset (e.g. local development), the gate is
- *     disabled and all requests pass through — local dev keeps working unchanged.
- *   - In production the secret is provided via a Fly secret.
+ *   - If API_SHARED_SECRET is unset:
+ *       - in production → fail CLOSED (503), so a misconfiguration can never
+ *         silently expose the API;
+ *       - otherwise (local development) → allow through, so dev keeps working.
+ *   - The token is compared in constant time to avoid leaking it via timing.
  */
+
+/** Length-aware constant-time string comparison (no early-exit on mismatch). */
+function safeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let result = 0;
+  for (let i = 0; i < a.length; i++) {
+    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return result === 0;
+}
+
 export function middleware(req: NextRequest) {
   if (req.nextUrl.pathname === '/api/health') {
     return NextResponse.next();
@@ -20,11 +33,14 @@ export function middleware(req: NextRequest) {
 
   const secret = process.env.API_SHARED_SECRET;
   if (!secret) {
+    if (process.env.NODE_ENV === 'production') {
+      return new NextResponse('Server auth misconfigured', { status: 503 });
+    }
     return NextResponse.next();
   }
 
-  const auth = req.headers.get('authorization');
-  if (auth === `Bearer ${secret}`) {
+  const auth = req.headers.get('authorization') ?? '';
+  if (safeEqual(auth, `Bearer ${secret}`)) {
     return NextResponse.next();
   }
 

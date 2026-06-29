@@ -7,11 +7,6 @@ enum AppConfig {
     /// Production (Fly.io): "https://vital-coach.fly.dev"
     /// Local dev: "http://localhost:3000"
     static let apiBaseURL = "https://vital-coach.fly.dev"
-
-    /// Shared secret sent as `Authorization: Bearer <token>` on every request.
-    /// Defined in the gitignored Secrets.swift (see Secrets.example.swift).
-    /// Must match the API_SHARED_SECRET Fly secret on the backend.
-    static var apiToken: String { AppSecrets.apiToken }
 }
 
 // MARK: - JSON value
@@ -57,12 +52,24 @@ struct APIClient {
 
     private let decoder = JSONDecoder()
 
-    /// Shared session that injects the bearer token on every request.
-    private let session: URLSession = {
-        let config = URLSessionConfiguration.default
-        config.httpAdditionalHeaders = ["Authorization": "Bearer \(AppConfig.apiToken)"]
-        return URLSession(configuration: config)
-    }()
+    /// Session whose delegate strips the bearer token on cross-host redirects,
+    /// so the credential can never leak to another origin.
+    private let session: URLSession
+    private let redirectGuard: AuthRedirectGuard
+
+    init() {
+        let delegate = AuthRedirectGuard()
+        redirectGuard = delegate
+        session = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
+    }
+
+    /// Builds a request carrying the bearer token. The header is set per-request
+    /// (not on the session) so the redirect delegate controls its propagation.
+    private func authorizedRequest(_ url: URL) -> URLRequest {
+        var r = URLRequest(url: url)
+        r.setValue("Bearer \(AppSecrets.apiToken)", forHTTPHeaderField: "Authorization")
+        return r
+    }
 
     // MARK: - Generic GET
 
@@ -70,7 +77,7 @@ struct APIClient {
         guard let url = URL(string: "\(AppConfig.apiBaseURL)\(path)") else {
             throw APIError.invalidURL
         }
-        var request = URLRequest(url: url)
+        var request = authorizedRequest(url)
         request.timeoutInterval = 30
         let (data, response) = try await session.data(for: request)
         if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
@@ -113,7 +120,7 @@ struct APIClient {
         guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/pending-facts/resolve") else {
             throw APIError.invalidURL
         }
-        var request = URLRequest(url: url)
+        var request = authorizedRequest(url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 10
@@ -136,7 +143,7 @@ struct APIClient {
                         return
                     }
 
-                    var request = URLRequest(url: url)
+                    var request = authorizedRequest(url)
                     request.httpMethod = "POST"
                     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
                     request.timeoutInterval = 60
@@ -185,7 +192,7 @@ struct APIClient {
         guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/nutrition/search") else {
             throw APIError.invalidURL
         }
-        var request = URLRequest(url: url)
+        var request = authorizedRequest(url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 15
@@ -202,7 +209,7 @@ struct APIClient {
         guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/nutrition/barcode") else {
             throw APIError.invalidURL
         }
-        var request = URLRequest(url: url)
+        var request = authorizedRequest(url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 15
@@ -219,7 +226,7 @@ struct APIClient {
         guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/nutrition/photo") else {
             throw APIError.invalidURL
         }
-        var request = URLRequest(url: url)
+        var request = authorizedRequest(url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 30
@@ -245,7 +252,7 @@ struct APIClient {
         guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/meals/log") else {
             throw APIError.invalidURL
         }
-        var request = URLRequest(url: url)
+        var request = authorizedRequest(url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 15
@@ -268,7 +275,7 @@ struct APIClient {
         guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/ingest") else {
             throw APIError.invalidURL
         }
-        var request = URLRequest(url: url)
+        var request = authorizedRequest(url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 10
@@ -291,6 +298,29 @@ enum APIError: Error, LocalizedError {
         case .invalidURL:         return "Invalid backend URL."
         case .serverError(let c): return "Server returned HTTP \(c)."
         }
+    }
+}
+
+// MARK: - Redirect guard
+
+/// Drops the Authorization header when a redirect targets a host other than the
+/// backend, so the bearer token is never forwarded to a different origin.
+private final class AuthRedirectGuard: NSObject, URLSessionTaskDelegate {
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        let backendHost = URL(string: AppConfig.apiBaseURL)?.host
+        guard request.url?.host == backendHost else {
+            var stripped = request
+            stripped.setValue(nil, forHTTPHeaderField: "Authorization")
+            completionHandler(stripped)
+            return
+        }
+        completionHandler(request)
     }
 }
 
