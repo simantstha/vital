@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import type { DailyBrief } from './types';
 import { readMemoryFile, writeMemoryFile } from '@/lib/memory';
+import { DATA_DIR } from './dataDir';
 
 // ── Inline types (formerly imported from lib/whoop + lib/strava) ──────────────
 
@@ -43,7 +44,7 @@ interface WeeklyLoadRecord {
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-const PROFILE_PATH = path.resolve(process.cwd(), '.vital-memory/user-profile.md');
+const PROFILE_PATH = path.join(DATA_DIR, '.vital-memory', 'user-profile.md');
 
 const SEED_PROFILE = `# Vital — User Profile
 

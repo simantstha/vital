@@ -6,3 +6,4 @@ node_modules/
 .DS_Store
 .brief-cache/
 .whoop-refresh-token
+ios/Vital/Sources/Core/Secrets.swift

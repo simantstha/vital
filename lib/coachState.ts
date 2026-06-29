@@ -1,7 +1,8 @@
 import fs from 'fs';
 import path from 'path';
+import { DATA_DIR } from './dataDir';
 
-const MEMORY_DIR = path.resolve(process.cwd(), '.vital-memory');
+const MEMORY_DIR = path.join(DATA_DIR, '.vital-memory');
 const OVERRIDES_FILE = path.join(MEMORY_DIR, 'overrides.json');
 const PENDING_FILE   = path.join(MEMORY_DIR, 'pending-barcode.json');
 

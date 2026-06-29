@@ -1,8 +1,9 @@
 import fs from 'fs';
 import path from 'path';
 import type { DailyBrief } from './types';
+import { DATA_DIR } from './dataDir';
 
-const CACHE_DIR = path.join(process.cwd(), '.brief-cache');
+const CACHE_DIR = path.join(DATA_DIR, '.brief-cache');
 
 function todayKey(): string {
   return new Date().toISOString().split('T')[0];

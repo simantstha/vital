@@ -1,0 +1,36 @@
+# Fly.io configuration for the Vital backend.
+# App name is finalized at `fly apps create` / `fly launch` time and must be
+# globally unique; adjust here if "vital-coach" is taken.
+
+app = "vital-coach"
+primary_region = "ord"
+
+[build]
+
+[env]
+  PORT = "3000"
+  VITAL_DATA_DIR = "/data"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = "suspend"
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "15s"
+    method = "GET"
+    path = "/api/health"
+
+[[mounts]]
+  source = "vital_data"
+  destination = "/data"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1gb"
+  cpus = 1

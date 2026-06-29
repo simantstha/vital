@@ -3,8 +3,15 @@ import Foundation
 // MARK: - App configuration
 
 enum AppConfig {
-    /// Base URL for the Vital backend. Override via scheme env vars for staging/prod.
-    static let apiBaseURL = "http://localhost:3000"
+    /// Base URL for the Vital backend.
+    /// Production (Fly.io): "https://vital-coach.fly.dev"
+    /// Local dev: "http://localhost:3000"
+    static let apiBaseURL = "https://vital-coach.fly.dev"
+
+    /// Shared secret sent as `Authorization: Bearer <token>` on every request.
+    /// Defined in the gitignored Secrets.swift (see Secrets.example.swift).
+    /// Must match the API_SHARED_SECRET Fly secret on the backend.
+    static var apiToken: String { AppSecrets.apiToken }
 }
 
 // MARK: - JSON value
@@ -50,6 +57,13 @@ struct APIClient {
 
     private let decoder = JSONDecoder()
 
+    /// Shared session that injects the bearer token on every request.
+    private let session: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.httpAdditionalHeaders = ["Authorization": "Bearer \(AppConfig.apiToken)"]
+        return URLSession(configuration: config)
+    }()
+
     // MARK: - Generic GET
 
     private func get<T: Decodable>(_ path: String) async throws -> T {
@@ -58,7 +72,7 @@ struct APIClient {
         }
         var request = URLRequest(url: url)
         request.timeoutInterval = 30
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
         if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
             throw APIError.serverError(http.statusCode)
         }
@@ -105,7 +119,7 @@ struct APIClient {
         request.timeoutInterval = 10
         struct Body: Encodable { let id: String; let action: String }
         request.httpBody = try encoder.encode(Body(id: id, action: action))
-        let (_, response) = try await URLSession.shared.data(for: request)
+        let (_, response) = try await session.data(for: request)
         if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
             throw APIError.serverError(http.statusCode)
         }
@@ -130,7 +144,7 @@ struct APIClient {
                     let body = CoachRequestBody(message: message, imageBase64: imageBase64)
                     request.httpBody = try encoder.encode(body)
 
-                    let (bytes, response) = try await URLSession.shared.bytes(for: request)
+                    let (bytes, response) = try await session.bytes(for: request)
 
                     if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
                         continuation.finish(throwing: APIError.serverError(http.statusCode))
@@ -177,7 +191,7 @@ struct APIClient {
         request.timeoutInterval = 15
         struct Body: Encodable { let query: String }
         request.httpBody = try encoder.encode(Body(query: query))
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
         if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
             throw APIError.serverError(http.statusCode)
         }
@@ -194,7 +208,7 @@ struct APIClient {
         request.timeoutInterval = 15
         struct Body: Encodable { let barcode: String; let grams: Double? }
         request.httpBody = try encoder.encode(Body(barcode: barcode, grams: grams))
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
         if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
             throw APIError.serverError(http.statusCode)
         }
@@ -211,7 +225,7 @@ struct APIClient {
         request.timeoutInterval = 30
         struct Body: Encodable { let imageBase64: String }
         request.httpBody = try encoder.encode(Body(imageBase64: imageBase64))
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
         if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
             throw APIError.serverError(http.statusCode)
         }
@@ -241,7 +255,7 @@ struct APIClient {
             let imageThumb: String?
         }
         request.httpBody = try encoder.encode(Body(name: name, kcal: kcal, c: c, p: p, f: f, source: source, imageThumb: imageThumb))
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
         if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
             throw APIError.serverError(http.statusCode)
         }
@@ -259,7 +273,7 @@ struct APIClient {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 10
         request.httpBody = try encoder.encode(IngestRequestBody(deltas: deltas))
-        let (_, response) = try await URLSession.shared.data(for: request)
+        let (_, response) = try await session.data(for: request)
         if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
             throw APIError.serverError(http.statusCode)
         }
