@@ -15,24 +15,31 @@
 
 import { NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
+import sharp from 'sharp';
 import { lookupNutrition } from '@/lib/nutritionix';
 
 export const dynamic = 'force-dynamic';
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-// ── mime-type detection from base64 header bytes ──────────────────────────────
+// ── normalize to a vision-API-safe JPEG ────────────────────────────────────────
+// Modern phone cameras (e.g. 48MP sensors) can exceed Claude's 8000px-per-side
+// limit. Resize to fit Anthropic's ~1568px recommended long edge — well under
+// the hard cap and avoids paying for tokens on detail the model downsamples anyway.
 
-function detectMimeType(b64: string): 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif' {
-  if (b64.startsWith('iVBORw0KGgo')) return 'image/png';
-  if (b64.startsWith('UklGR'))        return 'image/webp';
-  if (b64.startsWith('R0lGOD'))       return 'image/gif';
-  return 'image/jpeg'; // default — covers most mobile photos
+async function normalizeImage(b64: string): Promise<string> {
+  const buf = Buffer.from(b64, 'base64');
+  const resized = await sharp(buf)
+    .rotate() // apply EXIF orientation before stripping it
+    .resize(1568, 1568, { fit: 'inside', withoutEnlargement: true })
+    .jpeg({ quality: 85 })
+    .toBuffer();
+  return resized.toString('base64');
 }
 
 // ── Classification step ──────────────────────────────────────────────────────
 
-async function classifyMealPhoto(b64: string, mimeType: ReturnType<typeof detectMimeType>): Promise<{
+async function classifyMealPhoto(b64: string): Promise<{
   query: string;
   items: string[];
 } | null> {
@@ -44,7 +51,7 @@ async function classifyMealPhoto(b64: string, mimeType: ReturnType<typeof detect
       content: [
         {
           type: 'image',
-          source: { type: 'base64', media_type: mimeType, data: b64 },
+          source: { type: 'base64', media_type: 'image/jpeg', data: b64 },
         },
         {
           type: 'text',
@@ -77,7 +84,7 @@ For meal_photo: estimate realistic portion sizes. query must be comma-separated 
 
 // ── Direct Claude vision macro estimate (fallback) ────────────────────────────
 
-async function estimateDirectly(b64: string, mimeType: ReturnType<typeof detectMimeType>): Promise<{
+async function estimateDirectly(b64: string): Promise<{
   name: string; kcal: number; c: number; p: number; f: number;
   items: Array<{ name: string; qty: number; unit: string; kcal: number }>;
 }> {
@@ -89,7 +96,7 @@ async function estimateDirectly(b64: string, mimeType: ReturnType<typeof detectM
       content: [
         {
           type: 'image',
-          source: { type: 'base64', media_type: mimeType, data: b64 },
+          source: { type: 'base64', media_type: 'image/jpeg', data: b64 },
         },
         {
           type: 'text',
@@ -103,11 +110,17 @@ All numeric values must be integers. Base estimates on visible portion sizes.`,
   });
 
   const raw = (msg.content[0] as { text: string }).text;
-  return JSON.parse(raw.replace(/```json\n?|```/g, '').trim()) as {
-    name: string; kcal: number; c: number; p: number; f: number;
-    items: Array<{ name: string; qty: number; unit: string; kcal: number }>;
-  };
+  try {
+    return JSON.parse(raw.replace(/```json\n?|```/g, '').trim()) as {
+      name: string; kcal: number; c: number; p: number; f: number;
+      items: Array<{ name: string; qty: number; unit: string; kcal: number }>;
+    };
+  } catch {
+    throw new UnrecognizedImageError();
+  }
 }
+
+class UnrecognizedImageError extends Error {}
 
 // ── Route handler ─────────────────────────────────────────────────────────────
 
@@ -129,12 +142,22 @@ export async function POST(request: Request): Promise<NextResponse> {
 
   // Strip data-URL prefix if present (e.g. "data:image/jpeg;base64,")
   const raw = b.imageBase64.trim();
-  const b64 = raw.includes(',') ? raw.split(',')[1] : raw;
-  const mimeType = detectMimeType(b64);
+  const rawB64 = raw.includes(',') ? raw.split(',')[1] : raw;
+
+  let b64: string;
+  try {
+    b64 = await normalizeImage(rawB64);
+  } catch (err) {
+    console.error('[nutrition/photo] Invalid image:', err);
+    return NextResponse.json(
+      { error: 'Could not read image data — unsupported or corrupted format.' },
+      { status: 400 },
+    );
+  }
 
   try {
     // Step 1: classify and extract food query
-    const classification = await classifyMealPhoto(b64, mimeType);
+    const classification = await classifyMealPhoto(b64);
 
     if (classification) {
       // Step 2: try CalorieNinjas lookup for deterministic numbers
@@ -152,9 +175,15 @@ export async function POST(request: Request): Promise<NextResponse> {
     }
 
     // Step 3: fallback — direct Claude vision macro estimate
-    const estimate = await estimateDirectly(b64, mimeType);
+    const estimate = await estimateDirectly(b64);
     return NextResponse.json(estimate);
   } catch (err) {
+    if (err instanceof UnrecognizedImageError) {
+      return NextResponse.json(
+        { error: 'Could not identify food in this photo. Try a clearer shot or log it manually.' },
+        { status: 422 },
+      );
+    }
     console.error('[nutrition/photo] Error:', err);
     return NextResponse.json(
       { error: 'Failed to analyze image.' },
