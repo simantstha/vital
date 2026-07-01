@@ -9,9 +9,17 @@ struct ProfileView: View {
 
             ScrollView {
                 VStack(spacing: Theme.Spacing.xl) {
-                    avatarSection
-                    statsGrid
-                    integrationsSection
+                    // Gate on load so a fresh launch shows a spinner, not an
+                    // empty "?" avatar and blank stats.
+                    if vm.isLoading {
+                        ProgressView()
+                            .frame(maxWidth: .infinity)
+                            .padding(.top, 80)
+                    } else {
+                        avatarSection
+                        statsGrid
+                        integrationsSection
+                    }
                 }
                 .padding(.horizontal, Theme.Spacing.xl)
                 .padding(.top, Theme.Spacing.xxxl)

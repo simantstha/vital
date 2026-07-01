@@ -13,13 +13,21 @@ struct TodayView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: Theme.Spacing.xl) {
                     greetingSection
-                    chipRow
-                    pendingFactsBanner
-                    CoachBubble(message: vm.coachInsight)
-                    metricsGrid
-                    dietBudgetCard
-                    todaysPlanSection
-                    actionButtons
+                    // Gate the data-bearing content so a fresh launch shows a
+                    // spinner instead of a flash of stale/fake numbers.
+                    if vm.isLoading {
+                        ProgressView()
+                            .frame(maxWidth: .infinity)
+                            .padding(.top, 60)
+                    } else {
+                        chipRow
+                        pendingFactsBanner
+                        CoachBubble(message: vm.coachInsight)
+                        metricsGrid
+                        dietBudgetCard
+                        todaysPlanSection
+                        actionButtons
+                    }
                 }
                 .padding(.horizontal, Theme.Spacing.xl)
                 .padding(.top, Theme.Spacing.lg)

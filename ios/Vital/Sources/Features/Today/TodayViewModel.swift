@@ -61,27 +61,31 @@ struct MealRow: Identifiable {
 @MainActor
 final class TodayViewModel: ObservableObject {
 
+    // Loading / error state — the view gates on isLoading so a fresh launch
+    // shows a spinner instead of a flash of stale/fake numbers.
+    @Published var isLoading = true
+    @Published var errorMessage: String? = nil
+
     // Greeting
     @Published var greeting: String = ""
     @Published var dateSubtitle: String = ""
-    @Published var streakDays: Int = 12
+    @Published var streakDays: Int = 0
 
     // Coach insight — overwritten from /api/today
-    @Published var coachInsight: String =
-        "HRV's up 8 % and you slept 7h 40m — green light for a hard session today."
+    @Published var coachInsight: String = ""
 
-    // Biometrics — fallback values shown until data loads
-    @Published var hrv = HRVMetric(value: 71, trend: .upGood, delta: "+8 %")
-    @Published var sleep = SleepMetric(hours: 7, minutes: 40, trend: .upGood, delta: "+18 m")
-    @Published var restingHR = RestingHRMetric(bpm: 52, trend: .downGood, delta: "−3")
+    // Biometrics — neutral until real data loads (view is gated on isLoading)
+    @Published var hrv = HRVMetric(value: 0, trend: .neutral, delta: "—")
+    @Published var sleep = SleepMetric(hours: 0, minutes: 0, trend: .neutral, delta: "—")
+    @Published var restingHR = RestingHRMetric(bpm: 0, trend: .neutral, delta: "—")
 
     // Diet — driven from /api/today
     @Published var diet = DietCard(
-        kcalConsumed: 1_160,
-        kcalTarget:   2_400,
-        protein: MacroProgress(current: 68,  target: 180),
-        carbs:   MacroProgress(current: 142, target: 260),
-        fat:     MacroProgress(current: 44,  target: 80)
+        kcalConsumed: 0,
+        kcalTarget:   0,
+        protein: MacroProgress(current: 0, target: 0),
+        carbs:   MacroProgress(current: 0, target: 0),
+        fat:     MacroProgress(current: 0, target: 0)
     )
 
     // Today's plan — driven from /api/today
@@ -104,11 +108,13 @@ final class TodayViewModel: ObservableObject {
     // MARK: - Called from TodayView.task
 
     func loadHealthData() async {
+        isLoading = true
         // Run HealthKit + API calls concurrently
         async let healthTask: () = loadFromHealthKit()
         async let todayTask: () = loadTodayFromAPI()
         async let factsTask: () = loadPendingFacts()
         _ = await (healthTask, todayTask, factsTask)
+        isLoading = false
     }
 
     // MARK: - Pending facts
@@ -118,6 +124,7 @@ final class TodayViewModel: ObservableObject {
             try await apiClient.resolvePendingFact(id: id, action: action)
             pendingFacts.removeAll { $0.id == id }
         } catch {
+            errorMessage = error.localizedDescription
             print("[Vital] resolvePendingFact failed: \(error.localizedDescription)")
         }
     }
@@ -181,6 +188,7 @@ final class TodayViewModel: ObservableObject {
             do {
                 try await apiClient.postIngest(deltas)
             } catch {
+                errorMessage = error.localizedDescription
                 print("[Vital] Ingest failed: \(error.localizedDescription)")
             }
         }
@@ -191,6 +199,7 @@ final class TodayViewModel: ObservableObject {
             let response = try await apiClient.fetchToday()
             applyTodayResponse(response)
         } catch {
+            errorMessage = error.localizedDescription
             print("[Vital] fetchToday failed: \(error.localizedDescription)")
         }
     }
@@ -267,6 +276,7 @@ final class TodayViewModel: ObservableObject {
             let response = try await apiClient.fetchPendingFacts()
             pendingFacts = response.items
         } catch {
+            errorMessage = error.localizedDescription
             print("[Vital] fetchPendingFacts failed: \(error.localizedDescription)")
         }
     }
@@ -290,11 +300,13 @@ final class TodayViewModel: ObservableObject {
     // MARK: - Private helpers
 
     private func refreshGreeting() {
+        // Neutral, name-free greeting until real sign-up/accounts exist; the
+        // personalized "Morning, <name>" form returns with the next-cycle auth work.
         let hour = Calendar.current.component(.hour, from: Date())
         switch hour {
-        case 0..<12: greeting = "Morning, Simant"
-        case 12..<17: greeting = "Afternoon, Simant"
-        default: greeting = "Evening, Simant"
+        case 0..<12: greeting = "Good morning"
+        case 12..<17: greeting = "Good afternoon"
+        default: greeting = "Good evening"
         }
 
         let formatter = DateFormatter()

@@ -60,7 +60,12 @@ struct APIClient {
     init() {
         let delegate = AuthRedirectGuard()
         redirectGuard = delegate
-        session = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
+        // Disable HTTP caching so a fresh launch never renders a stale cached
+        // response before live data loads. Covers every current/future GET.
+        let config = URLSessionConfiguration.default
+        config.urlCache = nil
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        session = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
     }
 
     /// Builds a request carrying the bearer token. The header is set per-request

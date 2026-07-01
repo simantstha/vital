@@ -15,11 +15,12 @@ struct ProfileStatCell: Identifiable {
 @MainActor
 final class ProfileViewModel: ObservableObject {
 
-    @Published var name: String = "Simant Shrestha"
-    @Published var avatarInitial: String = "S"
+    @Published var name: String = ""
+    @Published var avatarInitial: String = "?"
     @Published var integrations: [ProfileIntegration] = []
     @Published var stats: [ProfileStatCell] = []
-    @Published var isLoading = false
+    @Published var isLoading = true
+    @Published var errorMessage: String? = nil
 
     private let apiClient = APIClient.shared
 
@@ -32,6 +33,7 @@ final class ProfileViewModel: ObservableObject {
             integrations = response.integrations
             stats = buildStats(from: response.stats)
         } catch {
+            errorMessage = error.localizedDescription
             print("[Vital] fetchProfile failed: \(error.localizedDescription)")
         }
         isLoading = false
