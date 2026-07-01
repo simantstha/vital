@@ -1,97 +1,92 @@
-# Handoff — Fly.io deploy + phone install
-
-**Goal:** deploy the Vital Next.js backend to Fly.io (with Supabase Postgres +
-shared-secret auth) so the iOS app talks to a hosted server, then install the
-app on a physical iPhone.
+# Handoff — bug-fix cycle done, deploy + phone test pending
 
 **Branch:** `feat/ios-pivot-foundation` → **PR #5** (private repo `simantstha/vital`).
-**Status as of 2026-06-30:** **Deployed and verified.** Live at https://vital-coach.fly.dev.
-Supabase project `vital-coach` (ref `roupsepzvxbxchnrlxpn`, us-east-2) holds the DB; schema
-migrated; Fly app `vital-coach` (region `ord`) running with volume `vital_data`. `/api/health`
-returns `{"ok":true}`, unauthenticated `/api/today` returns 401, authenticated returns JSON.
-Remaining step: **phone install** (see below).
+**Backend:** live at https://vital-coach.fly.dev (Fly app `vital-coach`, region `ord`,
+volume `vital_data`→`/data`; Supabase Postgres `roupsepzvxbxchnrlxpn`, us-east-2).
+**Plan file:** `~/.claude/plans/analyze-recent-developments-and-luminous-duckling.md`
 
 ---
 
-## ✅ Done (committed)
+## ✅ Done this session (committed + pushed to PR #5)
 
-- **Container:** `Dockerfile` (Next `output:'standalone'`), `.dockerignore`,
-  `scripts/docker-entrypoint.sh` (seeds `/data/.vital-memory` on first boot).
-- **Fly config:** `fly.toml` — app `vital-coach`, region `ord`, volume
-  `vital_data`→`/data`, `/api/health` check, auto-suspend.
-- **Persistence fix:** backend does runtime file I/O to `.vital-memory/` +
-  `.brief-cache/` (ephemeral on Fly). `lib/dataDir.ts` `DATA_DIR` (= `VITAL_DATA_DIR`
-  || cwd) routes it to the volume; touched `lib/coachState|memory|weightLog|briefCache|claude.ts`.
-  Local dev unaffected when `VITAL_DATA_DIR` is unset.
-- **Auth:** `middleware.ts` gates `/api/*` behind `Authorization: Bearer <API_SHARED_SECRET>`.
-  Fails **closed** in production if the secret is unset; fail-open only in local
-  dev; constant-time token compare; `/api/health` exempt.
-- **iOS:** `APIClient.swift` → `https://vital-coach.fly.dev`, bearer token set
-  per-request + redirect delegate strips it on cross-host redirects. Token lives
-  in **gitignored** `ios/Vital/Sources/Core/Secrets.swift` (`AppSecrets.apiToken`);
-  template `ios/Vital/Secrets.example.swift`.
-- **Build fix:** framer-motion `Variants` type error in untracked `app/mockup/page.tsx`.
-- **Runbook:** `docs/fly-deploy.md`.
+Six commits, top of branch = `97688ff`:
 
----
+1. `fix(nutrition):` **committed the deployed-but-uncommitted `sharp` photo fix** — git
+   now matches production. (Prod had been running code absent from git since Jun 30.)
+2. `feat(coach):` warmer conversational persona (MAX_TOKENS 1500→2500) + web layout fonts.
+3. `chore:` tracked `CLAUDE.md`/`HANDOFF.md`/`docs/`/`app/mockup/`; gitignored local scratch
+   (`.claude/`, `.playwright-mcp/`, `v0-output/`, v0 scripts, `supabase/.temp/`, tsbuildinfo).
+4. `fix(ios):` **clear 6 Xcode warnings** — `TARGETED_DEVICE_FAMILY=1` (iPhone-only), removed
+   `ENABLE_PREVIEWS`, migrated 5 `.onChange(of:){_ in}` → zero-param form. Build verified 6→0.
+5. `fix(ios):` **stop rendering fake data** — Today/Profile VMs seeded neutral zeros (HRV 0,
+   name "", avatar "?"), `isLoading` spinner gates, error surfacing, name-free greeting,
+   URLSession caching disabled. iOS build clean.
+6. `fix(backend):` **decouple seed template** — new tracked `vital-memory-template/` (genericized
+   profiles; HRV sentinel `- HRV baseline: 0ms (updated never)` verified against both regexes in
+   `lib/claude.ts:121,129`); cleaned duplicate `SEED_PROFILE`; `Dockerfile` seeds from template;
+   `.vital-memory/` gitignored + dockerignored + `git rm --cached` (files kept on disk for local dev).
 
-## ✅ Blockers — resolved 2026-06-30
-
-1. ~~Log into Fly~~ — done, `fly auth login` as `simant_stha@hotmail.com`.
-2. ~~Create Supabase DB~~ — done, project `vital-coach` (ref `roupsepzvxbxchnrlxpn`,
-   us-east-2). Session-mode connection string saved as `SUPABASE_DATABASE_URL` in
-   `.env.local` (gitignored). Supabase CLI also installed (`brew install supabase/tap/supabase`)
-   and a Supabase MCP server is registered (local scope, read-only, project-pinned) for
-   future DB inspection — needs a fresh Claude Code session to pick up its tools.
+**Verified locally:** `npx tsc --noEmit` clean, `npm run build` succeeds, iOS `xcodebuild` 0 warnings.
+Docker not available locally, so the fresh-seed container sim was deferred to the real deploy.
 
 ---
 
-## ✅ Deploy checklist — completed 2026-06-30
+## ⏭️ Next: two deploy actions (production-affecting — run these first)
 
+**1. Production reseed** — wipe the dirty live volume so it reseeds from the clean template:
 ```bash
-# 1. Migrated schema onto Supabase
-DATABASE_URL="$SUPABASE_DATABASE_URL" npx drizzle-kit migrate   # 7 tables created
-
-# 2. Created the Fly app + volume
-fly apps create vital-coach
-fly volumes create vital_data --app vital-coach --region ord --size 1 --yes
-
-# 3. Set secrets (DATABASE_URL=$SUPABASE_DATABASE_URL, API_SHARED_SECRET from
-#    Secrets.swift apiToken, plus Anthropic/Whoop/Strava/MFP/CalorieNinjas/v0 keys)
-fly secrets set --app vital-coach ...
-
-# 4. Deployed via Fly's remote (Depot) builder — no local Docker needed
 fly deploy --app vital-coach
-
-# 5. Verified
-curl https://vital-coach.fly.dev/api/health                 # {"ok":true} ✅
-curl -i https://vital-coach.fly.dev/api/today               # 401 ✅ (auth works)
-curl -s https://vital-coach.fly.dev/api/today -H "Authorization: Bearer $SECRET"  # JSON ✅
+fly ssh console -a vital-coach -C "rm -rf /data/.vital-memory"
+fly machine restart <machine-id> -a vital-coach   # or let auto_stop/auto_start cycle it
+# verify:
+fly ssh console -a vital-coach -C "cat /data/.vital-memory/core-profile.md"   # placeholders, no "Twin Cities"
+curl -s https://vital-coach.fly.dev/api/today -H "Authorization: Bearer $SECRET"  # 200 + well-formed
 ```
+Blast radius note: `rm -rf /data/.vital-memory` clears the whole dir incl. `weight-log.json`,
+`overrides.json`, `green-streak.json` (intended clean slate, user-confirmed).
+
+**2. Physical iPhone install** — the plan's end-to-end proof:
+- `cd ios/Vital && xcodegen generate`, open `Vital.xcodeproj` in Xcode.
+- Plug in iPhone, select as run destination, Signing & Capabilities → set **Team** (free Apple ID
+  = 7-day provisioning), Build & Run.
+- Confirm: Today/Profile show a **spinner first, never a flash of fake numbers**, then real/empty state.
+- Token lives in gitignored `ios/Vital/Sources/Core/Secrets.swift` (`AppSecrets.apiToken`).
 
 ---
 
-## 📱 Phone install (separate from Fly; no $99 account needed for personal use)
+## 🔒 Open follow-up (flagged, not scoped)
 
-1. `cd ios/Vital && xcodegen generate` (picks up the new gitignored
-   `Sources/Core/Secrets.swift`), then open `Vital.xcodeproj` in Xcode.
-2. Plug in the iPhone, select it as the run destination.
-3. Signing & Capabilities → set **Team** (a free Apple ID = 7-day personal
-   provisioning; paid Apple Developer Program for TestFlight/longer).
-4. Build & Run. The app hits the Fly backend.
+Background security review flagged `app/api/nutrition/photo/route.ts`: `sharp(buf)` is a potential
+**decompression-bomb / unbounded allocation**. Low severity (endpoint is auth-gated behind the
+shared-secret middleware; sharp has a default input-pixel limit). Fix if desired: explicit
+`sharp(buf, { limitInputPixels: ... })` + max base64/body-size guard. User was asked whether to
+harden now or defer to the auth cycle — **awaiting answer.**
+
+---
+
+## 🚀 Next cycle (designed, not started): Sign-in-with-Apple + per-user isolation
+
+User decision: bug-fix first (this session), auth next. This is what restores the personalization
+Part B temporarily dropped (name in greeting). Readiness audit (memory obs 2453) found:
+- **DB ready** — `users.apple_sub` (nullable, unique) + `user_id` FKs on all data tables. No schema change.
+- **Backend work** — middleware JWT verification (replace static shared-secret), new `/api/auth/apple`
+  route (issue session JWT via existing unused `jsonwebtoken` dep), replace ~10-11 `getOrCreateDevUser()`
+  call sites (in `app/api/{today,coach,logs,profile,trends,meals/log,pending-facts,pending-facts/resolve,
+  ingest,brief}`) with header-derived userId; thread `userId` through file-state modules
+  (`lib/memory.ts`/`claude.ts`/`weightLog.ts`/`coachState.ts`) → per-user `.vital-memory` paths;
+  unify the two brief caches (`lib/briefCache.ts` global vs `lib/brain/briefCache.ts` per-user).
+- **iOS work** — add `com.apple.developer.applesignin` to `Vital.entitlements`; `KeychainStore`;
+  `SignInView` + `AuthViewModel` (post identityToken to `/api/auth/apple`); `RootView` gate between
+  `SignInView`/`RootTabView`; swap `APIClient` static token → runtime Keychain token.
+- Existing `dev@vital.local` data abandoned (no migration); delete `getOrCreateDevUser()` after.
 
 ---
 
 ## ⚠️ Gotchas / notes
 
-- **Web dashboard `/`** fetches `/api/*` from the browser without the token →
-  shows error states against the deployed backend. Expected; the iOS app is the client.
-- **App name** `vital-coach` must be globally unique on Fly. If taken, change it
-  in `fly.toml` *and* `APIClient.swift` `apiBaseURL`.
-- **Supabase pooler:** must use **Session mode (5432)**. The 6543 transaction
-  pooler breaks postgres.js prepared statements without `prepare: false`.
-- **`middleware.ts`** triggers a Next 16 deprecation warning ("use proxy")—it
-  still works in 16.2.6. Optional future cleanup: rename to `proxy.ts`.
-- **Secret** is committed nowhere; it's only in the gitignored `Secrets.swift`
-  locally. Back it up if you wipe the working tree.
-- Full reference: `docs/fly-deploy.md`. Project memory: `ios-pivot-state` memory file.
+- **Local `.vital-memory/` still holds dirty dev-session content** (Twin Cities etc.) — expected, it's
+  now untracked/dockerignored so it can't ship. The clean template is `vital-memory-template/`.
+- `Vital.xcodeproj` is gitignored/regenerated — run `xcodegen generate` after any `project.yml` edit.
+- **Supabase pooler:** Session mode (5432), not 6543 (breaks postgres.js prepared statements).
+- `middleware.ts` triggers a Next 16 "use proxy" deprecation warning — still works; optional cleanup.
+- Full deploy runbook: `docs/fly-deploy.md`. Project memory: `ios-pivot-state`.
