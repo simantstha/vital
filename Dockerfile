@@ -33,8 +33,10 @@ COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/public ./public
 
-# Baked-in defaults used to seed the persistent volume on first boot
-COPY --from=builder /app/.vital-memory /seed/.vital-memory
+# Baked-in defaults used to seed the persistent volume on first boot.
+# Copied from the tracked template dir (never from live runtime state), so
+# local dev-session writes to .vital-memory/ can't leak into the image.
+COPY vital-memory-template /seed/.vital-memory
 
 COPY scripts/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh

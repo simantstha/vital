@@ -18,3 +18,6 @@ scripts/extract-v0.mjs
 scripts/inspect-v0.mjs
 scripts/pull-v0.mjs
 scripts/request-v0-code.mjs
+
+# Live runtime coach state — seeded from vital-memory-template/ (Part C)
+.vital-memory/

@@ -49,16 +49,16 @@ const PROFILE_PATH = path.join(DATA_DIR, '.vital-memory', 'user-profile.md');
 const SEED_PROFILE = `# Vital — User Profile
 
 ## Goals
-- Primary: Twin Cities Marathon, October 4 2026
+- Primary: [to be filled]
 - Body composition: [performance / weight-loss / muscle-gain — update this]
-- Weekly mileage target: ~35mi/week by race week
+- Weekly training target: [to be filled]
 
 ## Baselines (update as patterns emerge)
-- HRV baseline: ~65ms
-- Resting HR: ~49 bpm
-- Recovery baseline: ~72%
-- Typical hard days: Tuesday, Thursday, Saturday, Sunday (runs)
-- Typical gym days: inferred from Strava
+- HRV baseline: [to be filled]
+- Resting HR: [to be filled]
+- Recovery baseline: [to be filled]
+- Typical hard days: [to be filled]
+- Typical gym days: [to be filled]
 
 ## Dietary Preferences / Constraints
 - (Claude fills this in over time)
