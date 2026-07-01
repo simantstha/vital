@@ -15,11 +15,12 @@ import { sql } from 'drizzle-orm';
 // apple_sub is nullable — populated once Sign in with Apple is wired up.
 
 export const users = p.pgTable('users', {
-  id:         p.uuid('id').primaryKey().defaultRandom(),
-  apple_sub:  p.text('apple_sub').unique(),                                    // nullable; unique when present
-  email:      p.text('email').notNull(),
-  name:       p.text('name').notNull(),
-  created_at: p.timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  id:           p.uuid('id').primaryKey().defaultRandom(),
+  apple_sub:    p.text('apple_sub').unique(),                                  // nullable; unique when present
+  email:        p.text('email').notNull(),
+  name:         p.text('name').notNull(),
+  created_at:   p.timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  onboarded_at: p.timestamp('onboarded_at', { withTimezone: true }),           // nullable until onboarding flow completes
 });
 
 // ─── events (append-only) ────────────────────────────────────────────────────
