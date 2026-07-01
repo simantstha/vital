@@ -70,9 +70,14 @@ struct APIClient {
 
     /// Builds a request carrying the bearer token. The header is set per-request
     /// (not on the session) so the redirect delegate controls its propagation.
+    ///
+    /// Prefers the signed-in user's session token from Keychain; falls back to
+    /// the shared dev secret so the app keeps working against the currently
+    /// deployed backend before/without a session (e.g. pre-auth call sites).
     private func authorizedRequest(_ url: URL) -> URLRequest {
         var r = URLRequest(url: url)
-        r.setValue("Bearer \(AppSecrets.apiToken)", forHTTPHeaderField: "Authorization")
+        let bearer = KeychainStore.loadSessionToken() ?? AppSecrets.apiToken
+        r.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
         return r
     }
 
