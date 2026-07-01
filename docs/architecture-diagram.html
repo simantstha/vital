@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Vital Architecture</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  background:#0d0d0d;
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  padding:48px 56px;
+  min-height:100vh;
+}
+h1 { font-size:20px; font-weight:700; color:#c8f135; letter-spacing:-0.3px; margin-bottom:4px; }
+.sub { font-size:12px; color:#555; margin-bottom:40px; }
+
+.canvas {
+  position:relative;
+  width:1120px;
+  height:780px;
+}
+
+/* ─── Swimlane backgrounds ─── */
+.lane {
+  position:absolute;
+  border-radius:14px;
+  border:1px solid;
+  padding:12px 14px 8px;
+}
+.lane-label {
+  font-size:10px;
+  font-weight:600;
+  letter-spacing:.6px;
+  text-transform:uppercase;
+  margin-bottom:10px;
+  opacity:.7;
+}
+
+/* ─── Node boxes ─── */
+.node {
+  position:absolute;
+  border-radius:10px;
+  border:1px solid;
+  padding:10px 14px;
+  font-size:12px;
+  line-height:1.45;
+}
+.node strong { display:block; font-size:12.5px; font-weight:600; margin-bottom:2px; }
+.node small { font-size:10.5px; opacity:.65; }
+
+/* ─── Color themes ─── */
+.ios   { background:#0e1a0e; border-color:#2d4a2d; color:#7fcf7f; }
+.back  { background:#0e130e; border-color:#2a3d2a; color:#9ec99e; }
+.orch  { background:#1a2a0a; border-color:#c8f135; color:#c8f135; }
+.db    { background:#1a140a; border-color:#c87a00; color:#e8a840; }
+.claude{ background:#0f0f1e; border-color:#6c7dd6; color:#9eaaee; }
+.tools { background:#0d0d1a; border-color:#4a5090; color:#8890cc; }
+.ext   { background:#16101a; border-color:#5a3d70; color:#a07acc; }
+
+/* Lane backgrounds */
+.lane-ios   { background:#071007; border-color:#1c301c; color:#4a8f4a; top:0;    left:0;   width:210px; height:380px; }
+.lane-back  { background:#080d08; border-color:#182518; color:#3a6f3a; top:0;    left:230px; width:480px; height:490px; }
+.lane-db    { background:#100c04; border-color:#3a2400; color:#8f6020; top:510px; left:0;   width:340px; height:270px; }
+.lane-claude{ background:#060610; border-color:#2a2d60; color:#6070c0; top:510px; left:360px; width:340px; height:270px; }
+.lane-ext   { background:#0d0810; border-color:#301a40; color:#7a4aaf; top:0;    left:730px; width:380px; height:490px; }
+
+/* SVG overlay for arrows */
+svg.arrows {
+  position:absolute;
+  top:0; left:0;
+  width:100%; height:100%;
+  pointer-events:none;
+  overflow:visible;
+}
+</style>
+</head>
+<body>
+<h1>Vital — v1 Architecture</h1>
+<p class="sub">Deterministic orchestrator · Event-sourced · Single Postgres · Math as tool calls · iOS pushes (backend never polls)</p>
+
+<div class="canvas" id="canvas">
+
+  <!-- ─── LANES ─── -->
+  <div class="lane lane-ios">
+    <div class="lane-label" style="color:#4a8f4a">iOS App</div>
+  </div>
+  <div class="lane lane-back">
+    <div class="lane-label" style="color:#3a6f3a">Backend — Vercel / Next.js</div>
+  </div>
+  <div class="lane lane-db">
+    <div class="lane-label" style="color:#8f6020">Single Postgres — Neon</div>
+  </div>
+  <div class="lane lane-claude">
+    <div class="lane-label" style="color:#6070c0">Anthropic — Claude</div>
+  </div>
+  <div class="lane lane-ext">
+    <div class="lane-label" style="color:#7a4aaf">External APIs — enrichment at ingest only</div>
+  </div>
+
+  <!-- ─── IOS NODES ─── -->
+  <div class="node ios" style="left:22px;top:60px;width:166px;">
+    <strong>HealthKit</strong>
+    <small>passive data push</small>
+  </div>
+  <div class="node ios" style="left:22px;top:140px;width:166px;">
+    <strong>Camera / Barcode</strong>
+    <small>photo meals · scan</small>
+  </div>
+  <div class="node ios" style="left:22px;top:220px;width:166px;">
+    <strong>Chat UI</strong>
+    <small>sends messages</small>
+  </div>
+  <div class="node ios" style="left:22px;top:300px;width:166px;">
+    <strong>Push Notifications</strong>
+    <small>receives nudges</small>
+  </div>
+
+  <!-- ─── BACKEND NODES ─── -->
+  <div class="node back" style="left:254px;top:60px;width:200px;">
+    <strong>Ingest API</strong>
+    <small>HealthKit deltas · PDFs<br>barcodes · photos</small>
+  </div>
+  <div class="node back" style="left:254px;top:185px;width:200px;">
+    <strong>Coach API</strong>
+    <small>receives user messages<br>returns coach replies</small>
+  </div>
+  <div class="node orch" style="left:254px;top:295px;width:432px;padding:14px 16px;">
+    <strong style="font-size:13px;">🧠 Deterministic Orchestrator</strong>
+    <small style="opacity:.85;font-size:11px;line-height:1.6;">
+      ① hard constraints (allergies, meds, conditions) → system prompt<br>
+      ② ontology snapshot from nodes + edges tables<br>
+      ③ recent events from events table<br>
+      ④ last 20 messages from messages table<br>
+      ──────────────────────────────────────<br>
+      output: prepared prompt ~4,500 tokens → Claude
+    </small>
+  </div>
+  <div class="node back" style="left:474px;top:60px;width:200px;">
+    <strong>Nudge Scheduler</strong>
+    <small>cron job · reads pending_nudges<br>fires push notifications</small>
+  </div>
+
+  <!-- ─── POSTGRES NODES ─── -->
+  <div class="node db" style="left:18px;top:558px;width:148px;">
+    <strong>events</strong>
+    <small>append-only<br>source of truth</small>
+  </div>
+  <div class="node db" style="left:178px;top:558px;width:148px;">
+    <strong>nodes</strong>
+    <small>living ontology<br>all entity types</small>
+  </div>
+  <div class="node db" style="left:18px;top:660px;width:148px;">
+    <strong>edges</strong>
+    <small>relationships between<br>ontology nodes</small>
+  </div>
+  <div class="node db" style="left:178px;top:660px;width:148px;">
+    <strong>messages</strong>
+    <small>conversation history<br>per user</small>
+  </div>
+  <div class="node db" style="left:98px;top:730px;width:148px;">
+    <strong>pending_nudges</strong>
+    <small>scheduled proactive<br>notifications</small>
+  </div>
+
+  <!-- ─── CLAUDE NODES ─── -->
+  <div class="node claude" style="left:378px;top:558px;width:148px;height:90px;">
+    <strong>Claude Sonnet</strong>
+    <small>receives prepared<br>context · responds</small>
+  </div>
+  <div class="node tools" style="left:378px;top:660px;width:304px;">
+    <strong>Deterministic Tool Calls</strong>
+    <small>calculate_macros · calculate_tdee<br>log_food · remember_fact · create_nudge</small>
+  </div>
+
+  <!-- ─── EXTERNAL API NODES ─── -->
+  <div class="node ext" style="left:754px;top:60px;width:340px;">
+    <strong>Open Food Facts</strong>
+    <small>barcode → food identity + per-100g macros</small>
+  </div>
+  <div class="node ext" style="left:754px;top:160px;width:340px;">
+    <strong>Calorie Ninjas</strong>
+    <small>food name → estimated macros</small>
+  </div>
+  <div class="node ext" style="left:754px;top:260px;width:340px;">
+    <strong>Vision Model</strong>
+    <small>photo → meal description + macro estimate</small>
+  </div>
+  <div class="node ext" style="left:754px;top:360px;width:340px;opacity:.5;">
+    <strong>pgvector / RAG</strong>
+    <small>semantic recall — deferred to v2</small>
+  </div>
+
+  <!-- ─── SVG ARROWS ─── -->
+  <svg class="arrows" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+        <path d="M0,0 L0,6 L8,3 z" fill="#555"/>
+      </marker>
+      <marker id="arr-lime" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+        <path d="M0,0 L0,6 L8,3 z" fill="#c8f135"/>
+      </marker>
+      <marker id="arr-orange" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+        <path d="M0,0 L0,6 L8,3 z" fill="#c87a00"/>
+      </marker>
+      <marker id="arr-blue" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+        <path d="M0,0 L0,6 L8,3 z" fill="#6c7dd6"/>
+      </marker>
+      <marker id="arr-purple" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+        <path d="M0,0 L0,6 L8,3 z" fill="#5a3d70" stroke-dasharray="4,2"/>
+      </marker>
+    </defs>
+
+    <!-- HealthKit → Ingest API -->
+    <line x1="190" y1="80" x2="252" y2="90" stroke="#4a8f4a" stroke-width="1.5" marker-end="url(#arr)"/>
+    <!-- Camera → Ingest API -->
+    <line x1="190" y1="155" x2="252" y2="110" stroke="#4a8f4a" stroke-width="1.5" marker-end="url(#arr)"/>
+    <!-- Chat UI → Coach API -->
+    <line x1="190" y1="230" x2="252" y2="205" stroke="#4a8f4a" stroke-width="1.5" marker-end="url(#arr)"/>
+
+    <!-- Ingest API → Enrich → Ext APIs (dashed) -->
+    <line x1="454" y1="85" x2="752" y2="85" stroke="#5a3d70" stroke-width="1.5" stroke-dasharray="5,4" marker-end="url(#arr-purple)"/>
+    <line x1="454" y1="90" x2="620" y2="180" stroke="#5a3d70" stroke-width="1.5" stroke-dasharray="5,4" marker-end="url(#arr-purple)"/>
+    <line x1="190" y1="155" x2="752" y2="275" stroke="#5a3d70" stroke-width="1.5" stroke-dasharray="5,4" marker-end="url(#arr-purple)"/>
+
+    <!-- Ingest API → events (append) -->
+    <path d="M 355 130 Q 355 500 92 555" stroke="#c87a00" stroke-width="1.5" fill="none" marker-end="url(#arr-orange)"/>
+    <!-- Ingest API → nodes (upsert) -->
+    <path d="M 355 115 Q 400 490 252 555" stroke="#c87a00" stroke-width="1.5" fill="none" marker-end="url(#arr-orange)"/>
+
+    <!-- Coach API → Orchestrator -->
+    <line x1="354" y1="220" x2="354" y2="292" stroke="#7fcf7f" stroke-width="1.5" marker-end="url(#arr)"/>
+
+    <!-- Orchestrator queries DB -->
+    <path d="M 340 450 Q 300 510 252 555" stroke="#c87a00" stroke-width="1" stroke-dasharray="3,3" fill="none" marker-end="url(#arr-orange)"/>
+    <path d="M 340 450 Q 200 510 92 555" stroke="#c87a00" stroke-width="1" stroke-dasharray="3,3" fill="none" marker-end="url(#arr-orange)"/>
+    <path d="M 340 460 Q 250 550 252 657" stroke="#c87a00" stroke-width="1" stroke-dasharray="3,3" fill="none" marker-end="url(#arr-orange)"/>
+    <path d="M 340 465 Q 180 550 92 657" stroke="#c87a00" stroke-width="1" stroke-dasharray="3,3" fill="none" marker-end="url(#arr-orange)"/>
+
+    <!-- Orchestrator → Claude -->
+    <path d="M 686 370 Q 720 430 452 555" stroke="#c8f135" stroke-width="2" fill="none" marker-end="url(#arr-lime)"/>
+
+    <!-- Claude → Tool Calls -->
+    <line x1="452" y1="648" x2="452" y2="657" stroke="#6c7dd6" stroke-width="1.5" marker-end="url(#arr-blue)"/>
+
+    <!-- Tool calls → write events / nodes / pending_nudges -->
+    <path d="M 378 700 Q 200 720 252 660" stroke="#c87a00" stroke-width="1" stroke-dasharray="3,3" fill="none" marker-end="url(#arr-orange)"/>
+    <path d="M 378 690 Q 300 710 92 660" stroke="#c87a00" stroke-width="1" stroke-dasharray="3,3" fill="none" marker-end="url(#arr-orange)"/>
+    <path d="M 420 702 Q 280 760 172 755" stroke="#c87a00" stroke-width="1" stroke-dasharray="3,3" fill="none" marker-end="url(#arr-orange)"/>
+
+    <!-- Claude → Coach API (response) -->
+    <path d="M 452 555 Q 400 480 354 265" stroke="#6c7dd6" stroke-width="1.5" fill="none" marker-end="url(#arr-blue)"/>
+
+    <!-- Coach API → Chat UI (reply) -->
+    <line x1="252" y1="210" x2="190" y2="235" stroke="#7fcf7f" stroke-width="1.5" marker-end="url(#arr)"/>
+
+    <!-- Nudge Scheduler → pending_nudges -->
+    <path d="M 474 100 Q 470 640 252 745" stroke="#c87a00" stroke-width="1" stroke-dasharray="3,3" fill="none" marker-end="url(#arr-orange)"/>
+
+    <!-- Nudge Scheduler → Push Notifications -->
+    <path d="M 474 90 Q 220 90 190 315" stroke="#4a8f4a" stroke-width="1.5" fill="none" marker-end="url(#arr)"/>
+
+    <!-- Labels on arrows -->
+    <text x="215" y="75" fill="#4a8f4a" font-size="9" opacity=".8">delta push</text>
+    <text x="215" y="148" fill="#4a8f4a" font-size="9" opacity=".8">photo/scan</text>
+    <text x="200" y="222" fill="#4a8f4a" font-size="9" opacity=".8">message</text>
+    <text x="560" y="75" fill="#7a4aaf" font-size="9" opacity=".8">enrich (dashed = enrichment only)</text>
+    <text x="700" y="435" fill="#c8f135" font-size="10" font-weight="600" opacity=".9">prepared prompt</text>
+    <text x="700" y="447" fill="#c8f135" font-size="9" opacity=".7">~4,500 tokens</text>
+    <text x="400" y="540" fill="#6c7dd6" font-size="9" opacity=".8">response</text>
+    <text x="360" y="252" fill="#7fcf7f" font-size="9" opacity=".8">reply</text>
+  </svg>
+
+</div>
+
+</body>
+</html>

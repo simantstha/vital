@@ -7,3 +7,14 @@ node_modules/
 .brief-cache/
 .whoop-refresh-token
 ios/Vital/Sources/Core/Secrets.swift
+
+# Local tooling / scratch (Phase 0 triage)
+.claude/
+.playwright-mcp/
+v0-output/
+tsconfig.tsbuildinfo
+supabase/.temp/
+scripts/extract-v0.mjs
+scripts/inspect-v0.mjs
+scripts/pull-v0.mjs
+scripts/request-v0-code.mjs
