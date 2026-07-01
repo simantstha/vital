@@ -74,15 +74,15 @@ struct CoachView: View {
                 .padding(.vertical, Theme.Spacing.md)
             }
             .scrollDismissesKeyboard(.interactively)
-            .onChange(of: vm.messages.count) { _ in
+            .onChange(of: vm.messages.count) {
                 withAnimation(.easeOut(duration: 0.2)) {
                     proxy.scrollTo("bottom", anchor: .bottom)
                 }
             }
-            .onChange(of: vm.messages.last?.text) { _ in
+            .onChange(of: vm.messages.last?.text) {
                 proxy.scrollTo("bottom", anchor: .bottom)
             }
-            .onChange(of: vm.isStreaming) { _ in
+            .onChange(of: vm.isStreaming) {
                 withAnimation(.easeOut(duration: 0.2)) {
                     proxy.scrollTo("bottom", anchor: .bottom)
                 }

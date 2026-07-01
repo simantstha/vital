@@ -25,7 +25,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.simantstha.vital
         PRODUCT_NAME: Vital
         SWIFT_VERSION: "5"
-        ENABLE_PREVIEWS: "YES"
+        TARGETED_DEVICE_FAMILY: "1"
         SWIFT_EMIT_LOC_STRINGS: "YES"
         CODE_SIGN_ENTITLEMENTS: Sources/App/Vital.entitlements
     info:

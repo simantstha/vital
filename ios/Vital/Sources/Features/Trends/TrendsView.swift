@@ -23,8 +23,8 @@ struct TrendsView: View {
             .scrollIndicators(.hidden)
         }
         .task { await vm.load() }
-        .onChange(of: vm.selectedMetric) { _ in Task { await vm.load() } }
-        .onChange(of: vm.selectedDays)   { _ in Task { await vm.load() } }
+        .onChange(of: vm.selectedMetric) { Task { await vm.load() } }
+        .onChange(of: vm.selectedDays)   { Task { await vm.load() } }
     }
 }
 
