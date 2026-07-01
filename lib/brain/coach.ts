@@ -22,7 +22,7 @@ import { BRAIN_TOOLS, executeToolCall } from './tools';
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 const MODEL        = 'claude-sonnet-4-6';
-const MAX_TOKENS   = 1500;
+const MAX_TOKENS   = 2500;
 const MAX_ROUNDS   = 10;   // max tool-use iterations before hard stop
 
 // ── Yield types ───────────────────────────────────────────────────────────────
