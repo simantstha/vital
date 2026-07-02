@@ -3,8 +3,15 @@ import SwiftUI
 // MARK: - Root view
 
 struct CoachView: View {
-    @StateObject private var vm = CoachViewModel()
+    @StateObject private var vm: CoachViewModel
     @Namespace private var bottomAnchor
+
+    /// `mode` is forwarded to every `/api/coach` call via `CoachViewModel`.
+    /// The Coach tab uses the default (nil); the onboarding CoachIntro step
+    /// passes `"onboarding"`.
+    init(mode: String? = nil) {
+        _vm = StateObject(wrappedValue: CoachViewModel(mode: mode))
+    }
 
     var body: some View {
         ZStack {

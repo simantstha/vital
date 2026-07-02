@@ -63,6 +63,15 @@ final class CoachViewModel: ObservableObject {
 
     private let api = APIClient.shared
 
+    /// Passed through to every `/api/coach` call. Set to `"onboarding"` when
+    /// this view model backs the CoachIntro onboarding step; nil (the
+    /// default) for the regular Coach tab, which is unchanged.
+    private let mode: String?
+
+    init(mode: String? = nil) {
+        self.mode = mode
+    }
+
     // MARK: - Send
 
     func send() {
@@ -85,7 +94,7 @@ final class CoachViewModel: ObservableObject {
             defer { isStreaming = false }
 
             do {
-                let stream = api.streamCoach(message: trimmed)
+                let stream = api.streamCoach(message: trimmed, mode: mode)
                 for try await event in stream {
                     switch event {
                     case .text(let delta):

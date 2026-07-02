@@ -132,8 +132,11 @@ final class TodayViewModel: ObservableObject {
     // MARK: - Private loaders
 
     private func loadFromHealthKit() async {
-        await healthKit.requestAuthorization()
-
+        // Authorization is requested once, up front, at the start of the
+        // onboarding flow (see OnboardingViewModel.begin) — by the time
+        // Today loads, the user has already been asked. Re-requesting here
+        // was harmless but redundant, so it moved with the rest of the
+        // onboarding permission surface.
         async let hrvTask       = healthKit.fetchLatestHRV()
         async let sleepTask     = healthKit.fetchLastNightSleep()
         async let restingHRTask = healthKit.fetchLatestRestingHR()

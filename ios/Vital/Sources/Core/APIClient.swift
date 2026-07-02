@@ -151,7 +151,7 @@ struct APIClient {
 
     // MARK: - Coach (SSE streaming)
 
-    func streamCoach(message: String, imageBase64: String? = nil) -> AsyncThrowingStream<CoachStreamEvent, Error> {
+    func streamCoach(message: String, imageBase64: String? = nil, mode: String? = nil) -> AsyncThrowingStream<CoachStreamEvent, Error> {
         AsyncThrowingStream { continuation in
             Task {
                 do {
@@ -165,7 +165,7 @@ struct APIClient {
                     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
                     request.timeoutInterval = 60
 
-                    let body = CoachRequestBody(message: message, imageBase64: imageBase64)
+                    let body = CoachRequestBody(message: message, imageBase64: imageBase64, mode: mode)
                     request.httpBody = try encoder.encode(body)
 
                     let (bytes, response) = try await session.bytes(for: request)
@@ -333,6 +333,35 @@ struct APIClient {
         }
         return try decoder.decode(DailyIngestResponse.self, from: data).upserted
     }
+
+    // MARK: - Onboarding
+
+    /// Submits the full onboarding questionnaire in one shot. The server
+    /// fills per-user memory files from these answers and marks
+    /// `users.onboarded_at`, which is what `/api/profile` and the auth
+    /// endpoints subsequently report back as `onboarded`.
+    func postOnboarding(
+        basics: OnboardingBasics,
+        training: OnboardingTraining,
+        health: OnboardingHealth,
+        lifestyle: OnboardingLifestyle
+    ) async throws -> OnboardingResponse {
+        guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/onboarding") else {
+            throw APIError.invalidURL
+        }
+        var request = authorizedRequest(url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 15
+        request.httpBody = try encoder.encode(OnboardingRequestBody(
+            basics: basics, training: training, health: health, lifestyle: lifestyle
+        ))
+        let (data, response) = try await session.data(for: request)
+        if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
+            throw APIError.serverError(http.statusCode)
+        }
+        return try decoder.decode(OnboardingResponse.self, from: data)
+    }
 }
 
 // MARK: - Errors
@@ -426,6 +455,53 @@ private struct DailyIngestRequestBody: Encodable {
 
 private struct DailyIngestResponse: Decodable {
     let upserted: Int
+}
+
+// MARK: - Onboarding DTOs
+//
+// Mirror POST /api/onboarding's request schema exactly (see hand-off plan,
+// Phase 5): { basics, training, health, lifestyle } → { ok, onboarded }.
+
+struct OnboardingBasics: Encodable {
+    let name: String
+    let dob: String // 'YYYY-MM-DD'
+    let sex: String
+    let heightCm: Double
+    let weightKg: Double
+    let units: String
+    let goal: String
+    let targetDate: String? // 'YYYY-MM-DD'
+}
+
+struct OnboardingTraining: Encodable {
+    let frequency: Int
+    let types: [String]
+    let experience: String
+    let volumeNotes: String?
+}
+
+struct OnboardingHealth: Encodable {
+    let injuries: String?
+    let conditions: String?
+    let medications: String?
+}
+
+struct OnboardingLifestyle: Encodable {
+    let sleepSchedule: String?
+    let stress: String?
+    let diet: String?
+}
+
+private struct OnboardingRequestBody: Encodable {
+    let basics: OnboardingBasics
+    let training: OnboardingTraining
+    let health: OnboardingHealth
+    let lifestyle: OnboardingLifestyle
+}
+
+struct OnboardingResponse: Decodable {
+    let ok: Bool
+    let onboarded: Bool
 }
 
 // MARK: - Nutrition & Meal
@@ -562,6 +638,7 @@ struct PendingFactsResponse: Decodable {
 private struct CoachRequestBody: Encodable {
     let message: String
     let imageBase64: String?
+    let mode: String?
 }
 
 private struct SSEEvent: Decodable {
