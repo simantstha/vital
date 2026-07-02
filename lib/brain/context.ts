@@ -6,11 +6,20 @@
  * block ready for Claude prompt injection.
  *
  * Design principle: numbers come from SQL, never from LLM inference.
+ *
+ * Phase 3 (tool-first data access): the prompt carries only small durable
+ * facts — profile/ontology, a baselines snapshot, calibration status, and
+ * today's numbers. Multi-day time-series (trends, sleep history, workout
+ * lists, period comparisons) is deliberately NOT pre-computed here anymore —
+ * the coach reads that on demand via the get_metric_trend / get_sleep_summary /
+ * get_workouts / get_baseline / compare_periods tools in lib/brain/tools.ts.
  */
 
 import { db, schema } from '@/db';
 import { eq, and, gte, desc } from 'drizzle-orm';
 import type { OntologyNode } from '@/db/schema';
+import { getCalibration, type Calibration } from './baselines';
+import { queryAllBaselines, metricLabel, type BaselineSnapshot } from './tools';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -45,10 +54,11 @@ export interface DaySnapshot {
 export interface CoachContext {
   userId: string;
   today: DaySnapshot;
-  history: DaySnapshot[];    // last 7 days excluding today, newest first
   recentMessages: Array<{ role: string; content: string; timestamp: Date }>;
   hardConstraints: OntologyNode[];  // Allergy, Condition, Medication, Injury
   softFacts: OntologyNode[];        // Goal, Habit, FoodPreference, etc.
+  baselines: BaselineSnapshot[];    // one row per metric with a baselines row
+  calibration: Calibration;         // gates recovery/training prescriptions
   promptText: string;               // compact text block ready for Claude
 }
 
@@ -150,24 +160,6 @@ function buildDaySnapshot(
 
 // ── Compact text builder ──────────────────────────────────────────────────────
 
-function formatDayLine(snap: DaySnapshot): string {
-  const parts: string[] = [];
-  if (snap.hrv != null)             parts.push(`HRV ${snap.hrv}ms`);
-  if (snap.sleepDurationMs != null) parts.push(`sleep ${msToHm(snap.sleepDurationMs)}`);
-  if (snap.steps != null)           parts.push(`steps ${snap.steps.toLocaleString()}`);
-  for (const w of snap.workouts) {
-    const km = w.distanceM != null ? ` ${(w.distanceM / 1000).toFixed(1)}km` : '';
-    const min = w.durationS != null ? ` ${Math.round(w.durationS / 60)}min` : '';
-    parts.push(`${w.type}${km || min}`);
-  }
-  if (snap.meals.length > 0) {
-    const kcal = snap.meals.reduce((s, m) => s + m.kcal, 0);
-    parts.push(`${snap.meals.length} meal${snap.meals.length !== 1 ? 's' : ''} ${kcal}kcal`);
-  }
-  if (snap.weight != null) parts.push(`weight ${snap.weight}kg`);
-  return `${snap.date}: ${parts.join(' · ') || 'no data'}`;
-}
-
 function buildPromptText(
   ctx: Omit<CoachContext, 'promptText'>,
 ): string {
@@ -215,10 +207,31 @@ function buildPromptText(
     lines.push('- No meals logged today yet');
   }
 
-  // ── 7-day history ──────────────────────────────────────────────────────────
-  if (ctx.history.length > 0) {
-    lines.push('\n### 7-Day History (newest first)');
-    for (const d of ctx.history) lines.push(formatDayLine(d));
+  // ── Baselines snapshot (small durable facts — full history is tool-only) ───
+  if (ctx.baselines.length > 0) {
+    lines.push('\n### Baselines');
+    for (const b of ctx.baselines) {
+      const mean30Str = b.stats?.mean30 != null ? `${Math.round(b.stats.mean30)}` : 'n/a';
+      lines.push(
+        `- ${metricLabel(b.metric)} (${b.metric}): 30-day avg ${mean30Str}, ` +
+        `${b.dataDays} days of data in the last 90d` +
+        `${b.established ? ', established' : ', not yet established'}`,
+      );
+    }
+  } else {
+    lines.push('\n### Baselines\nNo baseline data yet — brand-new user, no history to compare against.');
+  }
+
+  // ── Calibration ──────────────────────────────────────────────────────────
+  lines.push(`\n### Calibration: ${ctx.calibration.status}`);
+  if (ctx.calibration.status === 'calibrating') {
+    const parts = Object.entries(ctx.calibration.metrics).map(
+      ([m, v]) => `${metricLabel(m)} ${v.dataDays}/14 days`,
+    );
+    lines.push(
+      `Not yet established: ${parts.join(', ')}. Avoid recovery scores or training ` +
+      `prescriptions until calibration is ready — say so plainly if asked.`,
+    );
   }
 
   // ── Recent conversation ────────────────────────────────────────────────────
@@ -258,17 +271,17 @@ export async function assembleContext(userId: string): Promise<CoachContext> {
   const todayStart = new Date(
     Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
   );
-  const sevenDaysAgo = new Date(todayStart);
-  sevenDaysAgo.setUTCDate(sevenDaysAgo.getUTCDate() - 7);
 
-  // Run all queries in parallel for minimal latency
-  const [allEvents, allNodes, rawMessages] = await Promise.all([
+  // Run all queries in parallel for minimal latency. Only today's events are
+  // fetched here — multi-day history lives behind the data tools (tools.ts),
+  // not pre-computed into the prompt (Phase 3 tool-first design rule).
+  const [todayEvents, allNodes, rawMessages, baselines, calibration] = await Promise.all([
     db.select()
       .from(schema.events)
       .where(
         and(
           eq(schema.events.user_id, userId),
-          gte(schema.events.timestamp, sevenDaysAgo),
+          gte(schema.events.timestamp, todayStart),
         ),
       )
       .orderBy(desc(schema.events.timestamp)),
@@ -287,27 +300,14 @@ export async function assembleContext(userId: string): Promise<CoachContext> {
       .where(eq(schema.messages.user_id, userId))
       .orderBy(desc(schema.messages.timestamp))
       .limit(20),
-  ]);
 
-  // Partition events by today vs history
-  const todayEvents   = allEvents.filter(e => e.timestamp >= todayStart);
-  const historyEvents = allEvents.filter(e => e.timestamp < todayStart);
+    queryAllBaselines(userId),
+    getCalibration(userId),
+  ]);
 
   // Today snapshot
   const todayStr = todayStart.toISOString().split('T')[0];
   const today = buildDaySnapshot(todayStr, todayEvents);
-
-  // Per-day buckets for last 7 days
-  const dayBuckets = new Map<string, Array<typeof schema.events.$inferSelect>>();
-  for (const e of historyEvents) {
-    const key = e.timestamp.toISOString().split('T')[0];
-    if (!dayBuckets.has(key)) dayBuckets.set(key, []);
-    dayBuckets.get(key)!.push(e);
-  }
-  const history: DaySnapshot[] = Array.from(dayBuckets.entries())
-    .sort(([a], [b]) => b.localeCompare(a)) // newest first
-    .slice(0, 7)
-    .map(([date, evts]) => buildDaySnapshot(date, evts));
 
   // Ontology partition
   const hardConstraints = allNodes.filter(n => HARD_CONSTRAINT_TYPES.has(n.type));
@@ -319,10 +319,11 @@ export async function assembleContext(userId: string): Promise<CoachContext> {
   const partial: Omit<CoachContext, 'promptText'> = {
     userId,
     today,
-    history,
     recentMessages,
     hardConstraints,
     softFacts,
+    baselines,
+    calibration,
   };
 
   return { ...partial, promptText: buildPromptText(partial) };

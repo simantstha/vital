@@ -8,6 +8,12 @@
  *
  * SSE event contract:
  *   data: {"type":"text","delta":"..."}       — one or more text chunks
+ *   data: {"type":"tool_call","id":"...","name":"...","label":"...",
+ *          "status":"started"}                — a tool started executing;
+ *                                                `id` is unique per call
+ *   data: {"type":"tool_call","id":"...","name":"...","label":"...",
+ *          "status":"done"}                    — same `id` as its "started"
+ *                                                event, once the tool finishes
  *   data: {"type":"done","messageId":"..."}   — final event; messageId is the
  *                                               UUID of the persisted assistant
  *                                               message row in `messages`.
@@ -58,6 +64,14 @@ export async function POST(request: Request): Promise<Response> {
         for await (const chunk of runCoach(userId, message, imageBase64)) {
           if (chunk.type === 'text') {
             send({ type: 'text', delta: chunk.text });
+          } else if (chunk.type === 'tool_call') {
+            send({
+              type:   'tool_call',
+              id:     chunk.id,
+              name:   chunk.name,
+              label:  chunk.label,
+              status: chunk.status,
+            });
           } else if (chunk.type === 'done') {
             send({ type: 'done', messageId: chunk.messageId });
           }

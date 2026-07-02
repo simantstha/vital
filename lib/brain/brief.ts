@@ -12,7 +12,8 @@
 import { db, schema } from '@/db';
 import { eq, and, gte, desc } from 'drizzle-orm';
 import { generateDailyBrief } from '@/lib/claude';
-import { getCalibration, type BaselineStats } from '@/lib/brain/baselines';
+import { getCalibration } from '@/lib/brain/baselines';
+import { queryBaseline } from '@/lib/brain/tools';
 import type { DailyBrief } from '@/lib/types';
 
 // ── Payload helpers ─────────────────────────────────────────────────────────
@@ -52,8 +53,10 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
   sevenDaysAgo.setUTCDate(sevenDaysAgo.getUTCDate() - 7);
 
   // Fetch all recent events in one query, plus the hrv_sdnn baseline row +
-  // calibration status (both cheap point-reads off the baselines table).
-  const [events, hrvBaselineRow, calibration] = await Promise.all([
+  // calibration status (both cheap point-reads off the baselines table, via
+  // the shared queryBaseline/getCalibration helpers so this aggregation isn't
+  // duplicated across brief.ts and the coach's get_baseline tool).
+  const [events, hrvBaseline, calibration] = await Promise.all([
     db
       .select()
       .from(schema.events)
@@ -64,11 +67,7 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
         ),
       )
       .orderBy(desc(schema.events.timestamp)),
-    db
-      .select({ stats: schema.baselines.stats })
-      .from(schema.baselines)
-      .where(and(eq(schema.baselines.user_id, userId), eq(schema.baselines.metric, 'hrv_sdnn')))
-      .limit(1),
+    queryBaseline(userId, 'hrv_sdnn'),
     getCalibration(userId),
   ]);
 
@@ -111,7 +110,7 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
   // Prefer the daily_metrics-derived 30-day baseline (lib/brain/baselines.ts);
   // fall back to the 7-day event-based estimate when no baseline row exists yet
   // (e.g. brand-new user before any /api/ingest/daily has run).
-  const baselineStats = hrvBaselineRow[0]?.stats as BaselineStats | undefined;
+  const baselineStats = hrvBaseline?.stats ?? undefined;
   const baselineHrv =
     baselineStats?.mean30 != null
       ? Math.round(baselineStats.mean30)
