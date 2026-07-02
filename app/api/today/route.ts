@@ -32,6 +32,7 @@ import { eq, and, gte, desc } from 'drizzle-orm';
 import { getUserIdFromRequest } from '@/lib/auth';
 import { generateDailyBriefFromDb } from '@/lib/brain/brief';
 import { getCachedBrief, setCachedBrief, briefCacheKey, todayKey } from '@/lib/brain/briefCache';
+import { getCalibration } from '@/lib/brain/baselines';
 
 export const dynamic = 'force-dynamic';
 
@@ -71,12 +72,16 @@ export async function GET(request: Request): Promise<NextResponse> {
 
   // ── DB read (fast). The LLM brief is served from cache, never awaited here ─
   let events: (typeof schema.events.$inferSelect)[];
+  let calibration: Awaited<ReturnType<typeof getCalibration>>;
   try {
-    events = await db
-      .select()
-      .from(schema.events)
-      .where(and(eq(schema.events.user_id, userId), gte(schema.events.timestamp, threeDaysAgo)))
-      .orderBy(desc(schema.events.timestamp));
+    [events, calibration] = await Promise.all([
+      db
+        .select()
+        .from(schema.events)
+        .where(and(eq(schema.events.user_id, userId), gte(schema.events.timestamp, threeDaysAgo)))
+        .orderBy(desc(schema.events.timestamp)),
+      getCalibration(userId),
+    ]);
   } catch (err) {
     return NextResponse.json({ error: `DB read error: ${String(err)}` }, { status: 500 });
   }
@@ -193,5 +198,6 @@ export async function GET(request: Request): Promise<NextResponse> {
     },
     insight,
     plan,
+    calibration,
   });
 }

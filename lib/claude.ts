@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { DailyBrief } from './types';
 import { readMemoryFile, writeMemoryFile } from '@/lib/memory';
+import { writeHrvBaselineToProfile } from '@/lib/brain/baselines';
 
 // ── Inline types (formerly imported from lib/whoop + lib/strava) ──────────────
 
@@ -101,24 +102,8 @@ interface BriefContext {
   weeklyMileage?: WeeklyLoadRecord[];
   recentNutrition?: Array<{ date: string; calories: number; carbs: number; protein: number; fat: number }>;
   weightKg?: number;
-}
-
-function updateHrvBaseline(userId: string, currentAvg: number): void {
-  const profile = readMemoryFile(userId, 'core-profile.md');
-  if (!profile) return;
-
-  const match = /hrv baseline:\s*(\d+)\s*ms/i.exec(profile);
-  if (!match) return;
-
-  const stored = parseInt(match[1], 10);
-  if (Math.abs(currentAvg - stored) <= 3) return;
-
-  const date = new Date().toISOString().split('T')[0];
-  const updated = profile.replace(
-    /hrv baseline:\s*\d+\s*ms \(updated [^)]+\)/i,
-    `HRV baseline: ${currentAvg}ms (updated ${date})`
-  );
-  writeMemoryFile(userId, 'core-profile.md', updated);
+  /** True while baselines are still calibrating (< 14 days of history) — recovery score is provisional. */
+  calibrating?: boolean;
 }
 
 export async function generateDailyBrief(userId: string, ctx: BriefContext): Promise<DailyBrief> {
@@ -167,7 +152,7 @@ ${userProfile}
 
 ## Today's Snapshot
 - Date: ${today}
-- Recovery Score: ${ctx.recovery}% (${ctx.recovery >= 67 ? 'Green' : ctx.recovery >= 34 ? 'Amber' : 'Red'})
+${ctx.calibrating ? '- NOTE: Baselines are still calibrating (fewer than 14 days of history) — treat the recovery score below as PROVISIONAL. Do not give a firm recovery/training-intensity prescription; say the numbers are still settling in and default to moderate, conservative guidance.\n' : ''}- Recovery Score: ${ctx.recovery}% (${ctx.recovery >= 67 ? 'Green' : ctx.recovery >= 34 ? 'Amber' : 'Red'})${ctx.calibrating ? ' — provisional' : ''}
 - HRV: ${ctx.hrv}ms
 - Resting HR: ${ctx.rhr}bpm
 - Sleep Performance: ${ctx.sleepPerf}% · ${ctx.sleepDuration}
@@ -212,7 +197,7 @@ Respond ONLY with valid JSON, no markdown, no explanation:
   if (parsed.profileUpdate) appendCoachNote(userId, parsed.profileUpdate);
 
   if (ctx.history?.avgHrv7d) {
-    updateHrvBaseline(userId, ctx.history.avgHrv7d);
+    writeHrvBaselineToProfile(userId, ctx.history.avgHrv7d);
   }
 
   return {
