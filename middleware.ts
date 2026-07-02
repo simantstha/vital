@@ -47,7 +47,11 @@ export async function middleware(req: NextRequest) {
     if (process.env.NODE_ENV === 'production') {
       return new NextResponse('Server auth misconfigured', { status: 503 });
     }
-    return NextResponse.next();
+    // Dev pass-through: strip any client-supplied x-user-id so identity can
+    // never be spoofed by sending the header directly.
+    const passthroughHeaders = new Headers(req.headers);
+    passthroughHeaders.delete('x-user-id');
+    return NextResponse.next({ request: { headers: passthroughHeaders } });
   }
 
   const auth = req.headers.get('authorization') ?? '';

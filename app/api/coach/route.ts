@@ -17,7 +17,7 @@
  * The connection closes after "done" or "error".
  */
 
-import { getOrCreateDevUser } from '@/lib/brain/user';
+import { getUserIdFromRequest } from '@/lib/auth';
 import { runCoach } from '@/lib/brain/coach';
 
 export const dynamic = 'force-dynamic';
@@ -39,12 +39,11 @@ export async function POST(request: Request): Promise<Response> {
   const imageBase64 =
     typeof body.imageBase64 === 'string' ? body.imageBase64 : undefined;
 
-  // Resolve the dev user (will be replaced by JWT auth in production)
   let userId: string;
   try {
-    userId = await getOrCreateDevUser();
+    userId = getUserIdFromRequest(request);
   } catch (err) {
-    return new Response(`DB error resolving user: ${String(err)}`, { status: 500 });
+    return new Response(String(err), { status: 401 });
   }
 
   const encoder = new TextEncoder();

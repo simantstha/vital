@@ -5,7 +5,7 @@
  *         imageThumb?: string }   — imageThumb: optional small base64 JPEG (no data-URL prefix)
  * Response: { ok: true, eventId: string, coachReaction: string }
  *
- * 1. Resolves the dev user (getOrCreateDevUser).
+ * 1. Resolves the authenticated user (getUserIdFromRequest).
  * 2. Inserts a `meal_logged` event into the append-only events ledger.
  * 3. Assembles today's context via lib/brain/context.assembleContext.
  * 4. Makes ONE claude-haiku-4-5 call to produce a 1-2 sentence coach reaction
@@ -19,7 +19,7 @@
 import { NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
 import { db, schema } from '@/db';
-import { getOrCreateDevUser } from '@/lib/brain/user';
+import { getUserIdFromRequest } from '@/lib/auth';
 import { assembleContext } from '@/lib/brain/context';
 
 export const dynamic = 'force-dynamic';
@@ -79,10 +79,9 @@ export async function POST(request: Request): Promise<NextResponse> {
 
   let userId: string;
   try {
-    userId = await getOrCreateDevUser();
+    userId = getUserIdFromRequest(request);
   } catch (err) {
-    console.error('[meals/log] DB error resolving user:', err);
-    return NextResponse.json({ error: 'Database error.' }, { status: 500 });
+    return NextResponse.json({ error: String(err) }, { status: 401 });
   }
 
   // ── 2. Insert meal_logged event ────────────────────────────────────────────

@@ -17,7 +17,9 @@ import { NextResponse } from 'next/server';
 import { db, schema } from '@/db';
 import { eq } from 'drizzle-orm';
 import { issueSessionJwt } from '@/lib/auth';
-import { getOrCreateDevUser } from '@/lib/brain/user';
+
+const DEV_EMAIL = 'dev@vital.local';
+const DEV_NAME  = 'Dev User';
 
 /** Length-aware constant-time string comparison (no early-exit on mismatch). */
 function safeEqual(a: string, b: string): boolean {
@@ -27,6 +29,30 @@ function safeEqual(a: string, b: string): boolean {
     result |= a.charCodeAt(i) ^ b.charCodeAt(i);
   }
   return result === 0;
+}
+
+/**
+ * Upsert-style helper: returns the UUID of dev@vital.local, creating the
+ * user row on first call. Subsequent calls hit the fast SELECT path.
+ *
+ * Inlined from the former lib/brain/user.ts (deleted — this was its only
+ * caller once every other route moved to getUserIdFromRequest()).
+ */
+async function getOrCreateDevUser(): Promise<string> {
+  const existing = await db
+    .select({ id: schema.users.id })
+    .from(schema.users)
+    .where(eq(schema.users.email, DEV_EMAIL))
+    .limit(1);
+
+  if (existing.length > 0) return existing[0].id;
+
+  const [created] = await db
+    .insert(schema.users)
+    .values({ email: DEV_EMAIL, name: DEV_NAME })
+    .returning({ id: schema.users.id });
+
+  return created.id;
 }
 
 export async function POST(req: Request): Promise<NextResponse> {
@@ -44,7 +70,8 @@ export async function POST(req: Request): Promise<NextResponse> {
   try {
     userId = await getOrCreateDevUser();
   } catch (err) {
-    return NextResponse.json({ error: `DB error resolving dev user: ${String(err)}` }, { status: 500 });
+    console.error('auth/dev: failed to resolve dev user:', err);
+    return NextResponse.json({ error: 'Internal error' }, { status: 500 });
   }
 
   let onboardedAt: Date | null = null;
@@ -56,7 +83,8 @@ export async function POST(req: Request): Promise<NextResponse> {
       .limit(1);
     onboardedAt = row?.onboarded_at ?? null;
   } catch (err) {
-    return NextResponse.json({ error: `DB error reading user: ${String(err)}` }, { status: 500 });
+    console.error('auth/dev: failed to read user:', err);
+    return NextResponse.json({ error: 'Internal error' }, { status: 500 });
   }
 
   const token = await issueSessionJwt(userId);

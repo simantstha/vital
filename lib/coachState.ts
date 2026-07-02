@@ -1,10 +1,14 @@
 import fs from 'fs';
 import path from 'path';
-import { DATA_DIR } from './dataDir';
+import { getUserMemoryDir } from './memory';
 
-const MEMORY_DIR = path.join(DATA_DIR, '.vital-memory');
-const OVERRIDES_FILE = path.join(MEMORY_DIR, 'overrides.json');
-const PENDING_FILE   = path.join(MEMORY_DIR, 'pending-barcode.json');
+function overridesFile(userId: string): string {
+  return path.join(getUserMemoryDir(userId), 'overrides.json');
+}
+
+function pendingBarcodeFile(userId: string): string {
+  return path.join(getUserMemoryDir(userId), 'pending-barcode.json');
+}
 
 export interface MealOverride {
   meal: string;        // "breakfast" | "lunch" | "snack" | "dinner"
@@ -34,42 +38,42 @@ function today(): string {
   return new Date().toISOString().split('T')[0];
 }
 
-function ensureDir() {
-  try { fs.mkdirSync(MEMORY_DIR, { recursive: true }); } catch { /* ok */ }
+function ensureDir(userId: string) {
+  try { fs.mkdirSync(getUserMemoryDir(userId), { recursive: true }); } catch { /* ok */ }
 }
 
-export function readCoachState(): CoachState {
+export function readCoachState(userId: string): CoachState {
   try {
-    const state = JSON.parse(fs.readFileSync(OVERRIDES_FILE, 'utf-8')) as CoachState;
+    const state = JSON.parse(fs.readFileSync(overridesFile(userId), 'utf-8')) as CoachState;
     if (state.date !== today()) return { date: today(), mealOverrides: [] };
     return state;
   } catch { return { date: today(), mealOverrides: [] }; }
 }
 
-export function writeMealOverride(override: MealOverride) {
-  ensureDir();
-  const state = readCoachState();
+export function writeMealOverride(userId: string, override: MealOverride) {
+  ensureDir(userId);
+  const state = readCoachState(userId);
   const idx = state.mealOverrides.findIndex(o => o.meal === override.meal);
   if (idx >= 0) state.mealOverrides[idx] = override;
   else state.mealOverrides.push(override);
-  try { fs.writeFileSync(OVERRIDES_FILE, JSON.stringify(state), 'utf-8'); } catch { /* ok */ }
+  try { fs.writeFileSync(overridesFile(userId), JSON.stringify(state), 'utf-8'); } catch { /* ok */ }
 }
 
-export function readPendingBarcode(chatId: number): PendingBarcode | null {
+export function readPendingBarcode(userId: string, chatId: number): PendingBarcode | null {
   try {
-    const p = JSON.parse(fs.readFileSync(PENDING_FILE, 'utf-8')) as PendingBarcode;
+    const p = JSON.parse(fs.readFileSync(pendingBarcodeFile(userId), 'utf-8')) as PendingBarcode;
     if (p.chatId !== chatId || Date.now() > p.expiresAt) return null;
     return p;
   } catch { return null; }
 }
 
-export function writePendingBarcode(pending: PendingBarcode) {
-  ensureDir();
-  try { fs.writeFileSync(PENDING_FILE, JSON.stringify(pending), 'utf-8'); } catch { /* ok */ }
+export function writePendingBarcode(userId: string, pending: PendingBarcode) {
+  ensureDir(userId);
+  try { fs.writeFileSync(pendingBarcodeFile(userId), JSON.stringify(pending), 'utf-8'); } catch { /* ok */ }
 }
 
-export function clearPendingBarcode() {
-  try { fs.unlinkSync(PENDING_FILE); } catch { /* ok */ }
+export function clearPendingBarcode(userId: string) {
+  try { fs.unlinkSync(pendingBarcodeFile(userId)); } catch { /* ok */ }
 }
 
 import type { NutritionixResult } from './nutritionix';
@@ -82,21 +86,23 @@ export interface PendingMeal {
   expiresAt: number;
 }
 
-const PENDING_MEAL_FILE = path.join(MEMORY_DIR, 'pending-meal.json');
+function pendingMealFile(userId: string): string {
+  return path.join(getUserMemoryDir(userId), 'pending-meal.json');
+}
 
-export function readPendingMeal(chatId: number): PendingMeal | null {
+export function readPendingMeal(userId: string, chatId: number): PendingMeal | null {
   try {
-    const p = JSON.parse(fs.readFileSync(PENDING_MEAL_FILE, 'utf-8')) as PendingMeal;
+    const p = JSON.parse(fs.readFileSync(pendingMealFile(userId), 'utf-8')) as PendingMeal;
     if (p.chatId !== chatId || Date.now() > p.expiresAt) return null;
     return p;
   } catch { return null; }
 }
 
-export function writePendingMeal(pending: PendingMeal) {
-  ensureDir();
-  try { fs.writeFileSync(PENDING_MEAL_FILE, JSON.stringify(pending), 'utf-8'); } catch { /* ok */ }
+export function writePendingMeal(userId: string, pending: PendingMeal) {
+  ensureDir(userId);
+  try { fs.writeFileSync(pendingMealFile(userId), JSON.stringify(pending), 'utf-8'); } catch { /* ok */ }
 }
 
-export function clearPendingMeal() {
-  try { fs.unlinkSync(PENDING_MEAL_FILE); } catch { /* ok */ }
+export function clearPendingMeal(userId: string) {
+  try { fs.unlinkSync(pendingMealFile(userId)); } catch { /* ok */ }
 }
