@@ -4,9 +4,14 @@ import Foundation
 
 enum AppConfig {
     /// Base URL for the Vital backend.
-    /// Production (Fly.io): "https://vital-coach.fly.dev"
-    /// Local dev: "http://localhost:3000"
-    static let apiBaseURL = "https://vital-coach.fly.dev"
+    /// Simulator talks to the local dev server; device builds use Fly.io.
+    static let apiBaseURL: String = {
+        #if targetEnvironment(simulator)
+        return "http://localhost:3000"
+        #else
+        return "https://vital-coach.fly.dev"
+        #endif
+    }()
 }
 
 // MARK: - JSON value
