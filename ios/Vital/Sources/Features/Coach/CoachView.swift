@@ -23,6 +23,9 @@ struct CoachView: View {
                 inputBar
             }
         }
+        // Leaving the view mid-stream (e.g. onboarding CoachIntro → Continue)
+        // must not leave a stream task running against a gone view.
+        .onDisappear { vm.cancelStreaming() }
     }
 
     // MARK: - Navigation bar

@@ -210,37 +210,48 @@ final class TodayViewModel: ObservableObject {
             coachInsight = r.insight
         }
 
-        // Metrics — prefer API over HealthKit defaults
+        // Metrics — prefer API over HealthKit defaults. Null value/deltaPct
+        // means the user has no data for that metric yet (fresh account) —
+        // keep the neutral defaults (or HealthKit reads) in that case.
         let m = r.metrics
 
         // HRV
-        let hrvTrend: TrendDirection = m.hrv.deltaPct >= 0 ? .upGood : .downBad
-        let hrvSign = m.hrv.deltaPct >= 0 ? "+" : ""
-        hrv = HRVMetric(
-            value: Int(m.hrv.value.rounded()),
-            trend: hrvTrend,
-            delta: "\(hrvSign)\(m.hrv.deltaPct) %"
-        )
+        if let value = m.hrv.value {
+            let deltaPct = m.hrv.deltaPct ?? 0
+            let hrvTrend: TrendDirection = deltaPct >= 0 ? .upGood : .downBad
+            let hrvSign = deltaPct >= 0 ? "+" : ""
+            hrv = HRVMetric(
+                value: Int(value.rounded()),
+                trend: hrvTrend,
+                delta: "\(hrvSign)\(deltaPct) %"
+            )
+        }
 
         // Sleep — value is in hours (e.g. 7.8)
-        let totalSleepMins = Int((m.sleep.value * 60).rounded())
-        let sleepTrend: TrendDirection = m.sleep.deltaPct >= 0 ? .upGood : .downBad
-        let sleepSign = m.sleep.deltaPct >= 0 ? "+" : ""
-        sleep = SleepMetric(
-            hours: totalSleepMins / 60,
-            minutes: totalSleepMins % 60,
-            trend: sleepTrend,
-            delta: "\(sleepSign)\(m.sleep.deltaPct) %"
-        )
+        if let value = m.sleep.value {
+            let deltaPct = m.sleep.deltaPct ?? 0
+            let totalSleepMins = Int((value * 60).rounded())
+            let sleepTrend: TrendDirection = deltaPct >= 0 ? .upGood : .downBad
+            let sleepSign = deltaPct >= 0 ? "+" : ""
+            sleep = SleepMetric(
+                hours: totalSleepMins / 60,
+                minutes: totalSleepMins % 60,
+                trend: sleepTrend,
+                delta: "\(sleepSign)\(deltaPct) %"
+            )
+        }
 
         // Resting HR — lower is better
-        let hrTrend: TrendDirection = m.restingHr.deltaPct <= 0 ? .downGood : .upBad
-        let hrSign = m.restingHr.deltaPct >= 0 ? "+" : ""
-        restingHR = RestingHRMetric(
-            bpm: Int(m.restingHr.value.rounded()),
-            trend: hrTrend,
-            delta: "\(hrSign)\(m.restingHr.deltaPct) %"
-        )
+        if let value = m.restingHr.value {
+            let deltaPct = m.restingHr.deltaPct ?? 0
+            let hrTrend: TrendDirection = deltaPct <= 0 ? .downGood : .upBad
+            let hrSign = deltaPct >= 0 ? "+" : ""
+            restingHR = RestingHRMetric(
+                bpm: Int(value.rounded()),
+                trend: hrTrend,
+                delta: "\(hrSign)\(deltaPct) %"
+            )
+        }
 
         // Diet budget
         let db = r.dietBudget
