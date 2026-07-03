@@ -310,6 +310,29 @@ struct APIClient {
             throw APIError.serverError(http.statusCode)
         }
     }
+
+    // MARK: - Daily ingest (1-year backfill + background sync)
+
+    /// Posts day-keyed HealthKit summaries to `/api/ingest/daily`, which
+    /// upserts into `daily_metrics` (unique on user/date/metric) and
+    /// recomputes baselines server-side. Idempotent — re-posting the same
+    /// day is a no-op write, which is what makes chunk retries and resume
+    /// safe. Returns the server-reported upserted row count.
+    func postDailyIngest(days: [DailyIngestDay]) async throws -> Int {
+        guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/ingest/daily") else {
+            throw APIError.invalidURL
+        }
+        var request = authorizedRequest(url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 30
+        request.httpBody = try encoder.encode(DailyIngestRequestBody(days: days))
+        let (data, response) = try await session.data(for: request)
+        if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
+            throw APIError.serverError(http.statusCode)
+        }
+        return try decoder.decode(DailyIngestResponse.self, from: data).upserted
+    }
 }
 
 // MARK: - Errors
@@ -353,6 +376,56 @@ private final class AuthRedirectGuard: NSObject, URLSessionTaskDelegate {
 
 private struct IngestRequestBody: Encodable {
     let deltas: [HealthDelta]
+}
+
+// MARK: - Daily ingest DTOs
+//
+// Mirror app/api/ingest/daily/route.ts's request schema exactly — including
+// its snake_case metric keys — so the encoder can rely on Swift's default
+// key encoding (no CodingKeys needed). Property names ARE the wire format.
+
+/// One day's HealthKit summary, as posted to `/api/ingest/daily`.
+struct DailyIngestDay: Encodable {
+    let date: String // 'YYYY-MM-DD'
+    let metrics: DailyIngestMetrics?
+    let sleep: DailyIngestSleep?
+    let workouts: [DailyIngestWorkout]?
+}
+
+struct DailyIngestMetrics: Encodable {
+    let hrv_sdnn: Double?
+    let resting_hr: Double?
+    let hr_avg: Double?
+    let steps: Double?
+    let active_energy_kcal: Double?
+    let body_mass_kg: Double?
+}
+
+struct DailyIngestSleep: Encodable {
+    let minutes: Int
+    let stages: DailyIngestSleepStages?
+}
+
+struct DailyIngestSleepStages: Encodable {
+    let core: Int?
+    let deep: Int?
+    let rem: Int?
+    let awake: Int?
+}
+
+struct DailyIngestWorkout: Encodable {
+    let hkUuid: String
+    let type: String
+    let durationMin: Double
+    let kcal: Double
+}
+
+private struct DailyIngestRequestBody: Encodable {
+    let days: [DailyIngestDay]
+}
+
+private struct DailyIngestResponse: Decodable {
+    let upserted: Int
 }
 
 // MARK: - Nutrition & Meal
