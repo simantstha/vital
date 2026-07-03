@@ -1,7 +1,8 @@
 import fs from 'fs';
 import path from 'path';
+import { DATA_DIR } from './dataDir';
 
-const FILE = path.resolve(process.cwd(), '.vital-memory/weight-log.json');
+const FILE = path.join(DATA_DIR, '.vital-memory', 'weight-log.json');
 
 export interface WeightEntry {
   date: string;    // "YYYY-MM-DD"

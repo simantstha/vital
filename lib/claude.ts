@@ -2,27 +2,63 @@ import Anthropic from '@anthropic-ai/sdk';
 import fs from 'fs';
 import path from 'path';
 import type { DailyBrief } from './types';
-import type { WhoopHistory } from './whoop';
-import type { RecentActivity, WeeklyLoad } from './strava';
 import { readMemoryFile, writeMemoryFile } from '@/lib/memory';
+import { DATA_DIR } from './dataDir';
+
+// ── Inline types (formerly imported from lib/whoop + lib/strava) ──────────────
+
+interface BriefHistoryDay {
+  date: string;
+  recovery: number;
+  hrv: number;
+  rhr: number;
+  sleepPerf: number;
+  sleepDuration: string;
+}
+
+interface BriefHistory {
+  days: BriefHistoryDay[];
+  avgRecovery7d: number;
+  avgHrv7d: number;
+  trend: 'improving' | 'declining' | 'stable';
+}
+
+interface ActivityRecord {
+  type: 'run' | 'gym' | 'walk';
+  date: string;
+  distanceMi?: string;
+  pace?: string;
+  hr?: number;
+  zone?: string;
+  name: string;
+  durationMin?: number;
+}
+
+interface WeeklyLoadRecord {
+  weekStart: string;
+  runMi: number;
+  walkMi: number;
+  gymMin: number;
+  gymSessions: number;
+}
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-const PROFILE_PATH = path.resolve(process.cwd(), '.vital-memory/user-profile.md');
+const PROFILE_PATH = path.join(DATA_DIR, '.vital-memory', 'user-profile.md');
 
 const SEED_PROFILE = `# Vital — User Profile
 
 ## Goals
-- Primary: Twin Cities Marathon, October 4 2026
+- Primary: [to be filled]
 - Body composition: [performance / weight-loss / muscle-gain — update this]
-- Weekly mileage target: ~35mi/week by race week
+- Weekly training target: [to be filled]
 
 ## Baselines (update as patterns emerge)
-- HRV baseline: ~65ms
-- Resting HR: ~49 bpm
-- Recovery baseline: ~72%
-- Typical hard days: Tuesday, Thursday, Saturday, Sunday (runs)
-- Typical gym days: inferred from Strava
+- HRV baseline: [to be filled]
+- Resting HR: [to be filled]
+- Recovery baseline: [to be filled]
+- Typical hard days: [to be filled]
+- Typical gym days: [to be filled]
 
 ## Dietary Preferences / Constraints
 - (Claude fills this in over time)
@@ -71,10 +107,11 @@ interface BriefContext {
   strain: number | string;
   weeklyMi: number;
   lastRun: { distanceMi: string; pace: string; dayTime: string; name: string } | null;
-  history?: WhoopHistory | null;
-  recentActivities?: RecentActivity[];
-  weeklyMileage?: WeeklyLoad[];
+  history?: BriefHistory | null;
+  recentActivities?: ActivityRecord[];
+  weeklyMileage?: WeeklyLoadRecord[];
   recentNutrition?: Array<{ date: string; calories: number; carbs: number; protein: number; fat: number }>;
+  weightKg?: number;
 }
 
 function updateHrvBaseline(currentAvg: number): void {

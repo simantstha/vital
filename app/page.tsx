@@ -2,8 +2,6 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import type { RecoveryState, MetricsData, DailyBrief } from '@/lib/types';
-import type { StravaData } from '@/lib/strava';
-import type { MFPMacros } from '@/lib/mfp';
 import { parseMarkup } from '@/lib/markup';
 import { STATES, BRIEFS, NUTRITION, MEAL_WINDOWS, MILEAGE } from '@/lib/data';
 import type { MealOverride } from '@/lib/coachState';
@@ -27,67 +25,48 @@ function getRelevantMealIndex(hours: number): number {
 const DESIGN_W = 1920;
 const DESIGN_H = 1080;
 
-// Zero-filled mileage bars (day labels only, no data) used when Strava is offline
+// Zero-filled mileage bars (day labels only, no data) — shown when activity data is absent
 const EMPTY_MILEAGE = MILEAGE.map(d => ({ ...d, mi: 0 }));
 const EMPTY_GYM = MILEAGE.map(d => ({ d: d.d, min: 0, today: d.today }));
 
 export default function DashboardPage() {
-  const [state, setState] = useState<RecoveryState>('green');
-  const [scale, setScale] = useState(1);
-  const [whoopMetrics, setWhoopMetrics] = useState<MetricsData | null>(null);
-  const [weightKg, setWeightKg] = useState<number | null>(null);
-  const [stravaData, setStravaData] = useState<StravaData | null>(null);
+  const [state, setState]           = useState<RecoveryState>('green');
+  const [scale, setScale]           = useState(1);
+  const [whoopMetrics]              = useState<MetricsData | null>(null);   // populated by HealthKit in v2
+  const [weightKg]                  = useState<number | null>(null);
   const [dailyBrief, setDailyBrief] = useState<DailyBrief | null>(null);
-  const [mfpMacros, setMfpMacros] = useState<MFPMacros | null>(null);
 
-  const [whoopStatus, setWhoopStatus] = useState<DataStatus>('loading');
-  const [stravaStatus, setStravaStatus] = useState<DataStatus>('loading');
+  const [whoopStatus]               = useState<DataStatus>('error');        // Whoop removed
+  const [stravaStatus]              = useState<DataStatus>('error');        // Strava removed
   const [briefStatus, setBriefStatus] = useState<DataStatus>('loading');
-  const [mfpStatus, setMfpStatus] = useState<DataStatus>('loading');
+  const [mfpStatus]                 = useState<DataStatus>('error');        // MFP removed
   const [mealOverrides, setMealOverrides] = useState<MealOverride[]>([]);
 
+  // Fetch daily brief from Postgres-backed endpoint
   useEffect(() => {
-    fetch('/api/whoop')
-      .then(r => r.json())
-      .then(({ metrics, recoveryScore, bodyMeasurement }: { metrics: MetricsData; recoveryScore: number; bodyMeasurement?: { weightKg?: number } }) => {
-        setWhoopMetrics(metrics);
-        if (bodyMeasurement?.weightKg) setWeightKg(bodyMeasurement.weightKg);
-        setWhoopStatus('live');
-        if (recoveryScore >= 67) setState('green');
-        else if (recoveryScore >= 34) setState('amber');
-        else setState('red');
-      })
-      .catch(() => setWhoopStatus('error'));
-
-    fetch('/api/strava')
-      .then(r => r.json())
-      .then((data: StravaData & { error?: string }) => {
-        if (data.error) { setStravaStatus('error'); return; }
-        setStravaData(data);
-        setStravaStatus('live');
-      })
-      .catch(() => setStravaStatus('error'));
-
     fetch('/api/brief')
       .then(r => r.json())
       .then((data: DailyBrief & { error?: string }) => {
         if ('error' in data) { setBriefStatus('error'); return; }
         setDailyBrief(data);
         setBriefStatus('live');
+        // Derive recovery state from brief chip if present
+        const recovChip = data.chips?.find(
+          c => c.k.toLowerCase().includes('recover') || c.k.toLowerCase().includes('hrv'),
+        );
+        if (recovChip) {
+          const v = parseInt(recovChip.v, 10);
+          if (!isNaN(v)) {
+            if (v >= 67) setState('green');
+            else if (v >= 34) setState('amber');
+            else setState('red');
+          }
+        }
       })
       .catch(() => setBriefStatus('error'));
-
-    fetch('/api/mfp')
-      .then(r => r.json())
-      .then((data: MFPMacros & { error?: string }) => {
-        if (data.error) { setMfpStatus('error'); return; }
-        setMfpMacros(data);
-        setMfpStatus('live');
-      })
-      .catch(() => setMfpStatus('error'));
   }, []);
 
-  // Poll coach state (Telegram bot meal overrides) every 30s
+  // Poll coach state (Telegram bot meal overrides) every 30 s
   useEffect(() => {
     const poll = () =>
       fetch('/api/coach-state')
@@ -108,16 +87,14 @@ export default function DashboardPage() {
     return () => window.removeEventListener('resize', updateScale);
   }, []);
 
-  const cfg = STATES[state];
-  // mock brief/nutrition used only for palette-driven static content (chip icons, quote)
-  const brief = BRIEFS[state];
+  const cfg       = STATES[state];
+  const brief     = BRIEFS[state];
   const nutrition = NUTRITION[state];
 
-  const now = useClock();
-  const hours = now.getHours() + now.getMinutes() / 60;
+  const now        = useClock();
+  const hours      = now.getHours() + now.getMinutes() / 60;
   const relevantIdx = getRelevantMealIndex(hours);
 
-  // Meals come from real brief only — empty when loading/error so NutritionPanel shows correct state
   const meals = useMemo(() => {
     if (!dailyBrief) return [];
     return dailyBrief.meals.map((m, i) => ({
@@ -130,21 +107,13 @@ export default function DashboardPage() {
     }));
   }, [relevantIdx, dailyBrief]);
 
-  const mileage         = stravaData?.mileage         ?? EMPTY_MILEAGE;
-  const walkMileage     = stravaData?.walkMileage     ?? EMPTY_MILEAGE;
-  const gymMinutes      = stravaData?.gymMinutes      ?? EMPTY_GYM;
-  const totalMi         = stravaData?.totalMi         ?? 0;
-  const totalWalkMi     = stravaData?.totalWalkMi     ?? 0;
-  const totalGymMin     = stravaData?.totalGymMin     ?? 0;
-  const gymSessionCount = stravaData?.gymSessionCount ?? 0;
-
   // Apply CSS variables on state change
   useEffect(() => {
     const root = document.documentElement;
-    root.style.setProperty('--c1', cfg.palette.c1);
-    root.style.setProperty('--c2', cfg.palette.c2);
-    root.style.setProperty('--c3', cfg.palette.c3);
-    root.style.setProperty('--glow', cfg.palette.glow);
+    root.style.setProperty('--c1',     cfg.palette.c1);
+    root.style.setProperty('--c2',     cfg.palette.c2);
+    root.style.setProperty('--c3',     cfg.palette.c3);
+    root.style.setProperty('--glow',   cfg.palette.glow);
     root.style.setProperty('--bg-tint', cfg.palette.tint);
   }, [state, cfg]);
 
@@ -165,15 +134,15 @@ export default function DashboardPage() {
         <MetricsRow metrics={whoopMetrics} status={whoopStatus} />
         <div className="lower">
           <StravaPanel
-            mileage={mileage}
-            walkMileage={walkMileage}
-            gymMinutes={gymMinutes}
-            totalMi={totalMi}
-            totalWalkMi={totalWalkMi}
-            totalGymMin={totalGymMin}
-            gymSessionCount={gymSessionCount}
-            lastRun={stravaData?.lastRun ?? null}
-            lastWorkout={stravaData?.lastWorkout ?? null}
+            mileage={EMPTY_MILEAGE}
+            walkMileage={EMPTY_MILEAGE}
+            gymMinutes={EMPTY_GYM}
+            totalMi={0}
+            totalWalkMi={0}
+            totalGymMin={0}
+            gymSessionCount={0}
+            lastRun={null}
+            lastWorkout={null}
             status={stravaStatus}
           />
           <NutritionPanel
@@ -181,7 +150,7 @@ export default function DashboardPage() {
             meals={meals}
             relevantIdx={relevantIdx}
             generatedAt={dailyBrief?.generatedAt ?? null}
-            mfpMacros={mfpMacros}
+            mfpMacros={null}
             briefStatus={briefStatus}
             mfpStatus={mfpStatus}
             mealOverrides={mealOverrides}

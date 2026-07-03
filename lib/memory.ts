@@ -1,8 +1,9 @@
 import fs from 'fs';
 import path from 'path';
 import type { Tool } from '@anthropic-ai/sdk/resources/messages';
+import { DATA_DIR } from './dataDir';
 
-const MEMORY_DIR = path.resolve(process.cwd(), '.vital-memory');
+const MEMORY_DIR = path.join(DATA_DIR, '.vital-memory');
 
 const ALLOWED_FILES = [
   'memory-index.md',

@@ -1,8 +1,25 @@
 'use client';
 
 import type { MileageDay, MinutesDay } from '@/lib/types';
-import type { LastRun, LastWorkout } from '@/lib/strava';
 import { TARGET_MI } from '@/lib/data';
+
+/** Last run summary (previously from lib/strava, now from Postgres events). */
+interface LastRun {
+  distanceMi: string;
+  pace: string;
+  hr?: number;
+  zone?: string;
+  name: string;
+  dayTime: string;
+}
+
+/** Last non-run workout summary (previously from lib/strava, now from Postgres events). */
+interface LastWorkout {
+  type: 'gym' | 'walk';
+  name: string;
+  dayTime: string;
+  durationMin: number;
+}
 
 type DataStatus = 'loading' | 'live' | 'error';
 
