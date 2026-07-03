@@ -22,6 +22,7 @@ import { NextResponse } from 'next/server';
 import { db, schema } from '@/db';
 import { eq } from 'drizzle-orm';
 import { getUserIdFromRequest } from '@/lib/auth';
+import { getCalibration } from '@/lib/brain/baselines';
 
 export const dynamic = 'force-dynamic';
 
@@ -48,9 +49,10 @@ export async function GET(request: Request): Promise<NextResponse> {
   }
 
   // Fetch all events for this user (profile stats span all time)
-  const [allEvents, userRow] = await Promise.all([
+  const [allEvents, userRow, calibration] = await Promise.all([
     db.select().from(schema.events).where(eq(schema.events.user_id, userId)),
     db.select({ name: schema.users.name }).from(schema.users).where(eq(schema.users.id, userId)).limit(1),
+    getCalibration(userId),
   ]);
   const name = userRow[0]?.name ?? 'Vital User';
 
@@ -96,5 +98,6 @@ export async function GET(request: Request): Promise<NextResponse> {
       avgHrv,
       workouts,
     },
+    calibration,
   });
 }

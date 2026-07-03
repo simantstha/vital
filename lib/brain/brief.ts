@@ -12,6 +12,7 @@
 import { db, schema } from '@/db';
 import { eq, and, gte, desc } from 'drizzle-orm';
 import { generateDailyBrief } from '@/lib/claude';
+import { getCalibration, type BaselineStats } from '@/lib/brain/baselines';
 import type { DailyBrief } from '@/lib/types';
 
 // ── Payload helpers ─────────────────────────────────────────────────────────
@@ -50,17 +51,26 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
   const sevenDaysAgo = new Date(todayStart);
   sevenDaysAgo.setUTCDate(sevenDaysAgo.getUTCDate() - 7);
 
-  // Fetch all recent events in one query
-  const events = await db
-    .select()
-    .from(schema.events)
-    .where(
-      and(
-        eq(schema.events.user_id, userId),
-        gte(schema.events.timestamp, eightWeeksAgo),
-      ),
-    )
-    .orderBy(desc(schema.events.timestamp));
+  // Fetch all recent events in one query, plus the hrv_sdnn baseline row +
+  // calibration status (both cheap point-reads off the baselines table).
+  const [events, hrvBaselineRow, calibration] = await Promise.all([
+    db
+      .select()
+      .from(schema.events)
+      .where(
+        and(
+          eq(schema.events.user_id, userId),
+          gte(schema.events.timestamp, eightWeeksAgo),
+        ),
+      )
+      .orderBy(desc(schema.events.timestamp)),
+    db
+      .select({ stats: schema.baselines.stats })
+      .from(schema.baselines)
+      .where(and(eq(schema.baselines.user_id, userId), eq(schema.baselines.metric, 'hrv_sdnn')))
+      .limit(1),
+    getCalibration(userId),
+  ]);
 
   const todayEvents   = events.filter(e => e.timestamp >= todayStart);
   const recentEvents  = events.filter(e => e.timestamp >= sevenDaysAgo && e.timestamp < todayStart);
@@ -98,10 +108,16 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
     .map(e => num(pl(e.payload).value) ?? num(pl(e.payload).hrv))
     .filter((v): v is number => v != null);
 
+  // Prefer the daily_metrics-derived 30-day baseline (lib/brain/baselines.ts);
+  // fall back to the 7-day event-based estimate when no baseline row exists yet
+  // (e.g. brand-new user before any /api/ingest/daily has run).
+  const baselineStats = hrvBaselineRow[0]?.stats as BaselineStats | undefined;
   const baselineHrv =
-    hrvReadings7d.length > 0
-      ? Math.round(hrvReadings7d.reduce((a, b) => a + b, 0) / hrvReadings7d.length)
-      : 65;
+    baselineStats?.mean30 != null
+      ? Math.round(baselineStats.mean30)
+      : hrvReadings7d.length > 0
+        ? Math.round(hrvReadings7d.reduce((a, b) => a + b, 0) / hrvReadings7d.length)
+        : 65;
 
   const hrvScore   = Math.min(100, Math.round((hrv / baselineHrv) * 70));
   const sleepScore = Math.round((sleepEff / 100) * 30);
@@ -356,5 +372,6 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
     weeklyMileage,
     recentNutrition,
     weightKg,
+    calibrating: calibration.status === 'calibrating',
   });
 }
