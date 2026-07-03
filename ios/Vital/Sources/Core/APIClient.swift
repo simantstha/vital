@@ -151,7 +151,7 @@ struct APIClient {
 
     // MARK: - Coach (SSE streaming)
 
-    func streamCoach(message: String, imageBase64: String? = nil) -> AsyncThrowingStream<String, Error> {
+    func streamCoach(message: String, imageBase64: String? = nil) -> AsyncThrowingStream<CoachStreamEvent, Error> {
         AsyncThrowingStream { continuation in
             Task {
                 do {
@@ -185,12 +185,20 @@ struct APIClient {
                         switch event.type {
                         case "text":
                             if let delta = event.delta {
-                                continuation.yield(delta)
+                                continuation.yield(.text(delta))
                             }
+                        case "tool_call":
+                            // Requires id/name/status; unrecognized shapes are dropped
+                            // rather than crashing the stream.
+                            guard let id = event.id, let name = event.name, let status = event.status else { break }
+                            let label = event.label ?? name
+                            continuation.yield(.toolCall(id: id, name: name, label: label, done: status == "done"))
                         case "done":
                             continuation.finish()
                             return
                         default:
+                            // Forward-compatible: unknown event types are ignored so the
+                            // stream stays robust to backend additions.
                             break
                         }
                     }
@@ -487,4 +495,17 @@ private struct SSEEvent: Decodable {
     let type: String
     let delta: String?
     let messageId: String?
+    // tool_call fields
+    let id: String?
+    let name: String?
+    let label: String?
+    let status: String?
+}
+
+/// A single event surfaced from the coach SSE stream: either a text delta to
+/// append to the streaming reply, or a tool-call lifecycle update (started/done)
+/// that the UI renders as an inline activity row.
+enum CoachStreamEvent {
+    case text(String)
+    case toolCall(id: String, name: String, label: String, done: Bool)
 }

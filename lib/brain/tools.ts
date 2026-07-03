@@ -5,19 +5,34 @@
  * functions backed by Drizzle. All math is computed in code, never by the LLM.
  *
  * Tool inventory:
- *   query_events      — read events table by type + date range
- *   query_ontology    — read nodes/edges
- *   calculate_macros  — deterministic TDEE + macro split (no LLM math)
- *   remember_fact     — write node/edge to ontology (weight 0.6)
- *   confirm_fact      — resolve a pending_fact to confirmed/rejected
- *   log_meal          — nutrition lookup → meal_logged event
+ *   query_events       — read events table by type + date range
+ *   query_ontology     — read nodes/edges
+ *   calculate_macros   — deterministic TDEE + macro split (no LLM math)
+ *   remember_fact      — write node/edge to ontology (weight 0.6)
+ *   confirm_fact       — resolve a pending_fact to confirmed/rejected
+ *   log_meal           — nutrition lookup → meal_logged event
+ *   get_metric_trend   — daily_metrics trend + mean/min/max + baseline direction
+ *   get_sleep_summary  — nightly sleep minutes + stages + consistency
+ *   get_workouts       — workout list from the workouts metric payload
+ *   get_baseline       — baselines row for one metric
+ *   compare_periods    — current vs. offset period means + delta
+ *
+ * Design rule (Phase 3): the coach prompt carries only small durable facts
+ * (profile, baselines snapshot, calibration, today's numbers — see context.ts).
+ * All time-series health data is tool-only — the five data tools above
+ * (get_metric_trend, get_sleep_summary, get_workouts, get_baseline,
+ * compare_periods) are the only way the coach reads daily_metrics/baselines.
+ * The plain query-helper functions below are exported so other server code
+ * (e.g. lib/brain/brief.ts) can reuse the same aggregation instead of
+ * duplicating it.
  */
 
 import type { Tool } from '@anthropic-ai/sdk/resources/messages';
 import { db, schema } from '@/db';
-import { eq, and, gte, desc } from 'drizzle-orm';
+import { eq, and, gte, lt, asc, desc } from 'drizzle-orm';
 import { lookupNutrition } from '@/lib/nutritionix';
 import { lookupBarcode } from '@/lib/openFoodFacts';
+import type { BaselineStats } from '@/lib/brain/baselines';
 
 // ── Tool definitions (Anthropic API schema) ────────────────────────────────
 
@@ -180,6 +195,111 @@ export const BRAIN_TOOLS: Tool[] = [
       required: ['text'],
     },
   },
+  {
+    name: 'get_metric_trend',
+    description:
+      'Get the daily trend for a single HealthKit metric over a date range, with ' +
+      'mean/min/max and a direction call vs. the user\'s 30-day baseline. Use this ' +
+      'whenever the user asks how a metric "has been" — never invent numbers.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        metric: {
+          type: 'string',
+          description:
+            'One of: hrv_sdnn, resting_hr, hr_avg, steps, active_energy_kcal, ' +
+            'body_mass_kg, sleep_minutes.',
+        },
+        days: {
+          type: 'number',
+          description: 'How many days back to look (max 90).',
+        },
+      },
+      required: ['metric', 'days'],
+    },
+  },
+  {
+    name: 'get_sleep_summary',
+    description:
+      'Get nightly sleep minutes + stage breakdown for the last N days, plus a ' +
+      'consistency read (standard deviation of nightly minutes). Use for any ' +
+      'question about sleep duration, quality, or regularity.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        days: {
+          type: 'number',
+          description: 'How many nights back to look (max 30).',
+        },
+      },
+      required: ['days'],
+    },
+  },
+  {
+    name: 'get_workouts',
+    description:
+      'List the user\'s logged workouts over the last N days (type, duration, ' +
+      'calories, etc., as captured from HealthKit). Use for any question about ' +
+      'training history or recent sessions.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        days: {
+          type: 'number',
+          description: 'How many days back to look (max 30).',
+        },
+      },
+      required: ['days'],
+    },
+  },
+  {
+    name: 'get_baseline',
+    description:
+      'Get the current baseline stats (7/30/60-day means, sd, percentiles) for a ' +
+      'single metric, plus whether it\'s established (>= 14 days of data) and how ' +
+      'many days of data back it. Use to ground any claim about "normal for you".',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        metric: {
+          type: 'string',
+          description:
+            'One of: hrv_sdnn, resting_hr, hr_avg, steps, active_energy_kcal, ' +
+            'body_mass_kg, sleep_minutes, workouts.',
+        },
+      },
+      required: ['metric'],
+    },
+  },
+  {
+    name: 'compare_periods',
+    description:
+      'Compare a metric\'s mean over a recent period against an earlier period of ' +
+      'the same length (e.g. this week vs. last week). Use for any "vs last week" / ' +
+      '"has this gotten better/worse" question.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        metric: {
+          type: 'string',
+          description:
+            'One of: hrv_sdnn, resting_hr, hr_avg, steps, active_energy_kcal, ' +
+            'body_mass_kg, sleep_minutes.',
+        },
+        periodDays: {
+          type: 'number',
+          description: 'Length of each period in days (max 30). E.g. 7 for week-over-week.',
+        },
+        offsetDays: {
+          type: 'number',
+          description:
+            'How many days back the earlier period starts, relative to today. ' +
+            'Usually equal to periodDays (e.g. 7/7 = this week vs. the week before).',
+        },
+      },
+      required: ['metric', 'periodDays', 'offsetDays'],
+    },
+  },
 ];
 
 // ── Deterministic macro math ──────────────────────────────────────────────────
@@ -284,6 +404,365 @@ function predicateFor(nodeType: string): string {
     LabMarker:      'last_value',
   };
   return map[nodeType] ?? 'related_to';
+}
+
+// ── Metric label helper (shared: tool_call SSE labels + prompt formatting) ────
+
+const METRIC_LABELS: Record<string, string> = {
+  hrv_sdnn:            'HRV',
+  resting_hr:          'resting heart rate',
+  hr_avg:              'heart rate',
+  steps:               'steps',
+  active_energy_kcal:  'active energy',
+  body_mass_kg:        'weight',
+  sleep_minutes:       'sleep',
+  workouts:            'workouts',
+};
+
+export function metricLabel(metric: string): string {
+  return METRIC_LABELS[metric] ?? metric;
+}
+
+const EVENT_TYPE_LABELS: Record<string, string> = {
+  hrv_reading:        'HRV readings',
+  sleep_session:      'sleep sessions',
+  workout_completed:  'workouts',
+  steps_recorded:     'step counts',
+  meal_logged:        'meals',
+  weight_logged:      'weight logs',
+};
+
+/** Human label for an in-flight tool call, surfaced via SSE tool_call events. */
+export function toolCallLabel(name: string, input: Record<string, unknown>): string {
+  switch (name) {
+    case 'query_events':
+      return `Checking your ${EVENT_TYPE_LABELS[String(input.type ?? '')] ?? 'recent activity'}…`;
+    case 'query_ontology':
+      return 'Looking up what I know about you…';
+    case 'calculate_macros':
+      return 'Crunching your macros…';
+    case 'remember_fact':
+      return 'Remembering that…';
+    case 'confirm_fact':
+      return 'Updating that…';
+    case 'log_meal':
+      return 'Logging your meal…';
+    case 'get_metric_trend':
+      return `Checking your ${metricLabel(String(input.metric ?? ''))} trend…`;
+    case 'get_sleep_summary':
+      return 'Looking at your sleep…';
+    case 'get_workouts':
+      return 'Pulling up your workouts…';
+    case 'get_baseline':
+      return `Checking your ${metricLabel(String(input.metric ?? ''))} baseline…`;
+    case 'compare_periods':
+      return 'Comparing periods…';
+    default:
+      return 'Working on it…';
+  }
+}
+
+// ── daily_metrics / baselines query helpers ────────────────────────────────────
+// Plain functions (no Anthropic tool binding) so both the tool executor below
+// and lib/brain/brief.ts can share one aggregation implementation.
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+function isoDateDaysAgo(days: number): string {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() - days);
+  return d.toISOString().split('T')[0];
+}
+
+export interface MetricPoint {
+  date:  string;
+  value: number;
+}
+
+/** Raw daily_metrics rows (date, value) for one metric over the trailing window. */
+export async function queryMetricPoints(
+  userId: string,
+  metric: string,
+  days: number,
+): Promise<MetricPoint[]> {
+  const since = isoDateDaysAgo(days);
+  const rows = await db
+    .select({ date: schema.daily_metrics.date, value: schema.daily_metrics.value })
+    .from(schema.daily_metrics)
+    .where(
+      and(
+        eq(schema.daily_metrics.user_id, userId),
+        eq(schema.daily_metrics.metric, metric),
+        gte(schema.daily_metrics.date, since),
+      ),
+    )
+    .orderBy(asc(schema.daily_metrics.date));
+
+  return rows.map(r => ({ date: r.date, value: r.value }));
+}
+
+export interface BaselineSnapshot {
+  metric:      string;
+  stats:       BaselineStats | null;
+  established: boolean;
+  dataDays:    number;
+}
+
+/** Single (user, metric) row from `baselines`, or null if none exists yet. */
+export async function queryBaseline(
+  userId: string,
+  metric: string,
+): Promise<BaselineSnapshot | null> {
+  const [row] = await db
+    .select({
+      stats:       schema.baselines.stats,
+      established: schema.baselines.established,
+      data_days:   schema.baselines.data_days,
+    })
+    .from(schema.baselines)
+    .where(and(eq(schema.baselines.user_id, userId), eq(schema.baselines.metric, metric)))
+    .limit(1);
+
+  if (!row) return null;
+  return {
+    metric,
+    stats:       row.stats as BaselineStats | null,
+    established: row.established,
+    dataDays:    row.data_days,
+  };
+}
+
+/** All baseline rows for a user — used for the small context.ts snapshot. */
+export async function queryAllBaselines(userId: string): Promise<BaselineSnapshot[]> {
+  const rows = await db
+    .select({
+      metric:      schema.baselines.metric,
+      stats:       schema.baselines.stats,
+      established: schema.baselines.established,
+      data_days:   schema.baselines.data_days,
+    })
+    .from(schema.baselines)
+    .where(eq(schema.baselines.user_id, userId));
+
+  return rows.map(r => ({
+    metric:      r.metric,
+    stats:       r.stats as BaselineStats | null,
+    established: r.established,
+    dataDays:    r.data_days,
+  }));
+}
+
+export interface MetricTrend {
+  metric:     string;
+  days:       number;
+  points:     MetricPoint[];
+  stats:      { mean: number | null; min: number | null; max: number | null };
+  baseline:   { mean30: number | null; established: boolean } | null;
+  direction:  'above' | 'below' | 'similar' | 'unknown';
+}
+
+export async function queryMetricTrend(
+  userId: string,
+  metric: string,
+  days: number,
+): Promise<MetricTrend> {
+  const clampedDays = Math.max(1, Math.min(90, Math.round(days)));
+
+  const [points, baseline] = await Promise.all([
+    queryMetricPoints(userId, metric, clampedDays),
+    queryBaseline(userId, metric),
+  ]);
+
+  const values = points.map(p => p.value);
+  const mean = values.length ? values.reduce((a, b) => a + b, 0) / values.length : null;
+  const min  = values.length ? Math.min(...values) : null;
+  const max  = values.length ? Math.max(...values) : null;
+
+  let direction: MetricTrend['direction'] = 'unknown';
+  const baselineMean = baseline?.stats?.mean30 ?? null;
+  if (mean != null && baselineMean != null && baselineMean !== 0) {
+    const pctDiff = (mean - baselineMean) / baselineMean;
+    direction = pctDiff > 0.05 ? 'above' : pctDiff < -0.05 ? 'below' : 'similar';
+  }
+
+  return {
+    metric,
+    days: clampedDays,
+    points,
+    stats: {
+      mean: mean != null ? round2(mean) : null,
+      min,
+      max,
+    },
+    baseline: baseline
+      ? { mean30: baseline.stats?.mean30 ?? null, established: baseline.established }
+      : null,
+    direction,
+  };
+}
+
+export interface SleepNight {
+  date:    string;
+  minutes: number;
+  stages:  unknown;
+}
+
+export interface SleepSummary {
+  days:        number;
+  nights:      SleepNight[];
+  meanMinutes: number | null;
+  sd:          number | null;
+  consistency: 'consistent' | 'variable' | 'unknown';
+}
+
+export async function querySleepSummary(userId: string, days: number): Promise<SleepSummary> {
+  const clampedDays = Math.max(1, Math.min(30, Math.round(days)));
+  const since = isoDateDaysAgo(clampedDays);
+
+  const rows = await db
+    .select({
+      date:    schema.daily_metrics.date,
+      value:   schema.daily_metrics.value,
+      payload: schema.daily_metrics.payload,
+    })
+    .from(schema.daily_metrics)
+    .where(
+      and(
+        eq(schema.daily_metrics.user_id, userId),
+        eq(schema.daily_metrics.metric, 'sleep_minutes'),
+        gte(schema.daily_metrics.date, since),
+      ),
+    )
+    .orderBy(asc(schema.daily_metrics.date));
+
+  const nights: SleepNight[] = rows.map(r => ({ date: r.date, minutes: r.value, stages: r.payload }));
+  const minutesArr = nights.map(n => n.minutes);
+
+  const meanMinutes = minutesArr.length
+    ? minutesArr.reduce((a, b) => a + b, 0) / minutesArr.length
+    : null;
+
+  let sd: number | null = null;
+  if (minutesArr.length > 1 && meanMinutes != null) {
+    const variance =
+      minutesArr.reduce((s, v) => s + (v - meanMinutes) ** 2, 0) / (minutesArr.length - 1);
+    sd = Math.sqrt(variance);
+  }
+
+  const consistency: SleepSummary['consistency'] =
+    sd == null ? 'unknown' : sd < 30 ? 'consistent' : 'variable';
+
+  return {
+    days: clampedDays,
+    nights,
+    meanMinutes: meanMinutes != null ? round2(meanMinutes) : null,
+    sd: sd != null ? round2(sd) : null,
+    consistency,
+  };
+}
+
+export interface WorkoutEntry {
+  date: string;
+  [key: string]: unknown;
+}
+
+export async function queryWorkouts(userId: string, days: number): Promise<WorkoutEntry[]> {
+  const clampedDays = Math.max(1, Math.min(30, Math.round(days)));
+  const since = isoDateDaysAgo(clampedDays);
+
+  const rows = await db
+    .select({ date: schema.daily_metrics.date, payload: schema.daily_metrics.payload })
+    .from(schema.daily_metrics)
+    .where(
+      and(
+        eq(schema.daily_metrics.user_id, userId),
+        eq(schema.daily_metrics.metric, 'workouts'),
+        gte(schema.daily_metrics.date, since),
+      ),
+    )
+    .orderBy(desc(schema.daily_metrics.date));
+
+  const workouts: WorkoutEntry[] = [];
+  for (const row of rows) {
+    const list = Array.isArray(row.payload) ? (row.payload as Record<string, unknown>[]) : [];
+    for (const w of list) workouts.push({ date: row.date, ...w });
+  }
+  return workouts;
+}
+
+export interface PeriodComparison {
+  metric:     string;
+  periodDays: number;
+  offsetDays: number;
+  current:    { mean: number | null; days: number };
+  previous:   { mean: number | null; days: number };
+  delta:      number | null;
+  deltaPct:   number | null;
+}
+
+export async function queryComparePeriods(
+  userId: string,
+  metric: string,
+  periodDays: number,
+  offsetDays: number,
+): Promise<PeriodComparison> {
+  const clampedPeriod = Math.max(1, Math.min(30, Math.round(periodDays)));
+  const clampedOffset = Math.max(1, Math.round(offsetDays) || clampedPeriod);
+
+  const currentSince  = isoDateDaysAgo(clampedPeriod);
+  const previousUntil = isoDateDaysAgo(clampedOffset);
+  const previousSince = isoDateDaysAgo(clampedOffset + clampedPeriod);
+
+  const [currentRows, previousRows] = await Promise.all([
+    db
+      .select({ value: schema.daily_metrics.value })
+      .from(schema.daily_metrics)
+      .where(
+        and(
+          eq(schema.daily_metrics.user_id, userId),
+          eq(schema.daily_metrics.metric, metric),
+          gte(schema.daily_metrics.date, currentSince),
+        ),
+      ),
+    db
+      .select({ value: schema.daily_metrics.value })
+      .from(schema.daily_metrics)
+      .where(
+        and(
+          eq(schema.daily_metrics.user_id, userId),
+          eq(schema.daily_metrics.metric, metric),
+          gte(schema.daily_metrics.date, previousSince),
+          lt(schema.daily_metrics.date, previousUntil),
+        ),
+      ),
+  ]);
+
+  const currentVals  = currentRows.map(r => r.value);
+  const previousVals = previousRows.map(r => r.value);
+
+  const currentMean = currentVals.length
+    ? currentVals.reduce((a, b) => a + b, 0) / currentVals.length
+    : null;
+  const previousMean = previousVals.length
+    ? previousVals.reduce((a, b) => a + b, 0) / previousVals.length
+    : null;
+
+  const delta =
+    currentMean != null && previousMean != null ? currentMean - previousMean : null;
+  const deltaPct =
+    delta != null && previousMean ? (delta / previousMean) * 100 : null;
+
+  return {
+    metric,
+    periodDays: clampedPeriod,
+    offsetDays: clampedOffset,
+    current:  { mean: currentMean != null ? round2(currentMean) : null, days: currentVals.length },
+    previous: { mean: previousMean != null ? round2(previousMean) : null, days: previousVals.length },
+    delta: delta != null ? round2(delta) : null,
+    deltaPct: deltaPct != null ? round2(deltaPct) : null,
+  };
 }
 
 // ── Tool executor ─────────────────────────────────────────────────────────────
@@ -501,6 +980,48 @@ export async function executeToolCall(
       f: nutrition.f,
       foods: nutrition.foods,
     });
+  }
+
+  // ── get_metric_trend ──────────────────────────────────────────────────────
+  if (name === 'get_metric_trend') {
+    const metric = String(input.metric ?? '');
+    const days   = Number(input.days ?? 7);
+    if (!metric) return 'Error: metric is required.';
+
+    return JSON.stringify(await queryMetricTrend(userId, metric, days));
+  }
+
+  // ── get_sleep_summary ─────────────────────────────────────────────────────
+  if (name === 'get_sleep_summary') {
+    const days = Number(input.days ?? 7);
+    return JSON.stringify(await querySleepSummary(userId, days));
+  }
+
+  // ── get_workouts ──────────────────────────────────────────────────────────
+  if (name === 'get_workouts') {
+    const days = Number(input.days ?? 7);
+    return JSON.stringify(await queryWorkouts(userId, days));
+  }
+
+  // ── get_baseline ──────────────────────────────────────────────────────────
+  if (name === 'get_baseline') {
+    const metric = String(input.metric ?? '');
+    if (!metric) return 'Error: metric is required.';
+
+    const baseline = await queryBaseline(userId, metric);
+    return JSON.stringify(
+      baseline ?? { metric, stats: null, established: false, dataDays: 0 },
+    );
+  }
+
+  // ── compare_periods ───────────────────────────────────────────────────────
+  if (name === 'compare_periods') {
+    const metric     = String(input.metric ?? '');
+    const periodDays = Number(input.periodDays ?? 7);
+    const offsetDays = Number(input.offsetDays ?? periodDays);
+    if (!metric) return 'Error: metric is required.';
+
+    return JSON.stringify(await queryComparePeriods(userId, metric, periodDays, offsetDays));
   }
 
   return `Unknown tool: ${name}`;

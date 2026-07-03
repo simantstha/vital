@@ -6,18 +6,22 @@
  *   2. Assembles context deterministically from Postgres
  *   3. Runs the Claude streaming tool-use loop (multi-turn, server-side)
  *   4. Yields text deltas as { type: 'text', text: string }
- *   5. Persists the completed assistant message
- *   6. Yields { type: 'done', messageId: string } as the final event
+ *   5. Yields { type: 'tool_call', id, name, label, status } around every tool
+ *      execution (memory tools + the daily_metrics/baselines data tools in
+ *      tools.ts) so the client can render a live "checking your..." indicator
+ *   6. Persists the completed assistant message
+ *   7. Yields { type: 'done', messageId: string } as the final event
  *
  * The caller (app/api/coach/route.ts) turns these events into SSE lines.
  */
 
+import { randomUUID } from 'node:crypto';
 import Anthropic from '@anthropic-ai/sdk';
 import type { MessageParam } from '@anthropic-ai/sdk/resources/messages';
 import { db, schema } from '@/db';
 import { assembleContext } from './context';
 import { assemblePersona } from './persona';
-import { BRAIN_TOOLS, executeToolCall } from './tools';
+import { BRAIN_TOOLS, executeToolCall, toolCallLabel } from './tools';
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -29,6 +33,7 @@ const MAX_ROUNDS   = 10;   // max tool-use iterations before hard stop
 
 export type CoachEvent =
   | { type: 'text'; text: string }
+  | { type: 'tool_call'; id: string; name: string; label: string; status: 'started' | 'done' }
   | { type: 'done'; messageId: string };
 
 // ── Main export ───────────────────────────────────────────────────────────────
@@ -133,21 +138,22 @@ export async function* runCoach(
       (b): b is Extract<typeof b, { type: 'tool_use' }> => b.type === 'tool_use',
     );
 
-    const toolResults = await Promise.all(
-      toolBlocks.map(async block => {
-        toolCallLog.push({ name: block.name, input: block.input });
-        const result = await executeToolCall(
-          block.name,
-          block.input as Record<string, unknown>,
-          userId,
-        );
-        return {
-          type:        'tool_result' as const,
-          tool_use_id: block.id,
-          content:     result,
-        };
-      }),
-    );
+    // Sequential (not Promise.all) so each tool's started/done SSE pair
+    // brackets its own execution — the iOS chat UI renders these live.
+    const toolResults: Array<{ type: 'tool_result'; tool_use_id: string; content: string }> = [];
+    for (const block of toolBlocks) {
+      const input = block.input as Record<string, unknown>;
+      const callId = randomUUID();
+      const label  = toolCallLabel(block.name, input);
+
+      toolCallLog.push({ name: block.name, input });
+      yield { type: 'tool_call', id: callId, name: block.name, label, status: 'started' };
+
+      const result = await executeToolCall(block.name, input, userId);
+
+      yield { type: 'tool_call', id: callId, name: block.name, label, status: 'done' };
+      toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: result });
+    }
 
     messages.push({ role: 'user', content: toolResults });
     // Reset accumulated text — the next turn is the new response
