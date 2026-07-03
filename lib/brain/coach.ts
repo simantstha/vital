@@ -66,7 +66,12 @@ export async function* runCoach(
   const ctx = await assembleContext(userId);
 
   // 3. Build persona and tool list ───────────────────────────────────────────
-  const systemPrompt = assemblePersona(ctx.hardConstraints, undefined, isOnboarding);
+  const systemPrompt = assemblePersona(
+    ctx.hardConstraints,
+    undefined,
+    isOnboarding,
+    ctx.calibration,
+  );
   const tools = isOnboarding ? [...BRAIN_TOOLS, ...MEMORY_TOOLS] : BRAIN_TOOLS;
 
   // 4. Build the initial user message content ───────────────────────────────

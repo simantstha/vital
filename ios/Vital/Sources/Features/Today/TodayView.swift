@@ -20,6 +20,7 @@ struct TodayView: View {
                             .frame(maxWidth: .infinity)
                             .padding(.top, 60)
                     } else {
+                        calibrationCard
                         chipRow
                         pendingFactsBanner
                         CoachBubble(message: vm.coachInsight)
@@ -117,6 +118,29 @@ private extension TodayView {
             Text(vm.dateSubtitle)
                 .font(Theme.Typography.bodySmall)
                 .foregroundStyle(Theme.Colors.textSecondary)
+        }
+    }
+
+    // ── Calibration card ────────────────────────────────────────────────────
+
+    @ViewBuilder
+    var calibrationCard: some View {
+        if vm.calibrationStatus == "calibrating" {
+            let daysCollected = Int((vm.calibrationProgress * 14).rounded())
+            GlassCard(padding: Theme.Spacing.lg) {
+                VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+                    VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                        Text("Calibrating your baselines")
+                            .font(Theme.Typography.bodyMedium)
+                            .fontWeight(.semibold)
+                            .foregroundStyle(Theme.Colors.textPrimary)
+                        Text("\(daysCollected) of 14 days of data collected")
+                            .font(Theme.Typography.bodySmall)
+                            .foregroundStyle(Theme.Colors.textSecondary)
+                    }
+                    VitalProgressBar(fraction: vm.calibrationProgress, tint: Theme.Colors.accent, height: 4)
+                }
+            }
         }
     }
 
