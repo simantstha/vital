@@ -7,13 +7,13 @@
  * Body: { deltas: [{ type: string, timestamp: string (ISO8601), payload: object }] }
  * Response: { inserted: number }
  *
- * Auth: dev mode uses a fixed dev@vital.local user; real Sign-in-with-Apple
- * auth is wired up in a later phase.
+ * Auth: session JWT via middleware.ts → x-user-id header, read with
+ * lib/auth.ts getUserIdFromRequest().
  */
 
 import { NextResponse } from 'next/server';
 import { db, schema } from '@/db';
-import { getOrCreateDevUser } from '@/lib/brain/user';
+import { getUserIdFromRequest } from '@/lib/auth';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -68,10 +68,15 @@ export async function POST(request: Request): Promise<NextResponse> {
 
   const deltas = raw as Delta[];
 
+  let userId: string;
+  try {
+    userId = getUserIdFromRequest(request);
+  } catch (err) {
+    return NextResponse.json({ error: String(err) }, { status: 401 });
+  }
+
   // Persist
   try {
-    const userId = await getOrCreateDevUser();
-
     await db.insert(schema.events).values(
       deltas.map((d) => ({
         user_id:   userId,

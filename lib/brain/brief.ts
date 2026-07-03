@@ -337,7 +337,7 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
   }
 
   // ── Delegate to lib/claude.ts generateDailyBrief ─────────────────────────
-  return generateDailyBrief({
+  return generateDailyBrief(userId, {
     recovery,
     hrv,
     rhr,

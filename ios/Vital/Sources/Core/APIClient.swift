@@ -4,9 +4,14 @@ import Foundation
 
 enum AppConfig {
     /// Base URL for the Vital backend.
-    /// Production (Fly.io): "https://vital-coach.fly.dev"
-    /// Local dev: "http://localhost:3000"
-    static let apiBaseURL = "https://vital-coach.fly.dev"
+    /// Simulator talks to the local dev server; device builds use Fly.io.
+    static let apiBaseURL: String = {
+        #if targetEnvironment(simulator)
+        return "http://localhost:3000"
+        #else
+        return "https://vital-coach.fly.dev"
+        #endif
+    }()
 }
 
 // MARK: - JSON value
@@ -70,9 +75,16 @@ struct APIClient {
 
     /// Builds a request carrying the bearer token. The header is set per-request
     /// (not on the session) so the redirect delegate controls its propagation.
+    ///
+    /// Only the signed-in user's Keychain session token is ever attached —
+    /// there is deliberately no fallback credential, so signing out revokes
+    /// API access. Unauthenticated requests go out without an Authorization
+    /// header and are rejected by the server.
     private func authorizedRequest(_ url: URL) -> URLRequest {
         var r = URLRequest(url: url)
-        r.setValue("Bearer \(AppSecrets.apiToken)", forHTTPHeaderField: "Authorization")
+        if let token = KeychainStore.loadSessionToken() {
+            r.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
         return r
     }
 

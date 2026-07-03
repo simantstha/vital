@@ -28,6 +28,12 @@ targets:
         TARGETED_DEVICE_FAMILY: "1"
         SWIFT_EMIT_LOC_STRINGS: "YES"
         CODE_SIGN_ENTITLEMENTS: Sources/App/Vital.entitlements
+        # NOTE: com.apple.developer.applesignin is intentionally NOT added here.
+        # It requires the paid Apple Developer Program; the current account is
+        # a free Apple ID and cannot sign that entitlement. Add it to
+        # Sources/App/Vital.entitlements (and enable the SIWA button in
+        # SignInView.swift) once the paid account exists. Dev sign-in
+        # (/api/auth/dev) is the working auth path until then.
     info:
       path: Sources/App/Info.plist
       properties:

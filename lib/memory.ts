@@ -3,7 +3,7 @@ import path from 'path';
 import type { Tool } from '@anthropic-ai/sdk/resources/messages';
 import { DATA_DIR } from './dataDir';
 
-const MEMORY_DIR = path.join(DATA_DIR, '.vital-memory');
+const MEMORY_ROOT = path.join(DATA_DIR, '.vital-memory');
 
 const ALLOWED_FILES = [
   'memory-index.md',
@@ -14,54 +14,101 @@ const ALLOWED_FILES = [
   'nutrition-habits.json',
   'life-context.json',
   'lab-results.json',
+  'user-profile.md',
 ] as const;
 
 type MemoryFile = typeof ALLOWED_FILES[number];
 
-function memoryPath(filename: MemoryFile): string {
-  return path.join(MEMORY_DIR, filename);
+// ── Per-user directory + seeding ───────────────────────────────────────────
+
+/** Absolute path to a given user's memory directory: <DATA_DIR>/.vital-memory/<userId>/ */
+export function getUserMemoryDir(userId: string): string {
+  return path.join(MEMORY_ROOT, userId);
 }
 
-export function readMemoryFile(filename: string): string | null {
-  if (!ALLOWED_FILES.includes(filename as MemoryFile)) return null;
+/**
+ * Resolves the fresh-install template directory to seed new users from.
+ * Priority: explicit env override → the Docker-baked `/seed/.vital-memory`
+ * path (see Dockerfile + scripts/docker-entrypoint.sh) → the tracked
+ * `vital-memory-template/` dir at the repo root (local dev).
+ */
+function resolveTemplateDir(): string {
+  const configured = process.env.VITAL_MEMORY_TEMPLATE_DIR;
+  if (configured) return path.resolve(configured);
+
+  const dockerSeed = '/seed/.vital-memory';
+  if (fs.existsSync(dockerSeed)) return dockerSeed;
+
+  return path.join(process.cwd(), 'vital-memory-template');
+}
+
+/**
+ * Seeds a brand-new user's memory directory by copying the template dir,
+ * recursively, only if the user's directory doesn't already exist. Safe to
+ * call on every access — the existsSync check makes it a no-op after the
+ * first call.
+ */
+export function seedUserMemory(userId: string): void {
+  const dir = getUserMemoryDir(userId);
+  if (fs.existsSync(dir)) return;
+
   try {
-    return fs.readFileSync(memoryPath(filename as MemoryFile), 'utf-8');
+    const template = resolveTemplateDir();
+    fs.mkdirSync(MEMORY_ROOT, { recursive: true });
+    fs.cpSync(template, dir, { recursive: true });
+  } catch {
+    // Read-only fs, or template missing — fall back to an empty dir so
+    // subsequent reads/writes still have somewhere to land.
+    try { fs.mkdirSync(dir, { recursive: true }); } catch { /* still read-only */ }
+  }
+}
+
+function memoryPath(userId: string, filename: MemoryFile): string {
+  return path.join(getUserMemoryDir(userId), filename);
+}
+
+export function readMemoryFile(userId: string, filename: string): string | null {
+  if (!ALLOWED_FILES.includes(filename as MemoryFile)) return null;
+  seedUserMemory(userId);
+  try {
+    return fs.readFileSync(memoryPath(userId, filename as MemoryFile), 'utf-8');
   } catch {
     return null;
   }
 }
 
-export function writeMemoryFile(filename: string, content: string): void {
+export function writeMemoryFile(userId: string, filename: string, content: string): void {
   if (!ALLOWED_FILES.includes(filename as MemoryFile)) return;
+  seedUserMemory(userId);
   try {
-    fs.mkdirSync(MEMORY_DIR, { recursive: true });
-    fs.writeFileSync(memoryPath(filename as MemoryFile), content, 'utf-8');
+    fs.mkdirSync(getUserMemoryDir(userId), { recursive: true });
+    fs.writeFileSync(memoryPath(userId, filename as MemoryFile), content, 'utf-8');
   } catch { /* read-only fs on Vercel */ }
 }
 
-export function appendObservation(note: string): void {
+export function appendObservation(userId: string, note: string): void {
   const date = new Date().toISOString().split('T')[0];
   const entry = `- [${date}] ${note}`;
-  const content = readMemoryFile('coach-observations.md') ?? '# Coach Observations\n\n';
+  const content = readMemoryFile(userId, 'coach-observations.md') ?? '# Coach Observations\n\n';
   const lines = content.split('\n').filter(l => l.startsWith('- ['));
   lines.unshift(entry);
   const updated = '# Coach Observations\n\n' + lines.slice(0, 30).join('\n') + '\n';
-  writeMemoryFile('coach-observations.md', updated);
+  writeMemoryFile(userId, 'coach-observations.md', updated);
 }
 
-export function readHrvBaseline(): number | null {
-  const profile = readMemoryFile('core-profile.md');
+export function readHrvBaseline(userId: string): number | null {
+  const profile = readMemoryFile(userId, 'core-profile.md');
   if (!profile) return null;
   const match = /hrv baseline:\s*(\d+)\s*ms/i.exec(profile);
   return match ? parseInt(match[1], 10) : null;
 }
 
-export function loadAlwaysOnContext(): string {
-  const index = readMemoryFile('memory-index.md') ?? '';
-  const core = readMemoryFile('core-profile.md') ?? '';
-  const conditions = readMemoryFile('health-conditions.json') ?? '{}';
-  const observations = readMemoryFile('coach-observations.md') ?? '';
-  const labs = readMemoryFile('lab-results.json') ?? '{}';
+export function loadAlwaysOnContext(userId: string): string {
+  const index = readMemoryFile(userId, 'memory-index.md') ?? '';
+  const core = readMemoryFile(userId, 'core-profile.md') ?? '';
+  const conditions = readMemoryFile(userId, 'health-conditions.json') ?? '{}';
+  const observations = readMemoryFile(userId, 'coach-observations.md') ?? '';
+  const labs = readMemoryFile(userId, 'lab-results.json') ?? '{}';
 
   return [
     '## Memory Index\n' + index,
@@ -100,7 +147,7 @@ export const MEMORY_TOOLS: Tool[] = [
           type: 'string',
           // Intentionally excludes memory-index.md (managed manually) and
           // coach-observations.md (use append_observation tool instead).
-          enum: ['health-conditions.json', 'training-history.json', 'nutrition-habits.json', 'life-context.json', 'core-profile.md', 'lab-results.json'],
+          enum: ['health-conditions.json', 'training-history.json', 'nutrition-habits.json', 'life-context.json', 'core-profile.md', 'lab-results.json', 'user-profile.md'],
           description: 'The memory file to overwrite.',
         },
         content: {
@@ -128,17 +175,17 @@ export const MEMORY_TOOLS: Tool[] = [
   },
 ] as const;
 
-export function handleToolCall(name: string, input: unknown): string {
+export function handleToolCall(userId: string, name: string, input: unknown): string {
   const inp = input as Record<string, string>;
   if (name === 'read_memory') {
-    return readMemoryFile(inp.filename) ?? `File "${inp.filename}" not found.`;
+    return readMemoryFile(userId, inp.filename) ?? `File "${inp.filename}" not found.`;
   }
   if (name === 'write_memory') {
-    writeMemoryFile(inp.filename, inp.content);
+    writeMemoryFile(userId, inp.filename, inp.content);
     return 'Memory updated.';
   }
   if (name === 'append_observation') {
-    appendObservation(inp.note);
+    appendObservation(userId, inp.note);
     return 'Observation appended.';
   }
   return 'Unknown tool.';
