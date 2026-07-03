@@ -4,7 +4,12 @@
  * Streams a coached reply as Server-Sent Events (SSE).
  *
  * Request body (JSON):
- *   { message: string, imageBase64?: string }
+ *   { message: string, imageBase64?: string, mode?: "onboarding" }
+ *
+ * `mode: "onboarding"` switches the persona into onboarding mode (greet the
+ * new user, ask at most 3 short questions, persist answers via the memory
+ * tools, no training/nutrition advice yet) — see lib/brain/persona.ts and
+ * lib/brain/coach.ts. The SSE contract below is identical in both modes.
  *
  * SSE event contract:
  *   data: {"type":"text","delta":"..."}       — one or more text chunks
@@ -30,9 +35,9 @@ export const dynamic = 'force-dynamic';
 
 export async function POST(request: Request): Promise<Response> {
   // Parse body
-  let body: { message?: unknown; imageBase64?: unknown };
+  let body: { message?: unknown; imageBase64?: unknown; mode?: unknown };
   try {
-    body = await request.json() as { message?: unknown; imageBase64?: unknown };
+    body = await request.json() as { message?: unknown; imageBase64?: unknown; mode?: unknown };
   } catch {
     return new Response('Invalid JSON body.', { status: 400 });
   }
@@ -44,6 +49,8 @@ export async function POST(request: Request): Promise<Response> {
 
   const imageBase64 =
     typeof body.imageBase64 === 'string' ? body.imageBase64 : undefined;
+
+  const mode = body.mode === 'onboarding' ? 'onboarding' as const : undefined;
 
   let userId: string;
   try {
@@ -61,7 +68,7 @@ export async function POST(request: Request): Promise<Response> {
       };
 
       try {
-        for await (const chunk of runCoach(userId, message, imageBase64)) {
+        for await (const chunk of runCoach(userId, message, imageBase64, mode)) {
           if (chunk.type === 'text') {
             send({ type: 'text', delta: chunk.text });
           } else if (chunk.type === 'tool_call') {

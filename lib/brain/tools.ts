@@ -457,6 +457,12 @@ export function toolCallLabel(name: string, input: Record<string, unknown>): str
       return `Checking your ${metricLabel(String(input.metric ?? ''))} baseline…`;
     case 'compare_periods':
       return 'Comparing periods…';
+    case 'read_memory':
+      return 'Checking my notes on you…';
+    case 'write_memory':
+      return 'Saving that…';
+    case 'append_observation':
+      return 'Jotting that down…';
     default:
       return 'Working on it…';
   }

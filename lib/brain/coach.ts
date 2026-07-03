@@ -1,7 +1,7 @@
 /**
  * Vital Brain — coach loop
  *
- * runCoach(userId, userMessage, imageBase64?) is an async generator that:
+ * runCoach(userId, userMessage, imageBase64?, mode?) is an async generator that:
  *   1. Persists the user message to Postgres
  *   2. Assembles context deterministically from Postgres
  *   3. Runs the Claude streaming tool-use loop (multi-turn, server-side)
@@ -22,12 +22,19 @@ import { db, schema } from '@/db';
 import { assembleContext } from './context';
 import { assemblePersona } from './persona';
 import { BRAIN_TOOLS, executeToolCall, toolCallLabel } from './tools';
+import { MEMORY_TOOLS, handleToolCall as handleMemoryToolCall } from '@/lib/memory';
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 const MODEL        = 'claude-sonnet-4-6';
 const MAX_TOKENS   = 2500;
 const MAX_ROUNDS   = 10;   // max tool-use iterations before hard stop
+
+// Tool names dispatched to lib/memory.ts's handleToolCall instead of
+// tools.ts's executeToolCall. Only registered/routed in onboarding mode
+// (see runCoach's `mode` param) — regular coaching keeps the existing
+// BRAIN_TOOLS-only surface unchanged.
+const MEMORY_TOOL_NAMES = new Set(MEMORY_TOOLS.map(t => t.name));
 
 // ── Yield types ───────────────────────────────────────────────────────────────
 
@@ -42,7 +49,9 @@ export async function* runCoach(
   userId: string,
   userMessage: string,
   imageBase64?: string,
+  mode?: 'onboarding',
 ): AsyncGenerator<CoachEvent> {
+  const isOnboarding = mode === 'onboarding';
   // 1. Persist the user message ──────────────────────────────────────────────
   await db.insert(schema.messages).values({
     user_id:   userId,
@@ -57,7 +66,8 @@ export async function* runCoach(
   const ctx = await assembleContext(userId);
 
   // 3. Build persona and tool list ───────────────────────────────────────────
-  const systemPrompt = assemblePersona(ctx.hardConstraints);
+  const systemPrompt = assemblePersona(ctx.hardConstraints, undefined, isOnboarding);
+  const tools = isOnboarding ? [...BRAIN_TOOLS, ...MEMORY_TOOLS] : BRAIN_TOOLS;
 
   // 4. Build the initial user message content ───────────────────────────────
   type ContentBlock =
@@ -94,7 +104,7 @@ export async function* runCoach(
       model:      MODEL,
       max_tokens: MAX_TOKENS,
       system:     systemPrompt,
-      tools:      BRAIN_TOOLS,
+      tools,
       messages,
     });
 
@@ -149,7 +159,9 @@ export async function* runCoach(
       toolCallLog.push({ name: block.name, input });
       yield { type: 'tool_call', id: callId, name: block.name, label, status: 'started' };
 
-      const result = await executeToolCall(block.name, input, userId);
+      const result = MEMORY_TOOL_NAMES.has(block.name)
+        ? handleMemoryToolCall(userId, block.name, input)
+        : await executeToolCall(block.name, input, userId);
 
       yield { type: 'tool_call', id: callId, name: block.name, label, status: 'done' };
       toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: result });

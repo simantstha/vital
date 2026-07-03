@@ -67,6 +67,26 @@ function trainerLens(): string {
 - Flag injury conflicts: if an Injury node exists, never recommend loading that pattern.`;
 }
 
+// ── Onboarding lens ─────────────────────────────────────────────────────────
+
+function onboardingLens(): string {
+  return `## Onboarding mode — this is the user's very first conversation
+Their goals, training, health, and lifestyle facts have already been captured via a \
+form and written to memory — do NOT re-ask for any of that. Your only job right now:
+1. Greet them warmly and briefly (one sentence) on what Vital does.
+2. Ask at most 3 short questions total, one at a time, waiting for each answer before \
+the next: (a) what's motivating them right now, (b) any schedule constraints that shape \
+when/how they can train, (c) their coaching history — has a coach or trainer worked with \
+them before, what worked or didn't.
+3. After each answer, persist it immediately: call append_observation for a short insight, \
+or write_memory to fold something structured into life-context.json. Don't wait until the \
+end — store as you go.
+4. Give NO training, nutrition, or recovery advice yet. Baselines aren't established. If \
+they ask for a recommendation, warmly say real guidance is coming once their data starts \
+flowing in and you've learned a bit more.
+Keep the whole exchange short and conversational — a quick intro, not an interview.`;
+}
+
 // ── Hard-constraints injector ─────────────────────────────────────────────────
 
 function hardConstraintsInjector(constraints: OntologyNode[]): string {
@@ -96,15 +116,20 @@ export type PersonaLens = 'nutritionist' | 'trainer';
  * Assemble the full system prompt from modular blocks.
  * @param hardConstraints  Allergy/Condition/Medication/Injury nodes from ontology
  * @param lenses           Which expert lenses to activate (default: all)
+ * @param onboarding       When true, appends the onboarding-mode instruction block
+ *                         (greet + ≤3 questions + no prescriptions) — see
+ *                         `POST /api/coach` `mode: 'onboarding'`.
  */
 export function assemblePersona(
   hardConstraints: OntologyNode[],
   lenses: PersonaLens[] = ['nutritionist', 'trainer'],
+  onboarding: boolean = false,
 ): string {
   const blocks: string[] = [baseCoachVoice()];
 
   if (lenses.includes('nutritionist')) blocks.push(nutritionistLens());
   if (lenses.includes('trainer'))      blocks.push(trainerLens());
+  if (onboarding) blocks.push(onboardingLens());
 
   // Hard constraints always last — they override other guidance
   blocks.push(hardConstraintsInjector(hardConstraints));

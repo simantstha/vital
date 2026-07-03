@@ -6,6 +6,7 @@
  * Response:
  * {
  *   name: string,
+ *   onboarded: boolean,   // true once users.onboarded_at is set (POST /api/onboarding)
  *   integrations: [
  *     { name: "Apple Health", status: "connected" | "disconnected" },
  *   ],
@@ -51,10 +52,15 @@ export async function GET(request: Request): Promise<NextResponse> {
   // Fetch all events for this user (profile stats span all time)
   const [allEvents, userRow, calibration] = await Promise.all([
     db.select().from(schema.events).where(eq(schema.events.user_id, userId)),
-    db.select({ name: schema.users.name }).from(schema.users).where(eq(schema.users.id, userId)).limit(1),
+    db
+      .select({ name: schema.users.name, onboarded_at: schema.users.onboarded_at })
+      .from(schema.users)
+      .where(eq(schema.users.id, userId))
+      .limit(1),
     getCalibration(userId),
   ]);
   const name = userRow[0]?.name ?? 'Vital User';
+  const onboarded = userRow[0]?.onboarded_at != null;
 
   // ── Integration: Apple Health ─────────────────────────────────────────────
   // Connected if any event came from healthkit source
@@ -89,6 +95,7 @@ export async function GET(request: Request): Promise<NextResponse> {
   // ── Response ──────────────────────────────────────────────────────────────
   return NextResponse.json({
     name,
+    onboarded,
     integrations: [
       { name: 'Apple Health', status: hasHealthKit ? 'connected' : 'disconnected' },
     ],

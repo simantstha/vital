@@ -14,10 +14,35 @@ final class AuthViewModel: ObservableObject {
     @Published var isLoading = false
     @Published var errorMessage: String?
 
+    /// Mirrors the server's `users.onboarded_at` gate. Seeded from
+    /// UserDefaults at launch (alongside the Keychain-seeded
+    /// `isAuthenticated`) so RootView never flashes onboarding for an
+    /// already-onboarded user, then kept in sync from every auth response
+    /// and finalized by `markOnboarded()` at the end of the onboarding flow.
+    @Published var onboarded: Bool
+
+    /// Full name from the Sign in with Apple credential, captured on first
+    /// authorization (Apple only supplies it once). Used purely as an
+    /// onboarding prefill convenience — nil under dev sign-in.
+    @Published var appleDisplayName: String?
+
     private let decoder = JSONDecoder()
+
+    private enum Keys {
+        static let onboarded = "user.onboarded"
+    }
 
     init() {
         isAuthenticated = KeychainStore.loadSessionToken() != nil
+        onboarded = UserDefaults.standard.bool(forKey: Keys.onboarded)
+    }
+
+    /// Called by OnboardingFlowView once the questionnaire submits
+    /// successfully and the user taps Continue on the Calibrating screen —
+    /// flips the RootView gate over to the main tab UI.
+    func markOnboarded() {
+        onboarded = true
+        UserDefaults.standard.set(true, forKey: Keys.onboarded)
     }
 
     /// Dev-only sign-in: exchanges the shared API secret for a real session
@@ -48,6 +73,15 @@ final class AuthViewModel: ObservableObject {
             return
         }
 
+        // Apple only includes fullName on the very first authorization for
+        // this app — capture it now so onboarding can prefill the name field.
+        if let components = credential.fullName {
+            let formatted = PersonNameComponentsFormatter().string(from: components)
+            if !formatted.isEmpty {
+                appleDisplayName = formatted
+            }
+        }
+
         guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/auth/apple") else {
             errorMessage = "Invalid backend URL."
             return
@@ -67,6 +101,8 @@ final class AuthViewModel: ObservableObject {
     func signOut() {
         KeychainStore.deleteSessionToken()
         isAuthenticated = false
+        onboarded = false
+        UserDefaults.standard.removeObject(forKey: Keys.onboarded)
     }
 
     // MARK: - Shared request handling
@@ -84,6 +120,8 @@ final class AuthViewModel: ObservableObject {
             }
             let auth = try decoder.decode(AuthResponse.self, from: data)
             KeychainStore.saveSessionToken(auth.token)
+            onboarded = auth.onboarded
+            UserDefaults.standard.set(auth.onboarded, forKey: Keys.onboarded)
             isAuthenticated = true
         } catch {
             errorMessage = "Sign-in failed: \(error.localizedDescription)"

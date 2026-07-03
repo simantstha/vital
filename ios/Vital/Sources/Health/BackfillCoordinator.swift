@@ -21,6 +21,14 @@ final class BackfillCoordinator: ObservableObject {
     @Published var isComplete: Bool = false
     @Published var lastError: String?
 
+    /// Guards against overlapping runs: the Calibrating onboarding step and
+    /// RootTabView's own `.task` can both call `startIfNeeded()` for the same
+    /// still-in-progress backfill (onboarding kicks it off, then the user
+    /// lands on the tab UI before it finishes). The server-side upsert makes
+    /// re-posting harmless, but there's no reason to double the network
+    /// traffic client-side.
+    private var isRunning = false
+
     private enum Keys {
         static let completed = "backfill.completed"
         static let lastCompletedDate = "backfill.lastCompletedDate"
@@ -65,6 +73,9 @@ final class BackfillCoordinator: ObservableObject {
             progress = 1
             return
         }
+        guard !isRunning else { return }
+        isRunning = true
+        defer { isRunning = false }
 
         lastError = nil
 
