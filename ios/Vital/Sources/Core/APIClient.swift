@@ -560,11 +560,22 @@ struct TodayPlanItem: Decodable {
     let why: String
 }
 
+struct CalibrationMetric: Decodable {
+    let dataDays: Int
+    let established: Bool
+}
+
+struct CalibrationStatus: Decodable {
+    let status: String // "calibrating" or "ready"
+    let metrics: [String: CalibrationMetric]
+}
+
 struct TodayResponse: Decodable {
     let metrics: TodayMetrics
     let dietBudget: TodayDietBudget
     let insight: String
     let plan: [TodayPlanItem]
+    let calibration: CalibrationStatus?
 }
 
 // MARK: - Trends types

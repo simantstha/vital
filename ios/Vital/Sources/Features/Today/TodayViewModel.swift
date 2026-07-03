@@ -94,6 +94,10 @@ final class TodayViewModel: ObservableObject {
     // Pending facts banner
     @Published var pendingFacts: [PendingFact] = []
 
+    // Calibration state — driven from /api/today
+    @Published var calibrationStatus: String? = nil
+    @Published var calibrationProgress: Double = 0 // 0...1 based on min(dataDays) / 14
+
     // MARK: - Dependencies
 
     private let healthKit = HealthKitManager()
@@ -208,6 +212,18 @@ final class TodayViewModel: ObservableObject {
     }
 
     private func applyTodayResponse(_ r: TodayResponse) {
+        // Calibration state — extract if present
+        if let cal = r.calibration {
+            calibrationStatus = cal.status
+            // Calculate progress as min of the three metrics' dataDays / 14 (target)
+            let dataDays = [
+                cal.metrics["hrv_sdnn"]?.dataDays ?? 0,
+                cal.metrics["resting_hr"]?.dataDays ?? 0,
+                cal.metrics["sleep_minutes"]?.dataDays ?? 0
+            ].min() ?? 0
+            calibrationProgress = min(1.0, Double(dataDays) / 14.0)
+        }
+
         // Coach insight — keep the existing default if the brief isn't ready yet
         if !r.insight.isEmpty {
             coachInsight = r.insight
