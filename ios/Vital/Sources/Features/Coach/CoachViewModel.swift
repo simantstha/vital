@@ -62,6 +62,7 @@ final class CoachViewModel: ObservableObject {
     @Published var errorMessage: String? = nil
 
     private let api = APIClient.shared
+    private var streamTask: Task<Void, Never>? = nil
 
     /// Passed through to every `/api/coach` call. Set to `"onboarding"` when
     /// this view model backs the CoachIntro onboarding step; nil (the
@@ -90,7 +91,7 @@ final class CoachViewModel: ObservableObject {
 
         isStreaming = true
 
-        Task {
+        streamTask = Task {
             defer { isStreaming = false }
 
             do {
@@ -113,6 +114,15 @@ final class CoachViewModel: ObservableObject {
                 errorMessage = error.localizedDescription
             }
         }
+    }
+
+    /// Cancels any in-flight coach stream. Called when the hosting view
+    /// disappears (e.g. leaving the onboarding CoachIntro step mid-stream)
+    /// so the typing indicator can't outlive the conversation on screen.
+    func cancelStreaming() {
+        streamTask?.cancel()
+        streamTask = nil
+        isStreaming = false
     }
 
     // MARK: - Row mutation helpers

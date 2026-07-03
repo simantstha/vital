@@ -34,6 +34,11 @@ targets:
         # Sources/App/Vital.entitlements (and enable the SIWA button in
         # SignInView.swift) once the paid account exists. Dev sign-in
         # (/api/auth/dev) is the working auth path until then.
+        #
+        # com.apple.developer.healthkit.background-delivery IS added (in
+        # Vital.entitlements) — unlike SIWA, this one signs fine on free
+        # provisioning, which is what makes ongoing background HealthKit sync
+        # (HealthSyncCoordinator) possible before the paid account exists.
     info:
       path: Sources/App/Info.plist
       properties:

@@ -534,9 +534,12 @@ struct LogMealResponse: Decodable {
 // MARK: - Today dashboard types
 
 struct TodayMetricValue: Decodable {
-    let value: Double
+    // value/deltaPct are null for a user with no data yet (fresh account
+    // before any ingest) — non-optional decoding would reject the whole
+    // /api/today payload and silently drop insight + calibration with it.
+    let value: Double?
     let unit: String
-    let deltaPct: Int
+    let deltaPct: Int?
 }
 
 struct TodayMetrics: Decodable {

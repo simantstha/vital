@@ -26,6 +26,10 @@ struct RootView: View {
                     .environmentObject(backfillCoordinator)
                     .task {
                         await backfillCoordinator.startIfNeeded()
+                        // Idempotent (guarded internally) — covers a user who
+                        // signed in this session, since the AppDelegate path
+                        // only registers observers at cold launch.
+                        await HealthSyncCoordinator.shared.registerBackgroundDelivery()
                     }
             }
         }

@@ -62,9 +62,19 @@ final class HealthKitBackfill {
     /// Fetches daily-bucketed scalar statistics (HRV SDNN, resting HR, average
     /// HR, steps, active energy, body mass) for the trailing `days` days.
     func fetchDailyStatistics(days: Int) async throws -> [DailyHealthData] {
+        let (start, end, _) = range(days: days)
+        return try await fetchDailyStatistics(from: start, to: end)
+    }
+
+    /// Fetches daily-bucketed scalar statistics for an explicit `[start, end)`
+    /// range, anchored at `start`'s midnight so buckets align to local
+    /// calendar days. Used by `HealthSyncCoordinator` to re-aggregate only the
+    /// specific days an observer query reported as touched, instead of
+    /// re-running the trailing-N-days sweep the initial backfill uses.
+    func fetchDailyStatistics(from start: Date, to end: Date) async throws -> [DailyHealthData] {
         guard HKHealthStore.isHealthDataAvailable() else { return [] }
 
-        let (start, end, anchor) = range(days: days)
+        let anchor = calendar.startOfDay(for: start)
 
         async let hrv = dailyQuantity(.heartRateVariabilitySDNN, options: .discreteAverage, unit: HKUnit.secondUnit(with: .milli), start: start, end: end, anchor: anchor)
         async let restingHr = dailyQuantity(.restingHeartRate, options: .discreteAverage, unit: HKUnit(from: "count/min"), start: start, end: end, anchor: anchor)
@@ -100,11 +110,17 @@ final class HealthKitBackfill {
     /// (the day `sample.endDate` falls on), with a stage breakdown when the
     /// source data provides one (Apple Watch sleep staging vs. plain "asleep").
     func fetchDailySleep(days: Int) async throws -> [DailySleepData] {
+        let (start, end, _) = range(days: days)
+        return try await fetchDailySleep(from: start, to: end)
+    }
+
+    /// Fetches nightly sleep for an explicit `[start, end)` range. See
+    /// `fetchDailyStatistics(from:to:)` for why this overload exists.
+    func fetchDailySleep(from start: Date, to end: Date) async throws -> [DailySleepData] {
         guard HKHealthStore.isHealthDataAvailable(),
               let sleepType = HKObjectType.categoryType(forIdentifier: .sleepAnalysis)
         else { return [] }
 
-        let (start, end, _) = range(days: days)
         // Buffer the query start by a day so sessions that began the evening
         // before `start` (and end, i.e. wake, inside the window) aren't missed.
         let queryStart = calendar.date(byAdding: .day, value: -1, to: start) ?? start
@@ -179,9 +195,15 @@ final class HealthKitBackfill {
     /// Fetches workouts started within the trailing `days` days, attributed to
     /// the day each workout started.
     func fetchWorkouts(days: Int) async throws -> [DailyWorkoutData] {
+        let (start, end, _) = range(days: days)
+        return try await fetchWorkouts(from: start, to: end)
+    }
+
+    /// Fetches workouts started within an explicit `[start, end)` range. See
+    /// `fetchDailyStatistics(from:to:)` for why this overload exists.
+    func fetchWorkouts(from start: Date, to end: Date) async throws -> [DailyWorkoutData] {
         guard HKHealthStore.isHealthDataAvailable() else { return [] }
 
-        let (start, end, _) = range(days: days)
         let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: .strictStartDate)
         let energyType = HKObjectType.quantityType(forIdentifier: .activeEnergyBurned)
 
@@ -222,9 +244,19 @@ final class HealthKitBackfill {
     /// appears in the result — callers don't need a separate "skip empty
     /// days" pass.
     func buildIngestDays(days: Int) async throws -> [DailyIngestDay] {
-        async let stats = fetchDailyStatistics(days: days)
-        async let sleep = fetchDailySleep(days: days)
-        async let workouts = fetchWorkouts(days: days)
+        let (start, end, _) = range(days: days)
+        return try await buildIngestDays(from: start, to: end)
+    }
+
+    /// Composes the per-day ingest DTO for an explicit `[start, end)` range.
+    /// `HealthSyncCoordinator` calls this with the tight range spanning just
+    /// the days an observer query reported as touched — the caller is
+    /// expected to filter the result down to the exact touched days if it
+    /// needs to exclude incidental days this range happens to also cover.
+    func buildIngestDays(from start: Date, to end: Date) async throws -> [DailyIngestDay] {
+        async let stats = fetchDailyStatistics(from: start, to: end)
+        async let sleep = fetchDailySleep(from: start, to: end)
+        async let workouts = fetchWorkouts(from: start, to: end)
         let (statsResult, sleepResult, workoutsResult) = try await (stats, sleep, workouts)
 
         let statsByDay = Dictionary(uniqueKeysWithValues: statsResult.map { ($0.day, $0) })
@@ -235,7 +267,7 @@ final class HealthKitBackfill {
         allDays.formUnion(sleepByDay.keys)
         allDays.formUnion(workoutsByDay.keys)
 
-        let formatter = Self.dayFormatter
+        let formatter = HealthKitBackfill.dayFormatter
 
         return allDays.map { day in
             let stat = statsByDay[day]
@@ -332,7 +364,10 @@ final class HealthKitBackfill {
         }
     }
 
-    private static let dayFormatter: DateFormatter = {
+    /// 'YYYY-MM-DD' formatter matching `/api/ingest/daily`'s wire format.
+    /// Internal (not private) so `HealthSyncCoordinator` can reuse it rather
+    /// than duplicating the format string.
+    static let dayFormatter: DateFormatter = {
         let f = DateFormatter()
         f.calendar = Calendar(identifier: .gregorian)
         f.locale = Locale(identifier: "en_US_POSIX")
