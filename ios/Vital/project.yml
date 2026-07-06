@@ -37,17 +37,13 @@ targets:
         MARKETING_VERSION: "1.0"
         CURRENT_PROJECT_VERSION: "1"
         VERSIONING_SYSTEM: apple-generic
-        # NOTE: com.apple.developer.applesignin is intentionally NOT added here.
-        # It requires the paid Apple Developer Program; the current account is
-        # a free Apple ID and cannot sign that entitlement. Add it to
-        # Sources/App/Vital.entitlements (and enable the SIWA button in
-        # SignInView.swift) once the paid account exists. Dev sign-in
-        # (/api/auth/dev) is the working auth path until then.
-        #
-        # com.apple.developer.healthkit.background-delivery IS added (in
-        # Vital.entitlements) — unlike SIWA, this one signs fine on free
-        # provisioning, which is what makes ongoing background HealthKit sync
-        # (HealthSyncCoordinator) possible before the paid account exists.
+        # Entitlements live in Sources/App/Vital.entitlements:
+        #   - com.apple.developer.healthkit + background-delivery (ongoing
+        #     background HealthKit sync via HealthSyncCoordinator)
+        #   - com.apple.developer.applesignin (Sign in with Apple; button
+        #     enabled in SignInView.swift). Requires the SIWA capability on the
+        #     App ID in the Apple Developer portal + APPLE_BUNDLE_ID on the
+        #     backend — see docs/CI-TESTFLIGHT.md.
     info:
       path: Sources/App/Info.plist
       properties:
