@@ -52,6 +52,9 @@ targets:
         # through to the packaged Info.plist (App Store Connect reads these).
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        # App uses only standard/exempt encryption (HTTPS) — declare it so
+        # TestFlight doesn't gate every build on the export-compliance prompt.
+        ITSAppUsesNonExemptEncryption: false
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
