@@ -2,6 +2,8 @@ import SwiftUI
 
 struct ProfileView: View {
     @StateObject private var vm = ProfileViewModel()
+    @EnvironmentObject private var authViewModel: AuthViewModel
+    @State private var showSignOutConfirm = false
 
     var body: some View {
         ZStack {
@@ -19,6 +21,7 @@ struct ProfileView: View {
                         avatarSection
                         statsGrid
                         integrationsSection
+                        accountSection
                     }
                 }
                 .padding(.horizontal, Theme.Spacing.xl)
@@ -28,6 +31,14 @@ struct ProfileView: View {
             .scrollIndicators(.hidden)
         }
         .task { await vm.load() }
+        .confirmationDialog(
+            "Sign out of Vital?",
+            isPresented: $showSignOutConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Sign Out", role: .destructive) { authViewModel.signOut() }
+            Button("Cancel", role: .cancel) {}
+        }
     }
 }
 
@@ -92,6 +103,40 @@ private extension ProfileView {
                     }
                 }
             }
+        }
+    }
+
+    // ── Account ────────────────────────────────────────────────────────────
+
+    var accountSection: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+            SectionHeader(title: "Account")
+
+            Button {
+                showSignOutConfirm = true
+            } label: {
+                GlassCard {
+                    HStack(spacing: Theme.Spacing.md) {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous)
+                                .fill(Theme.Colors.glassFill)
+                                .frame(width: 36, height: 36)
+                            Image(systemName: "rectangle.portrait.and.arrow.right")
+                                .font(.system(size: 15))
+                                .foregroundStyle(Theme.Colors.alert)
+                        }
+
+                        Text("Sign Out")
+                            .font(Theme.Typography.bodySmall)
+                            .fontWeight(.medium)
+                            .foregroundStyle(Theme.Colors.alert)
+
+                        Spacer()
+                    }
+                    .padding(.vertical, Theme.Spacing.xs)
+                }
+            }
+            .buttonStyle(.plain)
         }
     }
 
