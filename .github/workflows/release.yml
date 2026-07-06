@@ -37,13 +37,20 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+          cache: npm
+
+      # drizzle.config.ts imports drizzle-kit + dotenv, so node_modules must be
+      # populated before the migrate step (the pinned drizzle-kit is used, not
+      # @latest, to avoid version drift against the config).
+      - name: Install dependencies
+        run: npm ci
 
       # Apply schema to production BEFORE new code runs against it. drizzle-kit
       # is additive here (new columns/tables), so it is safe to run first.
       - name: Migrate Supabase schema
         env:
           DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
-        run: npx --yes drizzle-kit@latest push --force
+        run: npx drizzle-kit push --force
 
       - uses: superfly/flyctl-actions/setup-flyctl@master
 
