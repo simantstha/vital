@@ -33,6 +33,7 @@ import { getUserIdFromRequest } from '@/lib/auth';
 import { generateDailyBriefFromDb } from '@/lib/brain/brief';
 import { getCachedBrief, setCachedBrief, briefCacheKey, todayKey } from '@/lib/brain/briefCache';
 import { getCalibration } from '@/lib/brain/baselines';
+import { queryMetricPoints, type MetricPoint } from '@/lib/brain/tools';
 
 export const dynamic = 'force-dynamic';
 
@@ -51,6 +52,22 @@ function num(v: unknown): number | undefined {
 function deltaPct(current: number | null, prior: number | null): number | null {
   if (current == null || prior == null || prior === 0) return null;
   return Math.round(((current - prior) / prior) * 100);
+}
+
+/**
+ * Builds a { value, deltaPct } biometric card from a daily_metrics series.
+ * Points arrive ascending, so the latest is last and the prior day is second-
+ * to-last. `transform` maps the stored unit to the card unit (e.g. sleep
+ * minutes → hours). Empty series → nulls (iOS decode is null-tolerant).
+ */
+function cardFromPoints(
+  points: MetricPoint[],
+  transform: (v: number) => number = v => v,
+): { value: number | null; deltaPct: number | null } {
+  if (points.length === 0) return { value: null, deltaPct: null };
+  const value = transform(points[points.length - 1].value);
+  const prior = points.length > 1 ? transform(points[points.length - 2].value) : null;
+  return { value, deltaPct: deltaPct(value, prior) };
 }
 
 // ── Route handler ───────────────────────────────────────────────────────────
@@ -73,62 +90,35 @@ export async function GET(request: Request): Promise<NextResponse> {
   // ── DB read (fast). The LLM brief is served from cache, never awaited here ─
   let events: (typeof schema.events.$inferSelect)[];
   let calibration: Awaited<ReturnType<typeof getCalibration>>;
+  let hrvPts: MetricPoint[], rhrPts: MetricPoint[], sleepPts: MetricPoint[];
   try {
-    [events, calibration] = await Promise.all([
+    [events, calibration, hrvPts, rhrPts, sleepPts] = await Promise.all([
       db
         .select()
         .from(schema.events)
         .where(and(eq(schema.events.user_id, userId), gte(schema.events.timestamp, threeDaysAgo)))
         .orderBy(desc(schema.events.timestamp)),
       getCalibration(userId),
+      // Biometric cards read the aggregated daily_metrics store — the same
+      // source Trends and the coach data-tools use — so all surfaces agree.
+      // A 7-day window guarantees a prior point for the delta across a gap.
+      queryMetricPoints(userId, 'hrv_sdnn', 7),
+      queryMetricPoints(userId, 'resting_hr', 7),
+      queryMetricPoints(userId, 'sleep_minutes', 7),
     ]);
   } catch (err) {
     return NextResponse.json({ error: `DB read error: ${String(err)}` }, { status: 500 });
   }
 
-  // ── Partition by date bucket ─────────────────────────────────────────────
+  // ── Partition by date bucket (events power the diet budget only) ─────────
   const todayEvents     = events.filter(e => e.timestamp >= todayStart);
   const yesterdayEvents = events.filter(e => e.timestamp < todayStart);
 
-  // ── HRV ─────────────────────────────────────────────────────────────────
-  const hrvEvents  = events.filter(e => e.type === 'hrv_reading');
-  const latestHrv  = hrvEvents[0];
-  const prevHrv    = hrvEvents[1];
-
-  const extractHrv = (e: (typeof events)[number] | undefined): number | null => {
-    if (!e) return null;
-    const p = pl(e.payload);
-    // Handle all field name variants used across iOS app + seed
-    const v = num(p.value) ?? num(p.hrv) ?? num(p.valueMs) ?? num(p.sdnn);
-    return v != null ? Math.round(v) : null;
-  };
-
-  const hrvValue    = extractHrv(latestHrv);
-  const prevHrvVal  = extractHrv(prevHrv);
-  const hrvDelta    = deltaPct(hrvValue, prevHrvVal);
-
-  // ── Sleep + resting HR ───────────────────────────────────────────────────
-  // Sleep sessions: latest from today-or-yesterday (could have logged this morning),
-  // then the prior session for delta.
-  const sleepEvents  = events.filter(e => e.type === 'sleep_session');
-  const latestSleep  = sleepEvents[0];
-  const prevSleep    = sleepEvents[1];
-
-  const extractSleep = (e: (typeof events)[number] | undefined): { hours: number | null; rhr: number | null } => {
-    if (!e) return { hours: null, rhr: null };
-    const p = pl(e.payload);
-    const durMs = num(p.duration_ms) ?? (num(p.duration_s) != null ? num(p.duration_s)! * 1_000 : null);
-    const rhr   = num(p.rhr) ?? num(p.resting_heart_rate);
-    return {
-      hours: durMs != null ? Math.round((durMs / 3_600_000) * 10) / 10 : null,
-      rhr:   rhr   != null ? Math.round(rhr) : null,
-    };
-  };
-
-  const { hours: sleepHours, rhr: rhrValue }        = extractSleep(latestSleep);
-  const { hours: prevSleepH, rhr: prevRhrVal }       = extractSleep(prevSleep);
-  const sleepDelta = deltaPct(sleepHours, prevSleepH);
-  const rhrDelta   = deltaPct(rhrValue, prevRhrVal);
+  // ── Biometric cards from daily_metrics (single source of truth) ──────────
+  const { value: hrvValue,   deltaPct: hrvDelta }   = cardFromPoints(hrvPts, v => Math.round(v));
+  const { value: rhrValue,   deltaPct: rhrDelta }   = cardFromPoints(rhrPts, v => Math.round(v));
+  const { value: sleepHours, deltaPct: sleepDelta } =
+    cardFromPoints(sleepPts, v => Math.round((v / 60) * 10) / 10);
 
   // ── Diet budget (today only) ─────────────────────────────────────────────
   const TARGET_KCAL = 2400;

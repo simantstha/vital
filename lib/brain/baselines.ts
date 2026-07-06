@@ -127,19 +127,31 @@ export interface Calibration {
  * and sleep_minutes to all be established (>= 14 days of data in 90d).
  */
 export async function getCalibration(userId: string): Promise<Calibration> {
-  const rows = await db
-    .select({
-      metric:      schema.baselines.metric,
-      data_days:   schema.baselines.data_days,
-      established: schema.baselines.established,
-    })
-    .from(schema.baselines)
-    .where(sql`${schema.baselines.user_id} = ${userId}`);
+  // Count distinct data-days directly from daily_metrics — the same store the
+  // Trends charts read — rather than the `baselines.data_days` snapshot, which
+  // only refreshes on recomputeBaselines() and can lag behind a backfill. This
+  // structurally guarantees the calibration counter agrees with the charts.
+  const metricList = sql.join(CALIBRATION_METRICS.map(m => sql`${m}`), sql`, `);
+  const rows = await db.execute(sql`
+    select
+      ${schema.daily_metrics.metric} as metric,
+      count(distinct ${schema.daily_metrics.date}) as data_days
+    from ${schema.daily_metrics}
+    where ${schema.daily_metrics.user_id} = ${userId}
+      and ${schema.daily_metrics.metric} in (${metricList})
+      and ${schema.daily_metrics.date} >= current_date - interval '90 days'
+    group by ${schema.daily_metrics.metric}
+  `);
+
+  const dayCounts = new Map<string, number>();
+  for (const r of rows as unknown as Record<string, unknown>[]) {
+    dayCounts.set(String(r.metric), Number(r.data_days ?? 0));
+  }
 
   const metrics: Calibration['metrics'] = {};
   for (const m of CALIBRATION_METRICS) {
-    const row = rows.find(r => r.metric === m);
-    metrics[m] = { dataDays: row?.data_days ?? 0, established: row?.established ?? false };
+    const dataDays = dayCounts.get(m) ?? 0;
+    metrics[m] = { dataDays, established: dataDays >= ESTABLISHED_MIN_DAYS };
   }
 
   const ready = CALIBRATION_METRICS.every(m => metrics[m].established);
