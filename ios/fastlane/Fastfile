@@ -44,7 +44,7 @@ platform :ios do
     # deterministic on a fresh CI runner (no automatic-signing guesswork).
     update_code_signing_settings(
       use_automatic_signing: false,
-      path: "Vital.xcodeproj",
+      path: "Vital/Vital.xcodeproj",
       team_id: ENV.fetch("APPLE_TEAM_ID"),
       code_sign_identity: "Apple Distribution",
       profile_name: profile_name,
@@ -53,7 +53,7 @@ platform :ios do
     )
 
     build_app(
-      project: "Vital.xcodeproj",
+      project: "Vital/Vital.xcodeproj",
       scheme: "Vital",
       configuration: "Release",
       export_method: "app-store",

@@ -114,7 +114,9 @@ jobs:
           working-directory: ios
 
       - name: Build & upload to TestFlight
-        working-directory: ios/Vital
+        # Runs from ios/ (defaults.working-directory) — where both the Gemfile
+        # and fastlane/ live, so fastlane finds the Fastfile. The Fastfile
+        # references the project as Vital/Vital.xcodeproj relative to here.
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
@@ -123,6 +125,4 @@ jobs:
           MATCH_GIT_URL: ${{ secrets.MATCH_GIT_URL }}
           MATCH_GIT_BASIC_AUTHORIZATION: ${{ secrets.MATCH_GIT_BASIC_AUTHORIZATION }}
           MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
-        # Gemfile lives in ios/; run fastlane from ios/Vital (the .xcodeproj dir)
-        # via an explicit bundle gemfile so bundler still finds it.
-        run: BUNDLE_GEMFILE="${GITHUB_WORKSPACE}/ios/Gemfile" bundle exec fastlane beta
+        run: bundle exec fastlane beta
