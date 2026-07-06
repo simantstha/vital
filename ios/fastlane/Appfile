@@ -1,0 +1,5 @@
+# Authentication uses the App Store Connect API key (set in Fastfile), so an
+# Apple ID / password is not required here. team_id is read from the
+# APPLE_TEAM_ID secret to keep the account out of source control.
+app_identifier("com.simantstha.vital")
+team_id(ENV["APPLE_TEAM_ID"])

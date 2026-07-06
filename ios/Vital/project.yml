@@ -28,6 +28,15 @@ targets:
         TARGETED_DEVICE_FAMILY: "1"
         SWIFT_EMIT_LOC_STRINGS: "YES"
         CODE_SIGN_ENTITLEMENTS: Sources/App/Vital.entitlements
+        # Version + build number. Local dev keeps these defaults; the
+        # TestFlight pipeline (.github/workflows/release.yml → fastlane beta)
+        # overrides both at archive time via xcargs: MARKETING_VERSION comes
+        # from the git tag (v1.2.0 → 1.2.0) and CURRENT_PROJECT_VERSION is the
+        # next TestFlight build number. apple-generic versioning is required
+        # for that override to propagate into the Info.plist.
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        VERSIONING_SYSTEM: apple-generic
         # NOTE: com.apple.developer.applesignin is intentionally NOT added here.
         # It requires the paid Apple Developer Program; the current account is
         # a free Apple ID and cannot sign that entitlement. Add it to
@@ -43,6 +52,10 @@ targets:
       path: Sources/App/Info.plist
       properties:
         CFBundleDisplayName: Vital
+        # Reference the build settings so the pipeline's xcargs override flows
+        # through to the packaged Info.plist (App Store Connect reads these).
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait

@@ -1,0 +1,7 @@
+# Ruby toolchain for the iOS release pipeline (fastlane).
+# CI installs this with `bundle install` (cached by ruby/setup-ruby).
+# Run locally the same way: `cd ios && bundle install && bundle exec fastlane beta`.
+source "https://rubygems.org"
+
+gem "fastlane"
+gem "xcodeproj"

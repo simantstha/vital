@@ -1,0 +1,74 @@
+default_platform(:ios)
+
+APP_IDENTIFIER = "com.simantstha.vital".freeze
+PROFILE_NAME   = "match AppStore com.simantstha.vital".freeze
+
+platform :ios do
+  desc "Build a Release archive and upload it to TestFlight"
+  desc "Auth: App Store Connect API key. Signing: fastlane match (readonly)."
+  desc "Version comes from RELEASE_VERSION (the git tag); build number is the"
+  desc "next TestFlight build number. Both are injected at archive time."
+  lane :beta do
+    api_key = app_store_connect_api_key(
+      key_id: ENV.fetch("ASC_KEY_ID"),
+      issuer_id: ENV.fetch("ASC_ISSUER_ID"),
+      key_content: ENV.fetch("ASC_KEY_CONTENT_BASE64"),
+      is_key_content_base64: true,
+      in_house: false
+    )
+
+    # Pull the distribution cert + provisioning profile from the match repo.
+    # readonly: never mint new credentials from CI — populate them locally.
+    match(
+      type: "appstore",
+      readonly: true,
+      app_identifier: APP_IDENTIFIER,
+      api_key: api_key
+    )
+
+    # Next build number = (highest already on TestFlight) + 1. Falls back to 1
+    # for the very first upload (initial_build_number).
+    build_number = latest_testflight_build_number(
+      app_identifier: APP_IDENTIFIER,
+      api_key: api_key,
+      initial_build_number: 0
+    ) + 1
+
+    version = ENV.fetch("RELEASE_VERSION")
+
+    # Force manual signing with the match-installed profile so the archive is
+    # deterministic on a fresh CI runner (no automatic-signing guesswork).
+    update_code_signing_settings(
+      use_automatic_signing: false,
+      path: "Vital.xcodeproj",
+      team_id: ENV.fetch("APPLE_TEAM_ID"),
+      code_sign_identity: "Apple Distribution",
+      profile_name: PROFILE_NAME,
+      bundle_identifier: APP_IDENTIFIER,
+      targets: ["Vital"]
+    )
+
+    build_app(
+      project: "Vital.xcodeproj",
+      scheme: "Vital",
+      configuration: "Release",
+      export_method: "app-store",
+      output_directory: "build",
+      output_name: "Vital.ipa",
+      # Stamp version + build via build settings so they reach the Info.plist.
+      xcargs: "MARKETING_VERSION=#{version} CURRENT_PROJECT_VERSION=#{build_number}",
+      export_options: {
+        provisioningProfiles: {
+          APP_IDENTIFIER => PROFILE_NAME
+        }
+      }
+    )
+
+    upload_to_testflight(
+      api_key: api_key,
+      app_identifier: APP_IDENTIFIER,
+      # Don't block the CI job on Apple's server-side processing.
+      skip_waiting_for_build_processing: true
+    )
+  end
+end
