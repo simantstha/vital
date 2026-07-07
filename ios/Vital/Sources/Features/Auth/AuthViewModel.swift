@@ -35,6 +35,21 @@ final class AuthViewModel: ObservableObject {
     init() {
         isAuthenticated = KeychainStore.loadSessionToken() != nil
         onboarded = UserDefaults.standard.bool(forKey: Keys.onboarded)
+
+        // A 401 from any request means the stored token is no longer valid
+        // (expired, or signed with a since-rotated secret). Drop the session so
+        // RootView returns to SignInView instead of sitting in a broken
+        // "signed in" state where every API call silently fails.
+        NotificationCenter.default.addObserver(
+            forName: .vitalSessionExpired,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.isAuthenticated else { return }
+                self.signOut()
+            }
+        }
     }
 
     /// Called by OnboardingFlowView once the questionnaire submits
@@ -92,8 +107,10 @@ final class AuthViewModel: ObservableObject {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 15
 
-        struct Body: Encodable { let identityToken: String }
-        request.httpBody = try? JSONEncoder().encode(Body(identityToken: identityToken))
+        // Apple only supplies fullName on the first authorization; forward it
+        // so the server can persist a real name instead of the placeholder.
+        struct Body: Encodable { let identityToken: String; let name: String? }
+        request.httpBody = try? JSONEncoder().encode(Body(identityToken: identityToken, name: appleDisplayName))
 
         await send(request)
     }

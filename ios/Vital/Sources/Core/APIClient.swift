@@ -44,6 +44,16 @@ struct HealthDelta: Encodable {
     let payload: [String: JSONValue]
 }
 
+// MARK: - Session lifecycle
+
+extension Notification.Name {
+    /// Posted by `APIClient` when the backend rejects the session token with a
+    /// 401. `AuthViewModel` observes this and signs the user out, so an expired
+    /// or invalidated token returns them to the sign-in screen instead of
+    /// leaving a "signed in" session where every request silently 401s.
+    static let vitalSessionExpired = Notification.Name("vitalSessionExpired")
+}
+
 // MARK: - APIClient
 
 struct APIClient {
@@ -88,6 +98,18 @@ struct APIClient {
         return r
     }
 
+    /// Single choke point for HTTP status handling: throws
+    /// `APIError.serverError` for any >= 400 response, and additionally
+    /// broadcasts `.vitalSessionExpired` on a 401 so the app can drop a dead
+    /// session. Every request path routes its response through this.
+    private func validate(_ response: URLResponse) throws {
+        guard let http = response as? HTTPURLResponse, http.statusCode >= 400 else { return }
+        if http.statusCode == 401 {
+            NotificationCenter.default.post(name: .vitalSessionExpired, object: nil)
+        }
+        throw APIError.serverError(http.statusCode)
+    }
+
     // MARK: - Generic GET
 
     private func get<T: Decodable>(_ path: String) async throws -> T {
@@ -97,9 +119,7 @@ struct APIClient {
         var request = authorizedRequest(url)
         request.timeoutInterval = 30
         let (data, response) = try await session.data(for: request)
-        if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
-            throw APIError.serverError(http.statusCode)
-        }
+        try validate(response)
         return try decoder.decode(T.self, from: data)
     }
 
@@ -144,9 +164,7 @@ struct APIClient {
         struct Body: Encodable { let id: String; let action: String }
         request.httpBody = try encoder.encode(Body(id: id, action: action))
         let (_, response) = try await session.data(for: request)
-        if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
-            throw APIError.serverError(http.statusCode)
-        }
+        try validate(response)
     }
 
     // MARK: - Coach (SSE streaming)
@@ -171,6 +189,9 @@ struct APIClient {
                     let (bytes, response) = try await session.bytes(for: request)
 
                     if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
+                        if http.statusCode == 401 {
+                            NotificationCenter.default.post(name: .vitalSessionExpired, object: nil)
+                        }
                         continuation.finish(throwing: APIError.serverError(http.statusCode))
                         return
                     }
@@ -224,9 +245,7 @@ struct APIClient {
         struct Body: Encodable { let query: String }
         request.httpBody = try encoder.encode(Body(query: query))
         let (data, response) = try await session.data(for: request)
-        if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
-            throw APIError.serverError(http.statusCode)
-        }
+        try validate(response)
         return try decoder.decode(NutritionResult.self, from: data)
     }
 
@@ -241,9 +260,7 @@ struct APIClient {
         struct Body: Encodable { let barcode: String; let grams: Double? }
         request.httpBody = try encoder.encode(Body(barcode: barcode, grams: grams))
         let (data, response) = try await session.data(for: request)
-        if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
-            throw APIError.serverError(http.statusCode)
-        }
+        try validate(response)
         return try decoder.decode(BarcodeResult.self, from: data)
     }
 
@@ -258,9 +275,7 @@ struct APIClient {
         struct Body: Encodable { let imageBase64: String }
         request.httpBody = try encoder.encode(Body(imageBase64: imageBase64))
         let (data, response) = try await session.data(for: request)
-        if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
-            throw APIError.serverError(http.statusCode)
-        }
+        try validate(response)
         return try decoder.decode(NutritionResult.self, from: data)
     }
 
@@ -288,9 +303,7 @@ struct APIClient {
         }
         request.httpBody = try encoder.encode(Body(name: name, kcal: kcal, c: c, p: p, f: f, source: source, imageThumb: imageThumb))
         let (data, response) = try await session.data(for: request)
-        if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
-            throw APIError.serverError(http.statusCode)
-        }
+        try validate(response)
         return try decoder.decode(LogMealResponse.self, from: data)
     }
 
@@ -306,9 +319,7 @@ struct APIClient {
         request.timeoutInterval = 10
         request.httpBody = try encoder.encode(IngestRequestBody(deltas: deltas))
         let (_, response) = try await session.data(for: request)
-        if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
-            throw APIError.serverError(http.statusCode)
-        }
+        try validate(response)
     }
 
     // MARK: - Daily ingest (1-year backfill + background sync)
@@ -328,9 +339,7 @@ struct APIClient {
         request.timeoutInterval = 30
         request.httpBody = try encoder.encode(DailyIngestRequestBody(days: days))
         let (data, response) = try await session.data(for: request)
-        if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
-            throw APIError.serverError(http.statusCode)
-        }
+        try validate(response)
         return try decoder.decode(DailyIngestResponse.self, from: data).upserted
     }
 
@@ -357,9 +366,7 @@ struct APIClient {
             basics: basics, training: training, health: health, lifestyle: lifestyle
         ))
         let (data, response) = try await session.data(for: request)
-        if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
-            throw APIError.serverError(http.statusCode)
-        }
+        try validate(response)
         return try decoder.decode(OnboardingResponse.self, from: data)
     }
 }
