@@ -1,9 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
-import fs from 'fs';
-import path from 'path';
 import type { DailyBrief } from './types';
 import { readMemoryFile, writeMemoryFile } from '@/lib/memory';
-import { DATA_DIR } from './dataDir';
+import { writeHrvBaselineToProfile } from '@/lib/brain/baselines';
 
 // ── Inline types (formerly imported from lib/whoop + lib/strava) ──────────────
 
@@ -44,8 +42,6 @@ interface WeeklyLoadRecord {
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-const PROFILE_PATH = path.join(DATA_DIR, '.vital-memory', 'user-profile.md');
-
 const SEED_PROFILE = `# Vital — User Profile
 
 ## Goals
@@ -67,35 +63,29 @@ const SEED_PROFILE = `# Vital — User Profile
 (Claude appends one-sentence insights here after each brief)
 `;
 
-export function readUserProfile(): string {
-  try {
-    return fs.readFileSync(PROFILE_PATH, 'utf8');
-  } catch {
-    try {
-      fs.mkdirSync(path.dirname(PROFILE_PATH), { recursive: true });
-      fs.writeFileSync(PROFILE_PATH, SEED_PROFILE, 'utf8');
-    } catch { /* read-only fs on Vercel */ }
-    return SEED_PROFILE;
-  }
+export function readUserProfile(userId: string): string {
+  const existing = readMemoryFile(userId, 'user-profile.md');
+  if (existing) return existing;
+  writeMemoryFile(userId, 'user-profile.md', SEED_PROFILE);
+  return SEED_PROFILE;
 }
 
-function appendCoachNote(note: string) {
-  try {
-    let content = fs.readFileSync(PROFILE_PATH, 'utf8');
-    const marker = '## Coach Notes';
-    const idx = content.indexOf(marker);
-    const date = new Date().toISOString().split('T')[0];
-    const entry = `\n- [${date}] ${note}`;
-    if (idx === -1) {
-      content += `\n${marker}${entry}\n`;
-    } else {
-      // Append before next section or end of file
-      const nextSection = content.indexOf('\n## ', idx + marker.length);
-      const insertAt = nextSection === -1 ? content.length : nextSection;
-      content = content.slice(0, insertAt) + entry + content.slice(insertAt);
-    }
-    fs.writeFileSync(PROFILE_PATH, content, 'utf8');
-  } catch { /* read-only fs */ }
+function appendCoachNote(userId: string, note: string) {
+  const content = readMemoryFile(userId, 'user-profile.md') ?? SEED_PROFILE;
+  const marker = '## Coach Notes';
+  const idx = content.indexOf(marker);
+  const date = new Date().toISOString().split('T')[0];
+  const entry = `\n- [${date}] ${note}`;
+  let updated: string;
+  if (idx === -1) {
+    updated = content + `\n${marker}${entry}\n`;
+  } else {
+    // Append before next section or end of file
+    const nextSection = content.indexOf('\n## ', idx + marker.length);
+    const insertAt = nextSection === -1 ? content.length : nextSection;
+    updated = content.slice(0, insertAt) + entry + content.slice(insertAt);
+  }
+  writeMemoryFile(userId, 'user-profile.md', updated);
 }
 
 interface BriefContext {
@@ -112,29 +102,13 @@ interface BriefContext {
   weeklyMileage?: WeeklyLoadRecord[];
   recentNutrition?: Array<{ date: string; calories: number; carbs: number; protein: number; fat: number }>;
   weightKg?: number;
+  /** True while baselines are still calibrating (< 14 days of history) — recovery score is provisional. */
+  calibrating?: boolean;
 }
 
-function updateHrvBaseline(currentAvg: number): void {
-  const profile = readMemoryFile('core-profile.md');
-  if (!profile) return;
-
-  const match = /hrv baseline:\s*(\d+)\s*ms/i.exec(profile);
-  if (!match) return;
-
-  const stored = parseInt(match[1], 10);
-  if (Math.abs(currentAvg - stored) <= 3) return;
-
-  const date = new Date().toISOString().split('T')[0];
-  const updated = profile.replace(
-    /hrv baseline:\s*\d+\s*ms \(updated [^)]+\)/i,
-    `HRV baseline: ${currentAvg}ms (updated ${date})`
-  );
-  writeMemoryFile('core-profile.md', updated);
-}
-
-export async function generateDailyBrief(ctx: BriefContext): Promise<DailyBrief> {
+export async function generateDailyBrief(userId: string, ctx: BriefContext): Promise<DailyBrief> {
   const today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
-  const userProfile = readMemoryFile('core-profile.md') ?? readUserProfile();
+  const userProfile = readMemoryFile(userId, 'core-profile.md') ?? readUserProfile(userId);
 
   const historySection = ctx.history?.days.length
     ? `\n## 7-Day Recovery Trend (newest first)\n` +
@@ -178,7 +152,7 @@ ${userProfile}
 
 ## Today's Snapshot
 - Date: ${today}
-- Recovery Score: ${ctx.recovery}% (${ctx.recovery >= 67 ? 'Green' : ctx.recovery >= 34 ? 'Amber' : 'Red'})
+${ctx.calibrating ? '- NOTE: Baselines are still calibrating (fewer than 14 days of history) — treat the recovery score below as PROVISIONAL. Do not give a firm recovery/training-intensity prescription; say the numbers are still settling in and default to moderate, conservative guidance.\n' : ''}- Recovery Score: ${ctx.recovery}% (${ctx.recovery >= 67 ? 'Green' : ctx.recovery >= 34 ? 'Amber' : 'Red'})${ctx.calibrating ? ' — provisional' : ''}
 - HRV: ${ctx.hrv}ms
 - Resting HR: ${ctx.rhr}bpm
 - Sleep Performance: ${ctx.sleepPerf}% · ${ctx.sleepDuration}
@@ -220,10 +194,10 @@ Respond ONLY with valid JSON, no markdown, no explanation:
   const text = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
   const parsed = JSON.parse(text);
 
-  if (parsed.profileUpdate) appendCoachNote(parsed.profileUpdate);
+  if (parsed.profileUpdate) appendCoachNote(userId, parsed.profileUpdate);
 
   if (ctx.history?.avgHrv7d) {
-    updateHrvBaseline(ctx.history.avgHrv7d);
+    writeHrvBaselineToProfile(userId, ctx.history.avgHrv7d);
   }
 
   return {

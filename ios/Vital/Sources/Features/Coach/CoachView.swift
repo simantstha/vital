@@ -3,8 +3,15 @@ import SwiftUI
 // MARK: - Root view
 
 struct CoachView: View {
-    @StateObject private var vm = CoachViewModel()
+    @StateObject private var vm: CoachViewModel
     @Namespace private var bottomAnchor
+
+    /// `mode` is forwarded to every `/api/coach` call via `CoachViewModel`.
+    /// The Coach tab uses the default (nil); the onboarding CoachIntro step
+    /// passes `"onboarding"`.
+    init(mode: String? = nil) {
+        _vm = StateObject(wrappedValue: CoachViewModel(mode: mode))
+    }
 
     var body: some View {
         ZStack {
@@ -16,6 +23,9 @@ struct CoachView: View {
                 inputBar
             }
         }
+        // Leaving the view mid-stream (e.g. onboarding CoachIntro → Continue)
+        // must not leave a stream task running against a gone view.
+        .onDisappear { vm.cancelStreaming() }
     }
 
     // MARK: - Navigation bar
@@ -55,9 +65,15 @@ struct CoachView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: Theme.Spacing.md) {
-                    ForEach(vm.messages) { msg in
-                        MessageBubbleView(message: msg)
-                            .id(msg.id)
+                    ForEach(vm.rows) { row in
+                        switch row {
+                        case .message(let msg):
+                            MessageBubbleView(message: msg)
+                                .id(row.id)
+                        case .toolCall(let call):
+                            ToolCallActivityView(row: call)
+                                .id(row.id)
+                        }
                     }
 
                     if vm.isStreaming {
@@ -74,13 +90,10 @@ struct CoachView: View {
                 .padding(.vertical, Theme.Spacing.md)
             }
             .scrollDismissesKeyboard(.interactively)
-            .onChange(of: vm.messages.count) {
+            .onChange(of: vm.rows) {
                 withAnimation(.easeOut(duration: 0.2)) {
                     proxy.scrollTo("bottom", anchor: .bottom)
                 }
-            }
-            .onChange(of: vm.messages.last?.text) {
-                proxy.scrollTo("bottom", anchor: .bottom)
             }
             .onChange(of: vm.isStreaming) {
                 withAnimation(.easeOut(duration: 0.2)) {
@@ -177,6 +190,46 @@ private extension View {
                 in: .rect(cornerRadius: Theme.Radius.lg, style: .continuous)
             )
         }
+    }
+}
+
+// MARK: - Tool-call activity row
+
+/// Inline, quiet indicator for a backend tool call: a spinner + label while
+/// running, collapsing to a small checkmark tag (via `Chip`) once done. Sits
+/// left-aligned in the transcript, distinct from message bubbles.
+private struct ToolCallActivityView: View {
+    let row: ToolCallRow
+
+    var body: some View {
+        HStack {
+            if row.isDone {
+                Chip(text: row.label, icon: "checkmark")
+            } else {
+                HStack(spacing: Theme.Spacing.xs) {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .tint(Theme.Colors.textSecondary)
+                    Text(row.label)
+                        .font(Theme.Typography.labelSmall)
+                        .fontWeight(.medium)
+                        .foregroundStyle(Theme.Colors.textSecondary)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(
+                    Capsule()
+                        .fill(Theme.Colors.glassFill)
+                        .overlay(
+                            Capsule()
+                                .strokeBorder(Theme.Colors.glassBorder, lineWidth: 0.5)
+                        )
+                )
+            }
+
+            Spacer()
+        }
+        .animation(.easeInOut(duration: 0.2), value: row.isDone)
     }
 }
 

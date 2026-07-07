@@ -15,11 +15,12 @@ import { sql } from 'drizzle-orm';
 // apple_sub is nullable — populated once Sign in with Apple is wired up.
 
 export const users = p.pgTable('users', {
-  id:         p.uuid('id').primaryKey().defaultRandom(),
-  apple_sub:  p.text('apple_sub').unique(),                                    // nullable; unique when present
-  email:      p.text('email').notNull(),
-  name:       p.text('name').notNull(),
-  created_at: p.timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  id:           p.uuid('id').primaryKey().defaultRandom(),
+  apple_sub:    p.text('apple_sub').unique(),                                  // nullable; unique when present
+  email:        p.text('email').notNull(),
+  name:         p.text('name').notNull(),
+  created_at:   p.timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  onboarded_at: p.timestamp('onboarded_at', { withTimezone: true }),           // nullable until onboarding flow completes
 });
 
 // ─── events (append-only) ────────────────────────────────────────────────────
@@ -129,6 +130,43 @@ export const pending_facts = p.pgTable('pending_facts', {
   p.index('pending_facts_user_status_idx').on(t.user_id, t.status),
 ]);
 
+// ─── daily_metrics ───────────────────────────────────────────────────────────
+// Day-keyed HealthKit summaries, backfill + ongoing sync land here (not the
+// events ledger) so upserts make backfill/retry/resume/re-sync idempotent
+// structurally. Known metric names: hrv_sdnn, resting_hr, hr_avg, steps,
+// active_energy_kcal, body_mass_kg, sleep_minutes (payload: stages),
+// workouts (value = count, payload = array of workout entries w/ hkUuid).
+
+export const daily_metrics = p.pgTable('daily_metrics', {
+  id:         p.uuid('id').primaryKey().defaultRandom(),
+  user_id:    p.uuid('user_id').notNull().references(() => users.id),
+  date:       p.date('date').notNull(),
+  metric:     p.text('metric').notNull(),
+  value:      p.real('value').notNull(),
+  payload:    p.jsonb('payload'),                                                // nullable; e.g. sleep stages, workout list
+  source:     p.text('source').notNull(),
+  updated_at: p.timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  p.uniqueIndex('daily_metrics_user_date_metric_idx').on(t.user_id, t.date, t.metric),
+]);
+
+// ─── baselines ───────────────────────────────────────────────────────────────
+// One row per (user, metric) — recomputed from daily_metrics after every
+// ingest. `established` gates the coach's recovery/training prescriptions
+// (see lib/brain/baselines.ts getCalibration()).
+
+export const baselines = p.pgTable('baselines', {
+  id:          p.uuid('id').primaryKey().defaultRandom(),
+  user_id:     p.uuid('user_id').notNull().references(() => users.id),
+  metric:      p.text('metric').notNull(),
+  stats:       p.jsonb('stats').notNull(),                                       // {mean7,mean30,mean60,sd30,p25,p50,p75}
+  data_days:   p.integer('data_days').notNull(),
+  established: p.boolean('established').default(false).notNull(),
+  computed_at: p.timestamp('computed_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  p.uniqueIndex('baselines_user_metric_idx').on(t.user_id, t.metric),
+]);
+
 // ─── pending_nudges ──────────────────────────────────────────────────────────
 // Nudges scheduled by the proactive heuristics cron (steps drop, HRV trend, etc.)
 // sent_at is null until the nudge is dispatched via APNs.
@@ -167,3 +205,9 @@ export type NewPendingFact = typeof pending_facts.$inferInsert;
 
 export type PendingNudge  = typeof pending_nudges.$inferSelect;
 export type NewPendingNudge = typeof pending_nudges.$inferInsert;
+
+export type DailyMetric    = typeof daily_metrics.$inferSelect;
+export type NewDailyMetric = typeof daily_metrics.$inferInsert;
+
+export type Baseline       = typeof baselines.$inferSelect;
+export type NewBaseline    = typeof baselines.$inferInsert;

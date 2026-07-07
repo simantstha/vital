@@ -6,6 +6,7 @@
  * Response:
  * {
  *   name: string,
+ *   onboarded: boolean,   // true once users.onboarded_at is set (POST /api/onboarding)
  *   integrations: [
  *     { name: "Apple Health", status: "connected" | "disconnected" },
  *   ],
@@ -21,7 +22,8 @@
 import { NextResponse } from 'next/server';
 import { db, schema } from '@/db';
 import { eq } from 'drizzle-orm';
-import { getOrCreateDevUser, DEV_NAME } from '@/lib/brain/user';
+import { getUserIdFromRequest } from '@/lib/auth';
+import { getCalibration } from '@/lib/brain/baselines';
 
 export const dynamic = 'force-dynamic';
 
@@ -39,19 +41,26 @@ function num(v: unknown): number | undefined {
 
 // ── Route handler ───────────────────────────────────────────────────────────
 
-export async function GET(): Promise<NextResponse> {
+export async function GET(request: Request): Promise<NextResponse> {
   let userId: string;
   try {
-    userId = await getOrCreateDevUser();
+    userId = getUserIdFromRequest(request);
   } catch (err) {
-    return NextResponse.json({ error: `DB error resolving user: ${String(err)}` }, { status: 500 });
+    return NextResponse.json({ error: String(err) }, { status: 401 });
   }
 
   // Fetch all events for this user (profile stats span all time)
-  const allEvents = await db
-    .select()
-    .from(schema.events)
-    .where(eq(schema.events.user_id, userId));
+  const [allEvents, userRow, calibration] = await Promise.all([
+    db.select().from(schema.events).where(eq(schema.events.user_id, userId)),
+    db
+      .select({ name: schema.users.name, onboarded_at: schema.users.onboarded_at })
+      .from(schema.users)
+      .where(eq(schema.users.id, userId))
+      .limit(1),
+    getCalibration(userId),
+  ]);
+  const name = userRow[0]?.name ?? 'Vital User';
+  const onboarded = userRow[0]?.onboarded_at != null;
 
   // ── Integration: Apple Health ─────────────────────────────────────────────
   // Connected if any event came from healthkit source
@@ -85,7 +94,8 @@ export async function GET(): Promise<NextResponse> {
 
   // ── Response ──────────────────────────────────────────────────────────────
   return NextResponse.json({
-    name: DEV_NAME,
+    name,
+    onboarded,
     integrations: [
       { name: 'Apple Health', status: hasHealthKit ? 'connected' : 'disconnected' },
     ],
@@ -95,5 +105,6 @@ export async function GET(): Promise<NextResponse> {
       avgHrv,
       workouts,
     },
+    calibration,
   });
 }

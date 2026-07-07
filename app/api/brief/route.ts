@@ -7,27 +7,39 @@
  */
 
 import { NextResponse } from 'next/server';
-import { getCachedBrief, cacheBrief } from '@/lib/briefCache';
+import { setCachedBrief, briefCacheKey, todayKey } from '@/lib/brain/briefCache';
 import { generateDailyBriefFromDb } from '@/lib/brain/brief';
-import { getOrCreateDevUser } from '@/lib/brain/user';
+import { getUserIdFromRequest } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
-  const cached = getCachedBrief();
-  if (cached) return NextResponse.json(cached);
-  return generate();
+export async function GET(request: Request) {
+  return handle(request);
 }
 
-export async function POST() {
-  return generate();
+export async function POST(request: Request) {
+  return handle(request);
 }
 
-async function generate() {
+async function handle(request: Request) {
+  let userId: string;
   try {
-    const userId = await getOrCreateDevUser();
-    const brief  = await generateDailyBriefFromDb(userId);
-    cacheBrief(brief);
+    userId = getUserIdFromRequest(request);
+  } catch (err) {
+    return NextResponse.json({ error: String(err) }, { status: 401 });
+  }
+  return generate(userId);
+}
+
+async function generate(userId: string) {
+  try {
+    const brief = await generateDailyBriefFromDb(userId);
+    // Warm the shared per-user brief cache (also read by /api/today) so it
+    // doesn't have to regenerate again for the rest of the day.
+    setCachedBrief(briefCacheKey(userId, todayKey()), {
+      insight: brief.body,
+      plan: brief.meals.map(m => ({ name: m.k, kcal: m.kcal, why: m.why })),
+    });
     return NextResponse.json(brief);
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';

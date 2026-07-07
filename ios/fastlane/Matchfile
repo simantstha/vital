@@ -1,0 +1,7 @@
+# fastlane match — stores the App Store distribution certificate + provisioning
+# profile in a private git repo, encrypted with MATCH_PASSWORD. CI clones it
+# read-only; you populate it once locally (see docs/CI-TESTFLIGHT.md).
+git_url(ENV["MATCH_GIT_URL"])
+storage_mode("git")
+type("appstore")
+app_identifier(["com.simantstha.vital"])

@@ -4,10 +4,21 @@
  * Streams a coached reply as Server-Sent Events (SSE).
  *
  * Request body (JSON):
- *   { message: string, imageBase64?: string }
+ *   { message: string, imageBase64?: string, mode?: "onboarding" }
+ *
+ * `mode: "onboarding"` switches the persona into onboarding mode (greet the
+ * new user, ask at most 3 short questions, persist answers via the memory
+ * tools, no training/nutrition advice yet) — see lib/brain/persona.ts and
+ * lib/brain/coach.ts. The SSE contract below is identical in both modes.
  *
  * SSE event contract:
  *   data: {"type":"text","delta":"..."}       — one or more text chunks
+ *   data: {"type":"tool_call","id":"...","name":"...","label":"...",
+ *          "status":"started"}                — a tool started executing;
+ *                                                `id` is unique per call
+ *   data: {"type":"tool_call","id":"...","name":"...","label":"...",
+ *          "status":"done"}                    — same `id` as its "started"
+ *                                                event, once the tool finishes
  *   data: {"type":"done","messageId":"..."}   — final event; messageId is the
  *                                               UUID of the persisted assistant
  *                                               message row in `messages`.
@@ -17,16 +28,16 @@
  * The connection closes after "done" or "error".
  */
 
-import { getOrCreateDevUser } from '@/lib/brain/user';
+import { getUserIdFromRequest } from '@/lib/auth';
 import { runCoach } from '@/lib/brain/coach';
 
 export const dynamic = 'force-dynamic';
 
 export async function POST(request: Request): Promise<Response> {
   // Parse body
-  let body: { message?: unknown; imageBase64?: unknown };
+  let body: { message?: unknown; imageBase64?: unknown; mode?: unknown };
   try {
-    body = await request.json() as { message?: unknown; imageBase64?: unknown };
+    body = await request.json() as { message?: unknown; imageBase64?: unknown; mode?: unknown };
   } catch {
     return new Response('Invalid JSON body.', { status: 400 });
   }
@@ -39,12 +50,13 @@ export async function POST(request: Request): Promise<Response> {
   const imageBase64 =
     typeof body.imageBase64 === 'string' ? body.imageBase64 : undefined;
 
-  // Resolve the dev user (will be replaced by JWT auth in production)
+  const mode = body.mode === 'onboarding' ? 'onboarding' as const : undefined;
+
   let userId: string;
   try {
-    userId = await getOrCreateDevUser();
+    userId = getUserIdFromRequest(request);
   } catch (err) {
-    return new Response(`DB error resolving user: ${String(err)}`, { status: 500 });
+    return new Response(String(err), { status: 401 });
   }
 
   const encoder = new TextEncoder();
@@ -56,9 +68,17 @@ export async function POST(request: Request): Promise<Response> {
       };
 
       try {
-        for await (const chunk of runCoach(userId, message, imageBase64)) {
+        for await (const chunk of runCoach(userId, message, imageBase64, mode)) {
           if (chunk.type === 'text') {
             send({ type: 'text', delta: chunk.text });
+          } else if (chunk.type === 'tool_call') {
+            send({
+              type:   'tool_call',
+              id:     chunk.id,
+              name:   chunk.name,
+              label:  chunk.label,
+              status: chunk.status,
+            });
           } else if (chunk.type === 'done') {
             send({ type: 'done', messageId: chunk.messageId });
           }

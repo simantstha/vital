@@ -1,0 +1,12 @@
+# Ruby toolchain for the iOS release pipeline (fastlane).
+# CI installs this with `bundle install` (cached by ruby/setup-ruby).
+# Run locally the same way: `cd ios && bundle install && bundle exec fastlane beta`.
+source "https://rubygems.org"
+
+gem "fastlane"
+gem "xcodeproj"
+
+# Ruby 3.3's bundled openssl gem raises "invalid curve name" when fastlane's
+# app_store_connect_api_key parses Apple's ES256 .p8 key on OpenSSL 3. Pinning
+# a modern openssl gem (>= 3.2) fixes EC key parsing on CI.
+gem "openssl", ">= 3.2"

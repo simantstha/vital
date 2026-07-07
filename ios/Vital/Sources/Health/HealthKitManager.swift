@@ -46,6 +46,7 @@ final class HealthKitManager: ObservableObject {
             .stepCount,
             .activeEnergyBurned,
             .bodyMass,
+            .height,
         ]
 
         for id in quantityIdentifiers {
@@ -56,6 +57,15 @@ final class HealthKitManager: ObservableObject {
 
         if let sleepType = HKObjectType.categoryType(forIdentifier: .sleepAnalysis) {
             types.insert(sleepType)
+        }
+
+        // Characteristics — read once at onboarding to prefill date of birth /
+        // biological sex; these are one-time facts, not time-series samples.
+        if let dobType = HKObjectType.characteristicType(forIdentifier: .dateOfBirth) {
+            types.insert(dobType)
+        }
+        if let sexType = HKObjectType.characteristicType(forIdentifier: .biologicalSex) {
+            types.insert(sexType)
         }
 
         types.insert(HKObjectType.workoutType())
@@ -205,6 +215,75 @@ final class HealthKitManager: ObservableObject {
                 }
                 let count = Int(sum.doubleValue(for: HKUnit.count()))
                 continuation.resume(returning: StepsReading(count: count, date: Date()))
+            }
+            store.execute(query)
+        }
+    }
+
+    // MARK: - Characteristics (onboarding prefill)
+
+    /// One-shot read of static profile facts for onboarding prefill: date of
+    /// birth and biological sex come from HealthKit's characteristic store
+    /// (synchronous, throwing); height/weight come from the latest quantity
+    /// sample of each type. Every field degrades to `nil` independently —
+    /// callers should treat this purely as a convenience prefill, never a
+    /// required source of truth.
+    func fetchCharacteristics() async -> (
+        dateOfBirth: Date?,
+        biologicalSex: String?,
+        latestHeightCm: Double?,
+        latestBodyMassKg: Double?
+    ) {
+        guard HKHealthStore.isHealthDataAvailable() else {
+            return (nil, nil, nil, nil)
+        }
+
+        let dateOfBirth: Date? = {
+            guard let components = try? store.dateOfBirthComponents() else { return nil }
+            return Calendar.current.date(from: components)
+        }()
+
+        let biologicalSex: String? = {
+            guard let bio = try? store.biologicalSex() else { return nil }
+            switch bio.biologicalSex {
+            case .male:    return "male"
+            case .female:  return "female"
+            case .other:   return "other"
+            case .notSet:  return nil
+            @unknown default: return nil
+            }
+        }()
+
+        async let heightTask = fetchLatestQuantitySample(
+            identifier: .height, unit: HKUnit.meterUnit(with: .centi)
+        )
+        async let massTask = fetchLatestQuantitySample(
+            identifier: .bodyMass, unit: HKUnit.gramUnit(with: .kilo)
+        )
+        let (latestHeightCm, latestBodyMassKg) = await (heightTask, massTask)
+
+        return (dateOfBirth, biologicalSex, latestHeightCm, latestBodyMassKg)
+    }
+
+    private func fetchLatestQuantitySample(
+        identifier: HKQuantityTypeIdentifier,
+        unit: HKUnit
+    ) async -> Double? {
+        guard let type = HKObjectType.quantityType(forIdentifier: identifier) else { return nil }
+
+        return await withCheckedContinuation { continuation in
+            let sort = NSSortDescriptor(key: HKSampleSortIdentifierEndDate, ascending: false)
+            let query = HKSampleQuery(
+                sampleType: type,
+                predicate: nil,
+                limit: 1,
+                sortDescriptors: [sort]
+            ) { _, samples, _ in
+                guard let sample = samples?.first as? HKQuantitySample else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                continuation.resume(returning: sample.quantity.doubleValue(for: unit))
             }
             store.execute(query)
         }

@@ -1,8 +1,10 @@
 import fs from 'fs';
 import path from 'path';
-import { DATA_DIR } from './dataDir';
+import { getUserMemoryDir } from './memory';
 
-const FILE = path.join(DATA_DIR, '.vital-memory', 'weight-log.json');
+function fileFor(userId: string): string {
+  return path.join(getUserMemoryDir(userId), 'weight-log.json');
+}
 
 export interface WeightEntry {
   date: string;    // "YYYY-MM-DD"
@@ -10,13 +12,13 @@ export interface WeightEntry {
   unit: 'lbs' | 'kg';
 }
 
-export function readWeightLog(): WeightEntry[] {
-  try { return JSON.parse(fs.readFileSync(FILE, 'utf-8')) as WeightEntry[]; }
+export function readWeightLog(userId: string): WeightEntry[] {
+  try { return JSON.parse(fs.readFileSync(fileFor(userId), 'utf-8')) as WeightEntry[]; }
   catch { return []; }
 }
 
-export function logWeight(date: string, weight: number, unit: 'lbs' | 'kg') {
-  const entries = readWeightLog();
+export function logWeight(userId: string, date: string, weight: number, unit: 'lbs' | 'kg') {
+  const entries = readWeightLog(userId);
   const idx = entries.findIndex(e => e.date === date);
   const entry: WeightEntry = { date, weight, unit };
   if (idx >= 0) entries[idx] = entry;
@@ -25,7 +27,7 @@ export function logWeight(date: string, weight: number, unit: 'lbs' | 'kg') {
   entries.sort((a, b) => a.date.localeCompare(b.date));
   const trimmed = entries.slice(-90);
   try {
-    fs.mkdirSync(path.dirname(FILE), { recursive: true });
-    fs.writeFileSync(FILE, JSON.stringify(trimmed, null, 2), 'utf-8');
+    fs.mkdirSync(getUserMemoryDir(userId), { recursive: true });
+    fs.writeFileSync(fileFor(userId), JSON.stringify(trimmed, null, 2), 'utf-8');
   } catch { /* read-only fs */ }
 }

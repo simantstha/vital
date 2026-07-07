@@ -8,6 +8,16 @@ node_modules/
 .whoop-refresh-token
 ios/Vital/Sources/Core/Secrets.swift
 
+# XcodeGen output + build/fastlane artifacts (regenerated in CI and locally)
+ios/Vital/Vital.xcodeproj/
+ios/Vital/build/
+ios/**/*.ipa
+ios/**/*.app.dSYM.zip
+ios/fastlane/report.xml
+ios/fastlane/README.md
+ios/vendor/bundle/
+ios/Gemfile.lock
+
 # Local tooling / scratch (Phase 0 triage)
 .claude/
 .playwright-mcp/

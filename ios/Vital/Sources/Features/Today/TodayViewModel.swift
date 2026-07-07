@@ -94,6 +94,10 @@ final class TodayViewModel: ObservableObject {
     // Pending facts banner
     @Published var pendingFacts: [PendingFact] = []
 
+    // Calibration state — driven from /api/today
+    @Published var calibrationStatus: String? = nil
+    @Published var calibrationProgress: Double = 0 // 0...1 based on min(dataDays) / 14
+
     // MARK: - Dependencies
 
     private let healthKit = HealthKitManager()
@@ -132,8 +136,11 @@ final class TodayViewModel: ObservableObject {
     // MARK: - Private loaders
 
     private func loadFromHealthKit() async {
-        await healthKit.requestAuthorization()
-
+        // Authorization is requested once, up front, at the start of the
+        // onboarding flow (see OnboardingViewModel.begin) — by the time
+        // Today loads, the user has already been asked. Re-requesting here
+        // was harmless but redundant, so it moved with the rest of the
+        // onboarding permission surface.
         async let hrvTask       = healthKit.fetchLatestHRV()
         async let sleepTask     = healthKit.fetchLastNightSleep()
         async let restingHRTask = healthKit.fetchLatestRestingHR()
@@ -141,20 +148,18 @@ final class TodayViewModel: ObservableObject {
         let (hrvReading, sleepReading, restingHRReading) =
             await (hrvTask, sleepTask, restingHRTask)
 
-        var deltas: [HealthDelta] = []
-
+        // Local reads above are for instant UI display only (overwritten by
+        // /api/today once it loads). Persisting to the server is now
+        // HealthSyncCoordinator's job — it re-aggregates by day and upserts
+        // through /api/ingest/daily, which is what backfill + background
+        // sync also write through, so there's no separate delta-post path
+        // to keep in sync here.
         if let r = hrvReading {
-            // Only override HRV tile if /api/today hasn't loaded yet
             hrv = HRVMetric(
                 value: Int(r.valueMs.rounded()),
                 trend: .upGood,
                 delta: "\(Int(r.valueMs.rounded())) ms"
             )
-            deltas.append(HealthDelta(
-                type: "hrv_reading",
-                timestamp: r.timestamp,
-                payload: ["valueMs": .double(r.valueMs)]
-            ))
         }
 
         if let r = sleepReading {
@@ -164,11 +169,6 @@ final class TodayViewModel: ObservableObject {
                 trend: .upGood,
                 delta: "\(r.totalMinutes / 60)h \(r.totalMinutes % 60)m"
             )
-            deltas.append(HealthDelta(
-                type: "sleep_session",
-                timestamp: r.bedTime,
-                payload: ["totalMinutes": .int(r.totalMinutes)]
-            ))
         }
 
         if let r = restingHRReading {
@@ -177,21 +177,9 @@ final class TodayViewModel: ObservableObject {
                 trend: .downGood,
                 delta: "\(Int(r.bpm.rounded())) bpm"
             )
-            deltas.append(HealthDelta(
-                type: "resting_hr_reading",
-                timestamp: r.timestamp,
-                payload: ["bpm": .double(r.bpm)]
-            ))
         }
 
-        if !deltas.isEmpty {
-            do {
-                try await apiClient.postIngest(deltas)
-            } catch {
-                errorMessage = error.localizedDescription
-                print("[Vital] Ingest failed: \(error.localizedDescription)")
-            }
-        }
+        await HealthSyncCoordinator.shared.syncNow()
     }
 
     private func loadTodayFromAPI() async {
@@ -205,42 +193,65 @@ final class TodayViewModel: ObservableObject {
     }
 
     private func applyTodayResponse(_ r: TodayResponse) {
+        // Calibration state — extract if present
+        if let cal = r.calibration {
+            calibrationStatus = cal.status
+            // Calculate progress as min of the three metrics' dataDays / 14 (target)
+            let dataDays = [
+                cal.metrics["hrv_sdnn"]?.dataDays ?? 0,
+                cal.metrics["resting_hr"]?.dataDays ?? 0,
+                cal.metrics["sleep_minutes"]?.dataDays ?? 0
+            ].min() ?? 0
+            calibrationProgress = min(1.0, Double(dataDays) / 14.0)
+        }
+
         // Coach insight — keep the existing default if the brief isn't ready yet
         if !r.insight.isEmpty {
             coachInsight = r.insight
         }
 
-        // Metrics — prefer API over HealthKit defaults
+        // Metrics — prefer API over HealthKit defaults. Null value/deltaPct
+        // means the user has no data for that metric yet (fresh account) —
+        // keep the neutral defaults (or HealthKit reads) in that case.
         let m = r.metrics
 
         // HRV
-        let hrvTrend: TrendDirection = m.hrv.deltaPct >= 0 ? .upGood : .downBad
-        let hrvSign = m.hrv.deltaPct >= 0 ? "+" : ""
-        hrv = HRVMetric(
-            value: Int(m.hrv.value.rounded()),
-            trend: hrvTrend,
-            delta: "\(hrvSign)\(m.hrv.deltaPct) %"
-        )
+        if let value = m.hrv.value {
+            let deltaPct = m.hrv.deltaPct ?? 0
+            let hrvTrend: TrendDirection = deltaPct >= 0 ? .upGood : .downBad
+            let hrvSign = deltaPct >= 0 ? "+" : ""
+            hrv = HRVMetric(
+                value: Int(value.rounded()),
+                trend: hrvTrend,
+                delta: "\(hrvSign)\(deltaPct) %"
+            )
+        }
 
         // Sleep — value is in hours (e.g. 7.8)
-        let totalSleepMins = Int((m.sleep.value * 60).rounded())
-        let sleepTrend: TrendDirection = m.sleep.deltaPct >= 0 ? .upGood : .downBad
-        let sleepSign = m.sleep.deltaPct >= 0 ? "+" : ""
-        sleep = SleepMetric(
-            hours: totalSleepMins / 60,
-            minutes: totalSleepMins % 60,
-            trend: sleepTrend,
-            delta: "\(sleepSign)\(m.sleep.deltaPct) %"
-        )
+        if let value = m.sleep.value {
+            let deltaPct = m.sleep.deltaPct ?? 0
+            let totalSleepMins = Int((value * 60).rounded())
+            let sleepTrend: TrendDirection = deltaPct >= 0 ? .upGood : .downBad
+            let sleepSign = deltaPct >= 0 ? "+" : ""
+            sleep = SleepMetric(
+                hours: totalSleepMins / 60,
+                minutes: totalSleepMins % 60,
+                trend: sleepTrend,
+                delta: "\(sleepSign)\(deltaPct) %"
+            )
+        }
 
         // Resting HR — lower is better
-        let hrTrend: TrendDirection = m.restingHr.deltaPct <= 0 ? .downGood : .upBad
-        let hrSign = m.restingHr.deltaPct >= 0 ? "+" : ""
-        restingHR = RestingHRMetric(
-            bpm: Int(m.restingHr.value.rounded()),
-            trend: hrTrend,
-            delta: "\(hrSign)\(m.restingHr.deltaPct) %"
-        )
+        if let value = m.restingHr.value {
+            let deltaPct = m.restingHr.deltaPct ?? 0
+            let hrTrend: TrendDirection = deltaPct <= 0 ? .downGood : .upBad
+            let hrSign = deltaPct >= 0 ? "+" : ""
+            restingHR = RestingHRMetric(
+                bpm: Int(value.rounded()),
+                trend: hrTrend,
+                delta: "\(hrSign)\(deltaPct) %"
+            )
+        }
 
         // Diet budget
         let db = r.dietBudget

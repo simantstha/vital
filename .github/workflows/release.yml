@@ -1,0 +1,142 @@
+name: Release
+
+# Ships a versioned release: brings the backend up to date (Supabase migration
+# + Fly deploy), then builds and uploads the iOS app to TestFlight.
+#
+# Trigger: push a version tag, e.g.  git tag v1.2.0 && git push origin v1.2.0
+# Manual:  Actions → Release → Run workflow (provide the version, no leading v).
+#
+# Required repo secrets — see docs/CI-TESTFLIGHT.md for how to create each:
+#   Backend:  FLY_API_TOKEN, SUPABASE_DATABASE_URL
+#   iOS app:  IOS_API_TOKEN
+#   Signing:  APPLE_TEAM_ID, ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_CONTENT_BASE64,
+#             MATCH_GIT_URL, MATCH_GIT_BASIC_AUTHORIZATION, MATCH_PASSWORD
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Marketing version (no leading v, e.g. 1.2.0)"
+        required: true
+
+# Never run two releases at once; let an in-flight one finish.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  backend:
+    name: Backend — migrate + deploy (Fly)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      # drizzle.config.ts imports drizzle-kit + dotenv, so node_modules must be
+      # populated before the migrate step (the pinned drizzle-kit is used, not
+      # @latest, to avoid version drift against the config).
+      - name: Install dependencies
+        run: npm ci
+
+      # Apply schema to production BEFORE new code runs against it. drizzle-kit
+      # is additive here (new columns/tables), so it is safe to run first.
+      - name: Migrate Supabase schema
+        env:
+          DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
+        run: npx drizzle-kit push --force
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy to Fly
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: flyctl deploy --remote-only
+
+  ios:
+    name: iOS — build + upload to TestFlight
+    needs: backend
+    runs-on: macos-latest
+    # Safety net: the build itself is ~5 min; anything approaching this means a
+    # hang (e.g. a codesign keychain prompt) — fail fast instead of stalling.
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: ios
+    steps:
+      - uses: actions/checkout@v4
+
+      # The project targets a recent iOS SDK; pin here if a specific Xcode is
+      # needed to match local (project.yml declares deploymentTarget 26.0).
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Resolve release version
+        env:
+          # Pass the dispatch input through env (never interpolate untrusted
+          # input straight into the shell) and validate it before use.
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            VERSION="$INPUT_VERSION"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+(\.[0-9]+){1,2}$'; then
+            echo "::error::Invalid version '$VERSION' (expected e.g. 1.2 or 1.2.0)"
+            exit 1
+          fi
+          echo "RELEASE_VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      # Secrets.swift is gitignored — synthesize it from the template + secret.
+      - name: Write Secrets.swift
+        env:
+          IOS_API_TOKEN: ${{ secrets.IOS_API_TOKEN }}
+        run: |
+          mkdir -p Vital/Sources/Core
+          sed "s|REPLACE_WITH_API_SHARED_SECRET|${IOS_API_TOKEN}|" \
+            Vital/Secrets.example.swift > Vital/Sources/Core/Secrets.swift
+
+      - name: Generate Xcode project (XcodeGen)
+        run: |
+          brew install xcodegen
+          cd Vital && xcodegen generate
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+          working-directory: ios
+
+      # match clones the private vital-certs repo over SSH using a read-only
+      # deploy key (scoped to that repo only).
+      - name: Configure SSH for the match certs repo
+        env:
+          MATCH_DEPLOY_KEY: ${{ secrets.MATCH_DEPLOY_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$MATCH_DEPLOY_KEY" > ~/.ssh/match_ed25519
+          chmod 600 ~/.ssh/match_ed25519
+          ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
+          printf 'Host github.com\n  IdentityFile ~/.ssh/match_ed25519\n  IdentitiesOnly yes\n' >> ~/.ssh/config
+
+      - name: Build & upload to TestFlight
+        # Runs from ios/ (defaults.working-directory) — where both the Gemfile
+        # and fastlane/ live, so fastlane finds the Fastfile. The Fastfile
+        # references the project as Vital/Vital.xcodeproj relative to here.
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_CONTENT_BASE64: ${{ secrets.ASC_KEY_CONTENT_BASE64 }}
+          MATCH_GIT_URL: ${{ secrets.MATCH_GIT_URL }}
+          MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+        run: bundle exec fastlane beta

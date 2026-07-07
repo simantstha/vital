@@ -100,10 +100,23 @@ async function main() {
   config({ path: process.cwd() + '/.env.local' });
 
   const { db, schema } = await import('../db');
-  const { getOrCreateDevUser } = await import('../lib/brain/user');
   const { eq, and, sql } = await import('drizzle-orm');
 
-  const userId = await getOrCreateDevUser();
+  // Get-or-create the dev user (mirrors app/api/auth/dev/route.ts, which
+  // absorbed the former lib/brain/user.ts).
+  const DEV_EMAIL = 'dev@vital.local';
+  const DEV_NAME  = 'Dev User';
+  const existing = await db
+    .select({ id: schema.users.id })
+    .from(schema.users)
+    .where(eq(schema.users.email, DEV_EMAIL))
+    .limit(1);
+  const userId = existing.length > 0
+    ? existing[0].id
+    : (await db
+        .insert(schema.users)
+        .values({ email: DEV_EMAIL, name: DEV_NAME })
+        .returning({ id: schema.users.id }))[0].id;
   console.log(`Dev user UUID: ${userId}`);
 
   // ── Purge prior seeded rows ────────────────────────────────────────────────

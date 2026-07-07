@@ -8,6 +8,7 @@
  */
 
 import type { OntologyNode } from '@/db/schema';
+import type { Calibration } from './baselines';
 
 // ── Base coach voice ───────────────────────────────────────────────────────────
 
@@ -67,6 +68,53 @@ function trainerLens(): string {
 - Flag injury conflicts: if an Injury node exists, never recommend loading that pattern.`;
 }
 
+// ── Onboarding lens ─────────────────────────────────────────────────────────
+
+function onboardingLens(): string {
+  return `## Onboarding mode — this is the user's very first conversation
+Their goals, training, health, and lifestyle facts have already been captured via a \
+form and written to memory — do NOT re-ask for any of that. Your only job right now:
+1. Greet them warmly and briefly (one sentence) on what Vital does.
+2. Ask at most 3 short questions total, one at a time, waiting for each answer before \
+the next: (a) what's motivating them right now, (b) any schedule constraints that shape \
+when/how they can train, (c) their coaching history — has a coach or trainer worked with \
+them before, what worked or didn't.
+3. After each answer, persist it immediately: call append_observation for a short insight, \
+or write_memory to fold something structured into life-context.json. Don't wait until the \
+end — store as you go.
+4. Give NO training, nutrition, or recovery advice yet. Baselines aren't established. If \
+they ask for a recommendation, warmly say real guidance is coming once their data starts \
+flowing in and you've learned a bit more.
+Keep the whole exchange short and conversational — a quick intro, not an interview.`;
+}
+
+// ── Calibrating lens ──────────────────────────────────────────────────────────
+
+function calibratingLens(calibration: Calibration): string {
+  const metricLabels: Record<string, string> = {
+    'hrv_sdnn': 'HRV',
+    'resting_hr': 'resting heart rate',
+    'sleep_minutes': 'sleep',
+  };
+
+  const progress = Object.entries(calibration.metrics)
+    .map(([m, v]) => `${metricLabels[m] || m} ${v.dataDays}/14 days`)
+    .join(', ');
+
+  return `## Calibration mode — we're still learning your baselines
+Your body's baseline patterns are still being established: ${progress}.
+This means:
+- Do NOT give recovery scores, readiness verdicts, or training-intensity prescriptions yet.
+- If they ask for a recovery score or what workout intensity they should do, explain \
+plainly that baselines need 14 days of data per metric and you're still collecting it.
+- DO log meals, answer general health questions, offer encouragement, and discuss \
+training ideas — all of that helps the calibration process.
+- If they ask what calibration means, explain briefly: you're learning their normal \
+patterns (how their HRV, heart rate, and sleep usually look) so you can spot when \
+something is different and give advice that actually fits their body, not generic guidance.
+Everything else (nutrition logging, general advice, motivation) proceeds normally.`;
+}
+
 // ── Hard-constraints injector ─────────────────────────────────────────────────
 
 function hardConstraintsInjector(constraints: OntologyNode[]): string {
@@ -96,15 +144,25 @@ export type PersonaLens = 'nutritionist' | 'trainer';
  * Assemble the full system prompt from modular blocks.
  * @param hardConstraints  Allergy/Condition/Medication/Injury nodes from ontology
  * @param lenses           Which expert lenses to activate (default: all)
+ * @param onboarding       When true, appends the onboarding-mode instruction block
+ *                         (greet + ≤3 questions + no prescriptions) — see
+ *                         `POST /api/coach` `mode: 'onboarding'`.
+ * @param calibration      When status is 'calibrating', appends the calibration-mode
+ *                         instruction block (withhold recovery scores and training
+ *                         prescriptions until baselines are established).
  */
 export function assemblePersona(
   hardConstraints: OntologyNode[],
   lenses: PersonaLens[] = ['nutritionist', 'trainer'],
+  onboarding: boolean = false,
+  calibration?: Calibration,
 ): string {
   const blocks: string[] = [baseCoachVoice()];
 
   if (lenses.includes('nutritionist')) blocks.push(nutritionistLens());
   if (lenses.includes('trainer'))      blocks.push(trainerLens());
+  if (onboarding) blocks.push(onboardingLens());
+  if (calibration?.status === 'calibrating') blocks.push(calibratingLens(calibration));
 
   // Hard constraints always last — they override other guidance
   blocks.push(hardConstraintsInjector(hardConstraints));

@@ -4,9 +4,14 @@ import Foundation
 
 enum AppConfig {
     /// Base URL for the Vital backend.
-    /// Production (Fly.io): "https://vital-coach.fly.dev"
-    /// Local dev: "http://localhost:3000"
-    static let apiBaseURL = "https://vital-coach.fly.dev"
+    /// Simulator talks to the local dev server; device builds use Fly.io.
+    static let apiBaseURL: String = {
+        #if targetEnvironment(simulator)
+        return "http://localhost:3000"
+        #else
+        return "https://vital-coach.fly.dev"
+        #endif
+    }()
 }
 
 // MARK: - JSON value
@@ -70,9 +75,16 @@ struct APIClient {
 
     /// Builds a request carrying the bearer token. The header is set per-request
     /// (not on the session) so the redirect delegate controls its propagation.
+    ///
+    /// Only the signed-in user's Keychain session token is ever attached —
+    /// there is deliberately no fallback credential, so signing out revokes
+    /// API access. Unauthenticated requests go out without an Authorization
+    /// header and are rejected by the server.
     private func authorizedRequest(_ url: URL) -> URLRequest {
         var r = URLRequest(url: url)
-        r.setValue("Bearer \(AppSecrets.apiToken)", forHTTPHeaderField: "Authorization")
+        if let token = KeychainStore.loadSessionToken() {
+            r.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
         return r
     }
 
@@ -139,7 +151,7 @@ struct APIClient {
 
     // MARK: - Coach (SSE streaming)
 
-    func streamCoach(message: String, imageBase64: String? = nil) -> AsyncThrowingStream<String, Error> {
+    func streamCoach(message: String, imageBase64: String? = nil, mode: String? = nil) -> AsyncThrowingStream<CoachStreamEvent, Error> {
         AsyncThrowingStream { continuation in
             Task {
                 do {
@@ -153,7 +165,7 @@ struct APIClient {
                     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
                     request.timeoutInterval = 60
 
-                    let body = CoachRequestBody(message: message, imageBase64: imageBase64)
+                    let body = CoachRequestBody(message: message, imageBase64: imageBase64, mode: mode)
                     request.httpBody = try encoder.encode(body)
 
                     let (bytes, response) = try await session.bytes(for: request)
@@ -173,12 +185,20 @@ struct APIClient {
                         switch event.type {
                         case "text":
                             if let delta = event.delta {
-                                continuation.yield(delta)
+                                continuation.yield(.text(delta))
                             }
+                        case "tool_call":
+                            // Requires id/name/status; unrecognized shapes are dropped
+                            // rather than crashing the stream.
+                            guard let id = event.id, let name = event.name, let status = event.status else { break }
+                            let label = event.label ?? name
+                            continuation.yield(.toolCall(id: id, name: name, label: label, done: status == "done"))
                         case "done":
                             continuation.finish()
                             return
                         default:
+                            // Forward-compatible: unknown event types are ignored so the
+                            // stream stays robust to backend additions.
                             break
                         }
                     }
@@ -290,6 +310,58 @@ struct APIClient {
             throw APIError.serverError(http.statusCode)
         }
     }
+
+    // MARK: - Daily ingest (1-year backfill + background sync)
+
+    /// Posts day-keyed HealthKit summaries to `/api/ingest/daily`, which
+    /// upserts into `daily_metrics` (unique on user/date/metric) and
+    /// recomputes baselines server-side. Idempotent — re-posting the same
+    /// day is a no-op write, which is what makes chunk retries and resume
+    /// safe. Returns the server-reported upserted row count.
+    func postDailyIngest(days: [DailyIngestDay]) async throws -> Int {
+        guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/ingest/daily") else {
+            throw APIError.invalidURL
+        }
+        var request = authorizedRequest(url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 30
+        request.httpBody = try encoder.encode(DailyIngestRequestBody(days: days))
+        let (data, response) = try await session.data(for: request)
+        if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
+            throw APIError.serverError(http.statusCode)
+        }
+        return try decoder.decode(DailyIngestResponse.self, from: data).upserted
+    }
+
+    // MARK: - Onboarding
+
+    /// Submits the full onboarding questionnaire in one shot. The server
+    /// fills per-user memory files from these answers and marks
+    /// `users.onboarded_at`, which is what `/api/profile` and the auth
+    /// endpoints subsequently report back as `onboarded`.
+    func postOnboarding(
+        basics: OnboardingBasics,
+        training: OnboardingTraining,
+        health: OnboardingHealth,
+        lifestyle: OnboardingLifestyle
+    ) async throws -> OnboardingResponse {
+        guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/onboarding") else {
+            throw APIError.invalidURL
+        }
+        var request = authorizedRequest(url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 15
+        request.httpBody = try encoder.encode(OnboardingRequestBody(
+            basics: basics, training: training, health: health, lifestyle: lifestyle
+        ))
+        let (data, response) = try await session.data(for: request)
+        if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
+            throw APIError.serverError(http.statusCode)
+        }
+        return try decoder.decode(OnboardingResponse.self, from: data)
+    }
 }
 
 // MARK: - Errors
@@ -335,6 +407,103 @@ private struct IngestRequestBody: Encodable {
     let deltas: [HealthDelta]
 }
 
+// MARK: - Daily ingest DTOs
+//
+// Mirror app/api/ingest/daily/route.ts's request schema exactly — including
+// its snake_case metric keys — so the encoder can rely on Swift's default
+// key encoding (no CodingKeys needed). Property names ARE the wire format.
+
+/// One day's HealthKit summary, as posted to `/api/ingest/daily`.
+struct DailyIngestDay: Encodable {
+    let date: String // 'YYYY-MM-DD'
+    let metrics: DailyIngestMetrics?
+    let sleep: DailyIngestSleep?
+    let workouts: [DailyIngestWorkout]?
+}
+
+struct DailyIngestMetrics: Encodable {
+    let hrv_sdnn: Double?
+    let resting_hr: Double?
+    let hr_avg: Double?
+    let steps: Double?
+    let active_energy_kcal: Double?
+    let body_mass_kg: Double?
+}
+
+struct DailyIngestSleep: Encodable {
+    let minutes: Int
+    let stages: DailyIngestSleepStages?
+}
+
+struct DailyIngestSleepStages: Encodable {
+    let core: Int?
+    let deep: Int?
+    let rem: Int?
+    let awake: Int?
+}
+
+struct DailyIngestWorkout: Encodable {
+    let hkUuid: String
+    let type: String
+    let durationMin: Double
+    let kcal: Double
+}
+
+private struct DailyIngestRequestBody: Encodable {
+    let days: [DailyIngestDay]
+}
+
+private struct DailyIngestResponse: Decodable {
+    let upserted: Int
+}
+
+// MARK: - Onboarding DTOs
+//
+// Mirror POST /api/onboarding's request schema exactly (see hand-off plan,
+// Phase 5): { basics, training, health, lifestyle } → { ok, onboarded }.
+
+struct OnboardingBasics: Encodable {
+    let name: String
+    let dob: String // 'YYYY-MM-DD'
+    let sex: String
+    let heightCm: Double
+    let weightKg: Double
+    let units: String
+    let goal: String
+    let targetDate: String? // 'YYYY-MM-DD'
+}
+
+struct OnboardingTraining: Encodable {
+    let frequency: Int
+    let types: [String]
+    let experience: String
+    let volumeNotes: String?
+}
+
+struct OnboardingHealth: Encodable {
+    let injuries: String?
+    let conditions: String?
+    let medications: String?
+}
+
+struct OnboardingLifestyle: Encodable {
+    let sleepSchedule: String?
+    let stress: String?
+    let diet: String?
+}
+
+private struct OnboardingRequestBody: Encodable {
+    let basics: OnboardingBasics
+    let training: OnboardingTraining
+    let health: OnboardingHealth
+    let lifestyle: OnboardingLifestyle
+}
+
+struct OnboardingResponse: Decodable {
+    let ok: Bool
+    let onboarded: Bool
+}
+
 // MARK: - Nutrition & Meal
 
 struct NutritionResult: Decodable {
@@ -365,9 +534,12 @@ struct LogMealResponse: Decodable {
 // MARK: - Today dashboard types
 
 struct TodayMetricValue: Decodable {
-    let value: Double
+    // value/deltaPct are null for a user with no data yet (fresh account
+    // before any ingest) — non-optional decoding would reject the whole
+    // /api/today payload and silently drop insight + calibration with it.
+    let value: Double?
     let unit: String
-    let deltaPct: Int
+    let deltaPct: Int?
 }
 
 struct TodayMetrics: Decodable {
@@ -391,11 +563,22 @@ struct TodayPlanItem: Decodable {
     let why: String
 }
 
+struct CalibrationMetric: Decodable {
+    let dataDays: Int
+    let established: Bool
+}
+
+struct CalibrationStatus: Decodable {
+    let status: String // "calibrating" or "ready"
+    let metrics: [String: CalibrationMetric]
+}
+
 struct TodayResponse: Decodable {
     let metrics: TodayMetrics
     let dietBudget: TodayDietBudget
     let insight: String
     let plan: [TodayPlanItem]
+    let calibration: CalibrationStatus?
 }
 
 // MARK: - Trends types
@@ -469,10 +652,24 @@ struct PendingFactsResponse: Decodable {
 private struct CoachRequestBody: Encodable {
     let message: String
     let imageBase64: String?
+    let mode: String?
 }
 
 private struct SSEEvent: Decodable {
     let type: String
     let delta: String?
     let messageId: String?
+    // tool_call fields
+    let id: String?
+    let name: String?
+    let label: String?
+    let status: String?
+}
+
+/// A single event surfaced from the coach SSE stream: either a text delta to
+/// append to the streaming reply, or a tool-call lifecycle update (started/done)
+/// that the UI renders as an inline activity row.
+enum CoachStreamEvent {
+    case text(String)
+    case toolCall(id: String, name: String, label: String, done: Bool)
 }

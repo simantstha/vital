@@ -18,16 +18,16 @@
 import { NextResponse } from 'next/server';
 import { db, schema } from '@/db';
 import { eq, and, desc } from 'drizzle-orm';
-import { getOrCreateDevUser } from '@/lib/brain/user';
+import { getUserIdFromRequest } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET(): Promise<NextResponse> {
+export async function GET(request: Request): Promise<NextResponse> {
   let userId: string;
   try {
-    userId = await getOrCreateDevUser();
+    userId = getUserIdFromRequest(request);
   } catch (err) {
-    return NextResponse.json({ error: `DB error resolving user: ${String(err)}` }, { status: 500 });
+    return NextResponse.json({ error: String(err) }, { status: 401 });
   }
 
   const rows = await db
