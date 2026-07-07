@@ -113,6 +113,18 @@ jobs:
           bundler-cache: true
           working-directory: ios
 
+      # match clones the private vital-certs repo over SSH using a read-only
+      # deploy key (scoped to that repo only).
+      - name: Configure SSH for the match certs repo
+        env:
+          MATCH_DEPLOY_KEY: ${{ secrets.MATCH_DEPLOY_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$MATCH_DEPLOY_KEY" > ~/.ssh/match_ed25519
+          chmod 600 ~/.ssh/match_ed25519
+          ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
+          printf 'Host github.com\n  IdentityFile ~/.ssh/match_ed25519\n  IdentitiesOnly yes\n' >> ~/.ssh/config
+
       - name: Build & upload to TestFlight
         # Runs from ios/ (defaults.working-directory) — where both the Gemfile
         # and fastlane/ live, so fastlane finds the Fastfile. The Fastfile
@@ -123,6 +135,5 @@ jobs:
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           ASC_KEY_CONTENT_BASE64: ${{ secrets.ASC_KEY_CONTENT_BASE64 }}
           MATCH_GIT_URL: ${{ secrets.MATCH_GIT_URL }}
-          MATCH_GIT_BASIC_AUTHORIZATION: ${{ secrets.MATCH_GIT_BASIC_AUTHORIZATION }}
           MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
         run: bundle exec fastlane beta
