@@ -63,6 +63,9 @@ jobs:
     name: iOS — build + upload to TestFlight
     needs: backend
     runs-on: macos-latest
+    # Safety net: the build itself is ~5 min; anything approaching this means a
+    # hang (e.g. a codesign keychain prompt) — fail fast instead of stalling.
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: ios

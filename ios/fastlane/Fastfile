@@ -8,6 +8,12 @@ platform :ios do
   desc "Version comes from RELEASE_VERSION (the git tag); build number is the"
   desc "next TestFlight build number. Both are injected at archive time."
   lane :beta do
+    # On CI, create a temporary UNLOCKED keychain for signing. Without this,
+    # match imports the cert into the default keychain and codesign blocks
+    # forever waiting for keychain-access approval that never comes (there is
+    # no GUI on the runner). No-op locally when CI is unset.
+    setup_ci if ENV["CI"]
+
     api_key = app_store_connect_api_key(
       key_id: ENV.fetch("ASC_KEY_ID"),
       issuer_id: ENV.fetch("ASC_ISSUER_ID"),
