@@ -23,6 +23,8 @@ struct CoachView: View {
                 inputBar
             }
         }
+        // Fetch a fresh, data-aware opener when the Coach tab appears.
+        .task { vm.loadOpener() }
         // Leaving the view mid-stream (e.g. onboarding CoachIntro → Continue)
         // must not leave a stream task running against a gone view.
         .onDisappear { vm.cancelStreaming() }
@@ -76,7 +78,7 @@ struct CoachView: View {
                         }
                     }
 
-                    if vm.isStreaming {
+                    if vm.showTypingIndicator {
                         TypingIndicatorView()
                             .id("typing")
                     }
@@ -96,6 +98,11 @@ struct CoachView: View {
                 }
             }
             .onChange(of: vm.isStreaming) {
+                withAnimation(.easeOut(duration: 0.2)) {
+                    proxy.scrollTo("bottom", anchor: .bottom)
+                }
+            }
+            .onChange(of: vm.isOpening) {
                 withAnimation(.easeOut(duration: 0.2)) {
                     proxy.scrollTo("bottom", anchor: .bottom)
                 }
@@ -159,10 +166,9 @@ private struct MessageBubbleView: View {
             if message.role == .user { Spacer(minLength: 48) }
 
             VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 0) {
-                Text(message.text.isEmpty ? AttributedString(" ") : message.text.asMarkdown) // keep height while streaming
+                bubbleContent
                     .font(Theme.Typography.bodyMedium)
                     .foregroundStyle(message.role == .user ? Theme.Colors.onAccent : Theme.Colors.textPrimary)
-                    .lineSpacing(3)
                     .padding(.horizontal, Theme.Spacing.lg)
                     .padding(.vertical, Theme.Spacing.md)
                     .bubbleSurface(isUser: message.role == .user)
@@ -173,6 +179,17 @@ private struct MessageBubbleView: View {
         }
     }
 
+    /// User bubbles are plain single-line-ish text; the coach reply renders
+    /// block-level markdown (lists, paragraphs) via MarkdownText.
+    @ViewBuilder
+    private var bubbleContent: some View {
+        if message.role == .user {
+            Text(message.text.asMarkdown)
+                .lineSpacing(3)
+        } else {
+            MarkdownText(markdown: message.text)
+        }
+    }
 }
 
 /// Chat-bubble surface: a solid lime fill for the user, real Liquid Glass for the coach.
