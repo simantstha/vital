@@ -92,8 +92,10 @@ final class AuthViewModel: ObservableObject {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 15
 
-        struct Body: Encodable { let identityToken: String }
-        request.httpBody = try? JSONEncoder().encode(Body(identityToken: identityToken))
+        // Apple only supplies fullName on the first authorization; forward it
+        // so the server can persist a real name instead of the placeholder.
+        struct Body: Encodable { let identityToken: String; let name: String? }
+        request.httpBody = try? JSONEncoder().encode(Body(identityToken: identityToken, name: appleDisplayName))
 
         await send(request)
     }
