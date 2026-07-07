@@ -35,6 +35,21 @@ final class AuthViewModel: ObservableObject {
     init() {
         isAuthenticated = KeychainStore.loadSessionToken() != nil
         onboarded = UserDefaults.standard.bool(forKey: Keys.onboarded)
+
+        // A 401 from any request means the stored token is no longer valid
+        // (expired, or signed with a since-rotated secret). Drop the session so
+        // RootView returns to SignInView instead of sitting in a broken
+        // "signed in" state where every API call silently fails.
+        NotificationCenter.default.addObserver(
+            forName: .vitalSessionExpired,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.isAuthenticated else { return }
+                self.signOut()
+            }
+        }
     }
 
     /// Called by OnboardingFlowView once the questionnaire submits

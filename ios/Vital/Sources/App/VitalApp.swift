@@ -13,6 +13,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
+        // Must run before any token reader (below, AuthViewModel.init,
+        // APIClient): drops a session token inherited from a previous install,
+        // since the Keychain survives app deletion but UserDefaults don't.
+        KeychainStore.purgeIfFreshInstall()
+
         if KeychainStore.loadSessionToken() != nil {
             Task { @MainActor in
                 await HealthSyncCoordinator.shared.registerBackgroundDelivery()

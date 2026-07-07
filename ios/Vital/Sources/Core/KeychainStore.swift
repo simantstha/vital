@@ -58,4 +58,21 @@ enum KeychainStore {
         ]
         SecItemDelete(query as CFDictionary)
     }
+
+    /// Keychain items survive app deletion, but UserDefaults do not. On the
+    /// first launch after a fresh install we therefore purge any session token
+    /// left behind by a previous install — otherwise a reinstall resurrects a
+    /// stale (often invalid, e.g. expired or signed with a rotated secret)
+    /// session, skipping the sign-in screen and leaving every API call 401ing.
+    ///
+    /// Must run before anything reads the token (AuthViewModel.init,
+    /// AppDelegate, APIClient), so it's invoked at the very top of
+    /// application(_:didFinishLaunchingWithOptions:).
+    static func purgeIfFreshInstall() {
+        let installedKey = "app.hasLaunchedBefore"
+        let defaults = UserDefaults.standard
+        guard !defaults.bool(forKey: installedKey) else { return }
+        deleteSessionToken()
+        defaults.set(true, forKey: installedKey)
+    }
 }
