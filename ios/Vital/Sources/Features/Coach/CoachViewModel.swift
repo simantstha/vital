@@ -50,19 +50,45 @@ enum ChatRow: Identifiable, Equatable {
 @MainActor
 final class CoachViewModel: ObservableObject {
 
-    @Published var rows: [ChatRow] = [
-        .message(ChatMessage(
-            role: .assistant,
-            text: "Hey! I'm your Vital coach. Ask me anything about your health trends, sleep, or how to optimize your day."
-        ))
-    ]
+    // Starts empty — the opening line is fetched fresh from /api/coach/opener on
+    // appear (see loadOpener), so the chat reflects the user's data instead of a
+    // static greeting.
+    @Published var rows: [ChatRow] = []
 
     @Published var input: String = ""
     @Published var isStreaming: Bool = false
     @Published var errorMessage: String? = nil
 
+    /// True while the fresh opener is being fetched (before any rows exist), so
+    /// the view can show the typing indicator during load.
+    @Published var isOpening: Bool = false
+
     private let api = APIClient.shared
     private var streamTask: Task<Void, Never>? = nil
+    private var openerTask: Task<Void, Never>? = nil
+
+    /// The assistant message id for the in-flight turn. The bubble is inserted
+    /// lazily on the first text delta (not up front), so the typing indicator
+    /// renders where the reply will appear rather than below an empty bubble.
+    private var pendingAssistantId: UUID? = nil
+
+    // MARK: - Typing indicator
+
+    /// Show the standalone typing indicator while the opener loads, or while a
+    /// reply is streaming but no assistant text (or active tool call) has
+    /// surfaced yet. Once tokens arrive the bubble takes over and the dots hide.
+    var showTypingIndicator: Bool {
+        if isOpening { return true }
+        guard isStreaming else { return false }
+        let assistantStarted = pendingAssistantId.map { id in
+            rows.contains { $0.id == id.uuidString }
+        } ?? false
+        let hasActiveToolCall = rows.contains {
+            if case .toolCall(let t) = $0 { return !t.isDone }
+            return false
+        }
+        return !assistantStarted && !hasActiveToolCall
+    }
 
     /// Passed through to every `/api/coach` call. Set to `"onboarding"` when
     /// this view model backs the CoachIntro onboarding step; nil (the
@@ -71,6 +97,31 @@ final class CoachViewModel: ObservableObject {
 
     init(mode: String? = nil) {
         self.mode = mode
+    }
+
+    // MARK: - Opener
+
+    /// Fetches a fresh, data-aware opening line and inserts it as the first
+    /// assistant row. No-op if the conversation already has any rows (so it
+    /// never clobbers an in-progress chat) or if it's already loading. In
+    /// onboarding mode the opener comes from the streaming coach itself, so we
+    /// skip this entirely.
+    func loadOpener() {
+        guard mode == nil, rows.isEmpty, !isOpening, openerTask == nil else { return }
+        isOpening = true
+        openerTask = Task {
+            defer {
+                isOpening = false
+                openerTask = nil
+            }
+            let text = (try? await api.fetchCoachOpener())
+                ?? "Hey! I'm your Vital coach. Ask me anything about your health trends, sleep, or how to optimize your day."
+            // The user may have started typing/sending while we waited — only
+            // seed the opener if the transcript is still empty.
+            if rows.isEmpty {
+                rows.append(.message(ChatMessage(role: .assistant, text: text)))
+            }
+        }
     }
 
     // MARK: - Send
@@ -82,17 +133,26 @@ final class CoachViewModel: ObservableObject {
         input = ""
         errorMessage = nil
 
+        // A fresh send supersedes a still-loading opener.
+        openerTask?.cancel()
+        openerTask = nil
+        isOpening = false
+
         // Append user message
         rows.append(.message(ChatMessage(role: .user, text: trimmed)))
 
-        // Create placeholder assistant message that we fill in as tokens arrive
+        // The assistant bubble is created lazily on the first token (see
+        // appendText) so the typing indicator shows in its place until then.
         let assistantId = UUID()
-        rows.append(.message(ChatMessage(id: assistantId, role: .assistant, text: "")))
+        pendingAssistantId = assistantId
 
         isStreaming = true
 
         streamTask = Task {
-            defer { isStreaming = false }
+            defer {
+                isStreaming = false
+                pendingAssistantId = nil
+            }
 
             do {
                 let stream = api.streamCoach(message: trimmed, mode: mode)
@@ -105,11 +165,15 @@ final class CoachViewModel: ObservableObject {
                     }
                 }
             } catch {
-                // Replace empty placeholder with error text so the bubble isn't blank
+                // Surface the error in the assistant bubble. Since the bubble is
+                // created lazily, it may not exist yet (error before any token) —
+                // insert one if the reply never started.
+                let errorText = "Sorry, I couldn't reach the server. Please try again."
                 if let idx = rows.firstIndex(where: { $0.id == assistantId.uuidString }),
-                   case .message(var m) = rows[idx], m.text.isEmpty {
-                    m.text = "Sorry, I couldn't reach the server. Please try again."
-                    rows[idx] = .message(m)
+                   case .message(var m) = rows[idx] {
+                    if m.text.isEmpty { m.text = errorText; rows[idx] = .message(m) }
+                } else {
+                    rows.append(.message(ChatMessage(id: assistantId, role: .assistant, text: errorText)))
                 }
                 errorMessage = error.localizedDescription
             }
@@ -123,14 +187,22 @@ final class CoachViewModel: ObservableObject {
         streamTask?.cancel()
         streamTask = nil
         isStreaming = false
+        openerTask?.cancel()
+        openerTask = nil
+        isOpening = false
     }
 
     // MARK: - Row mutation helpers
 
     private func appendText(_ delta: String, toMessage id: UUID) {
+        // Lazily create the assistant bubble on the first token so the typing
+        // indicator (rendered while no bubble exists) is replaced in place.
         guard let idx = rows.firstIndex(where: { $0.id == id.uuidString }),
               case .message(var m) = rows[idx]
-        else { return }
+        else {
+            rows.append(.message(ChatMessage(id: id, role: .assistant, text: delta)))
+            return
+        }
         m.text += delta
         rows[idx] = .message(m)
     }

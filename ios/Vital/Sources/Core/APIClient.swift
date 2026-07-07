@@ -167,6 +167,17 @@ struct APIClient {
         try validate(response)
     }
 
+    // MARK: - Coach opener (fresh, data-aware greeting per open)
+
+    /// Fetches a short, data-aware opening line for the Coach tab. Generated
+    /// fresh on every open and never persisted server-side, so the chat opens
+    /// with something new about the user's data instead of a static greeting.
+    func fetchCoachOpener() async throws -> String {
+        struct OpenerResponse: Decodable { let text: String }
+        let r: OpenerResponse = try await get("/api/coach/opener")
+        return r.text
+    }
+
     // MARK: - Coach (SSE streaming)
 
     func streamCoach(message: String, imageBase64: String? = nil, mode: String? = nil) -> AsyncThrowingStream<CoachStreamEvent, Error> {
