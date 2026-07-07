@@ -37,6 +37,7 @@ targets:
         MARKETING_VERSION: "1.0"
         CURRENT_PROJECT_VERSION: "1"
         VERSIONING_SYSTEM: apple-generic
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         # Entitlements live in Sources/App/Vital.entitlements:
         #   - com.apple.developer.healthkit + background-delivery (ongoing
         #     background HealthKit sync via HealthSyncCoordinator)
@@ -52,6 +53,8 @@ targets:
         # through to the packaged Info.plist (App Store Connect reads these).
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        # Required by App Store validation for asset-catalog app icons.
+        CFBundleIconName: AppIcon
         # App uses only standard/exempt encryption (HTTPS) — declare it so
         # TestFlight doesn't gate every build on the export-compliance prompt.
         ITSAppUsesNonExemptEncryption: false
