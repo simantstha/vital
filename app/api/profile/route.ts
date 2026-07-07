@@ -21,23 +21,11 @@
 
 import { NextResponse } from 'next/server';
 import { db, schema } from '@/db';
-import { eq } from 'drizzle-orm';
+import { eq, and, sql } from 'drizzle-orm';
 import { getUserIdFromRequest } from '@/lib/auth';
 import { getCalibration } from '@/lib/brain/baselines';
 
 export const dynamic = 'force-dynamic';
-
-// ── Payload helpers ─────────────────────────────────────────────────────────
-
-function pl(payload: unknown): Record<string, unknown> {
-  return payload !== null && typeof payload === 'object' && !Array.isArray(payload)
-    ? (payload as Record<string, unknown>)
-    : {};
-}
-
-function num(v: unknown): number | undefined {
-  return typeof v === 'number' ? v : undefined;
-}
 
 // ── Route handler ───────────────────────────────────────────────────────────
 
@@ -49,48 +37,61 @@ export async function GET(request: Request): Promise<NextResponse> {
     return NextResponse.json({ error: String(err) }, { status: 401 });
   }
 
-  // Fetch all events for this user (profile stats span all time)
-  const [allEvents, userRow, calibration] = await Promise.all([
-    db.select().from(schema.events).where(eq(schema.events.user_id, userId)),
+  // HealthKit-derived stats (avgHrv, workouts, tracked days, integration
+  // status) come from daily_metrics — the store the backfill and background
+  // sync write to, and the same source Today/Trends read — NOT the events
+  // ledger. The app stopped writing hrv_reading/workout_completed events when
+  // health sync moved to daily_metrics, so reading events here reported zero.
+  // Meals are still logged as events (meal_logged), so mealsLogged stays there.
+  const [userRow, calibration, dmAgg, dmDates, mealRows] = await Promise.all([
     db
       .select({ name: schema.users.name, onboarded_at: schema.users.onboarded_at })
       .from(schema.users)
       .where(eq(schema.users.id, userId))
       .limit(1),
     getCalibration(userId),
+    db.execute(sql`
+      select
+        avg(value)  filter (where metric = 'hrv_sdnn')             as avg_hrv,
+        coalesce(sum(value) filter (where metric = 'workouts'), 0) as workouts,
+        count(*)                                                   as row_count
+      from ${schema.daily_metrics}
+      where ${schema.daily_metrics.user_id} = ${userId}
+    `),
+    db
+      .selectDistinct({ date: schema.daily_metrics.date })
+      .from(schema.daily_metrics)
+      .where(eq(schema.daily_metrics.user_id, userId)),
+    db
+      .select({ timestamp: schema.events.timestamp })
+      .from(schema.events)
+      .where(and(eq(schema.events.user_id, userId), eq(schema.events.type, 'meal_logged'))),
   ]);
+
   const name = userRow[0]?.name ?? 'Vital User';
   const onboarded = userRow[0]?.onboarded_at != null;
 
+  const aggRow = (dmAgg as unknown as Record<string, unknown>[])[0] ?? {};
+
   // ── Integration: Apple Health ─────────────────────────────────────────────
-  // Connected if any event came from healthkit source
-  const hasHealthKit = allEvents.some(e => e.source === 'healthkit');
+  // Connected once any HealthKit data has landed in daily_metrics.
+  const hasHealthKit = Number(aggRow.row_count ?? 0) > 0;
 
   // ── Stats ─────────────────────────────────────────────────────────────────
 
-  // loggedDays: distinct UTC calendar dates with any event
+  // loggedDays: distinct calendar dates the user was tracked — union of
+  // daily_metrics days (device-local 'YYYY-MM-DD') and meal-logged UTC days.
   const dateSet = new Set<string>();
-  for (const e of allEvents) {
-    dateSet.add(e.timestamp.toISOString().split('T')[0]);
-  }
+  for (const r of dmDates) dateSet.add(String(r.date));
+  for (const m of mealRows) dateSet.add(m.timestamp.toISOString().split('T')[0]);
 
-  // mealsLogged
-  const mealsLogged = allEvents.filter(e => e.type === 'meal_logged').length;
+  const mealsLogged = mealRows.length;
 
-  // avgHrv
-  const hrvValues: number[] = [];
-  for (const e of allEvents.filter(e => e.type === 'hrv_reading')) {
-    const p = pl(e.payload);
-    const v = num(p.value) ?? num(p.hrv) ?? num(p.valueMs) ?? num(p.sdnn);
-    if (v != null) hrvValues.push(v);
-  }
-  const avgHrv =
-    hrvValues.length > 0
-      ? Math.round((hrvValues.reduce((a, b) => a + b, 0) / hrvValues.length) * 10) / 10
-      : null;
+  // pg returns aggregates as numeric strings; null when no hrv_sdnn rows exist.
+  const avgHrvRaw = aggRow.avg_hrv != null ? Number(aggRow.avg_hrv) : NaN;
+  const avgHrv = Number.isFinite(avgHrvRaw) ? Math.round(avgHrvRaw * 10) / 10 : null;
 
-  // workouts
-  const workouts = allEvents.filter(e => e.type === 'workout_completed').length;
+  const workouts = Math.round(Number(aggRow.workouts ?? 0));
 
   // ── Response ──────────────────────────────────────────────────────────────
   return NextResponse.json({
