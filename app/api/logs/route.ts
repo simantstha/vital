@@ -20,6 +20,7 @@ import { NextResponse } from 'next/server';
 import { db, schema } from '@/db';
 import { eq, and, gte, inArray, desc } from 'drizzle-orm';
 import { getUserIdFromRequest } from '@/lib/auth';
+import { queryWorkouts } from '@/lib/brain/tools';
 
 export const dynamic = 'force-dynamic';
 
@@ -154,7 +155,7 @@ export async function GET(request: Request): Promise<NextResponse> {
     .orderBy(desc(schema.events.timestamp))
     .limit(200);
 
-  const items = events.map(e => {
+  const eventItems = events.map(e => {
     const thumb = str(pl(e.payload).imageThumb);
     return {
       id:        e.id,
@@ -165,6 +166,28 @@ export async function GET(request: Request): Promise<NextResponse> {
       ...(thumb ? { imageThumb: thumb } : {}),
     };
   });
+
+  // Workouts synced from HealthKit live in daily_metrics (not events), so the
+  // events query above never sees them. Surface them here. No exact start time
+  // is stored, so anchor to noon UTC on the workout's day for stable ordering.
+  const workouts = await queryWorkouts(userId, days);
+  const workoutItems = workouts.map((w, i) => {
+    const wtype = str(w.type) ?? 'Workout';
+    const label = wtype.charAt(0).toUpperCase() + wtype.slice(1);
+    const durationMin = num(w.durationMin);
+    const kcal = num(w.kcal);
+    return {
+      id:        str(w.hkUuid) ?? `${w.date}-workout-${i}`,
+      type:      'workout_completed',
+      timestamp: `${w.date}T12:00:00.000Z`,
+      title:     durationMin != null ? `${label} — ${Math.round(durationMin)} min` : label,
+      subtitle:  kcal != null ? `~${Math.round(kcal)} kcal` : 'Workout logged',
+    };
+  });
+
+  const items = [...eventItems, ...workoutItems].sort((a, b) =>
+    b.timestamp.localeCompare(a.timestamp),
+  );
 
   return NextResponse.json({ items });
 }
