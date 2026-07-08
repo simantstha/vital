@@ -89,11 +89,16 @@ function appendCoachNote(userId: string, note: string) {
 }
 
 interface BriefContext {
-  recovery: number;
-  hrv: number;
-  rhr: number;
-  sleepPerf: number;
-  sleepDuration: string;
+  /** null when there isn't enough biometric data to compute a recovery score yet. */
+  recovery: number | null;
+  /** null when no HRV has synced yet — never substitute a placeholder number. */
+  hrv: number | null;
+  /** null when no resting-HR reading has synced yet. */
+  rhr: number | null;
+  /** Sleep efficiency %; null when stage data is unavailable. */
+  sleepPerf: number | null;
+  /** Formatted sleep duration (e.g. "7h 12m"); null when no sleep has synced. */
+  sleepDuration: string | null;
   strain: number | string;
   weeklyMi: number;
   lastRun: { distanceMi: string; pace: string; dayTime: string; name: string } | null;
@@ -141,6 +146,22 @@ export async function generateDailyBrief(userId: string, ctx: BriefContext): Pro
       ).join('\n')
     : '';
 
+  // ── Absence-aware biometric lines ──────────────────────────────────────────
+  // These values come straight from the same daily_metrics store the Today
+  // metric cards read. When a metric hasn't synced yet we say so explicitly —
+  // never substitute a placeholder number the user can't reconcile with the app.
+  const recoveryLine = ctx.recovery != null
+    ? `- Recovery Score: ${ctx.recovery}% (${ctx.recovery >= 67 ? 'Green' : ctx.recovery >= 34 ? 'Amber' : 'Red'})${ctx.calibrating ? ' — provisional' : ''}`
+    : `- Recovery Score: not enough data yet (no HRV synced)`;
+  const hrvLine   = ctx.hrv != null ? `- HRV: ${ctx.hrv}ms` : `- HRV: no reading synced yet today`;
+  const rhrLine   = ctx.rhr != null ? `- Resting HR: ${ctx.rhr}bpm` : `- Resting HR: no reading synced yet today`;
+  const sleepLine = ctx.sleepDuration != null
+    ? `- Sleep: ${ctx.sleepDuration}${ctx.sleepPerf != null ? ` · ${ctx.sleepPerf}% efficiency` : ''}`
+    : `- Sleep: no sleep data synced yet today`;
+  const sleepChip = ctx.sleepDuration != null
+    ? `${ctx.sleepDuration}${ctx.sleepPerf != null ? ` · ${ctx.sleepPerf}%` : ''}`
+    : 'No data yet';
+
   const prompt = `You are a personal fitness and nutrition coach. Use the user's core profile (goals, activities, baselines) along with their training history and recovery trends to:
 1. Prescribe today's workout intensity based on recovery + recent training load
 2. Prescribe today's nutrition for recovery (post-workout if applicable) AND tomorrow's performance (carb-load if tomorrow looks like a hard day based on their pattern)
@@ -152,10 +173,11 @@ ${userProfile}
 
 ## Today's Snapshot
 - Date: ${today}
-${ctx.calibrating ? '- NOTE: Baselines are still calibrating (fewer than 14 days of history) — treat the recovery score below as PROVISIONAL. Do not give a firm recovery/training-intensity prescription; say the numbers are still settling in and default to moderate, conservative guidance.\n' : ''}- Recovery Score: ${ctx.recovery}% (${ctx.recovery >= 67 ? 'Green' : ctx.recovery >= 34 ? 'Amber' : 'Red'})${ctx.calibrating ? ' — provisional' : ''}
-- HRV: ${ctx.hrv}ms
-- Resting HR: ${ctx.rhr}bpm
-- Sleep Performance: ${ctx.sleepPerf}% · ${ctx.sleepDuration}
+${ctx.calibrating ? '- NOTE: Baselines are still calibrating (fewer than 14 days of history) — treat the recovery score below as PROVISIONAL. Do not give a firm recovery/training-intensity prescription; say the numbers are still settling in and default to moderate, conservative guidance.\n' : ''}- IMPORTANT: Only reference the biometrics listed below. If a metric says "no reading synced yet", acknowledge it's missing — do NOT invent a value.
+${recoveryLine}
+${hrvLine}
+${rhrLine}
+${sleepLine}
 - Today's Strain so far: ${ctx.strain}
 - Weekly Miles: ${ctx.weeklyMi.toFixed(1)}mi this week
 ${ctx.lastRun ? `- Last Run: ${ctx.lastRun.distanceMi}mi at ${ctx.lastRun.pace}/mi (${ctx.lastRun.dayTime}) — "${ctx.lastRun.name}"` : '- No recent runs logged'}
@@ -167,7 +189,7 @@ Respond ONLY with valid JSON, no markdown, no explanation:
   "body": "2-3 sentences. Personal, specific to their numbers. Use **text** for bold emphasis and *text* for accent highlights.",
   "chips": [
     {"k": "Workout", "v": "specific recommendation based on recovery + load"},
-    {"k": "Sleep", "v": "${ctx.sleepPerf}% · ${ctx.sleepDuration}"},
+    {"k": "Sleep", "v": "${sleepChip}"},
     {"k": "Strain", "v": "cap based on recovery"}
   ],
   "meals": [

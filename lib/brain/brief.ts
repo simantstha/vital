@@ -13,7 +13,7 @@ import { db, schema } from '@/db';
 import { eq, and, gte, desc } from 'drizzle-orm';
 import { generateDailyBrief } from '@/lib/claude';
 import { getCalibration } from '@/lib/brain/baselines';
-import { queryBaseline } from '@/lib/brain/tools';
+import { queryBaseline, queryMetricPoints, querySleepSummary } from '@/lib/brain/tools';
 import type { DailyBrief } from '@/lib/types';
 
 // ── Payload helpers ─────────────────────────────────────────────────────────
@@ -52,11 +52,13 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
   const sevenDaysAgo = new Date(todayStart);
   sevenDaysAgo.setUTCDate(sevenDaysAgo.getUTCDate() - 7);
 
-  // Fetch all recent events in one query, plus the hrv_sdnn baseline row +
-  // calibration status (both cheap point-reads off the baselines table, via
-  // the shared queryBaseline/getCalibration helpers so this aggregation isn't
-  // duplicated across brief.ts and the coach's get_baseline tool).
-  const [events, hrvBaseline, calibration] = await Promise.all([
+  // One events read (weight/meals/workouts still live there), plus the hrv_sdnn
+  // baseline row and calibration status via the shared helpers. Biometrics come
+  // from daily_metrics (hrv_sdnn / resting_hr / sleep_minutes) — the SAME store
+  // the Today metric cards, Trends, and the coach's data-tools read. Reading
+  // them here (instead of the events ledger, which HealthKit never writes to)
+  // guarantees the narrative and the cards can never disagree.
+  const [events, hrvBaseline, calibration, hrvPts, rhrPts, sleepSummary] = await Promise.all([
     db
       .select()
       .from(schema.events)
@@ -69,59 +71,54 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
       .orderBy(desc(schema.events.timestamp)),
     queryBaseline(userId, 'hrv_sdnn'),
     getCalibration(userId),
+    queryMetricPoints(userId, 'hrv_sdnn', 7),
+    queryMetricPoints(userId, 'resting_hr', 7),
+    querySleepSummary(userId, 7),
   ]);
 
   const todayEvents   = events.filter(e => e.timestamp >= todayStart);
   const recentEvents  = events.filter(e => e.timestamp >= sevenDaysAgo && e.timestamp < todayStart);
+  const latestWeight  = events.find(e => e.type === 'weight_logged');
 
-  // ── Today's biometrics ────────────────────────────────────────────────────
+  // ── Today's biometrics (latest daily_metrics point; null when unsynced) ────
 
-  const latestHrv = todayEvents.find(e => e.type === 'hrv_reading')
-    ?? recentEvents.find(e => e.type === 'hrv_reading');
-  const latestSleep = todayEvents.find(e => e.type === 'sleep_session')
-    ?? recentEvents.find(e => e.type === 'sleep_session');
-  const latestWeight = events.find(e => e.type === 'weight_logged');
-
-  const hrv  = latestHrv
-    ? Math.round(num(pl(latestHrv.payload).value) ?? num(pl(latestHrv.payload).hrv) ?? 65)
-    : 65;
-
-  let rhr         = 60;
-  let sleepDurMs  = 7 * 3_600_000;
-  let sleepEff    = 80;
-
-  if (latestSleep) {
-    const sp = pl(latestSleep.payload);
-    rhr      = Math.round(num(sp.rhr) ?? num(sp.resting_heart_rate) ?? 60);
-    const durMs = num(sp.duration_ms) ??
-      (num(sp.duration_s) != null ? num(sp.duration_s)! * 1_000 : null);
-    if (durMs != null) sleepDurMs = durMs;
-    sleepEff = Math.round(num(sp.efficiency) ?? num(sp.sleep_efficiency) ?? 80);
+  // Sleep efficiency isn't a stored metric, so derive it from the stage payload
+  // (asleep vs asleep+awake) when available; null otherwise.
+  function sleepEfficiency(minutes: number, stages: unknown): number | null {
+    const s = pl(stages);
+    const awake = num(s.awake) ?? num(s.awakeMinutes);
+    if (awake == null || minutes + awake <= 0) return null;
+    return Math.round((minutes / (minutes + awake)) * 100);
   }
 
-  const sleepDuration = msToHm(sleepDurMs);
+  const latestHrvPt = hrvPts.at(-1) ?? null;
+  const latestRhrPt = rhrPts.at(-1) ?? null;
+  const nights      = sleepSummary.nights;
+  const latestNight = nights.at(-1) ?? null;
 
-  // Estimate recovery from HRV relative to 7-day baseline
-  const hrvReadings7d = recentEvents
-    .filter(e => e.type === 'hrv_reading')
-    .map(e => num(pl(e.payload).value) ?? num(pl(e.payload).hrv))
-    .filter((v): v is number => v != null);
+  const hrv: number | null = latestHrvPt ? Math.round(latestHrvPt.value) : null;
+  const rhr: number | null = latestRhrPt ? Math.round(latestRhrPt.value) : null;
+  const sleepMinutes: number | null = latestNight ? Math.round(latestNight.minutes) : null;
+  const sleepDuration: string | null = sleepMinutes != null ? msToHm(sleepMinutes * 60_000) : null;
+  const sleepEff: number | null = latestNight ? sleepEfficiency(latestNight.minutes, latestNight.stages) : null;
 
-  // Prefer the daily_metrics-derived 30-day baseline (lib/brain/baselines.ts);
-  // fall back to the 7-day event-based estimate when no baseline row exists yet
-  // (e.g. brand-new user before any /api/ingest/daily has run).
+  // Baseline HRV for the recovery score: prefer the 30-day baseline row, else
+  // the mean of the available daily_metrics points, else null (no data at all).
   const baselineStats = hrvBaseline?.stats ?? undefined;
-  const baselineHrv =
-    baselineStats?.mean30 != null
-      ? Math.round(baselineStats.mean30)
-      : hrvReadings7d.length > 0
-        ? Math.round(hrvReadings7d.reduce((a, b) => a + b, 0) / hrvReadings7d.length)
-        : 65;
+  const hrvMean7d = hrvPts.length
+    ? Math.round(hrvPts.reduce((a, p) => a + p.value, 0) / hrvPts.length)
+    : null;
+  const baselineHrv: number | null =
+    baselineStats?.mean30 != null ? Math.round(baselineStats.mean30) : hrvMean7d;
 
-  const hrvScore   = Math.min(100, Math.round((hrv / baselineHrv) * 70));
-  const sleepScore = Math.round((sleepEff / 100) * 30);
-  const recovery   = Math.min(100, Math.max(0, hrvScore + sleepScore));
-  const strain     = todayEvents.filter(e => e.type === 'workout_completed').length > 0
+  // Recovery is only meaningful with an HRV reading + a baseline to compare to.
+  let recovery: number | null = null;
+  if (hrv != null && baselineHrv != null && baselineHrv > 0) {
+    const hrvScore   = Math.min(100, Math.round((hrv / baselineHrv) * 70));
+    const sleepScore = Math.round(((sleepEff ?? 85) / 100) * 30);
+    recovery = Math.min(100, Math.max(0, hrvScore + sleepScore));
+  }
+  const strain = todayEvents.filter(e => e.type === 'workout_completed').length > 0
     ? '–'
     : '0.0';
 
@@ -183,49 +180,46 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
     sleepDuration: string;
   };
 
-  const dayMap = new Map<string, { hrv?: number; sleepMs?: number; sleepEff?: number; rhr?: number }>();
-
-  for (const e of recentEvents) {
-    const key = e.timestamp.toISOString().split('T')[0];
-    if (!dayMap.has(key)) dayMap.set(key, {});
-    const d = dayMap.get(key)!;
-    const p = pl(e.payload);
-
-    if (e.type === 'hrv_reading' && d.hrv == null) {
-      d.hrv = num(p.value) ?? num(p.hrv);
-    }
-    if (e.type === 'sleep_session' && d.sleepMs == null) {
-      d.sleepMs  = num(p.duration_ms) ?? (num(p.duration_s) != null ? num(p.duration_s)! * 1000 : undefined);
-      d.sleepEff = num(p.efficiency) ?? num(p.sleep_efficiency);
-      d.rhr      = num(p.rhr) ?? num(p.resting_heart_rate);
-    }
+  // Built from the same daily_metrics points as today's biometrics above, so
+  // the trend the coach describes matches what Trends shows.
+  const dayMap = new Map<string, { hrv?: number; sleepMin?: number; sleepEff?: number; rhr?: number }>();
+  const touchDay = (date: string) => {
+    if (!dayMap.has(date)) dayMap.set(date, {});
+    return dayMap.get(date)!;
+  };
+  for (const p of hrvPts) touchDay(p.date).hrv = p.value;
+  for (const p of rhrPts) touchDay(p.date).rhr = p.value;
+  for (const n of nights) {
+    const d = touchDay(n.date);
+    d.sleepMin = n.minutes;
+    d.sleepEff = sleepEfficiency(n.minutes, n.stages) ?? undefined;
   }
 
   const historyDays: HistoryDay[] = Array.from(dayMap.entries())
     .sort(([a], [b]) => b.localeCompare(a))
     .slice(0, 7)
     .map(([date, d]) => {
-      const dayHrv  = d.hrv ?? baselineHrv;
-      const dayEff  = d.sleepEff ?? 80;
-      const dayRec  = Math.min(100, Math.max(0,
-        Math.round((dayHrv / baselineHrv) * 70 + (dayEff / 100) * 30),
-      ));
+      const dayHrv  = d.hrv ?? baselineHrv ?? 0;
+      const dayEff  = d.sleepEff ?? 85;
+      const dayRec  = baselineHrv != null && baselineHrv > 0
+        ? Math.min(100, Math.max(0, Math.round((dayHrv / baselineHrv) * 70 + (dayEff / 100) * 30)))
+        : 0;
       return {
         date,
         recovery:      dayRec,
         hrv:           Math.round(dayHrv),
-        rhr:           Math.round(d.rhr ?? 60),
+        rhr:           Math.round(d.rhr ?? 0),
         sleepPerf:     dayEff,
-        sleepDuration: d.sleepMs != null ? msToHm(d.sleepMs) : '–',
+        sleepDuration: d.sleepMin != null ? msToHm(d.sleepMin * 60_000) : '–',
       };
     });
 
   const avgHrv7d = historyDays.length > 0
     ? Math.round(historyDays.reduce((s, d) => s + d.hrv, 0) / historyDays.length)
-    : baselineHrv;
+    : (baselineHrv ?? 0);
   const avgRec7d = historyDays.length > 0
     ? Math.round(historyDays.reduce((s, d) => s + d.recovery, 0) / historyDays.length)
-    : recovery;
+    : (recovery ?? 0);
 
   const recent3Rec = historyDays.slice(0, 3).map(d => d.recovery);
   const older3Rec  = historyDays.slice(4).map(d => d.recovery);
