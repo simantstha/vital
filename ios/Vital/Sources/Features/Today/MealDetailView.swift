@@ -39,6 +39,10 @@ struct MealDetailView: View {
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
         .task { await vm.estimateOnOpen() }
+        // Refresh Today whenever the sheet closes *after* a successful log —
+        // covers both the "Done" button and swipe-to-dismiss. Gated on didLog
+        // so merely peeking at a meal doesn't trigger a reload.
+        .onDisappear { if vm.didLog { onLogged() } }
     }
 }
 
@@ -62,7 +66,7 @@ private extension MealDetailView {
                     .font(Theme.Typography.titleMedium)
                     .foregroundStyle(Theme.Colors.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)
-                Text("Lunch · plan")
+                Text("From today's plan")
                     .font(Theme.Typography.labelSmall)
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
@@ -243,7 +247,8 @@ private extension MealDetailView {
     }
 
     func finishLogging() {
-        onLogged()
+        // Just dismiss — the refresh fires from .onDisappear (gated on didLog),
+        // so it happens exactly once whether the user taps Done or swipes away.
         dismiss()
     }
 
