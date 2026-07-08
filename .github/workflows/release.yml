@@ -3,8 +3,12 @@ name: Release
 # Ships a versioned release: brings the backend up to date (Supabase migration
 # + Fly deploy), then builds and uploads the iOS app to TestFlight.
 #
-# Trigger: every push to main auto-bumps the patch version (vX.Y.Z -> vX.Y.Z+1),
-# tags it, and pushes the tag — which in turn runs the backend + iOS jobs below.
+# Trigger: every push to main resolves the next patch version (vX.Y.Z -> vX.Y.Z+1),
+# tags it, and runs backend + ios in THIS SAME workflow run. (Pushing a tag from
+# within a job does NOT itself trigger a new workflow run — GitHub Actions
+# suppresses runs triggered by the default GITHUB_TOKEN to prevent recursive
+# triggering — so backend/ios can't wait for a second, tag-triggered run.)
+# A direct push of a v* tag, or manual dispatch, uses that version instead.
 # Manual:  Actions → Release → Run workflow (provide the version, no leading v).
 #
 # Required repo secrets — see docs/CI-TESTFLIGHT.md for how to create each:
@@ -26,50 +30,70 @@ on:
         required: true
 
 # Never run two releases at once; let an in-flight one finish. This also
-# serializes bump-tag runs so two rapid main pushes can't race on the same
-# "next version" number.
+# serializes version resolution so two rapid main pushes can't race on the
+# same "next version" number.
 concurrency:
   group: release
   cancel-in-progress: false
 
 jobs:
-  # Runs only for a plain push to main: computes the next patch version from
-  # the latest v* tag and pushes it. The tag push is itself a trigger above,
-  # so it re-invokes this workflow with github.ref_type == 'tag' and runs the
-  # backend/ios jobs below — this job does not run them directly.
-  bump-tag:
-    name: Bump release tag
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+  version:
+    name: Resolve release version
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Compute and push next patch tag
+      - name: Resolve version
+        id: resolve
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          # Pass the dispatch input through env (never interpolate untrusted
+          # input straight into the shell) and validate it before use.
+          INPUT_VERSION: ${{ github.event.inputs.version }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git fetch --tags --quiet
-          LAST_TAG="$(git tag -l 'v*' --sort=-v:refname | head -n1)"
-          if [ -z "$LAST_TAG" ]; then
-            NEW_TAG="v0.1.0"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            VERSION="$INPUT_VERSION"
+          elif [ "$REF_TYPE" = "tag" ]; then
+            VERSION="${REF_NAME#v}"
           else
-            VERSION="${LAST_TAG#v}"
-            MAJOR="$(cut -d. -f1 <<<"$VERSION")"
-            MINOR="$(cut -d. -f2 <<<"$VERSION")"
-            PATCH="$(cut -d. -f3 <<<"$VERSION")"
-            NEW_TAG="v${MAJOR}.${MINOR}.$((PATCH + 1))"
+            # Plain push to main: bump the latest v* tag's patch number and
+            # push the new tag as a durable release marker (this push does not
+            # re-trigger the workflow — backend/ios run right here instead).
+            git fetch --tags --quiet
+            LAST_TAG="$(git tag -l 'v*' --sort=-v:refname | head -n1)"
+            if [ -z "$LAST_TAG" ]; then
+              VERSION="0.1.0"
+            else
+              LAST_VERSION="${LAST_TAG#v}"
+              MAJOR="$(cut -d. -f1 <<<"$LAST_VERSION")"
+              MINOR="$(cut -d. -f2 <<<"$LAST_VERSION")"
+              PATCH="$(cut -d. -f3 <<<"$LAST_VERSION")"
+              VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))"
+            fi
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git tag -a "v$VERSION" -m "v$VERSION"
+            git push origin "v$VERSION"
           fi
-          echo "Bumping $LAST_TAG -> $NEW_TAG"
-          git tag -a "$NEW_TAG" -m "$NEW_TAG"
-          git push origin "$NEW_TAG"
+
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+(\.[0-9]+){1,2}$'; then
+            echo "::error::Invalid version '$VERSION' (expected e.g. 1.2 or 1.2.0)"
+            exit 1
+          fi
+          echo "Resolved release version: $VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
   backend:
     name: Backend — migrate + deploy (Fly)
-    if: github.event_name == 'workflow_dispatch' || github.ref_type == 'tag'
+    needs: version
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -101,7 +125,7 @@ jobs:
 
   ios:
     name: iOS — build + upload to TestFlight
-    needs: backend
+    needs: [version, backend]
     runs-on: macos-latest
     # Safety net: the build itself is ~5 min; anything approaching this means a
     # hang (e.g. a codesign keychain prompt) — fail fast instead of stalling.
@@ -117,24 +141,6 @@ jobs:
       - uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: latest-stable
-
-      - name: Resolve release version
-        env:
-          # Pass the dispatch input through env (never interpolate untrusted
-          # input straight into the shell) and validate it before use.
-          INPUT_VERSION: ${{ github.event.inputs.version }}
-          EVENT_NAME: ${{ github.event_name }}
-        run: |
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            VERSION="$INPUT_VERSION"
-          else
-            VERSION="${GITHUB_REF_NAME#v}"
-          fi
-          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+(\.[0-9]+){1,2}$'; then
-            echo "::error::Invalid version '$VERSION' (expected e.g. 1.2 or 1.2.0)"
-            exit 1
-          fi
-          echo "RELEASE_VERSION=$VERSION" >> "$GITHUB_ENV"
 
       # Secrets.swift is gitignored — synthesize it from the template + secret.
       - name: Write Secrets.swift
@@ -173,6 +179,7 @@ jobs:
         # and fastlane/ live, so fastlane finds the Fastfile. The Fastfile
         # references the project as Vital/Vital.xcodeproj relative to here.
         env:
+          RELEASE_VERSION: ${{ needs.version.outputs.version }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
