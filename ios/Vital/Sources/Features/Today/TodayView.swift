@@ -5,6 +5,7 @@ import SwiftUI
 struct TodayView: View {
     @StateObject private var vm = TodayViewModel()
     @State private var showLogSheet = false
+    @State private var selectedMeal: MealRow?
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -39,6 +40,12 @@ struct TodayView: View {
         }
         .sheet(isPresented: $showLogSheet) {
             LogMealView()
+        }
+        .sheet(item: $selectedMeal) { meal in
+            MealDetailView(meal: meal) {
+                // Refresh Today after a plan meal is logged so the diet budget updates.
+                Task { await vm.loadHealthData() }
+            }
         }
     }
 }
@@ -244,7 +251,12 @@ private extension TodayView {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
             SectionHeader(title: "Today's Plan")
             ForEach(vm.meals) { meal in
-                MealRowView(meal: meal)
+                Button {
+                    selectedMeal = meal
+                } label: {
+                    MealRowView(meal: meal)
+                }
+                .buttonStyle(.plain)
             }
         }
     }

@@ -290,6 +290,43 @@ struct APIClient {
         return try decoder.decode(NutritionResult.self, from: data)
     }
 
+    // MARK: - Meal plan (modify + recipe)
+
+    /// Estimates/edits a planned meal. With `instruction == nil` (or empty) the
+    /// server keeps `kcal` and just fills macros (auto-estimate on modal open);
+    /// with an instruction it applies the natural-language edit and re-estimates.
+    func modifyMeal(name: String, kcal: Double, instruction: String?) async throws -> MealModifyResult {
+        guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/meals/modify") else {
+            throw APIError.invalidURL
+        }
+        var request = authorizedRequest(url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 20
+        struct Body: Encodable { let name: String; let kcal: Double; let instruction: String? }
+        request.httpBody = try encoder.encode(Body(name: name, kcal: kcal, instruction: instruction))
+        let (data, response) = try await session.data(for: request)
+        try validate(response)
+        return try decoder.decode(MealModifyResult.self, from: data)
+    }
+
+    /// Fetches a markdown recipe (ingredients + numbered steps) for a meal by name.
+    func mealRecipe(name: String, servings: Int? = nil) async throws -> String {
+        guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/meals/recipe") else {
+            throw APIError.invalidURL
+        }
+        var request = authorizedRequest(url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 30
+        struct Body: Encodable { let name: String; let servings: Int? }
+        request.httpBody = try encoder.encode(Body(name: name, servings: servings))
+        let (data, response) = try await session.data(for: request)
+        try validate(response)
+        struct RecipeResponse: Decodable { let recipe: String }
+        return try decoder.decode(RecipeResponse.self, from: data).recipe
+    }
+
     @discardableResult
     func logMeal(
         name: String,
@@ -530,6 +567,16 @@ struct NutritionResult: Decodable {
     let c: Double
     let p: Double
     let f: Double
+}
+
+/// Result of POST /api/meals/modify — an estimated/edited planned meal.
+struct MealModifyResult: Decodable {
+    let name: String
+    let kcal: Double
+    let c: Double
+    let p: Double
+    let f: Double
+    let why: String
 }
 
 struct BarcodeResult: Decodable {
