@@ -3,7 +3,8 @@ name: Release
 # Ships a versioned release: brings the backend up to date (Supabase migration
 # + Fly deploy), then builds and uploads the iOS app to TestFlight.
 #
-# Trigger: push a version tag, e.g.  git tag v1.2.0 && git push origin v1.2.0
+# Trigger: every push to main auto-bumps the patch version (vX.Y.Z -> vX.Y.Z+1),
+# tags it, and pushes the tag — which in turn runs the backend + iOS jobs below.
 # Manual:  Actions → Release → Run workflow (provide the version, no leading v).
 #
 # Required repo secrets — see docs/CI-TESTFLIGHT.md for how to create each:
@@ -14,6 +15,8 @@ name: Release
 
 on:
   push:
+    branches:
+      - main
     tags:
       - "v*"
   workflow_dispatch:
@@ -22,14 +25,49 @@ on:
         description: "Marketing version (no leading v, e.g. 1.2.0)"
         required: true
 
-# Never run two releases at once; let an in-flight one finish.
+# Never run two releases at once; let an in-flight one finish. This also
+# serializes bump-tag runs so two rapid main pushes can't race on the same
+# "next version" number.
 concurrency:
   group: release
   cancel-in-progress: false
 
 jobs:
+  # Runs only for a plain push to main: computes the next patch version from
+  # the latest v* tag and pushes it. The tag push is itself a trigger above,
+  # so it re-invokes this workflow with github.ref_type == 'tag' and runs the
+  # backend/ios jobs below — this job does not run them directly.
+  bump-tag:
+    name: Bump release tag
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute and push next patch tag
+        run: |
+          git fetch --tags --quiet
+          LAST_TAG="$(git tag -l 'v*' --sort=-v:refname | head -n1)"
+          if [ -z "$LAST_TAG" ]; then
+            NEW_TAG="v0.1.0"
+          else
+            VERSION="${LAST_TAG#v}"
+            MAJOR="$(cut -d. -f1 <<<"$VERSION")"
+            MINOR="$(cut -d. -f2 <<<"$VERSION")"
+            PATCH="$(cut -d. -f3 <<<"$VERSION")"
+            NEW_TAG="v${MAJOR}.${MINOR}.$((PATCH + 1))"
+          fi
+          echo "Bumping $LAST_TAG -> $NEW_TAG"
+          git tag -a "$NEW_TAG" -m "$NEW_TAG"
+          git push origin "$NEW_TAG"
+
   backend:
     name: Backend — migrate + deploy (Fly)
+    if: github.event_name == 'workflow_dispatch' || github.ref_type == 'tag'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
