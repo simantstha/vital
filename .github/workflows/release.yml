@@ -50,6 +50,8 @@ jobs:
 
       - name: Compute and push next patch tag
         run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
           git fetch --tags --quiet
           LAST_TAG="$(git tag -l 'v*' --sort=-v:refname | head -n1)"
           if [ -z "$LAST_TAG" ]; then
