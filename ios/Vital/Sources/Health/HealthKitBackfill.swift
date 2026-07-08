@@ -142,54 +142,90 @@ final class HealthKitBackfill {
             store.execute(query)
         }
 
-        struct Accumulator {
-            var total = 0.0
-            var core = 0.0
-            var deep = 0.0
-            var rem = 0.0
-            var awake = 0.0
+        // Collect the raw time intervals per wake-day, bucketed by stage. We do
+        // NOT sum sample durations directly: when multiple sources write sleep
+        // for the same night (e.g. Apple Watch staging + a 3rd-party app like
+        // AutoSleep/Oura, or Watch staging that also has a plain "asleep" block
+        // from another source), the overlapping samples would double-count and
+        // inflate the night (the "11h 42m for a 7h night" bug). Instead we merge
+        // overlapping intervals so each real minute of sleep counts exactly once.
+        struct Buckets {
+            var asleep: [Interval] = []   // union of all asleep stages → total
+            var core:   [Interval] = []
+            var deep:   [Interval] = []
+            var rem:    [Interval] = []
+            var awake:  [Interval] = []
         }
 
-        var byDay: [Date: Accumulator] = [:]
+        var byDay: [Date: Buckets] = [:]
 
         for sample in samples {
             let wakeDay = calendar.startOfDay(for: sample.endDate)
             guard wakeDay >= start, wakeDay <= end else { continue }
 
-            let minutes = sample.endDate.timeIntervalSince(sample.startDate) / 60
-            var acc = byDay[wakeDay] ?? Accumulator()
+            let iv = Interval(start: sample.startDate, end: sample.endDate)
+            var b = byDay[wakeDay] ?? Buckets()
 
             switch sample.value {
             case HKCategoryValueSleepAnalysis.asleepUnspecified.rawValue:
-                acc.total += minutes
+                b.asleep.append(iv)
             case HKCategoryValueSleepAnalysis.asleepCore.rawValue:
-                acc.total += minutes
-                acc.core += minutes
+                b.asleep.append(iv); b.core.append(iv)
             case HKCategoryValueSleepAnalysis.asleepDeep.rawValue:
-                acc.total += minutes
-                acc.deep += minutes
+                b.asleep.append(iv); b.deep.append(iv)
             case HKCategoryValueSleepAnalysis.asleepREM.rawValue:
-                acc.total += minutes
-                acc.rem += minutes
+                b.asleep.append(iv); b.rem.append(iv)
             case HKCategoryValueSleepAnalysis.awake.rawValue:
-                acc.awake += minutes
+                b.awake.append(iv)
             default:
                 break // inBed and anything unrecognized doesn't count as asleep time.
             }
 
-            byDay[wakeDay] = acc
+            byDay[wakeDay] = b
         }
 
-        return byDay.map { day, acc in
-            DailySleepData(
+        return byDay.map { day, b in
+            let core  = Self.unionMinutes(b.core)
+            let deep  = Self.unionMinutes(b.deep)
+            let rem   = Self.unionMinutes(b.rem)
+            let awake = Self.unionMinutes(b.awake)
+            return DailySleepData(
                 day: day,
-                minutes: Int(acc.total.rounded()),
-                coreMinutes: acc.core > 0 ? Int(acc.core.rounded()) : nil,
-                deepMinutes: acc.deep > 0 ? Int(acc.deep.rounded()) : nil,
-                remMinutes: acc.rem > 0 ? Int(acc.rem.rounded()) : nil,
-                awakeMinutes: acc.awake > 0 ? Int(acc.awake.rounded()) : nil
+                minutes: Int(Self.unionMinutes(b.asleep).rounded()),
+                coreMinutes: core  > 0 ? Int(core.rounded())  : nil,
+                deepMinutes: deep  > 0 ? Int(deep.rounded())  : nil,
+                remMinutes:  rem   > 0 ? Int(rem.rounded())   : nil,
+                awakeMinutes: awake > 0 ? Int(awake.rounded()) : nil
             )
         }
+    }
+
+    /// A half-open time interval `[start, end)`.
+    private struct Interval { let start: Date; let end: Date }
+
+    /// Total minutes covered by the union of the given intervals — overlapping
+    /// ranges are counted once, not summed. This is what lets multiple HealthKit
+    /// sources contribute to the same night without inflating the total.
+    private static func unionMinutes(_ intervals: [Interval]) -> Double {
+        let sorted = intervals
+            .filter { $0.end > $0.start }
+            .sorted { $0.start < $1.start }
+        guard let first = sorted.first else { return 0 }
+
+        var totalSeconds = 0.0
+        var curStart = first.start
+        var curEnd = first.end
+        for iv in sorted.dropFirst() {
+            if iv.start > curEnd {
+                totalSeconds += curEnd.timeIntervalSince(curStart)
+                curStart = iv.start
+                curEnd = iv.end
+            } else if iv.end > curEnd {
+                curEnd = iv.end
+            }
+        }
+        totalSeconds += curEnd.timeIntervalSince(curStart)
+        return totalSeconds / 60
     }
 
     /// Fetches workouts started within the trailing `days` days, attributed to
