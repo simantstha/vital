@@ -264,42 +264,20 @@ private extension TodayView {
     // ── Action buttons ────────────────────────────────────────────────────────
 
     var actionButtons: some View {
-        HStack(spacing: Theme.Spacing.md) {
-            // Primary — lime filled
-            Button {
-                showLogSheet = true
-            } label: {
-                Text("Log it")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(Theme.Colors.onAccent)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 16)
-                    .background(Theme.Colors.accent)
-                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md,
-                                               style: .continuous))
-            }
-
-            // Secondary — glass outline
-            Button {
-                // TODO: suggest lunch
-            } label: {
-                Text("Suggest lunch")
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(Theme.Colors.textPrimary)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 16)
-                    .background(
-                        RoundedRectangle(cornerRadius: Theme.Radius.md,
-                                         style: .continuous)
-                            .fill(Theme.Colors.glassFill)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: Theme.Radius.md,
-                                                  style: .continuous)
-                                    .strokeBorder(Theme.Colors.glassBorder,
-                                                  lineWidth: 1)
-                            )
-                    )
-            }
+        // Primary — lime filled. (A "Suggest lunch" stub used to sit beside this
+        // but did nothing; meal suggestions already come from the tappable plan
+        // rows above, so the log action stands on its own full-width.)
+        Button {
+            showLogSheet = true
+        } label: {
+            Text("Log it")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(Theme.Colors.onAccent)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 16)
+                .background(Theme.Colors.accent)
+                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md,
+                                           style: .continuous))
         }
     }
 }
