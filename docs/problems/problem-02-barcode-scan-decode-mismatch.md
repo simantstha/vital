@@ -1,8 +1,14 @@
 # Problem 02 — Barcode scan can't log food (JSON decode type mismatch)
 
-**Status:** Diagnosed, not fixed
+**Status:** ✅ Fixed on branch `fix/barcode-decode-mismatch`
 **Reported:** 2026-07-09
 **Area:** iOS — `BarcodeResult` decode model vs. backend `/api/nutrition/barcode` payload
+
+**Fix applied:** removed the mistyped `per100g: Bool?` property from
+`BarcodeResult` (`APIClient.swift`). The app only uses the already-scaled
+top-level `kcal/c/p/f`, and `Decodable` ignores undeclared keys — so the
+object-typed `per100g` no longer causes a `typeMismatch`. Verified by decoding a
+real backend payload (with `per100g` as an object): decodes cleanly.
 
 ---
 
