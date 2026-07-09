@@ -78,11 +78,11 @@ private extension TrendsView {
 
     var daysPicker: some View {
         HStack(spacing: Theme.Spacing.sm) {
-            ForEach([14, 30], id: \.self) { days in
+            ForEach([14, 30, 90, 365], id: \.self) { days in
                 Button {
                     vm.selectedDays = days
                 } label: {
-                    Text("\(days)d")
+                    Text(Self.rangeLabel(days))
                         .font(.system(size: 13, weight: vm.selectedDays == days ? .semibold : .regular))
                         .foregroundStyle(
                             vm.selectedDays == days
@@ -128,6 +128,9 @@ private extension TrendsView {
                             .foregroundStyle(Theme.Colors.textSecondary)
                     }
                     Spacer()
+                    if let pct = vm.trendDeltaPct {
+                        trendChip(pct)
+                    }
                     Text(vm.selectedMetric.displayName)
                         .font(Theme.Typography.labelSmall)
                         .foregroundStyle(Theme.Colors.textSecondary)
@@ -204,10 +207,17 @@ private extension TrendsView {
             .symbolSize(28)
         }
         .chartXAxis {
-            AxisMarks(values: .stride(by: .day, count: vm.selectedDays == 14 ? 4 : 7)) { value in
+            // Let Charts choose ~6 evenly-spaced ticks so the axis stays legible
+            // across every range (14d → 1Y) instead of overcrowding at 90/365d.
+            AxisMarks(values: .automatic(desiredCount: 6)) { _ in
                 AxisGridLine(stroke: StrokeStyle(lineWidth: 0.3))
                     .foregroundStyle(Theme.Colors.glassBorder)
-                AxisValueLabel(format: .dateTime.month(.abbreviated).day())
+                // Long ranges: month-only labels; short ranges: month + day.
+                AxisValueLabel(
+                    format: vm.selectedDays > 90
+                        ? .dateTime.month(.abbreviated)
+                        : .dateTime.month(.abbreviated).day()
+                )
                     .foregroundStyle(Theme.Colors.textSecondary)
                     .font(Theme.Typography.labelSmall)
             }
@@ -228,9 +238,37 @@ private extension TrendsView {
 
     var statsRow: some View {
         HStack(spacing: Theme.Spacing.sm) {
-            StatBadge(label: "Latest", value: vm.currentValue + " " + vm.selectedMetric.unit)
-            StatBadge(label: "Range", value: vm.rangeLabel.isEmpty ? "--" : vm.rangeLabel)
-            StatBadge(label: "Period", value: "\(vm.selectedDays) days")
+            StatBadge(label: "Latest",  value: vm.currentValue + " " + vm.selectedMetric.unit)
+            StatBadge(label: "Average", value: vm.averageValue + " " + vm.selectedMetric.unit)
+            StatBadge(label: "Range",   value: vm.rangeLabel.isEmpty ? "--" : vm.rangeLabel)
+        }
+    }
+
+    // ── Trend chip (first → last change over the visible window) ──────────────
+
+    func trendChip(_ pct: Int) -> some View {
+        let rising = pct >= 0
+        return HStack(spacing: 2) {
+            Image(systemName: rising ? "arrow.up.right" : "arrow.down.right")
+                .font(.system(size: 10, weight: .bold))
+            Text("\(abs(pct))%")
+                .font(.system(size: 12, weight: .semibold))
+        }
+        .foregroundStyle(Theme.Colors.accentContent)
+        .padding(.horizontal, Theme.Spacing.sm)
+        .padding(.vertical, 3)
+        .background(
+            Capsule().fill(Theme.Colors.accent.opacity(0.15))
+        )
+    }
+
+    // ── Range pill labels: compact for long windows ("3M", "1Y") ─────────────
+
+    static func rangeLabel(_ days: Int) -> String {
+        switch days {
+        case 365: return "1Y"
+        case 90:  return "3M"
+        default:  return "\(days)d"
         }
     }
 }

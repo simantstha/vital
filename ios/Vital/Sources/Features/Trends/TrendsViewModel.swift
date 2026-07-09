@@ -66,6 +66,22 @@ final class TrendsViewModel: ObservableObject {
         return "\(formatValue(lo)) – \(formatValue(hi))"
     }
 
+    /// Mean over the visible window (the analysis the Trends screen was missing).
+    var averageValue: String {
+        guard !points.isEmpty else { return "--" }
+        let mean = points.map(\.value).reduce(0, +) / Double(points.count)
+        return formatValue(mean)
+    }
+
+    /// First → last change across the visible window, as a signed percentage.
+    /// nil when there aren't enough points (or the baseline is zero).
+    var trendDeltaPct: Int? {
+        guard let first = points.first?.value,
+              let last = points.last?.value,
+              points.count > 1, first != 0 else { return nil }
+        return Int((((last - first) / first) * 100).rounded())
+    }
+
     // MARK: - Load
 
     func load() async {

@@ -635,8 +635,12 @@ struct BarcodeResult: Decodable {
     let c: Double
     let p: Double
     let f: Double
-    let per100g: Bool?
     let grams: Double?
+    // NOTE: the backend also sends `per100g` as a macro object, but the app
+    // only uses the already-scaled top-level kcal/c/p/f above. It is
+    // deliberately not declared here — Decodable ignores undeclared keys.
+    // (It was previously typed `Bool?`, which threw a typeMismatch and broke
+    // every successful barcode lookup.)
 }
 
 struct LogMealResponse: Decodable {
