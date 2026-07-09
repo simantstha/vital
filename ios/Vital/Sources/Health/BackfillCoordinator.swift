@@ -10,9 +10,12 @@ import Foundation
 /// drops everything up to and including that date before uploading — so a
 /// killed app picks up where it left off instead of re-posting everything
 /// (the server-side upsert would make re-posting harmless, but skipping is
-/// cheaper and gives an honest progress readout). Once every chunk succeeds,
-/// `backfill.completed` is set and `startIfNeeded()` becomes a no-op forever
-/// after (until UserDefaults is cleared, e.g. on sign-out).
+/// cheaper and gives an honest progress readout). Once a run that actually
+/// uploaded data finishes, `backfill.completed` is set and `startIfNeeded()`
+/// becomes a no-op after (until UserDefaults is cleared on sign-out, or the
+/// user triggers `resync()`). An *empty* run never marks complete, so it isn't
+/// permanently disabled by a first attempt made before HealthKit access is
+/// granted (see problem-04).
 @MainActor
 final class BackfillCoordinator: ObservableObject {
 
@@ -90,7 +93,13 @@ final class BackfillCoordinator: ObservableObject {
             }
 
             guard !days.isEmpty else {
-                markComplete()
+                // Nothing to upload — HealthKit read access isn't granted yet,
+                // or no history has synced to this device. Do NOT mark complete:
+                // marking here would permanently disable the backfill after an
+                // empty first run (e.g. the query racing ahead of authorization),
+                // leaving the account with only whatever the daily sync trickles
+                // in. Leaving `completed` unset lets a later launch retry once
+                // access is granted / data appears. (See problem-04.)
                 return
             }
 
@@ -116,6 +125,20 @@ final class BackfillCoordinator: ObservableObject {
         } catch {
             lastError = error.localizedDescription
         }
+    }
+
+    /// Clears the completion flags and re-runs the backfill from scratch.
+    /// Recovery path for an account whose backfill self-completed early (before
+    /// this fix) and is now stuck as a permanent no-op — surfaced as a manual
+    /// "Re-sync health history" action in Profile. Server ingest is an idempotent
+    /// upsert, so re-uploading existing days is harmless.
+    func resync() async {
+        defaults.removeObject(forKey: Keys.completed)
+        defaults.removeObject(forKey: Keys.lastCompletedDate)
+        isComplete = false
+        progress = 0
+        daysUploaded = 0
+        await startIfNeeded()
     }
 
     // MARK: - Private

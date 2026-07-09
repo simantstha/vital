@@ -3,8 +3,10 @@ import SwiftUI
 struct ProfileView: View {
     @StateObject private var vm = ProfileViewModel()
     @EnvironmentObject private var authViewModel: AuthViewModel
+    @EnvironmentObject private var backfillCoordinator: BackfillCoordinator
     @State private var showSignOutConfirm = false
     @State private var showBudgetEditor = false
+    @State private var isResyncing = false
 
     var body: some View {
         ZStack {
@@ -215,7 +217,58 @@ private extension ProfileView {
                     }
                 }
             }
+
+            resyncButton
         }
+    }
+
+    // ── Re-sync Health History ───────────────────────────────────────────────
+    // Recovery for accounts whose one-time backfill self-completed early (before
+    // the empty-run fix) and never imported their year of history. Re-runs the
+    // 365-day backfill; server ingest is an idempotent upsert.
+
+    var resyncButton: some View {
+        Button {
+            Task {
+                isResyncing = true
+                await backfillCoordinator.resync()
+                isResyncing = false
+            }
+        } label: {
+            GlassCard {
+                HStack(spacing: Theme.Spacing.md) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous)
+                            .fill(Theme.Colors.glassFill)
+                            .frame(width: 36, height: 36)
+                        if isResyncing {
+                            ProgressView().tint(Theme.Colors.accentContent)
+                        } else {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.system(size: 15))
+                                .foregroundStyle(Theme.Colors.accentContent)
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(isResyncing ? "Importing health history…" : "Re-sync Health History")
+                            .font(Theme.Typography.bodySmall)
+                            .fontWeight(.medium)
+                            .foregroundStyle(Theme.Colors.textPrimary)
+                        Text(isResyncing
+                             ? "\(backfillCoordinator.daysUploaded) days imported"
+                             : "Re-import up to a year from Apple Health")
+                            .font(Theme.Typography.labelSmall)
+                            .foregroundStyle(Theme.Colors.textSecondary)
+                    }
+
+                    Spacer()
+                }
+                .padding(.vertical, Theme.Spacing.xs)
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(isResyncing)
     }
 }
 
