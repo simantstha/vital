@@ -17,23 +17,27 @@ import { readWeightLog } from '@/lib/weightLog';
 
 export const dynamic = 'force-dynamic';
 
-const VALID_METRICS = new Set(['hrv', 'sleep', 'weight', 'steps']);
+const VALID_METRICS = new Set(['hrv', 'sleep', 'weight', 'steps', 'vo2', 'distance']);
 
 // Trends metric name → daily_metrics metric name
 const DAILY_METRIC: Record<string, string> = {
-  hrv:    'hrv_sdnn',
-  sleep:  'sleep_minutes',
-  weight: 'body_mass_kg',
-  steps:  'steps',
+  hrv:      'hrv_sdnn',
+  sleep:    'sleep_minutes',
+  weight:   'body_mass_kg',
+  steps:    'steps',
+  vo2:      'vo2_max',
+  distance: 'distance_m',
 };
 
 function transform(metric: string, value: number): number {
   switch (metric) {
-    case 'sleep':  return Math.round((value / 60) * 10) / 10; // minutes → hours (1dp)
-    case 'weight': return Math.round(value * 10) / 10;        // kg (1dp)
-    case 'hrv':    return Math.round(value);                  // ms
-    case 'steps':  return Math.round(value);
-    default:       return value;
+    case 'sleep':    return Math.round((value / 60) * 10) / 10;   // minutes → hours (1dp)
+    case 'weight':   return Math.round(value * 10) / 10;          // kg (1dp)
+    case 'hrv':      return Math.round(value);                    // ms
+    case 'steps':    return Math.round(value);
+    case 'vo2':      return Math.round(value * 10) / 10;          // ml/kg·min (1dp)
+    case 'distance': return Math.round((value / 1000) * 100) / 100; // meters → km (2dp)
+    default:         return value;
   }
 }
 

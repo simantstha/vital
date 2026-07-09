@@ -42,6 +42,11 @@ const SCALAR_METRICS = [
   'steps',
   'active_energy_kcal',
   'body_mass_kg',
+  'vo2_max',
+  'distance_m',
+  'exercise_min',
+  'flights',
+  'basal_energy_kcal',
 ] as const;
 type ScalarMetric = typeof SCALAR_METRICS[number];
 

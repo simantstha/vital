@@ -3,7 +3,7 @@ import HealthKit
 
 /// Drives ongoing background HealthKit sync, as a companion to the one-time
 /// `BackfillCoordinator`: registers `enableBackgroundDelivery` + an
-/// `HKObserverQuery` for each of the 8 backfilled sample types, and on every
+/// `HKObserverQuery` for each backfilled sample type, and on every
 /// fire re-aggregates only the days those samples touched (reusing
 /// `HealthKitBackfill`'s bucket logic) before posting through
 /// `/api/ingest/daily` — the same idempotent upsert the backfill uses, so
@@ -52,7 +52,7 @@ final class HealthSyncCoordinator: ObservableObject {
     // MARK: - Registration (called once, before app launch finishes)
 
     /// Enables background delivery and starts an `HKObserverQuery` for each
-    /// of the 8 sample types. Idempotent — safe to call more than once (e.g.
+    /// backfilled sample type. Idempotent — safe to call more than once (e.g.
     /// if both the AppDelegate path and a later foreground path both try).
     /// Callers are expected to guard this on "a session token exists" so it
     /// never registers signed-out (registering without read authorization is
@@ -234,7 +234,7 @@ final class HealthSyncCoordinator: ObservableObject {
         let frequency: HKUpdateFrequency
     }
 
-    /// The same 8 types `HealthKitManager`/`HealthKitBackfill` authorize and
+    /// The same types `HealthKitManager`/`HealthKitBackfill` authorize and
     /// backfill. Frequencies per the hand-off plan: hourly for the
     /// high-volume/streaming types (steps, heart rate, active energy), daily
     /// for the rest.
@@ -252,6 +252,12 @@ final class HealthSyncCoordinator: ObservableObject {
         addQuantity(.stepCount, key: "sync.anchor.steps", frequency: .hourly)
         addQuantity(.activeEnergyBurned, key: "sync.anchor.activeEnergy", frequency: .hourly)
         addQuantity(.bodyMass, key: "sync.anchor.bodyMass", frequency: .daily)
+        // Expanded coverage (aggregated via the same buildIngestDays path).
+        addQuantity(.vo2Max, key: "sync.anchor.vo2Max", frequency: .daily)
+        addQuantity(.distanceWalkingRunning, key: "sync.anchor.distance", frequency: .hourly)
+        addQuantity(.appleExerciseTime, key: "sync.anchor.exercise", frequency: .hourly)
+        addQuantity(.flightsClimbed, key: "sync.anchor.flights", frequency: .hourly)
+        addQuantity(.basalEnergyBurned, key: "sync.anchor.basalEnergy", frequency: .hourly)
 
         if let sleepType = HKObjectType.categoryType(forIdentifier: .sleepAnalysis) {
             types.append(SyncType(sampleType: sleepType, anchorKey: "sync.anchor.sleep", frequency: .daily))

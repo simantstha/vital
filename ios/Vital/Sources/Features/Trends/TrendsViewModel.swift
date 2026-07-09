@@ -4,28 +4,34 @@ import SwiftUI
 // MARK: - Metric option
 
 enum TrendMetric: String, CaseIterable, Identifiable {
-    case hrv    = "hrv"
-    case sleep  = "sleep"
-    case weight = "weight"
-    case steps  = "steps"
+    case hrv      = "hrv"
+    case sleep    = "sleep"
+    case weight   = "weight"
+    case steps    = "steps"
+    case vo2      = "vo2"
+    case distance = "distance"
 
     var id: String { rawValue }
 
     var displayName: String {
         switch self {
-        case .hrv:    return "HRV"
-        case .sleep:  return "Sleep"
-        case .weight: return "Weight"
-        case .steps:  return "Steps"
+        case .hrv:      return "HRV"
+        case .sleep:    return "Sleep"
+        case .weight:   return "Weight"
+        case .steps:    return "Steps"
+        case .vo2:      return "VO₂ Max"
+        case .distance: return "Distance"
         }
     }
 
     var unit: String {
         switch self {
-        case .hrv:    return "ms"
-        case .sleep:  return "h"
-        case .weight: return "kg"
-        case .steps:  return "steps"
+        case .hrv:      return "ms"
+        case .sleep:    return "h"
+        case .weight:   return "kg"
+        case .steps:    return "steps"
+        case .vo2:      return "ml/kg·min"
+        case .distance: return "km"
         }
     }
 }
@@ -108,9 +114,7 @@ final class TrendsViewModel: ObservableObject {
         switch selectedMetric {
         case .hrv, .steps:
             return "\(Int(v.rounded()))"
-        case .sleep:
-            return String(format: "%.1f", v)
-        case .weight:
+        case .sleep, .weight, .vo2, .distance:
             return String(format: "%.1f", v)
         }
     }
