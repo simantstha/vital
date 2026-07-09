@@ -34,6 +34,7 @@ import { generateDailyBriefFromDb } from '@/lib/brain/brief';
 import { getCachedBrief, setCachedBrief, briefCacheKey, todayKey } from '@/lib/brain/briefCache';
 import { getCalibration } from '@/lib/brain/baselines';
 import { queryMetricPoints, type MetricPoint } from '@/lib/brain/tools';
+import { resolveDietBudget } from '@/lib/brain/dietBudget';
 
 export const dynamic = 'force-dynamic';
 
@@ -91,8 +92,9 @@ export async function GET(request: Request): Promise<NextResponse> {
   let events: (typeof schema.events.$inferSelect)[];
   let calibration: Awaited<ReturnType<typeof getCalibration>>;
   let hrvPts: MetricPoint[], rhrPts: MetricPoint[], sleepPts: MetricPoint[];
+  let userRow: (typeof schema.users.$inferSelect) | undefined;
   try {
-    [events, calibration, hrvPts, rhrPts, sleepPts] = await Promise.all([
+    [events, calibration, hrvPts, rhrPts, sleepPts, userRow] = await Promise.all([
       db
         .select()
         .from(schema.events)
@@ -105,6 +107,7 @@ export async function GET(request: Request): Promise<NextResponse> {
       queryMetricPoints(userId, 'hrv_sdnn', 7),
       queryMetricPoints(userId, 'resting_hr', 7),
       queryMetricPoints(userId, 'sleep_minutes', 7),
+      db.select().from(schema.users).where(eq(schema.users.id, userId)).limit(1).then(r => r[0]),
     ]);
   } catch (err) {
     return NextResponse.json({ error: `DB read error: ${String(err)}` }, { status: 500 });
@@ -120,16 +123,24 @@ export async function GET(request: Request): Promise<NextResponse> {
   const { value: sleepHours, deltaPct: sleepDelta } =
     cardFromPoints(sleepPts, v => Math.round((v / 60) * 10) / 10);
 
-  // ── Diet budget (today only) ─────────────────────────────────────────────
-  const TARGET_KCAL = 2400;
-  let consumedKcal = 0, protein = 0, carbs = 0, fat = 0;
+  // ── Diet budget ──────────────────────────────────────────────────────────
+  // Target + macro targets come from the shared resolver (user override, else
+  // auto-calculated from goal + weight). Consumed macros are summed from
+  // today's meal_logged events.
+  const budget = userRow
+    ? await resolveDietBudget(userRow, userId)
+    : await resolveDietBudget(
+        { goal: null, target_kcal: null, protein_target_g: null, carbs_target_g: null, fat_target_g: null },
+        userId,
+      );
 
+  let consumedKcal = 0, consumedProtein = 0, consumedCarbs = 0, consumedFat = 0;
   for (const e of todayEvents.filter(e => e.type === 'meal_logged')) {
     const p   = pl(e.payload);
-    consumedKcal += Math.round(num(p.kcal)    ?? num(p.calories) ?? 0);
-    protein      += Math.round(num(p.p)       ?? num(p.protein)  ?? 0);
-    carbs        += Math.round(num(p.c)       ?? num(p.carbs)    ?? 0);
-    fat          += Math.round(num(p.f)       ?? num(p.fat)      ?? 0);
+    consumedKcal    += Math.round(num(p.kcal) ?? num(p.calories) ?? 0);
+    consumedProtein += Math.round(num(p.p)    ?? num(p.protein)  ?? 0);
+    consumedCarbs   += Math.round(num(p.c)    ?? num(p.carbs)    ?? 0);
+    consumedFat     += Math.round(num(p.f)    ?? num(p.fat)      ?? 0);
   }
 
   // Suppress a meal entry if we also pulled yesterday's meals (shouldn't happen
@@ -179,12 +190,20 @@ export async function GET(request: Request): Promise<NextResponse> {
       },
     },
     dietBudget: {
-      targetKcal:  TARGET_KCAL,
+      mode:          budget.mode,
+      goal:          budget.goal,
+      targetKcal:    budget.targetKcal,
       consumedKcal,
-      remaining:   Math.max(0, TARGET_KCAL - consumedKcal),
-      protein,
-      carbs,
-      fat,
+      remaining:     Math.max(0, budget.targetKcal - consumedKcal),
+      // Macro TARGETS (from the resolver) — the iOS app used to derive these
+      // from a fixed 30/40/30 split; now they're server-authoritative.
+      proteinTarget: budget.protein,
+      carbsTarget:   budget.carbs,
+      fatTarget:     budget.fat,
+      // Consumed-so-far, summed from today's logged meals.
+      protein:       consumedProtein,
+      carbs:         consumedCarbs,
+      fat:           consumedFat,
     },
     insight,
     plan,

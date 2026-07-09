@@ -22,6 +22,11 @@ final class ProfileViewModel: ObservableObject {
     @Published var isLoading = true
     @Published var errorMessage: String? = nil
 
+    // Diet budget summary for the Nutrition entry point.
+    @Published var budgetKcal: Int?
+    @Published var budgetMode: String = "auto"   // "auto" | "custom"
+    @Published var budgetGoalLabel: String = ""
+
     private let apiClient = APIClient.shared
 
     func load() async {
@@ -36,7 +41,22 @@ final class ProfileViewModel: ObservableObject {
             errorMessage = error.localizedDescription
             print("[Vital] fetchProfile failed: \(error.localizedDescription)")
         }
+        await loadBudget()
         isLoading = false
+    }
+
+    /// Loads the diet-budget summary shown on the Nutrition row. Called on
+    /// initial load and again when the editor is dismissed so the row updates.
+    func loadBudget() async {
+        do {
+            let r = try await apiClient.fetchDietGoal()
+            budgetKcal = r.current.targetKcal
+            budgetMode = r.current.mode
+            budgetGoalLabel = DietBudgetViewModel.goalLabels[r.current.goal] ?? r.current.goal
+        } catch {
+            // Non-fatal — the row just shows a neutral placeholder.
+            print("[Vital] fetchDietGoal failed: \(error.localizedDescription)")
+        }
     }
 
     // MARK: - Private

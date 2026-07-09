@@ -21,6 +21,18 @@ export const users = p.pgTable('users', {
   name:         p.text('name').notNull(),
   created_at:   p.timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   onboarded_at: p.timestamp('onboarded_at', { withTimezone: true }),           // nullable until onboarding flow completes
+
+  // ── Diet goal + budget ─────────────────────────────────────────────────────
+  // goal drives the auto-calculated calorie/macro target (Mifflin-St Jeor TDEE
+  // + goal adjustment; see lib/brain/dietBudget.ts). The *_target columns are a
+  // user override: null in all four → "auto" (recompute from goal + weight);
+  // set → the user has pinned their own numbers. Values: 'weight_loss' |
+  // 'muscle' | 'endurance' | 'general'.
+  goal:            p.text('goal'),                                             // nullable → treated as 'general'
+  target_kcal:     p.integer('target_kcal'),                                   // null → auto
+  protein_target_g: p.integer('protein_target_g'),
+  carbs_target_g:   p.integer('carbs_target_g'),
+  fat_target_g:     p.integer('fat_target_g'),
 });
 
 // ─── events (append-only) ────────────────────────────────────────────────────
