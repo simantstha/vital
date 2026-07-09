@@ -1,8 +1,19 @@
 # Problem 03 — A year of data is stored but Trends only shows ≤30 days
 
-**Status:** Diagnosed, not fixed
+**Status:** ✅ Fixed on branch `fix/barcode-decode-mismatch` (bundled into PR #33)
 **Reported:** 2026-07-09
 **Area:** iOS — Trends screen range picker (UI-only; backend + data are fine)
+
+**Fix applied:**
+- **3a (range cap):** range picker now offers `14 / 30 / 90 / 365` (labelled
+  14d / 30d / 3M / 1Y) so the app can request the full backfilled year. The
+  chart X-axis switched to `.automatic(desiredCount: 6)` with month-only labels
+  above 90 days, so ticks stay legible instead of overcrowding.
+- **3b (analysis, cheap path):** added an **Average** stat badge and a **trend
+  chip** (first→last % change with up/down arrow) computed client-side from the
+  points already fetched — no backend change. The richer "return the `baselines`
+  row from `/api/trends`" path (mean7/30/60, percentiles, vs-baseline) remains
+  **deferred**.
 
 ---
 
