@@ -31,10 +31,11 @@ import { db, schema } from '@/db';
 import { eq, and, gte, desc } from 'drizzle-orm';
 import { getUserIdFromRequest } from '@/lib/auth';
 import { generateDailyBriefFromDb } from '@/lib/brain/brief';
-import { getCachedBrief, setCachedBrief, briefCacheKey, todayKey } from '@/lib/brain/briefCache';
+import { getCachedBrief, setCachedBrief, briefCacheKey } from '@/lib/brain/briefCache';
 import { getCalibration } from '@/lib/brain/baselines';
 import { queryMetricPoints, type MetricPoint } from '@/lib/brain/tools';
 import { resolveDietBudget } from '@/lib/brain/dietBudget';
+import { localDayKey, pickTimeZone, isValidTimeZone } from '@/lib/localDay';
 
 export const dynamic = 'force-dynamic';
 
@@ -82,10 +83,15 @@ export async function GET(request: Request): Promise<NextResponse> {
   }
 
   // ── Date boundaries ──────────────────────────────────────────────────────
+  // The diet budget is bucketed by the user's *local* calendar day (see below),
+  // not UTC, so "consumed" resets at their local midnight. The device sends its
+  // current zone as ?tz= on every request, so this tracks travel automatically.
+  const paramTz = new URL(request.url).searchParams.get('tz');
   const now = new Date();
-  const todayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-  // Pull 3 days so we can compute deltas (today vs yesterday vs day-before)
-  const threeDaysAgo = new Date(todayStart);
+  // Pull a generous window (a local day starts at most ~14h from UTC midnight,
+  // well inside this) — we refine to "today" by local-day key in JS below.
+  const utcMidnight = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const threeDaysAgo = new Date(utcMidnight);
   threeDaysAgo.setUTCDate(threeDaysAgo.getUTCDate() - 3);
 
   // ── DB read (fast). The LLM brief is served from cache, never awaited here ─
@@ -113,9 +119,22 @@ export async function GET(request: Request): Promise<NextResponse> {
     return NextResponse.json({ error: `DB read error: ${String(err)}` }, { status: 500 });
   }
 
-  // ── Partition by date bucket (events power the diet budget only) ─────────
-  const todayEvents     = events.filter(e => e.timestamp >= todayStart);
-  const yesterdayEvents = events.filter(e => e.timestamp < todayStart);
+  // ── Partition by the user's local calendar day (events power the diet
+  //    budget only). Prefer the fresh request tz, else the stored one, else UTC.
+  const tz = pickTimeZone(paramTz, userRow?.timezone);
+  const dayKey = localDayKey(now, tz);
+  const todayEvents = events.filter(e => localDayKey(e.timestamp, tz) === dayKey);
+
+  // Travel-aware: persist the device's current zone so background jobs
+  // (/api/brief) compute the same local day. Fire-and-forget; this response
+  // already uses paramTz directly, so it's correct even before this commits.
+  if (isValidTimeZone(paramTz) && paramTz !== userRow?.timezone) {
+    void db
+      .update(schema.users)
+      .set({ timezone: paramTz })
+      .where(eq(schema.users.id, userId))
+      .catch(err => console.error('[/api/today] tz persist failed:', err));
+  }
 
   // ── Biometric cards from daily_metrics (single source of truth) ──────────
   const { value: hrvValue,   deltaPct: hrvDelta }   = cardFromPoints(hrvPts, v => Math.round(v));
@@ -143,10 +162,6 @@ export async function GET(request: Request): Promise<NextResponse> {
     consumedFat     += Math.round(num(p.f)    ?? num(p.fat)      ?? 0);
   }
 
-  // Suppress a meal entry if we also pulled yesterday's meals (shouldn't happen
-  // given todayEvents filter, but belt-and-suspenders check is free).
-  void yesterdayEvents;
-
   // ── Brief (insight + plan) — cached; regenerated in the background ────────
   // The Claude brief takes 15–27s, so we never block this response on it.
   // Cache hit → return it. Cache miss → return empty (the iOS app keeps its
@@ -154,7 +169,7 @@ export async function GET(request: Request): Promise<NextResponse> {
   let insight = '';
   let plan: Array<{ name: string; kcal: number; why: string }> = [];
 
-  const cacheKey = briefCacheKey(userId, todayKey());
+  const cacheKey = briefCacheKey(userId, dayKey);
   const cached = getCachedBrief(cacheKey);
   if (cached) {
     insight = cached.insight;
