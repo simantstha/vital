@@ -29,14 +29,14 @@ if (process.env.NODE_ENV !== 'production') {
   g._vitalBriefCache = cache;
 }
 
-/** Build the cache key for a user + UTC date (YYYY-MM-DD). */
+/**
+ * Build the cache key for a user + local-day date string (YYYY-MM-DD).
+ * Callers pass a local-day key from `lib/localDay.localDayKey(now, tz)` so the
+ * cached brief rolls over at the user's local midnight (see /api/today,
+ * /api/brief), not UTC midnight.
+ */
 export function briefCacheKey(userId: string, date: string): string {
   return `${userId}:${date}`;
-}
-
-/** Today's UTC date as YYYY-MM-DD — the canonical key suffix. */
-export function todayKey(): string {
-  return new Date().toISOString().split('T')[0];
 }
 
 export function getCachedBrief(key: string): CachedBrief | undefined {

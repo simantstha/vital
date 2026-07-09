@@ -126,7 +126,12 @@ struct APIClient {
     // MARK: - Today dashboard
 
     func fetchToday() async throws -> TodayResponse {
-        try await get("/api/today")
+        // Send the device's current timezone so the server buckets the diet
+        // budget by the user's local day (resets at local midnight, tracks
+        // travel). TimeZone.current re-reads the device zone on each call.
+        let tz = TimeZone.current.identifier
+        let encoded = tz.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? tz
+        return try await get("/api/today?tz=\(encoded)")
     }
 
     // MARK: - Diet goal / budget

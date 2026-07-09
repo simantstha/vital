@@ -21,6 +21,7 @@ export const users = p.pgTable('users', {
   name:         p.text('name').notNull(),
   created_at:   p.timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   onboarded_at: p.timestamp('onboarded_at', { withTimezone: true }),           // nullable until onboarding flow completes
+  timezone:     p.text('timezone'),                                            // IANA id (e.g. "America/Chicago"); null → UTC. Refreshed from the device on /api/today so day boundaries track travel.
 
   // ── Diet goal + budget ─────────────────────────────────────────────────────
   // goal drives the auto-calculated calorie/macro target (Mifflin-St Jeor TDEE
