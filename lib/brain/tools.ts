@@ -304,14 +304,14 @@ export const BRAIN_TOOLS: Tool[] = [
 
 // ── Deterministic macro math ──────────────────────────────────────────────────
 
-interface WorkoutInput {
+export interface WorkoutInput {
   type: string;
   distanceKm?: number;
   durationMin?: number;
   calories?: number;
 }
 
-function estimateTDEE(weightKg: number, workouts: WorkoutInput[]): number {
+export function estimateTDEE(weightKg: number, workouts: WorkoutInput[]): number {
   // Mifflin-St Jeor for 175 cm, 30-year-old male (profile defaults)
   const bmr = 10 * weightKg + 6.25 * 175 - 5 * 30 + 5;
   let tdee = bmr * 1.3; // lightly-active base
@@ -346,7 +346,7 @@ function estimateTDEE(weightKg: number, workouts: WorkoutInput[]): number {
   return Math.round(tdee);
 }
 
-function macrosForGoal(
+export function macrosForGoal(
   goal: string,
   weightKg: number,
   tdee: number,

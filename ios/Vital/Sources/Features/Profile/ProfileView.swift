@@ -4,6 +4,7 @@ struct ProfileView: View {
     @StateObject private var vm = ProfileViewModel()
     @EnvironmentObject private var authViewModel: AuthViewModel
     @State private var showSignOutConfirm = false
+    @State private var showBudgetEditor = false
 
     var body: some View {
         ZStack {
@@ -19,6 +20,7 @@ struct ProfileView: View {
                             .padding(.top, 80)
                     } else {
                         avatarSection
+                        nutritionSection
                         statsGrid
                         integrationsSection
                         accountSection
@@ -31,6 +33,9 @@ struct ProfileView: View {
             .scrollIndicators(.hidden)
         }
         .task { await vm.load() }
+        .sheet(isPresented: $showBudgetEditor, onDismiss: { Task { await vm.loadBudget() } }) {
+            DietBudgetEditorView()
+        }
         .confirmationDialog(
             "Sign out of Vital?",
             isPresented: $showSignOutConfirm,
@@ -70,6 +75,57 @@ private extension ProfileView {
             Text(vm.name)
                 .font(.system(size: 22, weight: .semibold))
                 .foregroundStyle(Theme.Colors.textPrimary)
+        }
+    }
+
+    // ── Nutrition (diet budget entry point) ──────────────────────────────────
+
+    var nutritionSection: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+            SectionHeader(title: "Nutrition")
+
+            Button { showBudgetEditor = true } label: {
+                GlassCard {
+                    HStack(spacing: Theme.Spacing.md) {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous)
+                                .fill(Theme.Colors.accent.opacity(0.22))
+                                .frame(width: 38, height: 38)
+                            Image(systemName: "target")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundStyle(Theme.Colors.accentContent)
+                        }
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Daily Budget")
+                                .font(Theme.Typography.bodyMedium)
+                                .fontWeight(.medium)
+                                .foregroundStyle(Theme.Colors.textPrimary)
+                            Text(vm.budgetMode == "custom" ? "Custom" : "Auto · \(vm.budgetGoalLabel)")
+                                .font(Theme.Typography.labelSmall)
+                                .foregroundStyle(Theme.Colors.textSecondary)
+                        }
+
+                        Spacer()
+
+                        if let kcal = vm.budgetKcal {
+                            VStack(alignment: .trailing, spacing: 1) {
+                                Text("\(kcal)")
+                                    .font(Theme.Typography.numericSmall(17))
+                                    .fontWeight(.semibold)
+                                    .foregroundStyle(Theme.Colors.textPrimary)
+                                Text("kcal / day")
+                                    .font(Theme.Typography.labelSmall)
+                                    .foregroundStyle(Theme.Colors.textSecondary)
+                            }
+                        }
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Theme.Colors.textSecondary)
+                    }
+                }
+            }
+            .buttonStyle(.plain)
         }
     }
 

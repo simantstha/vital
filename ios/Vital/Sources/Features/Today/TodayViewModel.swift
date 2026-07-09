@@ -255,10 +255,12 @@ final class TodayViewModel: ObservableObject {
 
         // Diet budget
         let db = r.dietBudget
-        // Derive macro targets from total kcal using standard splits: P 30%, C 40%, F 30%
-        let proteinTarget = Int((Double(db.targetKcal) * 0.30 / 4).rounded())
-        let carbsTarget   = Int((Double(db.targetKcal) * 0.40 / 4).rounded())
-        let fatTarget     = Int((Double(db.targetKcal) * 0.30 / 9).rounded())
+        // Macro targets are now server-authoritative (user override or auto-calc
+        // from goal). Fall back to a 30/40/30 split only if an older backend
+        // doesn't send them yet.
+        let proteinTarget = db.proteinTarget ?? Int((Double(db.targetKcal) * 0.30 / 4).rounded())
+        let carbsTarget   = db.carbsTarget   ?? Int((Double(db.targetKcal) * 0.40 / 4).rounded())
+        let fatTarget     = db.fatTarget     ?? Int((Double(db.targetKcal) * 0.30 / 9).rounded())
 
         diet = DietCard(
             kcalConsumed: db.consumedKcal,

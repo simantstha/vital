@@ -129,6 +129,47 @@ struct APIClient {
         try await get("/api/today")
     }
 
+    // MARK: - Diet goal / budget
+
+    func fetchDietGoal() async throws -> DietGoalResponse {
+        try await get("/api/diet-goal")
+    }
+
+    /// PATCH the diet goal and/or the calorie+macro override. Pass `mode: "auto"`
+    /// to clear the override, or `mode: "custom"` with all four numbers to pin it.
+    /// nil fields are omitted from the request body by JSONEncoder.
+    @discardableResult
+    func updateDietGoal(
+        goal: String? = nil,
+        mode: String? = nil,
+        targetKcal: Int? = nil,
+        protein: Int? = nil,
+        carbs: Int? = nil,
+        fat: Int? = nil
+    ) async throws -> DietGoalResponse {
+        guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/diet-goal") else {
+            throw APIError.invalidURL
+        }
+        var request = authorizedRequest(url)
+        request.httpMethod = "PATCH"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 15
+        struct Body: Encodable {
+            let goal: String?
+            let mode: String?
+            let targetKcal: Int?
+            let protein: Int?
+            let carbs: Int?
+            let fat: Int?
+        }
+        request.httpBody = try encoder.encode(
+            Body(goal: goal, mode: mode, targetKcal: targetKcal, protein: protein, carbs: carbs, fat: fat)
+        )
+        let (data, response) = try await session.data(for: request)
+        try validate(response)
+        return try decoder.decode(DietGoalResponse.self, from: data)
+    }
+
     // MARK: - Trends
 
     func fetchTrends(metric: String, days: Int) async throws -> TrendsResponse {
@@ -620,6 +661,13 @@ struct TodayDietBudget: Decodable {
     let protein: Int   // consumed grams
     let carbs: Int     // consumed grams
     let fat: Int       // consumed grams
+    // Macro TARGETS — server-authoritative (was a fixed 30/40/30 split on-device).
+    // Optional for backwards-compat with an older backend during rollout.
+    let proteinTarget: Int?
+    let carbsTarget: Int?
+    let fatTarget: Int?
+    let mode: String?  // "auto" | "custom"
+    let goal: String?
 }
 
 struct TodayPlanItem: Decodable {
@@ -644,6 +692,24 @@ struct TodayResponse: Decodable {
     let insight: String
     let plan: [TodayPlanItem]
     let calibration: CalibrationStatus?
+}
+
+// MARK: - Diet goal types
+
+struct DietBudgetDTO: Decodable {
+    let mode: String       // "auto" | "custom"
+    let goal: String       // "weight_loss" | "muscle" | "endurance" | "general"
+    let targetKcal: Int
+    let protein: Int
+    let carbs: Int
+    let fat: Int
+    let tdee: Int?         // present for auto only
+}
+
+struct DietGoalResponse: Decodable {
+    let current: DietBudgetDTO
+    let auto: DietBudgetDTO
+    let goals: [String]
 }
 
 // MARK: - Trends types
