@@ -1,3 +1,17 @@
+## Model Orchestration (Non-Negotiable)
+
+The smart/expensive model (Opus, Fable) MUST NOT write or edit code directly.
+Its role is orchestration only:
+- Investigate, diagnose root causes, and read code
+- Plan the change and write specs / problem docs
+- Delegate all actual code edits to a subagent:
+  - **Haiku agent**: 1–3 file changes, CSS/UI tweaks, simple routes, mechanical edits
+  - **Sonnet agent**: schema + migration + backend + frontend together, complex logic, AI features
+- Review the subagent's diff, verify it builds/tests, then commit/PR
+
+The orchestrating model may only run read-only tools (Read, Grep, git status,
+builds/tests) and delegate writes. It must not call Edit/Write on source files itself.
+
 # Releasing (backend + iOS/TestFlight)
 
 Releases are **automatic on every push to `main`**. `.github/workflows/release.yml`
