@@ -32,7 +32,11 @@ export const dynamic = 'force-dynamic';
 
 const KCAL_MIN = 800;
 const KCAL_MAX = 6000;
-const GRAMS_MAX = 600;
+// A single macro can legitimately be large at a high calorie target — e.g. a
+// ~4,300 kcal general-goal budget puts carbs around 650 g, and an all-carb
+// 6,000 kcal budget is ~1,500 g. Cap only to reject obvious typos, not real
+// auto-calculated values (600 g was too low and rejected valid budgets).
+const GRAMS_MAX = 1500;
 
 function num(v: unknown): number | undefined {
   return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
