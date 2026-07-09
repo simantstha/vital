@@ -22,6 +22,7 @@ import { db, schema } from '@/db';
 import { assembleContext } from './context';
 import { assemblePersona } from './persona';
 import { BRAIN_TOOLS, executeToolCall, toolCallLabel } from './tools';
+import { buildCoachViz, type CoachViz } from './coachViz';
 import { MEMORY_TOOLS, handleToolCall as handleMemoryToolCall } from '@/lib/memory';
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -41,6 +42,7 @@ const MEMORY_TOOL_NAMES = new Set(MEMORY_TOOLS.map(t => t.name));
 export type CoachEvent =
   | { type: 'text'; text: string }
   | { type: 'tool_call'; id: string; name: string; label: string; status: 'started' | 'done' }
+  | { type: 'tool_data'; id: string; viz: CoachViz }
   | { type: 'done'; messageId: string };
 
 // ── Main export ───────────────────────────────────────────────────────────────
@@ -169,6 +171,17 @@ export async function* runCoach(
         : await executeToolCall(block.name, input, userId);
 
       yield { type: 'tool_call', id: callId, name: block.name, label, status: 'done' };
+
+      // For the chartable data tools, also surface the structured result so the
+      // client can render an inline mini-chart / stat card (falls back to the
+      // text chip above when there's no data). Same callId ties it to the row.
+      try {
+        const viz = buildCoachViz(block.name, JSON.parse(result));
+        if (viz) yield { type: 'tool_data', id: callId, viz };
+      } catch {
+        // result wasn't JSON (or not chartable) — no viz, just the chip.
+      }
+
       toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: result });
     }
 

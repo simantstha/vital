@@ -75,6 +75,10 @@ struct CoachView: View {
                         case .toolCall(let call):
                             ToolCallActivityView(row: call)
                                 .id(row.id)
+                        case .dataCard(let card):
+                            CoachDataCardView(viz: card.viz)
+                                .id(row.id)
+                                .transition(.opacity.combined(with: .move(edge: .leading)))
                         }
                     }
 

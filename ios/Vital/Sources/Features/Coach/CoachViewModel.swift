@@ -28,19 +28,31 @@ struct ToolCallRow: Identifiable, Equatable {
     var isDone: Bool = false
 }
 
+// MARK: - Inline data card row
+
+/// An inline chart / stat card rendered from a chartable tool's structured
+/// result (get_metric_trend / get_sleep_summary / compare_periods). Sits just
+/// below its tool-call chip. `id` is the tool_call id it belongs to.
+struct CoachDataRow: Identifiable, Equatable {
+    let id: String
+    let viz: CoachViz
+}
+
 // MARK: - Transcript row
 
-/// A single row in the coach conversation — either a chat bubble or an inline
-/// tool-call activity indicator. Both live in one ordered array so tool calls
-/// render at the correct position relative to the surrounding message text.
+/// A single row in the coach conversation — a chat bubble, an inline tool-call
+/// activity indicator, or an inline data card. All live in one ordered array so
+/// each renders at the correct position relative to the surrounding message text.
 enum ChatRow: Identifiable, Equatable {
     case message(ChatMessage)
     case toolCall(ToolCallRow)
+    case dataCard(CoachDataRow)
 
     var id: String {
         switch self {
         case .message(let m):  return m.id.uuidString
         case .toolCall(let t): return "tool-\(t.id)"
+        case .dataCard(let d): return "data-\(d.id)"
         }
     }
 }
@@ -162,6 +174,8 @@ final class CoachViewModel: ObservableObject {
                         appendText(delta, toMessage: assistantId)
                     case .toolCall(let id, let name, let label, let done):
                         applyToolCall(id: id, name: name, label: label, done: done)
+                    case .toolData(let id, let viz):
+                        applyToolData(id: id, viz: viz)
                     }
                 }
             } catch {
@@ -219,6 +233,19 @@ final class CoachViewModel: ObservableObject {
             rows[idx] = .toolCall(row)
         } else if !done {
             rows.append(.toolCall(ToolCallRow(id: id, name: name, label: label)))
+        }
+    }
+
+    /// Inserts an inline data card for a chartable tool result, just after its
+    /// tool-call chip. Ignores duplicates (same tool_call id).
+    private func applyToolData(id: String, viz: CoachViz) {
+        let rowId = "data-\(id)"
+        guard !rows.contains(where: { $0.id == rowId }) else { return }
+        let card = ChatRow.dataCard(CoachDataRow(id: id, viz: viz))
+        if let idx = rows.firstIndex(where: { $0.id == "tool-\(id)" }) {
+            rows.insert(card, at: idx + 1)
+        } else {
+            rows.append(card)
         }
     }
 
