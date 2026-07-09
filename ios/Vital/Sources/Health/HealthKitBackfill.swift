@@ -13,6 +13,11 @@ struct DailyHealthData {
     var steps: Double?            // count, cumulativeSum
     var activeEnergyKcal: Double? // kcal, cumulativeSum
     var bodyMassKg: Double?       // kg, discreteAverage
+    var vo2Max: Double?           // ml/kg·min, discreteAverage (sparse — ~weekly)
+    var distanceM: Double?        // meters, cumulativeSum (walking+running)
+    var exerciseMin: Double?      // minutes, cumulativeSum (Apple exercise ring)
+    var flights: Double?          // count, cumulativeSum (flights climbed)
+    var basalEnergyKcal: Double?  // kcal, cumulativeSum (resting energy)
 }
 
 /// One night's sleep, attributed to the *wake* date (the day the sleep session ended).
@@ -40,6 +45,12 @@ struct DailyWorkoutData {
     let type: String
     let durationMin: Double
     let kcal: Double
+    let distanceM: Double?       // meters (nil for non-distance workouts)
+    let avgHr: Double?           // bpm, average over the workout
+    let maxHr: Double?           // bpm, max during the workout
+    let paceMinPerKm: Double?    // derived from distance + duration
+    let elevationGainM: Double?  // meters ascended (from workout metadata)
+    let startTime: String?       // ISO-8601 start instant
 }
 
 // MARK: - HealthKitBackfill
@@ -82,9 +93,16 @@ final class HealthKitBackfill {
         async let steps = dailyQuantity(.stepCount, options: .cumulativeSum, unit: HKUnit.count(), start: start, end: end, anchor: anchor)
         async let activeEnergy = dailyQuantity(.activeEnergyBurned, options: .cumulativeSum, unit: HKUnit.kilocalorie(), start: start, end: end, anchor: anchor)
         async let bodyMass = dailyQuantity(.bodyMass, options: .discreteAverage, unit: HKUnit.gramUnit(with: .kilo), start: start, end: end, anchor: anchor)
+        async let vo2 = dailyQuantity(.vo2Max, options: .discreteAverage, unit: HKUnit(from: "ml/kg*min"), start: start, end: end, anchor: anchor)
+        async let distance = dailyQuantity(.distanceWalkingRunning, options: .cumulativeSum, unit: HKUnit.meter(), start: start, end: end, anchor: anchor)
+        async let exercise = dailyQuantity(.appleExerciseTime, options: .cumulativeSum, unit: HKUnit.minute(), start: start, end: end, anchor: anchor)
+        async let flights = dailyQuantity(.flightsClimbed, options: .cumulativeSum, unit: HKUnit.count(), start: start, end: end, anchor: anchor)
+        async let basalEnergy = dailyQuantity(.basalEnergyBurned, options: .cumulativeSum, unit: HKUnit.kilocalorie(), start: start, end: end, anchor: anchor)
 
         let (hrvByDay, restingHrByDay, hrAvgByDay, stepsByDay, activeEnergyByDay, bodyMassByDay) =
             try await (hrv, restingHr, hrAvg, steps, activeEnergy, bodyMass)
+        let (vo2ByDay, distanceByDay, exerciseByDay, flightsByDay, basalByDay) =
+            try await (vo2, distance, exercise, flights, basalEnergy)
 
         var days = Set(hrvByDay.keys)
         days.formUnion(restingHrByDay.keys)
@@ -92,6 +110,11 @@ final class HealthKitBackfill {
         days.formUnion(stepsByDay.keys)
         days.formUnion(activeEnergyByDay.keys)
         days.formUnion(bodyMassByDay.keys)
+        days.formUnion(vo2ByDay.keys)
+        days.formUnion(distanceByDay.keys)
+        days.formUnion(exerciseByDay.keys)
+        days.formUnion(flightsByDay.keys)
+        days.formUnion(basalByDay.keys)
 
         return days.map { day in
             DailyHealthData(
@@ -101,7 +124,12 @@ final class HealthKitBackfill {
                 hrAvg: hrAvgByDay[day],
                 steps: stepsByDay[day],
                 activeEnergyKcal: activeEnergyByDay[day],
-                bodyMassKg: bodyMassByDay[day]
+                bodyMassKg: bodyMassByDay[day],
+                vo2Max: vo2ByDay[day],
+                distanceM: distanceByDay[day],
+                exerciseMin: exerciseByDay[day],
+                flights: flightsByDay[day],
+                basalEnergyKcal: basalByDay[day]
             )
         }
     }
@@ -242,6 +270,9 @@ final class HealthKitBackfill {
 
         let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: .strictStartDate)
         let energyType = HKObjectType.quantityType(forIdentifier: .activeEnergyBurned)
+        let hrType = HKObjectType.quantityType(forIdentifier: .heartRate)
+        let distanceType = HKObjectType.quantityType(forIdentifier: .distanceWalkingRunning)
+        let bpm = HKUnit(from: "count/min")
 
         let workouts: [HKWorkout] = try await withCheckedThrowingContinuation { continuation in
             let query = HKSampleQuery(
@@ -264,12 +295,35 @@ final class HealthKitBackfill {
             if let energyType, let stats = workout.statistics(for: energyType), let sum = stats.sumQuantity() {
                 kcal = sum.doubleValue(for: .kilocalorie())
             }
+
+            let distanceM: Double? = distanceType
+                .flatMap { workout.statistics(for: $0)?.sumQuantity()?.doubleValue(for: .meter()) }
+            let avgHr: Double? = hrType
+                .flatMap { workout.statistics(for: $0)?.averageQuantity()?.doubleValue(for: bpm) }
+            let maxHr: Double? = hrType
+                .flatMap { workout.statistics(for: $0)?.maximumQuantity()?.doubleValue(for: bpm) }
+            let elevationGainM: Double? =
+                (workout.metadata?[HKMetadataKeyElevationAscended] as? HKQuantity)?.doubleValue(for: .meter())
+
+            let durationMin = workout.duration / 60
+            // Pace in min/km, derived from distance + duration (running/walking).
+            let paceMinPerKm: Double? = {
+                guard let d = distanceM, d > 0 else { return nil }
+                return durationMin / (d / 1000)
+            }()
+
             return DailyWorkoutData(
                 day: calendar.startOfDay(for: workout.startDate),
                 hkUuid: workout.uuid.uuidString,
                 type: Self.workoutTypeName(workout.workoutActivityType),
-                durationMin: workout.duration / 60,
-                kcal: kcal
+                durationMin: durationMin,
+                kcal: kcal,
+                distanceM: distanceM,
+                avgHr: avgHr,
+                maxHr: maxHr,
+                paceMinPerKm: paceMinPerKm,
+                elevationGainM: elevationGainM,
+                startTime: Self.iso8601.string(from: workout.startDate)
             )
         }
     }
@@ -312,14 +366,21 @@ final class HealthKitBackfill {
 
             let metrics: DailyIngestMetrics?
             if let stat, stat.hrvSdnn != nil || stat.restingHr != nil || stat.hrAvg != nil
-                || stat.steps != nil || stat.activeEnergyKcal != nil || stat.bodyMassKg != nil {
+                || stat.steps != nil || stat.activeEnergyKcal != nil || stat.bodyMassKg != nil
+                || stat.vo2Max != nil || stat.distanceM != nil || stat.exerciseMin != nil
+                || stat.flights != nil || stat.basalEnergyKcal != nil {
                 metrics = DailyIngestMetrics(
                     hrv_sdnn: stat.hrvSdnn,
                     resting_hr: stat.restingHr,
                     hr_avg: stat.hrAvg,
                     steps: stat.steps,
                     active_energy_kcal: stat.activeEnergyKcal,
-                    body_mass_kg: stat.bodyMassKg
+                    body_mass_kg: stat.bodyMassKg,
+                    vo2_max: stat.vo2Max,
+                    distance_m: stat.distanceM,
+                    exercise_min: stat.exerciseMin,
+                    flights: stat.flights,
+                    basal_energy_kcal: stat.basalEnergyKcal
                 )
             } else {
                 metrics = nil
@@ -335,7 +396,18 @@ final class HealthKitBackfill {
             }
 
             let workoutsDTO: [DailyIngestWorkout]? = dayWorkouts?.map { w in
-                DailyIngestWorkout(hkUuid: w.hkUuid, type: w.type, durationMin: w.durationMin, kcal: w.kcal)
+                DailyIngestWorkout(
+                    hkUuid: w.hkUuid,
+                    type: w.type,
+                    durationMin: w.durationMin,
+                    kcal: w.kcal,
+                    distanceM: w.distanceM,
+                    avgHr: w.avgHr,
+                    maxHr: w.maxHr,
+                    paceMinPerKm: w.paceMinPerKm,
+                    elevationGainM: w.elevationGainM,
+                    startTime: w.startTime
+                )
             }
 
             return DailyIngestDay(
@@ -411,6 +483,9 @@ final class HealthKitBackfill {
         f.dateFormat = "yyyy-MM-dd"
         return f
     }()
+
+    /// ISO-8601 instant formatter for workout start times.
+    static let iso8601 = ISO8601DateFormatter()
 
     private static func workoutTypeName(_ type: HKWorkoutActivityType) -> String {
         switch type {

@@ -47,6 +47,12 @@ final class HealthKitManager: ObservableObject {
             .activeEnergyBurned,
             .bodyMass,
             .height,
+            // Expanded coverage: cardio fitness + activity + workout detail.
+            .vo2Max,
+            .distanceWalkingRunning,
+            .appleExerciseTime,
+            .flightsClimbed,
+            .basalEnergyBurned,
         ]
 
         for id in quantityIdentifiers {

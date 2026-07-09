@@ -532,6 +532,11 @@ struct DailyIngestMetrics: Encodable {
     let steps: Double?
     let active_energy_kcal: Double?
     let body_mass_kg: Double?
+    let vo2_max: Double?
+    let distance_m: Double?
+    let exercise_min: Double?
+    let flights: Double?
+    let basal_energy_kcal: Double?
 }
 
 struct DailyIngestSleep: Encodable {
@@ -551,6 +556,12 @@ struct DailyIngestWorkout: Encodable {
     let type: String
     let durationMin: Double
     let kcal: Double
+    let distanceM: Double?
+    let avgHr: Double?
+    let maxHr: Double?
+    let paceMinPerKm: Double?
+    let elevationGainM: Double?
+    let startTime: String?
 }
 
 private struct DailyIngestRequestBody: Encodable {
