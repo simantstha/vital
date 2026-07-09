@@ -225,6 +225,9 @@ struct APIClient {
                             guard let id = event.id, let name = event.name, let status = event.status else { break }
                             let label = event.label ?? name
                             continuation.yield(.toolCall(id: id, name: name, label: label, done: status == "done"))
+                        case "tool_data":
+                            guard let id = event.id, let viz = event.viz else { break }
+                            continuation.yield(.toolData(id: id, viz: viz))
                         case "done":
                             continuation.finish()
                             return
@@ -729,12 +732,43 @@ private struct SSEEvent: Decodable {
     let name: String?
     let label: String?
     let status: String?
+    // tool_data field
+    let viz: CoachViz?
 }
 
-/// A single event surfaced from the coach SSE stream: either a text delta to
-/// append to the streaming reply, or a tool-call lifecycle update (started/done)
-/// that the UI renders as an inline activity row.
+// MARK: - Coach inline data-viz
+
+struct CoachVizPoint: Decodable, Hashable {
+    let label: String
+    let value: Double
+}
+
+/// Structured result of a chartable coach tool (get_metric_trend /
+/// get_sleep_summary / compare_periods), rendered inline in the chat.
+struct CoachViz: Decodable, Hashable {
+    let kind: String            // "trend" | "sleep" | "compare"
+    let title: String
+    let unit: String?
+    // trend + sleep
+    let points: [CoachVizPoint]?
+    // trend
+    let mean: Double?
+    let baseline: Double?
+    let deltaPct: Double?
+    // sleep
+    let meanMinutes: Double?
+    let consistency: String?
+    // compare
+    let currentMean: Double?
+    let previousMean: Double?
+    let delta: Double?
+}
+
+/// A single event surfaced from the coach SSE stream: a text delta to append to
+/// the streaming reply, a tool-call lifecycle update (started/done) rendered as
+/// an inline activity row, or the structured data for a chartable tool.
 enum CoachStreamEvent {
     case text(String)
     case toolCall(id: String, name: String, label: String, done: Bool)
+    case toolData(id: String, viz: CoachViz)
 }

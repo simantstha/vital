@@ -79,6 +79,8 @@ export async function POST(request: Request): Promise<Response> {
               label:  chunk.label,
               status: chunk.status,
             });
+          } else if (chunk.type === 'tool_data') {
+            send({ type: 'tool_data', id: chunk.id, viz: chunk.viz });
           } else if (chunk.type === 'done') {
             send({ type: 'done', messageId: chunk.messageId });
           }
