@@ -23,6 +23,13 @@ struct MarkdownText: View {
                         .lineSpacing(lineSpacing)
                         .fixedSize(horizontal: false, vertical: true)
 
+                case .heading(let level):
+                    Text(block.text.asMarkdown)
+                        .font(headingFont(level: level))
+                        .foregroundStyle(Theme.Colors.textPrimary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, level == 1 ? Theme.Spacing.xs : 0)
+
                 case .listItem(let marker):
                     HStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.sm) {
                         Text(marker)
@@ -35,8 +42,24 @@ struct MarkdownText: View {
 
                 case .table(let header, let rows):
                     TableBlockView(header: header, rows: rows)
+
+                case .divider:
+                    Divider()
+                        .background(Theme.Colors.glassBorder)
+                        .padding(.vertical, Theme.Spacing.xs)
                 }
             }
+        }
+    }
+
+    private func headingFont(level: Int) -> Font {
+        switch level {
+        case 1:
+            return Theme.Typography.titleMedium
+        case 2:
+            return Theme.Typography.bodyMedium.weight(.semibold)
+        default:
+            return Theme.Typography.bodyMedium.weight(.medium)
         }
     }
 }
@@ -87,13 +110,16 @@ private struct TableBlockView: View {
 
 // MARK: - Block parsing
 
-/// A single rendered block: a paragraph, a list item with a leading marker
-/// glyph ("•" for bullets, "1." for ordered items), or a GFM table.
-private struct MarkdownBlock: Identifiable {
+/// A single rendered block: a paragraph, heading, list item with a leading
+/// marker glyph ("•" for bullets, "1." for ordered items), divider, or GFM
+/// table.
+struct MarkdownBlock: Identifiable {
     enum Kind: Equatable {
         case paragraph
+        case heading(level: Int)
         case listItem(marker: String)
         case table(header: [String], rows: [[String]])
+        case divider
     }
 
     let id = UUID()
@@ -156,6 +182,20 @@ private struct MarkdownBlock: Identifiable {
                 continue
             }
 
+            if isHorizontalRule(line) {
+                flushParagraph()
+                blocks.append(MarkdownBlock(kind: .divider))
+                i += 1
+                continue
+            }
+
+            if let heading = heading(from: line) {
+                flushParagraph()
+                blocks.append(heading)
+                i += 1
+                continue
+            }
+
             if let item = listItem(from: line) {
                 flushParagraph()
                 blocks.append(item)
@@ -188,6 +228,27 @@ private struct MarkdownBlock: Identifiable {
         }
 
         return nil
+    }
+
+    /// Recognizes ATX headings (`#` through `######`) and strips the marker.
+    private static func heading(from line: String) -> MarkdownBlock? {
+        let hashes = line.prefix { $0 == "#" }
+        guard (1...6).contains(hashes.count) else { return nil }
+        let remainder = line.dropFirst(hashes.count)
+        guard remainder.first == " " else { return nil }
+        let body = String(remainder.dropFirst()).trimmingCharacters(in: .whitespaces)
+        guard !body.isEmpty else { return nil }
+        return MarkdownBlock(kind: .heading(level: hashes.count), text: body)
+    }
+
+    /// Recognizes standalone Markdown horizontal rules. GFM table delimiter
+    /// rows are handled separately before this path.
+    private static func isHorizontalRule(_ line: String) -> Bool {
+        let compact = line.replacingOccurrences(of: " ", with: "")
+        guard compact.count >= 3 else { return false }
+        return compact.allSatisfy { $0 == "-" }
+            || compact.allSatisfy { $0 == "*" }
+            || compact.allSatisfy { $0 == "_" }
     }
 
     // MARK: Table helpers

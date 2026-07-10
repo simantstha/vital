@@ -39,21 +39,86 @@ struct CoachDataRow: Identifiable, Equatable {
     let viz: CoachViz
 }
 
+// MARK: - Assistant answer bundle
+
+/// One coach reply, grouped as stable UI: data cards first, transient tool
+/// activity while work is in-flight, then the formatted prose answer.
+struct AssistantTurn: Identifiable, Equatable {
+    let id: UUID
+    private(set) var text: String = ""
+    private(set) var toolCalls: [ToolCallRow] = []
+    private(set) var dataCards: [CoachDataRow] = []
+    private(set) var isFinished: Bool = false
+
+    var visibleText: String {
+        hasActiveToolCalls ? "" : text
+    }
+
+    var statusSummary: String? {
+        guard let active = toolCalls.first(where: { !$0.isDone }) else { return nil }
+        return active.label
+    }
+
+    private var hasActiveToolCalls: Bool {
+        toolCalls.contains { !$0.isDone }
+    }
+
+    mutating func appendText(_ delta: String) {
+        text += delta
+    }
+
+    mutating func applyToolCall(id: String, name: String, label: String, done: Bool) {
+        if let idx = toolCalls.firstIndex(where: { $0.id == id }) {
+            var row = toolCalls[idx]
+            row.isDone = done
+            if done { row.label = Self.doneLabel(from: row.label) }
+            toolCalls[idx] = row
+        } else if !done {
+            toolCalls.append(ToolCallRow(id: id, name: name, label: label))
+        }
+    }
+
+    mutating func applyToolData(id: String, viz: CoachViz) {
+        guard !dataCards.contains(where: { $0.id == id }) else { return }
+        dataCards.append(CoachDataRow(id: id, viz: viz))
+    }
+
+    mutating func finish() {
+        isFinished = true
+    }
+
+    /// Turns a present-tense label ("Checking your HRV trend…") into a short
+    /// past-tense done tag ("Checked your HRV trend").
+    private static func doneLabel(from label: String) -> String {
+        var text = label.trimmingCharacters(in: .whitespaces)
+        if text.hasSuffix("…") { text.removeLast() }
+        if text.hasSuffix("...") { text.removeLast(3) }
+        if text.hasPrefix("Checking ") {
+            text = "Checked " + text.dropFirst("Checking ".count)
+        }
+        if text.hasPrefix("Pulling up ") {
+            text = "Pulled up " + text.dropFirst("Pulling up ".count)
+        }
+        if text.hasPrefix("Looking at ") {
+            text = "Looked at " + text.dropFirst("Looking at ".count)
+        }
+        return text
+    }
+}
+
 // MARK: - Transcript row
 
-/// A single row in the coach conversation — a chat bubble, an inline tool-call
-/// activity indicator, or an inline data card. All live in one ordered array so
-/// each renders at the correct position relative to the surrounding message text.
+/// A single row in the coach conversation. User/opener messages remain simple
+/// bubbles; streaming coach replies are grouped into assistant turns so cards,
+/// tool activity, and prose keep a stable order.
 enum ChatRow: Identifiable, Equatable {
     case message(ChatMessage)
-    case toolCall(ToolCallRow)
-    case dataCard(CoachDataRow)
+    case assistantTurn(AssistantTurn)
 
     var id: String {
         switch self {
-        case .message(let m):  return m.id.uuidString
-        case .toolCall(let t): return "tool-\(t.id)"
-        case .dataCard(let d): return "data-\(d.id)"
+        case .message(let m):       return m.id.uuidString
+        case .assistantTurn(let t): return t.id.uuidString
         }
     }
 }
@@ -117,7 +182,7 @@ final class CoachViewModel: ObservableObject {
             rows.contains { $0.id == id.uuidString }
         } ?? false
         let hasActiveToolCall = rows.contains {
-            if case .toolCall(let t) = $0 { return !t.isDone }
+            if case .assistantTurn(let turn) = $0 { return turn.statusSummary != nil }
             return false
         }
         return !assistantStarted && !hasActiveToolCall
@@ -261,15 +326,16 @@ final class CoachViewModel: ObservableObject {
                 for try await event in stream {
                     switch event {
                     case .text(let delta):
-                        appendText(delta, toMessage: assistantId)
+                        appendText(delta, toTurn: assistantId)
                         // .toolCall/.toolData are never spoken — only prose.
                         if sentByVoice { speaker.feed(delta: delta) }
                     case .toolCall(let id, let name, let label, let done):
-                        applyToolCall(id: id, name: name, label: label, done: done)
+                        applyToolCall(id: id, name: name, label: label, done: done, toTurn: assistantId)
                     case .toolData(let id, let viz):
-                        applyToolData(id: id, viz: viz)
+                        applyToolData(id: id, viz: viz, toTurn: assistantId)
                     }
                 }
+                finishTurn(assistantId)
                 if sentByVoice { speaker.finish() }
             } catch {
                 // Surface the error in the assistant bubble. Since the bubble is
@@ -277,10 +343,15 @@ final class CoachViewModel: ObservableObject {
                 // insert one if the reply never started.
                 let errorText = "Sorry, I couldn't reach the server. Please try again."
                 if let idx = rows.firstIndex(where: { $0.id == assistantId.uuidString }),
-                   case .message(var m) = rows[idx] {
-                    if m.text.isEmpty { m.text = errorText; rows[idx] = .message(m) }
+                   case .assistantTurn(var turn) = rows[idx] {
+                    if turn.text.isEmpty { turn.appendText(errorText) }
+                    turn.finish()
+                    rows[idx] = .assistantTurn(turn)
                 } else {
-                    rows.append(.message(ChatMessage(id: assistantId, role: .assistant, text: errorText)))
+                    var turn = AssistantTurn(id: assistantId)
+                    turn.appendText(errorText)
+                    turn.finish()
+                    rows.append(.assistantTurn(turn))
                 }
                 errorMessage = error.localizedDescription
             }
@@ -303,56 +374,39 @@ final class CoachViewModel: ObservableObject {
 
     // MARK: - Row mutation helpers
 
-    private func appendText(_ delta: String, toMessage id: UUID) {
-        // Lazily create the assistant bubble on the first token so the typing
-        // indicator (rendered while no bubble exists) is replaced in place.
-        guard let idx = rows.firstIndex(where: { $0.id == id.uuidString }),
-              case .message(var m) = rows[idx]
-        else {
-            rows.append(.message(ChatMessage(id: id, role: .assistant, text: delta)))
-            return
-        }
-        m.text += delta
-        rows[idx] = .message(m)
-    }
-
-    /// Appends a new activity row on "started"; flips the matching row to its
-    /// collapsed done state on "done". Each tool_call id owns its own row, so
-    /// multiple concurrent/sequential tool calls each render independently.
-    private func applyToolCall(id: String, name: String, label: String, done: Bool) {
-        let rowId = "tool-\(id)"
-        if let idx = rows.firstIndex(where: { $0.id == rowId }),
-           case .toolCall(var row) = rows[idx] {
-            row.isDone = done
-            if done { row.label = Self.doneLabel(from: row.label) }
-            rows[idx] = .toolCall(row)
-        } else if !done {
-            rows.append(.toolCall(ToolCallRow(id: id, name: name, label: label)))
+    private func appendText(_ delta: String, toTurn id: UUID) {
+        mutateTurn(id) { turn in
+            turn.appendText(delta)
         }
     }
 
-    /// Inserts an inline data card for a chartable tool result, just after its
-    /// tool-call chip. Ignores duplicates (same tool_call id).
-    private func applyToolData(id: String, viz: CoachViz) {
-        let rowId = "data-\(id)"
-        guard !rows.contains(where: { $0.id == rowId }) else { return }
-        let card = ChatRow.dataCard(CoachDataRow(id: id, viz: viz))
-        if let idx = rows.firstIndex(where: { $0.id == "tool-\(id)" }) {
-            rows.insert(card, at: idx + 1)
+    private func applyToolCall(id: String, name: String, label: String, done: Bool, toTurn turnId: UUID) {
+        mutateTurn(turnId) { turn in
+            turn.applyToolCall(id: id, name: name, label: label, done: done)
+        }
+    }
+
+    private func applyToolData(id: String, viz: CoachViz, toTurn turnId: UUID) {
+        mutateTurn(turnId) { turn in
+            turn.applyToolData(id: id, viz: viz)
+        }
+    }
+
+    private func finishTurn(_ id: UUID) {
+        mutateTurn(id) { turn in
+            turn.finish()
+        }
+    }
+
+    private func mutateTurn(_ id: UUID, _ update: (inout AssistantTurn) -> Void) {
+        if let idx = rows.firstIndex(where: { $0.id == id.uuidString }),
+           case .assistantTurn(var turn) = rows[idx] {
+            update(&turn)
+            rows[idx] = .assistantTurn(turn)
         } else {
-            rows.append(card)
+            var turn = AssistantTurn(id: id)
+            update(&turn)
+            rows.append(.assistantTurn(turn))
         }
-    }
-
-    /// Turns a present-tense label ("Checking your HRV trend…") into a short
-    /// past-tense done tag ("Checked your HRV trend").
-    private static func doneLabel(from label: String) -> String {
-        var text = label.trimmingCharacters(in: .whitespaces)
-        if text.hasSuffix("…") { text.removeLast() }
-        if text.hasSuffix("...") { text.removeLast(3) }
-        if text.hasPrefix("Checking ") {
-            text = "Checked " + text.dropFirst("Checking ".count)
-        }
-        return text
     }
 }

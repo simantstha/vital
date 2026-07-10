@@ -70,6 +70,20 @@ targets:
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
 
+  VitalTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "26.0"
+    sources:
+      - path: Tests
+    dependencies:
+      - target: Vital
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.simantstha.vital.tests
+        SWIFT_VERSION: "5"
+        GENERATE_INFOPLIST_FILE: YES
+
 schemes:
   Vital:
     build:
@@ -79,6 +93,8 @@ schemes:
       config: Debug
     test:
       config: Debug
+      targets:
+        - VitalTests
     profile:
       config: Release
     analyze:
