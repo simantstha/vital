@@ -36,11 +36,11 @@
 	<key>NSHealthUpdateUsageDescription</key>
 	<string>Vital may write health data on your behalf.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Vital uses the microphone to recognise spoken food names.</string>
+	<string>Vital uses the microphone so you can talk to your coach and log foods by voice.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Vital accesses your photo library to identify food from images.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>Vital transcribes your voice to search for foods.</string>
+	<string>Vital transcribes your voice to chat with your coach and search for foods.</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>

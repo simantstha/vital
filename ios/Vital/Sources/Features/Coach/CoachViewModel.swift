@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 
 // MARK: - Chat message model
 
@@ -84,6 +85,26 @@ final class CoachViewModel: ObservableObject {
     /// renders where the reply will appear rather than below an empty bubble.
     private var pendingAssistantId: UUID? = nil
 
+    // MARK: - Voice
+
+    /// Tap-to-talk transcription and text-to-speech. Owned here (not by the
+    /// view) so a stream survives view identity changes, and so `send()` can
+    /// reach into the speaker directly.
+    let transcriber = SpeechTranscriber()
+    let speaker = CoachSpeaker()
+
+    private var cancellables = Set<AnyCancellable>()
+
+    /// True from the moment the mic is tapped until the resulting transcript
+    /// has been handed off to `send()`. Guards the transcript-mirroring and
+    /// stop→send bindings below.
+    private var isVoiceInputActive = false
+
+    /// Set right before a voice-originated `send()` call and consumed at the
+    /// top of `send()`. Determines whether the reply is spoken aloud as it
+    /// streams in — voice-in implies voice-out, typed messages stay silent.
+    private var pendingSentByVoice = false
+
     // MARK: - Typing indicator
 
     /// Show the standalone typing indicator while the opener loads, or while a
@@ -109,6 +130,67 @@ final class CoachViewModel: ObservableObject {
 
     init(mode: String? = nil) {
         self.mode = mode
+        bindVoice()
+    }
+
+    /// Forwards the two voice objects' own change notifications into this
+    /// view model's `objectWillChange` so `CoachView` (which only observes
+    /// `vm`, not `vm.transcriber`/`vm.speaker` directly) still re-renders on
+    /// every transcript token and speaking-state flip. Also wires the two
+    /// behavioral rules from the spec: live transcript mirrors into `input`
+    /// while recording, and stopping the recording sends it.
+    private func bindVoice() {
+        transcriber.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
+        speaker.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
+
+        transcriber.$transcribedText
+            .sink { [weak self] text in
+                guard let self, self.isVoiceInputActive else { return }
+                self.input = text
+            }
+            .store(in: &cancellables)
+
+        transcriber.$isRecording
+            .removeDuplicates()
+            .sink { [weak self] recording in
+                guard let self, self.isVoiceInputActive, !recording else { return }
+                self.isVoiceInputActive = false
+                self.finishVoiceInput()
+            }
+            .store(in: &cancellables)
+    }
+
+    // MARK: - Voice actions
+
+    func requestVoicePermissions() async {
+        await transcriber.requestPermissions()
+    }
+
+    /// Mic button action: tap once to start listening (mirroring the live
+    /// transcript into the input field), tap again to stop and send it as a
+    /// normal chat message, flagged so the reply is read aloud.
+    func toggleVoiceRecording() {
+        if transcriber.isRecording {
+            transcriber.stop()
+        } else {
+            guard !isStreaming else { return }
+            speaker.stop()
+            input = ""
+            isVoiceInputActive = true
+            transcriber.start()
+        }
+    }
+
+    private func finishVoiceInput() {
+        let transcript = transcriber.transcribedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !transcript.isEmpty else { return }
+        input = transcript
+        pendingSentByVoice = true
+        send()
     }
 
     // MARK: - Opener
@@ -142,8 +224,16 @@ final class CoachViewModel: ObservableObject {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !isStreaming else { return }
 
+        let sentByVoice = pendingSentByVoice
+        pendingSentByVoice = false
+
         input = ""
         errorMessage = nil
+
+        // A new turn always interrupts any reply still being read aloud —
+        // whether it's starting a fresh recording or sending (typed or
+        // voice).
+        speaker.stop()
 
         // A fresh send supersedes a still-loading opener.
         openerTask?.cancel()
@@ -172,12 +262,15 @@ final class CoachViewModel: ObservableObject {
                     switch event {
                     case .text(let delta):
                         appendText(delta, toMessage: assistantId)
+                        // .toolCall/.toolData are never spoken — only prose.
+                        if sentByVoice { speaker.feed(delta: delta) }
                     case .toolCall(let id, let name, let label, let done):
                         applyToolCall(id: id, name: name, label: label, done: done)
                     case .toolData(let id, let viz):
                         applyToolData(id: id, viz: viz)
                     }
                 }
+                if sentByVoice { speaker.finish() }
             } catch {
                 // Surface the error in the assistant bubble. Since the bubble is
                 // created lazily, it may not exist yet (error before any token) —
@@ -204,6 +297,8 @@ final class CoachViewModel: ObservableObject {
         openerTask?.cancel()
         openerTask = nil
         isOpening = false
+        transcriber.stop()
+        speaker.stop()
     }
 
     // MARK: - Row mutation helpers
