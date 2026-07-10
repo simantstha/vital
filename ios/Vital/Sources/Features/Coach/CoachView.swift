@@ -6,6 +6,11 @@ struct CoachView: View {
     @StateObject private var vm: CoachViewModel
     @Namespace private var bottomAnchor
 
+    /// Set once the user taps the mic while permission is denied, so the
+    /// inline "go to Settings" hint only appears after they've actually
+    /// tried voice — not as a permanent nag.
+    @State private var didAttemptDeniedMic = false
+
     /// `mode` is forwarded to every `/api/coach` call via `CoachViewModel`.
     /// The Coach tab uses the default (nil); the onboarding CoachIntro step
     /// passes `"onboarding"`.
@@ -118,6 +123,14 @@ struct CoachView: View {
 
     private var inputBar: some View {
         VStack(spacing: 0) {
+            if vm.speaker.isSpeaking {
+                stopSpeakingRow
+            }
+
+            if showMicPermissionHint {
+                micPermissionHint
+            }
+
             Divider()
                 .background(Theme.Colors.glassBorder)
 
@@ -128,35 +141,143 @@ struct CoachView: View {
                     .tint(Theme.Colors.accentContent)
                     .lineLimit(1...5)
                     .padding(.vertical, Theme.Spacing.sm)
+                    // While recording, the field mirrors the live transcript —
+                    // typing over it would fight the mic.
+                    .disabled(vm.transcriber.isRecording)
                     .onSubmit {
                         vm.send()
                     }
 
+                micButton
+
                 Button(action: vm.send) {
                     Image(systemName: "arrow.up")
                         .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(
-                            vm.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || vm.isStreaming
-                                ? Theme.Colors.onAccent
-                                : Theme.Colors.onAccent
-                        )
+                        .foregroundStyle(Theme.Colors.onAccent)
                         .frame(width: 32, height: 32)
                         .background(
                             Circle()
                                 .fill(
-                                    vm.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || vm.isStreaming
-                                        ? Theme.Colors.accent.opacity(0.3)
-                                        : Theme.Colors.accent
+                                    canSend
+                                        ? Theme.Colors.accent
+                                        : Theme.Colors.accent.opacity(0.3)
                                 )
                         )
                 }
-                .disabled(vm.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || vm.isStreaming)
+                .disabled(!canSend)
                 .animation(.easeInOut(duration: 0.15), value: vm.isStreaming)
             }
             .padding(.horizontal, Theme.Spacing.lg)
             .padding(.vertical, Theme.Spacing.md)
             .background(Theme.Colors.canvas)
         }
+    }
+
+    private var canSend: Bool {
+        !vm.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !vm.isStreaming
+            && !vm.transcriber.isRecording
+    }
+
+    // MARK: - Mic button
+
+    /// Tap-to-talk: authorized → toggle recording (tap again stops and
+    /// sends); not yet asked → request permission only — recording starts on
+    /// the next tap, never in the same instant the grant lands (starting the
+    /// audio engine while the audio server is still spinning up after a
+    /// first-time grant can abort inside AudioToolbox; LogMeal's two-step
+    /// flow avoids this); denied → surface the inline Settings hint.
+    private var micButton: some View {
+        Button {
+            switch vm.transcriber.permissionState {
+            case .authorized:
+                vm.toggleVoiceRecording()
+            case .notDetermined:
+                Task {
+                    await vm.requestVoicePermissions()
+                    if vm.transcriber.permissionState != .authorized {
+                        didAttemptDeniedMic = true
+                    }
+                }
+            case .denied:
+                didAttemptDeniedMic = true
+            }
+        } label: {
+            ZStack {
+                Circle()
+                    .fill(vm.transcriber.isRecording
+                          ? Theme.Colors.alert
+                          : Theme.Colors.accent.opacity(0.15))
+                    .frame(width: 32, height: 32)
+                Image(systemName: vm.transcriber.isRecording ? "stop.fill" : "mic.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(vm.transcriber.isRecording ? Theme.Colors.onAccent : Theme.Colors.accentContent)
+            }
+            .scaleEffect(vm.transcriber.isRecording ? 1.08 : 1.0)
+        }
+        .buttonStyle(.plain)
+        .disabled(vm.isStreaming && !vm.transcriber.isRecording)
+        .animation(.easeInOut(duration: 0.4).repeatForever(autoreverses: true), value: vm.transcriber.isRecording)
+    }
+
+    private var showMicPermissionHint: Bool {
+        didAttemptDeniedMic && vm.transcriber.permissionState == .denied
+    }
+
+    private var micPermissionHint: some View {
+        HStack(spacing: Theme.Spacing.sm) {
+            Image(systemName: "mic.slash.fill")
+                .font(.system(size: 13))
+                .foregroundStyle(Theme.Colors.textSecondary)
+            Text("Allow microphone and speech recognition in Settings to talk to your coach.")
+                .font(Theme.Typography.labelSmall)
+                .foregroundStyle(Theme.Colors.textSecondary)
+            Spacer(minLength: Theme.Spacing.sm)
+            Button {
+                if let url = URL(string: UIApplication.openSettingsURLString) {
+                    UIApplication.shared.open(url)
+                }
+            } label: {
+                Text("Settings")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Theme.Colors.accentContent)
+            }
+        }
+        .padding(.horizontal, Theme.Spacing.lg)
+        .padding(.vertical, Theme.Spacing.sm)
+        .background(Theme.Colors.glassFill)
+    }
+
+    // MARK: - Stop-speaking row
+
+    /// Shown above the input bar while the coach's reply is being read
+    /// aloud; tapping it cancels speech immediately (the text keeps
+    /// streaming/rendering either way).
+    private var stopSpeakingRow: some View {
+        HStack(spacing: Theme.Spacing.sm) {
+            Image(systemName: "speaker.wave.2.fill")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Theme.Colors.accentContent)
+            Text("Speaking…")
+                .font(Theme.Typography.labelSmall)
+                .foregroundStyle(Theme.Colors.textSecondary)
+            Spacer()
+            Button { vm.speaker.stop() } label: {
+                HStack(spacing: Theme.Spacing.xs) {
+                    Image(systemName: "stop.fill")
+                        .font(.system(size: 10, weight: .semibold))
+                    Text("Stop")
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                .foregroundStyle(Theme.Colors.textPrimary)
+                .padding(.horizontal, Theme.Spacing.md)
+                .padding(.vertical, Theme.Spacing.xs)
+                .background(Capsule().fill(Theme.Colors.glassFill))
+            }
+        }
+        .padding(.horizontal, Theme.Spacing.lg)
+        .padding(.vertical, Theme.Spacing.sm)
+        .background(Theme.Colors.canvas)
     }
 }
 
