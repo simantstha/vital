@@ -12,20 +12,15 @@
     "@anthropic-ai/sdk": "^0.95.1",
     "dotenv": "^17.4.2",
     "drizzle-orm": "^0.45.2",
-    "framer-motion": "^12.39.0",
     "jose": "^6.2.3",
-    "jsonwebtoken": "^9.0.3",
-    "lucide-react": "^1.16.0",
     "next": "16.2.6",
     "postgres": "^3.4.9",
     "react": "19.2.4",
     "react-dom": "19.2.4",
-    "sharp": "^0.35.2",
-    "v0-sdk": "^0.16.4"
+    "sharp": "^0.35.2"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
-    "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
