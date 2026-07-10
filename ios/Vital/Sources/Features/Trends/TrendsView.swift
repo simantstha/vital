@@ -44,36 +44,40 @@ private extension TrendsView {
     }
 
     var metricPicker: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: Theme.Spacing.sm) {
-                ForEach(TrendMetric.allCases) { metric in
-                    Button {
-                        vm.selectedMetric = metric
-                    } label: {
+        Menu {
+            ForEach(TrendMetric.allCases) { metric in
+                Button {
+                    vm.selectedMetric = metric
+                } label: {
+                    if vm.selectedMetric == metric {
+                        Label(metric.displayName, systemImage: "checkmark")
+                    } else {
                         Text(metric.displayName)
-                            .font(.system(size: 14, weight: vm.selectedMetric == metric ? .semibold : .regular))
-                            .foregroundStyle(
-                                vm.selectedMetric == metric
-                                    ? Theme.Colors.onAccent
-                                    : Theme.Colors.textSecondary
-                            )
-                            .padding(.horizontal, Theme.Spacing.lg)
-                            .padding(.vertical, Theme.Spacing.sm)
-                            .background(
-                                RoundedRectangle(cornerRadius: Theme.Radius.pill, style: .continuous)
-                                    .fill(vm.selectedMetric == metric
-                                          ? Theme.Colors.accent
-                                          : Theme.Colors.glassFill)
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: Theme.Radius.pill, style: .continuous)
-                                            .strokeBorder(Theme.Colors.glassBorder, lineWidth: 0.5)
-                                    )
-                            )
                     }
-                    .buttonStyle(.plain)
                 }
             }
+        } label: {
+            HStack(spacing: Theme.Spacing.xs) {
+                Text(vm.selectedMetric.displayName)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Theme.Colors.textPrimary)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Theme.Colors.textSecondary)
+                Spacer()
+            }
+            .padding(.horizontal, Theme.Spacing.lg)
+            .padding(.vertical, Theme.Spacing.sm)
+            .background(
+                RoundedRectangle(cornerRadius: Theme.Radius.pill, style: .continuous)
+                    .fill(Theme.Colors.glassFill)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: Theme.Radius.pill, style: .continuous)
+                            .strokeBorder(Theme.Colors.glassBorder, lineWidth: 0.5)
+                    )
+            )
         }
+        .buttonStyle(.plain)
     }
 
     var daysPicker: some View {
