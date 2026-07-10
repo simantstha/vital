@@ -10,6 +10,7 @@ struct CoachView: View {
     /// inline "go to Settings" hint only appears after they've actually
     /// tried voice — not as a permanent nag.
     @State private var didAttemptDeniedMic = false
+    @State private var isScrolledNearBottom = true
 
     /// `mode` is forwarded to every `/api/coach` call via `CoachViewModel`.
     /// The Coach tab uses the default (nil); the onboarding CoachIntro step
@@ -77,13 +78,9 @@ struct CoachView: View {
                         case .message(let msg):
                             MessageBubbleView(message: msg)
                                 .id(row.id)
-                        case .toolCall(let call):
-                            ToolCallActivityView(row: call)
+                        case .assistantTurn(let turn):
+                            AssistantTurnView(turn: turn)
                                 .id(row.id)
-                        case .dataCard(let card):
-                            CoachDataCardView(viz: card.viz)
-                                .id(row.id)
-                                .transition(.opacity.combined(with: .move(edge: .leading)))
                         }
                     }
 
@@ -101,21 +98,27 @@ struct CoachView: View {
                 .padding(.vertical, Theme.Spacing.md)
             }
             .scrollDismissesKeyboard(.interactively)
+            .onScrollGeometryChange(for: Bool.self) { geometry in
+                geometry.visibleRect.maxY >= geometry.contentSize.height - 80
+            } action: { _, nearBottom in
+                isScrolledNearBottom = nearBottom
+            }
             .onChange(of: vm.rows) {
-                withAnimation(.easeOut(duration: 0.2)) {
-                    proxy.scrollTo("bottom", anchor: .bottom)
-                }
+                scrollToBottomIfPinned(proxy)
             }
             .onChange(of: vm.isStreaming) {
-                withAnimation(.easeOut(duration: 0.2)) {
-                    proxy.scrollTo("bottom", anchor: .bottom)
-                }
+                scrollToBottomIfPinned(proxy)
             }
             .onChange(of: vm.isOpening) {
-                withAnimation(.easeOut(duration: 0.2)) {
-                    proxy.scrollTo("bottom", anchor: .bottom)
-                }
+                scrollToBottomIfPinned(proxy)
             }
+        }
+    }
+
+    private func scrollToBottomIfPinned(_ proxy: ScrollViewProxy) {
+        guard isScrolledNearBottom else { return }
+        withAnimation(.easeOut(duration: 0.2)) {
+            proxy.scrollTo("bottom", anchor: .bottom)
         }
     }
 
@@ -281,6 +284,30 @@ struct CoachView: View {
     }
 }
 
+// MARK: - Assistant turn
+
+private struct AssistantTurnView: View {
+    let turn: AssistantTurn
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+            ForEach(turn.dataCards) { card in
+                CoachDataCardView(viz: card.viz)
+                    .transition(.opacity.combined(with: .move(edge: .leading)))
+            }
+
+            if let status = turn.statusSummary {
+                ToolCallActivityView(label: status)
+            }
+
+            if !turn.visibleText.isEmpty {
+                MessageBubbleView(message: ChatMessage(id: turn.id, role: .assistant, text: turn.visibleText))
+                    .transition(.opacity)
+            }
+        }
+    }
+}
+
 // MARK: - Message bubble
 
 private struct MessageBubbleView: View {
@@ -337,41 +364,36 @@ private extension View {
 
 // MARK: - Tool-call activity row
 
-/// Inline, quiet indicator for a backend tool call: a spinner + label while
-/// running, collapsing to a small checkmark tag (via `Chip`) once done. Sits
-/// left-aligned in the transcript, distinct from message bubbles.
+/// Inline, quiet indicator for the active backend work in an assistant turn.
+/// Completed tool calls are intentionally not left behind as permanent chat
+/// content; the data cards and answer carry the durable result.
 private struct ToolCallActivityView: View {
-    let row: ToolCallRow
+    let label: String
 
     var body: some View {
         HStack {
-            if row.isDone {
-                Chip(text: row.label, icon: "checkmark")
-            } else {
-                HStack(spacing: Theme.Spacing.xs) {
-                    ProgressView()
-                        .controlSize(.mini)
-                        .tint(Theme.Colors.textSecondary)
-                    Text(row.label)
-                        .font(Theme.Typography.labelSmall)
-                        .fontWeight(.medium)
-                        .foregroundStyle(Theme.Colors.textSecondary)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(
-                    Capsule()
-                        .fill(Theme.Colors.glassFill)
-                        .overlay(
-                            Capsule()
-                                .strokeBorder(Theme.Colors.glassBorder, lineWidth: 0.5)
-                        )
-                )
+            HStack(spacing: Theme.Spacing.xs) {
+                ProgressView()
+                    .controlSize(.mini)
+                    .tint(Theme.Colors.textSecondary)
+                Text(label)
+                    .font(Theme.Typography.labelSmall)
+                    .fontWeight(.medium)
+                    .foregroundStyle(Theme.Colors.textSecondary)
             }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(
+                Capsule()
+                    .fill(Theme.Colors.glassFill)
+                    .overlay(
+                        Capsule()
+                            .strokeBorder(Theme.Colors.glassBorder, lineWidth: 0.5)
+                    )
+            )
 
             Spacer()
         }
-        .animation(.easeInOut(duration: 0.2), value: row.isDone)
     }
 }
 
@@ -408,4 +430,3 @@ private struct TypingIndicatorView: View {
         .onAppear { phase = 1 }
     }
 }
-
