@@ -120,6 +120,10 @@ npm install
 # Anthropic
 ANTHROPIC_API_KEY=
 
+# ElevenLabs — coach voice TTS (app/api/tts); optional, iOS falls back to the Apple voice
+ELEVENLABS_API_KEY=
+ELEVENLABS_VOICE_ID=       # optional, defaults to "Rachel" (21m00Tcm4TlvDq8ikWAM)
+
 # Postgres (local dev DB, or a Supabase Session-pooler URL — port 5432, NOT 6543)
 DATABASE_URL=postgres://user:pass@localhost:5432/vital
 
