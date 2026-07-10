@@ -55,6 +55,7 @@ fly secrets set \
   STRAVA_CLIENT_ID="..." STRAVA_CLIENT_SECRET="..." STRAVA_REFRESH_TOKEN="..." STRAVA_REDIRECT_URI="..." \
   MFP_USERNAME="..." MFP_PASSWORD="..." \
   CALORIENINJAS_API_KEY="..." \
+  ELEVENLABS_API_KEY="..." \
   V0_API_KEY="..."
 ```
 (Values come from `.env.local`. `VITAL_DATA_DIR` and `PORT` are already in `fly.toml [env]`.)

@@ -224,6 +224,32 @@ struct APIClient {
         return r.text
     }
 
+    // MARK: - Coach TTS
+
+    /// Fetches ElevenLabs-synthesized speech for one sentence from the backend
+    /// TTS proxy (POST /api/tts). Returns nil on any failure — network error,
+    /// non-200 (including 503 when the server has no ElevenLabs key), or an
+    /// empty body — so the caller can fall back to on-device speech.
+    func fetchTTSAudio(text: String) async -> Data? {
+        guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/tts") else { return nil }
+        var request = authorizedRequest(url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 15
+        struct Body: Encodable { let text: String }
+        guard let body = try? encoder.encode(Body(text: text)) else { return nil }
+        request.httpBody = body
+        do {
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200, !data.isEmpty else {
+                return nil
+            }
+            return data
+        } catch {
+            return nil
+        }
+    }
+
     // MARK: - Coach (SSE streaming)
 
     func streamCoach(message: String, imageBase64: String? = nil, mode: String? = nil) -> AsyncThrowingStream<CoachStreamEvent, Error> {
