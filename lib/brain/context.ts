@@ -20,6 +20,8 @@ import { eq, and, gte, desc } from 'drizzle-orm';
 import type { OntologyNode } from '@/db/schema';
 import { getCalibration, type Calibration } from './baselines';
 import { queryAllBaselines, metricLabel, type BaselineSnapshot } from './tools';
+import { resolveDietBudget, type DietBudget } from './dietBudget';
+import { getCachedBrief, briefCacheKey, type CachedBrief } from './briefCache';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -59,6 +61,8 @@ export interface CoachContext {
   softFacts: OntologyNode[];        // Goal, Habit, FoodPreference, etc.
   baselines: BaselineSnapshot[];    // one row per metric with a baselines row
   calibration: Calibration;         // gates recovery/training prescriptions
+  dietBudget?: DietBudget;          // effective calorie/macro targets (auto or pinned)
+  cachedBrief?: CachedBrief;        // today's app-generated insight + meal plan, if warm
   promptText: string;               // compact text block ready for Claude
 }
 
@@ -194,17 +198,39 @@ function buildPromptText(
     }
   }
 
+  const mealTotal = ctx.today.meals.reduce(
+    (a, m) => ({ kcal: a.kcal + m.kcal, c: a.c + m.c, p: a.p + m.p, f: a.f + m.f }),
+    { kcal: 0, c: 0, p: 0, f: 0 },
+  );
+
   if (ctx.today.meals.length > 0) {
-    const tot = ctx.today.meals.reduce(
-      (a, m) => ({ kcal: a.kcal + m.kcal, c: a.c + m.c, p: a.p + m.p, f: a.f + m.f }),
-      { kcal: 0, c: 0, p: 0, f: 0 },
-    );
     lines.push(
       `- Meals logged today: ${ctx.today.meals.length}, ` +
-      `${tot.kcal}kcal (${tot.c}g C / ${tot.p}g P / ${tot.f}g F)`,
+      `${mealTotal.kcal}kcal (${mealTotal.c}g C / ${mealTotal.p}g P / ${mealTotal.f}g F)`,
     );
   } else {
     lines.push('- No meals logged today yet');
+  }
+
+  // ── Diet Budget — source of truth for calorie/macro targets ────────────────
+  if (ctx.dietBudget) {
+    const b = ctx.dietBudget;
+    lines.push('\n### Diet Budget');
+    lines.push(
+      `- Mode: ${b.mode}${b.mode === 'auto' ? ' (auto-calculated)' : ' (user-pinned)'}, goal: ${b.goal}`,
+    );
+    lines.push(
+      `- Target: ${b.targetKcal} kcal (${b.carbs}g C / ${b.protein}g P / ${b.fat}g F)`,
+    );
+    lines.push(`- Remaining today: ${b.targetKcal - mealTotal.kcal} kcal`);
+  }
+
+  // ── App's meal plan for today (only if the daily brief cache is warm) ──────
+  if (ctx.cachedBrief?.plan && ctx.cachedBrief.plan.length > 0) {
+    lines.push("\n### App's meal plan for today");
+    for (const item of ctx.cachedBrief.plan) {
+      lines.push(`- ${item.name} · ${item.kcal} kcal · ${item.why}`);
+    }
   }
 
   // ── Baselines snapshot (small durable facts — full history is tool-only) ───
@@ -275,7 +301,7 @@ export async function assembleContext(userId: string): Promise<CoachContext> {
   // Run all queries in parallel for minimal latency. Only today's events are
   // fetched here — multi-day history lives behind the data tools (tools.ts),
   // not pre-computed into the prompt (Phase 3 tool-first design rule).
-  const [todayEvents, allNodes, rawMessages, baselines, calibration] = await Promise.all([
+  const [todayEvents, allNodes, rawMessages, baselines, calibration, [usersRow]] = await Promise.all([
     db.select()
       .from(schema.events)
       .where(
@@ -303,6 +329,7 @@ export async function assembleContext(userId: string): Promise<CoachContext> {
 
     queryAllBaselines(userId),
     getCalibration(userId),
+    db.select().from(schema.users).where(eq(schema.users.id, userId)).limit(1),
   ]);
 
   // Today snapshot
@@ -316,6 +343,13 @@ export async function assembleContext(userId: string): Promise<CoachContext> {
   // Messages in chronological order for the prompt
   const recentMessages = [...rawMessages].reverse();
 
+  // Diet budget + today's cached brief (meal plan) — assembleContext has no
+  // request timezone, so we key the brief lookup off the same UTC day used
+  // for `today` above (best-effort; exact match when the brief was warmed
+  // via /api/today or /api/brief on the same UTC day).
+  const dietBudget  = usersRow ? await resolveDietBudget(usersRow, userId) : undefined;
+  const cachedBrief = getCachedBrief(briefCacheKey(userId, todayStr));
+
   const partial: Omit<CoachContext, 'promptText'> = {
     userId,
     today,
@@ -324,6 +358,8 @@ export async function assembleContext(userId: string): Promise<CoachContext> {
     softFacts,
     baselines,
     calibration,
+    dietBudget,
+    cachedBrief,
   };
 
   return { ...partial, promptText: buildPromptText(partial) };

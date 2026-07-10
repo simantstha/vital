@@ -33,6 +33,7 @@ import { eq, and, gte, lt, asc, desc } from 'drizzle-orm';
 import { lookupNutrition } from '@/lib/nutritionix';
 import { lookupBarcode } from '@/lib/openFoodFacts';
 import type { BaselineStats } from '@/lib/brain/baselines';
+import { applyDietBudgetUpdate, splitMacrosForKcal } from '@/lib/brain/dietBudget';
 
 // ── Tool definitions (Anthropic API schema) ────────────────────────────────
 
@@ -116,6 +117,37 @@ export const BRAIN_TOOLS: Tool[] = [
         },
       },
       required: ['goal', 'weightKg', 'todayWorkouts'],
+    },
+  },
+  {
+    name: 'update_diet_budget',
+    description:
+      'Change the user\'s saved daily calorie/macro budget — the same budget both the ' +
+      'app and this coach read for "how am I doing today" and meal-planning. Macros ' +
+      'are NOT a param: they are computed server-side from the goal, never set by hand. ' +
+      'ALWAYS propose the specific change in chat and get the user\'s explicit agreement ' +
+      'BEFORE calling this tool — never call it silently. Use mode:\'custom\' with ' +
+      'targetKcal to pin a specific number, or mode:\'auto\' to reset to the ' +
+      'auto-calculated budget.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        mode: {
+          type: 'string',
+          enum: ['auto', 'custom'],
+          description: '\'custom\' pins targetKcal (+ derived macros); \'auto\' clears the pin.',
+        },
+        goal: {
+          type: 'string',
+          enum: ['weight_loss', 'muscle', 'endurance', 'general'],
+          description: 'Optional — update the user\'s nutrition goal alongside the budget.',
+        },
+        targetKcal: {
+          type: 'number',
+          description: 'Required when mode is \'custom\'. The new pinned daily calorie target.',
+        },
+      },
+      required: ['mode'],
     },
   },
   {
@@ -352,36 +384,24 @@ export function macrosForGoal(
   tdee: number,
 ): { targetCal: number; c: number; p: number; f: number } {
   let targetCal: number;
-  let proteinGPerKg: number;
-  let fatFraction: number;
 
   switch (goal) {
     case 'weight_loss':
-      targetCal    = tdee - 400;
-      proteinGPerKg = 2.2;
-      fatFraction   = 0.27;
+      targetCal = tdee - 400;
       break;
     case 'muscle':
-      targetCal    = tdee + 200;
-      proteinGPerKg = 2.0;
-      fatFraction   = 0.26;
+      targetCal = tdee + 200;
       break;
     case 'endurance':
-      targetCal    = tdee + 100;
-      proteinGPerKg = 1.6;
-      fatFraction   = 0.22;
+      targetCal = tdee + 100;
       break;
     default: // 'general'
-      targetCal    = tdee;
-      proteinGPerKg = 1.6;
-      fatFraction   = 0.27;
+      targetCal = tdee;
   }
 
-  const p    = Math.round(proteinGPerKg * weightKg);
-  const fKcal = Math.round(targetCal * fatFraction);
-  const f    = Math.round(fKcal / 9);
-  const cKcal = Math.max(0, targetCal - p * 4 - fKcal);
-  const c    = Math.round(cKcal / 4);
+  // Ratio table (protein-g/kg + fat-fraction per goal) lives in dietBudget.ts
+  // so the auto TDEE-derived split and the coach's custom-kcal split stay identical.
+  const { protein: p, carbs: c, fat: f } = splitMacrosForKcal(goal, weightKg, targetCal);
 
   return { targetCal: Math.round(targetCal), c, p, f };
 }
@@ -441,6 +461,8 @@ export function toolCallLabel(name: string, input: Record<string, unknown>): str
       return 'Looking up what I know about you…';
     case 'calculate_macros':
       return 'Crunching your macros…';
+    case 'update_diet_budget':
+      return 'Updating your diet budget…';
     case 'remember_fact':
       return 'Remembering that…';
     case 'confirm_fact':
@@ -836,6 +858,20 @@ export async function executeToolCall(
       macros: { c, p, f },
       note: `TDEE ${tdee} kcal · goal adjustment → ${targetCal} kcal · ${c}g C / ${p}g P / ${f}g F`,
     });
+  }
+
+  // ── update_diet_budget ────────────────────────────────────────────────────
+  if (name === 'update_diet_budget') {
+    try {
+      const { current } = await applyDietBudgetUpdate(userId, {
+        mode:       String(input.mode),
+        goal:       input.goal != null ? String(input.goal) : undefined,
+        targetKcal: typeof input.targetKcal === 'number' ? input.targetKcal : undefined,
+      });
+      return JSON.stringify({ ok: true, budget: current });
+    } catch (err) {
+      return `Error: ${err instanceof Error ? err.message : String(err)}`;
+    }
   }
 
   // ── remember_fact ─────────────────────────────────────────────────────────
