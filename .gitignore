@@ -21,6 +21,7 @@ ios/Gemfile.lock
 # Local tooling / scratch (Phase 0 triage)
 .claude/
 .playwright-mcp/
+.idea/
 v0-output/
 tsconfig.tsbuildinfo
 supabase/.temp/
