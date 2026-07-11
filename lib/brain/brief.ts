@@ -58,7 +58,7 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
   // the Today metric cards, Trends, and the coach's data-tools read. Reading
   // them here (instead of the events ledger, which HealthKit never writes to)
   // guarantees the narrative and the cards can never disagree.
-  const [events, hrvBaseline, calibration, hrvPts, rhrPts, sleepSummary] = await Promise.all([
+  const [events, hrvBaseline, calibration, hrvPts, rhrPts, sleepSummary, foodNodes] = await Promise.all([
     db
       .select()
       .from(schema.events)
@@ -74,7 +74,18 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
     queryMetricPoints(userId, 'hrv_sdnn', 7),
     queryMetricPoints(userId, 'resting_hr', 7),
     querySleepSummary(userId, 7),
+    db.select().from(schema.nodes).where(eq(schema.nodes.user_id, userId)).orderBy(desc(schema.nodes.weight)),
   ]);
+
+  // Partition food-related nodes into restrictions and preferences
+  const restrictions = foodNodes
+    .filter(n => ['Allergy', 'Intolerance', 'Condition'].includes(String(n.type)))
+    .map(n => ({ type: String(n.type), label: String(n.label) }));
+
+  const preferences = foodNodes
+    .filter(n => ['FoodPreference', 'Cuisine', 'PantryItem'].includes(String(n.type)))
+    .map(n => ({ type: String(n.type), label: String(n.label) }))
+    .slice(0, 15);
 
   const todayEvents   = events.filter(e => e.timestamp >= todayStart);
   const recentEvents  = events.filter(e => e.timestamp >= sevenDaysAgo && e.timestamp < todayStart);
@@ -365,6 +376,7 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
     weeklyMileage,
     recentNutrition,
     weightKg,
+    foodProfile: restrictions.length || preferences.length ? { restrictions, preferences } : undefined,
     calibrating: calibration.status === 'calibrating',
   });
 }
