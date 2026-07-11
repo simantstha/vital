@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { specialistRegistry } from './registry';
 
 export type SpecialistSessionStatus =
   | 'proposed'
@@ -77,8 +78,12 @@ export interface SpecialistMessageAttributionInput {
 
 export interface SpecialistMessageAttribution {
   speaker: 'specialist';
-  specialistSessionId: string;
-  specialistMetadata: Omit<SpecialistMessageAttributionInput, 'sessionId'>;
+  specialist_session_id: string;
+  specialist_metadata: Omit<SpecialistMessageAttributionInput, 'sessionId'>;
+}
+
+export interface SpecialistManifestCatalog {
+  get(id: string): { version: string };
 }
 
 export interface SpecialistSessionRepository {
@@ -149,9 +154,16 @@ export class SpecialistSessionService<R extends SpecialistSessionRepository = Sp
   constructor(
     readonly repository: R,
     private readonly now: () => Date = () => new Date(),
+    private readonly manifests: SpecialistManifestCatalog = specialistRegistry,
   ) {}
 
   async propose(input: ProposeSpecialistSessionInput): Promise<SpecialistSession> {
+    const manifest = this.manifests.get(input.manifestId);
+    if (manifest.version !== input.manifestVersion) {
+      throw new Error(
+        `Specialist manifest version ${input.manifestVersion} does not match registered version ${manifest.version}`,
+      );
+    }
     if (await this.repository.findOpenByUser(input.userId)) {
       throw new OpenSpecialistSessionExistsError(
         `User ${input.userId} already has an open specialist session`,
@@ -246,8 +258,8 @@ export class SpecialistSessionService<R extends SpecialistSessionRepository = Sp
     const { sessionId, ...specialistMetadata } = input;
     return {
       speaker: 'specialist',
-      specialistSessionId: sessionId,
-      specialistMetadata,
+      specialist_session_id: sessionId,
+      specialist_metadata: specialistMetadata,
     };
   }
 }

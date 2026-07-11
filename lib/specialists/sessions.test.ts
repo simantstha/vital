@@ -17,7 +17,14 @@ const USER_B = '00000000-0000-4000-8000-000000000002';
 const NOW = new Date('2026-07-11T12:00:00.000Z');
 
 function service() {
-  return new SpecialistSessionService(new InMemorySpecialistSessionRepository(), () => NOW);
+  return new SpecialistSessionService(
+    new InMemorySpecialistSessionRepository(),
+    () => NOW,
+    { get: (id: string) => {
+      if (id !== 'running-coach') throw new Error(`Unknown specialist: ${id}`);
+      return { version: '1.0.0' };
+    } },
+  );
 }
 
 async function seedSession(
@@ -223,6 +230,7 @@ test('expiry scan cannot fail a proposal that concurrently became active', async
   const sessions = new SpecialistSessionService(
     new ActivatingDuringExpiryRepository(),
     () => NOW,
+    { get: () => ({ version: '1.0.0' }) },
   );
   const proposal = await sessions.propose({
     userId: USER_A,
@@ -250,8 +258,8 @@ test('specialist attribution maps directly to persisted message columns', () => 
 
   assert.deepEqual(attribution, {
     speaker: 'specialist',
-    specialistSessionId: '10000000-0000-4000-8000-000000000001',
-    specialistMetadata: {
+    specialist_session_id: '10000000-0000-4000-8000-000000000001',
+    specialist_metadata: {
       specialistId: 'running-coach',
       manifestVersion: '1.0.0',
       name: 'Running Coach',
@@ -260,4 +268,25 @@ test('specialist attribution maps directly to persisted message columns', () => 
       icon: 'figure.run',
     },
   });
+});
+
+test('proposal creation rejects unknown or stale specialist manifests', async () => {
+  const sessions = service();
+  const input = {
+    userId: USER_A,
+    objective: 'Prepare for a 10K',
+    inboundHandoff: {},
+    expiresAt: new Date('2026-07-11T12:15:00.000Z'),
+  };
+
+  await assert.rejects(sessions.propose({
+    ...input,
+    manifestId: 'unknown-specialist',
+    manifestVersion: '1.0.0',
+  }), /Unknown specialist/);
+  await assert.rejects(sessions.propose({
+    ...input,
+    manifestId: 'running-coach',
+    manifestVersion: '0.9.0',
+  }), /manifest version/);
 });

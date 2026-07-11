@@ -970,32 +970,14 @@ export async function executeToolCall(
     const action = String(input.action ?? 'confirm') as 'confirm' | 'reject';
 
     if (!factId) return 'Error: factId is required.';
-
-    const status     = action === 'confirm' ? 'confirmed' : 'rejected';
-    const resolvedAt = new Date();
-
-    const [updated] = await db
-      .update(schema.pending_facts)
-      .set({ status, resolved_at: resolvedAt })
-      .where(eq(schema.pending_facts.id, factId))
-      .returning({ id: schema.pending_facts.id, proposed_node: schema.pending_facts.proposed_node });
-
-    if (!updated) return `No pending_fact found with id ${factId}.`;
-
-    // If confirmed, promote the proposed node/edge to the ontology
-    if (action === 'confirm' && updated.proposed_node) {
-      const proposed = updated.proposed_node as Record<string, unknown>;
-      await db.insert(schema.nodes).values({
-        user_id:    userId,
-        type:       String(proposed.type ?? 'Habit'),
-        label:      String(proposed.label ?? ''),
-        properties: proposed.properties as Record<string, unknown> | null,
-        source:     'confirmed',
-        weight:     0.9,
-      }).onConflictDoNothing();
-    }
-
-    return JSON.stringify({ ok: true, factId, status });
+    const result = await confirmPendingFact(
+      drizzlePendingFactConfirmationStore,
+      { factId, action },
+      userId,
+    );
+    return result.ok
+      ? JSON.stringify(result)
+      : `No pending_fact found with id ${factId}.`;
   }
 
   // ── log_meal ──────────────────────────────────────────────────────────────
@@ -1129,3 +1111,68 @@ export function buildPendingFactProposal(
     status: 'pending',
   };
 }
+
+export interface PendingFactConfirmationStore {
+  resolvePendingFact(request: {
+    factId: string;
+    userId: string;
+    expectedStatus: 'pending';
+    nextStatus: 'confirmed' | 'rejected';
+    resolvedAt: Date;
+  }): Promise<{ id: string; proposedNode: unknown } | null>;
+  insertConfirmedNode(userId: string, node: Record<string, unknown>): Promise<void>;
+}
+
+export async function confirmPendingFact(
+  store: PendingFactConfirmationStore,
+  input: { factId: string; action: 'confirm' | 'reject' },
+  userId: string,
+  resolvedAt = new Date(),
+): Promise<
+  | { ok: true; factId: string; status: 'confirmed' | 'rejected' }
+  | { ok: false; factId: string; error: 'pending_fact_not_found' }
+> {
+  const status = input.action === 'confirm' ? 'confirmed' : 'rejected';
+  const resolved = await store.resolvePendingFact({
+    factId: input.factId,
+    userId,
+    expectedStatus: 'pending',
+    nextStatus: status,
+    resolvedAt,
+  });
+  if (!resolved) {
+    return { ok: false, factId: input.factId, error: 'pending_fact_not_found' };
+  }
+  if (input.action === 'confirm' && resolved.proposedNode) {
+    await store.insertConfirmedNode(userId, resolved.proposedNode as Record<string, unknown>);
+  }
+  return { ok: true, factId: input.factId, status };
+}
+
+const drizzlePendingFactConfirmationStore: PendingFactConfirmationStore = {
+  async resolvePendingFact(request) {
+    const [updated] = await db
+      .update(schema.pending_facts)
+      .set({ status: request.nextStatus, resolved_at: request.resolvedAt })
+      .where(and(
+        eq(schema.pending_facts.id, request.factId),
+        eq(schema.pending_facts.user_id, request.userId),
+        eq(schema.pending_facts.status, request.expectedStatus),
+      ))
+      .returning({
+        id: schema.pending_facts.id,
+        proposedNode: schema.pending_facts.proposed_node,
+      });
+    return updated ?? null;
+  },
+  async insertConfirmedNode(userId, proposed) {
+    await db.insert(schema.nodes).values({
+      user_id: userId,
+      type: String(proposed.type ?? 'Habit'),
+      label: String(proposed.label ?? ''),
+      properties: proposed.properties as Record<string, unknown> | null,
+      source: 'confirmed',
+      weight: 0.9,
+    }).onConflictDoNothing();
+  },
+};
