@@ -150,7 +150,7 @@ export const messages = p.pgTable('messages', {
   user_id:    p.uuid('user_id').notNull().references(() => users.id),
   timestamp:  p.timestamp('timestamp', { withTimezone: true }).notNull(),
   role:       p.text('role').notNull(),                                         // 'user' | 'assistant'
-  speaker:    p.text('speaker').default('coach').notNull(),                     // 'user' | 'coach' | 'specialist'
+  speaker:    p.text('speaker').notNull(),                                      // 'user' | 'coach' | 'specialist'
   content:    p.text('content').notNull(),
   tool_calls: p.jsonb('tool_calls'),                                            // nullable; present on assistant messages with tool use
   images:     p.jsonb('images'),                                                // nullable; base64 or storage refs
@@ -159,11 +159,19 @@ export const messages = p.pgTable('messages', {
   specialist_session_id: p.uuid('specialist_session_id').references(() => specialist_sessions.id),
   specialist_metadata: p.jsonb('specialist_metadata'),                          // immutable identity/accent snapshot
 }, (t) => [
+  p.check(
+    'messages_role_speaker_check',
+    sql`((${t.role} = 'user' and ${t.speaker} = 'user') or (${t.role} = 'assistant' and ${t.speaker} in ('coach', 'specialist')))`,
+  ),
+  p.check(
+    'messages_specialist_metadata_check',
+    sql`((${t.speaker} = 'specialist' and ${t.specialist_session_id} is not null and ${t.specialist_metadata} is not null) or (${t.speaker} <> 'specialist' and ${t.specialist_session_id} is null and ${t.specialist_metadata} is null))`,
+  ),
   p.index('messages_user_timestamp_idx').on(t.user_id, t.timestamp),
 ]);
 
 // ─── pending_facts (confirmation-gated learning) ─────────────────────────────
-// When the coach proposes a new fact via remember_fact(), it lands here as
+// When the coach proposes a new fact via propose_fact(), it lands here as
 // 'pending' until the user confirms or rejects it. Confirmed facts promote
 // to nodes/edges. Rejected facts are retained for audit only.
 // Either proposed_node or proposed_edge is populated (or both for a node+edge pair).

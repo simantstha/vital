@@ -1,0 +1,4 @@
+ALTER TABLE "messages" ALTER COLUMN "speaker" DROP DEFAULT;--> statement-breakpoint
+UPDATE "messages" SET "speaker" = CASE WHEN "role" = 'user' THEN 'user' ELSE 'coach' END;--> statement-breakpoint
+ALTER TABLE "messages" ADD CONSTRAINT "messages_role_speaker_check" CHECK ((("messages"."role" = 'user' and "messages"."speaker" = 'user') or ("messages"."role" = 'assistant' and "messages"."speaker" in ('coach', 'specialist'))));--> statement-breakpoint
+ALTER TABLE "messages" ADD CONSTRAINT "messages_specialist_metadata_check" CHECK ((("messages"."speaker" = 'specialist' and "messages"."specialist_session_id" is not null and "messages"."specialist_metadata" is not null) or ("messages"."speaker" <> 'specialist' and "messages"."specialist_session_id" is null and "messages"."specialist_metadata" is null)));

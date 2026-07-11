@@ -8,7 +8,8 @@
  *   query_events       — read events table by type + date range
  *   query_ontology     — read nodes/edges
  *   calculate_macros   — deterministic TDEE + macro split (no LLM math)
- *   remember_fact      — write node/edge to ontology (weight 0.6)
+ *   propose_fact       — create a pending fact for explicit confirmation
+ *   remember_fact      — legacy direct ontology write (not specialist-allowed)
  *   confirm_fact       — resolve a pending_fact to confirmed/rejected
  *   log_meal           — nutrition lookup → meal_logged event
  *   get_metric_trend   — daily_metrics trend + mean/min/max + baseline direction
@@ -148,6 +149,32 @@ export const BRAIN_TOOLS: Tool[] = [
         },
       },
       required: ['mode'],
+    },
+  },
+  {
+    name: 'propose_fact',
+    description:
+      'Propose a structured fact for the user to confirm or reject before it is persisted ' +
+      'to the ontology. This only creates a pending proposal; it never writes a confirmed fact.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        nodeType: {
+          type: 'string',
+          description:
+            'Node type. One of: Condition, Medication, Allergy, Intolerance, Goal, ' +
+            'Habit, FoodPreference, Cuisine, PantryItem, LabMarker, Injury, FamilyHistory.',
+        },
+        label: {
+          type: 'string',
+          description: 'Short label for the proposed fact.',
+        },
+        evidence: {
+          type: 'string',
+          description: 'The exact user quote or signal that surfaced this proposal.',
+        },
+      },
+      required: ['nodeType', 'label', 'evidence'],
     },
   },
   {
@@ -465,6 +492,8 @@ export function toolCallLabel(name: string, input: Record<string, unknown>): str
       return 'Updating your diet budget…';
     case 'remember_fact':
       return 'Remembering that…';
+    case 'propose_fact':
+      return 'Preparing that for your confirmation…';
     case 'confirm_fact':
       return 'Updating that…';
     case 'log_meal':
@@ -874,6 +903,19 @@ export async function executeToolCall(
     }
   }
 
+  // ── propose_fact ──────────────────────────────────────────────────────────
+  if (name === 'propose_fact') {
+    const proposal = buildPendingFactProposal(input, userId);
+    if (!String(input.label ?? '')) return 'Error: label is required.';
+
+    const [pending] = await db
+      .insert(schema.pending_facts)
+      .values(proposal)
+      .returning({ id: schema.pending_facts.id });
+
+    return JSON.stringify({ ok: true, factId: pending.id, status: 'pending' });
+  }
+
   // ── remember_fact ─────────────────────────────────────────────────────────
   if (name === 'remember_fact') {
     const nodeType = String(input.nodeType ?? 'Habit');
@@ -1067,4 +1109,23 @@ export async function executeToolCall(
   }
 
   return `Unknown tool: ${name}`;
+}
+
+export function buildPendingFactProposal(
+  input: Record<string, unknown>,
+  userId: string,
+): typeof schema.pending_facts.$inferInsert {
+  const evidence = String(input.evidence ?? '');
+  return {
+    user_id: userId,
+    proposed_node: {
+      type: String(input.nodeType ?? 'Habit'),
+      label: String(input.label ?? ''),
+      properties: { evidence },
+    },
+    proposed_edge: null,
+    evidence,
+    salience: 0.6,
+    status: 'pending',
+  };
 }

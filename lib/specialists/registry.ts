@@ -4,7 +4,7 @@ export const RUNNING_COACH_TOOL_ALLOWLIST = [
   'get_workouts',
   'get_baseline',
   'compare_periods',
-  'remember_fact',
+  'propose_fact',
   'confirm_fact',
 ] as const;
 
@@ -24,6 +24,23 @@ export interface SpecialistManifest {
   promptModules: readonly SpecialistPromptModule[];
   allowedTools: readonly string[];
   model: string;
+}
+
+export function assertValidSpecialistManifest(
+  manifest: Omit<SpecialistManifest, 'accentColor'> & { accentColor: string },
+): asserts manifest is SpecialistManifest {
+  if (!/^#[0-9A-F]{6}$/i.test(manifest.accentColor)) {
+    throw new Error(`Invalid specialist accent color: ${manifest.accentColor}`);
+  }
+  if (manifest.promptModules.length === 0) {
+    throw new Error('Specialist manifest must include at least one prompt module');
+  }
+  if (new Set(manifest.allowedTools).size !== manifest.allowedTools.length) {
+    throw new Error('Specialist manifest contains a duplicate tool');
+  }
+  if (!/^\d+\.\d+\.\d+$/.test(manifest.version)) {
+    throw new Error(`Invalid specialist manifest version: ${manifest.version}`);
+  }
 }
 
 interface SpecialistEnvironment {
@@ -77,7 +94,9 @@ export class SpecialistRegistry {
     if (!model) {
       throw new Error('SPECIALIST_MODEL must be configured before loading a specialist');
     }
-    return { ...RUNNING_COACH_DEFINITION, model };
+    const manifest = { ...RUNNING_COACH_DEFINITION, model };
+    assertValidSpecialistManifest(manifest);
+    return manifest;
   }
 }
 

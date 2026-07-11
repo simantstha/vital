@@ -3,8 +3,10 @@ import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import {
   InMemorySpecialistSessionRepository,
+  ConcurrentSpecialistSessionUpdateError,
   InvalidSpecialistSessionTransitionError,
   OpenSpecialistSessionExistsError,
+  ProposalExpiryRequiredError,
   SpecialistSessionService,
   VALID_SPECIALIST_SESSION_TRANSITIONS,
   type SpecialistSessionStatus,
@@ -69,7 +71,17 @@ test('every documented lifecycle transition succeeds', async () => {
         });
       }
 
-      const changed = await sessions.transition(USER_A, current.id, to);
+      const changed = await sessions.transition(
+        USER_A,
+        current.id,
+        to,
+        to === 'return_proposed'
+          ? {
+              returnHandoff: { summary: 'Consultation is ready to return.' },
+              expiresAt: new Date('2026-07-11T12:20:00.000Z'),
+            }
+          : undefined,
+      );
       assert.equal(changed.status, to);
     }
   }
@@ -148,9 +160,85 @@ test('proposal expiry fails pending proposals but never expires active consultat
   assert.equal((await sessions.get(USER_B, active.id))?.expiresAt, null);
 });
 
-test('specialist speaker metadata survives JSON storage round-tripping', async () => {
+test('return proposals require a fresh future expiry', async () => {
   const sessions = service();
-  const metadata = sessions.messageAttribution({
+  const proposed = await sessions.propose({
+    userId: USER_A,
+    objective: 'Review recent training',
+    manifestId: 'running-coach',
+    manifestVersion: '1.0.0',
+    inboundHandoff: {},
+    expiresAt: new Date('2026-07-11T12:15:00.000Z'),
+  });
+  const active = await sessions.transition(USER_A, proposed.id, 'active');
+
+  await assert.rejects(
+    sessions.transition(USER_A, active.id, 'return_proposed', { returnHandoff: {} }),
+    ProposalExpiryRequiredError,
+  );
+  await assert.rejects(
+    sessions.transition(USER_A, active.id, 'return_proposed', {
+      returnHandoff: {},
+      expiresAt: NOW,
+    }),
+    ProposalExpiryRequiredError,
+  );
+  const expiresAt = new Date('2026-07-11T12:30:00.000Z');
+  const returning = await sessions.transition(USER_A, active.id, 'return_proposed', {
+    returnHandoff: {},
+    expiresAt,
+  });
+  assert.deepEqual(returning.expiresAt, expiresAt);
+});
+
+test('repository updates compare the expected prior status to detect races', async () => {
+  const sessions = service();
+  const proposed = await seedSession(sessions, 'proposed');
+  const failed = { ...proposed, status: 'failed' as const, expiresAt: null };
+  await sessions.repository.update(failed, 'proposed');
+
+  await assert.rejects(
+    sessions.repository.update({ ...proposed, status: 'active', expiresAt: null }, 'proposed'),
+    ConcurrentSpecialistSessionUpdateError,
+  );
+});
+
+test('expiry scan cannot fail a proposal that concurrently became active', async () => {
+  class ActivatingDuringExpiryRepository extends InMemorySpecialistSessionRepository {
+    override async findExpiredPending(now: Date) {
+      const expired = await super.findExpiredPending(now);
+      const [proposal] = expired;
+      if (proposal) {
+        await super.update({
+          ...proposal,
+          status: 'active',
+          activatedAt: NOW,
+          expiresAt: null,
+        }, 'proposed');
+      }
+      return expired;
+    }
+  }
+
+  const sessions = new SpecialistSessionService(
+    new ActivatingDuringExpiryRepository(),
+    () => NOW,
+  );
+  const proposal = await sessions.propose({
+    userId: USER_A,
+    objective: 'Review recent training',
+    manifestId: 'running-coach',
+    manifestVersion: '1.0.0',
+    inboundHandoff: {},
+    expiresAt: new Date('2026-07-11T11:59:00.000Z'),
+  });
+
+  assert.deepEqual(await sessions.expirePendingProposals(), []);
+  assert.equal((await sessions.get(USER_A, proposal.id))?.status, 'active');
+});
+
+test('specialist attribution maps directly to persisted message columns', () => {
+  const attribution = service().messageAttribution({
     sessionId: '10000000-0000-4000-8000-000000000001',
     specialistId: 'running-coach',
     manifestVersion: '1.0.0',
@@ -160,9 +248,16 @@ test('specialist speaker metadata survives JSON storage round-tripping', async (
     icon: 'figure.run',
   });
 
-  const stored = JSON.parse(JSON.stringify(metadata));
-  assert.deepEqual(stored, metadata);
-  assert.equal(stored.speaker, 'specialist');
-  assert.equal(stored.specialist.accentColor, '#4CC9F0');
-  assert.equal(stored.specialist.sessionId, '10000000-0000-4000-8000-000000000001');
+  assert.deepEqual(attribution, {
+    speaker: 'specialist',
+    specialistSessionId: '10000000-0000-4000-8000-000000000001',
+    specialistMetadata: {
+      specialistId: 'running-coach',
+      manifestVersion: '1.0.0',
+      name: 'Running Coach',
+      role: 'Vital Specialist',
+      accentColor: '#4CC9F0',
+      icon: 'figure.run',
+    },
+  });
 });

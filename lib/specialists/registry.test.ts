@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   RUNNING_COACH_TOOL_ALLOWLIST,
   SpecialistRegistry,
+  assertValidSpecialistManifest,
 } from './registry';
 
 test('registry exposes the versioned running coach manifest', () => {
@@ -31,11 +32,32 @@ test('running coach is restricted to health reads and confirmation-gated memory'
     'get_workouts',
     'get_baseline',
     'compare_periods',
-    'remember_fact',
+    'propose_fact',
     'confirm_fact',
   ]);
+  assert.ok(!manifest.allowedTools.includes('remember_fact'));
   assert.ok(!manifest.allowedTools.includes('log_meal'));
   assert.ok(!manifest.allowedTools.includes('update_diet_budget'));
+});
+
+test('manifest validation rejects inconsistent identity and capabilities', () => {
+  const valid = new SpecialistRegistry({ SPECIALIST_MODEL: 'test-model' }).get('running-coach');
+
+  assert.throws(
+    () => assertValidSpecialistManifest({ ...valid, accentColor: 'cyan' }),
+    /accent color/,
+  );
+  assert.throws(
+    () => assertValidSpecialistManifest({
+      ...valid,
+      allowedTools: ['get_workouts', 'get_workouts'],
+    }),
+    /duplicate tool/,
+  );
+  assert.throws(
+    () => assertValidSpecialistManifest({ ...valid, promptModules: [] }),
+    /prompt module/,
+  );
 });
 
 test('registry rejects unknown specialist ids and requires SPECIALIST_MODEL', () => {

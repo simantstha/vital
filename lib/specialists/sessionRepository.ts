@@ -4,6 +4,7 @@ import {
   OPEN_SPECIALIST_SESSION_STATUSES,
   PENDING_SPECIALIST_SESSION_STATUSES,
   OpenSpecialistSessionExistsError,
+  ConcurrentSpecialistSessionUpdateError,
   type SpecialistSession,
   type SpecialistSessionRepository,
   type SpecialistSessionStatus,
@@ -94,15 +95,23 @@ export class DrizzleSpecialistSessionRepository implements SpecialistSessionRepo
     }
   }
 
-  async update(session: SpecialistSession): Promise<SpecialistSession> {
+  async update(
+    session: SpecialistSession,
+    expectedStatus: SpecialistSessionStatus,
+  ): Promise<SpecialistSession> {
     const [row] = await db.update(schema.specialist_sessions)
       .set(toStored(session))
       .where(and(
         eq(schema.specialist_sessions.user_id, session.userId),
         eq(schema.specialist_sessions.id, session.id),
+        eq(schema.specialist_sessions.status, expectedStatus),
       ))
       .returning();
-    if (!row) throw new Error(`Specialist session ${session.id} no longer exists`);
+    if (!row) {
+      throw new ConcurrentSpecialistSessionUpdateError(
+        `Specialist session ${session.id} changed before the update could be applied`,
+      );
+    }
     return fromStored(row);
   }
 

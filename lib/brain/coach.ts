@@ -59,6 +59,7 @@ export async function* runCoach(
     user_id:   userId,
     timestamp: new Date(),
     role:      'user',
+    speaker:   'user',
     content:   userMessage,
     images:    imageBase64 ? [imageBase64] : null,
     sources:   [],
@@ -197,6 +198,7 @@ export async function* runCoach(
       user_id:    userId,
       timestamp:  new Date(),
       role:       'assistant',
+      speaker:    'coach',
       content:    assistantText,
       tool_calls: toolCallLog.length > 0 ? toolCallLog : null,
       sources:    [],    // citation seam — populated in v2

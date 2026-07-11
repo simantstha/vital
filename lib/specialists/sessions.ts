@@ -77,19 +77,25 @@ export interface SpecialistMessageAttributionInput {
 
 export interface SpecialistMessageAttribution {
   speaker: 'specialist';
-  specialist: SpecialistMessageAttributionInput;
+  specialistSessionId: string;
+  specialistMetadata: Omit<SpecialistMessageAttributionInput, 'sessionId'>;
 }
 
 export interface SpecialistSessionRepository {
   findByUserAndId(userId: string, id: string): Promise<SpecialistSession | null>;
   findOpenByUser(userId: string): Promise<SpecialistSession | null>;
   insert(session: SpecialistSession): Promise<SpecialistSession>;
-  update(session: SpecialistSession): Promise<SpecialistSession>;
+  update(
+    session: SpecialistSession,
+    expectedStatus: SpecialistSessionStatus,
+  ): Promise<SpecialistSession>;
   findExpiredPending(now: Date): Promise<SpecialistSession[]>;
 }
 
 export class InvalidSpecialistSessionTransitionError extends Error {}
 export class OpenSpecialistSessionExistsError extends Error {}
+export class ProposalExpiryRequiredError extends Error {}
+export class ConcurrentSpecialistSessionUpdateError extends Error {}
 
 export class InMemorySpecialistSessionRepository implements SpecialistSessionRepository {
   private readonly rows = new Map<string, SpecialistSession>();
@@ -114,7 +120,16 @@ export class InMemorySpecialistSessionRepository implements SpecialistSessionRep
     return structuredClone(session);
   }
 
-  async update(session: SpecialistSession): Promise<SpecialistSession> {
+  async update(
+    session: SpecialistSession,
+    expectedStatus: SpecialistSessionStatus,
+  ): Promise<SpecialistSession> {
+    const stored = this.rows.get(session.id);
+    if (!stored || stored.userId !== session.userId || stored.status !== expectedStatus) {
+      throw new ConcurrentSpecialistSessionUpdateError(
+        `Specialist session ${session.id} changed before the update could be applied`,
+      );
+    }
     this.rows.set(session.id, structuredClone(session));
     return structuredClone(session);
   }
@@ -178,6 +193,12 @@ export class SpecialistSessionService<R extends SpecialistSessionRepository = Sp
     }
 
     const now = this.now();
+    if (to === 'return_proposed' &&
+      (!details.expiresAt || details.expiresAt <= now)) {
+      throw new ProposalExpiryRequiredError(
+        'A return proposal requires an expiry later than the current time',
+      );
+    }
     const next: SpecialistSession = {
       ...current,
       status: to,
@@ -197,20 +218,36 @@ export class SpecialistSessionService<R extends SpecialistSessionRepository = Sp
       next.failedAt = now;
       next.failureReason = details.failureReason ?? 'session_failed';
     }
-    return this.repository.update(next);
+    return this.repository.update(next, current.status);
   }
 
   async expirePendingProposals(): Promise<SpecialistSession[]> {
-    const expired = await this.repository.findExpiredPending(this.now());
-    return Promise.all(expired.map((session) => this.transition(
-      session.userId,
-      session.id,
-      'failed',
-      { failureReason: 'proposal_expired' },
-    )));
+    const now = this.now();
+    const expired = await this.repository.findExpiredPending(now);
+    const results = await Promise.all(expired.map(async (session) => {
+      try {
+        return await this.repository.update({
+          ...session,
+          status: 'failed',
+          failureReason: 'proposal_expired',
+          failedAt: now,
+          expiresAt: null,
+          updatedAt: now,
+        }, session.status);
+      } catch (error) {
+        if (error instanceof ConcurrentSpecialistSessionUpdateError) return null;
+        throw error;
+      }
+    }));
+    return results.filter((session): session is SpecialistSession => session !== null);
   }
 
   messageAttribution(input: SpecialistMessageAttributionInput): SpecialistMessageAttribution {
-    return { speaker: 'specialist', specialist: { ...input } };
+    const { sessionId, ...specialistMetadata } = input;
+    return {
+      speaker: 'specialist',
+      specialistSessionId: sessionId,
+      specialistMetadata,
+    };
   }
 }
