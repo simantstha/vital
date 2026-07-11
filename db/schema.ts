@@ -102,6 +102,43 @@ export const edges = p.pgTable('edges', {
   p.index('edges_user_to_predicate_idx').on(t.user_id, t.to_node, t.predicate),
 ]);
 
+// ─── specialist_sessions ────────────────────────────────────────────────────
+// Durable handoff lifecycle for scoped specialist consultations. Only proposal
+// states expire; active consultations require an explicit return or failure.
+
+export const specialist_sessions = p.pgTable('specialist_sessions', {
+  id:                 p.uuid('id').primaryKey().defaultRandom(),
+  user_id:            p.uuid('user_id').notNull().references(() => users.id),
+  objective:          p.text('objective').notNull(),
+  manifest_id:        p.text('manifest_id').notNull(),
+  manifest_version:   p.text('manifest_version').notNull(),
+  status:             p.text('status').default('proposed').notNull(),
+  inbound_handoff:    p.jsonb('inbound_handoff').notNull(),
+  return_handoff:     p.jsonb('return_handoff'),
+  failure_reason:     p.text('failure_reason'),
+  proposed_at:        p.timestamp('proposed_at', { withTimezone: true }).defaultNow().notNull(),
+  activated_at:       p.timestamp('activated_at', { withTimezone: true }),
+  return_proposed_at: p.timestamp('return_proposed_at', { withTimezone: true }),
+  completed_at:       p.timestamp('completed_at', { withTimezone: true }),
+  declined_at:        p.timestamp('declined_at', { withTimezone: true }),
+  failed_at:          p.timestamp('failed_at', { withTimezone: true }),
+  expires_at:         p.timestamp('expires_at', { withTimezone: true }),
+  updated_at:         p.timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  p.check(
+    'specialist_sessions_status_check',
+    sql`${t.status} in ('proposed', 'active', 'return_proposed', 'completed', 'declined', 'failed')`,
+  ),
+  p.check(
+    'specialist_sessions_expiry_check',
+    sql`((${t.status} in ('proposed', 'return_proposed')) = (${t.expires_at} is not null))`,
+  ),
+  p.uniqueIndex('specialist_sessions_one_open_per_user_idx')
+    .on(t.user_id)
+    .where(sql`${t.status} in ('proposed', 'active', 'return_proposed')`),
+  p.index('specialist_sessions_user_updated_idx').on(t.user_id, t.updated_at),
+]);
+
 // ─── messages ────────────────────────────────────────────────────────────────
 // Full conversation history. Both role values: 'user' | 'assistant'
 // sources:  v2 citation seam — populated when assistant reply is grounded in
@@ -113,11 +150,14 @@ export const messages = p.pgTable('messages', {
   user_id:    p.uuid('user_id').notNull().references(() => users.id),
   timestamp:  p.timestamp('timestamp', { withTimezone: true }).notNull(),
   role:       p.text('role').notNull(),                                         // 'user' | 'assistant'
+  speaker:    p.text('speaker').default('coach').notNull(),                     // 'user' | 'coach' | 'specialist'
   content:    p.text('content').notNull(),
   tool_calls: p.jsonb('tool_calls'),                                            // nullable; present on assistant messages with tool use
   images:     p.jsonb('images'),                                                // nullable; base64 or storage refs
   sources:    p.jsonb('sources').default(sql`'[]'::jsonb`).notNull(),           // citation seam; always an array
   metadata:   p.jsonb('metadata'),                                              // structured insights seam; nullable
+  specialist_session_id: p.uuid('specialist_session_id').references(() => specialist_sessions.id),
+  specialist_metadata: p.jsonb('specialist_metadata'),                          // immutable identity/accent snapshot
 }, (t) => [
   p.index('messages_user_timestamp_idx').on(t.user_id, t.timestamp),
 ]);
@@ -212,6 +252,9 @@ export type NewEdge       = typeof edges.$inferInsert;
 
 export type Message       = typeof messages.$inferSelect;
 export type NewMessage    = typeof messages.$inferInsert;
+
+export type SpecialistSession = typeof specialist_sessions.$inferSelect;
+export type NewSpecialistSession = typeof specialist_sessions.$inferInsert;
 
 export type PendingFact   = typeof pending_facts.$inferSelect;
 export type NewPendingFact = typeof pending_facts.$inferInsert;
