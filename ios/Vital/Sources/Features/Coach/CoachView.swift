@@ -297,7 +297,7 @@ private struct AssistantTurnView: View {
             }
 
             if let status = turn.statusSummary {
-                ToolCallActivityView(label: status)
+                ToolCallActivityView(label: status, isChecking: turn.isChecking)
             }
 
             if !turn.visibleText.isEmpty {
@@ -369,28 +369,33 @@ private extension View {
 /// content; the data cards and answer carry the durable result.
 private struct ToolCallActivityView: View {
     let label: String
+    let isChecking: Bool
 
     var body: some View {
         HStack {
-            HStack(spacing: Theme.Spacing.xs) {
-                ProgressView()
-                    .controlSize(.mini)
-                    .tint(Theme.Colors.textSecondary)
-                Text(label)
-                    .font(Theme.Typography.labelSmall)
-                    .fontWeight(.medium)
-                    .foregroundStyle(Theme.Colors.textSecondary)
+            if isChecking {
+                HStack(spacing: Theme.Spacing.xs) {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .tint(Theme.Colors.textSecondary)
+                    Text(label)
+                        .font(Theme.Typography.labelSmall)
+                        .fontWeight(.medium)
+                        .foregroundStyle(Theme.Colors.textSecondary)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(
+                    Capsule()
+                        .fill(Theme.Colors.glassFill)
+                        .overlay(
+                            Capsule()
+                                .strokeBorder(Theme.Colors.glassBorder, lineWidth: 0.5)
+                        )
+                )
+            } else {
+                Chip(text: label, icon: "checkmark")
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(
-                Capsule()
-                    .fill(Theme.Colors.glassFill)
-                    .overlay(
-                        Capsule()
-                            .strokeBorder(Theme.Colors.glassBorder, lineWidth: 0.5)
-                    )
-            )
 
             Spacer()
         }
