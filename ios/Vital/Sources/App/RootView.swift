@@ -35,6 +35,10 @@ struct RootView: View {
                         // scratch every time this runs; no-op if permission
                         // hasn't been granted.
                         await ReminderScheduler.shared.resync()
+                        // Coach nudge bridge (PR2) — fetches pending_nudges
+                        // rows and schedules them locally; 60s-throttled
+                        // internally, so this is safe to call unconditionally.
+                        await NudgeSyncer.shared.sync()
                     }
             }
         }
@@ -47,6 +51,7 @@ struct RootView: View {
             Task {
                 await NotificationManager.shared.refreshPermissionState()
                 await ReminderScheduler.shared.resync()
+                await NudgeSyncer.shared.sync()
             }
         }
     }

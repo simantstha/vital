@@ -181,8 +181,14 @@ export const baselines = p.pgTable('baselines', {
 ]);
 
 // ─── pending_nudges ──────────────────────────────────────────────────────────
-// Nudges scheduled by the proactive heuristics cron (steps drop, HRV trend, etc.)
-// sent_at is null until the nudge is dispatched via APNs.
+// Coach-scheduled nudges (schedule_nudge tool, lib/brain/tools.ts) plus any
+// future proactive heuristics (steps drop, HRV trend, etc.). Local-notification
+// bridge — no APNs: the iOS app's NudgeSyncer fetches sent_at IS NULL rows on
+// foreground via GET /api/nudges, schedules each as a local one-shot
+// (`vital.nudge.<id>`), then POSTs /api/nudges/ack to set sent_at = now().
+// sent_at therefore means "a device fetched this and scheduled it locally",
+// not "delivered to the user" — see docs/problems (D4 in the notifications
+// plan) for the full ack-semantics rationale.
 
 export const pending_nudges = p.pgTable('pending_nudges', {
   id:            p.uuid('id').primaryKey().defaultRandom(),

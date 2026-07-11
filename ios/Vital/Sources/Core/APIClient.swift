@@ -213,6 +213,26 @@ struct APIClient {
         try validate(response)
     }
 
+    // MARK: - Nudges (coach → local notification bridge, PR2)
+
+    func fetchNudges() async throws -> NudgesResponse {
+        try await get("/api/nudges")
+    }
+
+    func ackNudges(ids: [String]) async throws {
+        guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/nudges/ack") else {
+            throw APIError.invalidURL
+        }
+        var request = authorizedRequest(url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 10
+        struct Body: Encodable { let ids: [String] }
+        request.httpBody = try encoder.encode(Body(ids: ids))
+        let (_, response) = try await session.data(for: request)
+        try validate(response)
+    }
+
     // MARK: - Coach opener (fresh, data-aware greeting per open)
 
     /// Fetches a short, data-aware opening line for the Coach tab. Generated
@@ -833,6 +853,23 @@ struct PendingFact: Decodable, Identifiable {
 
 struct PendingFactsResponse: Decodable {
     let items: [PendingFact]
+}
+
+// MARK: - Nudges types
+
+/// One unsent row from `pending_nudges`, as returned by GET /api/nudges.
+/// `scheduledFor` is decoded as a raw ISO 8601 string (not `Date`) because
+/// it may be in the past (a "dead" nudge, see NudgeSyncer) or future, and
+/// NudgeSyncer needs full control over trigger-type selection.
+struct NudgeItem: Decodable, Identifiable {
+    let id: String
+    let type: String
+    let message: String
+    let scheduledFor: String
+}
+
+struct NudgesResponse: Decodable {
+    let items: [NudgeItem]
 }
 
 // MARK: - Coach SSE types

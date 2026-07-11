@@ -148,6 +148,23 @@ final class NotificationManager: NSObject, ObservableObject {
         center.add(request)
     }
 
+    /// Schedules a one-shot notification firing `delay` seconds from now
+    /// (minimum 1s, per `UNTimeIntervalNotificationTrigger`'s requirement).
+    /// Used by `NudgeSyncer` for "dead" nudges — a `scheduled_for` in the
+    /// recent past — where a calendar trigger for a past date/time would
+    /// never fire.
+    func scheduleImmediate(id: String, title: String, body: String, category: String, delay: TimeInterval) {
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+        content.categoryIdentifier = category
+
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: max(1, delay), repeats: false)
+        let request = UNNotificationRequest(identifier: id, content: content, trigger: trigger)
+        center.add(request)
+    }
+
     func cancel(ids: [String]) {
         guard !ids.isEmpty else { return }
         center.removePendingNotificationRequests(withIdentifiers: ids)
