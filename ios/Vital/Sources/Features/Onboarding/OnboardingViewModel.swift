@@ -115,9 +115,14 @@ final class OnboardingViewModel: ObservableObject {
 
     /// Submits the full questionnaire, then advances to CoachIntro only on
     /// success — a failed submit leaves the user on Lifestyle with an error
-    /// message rather than moving forward with unsaved answers.
+    /// message rather than moving forward with unsaved answers. The
+    /// notification permission ask piggybacks here (D3) — after the
+    /// questionnaire, before CoachIntro, so it never collides with the
+    /// HealthKit prompt at flow start.
     func submitAndAdvance() async {
         guard await submit() else { return }
+        await NotificationManager.shared.requestPermission()
+        await ReminderScheduler.shared.resync()
         advance()
     }
 

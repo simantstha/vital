@@ -6,6 +6,7 @@ import SwiftUI
 /// launch, so this never flashes the wrong state.
 struct RootView: View {
     @StateObject private var authViewModel = AuthViewModel()
+    @Environment(\.scenePhase) private var scenePhase
 
     /// Drives the one-time 365-day HealthKit backfill. Owned here (rather
     /// than by RootTabView or OnboardingFlowView) so the same instance and
@@ -30,9 +31,23 @@ struct RootView: View {
                         // signed in this session, since the AppDelegate path
                         // only registers observers at cold launch.
                         await HealthSyncCoordinator.shared.registerBackgroundDelivery()
+                        // Rolling reminder window (D1) — recomputed from
+                        // scratch every time this runs; no-op if permission
+                        // hasn't been granted.
+                        await ReminderScheduler.shared.resync()
                     }
             }
         }
         .environmentObject(authViewModel)
+        .onChange(of: scenePhase) { _, newPhase in
+            // Catches the return trip from Settings after a permission
+            // grant/deny, and generally keeps the rolling window fresh
+            // without waiting on a cold launch.
+            guard newPhase == .active else { return }
+            Task {
+                await NotificationManager.shared.refreshPermissionState()
+                await ReminderScheduler.shared.resync()
+            }
+        }
     }
 }

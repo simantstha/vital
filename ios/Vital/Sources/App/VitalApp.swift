@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import UserNotifications
 
 /// Registers ongoing background HealthKit sync (`enableBackgroundDelivery` +
 /// `HKObserverQuery` per type) before the app finishes launching, as Apple
@@ -17,6 +18,16 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         // APIClient): drops a session token inherited from a previous install,
         // since the Keychain survives app deletion but UserDefaults don't.
         KeychainStore.purgeIfFreshInstall()
+
+        // Must be set before the first notification could arrive so
+        // foreground banners route through `willPresent` instead of being
+        // silently suppressed. `NotificationManager` is @MainActor-isolated,
+        // so the assignment and the permission refresh both happen inside
+        // this hop (didFinishLaunching itself isn't @MainActor-annotated).
+        Task { @MainActor in
+            UNUserNotificationCenter.current().delegate = NotificationManager.shared
+            await NotificationManager.shared.refreshPermissionState()
+        }
 
         if KeychainStore.loadSessionToken() != nil {
             Task { @MainActor in

@@ -267,6 +267,7 @@ final class LogMealViewModel: ObservableObject {
             )
             coachReaction = response.coachReaction
             isLogged      = true
+            ReminderScheduler.shared.mealLogged(at: Date())
         } catch {
             errorMessage = "Log failed: \(error.localizedDescription)"
         }

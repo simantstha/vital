@@ -115,6 +115,7 @@ final class MealDetailViewModel: ObservableObject {
             )
             coachReaction = res.coachReaction.isEmpty ? nil : res.coachReaction
             didLog = true
+            ReminderScheduler.shared.mealLogged(at: Date())
         } catch {
             errorMessage = error.localizedDescription
             print("[Vital] logMeal(plan) failed: \(error.localizedDescription)")
