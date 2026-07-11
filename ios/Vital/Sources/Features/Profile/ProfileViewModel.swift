@@ -10,6 +10,15 @@ struct ProfileStatCell: Identifiable {
     let sfSymbol: String
 }
 
+enum ProfileUnitSystem: Equatable {
+    case metric
+    case us
+
+    static func from(measurementSystem: Locale.MeasurementSystem) -> ProfileUnitSystem {
+        measurementSystem == .us ? .us : .metric
+    }
+}
+
 // MARK: - ViewModel
 
 @MainActor
@@ -18,7 +27,8 @@ final class ProfileViewModel: ObservableObject {
     @Published var name: String = ""
     @Published var avatarInitial: String = "?"
     @Published var integrations: [ProfileIntegration] = []
-    @Published var stats: [ProfileStatCell] = []
+    @Published var profileDetails: [ProfileStatCell] = []
+    @Published var activityStats: [ProfileStatCell] = []
     @Published var isLoading = true
     @Published var errorMessage: String? = nil
 
@@ -36,7 +46,9 @@ final class ProfileViewModel: ObservableObject {
             name = response.name
             avatarInitial = String(response.name.prefix(1)).uppercased()
             integrations = response.integrations
-            stats = buildStats(from: response.stats)
+            let units = ProfileUnitSystem.from(measurementSystem: Locale.current.measurementSystem)
+            profileDetails = Self.profileCells(from: response.profile, units: units)
+            activityStats = Self.activityCells(from: response.stats)
         } catch {
             errorMessage = error.localizedDescription
             print("[Vital] fetchProfile failed: \(error.localizedDescription)")
@@ -61,12 +73,52 @@ final class ProfileViewModel: ObservableObject {
 
     // MARK: - Private
 
-    private func buildStats(from s: ProfileStats) -> [ProfileStatCell] {
+    static func profileCells(from profile: ProfileDetails, units: ProfileUnitSystem) -> [ProfileStatCell] {
         [
-            ProfileStatCell(label: "Logged days", value: "\(s.loggedDays)",         sfSymbol: "calendar"),
-            ProfileStatCell(label: "Meals logged", value: "\(s.mealsLogged)",        sfSymbol: "fork.knife"),
-            ProfileStatCell(label: "Avg HRV",      value: "\(Int(s.avgHrv.rounded())) ms", sfSymbol: "waveform.path.ecg"),
-            ProfileStatCell(label: "Workouts",     value: "\(s.workouts)",           sfSymbol: "figure.run"),
+            ProfileStatCell(label: "Age",            value: profile.age.map(String.init) ?? "--", sfSymbol: "person.fill"),
+            ProfileStatCell(label: "Height",         value: formatHeight(profile.heightCm, units: units), sfSymbol: "ruler"),
+            ProfileStatCell(label: "Current weight", value: formatWeight(profile.weightKg, units: units), sfSymbol: "scalemass"),
+            ProfileStatCell(label: "Biological sex", value: profile.biologicalSex?.capitalized ?? "--", sfSymbol: "person.2.fill"),
         ]
+    }
+
+    static func activityCells(from s: ProfileStats) -> [ProfileStatCell] {
+        [
+            ProfileStatCell(label: "Logged days",    value: "\(s.loggedDays)", sfSymbol: "calendar"),
+            ProfileStatCell(label: "Meals logged",   value: "\(s.mealsLogged)", sfSymbol: "fork.knife"),
+            ProfileStatCell(label: "Avg HRV",        value: s.avgHrv.map { "\(Int($0.rounded())) ms" } ?? "--", sfSymbol: "waveform.path.ecg"),
+            ProfileStatCell(label: "Workouts",       value: "\(s.workouts)", sfSymbol: "figure.run"),
+        ]
+    }
+
+    private static func formatHeight(_ heightCm: Double?, units: ProfileUnitSystem) -> String {
+        guard let heightCm else { return "--" }
+
+        switch units {
+        case .metric:
+            return "\(Int(heightCm.rounded())) cm"
+        case .us:
+            let totalInches = Int((heightCm / 2.54).rounded())
+            return "\(totalInches / 12)' \(totalInches % 12)\""
+        }
+    }
+
+    private static func formatWeight(_ weightKg: Double?, units: ProfileUnitSystem) -> String {
+        guard let weightKg else { return "--" }
+
+        switch units {
+        case .metric:
+            return "\(formatNumber(weightKg, maximumFractionDigits: 1)) kg"
+        case .us:
+            return "\(Int((weightKg * 2.2046226218).rounded())) lb"
+        }
+    }
+
+    private static func formatNumber(_ value: Double, maximumFractionDigits: Int) -> String {
+        let formatter = NumberFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.minimumFractionDigits = 0
+        formatter.maximumFractionDigits = maximumFractionDigits
+        return formatter.string(from: NSNumber(value: value)) ?? "\(value)"
     }
 }
