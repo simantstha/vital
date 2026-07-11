@@ -34,6 +34,37 @@ final class ProfileViewModelTests: XCTestCase {
         XCTAssertNil(response.stats.avgHrv)
     }
 
+    func testProfileResponseDecodesNullPersonalDetailsAndAverageHrv() throws {
+        let data = Data(
+            """
+            {
+              "name": "Taylor",
+              "integrations": [],
+              "stats": {
+                "loggedDays": 0,
+                "mealsLogged": 0,
+                "avgHrv": null,
+                "workouts": 0
+              },
+              "profile": {
+                "age": null,
+                "biologicalSex": null,
+                "heightCm": null,
+                "weightKg": null
+              }
+            }
+            """.utf8
+        )
+
+        let response = try JSONDecoder().decode(ProfileResponse.self, from: data)
+
+        XCTAssertNil(response.profile.age)
+        XCTAssertNil(response.profile.biologicalSex)
+        XCTAssertNil(response.profile.heightCm)
+        XCTAssertNil(response.profile.weightKg)
+        XCTAssertNil(response.stats.avgHrv)
+    }
+
     func testProfileCellsExposeExactlyThePersonalDetailsInMetricUnits() {
         let cells = ProfileViewModel.profileCells(
             from: ProfileDetails(age: 34, biologicalSex: "Female", heightCm: 167.6, weightKg: 62.5),

@@ -16,6 +16,12 @@
  *     avgHrv:      number | null,   // avg SDNN ms across all hrv_reading events
  *     workouts:    number,   // total workout_completed events
  *   },
+ *   profile: {
+ *     age: number | null,
+ *     biologicalSex: string | null,
+ *     heightCm: number | null,
+ *     weightKg: number | null,
+ *   },
  * }
  */
 
