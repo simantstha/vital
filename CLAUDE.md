@@ -1,41 +1,18 @@
-## Model Orchestration (Non-Negotiable)
+@AI_COMMON.md
 
-The smart/expensive model (Opus, Fable) MUST NOT write or edit code directly.
-Its role is orchestration only:
-- Investigate, diagnose root causes, and read code
-- Plan the change and write specs / problem docs
-- Delegate all actual code edits to a subagent:
-  - **Haiku agent**: 1–3 file changes, CSS/UI tweaks, simple routes, mechanical edits
-  - **Sonnet agent**: schema + migration + backend + frontend together, complex logic, AI features
-- Review the subagent's diff, verify it builds/tests, then commit/PR
+## Model Orchestration — Claude Tier Mapping (Non-Negotiable)
 
-The orchestrating model may only run read-only tools (Read, Grep, git status,
-builds/tests) and delegate writes. It must not call Edit/Write on source files itself.
+Per the shared orchestration principle in `AI_COMMON.md`: the smart/expensive
+model (Opus, Fable) MUST NOT write or edit code directly. Orchestration only —
+investigate, diagnose, read code, write specs. Delegate all actual code edits
+to a subagent:
+- **Haiku agent**: 1–3 file changes, CSS/UI tweaks, simple routes, mechanical edits
+- **Sonnet agent**: schema + migration + backend + frontend together, complex logic, AI features
 
-# Releasing (backend + iOS/TestFlight)
-
-Releases are **automatic on every push to `main`**. `.github/workflows/release.yml`
-has a `version` job that computes the next patch version from the latest `v*`
-tag (e.g. `v0.2.1` → `v0.2.2`) and pushes it as a tag, then runs `backend` and
-`ios` in that *same* workflow run — (1) migrate the Supabase schema + deploy
-the backend to Fly, then (2) build the iOS app and upload it to TestFlight.
-(The tag push from `version` does not itself trigger a second run — GitHub
-Actions suppresses runs triggered by the default `GITHUB_TOKEN` — so
-everything must happen in one run rather than chaining off the tag push.)
-
-**Steps to ship a new build:**
-1. Merge the fix to `main` via PR (the user merges — never merge or push to `main` directly).
-2. That merge's push to `main` auto-tags and runs the full release in one workflow run — nothing else to do.
-3. Watch it: `gh run list --workflow=release.yml --limit 1` then
-   `gh run watch <run-id> --exit-status --interval 30`.
-4. Confirm all three jobs (version, backend, iOS) are `success`:
-   `gh run view <run-id> --json status,conclusion,jobs`
-
-**Notes:**
-- The marketing version comes from the auto-bumped tag name (`v0.2.2` → `0.2.2`); no VERSION file to bump.
-- To ship a specific minor/major version instead of the next patch, push that tag manually, or use Actions → Release → Run workflow (version without leading `v`) — either skips the auto-bump.
-- After a green run, Apple takes a few minutes to process the build before it shows in TestFlight.
-- Required secrets are documented in `docs/CI-TESTFLIGHT.md`; the `version` job additionally needs the default `GITHUB_TOKEN`'s `contents: write` permission (granted at the job level in the workflow).
+Review the subagent's diff, verify it builds/tests, then commit/PR. The
+orchestrating model may only run read-only tools (Read, Grep, git status,
+builds/tests) and delegate writes. It must not call Edit/Write on source
+files itself.
 
 # gstack
 
