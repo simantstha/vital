@@ -151,6 +151,39 @@ export const BRAIN_TOOLS: Tool[] = [
     },
   },
   {
+    name: 'schedule_nudge',
+    description:
+      'Schedule a proactive coach nudge — a short message delivered later via a ' +
+      'local notification on the user\'s phone. ALWAYS confirm the exact time ' +
+      'with the user in chat BEFORE calling this tool — never call it silently. ' +
+      'Delivery is NOT minute-precise: it fires once the user\'s device next ' +
+      'syncs (app foreground or return from background), so don\'t promise an ' +
+      'exact minute — say something like "I\'ll check in around 9pm." ' +
+      'scheduled_for must be ISO 8601 WITH a timezone offset (e.g. ' +
+      '"2026-07-11T21:00:00-05:00"), resolved from the user\'s stated local time.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        type: {
+          type: 'string',
+          enum: ['checkin', 'motivation', 'reminder', 'plan_adjustment'],
+          description: 'The nudge category.',
+        },
+        message: {
+          type: 'string',
+          description: 'The notification body, in coach voice. Max 160 characters.',
+        },
+        scheduled_for: {
+          type: 'string',
+          description:
+            'ISO 8601 timestamp WITH a timezone offset for when the nudge ' +
+            'should fire, e.g. "2026-07-11T21:00:00-05:00".',
+        },
+      },
+      required: ['type', 'message', 'scheduled_for'],
+    },
+  },
+  {
     name: 'remember_fact',
     description:
       'Persist a new fact about the user to the ontology. Use when the user reveals ' +
@@ -463,6 +496,8 @@ export function toolCallLabel(name: string, input: Record<string, unknown>): str
       return 'Crunching your macros…';
     case 'update_diet_budget':
       return 'Updating your diet budget…';
+    case 'schedule_nudge':
+      return 'Setting a reminder…';
     case 'remember_fact':
       return 'Remembering that…';
     case 'confirm_fact':
@@ -872,6 +907,46 @@ export async function executeToolCall(
     } catch (err) {
       return `Error: ${err instanceof Error ? err.message : String(err)}`;
     }
+  }
+
+  // ── schedule_nudge ────────────────────────────────────────────────────────
+  if (name === 'schedule_nudge') {
+    const type    = String(input.type ?? '');
+    const message = String(input.message ?? '').slice(0, 160);
+    const rawWhen = String(input.scheduled_for ?? '');
+
+    const validTypes = ['checkin', 'motivation', 'reminder', 'plan_adjustment'];
+    if (!validTypes.includes(type)) {
+      return `Error: type must be one of ${validTypes.join(', ')}.`;
+    }
+    if (!message) return 'Error: message is required.';
+
+    const parsed = new Date(rawWhen);
+    if (Number.isNaN(parsed.getTime())) {
+      return `Error: could not parse scheduled_for "${rawWhen}" as an ISO 8601 timestamp.`;
+    }
+
+    const now = new Date();
+    const fiveMinAgo = new Date(now.getTime() - 5 * 60 * 1000);
+    if (parsed < fiveMinAgo) {
+      return 'Error: scheduled_for is in the past — ask the user for a future time.';
+    }
+
+    // Clamp (not reject) far-future requests to a 30-day horizon.
+    const maxHorizon = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+    const scheduledFor = parsed > maxHorizon ? maxHorizon : parsed;
+
+    const [row] = await db
+      .insert(schema.pending_nudges)
+      .values({
+        user_id:       userId,
+        type,
+        payload:       { message },
+        scheduled_for: scheduledFor,
+      })
+      .returning({ id: schema.pending_nudges.id });
+
+    return JSON.stringify({ ok: true, nudgeId: row.id, scheduledFor: scheduledFor.toISOString() });
   }
 
   // ── remember_fact ─────────────────────────────────────────────────────────
