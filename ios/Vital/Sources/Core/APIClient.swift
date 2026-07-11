@@ -250,6 +250,35 @@ struct APIClient {
         }
     }
 
+    // MARK: - Coach STT
+
+    /// Uploads a recorded `.m4a` clip to the backend STT proxy (POST
+    /// /api/stt, ElevenLabs Scribe) and returns the transcript. Returns nil
+    /// on any failure — network error, non-200 (including 503 when the
+    /// server has no ElevenLabs key), or an empty/missing transcript — so the
+    /// caller can fall back to the on-device Apple transcript.
+    func uploadSTTAudio(fileURL: URL) async -> String? {
+        guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/stt") else { return nil }
+        guard let audioData = try? Data(contentsOf: fileURL) else { return nil }
+        var request = authorizedRequest(url)
+        request.httpMethod = "POST"
+        request.setValue("audio/mp4", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 30
+        request.httpBody = audioData
+        do {
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+                return nil
+            }
+            struct STTResponse: Decodable { let text: String }
+            guard let decoded = try? decoder.decode(STTResponse.self, from: data) else { return nil }
+            let trimmed = decoded.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        } catch {
+            return nil
+        }
+    }
+
     // MARK: - Coach (SSE streaming)
 
     func streamCoach(message: String, imageBase64: String? = nil, mode: String? = nil) -> AsyncThrowingStream<CoachStreamEvent, Error> {

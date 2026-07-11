@@ -1,8 +1,7 @@
 import Foundation
 import SwiftUI
 import PhotosUI
-import Speech
-import AVFoundation
+import Combine
 
 // MARK: - Input method
 
@@ -63,18 +62,45 @@ final class LogMealViewModel: ObservableObject {
     @Published var coachReaction: String? = nil
 
     // ── Voice ─────────────────────────────────────────────────────────────────
-    @Published var isRecording: Bool = false
-    @Published var transcribedText: String = ""
-    @Published var speechAuthStatus: SFSpeechRecognizerAuthorizationStatus = .notDetermined
-    @Published var micAuthGranted: Bool = false
+    /// Shared engine (also used by Coach tap-to-talk): Apple live preview +
+    /// auto-stop watchdogs + a recorded clip for cloud transcription.
+    let transcriber = SpeechTranscriber()
+    /// True from the moment recording stops until the cloud STT upload (or
+    /// its fallback to the Apple transcript) has resolved and search has run.
+    @Published var isTranscribing: Bool = false
 
     // MARK: Private
 
     private let api = APIClient.shared
-    private var audioEngine = AVAudioEngine()
-    private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
-    private var recognitionTask: SFSpeechRecognitionTask?
-    private let speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
+    private var cancellables = Set<AnyCancellable>()
+
+    /// True from the moment the mic is tapped until the resulting transcript
+    /// has been handed off to `finishVoiceInput()`. Guards the stop→finish
+    /// binding below (mirrors `CoachViewModel`'s voice flow).
+    private var isVoiceInputActive = false
+
+    init() {
+        bindVoice()
+    }
+
+    /// Forwards `transcriber`'s own change notifications into this view
+    /// model's `objectWillChange` — `LogMealView` only observes `vm`, not
+    /// `vm.transcriber` directly — and wires stopping the recording to
+    /// kick off transcription + search.
+    private func bindVoice() {
+        transcriber.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
+
+        transcriber.$isRecording
+            .removeDuplicates()
+            .sink { [weak self] recording in
+                guard let self, self.isVoiceInputActive, !recording else { return }
+                self.isVoiceInputActive = false
+                Task { await self.finishVoiceInput() }
+            }
+            .store(in: &cancellables)
+    }
 
     // MARK: - Pending meal helpers
 
@@ -142,105 +168,62 @@ final class LogMealViewModel: ObservableObject {
     }
 
     // MARK: - Voice
+    //
+    // Thin wrappers over the shared `SpeechTranscriber` so the view keeps
+    // calling the same method names it always has.
 
     func checkSpeechPermissions() {
-        speechAuthStatus = SFSpeechRecognizer.authorizationStatus()
-        micAuthGranted   = AVAudioApplication.shared.recordPermission == .granted
+        transcriber.refreshPermissionState()
     }
 
     func requestSpeechPermissions() async {
-        // Request speech recognition auth first.
-        await withCheckedContinuation { cont in
-            SFSpeechRecognizer.requestAuthorization { status in
-                Task { @MainActor in
-                    self.speechAuthStatus = status
-                    cont.resume()
-                }
-            }
-        }
-        // Then request microphone access.
-        let granted = await AVAudioApplication.requestRecordPermission()
-        micAuthGranted = granted
+        await transcriber.requestPermissions()
     }
 
     func toggleRecording() {
-        if isRecording { stopRecording() } else { startRecording() }
-    }
-
-    private func startRecording() {
-        guard speechAuthStatus == .authorized, micAuthGranted else { return }
-        guard let recognizer = speechRecognizer, recognizer.isAvailable else {
-            errorMessage = "Speech recognizer unavailable."
-            return
-        }
-
-        // Tear down any previous session.
-        recognitionTask?.cancel()
-        recognitionTask  = nil
-        transcribedText  = ""
-        errorMessage     = nil
-
-        let session = AVAudioSession.sharedInstance()
-        do {
-            try session.setCategory(.record, mode: .measurement, options: .duckOthers)
-            try session.setActive(true, options: .notifyOthersOnDeactivation)
-        } catch {
-            errorMessage = "Audio session error: \(error.localizedDescription)"
-            return
-        }
-
-        let req = SFSpeechAudioBufferRecognitionRequest()
-        req.shouldReportPartialResults = true
-        recognitionRequest = req
-
-        recognitionTask = recognizer.recognitionTask(with: req) { [weak self] result, error in
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                if let result {
-                    self.transcribedText = result.bestTranscription.formattedString
-                    if result.isFinal {
-                        let text = result.bestTranscription.formattedString
-                        self.stopRecording()
-                        if !text.isEmpty {
-                            self.searchText = text
-                            await self.searchByText()
-                        }
-                    }
-                }
-                if let error, self.isRecording {
-                    // Suppress cancellation codes; surface genuine errors only.
-                    let code = (error as NSError).code
-                    guard code != 203, code != 301 else { return }
-                    self.errorMessage = "Voice error: \(error.localizedDescription)"
-                    self.stopRecording()
-                }
-            }
-        }
-
-        let inputNode = audioEngine.inputNode
-        let format    = inputNode.outputFormat(forBus: 0)
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak req] buf, _ in
-            req?.append(buf)
-        }
-
-        audioEngine.prepare()
-        do {
-            try audioEngine.start()
-            isRecording = true
-        } catch {
-            inputNode.removeTap(onBus: 0)
-            errorMessage = "Could not start recording: \(error.localizedDescription)"
+        if transcriber.isRecording {
+            transcriber.stop()
+        } else {
+            guard !isTranscribing else { return }
+            errorMessage = nil
+            isVoiceInputActive = true
+            transcriber.start()
         }
     }
 
     func stopRecording() {
-        guard isRecording else { return }
-        isRecording = false
-        audioEngine.stop()
-        audioEngine.inputNode.removeTap(onBus: 0)
-        recognitionRequest?.endAudio()
-        recognitionRequest = nil
-        recognitionTask    = nil
+        transcriber.stop()
+    }
+
+    /// Called once recording stops (manual tap or a watchdog auto-stop).
+    /// Apple's live-preview transcript is the fallback; the accurate cloud
+    /// transcript from `/api/stt` replaces it when the upload succeeds.
+    /// Preserves the previous behavior of auto-searching as soon as a
+    /// transcript is available, now on any stop rather than only a final
+    /// on-device result.
+    private func finishVoiceInput() async {
+        let appleTranscript = transcriber.transcribedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let recordingURL = transcriber.recordingURL
+        guard !appleTranscript.isEmpty || recordingURL != nil else { return }
+
+        isTranscribing = true
+        defer {
+            isTranscribing = false
+            transcriber.discardRecording()
+        }
+
+        var finalText = appleTranscript
+        if let recordingURL,
+           let cloudText = await api.uploadSTTAudio(fileURL: recordingURL),
+           !cloudText.isEmpty {
+            finalText = cloudText
+        }
+
+        let trimmed = finalText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        searchText = trimmed
+        await searchByText()
     }
 
     // MARK: - Log meal
@@ -302,8 +285,8 @@ final class LogMealViewModel: ObservableObject {
 
     func fullReset() {
         stopRecording()
+        transcriber.discardRecording()
         clearResult()
-        searchText      = ""
-        transcribedText = ""
+        searchText = ""
     }
 }

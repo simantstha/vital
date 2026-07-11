@@ -154,6 +154,11 @@ final class CoachViewModel: ObservableObject {
     @Published var isStreaming: Bool = false
     @Published var errorMessage: String? = nil
 
+    /// True from the moment recording stops until the cloud STT upload (or
+    /// its fallback to the Apple transcript) has resolved and been handed
+    /// off to `send()`.
+    @Published var isTranscribing: Bool = false
+
     /// True while the fresh opener is being fetched (before any rows exist), so
     /// the view can show the typing indicator during load.
     @Published var isOpening: Bool = false
@@ -161,6 +166,7 @@ final class CoachViewModel: ObservableObject {
     private let api = APIClient.shared
     private var streamTask: Task<Void, Never>? = nil
     private var openerTask: Task<Void, Never>? = nil
+    private var transcriptionTask: Task<Void, Never>? = nil
 
     /// The assistant message id for the in-flight turn. The bubble is inserted
     /// lazily on the first text delta (not up front), so the typing indicator
@@ -259,7 +265,7 @@ final class CoachViewModel: ObservableObject {
         if transcriber.isRecording {
             transcriber.stop()
         } else {
-            guard !isStreaming else { return }
+            guard !isStreaming, !isTranscribing else { return }
             speaker.stop()
             input = ""
             isVoiceInputActive = true
@@ -267,12 +273,42 @@ final class CoachViewModel: ObservableObject {
         }
     }
 
+    /// Called once recording stops (manual tap or a watchdog auto-stop).
+    /// Apple's live-preview transcript is the fallback; the accurate cloud
+    /// transcript from `/api/stt` replaces it when the upload succeeds. Only
+    /// sends if either transcript ended up non-empty.
     private func finishVoiceInput() {
-        let transcript = transcriber.transcribedText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !transcript.isEmpty else { return }
-        input = transcript
-        pendingSentByVoice = true
-        send()
+        let appleTranscript = transcriber.transcribedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let recordingURL = transcriber.recordingURL
+        guard !appleTranscript.isEmpty || recordingURL != nil else { return }
+
+        isTranscribing = true
+        transcriptionTask = Task {
+            defer {
+                isTranscribing = false
+                transcriber.discardRecording()
+            }
+
+            var finalText = appleTranscript
+            if let recordingURL,
+               let cloudText = await api.uploadSTTAudio(fileURL: recordingURL),
+               !cloudText.isEmpty {
+                finalText = cloudText
+            }
+
+            // cancelStreaming() (fired by the view's onDisappear) cancels this task mid-upload.
+            // A cancelled voice turn must not send.
+            guard !Task.isCancelled else { return }
+
+            let trimmed = finalText.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                input = ""
+                return
+            }
+            input = trimmed
+            pendingSentByVoice = true
+            send()
+        }
     }
 
     // MARK: - Opener
@@ -385,6 +421,9 @@ final class CoachViewModel: ObservableObject {
         openerTask?.cancel()
         openerTask = nil
         isOpening = false
+        transcriptionTask?.cancel()
+        transcriptionTask = nil
+        isTranscribing = false
         transcriber.stop()
         speaker.stop()
     }

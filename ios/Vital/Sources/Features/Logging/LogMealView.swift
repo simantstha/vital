@@ -1,7 +1,6 @@
 import SwiftUI
 import PhotosUI
 import VisionKit
-import Speech
 
 // MARK: - Sheet root
 
@@ -275,7 +274,7 @@ private extension LogMealView {
 
     @ViewBuilder
     var voiceSection: some View {
-        if vm.speechAuthStatus == .authorized && vm.micAuthGranted {
+        if vm.transcriber.permissionState == .authorized {
             VStack(spacing: Theme.Spacing.lg) {
                 GlassCard {
                     VStack(spacing: Theme.Spacing.xl) {
@@ -283,21 +282,29 @@ private extension LogMealView {
                         Button { vm.toggleRecording() } label: {
                             ZStack {
                                 Circle()
-                                    .fill(vm.isRecording
+                                    .fill(vm.transcriber.isRecording
                                           ? Theme.Colors.alert.opacity(0.18)
                                           : Theme.Colors.accent.opacity(0.12))
                                     .frame(width: 80, height: 80)
-                                Image(systemName: vm.isRecording ? "stop.fill" : "mic.fill")
+                                Image(systemName: vm.transcriber.isRecording ? "stop.fill" : "mic.fill")
                                     .font(.system(size: 28, weight: .semibold))
-                                    .foregroundStyle(vm.isRecording ? Theme.Colors.alert : Theme.Colors.accentContent)
+                                    .foregroundStyle(vm.transcriber.isRecording ? Theme.Colors.alert : Theme.Colors.accentContent)
                             }
                         }
                         .buttonStyle(.plain)
-                        .scaleEffect(vm.isRecording ? 1.05 : 1.0)
+                        .disabled(vm.isTranscribing)
+                        .scaleEffect(vm.transcriber.isRecording ? 1.05 : 1.0)
                         .animation(.easeInOut(duration: 0.4).repeatForever(autoreverses: true),
-                                   value: vm.isRecording)
+                                   value: vm.transcriber.isRecording)
 
-                        if vm.isRecording {
+                        if vm.isTranscribing {
+                            HStack(spacing: Theme.Spacing.sm) {
+                                ProgressView().tint(Theme.Colors.accentContent)
+                                Text("Transcribing…")
+                                    .font(Theme.Typography.bodyMedium)
+                                    .foregroundStyle(Theme.Colors.accentContent)
+                            }
+                        } else if vm.transcriber.isRecording {
                             Text("Listening…")
                                 .font(Theme.Typography.bodyMedium)
                                 .foregroundStyle(Theme.Colors.accentContent)
@@ -307,8 +314,8 @@ private extension LogMealView {
                                 .foregroundStyle(Theme.Colors.textSecondary)
                         }
 
-                        if !vm.transcribedText.isEmpty {
-                            Text("\u{201C}\(vm.transcribedText)\u{201D}")
+                        if !vm.transcriber.transcribedText.isEmpty {
+                            Text("\u{201C}\(vm.transcriber.transcribedText)\u{201D}")
                                 .font(Theme.Typography.bodySmall)
                                 .italic()
                                 .foregroundStyle(Theme.Colors.textPrimary)
@@ -328,7 +335,7 @@ private extension LogMealView {
                     }
                 }
             }
-        } else if vm.speechAuthStatus == .denied || (vm.speechAuthStatus != .notDetermined && !vm.micAuthGranted) {
+        } else if vm.transcriber.permissionState == .denied {
             // Permissions denied
             GlassCard {
                 VStack(spacing: Theme.Spacing.lg) {
