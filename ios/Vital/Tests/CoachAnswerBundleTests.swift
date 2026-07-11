@@ -27,7 +27,8 @@ final class CoachAnswerBundleTests: XCTestCase {
 
         XCTAssertEqual(turn.dataCards.map(\.id), ["hrv"])
         XCTAssertEqual(turn.visibleText, "## Carb Loading\nStart tonight.")
-        XCTAssertNil(turn.statusSummary)
+        XCTAssertEqual(turn.statusSummary, "Checked HRV trend")
+        XCTAssertFalse(turn.isChecking)
     }
 
     func testToolBackedAssistantTurnBuffersTextUntilAllToolsFinish() {
@@ -42,6 +43,19 @@ final class CoachAnswerBundleTests: XCTestCase {
         turn.applyToolCall(id: "workouts", name: "get_workouts", label: "Pulling up your workouts…", done: true)
 
         XCTAssertEqual(turn.visibleText, "I found your recent run data.")
-        XCTAssertNil(turn.statusSummary)
+        XCTAssertEqual(turn.statusSummary, "Pulled up workouts")
+        XCTAssertFalse(turn.isChecking)
+    }
+
+    func testAssistantTurnCombinesCompletedToolCallsIntoOneCompactSummary() {
+        var turn = AssistantTurn(id: UUID())
+
+        turn.applyToolCall(id: "workouts", name: "get_workouts", label: "Pulling up your workouts…", done: false)
+        turn.applyToolCall(id: "hrv", name: "get_metric_trend", label: "Checking your HRV trend…", done: false)
+        turn.applyToolCall(id: "workouts", name: "get_workouts", label: "Pulling up your workouts…", done: true)
+        turn.applyToolCall(id: "hrv", name: "get_metric_trend", label: "Checking your HRV trend…", done: true)
+
+        XCTAssertEqual(turn.statusSummary, "Checked workouts, HRV trend")
+        XCTAssertFalse(turn.isChecking)
     }
 }
