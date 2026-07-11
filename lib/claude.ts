@@ -107,6 +107,7 @@ interface BriefContext {
   weeklyMileage?: WeeklyLoadRecord[];
   recentNutrition?: Array<{ date: string; calories: number; carbs: number; protein: number; fat: number }>;
   weightKg?: number;
+  foodProfile?: { restrictions: Array<{ type: string; label: string }>; preferences: Array<{ type: string; label: string }> };
   /** True while baselines are still calibrating (< 14 days of history) — recovery score is provisional. */
   calibrating?: boolean;
 }
@@ -146,6 +147,21 @@ export async function generateDailyBrief(userId: string, ctx: BriefContext): Pro
       ).join('\n')
     : '';
 
+  const foodSection = ctx.foodProfile && (ctx.foodProfile.restrictions.length || ctx.foodProfile.preferences.length)
+    ? `\n## Food Preferences & Restrictions\n` +
+      (ctx.foodProfile.restrictions.length
+        ? `RESTRICTIONS — never include these foods in ANY meal:\n${
+            ctx.foodProfile.restrictions.map(r => `- ${r.type}: ${r.label}`).join('\n')
+          }` +
+          (ctx.foodProfile.preferences.length ? '\n\n' : '')
+        : '') +
+      (ctx.foodProfile.preferences.length
+        ? `PREFERENCES — favor liked foods/cuisines, avoid disliked ones:\n${
+            ctx.foodProfile.preferences.map(p => `- ${p.type}: ${p.label}`).join('\n')
+          }`
+        : '')
+    : '';
+
   // ── Absence-aware biometric lines ──────────────────────────────────────────
   // These values come straight from the same daily_metrics store the Today
   // metric cards read. When a metric hasn't synced yet we say so explicitly —
@@ -167,6 +183,7 @@ export async function generateDailyBrief(userId: string, ctx: BriefContext): Pro
 2. Prescribe today's nutrition for recovery (post-workout if applicable) AND tomorrow's performance (carb-load if tomorrow looks like a hard day based on their pattern)
 3. Spot patterns worth calling out (e.g. "your HRV drops when sleep is under 7h")
 4. Keep meals specific and tied to actual training data — not generic advice
+5. Meals MUST NOT contain any food listed under RESTRICTIONS (allergies/intolerances/conditions) — this is a hard rule. Favor PREFERENCES: liked foods and cuisines in, disliked foods out.
 
 ## Long-term User Profile
 ${userProfile}
@@ -181,7 +198,7 @@ ${sleepLine}
 - Today's Strain so far: ${ctx.strain}
 - Weekly Miles: ${ctx.weeklyMi.toFixed(1)}mi this week
 ${ctx.lastRun ? `- Last Run: ${ctx.lastRun.distanceMi}mi at ${ctx.lastRun.pace}/mi (${ctx.lastRun.dayTime}) — "${ctx.lastRun.name}"` : '- No recent runs logged'}
-${historySection}${activitiesSection}${weeklyLoadSection}${nutritionSection}
+${historySection}${activitiesSection}${weeklyLoadSection}${nutritionSection}${foodSection}
 
 Respond ONLY with valid JSON, no markdown, no explanation:
 
