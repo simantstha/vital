@@ -32,3 +32,6 @@ scripts/request-v0-code.mjs
 
 # Live runtime coach state — seeded from vital-memory-template/ (Part C)
 .vital-memory/
+
+# codex
+.codex/
