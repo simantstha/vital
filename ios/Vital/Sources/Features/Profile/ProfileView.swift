@@ -26,12 +26,14 @@ struct ProfileView: View {
                         ProgressView()
                             .frame(maxWidth: .infinity)
                             .padding(.top, 80)
+                    } else if let errorMessage = vm.errorMessage {
+                        errorState(message: errorMessage)
                     } else {
                         avatarSection
-                        nutritionSection
+                        profileDetailsSection
+                        dailyBudgetSection
                         notificationsSection
-                        statsGrid
-                        integrationsSection
+                        activitySection
                         accountSection
                     }
                 }
@@ -66,35 +68,47 @@ private extension ProfileView {
     // ── Avatar + name ──────────────────────────────────────────────────────
 
     var avatarSection: some View {
-        VStack(spacing: Theme.Spacing.md) {
-            ZStack {
-                Circle()
-                    .fill(
-                        LinearGradient(
-                            colors: [Theme.Colors.accent, Theme.Colors.accent.opacity(0.6)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
+        ZStack(alignment: .topTrailing) {
+            VStack(spacing: Theme.Spacing.md) {
+                ZStack {
+                    Circle()
+                        .fill(
+                            LinearGradient(
+                                colors: [Theme.Colors.accent, Theme.Colors.accent.opacity(0.6)],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
                         )
-                    )
-                    .frame(width: 88, height: 88)
-                    .shadow(color: Theme.Colors.accent.opacity(0.35), radius: 16, x: 0, y: 8)
+                        .frame(width: 88, height: 88)
+                        .shadow(color: Theme.Colors.accent.opacity(0.35), radius: 16, x: 0, y: 8)
 
-                Text(vm.avatarInitial)
-                    .font(.system(size: 38, weight: .bold, design: .rounded))
-                    .foregroundStyle(Theme.Colors.onAccent)
+                    Text(vm.avatarInitial)
+                        .font(.system(size: 38, weight: .bold, design: .rounded))
+                        .foregroundStyle(Theme.Colors.onAccent)
+                }
+
+                Text(vm.name)
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(Theme.Colors.textPrimary)
             }
+            .frame(maxWidth: .infinity)
 
-            Text(vm.name)
-                .font(.system(size: 22, weight: .semibold))
-                .foregroundStyle(Theme.Colors.textPrimary)
+            profileMenu
         }
+        .frame(maxWidth: .infinity)
     }
 
-    // ── Nutrition (diet budget entry point) ──────────────────────────────────
+    // ── Profile details ───────────────────────────────────────────────────
 
-    var nutritionSection: some View {
+    var profileDetailsSection: some View {
+        statSection(title: "Profile Details", cells: vm.profileDetails)
+    }
+
+    // ── Daily budget entry point ──────────────────────────────────────────
+
+    var dailyBudgetSection: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-            SectionHeader(title: "Nutrition")
+            SectionHeader(title: "Daily Budget")
 
             Button { showBudgetEditor = true } label: {
                 GlassCard {
@@ -186,17 +200,21 @@ private extension ProfileView {
         }
     }
 
-    // ── Stats grid ─────────────────────────────────────────────────────────
+    // ── Activity stats ────────────────────────────────────────────────────
 
-    var statsGrid: some View {
+    var activitySection: some View {
+        statSection(title: "Activity", cells: vm.activityStats)
+    }
+
+    func statSection(title: String, cells: [ProfileStatCell]) -> some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-            SectionHeader(title: "Stats")
+            SectionHeader(title: title)
 
             let columns = [GridItem(.flexible(), spacing: Theme.Spacing.sm),
                            GridItem(.flexible(), spacing: Theme.Spacing.sm)]
 
             LazyVGrid(columns: columns, spacing: Theme.Spacing.sm) {
-                ForEach(vm.stats) { cell in
+                ForEach(cells) { cell in
                     GlassCard(padding: Theme.Spacing.lg, cornerRadius: Theme.Radius.md) {
                         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
                             HStack {
@@ -215,6 +233,95 @@ private extension ProfileView {
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
+            }
+        }
+    }
+
+    // ── Overflow menu ─────────────────────────────────────────────────────
+
+    var profileMenu: some View {
+        Menu {
+            Button {} label: {
+                Label("Apple Health: \(healthStatusLabel)", systemImage: "heart.fill")
+            }
+            .disabled(true)
+
+            Divider()
+
+            Button {
+                resyncHealthHistory()
+            } label: {
+                Label(
+                    isResyncing ? "Importing health history…" : "Re-sync Health History",
+                    systemImage: isResyncing ? "arrow.triangle.2.circlepath" : "arrow.clockwise"
+                )
+            }
+            .disabled(isResyncing)
+
+            if isResyncing {
+                Label("\(backfillCoordinator.daysUploaded) days imported", systemImage: "clock")
+                    .disabled(true)
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(Theme.Colors.textSecondary)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .accessibilityLabel("Profile options")
+    }
+
+    var healthStatusLabel: String {
+        let isConnected = vm.integrations.contains {
+            $0.name == "Apple Health" && $0.status.lowercased() == "connected"
+        }
+        return isConnected ? "Connected" : "Disconnected"
+    }
+
+    func resyncHealthHistory() {
+        guard !isResyncing else { return }
+
+        Task {
+            isResyncing = true
+            defer { isResyncing = false }
+            await backfillCoordinator.resync()
+        }
+    }
+
+    // ── Recoverable load error ─────────────────────────────────────────────
+
+    func errorState(message: String) -> some View {
+        GlassCard(padding: Theme.Spacing.lg, cornerRadius: Theme.Radius.md) {
+            HStack(alignment: .center, spacing: Theme.Spacing.md) {
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Theme.Colors.alert)
+
+                VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
+                    Text("Couldn't load profile")
+                        .font(Theme.Typography.bodySmall)
+                        .fontWeight(.medium)
+                        .foregroundStyle(Theme.Colors.textPrimary)
+                    Text(message)
+                        .font(Theme.Typography.labelSmall)
+                        .foregroundStyle(Theme.Colors.textSecondary)
+                        .lineLimit(2)
+                }
+
+                Spacer(minLength: Theme.Spacing.sm)
+
+                Button {
+                    Task {
+                        vm.errorMessage = nil
+                        await vm.load()
+                    }
+                } label: {
+                    Label("Retry", systemImage: "arrow.clockwise")
+                        .font(Theme.Typography.labelMedium)
+                        .foregroundStyle(Theme.Colors.accentContent)
+                }
+                .buttonStyle(.plain)
             }
         }
     }
@@ -253,120 +360,4 @@ private extension ProfileView {
         }
     }
 
-    // ── Integrations ───────────────────────────────────────────────────────
-
-    var integrationsSection: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-            SectionHeader(title: "Integrations")
-
-            GlassCard {
-                VStack(spacing: 0) {
-                    ForEach(Array(vm.integrations.enumerated()), id: \.offset) { index, integration in
-                        if index > 0 {
-                            Rectangle()
-                                .fill(Theme.Colors.glassBorder)
-                                .frame(height: 0.5)
-                        }
-
-                        IntegrationRowView(integration: integration)
-                    }
-                }
-            }
-
-            resyncButton
-        }
-    }
-
-    // ── Re-sync Health History ───────────────────────────────────────────────
-    // Recovery for accounts whose one-time backfill self-completed early (before
-    // the empty-run fix) and never imported their year of history. Re-runs the
-    // 365-day backfill; server ingest is an idempotent upsert.
-
-    var resyncButton: some View {
-        Button {
-            Task {
-                isResyncing = true
-                await backfillCoordinator.resync()
-                isResyncing = false
-            }
-        } label: {
-            GlassCard {
-                HStack(spacing: Theme.Spacing.md) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous)
-                            .fill(Theme.Colors.glassFill)
-                            .frame(width: 36, height: 36)
-                        if isResyncing {
-                            ProgressView().tint(Theme.Colors.accentContent)
-                        } else {
-                            Image(systemName: "arrow.clockwise")
-                                .font(.system(size: 15))
-                                .foregroundStyle(Theme.Colors.accentContent)
-                        }
-                    }
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(isResyncing ? "Importing health history…" : "Re-sync Health History")
-                            .font(Theme.Typography.bodySmall)
-                            .fontWeight(.medium)
-                            .foregroundStyle(Theme.Colors.textPrimary)
-                        Text(isResyncing
-                             ? "\(backfillCoordinator.daysUploaded) days imported"
-                             : "Re-import up to a year from Apple Health")
-                            .font(Theme.Typography.labelSmall)
-                            .foregroundStyle(Theme.Colors.textSecondary)
-                    }
-
-                    Spacer()
-                }
-                .padding(.vertical, Theme.Spacing.xs)
-            }
-        }
-        .buttonStyle(.plain)
-        .disabled(isResyncing)
-    }
-}
-
-// MARK: - Integration row
-
-private struct IntegrationRowView: View {
-    let integration: ProfileIntegration
-
-    private var isConnected: Bool { integration.status == "connected" }
-    private var icon: String {
-        switch integration.name {
-        case "Apple Health": return "heart.fill"
-        default:             return "link"
-        }
-    }
-
-    var body: some View {
-        HStack(spacing: Theme.Spacing.md) {
-            ZStack {
-                RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous)
-                    .fill(Theme.Colors.glassFill)
-                    .frame(width: 36, height: 36)
-                Image(systemName: icon)
-                    .font(.system(size: 15))
-                    .foregroundStyle(Theme.Colors.textSecondary)
-            }
-
-            Text(integration.name)
-                .font(Theme.Typography.bodySmall)
-                .fontWeight(.medium)
-                .foregroundStyle(Theme.Colors.textPrimary)
-
-            Spacer()
-
-            HStack(spacing: Theme.Spacing.xs) {
-                Circle()
-                    .fill(isConnected ? Theme.Colors.accent : Theme.Colors.textSecondary)
-                    .frame(width: 7, height: 7)
-                Text(isConnected ? "Connected" : "Disconnected")
-                    .font(Theme.Typography.labelSmall)
-                    .foregroundStyle(isConnected ? Theme.Colors.accent : Theme.Colors.textSecondary)
-            }
-        }
-        .padding(.vertical, Theme.Spacing.md)
-    }
 }

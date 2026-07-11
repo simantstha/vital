@@ -795,10 +795,17 @@ struct ProfileIntegration: Decodable {
     let status: String
 }
 
+struct ProfileDetails: Decodable {
+    let age: Int?
+    let biologicalSex: String?
+    let heightCm: Double?
+    let weightKg: Double?
+}
+
 struct ProfileStats: Decodable {
     let loggedDays: Int
     let mealsLogged: Int
-    let avgHrv: Double
+    let avgHrv: Double?
     let workouts: Int
 }
 
@@ -806,6 +813,7 @@ struct ProfileResponse: Decodable {
     let name: String
     let integrations: [ProfileIntegration]
     let stats: ProfileStats
+    let profile: ProfileDetails
 }
 
 // MARK: - Pending facts types
