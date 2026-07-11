@@ -4,9 +4,15 @@ struct ProfileView: View {
     @StateObject private var vm = ProfileViewModel()
     @EnvironmentObject private var authViewModel: AuthViewModel
     @EnvironmentObject private var backfillCoordinator: BackfillCoordinator
+    @ObservedObject private var notificationManager = NotificationManager.shared
     @State private var showSignOutConfirm = false
     @State private var showBudgetEditor = false
+    @State private var showNotificationSettings = false
     @State private var isResyncing = false
+
+    @AppStorage(NotificationPrefsKeys.briefEnabled) private var notifBriefEnabled = true
+    @AppStorage(NotificationPrefsKeys.mealsEnabled) private var notifMealsEnabled = true
+    @AppStorage(NotificationPrefsKeys.weighinEnabled) private var notifWeighinEnabled = true
 
     var body: some View {
         ZStack {
@@ -23,6 +29,7 @@ struct ProfileView: View {
                     } else {
                         avatarSection
                         nutritionSection
+                        notificationsSection
                         statsGrid
                         integrationsSection
                         accountSection
@@ -37,6 +44,9 @@ struct ProfileView: View {
         .task { await vm.load() }
         .sheet(isPresented: $showBudgetEditor, onDismiss: { Task { await vm.loadBudget() } }) {
             DietBudgetEditorView()
+        }
+        .sheet(isPresented: $showNotificationSettings) {
+            NotificationSettingsView()
         }
         .confirmationDialog(
             "Sign out of Vital?",
@@ -121,6 +131,51 @@ private extension ProfileView {
                                     .foregroundStyle(Theme.Colors.textSecondary)
                             }
                         }
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Theme.Colors.textSecondary)
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    // ── Notifications ─────────────────────────────────────────────────────
+
+    var notificationsSubtitle: String {
+        guard notificationManager.permissionState == .authorized else { return "Off" }
+        let enabledCount = [notifBriefEnabled, notifMealsEnabled, notifWeighinEnabled].filter { $0 }.count
+        return enabledCount > 0 ? "On · \(enabledCount) reminders" : "Off"
+    }
+
+    var notificationsSection: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+            SectionHeader(title: "Notifications")
+
+            Button { showNotificationSettings = true } label: {
+                GlassCard {
+                    HStack(spacing: Theme.Spacing.md) {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous)
+                                .fill(Theme.Colors.accent.opacity(0.22))
+                                .frame(width: 38, height: 38)
+                            Image(systemName: "bell.badge")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundStyle(Theme.Colors.accentContent)
+                        }
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Reminders")
+                                .font(Theme.Typography.bodyMedium)
+                                .fontWeight(.medium)
+                                .foregroundStyle(Theme.Colors.textPrimary)
+                            Text(notificationsSubtitle)
+                                .font(Theme.Typography.labelSmall)
+                                .foregroundStyle(Theme.Colors.textSecondary)
+                        }
+
+                        Spacer()
                         Image(systemName: "chevron.right")
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(Theme.Colors.textSecondary)
