@@ -51,15 +51,22 @@ struct AssistantTurn: Identifiable, Equatable {
     private(set) var isFinished: Bool = false
 
     var visibleText: String {
-        hasActiveToolCalls ? "" : text
+        isChecking ? "" : text
     }
 
     var statusSummary: String? {
-        guard let active = toolCalls.first(where: { !$0.isDone }) else { return nil }
-        return active.label
+        if let active = toolCalls.first(where: { !$0.isDone }) {
+            return active.label
+        }
+        let completed = toolCalls.filter(\.isDone)
+        guard !completed.isEmpty else { return nil }
+        if completed.count == 1 {
+            return completed[0].label
+        }
+        return "Checked " + completed.map { Self.summaryNoun(fromDoneLabel: $0.label) }.joined(separator: ", ")
     }
 
-    private var hasActiveToolCalls: Bool {
+    var isChecking: Bool {
         toolCalls.contains { !$0.isDone }
     }
 
@@ -101,6 +108,16 @@ struct AssistantTurn: Identifiable, Equatable {
         }
         if text.hasPrefix("Looking at ") {
             text = "Looked at " + text.dropFirst("Looking at ".count)
+        }
+        text = text.replacingOccurrences(of: "your ", with: "")
+        return text
+    }
+
+    private static func summaryNoun(fromDoneLabel label: String) -> String {
+        var text = label
+        for prefix in ["Checked ", "Pulled up ", "Looked at "] where text.hasPrefix(prefix) {
+            text = String(text.dropFirst(prefix.count))
+            break
         }
         return text
     }
