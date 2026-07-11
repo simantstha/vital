@@ -145,8 +145,9 @@ struct CoachView: View {
                     .lineLimit(1...5)
                     .padding(.vertical, Theme.Spacing.sm)
                     // While recording, the field mirrors the live transcript —
-                    // typing over it would fight the mic.
-                    .disabled(vm.transcriber.isRecording)
+                    // typing over it would fight the mic. Also disabled while
+                    // the recorded clip is being transcribed.
+                    .disabled(vm.transcriber.isRecording || vm.isTranscribing)
                     .onSubmit {
                         vm.send()
                     }
@@ -180,16 +181,19 @@ struct CoachView: View {
         !vm.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !vm.isStreaming
             && !vm.transcriber.isRecording
+            && !vm.isTranscribing
     }
 
     // MARK: - Mic button
 
-    /// Tap-to-talk: authorized → toggle recording (tap again stops and
-    /// sends); not yet asked → request permission only — recording starts on
-    /// the next tap, never in the same instant the grant lands (starting the
-    /// audio engine while the audio server is still spinning up after a
-    /// first-time grant can abort inside AudioToolbox; LogMeal's two-step
-    /// flow avoids this); denied → surface the inline Settings hint.
+    /// Tap-to-talk, three states: idle → recording (tap again stops, or a
+    /// watchdog auto-stops on silence/timeout) → transcribing (spinner,
+    /// disabled, while the cloud upload resolves). Not yet asked → request
+    /// permission only — recording starts on the next tap, never in the same
+    /// instant the grant lands (starting the audio engine while the audio
+    /// server is still spinning up after a first-time grant can abort inside
+    /// AudioToolbox; LogMeal's two-step flow avoids this); denied → surface
+    /// the inline Settings hint.
     private var micButton: some View {
         Button {
             switch vm.transcriber.permissionState {
@@ -212,14 +216,20 @@ struct CoachView: View {
                           ? Theme.Colors.alert
                           : Theme.Colors.accent.opacity(0.15))
                     .frame(width: 32, height: 32)
-                Image(systemName: vm.transcriber.isRecording ? "stop.fill" : "mic.fill")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(vm.transcriber.isRecording ? Theme.Colors.onAccent : Theme.Colors.accentContent)
+                if vm.isTranscribing {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .tint(Theme.Colors.accentContent)
+                } else {
+                    Image(systemName: vm.transcriber.isRecording ? "stop.fill" : "mic.fill")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(vm.transcriber.isRecording ? Theme.Colors.onAccent : Theme.Colors.accentContent)
+                }
             }
             .scaleEffect(vm.transcriber.isRecording ? 1.08 : 1.0)
         }
         .buttonStyle(.plain)
-        .disabled(vm.isStreaming && !vm.transcriber.isRecording)
+        .disabled((vm.isStreaming && !vm.transcriber.isRecording) || vm.isTranscribing)
         .animation(.easeInOut(duration: 0.4).repeatForever(autoreverses: true), value: vm.transcriber.isRecording)
     }
 
