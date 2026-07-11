@@ -32,10 +32,6 @@ final class ProfileViewModel: ObservableObject {
     @Published var isLoading = true
     @Published var errorMessage: String? = nil
 
-    // Kept as the existing UI-facing aggregate until the profile view is split
-    // into separate sections.
-    var stats: [ProfileStatCell] { profileDetails + activityStats }
-
     // Diet budget summary for the Nutrition entry point.
     @Published var budgetKcal: Int?
     @Published var budgetMode: String = "auto"   // "auto" | "custom"
