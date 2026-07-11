@@ -24,6 +24,8 @@ import { db, schema } from '@/db';
 import { eq, and, sql } from 'drizzle-orm';
 import { getUserIdFromRequest } from '@/lib/auth';
 import { getCalibration } from '@/lib/brain/baselines';
+import { readMemoryFile } from '@/lib/memory';
+import { parseProfileDetails } from '@/lib/profileDetails';
 
 export const dynamic = 'force-dynamic';
 
@@ -92,6 +94,7 @@ export async function GET(request: Request): Promise<NextResponse> {
   const avgHrv = Number.isFinite(avgHrvRaw) ? Math.round(avgHrvRaw * 10) / 10 : null;
 
   const workouts = Math.round(Number(aggRow.workouts ?? 0));
+  const profile = parseProfileDetails(readMemoryFile(userId, 'core-profile.md'));
 
   // ── Response ──────────────────────────────────────────────────────────────
   return NextResponse.json({
@@ -106,6 +109,7 @@ export async function GET(request: Request): Promise<NextResponse> {
       avgHrv,
       workouts,
     },
+    profile,
     calibration,
   });
 }
