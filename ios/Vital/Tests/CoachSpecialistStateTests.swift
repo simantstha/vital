@@ -186,7 +186,7 @@ final class CoachSpecialistStateTests: XCTestCase {
         XCTAssertEqual(viewModel.specialistState, .activeConsultation(runningCoach))
         XCTAssertTrue(viewModel.rows.contains {
             guard case .message(let message) = $0 else { return false }
-            return message.role == .system && message.text == "Running Coach joined the conversation."
+            return message.role == .system && message.text == "Running Coach joined."
         })
     }
 

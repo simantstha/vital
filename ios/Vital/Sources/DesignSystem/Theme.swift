@@ -77,12 +77,6 @@ enum Theme {
         /// Identity edge glow stays the manifest cyan in either appearance.
         static let specialistEdgeGlow = Color(red: 0.298, green: 0.788, blue: 0.941)
 
-        /// Quiet fallback surface used when native Liquid Glass is unavailable.
-        static let specialistGlassFill = Color(uiColor: UIColor { tc in
-            tc.userInterfaceStyle == .dark
-                ? UIColor(red: 0.298, green: 0.788, blue: 0.941, alpha: 0.08)
-                : UIColor(red: 0.016, green: 0.494, blue: 0.639, alpha: 0.07)
-        })
     }
 
     // MARK: - Spacing

@@ -557,7 +557,7 @@ final class CoachViewModel: ObservableObject {
         let previous = activePersona
         activePersona = persona
         if previous.id == "vital", persona.id != "vital" {
-            let joinedText = "\(persona.title) joined the conversation."
+            let joinedText = "\(persona.title) joined."
             let alreadyJoined = rows.contains {
                 guard case .message(let message) = $0 else { return false }
                 return message.role == .system && message.text == joinedText

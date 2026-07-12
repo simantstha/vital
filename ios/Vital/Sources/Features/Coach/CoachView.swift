@@ -482,31 +482,17 @@ private extension View {
                     .fill(Theme.Colors.accent)
             )
         } else {
-            if #available(iOS 26.0, *) {
-                glassEffect(
-                    isSpecialist
-                        ? .regular.tint(Theme.Colors.specialistAccent.opacity(0.10))
-                        : .regular,
-                    in: .rect(cornerRadius: Theme.Radius.lg, style: .continuous)
-                )
-                .overlay {
-                    if isSpecialist {
-                        RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
-                            .stroke(Theme.Colors.specialistAccent.opacity(0.42), lineWidth: 0.75)
-                    }
-                }
-            } else {
-                background(
+            glassEffect(
+                isSpecialist
+                    ? .regular.tint(Theme.Colors.specialistAccent.opacity(0.10))
+                    : .regular,
+                in: .rect(cornerRadius: Theme.Radius.lg, style: .continuous)
+            )
+            .overlay {
+                if isSpecialist {
                     RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
-                        .fill(isSpecialist ? Theme.Colors.specialistGlassFill : Theme.Colors.glassFill)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
-                                .strokeBorder(
-                                    isSpecialist ? Theme.Colors.specialistAccent.opacity(0.42) : Theme.Colors.glassBorder,
-                                    lineWidth: 0.75
-                                )
-                        )
-                )
+                        .stroke(Theme.Colors.specialistAccent.opacity(0.42), lineWidth: 0.75)
+                }
             }
         }
     }
@@ -543,6 +529,27 @@ private struct SpecialistHandoffCardView: View {
                 .font(Theme.Typography.bodyMedium)
                 .foregroundStyle(Theme.Colors.textSecondary)
 
+            if card.phase == .returnProposed,
+               let summary = card.returnSummary {
+                let sections = CoachViewPresentation.returnSummarySections(from: summary)
+                if !sections.isEmpty {
+                    VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                        ForEach(sections, id: \.title) { section in
+                            VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
+                                Text(section.title.uppercased())
+                                    .font(.system(size: 9, weight: .bold))
+                                    .tracking(0.7)
+                                    .foregroundStyle(Theme.Colors.specialistAccent)
+                                Text(section.items.joined(separator: " • "))
+                                    .font(Theme.Typography.bodySmall)
+                                    .foregroundStyle(Theme.Colors.textPrimary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    }
+                }
+            }
+
             HStack(spacing: Theme.Spacing.sm) {
                 actionButton(presentation.primaryAction, prominent: true)
                 actionButton(presentation.secondaryAction, prominent: false)
@@ -555,22 +562,15 @@ private struct SpecialistHandoffCardView: View {
 
     @ViewBuilder
     private func actionButton(_ action: CoachViewPresentation.CardAction, prominent: Bool) -> some View {
-        if #available(iOS 26.0, *) {
-            if prominent {
-                Button(action.title) { perform(action) }
-                    .buttonStyle(.glassProminent)
-                    .tint(Theme.Colors.specialistAccent)
-                    .disabled(!action.isEnabled)
-            } else {
-                Button(action.title) { perform(action) }
-                    .buttonStyle(.glass)
-                    .tint(Theme.Colors.textSecondary)
-                    .disabled(!action.isEnabled)
-            }
+        if prominent {
+            Button(action.title) { perform(action) }
+                .buttonStyle(.glassProminent)
+                .tint(Theme.Colors.specialistAccent)
+                .disabled(!action.isEnabled)
         } else {
             Button(action.title) { perform(action) }
-                .buttonStyle(.borderedProminent)
-                .tint(prominent ? Theme.Colors.specialistAccent : Theme.Colors.textSecondary)
+                .buttonStyle(.glass)
+                .tint(Theme.Colors.textSecondary)
                 .disabled(!action.isEnabled)
         }
     }
@@ -600,27 +600,15 @@ private struct JoinedSystemRowView: View {
 }
 
 private extension View {
-    @ViewBuilder
     func specialistCardSurface() -> some View {
-        if #available(iOS 26.0, *) {
-            glassEffect(
-                .regular.tint(Theme.Colors.specialistAccent.opacity(0.10)),
-                in: .rect(cornerRadius: Theme.Radius.xl, style: .continuous)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: Theme.Radius.xl, style: .continuous)
-                    .stroke(Theme.Colors.specialistAccent.opacity(0.48), lineWidth: 0.75)
-            )
-        } else {
-            background(
-                RoundedRectangle(cornerRadius: Theme.Radius.xl, style: .continuous)
-                    .fill(Theme.Colors.specialistGlassFill)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: Theme.Radius.xl, style: .continuous)
-                            .strokeBorder(Theme.Colors.specialistAccent.opacity(0.48), lineWidth: 0.75)
-                    )
-            )
-        }
+        glassEffect(
+            .regular.tint(Theme.Colors.specialistAccent.opacity(0.10)),
+            in: .rect(cornerRadius: Theme.Radius.xl, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.Radius.xl, style: .continuous)
+                .stroke(Theme.Colors.specialistAccent.opacity(0.48), lineWidth: 0.75)
+        )
     }
 }
 
@@ -651,6 +639,11 @@ enum CoachViewPresentation {
         let speakerLabel: String
         let bubbleLabel: String?
         let accentHex: String
+    }
+
+    struct ReturnSummarySection: Equatable {
+        let title: String
+        let items: [String]
     }
 
     static func header(for persona: CoachPersonaSnapshot) -> Header {
@@ -714,7 +707,29 @@ enum CoachViewPresentation {
     }
 
     static func joinedSystemRowText(for persona: CoachPersonaSnapshot) -> String {
-        "\(persona.title) joined the conversation."
+        "\(persona.title) joined."
+    }
+
+    static func returnSummarySections(from summary: JSONValue) -> [ReturnSummarySection] {
+        guard case .object(let object) = summary else { return [] }
+        let categories = [
+            (key: "outcomes", title: "Outcomes"),
+            (key: "decisions", title: "Decisions"),
+            (key: "recommendations", title: "Recommendations"),
+            (key: "unresolvedRisks", title: "Unresolved risks"),
+            (key: "nextSteps", title: "Next steps"),
+        ]
+
+        return categories.compactMap { category in
+            guard case .array(let values) = object[category.key] else { return nil }
+            let items = values.compactMap { value -> String? in
+                guard case .string(let text) = value else { return nil }
+                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : trimmed
+            }
+            guard !items.isEmpty else { return nil }
+            return ReturnSummarySection(title: category.title, items: items)
+        }
     }
 
     static func messageBubble(for message: ChatMessage) -> Bubble {

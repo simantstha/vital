@@ -60,7 +60,46 @@ final class CoachSpecialistViewTests: XCTestCase {
     func testJoinedSystemRowTextUsesSpecialistTitle() {
         XCTAssertEqual(
             CoachViewPresentation.joinedSystemRowText(for: runningCoach),
-            "Running Coach joined the conversation."
+            "Running Coach joined."
+        )
+    }
+
+    func testReturnSummaryRendersEveryCategoryInDeterministicCompactOrder() {
+        let summary: JSONValue = .object([
+            "nextSteps": .array([.string("Check in next week")]),
+            "unresolvedRisks": .array([.string("Watch the soreness response")]),
+            "recommendations": .array([.string("Keep easy runs conversational")]),
+            "decisions": .array([.string("Run three times")]),
+            "outcomes": .array([.string("Training week planned")]),
+        ])
+
+        XCTAssertEqual(
+            CoachViewPresentation.returnSummarySections(from: summary),
+            [
+                .init(title: "Outcomes", items: ["Training week planned"]),
+                .init(title: "Decisions", items: ["Run three times"]),
+                .init(title: "Recommendations", items: ["Keep easy runs conversational"]),
+                .init(title: "Unresolved risks", items: ["Watch the soreness response"]),
+                .init(title: "Next steps", items: ["Check in next week"]),
+            ]
+        )
+    }
+
+    func testReturnSummaryOmitsEmptyAndMalformedCategories() {
+        let summary: JSONValue = .object([
+            "outcomes": .array([.string("  Week planned  "), .string(" ")]),
+            "decisions": .string("not an array"),
+            "recommendations": .array([]),
+            "unresolvedRisks": .array([.int(4)]),
+            "nextSteps": .array([.string("Review after the long run")]),
+        ])
+
+        XCTAssertEqual(
+            CoachViewPresentation.returnSummarySections(from: summary),
+            [
+                .init(title: "Outcomes", items: ["Week planned"]),
+                .init(title: "Next steps", items: ["Review after the long run"]),
+            ]
         )
     }
 
@@ -98,7 +137,6 @@ final class CoachSpecialistViewTests: XCTestCase {
         let darkTraits = UITraitCollection(userInterfaceStyle: .dark)
         let accent = UIColor(Theme.Colors.specialistAccent)
         let edgeGlow = UIColor(Theme.Colors.specialistEdgeGlow)
-        let glassFill = UIColor(Theme.Colors.specialistGlassFill)
 
         XCTAssertNotEqual(
             accent.resolvedColor(with: lightTraits),
@@ -107,10 +145,6 @@ final class CoachSpecialistViewTests: XCTestCase {
         XCTAssertEqual(
             edgeGlow.resolvedColor(with: lightTraits),
             edgeGlow.resolvedColor(with: darkTraits)
-        )
-        XCTAssertNotEqual(
-            glassFill.resolvedColor(with: lightTraits),
-            glassFill.resolvedColor(with: darkTraits)
         )
     }
 
