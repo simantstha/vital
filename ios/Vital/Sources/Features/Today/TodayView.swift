@@ -56,7 +56,12 @@ struct TodayView: View {
         }
         .toast(message: $vm.toastMessage)
         .sheet(isPresented: $showLogSheet) {
-            LogMealView()
+            VitalSheet(detents: [.large]) {
+                DietSheetView(
+                    initialTarget: vm.diet.kcalTarget,
+                    onRefreshToday: { Task { await vm.loadHealthData() } }
+                )
+            }
         }
         .sheet(isPresented: $showAddItem) {
             VitalSheet(detents: [.medium]) {
