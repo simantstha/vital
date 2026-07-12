@@ -4,7 +4,7 @@ import { classifyApnsResponse, type CoachAnalysis, type PushDevice, type PushOut
 
 export interface ApnsConfig { keyId: string; teamId: string; topic: string; privateKey: string }
 export interface ApnsTransport { request(origin: string, headers: Record<string, string>, body: string): Promise<{ status: number; body: string; latencyMs: number }> }
-export type ApnsRoute = { type: 'workout_analysis' | 'sleep_analysis'; id: string } | { type: 'morning_brief' };
+export type ApnsRoute = { type: 'workout_analysis' | 'sleep_analysis'; id: string; deepLink: string } | { type: 'morning_brief'; deepLink: string };
 
 function base64url(value: string | Buffer): string { return Buffer.from(value).toString('base64url'); }
 

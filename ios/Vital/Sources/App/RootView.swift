@@ -35,7 +35,7 @@ struct RootView: View {
                         // scratch every time this runs; no-op if permission
                         // hasn't been granted.
                         await ReminderScheduler.shared.resync()
-                        await PushNotificationService.shared.syncPreferences(.current())
+                        await PushNotificationService.shared.hydratePreferences()
                     }
             }
         }
@@ -49,7 +49,7 @@ struct RootView: View {
                 await NotificationManager.shared.refreshPermissionState()
                 await ReminderScheduler.shared.resync()
                 if authViewModel.isAuthenticated {
-                    await PushNotificationService.shared.syncPreferences(.current())
+                    await PushNotificationService.shared.hydratePreferences()
                 }
             }
         }

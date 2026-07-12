@@ -186,7 +186,7 @@ extension NotificationManager: UNUserNotificationCenterDelegate {
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
         let info = notification.request.content.userInfo
-        Task { @MainActor in AppRouter.shared.handle(info) }
+        Task { @MainActor in NotificationDelegateRouter.route(info) }
         completionHandler([.banner, .sound])
     }
 
@@ -196,7 +196,7 @@ extension NotificationManager: UNUserNotificationCenterDelegate {
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
         let info = response.notification.request.content.userInfo
-        Task { @MainActor in AppRouter.shared.handle(info) }
+        Task { @MainActor in NotificationDelegateRouter.route(info) }
         completionHandler()
     }
 }

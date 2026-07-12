@@ -51,5 +51,7 @@
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
 	</array>
+	<key>VitalAPNSEnvironment</key>
+	<string>$(APS_ENVIRONMENT)</string>
 </dict>
 </plist>

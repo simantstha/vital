@@ -120,6 +120,8 @@ final class AuthViewModel: ObservableObject {
         let token = KeychainStore.loadSessionToken()
         Task { await PushNotificationService.shared.invalidate(sessionToken: token) }
         KeychainStore.deleteSessionToken()
+        AppRouter.shared.resetSession()
+        PushNotificationService.shared.resetSession()
         isAuthenticated = false
         onboarded = false
         UserDefaults.standard.removeObject(forKey: Keys.onboarded)
@@ -143,8 +145,9 @@ final class AuthViewModel: ObservableObject {
             onboarded = auth.onboarded
             UserDefaults.standard.set(auth.onboarded, forKey: Keys.onboarded)
             isAuthenticated = true
+            AppRouter.shared.activateSession(token: auth.token)
             UIApplication.shared.registerForRemoteNotifications()
-            await PushNotificationService.shared.syncPreferences(.current())
+            await PushNotificationService.shared.hydratePreferences()
         } catch {
             errorMessage = "Sign-in failed: \(error.localizedDescription)"
         }

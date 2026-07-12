@@ -24,8 +24,8 @@ test('includes only the public route type and analysis id', async () => {
   let body = '';
   const transport: ApnsTransport = { async request(_origin, _headers, value) { body = value; return { status: 200, body: '', latencyMs: 1 }; } };
   const client = new ApnsClient({ keyId: 'K', teamId: 'T', topic: 'com.vital.app', privateKey }, transport);
-  await client.send({ id: 'device', token: 'secret', environment: 'sandbox' }, result, { type: 'workout_analysis', id: 'public-id' });
-  assert.deepEqual(JSON.parse(body), { aps: { alert: { title: 'Ready', body: 'Your update is ready.' }, sound: 'default' }, type: 'workout_analysis', id: 'public-id' });
+  await client.send({ id: 'device', token: 'secret', environment: 'sandbox' }, result, { type: 'workout_analysis', id: 'public-id', deepLink: 'vital://workout-analysis/public-id' });
+  assert.deepEqual(JSON.parse(body), { aps: { alert: { title: 'Ready', body: 'Your update is ready.' }, sound: 'default' }, type: 'workout_analysis', id: 'public-id', deepLink: 'vital://workout-analysis/public-id' });
 });
 
 test('classifies transport failures as retryable without exposing the token', async () => {
