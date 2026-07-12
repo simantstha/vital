@@ -27,14 +27,13 @@
  */
 
 import { NextResponse } from 'next/server';
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, ne, sql } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import { getUserIdFromRequest } from '@/lib/auth';
 import { recomputeBaselines } from '@/lib/brain/baselines';
 import {
-  reconcileWorkouts,
+  reconcilePersistedWorkouts,
   sleepAnalysisCandidate,
-  type HealthKitWorkout,
 } from '@/lib/healthAnalysisReconciliation';
 
 const MAX_DAYS_PER_REQUEST = 60;
@@ -178,28 +177,34 @@ export async function POST(request: Request): Promise<NextResponse> {
 
   try {
     const workoutDays = days.filter((day) => day.workouts !== undefined);
-    const previousWorkoutRows = workoutDays.length === 0
-      ? []
-      : await db
-        .select({ date: schema.daily_metrics.date, payload: schema.daily_metrics.payload })
-        .from(schema.daily_metrics)
-        .where(and(
-          eq(schema.daily_metrics.user_id, userId),
-          eq(schema.daily_metrics.metric, 'workouts'),
-          inArray(schema.daily_metrics.date, workoutDays.map((day) => day.date)),
-        ));
-    const previousWorkoutsByDate = new Map(
-      previousWorkoutRows.map((row) => [
-        row.date,
-        Array.isArray(row.payload) ? row.payload as HealthKitWorkout[] : [],
-      ]),
-    );
-    const workoutReconciliations = workoutDays.map((day) => ({
-      day,
-      ...reconcileWorkouts(previousWorkoutsByDate.get(day.date) ?? [], day.workouts ?? []),
-    }));
 
     await db.transaction(async (tx) => {
+      // Serialize each user's ingest transactions so daily source rows and queue
+      // rows cannot be reconciled from different concurrent snapshots.
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${userId}, 0))`);
+
+      const persistedWorkoutRows = workoutDays.length === 0
+        ? []
+        : await tx
+          .select({
+            hkUuid: schema.workout_analyses.hk_uuid,
+            workoutDate: schema.workout_analyses.workout_date,
+            contentFingerprint: schema.workout_analyses.content_fingerprint,
+            status: schema.workout_analyses.status,
+          })
+          .from(schema.workout_analyses)
+          .where(and(
+            eq(schema.workout_analyses.user_id, userId),
+            inArray(schema.workout_analyses.workout_date, workoutDays.map((day) => day.date)),
+          ));
+      const workoutReconciliation = reconcilePersistedWorkouts(
+        persistedWorkoutRows,
+        workoutDays.flatMap((day) => (day.workouts ?? []).map((workout) => ({
+          workoutDate: day.date,
+          workout,
+        }))),
+      );
+
       await tx
         .insert(schema.daily_metrics)
         .values(rows)
@@ -213,15 +218,12 @@ export async function POST(request: Request): Promise<NextResponse> {
           },
         });
 
-      const removedHkUuids = Array.from(new Set(
-        workoutReconciliations.flatMap((entry) => entry.removedHkUuids),
-      ));
+      const removedHkUuids = workoutReconciliation.removedHkUuids;
       if (removedHkUuids.length > 0) {
         await tx.update(schema.workout_analyses).set({
           status: 'deleted',
           deleted_at: receivedAt,
           lease_expires_at: null,
-          notification_state: 'suppressed',
           updated_at: receivedAt,
         }).where(and(
           eq(schema.workout_analyses.user_id, userId),
@@ -230,31 +232,29 @@ export async function POST(request: Request): Promise<NextResponse> {
       }
 
       // Upserts follow removals so a workout moved between included dates ends active.
-      for (const reconciliation of workoutReconciliations) {
-        for (const entry of reconciliation.upserts) {
-          await tx.insert(schema.workout_analyses).values({
-            user_id: userId,
-            hk_uuid: entry.workout.hkUuid,
-            workout_date: reconciliation.day.date,
+      for (const entry of workoutReconciliation.upserts) {
+        await tx.insert(schema.workout_analyses).values({
+          user_id: userId,
+          hk_uuid: entry.workout.hkUuid,
+          workout_date: entry.workoutDate,
+          content_fingerprint: entry.fingerprint,
+          input_payload: entry.workout,
+        }).onConflictDoUpdate({
+          target: [schema.workout_analyses.user_id, schema.workout_analyses.hk_uuid],
+          set: {
+            workout_date: entry.workoutDate,
             content_fingerprint: entry.fingerprint,
             input_payload: entry.workout,
-          }).onConflictDoUpdate({
-            target: [schema.workout_analyses.user_id, schema.workout_analyses.hk_uuid],
-            set: {
-              workout_date: reconciliation.day.date,
-              content_fingerprint: entry.fingerprint,
-              input_payload: entry.workout,
-              status: 'pending',
-              retry_count: 0,
-              next_attempt_at: receivedAt,
-              lease_expires_at: null,
-              result: null,
-              deleted_at: null,
-              updated_at: receivedAt,
-              notification_state: sql`case when ${schema.workout_analyses.notification_state} = 'sent' then 'sent' else 'pending' end`,
-            },
-          });
-        }
+            status: 'pending',
+            retry_count: 0,
+            next_attempt_at: receivedAt,
+            lease_expires_at: null,
+            result: null,
+            deleted_at: null,
+            updated_at: receivedAt,
+            notification_state: sql`case when ${schema.workout_analyses.notification_sent_at} is not null or ${schema.workout_analyses.notification_state} = 'sent' then 'sent' else 'pending' end`,
+          },
+        });
       }
 
       for (const day of days.filter((candidate) => candidate.sleep !== undefined)) {
@@ -279,8 +279,9 @@ export async function POST(request: Request): Promise<NextResponse> {
             lease_expires_at: null,
             result: null,
             updated_at: receivedAt,
-            notification_state: sql`case when ${schema.sleep_analyses.notification_state} = 'sent' then 'sent' else 'pending' end`,
+            notification_state: sql`case when ${schema.sleep_analyses.notification_sent_at} is not null or ${schema.sleep_analyses.notification_state} = 'sent' then 'sent' else 'pending' end`,
           },
+          setWhere: ne(schema.sleep_analyses.content_fingerprint, candidate.fingerprint),
         });
       }
     });
