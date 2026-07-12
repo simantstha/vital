@@ -19,6 +19,17 @@ struct CoachView: View {
         _vm = StateObject(wrappedValue: CoachViewModel(mode: mode))
     }
 
+    /// Used by `RootTabView`, which owns a single `CoachViewModel` shared
+    /// with Today's voice FAB — so a transcript sent from Today
+    /// (`CoachViewModel.sendExternalVoiceTranscript`) lands in the exact same
+    /// thread the user sees here. `StateObject(wrappedValue:)` is safe with
+    /// an externally-owned instance as long as the same instance is passed
+    /// on every re-init, which it is here (`coachVM` is itself a
+    /// `@StateObject` on `RootTabView`, stable across re-renders).
+    init(vm: CoachViewModel) {
+        _vm = StateObject(wrappedValue: vm)
+    }
+
     var body: some View {
         ZStack {
             Theme.Colors.canvas.ignoresSafeArea()

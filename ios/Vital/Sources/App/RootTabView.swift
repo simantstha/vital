@@ -27,13 +27,23 @@ struct RootTabView: View {
 
     @State private var selected: Tab = .today
 
+    /// Owned here (not by `CoachView`) so Today's voice FAB can send a
+    /// transcript into the same conversation the Coach tab renders — see
+    /// `CoachView.init(vm:)` and `CoachViewModel.sendExternalVoiceTranscript`.
+    /// Lifting this was flagged in the Phase 0/1 changelog entries in
+    /// `docs/redesign-v3-plan.md` as the mechanism Phase 4 would need.
+    @StateObject private var coachVM = CoachViewModel()
+
     var body: some View {
         ZStack(alignment: .bottom) {
             TabView(selection: $selected) {
-                TodayView()
+                TodayView(
+                    coachVM: coachVM,
+                    switchToCoachTab: { withAnimation(.easeInOut(duration: 0.25)) { selected = .coach } }
+                )
                     .tag(Tab.today)
 
-                CoachView()
+                CoachView(vm: coachVM)
                     .tag(Tab.coach)
 
                 TrendsView()
