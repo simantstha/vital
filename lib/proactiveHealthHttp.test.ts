@@ -11,7 +11,7 @@ import {
 
 function repository(overrides: Partial<ProactiveHealthRepository> = {}): ProactiveHealthRepository {
   return {
-    async registerPushDevice() {},
+    async registerPushDevice() { return 'registered'; },
     async invalidatePushDevice() { return false; },
     async getNotificationPreferences() { return null; },
     async putNotificationPreferences(_userId, preferences) { return preferences; },
@@ -42,26 +42,40 @@ test('push registration is authenticated, validated, idempotent, and never retur
   const handlers = createPushDevicesHttpHandlers({
     authenticate,
     repository: repository({
-      async registerPushDevice(userId, device) { registrations.push({ userId, ...device }); },
+      async registerPushDevice(userId, device) { registrations.push({ userId, ...device }); return 'registered'; },
     }),
   });
   assert.equal((await handlers.POST(request('/api/push-devices', 'POST', {}))).status, 401);
   for (const body of [
     { installationId: '', token: 'token', environment: 'sandbox' },
-    { installationId: 'install', token: '', environment: 'sandbox' },
-    { installationId: 'install', token: 'token', environment: 'other' },
+    { installationId: '11111111-1111-4111-8111-111111111111', token: '', environment: 'sandbox' },
+    { installationId: '11111111-1111-4111-8111-111111111111', token: 'a'.repeat(64), environment: 'other' },
+    { installationId: 'not-a-uuid', token: 'a'.repeat(64), environment: 'sandbox' },
+    { installationId: '11111111-1111-4111-8111-111111111111', token: 'not-hex', environment: 'sandbox' },
   ]) assert.equal((await handlers.POST(request('/api/push-devices', 'POST', body, 'user-a'))).status, 400);
 
-  const valid = { installationId: ' install-1 ', token: ' token-secret ', environment: 'sandbox' };
+  const valid = { installationId: '11111111-1111-4111-8111-111111111111', token: 'A'.repeat(64), environment: 'sandbox' };
   const first = await handlers.POST(request('/api/push-devices', 'POST', valid, 'user-a'));
   const second = await handlers.POST(request('/api/push-devices', 'POST', valid, 'user-a'));
   assert.equal(first.status, 200);
   assert.equal(second.status, 200);
   assert.deepEqual(registrations, [
-    { userId: 'user-a', installationId: 'install-1', token: 'token-secret', environment: 'sandbox' },
-    { userId: 'user-a', installationId: 'install-1', token: 'token-secret', environment: 'sandbox' },
+    { userId: 'user-a', installationId: valid.installationId, token: 'a'.repeat(64), environment: 'sandbox' },
+    { userId: 'user-a', installationId: valid.installationId, token: 'a'.repeat(64), environment: 'sandbox' },
   ]);
-  assert.deepEqual(await first.json(), { installationId: 'install-1', environment: 'sandbox' });
+  assert.deepEqual(await first.json(), { installationId: valid.installationId, environment: 'sandbox' });
+});
+
+test('push registration maps ownership conflicts to a fixed public 409', async () => {
+  const handlers = createPushDevicesHttpHandlers({
+    authenticate,
+    repository: repository({ async registerPushDevice() { return 'conflict'; } }),
+  });
+  const response = await handlers.POST(request('/api/push-devices', 'POST', {
+    installationId: '11111111-1111-4111-8111-111111111111', token: 'a'.repeat(64), environment: 'sandbox',
+  }, 'user-b'));
+  assert.equal(response.status, 409);
+  assert.deepEqual(await response.json(), { error: 'Device registration conflicts with another account.' });
 });
 
 test('push invalidation scopes the installation to the authenticated user', async () => {
@@ -72,9 +86,10 @@ test('push invalidation scopes the installation to the authenticated user', asyn
       async invalidatePushDevice(userId, installationId) { calls.push([userId, installationId]); return true; },
     }),
   });
-  const response = await handlers.DELETE(request('/api/push-devices', 'DELETE', { installationId: 'install-1' }, 'user-b'));
+  const installationId = '11111111-1111-4111-8111-111111111111';
+  const response = await handlers.DELETE(request('/api/push-devices', 'DELETE', { installationId }, 'user-b'));
   assert.equal(response.status, 204);
-  assert.deepEqual(calls, [['user-b', 'install-1']]);
+  assert.deepEqual(calls, [['user-b', installationId]]);
   assert.equal((await handlers.DELETE(request('/api/push-devices', 'DELETE', {}, 'user-b'))).status, 400);
 });
 
@@ -112,7 +127,7 @@ test('notification preferences return defaults and PUT validates all fields and 
 
 test('analysis GET returns only an authenticated user ready non-deleted public DTO', async () => {
   const record: AnalysisRecord = {
-    id: 'analysis-1', userId: 'user-a', status: 'ready', deletedAt: null,
+    id: '11111111-1111-4111-8111-111111111111', userId: 'user-a', status: 'ready', deletedAt: null,
     date: '2026-07-12', result: { summary: 'Good run' }, createdAt: new Date('2026-07-12T12:00:00Z'),
   };
   const seen: string[][] = [];
@@ -123,16 +138,19 @@ test('analysis GET returns only an authenticated user ready non-deleted public D
       async getAnalysis(kind, userId, id) { seen.push([kind, userId, id]); return record; },
     }),
   });
-  assert.equal((await handler.GET(request('/api/workout-analyses/analysis-1'), { params: Promise.resolve({ id: 'analysis-1' }) })).status, 401);
-  const response = await handler.GET(request('/api/workout-analyses/analysis-1', 'GET', undefined, 'user-a'), { params: Promise.resolve({ id: 'analysis-1' }) });
+  assert.equal((await handler.GET(request('/api/workout-analyses/x'), { params: Promise.resolve({ id: 'x' }) })).status, 401);
+  const invalid = await handler.GET(request('/api/workout-analyses/x', 'GET', undefined, 'user-a'), { params: Promise.resolve({ id: 'x' }) });
+  assert.equal(invalid.status, 400);
+  assert.deepEqual(seen, []);
+  const response = await handler.GET(request(`/api/workout-analyses/${record.id}`, 'GET', undefined, 'user-a'), { params: Promise.resolve({ id: record.id }) });
   assert.equal(response.status, 200);
-  assert.deepEqual(seen, [['workout', 'user-a', 'analysis-1']]);
+  assert.deepEqual(seen, [['workout', 'user-a', record.id]]);
   assert.deepEqual(await response.json(), {
-    id: 'analysis-1', date: '2026-07-12', result: { summary: 'Good run' }, createdAt: '2026-07-12T12:00:00.000Z',
+    id: record.id, date: '2026-07-12', result: { summary: 'Good run' }, createdAt: '2026-07-12T12:00:00.000Z',
   });
 
   for (const hidden of [null, { ...record, userId: 'user-b' }, { ...record, status: 'processing' }, { ...record, deletedAt: new Date() }]) {
     const hiddenHandler = createAnalysisHttpHandler({ authenticate, kind: 'sleep', repository: repository({ async getAnalysis() { return hidden; } }) });
-    assert.equal((await hiddenHandler.GET(request('/api/sleep-analyses/x', 'GET', undefined, 'user-a'), { params: Promise.resolve({ id: 'x' }) })).status, 404);
+    assert.equal((await hiddenHandler.GET(request(`/api/sleep-analyses/${record.id}`, 'GET', undefined, 'user-a'), { params: Promise.resolve({ id: record.id }) })).status, 404);
   }
 });

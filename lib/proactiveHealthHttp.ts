@@ -27,7 +27,7 @@ export interface AnalysisRecord {
 export type AnalysisKind = 'workout' | 'sleep';
 
 export interface ProactiveHealthRepository {
-  registerPushDevice(userId: string, device: PushDeviceRegistration): Promise<void>;
+  registerPushDevice(userId: string, device: PushDeviceRegistration): Promise<'registered' | 'conflict'>;
   invalidatePushDevice(userId: string, installationId: string): Promise<boolean>;
   getNotificationPreferences(userId: string): Promise<NotificationPreferences | null>;
   putNotificationPreferences(
@@ -53,8 +53,8 @@ export const DEFAULT_NOTIFICATION_PREFERENCES: NotificationPreferences = {
 function authenticate(request: Request, dependencies: HttpDependencies): string | Response {
   try {
     return dependencies.authenticate(request);
-  } catch (error) {
-    return Response.json({ error: String(error) }, { status: 401 });
+  } catch {
+    return Response.json({ error: 'Unauthorized.' }, { status: 401 });
   }
 }
 
@@ -74,9 +74,18 @@ function nonEmptyString(value: unknown): string | null {
   return trimmed ? trimmed : null;
 }
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const APNS_TOKEN_PATTERN = /^[0-9a-f]{64}$/i;
+
+function uuid(value: unknown): string | null {
+  const parsed = nonEmptyString(value);
+  return parsed && UUID_PATTERN.test(parsed) ? parsed.toLowerCase() : null;
+}
+
 function parsePushDevice(body: Record<string, unknown>): PushDeviceRegistration | null {
-  const installationId = nonEmptyString(body.installationId);
-  const token = nonEmptyString(body.token);
+  const installationId = uuid(body.installationId);
+  const rawToken = nonEmptyString(body.token);
+  const token = rawToken && APNS_TOKEN_PATTERN.test(rawToken) ? rawToken.toLowerCase() : null;
   const environment = body.environment;
   if (!installationId || !token || (environment !== 'sandbox' && environment !== 'production')) return null;
   return { installationId, token, environment };
@@ -127,7 +136,13 @@ export function createPushDevicesHttpHandlers(dependencies: HttpDependencies) {
       if (body instanceof Response) return body;
       const device = parsePushDevice(body);
       if (!device) return Response.json({ error: 'Invalid push device registration.' }, { status: 400 });
-      await dependencies.repository.registerPushDevice(userId, device);
+      const result = await dependencies.repository.registerPushDevice(userId, device);
+      if (result === 'conflict') {
+        return Response.json(
+          { error: 'Device registration conflicts with another account.' },
+          { status: 409 },
+        );
+      }
       return Response.json({ installationId: device.installationId, environment: device.environment });
     },
 
@@ -136,7 +151,7 @@ export function createPushDevicesHttpHandlers(dependencies: HttpDependencies) {
       if (userId instanceof Response) return userId;
       const body = await jsonObject(request);
       if (body instanceof Response) return body;
-      const installationId = nonEmptyString(body.installationId);
+      const installationId = uuid(body.installationId);
       if (!installationId) return Response.json({ error: 'installationId is required.' }, { status: 400 });
       await dependencies.repository.invalidatePushDevice(userId, installationId);
       return new Response(null, { status: 204 });
@@ -176,6 +191,7 @@ export function createAnalysisHttpHandler(
       const userId = authenticate(request, dependencies);
       if (userId instanceof Response) return userId;
       const { id } = await context.params;
+      if (!uuid(id)) return Response.json({ error: 'Invalid analysis id.' }, { status: 400 });
       const analysis = id
         ? await dependencies.repository.getAnalysis(dependencies.kind, userId, id)
         : null;

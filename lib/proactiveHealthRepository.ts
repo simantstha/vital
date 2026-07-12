@@ -1,4 +1,4 @@
-import { and, eq, isNull, ne } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import type {
   AnalysisKind,
@@ -7,6 +7,10 @@ import type {
   ProactiveHealthRepository,
   PushDeviceRegistration,
 } from './proactiveHealthHttp';
+import {
+  reconcilePushDeviceRegistration,
+  type PushDeviceRow,
+} from './pushDeviceReconciliation';
 
 function preferencesDto(row: typeof schema.notification_preferences.$inferSelect): NotificationPreferences {
   return {
@@ -19,28 +23,64 @@ function preferencesDto(row: typeof schema.notification_preferences.$inferSelect
 }
 
 export const proactiveHealthRepository: ProactiveHealthRepository = {
-  async registerPushDevice(userId: string, device: PushDeviceRegistration): Promise<void> {
-    await db.transaction(async (tx) => {
-      await tx.delete(schema.push_devices).where(and(
-        eq(schema.push_devices.device_token, device.token),
-        eq(schema.push_devices.environment, device.environment),
-        ne(schema.push_devices.installation_id, device.installationId),
-      ));
-      await tx.insert(schema.push_devices).values({
-        user_id: userId,
-        installation_id: device.installationId,
-        device_token: device.token,
-        environment: device.environment,
-      }).onConflictDoUpdate({
-        target: schema.push_devices.installation_id,
-        set: {
-          user_id: userId,
-          device_token: device.token,
-          environment: device.environment,
-          invalidated_at: null,
-          updated_at: new Date(),
+  async registerPushDevice(userId: string, device: PushDeviceRegistration) {
+    return db.transaction(async (tx) => {
+      const lockKeys = [
+        `installation:${device.installationId}`,
+        `token:${device.environment}:${device.token}`,
+      ].sort();
+      for (const key of lockKeys) {
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${key}, 0))`);
+      }
+      const selectRow = {
+        id: schema.push_devices.id,
+        userId: schema.push_devices.user_id,
+        installationId: schema.push_devices.installation_id,
+        token: schema.push_devices.device_token,
+        environment: schema.push_devices.environment,
+        invalidatedAt: schema.push_devices.invalidated_at,
+        updatedAt: schema.push_devices.updated_at,
+      };
+      return reconcilePushDeviceRegistration({
+        async findByInstallationId(installationId) {
+          const [row] = await tx.select(selectRow).from(schema.push_devices)
+            .where(eq(schema.push_devices.installation_id, installationId)).limit(1).for('update');
+          return row ?? null;
         },
-      });
+        async findByToken(token, environment) {
+          const [row] = await tx.select(selectRow).from(schema.push_devices).where(and(
+            eq(schema.push_devices.device_token, token),
+            eq(schema.push_devices.environment, environment),
+          )).limit(1).for('update');
+          return row ?? null;
+        },
+        async retire(row: PushDeviceRow, retiredToken, now) {
+          await tx.update(schema.push_devices).set({
+            device_token: retiredToken,
+            invalidated_at: now,
+            updated_at: now,
+          }).where(eq(schema.push_devices.id, row.id));
+        },
+        async update(row: PushDeviceRow, token, environment, now) {
+          await tx.update(schema.push_devices).set({
+            device_token: token,
+            environment,
+            invalidated_at: null,
+            updated_at: now,
+          }).where(and(
+            eq(schema.push_devices.id, row.id),
+            eq(schema.push_devices.user_id, userId),
+          ));
+        },
+        async insert(ownerId, installationId, token, environment) {
+          await tx.insert(schema.push_devices).values({
+            user_id: ownerId,
+            installation_id: installationId,
+            device_token: token,
+            environment,
+          });
+        },
+      }, userId, device, new Date());
     });
   },
 
