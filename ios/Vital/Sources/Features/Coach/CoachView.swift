@@ -578,6 +578,7 @@ private struct SpecialistHandoffCardView: View {
 
 private struct JoinedSystemRowView: View {
     let text: String
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
         HStack(spacing: Theme.Spacing.sm) {
@@ -589,7 +590,9 @@ private struct JoinedSystemRowView: View {
             Text(text)
                 .font(Theme.Typography.labelSmall)
                 .foregroundStyle(Theme.Colors.textSecondary)
-                .fixedSize(horizontal: false, vertical: true)
+                .lineLimit(CoachViewPresentation.joinedSystemRowLineLimit(for: dynamicTypeSize))
+                .layoutPriority(1)
+                .fixedSize(horizontal: !dynamicTypeSize.isAccessibilitySize, vertical: true)
             Rectangle()
                 .fill(Theme.Colors.specialistAccent.opacity(0.55))
                 .frame(height: 1)
@@ -708,6 +711,10 @@ enum CoachViewPresentation {
 
     static func joinedSystemRowText(for persona: CoachPersonaSnapshot) -> String {
         "\(persona.title) joined."
+    }
+
+    static func joinedSystemRowLineLimit(for dynamicTypeSize: DynamicTypeSize) -> Int? {
+        dynamicTypeSize.isAccessibilitySize ? nil : 1
     }
 
     static func returnSummarySections(from summary: JSONValue) -> [ReturnSummarySection] {

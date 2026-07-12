@@ -64,6 +64,16 @@ final class CoachSpecialistViewTests: XCTestCase {
         )
     }
 
+    func testJoinedSystemRowStaysSingleLineUntilAccessibilityDynamicType() {
+        XCTAssertEqual(
+            CoachViewPresentation.joinedSystemRowLineLimit(for: .large),
+            1
+        )
+        XCTAssertNil(
+            CoachViewPresentation.joinedSystemRowLineLimit(for: .accessibility1)
+        )
+    }
+
     func testReturnSummaryRendersEveryCategoryInDeterministicCompactOrder() {
         let summary: JSONValue = .object([
             "nextSteps": .array([.string("Check in next week")]),
