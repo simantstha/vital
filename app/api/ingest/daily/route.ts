@@ -27,14 +27,14 @@
  */
 
 import { NextResponse } from 'next/server';
-import { and, eq, inArray, ne, sql } from 'drizzle-orm';
+import { and, eq, inArray, ne, or, sql } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import { getUserIdFromRequest } from '@/lib/auth';
 import { recomputeBaselines } from '@/lib/brain/baselines';
 import {
-  reconcilePersistedWorkouts,
-  sleepAnalysisCandidate,
-} from '@/lib/healthAnalysisReconciliation';
+  reconcileAnalysisIngest,
+  type AnalysisIngestRepository,
+} from '@/lib/healthAnalysisIngest';
 
 const MAX_DAYS_PER_REQUEST = 60;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -177,32 +177,112 @@ export async function POST(request: Request): Promise<NextResponse> {
 
   try {
     const workoutDays = days.filter((day) => day.workouts !== undefined);
+    const sleepDays = days.filter((day) => day.sleep !== undefined);
 
     await db.transaction(async (tx) => {
-      // Serialize each user's ingest transactions so daily source rows and queue
-      // rows cannot be reconciled from different concurrent snapshots.
-      await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${userId}, 0))`);
-
-      const persistedWorkoutRows = workoutDays.length === 0
-        ? []
-        : await tx
-          .select({
+      const analysisRepository: AnalysisIngestRepository = {
+        async lockUser(lockedUserId) {
+          await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${lockedUserId}, 0))`);
+        },
+        async listWorkoutAnalyses(scopedUserId, workoutDates, currentHkUuids) {
+          if (workoutDates.length === 0) return [];
+          return tx.select({
             hkUuid: schema.workout_analyses.hk_uuid,
             workoutDate: schema.workout_analyses.workout_date,
             contentFingerprint: schema.workout_analyses.content_fingerprint,
             status: schema.workout_analyses.status,
-          })
-          .from(schema.workout_analyses)
-          .where(and(
-            eq(schema.workout_analyses.user_id, userId),
-            inArray(schema.workout_analyses.workout_date, workoutDays.map((day) => day.date)),
+            notificationState: schema.workout_analyses.notification_state,
+            notificationSentAt: schema.workout_analyses.notification_sent_at,
+          }).from(schema.workout_analyses).where(and(
+            eq(schema.workout_analyses.user_id, scopedUserId),
+            or(
+              inArray(schema.workout_analyses.workout_date, workoutDates),
+              currentHkUuids.length > 0
+                ? inArray(schema.workout_analyses.hk_uuid, currentHkUuids)
+                : undefined,
+            ),
           ));
-      const workoutReconciliation = reconcilePersistedWorkouts(
-        persistedWorkoutRows,
-        workoutDays.flatMap((day) => (day.workouts ?? []).map((workout) => ({
-          workoutDate: day.date,
-          workout,
-        }))),
+        },
+        async markWorkoutsDeleted(scopedUserId, hkUuids, deletedAt) {
+          await tx.update(schema.workout_analyses).set({
+            status: 'deleted',
+            deleted_at: deletedAt,
+            lease_expires_at: null,
+            updated_at: deletedAt,
+          }).where(and(
+            eq(schema.workout_analyses.user_id, scopedUserId),
+            inArray(schema.workout_analyses.hk_uuid, hkUuids),
+          ));
+        },
+        async upsertWorkout(scopedUserId, entry) {
+          await tx.insert(schema.workout_analyses).values({
+            user_id: scopedUserId,
+            hk_uuid: entry.workout.hkUuid,
+            workout_date: entry.workoutDate,
+            content_fingerprint: entry.fingerprint,
+            input_payload: entry.workout,
+          }).onConflictDoUpdate({
+            target: [schema.workout_analyses.user_id, schema.workout_analyses.hk_uuid],
+            set: {
+              workout_date: entry.workoutDate,
+              content_fingerprint: entry.fingerprint,
+              input_payload: entry.workout,
+              status: 'pending',
+              retry_count: 0,
+              next_attempt_at: entry.receivedAt,
+              lease_expires_at: null,
+              result: null,
+              deleted_at: null,
+              updated_at: entry.receivedAt,
+              notification_state: entry.notificationState,
+            },
+          });
+        },
+        async listSleepAnalyses(scopedUserId, wakeDates) {
+          if (wakeDates.length === 0) return [];
+          return tx.select({
+            wakeDate: schema.sleep_analyses.wake_date,
+            contentFingerprint: schema.sleep_analyses.content_fingerprint,
+            notificationState: schema.sleep_analyses.notification_state,
+            notificationSentAt: schema.sleep_analyses.notification_sent_at,
+          }).from(schema.sleep_analyses).where(and(
+            eq(schema.sleep_analyses.user_id, scopedUserId),
+            inArray(schema.sleep_analyses.wake_date, wakeDates),
+          ));
+        },
+        async upsertSleep(scopedUserId, entry) {
+          await tx.insert(schema.sleep_analyses).values({
+            user_id: scopedUserId,
+            wake_date: entry.wakeDate,
+            content_fingerprint: entry.fingerprint,
+            input_payload: entry.sleep,
+            analyze_after: entry.analyzeAfter,
+            next_attempt_at: entry.analyzeAfter,
+          }).onConflictDoUpdate({
+            target: [schema.sleep_analyses.user_id, schema.sleep_analyses.wake_date],
+            set: {
+              content_fingerprint: entry.fingerprint,
+              input_payload: entry.sleep,
+              analyze_after: entry.analyzeAfter,
+              next_attempt_at: entry.analyzeAfter,
+              status: 'pending',
+              retry_count: 0,
+              lease_expires_at: null,
+              result: null,
+              updated_at: entry.receivedAt,
+              notification_state: entry.notificationState,
+            },
+            setWhere: ne(schema.sleep_analyses.content_fingerprint, entry.fingerprint),
+          });
+        },
+      };
+
+      await reconcileAnalysisIngest(
+        analysisRepository,
+        userId,
+        workoutDays.map((day) => ({ workoutDate: day.date, workouts: day.workouts ?? [] })),
+        sleepDays.map((day) => ({ wakeDate: day.date, sleep: day.sleep! })),
+        receivedAt,
       );
 
       await tx
@@ -218,72 +298,6 @@ export async function POST(request: Request): Promise<NextResponse> {
           },
         });
 
-      const removedHkUuids = workoutReconciliation.removedHkUuids;
-      if (removedHkUuids.length > 0) {
-        await tx.update(schema.workout_analyses).set({
-          status: 'deleted',
-          deleted_at: receivedAt,
-          lease_expires_at: null,
-          updated_at: receivedAt,
-        }).where(and(
-          eq(schema.workout_analyses.user_id, userId),
-          inArray(schema.workout_analyses.hk_uuid, removedHkUuids),
-        ));
-      }
-
-      // Upserts follow removals so a workout moved between included dates ends active.
-      for (const entry of workoutReconciliation.upserts) {
-        await tx.insert(schema.workout_analyses).values({
-          user_id: userId,
-          hk_uuid: entry.workout.hkUuid,
-          workout_date: entry.workoutDate,
-          content_fingerprint: entry.fingerprint,
-          input_payload: entry.workout,
-        }).onConflictDoUpdate({
-          target: [schema.workout_analyses.user_id, schema.workout_analyses.hk_uuid],
-          set: {
-            workout_date: entry.workoutDate,
-            content_fingerprint: entry.fingerprint,
-            input_payload: entry.workout,
-            status: 'pending',
-            retry_count: 0,
-            next_attempt_at: receivedAt,
-            lease_expires_at: null,
-            result: null,
-            deleted_at: null,
-            updated_at: receivedAt,
-            notification_state: sql`case when ${schema.workout_analyses.notification_sent_at} is not null or ${schema.workout_analyses.notification_state} = 'sent' then 'sent' else 'pending' end`,
-          },
-        });
-      }
-
-      for (const day of days.filter((candidate) => candidate.sleep !== undefined)) {
-        const sleep = day.sleep!;
-        const candidate = sleepAnalysisCandidate(day.date, sleep, receivedAt);
-        await tx.insert(schema.sleep_analyses).values({
-          user_id: userId,
-          wake_date: candidate.wakeDate,
-          content_fingerprint: candidate.fingerprint,
-          input_payload: sleep,
-          analyze_after: candidate.analyzeAfter,
-          next_attempt_at: candidate.analyzeAfter,
-        }).onConflictDoUpdate({
-          target: [schema.sleep_analyses.user_id, schema.sleep_analyses.wake_date],
-          set: {
-            content_fingerprint: candidate.fingerprint,
-            input_payload: sleep,
-            analyze_after: candidate.analyzeAfter,
-            next_attempt_at: candidate.analyzeAfter,
-            status: 'pending',
-            retry_count: 0,
-            lease_expires_at: null,
-            result: null,
-            updated_at: receivedAt,
-            notification_state: sql`case when ${schema.sleep_analyses.notification_sent_at} is not null or ${schema.sleep_analyses.notification_state} = 'sent' then 'sent' else 'pending' end`,
-          },
-          setWhere: ne(schema.sleep_analyses.content_fingerprint, candidate.fingerprint),
-        });
-      }
     });
 
     await recomputeBaselines(userId, Array.from(touchedMetrics));
