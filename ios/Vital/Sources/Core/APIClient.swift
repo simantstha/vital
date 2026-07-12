@@ -329,6 +329,7 @@ struct APIClient {
     /// `actionId` is supplied by state management so retries remain idempotent.
     func streamCoachAction(
         sessionId: String,
+        cardOccurrenceId: String,
         actionId: String,
         action: SpecialistAction
     ) -> AsyncThrowingStream<CoachStreamEvent, Error> {
@@ -345,6 +346,7 @@ struct APIClient {
                     request.timeoutInterval = 30
                     request.httpBody = try encoder.encode(CoachActionRequestBody(
                         sessionId: sessionId,
+                        cardOccurrenceId: cardOccurrenceId,
                         actionId: actionId,
                         action: action
                     ))
@@ -942,6 +944,7 @@ enum SpecialistAction: String, Codable, CaseIterable {
 
 struct CoachActionRequestBody: Encodable {
     let sessionId: String
+    let cardOccurrenceId: String
     let actionId: String
     let action: SpecialistAction
 }
@@ -992,14 +995,32 @@ enum CoachHandoffPhase: String, Codable, Equatable {
 struct CoachHandoffCard: Codable, Equatable {
     let phase: CoachHandoffPhase
     let sessionId: String
+    let cardOccurrenceId: String
     let specialist: CoachPersonaSnapshot
     let objective: String
     let returnSummary: JSONValue?
+
+    init(
+        phase: CoachHandoffPhase,
+        sessionId: String,
+        cardOccurrenceId: String,
+        specialist: CoachPersonaSnapshot,
+        objective: String,
+        returnSummary: JSONValue?
+    ) {
+        self.phase = phase
+        self.sessionId = sessionId
+        self.cardOccurrenceId = cardOccurrenceId
+        self.specialist = specialist
+        self.objective = objective
+        self.returnSummary = returnSummary
+    }
 
     var dismissed: CoachHandoffCard {
         CoachHandoffCard(
             phase: .dismissed,
             sessionId: sessionId,
+            cardOccurrenceId: cardOccurrenceId,
             specialist: specialist,
             objective: objective,
             returnSummary: returnSummary
@@ -1027,6 +1048,7 @@ private struct SSEEvent: Decodable {
     // specialist lifecycle fields
     let phase: CoachHandoffPhase?
     let sessionId: String?
+    let cardOccurrenceId: String?
     let specialist: CoachPersonaSnapshot?
     let objective: String?
     let returnSummary: JSONValue?
@@ -1034,10 +1056,11 @@ private struct SSEEvent: Decodable {
     let error: String?
 
     var handoffCard: CoachHandoffCard? {
-        guard let phase, let sessionId, let specialist, let objective else { return nil }
+        guard let phase, let sessionId, let cardOccurrenceId, let specialist, let objective else { return nil }
         return CoachHandoffCard(
             phase: phase,
             sessionId: sessionId,
+            cardOccurrenceId: cardOccurrenceId,
             specialist: specialist,
             objective: objective,
             returnSummary: returnSummary
@@ -1097,6 +1120,7 @@ protocol CoachAPIProviding {
     ) -> AsyncThrowingStream<CoachStreamEvent, Error>
     func streamCoachAction(
         sessionId: String,
+        cardOccurrenceId: String,
         actionId: String,
         action: SpecialistAction
     ) -> AsyncThrowingStream<CoachStreamEvent, Error>

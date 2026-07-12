@@ -497,8 +497,12 @@ final class CoachViewModel: ObservableObject {
 
     // MARK: - Specialist actions and authoritative events
 
-    static func stableActionId(sessionId: String, action: SpecialistAction) -> String {
-        "ios:\(sessionId):\(action.rawValue)"
+    static func stableActionId(
+        sessionId: String,
+        cardOccurrenceId: String,
+        action: SpecialistAction
+    ) -> String {
+        "ios:\(sessionId):\(cardOccurrenceId):\(action.rawValue)"
     }
 
     /// Executes an explicit card action. The in-flight flag is set before the
@@ -506,7 +510,12 @@ final class CoachViewModel: ObservableObject {
     func performSpecialistAction(_ action: SpecialistAction) {
         guard let card = pendingHandoffCard, !isPerformingSpecialistAction else { return }
         let sessionId = card.sessionId
-        let actionId = Self.stableActionId(sessionId: sessionId, action: action)
+        let cardOccurrenceId = card.cardOccurrenceId
+        let actionId = Self.stableActionId(
+            sessionId: sessionId,
+            cardOccurrenceId: cardOccurrenceId,
+            action: action
+        )
         isPerformingSpecialistAction = true
         errorMessage = nil
 
@@ -518,6 +527,7 @@ final class CoachViewModel: ObservableObject {
             do {
                 for try await event in api.streamCoachAction(
                     sessionId: sessionId,
+                    cardOccurrenceId: cardOccurrenceId,
                     actionId: actionId,
                     action: action
                 ) {
@@ -544,7 +554,8 @@ final class CoachViewModel: ObservableObject {
 
     private func applyHandoffCard(_ card: CoachHandoffCard) {
         if card.phase == .dismissed {
-            if pendingHandoffCard?.sessionId == card.sessionId {
+            if pendingHandoffCard?.sessionId == card.sessionId &&
+                pendingHandoffCard?.cardOccurrenceId == card.cardOccurrenceId {
                 pendingHandoffCard = nil
             }
         } else {

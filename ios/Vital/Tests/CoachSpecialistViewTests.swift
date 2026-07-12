@@ -162,6 +162,7 @@ final class CoachSpecialistViewTests: XCTestCase {
         CoachHandoffCard(
             phase: .proposed,
             sessionId: "session-1",
+            cardOccurrenceId: "proposal-occurrence",
             specialist: runningCoach,
             objective: "Plan a safe week",
             returnSummary: nil
@@ -172,6 +173,7 @@ final class CoachSpecialistViewTests: XCTestCase {
         CoachHandoffCard(
             phase: .returnProposed,
             sessionId: "session-1",
+            cardOccurrenceId: "return-occurrence",
             specialist: runningCoach,
             objective: "Plan a safe week",
             returnSummary: nil

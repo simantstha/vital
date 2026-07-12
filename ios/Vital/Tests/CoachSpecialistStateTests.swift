@@ -42,6 +42,7 @@ final class CoachSpecialistStateTests: XCTestCase {
           "pendingCard": {
             "phase": "return_proposed",
             "sessionId": "session-1",
+            "cardOccurrenceId": "30000000-0000-4000-8000-000000000001",
             "specialist": {
               "id": "running-coach",
               "title": "Running Coach",
@@ -60,6 +61,7 @@ final class CoachSpecialistStateTests: XCTestCase {
 
         XCTAssertEqual(restored.activePersona, runningCoach)
         XCTAssertEqual(restored.pendingCard?.phase, .returnProposed)
+        XCTAssertEqual(restored.pendingCard?.cardOccurrenceId, "30000000-0000-4000-8000-000000000001")
         XCTAssertEqual(restored.messages.first?.specialistSessionId, "session-1")
         XCTAssertEqual(restored.messages.first?.specialistMetadata?.name, "Running Coach")
     }
@@ -67,7 +69,7 @@ final class CoachSpecialistStateTests: XCTestCase {
     func testNewAndLegacySSEEventsDecodeWithoutChangingLegacyShapes() throws {
         let text = try XCTUnwrap(APIClient.decodeCoachSSELine(#"data: {"type":"text","delta":"Hi"}"#))
         let tool = try XCTUnwrap(APIClient.decodeCoachSSELine(#"data: {"type":"tool_call","id":"t1","name":"get_workouts","label":"Checking","status":"started"}"#))
-        let card = try XCTUnwrap(APIClient.decodeCoachSSELine(##"data: {"type":"handoff_card","phase":"proposed","sessionId":"session-1","specialist":{"id":"running-coach","title":"Running Coach","subtitle":"Vital Specialist","accent":"#4CC9F0","icon":"figure.run","sessionId":"session-1"},"objective":"Plan a safe week"}"##))
+        let card = try XCTUnwrap(APIClient.decodeCoachSSELine(##"data: {"type":"handoff_card","phase":"proposed","sessionId":"session-1","cardOccurrenceId":"30000000-0000-4000-8000-000000000001","specialist":{"id":"running-coach","title":"Running Coach","subtitle":"Vital Specialist","accent":"#4CC9F0","icon":"figure.run","sessionId":"session-1"},"objective":"Plan a safe week"}"##))
         let persona = try XCTUnwrap(APIClient.decodeCoachSSELine(##"data: {"type":"persona_changed","persona":{"id":"running-coach","title":"Running Coach","subtitle":"Vital Specialist","accent":"#4CC9F0","icon":"figure.run","sessionId":"session-1"}}"##))
 
         XCTAssertEqual(text, .text("Hi"))
@@ -75,6 +77,7 @@ final class CoachSpecialistStateTests: XCTestCase {
         XCTAssertEqual(card, .handoffCard(CoachHandoffCard(
             phase: .proposed,
             sessionId: "session-1",
+            cardOccurrenceId: "30000000-0000-4000-8000-000000000001",
             specialist: runningCoach,
             objective: "Plan a safe week",
             returnSummary: nil
@@ -89,14 +92,79 @@ final class CoachSpecialistStateTests: XCTestCase {
         for action in SpecialistAction.allCases {
             let body = CoachActionRequestBody(
                 sessionId: "session-1",
-                actionId: CoachViewModel.stableActionId(sessionId: "session-1", action: action),
+                cardOccurrenceId: "30000000-0000-4000-8000-000000000001",
+                actionId: CoachViewModel.stableActionId(
+                    sessionId: "session-1",
+                    cardOccurrenceId: "30000000-0000-4000-8000-000000000001",
+                    action: action
+                ),
                 action: action
             )
             let object = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(body)) as? [String: String])
             XCTAssertEqual(object["sessionId"], "session-1")
             XCTAssertEqual(object["action"], action.rawValue)
-            XCTAssertEqual(object["actionId"], "ios:session-1:\(action.rawValue)")
+            XCTAssertEqual(object["cardOccurrenceId"], "30000000-0000-4000-8000-000000000001")
+            XCTAssertEqual(object["actionId"], "ios:session-1:30000000-0000-4000-8000-000000000001:\(action.rawValue)")
         }
+    }
+
+    func testRepeatedReturnProposalGetsADistinctStableActionId() {
+        let first = CoachViewModel.stableActionId(
+            sessionId: "session-1",
+            cardOccurrenceId: "30000000-0000-4000-8000-000000000001",
+            action: .declineReturn
+        )
+        let second = CoachViewModel.stableActionId(
+            sessionId: "session-1",
+            cardOccurrenceId: "30000000-0000-4000-8000-000000000002",
+            action: .declineReturn
+        )
+
+        XCTAssertNotEqual(first, second)
+    }
+
+    func testRepeatedReturnDeclinesUseDistinctOccurrencesAndIgnoreStaleDismissal() async {
+        let first = CoachHandoffCard(
+            phase: .returnProposed,
+            sessionId: "session-1",
+            cardOccurrenceId: "30000000-0000-4000-8000-000000000001",
+            specialist: runningCoach,
+            objective: "Plan a safe week",
+            returnSummary: nil
+        )
+        let second = CoachHandoffCard(
+            phase: .returnProposed,
+            sessionId: "session-1",
+            cardOccurrenceId: "30000000-0000-4000-8000-000000000002",
+            specialist: runningCoach,
+            objective: "Plan a safe week",
+            returnSummary: nil
+        )
+        let api = FakeCoachAPI(restoration: CoachRestorationResponse(
+            messages: [], activePersona: runningCoach, pendingCard: first
+        ))
+        api.nextActionEvents = [.handoffCard(first.dismissed), .personaChanged(runningCoach)]
+        let viewModel = CoachViewModel(api: api)
+        await viewModel.restoreConversation()
+
+        viewModel.performSpecialistAction(.declineReturn)
+        await waitUntil { !viewModel.isPerformingSpecialistAction }
+        api.nextMessageEvents = [.handoffCard(second), .handoffCard(first.dismissed)]
+        viewModel.input = "Keep coaching"
+        viewModel.send()
+        await waitUntil { !viewModel.isStreaming }
+        XCTAssertEqual(viewModel.pendingHandoffCard, second)
+
+        api.nextActionEvents = [.handoffCard(second.dismissed), .personaChanged(runningCoach)]
+        viewModel.performSpecialistAction(.declineReturn)
+        await waitUntil { !viewModel.isPerformingSpecialistAction }
+
+        XCTAssertEqual(api.actionRequests.map(\.cardOccurrenceId), [
+            first.cardOccurrenceId,
+            second.cardOccurrenceId,
+        ])
+        XCTAssertNotEqual(api.actionRequests[0].actionId, api.actionRequests[1].actionId)
+        XCTAssertNil(viewModel.pendingHandoffCard)
     }
 
     func testRestoreBuildsPendingReturnStateAndDurableSpecialistLabel() async {
@@ -119,6 +187,7 @@ final class CoachSpecialistStateTests: XCTestCase {
         let card = CoachHandoffCard(
             phase: .returnProposed,
             sessionId: "session-1",
+            cardOccurrenceId: "return-occurrence",
             specialist: runningCoach,
             objective: "Plan a safe week",
             returnSummary: nil
@@ -142,6 +211,7 @@ final class CoachSpecialistStateTests: XCTestCase {
         let card = CoachHandoffCard(
             phase: .proposed,
             sessionId: "session-1",
+            cardOccurrenceId: "proposal-occurrence",
             specialist: runningCoach,
             objective: "Plan a safe week",
             returnSummary: nil
@@ -166,6 +236,7 @@ final class CoachSpecialistStateTests: XCTestCase {
         let card = CoachHandoffCard(
             phase: .proposed,
             sessionId: "session-1",
+            cardOccurrenceId: "proposal-occurrence",
             specialist: runningCoach,
             objective: "Plan a safe week",
             returnSummary: nil
@@ -235,7 +306,8 @@ final class CoachSpecialistStateTests: XCTestCase {
 
     func testPersonaChangeBeforeTextLabelsTypedAcceptanceReplyAsRunningCoach() async {
         let card = CoachHandoffCard(
-            phase: .proposed, sessionId: "session-1", specialist: runningCoach,
+            phase: .proposed, sessionId: "session-1", cardOccurrenceId: "proposal-occurrence",
+            specialist: runningCoach,
             objective: "Plan a safe week", returnSummary: nil
         )
         let api = FakeCoachAPI(restoration: CoachRestorationResponse(
@@ -316,7 +388,8 @@ final class CoachSpecialistStateTests: XCTestCase {
             specialistSessionId: "session-1", specialistMetadata: metadata
         )
         let card = CoachHandoffCard(
-            phase: .returnProposed, sessionId: "session-1", specialist: runningCoach,
+            phase: .returnProposed, sessionId: "session-1", cardOccurrenceId: "return-occurrence",
+            specialist: runningCoach,
             objective: "Plan a safe week", returnSummary: nil
         )
         let api = FakeCoachAPI(restoration: CoachRestorationResponse(
@@ -338,7 +411,8 @@ final class CoachSpecialistStateTests: XCTestCase {
 
     func testActionFailureReconcilesAuthoritativeStateWithoutReplacingTranscript() async {
         let card = CoachHandoffCard(
-            phase: .proposed, sessionId: "session-1", specialist: runningCoach,
+            phase: .proposed, sessionId: "session-1", cardOccurrenceId: "proposal-occurrence",
+            specialist: runningCoach,
             objective: "Plan a safe week", returnSummary: nil
         )
         let restoredMessage = CoachRestoredMessage(
@@ -389,6 +463,7 @@ private enum TestFailure: Error {
 private final class FakeCoachAPI: CoachAPIProviding {
     struct ActionRequest {
         let sessionId: String
+        let cardOccurrenceId: String
         let actionId: String
         let action: SpecialistAction
     }
@@ -423,10 +498,16 @@ private final class FakeCoachAPI: CoachAPIProviding {
 
     func streamCoachAction(
         sessionId: String,
+        cardOccurrenceId: String,
         actionId: String,
         action: SpecialistAction
     ) -> AsyncThrowingStream<CoachStreamEvent, Error> {
-        actionRequests.append(ActionRequest(sessionId: sessionId, actionId: actionId, action: action))
+        actionRequests.append(ActionRequest(
+            sessionId: sessionId,
+            cardOccurrenceId: cardOccurrenceId,
+            actionId: actionId,
+            action: action
+        ))
         if holdActionStreamOpen {
             return AsyncThrowingStream { continuation in
                 heldActionContinuation = continuation
