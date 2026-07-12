@@ -1,31 +1,32 @@
 import SwiftUI
 
-/// A one-line coach insight presented in a lime-tinted glass bubble.
+/// A one-line coach insight presented in a pale-lime (`accentSoft`) bubble
+/// with a lime avatar circle, matching the v3 mock's coach message idiom.
 struct CoachBubble: View {
     let message: String
 
     var body: some View {
         HStack(alignment: .top, spacing: Theme.Spacing.md) {
-            // Avatar dot
+            // Avatar circle
             Circle()
                 .fill(Theme.Colors.accent)
-                .frame(width: 36, height: 36)
+                .frame(width: 44, height: 44)
                 .overlay(
                     Image(systemName: "message.fill")
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(Theme.Colors.onAccent)
                 )
 
             Text(message.asMarkdown)
-                .font(Theme.Typography.bodyMedium)
+                .font(.system(size: 16, weight: .regular))
                 .foregroundStyle(Theme.Colors.textPrimary)
-                .lineSpacing(3)
+                .lineSpacing(6.4) // ~1.4x line height at 16pt
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(Theme.Spacing.lg)
-        .glassEffect(
-            .regular.tint(Theme.Colors.accent.opacity(0.18)),
-            in: .rect(cornerRadius: Theme.Radius.lg, style: .continuous)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.Radius.xl, style: .continuous)
+                .fill(Theme.Colors.accentSoft)
         )
     }
 }

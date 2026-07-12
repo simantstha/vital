@@ -262,6 +262,33 @@ export const pending_nudges = p.pgTable('pending_nudges', {
   p.index('pending_nudges_user_scheduled_idx').on(t.user_id, t.scheduled_for),
 ]);
 
+// ─── plan_items ──────────────────────────────────────────────────────────────
+// Server-persisted rows for the Today "plan" timeline (redesign v3 Phase 2).
+// One row per plan entry per (user, local calendar day) — local_day is a
+// YYYY-MM-DD key using the same convention as `lib/localDay.ts`. Seeded
+// additively from the cached daily brief's meals + a synthetic sleep item
+// (see app/api/plan/route.ts); user-added items get source='user'.
+// Calendar events are never stored here (privacy) — merged client-side only.
+// status values: 'pending' | 'done' | 'skipped'. kind values: 'meal' | 'move'
+// | 'rest' | 'sleep' | 'other'. source values: 'coach' | 'user'.
+
+export const plan_items = p.pgTable('plan_items', {
+  id:           p.uuid('id').primaryKey().defaultRandom(),
+  user_id:      p.uuid('user_id').notNull().references(() => users.id),
+  local_day:    p.text('local_day').notNull(),
+  time_minutes: p.integer('time_minutes').notNull(),                          // minutes from local midnight
+  title:        p.text('title').notNull(),
+  subtitle:     p.text('subtitle'),                                          // nullable
+  kind:         p.text('kind').notNull(),                                     // meal | move | rest | sleep | other
+  source:       p.text('source').notNull(),                                   // coach | user
+  status:       p.text('status').default('pending').notNull(),                // pending | done | skipped
+  kcal:         p.integer('kcal'),                                            // nullable — meals only
+  created_at:   p.timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updated_at:   p.timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  p.index('plan_items_user_day_idx').on(t.user_id, t.local_day),
+]);
+
 // ─── Inferred TypeScript types ────────────────────────────────────────────────
 // Named to avoid collision with built-in DOM globals (Event, Node).
 
@@ -294,3 +321,6 @@ export type NewDailyMetric = typeof daily_metrics.$inferInsert;
 
 export type Baseline       = typeof baselines.$inferSelect;
 export type NewBaseline    = typeof baselines.$inferInsert;
+
+export type PlanItemRow    = typeof plan_items.$inferSelect;                  // 'PlanItem' avoided — collides with iOS-side name in spirit, not compilation, but keep distinct
+export type NewPlanItemRow = typeof plan_items.$inferInsert;

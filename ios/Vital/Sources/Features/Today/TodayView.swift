@@ -4,8 +4,13 @@ import SwiftUI
 
 struct TodayView: View {
     @StateObject private var vm = TodayViewModel()
+
+    // Sheet / navigation state
     @State private var showLogSheet = false
-    @State private var selectedMeal: MealRow?
+    @State private var showAddItem = false
+    @State private var actionsItem: PlanItem? = nil
+    @State private var selectedMeal: MealRow? = nil
+    @State private var mealDetailPlanItemID: PlanItem.ID? = nil
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -22,28 +27,91 @@ struct TodayView: View {
                             .padding(.top, 60)
                     } else {
                         calibrationCard
-                        chipRow
                         pendingFactsBanner
+                        PlanTimelineView(
+                            items: vm.planItems,
+                            onItemTap: { actionsItem = $0 },
+                            onLogItem: { item in
+                                vm.setStatus(id: item.id, .done)
+                                vm.toastMessage = "Logged — nice work"
+                            },
+                            onOpenAdd: { showAddItem = true }
+                        )
                         CoachBubble(message: vm.coachInsight)
                         metricsGrid
-                        dietBudgetCard
-                        todaysPlanSection
-                        actionButtons
+                        FuelStripView(
+                            kcalRemaining: vm.diet.kcalRemaining,
+                            proteinHave: vm.diet.protein.current,
+                            proteinGoal: vm.diet.protein.target,
+                            onOpen: { showLogSheet = true }
+                        )
                     }
                 }
                 .padding(.horizontal, Theme.Spacing.xl)
                 .padding(.top, Theme.Spacing.lg)
-                .padding(.bottom, 100)
+                .padding(.bottom, 120)
             }
             .scrollIndicators(.hidden)
             .task { await vm.loadHealthData() }
         }
+        .toast(message: $vm.toastMessage)
         .sheet(isPresented: $showLogSheet) {
-            LogMealView()
+            VitalSheet(detents: [.large]) {
+                DietSheetView(
+                    initialTarget: vm.diet.kcalTarget,
+                    onRefreshToday: { Task { await vm.loadHealthData() } }
+                )
+            }
+        }
+        .sheet(isPresented: $showAddItem) {
+            VitalSheet(detents: [.medium]) {
+                AddPlanItemSheet(
+                    onAdd: { item in
+                        vm.addItem(item)
+                        showAddItem = false
+                    },
+                    onCancel: { showAddItem = false }
+                )
+            }
+        }
+        .sheet(item: $actionsItem) { planItem in
+            VitalSheet(detents: [.medium]) {
+                PlanItemActionsSheet(
+                    item: planItem,
+                    onMarkDone: {
+                        vm.setStatus(id: planItem.id, .done)
+                        actionsItem = nil
+                    },
+                    onSkip: {
+                        vm.setStatus(id: planItem.id, .skipped)
+                        actionsItem = nil
+                    },
+                    onMarkNotDone: {
+                        vm.setStatus(id: planItem.id, .later)
+                        actionsItem = nil
+                    },
+                    onRemove: {
+                        vm.removeItem(id: planItem.id)
+                        actionsItem = nil
+                    },
+                    onViewMeal: planItem.meal.map { meal in
+                        {
+                            mealDetailPlanItemID = planItem.id
+                            selectedMeal = meal
+                            actionsItem = nil
+                        }
+                    },
+                    onCancel: { actionsItem = nil }
+                )
+            }
         }
         .sheet(item: $selectedMeal) { meal in
             MealDetailView(meal: meal) {
-                // Refresh Today after a plan meal is logged so the diet budget updates.
+                // Refresh Today after a plan meal is logged so the diet
+                // budget updates, and mark the originating plan item done.
+                if let id = mealDetailPlanItemID {
+                    vm.setStatus(id: id, .done)
+                }
                 Task { await vm.loadHealthData() }
             }
         }
@@ -115,16 +183,26 @@ private extension TodayView {
         }
     }
 
-    // ── Greeting ────────────────────────────────────────────────────────────
+    // ── Header ──────────────────────────────────────────────────────────────
 
     var greetingSection: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-            Text(vm.greeting)
-                .font(.system(size: 28, weight: .bold, design: .default))
-                .foregroundStyle(Theme.Colors.textPrimary)
             Text(vm.dateSubtitle)
-                .font(Theme.Typography.bodySmall)
+                .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(Theme.Colors.textSecondary)
+
+            Text(vm.greeting)
+                .font(.system(size: 30, weight: .bold))
+                .tracking(-0.4)
+                .foregroundStyle(Theme.Colors.textPrimary)
+
+            HStack(spacing: Theme.Spacing.sm) {
+                Chip(text: "\(vm.streakDays)-day streak", icon: "flame.fill", isAccent: true)
+                Text(vm.planHint)
+                    .font(.system(size: 13))
+                    .foregroundStyle(Theme.Colors.textSecondary)
+            }
+            .padding(.top, Theme.Spacing.xxs)
         }
     }
 
@@ -148,17 +226,6 @@ private extension TodayView {
                     VitalProgressBar(fraction: vm.calibrationProgress, tint: Theme.Colors.accent, height: 4)
                 }
             }
-        }
-    }
-
-    // ── Chip row ─────────────────────────────────────────────────────────────
-
-    var chipRow: some View {
-        HStack(spacing: Theme.Spacing.sm) {
-            Chip(text: vm.dateSubtitle)
-            Chip(text: "\(vm.streakDays)-day streak",
-                 icon: "flame.fill",
-                 isAccent: true)
         }
     }
 
@@ -189,97 +256,6 @@ private extension TodayView {
             )
         }
     }
-
-    // ── Diet budget card ──────────────────────────────────────────────────────
-
-    var dietBudgetCard: some View {
-        GlassCard {
-            VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
-
-                SectionHeader(title: "Diet Budget")
-
-                // Remaining kcal hero number
-                HStack(alignment: .lastTextBaseline) {
-                    VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
-                        Text("\(vm.diet.kcalRemaining)")
-                            .font(Theme.Typography.numericHero(38))
-                            .foregroundStyle(Theme.Colors.textPrimary)
-                        Text("kcal remaining")
-                            .font(Theme.Typography.labelSmall)
-                            .foregroundStyle(Theme.Colors.textSecondary)
-                    }
-                    Spacer()
-                    VStack(alignment: .trailing, spacing: Theme.Spacing.xxs) {
-                        Text("\(vm.diet.kcalTarget)")
-                            .font(Theme.Typography.numericSmall(17))
-                            .foregroundStyle(Theme.Colors.textSecondary)
-                        Text("daily target")
-                            .font(Theme.Typography.labelSmall)
-                            .foregroundStyle(Theme.Colors.textSecondary)
-                    }
-                }
-
-                // Calorie progress bar
-                VitalProgressBar(fraction: vm.diet.kcalFraction,
-                                 tint: Theme.Colors.accent)
-
-                // Divider
-                Rectangle()
-                    .fill(Theme.Colors.glassBorder)
-                    .frame(height: 0.5)
-                    .padding(.vertical, Theme.Spacing.xs)
-
-                // Macro mini-bars
-                VStack(spacing: Theme.Spacing.md) {
-                    MacroRowView(label: "Protein",
-                                 progress: vm.diet.protein,
-                                 color: Theme.Colors.accent)
-                    MacroRowView(label: "Carbs",
-                                 progress: vm.diet.carbs,
-                                 color: Theme.Colors.indigo)
-                    MacroRowView(label: "Fat",
-                                 progress: vm.diet.fat,
-                                 color: Theme.Colors.alert)
-                }
-            }
-        }
-    }
-
-    // ── Today's plan ─────────────────────────────────────────────────────────
-
-    var todaysPlanSection: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-            SectionHeader(title: "Today's Plan")
-            ForEach(vm.meals) { meal in
-                Button {
-                    selectedMeal = meal
-                } label: {
-                    MealRowView(meal: meal)
-                }
-                .buttonStyle(.plain)
-            }
-        }
-    }
-
-    // ── Action buttons ────────────────────────────────────────────────────────
-
-    var actionButtons: some View {
-        // Primary — lime filled. (A "Suggest lunch" stub used to sit beside this
-        // but did nothing; meal suggestions already come from the tappable plan
-        // rows above, so the log action stands on its own full-width.)
-        Button {
-            showLogSheet = true
-        } label: {
-            Text("Log it")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(Theme.Colors.onAccent)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 16)
-                .background(Theme.Colors.accent)
-                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md,
-                                           style: .continuous))
-        }
-    }
 }
 
 // MARK: - Supporting views (file-private)
@@ -301,78 +277,5 @@ private struct VitalProgressBar: View {
             }
         }
         .frame(height: height)
-    }
-}
-
-/// A single macro row: label | mini-bar | consumed / target.
-private struct MacroRowView: View {
-    let label: String
-    let progress: MacroProgress
-    let color: Color
-
-    var body: some View {
-        HStack(spacing: Theme.Spacing.md) {
-            Text(label)
-                .font(Theme.Typography.labelSmall)
-                .foregroundStyle(Theme.Colors.textSecondary)
-                .frame(width: 52, alignment: .leading)
-
-            VitalProgressBar(fraction: progress.fraction, tint: color, height: 4)
-
-            Text(progress.consumedLabel)
-                .font(Theme.Typography.labelSmall)
-                .foregroundStyle(Theme.Colors.textSecondary)
-                .frame(width: 34, alignment: .trailing)
-                .monospacedDigit()
-        }
-    }
-}
-
-/// A single meal row card.
-private struct MealRowView: View {
-    let meal: MealRow
-
-    var body: some View {
-        HStack(spacing: Theme.Spacing.md) {
-            // Icon badge
-            ZStack {
-                RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous)
-                    .fill(Theme.Colors.accent.opacity(0.15))
-                    .frame(width: 44, height: 44)
-                Image(systemName: meal.icon)
-                    .font(.system(size: 18))
-                    .foregroundStyle(Theme.Colors.accentContent)
-            }
-
-            // Name + reason
-            VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
-                Text(meal.name)
-                    .font(Theme.Typography.bodySmall)
-                    .fontWeight(.medium)
-                    .foregroundStyle(Theme.Colors.textPrimary)
-                    .lineLimit(1)
-                Text(meal.reason.asMarkdown)
-                    .font(Theme.Typography.labelSmall)
-                    .foregroundStyle(Theme.Colors.textSecondary)
-                    .lineLimit(2)
-            }
-
-            Spacer()
-
-            // Kcal badge
-            Text("\(meal.kcal)")
-                .font(Theme.Typography.numericSmall(14))
-                .foregroundStyle(Theme.Colors.textSecondary)
-                .monospacedDigit()
-        }
-        .padding(Theme.Spacing.md)
-        .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
-                .fill(Theme.Colors.glassFill)
-                .overlay(
-                    RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
-                        .strokeBorder(Theme.Colors.glassBorder, lineWidth: 0.5)
-                )
-        )
     }
 }

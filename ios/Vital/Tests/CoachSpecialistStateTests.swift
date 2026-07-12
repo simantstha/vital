@@ -533,6 +533,10 @@ private final class FakeCoachAPI: CoachAPIProviding {
         self.restoration = restoration
     }
 
+    func uploadSTTAudio(fileURL: URL) async -> String? {
+        nil
+    }
+
     func fetchCoachRestoration() async throws -> CoachRestorationResponse {
         restorationRequestCount += 1
         return restoration

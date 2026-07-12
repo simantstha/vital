@@ -1,5 +1,5 @@
 {
-  "id": "18d44037-69cf-480a-be9f-b85becb71b3b",
+  "id": "8622df87-018a-4cf7-8dd8-ebca404c9fe8",
   "prevId": "279c1bf8-ad10-4139-a5a9-4d70f5e2fbc7",
   "version": "7",
   "dialect": "postgresql",
@@ -516,13 +516,6 @@
           "primaryKey": false,
           "notNull": true
         },
-        "speaker": {
-          "name": "speaker",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'coach'"
-        },
         "content": {
           "name": "content",
           "type": "text",
@@ -550,18 +543,6 @@
         },
         "metadata": {
           "name": "metadata",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "specialist_session_id": {
-          "name": "specialist_session_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "specialist_metadata": {
-          "name": "specialist_metadata",
           "type": "jsonb",
           "primaryKey": false,
           "notNull": false
@@ -597,19 +578,6 @@
           "tableTo": "users",
           "columnsFrom": [
             "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "messages_specialist_session_id_specialist_sessions_id_fk": {
-          "name": "messages_specialist_session_id_specialist_sessions_id_fk",
-          "tableFrom": "messages",
-          "tableTo": "specialist_sessions",
-          "columnsFrom": [
-            "specialist_session_id"
           ],
           "columnsTo": [
             "id"
@@ -937,8 +905,8 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.specialist_sessions": {
-      "name": "specialist_sessions",
+    "public.plan_items": {
+      "name": "plan_items",
       "schema": "",
       "columns": {
         "id": {
@@ -954,20 +922,38 @@
           "primaryKey": false,
           "notNull": true
         },
-        "objective": {
-          "name": "objective",
+        "local_day": {
+          "name": "local_day",
           "type": "text",
           "primaryKey": false,
           "notNull": true
         },
-        "manifest_id": {
-          "name": "manifest_id",
+        "time_minutes": {
+          "name": "time_minutes",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "title": {
+          "name": "title",
           "type": "text",
           "primaryKey": false,
           "notNull": true
         },
-        "manifest_version": {
-          "name": "manifest_version",
+        "subtitle": {
+          "name": "subtitle",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source": {
+          "name": "source",
           "type": "text",
           "primaryKey": false,
           "notNull": true
@@ -977,68 +963,20 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true,
-          "default": "'proposed'"
+          "default": "'pending'"
         },
-        "inbound_handoff": {
-          "name": "inbound_handoff",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "return_handoff": {
-          "name": "return_handoff",
-          "type": "jsonb",
+        "kcal": {
+          "name": "kcal",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false
         },
-        "failure_reason": {
-          "name": "failure_reason",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "proposed_at": {
-          "name": "proposed_at",
+        "created_at": {
+          "name": "created_at",
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
-        },
-        "activated_at": {
-          "name": "activated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "return_proposed_at": {
-          "name": "return_proposed_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "completed_at": {
-          "name": "completed_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "declined_at": {
-          "name": "declined_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "failed_at": {
-          "name": "failed_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "expires_at": {
-          "name": "expires_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
         },
         "updated_at": {
           "name": "updated_at",
@@ -1049,24 +987,8 @@
         }
       },
       "indexes": {
-        "specialist_sessions_one_open_per_user_idx": {
-          "name": "specialist_sessions_one_open_per_user_idx",
-          "columns": [
-            {
-              "expression": "user_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "\"specialist_sessions\".\"status\" in ('proposed', 'active', 'return_proposed')",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "specialist_sessions_user_updated_idx": {
-          "name": "specialist_sessions_user_updated_idx",
+        "plan_items_user_day_idx": {
+          "name": "plan_items_user_day_idx",
           "columns": [
             {
               "expression": "user_id",
@@ -1075,7 +997,7 @@
               "nulls": "last"
             },
             {
-              "expression": "updated_at",
+              "expression": "local_day",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -1088,9 +1010,9 @@
         }
       },
       "foreignKeys": {
-        "specialist_sessions_user_id_users_id_fk": {
-          "name": "specialist_sessions_user_id_users_id_fk",
-          "tableFrom": "specialist_sessions",
+        "plan_items_user_id_users_id_fk": {
+          "name": "plan_items_user_id_users_id_fk",
+          "tableFrom": "plan_items",
           "tableTo": "users",
           "columnsFrom": [
             "user_id"
@@ -1105,16 +1027,7 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {
-        "specialist_sessions_status_check": {
-          "name": "specialist_sessions_status_check",
-          "value": "\"specialist_sessions\".\"status\" in ('proposed', 'active', 'return_proposed', 'completed', 'declined', 'failed')"
-        },
-        "specialist_sessions_expiry_check": {
-          "name": "specialist_sessions_expiry_check",
-          "value": "((\"specialist_sessions\".\"status\" in ('proposed', 'return_proposed')) = (\"specialist_sessions\".\"expires_at\" is not null))"
-        }
-      },
+      "checkConstraints": {},
       "isRLSEnabled": false
     },
     "public.users": {
