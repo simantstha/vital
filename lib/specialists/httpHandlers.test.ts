@@ -103,6 +103,7 @@ test('specialist actions are scoped to authenticated user and preserve card-befo
       return events([
         {
           type: 'handoff_card', phase: 'dismissed', sessionId: 'session-1', objective: 'Plan week',
+          cardOccurrenceId: 'occurrence-1',
           specialist: {
             id: 'running-coach', title: 'Running Coach', subtitle: 'Vital Specialist',
             accent: '#4CC9F0', icon: 'figure.run', sessionId: 'session-1',
@@ -124,6 +125,7 @@ test('specialist actions are scoped to authenticated user and preserve card-befo
     method: 'POST', headers: { 'content-type': 'application/json', 'x-user-id': 'user-a' },
     body: JSON.stringify({
       sessionId: 'session-1', actionId: 'action-1', action: 'accept_handoff',
+      cardOccurrenceId: 'occurrence-1',
     }),
   }));
   assert.equal(actionUser, 'user-a');
@@ -151,16 +153,19 @@ test('GET is authenticated and returns the restoration payload', async () => {
   assert.deepEqual(await response.json(), payload);
 });
 
-test('GET remains unavailable and does not query specialist state while the feature is off', async () => {
+test('GET returns authoritative restoration so the kill switch can roll clients back to Vital', async () => {
   let restored = false;
   const handlers = createCoachHttpHandlers({
     enabled: () => false,
     authenticate: () => 'user-a',
     runCoach() { throw new Error('not used'); },
     runAction() { throw new Error('not used'); },
-    async restore() { restored = true; throw new Error('not used'); },
+    async restore() {
+      restored = true;
+      return { messages: [], activePersona: { id: 'vital' }, pendingCard: null } as never;
+    },
   });
   const response = await handlers.GET(new Request('http://local/api/coach'));
-  assert.equal(response.status, 404);
-  assert.equal(restored, false);
+  assert.equal(response.status, 200);
+  assert.equal(restored, true);
 });

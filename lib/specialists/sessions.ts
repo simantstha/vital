@@ -38,6 +38,7 @@ export interface SpecialistSession {
   manifestId: string;
   manifestVersion: string;
   status: SpecialistSessionStatus;
+  cardOccurrenceId: string;
   inboundHandoff: unknown;
   returnHandoff: unknown | null;
   failureReason: string | null;
@@ -164,7 +165,7 @@ export class SpecialistSessionService<R extends SpecialistSessionRepository = Sp
         `Specialist manifest version ${input.manifestVersion} does not match registered version ${manifest.version}`,
       );
     }
-    if (await this.repository.findOpenByUser(input.userId)) {
+    if (await this.findOpen(input.userId)) {
       throw new OpenSpecialistSessionExistsError(
         `User ${input.userId} already has an open specialist session`,
       );
@@ -174,6 +175,7 @@ export class SpecialistSessionService<R extends SpecialistSessionRepository = Sp
       id: randomUUID(),
       ...input,
       status: 'proposed',
+      cardOccurrenceId: randomUUID(),
       returnHandoff: null,
       failureReason: null,
       proposedAt: now,
@@ -186,8 +188,31 @@ export class SpecialistSessionService<R extends SpecialistSessionRepository = Sp
     });
   }
 
-  get(userId: string, id: string): Promise<SpecialistSession | null> {
-    return this.repository.findByUserAndId(userId, id);
+  async get(userId: string, id: string): Promise<SpecialistSession | null> {
+    const session = await this.repository.findByUserAndId(userId, id);
+    return session ? this.reconcileExpiry(session) : null;
+  }
+
+  async findOpen(userId: string): Promise<SpecialistSession | null> {
+    const session = await this.repository.findOpenByUser(userId);
+    if (!session) return null;
+    const reconciled = await this.reconcileExpiry(session);
+    return reconciled && OPEN_SPECIALIST_SESSION_STATUSES.includes(reconciled.status)
+      ? reconciled
+      : null;
+  }
+
+  async disableOpen(userId: string): Promise<SpecialistSession | null> {
+    const session = await this.repository.findOpenByUser(userId);
+    if (!session) return null;
+    try {
+      return await this.transition(userId, session.id, 'failed', {
+        failureReason: 'specialists_disabled',
+      });
+    } catch (error) {
+      if (!(error instanceof ConcurrentSpecialistSessionUpdateError)) throw error;
+      return this.repository.findByUserAndId(userId, session.id);
+    }
   }
 
   async transition(
@@ -221,6 +246,7 @@ export class SpecialistSessionService<R extends SpecialistSessionRepository = Sp
     };
     if (to === 'active') next.activatedAt ??= now;
     if (to === 'return_proposed') {
+      next.cardOccurrenceId = randomUUID();
       next.returnProposedAt = now;
       next.returnHandoff = details.returnHandoff ?? null;
     }
@@ -241,20 +267,48 @@ export class SpecialistSessionService<R extends SpecialistSessionRepository = Sp
     const expired = await this.repository.findExpiredPending(now);
     const results = await Promise.all(expired.map(async (session) => {
       try {
-        return await this.repository.update({
-          ...session,
-          status: 'failed',
-          failureReason: 'proposal_expired',
-          failedAt: now,
-          expiresAt: null,
-          updatedAt: now,
-        }, session.status);
+        return await this.reconcileExpiry(session, false);
       } catch (error) {
         if (error instanceof ConcurrentSpecialistSessionUpdateError) return null;
         throw error;
       }
     }));
     return results.filter((session): session is SpecialistSession => session !== null);
+  }
+
+  private async reconcileExpiry(
+    session: SpecialistSession,
+    returnConcurrentState = true,
+  ): Promise<SpecialistSession | null> {
+    const now = this.now();
+    if (!PENDING_SPECIALIST_SESSION_STATUSES.includes(session.status) ||
+      session.expiresAt === null || session.expiresAt > now) {
+      return session;
+    }
+    const next: SpecialistSession = session.status === 'proposed'
+      ? {
+          ...session,
+          status: 'failed',
+          failureReason: 'proposal_expired',
+          failedAt: now,
+          expiresAt: null,
+          updatedAt: now,
+        }
+      : {
+          ...session,
+          status: 'active',
+          expiresAt: null,
+          updatedAt: now,
+        };
+    try {
+      return await this.repository.update(next, session.status);
+    } catch (error) {
+      if (!(error instanceof ConcurrentSpecialistSessionUpdateError)) throw error;
+      if (!returnConcurrentState) return null;
+      const current = await this.repository.findByUserAndId(session.userId, session.id);
+      if (!current) throw error;
+      return current;
+    }
   }
 
   messageAttribution(input: SpecialistMessageAttributionInput): SpecialistMessageAttribution {

@@ -20,11 +20,13 @@ import {
   loadCoachRestoration,
 } from '@/lib/specialists/restoration';
 import { DrizzleSpecialistSessionRepository } from '@/lib/specialists/sessionRepository';
+import { SpecialistSessionService } from '@/lib/specialists/sessions';
 
 export const dynamic = 'force-dynamic';
 
 const history = new DrizzleCoachHistoryRepository(db);
 const sessions = new DrizzleSpecialistSessionRepository();
+const sessionService = new SpecialistSessionService(sessions);
 
 const handlers = createCoachHttpHandlers({
   enabled: isSpecialistsEnabled,
@@ -33,9 +35,9 @@ const handlers = createCoachHttpHandlers({
   runAction: runSpecialistAction,
   restore: (userId) => loadCoachRestoration(userId, {
     history,
-    sessions,
+    sessions: sessionService,
     manifests: specialistRegistry,
-  }),
+  }, isSpecialistsEnabled()),
 });
 
 export const GET = handlers.GET;

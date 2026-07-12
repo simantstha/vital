@@ -14,7 +14,7 @@ type DrizzleDatabase = typeof applicationDb;
 
 export interface SpecialistActionPersistence {
   find(userId: string, actionId: string): Promise<StoredAction | null>;
-  insertClaim(values: NewStoredAction): Promise<StoredAction>;
+  insertClaim(values: NewStoredAction): Promise<{ row: StoredAction; isNew: boolean }>;
   complete(userId: string, actionId: string, result: SpecialistActionResult): Promise<StoredAction>;
 }
 
@@ -25,20 +25,25 @@ export class SpecialistActionRepository implements SpecialistActionStore {
     userId: string,
     actionId: string,
     sessionId: string,
+    cardOccurrenceId: string,
     action: SpecialistAction,
   ): Promise<SpecialistActionClaim> {
-    const row = await this.persistence.insertClaim({
+    const claimed = await this.persistence.insertClaim({
       user_id: userId,
       action_id: actionId,
       session_id: sessionId,
+      card_occurrence_id: cardOccurrenceId,
       action,
       result: null,
     });
+    const { row } = claimed;
     if (row.user_id !== userId) throw new Error('Specialist action claim crossed user scope');
     return {
       sessionId: row.session_id,
+      cardOccurrenceId: row.card_occurrence_id,
       action: row.action as SpecialistAction,
       result: row.result === null ? null : deserializeResult(row.result),
+      isNew: claimed.isNew,
     };
   }
 
@@ -69,17 +74,17 @@ export class DrizzleSpecialistActionPersistence implements SpecialistActionPersi
     return row ?? null;
   }
 
-  async insertClaim(values: NewStoredAction): Promise<StoredAction> {
+  async insertClaim(values: NewStoredAction): Promise<{ row: StoredAction; isNew: boolean }> {
     const [row] = await this.database.insert(schema.specialist_actions)
       .values(values)
       .onConflictDoNothing({
         target: [schema.specialist_actions.user_id, schema.specialist_actions.action_id],
       })
       .returning();
-    if (row) return row;
+    if (row) return { row, isNew: true };
     const existing = await this.find(values.user_id, values.action_id);
     if (!existing) throw new Error('Specialist action conflicted but could not be reloaded');
-    return existing;
+    return { row: existing, isNew: false };
   }
 
   async complete(

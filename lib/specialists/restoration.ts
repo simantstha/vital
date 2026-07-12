@@ -3,7 +3,7 @@ import type { db as applicationDb } from '@/db';
 import * as schema from '@/db/schema';
 import type { SpecialistRegistry } from './registry';
 import type { SpecialistMessageAttribution } from './sessions';
-import type { SpecialistSessionRepository } from './sessions';
+import type { SpecialistSessionService } from './sessions';
 import {
   specialistPersona,
   VITAL_PERSONA,
@@ -61,6 +61,7 @@ export function compareRestoredMessages(
 export interface PendingHandoffCard {
   phase: 'proposed' | 'return_proposed';
   sessionId: string;
+  cardOccurrenceId: string;
   specialist: PersonaSnapshot;
   objective: string;
   returnSummary?: unknown;
@@ -74,17 +75,25 @@ export interface CoachRestoration {
 
 interface RestorationDependencies {
   history: CoachHistoryRepository;
-  sessions: SpecialistSessionRepository;
+  sessions: Pick<SpecialistSessionService, 'findOpen' | 'disableOpen'>;
   manifests: SpecialistRegistry;
 }
 
 export async function loadCoachRestoration(
   userId: string,
   dependencies: RestorationDependencies,
+  enabled = true,
 ): Promise<CoachRestoration> {
+  if (!enabled) {
+    const [messages] = await Promise.all([
+      dependencies.history.latest(userId, 50),
+      dependencies.sessions.disableOpen(userId),
+    ]);
+    return { messages, activePersona: VITAL_PERSONA, pendingCard: null };
+  }
   const [messages, session] = await Promise.all([
     dependencies.history.latest(userId, 50),
-    dependencies.sessions.findOpenByUser(userId),
+    dependencies.sessions.findOpen(userId),
   ]);
   if (!session) return { messages, activePersona: VITAL_PERSONA, pendingCard: null };
 
@@ -95,6 +104,7 @@ export async function loadCoachRestoration(
     ? {
         phase: session.status,
         sessionId: session.id,
+        cardOccurrenceId: session.cardOccurrenceId,
         specialist,
         objective: session.objective,
         ...(session.returnHandoff ? { returnSummary: session.returnHandoff } : {}),

@@ -2,6 +2,7 @@ import type { SpecialistAction } from './orchestration';
 
 export interface SpecialistActionRequest {
   sessionId: string;
+  cardOccurrenceId: string;
   actionId: string;
   action: SpecialistAction;
 }
@@ -24,11 +25,15 @@ export function parseSpecialistActionRequest(body: unknown): SpecialistActionReq
   if (typeof input.actionId !== 'string' || !input.actionId.trim()) {
     throw new Error('actionId is required for specialist actions');
   }
+  if (typeof input.cardOccurrenceId !== 'string' || !input.cardOccurrenceId.trim()) {
+    throw new Error('cardOccurrenceId is required for specialist actions');
+  }
   if (typeof input.action !== 'string' || !ACTIONS.has(input.action as SpecialistAction)) {
     throw new Error('action must be a supported specialist action');
   }
   return {
     sessionId: input.sessionId,
+    cardOccurrenceId: input.cardOccurrenceId,
     actionId: input.actionId,
     action: input.action as SpecialistAction,
   };

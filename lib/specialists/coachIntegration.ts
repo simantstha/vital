@@ -78,6 +78,7 @@ export interface HandoffCardPayload {
   type: 'handoff_card';
   phase: 'proposed' | 'return_proposed';
   sessionId: string;
+  cardOccurrenceId: string;
   specialist: PersonaSnapshot;
   objective: string;
   returnSummary?: unknown;
@@ -94,6 +95,7 @@ export function handoffCardForSession(
     type: 'handoff_card',
     phase: session.status,
     sessionId: session.id,
+    cardOccurrenceId: session.cardOccurrenceId,
     specialist: specialistPersona(manifest, session.id),
     objective: session.objective,
     ...(session.returnHandoff ? { returnSummary: session.returnHandoff } : {}),

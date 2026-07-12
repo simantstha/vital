@@ -79,9 +79,6 @@ export function createCoachHttpHandlers(dependencies: CoachHttpDependencies) {
     async GET(request: Request): Promise<Response> {
       const userId = authentication(request, dependencies);
       if (userId instanceof Response) return userId;
-      if (!dependencies.enabled()) {
-        return new Response('Specialists are not enabled.', { status: 404 });
-      }
       try {
         return Response.json(await dependencies.restore(userId));
       } catch (error) {

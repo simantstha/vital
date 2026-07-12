@@ -6,7 +6,10 @@ import {
   loadCoachRestoration,
   type CoachHistoryRepository,
 } from './restoration';
-import type { SpecialistSessionRepository } from './sessions';
+import {
+  InMemorySpecialistSessionRepository,
+  SpecialistSessionService,
+} from './sessions';
 
 const USER = '00000000-0000-4000-8000-000000000001';
 const SESSION = '10000000-0000-4000-8000-000000000001';
@@ -47,21 +50,19 @@ test('restoration requests latest 50 messages and returns active specialist iden
       }];
     },
   };
-  const sessions: SpecialistSessionRepository = {
-    async findOpenByUser(userId) {
+  const sessions = {
+    async findOpen(userId: string) {
       assert.equal(userId, USER);
       return {
         id: SESSION, userId: USER, objective: 'Plan a safe week', manifestId: 'running-coach',
-        manifestVersion: '1.0.0', status: 'active', inboundHandoff: { summary: 'Runner' },
+        manifestVersion: '1.0.0', status: 'active' as const, inboundHandoff: { summary: 'Runner' },
+        cardOccurrenceId: '30000000-0000-4000-8000-000000000001',
         returnHandoff: null, failureReason: null,
         proposedAt: new Date(), activatedAt: new Date(), returnProposedAt: null,
         completedAt: null, declinedAt: null, failedAt: null, expiresAt: null, updatedAt: new Date(),
       };
     },
-    async findByUserAndId() { return null; },
-    async insert() { throw new Error('not used'); },
-    async update() { throw new Error('not used'); },
-    async findExpiredPending() { return []; },
+    async disableOpen() { return null; },
   };
 
   const restored = await loadCoachRestoration(USER, {
@@ -79,17 +80,19 @@ test('restoration requests latest 50 messages and returns active specialist iden
 test('restoration exposes a pending return card without switching back to Vital', async () => {
   const history: CoachHistoryRepository = { async latest() { return []; } };
   const sessions = {
-    async findOpenByUser() {
+    async findOpen() {
       return {
         id: SESSION, userId: USER, objective: 'Plan a safe week', manifestId: 'running-coach',
         manifestVersion: '1.0.0', status: 'return_proposed' as const,
+        cardOccurrenceId: '30000000-0000-4000-8000-000000000001',
         inboundHandoff: { summary: 'Runner' },
         returnHandoff: { outcomes: ['Week planned'] }, failureReason: null,
         proposedAt: new Date(), activatedAt: new Date(), returnProposedAt: new Date(),
         completedAt: null, declinedAt: null, failedAt: null, expiresAt: new Date(), updatedAt: new Date(),
       };
     },
-  } as unknown as SpecialistSessionRepository;
+    async disableOpen() { return null; },
+  };
   const restored = await loadCoachRestoration(USER, {
     history, sessions,
     manifests: new SpecialistRegistry({ SPECIALIST_MODEL: 'claude-opus-test' }),
@@ -97,4 +100,70 @@ test('restoration exposes a pending return card without switching back to Vital'
   assert.equal(restored.activePersona.id, 'running-coach');
   assert.equal(restored.pendingCard?.phase, 'return_proposed');
   assert.deepEqual(restored.pendingCard?.returnSummary, { outcomes: ['Week planned'] });
+});
+
+test('restoration reconciles an expired return proposal back to the specialist', async () => {
+  const manifests = new SpecialistRegistry({ SPECIALIST_MODEL: 'claude-opus-test' });
+  const repository = new InMemorySpecialistSessionRepository();
+  const sessions = new SpecialistSessionService(
+    repository,
+    () => new Date('2026-07-11T12:00:00Z'),
+    manifests,
+  );
+  await repository.insert({
+    id: SESSION,
+    userId: USER,
+    objective: 'Plan a safe week',
+    manifestId: 'running-coach',
+    manifestVersion: '1.0.0',
+    status: 'return_proposed',
+    cardOccurrenceId: '30000000-0000-4000-8000-000000000001',
+    inboundHandoff: { summary: 'Runner' },
+    returnHandoff: { outcomes: ['Week planned'] },
+    failureReason: null,
+    proposedAt: new Date('2026-07-11T11:00:00Z'),
+    activatedAt: new Date('2026-07-11T11:01:00Z'),
+    returnProposedAt: new Date('2026-07-11T11:30:00Z'),
+    completedAt: null,
+    declinedAt: null,
+    failedAt: null,
+    expiresAt: new Date('2026-07-11T11:45:00Z'),
+    updatedAt: new Date('2026-07-11T11:30:00Z'),
+  });
+
+  const restored = await loadCoachRestoration(USER, {
+    history: { async latest() { return []; } },
+    sessions,
+    manifests,
+  });
+  assert.equal(restored.activePersona.id, 'running-coach');
+  assert.equal(restored.pendingCard, null);
+  assert.equal((await sessions.get(USER, SESSION))?.status, 'active');
+});
+
+test('disabled restoration rolls an active specialist back to authoritative Vital', async () => {
+  const manifests = new SpecialistRegistry({ SPECIALIST_MODEL: 'claude-opus-test' });
+  const sessions = new SpecialistSessionService(
+    new InMemorySpecialistSessionRepository(),
+    () => new Date('2026-07-11T12:00:00Z'),
+    manifests,
+  );
+  const proposed = await sessions.propose({
+    userId: USER,
+    objective: 'Plan',
+    manifestId: 'running-coach',
+    manifestVersion: '1.0.0',
+    inboundHandoff: {},
+    expiresAt: new Date('2026-07-11T12:15:00Z'),
+  });
+  await sessions.transition(USER, proposed.id, 'active');
+
+  const restored = await loadCoachRestoration(USER, {
+    history: { async latest() { return []; } },
+    sessions,
+    manifests,
+  }, false);
+  assert.equal(restored.activePersona.id, 'vital');
+  assert.equal(restored.pendingCard, null);
+  assert.equal((await sessions.get(USER, proposed.id))?.failureReason, 'specialists_disabled');
 });

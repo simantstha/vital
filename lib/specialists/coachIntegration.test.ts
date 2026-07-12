@@ -21,6 +21,7 @@ function session(status: SpecialistSession['status']): SpecialistSession {
   return {
     id: SESSION, userId: USER, objective: 'Plan a safe week', manifestId: 'running-coach',
     manifestVersion: '1.0.0', status, inboundHandoff: { summary: 'Runner' },
+    cardOccurrenceId: '30000000-0000-4000-8000-000000000001',
     returnHandoff: status === 'return_proposed' ? { outcomes: ['Week planned'] } : null,
     failureReason: null, proposedAt: new Date(), activatedAt: status === 'proposed' ? null : new Date(),
     returnProposedAt: status === 'return_proposed' ? new Date() : null,
@@ -75,6 +76,7 @@ test('pending proposal produces a proposal card but does not activate specialist
   const manifest = new SpecialistRegistry({ SPECIALIST_MODEL: 'claude-opus-test' }).get('running-coach');
   const card = handoffCardForSession(session('proposed'), manifest);
   assert.equal(card.phase, 'proposed');
+  assert.equal(card.cardOccurrenceId, session('proposed').cardOccurrenceId);
   assert.equal(card.specialist.title, 'Running Coach');
   assert.equal(card.returnSummary, undefined);
 });

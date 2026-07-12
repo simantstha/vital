@@ -27,6 +27,7 @@ export interface HandoffCardEvent {
   type: 'handoff_card';
   phase: 'dismissed';
   sessionId: string;
+  cardOccurrenceId: string;
   specialist: PersonaSnapshot;
   objective: string;
   returnSummary?: unknown;
@@ -45,6 +46,7 @@ export interface SpecialistActionResult {
 export interface ApplySpecialistActionInput {
   userId: string;
   sessionId: string;
+  cardOccurrenceId: string;
   actionId: string;
   action: SpecialistAction;
 }
@@ -54,6 +56,7 @@ export interface SpecialistActionStore {
     userId: string,
     actionId: string,
     sessionId: string,
+    cardOccurrenceId: string,
     action: SpecialistAction,
   ): Promise<SpecialistActionClaim>;
   complete(
@@ -65,8 +68,10 @@ export interface SpecialistActionStore {
 
 export interface SpecialistActionClaim {
   sessionId: string;
+  cardOccurrenceId: string;
   action: SpecialistAction;
   result: SpecialistActionResult | null;
+  isNew: boolean;
 }
 
 export class InMemorySpecialistActionStore implements SpecialistActionStore {
@@ -76,12 +81,13 @@ export class InMemorySpecialistActionStore implements SpecialistActionStore {
     userId: string,
     actionId: string,
     sessionId: string,
+    cardOccurrenceId: string,
     action: SpecialistAction,
   ): Promise<SpecialistActionClaim> {
     const key = `${userId}:${actionId}`;
     const existing = this.rows.get(key);
-    if (existing) return structuredClone(existing);
-    const claim = { sessionId, action, result: null };
+    if (existing) return { ...structuredClone(existing), isNew: false };
+    const claim = { sessionId, cardOccurrenceId, action, result: null, isNew: true };
     this.rows.set(key, claim);
     return structuredClone(claim);
   }
@@ -158,13 +164,14 @@ export class SpecialistActionCoordinator<
       input.userId,
       input.actionId,
       input.sessionId,
+      input.cardOccurrenceId,
       input.action,
     );
-    if (claim.sessionId !== input.sessionId || claim.action !== input.action) {
+    if (claim.sessionId !== input.sessionId ||
+      claim.cardOccurrenceId !== input.cardOccurrenceId ||
+      claim.action !== input.action) {
       throw new Error(`actionId ${input.actionId} belongs to a different specialist action`);
     }
-    if (claim.result) return claim.result;
-
     const expected: Record<SpecialistAction, SpecialistSession['status']> = {
       accept_handoff: 'proposed',
       decline_handoff: 'proposed',
@@ -179,6 +186,13 @@ export class SpecialistActionCoordinator<
     }[input.action] as SpecialistSession['status'];
     let session = await this.sessions.get(input.userId, input.sessionId);
     if (!session) throw new Error(`Specialist session ${input.sessionId} not found for user`);
+    if (session.cardOccurrenceId !== input.cardOccurrenceId) {
+      throw new Error(`Card occurrence ${input.cardOccurrenceId} is no longer current`);
+    }
+    if (claim.result) return claim.result;
+    if (claim.isNew && session.status !== expected[input.action]) {
+      throw new Error(`Action ${input.action} is invalid while session is ${session.status}`);
+    }
     if (session.status === expected[input.action]) {
       try {
         session = await this.sessions.transition(input.userId, input.sessionId, target);
@@ -203,6 +217,7 @@ export class SpecialistActionCoordinator<
           type: 'handoff_card',
           phase: 'dismissed',
           sessionId: session.id,
+          cardOccurrenceId: session.cardOccurrenceId,
           specialist: specialistPersona(manifest, session.id),
           objective: session.objective,
           ...(session.returnHandoff ? { returnSummary: session.returnHandoff } : {}),

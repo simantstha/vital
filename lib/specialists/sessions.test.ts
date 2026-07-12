@@ -39,6 +39,7 @@ async function seedSession(
     manifestId: 'running-coach',
     manifestVersion: '1.0.0',
     status,
+    cardOccurrenceId: randomUUID(),
     inboundHandoff: {},
     returnHandoff: null,
     failureReason: null,
@@ -165,6 +166,74 @@ test('proposal expiry fails pending proposals but never expires active consultat
   assert.equal((await sessions.get(USER_A, expired.id))?.failureReason, 'proposal_expired');
   assert.equal((await sessions.get(USER_B, active.id))?.status, 'active');
   assert.equal((await sessions.get(USER_B, active.id))?.expiresAt, null);
+});
+
+test('session reads reconcile expired proposals and return proposals', async () => {
+  const sessions = service();
+  const proposal = await sessions.propose({
+    userId: USER_A,
+    objective: 'Review recent training',
+    manifestId: 'running-coach',
+    manifestVersion: '1.0.0',
+    inboundHandoff: { summary: 'Review requested.' },
+    expiresAt: new Date('2026-07-11T11:59:00.000Z'),
+  });
+  const failed = await sessions.get(USER_A, proposal.id);
+  assert.equal(failed?.status, 'failed');
+  assert.equal(failed?.failureReason, 'proposal_expired');
+
+  const returning = await seedSession(sessions, 'return_proposed', USER_B);
+  await sessions.repository.update({
+    ...returning,
+    expiresAt: new Date('2026-07-11T11:59:00.000Z'),
+  }, 'return_proposed');
+  const resumed = await sessions.get(USER_B, returning.id);
+  assert.equal(resumed?.status, 'active');
+  assert.equal(resumed?.expiresAt, null);
+  assert.equal(resumed?.failureReason, null);
+});
+
+test('each pending card occurrence receives a new server-authored identifier', async () => {
+  const sessions = service();
+  const proposed = await sessions.propose({
+    userId: USER_A,
+    objective: 'Plan',
+    manifestId: 'running-coach',
+    manifestVersion: '1.0.0',
+    inboundHandoff: {},
+    expiresAt: new Date('2026-07-11T12:15:00.000Z'),
+  });
+  assert.match(proposed.cardOccurrenceId, /^[0-9a-f-]{36}$/i);
+  const active = await sessions.transition(USER_A, proposed.id, 'active');
+  const firstReturn = await sessions.transition(USER_A, active.id, 'return_proposed', {
+    returnHandoff: {},
+    expiresAt: new Date('2026-07-11T12:15:00.000Z'),
+  });
+  const resumed = await sessions.transition(USER_A, firstReturn.id, 'active');
+  const secondReturn = await sessions.transition(USER_A, resumed.id, 'return_proposed', {
+    returnHandoff: {},
+    expiresAt: new Date('2026-07-11T12:15:00.000Z'),
+  });
+  assert.notEqual(firstReturn.cardOccurrenceId, proposed.cardOccurrenceId);
+  assert.notEqual(secondReturn.cardOccurrenceId, firstReturn.cardOccurrenceId);
+});
+
+test('kill switch fails any open specialist session and reports Vital as authoritative', async () => {
+  const sessions = service();
+  const proposed = await sessions.propose({
+    userId: USER_A,
+    objective: 'Plan',
+    manifestId: 'running-coach',
+    manifestVersion: '1.0.0',
+    inboundHandoff: {},
+    expiresAt: new Date('2026-07-11T12:15:00.000Z'),
+  });
+  await sessions.transition(USER_A, proposed.id, 'active');
+
+  const disabled = await sessions.disableOpen(USER_A);
+  assert.equal(disabled?.status, 'failed');
+  assert.equal(disabled?.failureReason, 'specialists_disabled');
+  assert.equal(await sessions.findOpen(USER_A), null);
 });
 
 test('return proposals require a fresh future expiry', async () => {

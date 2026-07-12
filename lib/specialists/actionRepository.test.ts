@@ -9,12 +9,14 @@ import {
 const USER = '00000000-0000-4000-8000-000000000001';
 const OTHER_USER = '00000000-0000-4000-8000-000000000002';
 const SESSION = '10000000-0000-4000-8000-000000000001';
+const OCCURRENCE = '30000000-0000-4000-8000-000000000001';
 
 function result(): SpecialistActionResult {
   return {
     session: {
       id: SESSION, userId: USER, objective: 'Build a running week',
       manifestId: 'running-coach', manifestVersion: '1.0.0', status: 'active',
+      cardOccurrenceId: OCCURRENCE,
       inboundHandoff: { summary: 'Runner' }, returnHandoff: null, failureReason: null,
       proposedAt: new Date('2026-07-11T12:00:00Z'),
       activatedAt: new Date('2026-07-11T12:01:00Z'), returnProposedAt: null,
@@ -24,6 +26,7 @@ function result(): SpecialistActionResult {
     events: [
       {
         type: 'handoff_card', phase: 'dismissed', sessionId: SESSION,
+        cardOccurrenceId: OCCURRENCE,
         specialist: {
           id: 'running-coach', title: 'Running Coach', subtitle: 'Vital Specialist',
           accent: '#4CC9F0', icon: 'figure.run', sessionId: SESSION,
@@ -51,13 +54,13 @@ function persistence(): SpecialistActionPersistence {
     async insertClaim(values) {
       const rowKey = key(values.user_id, values.action_id);
       const existing = rows.get(rowKey);
-      if (existing) return existing as never;
+      if (existing) return { row: existing, isNew: false } as never;
       const row = {
         id: '20000000-0000-4000-8000-000000000001',
         created_at: new Date(), completed_at: null, ...values,
       };
       rows.set(rowKey, row);
-      return row as never;
+      return { row, isNew: true } as never;
     },
     async complete(userId, actionId, completedResult) {
       const rowKey = key(userId, actionId);
@@ -74,30 +77,36 @@ function persistence(): SpecialistActionPersistence {
 
 test('action repository claims before transition and later replays the completed result', async () => {
   const repository = new SpecialistActionRepository(persistence());
-  assert.deepEqual(await repository.claim(USER, 'accept-1', SESSION, 'accept_handoff'), {
+  assert.deepEqual(await repository.claim(USER, 'accept-1', SESSION, OCCURRENCE, 'accept_handoff'), {
     sessionId: SESSION,
+    cardOccurrenceId: OCCURRENCE,
     action: 'accept_handoff',
     result: null,
+    isNew: true,
   });
   const expected = result();
   assert.deepEqual(await repository.complete(USER, 'accept-1', expected), expected);
-  assert.deepEqual(await repository.claim(USER, 'accept-1', SESSION, 'accept_handoff'), {
+  assert.deepEqual(await repository.claim(USER, 'accept-1', SESSION, OCCURRENCE, 'accept_handoff'), {
     sessionId: SESSION,
+    cardOccurrenceId: OCCURRENCE,
     action: 'accept_handoff',
     result: expected,
+    isNew: false,
   });
 });
 
 test('action claims are scoped by user and retain the original request identity', async () => {
   const repository = new SpecialistActionRepository(persistence());
-  await repository.claim(USER, 'shared-id', SESSION, 'accept_handoff');
-  const other = await repository.claim(OTHER_USER, 'shared-id', SESSION, 'decline_handoff');
+  await repository.claim(USER, 'shared-id', SESSION, OCCURRENCE, 'accept_handoff');
+  const other = await repository.claim(OTHER_USER, 'shared-id', SESSION, OCCURRENCE, 'decline_handoff');
   assert.deepEqual(other, {
     sessionId: SESSION,
+    cardOccurrenceId: OCCURRENCE,
     action: 'decline_handoff',
     result: null,
+    isNew: true,
   });
-  const original = await repository.claim(USER, 'shared-id', 'different-session', 'accept_return');
+  const original = await repository.claim(USER, 'shared-id', 'different-session', 'different-occurrence', 'accept_return');
   assert.equal(original.sessionId, SESSION);
   assert.equal(original.action, 'accept_handoff');
 });

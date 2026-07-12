@@ -94,7 +94,7 @@ export type CoachEvent =
 
 export async function* runSpecialistAction(
   userId: string,
-  input: { sessionId: string; actionId: string; action: SpecialistAction },
+  input: { sessionId: string; cardOccurrenceId: string; actionId: string; action: SpecialistAction },
 ): AsyncGenerator<CoachEvent> {
   const result = await specialistActions.apply({ userId, ...input });
   console.info('specialist_lifecycle', {
@@ -133,10 +133,16 @@ export async function* runCoach(
   // 2. Assemble context from Postgres (deterministic) ────────────────────────
   const ctx = await assembleContext(userId);
 
-  let currentSession = specialistsEnabled
-    ? await specialistSessionRepository.findOpenByUser(userId)
-    : null;
   const pendingEvents: CoachEvent[] = [];
+  let currentSession = specialistsEnabled
+    ? await specialistSessions.findOpen(userId)
+    : null;
+  if (!specialistsEnabled && !isOnboarding) {
+    const disabledSession = await specialistSessions.disableOpen(userId);
+    if (disabledSession) {
+      pendingEvents.push({ type: 'persona_changed', persona: VITAL_PERSONA });
+    }
+  }
   if (currentSession?.status === 'active' && parseActiveSpecialistReturn(userMessage)) {
     currentSession = await specialistRuntime.completeExplicitReturn(userId, currentSession.id);
     pendingEvents.push({ type: 'persona_changed', persona: VITAL_PERSONA });
@@ -149,6 +155,7 @@ export async function* runCoach(
       const result = await specialistActions.apply({
         userId,
         sessionId: currentSession.id,
+        cardOccurrenceId: currentSession.cardOccurrenceId,
         actionId: `text:${randomUUID()}`,
         action,
       });

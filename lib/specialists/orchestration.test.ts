@@ -80,6 +80,7 @@ test('accepted handoff is user-scoped, idempotent by action id, and emits person
     actions.apply({
       userId: USER_B,
       sessionId: proposed.id,
+      cardOccurrenceId: proposed.cardOccurrenceId,
       actionId: 'action-cross-user',
       action: 'accept_handoff',
     }),
@@ -89,6 +90,7 @@ test('accepted handoff is user-scoped, idempotent by action id, and emits person
   const input = {
     userId: USER_A,
     sessionId: proposed.id,
+    cardOccurrenceId: proposed.cardOccurrenceId,
     actionId: 'action-accept-1',
     action: 'accept_handoff' as const,
   };
@@ -133,6 +135,7 @@ test('concurrent duplicate actions replay one transition and recover a failed re
   const input = {
     userId: USER_A,
     sessionId: proposed.id,
+    cardOccurrenceId: proposed.cardOccurrenceId,
     actionId: 'concurrent-accept',
     action: 'accept_handoff' as const,
   };
@@ -147,6 +150,7 @@ test('concurrent duplicate actions replay one transition and recover a failed re
   const returnInput = {
     userId: USER_A,
     sessionId: returning.id,
+    cardOccurrenceId: returning.cardOccurrenceId,
     actionId: 'recover-result-write',
     action: 'accept_return' as const,
   };
@@ -166,11 +170,64 @@ test('an idempotency key cannot be replayed for a different request', async () =
     manifestVersion: manifest.version, inboundHandoff: {}, expiresAt: LATER,
   });
   await actions.apply({
-    userId: USER_A, sessionId: proposed.id, actionId: 'same-key', action: 'accept_handoff',
+    userId: USER_A, sessionId: proposed.id, cardOccurrenceId: proposed.cardOccurrenceId,
+    actionId: 'same-key', action: 'accept_handoff',
   });
   await assert.rejects(actions.apply({
-    userId: USER_A, sessionId: proposed.id, actionId: 'same-key', action: 'decline_handoff',
+    userId: USER_A, sessionId: proposed.id, cardOccurrenceId: proposed.cardOccurrenceId,
+    actionId: 'same-key', action: 'decline_handoff',
   }), /different specialist action/);
+});
+
+test('actions reject an expired proposal after reconciling it', async () => {
+  const { manifests, sessions, actions } = setup();
+  const manifest = manifests.get('running-coach');
+  const proposed = await sessions.propose({
+    userId: USER_A,
+    objective: 'Plan',
+    manifestId: manifest.id,
+    manifestVersion: manifest.version,
+    inboundHandoff: {},
+    expiresAt: new Date('2026-07-11T11:59:00.000Z'),
+  });
+
+  await assert.rejects(actions.apply({
+    userId: USER_A,
+    sessionId: proposed.id,
+    cardOccurrenceId: proposed.cardOccurrenceId,
+    actionId: 'stale-accept',
+    action: 'accept_handoff',
+  }), /invalid while session is failed/);
+  assert.equal((await sessions.get(USER_A, proposed.id))?.failureReason, 'proposal_expired');
+});
+
+test('a newly claimed decline cannot replay an expired return proposal', async () => {
+  const { manifests, sessions, actions } = setup();
+  const manifest = manifests.get('running-coach');
+  const proposed = await sessions.propose({
+    userId: USER_A,
+    objective: 'Plan',
+    manifestId: manifest.id,
+    manifestVersion: manifest.version,
+    inboundHandoff: {},
+    expiresAt: LATER,
+  });
+  const active = await sessions.transition(USER_A, proposed.id, 'active');
+  await sessions.repository.update({
+    ...active,
+    status: 'return_proposed',
+    returnProposedAt: new Date('2026-07-11T11:30:00.000Z'),
+    returnHandoff: { outcomes: ['Done'] },
+    expiresAt: new Date('2026-07-11T11:59:00.000Z'),
+  }, 'active');
+
+  await assert.rejects(actions.apply({
+    userId: USER_A,
+    sessionId: proposed.id,
+    cardOccurrenceId: proposed.cardOccurrenceId,
+    actionId: 'stale-decline-return',
+    action: 'decline_return',
+  }), /invalid while session is active/);
 });
 
 test('return actions require the return proposal and restore Vital only on acceptance', async () => {
@@ -185,7 +242,7 @@ test('return actions require the return proposal and restore Vital only on accep
     expiresAt: LATER,
   });
   await sessions.transition(USER_A, proposed.id, 'active');
-  await sessions.transition(USER_A, proposed.id, 'return_proposed', {
+  const firstReturn = await sessions.transition(USER_A, proposed.id, 'return_proposed', {
     expiresAt: LATER,
     returnHandoff: { outcomes: ['Recovery plan agreed'] },
   });
@@ -193,19 +250,29 @@ test('return actions require the return proposal and restore Vital only on accep
   const declined = await actions.apply({
     userId: USER_A,
     sessionId: proposed.id,
+    cardOccurrenceId: firstReturn.cardOccurrenceId,
     actionId: 'decline-return',
     action: 'decline_return',
   });
   assert.equal(declined.session.status, 'active');
   assert.equal(declined.events[1].persona.id, 'running-coach');
 
-  await sessions.transition(USER_A, proposed.id, 'return_proposed', {
+  const secondReturn = await sessions.transition(USER_A, proposed.id, 'return_proposed', {
     expiresAt: LATER,
     returnHandoff: { outcomes: ['Recovery plan agreed'] },
   });
+  assert.notEqual(secondReturn.cardOccurrenceId, firstReturn.cardOccurrenceId);
+  await assert.rejects(actions.apply({
+    userId: USER_A,
+    sessionId: proposed.id,
+    cardOccurrenceId: firstReturn.cardOccurrenceId,
+    actionId: 'decline-return',
+    action: 'decline_return',
+  }), /no longer current/);
   const accepted = await actions.apply({
     userId: USER_A,
     sessionId: proposed.id,
+    cardOccurrenceId: secondReturn.cardOccurrenceId,
     actionId: 'accept-return',
     action: 'accept_return',
   });
