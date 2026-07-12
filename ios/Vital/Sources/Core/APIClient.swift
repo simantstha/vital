@@ -18,11 +18,25 @@ enum AppConfig {
 
 /// Minimal Encodable wrapper for heterogeneous JSON payloads.
 /// Avoids a dependency on external AnyCodable packages.
-enum JSONValue: Encodable {
+indirect enum JSONValue: Codable, Equatable {
     case int(Int)
     case double(Double)
     case string(String)
     case bool(Bool)
+    case array([JSONValue])
+    case object([String: JSONValue])
+    case null
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        if c.decodeNil() { self = .null }
+        else if let value = try? c.decode(Bool.self) { self = .bool(value) }
+        else if let value = try? c.decode(Int.self) { self = .int(value) }
+        else if let value = try? c.decode(Double.self) { self = .double(value) }
+        else if let value = try? c.decode(String.self) { self = .string(value) }
+        else if let value = try? c.decode([JSONValue].self) { self = .array(value) }
+        else { self = .object(try c.decode([String: JSONValue].self)) }
+    }
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.singleValueContainer()
@@ -31,6 +45,9 @@ enum JSONValue: Encodable {
         case .double(let v): try c.encode(v)
         case .string(let v): try c.encode(v)
         case .bool(let v):   try c.encode(v)
+        case .array(let v):  try c.encode(v)
+        case .object(let v): try c.encode(v)
+        case .null:          try c.encodeNil()
         }
     }
 }
@@ -224,6 +241,13 @@ struct APIClient {
         return r.text
     }
 
+    /// Restores the server-authoritative transcript, persona, and pending
+    /// specialist card. The backend deliberately owns these values; clients
+    /// must never infer a persona transition from assistant prose.
+    func fetchCoachRestoration() async throws -> CoachRestorationResponse {
+        try await get("/api/coach")
+    }
+
     // MARK: - Coach TTS
 
     /// Fetches ElevenLabs-synthesized speech for one sentence from the backend
@@ -280,33 +304,16 @@ struct APIClient {
                     }
 
                     for try await line in bytes.lines {
-                        guard line.hasPrefix("data: ") else { continue }
-                        let jsonSlice = line.dropFirst(6)
-                        guard let data = jsonSlice.data(using: .utf8),
-                              let event = try? JSONDecoder().decode(SSEEvent.self, from: data)
-                        else { continue }
-
-                        switch event.type {
-                        case "text":
-                            if let delta = event.delta {
-                                continuation.yield(.text(delta))
-                            }
-                        case "tool_call":
-                            // Requires id/name/status; unrecognized shapes are dropped
-                            // rather than crashing the stream.
-                            guard let id = event.id, let name = event.name, let status = event.status else { break }
-                            let label = event.label ?? name
-                            continuation.yield(.toolCall(id: id, name: name, label: label, done: status == "done"))
-                        case "tool_data":
-                            guard let id = event.id, let viz = event.viz else { break }
-                            continuation.yield(.toolData(id: id, viz: viz))
-                        case "done":
+                        guard let event = try? Self.decodeCoachSSELine(line) else { continue }
+                        switch event {
+                        case .done:
                             continuation.finish()
                             return
+                        case .error(let message):
+                            continuation.finish(throwing: APIError.coachStreamError(message))
+                            return
                         default:
-                            // Forward-compatible: unknown event types are ignored so the
-                            // stream stays robust to backend additions.
-                            break
+                            continuation.yield(event)
                         }
                     }
 
@@ -315,6 +322,87 @@ struct APIClient {
                     continuation.finish(throwing: error)
                 }
             }
+        }
+    }
+
+    /// Sends one explicit specialist-card action over the same SSE endpoint.
+    /// `actionId` is supplied by state management so retries remain idempotent.
+    func streamCoachAction(
+        sessionId: String,
+        actionId: String,
+        action: SpecialistAction
+    ) -> AsyncThrowingStream<CoachStreamEvent, Error> {
+        AsyncThrowingStream { continuation in
+            Task {
+                do {
+                    guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/coach") else {
+                        continuation.finish(throwing: APIError.invalidURL)
+                        return
+                    }
+                    var request = authorizedRequest(url)
+                    request.httpMethod = "POST"
+                    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                    request.timeoutInterval = 30
+                    request.httpBody = try encoder.encode(CoachActionRequestBody(
+                        sessionId: sessionId,
+                        actionId: actionId,
+                        action: action
+                    ))
+
+                    let (bytes, response) = try await session.bytes(for: request)
+                    try validate(response)
+                    for try await line in bytes.lines {
+                        guard let event = try? Self.decodeCoachSSELine(line) else { continue }
+                        switch event {
+                        case .done:
+                            continuation.finish()
+                            return
+                        case .error(let message):
+                            continuation.finish(throwing: APIError.coachStreamError(message))
+                            return
+                        default:
+                            continuation.yield(event)
+                        }
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+        }
+    }
+
+    static func decodeCoachRestoration(_ data: Data) throws -> CoachRestorationResponse {
+        try JSONDecoder().decode(CoachRestorationResponse.self, from: data)
+    }
+
+    /// Decodes one wire-format SSE line. Unknown event types return nil so
+    /// older clients remain forward-compatible with future server additions.
+    static func decodeCoachSSELine(_ line: String) throws -> CoachStreamEvent? {
+        guard line.hasPrefix("data: ") else { return nil }
+        let payload = String(line.dropFirst(6))
+        guard let data = payload.data(using: .utf8) else { return nil }
+        let event = try JSONDecoder().decode(SSEEvent.self, from: data)
+        switch event.type {
+        case "text":
+            return event.delta.map(CoachStreamEvent.text)
+        case "tool_call":
+            guard let id = event.id, let name = event.name, let status = event.status else { return nil }
+            return .toolCall(id: id, name: name, label: event.label ?? name, done: status == "done")
+        case "tool_data":
+            guard let id = event.id, let viz = event.viz else { return nil }
+            return .toolData(id: id, viz: viz)
+        case "handoff_card":
+            guard let card = event.handoffCard else { return nil }
+            return .handoffCard(card)
+        case "persona_changed":
+            return event.persona.map(CoachStreamEvent.personaChanged)
+        case "done":
+            return .done
+        case "error":
+            return .error(event.error ?? "Coach stream failed.")
+        default:
+            return nil
         }
     }
 
@@ -499,11 +587,13 @@ struct APIClient {
 enum APIError: Error, LocalizedError {
     case invalidURL
     case serverError(Int)
+    case coachStreamError(String)
 
     var errorDescription: String? {
         switch self {
         case .invalidURL:         return "Invalid backend URL."
         case .serverError(let c): return "Server returned HTTP \(c)."
+        case .coachStreamError(let message): return message
         }
     }
 }
@@ -843,6 +933,86 @@ private struct CoachRequestBody: Encodable {
     let mode: String?
 }
 
+enum SpecialistAction: String, Codable, CaseIterable {
+    case acceptHandoff = "accept_handoff"
+    case declineHandoff = "decline_handoff"
+    case acceptReturn = "accept_return"
+    case declineReturn = "decline_return"
+}
+
+struct CoachActionRequestBody: Encodable {
+    let sessionId: String
+    let actionId: String
+    let action: SpecialistAction
+}
+
+struct CoachPersonaSnapshot: Codable, Equatable {
+    let id: String
+    let title: String
+    let subtitle: String
+    let accent: String
+    let icon: String
+    let sessionId: String?
+
+    static let vital = CoachPersonaSnapshot(
+        id: "vital",
+        title: "Vital Coach",
+        subtitle: "Your personal coach",
+        accent: "#7C6CF2",
+        icon: "sparkles",
+        sessionId: nil
+    )
+}
+
+struct SpecialistMessageMetadata: Codable, Equatable {
+    let specialistId: String
+    let manifestVersion: String
+    let name: String
+    let role: String
+    let accentColor: String
+    let icon: String
+}
+
+struct CoachRestoredMessage: Codable, Equatable {
+    let id: String
+    let role: String
+    let speaker: String
+    let content: String
+    let timestamp: String
+    let specialistSessionId: String?
+    let specialistMetadata: SpecialistMessageMetadata?
+}
+
+enum CoachHandoffPhase: String, Codable, Equatable {
+    case proposed
+    case returnProposed = "return_proposed"
+    case dismissed
+}
+
+struct CoachHandoffCard: Codable, Equatable {
+    let phase: CoachHandoffPhase
+    let sessionId: String
+    let specialist: CoachPersonaSnapshot
+    let objective: String
+    let returnSummary: JSONValue?
+
+    var dismissed: CoachHandoffCard {
+        CoachHandoffCard(
+            phase: .dismissed,
+            sessionId: sessionId,
+            specialist: specialist,
+            objective: objective,
+            returnSummary: returnSummary
+        )
+    }
+}
+
+struct CoachRestorationResponse: Codable, Equatable {
+    let messages: [CoachRestoredMessage]
+    let activePersona: CoachPersonaSnapshot
+    let pendingCard: CoachHandoffCard?
+}
+
 private struct SSEEvent: Decodable {
     let type: String
     let delta: String?
@@ -854,6 +1024,25 @@ private struct SSEEvent: Decodable {
     let status: String?
     // tool_data field
     let viz: CoachViz?
+    // specialist lifecycle fields
+    let phase: CoachHandoffPhase?
+    let sessionId: String?
+    let specialist: CoachPersonaSnapshot?
+    let objective: String?
+    let returnSummary: JSONValue?
+    let persona: CoachPersonaSnapshot?
+    let error: String?
+
+    var handoffCard: CoachHandoffCard? {
+        guard let phase, let sessionId, let specialist, let objective else { return nil }
+        return CoachHandoffCard(
+            phase: phase,
+            sessionId: sessionId,
+            specialist: specialist,
+            objective: objective,
+            returnSummary: returnSummary
+        )
+    }
 }
 
 // MARK: - Coach inline data-viz
@@ -887,8 +1076,30 @@ struct CoachViz: Decodable, Hashable {
 /// A single event surfaced from the coach SSE stream: a text delta to append to
 /// the streaming reply, a tool-call lifecycle update (started/done) rendered as
 /// an inline activity row, or the structured data for a chartable tool.
-enum CoachStreamEvent {
+enum CoachStreamEvent: Equatable {
     case text(String)
     case toolCall(id: String, name: String, label: String, done: Bool)
     case toolData(id: String, viz: CoachViz)
+    case handoffCard(CoachHandoffCard)
+    case personaChanged(CoachPersonaSnapshot)
+    case done
+    case error(String)
 }
+
+@MainActor
+protocol CoachAPIProviding {
+    func fetchCoachRestoration() async throws -> CoachRestorationResponse
+    func fetchCoachOpener() async throws -> String
+    func streamCoach(
+        message: String,
+        imageBase64: String?,
+        mode: String?
+    ) -> AsyncThrowingStream<CoachStreamEvent, Error>
+    func streamCoachAction(
+        sessionId: String,
+        actionId: String,
+        action: SpecialistAction
+    ) -> AsyncThrowingStream<CoachStreamEvent, Error>
+}
+
+extension APIClient: CoachAPIProviding {}
