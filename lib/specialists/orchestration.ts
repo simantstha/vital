@@ -114,6 +114,13 @@ export function isSpecialistsEnabled(
   return environment.SPECIALISTS_ENABLED === 'true';
 }
 
+export function parseSpecialistConfirmation(text: string): SpecialistConfirmation | null {
+  const normalized = text.trim().toLowerCase().replace(/[.!]+$/, '').trim();
+  if (/^(yes|yep|yeah|accept|bring them in)$/.test(normalized)) return 'accept';
+  if (/^(no|decline|not now|no thanks)$/.test(normalized)) return 'decline';
+  return null;
+}
+
 export function parseActiveSpecialistReturn(text: string): boolean {
   const normalized = text.trim().toLowerCase().replace(/[.!]+$/, '').trim();
   return /^(?:(?:return|go back|switch back) to vital(?: coach)?|back to vital(?: coach)?|end specialist consultation)$/.test(normalized);
@@ -286,26 +293,12 @@ export function validateReturnHandoff(input: unknown): ReturnHandoff {
     throw new Error('return handoff must be an object');
   }
   const source = input as Record<string, unknown>;
-  // decisions/unresolvedRisks may legitimately be empty (e.g. a consultation
-  // that made no decisions, or resolved every risk) — only require non-empty
-  // string items when present. outcomes/recommendations/nextSteps must still
-  // be non-empty: a return handoff always has at least one of each.
-  const requiredNonEmpty = new Set(['outcomes', 'recommendations', 'nextSteps']);
   const keys = ['outcomes', 'decisions', 'recommendations', 'unresolvedRisks', 'nextSteps'] as const;
   const result = {} as ReturnHandoff;
   for (const key of keys) {
     const value = source[key];
-    const mustBeNonEmpty = requiredNonEmpty.has(key);
-    if (
-      !Array.isArray(value) ||
-      (mustBeNonEmpty && value.length === 0) ||
-      value.some((item) => typeof item !== 'string' || !item.trim())
-    ) {
-      throw new Error(
-        mustBeNonEmpty
-          ? `${key} must be a non-empty array of strings`
-          : `${key} must be an array of non-empty strings`,
-      );
+    if (!Array.isArray(value) || value.length === 0 || value.some((item) => typeof item !== 'string' || !item.trim())) {
+      throw new Error(`${key} must be a non-empty array of strings`);
     }
     result[key] = value;
   }
