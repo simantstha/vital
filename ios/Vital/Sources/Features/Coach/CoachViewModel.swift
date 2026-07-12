@@ -60,7 +60,7 @@ struct CoachDataRow: Identifiable, Equatable {
 /// activity while work is in-flight, then the formatted prose answer.
 struct AssistantTurn: Identifiable, Equatable {
     let id: UUID
-    let persona: CoachPersonaSnapshot
+    private(set) var persona: CoachPersonaSnapshot
     private(set) var text: String = ""
     private(set) var toolCalls: [ToolCallRow] = []
     private(set) var dataCards: [CoachDataRow] = []
@@ -95,6 +95,10 @@ struct AssistantTurn: Identifiable, Equatable {
 
     mutating func appendText(_ delta: String) {
         text += delta
+    }
+
+    mutating func updatePersona(_ persona: CoachPersonaSnapshot) {
+        self.persona = persona
     }
 
     mutating func applyToolCall(id: String, name: String, label: String, done: Bool) {
@@ -321,10 +325,16 @@ final class CoachViewModel: ObservableObject {
     /// attribution is copied into each historical row so a later persona
     /// change cannot relabel a Running Coach response as Vital.
     func restoreConversation() async {
-        guard mode == nil, !hasRestoredConversation else { return }
+        await restoreConversation(force: false, preserveTranscript: false)
+    }
+
+    private func restoreConversation(force: Bool, preserveTranscript: Bool) async {
+        guard mode == nil, force || !hasRestoredConversation else { return }
         do {
             let restoration = try await api.fetchCoachRestoration()
-            rows = restoration.messages.compactMap(Self.restoredRow)
+            if !preserveTranscript {
+                rows = restoration.messages.compactMap(Self.restoredRow)
+            }
             activePersona = restoration.activePersona
             pendingHandoffCard = restoration.pendingCard
             hasRestoredConversation = true
@@ -409,6 +419,7 @@ final class CoachViewModel: ObservableObject {
         isStreaming = true
 
         streamTask = Task {
+            var turnPersona = assistantPersona
             var receivedVitalRollback = false
             defer {
                 isStreaming = false
@@ -420,17 +431,19 @@ final class CoachViewModel: ObservableObject {
                 for try await event in stream {
                     switch event {
                     case .text(let delta):
-                        appendText(delta, toTurn: assistantId, persona: assistantPersona)
+                        appendText(delta, toTurn: assistantId, persona: turnPersona)
                         // .toolCall/.toolData are never spoken — only prose.
                         if sentByVoice { speaker.feed(delta: delta) }
                     case .toolCall(let id, let name, let label, let done):
-                        applyToolCall(id: id, name: name, label: label, done: done, toTurn: assistantId, persona: assistantPersona)
+                        applyToolCall(id: id, name: name, label: label, done: done, toTurn: assistantId, persona: turnPersona)
                     case .toolData(let id, let viz):
-                        applyToolData(id: id, viz: viz, toTurn: assistantId, persona: assistantPersona)
+                        applyToolData(id: id, viz: viz, toTurn: assistantId, persona: turnPersona)
                     case .handoffCard(let card):
                         applyHandoffCard(card)
                     case .personaChanged(let persona):
                         receivedVitalRollback = activePersona.id != "vital" && persona.id == "vital"
+                        turnPersona = persona
+                        updateTurnPersona(assistantId, persona: persona)
                         applyPersona(persona)
                     case .error(let message):
                         throw APIError.coachStreamError(message)
@@ -438,7 +451,7 @@ final class CoachViewModel: ObservableObject {
                         break
                     }
                 }
-                finishTurn(assistantId, persona: assistantPersona)
+                finishTurn(assistantId, persona: turnPersona)
                 if sentByVoice { speaker.finish() }
             } catch {
                 // Surface the error in the assistant bubble. Since the bubble is
@@ -451,7 +464,7 @@ final class CoachViewModel: ObservableObject {
                     turn.finish()
                     rows[idx] = .assistantTurn(turn)
                 } else {
-                    var turn = AssistantTurn(id: assistantId, persona: assistantPersona)
+                    var turn = AssistantTurn(id: assistantId, persona: turnPersona)
                     turn.appendText(errorText)
                     turn.finish()
                     rows.append(.assistantTurn(turn))
@@ -523,6 +536,7 @@ final class CoachViewModel: ObservableObject {
                 specialistState = .recoverableRollback(error.localizedDescription)
                 errorMessage = error.localizedDescription
                 hasRestoredConversation = false
+                await restoreConversation(force: true, preserveTranscript: true)
             }
         }
     }
@@ -596,6 +610,14 @@ final class CoachViewModel: ObservableObject {
         mutateTurn(id, persona: persona) { turn in
             turn.finish()
         }
+    }
+
+    private func updateTurnPersona(_ id: UUID, persona: CoachPersonaSnapshot) {
+        guard let idx = rows.firstIndex(where: { $0.id == id.uuidString }),
+              case .assistantTurn(var turn) = rows[idx]
+        else { return }
+        turn.updatePersona(persona)
+        rows[idx] = .assistantTurn(turn)
     }
 
     private func mutateTurn(_ id: UUID, persona: CoachPersonaSnapshot, _ update: (inout AssistantTurn) -> Void) {

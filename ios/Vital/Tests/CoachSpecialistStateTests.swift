@@ -206,6 +206,58 @@ final class CoachSpecialistStateTests: XCTestCase {
         XCTAssertEqual(viewModel.specialistState, .activeConsultation(runningCoach))
     }
 
+    func testPersonaChangeBeforeTextLabelsTypedAcceptanceReplyAsRunningCoach() async {
+        let card = CoachHandoffCard(
+            phase: .proposed, sessionId: "session-1", specialist: runningCoach,
+            objective: "Plan a safe week", returnSummary: nil
+        )
+        let api = FakeCoachAPI(restoration: CoachRestorationResponse(
+            messages: [], activePersona: .vital, pendingCard: card
+        ))
+        api.nextMessageEvents = [
+            .handoffCard(card.dismissed),
+            .toolCall(id: "context", name: "get_workouts", label: "Checking runs", done: false),
+            .personaChanged(runningCoach),
+            .text("Let's plan your week."),
+            .toolCall(id: "context", name: "get_workouts", label: "Checking runs", done: true),
+        ]
+        let viewModel = CoachViewModel(api: api)
+        await viewModel.restoreConversation()
+        viewModel.input = "yes"
+
+        viewModel.send()
+        await waitUntil { !viewModel.isStreaming }
+
+        guard let turn = viewModel.rows.compactMap({ row -> AssistantTurn? in
+            guard case .assistantTurn(let turn) = row else { return nil }
+            return turn
+        }).last else {
+            return XCTFail("Expected assistant turn")
+        }
+        XCTAssertEqual(turn.speakerLabel, "Running Coach")
+    }
+
+    func testPersonaChangeBeforeTextLabelsExplicitReturnReplyAsVital() async {
+        let api = FakeCoachAPI(restoration: CoachRestorationResponse(
+            messages: [], activePersona: runningCoach, pendingCard: nil
+        ))
+        api.nextMessageEvents = [
+            .personaChanged(.vital),
+            .text("You're back with Vital."),
+        ]
+        let viewModel = CoachViewModel(api: api)
+        await viewModel.restoreConversation()
+        viewModel.input = "return to Vital"
+
+        viewModel.send()
+        await waitUntil { !viewModel.isStreaming }
+
+        guard case .assistantTurn(let turn) = viewModel.rows.last else {
+            return XCTFail("Expected assistant turn")
+        }
+        XCTAssertEqual(turn.speakerLabel, "Vital Coach")
+    }
+
     func testServerRollbackEventFollowedByFailureReturnsToVitalRecoverably() async {
         let api = FakeCoachAPI(restoration: CoachRestorationResponse(
             messages: [], activePersona: runningCoach, pendingCard: nil
@@ -257,6 +309,38 @@ final class CoachSpecialistStateTests: XCTestCase {
         XCTAssertEqual(historical.speakerLabel, "Running Coach")
     }
 
+    func testActionFailureReconcilesAuthoritativeStateWithoutReplacingTranscript() async {
+        let card = CoachHandoffCard(
+            phase: .proposed, sessionId: "session-1", specialist: runningCoach,
+            objective: "Plan a safe week", returnSummary: nil
+        )
+        let restoredMessage = CoachRestoredMessage(
+            id: "20000000-0000-4000-8000-000000000001",
+            role: "assistant", speaker: "coach", content: "Want a running specialist?",
+            timestamp: "2026-07-11T12:05:00.000Z",
+            specialistSessionId: nil, specialistMetadata: nil
+        )
+        let api = FakeCoachAPI(restoration: CoachRestorationResponse(
+            messages: [restoredMessage], activePersona: .vital, pendingCard: card
+        ))
+        let viewModel = CoachViewModel(api: api)
+        await viewModel.restoreConversation()
+        let originalRows = viewModel.rows
+        api.restoration = CoachRestorationResponse(
+            messages: [], activePersona: runningCoach, pendingCard: nil
+        )
+        api.nextActionFailure = TestFailure.interrupted
+
+        viewModel.performSpecialistAction(.acceptHandoff)
+        await waitUntil { !viewModel.isPerformingSpecialistAction }
+
+        XCTAssertEqual(api.restorationRequestCount, 2)
+        XCTAssertEqual(viewModel.rows, originalRows)
+        XCTAssertEqual(viewModel.activePersona, runningCoach)
+        XCTAssertNil(viewModel.pendingHandoffCard)
+        XCTAssertEqual(viewModel.specialistState, .activeConsultation(runningCoach))
+    }
+
     private func waitUntil(
         _ predicate: @escaping @MainActor () -> Bool,
         file: StaticString = #filePath,
@@ -286,7 +370,9 @@ private final class FakeCoachAPI: CoachAPIProviding {
     var nextMessageEvents: [CoachStreamEvent] = []
     var nextMessageFailure: Error?
     var nextActionEvents: [CoachStreamEvent] = []
+    var nextActionFailure: Error?
     var actionRequests: [ActionRequest] = []
+    private(set) var restorationRequestCount = 0
     var holdActionStreamOpen = false
     private var heldActionContinuation: AsyncThrowingStream<CoachStreamEvent, Error>.Continuation?
     private var shouldFinishHeldAction = false
@@ -296,7 +382,8 @@ private final class FakeCoachAPI: CoachAPIProviding {
     }
 
     func fetchCoachRestoration() async throws -> CoachRestorationResponse {
-        restoration
+        restorationRequestCount += 1
+        return restoration
     }
 
     func fetchCoachOpener() async throws -> String {
@@ -319,7 +406,7 @@ private final class FakeCoachAPI: CoachAPIProviding {
                 if shouldFinishHeldAction { continuation.finish() }
             }
         }
-        return stream(events: nextActionEvents, failure: nil)
+        return stream(events: nextActionEvents, failure: nextActionFailure)
     }
 
     func finishHeldAction() {
