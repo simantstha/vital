@@ -43,14 +43,18 @@ const http2Transport: ApnsTransport = {
     return new Promise((resolve, reject) => {
       const started = Date.now();
       const session = http2.connect(origin);
-      session.once('error', reject);
       const request = session.request(headers);
+      const timeout = setTimeout(() => {
+        request.destroy(); session.destroy(); reject(new Error('apns_timeout'));
+      }, 10_000);
+      const fail = (error: Error) => { clearTimeout(timeout); session.destroy(); reject(error); };
+      session.once('error', fail);
       let status = 0; let responseBody = '';
       request.setEncoding('utf8');
       request.on('response', (responseHeaders) => { status = Number(responseHeaders[':status'] ?? 0); });
       request.on('data', (chunk) => { responseBody += chunk; });
-      request.on('end', () => { session.close(); resolve({ status, body: responseBody, latencyMs: Date.now() - started }); });
-      request.once('error', (error) => { session.close(); reject(error); });
+      request.on('end', () => { clearTimeout(timeout); session.close(); resolve({ status, body: responseBody, latencyMs: Date.now() - started }); });
+      request.once('error', fail);
       request.end(body);
     });
   },

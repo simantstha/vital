@@ -64,16 +64,19 @@ test('one logical notification is sent despite a duplicate worker delivery', asy
 });
 
 function job(): AnalysisJob {
-  return { id: 'j1', kind: 'workout', userId: 'u1', localDate: '2026-07-12', input: {}, retryCount: 0 };
+  return { id: 'j1', kind: 'workout', userId: 'u1', localDate: '2026-07-12', input: {}, retryCount: 0, notificationRetryCount: 0, leaseToken: 'lease' };
 }
 
 function fakeRepository(calls: string[], enabled: boolean): WorkerRepository {
   let sent = false;
   return {
     async getContext() { return { enabled, timezone: 'UTC', baselines: {}, profile: {}, metrics: {} }; },
-    async storeReady() {}, async markRetry() {}, async markFailed() {},
-    async suppress() { calls.push('suppress'); },
-    async claimNotification() { if (sent) return false; sent = true; return true; },
+    async renewAnalysisLease() { return true; }, async storeReady() { return true; }, async markRetry() { return true; }, async markFailed() { return true; },
+    async suppress() { calls.push('suppress'); return true; },
+    async suppressNotification() { calls.push('suppress'); return true; },
+    async claimNotification() { if (sent) return null; sent = true; return 'notification-lease'; },
+    async renewNotificationLease() { return true; },
+    async markNotificationRetry() {}, async markNotificationFailed() {},
     async listDevices() { return [{ id: 'd1', token: 'secret', environment: 'sandbox' }]; },
     async recordPushAttempt() {}, async retireDevice() {}, async markNotificationSent() {},
   };

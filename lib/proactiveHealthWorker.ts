@@ -2,22 +2,27 @@ import { localDayKey } from './localDay';
 
 export type AnalysisKind = 'workout' | 'sleep';
 export interface CoachAnalysis { headline: string; shortInsight: string; narrative: string; observations: string[]; nextSteps: string[] }
-export interface AnalysisJob { id: string; kind: AnalysisKind; userId: string; localDate: string; input: unknown; retryCount: number }
+export interface AnalysisJob { id: string; kind: AnalysisKind; userId: string; localDate: string; input: unknown; retryCount: number; notificationRetryCount: number; leaseToken: string }
 export interface AnalysisContext { enabled: boolean; timezone: string; baselines: unknown; profile: unknown; metrics: unknown }
 export interface PushDevice { id: string; token: string; environment: 'sandbox' | 'production' }
 export type PushOutcome = { outcome: 'sent' | 'transient' | 'permanent'; retireToken: boolean; status?: number; category?: string; latencyMs?: number };
 
 export interface WorkerRepository {
   getContext(job: AnalysisJob): Promise<AnalysisContext>;
-  storeReady(job: AnalysisJob, result: CoachAnalysis): Promise<void>;
-  markRetry(job: AnalysisJob, nextAt: Date): Promise<void>;
-  markFailed(job: AnalysisJob): Promise<void>;
-  suppress(job: AnalysisJob): Promise<void>;
-  claimNotification(job: AnalysisJob, now: Date): Promise<boolean>;
+  renewAnalysisLease(job: AnalysisJob, now: Date): Promise<boolean>;
+  storeReady(job: AnalysisJob, result: CoachAnalysis): Promise<boolean>;
+  markRetry(job: AnalysisJob, nextAt: Date): Promise<boolean>;
+  markFailed(job: AnalysisJob): Promise<boolean>;
+  suppress(job: AnalysisJob): Promise<boolean>;
+  suppressNotification(job: AnalysisJob, now: Date): Promise<boolean>;
+  claimNotification(job: AnalysisJob, now: Date): Promise<string | null>;
+  renewNotificationLease(job: AnalysisJob, token: string, now: Date): Promise<boolean>;
+  markNotificationRetry(job: AnalysisJob, token: string, nextAt: Date): Promise<void>;
+  markNotificationFailed(job: AnalysisJob, token: string): Promise<void>;
   listDevices(userId: string): Promise<PushDevice[]>;
   recordPushAttempt(job: AnalysisJob, device: PushDevice, attempt: number, result: PushOutcome): Promise<void>;
   retireDevice(deviceId: string, now: Date): Promise<void>;
-  markNotificationSent(job: AnalysisJob, now: Date): Promise<void>;
+  markNotificationSent(job: AnalysisJob, token: string, now: Date): Promise<void>;
 }
 
 const limits: Record<keyof CoachAnalysis, number> = { headline: 120, shortInsight: 240, narrative: 1200, observations: 6, nextSteps: 5 };
@@ -72,27 +77,37 @@ export async function runClaimedAnalysis(
   maxRetries = 5,
 ): Promise<void> {
   try {
+    if (!await repository.renewAnalysisLease(job, now)) return;
     const context = await repository.getContext(job);
     if (!context.enabled) { await repository.suppress(job); return; }
     const result = parseCoachAnalysis(await analyze(job, context));
-    await repository.storeReady(job, result);
-    if (!await repository.claimNotification(job, now)) return;
+    if (!await repository.renewAnalysisLease(job, new Date())) return;
+    if (!await repository.storeReady(job, result)) return;
+    const notificationToken = await repository.claimNotification(job, now);
+    if (!notificationToken) return;
+    await deliverNotification(job, result, notificationToken, repository, push, now, maxRetries);
+  } catch {
+    if (job.retryCount < maxRetries) await repository.markRetry(job, nextRetryAt(now, job.retryCount));
+    else await repository.markFailed(job);
+  }
+}
+
+/** APNs has no idempotency key: a crash after Apple accepts but before our CAS may duplicate once on lease recovery. */
+export async function deliverNotification(job: AnalysisJob, result: CoachAnalysis, notificationToken: string, repository: WorkerRepository, push: (device: PushDevice, analysis: CoachAnalysis) => Promise<PushOutcome>, now: Date, maxRetries = 5): Promise<void> {
     const devices = await repository.listDevices(job.userId);
     let sent = false;
     let transient = false;
     let attempt = 0;
     for (const device of devices) {
+      if (!await repository.renewNotificationLease(job, notificationToken, new Date())) return;
       const outcome = await push(device, result);
+      if (!await repository.renewNotificationLease(job, notificationToken, new Date())) return;
       await repository.recordPushAttempt(job, device, ++attempt, outcome);
       if (outcome.retireToken) await repository.retireDevice(device.id, now);
       sent ||= outcome.outcome === 'sent';
       transient ||= outcome.outcome === 'transient';
     }
-    if (sent) await repository.markNotificationSent(job, now);
-    else if (transient && job.retryCount < maxRetries) await repository.markRetry(job, nextRetryAt(now, job.retryCount));
-    else await repository.markFailed(job);
-  } catch {
-    if (job.retryCount < maxRetries) await repository.markRetry(job, nextRetryAt(now, job.retryCount));
-    else await repository.markFailed(job);
-  }
+    if (sent) await repository.markNotificationSent(job, notificationToken, now);
+    else if (transient && job.notificationRetryCount < maxRetries) await repository.markNotificationRetry(job, notificationToken, nextRetryAt(now, job.notificationRetryCount));
+    else await repository.markNotificationFailed(job, notificationToken);
 }

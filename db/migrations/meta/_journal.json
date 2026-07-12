@@ -57,6 +57,13 @@
       "when": 1783890787830,
       "tag": "0007_reflective_toro",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1783892370544,
+      "tag": "0008_milky_black_tarantula",
+      "breakpoints": true
     }
   ]
 }

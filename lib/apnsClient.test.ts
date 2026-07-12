@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { generateKeyPairSync } from 'node:crypto';
 import test from 'node:test';
 import { ApnsClient, type ApnsTransport } from './apnsClient';
+import { readFileSync } from 'node:fs';
 
 const result = { headline: 'Ready', shortInsight: 'Your update is ready.', narrative: 'Available data was reviewed.', observations: [], nextSteps: [] };
 const privateKey = generateKeyPairSync('ec', { namedCurve: 'P-256' }).privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
@@ -24,4 +25,11 @@ test('classifies transport failures as retryable without exposing the token', as
   assert.deepEqual(await client.send({ id: '1', token: 'secret', environment: 'production' }, result), {
     outcome: 'transient', retireToken: false, category: 'network_error',
   });
+});
+
+test('production transport bounds the APNs connect and request handoff', () => {
+  const source = readFileSync(new URL('./apnsClient.ts', import.meta.url), 'utf8');
+  assert.match(source, /setTimeout\(\(\) =>/);
+  assert.match(source, /10_000/);
+  assert.match(source, /category: 'network_error'/);
 });
