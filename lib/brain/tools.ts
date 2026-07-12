@@ -8,7 +8,8 @@
  *   query_events       — read events table by type + date range
  *   query_ontology     — read nodes/edges
  *   calculate_macros   — deterministic TDEE + macro split (no LLM math)
- *   remember_fact      — write node/edge to ontology (weight 0.6)
+ *   propose_fact       — create a pending fact for explicit confirmation
+ *   remember_fact      — legacy direct ontology write (not specialist-allowed)
  *   confirm_fact       — resolve a pending_fact to confirmed/rejected
  *   log_meal           — nutrition lookup → meal_logged event
  *   get_metric_trend   — daily_metrics trend + mean/min/max + baseline direction
@@ -148,6 +149,32 @@ export const BRAIN_TOOLS: Tool[] = [
         },
       },
       required: ['mode'],
+    },
+  },
+  {
+    name: 'propose_fact',
+    description:
+      'Propose a structured fact for the user to confirm or reject before it is persisted ' +
+      'to the ontology. This only creates a pending proposal; it never writes a confirmed fact.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        nodeType: {
+          type: 'string',
+          description:
+            'Node type. One of: Condition, Medication, Allergy, Intolerance, Goal, ' +
+            'Habit, FoodPreference, Cuisine, PantryItem, LabMarker, Injury, FamilyHistory.',
+        },
+        label: {
+          type: 'string',
+          description: 'Short label for the proposed fact.',
+        },
+        evidence: {
+          type: 'string',
+          description: 'The exact user quote or signal that surfaced this proposal.',
+        },
+      },
+      required: ['nodeType', 'label', 'evidence'],
     },
   },
   {
@@ -465,6 +492,8 @@ export function toolCallLabel(name: string, input: Record<string, unknown>): str
       return 'Updating your diet budget…';
     case 'remember_fact':
       return 'Remembering that…';
+    case 'propose_fact':
+      return 'Preparing that for your confirmation…';
     case 'confirm_fact':
       return 'Updating that…';
     case 'log_meal':
@@ -874,6 +903,19 @@ export async function executeToolCall(
     }
   }
 
+  // ── propose_fact ──────────────────────────────────────────────────────────
+  if (name === 'propose_fact') {
+    const proposal = buildPendingFactProposal(input, userId);
+    if (!String(input.label ?? '')) return 'Error: label is required.';
+
+    const [pending] = await db
+      .insert(schema.pending_facts)
+      .values(proposal)
+      .returning({ id: schema.pending_facts.id });
+
+    return JSON.stringify({ ok: true, factId: pending.id, status: 'pending' });
+  }
+
   // ── remember_fact ─────────────────────────────────────────────────────────
   if (name === 'remember_fact') {
     const nodeType = String(input.nodeType ?? 'Habit');
@@ -928,32 +970,14 @@ export async function executeToolCall(
     const action = String(input.action ?? 'confirm') as 'confirm' | 'reject';
 
     if (!factId) return 'Error: factId is required.';
-
-    const status     = action === 'confirm' ? 'confirmed' : 'rejected';
-    const resolvedAt = new Date();
-
-    const [updated] = await db
-      .update(schema.pending_facts)
-      .set({ status, resolved_at: resolvedAt })
-      .where(eq(schema.pending_facts.id, factId))
-      .returning({ id: schema.pending_facts.id, proposed_node: schema.pending_facts.proposed_node });
-
-    if (!updated) return `No pending_fact found with id ${factId}.`;
-
-    // If confirmed, promote the proposed node/edge to the ontology
-    if (action === 'confirm' && updated.proposed_node) {
-      const proposed = updated.proposed_node as Record<string, unknown>;
-      await db.insert(schema.nodes).values({
-        user_id:    userId,
-        type:       String(proposed.type ?? 'Habit'),
-        label:      String(proposed.label ?? ''),
-        properties: proposed.properties as Record<string, unknown> | null,
-        source:     'confirmed',
-        weight:     0.9,
-      }).onConflictDoNothing();
-    }
-
-    return JSON.stringify({ ok: true, factId, status });
+    const result = await confirmPendingFact(
+      drizzlePendingFactConfirmationStore,
+      { factId, action },
+      userId,
+    );
+    return result.ok
+      ? JSON.stringify(result)
+      : `No pending_fact found with id ${factId}.`;
   }
 
   // ── log_meal ──────────────────────────────────────────────────────────────
@@ -1068,3 +1092,87 @@ export async function executeToolCall(
 
   return `Unknown tool: ${name}`;
 }
+
+export function buildPendingFactProposal(
+  input: Record<string, unknown>,
+  userId: string,
+): typeof schema.pending_facts.$inferInsert {
+  const evidence = String(input.evidence ?? '');
+  return {
+    user_id: userId,
+    proposed_node: {
+      type: String(input.nodeType ?? 'Habit'),
+      label: String(input.label ?? ''),
+      properties: { evidence },
+    },
+    proposed_edge: null,
+    evidence,
+    salience: 0.6,
+    status: 'pending',
+  };
+}
+
+export interface PendingFactConfirmationStore {
+  resolvePendingFact(request: {
+    factId: string;
+    userId: string;
+    expectedStatus: 'pending';
+    nextStatus: 'confirmed' | 'rejected';
+    resolvedAt: Date;
+  }): Promise<{ id: string; proposedNode: unknown } | null>;
+  insertConfirmedNode(userId: string, node: Record<string, unknown>): Promise<void>;
+}
+
+export async function confirmPendingFact(
+  store: PendingFactConfirmationStore,
+  input: { factId: string; action: 'confirm' | 'reject' },
+  userId: string,
+  resolvedAt = new Date(),
+): Promise<
+  | { ok: true; factId: string; status: 'confirmed' | 'rejected' }
+  | { ok: false; factId: string; error: 'pending_fact_not_found' }
+> {
+  const status = input.action === 'confirm' ? 'confirmed' : 'rejected';
+  const resolved = await store.resolvePendingFact({
+    factId: input.factId,
+    userId,
+    expectedStatus: 'pending',
+    nextStatus: status,
+    resolvedAt,
+  });
+  if (!resolved) {
+    return { ok: false, factId: input.factId, error: 'pending_fact_not_found' };
+  }
+  if (input.action === 'confirm' && resolved.proposedNode) {
+    await store.insertConfirmedNode(userId, resolved.proposedNode as Record<string, unknown>);
+  }
+  return { ok: true, factId: input.factId, status };
+}
+
+const drizzlePendingFactConfirmationStore: PendingFactConfirmationStore = {
+  async resolvePendingFact(request) {
+    const [updated] = await db
+      .update(schema.pending_facts)
+      .set({ status: request.nextStatus, resolved_at: request.resolvedAt })
+      .where(and(
+        eq(schema.pending_facts.id, request.factId),
+        eq(schema.pending_facts.user_id, request.userId),
+        eq(schema.pending_facts.status, request.expectedStatus),
+      ))
+      .returning({
+        id: schema.pending_facts.id,
+        proposedNode: schema.pending_facts.proposed_node,
+      });
+    return updated ?? null;
+  },
+  async insertConfirmedNode(userId, proposed) {
+    await db.insert(schema.nodes).values({
+      user_id: userId,
+      type: String(proposed.type ?? 'Habit'),
+      label: String(proposed.label ?? ''),
+      properties: proposed.properties as Record<string, unknown> | null,
+      source: 'confirmed',
+      weight: 0.9,
+    }).onConflictDoNothing();
+  },
+};

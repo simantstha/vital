@@ -102,6 +102,62 @@ export const edges = p.pgTable('edges', {
   p.index('edges_user_to_predicate_idx').on(t.user_id, t.to_node, t.predicate),
 ]);
 
+// ─── specialist_sessions ────────────────────────────────────────────────────
+// Durable handoff lifecycle for scoped specialist consultations. Only proposal
+// states expire; active consultations require an explicit return or failure.
+
+export const specialist_sessions = p.pgTable('specialist_sessions', {
+  id:                 p.uuid('id').primaryKey().defaultRandom(),
+  user_id:            p.uuid('user_id').notNull().references(() => users.id),
+  objective:          p.text('objective').notNull(),
+  manifest_id:        p.text('manifest_id').notNull(),
+  manifest_version:   p.text('manifest_version').notNull(),
+  status:             p.text('status').default('proposed').notNull(),
+  card_occurrence_id: p.uuid('card_occurrence_id').defaultRandom().notNull(),
+  inbound_handoff:    p.jsonb('inbound_handoff').notNull(),
+  return_handoff:     p.jsonb('return_handoff'),
+  failure_reason:     p.text('failure_reason'),
+  proposed_at:        p.timestamp('proposed_at', { withTimezone: true }).defaultNow().notNull(),
+  activated_at:       p.timestamp('activated_at', { withTimezone: true }),
+  return_proposed_at: p.timestamp('return_proposed_at', { withTimezone: true }),
+  completed_at:       p.timestamp('completed_at', { withTimezone: true }),
+  declined_at:        p.timestamp('declined_at', { withTimezone: true }),
+  failed_at:          p.timestamp('failed_at', { withTimezone: true }),
+  expires_at:         p.timestamp('expires_at', { withTimezone: true }),
+  updated_at:         p.timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  p.check(
+    'specialist_sessions_status_check',
+    sql`${t.status} in ('proposed', 'active', 'return_proposed', 'completed', 'declined', 'failed')`,
+  ),
+  p.check(
+    'specialist_sessions_expiry_check',
+    sql`((${t.status} in ('proposed', 'return_proposed')) = (${t.expires_at} is not null))`,
+  ),
+  p.uniqueIndex('specialist_sessions_one_open_per_user_idx')
+    .on(t.user_id)
+    .where(sql`${t.status} in ('proposed', 'active', 'return_proposed')`),
+  p.index('specialist_sessions_user_updated_idx').on(t.user_id, t.updated_at),
+]);
+
+// Idempotency ledger for explicit specialist-card actions. The stored result
+// lets retries return the exact same ordered SSE payload without reapplying a
+// session transition.
+export const specialist_actions = p.pgTable('specialist_actions', {
+  id:         p.uuid('id').primaryKey().defaultRandom(),
+  user_id:    p.uuid('user_id').notNull().references(() => users.id),
+  action_id:  p.text('action_id').notNull(),
+  card_occurrence_id: p.uuid('card_occurrence_id').notNull(),
+  session_id: p.uuid('session_id').notNull().references(() => specialist_sessions.id),
+  action:     p.text('action').notNull(),
+  result:     p.jsonb('result'),
+  created_at: p.timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  completed_at: p.timestamp('completed_at', { withTimezone: true }),
+}, (t) => [
+  p.uniqueIndex('specialist_actions_user_action_idx').on(t.user_id, t.action_id),
+  p.index('specialist_actions_session_idx').on(t.session_id),
+]);
+
 // ─── messages ────────────────────────────────────────────────────────────────
 // Full conversation history. Both role values: 'user' | 'assistant'
 // sources:  v2 citation seam — populated when assistant reply is grounded in
@@ -113,17 +169,28 @@ export const messages = p.pgTable('messages', {
   user_id:    p.uuid('user_id').notNull().references(() => users.id),
   timestamp:  p.timestamp('timestamp', { withTimezone: true }).notNull(),
   role:       p.text('role').notNull(),                                         // 'user' | 'assistant'
+  speaker:    p.text('speaker').notNull(),                                      // 'user' | 'coach' | 'specialist'
   content:    p.text('content').notNull(),
   tool_calls: p.jsonb('tool_calls'),                                            // nullable; present on assistant messages with tool use
   images:     p.jsonb('images'),                                                // nullable; base64 or storage refs
   sources:    p.jsonb('sources').default(sql`'[]'::jsonb`).notNull(),           // citation seam; always an array
   metadata:   p.jsonb('metadata'),                                              // structured insights seam; nullable
+  specialist_session_id: p.uuid('specialist_session_id').references(() => specialist_sessions.id),
+  specialist_metadata: p.jsonb('specialist_metadata'),                          // immutable identity/accent snapshot
 }, (t) => [
+  p.check(
+    'messages_role_speaker_check',
+    sql`((${t.role} = 'user' and ${t.speaker} = 'user') or (${t.role} = 'assistant' and ${t.speaker} in ('coach', 'specialist')))`,
+  ),
+  p.check(
+    'messages_specialist_metadata_check',
+    sql`((${t.speaker} = 'specialist' and ${t.specialist_session_id} is not null and ${t.specialist_metadata} is not null) or (${t.speaker} <> 'specialist' and ${t.specialist_session_id} is null and ${t.specialist_metadata} is null))`,
+  ),
   p.index('messages_user_timestamp_idx').on(t.user_id, t.timestamp),
 ]);
 
 // ─── pending_facts (confirmation-gated learning) ─────────────────────────────
-// When the coach proposes a new fact via remember_fact(), it lands here as
+// When the coach proposes a new fact via propose_fact(), it lands here as
 // 'pending' until the user confirms or rejects it. Confirmed facts promote
 // to nodes/edges. Rejected facts are retained for audit only.
 // Either proposed_node or proposed_edge is populated (or both for a node+edge pair).
@@ -239,6 +306,9 @@ export type NewEdge       = typeof edges.$inferInsert;
 
 export type Message       = typeof messages.$inferSelect;
 export type NewMessage    = typeof messages.$inferInsert;
+
+export type SpecialistSession = typeof specialist_sessions.$inferSelect;
+export type NewSpecialistSession = typeof specialist_sessions.$inferInsert;
 
 export type PendingFact   = typeof pending_facts.$inferSelect;
 export type NewPendingFact = typeof pending_facts.$inferInsert;

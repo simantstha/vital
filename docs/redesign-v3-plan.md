@@ -286,7 +286,7 @@ commits beyond main; ElevenLabs TTS already works via `/api/tts`.)
   `FuelStripView` under `Features/Today/`; `TodayViewModel` derives
   `[PlanItem]` from `/api/today`'s `plan` (heuristic meal times + a synthetic
   "Lights out" sleep row) and exposes `setStatus`/`removeItem`/`addItem`
-  local mutations + `toastMessage`; `TodayView` reordered to header → 
+  local mutations + `toastMessage`; `TodayView` reordered to header →
   calibration → pending-facts → plan timeline → coach bubble → vitals →
   fuel strip, with the add-item/actions/meal-detail sheets and `.toast`
   wired up. Deviations: (1) added a "View meal" row in the actions sheet

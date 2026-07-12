@@ -4,16 +4,31 @@ import Combine
 // MARK: - Chat message model
 
 struct ChatMessage: Identifiable, Equatable {
-    enum Role { case user, assistant }
+    enum Role { case user, assistant, system }
 
     let id: UUID
     let role: Role
     var text: String
+    let specialistMetadata: SpecialistMessageMetadata?
 
-    init(id: UUID = UUID(), role: Role, text: String) {
+    var speakerLabel: String? {
+        switch role {
+        case .user: return nil
+        case .assistant: return specialistMetadata?.name ?? CoachPersonaSnapshot.vital.title
+        case .system: return nil
+        }
+    }
+
+    init(
+        id: UUID = UUID(),
+        role: Role,
+        text: String,
+        specialistMetadata: SpecialistMessageMetadata? = nil
+    ) {
         self.id = id
         self.role = role
         self.text = text
+        self.specialistMetadata = specialistMetadata
     }
 }
 
@@ -45,10 +60,18 @@ struct CoachDataRow: Identifiable, Equatable {
 /// activity while work is in-flight, then the formatted prose answer.
 struct AssistantTurn: Identifiable, Equatable {
     let id: UUID
+    private(set) var persona: CoachPersonaSnapshot
     private(set) var text: String = ""
     private(set) var toolCalls: [ToolCallRow] = []
     private(set) var dataCards: [CoachDataRow] = []
     private(set) var isFinished: Bool = false
+
+    init(id: UUID, persona: CoachPersonaSnapshot = .vital) {
+        self.id = id
+        self.persona = persona
+    }
+
+    var speakerLabel: String { persona.title }
 
     var visibleText: String {
         isChecking ? "" : text
@@ -72,6 +95,11 @@ struct AssistantTurn: Identifiable, Equatable {
 
     mutating func appendText(_ delta: String) {
         text += delta
+    }
+
+    mutating func updatePersona(_ persona: CoachPersonaSnapshot) {
+        guard text.isEmpty else { return }
+        self.persona = persona
     }
 
     mutating func applyToolCall(id: String, name: String, label: String, done: Bool) {
@@ -140,6 +168,16 @@ enum ChatRow: Identifiable, Equatable {
     }
 }
 
+// MARK: - Authoritative specialist lifecycle
+
+enum CoachSpecialistState: Equatable {
+    case vital
+    case pendingProposal(CoachHandoffCard)
+    case activeConsultation(CoachPersonaSnapshot)
+    case pendingReturn(CoachHandoffCard)
+    case recoverableRollback(String)
+}
+
 // MARK: - ViewModel
 
 @MainActor
@@ -153,6 +191,10 @@ final class CoachViewModel: ObservableObject {
     @Published var input: String = ""
     @Published var isStreaming: Bool = false
     @Published var errorMessage: String? = nil
+    @Published private(set) var activePersona: CoachPersonaSnapshot = .vital
+    @Published private(set) var pendingHandoffCard: CoachHandoffCard? = nil
+    @Published private(set) var specialistState: CoachSpecialistState = .vital
+    @Published private(set) var isPerformingSpecialistAction: Bool = false
 
     /// True from the moment recording stops until the cloud STT upload (or
     /// its fallback to the Apple transcript) has resolved and been handed
@@ -163,9 +205,11 @@ final class CoachViewModel: ObservableObject {
     /// the view can show the typing indicator during load.
     @Published var isOpening: Bool = false
 
-    private let api = APIClient.shared
+    private let api: any CoachAPIProviding
     private var streamTask: Task<Void, Never>? = nil
     private var openerTask: Task<Void, Never>? = nil
+    private var actionTask: Task<Void, Never>? = nil
+    private var hasRestoredConversation = false
     private var transcriptionTask: Task<Void, Never>? = nil
 
     /// The assistant message id for the in-flight turn. The bubble is inserted
@@ -216,8 +260,9 @@ final class CoachViewModel: ObservableObject {
     /// default) for the regular Coach tab, which is unchanged.
     private let mode: String?
 
-    init(mode: String? = nil) {
+    init(mode: String? = nil, api: any CoachAPIProviding = APIClient.shared) {
         self.mode = mode
+        self.api = api
         bindVoice()
     }
 
@@ -313,6 +358,45 @@ final class CoachViewModel: ObservableObject {
 
     // MARK: - Opener
 
+    /// Restores transcript and specialist UI state from the server. Message
+    /// attribution is copied into each historical row so a later persona
+    /// change cannot relabel a Running Coach response as Vital.
+    func restoreConversation() async {
+        await restoreConversation(force: false, preserveTranscript: false)
+    }
+
+    private func restoreConversation(force: Bool, preserveTranscript: Bool) async {
+        guard mode == nil, force || !hasRestoredConversation else { return }
+        do {
+            let restoration = try await api.fetchCoachRestoration()
+            if !preserveTranscript {
+                rows = restoration.messages.compactMap(Self.restoredRow)
+            }
+            activePersona = restoration.activePersona
+            pendingHandoffCard = restoration.pendingCard
+            hasRestoredConversation = true
+            recomputeSpecialistState()
+        } catch {
+            // The GET endpoint is feature-flagged and may return 404 on an
+            // older backend. Opener fallback preserves the legacy experience.
+        }
+    }
+
+    private static func restoredRow(_ message: CoachRestoredMessage) -> ChatRow? {
+        let role: ChatMessage.Role
+        switch message.role {
+        case "user": role = .user
+        case "assistant": role = .assistant
+        default: return nil
+        }
+        return .message(ChatMessage(
+            id: UUID(uuidString: message.id) ?? UUID(),
+            role: role,
+            text: message.content,
+            specialistMetadata: message.specialistMetadata
+        ))
+    }
+
     /// Fetches a fresh, data-aware opening line and inserts it as the first
     /// assistant row. No-op if the conversation already has any rows (so it
     /// never clobbers an in-progress chat) or if it's already loading. In
@@ -326,6 +410,8 @@ final class CoachViewModel: ObservableObject {
                 isOpening = false
                 openerTask = nil
             }
+            await restoreConversation()
+            guard rows.isEmpty else { return }
             let text = (try? await api.fetchCoachOpener())
                 ?? "Hey! I'm your Vital coach. Ask me anything about your health trends, sleep, or how to optimize your day."
             // The user may have started typing/sending while we waited — only
@@ -364,31 +450,45 @@ final class CoachViewModel: ObservableObject {
         // The assistant bubble is created lazily on the first token (see
         // appendText) so the typing indicator shows in its place until then.
         let assistantId = UUID()
+        let assistantPersona = activePersona
         pendingAssistantId = assistantId
 
         isStreaming = true
 
         streamTask = Task {
+            var turnPersona = assistantPersona
+            var receivedVitalRollback = false
             defer {
                 isStreaming = false
                 pendingAssistantId = nil
             }
 
             do {
-                let stream = api.streamCoach(message: trimmed, mode: mode)
+                let stream = api.streamCoach(message: trimmed, imageBase64: nil, mode: mode)
                 for try await event in stream {
                     switch event {
                     case .text(let delta):
-                        appendText(delta, toTurn: assistantId)
+                        appendText(delta, toTurn: assistantId, persona: turnPersona)
                         // .toolCall/.toolData are never spoken — only prose.
                         if sentByVoice { speaker.feed(delta: delta) }
                     case .toolCall(let id, let name, let label, let done):
-                        applyToolCall(id: id, name: name, label: label, done: done, toTurn: assistantId)
+                        applyToolCall(id: id, name: name, label: label, done: done, toTurn: assistantId, persona: turnPersona)
                     case .toolData(let id, let viz):
-                        applyToolData(id: id, viz: viz, toTurn: assistantId)
+                        applyToolData(id: id, viz: viz, toTurn: assistantId, persona: turnPersona)
+                    case .handoffCard(let card):
+                        applyHandoffCard(card)
+                    case .personaChanged(let persona):
+                        receivedVitalRollback = activePersona.id != "vital" && persona.id == "vital"
+                        turnPersona = persona
+                        updateTurnPersona(assistantId, persona: persona)
+                        applyPersona(persona)
+                    case .error(let message):
+                        throw APIError.coachStreamError(message)
+                    case .done:
+                        break
                     }
                 }
-                finishTurn(assistantId)
+                finishTurn(assistantId, persona: turnPersona)
                 if sentByVoice { speaker.finish() }
             } catch {
                 // Surface the error in the assistant bubble. Since the bubble is
@@ -401,12 +501,15 @@ final class CoachViewModel: ObservableObject {
                     turn.finish()
                     rows[idx] = .assistantTurn(turn)
                 } else {
-                    var turn = AssistantTurn(id: assistantId)
+                    var turn = AssistantTurn(id: assistantId, persona: turnPersona)
                     turn.appendText(errorText)
                     turn.finish()
                     rows.append(.assistantTurn(turn))
                 }
                 errorMessage = error.localizedDescription
+                if receivedVitalRollback {
+                    specialistState = .recoverableRollback(error.localizedDescription)
+                }
             }
         }
     }
@@ -421,6 +524,9 @@ final class CoachViewModel: ObservableObject {
         openerTask?.cancel()
         openerTask = nil
         isOpening = false
+        actionTask?.cancel()
+        actionTask = nil
+        isPerformingSpecialistAction = false
         transcriptionTask?.cancel()
         transcriptionTask = nil
         isTranscribing = false
@@ -428,39 +534,153 @@ final class CoachViewModel: ObservableObject {
         speaker.stop()
     }
 
+    // MARK: - Specialist actions and authoritative events
+
+    static func stableActionId(
+        sessionId: String,
+        cardOccurrenceId: String,
+        action: SpecialistAction
+    ) -> String {
+        "ios:\(sessionId):\(cardOccurrenceId):\(action.rawValue)"
+    }
+
+    /// Executes an explicit card action. The in-flight flag is set before the
+    /// task starts so repeated taps cannot race a second request onto the wire.
+    func performSpecialistAction(_ action: SpecialistAction) {
+        guard let card = pendingHandoffCard, !isPerformingSpecialistAction else { return }
+        let sessionId = card.sessionId
+        let cardOccurrenceId = card.cardOccurrenceId
+        let actionId = Self.stableActionId(
+            sessionId: sessionId,
+            cardOccurrenceId: cardOccurrenceId,
+            action: action
+        )
+        isPerformingSpecialistAction = true
+        errorMessage = nil
+
+        actionTask = Task {
+            defer {
+                isPerformingSpecialistAction = false
+                actionTask = nil
+            }
+            do {
+                for try await event in api.streamCoachAction(
+                    sessionId: sessionId,
+                    cardOccurrenceId: cardOccurrenceId,
+                    actionId: actionId,
+                    action: action
+                ) {
+                    switch event {
+                    case .handoffCard(let card): applyHandoffCard(card)
+                    case .personaChanged(let persona): applyPersona(persona)
+                    case .error(let message): throw APIError.coachStreamError(message)
+                    case .text, .toolCall, .toolData, .done: break
+                    }
+                }
+            } catch {
+                // An action failure is recoverable: return the controls to a
+                // known Vital state and let a fresh restoration reconcile any
+                // transition that may have completed server-side.
+                activePersona = .vital
+                pendingHandoffCard = nil
+                specialistState = .recoverableRollback(error.localizedDescription)
+                errorMessage = error.localizedDescription
+                hasRestoredConversation = false
+                await restoreConversation(force: true, preserveTranscript: true)
+            }
+        }
+    }
+
+    private func applyHandoffCard(_ card: CoachHandoffCard) {
+        if card.phase == .dismissed {
+            if pendingHandoffCard?.sessionId == card.sessionId &&
+                pendingHandoffCard?.cardOccurrenceId == card.cardOccurrenceId {
+                pendingHandoffCard = nil
+            }
+        } else {
+            pendingHandoffCard = card
+        }
+        recomputeSpecialistState()
+    }
+
+    private func applyPersona(_ persona: CoachPersonaSnapshot) {
+        let previous = activePersona
+        activePersona = persona
+        if persona.id == "vital" {
+            pendingHandoffCard = nil
+        }
+        if previous.id == "vital", persona.id != "vital" {
+            let joinedText = "\(persona.title) joined."
+            let alreadyJoined = rows.contains {
+                guard case .message(let message) = $0 else { return false }
+                return message.role == .system && message.text == joinedText
+            }
+            if !alreadyJoined {
+                rows.append(.message(ChatMessage(role: .system, text: joinedText)))
+            }
+        }
+        recomputeSpecialistState()
+    }
+
+    private func recomputeSpecialistState() {
+        if let card = pendingHandoffCard {
+            switch card.phase {
+            case .proposed:
+                specialistState = .pendingProposal(card)
+                return
+            case .returnProposed:
+                specialistState = .pendingReturn(card)
+                return
+            case .dismissed:
+                break
+            }
+        }
+        specialistState = activePersona.id == "vital"
+            ? .vital
+            : .activeConsultation(activePersona)
+    }
+
     // MARK: - Row mutation helpers
 
-    private func appendText(_ delta: String, toTurn id: UUID) {
-        mutateTurn(id) { turn in
+    private func appendText(_ delta: String, toTurn id: UUID, persona: CoachPersonaSnapshot) {
+        mutateTurn(id, persona: persona) { turn in
             turn.appendText(delta)
         }
     }
 
-    private func applyToolCall(id: String, name: String, label: String, done: Bool, toTurn turnId: UUID) {
-        mutateTurn(turnId) { turn in
+    private func applyToolCall(id: String, name: String, label: String, done: Bool, toTurn turnId: UUID, persona: CoachPersonaSnapshot) {
+        mutateTurn(turnId, persona: persona) { turn in
             turn.applyToolCall(id: id, name: name, label: label, done: done)
         }
     }
 
-    private func applyToolData(id: String, viz: CoachViz, toTurn turnId: UUID) {
-        mutateTurn(turnId) { turn in
+    private func applyToolData(id: String, viz: CoachViz, toTurn turnId: UUID, persona: CoachPersonaSnapshot) {
+        mutateTurn(turnId, persona: persona) { turn in
             turn.applyToolData(id: id, viz: viz)
         }
     }
 
-    private func finishTurn(_ id: UUID) {
-        mutateTurn(id) { turn in
+    private func finishTurn(_ id: UUID, persona: CoachPersonaSnapshot) {
+        mutateTurn(id, persona: persona) { turn in
             turn.finish()
         }
     }
 
-    private func mutateTurn(_ id: UUID, _ update: (inout AssistantTurn) -> Void) {
+    private func updateTurnPersona(_ id: UUID, persona: CoachPersonaSnapshot) {
+        guard let idx = rows.firstIndex(where: { $0.id == id.uuidString }),
+              case .assistantTurn(var turn) = rows[idx]
+        else { return }
+        turn.updatePersona(persona)
+        rows[idx] = .assistantTurn(turn)
+    }
+
+    private func mutateTurn(_ id: UUID, persona: CoachPersonaSnapshot, _ update: (inout AssistantTurn) -> Void) {
         if let idx = rows.firstIndex(where: { $0.id == id.uuidString }),
            case .assistantTurn(var turn) = rows[idx] {
             update(&turn)
             rows[idx] = .assistantTurn(turn)
         } else {
-            var turn = AssistantTurn(id: id)
+            var turn = AssistantTurn(id: id, persona: persona)
             update(&turn)
             rows.append(.assistantTurn(turn))
         }
