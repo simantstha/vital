@@ -50,6 +50,13 @@
       "when": 1783810293906,
       "tag": "0006_married_skreet",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1783811267521,
+      "tag": "0007_simple_darkstar",
+      "breakpoints": true
     }
   ]
 }
