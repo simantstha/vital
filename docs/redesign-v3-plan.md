@@ -1,6 +1,6 @@
 # Vital app redesign — "Today Screen v3" implementation plan
 
-**Status: Phase 0 done · Phase 1 in progress** · Branch: `feat/redesign-v3` (off `main`)
+**Status: Phase 0 + Phase 1 done · Phase 2 unclaimed** · Branch: `feat/redesign-v3` (off `main`)
 Source of truth for the design: Claude Design project
 <https://claude.ai/design/p/67904bc9-0509-4bb9-b4bf-2219bc3478fb?file=Today+Screen+v3.html>
 (file `Today Screen v3.html` — a full 5-tab React/Tailwind mock of the app).
@@ -108,9 +108,9 @@ Rules for every phase:
       regressions that block reading data; dark mode still legible.
 
 ### Phase 1 — Today screen restructure (UI, client-side state)
-**Owner: unclaimed · Suggested agent: Sonnet · iOS only · needs Phase 0**
+**Owner: DONE (2026-07-12, Sonnet subagent) · iOS only**
 
-- [ ] New `Features/Today/PlanTimelineView.swift` + `PlanItem` model
+- [x] New `Features/Today/PlanTimelineView.swift` + `PlanItem` model
       (id, time, title, subtitle, icon, status ∈ done/now/next/later/skipped,
       source ∈ coach/user/calendar, optional `action` label).
       Card contains rows: icon badge (lime when `now`, limeSoft otherwise,
@@ -119,23 +119,23 @@ Rules for every phase:
       rows at 60% opacity with a check, `skipped` struck through.
       Header row: "Today's plan" + "✦ Built for you" + lime ⊕ button.
       Footer caption: "Synced with your calendar · tap any item…".
-- [ ] New `Features/Today/PlanItemActionsSheet.swift` (VitalSheet): mark done /
+- [x] New `Features/Today/PlanItemActionsSheet.swift` (VitalSheet): mark done /
       skip today / mark not done / remove — mutates local VM state.
-- [ ] New `Features/Today/AddPlanItemSheet.swift` (VitalSheet): type picker
+- [x] New `Features/Today/AddPlanItemSheet.swift` (VitalSheet): type picker
       (Meal/Move/Rest/Other), title field, time picker + quick-time pills,
       Cancel/Add.
-- [ ] `TodayView.swift` reorder per §1 table; header gets date-above-greeting
+- [x] `TodayView.swift` reorder per §1 table; header gets date-above-greeting
       and streak chip + hint line; big diet card → new compact
       `FuelStripView` ("N kcal left · Protein x/yg · tap to log a meal")
       which opens the existing `LogMealView` for now (Phase 3 replaces it).
-- [ ] `TodayViewModel.swift`: derive an initial `[PlanItem]` from the existing
+- [x] `TodayViewModel.swift`: derive an initial `[PlanItem]` from the existing
       `/api/today` `plan` (meals get times heuristically: breakfast 8:00,
       lunch 12:45, dinner 19:30) + a "Lights out" row from the sleep goal.
       Status computed from current time (done/now/next/later). Local-only
       mutations this phase; **persistence is Phase 2 — expect statuses to
       reset on relaunch, that's OK here.**
-- [ ] "Logged" toast on plan-item log; keep pending-facts + calibration cards.
-- [ ] Acceptance: Today matches mock ordering & interactions with live API
+- [x] "Logged" toast on plan-item log; keep pending-facts + calibration cards.
+- [x] Acceptance: Today matches mock ordering & interactions with live API
       data; add/complete/skip/remove all work in-session; build + tests green.
 
 ### Phase 2 — Plan persistence (backend + wiring)
@@ -265,3 +265,29 @@ commits beyond main; ElevenLabs TTS already works via `/api/tts`.)
   `VitalSheet(detents:content:)` (use inside .sheet), `.toast(message: Binding<String?>)`.
   Note: RootTabView owns tab selection locally — lift it when the voice FAB
   (Phase 4) needs to switch to Coach programmatically. Starting Phase 1.
+- 2026-07-12: Phase 1 done (Sonnet subagent) — new `PlanItem` model,
+  `PlanTimelineView`, `PlanItemActionsSheet`, `AddPlanItemSheet`,
+  `FuelStripView` under `Features/Today/`; `TodayViewModel` derives
+  `[PlanItem]` from `/api/today`'s `plan` (heuristic meal times + a synthetic
+  "Lights out" sleep row) and exposes `setStatus`/`removeItem`/`addItem`
+  local mutations + `toastMessage`; `TodayView` reordered to header → 
+  calibration → pending-facts → plan timeline → coach bubble → vitals →
+  fuel strip, with the add-item/actions/meal-detail sheets and `.toast`
+  wired up. Deviations: (1) added a "View meal" row in the actions sheet
+  (not in the mock) so meal items still open `MealDetailView`'s existing
+  suggest/log flow — logging there now also marks the plan item done; (2)
+  the row's trailing "MoreVertical" hint icon from the mock was dropped, the
+  written scope's trailing-element list didn't call for it; (3) both the
+  add-item and item-actions sheets use `.medium` detent (mock is a fixed
+  390×844 frame with no real detent equivalent); (4) user-added items are
+  re-run through the same time-based status computation on every add/reload
+  instead of staying frozen at "later" forever like the static mock — more
+  correct for a live app. Build green (`xcodebuild ... build`), 13/13
+  existing tests still pass on `Vital-iPhone16`. Notes for Phase 2: swap
+  `TodayViewModel.derivePlanItems`/`setStatus`/`removeItem`/`addItem` for
+  `/api/plan` calls; the title-keyed "preserve done/skipped across
+  re-derivation" merge in `derivePlanItems` and the `computeStatuses`
+  ±45min-window heuristic can both be deleted once status is server-tracked;
+  calendar-item rendering (`PlanItem.Source.calendar`, the "Calendar" pill,
+  `.neutral` badge) is already wired in `PlanTimelineView`/
+  `PlanItemActionsSheet` and ready for Phase 8's EventKit merge.
