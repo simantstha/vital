@@ -198,7 +198,12 @@ final class PushNotificationService: ObservableObject {
                     workoutEnabled: remote.workoutNotificationsEnabled,
                     sleepEnabled: remote.sleepNotificationsEnabled, timezone: timezone.identifier), defaults: defaults)
             }
-        } catch { preferencesError = "Couldn’t load notification preferences. Pull to retry." }
+        } catch { preferencesError = "Couldn’t load notification preferences." }
+    }
+
+    func retryPreferences(defaults: UserDefaults = .standard, timezone: TimeZone = .current) async {
+        await hydratePreferences(defaults: defaults, timezone: timezone)
+        if preferencesPending { await flush(defaults: defaults) }
     }
 
     func resetSession(defaults: UserDefaults = .standard) {

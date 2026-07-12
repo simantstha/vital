@@ -77,7 +77,7 @@ struct NotificationSettingsView: View {
                 Text(pushService.preferencesError ?? "Saving notification preferences…").font(Theme.Typography.labelSmall)
                 Spacer()
                 if pushService.preferencesError != nil {
-                    Button("Retry") { Task { await pushService.flush() } }.font(Theme.Typography.labelSmall)
+                    Button("Retry") { Task { await pushService.retryPreferences() } }.font(Theme.Typography.labelSmall)
                 }
             }.foregroundStyle(pushService.preferencesError == nil ? Theme.Colors.textSecondary : Theme.Colors.alert)
         }

@@ -8,8 +8,14 @@ final class ProactiveNotificationsTests: XCTestCase {
         var remote: NotificationPreferences
         var puts: [NotificationPreferences] = []
         var failPut = false
+        var failGet = false
+        var getCount = 0
         init(_ remote: NotificationPreferences) { self.remote = remote }
-        func get() async throws -> NotificationPreferences { remote }
+        func get() async throws -> NotificationPreferences {
+            getCount += 1
+            if failGet { throw URLError(.notConnectedToInternet) }
+            return remote
+        }
         func put(_ value: NotificationPreferences) async throws {
             if failPut { throw URLError(.notConnectedToInternet) }
             puts.append(value); remote = value
@@ -72,6 +78,22 @@ final class ProactiveNotificationsTests: XCTestCase {
         XCTAssertEqual(defaults.integer(forKey: NotificationPrefsKeys.briefMinutes), 600)
         XCTAssertFalse(defaults.bool(forKey: NotificationPrefsKeys.mealsEnabled))
         XCTAssertEqual(defaults.integer(forKey: NotificationPrefsKeys.mealsLunchMinutes), 900)
+        defaults.removePersistentDomain(forName: suite)
+    }
+
+    func testGetFailureRetryActuallyHydratesAndClearsErrorOnlyAfterSuccess() async {
+        let suite = "get-retry-\(UUID())"; let defaults = UserDefaults(suiteName: suite)!
+        let remote = NotificationPreferences.fromLocal(morningEnabled: false, morningMinutes: 620, workoutEnabled: true, sleepEnabled: false, timezone: "UTC")
+        let transport = MockTransport(remote); transport.failGet = true
+        let service = PushNotificationService(transport: transport, debounceMilliseconds: nil)
+        await service.hydratePreferences(defaults: defaults, timezone: TimeZone(identifier: "UTC")!)
+        XCTAssertEqual(transport.getCount, 1); XCTAssertNotNil(service.preferencesError)
+        await service.retryPreferences(defaults: defaults, timezone: TimeZone(identifier: "UTC")!)
+        XCTAssertEqual(transport.getCount, 2); XCTAssertNotNil(service.preferencesError)
+        transport.failGet = false
+        await service.retryPreferences(defaults: defaults, timezone: TimeZone(identifier: "UTC")!)
+        XCTAssertEqual(transport.getCount, 3); XCTAssertNil(service.preferencesError)
+        XCTAssertEqual(defaults.integer(forKey: NotificationPrefsKeys.briefMinutes), 620)
         defaults.removePersistentDomain(forName: suite)
     }
 
