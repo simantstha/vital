@@ -10,18 +10,18 @@ struct MetricTile: View {
     let delta: String
 
     var body: some View {
-        GlassCard(padding: Theme.Spacing.lg, cornerRadius: Theme.Radius.md) {
+        VitalCard(padding: Theme.Spacing.lg, cornerRadius: Theme.Radius.lg) {
             VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
 
                 Text(label)
-                    .font(Theme.Typography.labelSmall)
+                    .font(.system(size: 13, weight: .regular))
                     .foregroundStyle(Theme.Colors.textSecondary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
 
                 HStack(alignment: .lastTextBaseline, spacing: 2) {
                     Text(value)
-                        .font(Theme.Typography.numericLarge(24))
+                        .font(.system(size: 26, weight: .bold, design: .rounded))
                         .foregroundStyle(Theme.Colors.textPrimary)
                         .minimumScaleFactor(0.7)
                         .lineLimit(1)

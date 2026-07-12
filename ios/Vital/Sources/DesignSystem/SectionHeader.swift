@@ -9,9 +9,9 @@ struct SectionHeader: View {
     var body: some View {
         HStack {
             Text(title.uppercased())
-                .font(Theme.Typography.labelSmall)
+                .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(Theme.Colors.textSecondary)
-                .tracking(0.8)
+                .tracking(1.3)
 
             Spacer()
 
@@ -19,7 +19,7 @@ struct SectionHeader: View {
                 Button(action: onAction) {
                     Text(actionLabel)
                         .font(Theme.Typography.labelMedium)
-                        .foregroundStyle(Theme.Colors.accent)
+                        .foregroundStyle(Theme.Colors.accentContent)
                 }
             }
         }

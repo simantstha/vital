@@ -1,6 +1,6 @@
 # Vital app redesign — "Today Screen v3" implementation plan
 
-**Status: Phase 0 in progress** · Branch: `feat/redesign-v3` (off `main`)
+**Status: Phase 0 done · Phase 1 in progress** · Branch: `feat/redesign-v3` (off `main`)
 Source of truth for the design: Claude Design project
 <https://claude.ai/design/p/67904bc9-0509-4bb9-b4bf-2219bc3478fb?file=Today+Screen+v3.html>
 (file `Today Screen v3.html` — a full 5-tab React/Tailwind mock of the app).
@@ -80,31 +80,31 @@ Rules for every phase:
 - No hardcoded hex in views — everything goes through `Theme`.
 
 ### Phase 0 — Design tokens + shared primitives ⬅ BLOCKS EVERYTHING
-**Owner: (this session) · Suggested agent: Sonnet · iOS only**
+**Owner: DONE (2026-07-12, Sonnet subagent) · iOS only**
 
-- [ ] `Theme.swift`: token changes from §2 (`card`, `cardShadow`, `accentSoft`,
+- [x] `Theme.swift`: token changes from §2 (`card`, `cardShadow`, `accentSoft`,
       `textTertiary`, `positive`, light-value retunes, `Radius.sheet`,
       `Typography.screenTitle`).
-- [ ] New `DesignSystem/VitalCard.swift`: white rounded-24 card w/ soft shadow
+- [x] New `DesignSystem/VitalCard.swift`: white rounded-24 card w/ soft shadow
       (replaces `GlassCard` usage as call sites migrate; do NOT delete
       `GlassCard` yet).
-- [ ] New `DesignSystem/IconBadge.swift`: 40pt rounded-16 icon square
+- [x] New `DesignSystem/IconBadge.swift`: 40pt rounded-16 icon square
       (limeSoft / lime / neutral variants — used by plan rows, logs, sheets).
-- [ ] New `DesignSystem/VitalSheet.swift`: bottom-sheet scaffold — rounded-top
+- [x] New `DesignSystem/VitalSheet.swift`: bottom-sheet scaffold — rounded-top
       ~35, grab handle, page background (used by add-item, item-actions, diet
       sheets).
-- [ ] New `DesignSystem/Toast.swift`: top-center dark pill toast ("Logged —
+- [x] New `DesignSystem/Toast.swift`: top-center dark pill toast ("Logged —
       nice work"), auto-dismiss ~2.4s, + a view-modifier host.
-- [ ] `App/RootTabView.swift`: custom floating pill tab bar (5 items, active =
+- [x] `App/RootTabView.swift`: custom floating pill tab bar (5 items, active =
       limeSoft capsule + olive icon/label) using the mock's icon set — Today
       `sun.max`, Coach `message`, Trends `chart.xyaxis.line`, Logs
       `list.clipboard`, Profile `person`. Hide the native tab bar; keep the
       same 5 root views; content must scroll under the bar (bottom padding).
-- [ ] Existing components restyle pass: `Chip` (limeSoft pill w/ olive text),
+- [x] Existing components restyle pass: `Chip` (limeSoft pill w/ olive text),
       `CoachBubble` (limeSoft rounded-24, lime avatar circle w/ dark icon),
       `MetricTile` (VitalCard style, colored delta with ↗/↘), `SectionHeader`
       (uppercase 13pt tracked label per mock).
-- [ ] Acceptance: app builds; all 5 tabs render with new tab bar; no visual
+- [x] Acceptance: app builds; all 5 tabs render with new tab bar; no visual
       regressions that block reading data; dark mode still legible.
 
 ### Phase 1 — Today screen restructure (UI, client-side state)
@@ -255,3 +255,13 @@ commits beyond main; ElevenLabs TTS already works via `/api/tts`.)
 
 - 2026-07-12 (Claude session, Suman): Imported design, wrote this plan,
   branch `feat/redesign-v3` created. Starting Phase 0.
+- 2026-07-12: Phase 0 done — Theme v3 tokens, VitalCard / IconBadge /
+  VitalSheet / `.toast(message:)` primitives, custom floating tab bar in
+  RootTabView, restyled Chip/CoachBubble/MetricTile/SectionHeader,
+  TrendDirection good-deltas now use `Colors.positive`. Build green,
+  13/13 existing tests pass. Component signatures:
+  `VitalCard(padding:cornerRadius:content:)`,
+  `IconBadge(systemName:style:size:cornerRadius:)` (.accent/.soft/.neutral),
+  `VitalSheet(detents:content:)` (use inside .sheet), `.toast(message: Binding<String?>)`.
+  Note: RootTabView owns tab selection locally — lift it when the voice FAB
+  (Phase 4) needs to switch to Coach programmatically. Starting Phase 1.
