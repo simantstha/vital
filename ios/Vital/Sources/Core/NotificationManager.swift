@@ -10,6 +10,11 @@ enum NotificationPermissionState {
     case denied
 }
 
+enum NotificationDeliveryPolicy {
+    enum Interaction { case foregroundReceipt, userResponse, coldLaunchTap }
+    static func shouldRoute(_ interaction: Interaction) -> Bool { interaction != .foregroundReceipt }
+}
+
 // MARK: - Identifiers (D5 — future-push-safe)
 
 /// Local-notification identifier + category constants, namespaced so a
@@ -185,8 +190,6 @@ extension NotificationManager: UNUserNotificationCenterDelegate {
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
-        let info = notification.request.content.userInfo
-        Task { @MainActor in NotificationDelegateRouter.route(info) }
         completionHandler([.banner, .sound])
     }
 

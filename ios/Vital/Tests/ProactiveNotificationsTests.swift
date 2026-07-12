@@ -132,4 +132,10 @@ final class ProactiveNotificationsTests: XCTestCase {
         NotificationDelegateRouter.route(["type": "workout_analysis", "id": id, "deepLink": "vital://workout-analysis/\(id)"], to: router)
         XCTAssertEqual(router.route, .workoutAnalysis(id))
     }
+
+    func testForegroundReceiptPresentsWithoutRoutingUntilUserInteraction() {
+        XCTAssertFalse(NotificationDeliveryPolicy.shouldRoute(.foregroundReceipt))
+        XCTAssertTrue(NotificationDeliveryPolicy.shouldRoute(.userResponse))
+        XCTAssertTrue(NotificationDeliveryPolicy.shouldRoute(.coldLaunchTap))
+    }
 }
