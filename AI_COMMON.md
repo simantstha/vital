@@ -21,6 +21,28 @@ The orchestrating model may only run read-only tools (file reads, grep,
 git status, builds/tests) and delegate writes. Each adapter file maps this
 principle to its tool's actual model tiers.
 
+## Database Migrations (Non-Negotiable)
+
+Two production incidents came from bypassing migration files (2026-07-09
+schema drift outage; 2026-07-12 `messages` table truncated). The rules:
+
+- **NEVER run `drizzle-kit push` against the production database** — from any
+  agent, tool, or terminal, with or without `--force`. `push` diffs
+  `db/schema.ts` against the live DB and ignores committed migration files and
+  their backfills entirely; `--force` auto-accepts data-loss resolutions
+  (that is what truncated `messages`). `push` is for local dev databases only.
+- Every schema change ships as a generated migration file: edit `db/schema.ts`,
+  run `npx drizzle-kit generate`, commit the new file under `db/migrations/`
+  (add hand-written backfill statements to that file when a column needs
+  populating before a NOT NULL or CHECK lands).
+- Production migrations are applied ONLY by `scripts/ci-migrate.mjs` in the
+  release workflow. It fails the deploy loudly on a bad `DATABASE_URL` or if
+  the applied head doesn't match the journal — never weaken or bypass that
+  verification to "unblock" a release.
+- A PR that both changes the schema and adds code reading the new columns must
+  keep the migration additive-safe: assume old code runs against the new
+  schema during the deploy window.
+
 ## Pull Request Discipline
 
 Never push directly to `main` and never merge PRs. Always:
