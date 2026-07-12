@@ -376,6 +376,56 @@ final class CoachSpecialistStateTests: XCTestCase {
         }
     }
 
+    func testAuthoritativeVitalRollbackClearsPendingHandoffProposal() async {
+        let card = CoachHandoffCard(
+            phase: .proposed,
+            sessionId: "session-1",
+            cardOccurrenceId: "proposal-occurrence",
+            specialist: runningCoach,
+            objective: "Plan a safe week",
+            returnSummary: nil
+        )
+        let api = FakeCoachAPI(restoration: CoachRestorationResponse(
+            messages: [], activePersona: .vital, pendingCard: card
+        ))
+        api.nextMessageEvents = [.personaChanged(.vital)]
+        let viewModel = CoachViewModel(api: api)
+        await viewModel.restoreConversation()
+        viewModel.input = "Continue with Vital"
+
+        viewModel.send()
+        await waitUntil { !viewModel.isStreaming }
+
+        XCTAssertEqual(viewModel.activePersona, .vital)
+        XCTAssertNil(viewModel.pendingHandoffCard)
+        XCTAssertEqual(viewModel.specialistState, .vital)
+    }
+
+    func testAuthoritativeVitalRollbackClearsPendingReturnProposal() async {
+        let card = CoachHandoffCard(
+            phase: .returnProposed,
+            sessionId: "session-1",
+            cardOccurrenceId: "return-occurrence",
+            specialist: runningCoach,
+            objective: "Plan a safe week",
+            returnSummary: nil
+        )
+        let api = FakeCoachAPI(restoration: CoachRestorationResponse(
+            messages: [], activePersona: runningCoach, pendingCard: card
+        ))
+        api.nextMessageEvents = [.personaChanged(.vital)]
+        let viewModel = CoachViewModel(api: api)
+        await viewModel.restoreConversation()
+        viewModel.input = "Continue with Vital"
+
+        viewModel.send()
+        await waitUntil { !viewModel.isStreaming }
+
+        XCTAssertEqual(viewModel.activePersona, .vital)
+        XCTAssertNil(viewModel.pendingHandoffCard)
+        XCTAssertEqual(viewModel.specialistState, .vital)
+    }
+
     func testHistoricalSpecialistLabelSurvivesReturnToVital() async {
         let metadata = SpecialistMessageMetadata(
             specialistId: "running-coach", manifestVersion: "1.0.0",

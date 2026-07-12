@@ -567,6 +567,9 @@ final class CoachViewModel: ObservableObject {
     private func applyPersona(_ persona: CoachPersonaSnapshot) {
         let previous = activePersona
         activePersona = persona
+        if persona.id == "vital" {
+            pendingHandoffCard = nil
+        }
         if previous.id == "vital", persona.id != "vital" {
             let joinedText = "\(persona.title) joined."
             let alreadyJoined = rows.contains {
