@@ -4,8 +4,11 @@ import Foundation
 /// rest/sleep block, or (eventually, Phase 8) calendar event — each anchored
 /// to a time-of-day and a status.
 ///
-/// Phase 1 state is client-side only (see `TodayViewModel`); Phase 2 swaps
-/// the derivation + mutations for `/api/plan` without changing this shape.
+/// Phase 2: persisted server-side via `/api/plan` (see `TodayViewModel`); `id`
+/// is the server row's uuid string, so it survives relaunch and round-trips
+/// through PATCH/DELETE. Locally-generated ids (calendar items, and the brief
+/// Phase-1-derivation fallback for an old backend) use a client-synthesized
+/// string — anything unique works since the server never sees those.
 struct PlanItem: Identifiable, Equatable {
 
     enum Status: String, Equatable {
@@ -32,7 +35,10 @@ struct PlanItem: Identifiable, Equatable {
         case meal, move, rest, sleep, other
     }
 
-    let id: UUID
+    /// Mutable so an optimistically-added item's client-side temp id can be
+    /// swapped for the server-issued id once `POST /api/plan` returns (see
+    /// `TodayViewModel.addItem`), without disturbing its position/status.
+    var id: String
     var timeMinutes: Int   // minutes from midnight, local time
     var title: String
     var subtitle: String
@@ -47,7 +53,7 @@ struct PlanItem: Identifiable, Equatable {
     var meal: MealRow?
 
     init(
-        id: UUID = UUID(),
+        id: String = UUID().uuidString,
         timeMinutes: Int,
         title: String,
         subtitle: String,

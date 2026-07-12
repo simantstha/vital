@@ -1,6 +1,6 @@
 # Vital app redesign — "Today Screen v3" implementation plan
 
-**Status: Phase 0 + Phase 1 done · Phase 2 unclaimed** · Branch: `feat/redesign-v3` (off `main`)
+**Status: Phases 0–3 done** · Branch: `feat/redesign-v3` (off `main`)
 Source of truth for the design: Claude Design project
 <https://claude.ai/design/p/67904bc9-0509-4bb9-b4bf-2219bc3478fb?file=Today+Screen+v3.html>
 (file `Today Screen v3.html` — a full 5-tab React/Tailwind mock of the app).
@@ -139,45 +139,61 @@ Rules for every phase:
       data; add/complete/skip/remove all work in-session; build + tests green.
 
 ### Phase 2 — Plan persistence (backend + wiring)
-**Owner: unclaimed · Suggested agent: Sonnet · full-stack · needs Phase 1**
+**Owner: DONE (2026-07-12, Sonnet subagent) · full-stack**
 
-- [ ] New table `plan_items` in `db/schema.ts` (drizzle): id, userId, localDay
+- [x] New table `plan_items` in `db/schema.ts` (drizzle): id, userId, localDay
       (text key, same convention as `lib/localDay.ts`), time (minutes-from-
       midnight int), title, subtitle, kind (meal/move/rest/sleep/other),
       source (coach/user), status (pending/done/skipped), kcal nullable,
       createdAt/updatedAt. Migration via drizzle-kit.
-- [ ] New route `app/api/plan/route.ts`: `GET ?day=` (seed-on-first-read:
-      if empty for today, materialize from the brief's plan + sleep goal,
-      then return), `POST` (add item), `PATCH ?id=` (status/remove).
+- [x] New route `app/api/plan/route.ts`: `GET ?tz=` (additive seed-on-every-
+      read: inserts a "Lights out" row once, plus any cached-brief meal not
+      yet present for today, matched by title — never triggers a fresh LLM
+      call), `POST` (add item), `PATCH` (status by id), `DELETE ?id=`.
       Auth via `getUserIdFromRequest`, tz handling like `/api/today`.
-- [ ] iOS `Core/APIClient.swift`: `fetchPlan(day:)`, `addPlanItem(…)`,
-      `updatePlanItem(id:status:)`, `deletePlanItem(id:)`.
-- [ ] `TodayViewModel`: replace Phase-1 heuristic with `/api/plan`; optimistic
-      updates, revert + error toast on failure.
+- [x] iOS `Core/APIClient.swift`: `fetchPlan()`, `addPlanItem(timeMinutes:
+      title:subtitle:kind:kcal:)`, `updatePlanItem(id:status:)`,
+      `deletePlanItem(id:)` + `PlanItemDTO`/`PlanResponse`.
+- [x] `TodayViewModel`: replaced Phase-1 heuristic with `/api/plan` as the
+      primary source; `setStatus`/`removeItem`/`addItem` are now optimistic
+      server mutations (mutate locally, fire the API call, revert + toast
+      "Couldn't save — try again" on failure).
 - [ ] Calendar events are **not** stored server-side (privacy): Phase 8 merges
       EventKit client-side. Design the VM merge point now (plan = server
-      items ∪ calendar items sorted by time).
-- [ ] Acceptance: statuses survive relaunch; two devices converge; backend
-      lint/type/build green; iOS tests green. Note for release: migration
-      runs automatically in the release workflow (`drizzle-kit push`).
+      items ∪ calendar items sorted by time). *(Still open — Phase 8.)*
+- [x] Acceptance: statuses survive relaunch (server-tracked); backend
+      lint/type/build green; iOS 13/13 tests green. Note for release:
+      migration runs automatically in the release workflow (`drizzle-kit
+      push`).
 
 ### Phase 3 — Diet sheet (log / edit / target)
-**Owner: unclaimed · Suggested agent: Sonnet · iOS-heavy · needs Phase 0**
+**Owner: DONE (2026-07-12, Sonnet subagent) · iOS-heavy · needs Phase 0**
 
-- [ ] New `Features/Logging/DietSheetView.swift` (VitalSheet, ~78% height):
-      header (remaining kcal of editable target — pencil → inline edit,
-      persists via existing `updateDietGoal`), meal-slot grid
-      (Breakfast/Lunch/Snacks/Dinner w/ per-slot kcal), "Quick log" list per
-      slot, custom name+kcal row, "Logged today" grouped list with remove.
-- [ ] Reuse the existing nutrition plumbing (`logMeal`, `searchFood`,
-      `fetchLogs`) — quick-log foods can start as a static client list like
-      the mock. Removing an entry needs a `DELETE`/tombstone — check
-      `app/api/meals` + `app/api/logs` and add if missing (backend task).
-- [ ] Fuel strip + Logs-tab diet card + "Add to today's log" all open this
-      sheet. Decide `LogMealView`'s fate: keep camera/barcode entry points
-      inside the new sheet (they exist and work — don't regress them).
-- [ ] Acceptance: log → fuel strip + diet numbers update immediately and match
-      `/api/today` after refresh; target edit persists.
+- [x] New `Features/Logging/DietSheetView.swift` (presented inside
+      `VitalSheet(detents: [.large])`, content scrolls internally): header
+      (remaining kcal of editable target — pencil → inline edit, persists via
+      existing `updateDietGoal`), meal-slot grid (Breakfast/Lunch/Snacks/
+      Dinner w/ per-slot kcal), "Quick log" list per slot, custom name+kcal
+      row, "Logged today" grouped list with remove.
+- [x] Reuse the existing nutrition plumbing (`logMeal`, `searchFood`) —
+      quick-log foods are a static client list matching the mock's `MEALS`
+      exactly. **Endpoint decision**: removing an entry needed a real
+      `DELETE`, and reading "today's logged meals bucketed by slot" needed a
+      new read shape — both landed on **`app/api/meals/log`** (GET + DELETE
+      added to the existing POST-only route) rather than extending
+      `/api/logs` (that route formats generic title/subtitle strings across
+      all event types over a rolling N-day window — not raw per-slot macros
+      scoped to "today") or adding a new file (this route already owns
+      `meal_logged` writes, so it owns today's read/delete of them too).
+- [x] Fuel strip opens this sheet (was `LogMealView()` directly). `LogMealView`
+      keeps working standalone: gained a purely-additive
+      `init(initialMethod: MealInputMethod = .text)` so the sheet's
+      Photo/Barcode/Search buttons can deep-link into it as a nested
+      `.sheet`; existing `LogMealView()` call sites are unchanged.
+- [x] Acceptance: log → fuel strip + diet numbers update immediately (via
+      `onRefreshToday` → `TodayViewModel.loadHealthData()`) and match
+      `/api/today` after refresh; target edit persists. Build green, 13/13
+      existing tests still pass.
 
 ### Phase 4 — Voice FAB on Today
 **Owner: unclaimed · Suggested agent: Sonnet · iOS · needs Phase 0**
@@ -291,3 +307,109 @@ commits beyond main; ElevenLabs TTS already works via `/api/tts`.)
   calendar-item rendering (`PlanItem.Source.calendar`, the "Calendar" pill,
   `.neutral` badge) is already wired in `PlanTimelineView`/
   `PlanItemActionsSheet` and ready for Phase 8's EventKit merge.
+- 2026-07-12: Phase 2 done (Sonnet subagent) — plan persistence, full-stack.
+  Backend: `plan_items` table in `db/schema.ts` (id, userId, localDay,
+  timeMinutes, title, subtitle, kind, source, status, kcal,
+  created/updatedAt; index on (userId, localDay)); migration
+  `db/migrations/0005_premium_molecule_man.sql` generated via `npx
+  drizzle-kit generate` (no live DB touched — CI applies it via `drizzle-kit
+  push` on release, per the release workflow). New `app/api/plan/route.ts`:
+  GET (additively seeds a "Lights out" row + any not-yet-present cached-brief
+  meal on *every* call — never awaits a fresh Claude call, so the plan
+  silently fills in once `/api/today`'s background brief generation lands),
+  POST/PATCH/DELETE for user items + status changes, all scoped to
+  `x-user-id` and 401/400 as appropriate. iOS: `PlanItem.id` is now a mutable
+  `String` (server uuid, swapped in after an optimistic POST resolves);
+  `APIClient` gained `fetchPlan()` (sends `?tz=` like `fetchToday()`),
+  `addPlanItem`, `updatePlanItem(id:status:)`, `deletePlanItem(id:)`, and
+  `PlanItemDTO`/`PlanResponse`. `TodayViewModel.loadHealthData` now fetches
+  `/api/today` and `/api/plan` concurrently, then maps `/api/plan` rows →
+  `PlanItem` (icon derived client-side from kind/title; meal rows re-matched
+  by title against `/api/today`'s `plan` array to keep the `MealRow` for
+  `MealDetailView`). `setStatus`/`removeItem`/`addItem` are optimistic:
+  mutate `planItems` immediately, fire the matching API call, revert + set
+  `toastMessage = "Couldn't save — try again"` on failure. Deviations: (1)
+  kept a **Phase 1 fallback** — if `fetchPlan()` throws (old backend without
+  `/api/plan`), `TodayViewModel` falls back to the original client-side
+  heuristic derivation from `/api/today`'s `plan`, clearly marked "PHASE 2
+  FALLBACK" in code comments, so the app keeps working read-only against a
+  not-yet-migrated prod backend during rollout; writes in that fallback mode
+  still go through the optimistic server path and will revert with a toast
+  since the endpoint doesn't exist there — accepted degradation, not a crash;
+  (2) deleted the Phase 1 title-keyed done/skipped preservation merge in
+  `derivePlanItems` per the brief (server now owns status, so the primary
+  path never needs it; the fallback-only survivor rebuilds fresh each
+  reload); (3) `AddPlanItemSheet` needed no changes — it already only hands
+  the VM a `PlanItem`, and `addItem` now persists that under the hood.
+  Verify: backend `npm run lint` / `npx tsc --noEmit` / `npm run build` all
+  green (Node 20, `/api/plan` shows in the build's route list); iOS
+  `xcodegen generate` + `xcodebuild ... test` on `Vital-iPhone16` → **TEST
+  SUCCEEDED**, 13/13 existing tests still pass. Notes for Phase 3: the diet
+  sheet is unrelated to plan persistence and can proceed independently;
+  Phase 8's calendar merge point is still just a design note (no code) —
+  merge calendar items into `planItems` client-side only, sorted by
+  `timeMinutes`, never POSTed to `/api/plan`.
+- 2026-07-12: Phase 3 done (Sonnet subagent) — diet sheet, full-stack.
+  Backend: `app/api/meals/log/route.ts` gained `GET ?tz=` and `DELETE ?id=`
+  alongside the existing `POST`; `POST` also accepts an optional
+  `slot: 'breakfast'|'lunch'|'snacks'|'dinner'` field (400 if present but
+  invalid), stored inside `payload` alongside `name/kcal/c/p/f/source` —
+  omitted entirely for older call sites, exactly like the existing
+  `imageThumb` conditional spread. GET filters `meal_logged` events to the
+  caller's local today (same `pickTimeZone`/`localDayKey` precedence as
+  `/api/plan`/`/api/today`: `?tz=` → stored `users.timezone` → UTC) and
+  returns `{ items: [{ id, name, kcal, protein, carbs, fat, slot, loggedAt }] }`
+  sorted ascending by `loggedAt`. DELETE hard-deletes a single event scoped to
+  `(id, user_id, type='meal_logged')` — a narrow, explicitly-commented
+  exception to the "events is append-only" rule in `db/schema.ts`, justified
+  as a user-initiated correction of a mis-logged meal, not a general delete
+  capability. No migration needed (`payload` is jsonb; DELETE uses the
+  existing table). Verify: `npm run lint` / `npx tsc --noEmit` / `npm run
+  build` all green (Node 20), `/api/meals/log` shows in the build's route
+  list. iOS: `Core/APIClient.swift` — `logMeal(...)` gained a trailing
+  `slot: String? = nil` param (Swift's synthesized `Encodable` omits it when
+  nil, same as `imageThumb`, so the existing `LogMealViewModel` call site
+  needed zero changes); added `fetchTodayMealLogs()` (GET, `?tz=` like
+  `fetchToday()`/`fetchPlan()`) and `deleteMealLog(id:)` (DELETE, mirrors
+  `deletePlanItem(id:)`); new `MealLogEntryDTO`/`MealLogsResponse` DTOs next
+  to `PlanResponse`. New `Features/Logging/DietSheetViewModel.swift`: `DietSlot`
+  enum (breakfast/lunch/snacks/dinner, `CaseIterable` order = display/grouping
+  order), static `quickFoods: [DietSlot: [QuickFood]]` matching the mock's
+  `MEALS` exactly, `target`/`remaining` (derived)/`loggedEntries` state,
+  `load()` (concurrent `fetchDietGoal()` + `fetchTodayMealLogs()`),
+  `logQuickFood`/`logCustom`/`removeEntry`/`updateTarget` all optimistic with
+  toast-on-failure + `onRefreshToday()` callback on success (mirrors
+  `MealDetailView`'s completion calling `vm.loadHealthData()`), plus
+  `subtotalLabel(for:)` and `loggedGroups` (breakfast→lunch→snacks→dinner,
+  then a trailing "Other" group for `slot == nil` entries from the
+  photo/barcode/search flow, so they don't disappear from "Logged today").
+  New `Features/Logging/DietSheetView.swift`: header + editable-target row +
+  4-way slot grid + "Quick log" `VitalCard` list + custom entry row + a
+  Photo/Barcode/Search row that presents `LogMealView(initialMethod:)` as a
+  nested `.sheet` (reloads + calls `onRefreshToday()` on dismiss, whether
+  logged or cancelled) + "Logged today" grouped list with per-entry delete.
+  `Features/Logging/LogMealView.swift` gained
+  `init(initialMethod: MealInputMethod = .text)` — sets
+  `vm.selectedMethod` in `.onAppear`; existing `LogMealView()` call sites and
+  `LogMealViewModel` are untouched. `TodayView.swift`: the fuel-strip
+  `.sheet(isPresented: $showLogSheet)` now presents
+  `VitalSheet(detents: [.large]) { DietSheetView(initialTarget:
+  vm.diet.kcalTarget, onRefreshToday:) }` instead of `LogMealView()` directly.
+  **Endpoint decision** (flagged as open in this doc): GET landed on
+  `app/api/meals/log` rather than extending `/api/logs` or adding a new file
+  — see the Phase 3 checklist above for the full reasoning. Deviations from
+  the brief: none structural; the target `TextField` commits on blur via
+  `@FocusState` (`onChange` true→false) since `.numberPad` has no Return key,
+  plus `.onSubmit` for parity if a hardware keyboard is attached. Verify:
+  backend lint/tsc/build green; iOS `xcodegen generate` +
+  `xcodebuild ... build` → **BUILD SUCCEEDED**, `xcodebuild ... test` →
+  **TEST SUCCEEDED**, 13/13 existing tests still pass (no new test target
+  changes — this phase added UI + a thin ViewModel with no committed test
+  coverage, consistent with Phases 1–2). Note for whoever picks up Phase 6
+  (Logs day pager): it will want this same `/api/meals/log` GET for past-day
+  diet cards, but today's implementation is **today-only** — it always
+  resolves "today" from `?tz=`/stored timezone and has no `?date=` param.
+  Phase 6 will need to add a `?date=YYYY-MM-DD` (or equivalent local-day key)
+  override to `GET /api/meals/log` — or a separate per-day rollup endpoint —
+  to read a past day's logged meals read-only; deliberately not added now
+  since Phase 3's brief scoped this to today only.

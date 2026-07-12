@@ -181,6 +181,76 @@ struct APIClient {
         try await get("/api/trends?metric=\(metric)&days=\(days)")
     }
 
+    // MARK: - Today's plan
+
+    /// Fetches today's plan timeline. Sends the device's current timezone —
+    /// same convention as `fetchToday()` — so the server resolves the same
+    /// local day both endpoints agree on.
+    func fetchPlan() async throws -> PlanResponse {
+        let tz = TimeZone.current.identifier
+        let encoded = tz.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? tz
+        return try await get("/api/plan?tz=\(encoded)")
+    }
+
+    @discardableResult
+    func addPlanItem(
+        timeMinutes: Int,
+        title: String,
+        subtitle: String?,
+        kind: String,
+        kcal: Int? = nil
+    ) async throws -> PlanItemDTO {
+        guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/plan") else {
+            throw APIError.invalidURL
+        }
+        var request = authorizedRequest(url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 15
+        struct Body: Encodable {
+            let timeMinutes: Int
+            let title: String
+            let subtitle: String?
+            let kind: String
+            let kcal: Int?
+        }
+        request.httpBody = try encoder.encode(
+            Body(timeMinutes: timeMinutes, title: title, subtitle: subtitle, kind: kind, kcal: kcal)
+        )
+        let (data, response) = try await session.data(for: request)
+        try validate(response)
+        return try decoder.decode(PlanItemDTO.self, from: data)
+    }
+
+    @discardableResult
+    func updatePlanItem(id: String, status: String) async throws -> PlanItemDTO {
+        guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/plan") else {
+            throw APIError.invalidURL
+        }
+        var request = authorizedRequest(url)
+        request.httpMethod = "PATCH"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 15
+        struct Body: Encodable { let id: String; let status: String }
+        request.httpBody = try encoder.encode(Body(id: id, status: status))
+        let (data, response) = try await session.data(for: request)
+        try validate(response)
+        return try decoder.decode(PlanItemDTO.self, from: data)
+    }
+
+    func deletePlanItem(id: String) async throws {
+        guard let encodedId = id.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+              let url = URL(string: "\(AppConfig.apiBaseURL)/api/plan?id=\(encodedId)")
+        else {
+            throw APIError.invalidURL
+        }
+        var request = authorizedRequest(url)
+        request.httpMethod = "DELETE"
+        request.timeoutInterval = 15
+        let (_, response) = try await session.data(for: request)
+        try validate(response)
+    }
+
     // MARK: - Activity logs
 
     func fetchLogs(days: Int = 7) async throws -> LogsResponse {
@@ -439,7 +509,8 @@ struct APIClient {
         p: Double,
         f: Double,
         source: String,
-        imageThumb: String? = nil
+        imageThumb: String? = nil,
+        slot: String? = nil
     ) async throws -> LogMealResponse {
         guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/meals/log") else {
             throw APIError.invalidURL
@@ -452,11 +523,38 @@ struct APIClient {
             let name: String; let kcal: Double
             let c: Double; let p: Double; let f: Double; let source: String
             let imageThumb: String?
+            let slot: String?
         }
-        request.httpBody = try encoder.encode(Body(name: name, kcal: kcal, c: c, p: p, f: f, source: source, imageThumb: imageThumb))
+        request.httpBody = try encoder.encode(
+            Body(name: name, kcal: kcal, c: c, p: p, f: f, source: source, imageThumb: imageThumb, slot: slot)
+        )
         let (data, response) = try await session.data(for: request)
         try validate(response)
         return try decoder.decode(LogMealResponse.self, from: data)
+    }
+
+    // MARK: - Diet sheet (today's logged meals)
+
+    /// Fetches today's logged meals (redesign-v3 Phase 3 diet sheet), grouped
+    /// by slot client-side. Same tz-encoding convention as `fetchToday()` /
+    /// `fetchPlan()`.
+    func fetchTodayMealLogs() async throws -> MealLogsResponse {
+        let tz = TimeZone.current.identifier
+        let encoded = tz.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? tz
+        return try await get("/api/meals/log?tz=\(encoded)")
+    }
+
+    func deleteMealLog(id: String) async throws {
+        guard let encodedId = id.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+              let url = URL(string: "\(AppConfig.apiBaseURL)/api/meals/log?id=\(encodedId)")
+        else {
+            throw APIError.invalidURL
+        }
+        var request = authorizedRequest(url)
+        request.httpMethod = "DELETE"
+        request.timeoutInterval = 15
+        let (_, response) = try await session.data(for: request)
+        try validate(response)
     }
 
     // MARK: - Ingest
@@ -800,6 +898,46 @@ struct TrendPoint: Decodable {
 struct TrendsResponse: Decodable {
     let metric: String
     let points: [TrendPoint]
+}
+
+// MARK: - Plan types
+
+/// Wire shape of a `/api/plan` row. `status` is server-tracked as
+/// pending/done/skipped only — now/next/later is derived client-side from
+/// the clock (see `TodayViewModel.computeStatuses`).
+struct PlanItemDTO: Decodable {
+    let id: String
+    let timeMinutes: Int
+    let title: String
+    let subtitle: String?
+    let kind: String   // meal | move | rest | sleep | other
+    let source: String // coach | user
+    let status: String // pending | done | skipped
+    let kcal: Int?
+}
+
+struct PlanResponse: Decodable {
+    let items: [PlanItemDTO]
+}
+
+// MARK: - Meal log types (redesign-v3 diet sheet)
+
+/// Wire shape of a `/api/meals/log` GET row — a single logged meal from
+/// today's local day. `slot` is nil for entries logged before the diet sheet
+/// existed, or via the photo/barcode/search flow (which doesn't set one).
+struct MealLogEntryDTO: Decodable, Identifiable {
+    let id: String
+    let name: String
+    let kcal: Int
+    let protein: Int
+    let carbs: Int
+    let fat: Int
+    let slot: String?
+    let loggedAt: String
+}
+
+struct MealLogsResponse: Decodable {
+    let items: [MealLogEntryDTO]
 }
 
 // MARK: - Logs types
