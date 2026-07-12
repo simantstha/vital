@@ -118,7 +118,11 @@ export function killSwitchEventsForSession(
   if (session.status !== 'proposed' && session.status !== 'return_proposed') {
     return [personaChanged];
   }
-  if (!manifest) throw new Error('A specialist manifest is required to dismiss a pending card');
+  // Normally a manifest is available to render the dismissed card. If it
+  // isn't (e.g. SPECIALIST_MODEL was unset as part of flipping the kill
+  // switch), degrade to restoring Vital without the card rather than
+  // throwing and leaving the session's disableOpen() unreached.
+  if (!manifest) return [personaChanged];
   return [
     { ...handoffCardForSession(session, manifest), phase: 'dismissed' },
     personaChanged,

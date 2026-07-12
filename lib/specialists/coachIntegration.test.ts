@@ -111,3 +111,13 @@ test('kill switch dismisses a pending card before restoring Vital', () => {
     ['persona_changed'],
   );
 });
+
+test('kill switch degrades to persona_changed only for a pending session with no manifest available', () => {
+  // e.g. SPECIALIST_MODEL was unset as part of flipping the kill switch, so
+  // the manifest lookup upstream failed. Must not throw — a throw here would
+  // skip disableOpen() and brick the user with a permanently pending session.
+  for (const status of ['proposed', 'return_proposed'] as const) {
+    const events = killSwitchEventsForSession(session(status), undefined);
+    assert.deepEqual(events.map((event) => event.type), ['persona_changed']);
+  }
+});

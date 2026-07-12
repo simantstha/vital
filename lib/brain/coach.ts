@@ -33,7 +33,6 @@ import {
   buildSpecialistPrompt,
   isSpecialistsEnabled,
   parseActiveSpecialistReturn,
-  parseSpecialistConfirmation,
   type HandoffCardEvent,
   type PersonaChangedEvent,
   type SpecialistAction,
@@ -141,32 +140,36 @@ export async function* runCoach(
   if (!specialistsEnabled && !isOnboarding) {
     const openSession = await specialistSessions.findOpen(userId);
     if (openSession) {
-      const manifest = openSession.status === 'proposed' || openSession.status === 'return_proposed'
-        ? specialistRegistry.get(openSession.manifestId)
-        : undefined;
+      let manifest: SpecialistManifest | undefined;
+      if (openSession.status === 'proposed' || openSession.status === 'return_proposed') {
+        // specialistRegistry.get() throws when SPECIALIST_MODEL is unset —
+        // e.g. the kill switch was flipped by unsetting it. Don't let that
+        // throw skip disableOpen() below and brick the user with a pending
+        // session; fall back to an undefined manifest instead.
+        try {
+          manifest = specialistRegistry.get(openSession.manifestId);
+        } catch (error) {
+          console.error('specialist_lifecycle', {
+            event: 'kill_switch_manifest_lookup_failed',
+            userId,
+            sessionId: openSession.id,
+            manifestId: openSession.manifestId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
       pendingEvents.push(...killSwitchEventsForSession(openSession, manifest));
       await specialistSessions.disableOpen(userId);
     }
   }
+  // Note: bare "yes"/"no" while a handoff or return card is pending used to
+  // silently confirm/decline it via parseSpecialistConfirmation. Removed —
+  // the cards' buttons are the only way to act on them (idempotent via
+  // actionId, so double-taps are safe); text confirmation risked activating
+  // a specialist the user never meant to accept.
   if (currentSession?.status === 'active' && parseActiveSpecialistReturn(userMessage)) {
     currentSession = await specialistRuntime.completeExplicitReturn(userId, currentSession.id);
     pendingEvents.push({ type: 'persona_changed', persona: VITAL_PERSONA });
-  } else if (currentSession && (currentSession.status === 'proposed' || currentSession.status === 'return_proposed')) {
-    const confirmation = parseSpecialistConfirmation(userMessage);
-    if (confirmation) {
-      const action: SpecialistAction = currentSession.status === 'proposed'
-        ? confirmation === 'accept' ? 'accept_handoff' : 'decline_handoff'
-        : confirmation === 'accept' ? 'accept_return' : 'decline_return';
-      const result = await specialistActions.apply({
-        userId,
-        sessionId: currentSession.id,
-        cardOccurrenceId: currentSession.cardOccurrenceId,
-        actionId: `text:${randomUUID()}`,
-        action,
-      });
-      currentSession = result.session;
-      pendingEvents.push(result.events[0], result.events[1]);
-    }
   }
 
   for (const event of pendingEvents) yield event;
