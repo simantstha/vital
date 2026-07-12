@@ -18,8 +18,10 @@ struct CoachView: View {
     /// `mode` is forwarded to every `/api/coach` call via `CoachViewModel`.
     /// The Coach tab uses the default (nil); the onboarding CoachIntro step
     /// passes `"onboarding"`.
-    init(mode: String? = nil) {
-        _vm = StateObject(wrappedValue: CoachViewModel(mode: mode))
+    init(mode: String? = nil, initialMessage: String? = nil) {
+        let model = CoachViewModel(mode: mode)
+        model.input = initialMessage ?? ""
+        _vm = StateObject(wrappedValue: model)
     }
 
     var body: some View {

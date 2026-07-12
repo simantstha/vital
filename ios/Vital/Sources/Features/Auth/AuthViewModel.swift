@@ -1,5 +1,6 @@
 import AuthenticationServices
 import Foundation
+import UIKit
 
 /// Response shape shared by /api/auth/dev and /api/auth/apple.
 private struct AuthResponse: Decodable {
@@ -116,6 +117,8 @@ final class AuthViewModel: ObservableObject {
     }
 
     func signOut() {
+        let token = KeychainStore.loadSessionToken()
+        Task { await PushNotificationService.shared.invalidate(sessionToken: token) }
         KeychainStore.deleteSessionToken()
         isAuthenticated = false
         onboarded = false
@@ -140,6 +143,8 @@ final class AuthViewModel: ObservableObject {
             onboarded = auth.onboarded
             UserDefaults.standard.set(auth.onboarded, forKey: Keys.onboarded)
             isAuthenticated = true
+            UIApplication.shared.registerForRemoteNotifications()
+            await PushNotificationService.shared.syncPreferences(.current())
         } catch {
             errorMessage = "Sign-in failed: \(error.localizedDescription)"
         }

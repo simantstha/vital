@@ -59,6 +59,8 @@ targets:
         # TestFlight doesn't gate every build on the export-compliance prompt.
         ITSAppUsesNonExemptEncryption: false
         UILaunchScreen: {}
+        UIBackgroundModes:
+          - remote-notification
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
         NSHealthShareUsageDescription: "Vital reads your health data to coach you."

@@ -20,14 +20,14 @@ async function analyze(job: AnalysisJob, context: AnalysisContext): Promise<unkn
 
 async function tick(): Promise<void> {
   const now = new Date();
-  for (const job of await claimAnalysisJobs(now)) await runClaimedAnalysis(job, workerRepository, analyze, (device, result) => apns.send(device, result), now);
+  for (const job of await claimAnalysisJobs(now)) await runClaimedAnalysis(job, workerRepository, analyze, (device, result) => apns.send(device, result, { type: `${job.kind}_analysis`, id: job.id }), now);
   for (const candidate of await listReadyNotificationCandidates(now)) {
     const token = await workerRepository.claimNotification(candidate.job, now);
-    if (token) await deliverNotification(candidate.job, candidate.result, token, workerRepository, (device, result) => apns.send(device, result), now);
+    if (token) await deliverNotification(candidate.job, candidate.result, token, workerRepository, (device, result) => apns.send(device, result, { type: `${candidate.job.kind}_analysis`, id: candidate.job.id }), now);
   }
   for (const claim of await claimDueMorningBriefs(now)) {
     const job: AnalysisJob = { id: claim.idempotencyKey, kind: 'sleep', userId: claim.userId, localDate: claim.localDate, input: { purpose: 'morning brief' }, retryCount: 0, notificationRetryCount: claim.retryCount, leaseToken: claim.leaseToken };
-    try { const result = parseCoachAnalysis(await analyze(job, await workerRepository.getContext(job))); await completeMorningBrief(claim, result, (device, value) => apns.send(device, value), now); }
+    try { const result = parseCoachAnalysis(await analyze(job, await workerRepository.getContext(job))); await completeMorningBrief(claim, result, (device, value) => apns.send(device, value, { type: 'morning_brief' }), now); }
     catch { await failMorningBrief(claim, new Date()); }
   }
 }

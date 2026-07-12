@@ -52,7 +52,10 @@ struct TodayView: View {
                 .padding(.bottom, 120)
             }
             .scrollIndicators(.hidden)
-            .task { await vm.loadHealthData() }
+            .task {
+                await vm.loadHealthData()
+                if vm.didLoadToday { ReminderScheduler.shared.briefViewed(at: Date()) }
+            }
         }
         .toast(message: $vm.toastMessage)
         .sheet(isPresented: $showLogSheet) {

@@ -1,5 +1,6 @@
 import Foundation
 import UserNotifications
+import UIKit
 
 // MARK: - Permission state
 
@@ -67,6 +68,8 @@ enum NotificationIdentifiers {
 enum NotificationPrefsKeys {
     static let briefEnabled = "notif.brief.enabled"
     static let briefMinutes = "notif.brief.minutes"          // default 450 = 7:30am
+    static let workoutEnabled = "notif.workout.enabled"
+    static let sleepEnabled = "notif.sleep.enabled"
 
     static let mealsEnabled = "notif.meals.enabled"
     static let mealsLunchMinutes = "notif.meals.lunchMinutes"   // default 750 = 12:30pm
@@ -79,6 +82,8 @@ enum NotificationPrefsKeys {
     static let registrationDefaults: [String: Any] = [
         briefEnabled: true,
         briefMinutes: 450,
+        workoutEnabled: true,
+        sleepEnabled: true,
         mealsEnabled: true,
         mealsLunchMinutes: 750,
         mealsDinnerMinutes: 1170,
@@ -131,6 +136,7 @@ final class NotificationManager: NSObject, ObservableObject {
     func requestPermission() async -> Bool {
         let granted = (try? await center.requestAuthorization(options: [.alert, .sound, .badge])) ?? false
         await refreshPermissionState()
+        if granted { UIApplication.shared.registerForRemoteNotifications() }
         return granted
     }
 
@@ -179,6 +185,18 @@ extension NotificationManager: UNUserNotificationCenterDelegate {
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
+        let info = notification.request.content.userInfo
+        Task { @MainActor in AppRouter.shared.handle(info) }
         completionHandler([.banner, .sound])
+    }
+
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        let info = response.notification.request.content.userInfo
+        Task { @MainActor in AppRouter.shared.handle(info) }
+        completionHandler()
     }
 }

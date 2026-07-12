@@ -11,6 +11,8 @@ struct NotificationSettingsView: View {
 
     @AppStorage(NotificationPrefsKeys.briefEnabled) private var briefEnabled = true
     @AppStorage(NotificationPrefsKeys.briefMinutes) private var briefMinutes = 450
+    @AppStorage(NotificationPrefsKeys.workoutEnabled) private var workoutEnabled = true
+    @AppStorage(NotificationPrefsKeys.sleepEnabled) private var sleepEnabled = true
 
     @AppStorage(NotificationPrefsKeys.mealsEnabled) private var mealsEnabled = true
     @AppStorage(NotificationPrefsKeys.mealsLunchMinutes) private var lunchMinutes = 750
@@ -33,6 +35,7 @@ struct NotificationSettingsView: View {
                             deniedCard
                         }
                         briefSection
+                        analysisSection
                         mealsSection
                         weighinSection
                     }
@@ -61,6 +64,18 @@ struct NotificationSettingsView: View {
                 await notificationManager.requestPermission()
                 await ReminderScheduler.shared.resync()
             }
+            await PushNotificationService.shared.syncPreferences(.current())
+        }
+    }
+
+    private var analysisSection: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+            SectionHeader(title: "Health Analysis")
+            GlassCard { VStack(spacing: Theme.Spacing.md) {
+                Toggle("Workout analysis", isOn: $workoutEnabled).tint(Theme.Colors.accent).onChange(of: workoutEnabled) { _, _ in syncServer() }
+                Divider().overlay(Theme.Colors.glassBorder)
+                Toggle("Sleep analysis", isOn: $sleepEnabled).tint(Theme.Colors.accent).onChange(of: sleepEnabled) { _, _ in syncServer() }
+            }}
         }
     }
 
@@ -112,12 +127,12 @@ struct NotificationSettingsView: View {
                 VStack(spacing: Theme.Spacing.md) {
                     Toggle("Remind me", isOn: $briefEnabled)
                         .tint(Theme.Colors.accent)
-                        .onChange(of: briefEnabled) { _, _ in resync() }
+                        .onChange(of: briefEnabled) { _, _ in syncServer() }
 
                     if briefEnabled {
                         Divider().overlay(Theme.Colors.glassBorder)
                         DatePicker("Time", selection: minutesBinding($briefMinutes), displayedComponents: .hourAndMinute)
-                            .onChange(of: briefMinutes) { _, _ in resync() }
+                            .onChange(of: briefMinutes) { _, _ in syncServer() }
                     }
                 }
             }
@@ -197,5 +212,17 @@ struct NotificationSettingsView: View {
 
     private func resync() {
         Task { await ReminderScheduler.shared.resync() }
+    }
+
+    private func syncServer() {
+        let value = NotificationPreferences.fromLocal(
+            morningEnabled: briefEnabled, morningMinutes: briefMinutes,
+            workoutEnabled: workoutEnabled, sleepEnabled: sleepEnabled,
+            timezone: TimeZone.current.identifier
+        )
+        Task {
+            await PushNotificationService.shared.syncPreferences(value)
+            await ReminderScheduler.shared.resync()
+        }
     }
 }

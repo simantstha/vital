@@ -27,6 +27,12 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         Task { @MainActor in
             UNUserNotificationCenter.current().delegate = NotificationManager.shared
             await NotificationManager.shared.refreshPermissionState()
+            if NotificationManager.shared.permissionState == .authorized {
+                application.registerForRemoteNotifications()
+            }
+            if let info = launchOptions?[.remoteNotification] as? [AnyHashable: Any] {
+                AppRouter.shared.handle(info)
+            }
         }
 
         if KeychainStore.loadSessionToken() != nil {
@@ -36,17 +42,29 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         }
         return true
     }
+
+    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        Task { @MainActor in await PushNotificationService.shared.register(token: deviceToken) }
+    }
+
+    func application(_ application: UIApplication, didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+                     fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void) {
+        Task { @MainActor in AppRouter.shared.handle(userInfo) }
+        completionHandler(.noData)
+    }
 }
 
 @main
 struct VitalApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    @StateObject private var router = AppRouter.shared
 
     var body: some Scene {
         WindowGroup {
             // No forced color scheme — Vital follows the system appearance so
             // the adaptive Liquid Glass palette renders correctly in light & dark.
             RootView()
+                .environmentObject(router)
         }
     }
 }

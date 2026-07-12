@@ -4,6 +4,7 @@ import { classifyApnsResponse, type CoachAnalysis, type PushDevice, type PushOut
 
 export interface ApnsConfig { keyId: string; teamId: string; topic: string; privateKey: string }
 export interface ApnsTransport { request(origin: string, headers: Record<string, string>, body: string): Promise<{ status: number; body: string; latencyMs: number }> }
+export type ApnsRoute = { type: 'workout_analysis' | 'sleep_analysis'; id: string } | { type: 'morning_brief' };
 
 function base64url(value: string | Buffer): string { return Buffer.from(value).toString('base64url'); }
 
@@ -20,9 +21,9 @@ export class ApnsClient {
     this.jwt = { token: `${unsigned}.${base64url(signature)}`, issuedAt: seconds };
     return this.jwt.token;
   }
-  async send(device: PushDevice, analysis: CoachAnalysis, now = new Date()): Promise<PushOutcome> {
+  async send(device: PushDevice, analysis: CoachAnalysis, route?: ApnsRoute, now = new Date()): Promise<PushOutcome> {
     const origin = device.environment === 'production' ? 'https://api.push.apple.com' : 'https://api.sandbox.push.apple.com';
-    const payload = JSON.stringify({ aps: { alert: { title: analysis.headline, body: analysis.shortInsight }, sound: 'default' } });
+    const payload = JSON.stringify({ aps: { alert: { title: analysis.headline, body: analysis.shortInsight }, sound: 'default' }, ...route });
     let response: { status: number; body: string; latencyMs: number };
     try {
       response = await this.transport.request(origin, {
