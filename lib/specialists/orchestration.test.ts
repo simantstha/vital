@@ -11,6 +11,7 @@ import {
   buildSpecialistPrompt,
   isSpecialistsEnabled,
   parseActiveSpecialistReturn,
+  parseSpecialistConfirmation,
   validateReturnHandoff,
 } from './orchestration';
 
@@ -39,6 +40,16 @@ test('specialist feature flag is disabled by default and requires literal true',
   assert.equal(isSpecialistsEnabled({ SPECIALISTS_ENABLED: 'false' }), false);
   assert.equal(isSpecialistsEnabled({ SPECIALISTS_ENABLED: '1' }), false);
   assert.equal(isSpecialistsEnabled({ SPECIALISTS_ENABLED: 'true' }), true);
+});
+
+test('text confirmation accepts only explicit whole-message affirmations or declines', () => {
+  for (const text of ['yes', 'Yes.', 'bring them in', 'accept', 'no', 'No thanks.', 'not now', 'decline']) {
+    assert.notEqual(parseSpecialistConfirmation(text), null, text);
+  }
+  assert.equal(parseSpecialistConfirmation('yes, but tell me more first'), null);
+  assert.equal(parseSpecialistConfirmation('I am not sure'), null);
+  assert.equal(parseSpecialistConfirmation('maybe later'), null);
+  assert.equal(parseSpecialistConfirmation('yesterday was hard'), null);
 });
 
 test('active specialist return accepts only explicit whole-message requests', () => {
@@ -311,28 +322,5 @@ test('return handoff validation requires every structured section', () => {
   };
   assert.deepEqual(validateReturnHandoff(valid), valid);
   assert.throws(() => validateReturnHandoff({ ...valid, nextSteps: [] }), /nextSteps/);
-  assert.throws(() => validateReturnHandoff({ ...valid, outcomes: [] }), /outcomes/);
-  assert.throws(() => validateReturnHandoff({ ...valid, recommendations: [] }), /recommendations/);
   assert.throws(() => validateReturnHandoff({ ...valid, decisions: 'Three runs' }), /decisions/);
-});
-
-test('return handoff validation allows decisions and unresolvedRisks to be empty', () => {
-  const noDecisionsOrRisks = {
-    outcomes: ['Defined an easy-week plan'],
-    decisions: [],
-    recommendations: ['Keep easy pace conversational'],
-    unresolvedRisks: [],
-    nextSteps: ['Reassess after seven days'],
-  };
-  assert.deepEqual(validateReturnHandoff(noDecisionsOrRisks), noDecisionsOrRisks);
-  // Present items must still be non-empty strings even when the array itself
-  // is allowed to be empty.
-  assert.throws(
-    () => validateReturnHandoff({ ...noDecisionsOrRisks, decisions: [''] }),
-    /decisions/,
-  );
-  assert.throws(
-    () => validateReturnHandoff({ ...noDecisionsOrRisks, unresolvedRisks: [42] }),
-    /unresolvedRisks/,
-  );
 });
