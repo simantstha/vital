@@ -19,7 +19,7 @@ enum TrendDirection {
 
     var color: Color {
         switch self {
-        case .upGood, .downGood: return Theme.Colors.accent
+        case .upGood, .downGood: return Theme.Colors.positive
         case .upBad, .downBad:   return Theme.Colors.alert
         case .neutral:           return Theme.Colors.textSecondary
         }

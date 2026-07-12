@@ -48,7 +48,7 @@ struct DietCard {
     let fat: MacroProgress
 }
 
-struct MealRow: Identifiable {
+struct MealRow: Identifiable, Equatable {
     let id = UUID()
     let name: String
     let kcal: Int
@@ -74,6 +74,11 @@ final class TodayViewModel: ObservableObject {
     // Coach insight — overwritten from /api/today
     @Published var coachInsight: String = ""
 
+    // Header hint line under the streak chip. TODO(Phase 2+): have the brief
+    // supply this copy directly instead of deriving a static placeholder
+    // from calibration status.
+    @Published var planHint: String = "Keep the streak going"
+
     // Biometrics — neutral until real data loads (view is gated on isLoading)
     @Published var hrv = HRVMetric(value: 0, trend: .neutral, delta: "—")
     @Published var sleep = SleepMetric(hours: 0, minutes: 0, trend: .neutral, delta: "—")
@@ -88,8 +93,13 @@ final class TodayViewModel: ObservableObject {
         fat:     MacroProgress(current: 0, target: 0)
     )
 
-    // Today's plan — driven from /api/today
-    @Published var meals: [MealRow] = []
+    // Today's plan timeline — derived (client-side, Phase 1) from /api/today's
+    // `plan` + a synthesized sleep item. Local-only mutations; Phase 2 swaps
+    // this for /api/plan without changing the shape callers see.
+    @Published var planItems: [PlanItem] = []
+
+    // Top-center toast host (see `.toast(message:)`).
+    @Published var toastMessage: String? = nil
 
     // Pending facts banner
     @Published var pendingFacts: [PendingFact] = []
@@ -203,6 +213,7 @@ final class TodayViewModel: ObservableObject {
                 cal.metrics["sleep_minutes"]?.dataDays ?? 0
             ].min() ?? 0
             calibrationProgress = min(1.0, Double(dataDays) / 14.0)
+            planHint = cal.status == "calibrating" ? "Take it easy today — recover" : "Keep the streak going"
         }
 
         // Coach insight — keep the existing default if the brief isn't ready yet
@@ -270,18 +281,160 @@ final class TodayViewModel: ObservableObject {
             fat:     MacroProgress(current: db.fat,     target: fatTarget)
         )
 
-        // Today's plan — map to MealRow, picking an icon by name heuristics.
-        // Keep the existing default plan if the brief isn't ready yet.
-        if !r.plan.isEmpty {
-            meals = r.plan.map { item in
-                MealRow(
-                    name:   item.name,
-                    kcal:   item.kcal,
-                    reason: item.why,
-                    icon:   mealIcon(for: item.name)
-                )
+        // Today's plan timeline — derive PlanItems from the brief's meals +
+        // a synthesized sleep item. Keep the existing derived plan if the
+        // brief isn't ready yet.
+        derivePlanItems(from: r.plan)
+    }
+
+    // MARK: - Plan timeline derivation (Phase 1: client-side heuristics)
+
+    /// Buckets a meal plan into breakfast/lunch/dinner slots so it can be
+    /// given a heuristic time-of-day. Mirrors `mealIcon(for:)`'s keyword
+    /// sets so the same meal always lands in the same slot as its icon.
+    private enum MealSlot: Equatable { case breakfast, lunch, dinner, unmatched }
+
+    private func mealSlot(for name: String) -> MealSlot {
+        let lower = name.lowercased()
+        if lower.contains("breakfast") || lower.contains("oat") || lower.contains("egg") {
+            return .breakfast
+        } else if lower.contains("lunch") || lower.contains("chicken") || lower.contains("bowl") {
+            return .lunch
+        } else if lower.contains("dinner") || lower.contains("salmon") || lower.contains("pasta") {
+            return .dinner
+        }
+        return .unmatched
+    }
+
+    /// Builds meal-kind PlanItems from the brief's plan items, assigning each
+    /// a heuristic time-of-day: breakfast 8:00, lunch 12:45, dinner 19:30;
+    /// anything that doesn't match one of those name heuristics (e.g.
+    /// snacks, recovery items) is spread evenly between lunch and dinner.
+    private func buildMealPlanItems(from plan: [TodayPlanItem]) -> [PlanItem] {
+        let breakfastMinutes = 8 * 60
+        let lunchMinutes = 12 * 60 + 45
+        let dinnerMinutes = 19 * 60 + 30
+
+        let unmatched = plan.filter { mealSlot(for: $0.name) == .unmatched }
+        let unmatchedTime: [String: Int] = Dictionary(
+            uniqueKeysWithValues: unmatched.enumerated().map { index, item in
+                let fraction = Double(index + 1) / Double(unmatched.count + 1)
+                let minutes = lunchMinutes + Int((Double(dinnerMinutes - lunchMinutes) * fraction).rounded())
+                return (item.name, minutes)
+            }
+        )
+
+        return plan.map { item in
+            let minutes: Int
+            switch mealSlot(for: item.name) {
+            case .breakfast: minutes = breakfastMinutes
+            case .lunch:     minutes = lunchMinutes
+            case .dinner:    minutes = dinnerMinutes
+            case .unmatched: minutes = unmatchedTime[item.name] ?? lunchMinutes
+            }
+
+            let meal = MealRow(name: item.name, kcal: item.kcal, reason: item.why, icon: mealIcon(for: item.name))
+            let subtitle = item.why.isEmpty ? "\(item.kcal) kcal" : "\(item.why) · \(item.kcal) kcal"
+            return PlanItem(
+                timeMinutes: minutes,
+                title: item.name,
+                subtitle: subtitle,
+                sfSymbol: mealIcon(for: item.name),
+                status: .later, // overwritten by computeStatuses(...) below
+                source: .coach,
+                kind: .meal,
+                meal: meal
+            )
+        }
+    }
+
+    /// Recomputes `.now` / `.next` / `.later` for items whose status isn't a
+    /// user-set `.done`/`.skipped` (those are left untouched). Items within
+    /// ±45 min of now become `.now`; the earliest future item beyond that
+    /// window becomes `.next`; everything else — including past items we
+    /// have no signal actually happened — stays `.later` rather than being
+    /// guessed as done. Simple and deterministic; Phase 2 replaces this with
+    /// server-tracked status.
+    private func computeStatuses(_ items: [PlanItem], nowMinutes: Int) -> [PlanItem] {
+        var items = items.sorted { $0.timeMinutes < $1.timeMinutes }
+        var assignedNext = false
+        for i in items.indices {
+            guard items[i].status != .done, items[i].status != .skipped else { continue }
+            let diff = items[i].timeMinutes - nowMinutes
+            if abs(diff) <= 45 {
+                items[i].status = .now
+            } else if diff > 45 {
+                if !assignedNext {
+                    items[i].status = .next
+                    assignedNext = true
+                } else {
+                    items[i].status = .later
+                }
+            } else {
+                items[i].status = .later
             }
         }
+        return items
+    }
+
+    private func derivePlanItems(from plan: [TodayPlanItem]) {
+        guard !plan.isEmpty else { return }
+
+        // Preserve any user-set done/skipped status across re-derivation
+        // (e.g. after a background refresh), matched by title since the
+        // brief's meal names are stable within a day.
+        let previousCoachStatus: [String: PlanItem.Status] = Dictionary(
+            planItems
+                .filter { $0.source == .coach && ($0.status == .done || $0.status == .skipped) }
+                .map { ($0.title, $0.status) },
+            uniquingKeysWith: { first, _ in first }
+        )
+
+        var mealItems = buildMealPlanItems(from: plan)
+        for i in mealItems.indices {
+            if let prev = previousCoachStatus[mealItems[i].title] {
+                mealItems[i].status = prev
+            }
+        }
+
+        var lightsOut = PlanItem(
+            timeMinutes: 22 * 60 + 30,
+            title: "Lights out",
+            subtitle: "8h target",
+            sfSymbol: "moon",
+            status: .later,
+            source: .coach,
+            kind: .sleep
+        )
+        if let prev = previousCoachStatus[lightsOut.title] {
+            lightsOut.status = prev
+        }
+
+        let userItems = planItems.filter { $0.source == .user }
+        let nowMinutes = Self.minutesSinceMidnight(Date())
+
+        planItems = computeStatuses(mealItems + [lightsOut] + userItems, nowMinutes: nowMinutes)
+    }
+
+    private static func minutesSinceMidnight(_ date: Date) -> Int {
+        let comps = Calendar.current.dateComponents([.hour, .minute], from: date)
+        return (comps.hour ?? 0) * 60 + (comps.minute ?? 0)
+    }
+
+    // MARK: - Plan timeline mutations (local-only this phase)
+
+    func setStatus(id: PlanItem.ID, _ status: PlanItem.Status) {
+        guard let idx = planItems.firstIndex(where: { $0.id == id }) else { return }
+        planItems[idx].status = status
+    }
+
+    func removeItem(id: PlanItem.ID) {
+        planItems.removeAll { $0.id == id }
+    }
+
+    func addItem(_ item: PlanItem) {
+        planItems.append(item)
+        planItems = computeStatuses(planItems, nowMinutes: Self.minutesSinceMidnight(Date()))
     }
 
     private func loadPendingFacts() async {

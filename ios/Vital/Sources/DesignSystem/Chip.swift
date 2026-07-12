@@ -7,10 +7,7 @@ struct Chip: View {
     var isAccent: Bool = false
 
     private var fillColor: Color {
-        isAccent ? Theme.Colors.accent.opacity(0.15) : Theme.Colors.glassFill
-    }
-    private var borderColor: Color {
-        isAccent ? Theme.Colors.accent.opacity(0.30) : Theme.Colors.glassBorder
+        isAccent ? Theme.Colors.accentSoft : Theme.Colors.glassFill
     }
     private var foreground: Color {
         isAccent ? Theme.Colors.accentContent : Theme.Colors.textSecondary
@@ -20,11 +17,10 @@ struct Chip: View {
         HStack(spacing: Theme.Spacing.xs) {
             if let icon {
                 Image(systemName: icon)
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: 12, weight: .semibold))
             }
             Text(text)
-                .font(Theme.Typography.labelSmall)
-                .fontWeight(.medium)
+                .font(.system(size: 13, weight: .semibold))
         }
         .foregroundStyle(foreground)
         .padding(.horizontal, 12)
@@ -32,10 +28,6 @@ struct Chip: View {
         .background(
             Capsule()
                 .fill(fillColor)
-                .overlay(
-                    Capsule()
-                        .strokeBorder(borderColor, lineWidth: 0.5)
-                )
         )
     }
 }
