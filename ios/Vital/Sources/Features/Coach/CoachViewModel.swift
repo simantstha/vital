@@ -98,6 +98,7 @@ struct AssistantTurn: Identifiable, Equatable {
     }
 
     mutating func updatePersona(_ persona: CoachPersonaSnapshot) {
+        guard text.isEmpty else { return }
         self.persona = persona
     }
 

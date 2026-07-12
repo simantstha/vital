@@ -206,6 +206,33 @@ final class CoachSpecialistStateTests: XCTestCase {
         XCTAssertEqual(viewModel.specialistState, .activeConsultation(runningCoach))
     }
 
+    func testRollbackAfterSpecialistPartialTextPreservesTurnSpeaker() async {
+        let api = FakeCoachAPI(restoration: CoachRestorationResponse(
+            messages: [], activePersona: runningCoach, pendingCard: nil
+        ))
+        api.nextMessageEvents = [
+            .text("Start with an easy ten-minute warmup."),
+            .personaChanged(.vital),
+        ]
+        api.nextMessageFailure = TestFailure.unavailable
+        let viewModel = CoachViewModel(api: api)
+        await viewModel.restoreConversation()
+        viewModel.input = "What should I run?"
+
+        viewModel.send()
+        await waitUntil { !viewModel.isStreaming }
+
+        XCTAssertEqual(viewModel.activePersona, .vital)
+        guard let turn = viewModel.rows.compactMap({ row -> AssistantTurn? in
+            guard case .assistantTurn(let turn) = row else { return nil }
+            return turn
+        }).last else {
+            return XCTFail("Expected assistant turn")
+        }
+        XCTAssertEqual(turn.text, "Start with an easy ten-minute warmup.")
+        XCTAssertEqual(turn.speakerLabel, "Running Coach")
+    }
+
     func testPersonaChangeBeforeTextLabelsTypedAcceptanceReplyAsRunningCoach() async {
         let card = CoachHandoffCard(
             phase: .proposed, sessionId: "session-1", specialist: runningCoach,
