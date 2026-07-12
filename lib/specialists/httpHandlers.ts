@@ -103,6 +103,15 @@ export function createCoachHttpHandlers(dependencies: CoachHttpDependencies) {
       const userId = authentication(request, dependencies);
       if (userId instanceof Response) return userId;
 
+      // A valid legacy message always wins, even if newer clients attach
+      // unrelated fields named action/sessionId as metadata.
+      const message = typeof body.message === 'string' ? body.message.trim() : '';
+      if (message) {
+        const imageBase64 = typeof body.imageBase64 === 'string' ? body.imageBase64 : undefined;
+        const mode = body.mode === 'onboarding' ? 'onboarding' as const : undefined;
+        return streamEvents(dependencies.runCoach(userId, message, imageBase64, mode));
+      }
+
       let action: SpecialistActionRequest | null;
       if (dependencies.enabled()) {
         try {
@@ -117,13 +126,7 @@ export function createCoachHttpHandlers(dependencies: CoachHttpDependencies) {
         return streamEvents(dependencies.runAction(userId, action));
       }
 
-      const message = typeof body.message === 'string' ? body.message.trim() : '';
-      if (!message) {
-        return new Response('"message" is required and must be a non-empty string.', { status: 400 });
-      }
-      const imageBase64 = typeof body.imageBase64 === 'string' ? body.imageBase64 : undefined;
-      const mode = body.mode === 'onboarding' ? 'onboarding' as const : undefined;
-      return streamEvents(dependencies.runCoach(userId, message, imageBase64, mode));
+      return new Response('"message" is required and must be a non-empty string.', { status: 400 });
     },
   };
 }

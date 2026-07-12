@@ -6,6 +6,7 @@ import type { SpecialistSession } from './sessions';
 import {
   selectCoachConfiguration,
   handoffCardForSession,
+  toolCallForPersistence,
 } from './coachIntegration';
 
 const USER = '00000000-0000-4000-8000-000000000001';
@@ -56,7 +57,10 @@ test('enabled Vital adds proposal tool while active and return-pending sessions 
     const selected = selectCoachConfiguration({
       enabled: true, session: session(status), manifest,
       baseModel: 'claude-sonnet-4-6', basePrompt: 'legacy prompt', baseTools,
-      specialistPrompt: { system: 'trusted specialist prompt', model: manifest.model, allowedTools: manifest.allowedTools },
+      specialistPrompt: {
+        system: 'trusted specialist prompt', context: 'untrusted consultation context',
+        model: manifest.model, allowedTools: manifest.allowedTools,
+      },
     });
     assert.equal(selected.model, 'claude-opus-test');
     assert.equal(selected.system, 'trusted specialist prompt');
@@ -73,4 +77,17 @@ test('pending proposal produces a proposal card but does not activate specialist
   assert.equal(card.phase, 'proposed');
   assert.equal(card.specialist.title, 'Running Coach');
   assert.equal(card.returnSummary, undefined);
+});
+
+test('persisted specialist lifecycle tool calls omit private proposal and return inputs', () => {
+  const privateInput = { objective: 'Private objective', summary: 'Private handoff' };
+  assert.deepEqual(toolCallForPersistence('propose_specialist_handoff', privateInput), {
+    name: 'propose_specialist_handoff',
+  });
+  assert.deepEqual(toolCallForPersistence('propose_return_to_vital', privateInput), {
+    name: 'propose_return_to_vital',
+  });
+  assert.deepEqual(toolCallForPersistence('get_sleep_summary', { days: 7 }), {
+    name: 'get_sleep_summary', input: { days: 7 },
+  });
 });

@@ -21,6 +21,7 @@ interface CoachConfigurationInput {
 export interface CoachConfiguration {
   model: string;
   system: string;
+  context: string | null;
   tools: Tool[];
   speaker: 'coach' | 'specialist';
 }
@@ -30,6 +31,7 @@ export function selectCoachConfiguration(input: CoachConfigurationInput): CoachC
     return {
       model: input.baseModel,
       system: input.basePrompt,
+      context: null,
       tools: input.baseTools,
       speaker: 'coach',
     };
@@ -42,6 +44,7 @@ export function selectCoachConfiguration(input: CoachConfigurationInput): CoachC
     return {
       model: input.specialistPrompt.model,
       system: input.specialistPrompt.system,
+      context: input.specialistPrompt.context,
       tools: [
         ...input.baseTools.filter((tool) => allowed.has(tool.name)),
         PROPOSE_RETURN_TO_VITAL_TOOL,
@@ -53,9 +56,22 @@ export function selectCoachConfiguration(input: CoachConfigurationInput): CoachC
   return {
     model: input.baseModel,
     system: input.basePrompt,
+    context: null,
     tools: input.session ? input.baseTools : [...input.baseTools, PROPOSE_SPECIALIST_HANDOFF_TOOL],
     speaker: 'coach',
   };
+}
+
+const PRIVATE_SPECIALIST_TOOL_INPUTS = new Set([
+  'propose_specialist_handoff',
+  'propose_return_to_vital',
+]);
+
+export function toolCallForPersistence(
+  name: string,
+  input: Record<string, unknown>,
+): { name: string; input?: Record<string, unknown> } {
+  return PRIVATE_SPECIALIST_TOOL_INPUTS.has(name) ? { name } : { name, input };
 }
 
 export interface HandoffCardPayload {

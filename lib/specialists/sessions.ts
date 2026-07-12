@@ -24,7 +24,7 @@ export const VALID_SPECIALIST_SESSION_TRANSITIONS: Readonly<
   Record<SpecialistSessionStatus, readonly SpecialistSessionStatus[]>
 > = {
   proposed: ['active', 'declined', 'failed'],
-  active: ['return_proposed', 'failed'],
+  active: ['return_proposed', 'completed', 'failed'],
   return_proposed: ['active', 'completed', 'failed'],
   completed: [],
   declined: [],
@@ -224,7 +224,10 @@ export class SpecialistSessionService<R extends SpecialistSessionRepository = Sp
       next.returnProposedAt = now;
       next.returnHandoff = details.returnHandoff ?? null;
     }
-    if (to === 'completed') next.completedAt = now;
+    if (to === 'completed') {
+      next.completedAt = now;
+      if (details.returnHandoff !== undefined) next.returnHandoff = details.returnHandoff;
+    }
     if (to === 'declined') next.declinedAt = now;
     if (to === 'failed') {
       next.failedAt = now;

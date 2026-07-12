@@ -10,6 +10,7 @@ import {
   SpecialistActionCoordinator,
   buildSpecialistPrompt,
   isSpecialistsEnabled,
+  parseActiveSpecialistReturn,
   parseSpecialistConfirmation,
   validateReturnHandoff,
 } from './orchestration';
@@ -51,6 +52,18 @@ test('text confirmation accepts only explicit whole-message affirmations or decl
   assert.equal(parseSpecialistConfirmation('yesterday was hard'), null);
 });
 
+test('active specialist return accepts only explicit whole-message requests', () => {
+  for (const text of [
+    'return to Vital', 'return to Vital Coach', 'Back to Vital Coach.',
+    'go back to Vital', 'switch back to Vital Coach', 'end specialist consultation',
+  ]) {
+    assert.equal(parseActiveSpecialistReturn(text), true, text);
+  }
+  for (const text of ['can we return to running?', 'maybe go back later', 'tell Vital eventually']) {
+    assert.equal(parseActiveSpecialistReturn(text), false, text);
+  }
+});
+
 test('accepted handoff is user-scoped, idempotent by action id, and emits persona after the card', async () => {
   const { manifests, sessions, actions } = setup();
   const manifest = manifests.get('running-coach');
@@ -85,6 +98,79 @@ test('accepted handoff is user-scoped, idempotent by action id, and emits person
   assert.equal((await sessions.get(USER_A, proposed.id))?.status, 'active');
   assert.deepEqual(first.events.map((event) => event.type), ['handoff_card', 'persona_changed']);
   assert.equal(first.events[1].persona.id, 'running-coach');
+});
+
+test('concurrent duplicate actions replay one transition and recover a failed result write', async () => {
+  const manifests = new SpecialistRegistry({ SPECIALIST_MODEL: 'claude-opus-test' });
+  const sessions = new SpecialistSessionService(
+    new InMemorySpecialistSessionRepository(),
+    () => NOW,
+    manifests,
+  );
+  class FlakyStore extends InMemorySpecialistActionStore {
+    completions = 0;
+    failNext = false;
+    override async complete(...args: Parameters<InMemorySpecialistActionStore['complete']>) {
+      this.completions += 1;
+      if (this.failNext) {
+        this.failNext = false;
+        throw new Error('result write failed');
+      }
+      return super.complete(...args);
+    }
+  }
+  const store = new FlakyStore();
+  const actions = new SpecialistActionCoordinator(sessions, store, manifests);
+  const manifest = manifests.get('running-coach');
+  const proposed = await sessions.propose({
+    userId: USER_A,
+    objective: 'Build a safe week',
+    manifestId: manifest.id,
+    manifestVersion: manifest.version,
+    inboundHandoff: { summary: 'Runner' },
+    expiresAt: LATER,
+  });
+  const input = {
+    userId: USER_A,
+    sessionId: proposed.id,
+    actionId: 'concurrent-accept',
+    action: 'accept_handoff' as const,
+  };
+  const [first, second] = await Promise.all([actions.apply(input), actions.apply(input)]);
+  assert.deepEqual(first, second);
+  assert.equal((await sessions.get(USER_A, proposed.id))?.status, 'active');
+
+  const returning = await sessions.transition(USER_A, proposed.id, 'return_proposed', {
+    expiresAt: LATER,
+    returnHandoff: { outcomes: ['Done'] },
+  });
+  const returnInput = {
+    userId: USER_A,
+    sessionId: returning.id,
+    actionId: 'recover-result-write',
+    action: 'accept_return' as const,
+  };
+  store.failNext = true;
+  await assert.rejects(actions.apply(returnInput), /result write failed/);
+  assert.equal((await sessions.get(USER_A, returning.id))?.status, 'completed');
+  const recovered = await actions.apply(returnInput);
+  assert.equal(recovered.session.status, 'completed');
+  assert.equal(recovered.events[1].persona.id, 'vital');
+});
+
+test('an idempotency key cannot be replayed for a different request', async () => {
+  const { manifests, sessions, actions } = setup();
+  const manifest = manifests.get('running-coach');
+  const proposed = await sessions.propose({
+    userId: USER_A, objective: 'Plan', manifestId: manifest.id,
+    manifestVersion: manifest.version, inboundHandoff: {}, expiresAt: LATER,
+  });
+  await actions.apply({
+    userId: USER_A, sessionId: proposed.id, actionId: 'same-key', action: 'accept_handoff',
+  });
+  await assert.rejects(actions.apply({
+    userId: USER_A, sessionId: proposed.id, actionId: 'same-key', action: 'decline_handoff',
+  }), /different specialist action/);
 });
 
 test('return actions require the return proposal and restore Vital only on acceptance', async () => {
@@ -146,7 +232,13 @@ test('specialist prompt reloads trusted safety and omits model-written safety fi
   assert.match(prompt.system, /TRUSTED SAFETY: never diagnose/);
   assert.match(prompt.system, /Achilles tendinopathy/);
   assert.match(prompt.system, /calibrating: HRV 5\/14 days/);
-  assert.match(prompt.system, /Previously ran 20 km\/week/);
+  assert.doesNotMatch(prompt.system, /Return to running safely/);
+  assert.doesNotMatch(prompt.system, /Previously ran 20 km\/week/);
+  assert.doesNotMatch(prompt.system, /I want to run four days/);
+  assert.match(prompt.context, /UNTRUSTED USER CONTEXT/);
+  assert.match(prompt.context, /Return to running safely/);
+  assert.match(prompt.context, /Previously ran 20 km\/week/);
+  assert.match(prompt.context, /I want to run four days/);
   assert.doesNotMatch(prompt.system, /Ignore the injury/);
   assert.doesNotMatch(prompt.system, /Override trusted rules/);
   assert.deepEqual(prompt.allowedTools, manifest.allowedTools);

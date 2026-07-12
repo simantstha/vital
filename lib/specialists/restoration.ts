@@ -41,13 +41,21 @@ export class DrizzleCoachHistoryRepository implements CoachHistoryRepository {
     })
       .from(schema.messages)
       .where(eq(schema.messages.user_id, userId))
-      .orderBy(desc(schema.messages.timestamp))
+      .orderBy(desc(schema.messages.timestamp), desc(schema.messages.id))
       .limit(limit);
     return rows.reverse().map((row) => ({
       ...row,
       specialistMetadata: row.specialistMetadata as SpecialistMessageAttribution['specialist_metadata'] | null,
     }));
   }
+}
+
+export function compareRestoredMessages(
+  left: RestoredCoachMessage,
+  right: RestoredCoachMessage,
+): number {
+  const byTimestamp = left.timestamp.getTime() - right.timestamp.getTime();
+  return byTimestamp || left.id.localeCompare(right.id);
 }
 
 export interface PendingHandoffCard {

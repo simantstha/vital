@@ -1,8 +1,9 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import type { db as applicationDb } from '@/db';
 import * as schema from '@/db/schema';
 import type {
   SpecialistAction,
+  SpecialistActionClaim,
   SpecialistActionResult,
   SpecialistActionStore,
 } from './orchestration';
@@ -13,34 +14,43 @@ type DrizzleDatabase = typeof applicationDb;
 
 export interface SpecialistActionPersistence {
   find(userId: string, actionId: string): Promise<StoredAction | null>;
-  insert(values: NewStoredAction): Promise<StoredAction>;
+  insertClaim(values: NewStoredAction): Promise<StoredAction>;
+  complete(userId: string, actionId: string, result: SpecialistActionResult): Promise<StoredAction>;
 }
 
 export class SpecialistActionRepository implements SpecialistActionStore {
   constructor(private readonly persistence: SpecialistActionPersistence) {}
 
-  async find(userId: string, actionId: string): Promise<SpecialistActionResult | null> {
-    const row = await this.persistence.find(userId, actionId);
-    if (!row || row.user_id !== userId) return null;
-    return deserializeResult(row.result);
-  }
-
-  async save(
+  async claim(
     userId: string,
     actionId: string,
     sessionId: string,
     action: SpecialistAction,
-    result: SpecialistActionResult,
-  ): Promise<SpecialistActionResult> {
-    const existing = await this.find(userId, actionId);
-    if (existing) return existing;
-    const row = await this.persistence.insert({
+  ): Promise<SpecialistActionClaim> {
+    const row = await this.persistence.insertClaim({
       user_id: userId,
       action_id: actionId,
       session_id: sessionId,
       action,
-      result,
+      result: null,
     });
+    if (row.user_id !== userId) throw new Error('Specialist action claim crossed user scope');
+    return {
+      sessionId: row.session_id,
+      action: row.action as SpecialistAction,
+      result: row.result === null ? null : deserializeResult(row.result),
+    };
+  }
+
+  async complete(
+    userId: string,
+    actionId: string,
+    result: SpecialistActionResult,
+  ): Promise<SpecialistActionResult> {
+    const row = await this.persistence.complete(userId, actionId, result);
+    if (row.user_id !== userId || row.result === null) {
+      throw new Error('Specialist action result was not completed for user');
+    }
     return deserializeResult(row.result);
   }
 }
@@ -59,7 +69,7 @@ export class DrizzleSpecialistActionPersistence implements SpecialistActionPersi
     return row ?? null;
   }
 
-  async insert(values: NewStoredAction): Promise<StoredAction> {
+  async insertClaim(values: NewStoredAction): Promise<StoredAction> {
     const [row] = await this.database.insert(schema.specialist_actions)
       .values(values)
       .onConflictDoNothing({
@@ -69,6 +79,25 @@ export class DrizzleSpecialistActionPersistence implements SpecialistActionPersi
     if (row) return row;
     const existing = await this.find(values.user_id, values.action_id);
     if (!existing) throw new Error('Specialist action conflicted but could not be reloaded');
+    return existing;
+  }
+
+  async complete(
+    userId: string,
+    actionId: string,
+    result: SpecialistActionResult,
+  ): Promise<StoredAction> {
+    const [row] = await this.database.update(schema.specialist_actions)
+      .set({ result, completed_at: new Date() })
+      .where(and(
+        eq(schema.specialist_actions.user_id, userId),
+        eq(schema.specialist_actions.action_id, actionId),
+        isNull(schema.specialist_actions.result),
+      ))
+      .returning();
+    if (row) return row;
+    const existing = await this.find(userId, actionId);
+    if (!existing) throw new Error('Specialist action claim disappeared before completion');
     return existing;
   }
 }

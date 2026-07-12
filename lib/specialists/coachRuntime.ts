@@ -147,6 +147,17 @@ export class SpecialistCoachRuntime<
     return session;
   }
 
+  async completeExplicitReturn(userId: string, sessionId: string): Promise<SpecialistSession> {
+    const session = await this.dependencies.sessions.transition(userId, sessionId, 'completed', {
+      returnHandoff: {
+        reason: 'user_requested_return',
+        summary: 'The user explicitly ended the specialist consultation.',
+      },
+    });
+    this.lifecycleLog(session, 'specialist_explicit_return');
+    return session;
+  }
+
   async handleModelFailure(
     userId: string,
     sessionId: string,

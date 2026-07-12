@@ -70,6 +70,28 @@ test('feature-off POST ignores specialist-looking extra fields like the legacy r
   assert.deepEqual((await sse(response)).map((event) => event.type), ['done']);
 });
 
+test('enabled POST gives a valid legacy message precedence over unknown action-like fields', async () => {
+  let messageSeen = '';
+  const handlers = createCoachHttpHandlers({
+    enabled: () => true,
+    authenticate: () => 'user-a',
+    runCoach(_userId, message) {
+      messageSeen = message;
+      return events([{ type: 'done', messageId: 'message-1' }]);
+    },
+    runAction() { throw new Error('must not parse as an action'); },
+    async restore() { throw new Error('not used'); },
+  });
+  const response = await handlers.POST(new Request('http://local/api/coach', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      message: 'keep coaching', sessionId: 'client-metadata', action: 'unknown-client-action',
+    }),
+  }));
+  assert.equal(response.status, 200);
+  assert.equal(messageSeen, 'keep coaching');
+});
+
 test('specialist actions are scoped to authenticated user and preserve card-before-persona ordering', async () => {
   let actionUser = '';
   const handlers = createCoachHttpHandlers({

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { SpecialistRegistry } from './registry';
 import {
+  compareRestoredMessages,
   loadCoachRestoration,
   type CoachHistoryRepository,
 } from './restoration';
@@ -9,6 +10,22 @@ import type { SpecialistSessionRepository } from './sessions';
 
 const USER = '00000000-0000-4000-8000-000000000001';
 const SESSION = '10000000-0000-4000-8000-000000000001';
+
+test('restored messages use ID as a deterministic timestamp tiebreaker', () => {
+  const timestamp = new Date('2026-07-11T12:00:00Z');
+  const base = {
+    role: 'assistant', speaker: 'coach', content: 'same time', timestamp,
+    specialistSessionId: null, specialistMetadata: null,
+  };
+  const messages = [
+    { ...base, id: '00000000-0000-4000-8000-000000000002' },
+    { ...base, id: '00000000-0000-4000-8000-000000000001' },
+  ].sort(compareRestoredMessages);
+  assert.deepEqual(messages.map((message) => message.id), [
+    '00000000-0000-4000-8000-000000000001',
+    '00000000-0000-4000-8000-000000000002',
+  ]);
+});
 
 test('restoration requests latest 50 messages and returns active specialist identity', async () => {
   let requestedLimit = 0;

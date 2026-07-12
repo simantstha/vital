@@ -68,6 +68,20 @@ test('return tool validates the complete summary and leaves specialist active pe
   });
 });
 
+test('explicit active-session return completes immediately with a compact return record', async () => {
+  const { runtime, sessions } = setup();
+  const proposed = await runtime.proposeHandoff(USER, {
+    objective: 'Plan a week', summary: 'Runner', relevantFacts: [],
+  });
+  await sessions.transition(USER, proposed.id, 'active');
+  const completed = await runtime.completeExplicitReturn(USER, proposed.id);
+  assert.equal(completed.status, 'completed');
+  assert.deepEqual(completed.returnHandoff, {
+    reason: 'user_requested_return',
+    summary: 'The user explicitly ended the specialist consultation.',
+  });
+});
+
 test('premium model failure restores Vital while aborted stream preserves active session', async () => {
   const failedSetup = setup();
   const failedProposal = await failedSetup.runtime.proposeHandoff(USER, {

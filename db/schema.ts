@@ -148,8 +148,9 @@ export const specialist_actions = p.pgTable('specialist_actions', {
   action_id:  p.text('action_id').notNull(),
   session_id: p.uuid('session_id').notNull().references(() => specialist_sessions.id),
   action:     p.text('action').notNull(),
-  result:     p.jsonb('result').notNull(),
+  result:     p.jsonb('result'),
   created_at: p.timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  completed_at: p.timestamp('completed_at', { withTimezone: true }),
 }, (t) => [
   p.uniqueIndex('specialist_actions_user_action_idx').on(t.user_id, t.action_id),
   p.index('specialist_actions_session_idx').on(t.session_id),

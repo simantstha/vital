@@ -57,6 +57,13 @@
       "when": 1783811267521,
       "tag": "0007_simple_darkstar",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1783827135258,
+      "tag": "0008_neat_thunderball",
+      "breakpoints": true
     }
   ]
 }

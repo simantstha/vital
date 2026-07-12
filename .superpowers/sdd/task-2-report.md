@@ -69,3 +69,56 @@ GREEN: focused runtime/HTTP suite plus typecheck
 - `SPECIALISTS_ENABLED` remains disabled unless its literal value is `true`.
 - `SPECIALIST_MODEL` is only required when a specialist manifest is loaded.
 - The specialist generator and specialist-to-specialist consultation remain deferred.
+
+## Review-fix pass
+
+### Changes
+
+- Proposal and return tool calls now persist only the tool name; objective, handoff, and return-summary inputs are omitted from `messages.tool_calls`.
+- Specialist actions use a durable claim/replay protocol. The action row is claimed before transition, request identity is validated on every replay, session transitions remain compare-and-swap, and a retry reconstructs/completes the deterministic result if completion storage failed after the transition. Concurrent duplicates replay one result.
+- Objective, inbound handoff, and recent user content were removed from the trusted system prompt. They are sent in a separately labeled `UNTRUSTED USER CONTEXT` user block; trusted safety rules, hard constraints, calibration, and vetted prompt modules remain authoritative system content.
+- Strict whole-message return requests complete an active consultation immediately, persist a compact `user_requested_return` record, emit Vital persona state, and do not require a model-created return proposal or another confirmation.
+- Valid legacy messages take precedence over action-like fields even when specialists are enabled.
+- Latest-50 restoration queries now order by descending timestamp and descending message ID before reversing for deterministic chronological display.
+
+### Additional RED/GREEN evidence
+
+4. Review privacy, prompt-boundary, concurrency, return, compatibility, and ordering cases:
+
+```text
+RED: tsx --test orchestration/coachRuntime/coachIntegration/httpHandlers/restoration tests
+28 tests: 20 passed, 8 failed
+- lifecycle tool inputs were not redacted
+- explicit-return parser/runtime were absent
+- concurrent duplicate transition threw a CAS error and action-key reuse replayed incorrectly
+- objective/handoff/recent content remained in the system prompt
+- enabled legacy message with action-like metadata returned 400
+- equal-timestamp restoration had no ID tiebreaker
+
+GREEN: same focused suite after implementation
+28 tests, 28 passed, 0 failed
+```
+
+5. Durable claim persistence and broader explicit-return wording:
+
+```text
+RED: active-return focused test
+1 failed: "return to Vital Coach" was not recognized
+
+GREEN: active-return focused test
+1 passed, 0 failed (8 unrelated tests skipped by name filter)
+
+GREEN: action repository + full focused review suite
+30 tests, 30 passed, 0 failed
+```
+
+### Final review-fix verification
+
+```text
+Full Node suite: 55 passed, 0 failed
+npx tsc --noEmit: exit 0
+npm run lint: exit 0
+Node 22 npm run build: compiled, typechecked, and generated successfully
+```
+
+The build continues to report only the repository's pre-existing Next.js middleware deprecation warning.
