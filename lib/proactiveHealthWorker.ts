@@ -40,6 +40,39 @@ export function parseCoachAnalysis(value: unknown): CoachAnalysis {
   return row as unknown as CoachAnalysis;
 }
 
+const unitAliases: Record<string, string> = { milliseconds: 'ms', millisecond: 'ms', bpm: 'bpm', '%': '%', kg: 'kg', km: 'km', mi: 'mi', kcal: 'kcal', calorie: 'kcal', calories: 'kcal', step: 'steps', steps: 'steps', minute: 'minutes', minutes: 'minutes', min: 'minutes', mins: 'minutes', hour: 'hours', hours: 'hours', hr: 'hours', hrs: 'hours' };
+function inferredUnit(key: string): string | undefined {
+  const lower = key.toLowerCase();
+  if (lower.includes('hrv') || lower.endsWith('_ms')) return 'ms';
+  if (lower.includes('heart_rate') || lower === 'rhr' || lower.includes('resting_hr') || lower.includes('avg_hr')) return 'bpm';
+  if (lower.includes('percent') || lower.includes('efficiency')) return '%';
+  if (lower.includes('weight') || lower.endsWith('_kg')) return 'kg';
+  if (lower.includes('calorie') || lower.includes('kcal') || lower.includes('energy')) return 'kcal';
+  if (lower.includes('step')) return 'steps';
+  if (lower.includes('minute')) return 'minutes';
+}
+export function validateGroundedAnalysis(result: CoachAnalysis, evidence: unknown): CoachAnalysis {
+  const values = new Map<string, Set<string>>();
+  const visit = (value: unknown, key = ''): void => {
+    if (typeof value === 'number' && Number.isFinite(value)) { const normalized = String(value); const units = values.get(normalized) ?? new Set<string>(); const unit = inferredUnit(key); if (unit) units.add(unit); values.set(normalized, units); }
+    else if (typeof value === 'string') { for (const match of value.matchAll(/\b(\d+(?:\.\d+)?)\s*(%|ms|bpm|kg|km|mi|kcal|calories?|steps?|minutes?|mins?|hours?|hrs?)?/gi)) { const units = values.get(match[1]) ?? new Set<string>(); if (match[2]) units.add(unitAliases[match[2].toLowerCase()] ?? match[2].toLowerCase()); values.set(match[1], units); } }
+    else if (Array.isArray(value)) value.forEach((item) => visit(item, key));
+    else if (value && typeof value === 'object') {
+      const object = value as Record<string, unknown>;
+      if (typeof object.value === 'number' && typeof object.metric === 'string') visit(object.value, object.metric);
+      for (const [childKey, child] of Object.entries(object)) if (childKey !== 'value' || typeof object.metric !== 'string') visit(child, childKey);
+    }
+  };
+  visit(evidence);
+  const text = [result.headline, result.shortInsight, result.narrative, ...result.observations, ...result.nextSteps].join(' ');
+  for (const match of text.matchAll(/\b(\d+(?:\.\d+)?)\s*(%|ms|bpm|kg|km|mi|kcal|calories?|steps?|minutes?|mins?|hours?|hrs?)?/gi)) {
+    const supported = values.get(match[1]);
+    if (!supported) throw new Error(`unsupported numeric claim: ${match[1]}`);
+    if (match[2]) { const unit = unitAliases[match[2].toLowerCase()] ?? match[2].toLowerCase(); if (!supported.has(unit)) throw new Error(`unsupported unit claim: ${match[1]} ${unit}`); }
+  }
+  return result;
+}
+
 export function nextRetryAt(now: Date, retryCount: number): Date {
   const minutes = Math.min(360, 2 ** Math.max(0, retryCount));
   return new Date(now.getTime() + minutes * 60_000);
@@ -80,7 +113,7 @@ export async function runClaimedAnalysis(
     if (!await repository.renewAnalysisLease(job, now)) return;
     const context = await repository.getContext(job);
     if (!context.enabled) { await repository.suppress(job); return; }
-    const result = parseCoachAnalysis(await analyze(job, context));
+    const result = validateGroundedAnalysis(parseCoachAnalysis(await analyze(job, context)), { input: job.input, context });
     if (!await repository.renewAnalysisLease(job, new Date())) return;
     if (!await repository.storeReady(job, result)) return;
     const notificationToken = await repository.claimNotification(job, now);

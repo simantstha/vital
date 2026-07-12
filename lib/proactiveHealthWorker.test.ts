@@ -4,6 +4,7 @@ import {
   classifyApnsResponse,
   nextRetryAt,
   parseCoachAnalysis,
+  validateGroundedAnalysis,
   runClaimedAnalysis,
   shouldRunMorningBrief,
   type AnalysisJob,
@@ -21,6 +22,12 @@ test('strictly validates structured coach output', () => {
   assert.throws(() => parseCoachAnalysis({ ...valid, invented: true }), /unexpected field/);
   assert.throws(() => parseCoachAnalysis({ ...valid, observations: [''] }), /observations/);
   assert.throws(() => parseCoachAnalysis({ ...valid, headline: 'x'.repeat(121) }), /headline/);
+});
+
+test('rejects fabricated numeric health claims and accepts grounded metric units', () => {
+  assert.throws(() => validateGroundedAnalysis({ ...valid, narrative: 'Your HRV was 99 ms.' }, { metrics: [{ metric: 'hrv_sdnn', value: 45 }] }), /unsupported numeric claim/);
+  assert.doesNotThrow(() => validateGroundedAnalysis({ ...valid, narrative: 'Your HRV was 45 ms.' }, { metrics: [{ metric: 'hrv_sdnn', value: 45 }] }));
+  assert.doesNotThrow(() => validateGroundedAnalysis(valid, {}));
 });
 
 test('caps exponential retries', () => {

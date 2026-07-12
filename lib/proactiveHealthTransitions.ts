@@ -1,4 +1,6 @@
 export const MAX_DELIVERY_RETRIES = 5;
+export function reservedSleepCapacity(limit: number): number { return limit <= 0 ? 0 : Math.max(1, Math.floor(limit / 4)); }
+export function shouldPersistDefaultPreferences(registrationResult: string): boolean { return registrationResult === 'registered'; }
 
 export interface RetryTransition { retryCount: number; terminal: boolean; nextAttemptAt: Date }
 export function retryTransition(retryCount: number, now: Date, maxRetries = MAX_DELIVERY_RETRIES): RetryTransition {

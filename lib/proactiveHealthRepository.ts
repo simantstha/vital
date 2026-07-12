@@ -11,6 +11,7 @@ import {
   registerPushDevice,
   type PushDeviceRow,
 } from './pushDeviceReconciliation';
+import { shouldPersistDefaultPreferences } from './proactiveHealthTransitions';
 
 function preferencesDto(row: typeof schema.notification_preferences.$inferSelect): NotificationPreferences {
   return {
@@ -39,7 +40,7 @@ export const proactiveHealthRepository: ProactiveHealthRepository = {
             invalidatedAt: schema.push_devices.invalidated_at,
             updatedAt: schema.push_devices.updated_at,
           };
-          return operation({
+          const result = await operation({
             async findByInstallationId(installationId) {
               const [row] = await tx.select(selectRow).from(schema.push_devices)
                 .where(eq(schema.push_devices.installation_id, installationId)).limit(1).for('update');
@@ -72,6 +73,8 @@ export const proactiveHealthRepository: ProactiveHealthRepository = {
               });
             },
           });
+          if (shouldPersistDefaultPreferences(String(result))) await tx.insert(schema.notification_preferences).values({ user_id: userId }).onConflictDoNothing();
+          return result;
         });
       },
     }, userId, device, new Date());
@@ -90,9 +93,8 @@ export const proactiveHealthRepository: ProactiveHealthRepository = {
   },
 
   async getNotificationPreferences(userId: string): Promise<NotificationPreferences | null> {
-    const [row] = await db.select().from(schema.notification_preferences)
-      .where(eq(schema.notification_preferences.user_id, userId)).limit(1);
-    return row ? preferencesDto(row) : null;
+    const [row] = await db.insert(schema.notification_preferences).values({ user_id: userId }).onConflictDoUpdate({ target: schema.notification_preferences.user_id, set: { user_id: userId } }).returning();
+    return preferencesDto(row);
   },
 
   async putNotificationPreferences(

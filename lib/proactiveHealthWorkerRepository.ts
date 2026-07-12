@@ -2,36 +2,43 @@ import { db, schema } from '@/db';
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { morningKey, notificationKey, type AnalysisJob, type CoachAnalysis, type PushDevice, type PushOutcome, type WorkerRepository } from './proactiveHealthWorker';
-import { claimMorningSlot, compareDueCandidates, failOwnedMorningSlot, notificationClaimable } from './proactiveHealthTransitions';
+import { claimMorningSlot, compareDueCandidates, failOwnedMorningSlot, notificationClaimable, reservedSleepCapacity } from './proactiveHealthTransitions';
 
 const LEASE_MS = 5 * 60_000;
 type RawJob = { id: string; user_id: string; local_date: string; input_payload: unknown; retry_count: number; kind: 'workout' | 'sleep'; lease_token: string; result?: unknown; notification_state?: string; notification_lease_expires_at?: Date | null; notification_next_attempt_at?: Date };
 
+export async function ensureDefaultPreferencesForRegisteredUsers(): Promise<void> {
+  await db.execute(sql`insert into ${schema.notification_preferences} (user_id)
+    select distinct user_id from ${schema.push_devices}
+    on conflict (user_id) do nothing`);
+}
+
 export async function claimAnalysisJobs(now: Date, limit = 20): Promise<AnalysisJob[]> {
   const lease = new Date(now.getTime() + LEASE_MS);
   return db.transaction(async (tx) => {
-    const workoutToken = randomUUID();
-    const workouts = await tx.execute(sql<RawJob>`
-      with eligible as (
-        select id from ${schema.workout_analyses}
-        where deleted_at is null and next_attempt_at <= ${now}
-          and (status = 'pending' or (status = 'processing' and lease_expires_at <= ${now}))
-        order by next_attempt_at limit ${limit} for update skip locked
-      ) update ${schema.workout_analyses} w set status='processing', lease_token=${workoutToken}, lease_expires_at=${lease}, updated_at=${now}
-        from eligible e where w.id=e.id
-        returning w.id,w.user_id,w.workout_date::text local_date,w.input_payload,w.retry_count,w.lease_token,'workout'::text kind`);
-    const remaining = Math.max(0, limit - workouts.length);
-    const sleepToken = randomUUID();
-    const sleeps = remaining ? await tx.execute(sql<RawJob>`
+    const claimSleeps = (capacity: number, token: string) => capacity ? tx.execute(sql<RawJob>`
       with eligible as (
         select id from ${schema.sleep_analyses}
         where analyze_after <= ${now} and next_attempt_at <= ${now}
           and (status = 'pending' or (status = 'processing' and lease_expires_at <= ${now}))
-        order by next_attempt_at limit ${remaining} for update skip locked
-      ) update ${schema.sleep_analyses} s set status='processing', lease_token=${sleepToken}, lease_expires_at=${lease}, updated_at=${now}
+        order by next_attempt_at limit ${capacity} for update skip locked
+      ) update ${schema.sleep_analyses} s set status='processing', lease_token=${token}, lease_expires_at=${lease}, updated_at=${now}
         from eligible e where s.id=e.id
-        returning s.id,s.user_id,s.wake_date::text local_date,s.input_payload,s.retry_count,s.lease_token,'sleep'::text kind`) : [];
-    return ([...(workouts as unknown as RawJob[]), ...(sleeps as unknown as RawJob[])]).map((row) => ({ id: row.id, kind: row.kind, userId: row.user_id, localDate: row.local_date, input: row.input_payload, retryCount: row.retry_count, notificationRetryCount: 0, leaseToken: row.lease_token }));
+        returning s.id,s.user_id,s.wake_date::text local_date,s.input_payload,s.retry_count,s.lease_token,'sleep'::text kind`) : Promise.resolve([]);
+    const claimWorkouts = (capacity: number, token: string) => capacity ? tx.execute(sql<RawJob>`
+      with eligible as (
+        select id from ${schema.workout_analyses}
+        where deleted_at is null and next_attempt_at <= ${now}
+          and (status = 'pending' or (status = 'processing' and lease_expires_at <= ${now}))
+        order by next_attempt_at limit ${capacity} for update skip locked
+      ) update ${schema.workout_analyses} w set status='processing', lease_token=${token}, lease_expires_at=${lease}, updated_at=${now}
+        from eligible e where w.id=e.id
+        returning w.id,w.user_id,w.workout_date::text local_date,w.input_payload,w.retry_count,w.lease_token,'workout'::text kind`) : Promise.resolve([]);
+    const reserved = reservedSleepCapacity(limit);
+    const sleeps = await claimSleeps(reserved, randomUUID());
+    const workouts = await claimWorkouts(limit - sleeps.length, randomUUID());
+    const extraSleeps = await claimSleeps(Math.max(0, limit - sleeps.length - workouts.length), randomUUID());
+    return ([...(sleeps as unknown as RawJob[]), ...(workouts as unknown as RawJob[]), ...(extraSleeps as unknown as RawJob[])]).map((row) => ({ id: row.id, kind: row.kind, userId: row.user_id, localDate: row.local_date, input: row.input_payload, retryCount: row.retry_count, notificationRetryCount: 0, leaseToken: row.lease_token }));
   });
 }
 

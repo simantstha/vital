@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { ApnsClient } from '../lib/apnsClient';
-import { deliverNotification, parseCoachAnalysis, runClaimedAnalysis, type AnalysisContext, type AnalysisJob } from '../lib/proactiveHealthWorker';
-import { claimAnalysisJobs, claimDueMorningBriefs, completeMorningBrief, failMorningBrief, listReadyNotificationCandidates, workerRepository } from '../lib/proactiveHealthWorkerRepository';
+import { deliverNotification, parseCoachAnalysis, runClaimedAnalysis, validateGroundedAnalysis, type AnalysisContext, type AnalysisJob } from '../lib/proactiveHealthWorker';
+import { claimAnalysisJobs, claimDueMorningBriefs, completeMorningBrief, ensureDefaultPreferencesForRegisteredUsers, failMorningBrief, listReadyNotificationCandidates, workerRepository } from '../lib/proactiveHealthWorkerRepository';
 
 const intervalMs = Number(process.env.PROACTIVE_WORKER_INTERVAL_MS ?? 15_000);
 const anthropic = new Anthropic({ apiKey: required('ANTHROPIC_API_KEY') });
@@ -20,6 +20,7 @@ async function analyze(job: AnalysisJob, context: AnalysisContext): Promise<unkn
 
 async function tick(): Promise<void> {
   const now = new Date();
+  await ensureDefaultPreferencesForRegisteredUsers();
   for (const job of await claimAnalysisJobs(now)) await runClaimedAnalysis(job, workerRepository, analyze, (device, result) => apns.send(device, result, { type: `${job.kind}_analysis`, id: job.id, deepLink: `vital://${job.kind}-analysis/${job.id}` }), now);
   for (const candidate of await listReadyNotificationCandidates(now)) {
     const token = await workerRepository.claimNotification(candidate.job, now);
@@ -27,7 +28,7 @@ async function tick(): Promise<void> {
   }
   for (const claim of await claimDueMorningBriefs(now)) {
     const job: AnalysisJob = { id: claim.idempotencyKey, kind: 'sleep', userId: claim.userId, localDate: claim.localDate, input: { purpose: 'morning brief' }, retryCount: 0, notificationRetryCount: claim.retryCount, leaseToken: claim.leaseToken };
-    try { const result = parseCoachAnalysis(await analyze(job, await workerRepository.getContext(job))); await completeMorningBrief(claim, result, (device, value) => apns.send(device, value, { type: 'morning_brief', deepLink: 'vital://today' }), now); }
+    try { const context = await workerRepository.getContext(job); const result = validateGroundedAnalysis(parseCoachAnalysis(await analyze(job, context)), { input: job.input, context }); await completeMorningBrief(claim, result, (device, value) => apns.send(device, value, { type: 'morning_brief', deepLink: 'vital://today' }), now); }
     catch { await failMorningBrief(claim, new Date()); }
   }
 }

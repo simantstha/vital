@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { claimMorningSlot, compareDueCandidates, failOwnedMorningSlot, notificationClaimable, ownsLease } from './proactiveHealthTransitions';
+import { claimMorningSlot, compareDueCandidates, failOwnedMorningSlot, notificationClaimable, ownsLease, reservedSleepCapacity, shouldPersistDefaultPreferences } from './proactiveHealthTransitions';
 
 type Row = { owner: string | null; expires: number; state: 'pending' | 'processing' | 'ready' | 'sending' | 'sent'; retries: number };
 function claim(row: Row, owner: string, now: number): boolean {
@@ -54,6 +54,18 @@ test('due candidates are fair by overdue duration then oldest update', () => {
   const older = { overdueMinutes: 10, updatedAt: new Date('2026-07-12T10:00:00Z') };
   const mostOverdue = { overdueMinutes: 30, updatedAt: new Date('2026-07-12T12:00:00Z') };
   assert.deepEqual([newer, older, mostOverdue].sort(compareDueCandidates), [mostOverdue, older, newer]);
+});
+
+test('sustained workout backlog always reserves sleep capacity while remaining work-conserving', () => {
+  const batchSize = 20;
+  for (let batch = 0; batch < 100; batch++) assert.equal(reservedSleepCapacity(batchSize), 5);
+  assert.equal(reservedSleepCapacity(1), 1);
+  assert.equal(reservedSleepCapacity(0), 0);
+});
+
+test('only successful device registration persists default preferences', () => {
+  assert.equal(shouldPersistDefaultPreferences('registered'), true);
+  assert.equal(shouldPersistDefaultPreferences('conflict'), false);
 });
 
 test('DST fallback keeps local-date slot identity stable while UTC instants differ', () => {
