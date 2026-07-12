@@ -10,6 +10,10 @@ primary_region = "ord"
 [env]
   PORT = "3000"
   VITAL_DATA_DIR = "/data"
+  VITAL_PROACTIVE_WORKER = "true"
+
+[processes]
+  app = "node server.js"
 
 [http_service]
   internal_port = 3000

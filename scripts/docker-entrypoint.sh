@@ -13,4 +13,8 @@ fi
 # Ensure the daily-brief cache directory exists on the volume.
 mkdir -p /data/.brief-cache
 
-exec node server.js
+if [ "${VITAL_PROACTIVE_WORKER:-false}" = "true" ]; then
+  node dist/proactive-health-worker.cjs &
+fi
+
+exec "$@"
