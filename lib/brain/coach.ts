@@ -49,6 +49,7 @@ import {
 } from '@/lib/specialists/coachRuntime';
 import {
   handoffCardForSession,
+  killSwitchEventsForSession,
   selectCoachConfiguration,
   toolCallForPersistence,
   type HandoffCardPayload,
@@ -138,9 +139,13 @@ export async function* runCoach(
     ? await specialistSessions.findOpen(userId)
     : null;
   if (!specialistsEnabled && !isOnboarding) {
-    const disabledSession = await specialistSessions.disableOpen(userId);
-    if (disabledSession) {
-      pendingEvents.push({ type: 'persona_changed', persona: VITAL_PERSONA });
+    const openSession = await specialistSessions.findOpen(userId);
+    if (openSession) {
+      const manifest = openSession.status === 'proposed' || openSession.status === 'return_proposed'
+        ? specialistRegistry.get(openSession.manifestId)
+        : undefined;
+      pendingEvents.push(...killSwitchEventsForSession(openSession, manifest));
+      await specialistSessions.disableOpen(userId);
     }
   }
   if (currentSession?.status === 'active' && parseActiveSpecialistReturn(userMessage)) {

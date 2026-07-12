@@ -6,6 +6,7 @@ import type { SpecialistSession } from './sessions';
 import {
   selectCoachConfiguration,
   handoffCardForSession,
+  killSwitchEventsForSession,
   toolCallForPersistence,
 } from './coachIntegration';
 
@@ -92,4 +93,21 @@ test('persisted specialist lifecycle tool calls omit private proposal and return
   assert.deepEqual(toolCallForPersistence('get_sleep_summary', { days: 7 }), {
     name: 'get_sleep_summary', input: { days: 7 },
   });
+});
+
+test('kill switch dismisses a pending card before restoring Vital', () => {
+  const manifest = new SpecialistRegistry({ SPECIALIST_MODEL: 'claude-opus-test' }).get('running-coach');
+  for (const status of ['proposed', 'return_proposed'] as const) {
+    const events = killSwitchEventsForSession(session(status), manifest);
+    assert.deepEqual(events.map((event) => event.type), ['handoff_card', 'persona_changed']);
+    assert.equal(events[0].type, 'handoff_card');
+    if (events[0].type === 'handoff_card') {
+      assert.equal(events[0].phase, 'dismissed');
+      assert.equal(events[0].cardOccurrenceId, session(status).cardOccurrenceId);
+    }
+  }
+  assert.deepEqual(
+    killSwitchEventsForSession(session('active'), manifest).map((event) => event.type),
+    ['persona_changed'],
+  );
 });

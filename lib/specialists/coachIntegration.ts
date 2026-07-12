@@ -1,8 +1,13 @@
 import type { Tool } from '@anthropic-ai/sdk/resources/messages';
 import type { SpecialistManifest } from './registry';
 import type { SpecialistSession } from './sessions';
-import type { CompiledSpecialistPrompt, PersonaSnapshot } from './orchestration';
-import { specialistPersona } from './orchestration';
+import type {
+  CompiledSpecialistPrompt,
+  HandoffCardEvent,
+  PersonaChangedEvent,
+  PersonaSnapshot,
+} from './orchestration';
+import { specialistPersona, VITAL_PERSONA } from './orchestration';
 import {
   PROPOSE_RETURN_TO_VITAL_TOOL,
   PROPOSE_SPECIALIST_HANDOFF_TOOL,
@@ -100,4 +105,22 @@ export function handoffCardForSession(
     objective: session.objective,
     ...(session.returnHandoff ? { returnSummary: session.returnHandoff } : {}),
   };
+}
+
+export function killSwitchEventsForSession(
+  session: SpecialistSession,
+  manifest?: SpecialistManifest,
+): Array<HandoffCardEvent | PersonaChangedEvent> {
+  const personaChanged: PersonaChangedEvent = {
+    type: 'persona_changed',
+    persona: VITAL_PERSONA,
+  };
+  if (session.status !== 'proposed' && session.status !== 'return_proposed') {
+    return [personaChanged];
+  }
+  if (!manifest) throw new Error('A specialist manifest is required to dismiss a pending card');
+  return [
+    { ...handoffCardForSession(session, manifest), phase: 'dismissed' },
+    personaChanged,
+  ];
 }
