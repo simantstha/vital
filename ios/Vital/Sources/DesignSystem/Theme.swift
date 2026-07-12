@@ -92,6 +92,15 @@ enum Theme {
                 : UIColor(red: 0.651, green: 0.655, blue: 0.671, alpha: 1)
         })
 
+        /// Muted chart fill for below-threshold values (e.g. short-sleep bars) —
+        /// light: #E4E5E0 / dark: #2A3038. A solid neutral, not an opacity of
+        /// `accent`, so it reads as "off" rather than "dim lime".
+        static let chartMuted = Color(uiColor: UIColor { tc in
+            tc.userInterfaceStyle == .dark
+                ? UIColor(red: 0.165, green: 0.188, blue: 0.220, alpha: 1)
+                : UIColor(red: 0.894, green: 0.898, blue: 0.878, alpha: 1)
+        })
+
         /// Glass fill — dark: white 5% / light: black 4%
         static let glassFill = Color(uiColor: UIColor { tc in
             tc.userInterfaceStyle == .dark
