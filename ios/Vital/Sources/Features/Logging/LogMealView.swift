@@ -11,6 +11,15 @@ struct LogMealView: View {
     /// Local photo-picker selection — view-local UI state.
     @State private var photoItem: PhotosPickerItem? = nil
 
+    /// Which method tab to open on. Backward-compatible: existing call sites
+    /// (`LogMealView()`) keep defaulting to `.text` unchanged. Lets the diet
+    /// sheet (redesign-v3 Phase 3) deep-link straight into Photo/Barcode.
+    private let initialMethod: MealInputMethod
+
+    init(initialMethod: MealInputMethod = .text) {
+        self.initialMethod = initialMethod
+    }
+
     var body: some View {
         ZStack {
             Theme.Colors.canvas.ignoresSafeArea()
@@ -47,6 +56,9 @@ struct LogMealView: View {
         // Handle photo picker selection.
         .onChange(of: photoItem) { _, newItem in
             Task { await vm.handlePhotoItem(newItem) }
+        }
+        .onAppear {
+            vm.selectedMethod = initialMethod
         }
     }
 }
