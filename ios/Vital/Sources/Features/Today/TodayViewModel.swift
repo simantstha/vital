@@ -93,9 +93,10 @@ final class TodayViewModel: ObservableObject {
         fat:     MacroProgress(current: 0, target: 0)
     )
 
-    // Today's plan timeline — derived (client-side, Phase 1) from /api/today's
-    // `plan` + a synthesized sleep item. Local-only mutations; Phase 2 swaps
-    // this for /api/plan without changing the shape callers see.
+    // Today's plan timeline — server-persisted via /api/plan (Phase 2).
+    // Falls back to the Phase 1 client-side derivation (from /api/today's
+    // `plan` + a synthesized sleep item, local-only mutations) when
+    // /api/plan isn't available — see `applyPlanResult`.
     @Published var planItems: [PlanItem] = []
 
     // Top-center toast host (see `.toast(message:)`).
@@ -123,11 +124,22 @@ final class TodayViewModel: ObservableObject {
 
     func loadHealthData() async {
         isLoading = true
-        // Run HealthKit + API calls concurrently
+        // Run HealthKit + API calls concurrently. /api/today and /api/plan run
+        // side by side (not one-after-the-other) — the plan step below waits
+        // for both to finish so it can match meal-kind plan rows against
+        // /api/today's `plan` array for the MealDetailView flow.
         async let healthTask: () = loadFromHealthKit()
-        async let todayTask: () = loadTodayFromAPI()
+        async let todayResult = loadTodayResponse()
         async let factsTask: () = loadPendingFacts()
-        _ = await (healthTask, todayTask, factsTask)
+        async let planResult = loadPlanResponse()
+
+        let (_, today, _, plan) = await (healthTask, todayResult, factsTask, planResult)
+
+        if let today {
+            applyTodayResponse(today)
+        }
+        applyPlanResult(plan, todayPlan: today?.plan ?? [])
+
         isLoading = false
     }
 
@@ -192,13 +204,26 @@ final class TodayViewModel: ObservableObject {
         await HealthSyncCoordinator.shared.syncNow()
     }
 
-    private func loadTodayFromAPI() async {
+    private func loadTodayResponse() async -> TodayResponse? {
         do {
-            let response = try await apiClient.fetchToday()
-            applyTodayResponse(response)
+            return try await apiClient.fetchToday()
         } catch {
             errorMessage = error.localizedDescription
             print("[Vital] fetchToday failed: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    /// PHASE 2 FALLBACK: nil here (network error, 404, decode failure — most
+    /// notably an older backend deployed before /api/plan existed) is not
+    /// surfaced as an error; `applyPlanResult` falls back to the Phase 1
+    /// client-side derivation so Today still renders a plan.
+    private func loadPlanResponse() async -> PlanResponse? {
+        do {
+            return try await apiClient.fetchPlan()
+        } catch {
+            print("[Vital] fetchPlan failed, falling back to Phase 1 derivation: \(error.localizedDescription)")
+            return nil
         }
     }
 
@@ -280,14 +305,77 @@ final class TodayViewModel: ObservableObject {
             carbs:   MacroProgress(current: db.carbs,   target: carbsTarget),
             fat:     MacroProgress(current: db.fat,     target: fatTarget)
         )
-
-        // Today's plan timeline — derive PlanItems from the brief's meals +
-        // a synthesized sleep item. Keep the existing derived plan if the
-        // brief isn't ready yet.
-        derivePlanItems(from: r.plan)
     }
 
-    // MARK: - Plan timeline derivation (Phase 1: client-side heuristics)
+    // MARK: - Plan timeline (Phase 2: server-persisted via /api/plan)
+
+    /// Maps a `/api/plan` row to the UI's `PlanItem`. `sfSymbol` is derived
+    /// client-side from `kind` + `title` (meals reuse `mealIcon`'s keyword
+    /// heuristics; sleep/rest → moon, move → figure.walk, other → circle) —
+    /// the server never sends an icon. Meal-kind items are matched by title
+    /// against `/api/today`'s `plan` array so the row keeps its `MealRow` for
+    /// `MealDetailView`'s suggest/log flow.
+    private func planItem(from dto: PlanItemDTO, todayPlan: [TodayPlanItem]) -> PlanItem {
+        let kind = PlanItem.Kind(rawValue: dto.kind) ?? .other
+
+        // Server status is pending/done/skipped only; `.later` is a harmless
+        // placeholder for `.pending` here — computeStatuses (below) recomputes
+        // every non-done/skipped item's now/next/later from the clock right
+        // after this mapping runs.
+        let status: PlanItem.Status
+        switch dto.status {
+        case "done":    status = .done
+        case "skipped": status = .skipped
+        default:        status = .later
+        }
+
+        var meal: MealRow?
+        let sfSymbol: String
+        switch kind {
+        case .meal:
+            sfSymbol = mealIcon(for: dto.title)
+            if let match = todayPlan.first(where: { $0.name == dto.title }) {
+                meal = MealRow(name: match.name, kcal: match.kcal, reason: match.why, icon: sfSymbol)
+            }
+        case .sleep, .rest:
+            sfSymbol = "moon"
+        case .move:
+            sfSymbol = "figure.walk"
+        case .other:
+            sfSymbol = "circle"
+        }
+
+        return PlanItem(
+            id: dto.id,
+            timeMinutes: dto.timeMinutes,
+            title: dto.title,
+            subtitle: dto.subtitle ?? "",
+            sfSymbol: sfSymbol,
+            status: status,
+            source: dto.source == "user" ? .user : .coach,
+            kind: kind,
+            meal: meal
+        )
+    }
+
+    /// Applies the `/api/plan` result, or falls back to the Phase 1
+    /// client-side derivation when the endpoint isn't available.
+    private func applyPlanResult(_ response: PlanResponse?, todayPlan: [TodayPlanItem]) {
+        guard let response else {
+            derivePlanItems(from: todayPlan) // PHASE 2 FALLBACK — see below
+            return
+        }
+        let items = response.items.map { planItem(from: $0, todayPlan: todayPlan) }
+        planItems = computeStatuses(items, nowMinutes: Self.minutesSinceMidnight(Date()))
+    }
+
+    // MARK: - Plan timeline: Phase 1 fallback derivation (old backend only)
+    //
+    // PHASE 2 FALLBACK: everything below is dead weight once every deployed
+    // backend has /api/plan — kept only so the app degrades gracefully
+    // against a prod backend from before this release (see `loadPlanResponse`
+    // / `applyPlanResult` above). Mutations made while running on this path
+    // are local-only and reset on relaunch, same as Phase 1.
 
     /// Buckets a meal plan into breakfast/lunch/dinner slots so it can be
     /// given a heuristic time-of-day. Mirrors `mealIcon(for:)`'s keyword
@@ -348,13 +436,15 @@ final class TodayViewModel: ObservableObject {
         }
     }
 
-    /// Recomputes `.now` / `.next` / `.later` for items whose status isn't a
-    /// user-set `.done`/`.skipped` (those are left untouched). Items within
-    /// ±45 min of now become `.now`; the earliest future item beyond that
-    /// window becomes `.next`; everything else — including past items we
-    /// have no signal actually happened — stays `.later` rather than being
-    /// guessed as done. Simple and deterministic; Phase 2 replaces this with
-    /// server-tracked status.
+    /// Recomputes `.now` / `.next` / `.later` for items whose status isn't
+    /// `.done`/`.skipped` (those are left untouched — server-tracked, or
+    /// user-set in the fallback path). Items within ±45 min of now become
+    /// `.now`; the earliest future item beyond that window becomes `.next`;
+    /// everything else — including past items we have no signal actually
+    /// happened — stays `.later` rather than being guessed as done. now/
+    /// next/later is deliberately never sent to the server (see
+    /// `docs/redesign-v3-plan.md` Phase 2): it's a clock-derived display
+    /// concern recomputed on every load, not stored state.
     private func computeStatuses(_ items: [PlanItem], nowMinutes: Int) -> [PlanItem] {
         var items = items.sorted { $0.timeMinutes < $1.timeMinutes }
         var assignedNext = false
@@ -377,27 +467,17 @@ final class TodayViewModel: ObservableObject {
         return items
     }
 
+    /// PHASE 2 FALLBACK — builds the same shape /api/plan would have seeded
+    /// (meal items from the brief's heuristic times + a synthesized "Lights
+    /// out" row), entirely client-side and local-only. No status-preservation
+    /// merge across reloads (the server owned that in Phase 1's plan; without
+    /// it, a fallback reload simply rebuilds fresh — acceptable since this
+    /// path only runs against a backend that predates plan persistence).
     private func derivePlanItems(from plan: [TodayPlanItem]) {
         guard !plan.isEmpty else { return }
 
-        // Preserve any user-set done/skipped status across re-derivation
-        // (e.g. after a background refresh), matched by title since the
-        // brief's meal names are stable within a day.
-        let previousCoachStatus: [String: PlanItem.Status] = Dictionary(
-            planItems
-                .filter { $0.source == .coach && ($0.status == .done || $0.status == .skipped) }
-                .map { ($0.title, $0.status) },
-            uniquingKeysWith: { first, _ in first }
-        )
-
-        var mealItems = buildMealPlanItems(from: plan)
-        for i in mealItems.indices {
-            if let prev = previousCoachStatus[mealItems[i].title] {
-                mealItems[i].status = prev
-            }
-        }
-
-        var lightsOut = PlanItem(
+        let mealItems = buildMealPlanItems(from: plan)
+        let lightsOut = PlanItem(
             timeMinutes: 22 * 60 + 30,
             title: "Lights out",
             subtitle: "8h target",
@@ -406,14 +486,9 @@ final class TodayViewModel: ObservableObject {
             source: .coach,
             kind: .sleep
         )
-        if let prev = previousCoachStatus[lightsOut.title] {
-            lightsOut.status = prev
-        }
 
-        let userItems = planItems.filter { $0.source == .user }
         let nowMinutes = Self.minutesSinceMidnight(Date())
-
-        planItems = computeStatuses(mealItems + [lightsOut] + userItems, nowMinutes: nowMinutes)
+        planItems = computeStatuses(mealItems + [lightsOut], nowMinutes: nowMinutes)
     }
 
     private static func minutesSinceMidnight(_ date: Date) -> Int {
@@ -421,20 +496,88 @@ final class TodayViewModel: ObservableObject {
         return (comps.hour ?? 0) * 60 + (comps.minute ?? 0)
     }
 
-    // MARK: - Plan timeline mutations (local-only this phase)
+    // MARK: - Plan timeline mutations (optimistic — see docs/redesign-v3-plan.md Phase 2)
+    //
+    // Each mutates `planItems` immediately, fires the matching /api/plan
+    // call, and reverts + shows a short error toast if the call fails
+    // (including when there's no /api/plan at all — the Phase 1 fallback
+    // path above still renders, but writes here won't persist against an
+    // old backend; that's an accepted degradation, not a crash).
+
+    /// Client status → server status. `.now`/`.next`/`.later` all collapse to
+    /// `'pending'` — the server only ever tracks pending/done/skipped, and
+    /// now/next/later is recomputed from the clock on every load (see
+    /// `computeStatuses`). "Mark not done" calls `setStatus(_, .later)`,
+    /// which — via this mapping — clears a done/skipped item back to pending.
+    private func serverStatus(for status: PlanItem.Status) -> String {
+        switch status {
+        case .done:    return "done"
+        case .skipped: return "skipped"
+        case .now, .next, .later: return "pending"
+        }
+    }
 
     func setStatus(id: PlanItem.ID, _ status: PlanItem.Status) {
         guard let idx = planItems.firstIndex(where: { $0.id == id }) else { return }
+        let previousStatus = planItems[idx].status
         planItems[idx].status = status
+
+        Task {
+            do {
+                try await apiClient.updatePlanItem(id: id, status: serverStatus(for: status))
+            } catch {
+                if let idx = planItems.firstIndex(where: { $0.id == id }) {
+                    planItems[idx].status = previousStatus
+                }
+                toastMessage = "Couldn't save — try again"
+                print("[Vital] updatePlanItem failed: \(error.localizedDescription)")
+            }
+        }
     }
 
     func removeItem(id: PlanItem.ID) {
+        guard let removed = planItems.first(where: { $0.id == id }) else { return }
         planItems.removeAll { $0.id == id }
+
+        Task {
+            do {
+                try await apiClient.deletePlanItem(id: id)
+            } catch {
+                planItems.append(removed)
+                planItems.sort { $0.timeMinutes < $1.timeMinutes }
+                toastMessage = "Couldn't save — try again"
+                print("[Vital] deletePlanItem failed: \(error.localizedDescription)")
+            }
+        }
     }
 
+    /// `item` arrives with a client-synthesized temp id (see
+    /// `AddPlanItemSheet`); on success the temp id is swapped for the
+    /// server-issued one so a subsequent setStatus/removeItem round-trips
+    /// correctly. On failure the optimistic row is pulled back out.
     func addItem(_ item: PlanItem) {
         planItems.append(item)
         planItems = computeStatuses(planItems, nowMinutes: Self.minutesSinceMidnight(Date()))
+        let tempId = item.id
+
+        Task {
+            do {
+                let dto = try await apiClient.addPlanItem(
+                    timeMinutes: item.timeMinutes,
+                    title: item.title,
+                    subtitle: item.subtitle,
+                    kind: item.kind.rawValue,
+                    kcal: nil
+                )
+                if let idx = planItems.firstIndex(where: { $0.id == tempId }) {
+                    planItems[idx].id = dto.id
+                }
+            } catch {
+                planItems.removeAll { $0.id == tempId }
+                toastMessage = "Couldn't save — try again"
+                print("[Vital] addPlanItem failed: \(error.localizedDescription)")
+            }
+        }
     }
 
     private func loadPendingFacts() async {

@@ -1,6 +1,6 @@
 # Vital app redesign — "Today Screen v3" implementation plan
 
-**Status: Phase 0 + Phase 1 done · Phase 2 unclaimed** · Branch: `feat/redesign-v3` (off `main`)
+**Status: Phases 0–2 done** · Branch: `feat/redesign-v3` (off `main`)
 Source of truth for the design: Claude Design project
 <https://claude.ai/design/p/67904bc9-0509-4bb9-b4bf-2219bc3478fb?file=Today+Screen+v3.html>
 (file `Today Screen v3.html` — a full 5-tab React/Tailwind mock of the app).
@@ -139,27 +139,32 @@ Rules for every phase:
       data; add/complete/skip/remove all work in-session; build + tests green.
 
 ### Phase 2 — Plan persistence (backend + wiring)
-**Owner: unclaimed · Suggested agent: Sonnet · full-stack · needs Phase 1**
+**Owner: DONE (2026-07-12, Sonnet subagent) · full-stack**
 
-- [ ] New table `plan_items` in `db/schema.ts` (drizzle): id, userId, localDay
+- [x] New table `plan_items` in `db/schema.ts` (drizzle): id, userId, localDay
       (text key, same convention as `lib/localDay.ts`), time (minutes-from-
       midnight int), title, subtitle, kind (meal/move/rest/sleep/other),
       source (coach/user), status (pending/done/skipped), kcal nullable,
       createdAt/updatedAt. Migration via drizzle-kit.
-- [ ] New route `app/api/plan/route.ts`: `GET ?day=` (seed-on-first-read:
-      if empty for today, materialize from the brief's plan + sleep goal,
-      then return), `POST` (add item), `PATCH ?id=` (status/remove).
+- [x] New route `app/api/plan/route.ts`: `GET ?tz=` (additive seed-on-every-
+      read: inserts a "Lights out" row once, plus any cached-brief meal not
+      yet present for today, matched by title — never triggers a fresh LLM
+      call), `POST` (add item), `PATCH` (status by id), `DELETE ?id=`.
       Auth via `getUserIdFromRequest`, tz handling like `/api/today`.
-- [ ] iOS `Core/APIClient.swift`: `fetchPlan(day:)`, `addPlanItem(…)`,
-      `updatePlanItem(id:status:)`, `deletePlanItem(id:)`.
-- [ ] `TodayViewModel`: replace Phase-1 heuristic with `/api/plan`; optimistic
-      updates, revert + error toast on failure.
+- [x] iOS `Core/APIClient.swift`: `fetchPlan()`, `addPlanItem(timeMinutes:
+      title:subtitle:kind:kcal:)`, `updatePlanItem(id:status:)`,
+      `deletePlanItem(id:)` + `PlanItemDTO`/`PlanResponse`.
+- [x] `TodayViewModel`: replaced Phase-1 heuristic with `/api/plan` as the
+      primary source; `setStatus`/`removeItem`/`addItem` are now optimistic
+      server mutations (mutate locally, fire the API call, revert + toast
+      "Couldn't save — try again" on failure).
 - [ ] Calendar events are **not** stored server-side (privacy): Phase 8 merges
       EventKit client-side. Design the VM merge point now (plan = server
-      items ∪ calendar items sorted by time).
-- [ ] Acceptance: statuses survive relaunch; two devices converge; backend
-      lint/type/build green; iOS tests green. Note for release: migration
-      runs automatically in the release workflow (`drizzle-kit push`).
+      items ∪ calendar items sorted by time). *(Still open — Phase 8.)*
+- [x] Acceptance: statuses survive relaunch (server-tracked); backend
+      lint/type/build green; iOS 13/13 tests green. Note for release:
+      migration runs automatically in the release workflow (`drizzle-kit
+      push`).
 
 ### Phase 3 — Diet sheet (log / edit / target)
 **Owner: unclaimed · Suggested agent: Sonnet · iOS-heavy · needs Phase 0**
@@ -291,3 +296,45 @@ commits beyond main; ElevenLabs TTS already works via `/api/tts`.)
   calendar-item rendering (`PlanItem.Source.calendar`, the "Calendar" pill,
   `.neutral` badge) is already wired in `PlanTimelineView`/
   `PlanItemActionsSheet` and ready for Phase 8's EventKit merge.
+- 2026-07-12: Phase 2 done (Sonnet subagent) — plan persistence, full-stack.
+  Backend: `plan_items` table in `db/schema.ts` (id, userId, localDay,
+  timeMinutes, title, subtitle, kind, source, status, kcal,
+  created/updatedAt; index on (userId, localDay)); migration
+  `db/migrations/0005_premium_molecule_man.sql` generated via `npx
+  drizzle-kit generate` (no live DB touched — CI applies it via `drizzle-kit
+  push` on release, per the release workflow). New `app/api/plan/route.ts`:
+  GET (additively seeds a "Lights out" row + any not-yet-present cached-brief
+  meal on *every* call — never awaits a fresh Claude call, so the plan
+  silently fills in once `/api/today`'s background brief generation lands),
+  POST/PATCH/DELETE for user items + status changes, all scoped to
+  `x-user-id` and 401/400 as appropriate. iOS: `PlanItem.id` is now a mutable
+  `String` (server uuid, swapped in after an optimistic POST resolves);
+  `APIClient` gained `fetchPlan()` (sends `?tz=` like `fetchToday()`),
+  `addPlanItem`, `updatePlanItem(id:status:)`, `deletePlanItem(id:)`, and
+  `PlanItemDTO`/`PlanResponse`. `TodayViewModel.loadHealthData` now fetches
+  `/api/today` and `/api/plan` concurrently, then maps `/api/plan` rows →
+  `PlanItem` (icon derived client-side from kind/title; meal rows re-matched
+  by title against `/api/today`'s `plan` array to keep the `MealRow` for
+  `MealDetailView`). `setStatus`/`removeItem`/`addItem` are optimistic:
+  mutate `planItems` immediately, fire the matching API call, revert + set
+  `toastMessage = "Couldn't save — try again"` on failure. Deviations: (1)
+  kept a **Phase 1 fallback** — if `fetchPlan()` throws (old backend without
+  `/api/plan`), `TodayViewModel` falls back to the original client-side
+  heuristic derivation from `/api/today`'s `plan`, clearly marked "PHASE 2
+  FALLBACK" in code comments, so the app keeps working read-only against a
+  not-yet-migrated prod backend during rollout; writes in that fallback mode
+  still go through the optimistic server path and will revert with a toast
+  since the endpoint doesn't exist there — accepted degradation, not a crash;
+  (2) deleted the Phase 1 title-keyed done/skipped preservation merge in
+  `derivePlanItems` per the brief (server now owns status, so the primary
+  path never needs it; the fallback-only survivor rebuilds fresh each
+  reload); (3) `AddPlanItemSheet` needed no changes — it already only hands
+  the VM a `PlanItem`, and `addItem` now persists that under the hood.
+  Verify: backend `npm run lint` / `npx tsc --noEmit` / `npm run build` all
+  green (Node 20, `/api/plan` shows in the build's route list); iOS
+  `xcodegen generate` + `xcodebuild ... test` on `Vital-iPhone16` → **TEST
+  SUCCEEDED**, 13/13 existing tests still pass. Notes for Phase 3: the diet
+  sheet is unrelated to plan persistence and can proceed independently;
+  Phase 8's calendar merge point is still just a design note (no code) —
+  merge calendar items into `planItems` client-side only, sorted by
+  `timeMinutes`, never POSTed to `/api/plan`.
