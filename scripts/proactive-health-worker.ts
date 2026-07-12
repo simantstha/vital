@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { ApnsClient } from '../lib/apnsClient';
 import { deliverNotification, parseCoachAnalysis, runClaimedAnalysis, type AnalysisContext, type AnalysisJob } from '../lib/proactiveHealthWorker';
-import { claimAnalysisJobs, claimDueMorningBriefs, completeMorningBrief, listReadyNotificationCandidates, workerRepository } from '../lib/proactiveHealthWorkerRepository';
+import { claimAnalysisJobs, claimDueMorningBriefs, completeMorningBrief, failMorningBrief, listReadyNotificationCandidates, workerRepository } from '../lib/proactiveHealthWorkerRepository';
 
 const intervalMs = Number(process.env.PROACTIVE_WORKER_INTERVAL_MS ?? 15_000);
 const anthropic = new Anthropic({ apiKey: required('ANTHROPIC_API_KEY') });
@@ -28,7 +28,7 @@ async function tick(): Promise<void> {
   for (const claim of await claimDueMorningBriefs(now)) {
     const job: AnalysisJob = { id: claim.idempotencyKey, kind: 'sleep', userId: claim.userId, localDate: claim.localDate, input: { purpose: 'morning brief' }, retryCount: 0, notificationRetryCount: claim.retryCount, leaseToken: claim.leaseToken };
     try { const result = parseCoachAnalysis(await analyze(job, await workerRepository.getContext(job))); await completeMorningBrief(claim, result, (device, value) => apns.send(device, value), now); }
-    catch { /* Slot remains claimed; a later operational repair can safely inspect it. */ }
+    catch { await failMorningBrief(claim, new Date()); }
   }
 }
 

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { claimMorningSlot, compareDueCandidates, failOwnedMorningSlot, notificationClaimable, ownsLease } from './proactiveHealthTransitions';
 
 type Row = { owner: string | null; expires: number; state: 'pending' | 'processing' | 'ready' | 'sending' | 'sent'; retries: number };
 function claim(row: Row, owner: string, now: number): boolean {
@@ -13,6 +14,15 @@ test('stale analysis owner cannot complete after an expired lease is reclaimed',
   assert.equal(claim(row, 'new', 11), true);
   assert.equal(cas(row, 'old', 'ready'), false);
   assert.equal(cas(row, 'new', 'ready'), true);
+  assert.equal(ownsLease('new', 'old'), false);
+});
+
+test('production notification predicate recovers ready pending and stale sending only', () => {
+  const now = new Date('2026-07-12T12:00:00Z');
+  assert.equal(notificationClaimable('pending', null, now, now), true);
+  assert.equal(notificationClaimable('sending', new Date(now.getTime() - 1), now, now), true);
+  assert.equal(notificationClaimable('sending', new Date(now.getTime() + 1), now, now), false);
+  assert.equal(notificationClaimable('sent', null, now, now), false);
 });
 
 test('crash after ready and after sending can both be recovered', () => {
@@ -23,16 +33,27 @@ test('crash after ready and after sending can both be recovered', () => {
 });
 
 test('unique morning date admits exactly one concurrent sleep-or-brief winner', () => {
-  const slots = new Set<string>();
-  const insert = (actor: string) => !slots.has('u:2026-11-01') && !!slots.add('u:2026-11-01') && actor.length > 0;
-  assert.equal([insert('sleep'), insert('brief')].filter(Boolean).length, 1);
+  let owner: 'sleep' | 'brief' | null = null;
+  const adapter = { async tryInsert(actor: 'sleep' | 'brief') { if (owner) return null; owner = actor; return actor; }, async tryRecover(actor: 'sleep' | 'brief') { return owner === actor ? actor : null; } };
+  return Promise.all([claimMorningSlot(adapter, 'sleep'), claimMorningSlot(adapter, 'brief')]).then((claims) => {
+    assert.equal(claims.filter(Boolean).length, 1);
+  });
 });
 
-test('transient morning retries stop at the configured cap', () => {
-  const row: Row = { owner: 'worker', expires: 1, state: 'sending', retries: 0 };
-  while (row.retries < 5) row.retries++;
-  assert.equal(row.retries, 5);
-  assert.equal(row.retries < 5, false);
+test('repeated morning analysis failures use owner CAS, back off, and become terminal', async () => {
+  let owner: string | null = 'lease'; let retries = 0; let terminal = false; const now = new Date('2026-07-12T12:00:00Z');
+  const adapter = { async apply(token: string, transition: { retryCount: number; terminal: boolean; nextAttemptAt: Date }) { if (owner !== token) return false; retries = transition.retryCount; terminal = transition.terminal; assert.equal(transition.nextAttemptAt > now, true); owner = null; return true; } };
+  assert.equal(await failOwnedMorningSlot(adapter, 'stale', retries, now), false);
+  for (let attempt = 0; attempt < 5; attempt++) { owner = 'lease'; assert.equal(await failOwnedMorningSlot(adapter, 'lease', retries, now), true); }
+  assert.equal(retries, 5);
+  assert.equal(terminal, true);
+});
+
+test('due candidates are fair by overdue duration then oldest update', () => {
+  const newer = { overdueMinutes: 10, updatedAt: new Date('2026-07-12T11:00:00Z') };
+  const older = { overdueMinutes: 10, updatedAt: new Date('2026-07-12T10:00:00Z') };
+  const mostOverdue = { overdueMinutes: 30, updatedAt: new Date('2026-07-12T12:00:00Z') };
+  assert.deepEqual([newer, older, mostOverdue].sort(compareDueCandidates), [mostOverdue, older, newer]);
 });
 
 test('DST fallback keeps local-date slot identity stable while UTC instants differ', () => {

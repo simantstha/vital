@@ -2,9 +2,10 @@ import { db, schema } from '@/db';
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { morningKey, notificationKey, type AnalysisJob, type CoachAnalysis, type PushDevice, type PushOutcome, type WorkerRepository } from './proactiveHealthWorker';
+import { claimMorningSlot, compareDueCandidates, failOwnedMorningSlot, notificationClaimable } from './proactiveHealthTransitions';
 
 const LEASE_MS = 5 * 60_000;
-type RawJob = { id: string; user_id: string; local_date: string; input_payload: unknown; retry_count: number; kind: 'workout' | 'sleep'; lease_token: string; result?: unknown };
+type RawJob = { id: string; user_id: string; local_date: string; input_payload: unknown; retry_count: number; kind: 'workout' | 'sleep'; lease_token: string; result?: unknown; notification_state?: string; notification_lease_expires_at?: Date | null; notification_next_attempt_at?: Date };
 
 export async function claimAnalysisJobs(now: Date, limit = 20): Promise<AnalysisJob[]> {
   const lease = new Date(now.getTime() + LEASE_MS);
@@ -81,37 +82,45 @@ function localMinute(date: Date, timezone: string): number { try { const values 
 
 export async function listReadyNotificationCandidates(now: Date, limit = 40): Promise<Array<{ job: AnalysisJob; result: CoachAnalysis }>> {
   const rows = await db.execute(sql<RawJob>`
-    select id,user_id,workout_date::text local_date,input_payload,notification_retry_count retry_count,'workout'::text kind,result
+    select id,user_id,workout_date::text local_date,input_payload,notification_retry_count retry_count,'workout'::text kind,result,notification_state,notification_lease_expires_at,notification_next_attempt_at
     from ${schema.workout_analyses} where status='ready' and result is not null and notification_next_attempt_at <= ${now}
       and (notification_state='pending' or (notification_state='sending' and notification_lease_expires_at <= ${now}))
     union all
-    select id,user_id,wake_date::text local_date,input_payload,notification_retry_count retry_count,'sleep'::text kind,result
+    select id,user_id,wake_date::text local_date,input_payload,notification_retry_count retry_count,'sleep'::text kind,result,notification_state,notification_lease_expires_at,notification_next_attempt_at
     from ${schema.sleep_analyses} where status='ready' and result is not null and notification_next_attempt_at <= ${now}
       and (notification_state='pending' or (notification_state='sending' and notification_lease_expires_at <= ${now}))
     order by local_date,id limit ${limit}`);
-  return (rows as unknown as RawJob[]).map((row) => ({ job: { id: row.id, userId: row.user_id, localDate: row.local_date, input: row.input_payload, retryCount: 0, notificationRetryCount: row.retry_count, kind: row.kind, leaseToken: randomUUID() }, result: row.result as CoachAnalysis }));
+  return (rows as unknown as RawJob[]).filter((row) => notificationClaimable(row.notification_state ?? '', row.notification_lease_expires_at ?? null, row.notification_next_attempt_at ?? now, now)).map((row) => ({ job: { id: row.id, userId: row.user_id, localDate: row.local_date, input: row.input_payload, retryCount: 0, notificationRetryCount: row.retry_count, kind: row.kind, leaseToken: randomUUID() }, result: row.result as CoachAnalysis }));
 }
 
 export interface MorningBriefClaim { slotId: string; userId: string; localDate: string; timezone: string; idempotencyKey: string; leaseToken: string; retryCount: number }
 export async function claimDueMorningBriefs(now: Date, limit = 20): Promise<MorningBriefClaim[]> {
-  const candidates = await db.execute(sql<{ user_id: string; timezone: string; local_date: string }>`
-    select p.user_id, p.timezone, (${now} at time zone p.timezone)::date::text local_date
+  const candidates = await db.execute(sql<{ user_id: string; timezone: string; local_date: string; overdue_minutes: number; updated_at: Date }>`
+    select p.user_id, p.timezone, (${now} at time zone p.timezone)::date::text local_date,
+      ((extract(hour from (${now} at time zone p.timezone))::int * 60 + extract(minute from (${now} at time zone p.timezone))::int) - p.morning_brief_time_minutes) overdue_minutes, p.updated_at
     from ${schema.notification_preferences} p
     where p.morning_brief_enabled = true
       and exists (select 1 from ${schema.push_devices} d where d.user_id=p.user_id and d.invalidated_at is null)
-      and (extract(hour from (${now} at time zone p.timezone))::int * 60 + extract(minute from (${now} at time zone p.timezone))::int) >= p.morning_brief_time_minutes
-    order by ((extract(hour from (${now} at time zone p.timezone))::int * 60 + extract(minute from (${now} at time zone p.timezone))::int) - p.morning_brief_time_minutes) desc, p.updated_at`);
-  const due = (candidates as unknown as Array<{ user_id: string; timezone: string; local_date: string }>).map((row) => ({ userId: row.user_id, timezone: row.timezone, localDate: row.local_date, idempotencyKey: morningKey(row.user_id, row.local_date) }));
+      and (extract(hour from (${now} at time zone p.timezone))::int * 60 + extract(minute from (${now} at time zone p.timezone))::int) >= p.morning_brief_time_minutes`);
+  const due = (candidates as unknown as Array<{ user_id: string; timezone: string; local_date: string; overdue_minutes: number; updated_at: Date }>).sort((a, b) => compareDueCandidates({ overdueMinutes: Number(a.overdue_minutes), updatedAt: a.updated_at }, { overdueMinutes: Number(b.overdue_minutes), updatedAt: b.updated_at })).map((row) => ({ userId: row.user_id, timezone: row.timezone, localDate: row.local_date, idempotencyKey: morningKey(row.user_id, row.local_date) }));
   const claims: MorningBriefClaim[] = [];
   for (const candidate of due) {
     const token = randomUUID(); const lease = new Date(now.getTime() + LEASE_MS);
-    const inserted = await db.insert(schema.morning_notification_slots).values({ user_id: candidate.userId, local_date: candidate.localDate, claimed_by: 'brief', idempotency_key: candidate.idempotencyKey, claimed_at: now, lease_token: token, lease_expires_at: lease, next_attempt_at: now }).onConflictDoNothing().returning({ id: schema.morning_notification_slots.id, retryCount: schema.morning_notification_slots.retry_count });
-    let row = inserted[0];
-    if (!row) [row] = await db.update(schema.morning_notification_slots).set({ status: 'claimed', lease_token: token, lease_expires_at: lease, claimed_at: now }).where(and(eq(schema.morning_notification_slots.idempotency_key, candidate.idempotencyKey), eq(schema.morning_notification_slots.claimed_by, 'brief'), sql`${schema.morning_notification_slots.retry_count} < 5`, sql`${schema.morning_notification_slots.next_attempt_at} <= ${now}`, sql`(${schema.morning_notification_slots.status} = 'failed' or (${schema.morning_notification_slots.status} = 'claimed' and ${schema.morning_notification_slots.lease_expires_at} <= ${now}))`)).returning({ id: schema.morning_notification_slots.id, retryCount: schema.morning_notification_slots.retry_count });
+    const row = await claimMorningSlot({
+      async tryInsert() { const rows = await db.insert(schema.morning_notification_slots).values({ user_id: candidate.userId, local_date: candidate.localDate, claimed_by: 'brief', idempotency_key: candidate.idempotencyKey, claimed_at: now, lease_token: token, lease_expires_at: lease, next_attempt_at: now }).onConflictDoNothing().returning({ id: schema.morning_notification_slots.id, retryCount: schema.morning_notification_slots.retry_count }); return rows[0] ?? null; },
+      async tryRecover(actor) { const rows = await db.update(schema.morning_notification_slots).set({ status: 'claimed', lease_token: token, lease_expires_at: lease, claimed_at: now }).where(and(eq(schema.morning_notification_slots.idempotency_key, candidate.idempotencyKey), eq(schema.morning_notification_slots.claimed_by, actor), sql`${schema.morning_notification_slots.retry_count} < 5`, sql`${schema.morning_notification_slots.next_attempt_at} <= ${now}`, sql`(${schema.morning_notification_slots.status} = 'failed' or (${schema.morning_notification_slots.status} = 'claimed' and ${schema.morning_notification_slots.lease_expires_at} <= ${now}))`)).returning({ id: schema.morning_notification_slots.id, retryCount: schema.morning_notification_slots.retry_count }); return rows[0] ?? null; },
+    }, 'brief');
     if (row) claims.push({ ...candidate, slotId: row.id, leaseToken: token, retryCount: row.retryCount });
     if (claims.length >= limit) break;
   }
   return claims;
+}
+
+export async function failMorningBrief(claim: MorningBriefClaim, now: Date): Promise<boolean> {
+  return failOwnedMorningSlot({ async apply(ownerToken, transition) {
+    const rows = await db.update(schema.morning_notification_slots).set({ status: 'failed', retry_count: transition.retryCount, next_attempt_at: transition.nextAttemptAt, lease_token: null, lease_expires_at: null }).where(and(eq(schema.morning_notification_slots.id, claim.slotId), eq(schema.morning_notification_slots.lease_token, ownerToken), eq(schema.morning_notification_slots.status, 'claimed'))).returning({ id: schema.morning_notification_slots.id });
+    return rows.length === 1;
+  } }, claim.leaseToken, claim.retryCount, now);
 }
 
 export async function completeMorningBrief(claim: MorningBriefClaim, result: CoachAnalysis, send: (device: PushDevice, result: CoachAnalysis) => Promise<PushOutcome>, now: Date): Promise<void> {
@@ -127,6 +136,6 @@ export async function completeMorningBrief(claim: MorningBriefClaim, result: Coa
       if (outcome.outcome !== 'transient') break;
     }
   }
-  const retry = transient && !sent && claim.retryCount < 5;
-  await db.update(schema.morning_notification_slots).set({ status: sent ? 'sent' : 'failed', sent_at: sent ? now : null, retry_count: retry ? sql`${schema.morning_notification_slots.retry_count} + 1` : schema.morning_notification_slots.retry_count, next_attempt_at: retry ? new Date(now.getTime() + Math.min(360, 2 ** claim.retryCount) * 60_000) : now, lease_token: null, lease_expires_at: null }).where(and(eq(schema.morning_notification_slots.id, claim.slotId), eq(schema.morning_notification_slots.lease_token, claim.leaseToken)));
+  if (!sent && transient) { await failMorningBrief(claim, now); return; }
+  await db.update(schema.morning_notification_slots).set({ status: sent ? 'sent' : 'failed', sent_at: sent ? now : null, retry_count: sent ? claim.retryCount : 5, next_attempt_at: now, lease_token: null, lease_expires_at: null }).where(and(eq(schema.morning_notification_slots.id, claim.slotId), eq(schema.morning_notification_slots.lease_token, claim.leaseToken)));
 }
