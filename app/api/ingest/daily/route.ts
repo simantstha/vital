@@ -27,10 +27,15 @@
  */
 
 import { NextResponse } from 'next/server';
-import { sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import { getUserIdFromRequest } from '@/lib/auth';
 import { recomputeBaselines } from '@/lib/brain/baselines';
+import {
+  reconcileWorkouts,
+  sleepAnalysisCandidate,
+  type HealthKitWorkout,
+} from '@/lib/healthAnalysisReconciliation';
 
 const MAX_DAYS_PER_REQUEST = 60;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -66,7 +71,15 @@ function isDayInput(d: unknown): d is DayInput {
     if (o.sleep === null || typeof o.sleep !== 'object') return false;
     if (typeof (o.sleep as Record<string, unknown>).minutes !== 'number') return false;
   }
-  if (o.workouts !== undefined && !Array.isArray(o.workouts)) return false;
+  if (o.workouts !== undefined) {
+    if (!Array.isArray(o.workouts)) return false;
+    if (!o.workouts.every((workout) => (
+      workout !== null
+      && typeof workout === 'object'
+      && typeof (workout as Record<string, unknown>).hkUuid === 'string'
+      && (workout as Record<string, unknown>).hkUuid !== ''
+    ))) return false;
+  }
   return true;
 }
 
@@ -120,6 +133,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   const days = raw as DayInput[];
+  const receivedAt = new Date();
 
   // ── Flatten into daily_metrics rows ───────────────────────────────────────
   const rows: Row[] = [];
@@ -163,18 +177,113 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   try {
-    await db
-      .insert(schema.daily_metrics)
-      .values(rows)
-      .onConflictDoUpdate({
-        target: [schema.daily_metrics.user_id, schema.daily_metrics.date, schema.daily_metrics.metric],
-        set: {
-          value:      sql`excluded.value`,
-          payload:    sql`excluded.payload`,
-          source:     sql`excluded.source`,
-          updated_at: sql`now()`,
-        },
-      });
+    const workoutDays = days.filter((day) => day.workouts !== undefined);
+    const previousWorkoutRows = workoutDays.length === 0
+      ? []
+      : await db
+        .select({ date: schema.daily_metrics.date, payload: schema.daily_metrics.payload })
+        .from(schema.daily_metrics)
+        .where(and(
+          eq(schema.daily_metrics.user_id, userId),
+          eq(schema.daily_metrics.metric, 'workouts'),
+          inArray(schema.daily_metrics.date, workoutDays.map((day) => day.date)),
+        ));
+    const previousWorkoutsByDate = new Map(
+      previousWorkoutRows.map((row) => [
+        row.date,
+        Array.isArray(row.payload) ? row.payload as HealthKitWorkout[] : [],
+      ]),
+    );
+    const workoutReconciliations = workoutDays.map((day) => ({
+      day,
+      ...reconcileWorkouts(previousWorkoutsByDate.get(day.date) ?? [], day.workouts ?? []),
+    }));
+
+    await db.transaction(async (tx) => {
+      await tx
+        .insert(schema.daily_metrics)
+        .values(rows)
+        .onConflictDoUpdate({
+          target: [schema.daily_metrics.user_id, schema.daily_metrics.date, schema.daily_metrics.metric],
+          set: {
+            value:      sql`excluded.value`,
+            payload:    sql`excluded.payload`,
+            source:     sql`excluded.source`,
+            updated_at: sql`now()`,
+          },
+        });
+
+      const removedHkUuids = Array.from(new Set(
+        workoutReconciliations.flatMap((entry) => entry.removedHkUuids),
+      ));
+      if (removedHkUuids.length > 0) {
+        await tx.update(schema.workout_analyses).set({
+          status: 'deleted',
+          deleted_at: receivedAt,
+          lease_expires_at: null,
+          notification_state: 'suppressed',
+          updated_at: receivedAt,
+        }).where(and(
+          eq(schema.workout_analyses.user_id, userId),
+          inArray(schema.workout_analyses.hk_uuid, removedHkUuids),
+        ));
+      }
+
+      // Upserts follow removals so a workout moved between included dates ends active.
+      for (const reconciliation of workoutReconciliations) {
+        for (const entry of reconciliation.upserts) {
+          await tx.insert(schema.workout_analyses).values({
+            user_id: userId,
+            hk_uuid: entry.workout.hkUuid,
+            workout_date: reconciliation.day.date,
+            content_fingerprint: entry.fingerprint,
+            input_payload: entry.workout,
+          }).onConflictDoUpdate({
+            target: [schema.workout_analyses.user_id, schema.workout_analyses.hk_uuid],
+            set: {
+              workout_date: reconciliation.day.date,
+              content_fingerprint: entry.fingerprint,
+              input_payload: entry.workout,
+              status: 'pending',
+              retry_count: 0,
+              next_attempt_at: receivedAt,
+              lease_expires_at: null,
+              result: null,
+              deleted_at: null,
+              updated_at: receivedAt,
+              notification_state: sql`case when ${schema.workout_analyses.notification_state} = 'sent' then 'sent' else 'pending' end`,
+            },
+          });
+        }
+      }
+
+      for (const day of days.filter((candidate) => candidate.sleep !== undefined)) {
+        const sleep = day.sleep!;
+        const candidate = sleepAnalysisCandidate(day.date, sleep, receivedAt);
+        await tx.insert(schema.sleep_analyses).values({
+          user_id: userId,
+          wake_date: candidate.wakeDate,
+          content_fingerprint: candidate.fingerprint,
+          input_payload: sleep,
+          analyze_after: candidate.analyzeAfter,
+          next_attempt_at: candidate.analyzeAfter,
+        }).onConflictDoUpdate({
+          target: [schema.sleep_analyses.user_id, schema.sleep_analyses.wake_date],
+          set: {
+            content_fingerprint: candidate.fingerprint,
+            input_payload: sleep,
+            analyze_after: candidate.analyzeAfter,
+            next_attempt_at: candidate.analyzeAfter,
+            status: 'pending',
+            retry_count: 0,
+            lease_expires_at: null,
+            result: null,
+            updated_at: receivedAt,
+            notification_state: sql`case when ${schema.sleep_analyses.notification_state} = 'sent' then 'sent' else 'pending' end`,
+          },
+        });
+      }
+    });
 
     await recomputeBaselines(userId, Array.from(touchedMetrics));
 
