@@ -154,3 +154,18 @@ test('analysis GET returns only an authenticated user ready non-deleted public D
     assert.equal((await hiddenHandler.GET(request(`/api/sleep-analyses/${record.id}`, 'GET', undefined, 'user-a'), { params: Promise.resolve({ id: record.id }) })).status, 404);
   }
 });
+
+test('analysis GET passes one canonical UUID to the repository', async () => {
+  let repositoryId = '';
+  const handler = createAnalysisHttpHandler({
+    authenticate,
+    kind: 'workout',
+    repository: repository({ async getAnalysis(_kind, _userId, id) { repositoryId = id; return null; } }),
+  });
+  const rawId = '  AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA  ';
+  const response = await handler.GET(request('/api/workout-analyses/id', 'GET', undefined, 'user-a'), {
+    params: Promise.resolve({ id: rawId }),
+  });
+  assert.equal(response.status, 404);
+  assert.equal(repositoryId, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+});

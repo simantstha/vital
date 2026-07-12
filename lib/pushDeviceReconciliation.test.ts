@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  registerPushDevice,
   reconcilePushDeviceRegistration,
+  type PushDeviceRegistrationBoundary,
   type PushDeviceRow,
   type PushDeviceTransaction,
 } from './pushDeviceReconciliation';
@@ -27,6 +29,21 @@ class MemoryTransaction implements PushDeviceTransaction {
 
   async insert(userId: string, installationId: string, token: string, environment: 'sandbox' | 'production', now: Date) {
     this.rows.push({ id: `device-${this.rows.length + 1}`, userId, installationId, token, environment, invalidatedAt: null, updatedAt: now });
+  }
+}
+
+class SerializedMemoryBoundary implements PushDeviceRegistrationBoundary {
+  private tail = Promise.resolve();
+  readonly transaction: MemoryTransaction;
+
+  constructor(rows: PushDeviceRow[]) { this.transaction = new MemoryTransaction(rows); }
+
+  async withRegistrationTransaction<T>(operation: (transaction: PushDeviceTransaction) => Promise<T>) {
+    const previous = this.tail;
+    let release!: () => void;
+    this.tail = new Promise<void>((resolve) => { release = resolve; });
+    await previous;
+    try { return await operation(this.transaction); } finally { release(); }
   }
 }
 
@@ -87,4 +104,22 @@ test('same-user installation refresh is idempotent and reactivates the row', asy
   assert.equal(tx.rows.length, 1);
   assert.equal(existing.token, tokenB);
   assert.equal(existing.invalidatedAt, null);
+});
+
+test('registration boundary serializes concurrent same-user token swaps without deadlock', async () => {
+  const deviceA = row({ id: 'device-a', installationId: '11111111-1111-4111-8111-111111111111', token: tokenA });
+  const deviceB = row({ id: 'device-b', installationId: '22222222-2222-4222-8222-222222222222', token: tokenB });
+  const boundary = new SerializedMemoryBoundary([deviceA, deviceB]);
+  const operations = Promise.all([
+    registerPushDevice(boundary, 'user-a', { installationId: deviceA.installationId, token: tokenB, environment: 'sandbox' }, now),
+    registerPushDevice(boundary, 'user-a', { installationId: deviceB.installationId, token: tokenA, environment: 'sandbox' }, new Date(now.getTime() + 1)),
+  ]);
+  const result = await Promise.race([
+    operations,
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error('registration deadlocked')), 250)),
+  ]);
+  assert.deepEqual(result, ['registered', 'registered']);
+  assert.equal(boundary.transaction.rows.length, 2);
+  assert.deepEqual(new Set(boundary.transaction.rows.map((device) => device.id)), new Set(['device-a', 'device-b']));
+  assert.equal(new Set(boundary.transaction.rows.map((device) => device.token)).size, 2);
 });

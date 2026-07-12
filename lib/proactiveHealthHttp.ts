@@ -191,10 +191,13 @@ export function createAnalysisHttpHandler(
       const userId = authenticate(request, dependencies);
       if (userId instanceof Response) return userId;
       const { id } = await context.params;
-      if (!uuid(id)) return Response.json({ error: 'Invalid analysis id.' }, { status: 400 });
-      const analysis = id
-        ? await dependencies.repository.getAnalysis(dependencies.kind, userId, id)
-        : null;
+      const normalizedId = uuid(id);
+      if (!normalizedId) return Response.json({ error: 'Invalid analysis id.' }, { status: 400 });
+      const analysis = await dependencies.repository.getAnalysis(
+        dependencies.kind,
+        userId,
+        normalizedId,
+      );
       if (
         !analysis
         || analysis.userId !== userId

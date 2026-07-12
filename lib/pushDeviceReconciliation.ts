@@ -26,6 +26,12 @@ export interface PushDeviceTransaction {
 
 export type PushDeviceRegistrationResult = 'registered' | 'conflict';
 
+export interface PushDeviceRegistrationBoundary {
+  withRegistrationTransaction<T>(
+    operation: (transaction: PushDeviceTransaction) => Promise<T>,
+  ): Promise<T>;
+}
+
 function retiredToken(row: PushDeviceRow, now: Date): string {
   return `retired:${row.id}:${now.getTime()}`;
 }
@@ -58,4 +64,15 @@ export async function reconcilePushDeviceRegistration(
     );
   }
   return 'registered';
+}
+
+export function registerPushDevice(
+  boundary: PushDeviceRegistrationBoundary,
+  userId: string,
+  registration: PushDeviceRegistration,
+  now: Date,
+): Promise<PushDeviceRegistrationResult> {
+  return boundary.withRegistrationTransaction((transaction) => (
+    reconcilePushDeviceRegistration(transaction, userId, registration, now)
+  ));
 }
