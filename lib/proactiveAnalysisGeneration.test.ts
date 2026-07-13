@@ -79,7 +79,8 @@ test('prompts express the closed token contract without numeric code points', ()
     assert.match(prompt, /copy only supplied evidence tokens exactly/i);
     assert.match(prompt, /five schema string locations/i);
     assert.match(prompt, /at most once/i);
-    for (const rule of ['alter', 'split', 'concatenate', 'nest', 'enumerate', 'manufacture', 'raw number', 'numeric symbol sequence', 'qualitative language']) {
+    assert.match(prompt, /terminate (?:its|the) clause or string/i);
+    for (const rule of ['alter', 'split', 'concatenate', 'nest', 'enumerate', 'manufacture', 'raw number', 'numeric symbol sequence', 'qualitative language', 'unit', 'sign', 'symbol']) {
       assert.match(prompt, new RegExp(rule, 'i'));
     }
   }
@@ -98,7 +99,7 @@ test('valid token output returns a consumable proof after one guarded call', asy
   });
 
   assert.equal(calls.length, 1);
-  assert.match(consumeGroundedAnalysisProof(proof).narrative, /45 ms/);
+  assert.match(consumeGroundedAnalysisProof(proof, source).narrative, /45 ms/);
 });
 
 const initialFailures: Array<{ name: string; response: (request: AnalysisGenerationRequest) => string; category: AnalysisFailureCategory }> = [
@@ -130,7 +131,7 @@ for (const { name, response, category } of initialFailures) {
       analysisFailureEvent('initial', category, 'repair_started'),
       analysisFailureEvent('repair', category, 'repair_succeeded'),
     ]);
-    assert.match(consumeGroundedAnalysisProof(proof).narrative, /45 ms/);
+    assert.match(consumeGroundedAnalysisProof(proof, source).narrative, /45 ms/);
   });
 }
 
@@ -189,7 +190,7 @@ test('source objects remain unchanged', async () => {
     generate: async (request) => tokenResponse(request),
     report: () => {},
   });
-  consumeGroundedAnalysisProof(proof);
+  consumeGroundedAnalysisProof(proof, mutableSource);
   assert.deepEqual(mutableSource, snapshot);
   assert.equal(Object.isFrozen(mutableSource), false);
   assert.equal(Object.isFrozen(mutableSource.availableContext), false);
@@ -212,6 +213,6 @@ test('source is encoded once per generation invocation', async () => {
     generate: async (request) => request.attempt === 'initial' ? '{' : tokenResponse(request),
     report: () => {},
   });
-  consumeGroundedAnalysisProof(proof);
+  consumeGroundedAnalysisProof(proof, source);
   assert.deepEqual(reads, { kind: 1, date: 1, input: 1, availableContext: 1 });
 });

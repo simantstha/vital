@@ -6,6 +6,7 @@ import {
   nextRetryAt,
   runClaimedAnalysis,
   shouldRunMorningBrief,
+  type AnalysisContext,
   type AnalysisJob,
   type WorkerRepository,
 } from './proactiveHealthWorker';
@@ -15,6 +16,7 @@ import {
   groundAnalysisText,
   modelPayload,
   type GroundedAnalysisProof,
+  type ProactiveAnalysisSource,
 } from './proactiveAnalysisGrounding';
 
 const valid = {
@@ -23,10 +25,16 @@ const valid = {
   observations: ['Sleep duration was recorded.'], nextSteps: ['Keep today comfortable.'],
 };
 
-function trustedProof(): GroundedAnalysisProof {
-  const encoded = encodeProactiveAnalysisRequest({
-    kind: 'workout', date: '2026-07-12', input: { value: 45 }, availableContext: {},
-  });
+function enabledContext(): AnalysisContext {
+  return { enabled: true, timezone: 'UTC', baselines: {}, profile: {}, metrics: {} };
+}
+
+function sourceFor(value: AnalysisJob, context = enabledContext()): ProactiveAnalysisSource {
+  return { kind: value.kind, date: value.localDate, input: value.input, availableContext: context };
+}
+
+function trustedProof(source: ProactiveAnalysisSource): GroundedAnalysisProof {
+  const encoded = encodeProactiveAnalysisRequest(source);
   const [token] = JSON.stringify(modelPayload(encoded)).match(/\{\{EVIDENCE_[A-Z]+\}\}/g) ?? [];
   assert.ok(token);
   return groundAnalysisText(JSON.stringify({ ...valid, narrative: `Available data included ${token}.` }), encoded);
@@ -56,7 +64,7 @@ test('timezone scheduling runs once at or after configured local minute', () => 
 test('disabled notification preference suppresses analysis without model or push', async () => {
   const calls: string[] = [];
   const repo = fakeRepository(calls, false);
-  await runClaimedAnalysis(job(), repo, async () => { calls.push('analyze'); return trustedProof(); }, async () => {
+  await runClaimedAnalysis(job(), repo, async (value, context) => { calls.push('analyze'); return trustedProof(sourceFor(value, context)); }, async () => {
     calls.push('push'); return { outcome: 'sent', retireToken: false };
   }, new Date());
   assert.deepEqual(calls, ['suppress']);
@@ -65,7 +73,7 @@ test('disabled notification preference suppresses analysis without model or push
 test('one logical notification is sent despite a duplicate worker delivery', async () => {
   const calls: string[] = [];
   const repo = fakeRepository(calls, true);
-  const analyze = async () => trustedProof();
+  const analyze = async (value: AnalysisJob, context: AnalysisContext) => trustedProof(sourceFor(value, context));
   const push = async () => { calls.push('push'); return { outcome: 'sent' as const, retireToken: false }; };
   await runClaimedAnalysis(job(), repo, analyze, push, new Date());
   await runClaimedAnalysis(job(), repo, analyze, push, new Date());
@@ -81,7 +89,7 @@ test('a grounded proof is not stored after lease ownership is lost', async () =>
   await runClaimedAnalysis(
     job(),
     repo,
-    async () => trustedProof(),
+    async (value, context) => trustedProof(sourceFor(value, context)),
     async () => ({ outcome: 'sent', retireToken: false }),
     new Date('2026-07-13T12:00:00Z'),
   );
@@ -89,9 +97,10 @@ test('a grounded proof is not stored after lease ownership is lost', async () =>
 });
 
 test('forged, copied, serialized, and reused proofs take the retry path before persistence or notification', async () => {
-  const consumed = trustedProof();
-  consumeGroundedAnalysisProof(consumed);
-  const fresh = trustedProof();
+  const expectedSource = sourceFor(job());
+  const consumed = trustedProof(expectedSource);
+  consumeGroundedAnalysisProof(consumed, expectedSource);
+  const fresh = trustedProof(expectedSource);
   const untrusted: GroundedAnalysisProof[] = [
     valid as unknown as GroundedAnalysisProof,
     {} as GroundedAnalysisProof,
@@ -120,16 +129,39 @@ test('forged, copied, serialized, and reused proofs take the retry path before p
   }
 });
 
+test('a fresh proof for another canonical request retries before queued persistence or notification', async () => {
+  const calls: string[] = [];
+  const repo = fakeRepository(calls, true);
+  repo.storeReady = async () => { calls.push('store'); return true; };
+  repo.markRetry = async () => { calls.push('retry'); return true; };
+  repo.claimNotification = async () => { calls.push('claim'); return 'notification-lease'; };
+  const expected = sourceFor(job());
+  const wrong = { ...expected, date: '2026-07-11' };
+  const proof = trustedProof(wrong);
+  await runClaimedAnalysis(
+    job(),
+    repo,
+    async () => proof,
+    async () => { calls.push('push'); return { outcome: 'sent', retireToken: false }; },
+    new Date('2026-07-13T12:00:00Z'),
+  );
+  assert.deepEqual(calls.filter((call) => call === 'retry'), ['retry']);
+  assert.equal(calls.includes('store'), false);
+  assert.equal(calls.includes('claim'), false);
+  assert.equal(calls.includes('push'), false);
+});
+
 test('morning completion consumes only a fresh trusted proof immediately before owned completion', () => {
   const calls: string[] = [];
   const completeOwned = (analysis: unknown) => { assert.ok(analysis); calls.push('complete'); };
-  const proof = trustedProof();
-  completeOwned(consumeMorningAnalysisProof(proof));
+  const expectedSource = sourceFor(job());
+  const proof = trustedProof(expectedSource);
+  completeOwned(consumeMorningAnalysisProof(proof, expectedSource));
   assert.deepEqual(calls, ['complete']);
 
-  const consumed = trustedProof();
-  consumeMorningAnalysisProof(consumed);
-  const fresh = trustedProof();
+  const consumed = trustedProof(expectedSource);
+  consumeMorningAnalysisProof(consumed, expectedSource);
+  const fresh = trustedProof(expectedSource);
   const untrusted: GroundedAnalysisProof[] = [
     valid as unknown as GroundedAnalysisProof,
     { ...fresh } as GroundedAnalysisProof,
@@ -137,9 +169,17 @@ test('morning completion consumes only a fresh trusted proof immediately before 
     consumed,
   ];
   for (const candidate of untrusted) {
-    assert.throws(() => completeOwned(consumeMorningAnalysisProof(candidate)), /invalid grounded analysis proof/i);
+    assert.throws(() => completeOwned(consumeMorningAnalysisProof(candidate, expectedSource)), /invalid grounded analysis proof/i);
   }
   assert.deepEqual(calls, ['complete']);
+});
+
+test('morning proof consumption rejects a fresh proof bound to another request without burning it', () => {
+  const expected = sourceFor(job());
+  const wrong = { ...expected, date: '2026-07-11' };
+  const proof = trustedProof(wrong);
+  assert.throws(() => consumeMorningAnalysisProof(proof, expected), /invalid grounded analysis proof/i);
+  assert.ok(consumeMorningAnalysisProof(proof, wrong));
 });
 
 test('a first failed analysis is retried after one minute', async () => {
@@ -183,7 +223,7 @@ function job(): AnalysisJob {
 function fakeRepository(calls: string[], enabled: boolean): WorkerRepository {
   let sent = false;
   return {
-    async getContext() { return { enabled, timezone: 'UTC', baselines: {}, profile: {}, metrics: {} }; },
+    async getContext() { return { ...enabledContext(), enabled }; },
     async renewAnalysisLease() { return true; }, async storeReady() { return true; }, async markRetry() { return true; }, async markFailed() { return true; },
     async suppress() { calls.push('suppress'); return true; },
     async suppressNotification() { calls.push('suppress'); return true; },

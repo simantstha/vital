@@ -34,7 +34,7 @@ export interface GenerateGroundedAnalysisArgs {
   report(event: AnalysisFailureEvent): void;
 }
 
-const TOKEN_CONTRACT = `Copy only supplied evidence tokens exactly. Copy them only into the five schema string locations: headline, shortInsight, narrative, observations, and nextSteps. Use each token at most once. Never alter, split, concatenate, nest, enumerate, or manufacture a token. Never write a raw number or numeric symbol sequence. Use qualitative language when no token fits.`;
+const TOKEN_CONTRACT = `Copy only supplied evidence tokens exactly. Copy them only into the five schema string locations: headline, shortInsight, narrative, observations, and nextSteps. Use each token at most once. Each token must terminate its clause or string and may be followed only by a terminal punctuation mark. Never place a sign before a token or a unit, percent, degree, or other numeric symbol after it. Never alter, split, concatenate, nest, enumerate, or manufacture a token. Never write a raw number or numeric symbol sequence. Use qualitative language when no token fits.`;
 
 export const PROACTIVE_ANALYSIS_SYSTEM_PROMPT = `You are Vital coach. Return JSON only with exactly headline, shortInsight, narrative, observations, and nextSteps. Keep the output observational and non-diagnostic. ${TOKEN_CONTRACT}`;
 

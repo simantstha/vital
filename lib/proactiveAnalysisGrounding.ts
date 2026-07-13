@@ -13,6 +13,7 @@ export interface EncodedProactiveAnalysisRequest { readonly [encodedBrand]: true
 interface PrivateEncodingState {
   payload: unknown;
   displays: ReadonlyMap<string, string>;
+  binding: string;
 }
 
 const encodings = new WeakMap<object, PrivateEncodingState>();
@@ -23,6 +24,9 @@ const RESERVED_EVIDENCE = /EVIDENCE_/iu;
 const TOKEN_FRAGMENT = /EVIDENCE|\{\{EVID|ENCE_[A-Z]*\}\}/iu;
 const NUMBER_START = /[-+.٫\p{N}]/u;
 const SOURCE_LEXEME = /^(?:[-+]?(?:(?:\p{Nd}{1,3}(?:[,٬]\p{Nd}{3})+|\p{Nd}+)(?:[.٫]\p{Nd}+)?|[.٫]\p{Nd}+)(?:[eE][-+]?\p{Nd}+)?|[\p{Nl}\p{No}]+)(?:\s*(?:[%٪]|[°℃℉](?:\p{L}+)?|[\p{L}µμ]+)(?:[\/_·*.-][\p{L}µμ%٪]+)*)?/u;
+const FORMAT_CONTROL = /\p{Cf}/u;
+const PREFIX_OPERATOR = /(?:\p{Dash_Punctuation}|[+\u2212\uFE62\uFF0B%٪°℃℉.,٬٫/])\s*$/u;
+const CLAUSE_BOUNDARY = /[.!?]\s+/gu;
 
 export type AnalysisFailureCategory = 'parse_failure' | 'schema_failure' | 'grounding_failure';
 
@@ -36,20 +40,39 @@ export class AnalysisContentError extends Error {
 declare const proofBrand: unique symbol;
 export interface GroundedAnalysisProof { readonly [proofBrand]: true }
 
-const proofs = new WeakMap<object, CoachAnalysis>();
+interface PrivateProofState {
+  value: CoachAnalysis;
+  binding: string;
+}
 
-function mintGroundedAnalysisProof(value: CoachAnalysis): GroundedAnalysisProof {
+const proofs = new WeakMap<object, PrivateProofState>();
+
+function requestBinding(payload: unknown, displays: ReadonlyMap<string, string>): string {
+  return JSON.stringify([payload, [...displays.entries()]]);
+}
+
+function mintGroundedAnalysisProof(value: CoachAnalysis, binding: string): GroundedAnalysisProof {
   const proof = Object.freeze({}) as GroundedAnalysisProof;
-  proofs.set(proof as object, value);
+  proofs.set(proof as object, { value, binding });
   return proof;
 }
 
-export function consumeGroundedAnalysisProof(proof: GroundedAnalysisProof): CoachAnalysis {
+export function consumeGroundedAnalysisProof(proof: GroundedAnalysisProof, expectedSource: ProactiveAnalysisSource): CoachAnalysis {
   if (!proof || typeof proof !== 'object') throw new Error('Invalid grounded analysis proof.');
-  const value = proofs.get(proof as object);
-  if (!value) throw new Error('Invalid grounded analysis proof.');
+  const state = proofs.get(proof as object);
+  if (!state) throw new Error('Invalid grounded analysis proof.');
+  let expectedBinding: string;
+  try {
+    const expected = encodeProactiveAnalysisRequest(expectedSource);
+    const expectedState = encodings.get(expected as object);
+    if (!expectedState) throw new Error('Invalid encoded proactive analysis request.');
+    expectedBinding = expectedState.binding;
+  } catch {
+    throw new Error('Invalid grounded analysis proof.');
+  }
+  if (state.binding !== expectedBinding) throw new Error('Invalid grounded analysis proof.');
   proofs.delete(proof as object);
-  return value;
+  return state.value;
 }
 
 export function modelPayload(encoded: EncodedProactiveAnalysisRequest): unknown {
@@ -71,6 +94,29 @@ function authoredStrings(value: CoachAnalysis): string[] {
   return [value.headline, value.shortInsight, value.narrative, ...value.observations, ...value.nextSteps];
 }
 
+function clauseStart(value: string, tokenStart: number): number {
+  let start = 0;
+  for (const boundary of value.slice(0, tokenStart).matchAll(CLAUSE_BOUNDARY)) {
+    start = boundary.index + boundary[0].length;
+  }
+  return start;
+}
+
+function assertClauseTerminalToken(value: string, start: number, end: number): void {
+  const startOfClause = clauseStart(value, start);
+  const prefix = value.slice(startOfClause, start);
+  if (FORMAT_CONTROL.test(value) || PREFIX_OPERATOR.test(prefix) || (startOfClause > 0 && !prefix.trim())) {
+    throw new AnalysisContentError('grounding_failure');
+  }
+
+  const suffix = value.slice(end);
+  if (!suffix || /^\s+$/u.test(suffix)) return;
+  if (!/[.!?]/u.test(suffix[0])) throw new AnalysisContentError('grounding_failure');
+  const afterPunctuation = suffix.slice(1);
+  if (!afterPunctuation || /^\s+$/u.test(afterPunctuation)) return;
+  if (!/^\s+/u.test(afterPunctuation)) throw new AnalysisContentError('grounding_failure');
+}
+
 function validateTokenUse(value: string, displays: ReadonlyMap<string, string>, used: Set<string>): void {
   assertNoRawNumbers(value);
   for (const match of value.matchAll(TOKENS)) {
@@ -81,6 +127,7 @@ function validateTokenUse(value: string, displays: ReadonlyMap<string, string>, 
     if (/[{}]/.test(value[start - 1] ?? '') || /[{}]/.test(value[end] ?? '')) {
       throw new AnalysisContentError('grounding_failure');
     }
+    assertClauseTerminalToken(value, start, end);
     used.add(token);
   }
   const scratch = value.replace(TOKENS, '');
@@ -123,7 +170,7 @@ export function groundAnalysisText(text: string, encoded: EncodedProactiveAnalys
       observations: validated.observations.map((value) => resolveTokens(value, state.displays)),
       nextSteps: validated.nextSteps.map((value) => resolveTokens(value, state.displays)),
     };
-    return mintGroundedAnalysisProof(parseCoachAnalysis(resolved));
+    return mintGroundedAnalysisProof(parseCoachAnalysis(resolved), state.binding);
   } catch {
     throw new AnalysisContentError('grounding_failure');
   }
@@ -206,23 +253,44 @@ export function encodeProactiveAnalysisRequest(source: ProactiveAnalysisSource):
     return token;
   };
 
+  const isUnarySign = (value: string, index: number): boolean => {
+    if (value[index] !== '-' && value[index] !== '+') return false;
+    if (index === 0) return true;
+    if (/\s/u.test(value[index - 1])) {
+      let previous = index - 1;
+      while (previous >= 0 && /\s/u.test(value[previous])) previous -= 1;
+      return previous < 0 || !/\p{N}/u.test(value[previous]);
+    }
+    return /[([{:;,=]/u.test(value[index - 1]);
+  };
+
   const encodeString = (value: string): string => {
     if (RESERVED_EVIDENCE.test(value)) throw new Error('Source contains a reserved evidence-token namespace fragment.');
     let encoded = '';
     let remaining = value;
+    let offset = 0;
     while (remaining) {
       const index = remaining.search(NUMBER_START);
       if (index < 0) return encoded + remaining;
       encoded += remaining.slice(0, index);
       remaining = remaining.slice(index);
+      offset += index;
+      if ((remaining[0] === '-' || remaining[0] === '+') && !isUnarySign(value, offset)) {
+        encoded += remaining[0];
+        remaining = remaining.slice(1);
+        offset += 1;
+        continue;
+      }
       const match = remaining.match(SOURCE_LEXEME);
       if (!match) {
         encoded += remaining[0];
         remaining = remaining.slice(1);
+        offset += 1;
         continue;
       }
       encoded += allocate(match[0]);
       remaining = remaining.slice(match[0].length);
+      offset += match[0].length;
     }
     return encoded;
   };
@@ -253,12 +321,18 @@ export function encodeProactiveAnalysisRequest(source: ProactiveAnalysisSource):
       const row = value as Record<string, unknown>;
       const exactUnit = typeof row.value === 'number' && typeof row.unit === 'string' ? row.unit : undefined;
       const metricKey = typeof row.value === 'number' && typeof row.metric === 'string' ? row.metric : undefined;
-      const output: Record<string, unknown> = {};
+      const output = Object.create(null) as Record<string, unknown>;
       for (const childKey of Object.keys(row).sort()) {
         const child = row[childKey];
-        output[childKey] = childKey === 'value' && typeof child === 'number'
+        const encodedKey = encodeString(childKey);
+        Object.defineProperty(output, encodedKey, {
+          configurable: true,
+          enumerable: true,
+          writable: true,
+          value: childKey === 'value' && typeof child === 'number'
           ? encodeValue(child, metricKey ?? key, exactUnit)
-          : encodeValue(child, childKey);
+          : encodeValue(child, childKey),
+        });
       }
       return output;
     } finally {
@@ -272,11 +346,15 @@ export function encodeProactiveAnalysisRequest(source: ProactiveAnalysisSource):
     input: encodeValue(source.input, 'input'),
     availableContext: encodeValue(source.availableContext, 'availableContext'),
   };
-  const payload: Record<string, unknown> = {};
-  for (const key of Object.keys(semanticallyOrdered).sort() as Array<keyof typeof semanticallyOrdered>) payload[key] = semanticallyOrdered[key];
+  const payload = Object.create(null) as Record<string, unknown>;
+  for (const key of Object.keys(semanticallyOrdered).sort() as Array<keyof typeof semanticallyOrdered>) {
+    Object.defineProperty(payload, key, { configurable: true, enumerable: true, writable: true, value: semanticallyOrdered[key] });
+  }
   deepFreeze(payload);
-  assertNoRawNumbers(JSON.stringify(payload));
+  const serializedPayload = JSON.stringify(payload);
+  assertNoRawNumbers(serializedPayload);
+  const binding = requestBinding(payload, displays);
   const encoded = payload as unknown as EncodedProactiveAnalysisRequest;
-  encodings.set(encoded as object, { payload, displays });
+  encodings.set(encoded as object, { payload, displays, binding });
   return encoded;
 }

@@ -1,6 +1,6 @@
 import { localDayKey } from './localDay';
 import { type CoachAnalysis } from './proactiveAnalysisSchema';
-import { consumeGroundedAnalysisProof, type GroundedAnalysisProof } from './proactiveAnalysisGrounding';
+import { consumeGroundedAnalysisProof, type GroundedAnalysisProof, type ProactiveAnalysisSource } from './proactiveAnalysisGrounding';
 
 export { parseCoachAnalysis, type CoachAnalysis } from './proactiveAnalysisSchema';
 
@@ -56,8 +56,8 @@ export function notificationKey(job: AnalysisJob): string { return `${job.kind}:
 export function morningKey(userId: string, date: string): string { return `morning:${userId}:${date}`; }
 export function currentLocalDate(now: Date, timezone: string): string { return localDayKey(now, timezone); }
 
-export function consumeMorningAnalysisProof(proof: GroundedAnalysisProof): CoachAnalysis {
-  return consumeGroundedAnalysisProof(proof);
+export function consumeMorningAnalysisProof(proof: GroundedAnalysisProof, expectedSource: ProactiveAnalysisSource): CoachAnalysis {
+  return consumeGroundedAnalysisProof(proof, expectedSource);
 }
 
 export async function runClaimedAnalysis(
@@ -73,7 +73,12 @@ export async function runClaimedAnalysis(
     const context = await repository.getContext(job);
     if (!context.enabled) { await repository.suppress(job); return; }
     const proof = await analyze(job, context);
-    const result = consumeGroundedAnalysisProof(proof);
+    const result = consumeGroundedAnalysisProof(proof, {
+      kind: job.kind,
+      date: job.localDate,
+      input: job.input,
+      availableContext: context,
+    });
     if (!await repository.renewAnalysisLease(job, new Date())) return;
     if (!await repository.storeReady(job, result)) return;
     const notificationToken = await repository.claimNotification(job, now);

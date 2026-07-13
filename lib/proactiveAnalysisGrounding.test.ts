@@ -8,6 +8,7 @@ import {
   encodeProactiveAnalysisRequest,
   groundAnalysisText,
   modelPayload,
+  type ProactiveAnalysisSource,
 } from './proactiveAnalysisGrounding';
 
 const validAnalysis = {
@@ -83,6 +84,22 @@ test('sorts object keys but preserves array order', () => {
   assert.deepEqual(Object.keys(encoded), ['availableContext', 'date', 'input', 'kind']);
   assert.deepEqual(Object.keys(encoded.input as object), ['a', 'z']);
   assert.notEqual(JSON.stringify(encoded.availableContext).indexOf('EVIDENCE_C'), -1);
+});
+
+test('encodes numeric object keys and preserves __proto__ as null-prototype data', () => {
+  const input = JSON.parse('{"__proto__":{"zone2":45},"vo2_max":7,"zone٤":8}') as Record<string, unknown>;
+  const payload = modelPayload(encodeProactiveAnalysisRequest({
+    kind: 'workout', date: 'date', input, availableContext: {},
+  })) as { input: Record<string, unknown> };
+  const serialized = JSON.stringify(payload);
+  assert.doesNotMatch(serialized, /\p{N}/u);
+  assert.equal(Object.getPrototypeOf(payload.input), null);
+  assert.equal(Object.hasOwn(payload.input, '__proto__'), true);
+  assert.equal(Object.keys(payload.input).length, 3);
+  const protoValue = payload.input.__proto__ as Record<string, unknown>;
+  assert.equal(Object.getPrototypeOf(protoValue), null);
+  assert.equal(Object.keys(protoValue).length, 1);
+  assert.doesNotMatch(Object.keys(protoValue)[0], /\p{N}/u);
 });
 
 test('rejects non-JSON and non-finite input before transport', () => {
@@ -174,17 +191,31 @@ test('captures unsigned leading decimal separators as complete exact displays', 
     const payload = modelPayload(encodeProactiveAnalysisRequest({
       kind: 'sleep', date: 'date', input: { arabic: '٫٥', ascii: '.5' }, availableContext: {},
     })) as { input: Record<string, string> };
-    assert.deepEqual(payload.input, { arabic: '{{EVIDENCE_A}}', ascii: '{{EVIDENCE_B}}' });
+    assert.deepEqual({ ...payload.input }, { arabic: '{{EVIDENCE_A}}', ascii: '{{EVIDENCE_B}}' });
   });
   assert.deepEqual(displays, ['٫٥', '.5']);
 });
 
+test('preserves date and range separators while storing only lexically unary signs', () => {
+  const displays = captureEvidenceDisplays(() => {
+    const payload = modelPayload(encodeProactiveAnalysisRequest({
+      kind: 'sleep', date: '2026-07-13', input: { range: '5-10', signed: 'change -2; then +3', spacedRange: '20 - 30', tightRange: '40 -50' }, availableContext: {},
+    })) as { date: string; input: Record<string, string> };
+    assert.match(payload.date, /^\{\{EVIDENCE_[A-Z]+\}\}-\{\{EVIDENCE_[A-Z]+\}\}-\{\{EVIDENCE_[A-Z]+\}\}$/);
+    assert.match(payload.input.range, /^\{\{EVIDENCE_[A-Z]+\}\}-\{\{EVIDENCE_[A-Z]+\}\}$/);
+    assert.match(payload.input.spacedRange, /^\{\{EVIDENCE_[A-Z]+\}\} - \{\{EVIDENCE_[A-Z]+\}\}$/);
+    assert.match(payload.input.tightRange, /^\{\{EVIDENCE_[A-Z]+\}\} -\{\{EVIDENCE_[A-Z]+\}\}$/);
+  });
+  assert.deepEqual(displays, ['2026', '07', '13', '5', '10', '-2', '+3', '20', '30', '40', '50']);
+});
+
 test('resolves exact private displays and consumes proof once', () => {
-  const encoded = encodeProactiveAnalysisRequest({
+  const request: ProactiveAnalysisSource = {
     kind: 'workout', date: 'date',
     input: { metrics: [{ metric: 'hrv_sdnn', value: 45 }], summary: 'Duration was 2 hours.' },
     availableContext: {},
-  });
+  };
+  const encoded = encodeProactiveAnalysisRequest(request);
   const tokens = evidenceTokens(encoded);
   const proof = groundAnalysisText(JSON.stringify({
     headline: 'A useful signal',
@@ -193,17 +224,18 @@ test('resolves exact private displays and consumes proof once', () => {
     observations: [`Duration was ${tokens[1]}.`],
     nextSteps: ['Keep today comfortable.'],
   }), encoded);
-  const resolved = consumeGroundedAnalysisProof(proof);
+  const resolved = consumeGroundedAnalysisProof(proof, request);
   assert.match(resolved.narrative, /45 ms/);
   assert.match(resolved.observations[0], /2 hours/);
   assert.doesNotMatch(JSON.stringify(resolved), /EVIDENCE/);
-  assert.throws(() => consumeGroundedAnalysisProof(proof));
+  assert.throws(() => consumeGroundedAnalysisProof(proof, request));
 });
 
 test('accepts one optional complete JSON code fence', () => {
-  const encoded = encodeProactiveAnalysisRequest({ kind: 'sleep', date: 'date', input: {}, availableContext: {} });
+  const request: ProactiveAnalysisSource = { kind: 'sleep', date: 'date', input: {}, availableContext: {} };
+  const encoded = encodeProactiveAnalysisRequest(request);
   const proof = groundAnalysisText(`\`\`\`json\n${JSON.stringify(validAnalysis)}\n\`\`\``, encoded);
-  assert.deepEqual(consumeGroundedAnalysisProof(proof), validAnalysis);
+  assert.deepEqual(consumeGroundedAnalysisProof(proof, request), validAnalysis);
 });
 
 test('classifies malformed and fenced-invalid JSON as parse failures', () => {
@@ -238,6 +270,36 @@ test('rejects raw numeric forms and invalid evidence-token forms as grounding fa
   }), encoded));
 });
 
+test('rejects composable token syntax and accepts clause-terminal token prose', () => {
+  const request: ProactiveAnalysisSource = {
+    kind: 'workout', date: 'date', input: { first: 45, second: 46 }, availableContext: {},
+  };
+  const encoded = encodeProactiveAnalysisRequest(request);
+  const [first, second] = evidenceTokens(encoded);
+  for (const narrative of [
+    `-${first}`, `- ${first}`, `+${first}`, `+ ${first}`, `−${first}`, `− ${first}`, `＋${first}`,
+    `%${first}`, `% ${first}`, `°${first}`, `° ${first}`,
+    `${first}%`, `${first} %`, `${first}°`, `${first} °C`, `${first} kg`, `${first},`,
+    `${first}.${second}`, `${first}. ${second}`, `${first} . ${second}`,
+    `${first}/${second}`, `${first} / ${second}`, `${first}:${second}`, `${first} : ${second}`,
+    `${first}${second}`, `${first} ${second}`, `${first}\u200b${second}`, `${first}\u2060 kg`,
+  ]) {
+    assertCategory('grounding_failure', () => groundAnalysisText(JSON.stringify({ ...validAnalysis, narrative }), encoded));
+  }
+
+  for (const narrative of [
+    `HRV was ${first}.`,
+    `Recorded value: ${first}! More qualitative context followed.`,
+    `First value was ${first}. Second value was ${second}?`,
+  ]) {
+    const fresh = encodeProactiveAnalysisRequest(request);
+    const [freshFirst, freshSecond] = evidenceTokens(fresh);
+    const freshNarrative = narrative.replaceAll(first, freshFirst).replaceAll(second, freshSecond);
+    const proof = groundAnalysisText(JSON.stringify({ ...validAnalysis, narrative: freshNarrative }), fresh);
+    assert.doesNotMatch(JSON.stringify(consumeGroundedAnalysisProof(proof, request)), /EVIDENCE/);
+  }
+});
+
 test('rejects a valid token copied from another encoded request', () => {
   const encoded = encodeProactiveAnalysisRequest({ kind: 'sleep', date: 'date', input: {}, availableContext: {} });
   const other = encodeProactiveAnalysisRequest({ kind: 'sleep', date: 'date', input: { first: 45, second: 46 }, availableContext: {} });
@@ -252,18 +314,29 @@ test('revalidates schema limits after token expansion', () => {
 });
 
 test('proofs cannot be forged or copied', () => {
-  const encoded = encodeProactiveAnalysisRequest({ kind: 'sleep', date: 'date', input: {}, availableContext: {} });
+  const request: ProactiveAnalysisSource = { kind: 'sleep', date: 'date', input: {}, availableContext: {} };
+  const encoded = encodeProactiveAnalysisRequest(request);
   const proof = groundAnalysisText(tokenResponse(encoded), encoded);
   for (const forged of [validAnalysis, { value: validAnalysis }, { ...proof }, JSON.parse(JSON.stringify(proof))]) {
-    assert.throws(() => consumeGroundedAnalysisProof(forged as GroundedAnalysisProof), /invalid grounded analysis proof/i);
+    assert.throws(() => consumeGroundedAnalysisProof(forged as GroundedAnalysisProof, request), /invalid grounded analysis proof/i);
   }
-  assert.deepEqual(consumeGroundedAnalysisProof(proof), validAnalysis);
+  assert.deepEqual(consumeGroundedAnalysisProof(proof, request), validAnalysis);
+});
+
+test('proof consumption requires the exact canonical source binding without burning on mismatch', () => {
+  const requestA: ProactiveAnalysisSource = { kind: 'workout', date: 'date', input: { value: 45 }, availableContext: {} };
+  const requestB: ProactiveAnalysisSource = { kind: 'workout', date: 'date', input: { value: 46 }, availableContext: {} };
+  const encoded = encodeProactiveAnalysisRequest(requestA);
+  const proof = groundAnalysisText(tokenResponse(encoded), encoded);
+  assert.throws(() => consumeGroundedAnalysisProof(proof, requestB), /invalid grounded analysis proof/i);
+  assert.match(consumeGroundedAnalysisProof(proof, requestA).narrative, /45/);
 });
 
 test('identical source displays receive distinct one-use capabilities', () => {
-  const encoded = encodeProactiveAnalysisRequest({
+  const request: ProactiveAnalysisSource = {
     kind: 'workout', date: 'date', input: { a: 45, b: 45 }, availableContext: {},
-  });
+  };
+  const encoded = encodeProactiveAnalysisRequest(request);
   const [first, second] = evidenceTokens(encoded);
   assertCategory('grounding_failure', () => groundAnalysisText(JSON.stringify({
     ...validAnalysis, narrative: `${first} and ${first}`,
@@ -271,7 +344,7 @@ test('identical source displays receive distinct one-use capabilities', () => {
   const proof = groundAnalysisText(JSON.stringify({
     ...validAnalysis, narrative: `First ${first}.`, observations: [`Second ${second}.`],
   }), encoded);
-  const resolved = consumeGroundedAnalysisProof(proof);
+  const resolved = consumeGroundedAnalysisProof(proof, request);
   assert.match(resolved.narrative, /First 45\./);
   assert.match(resolved.observations[0], /Second 45\./);
 });
