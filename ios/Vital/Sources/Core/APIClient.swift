@@ -625,13 +625,23 @@ struct APIClient {
 
     // MARK: - Diet sheet (today's logged meals)
 
-    /// Fetches today's logged meals (redesign-v3 Phase 3 diet sheet), grouped
-    /// by slot client-side. Same tz-encoding convention as `fetchToday()` /
-    /// `fetchPlan()`.
-    func fetchTodayMealLogs() async throws -> MealLogsResponse {
+    /// Fetches logged meals for a given local day (redesign-v3 Phase 6 Logs
+    /// day-pager), or today's when `date` is nil (redesign-v3 Phase 3 diet
+    /// sheet). Same tz-encoding convention as `fetchToday()` / `fetchPlan()`.
+    func fetchMealLogs(date: String? = nil) async throws -> MealLogsResponse {
         let tz = TimeZone.current.identifier
         let encoded = tz.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? tz
-        return try await get("/api/meals/log?tz=\(encoded)")
+        var path = "/api/meals/log?tz=\(encoded)"
+        if let date {
+            path += "&date=\(date)"
+        }
+        return try await get(path)
+    }
+
+    /// Today's logged meals — thin forwarding wrapper kept so existing call
+    /// sites (e.g. `DietSheetViewModel`) don't need to change.
+    func fetchTodayMealLogs() async throws -> MealLogsResponse {
+        try await fetchMealLogs(date: nil)
     }
 
     func deleteMealLog(id: String) async throws {
@@ -1042,6 +1052,12 @@ struct LogItem: Decodable, Identifiable {
     let title: String
     let subtitle: String
     let imageThumb: String?
+    /// meal_logged only — kcal eaten (redesign-v3 Phase 6 Logs day-pager).
+    let kcal: Double?
+    /// workout_completed only — distance in km (redesign-v3 Phase 6).
+    let km: Double?
+    /// sleep_session only — duration in ms (redesign-v3 Phase 6).
+    let sleepMs: Double?
 }
 
 struct LogsResponse: Decodable {
