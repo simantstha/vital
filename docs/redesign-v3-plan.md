@@ -1,6 +1,6 @@
 # Vital app redesign — "Today Screen v3" implementation plan
 
-**Status: Phases 0–3 + 5 done; Phase 4 in PR #55** · Branch: `feat/redesign-v3` (off `main`)
+**Status: Phases 0–3 + 5–6 done; Phase 4 in PR #55** · Branch: `feat/redesign-v3` (off `main`)
 Source of truth for the design: Claude Design project
 <https://claude.ai/design/p/67904bc9-0509-4bb9-b4bf-2219bc3478fb?file=Today+Screen+v3.html>
 (file `Today Screen v3.html` — a full 5-tab React/Tailwind mock of the app).
@@ -224,14 +224,15 @@ commits beyond main; ElevenLabs TTS already works via `/api/tts`.)
       metric + `calibration` in the `/api/trends` response (see changelog).
 
 ### Phase 6 — Logs day pager
-**Owner: unclaimed · Suggested agent: Haiku/Sonnet · iOS · needs Phases 0+3**
+**Owner: DONE (2026-07-12, Sonnet subagent) · iOS + small backend · needed Phases 0+3**
 
-- [ ] Day pager header (‹ / › buttons, disabled at ends; label + date +
+- [x] Day pager header (‹ / › buttons, disabled at ends; label + date +
       summary "3 entries · 640 kcal · 2.4 km").
-- [ ] Per-day diet budget card (read-only "Past day" variant) — needs per-day
-      diet totals; check `/api/logs` response, extend backend if it lacks
-      per-day macro rollups (Haiku backend task).
-- [ ] Entries list in new card idiom + dashed add button (today only).
+- [x] Per-day diet budget card (read-only "Past day" variant) — per-day meal
+      entries via new `?date=YYYY-MM-DD` on `GET /api/meals/log`; summary
+      needed structured fields, so `/api/logs` items gained optional
+      `kcal`/`km`/`sleepMs` (see changelog).
+- [x] Entries list in new card idiom + dashed add button (today only).
 
 ### Phase 7 — Profile & Coach restyle
 **Owner: unclaimed · Suggested agent: Haiku · iOS · needs Phase 0**
@@ -456,3 +457,45 @@ commits beyond main; ElevenLabs TTS already works via `/api/tts`.)
   no Trends overlap, but test count is 40 now, not 13; Phase 7's
   `GlassCard`→`VitalCard` migration can copy this phase's explorer pattern
   (same padding/radius args, only the surface type swaps).
+- 2026-07-12: Phase 6 done (Sonnet subagent) — Logs day pager, branch
+  `feat/redesign-v3-logs-pager` **stacked on `feat/redesign-v3-trends`**
+  (PR bases on the Phase 5 branch, so its diff stays clean; GitHub
+  auto-retargets to main when Phase 5's PR merges — merge order is
+  #60 → this one). Backend (both additive): `GET /api/meals/log` gained
+  `?date=YYYY-MM-DD` (regex-validated, 400 on malformed, exactly the
+  override the Phase 3 entry anticipated; omitted → identical to before);
+  `/api/logs` items gained conditional `kcal` (meal_logged only — food
+  eaten, never workout burn), `km` (workout_completed; events `distance_m`,
+  HK `queryWorkouts` rows via the same `distance_m`-wins-over-`distanceKm`
+  fallback `lib/brain/dietBudget.ts` uses), and `sleepMs` (sleep_session) —
+  so the pager's per-day summary line never parses formatted title strings.
+  iOS: `LogsViewModel` rewritten around a fixed 7-slot `LogDay` pager model
+  (index 0 = today; empty days render with an empty-state row) + pure
+  `LogsPagerSummary` helpers (bucketing, "Today"/"Yesterday"/weekday labels,
+  meta rule: sleep/HRV → "auto", else "7:41 PM"-style absolute time,
+  summary line "N entries[ · N kcal][ · N.N km][ · Hh Mm sleep]" — the
+  sleep part only on days with neither kcal nor km, per the mock; diet
+  rollup vs `fetchDietGoal().current` targets with `remaining` clamped ≥ 0)
+  — same testable-pure-enum convention as Phase 5's `TrendsSummary`, covered
+  by 15 new tests in `LogsPagerTests.swift`. `LogsView` rewritten: screen
+  title + "Everything you and your devices record", ‹/› pager row (40pt
+  circular buttons, card-fill + shadow enabled / glassFill + tertiary
+  disabled at ends), new `DietBudgetCardView` (mock's DietBudget: "Log
+  food ›" tappable today → opens the same Phase 3 `DietSheetView` the
+  Today tab uses, "Past day" read-only otherwise; 48pt remaining, 3pt
+  progress capsules, 3-column macro grid reusing `MacroProgress` from
+  `TodayViewModel`), hairline-separated entries in one `VitalCard` with
+  `IconBadge(.soft)` (photo thumbnails kept; per-type tint colors dropped —
+  mock is uniform limeSoft), dashed "Add to today's log" button (today
+  only → diet sheet). `APIClient`: `fetchMealLogs(date:)` generalizes
+  `fetchTodayMealLogs()` (kept as a forwarder); `LogItem` gained optional
+  `kcal`/`km`/`sleepMs`. Caching: diet goal fetched once; meal logs cached
+  per dayKey, today's invalidated when the diet sheet closes. Deviations:
+  `selectDay` is non-async (spawns its own Task) for button ergonomics;
+  spinner only when `days.isEmpty` so pull-to-refresh doesn't blank the
+  pager. Verify: backend lint/tsc/build green; iOS xcodegen + build + test
+  on `Vital-iPhone16` → **TEST SUCCEEDED, 73/73** (58 + 15 new). Note for
+  Phase 7/8: the `enum <Feature>Summary` pure-helper pattern is now house
+  convention (TrendsSummary, LogsPagerSummary); `DietBudgetCardView`'s
+  tappable-vs-readonly split may be reusable; no skeleton state while a
+  day's diet data loads — the card simply appears when the fetch resolves.

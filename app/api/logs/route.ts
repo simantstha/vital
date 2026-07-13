@@ -12,8 +12,16 @@
  *     timestamp: string (ISO 8601),
  *     title:     string,
  *     subtitle:  string,
+ *     imageThumb?: string,  // meal_logged only, when the log had a photo
+ *     kcal?:       number,  // meal_logged only — kcal eaten (not burned)
+ *     km?:         number,  // workout_completed only — distance, 2dp
+ *     sleepMs?:    number,  // sleep_session only — duration in ms
  *   }]
  * }
+ * (redesign-v3 Phase 6: kcal/km/sleepMs added so the Logs day-pager can
+ * summarize a day's entries without re-parsing title/subtitle strings.
+ * Each is a conditional-spread field, present only when the source payload
+ * carries it — same convention as the pre-existing imageThumb field.)
  */
 
 import { NextResponse } from 'next/server';
@@ -156,7 +164,21 @@ export async function GET(request: Request): Promise<NextResponse> {
     .limit(200);
 
   const eventItems = events.map(e => {
-    const thumb = str(pl(e.payload).imageThumb);
+    const p = pl(e.payload);
+    const thumb = str(p.imageThumb);
+
+    // meal_logged — kcal eaten (same fields formatTitle reads).
+    const mealKcal = e.type === 'meal_logged' ? (num(p.kcal) ?? num(p.calories)) : undefined;
+
+    // workout_completed — distance in km, from distance_m (meters).
+    const distM = e.type === 'workout_completed' ? num(p.distance_m) : undefined;
+    const workoutKm = distM != null ? Math.round((distM / 1000) * 100) / 100 : undefined;
+
+    // sleep_session — duration in ms.
+    const sleepMs = e.type === 'sleep_session'
+      ? (num(p.duration_ms) ?? (num(p.duration_s) != null ? num(p.duration_s)! * 1_000 : undefined))
+      : undefined;
+
     return {
       id:        e.id,
       type:      e.type,
@@ -164,6 +186,9 @@ export async function GET(request: Request): Promise<NextResponse> {
       title:     formatTitle(e.type, e.payload),
       subtitle:  formatSubtitle(e.type, e.payload),
       ...(thumb ? { imageThumb: thumb } : {}),
+      ...(mealKcal != null ? { kcal: Math.round(mealKcal) } : {}),
+      ...(workoutKm != null ? { km: workoutKm } : {}),
+      ...(sleepMs != null ? { sleepMs } : {}),
     };
   });
 
@@ -176,12 +201,17 @@ export async function GET(request: Request): Promise<NextResponse> {
     const label = wtype.charAt(0).toUpperCase() + wtype.slice(1);
     const durationMin = num(w.durationMin);
     const kcal = num(w.kcal);
+    // distance_m (meters) wins over distanceKm (already km) — same fallback
+    // precedent as lib/brain/dietBudget.ts's diet-budget rollup.
+    const distM = num(w.distance_m);
+    const km = distM != null ? distM / 1000 : num(w.distanceKm);
     return {
       id:        str(w.hkUuid) ?? `${w.date}-workout-${i}`,
       type:      'workout_completed',
       timestamp: `${w.date}T12:00:00.000Z`,
       title:     durationMin != null ? `${label} — ${Math.round(durationMin)} min` : label,
       subtitle:  kcal != null ? `~${Math.round(kcal)} kcal` : 'Workout logged',
+      ...(km != null ? { km: Math.round(km * 100) / 100 } : {}),
     };
   });
 
