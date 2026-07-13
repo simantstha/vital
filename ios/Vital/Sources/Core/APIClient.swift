@@ -719,6 +719,22 @@ struct APIClient {
         try validate(response)
         return try decoder.decode(OnboardingResponse.self, from: data)
     }
+
+    // MARK: - Coach reset
+
+    func resetCoachConversation() async throws {
+        guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/coach/reset") else {
+            throw APIError.invalidURL
+        }
+        var request = authorizedRequest(url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 10
+        struct Body: Encodable {}
+        request.httpBody = try encoder.encode(Body())
+        let (_, response) = try await session.data(for: request)
+        try validate(response)
+    }
 }
 
 // MARK: - Errors
@@ -1298,6 +1314,7 @@ protocol CoachAPIProviding {
     func uploadSTTAudio(fileURL: URL) async -> String?
     func fetchCoachRestoration() async throws -> CoachRestorationResponse
     func fetchCoachOpener() async throws -> String
+    func resetCoachConversation() async throws
     func streamCoach(
         message: String,
         imageBase64: String?,

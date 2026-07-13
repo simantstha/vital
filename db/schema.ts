@@ -34,6 +34,12 @@ export const users = p.pgTable('users', {
   protein_target_g: p.integer('protein_target_g'),
   carbs_target_g:   p.integer('carbs_target_g'),
   fat_target_g:     p.integer('fat_target_g'),
+
+  // Manual "new chat" boundary (lib/brain/conversationWindow.ts). Set to now()
+  // when the user taps "New chat"; messages at/before this timestamp are
+  // excluded from both coach restore (GET /api/coach) and the LLM prompt
+  // context (assembleContext), same as the automatic 4h-inactivity cutoff.
+  chat_reset_at:   p.timestamp('chat_reset_at', { withTimezone: true }),
 });
 
 // ─── events (append-only) ────────────────────────────────────────────────────

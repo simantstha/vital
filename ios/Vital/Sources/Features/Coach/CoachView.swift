@@ -6,6 +6,7 @@ struct CoachView: View {
     @StateObject private var vm: CoachViewModel
     @Namespace private var bottomAnchor
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
 
     /// Set once the user taps the mic while permission is denied, so the
     /// inline "go to Settings" hint only appears after they've actually
@@ -48,10 +49,17 @@ struct CoachView: View {
             specialistEdgeGlow
         }
         // Fetch a fresh, data-aware opener when the Coach tab appears.
-        .task { vm.loadOpener() }
+        // Check for stale conversations on every appearance.
+        .task {
+            vm.refreshIfStale()
+            vm.loadOpener()
+        }
         // Leaving the view mid-stream (e.g. onboarding CoachIntro → Continue)
         // must not leave a stream task running against a gone view.
         .onDisappear { vm.cancelStreaming() }
+        .onChange(of: scenePhase) { _, newPhase in
+            if newPhase == .active { vm.refreshIfStale() }
+        }
         .onChange(of: vm.activePersona.id) { _, personaID in
             specialistGlowExpanded = false
             guard personaID != "vital", !reduceMotion else { return }
@@ -108,6 +116,15 @@ struct CoachView: View {
             }
 
             Spacer()
+
+            Button(action: vm.startNewChat) {
+                Image(systemName: "square.and.pencil")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Theme.Colors.textPrimary)
+            }
+            .accessibilityLabel("New chat")
+            .opacity(vm.isOnboarding ? 0.0 : 1.0)
+            .disabled(vm.isStreaming)
         }
         .padding(.horizontal, Theme.Spacing.lg)
         .padding(.top, Theme.Spacing.md)

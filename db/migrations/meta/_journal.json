@@ -64,6 +64,13 @@
       "when": 1783892370544,
       "tag": "0008_milky_black_tarantula",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1783966060897,
+      "tag": "0009_flippant_jigsaw",
+      "breakpoints": true
     }
   ]
 }
