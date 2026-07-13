@@ -28,14 +28,23 @@ struct RootTabView: View {
 
     @State private var selected: Tab = .today
 
+    /// Owned here (not by `CoachView`) so Today's voice FAB can send a
+    /// transcript into the same conversation the Coach tab renders — see
+    /// `CoachView.init(vm:)` and `CoachViewModel.sendExternalVoiceTranscript`.
+    /// Lifting this was flagged in the Phase 0/1 changelog entries in
+    /// `docs/redesign-v3-plan.md` as the mechanism Phase 4 would need.
+    @StateObject private var coachVM = CoachViewModel()
+
     var body: some View {
         ZStack(alignment: .bottom) {
             TabView(selection: $selected) {
-                TodayView()
+                TodayView(
+                    coachVM: coachVM,
+                    switchToCoachTab: { withAnimation(.easeInOut(duration: 0.25)) { selected = .coach } }
+                )
                     .tag(Tab.today)
 
-                CoachView(initialMessage: router.coachContext)
-                    .id(router.coachContext)
+                CoachView(vm: coachVM)
                     .tag(Tab.coach)
 
                 TrendsView()
@@ -52,7 +61,12 @@ struct RootTabView: View {
             tabBar
         }
         .tint(Theme.Colors.accentContent)
-        .onChange(of: router.coachContext) { _, value in if value != nil { selected = .coach } }
+        .onChange(of: router.coachContext) { _, value in
+            if let value {
+                coachVM.input = value
+                selected = .coach
+            }
+        }
         .sheet(item: $router.route) { route in
             switch route {
             case .workoutAnalysis(let id): WorkoutAnalysisView(id: id)

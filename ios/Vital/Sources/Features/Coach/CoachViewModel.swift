@@ -356,6 +356,26 @@ final class CoachViewModel: ObservableObject {
         }
     }
 
+    // MARK: - External voice entry point (Today's voice FAB)
+
+    /// Entry point for a transcript captured by a mic *outside* this view
+    /// model's own tap-to-talk button — specifically Today's voice FAB
+    /// (`Features/Today/VoiceFABView.swift`), which owns its own
+    /// `SpeechTranscriber` instance and does its own record → cloud-STT
+    /// upload, then hands the final transcript here so it flows through the
+    /// exact same send/stream/speak pipeline as a Coach-tab voice turn: the
+    /// message lands in this shared `rows` thread, and the reply is spoken
+    /// aloud via `speaker` (voice-in implies voice-out — same rule
+    /// `toggleVoiceRecording` already follows, no new setting invented).
+    func sendExternalVoiceTranscript(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !isStreaming else { return }
+        speaker.stop()
+        input = trimmed
+        pendingSentByVoice = true
+        send()
+    }
+
     // MARK: - Opener
 
     /// Restores transcript and specialist UI state from the server. Message

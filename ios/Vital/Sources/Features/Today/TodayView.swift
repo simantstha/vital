@@ -5,12 +5,28 @@ import SwiftUI
 struct TodayView: View {
     @StateObject private var vm = TodayViewModel()
 
+    /// Shared with the Coach tab (owned by `RootTabView`) so the voice FAB's
+    /// transcript lands in the same conversation thread; `switchToCoachTab`
+    /// is the mechanism the Phase 0/1 changelog flagged as needed here.
+    @ObservedObject private var coachVM: CoachViewModel
+    private let switchToCoachTab: () -> Void
+
+    init(coachVM: CoachViewModel, switchToCoachTab: @escaping () -> Void) {
+        self.coachVM = coachVM
+        self.switchToCoachTab = switchToCoachTab
+    }
+
     // Sheet / navigation state
     @State private var showLogSheet = false
     @State private var showAddItem = false
     @State private var actionsItem: PlanItem? = nil
     @State private var selectedMeal: MealRow? = nil
     @State private var mealDetailPlanItemID: PlanItem.ID? = nil
+
+    /// The voice FAB must never overlap an open sheet.
+    private var isAnySheetOpen: Bool {
+        showLogSheet || showAddItem || actionsItem != nil || selectedMeal != nil
+    }
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -55,6 +71,21 @@ struct TodayView: View {
             .task {
                 await vm.loadHealthData()
                 if vm.didLoadToday { ReminderScheduler.shared.briefViewed(at: Date()) }
+            }
+
+            if !isAnySheetOpen {
+                VoiceFABView(
+                    coachVM: coachVM,
+                    onSent: {
+                        vm.toastMessage = "Sent to your coach"
+                        Task {
+                            // Let the toast register on Today before handing
+                            // off to the Coach tab, where the reply streams in.
+                            try? await Task.sleep(for: .seconds(0.6))
+                            switchToCoachTab()
+                        }
+                    }
+                )
             }
         }
         .toast(message: $vm.toastMessage)

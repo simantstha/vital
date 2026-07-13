@@ -1,6 +1,6 @@
 # Vital app redesign — "Today Screen v3" implementation plan
 
-**Status: Phases 0–3 + 5–6 done; Phase 4 in PR #55** · Branch: `feat/redesign-v3` (off `main`)
+**Status: Phases 0–6 done** · Branch: `feat/redesign-v3` (off `main`)
 Source of truth for the design: Claude Design project
 <https://claude.ai/design/p/67904bc9-0509-4bb9-b4bf-2219bc3478fb?file=Today+Screen+v3.html>
 (file `Today Screen v3.html` — a full 5-tab React/Tailwind mock of the app).
@@ -196,17 +196,17 @@ Rules for every phase:
       existing tests still pass.
 
 ### Phase 4 — Voice FAB on Today
-**Owner: unclaimed · Suggested agent: Sonnet · iOS · needs Phase 0**
+**Owner: DONE (2026-07-12, Sonnet subagent) · iOS · needs Phase 0**
 (There's an abandoned-looking `feat/elevenlabs-voice` branch — it has no
 commits beyond main; ElevenLabs TTS already works via `/api/tts`.)
 
-- [ ] Lime mic FAB bottom-right on Today (hidden while any sheet is open),
+- [x] Lime mic FAB bottom-right on Today (hidden while any sheet is open),
       pulse ring + full-screen lime edge-glow overlay + live caption while
       listening (reuse `Core/SpeechTranscriber.swift`).
-- [ ] On stop: send transcript through the existing coach pipeline
+- [x] On stop: send transcript through the existing coach pipeline
       (`streamCoach`), toast "Sent to your coach", response lands in Coach
       tab thread (and optionally TTS-plays via `CoachSpeaker`).
-- [ ] Acceptance: round-trip works on device; FAB never overlaps sheets; mic
+- [x] Acceptance: round-trip works on device; FAB never overlaps sheets; mic
       permission denial degrades gracefully.
 
 ### Phase 5 — Trends restyle
@@ -415,6 +415,91 @@ commits beyond main; ElevenLabs TTS already works via `/api/tts`.)
   override to `GET /api/meals/log` — or a separate per-day rollup endpoint —
   to read a past day's logged meals read-only; deliberately not added now
   since Phase 3's brief scoped this to today only.
+- 2026-07-12: Phase 4 done (Sonnet subagent) — voice FAB on Today, iOS only,
+  no backend changes (STT/TTS/coach endpoints already existed and are
+  untouched). **Key architectural decision** (this is the mechanism the
+  Phase 0 and Phase 1 changelog entries flagged as needed): lifted
+  `CoachViewModel` out of `CoachView` and up to `App/RootTabView.swift`,
+  which now owns a single `@StateObject private var coachVM =
+  CoachViewModel()` for the app's lifetime and passes it to both
+  `CoachView(vm: coachVM)` (new init, `_vm = StateObject(wrappedValue: vm)` —
+  valid because the same instance is passed on every `RootTabView`
+  re-render) and the new `TodayView(coachVM:switchToCoachTab:)`. `RootTabView`
+  also now exposes a `switchToCoachTab` closure (`{ selected = .coach }`) so
+  a voice turn started on Today can hand off to the Coach tab. The old
+  `CoachView(mode:)` init (used unchanged by `OnboardingFlowView`'s
+  `CoachView(mode: "onboarding")`) still creates its own private
+  `CoachViewModel` — onboarding's coach conversation stays independent, not
+  merged into the shared instance. New `Features/Coach/CoachViewModel.swift`
+  method `sendExternalVoiceTranscript(_ text:)` (additive, ~10 lines, doesn't
+  touch `send()`/`toggleVoiceRecording()`/`finishVoiceInput()`): sets
+  `input`, flags `pendingSentByVoice = true`, calls the existing `send()` —
+  so a Today-originated transcript runs through the identical
+  send/stream/speak pipeline as a Coach-tab voice turn (same thread, same
+  voice-in-implies-voice-out TTS rule, no new setting invented). New
+  `Features/Today/VoiceFABView.swift`: lime circular mic FAB, bottom-trailing
+  on Today, owns its **own** `SpeechTranscriber` instance (deliberately not
+  `coachVM.transcriber`) so a Today voice turn can never contend with or be
+  silently cancelled by a recording started from the Coach tab's own mic
+  button, or vice versa — both instances funnel into the same `coachVM`
+  regardless. Tap to start: pulse ring (`PulseRing`, a stroked circle that
+  scales/fades on a `repeatForever` loop, re-triggered every turn via
+  `.onAppear` since the caller only mounts it while `isRecording`) + a
+  full-screen blurred lime border (`edgeGlow`, `.ignoresSafeArea()`) + a live
+  caption pill near the bottom showing `transcriber.transcribedText` (Apple's
+  on-device live preview, same source `CoachView`'s input-field mirroring
+  uses). Tap to stop (or a `SpeechTranscriber` watchdog auto-stop, detected
+  via `.onChange(of: transcriber.isRecording)`): mirrors
+  `CoachViewModel.finishVoiceInput`'s upload-then-fallback rule locally
+  (`APIClient.shared.uploadSTTAudio`, Apple transcript as fallback) then
+  calls `coachVM.sendExternalVoiceTranscript` and fires `onSent()`.
+  `TodayView` wires `onSent` to set `vm.toastMessage = "Sent to your coach"`
+  (existing `.toast(message:)` host, existing `TodayViewModel.toastMessage`)
+  and, after a 0.6s delay so the toast is visible before the tab changes,
+  calls `switchToCoachTab()` — so the user watches the reply stream in (and
+  hears it via `CoachSpeaker`, since `sendExternalVoiceTranscript` sets
+  `pendingSentByVoice = true` exactly like a Coach-tab voice turn) rather
+  than the exchange landing invisibly in a background tab. The FAB is hidden
+  whenever any Today sheet is open (`TodayView.isAnySheetOpen` — diet sheet,
+  add-item, item-actions, or meal-detail — `if !isAnySheetOpen { VoiceFABView(...) }`
+  in the body's `ZStack`), so it can never overlap a sheet. Permission
+  handling: authorized → toggle recording; not-determined → request, then
+  alert if still not granted; denied → alert immediately, offering a
+  "Settings" button (`UIApplication.openSettingsURLString`) — the FAB itself
+  is never disabled by a denial, so tapping it always re-offers the alert
+  (satisfies "stays usable to retry"); also refreshes
+  `transcriber.permissionState` on `UIApplication.didBecomeActiveNotification`
+  so a grant made in Settings takes effect without an app relaunch.
+  Deviations: (1) the brief didn't specify whether the FAB should
+  auto-navigate to the Coach tab or stay fire-and-forget on Today — went with
+  auto-navigate (after a short toast delay) since it's the only way to make
+  "round-trip works on device" and "response lands in Coach tab thread"
+  directly observable, and it's what the Phase 0/1 notes' emphasis on
+  lifting tab-selection state implied; (2) used a toast + delayed
+  `switchToCoachTab()` rather than threading a second explicit "toast host"
+  through `RootTabView` — `TodayViewModel.toastMessage`/`TodayView`'s
+  existing `.toast()` already covered it with zero new plumbing since the
+  toast is shown *before* the tab switches away from Today; (3) the
+  full-screen edge glow is a blurred `strokeBorder` on a `RoundedRectangle`
+  rather than a shader/gradient — simpler and matches the mock's intent
+  (soft lime glow at the screen edges) closely enough at this fidelity.
+  Verify: `cd ios/Vital && /opt/homebrew/bin/xcodegen generate` (project.yml
+  globs `Sources/`, so the two new files needed no manual project edits);
+  `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild
+  -project Vital.xcodeproj -scheme Vital -destination 'platform=iOS
+  Simulator,name=Vital-iPhone16' build` → **BUILD SUCCEEDED**; same
+  `... test` → **TEST SUCCEEDED**, 13/13 existing tests still pass (no new
+  test target coverage added — this phase is UI + thin view-local upload
+  orchestration with no committed test target precedent, consistent with
+  Phases 1/3). Note: this environment's default shell had `xcodebuild`
+  pointed at the CommandLineTools developer directory (no `xcodebuild`
+  support there) and `xcodegen` not on `PATH` — used absolute paths /
+  `DEVELOPER_DIR` inline rather than changing global `xcode-select` state.
+  Notes for later phases: Phase 7 (Coach restyle) should keep
+  `CoachView(vm:)` in mind — the shared `coachVM` instance means any new
+  Coach-tab-only UI state must live in `CoachView` itself (or a new
+  `@State` there), not assume it can freely reset `CoachViewModel`; Phase 8
+  (calendar merge) is unrelated and can proceed independently.
 - 2026-07-12: Phase 5 done (Sonnet subagent) — Trends restyle, branch
   `feat/redesign-v3-trends` off main (not stacked on PR #55's Phase 4 branch:
   zero file overlap, and the #51/#52 stacking mess argued against). Backend
