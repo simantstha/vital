@@ -44,10 +44,43 @@ jobs:
       contents: write
     outputs:
       version: ${{ steps.resolve.outputs.version }}
+      # Empty (step skipped on tag push / manual dispatch) defaults to 'true'
+      # below — those triggers always release everything.
+      ios: ${{ steps.changes.outputs.ios || 'true' }}
+      backend: ${{ steps.changes.outputs.backend || 'true' }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      # Skip on tags/manual dispatch (those always release everything); only
+      # branch pushes to main need path-based gating to cut idle macOS/backend
+      # minutes when a change touches neither surface.
+      - name: Detect changed areas
+        id: changes
+        if: github.event_name == 'push' && github.ref_type == 'branch'
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            ios:
+              - 'ios/**'
+              - '.github/workflows/release.yml'
+            backend:
+              - 'app/**'
+              - 'lib/**'
+              - 'db/**'
+              - 'scripts/**'
+              - 'supabase/**'
+              - 'public/**'
+              - 'middleware.ts'
+              - 'next.config.ts'
+              - 'package.json'
+              - 'package-lock.json'
+              - 'Dockerfile'
+              - 'fly.toml'
+              - 'drizzle.config.ts'
+              - 'tsconfig.json'
+              - '.github/workflows/release.yml'
 
       - name: Resolve version
         id: resolve
@@ -58,6 +91,8 @@ jobs:
           # Pass the dispatch input through env (never interpolate untrusted
           # input straight into the shell) and validate it before use.
           INPUT_VERSION: ${{ github.event.inputs.version }}
+          IOS_CHANGED: ${{ steps.changes.outputs.ios || 'true' }}
+          BACKEND_CHANGED: ${{ steps.changes.outputs.backend || 'true' }}
         run: |
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             VERSION="$INPUT_VERSION"
@@ -67,6 +102,8 @@ jobs:
             # Plain push to main: bump the latest v* tag's patch number and
             # push the new tag as a durable release marker (this push does not
             # re-trigger the workflow — backend/ios run right here instead).
+            # Only tag (and thus ship) when something actually changed —
+            # skip it when both surfaces are untouched (e.g. docs-only push).
             git fetch --tags --quiet
             LAST_TAG="$(git tag -l 'v*' --sort=-v:refname | head -n1)"
             if [ -z "$LAST_TAG" ]; then
@@ -78,10 +115,14 @@ jobs:
               PATCH="$(cut -d. -f3 <<<"$LAST_VERSION")"
               VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))"
             fi
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git tag -a "v$VERSION" -m "v$VERSION"
-            git push origin "v$VERSION"
+            if [ "$IOS_CHANGED" = "true" ] || [ "$BACKEND_CHANGED" = "true" ]; then
+              git config user.name "github-actions[bot]"
+              git config user.email "github-actions[bot]@users.noreply.github.com"
+              git tag -a "v$VERSION" -m "v$VERSION"
+              git push origin "v$VERSION"
+            else
+              echo "No ios/backend changes detected — nothing to ship, skipping tag."
+            fi
           fi
 
           if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+(\.[0-9]+){1,2}$'; then
@@ -94,6 +135,9 @@ jobs:
   backend:
     name: Backend — migrate + deploy (Fly)
     needs: version
+    # Skip when this push touched neither backend nor shared release-workflow
+    # code — saves ubuntu minutes on ios-only / docs-only changes.
+    if: needs.version.outputs.backend == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -126,10 +170,16 @@ jobs:
   ios:
     name: iOS — build + upload to TestFlight
     needs: [version, backend]
+    # `needs: backend` makes this job skip by default when backend is skipped
+    # (its result is "skipped", not "success") — explicitly allow that case so
+    # an ios-only change still ships, while still respecting a real backend
+    # failure/cancellation.
+    if: ${{ !failure() && !cancelled() && needs.version.outputs.ios == 'true' }}
     runs-on: macos-latest
     # Safety net: the build itself is ~5 min; anything approaching this means a
     # hang (e.g. a codesign keychain prompt) — fail fast instead of stalling.
-    timeout-minutes: 30
+    # Kept tight because macOS runners bill at 10x the ubuntu rate.
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: ios
@@ -151,10 +201,13 @@ jobs:
           sed "s|REPLACE_WITH_API_SHARED_SECRET|${IOS_API_TOKEN}|" \
             Vital/Secrets.example.swift > Vital/Sources/Core/Secrets.swift
 
+      # `brew install xcodegen` costs ~1 min of 10x-billed macOS time; grab the
+      # prebuilt release binary directly instead.
       - name: Generate Xcode project (XcodeGen)
         run: |
-          brew install xcodegen
-          cd Vital && xcodegen generate
+          curl -fsSL -o /tmp/xcodegen.zip https://github.com/yonaskolb/XcodeGen/releases/latest/download/xcodegen.zip
+          unzip -q /tmp/xcodegen.zip -d /tmp
+          cd Vital && /tmp/xcodegen/bin/xcodegen generate
 
       - uses: ruby/setup-ruby@v1
         with:
