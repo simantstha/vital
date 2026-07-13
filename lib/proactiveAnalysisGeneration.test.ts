@@ -83,10 +83,17 @@ for (const [name, prompt] of [
     assert.match(prompt, /observational/i);
     assert.match(prompt, /non-diagnostic/i);
     assert.match(prompt, /copy only supplied evidence tokens exactly/i);
+    assert.match(prompt, /fewest evidence tokens needed/i);
+    assert.match(prompt, /omit (?:an evidence |a )?token when qualitative language is sufficient/i);
+    assert.match(prompt, /never repeat an evidence token anywhere in the response/i);
+    assert.match(prompt, /final content of (?:its|the) clause or string/i);
+    assert.match(prompt, /immediately before (?:a )?terminal punctuation mark/i);
+    for (const prohibitedAfterToken of ['unit', 'qualifier', 'parenthetical', 'symbol', 'prose']) {
+      assert.match(prompt, new RegExp(prohibitedAfterToken, 'i'));
+    }
+    assert.match(prompt, /no content after the token in that clause/i);
     assert.match(prompt, /scalar string or (?:an )?individual array-item string/i);
     assert.doesNotMatch(prompt, /five schema string locations/i);
-    assert.match(prompt, /at most once/i);
-    assert.match(prompt, /terminate (?:its|the) clause or string/i);
     for (const rule of ['alter', 'split', 'concatenate', 'nest', 'enumerate', 'manufacture', 'raw number', 'numeric symbol sequence', 'qualitative language', 'unit', 'sign', 'symbol']) {
       assert.match(prompt, new RegExp(rule, 'i'));
     }
