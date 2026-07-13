@@ -4,7 +4,7 @@
 
 **Goal:** Atomically recover exactly 14 operator-selected failed proactive analyses—exactly 8 workout and 6 sleep—while changing only the five approved analysis retry fields and `notification_state = 'pending'` so normal notification delivery can claim them.
 
-**Architecture:** Extend the existing privacy-safe recovery boundary rather than adding a new command or database path. The pure recovery coordinator validates the exact input and locked populations, enforces the 8/6 distribution and all eligibility predicates, and rejects any per-table or combined returned-set mismatch inside one transaction; the Drizzle adapter locks both analysis tables and performs the six-field compare-and-set update. The deployed command remains an explicit, one-shot operator action, and normal analysis and notification workers remain solely responsible for processing and APNs delivery after commit.
+**Architecture:** Extend the existing privacy-safe recovery boundary rather than adding a new database path. The pure recovery coordinator validates the exact input and locked populations, enforces the 8/6 distribution and all eligibility predicates, and rejects any per-table or combined returned-set mismatch inside one transaction; the Drizzle adapter locks both analysis tables and performs the six-field compare-and-set update. A separate esbuild target packages the existing TypeScript entrypoint into the backend image for direct, one-shot execution on an existing Fly worker, while normal analysis and notification workers remain solely responsible for processing and APNs delivery after commit.
 
 **Tech Stack:** TypeScript, Node.js `node:test`, Drizzle ORM/PostgreSQL, Next.js, esbuild, npm, GitHub CLI
 
@@ -18,6 +18,8 @@
 - Preserve `notification_retry_count`, `notification_next_attempt_at`, `notification_lease_token`, `notification_lease_expires_at`, `notification_sent_at`, payloads, `result`, ownership, source, date, and every unrelated field; do not explicitly assign `updated_at`.
 - Preserve fixed count-only success and failure output; never expose an argument, identifier, row, payload, SQL statement, connection value, or exception detail.
 - Do not change `db/schema.ts`, add a migration, add manual recovery SQL, automatically invoke recovery from deploy/startup/workers/schedules, call model generation or APNs from recovery, or bypass normal leases, retry policy, preferences, analysis workers, or notification workers.
+- Add exactly one package build target, `build:recovery`, producing `dist/recover-proactive-analysis-jobs.cjs`; invoke it only in the Docker builder and retain the existing runtime `dist` directory copy.
+- Do not add a recovery package lifecycle hook, Docker entrypoint hook, `CMD`, Fly process group, release-workflow invocation, worker-loop call, schedule, embedded ID, fallback ID, or environment/file/database ID source.
 - A second invocation with the recovered population must fail without mutation.
 - Never run `drizzle-kit push`, push to `main`, merge a PR, or invoke the production recovery before the PR is merged and deployed through the normal release workflow.
 
@@ -30,7 +32,9 @@
 - Modify `lib/proactiveAnalysisRecoveryDrizzle.ts`: project notification eligibility from both locked tables and add the one notification assignment plus both notification CAS predicates.
 - Modify `lib/proactiveAnalysisRecoveryDrizzle.test.ts`: inspect both SQL update shapes and prove no unapproved assignment or missing predicate.
 - Verify unchanged `scripts/recover-proactive-analysis-jobs.ts`: retain validation before dynamic database import, fixed failure output, and explicit operator-only invocation.
-- Verify unchanged `db/schema.ts`, `db/migrations/`, `.github/workflows/`, `scripts/proactive-health-worker.ts`, and `package.json`: no schema, migration, deployment hook, worker hook, scheduled hook, alternate command, or manual SQL path.
+- Modify `package.json`: add only the dedicated Node.js 22 CommonJS recovery bundle command; retain the source `recover:proactive-analysis` command for local use.
+- Modify `Dockerfile`: invoke the recovery build in the builder; retain the existing runtime `COPY --from=builder /app/dist ./dist` and all entrypoint/process behavior.
+- Verify unchanged `db/schema.ts`, `db/migrations/`, `.github/workflows/`, `fly.toml`, `scripts/proactive-health-worker.ts`, and `scripts/docker-entrypoint.sh`: no schema, migration, deployment invocation, new process group, entrypoint hook, worker hook, schedule, or manual SQL path.
 
 ---
 
@@ -397,23 +401,178 @@ Expected: one conventional commit containing only the adapter and its SQL-shape 
 
 ---
 
-### Task 3: Prove Guardrails, Verify the Branch, and Open the PR
+### Task 3: Ship a Manually Executable Recovery Bundle
+
+**Files:**
+- Modify: `package.json`
+- Modify: `Dockerfile`
+- Verify unchanged: `scripts/recover-proactive-analysis-jobs.ts`
+- Verify unchanged: `fly.toml`
+- Verify unchanged: `scripts/docker-entrypoint.sh`
+
+**Interfaces:**
+- Consumes: the existing `scripts/recover-proactive-analysis-jobs.ts` entrypoint, Task 1's parser/coordinator, Task 2's Drizzle store, the existing Node.js 22 Docker base, and the existing runtime `COPY --from=builder /app/dist ./dist`.
+- Produces: `npm run build:recovery`, which creates `dist/recover-proactive-analysis-jobs.cjs`; a runtime image containing that file; and the manual production command `node dist/recover-proactive-analysis-jobs.cjs [fourteen repeated --id arguments]`.
+
+- [ ] **Step 1: Run the missing build target to establish RED**
+
+Run:
+
+```bash
+npm run build:recovery
+```
+
+Expected: FAIL with npm's `Missing script: "build:recovery"` error. Do not reuse `build:worker`, add the recovery to the normal server command, or invoke the source-only `tsx` command in production.
+
+- [ ] **Step 2: Add the dedicated recovery build target**
+
+In the `scripts` object in `package.json`, place this entry beside `build:worker`:
+
+```json
+"build:recovery": "esbuild scripts/recover-proactive-analysis-jobs.ts --bundle --platform=node --target=node22 --outfile=dist/recover-proactive-analysis-jobs.cjs"
+```
+
+Retain `"recover:proactive-analysis": "tsx scripts/recover-proactive-analysis-jobs.ts"` unchanged for local source execution. Do not add `prebuild`, `postbuild`, `start`, `worker`, install, or release lifecycle invocation.
+
+- [ ] **Step 3: Build the bundle and smoke-test validation before database access**
+
+Run:
+
+```bash
+npm run build:recovery
+test -s dist/recover-proactive-analysis-jobs.cjs
+set +e
+smoke_output="$(node -e '
+let databaseUrlRead = false;
+delete process.env.DATABASE_URL;
+process.env = new Proxy(process.env, {
+  get(target, key) {
+    if (key === "DATABASE_URL") databaseUrlRead = true;
+    return Reflect.get(target, key);
+  },
+});
+process.on("beforeExit", () => {
+  if (databaseUrlRead) process.exitCode = 2;
+});
+process.argv = ["node", "dist/recover-proactive-analysis-jobs.cjs", "--invalid"];
+require("./dist/recover-proactive-analysis-jobs.cjs");
+' 2>&1)"
+smoke_status=$?
+set -e
+test "$smoke_status" -eq 1
+test "$smoke_output" = "$(printf '%s\n' \
+  'requested_count=0' \
+  'matched_count=0' \
+  'eligible_count=0' \
+  'workout_updated_count=0' \
+  'sleep_updated_count=0' \
+  'total_updated_count=0' \
+  'failure_count=1')"
+```
+
+Expected: the bundle exists, the instrumented invalid invocation exits 1, no `DATABASE_URL` read changes the exit status to 2, and output is exactly the seven fixed count-only lines. This executable smoke test proves bundle initialization retains argument validation before database-module initialization.
+
+- [ ] **Step 4: Invoke the recovery build in the Docker builder**
+
+In `Dockerfile`, add exactly one build instruction after the existing worker build:
+
+```dockerfile
+RUN npm run build
+RUN npm run build:worker
+RUN npm run build:recovery
+```
+
+Retain the runtime copy unchanged:
+
+```dockerfile
+COPY --from=builder /app/dist ./dist
+```
+
+Do not add a recovery `ENTRYPOINT`, `CMD`, process, startup hook, environment ID source, or additional runtime dependency copy.
+
+- [ ] **Step 5: Build and smoke-test the production image**
+
+Run:
+
+```bash
+docker build --tag vital-recovery-smoke .
+docker run --rm --entrypoint test vital-recovery-smoke -s /app/dist/recover-proactive-analysis-jobs.cjs
+set +e
+image_smoke_output="$(docker run --rm --entrypoint node vital-recovery-smoke -e '
+let databaseUrlRead = false;
+delete process.env.DATABASE_URL;
+process.env = new Proxy(process.env, {
+  get(target, key) {
+    if (key === "DATABASE_URL") databaseUrlRead = true;
+    return Reflect.get(target, key);
+  },
+});
+process.on("beforeExit", () => {
+  if (databaseUrlRead) process.exitCode = 2;
+});
+process.argv = ["node", "dist/recover-proactive-analysis-jobs.cjs", "--invalid"];
+require("/app/dist/recover-proactive-analysis-jobs.cjs");
+' 2>&1)"
+image_smoke_status=$?
+set -e
+test "$image_smoke_status" -eq 1
+test "$image_smoke_output" = "$(printf '%s\n' \
+  'requested_count=0' \
+  'matched_count=0' \
+  'eligible_count=0' \
+  'workout_updated_count=0' \
+  'sleep_updated_count=0' \
+  'total_updated_count=0' \
+  'failure_count=1')"
+```
+
+Expected: Docker builds successfully, the existing `dist` copy contains the recovery artifact, and the artifact in the runtime image passes the same no-database invalid-argument smoke contract.
+
+- [ ] **Step 6: Prove packaging did not create an automatic invocation**
+
+Run:
+
+```bash
+packaging_matches="$(rg -n "build:recovery|recover-proactive-analysis-jobs\.cjs" package.json Dockerfile)"
+test "$(printf '%s\n' "$packaging_matches" | wc -l | tr -d ' ')" -eq 2
+if rg -n "build:recovery|recover-proactive-analysis-jobs\.cjs" fly.toml scripts/docker-entrypoint.sh .github/workflows; then
+  exit 1
+fi
+```
+
+Expected: exactly one package build definition and one Docker builder invocation; no match in `fly.toml`, `scripts/docker-entrypoint.sh`, or `.github/workflows`. The only runtime use remains the operator's direct manual `node dist/recover-proactive-analysis-jobs.cjs` command after deployment.
+
+- [ ] **Step 7: Commit the deployable artifact configuration**
+
+```bash
+git add package.json Dockerfile
+git commit -m "build: bundle proactive recovery command"
+```
+
+Expected: one conventional commit containing only the package build target and Docker builder invocation.
+
+---
+
+### Task 4: Prove Guardrails, Verify the Branch, and Open the PR
 
 **Files:**
 - Verify unchanged: `scripts/recover-proactive-analysis-jobs.ts`
 - Verify unchanged: `db/schema.ts`
 - Verify unchanged: `db/migrations/`
 - Verify unchanged: `.github/workflows/`
+- Verify unchanged: `fly.toml`
 - Verify unchanged: `scripts/proactive-health-worker.ts`
-- Verify unchanged: `package.json`
+- Verify unchanged: `scripts/docker-entrypoint.sh`
+- Verify changed only as specified: `package.json`
+- Verify changed only as specified: `Dockerfile`
 - Verify changed only as specified: `lib/proactiveAnalysisRecovery.ts`
 - Verify changed only as specified: `lib/proactiveAnalysisRecovery.test.ts`
 - Verify changed only as specified: `lib/proactiveAnalysisRecoveryDrizzle.ts`
 - Verify changed only as specified: `lib/proactiveAnalysisRecoveryDrizzle.test.ts`
 
 **Interfaces:**
-- Consumes: the complete Task 1 coordinator and Task 2 transactional adapter.
-- Produces: a reviewed feature branch and ready PR; it does not execute production recovery or change runtime invocation paths.
+- Consumes: the complete Task 1 coordinator, Task 2 transactional adapter, and Task 3 deployable bundle.
+- Produces: a reviewed feature branch and ready PR; it does not execute production recovery or add an automatic runtime invocation path.
 
 - [ ] **Step 1: Verify the recovery command still validates before database access and emits fixed failure output**
 
@@ -438,20 +597,19 @@ Run from the feature worktree:
 
 ```bash
 base="$(git merge-base HEAD origin/main)"
-git diff --exit-code "$base" -- db/schema.ts db/migrations .github/workflows scripts/proactive-health-worker.ts package.json
+git diff --exit-code "$base" -- db/schema.ts db/migrations .github/workflows fly.toml scripts/proactive-health-worker.ts scripts/docker-entrypoint.sh scripts/recover-proactive-analysis-jobs.ts
 git diff --check "$base"..HEAD
 git diff --name-only "$base"..HEAD
-rg -n "recoverProactiveAnalysisJobs|recover:proactive-analysis|recover-proactive-analysis-jobs" \
-  --glob '!docs/superpowers/**' \
-  --glob '!lib/proactiveAnalysisRecovery*' \
-  --glob '!scripts/recover-proactive-analysis-jobs.ts' \
-  --glob '!package.json' .
+if rg -n "recoverProactiveAnalysisJobs|recover:proactive-analysis|recover-proactive-analysis-jobs" \
+  fly.toml scripts/docker-entrypoint.sh scripts/proactive-health-worker.ts .github/workflows; then
+  exit 1
+fi
 rg -n -i "update[[:space:]]+(workout_analyses|sleep_analyses)|manual sql|production ids?|fallback ids?|recovery ids?" \
   docs scripts lib --glob '!docs/superpowers/specs/2026-07-13-proactive-notification-recovery-correction-design.md' \
   --glob '!docs/superpowers/plans/2026-07-13-proactive-notification-recovery-correction.md'
 ```
 
-Expected: unchanged-path diff and `git diff --check` exit 0; the changed-file list contains only the approved spec/plan and four recovery implementation/test files; invocation search finds no automatic call site; the broad-selector/manual-SQL/embedded-ID audit finds no recovery instructions or ID source. Review any unrelated textual match rather than deleting valid application code.
+Expected: unchanged-path diff and `git diff --check` exit 0; the changed-file list contains only the approved spec/plan, four recovery implementation/test files, `package.json`, and `Dockerfile`; invocation search finds no automatic call site; the broad-selector/manual-SQL/embedded-ID audit finds no recovery instructions or ID source. Review any unrelated textual match rather than deleting valid application code.
 
 - [ ] **Step 3: Run focused recovery, proactive worker, and notification ownership tests**
 
@@ -479,10 +637,14 @@ npx tsx --test lib/*.test.ts
 npx tsc --noEmit
 npm run lint -- --max-warnings=0
 npm run build:worker
+npm run build:recovery
+test -s dist/recover-proactive-analysis-jobs.cjs
 DATABASE_URL=postgresql://test:test@localhost:5432/test npm run build
+docker build --tag vital-recovery-final .
+docker run --rm --entrypoint test vital-recovery-final -s /app/dist/recover-proactive-analysis-jobs.cjs
 ```
 
-Expected: every test passes, typecheck and lint exit 0, the worker bundle succeeds, and the production Next.js build exits 0; a pre-existing Next.js middleware deprecation warning is non-blocking.
+Expected: every test passes; typecheck and lint exit 0; worker and recovery bundles succeed; the production Next.js and Docker builds exit 0; and the runtime image contains the recovery artifact. Task 3's instrumented invalid-argument smoke remains the validation-before-database-access proof; a pre-existing Next.js middleware deprecation warning is non-blocking.
 
 - [ ] **Step 5: Review the final diff against every approved invariant**
 
@@ -496,11 +658,13 @@ git diff "$base"..HEAD -- \
   lib/proactiveAnalysisRecovery.test.ts \
   lib/proactiveAnalysisRecoveryDrizzle.ts \
   lib/proactiveAnalysisRecoveryDrizzle.test.ts \
-  scripts/recover-proactive-analysis-jobs.ts
+  scripts/recover-proactive-analysis-jobs.ts \
+  package.json \
+  Dockerfile
 git status --short
 ```
 
-Expected: exactly 14 inputs; exactly 8 workout and 6 sleep; all five eligibility predicates at lock and CAS time; per-table and combined returned-set equality; only six assignments; count-only output; no production identifiers; no schema, migration, automatic invocation, model, APNs, broad selector, or manual SQL path; clean worktree after committed plan and implementation.
+Expected: exactly 14 inputs; exactly 8 workout and 6 sleep; all five eligibility predicates at lock and CAS time; per-table and combined returned-set equality; only six assignments; count-only output; one dedicated recovery bundle included by the existing `dist` copy; no production identifiers; no schema, migration, automatic invocation, new process group, entrypoint hook, model, APNs, broad selector, or manual SQL path; clean worktree after committed plan and implementation.
 
 - [ ] **Step 6: Push the feature branch and open a ready PR**
 
@@ -520,12 +684,12 @@ gh pr create \
 - focused recovery and proactive worker suites
 - full test suite
 - TypeScript typecheck and ESLint
-- proactive worker bundle and production build
+- proactive worker and manual recovery bundles, invalid-argument smoke, production build, and Docker image build
 - schema, migration, invocation, privacy, and SQL-path guardrail audits
 
 ## Rollout
-- deployment does not invoke recovery
-- after merge and a green release, an operator will reconfirm eligibility and invoke the command once with the 14 privately held IDs
+- deployment includes but does not invoke the recovery artifact
+- after merge and successful version/backend jobs, an operator will reconfirm eligibility and invoke the bundled command once on the Fly worker with the 14 privately held IDs
 PR_BODY
 )"
 ```
@@ -547,15 +711,36 @@ gh run watch "$release_run_id" --exit-status --interval 30
 gh run view "$release_run_id" --json status,conclusion,jobs
 ```
 
-Expected: version, backend, and iOS jobs all report `success`; do not invoke recovery against an unverified deployment.
+Expected: the version job and backend deployment job report `success`. For this backend-only change the path-filtered iOS job may correctly report `skipped`; if it runs, it must succeed. Do not invoke recovery against an unverified backend deployment.
 
 - [ ] **Step 2: Reconfirm the private operator-held population through the existing read-only production query path**
 
 Expected: exactly 14 distinct supplied rows, exactly 8 workout and 6 sleep; every row has failed analysis state, null analysis lease, null result, failed notification state, null notification sent timestamp, and zero prior push attempts. Capture count-only pre-recovery evidence for notification retry metadata, schedule, leases, sent timestamps, payload integrity, and total rows; do not copy IDs or row content into source, task logs, PR comments, or committed artifacts.
 
-- [ ] **Step 3: Invoke the deployed application command exactly once**
+- [ ] **Step 3: Invoke the deployed bundle exactly once on the existing Fly worker**
 
-In the authorized production execution environment, construct repeated `--id` arguments from the operator's private 14-ID input and pass them directly to the deployed `npm run recover:proactive-analysis --` command. Do not paste identifiers into shell history, chat, logs, source files, environment defaults, or this runbook.
+Read one private string containing exactly 14 repeated `--id` arguments without echoing it, validate its safe canonical shape locally, and pass that string as command-line arguments to the bundle on the existing Fly `worker` process group. Interactive input read by `read` is not a shell command and is not stored in shell history; the entered Fly command contains only the variable reference, not its expanded value:
+
+```bash
+printf '%s' 'Enter fourteen repeated --id arguments: '
+IFS= read -r -s recovery_args
+printf '\n'
+canonical_uuid='[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}'
+if ! printf '%s\n' "$recovery_args" | grep -Eq "^--id $canonical_uuid( --id $canonical_uuid){13}$"; then
+  unset recovery_args canonical_uuid
+  exit 1
+fi
+fly ssh console \
+  --app vital-coach \
+  --process-group worker \
+  --quiet \
+  --command "node dist/recover-proactive-analysis-jobs.cjs $recovery_args"
+recovery_status=$?
+unset recovery_args canonical_uuid
+test "$recovery_status" -eq 0
+```
+
+The local ephemeral shell variable is expanded into argv before remote execution; the bundle still reads IDs only from repeated flags and has no environment-based ID source. Do not paste identifiers into shell history, chat, committed files, defaults, or the recovery program's output. Do not use `npm run recover:proactive-analysis`, `tsx`, Docker entrypoints, release hooks, worker-loop hooks, or manual SQL in production.
 
 Expected fixed output:
 

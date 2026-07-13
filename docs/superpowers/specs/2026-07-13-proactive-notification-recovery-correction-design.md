@@ -7,7 +7,7 @@
 
 The evidence-token grounding release corrected proactive analysis generation, but the approved one-shot recovery does not make the affected notifications claimable. Production inspection confirmed 14 eligible terminal analysis rows: 8 workout analyses and 6 sleep analyses. All 14 have `notification_state = 'failed'`, and there have been zero push attempts for them. Requeueing analysis work while preserving that terminal notification state cannot produce an APNs attempt.
 
-This correction expands the bounded recovery contract from exactly nine rows to exactly 14 operator-supplied rows and atomically resets each row's analysis retry fields together with `notification_state = 'pending'`. It preserves every other notification field, the analysis payload, and all unrelated data. The correction remains a one-shot operator action implemented through the application recovery boundary; it is not a general retry facility.
+This correction expands the bounded recovery contract from exactly nine rows to exactly 14 operator-supplied rows and atomically resets each row's analysis retry fields together with `notification_state = 'pending'`. It preserves every other notification field, the analysis payload, and all unrelated data. The correction also ships the existing TypeScript command as a dedicated Node.js bundle in the backend image so an operator can invoke it on the Fly worker after deployment. It remains a one-shot manual action implemented through the application recovery boundary; it is not a general retry facility.
 
 ## Confirmed production evidence
 
@@ -27,6 +27,7 @@ The production identifiers are operational input. They must not be committed to 
 - Preserve the existing privacy-safe argument, output, and error contracts.
 - Preserve payloads, notification retry metadata, and all unrelated fields.
 - Make a second invocation against the recovered rows fail without mutation.
+- Ship a directly executable recovery artifact in the deployed backend image.
 - Verify that normal workers process the rows and that notification delivery produces observable push attempts after commit.
 
 ## Non-goals
@@ -34,6 +35,7 @@ The production identifiers are operational input. They must not be committed to 
 - Embedding production IDs anywhere in the repository.
 - Changing either analysis-table schema or adding a database migration.
 - Automatically invoking recovery during deploy, startup, worker execution, or a scheduled job.
+- Adding a recovery process group, entrypoint hook, release step, worker loop call, or package lifecycle hook.
 - Running or documenting manual SQL as an operational alternative.
 - Sweeping arbitrary failed rows or accepting any count other than exactly 14.
 - Resetting notification retry counters, notification scheduling, notification leases, notification sent timestamps, payloads, or other notification fields.
@@ -51,6 +53,20 @@ Argument validation occurs before database import or connection. It rejects:
 - malformed, uppercase, or otherwise noncanonical UUIDs.
 
 Failure output remains fixed and count-only. It must not echo an argument, identifier, row, payload, database value, SQL statement, connection value, or exception detail.
+
+## Deployable recovery artifact
+
+The repository adds a separate `build:recovery` package script that bundles `scripts/recover-proactive-analysis-jobs.ts` with esbuild for Node.js 22 at `dist/recover-proactive-analysis-jobs.cjs`. The Docker builder runs `npm run build:recovery` after the application and worker builds. The existing `COPY --from=builder /app/dist ./dist` copies both worker and recovery bundles into the runtime image; no additional runtime copy, dependency install, entrypoint, command, process group, or automatic invocation is added.
+
+The deployed artifact is invoked manually on an existing Fly worker machine as:
+
+```text
+node dist/recover-proactive-analysis-jobs.cjs [fourteen repeated --id arguments]
+```
+
+The bracketed text is operational notation only and must never be replaced by a production identifier in source, tests, fixtures, examples, documentation, logs, or defaults. At invocation time, the operator supplies all 14 private identifiers as repeated command-line flags. The bundle has no embedded identifiers and does not read identifiers from environment variables, files, database discovery, or defaults.
+
+Argument parsing must still happen before the bundled database module is initialized. An invalid-argument smoke test runs the built artifact without `DATABASE_URL`, instruments access to that environment key, and requires the fixed count-only failure with exit status 1 and zero `DATABASE_URL` reads. This proves the deployable bundle preserves validation-before-database-access behavior rather than relying only on source order.
 
 ## Eligibility contract
 
@@ -115,6 +131,14 @@ Success and failure output remains a fixed set of `label=integer` lines. It may 
 - Reject every other count, duplicates, malformed or noncanonical UUIDs, positional values, and unknown flags before database access.
 - Prove there are no committed production IDs, fallback IDs, schema changes, automatic invocation paths, or manual SQL recovery instructions.
 - Verify all success and failure output is fixed and count-only.
+- Build `dist/recover-proactive-analysis-jobs.cjs` and smoke-test invalid arguments with instrumented `DATABASE_URL` access, requiring exit status 1, no database configuration access, and the exact fixed zero-count failure output.
+
+### Packaging tests
+
+- Require `npm run build:recovery` to produce the dedicated Node.js 22 CommonJS bundle at exactly `dist/recover-proactive-analysis-jobs.cjs`.
+- Require the Docker builder to invoke `npm run build:recovery` and the existing runtime `dist` copy to contain the recovery bundle.
+- Build the production image and execute the invalid-argument smoke test against the artifact inside that image.
+- Prove neither the Docker entrypoint nor `fly.toml` automatically invokes the recovery artifact and no recovery process group is added.
 
 ### Eligibility and transaction tests
 
@@ -134,10 +158,10 @@ Success and failure output remains a fixed set of `label=integer` lines. It may 
 ## Rollout
 
 1. Implement and review the correction on a feature branch.
-2. Run focused recovery tests, the proactive analysis and notification tests, type checking, lint, worker bundling, the full test suite, and the production build.
+2. Run focused recovery tests, the proactive analysis and notification tests, type checking, lint, worker and recovery bundling, the invalid-argument artifact smoke test, the full test suite, the production build, and a Docker image build/smoke test.
 3. Merge and deploy through the normal pull-request and release process; deployment must not invoke recovery automatically.
 4. Reconfirm immediately before invocation that the operator-held population is exactly 14 eligible rows with an 8-workout/6-sleep split and zero prior push attempts.
-5. Invoke the deployed recovery command once with the 14 operator-supplied IDs.
+5. Select the existing Fly worker process group and invoke `node dist/recover-proactive-analysis-jobs.cjs` once with the 14 operator-supplied `--id` arguments. Do not use the source-only `tsx` command in production.
 6. Require one committed result reporting 14 requested, matched, eligible, and updated rows, split into 8 workout and 6 sleep updates. Treat any other result as a complete rollback and investigate before retrying.
 7. Allow normal workers to claim and process the requeued analyses and notifications.
 
@@ -155,3 +179,5 @@ After the transaction commits, verify without exposing identifiers in logs or co
 - no additional rows were mutated.
 
 The correction is complete when exactly the 14 operator-selected rows are atomically requeued, their terminal notification state alone is reset to pending, all other notification and payload data is preserved, and normal delivery produces observable push attempts without any embedded IDs, schema change, automatic invocation, or manual SQL.
+
+For a backend-only merge, release verification requires the version job and backend deployment job to succeed. The path-filtered iOS job may correctly report `skipped`; an iOS build is not a prerequisite for this recovery invocation.
