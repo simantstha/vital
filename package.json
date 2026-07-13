@@ -6,6 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "build:worker": "esbuild scripts/proactive-health-worker.ts --bundle --platform=node --target=node22 --outfile=dist/proactive-health-worker.cjs",
+    "build:recovery": "esbuild scripts/recover-proactive-analysis-jobs.ts --bundle --platform=node --target=node22 --outfile=dist/recover-proactive-analysis-jobs.cjs",
     "worker": "node dist/proactive-health-worker.cjs",
     "recover:proactive-analysis": "tsx scripts/recover-proactive-analysis-jobs.ts",
     "start": "next start",
