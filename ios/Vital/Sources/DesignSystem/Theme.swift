@@ -92,6 +92,15 @@ enum Theme {
                 : UIColor(red: 0.651, green: 0.655, blue: 0.671, alpha: 1)
         })
 
+        /// Muted chart fill for below-threshold values (e.g. short-sleep bars) —
+        /// light: #E4E5E0 / dark: #2A3038. A solid neutral, not an opacity of
+        /// `accent`, so it reads as "off" rather than "dim lime".
+        static let chartMuted = Color(uiColor: UIColor { tc in
+            tc.userInterfaceStyle == .dark
+                ? UIColor(red: 0.165, green: 0.188, blue: 0.220, alpha: 1)
+                : UIColor(red: 0.894, green: 0.898, blue: 0.878, alpha: 1)
+        })
+
         /// Glass fill — dark: white 5% / light: black 4%
         static let glassFill = Color(uiColor: UIColor { tc in
             tc.userInterfaceStyle == .dark
@@ -108,6 +117,18 @@ enum Theme {
 
         /// Indigo for sleep / carbs — #8B93FF (fill-only; same in both modes)
         static let indigo = Color(red: 0.545, green: 0.576, blue: 1.000)
+
+        /// Running Coach accent — cyan in dark mode, deeper cyan in light mode
+        /// so labels and icons retain contrast without changing specialist identity.
+        static let specialistAccent = Color(uiColor: UIColor { tc in
+            tc.userInterfaceStyle == .dark
+                ? UIColor(red: 0.298, green: 0.788, blue: 0.941, alpha: 1)
+                : UIColor(red: 0.016, green: 0.494, blue: 0.639, alpha: 1)
+        })
+
+        /// Identity edge glow stays the manifest cyan in either appearance.
+        static let specialistEdgeGlow = Color(red: 0.298, green: 0.788, blue: 0.941)
+
     }
 
     // MARK: - Spacing

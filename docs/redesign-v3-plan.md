@@ -1,6 +1,6 @@
 # Vital app redesign — "Today Screen v3" implementation plan
 
-**Status: Phases 0–4 done** · Branch: `feat/redesign-v3` (off `main`)
+**Status: Phases 0–6 done** · Branch: `feat/redesign-v3` (off `main`)
 Source of truth for the design: Claude Design project
 <https://claude.ai/design/p/67904bc9-0509-4bb9-b4bf-2219bc3478fb?file=Today+Screen+v3.html>
 (file `Today Screen v3.html` — a full 5-tab React/Tailwind mock of the app).
@@ -210,27 +210,29 @@ commits beyond main; ElevenLabs TTS already works via `/api/tts`.)
       permission denial degrades gracefully.
 
 ### Phase 5 — Trends restyle
-**Owner: unclaimed · Suggested agent: Haiku/Sonnet · iOS · needs Phase 0**
+**Owner: DONE (2026-07-12, Sonnet subagent) · iOS + tiny backend**
 
-- [ ] Screen title style, calibrating banner (limeSoft, only while
+- [x] Screen title style, calibrating banner (limeSoft, only while
       `calibration.status == "calibrating"`).
-- [ ] `TrendBarChart` (sleep): goal-scaled bars, gray `< threshold` nights,
-      dashed placeholders for missing days; footnote ("Under 6h10m on 4 of 7
+- [x] `TrendBarChart` (sleep): goal-scaled bars, gray `< threshold` nights,
+      dashed placeholders for missing days; footnote ("Under 6h on 4 of 7
       nights…") driven by real data.
-- [ ] `TrendLineChart` (HRV, RHR): lime polyline + dots, ringed last point,
+- [x] `TrendLineChart` (HRV, RHR): lime polyline + dots, ringed last point,
       dashed hollow dots for missing days.
-- [ ] Data from existing `fetchTrends(metric:days:)`. Swift Charts or hand-
-      drawn — match the mock's look; hand-drawn is probably closer.
+- [x] Data from existing `fetchTrends(metric:days:)`. Hand-drawn SwiftUI
+      (not Swift Charts) — matches the mock's look. Backend gained an `rhr`
+      metric + `calibration` in the `/api/trends` response (see changelog).
 
 ### Phase 6 — Logs day pager
-**Owner: unclaimed · Suggested agent: Haiku/Sonnet · iOS · needs Phases 0+3**
+**Owner: DONE (2026-07-12, Sonnet subagent) · iOS + small backend · needed Phases 0+3**
 
-- [ ] Day pager header (‹ / › buttons, disabled at ends; label + date +
+- [x] Day pager header (‹ / › buttons, disabled at ends; label + date +
       summary "3 entries · 640 kcal · 2.4 km").
-- [ ] Per-day diet budget card (read-only "Past day" variant) — needs per-day
-      diet totals; check `/api/logs` response, extend backend if it lacks
-      per-day macro rollups (Haiku backend task).
-- [ ] Entries list in new card idiom + dashed add button (today only).
+- [x] Per-day diet budget card (read-only "Past day" variant) — per-day meal
+      entries via new `?date=YYYY-MM-DD` on `GET /api/meals/log`; summary
+      needed structured fields, so `/api/logs` items gained optional
+      `kcal`/`km`/`sleepMs` (see changelog).
+- [x] Entries list in new card idiom + dashed add button (today only).
 
 ### Phase 7 — Profile & Coach restyle
 **Owner: unclaimed · Suggested agent: Haiku · iOS · needs Phase 0**
@@ -286,7 +288,7 @@ commits beyond main; ElevenLabs TTS already works via `/api/tts`.)
   `FuelStripView` under `Features/Today/`; `TodayViewModel` derives
   `[PlanItem]` from `/api/today`'s `plan` (heuristic meal times + a synthetic
   "Lights out" sleep row) and exposes `setStatus`/`removeItem`/`addItem`
-  local mutations + `toastMessage`; `TodayView` reordered to header → 
+  local mutations + `toastMessage`; `TodayView` reordered to header →
   calibration → pending-facts → plan timeline → coach bubble → vitals →
   fuel strip, with the add-item/actions/meal-detail sheets and `.toast`
   wired up. Deviations: (1) added a "View meal" row in the actions sheet
@@ -498,3 +500,87 @@ commits beyond main; ElevenLabs TTS already works via `/api/tts`.)
   Coach-tab-only UI state must live in `CoachView` itself (or a new
   `@State` there), not assume it can freely reset `CoachViewModel`; Phase 8
   (calendar merge) is unrelated and can proceed independently.
+- 2026-07-12: Phase 5 done (Sonnet subagent) — Trends restyle, branch
+  `feat/redesign-v3-trends` off main (not stacked on PR #55's Phase 4 branch:
+  zero file overlap, and the #51/#52 stacking mess argued against). Backend
+  (small, additive): `app/api/trends/route.ts` gained metric `rhr` →
+  `daily_metrics.resting_hr` (rounded bpm; the metric already existed — the
+  coach tools query it) and now returns `calibration` (same
+  `getCalibration()` shape as `/api/today`, run via `Promise.all` — one cheap
+  GROUP BY per call) so Trends can show the calibrating banner without
+  touching the heavier `/api/today`. iOS: screen restyled to the mock's
+  "Last 7 days" summary — header (`.screenTitleStyle()` + "Last 7 days"),
+  limeSoft calibrating banner (only while `status == "calibrating"`, hidden
+  when calibration is nil i.e. old backend), then three `VitalCard`s: Sleep
+  (new hand-drawn `TrendBarChart`: goal-scaled bars capped at 8h, short
+  nights < 6h in a new adaptive `Theme.Colors.chartMuted` token
+  (#E4E5E0 / #2A3038), dashed outlines for missing days), HRV and Resting HR
+  (new hand-drawn `TrendLineChart`: accent polyline bridging gaps, 9pt dots,
+  ringed 11pt last point, dashed hollow dots for missing days). All summary
+  logic is in a pure `TrendsSummary` enum (`weekWindow` date-keyed 7-slot
+  mapping, `sleepAverageText`, data-driven footnotes with the mock's bold
+  span, `vitalsNote` "syncing"/"7-day", `latestAvailable`) — covered by 18
+  new unit tests in `ios/Vital/Tests/TrendsSummaryTests.swift` (first test
+  coverage added by any redesign phase; the logic was finally pure enough to
+  be worth it). Decisions: (1) the mock drops weight/steps/VO₂/distance and
+  range selection entirely — kept them as an "Explore" section below the
+  summary cards (existing metric menu + range pills + Swift Charts explorer,
+  restyled `GlassCard`→`VitalCard`, active range pill = accentSoft capsule +
+  accentContent text, Resting HR added to the menu) since manual weight
+  logging (`/api/weight-log`) would otherwise lose its only trend UI; (2)
+  short-night threshold = 6h (75% of the app-wide 8h goal) — the mock's
+  6h10m was sample-data-specific; (3) footnote copy is data-driven
+  ("No sleep synced yet." / "Every night near your 8h goal this week." /
+  "Under 6h on N of 7 nights…"; lines: "No readings yet." / "Only N
+  reading(s) this week — dashed dots haven't synced." / "Steady this week."
+  / "Drifting up (+x%)" / "Trending down (−x%)" with a ±2% steady band);
+  (4) weekday letters pinned to en_US for deterministic "F S S M T W T".
+  Verify: backend lint/tsc/build green (Node 20, `/api/trends` in route
+  list); iOS xcodegen + build + test on `Vital-iPhone16` → **TEST
+  SUCCEEDED**, 58/58 (40 pre-existing incl. PR #54's specialist tests + 18
+  new). Notes: PR #54 (running-coach specialist) landed on main mid-phase —
+  no Trends overlap, but test count is 40 now, not 13; Phase 7's
+  `GlassCard`→`VitalCard` migration can copy this phase's explorer pattern
+  (same padding/radius args, only the surface type swaps).
+- 2026-07-12: Phase 6 done (Sonnet subagent) — Logs day pager, branch
+  `feat/redesign-v3-logs-pager` **stacked on `feat/redesign-v3-trends`**
+  (PR bases on the Phase 5 branch, so its diff stays clean; GitHub
+  auto-retargets to main when Phase 5's PR merges — merge order is
+  #60 → this one). Backend (both additive): `GET /api/meals/log` gained
+  `?date=YYYY-MM-DD` (regex-validated, 400 on malformed, exactly the
+  override the Phase 3 entry anticipated; omitted → identical to before);
+  `/api/logs` items gained conditional `kcal` (meal_logged only — food
+  eaten, never workout burn), `km` (workout_completed; events `distance_m`,
+  HK `queryWorkouts` rows via the same `distance_m`-wins-over-`distanceKm`
+  fallback `lib/brain/dietBudget.ts` uses), and `sleepMs` (sleep_session) —
+  so the pager's per-day summary line never parses formatted title strings.
+  iOS: `LogsViewModel` rewritten around a fixed 7-slot `LogDay` pager model
+  (index 0 = today; empty days render with an empty-state row) + pure
+  `LogsPagerSummary` helpers (bucketing, "Today"/"Yesterday"/weekday labels,
+  meta rule: sleep/HRV → "auto", else "7:41 PM"-style absolute time,
+  summary line "N entries[ · N kcal][ · N.N km][ · Hh Mm sleep]" — the
+  sleep part only on days with neither kcal nor km, per the mock; diet
+  rollup vs `fetchDietGoal().current` targets with `remaining` clamped ≥ 0)
+  — same testable-pure-enum convention as Phase 5's `TrendsSummary`, covered
+  by 15 new tests in `LogsPagerTests.swift`. `LogsView` rewritten: screen
+  title + "Everything you and your devices record", ‹/› pager row (40pt
+  circular buttons, card-fill + shadow enabled / glassFill + tertiary
+  disabled at ends), new `DietBudgetCardView` (mock's DietBudget: "Log
+  food ›" tappable today → opens the same Phase 3 `DietSheetView` the
+  Today tab uses, "Past day" read-only otherwise; 48pt remaining, 3pt
+  progress capsules, 3-column macro grid reusing `MacroProgress` from
+  `TodayViewModel`), hairline-separated entries in one `VitalCard` with
+  `IconBadge(.soft)` (photo thumbnails kept; per-type tint colors dropped —
+  mock is uniform limeSoft), dashed "Add to today's log" button (today
+  only → diet sheet). `APIClient`: `fetchMealLogs(date:)` generalizes
+  `fetchTodayMealLogs()` (kept as a forwarder); `LogItem` gained optional
+  `kcal`/`km`/`sleepMs`. Caching: diet goal fetched once; meal logs cached
+  per dayKey, today's invalidated when the diet sheet closes. Deviations:
+  `selectDay` is non-async (spawns its own Task) for button ergonomics;
+  spinner only when `days.isEmpty` so pull-to-refresh doesn't blank the
+  pager. Verify: backend lint/tsc/build green; iOS xcodegen + build + test
+  on `Vital-iPhone16` → **TEST SUCCEEDED, 73/73** (58 + 15 new). Note for
+  Phase 7/8: the `enum <Feature>Summary` pure-helper pattern is now house
+  convention (TrendsSummary, LogsPagerSummary); `DietBudgetCardView`'s
+  tappable-vs-readonly split may be reusable; no skeleton state while a
+  day's diet data loads — the card simply appears when the fetch resolves.

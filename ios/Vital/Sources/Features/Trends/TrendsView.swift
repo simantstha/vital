@@ -11,10 +11,20 @@ struct TrendsView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: Theme.Spacing.xl) {
                     headerSection
-                    metricPicker
-                    daysPicker
-                    chartCard
-                    statsRow
+
+                    if vm.calibration?.status == "calibrating" {
+                        calibratingBanner
+                    }
+
+                    summaryCards
+
+                    VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
+                        SectionHeader(title: "Explore")
+                        metricPicker
+                        daysPicker
+                        chartCard
+                        statsRow
+                    }
                 }
                 .padding(.horizontal, Theme.Spacing.xl)
                 .padding(.top, Theme.Spacing.lg)
@@ -22,26 +32,92 @@ struct TrendsView: View {
             }
             .scrollIndicators(.hidden)
         }
-        .task { await vm.load() }
+        .task {
+            await vm.load()
+            await vm.loadSummary()
+        }
         .onChange(of: vm.selectedMetric) { Task { await vm.load() } }
         .onChange(of: vm.selectedDays)   { Task { await vm.load() } }
     }
 }
 
-// MARK: - Sections
+// MARK: - Header + calibrating banner
 
 private extension TrendsView {
 
     var headerSection: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
             Text("Trends")
-                .font(.system(size: 28, weight: .bold))
+                .screenTitleStyle()
                 .foregroundStyle(Theme.Colors.textPrimary)
-            Text("Track your metrics over time")
-                .font(Theme.Typography.bodySmall)
+            Text("Last 7 days")
+                .font(.system(size: 15))
                 .foregroundStyle(Theme.Colors.textSecondary)
         }
     }
+
+    var calibratingBanner: some View {
+        HStack(alignment: .top, spacing: Theme.Spacing.sm) {
+            Image(systemName: "info.circle")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(Theme.Colors.accentContent)
+                .padding(.top, 1)
+            Text("Baselines are still calibrating — trends firm up as more days come in.")
+                .font(.system(size: 14))
+                .foregroundStyle(Theme.Colors.accentContent)
+        }
+        .padding(Theme.Spacing.lg)
+        .background(
+            // Mock's `rounded-2xl` (16pt) — between Theme.Radius.md and .lg,
+            // kept as a literal since it's a shape radius, not a color.
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Theme.Colors.accentSoft)
+        )
+    }
+}
+
+// MARK: - Last 7 days summary cards
+
+private extension TrendsView {
+
+    var summaryCards: some View {
+        VStack(spacing: Theme.Spacing.lg) {
+            TrendSummaryCard(
+                title: "Sleep",
+                value: vm.sleepValueText,
+                unit: "avg",
+                note: "goal 8h",
+                footnote: vm.sleepFootnote
+            ) {
+                TrendBarChart(values: vm.sleepWindow.values, dayLabels: vm.sleepWindow.dayLabels)
+            }
+
+            TrendSummaryCard(
+                title: "HRV",
+                value: vm.hrvValueText,
+                unit: "ms",
+                note: vm.hrvNote,
+                footnote: vm.hrvFootnote
+            ) {
+                TrendLineChart(values: vm.hrvWindow.values, dayLabels: vm.hrvWindow.dayLabels)
+            }
+
+            TrendSummaryCard(
+                title: "Resting HR",
+                value: vm.rhrValueText,
+                unit: "bpm",
+                note: vm.rhrNote,
+                footnote: vm.rhrFootnote
+            ) {
+                TrendLineChart(values: vm.rhrWindow.values, dayLabels: vm.rhrWindow.dayLabels)
+            }
+        }
+    }
+}
+
+// MARK: - Explorer (existing metric/range explorer, restyled)
+
+private extension TrendsView {
 
     var metricPicker: some View {
         Menu {
@@ -69,13 +145,9 @@ private extension TrendsView {
             .padding(.horizontal, Theme.Spacing.lg)
             .padding(.vertical, Theme.Spacing.sm)
             .background(
-                RoundedRectangle(cornerRadius: Theme.Radius.pill, style: .continuous)
-                    .fill(Theme.Colors.glassFill)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: Theme.Radius.pill, style: .continuous)
-                            .strokeBorder(Theme.Colors.glassBorder, lineWidth: 0.5)
-                    )
+                Capsule().fill(Theme.Colors.card)
             )
+            .shadow(color: Theme.Colors.cardShadow, radius: 2, x: 0, y: 1)
         }
         .buttonStyle(.plain)
     }
@@ -87,28 +159,17 @@ private extension TrendsView {
                     vm.selectedDays = days
                 } label: {
                     Text(Self.rangeLabel(days))
-                        .font(.system(size: 13, weight: vm.selectedDays == days ? .semibold : .regular))
+                        .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(
                             vm.selectedDays == days
-                                ? Theme.Colors.accent
+                                ? Theme.Colors.accentContent
                                 : Theme.Colors.textSecondary
                         )
                         .padding(.horizontal, Theme.Spacing.md)
                         .padding(.vertical, Theme.Spacing.xs)
                         .background(
-                            RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous)
-                                .fill(vm.selectedDays == days
-                                      ? Theme.Colors.accent.opacity(0.15)
-                                      : Color.clear)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous)
-                                        .strokeBorder(
-                                            vm.selectedDays == days
-                                                ? Theme.Colors.accent.opacity(0.4)
-                                                : Theme.Colors.glassBorder,
-                                            lineWidth: 0.5
-                                        )
-                                )
+                            Capsule()
+                                .fill(vm.selectedDays == days ? Theme.Colors.accentSoft : Color.clear)
                         )
                 }
                 .buttonStyle(.plain)
@@ -120,7 +181,7 @@ private extension TrendsView {
     // MARK: - Chart card
 
     var chartCard: some View {
-        GlassCard {
+        VitalCard {
             VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
                 HStack(alignment: .lastTextBaseline) {
                     VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
@@ -277,6 +338,71 @@ private extension TrendsView {
     }
 }
 
+// MARK: - Trend summary card (Sleep / HRV / Resting HR)
+
+/// The v3 mock's `TrendCard`: title + note row, a big value line, a chart,
+/// and a data-driven footnote (optionally with a bold span).
+private struct TrendSummaryCard<Chart: View>: View {
+    let title: String
+    let value: String
+    let unit: String?
+    let note: String
+    let footnote: TrendsSummary.Footnote
+    @ViewBuilder var chart: () -> Chart
+
+    var body: some View {
+        VitalCard {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(title.uppercased())
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Theme.Colors.textSecondary)
+                        .tracking(1.3)
+                    Spacer()
+                    Text(note)
+                        .font(.system(size: 13))
+                        .foregroundStyle(Theme.Colors.textTertiary)
+                }
+
+                HStack(alignment: .lastTextBaseline, spacing: 6) {
+                    Text(value)
+                        .font(.system(size: 30, weight: .bold))
+                        .monospacedDigit()
+                        .foregroundStyle(Theme.Colors.textPrimary)
+                    if let unit {
+                        Text(unit)
+                            .font(.system(size: 14))
+                            .foregroundStyle(Theme.Colors.textSecondary)
+                    }
+                }
+                .padding(.top, Theme.Spacing.sm)
+
+                chart()
+                    .padding(.top, Theme.Spacing.lg)
+
+                footnoteView
+                    .padding(.top, Theme.Spacing.md)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var footnoteView: some View {
+        if let bold = footnote.bold {
+            (
+                Text(footnote.prefix).foregroundStyle(Theme.Colors.textSecondary)
+                + Text(bold).foregroundStyle(Theme.Colors.textPrimary).fontWeight(.semibold)
+                + Text(footnote.suffix).foregroundStyle(Theme.Colors.textSecondary)
+            )
+            .font(.system(size: 13))
+        } else {
+            Text(footnote.prefix)
+                .font(.system(size: 13))
+                .foregroundStyle(Theme.Colors.textSecondary)
+        }
+    }
+}
+
 // MARK: - Stat badge
 
 private struct StatBadge: View {
@@ -284,7 +410,7 @@ private struct StatBadge: View {
     let value: String
 
     var body: some View {
-        GlassCard(padding: Theme.Spacing.md, cornerRadius: Theme.Radius.md) {
+        VitalCard(padding: Theme.Spacing.md, cornerRadius: Theme.Radius.md) {
             VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
                 Text(label.uppercased())
                     .font(Theme.Typography.labelSmall)

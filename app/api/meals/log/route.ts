@@ -30,6 +30,11 @@
  * `meal_logged` writes, so it owns today's read of them too. Local-day
  * resolution mirrors `app/api/plan/route.ts`'s `resolveDayKey` /
  * `app/api/today`'s `todayEvents` filter.
+ * ?date=YYYY-MM-DD (redesign-v3 Phase 6): optional. When present, resolves
+ *   that local day (in `tz`) instead of today's — lets the Logs day-pager
+ *   fetch a past day's meal entries for its diet-budget card. Malformed
+ *   values (not matching /^\d{4}-\d{2}-\d{2}$/) return 400. Omitted → behavior
+ *   is byte-identical to before (today's local day).
  * Response: { items: [{ id, name, kcal, protein, carbs, fat, slot, loggedAt }] }
  * (ascending by loggedAt)
  *
@@ -199,10 +204,17 @@ export async function GET(request: Request): Promise<NextResponse> {
     return NextResponse.json({ error: String(err) }, { status: 401 });
   }
 
-  const paramTz = new URL(request.url).searchParams.get('tz');
+  const url = new URL(request.url);
+  const paramTz = url.searchParams.get('tz');
+  const paramDate = url.searchParams.get('date');
+
+  if (paramDate !== null && !/^\d{4}-\d{2}-\d{2}$/.test(paramDate)) {
+    return NextResponse.json({ error: 'date must be in YYYY-MM-DD format.' }, { status: 400 });
+  }
+
   const [userRow] = await db.select().from(schema.users).where(eq(schema.users.id, userId)).limit(1);
   const tz = pickTimeZone(paramTz, userRow?.timezone);
-  const todayKey = localDayKey(new Date(), tz);
+  const todayKey = paramDate ?? localDayKey(new Date(), tz);
 
   let events: (typeof schema.events.$inferSelect)[];
   try {

@@ -1,23 +1,26 @@
 /**
- * GET /api/trends?metric=hrv|sleep|weight|steps&days=30
+ * GET /api/trends?metric=hrv|sleep|weight|steps|vo2|distance|rhr&days=30
  *
  * Day-keyed time series for one metric, sourced from the `daily_metrics` store
  * — the same store the 1-year backfill + background sync write to, and that the
  * Today screen reads. `daily_metrics` is already unique per (user, date, metric),
  * so no bucketing is needed. Weight additionally merges manual weight-log.json
- * entries (manual wins per day).
+ * entries (manual wins per day). Also returns the same calibration status as
+ * `/api/today` (cheap GROUP BY, computed on every call) so the client can show
+ * a "still calibrating" banner alongside the series.
  *
- * Response: { metric, points: [{ date: "YYYY-MM-DD", value }] }  // oldest → newest
+ * Response: { metric, points: [{ date: "YYYY-MM-DD", value }], calibration }  // points oldest → newest
  */
 
 import { NextResponse } from 'next/server';
 import { getUserIdFromRequest } from '@/lib/auth';
 import { queryMetricPoints } from '@/lib/brain/tools';
 import { readWeightLog } from '@/lib/weightLog';
+import { getCalibration } from '@/lib/brain/baselines';
 
 export const dynamic = 'force-dynamic';
 
-const VALID_METRICS = new Set(['hrv', 'sleep', 'weight', 'steps', 'vo2', 'distance']);
+const VALID_METRICS = new Set(['hrv', 'sleep', 'weight', 'steps', 'vo2', 'distance', 'rhr']);
 
 // Trends metric name → daily_metrics metric name
 const DAILY_METRIC: Record<string, string> = {
@@ -27,6 +30,7 @@ const DAILY_METRIC: Record<string, string> = {
   steps:    'steps',
   vo2:      'vo2_max',
   distance: 'distance_m',
+  rhr:      'resting_hr',
 };
 
 function transform(metric: string, value: number): number {
@@ -37,6 +41,7 @@ function transform(metric: string, value: number): number {
     case 'steps':    return Math.round(value);
     case 'vo2':      return Math.round(value * 10) / 10;          // ml/kg·min (1dp)
     case 'distance': return Math.round((value / 1000) * 100) / 100; // meters → km (2dp)
+    case 'rhr':      return Math.round(value);                    // bpm
     default:         return value;
   }
 }
@@ -60,7 +65,10 @@ export async function GET(request: Request): Promise<NextResponse> {
     return NextResponse.json({ error: String(err) }, { status: 401 });
   }
 
-  const raw = await queryMetricPoints(userId, DAILY_METRIC[metric], days);
+  const [raw, calibration] = await Promise.all([
+    queryMetricPoints(userId, DAILY_METRIC[metric], days),
+    getCalibration(userId),
+  ]);
   const byDate = new Map<string, number>();
   for (const p of raw) byDate.set(p.date, transform(metric, p.value));
 
@@ -80,5 +88,5 @@ export async function GET(request: Request): Promise<NextResponse> {
     .map(([date, value]) => ({ date, value }))
     .sort((a, b) => a.date.localeCompare(b.date));
 
-  return NextResponse.json({ metric, points });
+  return NextResponse.json({ metric, points, calibration });
 }
