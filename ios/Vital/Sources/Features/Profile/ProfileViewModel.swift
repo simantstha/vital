@@ -37,6 +37,12 @@ final class ProfileViewModel: ObservableObject {
     @Published var budgetMode: String = "auto"   // "auto" | "custom"
     @Published var budgetGoalLabel: String = ""
 
+    /// Calibration status for the Profile banner — same shape Trends uses.
+    /// Loaded non-fatally via `fetchTrends(metric: "rhr", days: 7)` (one
+    /// cheap call that carries `calibration` alongside points we don't need
+    /// here), mirroring `TrendsViewModel.loadSummary()`.
+    @Published var calibration: CalibrationStatus? = nil
+
     private let apiClient = APIClient.shared
 
     func load() async {
@@ -54,6 +60,7 @@ final class ProfileViewModel: ObservableObject {
             print("[Vital] fetchProfile failed: \(error.localizedDescription)")
         }
         await loadBudget()
+        await loadCalibration()
         isLoading = false
     }
 
@@ -69,6 +76,28 @@ final class ProfileViewModel: ObservableObject {
             // Non-fatal — the row just shows a neutral placeholder.
             print("[Vital] fetchDietGoal failed: \(error.localizedDescription)")
         }
+    }
+
+    /// Non-fatal — the calibrating banner simply doesn't show if this fails.
+    func loadCalibration() async {
+        do {
+            let r = try await apiClient.fetchTrends(metric: "rhr", days: 7)
+            calibration = r.calibration
+        } catch {
+            print("[Vital] fetchTrends(rhr) for calibration failed: \(error.localizedDescription)")
+        }
+    }
+
+    /// `min(1, minimum dataDays across metrics / 14)` — same rule
+    /// `TodayViewModel.applyTodayResponse` uses for its calibration progress.
+    var calibrationPercent: Int {
+        guard let calibration else { return 0 }
+        let dataDays = [
+            calibration.metrics["hrv_sdnn"]?.dataDays ?? 0,
+            calibration.metrics["resting_hr"]?.dataDays ?? 0,
+            calibration.metrics["sleep_minutes"]?.dataDays ?? 0,
+        ].min() ?? 0
+        return Int((min(1.0, Double(dataDays) / 14.0) * 100).rounded())
     }
 
     // MARK: - Private

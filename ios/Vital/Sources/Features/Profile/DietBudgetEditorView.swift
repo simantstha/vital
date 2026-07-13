@@ -24,6 +24,10 @@ struct DietBudgetEditorView: View {
                                 resetButton
                             } else {
                                 goalCard
+                                if vm.goal != "endurance" {
+                                    coachRecommendsCard
+                                }
+                                whatThisMeansCard
                                 autoNote
                             }
                             if let msg = vm.errorMessage {
@@ -64,7 +68,7 @@ struct DietBudgetEditorView: View {
     // ── Hero: big kcal number (± stepper in custom) ──────────────────────────
 
     private var heroCard: some View {
-        GlassCard(padding: Theme.Spacing.xl) {
+        VitalCard(padding: Theme.Spacing.xl) {
             VStack(spacing: Theme.Spacing.sm) {
                 Text("DAILY TARGET")
                     .font(Theme.Typography.labelSmall)
@@ -157,7 +161,7 @@ struct DietBudgetEditorView: View {
     }
 
     private func macroRow(_ label: String, value: Binding<Int>, color: Color) -> some View {
-        GlassCard(padding: Theme.Spacing.lg, cornerRadius: Theme.Radius.md) {
+        VitalCard(padding: Theme.Spacing.lg, cornerRadius: Theme.Radius.md) {
             HStack {
                 Circle().fill(color).frame(width: 10, height: 10)
                 Text(label).font(Theme.Typography.bodyMedium).foregroundStyle(Theme.Colors.textPrimary)
@@ -191,7 +195,7 @@ struct DietBudgetEditorView: View {
     // ── Auto: goal picker + note ───────────────────────────────────────────────
 
     private var goalCard: some View {
-        GlassCard(padding: Theme.Spacing.lg, cornerRadius: Theme.Radius.md) {
+        VitalCard(padding: Theme.Spacing.lg, cornerRadius: Theme.Radius.md) {
             HStack {
                 Text("Goal").font(Theme.Typography.bodyMedium).foregroundStyle(Theme.Colors.textPrimary)
                 Spacer()
@@ -207,6 +211,93 @@ struct DietBudgetEditorView: View {
                     .foregroundStyle(Theme.Colors.accentContent)
                 }
             }
+        }
+    }
+
+    // ── Coach recommends (static per plan — mirrors the mock's GOAL_DETAILS) ──
+
+    private var coachRecommendsCard: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            Text("COACH RECOMMENDS")
+                .font(.system(size: 11, weight: .bold))
+                .tracking(1.0)
+                .foregroundStyle(Theme.Colors.accentContent)
+
+            Text("Endurance")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(Theme.Colors.textPrimary)
+
+            Text("You're training for a marathon — endurance fueling supports your mileage.")
+                .font(Theme.Typography.bodySmall)
+                .foregroundStyle(Theme.Colors.textSecondary)
+
+            Button {
+                vm.setGoal("endurance")
+            } label: {
+                Text("Use this goal")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Theme.Colors.onAccent)
+                    .padding(.horizontal, Theme.Spacing.lg)
+                    .padding(.vertical, Theme.Spacing.sm)
+                    .background(Capsule().fill(Theme.Colors.accent))
+            }
+            .buttonStyle(.plain)
+            .padding(.top, Theme.Spacing.xs)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(Theme.Spacing.lg)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.Radius.xl, style: .continuous)
+                .fill(Theme.Colors.accentSoft)
+        )
+    }
+
+    // ── What this means (static per-goal facts) ───────────────────────────────
+
+    private static let goalFacts: [String: [String]] = [
+        "weight_loss": [
+            "Moderate calorie deficit calculated from your weight trend",
+            "Protein set high to preserve muscle while losing fat",
+            "Budget tightens gradually, never a crash diet",
+        ],
+        "muscle": [
+            "Calorie surplus sized to your training volume",
+            "Protein set high to support muscle growth",
+            "Carbs scaled to fuel strength sessions",
+        ],
+        "endurance": [
+            "Higher carb targets on training days",
+            "Protein set to preserve muscle through mileage",
+            "Budget adapts to workout burn",
+        ],
+        "general": [
+            "Calories set to maintain your current weight",
+            "Balanced macros for everyday energy",
+            "Budget adjusts gently with activity",
+        ],
+    ]
+
+    private var whatThisMeansCard: some View {
+        VitalCard(padding: Theme.Spacing.lg, cornerRadius: Theme.Radius.md) {
+            VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+                Text("WHAT THIS MEANS")
+                    .font(.system(size: 11, weight: .bold))
+                    .tracking(1.0)
+                    .foregroundStyle(Theme.Colors.textSecondary)
+
+                ForEach(Self.goalFacts[vm.goal] ?? [], id: \.self) { fact in
+                    HStack(alignment: .top, spacing: Theme.Spacing.sm) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 13))
+                            .foregroundStyle(Theme.Colors.accentContent)
+                            .padding(.top, 2)
+                        Text(fact)
+                            .font(Theme.Typography.bodySmall)
+                            .foregroundStyle(Theme.Colors.textPrimary)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
