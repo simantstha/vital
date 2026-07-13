@@ -15,33 +15,44 @@ struct ProfileView: View {
     @AppStorage(NotificationPrefsKeys.weighinEnabled) private var notifWeighinEnabled = true
 
     var body: some View {
-        ZStack {
-            Theme.Colors.canvas.ignoresSafeArea()
+        NavigationStack {
+            ZStack {
+                Theme.Colors.canvas.ignoresSafeArea()
 
-            ScrollView {
-                VStack(spacing: Theme.Spacing.xl) {
-                    // Gate on load so a fresh launch shows a spinner, not an
-                    // empty "?" avatar and blank stats.
-                    if vm.isLoading {
-                        ProgressView()
-                            .frame(maxWidth: .infinity)
-                            .padding(.top, 80)
-                    } else if let errorMessage = vm.errorMessage {
-                        errorState(message: errorMessage)
-                    } else {
-                        avatarSection
-                        profileDetailsSection
-                        dailyBudgetSection
-                        notificationsSection
-                        activitySection
-                        accountSection
+                ScrollView {
+                    VStack(alignment: .leading, spacing: Theme.Spacing.xl) {
+                        headerSection
+
+                        // Gate on load so a fresh launch shows a spinner, not an
+                        // empty "?" avatar and blank stats.
+                        if vm.isLoading {
+                            ProgressView()
+                                .frame(maxWidth: .infinity)
+                                .padding(.top, 80)
+                        } else if let errorMessage = vm.errorMessage {
+                            errorState(message: errorMessage)
+                        } else {
+                            avatarSection
+
+                            if vm.calibration?.status == "calibrating" {
+                                calibratingBanner
+                            }
+
+                            profileDetailsSection
+                            dailyBudgetSection
+                            notificationsSection
+                            devicesSection
+                            activitySection
+                            accountSection
+                        }
                     }
+                    .padding(.horizontal, Theme.Spacing.xl)
+                    .padding(.top, Theme.Spacing.lg)
+                    .padding(.bottom, 40)
                 }
-                .padding(.horizontal, Theme.Spacing.xl)
-                .padding(.top, Theme.Spacing.xxxl)
-                .padding(.bottom, 40)
+                .scrollIndicators(.hidden)
             }
-            .scrollIndicators(.hidden)
+            .toolbar(.hidden, for: .navigationBar)
         }
         .task { await vm.load() }
         .sheet(isPresented: $showBudgetEditor, onDismiss: { Task { await vm.loadBudget() } }) {
@@ -65,37 +76,60 @@ struct ProfileView: View {
 
 private extension ProfileView {
 
+    // ── Screen title ─────────────────────────────────────────────────────
+
+    var headerSection: some View {
+        Text("Profile")
+            .screenTitleStyle()
+            .foregroundStyle(Theme.Colors.textPrimary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     // ── Avatar + name ──────────────────────────────────────────────────────
 
     var avatarSection: some View {
         ZStack(alignment: .topTrailing) {
-            VStack(spacing: Theme.Spacing.md) {
-                ZStack {
+            VitalCard {
+                VStack(spacing: Theme.Spacing.md) {
                     Circle()
-                        .fill(
-                            LinearGradient(
-                                colors: [Theme.Colors.accent, Theme.Colors.accent.opacity(0.6)],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
+                        .fill(Theme.Colors.accent)
                         .frame(width: 88, height: 88)
-                        .shadow(color: Theme.Colors.accent.opacity(0.35), radius: 16, x: 0, y: 8)
+                        .overlay(
+                            Text(vm.avatarInitial)
+                                .font(.system(size: 38, weight: .bold, design: .rounded))
+                                .foregroundStyle(Theme.Colors.onAccent)
+                        )
 
-                    Text(vm.avatarInitial)
-                        .font(.system(size: 38, weight: .bold, design: .rounded))
-                        .foregroundStyle(Theme.Colors.onAccent)
+                    Text(vm.name)
+                        .font(.system(size: 22, weight: .semibold))
+                        .foregroundStyle(Theme.Colors.textPrimary)
                 }
-
-                Text(vm.name)
-                    .font(.system(size: 22, weight: .semibold))
-                    .foregroundStyle(Theme.Colors.textPrimary)
+                .frame(maxWidth: .infinity)
             }
-            .frame(maxWidth: .infinity)
 
             profileMenu
+                .padding(.top, Theme.Spacing.xs)
+                .padding(.trailing, Theme.Spacing.xs)
         }
-        .frame(maxWidth: .infinity)
+    }
+
+    // ── Calibration banner ──────────────────────────────────────────────────
+
+    var calibratingBanner: some View {
+        HStack(alignment: .top, spacing: Theme.Spacing.sm) {
+            Image(systemName: "info.circle")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(Theme.Colors.accentContent)
+                .padding(.top, 1)
+            Text("Calibrating — \(vm.calibrationPercent)% · Vital is learning your baselines.")
+                .font(.system(size: 14))
+                .foregroundStyle(Theme.Colors.accentContent)
+        }
+        .padding(Theme.Spacing.lg)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Theme.Colors.accentSoft)
+        )
     }
 
     // ── Profile details ───────────────────────────────────────────────────
@@ -111,16 +145,9 @@ private extension ProfileView {
             SectionHeader(title: "Daily Budget")
 
             Button { showBudgetEditor = true } label: {
-                GlassCard {
+                VitalCard {
                     HStack(spacing: Theme.Spacing.md) {
-                        ZStack {
-                            RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous)
-                                .fill(Theme.Colors.accent.opacity(0.22))
-                                .frame(width: 38, height: 38)
-                            Image(systemName: "target")
-                                .font(.system(size: 16, weight: .semibold))
-                                .foregroundStyle(Theme.Colors.accentContent)
-                        }
+                        IconBadge(systemName: "target", style: .soft)
 
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Daily Budget")
@@ -147,7 +174,7 @@ private extension ProfileView {
                         }
                         Image(systemName: "chevron.right")
                             .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(Theme.Colors.textSecondary)
+                            .foregroundStyle(Theme.Colors.textTertiary)
                     }
                 }
             }
@@ -168,16 +195,9 @@ private extension ProfileView {
             SectionHeader(title: "Notifications")
 
             Button { showNotificationSettings = true } label: {
-                GlassCard {
+                VitalCard {
                     HStack(spacing: Theme.Spacing.md) {
-                        ZStack {
-                            RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous)
-                                .fill(Theme.Colors.accent.opacity(0.22))
-                                .frame(width: 38, height: 38)
-                            Image(systemName: "bell.badge")
-                                .font(.system(size: 16, weight: .semibold))
-                                .foregroundStyle(Theme.Colors.accentContent)
-                        }
+                        IconBadge(systemName: "bell.badge", style: .soft)
 
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Reminders")
@@ -192,7 +212,48 @@ private extension ProfileView {
                         Spacer()
                         Image(systemName: "chevron.right")
                             .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(Theme.Colors.textSecondary)
+                            .foregroundStyle(Theme.Colors.textTertiary)
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    // ── Devices ──────────────────────────────────────────────────────────
+
+    /// The backend only tracks one combined HealthKit integration ("Apple
+    /// Health") — that's also the channel Apple Watch data flows through, so
+    /// it doubles as the connectivity signal for the mock's "Apple Watch" row.
+    var appleWatchConnected: Bool {
+        vm.integrations.contains { $0.status.lowercased() == "connected" }
+    }
+
+    var devicesSection: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+            SectionHeader(title: "Devices")
+
+            NavigationLink {
+                DevicesView(appleWatchConnected: appleWatchConnected)
+            } label: {
+                VitalCard {
+                    HStack(spacing: Theme.Spacing.md) {
+                        IconBadge(systemName: "applewatch", style: .soft)
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Devices")
+                                .font(Theme.Typography.bodyMedium)
+                                .fontWeight(.medium)
+                                .foregroundStyle(Theme.Colors.textPrimary)
+                            Text(appleWatchConnected ? "Apple Watch · Connected" : "Apple Watch · Not connected")
+                                .font(Theme.Typography.labelSmall)
+                                .foregroundStyle(Theme.Colors.textSecondary)
+                        }
+
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Theme.Colors.textTertiary)
                     }
                 }
             }
@@ -215,7 +276,7 @@ private extension ProfileView {
 
             LazyVGrid(columns: columns, spacing: Theme.Spacing.sm) {
                 ForEach(cells) { cell in
-                    GlassCard(padding: Theme.Spacing.lg, cornerRadius: Theme.Radius.md) {
+                    VitalCard(padding: Theme.Spacing.lg, cornerRadius: Theme.Radius.md) {
                         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
                             HStack {
                                 Image(systemName: cell.sfSymbol)
@@ -292,7 +353,7 @@ private extension ProfileView {
     // ── Recoverable load error ─────────────────────────────────────────────
 
     func errorState(message: String) -> some View {
-        GlassCard(padding: Theme.Spacing.lg, cornerRadius: Theme.Radius.md) {
+        VitalCard(padding: Theme.Spacing.lg, cornerRadius: Theme.Radius.md) {
             HStack(alignment: .center, spacing: Theme.Spacing.md) {
                 Image(systemName: "exclamationmark.triangle")
                     .font(.system(size: 16, weight: .semibold))
@@ -335,11 +396,11 @@ private extension ProfileView {
             Button {
                 showSignOutConfirm = true
             } label: {
-                GlassCard {
+                VitalCard {
                     HStack(spacing: Theme.Spacing.md) {
                         ZStack {
                             RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous)
-                                .fill(Theme.Colors.glassFill)
+                                .fill(Theme.Colors.alert.opacity(0.12))
                                 .frame(width: 36, height: 36)
                             Image(systemName: "rectangle.portrait.and.arrow.right")
                                 .font(.system(size: 15))

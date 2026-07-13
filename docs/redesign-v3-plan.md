@@ -1,6 +1,6 @@
 # Vital app redesign — "Today Screen v3" implementation plan
 
-**Status: Phases 0–6 done** · Branch: `feat/redesign-v3` (off `main`)
+**Status: Phases 0–7 done** · Branch: `feat/redesign-v3` (off `main`)
 Source of truth for the design: Claude Design project
 <https://claude.ai/design/p/67904bc9-0509-4bb9-b4bf-2219bc3478fb?file=Today+Screen+v3.html>
 (file `Today Screen v3.html` — a full 5-tab React/Tailwind mock of the app).
@@ -235,11 +235,11 @@ commits beyond main; ElevenLabs TTS already works via `/api/tts`.)
 - [x] Entries list in new card idiom + dashed add button (today only).
 
 ### Phase 7 — Profile & Coach restyle
-**Owner: unclaimed · Suggested agent: Haiku · iOS · needs Phase 0**
+**Owner: DONE (2026-07-13, Sonnet subagent) · iOS only**
 
-- [ ] Coach: bubble/composer/chips restyle only (§1 table). Don't touch
+- [x] Coach: bubble/composer/chips restyle only (§1 table). Don't touch
       streaming logic.
-- [ ] Profile: avatar header card, calibration % banner, settings rows w/
+- [x] Profile: avatar header card, calibration % banner, settings rows w/
       icon badges + chevrons; Goal detail gets "Coach recommends" limeSoft
       card + "Use this goal" + "What this means" facts (static per-goal copy
       is fine, mirroring mock's `GOAL_DETAILS`); Devices screen (Apple Watch
@@ -584,3 +584,95 @@ commits beyond main; ElevenLabs TTS already works via `/api/tts`.)
   convention (TrendsSummary, LogsPagerSummary); `DietBudgetCardView`'s
   tappable-vs-readonly split may be reusable; no skeleton state while a
   day's diet data loads — the card simply appears when the fetch resolves.
+- 2026-07-13: Phase 7 done (Sonnet subagent) — Profile & Coach restyle,
+  branch `feat/redesign-v3-profile-coach`, presentation-only, iOS only (no
+  backend changes, no `CoachViewModel.swift`/`Theme.swift` changes).
+  **Coach** (`Features/Coach/CoachView.swift` only): the default "vital"
+  persona's `bubbleSurface` case now fills `Theme.Colors.accentSoft` at
+  `Theme.Radius.xl`; user bubbles moved off lime onto
+  `Theme.Colors.card` + `cardShadow` (radius 1, y 1) at the same `xl` radius,
+  with `foregroundStyle` unified to `textPrimary` for both roles (was
+  `onAccent` for user); specialist bubbles are untouched (still `.lg` radius,
+  glass+tint, unchanged branch). New private `CoachAvatarBadge` (30pt lime
+  circle, `onAccent` `message.fill`) renders leading every assistant bubble
+  whose `resolvedPresentation.bubbleLabel == nil` (i.e. vital, not a
+  specialist) — `MessageBubbleView`'s outer `HStack` gained
+  `alignment: .top` so the avatar sits top-aligned against multi-line
+  bubbles; this one component change covers both plain `ChatMessage` rows and
+  streaming `AssistantTurnView` bubbles since both route through
+  `MessageBubbleView`. Composer: the bare `HStack` + `Divider` became one
+  `Capsule().fill(Theme.Colors.card)` + `glassBorder` hairline + `cardShadow`
+  wrapping the text field/mic/send row (mic and send buttons, their
+  three-state logic, and `stopSpeakingRow`/`micPermissionHint` are otherwise
+  untouched — their backgrounds were left as-is, judged not "trivial enough"
+  to restyle without risking the denial-hint/speaking-row layout). New
+  suggestion-chips row (reuses `Chip(isAccent: true)`) sits directly above
+  the composer, gated on `showSuggestionChips`: `!vm.rows.contains` a
+  `.message` row with `role == .user` — the cheapest correct read of
+  "hasn't sent anything yet this session" since `rows` is already the
+  transcript's source of truth; tapping a chip sets `vm.input` and calls
+  `vm.send()` exactly like manual entry, disabled while `vm.isStreaming`.
+  Typing indicator's `glassEffect` became a flat `accentSoft` rounded-24 fill
+  to match the new vital bubble. **Profile**: `ProfileView` now wraps its
+  `ScrollView` in a `NavigationStack` with `.toolbar(.hidden, for:
+  .navigationBar)` (needed for the new Devices push) and a leading
+  `screenTitleStyle()` "Profile" header, matching Trends'/Logs' idiom.
+  Avatar header moved into a `VitalCard` with a flat `Theme.Colors.accent`
+  circle (dropped the old gradient + glow — v3 is flat per spec); the
+  overflow `Menu` stays anchored top-trailing via the same `ZStack(alignment:
+  .topTrailing)` shape, just nudged in slightly so it doesn't crowd the
+  card's rounded corner. Calibration banner copies `TrendsView`'s
+  `calibratingBanner` shape/colors with Profile-specific copy
+  ("Calibrating — N% · Vital is learning your baselines."), shown only when
+  `vm.calibration?.status == "calibrating"`. `ProfileViewModel` gained
+  `calibration: CalibrationStatus?` (loaded non-fatally in a new
+  `loadCalibration()`, called from `load()` alongside the existing
+  `loadBudget()`) and `calibrationPercent: Int`
+  (`min(1, minDataDays(hrv_sdnn, resting_hr, sleep_minutes) / 14)`, same rule
+  as `TodayViewModel.applyTodayResponse`). **Decision, per the spec's
+  explicit instruction**: calibration is fetched via
+  `apiClient.fetchTrends(metric: "rhr", days: 7)` (mirroring
+  `TrendsViewModel.loadSummary()`) rather than decoding the `calibration`
+  field the backend's `/api/profile` route already returns in its JSON body
+  — `ProfileResponse` doesn't decode that field today, and the brief called
+  out the Trends-mirroring approach by name, so `APIClient.swift` needed zero
+  changes. Settings rows (Daily Budget, Reminders) and the two stat grids
+  (Profile Details, Activity) migrated `GlassCard`→`VitalCard`, ad-hoc icon
+  `ZStack`s → `IconBadge(style: .soft)`, chevrons → `textTertiary`. New
+  **Devices row** (`VitalCard` + `IconBadge("applewatch")`, subtitle "Apple
+  Watch · Connected"/"· Not connected") is a `NavigationLink` to new
+  `Features/Profile/DevicesView.swift`: canvas background, `screenTitleStyle()`
+  "Devices" title, one `VitalCard` per device. **Deviation**: the spec's
+  "Apple Watch / Apple Health: status from `vm.integrations`" is rendered as
+  a single "Apple Watch" row (matching the mock's exact device name) backed
+  by `vm.integrations` — the backend's `/api/profile` route only returns one
+  combined `{ name: "Apple Health", status }` integration (verified in
+  `app/api/profile/route.ts`), which is also the channel Apple Watch data
+  flows through, so there's no separate watch-specific signal to read;
+  showing two rows both claiming status from the same one signal would have
+  been misleading. Whoop/Oura/Garmin are non-functional `VitalCard` stubs
+  with a `textSecondary` "Not connected" line and a trailing `accentSoft`
+  "Connect" pill; tapping one flips a local `@State private var tappedStub:
+  String?` to append an inline "· Coming soon" to that row's subtitle only —
+  never a fake connected state. Sign-out row migrated to `VitalCard` with a
+  `Theme.Colors.alert.opacity(0.12))`-tinted icon square (kept the existing
+  hand-rolled `ZStack` rather than `IconBadge`, which has no red/alert style
+  variant — judged as the "red-tinted variant if trivial" the spec allowed).
+  **Goal detail** (`DietBudgetEditorView`, auto-mode branch only): migrated
+  `heroCard`/`macroRow`/`goalCard` `GlassCard`→`VitalCard`; added a
+  `coachRecommendsCard` (`accentSoft` rounded-24, "COACH RECOMMENDS" label,
+  "Endurance" + the marathon-training line from the brief verbatim, "Use
+  this goal" lime pill → `vm.setGoal("endurance")`), hidden via `if vm.goal
+  != "endurance"`; added a `whatThisMeansCard` (`VitalCard`, "WHAT THIS
+  MEANS" label, 3 bullet facts per goal from a new static `private static
+  let goalFacts: [String: [String]]` keyed by all four goal ids, each with a
+  small `accentContent` checkmark icon) reading `vm.goal` live so it updates
+  when the menu picker changes goals. Verify:
+  `cd ios/Vital && xcodegen generate` (picked up the new `DevicesView.swift`
+  via the existing `Sources/` glob, no `project.yml` edit needed);
+  `xcodebuild ... build` → **BUILD SUCCEEDED**; `xcodebuild ... test` →
+  **TEST SUCCEEDED, 85/85** (this branch had picked up more tests from `main`
+  since Phase 6's 73 — `CoachSpecialistViewTests`/`ProactiveNotificationsTests`
+  etc. from unrelated merged PRs; zero new tests added this phase, consistent
+  with prior presentation-only phases). Notes for Phase 8: unrelated
+  (EventKit/calendar merge on Today) — no overlap with this phase's files.
