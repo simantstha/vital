@@ -34,11 +34,12 @@ export interface GenerateGroundedAnalysisArgs {
   report(event: AnalysisFailureEvent): void;
 }
 
-const TOKEN_CONTRACT = `Copy only supplied evidence tokens exactly. Copy them only into the five schema string locations: headline, shortInsight, narrative, observations, and nextSteps. Use each token at most once. Each token must terminate its clause or string and may be followed only by a terminal punctuation mark. Never place a sign before a token or a unit, percent, degree, or other numeric symbol after it. Never alter, split, concatenate, nest, enumerate, or manufacture a token. Never write a raw number or numeric symbol sequence. Use qualitative language when no token fits.`;
+const SCHEMA_CONTRACT = `headline, shortInsight, and narrative must each be a non-empty JSON string. observations and nextSteps must each be a JSON array of non-empty JSON strings. No additional keys are allowed.`;
+const TOKEN_CONTRACT = `Copy only supplied evidence tokens exactly. Copy them only into a scalar string or an individual array-item string. Use each token at most once. Each token must terminate its clause or string and may be followed only by a terminal punctuation mark. Never place a sign before a token or a unit, percent, degree, or other numeric symbol after it. Never alter, split, concatenate, nest, enumerate, or manufacture a token. Never write a raw number or numeric symbol sequence. Use qualitative language when no token fits.`;
 
-export const PROACTIVE_ANALYSIS_SYSTEM_PROMPT = `You are Vital coach. Return JSON only with exactly headline, shortInsight, narrative, observations, and nextSteps. Keep the output observational and non-diagnostic. ${TOKEN_CONTRACT}`;
+export const PROACTIVE_ANALYSIS_SYSTEM_PROMPT = `You are Vital coach. Return JSON only with exactly headline, shortInsight, narrative, observations, and nextSteps. ${SCHEMA_CONTRACT} Keep the output observational and non-diagnostic. ${TOKEN_CONTRACT}`;
 
-export const PROACTIVE_ANALYSIS_REPAIR_PROMPT = `Repair the Vital coach response for the supplied failure category and request. Return a full replacement as JSON only with exactly headline, shortInsight, narrative, observations, and nextSteps. Keep the output observational and non-diagnostic. ${TOKEN_CONTRACT}`;
+export const PROACTIVE_ANALYSIS_REPAIR_PROMPT = `Repair the Vital coach response for the supplied failure category and request. Return a full replacement as JSON only with exactly headline, shortInsight, narrative, observations, and nextSteps. ${SCHEMA_CONTRACT} Keep the output observational and non-diagnostic. ${TOKEN_CONTRACT}`;
 
 export function proactiveAnalysisModel(env: NodeJS.ProcessEnv): string {
   return env.PROACTIVE_ANALYSIS_MODEL ?? DEFAULT_PROACTIVE_ANALYSIS_MODEL;
