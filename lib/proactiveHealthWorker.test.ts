@@ -2,18 +2,35 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   classifyApnsResponse,
+  consumeMorningAnalysisProof,
   nextRetryAt,
   runClaimedAnalysis,
   shouldRunMorningBrief,
   type AnalysisJob,
   type WorkerRepository,
 } from './proactiveHealthWorker';
+import {
+  consumeGroundedAnalysisProof,
+  encodeProactiveAnalysisRequest,
+  groundAnalysisText,
+  modelPayload,
+  type GroundedAnalysisProof,
+} from './proactiveAnalysisGrounding';
 
 const valid = {
   headline: 'A useful signal', shortInsight: 'Recovery held steady.',
   narrative: 'Your available data suggests a steady day.',
   observations: ['Sleep duration was recorded.'], nextSteps: ['Keep today comfortable.'],
 };
+
+function trustedProof(): GroundedAnalysisProof {
+  const encoded = encodeProactiveAnalysisRequest({
+    kind: 'workout', date: '2026-07-12', input: { value: 45 }, availableContext: {},
+  });
+  const [token] = JSON.stringify(modelPayload(encoded)).match(/\{\{EVIDENCE_[A-Z]+\}\}/g) ?? [];
+  assert.ok(token);
+  return groundAnalysisText(JSON.stringify({ ...valid, narrative: `Available data included ${token}.` }), encoded);
+}
 
 test('caps exponential retries', () => {
   const now = new Date('2026-07-12T12:00:00Z');
@@ -39,7 +56,7 @@ test('timezone scheduling runs once at or after configured local minute', () => 
 test('disabled notification preference suppresses analysis without model or push', async () => {
   const calls: string[] = [];
   const repo = fakeRepository(calls, false);
-  await runClaimedAnalysis(job(), repo, async () => { calls.push('analyze'); return valid; }, async () => {
+  await runClaimedAnalysis(job(), repo, async () => { calls.push('analyze'); return trustedProof(); }, async () => {
     calls.push('push'); return { outcome: 'sent', retireToken: false };
   }, new Date());
   assert.deepEqual(calls, ['suppress']);
@@ -48,14 +65,14 @@ test('disabled notification preference suppresses analysis without model or push
 test('one logical notification is sent despite a duplicate worker delivery', async () => {
   const calls: string[] = [];
   const repo = fakeRepository(calls, true);
-  const analyze = async () => valid;
+  const analyze = async () => trustedProof();
   const push = async () => { calls.push('push'); return { outcome: 'sent' as const, retireToken: false }; };
   await runClaimedAnalysis(job(), repo, analyze, push, new Date());
   await runClaimedAnalysis(job(), repo, analyze, push, new Date());
   assert.equal(calls.filter((x) => x === 'push').length, 1);
 });
 
-test('a repaired result is not stored after lease ownership is lost', async () => {
+test('a grounded proof is not stored after lease ownership is lost', async () => {
   const calls: string[] = [];
   const repo = fakeRepository(calls, true);
   let renewals = 0;
@@ -64,11 +81,65 @@ test('a repaired result is not stored after lease ownership is lost', async () =
   await runClaimedAnalysis(
     job(),
     repo,
-    async () => valid,
+    async () => trustedProof(),
     async () => ({ outcome: 'sent', retireToken: false }),
     new Date('2026-07-13T12:00:00Z'),
   );
   assert.equal(calls.includes('store'), false);
+});
+
+test('forged, copied, serialized, and reused proofs take the retry path before persistence or notification', async () => {
+  const consumed = trustedProof();
+  consumeGroundedAnalysisProof(consumed);
+  const fresh = trustedProof();
+  const untrusted: GroundedAnalysisProof[] = [
+    valid as unknown as GroundedAnalysisProof,
+    {} as GroundedAnalysisProof,
+    { ...fresh } as GroundedAnalysisProof,
+    JSON.parse(JSON.stringify(fresh)) as GroundedAnalysisProof,
+    consumed,
+  ];
+
+  for (const proof of untrusted) {
+    const calls: string[] = [];
+    const repo = fakeRepository(calls, true);
+    repo.storeReady = async () => { calls.push('store'); return true; };
+    repo.markRetry = async () => { calls.push('retry'); return true; };
+    repo.claimNotification = async () => { calls.push('claim'); return 'notification-lease'; };
+    await runClaimedAnalysis(
+      job(),
+      repo,
+      async () => proof,
+      async () => { calls.push('push'); return { outcome: 'sent', retireToken: false }; },
+      new Date('2026-07-13T12:00:00Z'),
+    );
+    assert.deepEqual(calls.filter((call) => call === 'retry'), ['retry']);
+    assert.equal(calls.includes('store'), false);
+    assert.equal(calls.includes('claim'), false);
+    assert.equal(calls.includes('push'), false);
+  }
+});
+
+test('morning completion consumes only a fresh trusted proof immediately before owned completion', () => {
+  const calls: string[] = [];
+  const completeOwned = (_analysis: unknown) => { calls.push('complete'); };
+  const proof = trustedProof();
+  completeOwned(consumeMorningAnalysisProof(proof));
+  assert.deepEqual(calls, ['complete']);
+
+  const consumed = trustedProof();
+  consumeMorningAnalysisProof(consumed);
+  const fresh = trustedProof();
+  const untrusted: GroundedAnalysisProof[] = [
+    valid as unknown as GroundedAnalysisProof,
+    { ...fresh } as GroundedAnalysisProof,
+    JSON.parse(JSON.stringify(fresh)) as GroundedAnalysisProof,
+    consumed,
+  ];
+  for (const candidate of untrusted) {
+    assert.throws(() => completeOwned(consumeMorningAnalysisProof(candidate)), /invalid grounded analysis proof/i);
+  }
+  assert.deepEqual(calls, ['complete']);
 });
 
 test('a first failed analysis is retried after one minute', async () => {

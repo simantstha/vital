@@ -1,8 +1,8 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { ApnsClient } from '../lib/apnsClient';
 import { generateGroundedAnalysis, proactiveAnalysisModel, type AnalysisFailureEvent } from '../lib/proactiveAnalysisGeneration';
-import { consumeGroundedAnalysisProof } from '../lib/proactiveAnalysisGrounding';
-import { deliverNotification, runClaimedAnalysis, type AnalysisContext, type AnalysisJob, type CoachAnalysis } from '../lib/proactiveHealthWorker';
+import { type GroundedAnalysisProof } from '../lib/proactiveAnalysisGrounding';
+import { consumeMorningAnalysisProof, deliverNotification, runClaimedAnalysis, type AnalysisContext, type AnalysisJob } from '../lib/proactiveHealthWorker';
 import { claimAnalysisJobs, claimDueMorningBriefs, completeMorningBrief, ensureDefaultPreferencesForRegisteredUsers, failMorningBrief, listReadyNotificationCandidates, workerRepository } from '../lib/proactiveHealthWorkerRepository';
 import { workerErrorEvent, type WorkerStage } from '../lib/proactiveHealthWorkerSupport';
 
@@ -14,8 +14,8 @@ const reportAnalysisFailure = (event: AnalysisFailureEvent): void => {
   console.error(JSON.stringify(event));
 };
 
-async function analyze(job: AnalysisJob, context: AnalysisContext): Promise<CoachAnalysis> {
-  const proof = await generateGroundedAnalysis({
+async function analyze(job: AnalysisJob, context: AnalysisContext): Promise<GroundedAnalysisProof> {
+  return generateGroundedAnalysis({
     source: { kind: job.kind, date: job.localDate, input: job.input, availableContext: context },
     generate: async (request) => {
       const response = await anthropic.messages.create({
@@ -30,7 +30,6 @@ async function analyze(job: AnalysisJob, context: AnalysisContext): Promise<Coac
     },
     report: reportAnalysisFailure,
   });
-  return consumeGroundedAnalysisProof(proof);
 }
 
 async function tick(reportStage: (stage: WorkerStage) => void): Promise<void> {
@@ -60,7 +59,8 @@ async function tick(reportStage: (stage: WorkerStage) => void): Promise<void> {
     const job: AnalysisJob = { id: claim.idempotencyKey, kind: 'sleep', userId: claim.userId, localDate: claim.localDate, input: { purpose: 'morning brief' }, retryCount: 0, notificationRetryCount: claim.retryCount, leaseToken: claim.leaseToken };
     try {
       const context = await workerRepository.getContext(job);
-      const result = await analyze(job, context);
+      const proof = await analyze(job, context);
+      const result = consumeMorningAnalysisProof(proof);
       await completeMorningBrief(claim, result, (device, value) => apns.send(device, value, { type: 'morning_brief', deepLink: 'vital://today' }), now);
     } catch (error) {
       console.error(JSON.stringify(workerErrorEvent('process-morning-brief', error)));
