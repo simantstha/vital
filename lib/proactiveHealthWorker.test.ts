@@ -122,7 +122,7 @@ test('forged, copied, serialized, and reused proofs take the retry path before p
 
 test('morning completion consumes only a fresh trusted proof immediately before owned completion', () => {
   const calls: string[] = [];
-  const completeOwned = (_analysis: unknown) => { calls.push('complete'); };
+  const completeOwned = (analysis: unknown) => { assert.ok(analysis); calls.push('complete'); };
   const proof = trustedProof();
   completeOwned(consumeMorningAnalysisProof(proof));
   assert.deepEqual(calls, ['complete']);

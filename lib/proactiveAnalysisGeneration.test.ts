@@ -33,13 +33,28 @@ const valid = {
   nextSteps: ['Keep today comfortable.'],
 };
 
-function payloadOf(request: AnalysisGenerationRequest): Record<string, any> {
-  return JSON.parse(request.content) as Record<string, any>;
+function assertRecord(value: unknown): asserts value is Record<string, unknown> {
+  assert.ok(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function payloadOf(request: AnalysisGenerationRequest): Record<string, unknown> {
+  const payload: unknown = JSON.parse(request.content);
+  assertRecord(payload);
+  return payload;
 }
 
 function hrvToken(request: AnalysisGenerationRequest): string {
   const payload = request.attempt === 'initial' ? payloadOf(request) : payloadOf(request).request;
-  return payload.availableContext.metrics[0].value as string;
+  assertRecord(payload);
+  const availableContext = payload.availableContext;
+  assertRecord(availableContext);
+  const metrics = availableContext.metrics;
+  assert.ok(Array.isArray(metrics));
+  const metric = metrics[0];
+  assertRecord(metric);
+  const value = metric.value;
+  assert.ok(typeof value === 'string');
+  return value;
 }
 
 function tokenResponse(request: AnalysisGenerationRequest): string {
