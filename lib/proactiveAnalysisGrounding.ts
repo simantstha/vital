@@ -1,3 +1,5 @@
+import { type CoachAnalysis, parseCoachAnalysis } from './proactiveAnalysisSchema';
+
 export interface ProactiveAnalysisSource {
   kind: 'workout' | 'sleep';
   date: string;
@@ -15,8 +17,10 @@ interface PrivateEncodingState {
 
 const encodings = new WeakMap<object, PrivateEncodingState>();
 const TOKEN = /^\{\{EVIDENCE_[A-Z]+\}\}$/;
+const TOKENS = /\{\{EVIDENCE_[A-Z]+\}\}/g;
 const RAW_NUMBER = /\p{N}/u;
 const RESERVED_EVIDENCE = /EVIDENCE_/iu;
+const TOKEN_FRAGMENT = /EVIDENCE|\{\{EVID|ENCE_[A-Z]*\}\}/iu;
 const NUMBER_START = /[-+.٫\p{N}]/u;
 const SOURCE_LEXEME = /^(?:[-+]?(?:(?:\p{Nd}{1,3}(?:[,٬]\p{Nd}{3})+|\p{Nd}+)(?:[.٫]\p{Nd}+)?|[.٫]\p{Nd}+)(?:[eE][-+]?\p{Nd}+)?|[\p{Nl}\p{No}]+)(?:\s*(?:[%٪]|[°℃℉](?:\p{L}+)?|[\p{L}µμ]+)(?:[\/_·*.-][\p{L}µμ%٪]+)*)?/u;
 
@@ -29,6 +33,25 @@ export class AnalysisContentError extends Error {
   }
 }
 
+declare const proofBrand: unique symbol;
+export interface GroundedAnalysisProof { readonly [proofBrand]: true }
+
+const proofs = new WeakMap<object, CoachAnalysis>();
+
+function mintGroundedAnalysisProof(value: CoachAnalysis): GroundedAnalysisProof {
+  const proof = Object.freeze({}) as GroundedAnalysisProof;
+  proofs.set(proof as object, value);
+  return proof;
+}
+
+export function consumeGroundedAnalysisProof(proof: GroundedAnalysisProof): CoachAnalysis {
+  if (!proof || typeof proof !== 'object') throw new Error('Invalid grounded analysis proof.');
+  const value = proofs.get(proof as object);
+  if (!value) throw new Error('Invalid grounded analysis proof.');
+  proofs.delete(proof as object);
+  return value;
+}
+
 export function modelPayload(encoded: EncodedProactiveAnalysisRequest): unknown {
   const state = encodings.get(encoded as object);
   if (!state) throw new Error('Invalid encoded proactive analysis request.');
@@ -37,6 +60,73 @@ export function modelPayload(encoded: EncodedProactiveAnalysisRequest): unknown 
 
 export function assertNoRawNumbers(content: string): void {
   if (RAW_NUMBER.test(content)) throw new AnalysisContentError('grounding_failure');
+}
+
+function stripCompleteJsonFence(text: string): string {
+  const fence = text.match(/^\s*```json\s*\r?\n([\s\S]*?)\r?\n```\s*$/i);
+  return fence ? fence[1] : text;
+}
+
+function authoredStrings(value: CoachAnalysis): string[] {
+  return [value.headline, value.shortInsight, value.narrative, ...value.observations, ...value.nextSteps];
+}
+
+function validateTokenUse(value: string, displays: ReadonlyMap<string, string>, used: Set<string>): void {
+  assertNoRawNumbers(value);
+  for (const match of value.matchAll(TOKENS)) {
+    const token = match[0];
+    const start = match.index;
+    const end = start + token.length;
+    if (!displays.has(token) || used.has(token)) throw new AnalysisContentError('grounding_failure');
+    if (/[{}]/.test(value[start - 1] ?? '') || /[{}]/.test(value[end] ?? '')) {
+      throw new AnalysisContentError('grounding_failure');
+    }
+    used.add(token);
+  }
+  const scratch = value.replace(TOKENS, '');
+  if (TOKEN_FRAGMENT.test(scratch)) throw new AnalysisContentError('grounding_failure');
+}
+
+function resolveTokens(value: string, displays: ReadonlyMap<string, string>): string {
+  return value.replace(TOKENS, (token) => {
+    const display = displays.get(token);
+    if (display === undefined) throw new AnalysisContentError('grounding_failure');
+    return display;
+  });
+}
+
+export function groundAnalysisText(text: string, encoded: EncodedProactiveAnalysisRequest): GroundedAnalysisProof {
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(stripCompleteJsonFence(text));
+  } catch {
+    throw new AnalysisContentError('parse_failure');
+  }
+
+  let validated: CoachAnalysis;
+  try {
+    validated = parseCoachAnalysis(decoded);
+  } catch {
+    throw new AnalysisContentError('schema_failure');
+  }
+
+  const state = encodings.get(encoded as object);
+  if (!state) throw new AnalysisContentError('grounding_failure');
+
+  try {
+    const used = new Set<string>();
+    for (const value of authoredStrings(validated)) validateTokenUse(value, state.displays, used);
+    const resolved = {
+      headline: resolveTokens(validated.headline, state.displays),
+      shortInsight: resolveTokens(validated.shortInsight, state.displays),
+      narrative: resolveTokens(validated.narrative, state.displays),
+      observations: validated.observations.map((value) => resolveTokens(value, state.displays)),
+      nextSteps: validated.nextSteps.map((value) => resolveTokens(value, state.displays)),
+    };
+    return mintGroundedAnalysisProof(parseCoachAnalysis(resolved));
+  } catch {
+    throw new AnalysisContentError('grounding_failure');
+  }
 }
 
 function alphabeticName(index: number): string {
