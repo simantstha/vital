@@ -11,109 +11,134 @@ import {
   type AnalysisFailureEvent,
   type AnalysisGenerationRequest,
 } from './proactiveAnalysisGeneration';
+import { consumeGroundedAnalysisProof, type ProactiveAnalysisSource } from './proactiveAnalysisGrounding';
 
-const evidence = {
-  input: { source: 'workout' },
-  context: { enabled: true, timezone: 'UTC', baselines: {}, profile: {}, metrics: [{ metric: 'hrv_sdnn', value: 45 }] },
+const source: ProactiveAnalysisSource = {
+  kind: 'workout',
+  date: '2026-07-13',
+  input: { workoutId: 'session-314', durationMin: 38 },
+  availableContext: {
+    enabled: true,
+    timezone: 'UTC-05:00',
+    profile: { age: 42 },
+    metrics: [{ metric: 'hrv_sdnn', value: 45 }],
+  },
 };
-const promptInput = { kind: 'workout' as const, date: '2026-07-13', input: evidence.input, availableContext: evidence.context };
+
 const valid = {
   headline: 'A useful signal',
   shortInsight: 'Recovery held steady.',
-  narrative: 'Your HRV was 45 ms.',
+  narrative: 'HRV was available.',
   observations: ['HRV data was available.'],
   nextSteps: ['Keep today comfortable.'],
 };
 
-test('defaults to Sonnet 4.6 and preserves the environment override', () => {
+function payloadOf(request: AnalysisGenerationRequest): Record<string, any> {
+  return JSON.parse(request.content) as Record<string, any>;
+}
+
+function hrvToken(request: AnalysisGenerationRequest): string {
+  const payload = request.attempt === 'initial' ? payloadOf(request) : payloadOf(request).request;
+  return payload.availableContext.metrics[0].value as string;
+}
+
+function tokenResponse(request: AnalysisGenerationRequest): string {
+  return JSON.stringify({ ...valid, narrative: `HRV was ${hrvToken(request)}.` });
+}
+
+function assertGuarded(request: AnalysisGenerationRequest): void {
+  assert.doesNotMatch(request.system + request.content, /\p{N}/u);
+}
+
+test('defaults to Sonnet model and preserves the environment override', () => {
   assert.equal(proactiveAnalysisModel({} as NodeJS.ProcessEnv), 'claude-sonnet-4-6');
   assert.equal(proactiveAnalysisModel({ PROACTIVE_ANALYSIS_MODEL: 'custom-model' } as unknown as NodeJS.ProcessEnv), 'custom-model');
 });
 
-test('initial and repair prompts forbid every derived-number class', () => {
-  for (const phrase of ['arithmetic', 'ratios', 'percentages', 'differences', 'unit conversion', 'rounding', 'estimation', 'extrapolation', 'numeric list labels']) {
-    assert.match(PROACTIVE_ANALYSIS_SYSTEM_PROMPT, new RegExp(phrase, 'i'));
-    assert.match(PROACTIVE_ANALYSIS_REPAIR_PROMPT, new RegExp(phrase, 'i'));
-  }
+test('prompts express the closed token contract without numeric code points', () => {
   for (const prompt of [PROACTIVE_ANALYSIS_SYSTEM_PROMPT, PROACTIVE_ANALYSIS_REPAIR_PROMPT]) {
+    assert.doesNotMatch(prompt, /\p{N}/u);
     assert.match(prompt, /JSON only/i);
     assert.match(prompt, /observational/i);
-    assert.match(prompt, /not diagnostic/i);
-    assert.match(prompt, /exact supplied value/i);
-    assert.match(prompt, /same unit as (?:that|the) source/i);
+    assert.match(prompt, /non-diagnostic/i);
+    assert.match(prompt, /copy only supplied evidence tokens exactly/i);
+    assert.match(prompt, /five schema string locations/i);
+    assert.match(prompt, /at most once/i);
+    for (const rule of ['alter', 'split', 'concatenate', 'nest', 'enumerate', 'manufacture', 'raw number', 'numeric symbol sequence', 'qualitative language']) {
+      assert.match(prompt, new RegExp(rule, 'i'));
+    }
   }
 });
 
-test('valid initial output returns after one call', async () => {
+test('valid token output returns a consumable proof after one guarded call', async () => {
   const calls: AnalysisGenerationRequest[] = [];
-  const result = await generateGroundedAnalysis({
-    promptInput,
-    evidence,
-    generate: async (request) => { calls.push(request); return JSON.stringify(valid); },
+  const proof = await generateGroundedAnalysis({
+    source,
+    generate: async (request) => {
+      calls.push(request);
+      assertGuarded(request);
+      return tokenResponse(request);
+    },
     report: () => {},
   });
-  assert.deepEqual(result, valid);
+
   assert.equal(calls.length, 1);
-  assert.deepEqual(calls[0], { attempt: 'initial', system: PROACTIVE_ANALYSIS_SYSTEM_PROMPT, content: JSON.stringify(promptInput) });
+  assert.match(consumeGroundedAnalysisProof(proof).narrative, /45 ms/);
 });
 
-const rejectedCases: Array<{ name: string; rejected: string; category: AnalysisFailureCategory }> = [
-  { name: 'malformed JSON', rejected: '{"headline":', category: 'parse_failure' },
-  { name: 'schema-invalid JSON', rejected: JSON.stringify({ headline: 'Incomplete' }), category: 'schema_failure' },
-  { name: 'unsupported number', rejected: JSON.stringify({ ...valid, narrative: 'Your HRV was 99 ms.' }), category: 'grounding_failure' },
-  { name: 'mismatched unit', rejected: JSON.stringify({ ...valid, narrative: 'Your HRV was 45 bpm.' }), category: 'grounding_failure' },
+const initialFailures: Array<{ name: string; response: (request: AnalysisGenerationRequest) => string; category: AnalysisFailureCategory }> = [
+  { name: 'parse', response: () => '{private rejected text', category: 'parse_failure' },
+  { name: 'schema', response: () => JSON.stringify({ headline: 'private rejected text' }), category: 'schema_failure' },
+  { name: 'grounding', response: () => JSON.stringify({ ...valid, narrative: 'private rejected text 99' }), category: 'grounding_failure' },
 ];
 
-for (const { name, rejected, category } of rejectedCases) {
-  test(`${name} is classified and repaired exactly once`, async () => {
+for (const { name, response, category } of initialFailures) {
+  test(`initial ${name} failure repairs once with the same encoded payload and no rejected data`, async () => {
     const calls: AnalysisGenerationRequest[] = [];
     const events: AnalysisFailureEvent[] = [];
-    const result = await generateGroundedAnalysis({
-      promptInput,
-      evidence,
+    const proof = await generateGroundedAnalysis({
+      source,
       generate: async (request) => {
         calls.push(request);
-        return calls.length === 1 ? rejected : JSON.stringify(valid);
+        assertGuarded(request);
+        return request.attempt === 'initial' ? response(request) : tokenResponse(request);
       },
       report: (event) => events.push(event),
     });
 
-    assert.deepEqual(result, valid);
     assert.equal(calls.length, 2);
-    assert.deepEqual(calls[1], {
-      attempt: 'repair',
-      system: PROACTIVE_ANALYSIS_REPAIR_PROMPT,
-      content: JSON.stringify({ promptInput, rejectedText: rejected, category }),
-    });
+    const initialPayload = payloadOf(calls[0]);
+    assert.deepEqual(payloadOf(calls[1]), { category, request: initialPayload });
+    assert.equal(calls[1].content.includes('private rejected text'), false);
+    assert.equal(calls[1].content.includes('Proactive analysis content validation failed'), false);
     assert.deepEqual(events, [
       analysisFailureEvent('initial', category, 'repair_started'),
       analysisFailureEvent('repair', category, 'repair_succeeded'),
     ]);
+    assert.match(consumeGroundedAnalysisProof(proof).narrative, /45 ms/);
   });
 }
 
-const failedRepairs: Array<{ name: string; repair: string; category: AnalysisFailureCategory }> = [
-  { name: 'parse', repair: 'not-json', category: 'parse_failure' },
-  { name: 'schema', repair: JSON.stringify({ ...valid, nextSteps: 'rest' }), category: 'schema_failure' },
-  { name: 'grounding', repair: JSON.stringify({ ...valid, narrative: 'Your HRV was 46 ms.' }), category: 'grounding_failure' },
+const repairFailures: Array<{ name: string; response: (request: AnalysisGenerationRequest) => string; category: AnalysisFailureCategory }> = [
+  { name: 'parse', response: () => '{', category: 'parse_failure' },
+  { name: 'schema', response: () => JSON.stringify({ ...valid, nextSteps: 'rest' }), category: 'schema_failure' },
+  { name: 'grounding', response: () => JSON.stringify({ ...valid, narrative: 'HRV was 46 ms.' }), category: 'grounding_failure' },
 ];
 
-for (const { name, repair, category } of failedRepairs) {
-  test(`a ${name}-invalid repair is exhausted without another model call`, async () => {
+for (const { name, response, category } of repairFailures) {
+  test(`repair ${name} failure is exhausted after exactly two calls`, async () => {
     const calls: AnalysisGenerationRequest[] = [];
     const events: AnalysisFailureEvent[] = [];
-    await assert.rejects(
-      generateGroundedAnalysis({
-        promptInput,
-        evidence,
-        generate: async (request) => {
-          calls.push(request);
-          return calls.length === 1 ? '{' : repair;
-        },
-        report: (event) => events.push(event),
-      }),
-      (error: unknown) => error instanceof AnalysisContentError && error.category === category,
-    );
+    await assert.rejects(generateGroundedAnalysis({
+      source,
+      generate: async (request) => {
+        calls.push(request);
+        assertGuarded(request);
+        return request.attempt === 'initial' ? '{' : response(request);
+      },
+      report: (event) => events.push(event),
+    }), (error: unknown) => error instanceof AnalysisContentError && error.category === category);
+
     assert.equal(calls.length, 2);
     assert.deepEqual(events, [
       analysisFailureEvent('initial', 'parse_failure', 'repair_started'),
@@ -123,16 +148,17 @@ for (const { name, repair, category } of failedRepairs) {
 }
 
 for (const { name, error } of [
-  { name: 'transport', error: new Error('upstream token secret-token failed') },
-  { name: 'no-text', error: new Error('analysis model returned no text') },
+  { name: 'transport', error: new Error('transport private detail') },
+  { name: 'authentication', error: new Error('authentication private detail') },
+  { name: 'timeout', error: new Error('timeout private detail') },
+  { name: 'no-text', error: new Error('no text private detail') },
 ]) {
-  test(`${name} errors reject after one call without content-repair events`, async () => {
+  test(`${name} errors reject after one call without repair or content events`, async () => {
     let calls = 0;
     const events: AnalysisFailureEvent[] = [];
     await assert.rejects(generateGroundedAnalysis({
-      promptInput,
-      evidence,
-      generate: async () => { calls += 1; throw error; },
+      source,
+      generate: async (request) => { calls += 1; assertGuarded(request); throw error; },
       report: (event) => events.push(event),
     }), error);
     assert.equal(calls, 1);
@@ -140,38 +166,37 @@ for (const { name, error } of [
   });
 }
 
-test('failure events serialize only their typed non-sensitive fields', async () => {
-  const rejected = '{"response":"private-rejected-text","id":"job-123","uuid":"550e8400-e29b-41d4-a716-446655440000","token":"secret-token"}';
-  const privateEvidence = {
-    ...evidence,
-    input: { source: 'sensitive-source', accountId: 'account-987' },
-    exception: { message: 'private-exception', stack: 'private-stack', cause: 'private-cause' },
-  };
-  const events: AnalysisFailureEvent[] = [];
-  await assert.rejects(generateGroundedAnalysis({
-    promptInput,
-    evidence: privateEvidence,
-    generate: async (request) => request.attempt === 'initial' ? rejected : 'still-not-json',
-    report: (event) => events.push(event),
-  }), AnalysisContentError);
+test('source objects remain unchanged', async () => {
+  const mutableSource = structuredClone(source);
+  const snapshot = structuredClone(mutableSource);
+  const proof = await generateGroundedAnalysis({
+    source: mutableSource,
+    generate: async (request) => tokenResponse(request),
+    report: () => {},
+  });
+  consumeGroundedAnalysisProof(proof);
+  assert.deepEqual(mutableSource, snapshot);
+  assert.equal(Object.isFrozen(mutableSource), false);
+  assert.equal(Object.isFrozen(mutableSource.availableContext), false);
+});
 
-  const serialized = JSON.stringify(events);
-  assert.deepEqual(JSON.parse(serialized), [
-    analysisFailureEvent('initial', 'schema_failure', 'repair_started'),
-    analysisFailureEvent('repair', 'parse_failure', 'repair_exhausted'),
-  ]);
-  for (const forbidden of [
-    rejected,
-    'private-rejected-text',
-    'sensitive-source',
-    'account-987',
-    'private-exception',
-    'job-123',
-    '550e8400-e29b-41d4-a716-446655440000',
-    'secret-token',
-    PROACTIVE_ANALYSIS_SYSTEM_PROMPT,
-    PROACTIVE_ANALYSIS_REPAIR_PROMPT,
-    'private-stack',
-    'private-cause',
-  ]) assert.equal(serialized.includes(forbidden), false, `event leaked ${forbidden}`);
+test('source is encoded once per generation invocation', async () => {
+  const reads = { kind: 0, date: 0, input: 0, availableContext: 0 };
+  const countedSource = {} as ProactiveAnalysisSource;
+  for (const key of Object.keys(reads) as Array<keyof typeof reads>) {
+    Object.defineProperty(countedSource, key, {
+      enumerable: true,
+      get() {
+        reads[key] += 1;
+        return source[key];
+      },
+    });
+  }
+  const proof = await generateGroundedAnalysis({
+    source: countedSource,
+    generate: async (request) => request.attempt === 'initial' ? '{' : tokenResponse(request),
+    report: () => {},
+  });
+  consumeGroundedAnalysisProof(proof);
+  assert.deepEqual(reads, { kind: 1, date: 1, input: 1, availableContext: 1 });
 });

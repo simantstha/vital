@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { ApnsClient } from '../lib/apnsClient';
 import { generateGroundedAnalysis, proactiveAnalysisModel, type AnalysisFailureEvent } from '../lib/proactiveAnalysisGeneration';
+import { consumeGroundedAnalysisProof } from '../lib/proactiveAnalysisGrounding';
 import { deliverNotification, runClaimedAnalysis, type AnalysisContext, type AnalysisJob, type CoachAnalysis } from '../lib/proactiveHealthWorker';
 import { claimAnalysisJobs, claimDueMorningBriefs, completeMorningBrief, ensureDefaultPreferencesForRegisteredUsers, failMorningBrief, listReadyNotificationCandidates, workerRepository } from '../lib/proactiveHealthWorkerRepository';
 import { workerErrorEvent, type WorkerStage } from '../lib/proactiveHealthWorkerSupport';
@@ -14,9 +15,8 @@ const reportAnalysisFailure = (event: AnalysisFailureEvent): void => {
 };
 
 async function analyze(job: AnalysisJob, context: AnalysisContext): Promise<CoachAnalysis> {
-  return generateGroundedAnalysis({
-    promptInput: { kind: job.kind, date: job.localDate, input: job.input, availableContext: context },
-    evidence: { input: job.input, context },
+  const proof = await generateGroundedAnalysis({
+    source: { kind: job.kind, date: job.localDate, input: job.input, availableContext: context },
     generate: async (request) => {
       const response = await anthropic.messages.create({
         model: proactiveAnalysisModel(process.env),
@@ -30,6 +30,7 @@ async function analyze(job: AnalysisJob, context: AnalysisContext): Promise<Coac
     },
     report: reportAnalysisFailure,
   });
+  return consumeGroundedAnalysisProof(proof);
 }
 
 async function tick(reportStage: (stage: WorkerStage) => void): Promise<void> {
