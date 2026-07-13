@@ -1,6 +1,6 @@
 # Vital app redesign — "Today Screen v3" implementation plan
 
-**Status: Phases 0–3 done** · Branch: `feat/redesign-v3` (off `main`)
+**Status: Phases 0–3 + 5 done; Phase 4 in PR #55** · Branch: `feat/redesign-v3` (off `main`)
 Source of truth for the design: Claude Design project
 <https://claude.ai/design/p/67904bc9-0509-4bb9-b4bf-2219bc3478fb?file=Today+Screen+v3.html>
 (file `Today Screen v3.html` — a full 5-tab React/Tailwind mock of the app).
@@ -210,17 +210,18 @@ commits beyond main; ElevenLabs TTS already works via `/api/tts`.)
       permission denial degrades gracefully.
 
 ### Phase 5 — Trends restyle
-**Owner: unclaimed · Suggested agent: Haiku/Sonnet · iOS · needs Phase 0**
+**Owner: DONE (2026-07-12, Sonnet subagent) · iOS + tiny backend**
 
-- [ ] Screen title style, calibrating banner (limeSoft, only while
+- [x] Screen title style, calibrating banner (limeSoft, only while
       `calibration.status == "calibrating"`).
-- [ ] `TrendBarChart` (sleep): goal-scaled bars, gray `< threshold` nights,
-      dashed placeholders for missing days; footnote ("Under 6h10m on 4 of 7
+- [x] `TrendBarChart` (sleep): goal-scaled bars, gray `< threshold` nights,
+      dashed placeholders for missing days; footnote ("Under 6h on 4 of 7
       nights…") driven by real data.
-- [ ] `TrendLineChart` (HRV, RHR): lime polyline + dots, ringed last point,
+- [x] `TrendLineChart` (HRV, RHR): lime polyline + dots, ringed last point,
       dashed hollow dots for missing days.
-- [ ] Data from existing `fetchTrends(metric:days:)`. Swift Charts or hand-
-      drawn — match the mock's look; hand-drawn is probably closer.
+- [x] Data from existing `fetchTrends(metric:days:)`. Hand-drawn SwiftUI
+      (not Swift Charts) — matches the mock's look. Backend gained an `rhr`
+      metric + `calibration` in the `/api/trends` response (see changelog).
 
 ### Phase 6 — Logs day pager
 **Owner: unclaimed · Suggested agent: Haiku/Sonnet · iOS · needs Phases 0+3**
@@ -413,3 +414,45 @@ commits beyond main; ElevenLabs TTS already works via `/api/tts`.)
   override to `GET /api/meals/log` — or a separate per-day rollup endpoint —
   to read a past day's logged meals read-only; deliberately not added now
   since Phase 3's brief scoped this to today only.
+- 2026-07-12: Phase 5 done (Sonnet subagent) — Trends restyle, branch
+  `feat/redesign-v3-trends` off main (not stacked on PR #55's Phase 4 branch:
+  zero file overlap, and the #51/#52 stacking mess argued against). Backend
+  (small, additive): `app/api/trends/route.ts` gained metric `rhr` →
+  `daily_metrics.resting_hr` (rounded bpm; the metric already existed — the
+  coach tools query it) and now returns `calibration` (same
+  `getCalibration()` shape as `/api/today`, run via `Promise.all` — one cheap
+  GROUP BY per call) so Trends can show the calibrating banner without
+  touching the heavier `/api/today`. iOS: screen restyled to the mock's
+  "Last 7 days" summary — header (`.screenTitleStyle()` + "Last 7 days"),
+  limeSoft calibrating banner (only while `status == "calibrating"`, hidden
+  when calibration is nil i.e. old backend), then three `VitalCard`s: Sleep
+  (new hand-drawn `TrendBarChart`: goal-scaled bars capped at 8h, short
+  nights < 6h in a new adaptive `Theme.Colors.chartMuted` token
+  (#E4E5E0 / #2A3038), dashed outlines for missing days), HRV and Resting HR
+  (new hand-drawn `TrendLineChart`: accent polyline bridging gaps, 9pt dots,
+  ringed 11pt last point, dashed hollow dots for missing days). All summary
+  logic is in a pure `TrendsSummary` enum (`weekWindow` date-keyed 7-slot
+  mapping, `sleepAverageText`, data-driven footnotes with the mock's bold
+  span, `vitalsNote` "syncing"/"7-day", `latestAvailable`) — covered by 18
+  new unit tests in `ios/Vital/Tests/TrendsSummaryTests.swift` (first test
+  coverage added by any redesign phase; the logic was finally pure enough to
+  be worth it). Decisions: (1) the mock drops weight/steps/VO₂/distance and
+  range selection entirely — kept them as an "Explore" section below the
+  summary cards (existing metric menu + range pills + Swift Charts explorer,
+  restyled `GlassCard`→`VitalCard`, active range pill = accentSoft capsule +
+  accentContent text, Resting HR added to the menu) since manual weight
+  logging (`/api/weight-log`) would otherwise lose its only trend UI; (2)
+  short-night threshold = 6h (75% of the app-wide 8h goal) — the mock's
+  6h10m was sample-data-specific; (3) footnote copy is data-driven
+  ("No sleep synced yet." / "Every night near your 8h goal this week." /
+  "Under 6h on N of 7 nights…"; lines: "No readings yet." / "Only N
+  reading(s) this week — dashed dots haven't synced." / "Steady this week."
+  / "Drifting up (+x%)" / "Trending down (−x%)" with a ±2% steady band);
+  (4) weekday letters pinned to en_US for deterministic "F S S M T W T".
+  Verify: backend lint/tsc/build green (Node 20, `/api/trends` in route
+  list); iOS xcodegen + build + test on `Vital-iPhone16` → **TEST
+  SUCCEEDED**, 58/58 (40 pre-existing incl. PR #54's specialist tests + 18
+  new). Notes: PR #54 (running-coach specialist) landed on main mid-phase —
+  no Trends overlap, but test count is 40 now, not 13; Phase 7's
+  `GlassCard`→`VitalCard` migration can copy this phase's explorer pattern
+  (same padding/radius args, only the surface type swaps).

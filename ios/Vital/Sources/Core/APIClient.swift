@@ -990,6 +990,7 @@ struct TrendPoint: Decodable {
 struct TrendsResponse: Decodable {
     let metric: String
     let points: [TrendPoint]
+    let calibration: CalibrationStatus?
 }
 
 // MARK: - Plan types
