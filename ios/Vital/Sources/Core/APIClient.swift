@@ -280,6 +280,43 @@ struct APIClient {
         try await get("/api/profile")
     }
 
+    /// PATCH /api/profile — partial update of personal details + sleep goal
+    /// (redesign v3 Phase 9). All fields optional; nil fields are omitted from
+    /// the request body by JSONEncoder, so only changed fields are sent.
+    /// Server units: heightCm in cm, weightKg in kg, sleep values in minutes.
+    func updateProfile(
+        name: String? = nil,
+        age: Int? = nil,
+        heightCm: Double? = nil,
+        weightKg: Double? = nil,
+        sleepGoalMinutes: Int? = nil,
+        lightsOutMinutes: Int? = nil
+    ) async throws {
+        guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/profile") else {
+            throw APIError.invalidURL
+        }
+        var request = authorizedRequest(url)
+        request.httpMethod = "PATCH"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 15
+        struct Body: Encodable {
+            let name: String?
+            let age: Int?
+            let heightCm: Double?
+            let weightKg: Double?
+            let sleepGoalMinutes: Int?
+            let lightsOutMinutes: Int?
+        }
+        request.httpBody = try encoder.encode(
+            Body(
+                name: name, age: age, heightCm: heightCm, weightKg: weightKg,
+                sleepGoalMinutes: sleepGoalMinutes, lightsOutMinutes: lightsOutMinutes
+            )
+        )
+        let (_, response) = try await session.data(for: request)
+        try validate(response)
+    }
+
     // MARK: - Pending facts
 
     func fetchPendingFacts() async throws -> PendingFactsResponse {
@@ -1090,6 +1127,15 @@ struct ProfileResponse: Decodable {
     let integrations: [ProfileIntegration]
     let stats: ProfileStats
     let profile: ProfileDetails
+    /// ISO timestamp of users.created_at — drives "Member since MMM yyyy".
+    let createdAt: String?
+    /// Effective sleep goal in minutes (server applies the 480 default).
+    let sleepGoalMinutes: Int?
+    /// Effective lights-out time as minutes from midnight (server default 1350).
+    let lightsOutMinutes: Int?
+    /// Same shape Trends/Today carry — decoded here so Profile doesn't need a
+    /// separate fetchTrends call just for the calibration banner.
+    let calibration: CalibrationStatus?
 }
 
 // MARK: - Pending facts types

@@ -1,6 +1,6 @@
 # Vital app redesign — "Today Screen v3" implementation plan
 
-**Status: Phases 0–8 done (redesign complete)** · Branch: `feat/redesign-v3` (off `main`)
+**Status: Phases 0–9 done (redesign complete + parity pass)** · Branch: `feat/redesign-v3` (off `main`)
 Source of truth for the design: Claude Design project
 <https://claude.ai/design/p/67904bc9-0509-4bb9-b4bf-2219bc3478fb?file=Today+Screen+v3.html>
 (file `Today Screen v3.html` — a full 5-tab React/Tailwind mock of the app).
@@ -253,6 +253,41 @@ commits beyond main; ElevenLabs TTS already works via `/api/tts`.)
       `ios/Vital/project.yml`), fetch today's events, merge into the timeline
       client-side (neutral icon badge + "Calendar" tag, no Log button, not
       persisted server-side).
+
+### Phase 9 — Design-parity gap close (Profile pages)
+**Owner: DONE (2026-07-13) · full-stack · audit vs the mock's six Profile detail pages**
+
+- [x] Schema: `users.sleep_goal_minutes` / `users.lights_out_minutes`
+      (nullable ints, null → 480/1350 app-side defaults; migration
+      `db/migrations/0009_perpetual_vivisector.sql`, additive-only).
+- [x] `PATCH /api/profile`: all-optional `{ name, age, heightCm, weightKg,
+      sleepGoalMinutes, lightsOutMinutes }` with range validation; name →
+      `users.name`; age/height/weight → section-aware Identity-line patch in
+      `core-profile.md` (`lib/profileDetails.updateIdentityLines` — silent
+      no-op when not onboarded); weight ALSO logged via `logWeight` for
+      history; lights-out change also updates today's still-pending "Lights
+      out" plan row in place.
+- [x] `GET /api/profile` gains `createdAt` + effective `sleepGoalMinutes` /
+      `lightsOutMinutes`.
+- [x] `/api/plan` seed: hardcoded 22:30 / "8h target" replaced by the user's
+      columns (same single user query) via shared `formatSleepSubtitle`.
+- [x] iOS `APIClient.updateProfile(...)`; `ProfileResponse` gains
+      `createdAt`/`sleepGoalMinutes`/`lightsOutMinutes`/`calibration`
+      (deleting the Phase 7 `fetchTrends("rhr")` calibration workaround).
+- [x] Profile main page → mock parity: "Member since MMM yyyy" under the
+      name, calibration banner with progress bar, ONE grouped six-row card
+      (Personal details / Goal / Daily budget / Sleep goal / Devices /
+      Notifications; neutral 36pt icon badges, no section headers), Activity
+      grid kept (deliberate, real data), version footer "Vital · vX.Y.Z".
+- [x] New `PersonalDetailsView` (pushed): editable Name/Age/Height/Weight,
+      one PATCH of only changed fields on Done, then refresh + pop.
+- [x] New `SleepGoalView` (pushed): 7.5h/8h/8.5h pills + lights-out time
+      picker, optimistic immediate persistence.
+- [x] New `GoalDetailView` (pushed): Coach-recommends card, four-goal radio
+      list (existing `DietBudgetViewModel.setGoal` plumbing), "What this
+      means" facts, "Talk it through with your coach" → `switchToCoachTab`
+      closure threaded from `RootTabView`; goal UI removed from
+      `DietBudgetEditorView` (numbers only now).
 
 ---
 
@@ -726,3 +761,43 @@ commits beyond main; ElevenLabs TTS already works via `/api/tts`.)
   build; all EventKit-adjacent logic that matters is covered through the
   pure `CalendarPlanMapping` unit tests instead, as the spec anticipated.
   Redesign v3 is now feature-complete through the stretch phase (0–8).
+- 2026-07-13: Phase 9 done — design-parity gap close (Profile pages),
+  full-stack, on `feat/redesign-v3-profile-pages`. Backend: `users` gains
+  nullable `sleep_goal_minutes`/`lights_out_minutes` (null-means-default 480/
+  1350, migration `0009_perpetual_vivisector.sql`, additive-only, generated
+  with `drizzle-kit generate` — never push); new `PATCH /api/profile`
+  (validated all-optional body; name → users; age/height/weight → targeted
+  `## Identity` line replacement via new `lib/profileDetails.
+  updateIdentityLines` — standalone section-walk copied from onboarding's
+  `fillCoreProfile` rather than a shared extraction, deliberately lower-risk;
+  weight also `logWeight`'d for trend history; a lights-out change updates
+  today's pending "Lights out" plan row in place using the same tz-precedence
+  day key); `GET /api/profile` adds `createdAt` + effective sleep fields;
+  `/api/plan`'s `resolveDayKey` now returns `{dayKey, userRow}` so the seed
+  reads the sleep columns off the query it already made, subtitle via shared
+  `formatSleepSubtitle` (note: seed subtitle copy changed from "8h target"
+  to "8h target — your biggest lever this week" per the mock). iOS:
+  `APIClient.updateProfile` (nil-omitted PATCH body); `ProfileResponse` +
+  `createdAt`/`sleepGoalMinutes`/`lightsOutMinutes`/`calibration` — Profile's
+  calibration now decodes off its own response, `loadCalibration()`/
+  `fetchTrends("rhr")` workaround deleted; ProfileView rebuilt to the mock
+  (member-since line, progress-bar calibration banner, grouped six-row
+  settings card with neutral 36pt badges + hairlines, Activity grid kept
+  deliberately, version footer); new `PersonalDetailsView` /
+  `SleepGoalView` / `GoalDetailView` under `Features/Profile/`;
+  `DietBudgetEditorView` slimmed to numbers-only (goal picker,
+  Coach-recommends, What-this-means moved to GoalDetailView);
+  `RootTabView` passes `switchToCoachTab` into `ProfileView`. New pure
+  helpers `ProfileViewModel.memberSinceLabel(fromISO:)` (UTC-pinned) and
+  `sleepGoalSummary(goalMinutes:lightsOutMinutes:)` with 3 new tests.
+  Deviations: (1) US units in PersonalDetailsView use total inches + lb
+  single fields (converted to cm/kg for the API) — v1 simplification over a
+  ft-in split; (2) PersonalDetailsView persists once on Done (no per-field
+  commit-on-blur) since the spec settles on a single PATCH of changed
+  fields; (3) `formatSleepSubtitle` rounds to the nearest half hour for any
+  valid minutes value, superset of the spec's half-hour examples. Verify:
+  backend `npm run lint` / `tsc --noEmit` / `npm run build` all clean
+  (route list shows `ƒ /api/profile`); iOS `xcodegen generate` +
+  `xcodebuild build` → BUILD SUCCEEDED; `xcodebuild test` → 101/101 (98
+  existing + 3 new; one unrelated `CoachSpecialistStateTests` case flaked
+  on a first run and passed in isolation and on the full re-run).

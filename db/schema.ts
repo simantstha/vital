@@ -34,6 +34,13 @@ export const users = p.pgTable('users', {
   protein_target_g: p.integer('protein_target_g'),
   carbs_target_g:   p.integer('carbs_target_g'),
   fat_target_g:     p.integer('fat_target_g'),
+
+  // ── Sleep goal (redesign v3 Phase 9 — Profile personal details) ────────────
+  // Same null-means-default convention as the diet targets above: null → the
+  // app-level default is applied in code, not a DB default, so existing rows
+  // pick up new defaults automatically if the default ever changes.
+  sleep_goal_minutes:  p.integer('sleep_goal_minutes'),                        // null → 480 (8h)
+  lights_out_minutes:  p.integer('lights_out_minutes'),                        // null → 1350 (22:30)
 });
 
 // ─── events (append-only) ────────────────────────────────────────────────────

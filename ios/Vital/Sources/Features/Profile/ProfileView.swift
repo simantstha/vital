@@ -14,6 +14,15 @@ struct ProfileView: View {
     @AppStorage(NotificationPrefsKeys.mealsEnabled) private var notifMealsEnabled = true
     @AppStorage(NotificationPrefsKeys.weighinEnabled) private var notifWeighinEnabled = true
 
+    /// Switches the root TabView to the Coach tab — threaded down from
+    /// `RootTabView` (same closure Today's voice FAB uses) so GoalDetailView's
+    /// "Talk it through with your coach" button can land in the conversation.
+    private let switchToCoachTab: () -> Void
+
+    init(switchToCoachTab: @escaping () -> Void = {}) {
+        self.switchToCoachTab = switchToCoachTab
+    }
+
     var body: some View {
         NavigationStack {
             ZStack {
@@ -38,12 +47,10 @@ struct ProfileView: View {
                                 calibratingBanner
                             }
 
-                            profileDetailsSection
-                            dailyBudgetSection
-                            notificationsSection
-                            devicesSection
+                            settingsCard
                             activitySection
                             accountSection
+                            versionFooter
                         }
                     }
                     .padding(.horizontal, Theme.Spacing.xl)
@@ -100,9 +107,17 @@ private extension ProfileView {
                                 .foregroundStyle(Theme.Colors.onAccent)
                         )
 
-                    Text(vm.name)
-                        .font(.system(size: 22, weight: .semibold))
-                        .foregroundStyle(Theme.Colors.textPrimary)
+                    VStack(spacing: 2) {
+                        Text(vm.name)
+                            .font(.system(size: 22, weight: .semibold))
+                            .foregroundStyle(Theme.Colors.textPrimary)
+
+                        if let memberSince = vm.memberSince {
+                            Text(memberSince)
+                                .font(Theme.Typography.bodySmall)
+                                .foregroundStyle(Theme.Colors.textSecondary)
+                        }
+                    }
                 }
                 .frame(maxWidth: .infinity)
             }
@@ -113,17 +128,33 @@ private extension ProfileView {
         }
     }
 
-    // ── Calibration banner ──────────────────────────────────────────────────
+    // ── Calibration banner (title row + progress bar, per the mock) ─────────
 
     var calibratingBanner: some View {
-        HStack(alignment: .top, spacing: Theme.Spacing.sm) {
-            Image(systemName: "info.circle")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(Theme.Colors.accentContent)
-                .padding(.top, 1)
-            Text("Calibrating — \(vm.calibrationPercent)% · Vital is learning your baselines.")
-                .font(.system(size: 14))
-                .foregroundStyle(Theme.Colors.accentContent)
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            HStack {
+                Text("Calibrating your baselines")
+                    .font(Theme.Typography.bodySmall)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(Theme.Colors.textPrimary)
+                Spacer()
+                Text("\(vm.calibrationPercent)%")
+                    .font(Theme.Typography.bodySmall)
+                    .fontWeight(.semibold)
+                    .monospacedDigit()
+                    .foregroundStyle(Theme.Colors.accentContent)
+            }
+
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(Theme.Colors.textPrimary.opacity(0.08))
+                    Capsule()
+                        .fill(Theme.Colors.accent)
+                        .frame(width: geo.size.width * CGFloat(max(vm.calibrationPercent, 1)) / 100)
+                }
+            }
+            .frame(height: 3)
         }
         .padding(Theme.Spacing.lg)
         .background(
@@ -132,57 +163,95 @@ private extension ProfileView {
         )
     }
 
-    // ── Profile details ───────────────────────────────────────────────────
+    // ── Grouped settings card (mock's single six-row list) ──────────────────
 
-    var profileDetailsSection: some View {
-        statSection(title: "Profile Details", cells: vm.profileDetails)
-    }
+    var settingsCard: some View {
+        VitalCard(padding: 0) {
+            VStack(spacing: 0) {
+                settingsLink(index: 0, icon: "person", title: "Personal details", value: "Name, age, weight") {
+                    PersonalDetailsView(profileVM: vm)
+                }
 
-    // ── Daily budget entry point ──────────────────────────────────────────
+                settingsLink(index: 1, icon: "target", title: "Goal", value: vm.budgetGoalLabel) {
+                    GoalDetailView(switchToCoachTab: switchToCoachTab)
+                        .onDisappear { Task { await vm.loadBudget() } }
+                }
 
-    var dailyBudgetSection: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-            SectionHeader(title: "Daily Budget")
+                settingsButton(index: 2, icon: "flame", title: "Daily budget",
+                               value: vm.budgetKcal.map { "\($0) kcal" } ?? "--") {
+                    showBudgetEditor = true
+                }
 
-            Button { showBudgetEditor = true } label: {
-                VitalCard {
-                    HStack(spacing: Theme.Spacing.md) {
-                        IconBadge(systemName: "target", style: .soft)
+                settingsLink(index: 3, icon: "moon", title: "Sleep goal", value: vm.sleepGoalSummary) {
+                    SleepGoalView(profileVM: vm)
+                }
 
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Daily Budget")
-                                .font(Theme.Typography.bodyMedium)
-                                .fontWeight(.medium)
-                                .foregroundStyle(Theme.Colors.textPrimary)
-                            Text(vm.budgetMode == "custom" ? "Custom" : "Auto · \(vm.budgetGoalLabel)")
-                                .font(Theme.Typography.labelSmall)
-                                .foregroundStyle(Theme.Colors.textSecondary)
-                        }
+                settingsLink(index: 4, icon: "applewatch", title: "Devices",
+                             value: appleWatchConnected ? "Apple Watch · synced" : "Not connected") {
+                    DevicesView(appleWatchConnected: appleWatchConnected)
+                }
 
-                        Spacer()
-
-                        if let kcal = vm.budgetKcal {
-                            VStack(alignment: .trailing, spacing: 1) {
-                                Text("\(kcal)")
-                                    .font(Theme.Typography.numericSmall(17))
-                                    .fontWeight(.semibold)
-                                    .foregroundStyle(Theme.Colors.textPrimary)
-                                Text("kcal / day")
-                                    .font(Theme.Typography.labelSmall)
-                                    .foregroundStyle(Theme.Colors.textSecondary)
-                            }
-                        }
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(Theme.Colors.textTertiary)
-                    }
+                settingsButton(index: 5, icon: "bell", title: "Notifications", value: notificationsSubtitle) {
+                    showNotificationSettings = true
                 }
             }
-            .buttonStyle(.plain)
         }
     }
 
-    // ── Notifications ─────────────────────────────────────────────────────
+    func settingsLink<Destination: View>(
+        index: Int, icon: String, title: String, value: String,
+        @ViewBuilder destination: @escaping () -> Destination
+    ) -> some View {
+        NavigationLink { destination() } label: {
+            settingsRowContent(icon: icon, title: title, value: value)
+        }
+        .buttonStyle(.plain)
+        .overlay(alignment: .top) { if index > 0 { rowHairline } }
+    }
+
+    func settingsButton(
+        index: Int, icon: String, title: String, value: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            settingsRowContent(icon: icon, title: title, value: value)
+        }
+        .buttonStyle(.plain)
+        .overlay(alignment: .top) { if index > 0 { rowHairline } }
+    }
+
+    var rowHairline: some View {
+        Rectangle()
+            .fill(Theme.Colors.glassBorder)
+            .frame(height: 0.5)
+    }
+
+    func settingsRowContent(icon: String, title: String, value: String) -> some View {
+        HStack(spacing: Theme.Spacing.md) {
+            IconBadge(systemName: icon, style: .neutral, size: 36, cornerRadius: 12)
+
+            Text(title)
+                .font(Theme.Typography.bodyMedium)
+                .fontWeight(.medium)
+                .foregroundStyle(Theme.Colors.textPrimary)
+
+            Spacer(minLength: Theme.Spacing.sm)
+
+            Text(value)
+                .font(.system(size: 13))
+                .foregroundStyle(Theme.Colors.textSecondary)
+                .lineLimit(1)
+
+            Image(systemName: "chevron.right")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Theme.Colors.textTertiary)
+        }
+        .padding(.horizontal, Theme.Spacing.lg)
+        .padding(.vertical, Theme.Spacing.md)
+        .contentShape(Rectangle())
+    }
+
+    // ── Notifications subtitle ────────────────────────────────────────────
 
     var notificationsSubtitle: String {
         guard notificationManager.permissionState == .authorized else { return "Off" }
@@ -190,75 +259,13 @@ private extension ProfileView {
         return enabledCount > 0 ? "On · \(enabledCount) reminders" : "Off"
     }
 
-    var notificationsSection: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-            SectionHeader(title: "Notifications")
-
-            Button { showNotificationSettings = true } label: {
-                VitalCard {
-                    HStack(spacing: Theme.Spacing.md) {
-                        IconBadge(systemName: "bell.badge", style: .soft)
-
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Reminders")
-                                .font(Theme.Typography.bodyMedium)
-                                .fontWeight(.medium)
-                                .foregroundStyle(Theme.Colors.textPrimary)
-                            Text(notificationsSubtitle)
-                                .font(Theme.Typography.labelSmall)
-                                .foregroundStyle(Theme.Colors.textSecondary)
-                        }
-
-                        Spacer()
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(Theme.Colors.textTertiary)
-                    }
-                }
-            }
-            .buttonStyle(.plain)
-        }
-    }
-
-    // ── Devices ──────────────────────────────────────────────────────────
+    // ── Devices connectivity ──────────────────────────────────────────────
 
     /// The backend only tracks one combined HealthKit integration ("Apple
     /// Health") — that's also the channel Apple Watch data flows through, so
     /// it doubles as the connectivity signal for the mock's "Apple Watch" row.
     var appleWatchConnected: Bool {
         vm.integrations.contains { $0.status.lowercased() == "connected" }
-    }
-
-    var devicesSection: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-            SectionHeader(title: "Devices")
-
-            NavigationLink {
-                DevicesView(appleWatchConnected: appleWatchConnected)
-            } label: {
-                VitalCard {
-                    HStack(spacing: Theme.Spacing.md) {
-                        IconBadge(systemName: "applewatch", style: .soft)
-
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Devices")
-                                .font(Theme.Typography.bodyMedium)
-                                .fontWeight(.medium)
-                                .foregroundStyle(Theme.Colors.textPrimary)
-                            Text(appleWatchConnected ? "Apple Watch · Connected" : "Apple Watch · Not connected")
-                                .font(Theme.Typography.labelSmall)
-                                .foregroundStyle(Theme.Colors.textSecondary)
-                        }
-
-                        Spacer()
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(Theme.Colors.textTertiary)
-                    }
-                }
-            }
-            .buttonStyle(.plain)
-        }
     }
 
     // ── Activity stats ────────────────────────────────────────────────────
@@ -419,6 +426,16 @@ private extension ProfileView {
             }
             .buttonStyle(.plain)
         }
+    }
+
+    // ── Version footer ─────────────────────────────────────────────────────
+
+    var versionFooter: some View {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"
+        return Text("Vital · v\(version)")
+            .font(.system(size: 12))
+            .foregroundStyle(Theme.Colors.textTertiary)
+            .frame(maxWidth: .infinity, alignment: .center)
     }
 
 }
