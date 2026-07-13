@@ -45,7 +45,7 @@ struct VoiceFABView: View {
 
                 captionOverlay
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-                    .padding(.bottom, fabSize + Theme.Spacing.xxxl + 90)
+                    .padding(.bottom, fabSize + Theme.Spacing.xxxl)
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
 
@@ -103,7 +103,7 @@ struct VoiceFABView: View {
         .disabled(isUploading || (coachVM.isStreaming && !transcriber.isRecording))
         .opacity(coachVM.isStreaming && !transcriber.isRecording ? 0.5 : 1.0)
         .padding(.trailing, Theme.Spacing.xl)
-        .padding(.bottom, Theme.Spacing.xxxl + 70)
+        .padding(.bottom, Theme.Spacing.xxxl)
     }
 
     // MARK: - Listening overlays

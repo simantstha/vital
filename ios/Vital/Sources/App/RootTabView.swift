@@ -36,29 +36,29 @@ struct RootTabView: View {
     @StateObject private var coachVM = CoachViewModel()
 
     var body: some View {
-        ZStack(alignment: .bottom) {
-            TabView(selection: $selected) {
-                TodayView(
-                    coachVM: coachVM,
-                    switchToCoachTab: { withAnimation(.easeInOut(duration: 0.25)) { selected = .coach } }
-                )
-                    .tag(Tab.today)
+        TabView(selection: $selected) {
+            TodayView(
+                coachVM: coachVM,
+                switchToCoachTab: { withAnimation(.easeInOut(duration: 0.25)) { selected = .coach } }
+            )
+            .tabItem { Label(Tab.today.label, systemImage: Tab.today.icon) }
+            .tag(Tab.today)
 
-                CoachView(vm: coachVM)
-                    .tag(Tab.coach)
+            CoachView(vm: coachVM)
+            .tabItem { Label(Tab.coach.label, systemImage: Tab.coach.icon) }
+            .tag(Tab.coach)
 
-                TrendsView()
-                    .tag(Tab.trends)
+            TrendsView()
+            .tabItem { Label(Tab.trends.label, systemImage: Tab.trends.icon) }
+            .tag(Tab.trends)
 
-                LogsView()
-                    .tag(Tab.logs)
+            LogsView()
+            .tabItem { Label(Tab.logs.label, systemImage: Tab.logs.icon) }
+            .tag(Tab.logs)
 
-                ProfileView()
-                    .tag(Tab.profile)
-            }
-            .toolbar(.hidden, for: .tabBar)
-
-            tabBar
+            ProfileView()
+            .tabItem { Label(Tab.profile.label, systemImage: Tab.profile.icon) }
+            .tag(Tab.profile)
         }
         .tint(Theme.Colors.accentContent)
         .onChange(of: router.coachContext) { _, value in
@@ -75,45 +75,5 @@ struct RootTabView: View {
                 Color.clear.onAppear { selected = .today; router.route = nil }
             }
         }
-    }
-
-    private var tabBar: some View {
-        HStack(spacing: 0) {
-            ForEach(Tab.allCases, id: \.self) { tab in
-                tabButton(for: tab)
-            }
-        }
-        .padding(.horizontal, Theme.Spacing.xs)
-        .padding(.vertical, Theme.Spacing.sm)
-        .background(
-            Capsule()
-                .fill(Theme.Colors.card.opacity(0.95))
-                .shadow(color: .black.opacity(0.12), radius: 30, x: 0, y: 8)
-        )
-        .padding(.horizontal, Theme.Spacing.lg)
-        .padding(.bottom, Theme.Spacing.sm)
-    }
-
-    private func tabButton(for tab: Tab) -> some View {
-        let isActive = selected == tab
-
-        return Button {
-            selected = tab
-        } label: {
-            VStack(spacing: Theme.Spacing.xxs) {
-                Image(systemName: tab.icon)
-                    .font(.system(size: 21, weight: isActive ? .semibold : .regular))
-                Text(tab.label)
-                    .font(.system(size: 11, weight: isActive ? .semibold : .medium))
-            }
-            .foregroundStyle(isActive ? Theme.Colors.accentContent : Theme.Colors.textPrimary)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, Theme.Spacing.sm)
-            .background(
-                RoundedRectangle(cornerRadius: Theme.Radius.xl, style: .continuous)
-                    .fill(isActive ? Theme.Colors.accentSoft : .clear)
-            )
-        }
-        .buttonStyle(.plain)
     }
 }
