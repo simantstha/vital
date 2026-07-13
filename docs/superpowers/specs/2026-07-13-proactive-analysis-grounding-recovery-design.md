@@ -1,233 +1,259 @@
-# Proactive Analysis Grounding Recovery Design
+# Proactive Analysis Evidence-Token Grounding and Recovery Design
 
 **Date:** 2026-07-13
 **Status:** Approved for implementation planning
 
 ## Summary
 
-Proactive workout and sleep analyses can currently exhaust their normal job retries when the model returns malformed JSON, an invalid analysis shape, or a numeric claim that the strict grounding validator rejects. This design makes those failures recoverable without weakening validation: use `claude-sonnet-4-6` by default, prohibit derived numbers in both model prompts, and allow exactly one focused model repair attempt after a parse, schema, or grounding failure.
+Proactive workout and sleep analyses can exhaust their normal retries when model output is malformed, violates the exact `CoachAnalysis` schema, or contains an unsupported numeric claim. The previous design attempted to prove grounding by parsing numeric text and recognizing units after generation. That boundary is inherently ambiguous: ordinary prose can look like a unit, numeric forms can be split, and a growing output-unit vocabulary can still miss a spelling or symbol.
 
-A separate one-shot operator script will requeue the nine already-failed analysis rows. The script accepts exactly nine unique runtime UUIDs, validates and reconciles them inside one database transaction, performs compare-and-set updates only from the expected failed state, rolls back unless all nine transition, and emits counts only. Recovery changes analysis queue fields only; every notification field is preserved exactly.
+This design removes raw numbers from the model boundary. Before either model call, a deterministic encoder walks the complete request payload—date, job input, and available context—replaces every numeric value or numeric lexeme with a unique opaque alphabetic evidence token, and records a server-only map from each token to the source's exact display text, including its source unit when known. The model sees no raw numbers and may copy evidence tokens only into `CoachAnalysis` string values. After JSON parsing and exact schema validation, the server rejects raw numeric output and invalid token use, resolves trusted tokens from the private map, and produces the same clean `CoachAnalysis` schema stored today.
+
+Exactly one content repair remains available after parse, schema, or token-grounding failure. Privacy-safe diagnostics, leases, compare-and-set persistence, retries, morning-slot ownership, the exact-nine recovery script, notification preservation, and the public analysis schema remain unchanged.
 
 ## Goals
 
-- Change the proactive analysis default model from the dated Sonnet identifier to `claude-sonnet-4-6` while preserving the `PROACTIVE_ANALYSIS_MODEL` override.
-- Tell the model not to calculate, transform, estimate, average, compare numerically, convert units, or otherwise derive numbers. Any number in the response must appear exactly in the supplied evidence with the same unit.
-- Make one repair call after an initial parse, schema, or grounding failure, then run the repaired output through the same strict parsing and grounding boundaries.
-- Expose only fixed, privacy-safe failure categories to diagnostics.
-- Preserve current lease ownership, compare-and-set writes, retry limits, exponential backoff, and terminal failure behavior.
-- Provide a narrow one-shot script to requeue exactly nine known failed runtime records safely.
-- Preserve `notification_state`, `notification_retry_count`, `notification_next_attempt_at`, `notification_lease_token`, `notification_lease_expires_at`, and `notification_sent_at` byte-for-byte during recovery.
+- Default proactive generation to `claude-sonnet-4-6` while preserving the `PROACTIVE_ANALYSIS_MODEL` override.
+- Make numeric grounding deterministic without parsing model-authored numbers or units.
+- Tokenize every numeric value in the complete date/input/context payload before model invocation.
+- Preserve the source's exact display text and source unit in a private token map.
+- Send no raw numbers to the model in either initial or repair requests.
+- Permit the model to copy only known opaque evidence tokens, only into `CoachAnalysis` string values, and at most once per token.
+- Reject raw numeric output, unknown tokens, duplicate tokens, malformed token-like text, and token placement outside allowed strings.
+- Resolve tokens only after JSON parsing and exact schema validation, then store an unchanged clean `CoachAnalysis`.
+- Ensure `runClaimedAnalysis` can persist only a runtime proof minted by the trusted resolver, never a plain result from an untrusted analyzer.
+- Preserve one repair attempt, privacy-safe diagnostics, lease ownership, compare-and-set writes, retry/backoff behavior, and terminal failure behavior.
+- Safely requeue exactly nine known failed runtime rows while preserving all notification and unrelated fields.
 
 ## Non-goals
 
-- Weakening, bypassing, or adding exceptions to `validateGroundedAnalysis`.
-- Automatically deleting unsupported numbers or accepting calculated values.
-- Changing the analysis JSON schema, APNs delivery, notification preferences, notification retry behavior, lease duration, queue ordering, or sleep capacity reservation.
-- Resetting, repairing, clearing, or otherwise mutating notification state as part of the one-shot analysis recovery.
-- Adding a database migration or changing the analysis-table schema.
-- Sweeping all failed analyses or turning the recovery script into a recurring worker.
-- Embedding the nine production UUIDs in source control, command history examples, tests, logs, or the design document.
-- Reprocessing analyses that are ready, pending, processing, deleted, or already recovered.
+- Parsing or canonicalizing numeric model output with regular expressions.
+- Maintaining an output-side health-unit vocabulary or accepting unit aliases after generation.
+- Accepting a raw model number because it resembles, equals, rounds to, converts from, or shares a unit with source evidence.
+- Allowing arithmetic, ratios, percentages, differences, averages, trends expressed as new numbers, conversions, rounding, estimation, or extrapolation.
+- Persisting evidence tokens, token maps, grounding proofs, prompts, or rejected model text.
+- Changing the public `CoachAnalysis` JSON schema, analysis-table schema, APNs behavior, notification preferences, lease duration, queue ordering, or sleep capacity reservation.
+- Mutating notification state during one-shot recovery.
+- Sweeping all failed analyses or embedding production UUIDs in source, examples, tests, logs, or documentation.
 
-## Current behavior and failure boundary
+## Current behavior and reason for replacement
 
-The worker currently asks the model for JSON, parses it, validates the exact `CoachAnalysis` shape, and then validates every numeric claim against the supplied input and context. `runClaimedAnalysis` renews the analysis lease before work, renews it again before persistence, and stores the result with a status-and-lease-token compare-and-set. Its catch path uses the existing capped exponential backoff and eventually marks a job failed.
+The worker parses model JSON, validates the exact `CoachAnalysis` shape, and scans its strings for numeric claims to compare against input and context. `runClaimedAnalysis` renews the analysis lease before work and again before persistence, and `storeReady` uses the existing status-and-lease-token compare-and-set. The catch path retains capped exponential backoff and eventually marks a job failed.
 
-Those ownership and retry boundaries are correct. The problem is that a repairable model-format or grounding mistake consumes a full queue attempt. The change therefore belongs within model response generation, before `runClaimedAnalysis` receives a candidate result. No persistence rule needs to change.
+The ownership and retry boundaries are correct. The output scanner is not. Numeric syntax, punctuation, unit spellings, symbols, ordinary following prose, and attached text create an open-ended language-recognition problem. Expanding a unit list moves the ambiguity without eliminating it. Grounding instead needs a closed capability: possession of a server-issued token is the only authority to emit a source number.
 
 ## Recommended architecture
 
-### 1. A pure analysis-output boundary
+### 1. Deterministic evidence-token encoding
 
-Introduce a small, testable boundary that turns model text into a grounded `CoachAnalysis` in three explicit steps:
+The trusted analyzer constructs one canonical payload containing exactly:
+
+- analysis kind and date;
+- job input;
+- available context.
+
+A deterministic encoder traverses that complete payload before serialization. It handles JSON numbers and numeric lexemes embedded in source strings. No field is exempt merely because it is nested, appears in a date, belongs to a payload object, or is not a currently known metric.
+
+For each source occurrence, the encoder:
+
+1. Determines the complete numeric source lexeme or finite JSON numeric value.
+2. Obtains its exact source display text. Path-specific source adapters may add a unit that is defined by that source field; a source string retains the exact numeric text and adjacent source unit already present. If the source provides no unit, the display text remains explicitly unitless.
+3. Allocates a unique opaque token using an alphabetic sequence, for example `{{EVIDENCE_ALPHA}}`, `{{EVIDENCE_BETA}}`, and `{{EVIDENCE_GAMMA}}`. Tokens contain no digits and cannot be confused with numeric output.
+4. Replaces that occurrence in the model payload with the token.
+5. Stores `{ token -> exactSourceDisplayText }` in a request-local private map.
+
+Every source occurrence receives a distinct token, even when two occurrences have identical display text. The map therefore preserves provenance and makes output-token reuse detectable. Token allocation order is deterministic for the canonical traversal order, which keeps tests reproducible, but tokens reveal no metric name, value, unit, user identifier, or database identifier.
+
+Source adapters are typed formatters at the input boundary, not an output scanner. They define how a known field is displayed before the model sees it. Unknown fields are still tokenized; they simply use their exact source lexeme without inventing a unit. The encoder never calculates, normalizes, rounds, converts, or groups a value.
+
+After encoding, an outbound guard inspects all model-visible system and user content and rejects it if any raw numeric code point remains outside the evidence-token protocol. API transport metadata is outside this check because the selected model identifier necessarily contains version digits; it is not health evidence or prompt content. The initial model call cannot occur unless the guard succeeds. Tokens, token maps, and exact source display strings are held only in memory for that attempt; the map is never sent to the model.
+
+### 2. Token-only model contract
+
+The initial and repair prompts retain the JSON-only, observational, and non-diagnostic instructions. They replace all free-form numeric grounding guidance with a token contract:
+
+- Never write a raw number or numeric symbol sequence.
+- A source number may be referenced only by copying one supplied evidence token exactly.
+- Copy a token only into one of the five `CoachAnalysis` string locations: `headline`, `shortInsight`, `narrative`, an `observations` item, or a `nextSteps` item.
+- Use each token at most once.
+- Never alter, concatenate, split, nest, enumerate, or manufacture a token.
+- If no suitable token is supplied, describe the observation qualitatively.
+- Do not create numeric list labels; JSON arrays already provide structure.
+
+The model does not know the raw value behind a token. It cannot calculate with the value, change its unit, or restate a nearby number. Its only numeric capability is copying a closed opaque token supplied by the server.
+
+### 3. Parse, schema, token proof, then resolution
+
+Model output crosses four ordered boundaries:
 
 1. **Parse:** strip an optional JSON code fence and call `JSON.parse`.
-2. **Schema:** call the existing `parseCoachAnalysis` exact-shape validator.
-3. **Grounding:** call the existing `validateGroundedAnalysis` with `{ input: job.input, context }`.
+2. **Schema:** call the exact existing `parseCoachAnalysis` validator. Extra keys, wrong types, numeric values, nested objects, and tokens in keys or structural positions fail here.
+3. **Token proof:** inspect only the validated `CoachAnalysis` string values. Reject any raw numeric code point or numeric lexeme, any unknown token, duplicate use of a token, malformed token-like text, token concatenation, or any known token outside those validated strings. A token must match one private-map key exactly and may occur once.
+4. **Resolution:** replace each trusted token with its exact private-map display text. Parse the resolved value through `parseCoachAnalysis` again to preserve all string-length and array limits after expansion.
 
-The boundary classifies failures by where they occur rather than by inspecting arbitrary error messages:
+The output of resolution is an ordinary clean `CoachAnalysis`. It contains source display text, not tokens, and its public shape is unchanged. Resolution performs no numeric parsing and no unit recognition. A source unit cannot be dropped, added, disguised, or converted because the exact value-and-unit display text is substituted atomically by trusted code.
+
+Failures remain classified by boundary rather than by exception text:
 
 - `parse_failure`
 - `schema_failure`
-- `grounding_failure`
+- `grounding_failure` for any outbound-number, token-proof, or resolution failure
 
-The category is a closed union. It contains no model text, prompt content, health data, user ID, job ID, UUID, stack, SQL, token, or arbitrary exception message. Internal exceptions may retain their cause for control flow, but diagnostic serialization must emit only the fixed category through the existing sanitized worker event mechanism.
+Only the fixed category participates in diagnostics and repair control flow.
 
-Transport failures, authentication failures, timeouts, and a response with no text remain ordinary model-call failures. They do not trigger the content-repair call because there is no rejected content to repair; they flow to the existing queue retry and backoff path.
+### 4. Runtime proof and branding boundary
 
-### 2. Initial prompt and default model
+A TypeScript type assertion alone is not a security boundary: an untrusted analyzer could cast a numeric `CoachAnalysis` to a branded type. The trusted resolver therefore mints a runtime-verifiable proof object after successful resolution.
 
-The model selection expression becomes:
+The proof API has these properties:
 
-```text
-PROACTIVE_ANALYSIS_MODEL ?? "claude-sonnet-4-6"
-```
+- the proof constructor and minting key are private to the grounding module;
+- minted proof objects are registered in module-private runtime state, such as a `WeakSet`;
+- the proof contains the resolved clean `CoachAnalysis`, but the marker cannot be recreated by object shape or a public symbol;
+- the consume operation verifies runtime membership, consumes the proof once, and returns the clean analysis;
+- copying, serializing, spreading, or fabricating a proof does not preserve membership.
 
-The existing JSON-only, observational, non-diagnostic instructions remain. Add an explicit no-derived-number contract:
+`runClaimedAnalysis` changes its analyzer boundary from “return unknown model output” to “return a trusted grounded-analysis proof.” It must call the proof consumer before renewing the lease for persistence. A plain `CoachAnalysis`, including one containing a number, fails before `storeReady` even if an untrusted callback lies about its TypeScript type. Only the token resolver can mint a proof.
 
-- Do not perform arithmetic, ratios, percentages, differences, trends expressed as new numbers, unit conversion, rounding, estimation, or extrapolation.
-- A numeric token may appear only when the exact numeric value is present in the supplied input or context.
-- Keep the source unit unchanged; if a number or its unit cannot be copied exactly, describe the observation qualitatively without a number.
-- Never manufacture numeric list labels or numbered prose; the JSON arrays already provide structure.
+The brand is never stored. After successful proof consumption, `runClaimedAnalysis` persists only the clean existing schema. Tests that need a successful analysis exercise the trusted token analyzer or a private test seam in the grounding module; there is no public arbitrary-result minting helper.
 
-This prompt reduces avoidable failures but is not trusted as enforcement. The existing grounding validator remains authoritative.
+Morning briefs use the same trusted analyzer and proof consumer. They cannot bypass token validation through a separate generation path.
 
-### 3. Exactly one content repair attempt
+### 5. Exactly one content repair
 
-The analyzer performs this bounded sequence:
+Generation remains bounded:
 
-1. Make the initial model call.
-2. Evaluate its text at the parse, schema, and grounding boundary.
-3. If it succeeds, return immediately without a repair call.
-4. If it fails with `parse_failure`, `schema_failure`, or `grounding_failure`, make one repair call using the same selected model.
-5. Evaluate the repair response through the complete parse, schema, and strict grounding boundary again.
-6. Return the repaired analysis on success. On any repair failure, throw a typed terminal-for-this-attempt error and let the existing job backoff path run. Never make a third model call.
+1. Encode the canonical payload and establish the private token map.
+2. Make the initial model call with the tokenized request.
+3. Run parse, schema, token proof, and resolution.
+4. On success, mint and return the runtime proof without repair.
+5. On `parse_failure`, `schema_failure`, or `grounding_failure`, make exactly one repair call with the same tokenized request and fixed category.
+6. Run the full boundary again. On success, mint a proof. On failure, report repair exhaustion and let the existing job retry path run. Never make a third call.
 
-The repair request includes the original job evidence and the rejected model response because the model needs both to correct structure or remove unsupported claims. It also includes only the fixed failure category, never a raw exception message. Its instruction is to produce a full replacement JSON object, not a patch, and repeats the no-derived-number contract.
+The repair request must also satisfy the outbound no-number guard. It must not include the raw rejected response. It may include a deterministic sanitized structural rendering that preserves known evidence tokens while replacing all raw numeric text and malformed token-like fragments with fixed nonnumeric placeholders. Omitting rejected content is preferable when it cannot be sanitized without ambiguity. Raw exception messages are never sent.
 
-The repair call does not write database state. After a successful repair, `runClaimedAnalysis` still renews the lease and must win the existing `status = 'processing' AND lease_token = ?` compare-and-set before `storeReady`. If model latency causes ownership to expire or another worker reclaims the row, the stale worker exits without storing or notifying.
+Repair performs no database write. A successfully repaired proof still passes through `runClaimedAnalysis`, lease renewal, and the existing `status = 'processing' AND lease_token = ?` compare-and-set. A stale worker cannot store or notify.
 
-Morning briefs use the same analyzer and output boundary, so they receive the same default model, prompt constraints, one-repair limit, and grounding enforcement. Their existing morning-slot ownership and retry transition remain unchanged.
+### 6. Privacy-safe diagnostics
 
-### 4. Privacy-safe diagnostics
+Model-content diagnostics expose only:
 
-Model-content failures expose only these fixed values:
+- attempt: `initial` or `repair`;
+- category: `parse_failure`, `schema_failure`, or `grounding_failure`;
+- outcome: `repair_started`, `repair_succeeded`, or `repair_exhausted`.
 
-- attempt: `initial` or `repair`
-- category: `parse_failure`, `schema_failure`, or `grounding_failure`
-- outcome: `repair_started`, `repair_succeeded`, or `repair_exhausted`
-
-If these are added to structured worker events, they must be allowlisted typed fields rather than copied from an exception. Logs must not include the rejected or repaired response, evidence, prompts, exception message, stack, cause, identifiers, UUIDs, model request IDs, or token counts tied to user content. Existing stage labels remain unchanged.
-
-The queue transition after an exhausted repair is deliberately unchanged: the current `retry_count`, maximum retries, `nextRetryAt` calculation, `markRetry` compare-and-set, and `markFailed` compare-and-set remain the source of truth.
+Logs must not include raw or tokenized prompts, token values, token maps, source display text, rejected or repaired responses, health evidence, exception messages, stacks, causes, identifiers, UUIDs, model request IDs, database values, or user-linked token counts. These fields remain closed typed allowlists. Existing queue-stage labels and sanitized error handling remain unchanged.
 
 ## One-shot recovery script
 
+The recovery mechanism remains separate from token grounding and is unchanged in behavior.
+
 ### Invocation contract
 
-Add a separately invoked script, not imported by the long-running worker. It must receive exactly nine UUID arguments at runtime, for example through nine repeated `--id` flags. The implementation must not define fallback IDs or read an ID list committed to the repository.
-
-Before connecting to the database, argument validation must require:
-
-- exactly nine values;
-- every value is a canonical UUID accepted by the project UUID parser;
-- all nine values are unique;
-- no positional extras or unknown flags.
-
-Validation failures exit nonzero before any database mutation and print only fixed count labels with integer values. They never echo arguments or print a prose reason; the exit code is the failure signal.
+The script receives exactly nine unique canonical runtime UUIDs through repeated `--id` flags. It defines no fallback IDs and reads no committed ID list. Argument validation occurs before database import or connection and rejects missing, extra, duplicate, positional, unknown-flag, malformed, uppercase, or noncanonical values. Failure output contains fixed integer counts only and never echoes an argument or prose reason.
 
 ### Transaction and compare-and-set recovery
 
-All discovery and mutation run in one database transaction:
+One transaction:
 
-1. Query both `workout_analyses` and `sleep_analyses` for the supplied IDs while holding the rows needed for the update.
-2. Verify that the union contains exactly nine rows, each supplied UUID appears exactly once, and every row is eligible for recovery: `status = 'failed'`, `lease_token IS NULL`, and `result IS NULL`.
-3. Update each table with a compare-and-set predicate that repeats the expected failed-state conditions and restricts the update to the supplied UUID set.
-4. Requeue eligible rows by updating only these analysis queue fields: set `status` to `pending`, set `retry_count` to `0`, set `next_attempt_at` to the transaction time, and clear `lease_token` and `lease_expires_at`. `result` is an eligibility condition and remains `NULL`; the update does not assign it.
-5. Require the workout plus sleep affected-row counts to equal nine and require the affected UUID set to equal the validated input set. Any mismatch throws and rolls back the entire transaction.
+1. Locks matching rows in both `workout_analyses` and `sleep_analyses`.
+2. Requires exactly nine distinct supplied rows, all with `status = 'failed'`, `lease_token IS NULL`, and `result IS NULL`.
+3. Updates each table using compare-and-set predicates for ID, failed status, null lease, and null result.
+4. Assigns exactly `status = 'pending'`, `retry_count = 0`, `next_attempt_at = transaction time`, `lease_token = NULL`, and `lease_expires_at = NULL`.
+5. Requires returned workout and sleep ID sets to equal the validated input set. Any mismatch rolls back everything.
 
-The update must not assign any notification column. In particular, `notification_state`, `notification_retry_count`, `notification_next_attempt_at`, `notification_lease_token`, `notification_lease_expires_at`, and `notification_sent_at` must retain their exact pre-transaction values. Input payloads, `updated_at`, user IDs, dates, source identifiers, and every other non-listed column are also untouched.
+The script does not assign `result`, `updated_at`, or any notification column. It preserves `notification_state`, `notification_retry_count`, `notification_next_attempt_at`, `notification_lease_token`, `notification_lease_expires_at`, `notification_sent_at`, payloads, users, dates, source identifiers, and every other field. A second invocation after success updates nothing and rolls back.
 
-The compare-and-set makes the script safe against a concurrent change after the initial read. It is intentionally one-shot but also safe to rerun: after a successful run, the rows are no longer `failed`, so a second invocation updates zero rows, rolls back, and exits nonzero rather than resetting active work.
-
-No model or notification work occurs inside the transaction. The normal worker claims the requeued analysis jobs after commit and applies standard analysis leases, validation, and backoff. Recovery does not attempt to make notification state claimable or otherwise alter later notification behavior.
-
-### Count-only operator output
-
-The script emits fixed labels whose values are integer counts only, such as:
-
-- requested count;
-- matched count;
-- eligible count;
-- workout updated count;
-- sleep updated count;
-- total updated count;
-- success count (`1` after commit, otherwise absent);
-- failure count (`1` on a handled failure, otherwise absent).
-
-No log value may be free-form text. The script must never print UUIDs, user IDs, dates, input payloads, results, SQL, database URLs, exception messages, failure reasons, or row objects. Unexpected exceptions emit only a fixed failure label with integer value `1` and return a nonzero exit code.
+Success and failure output remain fixed `label=integer` lines only. UUIDs, user IDs, dates, payloads, results, SQL, database URLs, exceptions, and row objects are never logged. Recovery runs no model or notification work; normal workers claim rows only after commit.
 
 ## Alternatives considered
 
-### Recommended: one in-attempt repair plus exact-ID transactional recovery
+### Recommended: deterministic opaque evidence tokens plus runtime proof
 
-This addresses future model mistakes at the narrowest boundary and repairs the known backlog without broadening production selection. It adds one model call only when content validation fails, retains deterministic validation, and gives operators all-or-nothing recovery evidence.
+This is a closed protocol. The model never receives a number, cannot transform a hidden value, and cannot authorize output without an exact server-issued token. Atomic trusted resolution preserves the source unit, while the runtime proof prevents an alternate analyzer from bypassing the boundary.
 
-### Rely only on normal queue retries
+### Numeric and unit scanner after generation
 
-This is simpler, but identical prompts can repeat the same unsupported numeric claim until the job becomes terminal. It also does not safely recover the nine rows already in `failed`. Rejected.
+This can accept familiar output, but numeric grammars, punctuation, Unicode, compound units, aliases, and ordinary prose create an unbounded parser. Each vocabulary expansion introduces new ambiguous cases. Rejected.
 
-### Deterministically remove every number from rejected output
+### Give the model raw evidence and rely on prompt compliance
 
-This avoids a second model call but risks corrupting prose, missing semantic dependencies, or turning an invalid answer into a misleading one. It also obscures whether the remaining analysis is coherent. Rejected; the full replacement must pass the strict validator.
+This is simple but does not enforce grounding. The model can calculate, convert, round, or invent a plausible number, and a prompt cannot establish proof. Rejected.
 
-### Weaken grounding or allow derived metrics
+### Deterministically delete numbers from rejected output
 
-Allowing plausible calculations would reduce failures but erodes the core evidence contract and could produce unsupported health claims. Rejected.
+Deletion can damage meaning and produce incoherent or misleading health guidance. It also provides no trusted link between remaining prose and source evidence. Rejected.
 
-### Automatically sweep all failed rows
+### Weaken grounding or accept derived values
 
-A global recovery command is operationally convenient but can revive unrelated permanent failures and makes the blast radius difficult to review. Rejected in favor of exactly nine runtime UUIDs.
+Plausible arithmetic still violates the evidence contract and can create unsupported health claims. Rejected.
 
-### Manual production SQL
+### Broad or manual recovery
 
-Manual updates are hard to test, easy to partially apply across two tables, and likely to expose identifiers in shell history or output. Rejected in favor of a reviewed script with validation, a single transaction, compare-and-set predicates, and count-only logs.
+Sweeping all failures or running manual SQL increases blast radius and identifier exposure. The exact-nine transactional script remains the approved approach.
 
 ## Testing strategy
 
-### Model configuration and prompt tests
+### Evidence encoding and outbound tests
 
-- With no override, the request uses exactly `claude-sonnet-4-6`.
-- `PROACTIVE_ANALYSIS_MODEL` still overrides the default.
-- Initial and repair system prompts contain the no-derived-number contract.
-- Prompt tests assert arithmetic, unit conversion, estimation, rounding, and invented numeric labels are prohibited.
+- Traverse numeric values at every nesting level across date, input, and context.
+- Tokenize JSON numbers and complete numeric lexemes in source strings.
+- Produce unique alphabetic opaque tokens in deterministic traversal order.
+- Map every token to exact source display text, including the source unit when a typed source formatter knows it.
+- Preserve exact source spelling and never round, normalize, calculate, group, or convert.
+- Give identical source displays at different locations distinct tokens.
+- Assert all model-visible system and user content for initial and repair calls contains no raw numeric code point; transport-only model metadata is excluded.
+- Assert token maps and source display text are never included in requests or logs.
 
-### Output and repair tests
+### Parse, schema, token, and resolution tests
 
-- A valid grounded initial response returns after one model call.
-- Malformed JSON triggers exactly one repair call.
-- Valid JSON with an invalid schema triggers exactly one repair call.
-- A schema-valid response with an unsupported number or mismatched unit triggers exactly one repair call.
-- A valid grounded repair response succeeds.
-- A failed repair never triggers a third call and flows to the existing queue retry transition.
-- Transport, authentication, timeout, and no-text failures do not trigger content repair.
-- Both initial and repaired responses pass the same exact-schema and strict-grounding functions.
-- Morning briefs and workout/sleep analyses share the same repair behavior.
-- Failure events contain only allowlisted categories and never serialize rejected output, health evidence, prompts, exception messages, IDs, or tokens.
+- A schema-valid token-only response resolves to the unchanged clean `CoachAnalysis` after one model call.
+- Malformed JSON is `parse_failure`; invalid shape or token use outside string values is `schema_failure`.
+- Reject raw integers, signs, decimals, leading decimals, exponents, grouped numbers, percentages, temperature values, numeric list labels, and Unicode numeric code points in model-authored strings.
+- Reject unknown, duplicate, malformed, split, concatenated, nested, or partially copied tokens.
+- Reject a known token in a key, array structure, numeric field, extra field, or any location other than validated `CoachAnalysis` strings.
+- Resolve only exact private-map tokens and substitute the exact source display atomically.
+- Re-run exact schema and length limits after resolution.
+- Verify no token or proof remains in the stored/public value.
+- Verify source values that happen to be equal cannot authorize token substitution from a different occurrence.
 
-### Ownership and retry regression tests
+### Proof, ownership, repair, and privacy tests
 
-- A successful repair is not stored when lease renewal fails.
-- A stale lease token cannot store a repaired result.
-- Existing retry counts, exponential backoff timestamps, maximum retry behavior, and terminal `failed` transition are unchanged.
-- A repaired result becomes `ready` only through the existing compare-and-set, and notification delivery starts only after that succeeds.
+- `runClaimedAnalysis` rejects a plain or type-cast `CoachAnalysis` from an untrusted analyzer.
+- A forged, copied, serialized, spread, or already-consumed proof is rejected before `storeReady`.
+- Only a proof minted by successful token resolution can be consumed.
+- Initial parse/schema/grounding failure triggers exactly one repair; repair failure never triggers a third call.
+- Repair requests pass the same no-number outbound guard and never contain raw rejected text.
+- Transport, authentication, timeout, and no-text failures do not enter content repair.
+- A successful proof is not stored after lease loss; stale lease tokens cannot win persistence.
+- Existing retry counts, exponential backoff, terminal failure, morning-slot ownership, and notification sequencing remain unchanged.
+- Failure events contain only fixed allowlisted fields and never serialize evidence, tokens, maps, prompts, rejected output, identifiers, or exceptions.
 
 ### Recovery-script tests
 
-- Reject zero, fewer than nine, more than nine, duplicate, malformed, noncanonical, positional, and unknown-flag inputs before opening a transaction.
-- Accept exactly nine unique canonical runtime UUIDs.
-- Recover a mixed set across workout and sleep tables and commit only when the combined affected count is nine.
-- Roll back when any UUID is absent, duplicated across unexpected data, ineligible, concurrently changed, or fails the compare-and-set update.
-- Verify the update changes exactly `status`, `retry_count`, `next_attempt_at`, `lease_token`, and `lease_expires_at`; `result` is confirmed `NULL` before the compare-and-set and remains `NULL` afterward.
-- Seed distinct values for `notification_state`, `notification_retry_count`, `notification_next_attempt_at`, `notification_lease_token`, `notification_lease_expires_at`, and `notification_sent_at`, then assert every value is identical before and after a successful recovery.
-- Verify payload, `updated_at`, user, date, source data, and every other non-listed field are unchanged.
-- Verify a second invocation after success updates nothing, rolls back, and exits nonzero.
-- Capture stdout and stderr and assert they contain fixed labels with integer counts only, with none of the supplied UUIDs or row content.
-- Verify the transaction commits once on success and rolls back atomically on every failure path.
+- Reject all argument counts other than exactly nine and reject duplicate, malformed, noncanonical, positional, and unknown-flag inputs before database access.
+- Prove both table locks, all four compare-and-set conditions, returned IDs, and exactly five assignments without executing production recovery.
+- Commit a mixed workout/sleep set only when all nine supplied IDs transition.
+- Roll back on absent, duplicate, ineligible, concurrently changed, or compare-and-set-missed rows.
+- Preserve all notification and unrelated fields exactly.
+- Reject a second invocation after successful recovery.
+- Emit count-only output with no identifiers, row content, SQL, connection data, or exception text.
 
-### Verification commands
+## Verification
 
-The implementation plan must include focused unit tests for the analysis boundary and recovery script, existing proactive worker lease/transition tests, TypeScript checking, `npm run build:worker`, the project test suite, and `npm run build`.
+The implementation plan must include focused evidence-encoder, output-boundary, proof, repair, lease, transition, and recovery tests; all proactive tests; TypeScript checking; lint; worker bundling; the project test suite; and the production application build.
 
 ## Rollout and acceptance criteria
 
-1. Deploy the worker change through the normal PR and release process.
-2. Confirm sanitized logs identify repair outcomes only by fixed categories and contain no private content.
-3. Run the recovery script once with the nine operator-supplied UUIDs.
-4. Require a committed total of nine updates; any other total is a failed recovery and must leave all rows unchanged.
-5. Verify before and after snapshots show exact preservation of all six notification fields for all nine rows.
-6. Observe the normal worker claim the rows and confirm they advance through `processing` to `ready` or follow the unchanged retry/backoff path.
-7. Confirm no stale worker can persist after losing its lease and strict grounding rejects unsupported numeric claims after both initial and repair responses.
+1. Deploy through the normal feature-branch PR and release process.
+2. Confirm every initial and repair model request contains only tokenized evidence and no raw numbers.
+3. Confirm logs expose only fixed repair categories/outcomes and no private content or token material.
+4. Confirm valid token output resolves to the unchanged public `CoachAnalysis` and contains no tokens at persistence or API readback.
+5. Confirm raw numeric output and every unknown, duplicate, malformed, misplaced, split, or concatenated token fail before proof minting.
+6. Confirm `runClaimedAnalysis` rejects untrusted plain results and accepts only a fresh runtime proof minted by the trusted resolver.
+7. Confirm lease renewal and the existing status-and-token compare-and-set remain mandatory before storage and notification.
+8. Run the recovery script once with nine operator-supplied UUIDs; require exactly nine committed updates or a complete rollback.
+9. Verify all six notification fields and all unrelated fields are identical before and after recovery.
+10. Observe requeued jobs follow normal processing, retry, backoff, ready, and notification behavior.
 
-The feature is complete when new parse/schema/grounding failures receive no more than one strict repair attempt, successful repaired analyses retain all current ownership guarantees, and the exact nine known failed jobs are atomically requeued by changing analysis queue fields only. All notification fields must remain exactly unchanged, and no identifiers or health content may appear in logs.
+The feature is complete when the model never receives raw numeric evidence, can express a source number only by copying one opaque server-issued token, trusted resolution is the only way to mint the runtime proof consumed by `runClaimedAnalysis`, the stored/public schema remains clean and unchanged, one repair remains bounded and privacy-safe, and the exact nine failed jobs are atomically requeued without changing notification or unrelated state.
