@@ -39,6 +39,8 @@ test('initial and repair prompts forbid every derived-number class', () => {
     assert.match(prompt, /JSON only/i);
     assert.match(prompt, /observational/i);
     assert.match(prompt, /not diagnostic/i);
+    assert.match(prompt, /exact supplied value/i);
+    assert.match(prompt, /same unit as (?:that|the) source/i);
   }
 });
 

@@ -38,10 +38,11 @@ export class AnalysisContentError extends Error {
 }
 
 const DERIVED_NUMBER_RULES = `Do not perform or state arithmetic, ratios, percentages, differences, unit conversion, rounding, estimation, extrapolation, or numeric list labels.`;
+const SOURCE_VALUE_RULE = `Every numeric claim must use an exact supplied value with the same unit as that source; never drop, add, disguise, or replace a source unit.`;
 
-export const PROACTIVE_ANALYSIS_SYSTEM_PROMPT = `You are Vital coach. Use only supplied values; never infer or invent a metric. ${DERIVED_NUMBER_RULES} Return JSON only with exactly headline, shortInsight, narrative, observations, nextSteps. Missing data must be described as unavailable. Keep medical claims observational, not diagnostic.`;
+export const PROACTIVE_ANALYSIS_SYSTEM_PROMPT = `You are Vital coach. Use only supplied values; never infer or invent a metric. ${SOURCE_VALUE_RULE} ${DERIVED_NUMBER_RULES} Return JSON only with exactly headline, shortInsight, narrative, observations, nextSteps. Missing data must be described as unavailable. Keep medical claims observational, not diagnostic.`;
 
-export const PROACTIVE_ANALYSIS_REPAIR_PROMPT = `Repair the rejected Vital coach response using only the supplied request and evidence. Use only supplied values; never infer or invent a metric. ${DERIVED_NUMBER_RULES} Return a full replacement as JSON only with exactly headline, shortInsight, narrative, observations, nextSteps. Missing data must be described as unavailable. Keep medical claims observational, not diagnostic. Fix only the supplied failure category.`;
+export const PROACTIVE_ANALYSIS_REPAIR_PROMPT = `Repair the rejected Vital coach response using only the supplied request and evidence. Use only supplied values; never infer or invent a metric. ${SOURCE_VALUE_RULE} ${DERIVED_NUMBER_RULES} Return a full replacement as JSON only with exactly headline, shortInsight, narrative, observations, nextSteps. Missing data must be described as unavailable. Keep medical claims observational, not diagnostic. Fix only the supplied failure category.`;
 
 export function proactiveAnalysisModel(env: NodeJS.ProcessEnv): string {
   return env.PROACTIVE_ANALYSIS_MODEL ?? DEFAULT_PROACTIVE_ANALYSIS_MODEL;

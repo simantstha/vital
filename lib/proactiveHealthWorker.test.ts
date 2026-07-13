@@ -30,6 +30,25 @@ test('rejects fabricated numeric health claims and accepts grounded metric units
   assert.doesNotThrow(() => validateGroundedAnalysis(valid, {}));
 });
 
+test('grounding requires an exact supplied value with the same source unit', () => {
+  const analysis = (narrative: string) => ({ ...valid, narrative });
+
+  assert.doesNotThrow(() => validateGroundedAnalysis(analysis('Your HRV was 45 ms.'), { metrics: [{ metric: 'hrv_sdnn', value: 45 }] }));
+  assert.doesNotThrow(() => validateGroundedAnalysis(analysis('Your HRV was 45 milliseconds.'), { metrics: [{ metric: 'hrv_sdnn', value: 45 }] }));
+  assert.doesNotThrow(() => validateGroundedAnalysis(analysis('Your score was 45.'), { score: 45 }));
+  assert.doesNotThrow(() => validateGroundedAnalysis(analysis('Your walk lasted 2 hrs.'), { summary: 'Duration: 2 hours.' }));
+  assert.doesNotThrow(() => validateGroundedAnalysis(analysis('Energy was 300 calories.'), { summary: 'Energy: 300 kcal.' }));
+
+  assert.throws(() => validateGroundedAnalysis(analysis('Your HRV was 45.'), { metrics: [{ metric: 'hrv_sdnn', value: 45 }] }), /unit/);
+  assert.throws(() => validateGroundedAnalysis(analysis('Your score was 45 ms.'), { score: 45 }), /unit/);
+  assert.throws(() => validateGroundedAnalysis(analysis('Your HRV was 45 bpm.'), { metrics: [{ metric: 'hrv_sdnn', value: 45 }] }), /unit/);
+  assert.throws(() => validateGroundedAnalysis(analysis('Your HRV was 45 seconds.'), { metrics: [{ metric: 'hrv_sdnn', value: 45 }] }), /unit/);
+  assert.throws(() => validateGroundedAnalysis(analysis('Your HRV was 45 bananas.'), { metrics: [{ metric: 'hrv_sdnn', value: 45 }] }), /unit/);
+  assert.throws(() => validateGroundedAnalysis(analysis('Your HRV was 45-ms.'), { metrics: [{ metric: 'hrv_sdnn', value: 45 }] }), /unit/);
+  assert.throws(() => validateGroundedAnalysis(analysis('Your HRV was 45_ms.'), { metrics: [{ metric: 'hrv_sdnn', value: 45 }] }), /unit/);
+  assert.throws(() => validateGroundedAnalysis(analysis('Your HRV was 45/ms.'), { metrics: [{ metric: 'hrv_sdnn', value: 45 }] }), /unit/);
+});
+
 test('caps exponential retries', () => {
   const now = new Date('2026-07-12T12:00:00Z');
   assert.equal(nextRetryAt(now, 0).toISOString(), '2026-07-12T12:01:00.000Z');

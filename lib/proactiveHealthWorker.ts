@@ -40,7 +40,19 @@ export function parseCoachAnalysis(value: unknown): CoachAnalysis {
   return row as unknown as CoachAnalysis;
 }
 
-const unitAliases: Record<string, string> = { milliseconds: 'ms', millisecond: 'ms', bpm: 'bpm', '%': '%', kg: 'kg', km: 'km', mi: 'mi', kcal: 'kcal', calorie: 'kcal', calories: 'kcal', step: 'steps', steps: 'steps', minute: 'minutes', minutes: 'minutes', min: 'minutes', mins: 'minutes', hour: 'hours', hours: 'hours', hr: 'hours', hrs: 'hours' };
+const UNITLESS = '<unitless>';
+const unitAliases: Record<string, string> = {
+  ms: 'ms', millisecond: 'ms', milliseconds: 'ms',
+  bpm: 'bpm',
+  '%': '%', percent: '%', percentage: '%', percentages: '%',
+  kg: 'kg', kilogram: 'kg', kilograms: 'kg',
+  km: 'km', kilometer: 'km', kilometers: 'km', kilometre: 'km', kilometres: 'km',
+  mi: 'mi', mile: 'mi', miles: 'mi',
+  kcal: 'kcal', calorie: 'kcal', calories: 'kcal', kilocalorie: 'kcal', kilocalories: 'kcal',
+  step: 'steps', steps: 'steps',
+  minute: 'minutes', minutes: 'minutes', min: 'minutes', mins: 'minutes',
+  hour: 'hours', hours: 'hours', hr: 'hours', hrs: 'hours',
+};
 function inferredUnit(key: string): string | undefined {
   const lower = key.toLowerCase();
   if (lower.includes('hrv') || lower.endsWith('_ms')) return 'ms';
@@ -53,9 +65,31 @@ function inferredUnit(key: string): string | undefined {
 }
 export function validateGroundedAnalysis(result: CoachAnalysis, evidence: unknown): CoachAnalysis {
   const values = new Map<string, Set<string>>();
+  const addValue = (rawValue: string | number, unit: string | undefined): void => {
+    const normalized = String(Number(rawValue));
+    const units = values.get(normalized) ?? new Set<string>();
+    units.add(unit ?? UNITLESS);
+    values.set(normalized, units);
+  };
+  const claims = (text: string): Array<{ value: string; unit?: string; unknownUnit?: string }> => {
+    const found: Array<{ value: string; unit?: string; unknownUnit?: string }> = [];
+    for (const match of text.matchAll(/(?<![\d.])\d+(?:\.\d+)?(?!\d|\.\d)/g)) {
+      const value = match[0];
+      const remainder = text.slice((match.index ?? 0) + value.length);
+      const suffix = remainder.match(/^\s*(%|[a-zA-Z]+|[-_/][a-zA-Z]+)/)?.[1];
+      if (!suffix) found.push({ value });
+      else {
+        const unit = unitAliases[suffix.toLowerCase()];
+        found.push(unit ? { value, unit } : { value, unknownUnit: suffix.toLowerCase() });
+      }
+    }
+    return found;
+  };
   const visit = (value: unknown, key = ''): void => {
-    if (typeof value === 'number' && Number.isFinite(value)) { const normalized = String(value); const units = values.get(normalized) ?? new Set<string>(); const unit = inferredUnit(key); if (unit) units.add(unit); values.set(normalized, units); }
-    else if (typeof value === 'string') { for (const match of value.matchAll(/\b(\d+(?:\.\d+)?)\s*(%|ms|bpm|kg|km|mi|kcal|calories?|steps?|minutes?|mins?|hours?|hrs?)?/gi)) { const units = values.get(match[1]) ?? new Set<string>(); if (match[2]) units.add(unitAliases[match[2].toLowerCase()] ?? match[2].toLowerCase()); values.set(match[1], units); } }
+    if (typeof value === 'number' && Number.isFinite(value)) addValue(value, inferredUnit(key));
+    else if (typeof value === 'string') {
+      for (const claim of claims(value)) if (!claim.unknownUnit) addValue(claim.value, claim.unit);
+    }
     else if (Array.isArray(value)) value.forEach((item) => visit(item, key));
     else if (value && typeof value === 'object') {
       const object = value as Record<string, unknown>;
@@ -65,10 +99,12 @@ export function validateGroundedAnalysis(result: CoachAnalysis, evidence: unknow
   };
   visit(evidence);
   const text = [result.headline, result.shortInsight, result.narrative, ...result.observations, ...result.nextSteps].join(' ');
-  for (const match of text.matchAll(/\b(\d+(?:\.\d+)?)\s*(%|ms|bpm|kg|km|mi|kcal|calories?|steps?|minutes?|mins?|hours?|hrs?)?/gi)) {
-    const supported = values.get(match[1]);
-    if (!supported) throw new Error(`unsupported numeric claim: ${match[1]}`);
-    if (match[2]) { const unit = unitAliases[match[2].toLowerCase()] ?? match[2].toLowerCase(); if (!supported.has(unit)) throw new Error(`unsupported unit claim: ${match[1]} ${unit}`); }
+  for (const claim of claims(text)) {
+    if (claim.unknownUnit) throw new Error(`unsupported unit claim: ${claim.value} ${claim.unknownUnit}`);
+    const supported = values.get(String(Number(claim.value)));
+    if (!supported) throw new Error(`unsupported numeric claim: ${claim.value}`);
+    const unit = claim.unit ?? UNITLESS;
+    if (!supported.has(unit)) throw new Error(`unsupported unit claim: ${claim.value} ${claim.unit ?? 'unitless'}`);
   }
   return result;
 }
