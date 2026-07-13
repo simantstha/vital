@@ -262,6 +262,135 @@ export const pending_nudges = p.pgTable('pending_nudges', {
   p.index('pending_nudges_user_scheduled_idx').on(t.user_id, t.scheduled_for),
 ]);
 
+// ─── proactive health analysis + push delivery ─────────────────────────────
+
+export const push_devices = p.pgTable('push_devices', {
+  id:              p.uuid('id').primaryKey().defaultRandom(),
+  user_id:         p.uuid('user_id').notNull().references(() => users.id),
+  installation_id: p.text('installation_id').notNull(),
+  device_token:    p.text('device_token').notNull(),
+  environment:     p.text('environment').notNull(),
+  created_at:      p.timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updated_at:      p.timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  invalidated_at:  p.timestamp('invalidated_at', { withTimezone: true }),
+}, (t) => [
+  p.check('push_devices_environment_check', sql`${t.environment} in ('sandbox', 'production')`),
+  p.uniqueIndex('push_devices_installation_idx').on(t.installation_id),
+  p.uniqueIndex('push_devices_token_environment_idx').on(t.device_token, t.environment),
+  p.index('push_devices_user_active_idx').on(t.user_id, t.invalidated_at),
+]);
+
+export const notification_preferences = p.pgTable('notification_preferences', {
+  user_id:                       p.uuid('user_id').primaryKey().references(() => users.id),
+  morning_brief_enabled:         p.boolean('morning_brief_enabled').default(true).notNull(),
+  morning_brief_time_minutes:    p.integer('morning_brief_time_minutes').default(450).notNull(),
+  workout_notifications_enabled: p.boolean('workout_notifications_enabled').default(true).notNull(),
+  sleep_notifications_enabled:   p.boolean('sleep_notifications_enabled').default(true).notNull(),
+  timezone:                      p.text('timezone').default('UTC').notNull(),
+  updated_at:                    p.timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  p.check(
+    'notification_preferences_morning_time_check',
+    sql`${t.morning_brief_time_minutes} between 0 and 1439`,
+  ),
+]);
+
+export const workout_analyses = p.pgTable('workout_analyses', {
+  id:                 p.uuid('id').primaryKey().defaultRandom(),
+  user_id:            p.uuid('user_id').notNull().references(() => users.id),
+  hk_uuid:            p.text('hk_uuid').notNull(),
+  workout_date:       p.date('workout_date').notNull(),
+  content_fingerprint: p.text('content_fingerprint').notNull(),
+  input_payload:      p.jsonb('input_payload').notNull(),
+  status:             p.text('status').default('pending').notNull(),
+  retry_count:        p.integer('retry_count').default(0).notNull(),
+  next_attempt_at:    p.timestamp('next_attempt_at', { withTimezone: true }).defaultNow().notNull(),
+  lease_expires_at:   p.timestamp('lease_expires_at', { withTimezone: true }),
+  lease_token:        p.uuid('lease_token'),
+  result:             p.jsonb('result'),
+  notification_state: p.text('notification_state').default('pending').notNull(),
+  notification_sent_at: p.timestamp('notification_sent_at', { withTimezone: true }),
+  notification_lease_token: p.uuid('notification_lease_token'),
+  notification_lease_expires_at: p.timestamp('notification_lease_expires_at', { withTimezone: true }),
+  notification_retry_count: p.integer('notification_retry_count').default(0).notNull(),
+  notification_next_attempt_at: p.timestamp('notification_next_attempt_at', { withTimezone: true }).defaultNow().notNull(),
+  created_at:         p.timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updated_at:         p.timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  deleted_at:         p.timestamp('deleted_at', { withTimezone: true }),
+}, (t) => [
+  p.check('workout_analyses_status_check', sql`${t.status} in ('pending', 'processing', 'ready', 'failed', 'deleted')`),
+  p.check('workout_analyses_notification_state_check', sql`${t.notification_state} in ('pending', 'suppressed', 'sending', 'sent', 'failed')`),
+  p.uniqueIndex('workout_analyses_user_hk_uuid_idx').on(t.user_id, t.hk_uuid),
+  p.index('workout_analyses_queue_idx').on(t.status, t.next_attempt_at),
+]);
+
+export const sleep_analyses = p.pgTable('sleep_analyses', {
+  id:                 p.uuid('id').primaryKey().defaultRandom(),
+  user_id:            p.uuid('user_id').notNull().references(() => users.id),
+  wake_date:          p.date('wake_date').notNull(),
+  content_fingerprint: p.text('content_fingerprint').notNull(),
+  input_payload:      p.jsonb('input_payload').notNull(),
+  analyze_after:      p.timestamp('analyze_after', { withTimezone: true }).notNull(),
+  status:             p.text('status').default('pending').notNull(),
+  retry_count:        p.integer('retry_count').default(0).notNull(),
+  next_attempt_at:    p.timestamp('next_attempt_at', { withTimezone: true }).notNull(),
+  lease_expires_at:   p.timestamp('lease_expires_at', { withTimezone: true }),
+  lease_token:        p.uuid('lease_token'),
+  result:             p.jsonb('result'),
+  notification_state: p.text('notification_state').default('pending').notNull(),
+  notification_sent_at: p.timestamp('notification_sent_at', { withTimezone: true }),
+  notification_lease_token: p.uuid('notification_lease_token'),
+  notification_lease_expires_at: p.timestamp('notification_lease_expires_at', { withTimezone: true }),
+  notification_retry_count: p.integer('notification_retry_count').default(0).notNull(),
+  notification_next_attempt_at: p.timestamp('notification_next_attempt_at', { withTimezone: true }).defaultNow().notNull(),
+  created_at:         p.timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updated_at:         p.timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  p.check('sleep_analyses_status_check', sql`${t.status} in ('pending', 'processing', 'ready', 'failed', 'deleted')`),
+  p.check('sleep_analyses_notification_state_check', sql`${t.notification_state} in ('pending', 'suppressed', 'sending', 'sent', 'failed')`),
+  p.uniqueIndex('sleep_analyses_user_wake_date_idx').on(t.user_id, t.wake_date),
+  p.index('sleep_analyses_queue_idx').on(t.status, t.next_attempt_at),
+]);
+
+export const morning_notification_slots = p.pgTable('morning_notification_slots', {
+  id:              p.uuid('id').primaryKey().defaultRandom(),
+  user_id:         p.uuid('user_id').notNull().references(() => users.id),
+  local_date:      p.date('local_date').notNull(),
+  claimed_by:      p.text('claimed_by').notNull(),
+  status:          p.text('status').default('claimed').notNull(),
+  idempotency_key: p.text('idempotency_key').notNull(),
+  claimed_at:      p.timestamp('claimed_at', { withTimezone: true }).defaultNow().notNull(),
+  sent_at:         p.timestamp('sent_at', { withTimezone: true }),
+  lease_token:     p.uuid('lease_token'),
+  lease_expires_at: p.timestamp('lease_expires_at', { withTimezone: true }),
+  retry_count:     p.integer('retry_count').default(0).notNull(),
+  next_attempt_at: p.timestamp('next_attempt_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  p.check('morning_notification_slots_claimed_by_check', sql`${t.claimed_by} in ('sleep', 'brief')`),
+  p.check('morning_notification_slots_status_check', sql`${t.status} in ('claimed', 'sent', 'failed')`),
+  p.uniqueIndex('morning_notification_slots_user_date_idx').on(t.user_id, t.local_date),
+  p.uniqueIndex('morning_notification_slots_idempotency_idx').on(t.idempotency_key),
+]);
+
+export const push_attempts = p.pgTable('push_attempts', {
+  id:              p.uuid('id').primaryKey().defaultRandom(),
+  user_id:         p.uuid('user_id').notNull().references(() => users.id),
+  push_device_id:  p.uuid('push_device_id').references(() => push_devices.id),
+  idempotency_key: p.text('idempotency_key').notNull(),
+  notification_type: p.text('notification_type').notNull(),
+  target_id:       p.uuid('target_id'),
+  attempt_number:  p.integer('attempt_number').default(1).notNull(),
+  status:          p.text('status').default('pending').notNull(),
+  apns_status:     p.integer('apns_status'),
+  failure_category: p.text('failure_category'),
+  latency_ms:      p.integer('latency_ms'),
+  attempted_at:    p.timestamp('attempted_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  p.check('push_attempts_status_check', sql`${t.status} in ('pending', 'sent', 'transient_failure', 'permanent_failure')`),
+  p.uniqueIndex('push_attempts_idempotency_attempt_idx').on(t.idempotency_key, t.attempt_number),
+  p.index('push_attempts_user_attempted_idx').on(t.user_id, t.attempted_at),
+]);
+
 // ─── plan_items ──────────────────────────────────────────────────────────────
 // Server-persisted rows for the Today "plan" timeline (redesign v3 Phase 2).
 // One row per plan entry per (user, local calendar day) — local_day is a
@@ -324,3 +453,8 @@ export type NewBaseline    = typeof baselines.$inferInsert;
 
 export type PlanItemRow    = typeof plan_items.$inferSelect;                  // 'PlanItem' avoided — collides with iOS-side name in spirit, not compilation, but keep distinct
 export type NewPlanItemRow = typeof plan_items.$inferInsert;
+
+export type PushDevice = typeof push_devices.$inferSelect;
+export type NotificationPreference = typeof notification_preferences.$inferSelect;
+export type WorkoutAnalysis = typeof workout_analyses.$inferSelect;
+export type SleepAnalysis = typeof sleep_analyses.$inferSelect;

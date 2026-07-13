@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "build:worker": "esbuild scripts/proactive-health-worker.ts --bundle --platform=node --target=node22 --outfile=dist/proactive-health-worker.cjs",
+    "worker": "node dist/proactive-health-worker.cjs",
     "start": "next start",
     "lint": "eslint"
   },
@@ -27,6 +29,7 @@
     "drizzle-kit": "^0.31.10",
     "eslint": "^9",
     "eslint-config-next": "16.2.6",
+    "esbuild": "^0.25.6",
     "tailwindcss": "^4",
     "typescript": "^5"
   }

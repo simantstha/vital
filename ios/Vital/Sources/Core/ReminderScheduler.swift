@@ -20,6 +20,9 @@ import Foundation
 @MainActor
 final class ReminderScheduler {
 
+    enum LocalReminderKind: Hashable { case morningBrief, meal, weighIn }
+    static let localReminderKinds: [LocalReminderKind] = [.meal, .weighIn]
+
     static let shared = ReminderScheduler()
 
     private enum Keys {
@@ -50,7 +53,6 @@ final class ReminderScheduler {
         await manager.cancelAll(prefix: NotificationIdentifiers.reminderPrefix)
 
         let now = Date()
-        scheduleBriefWindow(from: now)
         scheduleMealWindow(from: now)
         scheduleWeighInWindow(from: now)
     }
@@ -69,32 +71,10 @@ final class ReminderScheduler {
         manager.cancel(ids: [id])
     }
 
-    // MARK: - Brief
-
-    private func scheduleBriefWindow(from now: Date) {
-        guard defaults.bool(forKey: NotificationPrefsKeys.briefEnabled) else { return }
-        let minutes = defaults.integer(forKey: NotificationPrefsKeys.briefMinutes)
-        let fourAM = date(onDay: now, minutesSinceMidnight: 4 * 60) ?? now
-
-        for offset in 0..<7 {
-            guard let day = calendar.date(byAdding: .day, value: offset, to: now),
-                  let fireDate = date(onDay: day, minutesSinceMidnight: minutes),
-                  fireDate > now else { continue }
-
-            // Brief suppression: if it's already between 4am and the brief
-            // time on the first day of the window, the user foregrounding
-            // the app *is* them checking in — skip today's nudge.
-            if offset == 0 && now >= fourAM {
-                continue
-            }
-
-            schedule(
-                id: NotificationIdentifiers.brief(day),
-                title: "Morning Brief",
-                body: "Your morning brief is ready — see how you recovered overnight.",
-                fireDate: fireDate
-            )
-        }
+    /// Cancels a legacy locally scheduled brief after Today has loaded. This
+    /// is migration-only; new morning briefs are server-scheduled remote push.
+    func briefViewed(at date: Date) {
+        manager.cancel(ids: [NotificationIdentifiers.brief(date)])
     }
 
     // MARK: - Meals

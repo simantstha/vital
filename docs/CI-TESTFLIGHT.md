@@ -97,6 +97,12 @@ repo**, encrypted. CI only reads it.
 | `MATCH_GIT_BASIC_AUTHORIZATION` | base64 of `user:PAT` |
 | `MATCH_PASSWORD` | the match passphrase from step 3 |
 
+The proactive notification worker additionally requires Fly runtime secrets
+`APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_TOPIC`, and the full PEM-formatted
+`APNS_PRIVATE_KEY`. These are Fly secrets, not GitHub Actions secrets; provision
+them with the commands and formatting rules in `docs/fly-deploy.md` before the
+release workflow deploys the worker.
+
 ---
 
 ## How versioning works

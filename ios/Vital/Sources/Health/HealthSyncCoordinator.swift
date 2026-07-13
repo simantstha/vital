@@ -15,6 +15,7 @@ import HealthKit
 /// added/deleted since the last successful sync — not a full re-scan.
 @MainActor
 final class HealthSyncCoordinator: ObservableObject {
+    static let sleepBackgroundFrequency: HKUpdateFrequency = .immediate
 
     static let shared = HealthSyncCoordinator()
 
@@ -260,10 +261,10 @@ final class HealthSyncCoordinator: ObservableObject {
         addQuantity(.basalEnergyBurned, key: "sync.anchor.basalEnergy", frequency: .hourly)
 
         if let sleepType = HKObjectType.categoryType(forIdentifier: .sleepAnalysis) {
-            types.append(SyncType(sampleType: sleepType, anchorKey: "sync.anchor.sleep", frequency: .daily))
+            types.append(SyncType(sampleType: sleepType, anchorKey: "sync.anchor.sleep", frequency: sleepBackgroundFrequency))
         }
 
-        types.append(SyncType(sampleType: HKObjectType.workoutType(), anchorKey: "sync.anchor.workouts", frequency: .daily))
+        types.append(SyncType(sampleType: HKObjectType.workoutType(), anchorKey: "sync.anchor.workouts", frequency: .immediate))
 
         return types
     }()

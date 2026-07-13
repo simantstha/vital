@@ -19,6 +19,7 @@ COPY . .
 ENV DATABASE_URL="postgres://build:build@localhost:5432/build"
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
+RUN npm run build:worker
 
 # ---- Runtime ----
 FROM base AS runner
@@ -32,6 +33,7 @@ ENV VITAL_DATA_DIR=/data
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/public ./public
+COPY --from=builder /app/dist ./dist
 
 # Baked-in defaults used to seed the persistent volume on first boot.
 # Copied from the tracked template dir (never from live runtime state), so
@@ -43,3 +45,4 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 EXPOSE 3000
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+CMD ["node", "server.js"]

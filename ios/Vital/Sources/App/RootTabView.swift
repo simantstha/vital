@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct RootTabView: View {
+    @EnvironmentObject private var router: AppRouter
     private enum Tab: Int, CaseIterable {
         case today, coach, trends, logs, profile
 
@@ -33,7 +34,8 @@ struct RootTabView: View {
                 TodayView()
                     .tag(Tab.today)
 
-                CoachView()
+                CoachView(initialMessage: router.coachContext)
+                    .id(router.coachContext)
                     .tag(Tab.coach)
 
                 TrendsView()
@@ -50,6 +52,15 @@ struct RootTabView: View {
             tabBar
         }
         .tint(Theme.Colors.accentContent)
+        .onChange(of: router.coachContext) { _, value in if value != nil { selected = .coach } }
+        .sheet(item: $router.route) { route in
+            switch route {
+            case .workoutAnalysis(let id): WorkoutAnalysisView(id: id)
+            case .sleepAnalysis(let id): SleepAnalysisView(id: id)
+            case .morningBrief:
+                Color.clear.onAppear { selected = .today; router.route = nil }
+            }
+        }
     }
 
     private var tabBar: some View {

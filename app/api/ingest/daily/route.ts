@@ -27,10 +27,14 @@
  */
 
 import { NextResponse } from 'next/server';
-import { sql } from 'drizzle-orm';
+import { and, eq, inArray, ne, or, sql } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import { getUserIdFromRequest } from '@/lib/auth';
 import { recomputeBaselines } from '@/lib/brain/baselines';
+import {
+  reconcileAnalysisIngest,
+  type AnalysisIngestRepository,
+} from '@/lib/healthAnalysisIngest';
 
 const MAX_DAYS_PER_REQUEST = 60;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -66,7 +70,15 @@ function isDayInput(d: unknown): d is DayInput {
     if (o.sleep === null || typeof o.sleep !== 'object') return false;
     if (typeof (o.sleep as Record<string, unknown>).minutes !== 'number') return false;
   }
-  if (o.workouts !== undefined && !Array.isArray(o.workouts)) return false;
+  if (o.workouts !== undefined) {
+    if (!Array.isArray(o.workouts)) return false;
+    if (!o.workouts.every((workout) => (
+      workout !== null
+      && typeof workout === 'object'
+      && typeof (workout as Record<string, unknown>).hkUuid === 'string'
+      && (workout as Record<string, unknown>).hkUuid !== ''
+    ))) return false;
+  }
   return true;
 }
 
@@ -120,6 +132,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   const days = raw as DayInput[];
+  const receivedAt = new Date();
 
   // ── Flatten into daily_metrics rows ───────────────────────────────────────
   const rows: Row[] = [];
@@ -163,18 +176,129 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   try {
-    await db
-      .insert(schema.daily_metrics)
-      .values(rows)
-      .onConflictDoUpdate({
-        target: [schema.daily_metrics.user_id, schema.daily_metrics.date, schema.daily_metrics.metric],
-        set: {
-          value:      sql`excluded.value`,
-          payload:    sql`excluded.payload`,
-          source:     sql`excluded.source`,
-          updated_at: sql`now()`,
+    const workoutDays = days.filter((day) => day.workouts !== undefined);
+    const sleepDays = days.filter((day) => day.sleep !== undefined);
+
+    await db.transaction(async (tx) => {
+      const analysisRepository: AnalysisIngestRepository = {
+        async lockUser(lockedUserId) {
+          await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${lockedUserId}, 0))`);
         },
-      });
+        async listWorkoutAnalyses(scopedUserId, workoutDates, currentHkUuids) {
+          if (workoutDates.length === 0) return [];
+          return tx.select({
+            hkUuid: schema.workout_analyses.hk_uuid,
+            workoutDate: schema.workout_analyses.workout_date,
+            contentFingerprint: schema.workout_analyses.content_fingerprint,
+            status: schema.workout_analyses.status,
+            notificationState: schema.workout_analyses.notification_state,
+            notificationSentAt: schema.workout_analyses.notification_sent_at,
+          }).from(schema.workout_analyses).where(and(
+            eq(schema.workout_analyses.user_id, scopedUserId),
+            or(
+              inArray(schema.workout_analyses.workout_date, workoutDates),
+              currentHkUuids.length > 0
+                ? inArray(schema.workout_analyses.hk_uuid, currentHkUuids)
+                : undefined,
+            ),
+          ));
+        },
+        async markWorkoutsDeleted(scopedUserId, hkUuids, deletedAt) {
+          await tx.update(schema.workout_analyses).set({
+            status: 'deleted',
+            deleted_at: deletedAt,
+            lease_expires_at: null,
+            updated_at: deletedAt,
+          }).where(and(
+            eq(schema.workout_analyses.user_id, scopedUserId),
+            inArray(schema.workout_analyses.hk_uuid, hkUuids),
+          ));
+        },
+        async upsertWorkout(scopedUserId, entry) {
+          await tx.insert(schema.workout_analyses).values({
+            user_id: scopedUserId,
+            hk_uuid: entry.workout.hkUuid,
+            workout_date: entry.workoutDate,
+            content_fingerprint: entry.fingerprint,
+            input_payload: entry.workout,
+          }).onConflictDoUpdate({
+            target: [schema.workout_analyses.user_id, schema.workout_analyses.hk_uuid],
+            set: {
+              workout_date: entry.workoutDate,
+              content_fingerprint: entry.fingerprint,
+              input_payload: entry.workout,
+              status: 'pending',
+              retry_count: 0,
+              next_attempt_at: entry.receivedAt,
+              lease_expires_at: null,
+              result: null,
+              deleted_at: null,
+              updated_at: entry.receivedAt,
+              notification_state: entry.notificationState,
+            },
+          });
+        },
+        async listSleepAnalyses(scopedUserId, wakeDates) {
+          if (wakeDates.length === 0) return [];
+          return tx.select({
+            wakeDate: schema.sleep_analyses.wake_date,
+            contentFingerprint: schema.sleep_analyses.content_fingerprint,
+            notificationState: schema.sleep_analyses.notification_state,
+            notificationSentAt: schema.sleep_analyses.notification_sent_at,
+          }).from(schema.sleep_analyses).where(and(
+            eq(schema.sleep_analyses.user_id, scopedUserId),
+            inArray(schema.sleep_analyses.wake_date, wakeDates),
+          ));
+        },
+        async upsertSleep(scopedUserId, entry) {
+          await tx.insert(schema.sleep_analyses).values({
+            user_id: scopedUserId,
+            wake_date: entry.wakeDate,
+            content_fingerprint: entry.fingerprint,
+            input_payload: entry.sleep,
+            analyze_after: entry.analyzeAfter,
+            next_attempt_at: entry.analyzeAfter,
+          }).onConflictDoUpdate({
+            target: [schema.sleep_analyses.user_id, schema.sleep_analyses.wake_date],
+            set: {
+              content_fingerprint: entry.fingerprint,
+              input_payload: entry.sleep,
+              analyze_after: entry.analyzeAfter,
+              next_attempt_at: entry.analyzeAfter,
+              status: 'pending',
+              retry_count: 0,
+              lease_expires_at: null,
+              result: null,
+              updated_at: entry.receivedAt,
+              notification_state: entry.notificationState,
+            },
+            setWhere: ne(schema.sleep_analyses.content_fingerprint, entry.fingerprint),
+          });
+        },
+      };
+
+      await reconcileAnalysisIngest(
+        analysisRepository,
+        userId,
+        workoutDays.map((day) => ({ workoutDate: day.date, workouts: day.workouts ?? [] })),
+        sleepDays.map((day) => ({ wakeDate: day.date, sleep: day.sleep! })),
+        receivedAt,
+      );
+
+      await tx
+        .insert(schema.daily_metrics)
+        .values(rows)
+        .onConflictDoUpdate({
+          target: [schema.daily_metrics.user_id, schema.daily_metrics.date, schema.daily_metrics.metric],
+          set: {
+            value:      sql`excluded.value`,
+            payload:    sql`excluded.payload`,
+            source:     sql`excluded.source`,
+            updated_at: sql`now()`,
+          },
+        });
+
+    });
 
     await recomputeBaselines(userId, Array.from(touchedMetrics));
 

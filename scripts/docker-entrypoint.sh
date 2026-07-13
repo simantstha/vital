@@ -13,4 +13,4 @@ fi
 # Ensure the daily-brief cache directory exists on the volume.
 mkdir -p /data/.brief-cache
 
-exec node server.js
+exec "$@"

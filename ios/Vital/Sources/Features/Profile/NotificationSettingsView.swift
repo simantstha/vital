@@ -8,9 +8,12 @@ import SwiftUI
 struct NotificationSettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var notificationManager = NotificationManager.shared
+    @ObservedObject private var pushService = PushNotificationService.shared
 
     @AppStorage(NotificationPrefsKeys.briefEnabled) private var briefEnabled = true
     @AppStorage(NotificationPrefsKeys.briefMinutes) private var briefMinutes = 450
+    @AppStorage(NotificationPrefsKeys.workoutEnabled) private var workoutEnabled = true
+    @AppStorage(NotificationPrefsKeys.sleepEnabled) private var sleepEnabled = true
 
     @AppStorage(NotificationPrefsKeys.mealsEnabled) private var mealsEnabled = true
     @AppStorage(NotificationPrefsKeys.mealsLunchMinutes) private var lunchMinutes = 750
@@ -32,7 +35,9 @@ struct NotificationSettingsView: View {
                         if notificationManager.permissionState == .denied {
                             deniedCard
                         }
+                        if pushService.preferencesPending || pushService.preferencesError != nil { syncStatusCard }
                         briefSection
+                        analysisSection
                         mealsSection
                         weighinSection
                     }
@@ -61,6 +66,31 @@ struct NotificationSettingsView: View {
                 await notificationManager.requestPermission()
                 await ReminderScheduler.shared.resync()
             }
+            await PushNotificationService.shared.hydratePreferences()
+        }
+    }
+
+    private var syncStatusCard: some View {
+        GlassCard {
+            HStack {
+                Image(systemName: pushService.preferencesError == nil ? "arrow.triangle.2.circlepath" : "exclamationmark.arrow.triangle.2.circlepath")
+                Text(pushService.preferencesError ?? "Saving notification preferences…").font(Theme.Typography.labelSmall)
+                Spacer()
+                if pushService.preferencesError != nil {
+                    Button("Retry") { Task { await pushService.retryPreferences() } }.font(Theme.Typography.labelSmall)
+                }
+            }.foregroundStyle(pushService.preferencesError == nil ? Theme.Colors.textSecondary : Theme.Colors.alert)
+        }
+    }
+
+    private var analysisSection: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+            SectionHeader(title: "Health Analysis")
+            GlassCard { VStack(spacing: Theme.Spacing.md) {
+                Toggle("Workout analysis", isOn: $workoutEnabled).tint(Theme.Colors.accent).onChange(of: workoutEnabled) { _, _ in syncServer() }
+                Divider().overlay(Theme.Colors.glassBorder)
+                Toggle("Sleep analysis", isOn: $sleepEnabled).tint(Theme.Colors.accent).onChange(of: sleepEnabled) { _, _ in syncServer() }
+            }}
         }
     }
 
@@ -112,12 +142,12 @@ struct NotificationSettingsView: View {
                 VStack(spacing: Theme.Spacing.md) {
                     Toggle("Remind me", isOn: $briefEnabled)
                         .tint(Theme.Colors.accent)
-                        .onChange(of: briefEnabled) { _, _ in resync() }
+                        .onChange(of: briefEnabled) { _, _ in syncServer() }
 
                     if briefEnabled {
                         Divider().overlay(Theme.Colors.glassBorder)
                         DatePicker("Time", selection: minutesBinding($briefMinutes), displayedComponents: .hourAndMinute)
-                            .onChange(of: briefMinutes) { _, _ in resync() }
+                            .onChange(of: briefMinutes) { _, _ in syncServer() }
                     }
                 }
             }
@@ -197,5 +227,17 @@ struct NotificationSettingsView: View {
 
     private func resync() {
         Task { await ReminderScheduler.shared.resync() }
+    }
+
+    private func syncServer() {
+        let value = NotificationPreferences.fromLocal(
+            morningEnabled: briefEnabled, morningMinutes: briefMinutes,
+            workoutEnabled: workoutEnabled, sleepEnabled: sleepEnabled,
+            timezone: TimeZone.current.identifier
+        )
+        PushNotificationService.shared.enqueuePreferences(value)
+        Task {
+            await ReminderScheduler.shared.resync()
+        }
     }
 }

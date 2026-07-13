@@ -45,6 +45,11 @@ targets:
         #     enabled in SignInView.swift). Requires the SIWA capability on the
         #     App ID in the Apple Developer portal + APPLE_BUNDLE_ID on the
         #     backend — see docs/CI-TESTFLIGHT.md.
+      configs:
+        Debug:
+          APS_ENVIRONMENT: development
+        Release:
+          APS_ENVIRONMENT: production
     info:
       path: Sources/App/Info.plist
       properties:
@@ -59,6 +64,9 @@ targets:
         # TestFlight doesn't gate every build on the export-compliance prompt.
         ITSAppUsesNonExemptEncryption: false
         UILaunchScreen: {}
+        UIBackgroundModes:
+          - remote-notification
+        VitalAPNSEnvironment: "$(APS_ENVIRONMENT)"
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
         NSHealthShareUsageDescription: "Vital reads your health data to coach you."
