@@ -98,8 +98,12 @@ test('synthetic live proactive analysis returns typed grounded output', {
 }, async () => {
   const { default: Anthropic } = await import('@anthropic-ai/sdk');
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  const liveSource: ProactiveAnalysisSource = {
+    ...source,
+    input: { request: 'Mention the supplied synthetic HRV evidence value in an observation.' },
+  };
   const proof = await generateGroundedAnalysis({
-    source,
+    source: liveSource,
     generate: async (request) => {
       const response = await anthropic.messages.create({
         model: proactiveAnalysisModel(process.env),
@@ -111,16 +115,19 @@ test('synthetic live proactive analysis returns typed grounded output', {
       assert.equal(textBlocks.length, 1);
       const raw: unknown = JSON.parse(textBlocks[0].text);
       assertRecord(raw);
-      for (const key of ['observations', 'nextSteps'] as const) {
-        assert.ok(Array.isArray(raw[key]));
-        assert.ok(raw[key].every((item) => typeof item === 'string' && item.trim()));
-      }
+      const rawObservations = raw.observations;
+      const rawNextSteps = raw.nextSteps;
+      assert.ok(Array.isArray(rawObservations));
+      assert.ok(rawObservations.every((item) => typeof item === 'string' && item.trim()));
+      assert.ok(rawObservations.some((item) => /\{\{EVIDENCE_[A-Z]+\}\}/.test(item)));
+      assert.ok(Array.isArray(rawNextSteps));
+      assert.ok(rawNextSteps.every((item) => typeof item === 'string' && item.trim()));
       return textBlocks[0].text;
     },
     report: () => {},
   });
 
-  const resolved = consumeGroundedAnalysisProof(proof, source);
+  const resolved = consumeGroundedAnalysisProof(proof, liveSource);
   assert.deepEqual(Object.keys(resolved), ['headline', 'shortInsight', 'narrative', 'observations', 'nextSteps']);
   for (const key of ['headline', 'shortInsight', 'narrative'] as const) {
     assert.ok(typeof resolved[key] === 'string' && resolved[key].trim());
@@ -129,6 +136,7 @@ test('synthetic live proactive analysis returns typed grounded output', {
     assert.ok(Array.isArray(resolved[key]));
     assert.ok(resolved[key].every((item) => typeof item === 'string' && item.trim()));
   }
+  assert.ok(resolved.observations.some((item) => item.includes('45 ms')));
 });
 
 test('valid token output returns a consumable proof after one guarded call', async () => {
