@@ -51,7 +51,10 @@ struct TodayView: View {
                                 vm.setStatus(id: item.id, .done)
                                 vm.toastMessage = "Logged — nice work"
                             },
-                            onOpenAdd: { showAddItem = true }
+                            onOpenAdd: { showAddItem = true },
+                            onSyncCalendar: vm.calendarSyncState == .notDetermined
+                                ? { Task { await vm.syncCalendar() } }
+                                : nil
                         )
                         CoachBubble(message: vm.coachInsight)
                         metricsGrid

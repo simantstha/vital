@@ -75,6 +75,7 @@ targets:
         NSMicrophoneUsageDescription: "Vital uses the microphone so you can talk to your coach and log foods by voice."
         NSSpeechRecognitionUsageDescription: "Vital transcribes your voice to chat with your coach and search for foods."
         NSPhotoLibraryUsageDescription: "Vital accesses your photo library to identify food from images."
+        NSCalendarsFullAccessUsageDescription: "Vital shows today's calendar events alongside your plan so meals and workouts fit your schedule. Events never leave your device."
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
 

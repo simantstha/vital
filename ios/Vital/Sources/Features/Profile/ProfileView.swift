@@ -14,34 +14,52 @@ struct ProfileView: View {
     @AppStorage(NotificationPrefsKeys.mealsEnabled) private var notifMealsEnabled = true
     @AppStorage(NotificationPrefsKeys.weighinEnabled) private var notifWeighinEnabled = true
 
-    var body: some View {
-        ZStack {
-            Theme.Colors.canvas.ignoresSafeArea()
+    /// Switches the root TabView to the Coach tab — threaded down from
+    /// `RootTabView` (same closure Today's voice FAB uses) so GoalDetailView's
+    /// "Talk it through with your coach" button can land in the conversation.
+    private let switchToCoachTab: () -> Void
 
-            ScrollView {
-                VStack(spacing: Theme.Spacing.xl) {
-                    // Gate on load so a fresh launch shows a spinner, not an
-                    // empty "?" avatar and blank stats.
-                    if vm.isLoading {
-                        ProgressView()
-                            .frame(maxWidth: .infinity)
-                            .padding(.top, 80)
-                    } else if let errorMessage = vm.errorMessage {
-                        errorState(message: errorMessage)
-                    } else {
-                        avatarSection
-                        profileDetailsSection
-                        dailyBudgetSection
-                        notificationsSection
-                        activitySection
-                        accountSection
+    init(switchToCoachTab: @escaping () -> Void = {}) {
+        self.switchToCoachTab = switchToCoachTab
+    }
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Theme.Colors.canvas.ignoresSafeArea()
+
+                ScrollView {
+                    VStack(alignment: .leading, spacing: Theme.Spacing.xl) {
+                        headerSection
+
+                        // Gate on load so a fresh launch shows a spinner, not an
+                        // empty "?" avatar and blank stats.
+                        if vm.isLoading {
+                            ProgressView()
+                                .frame(maxWidth: .infinity)
+                                .padding(.top, 80)
+                        } else if let errorMessage = vm.errorMessage {
+                            errorState(message: errorMessage)
+                        } else {
+                            avatarSection
+
+                            if vm.calibration?.status == "calibrating" {
+                                calibratingBanner
+                            }
+
+                            settingsCard
+                            activitySection
+                            accountSection
+                            versionFooter
+                        }
                     }
+                    .padding(.horizontal, Theme.Spacing.xl)
+                    .padding(.top, Theme.Spacing.lg)
+                    .padding(.bottom, 40)
                 }
-                .padding(.horizontal, Theme.Spacing.xl)
-                .padding(.top, Theme.Spacing.xxxl)
-                .padding(.bottom, 40)
+                .scrollIndicators(.hidden)
             }
-            .scrollIndicators(.hidden)
+            .toolbar(.hidden, for: .navigationBar)
         }
         .task { await vm.load() }
         .sheet(isPresented: $showBudgetEditor, onDismiss: { Task { await vm.loadBudget() } }) {
@@ -65,97 +83,175 @@ struct ProfileView: View {
 
 private extension ProfileView {
 
+    // ── Screen title ─────────────────────────────────────────────────────
+
+    var headerSection: some View {
+        Text("Profile")
+            .screenTitleStyle()
+            .foregroundStyle(Theme.Colors.textPrimary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     // ── Avatar + name ──────────────────────────────────────────────────────
 
     var avatarSection: some View {
         ZStack(alignment: .topTrailing) {
-            VStack(spacing: Theme.Spacing.md) {
-                ZStack {
+            VitalCard {
+                VStack(spacing: Theme.Spacing.md) {
                     Circle()
-                        .fill(
-                            LinearGradient(
-                                colors: [Theme.Colors.accent, Theme.Colors.accent.opacity(0.6)],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
+                        .fill(Theme.Colors.accent)
                         .frame(width: 88, height: 88)
-                        .shadow(color: Theme.Colors.accent.opacity(0.35), radius: 16, x: 0, y: 8)
+                        .overlay(
+                            Text(vm.avatarInitial)
+                                .font(.system(size: 38, weight: .bold, design: .rounded))
+                                .foregroundStyle(Theme.Colors.onAccent)
+                        )
 
-                    Text(vm.avatarInitial)
-                        .font(.system(size: 38, weight: .bold, design: .rounded))
-                        .foregroundStyle(Theme.Colors.onAccent)
-                }
+                    VStack(spacing: 2) {
+                        Text(vm.name)
+                            .font(.system(size: 22, weight: .semibold))
+                            .foregroundStyle(Theme.Colors.textPrimary)
 
-                Text(vm.name)
-                    .font(.system(size: 22, weight: .semibold))
-                    .foregroundStyle(Theme.Colors.textPrimary)
-            }
-            .frame(maxWidth: .infinity)
-
-            profileMenu
-        }
-        .frame(maxWidth: .infinity)
-    }
-
-    // ── Profile details ───────────────────────────────────────────────────
-
-    var profileDetailsSection: some View {
-        statSection(title: "Profile Details", cells: vm.profileDetails)
-    }
-
-    // ── Daily budget entry point ──────────────────────────────────────────
-
-    var dailyBudgetSection: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-            SectionHeader(title: "Daily Budget")
-
-            Button { showBudgetEditor = true } label: {
-                GlassCard {
-                    HStack(spacing: Theme.Spacing.md) {
-                        ZStack {
-                            RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous)
-                                .fill(Theme.Colors.accent.opacity(0.22))
-                                .frame(width: 38, height: 38)
-                            Image(systemName: "target")
-                                .font(.system(size: 16, weight: .semibold))
-                                .foregroundStyle(Theme.Colors.accentContent)
-                        }
-
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Daily Budget")
-                                .font(Theme.Typography.bodyMedium)
-                                .fontWeight(.medium)
-                                .foregroundStyle(Theme.Colors.textPrimary)
-                            Text(vm.budgetMode == "custom" ? "Custom" : "Auto · \(vm.budgetGoalLabel)")
-                                .font(Theme.Typography.labelSmall)
+                        if let memberSince = vm.memberSince {
+                            Text(memberSince)
+                                .font(Theme.Typography.bodySmall)
                                 .foregroundStyle(Theme.Colors.textSecondary)
                         }
-
-                        Spacer()
-
-                        if let kcal = vm.budgetKcal {
-                            VStack(alignment: .trailing, spacing: 1) {
-                                Text("\(kcal)")
-                                    .font(Theme.Typography.numericSmall(17))
-                                    .fontWeight(.semibold)
-                                    .foregroundStyle(Theme.Colors.textPrimary)
-                                Text("kcal / day")
-                                    .font(Theme.Typography.labelSmall)
-                                    .foregroundStyle(Theme.Colors.textSecondary)
-                            }
-                        }
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(Theme.Colors.textSecondary)
                     }
                 }
+                .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.plain)
+
+            profileMenu
+                .padding(.top, Theme.Spacing.xs)
+                .padding(.trailing, Theme.Spacing.xs)
         }
     }
 
-    // ── Notifications ─────────────────────────────────────────────────────
+    // ── Calibration banner (title row + progress bar, per the mock) ─────────
+
+    var calibratingBanner: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            HStack {
+                Text("Calibrating your baselines")
+                    .font(Theme.Typography.bodySmall)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(Theme.Colors.textPrimary)
+                Spacer()
+                Text("\(vm.calibrationPercent)%")
+                    .font(Theme.Typography.bodySmall)
+                    .fontWeight(.semibold)
+                    .monospacedDigit()
+                    .foregroundStyle(Theme.Colors.accentContent)
+            }
+
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(Theme.Colors.textPrimary.opacity(0.08))
+                    Capsule()
+                        .fill(Theme.Colors.accent)
+                        .frame(width: geo.size.width * CGFloat(max(vm.calibrationPercent, 1)) / 100)
+                }
+            }
+            .frame(height: 3)
+        }
+        .padding(Theme.Spacing.lg)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Theme.Colors.accentSoft)
+        )
+    }
+
+    // ── Grouped settings card (mock's single six-row list) ──────────────────
+
+    var settingsCard: some View {
+        VitalCard(padding: 0) {
+            VStack(spacing: 0) {
+                settingsLink(index: 0, icon: "person", title: "Personal details", value: "Name, age, weight") {
+                    PersonalDetailsView(profileVM: vm)
+                }
+
+                settingsLink(index: 1, icon: "target", title: "Goal", value: vm.budgetGoalLabel) {
+                    GoalDetailView(switchToCoachTab: switchToCoachTab)
+                        .onDisappear { Task { await vm.loadBudget() } }
+                }
+
+                settingsButton(index: 2, icon: "flame", title: "Daily budget",
+                               value: vm.budgetKcal.map { "\($0) kcal" } ?? "--") {
+                    showBudgetEditor = true
+                }
+
+                settingsLink(index: 3, icon: "moon", title: "Sleep goal", value: vm.sleepGoalSummary) {
+                    SleepGoalView(profileVM: vm)
+                }
+
+                settingsLink(index: 4, icon: "applewatch", title: "Devices",
+                             value: appleWatchConnected ? "Apple Watch · synced" : "Not connected") {
+                    DevicesView(appleWatchConnected: appleWatchConnected)
+                }
+
+                settingsButton(index: 5, icon: "bell", title: "Notifications", value: notificationsSubtitle) {
+                    showNotificationSettings = true
+                }
+            }
+        }
+    }
+
+    func settingsLink<Destination: View>(
+        index: Int, icon: String, title: String, value: String,
+        @ViewBuilder destination: @escaping () -> Destination
+    ) -> some View {
+        NavigationLink { destination() } label: {
+            settingsRowContent(icon: icon, title: title, value: value)
+        }
+        .buttonStyle(.plain)
+        .overlay(alignment: .top) { if index > 0 { rowHairline } }
+    }
+
+    func settingsButton(
+        index: Int, icon: String, title: String, value: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            settingsRowContent(icon: icon, title: title, value: value)
+        }
+        .buttonStyle(.plain)
+        .overlay(alignment: .top) { if index > 0 { rowHairline } }
+    }
+
+    var rowHairline: some View {
+        Rectangle()
+            .fill(Theme.Colors.glassBorder)
+            .frame(height: 0.5)
+    }
+
+    func settingsRowContent(icon: String, title: String, value: String) -> some View {
+        HStack(spacing: Theme.Spacing.md) {
+            IconBadge(systemName: icon, style: .neutral, size: 36, cornerRadius: 12)
+
+            Text(title)
+                .font(Theme.Typography.bodyMedium)
+                .fontWeight(.medium)
+                .foregroundStyle(Theme.Colors.textPrimary)
+
+            Spacer(minLength: Theme.Spacing.sm)
+
+            Text(value)
+                .font(.system(size: 13))
+                .foregroundStyle(Theme.Colors.textSecondary)
+                .lineLimit(1)
+
+            Image(systemName: "chevron.right")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Theme.Colors.textTertiary)
+        }
+        .padding(.horizontal, Theme.Spacing.lg)
+        .padding(.vertical, Theme.Spacing.md)
+        .contentShape(Rectangle())
+    }
+
+    // ── Notifications subtitle ────────────────────────────────────────────
 
     var notificationsSubtitle: String {
         guard notificationManager.permissionState == .authorized else { return "Off" }
@@ -163,41 +259,13 @@ private extension ProfileView {
         return enabledCount > 0 ? "On · \(enabledCount) reminders" : "Off"
     }
 
-    var notificationsSection: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-            SectionHeader(title: "Notifications")
+    // ── Devices connectivity ──────────────────────────────────────────────
 
-            Button { showNotificationSettings = true } label: {
-                GlassCard {
-                    HStack(spacing: Theme.Spacing.md) {
-                        ZStack {
-                            RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous)
-                                .fill(Theme.Colors.accent.opacity(0.22))
-                                .frame(width: 38, height: 38)
-                            Image(systemName: "bell.badge")
-                                .font(.system(size: 16, weight: .semibold))
-                                .foregroundStyle(Theme.Colors.accentContent)
-                        }
-
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Reminders")
-                                .font(Theme.Typography.bodyMedium)
-                                .fontWeight(.medium)
-                                .foregroundStyle(Theme.Colors.textPrimary)
-                            Text(notificationsSubtitle)
-                                .font(Theme.Typography.labelSmall)
-                                .foregroundStyle(Theme.Colors.textSecondary)
-                        }
-
-                        Spacer()
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(Theme.Colors.textSecondary)
-                    }
-                }
-            }
-            .buttonStyle(.plain)
-        }
+    /// The backend only tracks one combined HealthKit integration ("Apple
+    /// Health") — that's also the channel Apple Watch data flows through, so
+    /// it doubles as the connectivity signal for the mock's "Apple Watch" row.
+    var appleWatchConnected: Bool {
+        vm.integrations.contains { $0.status.lowercased() == "connected" }
     }
 
     // ── Activity stats ────────────────────────────────────────────────────
@@ -215,7 +283,7 @@ private extension ProfileView {
 
             LazyVGrid(columns: columns, spacing: Theme.Spacing.sm) {
                 ForEach(cells) { cell in
-                    GlassCard(padding: Theme.Spacing.lg, cornerRadius: Theme.Radius.md) {
+                    VitalCard(padding: Theme.Spacing.lg, cornerRadius: Theme.Radius.md) {
                         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
                             HStack {
                                 Image(systemName: cell.sfSymbol)
@@ -292,7 +360,7 @@ private extension ProfileView {
     // ── Recoverable load error ─────────────────────────────────────────────
 
     func errorState(message: String) -> some View {
-        GlassCard(padding: Theme.Spacing.lg, cornerRadius: Theme.Radius.md) {
+        VitalCard(padding: Theme.Spacing.lg, cornerRadius: Theme.Radius.md) {
             HStack(alignment: .center, spacing: Theme.Spacing.md) {
                 Image(systemName: "exclamationmark.triangle")
                     .font(.system(size: 16, weight: .semibold))
@@ -335,11 +403,11 @@ private extension ProfileView {
             Button {
                 showSignOutConfirm = true
             } label: {
-                GlassCard {
+                VitalCard {
                     HStack(spacing: Theme.Spacing.md) {
                         ZStack {
                             RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous)
-                                .fill(Theme.Colors.glassFill)
+                                .fill(Theme.Colors.alert.opacity(0.12))
                                 .frame(width: 36, height: 36)
                             Image(systemName: "rectangle.portrait.and.arrow.right")
                                 .font(.system(size: 15))
@@ -358,6 +426,16 @@ private extension ProfileView {
             }
             .buttonStyle(.plain)
         }
+    }
+
+    // ── Version footer ─────────────────────────────────────────────────────
+
+    var versionFooter: some View {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"
+        return Text("Vital · v\(version)")
+            .font(.system(size: 12))
+            .foregroundStyle(Theme.Colors.textTertiary)
+            .frame(maxWidth: .infinity, alignment: .center)
     }
 
 }

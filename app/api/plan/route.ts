@@ -39,6 +39,7 @@ import { eq, and } from 'drizzle-orm';
 import { getUserIdFromRequest } from '@/lib/auth';
 import { getCachedBrief, briefCacheKey } from '@/lib/brain/briefCache';
 import { localDayKey, pickTimeZone } from '@/lib/localDay';
+import { formatSleepSubtitle } from '@/lib/profileDetails';
 
 export const dynamic = 'force-dynamic';
 
@@ -52,7 +53,12 @@ const VALID_STATUSES = ['pending', 'done', 'skipped'];
 const BREAKFAST_MIN = 8 * 60;        // 480 — 8:00
 const LUNCH_MIN     = 12 * 60 + 45;  // 765 — 12:45
 const DINNER_MIN    = 19 * 60 + 30;  // 1170 — 19:30
-const LIGHTS_OUT_MIN = 22 * 60 + 30; // 1350 — 22:30
+
+// Fallbacks applied when the user hasn't set a sleep goal / lights-out time
+// yet (see users.sleep_goal_minutes / lights_out_minutes — null-means-default
+// convention, db/schema.ts). Kept in sync with app/api/profile/route.ts §A4.
+const DEFAULT_SLEEP_GOAL_MIN = 480;  // 8h
+const DEFAULT_LIGHTS_OUT_MIN = 1350; // 22:30
 
 type BriefMeal = { name: string; kcal: number; why: string };
 type MealSlot = 'breakfast' | 'lunch' | 'dinner' | 'unmatched';
@@ -103,12 +109,16 @@ function serialize(row: typeof schema.plan_items.$inferSelect) {
  * same precedence `/api/today` uses. Doesn't persist the tz itself; /api/today
  * already does that on every load and the iOS client always calls both
  * concurrently, so the stored value is fresh by the time POST/PATCH/DELETE run.
+ *
+ * Also returns the full user row (already fetched via `select()` with no
+ * column list) so GET's seed step can read sleep_goal_minutes/
+ * lights_out_minutes off the same query instead of issuing a second one.
  */
-async function resolveDayKey(request: Request, userId: string): Promise<string> {
+async function resolveDayKey(request: Request, userId: string): Promise<{ dayKey: string; userRow: typeof schema.users.$inferSelect | undefined }> {
   const paramTz = new URL(request.url).searchParams.get('tz');
   const [userRow] = await db.select().from(schema.users).where(eq(schema.users.id, userId)).limit(1);
   const tz = pickTimeZone(paramTz, userRow?.timezone);
-  return localDayKey(new Date(), tz);
+  return { dayKey: localDayKey(new Date(), tz), userRow };
 }
 
 // ── GET ──────────────────────────────────────────────────────────────────────
@@ -121,7 +131,9 @@ export async function GET(request: Request): Promise<NextResponse> {
     return NextResponse.json({ error: String(err) }, { status: 401 });
   }
 
-  const dayKey = await resolveDayKey(request, userId);
+  const { dayKey, userRow } = await resolveDayKey(request, userId);
+  const lightsOutMin = userRow?.lights_out_minutes ?? DEFAULT_LIGHTS_OUT_MIN;
+  const sleepGoalMin = userRow?.sleep_goal_minutes ?? DEFAULT_SLEEP_GOAL_MIN;
 
   let rows = await db
     .select()
@@ -135,9 +147,9 @@ export async function GET(request: Request): Promise<NextResponse> {
     toInsert.push({
       user_id:      userId,
       local_day:    dayKey,
-      time_minutes: LIGHTS_OUT_MIN,
+      time_minutes: lightsOutMin,
       title:        'Lights out',
-      subtitle:     '8h target',
+      subtitle:     formatSleepSubtitle(sleepGoalMin),
       kind:         'sleep',
       source:       'coach',
       status:       'pending',
@@ -211,7 +223,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     return NextResponse.json({ error: 'kcal must be a number.' }, { status: 400 });
   }
 
-  const dayKey = await resolveDayKey(request, userId);
+  const { dayKey } = await resolveDayKey(request, userId);
 
   const [inserted] = await db
     .insert(schema.plan_items)

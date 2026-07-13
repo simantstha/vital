@@ -64,6 +64,13 @@
       "when": 1783892370544,
       "tag": "0008_milky_black_tarantula",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1783955912569,
+      "tag": "0009_perpetual_vivisector",
+      "breakpoints": true
     }
   ]
 }
