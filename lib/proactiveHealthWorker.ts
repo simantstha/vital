@@ -43,30 +43,46 @@ export function parseCoachAnalysis(value: unknown): CoachAnalysis {
 const UNITLESS = '<unitless>';
 const unitAliases: Record<string, string> = {
   ms: 'ms', millisecond: 'ms', milliseconds: 'ms',
+  s: 'seconds', sec: 'seconds', secs: 'seconds', second: 'seconds', seconds: 'seconds',
   bpm: 'bpm',
   '%': '%', percent: '%', percentage: '%', percentages: '%',
   kg: 'kg', kilogram: 'kg', kilograms: 'kg',
+  g: 'g', gram: 'g', grams: 'g',
+  lb: 'lb', lbs: 'lb', pound: 'lb', pounds: 'lb',
+  cm: 'cm', centimeter: 'cm', centimeters: 'cm', centimetre: 'cm', centimetres: 'cm',
+  m: 'm', meter: 'm', meters: 'm', metre: 'm', metres: 'm',
   km: 'km', kilometer: 'km', kilometers: 'km', kilometre: 'km', kilometres: 'km',
   mi: 'mi', mile: 'mi', miles: 'mi',
   kcal: 'kcal', calorie: 'kcal', calories: 'kcal', kilocalorie: 'kcal', kilocalories: 'kcal',
   step: 'steps', steps: 'steps',
   minute: 'minutes', minutes: 'minutes', min: 'minutes', mins: 'minutes',
-  hour: 'hours', hours: 'hours', hr: 'hours', hrs: 'hours',
+  h: 'hours', hour: 'hours', hours: 'hours', hr: 'hours', hrs: 'hours',
+  mmhg: 'mmhg',
+  'ml/kg/min': 'ml/kg/min', 'ml/kg/minute': 'ml/kg/min', 'ml/kg*min': 'ml/kg/min', 'ml/kg·min': 'ml/kg/min',
+  'min/km': 'min/km', 'mins/km': 'min/km', 'minute/km': 'min/km', 'minutes/km': 'min/km',
+  'min/mi': 'min/mi', 'mins/mi': 'min/mi', 'minute/mi': 'min/mi', 'minutes/mi': 'min/mi',
+  '°c': '°c', '℃': '°c', celsius: '°c', 'degree celsius': '°c', 'degrees celsius': '°c',
+  '°f': '°f', '℉': '°f', fahrenheit: '°f', 'degree fahrenheit': '°f', 'degrees fahrenheit': '°f',
 };
 const unsupportedHealthUnits = new Set([
-  's', 'sec', 'secs', 'second', 'seconds',
-  'degree', 'degrees', 'celsius', 'fahrenheit',
   'banana', 'bananas',
 ]);
+const unitAliasEntries = Object.entries(unitAliases).sort(([left], [right]) => right.length - left.length);
 function inferredUnit(key: string): string | undefined {
   const lower = key.toLowerCase();
-  if (lower.includes('hrv') || lower.endsWith('_ms')) return 'ms';
-  if (lower.includes('heart_rate') || lower === 'rhr' || lower.includes('resting_hr') || lower.includes('avg_hr')) return 'bpm';
+  if (lower.includes('vo2')) return 'ml/kg/min';
+  if (lower.includes('blood_pressure') || lower.includes('systolic') || lower.includes('diastolic')) return 'mmhg';
+  if (lower.includes('pace') && lower.includes('perkm')) return 'min/km';
+  if (lower.includes('pace') && lower.includes('permi')) return 'min/mi';
+  if (lower.includes('hrv') || lower.endsWith('_ms') || lower.endsWith('ms')) return 'ms';
+  if (lower.includes('heart_rate') || lower === 'rhr' || lower.includes('resting_hr') || lower.includes('avg_hr') || lower.includes('hr_avg') || lower.endsWith('avghr') || lower.endsWith('maxhr')) return 'bpm';
   if (lower.includes('percent') || lower.includes('efficiency')) return '%';
   if (lower.includes('weight') || lower.endsWith('_kg')) return 'kg';
   if (lower.includes('calorie') || lower.includes('kcal') || lower.includes('energy')) return 'kcal';
   if (lower.includes('step')) return 'steps';
-  if (lower.includes('minute')) return 'minutes';
+  if (lower.includes('minute') || lower.endsWith('_min') || lower.endsWith('min')) return 'minutes';
+  if (lower.endsWith('_s') || lower.endsWith('seconds')) return 'seconds';
+  if ((lower.includes('distance') || lower.includes('elevation')) && (lower.endsWith('_m') || lower.endsWith('m'))) return 'm';
 }
 export function validateGroundedAnalysis(result: CoachAnalysis, evidence: unknown): CoachAnalysis {
   const values = new Map<string, Set<string>>();
@@ -80,25 +96,40 @@ export function validateGroundedAnalysis(result: CoachAnalysis, evidence: unknow
     units.add(unit ?? UNITLESS);
     values.set(normalized, units);
   };
-  const claims = (text: string): Array<{ value: string; unit?: string; unsupportedUnit?: string }> => {
-    const found: Array<{ value: string; unit?: string; unsupportedUnit?: string }> = [];
-    for (const match of text.matchAll(/(?<![\d.])[-+]?(?:\d+(?:\.\d+)?|\.\d+)(?!\d|\.\d)/g)) {
+  const canonicalSuffix = (remainder: string): { unit?: string; unsupportedUnit?: string } => {
+    const whitespace = remainder.match(/^\s*/)?.[0] ?? '';
+    let candidate = remainder.slice(whitespace.length);
+    let separator = '';
+    if (/^[-_/]/.test(candidate)) {
+      separator = candidate[0];
+      candidate = candidate.slice(1);
+    }
+    const lower = candidate.toLowerCase();
+    for (const [alias, unit] of unitAliasEntries) {
+      if (!lower.startsWith(alias)) continue;
+      const following = lower[alias.length];
+      if (following && /[\p{L}°℃℉/·*]/u.test(following)) continue;
+      return { unit };
+    }
+    const token = candidate.match(/^[\p{L}°℃℉%]+(?:[\/·*][\p{L}]+)*/u)?.[0];
+    if (!token) return {};
+    const normalizedToken = token.toLowerCase();
+    if (!whitespace || separator || unsupportedHealthUnits.has(normalizedToken)) {
+      return { unsupportedUnit: `${separator}${normalizedToken}` };
+    }
+    return {};
+  };
+  const claims = (text: string): Array<{ value: string; unit?: string; unsupportedUnit?: string; unsupportedNumber?: boolean }> => {
+    const found: Array<{ value: string; unit?: string; unsupportedUnit?: string; unsupportedNumber?: boolean }> = [];
+    const numericClaim = /(?<![a-zA-Z\d_.,])[-+]?(?:\d{1,3}(?:,\d{3})+|(?:\d+(?:\.\d+)?|\.\d+)(?:e[-+]?\d+)?)(?!\d|[.,]\d)/gi;
+    for (const match of text.matchAll(numericClaim)) {
       const value = match[0];
-      const remainder = text.slice((match.index ?? 0) + value.length);
-      const suffix = remainder.match(/^\s*(%|°[a-zA-Z]+|[a-zA-Z]+|[-_/][a-zA-Z]+)/)?.[1];
-      if (!suffix) found.push({ value });
-      else {
-        const normalizedSuffix = suffix.toLowerCase();
-        const unit = unitAliases[normalizedSuffix];
-        const separatedUnit = /^[-_/]/.test(normalizedSuffix) ? normalizedSuffix.slice(1) : undefined;
-        if (unit) found.push({ value, unit });
-        else if (
-          normalizedSuffix.startsWith('°')
-          || unsupportedHealthUnits.has(normalizedSuffix)
-          || (separatedUnit && (unitAliases[separatedUnit] || unsupportedHealthUnits.has(separatedUnit)))
-        ) found.push({ value, unsupportedUnit: normalizedSuffix });
-        else found.push({ value });
+      if (/[,e]/i.test(value)) {
+        found.push({ value, unsupportedNumber: true });
+        continue;
       }
+      const remainder = text.slice((match.index ?? 0) + value.length);
+      found.push({ value, ...canonicalSuffix(remainder) });
     }
     return found;
   };
@@ -110,13 +141,18 @@ export function validateGroundedAnalysis(result: CoachAnalysis, evidence: unknow
     else if (Array.isArray(value)) value.forEach((item) => visit(item, key));
     else if (value && typeof value === 'object') {
       const object = value as Record<string, unknown>;
-      if (typeof object.value === 'number' && typeof object.metric === 'string') visit(object.value, object.metric);
-      for (const [childKey, child] of Object.entries(object)) if (childKey !== 'value' || typeof object.metric !== 'string') visit(child, childKey);
+      const describedValue = typeof object.value === 'number' && (typeof object.metric === 'string' || typeof object.unit === 'string');
+      if (typeof object.value === 'number' && typeof object.unit === 'string') {
+        const explicitUnit = unitAliases[object.unit.trim().toLowerCase()];
+        if (explicitUnit) addValue(object.value, explicitUnit);
+      } else if (typeof object.value === 'number' && typeof object.metric === 'string') visit(object.value, object.metric);
+      for (const [childKey, child] of Object.entries(object)) if (childKey !== 'value' || !describedValue) visit(child, childKey);
     }
   };
   visit(evidence);
   const text = [result.headline, result.shortInsight, result.narrative, ...result.observations, ...result.nextSteps].join(' ');
   for (const claim of claims(text)) {
+    if (claim.unsupportedNumber) throw new Error(`unsupported numeric claim: ${claim.value}`);
     if (claim.unsupportedUnit) throw new Error(`unsupported unit claim: ${claim.value} ${claim.unsupportedUnit}`);
     const supported = values.get(normalizedValue(claim.value));
     if (!supported) throw new Error(`unsupported numeric claim: ${claim.value}`);
