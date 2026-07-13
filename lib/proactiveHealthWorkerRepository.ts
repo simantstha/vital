@@ -14,27 +14,32 @@ export async function ensureDefaultPreferencesForRegisteredUsers(): Promise<void
     on conflict (user_id) do nothing`);
 }
 
-export async function claimAnalysisJobs(now: Date, limit = 20): Promise<AnalysisJob[]> {
+export function buildAnalysisClaimQuery(kind: 'sleep' | 'workout', now: Date, capacity: number, token: string) {
   const { now: nowSql, lease: leaseSql } = rawSqlTimeBindings(now, LEASE_MS);
+  if (kind === 'sleep') return sql<RawJob>`
+    with eligible as (
+      select id from ${schema.sleep_analyses}
+      where analyze_after <= ${nowSql} and next_attempt_at <= ${nowSql}
+        and (status = 'pending' or (status = 'processing' and lease_expires_at <= ${nowSql}))
+      order by next_attempt_at limit ${capacity} for update skip locked
+    ) update ${schema.sleep_analyses} s set status='processing', lease_token=${token}, lease_expires_at=${leaseSql}, updated_at=${nowSql}
+      from eligible e where s.id=e.id
+      returning s.id,s.user_id,s.wake_date::text local_date,s.input_payload,s.retry_count,s.lease_token,'sleep'::text kind`;
+  return sql<RawJob>`
+    with eligible as (
+      select id from ${schema.workout_analyses}
+      where deleted_at is null and next_attempt_at <= ${nowSql}
+        and (status = 'pending' or (status = 'processing' and lease_expires_at <= ${nowSql}))
+      order by next_attempt_at limit ${capacity} for update skip locked
+    ) update ${schema.workout_analyses} w set status='processing', lease_token=${token}, lease_expires_at=${leaseSql}, updated_at=${nowSql}
+      from eligible e where w.id=e.id
+      returning w.id,w.user_id,w.workout_date::text local_date,w.input_payload,w.retry_count,w.lease_token,'workout'::text kind`;
+}
+
+export async function claimAnalysisJobs(now: Date, limit = 20): Promise<AnalysisJob[]> {
   return db.transaction(async (tx) => {
-    const claimSleeps = (capacity: number, token: string) => capacity ? tx.execute(sql<RawJob>`
-      with eligible as (
-        select id from ${schema.sleep_analyses}
-        where analyze_after <= ${nowSql} and next_attempt_at <= ${nowSql}
-          and (status = 'pending' or (status = 'processing' and lease_expires_at <= ${nowSql}))
-        order by next_attempt_at limit ${capacity} for update skip locked
-      ) update ${schema.sleep_analyses} s set status='processing', lease_token=${token}, lease_expires_at=${leaseSql}, updated_at=${nowSql}
-        from eligible e where s.id=e.id
-        returning s.id,s.user_id,s.wake_date::text local_date,s.input_payload,s.retry_count,s.lease_token,'sleep'::text kind`) : Promise.resolve([]);
-    const claimWorkouts = (capacity: number, token: string) => capacity ? tx.execute(sql<RawJob>`
-      with eligible as (
-        select id from ${schema.workout_analyses}
-        where deleted_at is null and next_attempt_at <= ${nowSql}
-          and (status = 'pending' or (status = 'processing' and lease_expires_at <= ${nowSql}))
-        order by next_attempt_at limit ${capacity} for update skip locked
-      ) update ${schema.workout_analyses} w set status='processing', lease_token=${token}, lease_expires_at=${leaseSql}, updated_at=${nowSql}
-        from eligible e where w.id=e.id
-        returning w.id,w.user_id,w.workout_date::text local_date,w.input_payload,w.retry_count,w.lease_token,'workout'::text kind`) : Promise.resolve([]);
+    const claimSleeps = (capacity: number, token: string) => capacity ? tx.execute(buildAnalysisClaimQuery('sleep', now, capacity, token)) : Promise.resolve([]);
+    const claimWorkouts = (capacity: number, token: string) => capacity ? tx.execute(buildAnalysisClaimQuery('workout', now, capacity, token)) : Promise.resolve([]);
     const reserved = reservedSleepCapacity(limit);
     const sleeps = await claimSleeps(reserved, randomUUID());
     const workouts = await claimWorkouts(limit - sleeps.length, randomUUID());
@@ -89,9 +94,9 @@ export const workerRepository: WorkerRepository = {
 
 function localMinute(date: Date, timezone: string): number { try { const values = new Intl.DateTimeFormat('en-US', { timeZone: timezone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(date); return Number(values.find((x) => x.type === 'hour')?.value) * 60 + Number(values.find((x) => x.type === 'minute')?.value); } catch { return date.getUTCHours() * 60 + date.getUTCMinutes(); } }
 
-export async function listReadyNotificationCandidates(now: Date, limit = 40): Promise<Array<{ job: AnalysisJob; result: CoachAnalysis }>> {
+export function buildReadyNotificationCandidatesQuery(now: Date, limit: number) {
   const nowSql = rawSqlTimestamp(now);
-  const rows = await db.execute(sql<RawJob>`
+  return sql<RawJob>`
     select id,user_id,workout_date::text local_date,input_payload,notification_retry_count retry_count,'workout'::text kind,result,notification_state,notification_lease_expires_at,notification_next_attempt_at
     from ${schema.workout_analyses} where status='ready' and result is not null and notification_next_attempt_at <= ${nowSql}
       and (notification_state='pending' or (notification_state='sending' and notification_lease_expires_at <= ${nowSql}))
@@ -99,20 +104,29 @@ export async function listReadyNotificationCandidates(now: Date, limit = 40): Pr
     select id,user_id,wake_date::text local_date,input_payload,notification_retry_count retry_count,'sleep'::text kind,result,notification_state,notification_lease_expires_at,notification_next_attempt_at
     from ${schema.sleep_analyses} where status='ready' and result is not null and notification_next_attempt_at <= ${nowSql}
       and (notification_state='pending' or (notification_state='sending' and notification_lease_expires_at <= ${nowSql}))
-    order by local_date,id limit ${limit}`);
+    order by local_date,id limit ${limit}`;
+}
+
+export async function listReadyNotificationCandidates(now: Date, limit = 40): Promise<Array<{ job: AnalysisJob; result: CoachAnalysis }>> {
+  const rows = await db.execute(buildReadyNotificationCandidatesQuery(now, limit));
   return (rows as unknown as RawJob[]).filter((row) => notificationClaimable(row.notification_state ?? '', row.notification_lease_expires_at ?? null, row.notification_next_attempt_at ?? now, now)).map((row) => ({ job: { id: row.id, userId: row.user_id, localDate: row.local_date, input: row.input_payload, retryCount: 0, notificationRetryCount: row.retry_count, kind: row.kind, leaseToken: randomUUID() }, result: row.result as CoachAnalysis }));
 }
 
 export interface MorningBriefClaim { slotId: string; userId: string; localDate: string; timezone: string; idempotencyKey: string; leaseToken: string; retryCount: number }
-export async function claimDueMorningBriefs(now: Date, limit = 20): Promise<MorningBriefClaim[]> {
+export function buildDueMorningBriefCandidatesQuery(now: Date) {
   const nowSql = rawSqlTimestamp(now);
-  const candidates = await db.execute(sql<{ user_id: string; timezone: string; local_date: string; overdue_minutes: number; updated_at: Date }>`
+  return sql<{ user_id: string; timezone: string; local_date: string; overdue_minutes: number; updated_at: Date }>`
     select p.user_id, p.timezone, (${nowSql} at time zone p.timezone)::date::text local_date,
       ((extract(hour from (${nowSql} at time zone p.timezone))::int * 60 + extract(minute from (${nowSql} at time zone p.timezone))::int) - p.morning_brief_time_minutes) overdue_minutes, p.updated_at
     from ${schema.notification_preferences} p
     where p.morning_brief_enabled = true
       and exists (select 1 from ${schema.push_devices} d where d.user_id=p.user_id and d.invalidated_at is null)
-      and (extract(hour from (${nowSql} at time zone p.timezone))::int * 60 + extract(minute from (${nowSql} at time zone p.timezone))::int) >= p.morning_brief_time_minutes`);
+      and (extract(hour from (${nowSql} at time zone p.timezone))::int * 60 + extract(minute from (${nowSql} at time zone p.timezone))::int) >= p.morning_brief_time_minutes`;
+}
+
+export async function claimDueMorningBriefs(now: Date, limit = 20): Promise<MorningBriefClaim[]> {
+  const nowSql = rawSqlTimestamp(now);
+  const candidates = await db.execute(buildDueMorningBriefCandidatesQuery(now));
   const due = (candidates as unknown as Array<{ user_id: string; timezone: string; local_date: string; overdue_minutes: number; updated_at: Date }>).sort((a, b) => compareDueCandidates({ overdueMinutes: Number(a.overdue_minutes), updatedAt: a.updated_at }, { overdueMinutes: Number(b.overdue_minutes), updatedAt: b.updated_at })).map((row) => ({ userId: row.user_id, timezone: row.timezone, localDate: row.local_date, idempotencyKey: morningKey(row.user_id, row.local_date) }));
   const claims: MorningBriefClaim[] = [];
   for (const candidate of due) {

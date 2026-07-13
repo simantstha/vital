@@ -56,7 +56,7 @@ export function workerErrorEvent(stage: WorkerStage, error: unknown): WorkerErro
   }
 
   let code: unknown;
-  if (typeof error === 'object' && error !== null) {
+  if (isError) {
     try {
       code = (error as { code?: unknown }).code;
     } catch {

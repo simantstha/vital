@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { rawSqlTimeBindings, rawSqlTimestamp, workerErrorEvent } from './proactiveHealthWorkerSupport';
 
@@ -23,16 +22,30 @@ test('raw SQL timestamp conversion rejects invalid dates before query execution'
   );
 });
 
-test('proactive repository does not interpolate Date variables at raw SQL boundaries', () => {
-  const source = readFileSync(new URL('./proactiveHealthWorkerRepository.ts', import.meta.url), 'utf8');
-  const rawTemplates = [...source.matchAll(/sql(?:<[^`]+>)?`[\s\S]*?`/g)].map(([template]) => template);
+test('constructed worker raw queries bind timestamps as strings without Date parameters', async () => {
+  process.env.DATABASE_URL ??= 'postgres://test:test@localhost:5432/test';
+  const repository = await import('./proactiveHealthWorkerRepository');
+  const now = new Date('2026-07-13T12:34:56.789Z');
+  const cases = [
+    { query: repository.buildAnalysisClaimQuery('sleep', now, 10, 'sleep-token'), timestamps: ['2026-07-13T12:34:56.789Z', '2026-07-13T12:39:56.789Z'] },
+    { query: repository.buildAnalysisClaimQuery('workout', now, 10, 'workout-token'), timestamps: ['2026-07-13T12:34:56.789Z', '2026-07-13T12:39:56.789Z'] },
+    { query: repository.buildReadyNotificationCandidatesQuery(now, 40), timestamps: ['2026-07-13T12:34:56.789Z'] },
+    { query: repository.buildDueMorningBriefCandidatesQuery(now), timestamps: ['2026-07-13T12:34:56.789Z'] },
+  ];
 
-  assert.ok(rawTemplates.length >= 10);
-  for (const template of rawTemplates) {
-    assert.doesNotMatch(template, /\$\{now\}/);
-    assert.doesNotMatch(template, /\$\{lease\}/);
+  for (const { query, timestamps } of cases) {
+    const parameters = queryParameters(query);
+    assert.equal(parameters.some((value) => value instanceof Date), false);
+    for (const timestamp of timestamps) assert.ok(parameters.includes(timestamp));
   }
 });
+
+function queryParameters(query: unknown): unknown[] {
+  if (query instanceof Date) return [query];
+  if (typeof query !== 'object' || query === null || !('queryChunks' in query)) return [query];
+  const chunks = (query as { queryChunks: unknown[] }).queryChunks;
+  return chunks.flatMap((chunk) => queryParameters(chunk));
+}
 
 test('worker diagnostics expose only allowlisted stage and safe error metadata', () => {
   const error = Object.assign(new Error('user u1 device secret-token SQL select *'), {
@@ -67,6 +80,26 @@ test('worker diagnostics normalize unknown throws and discard unsafe codes', () 
     stage: 'deliver-notification',
     errorName: 'Error',
   });
+});
+
+test('worker diagnostics never read valid-looking codes from unknown objects', () => {
+  let stringCodeReads = 0;
+  let numericCodeReads = 0;
+  const stringCode = Object.defineProperty({}, 'code', { get: () => { stringCodeReads += 1; return 'ERR_INVALID_ARG_TYPE'; } });
+  const numericCode = Object.defineProperty({}, 'code', { get: () => { numericCodeReads += 1; return 400; } });
+
+  assert.deepEqual(workerErrorEvent('claim-analysis-jobs', stringCode), {
+    event: 'proactive_worker_error',
+    stage: 'claim-analysis-jobs',
+    errorName: 'UnknownError',
+  });
+  assert.deepEqual(workerErrorEvent('list-notification-candidates', numericCode), {
+    event: 'proactive_worker_error',
+    stage: 'list-notification-candidates',
+    errorName: 'UnknownError',
+  });
+  assert.equal(stringCodeReads, 0);
+  assert.equal(numericCodeReads, 0);
 });
 
 test('worker diagnostics survive hostile error metadata access', () => {
