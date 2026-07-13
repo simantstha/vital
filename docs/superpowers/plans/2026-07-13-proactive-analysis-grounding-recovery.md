@@ -334,7 +334,7 @@ export interface RecoveryStore {
 
 `parseRecoveryIds` must require `argv.length === 18`, accept only alternating `--id` and lowercase canonical UUID values matching `/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/`, and require a set size of `9`. Throw only `new Error('Invalid proactive analysis recovery arguments.')`.
 
-`recoverProactiveAnalysisJobs` must revalidate count and uniqueness, then open exactly one transaction. Inside it, lock rows, require exactly nine unique matches, and require every row to satisfy `status === 'failed'`, `retryCount >= 5`, `leaseToken === null`, and `result === null`. Partition IDs by kind, call `recover` once per non-empty partition, require the returned ID set to equal the supplied set exactly, and throw on any mismatch so the store rolls back. Return only integer counts after all checks pass.
+`recoverProactiveAnalysisJobs` must revalidate count and uniqueness, then open exactly one transaction. Inside it, lock rows, require both `rows.length === 9` and `new Set(rows.map((row) => row.id)).size === 9`, and require every row to satisfy `status === 'failed'`, `leaseToken === null`, and `result === null`. Partition IDs by kind, call `recover` once per non-empty partition, require both the combined returned-array length to equal `9` and its ID set to equal the supplied set exactly, and throw on any mismatch so the store rolls back. Return only integer counts after all checks pass.
 
 `formatRecoveryCounts` must produce fixed `label=integer` lines for requested, matched, eligible, workout updated, sleep updated, total updated, and either `success_count=1` or `failure_count=1`. It must accept no error object or free-form string.
 
