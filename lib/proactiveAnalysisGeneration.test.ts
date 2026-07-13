@@ -37,6 +37,11 @@ function assertRecord(value: unknown): asserts value is Record<string, unknown> 
   assert.ok(value && typeof value === 'object' && !Array.isArray(value));
 }
 
+function parseLiveResponse(text: string): unknown {
+  const fence = text.match(/^\s*```json\s*\r?\n([\s\S]*?)\r?\n```\s*$/i);
+  return JSON.parse(fence ? fence[1] : text);
+}
+
 function payloadOf(request: AnalysisGenerationRequest): Record<string, unknown> {
   const payload: unknown = JSON.parse(request.content);
   assertRecord(payload);
@@ -100,6 +105,12 @@ for (const [name, prompt] of [
   });
 }
 
+test('live response inspection accepts plain JSON and one complete JSON fence', () => {
+  const payload = JSON.stringify(valid);
+  assert.deepEqual(parseLiveResponse(payload), valid);
+  assert.deepEqual(parseLiveResponse(`\`\`\`json\n${payload}\n\`\`\``), valid);
+});
+
 test('synthetic live proactive analysis returns typed grounded output', {
   skip: process.env.RUN_PROACTIVE_ANALYSIS_LIVE_TEST !== 'true',
 }, async () => {
@@ -120,7 +131,7 @@ test('synthetic live proactive analysis returns typed grounded output', {
       });
       const textBlocks = response.content.filter((item) => item.type === 'text');
       assert.equal(textBlocks.length, 1);
-      const raw: unknown = JSON.parse(textBlocks[0].text);
+      const raw = parseLiveResponse(textBlocks[0].text);
       assertRecord(raw);
       const rawObservations = raw.observations;
       const rawNextSteps = raw.nextSteps;
