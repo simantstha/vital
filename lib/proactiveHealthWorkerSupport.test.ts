@@ -68,3 +68,26 @@ test('worker diagnostics normalize unknown throws and discard unsafe codes', () 
     errorName: 'Error',
   });
 });
+
+test('worker diagnostics survive hostile error metadata access', () => {
+  const hostileError = new Error('private health content');
+  Object.defineProperties(hostileError, {
+    name: { get: () => { throw new Error('private name'); } },
+    code: { get: () => { throw new Error('private code'); } },
+  });
+  assert.deepEqual(workerErrorEvent('process-analysis-job', hostileError), {
+    event: 'proactive_worker_error',
+    stage: 'process-analysis-job',
+    errorName: 'Error',
+  });
+
+  const hostileProxy = new Proxy({}, {
+    get: () => { throw new Error('private property'); },
+    getPrototypeOf: () => { throw new Error('private prototype'); },
+  });
+  assert.deepEqual(workerErrorEvent('claim-morning-briefs', hostileProxy), {
+    event: 'proactive_worker_error',
+    stage: 'claim-morning-briefs',
+    errorName: 'UnknownError',
+  });
+});
