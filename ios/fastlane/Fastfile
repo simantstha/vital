@@ -81,4 +81,41 @@ platform :ios do
       skip_waiting_for_build_processing: true
     )
   end
+
+  desc "One-off maintenance: enable the Push Notifications capability on the"
+  desc "App ID and force-regenerate the App Store profile so it carries the"
+  desc "aps-environment entitlement the app now declares. Idempotent."
+  lane :fix_push_capability do
+    setup_ci if ENV["CI"]
+
+    api_key = app_store_connect_api_key(
+      key_id: ENV.fetch("ASC_KEY_ID"),
+      issuer_id: ENV.fetch("ASC_ISSUER_ID"),
+      key_content: ENV.fetch("ASC_KEY_CONTENT_BASE64"),
+      is_key_content_base64: true,
+      in_house: false
+    )
+
+    Spaceship::ConnectAPI.token = Spaceship::ConnectAPI::Token.from(hash: api_key)
+    bundle_id = Spaceship::ConnectAPI::BundleId.find(APP_IDENTIFIER)
+    UI.user_error!("App ID #{APP_IDENTIFIER} not found on this team") if bundle_id.nil?
+
+    push_type = Spaceship::ConnectAPI::BundleIdCapability::Type::PUSH_NOTIFICATIONS
+    if bundle_id.get_capabilities.any? { |c| c.capability_type == push_type }
+      UI.message("Push Notifications capability already enabled on #{APP_IDENTIFIER}")
+    else
+      bundle_id.create_capability(push_type)
+      UI.success("Enabled Push Notifications capability on #{APP_IDENTIFIER}")
+    end
+
+    # Re-mint the profile so it picks up the capability. Unlike `beta`, this
+    # writes to the certs repo — the deploy key must allow write access.
+    match(
+      type: "appstore",
+      readonly: false,
+      force: true,
+      app_identifier: APP_IDENTIFIER,
+      api_key: api_key
+    )
+  end
 end
