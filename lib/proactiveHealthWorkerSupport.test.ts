@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { rawSqlTimeBindings, rawSqlTimestamp } from './proactiveHealthWorkerSupport';
 
@@ -20,4 +21,15 @@ test('raw SQL timestamp conversion rejects invalid dates before query execution'
     () => rawSqlTimestamp(new Date(Number.NaN)),
     (error: unknown) => error instanceof TypeError && error.message === 'Invalid raw SQL timestamp.',
   );
+});
+
+test('proactive repository does not interpolate Date variables at raw SQL boundaries', () => {
+  const source = readFileSync(new URL('./proactiveHealthWorkerRepository.ts', import.meta.url), 'utf8');
+  const rawTemplates = [...source.matchAll(/sql(?:<[^`]+>)?`[\s\S]*?`/g)].map(([template]) => template);
+
+  assert.ok(rawTemplates.length >= 10);
+  for (const template of rawTemplates) {
+    assert.doesNotMatch(template, /\$\{now\}/);
+    assert.doesNotMatch(template, /\$\{lease\}/);
+  }
 });
