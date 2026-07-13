@@ -65,6 +65,7 @@ final class TodayViewModel: ObservableObject {
     // shows a spinner instead of a flash of stale/fake numbers.
     @Published var isLoading = true
     @Published var errorMessage: String? = nil
+    @Published private(set) var didLoadToday = false
 
     // Greeting
     @Published var greeting: String = ""
@@ -124,6 +125,7 @@ final class TodayViewModel: ObservableObject {
 
     func loadHealthData() async {
         isLoading = true
+        didLoadToday = false
         // Run HealthKit + API calls concurrently. /api/today and /api/plan run
         // side by side (not one-after-the-other) — the plan step below waits
         // for both to finish so it can match meal-kind plan rows against
@@ -137,6 +139,7 @@ final class TodayViewModel: ObservableObject {
 
         if let today {
             applyTodayResponse(today)
+            didLoadToday = true
         }
         applyPlanResult(plan, todayPlan: today?.plan ?? [])
 

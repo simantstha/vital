@@ -46,11 +46,35 @@ fly volumes create vital_data --region ord --size 1 --yes
 ```
 
 ### 5. Set secrets
+
+APNs requires an Apple Push Notification authentication key created in Apple
+Developer → Certificates, Identifiers & Profiles → Keys. Provision these
+without committing the `.p8` file:
+
+- `APNS_KEY_ID`: the 10-character Key ID shown for the APNs key.
+- `APNS_TEAM_ID`: Apple Developer Membership Team ID.
+- `APNS_TOPIC`: the app bundle identifier (`com.simantstha.vital`).
+- `APNS_PRIVATE_KEY`: complete PEM contents of `AuthKey_<KEY_ID>.p8`, including
+  `BEGIN/END PRIVATE KEY` lines. Fly accepts the multiline value directly;
+  the worker also accepts literal `\n` separators.
+
+```bash
+fly secrets set \
+  APNS_KEY_ID="<key-id>" \
+  APNS_TEAM_ID="<team-id>" \
+  APNS_TOPIC="com.simantstha.vital" \
+  APNS_PRIVATE_KEY="$(cat /secure/path/AuthKey_<KEY_ID>.p8)"
+```
+
+Never paste the key into source, `.env` files committed to git, CI logs, or
+support messages. Apple only permits downloading the key once.
+
 ```
 fly secrets set \
   DATABASE_URL="<supabase-session-string>" \
   API_SHARED_SECRET="<the 64-char hex token, matches APIClient.swift>" \
   ANTHROPIC_API_KEY="..." \
+  APNS_KEY_ID="..." APNS_TEAM_ID="..." APNS_TOPIC="com.simantstha.vital" APNS_PRIVATE_KEY="..." \
   WHOOP_CLIENT_ID="..." WHOOP_CLIENT_SECRET="..." WHOOP_REFRESH_TOKEN="..." WHOOP_REDIRECT_URI="..." WHOOP_WEBHOOK_SECRET="..." \
   STRAVA_CLIENT_ID="..." STRAVA_CLIENT_SECRET="..." STRAVA_REFRESH_TOKEN="..." STRAVA_REDIRECT_URI="..." \
   MFP_USERNAME="..." MFP_PASSWORD="..." \

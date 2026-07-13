@@ -41,11 +41,17 @@
 	<string>Vital accesses your photo library to identify food from images.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Vital transcribes your voice to chat with your coach and search for foods.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>remote-notification</string>
+	</array>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
 	</array>
+	<key>VitalAPNSEnvironment</key>
+	<string>$(APS_ENVIRONMENT)</string>
 </dict>
 </plist>
