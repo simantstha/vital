@@ -1,6 +1,6 @@
 # Vital app redesign — "Today Screen v3" implementation plan
 
-**Status: Phases 0–7 done** · Branch: `feat/redesign-v3` (off `main`)
+**Status: Phases 0–8 done (redesign complete)** · Branch: `feat/redesign-v3` (off `main`)
 Source of truth for the design: Claude Design project
 <https://claude.ai/design/p/67904bc9-0509-4bb9-b4bf-2219bc3478fb?file=Today+Screen+v3.html>
 (file `Today Screen v3.html` — a full 5-tab React/Tailwind mock of the app).
@@ -158,9 +158,9 @@ Rules for every phase:
       primary source; `setStatus`/`removeItem`/`addItem` are now optimistic
       server mutations (mutate locally, fire the API call, revert + toast
       "Couldn't save — try again" on failure).
-- [ ] Calendar events are **not** stored server-side (privacy): Phase 8 merges
+- [x] Calendar events are **not** stored server-side (privacy): Phase 8 merges
       EventKit client-side. Design the VM merge point now (plan = server
-      items ∪ calendar items sorted by time). *(Still open — Phase 8.)*
+      items ∪ calendar items sorted by time). *(Done — Phase 8.)*
 - [x] Acceptance: statuses survive relaunch (server-tracked); backend
       lint/type/build green; iOS 13/13 tests green. Note for release:
       migration runs automatically in the release workflow (`drizzle-kit
@@ -247,9 +247,9 @@ commits beyond main; ElevenLabs TTS already works via `/api/tts`.)
       log-out row in red.
 
 ### Phase 8 (stretch) — Calendar merge
-**Owner: unclaimed · Suggested agent: Sonnet · iOS · needs Phase 2**
+**Owner: DONE (2026-07-13, Sonnet subagent) · iOS · needs Phase 2**
 
-- [ ] EventKit read-only permission (Info.plist string via
+- [x] EventKit read-only permission (Info.plist string via
       `ios/Vital/project.yml`), fetch today's events, merge into the timeline
       client-side (neutral icon badge + "Calendar" tag, no Log button, not
       persisted server-side).
@@ -676,3 +676,53 @@ commits beyond main; ElevenLabs TTS already works via `/api/tts`.)
   etc. from unrelated merged PRs; zero new tests added this phase, consistent
   with prior presentation-only phases). Notes for Phase 8: unrelated
   (EventKit/calendar merge on Today) — no overlap with this phase's files.
+- 2026-07-13: Phase 8 done (Sonnet subagent) — calendar merge, iOS only, on
+  `feat/redesign-v3-calendar`. `ios/Vital/project.yml`: added
+  `NSCalendarsFullAccessUsageDescription`. New
+  `Features/Today/CalendarEventsProvider.swift`: pure `CalendarPlanMapping`
+  enum (`planItemFields`/`minutesFromMidnight`/`subtitle`/`merge` — no
+  EventKit types, unit-testable) + `@MainActor CalendarEventsProvider` class
+  wrapping one `EKEventStore` (`authorizationStatus`, `requestAccess()` via
+  iOS 17+ `requestFullAccessToEvents()`, `fetchTodayPlanItems(now:)` —
+  predicate-scoped to the local calendar day, skips all-day and
+  cheaply-detected declined events, maps to `PlanItem(id: "cal-" +
+  eventIdentifier, source: .calendar, kind: .other, sfSymbol: "calendar")`).
+  `TodayViewModel`: both `applyPlanResult` paths (server `/api/plan` and the
+  Phase 1 fallback) now funnel through one new `mergeAndSetPlanItems(
+  serverItems:)` — fetches calendar items (if authorized), drops
+  session-local `hiddenCalendarItemIDs`, unions + sorts via
+  `CalendarPlanMapping.merge`, then runs the existing `computeStatuses`;
+  publishes `calendarSyncState` (`.notDetermined`/`.authorized`/`.denied`)
+  for the view. `setStatus`/`removeItem` guard on `item.source == .calendar`:
+  status changes mutate `planItems` only (no `APIClient` call); remove
+  inserts the id into `hiddenCalendarItemIDs` and drops it locally — no
+  `cal-…` id ever reaches `APIClient`. New `syncCalendar()` is the only
+  caller of `requestAccess()`, itself only invoked from an explicit user tap
+  (never auto-requested). `PlanTimelineView` gained an optional
+  `onSyncCalendar: (() -> Void)?`: when non-nil (authorization
+  `.notDetermined`) it swaps the footer caption for a tappable "Sync your
+  calendar" row (`calendar.badge.plus` icon, `accentContent` text); nil
+  (authorized or denied/restricted) shows the existing plain caption
+  unchanged in both cases, per spec — deliberately not distinguishing denied
+  from authorized copy. `TodayView` wires `onSyncCalendar` from
+  `vm.calendarSyncState`. New `Tests/CalendarPlanMappingTests.swift` (13
+  tests): timed vs all-day mapping, minutes-from-midnight, subtitle
+  formatting (short/long/empty calendar name, noon-boundary AM/PM), and
+  merge (sort, hidden-id filtering, no duplication, empty inputs). No
+  backend changes; no calendar data constructed anywhere near `APIClient` —
+  grepped the diff to confirm. Deviation: `derivePlanItems` (Phase 1
+  fallback) changed from a `planItems`-mutating `Void` function to a pure
+  `-> [PlanItem]` return so both paths funnel through the single new merge
+  point, exactly as the spec asked ("factor the merge so it's applied after
+  either source resolves") — its own internal `computeStatuses` call was
+  removed since `mergeAndSetPlanItems` now runs it once on the merged set.
+  Verify: `xcodegen generate` regenerated `Vital.xcodeproj`/`Info.plist`
+  (both gitignored/tracked-generated respectively) picking up the new file
+  and Info.plist key automatically (glob-based `Sources/` + `project.yml`
+  properties, no other `project.yml` change needed); `xcodebuild ... build`
+  → **BUILD SUCCEEDED**; `xcodebuild ... test` → **TEST SUCCEEDED, 98/98**
+  (85 existing + 13 new `CalendarPlanMappingTests`, 0 failures). Simulator
+  has no calendar data so `CalendarEventsProvider` itself only exercised via
+  build; all EventKit-adjacent logic that matters is covered through the
+  pure `CalendarPlanMapping` unit tests instead, as the spec anticipated.
+  Redesign v3 is now feature-complete through the stretch phase (0–8).

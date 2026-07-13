@@ -94,11 +94,20 @@ final class TodayViewModel: ObservableObject {
         fat:     MacroProgress(current: 0, target: 0)
     )
 
-    // Today's plan timeline — server-persisted via /api/plan (Phase 2).
-    // Falls back to the Phase 1 client-side derivation (from /api/today's
-    // `plan` + a synthesized sleep item, local-only mutations) when
-    // /api/plan isn't available — see `applyPlanResult`.
+    // Today's plan timeline — server-persisted via /api/plan (Phase 2),
+    // merged client-side with today's calendar events (Phase 8, never sent
+    // to the server — see `mergeAndSetPlanItems`). Falls back to the Phase 1
+    // client-side derivation (from /api/today's `plan` + a synthesized sleep
+    // item, local-only mutations) when /api/plan isn't available — see
+    // `applyPlanResult`.
     @Published var planItems: [PlanItem] = []
+
+    /// Drives the Today footer's calendar-sync affordance: `.notDetermined`
+    /// shows a tappable "Sync your calendar" row instead of the plain
+    /// caption; `.authorized`/`.denied` both show the plain caption (never
+    /// nag once the user has answered the system prompt).
+    enum CalendarSyncState: Equatable { case notDetermined, authorized, denied }
+    @Published private(set) var calendarSyncState: CalendarSyncState = .notDetermined
 
     // Top-center toast host (see `.toast(message:)`).
     @Published var toastMessage: String? = nil
@@ -114,6 +123,16 @@ final class TodayViewModel: ObservableObject {
 
     private let healthKit = HealthKitManager()
     private let apiClient = APIClient.shared
+    private let calendarProvider = CalendarEventsProvider()
+
+    // Phase 8 calendar-merge state. `lastServerPlanItems` is the most recent
+    // server (or Phase-1-fallback) plan, kept so `syncCalendar()` can re-merge
+    // immediately after a grant without re-hitting /api/plan. Removing a
+    // calendar item hides it for the rest of the session — it's never
+    // deleted server-side (there's nothing to delete; it never existed
+    // there) and reappears if the app is relaunched.
+    private var lastServerPlanItems: [PlanItem] = []
+    private var hiddenCalendarItemIDs: Set<String> = []
 
     // MARK: - Init
 
@@ -362,14 +381,62 @@ final class TodayViewModel: ObservableObject {
     }
 
     /// Applies the `/api/plan` result, or falls back to the Phase 1
-    /// client-side derivation when the endpoint isn't available.
+    /// client-side derivation when the endpoint isn't available, then merges
+    /// in today's calendar events (Phase 8) — see `mergeAndSetPlanItems`.
     private func applyPlanResult(_ response: PlanResponse?, todayPlan: [TodayPlanItem]) {
-        guard let response else {
-            derivePlanItems(from: todayPlan) // PHASE 2 FALLBACK — see below
-            return
+        let serverItems: [PlanItem]
+        if let response {
+            serverItems = response.items.map { planItem(from: $0, todayPlan: todayPlan) }
+        } else {
+            serverItems = derivePlanItems(from: todayPlan) // PHASE 2 FALLBACK — see below
         }
-        let items = response.items.map { planItem(from: $0, todayPlan: todayPlan) }
-        planItems = computeStatuses(items, nowMinutes: Self.minutesSinceMidnight(Date()))
+        mergeAndSetPlanItems(serverItems: serverItems)
+    }
+
+    // MARK: - Plan timeline: calendar merge (Phase 8)
+    //
+    // Calendar events are read on-device only and never sent to /api/plan —
+    // see docs/redesign-v3-plan.md §4 decision 5. This is the single merge
+    // point both `applyPlanResult` paths (server + Phase 1 fallback) funnel
+    // through, so calendar items always appear regardless of which plan
+    // source resolved.
+
+    /// Merges `serverItems` with today's calendar events (if authorized),
+    /// recomputes now/next/later, and publishes the result. Also refreshes
+    /// `calendarSyncState` so the footer affordance reflects the current
+    /// authorization.
+    private func mergeAndSetPlanItems(serverItems: [PlanItem]) {
+        lastServerPlanItems = serverItems
+        let calendarItems = calendarProvider.fetchTodayPlanItems(now: Date())
+        let merged = CalendarPlanMapping.merge(
+            serverItems: serverItems,
+            calendarItems: calendarItems,
+            hiddenCalendarItemIDs: hiddenCalendarItemIDs
+        )
+        planItems = computeStatuses(merged, nowMinutes: Self.minutesSinceMidnight(Date()))
+        refreshCalendarSyncState()
+    }
+
+    private func refreshCalendarSyncState() {
+        switch calendarProvider.authorizationStatus {
+        case .notDetermined: calendarSyncState = .notDetermined
+        case .fullAccess:    calendarSyncState = .authorized
+        default:             calendarSyncState = .denied
+        }
+    }
+
+    /// Called only from an explicit user tap on the "Sync your calendar"
+    /// affordance (never automatically — no surprise permission prompt at
+    /// launch). On grant, immediately re-merges using the last-known server
+    /// plan so calendar items appear without waiting for the next /api/plan
+    /// load.
+    func syncCalendar() async {
+        let granted = await calendarProvider.requestAccess()
+        if granted {
+            mergeAndSetPlanItems(serverItems: lastServerPlanItems)
+        } else {
+            refreshCalendarSyncState()
+        }
     }
 
     // MARK: - Plan timeline: Phase 1 fallback derivation (old backend only)
@@ -476,8 +543,10 @@ final class TodayViewModel: ObservableObject {
     /// merge across reloads (the server owned that in Phase 1's plan; without
     /// it, a fallback reload simply rebuilds fresh — acceptable since this
     /// path only runs against a backend that predates plan persistence).
-    private func derivePlanItems(from plan: [TodayPlanItem]) {
-        guard !plan.isEmpty else { return }
+    /// Status/sort is left to `mergeAndSetPlanItems`'s single `computeStatuses`
+    /// call so calendar items merged in afterward are recomputed together.
+    private func derivePlanItems(from plan: [TodayPlanItem]) -> [PlanItem] {
+        guard !plan.isEmpty else { return [] }
 
         let mealItems = buildMealPlanItems(from: plan)
         let lightsOut = PlanItem(
@@ -490,8 +559,7 @@ final class TodayViewModel: ObservableObject {
             kind: .sleep
         )
 
-        let nowMinutes = Self.minutesSinceMidnight(Date())
-        planItems = computeStatuses(mealItems + [lightsOut], nowMinutes: nowMinutes)
+        return mealItems + [lightsOut]
     }
 
     private static func minutesSinceMidnight(_ date: Date) -> Int {
@@ -520,8 +588,16 @@ final class TodayViewModel: ObservableObject {
         }
     }
 
+    /// Calendar-sourced items (`id` prefixed `cal-`) never exist server-side
+    /// — mutating them is session-local only, no `APIClient` call, ever.
     func setStatus(id: PlanItem.ID, _ status: PlanItem.Status) {
         guard let idx = planItems.firstIndex(where: { $0.id == id }) else { return }
+
+        if planItems[idx].source == .calendar {
+            planItems[idx].status = status
+            return
+        }
+
         let previousStatus = planItems[idx].status
         planItems[idx].status = status
 
@@ -538,8 +614,18 @@ final class TodayViewModel: ObservableObject {
         }
     }
 
+    /// Removing a calendar item hides it for the rest of the session
+    /// (`hiddenCalendarItemIDs`, consulted by `mergeAndSetPlanItems`) and
+    /// never calls `APIClient` — there is no server row to delete.
     func removeItem(id: PlanItem.ID) {
         guard let removed = planItems.first(where: { $0.id == id }) else { return }
+
+        if removed.source == .calendar {
+            hiddenCalendarItemIDs.insert(id)
+            planItems.removeAll { $0.id == id }
+            return
+        }
+
         planItems.removeAll { $0.id == id }
 
         Task {
