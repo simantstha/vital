@@ -1,0 +1,52 @@
+name: Fix provisioning profile
+
+# One-off maintenance. The app now declares the aps-environment entitlement
+# (push notifications), but the match App Store profile predates the Push
+# Notifications capability on the App ID, so release builds fail codesigning.
+# This enables the capability via the App Store Connect API and force-
+# regenerates the match profile using the same secrets the Release workflow
+# already uses. Manual dispatch only; safe to re-run.
+#
+# Requirement: the certs-repo deploy key (MATCH_DEPLOY_KEY) must have write
+# access, since the regenerated profile is pushed back to the match repo.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fix:
+    name: Enable push capability + regenerate profile
+    runs-on: macos-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: ios
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+          working-directory: ios
+
+      # Same SSH setup as release.yml — match reaches the certs repo over SSH.
+      - name: Configure SSH for the match certs repo
+        env:
+          MATCH_DEPLOY_KEY: ${{ secrets.MATCH_DEPLOY_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$MATCH_DEPLOY_KEY" > ~/.ssh/match_ed25519
+          chmod 600 ~/.ssh/match_ed25519
+          ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
+          printf 'Host github.com\n  IdentityFile ~/.ssh/match_ed25519\n  IdentitiesOnly yes\n' >> ~/.ssh/config
+
+      - name: Enable capability & regenerate profile
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_CONTENT_BASE64: ${{ secrets.ASC_KEY_CONTENT_BASE64 }}
+          MATCH_GIT_URL: ${{ secrets.MATCH_GIT_URL }}
+          MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+        run: bundle exec fastlane fix_push_capability
