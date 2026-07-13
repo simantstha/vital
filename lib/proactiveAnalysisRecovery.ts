@@ -1,4 +1,6 @@
-export const RECOVERY_JOB_COUNT = 9;
+export const RECOVERY_JOB_COUNT = 14;
+export const RECOVERY_WORKOUT_COUNT = 8;
+export const RECOVERY_SLEEP_COUNT = 6;
 export type RecoveryKind = 'workout' | 'sleep';
 
 export interface RecoveryRow {
@@ -8,6 +10,8 @@ export interface RecoveryRow {
   retryCount: number;
   leaseToken: string | null;
   result: unknown;
+  notificationState: string;
+  notificationSentAt: Date | null;
 }
 
 export interface RecoveryCounts {
@@ -31,6 +35,13 @@ export interface RecoveryStore {
 const canonicalUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const invalidArguments = (): Error => new Error('Invalid proactive analysis recovery arguments.');
 
+function hasExactIds(actual: string[], expected: string[]): boolean {
+  const expectedIds = new Set(expected);
+  return actual.length === expected.length
+    && new Set(actual).size === expected.length
+    && actual.every((id) => expectedIds.has(id));
+}
+
 export function parseRecoveryIds(argv: string[]): string[] {
   if (argv.length !== RECOVERY_JOB_COUNT * 2) throw invalidArguments();
   const ids: string[] = [];
@@ -53,23 +64,38 @@ export async function recoverProactiveAnalysisJobs(
 
   return store.transaction(async (tx) => {
     const rows = await tx.lockRows(ids);
-    if (rows.length !== RECOVERY_JOB_COUNT || new Set(rows.map((row) => row.id)).size !== RECOVERY_JOB_COUNT) {
+    const suppliedIds = new Set(ids);
+    const lockedIds = rows.map((row) => row.id);
+    if (
+      rows.length !== RECOVERY_JOB_COUNT
+      || new Set(lockedIds).size !== RECOVERY_JOB_COUNT
+      || lockedIds.some((id) => !suppliedIds.has(id))
+    ) {
       throw new Error('Proactive analysis recovery row mismatch.');
     }
-    if (rows.some((row) => row.status !== 'failed' || row.leaseToken !== null || row.result !== null)) {
+    if (rows.some((row) => (
+      row.status !== 'failed'
+      || row.leaseToken !== null
+      || row.result !== null
+      || row.notificationState !== 'failed'
+      || row.notificationSentAt !== null
+    ))) {
       throw new Error('Proactive analysis recovery row is ineligible.');
     }
 
     const workoutIds = rows.filter((row) => row.kind === 'workout').map((row) => row.id);
     const sleepIds = rows.filter((row) => row.kind === 'sleep').map((row) => row.id);
-    const workoutUpdatedIds = workoutIds.length === 0 ? [] : await tx.recover('workout', workoutIds, now);
-    const sleepUpdatedIds = sleepIds.length === 0 ? [] : await tx.recover('sleep', sleepIds, now);
+    if (workoutIds.length !== RECOVERY_WORKOUT_COUNT || sleepIds.length !== RECOVERY_SLEEP_COUNT) {
+      throw new Error('Proactive analysis recovery distribution mismatch.');
+    }
+
+    const workoutUpdatedIds = await tx.recover('workout', workoutIds, now);
+    const sleepUpdatedIds = await tx.recover('sleep', sleepIds, now);
     const updatedIds = [...workoutUpdatedIds, ...sleepUpdatedIds];
-    const suppliedIds = new Set(ids);
     if (
-      updatedIds.length !== RECOVERY_JOB_COUNT
-      || new Set(updatedIds).size !== RECOVERY_JOB_COUNT
-      || updatedIds.some((id) => !suppliedIds.has(id))
+      !hasExactIds(workoutUpdatedIds, workoutIds)
+      || !hasExactIds(sleepUpdatedIds, sleepIds)
+      || !hasExactIds(updatedIds, ids)
     ) {
       throw new Error('Proactive analysis recovery update mismatch.');
     }

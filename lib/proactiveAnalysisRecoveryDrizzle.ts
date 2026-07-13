@@ -36,6 +36,8 @@ export function createProactiveAnalysisRecoveryStore(database: unknown, schema: 
             retryCount: schema.workout_analyses.retry_count,
             leaseToken: schema.workout_analyses.lease_token,
             result: schema.workout_analyses.result,
+            notificationState: schema.workout_analyses.notification_state,
+            notificationSentAt: schema.workout_analyses.notification_sent_at,
           })
           .from(schema.workout_analyses)
           .where(inArray(schema.workout_analyses.id, requestedIds))
@@ -47,6 +49,8 @@ export function createProactiveAnalysisRecoveryStore(database: unknown, schema: 
             retryCount: schema.sleep_analyses.retry_count,
             leaseToken: schema.sleep_analyses.lease_token,
             result: schema.sleep_analyses.result,
+            notificationState: schema.sleep_analyses.notification_state,
+            notificationSentAt: schema.sleep_analyses.notification_sent_at,
           })
           .from(schema.sleep_analyses)
           .where(inArray(schema.sleep_analyses.id, requestedIds))
@@ -64,11 +68,14 @@ export function createProactiveAnalysisRecoveryStore(database: unknown, schema: 
           next_attempt_at: now,
           lease_token: null,
           lease_expires_at: null,
+          notification_state: 'pending',
         }).where(and(
           inArray(table.id, requestedIds),
           eq(table.status, 'failed'),
           isNull(table.lease_token),
           isNull(table.result),
+          eq(table.notification_state, 'failed'),
+          isNull(table.notification_sent_at),
         )).returning({ id: table.id });
         return rows.map((row) => row.id);
       },
