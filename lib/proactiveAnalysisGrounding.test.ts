@@ -209,6 +209,31 @@ test('preserves date and range separators while storing only lexically unary sig
   assert.deepEqual(displays, ['2026', '07', '13', '5', '10', '-2', '+3', '20', '30', '40', '50']);
 });
 
+test('preserves every supported Unicode sign exactly through encoding and resolution', () => {
+  const signedDisplays = ['−45', '＋45', '﹢45', '﹣45', '－45'];
+  const request: ProactiveAnalysisSource = { kind: 'workout', date: 'date', input: signedDisplays, availableContext: {} };
+  const encoded = encodeProactiveAnalysisRequest(request);
+  const payload = modelPayload(encoded) as { input: string[] };
+  const tokens = evidenceTokens(encoded);
+  assert.deepEqual(payload.input, tokens);
+  assert.deepEqual(captureEvidenceDisplays(() => encodeProactiveAnalysisRequest(request)), signedDisplays);
+
+  const proof = groundAnalysisText(JSON.stringify({
+    headline: tokens[0],
+    shortInsight: tokens[1],
+    narrative: tokens[2],
+    observations: [tokens[3]],
+    nextSteps: [tokens[4]],
+  }), encoded);
+  assert.deepEqual(consumeGroundedAnalysisProof(proof, request), {
+    headline: '−45',
+    shortInsight: '＋45',
+    narrative: '﹢45',
+    observations: ['﹣45'],
+    nextSteps: ['－45'],
+  });
+});
+
 test('resolves exact private displays and consumes proof once', () => {
   const request: ProactiveAnalysisSource = {
     kind: 'workout', date: 'date',
@@ -278,6 +303,9 @@ test('rejects composable token syntax and accepts clause-terminal token prose', 
   const [first, second] = evidenceTokens(encoded);
   for (const narrative of [
     `-${first}`, `- ${first}`, `+${first}`, `+ ${first}`, `−${first}`, `− ${first}`, `＋${first}`,
+    `~${first}`, `~ ${first}`, `≈${first}`, `≈ ${first}`, `<${first}`, `< ${first}`,
+    `≤${first}`, `≤ ${first}`, `>${first}`, `> ${first}`, `≥${first}`, `≥ ${first}`,
+    `=${first}`, `= ${first}`, `±${first}`, `± ${first}`,
     `%${first}`, `% ${first}`, `°${first}`, `° ${first}`,
     `${first}%`, `${first} %`, `${first}°`, `${first} °C`, `${first} kg`, `${first},`,
     `${first}.${second}`, `${first}. ${second}`, `${first} . ${second}`,
@@ -289,6 +317,7 @@ test('rejects composable token syntax and accepts clause-terminal token prose', 
 
   for (const narrative of [
     `HRV was ${first}.`,
+    `Recovery remained qualitatively near ${first}.`,
     `Recorded value: ${first}! More qualitative context followed.`,
     `First value was ${first}. Second value was ${second}?`,
   ]) {

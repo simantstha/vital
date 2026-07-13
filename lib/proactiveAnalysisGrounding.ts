@@ -22,10 +22,13 @@ const TOKENS = /\{\{EVIDENCE_[A-Z]+\}\}/g;
 const RAW_NUMBER = /\p{N}/u;
 const RESERVED_EVIDENCE = /EVIDENCE_/iu;
 const TOKEN_FRAGMENT = /EVIDENCE|\{\{EVID|ENCE_[A-Z]*\}\}/iu;
-const NUMBER_START = /[-+.٫\p{N}]/u;
-const SOURCE_LEXEME = /^(?:[-+]?(?:(?:\p{Nd}{1,3}(?:[,٬]\p{Nd}{3})+|\p{Nd}+)(?:[.٫]\p{Nd}+)?|[.٫]\p{Nd}+)(?:[eE][-+]?\p{Nd}+)?|[\p{Nl}\p{No}]+)(?:\s*(?:[%٪]|[°℃℉](?:\p{L}+)?|[\p{L}µμ]+)(?:[\/_·*.-][\p{L}µμ%٪]+)*)?/u;
+const SOURCE_SIGN_CHARACTERS = '+\u2212\uFE62\uFE63\uFF0B\uFF0D-';
+const SOURCE_SIGN_CLASS = `[${SOURCE_SIGN_CHARACTERS}]`;
+const SOURCE_SIGN = new RegExp(`^${SOURCE_SIGN_CLASS}$`, 'u');
+const NUMBER_START = new RegExp(`[.٫\\p{N}${SOURCE_SIGN_CHARACTERS}]`, 'u');
+const SOURCE_LEXEME = new RegExp(String.raw`^(?:${SOURCE_SIGN_CLASS}?(?:(?:\p{Nd}{1,3}(?:[,٬]\p{Nd}{3})+|\p{Nd}+)(?:[.٫]\p{Nd}+)?|[.٫]\p{Nd}+)(?:[eE]${SOURCE_SIGN_CLASS}?\p{Nd}+)?|[\p{Nl}\p{No}]+)(?:\s*(?:[%٪]|[°℃℉](?:\p{L}+)?|[\p{L}µμ]+)(?:[\/_·*.-][\p{L}µμ%٪]+)*)?`, 'u');
 const FORMAT_CONTROL = /\p{Cf}/u;
-const PREFIX_OPERATOR = /(?:\p{Dash_Punctuation}|[+\u2212\uFE62\uFF0B%٪°℃℉.,٬٫/])\s*$/u;
+const PREFIX_OPERATOR = /(?:\p{S}|\p{Dash_Punctuation}|[%٪.,٬٫/])\s*$/u;
 const CLAUSE_BOUNDARY = /[.!?]\s+/gu;
 
 export type AnalysisFailureCategory = 'parse_failure' | 'schema_failure' | 'grounding_failure';
@@ -254,7 +257,7 @@ export function encodeProactiveAnalysisRequest(source: ProactiveAnalysisSource):
   };
 
   const isUnarySign = (value: string, index: number): boolean => {
-    if (value[index] !== '-' && value[index] !== '+') return false;
+    if (!SOURCE_SIGN.test(value[index])) return false;
     if (index === 0) return true;
     if (/\s/u.test(value[index - 1])) {
       let previous = index - 1;
@@ -275,7 +278,7 @@ export function encodeProactiveAnalysisRequest(source: ProactiveAnalysisSource):
       encoded += remaining.slice(0, index);
       remaining = remaining.slice(index);
       offset += index;
-      if ((remaining[0] === '-' || remaining[0] === '+') && !isUnarySign(value, offset)) {
+      if (SOURCE_SIGN.test(remaining[0]) && !isUnarySign(value, offset)) {
         encoded += remaining[0];
         remaining = remaining.slice(1);
         offset += 1;
