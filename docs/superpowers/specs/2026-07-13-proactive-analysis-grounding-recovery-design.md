@@ -7,7 +7,7 @@
 
 Proactive workout and sleep analyses can currently exhaust their normal job retries when the model returns malformed JSON, an invalid analysis shape, or a numeric claim that the strict grounding validator rejects. This design makes those failures recoverable without weakening validation: use `claude-sonnet-4-6` by default, prohibit derived numbers in both model prompts, and allow exactly one focused model repair attempt after a parse, schema, or grounding failure.
 
-A separate one-shot operator script will requeue the nine already-failed analysis rows. The script accepts exactly nine unique runtime UUIDs, validates and reconciles them inside one database transaction, performs compare-and-set updates only from the expected failed state, rolls back unless all nine transition, and emits counts only.
+A separate one-shot operator script will requeue the nine already-failed analysis rows. The script accepts exactly nine unique runtime UUIDs, validates and reconciles them inside one database transaction, performs compare-and-set updates only from the expected failed state, rolls back unless all nine transition, and emits counts only. Recovery changes analysis queue fields only; every notification field is preserved exactly.
 
 ## Goals
 
@@ -17,12 +17,14 @@ A separate one-shot operator script will requeue the nine already-failed analysi
 - Expose only fixed, privacy-safe failure categories to diagnostics.
 - Preserve current lease ownership, compare-and-set writes, retry limits, exponential backoff, and terminal failure behavior.
 - Provide a narrow one-shot script to requeue exactly nine known failed runtime records safely.
+- Preserve `notification_state`, `notification_retry_count`, `notification_next_attempt_at`, `notification_lease_token`, `notification_lease_expires_at`, and `notification_sent_at` byte-for-byte during recovery.
 
 ## Non-goals
 
 - Weakening, bypassing, or adding exceptions to `validateGroundedAnalysis`.
 - Automatically deleting unsupported numbers or accepting calculated values.
 - Changing the analysis JSON schema, APNs delivery, notification preferences, notification retry behavior, lease duration, queue ordering, or sleep capacity reservation.
+- Resetting, repairing, clearing, or otherwise mutating notification state as part of the one-shot analysis recovery.
 - Adding a database migration or changing the analysis-table schema.
 - Sweeping all failed analyses or turning the recovery script into a recurring worker.
 - Embedding the nine production UUIDs in source control, command history examples, tests, logs, or the design document.
@@ -120,14 +122,16 @@ Validation failures exit nonzero before any database mutation and print only fix
 All discovery and mutation run in one database transaction:
 
 1. Query both `workout_analyses` and `sleep_analyses` for the supplied IDs while holding the rows needed for the update.
-2. Verify that the union contains exactly nine rows, each supplied UUID appears exactly once, and every row is eligible for recovery: `status = 'failed'`, no active lease token, and no persisted ready result.
+2. Verify that the union contains exactly nine rows, each supplied UUID appears exactly once, and every row is eligible for recovery: `status = 'failed'`, `lease_token IS NULL`, and `result IS NULL`.
 3. Update each table with a compare-and-set predicate that repeats the expected failed-state conditions and restricts the update to the supplied UUID set.
-4. Requeue eligible rows by setting analysis status to `pending`, resetting analysis `retry_count` to `0`, setting `next_attempt_at` to the transaction time, clearing analysis lease fields, clearing any stale result, and restoring `notification_state` to `pending`. Reset `notification_retry_count` to `0`, set `notification_next_attempt_at` to the same transaction time, and clear notification lease and sent fields. Existing input payloads, ownership, user IDs, dates, and source identifiers are untouched.
+4. Requeue eligible rows by updating only these analysis queue fields: set `status` to `pending`, set `retry_count` to `0`, set `next_attempt_at` to the transaction time, and clear `lease_token` and `lease_expires_at`. `result` is an eligibility condition and remains `NULL`; the update does not assign it.
 5. Require the workout plus sleep affected-row counts to equal nine and require the affected UUID set to equal the validated input set. Any mismatch throws and rolls back the entire transaction.
+
+The update must not assign any notification column. In particular, `notification_state`, `notification_retry_count`, `notification_next_attempt_at`, `notification_lease_token`, `notification_lease_expires_at`, and `notification_sent_at` must retain their exact pre-transaction values. Input payloads, `updated_at`, user IDs, dates, source identifiers, and every other non-listed column are also untouched.
 
 The compare-and-set makes the script safe against a concurrent change after the initial read. It is intentionally one-shot but also safe to rerun: after a successful run, the rows are no longer `failed`, so a second invocation updates zero rows, rolls back, and exits nonzero rather than resetting active work.
 
-No model or notification work occurs inside the transaction. The normal worker claims the requeued jobs after commit and applies standard leases, analysis validation, notification behavior, and backoff.
+No model or notification work occurs inside the transaction. The normal worker claims the requeued analysis jobs after commit and applies standard analysis leases, validation, and backoff. Recovery does not attempt to make notification state claimable or otherwise alter later notification behavior.
 
 ### Count-only operator output
 
@@ -205,7 +209,9 @@ Manual updates are hard to test, easy to partially apply across two tables, and 
 - Accept exactly nine unique canonical runtime UUIDs.
 - Recover a mixed set across workout and sleep tables and commit only when the combined affected count is nine.
 - Roll back when any UUID is absent, duplicated across unexpected data, ineligible, concurrently changed, or fails the compare-and-set update.
-- Verify the update resets only the approved queue and notification state fields and preserves payload, user, date, and source data.
+- Verify the update changes exactly `status`, `retry_count`, `next_attempt_at`, `lease_token`, and `lease_expires_at`; `result` is confirmed `NULL` before the compare-and-set and remains `NULL` afterward.
+- Seed distinct values for `notification_state`, `notification_retry_count`, `notification_next_attempt_at`, `notification_lease_token`, `notification_lease_expires_at`, and `notification_sent_at`, then assert every value is identical before and after a successful recovery.
+- Verify payload, `updated_at`, user, date, source data, and every other non-listed field are unchanged.
 - Verify a second invocation after success updates nothing, rolls back, and exits nonzero.
 - Capture stdout and stderr and assert they contain fixed labels with integer counts only, with none of the supplied UUIDs or row content.
 - Verify the transaction commits once on success and rolls back atomically on every failure path.
@@ -220,7 +226,8 @@ The implementation plan must include focused unit tests for the analysis boundar
 2. Confirm sanitized logs identify repair outcomes only by fixed categories and contain no private content.
 3. Run the recovery script once with the nine operator-supplied UUIDs.
 4. Require a committed total of nine updates; any other total is a failed recovery and must leave all rows unchanged.
-5. Observe the normal worker claim the rows and confirm they advance through `processing` to `ready` or follow the unchanged retry/backoff path.
-6. Confirm no stale worker can persist after losing its lease and strict grounding rejects unsupported numeric claims after both initial and repair responses.
+5. Verify before and after snapshots show exact preservation of all six notification fields for all nine rows.
+6. Observe the normal worker claim the rows and confirm they advance through `processing` to `ready` or follow the unchanged retry/backoff path.
+7. Confirm no stale worker can persist after losing its lease and strict grounding rejects unsupported numeric claims after both initial and repair responses.
 
-The feature is complete when new parse/schema/grounding failures receive no more than one strict repair attempt, successful repaired analyses retain all current ownership guarantees, and the exact nine known failed jobs are atomically requeued without identifiers or health content appearing in logs.
+The feature is complete when new parse/schema/grounding failures receive no more than one strict repair attempt, successful repaired analyses retain all current ownership guarantees, and the exact nine known failed jobs are atomically requeued by changing analysis queue fields only. All notification fields must remain exactly unchanged, and no identifiers or health content may appear in logs.
