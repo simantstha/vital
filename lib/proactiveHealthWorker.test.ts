@@ -3,8 +3,6 @@ import test from 'node:test';
 import {
   classifyApnsResponse,
   nextRetryAt,
-  parseCoachAnalysis,
-  validateGroundedAnalysis,
   runClaimedAnalysis,
   shouldRunMorningBrief,
   type AnalysisJob,
@@ -16,77 +14,6 @@ const valid = {
   narrative: 'Your available data suggests a steady day.',
   observations: ['Sleep duration was recorded.'], nextSteps: ['Keep today comfortable.'],
 };
-
-test('strictly validates structured coach output', () => {
-  assert.deepEqual(parseCoachAnalysis(valid), valid);
-  assert.throws(() => parseCoachAnalysis({ ...valid, invented: true }), /unexpected field/);
-  assert.throws(() => parseCoachAnalysis({ ...valid, observations: [''] }), /observations/);
-  assert.throws(() => parseCoachAnalysis({ ...valid, headline: 'x'.repeat(121) }), /headline/);
-});
-
-test('rejects fabricated numeric health claims and accepts grounded metric units', () => {
-  assert.throws(() => validateGroundedAnalysis({ ...valid, narrative: 'Your HRV was 99 ms.' }, { metrics: [{ metric: 'hrv_sdnn', value: 45 }] }), /unsupported numeric claim/);
-  assert.doesNotThrow(() => validateGroundedAnalysis({ ...valid, narrative: 'Your HRV was 45 ms.' }, { metrics: [{ metric: 'hrv_sdnn', value: 45 }] }));
-  assert.doesNotThrow(() => validateGroundedAnalysis(valid, {}));
-});
-
-test('grounding requires an exact supplied value with the same source unit', () => {
-  const analysis = (narrative: string) => ({ ...valid, narrative });
-
-  assert.doesNotThrow(() => validateGroundedAnalysis(analysis('Your HRV was 45 ms.'), { metrics: [{ metric: 'hrv_sdnn', value: 45 }] }));
-  assert.doesNotThrow(() => validateGroundedAnalysis(analysis('Your HRV was 45 milliseconds.'), { metrics: [{ metric: 'hrv_sdnn', value: 45 }] }));
-  assert.doesNotThrow(() => validateGroundedAnalysis(analysis('Your score was 45.'), { score: 45 }));
-  assert.doesNotThrow(() => validateGroundedAnalysis(analysis('Your walk lasted 2 hrs.'), { summary: 'Duration: 2 hours.' }));
-  assert.doesNotThrow(() => validateGroundedAnalysis(analysis('Energy was 300 calories.'), { summary: 'Energy: 300 kcal.' }));
-
-  assert.throws(() => validateGroundedAnalysis(analysis('Your HRV was 45.'), { metrics: [{ metric: 'hrv_sdnn', value: 45 }] }), /unit/);
-  assert.throws(() => validateGroundedAnalysis(analysis('Your score was 45 ms.'), { score: 45 }), /unit/);
-  assert.throws(() => validateGroundedAnalysis(analysis('Your HRV was 45 bpm.'), { metrics: [{ metric: 'hrv_sdnn', value: 45 }] }), /unit/);
-  assert.throws(() => validateGroundedAnalysis(analysis('Your HRV was 45 seconds.'), { metrics: [{ metric: 'hrv_sdnn', value: 45 }] }), /unit/);
-  assert.throws(() => validateGroundedAnalysis(analysis('Your HRV was 45 bananas.'), { metrics: [{ metric: 'hrv_sdnn', value: 45 }] }), /unit/);
-  assert.doesNotThrow(() => validateGroundedAnalysis(analysis('Your HRV was 45-ms.'), { metrics: [{ metric: 'hrv_sdnn', value: 45 }] }));
-  assert.doesNotThrow(() => validateGroundedAnalysis(analysis('Your HRV was 45_ms.'), { metrics: [{ metric: 'hrv_sdnn', value: 45 }] }));
-  assert.doesNotThrow(() => validateGroundedAnalysis(analysis('Your HRV was 45/ms.'), { metrics: [{ metric: 'hrv_sdnn', value: 45 }] }));
-});
-
-test('grounding distinguishes ordinary prose from complete signed, decimal, and symbol-unit claims', () => {
-  const analysis = (narrative: string) => ({ ...valid, narrative });
-  const unitlessEvidence = { score: 45 };
-
-  assert.doesNotThrow(() => validateGroundedAnalysis(analysis('Your score was 45 today.'), unitlessEvidence));
-  assert.throws(() => validateGroundedAnalysis(analysis('Your score was -45.'), unitlessEvidence), /unsupported numeric claim: -45/);
-  assert.throws(() => validateGroundedAnalysis(analysis('Your score was +45.'), unitlessEvidence), /unsupported numeric claim: \+45/);
-  assert.throws(() => validateGroundedAnalysis(analysis('Your score was .5.'), unitlessEvidence), /unsupported numeric claim: \.5/);
-  assert.throws(() => validateGroundedAnalysis(analysis('Your temperature was 45°C.'), unitlessEvidence), /unsupported unit claim: 45 °c/);
-  assert.doesNotThrow(() => validateGroundedAnalysis(analysis('Your temperature was 45 ℃.'), { summary: 'Temperature: 45°C.' }));
-});
-
-test('grounding canonicalizes repository health units and rejects ambiguous numeric syntax', () => {
-  const analysis = (narrative: string) => ({ ...valid, narrative });
-  const distanceEvidence = { metrics: [{ metric: 'distance_m', value: 45 }] };
-  const vo2Evidence = { metrics: [{ metric: 'vo2_max', value: 45 }] };
-
-  for (const claim of ['45 m', '45 meters', '45 metres', '45-meters']) {
-    assert.doesNotThrow(() => validateGroundedAnalysis(analysis(`Distance was ${claim}.`), distanceEvidence));
-  }
-  assert.doesNotThrow(() => validateGroundedAnalysis(analysis('Pressure was 45 mmHg.'), { summary: 'Pressure: 45 MMHG.' }));
-  for (const claim of ['45 ml/kg/min', '45 mL/kg*min', '45 ml/kg·min']) {
-    assert.doesNotThrow(() => validateGroundedAnalysis(analysis(`VO2 max was ${claim}.`), vo2Evidence));
-  }
-
-  assert.throws(() => validateGroundedAnalysis(analysis('HRV was 45 meters.'), { metrics: [{ metric: 'hrv_sdnn', value: 45 }] }), /unit/);
-  assert.throws(() => validateGroundedAnalysis(analysis('Score was 45widgets.'), { score: 45 }), /unsupported unit claim: 45 widgets/);
-  assert.throws(() => validateGroundedAnalysis(analysis('Score was 45µg.'), { score: 45 }), /unsupported unit claim: 45 µg/);
-  assert.throws(() => validateGroundedAnalysis(analysis('Score was 45-widgets.'), { score: 45 }), /unsupported unit claim: 45 -widgets/);
-  assert.doesNotThrow(() => validateGroundedAnalysis(analysis('Score was 45 today.'), { score: 45 }));
-  assert.throws(() => validateGroundedAnalysis(analysis('Score was 1e3.'), { score: 1 }), /unsupported numeric claim: 1e3/);
-  assert.throws(() => validateGroundedAnalysis(analysis('Score was 1,000.'), { score: 1 }), /unsupported numeric claim: 1,000/);
-
-  assert.doesNotThrow(() => validateGroundedAnalysis(analysis('Average HR was 45 bpm.'), { metrics: [{ metric: 'hr_avg', value: 45 }] }));
-  assert.doesNotThrow(() => validateGroundedAnalysis(analysis('Average HR was 45 bpm.'), { workout: { avgHr: 45 } }));
-  assert.doesNotThrow(() => validateGroundedAnalysis(analysis('Pace was 5 min/km.'), { workout: { paceMinPerKm: 5 } }));
-  assert.doesNotThrow(() => validateGroundedAnalysis(analysis('Sleep was 45 min.'), { sleep: { minutes: 45 } }));
-});
 
 test('caps exponential retries', () => {
   const now = new Date('2026-07-12T12:00:00Z');

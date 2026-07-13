@@ -1,7 +1,9 @@
 import { localDayKey } from './localDay';
+import { parseCoachAnalysis, type CoachAnalysis } from './proactiveAnalysisSchema';
+
+export { parseCoachAnalysis, type CoachAnalysis } from './proactiveAnalysisSchema';
 
 export type AnalysisKind = 'workout' | 'sleep';
-export interface CoachAnalysis { headline: string; shortInsight: string; narrative: string; observations: string[]; nextSteps: string[] }
 export interface AnalysisJob { id: string; kind: AnalysisKind; userId: string; localDate: string; input: unknown; retryCount: number; notificationRetryCount: number; leaseToken: string }
 export interface AnalysisContext { enabled: boolean; timezone: string; baselines: unknown; profile: unknown; metrics: unknown }
 export interface PushDevice { id: string; token: string; environment: 'sandbox' | 'production' }
@@ -23,21 +25,6 @@ export interface WorkerRepository {
   recordPushAttempt(job: AnalysisJob, device: PushDevice, attempt: number, result: PushOutcome): Promise<void>;
   retireDevice(deviceId: string, now: Date): Promise<void>;
   markNotificationSent(job: AnalysisJob, token: string, now: Date): Promise<void>;
-}
-
-const limits: Record<keyof CoachAnalysis, number> = { headline: 120, shortInsight: 240, narrative: 1200, observations: 6, nextSteps: 5 };
-export function parseCoachAnalysis(value: unknown): CoachAnalysis {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('coach output must be an object');
-  const row = value as Record<string, unknown>;
-  const expected = Object.keys(limits);
-  for (const key of Object.keys(row)) if (!expected.includes(key)) throw new Error(`unexpected field: ${key}`);
-  for (const key of ['headline', 'shortInsight', 'narrative'] as const) {
-    if (typeof row[key] !== 'string' || !row[key].trim() || row[key].length > limits[key]) throw new Error(`invalid ${key}`);
-  }
-  for (const key of ['observations', 'nextSteps'] as const) {
-    if (!Array.isArray(row[key]) || row[key].length > limits[key] || row[key].some((x) => typeof x !== 'string' || !x.trim() || x.length > 240)) throw new Error(`invalid ${key}`);
-  }
-  return row as unknown as CoachAnalysis;
 }
 
 const UNITLESS = '<unitless>';
