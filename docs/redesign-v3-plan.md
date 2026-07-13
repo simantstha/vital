@@ -260,7 +260,7 @@ commits beyond main; ElevenLabs TTS already works via `/api/tts`.)
 
 1. **Dark mode kept** — mock is light-only; we map v3 to light and keep tuned
    dark equivalents rather than dropping dark support.
-2. **Custom tab bar** replaces native `TabView` chrome (mock is unambiguous).
+2. ~~**Custom tab bar** replaces native `TabView` chrome (mock is unambiguous).~~ **Reverted 2026-07-13 by user preference**: native glassy `TabView` bar restored — the custom pill covered the Coach composer and the user prefers the native finish.
 3. **Mock's fake status bar / iPhone frame** is presentation-only — ignore.
 4. **Streak chip moves into the Today header** (mock has it there, plus the
    old chip row is gone).

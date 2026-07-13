@@ -65,7 +65,7 @@ struct TodayView: View {
                 }
                 .padding(.horizontal, Theme.Spacing.xl)
                 .padding(.top, Theme.Spacing.lg)
-                .padding(.bottom, 120)
+                .padding(.bottom, Theme.Spacing.lg)
             }
             .scrollIndicators(.hidden)
             .task {
