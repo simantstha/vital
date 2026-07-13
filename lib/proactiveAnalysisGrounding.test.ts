@@ -18,6 +18,26 @@ const source = {
   availableContext: { enabled: true, timezone: 'UTC-5', profile: {}, baselines: {}, metrics: [] },
 };
 
+function captureEvidenceDisplays(run: () => void): string[] {
+  const descriptor = Object.getOwnPropertyDescriptor(Map.prototype, 'set');
+  assert.ok(descriptor);
+  const original = Map.prototype.set;
+  const displays: string[] = [];
+  Object.defineProperty(Map.prototype, 'set', {
+    ...descriptor,
+    value(this: Map<unknown, unknown>, key: unknown, value: unknown) {
+      if (typeof key === 'string' && /^\{\{EVIDENCE_[A-Z]+\}\}$/.test(key) && typeof value === 'string') displays.push(value);
+      return original.call(this, key, value);
+    },
+  });
+  try {
+    run();
+  } finally {
+    Object.defineProperty(Map.prototype, 'set', descriptor);
+  }
+  return displays;
+}
+
 test('encodes every number in date input and context deterministically', () => {
   const left = modelPayload(encodeProactiveAnalysisRequest(source));
   const right = modelPayload(encodeProactiveAnalysisRequest(source));
@@ -108,4 +128,26 @@ test('captures complete numeric lexemes, adjacent units, and typed numeric field
   assert.equal(tokens.length, 13);
   assert.doesNotMatch(serialized, /\p{N}/u);
   assert.doesNotMatch(serialized, /-2|\+\.5|1\.2e\+3|1,000|45%|37\.5°C/);
+});
+
+test('uses only the closed known-key allowlist for typed numeric displays', () => {
+  const displays = captureEvidenceDisplays(() => {
+    encodeProactiveAnalysisRequest({
+      kind: 'workout',
+      date: 'date',
+      input: { activeEnergyKcal: 8, activity_energy_level: 6, distanceM: 5, energyLevel: 3, heart_rate: 60, items: 2, paceMinPerMi: 7, steps: 4 },
+      availableContext: {},
+    });
+  });
+  assert.deepEqual(displays, ['8 kcal', '6', '5 m', '3', '60 bpm', '2', '7 min/mi', '4 steps']);
+});
+
+test('captures unsigned leading decimal separators as complete exact displays', () => {
+  const displays = captureEvidenceDisplays(() => {
+    const payload = modelPayload(encodeProactiveAnalysisRequest({
+      kind: 'sleep', date: 'date', input: { arabic: '٫٥', ascii: '.5' }, availableContext: {},
+    })) as { input: Record<string, string> };
+    assert.deepEqual(payload.input, { arabic: '{{EVIDENCE_A}}', ascii: '{{EVIDENCE_B}}' });
+  });
+  assert.deepEqual(displays, ['٫٥', '.5']);
 });

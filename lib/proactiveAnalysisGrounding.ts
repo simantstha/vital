@@ -17,7 +17,7 @@ const encodings = new WeakMap<object, PrivateEncodingState>();
 const TOKEN = /^\{\{EVIDENCE_[A-Z]+\}\}$/;
 const RAW_NUMBER = /\p{N}/u;
 const RESERVED_EVIDENCE = /EVIDENCE_/iu;
-const NUMBER_START = /[-+\p{N}]/u;
+const NUMBER_START = /[-+.٫\p{N}]/u;
 const SOURCE_LEXEME = /^(?:[-+]?(?:(?:\p{Nd}{1,3}(?:[,٬]\p{Nd}{3})+|\p{Nd}+)(?:[.٫]\p{Nd}+)?|[.٫]\p{Nd}+)(?:[eE][-+]?\p{Nd}+)?|[\p{Nl}\p{No}]+)(?:\s*(?:[%٪]|[°℃℉](?:\p{L}+)?|[\p{L}µμ]+)(?:[\/_·*.-][\p{L}µμ%٪]+)*)?/u;
 
 export type AnalysisFailureCategory = 'parse_failure' | 'schema_failure' | 'grounding_failure';
@@ -47,21 +47,55 @@ function alphabeticName(index: number): string {
   return name;
 }
 
+const KNOWN_EXACT_KEY_UNITS: Readonly<Record<string, string>> = {
+  activecalories: 'kcal',
+  active_calories: 'kcal',
+  activeenergykcal: 'kcal',
+  active_energy_kcal: 'kcal',
+  avghr: 'bpm',
+  avghrv: 'ms',
+  basalenergykcal: 'kcal',
+  basal_energy_kcal: 'kcal',
+  bodymasskg: 'kg',
+  caloriesburned: 'kcal',
+  calories_burned: 'kcal',
+  distancem: 'm',
+  durationmin: 'minutes',
+  elevationgainm: 'm',
+  heartrate: 'bpm',
+  heartratevariabilitysdnn: 'ms',
+  maxhr: 'bpm',
+  paceminperkm: 'min/km',
+  paceminmi: 'min/mi',
+  paceminpermi: 'min/mi',
+  restingheartrate: 'bpm',
+  sleepefficiency: '%',
+  stepcount: 'steps',
+  vo2max: 'ml/kg/min',
+  weightkg: 'kg',
+};
+
+const KNOWN_KEY_UNIT_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
+  [/^(?:hrv(?:_[a-z]+)*|[a-z]+_hrv(?:_[a-z]+)*|[a-z][a-z0-9_]*_ms)$/, 'ms'],
+  [/^(?:heart_rate|average_heart_rate|resting_heart_rate|resting_hr|avg_hr|hr_avg|rhr|max_hr)$/, 'bpm'],
+  [/^(?:[a-z]+_)*(?:percent|percentage|efficiency)$/, '%'],
+  [/^(?:weight|body_weight|[a-z][a-z0-9_]*_kg)$/, 'kg'],
+  [/^(?:energy|calorie|calories|kcal)$/, 'kcal'],
+  [/^(?:step|steps|step_count|steps_recorded)$/, 'steps'],
+  [/^(?:second|seconds|[a-z][a-z0-9_]*_s)$/, 'seconds'],
+  [/^(?:duration|minute|minutes|[a-z][a-z0-9_]*_min|(?:[a-z]+_)*minutes)$/, 'minutes'],
+  [/^(?:distance|elevation)(?:_[a-z]+)*_m$/, 'm'],
+  [/^pace(?:_min)?_per_km$/, 'min/km'],
+  [/^pace(?:_min)?_per_mi$/, 'min/mi'],
+  [/^vo2(?:_[a-z]+)*$/, 'ml/kg/min'],
+  [/^(?:blood_pressure|systolic|diastolic)$/, 'mmHg'],
+];
+
 function inferredUnit(key: string): string | undefined {
   const lower = key.toLowerCase();
-  if (lower.includes('vo2')) return 'ml/kg/min';
-  if (lower.includes('blood_pressure') || lower.includes('systolic') || lower.includes('diastolic')) return 'mmHg';
-  if (lower.includes('pace') && /per_?km|perkm/.test(lower)) return 'min/km';
-  if (lower.includes('pace') && /per_?mi|permi/.test(lower)) return 'min/mi';
-  if (lower.includes('hrv') || lower.endsWith('_ms') || lower.endsWith('ms')) return 'ms';
-  if (lower.includes('heart_rate') || ['rhr', 'resting_hr', 'avg_hr', 'hr_avg', 'avghr', 'maxhr'].includes(lower) || lower.endsWith('avghr') || lower.endsWith('maxhr')) return 'bpm';
-  if (lower.includes('percent') || lower.includes('percentage') || lower.includes('efficiency')) return '%';
-  if (lower.includes('weight') || lower.endsWith('_kg')) return 'kg';
-  if (lower.includes('calorie') || lower.includes('kcal') || lower.includes('energy')) return 'kcal';
-  if (lower.includes('step')) return 'steps';
-  if (lower.includes('duration') || lower.includes('minute') || lower.endsWith('_min') || lower.endsWith('min')) return 'minutes';
-  if (lower.endsWith('_s') || lower.endsWith('seconds') || lower.includes('second')) return 'seconds';
-  if ((lower.includes('distance') || lower.includes('elevation')) && (lower.endsWith('_m') || lower.endsWith('m'))) return 'm';
+  const exact = KNOWN_EXACT_KEY_UNITS[lower];
+  if (exact) return exact;
+  return KNOWN_KEY_UNIT_PATTERNS.find(([pattern]) => pattern.test(lower))?.[1];
 }
 
 function deepFreeze(value: unknown): void {
