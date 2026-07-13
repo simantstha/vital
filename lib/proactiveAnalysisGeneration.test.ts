@@ -70,19 +70,64 @@ test('defaults to Sonnet model and preserves the environment override', () => {
   assert.equal(proactiveAnalysisModel({ PROACTIVE_ANALYSIS_MODEL: 'custom-model' } as unknown as NodeJS.ProcessEnv), 'custom-model');
 });
 
-test('prompts express the closed token contract without numeric code points', () => {
-  for (const prompt of [PROACTIVE_ANALYSIS_SYSTEM_PROMPT, PROACTIVE_ANALYSIS_REPAIR_PROMPT]) {
+for (const [name, prompt] of [
+  ['system', PROACTIVE_ANALYSIS_SYSTEM_PROMPT],
+  ['repair', PROACTIVE_ANALYSIS_REPAIR_PROMPT],
+] as const) {
+  test(`${name} prompt expresses the closed token contract without numeric code points`, () => {
     assert.doesNotMatch(prompt, /\p{N}/u);
+    assert.match(prompt, /headline, shortInsight, and narrative must each be a non-empty JSON string/i);
+    assert.match(prompt, /observations and nextSteps must each be a JSON array of non-empty JSON strings/i);
+    assert.match(prompt, /no additional keys/i);
     assert.match(prompt, /JSON only/i);
     assert.match(prompt, /observational/i);
     assert.match(prompt, /non-diagnostic/i);
     assert.match(prompt, /copy only supplied evidence tokens exactly/i);
-    assert.match(prompt, /five schema string locations/i);
+    assert.match(prompt, /scalar string or (?:an )?individual array-item string/i);
+    assert.doesNotMatch(prompt, /five schema string locations/i);
     assert.match(prompt, /at most once/i);
     assert.match(prompt, /terminate (?:its|the) clause or string/i);
     for (const rule of ['alter', 'split', 'concatenate', 'nest', 'enumerate', 'manufacture', 'raw number', 'numeric symbol sequence', 'qualitative language', 'unit', 'sign', 'symbol']) {
       assert.match(prompt, new RegExp(rule, 'i'));
     }
+  });
+}
+
+test('synthetic live proactive analysis returns typed grounded output', {
+  skip: process.env.RUN_PROACTIVE_ANALYSIS_LIVE_TEST !== 'true',
+}, async () => {
+  const { default: Anthropic } = await import('@anthropic-ai/sdk');
+  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  const proof = await generateGroundedAnalysis({
+    source,
+    generate: async (request) => {
+      const response = await anthropic.messages.create({
+        model: proactiveAnalysisModel(process.env),
+        max_tokens: 700,
+        system: request.system,
+        messages: [{ role: 'user', content: request.content }],
+      });
+      const textBlocks = response.content.filter((item) => item.type === 'text');
+      assert.equal(textBlocks.length, 1);
+      const raw: unknown = JSON.parse(textBlocks[0].text);
+      assertRecord(raw);
+      for (const key of ['observations', 'nextSteps'] as const) {
+        assert.ok(Array.isArray(raw[key]));
+        assert.ok(raw[key].every((item) => typeof item === 'string' && item.trim()));
+      }
+      return textBlocks[0].text;
+    },
+    report: () => {},
+  });
+
+  const resolved = consumeGroundedAnalysisProof(proof, source);
+  assert.deepEqual(Object.keys(resolved), ['headline', 'shortInsight', 'narrative', 'observations', 'nextSteps']);
+  for (const key of ['headline', 'shortInsight', 'narrative'] as const) {
+    assert.ok(typeof resolved[key] === 'string' && resolved[key].trim());
+  }
+  for (const key of ['observations', 'nextSteps'] as const) {
+    assert.ok(Array.isArray(resolved[key]));
+    assert.ok(resolved[key].every((item) => typeof item === 'string' && item.trim()));
   }
 });
 
