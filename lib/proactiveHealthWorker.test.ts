@@ -49,6 +49,18 @@ test('grounding requires an exact supplied value with the same source unit', () 
   assert.throws(() => validateGroundedAnalysis(analysis('Your HRV was 45/ms.'), { metrics: [{ metric: 'hrv_sdnn', value: 45 }] }), /unit/);
 });
 
+test('grounding distinguishes ordinary prose from complete signed, decimal, and symbol-unit claims', () => {
+  const analysis = (narrative: string) => ({ ...valid, narrative });
+  const unitlessEvidence = { score: 45 };
+
+  assert.doesNotThrow(() => validateGroundedAnalysis(analysis('Your score was 45 today.'), unitlessEvidence));
+  assert.throws(() => validateGroundedAnalysis(analysis('Your score was -45.'), unitlessEvidence), /unsupported numeric claim: -45/);
+  assert.throws(() => validateGroundedAnalysis(analysis('Your score was +45.'), unitlessEvidence), /unsupported numeric claim: \+45/);
+  assert.throws(() => validateGroundedAnalysis(analysis('Your score was .5.'), unitlessEvidence), /unsupported numeric claim: \.5/);
+  assert.throws(() => validateGroundedAnalysis(analysis('Your temperature was 45°C.'), unitlessEvidence), /unsupported unit claim: 45 °c/);
+  assert.throws(() => validateGroundedAnalysis(analysis('Your temperature was 45°C.'), { summary: 'Temperature: 45°C.' }), /unsupported unit claim: 45 °c/);
+});
+
 test('caps exponential retries', () => {
   const now = new Date('2026-07-12T12:00:00Z');
   assert.equal(nextRetryAt(now, 0).toISOString(), '2026-07-12T12:01:00.000Z');
