@@ -1,6 +1,7 @@
-import { desc, eq } from 'drizzle-orm';
+import { and, desc, eq, gte } from 'drizzle-orm';
 import type { db as applicationDb } from '@/db';
 import * as schema from '@/db/schema';
+import { getConversationStart } from '@/lib/brain/conversationWindow';
 import type { SpecialistRegistry } from './registry';
 import type { SpecialistMessageAttribution } from './sessions';
 import type { SpecialistSessionService } from './sessions';
@@ -30,6 +31,14 @@ export class DrizzleCoachHistoryRepository implements CoachHistoryRepository {
   constructor(private readonly database: DrizzleDatabase) {}
 
   async latest(userId: string, limit: number): Promise<RestoredCoachMessage[]> {
+    // Restore only the current conversation — messages before the 4h
+    // inactivity gap or the user's last manual "New chat" reset are excluded
+    // (see lib/brain/conversationWindow.ts).
+    const conversationStart = await getConversationStart(this.database, userId);
+    const where = conversationStart
+      ? and(eq(schema.messages.user_id, userId), gte(schema.messages.timestamp, conversationStart))
+      : eq(schema.messages.user_id, userId);
+
     const rows = await this.database.select({
       id: schema.messages.id,
       role: schema.messages.role,
@@ -40,7 +49,7 @@ export class DrizzleCoachHistoryRepository implements CoachHistoryRepository {
       specialistMetadata: schema.messages.specialist_metadata,
     })
       .from(schema.messages)
-      .where(eq(schema.messages.user_id, userId))
+      .where(where)
       .orderBy(desc(schema.messages.timestamp), desc(schema.messages.id))
       .limit(limit);
     return rows.reverse().map((row) => ({

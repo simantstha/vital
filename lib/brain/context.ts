@@ -22,6 +22,7 @@ import { getCalibration, type Calibration } from './baselines';
 import { queryAllBaselines, metricLabel, type BaselineSnapshot } from './tools';
 import { resolveDietBudget, type DietBudget } from './dietBudget';
 import { getCachedBrief, briefCacheKey, type CachedBrief } from './briefCache';
+import { getConversationStart } from './conversationWindow';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -262,7 +263,7 @@ function buildPromptText(
 
   // ── Recent conversation ────────────────────────────────────────────────────
   if (ctx.recentMessages.length > 0) {
-    lines.push('\n### Recent Conversation (last 20 messages, chronological)');
+    lines.push('\n### Current Conversation (last 20 messages, chronological)');
     for (const m of ctx.recentMessages) {
       const preview =
         m.content.length > 300 ? m.content.slice(0, 300) + '…' : m.content;
@@ -298,6 +299,12 @@ export async function assembleContext(userId: string): Promise<CoachContext> {
     Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
   );
 
+  // Only messages within the current conversation (since the last 4h
+  // inactivity gap or manual "New chat" reset) are eligible for the prompt —
+  // see lib/brain/conversationWindow.ts. Computed up front since the messages
+  // query below depends on it.
+  const conversationStart = await getConversationStart(db, userId, now);
+
   // Run all queries in parallel for minimal latency. Only today's events are
   // fetched here — multi-day history lives behind the data tools (tools.ts),
   // not pre-computed into the prompt (Phase 3 tool-first design rule).
@@ -323,7 +330,11 @@ export async function assembleContext(userId: string): Promise<CoachContext> {
         timestamp: schema.messages.timestamp,
       })
       .from(schema.messages)
-      .where(eq(schema.messages.user_id, userId))
+      .where(
+        conversationStart
+          ? and(eq(schema.messages.user_id, userId), gte(schema.messages.timestamp, conversationStart))
+          : eq(schema.messages.user_id, userId),
+      )
       .orderBy(desc(schema.messages.timestamp))
       .limit(20),
 

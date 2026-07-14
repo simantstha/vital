@@ -210,7 +210,27 @@ final class CoachViewModel: ObservableObject {
     private var openerTask: Task<Void, Never>? = nil
     private var actionTask: Task<Void, Never>? = nil
     private var hasRestoredConversation = false
+    private var lastActivityAt: Date? = nil
     private var transcriptionTask: Task<Void, Never>? = nil
+
+    // Server timestamps come from Date.toISOString(), which includes
+    // fractional seconds — a default ISO8601DateFormatter can't parse those.
+    // Cached (formatters are expensive to allocate); fractional first, plain
+    // fallback. Same pattern as LogsViewModel.
+    private static let isoParser: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+    private static let isoParserNF: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
+
+    private static func parseISODate(_ string: String) -> Date? {
+        isoParser.date(from: string) ?? isoParserNF.date(from: string)
+    }
 
     /// The assistant message id for the in-flight turn. The bubble is inserted
     /// lazily on the first text delta (not up front), so the typing indicator
@@ -259,6 +279,10 @@ final class CoachViewModel: ObservableObject {
     /// this view model backs the CoachIntro onboarding step; nil (the
     /// default) for the regular Coach tab, which is unchanged.
     private let mode: String?
+
+    /// Whether this view model backs the onboarding CoachIntro step. Exposed
+    /// so the view can hide chat-management chrome (e.g. the New chat button).
+    var isOnboarding: Bool { mode != nil }
 
     init(mode: String? = nil, api: any CoachAPIProviding = APIClient.shared) {
         self.mode = mode
@@ -391,6 +415,11 @@ final class CoachViewModel: ObservableObject {
             let restoration = try await api.fetchCoachRestoration()
             if !preserveTranscript {
                 rows = restoration.messages.compactMap(Self.restoredRow)
+                // Extract newest message's timestamp for inactivity tracking
+                if let newestMessage = restoration.messages.last,
+                   let timestamp = Self.parseISODate(newestMessage.timestamp) {
+                    lastActivityAt = timestamp
+                }
             }
             activePersona = restoration.activePersona
             pendingHandoffCard = restoration.pendingCard
@@ -466,6 +495,7 @@ final class CoachViewModel: ObservableObject {
 
         // Append user message
         rows.append(.message(ChatMessage(role: .user, text: trimmed)))
+        lastActivityAt = Date()
 
         // The assistant bubble is created lazily on the first token (see
         // appendText) so the typing indicator shows in its place until then.
@@ -509,6 +539,7 @@ final class CoachViewModel: ObservableObject {
                     }
                 }
                 finishTurn(assistantId, persona: turnPersona)
+                lastActivityAt = Date()
                 if sentByVoice { speaker.finish() }
             } catch {
                 // Surface the error in the assistant bubble. Since the bubble is
@@ -552,6 +583,49 @@ final class CoachViewModel: ObservableObject {
         isTranscribing = false
         transcriber.stop()
         speaker.stop()
+    }
+
+    // MARK: - Manual chat reset
+
+    /// Manually starts a new conversation. Guards against onboarding mode
+    /// and concurrent streams. Calls server reset endpoint, then clears
+    /// transcript and refreshes with a fresh opener.
+    func startNewChat() {
+        guard mode == nil, !isStreaming else { return }
+        openerTask?.cancel()
+        openerTask = nil
+        isOpening = false
+
+        Task {
+            do {
+                try await api.resetCoachConversation()
+                rows = []
+                errorMessage = nil
+                pendingHandoffCard = nil
+                activePersona = .vital
+                hasRestoredConversation = false
+                lastActivityAt = nil
+                recomputeSpecialistState()
+                loadOpener()
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    /// Checks for inactivity and resets the conversation if the 4-hour
+    /// window (14400 seconds) has elapsed. Mirrors CONVERSATION_GAP_MS
+    /// in lib/brain/conversationWindow.ts; server is authoritative.
+    /// This is only the client-side trigger for stale conversations.
+    func refreshIfStale() {
+        guard mode == nil, !isStreaming, openerTask == nil else { return }
+        guard let lastActivity = lastActivityAt else { return }
+        let secondsSinceActivity = Date().timeIntervalSince(lastActivity)
+        guard secondsSinceActivity > 4 * 3600 else { return }
+
+        rows = []
+        hasRestoredConversation = false
+        loadOpener()
     }
 
     // MARK: - Specialist actions and authoritative events

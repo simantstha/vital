@@ -35,6 +35,12 @@ export const users = p.pgTable('users', {
   carbs_target_g:   p.integer('carbs_target_g'),
   fat_target_g:     p.integer('fat_target_g'),
 
+  // Manual "new chat" boundary (lib/brain/conversationWindow.ts). Set to now()
+  // when the user taps "New chat"; messages at/before this timestamp are
+  // excluded from both coach restore (GET /api/coach) and the LLM prompt
+  // context (assembleContext), same as the automatic 4h-inactivity cutoff.
+  chat_reset_at:   p.timestamp('chat_reset_at', { withTimezone: true }),
+
   // ── Sleep goal (redesign v3 Phase 9 — Profile personal details) ────────────
   // Same null-means-default convention as the diet targets above: null → the
   // app-level default is applied in code, not a DB default, so existing rows

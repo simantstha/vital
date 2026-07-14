@@ -546,6 +546,10 @@ private final class FakeCoachAPI: CoachAPIProviding {
         "Fresh opener"
     }
 
+    func resetCoachConversation() async throws {
+        // No-op for testing
+    }
+
     func streamCoach(message: String, imageBase64: String?, mode: String?) -> AsyncThrowingStream<CoachStreamEvent, Error> {
         stream(events: nextMessageEvents, failure: nextMessageFailure)
     }
