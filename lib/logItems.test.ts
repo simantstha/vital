@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   mapDailySleepRow,
+  mapEventToLogItem,
   mapHealthKitWorkout,
   sortLogItemsNewestFirst,
 } from './logItems';
@@ -79,20 +80,53 @@ test('uses an inexact noon anchor for missing and invalid workout start times', 
   }
 });
 
-test('sorting derived items does not alter an existing event item', () => {
-  const eventItem = {
-    id: 'event-1',
+test('maps legacy events without changing identity, formatting, or optional fields', () => {
+  assert.deepEqual(mapEventToLogItem({
+    id: 'meal-event',
+    type: 'meal_logged',
+    timestamp: new Date('2026-07-14T20:00:00.000Z'),
+    payload: {
+      description: 'Dinner',
+      kcal: 700.4,
+      c: 50,
+      p: 40,
+      imageThumb: 'https://example.com/meal.jpg',
+    },
+  }), {
+    id: 'meal-event',
     type: 'meal_logged',
     timestamp: '2026-07-14T20:00:00.000Z',
     title: 'Dinner · 700 kcal',
     subtitle: '50g carbs · 40g protein',
+    imageThumb: 'https://example.com/meal.jpg',
     kcal: 700,
-  };
+  });
 
-  const sorted = sortLogItemsNewestFirst([
-    eventItem,
-    { id: 'sleep', type: 'sleep_session', timestamp: '2026-07-14T12:00:00.000Z' },
-  ]);
+  assert.deepEqual(mapEventToLogItem({
+    id: 'workout-event',
+    type: 'workout_completed',
+    timestamp: new Date('2026-07-14T18:00:00.000Z'),
+    payload: { type: 'running', distance_m: 5_250, calories: 410, avg_hr: 145 },
+  }), {
+    id: 'workout-event',
+    type: 'workout_completed',
+    timestamp: '2026-07-14T18:00:00.000Z',
+    title: 'Running — 5.3 km',
+    subtitle: '~410 kcal · avg 145 bpm',
+    km: 5.25,
+  });
 
-  assert.deepEqual(sorted[0], eventItem);
+  assert.deepEqual(mapEventToLogItem({
+    id: 'sleep-event',
+    type: 'sleep_session',
+    timestamp: new Date('2026-07-14T13:00:00.000Z'),
+    payload: { duration_s: 28_800, efficiency: 92, rhr: 52 },
+  }), {
+    id: 'sleep-event',
+    type: 'sleep_session',
+    timestamp: '2026-07-14T13:00:00.000Z',
+    title: 'Sleep: 8h 00m',
+    subtitle: '92% efficiency · RHR 52 bpm',
+    sleepMs: 28_800_000,
+  });
 });
