@@ -9,6 +9,9 @@ struct LogDisplayItem: Identifiable {
     let title: String
     let subtitle: String
     let date: Date
+    /// Source calendar date for day-level data, preferred over re-bucketing
+    /// the sortable timestamp in the device's current timezone.
+    let dayKey: String?
     let sfSymbol: String
     let thumbnail: UIImage?
     /// Trailing meta label — absolute local time ("7:41 PM") for most types,
@@ -59,13 +62,6 @@ struct DietDayData {
 /// `TrendsViewModel.swift`.
 enum LogsPagerSummary {
 
-    private static let dayKeyFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "yyyy-MM-dd"
-        f.locale = Locale(identifier: "en_US_POSIX")
-        return f
-    }()
-
     private static let weekdayFormatter: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "EEEE"
@@ -87,6 +83,20 @@ enum LogsPagerSummary {
         return f
     }()
 
+    private static func dayKey(for date: Date, calendar: Calendar) -> String {
+        let components = calendar.dateComponents([.year, .month, .day], from: date)
+        guard let year = components.year, let month = components.month, let day = components.day else {
+            return ""
+        }
+        return String(format: "%04d-%02d-%02d", year, month, day)
+    }
+
+    private static func format(_ date: Date, using formatter: DateFormatter, timeZone: TimeZone) -> String {
+        let localized = formatter.copy() as! DateFormatter
+        localized.timeZone = timeZone
+        return localized.string(from: date)
+    }
+
     // MARK: Day label
 
     /// "Today" for offset 0, "Yesterday" for offset 1, else the full local
@@ -97,11 +107,9 @@ enum LogsPagerSummary {
         case 0:  return "Today"
         case 1:  return "Yesterday"
         default:
-            var cal = calendar
-            cal.timeZone = TimeZone.current
-            let startOfToday = cal.startOfDay(for: today)
-            guard let day = cal.date(byAdding: .day, value: -offset, to: startOfToday) else { return "" }
-            return weekdayFormatter.string(from: day)
+            let startOfToday = calendar.startOfDay(for: today)
+            guard let day = calendar.date(byAdding: .day, value: -offset, to: startOfToday) else { return "" }
+            return format(day, using: weekdayFormatter, timeZone: calendar.timeZone)
         }
     }
 
@@ -117,26 +125,24 @@ enum LogsPagerSummary {
         today: Date,
         calendar: Calendar = .current
     ) -> [LogDay] {
-        var cal = calendar
-        cal.timeZone = TimeZone.current
+        let cal = calendar
         let startOfToday = cal.startOfDay(for: today)
 
         var byDayKey: [String: [LogDisplayItem]] = [:]
         for item in items {
-            let dayStart = cal.startOfDay(for: item.date)
-            let key = dayKeyFormatter.string(from: dayStart)
+            let key = item.dayKey ?? dayKey(for: item.date, calendar: cal)
             byDayKey[key, default: []].append(item)
         }
 
         var days: [LogDay] = []
         for offset in 0...6 {
             guard let day = cal.date(byAdding: .day, value: -offset, to: startOfToday) else { continue }
-            let key = dayKeyFormatter.string(from: day)
+            let key = dayKey(for: day, calendar: cal)
             let dayItems = (byDayKey[key] ?? []).sorted { $0.date > $1.date }
             days.append(LogDay(
                 dayKey: key,
                 label: dayLabel(offset: offset, today: today, calendar: cal),
-                dateLabel: dateLabelFormatter.string(from: day),
+                dateLabel: format(day, using: dateLabelFormatter, timeZone: cal.timeZone),
                 items: dayItems
             ))
         }
@@ -145,12 +151,15 @@ enum LogsPagerSummary {
 
     // MARK: Meta label
 
-    /// `sleep_session` / `hrv_reading` are auto-synced from HealthKit with no
-    /// meaningful user-facing log time, so "auto" replaces the clock time.
-    /// Everything else gets the absolute local time ("7:41 PM").
-    static func metaLabel(type: String, date: Date) -> String {
+    /// `sleep_session` / `hrv_reading` are always labeled "auto". Items with
+    /// an explicitly inexact timestamp are labeled "Synced"; older responses
+    /// without the precision field retain the absolute local time behavior.
+    static func metaLabel(type: String, date: Date, hasExactTime: Bool? = nil) -> String {
         if type == "sleep_session" || type == "hrv_reading" {
             return "auto"
+        }
+        if hasExactTime == false {
+            return "Synced"
         }
         return timeFormatter.string(from: date)
     }
@@ -270,9 +279,14 @@ final class LogsViewModel: ObservableObject {
                     title:     item.title,
                     subtitle:  item.subtitle,
                     date:      date,
+                    dayKey:    item.dayKey,
                     sfSymbol:  symbol(for: item.type),
                     thumbnail: thumbnail,
-                    meta:      LogsPagerSummary.metaLabel(type: item.type, date: date),
+                    meta:      LogsPagerSummary.metaLabel(
+                        type: item.type,
+                        date: date,
+                        hasExactTime: item.hasExactTime
+                    ),
                     kcal:      item.kcal,
                     km:        item.km,
                     sleepMs:   item.sleepMs

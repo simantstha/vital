@@ -1102,6 +1102,12 @@ struct LogItem: Decodable, Identifiable {
     let id: String
     let type: String
     let timestamp: String
+    /// Whether `timestamp` represents the item's exact occurrence time.
+    /// Absent in older API responses, which continue to decode as `nil`.
+    let hasExactTime: Bool?
+    /// Source calendar day for day-level HealthKit data. Additive and absent
+    /// from older API responses and exact-time event items.
+    let dayKey: String?
     let title: String
     let subtitle: String
     let imageThumb: String?

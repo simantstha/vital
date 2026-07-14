@@ -16,6 +16,8 @@
  *     kcal?:       number,  // meal_logged only — kcal eaten (not burned)
  *     km?:         number,  // workout_completed only — distance, 2dp
  *     sleepMs?:    number,  // sleep_session only — duration in ms
+ *     hasExactTime?: boolean, // HealthKit-derived items only
+ *     dayKey?:     string,  // day-level HealthKit source date (yyyy-MM-dd)
  *   }]
  * }
  * (redesign-v3 Phase 6: kcal/km/sleepMs added so the Logs day-pager can
@@ -28,110 +30,17 @@ import { NextResponse } from 'next/server';
 import { db, schema } from '@/db';
 import { eq, and, gte, inArray, desc } from 'drizzle-orm';
 import { getUserIdFromRequest } from '@/lib/auth';
-import { queryWorkouts } from '@/lib/brain/tools';
+import { queryMetricPoints, queryWorkouts } from '@/lib/brain/tools';
+import {
+  mapDailySleepRow,
+  mapEventToLogItem,
+  mapHealthKitWorkout,
+  sortLogItemsNewestFirst,
+} from '@/lib/logItems';
 
 export const dynamic = 'force-dynamic';
 
-// ── Payload helpers ─────────────────────────────────────────────────────────
-
-function pl(payload: unknown): Record<string, unknown> {
-  return payload !== null && typeof payload === 'object' && !Array.isArray(payload)
-    ? (payload as Record<string, unknown>)
-    : {};
-}
-
-function num(v: unknown): number | undefined {
-  return typeof v === 'number' ? v : undefined;
-}
-
-function str(v: unknown): string | undefined {
-  return typeof v === 'string' ? v : undefined;
-}
-
-function msToHm(ms: number): string {
-  const h = Math.floor(ms / 3_600_000);
-  const m = Math.floor((ms % 3_600_000) / 60_000);
-  return `${h}h ${m < 10 ? '0' : ''}${m}m`;
-}
-
 const LOG_TYPES = ['meal_logged', 'workout_completed', 'weight_logged', 'hrv_reading', 'sleep_session'];
-
-// ── Format helpers per event type ───────────────────────────────────────────
-
-function formatTitle(type: string, payload: unknown): string {
-  const p = pl(payload);
-  switch (type) {
-    case 'meal_logged': {
-      const desc = str(p.description) ?? str(p.name) ?? str(p.items) ?? 'Meal';
-      const kcal = num(p.kcal) ?? num(p.calories);
-      return kcal != null ? `${desc} · ${Math.round(kcal)} kcal` : desc;
-    }
-    case 'workout_completed': {
-      const wtype = str(p.type) ?? str(p.workout_type) ?? 'Workout';
-      const label = wtype.charAt(0).toUpperCase() + wtype.slice(1);
-      const distM = num(p.distance_m);
-      const durS  = num(p.duration_s);
-      if (distM != null) return `${label} — ${(distM / 1000).toFixed(1)} km`;
-      if (durS  != null) return `${label} — ${Math.round(durS / 60)} min`;
-      return label;
-    }
-    case 'weight_logged': {
-      let w = num(p.value) ?? num(p.weight);
-      if (w == null) return 'Weight logged';
-      const unit = str(p.unit);
-      if (unit === 'lbs' || unit === 'lb') w *= 0.453592;
-      return `Weight: ${(Math.round(w * 10) / 10).toFixed(1)} kg`;
-    }
-    case 'hrv_reading': {
-      const v = num(p.value) ?? num(p.hrv) ?? num(p.valueMs) ?? num(p.sdnn);
-      return v != null ? `HRV: ${Math.round(v)} ms` : 'HRV reading';
-    }
-    case 'sleep_session': {
-      const durMs = num(p.duration_ms) ?? (num(p.duration_s) != null ? num(p.duration_s)! * 1_000 : null);
-      return durMs != null ? `Sleep: ${msToHm(durMs)}` : 'Sleep logged';
-    }
-    default:
-      return type;
-  }
-}
-
-function formatSubtitle(type: string, payload: unknown): string {
-  const p = pl(payload);
-  switch (type) {
-    case 'meal_logged': {
-      const parts: string[] = [];
-      const c = num(p.c) ?? num(p.carbs);
-      const protein = num(p.p) ?? num(p.protein);
-      const f = num(p.f) ?? num(p.fat);
-      if (c != null)       parts.push(`${Math.round(c)}g carbs`);
-      if (protein != null) parts.push(`${Math.round(protein)}g protein`);
-      if (f != null)       parts.push(`${Math.round(f)}g fat`);
-      return parts.join(' · ') || 'Nutrition logged';
-    }
-    case 'workout_completed': {
-      const parts: string[] = [];
-      const calories = num(p.calories);
-      const avgHr    = num(p.avg_hr) ?? num(p.average_heart_rate);
-      if (calories != null) parts.push(`~${Math.round(calories)} kcal`);
-      if (avgHr != null)    parts.push(`avg ${Math.round(avgHr)} bpm`);
-      return parts.join(' · ') || 'Workout logged';
-    }
-    case 'weight_logged':
-      return 'Body weight';
-    case 'hrv_reading':
-      return 'Heart rate variability';
-    case 'sleep_session': {
-      const eff = num(p.efficiency) ?? num(p.sleep_efficiency);
-      const rhr = num(p.rhr) ?? num(p.resting_heart_rate);
-      const parts: string[] = [];
-      if (eff != null) parts.push(`${Math.round(eff)}% efficiency`);
-      if (rhr != null) parts.push(`RHR ${Math.round(rhr)} bpm`);
-      return parts.join(' · ') || 'Sleep tracked';
-    }
-    default:
-      return '';
-  }
-}
 
 // ── Route handler ───────────────────────────────────────────────────────────
 
@@ -163,61 +72,19 @@ export async function GET(request: Request): Promise<NextResponse> {
     .orderBy(desc(schema.events.timestamp))
     .limit(200);
 
-  const eventItems = events.map(e => {
-    const p = pl(e.payload);
-    const thumb = str(p.imageThumb);
+  const eventItems = events.map(mapEventToLogItem);
 
-    // meal_logged — kcal eaten (same fields formatTitle reads).
-    const mealKcal = e.type === 'meal_logged' ? (num(p.kcal) ?? num(p.calories)) : undefined;
+  // HealthKit workouts and sleep are synced into daily_metrics rather than the
+  // events ledger. Workout startTime is an exact instant when available; daily
+  // sleep remains day-level data attributed to its existing wake date.
+  const [workouts, sleepRows] = await Promise.all([
+    queryWorkouts(userId, days),
+    queryMetricPoints(userId, 'sleep_minutes', days),
+  ]);
+  const workoutItems = workouts.map(mapHealthKitWorkout);
+  const sleepItems = sleepRows.map(mapDailySleepRow);
 
-    // workout_completed — distance in km, from distance_m (meters).
-    const distM = e.type === 'workout_completed' ? num(p.distance_m) : undefined;
-    const workoutKm = distM != null ? Math.round((distM / 1000) * 100) / 100 : undefined;
-
-    // sleep_session — duration in ms.
-    const sleepMs = e.type === 'sleep_session'
-      ? (num(p.duration_ms) ?? (num(p.duration_s) != null ? num(p.duration_s)! * 1_000 : undefined))
-      : undefined;
-
-    return {
-      id:        e.id,
-      type:      e.type,
-      timestamp: e.timestamp.toISOString(),
-      title:     formatTitle(e.type, e.payload),
-      subtitle:  formatSubtitle(e.type, e.payload),
-      ...(thumb ? { imageThumb: thumb } : {}),
-      ...(mealKcal != null ? { kcal: Math.round(mealKcal) } : {}),
-      ...(workoutKm != null ? { km: workoutKm } : {}),
-      ...(sleepMs != null ? { sleepMs } : {}),
-    };
-  });
-
-  // Workouts synced from HealthKit live in daily_metrics (not events), so the
-  // events query above never sees them. Surface them here. No exact start time
-  // is stored, so anchor to noon UTC on the workout's day for stable ordering.
-  const workouts = await queryWorkouts(userId, days);
-  const workoutItems = workouts.map((w, i) => {
-    const wtype = str(w.type) ?? 'Workout';
-    const label = wtype.charAt(0).toUpperCase() + wtype.slice(1);
-    const durationMin = num(w.durationMin);
-    const kcal = num(w.kcal);
-    // distance_m (meters) wins over distanceKm (already km) — same fallback
-    // precedent as lib/brain/dietBudget.ts's diet-budget rollup.
-    const distM = num(w.distance_m);
-    const km = distM != null ? distM / 1000 : num(w.distanceKm);
-    return {
-      id:        str(w.hkUuid) ?? `${w.date}-workout-${i}`,
-      type:      'workout_completed',
-      timestamp: `${w.date}T12:00:00.000Z`,
-      title:     durationMin != null ? `${label} — ${Math.round(durationMin)} min` : label,
-      subtitle:  kcal != null ? `~${Math.round(kcal)} kcal` : 'Workout logged',
-      ...(km != null ? { km: Math.round(km * 100) / 100 } : {}),
-    };
-  });
-
-  const items = [...eventItems, ...workoutItems].sort((a, b) =>
-    b.timestamp.localeCompare(a.timestamp),
-  );
+  const items = sortLogItemsNewestFirst([...eventItems, ...workoutItems, ...sleepItems]);
 
   return NextResponse.json({ items });
 }
