@@ -40,6 +40,13 @@ export const users = p.pgTable('users', {
   // excluded from both coach restore (GET /api/coach) and the LLM prompt
   // context (assembleContext), same as the automatic 4h-inactivity cutoff.
   chat_reset_at:   p.timestamp('chat_reset_at', { withTimezone: true }),
+
+  // ── Sleep goal (redesign v3 Phase 9 — Profile personal details) ────────────
+  // Same null-means-default convention as the diet targets above: null → the
+  // app-level default is applied in code, not a DB default, so existing rows
+  // pick up new defaults automatically if the default ever changes.
+  sleep_goal_minutes:  p.integer('sleep_goal_minutes'),                        // null → 480 (8h)
+  lights_out_minutes:  p.integer('lights_out_minutes'),                        // null → 1350 (22:30)
 });
 
 // ─── events (append-only) ────────────────────────────────────────────────────

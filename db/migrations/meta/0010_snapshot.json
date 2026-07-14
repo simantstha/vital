@@ -1,6 +1,6 @@
 {
-  "id": "3a9b6deb-d764-41d7-bb36-90995f5a2581",
-  "prevId": "90606038-670e-4b0c-82ce-5aaaeaea5404",
+  "id": "b1819203-d81b-463f-8b1e-4fd6024a87ee",
+  "prevId": "3a9b6deb-d764-41d7-bb36-90995f5a2581",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -2207,6 +2207,12 @@
         "fat_target_g": {
           "name": "fat_target_g",
           "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "chat_reset_at": {
+          "name": "chat_reset_at",
+          "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
         },

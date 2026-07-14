@@ -11,6 +11,11 @@ struct PlanTimelineView: View {
     var onLogItem: (PlanItem) -> Void
     /// "+" button tap — opens the add-item sheet.
     var onOpenAdd: () -> Void
+    /// Non-nil only when calendar authorization is undetermined — shows a
+    /// tappable "Sync your calendar" row in place of the caption. Pass `nil`
+    /// once the user has answered the system prompt (granted or denied) so
+    /// the footer never nags again (Phase 8).
+    var onSyncCalendar: (() -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
@@ -36,7 +41,11 @@ struct PlanTimelineView: View {
                 }
             }
 
-            caption
+            if let onSyncCalendar {
+                syncCalendarRow(action: onSyncCalendar)
+            } else {
+                caption
+            }
         }
     }
 
@@ -84,6 +93,22 @@ struct PlanTimelineView: View {
         .font(.system(size: 12))
         .foregroundStyle(Theme.Colors.textTertiary)
         .padding(.horizontal, Theme.Spacing.xxs)
+    }
+
+    /// Tappable footer row shown instead of `caption` while calendar
+    /// authorization is undetermined — see `onSyncCalendar`.
+    private func syncCalendarRow(action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: Theme.Spacing.xs) {
+                Image(systemName: "calendar.badge.plus")
+                    .font(.system(size: 11, weight: .semibold))
+                Text("Sync your calendar")
+                    .font(.system(size: 12, weight: .semibold))
+            }
+            .foregroundStyle(Theme.Colors.accentContent)
+            .padding(.horizontal, Theme.Spacing.xxs)
+        }
+        .buttonStyle(.plain)
     }
 }
 

@@ -1,6 +1,6 @@
 # Vital app redesign — "Today Screen v3" implementation plan
 
-**Status: Phases 0–6 done** · Branch: `feat/redesign-v3` (off `main`)
+**Status: Phases 0–9 done (redesign complete + parity pass)** · Branch: `feat/redesign-v3` (off `main`)
 Source of truth for the design: Claude Design project
 <https://claude.ai/design/p/67904bc9-0509-4bb9-b4bf-2219bc3478fb?file=Today+Screen+v3.html>
 (file `Today Screen v3.html` — a full 5-tab React/Tailwind mock of the app).
@@ -158,9 +158,9 @@ Rules for every phase:
       primary source; `setStatus`/`removeItem`/`addItem` are now optimistic
       server mutations (mutate locally, fire the API call, revert + toast
       "Couldn't save — try again" on failure).
-- [ ] Calendar events are **not** stored server-side (privacy): Phase 8 merges
+- [x] Calendar events are **not** stored server-side (privacy): Phase 8 merges
       EventKit client-side. Design the VM merge point now (plan = server
-      items ∪ calendar items sorted by time). *(Still open — Phase 8.)*
+      items ∪ calendar items sorted by time). *(Done — Phase 8.)*
 - [x] Acceptance: statuses survive relaunch (server-tracked); backend
       lint/type/build green; iOS 13/13 tests green. Note for release:
       migration runs automatically in the release workflow (`drizzle-kit
@@ -235,11 +235,11 @@ commits beyond main; ElevenLabs TTS already works via `/api/tts`.)
 - [x] Entries list in new card idiom + dashed add button (today only).
 
 ### Phase 7 — Profile & Coach restyle
-**Owner: unclaimed · Suggested agent: Haiku · iOS · needs Phase 0**
+**Owner: DONE (2026-07-13, Sonnet subagent) · iOS only**
 
-- [ ] Coach: bubble/composer/chips restyle only (§1 table). Don't touch
+- [x] Coach: bubble/composer/chips restyle only (§1 table). Don't touch
       streaming logic.
-- [ ] Profile: avatar header card, calibration % banner, settings rows w/
+- [x] Profile: avatar header card, calibration % banner, settings rows w/
       icon badges + chevrons; Goal detail gets "Coach recommends" limeSoft
       card + "Use this goal" + "What this means" facts (static per-goal copy
       is fine, mirroring mock's `GOAL_DETAILS`); Devices screen (Apple Watch
@@ -247,12 +247,47 @@ commits beyond main; ElevenLabs TTS already works via `/api/tts`.)
       log-out row in red.
 
 ### Phase 8 (stretch) — Calendar merge
-**Owner: unclaimed · Suggested agent: Sonnet · iOS · needs Phase 2**
+**Owner: DONE (2026-07-13, Sonnet subagent) · iOS · needs Phase 2**
 
-- [ ] EventKit read-only permission (Info.plist string via
+- [x] EventKit read-only permission (Info.plist string via
       `ios/Vital/project.yml`), fetch today's events, merge into the timeline
       client-side (neutral icon badge + "Calendar" tag, no Log button, not
       persisted server-side).
+
+### Phase 9 — Design-parity gap close (Profile pages)
+**Owner: DONE (2026-07-13) · full-stack · audit vs the mock's six Profile detail pages**
+
+- [x] Schema: `users.sleep_goal_minutes` / `users.lights_out_minutes`
+      (nullable ints, null → 480/1350 app-side defaults; migration
+      `db/migrations/0009_perpetual_vivisector.sql`, additive-only).
+- [x] `PATCH /api/profile`: all-optional `{ name, age, heightCm, weightKg,
+      sleepGoalMinutes, lightsOutMinutes }` with range validation; name →
+      `users.name`; age/height/weight → section-aware Identity-line patch in
+      `core-profile.md` (`lib/profileDetails.updateIdentityLines` — silent
+      no-op when not onboarded); weight ALSO logged via `logWeight` for
+      history; lights-out change also updates today's still-pending "Lights
+      out" plan row in place.
+- [x] `GET /api/profile` gains `createdAt` + effective `sleepGoalMinutes` /
+      `lightsOutMinutes`.
+- [x] `/api/plan` seed: hardcoded 22:30 / "8h target" replaced by the user's
+      columns (same single user query) via shared `formatSleepSubtitle`.
+- [x] iOS `APIClient.updateProfile(...)`; `ProfileResponse` gains
+      `createdAt`/`sleepGoalMinutes`/`lightsOutMinutes`/`calibration`
+      (deleting the Phase 7 `fetchTrends("rhr")` calibration workaround).
+- [x] Profile main page → mock parity: "Member since MMM yyyy" under the
+      name, calibration banner with progress bar, ONE grouped six-row card
+      (Personal details / Goal / Daily budget / Sleep goal / Devices /
+      Notifications; neutral 36pt icon badges, no section headers), Activity
+      grid kept (deliberate, real data), version footer "Vital · vX.Y.Z".
+- [x] New `PersonalDetailsView` (pushed): editable Name/Age/Height/Weight,
+      one PATCH of only changed fields on Done, then refresh + pop.
+- [x] New `SleepGoalView` (pushed): 7.5h/8h/8.5h pills + lights-out time
+      picker, optimistic immediate persistence.
+- [x] New `GoalDetailView` (pushed): Coach-recommends card, four-goal radio
+      list (existing `DietBudgetViewModel.setGoal` plumbing), "What this
+      means" facts, "Talk it through with your coach" → `switchToCoachTab`
+      closure threaded from `RootTabView`; goal UI removed from
+      `DietBudgetEditorView` (numbers only now).
 
 ---
 
@@ -584,3 +619,185 @@ commits beyond main; ElevenLabs TTS already works via `/api/tts`.)
   convention (TrendsSummary, LogsPagerSummary); `DietBudgetCardView`'s
   tappable-vs-readonly split may be reusable; no skeleton state while a
   day's diet data loads — the card simply appears when the fetch resolves.
+- 2026-07-13: Phase 7 done (Sonnet subagent) — Profile & Coach restyle,
+  branch `feat/redesign-v3-profile-coach`, presentation-only, iOS only (no
+  backend changes, no `CoachViewModel.swift`/`Theme.swift` changes).
+  **Coach** (`Features/Coach/CoachView.swift` only): the default "vital"
+  persona's `bubbleSurface` case now fills `Theme.Colors.accentSoft` at
+  `Theme.Radius.xl`; user bubbles moved off lime onto
+  `Theme.Colors.card` + `cardShadow` (radius 1, y 1) at the same `xl` radius,
+  with `foregroundStyle` unified to `textPrimary` for both roles (was
+  `onAccent` for user); specialist bubbles are untouched (still `.lg` radius,
+  glass+tint, unchanged branch). New private `CoachAvatarBadge` (30pt lime
+  circle, `onAccent` `message.fill`) renders leading every assistant bubble
+  whose `resolvedPresentation.bubbleLabel == nil` (i.e. vital, not a
+  specialist) — `MessageBubbleView`'s outer `HStack` gained
+  `alignment: .top` so the avatar sits top-aligned against multi-line
+  bubbles; this one component change covers both plain `ChatMessage` rows and
+  streaming `AssistantTurnView` bubbles since both route through
+  `MessageBubbleView`. Composer: the bare `HStack` + `Divider` became one
+  `Capsule().fill(Theme.Colors.card)` + `glassBorder` hairline + `cardShadow`
+  wrapping the text field/mic/send row (mic and send buttons, their
+  three-state logic, and `stopSpeakingRow`/`micPermissionHint` are otherwise
+  untouched — their backgrounds were left as-is, judged not "trivial enough"
+  to restyle without risking the denial-hint/speaking-row layout). New
+  suggestion-chips row (reuses `Chip(isAccent: true)`) sits directly above
+  the composer, gated on `showSuggestionChips`: `!vm.rows.contains` a
+  `.message` row with `role == .user` — the cheapest correct read of
+  "hasn't sent anything yet this session" since `rows` is already the
+  transcript's source of truth; tapping a chip sets `vm.input` and calls
+  `vm.send()` exactly like manual entry, disabled while `vm.isStreaming`.
+  Typing indicator's `glassEffect` became a flat `accentSoft` rounded-24 fill
+  to match the new vital bubble. **Profile**: `ProfileView` now wraps its
+  `ScrollView` in a `NavigationStack` with `.toolbar(.hidden, for:
+  .navigationBar)` (needed for the new Devices push) and a leading
+  `screenTitleStyle()` "Profile" header, matching Trends'/Logs' idiom.
+  Avatar header moved into a `VitalCard` with a flat `Theme.Colors.accent`
+  circle (dropped the old gradient + glow — v3 is flat per spec); the
+  overflow `Menu` stays anchored top-trailing via the same `ZStack(alignment:
+  .topTrailing)` shape, just nudged in slightly so it doesn't crowd the
+  card's rounded corner. Calibration banner copies `TrendsView`'s
+  `calibratingBanner` shape/colors with Profile-specific copy
+  ("Calibrating — N% · Vital is learning your baselines."), shown only when
+  `vm.calibration?.status == "calibrating"`. `ProfileViewModel` gained
+  `calibration: CalibrationStatus?` (loaded non-fatally in a new
+  `loadCalibration()`, called from `load()` alongside the existing
+  `loadBudget()`) and `calibrationPercent: Int`
+  (`min(1, minDataDays(hrv_sdnn, resting_hr, sleep_minutes) / 14)`, same rule
+  as `TodayViewModel.applyTodayResponse`). **Decision, per the spec's
+  explicit instruction**: calibration is fetched via
+  `apiClient.fetchTrends(metric: "rhr", days: 7)` (mirroring
+  `TrendsViewModel.loadSummary()`) rather than decoding the `calibration`
+  field the backend's `/api/profile` route already returns in its JSON body
+  — `ProfileResponse` doesn't decode that field today, and the brief called
+  out the Trends-mirroring approach by name, so `APIClient.swift` needed zero
+  changes. Settings rows (Daily Budget, Reminders) and the two stat grids
+  (Profile Details, Activity) migrated `GlassCard`→`VitalCard`, ad-hoc icon
+  `ZStack`s → `IconBadge(style: .soft)`, chevrons → `textTertiary`. New
+  **Devices row** (`VitalCard` + `IconBadge("applewatch")`, subtitle "Apple
+  Watch · Connected"/"· Not connected") is a `NavigationLink` to new
+  `Features/Profile/DevicesView.swift`: canvas background, `screenTitleStyle()`
+  "Devices" title, one `VitalCard` per device. **Deviation**: the spec's
+  "Apple Watch / Apple Health: status from `vm.integrations`" is rendered as
+  a single "Apple Watch" row (matching the mock's exact device name) backed
+  by `vm.integrations` — the backend's `/api/profile` route only returns one
+  combined `{ name: "Apple Health", status }` integration (verified in
+  `app/api/profile/route.ts`), which is also the channel Apple Watch data
+  flows through, so there's no separate watch-specific signal to read;
+  showing two rows both claiming status from the same one signal would have
+  been misleading. Whoop/Oura/Garmin are non-functional `VitalCard` stubs
+  with a `textSecondary` "Not connected" line and a trailing `accentSoft`
+  "Connect" pill; tapping one flips a local `@State private var tappedStub:
+  String?` to append an inline "· Coming soon" to that row's subtitle only —
+  never a fake connected state. Sign-out row migrated to `VitalCard` with a
+  `Theme.Colors.alert.opacity(0.12))`-tinted icon square (kept the existing
+  hand-rolled `ZStack` rather than `IconBadge`, which has no red/alert style
+  variant — judged as the "red-tinted variant if trivial" the spec allowed).
+  **Goal detail** (`DietBudgetEditorView`, auto-mode branch only): migrated
+  `heroCard`/`macroRow`/`goalCard` `GlassCard`→`VitalCard`; added a
+  `coachRecommendsCard` (`accentSoft` rounded-24, "COACH RECOMMENDS" label,
+  "Endurance" + the marathon-training line from the brief verbatim, "Use
+  this goal" lime pill → `vm.setGoal("endurance")`), hidden via `if vm.goal
+  != "endurance"`; added a `whatThisMeansCard` (`VitalCard`, "WHAT THIS
+  MEANS" label, 3 bullet facts per goal from a new static `private static
+  let goalFacts: [String: [String]]` keyed by all four goal ids, each with a
+  small `accentContent` checkmark icon) reading `vm.goal` live so it updates
+  when the menu picker changes goals. Verify:
+  `cd ios/Vital && xcodegen generate` (picked up the new `DevicesView.swift`
+  via the existing `Sources/` glob, no `project.yml` edit needed);
+  `xcodebuild ... build` → **BUILD SUCCEEDED**; `xcodebuild ... test` →
+  **TEST SUCCEEDED, 85/85** (this branch had picked up more tests from `main`
+  since Phase 6's 73 — `CoachSpecialistViewTests`/`ProactiveNotificationsTests`
+  etc. from unrelated merged PRs; zero new tests added this phase, consistent
+  with prior presentation-only phases). Notes for Phase 8: unrelated
+  (EventKit/calendar merge on Today) — no overlap with this phase's files.
+- 2026-07-13: Phase 8 done (Sonnet subagent) — calendar merge, iOS only, on
+  `feat/redesign-v3-calendar`. `ios/Vital/project.yml`: added
+  `NSCalendarsFullAccessUsageDescription`. New
+  `Features/Today/CalendarEventsProvider.swift`: pure `CalendarPlanMapping`
+  enum (`planItemFields`/`minutesFromMidnight`/`subtitle`/`merge` — no
+  EventKit types, unit-testable) + `@MainActor CalendarEventsProvider` class
+  wrapping one `EKEventStore` (`authorizationStatus`, `requestAccess()` via
+  iOS 17+ `requestFullAccessToEvents()`, `fetchTodayPlanItems(now:)` —
+  predicate-scoped to the local calendar day, skips all-day and
+  cheaply-detected declined events, maps to `PlanItem(id: "cal-" +
+  eventIdentifier, source: .calendar, kind: .other, sfSymbol: "calendar")`).
+  `TodayViewModel`: both `applyPlanResult` paths (server `/api/plan` and the
+  Phase 1 fallback) now funnel through one new `mergeAndSetPlanItems(
+  serverItems:)` — fetches calendar items (if authorized), drops
+  session-local `hiddenCalendarItemIDs`, unions + sorts via
+  `CalendarPlanMapping.merge`, then runs the existing `computeStatuses`;
+  publishes `calendarSyncState` (`.notDetermined`/`.authorized`/`.denied`)
+  for the view. `setStatus`/`removeItem` guard on `item.source == .calendar`:
+  status changes mutate `planItems` only (no `APIClient` call); remove
+  inserts the id into `hiddenCalendarItemIDs` and drops it locally — no
+  `cal-…` id ever reaches `APIClient`. New `syncCalendar()` is the only
+  caller of `requestAccess()`, itself only invoked from an explicit user tap
+  (never auto-requested). `PlanTimelineView` gained an optional
+  `onSyncCalendar: (() -> Void)?`: when non-nil (authorization
+  `.notDetermined`) it swaps the footer caption for a tappable "Sync your
+  calendar" row (`calendar.badge.plus` icon, `accentContent` text); nil
+  (authorized or denied/restricted) shows the existing plain caption
+  unchanged in both cases, per spec — deliberately not distinguishing denied
+  from authorized copy. `TodayView` wires `onSyncCalendar` from
+  `vm.calendarSyncState`. New `Tests/CalendarPlanMappingTests.swift` (13
+  tests): timed vs all-day mapping, minutes-from-midnight, subtitle
+  formatting (short/long/empty calendar name, noon-boundary AM/PM), and
+  merge (sort, hidden-id filtering, no duplication, empty inputs). No
+  backend changes; no calendar data constructed anywhere near `APIClient` —
+  grepped the diff to confirm. Deviation: `derivePlanItems` (Phase 1
+  fallback) changed from a `planItems`-mutating `Void` function to a pure
+  `-> [PlanItem]` return so both paths funnel through the single new merge
+  point, exactly as the spec asked ("factor the merge so it's applied after
+  either source resolves") — its own internal `computeStatuses` call was
+  removed since `mergeAndSetPlanItems` now runs it once on the merged set.
+  Verify: `xcodegen generate` regenerated `Vital.xcodeproj`/`Info.plist`
+  (both gitignored/tracked-generated respectively) picking up the new file
+  and Info.plist key automatically (glob-based `Sources/` + `project.yml`
+  properties, no other `project.yml` change needed); `xcodebuild ... build`
+  → **BUILD SUCCEEDED**; `xcodebuild ... test` → **TEST SUCCEEDED, 98/98**
+  (85 existing + 13 new `CalendarPlanMappingTests`, 0 failures). Simulator
+  has no calendar data so `CalendarEventsProvider` itself only exercised via
+  build; all EventKit-adjacent logic that matters is covered through the
+  pure `CalendarPlanMapping` unit tests instead, as the spec anticipated.
+  Redesign v3 is now feature-complete through the stretch phase (0–8).
+- 2026-07-13: Phase 9 done — design-parity gap close (Profile pages),
+  full-stack, on `feat/redesign-v3-profile-pages`. Backend: `users` gains
+  nullable `sleep_goal_minutes`/`lights_out_minutes` (null-means-default 480/
+  1350, migration `0009_perpetual_vivisector.sql`, additive-only, generated
+  with `drizzle-kit generate` — never push); new `PATCH /api/profile`
+  (validated all-optional body; name → users; age/height/weight → targeted
+  `## Identity` line replacement via new `lib/profileDetails.
+  updateIdentityLines` — standalone section-walk copied from onboarding's
+  `fillCoreProfile` rather than a shared extraction, deliberately lower-risk;
+  weight also `logWeight`'d for trend history; a lights-out change updates
+  today's pending "Lights out" plan row in place using the same tz-precedence
+  day key); `GET /api/profile` adds `createdAt` + effective sleep fields;
+  `/api/plan`'s `resolveDayKey` now returns `{dayKey, userRow}` so the seed
+  reads the sleep columns off the query it already made, subtitle via shared
+  `formatSleepSubtitle` (note: seed subtitle copy changed from "8h target"
+  to "8h target — your biggest lever this week" per the mock). iOS:
+  `APIClient.updateProfile` (nil-omitted PATCH body); `ProfileResponse` +
+  `createdAt`/`sleepGoalMinutes`/`lightsOutMinutes`/`calibration` — Profile's
+  calibration now decodes off its own response, `loadCalibration()`/
+  `fetchTrends("rhr")` workaround deleted; ProfileView rebuilt to the mock
+  (member-since line, progress-bar calibration banner, grouped six-row
+  settings card with neutral 36pt badges + hairlines, Activity grid kept
+  deliberately, version footer); new `PersonalDetailsView` /
+  `SleepGoalView` / `GoalDetailView` under `Features/Profile/`;
+  `DietBudgetEditorView` slimmed to numbers-only (goal picker,
+  Coach-recommends, What-this-means moved to GoalDetailView);
+  `RootTabView` passes `switchToCoachTab` into `ProfileView`. New pure
+  helpers `ProfileViewModel.memberSinceLabel(fromISO:)` (UTC-pinned) and
+  `sleepGoalSummary(goalMinutes:lightsOutMinutes:)` with 3 new tests.
+  Deviations: (1) US units in PersonalDetailsView use total inches + lb
+  single fields (converted to cm/kg for the API) — v1 simplification over a
+  ft-in split; (2) PersonalDetailsView persists once on Done (no per-field
+  commit-on-blur) since the spec settles on a single PATCH of changed
+  fields; (3) `formatSleepSubtitle` rounds to the nearest half hour for any
+  valid minutes value, superset of the spec's half-hour examples. Verify:
+  backend `npm run lint` / `tsc --noEmit` / `npm run build` all clean
+  (route list shows `ƒ /api/profile`); iOS `xcodegen generate` +
+  `xcodebuild build` → BUILD SUCCEEDED; `xcodebuild test` → 101/101 (98
+  existing + 3 new; one unrelated `CoachSpecialistStateTests` case flaked
+  on a first run and passed in isolation and on the full re-run).

@@ -1,7 +1,10 @@
 import { localDayKey } from './localDay';
+import { type CoachAnalysis } from './proactiveAnalysisSchema';
+import { consumeGroundedAnalysisProof, type GroundedAnalysisProof, type ProactiveAnalysisSource } from './proactiveAnalysisGrounding';
+
+export { parseCoachAnalysis, type CoachAnalysis } from './proactiveAnalysisSchema';
 
 export type AnalysisKind = 'workout' | 'sleep';
-export interface CoachAnalysis { headline: string; shortInsight: string; narrative: string; observations: string[]; nextSteps: string[] }
 export interface AnalysisJob { id: string; kind: AnalysisKind; userId: string; localDate: string; input: unknown; retryCount: number; notificationRetryCount: number; leaseToken: string }
 export interface AnalysisContext { enabled: boolean; timezone: string; baselines: unknown; profile: unknown; metrics: unknown }
 export interface PushDevice { id: string; token: string; environment: 'sandbox' | 'production' }
@@ -23,54 +26,6 @@ export interface WorkerRepository {
   recordPushAttempt(job: AnalysisJob, device: PushDevice, attempt: number, result: PushOutcome): Promise<void>;
   retireDevice(deviceId: string, now: Date): Promise<void>;
   markNotificationSent(job: AnalysisJob, token: string, now: Date): Promise<void>;
-}
-
-const limits: Record<keyof CoachAnalysis, number> = { headline: 120, shortInsight: 240, narrative: 1200, observations: 6, nextSteps: 5 };
-export function parseCoachAnalysis(value: unknown): CoachAnalysis {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('coach output must be an object');
-  const row = value as Record<string, unknown>;
-  const expected = Object.keys(limits);
-  for (const key of Object.keys(row)) if (!expected.includes(key)) throw new Error(`unexpected field: ${key}`);
-  for (const key of ['headline', 'shortInsight', 'narrative'] as const) {
-    if (typeof row[key] !== 'string' || !row[key].trim() || row[key].length > limits[key]) throw new Error(`invalid ${key}`);
-  }
-  for (const key of ['observations', 'nextSteps'] as const) {
-    if (!Array.isArray(row[key]) || row[key].length > limits[key] || row[key].some((x) => typeof x !== 'string' || !x.trim() || x.length > 240)) throw new Error(`invalid ${key}`);
-  }
-  return row as unknown as CoachAnalysis;
-}
-
-const unitAliases: Record<string, string> = { milliseconds: 'ms', millisecond: 'ms', bpm: 'bpm', '%': '%', kg: 'kg', km: 'km', mi: 'mi', kcal: 'kcal', calorie: 'kcal', calories: 'kcal', step: 'steps', steps: 'steps', minute: 'minutes', minutes: 'minutes', min: 'minutes', mins: 'minutes', hour: 'hours', hours: 'hours', hr: 'hours', hrs: 'hours' };
-function inferredUnit(key: string): string | undefined {
-  const lower = key.toLowerCase();
-  if (lower.includes('hrv') || lower.endsWith('_ms')) return 'ms';
-  if (lower.includes('heart_rate') || lower === 'rhr' || lower.includes('resting_hr') || lower.includes('avg_hr')) return 'bpm';
-  if (lower.includes('percent') || lower.includes('efficiency')) return '%';
-  if (lower.includes('weight') || lower.endsWith('_kg')) return 'kg';
-  if (lower.includes('calorie') || lower.includes('kcal') || lower.includes('energy')) return 'kcal';
-  if (lower.includes('step')) return 'steps';
-  if (lower.includes('minute')) return 'minutes';
-}
-export function validateGroundedAnalysis(result: CoachAnalysis, evidence: unknown): CoachAnalysis {
-  const values = new Map<string, Set<string>>();
-  const visit = (value: unknown, key = ''): void => {
-    if (typeof value === 'number' && Number.isFinite(value)) { const normalized = String(value); const units = values.get(normalized) ?? new Set<string>(); const unit = inferredUnit(key); if (unit) units.add(unit); values.set(normalized, units); }
-    else if (typeof value === 'string') { for (const match of value.matchAll(/\b(\d+(?:\.\d+)?)\s*(%|ms|bpm|kg|km|mi|kcal|calories?|steps?|minutes?|mins?|hours?|hrs?)?/gi)) { const units = values.get(match[1]) ?? new Set<string>(); if (match[2]) units.add(unitAliases[match[2].toLowerCase()] ?? match[2].toLowerCase()); values.set(match[1], units); } }
-    else if (Array.isArray(value)) value.forEach((item) => visit(item, key));
-    else if (value && typeof value === 'object') {
-      const object = value as Record<string, unknown>;
-      if (typeof object.value === 'number' && typeof object.metric === 'string') visit(object.value, object.metric);
-      for (const [childKey, child] of Object.entries(object)) if (childKey !== 'value' || typeof object.metric !== 'string') visit(child, childKey);
-    }
-  };
-  visit(evidence);
-  const text = [result.headline, result.shortInsight, result.narrative, ...result.observations, ...result.nextSteps].join(' ');
-  for (const match of text.matchAll(/\b(\d+(?:\.\d+)?)\s*(%|ms|bpm|kg|km|mi|kcal|calories?|steps?|minutes?|mins?|hours?|hrs?)?/gi)) {
-    const supported = values.get(match[1]);
-    if (!supported) throw new Error(`unsupported numeric claim: ${match[1]}`);
-    if (match[2]) { const unit = unitAliases[match[2].toLowerCase()] ?? match[2].toLowerCase(); if (!supported.has(unit)) throw new Error(`unsupported unit claim: ${match[1]} ${unit}`); }
-  }
-  return result;
 }
 
 export function nextRetryAt(now: Date, retryCount: number): Date {
@@ -101,10 +56,14 @@ export function notificationKey(job: AnalysisJob): string { return `${job.kind}:
 export function morningKey(userId: string, date: string): string { return `morning:${userId}:${date}`; }
 export function currentLocalDate(now: Date, timezone: string): string { return localDayKey(now, timezone); }
 
+export function consumeMorningAnalysisProof(proof: GroundedAnalysisProof, expectedSource: ProactiveAnalysisSource): CoachAnalysis {
+  return consumeGroundedAnalysisProof(proof, expectedSource);
+}
+
 export async function runClaimedAnalysis(
   job: AnalysisJob,
   repository: WorkerRepository,
-  analyze: (job: AnalysisJob, context: AnalysisContext) => Promise<unknown>,
+  analyze: (job: AnalysisJob, context: AnalysisContext) => Promise<GroundedAnalysisProof>,
   push: (device: PushDevice, analysis: CoachAnalysis) => Promise<PushOutcome>,
   now: Date,
   maxRetries = 5,
@@ -113,7 +72,13 @@ export async function runClaimedAnalysis(
     if (!await repository.renewAnalysisLease(job, now)) return;
     const context = await repository.getContext(job);
     if (!context.enabled) { await repository.suppress(job); return; }
-    const result = validateGroundedAnalysis(parseCoachAnalysis(await analyze(job, context)), { input: job.input, context });
+    const proof = await analyze(job, context);
+    const result = consumeGroundedAnalysisProof(proof, {
+      kind: job.kind,
+      date: job.localDate,
+      input: job.input,
+      availableContext: context,
+    });
     if (!await repository.renewAnalysisLease(job, new Date())) return;
     if (!await repository.storeReady(job, result)) return;
     const notificationToken = await repository.claimNotification(job, now);

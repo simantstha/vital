@@ -1,6 +1,8 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { ApnsClient } from '../lib/apnsClient';
-import { deliverNotification, parseCoachAnalysis, runClaimedAnalysis, validateGroundedAnalysis, type AnalysisContext, type AnalysisJob } from '../lib/proactiveHealthWorker';
+import { generateGroundedAnalysis, proactiveAnalysisModel, type AnalysisFailureEvent } from '../lib/proactiveAnalysisGeneration';
+import { type GroundedAnalysisProof } from '../lib/proactiveAnalysisGrounding';
+import { consumeMorningAnalysisProof, deliverNotification, runClaimedAnalysis, type AnalysisContext, type AnalysisJob } from '../lib/proactiveHealthWorker';
 import { claimAnalysisJobs, claimDueMorningBriefs, completeMorningBrief, ensureDefaultPreferencesForRegisteredUsers, failMorningBrief, listReadyNotificationCandidates, workerRepository } from '../lib/proactiveHealthWorkerRepository';
 import { workerErrorEvent, type WorkerStage } from '../lib/proactiveHealthWorkerSupport';
 
@@ -8,15 +10,26 @@ const intervalMs = Number(process.env.PROACTIVE_WORKER_INTERVAL_MS ?? 15_000);
 const anthropic = new Anthropic({ apiKey: required('ANTHROPIC_API_KEY') });
 const apns = new ApnsClient({ keyId: required('APNS_KEY_ID'), teamId: required('APNS_TEAM_ID'), topic: required('APNS_TOPIC'), privateKey: required('APNS_PRIVATE_KEY').replace(/\\n/g, '\n') });
 
-async function analyze(job: AnalysisJob, context: AnalysisContext): Promise<unknown> {
-  const response = await anthropic.messages.create({
-    model: process.env.PROACTIVE_ANALYSIS_MODEL ?? 'claude-sonnet-4-20250514', max_tokens: 700,
-    system: 'You are Vital coach. Use only supplied values; never infer or invent a metric. Return JSON only with exactly headline, shortInsight, narrative, observations, nextSteps. Missing data must be described as unavailable. Keep medical claims observational, not diagnostic.',
-    messages: [{ role: 'user', content: JSON.stringify({ kind: job.kind, date: job.localDate, input: job.input, availableContext: context }) }],
+const reportAnalysisFailure = (event: AnalysisFailureEvent): void => {
+  console.error(JSON.stringify(event));
+};
+
+async function analyze(job: AnalysisJob, context: AnalysisContext): Promise<GroundedAnalysisProof> {
+  return generateGroundedAnalysis({
+    source: { kind: job.kind, date: job.localDate, input: job.input, availableContext: context },
+    generate: async (request) => {
+      const response = await anthropic.messages.create({
+        model: proactiveAnalysisModel(process.env),
+        max_tokens: 700,
+        system: request.system,
+        messages: [{ role: 'user', content: request.content }],
+      });
+      const textBlocks = response.content.filter((item) => item.type === 'text');
+      if (textBlocks.length !== 1) throw new Error('analysis model returned no text');
+      return textBlocks[0].text;
+    },
+    report: reportAnalysisFailure,
   });
-  const text = response.content.find((item) => item.type === 'text');
-  if (!text || text.type !== 'text') throw new Error('analysis model returned no text');
-  return parseCoachAnalysis(JSON.parse(text.text.replace(/^```json\s*|\s*```$/g, '')));
 }
 
 async function tick(reportStage: (stage: WorkerStage) => void): Promise<void> {
@@ -46,7 +59,13 @@ async function tick(reportStage: (stage: WorkerStage) => void): Promise<void> {
     const job: AnalysisJob = { id: claim.idempotencyKey, kind: 'sleep', userId: claim.userId, localDate: claim.localDate, input: { purpose: 'morning brief' }, retryCount: 0, notificationRetryCount: claim.retryCount, leaseToken: claim.leaseToken };
     try {
       const context = await workerRepository.getContext(job);
-      const result = validateGroundedAnalysis(parseCoachAnalysis(await analyze(job, context)), { input: job.input, context });
+      const proof = await analyze(job, context);
+      const result = consumeMorningAnalysisProof(proof, {
+        kind: job.kind,
+        date: job.localDate,
+        input: job.input,
+        availableContext: context,
+      });
       await completeMorningBrief(claim, result, (device, value) => apns.send(device, value, { type: 'morning_brief', deepLink: 'vital://today' }), now);
     } catch (error) {
       console.error(JSON.stringify(workerErrorEvent('process-morning-brief', error)));

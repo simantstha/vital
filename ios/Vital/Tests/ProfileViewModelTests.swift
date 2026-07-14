@@ -114,4 +114,62 @@ final class ProfileViewModelTests: XCTestCase {
 
         XCTAssertEqual(cells.map(\.value), ["0", "0", "--", "0"])
     }
+
+    // MARK: - Phase 9 additions
+
+    func testProfileResponseDecodesPhase9FieldsWhenPresent() throws {
+        let data = Data(
+            """
+            {
+              "name": "Taylor",
+              "integrations": [],
+              "stats": { "loggedDays": 1, "mealsLogged": 2, "avgHrv": null, "workouts": 0 },
+              "profile": { "age": null, "biologicalSex": null, "heightCm": null, "weightKg": null },
+              "createdAt": "2026-07-01T09:30:00.000Z",
+              "sleepGoalMinutes": 450,
+              "lightsOutMinutes": 1380,
+              "calibration": {
+                "status": "calibrating",
+                "metrics": { "resting_hr": { "dataDays": 7, "established": false } }
+              }
+            }
+            """.utf8
+        )
+
+        let response = try JSONDecoder().decode(ProfileResponse.self, from: data)
+
+        XCTAssertEqual(response.createdAt, "2026-07-01T09:30:00.000Z")
+        XCTAssertEqual(response.sleepGoalMinutes, 450)
+        XCTAssertEqual(response.lightsOutMinutes, 1380)
+        XCTAssertEqual(response.calibration?.status, "calibrating")
+        XCTAssertEqual(response.calibration?.metrics["resting_hr"]?.dataDays, 7)
+    }
+
+    func testMemberSinceLabelFormatsIsoTimestampsWithAndWithoutFractionalSeconds() {
+        XCTAssertEqual(
+            ProfileViewModel.memberSinceLabel(fromISO: "2026-07-13T05:12:41.123Z"),
+            "Member since Jul 2026"
+        )
+        XCTAssertEqual(
+            ProfileViewModel.memberSinceLabel(fromISO: "2025-12-01T00:00:00Z"),
+            "Member since Dec 2025"
+        )
+        XCTAssertNil(ProfileViewModel.memberSinceLabel(fromISO: nil))
+        XCTAssertNil(ProfileViewModel.memberSinceLabel(fromISO: "not-a-date"))
+    }
+
+    func testSleepGoalSummaryFormatsWholeAndHalfHourGoals() {
+        XCTAssertEqual(
+            ProfileViewModel.sleepGoalSummary(goalMinutes: 480, lightsOutMinutes: 1350),
+            "8h · lights out 10:30"
+        )
+        XCTAssertEqual(
+            ProfileViewModel.sleepGoalSummary(goalMinutes: 450, lightsOutMinutes: 1380),
+            "7.5h · lights out 11:00"
+        )
+        XCTAssertEqual(
+            ProfileViewModel.sleepGoalSummary(goalMinutes: 510, lightsOutMinutes: 0),
+            "8.5h · lights out 12:00"
+        )
+    }
 }

@@ -1,3 +1,5 @@
+import { readMemoryFile, writeMemoryFile } from './memory';
+
 export type ProfileDetails = {
   age: number | null;
   biologicalSex: string | null;
@@ -83,4 +85,69 @@ export function parseProfileDetails(markdown: string | null | undefined): Profil
   }
 
   return details;
+}
+
+// ── core-profile.md Identity patch (Profile PATCH endpoint) ─────────────────
+
+export type IdentityPatch = {
+  age?: number;
+  heightCm?: number;
+  weightKg?: number;
+};
+
+/**
+ * Partial, section-aware patch of the `## Identity` lines in core-profile.md.
+ * Mirrors the section-walk in app/api/onboarding/route.ts's fillCoreProfile,
+ * but only rewrites the specific fields present in `patch` (undefined fields
+ * are left untouched) rather than always filling all four from a full
+ * onboarding payload — so it's safe to call from the profile PATCH route
+ * with just the fields the user actually changed.
+ *
+ * No-ops silently (does not write) if the user has no core-profile.md yet
+ * (not onboarded) or if `patch` has no defined fields.
+ */
+export function updateIdentityLines(userId: string, patch: IdentityPatch): void {
+  const hasAge = patch.age !== undefined;
+  const hasHeight = patch.heightCm !== undefined;
+  const hasWeight = patch.weightKg !== undefined;
+  if (!hasAge && !hasHeight && !hasWeight) return;
+
+  const content = readMemoryFile(userId, 'core-profile.md');
+  if (content == null) return;
+
+  const today = new Date().toISOString().split('T')[0];
+
+  let section = '';
+  const lines = content.split('\n').map((line) => {
+    const heading = /^## (.+)$/.exec(line);
+    if (heading) {
+      section = heading[1].trim();
+      return line;
+    }
+
+    if (section === 'Identity') {
+      if (hasAge && /^- Age:/.test(line)) return `- Age: ${patch.age}`;
+      if (hasHeight && /^- Height:/.test(line)) return `- Height: ${patch.heightCm} cm`;
+      if (hasWeight && /^- Current weight:/.test(line)) {
+        return `- Current weight: ${patch.weightKg} kg — last updated ${today}`;
+      }
+    }
+
+    return line;
+  });
+
+  writeMemoryFile(userId, 'core-profile.md', lines.join('\n'));
+}
+
+// ── Sleep goal subtitle formatting (shared between /api/plan seed + PATCH) ──
+
+/**
+ * Formats a sleep-goal-minutes value as e.g. "8h target — your biggest lever
+ * this week" / "7.5h target — your biggest lever this week". Hours show a
+ * ".5" only when minutes aren't an exact multiple of 60.
+ */
+export function formatSleepSubtitle(sleepGoalMinutes: number): string {
+  const hours = sleepGoalMinutes / 60;
+  const hoursLabel = Number.isInteger(hours) ? `${hours}` : `${Math.round(hours * 2) / 2}`;
+  return `${hoursLabel}h target — your biggest lever this week`;
 }

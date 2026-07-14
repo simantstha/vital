@@ -269,16 +269,16 @@ struct CoachView: View {
                 micPermissionHint
             }
 
-            Divider()
-                .background(Theme.Colors.glassBorder)
+            if showSuggestionChips {
+                suggestionChipsRow
+            }
 
-            HStack(spacing: Theme.Spacing.md) {
+            HStack(spacing: Theme.Spacing.sm) {
                 TextField("Message your coach…", text: $vm.input, axis: .vertical)
                     .font(Theme.Typography.bodyMedium)
                     .foregroundStyle(Theme.Colors.textPrimary)
                     .tint(Theme.Colors.accentContent)
                     .lineLimit(1...5)
-                    .padding(.vertical, Theme.Spacing.sm)
                     // While recording, the field mirrors the live transcript —
                     // typing over it would fight the mic. Also disabled while
                     // the recorded clip is being transcribed.
@@ -306,10 +306,58 @@ struct CoachView: View {
                 .disabled(!canSend)
                 .animation(.easeInOut(duration: 0.15), value: vm.isStreaming)
             }
+            .padding(.horizontal, Theme.Spacing.md)
+            .padding(.vertical, Theme.Spacing.sm)
+            .background(
+                Capsule()
+                    .fill(Theme.Colors.card)
+                    .overlay(
+                        Capsule().strokeBorder(Theme.Colors.glassBorder, lineWidth: 0.5)
+                    )
+            )
+            .shadow(color: Theme.Colors.cardShadow, radius: 1, x: 0, y: 1)
             .padding(.horizontal, Theme.Spacing.lg)
             .padding(.vertical, Theme.Spacing.md)
             .background(Theme.Colors.canvas)
         }
+    }
+
+    /// Static conversation starters shown above the composer only until the
+    /// user sends their first message this session (no `.message` row with
+    /// role `.user` in `vm.rows` yet — cheaper than tracking a separate flag
+    /// since `rows` is already the source of truth for the transcript).
+    private var showSuggestionChips: Bool {
+        !vm.rows.contains { row in
+            if case .message(let msg) = row, msg.role == .user { return true }
+            return false
+        }
+    }
+
+    private static let suggestionPrompts = [
+        "How am I doing today?",
+        "What should I eat for dinner?",
+        "How was my sleep?",
+        "Plan tomorrow's run",
+    ]
+
+    private var suggestionChipsRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: Theme.Spacing.sm) {
+                ForEach(Self.suggestionPrompts, id: \.self) { prompt in
+                    Button {
+                        vm.input = prompt
+                        vm.send()
+                    } label: {
+                        Chip(text: prompt, isAccent: true)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(vm.isStreaming)
+                }
+            }
+            .padding(.horizontal, Theme.Spacing.lg)
+            .padding(.vertical, Theme.Spacing.sm)
+        }
+        .scrollIndicators(.hidden)
     }
 
     private var canSend: Bool {
@@ -466,8 +514,12 @@ private struct MessageBubbleView: View {
         if message.role == .system {
             JoinedSystemRowView(text: message.text)
         } else {
-            HStack {
+            HStack(alignment: .top, spacing: Theme.Spacing.sm) {
                 if message.role == .user { Spacer(minLength: 48) }
+
+                if message.role == .assistant && resolvedPresentation.bubbleLabel == nil {
+                    CoachAvatarBadge()
+                }
 
                 VStack(alignment: message.role == .user ? .trailing : .leading, spacing: Theme.Spacing.xs) {
                     if let label = resolvedPresentation.bubbleLabel {
@@ -480,7 +532,7 @@ private struct MessageBubbleView: View {
 
                     bubbleContent
                         .font(Theme.Typography.bodyMedium)
-                        .foregroundStyle(message.role == .user ? Theme.Colors.onAccent : Theme.Colors.textPrimary)
+                        .foregroundStyle(Theme.Colors.textPrimary)
                         .padding(.horizontal, Theme.Spacing.lg)
                         .padding(.vertical, Theme.Spacing.md)
                         .bubbleSurface(
@@ -512,29 +564,48 @@ private struct MessageBubbleView: View {
     }
 }
 
-/// Chat-bubble surface: a solid lime fill for the user, real Liquid Glass for the coach.
+/// Chat-bubble surface: a white v3 card for the user, pale-lime for the
+/// default "vital" persona, and unchanged Liquid Glass for a specialist.
 private extension View {
     @ViewBuilder
     func bubbleSurface(isUser: Bool, isSpecialist: Bool) -> some View {
         if isUser {
             background(
-                RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
-                    .fill(Theme.Colors.accent)
+                RoundedRectangle(cornerRadius: Theme.Radius.xl, style: .continuous)
+                    .fill(Theme.Colors.card)
             )
-        } else {
+            .shadow(color: Theme.Colors.cardShadow, radius: 1, x: 0, y: 1)
+        } else if isSpecialist {
             glassEffect(
-                isSpecialist
-                    ? .regular.tint(Theme.Colors.specialistAccent.opacity(0.10))
-                    : .regular,
+                .regular.tint(Theme.Colors.specialistAccent.opacity(0.10)),
                 in: .rect(cornerRadius: Theme.Radius.lg, style: .continuous)
             )
             .overlay {
-                if isSpecialist {
-                    RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
-                        .stroke(Theme.Colors.specialistAccent.opacity(0.42), lineWidth: 0.75)
-                }
+                RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
+                    .stroke(Theme.Colors.specialistAccent.opacity(0.42), lineWidth: 0.75)
             }
+        } else {
+            background(
+                RoundedRectangle(cornerRadius: Theme.Radius.xl, style: .continuous)
+                    .fill(Theme.Colors.accentSoft)
+            )
         }
+    }
+}
+
+/// Small lime avatar circle leading each default "vital" assistant bubble —
+/// mirrors `DesignSystem/CoachBubble.swift`'s avatar idiom at composer scale.
+/// Specialist bubbles keep their own label row instead (no avatar).
+private struct CoachAvatarBadge: View {
+    var body: some View {
+        Circle()
+            .fill(Theme.Colors.accent)
+            .frame(width: 30, height: 30)
+            .overlay(
+                Image(systemName: "message.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Theme.Colors.onAccent)
+            )
     }
 }
 
@@ -866,9 +937,9 @@ private struct TypingIndicatorView: View {
             }
             .padding(.horizontal, Theme.Spacing.lg)
             .padding(.vertical, Theme.Spacing.md)
-            .glassEffect(
-                .regular,
-                in: .rect(cornerRadius: Theme.Radius.lg, style: .continuous)
+            .background(
+                RoundedRectangle(cornerRadius: Theme.Radius.xl, style: .continuous)
+                    .fill(Theme.Colors.accentSoft)
             )
 
             Spacer()

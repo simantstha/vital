@@ -29,6 +29,8 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Vital shows today's calendar events alongside your plan so meals and workouts fit your schedule. Events never leave your device.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Vital uses the camera to scan barcodes and identify food.</string>
 	<key>NSHealthShareUsageDescription</key>

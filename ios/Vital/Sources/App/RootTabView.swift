@@ -56,7 +56,9 @@ struct RootTabView: View {
             .tabItem { Label(Tab.logs.label, systemImage: Tab.logs.icon) }
             .tag(Tab.logs)
 
-            ProfileView()
+            ProfileView(
+                switchToCoachTab: { withAnimation(.easeInOut(duration: 0.25)) { selected = .coach } }
+            )
             .tabItem { Label(Tab.profile.label, systemImage: Tab.profile.icon) }
             .tag(Tab.profile)
         }

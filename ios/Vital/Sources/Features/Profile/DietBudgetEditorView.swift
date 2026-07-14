@@ -23,7 +23,6 @@ struct DietBudgetEditorView: View {
                                 macroEditors
                                 resetButton
                             } else {
-                                goalCard
                                 autoNote
                             }
                             if let msg = vm.errorMessage {
@@ -64,7 +63,7 @@ struct DietBudgetEditorView: View {
     // ── Hero: big kcal number (± stepper in custom) ──────────────────────────
 
     private var heroCard: some View {
-        GlassCard(padding: Theme.Spacing.xl) {
+        VitalCard(padding: Theme.Spacing.xl) {
             VStack(spacing: Theme.Spacing.sm) {
                 Text("DAILY TARGET")
                     .font(Theme.Typography.labelSmall)
@@ -157,7 +156,7 @@ struct DietBudgetEditorView: View {
     }
 
     private func macroRow(_ label: String, value: Binding<Int>, color: Color) -> some View {
-        GlassCard(padding: Theme.Spacing.lg, cornerRadius: Theme.Radius.md) {
+        VitalCard(padding: Theme.Spacing.lg, cornerRadius: Theme.Radius.md) {
             HStack {
                 Circle().fill(color).frame(width: 10, height: 10)
                 Text(label).font(Theme.Typography.bodyMedium).foregroundStyle(Theme.Colors.textPrimary)
@@ -188,27 +187,9 @@ struct DietBudgetEditorView: View {
         }
     }
 
-    // ── Auto: goal picker + note ───────────────────────────────────────────────
-
-    private var goalCard: some View {
-        GlassCard(padding: Theme.Spacing.lg, cornerRadius: Theme.Radius.md) {
-            HStack {
-                Text("Goal").font(Theme.Typography.bodyMedium).foregroundStyle(Theme.Colors.textPrimary)
-                Spacer()
-                Menu {
-                    ForEach(vm.goalOptions) { opt in
-                        Button(opt.label) { vm.setGoal(opt.id) }
-                    }
-                } label: {
-                    HStack(spacing: 4) {
-                        Text(vm.goalDisplay).fontWeight(.medium)
-                        Image(systemName: "chevron.up.chevron.down").font(.system(size: 11))
-                    }
-                    .foregroundStyle(Theme.Colors.accentContent)
-                }
-            }
-        }
-    }
+    // ── Auto: note ─────────────────────────────────────────────────────────────
+    // Goal editing (picker, "Coach recommends", "What this means") moved to
+    // GoalDetailView in Phase 9 — the budget editor keeps only the numbers.
 
     private var autoNote: some View {
         Text("Vital keeps this target updated automatically as your weight and activity change. Switch to Custom to set your own.")

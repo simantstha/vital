@@ -20,6 +20,7 @@ ENV DATABASE_URL="postgres://build:build@localhost:5432/build"
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 RUN npm run build:worker
+RUN npm run build:recovery
 
 # ---- Runtime ----
 FROM base AS runner
