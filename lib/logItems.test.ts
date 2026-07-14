@@ -18,6 +18,7 @@ test('maps sleep minutes to a stable wake-date sleep session', () => {
       subtitle: 'Sleep tracked',
       sleepMs: 27_090_000,
       hasExactTime: false,
+      dayKey: '2026-07-14',
     },
   );
 });
@@ -76,8 +77,26 @@ test('uses an inexact noon anchor for missing and invalid workout start times', 
       title: 'Strength',
       subtitle: 'Workout logged',
       hasExactTime: false,
+      dayKey: '2026-07-13',
     });
   }
+});
+
+test('treats a workout start time from a different calendar date as inexact', () => {
+  assert.deepEqual(mapHealthKitWorkout({
+    date: '2026-07-14',
+    hkUuid: 'date-mismatch',
+    type: 'running',
+    startTime: '2026-07-13T23:45:00-05:00',
+  }, 0), {
+    id: 'date-mismatch',
+    type: 'workout_completed',
+    timestamp: '2026-07-14T12:00:00.000Z',
+    title: 'Running',
+    subtitle: 'Workout logged',
+    hasExactTime: false,
+    dayKey: '2026-07-14',
+  });
 });
 
 test('maps legacy events without changing identity, formatting, or optional fields', () => {

@@ -17,6 +17,7 @@
  *     km?:         number,  // workout_completed only — distance, 2dp
  *     sleepMs?:    number,  // sleep_session only — duration in ms
  *     hasExactTime?: boolean, // HealthKit-derived items only
+ *     dayKey?:     string,  // day-level HealthKit source date (yyyy-MM-dd)
  *   }]
  * }
  * (redesign-v3 Phase 6: kcal/km/sleepMs added so the Logs day-pager can

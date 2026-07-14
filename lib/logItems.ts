@@ -9,6 +9,7 @@ export interface LogItem {
   km?: number;
   sleepMs?: number;
   hasExactTime?: boolean;
+  dayKey?: string;
 }
 
 export interface DailySleepRow {
@@ -163,6 +164,7 @@ export function mapDailySleepRow(row: DailySleepRow): LogItem {
     subtitle: 'Sleep tracked',
     sleepMs,
     hasExactTime: false,
+    dayKey: row.date,
   };
 }
 
@@ -199,7 +201,10 @@ export function mapHealthKitWorkout(workout: HealthKitWorkout, index: number): L
   const kcal = num(workout.kcal);
   const distanceM = num(workout.distance_m);
   const km = distanceM != null ? distanceM / 1000 : num(workout.distanceKm);
-  const exactTimestamp = normalizedStartTime(workout.startTime);
+  const startTime = str(workout.startTime);
+  const exactTimestamp = startTime?.slice(0, 10) === workout.date
+    ? normalizedStartTime(startTime)
+    : undefined;
 
   return {
     id: str(workout.hkUuid) ?? `${workout.date}-workout-${index}`,
@@ -209,6 +214,7 @@ export function mapHealthKitWorkout(workout: HealthKitWorkout, index: number): L
     subtitle: kcal != null ? `~${Math.round(kcal)} kcal` : 'Workout logged',
     ...(km != null ? { km: Math.round(km * 100) / 100 } : {}),
     hasExactTime: exactTimestamp != null,
+    ...(exactTimestamp == null ? { dayKey: workout.date } : {}),
   };
 }
 

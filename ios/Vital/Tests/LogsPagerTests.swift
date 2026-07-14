@@ -37,6 +37,7 @@ final class LogsPagerTests: XCTestCase {
         offsetFromToday: Int = 0,
         hour: Int = 12,
         minute: Int = 0,
+        dayKey: String? = nil,
         kcal: Double? = nil,
         km: Double? = nil,
         sleepMs: Double? = nil
@@ -48,6 +49,7 @@ final class LogsPagerTests: XCTestCase {
             title: "Title",
             subtitle: "Subtitle",
             date: d,
+            dayKey: dayKey,
             sfSymbol: "circle.fill",
             thumbnail: nil,
             meta: LogsPagerSummary.metaLabel(type: type, date: d),
@@ -94,6 +96,33 @@ final class LogsPagerTests: XCTestCase {
         for day in days[1...] {
             XCTAssertTrue(day.items.isEmpty)
         }
+    }
+
+    func testBucketDaysPrefersSuppliedWakeDateAcrossKiritimatiTimezoneBoundary() {
+        var kiritimati = Calendar(identifier: .gregorian)
+        kiritimati.timeZone = TimeZone(identifier: "Pacific/Kiritimati")!
+        let today = ISO8601DateFormatter().date(from: "2026-07-12T12:00:00Z")!
+        let noonUTC = ISO8601DateFormatter().date(from: "2026-07-11T12:00:00Z")!
+        let sleep = LogDisplayItem(
+            id: "sleep-2026-07-11",
+            type: "sleep_session",
+            title: "Sleep: 8h 00m",
+            subtitle: "Sleep tracked",
+            date: noonUTC,
+            dayKey: "2026-07-11",
+            sfSymbol: "bed.double.fill",
+            thumbnail: nil,
+            meta: "auto",
+            kcal: nil,
+            km: nil,
+            sleepMs: 28_800_000
+        )
+
+        let days = LogsPagerSummary.bucketDays(items: [sleep], today: today, calendar: kiritimati)
+
+        XCTAssertEqual(days.first?.dayKey, "2026-07-13")
+        XCTAssertEqual(days.first(where: { $0.dayKey == "2026-07-11" })?.items.map(\.id), ["sleep-2026-07-11"])
+        XCTAssertTrue(days.first(where: { $0.dayKey == "2026-07-12" })?.items.isEmpty == true)
     }
 
     // MARK: - summaryLine
@@ -208,6 +237,24 @@ final class LogsPagerTests: XCTestCase {
         let decoded = try JSONDecoder().decode(LogItem.self, from: json)
 
         XCTAssertNil(decoded.hasExactTime)
+        XCTAssertNil(decoded.dayKey)
+    }
+
+    func testLogItemDecodesOptionalDayKey() throws {
+        let json = #"""
+        {
+          "id": "sleep-2026-07-11",
+          "type": "sleep_session",
+          "timestamp": "2026-07-11T12:00:00.000Z",
+          "dayKey": "2026-07-11",
+          "title": "Sleep: 8h 00m",
+          "subtitle": "Sleep tracked"
+        }
+        """#.data(using: .utf8)!
+
+        let decoded = try JSONDecoder().decode(LogItem.self, from: json)
+
+        XCTAssertEqual(decoded.dayKey, "2026-07-11")
     }
 
     // MARK: - dietDayData
