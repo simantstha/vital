@@ -16,6 +16,7 @@
  *     kcal?:       number,  // meal_logged only — kcal eaten (not burned)
  *     km?:         number,  // workout_completed only — distance, 2dp
  *     sleepMs?:    number,  // sleep_session only — duration in ms
+ *     hasExactTime?: boolean, // HealthKit-derived items only
  *   }]
  * }
  * (redesign-v3 Phase 6: kcal/km/sleepMs added so the Logs day-pager can
@@ -28,7 +29,12 @@ import { NextResponse } from 'next/server';
 import { db, schema } from '@/db';
 import { eq, and, gte, inArray, desc } from 'drizzle-orm';
 import { getUserIdFromRequest } from '@/lib/auth';
-import { queryWorkouts } from '@/lib/brain/tools';
+import { queryMetricPoints, queryWorkouts } from '@/lib/brain/tools';
+import {
+  mapDailySleepRow,
+  mapHealthKitWorkout,
+  sortLogItemsNewestFirst,
+} from '@/lib/logItems';
 
 export const dynamic = 'force-dynamic';
 
@@ -192,32 +198,17 @@ export async function GET(request: Request): Promise<NextResponse> {
     };
   });
 
-  // Workouts synced from HealthKit live in daily_metrics (not events), so the
-  // events query above never sees them. Surface them here. No exact start time
-  // is stored, so anchor to noon UTC on the workout's day for stable ordering.
-  const workouts = await queryWorkouts(userId, days);
-  const workoutItems = workouts.map((w, i) => {
-    const wtype = str(w.type) ?? 'Workout';
-    const label = wtype.charAt(0).toUpperCase() + wtype.slice(1);
-    const durationMin = num(w.durationMin);
-    const kcal = num(w.kcal);
-    // distance_m (meters) wins over distanceKm (already km) — same fallback
-    // precedent as lib/brain/dietBudget.ts's diet-budget rollup.
-    const distM = num(w.distance_m);
-    const km = distM != null ? distM / 1000 : num(w.distanceKm);
-    return {
-      id:        str(w.hkUuid) ?? `${w.date}-workout-${i}`,
-      type:      'workout_completed',
-      timestamp: `${w.date}T12:00:00.000Z`,
-      title:     durationMin != null ? `${label} — ${Math.round(durationMin)} min` : label,
-      subtitle:  kcal != null ? `~${Math.round(kcal)} kcal` : 'Workout logged',
-      ...(km != null ? { km: Math.round(km * 100) / 100 } : {}),
-    };
-  });
+  // HealthKit workouts and sleep are synced into daily_metrics rather than the
+  // events ledger. Workout startTime is an exact instant when available; daily
+  // sleep remains day-level data attributed to its existing wake date.
+  const [workouts, sleepRows] = await Promise.all([
+    queryWorkouts(userId, days),
+    queryMetricPoints(userId, 'sleep_minutes', days),
+  ]);
+  const workoutItems = workouts.map(mapHealthKitWorkout);
+  const sleepItems = sleepRows.map(mapDailySleepRow);
 
-  const items = [...eventItems, ...workoutItems].sort((a, b) =>
-    b.timestamp.localeCompare(a.timestamp),
-  );
+  const items = sortLogItemsNewestFirst([...eventItems, ...workoutItems, ...sleepItems]);
 
   return NextResponse.json({ items });
 }
