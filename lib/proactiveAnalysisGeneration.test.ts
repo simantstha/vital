@@ -37,6 +37,11 @@ function assertRecord(value: unknown): asserts value is Record<string, unknown> 
   assert.ok(value && typeof value === 'object' && !Array.isArray(value));
 }
 
+function parseLiveResponse(text: string): unknown {
+  const fence = text.match(/^\s*```json\s*\r?\n([\s\S]*?)\r?\n```\s*$/i);
+  return JSON.parse(fence ? fence[1] : text);
+}
+
 function payloadOf(request: AnalysisGenerationRequest): Record<string, unknown> {
   const payload: unknown = JSON.parse(request.content);
   assertRecord(payload);
@@ -83,15 +88,28 @@ for (const [name, prompt] of [
     assert.match(prompt, /observational/i);
     assert.match(prompt, /non-diagnostic/i);
     assert.match(prompt, /copy only supplied evidence tokens exactly/i);
+    assert.match(prompt, /fewest evidence tokens needed/i);
+    assert.match(prompt, /omit (?:an evidence |a )?token when qualitative language is sufficient/i);
+    assert.match(prompt, /never repeat an evidence token anywhere in the response/i);
+    assert.match(prompt, /final content of (?:its|the) clause or string/i);
+    assert.match(prompt, /immediately before (?:a )?terminal punctuation mark/i);
+    for (const prohibitedAfterToken of ['unit', 'qualifier', 'parenthetical', 'symbol', 'prose']) {
+      assert.match(prompt, new RegExp(prohibitedAfterToken, 'i'));
+    }
+    assert.match(prompt, /no content after the token in that clause/i);
     assert.match(prompt, /scalar string or (?:an )?individual array-item string/i);
     assert.doesNotMatch(prompt, /five schema string locations/i);
-    assert.match(prompt, /at most once/i);
-    assert.match(prompt, /terminate (?:its|the) clause or string/i);
     for (const rule of ['alter', 'split', 'concatenate', 'nest', 'enumerate', 'manufacture', 'raw number', 'numeric symbol sequence', 'qualitative language', 'unit', 'sign', 'symbol']) {
       assert.match(prompt, new RegExp(rule, 'i'));
     }
   });
 }
+
+test('live response inspection accepts plain JSON and one complete JSON fence', () => {
+  const payload = JSON.stringify(valid);
+  assert.deepEqual(parseLiveResponse(payload), valid);
+  assert.deepEqual(parseLiveResponse(`\`\`\`json\n${payload}\n\`\`\``), valid);
+});
 
 test('synthetic live proactive analysis returns typed grounded output', {
   skip: process.env.RUN_PROACTIVE_ANALYSIS_LIVE_TEST !== 'true',
@@ -113,7 +131,7 @@ test('synthetic live proactive analysis returns typed grounded output', {
       });
       const textBlocks = response.content.filter((item) => item.type === 'text');
       assert.equal(textBlocks.length, 1);
-      const raw: unknown = JSON.parse(textBlocks[0].text);
+      const raw = parseLiveResponse(textBlocks[0].text);
       assertRecord(raw);
       const rawObservations = raw.observations;
       const rawNextSteps = raw.nextSteps;
