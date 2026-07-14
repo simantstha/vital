@@ -1102,6 +1102,9 @@ struct LogItem: Decodable, Identifiable {
     let id: String
     let type: String
     let timestamp: String
+    /// Whether `timestamp` represents the item's exact occurrence time.
+    /// Absent in older API responses, which continue to decode as `nil`.
+    let hasExactTime: Bool?
     let title: String
     let subtitle: String
     let imageThumb: String?

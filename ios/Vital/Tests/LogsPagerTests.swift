@@ -145,13 +145,13 @@ final class LogsPagerTests: XCTestCase {
 
     // MARK: - metaLabel
 
-    func testMetaLabelIsAutoForSleepAndHRVTypes() {
+    func testMetaLabelIsAutoForSleepAndHRVTypesEvenWhenTimeIsInexact() {
         let d = date(offsetFromToday: 0)
-        XCTAssertEqual(LogsPagerSummary.metaLabel(type: "sleep_session", date: d), "auto")
-        XCTAssertEqual(LogsPagerSummary.metaLabel(type: "hrv_reading", date: d), "auto")
+        XCTAssertEqual(LogsPagerSummary.metaLabel(type: "sleep_session", date: d, hasExactTime: false), "auto")
+        XCTAssertEqual(LogsPagerSummary.metaLabel(type: "hrv_reading", date: d, hasExactTime: false), "auto")
     }
 
-    func testMetaLabelIsAbsoluteLocalTimeForOtherTypes() {
+    func testMetaLabelIsAbsoluteLocalTimeForExactWorkout() {
         let d = date(offsetFromToday: -1, hour: 19, minute: 41)
         let expectedFormatter: DateFormatter = {
             let f = DateFormatter()
@@ -160,7 +160,54 @@ final class LogsPagerTests: XCTestCase {
             return f
         }()
 
-        XCTAssertEqual(LogsPagerSummary.metaLabel(type: "meal_logged", date: d), expectedFormatter.string(from: d))
+        XCTAssertEqual(
+            LogsPagerSummary.metaLabel(type: "workout_completed", date: d, hasExactTime: true),
+            expectedFormatter.string(from: d)
+        )
+    }
+
+    func testMetaLabelIsSyncedForInexactWorkout() {
+        let d = date(offsetFromToday: -1, hour: 12)
+
+        XCTAssertEqual(
+            LogsPagerSummary.metaLabel(type: "workout_completed", date: d, hasExactTime: false),
+            "Synced"
+        )
+    }
+
+    func testMetaLabelRetainsLocalTimeWhenPrecisionFieldIsAbsent() {
+        let d = date(offsetFromToday: -1, hour: 19, minute: 41)
+        let expectedFormatter: DateFormatter = {
+            let f = DateFormatter()
+            f.dateFormat = "h:mm a"
+            f.locale = Locale(identifier: "en_US")
+            return f
+        }()
+
+        XCTAssertEqual(
+            LogsPagerSummary.metaLabel(type: "meal_logged", date: d),
+            expectedFormatter.string(from: d)
+        )
+    }
+
+    func testLogItemWithoutHasExactTimeDecodesForBackwardCompatibility() throws {
+        let json = #"""
+        {
+          "id": "workout-1",
+          "type": "workout_completed",
+          "timestamp": "2026-07-11T19:41:00.000Z",
+          "title": "Running",
+          "subtitle": "Workout tracked",
+          "imageThumb": null,
+          "kcal": 420,
+          "km": 5.2,
+          "sleepMs": null
+        }
+        """#.data(using: .utf8)!
+
+        let decoded = try JSONDecoder().decode(LogItem.self, from: json)
+
+        XCTAssertNil(decoded.hasExactTime)
     }
 
     // MARK: - dietDayData

@@ -145,12 +145,15 @@ enum LogsPagerSummary {
 
     // MARK: Meta label
 
-    /// `sleep_session` / `hrv_reading` are auto-synced from HealthKit with no
-    /// meaningful user-facing log time, so "auto" replaces the clock time.
-    /// Everything else gets the absolute local time ("7:41 PM").
-    static func metaLabel(type: String, date: Date) -> String {
+    /// `sleep_session` / `hrv_reading` are always labeled "auto". Items with
+    /// an explicitly inexact timestamp are labeled "Synced"; older responses
+    /// without the precision field retain the absolute local time behavior.
+    static func metaLabel(type: String, date: Date, hasExactTime: Bool? = nil) -> String {
         if type == "sleep_session" || type == "hrv_reading" {
             return "auto"
+        }
+        if hasExactTime == false {
+            return "Synced"
         }
         return timeFormatter.string(from: date)
     }
@@ -272,7 +275,11 @@ final class LogsViewModel: ObservableObject {
                     date:      date,
                     sfSymbol:  symbol(for: item.type),
                     thumbnail: thumbnail,
-                    meta:      LogsPagerSummary.metaLabel(type: item.type, date: date),
+                    meta:      LogsPagerSummary.metaLabel(
+                        type: item.type,
+                        date: date,
+                        hasExactTime: item.hasExactTime
+                    ),
                     kcal:      item.kcal,
                     km:        item.km,
                     sleepMs:   item.sleepMs
