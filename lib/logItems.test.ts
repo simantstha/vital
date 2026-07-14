@@ -82,20 +82,19 @@ test('uses an inexact noon anchor for missing and invalid workout start times', 
   }
 });
 
-test('treats a workout start time from a different calendar date as inexact', () => {
+test('keeps a valid UTC-rollover workout start time exact', () => {
   assert.deepEqual(mapHealthKitWorkout({
     date: '2026-07-14',
-    hkUuid: 'date-mismatch',
+    hkUuid: 'utc-rollover',
     type: 'running',
-    startTime: '2026-07-13T23:45:00-05:00',
+    startTime: '2026-07-15T01:00:00Z',
   }, 0), {
-    id: 'date-mismatch',
+    id: 'utc-rollover',
     type: 'workout_completed',
-    timestamp: '2026-07-14T12:00:00.000Z',
+    timestamp: '2026-07-15T01:00:00.000Z',
     title: 'Running',
     subtitle: 'Workout logged',
-    hasExactTime: false,
-    dayKey: '2026-07-14',
+    hasExactTime: true,
   });
 });
 

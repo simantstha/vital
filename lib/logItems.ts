@@ -201,10 +201,7 @@ export function mapHealthKitWorkout(workout: HealthKitWorkout, index: number): L
   const kcal = num(workout.kcal);
   const distanceM = num(workout.distance_m);
   const km = distanceM != null ? distanceM / 1000 : num(workout.distanceKm);
-  const startTime = str(workout.startTime);
-  const exactTimestamp = startTime?.slice(0, 10) === workout.date
-    ? normalizedStartTime(startTime)
-    : undefined;
+  const exactTimestamp = normalizedStartTime(workout.startTime);
 
   return {
     id: str(workout.hkUuid) ?? `${workout.date}-workout-${index}`,
