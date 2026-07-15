@@ -26,13 +26,14 @@ export function isValidTimeZone(tz: string | null | undefined): tz is string {
  */
 export function localDayKey(date: Date, tz: string | null | undefined): string {
   if (!isValidTimeZone(tz)) return date.toISOString().slice(0, 10); // UTC fallback
-  // en-CA renders as YYYY-MM-DD.
-  return new Intl.DateTimeFormat('en-CA', {
+  const parts = new Intl.DateTimeFormat('en-US', {
     timeZone: tz,
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
-  }).format(date);
+  }).formatToParts(date);
+  const value = (type: 'year' | 'month' | 'day') => parts.find(part => part.type === type)?.value;
+  return `${value('year')}-${value('month')}-${value('day')}`;
 }
 
 /**

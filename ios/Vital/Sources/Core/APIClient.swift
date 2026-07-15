@@ -151,6 +151,12 @@ struct APIClient {
         return try await get("/api/today?tz=\(encoded)")
     }
 
+    func fetchStreak() async throws -> StreakResponse {
+        let tz = TimeZone.current.identifier
+        let encoded = tz.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? tz
+        return try await get("/api/streak?tz=\(encoded)")
+    }
+
     // MARK: - Diet goal / budget
 
     func fetchDietGoal() async throws -> DietGoalResponse {
@@ -1023,6 +1029,10 @@ struct TodayResponse: Decodable {
     let insight: String
     let plan: [TodayPlanItem]
     let calibration: CalibrationStatus?
+}
+
+struct StreakResponse: Decodable {
+    let streakDays: Int
 }
 
 // MARK: - Diet goal types
