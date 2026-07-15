@@ -34,8 +34,16 @@ enum NotificationIdentifiers {
         "vital.reminder.brief.\(dayString(day))"
     }
 
+    static func mealBreakfast(_ day: Date) -> String {
+        "vital.reminder.meal.breakfast.\(dayString(day))"
+    }
+
     static func mealLunch(_ day: Date) -> String {
         "vital.reminder.meal.lunch.\(dayString(day))"
+    }
+
+    static func mealSnack(_ day: Date) -> String {
+        "vital.reminder.meal.snack.\(dayString(day))"
     }
 
     static func mealDinner(_ day: Date) -> String {
@@ -77,7 +85,9 @@ enum NotificationPrefsKeys {
     static let sleepEnabled = "notif.sleep.enabled"
 
     static let mealsEnabled = "notif.meals.enabled"
-    static let mealsLunchMinutes = "notif.meals.lunchMinutes"   // default 750 = 12:30pm
+    static let mealsBreakfastMinutes = "notif.meals.breakfastMinutes"  // default 480 = 8:00am
+    static let mealsLunchMinutes = "notif.meals.lunchMinutes"   // default 765 = 12:45pm
+    static let mealsSnackMinutes = "notif.meals.snackMinutes"   // default 960 = 4:00pm
     static let mealsDinnerMinutes = "notif.meals.dinnerMinutes"  // default 1170 = 7:30pm
 
     static let weighinEnabled = "notif.weighin.enabled"
@@ -90,7 +100,9 @@ enum NotificationPrefsKeys {
         workoutEnabled: true,
         sleepEnabled: true,
         mealsEnabled: true,
-        mealsLunchMinutes: 750,
+        mealsBreakfastMinutes: 480,
+        mealsLunchMinutes: 765,
+        mealsSnackMinutes: 960,
         mealsDinnerMinutes: 1170,
         weighinEnabled: true,
         weighinWeekday: 7,

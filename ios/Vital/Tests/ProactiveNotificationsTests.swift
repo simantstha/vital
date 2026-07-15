@@ -72,12 +72,20 @@ final class ProactiveNotificationsTests: XCTestCase {
     func testServerPreferencesPreserveLocalReminderSettings() {
         let mapped = NotificationPreferences.fromLocal(
             morningEnabled: false, morningMinutes: 510,
-            workoutEnabled: true, sleepEnabled: false, timezone: "America/Chicago"
+            workoutEnabled: true, sleepEnabled: false,
+            mealsEnabled: false, breakfastMinutes: 500,
+            lunchMinutes: 780, snackMinutes: 950, dinnerMinutes: 1140,
+            timezone: "America/Chicago"
         )
         XCTAssertEqual(mapped.morningBriefTimeMinutes, 510)
         XCTAssertEqual(mapped.timezone, "America/Chicago")
         XCTAssertTrue(mapped.workoutNotificationsEnabled)
         XCTAssertFalse(mapped.sleepNotificationsEnabled)
+        XCTAssertFalse(mapped.mealsEnabled)
+        XCTAssertEqual(mapped.mealBreakfastTimeMinutes, 500)
+        XCTAssertEqual(mapped.mealLunchTimeMinutes, 780)
+        XCTAssertEqual(mapped.mealSnackTimeMinutes, 950)
+        XCTAssertEqual(mapped.mealDinnerTimeMinutes, 1140)
     }
 
     func testLocalScheduleContainsNoMorningBrief() {
@@ -102,19 +110,30 @@ final class ProactiveNotificationsTests: XCTestCase {
         let suite = "hydrate-\(UUID())"; let defaults = UserDefaults(suiteName: suite)!
         defaults.set(false, forKey: NotificationPrefsKeys.mealsEnabled)
         defaults.set(900, forKey: NotificationPrefsKeys.mealsLunchMinutes)
-        let remote = NotificationPreferences.fromLocal(morningEnabled: false, morningMinutes: 600, workoutEnabled: false, sleepEnabled: true, timezone: "UTC")
+        let remote = NotificationPreferences.fromLocal(
+            morningEnabled: false, morningMinutes: 600, workoutEnabled: false, sleepEnabled: true,
+            mealsEnabled: true, breakfastMinutes: 495, lunchMinutes: 780, snackMinutes: 975, dinnerMinutes: 1155,
+            timezone: "UTC"
+        )
         let service = PushNotificationService(transport: MockTransport(remote))
         await service.hydratePreferences(defaults: defaults, timezone: TimeZone(identifier: "UTC")!)
         XCTAssertFalse(defaults.bool(forKey: NotificationPrefsKeys.briefEnabled))
         XCTAssertEqual(defaults.integer(forKey: NotificationPrefsKeys.briefMinutes), 600)
-        XCTAssertFalse(defaults.bool(forKey: NotificationPrefsKeys.mealsEnabled))
-        XCTAssertEqual(defaults.integer(forKey: NotificationPrefsKeys.mealsLunchMinutes), 900)
+        XCTAssertTrue(defaults.bool(forKey: NotificationPrefsKeys.mealsEnabled))
+        XCTAssertEqual(defaults.integer(forKey: NotificationPrefsKeys.mealsBreakfastMinutes), 495)
+        XCTAssertEqual(defaults.integer(forKey: NotificationPrefsKeys.mealsLunchMinutes), 780)
+        XCTAssertEqual(defaults.integer(forKey: NotificationPrefsKeys.mealsSnackMinutes), 975)
+        XCTAssertEqual(defaults.integer(forKey: NotificationPrefsKeys.mealsDinnerMinutes), 1155)
         defaults.removePersistentDomain(forName: suite)
     }
 
     func testGetFailureRetryActuallyHydratesAndClearsErrorOnlyAfterSuccess() async {
         let suite = "get-retry-\(UUID())"; let defaults = UserDefaults(suiteName: suite)!
-        let remote = NotificationPreferences.fromLocal(morningEnabled: false, morningMinutes: 620, workoutEnabled: true, sleepEnabled: false, timezone: "UTC")
+        let remote = NotificationPreferences.fromLocal(
+            morningEnabled: false, morningMinutes: 620, workoutEnabled: true, sleepEnabled: false,
+            mealsEnabled: true, breakfastMinutes: 480, lunchMinutes: 765, snackMinutes: 960, dinnerMinutes: 1170,
+            timezone: "UTC"
+        )
         let transport = MockTransport(remote); transport.failGet = true
         let service = PushNotificationService(transport: transport, debounceMilliseconds: nil)
         await service.hydratePreferences(defaults: defaults, timezone: TimeZone(identifier: "UTC")!)
@@ -130,8 +149,16 @@ final class ProactiveNotificationsTests: XCTestCase {
 
     func testLatestPreferenceWriteWinsAndOfflineRetryPersistsPending() async {
         let suite = "sync-\(UUID())"; let defaults = UserDefaults(suiteName: suite)!
-        let first = NotificationPreferences.fromLocal(morningEnabled: true, morningMinutes: 450, workoutEnabled: true, sleepEnabled: true, timezone: "UTC")
-        let latest = NotificationPreferences.fromLocal(morningEnabled: false, morningMinutes: 500, workoutEnabled: false, sleepEnabled: true, timezone: "UTC")
+        let first = NotificationPreferences.fromLocal(
+            morningEnabled: true, morningMinutes: 450, workoutEnabled: true, sleepEnabled: true,
+            mealsEnabled: true, breakfastMinutes: 480, lunchMinutes: 765, snackMinutes: 960, dinnerMinutes: 1170,
+            timezone: "UTC"
+        )
+        let latest = NotificationPreferences.fromLocal(
+            morningEnabled: false, morningMinutes: 500, workoutEnabled: false, sleepEnabled: true,
+            mealsEnabled: false, breakfastMinutes: 480, lunchMinutes: 765, snackMinutes: 960, dinnerMinutes: 1170,
+            timezone: "UTC"
+        )
         let transport = MockTransport(first); transport.failPut = true
         let service = PushNotificationService(transport: transport, debounceMilliseconds: nil)
         service.enqueuePreferences(first, defaults: defaults)

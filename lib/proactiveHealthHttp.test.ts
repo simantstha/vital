@@ -107,11 +107,18 @@ test('notification preferences return defaults and PUT validates all fields and 
     morningBriefTimeMinutes: 450,
     workoutNotificationsEnabled: true,
     sleepNotificationsEnabled: true,
+    mealsEnabled: true,
+    mealBreakfastTimeMinutes: 480,
+    mealLunchTimeMinutes: 765,
+    mealSnackTimeMinutes: 960,
+    mealDinnerTimeMinutes: 1170,
     timezone: 'UTC',
   });
   const valid = {
     morningBriefEnabled: false, morningBriefTimeMinutes: 0,
     workoutNotificationsEnabled: false, sleepNotificationsEnabled: true,
+    mealsEnabled: false, mealBreakfastTimeMinutes: 500,
+    mealLunchTimeMinutes: 780, mealSnackTimeMinutes: 950, mealDinnerTimeMinutes: 1140,
     timezone: 'America/Chicago',
   };
   assert.equal((await handlers.PUT(request('/api/notification-preferences', 'PUT', valid, 'user-a'))).status, 200);
@@ -122,7 +129,98 @@ test('notification preferences return defaults and PUT validates all fields and 
     { ...valid, morningBriefEnabled: 'yes' },
     { ...valid, timezone: 'Not/A_Zone' },
     { ...valid, sleepNotificationsEnabled: undefined },
+    { ...valid, mealsEnabled: 'yes' },
+    { ...valid, mealBreakfastTimeMinutes: -1 },
+    { ...valid, mealLunchTimeMinutes: 1440 },
+    { ...valid, mealSnackTimeMinutes: 1.5 },
+    { ...valid, mealDinnerTimeMinutes: null },
   ]) assert.equal((await handlers.PUT(request('/api/notification-preferences', 'PUT', invalid, 'user-a'))).status, 400);
+});
+
+test('legacy PUT without meal fields merges stored meal values instead of clobbering them', async () => {
+  const stored: NotificationPreferences = {
+    morningBriefEnabled: true, morningBriefTimeMinutes: 450,
+    workoutNotificationsEnabled: true, sleepNotificationsEnabled: true,
+    mealsEnabled: false, mealBreakfastTimeMinutes: 505,
+    mealLunchTimeMinutes: 790, mealSnackTimeMinutes: 955, mealDinnerTimeMinutes: 1125,
+    timezone: 'UTC',
+  };
+  let saved: NotificationPreferences | undefined;
+  let reads = 0;
+  const handlers = createNotificationPreferencesHttpHandlers({
+    authenticate,
+    repository: repository({
+      async getNotificationPreferences() { reads += 1; return stored; },
+      async putNotificationPreferences(_userId, preferences) { saved = preferences; return preferences; },
+    }),
+  });
+
+  // (1) Legacy 5-field payload (pre-meal-sync iOS builds): succeeds and
+  // keeps the previously stored meal values untouched.
+  const legacy = {
+    morningBriefEnabled: false, morningBriefTimeMinutes: 510,
+    workoutNotificationsEnabled: false, sleepNotificationsEnabled: true,
+    timezone: 'America/Chicago',
+  };
+  const response = await handlers.PUT(request('/api/notification-preferences', 'PUT', legacy, 'user-a'));
+  assert.equal(response.status, 200);
+  assert.equal(reads, 1);
+  assert.deepEqual(saved, {
+    ...legacy,
+    mealsEnabled: false, mealBreakfastTimeMinutes: 505,
+    mealLunchTimeMinutes: 790, mealSnackTimeMinutes: 955, mealDinnerTimeMinutes: 1125,
+  });
+
+  // A subset of meal fields merges per-field: provided values win, absent
+  // ones come from the stored row.
+  const partial = { ...legacy, mealLunchTimeMinutes: 800 };
+  assert.equal((await handlers.PUT(request('/api/notification-preferences', 'PUT', partial, 'user-a'))).status, 200);
+  assert.deepEqual(saved, {
+    ...legacy,
+    mealsEnabled: false, mealBreakfastTimeMinutes: 505,
+    mealLunchTimeMinutes: 800, mealSnackTimeMinutes: 955, mealDinnerTimeMinutes: 1125,
+  });
+
+  // (2) A present-but-invalid meal minute still 400s — absence is the only
+  // pass-through, never a bad value.
+  for (const invalid of [
+    { ...legacy, mealLunchTimeMinutes: 1440 },
+    { ...legacy, mealBreakfastTimeMinutes: -1 },
+    { ...legacy, mealsEnabled: 'yes' },
+  ]) assert.equal((await handlers.PUT(request('/api/notification-preferences', 'PUT', invalid, 'user-a'))).status, 400);
+
+  // (3) A full new-client payload round-trips as-is and never reads the
+  // stored row.
+  reads = 0; saved = undefined;
+  const full = {
+    ...legacy,
+    mealsEnabled: true, mealBreakfastTimeMinutes: 470,
+    mealLunchTimeMinutes: 760, mealSnackTimeMinutes: 965, mealDinnerTimeMinutes: 1180,
+  };
+  assert.equal((await handlers.PUT(request('/api/notification-preferences', 'PUT', full, 'user-a'))).status, 200);
+  assert.equal(reads, 0);
+  assert.deepEqual(saved, full);
+});
+
+test('legacy PUT for a user with no stored row falls back to default meal values', async () => {
+  let saved: NotificationPreferences | undefined;
+  const handlers = createNotificationPreferencesHttpHandlers({
+    authenticate,
+    repository: repository({
+      async putNotificationPreferences(_userId, preferences) { saved = preferences; return preferences; },
+    }),
+  });
+  const legacy = {
+    morningBriefEnabled: true, morningBriefTimeMinutes: 450,
+    workoutNotificationsEnabled: true, sleepNotificationsEnabled: true,
+    timezone: 'UTC',
+  };
+  assert.equal((await handlers.PUT(request('/api/notification-preferences', 'PUT', legacy, 'user-a'))).status, 200);
+  assert.deepEqual(saved, {
+    ...legacy,
+    mealsEnabled: true, mealBreakfastTimeMinutes: 480,
+    mealLunchTimeMinutes: 765, mealSnackTimeMinutes: 960, mealDinnerTimeMinutes: 1170,
+  });
 });
 
 test('analysis GET returns only an authenticated user ready non-deleted public DTO', async () => {

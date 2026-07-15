@@ -11,6 +11,11 @@ export interface NotificationPreferences {
   morningBriefTimeMinutes: number;
   workoutNotificationsEnabled: boolean;
   sleepNotificationsEnabled: boolean;
+  mealsEnabled: boolean;
+  mealBreakfastTimeMinutes: number;
+  mealLunchTimeMinutes: number;
+  mealSnackTimeMinutes: number;
+  mealDinnerTimeMinutes: number;
   timezone: string;
 }
 
@@ -49,6 +54,11 @@ export const DEFAULT_NOTIFICATION_PREFERENCES: NotificationPreferences = {
   morningBriefTimeMinutes: 450,
   workoutNotificationsEnabled: true,
   sleepNotificationsEnabled: true,
+  mealsEnabled: true,
+  mealBreakfastTimeMinutes: 480,
+  mealLunchTimeMinutes: 765,
+  mealSnackTimeMinutes: 960,
+  mealDinnerTimeMinutes: 1170,
   timezone: 'UTC',
 };
 
@@ -102,29 +112,64 @@ function isIanaTimezone(value: string): boolean {
   }
 }
 
-function parsePreferences(body: Record<string, unknown>): NotificationPreferences | null {
+function isValidMinutes(value: unknown): value is number {
+  return Number.isInteger(value) && (value as number) >= 0 && (value as number) <= 1439;
+}
+
+/**
+ * Parsed PUT payload. Meal fields are optional for backward compatibility:
+ * iOS builds that predate meal-reminder sync PUT only the original five
+ * fields and must neither be rejected nor have their stored meal settings
+ * clobbered — the PUT handler merges absent meal fields from the user's
+ * stored row. A meal field that IS present must still pass its type/range
+ * check independently.
+ */
+type MealPreferenceKey =
+  | 'mealsEnabled'
+  | 'mealBreakfastTimeMinutes'
+  | 'mealLunchTimeMinutes'
+  | 'mealSnackTimeMinutes'
+  | 'mealDinnerTimeMinutes';
+
+type NotificationPreferencesUpdate =
+  Omit<NotificationPreferences, MealPreferenceKey> & Partial<Pick<NotificationPreferences, MealPreferenceKey>>;
+
+function parsePreferences(body: Record<string, unknown>): NotificationPreferencesUpdate | null {
   const {
     morningBriefEnabled,
     morningBriefTimeMinutes,
     workoutNotificationsEnabled,
     sleepNotificationsEnabled,
+    mealsEnabled,
+    mealBreakfastTimeMinutes,
+    mealLunchTimeMinutes,
+    mealSnackTimeMinutes,
+    mealDinnerTimeMinutes,
     timezone,
   } = body;
   if (
     typeof morningBriefEnabled !== 'boolean'
-    || !Number.isInteger(morningBriefTimeMinutes)
-    || (morningBriefTimeMinutes as number) < 0
-    || (morningBriefTimeMinutes as number) > 1439
+    || !isValidMinutes(morningBriefTimeMinutes)
     || typeof workoutNotificationsEnabled !== 'boolean'
     || typeof sleepNotificationsEnabled !== 'boolean'
+    || (mealsEnabled !== undefined && typeof mealsEnabled !== 'boolean')
+    || (mealBreakfastTimeMinutes !== undefined && !isValidMinutes(mealBreakfastTimeMinutes))
+    || (mealLunchTimeMinutes !== undefined && !isValidMinutes(mealLunchTimeMinutes))
+    || (mealSnackTimeMinutes !== undefined && !isValidMinutes(mealSnackTimeMinutes))
+    || (mealDinnerTimeMinutes !== undefined && !isValidMinutes(mealDinnerTimeMinutes))
     || typeof timezone !== 'string'
     || !isIanaTimezone(timezone)
   ) return null;
   return {
     morningBriefEnabled,
-    morningBriefTimeMinutes: morningBriefTimeMinutes as number,
+    morningBriefTimeMinutes,
     workoutNotificationsEnabled,
     sleepNotificationsEnabled,
+    mealsEnabled: mealsEnabled as boolean | undefined,
+    mealBreakfastTimeMinutes: mealBreakfastTimeMinutes as number | undefined,
+    mealLunchTimeMinutes: mealLunchTimeMinutes as number | undefined,
+    mealSnackTimeMinutes: mealSnackTimeMinutes as number | undefined,
+    mealDinnerTimeMinutes: mealDinnerTimeMinutes as number | undefined,
     timezone,
   };
 }
@@ -175,8 +220,29 @@ export function createNotificationPreferencesHttpHandlers(dependencies: HttpDepe
       if (userId instanceof Response) return userId;
       const body = await jsonObject(request);
       if (body instanceof Response) return body;
-      const preferences = parsePreferences(body);
-      if (!preferences) return Response.json({ error: 'Invalid notification preferences.' }, { status: 400 });
+      const update = parsePreferences(body);
+      if (!update) return Response.json({ error: 'Invalid notification preferences.' }, { status: 400 });
+      // Legacy clients omit the meal fields — fill them from the user's
+      // stored preferences (falling back to defaults for a user with no
+      // row) so a legacy PUT never clobbers meal settings saved by a newer
+      // client. Full payloads skip the extra repository read entirely.
+      let preferences = update as NotificationPreferences;
+      const mealKeys = [
+        'mealsEnabled', 'mealBreakfastTimeMinutes', 'mealLunchTimeMinutes',
+        'mealSnackTimeMinutes', 'mealDinnerTimeMinutes',
+      ] as const;
+      if (mealKeys.some((key) => update[key] === undefined)) {
+        const stored = await dependencies.repository.getNotificationPreferences(userId)
+          ?? DEFAULT_NOTIFICATION_PREFERENCES;
+        preferences = {
+          ...update,
+          mealsEnabled: update.mealsEnabled ?? stored.mealsEnabled,
+          mealBreakfastTimeMinutes: update.mealBreakfastTimeMinutes ?? stored.mealBreakfastTimeMinutes,
+          mealLunchTimeMinutes: update.mealLunchTimeMinutes ?? stored.mealLunchTimeMinutes,
+          mealSnackTimeMinutes: update.mealSnackTimeMinutes ?? stored.mealSnackTimeMinutes,
+          mealDinnerTimeMinutes: update.mealDinnerTimeMinutes ?? stored.mealDinnerTimeMinutes,
+        };
+      }
       return Response.json(await dependencies.repository.putNotificationPreferences(userId, preferences));
     },
   };
