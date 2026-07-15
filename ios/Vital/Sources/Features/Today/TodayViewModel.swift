@@ -125,6 +125,7 @@ final class TodayViewModel: ObservableObject {
     private let apiClient = APIClient.shared
     private let calendarProvider = CalendarEventsProvider()
     private let fetchStreak: () async throws -> StreakResponse
+    private let deletePlanItem: (String) async throws -> Void
 
     // Phase 8 calendar-merge state. `lastServerPlanItems` is the most recent
     // server (or Phase-1-fallback) plan, kept so `syncCalendar()` can re-merge
@@ -137,8 +138,12 @@ final class TodayViewModel: ObservableObject {
 
     // MARK: - Init
 
-    init(fetchStreak: @escaping () async throws -> StreakResponse = { try await APIClient.shared.fetchStreak() }) {
+    init(
+        fetchStreak: @escaping () async throws -> StreakResponse = { try await APIClient.shared.fetchStreak() },
+        deletePlanItem: @escaping (String) async throws -> Void = { try await APIClient.shared.deletePlanItem(id: $0) }
+    ) {
         self.fetchStreak = fetchStreak
+        self.deletePlanItem = deletePlanItem
         refreshGreeting()
     }
 
@@ -644,7 +649,8 @@ final class TodayViewModel: ObservableObject {
 
         Task {
             do {
-                try await apiClient.deletePlanItem(id: id)
+                try await deletePlanItem(id)
+                await refreshStreak()
             } catch {
                 planItems.append(removed)
                 planItems.sort { $0.timeMinutes < $1.timeMinutes }

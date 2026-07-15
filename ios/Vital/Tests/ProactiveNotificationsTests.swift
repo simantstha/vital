@@ -4,6 +4,37 @@ import HealthKit
 
 @MainActor
 final class ProactiveNotificationsTests: XCTestCase {
+    @MainActor
+    func testConcurrentSyncRequestsJoinTheSameOperationUntilPersistenceCompletes() async {
+        let coalescer = SyncOperationCoalescer()
+        let started = expectation(description: "sync started")
+        var release: CheckedContinuation<Void, Never>?
+        var operationCount = 0
+        var secondReturned = false
+
+        let first = Task { @MainActor in
+            await coalescer.run {
+                operationCount += 1
+                started.fulfill()
+                await withCheckedContinuation { release = $0 }
+            }
+        }
+        await fulfillment(of: [started], timeout: 1)
+
+        let second = Task { @MainActor in
+            await coalescer.run { operationCount += 1 }
+            secondReturned = true
+        }
+        await Task.yield()
+
+        XCTAssertEqual(operationCount, 1)
+        XCTAssertFalse(secondReturned)
+        release?.resume()
+        await first.value
+        await second.value
+        XCTAssertTrue(secondReturned)
+    }
+
     final class MockTransport: NotificationPreferencesTransport {
         var remote: NotificationPreferences
         var puts: [NotificationPreferences] = []

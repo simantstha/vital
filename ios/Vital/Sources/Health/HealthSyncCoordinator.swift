@@ -1,6 +1,26 @@
 import Foundation
 import HealthKit
 
+/// Coalesces overlapping foreground/background sync requests. Every caller
+/// awaits the same in-flight task, so returning means persistence has actually
+/// finished rather than merely that another caller already started it.
+@MainActor
+final class SyncOperationCoalescer {
+    private var inFlight: Task<Void, Never>?
+
+    func run(_ operation: @escaping @MainActor () async -> Void) async {
+        if let inFlight {
+            await inFlight.value
+            return
+        }
+
+        let task = Task { @MainActor in await operation() }
+        inFlight = task
+        await task.value
+        inFlight = nil
+    }
+}
+
 /// Drives ongoing background HealthKit sync, as a companion to the one-time
 /// `BackfillCoordinator`: registers `enableBackgroundDelivery` + an
 /// `HKObserverQuery` for each backfilled sample type, and on every
@@ -30,6 +50,7 @@ final class HealthSyncCoordinator: ObservableObject {
     private let backfill: HealthKitBackfill
     private let apiClient: APIClient
     private let calendar = Calendar.current
+    private let syncCoalescer = SyncOperationCoalescer()
 
     private var didRegister = false
     private var observerQueries: [HKObserverQuery] = []
@@ -84,7 +105,9 @@ final class HealthSyncCoordinator: ObservableObject {
     /// (no debounce). Called from `TodayViewModel.loadFromHealthKit` so a
     /// fresh app launch doesn't wait on the next background observer fire.
     func syncNow() async {
-        await performSync()
+        await syncCoalescer.run { [weak self] in
+            await self?.performSync()
+        }
     }
 
     // MARK: - Observer plumbing
@@ -115,7 +138,7 @@ final class HealthSyncCoordinator: ObservableObject {
     private func flushPendingSync() async {
         let handlers = pendingCompletionHandlers
         pendingCompletionHandlers = []
-        await performSync()
+        await syncNow()
         handlers.forEach { $0() }
     }
 
@@ -127,7 +150,6 @@ final class HealthSyncCoordinator: ObservableObject {
     /// `HealthKitBackfill`, and posts them through the same
     /// `/api/ingest/daily` upsert the backfill uses.
     private func performSync() async {
-        guard !isSyncing else { return }
         isSyncing = true
         defer { isSyncing = false }
         lastSyncError = nil

@@ -36,4 +36,37 @@ final class TodayStreakTests: XCTestCase {
 
         XCTAssertEqual(viewModel.streakDays, 5)
     }
+
+    func testSuccessfulServerPlanDeletionRefreshesStreak() async {
+        let deleted = expectation(description: "plan item deleted")
+        let refreshed = expectation(description: "streak refreshed")
+        let viewModel = TodayViewModel(
+            fetchStreak: {
+                refreshed.fulfill()
+                return StreakResponse(streakDays: 2)
+            },
+            deletePlanItem: { id in
+                XCTAssertEqual(id, "server-done")
+                deleted.fulfill()
+            }
+        )
+        viewModel.planItems = [
+            PlanItem(
+                id: "server-done",
+                timeMinutes: 480,
+                title: "Morning walk",
+                subtitle: "",
+                sfSymbol: "figure.walk",
+                status: .done,
+                source: .user,
+                kind: .move
+            )
+        ]
+
+        viewModel.removeItem(id: "server-done")
+        await fulfillment(of: [deleted, refreshed], timeout: 1)
+
+        XCTAssertEqual(viewModel.streakDays, 2)
+        XCTAssertTrue(viewModel.planItems.isEmpty)
+    }
 }
