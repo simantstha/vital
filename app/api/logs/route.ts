@@ -18,6 +18,13 @@
  *     sleepMs?:    number,  // sleep_session only — duration in ms
  *     hasExactTime?: boolean, // HealthKit-derived items only
  *     dayKey?:     string,  // day-level HealthKit source date (yyyy-MM-dd)
+ *     analysisId?: string,  // ready proactive-analysis id — workout_completed
+ *                           // items match workout_analyses by (user_id, hk_uuid),
+ *                           // sleep_session items match sleep_analyses by
+ *                           // (user_id, wake_date = the item's day); present only
+ *                           // when a status='ready' (and non-deleted) analysis
+ *                           // exists, so clients can deep-link to GET
+ *                           // /api/{workout,sleep}-analyses/:id
  *   }]
  * }
  * (redesign-v3 Phase 6: kcal/km/sleepMs added so the Logs day-pager can
@@ -28,7 +35,7 @@
 
 import { NextResponse } from 'next/server';
 import { db, schema } from '@/db';
-import { eq, and, gte, inArray, desc } from 'drizzle-orm';
+import { eq, and, gte, inArray, desc, isNull } from 'drizzle-orm';
 import { getUserIdFromRequest } from '@/lib/auth';
 import { queryMetricPoints, queryWorkouts } from '@/lib/brain/tools';
 import {
@@ -36,6 +43,7 @@ import {
   mapEventToLogItem,
   mapHealthKitWorkout,
   sortLogItemsNewestFirst,
+  type LogItem,
 } from '@/lib/logItems';
 
 export const dynamic = 'force-dynamic';
@@ -86,5 +94,56 @@ export async function GET(request: Request): Promise<NextResponse> {
 
   const items = sortLogItemsNewestFirst([...eventItems, ...workoutItems, ...sleepItems]);
 
-  return NextResponse.json({ items });
+  return NextResponse.json({ items: await withAnalysisIds(userId, items) });
+}
+
+// ── Proactive-analysis linkage ──────────────────────────────────────────────
+
+/**
+ * Attaches `analysisId` to items that have a ready proactive analysis.
+ * Workout items are keyed by HealthKit UUID (the item id IS the hkUuid);
+ * sleep items are keyed by wake date (the item's day). Both lookups are
+ * batched into one query per kind for the whole range — never per item.
+ */
+async function withAnalysisIds(userId: string, items: LogItem[]): Promise<LogItem[]> {
+  const workoutIds = items.filter((i) => i.type === 'workout_completed').map((i) => i.id);
+  const sleepDays = items
+    .filter((i) => i.type === 'sleep_session')
+    .map((i) => i.dayKey ?? i.timestamp.slice(0, 10));
+
+  const [workoutRows, sleepRows] = await Promise.all([
+    workoutIds.length === 0 ? [] : db
+      .select({ hkUuid: schema.workout_analyses.hk_uuid, analysisId: schema.workout_analyses.id })
+      .from(schema.workout_analyses)
+      .where(
+        and(
+          eq(schema.workout_analyses.user_id, userId),
+          inArray(schema.workout_analyses.hk_uuid, workoutIds),
+          eq(schema.workout_analyses.status, 'ready'),
+          isNull(schema.workout_analyses.deleted_at),
+        ),
+      ),
+    sleepDays.length === 0 ? [] : db
+      .select({ wakeDate: schema.sleep_analyses.wake_date, analysisId: schema.sleep_analyses.id })
+      .from(schema.sleep_analyses)
+      .where(
+        and(
+          eq(schema.sleep_analyses.user_id, userId),
+          inArray(schema.sleep_analyses.wake_date, sleepDays),
+          eq(schema.sleep_analyses.status, 'ready'),
+        ),
+      ),
+  ]);
+
+  const workoutAnalysisByHkUuid = new Map(workoutRows.map((r) => [r.hkUuid, r.analysisId]));
+  const sleepAnalysisByWakeDate = new Map(sleepRows.map((r) => [r.wakeDate, r.analysisId]));
+
+  return items.map((item) => {
+    const analysisId = item.type === 'workout_completed'
+      ? workoutAnalysisByHkUuid.get(item.id)
+      : item.type === 'sleep_session'
+        ? sleepAnalysisByWakeDate.get(item.dayKey ?? item.timestamp.slice(0, 10))
+        : undefined;
+    return analysisId ? { ...item, analysisId } : item;
+  });
 }

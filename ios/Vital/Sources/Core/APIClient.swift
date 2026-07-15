@@ -1127,6 +1127,9 @@ struct LogItem: Decodable, Identifiable {
     let km: Double?
     /// sleep_session only — duration in ms (redesign-v3 Phase 6).
     let sleepMs: Double?
+    /// Ready proactive-analysis id for workout_completed / sleep_session
+    /// items — present only when the backend has a ready analysis to open.
+    let analysisId: String?
 }
 
 struct LogsResponse: Decodable {

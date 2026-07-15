@@ -97,7 +97,8 @@ test('stateful boundary filters analyses by owner, readiness, and deletion', asy
   const repository = new StatefulRepository();
   const base: AnalysisRecord = {
     id: analysisId, userId: 'user-a', status: 'ready', deletedAt: null,
-    date: '2026-07-12', result: { summary: 'ready' }, createdAt: new Date('2026-07-12T12:00:00Z'),
+    date: '2026-07-12', input: { type: 'running', durationMin: 42, kcal: 380 },
+    result: { summary: 'ready' }, createdAt: new Date('2026-07-12T12:00:00Z'),
   };
   const handler = createAnalysisHttpHandler({ authenticate, repository, kind: 'workout' });
   repository.analyses = [{ ...base, userId: 'user-b' }];

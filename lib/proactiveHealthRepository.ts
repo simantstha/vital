@@ -125,6 +125,7 @@ export const proactiveHealthRepository: ProactiveHealthRepository = {
         status: schema.workout_analyses.status,
         deletedAt: schema.workout_analyses.deleted_at,
         date: schema.workout_analyses.workout_date,
+        input: schema.workout_analyses.input_payload,
         result: schema.workout_analyses.result,
         createdAt: schema.workout_analyses.created_at,
       }).from(schema.workout_analyses).where(and(
@@ -140,6 +141,7 @@ export const proactiveHealthRepository: ProactiveHealthRepository = {
       userId: schema.sleep_analyses.user_id,
       status: schema.sleep_analyses.status,
       date: schema.sleep_analyses.wake_date,
+      input: schema.sleep_analyses.input_payload,
       result: schema.sleep_analyses.result,
       createdAt: schema.sleep_analyses.created_at,
     }).from(schema.sleep_analyses).where(and(

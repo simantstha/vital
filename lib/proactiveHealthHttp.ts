@@ -20,6 +20,8 @@ export interface AnalysisRecord {
   status: string;
   deletedAt: Date | null;
   date: string;
+  /** Raw HealthKit input payload the analysis was generated from (input_payload). */
+  input: unknown;
   result: unknown;
   createdAt: Date;
 }
@@ -208,6 +210,7 @@ export function createAnalysisHttpHandler(
         id: analysis.id,
         date: analysis.date,
         result: analysis.result,
+        metrics: analysis.input,
         createdAt: analysis.createdAt.toISOString(),
       });
     },
