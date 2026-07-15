@@ -16,7 +16,9 @@ struct NotificationSettingsView: View {
     @AppStorage(NotificationPrefsKeys.sleepEnabled) private var sleepEnabled = true
 
     @AppStorage(NotificationPrefsKeys.mealsEnabled) private var mealsEnabled = true
-    @AppStorage(NotificationPrefsKeys.mealsLunchMinutes) private var lunchMinutes = 750
+    @AppStorage(NotificationPrefsKeys.mealsBreakfastMinutes) private var breakfastMinutes = 480
+    @AppStorage(NotificationPrefsKeys.mealsLunchMinutes) private var lunchMinutes = 765
+    @AppStorage(NotificationPrefsKeys.mealsSnackMinutes) private var snackMinutes = 960
     @AppStorage(NotificationPrefsKeys.mealsDinnerMinutes) private var dinnerMinutes = 1170
 
     @AppStorage(NotificationPrefsKeys.weighinEnabled) private var weighinEnabled = true
@@ -163,14 +165,18 @@ struct NotificationSettingsView: View {
                 VStack(spacing: Theme.Spacing.md) {
                     Toggle("Remind me", isOn: $mealsEnabled)
                         .tint(Theme.Colors.accent)
-                        .onChange(of: mealsEnabled) { _, _ in resync() }
+                        .onChange(of: mealsEnabled) { _, _ in syncServer() }
 
                     if mealsEnabled {
                         Divider().overlay(Theme.Colors.glassBorder)
+                        DatePicker("Breakfast", selection: minutesBinding($breakfastMinutes), displayedComponents: .hourAndMinute)
+                            .onChange(of: breakfastMinutes) { _, _ in syncServer() }
                         DatePicker("Lunch", selection: minutesBinding($lunchMinutes), displayedComponents: .hourAndMinute)
-                            .onChange(of: lunchMinutes) { _, _ in resync() }
+                            .onChange(of: lunchMinutes) { _, _ in syncServer() }
+                        DatePicker("Snack", selection: minutesBinding($snackMinutes), displayedComponents: .hourAndMinute)
+                            .onChange(of: snackMinutes) { _, _ in syncServer() }
                         DatePicker("Dinner", selection: minutesBinding($dinnerMinutes), displayedComponents: .hourAndMinute)
-                            .onChange(of: dinnerMinutes) { _, _ in resync() }
+                            .onChange(of: dinnerMinutes) { _, _ in syncServer() }
                     }
                 }
             }
@@ -233,6 +239,8 @@ struct NotificationSettingsView: View {
         let value = NotificationPreferences.fromLocal(
             morningEnabled: briefEnabled, morningMinutes: briefMinutes,
             workoutEnabled: workoutEnabled, sleepEnabled: sleepEnabled,
+            mealsEnabled: mealsEnabled, breakfastMinutes: breakfastMinutes,
+            lunchMinutes: lunchMinutes, snackMinutes: snackMinutes, dinnerMinutes: dinnerMinutes,
             timezone: TimeZone.current.identifier
         )
         PushNotificationService.shared.enqueuePreferences(value)

@@ -299,12 +299,33 @@ export const notification_preferences = p.pgTable('notification_preferences', {
   morning_brief_time_minutes:    p.integer('morning_brief_time_minutes').default(450).notNull(),
   workout_notifications_enabled: p.boolean('workout_notifications_enabled').default(true).notNull(),
   sleep_notifications_enabled:   p.boolean('sleep_notifications_enabled').default(true).notNull(),
+  meals_enabled:                 p.boolean('meals_enabled').default(true).notNull(),
+  meal_breakfast_time_minutes:   p.integer('meal_breakfast_time_minutes').default(480).notNull(),
+  meal_lunch_time_minutes:       p.integer('meal_lunch_time_minutes').default(765).notNull(),
+  meal_snack_time_minutes:       p.integer('meal_snack_time_minutes').default(960).notNull(),
+  meal_dinner_time_minutes:      p.integer('meal_dinner_time_minutes').default(1170).notNull(),
   timezone:                      p.text('timezone').default('UTC').notNull(),
   updated_at:                    p.timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [
   p.check(
     'notification_preferences_morning_time_check',
     sql`${t.morning_brief_time_minutes} between 0 and 1439`,
+  ),
+  p.check(
+    'notification_preferences_meal_breakfast_time_check',
+    sql`${t.meal_breakfast_time_minutes} between 0 and 1439`,
+  ),
+  p.check(
+    'notification_preferences_meal_lunch_time_check',
+    sql`${t.meal_lunch_time_minutes} between 0 and 1439`,
+  ),
+  p.check(
+    'notification_preferences_meal_snack_time_check',
+    sql`${t.meal_snack_time_minutes} between 0 and 1439`,
+  ),
+  p.check(
+    'notification_preferences_meal_dinner_time_check',
+    sql`${t.meal_dinner_time_minutes} between 0 and 1439`,
   ),
 ]);
 

@@ -84,7 +84,10 @@ test('stateful boundary upserts preferences independently per authenticated user
   const handlers = createNotificationPreferencesHttpHandlers({ authenticate, repository });
   const preferences = {
     morningBriefEnabled: false, morningBriefTimeMinutes: 510,
-    workoutNotificationsEnabled: true, sleepNotificationsEnabled: false, timezone: 'America/Chicago',
+    workoutNotificationsEnabled: true, sleepNotificationsEnabled: false,
+    mealsEnabled: true, mealBreakfastTimeMinutes: 480,
+    mealLunchTimeMinutes: 765, mealSnackTimeMinutes: 960, mealDinnerTimeMinutes: 1170,
+    timezone: 'America/Chicago',
   };
   await handlers.PUT(request('/api/notification-preferences', 'PUT', 'user-a', preferences));
   await handlers.PUT(request('/api/notification-preferences', 'PUT', 'user-a', { ...preferences, morningBriefTimeMinutes: 600 }));

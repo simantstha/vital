@@ -19,6 +19,11 @@ function preferencesDto(row: typeof schema.notification_preferences.$inferSelect
     morningBriefTimeMinutes: row.morning_brief_time_minutes,
     workoutNotificationsEnabled: row.workout_notifications_enabled,
     sleepNotificationsEnabled: row.sleep_notifications_enabled,
+    mealsEnabled: row.meals_enabled,
+    mealBreakfastTimeMinutes: row.meal_breakfast_time_minutes,
+    mealLunchTimeMinutes: row.meal_lunch_time_minutes,
+    mealSnackTimeMinutes: row.meal_snack_time_minutes,
+    mealDinnerTimeMinutes: row.meal_dinner_time_minutes,
     timezone: row.timezone,
   };
 }
@@ -107,6 +112,11 @@ export const proactiveHealthRepository: ProactiveHealthRepository = {
       morning_brief_time_minutes: preferences.morningBriefTimeMinutes,
       workout_notifications_enabled: preferences.workoutNotificationsEnabled,
       sleep_notifications_enabled: preferences.sleepNotificationsEnabled,
+      meals_enabled: preferences.mealsEnabled,
+      meal_breakfast_time_minutes: preferences.mealBreakfastTimeMinutes,
+      meal_lunch_time_minutes: preferences.mealLunchTimeMinutes,
+      meal_snack_time_minutes: preferences.mealSnackTimeMinutes,
+      meal_dinner_time_minutes: preferences.mealDinnerTimeMinutes,
       timezone: preferences.timezone,
       updated_at: new Date(),
     };

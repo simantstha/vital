@@ -15,13 +15,22 @@ struct NotificationPreferences: Codable, Equatable {
     let morningBriefTimeMinutes: Int
     let workoutNotificationsEnabled: Bool
     let sleepNotificationsEnabled: Bool
+    let mealsEnabled: Bool
+    let mealBreakfastTimeMinutes: Int
+    let mealLunchTimeMinutes: Int
+    let mealSnackTimeMinutes: Int
+    let mealDinnerTimeMinutes: Int
     let timezone: String
 
     static func fromLocal(morningEnabled: Bool, morningMinutes: Int, workoutEnabled: Bool,
-                          sleepEnabled: Bool, timezone: String) -> Self {
+                          sleepEnabled: Bool, mealsEnabled: Bool, breakfastMinutes: Int,
+                          lunchMinutes: Int, snackMinutes: Int, dinnerMinutes: Int,
+                          timezone: String) -> Self {
         Self(morningBriefEnabled: morningEnabled, morningBriefTimeMinutes: morningMinutes,
              workoutNotificationsEnabled: workoutEnabled, sleepNotificationsEnabled: sleepEnabled,
-             timezone: timezone)
+             mealsEnabled: mealsEnabled, mealBreakfastTimeMinutes: breakfastMinutes,
+             mealLunchTimeMinutes: lunchMinutes, mealSnackTimeMinutes: snackMinutes,
+             mealDinnerTimeMinutes: dinnerMinutes, timezone: timezone)
     }
 
     static func current(defaults: UserDefaults = .standard, timezone: TimeZone = .current) -> Self {
@@ -29,6 +38,11 @@ struct NotificationPreferences: Codable, Equatable {
                   morningMinutes: defaults.integer(forKey: NotificationPrefsKeys.briefMinutes),
                   workoutEnabled: defaults.bool(forKey: NotificationPrefsKeys.workoutEnabled),
                   sleepEnabled: defaults.bool(forKey: NotificationPrefsKeys.sleepEnabled),
+                  mealsEnabled: defaults.bool(forKey: NotificationPrefsKeys.mealsEnabled),
+                  breakfastMinutes: defaults.integer(forKey: NotificationPrefsKeys.mealsBreakfastMinutes),
+                  lunchMinutes: defaults.integer(forKey: NotificationPrefsKeys.mealsLunchMinutes),
+                  snackMinutes: defaults.integer(forKey: NotificationPrefsKeys.mealsSnackMinutes),
+                  dinnerMinutes: defaults.integer(forKey: NotificationPrefsKeys.mealsDinnerMinutes),
                   timezone: timezone.identifier)
     }
 }
@@ -191,13 +205,26 @@ final class PushNotificationService: ObservableObject {
             defaults.set(remote.morningBriefTimeMinutes, forKey: NotificationPrefsKeys.briefMinutes)
             defaults.set(remote.workoutNotificationsEnabled, forKey: NotificationPrefsKeys.workoutEnabled)
             defaults.set(remote.sleepNotificationsEnabled, forKey: NotificationPrefsKeys.sleepEnabled)
+            defaults.set(remote.mealsEnabled, forKey: NotificationPrefsKeys.mealsEnabled)
+            defaults.set(remote.mealBreakfastTimeMinutes, forKey: NotificationPrefsKeys.mealsBreakfastMinutes)
+            defaults.set(remote.mealLunchTimeMinutes, forKey: NotificationPrefsKeys.mealsLunchMinutes)
+            defaults.set(remote.mealSnackTimeMinutes, forKey: NotificationPrefsKeys.mealsSnackMinutes)
+            defaults.set(remote.mealDinnerTimeMinutes, forKey: NotificationPrefsKeys.mealsDinnerMinutes)
             preferencesError = nil
             if remote.timezone != timezone.identifier {
                 enqueuePreferences(.fromLocal(morningEnabled: remote.morningBriefEnabled,
                     morningMinutes: remote.morningBriefTimeMinutes,
                     workoutEnabled: remote.workoutNotificationsEnabled,
-                    sleepEnabled: remote.sleepNotificationsEnabled, timezone: timezone.identifier), defaults: defaults)
+                    sleepEnabled: remote.sleepNotificationsEnabled,
+                    mealsEnabled: remote.mealsEnabled, breakfastMinutes: remote.mealBreakfastTimeMinutes,
+                    lunchMinutes: remote.mealLunchTimeMinutes, snackMinutes: remote.mealSnackTimeMinutes,
+                    dinnerMinutes: remote.mealDinnerTimeMinutes, timezone: timezone.identifier), defaults: defaults)
             }
+            // Server-owned meal times feed ReminderScheduler's local
+            // notification window directly (unlike brief*, which is
+            // server-scheduled remote push) — resync so a fresh install or
+            // a value changed on another device takes effect immediately.
+            await ReminderScheduler.shared.resync()
         } catch { preferencesError = "Couldn’t load notification preferences." }
     }
 
