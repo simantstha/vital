@@ -41,10 +41,40 @@ struct AnalysisResult: Codable, Equatable {
     let nextSteps: [String]
 }
 
+/// Raw HealthKit numbers the analysis was generated from — echoed by the API
+/// as `metrics`. One all-optional shape covers both kinds: workout payloads
+/// carry type/durationMin/kcal/distanceM/avgHr/maxHr/paceMinPerKm/
+/// elevationGainM/startTime; sleep payloads carry minutes and stage minutes.
+struct AnalysisMetrics: Codable, Equatable {
+    struct SleepStages: Codable, Equatable {
+        let core: Double?
+        let deep: Double?
+        let rem: Double?
+        let awake: Double?
+    }
+
+    // Workout shape
+    let type: String?
+    let durationMin: Double?
+    let kcal: Double?
+    let distanceM: Double?
+    let avgHr: Double?
+    let maxHr: Double?
+    let paceMinPerKm: Double?
+    let elevationGainM: Double?
+    let startTime: String?
+
+    // Sleep shape
+    let minutes: Double?
+    let stages: SleepStages?
+}
+
 struct AnalysisResponse: Codable, Equatable {
     let id: String
     let date: String
     let result: AnalysisResult
+    /// Absent in older API responses; the metrics card is hidden when nil.
+    let metrics: AnalysisMetrics?
     let createdAt: Date
 }
 

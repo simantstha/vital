@@ -1,11 +1,21 @@
 import SwiftUI
 
+/// Sheet target for a log row's proactive analysis — `kind` is the row's
+/// log type (workout_completed / sleep_session), `analysisId` the ready
+/// analysis to open.
+private struct AnalysisSheetTarget: Identifiable {
+    let kind: String
+    let analysisId: String
+    var id: String { analysisId }
+}
+
 /// The Logs tab: a 7-day pager (today ... six days ago) over a unified
 /// activity feed, with a per-day diet-budget card (live/tappable for today,
 /// read-only for past days) and a hairline-separated entries list.
 struct LogsView: View {
     @StateObject private var vm = LogsViewModel()
     @State private var showDietSheet = false
+    @State private var analysisTarget: AnalysisSheetTarget?
 
     private var currentDay: LogDay? {
         vm.days.indices.contains(vm.selectedIndex) ? vm.days[vm.selectedIndex] : nil
@@ -55,6 +65,13 @@ struct LogsView: View {
                     initialTarget: vm.todayTargetKcal,
                     onRefreshToday: { Task { await vm.invalidateTodayMealCache() } }
                 )
+            }
+        }
+        .sheet(item: $analysisTarget) { target in
+            if target.kind == "workout_completed" {
+                WorkoutAnalysisView(id: target.analysisId)
+            } else {
+                SleepAnalysisView(id: target.analysisId)
             }
         }
     }
@@ -146,7 +163,16 @@ private extension LogsView {
                 } else {
                     VStack(spacing: 0) {
                         ForEach(Array(day.items.enumerated()), id: \.element.id) { index, item in
-                            LogEntryRow(item: item, isFirst: index == 0)
+                            if let analysisId = item.analysisId {
+                                Button {
+                                    analysisTarget = AnalysisSheetTarget(kind: item.type, analysisId: analysisId)
+                                } label: {
+                                    LogEntryRow(item: item, isFirst: index == 0)
+                                }
+                                .buttonStyle(.plain)
+                            } else {
+                                LogEntryRow(item: item, isFirst: index == 0)
+                            }
                         }
                     }
                 }
@@ -216,6 +242,12 @@ private struct LogEntryRow: View {
             Text(item.meta)
                 .font(.system(size: 12))
                 .foregroundStyle(Theme.Colors.textTertiary)
+
+            if item.analysisId != nil {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Theme.Colors.textTertiary)
+            }
         }
         .padding(.horizontal, Theme.Spacing.lg)
         .padding(.vertical, Theme.Spacing.md)

@@ -10,6 +10,8 @@ export interface LogItem {
   sleepMs?: number;
   hasExactTime?: boolean;
   dayKey?: string;
+  /** Ready proactive-analysis id for workout_completed / sleep_session items. */
+  analysisId?: string;
 }
 
 export interface DailySleepRow {

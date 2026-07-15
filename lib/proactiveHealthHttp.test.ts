@@ -128,7 +128,9 @@ test('notification preferences return defaults and PUT validates all fields and 
 test('analysis GET returns only an authenticated user ready non-deleted public DTO', async () => {
   const record: AnalysisRecord = {
     id: '11111111-1111-4111-8111-111111111111', userId: 'user-a', status: 'ready', deletedAt: null,
-    date: '2026-07-12', result: { summary: 'Good run' }, createdAt: new Date('2026-07-12T12:00:00Z'),
+    date: '2026-07-12',
+    input: { type: 'running', durationMin: 59, kcal: 97, distanceM: 10200, avgHr: 151, maxHr: 176, paceMinPerKm: 5.78, startTime: '2026-07-12T11:00:00Z' },
+    result: { summary: 'Good run' }, createdAt: new Date('2026-07-12T12:00:00Z'),
   };
   const seen: string[][] = [];
   const handler = createAnalysisHttpHandler({
@@ -146,13 +148,32 @@ test('analysis GET returns only an authenticated user ready non-deleted public D
   assert.equal(response.status, 200);
   assert.deepEqual(seen, [['workout', 'user-a', record.id]]);
   assert.deepEqual(await response.json(), {
-    id: record.id, date: '2026-07-12', result: { summary: 'Good run' }, createdAt: '2026-07-12T12:00:00.000Z',
+    id: record.id, date: '2026-07-12', result: { summary: 'Good run' },
+    metrics: { type: 'running', durationMin: 59, kcal: 97, distanceM: 10200, avgHr: 151, maxHr: 176, paceMinPerKm: 5.78, startTime: '2026-07-12T11:00:00Z' },
+    createdAt: '2026-07-12T12:00:00.000Z',
   });
 
   for (const hidden of [null, { ...record, userId: 'user-b' }, { ...record, status: 'processing' }, { ...record, deletedAt: new Date() }]) {
     const hiddenHandler = createAnalysisHttpHandler({ authenticate, kind: 'sleep', repository: repository({ async getAnalysis() { return hidden; } }) });
     assert.equal((await hiddenHandler.GET(request(`/api/sleep-analyses/${record.id}`, 'GET', undefined, 'user-a'), { params: Promise.resolve({ id: record.id }) })).status, 404);
   }
+});
+
+test('analysis GET echoes the sleep input payload as metrics', async () => {
+  const record: AnalysisRecord = {
+    id: '22222222-2222-4222-8222-222222222222', userId: 'user-a', status: 'ready', deletedAt: null,
+    date: '2026-07-13',
+    input: { minutes: 431, stages: { core: 312, deep: 55, rem: 64, awake: 12 } },
+    result: { summary: 'Solid night' }, createdAt: new Date('2026-07-13T08:00:00Z'),
+  };
+  const handler = createAnalysisHttpHandler({
+    authenticate,
+    kind: 'sleep',
+    repository: repository({ async getAnalysis() { return record; } }),
+  });
+  const response = await handler.GET(request(`/api/sleep-analyses/${record.id}`, 'GET', undefined, 'user-a'), { params: Promise.resolve({ id: record.id }) });
+  assert.equal(response.status, 200);
+  assert.deepEqual((await response.json()).metrics, { minutes: 431, stages: { core: 312, deep: 55, rem: 64, awake: 12 } });
 });
 
 test('analysis GET passes one canonical UUID to the repository', async () => {

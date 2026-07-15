@@ -55,7 +55,8 @@ final class LogsPagerTests: XCTestCase {
             meta: LogsPagerSummary.metaLabel(type: type, date: d),
             kcal: kcal,
             km: km,
-            sleepMs: sleepMs
+            sleepMs: sleepMs,
+            analysisId: nil
         )
     }
 
@@ -115,7 +116,8 @@ final class LogsPagerTests: XCTestCase {
             meta: "auto",
             kcal: nil,
             km: nil,
-            sleepMs: 28_800_000
+            sleepMs: 28_800_000,
+            analysisId: nil
         )
 
         let days = LogsPagerSummary.bucketDays(items: [sleep], today: today, calendar: kiritimati)

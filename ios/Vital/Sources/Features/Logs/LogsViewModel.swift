@@ -24,6 +24,9 @@ struct LogDisplayItem: Identifiable {
     let km: Double?
     /// sleep_session only — duration in ms.
     let sleepMs: Double?
+    /// Ready proactive-analysis id (workout/sleep) — rows with one become
+    /// tappable and open the corresponding analysis sheet.
+    let analysisId: String?
 }
 
 // MARK: - Day model (fixed 7-slot pager)
@@ -289,7 +292,8 @@ final class LogsViewModel: ObservableObject {
                     ),
                     kcal:      item.kcal,
                     km:        item.km,
-                    sleepMs:   item.sleepMs
+                    sleepMs:   item.sleepMs,
+                    analysisId: item.analysisId
                 )
             }
             days = LogsPagerSummary.bucketDays(items: displayItems, today: Date())
