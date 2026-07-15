@@ -39,3 +39,7 @@ primary_region = "ord"
   size = "shared-cpu-1x"
   memory = "1gb"
   cpus = 1
+
+[[restart]]
+  policy = "always"
+  processes = ["worker"]
