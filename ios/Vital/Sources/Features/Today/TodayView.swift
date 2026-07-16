@@ -71,6 +71,7 @@ struct TodayView: View {
                 .padding(.bottom, Theme.Spacing.lg)
             }
             .scrollIndicators(.hidden)
+            .refreshable { await vm.loadHealthData() }
             .task {
                 await vm.loadHealthData()
                 if vm.didLoadToday { ReminderScheduler.shared.briefViewed(at: Date()) }
