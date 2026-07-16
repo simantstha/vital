@@ -30,7 +30,7 @@
 
 import type { Tool } from '@anthropic-ai/sdk/resources/messages';
 import { db, schema } from '@/db';
-import { eq, and, gte, lt, asc, desc } from 'drizzle-orm';
+import { eq, and, gte, gt, lt, asc, desc } from 'drizzle-orm';
 import { lookupNutrition } from '@/lib/nutritionix';
 import { lookupBarcode } from '@/lib/openFoodFacts';
 import type { BaselineStats } from '@/lib/brain/baselines';
@@ -359,6 +359,28 @@ export const BRAIN_TOOLS: Tool[] = [
       required: ['metric', 'periodDays', 'offsetDays'],
     },
   },
+  {
+    name: 'get_schedule',
+    description:
+      'Get the user\'s synced calendar busy blocks (times + titles only — never ' +
+      'locations, attendees, or notes) for a date range, rendered in the user\'s own ' +
+      'timezone. Use whenever a question involves timing, planning, or availability — ' +
+      'never guess at what\'s on their calendar.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        startDate: {
+          type: 'string',
+          description: 'Optional start date as YYYY-MM-DD. Defaults to today.',
+        },
+        days: {
+          type: 'number',
+          description: 'How many days forward to look (1-14, default 3).',
+        },
+      },
+      required: [],
+    },
+  },
 ];
 
 // ── Deterministic macro math ──────────────────────────────────────────────────
@@ -508,6 +530,8 @@ export function toolCallLabel(name: string, input: Record<string, unknown>): str
       return `Checking your ${metricLabel(String(input.metric ?? ''))} baseline…`;
     case 'compare_periods':
       return 'Comparing periods…';
+    case 'get_schedule':
+      return 'Checking your schedule…';
     case 'read_memory':
       return 'Checking my notes on you…';
     case 'write_memory':
@@ -822,6 +846,98 @@ export async function queryComparePeriods(
   };
 }
 
+// ── calendar_blocks query + render helpers ─────────────────────────────────────
+// Plain functions (no Anthropic tool binding) so both the get_schedule tool
+// executor below and lib/brain/context.ts's "### Schedule" prompt section
+// share one query + one timezone-safe rendering implementation — the model
+// (and the prompt) never do timezone math themselves.
+
+export interface ScheduleBlock {
+  id:      string;
+  startAt: Date;
+  endAt:   Date;
+  allDay:  boolean;
+  title:   string | null;
+}
+
+/** Raw calendar_blocks rows for a user within [from, to), ordered by start_at. */
+export async function queryScheduleWindow(
+  userId: string,
+  from: Date,
+  to: Date,
+): Promise<ScheduleBlock[]> {
+  return db
+    .select({
+      id:      schema.calendar_blocks.id,
+      startAt: schema.calendar_blocks.start_at,
+      endAt:   schema.calendar_blocks.end_at,
+      allDay:  schema.calendar_blocks.all_day,
+      title:   schema.calendar_blocks.title,
+    })
+    .from(schema.calendar_blocks)
+    .where(
+      and(
+        eq(schema.calendar_blocks.user_id, userId),
+        lt(schema.calendar_blocks.start_at, to),
+        gt(schema.calendar_blocks.end_at, from),
+      ),
+    )
+    .orderBy(asc(schema.calendar_blocks.start_at));
+}
+
+const SCHEDULE_DATE_TIME_FMT: Intl.DateTimeFormatOptions = {
+  weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+};
+const SCHEDULE_DATE_ONLY_FMT: Intl.DateTimeFormatOptions = {
+  weekday: 'short', month: 'short', day: 'numeric',
+};
+const SCHEDULE_TIME_ONLY_FMT: Intl.DateTimeFormatOptions = {
+  hour: 'numeric', minute: '2-digit',
+};
+
+/** Intl.DateTimeFormat in `timezone`, falling back to UTC on an invalid IANA id. */
+function formatInTimezone(date: Date, timezone: string, options: Intl.DateTimeFormatOptions): string {
+  try {
+    return new Intl.DateTimeFormat('en-US', { ...options, timeZone: timezone }).format(date);
+  } catch {
+    return new Intl.DateTimeFormat('en-US', { ...options, timeZone: 'UTC' }).format(date);
+  }
+}
+
+export interface RenderedScheduleEntry {
+  start:  string;
+  end:    string;
+  allDay: boolean;
+  title:  string;
+}
+
+/** Human-readable start/end + title for one block, rendered in the user's timezone. */
+export function renderScheduleBlock(block: ScheduleBlock, timezone: string): RenderedScheduleEntry {
+  const title = block.title && block.title.trim().length > 0 ? block.title : 'Busy';
+  if (block.allDay) {
+    return {
+      start:  formatInTimezone(block.startAt, timezone, SCHEDULE_DATE_ONLY_FMT),
+      end:    formatInTimezone(block.endAt, timezone, SCHEDULE_DATE_ONLY_FMT),
+      allDay: true,
+      title,
+    };
+  }
+  return {
+    start:  formatInTimezone(block.startAt, timezone, SCHEDULE_DATE_TIME_FMT),
+    end:    formatInTimezone(block.endAt, timezone, SCHEDULE_TIME_ONLY_FMT),
+    allDay: false,
+    title,
+  };
+}
+
+/** Compact one-line rendering for the prompt's "### Schedule" section. */
+export function formatScheduleLine(block: ScheduleBlock, timezone: string): string {
+  const rendered = renderScheduleBlock(block, timezone);
+  return rendered.allDay
+    ? `- ${rendered.start} (all day): ${rendered.title}`
+    : `- ${rendered.start}–${rendered.end}: ${rendered.title}`;
+}
+
 // ── Tool executor ─────────────────────────────────────────────────────────────
 
 export async function executeToolCall(
@@ -1088,6 +1204,30 @@ export async function executeToolCall(
     if (!metric) return 'Error: metric is required.';
 
     return JSON.stringify(await queryComparePeriods(userId, metric, periodDays, offsetDays));
+  }
+
+  // ── get_schedule ──────────────────────────────────────────────────────────
+  if (name === 'get_schedule') {
+    const days = Math.max(1, Math.min(14, Math.round(Number(input.days ?? 3))));
+
+    const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+    const startDateStr = typeof input.startDate === 'string' && DATE_RE.test(input.startDate)
+      ? input.startDate
+      : null;
+    const from = startDateStr ? new Date(`${startDateStr}T00:00:00.000Z`) : new Date();
+    const to = new Date(from.getTime() + days * 86_400_000);
+
+    const [userRow] = await db
+      .select({ timezone: schema.users.timezone })
+      .from(schema.users)
+      .where(eq(schema.users.id, userId))
+      .limit(1);
+    const timezone = userRow?.timezone ?? 'UTC';
+
+    const blocks = await queryScheduleWindow(userId, from, to);
+    const busy = blocks.map((b) => renderScheduleBlock(b, timezone));
+
+    return JSON.stringify({ timezone, busy });
   }
 
   return `Unknown tool: ${name}`;
