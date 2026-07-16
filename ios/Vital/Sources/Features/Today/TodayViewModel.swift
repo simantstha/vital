@@ -1,5 +1,7 @@
 import Foundation
 import Combine
+import EventKit
+import UIKit
 
 // MARK: - Local metric models (UI layer)
 
@@ -136,6 +138,13 @@ final class TodayViewModel: ObservableObject {
     private var lastServerPlanItems: [PlanItem] = []
     private var hiddenCalendarItemIDs: Set<String> = []
 
+    // Notification observer tokens for calendar and app foreground events.
+    // Calendar events are read locally per merge; these observers keep the
+    // plan timeline fresh when the calendar changes (EKEventStoreChanged) or
+    // the app foregrounds (willEnterForegroundNotification).
+    private var calendarStoreObserverToken: NSObjectProtocol?
+    private var foregroundObserverToken: NSObjectProtocol?
+
     // MARK: - Init
 
     init(
@@ -145,6 +154,38 @@ final class TodayViewModel: ObservableObject {
         self.fetchStreak = fetchStreak
         self.deletePlanItem = deletePlanItem
         refreshGreeting()
+
+        // Set up observers for calendar changes and app foreground events.
+        // When the calendar store changes or the app foregrounds, re-merge
+        // plan items so any new or moved calendar events appear immediately.
+        calendarStoreObserverToken = NotificationCenter.default.addObserver(
+            forName: .EKEventStoreChanged,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.mergeAndSetPlanItems(serverItems: self?.lastServerPlanItems ?? [])
+            }
+        }
+
+        foregroundObserverToken = NotificationCenter.default.addObserver(
+            forName: UIApplication.willEnterForegroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.mergeAndSetPlanItems(serverItems: self?.lastServerPlanItems ?? [])
+            }
+        }
+    }
+
+    deinit {
+        if let token = calendarStoreObserverToken {
+            NotificationCenter.default.removeObserver(token)
+        }
+        if let token = foregroundObserverToken {
+            NotificationCenter.default.removeObserver(token)
+        }
     }
 
     // MARK: - Called from TodayView.task
