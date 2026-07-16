@@ -11,7 +11,7 @@ import {
 
 export { AnalysisContentError, type AnalysisFailureCategory } from './proactiveAnalysisGrounding';
 
-export const DEFAULT_PROACTIVE_ANALYSIS_MODEL = 'claude-sonnet-4-6';
+export const DEFAULT_PROACTIVE_ANALYSIS_MODEL = 'claude-haiku-4-5';
 export type AnalysisAttempt = 'initial' | 'repair';
 export type AnalysisFailureOutcome = 'repair_started' | 'repair_succeeded' | 'repair_exhausted';
 
@@ -35,11 +35,12 @@ export interface GenerateGroundedAnalysisArgs {
 }
 
 const SCHEMA_CONTRACT = `headline, shortInsight, and narrative must each be a non-empty JSON string. observations and nextSteps must each be a JSON array of non-empty JSON strings. No additional keys are allowed.`;
-const TOKEN_CONTRACT = `Copy only supplied evidence tokens exactly. Use the fewest evidence tokens needed to answer the request, and omit a token when qualitative language is sufficient. Copy a token only into a scalar string or an individual array-item string. Never repeat an evidence token anywhere in the response. A copied token must be the final content of its clause or string. When punctuation is used, place the token immediately before a terminal punctuation mark, with no unit, qualifier, parenthetical, symbol, or other prose between the token and that punctuation. Place no content after the token in that clause. Never place a sign before a token or a unit, percent, degree, or other numeric symbol after it. Never alter, split, concatenate, nest, enumerate, or manufacture a token. Never write a raw number or numeric symbol sequence.`;
+const TOKEN_CONTRACT = `Copy only supplied evidence tokens exactly. Cite the session's key metrics: for a workout, cite duration, distance, pace, and average heart rate when supplied; for sleep, cite duration and efficiency. Copy a token only into a scalar string or an individual array-item string. Never repeat an evidence token anywhere in the response. A copied token must be the final content of its clause or string. When punctuation is used, place the token immediately before a terminal punctuation mark, with no unit, qualifier, parenthetical, symbol, or other prose between the token and that punctuation. Place no content after the token in that clause. Never place a sign before a token or a unit, percent, degree, or other numeric symbol after it. Never alter, split, concatenate, nest, enumerate, or manufacture a token. Never write a raw number or numeric symbol sequence.`;
+const CONTENT_CONTRACT = `Name the workout type or sleep in the headline using a few words. Make the shortInsight one sentence containing the single most notable metric. Keep the narrative to at most three sentences about this session only. Anchor each observation to a supplied metric, giving two or three observations. Give one or two next steps. Never repeat the same fact or profile detail in more than one field; mention profile or goal context only when it changes what the user should do next.`;
 
-export const PROACTIVE_ANALYSIS_SYSTEM_PROMPT = `You are Vital coach. Return JSON only with exactly headline, shortInsight, narrative, observations, and nextSteps. ${SCHEMA_CONTRACT} Keep the output observational and non-diagnostic. ${TOKEN_CONTRACT}`;
+export const PROACTIVE_ANALYSIS_SYSTEM_PROMPT = `You are Vital coach. Return JSON only with exactly headline, shortInsight, narrative, observations, and nextSteps. ${SCHEMA_CONTRACT} Keep the output observational and non-diagnostic. ${TOKEN_CONTRACT} ${CONTENT_CONTRACT}`;
 
-export const PROACTIVE_ANALYSIS_REPAIR_PROMPT = `Repair the Vital coach response for the supplied failure category and request. Return a full replacement as JSON only with exactly headline, shortInsight, narrative, observations, and nextSteps. ${SCHEMA_CONTRACT} Keep the output observational and non-diagnostic. ${TOKEN_CONTRACT}`;
+export const PROACTIVE_ANALYSIS_REPAIR_PROMPT = `Repair the Vital coach response for the supplied failure category and request. Return a full replacement as JSON only with exactly headline, shortInsight, narrative, observations, and nextSteps. ${SCHEMA_CONTRACT} Keep the output observational and non-diagnostic. ${TOKEN_CONTRACT} ${CONTENT_CONTRACT}`;
 
 export function proactiveAnalysisModel(env: NodeJS.ProcessEnv): string {
   return env.PROACTIVE_ANALYSIS_MODEL ?? DEFAULT_PROACTIVE_ANALYSIS_MODEL;

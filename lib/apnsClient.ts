@@ -1,8 +1,9 @@
 import { createPrivateKey, sign } from 'node:crypto';
 import http2 from 'node:http2';
-import { classifyApnsResponse, type CoachAnalysis, type PushDevice, type PushOutcome } from './proactiveHealthWorker';
+import { classifyApnsResponse, type PushDevice, type PushOutcome } from './proactiveHealthWorker';
 
 export interface ApnsConfig { keyId: string; teamId: string; topic: string; privateKey: string }
+export interface ApnsAlert { title: string; body: string }
 export interface ApnsTransport { request(origin: string, headers: Record<string, string>, body: string): Promise<{ status: number; body: string; latencyMs: number }> }
 export type ApnsRoute = { type: 'workout_analysis' | 'sleep_analysis'; id: string; deepLink: string } | { type: 'morning_brief'; deepLink: string };
 
@@ -21,9 +22,9 @@ export class ApnsClient {
     this.jwt = { token: `${unsigned}.${base64url(signature)}`, issuedAt: seconds };
     return this.jwt.token;
   }
-  async send(device: PushDevice, analysis: CoachAnalysis, route?: ApnsRoute, now = new Date()): Promise<PushOutcome> {
+  async send(device: PushDevice, alert: ApnsAlert, route?: ApnsRoute, now = new Date()): Promise<PushOutcome> {
     const origin = device.environment === 'production' ? 'https://api.push.apple.com' : 'https://api.sandbox.push.apple.com';
-    const payload = JSON.stringify({ aps: { alert: { title: analysis.headline, body: analysis.shortInsight }, sound: 'default' }, ...route });
+    const payload = JSON.stringify({ aps: { alert: { title: alert.title, body: alert.body }, sound: 'default' }, ...route });
     let response: { status: number; body: string; latencyMs: number };
     try {
       response = await this.transport.request(origin, {

@@ -1,6 +1,32 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { rawSqlTimeBindings, rawSqlTimestamp, workerErrorEvent } from './proactiveHealthWorkerSupport';
+import { analysisAlert, rawSqlTimeBindings, rawSqlTimestamp, workerErrorEvent } from './proactiveHealthWorkerSupport';
+
+test('workout analysis alert is a static line naming the logged workout type', () => {
+  assert.deepEqual(analysisAlert('workout', { type: 'Walking' }), {
+    title: 'Workout logged',
+    body: 'Your walking workout has been logged.',
+  });
+  assert.deepEqual(analysisAlert('workout', { type: 'Running' }), {
+    title: 'Workout logged',
+    body: 'Your running workout has been logged.',
+  });
+});
+
+test('workout analysis alert falls back to a generic body when the type is missing or non-string', () => {
+  assert.deepEqual(analysisAlert('workout', {}), { title: 'Workout logged', body: 'Your workout has been logged.' });
+  assert.deepEqual(analysisAlert('workout', { type: 7 }), { title: 'Workout logged', body: 'Your workout has been logged.' });
+  assert.deepEqual(analysisAlert('workout', null), { title: 'Workout logged', body: 'Your workout has been logged.' });
+  assert.deepEqual(analysisAlert('workout', undefined), { title: 'Workout logged', body: 'Your workout has been logged.' });
+  assert.deepEqual(analysisAlert('workout', 'Walking'), { title: 'Workout logged', body: 'Your workout has been logged.' });
+});
+
+test('sleep analysis alert is a fixed static line regardless of input', () => {
+  assert.deepEqual(analysisAlert('sleep', { anything: 'ignored' }), {
+    title: 'Sleep logged',
+    body: "Last night's sleep has been logged.",
+  });
+});
 
 test('raw SQL timestamps are ISO strings rather than Date instances', () => {
   const now = new Date('2026-07-13T12:34:56.789Z');
