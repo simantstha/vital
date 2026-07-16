@@ -57,6 +57,7 @@ export interface DaySnapshot {
 export interface CoachContext {
   userId: string;
   today: DaySnapshot;
+  localNow: string;                 // human-readable current date/time in the user's timezone, e.g. "Wednesday, July 15, 2026, 6:33 PM CDT"
   recentMessages: Array<{ role: string; content: string; timestamp: Date }>;
   hardConstraints: OntologyNode[];  // Allergy, Condition, Medication, Injury
   softFacts: OntologyNode[];        // Goal, Habit, FoodPreference, etc.
@@ -171,7 +172,7 @@ function buildPromptText(
   const lines: string[] = ['## Vital Context'];
 
   // ── Today ──────────────────────────────────────────────────────────────────
-  lines.push(`\n### Today — ${ctx.today.date}`);
+  lines.push(`\n### Today — ${ctx.localNow}`);
 
   if (ctx.today.hrv != null)
     lines.push(`- HRV: ${ctx.today.hrv}ms`);
@@ -343,6 +344,20 @@ export async function assembleContext(userId: string): Promise<CoachContext> {
     db.select().from(schema.users).where(eq(schema.users.id, userId)).limit(1),
   ]);
 
+  // Compute user's local date/time in their timezone
+  const tz = usersRow?.timezone ?? 'UTC';
+  const nowFormat: Intl.DateTimeFormatOptions = {
+    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+    hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
+  };
+  let localNow: string;
+  try {
+    localNow = new Intl.DateTimeFormat('en-US', { ...nowFormat, timeZone: tz }).format(now);
+  } catch {
+    // invalid IANA id stored in DB — fall back to UTC
+    localNow = new Intl.DateTimeFormat('en-US', { ...nowFormat, timeZone: 'UTC' }).format(now);
+  }
+
   // Today snapshot
   const todayStr = todayStart.toISOString().split('T')[0];
   const today = buildDaySnapshot(todayStr, todayEvents);
@@ -364,6 +379,7 @@ export async function assembleContext(userId: string): Promise<CoachContext> {
   const partial: Omit<CoachContext, 'promptText'> = {
     userId,
     today,
+    localNow,
     recentMessages,
     hardConstraints,
     softFacts,
