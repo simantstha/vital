@@ -70,8 +70,8 @@ function assertGuarded(request: AnalysisGenerationRequest): void {
   assert.doesNotMatch(request.system + request.content, /\p{N}/u);
 }
 
-test('defaults to Sonnet model and preserves the environment override', () => {
-  assert.equal(proactiveAnalysisModel({} as NodeJS.ProcessEnv), 'claude-sonnet-4-6');
+test('defaults to Haiku model and preserves the environment override', () => {
+  assert.equal(proactiveAnalysisModel({} as NodeJS.ProcessEnv), 'claude-haiku-4-5');
   assert.equal(proactiveAnalysisModel({ PROACTIVE_ANALYSIS_MODEL: 'custom-model' } as unknown as NodeJS.ProcessEnv), 'custom-model');
 });
 
@@ -88,8 +88,9 @@ for (const [name, prompt] of [
     assert.match(prompt, /observational/i);
     assert.match(prompt, /non-diagnostic/i);
     assert.match(prompt, /copy only supplied evidence tokens exactly/i);
-    assert.match(prompt, /fewest evidence tokens needed/i);
-    assert.match(prompt, /omit (?:an evidence |a )?token when qualitative language is sufficient/i);
+    assert.match(prompt, /cite the session's key metrics/i);
+    assert.match(prompt, /duration, distance, pace, and average heart rate/i);
+    assert.match(prompt, /duration and efficiency/i);
     assert.match(prompt, /never repeat an evidence token anywhere in the response/i);
     assert.match(prompt, /final content of (?:its|the) clause or string/i);
     assert.match(prompt, /immediately before (?:a )?terminal punctuation mark/i);
@@ -99,9 +100,22 @@ for (const [name, prompt] of [
     assert.match(prompt, /no content after the token in that clause/i);
     assert.match(prompt, /scalar string or (?:an )?individual array-item string/i);
     assert.doesNotMatch(prompt, /five schema string locations/i);
-    for (const rule of ['alter', 'split', 'concatenate', 'nest', 'enumerate', 'manufacture', 'raw number', 'numeric symbol sequence', 'qualitative language', 'unit', 'sign', 'symbol']) {
+    for (const rule of ['alter', 'split', 'concatenate', 'nest', 'enumerate', 'manufacture', 'raw number', 'numeric symbol sequence', 'unit', 'sign', 'symbol']) {
       assert.match(prompt, new RegExp(rule, 'i'));
     }
+  });
+
+  test(`${name} prompt's content contract keeps the popup short and metric-anchored`, () => {
+    assert.doesNotMatch(prompt, /\p{N}/u);
+    assert.match(prompt, /names? the workout type or sleep in the headline/i);
+    assert.match(prompt, /a few words/i);
+    assert.match(prompt, /single most notable metric/i);
+    assert.match(prompt, /at most three sentences/i);
+    assert.match(prompt, /this session only/i);
+    assert.match(prompt, /anchor each observation to a supplied metric/i);
+    assert.match(prompt, /two or three observations/i);
+    assert.match(prompt, /one or two next steps/i);
+    assert.match(prompt, /never repeat the same fact or profile detail in more than one field/i);
   });
 }
 

@@ -4,7 +4,7 @@ import { generateGroundedAnalysis, proactiveAnalysisModel, type AnalysisFailureE
 import { type GroundedAnalysisProof } from '../lib/proactiveAnalysisGrounding';
 import { consumeMorningAnalysisProof, deliverNotification, runClaimedAnalysis, type AnalysisContext, type AnalysisJob } from '../lib/proactiveHealthWorker';
 import { claimAnalysisJobs, claimDueMorningBriefs, completeMorningBrief, ensureDefaultPreferencesForRegisteredUsers, failMorningBrief, listReadyNotificationCandidates, workerRepository } from '../lib/proactiveHealthWorkerRepository';
-import { workerErrorEvent, type WorkerStage } from '../lib/proactiveHealthWorkerSupport';
+import { analysisAlert, workerErrorEvent, type WorkerStage } from '../lib/proactiveHealthWorkerSupport';
 
 const intervalMs = Number(process.env.PROACTIVE_WORKER_INTERVAL_MS ?? 15_000);
 const anthropic = new Anthropic({ apiKey: required('ANTHROPIC_API_KEY') });
@@ -41,7 +41,7 @@ async function tick(reportStage: (stage: WorkerStage) => void): Promise<void> {
   const jobs = await claimAnalysisJobs(now);
   for (const job of jobs) {
     reportStage('process-analysis-job');
-    await runClaimedAnalysis(job, workerRepository, analyze, (device, result) => apns.send(device, result, { type: `${job.kind}_analysis`, id: job.id, deepLink: `vital://${job.kind}-analysis/${job.id}` }), now);
+    await runClaimedAnalysis(job, workerRepository, analyze, (device) => apns.send(device, analysisAlert(job.kind, job.input), { type: `${job.kind}_analysis`, id: job.id, deepLink: `vital://${job.kind}-analysis/${job.id}` }), now);
   }
 
   reportStage('list-notification-candidates');
@@ -49,7 +49,7 @@ async function tick(reportStage: (stage: WorkerStage) => void): Promise<void> {
   for (const candidate of candidates) {
     reportStage('deliver-notification');
     const token = await workerRepository.claimNotification(candidate.job, now);
-    if (token) await deliverNotification(candidate.job, candidate.result, token, workerRepository, (device, result) => apns.send(device, result, { type: `${candidate.job.kind}_analysis`, id: candidate.job.id, deepLink: `vital://${candidate.job.kind}-analysis/${candidate.job.id}` }), now);
+    if (token) await deliverNotification(candidate.job, candidate.result, token, workerRepository, (device) => apns.send(device, analysisAlert(candidate.job.kind, candidate.job.input), { type: `${candidate.job.kind}_analysis`, id: candidate.job.id, deepLink: `vital://${candidate.job.kind}-analysis/${candidate.job.id}` }), now);
   }
 
   reportStage('claim-morning-briefs');
@@ -66,7 +66,7 @@ async function tick(reportStage: (stage: WorkerStage) => void): Promise<void> {
         input: job.input,
         availableContext: context,
       });
-      await completeMorningBrief(claim, result, (device, value) => apns.send(device, value, { type: 'morning_brief', deepLink: 'vital://today' }), now);
+      await completeMorningBrief(claim, result, (device, value) => apns.send(device, { title: value.headline, body: value.shortInsight }, { type: 'morning_brief', deepLink: 'vital://today' }), now);
     } catch (error) {
       console.error(JSON.stringify(workerErrorEvent('process-morning-brief', error)));
       await failMorningBrief(claim, new Date());

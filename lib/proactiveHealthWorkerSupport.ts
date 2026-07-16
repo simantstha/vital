@@ -1,6 +1,18 @@
+import { type AnalysisKind } from './proactiveHealthWorker';
+
 export interface RawSqlTimeBindings {
   now: string;
   lease: string;
+}
+
+export interface AnalysisAlert { title: string; body: string }
+
+/** Static, LLM-free push copy for workout/sleep jobs — the analysis content lives behind the tap, not on the lock screen. */
+export function analysisAlert(kind: AnalysisKind, input: unknown): AnalysisAlert {
+  if (kind === 'sleep') return { title: 'Sleep logged', body: "Last night's sleep has been logged." };
+  const type = input && typeof input === 'object' && !Array.isArray(input) ? (input as Record<string, unknown>).type : undefined;
+  if (typeof type === 'string' && type.trim()) return { title: 'Workout logged', body: `Your ${type.trim().toLowerCase()} workout has been logged.` };
+  return { title: 'Workout logged', body: 'Your workout has been logged.' };
 }
 
 export function rawSqlTimestamp(date: Date): string {
