@@ -89,10 +89,26 @@ enum CalendarPlanMapping {
     }
 }
 
-/// Read-only EventKit access for merging today's calendar into the plan
-/// timeline (Phase 8). Wraps a single `EKEventStore`; events are only ever
-/// read on-device and mapped into `PlanItem`s here — never sent to the
-/// backend (privacy decision, `docs/redesign-v3-plan.md` §4.5). Access is
+/// A busy window derived from an EventKit event, for syncing to the backend
+/// so the coach can plan around the user's day. Deliberately narrow — only
+/// the fields needed to describe "the user is unavailable here, doing
+/// roughly this": start/end/all-day plus a title. Never carries location,
+/// attendees, or notes.
+struct CalendarBusyBlock: Equatable {
+    let start: Date
+    let end: Date
+    let allDay: Bool
+    let title: String?
+}
+
+/// Read-only EventKit access for the Today plan timeline (Phase 8) and for
+/// calendar sync to the backend. Wraps a single `EKEventStore`; events are
+/// always read on-device first. `fetchTodayPlanItems` maps events into
+/// `PlanItem`s purely for the on-device Today timeline merge and never
+/// leaves the device. `fetchBusyBlocks` additionally produces busy windows
+/// (titles + times only — never locations, attendees, or notes) that
+/// `CalendarSyncCoordinator` posts to the backend, with user consent, so the
+/// health coach can see upcoming events and plan around them. Access is
 /// never requested automatically; `TodayViewModel.syncCalendar()` only calls
 /// `requestAccess()` in response to an explicit user tap.
 @MainActor
@@ -161,5 +177,40 @@ final class CalendarEventsProvider {
                 kind: .other
             )
         }
+    }
+
+    /// Fetches busy windows across `[windowStart, windowEnd)`, for
+    /// `CalendarSyncCoordinator` to post to the backend. Mirrors
+    /// `fetchTodayPlanItems`'s canceled/declined filtering, additionally
+    /// drops `.free`-availability events (the user isn't actually busy —
+    /// nothing for the coach to plan around), and caps the result at 500
+    /// blocks so a pathological calendar can't balloon the request body.
+    /// Returns `[]` when not authorized.
+    func fetchBusyBlocks(windowStart: Date, windowEnd: Date) -> [CalendarBusyBlock] {
+        guard authorizationStatus == .fullAccess else { return [] }
+
+        let predicate = store.predicateForEvents(withStart: windowStart, end: windowEnd, calendars: nil)
+        let events = store.events(matching: predicate)
+
+        let blocks = events.compactMap { event -> CalendarBusyBlock? in
+            guard event.status != .canceled else { return nil }
+            guard event.availability != .free else { return nil }
+            // Cheap declined-event check — attendee data is already bundled
+            // with events fetched via the predicate above, no extra fetch.
+            if let attendees = event.attendees,
+               let selfAttendee = attendees.first(where: { $0.isCurrentUser }),
+               selfAttendee.participantStatus == .declined {
+                return nil
+            }
+
+            return CalendarBusyBlock(
+                start: event.startDate,
+                end: event.endDate,
+                allDay: event.isAllDay,
+                title: event.title?.isEmpty == false ? event.title : nil
+            )
+        }
+
+        return Array(blocks.prefix(500))
     }
 }
