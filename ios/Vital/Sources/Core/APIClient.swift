@@ -736,6 +736,33 @@ struct APIClient {
         return try decoder.decode(DailyIngestResponse.self, from: data).upserted
     }
 
+    // MARK: - Calendar ingest (busy blocks for the coach)
+
+    /// Posts EventKit busy blocks for `[windowStart, windowEnd)` to
+    /// `POST /api/ingest/calendar`, which replaces the stored blocks for that
+    /// window and returns how many rows it wrote. Mirrors `postDailyIngest`'s
+    /// request pattern; `windowStart`/`windowEnd`/each block's `start`/`end`
+    /// encode as ISO8601 via the shared `encoder`.
+    func postCalendarBlocks(
+        windowStart: Date,
+        windowEnd: Date,
+        blocks: [CalendarBlockDTO]
+    ) async throws -> Int {
+        guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/ingest/calendar") else {
+            throw APIError.invalidURL
+        }
+        var request = authorizedRequest(url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 30
+        request.httpBody = try encoder.encode(
+            CalendarIngestRequestBody(windowStart: windowStart, windowEnd: windowEnd, blocks: blocks)
+        )
+        let (data, response) = try await session.data(for: request)
+        try validate(response)
+        return try decoder.decode(CalendarIngestResponse.self, from: data).replaced
+    }
+
     // MARK: - Onboarding
 
     /// Submits the full onboarding questionnaire in one shot. The server
@@ -884,6 +911,30 @@ private struct DailyIngestRequestBody: Encodable {
 
 private struct DailyIngestResponse: Decodable {
     let upserted: Int
+}
+
+// MARK: - Calendar ingest DTOs
+//
+// Mirror POST /api/ingest/calendar's request schema: { windowStart, windowEnd,
+// blocks: [{ start, end, allDay, title? }] } → { replaced: n }.
+
+/// One EventKit busy block, as posted to `/api/ingest/calendar`. Titles-only
+/// — never location, attendees, or notes (see `CalendarBusyBlock`).
+struct CalendarBlockDTO: Encodable {
+    let start: Date
+    let end: Date
+    let allDay: Bool
+    let title: String?
+}
+
+private struct CalendarIngestRequestBody: Encodable {
+    let windowStart: Date
+    let windowEnd: Date
+    let blocks: [CalendarBlockDTO]
+}
+
+private struct CalendarIngestResponse: Decodable {
+    let replaced: Int
 }
 
 // MARK: - Onboarding DTOs

@@ -36,6 +36,12 @@ struct RootView: View {
                         // hasn't been granted.
                         await ReminderScheduler.shared.resync()
                         await PushNotificationService.shared.hydratePreferences()
+                        // No-ops until the user has granted calendar access
+                        // (CalendarEventsProvider gate) — covers the case
+                        // where access was already granted in a prior
+                        // session, so the coach has fresh blocks without
+                        // waiting on the next foreground.
+                        await CalendarSyncCoordinator.shared.syncNow()
                     }
             }
         }
@@ -50,6 +56,7 @@ struct RootView: View {
                 await ReminderScheduler.shared.resync()
                 if authViewModel.isAuthenticated {
                     await PushNotificationService.shared.hydratePreferences()
+                    await CalendarSyncCoordinator.shared.syncNow()
                 }
             }
         }
