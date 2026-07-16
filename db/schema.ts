@@ -431,7 +431,9 @@ export const push_attempts = p.pgTable('push_attempts', {
 // YYYY-MM-DD key using the same convention as `lib/localDay.ts`. Seeded
 // additively from the cached daily brief's meals + a synthetic sleep item
 // (see app/api/plan/route.ts); user-added items get source='user'.
-// Calendar events are never stored here (privacy) — merged client-side only.
+// Calendar busy blocks with titles now sync to `calendar_blocks` below with
+// user consent (titles only — never locations/attendees/notes); plan_items
+// itself still never stores calendar events — merged client-side only.
 // status values: 'pending' | 'done' | 'skipped'. kind values: 'meal' | 'move'
 // | 'rest' | 'sleep' | 'other'. source values: 'coach' | 'user'.
 
@@ -450,6 +452,26 @@ export const plan_items = p.pgTable('plan_items', {
   updated_at:   p.timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [
   p.index('plan_items_user_day_idx').on(t.user_id, t.local_day),
+]);
+
+// ─── calendar_blocks ─────────────────────────────────────────────────────────
+// Coach calendar awareness (see docs Calendar Integration plan). iOS syncs
+// EventKit busy blocks here with explicit user consent — title only, never
+// location/attendees/notes. Full-replace sync: a POST to
+// /api/ingest/calendar deletes existing rows overlapping the posted window
+// for the user, then bulk-inserts the fresh set, so re-posting the same
+// window is idempotent by construction (no dedup key needed).
+
+export const calendar_blocks = p.pgTable('calendar_blocks', {
+  id:         p.uuid('id').primaryKey().defaultRandom(),
+  user_id:    p.uuid('user_id').notNull().references(() => users.id),
+  start_at:   p.timestamp('start_at', { withTimezone: true }).notNull(),
+  end_at:     p.timestamp('end_at', { withTimezone: true }).notNull(),
+  all_day:    p.boolean('all_day').default(false).notNull(),
+  title:      p.text('title'),                                                // nullable — "Busy" fallback when absent
+  synced_at:  p.timestamp('synced_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  p.index('calendar_blocks_user_start_idx').on(t.user_id, t.start_at),
 ]);
 
 // ─── Inferred TypeScript types ────────────────────────────────────────────────
@@ -487,6 +509,9 @@ export type NewBaseline    = typeof baselines.$inferInsert;
 
 export type PlanItemRow    = typeof plan_items.$inferSelect;                  // 'PlanItem' avoided — collides with iOS-side name in spirit, not compilation, but keep distinct
 export type NewPlanItemRow = typeof plan_items.$inferInsert;
+
+export type CalendarBlock    = typeof calendar_blocks.$inferSelect;
+export type NewCalendarBlock = typeof calendar_blocks.$inferInsert;
 
 export type PushDevice = typeof push_devices.$inferSelect;
 export type NotificationPreference = typeof notification_preferences.$inferSelect;

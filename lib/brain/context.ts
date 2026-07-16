@@ -19,7 +19,10 @@ import { db, schema } from '@/db';
 import { eq, and, gte, desc } from 'drizzle-orm';
 import type { OntologyNode } from '@/db/schema';
 import { getCalibration, type Calibration } from './baselines';
-import { queryAllBaselines, metricLabel, type BaselineSnapshot } from './tools';
+import {
+  queryAllBaselines, metricLabel, type BaselineSnapshot,
+  queryScheduleWindow, formatScheduleLine, type ScheduleBlock,
+} from './tools';
 import { resolveDietBudget, type DietBudget } from './dietBudget';
 import { getCachedBrief, briefCacheKey, type CachedBrief } from './briefCache';
 import { getConversationStart } from './conversationWindow';
@@ -58,6 +61,8 @@ export interface CoachContext {
   userId: string;
   today: DaySnapshot;
   localNow: string;                 // human-readable current date/time in the user's timezone, e.g. "Wednesday, July 15, 2026, 6:33 PM CDT"
+  timezone: string;                 // IANA id backing localNow + schedule rendering; 'UTC' when unset/invalid
+  schedule: ScheduleBlock[];        // calendar_blocks in the next 48h, if the user has synced
   recentMessages: Array<{ role: string; content: string; timestamp: Date }>;
   hardConstraints: OntologyNode[];  // Allergy, Condition, Medication, Injury
   softFacts: OntologyNode[];        // Goal, Habit, FoodPreference, etc.
@@ -227,6 +232,16 @@ function buildPromptText(
     lines.push(`- Remaining today: ${b.targetKcal - mealTotal.kcal} kcal`);
   }
 
+  // ── Schedule (next 48h calendar_blocks, if the user has synced) ────────────
+  lines.push('\n### Schedule');
+  if (ctx.schedule.length === 0) {
+    lines.push('- No calendar synced yet');
+  } else {
+    for (const block of ctx.schedule.slice(0, 12)) {
+      lines.push(formatScheduleLine(block, ctx.timezone));
+    }
+  }
+
   // ── App's meal plan for today (only if the daily brief cache is warm) ──────
   if (ctx.cachedBrief?.plan && ctx.cachedBrief.plan.length > 0) {
     lines.push("\n### App's meal plan for today");
@@ -306,10 +321,15 @@ export async function assembleContext(userId: string): Promise<CoachContext> {
   // query below depends on it.
   const conversationStart = await getConversationStart(db, userId, now);
 
+  const in48h = new Date(now.getTime() + 48 * 3_600_000);
+
   // Run all queries in parallel for minimal latency. Only today's events are
   // fetched here — multi-day history lives behind the data tools (tools.ts),
-  // not pre-computed into the prompt (Phase 3 tool-first design rule).
-  const [todayEvents, allNodes, rawMessages, baselines, calibration, [usersRow]] = await Promise.all([
+  // not pre-computed into the prompt (Phase 3 tool-first design rule). The
+  // schedule is the one exception: a small "next 48h" snapshot is worth the
+  // prompt tokens so the coach doesn't need a tool round-trip for "am I free
+  // this afternoon" — the full range stays tool-only via get_schedule.
+  const [todayEvents, allNodes, rawMessages, baselines, calibration, [usersRow], schedule] = await Promise.all([
     db.select()
       .from(schema.events)
       .where(
@@ -342,6 +362,7 @@ export async function assembleContext(userId: string): Promise<CoachContext> {
     queryAllBaselines(userId),
     getCalibration(userId),
     db.select().from(schema.users).where(eq(schema.users.id, userId)).limit(1),
+    queryScheduleWindow(userId, now, in48h),
   ]);
 
   // Compute user's local date/time in their timezone
@@ -380,6 +401,8 @@ export async function assembleContext(userId: string): Promise<CoachContext> {
     userId,
     today,
     localNow,
+    timezone: tz,
+    schedule,
     recentMessages,
     hardConstraints,
     softFacts,
