@@ -517,10 +517,6 @@ private struct MessageBubbleView: View {
             HStack(alignment: .top, spacing: Theme.Spacing.sm) {
                 if message.role == .user { Spacer(minLength: 48) }
 
-                if message.role == .assistant && resolvedPresentation.bubbleLabel == nil {
-                    CoachAvatarBadge()
-                }
-
                 VStack(alignment: message.role == .user ? .trailing : .leading, spacing: Theme.Spacing.xs) {
                     if let label = resolvedPresentation.bubbleLabel {
                         Text(label)
@@ -590,22 +586,6 @@ private extension View {
                     .fill(Theme.Colors.accentSoft)
             )
         }
-    }
-}
-
-/// Small lime avatar circle leading each default "vital" assistant bubble —
-/// mirrors `DesignSystem/CoachBubble.swift`'s avatar idiom at composer scale.
-/// Specialist bubbles keep their own label row instead (no avatar).
-private struct CoachAvatarBadge: View {
-    var body: some View {
-        Circle()
-            .fill(Theme.Colors.accent)
-            .frame(width: 30, height: 30)
-            .overlay(
-                Image(systemName: "message.fill")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Theme.Colors.onAccent)
-            )
     }
 }
 
