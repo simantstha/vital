@@ -31,8 +31,8 @@
 import type { Tool } from '@anthropic-ai/sdk/resources/messages';
 import { db, schema } from '@/db';
 import { eq, and, gte, gt, lt, asc, desc } from 'drizzle-orm';
-import { lookupNutrition } from '@/lib/nutritionix';
 import { lookupBarcode } from '@/lib/openFoodFacts';
+import { searchCandidates, type Candidate } from '@/lib/nutrition/candidates';
 import type { BaselineStats } from '@/lib/brain/baselines';
 import { applyDietBudgetUpdate, splitMacrosForKcal } from '@/lib/brain/dietBudget';
 
@@ -1131,37 +1131,56 @@ export async function executeToolCall(
       });
     }
 
-    // Text/description path — CalorieNinjas lookup
-    const nutrition = await lookupNutrition(text);
-    if (!nutrition) {
+    // Text/description path — history-first candidate search
+    const { candidates, estimateFoods } = await searchCandidates(userId, text);
+    const top = candidates[0];
+    if (!top) {
       return `Could not find nutrition data for "${text}". Try being more specific, e.g. "200g grilled chicken breast".`;
+    }
+
+    const SOURCE_BY_ORIGIN: Record<Candidate['origin'], string> = {
+      history:  'history',
+      cache:    'cache',
+      usda:     'usda',
+      estimate: 'calorieninjas',
+    };
+    const isEstimate = top.origin === 'estimate' && estimateFoods != null;
+
+    const payload: Record<string, unknown> = {
+      kcal:        top.kcal,
+      c:           top.c,
+      p:           top.p,
+      f:           top.f,
+      description: text,
+      source:      SOURCE_BY_ORIGIN[top.origin],
+    };
+    if (isEstimate) {
+      payload.items = estimateFoods!.map(fd => `${fd.qty}${fd.unit} ${fd.name}`).join(', ');
     }
 
     await db.insert(schema.events).values({
       user_id:   userId,
       timestamp: new Date(),
       type:      'meal_logged',
-      payload:   {
-        kcal:        nutrition.kcal,
-        c:           nutrition.c,
-        p:           nutrition.p,
-        f:           nutrition.f,
-        description: text,
-        items:       nutrition.foods.map(fd => `${fd.qty}${fd.unit} ${fd.name}`).join(', '),
-        source:      'calorieninjas',
-      },
+      payload,
       source: 'coach',
     });
 
-    return JSON.stringify({
+    const result: Record<string, unknown> = {
       ok: true,
       query: text,
-      kcal: nutrition.kcal,
-      c: nutrition.c,
-      p: nutrition.p,
-      f: nutrition.f,
-      foods: nutrition.foods,
-    });
+      kcal: top.kcal,
+      c: top.c,
+      p: top.p,
+      f: top.f,
+      matched: top.name,
+      origin: top.origin,
+    };
+    if (isEstimate) {
+      result.foods = estimateFoods;
+    }
+
+    return JSON.stringify(result);
   }
 
   // ── get_metric_trend ──────────────────────────────────────────────────────
