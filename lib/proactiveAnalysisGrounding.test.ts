@@ -289,6 +289,19 @@ test('requires session-input evidence when numeric input tokens are available', 
   assert.match(consumeGroundedAnalysisProof(proof, request).narrative, /60 minutes/);
 });
 
+test('rejects a copied date token as session-input evidence', () => {
+  const request: ProactiveAnalysisSource = {
+    kind: 'workout', date: '2026', input: { durationMin: 60 }, availableContext: {},
+  };
+  const encoded = encodeProactiveAnalysisRequest(request);
+  const payload = modelPayload(encoded) as { date: string };
+  assert.match(payload.date, /^\{\{EVIDENCE_[A-Z]+\}\}$/);
+  assertCategory('grounding_failure', () => groundAnalysisText(JSON.stringify({
+    ...validAnalysis,
+    narrative: `Recorded date was ${payload.date}.`,
+  }), encoded));
+});
+
 test('rejects placeholder-style meta-responses even when they copy input evidence', () => {
   const request: ProactiveAnalysisSource = {
     kind: 'workout', date: 'date', input: { durationMin: 60 }, availableContext: {},

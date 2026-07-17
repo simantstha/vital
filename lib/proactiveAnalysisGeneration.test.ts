@@ -191,6 +191,35 @@ test('valid token output returns a consumable proof after one guarded call', asy
   assert.match(consumeGroundedAnalysisProof(proof, source).narrative, /38 minutes/);
 });
 
+test('screenshot-style token-free meta-response repairs with source-input evidence', async () => {
+  const calls: AnalysisGenerationRequest[] = [];
+  const events: AnalysisFailureEvent[] = [];
+  const screenshotResponse = JSON.stringify({
+    ...valid,
+    headline: 'Unable to process workout data',
+    shortInsight: 'The workout record contains placeholder tokens.',
+    narrative: 'Data integrity must be restored before analysis can continue.',
+  });
+  const proof = await generateGroundedAnalysis({
+    source,
+    generate: async (request) => {
+      calls.push(request);
+      assertGuarded(request);
+      return request.attempt === 'initial' ? screenshotResponse : tokenResponse(request);
+    },
+    report: (event) => events.push(event),
+  });
+
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].content.includes('Unable to process workout data'), false);
+  assert.equal(calls[1].content.includes('placeholder tokens'), false);
+  assert.deepEqual(events, [
+    analysisFailureEvent('initial', 'grounding_failure', 'repair_started'),
+    analysisFailureEvent('repair', 'grounding_failure', 'repair_succeeded'),
+  ]);
+  assert.match(consumeGroundedAnalysisProof(proof, source).narrative, /38 minutes/);
+});
+
 const initialFailures: Array<{ name: string; response: (request: AnalysisGenerationRequest) => string; category: AnalysisFailureCategory }> = [
   { name: 'parse', response: () => '{private rejected text', category: 'parse_failure' },
   { name: 'schema', response: () => JSON.stringify({ headline: 'private rejected text' }), category: 'schema_failure' },
