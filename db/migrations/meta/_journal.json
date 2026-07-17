@@ -92,6 +92,13 @@
       "when": 1784201983483,
       "tag": "0012_loud_scrambler",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1784260011182,
+      "tag": "0013_orange_gamma_corps",
+      "breakpoints": true
     }
   ]
 }
