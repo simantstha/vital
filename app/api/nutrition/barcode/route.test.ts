@@ -23,12 +23,17 @@ let usdaResult: {
 let offCalls = 0;
 let usdaCalls = 0;
 
+let cacheReadThrows = false;
+
 const fakeDb = {
   select: () => ({
     from: () => ({
       where: () => ({
         orderBy: () => ({
-          limit: async () => cacheRows,
+          limit: async () => {
+            if (cacheReadThrows) throw new Error('connection refused');
+            return cacheRows;
+          },
         }),
       }),
     }),
@@ -65,6 +70,7 @@ function reset() {
   usdaResult = null;
   offCalls = 0;
   usdaCalls = 0;
+  cacheReadThrows = false;
 }
 
 test('POST 400s on missing barcode', async () => {
@@ -170,4 +176,18 @@ test('POST 404s with offerTextSearch when no source has the product', async () =
   assert.equal(res.status, 404);
   const body = await res.json();
   assert.deepEqual(body, { error: 'Product not found.', offerTextSearch: true });
+});
+
+test('POST 500s (not 404) when the food_cache read throws — a DB outage is retryable, not a miss', async () => {
+  reset();
+  cacheReadThrows = true;
+  // Even with a would-be OFF hit downstream, the thrown cache read must
+  // surface as a 500 rather than being swallowed into a lookup miss.
+  offResult = { productName: 'Should Not Matter', per100g: { kcal: 100, c: 10, p: 5, f: 2 } };
+  const { POST } = await routePromise;
+  const res = await POST(request({ barcode: '555' }, { 'x-user-id': 'user-1' }));
+  assert.equal(res.status, 500);
+  const body = await res.json();
+  assert.match(body.error, /Barcode lookup error/);
+  assert.equal(body.offerTextSearch, undefined); // must not masquerade as a product miss
 });

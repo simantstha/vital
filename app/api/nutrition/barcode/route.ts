@@ -23,9 +23,13 @@
  * db/schema.ts.
  *
  * Returns 400 on bad input, 401 if unauthenticated, 404 with
- * { error, offerTextSearch: true } when no source has the product —
+ * { error, offerTextSearch: true } when every source genuinely misses —
  * offerTextSearch signals the client to fall back to the search flow
- * instead of retrying the scan.
+ * instead of retrying the scan. An unexpected exception in the lookup
+ * chain (realistically only the food_cache read — the external lookups
+ * catch internally and the upsert is best-effort) is a 500, never a 404:
+ * a transient DB outage must read as a retryable server error, not
+ * "product not found".
  */
 
 import { NextResponse } from 'next/server';
@@ -195,13 +199,18 @@ export async function POST(request: Request): Promise<NextResponse> {
 
   const barcode = b.barcode.trim();
 
-  let resolved: ResolvedProduct | null = null;
+  // lookupBarcode/searchByGtin catch internally and upsertCache is
+  // best-effort, so an exception here is an unexpected failure
+  // (realistically the food_cache read) — surface it as a retryable 500,
+  // never as a "product not found" 404.
+  let resolved: ResolvedProduct | null;
   try {
     resolved = await fromCache(barcode);
     if (!resolved) resolved = await fromOff(barcode);
     if (!resolved) resolved = await fromUsda(barcode);
   } catch (err) {
     console.error('[nutrition/barcode] lookup error:', err);
+    return NextResponse.json({ error: `Barcode lookup error: ${String(err)}` }, { status: 500 });
   }
 
   if (!resolved) {
