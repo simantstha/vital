@@ -87,6 +87,14 @@ for (const [name, prompt] of [
     assert.match(prompt, /cite the session's key metrics/i);
     assert.match(prompt, /duration, distance, pace, and average heart rate/i);
     assert.match(prompt, /duration and efficiency/i);
+    assert.match(prompt, /verified recorded value/i);
+    assert.match(prompt, /already includes its display unit/i);
+    assert.match(prompt, /treat evidence tokens as real measurements/i);
+    assert.match(prompt, /not placeholders or missing data/i);
+    assert.match(prompt, /never describe the request as containing placeholders/i);
+    assert.match(prompt, /template variables/i);
+    assert.match(prompt, /unresolved tokens/i);
+    assert.match(prompt, /data integrity problem/i);
     assert.match(prompt, /never repeat an evidence token anywhere in the response/i);
     assert.match(prompt, /final content of (?:its|the) clause or string/i);
     assert.match(prompt, /immediately before (?:a )?terminal punctuation mark/i);
