@@ -48,22 +48,18 @@ function payloadOf(request: AnalysisGenerationRequest): Record<string, unknown> 
   return payload;
 }
 
-function hrvToken(request: AnalysisGenerationRequest): string {
+function durationToken(request: AnalysisGenerationRequest): string {
   const payload = request.attempt === 'initial' ? payloadOf(request) : payloadOf(request).request;
   assertRecord(payload);
-  const availableContext = payload.availableContext;
-  assertRecord(availableContext);
-  const metrics = availableContext.metrics;
-  assert.ok(Array.isArray(metrics));
-  const metric = metrics[0];
-  assertRecord(metric);
-  const value = metric.value;
-  assert.ok(typeof value === 'string');
-  return value;
+  const input = payload.input;
+  assertRecord(input);
+  const duration = input.durationMin;
+  assert.ok(typeof duration === 'string');
+  return duration;
 }
 
 function tokenResponse(request: AnalysisGenerationRequest): string {
-  return JSON.stringify({ ...valid, narrative: `HRV was ${hrvToken(request)}.` });
+  return JSON.stringify({ ...valid, narrative: `Workout duration was ${durationToken(request)}.` });
 }
 
 function assertGuarded(request: AnalysisGenerationRequest): void {
@@ -184,7 +180,7 @@ test('valid token output returns a consumable proof after one guarded call', asy
   });
 
   assert.equal(calls.length, 1);
-  assert.match(consumeGroundedAnalysisProof(proof, source).narrative, /45 ms/);
+  assert.match(consumeGroundedAnalysisProof(proof, source).narrative, /38 minutes/);
 });
 
 const initialFailures: Array<{ name: string; response: (request: AnalysisGenerationRequest) => string; category: AnalysisFailureCategory }> = [
@@ -216,7 +212,7 @@ for (const { name, response, category } of initialFailures) {
       analysisFailureEvent('initial', category, 'repair_started'),
       analysisFailureEvent('repair', category, 'repair_succeeded'),
     ]);
-    assert.match(consumeGroundedAnalysisProof(proof, source).narrative, /45 ms/);
+    assert.match(consumeGroundedAnalysisProof(proof, source).narrative, /38 minutes/);
   });
 }
 
