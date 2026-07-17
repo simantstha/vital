@@ -1048,7 +1048,9 @@ struct NutritionCandidatePer100g: Decodable {
 
 /// One entry from GET /api/nutrition/recents — the user's own recently
 /// logged meals, deduped by name and ranked by frequency then recency.
-struct RecentFood: Decodable {
+/// Codable (not just Decodable) so `LogMealViewModel` can round-trip it
+/// through a UserDefaults cache for instant paint on next sheet open.
+struct RecentFood: Codable {
     let name: String
     let kcal: Double
     let c: Double
@@ -1090,11 +1092,12 @@ struct BarcodeResult: Decodable {
     let servingGrams: Double?
     let servingDesc: String?
     let source: String?
-    // NOTE: the backend also sends `per100g` as a macro object, but the app
-    // only uses the already-scaled top-level kcal/c/p/f above. It is
-    // deliberately not declared here — Decodable ignores undeclared keys.
-    // (It was previously typed `Bool?`, which threw a typeMismatch and broke
-    // every successful barcode lookup.)
+    // Per-100g breakdown (kcal/c/p/f), additive alongside the legacy
+    // already-scaled top-level fields above. Used by the log sheet's
+    // portion controls to recompute macros locally as the user adjusts
+    // serving size/grams, instead of round-tripping to the server. Optional
+    // for backwards-compat with an older backend during a rollout window.
+    let per100g: NutritionCandidatePer100g?
 }
 
 struct LogMealResponse: Decodable {
