@@ -48,22 +48,18 @@ function payloadOf(request: AnalysisGenerationRequest): Record<string, unknown> 
   return payload;
 }
 
-function hrvToken(request: AnalysisGenerationRequest): string {
+function durationToken(request: AnalysisGenerationRequest): string {
   const payload = request.attempt === 'initial' ? payloadOf(request) : payloadOf(request).request;
   assertRecord(payload);
-  const availableContext = payload.availableContext;
-  assertRecord(availableContext);
-  const metrics = availableContext.metrics;
-  assert.ok(Array.isArray(metrics));
-  const metric = metrics[0];
-  assertRecord(metric);
-  const value = metric.value;
-  assert.ok(typeof value === 'string');
-  return value;
+  const input = payload.input;
+  assertRecord(input);
+  const duration = input.durationMin;
+  assert.ok(typeof duration === 'string');
+  return duration;
 }
 
 function tokenResponse(request: AnalysisGenerationRequest): string {
-  return JSON.stringify({ ...valid, narrative: `HRV was ${hrvToken(request)}.` });
+  return JSON.stringify({ ...valid, narrative: `Workout duration was ${durationToken(request)}.` });
 }
 
 function assertGuarded(request: AnalysisGenerationRequest): void {
@@ -91,6 +87,14 @@ for (const [name, prompt] of [
     assert.match(prompt, /cite the session's key metrics/i);
     assert.match(prompt, /duration, distance, pace, and average heart rate/i);
     assert.match(prompt, /duration and efficiency/i);
+    assert.match(prompt, /verified recorded value/i);
+    assert.match(prompt, /already includes its display unit/i);
+    assert.match(prompt, /treat evidence tokens as real measurements/i);
+    assert.match(prompt, /not placeholders or missing data/i);
+    assert.match(prompt, /never describe the request as containing placeholders/i);
+    assert.match(prompt, /template variables/i);
+    assert.match(prompt, /unresolved tokens/i);
+    assert.match(prompt, /data integrity problem/i);
     assert.match(prompt, /never repeat an evidence token anywhere in the response/i);
     assert.match(prompt, /final content of (?:its|the) clause or string/i);
     assert.match(prompt, /immediately before (?:a )?terminal punctuation mark/i);
@@ -184,7 +188,36 @@ test('valid token output returns a consumable proof after one guarded call', asy
   });
 
   assert.equal(calls.length, 1);
-  assert.match(consumeGroundedAnalysisProof(proof, source).narrative, /45 ms/);
+  assert.match(consumeGroundedAnalysisProof(proof, source).narrative, /38 minutes/);
+});
+
+test('screenshot-style token-free meta-response repairs with source-input evidence', async () => {
+  const calls: AnalysisGenerationRequest[] = [];
+  const events: AnalysisFailureEvent[] = [];
+  const screenshotResponse = JSON.stringify({
+    ...valid,
+    headline: 'Unable to process workout data',
+    shortInsight: 'The workout record contains placeholder tokens.',
+    narrative: 'Data integrity must be restored before analysis can continue.',
+  });
+  const proof = await generateGroundedAnalysis({
+    source,
+    generate: async (request) => {
+      calls.push(request);
+      assertGuarded(request);
+      return request.attempt === 'initial' ? screenshotResponse : tokenResponse(request);
+    },
+    report: (event) => events.push(event),
+  });
+
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].content.includes('Unable to process workout data'), false);
+  assert.equal(calls[1].content.includes('placeholder tokens'), false);
+  assert.deepEqual(events, [
+    analysisFailureEvent('initial', 'grounding_failure', 'repair_started'),
+    analysisFailureEvent('repair', 'grounding_failure', 'repair_succeeded'),
+  ]);
+  assert.match(consumeGroundedAnalysisProof(proof, source).narrative, /38 minutes/);
 });
 
 const initialFailures: Array<{ name: string; response: (request: AnalysisGenerationRequest) => string; category: AnalysisFailureCategory }> = [
@@ -216,7 +249,7 @@ for (const { name, response, category } of initialFailures) {
       analysisFailureEvent('initial', category, 'repair_started'),
       analysisFailureEvent('repair', category, 'repair_succeeded'),
     ]);
-    assert.match(consumeGroundedAnalysisProof(proof, source).narrative, /45 ms/);
+    assert.match(consumeGroundedAnalysisProof(proof, source).narrative, /38 minutes/);
   });
 }
 

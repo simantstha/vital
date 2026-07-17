@@ -13,6 +13,7 @@ export interface EncodedProactiveAnalysisRequest { readonly [encodedBrand]: true
 interface PrivateEncodingState {
   payload: unknown;
   displays: ReadonlyMap<string, string>;
+  inputTokens: ReadonlySet<string>;
   binding: string;
 }
 
@@ -30,6 +31,7 @@ const SOURCE_LEXEME = new RegExp(String.raw`^(?:${SOURCE_SIGN_CLASS}?(?:(?:\p{Nd
 const FORMAT_CONTROL = /\p{Cf}/u;
 const PREFIX_OPERATOR = /(?:\p{S}|\p{Dash_Punctuation}|[%٪.,٬٫/])\s*$/u;
 const CLAUSE_BOUNDARY = /[.!?]\s+/gu;
+const META_RESPONSE = /\b(?:unable to process|placeholder tokens?|template variables?|unresolved tokens?|data integrity)\b/iu;
 
 export type AnalysisFailureCategory = 'parse_failure' | 'schema_failure' | 'grounding_failure';
 
@@ -164,8 +166,15 @@ export function groundAnalysisText(text: string, encoded: EncodedProactiveAnalys
   if (!state) throw new AnalysisContentError('grounding_failure');
 
   try {
+    const strings = authoredStrings(validated);
     const used = new Set<string>();
-    for (const value of authoredStrings(validated)) validateTokenUse(value, state.displays, used);
+    for (const value of strings) {
+      if (META_RESPONSE.test(value)) throw new AnalysisContentError('grounding_failure');
+      validateTokenUse(value, state.displays, used);
+    }
+    if (state.inputTokens.size > 0 && ![...state.inputTokens].some((token) => used.has(token))) {
+      throw new AnalysisContentError('grounding_failure');
+    }
     const resolved = {
       headline: resolveTokens(validated.headline, state.displays),
       shortInsight: resolveTokens(validated.shortInsight, state.displays),
@@ -247,12 +256,15 @@ function deepFreeze(value: unknown): void {
 export function encodeProactiveAnalysisRequest(source: ProactiveAnalysisSource): EncodedProactiveAnalysisRequest {
   let nextToken = 0;
   const displays = new Map<string, string>();
+  const inputTokens = new Set<string>();
+  let collectingInputTokens = false;
   const ancestors = new WeakSet<object>();
 
   const allocate = (display: string): string => {
     const token = `{{EVIDENCE_${alphabeticName(nextToken++)}}}`;
     if (!TOKEN.test(token)) throw new Error('Invalid evidence token.');
     displays.set(token, display);
+    if (collectingInputTokens) inputTokens.add(token);
     return token;
   };
 
@@ -343,11 +355,22 @@ export function encodeProactiveAnalysisRequest(source: ProactiveAnalysisSource):
     }
   };
 
+  const encodedKind = encodeValue(source.kind, 'kind');
+  const encodedDate = encodeValue(source.date, 'date');
+  let encodedInput: unknown;
+  collectingInputTokens = true;
+  try {
+    encodedInput = encodeValue(source.input, 'input');
+  } finally {
+    collectingInputTokens = false;
+  }
+  const encodedAvailableContext = encodeValue(source.availableContext, 'availableContext');
+
   const semanticallyOrdered = {
-    kind: encodeValue(source.kind, 'kind'),
-    date: encodeValue(source.date, 'date'),
-    input: encodeValue(source.input, 'input'),
-    availableContext: encodeValue(source.availableContext, 'availableContext'),
+    kind: encodedKind,
+    date: encodedDate,
+    input: encodedInput,
+    availableContext: encodedAvailableContext,
   };
   const payload = Object.create(null) as Record<string, unknown>;
   for (const key of Object.keys(semanticallyOrdered).sort() as Array<keyof typeof semanticallyOrdered>) {
@@ -358,6 +381,6 @@ export function encodeProactiveAnalysisRequest(source: ProactiveAnalysisSource):
   assertNoRawNumbers(serializedPayload);
   const binding = requestBinding(payload, displays);
   const encoded = payload as unknown as EncodedProactiveAnalysisRequest;
-  encodings.set(encoded as object, { payload, displays, binding });
+  encodings.set(encoded as object, { payload, displays, inputTokens, binding });
   return encoded;
 }

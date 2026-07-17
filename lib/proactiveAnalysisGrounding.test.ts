@@ -263,6 +263,66 @@ test('accepts one optional complete JSON code fence', () => {
   assert.deepEqual(consumeGroundedAnalysisProof(proof, request), validAnalysis);
 });
 
+test('requires session-input evidence when numeric input tokens are available', () => {
+  const request: ProactiveAnalysisSource = {
+    kind: 'workout',
+    date: '2026-07-17',
+    input: { durationMin: 60 },
+    availableContext: { metrics: [{ metric: 'hrv_sdnn', value: 45 }] },
+  };
+  const encoded = encodeProactiveAnalysisRequest(request);
+  const payload = modelPayload(encoded) as {
+    input: { durationMin: string };
+    availableContext: { metrics: Array<{ value: string }> };
+  };
+
+  assertCategory('grounding_failure', () => groundAnalysisText(JSON.stringify(validAnalysis), encoded));
+  assertCategory('grounding_failure', () => groundAnalysisText(JSON.stringify({
+    ...validAnalysis,
+    narrative: `Context HRV was ${payload.availableContext.metrics[0].value}.`,
+  }), encoded));
+
+  const proof = groundAnalysisText(JSON.stringify({
+    ...validAnalysis,
+    narrative: `Workout duration was ${payload.input.durationMin}.`,
+  }), encoded);
+  assert.match(consumeGroundedAnalysisProof(proof, request).narrative, /60 minutes/);
+});
+
+test('rejects a copied date token as session-input evidence', () => {
+  const request: ProactiveAnalysisSource = {
+    kind: 'workout', date: '2026', input: { durationMin: 60 }, availableContext: {},
+  };
+  const encoded = encodeProactiveAnalysisRequest(request);
+  const payload = modelPayload(encoded) as { date: string };
+  assert.match(payload.date, /^\{\{EVIDENCE_[A-Z]+\}\}$/);
+  assertCategory('grounding_failure', () => groundAnalysisText(JSON.stringify({
+    ...validAnalysis,
+    narrative: `Recorded date was ${payload.date}.`,
+  }), encoded));
+});
+
+test('rejects placeholder-style meta-responses even when they copy input evidence', () => {
+  const request: ProactiveAnalysisSource = {
+    kind: 'workout', date: 'date', input: { durationMin: 60 }, availableContext: {},
+  };
+
+  for (const phrase of [
+    'Unable to process workout data',
+    'The record contains placeholder tokens',
+    'The record contains a template variable',
+    'The record contains unresolved tokens',
+    'Data integrity must be restored',
+  ]) {
+    const encoded = encodeProactiveAnalysisRequest(request);
+    const payload = modelPayload(encoded) as { input: { durationMin: string } };
+    assertCategory('grounding_failure', () => groundAnalysisText(JSON.stringify({
+      ...validAnalysis,
+      narrative: `${phrase}. Recorded duration was ${payload.input.durationMin}.`,
+    }), encoded));
+  }
+});
+
 test('classifies malformed and fenced-invalid JSON as parse failures', () => {
   const encoded = encodeProactiveAnalysisRequest({ kind: 'sleep', date: 'date', input: {}, availableContext: {} });
   for (const text of [
