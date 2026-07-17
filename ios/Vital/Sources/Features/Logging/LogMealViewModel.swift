@@ -276,21 +276,61 @@ final class LogMealViewModel: ObservableObject {
 
     /// Selects one candidate from the list rendered after `searchByText()`.
     /// History rows get the "same as last time" scaled-totals portion mode;
-    /// cache/USDA rows with a known serving size + per-100g breakdown get
-    /// the full stepper/grams portion mode; everything else (estimate rows,
-    /// or a cache/USDA row missing a serving size) falls back to the flat
-    /// totals `applyResult` sets, unchanged.
+    /// any cache/USDA row with a per-100g breakdown gets the per-gram
+    /// portion mode (serving size known → 1-serving default, unknown →
+    /// gated grams entry — same rule as barcode, never a silent 100 g);
+    /// estimate rows (no per100g) keep the flat totals `applyResult` sets.
     func chooseCandidate(_ candidate: NutritionCandidate) {
         candidates = []
         resetPortionState()
 
         if candidate.origin == "history" {
             portionMode = .scaledHistory(kcal: candidate.kcal, c: candidate.c, p: candidate.p, f: candidate.f)
-        } else if let per100g = candidate.per100g, candidate.servingGrams != nil {
-            portionMode = .perGram(per100g: per100g, servingGrams: candidate.servingGrams, servingDesc: candidate.servingDesc)
+            applyResult(name: candidate.name, kcal: candidate.kcal, p: candidate.p, c: candidate.c, f: candidate.f, source: "text")
+        } else if let per100g = candidate.per100g {
+            applyPerGramResult(
+                name: candidate.name,
+                per100g: per100g,
+                servingGrams: candidate.servingGrams,
+                servingDesc: candidate.servingDesc,
+                source: "text"
+            )
+        } else {
+            applyResult(name: candidate.name, kcal: candidate.kcal, p: candidate.p, c: candidate.c, f: candidate.f, source: "text")
         }
+    }
 
-        applyResult(name: candidate.name, kcal: candidate.kcal, p: candidate.p, c: candidate.c, f: candidate.f, source: "text")
+    /// Shared per-gram apply path for candidate picks and barcode hits:
+    /// sets `.perGram` portion mode, then either prefills the confirm card
+    /// at 1 serving (serving size known) or blanks the macro fields and
+    /// relies on `portionNeedsGrams` gating the Log button until the user
+    /// enters real grams — never a silently-assumed 100 g.
+    private func applyPerGramResult(
+        name: String,
+        per100g: NutritionCandidatePer100g,
+        servingGrams: Double?,
+        servingDesc: String?,
+        source: String
+    ) {
+        portionMode = .perGram(per100g: per100g, servingGrams: servingGrams, servingDesc: servingDesc)
+
+        if let servingGrams {
+            let factor = servingGrams / 100
+            applyResult(
+                name: name,
+                kcal: per100g.kcal * factor,
+                p: per100g.p * factor,
+                c: per100g.c * factor,
+                f: per100g.f * factor,
+                source: source
+            )
+        } else {
+            applyResult(name: name, kcal: 0, p: 0, c: 0, f: 0, source: source)
+            editedKcal = ""
+            editedProtein = ""
+            editedCarbs = ""
+            editedFat = ""
+        }
     }
 
     // MARK: - Recents
@@ -371,12 +411,10 @@ final class LogMealViewModel: ObservableObject {
     }
 
     /// Sets up the portion mode from a successful barcode lookup and seeds
-    /// the confirm card. `grams: nil` was sent on the request, so the
-    /// server's own `kcal/c/p/f` reflect its 100 g default — when the source
-    /// knows a real serving size we recompute to "1 serving" instead of
-    /// silently keeping that 100 g figure; when it doesn't, macros stay
-    /// blank until the user types real grams (portion picker default 1
-    /// serving when known, else explicit grams entry — never a silent 100 g).
+    /// the confirm card via the shared `applyPerGramResult` path (same rules
+    /// as candidate picks). `grams: nil` was sent on the request, so the
+    /// server's own `kcal/c/p/f` reflect its 100 g default — that's why the
+    /// per100g path recomputes/blanks rather than trusting the flat fields.
     private func applyBarcodeResult(_ r: BarcodeResult) {
         candidates = []
         resetPortionState()
@@ -387,25 +425,13 @@ final class LogMealViewModel: ObservableObject {
             return
         }
 
-        portionMode = .perGram(per100g: per100g, servingGrams: r.servingGrams, servingDesc: r.servingDesc)
-
-        if let servingGrams = r.servingGrams {
-            let factor = servingGrams / 100
-            applyResult(
-                name: r.name,
-                kcal: per100g.kcal * factor,
-                p: per100g.p * factor,
-                c: per100g.c * factor,
-                f: per100g.f * factor,
-                source: "barcode"
-            )
-        } else {
-            applyResult(name: r.name, kcal: 0, p: 0, c: 0, f: 0, source: "barcode")
-            editedKcal = ""
-            editedProtein = ""
-            editedCarbs = ""
-            editedFat = ""
-        }
+        applyPerGramResult(
+            name: r.name,
+            per100g: per100g,
+            servingGrams: r.servingGrams,
+            servingDesc: r.servingDesc,
+            source: "barcode"
+        )
     }
 
     // MARK: - Voice

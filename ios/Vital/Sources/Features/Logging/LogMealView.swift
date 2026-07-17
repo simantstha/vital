@@ -39,6 +39,12 @@ struct LogMealView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: Theme.Spacing.xl) {
                         methodContent
+                        // Tab-agnostic, like the confirm card below it: voice
+                        // funnels into searchByText() too, so its candidate
+                        // results must render on the Voice tab as well —
+                        // switching tabs to look for them would wipe them via
+                        // the onChange clearResult above.
+                        if !vm.candidates.isEmpty { candidateListSection }
                         if vm.showConfirmCard { confirmCard }
                         if vm.isLogged      { loggedSection }
                         if let err = vm.errorMessage {
@@ -221,12 +227,8 @@ private extension LogMealView {
                 .disabled(vm.searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
 
-            // Candidate list — a ranked search shows this instead of jumping
-            // straight to the confirm card; falls back to the old flat
-            // single-result flow when the server sends no `candidates`.
-            if !vm.candidates.isEmpty {
-                candidateListSection
-            }
+            // Candidate list renders tab-agnostically from the sheet root
+            // (next to the confirm card) so voice searches surface it too.
         }
     }
 
