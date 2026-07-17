@@ -474,6 +474,32 @@ export const calendar_blocks = p.pgTable('calendar_blocks', {
   p.index('calendar_blocks_user_start_idx').on(t.user_id, t.start_at),
 ]);
 
+// ─── food_cache ──────────────────────────────────────────────────────────────
+// Shared provider data cache (USDA FDC, OpenFoodFacts). Indexed by
+// (provider, provider_food_id) for fast lookups. Barcode and name are
+// indexed for search. Note: data is provider-only (no user-specific enrichment);
+// all users share the same canonical cache entries.
+
+export const food_cache = p.pgTable('food_cache', {
+  id:               p.uuid('id').primaryKey().defaultRandom(),
+  provider:         p.text('provider').notNull(),          // 'usda' | 'off'
+  provider_food_id: p.text('provider_food_id').notNull(),  // fdcId or OFF barcode
+  barcode:          p.text('barcode'),                     // GTIN/UPC when known
+  name:             p.text('name').notNull(),
+  brand:            p.text('brand'),
+  serving_desc:     p.text('serving_desc'),                // e.g. "1 cake (13g)"
+  serving_grams:    p.real('serving_grams'),
+  kcal_100g:        p.real('kcal_100g'),                   // null = unknown, never 0
+  protein_100g:     p.real('protein_100g'),
+  carbs_100g:       p.real('carbs_100g'),
+  fat_100g:         p.real('fat_100g'),
+  fetched_at:       p.timestamp('fetched_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  p.uniqueIndex('food_cache_provider_food_idx').on(t.provider, t.provider_food_id),
+  p.index('food_cache_barcode_idx').on(t.barcode),
+  p.index('food_cache_name_idx').on(t.name),
+]);
+
 // ─── Inferred TypeScript types ────────────────────────────────────────────────
 // Named to avoid collision with built-in DOM globals (Event, Node).
 
@@ -517,3 +543,6 @@ export type PushDevice = typeof push_devices.$inferSelect;
 export type NotificationPreference = typeof notification_preferences.$inferSelect;
 export type WorkoutAnalysis = typeof workout_analyses.$inferSelect;
 export type SleepAnalysis = typeof sleep_analyses.$inferSelect;
+
+export type FoodCache       = typeof food_cache.$inferSelect;
+export type NewFoodCache    = typeof food_cache.$inferInsert;
