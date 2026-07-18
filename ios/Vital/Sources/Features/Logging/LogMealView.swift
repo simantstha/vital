@@ -11,6 +11,11 @@ struct LogMealView: View {
     /// Local photo-picker selection — view-local UI state.
     @State private var photoItem: PhotosPickerItem? = nil
 
+    /// Drives focus into the text search field — used by the barcode
+    /// "Search by Name" fallback so the switch to the Text tab lands the
+    /// keyboard immediately instead of requiring an extra tap.
+    @FocusState private var searchFieldFocused: Bool
+
     /// Which method tab to open on. Backward-compatible: existing call sites
     /// (`LogMealView()`) keep defaulting to `.text` unchanged. Lets the diet
     /// sheet (redesign-v3 Phase 3) deep-link straight into Photo/Barcode.
@@ -34,6 +39,12 @@ struct LogMealView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: Theme.Spacing.xl) {
                         methodContent
+                        // Tab-agnostic, like the confirm card below it: voice
+                        // funnels into searchByText() too, so its candidate
+                        // results must render on the Voice tab as well —
+                        // switching tabs to look for them would wipe them via
+                        // the onChange clearResult above.
+                        if !vm.candidates.isEmpty { candidateListSection }
                         if vm.showConfirmCard { confirmCard }
                         if vm.isLogged      { loggedSection }
                         if let err = vm.errorMessage {
@@ -60,12 +71,35 @@ struct LogMealView: View {
         .onAppear {
             vm.selectedMethod = initialMethod
         }
+        // Paints the UserDefaults-cached recents instantly, then refreshes
+        // from the server in the background — runs once per sheet open.
+        .task {
+            await vm.loadRecents()
+        }
     }
 }
 
 // MARK: - Private sub-views
 
 private extension LogMealView {
+
+    // ── Date parsing (candidate "Logged Jul 12" badges) ─────────────────────
+
+    static let isoParserFractional: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+    static let isoParser: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
+    static let badgeDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "MMM d"
+        return f
+    }()
 
     // ── Header ────────────────────────────────────────────────────────────────
 
@@ -150,6 +184,12 @@ private extension LogMealView {
 
     var textInputSection: some View {
         VStack(spacing: Theme.Spacing.lg) {
+            // Recents — hidden once a search has results or the confirm
+            // card is up, so it doesn't compete with the active flow.
+            if !vm.recents.isEmpty, vm.candidates.isEmpty, !vm.showConfirmCard {
+                recentsSection
+            }
+
             // Search field
             HStack(spacing: Theme.Spacing.sm) {
                 Image(systemName: "magnifyingglass")
@@ -157,6 +197,7 @@ private extension LogMealView {
                 TextField("banana, grilled chicken, oat milk latte…", text: $vm.searchText)
                     .foregroundStyle(Theme.Colors.textPrimary)
                     .tint(Theme.Colors.accentContent)
+                    .focused($searchFieldFocused)
                     .onSubmit { Task { await vm.searchByText() } }
             }
             .padding(Theme.Spacing.md)
@@ -185,7 +226,127 @@ private extension LogMealView {
                 }
                 .disabled(vm.searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
+
+            // Candidate list renders tab-agnostically from the sheet root
+            // (next to the confirm card) so voice searches surface it too.
         }
+    }
+
+    // ── Recents (quick re-log) ───────────────────────────────────────────────
+
+    var recentsSection: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            SectionHeader(title: "Recent")
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: Theme.Spacing.sm) {
+                    ForEach(vm.recents, id: \.name) { recent in
+                        Button {
+                            vm.applyRecent(recent)
+                        } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(recent.name)
+                                    .font(Theme.Typography.labelMedium)
+                                    .foregroundStyle(Theme.Colors.textPrimary)
+                                    .lineLimit(1)
+                                Text("\(Int(recent.kcal.rounded())) kcal")
+                                    .font(Theme.Typography.labelSmall)
+                                    .foregroundStyle(Theme.Colors.textSecondary)
+                            }
+                            .padding(.horizontal, Theme.Spacing.md)
+                            .padding(.vertical, Theme.Spacing.sm)
+                            .background(
+                                RoundedRectangle(cornerRadius: Theme.Radius.pill, style: .continuous)
+                                    .fill(Theme.Colors.glassFill)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: Theme.Radius.pill, style: .continuous)
+                                            .strokeBorder(Theme.Colors.glassBorder, lineWidth: 0.5)
+                                    )
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.vertical, Theme.Spacing.xxs)
+            }
+        }
+    }
+
+    // ── Candidate list ───────────────────────────────────────────────────────
+
+    var candidateListSection: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            SectionHeader(title: "Results")
+            VStack(spacing: Theme.Spacing.sm) {
+                ForEach(Array(vm.candidates.enumerated()), id: \.offset) { _, candidate in
+                    candidateRow(candidate)
+                }
+            }
+        }
+    }
+
+    func candidateRow(_ candidate: NutritionCandidate) -> some View {
+        Button {
+            vm.chooseCandidate(candidate)
+        } label: {
+            HStack(alignment: .top, spacing: Theme.Spacing.md) {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: Theme.Spacing.xs) {
+                        Text(candidate.name)
+                            .font(Theme.Typography.bodyMedium)
+                            .foregroundStyle(Theme.Colors.textPrimary)
+                            .lineLimit(1)
+                        if let badge = loggedBadge(candidate.lastLoggedAt) {
+                            Text(badge)
+                                .font(Theme.Typography.labelSmall)
+                                .foregroundStyle(Theme.Colors.accentContent)
+                                .padding(.horizontal, Theme.Spacing.sm)
+                                .padding(.vertical, 2)
+                                .background(Capsule().fill(Theme.Colors.accentSoft))
+                        }
+                    }
+                    if let subtitle = candidateSubtitle(candidate) {
+                        Text(subtitle)
+                            .font(Theme.Typography.bodySmall)
+                            .foregroundStyle(Theme.Colors.textSecondary)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer()
+                Text("\(Int(candidate.kcal.rounded())) kcal")
+                    .font(Theme.Typography.numericSmall(15))
+                    .foregroundStyle(Theme.Colors.textPrimary)
+            }
+            .padding(Theme.Spacing.md)
+            .background(
+                RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
+                    .fill(Theme.Colors.glassFill)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
+                            .strokeBorder(Theme.Colors.glassBorder, lineWidth: 0.5)
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Brand + serving description, e.g. "Chobani • 170 g cup" — nil when
+    /// the candidate has neither (history rows, estimates).
+    func candidateSubtitle(_ candidate: NutritionCandidate) -> String? {
+        let parts = [candidate.brand, candidate.servingDesc]
+            .compactMap { $0 }
+            .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+        return parts.isEmpty ? nil : parts.joined(separator: " • ")
+    }
+
+    /// "Logged Jul 12" from a history candidate's `lastLoggedAt` ISO8601
+    /// timestamp. Tries with-fractional-seconds first, falls back to
+    /// without — server timestamps can come either way.
+    func loggedBadge(_ isoTimestamp: String?) -> String? {
+        guard let isoTimestamp else { return nil }
+        guard let date = Self.isoParserFractional.date(from: isoTimestamp)
+                ?? Self.isoParser.date(from: isoTimestamp)
+        else { return nil }
+        return "Logged \(Self.badgeDateFormatter.string(from: date))"
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -251,6 +412,8 @@ private extension LogMealView {
                             .font(Theme.Typography.bodySmall)
                             .foregroundStyle(Theme.Colors.textSecondary)
                     }
+                } else if vm.barcodeNotFound {
+                    barcodeNotFoundCard
                 } else if !vm.showConfirmCard {
                     Text("Point the camera at a product barcode")
                         .font(Theme.Typography.bodySmall)
@@ -277,6 +440,43 @@ private extension LogMealView {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, Theme.Spacing.xl)
             }
+        }
+    }
+
+    /// Friendly fallback for `APIError.barcodeNotFound` — every source
+    /// genuinely missed this scan. Offers text search instead of a bare
+    /// error string, switching to the Text tab with the search field
+    /// pre-focused so the user can retype the name immediately.
+    var barcodeNotFoundCard: some View {
+        GlassCard {
+            VStack(spacing: Theme.Spacing.lg) {
+                Image(systemName: "questionmark.barcode")
+                    .font(.system(size: 38))
+                    .foregroundStyle(Theme.Colors.textSecondary)
+                Text("Couldn't find that product")
+                    .font(Theme.Typography.bodyMedium)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(Theme.Colors.textPrimary)
+                Text("Try searching by name instead.")
+                    .font(Theme.Typography.bodySmall)
+                    .foregroundStyle(Theme.Colors.textSecondary)
+                    .multilineTextAlignment(.center)
+                Button {
+                    vm.barcodeNotFound = false
+                    vm.selectedMethod = .text
+                    searchFieldFocused = true
+                } label: {
+                    Text("Search by Name")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Theme.Colors.onAccent)
+                        .padding(.horizontal, Theme.Spacing.xl)
+                        .padding(.vertical, Theme.Spacing.sm)
+                        .background(Theme.Colors.accent)
+                        .clipShape(Capsule())
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, Theme.Spacing.lg)
         }
     }
 
@@ -466,6 +666,8 @@ private extension LogMealView {
                         )
                 }
 
+                portionControl
+
                 // Macro fields — 2×2 grid
                 LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())],
                           spacing: Theme.Spacing.md) {
@@ -493,11 +695,142 @@ private extension LogMealView {
                     .background(Theme.Colors.accent)
                     .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous))
                 }
-                .disabled(vm.isLoading || vm.editedName.trimmingCharacters(in: .whitespaces).isEmpty)
+                .disabled(
+                    vm.isLoading
+                    || vm.editedName.trimmingCharacters(in: .whitespaces).isEmpty
+                    || vm.portionNeedsGrams
+                )
             }
         }
         .transition(.move(edge: .bottom).combined(with: .opacity))
         .animation(.spring(response: 0.4, dampingFraction: 0.8), value: vm.showConfirmCard)
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // MARK: Portion controls
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Only rendered when `vm.portionMode` is set — a cache/USDA/barcode
+    /// candidate with a per-100g breakdown, or a history candidate (scaled
+    /// totals, no per-gram data needed). Everything else (estimate rows, an
+    /// old server with no candidates) keeps the flat totals hidden, exactly
+    /// like the pre-existing single-result flow.
+    @ViewBuilder
+    var portionControl: some View {
+        if let mode = vm.portionMode {
+            VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                Text("Portion")
+                    .font(Theme.Typography.labelSmall)
+                    .foregroundStyle(Theme.Colors.textSecondary)
+
+                switch mode {
+                case .scaledHistory:
+                    portionStepperRow(
+                        title: "Same as last time",
+                        subtitle: String(format: "%.1f×", vm.portionMultiplier)
+                    )
+
+                case .perGram(_, let servingGrams, let servingDesc):
+                    if let servingGrams, !vm.useCustomPortionGrams {
+                        portionStepperRow(
+                            title: servingDesc ?? "1 serving",
+                            subtitle: "\(Int((servingGrams * vm.portionMultiplier).rounded())) g · \(String(format: "%.1f×", vm.portionMultiplier))"
+                        )
+                    } else {
+                        portionGramsEntryRow
+                    }
+
+                    if servingGrams != nil {
+                        Button {
+                            vm.toggleCustomPortionGrams()
+                        } label: {
+                            Text(vm.useCustomPortionGrams ? "Use serving stepper" : "Enter grams instead")
+                                .font(Theme.Typography.labelMedium)
+                                .foregroundStyle(Theme.Colors.accentContent)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+    }
+
+    func portionStepperRow(title: String, subtitle: String) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(Theme.Typography.bodyMedium)
+                    .foregroundStyle(Theme.Colors.textPrimary)
+                    .lineLimit(1)
+                Text(subtitle)
+                    .font(Theme.Typography.bodySmall)
+                    .foregroundStyle(Theme.Colors.textSecondary)
+            }
+            Spacer()
+            HStack(spacing: Theme.Spacing.md) {
+                Button {
+                    vm.decrementPortion()
+                } label: {
+                    Image(systemName: "minus.circle.fill")
+                        .font(.system(size: 22))
+                        .foregroundStyle(
+                            vm.portionMultiplier <= 0.5
+                                ? Theme.Colors.textTertiary
+                                : Theme.Colors.accentContent
+                        )
+                }
+                .buttonStyle(.plain)
+                .disabled(vm.portionMultiplier <= 0.5)
+
+                Text(String(format: "%.1f×", vm.portionMultiplier))
+                    .font(Theme.Typography.numericSmall(15))
+                    .foregroundStyle(Theme.Colors.textPrimary)
+                    .frame(minWidth: 36)
+
+                Button {
+                    vm.incrementPortion()
+                } label: {
+                    Image(systemName: "plus.circle.fill")
+                        .font(.system(size: 22))
+                        .foregroundStyle(Theme.Colors.accentContent)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(Theme.Spacing.md)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous)
+                .fill(Theme.Colors.glassFill)
+                .overlay(
+                    RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous)
+                        .strokeBorder(Theme.Colors.glassBorder, lineWidth: 0.5)
+                )
+        )
+    }
+
+    var portionGramsEntryRow: some View {
+        HStack(spacing: Theme.Spacing.sm) {
+            TextField("Grams eaten", text: Binding(
+                get: { vm.portionGramsText },
+                set: { vm.updatePortionGrams($0) }
+            ))
+            .keyboardType(.decimalPad)
+            .font(Theme.Typography.numericSmall(15))
+            .foregroundStyle(Theme.Colors.textPrimary)
+            .tint(Theme.Colors.accentContent)
+            Text("g")
+                .font(Theme.Typography.bodySmall)
+                .foregroundStyle(Theme.Colors.textSecondary)
+        }
+        .padding(Theme.Spacing.md)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous)
+                .fill(Theme.Colors.glassFill)
+                .overlay(
+                    RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous)
+                        .strokeBorder(Theme.Colors.glassBorder, lineWidth: 0.5)
+                )
+        )
     }
 
     // ─────────────────────────────────────────────────────────────────────────
