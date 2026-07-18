@@ -578,8 +578,24 @@ struct APIClient {
         struct Body: Encodable { let barcode: String; let grams: Double? }
         request.httpBody = try encoder.encode(Body(barcode: barcode, grams: grams))
         let (data, response) = try await session.data(for: request)
+        // The barcode endpoint uses 404 exclusively for a genuine "every
+        // source missed" lookup miss (bad input is 400, a DB/lookup fault is
+        // 500) and pairs it with `{ offerTextSearch: true }` — surface that
+        // as a distinguishable case ahead of the generic `validate` choke
+        // point so the caller can fall back to text search instead of
+        // showing a generic server-error message.
+        if let http = response as? HTTPURLResponse, http.statusCode == 404 {
+            throw APIError.barcodeNotFound
+        }
         try validate(response)
         return try decoder.decode(BarcodeResult.self, from: data)
+    }
+
+    /// GET /api/nutrition/recents — the user's own recently logged meals,
+    /// deduped and ranked server-side, for the "log again" quick-pick list.
+    func fetchNutritionRecents() async throws -> [RecentFood] {
+        let wrapper: RecentFoodsResponse = try await get("/api/nutrition/recents")
+        return wrapper.items
     }
 
     func photoFood(imageBase64: String) async throws -> NutritionResult {
@@ -813,12 +829,18 @@ enum APIError: Error, LocalizedError {
     case invalidURL
     case serverError(Int)
     case coachStreamError(String)
+    /// POST /api/nutrition/barcode genuinely found no match for the scanned
+    /// code (mirrors the server's 404 + `offerTextSearch: true`). Distinct
+    /// from `.serverError` so callers can fall back to text search instead
+    /// of showing a generic failure message.
+    case barcodeNotFound
 
     var errorDescription: String? {
         switch self {
         case .invalidURL:         return "Invalid backend URL."
         case .serverError(let c): return "Server returned HTTP \(c)."
         case .coachStreamError(let message): return message
+        case .barcodeNotFound:    return "Product not found. Try searching by name instead."
         }
     }
 }
@@ -992,6 +1014,55 @@ struct NutritionResult: Decodable {
     let c: Double
     let p: Double
     let f: Double
+    // POST /api/nutrition/search additionally returns the full ranked
+    // candidate list this top result was drawn from. Optional so this same
+    // type still decodes the flat photoFood/legacy shape, which never sends
+    // it, without failing.
+    let candidates: [NutritionCandidate]?
+}
+
+/// One ranked match from POST /api/nutrition/search's `candidates` array —
+/// user history, the shared food_cache/USDA lookup, or a CalorieNinjas
+/// free-text estimate, in that preference order (see `origin`).
+struct NutritionCandidate: Decodable {
+    let origin: String // "history" | "cache" | "usda" | "estimate"
+    let name: String
+    let brand: String?
+    let kcal: Double
+    let c: Double
+    let p: Double
+    let f: Double
+    let servingDesc: String?
+    let servingGrams: Double?
+    let per100g: NutritionCandidatePer100g?
+    let lastLoggedAt: String? // ISO8601 — history only
+    let slot: String? // history only
+}
+
+struct NutritionCandidatePer100g: Decodable {
+    let kcal: Double
+    let c: Double
+    let p: Double
+    let f: Double
+}
+
+/// One entry from GET /api/nutrition/recents — the user's own recently
+/// logged meals, deduped by name and ranked by frequency then recency.
+/// Codable (not just Decodable) so `LogMealViewModel` can round-trip it
+/// through a UserDefaults cache for instant paint on next sheet open.
+struct RecentFood: Codable {
+    let name: String
+    let kcal: Double
+    let c: Double
+    let p: Double
+    let f: Double
+    let slot: String?
+    let lastLoggedAt: String?
+    let imageThumb: String?
+}
+
+private struct RecentFoodsResponse: Decodable {
+    let items: [RecentFood]
 }
 
 /// Result of POST /api/meals/modify — an estimated/edited planned meal.
@@ -1012,11 +1083,21 @@ struct BarcodeResult: Decodable {
     let p: Double
     let f: Double
     let grams: Double?
-    // NOTE: the backend also sends `per100g` as a macro object, but the app
-    // only uses the already-scaled top-level kcal/c/p/f above. It is
-    // deliberately not declared here — Decodable ignores undeclared keys.
-    // (It was previously typed `Bool?`, which threw a typeMismatch and broke
-    // every successful barcode lookup.)
+    // Additive fields alongside the legacy kcal/c/p/f above — the serving
+    // size the source actually reports (distinct from `grams`, the scaling
+    // factor the client requested/received) and which provider resolved
+    // the lookup ("cache" | "off" | "usda"). All optional: an old backend
+    // during a rollout window won't send them, and the source's own data
+    // may not know a serving size.
+    let servingGrams: Double?
+    let servingDesc: String?
+    let source: String?
+    // Per-100g breakdown (kcal/c/p/f), additive alongside the legacy
+    // already-scaled top-level fields above. Used by the log sheet's
+    // portion controls to recompute macros locally as the user adjusts
+    // serving size/grams, instead of round-tripping to the server. Optional
+    // for backwards-compat with an older backend during a rollout window.
+    let per100g: NutritionCandidatePer100g?
 }
 
 struct LogMealResponse: Decodable {

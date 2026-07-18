@@ -33,6 +33,26 @@ struct ImageTransfer: Transferable {
     }
 }
 
+// MARK: - Portion mode
+
+/// Drives the confirm card's portion controls once a candidate/barcode
+/// result is applied. `nil` (the default) means no portion control — the
+/// flat totals `applyResult` set are shown as-is, exactly like the old
+/// single-result flow.
+///
+/// - `.perGram`: a cache/USDA/barcode result with a per-100g breakdown.
+///   `servingGrams` is the "1 serving" size when the source knows it (drives
+///   the stepper, default multiplier 1.0); `nil` means the source has no
+///   serving size, so the UI must fall back to explicit grams entry rather
+///   than silently assuming 100 g.
+/// - `.scaledHistory`: a user-history candidate. History rows never carry a
+///   per-gram breakdown (see `dedupHistory` server-side), so portion
+///   adjustment linearly scales the last-logged totals themselves.
+enum PortionMode {
+    case perGram(per100g: NutritionCandidatePer100g, servingGrams: Double?, servingDesc: String?)
+    case scaledHistory(kcal: Double, c: Double, p: Double, f: Double)
+}
+
 // MARK: - ViewModel
 
 @MainActor
@@ -45,6 +65,23 @@ final class LogMealViewModel: ObservableObject {
 
     // ── Text input ────────────────────────────────────────────────────────────
     @Published var searchText: String = ""
+    /// Ranked matches from the last text/voice search (POST /api/nutrition/
+    /// search's `candidates`). Non-empty means the UI shows a selectable
+    /// list instead of jumping straight to the confirm card; empty (old
+    /// server, or no candidates key at all) keeps the single-result flow.
+    @Published var candidates: [NutritionCandidate] = []
+
+    // ── Recents (quick re-log) ───────────────────────────────────────────────
+    /// The user's own recently-logged meals (GET /api/nutrition/recents),
+    /// shown as a tappable section above the text input. Painted from the
+    /// UserDefaults cache instantly on open, then refreshed in the background.
+    @Published var recents: [RecentFood] = []
+
+    // ── Barcode ───────────────────────────────────────────────────────────────
+    /// True when the barcode endpoint returned a genuine "not found" miss
+    /// (`APIError.barcodeNotFound`) — shows a friendly fallback offering text
+    /// search instead of a bare error banner.
+    @Published var barcodeNotFound: Bool = false
 
     // ── Confirm card (shown after any method returns a result) ────────────────
     @Published var showConfirmCard: Bool = false
@@ -56,6 +93,16 @@ final class LogMealViewModel: ObservableObject {
     /// Full-resolution image the user picked (photo method) — shown in the confirm card.
     @Published var pendingImage: UIImage? = nil
     private var pendingSource: String = "text"
+
+    // ── Portion controls (confirm card) ─────────────────────────────────────
+    @Published var portionMode: PortionMode? = nil
+    /// 0.5-step serving multiplier, floor 0.5. Drives both `.perGram` (when
+    /// `servingGrams` is known) and `.scaledHistory`.
+    @Published var portionMultiplier: Double = 1.0
+    /// Free-text grams entry, used for `.perGram` when `servingGrams` is
+    /// unknown, or when the user opts into it via `toggleCustomPortionGrams()`.
+    @Published var portionGramsText: String = ""
+    @Published var useCustomPortionGrams: Bool = false
 
     // ── Post-log ──────────────────────────────────────────────────────────────
     @Published var isLogged: Bool = false
@@ -106,13 +153,98 @@ final class LogMealViewModel: ObservableObject {
 
     private func applyResult(name: String, kcal: Double, p: Double, c: Double, f: Double, source: String) {
         editedName    = name
+        setMacroFields(kcal: kcal, p: p, c: c, f: f)
+        pendingSource = source
+        showConfirmCard = true
+        errorMessage = nil
+    }
+
+    private func setMacroFields(kcal: Double, p: Double, c: Double, f: Double) {
         editedKcal    = "\(Int(kcal.rounded()))"
         editedProtein = String(format: "%.1f", p)
         editedCarbs   = String(format: "%.1f", c)
         editedFat     = String(format: "%.1f", f)
-        pendingSource = source
-        showConfirmCard = true
-        errorMessage = nil
+    }
+
+    // MARK: - Portion controls
+
+    /// Recomputes the confirm card's macro fields from the active
+    /// `portionMode` + the current multiplier/grams entry. A no-op when
+    /// there's no portion mode (flat-result flow) or the grams entry doesn't
+    /// yet parse to a positive number — the fields simply stay as they were
+    /// until the user provides a valid amount.
+    private func recomputePortion() {
+        guard let mode = portionMode else { return }
+        switch mode {
+        case .scaledHistory(let kcal, let c, let p, let f):
+            setMacroFields(
+                kcal: kcal * portionMultiplier,
+                p: p * portionMultiplier,
+                c: c * portionMultiplier,
+                f: f * portionMultiplier
+            )
+        case .perGram(let per100g, let servingGrams, _):
+            let grams: Double?
+            if let servingGrams, !useCustomPortionGrams {
+                grams = servingGrams * portionMultiplier
+            } else {
+                grams = Double(portionGramsText)
+            }
+            guard let grams, grams > 0 else { return }
+            let factor = grams / 100
+            setMacroFields(
+                kcal: per100g.kcal * factor,
+                p: per100g.p * factor,
+                c: per100g.c * factor,
+                f: per100g.f * factor
+            )
+        }
+    }
+
+    /// True only when the confirm card is waiting on an explicit grams entry
+    /// (unknown serving size, or the user opted into custom grams) that
+    /// hasn't been filled in yet — gates the Log button so nothing gets
+    /// logged against a silently-assumed 100 g.
+    var portionNeedsGrams: Bool {
+        guard case .perGram(_, let servingGrams, _) = portionMode,
+              servingGrams == nil || useCustomPortionGrams
+        else { return false }
+        guard let grams = Double(portionGramsText), grams > 0 else { return true }
+        return false
+    }
+
+    func incrementPortion() {
+        portionMultiplier += 0.5
+        recomputePortion()
+    }
+
+    func decrementPortion() {
+        portionMultiplier = max(0.5, portionMultiplier - 0.5)
+        recomputePortion()
+    }
+
+    func updatePortionGrams(_ text: String) {
+        portionGramsText = text
+        recomputePortion()
+    }
+
+    /// Toggles between the serving-multiplier stepper and free-text grams
+    /// entry for a `.perGram` candidate whose `servingGrams` is known.
+    /// Seeds the grams field with the stepper's current reading so the
+    /// switch doesn't blank out a value the user already dialed in.
+    func toggleCustomPortionGrams() {
+        useCustomPortionGrams.toggle()
+        if useCustomPortionGrams, case .perGram(_, let servingGrams, _) = portionMode, let servingGrams {
+            portionGramsText = String(format: "%.0f", servingGrams * portionMultiplier)
+        }
+        recomputePortion()
+    }
+
+    private func resetPortionState() {
+        portionMode = nil
+        portionMultiplier = 1.0
+        portionGramsText = ""
+        useCustomPortionGrams = false
     }
 
     // MARK: - Text search
@@ -120,14 +252,120 @@ final class LogMealViewModel: ObservableObject {
     func searchByText() async {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return }
+        candidates = []
         isLoading = true
         defer { isLoading = false }
         do {
             let r = try await api.searchFood(query)
-            applyResult(name: r.name, kcal: r.kcal, p: r.p, c: r.c, f: r.f, source: "text")
+            if let cands = r.candidates, !cands.isEmpty {
+                // Old server (no `candidates` key, or an empty one) falls
+                // through to the flat single-result flow below unchanged.
+                // Hide any stale confirm card from a previous selection —
+                // the old flow always overwrote it on a new search.
+                showConfirmCard = false
+                resetPortionState()
+                candidates = cands
+            } else {
+                resetPortionState()
+                applyResult(name: r.name, kcal: r.kcal, p: r.p, c: r.c, f: r.f, source: "text")
+            }
         } catch {
             errorMessage = "Search failed: \(error.localizedDescription)"
         }
+    }
+
+    /// Selects one candidate from the list rendered after `searchByText()`.
+    /// History rows get the "same as last time" scaled-totals portion mode;
+    /// any cache/USDA row with a per-100g breakdown gets the per-gram
+    /// portion mode (serving size known → 1-serving default, unknown →
+    /// gated grams entry — same rule as barcode, never a silent 100 g);
+    /// estimate rows (no per100g) keep the flat totals `applyResult` sets.
+    func chooseCandidate(_ candidate: NutritionCandidate) {
+        candidates = []
+        resetPortionState()
+
+        if candidate.origin == "history" {
+            portionMode = .scaledHistory(kcal: candidate.kcal, c: candidate.c, p: candidate.p, f: candidate.f)
+            applyResult(name: candidate.name, kcal: candidate.kcal, p: candidate.p, c: candidate.c, f: candidate.f, source: "text")
+        } else if let per100g = candidate.per100g {
+            applyPerGramResult(
+                name: candidate.name,
+                per100g: per100g,
+                servingGrams: candidate.servingGrams,
+                servingDesc: candidate.servingDesc,
+                source: "text"
+            )
+        } else {
+            applyResult(name: candidate.name, kcal: candidate.kcal, p: candidate.p, c: candidate.c, f: candidate.f, source: "text")
+        }
+    }
+
+    /// Shared per-gram apply path for candidate picks and barcode hits:
+    /// sets `.perGram` portion mode, then either prefills the confirm card
+    /// at 1 serving (serving size known) or blanks the macro fields and
+    /// relies on `portionNeedsGrams` gating the Log button until the user
+    /// enters real grams — never a silently-assumed 100 g.
+    private func applyPerGramResult(
+        name: String,
+        per100g: NutritionCandidatePer100g,
+        servingGrams: Double?,
+        servingDesc: String?,
+        source: String
+    ) {
+        portionMode = .perGram(per100g: per100g, servingGrams: servingGrams, servingDesc: servingDesc)
+
+        if let servingGrams {
+            let factor = servingGrams / 100
+            applyResult(
+                name: name,
+                kcal: per100g.kcal * factor,
+                p: per100g.p * factor,
+                c: per100g.c * factor,
+                f: per100g.f * factor,
+                source: source
+            )
+        } else {
+            applyResult(name: name, kcal: 0, p: 0, c: 0, f: 0, source: source)
+            editedKcal = ""
+            editedProtein = ""
+            editedCarbs = ""
+            editedFat = ""
+        }
+    }
+
+    // MARK: - Recents
+
+    private static let recentsCacheKey = "vital.nutrition.recentsCache"
+
+    /// Paints the cached copy instantly (if any), then refreshes from the
+    /// server in the background. Silent on failure — recents are a
+    /// nice-to-have quick-pick list, not something worth surfacing an error
+    /// banner over — and shows nothing when there's no data at all.
+    func loadRecents() async {
+        if recents.isEmpty, let cached = Self.loadCachedRecents() {
+            recents = cached
+        }
+        guard let fresh = try? await api.fetchNutritionRecents() else { return }
+        recents = fresh
+        Self.cacheRecents(fresh)
+    }
+
+    /// Applies a recent as-is — no portion controls (recents carry no
+    /// per-gram breakdown), zero network.
+    func applyRecent(_ recent: RecentFood) {
+        candidates = []
+        resetPortionState()
+        applyResult(name: recent.name, kcal: recent.kcal, p: recent.p, c: recent.c, f: recent.f, source: "text")
+    }
+
+    private static func loadCachedRecents() -> [RecentFood]? {
+        guard let data = UserDefaults.standard.data(forKey: recentsCacheKey) else { return nil }
+        return try? JSONDecoder().decode([RecentFood].self, from: data)
+    }
+
+    private static func cacheRecents(_ items: [RecentFood]) {
+        guard let data = try? JSONEncoder().encode(items) else { return }
+        UserDefaults.standard.set(data, forKey: recentsCacheKey)
     }
 
     // MARK: - Photo
@@ -158,13 +396,42 @@ final class LogMealViewModel: ObservableObject {
         // Ignore if a scan is already in-flight or we already have a result.
         guard !isLoading, !showConfirmCard else { return }
         isLoading = true
+        barcodeNotFound = false
         defer { isLoading = false }
         do {
             let r = try await api.barcodeFood(code, grams: nil)
-            applyResult(name: r.name, kcal: r.kcal, p: r.p, c: r.c, f: r.f, source: "barcode")
+            applyBarcodeResult(r)
+        } catch APIError.barcodeNotFound {
+            // Genuine "every source missed" — the view shows a friendly
+            // fallback offering text search instead of a bare error string.
+            barcodeNotFound = true
         } catch {
             errorMessage = "Barcode lookup failed: \(error.localizedDescription)"
         }
+    }
+
+    /// Sets up the portion mode from a successful barcode lookup and seeds
+    /// the confirm card via the shared `applyPerGramResult` path (same rules
+    /// as candidate picks). `grams: nil` was sent on the request, so the
+    /// server's own `kcal/c/p/f` reflect its 100 g default — that's why the
+    /// per100g path recomputes/blanks rather than trusting the flat fields.
+    private func applyBarcodeResult(_ r: BarcodeResult) {
+        candidates = []
+        resetPortionState()
+
+        guard let per100g = r.per100g else {
+            // Old server without per100g — legacy flat-result behavior.
+            applyResult(name: r.name, kcal: r.kcal, p: r.p, c: r.c, f: r.f, source: "barcode")
+            return
+        }
+
+        applyPerGramResult(
+            name: r.name,
+            per100g: per100g,
+            servingGrams: r.servingGrams,
+            servingDesc: r.servingDesc,
+            source: "barcode"
+        )
     }
 
     // MARK: - Voice
@@ -281,6 +548,9 @@ final class LogMealViewModel: ObservableObject {
         editedProtein   = ""
         editedCarbs     = ""
         editedFat       = ""
+        candidates      = []
+        barcodeNotFound = false
+        resetPortionState()
     }
 
     func fullReset() {
