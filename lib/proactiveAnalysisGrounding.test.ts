@@ -20,7 +20,7 @@ const validAnalysis = {
 };
 
 function evidenceTokens(encoded: ReturnType<typeof encodeProactiveAnalysisRequest>): string[] {
-  return JSON.stringify(modelPayload(encoded)).match(/\{\{EVIDENCE_[A-Z]+\}\}/g) ?? [];
+  return JSON.stringify(modelPayload(encoded)).match(/⟦EVIDENCE_[A-Z]+⟧/g) ?? [];
 }
 
 function tokenResponse(encoded: ReturnType<typeof encodeProactiveAnalysisRequest>): string {
@@ -54,7 +54,7 @@ function captureEvidenceDisplays(run: () => void): string[] {
   Object.defineProperty(Map.prototype, 'set', {
     ...descriptor,
     value(this: Map<unknown, unknown>, key: unknown, value: unknown) {
-      if (typeof key === 'string' && /^\{\{EVIDENCE_[A-Z]+\}\}$/.test(key) && typeof value === 'string') displays.push(value);
+      if (typeof key === 'string' && /^⟦EVIDENCE_[A-Z]+⟧$/.test(key) && typeof value === 'string') displays.push(value);
       return original.call(this, key, value);
     },
   });
@@ -72,7 +72,7 @@ test('encodes every number in date input and context deterministically', () => {
   assert.deepEqual(left, right);
   const serialized = JSON.stringify(left);
   assert.doesNotMatch(serialized, /\p{N}/u);
-  const tokens = serialized.match(/\{\{EVIDENCE_[A-Z]+\}\}/g) ?? [];
+  const tokens = serialized.match(/⟦EVIDENCE_[A-Z]+⟧/g) ?? [];
   assert.equal(tokens.length, new Set(tokens).size);
   assert.ok(tokens.length >= 10);
 });
@@ -118,17 +118,17 @@ test('the outbound guard rejects every Unicode numeric code point', () => {
       (error) => error instanceof AnalysisContentError && error.category === 'grounding_failure',
     );
   }
-  assert.doesNotThrow(() => assertNoRawNumbers('Use {{EVIDENCE_ALPHA}} only.'));
+  assert.doesNotThrow(() => assertNoRawNumbers('Use ⟦EVIDENCE_ALPHA⟧ only.'));
 });
 
 test('allocates unique uppercase ASCII tokens for identical displays at different paths', () => {
   const payload = modelPayload(encodeProactiveAnalysisRequest({
     kind: 'workout', date: 'date', input: { a: 45, b: 45 }, availableContext: {},
   }));
-  const tokens = JSON.stringify(payload).match(/\{\{EVIDENCE_[A-Z]+\}\}/g) ?? [];
+  const tokens = JSON.stringify(payload).match(/⟦EVIDENCE_[A-Z]+⟧/g) ?? [];
   assert.equal(tokens.length, 2);
   assert.equal(new Set(tokens).size, 2);
-  assert.ok(tokens.every((token) => /^\{\{EVIDENCE_[A-Z]+\}\}$/.test(token)));
+  assert.ok(tokens.every((token) => /^⟦EVIDENCE_[A-Z]+⟧$/.test(token)));
 });
 
 test('does not mutate source objects', () => {
@@ -138,7 +138,7 @@ test('does not mutate source objects', () => {
 });
 
 test('rejects reserved evidence-token namespace collisions in source strings', () => {
-  for (const input of ['{{EVIDENCE_A}}', 'prefix {{EVIDENCE_', 'prefix EVIDENCE_A suffix']) {
+  for (const input of ['⟦EVIDENCE_A⟧', 'prefix ⟦EVIDENCE_', 'prefix EVIDENCE_A suffix']) {
     assert.throws(() => encodeProactiveAnalysisRequest({ kind: 'sleep', date: 'date', input, availableContext: {} }), /reserved/i);
   }
 });
@@ -168,7 +168,7 @@ test('captures complete numeric lexemes, adjacent units, and typed numeric field
     availableContext: {},
   }));
   const serialized = JSON.stringify(payload);
-  const tokens = serialized.match(/\{\{EVIDENCE_[A-Z]+\}\}/g) ?? [];
+  const tokens = serialized.match(/⟦EVIDENCE_[A-Z]+⟧/g) ?? [];
   assert.equal(tokens.length, 13);
   assert.doesNotMatch(serialized, /\p{N}/u);
   assert.doesNotMatch(serialized, /-2|\+\.5|1\.2e\+3|1,000|45%|37\.5°C/);
@@ -191,7 +191,7 @@ test('captures unsigned leading decimal separators as complete exact displays', 
     const payload = modelPayload(encodeProactiveAnalysisRequest({
       kind: 'sleep', date: 'date', input: { arabic: '٫٥', ascii: '.5' }, availableContext: {},
     })) as { input: Record<string, string> };
-    assert.deepEqual({ ...payload.input }, { arabic: '{{EVIDENCE_A}}', ascii: '{{EVIDENCE_B}}' });
+    assert.deepEqual({ ...payload.input }, { arabic: '⟦EVIDENCE_A⟧', ascii: '⟦EVIDENCE_B⟧' });
   });
   assert.deepEqual(displays, ['٫٥', '.5']);
 });
@@ -201,10 +201,10 @@ test('preserves date and range separators while storing only lexically unary sig
     const payload = modelPayload(encodeProactiveAnalysisRequest({
       kind: 'sleep', date: '2026-07-13', input: { range: '5-10', signed: 'change -2; then +3', spacedRange: '20 - 30', tightRange: '40 -50' }, availableContext: {},
     })) as { date: string; input: Record<string, string> };
-    assert.match(payload.date, /^\{\{EVIDENCE_[A-Z]+\}\}-\{\{EVIDENCE_[A-Z]+\}\}-\{\{EVIDENCE_[A-Z]+\}\}$/);
-    assert.match(payload.input.range, /^\{\{EVIDENCE_[A-Z]+\}\}-\{\{EVIDENCE_[A-Z]+\}\}$/);
-    assert.match(payload.input.spacedRange, /^\{\{EVIDENCE_[A-Z]+\}\} - \{\{EVIDENCE_[A-Z]+\}\}$/);
-    assert.match(payload.input.tightRange, /^\{\{EVIDENCE_[A-Z]+\}\} -\{\{EVIDENCE_[A-Z]+\}\}$/);
+    assert.match(payload.date, /^⟦EVIDENCE_[A-Z]+⟧-⟦EVIDENCE_[A-Z]+⟧-⟦EVIDENCE_[A-Z]+⟧$/);
+    assert.match(payload.input.range, /^⟦EVIDENCE_[A-Z]+⟧-⟦EVIDENCE_[A-Z]+⟧$/);
+    assert.match(payload.input.spacedRange, /^⟦EVIDENCE_[A-Z]+⟧ - ⟦EVIDENCE_[A-Z]+⟧$/);
+    assert.match(payload.input.tightRange, /^⟦EVIDENCE_[A-Z]+⟧ -⟦EVIDENCE_[A-Z]+⟧$/);
   });
   assert.deepEqual(displays, ['2026', '07', '13', '5', '10', '-2', '+3', '20', '30', '40', '50']);
 });
@@ -295,7 +295,7 @@ test('rejects a copied date token as session-input evidence', () => {
   };
   const encoded = encodeProactiveAnalysisRequest(request);
   const payload = modelPayload(encoded) as { date: string };
-  assert.match(payload.date, /^\{\{EVIDENCE_[A-Z]+\}\}$/);
+  assert.match(payload.date, /^⟦EVIDENCE_[A-Z]+⟧$/);
   assertCategory('grounding_failure', () => groundAnalysisText(JSON.stringify({
     ...validAnalysis,
     narrative: `Recorded date was ${payload.date}.`,
@@ -342,16 +342,16 @@ test('rejects raw numeric forms and invalid evidence-token forms as grounding fa
   const [first, second] = evidenceTokens(encoded);
   const authored = [
     '45', '٤٥', '-45', '+45', '1.5', '.5', '1e2', '1,000', '45%', '37°C', '1. Rest',
-    '{{EVIDENCE_UNKNOWN}}', '{{EVIDENCE_AA', 'EVIDENCE_AA}}', '{{EVIDENCE_ AA}}',
-    '{{EVIDENCE_a}}', '{{EVIDENCE_A1}}', '{{EVIDENCE_{{EVIDENCE_A}}}}',
-    `${first}${second}`, `${first}EVIDENCE_A`, `{${first}}`,
+    '⟦EVIDENCE_UNKNOWN⟧', '⟦EVIDENCE_AA', 'EVIDENCE_AA⟧', '⟦EVIDENCE_ AA⟧',
+    '⟦EVIDENCE_a⟧', '⟦EVIDENCE_A1⟧', '⟦EVIDENCE_⟦EVIDENCE_A⟧⟧',
+    `${first}${second}`, `${first}EVIDENCE_A`, `⟦${first}⟧`,
   ];
   for (const narrative of authored) {
     assertCategory('grounding_failure', () => groundAnalysisText(JSON.stringify({ ...validAnalysis, narrative }), encoded));
   }
   assertCategory('grounding_failure', () => groundAnalysisText(JSON.stringify({ ...validAnalysis, narrative: `${first} then ${first}` }), encoded));
   assertCategory('grounding_failure', () => groundAnalysisText(JSON.stringify({
-    ...validAnalysis, narrative: '{{EVID', observations: ['ENCE_A}}'],
+    ...validAnalysis, narrative: '⟦EVID', observations: ['ENCE_A⟧'],
   }), encoded));
 });
 

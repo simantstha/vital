@@ -155,7 +155,7 @@ test('synthetic live proactive analysis returns typed grounded output', {
       const rawNextSteps = raw.nextSteps;
       assert.ok(Array.isArray(rawObservations));
       assert.ok(rawObservations.every((item) => typeof item === 'string' && item.trim()));
-      assert.ok(rawObservations.some((item) => /\{\{EVIDENCE_[A-Z]+\}\}/.test(item)));
+      assert.ok(rawObservations.some((item) => /⟦EVIDENCE_[A-Z]+⟧/.test(item)));
       assert.ok(Array.isArray(rawNextSteps));
       assert.ok(rawNextSteps.every((item) => typeof item === 'string' && item.trim()));
       return textBlocks[0].text;

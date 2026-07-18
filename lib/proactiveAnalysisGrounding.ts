@@ -18,11 +18,11 @@ interface PrivateEncodingState {
 }
 
 const encodings = new WeakMap<object, PrivateEncodingState>();
-const TOKEN = /^\{\{EVIDENCE_[A-Z]+\}\}$/;
-const TOKENS = /\{\{EVIDENCE_[A-Z]+\}\}/g;
+const TOKEN = /^⟦EVIDENCE_[A-Z]+⟧$/;
+const TOKENS = /⟦EVIDENCE_[A-Z]+⟧/g;
 const RAW_NUMBER = /\p{N}/u;
 const RESERVED_EVIDENCE = /EVIDENCE_/iu;
-const TOKEN_FRAGMENT = /EVIDENCE|\{\{EVID|ENCE_[A-Z]*\}\}/iu;
+const TOKEN_FRAGMENT = /EVIDENCE|⟦EVID|ENCE_[A-Z]*⟧/iu;
 const SOURCE_SIGN_CHARACTERS = '+\u2212\uFE62\uFE63\uFF0B\uFF0D-';
 const SOURCE_SIGN_CLASS = `[${SOURCE_SIGN_CHARACTERS}]`;
 const SOURCE_SIGN = new RegExp(`^${SOURCE_SIGN_CLASS}$`, 'u');
@@ -129,7 +129,7 @@ function validateTokenUse(value: string, displays: ReadonlyMap<string, string>, 
     const start = match.index;
     const end = start + token.length;
     if (!displays.has(token) || used.has(token)) throw new AnalysisContentError('grounding_failure');
-    if (/[{}]/.test(value[start - 1] ?? '') || /[{}]/.test(value[end] ?? '')) {
+    if (/[⟦⟧]/.test(value[start - 1] ?? '') || /[⟦⟧]/.test(value[end] ?? '')) {
       throw new AnalysisContentError('grounding_failure');
     }
     assertClauseTerminalToken(value, start, end);
@@ -261,7 +261,7 @@ export function encodeProactiveAnalysisRequest(source: ProactiveAnalysisSource):
   const ancestors = new WeakSet<object>();
 
   const allocate = (display: string): string => {
-    const token = `{{EVIDENCE_${alphabeticName(nextToken++)}}}`;
+    const token = `⟦EVIDENCE_${alphabeticName(nextToken++)}⟧`;
     if (!TOKEN.test(token)) throw new Error('Invalid evidence token.');
     displays.set(token, display);
     if (collectingInputTokens) inputTokens.add(token);
