@@ -20,7 +20,7 @@ async function analyze(job: AnalysisJob, context: AnalysisContext): Promise<Grou
     generate: async (request) => {
       const response = await anthropic.messages.create({
         model: proactiveAnalysisModel(process.env),
-        max_tokens: 700,
+        max_tokens: 1500,
         system: request.system,
         messages: [{ role: 'user', content: request.content }],
       });

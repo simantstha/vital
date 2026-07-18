@@ -29,12 +29,12 @@ test('classifies every invalid output shape as a schema failure before grounding
     { shortInsight: valid.shortInsight, narrative: valid.narrative, observations: valid.observations, nextSteps: valid.nextSteps },
     { ...valid, extra: 'field' },
     { ...valid, headline: 45 },
-    { ...valid, shortInsight: { text: '{{EVIDENCE_A}}' } },
-    { ...valid, observations: '{{EVIDENCE_A}}' },
-    { ...valid, observations: [['{{EVIDENCE_A}}']] },
-    { ...valid, nextSteps: [{ value: '{{EVIDENCE_A}}' }] },
-    { ...valid, '{{EVIDENCE_A}}': 'token in key' },
-    { ...valid, extra: '{{EVIDENCE_A}}' },
+    { ...valid, shortInsight: { text: '⟦EVIDENCE_A⟧' } },
+    { ...valid, observations: '⟦EVIDENCE_A⟧' },
+    { ...valid, observations: [['⟦EVIDENCE_A⟧']] },
+    { ...valid, nextSteps: [{ value: '⟦EVIDENCE_A⟧' }] },
+    { ...valid, '⟦EVIDENCE_A⟧': 'token in key' },
+    { ...valid, extra: '⟦EVIDENCE_A⟧' },
   ];
   for (const value of invalidShapes) {
     assert.throws(

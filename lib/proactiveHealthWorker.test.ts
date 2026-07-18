@@ -35,7 +35,7 @@ function sourceFor(value: AnalysisJob, context = enabledContext()): ProactiveAna
 
 function trustedProof(source: ProactiveAnalysisSource): GroundedAnalysisProof {
   const encoded = encodeProactiveAnalysisRequest(source);
-  const [token] = JSON.stringify(modelPayload(encoded)).match(/\{\{EVIDENCE_[A-Z]+\}\}/g) ?? [];
+  const [token] = JSON.stringify(modelPayload(encoded)).match(/⟦EVIDENCE_[A-Z]+⟧/g) ?? [];
   assert.ok(token);
   return groundAnalysisText(JSON.stringify({ ...valid, narrative: `Available data included ${token}.` }), encoded);
 }
