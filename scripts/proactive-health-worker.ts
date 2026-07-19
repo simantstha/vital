@@ -1,14 +1,21 @@
 import Anthropic from '@anthropic-ai/sdk';
+import { db, schema } from '../db';
 import { ApnsClient } from '../lib/apnsClient';
 import { generateGroundedAnalysis, proactiveAnalysisModel, type AnalysisFailureEvent } from '../lib/proactiveAnalysisGeneration';
 import { type GroundedAnalysisProof } from '../lib/proactiveAnalysisGrounding';
 import { consumeMorningAnalysisProof, deliverNotification, runClaimedAnalysis, type AnalysisContext, type AnalysisJob } from '../lib/proactiveHealthWorker';
 import { claimAnalysisJobs, claimDueMorningBriefs, completeMorningBrief, ensureDefaultPreferencesForRegisteredUsers, failMorningBrief, listReadyNotificationCandidates, workerRepository } from '../lib/proactiveHealthWorkerRepository';
 import { analysisAlert, workerErrorEvent, type WorkerStage } from '../lib/proactiveHealthWorkerSupport';
+import { createWhoopTokenStore } from '../lib/whoop/client';
+import { createWhoopSyncRepository, runWhoopSync } from '../lib/whoop/sync';
+import { createWhoopWorkerRepository, runWhoopWorkerPass } from '../lib/whoop/workerPass';
 
 const intervalMs = Number(process.env.PROACTIVE_WORKER_INTERVAL_MS ?? 15_000);
 const anthropic = new Anthropic({ apiKey: required('ANTHROPIC_API_KEY') });
 const apns = new ApnsClient({ keyId: required('APNS_KEY_ID'), teamId: required('APNS_TEAM_ID'), topic: required('APNS_TOPIC'), privateKey: required('APNS_PRIVATE_KEY').replace(/\\n/g, '\n') });
+const whoopWorkerRepository = createWhoopWorkerRepository(db, schema);
+const whoopTokenStore = createWhoopTokenStore(db, schema);
+const whoopSyncRepository = createWhoopSyncRepository(db, schema);
 
 const reportAnalysisFailure = (event: AnalysisFailureEvent): void => {
   console.error(JSON.stringify(event));
@@ -71,6 +78,16 @@ async function tick(reportStage: (stage: WorkerStage) => void): Promise<void> {
       console.error(JSON.stringify(workerErrorEvent('process-morning-brief', error)));
       await failMorningBrief(claim, new Date());
     }
+  }
+
+  reportStage('whoop-sync');
+  const whoopResult = await runWhoopWorkerPass(now, {
+    listActiveConnections: () => whoopWorkerRepository.listActiveConnections(),
+    runSync: (target, windowStart, windowEnd) => runWhoopSync(target, whoopTokenStore, whoopSyncRepository, windowStart, windowEnd),
+    markSynced: (connectionId, syncedAt) => whoopWorkerRepository.markSynced(connectionId, syncedAt),
+  });
+  if (whoopResult.aborted) {
+    console.error(JSON.stringify({ event: 'whoop_worker_pass_aborted', synced: whoopResult.synced.length, skipped: whoopResult.skipped.length }));
   }
 }
 

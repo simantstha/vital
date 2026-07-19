@@ -35,6 +35,7 @@ export const WORKER_STAGES = [
   'deliver-notification',
   'claim-morning-briefs',
   'process-morning-brief',
+  'whoop-sync',
 ] as const;
 
 export type WorkerStage = (typeof WORKER_STAGES)[number];
