@@ -46,6 +46,17 @@ struct RootView: View {
             }
         }
         .environmentObject(authViewModel)
+        .onOpenURL { url in
+            // `vital://` deep links. The WHOOP connect callback
+            // (`vital://whoop?status=connected|error`) is normally consumed
+            // directly by `ASWebAuthenticationSession`'s own completion
+            // handler before it ever reaches here; this is the fallback for
+            // the system routing it to the app instead (e.g. the session was
+            // already dismissed when WHOOP redirected) and the extension
+            // point for future `vital://` deep links.
+            guard WhoopCallbackResult(url: url) != nil else { return }
+            NotificationCenter.default.post(name: .vitalWhoopCallbackReceived, object: nil)
+        }
         .onChange(of: scenePhase) { _, newPhase in
             // Catches the return trip from Settings after a permission
             // grant/deny, and generally keeps the rolling window fresh
