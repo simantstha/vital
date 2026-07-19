@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  dedupeWorkoutLogItems,
   mapDailySleepRow,
   mapEventToLogItem,
   mapHealthKitWorkout,
   sortLogItemsNewestFirst,
+  type LogItem,
 } from './logItems';
 
 test('maps sleep minutes to a stable wake-date sleep session', () => {
@@ -147,4 +149,77 @@ test('maps legacy events without changing identity, formatting, or optional fiel
     subtitle: '92% efficiency · RHR 52 bpm',
     sleepMs: 28_800_000,
   });
+});
+
+test('mapEventToLogItem carries the events.source column when present', () => {
+  const item = mapEventToLogItem({
+    id: 'whoop-workout',
+    type: 'workout_completed',
+    timestamp: new Date('2026-07-14T18:00:00.000Z'),
+    payload: { type: 'running', duration_s: 1_800 },
+    source: 'whoop',
+  });
+  assert.equal(item.source, 'whoop');
+});
+
+test('dedupeWorkoutLogItems drops a WHOOP workout that duplicates an Apple Watch workout within 5 minutes', () => {
+  const whoop: LogItem = mapEventToLogItem({
+    id: 'whoop-1',
+    type: 'workout_completed',
+    timestamp: new Date('2026-07-14T18:02:00.000Z'),
+    payload: { type: 'running', duration_s: 1_800 },
+    source: 'whoop',
+  });
+  const apple: LogItem = mapHealthKitWorkout({
+    date: '2026-07-14',
+    hkUuid: 'apple-1',
+    type: 'running',
+    durationMin: 30,
+    startTime: '2026-07-14T18:00:00Z',
+  }, 0);
+  const other: LogItem = mapEventToLogItem({
+    id: 'meal-1',
+    type: 'meal_logged',
+    timestamp: new Date('2026-07-14T20:00:00.000Z'),
+    payload: { description: 'Snack' },
+  });
+
+  const result = dedupeWorkoutLogItems([other, whoop, apple]);
+
+  assert.deepEqual(result.map((item) => item.id), ['meal-1', 'apple-1']);
+});
+
+test('dedupeWorkoutLogItems keeps both workouts when start times are more than 5 minutes apart', () => {
+  const whoop: LogItem = mapEventToLogItem({
+    id: 'whoop-2',
+    type: 'workout_completed',
+    timestamp: new Date('2026-07-14T18:10:00.000Z'),
+    payload: { type: 'running', duration_s: 1_800 },
+    source: 'whoop',
+  });
+  const apple: LogItem = mapHealthKitWorkout({
+    date: '2026-07-14',
+    hkUuid: 'apple-2',
+    type: 'running',
+    durationMin: 30,
+    startTime: '2026-07-14T18:00:00Z',
+  }, 0);
+
+  const result = dedupeWorkoutLogItems([whoop, apple]);
+
+  assert.deepEqual(result.map((item) => item.id), ['whoop-2', 'apple-2']);
+});
+
+test('dedupeWorkoutLogItems keeps a WHOOP-only workout with no matching non-WHOOP workout', () => {
+  const whoop: LogItem = mapEventToLogItem({
+    id: 'whoop-3',
+    type: 'workout_completed',
+    timestamp: new Date('2026-07-14T18:00:00.000Z'),
+    payload: { type: 'running', duration_s: 1_800 },
+    source: 'whoop',
+  });
+
+  const result = dedupeWorkoutLogItems([whoop]);
+
+  assert.deepEqual(result.map((item) => item.id), ['whoop-3']);
 });

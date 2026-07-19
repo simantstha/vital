@@ -12,6 +12,8 @@ export interface LogItem {
   dayKey?: string;
   /** Ready proactive-analysis id for workout_completed / sleep_session items. */
   analysisId?: string;
+  /** Originating events.source column (e.g. 'whoop', 'healthkit') — used for read-time dedup. */
+  source?: string;
 }
 
 export interface DailySleepRow {
@@ -29,6 +31,7 @@ export interface EventLogSource {
   type: string;
   timestamp: Date;
   payload: unknown;
+  source?: string;
 }
 
 function pl(payload: unknown): Record<string, unknown> {
@@ -193,6 +196,7 @@ export function mapEventToLogItem(event: EventLogSource): LogItem {
     ...(mealKcal != null ? { kcal: Math.round(mealKcal) } : {}),
     ...(workoutKm != null ? { km: workoutKm } : {}),
     ...(sleepMs != null ? { sleepMs } : {}),
+    ...(event.source != null ? { source: event.source } : {}),
   };
 }
 
@@ -219,4 +223,35 @@ export function mapHealthKitWorkout(workout: HealthKitWorkout, index: number): L
 
 export function sortLogItemsNewestFirst<T extends { timestamp: string }>(items: T[]): T[] {
   return [...items].sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+}
+
+const WORKOUT_DEDUPE_WINDOW_MS = 5 * 60_000;
+
+// hasExactTime is only ever set to false by mapHealthKitWorkout, for the
+// day-level noon-fallback placeholder used when no real start time exists.
+// Event-sourced workouts (WHOOP included) always carry a real instant, so an
+// absent hasExactTime is treated as exact.
+function hasExactWorkoutTime(item: LogItem): boolean {
+  return item.hasExactTime !== false;
+}
+
+/**
+ * Drops WHOOP-sourced workout_completed items that duplicate a non-WHOOP
+ * (e.g. Apple Watch/HealthKit) workout starting within 5 minutes — Apple
+ * Watch wins when both devices logged the same physical workout. Only
+ * compares items whose start timestamps are exact instants; everything
+ * else (including non-workout items) passes through untouched, in order.
+ */
+export function dedupeWorkoutLogItems(items: LogItem[]): LogItem[] {
+  const nonWhoopWorkoutTimes = items
+    .filter((item) => item.type === 'workout_completed' && item.source !== 'whoop' && hasExactWorkoutTime(item))
+    .map((item) => Date.parse(item.timestamp))
+    .filter((ms) => Number.isFinite(ms));
+
+  return items.filter((item) => {
+    if (item.type !== 'workout_completed' || item.source !== 'whoop' || !hasExactWorkoutTime(item)) return true;
+    const whoopMs = Date.parse(item.timestamp);
+    if (!Number.isFinite(whoopMs)) return true;
+    return !nonWhoopWorkoutTimes.some((ms) => Math.abs(ms - whoopMs) <= WORKOUT_DEDUPE_WINDOW_MS);
+  });
 }

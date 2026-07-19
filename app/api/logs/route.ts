@@ -39,6 +39,7 @@ import { eq, and, gte, inArray, desc, isNull } from 'drizzle-orm';
 import { getUserIdFromRequest } from '@/lib/auth';
 import { queryMetricPoints, queryWorkouts } from '@/lib/brain/tools';
 import {
+  dedupeWorkoutLogItems,
   mapDailySleepRow,
   mapEventToLogItem,
   mapHealthKitWorkout,
@@ -92,7 +93,9 @@ export async function GET(request: Request): Promise<NextResponse> {
   const workoutItems = workouts.map(mapHealthKitWorkout);
   const sleepItems = sleepRows.map(mapDailySleepRow);
 
-  const items = sortLogItemsNewestFirst([...eventItems, ...workoutItems, ...sleepItems]);
+  const items = dedupeWorkoutLogItems(
+    sortLogItemsNewestFirst([...eventItems, ...workoutItems, ...sleepItems]),
+  );
 
   return NextResponse.json({ items: await withAnalysisIds(userId, items) });
 }
