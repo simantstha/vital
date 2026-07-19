@@ -33,7 +33,12 @@ function getAppleJwks() {
   return appleJwks;
 }
 
-function getSessionSecret(): Uint8Array {
+/**
+ * Exported so other short-lived-JWT use cases (e.g. lib/whoop/state.ts's
+ * OAuth `state` token) can sign/verify with the same secret mechanism as the
+ * session JWT, rather than re-deriving `SESSION_JWT_SECRET` handling.
+ */
+export function getSessionSecret(): Uint8Array {
   const secret = process.env.SESSION_JWT_SECRET;
   if (!secret) {
     throw new Error('SESSION_JWT_SECRET environment variable is not set.');

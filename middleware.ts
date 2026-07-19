@@ -15,6 +15,14 @@ import { jwtVerify } from 'jose';
  *   - /api/health is always public (used by Fly health checks).
  *   - /api/auth/* is always public (that's how a client obtains a session
  *     JWT in the first place).
+ *   - /api/whoop/callback is always public: it's a browser redirect from
+ *     WHOOP's authorize page (ASWebAuthenticationSession in iOS), which
+ *     carries no Authorization header — identity comes from the signed
+ *     `state` param instead (see lib/whoop/state.ts). Verified inside the
+ *     route itself.
+ *   - /api/whoop/webhook is always public: WHOOP's server posts events with
+ *     no session JWT, only its own `X-WHOOP-Signature` HMAC (verified inside
+ *     the route itself, see app/api/whoop/webhook/route.ts).
  *   - If SESSION_JWT_SECRET is unset:
  *       - in production → fail CLOSED (503), so a misconfiguration can
  *         never silently expose the API;
@@ -38,7 +46,12 @@ function getSecretKey(secret: string): Uint8Array {
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
-  if (pathname === '/api/health' || pathname.startsWith('/api/auth/')) {
+  if (
+    pathname === '/api/health' ||
+    pathname.startsWith('/api/auth/') ||
+    pathname === '/api/whoop/callback' ||
+    pathname === '/api/whoop/webhook'
+  ) {
     return NextResponse.next();
   }
 
