@@ -4,7 +4,7 @@ import UIKit
 
 // MARK: - Connection state
 
-/// Connection state for the WHOOP row on `ConnectedAppsView`. `.loading` and
+/// Connection state for the WHOOP row on `DevicesView`. `.loading` and
 /// `.connecting` are client-only phases; the rest mirror
 /// `whoop_connections.status` ("active" | "revoked" | "error") as reported by
 /// `GET /api/whoop/status` — `.notConnected` covers both "never connected"
@@ -23,7 +23,7 @@ extension Notification.Name {
     /// `vital://whoop?...` callback directly to the app instead of through
     /// `ASWebAuthenticationSession`'s own completion handler (which normally
     /// consumes it first) — e.g. the session was already dismissed when
-    /// WHOOP redirected. `ConnectedAppsView` observes this to refresh status
+    /// WHOOP redirected. `DevicesView` observes this to refresh status
     /// on that fallback path.
     static let vitalWhoopCallbackReceived = Notification.Name("vitalWhoopCallbackReceived")
 }
