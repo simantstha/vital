@@ -16,7 +16,7 @@
  */
 
 import { db, schema } from '@/db';
-import { eq, and, gte, desc } from 'drizzle-orm';
+import { eq, and, gte, desc, inArray } from 'drizzle-orm';
 import type { OntologyNode } from '@/db/schema';
 import { getCalibration, type Calibration } from './baselines';
 import {
@@ -26,6 +26,8 @@ import {
 import { resolveDietBudget, type DietBudget } from './dietBudget';
 import { getCachedBrief, briefCacheKey, type CachedBrief } from './briefCache';
 import { getConversationStart } from './conversationWindow';
+import { buildWhoopContextLine } from './whoopContext';
+import { localDayKey } from '../localDay';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -70,6 +72,7 @@ export interface CoachContext {
   calibration: Calibration;         // gates recovery/training prescriptions
   dietBudget?: DietBudget;          // effective calorie/macro targets (auto or pinned)
   cachedBrief?: CachedBrief;        // today's app-generated insight + meal plan, if warm
+  whoopLine?: string;               // compact "WHOOP (today|yesterday): ..." line, if any whoop_* daily_metrics exist
   promptText: string;               // compact text block ready for Claude
 }
 
@@ -194,6 +197,8 @@ function buildPromptText(
     lines.push(`- Steps so far: ${ctx.today.steps.toLocaleString()}`);
   if (ctx.today.weight != null)
     lines.push(`- Weight: ${ctx.today.weight}kg`);
+  if (ctx.whoopLine)
+    lines.push(`- ${ctx.whoopLine}`);
 
   if (ctx.today.workouts.length > 0) {
     for (const w of ctx.today.workouts) {
@@ -397,6 +402,26 @@ export async function assembleContext(userId: string): Promise<CoachContext> {
   const dietBudget  = usersRow ? await resolveDietBudget(usersRow, userId) : undefined;
   const cachedBrief = getCachedBrief(briefCacheKey(userId, todayStr));
 
+  // WHOOP context line (Task 7) — daily_metrics is day-keyed to the user's
+  // *local* day (lib/whoop/mapping.ts's localDayKey), so this uses `tz`
+  // (only known after the Promise.all above resolves usersRow), not the UTC
+  // `todayStr` used for the events-based snapshot.
+  const localToday = localDayKey(now, tz);
+  const localYesterday = localDayKey(new Date(now.getTime() - 24 * 3_600_000), tz);
+  const whoopRows = await db.select({
+      date: schema.daily_metrics.date,
+      metric: schema.daily_metrics.metric,
+      value: schema.daily_metrics.value,
+      payload: schema.daily_metrics.payload,
+    })
+    .from(schema.daily_metrics)
+    .where(and(eq(schema.daily_metrics.user_id, userId), inArray(schema.daily_metrics.date, [localToday, localYesterday])));
+  const whoopLine = buildWhoopContextLine(
+    whoopRows.filter((r) => r.metric.startsWith('whoop_')),
+    localToday,
+    localYesterday,
+  );
+
   const partial: Omit<CoachContext, 'promptText'> = {
     userId,
     today,
@@ -410,6 +435,7 @@ export async function assembleContext(userId: string): Promise<CoachContext> {
     calibration,
     dietBudget,
     cachedBrief,
+    whoopLine,
   };
 
   return { ...partial, promptText: buildPromptText(partial) };
