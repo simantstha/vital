@@ -5,7 +5,8 @@ import SwiftUI
 /// derives it from `vm.integrations` — the backend only tracks one combined
 /// HealthKit integration ("Apple Health"), which is also the channel Apple
 /// Watch data flows through, so there's no separate watch-specific status to
-/// read. Whoop/Oura/Garmin are non-functional stubs per the redesign-v3 mock
+/// read. Oura/Garmin are non-functional stubs per the redesign-v3 mock (WHOOP
+/// has a real OAuth connect flow under Profile → Connected apps)
 /// — tapping "Connect" never fakes a connection, it only reveals a small
 /// "Coming soon" footnote.
 struct DevicesView: View {
@@ -29,7 +30,6 @@ struct DevicesView: View {
                             name: "Apple Watch",
                             connected: appleWatchConnected
                         )
-                        stubRow(icon: "waveform.path.ecg", name: "Whoop")
                         stubRow(icon: "circle.circle", name: "Oura")
                         stubRow(icon: "location.fill", name: "Garmin")
                     }
