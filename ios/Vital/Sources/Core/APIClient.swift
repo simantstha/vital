@@ -806,6 +806,73 @@ struct APIClient {
         return try decoder.decode(OnboardingResponse.self, from: data)
     }
 
+    // MARK: - WHOOP integration
+
+    /// GET /api/whoop/status — connection state for the "Connected apps"
+    /// screen. `connected: false` with null `status`/`lastSyncedAt` covers
+    /// both "never connected" and "disconnected"; the server doesn't
+    /// distinguish them and neither does the UI.
+    func whoopStatus() async throws -> WhoopStatusResponse {
+        try await get("/api/whoop/status")
+    }
+
+    /// POST /api/whoop/disconnect — deletes the connection row server-side.
+    /// Always succeeds (even as a no-op) per the route's contract.
+    func whoopDisconnect() async throws {
+        guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/whoop/disconnect") else {
+            throw APIError.invalidURL
+        }
+        var request = authorizedRequest(url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 15
+        let (_, response) = try await session.data(for: request)
+        try validate(response)
+    }
+
+    /// GET /api/whoop/connect returns a 302 to the WHOOP authorize URL
+    /// (in the `Location` header) rather than a JSON body — the route is
+    /// session-authed via a Bearer header, which a browser-driven redirect
+    /// can't carry, so `ASWebAuthenticationSession` must be pointed at the
+    /// authorize URL directly rather than at this route. This method makes
+    /// the authenticated request itself (attaching the Bearer token this
+    /// app already holds) and stops at the redirect using a dedicated
+    /// session/delegate — `redirectGuard` on the shared session strips auth
+    /// headers on cross-host redirects but still *follows* them, which
+    /// would leak this request to WHOOP and discard the Location header we
+    /// actually need.
+    func whoopAuthorizeURL() async throws -> URL {
+        guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/whoop/connect") else {
+            throw APIError.invalidURL
+        }
+        var request = authorizedRequest(url)
+        request.timeoutInterval = 15
+
+        let interceptor = RedirectInterceptingDelegate()
+        let config = URLSessionConfiguration.default
+        config.urlCache = nil
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        let oneOffSession = URLSession(configuration: config, delegate: interceptor, delegateQueue: nil)
+        defer { oneOffSession.finishTasksAndInvalidate() }
+
+        let (_, response) = try await oneOffSession.data(for: request)
+        return try Self.extractAuthorizeURL(from: response)
+    }
+
+    /// Pulls the WHOOP authorize URL out of the intercepted 302 response.
+    /// Pure and synchronous (no networking) so it's unit-testable by handing
+    /// it a constructed `HTTPURLResponse` directly, without standing up a
+    /// real `URLSession`/delegate round-trip.
+    static func extractAuthorizeURL(from response: URLResponse) throws -> URL {
+        guard let http = response as? HTTPURLResponse, http.statusCode == 302,
+              let location = http.value(forHTTPHeaderField: "Location"),
+              let authorizeURL = URL(string: location)
+        else {
+            throw APIError.whoopAuthorizeURLMissing
+        }
+        return authorizeURL
+    }
+
     // MARK: - Coach reset
 
     func resetCoachConversation() async throws {
@@ -825,7 +892,7 @@ struct APIClient {
 
 // MARK: - Errors
 
-enum APIError: Error, LocalizedError {
+enum APIError: Error, LocalizedError, Equatable {
     case invalidURL
     case serverError(Int)
     case coachStreamError(String)
@@ -834,6 +901,13 @@ enum APIError: Error, LocalizedError {
     /// from `.serverError` so callers can fall back to text search instead
     /// of showing a generic failure message.
     case barcodeNotFound
+    /// GET /api/whoop/connect didn't reply with the expected 302 + `Location`
+    /// header — e.g. WHOOP isn't configured server-side, or the session
+    /// token was rejected before the redirect.
+    case whoopAuthorizeURLMissing
+    /// The WHOOP login sheet redirected back with `?status=error` (WHOOP
+    /// denied the request, or our callback route failed the exchange).
+    case whoopConnectFailed
 
     var errorDescription: String? {
         switch self {
@@ -841,6 +915,8 @@ enum APIError: Error, LocalizedError {
         case .serverError(let c): return "Server returned HTTP \(c)."
         case .coachStreamError(let message): return message
         case .barcodeNotFound:    return "Product not found. Try searching by name instead."
+        case .whoopAuthorizeURLMissing: return "Couldn't start the WHOOP connection. Try again later."
+        case .whoopConnectFailed: return "WHOOP didn't finish connecting. Please try again."
         }
     }
 }
@@ -865,6 +941,41 @@ private final class AuthRedirectGuard: NSObject, URLSessionTaskDelegate {
             return
         }
         completionHandler(request)
+    }
+}
+
+// MARK: - Redirect interceptor (WHOOP authorize URL)
+
+/// Stops a redirect dead and hands the 302 response (with its `Location`
+/// header intact) back to the caller, instead of following it. Used only by
+/// `whoopAuthorizeURL()` — a one-off `URLSession` is built per call so this
+/// never affects the shared session's redirect behavior. Internal (not
+/// `private`) so `VitalTests` can exercise `urlSession(_:task:willPerformHTTPRedirection:...)`
+/// directly without needing a live network round-trip.
+final class RedirectInterceptingDelegate: NSObject, URLSessionTaskDelegate {
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        completionHandler(nil)
+    }
+}
+
+// MARK: - WHOOP DTOs
+
+/// Wire shape of GET /api/whoop/status.
+struct WhoopStatusResponse: Decodable {
+    let connected: Bool
+    let status: String?       // "active" | "revoked" | "error" | nil
+    let lastSyncedAt: String? // ISO8601, nil if never synced
+
+    enum CodingKeys: String, CodingKey {
+        case connected
+        case status
+        case lastSyncedAt = "last_synced_at"
     }
 }
 
