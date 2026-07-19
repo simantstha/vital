@@ -500,6 +500,37 @@ export const food_cache = p.pgTable('food_cache', {
   p.index('food_cache_name_idx').on(t.name),
 ]);
 
+// ─── whoop_connections ───────────────────────────────────────────────────────
+// One row per user's linked WHOOP account (stage 1 of the WHOOP integration —
+// see docs/superpowers/plans/2026-07-19-whoop-integration.md). Tokens are
+// stored in plaintext, consistent with the rest of this DB (Supabase gives
+// at-rest encryption); app-layer encryption can be layered on later without a
+// schema change. Refresh tokens are single-use — WHOOP invalidates the old
+// one and issues a new one on every refresh — so concurrent refreshes must be
+// serialized via a `SELECT ... FOR UPDATE` on this row (see
+// lib/whoop/client.ts withValidToken()).
+// status values: 'active' | 'revoked' | 'error' ('error' is set when a
+// refresh fails with invalid_grant — surfaced in iOS as "reconnect WHOOP").
+// OAuth `state` is a signed JWT (existing session secret), not a DB row — no
+// separate oauth_state table.
+
+export const whoop_connections = p.pgTable('whoop_connections', {
+  id:             p.uuid('id').primaryKey().defaultRandom(),
+  user_id:        p.uuid('user_id').notNull().references(() => users.id),
+  whoop_user_id:  p.bigint('whoop_user_id', { mode: 'number' }).notNull(), // int64 from WHOOP; webhook routing key
+  access_token:   p.text('access_token').notNull(),
+  refresh_token:  p.text('refresh_token').notNull(),   // single-use; rotated on every refresh
+  expires_at:     p.timestamp('expires_at', { withTimezone: true }).notNull(),
+  scopes:         p.text('scopes').notNull(),
+  status:         p.text('status').default('active').notNull(), // 'active' | 'revoked' | 'error'
+  last_synced_at: p.timestamp('last_synced_at', { withTimezone: true }),       // nullable until first sync completes
+  created_at:     p.timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updated_at:     p.timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  p.uniqueIndex('whoop_connections_user_idx').on(t.user_id),
+  p.uniqueIndex('whoop_connections_whoop_user_idx').on(t.whoop_user_id),
+]);
+
 // ─── Inferred TypeScript types ────────────────────────────────────────────────
 // Named to avoid collision with built-in DOM globals (Event, Node).
 
@@ -546,3 +577,6 @@ export type SleepAnalysis = typeof sleep_analyses.$inferSelect;
 
 export type FoodCache       = typeof food_cache.$inferSelect;
 export type NewFoodCache    = typeof food_cache.$inferInsert;
+
+export type WhoopConnection    = typeof whoop_connections.$inferSelect;
+export type NewWhoopConnection = typeof whoop_connections.$inferInsert;
