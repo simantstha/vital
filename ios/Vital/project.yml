@@ -78,6 +78,16 @@ targets:
         NSCalendarsFullAccessUsageDescription: "Vital shows today's events in your plan and shares your upcoming events (titles and times only) with your coach so it can plan around your day."
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
+        # Custom scheme for deep links back into the app — currently the WHOOP
+        # OAuth connect flow's callback (vital://whoop?status=connected|error),
+        # handled in RootView.onOpenURL. ASWebAuthenticationSession technically
+        # captures its own callback scheme without this registration, but it's
+        # declared anyway so `vital://` deep links work from any other context
+        # (e.g. a push notification or a Universal Link fallback) too.
+        CFBundleURLTypes:
+          - CFBundleURLName: com.simantstha.vital
+            CFBundleURLSchemes:
+              - vital
 
   VitalTests:
     type: bundle.unit-test

@@ -191,7 +191,11 @@ private extension ProfileView {
                     DevicesView(appleWatchConnected: appleWatchConnected)
                 }
 
-                settingsButton(index: 5, icon: "bell", title: "Notifications", value: notificationsSubtitle) {
+                settingsLink(index: 5, icon: "link", title: "Connected apps", value: "WHOOP") {
+                    ConnectedAppsView()
+                }
+
+                settingsButton(index: 6, icon: "bell", title: "Notifications", value: notificationsSubtitle) {
                     showNotificationSettings = true
                 }
             }
