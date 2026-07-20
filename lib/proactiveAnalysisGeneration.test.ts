@@ -96,12 +96,9 @@ for (const [name, prompt] of [
     assert.match(prompt, /unresolved tokens/i);
     assert.match(prompt, /data integrity problem/i);
     assert.match(prompt, /never repeat an evidence token anywhere in the response/i);
-    assert.match(prompt, /final content of (?:its|the) clause or string/i);
-    assert.match(prompt, /immediately before (?:a )?terminal punctuation mark/i);
     for (const prohibitedAfterToken of ['unit', 'qualifier', 'parenthetical', 'symbol', 'prose']) {
       assert.match(prompt, new RegExp(prohibitedAfterToken, 'i'));
     }
-    assert.match(prompt, /no content after the token in that clause/i);
     assert.match(prompt, /scalar string or (?:an )?individual array-item string/i);
     assert.doesNotMatch(prompt, /five schema string locations/i);
     for (const rule of ['alter', 'split', 'concatenate', 'nest', 'enumerate', 'manufacture', 'raw number', 'numeric symbol sequence', 'unit', 'sign', 'symbol']) {

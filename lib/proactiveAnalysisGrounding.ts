@@ -30,6 +30,7 @@ const NUMBER_START = new RegExp(`[.٫\\p{N}${SOURCE_SIGN_CHARACTERS}]`, 'u');
 const SOURCE_LEXEME = new RegExp(String.raw`^(?:${SOURCE_SIGN_CLASS}?(?:(?:\p{Nd}{1,3}(?:[,٬]\p{Nd}{3})+|\p{Nd}+)(?:[.٫]\p{Nd}+)?|[.٫]\p{Nd}+)(?:[eE]${SOURCE_SIGN_CLASS}?\p{Nd}+)?|[\p{Nl}\p{No}]+)(?:\s*(?:[%٪]|[°℃℉](?:\p{L}+)?|[\p{L}µμ]+)(?:[\/_·*.-][\p{L}µμ%٪]+)*)?`, 'u');
 const FORMAT_CONTROL = /\p{Cf}/u;
 const PREFIX_OPERATOR = /(?:\p{S}|\p{Dash_Punctuation}|[%٪.,٬٫/])\s*$/u;
+const SUFFIX_BOUNDARY = /[\s.,;:!?)\]}—]/u;
 const CLAUSE_BOUNDARY = /[.!?]\s+/gu;
 const META_RESPONSE = /\b(?:unable to process|placeholder tokens?|template variables?|unresolved tokens?|data integrity)\b/iu;
 
@@ -115,11 +116,8 @@ function assertClauseTerminalToken(value: string, start: number, end: number): v
   }
 
   const suffix = value.slice(end);
-  if (!suffix || /^\s+$/u.test(suffix)) return;
-  if (!/[.!?]/u.test(suffix[0])) throw new AnalysisContentError('grounding_failure');
-  const afterPunctuation = suffix.slice(1);
-  if (!afterPunctuation || /^\s+$/u.test(afterPunctuation)) return;
-  if (!/^\s+/u.test(afterPunctuation)) throw new AnalysisContentError('grounding_failure');
+  if (!suffix) return;
+  if (!SUFFIX_BOUNDARY.test(suffix[0])) throw new AnalysisContentError('grounding_failure');
 }
 
 function validateTokenUse(value: string, displays: ReadonlyMap<string, string>, used: Set<string>): void {

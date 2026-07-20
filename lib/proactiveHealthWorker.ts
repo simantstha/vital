@@ -1,6 +1,7 @@
 import { localDayKey } from './localDay';
 import { type CoachAnalysis } from './proactiveAnalysisSchema';
 import { consumeGroundedAnalysisProof, type GroundedAnalysisProof, type ProactiveAnalysisSource } from './proactiveAnalysisGrounding';
+import { workerErrorEvent } from './proactiveHealthWorkerSupport';
 
 export { parseCoachAnalysis, type CoachAnalysis } from './proactiveAnalysisSchema';
 
@@ -84,7 +85,8 @@ export async function runClaimedAnalysis(
     const notificationToken = await repository.claimNotification(job, now);
     if (!notificationToken) return;
     await deliverNotification(job, result, notificationToken, repository, push, now, maxRetries);
-  } catch {
+  } catch (error) {
+    console.error(JSON.stringify(workerErrorEvent('process-analysis-job', error)));
     if (job.retryCount < maxRetries) await repository.markRetry(job, nextRetryAt(now, job.retryCount));
     else await repository.markFailed(job);
   }
