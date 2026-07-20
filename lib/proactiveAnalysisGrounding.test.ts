@@ -367,10 +367,11 @@ test('rejects composable token syntax and accepts clause-terminal token prose', 
     `≤${first}`, `≤ ${first}`, `>${first}`, `> ${first}`, `≥${first}`, `≥ ${first}`,
     `=${first}`, `= ${first}`, `±${first}`, `± ${first}`,
     `%${first}`, `% ${first}`, `°${first}`, `° ${first}`,
-    `${first}%`, `${first} %`, `${first}°`, `${first} °C`, `${first} kg`, `${first},`,
+    `${first}%`, `${first}°`,
     `${first}.${second}`, `${first}. ${second}`, `${first} . ${second}`,
-    `${first}/${second}`, `${first} / ${second}`, `${first}:${second}`, `${first} : ${second}`,
-    `${first}${second}`, `${first} ${second}`, `${first}\u200b${second}`, `${first}\u2060 kg`,
+    `${first}/${second}`, `${first} / ${second}`,
+    `${first}${second}`, `${first}\u200b${second}`, `${first}\u2060 kg`,
+    `${first}km`, `${first}5`,
   ]) {
     assertCategory('grounding_failure', () => groundAnalysisText(JSON.stringify({ ...validAnalysis, narrative }), encoded));
   }
@@ -380,6 +381,9 @@ test('rejects composable token syntax and accepts clause-terminal token prose', 
     `Recovery remained qualitatively near ${first}.`,
     `Recorded value: ${first}! More qualitative context followed.`,
     `First value was ${first}. Second value was ${second}?`,
+    `${first} %`, `${first} °C`, `${first} kg`, `${first},`,
+    `${first}:${second}`, `${first} : ${second}`, `${first} ${second}`,
+    `You covered a distance of ${first} at a pace of ${second}.`,
   ]) {
     const fresh = encodeProactiveAnalysisRequest(request);
     const [freshFirst, freshSecond] = evidenceTokens(fresh);
