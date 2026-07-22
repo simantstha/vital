@@ -1,6 +1,6 @@
 import { localDayKey } from './localDay';
 import { type CoachAnalysis } from './proactiveAnalysisSchema';
-import { consumeGroundedAnalysisProof, type GroundedAnalysisProof, type ProactiveAnalysisSource } from './proactiveAnalysisGrounding';
+import { AnalysisContentError, consumeGroundedAnalysisProof, type GroundedAnalysisProof, type ProactiveAnalysisSource } from './proactiveAnalysisGrounding';
 import { workerErrorEvent } from './proactiveHealthWorkerSupport';
 
 export { parseCoachAnalysis, type CoachAnalysis } from './proactiveAnalysisSchema';
@@ -61,6 +61,24 @@ export function consumeMorningAnalysisProof(proof: GroundedAnalysisProof, expect
   return consumeGroundedAnalysisProof(proof, expectedSource);
 }
 
+/**
+ * Content-grounding failures (a bad LLM output) must never black out a notification: the push
+ * copy is static (see analysisAlert), so we still have something true and schema-valid to store
+ * and deliver even when the AI-authored analysis behind the tap couldn't be produced this time.
+ */
+export function fallbackAnalysis(kind: AnalysisKind, input: unknown): CoachAnalysis {
+  const type = input && typeof input === 'object' && !Array.isArray(input) ? (input as Record<string, unknown>).type : undefined;
+  const label = kind === 'sleep' ? 'Sleep' : (typeof type === 'string' && type.trim() ? type.trim() : 'Workout');
+  const subject = kind === 'sleep' ? "last night's sleep" : 'this workout';
+  return {
+    headline: `${label} logged`,
+    shortInsight: `We've saved ${subject} to your history.`,
+    narrative: `We've logged ${subject}. A detailed analysis wasn't available this time, but the data is saved and will factor into your trends.`,
+    observations: ['Detailed analysis was unavailable for this entry, but the data has been recorded.'],
+    nextSteps: ['Check back later for a full breakdown, or keep logging to build your trend history.'],
+  };
+}
+
 export async function runClaimedAnalysis(
   job: AnalysisJob,
   repository: WorkerRepository,
@@ -87,6 +105,15 @@ export async function runClaimedAnalysis(
     await deliverNotification(job, result, notificationToken, repository, push, now, maxRetries);
   } catch (error) {
     console.error(JSON.stringify(workerErrorEvent('process-analysis-job', error)));
+    if (error instanceof AnalysisContentError) {
+      const fallback = fallbackAnalysis(job.kind, job.input);
+      if (!await repository.renewAnalysisLease(job, new Date())) return;
+      if (!await repository.storeReady(job, fallback)) return;
+      const notificationToken = await repository.claimNotification(job, now);
+      if (!notificationToken) return;
+      await deliverNotification(job, fallback, notificationToken, repository, push, now, maxRetries);
+      return;
+    }
     if (job.retryCount < maxRetries) await repository.markRetry(job, nextRetryAt(now, job.retryCount));
     else await repository.markFailed(job);
   }

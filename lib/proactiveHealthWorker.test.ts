@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   classifyApnsResponse,
   consumeMorningAnalysisProof,
+  fallbackAnalysis,
   nextRetryAt,
   runClaimedAnalysis,
   shouldRunMorningBrief,
@@ -11,6 +12,7 @@ import {
   type WorkerRepository,
 } from './proactiveHealthWorker';
 import {
+  AnalysisContentError,
   consumeGroundedAnalysisProof,
   encodeProactiveAnalysisRequest,
   groundAnalysisText,
@@ -198,6 +200,47 @@ test('a first failed analysis is retried after one minute', async () => {
   assert.deepEqual(calls.filter((call) => call === 'retry'), ['retry']);
   assert.deepEqual(retryTimes, ['2026-07-13T12:01:00.000Z']);
   assert.equal(calls.includes('failed'), false);
+});
+
+test('a content-grounding failure still stores and delivers a fallback notification instead of retrying', async () => {
+  const calls: string[] = [];
+  const repo = fakeRepository(calls, true);
+  let storedAnalysis: unknown;
+  let pushedAnalysis: unknown;
+  repo.storeReady = async (_job, analysis) => { calls.push('store'); storedAnalysis = analysis; return true; };
+  repo.claimNotification = async () => { calls.push('claim'); return 'notification-lease'; };
+  repo.markRetry = async () => { calls.push('retry'); return true; };
+  repo.markFailed = async () => { calls.push('failed'); return true; };
+  const currentJob = { ...job(), input: { type: 'Run' } };
+  await runClaimedAnalysis(
+    currentJob,
+    repo,
+    async () => { throw new AnalysisContentError('grounding_failure'); },
+    async (_device, analysis) => { calls.push('push'); pushedAnalysis = analysis; return { outcome: 'sent', retireToken: false }; },
+    new Date('2026-07-13T12:00:00Z'),
+  );
+  assert.deepEqual(calls, ['store', 'claim', 'push']);
+  const expected = fallbackAnalysis('workout', currentJob.input);
+  assert.deepEqual(storedAnalysis, expected);
+  assert.deepEqual(pushedAnalysis, expected);
+  assert.doesNotMatch(JSON.stringify(storedAnalysis), /EVIDENCE/);
+});
+
+test('a non-content error still retries instead of falling back', async () => {
+  const calls: string[] = [];
+  const repo = fakeRepository(calls, true);
+  repo.storeReady = async () => { calls.push('store'); return true; };
+  repo.claimNotification = async () => { calls.push('claim'); return 'notification-lease'; };
+  repo.markRetry = async () => { calls.push('retry'); return true; };
+  repo.markFailed = async () => { calls.push('failed'); return true; };
+  await runClaimedAnalysis(
+    job(),
+    repo,
+    async () => { throw new Error('transient upstream failure'); },
+    async () => { calls.push('push'); return { outcome: 'sent', retireToken: false }; },
+    new Date('2026-07-13T12:00:00Z'),
+  );
+  assert.deepEqual(calls, ['retry']);
 });
 
 test('an analysis at the retry limit is failed without another retry', async () => {

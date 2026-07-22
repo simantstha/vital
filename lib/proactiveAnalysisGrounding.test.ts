@@ -349,7 +349,6 @@ test('rejects raw numeric forms and invalid evidence-token forms as grounding fa
   for (const narrative of authored) {
     assertCategory('grounding_failure', () => groundAnalysisText(JSON.stringify({ ...validAnalysis, narrative }), encoded));
   }
-  assertCategory('grounding_failure', () => groundAnalysisText(JSON.stringify({ ...validAnalysis, narrative: `${first} then ${first}` }), encoded));
   assertCategory('grounding_failure', () => groundAnalysisText(JSON.stringify({
     ...validAnalysis, narrative: '⟦EVID', observations: ['ENCE_A⟧'],
   }), encoded));
@@ -425,19 +424,25 @@ test('proof consumption requires the exact canonical source binding without burn
   assert.match(consumeGroundedAnalysisProof(proof, requestA).narrative, /45/);
 });
 
-test('identical source displays receive distinct one-use capabilities', () => {
+test('evidence tokens may be reused within a field and across fields', () => {
   const request: ProactiveAnalysisSource = {
     kind: 'workout', date: 'date', input: { a: 45, b: 45 }, availableContext: {},
   };
   const encoded = encodeProactiveAnalysisRequest(request);
-  const [first, second] = evidenceTokens(encoded);
-  assertCategory('grounding_failure', () => groundAnalysisText(JSON.stringify({
-    ...validAnalysis, narrative: `${first} and ${first}`,
-  }), encoded));
-  const proof = groundAnalysisText(JSON.stringify({
-    ...validAnalysis, narrative: `First ${first}.`, observations: [`Second ${second}.`],
+  const [first] = evidenceTokens(encoded);
+
+  const sameFieldProof = groundAnalysisText(JSON.stringify({
+    ...validAnalysis, narrative: `First ${first}. Repeated again ${first}.`,
   }), encoded);
+  assert.match(consumeGroundedAnalysisProof(sameFieldProof, request).narrative, /First 45\. Repeated again 45\./);
+
+  const fresh = encodeProactiveAnalysisRequest(request);
+  const [freshFirst, freshSecond] = evidenceTokens(fresh);
+  const proof = groundAnalysisText(JSON.stringify({
+    ...validAnalysis, narrative: `First ${freshFirst}.`, observations: [`Second ${freshFirst}.`, `Third ${freshSecond}.`],
+  }), fresh);
   const resolved = consumeGroundedAnalysisProof(proof, request);
   assert.match(resolved.narrative, /First 45\./);
   assert.match(resolved.observations[0], /Second 45\./);
+  assert.match(resolved.observations[1], /Third 45\./);
 });

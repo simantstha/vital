@@ -126,7 +126,7 @@ function validateTokenUse(value: string, displays: ReadonlyMap<string, string>, 
     const token = match[0];
     const start = match.index;
     const end = start + token.length;
-    if (!displays.has(token) || used.has(token)) throw new AnalysisContentError('grounding_failure');
+    if (!displays.has(token)) throw new AnalysisContentError('grounding_failure');
     if (/[⟦⟧]/.test(value[start - 1] ?? '') || /[⟦⟧]/.test(value[end] ?? '')) {
       throw new AnalysisContentError('grounding_failure');
     }
