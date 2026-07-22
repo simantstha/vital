@@ -192,3 +192,35 @@ test('workout with no score yet is still recorded as an event, with null score f
     distance_m: null,
   });
 });
+
+test('cycle with score but strain is null skips whoop_day_strain row', () => {
+  const input = {
+    ...emptyInput(),
+    cycles: [cycle({ score: { strain: null, kilojoule: 8000, average_heart_rate: 80, max_heart_rate: 150 } })],
+  };
+  const { dailyMetrics } = mapWhoopWindow(input, 'UTC');
+
+  assert.equal(dailyMetrics.some((m) => m.metric === 'whoop_day_strain'), false);
+});
+
+test('recovery with score but recovery_score is null skips whoop_recovery row but writes other metrics', () => {
+  const input = {
+    ...emptyInput(),
+    cycles: [cycle()],
+    recoveries: [recovery({ score: {
+      recovery_score: null,
+      resting_heart_rate: 55,
+      hrv_rmssd_milli: 48.5,
+      spo2_percentage: 96,
+      skin_temp_celsius: 33.5,
+    } })],
+  };
+  const { dailyMetrics } = mapWhoopWindow(input, 'UTC');
+  const byMetric = new Map(dailyMetrics.map((m) => [m.metric, m]));
+
+  assert.equal(byMetric.has('whoop_recovery'), false);
+  assert.equal(byMetric.get('whoop_hrv_rmssd')?.value, 48.5);
+  assert.equal(byMetric.get('whoop_resting_hr')?.value, 55);
+  assert.equal(byMetric.get('whoop_spo2')?.value, 96);
+  assert.equal(byMetric.get('whoop_skin_temp')?.value, 33.5);
+});

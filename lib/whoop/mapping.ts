@@ -73,7 +73,7 @@ function mapCycles(cycles: WhoopCycle[], timezone: string | null | undefined): {
     startById.set(cycle.id, cycle.start);
     if (cycle.score == null) continue; // not scored yet — never write 0
     const date = localDayKey(new Date(cycle.start), timezone);
-    rows.push({ date, metric: 'whoop_day_strain', value: cycle.score.strain, payload: null });
+    if (cycle.score.strain != null) rows.push({ date, metric: 'whoop_day_strain', value: cycle.score.strain, payload: null });
   }
 
   return { rows, startById };
@@ -93,7 +93,7 @@ function mapRecoveries(
 
     const date = localDayKey(new Date(cycleStart), timezone);
     const { score } = recovery;
-    rows.push({ date, metric: 'whoop_recovery', value: score.recovery_score, payload: null });
+    if (score.recovery_score != null) rows.push({ date, metric: 'whoop_recovery', value: score.recovery_score, payload: null });
     if (score.hrv_rmssd_milli != null) rows.push({ date, metric: 'whoop_hrv_rmssd', value: score.hrv_rmssd_milli, payload: null });
     if (score.resting_heart_rate != null) rows.push({ date, metric: 'whoop_resting_hr', value: score.resting_heart_rate, payload: null });
     if (score.spo2_percentage != null) rows.push({ date, metric: 'whoop_spo2', value: score.spo2_percentage, payload: null });

@@ -149,7 +149,10 @@ export function createWhoopSyncRepository(database: unknown, schema: typeof Whoo
   return {
     async upsertDailyMetrics(userId, rows) {
       if (rows.length === 0) return;
-      await db.insert(schema.daily_metrics).values(rows.map((r) => ({
+      // Defense-in-depth: filter out any row with non-finite value to prevent NOT NULL constraint violations
+      const validRows = rows.filter((r) => Number.isFinite(r.value));
+      if (validRows.length === 0) return;
+      await db.insert(schema.daily_metrics).values(validRows.map((r) => ({
         user_id: userId,
         date: r.date,
         metric: r.metric,
