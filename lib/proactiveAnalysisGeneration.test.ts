@@ -66,8 +66,8 @@ function assertGuarded(request: AnalysisGenerationRequest): void {
   assert.doesNotMatch(request.system + request.content, /\p{N}/u);
 }
 
-test('defaults to Haiku model and preserves the environment override', () => {
-  assert.equal(proactiveAnalysisModel({} as NodeJS.ProcessEnv), 'claude-haiku-4-5');
+test('defaults to Sonnet model and preserves the environment override', () => {
+  assert.equal(proactiveAnalysisModel({} as NodeJS.ProcessEnv), 'claude-sonnet-5');
   assert.equal(proactiveAnalysisModel({ PROACTIVE_ANALYSIS_MODEL: 'custom-model' } as unknown as NodeJS.ProcessEnv), 'custom-model');
 });
 
@@ -95,7 +95,7 @@ for (const [name, prompt] of [
     assert.match(prompt, /template variables/i);
     assert.match(prompt, /unresolved tokens/i);
     assert.match(prompt, /data integrity problem/i);
-    assert.match(prompt, /never repeat an evidence token anywhere in the response/i);
+    assert.doesNotMatch(prompt, /never repeat an evidence token/i);
     for (const prohibitedAfterToken of ['unit', 'qualifier', 'parenthetical', 'symbol', 'prose']) {
       assert.match(prompt, new RegExp(prohibitedAfterToken, 'i'));
     }
@@ -116,7 +116,8 @@ for (const [name, prompt] of [
     assert.match(prompt, /anchor each observation to a supplied metric/i);
     assert.match(prompt, /two or three observations/i);
     assert.match(prompt, /one or two next steps/i);
-    assert.match(prompt, /never repeat the same fact or profile detail in more than one field/i);
+    assert.match(prompt, /mention profile or goal context only when it changes what the user should do next/i);
+    assert.doesNotMatch(prompt, /never repeat the same fact or profile detail/i);
   });
 }
 
