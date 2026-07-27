@@ -122,9 +122,24 @@ enum TrendsSummary {
 
     // MARK: Sleep
 
-    static let sleepGoalHours: Double = 8.0
-    /// 360min = 75% of the 480min/8h goal.
-    static let sleepShortThresholdHours: Double = 6.0
+    /// "8" for 8.0, "7.5" for 7.5 — the bare number; callers append "h".
+    /// Matches `ProfileViewModel.sleepGoalSummary`'s formatting.
+    static func hoursLabel(_ hours: Double) -> String {
+        hours.truncatingRemainder(dividingBy: 1) == 0
+            ? "\(Int(hours))"
+            : String(format: "%.1f", hours)
+    }
+
+    /// The "short night" cutoff for a given sleep goal: 75% of the goal,
+    /// snapped to the nearest half hour so the threshold speaks the same
+    /// half-hour vocabulary as the goal picker (7.5h / 8h / 8.5h) rather than
+    /// surfacing a derived decimal like "5.6h". 7.5h → 5.5h, 8h → 6h, 8.5h → 6.5h.
+    ///
+    /// Single source of truth: `sleepFootnote`'s copy and `TrendBarChart`'s bar
+    /// shading both call this, so the gray bars always match the sentence.
+    static func shortSleepThreshold(for goalHours: Double) -> Double {
+        ((goalHours * 0.75) * 2).rounded() / 2
+    }
 
     /// Average of the available (non-nil) nights, formatted "6h 54m"; nil
     /// when no nights are available.
@@ -140,14 +155,17 @@ enum TrendsSummary {
 
     static func sleepFootnote(
         _ values: [Double?],
-        shortThresholdHours: Double = sleepShortThresholdHours
+        goalHours: Double = 8.0
     ) -> Footnote {
         let available = values.compactMap { $0 }
         guard !available.isEmpty else { return .plain("No sleep synced yet.") }
+        let shortThresholdHours = shortSleepThreshold(for: goalHours)
         let shortCount = available.filter { $0 < shortThresholdHours }.count
-        guard shortCount > 0 else { return .plain("Every night near your 8h goal this week.") }
+        guard shortCount > 0 else {
+            return .plain("Every night near your \(hoursLabel(goalHours))h goal this week.")
+        }
         return Footnote(
-            prefix: "Under 6h on ",
+            prefix: "Under \(hoursLabel(shortThresholdHours))h on ",
             bold: "\(shortCount) of 7 nights",
             suffix: ". Gray bars are short nights."
         )
@@ -206,6 +224,7 @@ final class TrendsViewModel: ObservableObject {
     @Published var hrvWindow: TrendsSummary.WeekWindow = .empty
     @Published var rhrWindow: TrendsSummary.WeekWindow = .empty
     @Published var calibration: CalibrationStatus? = nil
+    @Published var sleepGoalMinutes: Int = 480 // 8h default
     @Published var isLoadingSummary = false
     @Published var summaryErrorMessage: String? = nil
 
@@ -245,7 +264,7 @@ final class TrendsViewModel: ObservableObject {
     // MARK: - Computed stats (Last 7 days summary)
 
     var sleepValueText: String { TrendsSummary.sleepAverageText(sleepWindow.values) ?? "--" }
-    var sleepFootnote: TrendsSummary.Footnote { TrendsSummary.sleepFootnote(sleepWindow.values) }
+    var sleepFootnote: TrendsSummary.Footnote { TrendsSummary.sleepFootnote(sleepWindow.values, goalHours: Double(sleepGoalMinutes) / 60.0) }
 
     var hrvValueText: String {
         TrendsSummary.latestAvailable(hrvWindow.values).map { "\(Int($0.rounded()))" } ?? "--"
@@ -284,6 +303,13 @@ final class TrendsViewModel: ObservableObject {
     func loadSummary() async {
         isLoadingSummary = true
         summaryErrorMessage = nil
+
+        // The sleep goal only drives label copy ("goal 7.5h"), so it rides
+        // alongside the trend requests but is deliberately fail-soft — a
+        // profile error must never blank all three charts. Falls back to the
+        // 480min/8h default.
+        async let profileResp = try? await apiClient.fetchProfile()
+
         do {
             async let sleepResp = apiClient.fetchTrends(metric: "sleep", days: 7)
             async let hrvResp   = apiClient.fetchTrends(metric: "hrv", days: 7)
@@ -298,6 +324,9 @@ final class TrendsViewModel: ObservableObject {
         } catch {
             summaryErrorMessage = error.localizedDescription
         }
+
+        let profile = await profileResp
+        sleepGoalMinutes = profile?.sleepGoalMinutes ?? 480
         isLoadingSummary = false
     }
 

@@ -79,8 +79,8 @@ final class TodayViewModel: ObservableObject {
 
     // Header hint line under the streak chip. TODO(Phase 2+): have the brief
     // supply this copy directly instead of deriving a static placeholder
-    // from calibration status.
-    @Published var planHint: String = "Keep the streak going"
+    // from calibration status. For now, kept nil so no fabricated hint is shown.
+    @Published var planHint: String? = nil
 
     // Biometrics — neutral until real data loads (view is gated on isLoading)
     @Published var hrv = HRVMetric(value: 0, trend: .neutral, delta: "—")
@@ -319,7 +319,6 @@ final class TodayViewModel: ObservableObject {
                 cal.metrics["sleep_minutes"]?.dataDays ?? 0
             ].min() ?? 0
             calibrationProgress = min(1.0, Double(dataDays) / 14.0)
-            planHint = cal.status == "calibrating" ? "Take it easy today — recover" : "Keep the streak going"
         }
 
         // Coach insight — keep the existing default if the brief isn't ready yet

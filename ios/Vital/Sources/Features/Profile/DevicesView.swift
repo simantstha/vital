@@ -10,12 +10,10 @@ import SwiftUI
 /// the backend, `ASWebAuthenticationSession` runs the WHOOP login/consent
 /// page, and the backend callback does the code-for-token exchange
 /// server-side. Oura/Garmin remain non-functional stubs per the redesign-v3
-/// mock — tapping "Connect" never fakes a connection, it only reveals a
-/// small "Coming soon" footnote.
+/// mock — displayed as non-interactive "Coming soon" chips.
 struct DevicesView: View {
     let appleWatchConnected: Bool
 
-    @State private var tappedStub: String? = nil
     @StateObject private var whoopVM = WhoopConnectViewModel()
 
     var body: some View {
@@ -210,24 +208,23 @@ struct DevicesView: View {
                         .font(Theme.Typography.bodyMedium)
                         .fontWeight(.medium)
                         .foregroundStyle(Theme.Colors.textPrimary)
-                    Text(tappedStub == name ? "Not connected · Coming soon" : "Not connected")
+                    Text("Not connected")
                         .font(Theme.Typography.labelSmall)
                         .foregroundStyle(Theme.Colors.textSecondary)
                 }
 
                 Spacer()
 
-                Button {
-                    withAnimation(.easeInOut(duration: 0.15)) { tappedStub = name }
-                } label: {
-                    Text("Connect")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(Theme.Colors.accentContent)
-                        .padding(.horizontal, Theme.Spacing.md)
-                        .padding(.vertical, Theme.Spacing.xs)
-                        .background(Capsule().fill(Theme.Colors.accentSoft))
-                }
-                .buttonStyle(.plain)
+                Text("Coming soon")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Theme.Colors.textTertiary)
+                    .padding(.horizontal, Theme.Spacing.md)
+                    .padding(.vertical, Theme.Spacing.xs)
+                    .background(Capsule().fill(Theme.Colors.glassFill))
+                    .overlay(
+                        Capsule()
+                            .strokeBorder(Theme.Colors.glassBorder, lineWidth: 1)
+                    )
             }
         }
     }

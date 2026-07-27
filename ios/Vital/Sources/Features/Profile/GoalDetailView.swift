@@ -55,10 +55,6 @@ struct GoalDetailView: View {
                             .screenTitleStyle()
                             .foregroundStyle(Theme.Colors.textPrimary)
 
-                        if vm.goal != "endurance" {
-                            coachRecommendsCard
-                        }
-
                         radioListCard
                         whatThisMeansCard
                         coachButtonCard
@@ -81,44 +77,6 @@ struct GoalDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(Theme.Colors.canvas, for: .navigationBar)
         .task { await vm.load() }
-    }
-
-    // ── Coach recommends (moved from DietBudgetEditorView, unchanged) ────────
-
-    private var coachRecommendsCard: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-            Text("COACH RECOMMENDS")
-                .font(.system(size: 11, weight: .bold))
-                .tracking(1.0)
-                .foregroundStyle(Theme.Colors.accentContent)
-
-            Text("Endurance")
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(Theme.Colors.textPrimary)
-
-            Text("You're training for a marathon — endurance fueling supports your mileage.")
-                .font(Theme.Typography.bodySmall)
-                .foregroundStyle(Theme.Colors.textSecondary)
-
-            Button {
-                vm.setGoal("endurance")
-            } label: {
-                Text("Use this goal")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Theme.Colors.onAccent)
-                    .padding(.horizontal, Theme.Spacing.lg)
-                    .padding(.vertical, Theme.Spacing.sm)
-                    .background(Capsule().fill(Theme.Colors.accent))
-            }
-            .buttonStyle(.plain)
-            .padding(.top, Theme.Spacing.xs)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(Theme.Spacing.lg)
-        .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.xl, style: .continuous)
-                .fill(Theme.Colors.accentSoft)
-        )
     }
 
     // ── Radio list (mock's PRadio) ────────────────────────────────────────────
