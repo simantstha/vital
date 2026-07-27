@@ -26,7 +26,7 @@ struct DietSheetView: View {
                 header
                 remainingRow
                 slotGrid
-                quickLogSection
+                recentMealsSection
                 deeperFlowsRow
                 loggedTodaySection
             }
@@ -162,14 +162,30 @@ private extension DietSheetView {
         }
     }
 
-    var quickLogSection: some View {
+    /// "Quick log · <slot>" renamed to reflect what actually feeds this list
+    /// now: the user's own recently logged meals (GET /api/nutrition/recents),
+    /// not a fabricated catalogue. Falls back to "Recently logged" (no slot
+    /// suffix) when `vm.isRecentsFallback` — i.e. we're showing meals from
+    /// other slots because this one has none of its own yet.
+    var recentsSectionTitle: String {
+        if vm.recentsForSelectedSlot.isEmpty {
+            return "Log again"
+        }
+        return vm.isRecentsFallback ? "Recently logged" : "Recently logged · \(vm.selectedSlot.label)"
+    }
+
+    var recentMealsSection: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-            SectionHeader(title: "Quick log · \(vm.selectedSlot.label)")
+            SectionHeader(title: recentsSectionTitle)
 
             VitalCard(padding: 0) {
                 VStack(spacing: 0) {
-                    ForEach(Array((DietSheetViewModel.quickFoods[vm.selectedSlot] ?? []).enumerated()), id: \.element.id) { index, food in
-                        quickFoodRow(food, isFirst: index == 0)
+                    if vm.recentsForSelectedSlot.isEmpty {
+                        recentsEmptyRow
+                    } else {
+                        ForEach(Array(vm.recentsForSelectedSlot.enumerated()), id: \.element.name) { index, food in
+                            recentFoodRow(food, isFirst: index == 0)
+                        }
                     }
                     customRow
                 }
@@ -177,19 +193,36 @@ private extension DietSheetView {
         }
     }
 
-    func quickFoodRow(_ food: QuickFood, isFirst: Bool) -> some View {
+    /// Shown when the user has no recently logged meals at all (or the load
+    /// failed) — points at the entry points that actually produce a first
+    /// meal, in the same card idiom as a populated row so the sheet never
+    /// looks broken or blank.
+    var recentsEmptyRow: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Nothing logged yet")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(Theme.Colors.textPrimary)
+            Text("Log a meal with Photo, Barcode, or Search below — it'll show up here to log again next time.")
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.Colors.textSecondary)
+        }
+        .padding(.horizontal, Theme.Spacing.lg)
+        .padding(.vertical, Theme.Spacing.md)
+    }
+
+    func recentFoodRow(_ food: RecentFood, isFirst: Bool) -> some View {
         HStack(spacing: Theme.Spacing.md) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(food.name)
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(Theme.Colors.textPrimary)
-                Text("\(food.kcal) kcal · P\(food.protein) C\(food.carbs) F\(food.fat)")
+                Text("\(Int(food.kcal.rounded())) kcal · P\(Int(food.p.rounded())) C\(Int(food.c.rounded())) F\(Int(food.f.rounded()))")
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
             Spacer(minLength: Theme.Spacing.sm)
             Button {
-                Task { await vm.logQuickFood(food, slot: vm.selectedSlot) }
+                Task { await vm.logRecentFood(food, slot: vm.selectedSlot) }
             } label: {
                 Text("Log")
                     .font(.system(size: 13, weight: .bold))

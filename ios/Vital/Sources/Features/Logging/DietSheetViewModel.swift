@@ -30,18 +30,6 @@ enum DietSlot: String, CaseIterable, Identifiable {
     }
 }
 
-// MARK: - Quick food
-
-/// A static, client-side quick-log option (mirrors the design mock's `MEALS`).
-struct QuickFood: Identifiable {
-    var id: String { name }
-    let name: String
-    let kcal: Int
-    let protein: Int
-    let carbs: Int
-    let fat: Int
-}
-
 // MARK: - Logged group (for "Logged today")
 
 struct DietLoggedGroup: Identifiable {
@@ -64,6 +52,11 @@ final class DietSheetViewModel: ObservableObject {
 
     @Published var loggedEntries: [MealLogEntryDTO] = []
     @Published var selectedSlot: DietSlot = .breakfast
+
+    /// The user's own recently logged meals (GET /api/nutrition/recents),
+    /// shown as the "log again" list in place of the old hardcoded catalogue.
+    /// Server-deduped by name, ranked by frequency then recency, capped at 12.
+    @Published var recents: [RecentFood] = []
 
     @Published var isEditingTarget = false
     @Published var targetInput = ""
@@ -88,31 +81,6 @@ final class DietSheetViewModel: ObservableObject {
         return f
     }()
 
-    // Static quick-log data — matches the design mock's `MEALS` exactly.
-    // Order per food: kcal / protein / carbs / fat.
-    static let quickFoods: [DietSlot: [QuickFood]] = [
-        .breakfast: [
-            QuickFood(name: "Greek yogurt & berries", kcal: 220, protein: 18, carbs: 24, fat: 6),
-            QuickFood(name: "Oats, banana & honey",   kcal: 310, protein: 9,  carbs: 62, fat: 5),
-            QuickFood(name: "Eggs & toast",            kcal: 350, protein: 21, carbs: 28, fat: 16),
-        ],
-        .lunch: [
-            QuickFood(name: "Salmon bowl",             kcal: 580, protein: 38, carbs: 52, fat: 22),
-            QuickFood(name: "Chicken & rice bowl",     kcal: 640, protein: 52, carbs: 74, fat: 14),
-            QuickFood(name: "Falafel wrap",             kcal: 520, protein: 18, carbs: 64, fat: 20),
-        ],
-        .snacks: [
-            QuickFood(name: "Protein shake",           kcal: 180, protein: 30, carbs: 6,  fat: 3),
-            QuickFood(name: "Apple & peanut butter",   kcal: 250, protein: 7,  carbs: 28, fat: 13),
-            QuickFood(name: "Trail mix",               kcal: 210, protein: 6,  carbs: 18, fat: 13),
-        ],
-        .dinner: [
-            QuickFood(name: "Salmon & greens",         kcal: 480, protein: 38, carbs: 18, fat: 26),
-            QuickFood(name: "Chicken stir-fry",        kcal: 640, protein: 46, carbs: 58, fat: 20),
-            QuickFood(name: "Pasta & veg",              kcal: 560, protein: 20, carbs: 88, fat: 14),
-        ],
-    ]
-
     init(initialTarget: Int, onRefreshToday: @escaping () -> Void) {
         self.target = initialTarget
         self.onRefreshToday = onRefreshToday
@@ -123,6 +91,7 @@ final class DietSheetViewModel: ObservableObject {
     func load() async {
         async let goalTask = apiClient.fetchDietGoal()
         async let logsTask = apiClient.fetchTodayMealLogs()
+        async let recentsTask = apiClient.fetchNutritionRecents()
         do {
             let (goal, logs) = try await (goalTask, logsTask)
             target = goal.current.targetKcal
@@ -131,28 +100,49 @@ final class DietSheetViewModel: ObservableObject {
             // Keep whatever we already had (initialTarget / previous list) —
             // the sheet stays usable; the next open retries.
         }
+        if let fresh = try? await recentsTask {
+            recents = fresh
+        }
+        // On failure, keep whatever recents we already had — same fail-soft
+        // contract as goal/logs above: the sheet degrades to the empty
+        // state rather than blanking, and the next open retries.
     }
 
-    // MARK: - Quick log
+    // MARK: - Log again (recents)
 
-    func logQuickFood(_ food: QuickFood, slot: DietSlot) async {
+    /// Recents scoped to the selected slot — falls back to the full,
+    /// unfiltered list when this slot has none of its own (a food logged at
+    /// lunch is still a plausible dinner pick).
+    var recentsForSelectedSlot: [RecentFood] {
+        let matching = recents.filter { $0.slot == selectedSlot.rawValue }
+        return matching.isEmpty ? recents : matching
+    }
+
+    /// True when `recentsForSelectedSlot` is showing the unfiltered fallback
+    /// rather than recents scoped to the selected slot — drives the section
+    /// header so it doesn't claim slot-scoping it isn't doing.
+    var isRecentsFallback: Bool {
+        !recents.isEmpty && !recents.contains { $0.slot == selectedSlot.rawValue }
+    }
+
+    func logRecentFood(_ food: RecentFood, slot: DietSlot) async {
         do {
             let response = try await apiClient.logMeal(
                 name: food.name,
-                kcal: Double(food.kcal),
-                c: Double(food.carbs),
-                p: Double(food.protein),
-                f: Double(food.fat),
-                source: "quick",
+                kcal: food.kcal,
+                c: food.c,
+                p: food.p,
+                f: food.f,
+                source: "recent",
                 slot: slot.rawValue
             )
             let entry = MealLogEntryDTO(
                 id: response.eventId,
                 name: food.name,
-                kcal: food.kcal,
-                protein: food.protein,
-                carbs: food.carbs,
-                fat: food.fat,
+                kcal: Int(food.kcal.rounded()),
+                protein: Int(food.p.rounded()),
+                carbs: Int(food.c.rounded()),
+                fat: Int(food.f.rounded()),
                 slot: slot.rawValue,
                 loggedAt: Self.isoFormatter.string(from: Date())
             )
