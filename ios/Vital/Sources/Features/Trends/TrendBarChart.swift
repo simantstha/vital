@@ -6,15 +6,21 @@ import SwiftUI
 /// muted "short night" token instead of the accent lime. A missing day
 /// renders as a full-height dashed hairline outline with no fill.
 ///
+/// The short-night cutoff comes from `TrendsSummary.shortSleepThreshold(for:)`
+/// — the same helper behind the footnote copy — so the gray bars always agree
+/// with the sentence under the chart.
+///
 /// Values are in **hours**. Both this and `TrendLineChart` take
 /// `values: [Double?]` (exactly 7, oldest → newest) + `dayLabels: [String]`.
 struct TrendBarChart: View {
     let values: [Double?]
     let dayLabels: [String]
-    var goalHours: Double = TrendsSummary.sleepGoalHours
-    var shortThresholdHours: Double = TrendsSummary.sleepShortThresholdHours
+    var goalHours: Double = 8.0
 
     private let chartHeight: CGFloat = 62
+    private var shortThresholdHours: Double {
+        TrendsSummary.shortSleepThreshold(for: goalHours)
+    }
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 8) {

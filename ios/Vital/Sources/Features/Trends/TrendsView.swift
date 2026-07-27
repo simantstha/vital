@@ -50,9 +50,20 @@ private extension TrendsView {
             Text("Trends")
                 .screenTitleStyle()
                 .foregroundStyle(Theme.Colors.textPrimary)
-            Text("Last 7 days")
+            Text(rangeSubtitle)
                 .font(.system(size: 15))
                 .foregroundStyle(Theme.Colors.textSecondary)
+        }
+    }
+
+    private var rangeSubtitle: String {
+        switch vm.selectedDays {
+        case 7:   return "Last 7 days"
+        case 14:  return "Last 14 days"
+        case 30:  return "Last 30 days"
+        case 90:  return "Last 3 months"
+        case 365: return "Last year"
+        default:  return "Last \(vm.selectedDays) days"
         }
     }
 
@@ -82,14 +93,15 @@ private extension TrendsView {
 
     var summaryCards: some View {
         VStack(spacing: Theme.Spacing.lg) {
+            let sleepGoalHours = Double(vm.sleepGoalMinutes) / 60.0
             TrendSummaryCard(
                 title: "Sleep",
                 value: vm.sleepValueText,
                 unit: "avg",
-                note: "goal 8h",
+                note: "goal \(TrendsSummary.hoursLabel(sleepGoalHours))h",
                 footnote: vm.sleepFootnote
             ) {
-                TrendBarChart(values: vm.sleepWindow.values, dayLabels: vm.sleepWindow.dayLabels)
+                TrendBarChart(values: vm.sleepWindow.values, dayLabels: vm.sleepWindow.dayLabels, goalHours: sleepGoalHours)
             }
 
             TrendSummaryCard(

@@ -236,9 +236,11 @@ private extension TodayView {
 
             HStack(spacing: Theme.Spacing.sm) {
                 Chip(text: "\(vm.streakDays)-day streak", icon: "flame.fill", isAccent: true)
-                Text(vm.planHint)
-                    .font(.system(size: 13))
-                    .foregroundStyle(Theme.Colors.textSecondary)
+                if let hint = vm.planHint {
+                    Text(hint)
+                        .font(.system(size: 13))
+                        .foregroundStyle(Theme.Colors.textSecondary)
+                }
             }
             .padding(.top, Theme.Spacing.xxs)
         }

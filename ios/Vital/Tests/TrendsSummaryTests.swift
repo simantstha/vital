@@ -84,6 +84,73 @@ final class TrendsSummaryTests: XCTestCase {
         XCTAssertNil(TrendsSummary.sleepAverageText([nil, nil, nil, nil, nil, nil, nil]))
     }
 
+    // MARK: - hoursLabel
+
+    func testHoursLabelFormatsWholeNumbersWithoutDecimal() {
+        XCTAssertEqual(TrendsSummary.hoursLabel(8.0), "8")
+        XCTAssertEqual(TrendsSummary.hoursLabel(6.0), "6")
+        XCTAssertEqual(TrendsSummary.hoursLabel(9.0), "9")
+    }
+
+    func testHoursLabelFormatsHalfHoursWithOneDecimal() {
+        XCTAssertEqual(TrendsSummary.hoursLabel(7.5), "7.5")
+        XCTAssertEqual(TrendsSummary.hoursLabel(8.5), "8.5")
+        XCTAssertEqual(TrendsSummary.hoursLabel(6.5), "6.5")
+    }
+
+    func testHoursLabelNeverEmitsTrailingDecimal() {
+        // Ensure no value produces "8.0" or similar
+        let result = TrendsSummary.hoursLabel(8.0)
+        XCTAssertFalse(result.contains("."), "hoursLabel should never contain a decimal point for whole numbers")
+    }
+
+    // MARK: - shortSleepThreshold (75% of goal, snapped to the nearest half hour)
+
+    func testShortSleepThresholdSnapsToTheNearestHalfHour() {
+        // Raw 75% would be 5.625 / 6.0 / 6.375 — only the middle is already a
+        // half hour, so the outer two prove the snapping.
+        XCTAssertEqual(TrendsSummary.shortSleepThreshold(for: 7.5), 5.5)
+        XCTAssertEqual(TrendsSummary.shortSleepThreshold(for: 8.0), 6.0)
+        XCTAssertEqual(TrendsSummary.shortSleepThreshold(for: 8.5), 6.5)
+    }
+
+    func testShortSleepThresholdAlwaysLabelsAsAWholeOrHalfHour() {
+        // Whatever the goal, the threshold must render in the app's half-hour
+        // vocabulary — never a derived decimal like "5.6".
+        for goal in [6.0, 6.5, 7.0, 7.5, 8.0, 8.5, 9.0, 9.5, 10.0] {
+            let label = TrendsSummary.hoursLabel(TrendsSummary.shortSleepThreshold(for: goal))
+            XCTAssertTrue(
+                !label.contains(".") || label.hasSuffix(".5"),
+                "threshold label \"\(label)\" for goal \(goal)h is not a whole or half hour"
+            )
+        }
+    }
+
+    /// Regression guard for the bug where `TrendBarChart` shaded bars against
+    /// its own `goalHours * 0.75` while the footnote counted against the
+    /// snapped threshold: at a 7.5h goal a 5.6h night drew as a gray "short"
+    /// bar while the caption said no nights were short. Both now read the same
+    /// helper, so the chart's classification and the footnote's count agree.
+    func testChartThresholdAndFootnoteAgreeOnWhichNightsAreShort() {
+        let goal = 7.5
+        let values: [Double?] = [5.4, 5.6, 6.1, 7.0, 7.5, 8.0, 8.2]
+
+        // What the chart shades gray: value < shortSleepThreshold(for: goal).
+        let threshold = TrendsSummary.shortSleepThreshold(for: goal)
+        let chartShortCount = values.compactMap { $0 }.filter { $0 < threshold }.count
+
+        // What the footnote reports.
+        let footnote = TrendsSummary.sleepFootnote(values, goalHours: goal)
+
+        XCTAssertEqual(chartShortCount, 1)
+        XCTAssertEqual(footnote.bold, "\(chartShortCount) of 7 nights")
+        XCTAssertEqual(footnote.prefix, "Under \(TrendsSummary.hoursLabel(threshold))h on ")
+
+        // The 5.6h night specifically: adequate to the chart, uncounted by the
+        // footnote — the exact pair that disagreed before the shared helper.
+        XCTAssertFalse(5.6 < threshold, "5.6h must not shade as a short bar at a 7.5h goal")
+    }
+
     // MARK: - sleepFootnote
 
     func testSleepFootnoteReportsNoDataWhenAllNightsMissing() {
@@ -110,6 +177,76 @@ final class TrendsSummaryTests: XCTestCase {
         let footnote = TrendsSummary.sleepFootnote(values)
 
         XCTAssertEqual(footnote, .plain("Every night near your 8h goal this week."))
+    }
+
+    func testSleepFootnoteWith7_5hGoalTreats5_6hAsAdequateAgainstSnapped5_5hThreshold() {
+        // 7.5h goal → threshold snaps to 5.5h (raw 75% would be 5.625h).
+        // 5.6h is the discriminator: ABOVE the snapped 5.5h (adequate), but
+        // BELOW both the unsnapped 5.625h and the old hardcoded 6.0h — under
+        // either of those this falls into the short-nights branch instead.
+        let values: [Double?] = [5.6, 6.1, 7.0, 7.5, 8.0, 8.2, 7.9]
+
+        let footnote = TrendsSummary.sleepFootnote(values, goalHours: 7.5)
+
+        XCTAssertEqual(footnote, .plain("Every night near your 7.5h goal this week."))
+    }
+
+    func testSleepFootnoteWith7_5hGoalCountsOnlyNightsUnderSnapped5_5hThreshold() {
+        // 5.4h is short under all three candidate thresholds; 5.6h is short
+        // ONLY under the unsnapped 5.625h or the old 6.0h. So only the snapped
+        // threshold yields "Under 5.5h on 1 of 7 nights" — unsnapped would say
+        // "Under 5.6h on 2 of 7", the old hardcode "Under 6h on 2 of 7".
+        let values: [Double?] = [5.4, 5.6, 6.1, 7.0, 7.5, 8.0, 8.2]
+
+        let footnote = TrendsSummary.sleepFootnote(values, goalHours: 7.5)
+
+        XCTAssertEqual(footnote, TrendsSummary.Footnote(
+            prefix: "Under 5.5h on ",
+            bold: "1 of 7 nights",
+            suffix: ". Gray bars are short nights."
+        ))
+    }
+
+    func testSleepFootnoteWith8_5hGoalCountsNightsUnderSnapped6_5hThreshold() {
+        // 8.5h goal → threshold snaps to 6.5h (raw 75% would be 6.375h).
+        // 6.4h discriminates in the opposite direction: BELOW the snapped 6.5h
+        // (short), but ABOVE both the unsnapped 6.375h and the old 6.0h —
+        // under either of those every night is adequate and the footnote takes
+        // the "Every night" branch instead.
+        let values: [Double?] = [6.4, 6.6, 7.0, 7.5, 8.0, 8.5, 8.8]
+
+        let footnote = TrendsSummary.sleepFootnote(values, goalHours: 8.5)
+
+        XCTAssertEqual(footnote, TrendsSummary.Footnote(
+            prefix: "Under 6.5h on ",
+            bold: "1 of 7 nights",
+            suffix: ". Gray bars are short nights."
+        ))
+    }
+
+    func testSleepFootnoteWith8_5hGoalNamesTheGoalInTheAllGoodCopy() {
+        // Locks the goal-derived copy on the "Every night" branch. Note: this
+        // case cannot discriminate the snapping — at an 8.5h goal the snapped
+        // 6.5h threshold is the highest of the three candidates, so any set
+        // clearing it also clears 6.375h and 6.0h.
+        let values: [Double?] = [6.6, 7.0, 7.5, 8.0, 8.2, 8.5, 8.8]
+
+        let footnote = TrendsSummary.sleepFootnote(values, goalHours: 8.5)
+
+        XCTAssertEqual(footnote, .plain("Every night near your 8.5h goal this week."))
+    }
+
+    func testSleepFootnoteDefaultParameterStillProduces8hStrings() {
+        // Regression test: the default 8.0h behavior must remain unchanged.
+        let values: [Double?] = [5.9, 7.1, 7.6, 5.9, 5.7, 6.2, 5.5]
+
+        let footnote = TrendsSummary.sleepFootnote(values) // default goalHours: 8.0
+
+        XCTAssertEqual(footnote, TrendsSummary.Footnote(
+            prefix: "Under 6h on ",
+            bold: "4 of 7 nights",
+            suffix: ". Gray bars are short nights."
+        ))
     }
 
     // MARK: - lineFootnote (HRV / Resting HR)
