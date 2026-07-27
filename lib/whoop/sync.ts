@@ -152,7 +152,17 @@ export function createWhoopSyncRepository(database: unknown, schema: typeof Whoo
       // Defense-in-depth: filter out any row with non-finite value to prevent NOT NULL constraint violations
       const validRows = rows.filter((r) => Number.isFinite(r.value));
       if (validRows.length === 0) return;
-      await db.insert(schema.daily_metrics).values(validRows.map((r) => ({
+
+      // Dedupe rows by (date, metric) — PostgreSQL rejects ON CONFLICT when a single INSERT
+      // contains multiple rows with the same conflict key. Use last-wins semantics (consistent
+      // with onConflictDoUpdate overwriting): later rows replace earlier ones with the same key.
+      const deduped = new Map<string, (typeof validRows)[number]>();
+      for (const row of validRows) {
+        const key = `${row.date} ${row.metric}`;
+        deduped.set(key, row);
+      }
+
+      await db.insert(schema.daily_metrics).values([...deduped.values()].map((r) => ({
         user_id: userId,
         date: r.date,
         metric: r.metric,
