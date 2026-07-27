@@ -39,7 +39,12 @@ struct ProfileView: View {
                                 .frame(maxWidth: .infinity)
                                 .padding(.top, 80)
                         } else if let errorMessage = vm.errorMessage {
-                            errorState(message: errorMessage)
+                            ErrorCard(title: "Couldn't load profile", message: errorMessage) {
+                                Task {
+                                    vm.errorMessage = nil
+                                    await vm.load()
+                                }
+                            }
                         } else {
                             avatarSection
 
@@ -354,43 +359,6 @@ private extension ProfileView {
             isResyncing = true
             defer { isResyncing = false }
             await backfillCoordinator.resync()
-        }
-    }
-
-    // ── Recoverable load error ─────────────────────────────────────────────
-
-    func errorState(message: String) -> some View {
-        VitalCard(padding: Theme.Spacing.lg, cornerRadius: Theme.Radius.md) {
-            HStack(alignment: .center, spacing: Theme.Spacing.md) {
-                Image(systemName: "exclamationmark.triangle")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(Theme.Colors.alert)
-
-                VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
-                    Text("Couldn't load profile")
-                        .font(Theme.Typography.bodySmall)
-                        .fontWeight(.medium)
-                        .foregroundStyle(Theme.Colors.textPrimary)
-                    Text(message)
-                        .font(Theme.Typography.labelSmall)
-                        .foregroundStyle(Theme.Colors.textSecondary)
-                        .lineLimit(2)
-                }
-
-                Spacer(minLength: Theme.Spacing.sm)
-
-                Button {
-                    Task {
-                        vm.errorMessage = nil
-                        await vm.load()
-                    }
-                } label: {
-                    Label("Retry", systemImage: "arrow.clockwise")
-                        .font(Theme.Typography.labelMedium)
-                        .foregroundStyle(Theme.Colors.accentContent)
-                }
-                .buttonStyle(.plain)
-            }
         }
     }
 
