@@ -189,3 +189,60 @@ test('runWhoopSync never calls recomputeBaselines when nothing was mapped', asyn
   assert.equal(repo.upsertCalls.length, 0);
   assert.equal(recomputeCalls.length, 0);
 });
+
+// ─── createWhoopSyncRepository.upsertDailyMetrics (Drizzle-backed repository) ─
+
+test('upsertDailyMetrics dedupes rows by (date, metric) using last-wins semantics', async () => {
+  const { createWhoopSyncRepository } = await syncModule;
+
+  // Create a fake database that captures what rows are passed to .values()
+  const recordedValuesCalls: Array<Array<Record<string, unknown>>> = [];
+  const mockSchema = {
+    daily_metrics: { user_id: {}, date: {}, metric: {} },
+    events: {},
+  };
+  const fakeDb = {
+    insert() {
+      return {
+        values(rows: Array<Record<string, unknown>>) {
+          recordedValuesCalls.push(rows);
+          return {
+            async onConflictDoUpdate() {
+              // no-op for this test
+            }
+          };
+        }
+      };
+    },
+  };
+
+  const repo = createWhoopSyncRepository(fakeDb as unknown, mockSchema as unknown);
+
+  // Call with rows containing duplicate (date, metric) keys but different values
+  await repo.upsertDailyMetrics('user-1', [
+    { date: '2026-07-21', metric: 'whoop_day_strain', value: 8, payload: null },
+    { date: '2026-07-21', metric: 'whoop_day_strain', value: 9, payload: null }, // same key, replaces above (last-wins)
+    { date: '2026-07-21', metric: 'whoop_recovery', value: 50, payload: null },
+    { date: '2026-07-21', metric: 'whoop_recovery', value: 60, payload: null }, // same key, replaces above (last-wins)
+    { date: '2026-07-22', metric: 'whoop_day_strain', value: 7, payload: null }, // distinct (date, metric)
+  ]);
+
+  // Verify insert() was called exactly once with deduplicated rows
+  assert.equal(recordedValuesCalls.length, 1, 'insert().values() should be called once');
+  const [values] = recordedValuesCalls;
+  assert.equal(values.length, 3, 'should have 3 unique (date, metric) pairs after deduplication');
+
+  // Verify last-wins semantics: later rows replaced earlier ones with the same key
+  const strain21 = values.find((r) => r.metric === 'whoop_day_strain' && r.date === '2026-07-21') as Record<string, unknown>;
+  assert(strain21, 'should have whoop_day_strain for 2026-07-21');
+  assert.equal(strain21.value, 9, 'whoop_day_strain 2026-07-21 should have last-wins value (9, not 8)');
+  assert.equal(strain21.user_id, 'user-1');
+
+  const recovery21 = values.find((r) => r.metric === 'whoop_recovery' && r.date === '2026-07-21') as Record<string, unknown>;
+  assert(recovery21, 'should have whoop_recovery for 2026-07-21');
+  assert.equal(recovery21.value, 60, 'whoop_recovery 2026-07-21 should have last-wins value (60, not 50)');
+
+  const strain22 = values.find((r) => r.metric === 'whoop_day_strain' && r.date === '2026-07-22') as Record<string, unknown>;
+  assert(strain22, 'should have whoop_day_strain for 2026-07-22');
+  assert.equal(strain22.value, 7, 'distinct row should be preserved as-is');
+});
