@@ -12,7 +12,7 @@
  *     { name: "Apple Health", status: "connected" | "disconnected" },
  *   ],
  *   stats: {
- *     loggedDays:  number,   // distinct UTC dates with at least one event
+ *     loggedDays:  number,   // distinct local calendar dates with at least one event
  *     mealsLogged: number,   // total meal_logged events
  *     avgHrv:      number | null,   // avg SDNN ms across all hrv_reading events
  *     workouts:    number,   // total workout_completed events
@@ -94,6 +94,7 @@ export async function GET(request: Request): Promise<NextResponse> {
         created_at: schema.users.created_at,
         sleep_goal_minutes: schema.users.sleep_goal_minutes,
         lights_out_minutes: schema.users.lights_out_minutes,
+        timezone: schema.users.timezone,
       })
       .from(schema.users)
       .where(eq(schema.users.id, userId))
@@ -132,10 +133,14 @@ export async function GET(request: Request): Promise<NextResponse> {
   // ── Stats ─────────────────────────────────────────────────────────────────
 
   // loggedDays: distinct calendar dates the user was tracked — union of
-  // daily_metrics days (device-local 'YYYY-MM-DD') and meal-logged UTC days.
+  // daily_metrics days (already device-local 'YYYY-MM-DD') and meal-logged
+  // days. Meal timestamps are absolute instants, so they must be bucketed by
+  // the SAME local day (not UTC) or a meal logged after local midnight but
+  // before UTC midnight invents a phantom day and inflates this count.
+  const tz = pickTimeZone(null, userRow[0]?.timezone);
   const dateSet = new Set<string>();
   for (const r of dmDates) dateSet.add(String(r.date));
-  for (const m of mealRows) dateSet.add(m.timestamp.toISOString().split('T')[0]);
+  for (const m of mealRows) dateSet.add(localDayKey(m.timestamp, tz));
 
   const mealsLogged = mealRows.length;
 
@@ -233,7 +238,15 @@ export async function PATCH(request: Request): Promise<NextResponse> {
   }
 
   if (weightKg !== undefined) {
-    const today = new Date().toISOString().split('T')[0];
+    // Bucket by the user's *local* day, not UTC — otherwise a weight logged
+    // late at night can land on the wrong day's point on the Trends chart
+    // (which overlays this over device-local daily_metrics dates).
+    const [row] = await db
+      .select({ timezone: schema.users.timezone })
+      .from(schema.users)
+      .where(eq(schema.users.id, userId))
+      .limit(1);
+    const today = localDayKey(new Date(), pickTimeZone(null, row?.timezone));
     logWeight(userId, today, weightKg as number, 'kg');
   }
 

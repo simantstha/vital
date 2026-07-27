@@ -48,7 +48,7 @@ export interface MealSummary {
 }
 
 export interface DaySnapshot {
-  date: string;              // YYYY-MM-DD (UTC)
+  date: string;              // YYYY-MM-DD (user's local day, via lib/localDay.ts)
   hrv?: number;              // ms
   sleepDurationMs?: number;
   sleepEfficiency?: number;  // 0–100
@@ -384,9 +384,17 @@ export async function assembleContext(userId: string): Promise<CoachContext> {
     localNow = new Intl.DateTimeFormat('en-US', { ...nowFormat, timeZone: 'UTC' }).format(now);
   }
 
+  // Today's local calendar day (Intl-based, DST-proof). Used both to label
+  // the "Today" prompt snapshot and to key the cached-brief lookup below, so
+  // this agrees with the day /api/today computed the brief under (see
+  // lib/localDay.ts) instead of drifting to a UTC day that can be off by one
+  // for non-UTC users — previously this used the UTC day, which could miss a
+  // same-day cache the app already warmed (or worse, hit a stale one).
+  const localToday = localDayKey(now, tz);
+  const localYesterday = localDayKey(new Date(now.getTime() - 24 * 3_600_000), tz);
+
   // Today snapshot
-  const todayStr = todayStart.toISOString().split('T')[0];
-  const today = buildDaySnapshot(todayStr, todayEvents);
+  const today = buildDaySnapshot(localToday, todayEvents);
 
   // Ontology partition
   const hardConstraints = allNodes.filter(n => HARD_CONSTRAINT_TYPES.has(n.type));
@@ -395,19 +403,14 @@ export async function assembleContext(userId: string): Promise<CoachContext> {
   // Messages in chronological order for the prompt
   const recentMessages = [...rawMessages].reverse();
 
-  // Diet budget + today's cached brief (meal plan) — assembleContext has no
-  // request timezone, so we key the brief lookup off the same UTC day used
-  // for `today` above (best-effort; exact match when the brief was warmed
-  // via /api/today or /api/brief on the same UTC day).
+  // Diet budget + today's cached brief (meal plan) — keyed by the same local
+  // day as /api/today's briefCacheKey call (see above), so a warm cache hits
+  // regardless of UTC/local day skew.
   const dietBudget  = usersRow ? await resolveDietBudget(usersRow, userId) : undefined;
-  const cachedBrief = getCachedBrief(briefCacheKey(userId, todayStr));
+  const cachedBrief = getCachedBrief(briefCacheKey(userId, localToday));
 
   // WHOOP context line (Task 7) — daily_metrics is day-keyed to the user's
-  // *local* day (lib/whoop/mapping.ts's localDayKey), so this uses `tz`
-  // (only known after the Promise.all above resolves usersRow), not the UTC
-  // `todayStr` used for the events-based snapshot.
-  const localToday = localDayKey(now, tz);
-  const localYesterday = localDayKey(new Date(now.getTime() - 24 * 3_600_000), tz);
+  // *local* day (lib/whoop/mapping.ts's localDayKey), same key as above.
   const whoopRows = await db.select({
       date: schema.daily_metrics.date,
       metric: schema.daily_metrics.metric,
