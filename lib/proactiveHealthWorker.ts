@@ -1,6 +1,6 @@
 import { localDayKey } from './localDay';
 import { type CoachAnalysis } from './proactiveAnalysisSchema';
-import { AnalysisContentError, consumeGroundedAnalysisProof, type GroundedAnalysisProof, type ProactiveAnalysisSource } from './proactiveAnalysisGrounding';
+import { AnalysisContentError } from './proactiveAnalysisGrounding';
 import { workerErrorEvent } from './proactiveHealthWorkerSupport';
 
 export { parseCoachAnalysis, type CoachAnalysis } from './proactiveAnalysisSchema';
@@ -57,14 +57,12 @@ export function notificationKey(job: AnalysisJob): string { return `${job.kind}:
 export function morningKey(userId: string, date: string): string { return `morning:${userId}:${date}`; }
 export function currentLocalDate(now: Date, timezone: string): string { return localDayKey(now, timezone); }
 
-export function consumeMorningAnalysisProof(proof: GroundedAnalysisProof, expectedSource: ProactiveAnalysisSource): CoachAnalysis {
-  return consumeGroundedAnalysisProof(proof, expectedSource);
-}
-
 /**
- * Content-grounding failures (a bad LLM output) must never black out a notification: the push
- * copy is static (see analysisAlert), so we still have something true and schema-valid to store
- * and deliver even when the AI-authored analysis behind the tap couldn't be produced this time.
+ * A model output that still fails validation after the one repair attempt (unparseable JSON,
+ * a schema mismatch, or a stray digit in the prose) must never black out a notification: the
+ * push copy is static (see analysisAlert), so we still have something true and schema-valid to
+ * store and deliver even when the AI-authored analysis behind the tap couldn't be produced this
+ * time. Transport/network failures take the retry path instead (see runClaimedAnalysis below).
  */
 export function fallbackAnalysis(kind: AnalysisKind, input: unknown): CoachAnalysis {
   const type = input && typeof input === 'object' && !Array.isArray(input) ? (input as Record<string, unknown>).type : undefined;
@@ -82,7 +80,7 @@ export function fallbackAnalysis(kind: AnalysisKind, input: unknown): CoachAnaly
 export async function runClaimedAnalysis(
   job: AnalysisJob,
   repository: WorkerRepository,
-  analyze: (job: AnalysisJob, context: AnalysisContext) => Promise<GroundedAnalysisProof>,
+  analyze: (job: AnalysisJob, context: AnalysisContext) => Promise<CoachAnalysis>,
   push: (device: PushDevice, analysis: CoachAnalysis) => Promise<PushOutcome>,
   now: Date,
   maxRetries = 5,
@@ -91,13 +89,7 @@ export async function runClaimedAnalysis(
     if (!await repository.renewAnalysisLease(job, now)) return;
     const context = await repository.getContext(job);
     if (!context.enabled) { await repository.suppress(job); return; }
-    const proof = await analyze(job, context);
-    const result = consumeGroundedAnalysisProof(proof, {
-      kind: job.kind,
-      date: job.localDate,
-      input: job.input,
-      availableContext: context,
-    });
+    const result = await analyze(job, context);
     if (!await repository.renewAnalysisLease(job, new Date())) return;
     if (!await repository.storeReady(job, result)) return;
     const notificationToken = await repository.claimNotification(job, now);
