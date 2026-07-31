@@ -1,13 +1,10 @@
 import {
   AnalysisContentError,
-  assertNoRawNumbers,
-  encodeProactiveAnalysisRequest,
-  groundAnalysisText,
-  modelPayload,
+  parseAnalysisText,
   type AnalysisFailureCategory,
-  type GroundedAnalysisProof,
   type ProactiveAnalysisSource,
 } from './proactiveAnalysisGrounding';
+import { type CoachAnalysis } from './proactiveAnalysisSchema';
 
 export { AnalysisContentError, type AnalysisFailureCategory } from './proactiveAnalysisGrounding';
 
@@ -28,19 +25,19 @@ export interface AnalysisGenerationRequest {
   content: string;
 }
 
-export interface GenerateGroundedAnalysisArgs {
+export interface GenerateAnalysisArgs {
   source: ProactiveAnalysisSource;
   generate(request: AnalysisGenerationRequest): Promise<string>;
   report(event: AnalysisFailureEvent): void;
 }
 
 const SCHEMA_CONTRACT = `headline, shortInsight, and narrative must each be a non-empty JSON string. observations and nextSteps must each be a JSON array of non-empty JSON strings. No additional keys are allowed.`;
-const TOKEN_CONTRACT = `Evidence tokens are delimited by the characters ⟦ and ⟧ (for example ⟦EVIDENCE_A⟧); every such token is a real recorded measurement, never a placeholder or an unfilled template variable, and must be copied exactly as given, brackets included. Every supplied evidence token stands for a verified recorded value and already includes its display unit when applicable. Treat evidence tokens as real measurements, not placeholders or missing data. Never describe the request as containing placeholders, template variables, unresolved tokens, missing metric values, or a data integrity problem. Copy only supplied evidence tokens exactly into natural user-facing prose. Cite the session's key metrics: for a workout, cite duration, distance, pace, and average heart rate when supplied; for sleep, cite duration and efficiency. Copy a token only into a scalar string or an individual array-item string. Never place a unit, qualifier, parenthetical, symbol, or other prose after the token. Never place a sign before a token. Never alter, split, concatenate, nest, enumerate, or manufacture a token. Never write a raw number or numeric symbol sequence.`;
-const CONTENT_CONTRACT = `Name the workout type or sleep in the headline using a few words. Make the shortInsight one sentence containing the single most notable metric. Keep the narrative to at most three sentences about this session only. Anchor each observation to a supplied metric, giving two or three observations. Give one or two next steps. Mention profile or goal context only when it changes what the user should do next.`;
+const NUMBER_CONTRACT = `The app already displays this session's exact figures (duration, calories, average and max heart rate, distance, pace, sleep stages, and similar) in a metrics card shown directly above this text, so repeating any of those figures here would just be redundant. Describe the session qualitatively instead: say whether it was faster or slower, longer or shorter than usual, well above or below baseline, a personal best, or in line with recent sessions — without writing the numbers themselves. Never write a digit or any other numeral character (no Arabic numerals, no other numbering systems, no numeric symbols) anywhere in headline, shortInsight, narrative, observations, or nextSteps.`;
+const CONTENT_CONTRACT = `Name the workout type or sleep in the headline using a few words. Make the shortInsight one sentence characterizing the single most notable aspect of the session. Keep the narrative to at most three sentences about this session only. Characterize two or three observations qualitatively rather than citing exact figures. Give one or two next steps. Mention profile or goal context only when it changes what the user should do next.`;
 
-export const PROACTIVE_ANALYSIS_SYSTEM_PROMPT = `You are Vital coach. Return JSON only with exactly headline, shortInsight, narrative, observations, and nextSteps. ${SCHEMA_CONTRACT} Keep the output observational and non-diagnostic. ${TOKEN_CONTRACT} ${CONTENT_CONTRACT}`;
+export const PROACTIVE_ANALYSIS_SYSTEM_PROMPT = `You are Vital coach. Return JSON only with exactly headline, shortInsight, narrative, observations, and nextSteps. ${SCHEMA_CONTRACT} Keep the output observational and non-diagnostic. ${NUMBER_CONTRACT} ${CONTENT_CONTRACT}`;
 
-export const PROACTIVE_ANALYSIS_REPAIR_PROMPT = `Repair the Vital coach response for the supplied failure category and request. Return a full replacement as JSON only with exactly headline, shortInsight, narrative, observations, and nextSteps. ${SCHEMA_CONTRACT} Keep the output observational and non-diagnostic. ${TOKEN_CONTRACT} ${CONTENT_CONTRACT}`;
+export const PROACTIVE_ANALYSIS_REPAIR_PROMPT = `Repair the Vital coach response for the supplied failure category and request. Return a full replacement as JSON only with exactly headline, shortInsight, narrative, observations, and nextSteps. ${SCHEMA_CONTRACT} Keep the output observational and non-diagnostic. ${NUMBER_CONTRACT} ${CONTENT_CONTRACT}`;
 
 export function proactiveAnalysisModel(env: NodeJS.ProcessEnv): string {
   return env.PROACTIVE_ANALYSIS_MODEL ?? DEFAULT_PROACTIVE_ANALYSIS_MODEL;
@@ -54,21 +51,23 @@ export function analysisFailureEvent(
   return { event: 'proactive_analysis_failure', attempt, category, outcome };
 }
 
-function guardedRequest(attempt: AnalysisAttempt, system: string, payload: unknown): AnalysisGenerationRequest {
-  const content = JSON.stringify(payload);
-  assertNoRawNumbers(system);
-  assertNoRawNumbers(content);
-  return { attempt, system, content };
+function analysisRequest(attempt: AnalysisAttempt, system: string, payload: unknown): AnalysisGenerationRequest {
+  return { attempt, system, content: JSON.stringify(payload) };
 }
 
-export async function generateGroundedAnalysis(args: GenerateGroundedAnalysisArgs): Promise<GroundedAnalysisProof> {
-  const encoded = encodeProactiveAnalysisRequest(args.source);
+/**
+ * The model receives the real, unencoded source and is asked for qualitative prose only: the exact
+ * figures are rendered deterministically by the client from the same stored input (see
+ * lib/proactiveHealthHttp.ts), so the model never has to reproduce a number. One repair attempt
+ * covers the occasional stray digit or malformed JSON; a second failure is reported and rethrown so
+ * the caller can fall back.
+ */
+export async function generateAnalysis(args: GenerateAnalysisArgs): Promise<CoachAnalysis> {
   let initialError: AnalysisContentError;
 
   try {
-    const initialRequest = guardedRequest('initial', PROACTIVE_ANALYSIS_SYSTEM_PROMPT, modelPayload(encoded));
-    const initialText = await args.generate(initialRequest);
-    return groundAnalysisText(initialText, encoded);
+    const initialText = await args.generate(analysisRequest('initial', PROACTIVE_ANALYSIS_SYSTEM_PROMPT, args.source));
+    return parseAnalysisText(initialText);
   } catch (error) {
     if (!(error instanceof AnalysisContentError)) throw error;
     initialError = error;
@@ -77,15 +76,14 @@ export async function generateGroundedAnalysis(args: GenerateGroundedAnalysisArg
   args.report(analysisFailureEvent('initial', initialError.category, 'repair_started'));
   const repairPayload = {
     category: initialError.category,
-    request: modelPayload(encoded),
+    request: args.source,
   };
 
   try {
-    const repairRequest = guardedRequest('repair', PROACTIVE_ANALYSIS_REPAIR_PROMPT, repairPayload);
-    const repairText = await args.generate(repairRequest);
-    const proof = groundAnalysisText(repairText, encoded);
+    const repairText = await args.generate(analysisRequest('repair', PROACTIVE_ANALYSIS_REPAIR_PROMPT, repairPayload));
+    const result = parseAnalysisText(repairText);
     args.report(analysisFailureEvent('repair', initialError.category, 'repair_succeeded'));
-    return proof;
+    return result;
   } catch (error) {
     if (!(error instanceof AnalysisContentError)) throw error;
     args.report(analysisFailureEvent('repair', error.category, 'repair_exhausted'));
