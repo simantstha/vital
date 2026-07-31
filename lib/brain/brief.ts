@@ -14,6 +14,7 @@ import { eq, and, gte, desc } from 'drizzle-orm';
 import { generateDailyBrief } from '@/lib/claude';
 import { getCalibration } from '@/lib/brain/baselines';
 import { queryBaseline, queryMetricPoints, querySleepSummary } from '@/lib/brain/tools';
+import { localDayKey, pickTimeZone } from '@/lib/localDay';
 import type { DailyBrief } from '@/lib/types';
 
 // ── Payload helpers ─────────────────────────────────────────────────────────
@@ -38,6 +39,16 @@ function msToHm(ms: number): string {
   return `${h}h ${m < 10 ? '0' : ''}${m}m`;
 }
 
+/** Sunday-of-the-week key for an already-local 'YYYY-MM-DD' day (calendar
+ *  arithmetic on a local key, mirroring lib/streak.ts's previousDayKey).
+ *  Exported for unit testing (see brief.test.ts). */
+export function weekStartKeyFromLocalDay(localDay: string): string {
+  const [year, month, day] = localDay.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  date.setUTCDate(date.getUTCDate() - date.getUTCDay()); // back to Sunday
+  return date.toISOString().slice(0, 10);
+}
+
 const M_TO_MI = 1 / 1609.34;
 
 // ── Main export ─────────────────────────────────────────────────────────────
@@ -58,7 +69,7 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
   // the Today metric cards, Trends, and the coach's data-tools read. Reading
   // them here (instead of the events ledger, which HealthKit never writes to)
   // guarantees the narrative and the cards can never disagree.
-  const [events, hrvBaseline, calibration, hrvPts, rhrPts, sleepSummary, foodNodes] = await Promise.all([
+  const [events, hrvBaseline, calibration, hrvPts, rhrPts, sleepSummary, foodNodes, [userRow]] = await Promise.all([
     db
       .select()
       .from(schema.events)
@@ -75,7 +86,13 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
     queryMetricPoints(userId, 'resting_hr', 7),
     querySleepSummary(userId, 7),
     db.select().from(schema.nodes).where(eq(schema.nodes.user_id, userId)).orderBy(desc(schema.nodes.weight)),
+    db.select({ timezone: schema.users.timezone }).from(schema.users).where(eq(schema.users.id, userId)).limit(1),
   ]);
+
+  // No request context here (background/cron-generated brief), so this can
+  // only use the stored device timezone, not a fresher request-supplied one —
+  // still correct, just not travel-instant (see lib/localDay.ts).
+  const tz = pickTimeZone(null, userRow?.timezone);
 
   // Partition food-related nodes into restrictions and preferences
   const restrictions = foodNodes
@@ -272,7 +289,7 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
 
       return {
         type:        kind,
-        date:        e.timestamp.toISOString().split('T')[0],
+        date:        localDayKey(e.timestamp, tz),
         distanceMi:  distM > 0 ? distMi.toFixed(1) : undefined,
         pace:        paceMinMi > 0 ? `${paceMin}:${paceSec < 10 ? '0' : ''}${paceSec}` : undefined,
         hr:          num(p.avg_hr) ?? num(p.average_heart_rate),
@@ -293,10 +310,11 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
 
   const weekBuckets = new Map<string, WeeklyLoadRecord>();
   for (const e of events.filter(ev => ev.type === 'workout_completed')) {
-    const d  = e.timestamp;
-    const ws = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
-    ws.setUTCDate(ws.getUTCDate() - ws.getUTCDay()); // Sunday
-    const key = ws.toISOString().split('T')[0];
+    // Bucket by the workout's *local* day, then walk back to that local
+    // week's Sunday — calendar arithmetic on an already-local key (like
+    // lib/streak.ts's previousDayKey), so it's DST-proof and never buckets a
+    // late-night local workout into the wrong (UTC) week.
+    const key = weekStartKeyFromLocalDay(localDayKey(e.timestamp, tz));
     if (!weekBuckets.has(key)) {
       weekBuckets.set(key, { weekStart: key, runMi: 0, walkMi: 0, gymMin: 0, gymSessions: 0 });
     }
@@ -329,7 +347,7 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
 
   const mealDayMap = new Map<string, { calories: number; carbs: number; protein: number; fat: number }>();
   for (const e of events.filter(ev => ev.type === 'meal_logged' && ev.timestamp >= threeDaysAgo && ev.timestamp < todayStart)) {
-    const key = e.timestamp.toISOString().split('T')[0];
+    const key = localDayKey(e.timestamp, tz);
     if (!mealDayMap.has(key)) mealDayMap.set(key, { calories: 0, carbs: 0, protein: 0, fat: 0 });
     const day = mealDayMap.get(key)!;
     const p   = pl(e.payload);
