@@ -42,6 +42,14 @@ struct TodayView: View {
                             .frame(maxWidth: .infinity)
                             .padding(.top, 60)
                     } else {
+                        if let errorMessage = vm.errorMessage {
+                            ErrorCard(title: "Couldn't load today's data", message: errorMessage) {
+                                Task {
+                                    vm.errorMessage = nil
+                                    await vm.loadHealthData()
+                                }
+                            }
+                        }
                         calibrationCard
                         pendingFactsBanner
                         PlanTimelineView(

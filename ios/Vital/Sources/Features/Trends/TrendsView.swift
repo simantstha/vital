@@ -16,12 +16,31 @@ struct TrendsView: View {
                         calibratingBanner
                     }
 
+                    if let summaryErrorMessage = vm.summaryErrorMessage {
+                        ErrorCard(title: "Couldn't load your 7-day summary", message: summaryErrorMessage) {
+                            Task {
+                                vm.summaryErrorMessage = nil
+                                await vm.loadSummary()
+                            }
+                        }
+                    }
+
                     summaryCards
 
                     VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
                         SectionHeader(title: "Explore")
                         metricPicker
                         daysPicker
+
+                        if let errorMessage = vm.errorMessage {
+                            ErrorCard(title: "Couldn't load this chart", message: errorMessage) {
+                                Task {
+                                    vm.errorMessage = nil
+                                    await vm.load()
+                                }
+                            }
+                        }
+
                         chartCard
                         statsRow
                     }

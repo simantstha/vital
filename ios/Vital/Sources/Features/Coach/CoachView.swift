@@ -261,6 +261,26 @@ struct CoachView: View {
 
     private var inputBar: some View {
         VStack(spacing: 0) {
+            if let errorMessage = vm.errorMessage {
+                // Dismiss, not retry: the user's message is already in the
+                // transcript *and* already persisted server-side (runCoach
+                // inserts it before any model call, with no idempotency key),
+                // so replaying the turn would double-write it and the user
+                // would see their question twice on the next launch. There is
+                // nothing to retry here — only a notice to clear. Sending
+                // again is one deliberate tap.
+                ErrorCard(
+                    title: "Couldn't reach your coach",
+                    message: errorMessage,
+                    actionLabel: "Dismiss",
+                    actionIcon: "xmark"
+                ) {
+                    vm.errorMessage = nil
+                }
+                .padding(.horizontal, Theme.Spacing.lg)
+                .padding(.top, Theme.Spacing.sm)
+            }
+
             if vm.speaker.isSpeaking {
                 stopSpeakingRow
             }
