@@ -67,6 +67,9 @@ struct RootView: View {
                 await ReminderScheduler.shared.resync()
                 if authViewModel.isAuthenticated {
                     await PushNotificationService.shared.hydratePreferences()
+                    // Health syncs before Calendar (notification-critical sweep).
+                    // Repeat calls are safe via SyncOperationCoalescer.
+                    await HealthSyncCoordinator.shared.syncNow()
                     await CalendarSyncCoordinator.shared.syncNow()
                 }
             }

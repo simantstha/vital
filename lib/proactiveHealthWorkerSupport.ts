@@ -1,4 +1,5 @@
-import { type AnalysisKind } from './proactiveHealthWorker';
+import { type AnalysisJob, type AnalysisKind } from './proactiveHealthWorker';
+import { type FreshnessVerdict } from './proactiveHealthTransitions';
 
 export interface RawSqlTimeBindings {
   now: string;
@@ -13,6 +14,34 @@ export function analysisAlert(kind: AnalysisKind, input: unknown): AnalysisAlert
   const type = input && typeof input === 'object' && !Array.isArray(input) ? (input as Record<string, unknown>).type : undefined;
   if (typeof type === 'string' && type.trim()) return { title: 'Workout logged', body: `Your ${type.trim().toLowerCase()} workout has been logged.` };
   return { title: 'Workout logged', body: 'Your workout has been logged.' };
+}
+
+export interface StaleNotificationEvent {
+  event: 'proactive_notification_suppressed';
+  reason: 'stale_event';
+  kind: AnalysisKind;
+  analysisId: string;
+  localDate: string;
+  basis: FreshnessVerdict['basis'];
+  ageMinutes?: number;
+}
+
+/**
+ * Logged when the freshness gate suppresses a push. Deliberately carries no
+ * `userId` and no payload fields — matching the whitelist posture
+ * `workerErrorEvent` maintains above. `analysisId` is enough to join back to
+ * the row for investigation.
+ */
+export function staleNotificationEvent(job: Pick<AnalysisJob, 'kind' | 'id' | 'localDate'>, verdict: FreshnessVerdict): StaleNotificationEvent {
+  const base: StaleNotificationEvent = {
+    event: 'proactive_notification_suppressed',
+    reason: 'stale_event',
+    kind: job.kind,
+    analysisId: job.id,
+    localDate: job.localDate,
+    basis: verdict.basis,
+  };
+  return verdict.ageMs == null ? base : { ...base, ageMinutes: Math.round(verdict.ageMs / 60_000) };
 }
 
 export function rawSqlTimestamp(date: Date): string {

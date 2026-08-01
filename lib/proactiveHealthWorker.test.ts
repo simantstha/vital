@@ -172,6 +172,21 @@ test('an analysis at the retry limit is failed without another retry', async () 
   assert.equal(calls.includes('retry'), false);
 });
 
+test('a null notification claim (e.g. the freshness gate suppressing a stale event) never calls listDevices or push', async () => {
+  const calls: string[] = [];
+  const repo = fakeRepository(calls, true);
+  repo.claimNotification = async () => { calls.push('claim-null'); return null; };
+  repo.listDevices = async () => { calls.push('listDevices'); return [{ id: 'd1', token: 'secret', environment: 'sandbox' }]; };
+  await runClaimedAnalysis(
+    job(),
+    repo,
+    async () => valid,
+    async () => { calls.push('push'); return { outcome: 'sent', retireToken: false }; },
+    new Date('2026-07-13T12:00:00Z'),
+  );
+  assert.deepEqual(calls, ['claim-null']);
+});
+
 function job(): AnalysisJob {
   return { id: 'j1', kind: 'workout', userId: 'u1', localDate: '2026-07-12', input: {}, retryCount: 0, notificationRetryCount: 0, leaseToken: 'lease' };
 }

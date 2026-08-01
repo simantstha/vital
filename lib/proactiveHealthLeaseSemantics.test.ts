@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { claimMorningSlot, compareDueCandidates, failOwnedMorningSlot, notificationClaimable, ownsLease, reservedSleepCapacity, shouldPersistDefaultPreferences } from './proactiveHealthTransitions';
+import { NOTIFICATION_FRESHNESS_MS, claimMorningSlot, compareDueCandidates, failOwnedMorningSlot, freshnessWindowMs, notificationClaimable, notificationFresh, ownsLease, reservedSleepCapacity, shouldPersistDefaultPreferences, workoutEndedAt } from './proactiveHealthTransitions';
 
 type Row = { owner: string | null; expires: number; state: 'pending' | 'processing' | 'ready' | 'sending' | 'sent'; retries: number };
 function claim(row: Row, owner: string, now: number): boolean {
@@ -23,6 +23,7 @@ test('production notification predicate recovers ready pending and stale sending
   assert.equal(notificationClaimable('sending', new Date(now.getTime() - 1), now, now), true);
   assert.equal(notificationClaimable('sending', new Date(now.getTime() + 1), now, now), false);
   assert.equal(notificationClaimable('sent', null, now, now), false);
+  assert.equal(notificationClaimable('suppressed', null, now, now), false);
 });
 
 test('crash after ready and after sending can both be recovered', () => {
@@ -76,4 +77,96 @@ test('DST fallback keeps local-date slot identity stable while UTC instants diff
   };
   assert.equal(format('2026-11-01T06:30:00Z'), '2026-11-01');
   assert.equal(format('2026-11-01T07:30:00Z'), '2026-11-01');
+});
+
+// ── Notification freshness gate (Part A) ────────────────────────────────────
+
+test('workoutEndedAt derives the end instant from startTime + durationMin, defaulting duration to zero', () => {
+  assert.equal(workoutEndedAt({ startTime: '2026-07-13T00:00:00.000Z', durationMin: 30 })?.toISOString(), '2026-07-13T00:30:00.000Z');
+  assert.equal(workoutEndedAt({ startTime: '2026-07-13T00:00:00.000Z' })?.toISOString(), '2026-07-13T00:00:00.000Z');
+  assert.equal(workoutEndedAt({ startTime: '2026-07-13T00:00:00.000Z', durationMin: -5 })?.toISOString(), '2026-07-13T00:00:00.000Z');
+  assert.equal(workoutEndedAt({ startTime: 'not-a-date' }), null);
+  assert.equal(workoutEndedAt({ durationMin: 30 }), null);
+  assert.equal(workoutEndedAt(null), null);
+  assert.equal(workoutEndedAt('2026-07-13T00:00:00.000Z'), null);
+});
+
+test('6h freshness boundary is inclusive at exactly the window and exclusive one ms past it', () => {
+  const input = { startTime: '2026-07-13T00:00:00.000Z', durationMin: 0 };
+  const atBoundary = notificationFresh({ kind: 'workout', input, localDate: '2026-07-13', timezone: 'UTC', now: new Date('2026-07-13T06:00:00.000Z') });
+  assert.deepEqual(atBoundary, { fresh: true, basis: 'event_end', ageMs: NOTIFICATION_FRESHNESS_MS });
+
+  const pastBoundary = notificationFresh({ kind: 'workout', input, localDate: '2026-07-13', timezone: 'UTC', now: new Date('2026-07-13T06:00:00.001Z') });
+  assert.equal(pastBoundary.fresh, false);
+  assert.equal(pastBoundary.basis, 'event_end');
+  assert.equal(pastBoundary.ageMs, NOTIFICATION_FRESHNESS_MS + 1);
+});
+
+test('an in-progress workout (negative age) reads as fresh', () => {
+  const verdict = notificationFresh({
+    kind: 'workout',
+    input: { startTime: '2026-07-13T09:50:00.000Z', durationMin: 60 },
+    localDate: '2026-07-13',
+    timezone: 'UTC',
+    now: new Date('2026-07-13T10:00:00.000Z'),
+  });
+  assert.equal(verdict.fresh, true);
+  assert.equal(verdict.basis, 'event_end');
+  assert.equal(verdict.ageMs !== null && verdict.ageMs < 0, true);
+});
+
+test('a workout with no startTime falls back to the local-date rule', () => {
+  const now = new Date('2026-07-13T10:00:00Z');
+  const sameDay = notificationFresh({ kind: 'workout', input: {}, localDate: '2026-07-13', timezone: 'UTC', now });
+  assert.deepEqual(sameDay, { fresh: true, basis: 'local_date', ageMs: null });
+
+  const staleDay = notificationFresh({ kind: 'workout', input: {}, localDate: '2026-07-10', timezone: 'UTC', now });
+  assert.deepEqual(staleDay, { fresh: false, basis: 'local_date', ageMs: null });
+});
+
+test('an unparseable startTime falls back to the local-date rule rather than throwing', () => {
+  const now = new Date('2026-07-13T10:00:00Z');
+  assert.doesNotThrow(() => notificationFresh({ kind: 'workout', input: { startTime: 'garbage' }, localDate: '2026-07-13', timezone: 'UTC', now }));
+  const verdict = notificationFresh({ kind: 'workout', input: { startTime: 'garbage' }, localDate: '2026-07-10', timezone: 'UTC', now });
+  assert.deepEqual(verdict, { fresh: false, basis: 'local_date', ageMs: null });
+});
+
+test('sleep is fresh only on the wake date, regardless of input payload', () => {
+  const now = new Date('2026-07-13T10:00:00Z');
+  assert.equal(notificationFresh({ kind: 'sleep', input: {}, localDate: '2026-07-13', timezone: 'UTC', now }).fresh, true);
+  assert.equal(notificationFresh({ kind: 'sleep', input: { startTime: '2026-07-13T00:00:00Z' }, localDate: '2026-07-12', timezone: 'UTC', now }).fresh, false);
+});
+
+test('an invalid timezone falls back to UTC day-keying rather than suppressing everything', () => {
+  const now = new Date('2026-07-13T10:00:00Z'); // UTC day 2026-07-13
+  assert.equal(notificationFresh({ kind: 'sleep', input: {}, localDate: '2026-07-13', timezone: 'Invalid/Zone', now }).fresh, true);
+  assert.equal(notificationFresh({ kind: 'sleep', input: {}, localDate: '2026-07-10', timezone: 'Invalid/Zone', now }).fresh, false);
+});
+
+test('DST boundary: local-date freshness is stable across a Chicago fall-back transition', () => {
+  assert.equal(notificationFresh({ kind: 'sleep', input: {}, localDate: '2026-11-01', timezone: 'America/Chicago', now: new Date('2026-11-01T06:30:00Z') }).fresh, true);
+  assert.equal(notificationFresh({ kind: 'sleep', input: {}, localDate: '2026-11-01', timezone: 'America/Chicago', now: new Date('2026-11-01T07:30:00Z') }).fresh, true);
+});
+
+test('windowMs <= 0 disables the freshness gate outright', () => {
+  const staleWorkout = notificationFresh({
+    kind: 'workout',
+    input: { startTime: '2020-01-01T00:00:00Z' },
+    localDate: '2020-01-01',
+    timezone: 'UTC',
+    now: new Date('2026-07-13T10:00:00Z'),
+    windowMs: 0,
+  });
+  assert.equal(staleWorkout.fresh, true);
+
+  const staleSleep = notificationFresh({ kind: 'sleep', input: {}, localDate: '2020-01-01', timezone: 'UTC', now: new Date('2026-07-13T10:00:00Z'), windowMs: 0 });
+  assert.equal(staleSleep.fresh, true);
+});
+
+test('freshnessWindowMs reads PROACTIVE_NOTIFICATION_FRESHNESS_HOURS, defaults to 6h, and treats 0 as the kill switch', () => {
+  assert.equal(freshnessWindowMs({} as NodeJS.ProcessEnv), NOTIFICATION_FRESHNESS_MS);
+  assert.equal(freshnessWindowMs({ PROACTIVE_NOTIFICATION_FRESHNESS_HOURS: '0' } as unknown as NodeJS.ProcessEnv), 0);
+  assert.equal(freshnessWindowMs({ PROACTIVE_NOTIFICATION_FRESHNESS_HOURS: '3' } as unknown as NodeJS.ProcessEnv), 3 * 60 * 60_000);
+  assert.equal(freshnessWindowMs({ PROACTIVE_NOTIFICATION_FRESHNESS_HOURS: 'not-a-number' } as unknown as NodeJS.ProcessEnv), NOTIFICATION_FRESHNESS_MS);
+  assert.equal(freshnessWindowMs({ PROACTIVE_NOTIFICATION_FRESHNESS_HOURS: '-1' } as unknown as NodeJS.ProcessEnv), NOTIFICATION_FRESHNESS_MS);
 });

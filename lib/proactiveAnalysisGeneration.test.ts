@@ -12,6 +12,7 @@ import {
   type AnalysisGenerationRequest,
 } from './proactiveAnalysisGeneration';
 import { type ProactiveAnalysisSource } from './proactiveAnalysisGrounding';
+import { formatAnalysisSource } from './proactiveAnalysisFormatting';
 
 const source: ProactiveAnalysisSource = {
   kind: 'workout',
@@ -91,7 +92,7 @@ for (const [name, prompt] of [
   });
 }
 
-test('the model receives the real unencoded source, numbers included', async () => {
+test('the model receives a pre-formatted source', async () => {
   const calls: AnalysisGenerationRequest[] = [];
   await generateAnalysis({
     source,
@@ -100,9 +101,29 @@ test('the model receives the real unencoded source, numbers included', async () 
   });
 
   assert.equal(calls.length, 1);
-  assert.deepEqual(payloadOf(calls[0]), source as unknown as Record<string, unknown>);
-  assert.match(calls[0].content, /"durationMin":38/);
+  assert.deepEqual(payloadOf(calls[0]), formatAnalysisSource(source) as unknown as Record<string, unknown>);
+  // durationMin is a whitelisted workout key — it's rounded, unit-labeled, and renamed to `duration`,
+  // so the raw key/value never reaches the model (see lib/proactiveAnalysisFormatting.ts).
+  assert.doesNotMatch(calls[0].content, /"durationMin":38/);
+  assert.match(calls[0].content, /"duration":"38 min"/);
   assert.doesNotMatch(calls[0].content, /EVIDENCE/);
+});
+
+test('both the initial and repair requests carry the same pre-formatted source', async () => {
+  const calls: AnalysisGenerationRequest[] = [];
+  await generateAnalysis({
+    source,
+    generate: async (request) => {
+      calls.push(request);
+      return request.attempt === 'initial' ? '{' : validResponse();
+    },
+    report: () => {},
+  });
+
+  assert.deepEqual(calls.map((call) => call.attempt), ['initial', 'repair']);
+  const formatted = formatAnalysisSource(source) as unknown as Record<string, unknown>;
+  assert.deepEqual(payloadOf(calls[0]), formatted);
+  assert.deepEqual(payloadOf(calls[1]), { category: 'parse_failure', request: formatted });
 });
 
 test('live response inspection accepts plain JSON and one complete JSON fence', () => {
