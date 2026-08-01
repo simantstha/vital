@@ -6,8 +6,10 @@ export interface CoachAnalysis {
   nextSteps: string[];
 }
 
+// Runaway guardrails, set one notch above what CONTENT_CONTRACT in proactiveAnalysisGeneration.ts
+// asks for — exceeding these throws and costs a repair round-trip, so they should rarely fire.
 const limits: Record<keyof CoachAnalysis, number> = {
-  headline: 120, shortInsight: 240, narrative: 1200, observations: 6, nextSteps: 5,
+  headline: 80, shortInsight: 200, narrative: 500, observations: 3, nextSteps: 2,
 };
 
 export function parseCoachAnalysis(value: unknown): CoachAnalysis {
@@ -19,7 +21,7 @@ export function parseCoachAnalysis(value: unknown): CoachAnalysis {
     if (typeof row[key] !== 'string' || !row[key].trim() || row[key].length > limits[key]) throw new Error(`invalid ${key}`);
   }
   for (const key of ['observations', 'nextSteps'] as const) {
-    if (!Array.isArray(row[key]) || row[key].length > limits[key] || row[key].some((item) => typeof item !== 'string' || !item.trim() || item.length > 240)) throw new Error(`invalid ${key}`);
+    if (!Array.isArray(row[key]) || row[key].length > limits[key] || row[key].some((item) => typeof item !== 'string' || !item.trim() || item.length > 200)) throw new Error(`invalid ${key}`);
   }
   return row as unknown as CoachAnalysis;
 }
