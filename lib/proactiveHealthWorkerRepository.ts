@@ -2,8 +2,8 @@ import { db, schema } from '@/db';
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { morningKey, notificationKey, type AnalysisJob, type CoachAnalysis, type PushDevice, type PushOutcome, type WorkerRepository } from './proactiveHealthWorker';
-import { rawSqlTimeBindings, rawSqlTimestamp } from './proactiveHealthWorkerSupport';
-import { claimMorningSlot, compareDueCandidates, failOwnedMorningSlot, notificationClaimable, reservedSleepCapacity } from './proactiveHealthTransitions';
+import { rawSqlTimeBindings, rawSqlTimestamp, staleNotificationEvent } from './proactiveHealthWorkerSupport';
+import { claimMorningSlot, compareDueCandidates, failOwnedMorningSlot, freshnessWindowMs, notificationClaimable, notificationFresh, reservedSleepCapacity } from './proactiveHealthTransitions';
 
 const LEASE_MS = 5 * 60_000;
 type RawJob = { id: string; user_id: string; local_date: string; input_payload: unknown; retry_count: number; kind: 'workout' | 'sleep'; lease_token: string; result?: unknown; notification_state?: string; notification_lease_expires_at?: Date | null; notification_next_attempt_at?: Date };
@@ -71,6 +71,16 @@ export const workerRepository: WorkerRepository = {
     const [preference] = await db.select().from(schema.notification_preferences).where(eq(schema.notification_preferences.user_id, job.userId)).limit(1);
     const enabled = job.kind === 'workout' ? preference?.workout_notifications_enabled !== false : preference?.sleep_notifications_enabled !== false;
     if (!enabled) { await this.suppressNotification(job, now); return null; }
+    const freshness = notificationFresh({
+      kind: job.kind, input: job.input, localDate: job.localDate,
+      timezone: preference?.timezone ?? 'UTC', now,
+      windowMs: freshnessWindowMs(process.env),
+    });
+    if (!freshness.fresh) {
+      console.error(JSON.stringify(staleNotificationEvent(job, freshness)));
+      await this.suppressNotification(job, now);
+      return null;
+    }
     const t = table(job);
     const rows = await db.update(t).set({ notification_state: 'sending', notification_lease_token: token, notification_lease_expires_at: new Date(now.getTime() + LEASE_MS), updated_at: now }).where(and(eq(t.id, job.id), eq(t.status, 'ready'), sql`${t.notification_next_attempt_at} <= ${nowSql}`, sql`(${t.notification_state} = 'pending' or (${t.notification_state} = 'sending' and ${t.notification_lease_expires_at} <= ${nowSql}))`)).returning({ id: t.id });
     return rows.length ? token : null;

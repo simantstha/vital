@@ -5,6 +5,7 @@ import {
   type ProactiveAnalysisSource,
 } from './proactiveAnalysisGrounding';
 import { type CoachAnalysis } from './proactiveAnalysisSchema';
+import { formatAnalysisSource } from './proactiveAnalysisFormatting';
 
 export { AnalysisContentError, type AnalysisFailureCategory } from './proactiveAnalysisGrounding';
 
@@ -56,17 +57,20 @@ function analysisRequest(attempt: AnalysisAttempt, system: string, payload: unkn
 }
 
 /**
- * The model receives the real, unencoded source and is asked for qualitative prose only: the exact
+ * The model receives a pre-formatted source (see lib/proactiveAnalysisFormatting.ts — rounded,
+ * unit-labeled figures rather than raw floats) and is asked for qualitative prose only: the exact
  * figures are rendered deterministically by the client from the same stored input (see
  * lib/proactiveHealthHttp.ts), so the model never has to reproduce a number. One repair attempt
  * covers the occasional stray digit or malformed JSON; a second failure is reported and rethrown so
- * the caller can fall back.
+ * the caller can fall back. `args.source` itself is never mutated — see formatAnalysisSource's doc
+ * comment for why that matters.
  */
 export async function generateAnalysis(args: GenerateAnalysisArgs): Promise<CoachAnalysis> {
+  const formattedSource = formatAnalysisSource(args.source);
   let initialError: AnalysisContentError;
 
   try {
-    const initialText = await args.generate(analysisRequest('initial', PROACTIVE_ANALYSIS_SYSTEM_PROMPT, args.source));
+    const initialText = await args.generate(analysisRequest('initial', PROACTIVE_ANALYSIS_SYSTEM_PROMPT, formattedSource));
     return parseAnalysisText(initialText);
   } catch (error) {
     if (!(error instanceof AnalysisContentError)) throw error;
@@ -76,7 +80,7 @@ export async function generateAnalysis(args: GenerateAnalysisArgs): Promise<Coac
   args.report(analysisFailureEvent('initial', initialError.category, 'repair_started'));
   const repairPayload = {
     category: initialError.category,
-    request: args.source,
+    request: formattedSource,
   };
 
   try {
