@@ -34,7 +34,6 @@ struct AnalysisView: View {
                 }
                 GlassCard { VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
                     Text(value.result.headline).font(Theme.Typography.titleMedium)
-                    Text(value.result.shortInsight).foregroundStyle(Theme.Colors.textSecondary)
                     Text(value.result.narrative)
                 }}
                 analysisList("What stood out", value.result.observations)
@@ -48,11 +47,18 @@ struct AnalysisView: View {
         }
     }
 
+    /// Backend omits observations and nextSteps for routine sessions, so empty
+    /// arrays are expected — the card is hidden rather than shown empty.
+    @ViewBuilder
     private func analysisList(_ title: String, _ rows: [String]) -> some View {
-        GlassCard { VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-            Text(title).font(Theme.Typography.bodyMedium).fontWeight(.semibold)
-            ForEach(rows, id: \.self) { Text("• \($0)").foregroundStyle(Theme.Colors.textSecondary) }
-        }}
+        if rows.isEmpty {
+            EmptyView()
+        } else {
+            GlassCard { VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                Text(title).font(Theme.Typography.bodyMedium).fontWeight(.semibold)
+                ForEach(rows, id: \.self) { Text("• \($0)").foregroundStyle(Theme.Colors.textSecondary) }
+            }}
+        }
     }
 
     private func load() async {
