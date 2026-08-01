@@ -15,8 +15,12 @@ test('accepts only the unchanged CoachAnalysis shape and limits', () => {
   assert.deepEqual(parseCoachAnalysis(valid), valid);
   assert.throws(() => parseCoachAnalysis({ ...valid, invented: true }), /unexpected field/);
   assert.throws(() => parseCoachAnalysis({ ...valid, observations: [''] }), /observations/);
-  assert.throws(() => parseCoachAnalysis({ ...valid, headline: 'x'.repeat(121) }), /headline/);
-  assert.throws(() => parseCoachAnalysis({ ...valid, nextSteps: Array(6).fill('Rest') }), /nextSteps/);
+  assert.throws(() => parseCoachAnalysis({ ...valid, headline: 'x'.repeat(81) }), /headline/);
+  assert.throws(() => parseCoachAnalysis({ ...valid, nextSteps: Array(3).fill('Rest') }), /nextSteps/);
+});
+
+test('routine sessions may return empty observations and nextSteps', () => {
+  assert.deepEqual(parseCoachAnalysis({ ...valid, observations: [], nextSteps: [] }), { ...valid, observations: [], nextSteps: [] });
 });
 
 test('classifies every invalid output shape as a schema failure before the digit check', () => {

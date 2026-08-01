@@ -64,28 +64,34 @@ for (const [name, prompt] of [
     assert.doesNotMatch(prompt, /\p{N}/u);
     assert.match(prompt, /headline, shortInsight, and narrative must each be a non-empty JSON string/i);
     assert.match(prompt, /observations and nextSteps must each be a JSON array of non-empty JSON strings/i);
+    assert.match(prompt, /either array may itself be empty/i);
     assert.match(prompt, /no additional keys/i);
     assert.match(prompt, /JSON only/i);
     assert.match(prompt, /observational/i);
     assert.match(prompt, /non-diagnostic/i);
     assert.match(prompt, /metrics card shown directly above this text/i);
     assert.match(prompt, /redundant/i);
-    assert.match(prompt, /describe the session qualitatively/i);
-    assert.match(prompt, /faster or slower/i);
-    assert.match(prompt, /above or below baseline/i);
     assert.match(prompt, /never write a digit/i);
     assert.doesNotMatch(prompt, /evidence token/i);
     assert.doesNotMatch(prompt, /copy .*exactly/i);
+    // This phrasing produced metric-restating filler bullets ("longer than usual", "faster than
+    // your recent average") instead of suppressing the metric entirely — must not return.
+    assert.doesNotMatch(prompt, /describe the session qualitatively/i);
   });
 
-  test(`${name} prompt's content contract keeps the popup short and qualitative`, () => {
+  test(`${name} prompt's content contract keeps routine sessions terse and notable ones proportional`, () => {
     assert.match(prompt, /names? the workout type or sleep in the headline/i);
     assert.match(prompt, /a few words/i);
+    assert.match(prompt, /sentence case/i);
     assert.match(prompt, /single most notable aspect/i);
-    assert.match(prompt, /at most three sentences/i);
+    assert.match(prompt, /at most two sentences/i);
     assert.match(prompt, /this session only/i);
-    assert.match(prompt, /two or three observations qualitatively/i);
-    assert.match(prompt, /one or two next steps/i);
+    assert.match(prompt, /routine or notable/i);
+    assert.match(prompt, /at most two observations/i);
+    assert.match(prompt, /at most one next step/i);
+    assert.match(prompt, /an observation must earn its place/i);
+    assert.match(prompt, /never restate a point the narrative already made/i);
+    assert.match(prompt, /the way a coach speaks aloud/i);
     assert.match(prompt, /mention profile or goal context only when it changes what the user should do next/i);
     assert.doesNotMatch(prompt, /cite the session's key metrics/i);
     assert.doesNotMatch(prompt, /anchor each observation to a supplied metric/i);
