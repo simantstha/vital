@@ -156,10 +156,12 @@ private extension DietSheetView {
                             .fill(selected ? Theme.Colors.accentSoft : Theme.Colors.card)
                             .shadow(color: selected ? .clear : Theme.Colors.cardShadow, radius: 2, x: 0, y: 1)
                     )
+                    .animation(Theme.Motion.quick, value: vm.selectedSlot)
                 }
                 .buttonStyle(.plain)
             }
         }
+        .sensoryFeedback(Theme.Haptics.selection, trigger: vm.selectedSlot)
     }
 
     /// "Quick log · <slot>" renamed to reflect what actually feeds this list

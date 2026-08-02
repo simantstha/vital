@@ -18,7 +18,7 @@ struct DietBudgetCardView: View {
             } label: {
                 VitalCard { content }
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.vital)
         }
     }
 

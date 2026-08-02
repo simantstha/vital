@@ -29,7 +29,7 @@ struct PlanTimelineView: View {
                         } label: {
                             PlanRowView(item: item, onLogItem: onLogItem)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.vital)
                         .overlay(alignment: .top) {
                             if index > 0 {
                                 Rectangle()
@@ -118,6 +118,12 @@ private struct PlanRowView: View {
     let item: PlanItem
     let onLogItem: (PlanItem) -> Void
 
+    /// Flips on every "Log" pill tap — drives the commit haptic below.
+    /// `onLogItem` is a caller-owned closure with no observable state of its
+    /// own, so this local toggle is the state the tap "mutates" for
+    /// `.sensoryFeedback(trigger:)` purposes.
+    @State private var logTapped = false
+
     private var isNow: Bool { item.status == .now }
     private var isDone: Bool { item.status == .done }
     private var isSkipped: Bool { item.status == .skipped }
@@ -200,6 +206,7 @@ private struct PlanRowView: View {
                 .foregroundStyle(Theme.Colors.alert.opacity(0.7))
         } else if let actionLabel = item.actionLabel, isNow {
             Button {
+                logTapped.toggle()
                 onLogItem(item)
             } label: {
                 Text(actionLabel)
@@ -209,7 +216,8 @@ private struct PlanRowView: View {
                     .padding(.vertical, Theme.Spacing.sm)
                     .background(Capsule().fill(Theme.Colors.textPrimary))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.vital(scale: 1.0))
+            .sensoryFeedback(Theme.Haptics.commit, trigger: logTapped)
         } else {
             Text(item.timeLabel)
                 .font(.system(size: 12))
