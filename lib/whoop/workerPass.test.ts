@@ -50,13 +50,10 @@ test('selectDueWhoopConnections treats exactly one hour as due (>=)', () => {
 
 // ─── runWhoopWorkerPass (orchestration, injected deps) ───────────────────────
 
-function makeDeps(connections: WhoopConnectionForSync[], runSyncImpl: WhoopWorkerPassDeps['runSync']): WhoopWorkerPassDeps & { markedSynced: Array<{ connectionId: string; syncedAt: Date }> } {
-  const markedSynced: Array<{ connectionId: string; syncedAt: Date }> = [];
+function makeDeps(connections: WhoopConnectionForSync[], runSyncImpl: WhoopWorkerPassDeps['runSync']): WhoopWorkerPassDeps {
   return {
     listActiveConnections: async () => connections,
     runSync: runSyncImpl,
-    markSynced: async (connectionId, syncedAt) => { markedSynced.push({ connectionId, syncedAt }); },
-    markedSynced,
   };
 }
 
@@ -72,7 +69,6 @@ test('runWhoopWorkerPass syncs every due connection one at a time and marks each
   assert.equal(result.skipped.length, 0);
   assert.equal(result.aborted, false);
   assert.deepEqual(syncCalls.sort(), ['conn-1', 'conn-2']);
-  assert.equal(deps.markedSynced.length, 2);
 });
 
 test('runWhoopWorkerPass passes a trailing 48h window ending at `now`', async () => {
@@ -119,7 +115,6 @@ test('runWhoopWorkerPass aborts the whole pass on a WhoopApiError (e.g. 429) and
   assert.equal(result.aborted, true);
   assert.deepEqual(result.synced, []);
   assert.deepEqual(result.skipped, []);
-  assert.equal(deps.markedSynced.length, 0);
 });
 
 test('runWhoopWorkerPass aborts on an unexpected error too (not just WhoopApiError)', async () => {
@@ -161,7 +156,6 @@ test('createWhoopWorkerRepository queries active connections due for sync via an
         };
       },
     }),
-    update: () => ({ set: () => ({ where: async () => {} }) }),
   };
 
   const repo = createWhoopWorkerRepository(fakeDb, schema);
@@ -171,25 +165,4 @@ test('createWhoopWorkerRepository queries active connections due for sync via an
   assert.equal(seenJoinTable, schema.users);
   assert.deepEqual(connections, [{ id: 'conn-1', userId: 'user-1', timezone: 'America/Chicago', status: 'active', lastSyncedAt: null }]);
   void now;
-});
-
-test('createWhoopWorkerRepository.markSynced updates last_synced_at for the given connection', async () => {
-  const updateCalls: Array<{ table: unknown; set: Record<string, unknown> }> = [];
-  const fakeDb = {
-    select: () => ({ from: () => ({ innerJoin: () => ({ where: async () => [] }) }) }),
-    update: (table: unknown) => ({
-      set: (set: Record<string, unknown>) => {
-        updateCalls.push({ table, set });
-        return { where: async () => {} };
-      },
-    }),
-  };
-
-  const repo = createWhoopWorkerRepository(fakeDb, schema);
-  const syncedAt = new Date('2026-07-19T12:00:00.000Z');
-  await repo.markSynced('conn-1', syncedAt);
-
-  assert.equal(updateCalls.length, 1);
-  assert.equal(updateCalls[0].table, schema.whoop_connections);
-  assert.equal(updateCalls[0].set.last_synced_at, syncedAt);
 });

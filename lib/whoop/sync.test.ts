@@ -33,6 +33,7 @@ class FakeSyncRepository implements WhoopSyncRepository {
   insertCalls: Array<{ userId: string; events: unknown[] }> = [];
   existingWorkoutIds = new Set<string>();
   listCalls: Array<{ userId: string; windowStart: Date; windowEnd: Date; whoopIds: string[] }> = [];
+  markSyncedCalls: Array<{ connectionId: string; syncedAt: Date }> = [];
 
   async upsertDailyMetrics(userId: string, rows: Array<{ date: string; metric: string; value: number; payload: unknown }>): Promise<void> {
     this.upsertCalls.push({ userId, rows });
@@ -43,6 +44,9 @@ class FakeSyncRepository implements WhoopSyncRepository {
   }
   async insertWorkoutEvents(userId: string, events: Array<{ timestamp: Date; payload: unknown }>): Promise<void> {
     this.insertCalls.push({ userId, events });
+  }
+  async markSynced(connectionId: string, syncedAt: Date): Promise<void> {
+    this.markSyncedCalls.push({ connectionId, syncedAt });
   }
 }
 
@@ -188,6 +192,54 @@ test('runWhoopSync never calls recomputeBaselines when nothing was mapped', asyn
   assert.deepEqual(result.touchedMetrics, []);
   assert.equal(repo.upsertCalls.length, 0);
   assert.equal(recomputeCalls.length, 0);
+});
+
+test('runWhoopSync stamps last_synced_at with windowEnd on success', async (t) => {
+  recomputeCalls.length = 0;
+  const { runWhoopSync } = await syncModule;
+
+  t.mock.method(globalThis, 'fetch', async () => jsonResponse({ records: [], next_token: null }));
+
+  const tokenStore = new FakeTokenStore({
+    id: 'conn-1', access_token: 'access-1', refresh_token: 'refresh-1',
+    expires_at: new Date(Date.now() + 60 * 60_000), status: 'active',
+  });
+  const repo = new FakeSyncRepository();
+
+  await runWhoopSync(
+    { connectionId: 'conn-1', userId: 'user-1', timezone: 'UTC' },
+    tokenStore,
+    repo,
+    windowStart,
+    windowEnd,
+  );
+
+  assert.equal(repo.markSyncedCalls.length, 1);
+  assert.equal(repo.markSyncedCalls[0].connectionId, 'conn-1');
+  assert.equal(repo.markSyncedCalls[0].syncedAt.getTime(), windowEnd.getTime());
+});
+
+test('runWhoopSync does not call markSynced when the sync throws', async (t) => {
+  recomputeCalls.length = 0;
+  const { runWhoopSync } = await syncModule;
+
+  t.mock.method(globalThis, 'fetch', async () => { throw new Error('network exploded'); });
+
+  const tokenStore = new FakeTokenStore({
+    id: 'conn-1', access_token: 'access-1', refresh_token: 'refresh-1',
+    expires_at: new Date(Date.now() + 60 * 60_000), status: 'active',
+  });
+  const repo = new FakeSyncRepository();
+
+  await assert.rejects(() => runWhoopSync(
+    { connectionId: 'conn-1', userId: 'user-1', timezone: 'UTC' },
+    tokenStore,
+    repo,
+    windowStart,
+    windowEnd,
+  ));
+
+  assert.equal(repo.markSyncedCalls.length, 0);
 });
 
 // ─── createWhoopSyncRepository.upsertDailyMetrics (Drizzle-backed repository) ─

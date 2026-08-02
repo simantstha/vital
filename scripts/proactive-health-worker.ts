@@ -77,7 +77,6 @@ async function tick(reportStage: (stage: WorkerStage) => void): Promise<void> {
   const whoopResult = await runWhoopWorkerPass(now, {
     listActiveConnections: () => whoopWorkerRepository.listActiveConnections(),
     runSync: (target, windowStart, windowEnd) => runWhoopSync(target, whoopTokenStore, whoopSyncRepository, windowStart, windowEnd),
-    markSynced: (connectionId, syncedAt) => whoopWorkerRepository.markSynced(connectionId, syncedAt),
   });
   if (whoopResult.aborted) {
     console.error(JSON.stringify({ event: 'whoop_worker_pass_aborted', synced: whoopResult.synced.length, skipped: whoopResult.skipped.length }));

@@ -12,6 +12,10 @@
  * any needed token refresh through withValidToken), maps + upserts via
  * syncWhoopWindow(), then recomputes baselines for whatever metrics were
  * touched — the same recomputeBaselines() call POST /api/ingest/daily makes.
+ * On success it also stamps `whoop_connections.last_synced_at = windowEnd` —
+ * this is the one shared success path both the webhook handler and the
+ * hourly reconciliation pass (lib/whoop/workerPass.ts) funnel through, so a
+ * healthy webhook keeps the timestamp fresh without waiting for the pass.
  *
  * `createWhoopSyncRepository()` is the Drizzle-backed WhoopSyncRepository for
  * production use (Task 3/5 wiring, not part of this stage) — takes
@@ -37,6 +41,7 @@ export interface WhoopSyncRepository {
   /** Scoped to [windowStart, windowEnd] — matches events_user_type_timestamp_idx. */
   listExistingWorkoutIds(userId: string, windowStart: Date, windowEnd: Date, whoopIds: string[]): Promise<Set<string>>;
   insertWorkoutEvents(userId: string, events: Array<{ timestamp: Date; payload: unknown }>): Promise<void>;
+  markSynced(connectionId: string, syncedAt: Date): Promise<void>;
 }
 
 export interface WhoopSyncResult {
@@ -123,6 +128,8 @@ export async function runWhoopSync(
     await recomputeBaselines(target.userId, result.touchedMetrics);
   }
 
+  await repository.markSynced(target.connectionId, windowEnd);
+
   return result;
 }
 
@@ -140,6 +147,11 @@ interface DrizzleWhoopSyncDatabase {
   select(fields: Record<string, unknown>): {
     from(table: unknown): {
       where(predicate: unknown): Promise<Array<Record<string, unknown>>>;
+    };
+  };
+  update(table: unknown): {
+    set(values: Record<string, unknown>): {
+      where(predicate: unknown): Promise<unknown>;
     };
   };
 }
@@ -204,6 +216,9 @@ export function createWhoopSyncRepository(database: unknown, schema: typeof Whoo
         payload: e.payload,
         source: 'whoop',
       })));
+    },
+    async markSynced(connectionId, syncedAt) {
+      await db.update(schema.whoop_connections).set({ last_synced_at: syncedAt, updated_at: new Date() }).where(eq(schema.whoop_connections.id, connectionId));
     },
   };
 }
