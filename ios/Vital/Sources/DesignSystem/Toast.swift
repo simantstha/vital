@@ -40,13 +40,13 @@ private struct ToastModifier: ViewModifier {
                         .allowsHitTesting(false)
                         .task(id: message) {
                             try? await Task.sleep(nanoseconds: 2_400_000_000)
-                            withAnimation(.easeOut(duration: 0.2)) {
+                            withAnimation(Theme.Motion.exit) {
                                 self.message = nil
                             }
                         }
                 }
             }
-            .animation(.spring(response: 0.35, dampingFraction: 0.8), value: message)
+            .animation(Theme.Motion.snap, value: message)
     }
 }
 

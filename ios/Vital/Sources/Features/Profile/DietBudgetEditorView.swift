@@ -98,7 +98,7 @@ struct DietBudgetEditorView: View {
                 .foregroundStyle(Theme.Colors.textSecondary)
         }
         .contentTransition(.numericText())
-        .animation(.snappy, value: vm.targetKcal)
+        .animation(Theme.Motion.numeric, value: vm.targetKcal)
     }
 
     private func stepButton(_ symbol: String, action: @escaping () -> Void) -> some View {

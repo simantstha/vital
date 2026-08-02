@@ -152,7 +152,7 @@ private extension LogMealView {
                     )
                 }
                 .buttonStyle(.plain)
-                .animation(.easeInOut(duration: 0.15), value: vm.selectedMethod)
+                .animation(Theme.Motion.micro, value: vm.selectedMethod)
             }
         }
         .padding(4)
@@ -506,8 +506,7 @@ private extension LogMealView {
                         .buttonStyle(.plain)
                         .disabled(vm.isTranscribing)
                         .scaleEffect(vm.transcriber.isRecording ? 1.05 : 1.0)
-                        .animation(.easeInOut(duration: 0.4).repeatForever(autoreverses: true),
-                                   value: vm.transcriber.isRecording)
+                        .ambient(Theme.Motion.pulse, value: vm.transcriber.isRecording)
 
                         if vm.isTranscribing {
                             HStack(spacing: Theme.Spacing.sm) {
@@ -703,7 +702,7 @@ private extension LogMealView {
             }
         }
         .transition(.move(edge: .bottom).combined(with: .opacity))
-        .animation(.spring(response: 0.4, dampingFraction: 0.8), value: vm.showConfirmCard)
+        .animation(Theme.Motion.settle, value: vm.showConfirmCard)
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -843,7 +842,7 @@ private extension LogMealView {
                 // Reuse CoachBubble from the design system
                 CoachBubble(message: reaction)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
-                    .animation(.spring(response: 0.5, dampingFraction: 0.8), value: vm.isLogged)
+                    .animation(Theme.Motion.arrive, value: vm.isLogged)
             }
 
             Button {
