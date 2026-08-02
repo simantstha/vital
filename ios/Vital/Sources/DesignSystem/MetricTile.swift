@@ -25,6 +25,7 @@ struct MetricTile: View {
                         .foregroundStyle(Theme.Colors.textPrimary)
                         .minimumScaleFactor(0.7)
                         .lineLimit(1)
+                        .contentTransition(.numericText())
 
                     if !unit.isEmpty {
                         Text(unit)

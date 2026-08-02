@@ -43,33 +43,37 @@ struct LogsView: View {
                             Spacer()
                         }
                         .padding(.top, 60)
+                        .motionTransition(.fade)
                     } else {
-                        if let errorMessage = vm.errorMessage {
-                            ErrorCard(title: "Couldn't load your logs", message: errorMessage) {
-                                Task {
-                                    vm.errorMessage = nil
-                                    await vm.load()
+                        Group {
+                            if let errorMessage = vm.errorMessage {
+                                ErrorCard(title: "Couldn't load your logs", message: errorMessage) {
+                                    Task {
+                                        vm.errorMessage = nil
+                                        await vm.load()
+                                    }
                                 }
-                            }
-                            .padding(.horizontal, Theme.Spacing.xl)
-                            .padding(.bottom, Theme.Spacing.lg)
-                        }
-
-                        if let day = currentDay {
-                            pagerRow(day)
-
-                            if let data = vm.dietDataByDay[day.dayKey] {
-                                DietBudgetCardView(
-                                    data: data,
-                                    readOnly: vm.selectedIndex != 0,
-                                    onTap: vm.selectedIndex == 0 ? { showDietSheet = true } : nil
-                                )
                                 .padding(.horizontal, Theme.Spacing.xl)
                                 .padding(.bottom, Theme.Spacing.lg)
                             }
 
-                            entriesSection(day)
+                            if let day = currentDay {
+                                pagerRow(day)
+
+                                if let data = vm.dietDataByDay[day.dayKey] {
+                                    DietBudgetCardView(
+                                        data: data,
+                                        readOnly: vm.selectedIndex != 0,
+                                        onTap: vm.selectedIndex == 0 ? { showDietSheet = true } : nil
+                                    )
+                                    .padding(.horizontal, Theme.Spacing.xl)
+                                    .padding(.bottom, Theme.Spacing.lg)
+                                }
+
+                                entriesSection(day)
+                            }
                         }
+                        .motionTransition(.fade)
                     }
                 }
                 .padding(.bottom, 40)

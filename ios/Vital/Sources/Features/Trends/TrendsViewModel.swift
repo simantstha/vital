@@ -331,7 +331,7 @@ final class TrendsViewModel: ObservableObject {
         let requestedMetric = selectedMetric
         let requestedDays = selectedDays
 
-        isLoading = true
+        withAnimation(Theme.Motion.appear) { isLoading = true }
         errorMessage = nil
         do {
             let response = try await apiClient.fetchTrends(
@@ -343,13 +343,14 @@ final class TrendsViewModel: ObservableObject {
                 guard let date = Self.dateFormatter.date(from: pt.date) else { return nil }
                 return ChartPoint(date: date, value: pt.value)
             }
-            loaded = LoadedSeries(metric: requestedMetric, days: requestedDays, points: points)
+            let newSeries = LoadedSeries(metric: requestedMetric, days: requestedDays, points: points)
+            withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) { loaded = newSeries }
         } catch {
             guard generation == loadGeneration else { return } // superseded by a newer tap
             errorMessage = error.localizedDescription
             loaded = nil
         }
-        isLoading = false
+        withAnimation(Theme.Motion.appear) { isLoading = false }
     }
 
     // MARK: - Load (Last 7 days summary)
