@@ -47,6 +47,23 @@ struct ChartPoint: Identifiable {
     let value: Double
 }
 
+/// A fully-loaded explorer series: the metric/range it was fetched for,
+/// bundled with its points so the two can never drift apart in the view.
+/// Replaces a bare `points` array, which let a stale metric's numbers render
+/// under a just-tapped metric's label mid-load.
+struct LoadedSeries: Equatable {
+    let metric: TrendMetric
+    let days: Int
+    let points: [ChartPoint]
+
+    static func == (lhs: LoadedSeries, rhs: LoadedSeries) -> Bool {
+        lhs.metric == rhs.metric
+            && lhs.days == rhs.days
+            && lhs.points.map(\.value) == rhs.points.map(\.value)
+            && lhs.points.map(\.date) == rhs.points.map(\.date)
+    }
+}
+
 // MARK: - Weekly summary — pure helpers
 
 /// Pure, network-free logic behind the "Last 7 days" summary cards (Sleep,
@@ -214,9 +231,17 @@ final class TrendsViewModel: ObservableObject {
 
     @Published var selectedMetric: TrendMetric = .hrv
     @Published var selectedDays: Int = 14
-    @Published var points: [ChartPoint] = []
+    /// The metric/range a completed `load()` actually produced, bundled with
+    /// its points. Never set from a response whose metric/days no longer
+    /// match what was requested at call time (see `load()`), so the chart and
+    /// header can't show one metric's numbers under another's label.
+    @Published private(set) var loaded: LoadedSeries? = nil
     @Published var isLoading = false
     @Published var errorMessage: String? = nil
+
+    /// Derived from `loaded` for the chart body / stats math below, which are
+    /// otherwise unchanged by this refactor.
+    var points: [ChartPoint] { loaded?.points ?? [] }
 
     // MARK: Summary state (Last 7 days)
 
@@ -228,7 +253,22 @@ final class TrendsViewModel: ObservableObject {
     @Published var isLoadingSummary = false
     @Published var summaryErrorMessage: String? = nil
 
-    private let apiClient = APIClient.shared
+    private let apiClient: TrendsAPIProviding
+    /// `loadSummary()` also needs `fetchProfile()`, which is outside the
+    /// minimal `TrendsAPIProviding` seam (that protocol exists solely to let
+    /// tests inject a fake for `load()`/`fetchTrends`). Kept as a direct
+    /// `APIClient.shared` reference rather than widening the protocol.
+    private let profileClient = APIClient.shared
+
+    /// Bumped at the top of every `load()` call; a response is only applied
+    /// if its generation is still the newest one in flight. Guards against a
+    /// slow first response (e.g. metric A) landing after a faster second one
+    /// (metric B) and overwriting it with stale data.
+    private var loadGeneration = 0
+
+    init(apiClient: TrendsAPIProviding = APIClient.shared) {
+        self.apiClient = apiClient
+    }
 
     // MARK: - Computed stats (explorer)
 
@@ -281,19 +321,33 @@ final class TrendsViewModel: ObservableObject {
     // MARK: - Load (explorer — unchanged apart from the .rhr case flowing through)
 
     func load() async {
+        loadGeneration += 1
+        let generation = loadGeneration
+
+        // Capture the tapped metric/range before the `await` below — if the
+        // user taps again before this call returns, `selectedMetric`/
+        // `selectedDays` will have already moved on, and the response must
+        // still be labeled with what was actually requested here.
+        let requestedMetric = selectedMetric
+        let requestedDays = selectedDays
+
         isLoading = true
         errorMessage = nil
         do {
             let response = try await apiClient.fetchTrends(
-                metric: selectedMetric.rawValue,
-                days: selectedDays
+                metric: requestedMetric.rawValue,
+                days: requestedDays
             )
-            points = response.points.compactMap { pt in
+            guard generation == loadGeneration else { return } // superseded by a newer tap
+            let points = response.points.compactMap { pt -> ChartPoint? in
                 guard let date = Self.dateFormatter.date(from: pt.date) else { return nil }
                 return ChartPoint(date: date, value: pt.value)
             }
+            loaded = LoadedSeries(metric: requestedMetric, days: requestedDays, points: points)
         } catch {
+            guard generation == loadGeneration else { return } // superseded by a newer tap
             errorMessage = error.localizedDescription
+            loaded = nil
         }
         isLoading = false
     }
@@ -308,7 +362,7 @@ final class TrendsViewModel: ObservableObject {
         // alongside the trend requests but is deliberately fail-soft — a
         // profile error must never blank all three charts. Falls back to the
         // 480min/8h default.
-        async let profileResp = try? await apiClient.fetchProfile()
+        async let profileResp = try? await profileClient.fetchProfile()
 
         do {
             async let sleepResp = apiClient.fetchTrends(metric: "sleep", days: 7)
@@ -333,7 +387,13 @@ final class TrendsViewModel: ObservableObject {
     // MARK: - Helpers
 
     private func formatValue(_ v: Double) -> String {
-        switch selectedMetric {
+        // Format against the metric `points` actually belongs to (not
+        // necessarily `selectedMetric`, which may have already moved on to
+        // the user's next tap while this load is still in flight) — the view
+        // additionally gates display of these strings on `loaded` matching
+        // the current selection, but this keeps the value's own formatting
+        // honest about which metric it is.
+        switch loaded?.metric ?? selectedMetric {
         case .hrv, .steps, .rhr:
             return "\(Int(v.rounded()))"
         case .sleep, .weight, .vo2, .distance:

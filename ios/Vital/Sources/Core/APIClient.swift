@@ -1309,6 +1309,13 @@ struct TrendsResponse: Decodable {
     let calibration: CalibrationStatus?
 }
 
+@MainActor
+protocol TrendsAPIProviding {
+    func fetchTrends(metric: String, days: Int) async throws -> TrendsResponse
+}
+
+extension APIClient: TrendsAPIProviding {}
+
 // MARK: - Plan types
 
 /// Wire shape of a `/api/plan` row. `status` is server-tracked as

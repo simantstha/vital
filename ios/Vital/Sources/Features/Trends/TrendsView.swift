@@ -211,20 +211,30 @@ private extension TrendsView {
 
     // MARK: - Chart card
 
+    /// True once `vm.loaded` reflects the metric/range currently selected —
+    /// false during the window between a tap and its `load()` completing (or
+    /// after that load fails). The hero value, unit, delta chip, and every
+    /// number in `statsRow` must only render while this is true: otherwise
+    /// they'd still be showing the *previous* selection's numbers under the
+    /// metric name the user just tapped.
+    var isShowingCurrentSelection: Bool {
+        vm.loaded?.metric == vm.selectedMetric && vm.loaded?.days == vm.selectedDays
+    }
+
     var chartCard: some View {
         VitalCard {
             VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
                 HStack(alignment: .lastTextBaseline) {
                     VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
-                        Text(vm.currentValue)
+                        Text(isShowingCurrentSelection ? vm.currentValue : "--")
                             .font(Theme.Typography.numericHero(36))
                             .foregroundStyle(Theme.Colors.textPrimary)
-                        Text(vm.selectedMetric.unit)
+                        Text(isShowingCurrentSelection ? vm.selectedMetric.unit : "--")
                             .font(Theme.Typography.labelSmall)
                             .foregroundStyle(Theme.Colors.textSecondary)
                     }
                     Spacer()
-                    if let pct = vm.trendDeltaPct {
+                    if isShowingCurrentSelection, let pct = vm.trendDeltaPct {
                         trendChip(pct)
                     }
                     Text(vm.selectedMetric.displayName)
@@ -334,9 +344,15 @@ private extension TrendsView {
 
     var statsRow: some View {
         HStack(spacing: Theme.Spacing.sm) {
-            StatBadge(label: "Latest",  value: vm.currentValue + " " + vm.selectedMetric.unit)
-            StatBadge(label: "Average", value: vm.averageValue + " " + vm.selectedMetric.unit)
-            StatBadge(label: "Range",   value: vm.rangeLabel.isEmpty ? "--" : vm.rangeLabel)
+            if isShowingCurrentSelection {
+                StatBadge(label: "Latest",  value: vm.currentValue + " " + vm.selectedMetric.unit)
+                StatBadge(label: "Average", value: vm.averageValue + " " + vm.selectedMetric.unit)
+                StatBadge(label: "Range",   value: vm.rangeLabel.isEmpty ? "--" : vm.rangeLabel)
+            } else {
+                StatBadge(label: "Latest",  value: "--")
+                StatBadge(label: "Average", value: "--")
+                StatBadge(label: "Range",   value: "--")
+            }
         }
     }
 
