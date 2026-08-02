@@ -16,6 +16,12 @@ struct LogsView: View {
     @StateObject private var vm = LogsViewModel()
     @State private var showDietSheet = false
     @State private var analysisTarget: AnalysisSheetTarget?
+    /// Bumped only inside an *enabled* pager button's own action — never
+    /// bound to `vm.selectedIndex` directly, since `LogsViewModel.load()`
+    /// resets that to 0 on every pull-to-refresh, which would fire a
+    /// spurious haptic. Disabled buttons don't invoke their action at all,
+    /// so the ends of the 7-day range stay silent for free.
+    @State private var pagerTapTick = 0
 
     private var currentDay: LogDay? {
         vm.days.indices.contains(vm.selectedIndex) ? vm.days[vm.selectedIndex] : nil
@@ -134,10 +140,14 @@ private extension LogsView {
         }
         .padding(.horizontal, Theme.Spacing.xl)
         .padding(.bottom, Theme.Spacing.lg)
+        .sensoryFeedback(Theme.Haptics.selection, trigger: pagerTapTick)
     }
 
     func pagerButton(systemName: String, enabled: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+        Button {
+            pagerTapTick += 1
+            action()
+        } label: {
             ZStack {
                 Circle()
                     .fill(enabled ? Theme.Colors.card : Theme.Colors.glassFill)
@@ -148,7 +158,7 @@ private extension LogsView {
                     .foregroundStyle(enabled ? Theme.Colors.textPrimary : Theme.Colors.textTertiary)
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.vital(scale: 0.94))
         .disabled(!enabled)
     }
 
