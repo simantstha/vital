@@ -41,6 +41,7 @@ struct AddPlanItemSheet: View {
     @State private var type: ItemType = .meal
     @State private var title: String = ""
     @State private var time: Date = Self.defaultTime
+    @State private var timePillTapTick = 0
     @FocusState private var titleFocused: Bool
 
     private static var defaultTime: Date {
@@ -106,10 +107,12 @@ struct AddPlanItemSheet: View {
                             .fill(selected ? Theme.Colors.accentSoft : Theme.Colors.card)
                             .shadow(color: selected ? .clear : Theme.Colors.cardShadow, radius: 2, x: 0, y: 1)
                     )
+                    .animation(Theme.Motion.quick, value: type)
                 }
                 .buttonStyle(.plain)
             }
         }
+        .sensoryFeedback(Theme.Haptics.selection, trigger: type)
     }
 
     private var timeRow: some View {
@@ -134,6 +137,7 @@ struct AddPlanItemSheet: View {
                 quickTimePill(hour: hour)
             }
         }
+        .sensoryFeedback(Theme.Haptics.selection, trigger: timePillTapTick)
     }
 
     private func quickTimePill(hour: Int) -> some View {
@@ -146,6 +150,7 @@ struct AddPlanItemSheet: View {
             comps.hour = hour
             comps.minute = 0
             time = Calendar.current.date(from: comps) ?? time
+            timePillTapTick += 1
         } label: {
             Text(label)
                 .font(.system(size: 13, weight: .semibold))
@@ -153,6 +158,7 @@ struct AddPlanItemSheet: View {
                 .padding(.horizontal, Theme.Spacing.md)
                 .padding(.vertical, Theme.Spacing.sm + 2)
                 .background(Capsule().fill(isSelected ? Theme.Colors.accentSoft : Theme.Colors.glassFill))
+                .animation(Theme.Motion.quick, value: time)
         }
         .buttonStyle(.plain)
     }

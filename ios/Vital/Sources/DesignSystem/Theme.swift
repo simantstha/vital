@@ -276,6 +276,30 @@ private struct MotionTransitionModifier: ViewModifier {
     }
 }
 
+/// Press feedback for large tappable cards/rows where `.buttonStyle(.plain)`
+/// gives zero visual response to a touch. Scales and dims the label while
+/// pressed, animated with `Theme.Motion.micro`.
+///
+/// Do NOT apply this inside a `.glassEffect` container — scaling a glass view
+/// forces a backdrop blur re-render every frame.
+struct VitalButtonStyle: ButtonStyle {
+    var scale: CGFloat = 0.97
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? scale : 1.0)
+            .opacity(configuration.isPressed ? 0.85 : 1.0)
+            .animation(Theme.Motion.micro, value: configuration.isPressed)
+    }
+}
+
+extension ButtonStyle where Self == VitalButtonStyle {
+    /// Default press feedback — 0.97 scale + opacity dim.
+    static var vital: VitalButtonStyle { VitalButtonStyle() }
+    /// Press feedback with a custom scale (e.g. smaller controls want a
+    /// subtler 0.94, pills nested in an already-scaling card want 1.0).
+    static func vital(scale: CGFloat) -> VitalButtonStyle { VitalButtonStyle(scale: scale) }
+}
+
 extension View {
     /// Applies `Theme.Typography.screenTitle` with the mock's tight tracking.
     func screenTitleStyle() -> some View {

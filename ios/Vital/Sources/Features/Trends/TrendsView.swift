@@ -202,11 +202,13 @@ private extension TrendsView {
                             Capsule()
                                 .fill(vm.selectedDays == days ? Theme.Colors.accentSoft : Color.clear)
                         )
+                        .animation(Theme.Motion.quick, value: vm.selectedDays)
                 }
                 .buttonStyle(.plain)
             }
             Spacer()
         }
+        .sensoryFeedback(Theme.Haptics.selection, trigger: vm.selectedDays)
     }
 
     // MARK: - Chart card
