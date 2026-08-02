@@ -318,3 +318,122 @@ final class TrendsSummaryTests: XCTestCase {
         XCTAssertEqual(TrendsSummary.vitalsNote([47, 47, 48, 48, 49, 49, 49]), "7-day")
     }
 }
+
+// MARK: - TrendsViewModel.load() — metric/response integrity
+
+/// Regression coverage for the mislabeled-metric bug: `selectedMetric` used
+/// to change synchronously on tap while `points` only updated after the
+/// network round-trip, so the header briefly (or, on error, indefinitely)
+/// showed one metric's numbers under another metric's name. `load()` now
+/// binds points to the metric/days that produced them via `LoadedSeries`,
+/// and a generation counter drops any response superseded by a later tap.
+@MainActor
+final class TrendsViewModelLoadTests: XCTestCase {
+
+    private func point(_ dateKey: String, _ value: Double) -> TrendPoint {
+        TrendPoint(date: dateKey, value: value)
+    }
+
+    func testSuccessfulLoadExposesLoadedMatchingTheRequestedMetric() async {
+        let fake = FakeTrendsAPI()
+        fake.responses["steps"] = TrendsResponse(
+            metric: "steps",
+            points: [point("2026-07-01", 4200), point("2026-07-02", 5300)],
+            calibration: nil
+        )
+        let vm = TrendsViewModel(apiClient: fake)
+        vm.selectedMetric = .steps
+        vm.selectedDays = 30
+
+        await vm.load()
+
+        XCTAssertEqual(vm.loaded?.metric, .steps)
+        XCTAssertEqual(vm.loaded?.days, 30)
+        XCTAssertEqual(vm.loaded?.points.count, 2)
+        XCTAssertFalse(vm.isLoading)
+        XCTAssertNil(vm.errorMessage)
+    }
+
+    func testFailedLoadClearsLoaded() async {
+        let fake = FakeTrendsAPI()
+        fake.responses["hrv"] = TrendsResponse(
+            metric: "hrv",
+            points: [point("2026-07-01", 55)],
+            calibration: nil
+        )
+        let vm = TrendsViewModel(apiClient: fake)
+        vm.selectedMetric = .hrv
+        vm.selectedDays = 14
+        await vm.load()
+        XCTAssertNotNil(vm.loaded, "precondition: first load should have succeeded")
+
+        fake.error = TestFailure.unavailable
+        await vm.load()
+
+        XCTAssertNil(vm.loaded)
+        XCTAssertNotNil(vm.errorMessage)
+    }
+
+    /// Two taps in quick succession — a slow first response for the metric
+    /// tapped first must not land after (and overwrite) a faster response
+    /// for the metric tapped second.
+    func testSlowFirstResponseDoesNotOverwriteNewerSecondResponse() async {
+        let fake = FakeTrendsAPI()
+        fake.responses["hrv"] = TrendsResponse(
+            metric: "hrv",
+            points: [point("2026-07-01", 55)],
+            calibration: nil
+        )
+        fake.responses["rhr"] = TrendsResponse(
+            metric: "rhr",
+            points: [point("2026-07-01", 60)],
+            calibration: nil
+        )
+        fake.delayedMetric = "hrv"
+
+        let vm = TrendsViewModel(apiClient: fake)
+        vm.selectedMetric = .hrv
+        vm.selectedDays = 14
+
+        let firstLoad = Task { await vm.load() }
+        await Task.yield() // let the first load reach the fetchTrends("hrv") await
+
+        vm.selectedMetric = .rhr
+        await vm.load() // resolves immediately — not the delayed metric
+
+        XCTAssertEqual(vm.loaded?.metric, .rhr, "the faster, newer response should win")
+
+        fake.release() // now let the stale hrv response land
+        await firstLoad.value
+
+        XCTAssertEqual(vm.loaded?.metric, .rhr, "a superseded response must not overwrite the newer one")
+        XCTAssertEqual(vm.loaded?.points.first?.value, 60)
+    }
+}
+
+private enum TestFailure: Error {
+    case unavailable
+}
+
+@MainActor
+private final class FakeTrendsAPI: TrendsAPIProviding {
+    var responses: [String: TrendsResponse] = [:]
+    var error: Error?
+    /// When set, `fetchTrends` for this metric suspends until `release()` is
+    /// called, so tests can control response ordering deterministically.
+    var delayedMetric: String?
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func fetchTrends(metric: String, days: Int) async throws -> TrendsResponse {
+        if metric == delayedMetric {
+            await withCheckedContinuation { continuation = $0 }
+        }
+        if let error { throw error }
+        return responses[metric] ?? TrendsResponse(metric: metric, points: [], calibration: nil)
+    }
+
+    func release() {
+        continuation?.resume()
+        continuation = nil
+    }
+}
