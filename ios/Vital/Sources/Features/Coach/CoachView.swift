@@ -197,7 +197,7 @@ struct CoachView: View {
 
     private func scrollToBottomIfPinned(_ proxy: ScrollViewProxy) {
         guard isScrolledNearBottom else { return }
-        withAnimation(.easeOut(duration: 0.2)) {
+        withAnimation(Theme.Motion.exit) {
             proxy.scrollTo("bottom", anchor: .bottom)
         }
     }
@@ -213,10 +213,7 @@ struct CoachView: View {
                 .ignoresSafeArea()
                 .allowsHitTesting(false)
                 .onAppear { specialistGlowExpanded = true }
-                .animation(
-                    reduceMotion ? nil : .easeInOut(duration: 1.8).repeatForever(autoreverses: true),
-                    value: specialistGlowExpanded
-                )
+                .ambient(Theme.Motion.breathe, value: specialistGlowExpanded)
         }
     }
 
@@ -324,7 +321,7 @@ struct CoachView: View {
                         )
                 }
                 .disabled(!canSend)
-                .animation(.easeInOut(duration: 0.15), value: vm.isStreaming)
+                .animation(Theme.Motion.micro, value: vm.isStreaming)
             }
             .padding(.horizontal, Theme.Spacing.md)
             .padding(.vertical, Theme.Spacing.sm)
@@ -433,7 +430,7 @@ struct CoachView: View {
         }
         .buttonStyle(.plain)
         .disabled((vm.isStreaming && !vm.transcriber.isRecording) || vm.isTranscribing)
-        .animation(.easeInOut(duration: 0.4).repeatForever(autoreverses: true), value: vm.transcriber.isRecording)
+        .ambient(Theme.Motion.pulse, value: vm.transcriber.isRecording)
     }
 
     private var showMicPermissionHint: Bool {
@@ -917,22 +914,24 @@ private struct ToolCallActivityView: View {
 // MARK: - Typing indicator
 
 private struct TypingIndicatorView: View {
-    @State private var phase: Int = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack {
-            HStack(spacing: 5) {
-                ForEach(0..<3, id: \.self) { i in
-                    Circle()
-                        .fill(Theme.Colors.textSecondary)
-                        .frame(width: 7, height: 7)
-                        .scaleEffect(phase == i ? 1.3 : 0.8)
-                        .animation(
+            Group {
+                if reduceMotion {
+                    // `.phaseAnimator` self-drives regardless of any
+                    // `.animation`/`.ambient` gating applied to it, so Reduce
+                    // Motion must be handled by not attaching it at all —
+                    // render the three dots statically instead.
+                    dotsRow(activeIndex: nil)
+                } else {
+                    Color.clear
+                        .phaseAnimator([0, 1, 2]) { _, phase in
+                            dotsRow(activeIndex: phase)
+                        } animation: { _ in
                             .easeInOut(duration: 0.4)
-                                .repeatForever(autoreverses: true)
-                                .delay(Double(i) * 0.15),
-                            value: phase
-                        )
+                        }
                 }
             }
             .padding(.horizontal, Theme.Spacing.lg)
@@ -944,6 +943,17 @@ private struct TypingIndicatorView: View {
 
             Spacer()
         }
-        .onAppear { phase = 1 }
+    }
+
+    /// All three dots, scaled up at `activeIndex` (or all resting if `nil`).
+    private func dotsRow(activeIndex: Int?) -> some View {
+        HStack(spacing: 5) {
+            ForEach(0..<3, id: \.self) { i in
+                Circle()
+                    .fill(Theme.Colors.textSecondary)
+                    .frame(width: 7, height: 7)
+                    .scaleEffect(activeIndex == i ? 1.3 : 0.8)
+            }
+        }
     }
 }

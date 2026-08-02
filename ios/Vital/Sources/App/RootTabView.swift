@@ -39,7 +39,7 @@ struct RootTabView: View {
         TabView(selection: $selected) {
             TodayView(
                 coachVM: coachVM,
-                switchToCoachTab: { withAnimation(.easeInOut(duration: 0.25)) { selected = .coach } }
+                switchToCoachTab: { withAnimation(Theme.Motion.standard) { selected = .coach } }
             )
             .tabItem { Label(Tab.today.label, systemImage: Tab.today.icon) }
             .tag(Tab.today)
@@ -57,7 +57,7 @@ struct RootTabView: View {
             .tag(Tab.logs)
 
             ProfileView(
-                switchToCoachTab: { withAnimation(.easeInOut(duration: 0.25)) { selected = .coach } }
+                switchToCoachTab: { withAnimation(Theme.Motion.standard) { selected = .coach } }
             )
             .tabItem { Label(Tab.profile.label, systemImage: Tab.profile.icon) }
             .tag(Tab.profile)

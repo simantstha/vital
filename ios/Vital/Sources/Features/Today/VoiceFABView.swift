@@ -52,7 +52,7 @@ struct VoiceFABView: View {
             fab
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
-        .animation(.easeInOut(duration: 0.2), value: transcriber.isRecording)
+        .animation(Theme.Motion.quick, value: transcriber.isRecording)
         .onChange(of: transcriber.isRecording) { _, isRecording in
             guard !isRecording, isVoiceTurnActive else { return }
             isVoiceTurnActive = false
@@ -206,10 +206,7 @@ private struct PulseRing: View {
             .frame(width: diameter, height: diameter)
             .scaleEffect(animating ? 1.9 : 1.0)
             .opacity(animating ? 0 : 0.7)
-            .onAppear {
-                withAnimation(.easeOut(duration: 1.3).repeatForever(autoreverses: false)) {
-                    animating = true
-                }
-            }
+            .ambient(Theme.Motion.pulseRing, value: animating)
+            .onAppear { animating = true }
     }
 }

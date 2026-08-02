@@ -184,6 +184,96 @@ enum Theme {
         /// mock's tight tracking.
         static let screenTitle = Font.system(size: 34, weight: .bold)
     }
+
+    // MARK: - Motion
+    /// Canonical animation curves for the whole app. Every spring here stays
+    /// at `dampingFraction: 0.8` — never lower it, and never add `.bouncy`.
+    /// No duration above 0.5s outside the three ambient loops (`breathe`,
+    /// `pulseRing`, `pulse`), which are meant to run indefinitely at a calm,
+    /// unobtrusive pace.
+    enum Motion {
+        /// Fast micro-interactions — segmented control selection, small toggles.
+        static let micro: Animation = .easeInOut(duration: 0.15)
+        /// Quick state changes — send-button enable/disable.
+        static let quick: Animation = .easeInOut(duration: 0.2)
+        /// Something leaving the screen (scroll-to-bottom, dismissal).
+        static let exit: Animation = .easeOut(duration: 0.2)
+        /// Default state-change duration for most view transitions.
+        static let standard: Animation = .easeInOut(duration: 0.25)
+        /// Something newly appearing.
+        static let appear: Animation = .easeOut(duration: 0.25)
+        /// Small springy confirmations — toasts, chips.
+        static let snap: Animation = .spring(response: 0.35, dampingFraction: 0.8)
+        /// Medium springy confirmations — cards settling into place.
+        static let settle: Animation = .spring(response: 0.4, dampingFraction: 0.8)
+        /// Larger springy arrivals — bottom sheets, coach bubbles.
+        static let arrive: Animation = .spring(response: 0.5, dampingFraction: 0.8)
+        /// Numeric roll-up for `.contentTransition(.numericText())`.
+        static let numeric: Animation = .snappy
+        /// Ambient breathing glow loop. Never attach with `.animation` directly —
+        /// use `.ambient` so Reduce Motion is honored.
+        static let breathe: Animation = .easeInOut(duration: 1.8).repeatForever(autoreverses: true)
+        /// Ambient expanding pulse-ring loop. Use with `.ambient`.
+        static let pulseRing: Animation = .easeOut(duration: 1.3).repeatForever(autoreverses: false)
+        /// Ambient mic-listening pulse loop. Use with `.ambient`.
+        static let pulse: Animation = .easeInOut(duration: 0.4).repeatForever(autoreverses: true)
+
+        /// Reduce Motion state, for use outside a View body (e.g. deciding
+        /// whether to even start an imperative animation). Inside a View,
+        /// prefer `@Environment(\.accessibilityReduceMotion)` so the view
+        /// re-renders when the setting changes mid-session.
+        static var isReduced: Bool { UIAccessibility.isReduceMotionEnabled }
+    }
+
+    // MARK: - Haptics
+    /// Canonical `SensoryFeedback` tokens. Haptics fire on state the user
+    /// *committed*, never on state the user *observed* — no buzz when data
+    /// loads, a stream token arrives, an error card appears, or a background
+    /// refresh lands. There is deliberately no `.warning`/`.error` token here:
+    /// an error card in this app is always the result of a load, not a tap.
+    enum Haptics {
+        /// Picking an option — segmented control, list selection.
+        static let selection: SensoryFeedback = .selection
+        /// Committing an action — sending a message, logging a meal.
+        static let commit: SensoryFeedback = .impact(weight: .medium, intensity: 0.7)
+        /// A committed action completed successfully.
+        static let success: SensoryFeedback = .success
+        /// A light on/off toggle the user tapped.
+        static let toggle: SensoryFeedback = .impact(weight: .light, intensity: 0.5)
+    }
+}
+
+/// Drives a `repeatForever` animation declaratively so it re-evaluates
+/// (and stops) when Reduce Motion is flipped mid-session — an imperative
+/// `withAnimation(...repeatForever...)` cannot be cancelled by a later
+/// `.animation(nil, value:)` once it has started.
+private struct AmbientAnimation<V: Equatable>: ViewModifier {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let animation: Animation
+    let value: V
+    func body(content: Content) -> some View {
+        content.animation(reduceMotion ? nil : animation, value: value)
+    }
+}
+
+/// Named transition styles for `.motionTransition`. Reduce Motion means "no
+/// large movement", not "no animation" — a cross-fade is substituted, never
+/// a hard cut.
+enum MotionTransition { case fade, card, fromTop, fromBottom }
+
+private struct MotionTransitionModifier: ViewModifier {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let style: MotionTransition
+    func body(content: Content) -> some View { content.transition(resolved) }
+    private var resolved: AnyTransition {
+        guard !reduceMotion else { return .opacity }
+        switch style {
+        case .fade:       return .opacity
+        case .card:       return .opacity.combined(with: .scale(scale: 0.97, anchor: .top))
+        case .fromTop:    return .opacity.combined(with: .move(edge: .top))
+        case .fromBottom: return .opacity.combined(with: .move(edge: .bottom))
+        }
+    }
 }
 
 extension View {
@@ -192,5 +282,19 @@ extension View {
         self
             .font(Theme.Typography.screenTitle)
             .tracking(-0.4)
+    }
+
+    /// The only approved way to attach a `repeatForever` animation. Reads
+    /// Reduce Motion from the environment so an ambient loop starts, stops,
+    /// or restarts correctly if the user flips the accessibility setting
+    /// while the view is on screen.
+    func ambient<V: Equatable>(_ animation: Animation, value: V) -> some View {
+        modifier(AmbientAnimation(animation: animation, value: value))
+    }
+
+    /// Applies a named `MotionTransition`, substituting a cross-fade for any
+    /// large movement when Reduce Motion is on.
+    func motionTransition(_ style: MotionTransition) -> some View {
+        modifier(MotionTransitionModifier(style: style))
     }
 }
