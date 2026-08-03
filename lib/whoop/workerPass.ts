@@ -4,8 +4,18 @@
  *
  * Runs once per proactive-health-worker tick: for every `active` WHOOP
  * connection whose `last_synced_at` is null or more than an hour old, sync a
- * trailing 48h window (this is also how cycle/strain data — which has no
- * webhook — gets picked up at all) and stamp `last_synced_at = now()`.
+ * trailing 48h window. WHOOP publishes no *cycle* webhook event type, but
+ * because the webhook handler re-syncs the whole trailing 48h window on any
+ * recovery/sleep/workout event, cycles/strain come along with it — so this
+ * pass is not what makes cycle/strain land. Its real job is the safety net:
+ * it covers stretches where no webhook event fires at all (so intraday strain
+ * doesn't go stale on a quiet day) and any delivery WHOOP drops.
+ * `last_synced_at` itself is stamped by runWhoopSync() on success
+ * (lib/whoop/sync.ts), the one shared success path both this pass and the
+ * webhook handler funnel through — not by this pass directly. Intentional
+ * consequence: webhook syncs advance `last_synced_at` too, so while webhooks
+ * are healthy this pass finds nothing due and is a no-op; if webhooks go
+ * quiet for over an hour, the next tick picks the connection back up.
  *
  * Split the same way as lib/calendarIngestStore.ts / lib/whoop/sync.ts:
  * `selectDueWhoopConnections` is pure (no DB, no fetch) so scheduling logic
@@ -61,7 +71,6 @@ export function selectDueWhoopConnections(connections: WhoopConnectionForSync[],
 export interface WhoopWorkerPassDeps {
   listActiveConnections(): Promise<WhoopConnectionForSync[]>;
   runSync(target: { connectionId: string; userId: string; timezone: string | null }, windowStart: Date, windowEnd: Date): Promise<unknown>;
-  markSynced(connectionId: string, syncedAt: Date): Promise<void>;
 }
 
 export interface WhoopWorkerPassResult {
@@ -83,7 +92,6 @@ export async function runWhoopWorkerPass(now: Date, deps: WhoopWorkerPassDeps): 
   for (const connection of due) {
     try {
       await deps.runSync({ connectionId: connection.id, userId: connection.userId, timezone: connection.timezone }, windowStart, windowEnd);
-      await deps.markSynced(connection.id, now);
       synced.push(connection.id);
     } catch (err) {
       if (err instanceof WhoopConnectionInactiveError) {
@@ -112,16 +120,10 @@ interface DrizzleWhoopWorkerDatabase {
       };
     };
   };
-  update(table: unknown): {
-    set(values: Record<string, unknown>): {
-      where(predicate: unknown): Promise<unknown>;
-    };
-  };
 }
 
 export interface WhoopWorkerRepository {
   listActiveConnections(): Promise<WhoopConnectionForSync[]>;
-  markSynced(connectionId: string, syncedAt: Date): Promise<void>;
 }
 
 export function createWhoopWorkerRepository(database: unknown, schema: typeof WhoopSchema): WhoopWorkerRepository {
@@ -144,9 +146,6 @@ export function createWhoopWorkerRepository(database: unknown, schema: typeof Wh
           or(isNull(schema.whoop_connections.last_synced_at), lt(schema.whoop_connections.last_synced_at, cutoff)),
         ));
       return rows.map((r) => ({ id: r.id, userId: r.user_id, timezone: r.timezone, status: r.status, lastSyncedAt: r.last_synced_at }));
-    },
-    async markSynced(connectionId, syncedAt) {
-      await db.update(schema.whoop_connections).set({ last_synced_at: syncedAt, updated_at: new Date() }).where(eq(schema.whoop_connections.id, connectionId));
     },
   };
 }
