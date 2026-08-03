@@ -265,7 +265,7 @@ final class LogsViewModel: ObservableObject {
     /// Entry point for `.task` / `.refreshable`: fetches the 7-day log window
     /// once, buckets it into fixed day slots, then loads today's diet data.
     func load() async {
-        isLoading = true
+        withAnimation(Theme.Motion.appear) { isLoading = true }
         errorMessage = nil
         do {
             let response = try await apiClient.fetchLogs(days: 7)
@@ -300,7 +300,7 @@ final class LogsViewModel: ObservableObject {
         } catch {
             errorMessage = error.localizedDescription
         }
-        isLoading = false
+        withAnimation(Theme.Motion.appear) { isLoading = false }
         selectedIndex = 0
         await refreshDietData(for: 0)
     }
@@ -354,7 +354,10 @@ final class LogsViewModel: ObservableObject {
                 mealLogCache[dayKey] = entries
             }
 
-            dietDataByDay[dayKey] = LogsPagerSummary.dietDayData(entries: entries, goal: goal.current)
+            let newData = LogsPagerSummary.dietDayData(entries: entries, goal: goal.current)
+            withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) {
+                dietDataByDay[dayKey] = newData
+            }
         } catch {
             // Keep whatever's already cached — the view falls back to the
             // absent-data state; the next select/refresh retries.

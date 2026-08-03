@@ -14,9 +14,9 @@ struct AnalysisView: View {
             ZStack {
                 Theme.Colors.canvas.ignoresSafeArea()
                 Group {
-                    if loading { ProgressView() }
-                    else if let analysis { content(analysis) }
-                    else { ContentUnavailableView("Analysis unavailable", systemImage: "chart.line.downtrend.xyaxis", description: Text(error ?? "This analysis is no longer available.")) }
+                    if loading { ProgressView().motionTransition(.fade) }
+                    else if let analysis { content(analysis).motionTransition(.fade) }
+                    else { ContentUnavailableView("Analysis unavailable", systemImage: "chart.line.downtrend.xyaxis", description: Text(error ?? "This analysis is no longer available.")).motionTransition(.fade) }
                 }
             }
             .navigationTitle(kind == "workout" ? "Workout Analysis" : "Sleep Analysis")
@@ -64,7 +64,7 @@ struct AnalysisView: View {
     private func load() async {
         do { analysis = try await APIClient.shared.fetchAnalysis(kind: kind, id: id) }
         catch { self.error = error.localizedDescription }
-        loading = false
+        withAnimation(Theme.Motion.appear) { loading = false }
     }
 }
 

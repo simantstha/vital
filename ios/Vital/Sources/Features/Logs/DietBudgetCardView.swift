@@ -53,6 +53,7 @@ struct DietBudgetCardView: View {
                         .font(.system(size: 48, weight: .bold))
                         .monospacedDigit()
                         .foregroundStyle(Theme.Colors.textPrimary)
+                        .contentTransition(.numericText())
                     Text("kcal left")
                         .font(.system(size: 15))
                         .foregroundStyle(Theme.Colors.textSecondary)
@@ -65,6 +66,7 @@ struct DietBudgetCardView: View {
             .padding(.top, Theme.Spacing.sm)
 
             progressBar(fraction: eatenFraction)
+                .animation(Theme.Motion.settle, value: eatenFraction)
                 .padding(.top, Theme.Spacing.lg)
 
             HStack(spacing: Theme.Spacing.md) {

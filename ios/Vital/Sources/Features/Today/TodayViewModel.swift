@@ -2,6 +2,7 @@ import Foundation
 import Combine
 import EventKit
 import UIKit
+import SwiftUI
 
 // MARK: - Local metric models (UI layer)
 
@@ -191,7 +192,7 @@ final class TodayViewModel: ObservableObject {
     // MARK: - Called from TodayView.task
 
     func loadHealthData() async {
-        isLoading = true
+        withAnimation(Theme.Motion.appear) { isLoading = true }
         didLoadToday = false
         // Run HealthKit + API calls concurrently. /api/today and /api/plan run
         // side by side (not one-after-the-other) — the plan step below waits
@@ -210,7 +211,7 @@ final class TodayViewModel: ObservableObject {
         }
         applyPlanResult(plan, todayPlan: today?.plan ?? [])
 
-        isLoading = false
+        withAnimation(Theme.Motion.appear) { isLoading = false }
     }
 
     // MARK: - Pending facts
@@ -247,28 +248,31 @@ final class TodayViewModel: ObservableObject {
         // sync also write through, so there's no separate delta-post path
         // to keep in sync here.
         if let r = hrvReading {
-            hrv = HRVMetric(
+            let newHRV = HRVMetric(
                 value: Int(r.valueMs.rounded()),
                 trend: .upGood,
                 delta: "\(Int(r.valueMs.rounded())) ms"
             )
+            withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) { hrv = newHRV }
         }
 
         if let r = sleepReading {
-            sleep = SleepMetric(
+            let newSleep = SleepMetric(
                 hours: r.totalMinutes / 60,
                 minutes: r.totalMinutes % 60,
                 trend: .upGood,
                 delta: "\(r.totalMinutes / 60)h \(r.totalMinutes % 60)m"
             )
+            withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) { sleep = newSleep }
         }
 
         if let r = restingHRReading {
-            restingHR = RestingHRMetric(
+            let newRestingHR = RestingHRMetric(
                 bpm: Int(r.bpm.rounded()),
                 trend: .downGood,
                 delta: "\(Int(r.bpm.rounded())) bpm"
             )
+            withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) { restingHR = newRestingHR }
         }
 
         await HealthSyncCoordinator.shared.syncNow()
@@ -336,11 +340,12 @@ final class TodayViewModel: ObservableObject {
             let deltaPct = m.hrv.deltaPct ?? 0
             let hrvTrend: TrendDirection = deltaPct >= 0 ? .upGood : .downBad
             let hrvSign = deltaPct >= 0 ? "+" : ""
-            hrv = HRVMetric(
+            let newHRV = HRVMetric(
                 value: Int(value.rounded()),
                 trend: hrvTrend,
                 delta: "\(hrvSign)\(deltaPct) %"
             )
+            withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) { hrv = newHRV }
         }
 
         // Sleep — value is in hours (e.g. 7.8)
@@ -349,12 +354,13 @@ final class TodayViewModel: ObservableObject {
             let totalSleepMins = Int((value * 60).rounded())
             let sleepTrend: TrendDirection = deltaPct >= 0 ? .upGood : .downBad
             let sleepSign = deltaPct >= 0 ? "+" : ""
-            sleep = SleepMetric(
+            let newSleep = SleepMetric(
                 hours: totalSleepMins / 60,
                 minutes: totalSleepMins % 60,
                 trend: sleepTrend,
                 delta: "\(sleepSign)\(deltaPct) %"
             )
+            withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) { sleep = newSleep }
         }
 
         // Resting HR — lower is better
@@ -362,11 +368,12 @@ final class TodayViewModel: ObservableObject {
             let deltaPct = m.restingHr.deltaPct ?? 0
             let hrTrend: TrendDirection = deltaPct <= 0 ? .downGood : .upBad
             let hrSign = deltaPct >= 0 ? "+" : ""
-            restingHR = RestingHRMetric(
+            let newRestingHR = RestingHRMetric(
                 bpm: Int(value.rounded()),
                 trend: hrTrend,
                 delta: "\(hrSign)\(deltaPct) %"
             )
+            withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) { restingHR = newRestingHR }
         }
 
         // Diet budget

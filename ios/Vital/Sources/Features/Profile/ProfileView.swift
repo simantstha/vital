@@ -38,6 +38,7 @@ struct ProfileView: View {
                             ProgressView()
                                 .frame(maxWidth: .infinity)
                                 .padding(.top, 80)
+                                .motionTransition(.fade)
                         } else if let errorMessage = vm.errorMessage {
                             ErrorCard(title: "Couldn't load profile", message: errorMessage) {
                                 Task {
@@ -45,17 +46,21 @@ struct ProfileView: View {
                                     await vm.load()
                                 }
                             }
+                            .motionTransition(.fade)
                         } else {
-                            avatarSection
+                            Group {
+                                avatarSection
 
-                            if vm.calibration?.status == "calibrating" {
-                                calibratingBanner
+                                if vm.calibration?.status == "calibrating" {
+                                    calibratingBanner
+                                }
+
+                                settingsCard
+                                activitySection
+                                accountSection
+                                versionFooter
                             }
-
-                            settingsCard
-                            activitySection
-                            accountSection
-                            versionFooter
+                            .motionTransition(.fade)
                         }
                     }
                     .padding(.horizontal, Theme.Spacing.xl)
@@ -157,6 +162,7 @@ private extension ProfileView {
                     Capsule()
                         .fill(Theme.Colors.accent)
                         .frame(width: geo.size.width * CGFloat(max(vm.calibrationPercent, 1)) / 100)
+                        .animation(Theme.Motion.settle, value: vm.calibrationPercent)
                 }
             }
             .frame(height: 3)

@@ -61,7 +61,7 @@ final class ProfileViewModel: ObservableObject {
     }
 
     func load() async {
-        isLoading = true
+        withAnimation(Theme.Motion.appear) { isLoading = true }
         do {
             let response = try await apiClient.fetchProfile()
             name = response.name
@@ -80,7 +80,7 @@ final class ProfileViewModel: ObservableObject {
             print("[Vital] fetchProfile failed: \(error.localizedDescription)")
         }
         await loadBudget()
-        isLoading = false
+        withAnimation(Theme.Motion.appear) { isLoading = false }
     }
 
     /// Loads the diet-budget summary shown on the Nutrition row. Called on

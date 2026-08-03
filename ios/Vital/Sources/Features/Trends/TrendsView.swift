@@ -231,6 +231,7 @@ private extension TrendsView {
                         Text(isShowingCurrentSelection ? vm.currentValue : "--")
                             .font(Theme.Typography.numericHero(36))
                             .foregroundStyle(Theme.Colors.textPrimary)
+                            .contentTransition(.numericText())
                         Text(isShowingCurrentSelection ? vm.selectedMetric.unit : "--")
                             .font(Theme.Typography.labelSmall)
                             .foregroundStyle(Theme.Colors.textSecondary)
@@ -253,10 +254,13 @@ private extension TrendsView {
                         Spacer()
                     }
                     .frame(height: 180)
+                    .motionTransition(.fade)
                 } else if vm.points.isEmpty {
                     emptyChartPlaceholder
+                        .motionTransition(.fade)
                 } else {
                     trendChart
+                        .motionTransition(.fade)
                 }
             }
         }

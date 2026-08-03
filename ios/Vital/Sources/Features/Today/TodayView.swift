@@ -41,37 +41,41 @@ struct TodayView: View {
                         ProgressView()
                             .frame(maxWidth: .infinity)
                             .padding(.top, 60)
+                            .motionTransition(.fade)
                     } else {
-                        if let errorMessage = vm.errorMessage {
-                            ErrorCard(title: "Couldn't load today's data", message: errorMessage) {
-                                Task {
-                                    vm.errorMessage = nil
-                                    await vm.loadHealthData()
+                        Group {
+                            if let errorMessage = vm.errorMessage {
+                                ErrorCard(title: "Couldn't load today's data", message: errorMessage) {
+                                    Task {
+                                        vm.errorMessage = nil
+                                        await vm.loadHealthData()
+                                    }
                                 }
                             }
+                            calibrationCard
+                            pendingFactsBanner
+                            PlanTimelineView(
+                                items: vm.planItems,
+                                onItemTap: { actionsItem = $0 },
+                                onLogItem: { item in
+                                    vm.setStatus(id: item.id, .done)
+                                    vm.toastMessage = "Logged — nice work"
+                                },
+                                onOpenAdd: { showAddItem = true },
+                                onSyncCalendar: vm.calendarSyncState == .notDetermined
+                                    ? { Task { await vm.syncCalendar() } }
+                                    : nil
+                            )
+                            CoachBubble(message: vm.coachInsight)
+                            metricsGrid
+                            FuelStripView(
+                                kcalRemaining: vm.diet.kcalRemaining,
+                                proteinHave: vm.diet.protein.current,
+                                proteinGoal: vm.diet.protein.target,
+                                onOpen: { showLogSheet = true }
+                            )
                         }
-                        calibrationCard
-                        pendingFactsBanner
-                        PlanTimelineView(
-                            items: vm.planItems,
-                            onItemTap: { actionsItem = $0 },
-                            onLogItem: { item in
-                                vm.setStatus(id: item.id, .done)
-                                vm.toastMessage = "Logged — nice work"
-                            },
-                            onOpenAdd: { showAddItem = true },
-                            onSyncCalendar: vm.calendarSyncState == .notDetermined
-                                ? { Task { await vm.syncCalendar() } }
-                                : nil
-                        )
-                        CoachBubble(message: vm.coachInsight)
-                        metricsGrid
-                        FuelStripView(
-                            kcalRemaining: vm.diet.kcalRemaining,
-                            proteinHave: vm.diet.protein.current,
-                            proteinGoal: vm.diet.protein.target,
-                            onOpen: { showLogSheet = true }
-                        )
+                        .motionTransition(.fade)
                     }
                 }
                 .padding(.horizontal, Theme.Spacing.xl)
@@ -322,6 +326,7 @@ private struct VitalProgressBar: View {
                 RoundedRectangle(cornerRadius: height / 2, style: .continuous)
                     .fill(tint)
                     .frame(width: geo.size.width * fraction)
+                    .animation(Theme.Motion.settle, value: fraction)
             }
         }
         .frame(height: height)
