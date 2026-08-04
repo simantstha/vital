@@ -317,6 +317,25 @@ final class TrendsSummaryTests: XCTestCase {
         XCTAssertEqual(TrendsSummary.vitalsNote([47, 47, 48, 48, 49, 49, nil]), "syncing")
         XCTAssertEqual(TrendsSummary.vitalsNote([47, 47, 48, 48, 49, 49, 49]), "7-day")
     }
+
+    // MARK: - TrendMetric.unitLabel
+
+    func testUnitLabelConvertsWeightAndDistanceButLeavesNeutralMetricsUnchanged() {
+        XCTAssertEqual(TrendMetric.weight.unitLabel(.metric), "kg")
+        XCTAssertEqual(TrendMetric.weight.unitLabel(.imperial), "lb")
+        XCTAssertEqual(TrendMetric.distance.unitLabel(.metric), "km")
+        XCTAssertEqual(TrendMetric.distance.unitLabel(.imperial), "mi")
+
+        for metric: TrendMetric in [.hrv, .sleep, .steps, .vo2, .rhr] {
+            XCTAssertEqual(metric.unitLabel(.metric), metric.unitLabel(.imperial),
+                            "\(metric) should be unaffected by unit system")
+        }
+        XCTAssertEqual(TrendMetric.hrv.unitLabel(.metric), "ms")
+        XCTAssertEqual(TrendMetric.sleep.unitLabel(.metric), "h")
+        XCTAssertEqual(TrendMetric.steps.unitLabel(.metric), "steps")
+        XCTAssertEqual(TrendMetric.vo2.unitLabel(.metric), "ml/kg·min")
+        XCTAssertEqual(TrendMetric.rhr.unitLabel(.metric), "bpm")
+    }
 }
 
 // MARK: - TrendsViewModel.load() — metric/response integrity

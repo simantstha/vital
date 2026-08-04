@@ -223,6 +223,17 @@ private struct FlowLayout: Layout {
 private struct BasicsStepView: View {
     @ObservedObject var vm: OnboardingViewModel
 
+    // Display-unit text drafts, kept local rather than bound straight to
+    // `vm.heightCm`/`vm.weightKg` — a converting Binding would reformat the
+    // field on every keystroke and fight the user's typing mid-entry.
+    // Drafts are parsed and committed back to the VM's canonical cm/kg on
+    // every change, and re-seeded from the canonical values whenever the
+    // unit system changes.
+    @State private var heightCmText = ""
+    @State private var heightFeetText = ""
+    @State private var heightInchesText = ""
+    @State private var weightText = ""
+
     var body: some View {
         StepScaffold(
             title: "Let's get to know you",
@@ -253,32 +264,138 @@ private struct BasicsStepView: View {
                     )
                 }
 
-                HStack(spacing: Theme.Spacing.md) {
-                    FieldLabel(title: "Height (cm)") {
-                        TextField("cm", value: $vm.heightCm, format: .number)
-                            .keyboardType(.decimalPad)
-                            .font(Theme.Typography.bodyLarge)
-                            .foregroundStyle(Theme.Colors.textPrimary)
-                            .onboardingFieldSurface()
-                    }
-                    FieldLabel(title: "Weight (kg)") {
-                        TextField("kg", value: $vm.weightKg, format: .number)
-                            .keyboardType(.decimalPad)
-                            .font(Theme.Typography.bodyLarge)
-                            .foregroundStyle(Theme.Colors.textPrimary)
-                            .onboardingFieldSurface()
-                    }
-                }
-
                 FieldLabel(title: "Units") {
                     ChipPicker(
-                        options: [("metric", "Metric"), ("imperial", "Imperial")],
-                        isSelected: { vm.units == $0 },
-                        onTap: { vm.units = $0 }
+                        options: [(UnitSystem.metric.rawValue, "Metric"), (UnitSystem.imperial.rawValue, "Imperial")],
+                        isSelected: { vm.units.rawValue == $0 },
+                        onTap: { raw in
+                            guard let system = UnitSystem(rawValue: raw) else { return }
+                            vm.units = system
+                            UnitPreference.shared.set(system)
+                        }
                     )
+                }
+
+                heightWeightFields
+            }
+        }
+        .onAppear { seedHeightDraft(); seedWeightDraft() }
+        .onChange(of: vm.units) { seedHeightDraft(); seedWeightDraft() }
+        .onChange(of: vm.heightCm) { reseedHeightIfDraftEmpty() }
+        .onChange(of: vm.weightKg) { reseedWeightIfDraftEmpty() }
+    }
+
+    // MARK: - Height/weight fields (unit-dependent layout)
+
+    @ViewBuilder
+    private var heightWeightFields: some View {
+        switch vm.units {
+        case .metric:
+            HStack(spacing: Theme.Spacing.md) {
+                FieldLabel(title: "Height (cm)") {
+                    TextField("cm", text: $heightCmText)
+                        .keyboardType(.decimalPad)
+                        .font(Theme.Typography.bodyLarge)
+                        .foregroundStyle(Theme.Colors.textPrimary)
+                        .onboardingFieldSurface()
+                        .onChange(of: heightCmText) { commitHeight() }
+                }
+                FieldLabel(title: "Weight (kg)") {
+                    TextField("kg", text: $weightText)
+                        .keyboardType(.decimalPad)
+                        .font(Theme.Typography.bodyLarge)
+                        .foregroundStyle(Theme.Colors.textPrimary)
+                        .onboardingFieldSurface()
+                        .onChange(of: weightText) { commitWeight() }
+                }
+            }
+        case .imperial:
+            HStack(spacing: Theme.Spacing.md) {
+                FieldLabel(title: "Height (ft)") {
+                    TextField("ft", text: $heightFeetText)
+                        .keyboardType(.numberPad)
+                        .font(Theme.Typography.bodyLarge)
+                        .foregroundStyle(Theme.Colors.textPrimary)
+                        .onboardingFieldSurface()
+                        .onChange(of: heightFeetText) { commitHeight() }
+                }
+                FieldLabel(title: "Height (in)") {
+                    TextField("in", text: $heightInchesText)
+                        .keyboardType(.numberPad)
+                        .font(Theme.Typography.bodyLarge)
+                        .foregroundStyle(Theme.Colors.textPrimary)
+                        .onboardingFieldSurface()
+                        .onChange(of: heightInchesText) { commitHeight() }
+                }
+                FieldLabel(title: "Weight (lb)") {
+                    TextField("lb", text: $weightText)
+                        .keyboardType(.numberPad)
+                        .font(Theme.Typography.bodyLarge)
+                        .foregroundStyle(Theme.Colors.textPrimary)
+                        .onboardingFieldSurface()
+                        .onChange(of: weightText) { commitWeight() }
                 }
             }
         }
+    }
+
+    // MARK: - Draft ↔ VM
+
+    private func commitHeight() {
+        switch vm.units {
+        case .metric:
+            vm.heightCm = Double(heightCmText.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: ",", with: "."))
+        case .imperial:
+            guard !heightFeetText.isEmpty || !heightInchesText.isEmpty else {
+                vm.heightCm = nil
+                return
+            }
+            let feet = Int(heightFeetText.trimmingCharacters(in: .whitespaces)) ?? 0
+            let inches = Int(heightInchesText.trimmingCharacters(in: .whitespaces)) ?? 0
+            vm.heightCm = UnitFormat.cm(fromFeet: feet, inches: inches)
+        }
+    }
+
+    private func commitWeight() {
+        vm.weightKg = weightText.isEmpty ? nil : UnitFormat.kg(fromEntry: weightText, vm.units)
+    }
+
+    private func seedHeightDraft() {
+        switch vm.units {
+        case .metric:
+            heightCmText = vm.heightCm.map { String(Int($0.rounded())) } ?? ""
+            heightFeetText = ""
+            heightInchesText = ""
+        case .imperial:
+            if let cm = vm.heightCm {
+                let parts = UnitFormat.heightParts(cm: cm)
+                heightFeetText = String(parts.feet)
+                heightInchesText = String(parts.inches)
+            } else {
+                heightFeetText = ""
+                heightInchesText = ""
+            }
+            heightCmText = ""
+        }
+    }
+
+    private func seedWeightDraft() {
+        weightText = UnitFormat.weightEntryText(kg: vm.weightKg, vm.units)
+    }
+
+    /// Reflects `vm.heightCm` changing out from under an untouched draft
+    /// (HealthKit prefill lands asynchronously, after this view has already
+    /// appeared with empty fields) without stomping on live typing — a draft
+    /// that already has characters in it never gets overwritten here.
+    private func reseedHeightIfDraftEmpty() {
+        let isEmpty = vm.units == .metric
+            ? heightCmText.isEmpty
+            : (heightFeetText.isEmpty && heightInchesText.isEmpty)
+        if isEmpty { seedHeightDraft() }
+    }
+
+    private func reseedWeightIfDraftEmpty() {
+        if weightText.isEmpty { seedWeightDraft() }
     }
 }
 

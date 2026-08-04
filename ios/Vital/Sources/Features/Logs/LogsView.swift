@@ -14,6 +14,7 @@ private struct AnalysisSheetTarget: Identifiable {
 /// read-only for past days) and a hairline-separated entries list.
 struct LogsView: View {
     @StateObject private var vm = LogsViewModel()
+    @ObservedObject private var unitPref = UnitPreference.shared
     @State private var showDietSheet = false
     @State private var analysisTarget: AnalysisSheetTarget?
     /// Bumped only inside an *enabled* pager button's own action — never
@@ -130,7 +131,7 @@ private extension LogsView {
                 Text(day.label)
                     .font(.system(size: 17, weight: .bold))
                     .foregroundStyle(Theme.Colors.textPrimary)
-                Text("\(day.dateLabel) · \(LogsPagerSummary.summaryLine(items: day.items))")
+                Text("\(day.dateLabel) · \(LogsPagerSummary.summaryLine(items: day.items, units: unitPref.current))")
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.Colors.textTertiary)
                     .lineLimit(1)
