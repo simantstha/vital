@@ -2,8 +2,8 @@ import SwiftUI
 
 /// Pushed from Profile → "Personal details". Editable name / age / height /
 /// weight, saved with a single PATCH /api/profile carrying only the fields the
-/// user actually changed. Height/weight follow the device's measurement
-/// system: metric shows cm/kg, US shows total inches/lb (converted to cm/kg
+/// user actually changed. Height/weight follow `UnitPreference.shared`:
+/// metric shows cm/kg, imperial shows total inches/lb (converted to cm/kg
 /// for the API) — a deliberate v1 simplification over a ft-in split field.
 struct PersonalDetailsView: View {
     let profileVM: ProfileViewModel
@@ -17,7 +17,7 @@ struct PersonalDetailsView: View {
     @State private var isSaving = false
     @State private var errorMessage: String?
 
-    private let units: ProfileUnitSystem
+    private let units: UnitSystem
     private let initialName: String
     private let initialAge: String
     private let initialHeight: String
@@ -25,12 +25,10 @@ struct PersonalDetailsView: View {
 
     private let api = APIClient.shared
 
-    private static let lbPerKg = 2.2046226218
-
     init(profileVM: ProfileViewModel) {
         self.profileVM = profileVM
 
-        let units = ProfileUnitSystem.from(measurementSystem: Locale.current.measurementSystem)
+        let units = UnitPreference.shared.current
         self.units = units
 
         let details = profileVM.details
@@ -153,10 +151,10 @@ struct PersonalDetailsView: View {
         }()
         let age: Int? = ageText != initialAge ? Int(ageText.trimmingCharacters(in: .whitespaces)) : nil
         let heightCm: Double? = heightText != initialHeight ? parseNumber(heightText).map {
-            units == .metric ? $0 : $0 * 2.54
+            units == .metric ? $0 : $0 * UnitConvert.cmPerInch
         } : nil
         let weightKg: Double? = weightText != initialWeight ? parseNumber(weightText).map {
-            units == .metric ? $0 : $0 / Self.lbPerKg
+            units == .metric ? $0 : $0 / UnitConvert.lbPerKg
         } : nil
 
         guard name != nil || age != nil || heightCm != nil || weightKg != nil else {
@@ -184,24 +182,15 @@ struct PersonalDetailsView: View {
 
     // MARK: - Field seeding
 
-    private static func heightFieldText(_ heightCm: Double?, units: ProfileUnitSystem) -> String {
+    private static func heightFieldText(_ heightCm: Double?, units: UnitSystem) -> String {
         guard let heightCm else { return "" }
         switch units {
-        case .metric: return String(Int(heightCm.rounded()))
-        case .us:     return String(Int((heightCm / 2.54).rounded()))
+        case .metric:  return String(Int(heightCm.rounded()))
+        case .imperial: return String(Int(UnitConvert.cmToInches(heightCm).rounded()))
         }
     }
 
-    private static func weightFieldText(_ weightKg: Double?, units: ProfileUnitSystem) -> String {
-        guard let weightKg else { return "" }
-        switch units {
-        case .metric:
-            let rounded = (weightKg * 10).rounded() / 10
-            return rounded.truncatingRemainder(dividingBy: 1) == 0
-                ? String(Int(rounded))
-                : String(format: "%.1f", rounded)
-        case .us:
-            return String(Int((weightKg * lbPerKg).rounded()))
-        }
+    private static func weightFieldText(_ weightKg: Double?, units: UnitSystem) -> String {
+        UnitFormat.weightEntryText(kg: weightKg, units)
     }
 }

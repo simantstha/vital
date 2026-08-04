@@ -10,15 +10,6 @@ struct ProfileStatCell: Identifiable {
     let sfSymbol: String
 }
 
-enum ProfileUnitSystem: Equatable {
-    case metric
-    case us
-
-    static func from(measurementSystem: Locale.MeasurementSystem) -> ProfileUnitSystem {
-        measurementSystem == .us ? .us : .metric
-    }
-}
-
 // MARK: - ViewModel
 
 @MainActor
@@ -72,7 +63,8 @@ final class ProfileViewModel: ObservableObject {
             sleepGoalMinutes = response.sleepGoalMinutes ?? 480
             lightsOutMinutes = response.lightsOutMinutes ?? 1350
             calibration = response.calibration
-            let units = ProfileUnitSystem.from(measurementSystem: Locale.current.measurementSystem)
+            UnitPreference.shared.applyServerValue(response.unitSystem)
+            let units = UnitPreference.shared.current
             profileDetails = Self.profileCells(from: response.profile, units: units)
             activityStats = Self.activityCells(from: response.stats)
         } catch {
@@ -149,11 +141,11 @@ final class ProfileViewModel: ObservableObject {
 
     // MARK: - Private
 
-    static func profileCells(from profile: ProfileDetails, units: ProfileUnitSystem) -> [ProfileStatCell] {
+    static func profileCells(from profile: ProfileDetails, units: UnitSystem) -> [ProfileStatCell] {
         [
             ProfileStatCell(label: "Age",            value: profile.age.map(String.init) ?? "--", sfSymbol: "person.fill"),
-            ProfileStatCell(label: "Height",         value: formatHeight(profile.heightCm, units: units), sfSymbol: "ruler"),
-            ProfileStatCell(label: "Current weight", value: formatWeight(profile.weightKg, units: units), sfSymbol: "scalemass"),
+            ProfileStatCell(label: "Height",         value: UnitFormat.height(cm: profile.heightCm, units), sfSymbol: "ruler"),
+            ProfileStatCell(label: "Current weight", value: UnitFormat.weight(kg: profile.weightKg, units), sfSymbol: "scalemass"),
             ProfileStatCell(label: "Biological sex", value: profile.biologicalSex?.capitalized ?? "--", sfSymbol: "person.2.fill"),
         ]
     }
@@ -165,36 +157,5 @@ final class ProfileViewModel: ObservableObject {
             ProfileStatCell(label: "Avg HRV",        value: s.avgHrv.map { "\(Int($0.rounded())) ms" } ?? "--", sfSymbol: "waveform.path.ecg"),
             ProfileStatCell(label: "Workouts",       value: "\(s.workouts)", sfSymbol: "figure.run"),
         ]
-    }
-
-    private static func formatHeight(_ heightCm: Double?, units: ProfileUnitSystem) -> String {
-        guard let heightCm else { return "--" }
-
-        switch units {
-        case .metric:
-            return "\(Int(heightCm.rounded())) cm"
-        case .us:
-            let totalInches = Int((heightCm / 2.54).rounded())
-            return "\(totalInches / 12)' \(totalInches % 12)\""
-        }
-    }
-
-    private static func formatWeight(_ weightKg: Double?, units: ProfileUnitSystem) -> String {
-        guard let weightKg else { return "--" }
-
-        switch units {
-        case .metric:
-            return "\(formatNumber(weightKg, maximumFractionDigits: 1)) kg"
-        case .us:
-            return "\(Int((weightKg * 2.2046226218).rounded())) lb"
-        }
-    }
-
-    private static func formatNumber(_ value: Double, maximumFractionDigits: Int) -> String {
-        let formatter = NumberFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.minimumFractionDigits = 0
-        formatter.maximumFractionDigits = maximumFractionDigits
-        return formatter.string(from: NSNumber(value: value)) ?? "\(value)"
     }
 }

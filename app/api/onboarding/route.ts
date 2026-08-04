@@ -27,7 +27,9 @@
  *     life-context.json. Merge is a shallow key overwrite: only keys present
  *     in the submitted body are touched, everything else already in the
  *     file (e.g. facts the coach learned via write_memory) is preserved.
- *   - Updates users.name (from basics.name) and sets users.onboarded_at.
+ *   - Updates users.name (from basics.name), sets users.onboarded_at, and
+ *     persists users.unit_system from basics.units (normalized, never 400s —
+ *     see lib/units.ts resolveUnitSystem).
  *
  * Response: { ok: true, onboarded: true }
  */
@@ -37,6 +39,7 @@ import { eq } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import { getUserIdFromRequest } from '@/lib/auth';
 import { seedUserMemory, readMemoryFile, writeMemoryFile } from '@/lib/memory';
+import { resolveUnitSystem } from '@/lib/units';
 
 export const dynamic = 'force-dynamic';
 
@@ -110,6 +113,10 @@ function computeAge(dob: string): number | null {
  * A final catch-all swaps any leftover literal placeholder for a neutral
  * "Not yet established" so no stray `[to be filled]` survives regardless.
  */
+// core-profile.md is storage for the coach's prompt context, not a
+// user-facing surface — it stays canonically metric (cm/kg) regardless of
+// basics.units; unit-system rendering is handled client-side off
+// users.unit_system (see lib/units.ts), not here.
 function fillCoreProfile(template: string, basics: Basics, training: Training): string {
   const age = computeAge(basics.dob);
   const today = new Date().toISOString().split('T')[0];
@@ -242,10 +249,14 @@ export async function POST(request: Request): Promise<NextResponse> {
   });
 
   // Completion flag + name (submitted at onboarding, Apple/dev-auth rows
-  // otherwise carry a placeholder name).
+  // otherwise carry a placeholder name) + unit-system preference. Normalized
+  // via resolveUnitSystem rather than validated/400'd — basics.units is only
+  // required to be a non-empty string (isBasicsValid), so an older client
+  // sending something unexpected (or a future third option) lands on the
+  // 'metric' default instead of failing onboarding outright.
   await db
     .update(schema.users)
-    .set({ name: basics.name, onboarded_at: new Date() })
+    .set({ name: basics.name, onboarded_at: new Date(), unit_system: resolveUnitSystem(basics.units) })
     .where(eq(schema.users.id, userId));
 
   return NextResponse.json({ ok: true, onboarded: true });

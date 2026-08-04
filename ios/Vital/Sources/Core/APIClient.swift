@@ -296,7 +296,8 @@ struct APIClient {
         heightCm: Double? = nil,
         weightKg: Double? = nil,
         sleepGoalMinutes: Int? = nil,
-        lightsOutMinutes: Int? = nil
+        lightsOutMinutes: Int? = nil,
+        unitSystem: String? = nil
     ) async throws {
         guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/profile") else {
             throw APIError.invalidURL
@@ -312,11 +313,13 @@ struct APIClient {
             let weightKg: Double?
             let sleepGoalMinutes: Int?
             let lightsOutMinutes: Int?
+            let unitSystem: String?
         }
         request.httpBody = try encoder.encode(
             Body(
                 name: name, age: age, heightCm: heightCm, weightKg: weightKg,
-                sleepGoalMinutes: sleepGoalMinutes, lightsOutMinutes: lightsOutMinutes
+                sleepGoalMinutes: sleepGoalMinutes, lightsOutMinutes: lightsOutMinutes,
+                unitSystem: unitSystem
             )
         )
         let (_, response) = try await session.data(for: request)
@@ -1421,6 +1424,10 @@ struct ProfileResponse: Decodable {
     /// Same shape Trends/Today carry — decoded here so Profile doesn't need a
     /// separate fetchTrends call just for the calibration banner.
     let calibration: CalibrationStatus?
+    /// `users.unit_system` — `"metric"` / `"imperial"`, or nil if the column
+    /// hasn't been set for this user yet. `UnitPreference.applyServerValue`
+    /// treats nil as a no-op rather than forcing metric.
+    let unitSystem: String?
 }
 
 // MARK: - Pending facts types

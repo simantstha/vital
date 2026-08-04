@@ -382,6 +382,7 @@ final class TrendsViewModel: ObservableObject {
 
         let profile = await profileResp
         sleepGoalMinutes = profile?.sleepGoalMinutes ?? 480
+        UnitPreference.shared.applyServerValue(profile?.unitSystem)
         isLoadingSummary = false
     }
 
