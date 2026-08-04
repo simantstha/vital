@@ -25,6 +25,10 @@
  *   },
  *   sleepGoalMinutes: number,   // effective value — users.sleep_goal_minutes ?? 480
  *   lightsOutMinutes: number,   // effective value — users.lights_out_minutes ?? 1350
+ *   unitSystem: 'metric' | 'imperial' | null,   // raw users.unit_system — explicitly
+ *                                                // nullable so the client can distinguish
+ *                                                // "unset" (fall back to device locale)
+ *                                                // from an explicit 'metric' choice.
  * }
  *
  * PATCH /api/profile
@@ -41,6 +45,7 @@
  *     weightKg?: number,           // 20–400
  *     sleepGoalMinutes?: integer,  // 240–720
  *     lightsOutMinutes?: integer,  // 0–1439
+ *     unitSystem?: 'metric' | 'imperial',
  *   }
  *
  * Effects:
@@ -50,6 +55,8 @@
  *   - sleepGoalMinutes / lightsOutMinutes → users.sleep_goal_minutes / users.lights_out_minutes;
  *     when lightsOutMinutes changes, today's still-pending "Lights out" plan_items
  *     row (if any) is updated in place so Today reflects the change immediately.
+ *   - unitSystem          → users.unit_system (strictly validated — 400 on a
+ *     present-but-invalid value, unlike onboarding's lenient normalize-on-write).
  *
  * Response: { ok: true }
  * 400 on validation failure ({ error }), 401 if unauthenticated.
@@ -64,6 +71,7 @@ import { readMemoryFile } from '@/lib/memory';
 import { parseProfileDetails, updateIdentityLines, formatSleepSubtitle } from '@/lib/profileDetails';
 import { logWeight } from '@/lib/weightLog';
 import { localDayKey, pickTimeZone } from '@/lib/localDay';
+import { parseUnitSystem } from '@/lib/units';
 
 export const dynamic = 'force-dynamic';
 
@@ -95,6 +103,7 @@ export async function GET(request: Request): Promise<NextResponse> {
         sleep_goal_minutes: schema.users.sleep_goal_minutes,
         lights_out_minutes: schema.users.lights_out_minutes,
         timezone: schema.users.timezone,
+        unit_system: schema.users.unit_system,
       })
       .from(schema.users)
       .where(eq(schema.users.id, userId))
@@ -169,6 +178,7 @@ export async function GET(request: Request): Promise<NextResponse> {
     calibration,
     sleepGoalMinutes,
     lightsOutMinutes,
+    unitSystem: userRow[0]?.unit_system ?? null,
   });
 }
 
@@ -197,7 +207,7 @@ export async function PATCH(request: Request): Promise<NextResponse> {
     return NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 });
   }
 
-  const { name, age, heightCm, weightKg, sleepGoalMinutes, lightsOutMinutes } = body;
+  const { name, age, heightCm, weightKg, sleepGoalMinutes, lightsOutMinutes, unitSystem } = body;
 
   // ── Validation ───────────────────────────────────────────────────────────
   let trimmedName: string | undefined;
@@ -223,10 +233,22 @@ export async function PATCH(request: Request): Promise<NextResponse> {
   if (lightsOutMinutes !== undefined && (!isInteger(lightsOutMinutes) || lightsOutMinutes < 0 || lightsOutMinutes > 1439)) {
     return NextResponse.json({ error: 'lightsOutMinutes must be an integer between 0 and 1439.' }, { status: 400 });
   }
+  let parsedUnitSystem: 'metric' | 'imperial' | undefined;
+  if (unitSystem !== undefined) {
+    const parsed = parseUnitSystem(unitSystem);
+    if (parsed === null) {
+      return NextResponse.json({ error: 'unitSystem must be "metric" or "imperial".' }, { status: 400 });
+    }
+    parsedUnitSystem = parsed;
+  }
 
   // ── Effects ──────────────────────────────────────────────────────────────
   if (trimmedName !== undefined) {
     await db.update(schema.users).set({ name: trimmedName }).where(eq(schema.users.id, userId));
+  }
+
+  if (parsedUnitSystem !== undefined) {
+    await db.update(schema.users).set({ unit_system: parsedUnitSystem }).where(eq(schema.users.id, userId));
   }
 
   if (age !== undefined || heightCm !== undefined || weightKg !== undefined) {

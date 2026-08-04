@@ -47,6 +47,15 @@ export const users = p.pgTable('users', {
   // pick up new defaults automatically if the default ever changes.
   sleep_goal_minutes:  p.integer('sleep_goal_minutes'),                        // null → 480 (8h)
   lights_out_minutes:  p.integer('lights_out_minutes'),                        // null → 1350 (22:30)
+
+  // ── Unit system preference (rendering only) ─────────────────────────────────
+  // Same null-means-default convention as above: null → the client falls back
+  // to the device's locale rather than a hardcoded app default, since there's
+  // no single sane server-side default across regions. This column governs
+  // *display* only — every value stored anywhere in this schema (heightCm,
+  // weightKg, distances, etc.) remains canonically metric (cm/kg/metres);
+  // imperial is purely a client-side rendering choice derived from this flag.
+  unit_system: p.text('unit_system'),                                          // 'metric' | 'imperial'; null → client falls back to device locale
 });
 
 // ─── events (append-only) ────────────────────────────────────────────────────

@@ -21,7 +21,7 @@ const state: {
   userRow: Array<{
     name: string; onboarded_at: Date | null; created_at: Date;
     sleep_goal_minutes: number | null; lights_out_minutes: number | null;
-    timezone: string | null;
+    timezone: string | null; unit_system: string | null;
   }>;
   dmDates: Array<{ date: string }>;
   mealRows: Array<{ timestamp: Date }>;
@@ -29,12 +29,14 @@ const state: {
 } = {
   userRow: [{
     name: 'Test User', onboarded_at: new Date('2026-01-01T00:00:00Z'), created_at: new Date('2026-01-01T00:00:00Z'),
-    sleep_goal_minutes: 480, lights_out_minutes: 1350, timezone: 'America/Chicago',
+    sleep_goal_minutes: 480, lights_out_minutes: 1350, timezone: 'America/Chicago', unit_system: null,
   }],
   dmDates: [],
   mealRows: [],
   aggRow: [{ avg_hrv: null, workouts: 0, row_count: 0 }],
 };
+
+const userUpdateCalls: Array<Record<string, unknown>> = [];
 
 const fakeDb = {
   select: () => ({
@@ -57,6 +59,16 @@ const fakeDb = {
     },
   }),
   execute: async () => state.aggRow,
+  update: (table: unknown) => ({
+    set: (assigned: Record<string, unknown>) => {
+      if (table === realSchema.users) userUpdateCalls.push(assigned);
+      return {
+        where: () => ({
+          returning: async () => [{ ...state.userRow[0], ...assigned }],
+        }),
+      };
+    },
+  }),
 };
 
 mock.module('@/db', { namedExports: { db: fakeDb, schema: realSchema } });
@@ -147,4 +159,45 @@ test('PATCH looks up the user\'s stored timezone and logs weight under lib/local
   assert.equal(loggedWeightCalls.length, 1);
   assert.match(loggedWeightCalls[0].date, /^\d{4}-\d{2}-\d{2}$/);
   assert.equal(loggedWeightCalls[0].weight, 81.2);
+});
+
+test('GET returns unitSystem: null when the column is unset', async () => {
+  state.userRow = [{ ...state.userRow[0], unit_system: null }];
+
+  const { GET } = await routePromise;
+  const res = await GET(getRequest({ 'x-user-id': 'user-1' }));
+  const body = await res.json();
+
+  assert.equal(body.unitSystem, null);
+});
+
+test('GET returns unitSystem: "imperial" when the column is set', async () => {
+  state.userRow = [{ ...state.userRow[0], unit_system: 'imperial' }];
+
+  const { GET } = await routePromise;
+  const res = await GET(getRequest({ 'x-user-id': 'user-1' }));
+  const body = await res.json();
+
+  assert.equal(body.unitSystem, 'imperial');
+});
+
+test('PATCH persists a valid unitSystem', async () => {
+  userUpdateCalls.length = 0;
+
+  const { PATCH } = await routePromise;
+  const res = await PATCH(patchRequest({ unitSystem: 'imperial' }, { 'x-user-id': 'user-1' }));
+  assert.equal(res.status, 200);
+
+  assert.equal(userUpdateCalls.length, 1);
+  assert.equal(userUpdateCalls[0].unit_system, 'imperial');
+});
+
+test('PATCH 400s on a garbage unitSystem value', async () => {
+  userUpdateCalls.length = 0;
+
+  const { PATCH } = await routePromise;
+  const res = await PATCH(patchRequest({ unitSystem: 'us' }, { 'x-user-id': 'user-1' }));
+  assert.equal(res.status, 400);
+
+  assert.equal(userUpdateCalls.length, 0);
 });

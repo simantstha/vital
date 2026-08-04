@@ -125,6 +125,7 @@ final class AuthViewModel: ObservableObject {
         isAuthenticated = false
         onboarded = false
         UserDefaults.standard.removeObject(forKey: Keys.onboarded)
+        UnitPreference.shared.clear()
     }
 
     // MARK: - Shared request handling

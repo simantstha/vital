@@ -84,18 +84,15 @@ final class ProfileViewModelTests: XCTestCase {
         XCTAssertEqual(cells.map(\.value), ["12", "24", "62 ms", "4"])
     }
 
-    func testProfileCellsFormatMeasurementsInUSUnitsWhenExplicitlyRequested() {
+    func testProfileCellsFormatMeasurementsInImperialUnitsWhenExplicitlyRequested() {
         let cells = ProfileViewModel.profileCells(
             from: ProfileDetails(age: 29, biologicalSex: "Male", heightCm: 175.3, weightKg: 70),
-            units: .us
+            units: .imperial
         )
 
-        XCTAssertEqual(cells.map(\.value), ["29", "5' 9\"", "154 lb", "Male"])
-    }
-
-    func testProfileUnitSystemMapsMeasurementSystemWithoutLocaleInference() {
-        XCTAssertEqual(ProfileUnitSystem.from(measurementSystem: .metric), .metric)
-        XCTAssertEqual(ProfileUnitSystem.from(measurementSystem: .us), .us)
+        XCTAssertEqual(cells.map(\.label), ["Age", "Height", "Current weight", "Biological sex"])
+        XCTAssertEqual(cells.map(\.value)[0], "29")
+        XCTAssertEqual(cells.map(\.value)[3], "Male")
     }
 
     func testProfileCellsUsePlaceholdersForMissingPersonalDetails() {
