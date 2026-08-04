@@ -20,7 +20,7 @@ final class OnboardingViewModel: ObservableObject {
     @Published var sex: String = ""
     @Published var heightCm: Double?
     @Published var weightKg: Double?
-    @Published var units: String = "metric"
+    @Published var units: UnitSystem = UnitPreference.shared.current
 
     // MARK: - Goal
 
@@ -139,7 +139,7 @@ final class OnboardingViewModel: ObservableObject {
             sex: sex,
             heightCm: heightCm ?? 0,
             weightKg: weightKg ?? 0,
-            units: units,
+            units: units.rawValue,
             goal: goal,
             targetDate: hasTargetDate ? Self.dateFormatter.string(from: targetDate) : nil
         )

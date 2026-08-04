@@ -75,6 +75,7 @@ struct AnalysisView: View {
 private struct AnalysisMetricsCard: View {
     let kind: String
     let metrics: AnalysisMetrics
+    @ObservedObject private var unitPref = UnitPreference.shared
 
     var body: some View {
         GlassCard {
@@ -132,9 +133,11 @@ private struct AnalysisMetricsCard: View {
         if let avgHr = metrics.avgHr { tiles.append(("\(Int(avgHr.rounded())) bpm", "Avg HR")) }
         if let maxHr = metrics.maxHr { tiles.append(("\(Int(maxHr.rounded())) bpm", "Max HR")) }
         if let distanceM = metrics.distanceM {
-            tiles.append((String(format: "%.1f km", distanceM / 1000), "Distance"))
+            tiles.append((UnitFormat.distance(metres: distanceM, unitPref.current), "Distance"))
         }
-        if let pace = metrics.paceMinPerKm { tiles.append((Self.paceLabel(pace), "Pace /km")) }
+        if let pace = metrics.paceMinPerKm {
+            tiles.append((UnitFormat.pace(minPerKm: pace, unitPref.current), "Pace \(unitPref.current.paceUnit)"))
+        }
         return tiles
     }
 
@@ -251,14 +254,6 @@ private struct AnalysisMetricsCard: View {
     private static func hoursMinutes(_ minutes: Double) -> String {
         let total = Int(minutes.rounded())
         return "\(total / 60)h \(total % 60)m"
-    }
-
-    /// 5.78 → "5′47″"
-    private static func paceLabel(_ minutesPerKm: Double) -> String {
-        var wholeMinutes = Int(minutesPerKm)
-        var seconds = Int(((minutesPerKm - Double(wholeMinutes)) * 60).rounded())
-        if seconds == 60 { wholeMinutes += 1; seconds = 0 }
-        return "\(wholeMinutes)′\(String(format: "%02d", seconds))″"
     }
 }
 

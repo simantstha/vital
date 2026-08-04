@@ -169,10 +169,14 @@ enum LogsPagerSummary {
 
     // MARK: Summary line
 
-    /// Per-day summary line: "N entries[ · N kcal][ · N.N km][ · Hh Mm sleep]".
+    /// Per-day summary line: "N entries[ · N kcal][ · N.N km/mi][ · Hh Mm sleep]".
     /// The sleep part only appears when neither kcal nor km fired (a pure
     /// rest day) and at least one item carries `sleepMs`.
-    static func summaryLine(items: [LogDisplayItem]) -> String {
+    ///
+    /// `LogDisplayItem.km` stays canonical km throughout — it decodes the
+    /// server's wire field directly (see `LogsPagerTests`'s decode tests) —
+    /// `units` only controls how this render path formats the summed total.
+    static func summaryLine(items: [LogDisplayItem], units: UnitSystem) -> String {
         var parts: [String] = []
 
         if items.isEmpty {
@@ -192,7 +196,7 @@ enum LogsPagerSummary {
             addedKcalOrKm = true
         }
         if kmSum > 0 {
-            parts.append(String(format: "%.1f km", kmSum))
+            parts.append(UnitFormat.distance(km: kmSum, units))
             addedKcalOrKm = true
         }
 

@@ -3,6 +3,7 @@ import Charts
 
 struct TrendsView: View {
     @StateObject private var vm = TrendsViewModel()
+    @ObservedObject private var unitPref = UnitPreference.shared
 
     var body: some View {
         ZStack {
@@ -232,7 +233,7 @@ private extension TrendsView {
                             .font(Theme.Typography.numericHero(36))
                             .foregroundStyle(Theme.Colors.textPrimary)
                             .contentTransition(.numericText())
-                        Text(isShowingCurrentSelection ? vm.selectedMetric.unit : "--")
+                        Text(isShowingCurrentSelection ? vm.selectedMetric.unitLabel(unitPref.current) : "--")
                             .font(Theme.Typography.labelSmall)
                             .foregroundStyle(Theme.Colors.textSecondary)
                     }
@@ -351,8 +352,8 @@ private extension TrendsView {
     var statsRow: some View {
         HStack(spacing: Theme.Spacing.sm) {
             if isShowingCurrentSelection {
-                StatBadge(label: "Latest",  value: vm.currentValue + " " + vm.selectedMetric.unit)
-                StatBadge(label: "Average", value: vm.averageValue + " " + vm.selectedMetric.unit)
+                StatBadge(label: "Latest",  value: vm.currentValue + " " + vm.selectedMetric.unitLabel(unitPref.current))
+                StatBadge(label: "Average", value: vm.averageValue + " " + vm.selectedMetric.unitLabel(unitPref.current))
                 StatBadge(label: "Range",   value: vm.rangeLabel.isEmpty ? "--" : vm.rangeLabel)
             } else {
                 StatBadge(label: "Latest",  value: "--")
