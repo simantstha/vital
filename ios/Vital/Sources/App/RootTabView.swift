@@ -73,8 +73,9 @@ struct RootTabView: View {
             switch route {
             case .workoutAnalysis(let id): WorkoutAnalysisView(id: id)
             case .sleepAnalysis(let id): SleepAnalysisView(id: id)
-            case .morningBrief:
-                Color.clear.onAppear { selected = .today; router.route = nil }
+            case .morningBrief(let id):
+                if let id { MorningBriefView(id: id) }
+                else { Color.clear.onAppear { selected = .today; router.route = nil } }
             }
         }
     }

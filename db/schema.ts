@@ -408,6 +408,7 @@ export const morning_notification_slots = p.pgTable('morning_notification_slots'
   lease_expires_at: p.timestamp('lease_expires_at', { withTimezone: true }),
   retry_count:     p.integer('retry_count').default(0).notNull(),
   next_attempt_at: p.timestamp('next_attempt_at', { withTimezone: true }).defaultNow().notNull(),
+  result:          p.jsonb('result'),
 }, (t) => [
   p.check('morning_notification_slots_claimed_by_check', sql`${t.claimed_by} in ('sleep', 'brief')`),
   p.check('morning_notification_slots_status_check', sql`${t.status} in ('claimed', 'sent', 'failed')`),

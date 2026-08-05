@@ -150,6 +150,18 @@ export async function failMorningBrief(claim: MorningBriefClaim, now: Date): Pro
 }
 
 export async function completeMorningBrief(claim: MorningBriefClaim, result: CoachAnalysis, send: (device: PushDevice, result: CoachAnalysis) => Promise<PushOutcome>, now: Date): Promise<void> {
+  // Persist the result before any push leaves the process: the client can tap
+  // within milliseconds of delivery, so the row must be readable before the
+  // send loop starts. Same lease-guarded CAS as `storeReady` above.
+  const stored = await db.update(schema.morning_notification_slots)
+    .set({ result })
+    .where(and(
+      eq(schema.morning_notification_slots.id, claim.slotId),
+      eq(schema.morning_notification_slots.lease_token, claim.leaseToken),
+      eq(schema.morning_notification_slots.status, 'claimed'),
+    ))
+    .returning({ id: schema.morning_notification_slots.id });
+  if (!stored.length) return; // lease lost — another worker owns this slot
   const devices = await workerRepository.listDevices(claim.userId);
   let sent = false; let transient = false; let attempt = claim.retryCount * 100;
   for (const device of devices) {

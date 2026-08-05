@@ -1,4 +1,4 @@
-import { and, eq, isNull, sql } from 'drizzle-orm';
+import { and, eq, isNotNull, isNull, sql } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import type {
   AnalysisKind,
@@ -128,6 +128,23 @@ export const proactiveHealthRepository: ProactiveHealthRepository = {
   },
 
   async getAnalysis(kind: AnalysisKind, userId: string, id: string): Promise<AnalysisRecord | null> {
+    if (kind === 'morningBrief') {
+      const [row] = await db.select({
+        id: schema.morning_notification_slots.id,
+        userId: schema.morning_notification_slots.user_id,
+        date: schema.morning_notification_slots.local_date,
+        result: schema.morning_notification_slots.result,
+        createdAt: schema.morning_notification_slots.claimed_at,
+      }).from(schema.morning_notification_slots).where(and(
+        eq(schema.morning_notification_slots.id, id),
+        eq(schema.morning_notification_slots.user_id, userId),
+        eq(schema.morning_notification_slots.status, 'sent'),
+        isNotNull(schema.morning_notification_slots.result),
+      )).limit(1);
+      // `status: 'ready'` is a synthesized DTO signal (slots use 'sent'),
+      // consistent with how the sleep branch below synthesizes `deletedAt: null`.
+      return row ? { ...row, status: 'ready', deletedAt: null, input: null } : null;
+    }
     if (kind === 'workout') {
       const [row] = await db.select({
         id: schema.workout_analyses.id,

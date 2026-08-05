@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct AnalysisView: View {
-    let kind: String
+    let kind: AnalysisKind
     let id: String
     @EnvironmentObject private var router: AppRouter
     @Environment(\.dismiss) private var dismiss
@@ -16,10 +16,10 @@ struct AnalysisView: View {
                 Group {
                     if loading { ProgressView().motionTransition(.fade) }
                     else if let analysis { content(analysis).motionTransition(.fade) }
-                    else { ContentUnavailableView("Analysis unavailable", systemImage: "chart.line.downtrend.xyaxis", description: Text(error ?? "This analysis is no longer available.")).motionTransition(.fade) }
+                    else { ContentUnavailableView("\(kind.title) unavailable", systemImage: "chart.line.downtrend.xyaxis", description: Text(error ?? "This analysis is no longer available.")).motionTransition(.fade) }
                 }
             }
-            .navigationTitle(kind == "workout" ? "Workout Analysis" : "Sleep Analysis")
+            .navigationTitle(kind.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
         }
@@ -29,8 +29,8 @@ struct AnalysisView: View {
     private func content(_ value: AnalysisResponse) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
-                if let metrics = value.metrics {
-                    AnalysisMetricsCard(kind: kind, metrics: metrics)
+                if let metrics = value.metrics, let layout = kind.metrics {
+                    AnalysisMetricsCard(kind: layout, metrics: metrics)
                 }
                 GlassCard { VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
                     Text(value.result.headline).font(Theme.Typography.titleMedium)
@@ -39,7 +39,7 @@ struct AnalysisView: View {
                 analysisList("What stood out", value.result.observations)
                 analysisList("Next steps", value.result.nextSteps)
                 Button("Discuss with Coach") {
-                    router.coachContext = "Let's discuss my \(kind) analysis from \(value.date): \(value.result.headline). \(value.result.shortInsight)"
+                    router.coachContext = "Let's discuss my \(kind.subject) from \(value.date): \(value.result.headline). \(value.result.shortInsight)"
                     router.route = nil
                 }
                 .buttonStyle(.borderedProminent).tint(Theme.Colors.accent).frame(maxWidth: .infinity)
@@ -62,7 +62,7 @@ struct AnalysisView: View {
     }
 
     private func load() async {
-        do { analysis = try await APIClient.shared.fetchAnalysis(kind: kind, id: id) }
+        do { analysis = try await APIClient.shared.fetchAnalysis(resource: kind.resource, id: id) }
         catch { self.error = error.localizedDescription }
         withAnimation(Theme.Motion.appear) { loading = false }
     }
@@ -259,10 +259,15 @@ private struct AnalysisMetricsCard: View {
 
 struct WorkoutAnalysisView: View {
     let id: String
-    var body: some View { AnalysisView(kind: "workout", id: id) }
+    var body: some View { AnalysisView(kind: .workout, id: id) }
 }
 
 struct SleepAnalysisView: View {
     let id: String
-    var body: some View { AnalysisView(kind: "sleep", id: id) }
+    var body: some View { AnalysisView(kind: .sleep, id: id) }
+}
+
+struct MorningBriefView: View {
+    let id: String
+    var body: some View { AnalysisView(kind: .morningBrief, id: id) }
 }

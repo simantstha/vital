@@ -67,7 +67,7 @@ async function tick(reportStage: (stage: WorkerStage) => void): Promise<void> {
     try {
       const context = await workerRepository.getContext(job);
       const result = await analyze(job, context);
-      await completeMorningBrief(claim, result, (device, value) => apns.send(device, { title: value.headline, body: value.shortInsight }, { type: 'morning_brief', deepLink: 'vital://today' }), now);
+      await completeMorningBrief(claim, result, (device, value) => apns.send(device, { title: value.headline, body: value.shortInsight }, { type: 'morning_brief', id: claim.slotId, deepLink: `vital://morning-brief/${claim.slotId}` }), now);
     } catch (error) {
       console.error(JSON.stringify(workerErrorEvent('process-morning-brief', error)));
       await failMorningBrief(claim, new Date());

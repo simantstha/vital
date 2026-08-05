@@ -64,9 +64,11 @@ final class ProactiveNotificationsTests: XCTestCase {
         let id = "8ba804f0-68b2-4d36-98bb-90c9eea911a1"
         XCTAssertEqual(PushRoute(userInfo: ["type": "workout_analysis", "id": id, "deepLink": "vital://workout-analysis/\(id)"]), .workoutAnalysis(id))
         XCTAssertEqual(PushRoute(userInfo: ["type": "sleep_analysis", "id": id, "deepLink": "vital://sleep-analysis/\(id)"]), .sleepAnalysis(id))
-        XCTAssertEqual(PushRoute(userInfo: ["type": "morning_brief", "deepLink": "vital://today"]), .morningBrief)
+        XCTAssertEqual(PushRoute(userInfo: ["type": "morning_brief", "id": id, "deepLink": "vital://morning-brief/\(id)"]), .morningBrief(id))
+        XCTAssertEqual(PushRoute(userInfo: ["type": "morning_brief", "deepLink": "vital://today"]), .morningBrief(nil))
         XCTAssertNil(PushRoute(userInfo: ["type": "workout_analysis", "id": id, "deepLink": "https://example.com/\(id)"]))
         XCTAssertNil(PushRoute(userInfo: ["type": "workout_analysis", "id": id, "deepLink": "vital://sleep-analysis/\(id)"]))
+        XCTAssertNil(PushRoute(userInfo: ["type": "morning_brief", "id": id, "deepLink": "vital://sleep-analysis/\(id)"]))
     }
 
     func testServerPreferencesPreserveLocalReminderSettings() {
