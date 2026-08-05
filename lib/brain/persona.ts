@@ -9,6 +9,7 @@
 
 import type { OntologyNode } from '@/db/schema';
 import type { Calibration } from './baselines';
+import type { UnitSystem } from '../units';
 
 // ── Base coach voice ───────────────────────────────────────────────────────────
 
@@ -139,6 +140,25 @@ something is different and give advice that actually fits their body, not generi
 Everything else (nutrition logging, general advice, motivation) proceeds normally.`;
 }
 
+// ── Units instruction ──────────────────────────────────────────────────────
+
+/**
+ * Display-unit instruction — how the coach should render distances, weights,
+ * and heights it speaks in chat. Storage stays canonically metric (see
+ * lib/units.ts); this block only steers prose. Shared with the specialist
+ * prompt (lib/specialists/orchestration.ts's buildSpecialistPrompt) so a
+ * handed-off specialist doesn't drift back to the other unit system.
+ */
+export function unitsInstructionBlock(unitSystem: UnitSystem): string {
+  const imperial = unitSystem === 'imperial';
+  return `## Units — how to render numbers in your prose
+This user has chosen ${imperial ? 'imperial' : 'metric'} units. Render distances in ${imperial ? 'miles' : 'kilometres'}, \
+body weight in ${imperial ? 'pounds' : 'kilograms'}, and height in ${imperial ? 'feet/inches' : 'centimetres'} — \
+match what they see in the app.
+Exception: nutrition ratios expressed "per kilogram of body mass" (e.g. "≥1.6g/kg protein") are a scientific \
+dosing ratio, not a display unit — never convert that "/kg" to "/lb", even for an imperial user.`;
+}
+
 // ── Hard-constraints injector ─────────────────────────────────────────────────
 
 function hardConstraintsInjector(constraints: OntologyNode[]): string {
@@ -174,12 +194,15 @@ export type PersonaLens = 'nutritionist' | 'trainer';
  * @param calibration      When status is 'calibrating', appends the calibration-mode
  *                         instruction block (withhold recovery scores and training
  *                         prescriptions until baselines are established).
+ * @param unitSystem       Display-unit preference (default 'metric') — steers only how
+ *                         the coach renders distances/weights/heights in prose.
  */
 export function assemblePersona(
   hardConstraints: OntologyNode[],
   lenses: PersonaLens[] = ['nutritionist', 'trainer'],
   onboarding: boolean = false,
   calibration?: Calibration,
+  unitSystem: UnitSystem = 'metric',
 ): string {
   const blocks: string[] = [baseCoachVoice()];
 
@@ -189,7 +212,10 @@ export function assemblePersona(
   if (onboarding) blocks.push(onboardingLens());
   if (calibration?.status === 'calibrating') blocks.push(calibratingLens(calibration));
 
-  // Hard constraints always last — they override other guidance
+  // Units block, then hard constraints always last — constraints override
+  // every other block, including units (e.g. if a constraint somehow implied
+  // a unit-relevant caveat).
+  blocks.push(unitsInstructionBlock(unitSystem));
   blocks.push(hardConstraintsInjector(hardConstraints));
 
   return blocks.join('\n\n---\n\n');

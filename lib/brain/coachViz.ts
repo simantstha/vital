@@ -5,7 +5,15 @@
  * inline instead of only showing a "Checked your HRV trend" chip.
  *
  * Only these three tools produce a viz; everything else stays text-only.
+ *
+ * Unit conversion: the underlying data tools (lib/brain/tools.ts) always
+ * return metric values (daily_metrics is stored metric). `buildCoachViz`
+ * takes the caller's `UnitSystem` and converts `body_mass_kg` points/stats to
+ * lb for imperial — display-only, the tool result and DB stay metric.
  */
+
+import { LB_PER_KG } from '../metricFormat';
+import type { UnitSystem } from '../units';
 
 export type CoachViz =
   | {
@@ -44,8 +52,17 @@ const METRIC_META: Record<string, { label: string; unit: string }> = {
   sleep_minutes:      { label: 'Sleep',         unit: 'min' },
 };
 
-function meta(metric: string): { label: string; unit: string } {
-  return METRIC_META[metric] ?? { label: metric, unit: '' };
+/** Metric metadata, unit-aware: `body_mass_kg` reports `unit: 'lb'` for an imperial user. */
+function meta(metric: string, unitSystem: UnitSystem): { label: string; unit: string } {
+  const base = METRIC_META[metric] ?? { label: metric, unit: '' };
+  if (metric === 'body_mass_kg' && unitSystem === 'imperial') return { ...base, unit: 'lb' };
+  return base;
+}
+
+/** Converts a raw metric value for display — only `body_mass_kg` under `imperial` actually converts; everything else passes through. Pure scalar (kg→lb), so it's safe to apply to deltas as well as absolute values. */
+function convertMetricValue(metric: string, value: number, unitSystem: UnitSystem): number {
+  if (metric === 'body_mass_kg' && unitSystem === 'imperial') return value * LB_PER_KG;
+  return value;
 }
 
 /** Single-letter weekday label from an ISO 'YYYY-MM-DD' date. */
@@ -62,8 +79,10 @@ function num(v: unknown): number | null {
 /**
  * Build a CoachViz from a tool name + its (already JSON-parsed) result.
  * Returns null when the tool isn't chartable or has no data to show.
+ * `unitSystem` (default 'metric') converts `body_mass_kg` points/stats to lb
+ * for display — the tool result itself and the underlying DB stay metric.
  */
-export function buildCoachViz(name: string, parsed: unknown): CoachViz | null {
+export function buildCoachViz(name: string, parsed: unknown, unitSystem: UnitSystem = 'metric'): CoachViz | null {
   if (parsed == null || typeof parsed !== 'object') return null;
   const r = parsed as Record<string, unknown>;
 
@@ -73,20 +92,24 @@ export function buildCoachViz(name: string, parsed: unknown): CoachViz | null {
     const points = rawPoints
       .map((p) => {
         const o = p as Record<string, unknown>;
-        return { label: dayLabel(String(o.date ?? '')), value: num(o.value) };
+        const raw = num(o.value);
+        const value = raw != null ? convertMetricValue(metric, raw, unitSystem) : null;
+        return { label: dayLabel(String(o.date ?? '')), value };
       })
       .filter((p): p is { label: string; value: number } => p.value != null);
     if (points.length === 0) return null;
 
     const stats = (r.stats ?? {}) as Record<string, unknown>;
     const baselineObj = (r.baseline ?? null) as Record<string, unknown> | null;
-    const mean = num(stats.mean);
-    const baseline = baselineObj ? num(baselineObj.mean30) : null;
+    const rawMean = num(stats.mean);
+    const mean = rawMean != null ? convertMetricValue(metric, rawMean, unitSystem) : null;
+    const rawBaseline = baselineObj ? num(baselineObj.mean30) : null;
+    const baseline = rawBaseline != null ? convertMetricValue(metric, rawBaseline, unitSystem) : null;
     const deltaPct =
       mean != null && baseline != null && baseline !== 0
         ? Math.round(((mean - baseline) / baseline) * 100)
         : null;
-    const m = meta(metric);
+    const m = meta(metric, unitSystem);
     return {
       kind: 'trend',
       title: `${m.label} · last ${points.length} days`,
@@ -120,17 +143,21 @@ export function buildCoachViz(name: string, parsed: unknown): CoachViz | null {
     const metric = String(r.metric ?? '');
     const current = (r.current ?? {}) as Record<string, unknown>;
     const previous = (r.previous ?? {}) as Record<string, unknown>;
-    const currentMean = num(current.mean);
-    const previousMean = num(previous.mean);
+    const rawCurrentMean = num(current.mean);
+    const rawPreviousMean = num(previous.mean);
+    const currentMean = rawCurrentMean != null ? convertMetricValue(metric, rawCurrentMean, unitSystem) : null;
+    const previousMean = rawPreviousMean != null ? convertMetricValue(metric, rawPreviousMean, unitSystem) : null;
     if (currentMean == null && previousMean == null) return null;
-    const m = meta(metric);
+    const m = meta(metric, unitSystem);
+    const rawDelta = num(r.delta);
+    const delta = rawDelta != null ? convertMetricValue(metric, rawDelta, unitSystem) : null;
     return {
       kind: 'compare',
       title: `${m.label} · this vs last period`,
       unit: m.unit,
       currentMean: currentMean != null ? Math.round(currentMean) : null,
       previousMean: previousMean != null ? Math.round(previousMean) : null,
-      delta: num(r.delta) != null ? Math.round(num(r.delta)!) : null,
+      delta: delta != null ? Math.round(delta) : null,
       deltaPct: num(r.deltaPct),
     };
   }

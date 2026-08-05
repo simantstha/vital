@@ -177,6 +177,7 @@ export async function* runCoach(
     undefined,
     isOnboarding,
     ctx.calibration,
+    ctx.unitSystem,
   );
   const baseTools = isOnboarding ? [...BRAIN_TOOLS, ...MEMORY_TOOLS] : BRAIN_TOOLS;
   let manifest: SpecialistManifest | null = null;
@@ -193,6 +194,7 @@ export async function* runCoach(
       calibration: JSON.stringify(ctx.calibration),
       relevantMessages: ctx.recentMessages.map((message) => `${message.role}: ${message.content}`),
       inboundHandoff: currentSession.inboundHandoff,
+      unitSystem: ctx.unitSystem,
     });
   }
   const configuration = selectCoachConfiguration({
@@ -349,7 +351,7 @@ export async function* runCoach(
       // client can render an inline mini-chart / stat card (falls back to the
       // text chip above when there's no data). Same callId ties it to the row.
       try {
-        const viz = buildCoachViz(block.name, JSON.parse(result));
+        const viz = buildCoachViz(block.name, JSON.parse(result), ctx.unitSystem);
         if (viz) yield { type: 'tool_data', id: callId, viz };
       } catch {
         // result wasn't JSON (or not chartable) — no viz, just the chip.

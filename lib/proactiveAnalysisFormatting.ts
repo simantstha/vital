@@ -1,5 +1,6 @@
 import { type ProactiveAnalysisSource } from './proactiveAnalysisGrounding';
-import { formatKilometres, formatMinutes, formatPaceMinPerKm, roundInteger, roundTo } from './metricFormat';
+import { formatDistance, formatMinutes, formatPace, paceSuffix, roundInteger, roundTo, LB_PER_KG } from './metricFormat';
+import { type UnitSystem } from './units';
 
 type Rec = Record<string, unknown>;
 
@@ -28,7 +29,7 @@ function bpm(value: unknown): string | null {
  * validates `hkUuid: string`, see app/api/ingest/daily/route.ts:61,78-79) —
  * also passes through verbatim rather than being silently dropped.
  */
-function formatWorkoutInput(input: unknown): unknown {
+function formatWorkoutInput(input: unknown, units: UnitSystem): unknown {
   if (!isPlainObject(input)) return input;
   const result: Rec = {};
   for (const [key, value] of Object.entries(input)) {
@@ -50,16 +51,18 @@ function formatWorkoutInput(input: unknown): unknown {
         break;
       }
       case 'distanceM': {
-        const formatted = formatKilometres(value);
+        const formatted = formatDistance(value, units);
         if (formatted != null) result.distance = formatted;
         break;
       }
       case 'paceMinPerKm': {
-        const formatted = formatPaceMinPerKm(value);
-        if (formatted != null) result.pace = `${formatted} /km`;
+        const formatted = formatPace(value, units);
+        if (formatted != null) result.pace = `${formatted} ${paceSuffix(units)}`;
         break;
       }
       case 'elevationGainM': {
+        // Left in metres deliberately — elevation has no imperial-display
+        // requirement in scope, see lib/proactiveAnalysisFormatting docs.
         const n = roundInteger(value);
         if (n != null) result[key] = `${n} m`;
         break;
@@ -106,20 +109,33 @@ function formatSleepStages(stages: Rec): Rec {
 /**
  * `availableContext.metrics[]` metric-name table — matches the rounding
  * already used in lib/brain/whoopContext.ts so the two prompts agree.
+ * `body_mass_kg` under `imperial` converts kg→lb and rounds to a whole
+ * pound (matching lib/metricFormat.formatWeight's imperial convention); the
+ * caller (formatMetricRow) relabels the row's `metric` key to `body_mass_lb`
+ * so a converted value never sits under a `_kg` key.
  */
-function formatMetricValue(metric: string, value: unknown): unknown {
+function formatMetricValue(metric: string, value: unknown, units: UnitSystem): unknown {
+  if (metric === 'body_mass_kg' && units === 'imperial') {
+    const kg = typeof value === 'number' ? value : NaN;
+    return roundInteger(kg * LB_PER_KG);
+  }
   if (INTEGER_METRICS.has(metric)) return roundInteger(value);
   if (ROUND_TO_1DP_METRICS.has(metric)) return roundTo(value, 1);
   if (FORMAT_MINUTES_METRICS.has(metric)) return formatMinutes(value);
   return roundTo(value, 1);
 }
 
-function formatMetricRow(row: unknown): unknown {
+function formatMetricRow(row: unknown, units: UnitSystem): unknown {
   if (!isPlainObject(row) || typeof row.metric !== 'string' || !('value' in row)) return row;
   const result: Rec = { ...row };
-  const formatted = formatMetricValue(row.metric, row.value);
+  const formatted = formatMetricValue(row.metric, row.value, units);
   if (formatted == null) delete result.value;
-  else result.value = formatted;
+  else {
+    result.value = formatted;
+    // A converted value under a `_kg` key is a lie the model will read
+    // literally — relabel the key alongside the conversion.
+    if (row.metric === 'body_mass_kg' && units === 'imperial') result.metric = 'body_mass_lb';
+  }
   return result;
 }
 
@@ -146,11 +162,11 @@ function formatBaselineRow(row: unknown): unknown {
   return { ...row, stats: roundNumericLeaves(row.stats, 1) };
 }
 
-function formatAvailableContext(context: unknown): unknown {
+function formatAvailableContext(context: unknown, units: UnitSystem): unknown {
   if (!isPlainObject(context)) return context;
   const result: Rec = {};
   for (const [key, value] of Object.entries(context)) {
-    if (key === 'metrics' && Array.isArray(value)) { result.metrics = value.map(formatMetricRow); continue; }
+    if (key === 'metrics' && Array.isArray(value)) { result.metrics = value.map((row) => formatMetricRow(row, units)); continue; }
     if (key === 'baselines' && Array.isArray(value)) { result.baselines = value.map(formatBaselineRow); continue; }
     result[key] = value;
   }
@@ -165,11 +181,11 @@ function formatAvailableContext(context: unknown): unknown {
  * (lib/proactiveHealthWorkerSupport.ts), and it is the row
  * lib/proactiveHealthHttp.ts serves to the iOS metrics card.
  */
-export function formatAnalysisSource(source: ProactiveAnalysisSource): ProactiveAnalysisSource {
+export function formatAnalysisSource(source: ProactiveAnalysisSource, units: UnitSystem = 'metric'): ProactiveAnalysisSource {
   return {
     kind: source.kind,
     date: source.date,
-    input: source.kind === 'workout' ? formatWorkoutInput(source.input) : formatSleepInput(source.input),
-    availableContext: formatAvailableContext(source.availableContext),
+    input: source.kind === 'workout' ? formatWorkoutInput(source.input, units) : formatSleepInput(source.input),
+    availableContext: formatAvailableContext(source.availableContext, units),
   };
 }

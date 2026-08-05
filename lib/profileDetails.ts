@@ -1,4 +1,6 @@
 import { readMemoryFile, writeMemoryFile } from './memory';
+import { formatHeight, formatWeight } from './metricFormat';
+import type { UnitSystem } from './units';
 
 export type ProfileDetails = {
   age: number | null;
@@ -85,6 +87,34 @@ export function parseProfileDetails(markdown: string | null | undefined): Profil
   }
 
   return details;
+}
+
+// ── Prompt-only identity formatting (never storage) ─────────────────────────
+
+/**
+ * Formats already-parsed identity details for PROMPT ASSEMBLY ONLY (see
+ * lib/claude.ts's generateDailyBrief) — never for storage. core-profile.md
+ * and `parsePositiveNumber(value, 'cm'|'kg')`'s parse contract above stay
+ * metric; this is a read-only display transform applied just before the
+ * daily-brief prompt is built, so an imperial user's coach reads "5'11″/179
+ * lb" instead of raw "179 cm/81.2 kg". Omits a field entirely when it's
+ * null (never invents a value) and intentionally does not carry the
+ * "last updated" weight provenance `updateIdentityLines` writes to storage —
+ * that's storage metadata, not something the model needs to render numbers.
+ */
+export function formatIdentityForPrompt(details: ProfileDetails, units: UnitSystem): string {
+  const lines: string[] = [];
+  if (details.age != null) lines.push(`- Age: ${details.age}`);
+  if (details.biologicalSex != null) lines.push(`- Sex: ${details.biologicalSex}`);
+  if (details.heightCm != null) {
+    const height = formatHeight(details.heightCm, units);
+    if (height != null) lines.push(`- Height: ${height}`);
+  }
+  if (details.weightKg != null) {
+    const weight = formatWeight(details.weightKg, units);
+    if (weight != null) lines.push(`- Current weight: ${weight}`);
+  }
+  return lines.join('\n');
 }
 
 // ── core-profile.md Identity patch (Profile PATCH endpoint) ─────────────────

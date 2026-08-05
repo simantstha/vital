@@ -20,7 +20,7 @@ const valid: CoachAnalysis = {
 };
 
 function enabledContext(): AnalysisContext {
-  return { enabled: true, timezone: 'UTC', baselines: {}, profile: {}, metrics: {} };
+  return { enabled: true, timezone: 'UTC', baselines: {}, profile: {}, metrics: {}, unitSystem: 'metric' };
 }
 
 test('caps exponential retries', () => {

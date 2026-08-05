@@ -23,6 +23,7 @@ const reportAnalysisFailure = (event: AnalysisFailureEvent): void => {
 async function analyze(job: AnalysisJob, context: AnalysisContext): Promise<CoachAnalysis> {
   return generateAnalysis({
     source: { kind: job.kind, date: job.localDate, input: job.input, availableContext: context },
+    units: context.unitSystem,
     generate: async (request) => {
       const response = await anthropic.messages.create({
         model: proactiveAnalysisModel(process.env),

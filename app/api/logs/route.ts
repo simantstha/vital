@@ -46,6 +46,7 @@ import {
   sortLogItemsNewestFirst,
   type LogItem,
 } from '@/lib/logItems';
+import { getUserUnitSystem } from '@/lib/units';
 
 export const dynamic = 'force-dynamic';
 
@@ -81,16 +82,16 @@ export async function GET(request: Request): Promise<NextResponse> {
     .orderBy(desc(schema.events.timestamp))
     .limit(200);
 
-  const eventItems = events.map(mapEventToLogItem);
-
   // HealthKit workouts and sleep are synced into daily_metrics rather than the
   // events ledger. Workout startTime is an exact instant when available; daily
   // sleep remains day-level data attributed to its existing wake date.
-  const [workouts, sleepRows] = await Promise.all([
+  const [workouts, sleepRows, units] = await Promise.all([
     queryWorkouts(userId, days),
     queryMetricPoints(userId, 'sleep_minutes', days),
+    getUserUnitSystem(userId),
   ]);
-  const workoutItems = workouts.map(mapHealthKitWorkout);
+  const eventItems = events.map((e) => mapEventToLogItem(e, units));
+  const workoutItems = workouts.map((w, i) => mapHealthKitWorkout(w, i, units));
   const sleepItems = sleepRows.map(mapDailySleepRow);
 
   const items = dedupeWorkoutLogItems(

@@ -2,6 +2,8 @@ import Anthropic from '@anthropic-ai/sdk';
 import type { DailyBrief } from './types';
 import { readMemoryFile, writeMemoryFile } from '@/lib/memory';
 import { writeHrvBaselineToProfile } from '@/lib/brain/baselines';
+import { parseProfileDetails, formatIdentityForPrompt } from '@/lib/profileDetails';
+import type { UnitSystem } from '@/lib/units';
 
 // ── Inline types (formerly imported from lib/whoop + lib/strava) ──────────────
 
@@ -24,7 +26,7 @@ interface BriefHistory {
 interface ActivityRecord {
   type: 'run' | 'gym' | 'walk';
   date: string;
-  distanceMi?: string;
+  distance?: string;
   pace?: string;
   hr?: number;
   zone?: string;
@@ -34,8 +36,8 @@ interface ActivityRecord {
 
 interface WeeklyLoadRecord {
   weekStart: string;
-  runMi: number;
-  walkMi: number;
+  runDistance: number;
+  walkDistance: number;
   gymMin: number;
   gymSessions: number;
 }
@@ -100,8 +102,12 @@ interface BriefContext {
   /** Formatted sleep duration (e.g. "7h 12m"); null when no sleep has synced. */
   sleepDuration: string | null;
   strain: number | string;
-  weeklyMi: number;
-  lastRun: { distanceMi: string; pace: string; dayTime: string; name: string } | null;
+  weeklyDistance: number;
+  /** Unit label the distance fields above (weeklyDistance, lastRun.distance, weeklyMileage.run/walkDistance) are expressed in — "km" or "mi". */
+  distanceUnit: string;
+  /** Display-unit preference (default 'metric' when omitted) — only steers prompt-assembly formatting (distanceUnit above, identity height/weight); storage stays metric. */
+  unitSystem?: UnitSystem;
+  lastRun: { distance: string; pace: string; dayTime: string; name: string } | null;
   history?: BriefHistory | null;
   recentActivities?: ActivityRecord[];
   weeklyMileage?: WeeklyLoadRecord[];
@@ -112,9 +118,42 @@ interface BriefContext {
   calibrating?: boolean;
 }
 
+/**
+ * Replaces the `## Identity` section's lines in a raw core-profile.md/
+ * user-profile.md markdown blob with `formatIdentityForPrompt`'s
+ * unit-converted rendering — prompt-assembly only, the stored file is never
+ * touched. A no-op when there's no `## Identity` heading (e.g. the seeded
+ * user-profile.md fallback) or when `units` is 'metric' (the stored text is
+ * already metric, so rewriting it would only drop the weight's "last
+ * updated" provenance for no benefit).
+ */
+function applyIdentityUnits(markdown: string, units: UnitSystem): string {
+  if (units !== 'imperial' || !markdown.includes('## Identity')) return markdown;
+  const formatted = formatIdentityForPrompt(parseProfileDetails(markdown), units);
+  if (!formatted) return markdown;
+
+  const result: string[] = [];
+  let inIdentity = false;
+  for (const line of markdown.split('\n')) {
+    const heading = /^##\s+(.+?)\s*$/.exec(line);
+    if (heading) {
+      inIdentity = heading[1] === 'Identity';
+      result.push(line);
+      if (inIdentity) result.push(formatted);
+      continue;
+    }
+    if (inIdentity) continue; // original Identity lines dropped in favor of `formatted` above
+    result.push(line);
+  }
+  return result.join('\n');
+}
+
 export async function generateDailyBrief(userId: string, ctx: BriefContext): Promise<DailyBrief> {
   const today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
-  const userProfile = readMemoryFile(userId, 'core-profile.md') ?? readUserProfile(userId);
+  const userProfile = applyIdentityUnits(
+    readMemoryFile(userId, 'core-profile.md') ?? readUserProfile(userId),
+    ctx.unitSystem ?? 'metric',
+  );
 
   const historySection = ctx.history?.days.length
     ? `\n## 7-Day Recovery Trend (newest first)\n` +
@@ -124,19 +163,21 @@ export async function generateDailyBrief(userId: string, ctx: BriefContext): Pro
       `\n7-day avg: recovery ${ctx.history.avgRecovery7d}%, HRV ${ctx.history.avgHrv7d}ms — trend: ${ctx.history.trend}`
     : '';
 
+  const distanceUnit = ctx.distanceUnit;
+
   const activitiesSection = ctx.recentActivities?.length
     ? `\n## Last 7 Days Activities\n` +
       ctx.recentActivities.map(a => {
-        if (a.type === 'run') return `${a.date}: Run ${a.distanceMi}mi @ ${a.pace}/mi, HR ${a.hr}bpm (${a.zone}), "${a.name}"`;
+        if (a.type === 'run') return `${a.date}: Run ${a.distance}${distanceUnit} @ ${a.pace}/${distanceUnit}, HR ${a.hr}bpm (${a.zone}), "${a.name}"`;
         if (a.type === 'gym') return `${a.date}: Gym ${a.durationMin}min, "${a.name}"`;
-        return `${a.date}: Walk ${a.distanceMi ?? 0}mi, ${a.durationMin}min`;
+        return `${a.date}: Walk ${a.distance ?? 0}${distanceUnit}, ${a.durationMin}min`;
       }).join('\n')
     : '';
 
   const weeklyLoadSection = ctx.weeklyMileage?.length
     ? `\n## Weekly Training Load (last 8 weeks, newest first)\n` +
       ctx.weeklyMileage.map(w =>
-        `${w.weekStart}: ${w.runMi}mi run · ${w.walkMi}mi walk · ${w.gymMin}min gym (${w.gymSessions} sessions)`
+        `${w.weekStart}: ${w.runDistance}${distanceUnit} run · ${w.walkDistance}${distanceUnit} walk · ${w.gymMin}min gym (${w.gymSessions} sessions)`
       ).join('\n')
     : '';
 
@@ -196,8 +237,8 @@ ${hrvLine}
 ${rhrLine}
 ${sleepLine}
 - Today's Strain so far: ${ctx.strain}
-- Weekly Miles: ${ctx.weeklyMi.toFixed(1)}mi this week
-${ctx.lastRun ? `- Last Run: ${ctx.lastRun.distanceMi}mi at ${ctx.lastRun.pace}/mi (${ctx.lastRun.dayTime}) — "${ctx.lastRun.name}"` : '- No recent runs logged'}
+- Weekly Distance: ${ctx.weeklyDistance.toFixed(1)}${distanceUnit} this week
+${ctx.lastRun ? `- Last Run: ${ctx.lastRun.distance}${distanceUnit} at ${ctx.lastRun.pace}/${distanceUnit} (${ctx.lastRun.dayTime}) — "${ctx.lastRun.name}"` : '- No recent runs logged'}
 ${historySection}${activitiesSection}${weeklyLoadSection}${nutritionSection}${foodSection}
 
 Respond ONLY with valid JSON, no markdown, no explanation:

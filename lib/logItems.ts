@@ -1,3 +1,6 @@
+import { formatDistance, formatWeight } from './metricFormat';
+import { type UnitSystem } from './units';
+
 export interface LogItem {
   id: string;
   type: string;
@@ -54,7 +57,7 @@ function formatHoursMinutes(ms: number): string {
   return `${hours}h ${minutes < 10 ? '0' : ''}${minutes}m`;
 }
 
-function formatEventTitle(type: string, payload: unknown): string {
+function formatEventTitle(type: string, payload: unknown, units: UnitSystem = 'metric'): string {
   const p = pl(payload);
   switch (type) {
     case 'meal_logged': {
@@ -67,7 +70,8 @@ function formatEventTitle(type: string, payload: unknown): string {
       const label = workoutType.charAt(0).toUpperCase() + workoutType.slice(1);
       const distanceM = num(p.distance_m);
       const durationS = num(p.duration_s);
-      if (distanceM != null) return `${label} — ${(distanceM / 1000).toFixed(1)} km`;
+      const distanceStr = formatDistance(distanceM, units);
+      if (distanceStr != null) return `${label} — ${distanceStr}`;
       if (durationS != null) return `${label} — ${Math.round(durationS / 60)} min`;
       return label;
     }
@@ -76,7 +80,8 @@ function formatEventTitle(type: string, payload: unknown): string {
       if (weight == null) return 'Weight logged';
       const unit = str(p.unit);
       if (unit === 'lbs' || unit === 'lb') weight *= 0.453592;
-      return `Weight: ${(Math.round(weight * 10) / 10).toFixed(1)} kg`;
+      const weightStr = formatWeight(weight, units);
+      return weightStr != null ? `Weight: ${weightStr}` : 'Weight logged';
     }
     case 'hrv_reading': {
       const value = num(p.value) ?? num(p.hrv) ?? num(p.valueMs) ?? num(p.sdnn);
@@ -92,7 +97,8 @@ function formatEventTitle(type: string, payload: unknown): string {
   }
 }
 
-function formatEventSubtitle(type: string, payload: unknown): string {
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- kept for signature symmetry with formatEventTitle; no subtitle currently renders a distance/weight value.
+function formatEventSubtitle(type: string, payload: unknown, units: UnitSystem = 'metric'): string {
   const p = pl(payload);
   switch (type) {
     case 'meal_logged': {
@@ -173,7 +179,14 @@ export function mapDailySleepRow(row: DailySleepRow): LogItem {
   };
 }
 
-export function mapEventToLogItem(event: EventLogSource): LogItem {
+/**
+ * `units` (default 'metric') only affects the human-readable `title`/
+ * `subtitle` strings. The numeric `km` field ALWAYS stays named `km` and
+ * valued in kilometres regardless of `units` — the iOS client decodes it and
+ * converts at render time; re-purposing this wire field to imperial would
+ * silently corrupt every existing client's math.
+ */
+export function mapEventToLogItem(event: EventLogSource, units: UnitSystem = 'metric'): LogItem {
   const payload = pl(event.payload);
   const imageThumb = str(payload.imageThumb);
   const mealKcal = event.type === 'meal_logged'
@@ -190,8 +203,8 @@ export function mapEventToLogItem(event: EventLogSource): LogItem {
     id: event.id,
     type: event.type,
     timestamp: event.timestamp.toISOString(),
-    title: formatEventTitle(event.type, event.payload),
-    subtitle: formatEventSubtitle(event.type, event.payload),
+    title: formatEventTitle(event.type, event.payload, units),
+    subtitle: formatEventSubtitle(event.type, event.payload, units),
     ...(imageThumb ? { imageThumb } : {}),
     ...(mealKcal != null ? { kcal: Math.round(mealKcal) } : {}),
     ...(workoutKm != null ? { km: workoutKm } : {}),
@@ -200,7 +213,15 @@ export function mapEventToLogItem(event: EventLogSource): LogItem {
   };
 }
 
-export function mapHealthKitWorkout(workout: HealthKitWorkout, index: number): LogItem {
+/**
+ * See mapEventToLogItem's doc comment for the `km`-stays-metric contract.
+ * `units` is accepted for signature symmetry with the other mappers in this
+ * file, even though this mapper's title/subtitle never render distance today
+ * (duration/calories only) — keeps the call site in app/api/logs/route.ts
+ * uniform across all four mappers.
+ */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- see doc comment above
+export function mapHealthKitWorkout(workout: HealthKitWorkout, index: number, units: UnitSystem = 'metric'): LogItem {
   const workoutType = str(workout.type) ?? 'Workout';
   const label = workoutType.charAt(0).toUpperCase() + workoutType.slice(1);
   const durationMin = num(workout.durationMin);

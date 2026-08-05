@@ -5,6 +5,8 @@ import type {
   SpecialistSessionService,
 } from './sessions';
 import { ConcurrentSpecialistSessionUpdateError } from './sessions';
+import type { UnitSystem } from '../units';
+import { unitsInstructionBlock } from '../brain/persona';
 
 export type SpecialistAction =
   | 'accept_handoff'
@@ -241,6 +243,8 @@ interface SpecialistPromptInput {
   calibration: string;
   relevantMessages: string[];
   inboundHandoff: unknown;
+  /** Display-unit preference (default 'metric') — same instruction block as the base coach persona. */
+  unitSystem?: UnitSystem;
 }
 
 export interface CompiledSpecialistPrompt {
@@ -267,6 +271,7 @@ export function buildSpecialistPrompt(input: SpecialistPromptInput): CompiledSpe
       `You are ${input.manifest.name}, a non-clinical ${input.manifest.role}.`,
       moduleText,
       `## Trusted safety rules\n${input.trustedSafetyRules}`,
+      unitsInstructionBlock(input.unitSystem ?? 'metric'),
       `## Hard constraints\n${input.hardConstraints}`,
       `## Calibration\n${input.calibration}`,
     ].join('\n\n---\n\n'),
