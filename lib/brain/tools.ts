@@ -109,7 +109,7 @@ export const BRAIN_TOOLS: Tool[] = [
             type: 'object',
             properties: {
               type:        { type: 'string', description: 'e.g. running, cycling, strength, walk' },
-              distanceKm:  { type: 'number', description: 'Distance in km (optional).' },
+              distanceKm:  { type: 'number', description: 'Distance in km — convert from miles if the user speaks imperial.' },
               durationMin: { type: 'number', description: 'Duration in minutes (optional).' },
               calories:    { type: 'number', description: 'Active calories if known (overrides estimate).' },
             },

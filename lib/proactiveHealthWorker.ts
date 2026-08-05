@@ -2,12 +2,13 @@ import { localDayKey } from './localDay';
 import { type CoachAnalysis } from './proactiveAnalysisSchema';
 import { AnalysisContentError } from './proactiveAnalysisGrounding';
 import { workerErrorEvent } from './proactiveHealthWorkerSupport';
+import { type UnitSystem } from './units';
 
 export { parseCoachAnalysis, type CoachAnalysis } from './proactiveAnalysisSchema';
 
 export type AnalysisKind = 'workout' | 'sleep';
 export interface AnalysisJob { id: string; kind: AnalysisKind; userId: string; localDate: string; input: unknown; retryCount: number; notificationRetryCount: number; leaseToken: string }
-export interface AnalysisContext { enabled: boolean; timezone: string; baselines: unknown; profile: unknown; metrics: unknown }
+export interface AnalysisContext { enabled: boolean; timezone: string; baselines: unknown; profile: unknown; metrics: unknown; unitSystem: UnitSystem }
 export interface PushDevice { id: string; token: string; environment: 'sandbox' | 'production' }
 export type PushOutcome = { outcome: 'sent' | 'transient' | 'permanent'; retireToken: boolean; status?: number; category?: string; latencyMs?: number };
 

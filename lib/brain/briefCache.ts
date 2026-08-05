@@ -15,6 +15,8 @@
  * every hot reload during development.
  */
 
+import type { UnitSystem } from '../units';
+
 export interface CachedBrief {
   insight: string;
   plan: Array<{ name: string; kcal: number; why: string }>;
@@ -30,13 +32,16 @@ if (process.env.NODE_ENV !== 'production') {
 }
 
 /**
- * Build the cache key for a user + local-day date string (YYYY-MM-DD).
+ * Build the cache key for a user + local-day date string (YYYY-MM-DD) + unit
+ * system. `unitSystem` is part of the key (not just the date) so a mid-day
+ * units flip regenerates the brief in the new unit system instead of serving
+ * yesterday's-units prose until local midnight.
  * Callers pass a local-day key from `lib/localDay.localDayKey(now, tz)` so the
  * cached brief rolls over at the user's local midnight (see /api/today,
  * /api/brief), not UTC midnight.
  */
-export function briefCacheKey(userId: string, date: string): string {
-  return `${userId}:${date}`;
+export function briefCacheKey(userId: string, date: string, unitSystem: UnitSystem): string {
+  return `${userId}:${date}:${unitSystem}`;
 }
 
 export function getCachedBrief(key: string): CachedBrief | undefined {

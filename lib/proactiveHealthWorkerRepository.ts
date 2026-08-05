@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { morningKey, notificationKey, type AnalysisJob, type CoachAnalysis, type PushDevice, type PushOutcome, type WorkerRepository } from './proactiveHealthWorker';
 import { rawSqlTimeBindings, rawSqlTimestamp, staleNotificationEvent } from './proactiveHealthWorkerSupport';
 import { claimMorningSlot, compareDueCandidates, failOwnedMorningSlot, freshnessWindowMs, notificationClaimable, notificationFresh, reservedSleepCapacity } from './proactiveHealthTransitions';
+import { resolveUnitSystem } from './units';
 
 const LEASE_MS = 5 * 60_000;
 type RawJob = { id: string; user_id: string; local_date: string; input_payload: unknown; retry_count: number; kind: 'workout' | 'sleep'; lease_token: string; result?: unknown; notification_state?: string; notification_lease_expires_at?: Date | null; notification_next_attempt_at?: Date };
@@ -55,9 +56,9 @@ export const workerRepository: WorkerRepository = {
     const enabled = job.kind === 'workout' ? preference?.workout_notifications_enabled !== false : preference?.sleep_notifications_enabled !== false;
     const baselines = await db.select({ metric: schema.baselines.metric, stats: schema.baselines.stats, established: schema.baselines.established }).from(schema.baselines).where(eq(schema.baselines.user_id, job.userId));
     const metrics = await db.select({ date: schema.daily_metrics.date, metric: schema.daily_metrics.metric, value: schema.daily_metrics.value, payload: schema.daily_metrics.payload }).from(schema.daily_metrics).where(and(eq(schema.daily_metrics.user_id, job.userId), eq(schema.daily_metrics.date, job.localDate)));
-    const [user] = await db.select({ name: schema.users.name, goal: schema.users.goal, targetKcal: schema.users.target_kcal, proteinTargetG: schema.users.protein_target_g, carbsTargetG: schema.users.carbs_target_g, fatTargetG: schema.users.fat_target_g }).from(schema.users).where(eq(schema.users.id, job.userId)).limit(1);
+    const [user] = await db.select({ name: schema.users.name, goal: schema.users.goal, targetKcal: schema.users.target_kcal, proteinTargetG: schema.users.protein_target_g, carbsTargetG: schema.users.carbs_target_g, fatTargetG: schema.users.fat_target_g, unit_system: schema.users.unit_system }).from(schema.users).where(eq(schema.users.id, job.userId)).limit(1);
     const profileFacts = await db.select({ type: schema.nodes.type, label: schema.nodes.label, properties: schema.nodes.properties }).from(schema.nodes).where(eq(schema.nodes.user_id, job.userId));
-    return { enabled, timezone: preference?.timezone ?? 'UTC', baselines, metrics, profile: { user, facts: profileFacts } };
+    return { enabled, timezone: preference?.timezone ?? 'UTC', baselines, metrics, profile: { user, facts: profileFacts }, unitSystem: resolveUnitSystem(user?.unit_system) };
   },
   async renewAnalysisLease(job, now) { const t = table(job); const rows = await db.update(t).set({ lease_expires_at: new Date(now.getTime() + LEASE_MS), updated_at: now }).where(and(eq(t.id, job.id), eq(t.status, 'processing'), eq(t.lease_token, job.leaseToken))).returning({ id: t.id }); return rows.length === 1; },
   async storeReady(job, result) { const t = table(job); const rows = await db.update(t).set({ status: 'ready', result, lease_token: null, lease_expires_at: null, updated_at: new Date() }).where(and(eq(t.id, job.id), eq(t.status, 'processing'), eq(t.lease_token, job.leaseToken))).returning({ id: t.id }); return rows.length === 1; },

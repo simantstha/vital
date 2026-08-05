@@ -40,6 +40,7 @@ import { getUserIdFromRequest } from '@/lib/auth';
 import { getCachedBrief, briefCacheKey } from '@/lib/brain/briefCache';
 import { localDayKey, pickTimeZone } from '@/lib/localDay';
 import { formatSleepSubtitle } from '@/lib/profileDetails';
+import { resolveUnitSystem } from '@/lib/units';
 
 export const dynamic = 'force-dynamic';
 
@@ -157,7 +158,7 @@ export async function GET(request: Request): Promise<NextResponse> {
     });
   }
 
-  const cached = getCachedBrief(briefCacheKey(userId, dayKey));
+  const cached = getCachedBrief(briefCacheKey(userId, dayKey, resolveUnitSystem(userRow?.unit_system)));
   if (cached) {
     const times = heuristicMealTimes(cached.plan);
     for (const meal of cached.plan) {
