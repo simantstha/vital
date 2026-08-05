@@ -5,9 +5,11 @@ struct ProfileView: View {
     @EnvironmentObject private var authViewModel: AuthViewModel
     @EnvironmentObject private var backfillCoordinator: BackfillCoordinator
     @ObservedObject private var notificationManager = NotificationManager.shared
+    @ObservedObject private var unitPref = UnitPreference.shared
     @State private var showSignOutConfirm = false
     @State private var showBudgetEditor = false
     @State private var showNotificationSettings = false
+    @State private var showUnitsDialog = false
     @State private var isResyncing = false
 
     @AppStorage(NotificationPrefsKeys.briefEnabled) private var notifBriefEnabled = true
@@ -84,6 +86,16 @@ struct ProfileView: View {
             titleVisibility: .visible
         ) {
             Button("Sign Out", role: .destructive) { authViewModel.signOut() }
+            Button("Cancel", role: .cancel) {}
+        }
+        .confirmationDialog(
+            "Units",
+            isPresented: $showUnitsDialog,
+            titleVisibility: .visible
+        ) {
+            ForEach(UnitSystem.allCases, id: \.self) { system in
+                Button(system.displayName) { setUnits(system) }
+            }
             Button("Cancel", role: .cancel) {}
         }
     }
@@ -202,6 +214,10 @@ private extension ProfileView {
                     DevicesView(appleWatchConnected: appleWatchConnected)
                 }
 
+                settingsButton(index: 5, icon: "ruler", title: "Units", value: unitPref.current.displayName) {
+                    showUnitsDialog = true
+                }
+
                 settingsButton(index: 6, icon: "bell", title: "Notifications", value: notificationsSubtitle) {
                     showNotificationSettings = true
                 }
@@ -260,6 +276,21 @@ private extension ProfileView {
         .padding(.horizontal, Theme.Spacing.lg)
         .padding(.vertical, Theme.Spacing.md)
         .contentShape(Rectangle())
+    }
+
+    // ── Units (optimistic, reverting on failure — same idiom as SleepGoalView) ─
+
+    func setUnits(_ system: UnitSystem) {
+        let previous = unitPref.current
+        guard system != previous else { return }
+        unitPref.set(system)
+        Task {
+            do {
+                try await APIClient.shared.updateProfile(unitSystem: system.rawValue)
+            } catch {
+                unitPref.set(previous)
+            }
+        }
     }
 
     // ── Notifications subtitle ────────────────────────────────────────────

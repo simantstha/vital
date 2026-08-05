@@ -28,6 +28,8 @@ import { getCachedBrief, briefCacheKey, type CachedBrief } from './briefCache';
 import { getConversationStart } from './conversationWindow';
 import { buildWhoopContextLine } from './whoopContext';
 import { localDayKey } from '../localDay';
+import { resolveUnitSystem, type UnitSystem } from '../units';
+import { formatDistance, formatWeight } from '../metricFormat';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -73,6 +75,7 @@ export interface CoachContext {
   dietBudget?: DietBudget;          // effective calorie/macro targets (auto or pinned)
   cachedBrief?: CachedBrief;        // today's app-generated insight + meal plan, if warm
   whoopLine?: string;               // compact "WHOOP (today|yesterday): ..." line, if any whoop_* daily_metrics exist
+  unitSystem: UnitSystem;           // display-unit preference — render-only, never storage (see lib/units.ts)
   promptText: string;               // compact text block ready for Claude
 }
 
@@ -174,7 +177,8 @@ function buildDaySnapshot(
 
 // ── Compact text builder ──────────────────────────────────────────────────────
 
-function buildPromptText(
+/** Exported for unit testing (see context.test.ts) — otherwise only called internally by assembleContext. */
+export function buildPromptText(
   ctx: Omit<CoachContext, 'promptText'>,
 ): string {
   const lines: string[] = ['## Vital Context'];
@@ -195,14 +199,17 @@ function buildPromptText(
   }
   if (ctx.today.steps != null)
     lines.push(`- Steps so far: ${ctx.today.steps.toLocaleString()}`);
-  if (ctx.today.weight != null)
-    lines.push(`- Weight: ${ctx.today.weight}kg`);
+  if (ctx.today.weight != null) {
+    const weightStr = formatWeight(ctx.today.weight, ctx.unitSystem);
+    if (weightStr) lines.push(`- Weight: ${weightStr}`);
+  }
   if (ctx.whoopLine)
     lines.push(`- ${ctx.whoopLine}`);
 
   if (ctx.today.workouts.length > 0) {
     for (const w of ctx.today.workouts) {
-      const dist  = w.distanceM != null ? ` ${(w.distanceM / 1000).toFixed(1)}km` : '';
+      const distStr = formatDistance(w.distanceM, ctx.unitSystem);
+      const dist  = distStr ? ` ${distStr}` : '';
       const dur   = w.durationS != null ? ` ${Math.round(w.durationS / 60)}min` : '';
       const hr    = w.avgHr != null ? ` avg HR ${w.avgHr}bpm` : '';
       const cal   = w.calories != null ? ` ~${w.calories}kcal` : '';
@@ -370,6 +377,11 @@ export async function assembleContext(userId: string): Promise<CoachContext> {
     queryScheduleWindow(userId, now, in48h),
   ]);
 
+  // Display-unit preference — resolved once here, threaded only into
+  // formatting (never storage/business logic). No new query: usersRow was
+  // already selected above for timezone/diet-budget.
+  const unitSystem = resolveUnitSystem(usersRow?.unit_system);
+
   // Compute user's local date/time in their timezone
   const tz = usersRow?.timezone ?? 'UTC';
   const nowFormat: Intl.DateTimeFormatOptions = {
@@ -407,7 +419,7 @@ export async function assembleContext(userId: string): Promise<CoachContext> {
   // day as /api/today's briefCacheKey call (see above), so a warm cache hits
   // regardless of UTC/local day skew.
   const dietBudget  = usersRow ? await resolveDietBudget(usersRow, userId) : undefined;
-  const cachedBrief = getCachedBrief(briefCacheKey(userId, localToday));
+  const cachedBrief = getCachedBrief(briefCacheKey(userId, localToday, unitSystem));
 
   // WHOOP context line (Task 7) — daily_metrics is day-keyed to the user's
   // *local* day (lib/whoop/mapping.ts's localDayKey), same key as above.
@@ -439,6 +451,7 @@ export async function assembleContext(userId: string): Promise<CoachContext> {
     dietBudget,
     cachedBrief,
     whoopLine,
+    unitSystem,
   };
 
   return { ...partial, promptText: buildPromptText(partial) };

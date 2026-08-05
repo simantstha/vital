@@ -6,6 +6,7 @@ import {
 } from './proactiveAnalysisGrounding';
 import { type CoachAnalysis } from './proactiveAnalysisSchema';
 import { formatAnalysisSource } from './proactiveAnalysisFormatting';
+import { type UnitSystem } from './units';
 
 export { AnalysisContentError, type AnalysisFailureCategory } from './proactiveAnalysisGrounding';
 
@@ -30,6 +31,8 @@ export interface GenerateAnalysisArgs {
   source: ProactiveAnalysisSource;
   generate(request: AnalysisGenerationRequest): Promise<string>;
   report(event: AnalysisFailureEvent): void;
+  /** Display-unit preference (default 'metric') applied when formatting `source` for the model. */
+  units?: UnitSystem;
 }
 
 const SCHEMA_CONTRACT = `headline, shortInsight, and narrative must each be a non-empty JSON string. observations and nextSteps must each be a JSON array of non-empty JSON strings, and either array may itself be empty. No additional keys are allowed.`;
@@ -67,7 +70,7 @@ function analysisRequest(attempt: AnalysisAttempt, system: string, payload: unkn
  * comment for why that matters.
  */
 export async function generateAnalysis(args: GenerateAnalysisArgs): Promise<CoachAnalysis> {
-  const formattedSource = formatAnalysisSource(args.source);
+  const formattedSource = formatAnalysisSource(args.source, args.units ?? 'metric');
   let initialError: AnalysisContentError;
 
   try {

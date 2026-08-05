@@ -17,7 +17,7 @@ import { localDayKey } from '../localDay';
  */
 
 const state: {
-  userRow: Array<{ timezone: string | null }>;
+  userRow: Array<{ timezone: string | null; unit_system?: string | null }>;
   events: Array<{ type: string; timestamp: Date; payload: unknown }>;
 } = { userRow: [{ timezone: 'America/Chicago' }], events: [] };
 
@@ -119,4 +119,48 @@ test('generateDailyBriefFromDb buckets a workout/meal by local day, not the UTC 
 
   assert.equal(weeklyMileage.length, 1);
   assert.equal(weeklyMileage[0].weekStart, weekStartKeyFromLocalDay(localDay));
+});
+
+/**
+ * Regression test for the pre-existing miles bug: this brief used to
+ * hardcode `M_TO_MI` for every user regardless of `unit_system`, while coach
+ * chat (lib/brain/context.ts) and the data tools (lib/brain/tools.ts)
+ * hardcoded km — the two surfaces contradicted each other for a metric user.
+ * A metric (or unset) `unit_system` must produce `distanceUnit: 'km'` and
+ * km-valued distance fields.
+ */
+test('a metric user\'s brief carries km, not miles — the regression test for the miles-hardcoding bug', async () => {
+  const now = new Date();
+  state.userRow = [{ timezone: 'America/Chicago', unit_system: 'metric' }];
+  state.events = [
+    { type: 'workout_completed', timestamp: now, payload: { type: 'run', distance_m: 5000, duration_s: 1500 } },
+  ];
+  capturedCtx = null;
+
+  const { generateDailyBriefFromDb } = await briefPromise;
+  await generateDailyBriefFromDb('user-1');
+
+  assert.equal(capturedCtx!.distanceUnit, 'km');
+  assert.equal(capturedCtx!.unitSystem, 'metric');
+  assert.equal(capturedCtx!.weeklyDistance, 5); // 5000m -> 5.0km, not miles
+  const lastRun = capturedCtx!.lastRun as { distance: string; pace: string } | null;
+  assert.equal(lastRun?.distance, '5.0');
+  assert.equal(lastRun?.pace, '5:00'); // 1500s / 5km = 5:00/km
+});
+
+test('an imperial user\'s brief carries mi, converted from the same metric-stored distance', async () => {
+  const now = new Date();
+  state.userRow = [{ timezone: 'America/Chicago', unit_system: 'imperial' }];
+  state.events = [
+    { type: 'workout_completed', timestamp: now, payload: { type: 'run', distance_m: 5000, duration_s: 1500 } },
+  ];
+  capturedCtx = null;
+
+  const { generateDailyBriefFromDb } = await briefPromise;
+  await generateDailyBriefFromDb('user-1');
+
+  assert.equal(capturedCtx!.distanceUnit, 'mi');
+  assert.equal(capturedCtx!.unitSystem, 'imperial');
+  const lastRun = capturedCtx!.lastRun as { distance: string } | null;
+  assert.equal(lastRun?.distance, (5000 / 1000 / 1.609344).toFixed(1)); // "3.1"
 });

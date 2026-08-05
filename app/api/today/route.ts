@@ -36,6 +36,7 @@ import { getCalibration } from '@/lib/brain/baselines';
 import { queryMetricPoints, type MetricPoint } from '@/lib/brain/tools';
 import { resolveDietBudget } from '@/lib/brain/dietBudget';
 import { localDayKey, pickTimeZone, isValidTimeZone } from '@/lib/localDay';
+import { resolveUnitSystem } from '@/lib/units';
 
 export const dynamic = 'force-dynamic';
 
@@ -169,7 +170,7 @@ export async function GET(request: Request): Promise<NextResponse> {
   let insight = '';
   let plan: Array<{ name: string; kcal: number; why: string }> = [];
 
-  const cacheKey = briefCacheKey(userId, dayKey);
+  const cacheKey = briefCacheKey(userId, dayKey, resolveUnitSystem(userRow?.unit_system));
   const cached = getCachedBrief(cacheKey);
   if (cached) {
     insight = cached.insight;

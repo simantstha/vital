@@ -18,7 +18,6 @@ final class ProfileViewModel: ObservableObject {
     @Published var name: String = ""
     @Published var avatarInitial: String = "?"
     @Published var integrations: [ProfileIntegration] = []
-    @Published var profileDetails: [ProfileStatCell] = []
     @Published var activityStats: [ProfileStatCell] = []
     @Published var isLoading = true
     @Published var errorMessage: String? = nil
@@ -51,6 +50,15 @@ final class ProfileViewModel: ObservableObject {
         Self.sleepGoalSummary(goalMinutes: sleepGoalMinutes, lightsOutMinutes: lightsOutMinutes)
     }
 
+    /// Computed (not `@Published`) so flipping the Units picker re-renders
+    /// this without waiting for a fresh `load()` — it reads
+    /// `UnitPreference.shared.current` fresh on every access. `details` being
+    /// `@Published` is what actually triggers the view refresh.
+    var profileDetails: [ProfileStatCell] {
+        guard let details else { return [] }
+        return Self.profileCells(from: details, units: UnitPreference.shared.current)
+    }
+
     func load() async {
         withAnimation(Theme.Motion.appear) { isLoading = true }
         do {
@@ -64,8 +72,6 @@ final class ProfileViewModel: ObservableObject {
             lightsOutMinutes = response.lightsOutMinutes ?? 1350
             calibration = response.calibration
             UnitPreference.shared.applyServerValue(response.unitSystem)
-            let units = UnitPreference.shared.current
-            profileDetails = Self.profileCells(from: response.profile, units: units)
             activityStats = Self.activityCells(from: response.stats)
         } catch {
             errorMessage = error.localizedDescription

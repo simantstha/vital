@@ -15,6 +15,8 @@ import { generateDailyBrief } from '@/lib/claude';
 import { getCalibration } from '@/lib/brain/baselines';
 import { queryBaseline, queryMetricPoints, querySleepSummary } from '@/lib/brain/tools';
 import { localDayKey, pickTimeZone } from '@/lib/localDay';
+import { resolveUnitSystem, type UnitSystem } from '@/lib/units';
+import { KM_PER_MILE } from '@/lib/metricFormat';
 import type { DailyBrief } from '@/lib/types';
 
 // ── Payload helpers ─────────────────────────────────────────────────────────
@@ -49,7 +51,10 @@ export function weekStartKeyFromLocalDay(localDay: string): string {
   return date.toISOString().slice(0, 10);
 }
 
-const M_TO_MI = 1 / 1609.34;
+/** Metres → the user's preferred display-distance unit (km for metric, mi for imperial). Display-only — storage stays metric. */
+function metersToUnitDistance(m: number, units: UnitSystem): number {
+  return units === 'imperial' ? m / 1000 / KM_PER_MILE : m / 1000;
+}
 
 // ── Main export ─────────────────────────────────────────────────────────────
 
@@ -86,13 +91,23 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
     queryMetricPoints(userId, 'resting_hr', 7),
     querySleepSummary(userId, 7),
     db.select().from(schema.nodes).where(eq(schema.nodes.user_id, userId)).orderBy(desc(schema.nodes.weight)),
-    db.select({ timezone: schema.users.timezone }).from(schema.users).where(eq(schema.users.id, userId)).limit(1),
+    db.select({ timezone: schema.users.timezone, unit_system: schema.users.unit_system })
+      .from(schema.users).where(eq(schema.users.id, userId)).limit(1),
   ]);
 
   // No request context here (background/cron-generated brief), so this can
   // only use the stored device timezone, not a fresher request-supplied one —
   // still correct, just not travel-instant (see lib/localDay.ts).
   const tz = pickTimeZone(null, userRow?.timezone);
+
+  // Display-unit preference — resolved once here (same select as timezone,
+  // no extra query), threaded only into distance formatting below. Fixes the
+  // pre-existing bug where this brief hardcoded miles for every user
+  // regardless of unitSystem, while coach chat (lib/brain/context.ts) and the
+  // data tools (lib/brain/tools.ts) hardcoded km — the two surfaces used to
+  // contradict each other regardless of locale.
+  const unitSystem = resolveUnitSystem(userRow?.unit_system);
+  const distanceUnit = unitSystem === 'imperial' ? 'mi' : 'km';
 
   // Partition food-related nodes into restrictions and preferences
   const restrictions = foodNodes
@@ -160,9 +175,9 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
       e.timestamp >= weekStart &&
       (str(pl(e.payload).type) ?? '').toLowerCase().includes('run'),
   );
-  const weeklyMi = thisWeekRuns.reduce((sum, e) => {
+  const weeklyDistance = thisWeekRuns.reduce((sum, e) => {
     const m = num(pl(e.payload).distance_m) ?? 0;
-    return sum + m * M_TO_MI;
+    return sum + metersToUnitDistance(m, unitSystem);
   }, 0);
 
   // ── Last run ─────────────────────────────────────────────────────────────
@@ -173,25 +188,25 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
       (str(pl(e.payload).type) ?? '').toLowerCase().includes('run'),
   );
 
-  let lastRun: { distanceMi: string; pace: string; dayTime: string; name: string } | null = null;
+  let lastRun: { distance: string; pace: string; dayTime: string; name: string } | null = null;
   if (lastRunEvent) {
     const rp  = pl(lastRunEvent.payload);
     const distM = num(rp.distance_m) ?? 0;
     const durS  = num(rp.duration_s) ?? 0;
-    const distMi = distM * M_TO_MI;
-    const paceMinMi = distM > 0 && durS > 0
-      ? (durS / 60) / distMi
+    const distUnit = metersToUnitDistance(distM, unitSystem);
+    const paceMinUnit = distM > 0 && durS > 0
+      ? (durS / 60) / distUnit
       : 0;
-    const paceMin = Math.floor(paceMinMi);
-    const paceSec = Math.round((paceMinMi - paceMin) * 60);
+    const paceMin = Math.floor(paceMinUnit);
+    const paceSec = Math.round((paceMinUnit - paceMin) * 60);
     const ts = lastRunEvent.timestamp;
     const h  = ts.getHours();
     const dayTime =
       h < 9 ? 'morning' : h < 12 ? 'late morning' : h < 17 ? 'afternoon' : 'evening';
 
     lastRun = {
-      distanceMi: distMi.toFixed(1),
-      pace: paceMinMi > 0 ? `${paceMin}:${paceSec < 10 ? '0' : ''}${paceSec}` : '–',
+      distance: distUnit.toFixed(1),
+      pace: paceMinUnit > 0 ? `${paceMin}:${paceSec < 10 ? '0' : ''}${paceSec}` : '–',
       dayTime,
       name: str(rp.name) ?? str(rp.type) ?? 'Run',
     };
@@ -261,7 +276,7 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
   type ActivityRecord = {
     type: 'run' | 'gym' | 'walk';
     date: string;
-    distanceMi?: string;
+    distance?: string;
     pace?: string;
     hr?: number;
     zone?: string;
@@ -282,16 +297,16 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
       if (wType.includes('run')) kind = 'run';
       else if (wType.includes('walk') || wType.includes('hike')) kind = 'walk';
 
-      const distMi    = distM * M_TO_MI;
-      const paceMinMi = distM > 0 && durS > 0 ? (durS / 60) / distMi : 0;
-      const paceMin   = Math.floor(paceMinMi);
-      const paceSec   = Math.round((paceMinMi - paceMin) * 60);
+      const distUnit    = metersToUnitDistance(distM, unitSystem);
+      const paceMinUnit = distM > 0 && durS > 0 ? (durS / 60) / distUnit : 0;
+      const paceMin     = Math.floor(paceMinUnit);
+      const paceSec     = Math.round((paceMinUnit - paceMin) * 60);
 
       return {
         type:        kind,
         date:        localDayKey(e.timestamp, tz),
-        distanceMi:  distM > 0 ? distMi.toFixed(1) : undefined,
-        pace:        paceMinMi > 0 ? `${paceMin}:${paceSec < 10 ? '0' : ''}${paceSec}` : undefined,
+        distance:    distM > 0 ? distUnit.toFixed(1) : undefined,
+        pace:        paceMinUnit > 0 ? `${paceMin}:${paceSec < 10 ? '0' : ''}${paceSec}` : undefined,
         hr:          num(p.avg_hr) ?? num(p.average_heart_rate),
         name:        str(p.name) ?? str(p.type) ?? 'Workout',
         durationMin: durS > 0 ? Math.round(durS / 60) : undefined,
@@ -302,8 +317,8 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
 
   type WeeklyLoadRecord = {
     weekStart: string;
-    runMi: number;
-    walkMi: number;
+    runDistance: number;
+    walkDistance: number;
     gymMin: number;
     gymSessions: number;
   };
@@ -316,7 +331,7 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
     // late-night local workout into the wrong (UTC) week.
     const key = weekStartKeyFromLocalDay(localDayKey(e.timestamp, tz));
     if (!weekBuckets.has(key)) {
-      weekBuckets.set(key, { weekStart: key, runMi: 0, walkMi: 0, gymMin: 0, gymSessions: 0 });
+      weekBuckets.set(key, { weekStart: key, runDistance: 0, walkDistance: 0, gymMin: 0, gymSessions: 0 });
     }
     const wb   = weekBuckets.get(key)!;
     const p    = pl(e.payload);
@@ -324,8 +339,8 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
     const distM = num(p.distance_m) ?? 0;
     const durS  = num(p.duration_s) ?? 0;
 
-    if (wt.includes('run')) wb.runMi  += distM * M_TO_MI;
-    else if (wt.includes('walk') || wt.includes('hike')) wb.walkMi += distM * M_TO_MI;
+    if (wt.includes('run')) wb.runDistance  += metersToUnitDistance(distM, unitSystem);
+    else if (wt.includes('walk') || wt.includes('hike')) wb.walkDistance += metersToUnitDistance(distM, unitSystem);
     else {
       wb.gymMin      += Math.round(durS / 60);
       wb.gymSessions += 1;
@@ -336,8 +351,8 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
     .slice(0, 8)
     .map(w => ({
       ...w,
-      runMi:  Math.round(w.runMi  * 10) / 10,
-      walkMi: Math.round(w.walkMi * 10) / 10,
+      runDistance:  Math.round(w.runDistance  * 10) / 10,
+      walkDistance: Math.round(w.walkDistance * 10) / 10,
     }));
 
   // ── Recent nutrition (last 3 days, excluding today) ───────────────────────
@@ -382,7 +397,9 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
     sleepPerf:  sleepEff,
     sleepDuration,
     strain,
-    weeklyMi:   Math.round(weeklyMi * 10) / 10,
+    weeklyDistance: Math.round(weeklyDistance * 10) / 10,
+    distanceUnit,
+    unitSystem,
     lastRun,
     history: {
       days:          historyDays,

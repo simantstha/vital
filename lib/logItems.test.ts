@@ -151,6 +151,35 @@ test('maps legacy events without changing identity, formatting, or optional fiel
   });
 });
 
+test('mapEventToLogItem renders workout distance and weight titles in imperial units, while km stays km on the wire', () => {
+  const workout = mapEventToLogItem({
+    id: 'workout-imperial',
+    type: 'workout_completed',
+    timestamp: new Date('2026-07-14T18:00:00.000Z'),
+    payload: { type: 'running', distance_m: 5_250, calories: 410, avg_hr: 145 },
+  }, 'imperial');
+  assert.equal(workout.title, 'Running — 3.3 mi');
+  assert.equal(workout.km, 5.25); // wire field ALWAYS stays km, regardless of units
+
+  const weight = mapEventToLogItem({
+    id: 'weight-imperial',
+    type: 'weight_logged',
+    timestamp: new Date('2026-07-14T18:00:00.000Z'),
+    payload: { value: 81.2 },
+  }, 'imperial');
+  assert.equal(weight.title, 'Weight: 179 lb');
+});
+
+test('mapEventToLogItem defaults to metric when units is omitted — existing callers are unaffected', () => {
+  const workout = mapEventToLogItem({
+    id: 'workout-default',
+    type: 'workout_completed',
+    timestamp: new Date('2026-07-14T18:00:00.000Z'),
+    payload: { type: 'running', distance_m: 5_250 },
+  });
+  assert.equal(workout.title, 'Running — 5.3 km');
+});
+
 test('mapEventToLogItem carries the events.source column when present', () => {
   const item = mapEventToLogItem({
     id: 'whoop-workout',

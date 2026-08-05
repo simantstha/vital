@@ -13,6 +13,7 @@ import { setCachedBrief, briefCacheKey } from '@/lib/brain/briefCache';
 import { generateDailyBriefFromDb } from '@/lib/brain/brief';
 import { getUserIdFromRequest } from '@/lib/auth';
 import { localDayKey } from '@/lib/localDay';
+import { resolveUnitSystem } from '@/lib/units';
 
 export const dynamic = 'force-dynamic';
 
@@ -42,12 +43,12 @@ async function generate(userId: string) {
     // user's local day (from their stored tz) so it matches /api/today and
     // rolls over at local midnight, not UTC midnight.
     const [user] = await db
-      .select({ timezone: schema.users.timezone })
+      .select({ timezone: schema.users.timezone, unit_system: schema.users.unit_system })
       .from(schema.users)
       .where(eq(schema.users.id, userId))
       .limit(1);
     const dayKey = localDayKey(new Date(), user?.timezone);
-    setCachedBrief(briefCacheKey(userId, dayKey), {
+    setCachedBrief(briefCacheKey(userId, dayKey, resolveUnitSystem(user?.unit_system)), {
       insight: brief.body,
       plan: brief.meals.map(m => ({ name: m.k, kcal: m.kcal, why: m.why })),
     });

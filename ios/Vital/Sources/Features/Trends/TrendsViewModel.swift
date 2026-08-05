@@ -26,14 +26,18 @@ enum TrendMetric: String, CaseIterable, Identifiable {
         }
     }
 
-    var unit: String {
+    /// Server values are always metric (kg/km) — actual value conversion
+    /// happens in `TrendsViewModel.points` and friends via `UnitConvert`.
+    /// Unit-neutral metrics (ms, h, steps, bpm, ml/kg·min) are unaffected by
+    /// the unit system.
+    func unitLabel(_ system: UnitSystem) -> String {
         switch self {
         case .hrv:      return "ms"
         case .sleep:    return "h"
-        case .weight:   return "kg"
+        case .weight:   return system.weightUnit
         case .steps:    return "steps"
         case .vo2:      return "ml/kg·min"
-        case .distance: return "km"
+        case .distance: return system.distanceUnit
         case .rhr:      return "bpm"
         }
     }
@@ -239,9 +243,25 @@ final class TrendsViewModel: ObservableObject {
     @Published var isLoading = false
     @Published var errorMessage: String? = nil
 
-    /// Derived from `loaded` for the chart body / stats math below, which are
-    /// otherwise unchanged by this refactor.
-    var points: [ChartPoint] { loaded?.points ?? [] }
+    /// Derived from `loaded`, converted into the user's current unit system
+    /// for weight/distance (the server always returns kg/km) — the chart,
+    /// the hero number, and the Latest/Average badges all read from this one
+    /// converted source so they can never drift apart from each other.
+    var points: [ChartPoint] {
+        guard let loaded else { return [] }
+        let system = UnitPreference.shared.current
+        return loaded.points.map {
+            ChartPoint(date: $0.date, value: Self.displayValue($0.value, metric: loaded.metric, system: system))
+        }
+    }
+
+    private static func displayValue(_ value: Double, metric: TrendMetric, system: UnitSystem) -> Double {
+        switch metric {
+        case .weight:   return system == .metric ? value : UnitConvert.kgToLb(value)
+        case .distance: return system == .metric ? value : UnitConvert.kmToMiles(value)
+        default:        return value
+        }
+    }
 
     // MARK: Summary state (Last 7 days)
 

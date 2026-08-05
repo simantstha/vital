@@ -130,27 +130,32 @@ final class LogsPagerTests: XCTestCase {
     // MARK: - summaryLine
 
     func testSummaryLineReportsNoEntriesWhenEmpty() {
-        XCTAssertEqual(LogsPagerSummary.summaryLine(items: []), "No entries")
+        XCTAssertEqual(LogsPagerSummary.summaryLine(items: [], units: .metric), "No entries")
     }
 
     func testSummaryLineUsesSingularEntryForExactlyOneItem() {
         let items = [item()]
-        XCTAssertEqual(LogsPagerSummary.summaryLine(items: items), "1 entry")
+        XCTAssertEqual(LogsPagerSummary.summaryLine(items: items, units: .metric), "1 entry")
     }
 
     func testSummaryLineUsesPluralEntriesForMultipleItems() {
         let items = [item(id: "a"), item(id: "b"), item(id: "c")]
-        XCTAssertEqual(LogsPagerSummary.summaryLine(items: items), "3 entries")
+        XCTAssertEqual(LogsPagerSummary.summaryLine(items: items, units: .metric), "3 entries")
     }
 
     func testSummaryLineAppendsKcalWhenPresent() {
         let items = [item(id: "a", kcal: 640)]
-        XCTAssertEqual(LogsPagerSummary.summaryLine(items: items), "1 entry · 640 kcal")
+        XCTAssertEqual(LogsPagerSummary.summaryLine(items: items, units: .metric), "1 entry · 640 kcal")
     }
 
     func testSummaryLineAppendsKmWhenPresent() {
         let items = [item(id: "a", type: "workout_completed", km: 2.4)]
-        XCTAssertEqual(LogsPagerSummary.summaryLine(items: items), "1 entry · 2.4 km")
+        XCTAssertEqual(LogsPagerSummary.summaryLine(items: items, units: .metric), "1 entry · 2.4 km")
+    }
+
+    func testSummaryLineAppendsMilesWhenImperial() {
+        let items = [item(id: "a", type: "workout_completed", km: 2.4)]
+        XCTAssertEqual(LogsPagerSummary.summaryLine(items: items, units: .imperial), "1 entry · 1.5 mi")
     }
 
     func testSummaryLineOrdersEntriesThenKcalThenKm() {
@@ -158,12 +163,20 @@ final class LogsPagerTests: XCTestCase {
             item(id: "meal", kcal: 640),
             item(id: "walk", type: "workout_completed", km: 2.4),
         ]
-        XCTAssertEqual(LogsPagerSummary.summaryLine(items: items), "2 entries · 640 kcal · 2.4 km")
+        XCTAssertEqual(LogsPagerSummary.summaryLine(items: items, units: .metric), "2 entries · 640 kcal · 2.4 km")
+    }
+
+    func testSummaryLineOrdersEntriesThenKcalThenMilesWhenImperial() {
+        let items = [
+            item(id: "meal", kcal: 640),
+            item(id: "walk", type: "workout_completed", km: 2.4),
+        ]
+        XCTAssertEqual(LogsPagerSummary.summaryLine(items: items, units: .imperial), "2 entries · 640 kcal · 1.5 mi")
     }
 
     func testSummaryLineFallsBackToSleepOnlyWhenNoKcalOrKmPresent() {
         let items = [item(id: "a", type: "sleep_session", sleepMs: (6 * 3_600_000) + (6 * 60_000))]
-        XCTAssertEqual(LogsPagerSummary.summaryLine(items: items), "1 entry · 6h 6m sleep")
+        XCTAssertEqual(LogsPagerSummary.summaryLine(items: items, units: .metric), "1 entry · 6h 6m sleep")
     }
 
     func testSummaryLineOmitsSleepWhenKcalOrKmAlreadyFired() {
@@ -171,7 +184,7 @@ final class LogsPagerTests: XCTestCase {
             item(id: "meal", kcal: 300),
             item(id: "sleep", type: "sleep_session", sleepMs: 6 * 3_600_000),
         ]
-        XCTAssertEqual(LogsPagerSummary.summaryLine(items: items), "2 entries · 300 kcal")
+        XCTAssertEqual(LogsPagerSummary.summaryLine(items: items, units: .metric), "2 entries · 300 kcal")
     }
 
     // MARK: - metaLabel

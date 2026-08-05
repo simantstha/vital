@@ -177,6 +177,74 @@ test('whoop_hrv_rmssd metric rounds to integer', () => {
   assert.equal(formatted.availableContext.metrics[0].value, 47);
 });
 
+test('workout distance/pace render in imperial units, unit suffix included, when the user has that preference', () => {
+  const source: ProactiveAnalysisSource = {
+    kind: 'workout',
+    date: '2026-07-13',
+    input: {
+      type: 'Run',
+      distanceM: 8437,
+      paceMinPerKm: 5.383,
+      elevationGainM: 119.8,
+    },
+    availableContext: {},
+  };
+
+  const formatted = formatAnalysisSource(source, 'imperial');
+  assert.deepEqual(formatted.input, {
+    type: 'Run',
+    distance: '5.2 mi',
+    pace: '8′40″ /mi',
+    elevationGainM: '120 m', // deliberately left in metres — out of scope
+  });
+});
+
+test('formatAnalysisSource defaults to metric when no units argument is passed — existing callers are unaffected', () => {
+  const source: ProactiveAnalysisSource = {
+    kind: 'workout',
+    date: '2026-07-13',
+    input: { type: 'Run', distanceM: 8437 },
+    availableContext: {},
+  };
+
+  const formatted = formatAnalysisSource(source) as { input: Record<string, unknown> };
+  assert.equal(formatted.input.distance, '8.4 km');
+});
+
+test('body_mass_kg converts to lb and relabels to body_mass_lb under imperial — never a converted value under a _kg key', () => {
+  const source: ProactiveAnalysisSource = {
+    kind: 'workout',
+    date: '2026-07-13',
+    input: {},
+    availableContext: {
+      metrics: [{ date: '2026-07-13', metric: 'body_mass_kg', value: 72.849, payload: null }],
+    },
+  };
+
+  const formatted = formatAnalysisSource(source, 'imperial') as {
+    availableContext: { metrics: Array<Record<string, unknown>> };
+  };
+  assert.equal(formatted.availableContext.metrics[0].metric, 'body_mass_lb');
+  assert.equal(formatted.availableContext.metrics[0].value, Math.round(72.849 * 2.2046226218)); // 161
+});
+
+test('body_mass_kg stays body_mass_kg and unconverted under metric (default)', () => {
+  const source: ProactiveAnalysisSource = {
+    kind: 'workout',
+    date: '2026-07-13',
+    input: {},
+    availableContext: {
+      metrics: [{ date: '2026-07-13', metric: 'body_mass_kg', value: 72.849, payload: null }],
+    },
+  };
+
+  const formatted = formatAnalysisSource(source) as {
+    availableContext: { metrics: Array<Record<string, unknown>> };
+  };
+  assert.equal(formatted.availableContext.metrics[0].metric, 'body_mass_kg');
+  assert.equal(formatted.availableContext.metrics[0].value, 72.8);
+});
+
 test('formatAnalysisSource never mutates its input, even a deep-frozen one', () => {
   const source: ProactiveAnalysisSource = {
     kind: 'workout',
