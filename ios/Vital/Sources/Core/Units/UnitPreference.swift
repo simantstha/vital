@@ -20,6 +20,13 @@ final class UnitPreference: ObservableObject {
 
     private let defaults: UserDefaults
 
+    /// Guards the locale-default adoption PATCH (see `applyServerValue`) so
+    /// it fires at most once per app session. `applyServerValue` is called
+    /// from both `ProfileViewModel.load()` and `TrendsViewModel.loadSummary()`
+    /// on cold start; without this flag both call sites would independently
+    /// observe a `nil` server value and race to PATCH the same adoption.
+    private var hasAdoptedLocaleDefault = false
+
     private enum Keys {
         static let unitSystem = "vital.unitSystem"
     }
@@ -40,13 +47,54 @@ final class UnitPreference: ObservableObject {
         return system
     }
 
-    /// Applies the server's `users.unit_system` column value. A `nil` (the
-    /// column not yet set for this user) is a no-op, so the locale fallback
-    /// — or a previously-applied value — stands. Idempotent: reapplying the
-    /// same raw value more than once has no further effect.
-    func applyServerValue(_ raw: String?) {
-        guard let raw, let system = UnitSystem(rawValue: raw) else { return }
+    /// Applies the server's `users.unit_system` column value.
+    ///
+    /// Why this exists: the column is nullable, and NULL resolves
+    /// differently on each side of the client/server split. The iOS client
+    /// falls back to the device's locale (`resolve(stored:)` above) because
+    /// only the client can see that locale. The backend, which has no
+    /// concept of device locale, falls back to hardcoded `'metric'`. Every
+    /// user who onboarded before this column existed has NULL, so a
+    /// US-locale user sees imperial units in the app while server-generated
+    /// prose (coach, brief, analysis) talks in km/kg.
+    ///
+    /// The client is the only party that can see the true locale-derived
+    /// default, so on a `nil`/unrecognised server value it needs to adopt the
+    /// current (locale-derived) value permanently by persisting it to the
+    /// server — turning the implicit default into an explicit stored
+    /// preference so both sides agree from then on. This does NOT touch
+    /// `current`: the value the user already sees is correct, we're just
+    /// flagging that it needs to be persisted. Do not "simplify" this into a
+    /// plain no-op — that reintroduces the asymmetry for every pre-existing
+    /// NULL user.
+    ///
+    /// When `raw` IS a valid value, behaviour is unchanged from before:
+    /// apply and persist it locally. Idempotent: reapplying the same raw
+    /// value more than once has no further effect.
+    ///
+    /// Returns `true` exactly once per session — the first time a `nil`/
+    /// unrecognised value is seen — to tell the caller it should PATCH the
+    /// locale default up to the server. This preference store only owns
+    /// preference state, not network I/O, so it reports intent rather than
+    /// making the call itself; the two call sites (`ProfileViewModel.load`,
+    /// `TrendsViewModel.loadSummary`) both check this flag, so the one-shot
+    /// guard here prevents both from firing the PATCH.
+    @discardableResult
+    func applyServerValue(_ raw: String?) -> Bool {
+        guard let raw, let system = UnitSystem(rawValue: raw) else {
+            return adoptLocaleDefaultIfNeeded()
+        }
         write(system, persist: true)
+        return false
+    }
+
+    /// One-shot guard described in `applyServerValue`. Returns `true` the
+    /// first time it's called per session (or since the last `clear()`), and
+    /// `false` on every subsequent call.
+    private func adoptLocaleDefaultIfNeeded() -> Bool {
+        guard !hasAdoptedLocaleDefault else { return false }
+        hasAdoptedLocaleDefault = true
+        return true
     }
 
     /// Explicit user choice (e.g. from a future settings toggle).
@@ -60,6 +108,7 @@ final class UnitPreference: ObservableObject {
     func clear() {
         defaults.removeObject(forKey: Keys.unitSystem)
         write(.deviceDefault, persist: false)
+        hasAdoptedLocaleDefault = false
     }
 
     /// Persists to `UserDefaults` whenever asked, but only publishes

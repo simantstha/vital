@@ -71,7 +71,12 @@ final class ProfileViewModel: ObservableObject {
             sleepGoalMinutes = response.sleepGoalMinutes ?? 480
             lightsOutMinutes = response.lightsOutMinutes ?? 1350
             calibration = response.calibration
-            UnitPreference.shared.applyServerValue(response.unitSystem)
+            // Locale-default adoption PATCH: opportunistic housekeeping, not a
+            // user-initiated action, so failure is silent and simply retries
+            // next launch (see UnitPreference.applyServerValue).
+            if UnitPreference.shared.applyServerValue(response.unitSystem) {
+                try? await apiClient.updateProfile(unitSystem: UnitPreference.shared.current.rawValue)
+            }
             activityStats = Self.activityCells(from: response.stats)
         } catch {
             errorMessage = error.localizedDescription

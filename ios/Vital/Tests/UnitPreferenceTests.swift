@@ -59,6 +59,45 @@ final class UnitPreferenceTests: XCTestCase {
         XCTAssertEqual(pref.current, before)
     }
 
+    // MARK: - applyServerValue(nil) locale-default adoption (one-shot)
+
+    func testApplyServerValueNilReturnsTrueOnceThenFalse() {
+        let pref = UnitPreference(defaults: defaults)
+
+        XCTAssertTrue(pref.applyServerValue(nil))
+        XCTAssertFalse(pref.applyServerValue(nil)) // second call within the same session must not fire again
+        XCTAssertFalse(pref.applyServerValue(nil))
+    }
+
+    func testApplyServerValueGarbageAndNilShareTheSameOneShotGuard() {
+        let pref = UnitPreference(defaults: defaults)
+
+        XCTAssertTrue(pref.applyServerValue("bogus"))
+        XCTAssertFalse(pref.applyServerValue(nil)) // still counts against the same one-shot guard
+    }
+
+    func testApplyServerValueAdoptionDoesNotAlterCurrent() {
+        let pref = UnitPreference(defaults: defaults)
+        let before = pref.current
+        pref.applyServerValue(nil)
+        XCTAssertEqual(pref.current, before)
+    }
+
+    func testClearRearmsLocaleDefaultAdoption() {
+        let pref = UnitPreference(defaults: defaults)
+
+        XCTAssertTrue(pref.applyServerValue(nil))
+        XCTAssertFalse(pref.applyServerValue(nil))
+
+        pref.clear()
+        XCTAssertTrue(pref.applyServerValue(nil))
+    }
+
+    func testApplyServerValueValidValueReturnsFalse() {
+        let pref = UnitPreference(defaults: defaults)
+        XCTAssertFalse(pref.applyServerValue("imperial"))
+    }
+
     func testApplyServerValueAppliesAndPersistsValidValue() {
         let pref = UnitPreference(defaults: defaults)
         pref.applyServerValue("imperial")
