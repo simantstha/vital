@@ -402,7 +402,12 @@ final class TrendsViewModel: ObservableObject {
 
         let profile = await profileResp
         sleepGoalMinutes = profile?.sleepGoalMinutes ?? 480
-        UnitPreference.shared.applyServerValue(profile?.unitSystem)
+        // Locale-default adoption PATCH: opportunistic housekeeping, not a
+        // user-initiated action, so failure is silent and simply retries
+        // next launch (see UnitPreference.applyServerValue).
+        if UnitPreference.shared.applyServerValue(profile?.unitSystem) {
+            try? await profileClient.updateProfile(unitSystem: UnitPreference.shared.current.rawValue)
+        }
         isLoadingSummary = false
     }
 
