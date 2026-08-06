@@ -274,6 +274,45 @@ test('analysis GET echoes the sleep input payload as metrics', async () => {
   assert.deepEqual((await response.json()).metrics, { minutes: 431, stages: { core: 312, deep: 55, rem: 64, awake: 12 } });
 });
 
+test('morning brief GET returns the same DTO shape as other analysis kinds', async () => {
+  const record: AnalysisRecord = {
+    id: '33333333-3333-4333-8333-333333333333', userId: 'user-a', status: 'ready', deletedAt: null,
+    date: '2026-08-05',
+    input: null,
+    result: { headline: 'Good sleep', shortInsight: 'Recovery is up' }, createdAt: new Date('2026-08-05T11:00:00Z'),
+  };
+  const seen: string[][] = [];
+  const handler = createAnalysisHttpHandler({
+    authenticate,
+    kind: 'morningBrief',
+    repository: repository({
+      async getAnalysis(kind, userId, id) { seen.push([kind, userId, id]); return record; },
+    }),
+  });
+
+  // 401 unauthenticated.
+  assert.equal((await handler.GET(request('/api/morning-briefs/x'), { params: Promise.resolve({ id: 'x' }) })).status, 401);
+
+  // 400 on a non-UUID id, without even reaching the repository.
+  const invalid = await handler.GET(request('/api/morning-briefs/x', 'GET', undefined, 'user-a'), { params: Promise.resolve({ id: 'x' }) });
+  assert.equal(invalid.status, 400);
+  assert.deepEqual(seen, []);
+
+  // 200 with the standard analysis DTO shape; metrics is null (briefs carry no input payload).
+  const response = await handler.GET(request(`/api/morning-briefs/${record.id}`, 'GET', undefined, 'user-a'), { params: Promise.resolve({ id: record.id }) });
+  assert.equal(response.status, 200);
+  assert.deepEqual(seen, [['morningBrief', 'user-a', record.id]]);
+  assert.deepEqual(await response.json(), {
+    id: record.id, date: '2026-08-05', result: { headline: 'Good sleep', shortInsight: 'Recovery is up' },
+    metrics: null,
+    createdAt: '2026-08-05T11:00:00.000Z',
+  });
+
+  // 404 on null (repository found nothing servable).
+  const nullHandler = createAnalysisHttpHandler({ authenticate, kind: 'morningBrief', repository: repository({ async getAnalysis() { return null; } }) });
+  assert.equal((await nullHandler.GET(request(`/api/morning-briefs/${record.id}`, 'GET', undefined, 'user-a'), { params: Promise.resolve({ id: record.id }) })).status, 404);
+});
+
 test('analysis GET passes one canonical UUID to the repository', async () => {
   let repositoryId = '';
   const handler = createAnalysisHttpHandler({

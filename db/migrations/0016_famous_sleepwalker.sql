@@ -1,0 +1,1 @@
+ALTER TABLE "morning_notification_slots" ADD COLUMN "result" jsonb;

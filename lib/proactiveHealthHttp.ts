@@ -31,7 +31,7 @@ export interface AnalysisRecord {
   createdAt: Date;
 }
 
-export type AnalysisKind = 'workout' | 'sleep';
+export type AnalysisKind = 'workout' | 'sleep' | 'morningBrief';
 
 export interface ProactiveHealthRepository {
   registerPushDevice(userId: string, device: PushDeviceRegistration): Promise<'registered' | 'conflict'>;

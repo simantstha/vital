@@ -92,16 +92,32 @@ struct AnalysisResponse: Codable, Equatable {
     let createdAt: Date
 }
 
+/// A coach-analysis-shaped detail screen: which resource to fetch, how to title
+/// it, and which metrics layout (if any) its payload carries.
+struct AnalysisKind: Equatable {
+    let resource: String   // API path segment
+    let title: String
+    let subject: String    // coach-context wording
+    let metrics: String?   // nil = payload never carries metrics
+
+    static let workout = AnalysisKind(resource: "workout-analyses", title: "Workout Analysis",
+                                      subject: "workout analysis", metrics: "workout")
+    static let sleep = AnalysisKind(resource: "sleep-analyses", title: "Sleep Analysis",
+                                    subject: "sleep analysis", metrics: "sleep")
+    static let morningBrief = AnalysisKind(resource: "morning-briefs", title: "Morning Brief",
+                                           subject: "morning brief", metrics: nil)
+}
+
 enum PushRoute: Equatable, Identifiable {
     case workoutAnalysis(String)
     case sleepAnalysis(String)
-    case morningBrief
+    case morningBrief(String?)   // nil = legacy `vital://today` payload
 
     var id: String {
         switch self {
         case .workoutAnalysis(let id): "workout:\(id)"
         case .sleepAnalysis(let id): "sleep:\(id)"
-        case .morningBrief: "morning"
+        case .morningBrief(let id): "morning:\(id ?? "legacy")"
         }
     }
 
@@ -109,15 +125,16 @@ enum PushRoute: Equatable, Identifiable {
         guard let type = userInfo["type"] as? String else { return nil }
         guard let deepLink = userInfo["deepLink"] as? String, let url = URL(string: deepLink),
               url.scheme == "vital", url.host != nil else { return nil }
-        if type == "morning_brief" {
-            guard url.host == "today", url.path.isEmpty else { return nil }
-            self = .morningBrief; return
+        // Legacy: briefs delivered before they were persisted carry no id.
+        if type == "morning_brief", url.host == "today", url.path.isEmpty, userInfo["id"] == nil {
+            self = .morningBrief(nil); return
         }
         guard let id = userInfo["id"] as? String, UUID(uuidString: id) != nil,
               url.path == "/\(id)" else { return nil }
         switch type {
         case "workout_analysis" where url.host == "workout-analysis": self = .workoutAnalysis(id)
         case "sleep_analysis" where url.host == "sleep-analysis": self = .sleepAnalysis(id)
+        case "morning_brief" where url.host == "morning-brief": self = .morningBrief(id)
         default: return nil
         }
     }
@@ -320,8 +337,8 @@ final class PushNotificationService: ObservableObject {
 }
 
 extension APIClient {
-    func fetchAnalysis(kind: String, id: String) async throws -> AnalysisResponse {
-        guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/\(kind)-analyses/\(id)") else { throw APIError.invalidURL }
+    func fetchAnalysis(resource: String, id: String) async throws -> AnalysisResponse {
+        guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/\(resource)/\(id)") else { throw APIError.invalidURL }
         var request = URLRequest(url: url)
         if let token = KeychainStore.loadSessionToken() { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         let (data, response) = try await URLSession.shared.data(for: request)

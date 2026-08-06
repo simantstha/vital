@@ -5,7 +5,7 @@ import { classifyApnsResponse, type PushDevice, type PushOutcome } from './proac
 export interface ApnsConfig { keyId: string; teamId: string; topic: string; privateKey: string }
 export interface ApnsAlert { title: string; body: string }
 export interface ApnsTransport { request(origin: string, headers: Record<string, string>, body: string): Promise<{ status: number; body: string; latencyMs: number }> }
-export type ApnsRoute = { type: 'workout_analysis' | 'sleep_analysis'; id: string; deepLink: string } | { type: 'morning_brief'; deepLink: string };
+export type ApnsRoute = { type: 'workout_analysis' | 'sleep_analysis' | 'morning_brief'; id: string; deepLink: string };
 
 function base64url(value: string | Buffer): string { return Buffer.from(value).toString('base64url'); }
 
