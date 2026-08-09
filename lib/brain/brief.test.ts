@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import test, { mock } from 'node:test';
+import test, { mock, beforeEach } from 'node:test';
 import * as realSchema from '../../db/schema';
 import { localDayKey } from '../localDay';
 
@@ -16,10 +16,38 @@ import { localDayKey } from '../localDay';
  * in its own subprocess, so this lives on its own.
  */
 
+type BaselineFixture = { stats: { mean30: number | null } | null; established: boolean; dataDays: number };
+type MetricPointFixture = { date: string; value: number };
+type SleepSummaryFixture = { nights: Array<{ date: string; minutes: number; stages: unknown }> };
+
 const state: {
-  userRow: Array<{ timezone: string | null; unit_system?: string | null }>;
+  userRow: Array<{ timezone: string | null; unit_system?: string | null; sleep_goal_minutes?: number | null }>;
   events: Array<{ type: string; timestamp: Date; payload: unknown }>;
-} = { userRow: [{ timezone: 'America/Chicago' }], events: [] };
+  whoopConn: Array<{ status: string }>;
+  baselines: Record<string, BaselineFixture | null>;
+  metricPoints: Record<string, MetricPointFixture[]>;
+  sleepSummaries: Record<string, SleepSummaryFixture>;
+} = {
+  userRow: [{ timezone: 'America/Chicago' }],
+  events: [],
+  whoopConn: [],
+  baselines: {},
+  metricPoints: {},
+  sleepSummaries: {},
+};
+
+// The recovery-scoring additions (lib/brain/brief.ts reading whoop_connections
+// + per-metric baselines/points) are opt-in per test via `state.whoopConn` /
+// `state.baselines` / `state.metricPoints` / `state.sleepSummaries` — reset
+// here so a test that sets them up doesn't leak into the next one. userRow
+// and events are NOT reset here since every existing test already sets them
+// explicitly at the top of its body.
+beforeEach(() => {
+  state.whoopConn = [];
+  state.baselines = {};
+  state.metricPoints = {};
+  state.sleepSummaries = {};
+});
 
 const fakeDb = {
   select: () => ({
@@ -33,6 +61,9 @@ const fakeDb = {
       if (table === realSchema.nodes) {
         return { where: () => ({ orderBy: async () => [] }) };
       }
+      if (table === realSchema.whoop_connections) {
+        return { where: () => ({ limit: async () => state.whoopConn }) };
+      }
       throw new Error(`unexpected select().from(): ${String(table)}`);
     },
   }),
@@ -44,9 +75,10 @@ mock.module('@/lib/brain/baselines', {
 });
 mock.module('@/lib/brain/tools', {
   namedExports: {
-    queryBaseline: async () => null,
-    queryMetricPoints: async () => [],
-    querySleepSummary: async () => ({ nights: [] }),
+    queryBaseline: async (_userId: string, metric: string) => state.baselines[metric] ?? null,
+    queryMetricPoints: async (_userId: string, metric: string, _days: number) => state.metricPoints[metric] ?? [],
+    querySleepSummary: async (_userId: string, _days: number, metric: string = 'sleep_minutes') =>
+      state.sleepSummaries[metric] ?? { nights: [] },
   },
 });
 let capturedCtx: Record<string, unknown> | null = null;
@@ -163,4 +195,81 @@ test('an imperial user\'s brief carries mi, converted from the same metric-store
   assert.equal(capturedCtx!.unitSystem, 'imperial');
   const lastRun = capturedCtx!.lastRun as { distance: string } | null;
   assert.equal(lastRun?.distance, (5000 / 1000 / 1.609344).toFixed(1)); // "3.1"
+});
+
+/**
+ * Recovery-scoring integration tests (lib/brain/recovery.ts wired through
+ * lib/brain/brief.ts). These drive the REAL computeRecovery/selectHrvSource/
+ * buildRecoveryHistory logic — only the DB reads (queryBaseline,
+ * queryMetricPoints, querySleepSummary, the whoop_connections probe) are
+ * faked via `state`.
+ */
+
+test('a user with no HRV data anywhere gets a suppressed (null) recovery score with insufficient confidence, never a fabricated number', async () => {
+  state.userRow = [{ timezone: 'America/Chicago' }];
+  state.events = [];
+  capturedCtx = null;
+
+  const { generateDailyBriefFromDb } = await briefPromise;
+  await generateDailyBriefFromDb('user-1');
+
+  assert.equal(capturedCtx!.recovery, null);
+  assert.equal(capturedCtx!.recoveryConfidence, 'insufficient');
+});
+
+test('whoopRecovery arrives as a field separate from recovery — WHOOP\'s own score never overwrites Vital\'s blend', async () => {
+  state.userRow = [{ timezone: 'America/Chicago' }];
+  state.events = [];
+  state.whoopConn = [{ status: 'active' }];
+  state.baselines = {
+    whoop_hrv_rmssd: { stats: { mean30: 80 }, established: true, dataDays: 30 },
+  };
+  state.metricPoints = {
+    whoop_hrv_rmssd: [{ date: '2026-08-08', value: 80 }],
+    whoop_recovery:  [{ date: '2026-08-08', value: 45 }], // WHOOP's own score — deliberately different from Vital's blend
+  };
+  state.sleepSummaries = {
+    // HealthKit reports zero nights, so brief.ts must fall back to
+    // whoop_sleep_min (IN-BED time) and convert it via
+    // sleepFromWhoopStageSummary — same fixture as recovery.test.ts's
+    // "converts in-bed time to asleep time" case (480min in-bed, 45min
+    // awake -> 435 asleep / 91% efficiency).
+    whoop_sleep_min: { nights: [{ date: '2026-08-08', minutes: 480, stages: { total_awake_time_milli: 45 * 60_000 } }] },
+  };
+  capturedCtx = null;
+
+  const { generateDailyBriefFromDb } = await briefPromise;
+  await generateDailyBriefFromDb('user-1');
+
+  assert.equal(capturedCtx!.whoopRecovery, 45);
+  assert.notEqual(capturedCtx!.recovery, null);
+  assert.notEqual(capturedCtx!.recovery, capturedCtx!.whoopRecovery);
+});
+
+test('sleep_goal_minutes: 420 changes the resulting recovery score vs. the 480min default', async () => {
+  state.events = [];
+  state.baselines = {
+    hrv_sdnn: { stats: { mean30: 80 }, established: true, dataDays: 30 },
+  };
+  state.metricPoints = {
+    hrv_sdnn: [{ date: '2026-08-08', value: 80 }],
+  };
+  state.sleepSummaries = {
+    sleep_minutes: { nights: [{ date: '2026-08-08', minutes: 420, stages: { awake: 47 } }] },
+  };
+
+  state.userRow = [{ timezone: 'America/Chicago' }]; // sleep_goal_minutes unset -> DEFAULT_SLEEP_GOAL_MIN (480)
+  capturedCtx = null;
+  const { generateDailyBriefFromDb } = await briefPromise;
+  await generateDailyBriefFromDb('user-1');
+  const defaultGoalRecovery = capturedCtx!.recovery;
+
+  state.userRow = [{ timezone: 'America/Chicago', sleep_goal_minutes: 420 }];
+  capturedCtx = null;
+  await generateDailyBriefFromDb('user-1');
+  const customGoalRecovery = capturedCtx!.recovery;
+
+  assert.notEqual(defaultGoalRecovery, null);
+  assert.notEqual(customGoalRecovery, null);
+  assert.notEqual(defaultGoalRecovery, customGoalRecovery);
 });
