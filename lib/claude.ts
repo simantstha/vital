@@ -4,23 +4,15 @@ import { readMemoryFile, writeMemoryFile } from '@/lib/memory';
 import { writeHrvBaselineToProfile } from '@/lib/brain/baselines';
 import { parseProfileDetails, formatIdentityForPrompt } from '@/lib/profileDetails';
 import type { UnitSystem } from '@/lib/units';
+import type { RecoveryConfidence, RecoveryGap, RecoveryHistoryDay } from '@/lib/brain/recovery';
 
 // ── Inline types (formerly imported from lib/whoop + lib/strava) ──────────────
 
-interface BriefHistoryDay {
-  date: string;
-  recovery: number;
-  hrv: number;
-  rhr: number;
-  sleepPerf: number;
-  sleepDuration: string;
-}
-
 interface BriefHistory {
-  days: BriefHistoryDay[];
-  avgRecovery7d: number;
-  avgHrv7d: number;
-  trend: 'improving' | 'declining' | 'stable';
+  days: RecoveryHistoryDay[];
+  avgRecovery7d: number | null;
+  avgHrv7d: number | null;
+  trend: 'improving' | 'declining' | 'stable' | 'unknown';
 }
 
 interface ActivityRecord {
@@ -40,6 +32,13 @@ interface WeeklyLoadRecord {
   walkDistance: number;
   gymMin: number;
   gymSessions: number;
+}
+
+/** Minutes → "Xh YYm", for rendering RecoveryHistoryDay.sleepMinutes in the prompt. */
+function minutesToHm(min: number): string {
+  const h = Math.floor(min / 60);
+  const m = Math.round(min % 60);
+  return `${h}h ${m < 10 ? '0' : ''}${m}m`;
 }
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -93,6 +92,14 @@ function appendCoachNote(userId: string, note: string) {
 interface BriefContext {
   /** null when there isn't enough biometric data to compute a recovery score yet. */
   recovery: number | null;
+  /** Confidence behind `recovery` — 'high' only when HRV + both sleep components are present and the baseline is established; 'insufficient' when `recovery` is null. */
+  recoveryConfidence?: RecoveryConfidence;
+  /** Which HRV source `recovery` was computed from (e.g. "WHOOP HRV (RMSSD)", "HealthKit HRV (SDNN)"); null when there's no source. */
+  recoverySourceLabel?: string | null;
+  /** Why `recovery` is provisional or absent — drives the PROVISIONAL phrase list in the prompt. */
+  recoveryGaps?: RecoveryGap[];
+  /** WHOOP's own recovery score, reference only — never the score quoted as "Recovery Score" above. Null when WHOOP isn't the source or hasn't reported today. */
+  whoopRecovery?: number | null;
   /** null when no HRV has synced yet — never substitute a placeholder number. */
   hrv: number | null;
   /** null when no resting-HR reading has synced yet. */
@@ -155,12 +162,22 @@ export async function generateDailyBrief(userId: string, ctx: BriefContext): Pro
     ctx.unitSystem ?? 'metric',
   );
 
+  // History days come from lib/brain/recovery.ts's buildRecoveryHistory, which
+  // OMITS any day with no HRV reading rather than fabricating one — so every
+  // day here has a real `recovery`/`hrv`, but sleep fields can still be null
+  // (no stage/duration data that night). Never print a bare "null%".
   const historySection = ctx.history?.days.length
     ? `\n## 7-Day Recovery Trend (newest first)\n` +
-      ctx.history.days.map(d =>
-        `${d.date}: recovery ${d.recovery}%, HRV ${d.hrv}ms, sleep ${d.sleepPerf}% (${d.sleepDuration})`
-      ).join('\n') +
-      `\n7-day avg: recovery ${ctx.history.avgRecovery7d}%, HRV ${ctx.history.avgHrv7d}ms — trend: ${ctx.history.trend}`
+      ctx.history.days.map(d => {
+        const sleepPart = d.sleepMinutes != null
+          ? `, sleep ${minutesToHm(d.sleepMinutes)}${d.sleepEfficiencyPct != null ? ` (${d.sleepEfficiencyPct}% efficiency)` : ''}`
+          : '';
+        return `${d.date}: recovery ${d.recovery}%, HRV ${d.hrv}ms${sleepPart}`;
+      }).join('\n') +
+      (ctx.history.avgRecovery7d != null
+        ? `\n7-day avg: recovery ${ctx.history.avgRecovery7d}%${ctx.history.avgHrv7d != null ? `, HRV ${ctx.history.avgHrv7d}ms` : ''}`
+        : '') +
+      `\nBased on ${ctx.history.days.length} of the last 7 days — trend: ${ctx.history.trend}`
     : '';
 
   const distanceUnit = ctx.distanceUnit;
@@ -207,9 +224,35 @@ export async function generateDailyBrief(userId: string, ctx: BriefContext): Pro
   // These values come straight from the same daily_metrics store the Today
   // metric cards read. When a metric hasn't synced yet we say so explicitly —
   // never substitute a placeholder number the user can't reconcile with the app.
-  const recoveryLine = ctx.recovery != null
-    ? `- Recovery Score: ${ctx.recovery}% (${ctx.recovery >= 67 ? 'Green' : ctx.recovery >= 34 ? 'Amber' : 'Red'})${ctx.calibrating ? ' — provisional' : ''}`
-    : `- Recovery Score: not enough data yet (no HRV synced)`;
+
+  // Plain-English reasons for a PROVISIONAL recovery score, keyed off the
+  // RecoveryGap enum in lib/brain/recovery.ts. no_hrv is excluded here — it
+  // maps to the 'insufficient' branch below, never to a provisional line.
+  const RECOVERY_GAP_PHRASES: Partial<Record<RecoveryGap, string>> = {
+    no_sleep_duration: 'no sleep data synced last night',
+    no_sleep_efficiency: 'sleep stages not recorded',
+    baseline_calibrating: 'baseline still calibrating',
+    baseline_from_short_window: 'baseline from a short history',
+  };
+
+  let recoveryLine: string;
+  if (ctx.recovery != null && ctx.recoveryConfidence !== 'insufficient') {
+    const band = ctx.recovery >= 67 ? 'Green' : ctx.recovery >= 34 ? 'Amber' : 'Red';
+    const base = `- Recovery Score: ${ctx.recovery}% (${band}) — Vital's own score, from ${ctx.recoverySourceLabel} vs. your 30-day baseline, blended with sleep duration and efficiency`;
+    if (ctx.recoveryConfidence === 'provisional') {
+      const reasons = (ctx.recoveryGaps ?? [])
+        .map(g => RECOVERY_GAP_PHRASES[g])
+        .filter((s): s is string => !!s);
+      recoveryLine = reasons.length ? `${base} — PROVISIONAL: ${reasons.join(', ')}` : `${base} — PROVISIONAL`;
+    } else {
+      recoveryLine = base;
+    }
+  } else {
+    recoveryLine = `- Recovery Score: not enough data yet (no HRV reading synced)`;
+  }
+  const whoopRecoveryLine = ctx.whoopRecovery != null
+    ? `\n- WHOOP Recovery (WHOOP's own score, reference only — NOT the score above): ${ctx.whoopRecovery}%`
+    : '';
   const hrvLine   = ctx.hrv != null ? `- HRV: ${ctx.hrv}ms` : `- HRV: no reading synced yet today`;
   const rhrLine   = ctx.rhr != null ? `- Resting HR: ${ctx.rhr}bpm` : `- Resting HR: no reading synced yet today`;
   const sleepLine = ctx.sleepDuration != null
@@ -232,7 +275,8 @@ ${userProfile}
 ## Today's Snapshot
 - Date: ${today}
 ${ctx.calibrating ? '- NOTE: Baselines are still calibrating (fewer than 14 days of history) — treat the recovery score below as PROVISIONAL. Do not give a firm recovery/training-intensity prescription; say the numbers are still settling in and default to moderate, conservative guidance.\n' : ''}- IMPORTANT: Only reference the biometrics listed below. If a metric says "no reading synced yet", acknowledge it's missing — do NOT invent a value.
-${recoveryLine}
+- The Recovery Score is Vital's own blend of HRV-vs-baseline and sleep — it is not any device's score. Never describe it as perfect or ideal while the sleep line shows a short night; if the score and the sleep line seem to disagree, lead with the sleep line. If the score is PROVISIONAL or absent, do not give a firm readiness verdict. Quote Vital's score, not WHOOP's — mention WHOOP's only if the user asks or the two differ by more than 20 points.
+${recoveryLine}${whoopRecoveryLine}
 ${hrvLine}
 ${rhrLine}
 ${sleepLine}

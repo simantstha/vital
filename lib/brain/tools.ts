@@ -698,7 +698,11 @@ export interface SleepSummary {
   consistency: 'consistent' | 'variable' | 'unknown';
 }
 
-export async function querySleepSummary(userId: string, days: number): Promise<SleepSummary> {
+export async function querySleepSummary(
+  userId: string,
+  days: number,
+  metric: string = 'sleep_minutes',
+): Promise<SleepSummary> {
   const clampedDays = Math.max(1, Math.min(30, Math.round(days)));
   const since = isoDateDaysAgo(clampedDays);
 
@@ -712,7 +716,7 @@ export async function querySleepSummary(userId: string, days: number): Promise<S
     .where(
       and(
         eq(schema.daily_metrics.user_id, userId),
-        eq(schema.daily_metrics.metric, 'sleep_minutes'),
+        eq(schema.daily_metrics.metric, metric),
         gte(schema.daily_metrics.date, since),
       ),
     )

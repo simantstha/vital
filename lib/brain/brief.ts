@@ -13,7 +13,17 @@ import { db, schema } from '@/db';
 import { eq, and, gte, desc } from 'drizzle-orm';
 import { generateDailyBrief } from '@/lib/claude';
 import { getCalibration } from '@/lib/brain/baselines';
-import { queryBaseline, queryMetricPoints, querySleepSummary } from '@/lib/brain/tools';
+import { queryBaseline, queryMetricPoints, querySleepSummary, type MetricPoint, type BaselineSnapshot } from '@/lib/brain/tools';
+import {
+  computeRecovery,
+  selectHrvSource,
+  sleepEfficiencyFromHealthKitStages,
+  sleepFromWhoopStageSummary,
+  buildRecoveryHistory,
+  summarizeRecoveryTrend,
+  DEFAULT_SLEEP_GOAL_MIN,
+  type HrvMetric,
+} from '@/lib/brain/recovery';
 import { localDayKey, pickTimeZone } from '@/lib/localDay';
 import { resolveUnitSystem, type UnitSystem } from '@/lib/units';
 import { KM_PER_MILE } from '@/lib/metricFormat';
@@ -74,7 +84,25 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
   // the Today metric cards, Trends, and the coach's data-tools read. Reading
   // them here (instead of the events ledger, which HealthKit never writes to)
   // guarantees the narrative and the cards can never disagree.
-  const [events, hrvBaseline, calibration, hrvPts, rhrPts, sleepSummary, foodNodes, [userRow]] = await Promise.all([
+  //
+  // The hrv_sdnn point window is 14 days (not 7) because selectHrvSource()
+  // needs a recency probe wider than the 7-day history window, and the
+  // baseline-fallback in computeBaselineForSource() below needs >=5 prior
+  // points to fall back to — history still only renders the trailing 7.
+  const [
+    events,
+    hrvBaseline,
+    calibration,
+    hrvPts,
+    rhrPts,
+    sleepSummary,
+    foodNodes,
+    [userRow],
+    whoopHrvBaseline,
+    whoopHrvPts,
+    whoopRecoveryPts,
+    whoopConnRows,
+  ] = await Promise.all([
     db
       .select()
       .from(schema.events)
@@ -87,12 +115,20 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
       .orderBy(desc(schema.events.timestamp)),
     queryBaseline(userId, 'hrv_sdnn'),
     getCalibration(userId),
-    queryMetricPoints(userId, 'hrv_sdnn', 7),
+    queryMetricPoints(userId, 'hrv_sdnn', 14),
     queryMetricPoints(userId, 'resting_hr', 7),
     querySleepSummary(userId, 7),
     db.select().from(schema.nodes).where(eq(schema.nodes.user_id, userId)).orderBy(desc(schema.nodes.weight)),
-    db.select({ timezone: schema.users.timezone, unit_system: schema.users.unit_system })
-      .from(schema.users).where(eq(schema.users.id, userId)).limit(1),
+    db.select({
+      timezone:           schema.users.timezone,
+      unit_system:        schema.users.unit_system,
+      sleep_goal_minutes: schema.users.sleep_goal_minutes,
+    }).from(schema.users).where(eq(schema.users.id, userId)).limit(1),
+    queryBaseline(userId, 'whoop_hrv_rmssd'),
+    queryMetricPoints(userId, 'whoop_hrv_rmssd', 14),
+    queryMetricPoints(userId, 'whoop_recovery', 2),
+    db.select({ status: schema.whoop_connections.status })
+      .from(schema.whoop_connections).where(eq(schema.whoop_connections.user_id, userId)).limit(1),
   ]);
 
   // No request context here (background/cron-generated brief), so this can
@@ -125,42 +161,106 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
 
   // ── Today's biometrics (latest daily_metrics point; null when unsynced) ────
 
-  // Sleep efficiency isn't a stored metric, so derive it from the stage payload
-  // (asleep vs asleep+awake) when available; null otherwise.
-  function sleepEfficiency(minutes: number, stages: unknown): number | null {
-    const s = pl(stages);
-    const awake = num(s.awake) ?? num(s.awakeMinutes);
-    if (awake == null || minutes + awake <= 0) return null;
-    return Math.round((minutes / (minutes + awake)) * 100);
-  }
+  const whoopConnected = whoopConnRows[0]?.status === 'active';
 
-  const latestHrvPt = hrvPts.at(-1) ?? null;
+  // WHOOP wins whenever it has fresh data; a baseline-only source beats no
+  // source at all. Everything downstream — today's HRV value, the baseline
+  // it's compared to, and the 7-day history — reads ONLY this metric, so an
+  // SDNN reading can never meet an RMSSD baseline (see lib/brain/recovery.ts).
+  const selectedHrvSource: HrvMetric | null = selectHrvSource({
+    whoopConnected,
+    whoopRecentPointDays: whoopHrvPts.length,
+    whoopBaselineDataDays: whoopHrvBaseline?.dataDays ?? 0,
+    healthkitRecentPointDays: hrvPts.length,
+    healthkitBaselineDataDays: hrvBaseline?.dataDays ?? 0,
+  });
+
+  const sourcePts: MetricPoint[] =
+    selectedHrvSource === 'whoop_hrv_rmssd' ? whoopHrvPts :
+    selectedHrvSource === 'hrv_sdnn'        ? hrvPts :
+    [];
+  const sourceBaseline: BaselineSnapshot | null =
+    selectedHrvSource === 'whoop_hrv_rmssd' ? whoopHrvBaseline :
+    selectedHrvSource === 'hrv_sdnn'        ? hrvBaseline :
+    null;
+
+  const sourceLatestPt = sourcePts.at(-1) ?? null;
+  const hrv: number | null = sourceLatestPt ? Math.round(sourceLatestPt.value) : null;
+
+  // Baseline HRV for the recovery score: prefer the 30-day baseline row for
+  // the SELECTED source; only when that's absent, fall back to the mean of
+  // that same metric's OWN points, excluding the day being scored, and only
+  // when there are at least 5 prior points — otherwise no baseline at all
+  // (never impute one). hrvBaselineFromShortWindow flags the fallback path
+  // so computeRecovery caps confidence at 'provisional'.
+  function computeBaselineForSource(): { baseline: number | null; fromShortWindow: boolean; established: boolean } {
+    const established = sourceBaseline?.established ?? false;
+    const mean30 = sourceBaseline?.stats?.mean30;
+    if (mean30 != null) return { baseline: Math.round(mean30), fromShortWindow: false, established };
+
+    const priorPoints = sourcePts.filter(p => p.date !== sourceLatestPt?.date);
+    if (priorPoints.length >= 5) {
+      const mean = priorPoints.reduce((a, p) => a + p.value, 0) / priorPoints.length;
+      return { baseline: Math.round(mean), fromShortWindow: true, established };
+    }
+    return { baseline: null, fromShortWindow: false, established };
+  }
+  const {
+    baseline: hrvBaselineValue,
+    fromShortWindow: hrvBaselineFromShortWindow,
+    established: hrvBaselineEstablished,
+  } = computeBaselineForSource();
+
   const latestRhrPt = rhrPts.at(-1) ?? null;
-  const nights      = sleepSummary.nights;
-  const latestNight = nights.at(-1) ?? null;
-
-  const hrv: number | null = latestHrvPt ? Math.round(latestHrvPt.value) : null;
   const rhr: number | null = latestRhrPt ? Math.round(latestRhrPt.value) : null;
-  const sleepMinutes: number | null = latestNight ? Math.round(latestNight.minutes) : null;
-  const sleepDuration: string | null = sleepMinutes != null ? msToHm(sleepMinutes * 60_000) : null;
-  const sleepEff: number | null = latestNight ? sleepEfficiency(latestNight.minutes, latestNight.stages) : null;
 
-  // Baseline HRV for the recovery score: prefer the 30-day baseline row, else
-  // the mean of the available daily_metrics points, else null (no data at all).
-  const baselineStats = hrvBaseline?.stats ?? undefined;
-  const hrvMean7d = hrvPts.length
-    ? Math.round(hrvPts.reduce((a, p) => a + p.value, 0) / hrvPts.length)
-    : null;
-  const baselineHrv: number | null =
-    baselineStats?.mean30 != null ? Math.round(baselineStats.mean30) : hrvMean7d;
+  // Sleep: HealthKit nights first (efficiency derived from the stage payload
+  // via sleepEfficiencyFromHealthKitStages). If HealthKit has zero nights AND
+  // the selected HRV source is WHOOP, fall back to whoop_sleep_min — which is
+  // IN-BED time, not asleep time, so sleepFromWhoopStageSummary's conversion
+  // is mandatory rather than treating it as asleep minutes directly.
+  let nightsForScoring: Array<{ date: string; asleepMinutes: number; sleepEfficiencyPct: number | null }> =
+    sleepSummary.nights.map(n => ({
+      date: n.date,
+      asleepMinutes: n.minutes,
+      sleepEfficiencyPct: sleepEfficiencyFromHealthKitStages(n.minutes, n.stages),
+    }));
 
-  // Recovery is only meaningful with an HRV reading + a baseline to compare to.
-  let recovery: number | null = null;
-  if (hrv != null && baselineHrv != null && baselineHrv > 0) {
-    const hrvScore   = Math.min(100, Math.round((hrv / baselineHrv) * 70));
-    const sleepScore = Math.round(((sleepEff ?? 85) / 100) * 30);
-    recovery = Math.min(100, Math.max(0, hrvScore + sleepScore));
+  if (nightsForScoring.length === 0 && selectedHrvSource === 'whoop_hrv_rmssd') {
+    const whoopSleepSummary = await querySleepSummary(userId, 7, 'whoop_sleep_min');
+    nightsForScoring = whoopSleepSummary.nights
+      .map(n => {
+        const converted = sleepFromWhoopStageSummary(n.minutes, n.stages);
+        return converted
+          ? { date: n.date, asleepMinutes: converted.asleepMinutes, sleepEfficiencyPct: converted.efficiencyPct }
+          : null;
+      })
+      .filter((n): n is { date: string; asleepMinutes: number; sleepEfficiencyPct: number } => n != null);
   }
+
+  const latestNight = nightsForScoring.at(-1) ?? null;
+  const sleepMinutes: number | null = latestNight ? Math.round(latestNight.asleepMinutes) : null;
+  const sleepDuration: string | null = sleepMinutes != null ? msToHm(sleepMinutes * 60_000) : null;
+  const sleepEff: number | null = latestNight?.sleepEfficiencyPct ?? null;
+
+  const sleepGoalMinutes = userRow?.sleep_goal_minutes ?? DEFAULT_SLEEP_GOAL_MIN;
+
+  const recoveryResult = computeRecovery({
+    hrvSource: selectedHrvSource,
+    hrv,
+    hrvBaseline: hrvBaselineValue,
+    hrvBaselineEstablished,
+    hrvBaselineFromShortWindow,
+    asleepMinutes: latestNight?.asleepMinutes ?? null,
+    sleepEfficiencyPct: latestNight?.sleepEfficiencyPct ?? null,
+    sleepGoalMinutes,
+  });
+
+  // WHOOP's own recovery score — reference only, never the score we prompt
+  // the coach with (that's recoveryResult.score, Vital's own blend above).
+  const whoopRecovery: number | null =
+    whoopRecoveryPts.length ? Math.round(whoopRecoveryPts.at(-1)!.value) : null;
+
   const strain = todayEvents.filter(e => e.type === 'workout_completed').length > 0
     ? '–'
     : '0.0';
@@ -212,64 +312,47 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
     };
   }
 
-  // ── 7-day history ─────────────────────────────────────────────────────────
+  // ── 7-day recovery history ───────────────────────────────────────────────
 
-  type HistoryDay = {
-    date: string;
-    recovery: number;
-    hrv: number;
-    rhr: number;
-    sleepPerf: number;
-    sleepDuration: string;
-  };
-
-  // Built from the same daily_metrics points as today's biometrics above, so
-  // the trend the coach describes matches what Trends shows.
-  const dayMap = new Map<string, { hrv?: number; sleepMin?: number; sleepEff?: number; rhr?: number }>();
+  // Built from the same daily_metrics points as today's biometrics above (the
+  // SELECTED HRV source only, same baseline), so the trend the coach
+  // describes matches what Trends shows. A day with no HRV reading is
+  // omitted rather than fabricated — see buildRecoveryHistory in
+  // lib/brain/recovery.ts.
+  const historySourcePts = sourcePts.slice(-7);
+  const dayMap = new Map<string, { hrv?: number; rhr?: number; asleepMinutes?: number; sleepEfficiencyPct?: number }>();
   const touchDay = (date: string) => {
     if (!dayMap.has(date)) dayMap.set(date, {});
     return dayMap.get(date)!;
   };
-  for (const p of hrvPts) touchDay(p.date).hrv = p.value;
+  for (const p of historySourcePts) touchDay(p.date).hrv = p.value;
   for (const p of rhrPts) touchDay(p.date).rhr = p.value;
-  for (const n of nights) {
+  for (const n of nightsForScoring) {
     const d = touchDay(n.date);
-    d.sleepMin = n.minutes;
-    d.sleepEff = sleepEfficiency(n.minutes, n.stages) ?? undefined;
+    d.asleepMinutes = n.asleepMinutes;
+    if (n.sleepEfficiencyPct != null) d.sleepEfficiencyPct = n.sleepEfficiencyPct;
   }
 
-  const historyDays: HistoryDay[] = Array.from(dayMap.entries())
+  const historyDaysRaw = Array.from(dayMap.entries())
     .sort(([a], [b]) => b.localeCompare(a))
     .slice(0, 7)
-    .map(([date, d]) => {
-      const dayHrv  = d.hrv ?? baselineHrv ?? 0;
-      const dayEff  = d.sleepEff ?? 85;
-      const dayRec  = baselineHrv != null && baselineHrv > 0
-        ? Math.min(100, Math.max(0, Math.round((dayHrv / baselineHrv) * 70 + (dayEff / 100) * 30)))
-        : 0;
-      return {
-        date,
-        recovery:      dayRec,
-        hrv:           Math.round(dayHrv),
-        rhr:           Math.round(d.rhr ?? 0),
-        sleepPerf:     dayEff,
-        sleepDuration: d.sleepMin != null ? msToHm(d.sleepMin * 60_000) : '–',
-      };
-    });
+    .map(([date, d]) => ({
+      date,
+      hrv: d.hrv,
+      rhr: d.rhr,
+      asleepMinutes: d.asleepMinutes,
+      sleepEfficiencyPct: d.sleepEfficiencyPct,
+    }));
 
-  const avgHrv7d = historyDays.length > 0
-    ? Math.round(historyDays.reduce((s, d) => s + d.hrv, 0) / historyDays.length)
-    : (baselineHrv ?? 0);
-  const avgRec7d = historyDays.length > 0
-    ? Math.round(historyDays.reduce((s, d) => s + d.recovery, 0) / historyDays.length)
-    : (recovery ?? 0);
+  const recoveryHistory = buildRecoveryHistory(historyDaysRaw, {
+    hrvSource: selectedHrvSource,
+    hrvBaseline: hrvBaselineValue,
+    hrvBaselineEstablished,
+    hrvBaselineFromShortWindow,
+    sleepGoalMinutes,
+  });
 
-  const recent3Rec = historyDays.slice(0, 3).map(d => d.recovery);
-  const older3Rec  = historyDays.slice(4).map(d => d.recovery);
-  const avg = (arr: number[]) => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
-  const diff = avg(recent3Rec) - avg(older3Rec);
-  const trend: 'improving' | 'declining' | 'stable' =
-    diff > 5 ? 'improving' : diff < -5 ? 'declining' : 'stable';
+  const trendSummary = summarizeRecoveryTrend(recoveryHistory);
 
   // ── Recent activities (last 7 days) ───────────────────────────────────────
 
@@ -391,7 +474,11 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
 
   // ── Delegate to lib/claude.ts generateDailyBrief ─────────────────────────
   return generateDailyBrief(userId, {
-    recovery,
+    recovery: recoveryResult.score,
+    recoveryConfidence: recoveryResult.confidence,
+    recoverySourceLabel: recoveryResult.hrvSourceLabel,
+    recoveryGaps: recoveryResult.gaps,
+    whoopRecovery,
     hrv,
     rhr,
     sleepPerf:  sleepEff,
@@ -402,10 +489,10 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
     unitSystem,
     lastRun,
     history: {
-      days:          historyDays,
-      avgRecovery7d: avgRec7d,
-      avgHrv7d,
-      trend,
+      days:          recoveryHistory,
+      avgRecovery7d: trendSummary.avgRecovery,
+      avgHrv7d:      trendSummary.avgHrv,
+      trend:         trendSummary.trend,
     },
     recentActivities,
     weeklyMileage,
