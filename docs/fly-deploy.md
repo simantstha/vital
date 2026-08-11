@@ -34,10 +34,12 @@ Hand that string back, and the rest can be automated.
 
 ## Deploy steps
 
-### 3. Run schema migrations against Supabase (from this machine)
-```
-DATABASE_URL="<supabase-session-string>" npx drizzle-kit migrate
-```
+### 3. Let the release workflow migrate Supabase
+
+Do not run production migrations from a workstation. The release workflow runs
+`npm run ci:migrate` before `flyctl deploy`; that gate applies the committed
+`db/migrations/` journal and verifies the database migration-table head. Never
+use `drizzle-kit push` or `--force` against Supabase production.
 
 ### 4. Create the Fly app + volume
 ```
@@ -113,4 +115,5 @@ bearer token. To run on a physical device:
   the iOS app is the client. (To use the web UI, it would need the token too.)
 - If the app name `vital-coach` is taken, change it in `fly.toml` AND in
   `APIClient.swift` (`apiBaseURL`).
-- Schema changes: re-run step 3 against Supabase, then `fly deploy`.
+- Schema changes: generate and commit a Drizzle migration (including its
+  journal update), then release through the normal workflow.

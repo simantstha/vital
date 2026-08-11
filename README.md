@@ -146,11 +146,23 @@ VITAL_DATA_DIR=/Users/you/.vital-data
 ### 3. Database
 
 ```bash
-npx drizzle-kit push        # local dev: push schema directly
+npx drizzle-kit migrate     # apply committed migrations to the local database
 npx tsx scripts/seed-dev.ts # optional: seed a dev user / sample data
 ```
 
-(Production uses `drizzle-kit migrate` against the tracked migrations in `db/`.)
+Schema changes always use migration files:
+
+1. Update `db/schema.ts`.
+2. Run `npx drizzle-kit generate`.
+3. Review and commit the generated SQL plus `db/migrations/meta/_journal.json`
+   (and its snapshot).
+4. Test the migration against a local database with `npx drizzle-kit migrate`.
+
+Production never uses `drizzle-kit push` (especially not `--force`). The
+release workflow runs `npm run ci:migrate`, which validates the PostgreSQL URL,
+applies only the committed `db/migrations/` journal through Drizzle's pinned
+migrator, and verifies that the database migration table reaches the committed
+journal head before deploying the backend.
 
 ### 4. Run
 
@@ -191,7 +203,9 @@ Releases are **automatic on every push to `main`** via `.github/workflows/releas
 (see [CLAUDE.md](CLAUDE.md) for the full flow). In one workflow run it:
 
 1. **version** — computes the next patch version from the latest `v*` tag and pushes it.
-2. **backend** — `drizzle-kit push` against Supabase, then `flyctl deploy` to Fly app `vital-coach`.
+2. **backend** — runs tests and a production build, then applies and verifies
+   the committed Drizzle migrations against Supabase before `flyctl deploy` to
+   Fly app `vital-coach`.
 3. **ios** — `xcodegen generate` + `fastlane beta` → uploads to TestFlight.
 
 - **Backend** runs on **Fly.io** (not Vercel), with a persistent volume `vital_data` → `/data`

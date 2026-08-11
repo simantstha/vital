@@ -111,7 +111,12 @@ release workflow deploys the worker.
 - Both are injected at archive time via `xcargs`; nothing to bump by hand.
 
 ## What CI does per run
-1. **backend** job: `drizzle-kit push` to Supabase, then `flyctl deploy`.
+1. **backend** job: runs backend tests and a production build, then executes
+   `npm run ci:migrate` against Supabase before `flyctl deploy`. The migration
+   gate accepts only a complete PostgreSQL `DATABASE_URL`, reads only committed
+   `db/migrations/` files via the package-lock-pinned Drizzle migrator, and
+   verifies `drizzle.__drizzle_migrations` reaches the committed journal head.
+   Do not use `drizzle-kit push` or `--force` in production.
 2. **ios** job (after backend): write `Secrets.swift`, `xcodegen generate`,
    `bundle exec fastlane beta` → archive → upload to TestFlight.
 

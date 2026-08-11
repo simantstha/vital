@@ -3,7 +3,7 @@
  *
  * Used by:
  *   npx drizzle-kit generate   — produce SQL migrations from schema diff (no live DB needed)
- *   npx drizzle-kit push       — apply schema directly to a live DB (dev convenience)
+ *   npx drizzle-kit push       — local-development convenience only (never production)
  *   npx drizzle-kit studio     — open Drizzle Studio against the live DB
  *
  * DATABASE_URL is loaded from .env.local for local development.
@@ -13,8 +13,8 @@
 import { defineConfig } from 'drizzle-kit';
 import { config } from 'dotenv';
 
-// Load .env.local so drizzle-kit push / studio pick up DATABASE_URL locally.
-// drizzle-kit generate does not need a live connection and works regardless.
+// Load .env.local so local-only push / studio pick up DATABASE_URL.
+// Production applies committed migrations through scripts/ci-migrate.mjs.
 config({ path: '.env.local' });
 
 export default defineConfig({
