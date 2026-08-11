@@ -18,6 +18,8 @@ import {
   withLockedRecommendationMutation,
 } from '@/lib/coachWorkspaceActionReplay';
 import {
+  linkedPlanPredicateForAction,
+  latestLinkedPlanPredicate,
   latestCurrentLinkedPlanPredicate,
   latestCurrentStatefulPredicate,
 } from '@/lib/coachWorkspaceQueries';
@@ -323,9 +325,8 @@ export async function applyCoachAction(input: ApplyCoachActionInput): Promise<{
             planItemId: schema.coach_recommendation_interactions.plan_item_id,
           })
             .from(schema.coach_recommendation_interactions)
-            .where(latestCurrentLinkedPlanPredicate(
-              userId, recommendationId, input.materialSignature,
-            )).orderBy(desc(schema.coach_recommendation_interactions.occurrence_seq)).limit(1);
+            .where(latestLinkedPlanPredicate(userId, recommendationId))
+            .orderBy(desc(schema.coach_recommendation_interactions.occurrence_seq)).limit(1);
           return link?.planItemId ?? null;
         },
         markPlanSkipped: async ({ userId, localDay, planItemId }) => {
@@ -361,8 +362,11 @@ export async function applyCoachAction(input: ApplyCoachActionInput): Promise<{
       planItemId: schema.coach_recommendation_interactions.plan_item_id,
     })
       .from(schema.coach_recommendation_interactions)
-      .where(latestCurrentLinkedPlanPredicate(
-        input.userId, recommendation.id, input.materialSignature,
+      .where(linkedPlanPredicateForAction(
+        input.action as Exclude<CoachWorkspaceInteractionAction, 'open_chat'>,
+        input.userId,
+        recommendation.id,
+        input.materialSignature,
       )).orderBy(desc(schema.coach_recommendation_interactions.occurrence_seq)).limit(1);
 
     let planItemId = existingPlanLink?.planItemId ?? null;

@@ -59,3 +59,25 @@ export function latestCurrentLinkedPlanPredicate(
   if (!predicate) throw new Error('Unable to build current linked-plan predicate.');
   return predicate;
 }
+
+/** Latest linked plan across every material occurrence of one recommendation. */
+export function latestLinkedPlanPredicate(userId: string, recommendationId: string) {
+  const predicate = and(
+    eq(coach_recommendation_interactions.user_id, userId),
+    eq(coach_recommendation_interactions.recommendation_id, recommendationId),
+    isNotNull(coach_recommendation_interactions.plan_item_id),
+  );
+  if (!predicate) throw new Error('Unable to build latest linked-plan predicate.');
+  return predicate;
+}
+
+export function linkedPlanPredicateForAction(
+  action: 'accept' | 'adjust' | 'skip' | 'complete',
+  userId: string,
+  recommendationId: string,
+  materialSignature: string,
+) {
+  return action === 'complete'
+    ? latestCurrentLinkedPlanPredicate(userId, recommendationId, materialSignature)
+    : latestLinkedPlanPredicate(userId, recommendationId);
+}
