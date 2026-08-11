@@ -134,6 +134,13 @@
       "when": 1786467034771,
       "tag": "0018_fantastic_vision",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1786472331421,
+      "tag": "0019_flaky_rumiko_fujikawa",
+      "breakpoints": true
     }
   ]
 }

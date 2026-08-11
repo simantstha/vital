@@ -4,7 +4,6 @@ import {
   adjustmentWithMaterialSignature,
   assertActionAllowedForRecommendation,
   deriveCoachWorkspaceState,
-  latestCurrentOccurrencePlanId,
   materialSignatureFromAdjustment,
   shouldMutatePlanForAction,
   type HydrationInteraction,
@@ -19,6 +18,7 @@ function interaction(overrides: Partial<HydrationInteraction>): HydrationInterac
   return {
     action: 'accept', adjustment: null, planItemId: 'plan-1',
     materialSignature: 'signature-current',
+    occurrenceSeq: 1,
     createdAt: new Date('2026-08-11T15:00:00Z'), ...overrides,
   };
 }
@@ -157,17 +157,33 @@ test('A to B to A is ready before the returning A occurrence is accepted', () =>
   assert.deepEqual(state, { status: 'ready', planItemId: null, effectiveAction: baseAction });
 });
 
-test('plan mutation never reuses a link from a prior material occurrence', () => {
-  assert.equal(latestCurrentOccurrencePlanId([
-    { adjustment: { __materialSignature: 'signature-b' }, planItemId: 'plan-b' },
-    { adjustment: { __materialSignature: 'signature-a' }, planItemId: 'plan-a1' },
-  ], 'signature-a'), null);
+test('occurrence sequence wins over transaction-start timestamp inversion', () => {
+  const state = deriveCoachWorkspaceState({
+    category: 'training', action: baseAction, materialSignature: 'signature-current',
+    userId: 'user-1', localDay: '2026-08-11',
+    interactions: [
+      interaction({ action: 'adjust', occurrenceSeq: 10, adjustment: { durationMinutes: 30 }, createdAt: new Date('2026-08-11T17:00:00Z') }),
+      interaction({ action: 'adjust', occurrenceSeq: 11, adjustment: { durationMinutes: 45 }, createdAt: new Date('2026-08-11T16:00:00Z') }),
+    ],
+    planItem: { id: 'plan-1', userId: 'user-1', localDay: '2026-08-11', status: 'pending', kind: 'move' },
+  });
 
-  assert.equal(latestCurrentOccurrencePlanId([
-    { adjustment: { __materialSignature: 'signature-a' }, planItemId: 'plan-a2' },
-    { adjustment: { __materialSignature: 'signature-b' }, planItemId: 'plan-b' },
-    { adjustment: { __materialSignature: 'signature-a' }, planItemId: 'plan-a1' },
-  ], 'signature-a'), 'plan-a2');
+  assert.equal(state.effectiveAction.durationMinutes, 45);
+});
+
+test('occurrence sequence deterministically orders interactions with equal timestamps', () => {
+  const timestamp = new Date('2026-08-11T16:00:00Z');
+  const state = deriveCoachWorkspaceState({
+    category: 'training', action: baseAction, materialSignature: 'signature-current',
+    userId: 'user-1', localDay: '2026-08-11',
+    interactions: [
+      interaction({ action: 'adjust', occurrenceSeq: 20, adjustment: { durationMinutes: 30 }, createdAt: timestamp }),
+      interaction({ action: 'adjust', occurrenceSeq: 21, adjustment: { durationMinutes: 45 }, createdAt: timestamp }),
+    ],
+    planItem: { id: 'plan-1', userId: 'user-1', localDay: '2026-08-11', status: 'pending', kind: 'move' },
+  });
+
+  assert.equal(state.effectiveAction.durationMinutes, 45);
 });
 
 test('calibration rejects plan-mutating actions but permits skip and open_chat', () => {

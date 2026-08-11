@@ -8,6 +8,7 @@ export interface HydrationInteraction {
   adjustment: unknown;
   planItemId: string | null;
   createdAt: Date;
+  occurrenceSeq: number;
   materialSignature: string | null;
 }
 
@@ -40,18 +41,6 @@ export function materialSignatureFromAdjustment(value: unknown): string | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const signature = (value as Record<string, unknown>)[MATERIAL_SIGNATURE_KEY];
   return typeof signature === 'string' && signature.length > 0 ? signature : null;
-}
-
-export function latestCurrentOccurrencePlanId(
-  rows: Array<{ adjustment: unknown; planItemId: string | null }>,
-  materialSignature: string,
-): string | null {
-  for (const row of rows) {
-    const signature = materialSignatureFromAdjustment(row.adjustment);
-    if (signature !== materialSignature) return null;
-    if (row.planItemId) return row.planItemId;
-  }
-  return null;
 }
 
 function currentOccurrenceInteractions(
@@ -120,7 +109,8 @@ export function deriveCoachWorkspaceState(input: {
     return { status: 'calibration', planItemId: null, effectiveAction: baseAction };
   }
 
-  const compatibleInteractions = currentOccurrenceInteractions(input.interactions, input.materialSignature);
+  const orderedInteractions = [...input.interactions].sort((left, right) => right.occurrenceSeq - left.occurrenceSeq);
+  const compatibleInteractions = currentOccurrenceInteractions(orderedInteractions, input.materialSignature);
   const stateful = compatibleInteractions.find(interaction => interaction.action !== 'open_chat');
   if (!stateful) return { status: 'ready', planItemId: null, effectiveAction: baseAction };
 

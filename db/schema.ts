@@ -496,11 +496,14 @@ export const coach_recommendation_interactions = p.pgTable('coach_recommendation
   action:                   p.text('action').notNull(), // accept | adjust | skip | complete | open_chat
   adjustment:               p.jsonb('adjustment'),
   plan_item_id:             p.uuid('plan_item_id').references(() => plan_items.id, { onDelete: 'set null' }),
+  occurrence_seq:           p.bigserial('occurrence_seq', { mode: 'number' }).notNull(),
   created_at:               p.timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [
   p.check('coach_recommendation_interactions_action_check', sql`${t.action} in ('accept', 'adjust', 'skip', 'complete', 'open_chat')`),
   p.uniqueIndex('coach_recommendation_interactions_user_action_idx').on(t.user_id, t.action_id),
+  p.uniqueIndex('coach_recommendation_interactions_occurrence_seq_idx').on(t.occurrence_seq),
   p.index('coach_recommendation_interactions_recommendation_idx').on(t.recommendation_id),
+  p.index('coach_recommendation_interactions_recommendation_occurrence_idx').on(t.recommendation_id, t.occurrence_seq),
 ]);
 
 // ─── calendar_blocks ─────────────────────────────────────────────────────────

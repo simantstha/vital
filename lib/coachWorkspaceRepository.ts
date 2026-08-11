@@ -17,13 +17,15 @@ import {
   resolveReplayBeforeEligibility,
   withLockedRecommendationMutation,
 } from '@/lib/coachWorkspaceActionReplay';
-import { hydrationInteractionPredicate } from '@/lib/coachWorkspaceQueries';
+import {
+  latestCurrentLinkedPlanPredicate,
+  latestCurrentStatefulPredicate,
+} from '@/lib/coachWorkspaceQueries';
 import {
   adjustmentWithMaterialSignature,
   assertActionAllowedForRecommendation,
   deriveCoachWorkspaceState,
   materialSignatureFromAdjustment,
-  latestCurrentOccurrencePlanId,
   shouldMutatePlanForAction,
   type CoachWorkspaceState,
   type HydrationAction,
@@ -144,14 +146,33 @@ export async function hydrateCoachWorkspaceState(
     });
   }
 
-  const rows = await db.select({
+  const interactionSelection = {
     action: schema.coach_recommendation_interactions.action,
     adjustment: schema.coach_recommendation_interactions.adjustment,
     planItemId: schema.coach_recommendation_interactions.plan_item_id,
     createdAt: schema.coach_recommendation_interactions.created_at,
-  }).from(schema.coach_recommendation_interactions)
-    .where(hydrationInteractionPredicate(userId, recommendation.id))
-    .orderBy(desc(schema.coach_recommendation_interactions.created_at)).limit(50);
+    occurrenceSeq: schema.coach_recommendation_interactions.occurrence_seq,
+  };
+  const statefulPredicate = latestCurrentStatefulPredicate(
+    userId, recommendation.id, recommendation.material_signature,
+  );
+  const [statefulRows, effectiveRows, linkedRows] = await Promise.all([
+    db.select(interactionSelection).from(schema.coach_recommendation_interactions)
+      .where(statefulPredicate)
+      .orderBy(desc(schema.coach_recommendation_interactions.occurrence_seq)).limit(1),
+    db.select(interactionSelection).from(schema.coach_recommendation_interactions)
+      .where(and(
+        statefulPredicate,
+        inArray(schema.coach_recommendation_interactions.action, ['accept', 'adjust']),
+      )).orderBy(desc(schema.coach_recommendation_interactions.occurrence_seq)).limit(1),
+    db.select(interactionSelection).from(schema.coach_recommendation_interactions)
+      .where(latestCurrentLinkedPlanPredicate(
+        userId, recommendation.id, recommendation.material_signature,
+      )).orderBy(desc(schema.coach_recommendation_interactions.occurrence_seq)).limit(1),
+  ]);
+  const rows = [...new Map(
+    [...statefulRows, ...effectiveRows, ...linkedRows].map(row => [row.occurrenceSeq, row]),
+  ).values()];
 
   const interactions: HydrationInteraction[] = rows
     .filter(row => ['accept', 'adjust', 'skip', 'complete'].includes(row.action))
@@ -160,9 +181,10 @@ export async function hydrateCoachWorkspaceState(
       adjustment: row.adjustment,
       planItemId: row.planItemId,
       createdAt: row.createdAt,
+      occurrenceSeq: row.occurrenceSeq,
       materialSignature: materialSignatureFromAdjustment(row.adjustment),
     }));
-  const latestPlanId = interactions.find(interaction => interaction.planItemId != null)?.planItemId ?? null;
+  const latestPlanId = linkedRows[0]?.planItemId ?? null;
 
   let planItem: { id: string; userId: string; localDay: string; status: string; kind: string } | null = null;
   if (latestPlanId) {
@@ -297,16 +319,14 @@ export async function applyCoachAction(input: ApplyCoachActionInput): Promise<{
     if (input.action === 'skip') {
       const interaction = await applySkipPlanMutation({
         latestLinkedPlanId: async ({ userId, recommendationId }) => {
-          const links = await tx.select({
-            adjustment: schema.coach_recommendation_interactions.adjustment,
+          const [link] = await tx.select({
             planItemId: schema.coach_recommendation_interactions.plan_item_id,
           })
             .from(schema.coach_recommendation_interactions)
-            .where(and(
-              eq(schema.coach_recommendation_interactions.recommendation_id, recommendationId),
-              eq(schema.coach_recommendation_interactions.user_id, userId),
-            )).orderBy(desc(schema.coach_recommendation_interactions.created_at)).limit(50);
-          return latestCurrentOccurrencePlanId(links, input.materialSignature);
+            .where(latestCurrentLinkedPlanPredicate(
+              userId, recommendationId, input.materialSignature,
+            )).orderBy(desc(schema.coach_recommendation_interactions.occurrence_seq)).limit(1);
+          return link?.planItemId ?? null;
         },
         markPlanSkipped: async ({ userId, localDay, planItemId }) => {
           const [updated] = await tx.update(schema.plan_items).set({ status: 'skipped', updated_at: new Date() })
@@ -337,17 +357,15 @@ export async function applyCoachAction(input: ApplyCoachActionInput): Promise<{
       ? applyActionAdjustment(baseAction, input.adjustment ?? {})
       : baseAction;
 
-    const existingPlanLinks = await tx.select({
-      adjustment: schema.coach_recommendation_interactions.adjustment,
+    const [existingPlanLink] = await tx.select({
       planItemId: schema.coach_recommendation_interactions.plan_item_id,
     })
       .from(schema.coach_recommendation_interactions)
-      .where(and(
-        eq(schema.coach_recommendation_interactions.recommendation_id, recommendation.id),
-        eq(schema.coach_recommendation_interactions.user_id, input.userId),
-      )).orderBy(desc(schema.coach_recommendation_interactions.created_at)).limit(50);
+      .where(latestCurrentLinkedPlanPredicate(
+        input.userId, recommendation.id, input.materialSignature,
+      )).orderBy(desc(schema.coach_recommendation_interactions.occurrence_seq)).limit(1);
 
-    let planItemId = latestCurrentOccurrencePlanId(existingPlanLinks, input.materialSignature);
+    let planItemId = existingPlanLink?.planItemId ?? null;
     if (input.action === 'complete') {
       if (!planItemId) throw new Error('No plan item is linked to this recommendation.');
       const [completed] = await tx.update(schema.plan_items).set({ status: 'done', updated_at: new Date() }).where(and(
