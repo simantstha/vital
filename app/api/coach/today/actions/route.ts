@@ -2,6 +2,11 @@ import { NextResponse } from 'next/server';
 import { getUserIdFromRequest } from '@/lib/auth';
 import { applyCoachAction, type CoachWorkspaceInteractionAction } from '@/lib/coachWorkspaceRepository';
 import type { ActionAdjustment } from '@/lib/coachWorkspace';
+import {
+  COACH_WORKSPACE_DISABLED_RESPONSE,
+  COACH_WORKSPACE_DISABLED_STATUS,
+  isCoachWorkspaceEnabled,
+} from '@/lib/coachWorkspaceFeature';
 
 const VALID_ACTIONS = new Set<CoachWorkspaceInteractionAction>(['accept', 'adjust', 'skip', 'complete', 'open_chat']);
 
@@ -32,6 +37,10 @@ function serialize(interaction: Awaited<ReturnType<typeof applyCoachAction>>['in
 
 /** Records one atomic Coach Workspace interaction. Plan rows are server-authored. */
 export async function POST(request: Request): Promise<NextResponse> {
+  if (!isCoachWorkspaceEnabled()) {
+    return NextResponse.json(COACH_WORKSPACE_DISABLED_RESPONSE, { status: COACH_WORKSPACE_DISABLED_STATUS });
+  }
+
   let userId: string;
   try {
     userId = getUserIdFromRequest(request);

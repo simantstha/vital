@@ -2,6 +2,22 @@ import XCTest
 @testable import Vital
 
 final class CoachWorkspacePresentationTests: XCTestCase {
+    func testDisabledWorkspaceResponseDecodesAsUnavailable() throws {
+        let data = Data(#"{"error":"Coach Workspace is disabled.","code":"COACH_WORKSPACE_DISABLED"}"#.utf8)
+
+        let availability = try APIClient.decodeCoachWorkspaceAvailability(statusCode: 404, data: data)
+
+        XCTAssertEqual(availability, .disabled)
+    }
+
+    func testUnrelatedNotFoundResponseRemainsAServerError() {
+        let data = Data(#"{"error":"Not found"}"#.utf8)
+
+        XCTAssertThrowsError(try APIClient.decodeCoachWorkspaceAvailability(statusCode: 404, data: data)) { error in
+            XCTAssertEqual(error as? APIError, .serverError(404))
+        }
+    }
+
     func testMoveRecommendationOffersOnlyBoundedMoveAdjustments() {
         let recommendation = CoachWorkspaceRecommendation.fixture(kind: "move")
 

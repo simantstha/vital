@@ -323,10 +323,18 @@ final class CoachViewModel: ObservableObject {
                 workspaceTask = nil
             }
             do {
-                let snapshot = try await api.fetchCoachWorkspace()
-                workspaceSnapshot = snapshot
-                workspacePlanState = Self.planState(for: snapshot.state.status)
-                workspaceActionErrorMessage = nil
+                switch try await api.fetchCoachWorkspace() {
+                case .available(let snapshot):
+                    workspaceSnapshot = snapshot
+                    workspacePlanState = Self.planState(for: snapshot.state.status)
+                    workspaceActionErrorMessage = nil
+                case .disabled:
+                    workspaceSnapshot = nil
+                    workspacePlanState = .ready
+                    workspaceActionMessage = nil
+                    workspaceActionErrorMessage = nil
+                    lastWorkspaceAction = nil
+                }
             } catch is CancellationError {
                 return
             } catch {

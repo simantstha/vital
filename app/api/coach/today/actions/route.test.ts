@@ -28,6 +28,29 @@ mock.module('@/lib/coachWorkspaceRepository', { namedExports: {
 } });
 const routePromise = import('./route');
 
+process.env.COACH_WORKSPACE_V1 = 'true';
+
+test('POST /api/coach/today/actions fails closed before repository work when disabled', async () => {
+  const { POST } = await routePromise;
+  delete process.env.COACH_WORKSPACE_V1;
+  appliedActionInput = undefined;
+  try {
+    const response = await POST(new Request('http://local/api/coach/today/actions', {
+      method: 'POST', headers: { 'x-user-id': 'user-1' },
+      body: JSON.stringify({ actionId: 'tap-1', recommendationId: 'recommendation-1', action: 'accept' }),
+    }));
+
+    assert.equal(response.status, 404);
+    assert.deepEqual(await response.json(), {
+      error: 'Coach Workspace is disabled.',
+      code: 'COACH_WORKSPACE_DISABLED',
+    });
+    assert.equal(lastAppliedAction(), undefined);
+  } finally {
+    process.env.COACH_WORKSPACE_V1 = 'true';
+  }
+});
+
 test('POST /api/coach/today/actions rejects unauthenticated requests', async () => {
   const { POST } = await routePromise;
   const response = await POST(new Request('http://local/api/coach/today/actions', {

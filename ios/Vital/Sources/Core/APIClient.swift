@@ -369,11 +369,15 @@ struct APIClient {
     /// Fetches the server-authored, deterministic recommendation for the
     /// user's local day. The server owns freshness and safety gating; iOS only
     /// presents the recommendation and explicit user actions.
-    func fetchCoachWorkspace() async throws -> CoachWorkspaceSnapshot {
+    func fetchCoachWorkspace() async throws -> CoachWorkspaceAvailability {
         let tz = TimeZone.current.identifier
         let encoded = tz.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? tz
-        let response: CoachWorkspaceResponse = try await get("/api/coach/today?tz=\(encoded)")
-        return response.snapshot
+        guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/coach/today?tz=\(encoded)") else {
+            throw APIError.invalidURL
+        }
+        let (data, response) = try await session.data(for: authorizedRequest(url))
+        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        return try Self.decodeCoachWorkspaceAvailability(statusCode: http.statusCode, data: data)
     }
 
     @discardableResult
@@ -564,6 +568,16 @@ struct APIClient {
     /// session in unit tests.
     static func decodeCoachWorkspace(_ data: Data) throws -> CoachWorkspaceSnapshot {
         try JSONDecoder().decode(CoachWorkspaceResponse.self, from: data).snapshot
+    }
+
+    static func decodeCoachWorkspaceAvailability(statusCode: Int, data: Data) throws -> CoachWorkspaceAvailability {
+        if statusCode == 404,
+           let response = try? JSONDecoder().decode(CoachWorkspaceDisabledResponse.self, from: data),
+           response.code == "COACH_WORKSPACE_DISABLED" {
+            return .disabled
+        }
+        guard statusCode < 400 else { throw APIError.serverError(statusCode) }
+        return .available(try decodeCoachWorkspace(data))
     }
 
     static func decodeCoachWorkspaceAction(_ data: Data) throws -> CoachWorkspaceInteraction {
@@ -1633,6 +1647,11 @@ enum CoachWorkspaceStatus: String, Codable, Equatable, CaseIterable {
     case completed
 }
 
+enum CoachWorkspaceAvailability: Equatable {
+    case available(CoachWorkspaceSnapshot)
+    case disabled
+}
+
 struct CoachWorkspaceState: Codable, Equatable {
     let status: CoachWorkspaceStatus
     let planItemId: String?
@@ -1677,6 +1696,10 @@ private struct CoachWorkspaceResponse: Decodable {
     var snapshot: CoachWorkspaceSnapshot {
         CoachWorkspaceSnapshot(recommendation: recommendation, state: state)
     }
+}
+
+private struct CoachWorkspaceDisabledResponse: Decodable {
+    let code: String
 }
 
 private struct CoachWorkspaceActionRequest: Encodable {
@@ -1867,7 +1890,7 @@ protocol CoachAPIProviding {
         actionId: String,
         action: SpecialistAction
     ) -> AsyncThrowingStream<CoachStreamEvent, Error>
-    func fetchCoachWorkspace() async throws -> CoachWorkspaceSnapshot
+    func fetchCoachWorkspace() async throws -> CoachWorkspaceAvailability
     func performCoachWorkspaceAction(
         recommendationId: String,
         actionId: String,
@@ -1877,7 +1900,7 @@ protocol CoachAPIProviding {
 }
 
 extension CoachAPIProviding {
-    func fetchCoachWorkspace() async throws -> CoachWorkspaceSnapshot {
+    func fetchCoachWorkspace() async throws -> CoachWorkspaceAvailability {
         throw APIError.serverError(501)
     }
 

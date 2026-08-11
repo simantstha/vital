@@ -3,6 +3,11 @@ import { db, schema } from '@/db';
 import { eq } from 'drizzle-orm';
 import { getUserIdFromRequest } from '@/lib/auth';
 import { createOrLoadDailyRecommendation, hydrateCoachWorkspaceState } from '@/lib/coachWorkspaceRepository';
+import {
+  COACH_WORKSPACE_DISABLED_RESPONSE,
+  COACH_WORKSPACE_DISABLED_STATUS,
+  isCoachWorkspaceEnabled,
+} from '@/lib/coachWorkspaceFeature';
 import { localDayKey, pickTimeZone } from '@/lib/localDay';
 
 export const dynamic = 'force-dynamic';
@@ -20,6 +25,10 @@ function serialize(row: typeof schema.daily_coach_recommendations.$inferSelect) 
 
 /** Authenticated deterministic daily Coach Workspace recommendation. */
 export async function GET(request: Request): Promise<NextResponse> {
+  if (!isCoachWorkspaceEnabled()) {
+    return NextResponse.json(COACH_WORKSPACE_DISABLED_RESPONSE, { status: COACH_WORKSPACE_DISABLED_STATUS });
+  }
+
   let userId: string;
   try {
     userId = getUserIdFromRequest(request);

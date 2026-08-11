@@ -569,6 +569,23 @@ final class CoachSpecialistStateTests: XCTestCase {
         XCTAssertNotNil(viewModel.workspaceErrorMessage)
     }
 
+    func testDisabledWorkspaceClearsTheCardWithoutShowingAnError() async {
+        let api = FakeCoachAPI(restoration: CoachRestorationResponse(
+            messages: [], activePersona: .vital, pendingCard: nil
+        ))
+        let viewModel = CoachViewModel(api: api)
+        viewModel.loadWorkspace()
+        await waitUntil { !viewModel.isLoadingWorkspace }
+        XCTAssertNotNil(viewModel.workspaceSnapshot)
+
+        api.workspaceAvailability = .disabled
+        viewModel.loadWorkspace()
+        await waitUntil { !viewModel.isLoadingWorkspace }
+
+        XCTAssertNil(viewModel.workspaceSnapshot)
+        XCTAssertNil(viewModel.workspaceErrorMessage)
+    }
+
     func testOpenChatActionRecordsIntentThenSendsTheWorkspacePrompt() async {
         let api = FakeCoachAPI(restoration: CoachRestorationResponse(
             messages: [], activePersona: .vital, pendingCard: nil
@@ -660,6 +677,7 @@ private final class FakeCoachAPI: CoachAPIProviding {
     var nextActionFailure: Error?
     var actionRequests: [ActionRequest] = []
     var workspace: CoachWorkspaceSnapshot = FakeCoachAPI.defaultWorkspace
+    var workspaceAvailability: CoachWorkspaceAvailability?
     var workspaceFailure: Error?
     var workspaceActionFailure: Error?
     var workspaceActionRequests: [WorkspaceActionRequest] = []
@@ -692,15 +710,17 @@ private final class FakeCoachAPI: CoachAPIProviding {
         // No-op for testing
     }
 
-    func fetchCoachWorkspace() async throws -> CoachWorkspaceSnapshot {
+    func fetchCoachWorkspace() async throws -> CoachWorkspaceAvailability {
         workspaceRequestCount += 1
         if let workspaceFailure { throw workspaceFailure }
+        if let workspaceAvailability { return workspaceAvailability }
         if holdWorkspaceLoad {
-            return await withCheckedContinuation { continuation in
+            let snapshot = await withCheckedContinuation { continuation in
                 heldWorkspaceContinuation = continuation
             }
+            return .available(snapshot)
         }
-        return workspace
+        return .available(workspace)
     }
 
     func finishHeldWorkspaceLoad() {
