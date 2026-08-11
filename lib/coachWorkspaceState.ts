@@ -8,6 +8,7 @@ export interface HydrationInteraction {
   adjustment: unknown;
   planItemId: string | null;
   createdAt: Date;
+  materialSignature: string | null;
 }
 
 export interface HydrationPlanItem {
@@ -15,12 +16,30 @@ export interface HydrationPlanItem {
   userId: string;
   localDay: string;
   status: string;
+  kind: string;
 }
 
 export interface CoachWorkspaceState {
   status: CoachWorkspaceHydrationStatus;
   planItemId: string | null;
   effectiveAction: CoachWorkspaceAction;
+}
+
+const MATERIAL_SIGNATURE_KEY = '__materialSignature';
+
+/** Stores recommendation context alongside the existing adjustment JSONB. */
+export function adjustmentWithMaterialSignature(
+  adjustment: ActionAdjustment | undefined,
+  materialSignature: string,
+): Record<string, unknown> {
+  return { ...(adjustment ?? {}), [MATERIAL_SIGNATURE_KEY]: materialSignature };
+}
+
+/** Reads context written by adjustmentWithMaterialSignature; legacy rows return null. */
+export function materialSignatureFromAdjustment(value: unknown): string | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const signature = (value as Record<string, unknown>)[MATERIAL_SIGNATURE_KEY];
+  return typeof signature === 'string' && signature.length > 0 ? signature : null;
 }
 
 function parseAction(value: unknown): CoachWorkspaceAction {
@@ -63,6 +82,7 @@ export function shouldMutatePlanForAction(category: string, action: HydrationAct
 export function deriveCoachWorkspaceState(input: {
   category: string;
   action: unknown;
+  materialSignature: string;
   userId: string;
   localDay: string;
   interactions: HydrationInteraction[];
@@ -73,26 +93,38 @@ export function deriveCoachWorkspaceState(input: {
     return { status: 'calibration', planItemId: null, effectiveAction: baseAction };
   }
 
-  const stateful = input.interactions.find(interaction => interaction.action !== 'open_chat');
+  const compatibleInteractions = input.interactions.filter(interaction =>
+    interaction.materialSignature == null || interaction.materialSignature === input.materialSignature,
+  );
+  const stateful = compatibleInteractions.find(interaction => interaction.action !== 'open_chat');
   if (!stateful) return { status: 'ready', planItemId: null, effectiveAction: baseAction };
 
-  const latestEffective = input.interactions.find(interaction =>
+  const latestEffective = compatibleInteractions.find(interaction =>
     interaction.action === 'accept' || interaction.action === 'adjust',
   );
-  const effectiveAction = latestEffective?.action === 'adjust'
-    ? applyActionAdjustment(baseAction, parseAdjustment(latestEffective.adjustment))
-    : baseAction;
+  let effectiveAction = baseAction;
+  let effectiveCompatible = true;
+  if (latestEffective?.action === 'adjust') {
+    try {
+      effectiveAction = applyActionAdjustment(baseAction, parseAdjustment(latestEffective.adjustment));
+    } catch {
+      effectiveCompatible = false;
+    }
+  }
 
-  const latestLinkedPlanId = input.interactions.find(interaction =>
+  const latestLinkedPlanId = compatibleInteractions.find(interaction =>
     interaction.action !== 'open_chat' && interaction.planItemId != null,
   )?.planItemId ?? null;
   const validPlan = input.planItem
     && input.planItem.id === latestLinkedPlanId
     && input.planItem.userId === input.userId
     && input.planItem.localDay === input.localDay
+    && input.planItem.kind === baseAction.kind
+    && effectiveCompatible
     ? input.planItem
     : null;
 
+  if (!effectiveCompatible) return { status: 'ready', planItemId: null, effectiveAction: baseAction };
   if (stateful.action === 'skip') {
     return { status: 'skipped', planItemId: validPlan?.id ?? null, effectiveAction };
   }

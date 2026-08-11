@@ -11,9 +11,13 @@ import {
 } from '@/lib/coachWorkspace';
 import { getCalibration } from '@/lib/brain/baselines';
 import { applySkipPlanMutation } from '@/lib/coachWorkspaceSkip';
+import { resolveReplayBeforeEligibility } from '@/lib/coachWorkspaceActionReplay';
+import { hydrationInteractionPredicate } from '@/lib/coachWorkspaceQueries';
 import {
+  adjustmentWithMaterialSignature,
   assertActionAllowedForRecommendation,
   deriveCoachWorkspaceState,
+  materialSignatureFromAdjustment,
   shouldMutatePlanForAction,
   type CoachWorkspaceState,
   type HydrationAction,
@@ -125,6 +129,7 @@ export async function hydrateCoachWorkspaceState(
     return deriveCoachWorkspaceState({
       category: recommendation.category,
       action: recommendation.action,
+      materialSignature: recommendation.material_signature,
       userId,
       localDay: recommendation.local_day,
       interactions: [],
@@ -137,30 +142,29 @@ export async function hydrateCoachWorkspaceState(
     adjustment: schema.coach_recommendation_interactions.adjustment,
     planItemId: schema.coach_recommendation_interactions.plan_item_id,
     createdAt: schema.coach_recommendation_interactions.created_at,
-  }).from(schema.coach_recommendation_interactions).where(and(
-    eq(schema.coach_recommendation_interactions.user_id, userId),
-    eq(schema.coach_recommendation_interactions.recommendation_id, recommendation.id),
-  )).orderBy(desc(schema.coach_recommendation_interactions.created_at)).limit(50);
+  }).from(schema.coach_recommendation_interactions)
+    .where(hydrationInteractionPredicate(userId, recommendation.id))
+    .orderBy(desc(schema.coach_recommendation_interactions.created_at)).limit(50);
 
   const interactions: HydrationInteraction[] = rows
-    .filter(row => ['accept', 'adjust', 'skip', 'complete', 'open_chat'].includes(row.action))
+    .filter(row => ['accept', 'adjust', 'skip', 'complete'].includes(row.action))
     .map(row => ({
       action: row.action as HydrationAction,
       adjustment: row.adjustment,
       planItemId: row.planItemId,
       createdAt: row.createdAt,
+      materialSignature: materialSignatureFromAdjustment(row.adjustment),
     }));
-  const latestPlanId = interactions.find(interaction =>
-    interaction.action !== 'open_chat' && interaction.planItemId != null,
-  )?.planItemId ?? null;
+  const latestPlanId = interactions.find(interaction => interaction.planItemId != null)?.planItemId ?? null;
 
-  let planItem: { id: string; userId: string; localDay: string; status: string } | null = null;
+  let planItem: { id: string; userId: string; localDay: string; status: string; kind: string } | null = null;
   if (latestPlanId) {
     const [row] = await db.select({
       id: schema.plan_items.id,
       userId: schema.plan_items.user_id,
       localDay: schema.plan_items.local_day,
       status: schema.plan_items.status,
+      kind: schema.plan_items.kind,
     }).from(schema.plan_items).where(and(
       eq(schema.plan_items.id, latestPlanId),
       eq(schema.plan_items.user_id, userId),
@@ -172,6 +176,7 @@ export async function hydrateCoachWorkspaceState(
   return deriveCoachWorkspaceState({
     category: recommendation.category,
     action: recommendation.action,
+    materialSignature: recommendation.material_signature,
     userId,
     localDay: recommendation.local_day,
     interactions,
@@ -215,27 +220,42 @@ function planSubtitle(action: CoachWorkspaceAction): string {
 
 /**
  * Performs a user action and all required plan mutations in one transaction.
- * The idempotency insert happens first: a unique-key conflict reloads the
- * original interaction and bypasses every downstream mutation.
+ * A committed idempotent replay is resolved before current recommendation
+ * eligibility. A concurrent insert conflict is reloaded after the insert.
  */
 export async function applyCoachAction(input: ApplyCoachActionInput): Promise<{
   created: boolean;
   interaction: typeof schema.coach_recommendation_interactions.$inferSelect;
 }> {
   return db.transaction(async tx => {
-    const [recommendation] = await tx.select().from(schema.daily_coach_recommendations).where(and(
-      eq(schema.daily_coach_recommendations.id, input.recommendationId),
-      eq(schema.daily_coach_recommendations.user_id, input.userId),
-    )).limit(1);
-    if (!recommendation) throw new Error('Recommendation not found.');
-    assertActionAllowedForRecommendation(recommendation.category, input.action);
+    const resolved = await resolveReplayBeforeEligibility({
+      findReplay: async () => {
+        const [existing] = await tx.select().from(schema.coach_recommendation_interactions).where(and(
+          eq(schema.coach_recommendation_interactions.user_id, input.userId),
+          eq(schema.coach_recommendation_interactions.action_id, input.actionId),
+        )).limit(1);
+        return existing ?? null;
+      },
+      loadRecommendation: async () => {
+        const [recommendation] = await tx.select().from(schema.daily_coach_recommendations).where(and(
+          eq(schema.daily_coach_recommendations.id, input.recommendationId),
+          eq(schema.daily_coach_recommendations.user_id, input.userId),
+        )).limit(1);
+        return recommendation ?? null;
+      },
+      assertEligible: recommendation => {
+        assertActionAllowedForRecommendation(recommendation.category, input.action);
+      },
+    });
+    if (resolved.replay) return { created: false, interaction: resolved.replay };
+    const recommendation = resolved.recommendation;
 
     const [inserted] = await tx.insert(schema.coach_recommendation_interactions).values({
       user_id: input.userId,
       recommendation_id: recommendation.id,
       action_id: input.actionId,
       action: input.action,
-      adjustment: input.adjustment ?? null,
+      adjustment: adjustmentWithMaterialSignature(input.adjustment, recommendation.material_signature),
       plan_item_id: null,
     }).onConflictDoNothing().returning();
 
