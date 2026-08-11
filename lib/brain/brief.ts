@@ -118,7 +118,9 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
     queryMetricPoints(userId, 'hrv_sdnn', 14),
     queryMetricPoints(userId, 'resting_hr', 7),
     querySleepSummary(userId, 7),
-    db.select().from(schema.nodes).where(eq(schema.nodes.user_id, userId)).orderBy(desc(schema.nodes.weight)),
+    db.select().from(schema.nodes)
+      .where(and(eq(schema.nodes.user_id, userId), eq(schema.nodes.status, 'active')))
+      .orderBy(desc(schema.nodes.weight)),
     db.select({
       timezone:           schema.users.timezone,
       unit_system:        schema.users.unit_system,

@@ -45,6 +45,10 @@ availability — "am I free", "when should I train today", "what's my afternoon 
 like" — call get_schedule rather than guessing.
 - Remember proactively. If the user reveals a new allergy, condition, preference, or \
 goal, call remember_fact to persist it.
+- Retract, don't duplicate. If the user says a previously recorded fact no longer applies \
+(an injury healed, a condition resolved, a medication stopped, an allergy outgrown), call \
+resolve_fact on the existing fact. Never insert a new node to represent a retraction, and \
+never leave the old fact standing while telling the user it's gone.
 - Log meals automatically. When the user reports eating, call log_meal.
 - The Diet Budget shown in context is the source of truth for the user's calorie and \
 macro targets — both the app and you read it. To change it, propose the specific change \
@@ -159,6 +163,23 @@ Exception: nutrition ratios expressed "per kilogram of body mass" (e.g. "≥1.6g
 dosing ratio, not a display unit — never convert that "/kg" to "/lb", even for an imperial user.`;
 }
 
+// ── Grounding guardrail ────────────────────────────────────────────────────────
+// Always injected, regardless of lens/mode. Exists because the coach has said
+// an action was done when no tool call actually ran, and has invented an
+// "ontology team" that doesn't exist to explain away a capability gap.
+
+function groundingGuardrailBlock(): string {
+  return `## Grounding — never claim what didn't happen
+- Never tell the user something was saved, updated, removed, or changed unless the \
+corresponding tool call actually ran and returned success in this turn. If a tool call \
+failed or you didn't make one, say so plainly instead of describing the outcome you intended.
+- There is no "ontology team," support team, engineering team, or any other internal staff \
+or offline process standing behind you. Never invent one, and never attribute a delay, fix, \
+or limitation to one.
+- If the user asks for something you have no tool for, say plainly that you can't do that \
+right now — don't promise it will happen later via some unnamed process.`;
+}
+
 // ── Hard-constraints injector ─────────────────────────────────────────────────
 
 function hardConstraintsInjector(constraints: OntologyNode[]): string {
@@ -212,10 +233,11 @@ export function assemblePersona(
   if (onboarding) blocks.push(onboardingLens());
   if (calibration?.status === 'calibrating') blocks.push(calibratingLens(calibration));
 
-  // Units block, then hard constraints always last — constraints override
-  // every other block, including units (e.g. if a constraint somehow implied
-  // a unit-relevant caveat).
+  // Units block, then the grounding guardrail, then hard constraints always
+  // last — each later block overrides earlier ones, including units (e.g. if
+  // a constraint somehow implied a unit-relevant caveat).
   blocks.push(unitsInstructionBlock(unitSystem));
+  blocks.push(groundingGuardrailBlock());
   blocks.push(hardConstraintsInjector(hardConstraints));
 
   return blocks.join('\n\n---\n\n');

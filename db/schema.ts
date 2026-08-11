@@ -83,17 +83,28 @@ export const events = p.pgTable('events', {
 //   LabMarker, Injury, FamilyHistory
 
 export const nodes = p.pgTable('nodes', {
-  id:         p.uuid('id').primaryKey().defaultRandom(),
-  user_id:    p.uuid('user_id').notNull().references(() => users.id),
-  type:       p.text('type').notNull(),
-  label:      p.text('label').notNull(),
-  properties: p.jsonb('properties'),                                            // nullable; extra metadata per node type
-  source:     p.text('source').notNull(),
-  weight:     p.real('weight').default(0.9).notNull(),
-  created_at: p.timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  id:          p.uuid('id').primaryKey().defaultRandom(),
+  user_id:     p.uuid('user_id').notNull().references(() => users.id),
+  type:        p.text('type').notNull(),
+  label:       p.text('label').notNull(),
+  properties:  p.jsonb('properties'),                                            // nullable; extra metadata per node type
+  source:      p.text('source').notNull(),
+  weight:      p.real('weight').default(0.9).notNull(),
+  created_at:  p.timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  // ── Lifecycle (retraction support) ─────────────────────────────────────────
+  // Nodes are never deleted — a retracted fact (e.g. "my injury healed") flips
+  // status to 'resolved' instead, keeping history intact and reversible. All
+  // readers that gate behavior on confirmed facts (workspace constraint gate,
+  // context assembly, brief allergen exclusion, coach tools) must filter to
+  // status = 'active'. Existing rows default to 'active' so old behavior is
+  // unchanged until a fact is explicitly resolved.
+  status:      p.text('status').notNull().default('active'),                     // 'active' | 'resolved'
+  resolved_at: p.timestamp('resolved_at', { withTimezone: true }),                // nullable until resolved
 }, (t) => [
   p.index('nodes_user_type_idx').on(t.user_id, t.type),
   p.index('nodes_user_label_idx').on(t.user_id, t.label),
+  p.index('nodes_user_status_idx').on(t.user_id, t.status),
+  p.check('nodes_status_check', sql`${t.status} in ('active', 'resolved')`),
 ]);
 
 // ─── edges (ontology) ────────────────────────────────────────────────────────
