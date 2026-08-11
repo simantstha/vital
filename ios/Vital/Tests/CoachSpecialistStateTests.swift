@@ -586,6 +586,41 @@ final class CoachSpecialistStateTests: XCTestCase {
         XCTAssertNil(viewModel.workspaceErrorMessage)
     }
 
+    func testWorkspaceDisabledWhileActionIsInFlightClearsWorkspaceAndKeepsLegacyChat() async {
+        let restoredMessage = CoachRestoredMessage(
+            id: "20000000-0000-4000-8000-000000000001",
+            role: "assistant", speaker: "vital", content: "How can I help?",
+            timestamp: "2026-08-11T12:05:00.000Z",
+            specialistSessionId: nil, specialistMetadata: nil
+        )
+        let api = FakeCoachAPI(restoration: CoachRestorationResponse(
+            messages: [restoredMessage], activePersona: .vital, pendingCard: nil
+        ))
+        api.holdWorkspaceAction = true
+        let viewModel = CoachViewModel(api: api)
+        await viewModel.restoreConversation()
+        viewModel.loadWorkspace()
+        await waitUntil { !viewModel.isLoadingWorkspace }
+        let legacyRows = viewModel.rows
+
+        viewModel.performWorkspaceAction(.accept)
+        await waitUntil { api.workspaceActionRequests.count == 1 }
+        XCTAssertTrue(viewModel.isPerformingWorkspaceAction)
+
+        api.failHeldWorkspaceAction(APIError.coachWorkspaceDisabled)
+        await waitUntil { !viewModel.isPerformingWorkspaceAction }
+
+        XCTAssertNil(viewModel.workspaceSnapshot)
+        XCTAssertEqual(viewModel.workspacePlanState, .ready)
+        XCTAssertNil(viewModel.workspaceErrorMessage)
+        XCTAssertNil(viewModel.workspaceActionMessage)
+        XCTAssertNil(viewModel.workspaceActionErrorMessage)
+        XCTAssertEqual(viewModel.rows, legacyRows)
+
+        viewModel.retryWorkspaceAction()
+        XCTAssertEqual(api.workspaceActionRequests.count, 1)
+    }
+
     func testOpenChatActionRecordsIntentThenSendsTheWorkspacePrompt() async {
         let api = FakeCoachAPI(restoration: CoachRestorationResponse(
             messages: [], activePersona: .vital, pendingCard: nil
@@ -681,6 +716,7 @@ private final class FakeCoachAPI: CoachAPIProviding {
     var workspaceFailure: Error?
     var workspaceActionFailure: Error?
     var workspaceActionRequests: [WorkspaceActionRequest] = []
+    var holdWorkspaceAction = false
     private(set) var workspaceRequestCount = 0
     var holdWorkspaceLoad = false
     private(set) var restorationRequestCount = 0
@@ -688,6 +724,7 @@ private final class FakeCoachAPI: CoachAPIProviding {
     private var heldActionContinuation: AsyncThrowingStream<CoachStreamEvent, Error>.Continuation?
     private var shouldFinishHeldAction = false
     private var heldWorkspaceContinuation: CheckedContinuation<CoachWorkspaceSnapshot, Never>?
+    private var heldWorkspaceActionContinuation: CheckedContinuation<CoachWorkspaceInteraction, Error>?
 
     init(restoration: CoachRestorationResponse) {
         self.restoration = restoration
@@ -741,6 +778,11 @@ private final class FakeCoachAPI: CoachAPIProviding {
             adjustment: adjustment
         ))
         if let workspaceActionFailure { throw workspaceActionFailure }
+        if holdWorkspaceAction {
+            return try await withCheckedThrowingContinuation { continuation in
+                heldWorkspaceActionContinuation = continuation
+            }
+        }
         return CoachWorkspaceInteraction(
             id: "workspace-interaction-1",
             recommendationId: recommendationId,
@@ -750,6 +792,11 @@ private final class FakeCoachAPI: CoachAPIProviding {
             planItemId: action == .openChat ? nil : "plan-1",
             createdAt: "2026-08-11T12:00:00.000Z"
         )
+    }
+
+    func failHeldWorkspaceAction(_ error: Error) {
+        heldWorkspaceActionContinuation?.resume(throwing: error)
+        heldWorkspaceActionContinuation = nil
     }
 
     func streamCoach(message: String, imageBase64: String?, mode: String?) -> AsyncThrowingStream<CoachStreamEvent, Error> {

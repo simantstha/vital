@@ -329,11 +329,7 @@ final class CoachViewModel: ObservableObject {
                     workspacePlanState = Self.planState(for: snapshot.state.status)
                     workspaceActionErrorMessage = nil
                 case .disabled:
-                    workspaceSnapshot = nil
-                    workspacePlanState = .ready
-                    workspaceActionMessage = nil
-                    workspaceActionErrorMessage = nil
-                    lastWorkspaceAction = nil
+                    clearDisabledWorkspace()
                 }
             } catch is CancellationError {
                 return
@@ -418,6 +414,8 @@ final class CoachViewModel: ObservableObject {
                     workspaceChatRequestToken += 1
                     send()
                 }
+            } catch APIError.coachWorkspaceDisabled {
+                clearDisabledWorkspace()
             } catch is CancellationError {
                 return
             } catch {
@@ -429,6 +427,15 @@ final class CoachViewModel: ObservableObject {
     func retryWorkspaceAction() {
         guard let lastWorkspaceAction else { return }
         performWorkspaceAction(lastWorkspaceAction.action, adjustment: lastWorkspaceAction.adjustment)
+    }
+
+    private func clearDisabledWorkspace() {
+        workspaceSnapshot = nil
+        workspacePlanState = .ready
+        workspaceErrorMessage = nil
+        workspaceActionMessage = nil
+        workspaceActionErrorMessage = nil
+        lastWorkspaceAction = nil
     }
 
     static func workspaceActionId(

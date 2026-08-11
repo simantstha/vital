@@ -401,8 +401,8 @@ struct APIClient {
             adjustment: adjustment
         ))
         let (data, response) = try await session.data(for: request)
-        try validate(response)
-        return try decoder.decode(CoachWorkspaceActionResponse.self, from: data).interaction
+        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        return try Self.decodeCoachWorkspaceAction(statusCode: http.statusCode, data: data)
     }
 
     // MARK: - Coach TTS
@@ -570,18 +570,42 @@ struct APIClient {
         try JSONDecoder().decode(CoachWorkspaceResponse.self, from: data).snapshot
     }
 
-    static func decodeCoachWorkspaceAvailability(statusCode: Int, data: Data) throws -> CoachWorkspaceAvailability {
+    static func decodeCoachWorkspaceAvailability(
+        statusCode: Int,
+        data: Data,
+        onSessionExpired: () -> Void = {
+            NotificationCenter.default.post(name: .vitalSessionExpired, object: nil)
+        }
+    ) throws -> CoachWorkspaceAvailability {
         if statusCode == 404,
            let response = try? JSONDecoder().decode(CoachWorkspaceDisabledResponse.self, from: data),
            response.code == "COACH_WORKSPACE_DISABLED" {
             return .disabled
         }
+        if statusCode == 401 { onSessionExpired() }
         guard statusCode < 400 else { throw APIError.serverError(statusCode) }
         return .available(try decodeCoachWorkspace(data))
     }
 
     static func decodeCoachWorkspaceAction(_ data: Data) throws -> CoachWorkspaceInteraction {
         try JSONDecoder().decode(CoachWorkspaceActionResponse.self, from: data).interaction
+    }
+
+    static func decodeCoachWorkspaceAction(
+        statusCode: Int,
+        data: Data,
+        onSessionExpired: () -> Void = {
+            NotificationCenter.default.post(name: .vitalSessionExpired, object: nil)
+        }
+    ) throws -> CoachWorkspaceInteraction {
+        if statusCode == 404,
+           let response = try? JSONDecoder().decode(CoachWorkspaceDisabledResponse.self, from: data),
+           response.code == "COACH_WORKSPACE_DISABLED" {
+            throw APIError.coachWorkspaceDisabled
+        }
+        if statusCode == 401 { onSessionExpired() }
+        guard statusCode < 400 else { throw APIError.serverError(statusCode) }
+        return try decodeCoachWorkspaceAction(data)
     }
 
     /// Decodes one wire-format SSE line. Unknown event types return nil so
@@ -960,6 +984,7 @@ enum APIError: Error, LocalizedError, Equatable {
     case invalidURL
     case serverError(Int)
     case coachStreamError(String)
+    case coachWorkspaceDisabled
     /// POST /api/nutrition/barcode genuinely found no match for the scanned
     /// code (mirrors the server's 404 + `offerTextSearch: true`). Distinct
     /// from `.serverError` so callers can fall back to text search instead
@@ -978,6 +1003,7 @@ enum APIError: Error, LocalizedError, Equatable {
         case .invalidURL:         return "Invalid backend URL."
         case .serverError(let c): return "Server returned HTTP \(c)."
         case .coachStreamError(let message): return message
+        case .coachWorkspaceDisabled: return "Coach Workspace is unavailable."
         case .barcodeNotFound:    return "Product not found. Try searching by name instead."
         case .whoopAuthorizeURLMissing: return "Couldn't start the WHOOP connection. Try again later."
         case .whoopConnectFailed: return "WHOOP didn't finish connecting. Please try again."

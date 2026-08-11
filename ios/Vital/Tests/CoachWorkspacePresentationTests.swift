@@ -18,6 +18,41 @@ final class CoachWorkspacePresentationTests: XCTestCase {
         }
     }
 
+    func testUnauthorizedWorkspaceResponseExpiresTheSessionExactlyOnce() {
+        var expirationCount = 0
+
+        XCTAssertThrowsError(try APIClient.decodeCoachWorkspaceAvailability(
+            statusCode: 401,
+            data: Data(),
+            onSessionExpired: { expirationCount += 1 }
+        )) { error in
+            XCTAssertEqual(error as? APIError, .serverError(401))
+        }
+        XCTAssertEqual(expirationCount, 1)
+    }
+
+    func testDisabledWorkspaceActionResponseDecodesAsTypedDisabledError() {
+        let data = Data(#"{"error":"Coach Workspace is disabled.","code":"COACH_WORKSPACE_DISABLED"}"#.utf8)
+
+        XCTAssertThrowsError(try APIClient.decodeCoachWorkspaceAction(
+            statusCode: 404,
+            data: data
+        )) { error in
+            XCTAssertEqual(error as? APIError, .coachWorkspaceDisabled)
+        }
+    }
+
+    func testUnrelatedWorkspaceActionNotFoundRemainsAServerError() {
+        let data = Data(#"{"error":"Not found"}"#.utf8)
+
+        XCTAssertThrowsError(try APIClient.decodeCoachWorkspaceAction(
+            statusCode: 404,
+            data: data
+        )) { error in
+            XCTAssertEqual(error as? APIError, .serverError(404))
+        }
+    }
+
     func testMoveRecommendationOffersOnlyBoundedMoveAdjustments() {
         let recommendation = CoachWorkspaceRecommendation.fixture(kind: "move")
 
