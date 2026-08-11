@@ -41,6 +41,13 @@ Do not run production migrations from a workstation. The release workflow runs
 `db/migrations/` journal and verifies the database migration-table head. Never
 use `drizzle-kit push` or `--force` against Supabase production.
 
+The gate also contains a one-time recovery for the known legacy state where
+the ledger is exactly at committed `0000` but the live schema already matches
+`0016_famous_sleepwalker`. It verifies the entire public app catalog against
+the committed 0016 snapshot before transactionally recording migrations
+0001–0016. Any catalog mismatch or different stale ledger is an intentional
+hard failure requiring manual investigation; do not bypass or weaken it.
+
 ### 4. Create the Fly app + volume
 ```
 fly apps create vital-coach          # pick a unique name; update fly.toml if taken

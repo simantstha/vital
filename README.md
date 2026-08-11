@@ -164,6 +164,15 @@ applies only the committed `db/migrations/` journal through Drizzle's pinned
 migrator, and verifies that the database migration table reaches the committed
 journal head before deploying the backend.
 
+For the one production database whose schema was previously advanced through
+`0016_famous_sleepwalker` by schema pushes while its Drizzle ledger remained at
+`0000`, the same gate has a one-time adoption path. It runs only for the exact
+committed `0000` ledger hash, compares every public app table, column, default,
+constraint, index, RLS/policy, and extra object against the committed 0016
+snapshot, then stamps committed migrations 0001–0016 inside an advisory-locked
+transaction. Any mismatch or any other stale/unknown ledger state stops the
+release for manual inspection; it never blindly stamps a database.
+
 ### 4. Run
 
 ```bash

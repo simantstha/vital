@@ -1,8 +1,18 @@
 import assert from 'node:assert/strict';
+import path from 'node:path';
 import test from 'node:test';
 
 import {
   assertAppliedMigrationHead,
+  assertLegacySchemaMatches,
+  buildLegacyStampingPlan,
+  classifyLegacyLedger,
+  diffCanonicalSchemas,
+  loadCommittedMigrationState,
+  normalizeCatalogSchema,
+  normalizeSnapshotSchema,
+  normalizeSqlExpression,
+  performLegacyAdoption,
   validateDatabaseUrl,
   validateMigrationJournal,
 } from './ci-migrate.mjs';
@@ -97,4 +107,288 @@ test('requires the applied migration table head to match the committed journal h
     () => assertAppliedMigrationHead({ createdAt: 1710000000000, hash: 'committed-sha256' }, expectedHead),
     /does not match the committed journal head/,
   );
+});
+
+const legacyArtifacts = Array.from({ length: 19 }, (_, idx) => ({
+  idx,
+  tag: idx === 16 ? '0016_famous_sleepwalker' : `${String(idx).padStart(4, '0')}_migration`,
+  createdAt: 1710000000000 + idx,
+  hash: `hash-${idx}`,
+}));
+
+const legacySnapshot = {
+  dialect: 'postgresql',
+  tables: {
+    'public.users': {
+      name: 'users',
+      schema: '',
+      columns: {
+        id: {
+          name: 'id',
+          type: 'uuid',
+          primaryKey: true,
+          notNull: true,
+          default: 'gen_random_uuid()',
+        },
+        status: {
+          name: 'status',
+          type: 'text',
+          primaryKey: false,
+          notNull: true,
+          default: "'active'",
+        },
+      },
+      indexes: {
+        users_status_idx: {
+          name: 'users_status_idx',
+          columns: [{ expression: 'status', isExpression: false, asc: true, nulls: 'last' }],
+          isUnique: false,
+          method: 'btree',
+          where: '"users"."status" in (\'active\', \'paused\')',
+        },
+      },
+      foreignKeys: {},
+      compositePrimaryKeys: {},
+      uniqueConstraints: {},
+      checkConstraints: {
+        users_status_check: {
+          name: 'users_status_check',
+          value: '"users"."status" in (\'active\', \'paused\')',
+        },
+      },
+      policies: {},
+      isRLSEnabled: false,
+    },
+  },
+  schemas: {},
+  enums: {},
+  sequences: {},
+  roles: {},
+  policies: {},
+  views: {},
+};
+
+const matchingCatalog = {
+  tables: [{ table_name: 'users', rls_enabled: false }],
+  columns: [
+    {
+      table_name: 'users',
+      column_name: 'status',
+      data_type: 'text',
+      not_null: true,
+      default_expr: "'active'::text",
+    },
+    {
+      table_name: 'users',
+      column_name: 'id',
+      data_type: 'uuid',
+      not_null: true,
+      default_expr: 'gen_random_uuid()',
+    },
+  ],
+  constraints: [
+    {
+      table_name: 'users',
+      constraint_name: 'users_status_check',
+      kind: 'check',
+      columns: [],
+      expression: "(status = ANY (ARRAY['active'::text, 'paused'::text]))",
+    },
+    {
+      table_name: 'users',
+      constraint_name: 'users_pkey',
+      kind: 'primaryKey',
+      columns: ['id'],
+    },
+  ],
+  indexes: [
+    {
+      table_name: 'users',
+      index_name: 'users_status_idx',
+      unique: false,
+      method: 'btree',
+      columns: [{ expression: 'status', asc: true, nulls: 'last' }],
+      predicate: "(status = ANY (ARRAY['active'::text, 'paused'::text]))",
+    },
+  ],
+  policies: [],
+  extra_objects: [],
+  custom_types: [],
+};
+
+test('normalizes snapshot and catalog schemas to the same deterministic representation', () => {
+  const expected = normalizeSnapshotSchema(legacySnapshot);
+  const actual = normalizeCatalogSchema(matchingCatalog);
+
+  assert.deepEqual(actual, expected);
+  assert.deepEqual(diffCanonicalSchemas(expected, actual), []);
+});
+
+test('normalizes PostgreSQL check-expression rewrites without losing boolean grouping', () => {
+  const snapshotExpression =
+    '(("messages"."role" = \'user\' and "messages"."speaker" = \'user\') or ("messages"."role" = \'assistant\' and "messages"."speaker" in (\'coach\', \'specialist\')))';
+  const catalogExpression =
+    "(((role = 'user'::text) AND (speaker = 'user'::text)) OR ((role = 'assistant'::text) AND (speaker = ANY (ARRAY['coach'::text, 'specialist'::text]))))";
+
+  assert.equal(normalizeSqlExpression(catalogExpression), normalizeSqlExpression(snapshotExpression));
+});
+
+test('normalizes PostgreSQL BETWEEN check rewrites', () => {
+  assert.equal(
+    normalizeSqlExpression('"notification_preferences"."morning_brief_time_minutes" between 0 and 1439'),
+    normalizeSqlExpression('(morning_brief_time_minutes >= 0) AND (morning_brief_time_minutes <= 1439)'),
+  );
+});
+
+test('normalization preserves case inside default string literals', () => {
+  assert.notEqual(normalizeSqlExpression("'UTC'::text"), normalizeSqlExpression("'utc'::text"));
+});
+
+test('schema diff reports missing, differing, and unsafe extra app objects', () => {
+  const expected = normalizeSnapshotSchema(legacySnapshot);
+  const actual = normalizeCatalogSchema({
+    ...matchingCatalog,
+    columns: matchingCatalog.columns.filter((column) => column.column_name !== 'status'),
+    extra_objects: [{ name: 'legacy_view', kind: 'view' }],
+  });
+
+  const differences = diffCanonicalSchemas(expected, actual);
+  assert.ok(differences.some((difference) => difference.includes('status')));
+  assert.ok(differences.some((difference) => difference.includes('legacy_view')));
+  assert.throws(() => assertLegacySchemaMatches(expected, actual), /does not exactly match committed 0016 snapshot/);
+});
+
+test('schema diff rejects invalid indexes and unexpected included index columns', () => {
+  const expected = normalizeSnapshotSchema(legacySnapshot);
+  const actual = normalizeCatalogSchema({
+    ...matchingCatalog,
+    indexes: matchingCatalog.indexes.map((index) => ({
+      ...index,
+      valid: false,
+      columns: [{ ...index.columns[0], included: true }],
+    })),
+  });
+
+  const differences = diffCanonicalSchemas(expected, actual);
+  assert.ok(differences.some((difference) => difference.includes('valid')));
+  assert.ok(differences.some((difference) => difference.includes('included')));
+});
+
+test('only the exact known 0000 ledger is eligible for legacy adoption', () => {
+  const exact0000 = [{ createdAt: legacyArtifacts[0].createdAt, hash: legacyArtifacts[0].hash }];
+
+  assert.equal(classifyLegacyLedger([], legacyArtifacts), 'fresh');
+  assert.equal(classifyLegacyLedger(exact0000, legacyArtifacts), 'adopt');
+  assert.equal(
+    classifyLegacyLedger(
+      [{ createdAt: legacyArtifacts[16].createdAt, hash: legacyArtifacts[16].hash }],
+      legacyArtifacts,
+    ),
+    'current',
+  );
+  assert.throws(
+    () =>
+      classifyLegacyLedger(
+        [{ createdAt: legacyArtifacts[4].createdAt, hash: legacyArtifacts[4].hash }],
+        legacyArtifacts,
+      ),
+    /unexpected stale migration ledger/,
+  );
+  assert.throws(
+    () => classifyLegacyLedger([{ createdAt: legacyArtifacts[0].createdAt, hash: 'unknown' }], legacyArtifacts),
+    /refusing automatic adoption/,
+  );
+  assert.throws(
+    () =>
+      classifyLegacyLedger(
+        [
+          { createdAt: legacyArtifacts[16].createdAt, hash: legacyArtifacts[16].hash },
+          { createdAt: 123, hash: 'unexpected-older-row' },
+        ],
+        legacyArtifacts,
+      ),
+    /refusing automatic adoption/,
+  );
+});
+
+test('legacy stamping plan is exactly committed migrations 0001 through 0016', () => {
+  const exact0000 = [{ createdAt: legacyArtifacts[0].createdAt, hash: legacyArtifacts[0].hash }];
+  const plan = buildLegacyStampingPlan(exact0000, legacyArtifacts);
+
+  assert.deepEqual(plan, legacyArtifacts.slice(1, 17));
+  assert.equal(plan[0].idx, 1);
+  assert.equal(plan.at(-1).tag, '0016_famous_sleepwalker');
+});
+
+test('legacy stamping refuses a changed target or mismatched ledger', () => {
+  const exact0000 = [{ createdAt: legacyArtifacts[0].createdAt, hash: legacyArtifacts[0].hash }];
+  const wrongTarget = legacyArtifacts.map((artifact) => ({ ...artifact }));
+  wrongTarget[16].tag = '0016_unexpected_target';
+
+  assert.throws(() => buildLegacyStampingPlan(exact0000, wrongTarget), /legacy target/);
+  assert.throws(
+    () => buildLegacyStampingPlan([{ createdAt: legacyArtifacts[2].createdAt, hash: legacyArtifacts[2].hash }], legacyArtifacts),
+    /unexpected stale migration ledger/,
+  );
+});
+
+test('legacy adoption locks, rechecks, stamps exactly the plan, and verifies the adopted head', async () => {
+  const ledger = [{ createdAt: legacyArtifacts[0].createdAt, hash: legacyArtifacts[0].hash }];
+  const stamped = [];
+  const events = [];
+  let ledgerReads = 0;
+
+  const result = await performLegacyAdoption({
+    artifacts: legacyArtifacts,
+    expectedSchema: normalizeSnapshotSchema(legacySnapshot),
+    withTransaction: async (callback) => {
+      events.push('transaction');
+      return callback({});
+    },
+    acquireLock: async () => events.push('lock'),
+    readLedger: async () => {
+      ledgerReads += 1;
+      return ledger.map((row) => ({ ...row }));
+    },
+    readCatalog: async () => matchingCatalog,
+    insertMigration: async (_transaction, migration) => {
+      stamped.push(migration);
+      ledger.push({ createdAt: migration.createdAt, hash: migration.hash });
+    },
+  });
+
+  assert.equal(result, 'adopted');
+  assert.deepEqual(events, ['transaction', 'lock']);
+  assert.equal(ledgerReads, 3);
+  assert.deepEqual(stamped, legacyArtifacts.slice(1, 17));
+});
+
+test('legacy adoption never stamps when the live schema differs', async () => {
+  const ledger = [{ createdAt: legacyArtifacts[0].createdAt, hash: legacyArtifacts[0].hash }];
+  let insertCount = 0;
+
+  await assert.rejects(
+    performLegacyAdoption({
+      artifacts: legacyArtifacts,
+      expectedSchema: normalizeSnapshotSchema(legacySnapshot),
+      withTransaction: async (callback) => callback({}),
+      acquireLock: async () => {},
+      readLedger: async () => ledger,
+      readCatalog: async () => ({ ...matchingCatalog, columns: [] }),
+      insertMigration: async () => {
+        insertCount += 1;
+      },
+    }),
+    /does not exactly match committed 0016 snapshot/,
+  );
+  assert.equal(insertCount, 0);
+});
+
+test('loads the exact committed 0016 legacy snapshot and every migration SQL hash', async () => {
+  const state = await loadCommittedMigrationState(path.resolve('db/migrations'));
+
+  assert.equal(state.artifacts[16].tag, '0016_famous_sleepwalker');
+  assert.match(state.artifacts[16].hash, /^[a-f0-9]{64}$/);
+  assert.equal(state.expectedLegacySchema.tables.length, 21);
+  assert.equal(state.expectedHead.tag, '0018_fantastic_vision');
 });

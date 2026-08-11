@@ -117,6 +117,15 @@ release workflow deploys the worker.
    `db/migrations/` files via the package-lock-pinned Drizzle migrator, and
    verifies `drizzle.__drizzle_migrations` reaches the committed journal head.
    Do not use `drizzle-kit push` or `--force` in production.
+
+   One-time legacy adoption is narrowly limited to an exact committed `0000`
+   ledger with expected target `0016_famous_sleepwalker`. Under a transaction
+   and advisory lock, CI compares the live `public` catalog to the committed
+   0016 snapshot—including all app tables, columns/types/nullability/defaults,
+   PK/unique/check/FK constraints, indexes, RLS/policies, and unexpected public
+   objects. Only an exact match allows CI to insert the committed 0001–0016
+   hashes/timestamps, verify the adopted head, and continue with 0017+. A
+   mismatch or any other stale/unknown ledger fails with operator guidance.
 2. **ios** job (after backend): write `Secrets.swift`, `xcodegen generate`,
    `bundle exec fastlane beta` → archive → upload to TestFlight.
 

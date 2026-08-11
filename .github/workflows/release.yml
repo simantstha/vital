@@ -161,7 +161,8 @@ jobs:
 
       # Apply only committed Drizzle migration files before new code runs.
       # The gate validates DATABASE_URL, uses the package-lock-pinned Drizzle
-      # migrator, and verifies the database's migration-table head afterwards.
+      # migrator, performs the one-time catalog-verified 0000→0016 ledger
+      # adoption when eligible, and verifies the migration-table head.
       - name: Apply and verify committed Supabase migrations
         env:
           DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
