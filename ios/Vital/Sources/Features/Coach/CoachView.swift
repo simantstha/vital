@@ -16,6 +16,7 @@ struct CoachView: View {
     @State private var showWorkspaceStickySummary = false
     @State private var specialistGlowExpanded = false
     @State private var pendingConfirmedAction: SpecialistAction?
+    @FocusState private var composerFocused: Bool
 
     /// `mode` is forwarded to every `/api/coach` call via `CoachViewModel`.
     /// The Coach tab uses the default (nil); the onboarding CoachIntro step
@@ -190,10 +191,9 @@ struct CoachView: View {
                 showWorkspaceStickySummary = shouldShow
             }
             .overlay(alignment: .top) {
-                if showWorkspaceStickySummary, let recommendation = vm.workspaceRecommendation {
+                if showWorkspaceStickySummary, let workspace = vm.workspaceSnapshot {
                     CoachWorkspaceCompactSummary(
-                        recommendation: recommendation,
-                        isPlanned: vm.workspacePlanState == .planned
+                        workspace: workspace
                     )
                     .padding(.horizontal, Theme.Spacing.lg)
                     .padding(.top, Theme.Spacing.xs)
@@ -213,21 +213,36 @@ struct CoachView: View {
             .onChange(of: vm.pendingHandoffCard) {
                 scrollToBottomIfPinned(proxy)
             }
+            .onChange(of: vm.workspaceChatRequestToken) {
+                withAnimation(reduceMotion ? nil : Theme.Motion.exit) {
+                    proxy.scrollTo("bottom", anchor: .bottom)
+                }
+                composerFocused = true
+            }
         }
     }
 
     @ViewBuilder
     private var coachWorkspace: some View {
-        if let recommendation = vm.workspaceRecommendation {
+        if let workspace = vm.workspaceSnapshot {
             CoachWorkspaceView(
-                recommendation: recommendation,
+                workspace: workspace,
                 isPerformingAction: vm.isPerformingWorkspaceAction,
-                isPlanned: vm.workspacePlanState == .planned,
+                actionMessage: vm.workspaceActionMessage,
+                actionError: vm.workspaceActionErrorMessage ?? vm.workspaceErrorMessage,
                 onAction: { action, adjustment in
                     vm.performWorkspaceAction(action, adjustment: adjustment)
+                },
+                onRefresh: vm.loadWorkspace,
+                onRetry: {
+                    if vm.workspaceActionErrorMessage != nil {
+                        vm.retryWorkspaceAction()
+                    } else {
+                        vm.loadWorkspace()
+                    }
                 }
             )
-            .id("coach-workspace-\(recommendation.id)")
+            .id("coach-workspace-\(workspace.recommendation.id)")
         } else if vm.isLoadingWorkspace {
             HStack(spacing: Theme.Spacing.sm) {
                 ProgressView()
@@ -355,6 +370,7 @@ struct CoachView: View {
                     // typing over it would fight the mic. Also disabled while
                     // the recorded clip is being transcribed.
                     .disabled(vm.transcriber.isRecording || vm.isTranscribing)
+                    .focused($composerFocused)
                     .onSubmit {
                         vm.send()
                     }

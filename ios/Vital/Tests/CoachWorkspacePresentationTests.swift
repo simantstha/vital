@@ -50,14 +50,66 @@ final class CoachWorkspacePresentationTests: XCTestCase {
               "constraintGate": false
             },
             "materialSignature": "signature"
+          },
+          "state": { "status": "ready", "planItemId": null, "effectiveAction": null }
+        }
+        """#
+
+        let workspace = try APIClient.decodeCoachWorkspace(Data(json.utf8))
+
+        XCTAssertEqual(workspace.recommendation.action.durationMinutes, 45)
+        XCTAssertEqual(workspace.recommendation.evidence.sources.first?.label, "HRV")
+    }
+
+    func testWorkspaceDTOHydratesAuthoritativePlanStateAndEffectiveAction() throws {
+        let json = #"""
+        {
+          "recommendation": {
+            "id": "recommendation-1", "localDay": "2026-08-11", "category": "training",
+            "action": { "title": "Keep it easy", "copy": "Comfortable work.", "kind": "move", "timeMinutes": 1020, "durationMinutes": 45, "intensity": "easy" },
+            "evidence": { "fresh": true, "sources": [], "constraintGate": false }, "materialSignature": "signature"
+          },
+          "state": {
+            "status": "planned", "planItemId": "plan-1",
+            "effectiveAction": { "title": "Keep it easy", "copy": "Comfortable work.", "kind": "move", "timeMinutes": 1080, "durationMinutes": 30, "intensity": "easy" }
           }
         }
         """#
 
-        let recommendation = try APIClient.decodeCoachWorkspace(Data(json.utf8))
+        let workspace = try APIClient.decodeCoachWorkspace(Data(json.utf8))
 
-        XCTAssertEqual(recommendation.action.durationMinutes, 45)
-        XCTAssertEqual(recommendation.evidence.sources.first?.label, "HRV")
+        XCTAssertEqual(workspace.state.status, .planned)
+        XCTAssertEqual(workspace.state.planItemId, "plan-1")
+        XCTAssertEqual(workspace.effectiveAction.durationMinutes, 30)
+    }
+
+    func testCalibrationNeverOffersPlanControlsEvenWhenActionLooksRunnable() {
+        let workspace = CoachWorkspaceSnapshot.fixture(status: .calibration)
+
+        XCTAssertFalse(CoachWorkspacePresentation.allowsPlanControls(for: workspace))
+        XCTAssertTrue(CoachWorkspacePresentation.isCalibrationGuidance(for: workspace))
+    }
+
+    func testEvidenceUsesMetricUnitsAndAnObservedTimestamp() {
+        let hrv = CoachWorkspaceEvidenceSource(metric: "hrv", observedAt: "2026-08-11T12:00:00.000Z", baseline: 56, value: 61)
+        let restingHr = CoachWorkspaceEvidenceSource(metric: "restingHr", observedAt: "2026-08-11T12:00:00.000Z", baseline: 50, value: 52)
+        let sleep = CoachWorkspaceEvidenceSource(metric: "sleep", observedAt: "2026-08-11T12:00:00.000Z", baseline: 480, value: 462)
+
+        XCTAssertEqual(hrv.measurementText, "61 ms · Baseline 56 ms")
+        XCTAssertEqual(restingHr.measurementText, "52 bpm · Baseline 50 bpm")
+        XCTAssertEqual(sleep.measurementText, "7h 42m · Baseline 8h 0m")
+        XCTAssertTrue(sleep.observedText.hasPrefix("Observed "))
+    }
+
+    func testWorkspaceActionResponseDecodesTheServerInteraction() throws {
+        let json = #"""
+        { "interaction": { "id": "interaction-1", "recommendationId": "recommendation-1", "actionId": "ios-workspace:1:accept:default", "action": "accept", "planItemId": "plan-1", "createdAt": "2026-08-11T12:00:00.000Z" } }
+        """#
+
+        let interaction = try APIClient.decodeCoachWorkspaceAction(Data(json.utf8))
+
+        XCTAssertEqual(interaction.action, .accept)
+        XCTAssertEqual(interaction.planItemId, "plan-1")
     }
 }
 
@@ -81,6 +133,15 @@ private extension CoachWorkspaceRecommendation {
                 constraintGate: false
             ),
             materialSignature: "signature"
+        )
+    }
+}
+
+private extension CoachWorkspaceSnapshot {
+    static func fixture(status: CoachWorkspaceStatus) -> CoachWorkspaceSnapshot {
+        CoachWorkspaceSnapshot(
+            recommendation: CoachWorkspaceRecommendation.fixture(),
+            state: CoachWorkspaceState(status: status, planItemId: nil, effectiveAction: nil)
         )
     }
 }

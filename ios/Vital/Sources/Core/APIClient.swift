@@ -369,11 +369,11 @@ struct APIClient {
     /// Fetches the server-authored, deterministic recommendation for the
     /// user's local day. The server owns freshness and safety gating; iOS only
     /// presents the recommendation and explicit user actions.
-    func fetchCoachWorkspace() async throws -> CoachWorkspaceRecommendation {
+    func fetchCoachWorkspace() async throws -> CoachWorkspaceSnapshot {
         let tz = TimeZone.current.identifier
         let encoded = tz.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? tz
         let response: CoachWorkspaceResponse = try await get("/api/coach/today?tz=\(encoded)")
-        return response.recommendation
+        return response.snapshot
     }
 
     @discardableResult
@@ -562,8 +562,12 @@ struct APIClient {
 
     /// Keeps the Coach Workspace wire shape covered without requiring a live
     /// session in unit tests.
-    static func decodeCoachWorkspace(_ data: Data) throws -> CoachWorkspaceRecommendation {
-        try JSONDecoder().decode(CoachWorkspaceResponse.self, from: data).recommendation
+    static func decodeCoachWorkspace(_ data: Data) throws -> CoachWorkspaceSnapshot {
+        try JSONDecoder().decode(CoachWorkspaceResponse.self, from: data).snapshot
+    }
+
+    static func decodeCoachWorkspaceAction(_ data: Data) throws -> CoachWorkspaceInteraction {
+        try JSONDecoder().decode(CoachWorkspaceActionResponse.self, from: data).interaction
     }
 
     /// Decodes one wire-format SSE line. Unknown event types return nil so
@@ -1556,13 +1560,52 @@ struct CoachWorkspaceEvidenceSource: Codable, Identifiable, Equatable {
         default: return "chart.line.uptrend.xyaxis"
         }
     }
-    var detail: String {
-        let valueText = value.map { Self.valueText($0) } ?? "No reading"
-        let baselineText = baseline.map { "Baseline \(Self.valueText($0))" } ?? "No baseline"
+    var measurementText: String {
+        let valueText = value.map { Self.valueText($0, metric: metric) } ?? "No reading"
+        let baselineText = baseline.map { "Baseline \(Self.valueText($0, metric: metric))" } ?? "No baseline"
         return "\(valueText) · \(baselineText)"
     }
 
-    private static func valueText(_ value: Double) -> String {
+    var observedText: String {
+        guard let observedAt else { return "No observed timestamp" }
+        guard let date = Self.isoParser.date(from: observedAt) ?? Self.isoParserWithoutFraction.date(from: observedAt) else {
+            return "Observed \(observedAt)"
+        }
+        return "Observed \(Self.observedFormatter.string(from: date))"
+    }
+
+    var detail: String { "\(measurementText) · \(observedText)" }
+
+    private static let isoParser: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+    private static let isoParserWithoutFraction: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
+    private static let observedFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale.current
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter
+    }()
+
+    private static func valueText(_ value: Double, metric: String) -> String {
+        switch metric {
+        case "hrv": return "\(numberText(value)) ms"
+        case "restingHr": return "\(numberText(value)) bpm"
+        case "sleep":
+            let minutes = Int(value.rounded())
+            return "\(minutes / 60)h \(minutes % 60)m"
+        default: return numberText(value)
+        }
+    }
+
+    private static func numberText(_ value: Double) -> String {
         value.rounded() == value ? "\(Int(value))" : String(format: "%.1f", value)
     }
 }
@@ -1580,6 +1623,29 @@ struct CoachWorkspaceRecommendation: Codable, Equatable, Identifiable {
     var action: CoachWorkspaceAction
     let evidence: CoachWorkspaceEvidence
     let materialSignature: String
+}
+
+enum CoachWorkspaceStatus: String, Codable, Equatable, CaseIterable {
+    case ready
+    case calibration
+    case planned
+    case skipped
+    case completed
+}
+
+struct CoachWorkspaceState: Codable, Equatable {
+    let status: CoachWorkspaceStatus
+    let planItemId: String?
+    let effectiveAction: CoachWorkspaceAction?
+}
+
+struct CoachWorkspaceSnapshot: Codable, Equatable {
+    let recommendation: CoachWorkspaceRecommendation
+    var state: CoachWorkspaceState
+
+    var effectiveAction: CoachWorkspaceAction {
+        state.effectiveAction ?? recommendation.action
+    }
 }
 
 struct CoachWorkspaceAdjustmentRequest: Codable, Equatable {
@@ -1606,6 +1672,11 @@ struct CoachWorkspaceInteraction: Codable, Equatable {
 
 private struct CoachWorkspaceResponse: Decodable {
     let recommendation: CoachWorkspaceRecommendation
+    let state: CoachWorkspaceState
+
+    var snapshot: CoachWorkspaceSnapshot {
+        CoachWorkspaceSnapshot(recommendation: recommendation, state: state)
+    }
 }
 
 private struct CoachWorkspaceActionRequest: Encodable {
@@ -1796,7 +1867,7 @@ protocol CoachAPIProviding {
         actionId: String,
         action: SpecialistAction
     ) -> AsyncThrowingStream<CoachStreamEvent, Error>
-    func fetchCoachWorkspace() async throws -> CoachWorkspaceRecommendation
+    func fetchCoachWorkspace() async throws -> CoachWorkspaceSnapshot
     func performCoachWorkspaceAction(
         recommendationId: String,
         actionId: String,
@@ -1806,7 +1877,7 @@ protocol CoachAPIProviding {
 }
 
 extension CoachAPIProviding {
-    func fetchCoachWorkspace() async throws -> CoachWorkspaceRecommendation {
+    func fetchCoachWorkspace() async throws -> CoachWorkspaceSnapshot {
         throw APIError.serverError(501)
     }
 

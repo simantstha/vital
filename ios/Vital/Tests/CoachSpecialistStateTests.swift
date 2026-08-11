@@ -492,6 +492,98 @@ final class CoachSpecialistStateTests: XCTestCase {
         XCTAssertEqual(viewModel.specialistState, .activeConsultation(runningCoach))
     }
 
+    func testWorkspaceLoadHydratesServerStateAndResetsForTheNextDay() async {
+        let api = FakeCoachAPI(restoration: CoachRestorationResponse(
+            messages: [], activePersona: .vital, pendingCard: nil
+        ))
+        api.workspace = workspaceFixture(status: .planned, durationMinutes: 30, planItemId: "plan-1")
+        let viewModel = CoachViewModel(api: api)
+
+        viewModel.loadWorkspace()
+        await waitUntil { !viewModel.isLoadingWorkspace }
+
+        XCTAssertEqual(viewModel.workspaceSnapshot?.state.status, .planned)
+        XCTAssertEqual(viewModel.workspaceSnapshot?.state.planItemId, "plan-1")
+        XCTAssertEqual(viewModel.workspaceSnapshot?.effectiveAction.durationMinutes, 30)
+
+        api.workspace = workspaceFixture(status: .ready, durationMinutes: 45, planItemId: nil)
+        viewModel.loadWorkspace()
+        await waitUntil { !viewModel.isLoadingWorkspace }
+
+        XCTAssertEqual(viewModel.workspaceSnapshot?.state.status, .ready)
+        XCTAssertNil(viewModel.workspaceSnapshot?.state.planItemId)
+        XCTAssertEqual(viewModel.workspaceSnapshot?.effectiveAction.durationMinutes, 45)
+    }
+
+    func testWorkspaceLoadFailureKeepsTheLastHydratedState() async {
+        let api = FakeCoachAPI(restoration: CoachRestorationResponse(
+            messages: [], activePersona: .vital, pendingCard: nil
+        ))
+        api.workspace = workspaceFixture(status: .planned, durationMinutes: 30, planItemId: "plan-1")
+        let viewModel = CoachViewModel(api: api)
+        viewModel.loadWorkspace()
+        await waitUntil { !viewModel.isLoadingWorkspace }
+        let hydratedWorkspace = viewModel.workspaceSnapshot
+
+        api.workspaceFailure = TestFailure.unavailable
+        viewModel.loadWorkspace()
+        await waitUntil { !viewModel.isLoadingWorkspace }
+
+        XCTAssertEqual(viewModel.workspaceSnapshot, hydratedWorkspace)
+        XCTAssertNotNil(viewModel.workspaceErrorMessage)
+    }
+
+    func testOpenChatActionRecordsIntentThenSendsTheWorkspacePrompt() async {
+        let api = FakeCoachAPI(restoration: CoachRestorationResponse(
+            messages: [], activePersona: .vital, pendingCard: nil
+        ))
+        api.workspace = workspaceFixture(status: .ready, durationMinutes: 30, planItemId: nil)
+        api.nextMessageEvents = [.text("Let’s make it easy."), .done]
+        let viewModel = CoachViewModel(api: api)
+        viewModel.loadWorkspace()
+        await waitUntil { !viewModel.isLoadingWorkspace }
+
+        viewModel.performWorkspaceAction(.openChat)
+        await waitUntil { !viewModel.isPerformingWorkspaceAction && !viewModel.isStreaming }
+
+        XCTAssertEqual(api.workspaceActionRequests.map(\.action), [.openChat])
+        XCTAssertEqual(viewModel.workspaceChatRequestToken, 1)
+        XCTAssertTrue(viewModel.rows.contains {
+            guard case .message(let message) = $0 else { return false }
+            return message.role == .user && message.text == "Can we talk through keep it easy?"
+        })
+    }
+
+    private func workspaceFixture(
+        status: CoachWorkspaceStatus,
+        durationMinutes: Int,
+        planItemId: String?
+    ) -> CoachWorkspaceSnapshot {
+        let action = CoachWorkspaceAction(
+            title: "Keep it easy",
+            copy: "Comfortable work supports recovery.",
+            kind: "move",
+            timeMinutes: 1_020,
+            durationMinutes: durationMinutes,
+            intensity: "easy"
+        )
+        return CoachWorkspaceSnapshot(
+            recommendation: CoachWorkspaceRecommendation(
+                id: "recommendation-1",
+                localDay: "2026-08-11",
+                category: "training",
+                action: action,
+                evidence: CoachWorkspaceEvidence(fresh: true, sources: [], constraintGate: false),
+                materialSignature: "signature"
+            ),
+            state: CoachWorkspaceState(
+                status: status,
+                planItemId: planItemId,
+                effectiveAction: status == .ready ? nil : action
+            )
+        )
+    }
+
     private func waitUntil(
         _ predicate: @escaping @MainActor () -> Bool,
         file: StaticString = #filePath,
@@ -518,12 +610,23 @@ private final class FakeCoachAPI: CoachAPIProviding {
         let action: SpecialistAction
     }
 
+    struct WorkspaceActionRequest {
+        let recommendationId: String
+        let actionId: String
+        let action: CoachWorkspaceActionKind
+        let adjustment: CoachWorkspaceAdjustmentRequest?
+    }
+
     var restoration: CoachRestorationResponse
     var nextMessageEvents: [CoachStreamEvent] = []
     var nextMessageFailure: Error?
     var nextActionEvents: [CoachStreamEvent] = []
     var nextActionFailure: Error?
     var actionRequests: [ActionRequest] = []
+    var workspace: CoachWorkspaceSnapshot = FakeCoachAPI.defaultWorkspace
+    var workspaceFailure: Error?
+    var workspaceActionFailure: Error?
+    var workspaceActionRequests: [WorkspaceActionRequest] = []
     private(set) var restorationRequestCount = 0
     var holdActionStreamOpen = false
     private var heldActionContinuation: AsyncThrowingStream<CoachStreamEvent, Error>.Continuation?
@@ -548,6 +651,35 @@ private final class FakeCoachAPI: CoachAPIProviding {
 
     func resetCoachConversation() async throws {
         // No-op for testing
+    }
+
+    func fetchCoachWorkspace() async throws -> CoachWorkspaceSnapshot {
+        if let workspaceFailure { throw workspaceFailure }
+        return workspace
+    }
+
+    func performCoachWorkspaceAction(
+        recommendationId: String,
+        actionId: String,
+        action: CoachWorkspaceActionKind,
+        adjustment: CoachWorkspaceAdjustmentRequest?
+    ) async throws -> CoachWorkspaceInteraction {
+        workspaceActionRequests.append(WorkspaceActionRequest(
+            recommendationId: recommendationId,
+            actionId: actionId,
+            action: action,
+            adjustment: adjustment
+        ))
+        if let workspaceActionFailure { throw workspaceActionFailure }
+        return CoachWorkspaceInteraction(
+            id: "workspace-interaction-1",
+            recommendationId: recommendationId,
+            actionId: actionId,
+            action: action,
+            adjustment: adjustment,
+            planItemId: action == .openChat ? nil : "plan-1",
+            createdAt: "2026-08-11T12:00:00.000Z"
+        )
     }
 
     func streamCoach(message: String, imageBase64: String?, mode: String?) -> AsyncThrowingStream<CoachStreamEvent, Error> {
@@ -593,4 +725,23 @@ private final class FakeCoachAPI: CoachAPIProviding {
             }
         }
     }
+
+    private static let defaultWorkspace = CoachWorkspaceSnapshot(
+        recommendation: CoachWorkspaceRecommendation(
+            id: "recommendation-1",
+            localDay: "2026-08-11",
+            category: "training",
+            action: CoachWorkspaceAction(
+                title: "Keep it easy",
+                copy: "Comfortable work supports recovery.",
+                kind: "move",
+                timeMinutes: 1_020,
+                durationMinutes: 30,
+                intensity: "easy"
+            ),
+            evidence: CoachWorkspaceEvidence(fresh: true, sources: [], constraintGate: false),
+            materialSignature: "signature"
+        ),
+        state: CoachWorkspaceState(status: .ready, planItemId: nil, effectiveAction: nil)
+    )
 }

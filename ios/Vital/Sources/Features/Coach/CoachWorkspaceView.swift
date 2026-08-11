@@ -33,6 +33,28 @@ enum CoachWorkspaceAdjustment: Equatable, Identifiable {
 }
 
 enum CoachWorkspacePresentation {
+    static func allowsPlanControls(for workspace: CoachWorkspaceSnapshot) -> Bool {
+        workspace.state.status == .ready
+            && workspace.recommendation.evidence.fresh
+            && !workspace.recommendation.evidence.constraintGate
+    }
+
+    static func isCalibrationGuidance(for workspace: CoachWorkspaceSnapshot) -> Bool {
+        workspace.state.status == .calibration
+            || !workspace.recommendation.evidence.fresh
+            || workspace.recommendation.evidence.constraintGate
+    }
+
+    static func calibrationGuidance(for workspace: CoachWorkspaceSnapshot) -> String {
+        if workspace.recommendation.evidence.constraintGate {
+            return "A confirmed health limit is guiding today’s recommendation. Let’s keep this comfortable."
+        }
+        if !workspace.recommendation.evidence.fresh {
+            return "We need fresh sleep, HRV, and resting-heart-rate signals before offering a plan."
+        }
+        return "We’re still learning your baseline. Keep today comfortable while your signals calibrate."
+    }
+
     static func adjustmentOptions(for recommendation: CoachWorkspaceRecommendation) -> [CoachWorkspaceAdjustment] {
         switch recommendation.action.kind {
         case "move":
@@ -72,33 +94,51 @@ enum CoachWorkspacePresentation {
 // MARK: - Workspace card
 
 struct CoachWorkspaceView: View {
-    let recommendation: CoachWorkspaceRecommendation
+    let workspace: CoachWorkspaceSnapshot
     let isPerformingAction: Bool
-    let isPlanned: Bool
+    let actionMessage: String?
+    let actionError: String?
     let onAction: (CoachWorkspaceActionKind, CoachWorkspaceAdjustmentRequest?) -> Void
+    let onRefresh: () -> Void
+    let onRetry: () -> Void
 
     @State private var activeSheet: CoachWorkspaceSheet?
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    private var recommendation: CoachWorkspaceRecommendation {
+        CoachWorkspaceRecommendation(
+            id: workspace.recommendation.id,
+            localDay: workspace.recommendation.localDay,
+            category: workspace.recommendation.category,
+            action: workspace.effectiveAction,
+            evidence: workspace.recommendation.evidence,
+            materialSignature: workspace.recommendation.materialSignature
+        )
+    }
+
+    private var isCalibration: Bool { CoachWorkspacePresentation.isCalibrationGuidance(for: workspace) }
+    private var allowsPlanControls: Bool { CoachWorkspacePresentation.allowsPlanControls(for: workspace) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
             HStack(spacing: Theme.Spacing.sm) {
                 Image(systemName: "sparkles")
-                    .font(.system(size: 13, weight: .bold))
+                    .font(.caption.weight(.bold))
                     .foregroundStyle(Theme.Colors.accentContent)
                 Text("TODAY'S COACH BRIEF")
-                    .font(Theme.Typography.labelSmall)
+                    .font(.caption2)
                     .tracking(0.8)
                     .foregroundStyle(Theme.Colors.accentContent)
                 Spacer()
                 Text(CoachWorkspacePresentation.evidenceSummary(for: recommendation))
-                    .font(Theme.Typography.labelSmall)
+                    .font(.caption)
                     .foregroundStyle(Theme.Colors.textSecondary)
                     .multilineTextAlignment(.trailing)
             }
 
             HStack(alignment: .top, spacing: Theme.Spacing.md) {
                 Image(systemName: CoachWorkspacePresentation.icon(for: recommendation.action.kind))
-                    .font(.system(size: 20, weight: .semibold))
+                    .font(.title3.weight(.semibold))
                     .foregroundStyle(Theme.Colors.accentContent)
                     .frame(width: 44, height: 44)
                     .background(Circle().fill(Theme.Colors.accent.opacity(0.14)))
@@ -106,28 +146,29 @@ struct CoachWorkspaceView: View {
 
                 VStack(alignment: .leading, spacing: 5) {
                     Text(recommendation.action.title)
-                        .font(Theme.Typography.titleLarge)
+                        .font(.title2.weight(.bold))
                         .foregroundStyle(Theme.Colors.textPrimary)
                     Text(actionDetail)
-                        .font(Theme.Typography.bodySmall)
+                        .font(.subheadline)
                         .foregroundStyle(Theme.Colors.textSecondary)
                 }
             }
 
             Text(recommendation.action.copy)
-                .font(Theme.Typography.bodyMedium)
+                .font(.body)
                 .foregroundStyle(Theme.Colors.textPrimary)
 
             evidenceChips
 
-            if isPlanned {
-                Label("Added to today’s plan", systemImage: "checkmark.circle.fill")
-                    .font(Theme.Typography.bodyMedium)
-                    .foregroundStyle(Theme.Colors.accentContent)
-                    .frame(maxWidth: .infinity, minHeight: 48)
-                    .background(RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous).fill(Theme.Colors.accent.opacity(0.13)))
-                    .accessibilityLabel("Added to today’s plan")
-            } else {
+            if isCalibration {
+                calibrationControls
+            } else if workspace.state.status == .planned {
+                stateLabel("Added to today’s plan", icon: "checkmark.circle.fill")
+            } else if workspace.state.status == .skipped {
+                stateLabel("Skipped for today", icon: "forward.fill")
+            } else if workspace.state.status == .completed {
+                stateLabel("Completed", icon: "checkmark.circle.fill")
+            } else if allowsPlanControls {
                 Button {
                     onAction(.accept, nil)
                 } label: {
@@ -139,16 +180,25 @@ struct CoachWorkspaceView: View {
                 .accessibilityHint("Adds this recommendation to today’s plan")
             }
 
-            HStack(spacing: Theme.Spacing.sm) {
-                Button("Adjust") { activeSheet = .adjust }
-                    .buttonStyle(CoachWorkspaceSecondaryButtonStyle())
-                    .disabled(isPerformingAction || CoachWorkspacePresentation.adjustmentOptions(for: recommendation).isEmpty)
-                Button("See evidence") { activeSheet = .evidence }
-                    .buttonStyle(CoachWorkspaceSecondaryButtonStyle())
-                Button("Talk it through") { onAction(.openChat, nil) }
-                    .buttonStyle(CoachWorkspaceSecondaryButtonStyle())
-                    .disabled(isPerformingAction)
+            if let actionMessage, isPerformingAction {
+                HStack(spacing: Theme.Spacing.sm) {
+                    ProgressView().controlSize(.small)
+                    Text(actionMessage).font(.footnote).foregroundStyle(Theme.Colors.textSecondary)
+                }
+                .accessibilityLabel(actionMessage)
             }
+
+            if let actionError {
+                ErrorCard(
+                    title: "Couldn’t update today’s plan",
+                    message: actionError,
+                    actionLabel: "Try again",
+                    actionIcon: "arrow.clockwise",
+                    onAction: onRetry
+                )
+            }
+
+            secondaryActions
         }
         .padding(Theme.Spacing.lg)
         .background(Theme.Colors.card)
@@ -181,7 +231,7 @@ struct CoachWorkspaceView: View {
             HStack(spacing: Theme.Spacing.sm) {
                 ForEach(recommendation.evidence.sources) { source in
                     Label(source.label, systemImage: source.icon)
-                        .font(Theme.Typography.labelSmall)
+                        .font(.caption)
                         .foregroundStyle(Theme.Colors.textSecondary)
                         .padding(.horizontal, 10)
                         .frame(minHeight: 32)
@@ -191,24 +241,78 @@ struct CoachWorkspaceView: View {
         }
         .accessibilityLabel("Evidence: \(CoachWorkspacePresentation.evidenceSummary(for: recommendation))")
     }
+
+    @ViewBuilder
+    private var calibrationControls: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            Text(CoachWorkspacePresentation.calibrationGuidance(for: workspace))
+                .font(.body)
+                .foregroundStyle(Theme.Colors.textSecondary)
+            Button {
+                onRefresh()
+            } label: {
+                Label("Refresh signals", systemImage: "arrow.clockwise")
+                    .frame(maxWidth: .infinity, minHeight: 48)
+            }
+            .buttonStyle(CoachWorkspacePrimaryButtonStyle())
+            .disabled(isPerformingAction)
+        }
+    }
+
+    private func stateLabel(_ title: String, icon: String) -> some View {
+        Label(title, systemImage: icon)
+            .font(.body.weight(.semibold))
+            .foregroundStyle(Theme.Colors.accentContent)
+            .frame(maxWidth: .infinity, minHeight: 48)
+            .background(RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous).fill(Theme.Colors.accent.opacity(0.13)))
+            .accessibilityLabel(title)
+    }
+
+    @ViewBuilder
+    private var secondaryActions: some View {
+        let controls = Group {
+            if allowsPlanControls {
+                Button("Adjust") { activeSheet = .adjust }
+                    .buttonStyle(CoachWorkspaceSecondaryButtonStyle())
+                    .disabled(isPerformingAction || CoachWorkspacePresentation.adjustmentOptions(for: recommendation).isEmpty)
+            }
+            Button("See evidence") { activeSheet = .evidence }
+                .buttonStyle(CoachWorkspaceSecondaryButtonStyle())
+            Button("Talk it through") { onAction(.openChat, nil) }
+                .buttonStyle(CoachWorkspaceSecondaryButtonStyle())
+                .disabled(isPerformingAction)
+        }
+        if dynamicTypeSize.isAccessibilitySize {
+            VStack(spacing: Theme.Spacing.sm) { controls }
+        } else {
+            HStack(spacing: Theme.Spacing.sm) { controls }
+        }
+    }
 }
 
 struct CoachWorkspaceCompactSummary: View {
-    let recommendation: CoachWorkspaceRecommendation
-    let isPlanned: Bool
+    let workspace: CoachWorkspaceSnapshot
+
+    private var recommendation: CoachWorkspaceRecommendation {
+        CoachWorkspaceRecommendation(
+            id: workspace.recommendation.id, localDay: workspace.recommendation.localDay,
+            category: workspace.recommendation.category, action: workspace.effectiveAction,
+            evidence: workspace.recommendation.evidence, materialSignature: workspace.recommendation.materialSignature
+        )
+    }
 
     var body: some View {
         HStack(spacing: Theme.Spacing.sm) {
-            Image(systemName: isPlanned ? "checkmark.circle.fill" : CoachWorkspacePresentation.icon(for: recommendation.action.kind))
+            Image(systemName: workspace.state.status == .planned ? "checkmark.circle.fill" : CoachWorkspacePresentation.icon(for: recommendation.action.kind))
                 .foregroundStyle(Theme.Colors.accentContent)
             VStack(alignment: .leading, spacing: 1) {
-                Text(isPlanned ? "In today’s plan" : "Today’s recommendation")
-                    .font(Theme.Typography.labelSmall)
+                Text(workspace.state.status == .planned ? "In today’s plan" : "Today’s recommendation")
+                    .font(.caption)
                     .foregroundStyle(Theme.Colors.textSecondary)
                 Text(recommendation.action.title)
-                    .font(Theme.Typography.bodyMedium)
+                    .font(.body)
                     .foregroundStyle(Theme.Colors.textPrimary)
-                    .lineLimit(1)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
         }
@@ -238,7 +342,7 @@ private struct CoachWorkspaceAdjustSheet: View {
             List {
                 Section("Keep it comfortable") {
                     Text("Choose a bounded adjustment. Your coach’s safety guidance stays the same.")
-                        .font(Theme.Typography.bodySmall)
+                        .font(.subheadline)
                         .foregroundStyle(Theme.Colors.textSecondary)
                     ForEach(CoachWorkspacePresentation.adjustmentOptions(for: recommendation)) { option in
                         Button(option.label) { select(option) }
@@ -266,8 +370,8 @@ private struct CoachWorkspaceEvidenceSheet: View {
                 Section("Signals") {
                     ForEach(recommendation.evidence.sources) { source in
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(source.label).font(Theme.Typography.bodyMedium)
-                            Text(source.detail).font(Theme.Typography.bodySmall).foregroundStyle(Theme.Colors.textSecondary)
+                            Text(source.label).font(.body)
+                            Text(source.detail).font(.subheadline).foregroundStyle(Theme.Colors.textSecondary)
                         }
                         .padding(.vertical, 4)
                     }
@@ -285,7 +389,7 @@ private struct CoachWorkspaceEvidenceSheet: View {
 private struct CoachWorkspacePrimaryButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(Theme.Typography.bodyMedium)
+            .font(.body)
             .fontWeight(.semibold)
             .foregroundStyle(Theme.Colors.onAccent)
             .background(RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous).fill(Theme.Colors.accent.opacity(configuration.isPressed ? 0.72 : 1)))
@@ -295,11 +399,72 @@ private struct CoachWorkspacePrimaryButtonStyle: ButtonStyle {
 private struct CoachWorkspaceSecondaryButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(Theme.Typography.labelMedium)
+            .font(.subheadline)
             .foregroundStyle(Theme.Colors.textPrimary)
             .frame(maxWidth: .infinity, minHeight: 44)
             .background(RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous).fill(Theme.Colors.card))
             .overlay(RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous).strokeBorder(Theme.Colors.glassBorder, lineWidth: 0.75))
             .opacity(configuration.isPressed ? 0.68 : 1)
     }
+}
+
+#Preview("Loaded coach workspace") {
+    CoachWorkspaceView(
+        workspace: .previewLoaded,
+        isPerformingAction: false,
+        actionMessage: nil,
+        actionError: nil,
+        onAction: { _, _ in },
+        onRefresh: {},
+        onRetry: {}
+    )
+    .padding()
+    .background(Theme.Colors.canvas)
+}
+
+#Preview("Calibration coach workspace") {
+    CoachWorkspaceView(
+        workspace: .previewCalibration,
+        isPerformingAction: false,
+        actionMessage: nil,
+        actionError: nil,
+        onAction: { _, _ in },
+        onRefresh: {},
+        onRetry: {}
+    )
+    .padding()
+    .background(Theme.Colors.canvas)
+}
+
+private extension CoachWorkspaceSnapshot {
+    static let previewLoaded = CoachWorkspaceSnapshot(
+        recommendation: CoachWorkspaceRecommendation(
+            id: "preview-recommendation",
+            localDay: "2026-08-11",
+            category: "training",
+            action: CoachWorkspaceAction(
+                title: "Keep it easy this afternoon",
+                copy: "A comfortable session supports recovery and keeps your weekly rhythm intact.",
+                kind: "move",
+                timeMinutes: 1_020,
+                durationMinutes: 30,
+                intensity: "easy"
+            ),
+            evidence: CoachWorkspaceEvidence(
+                fresh: true,
+                sources: [
+                    CoachWorkspaceEvidenceSource(metric: "hrv", observedAt: "2026-08-11T12:00:00.000Z", baseline: 56, value: 61),
+                    CoachWorkspaceEvidenceSource(metric: "sleep", observedAt: "2026-08-11T12:00:00.000Z", baseline: 480, value: 462),
+                ],
+                constraintGate: false
+            ),
+            materialSignature: "preview-signature"
+        ),
+        state: CoachWorkspaceState(status: .ready, planItemId: nil, effectiveAction: nil)
+    )
+
+    static let previewCalibration = CoachWorkspaceSnapshot(
+        recommendation: previewLoaded.recommendation,
+        state: CoachWorkspaceState(status: .calibration, planItemId: nil, effectiveAction: nil)
+    )
 }
