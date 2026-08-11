@@ -642,10 +642,108 @@ final class CoachSpecialistStateTests: XCTestCase {
         })
     }
 
+    func testWorkspaceTransitionsUseFreshUUIDsAndCurrentMaterialSignature() async {
+        let api = FakeCoachAPI(restoration: CoachRestorationResponse(
+            messages: [], activePersona: .vital, pendingCard: nil
+        ))
+        api.workspace = workspaceFixture(status: .ready, durationMinutes: 30, planItemId: nil)
+        let viewModel = CoachViewModel(api: api)
+        viewModel.loadWorkspace()
+        await waitUntil { !viewModel.isLoadingWorkspace }
+
+        let transitions = [20, 30, 20]
+        for (index, minutes) in transitions.enumerated() {
+            if index == 2 {
+                api.workspace = workspaceFixture(
+                    status: .ready,
+                    durationMinutes: 30,
+                    planItemId: nil,
+                    materialSignature: "material-v2"
+                )
+                viewModel.loadWorkspace()
+                await waitUntil { !viewModel.isLoadingWorkspace }
+            }
+            viewModel.performWorkspaceAction(
+                .adjust,
+                adjustment: CoachWorkspaceAdjustmentRequest(durationMinutes: minutes)
+            )
+            await waitUntil { api.workspaceActionRequests.count == index + 1 && !viewModel.isPerformingWorkspaceAction }
+        }
+
+        let actionIds = api.workspaceActionRequests.map(\.actionId)
+        XCTAssertEqual(Set(actionIds).count, transitions.count)
+        XCTAssertTrue(actionIds.allSatisfy { UUID(uuidString: $0) != nil })
+        XCTAssertEqual(api.workspaceActionRequests.map(\.materialSignature), ["signature", "signature", "material-v2"])
+    }
+
+    func testWorkspaceSkipAndCompleteReachTheirTerminalStates() async {
+        let api = FakeCoachAPI(restoration: CoachRestorationResponse(
+            messages: [], activePersona: .vital, pendingCard: nil
+        ))
+        let viewModel = CoachViewModel(api: api)
+        viewModel.loadWorkspace()
+        await waitUntil { !viewModel.isLoadingWorkspace }
+
+        viewModel.performWorkspaceAction(.skip)
+        await waitUntil { !viewModel.isPerformingWorkspaceAction }
+        XCTAssertEqual(viewModel.workspaceSnapshot?.state.status, .skipped)
+
+        api.workspace = workspaceFixture(status: .planned, durationMinutes: 30, planItemId: "plan-1")
+        viewModel.loadWorkspace()
+        await waitUntil { !viewModel.isLoadingWorkspace }
+        viewModel.performWorkspaceAction(.complete)
+        await waitUntil { !viewModel.isPerformingWorkspaceAction }
+
+        XCTAssertEqual(viewModel.workspaceSnapshot?.state.status, .completed)
+        XCTAssertEqual(api.workspaceActionRequests.map(\.action), [.skip, .complete])
+    }
+
+    func testRetryUsesANewWorkspaceActionUUID() async {
+        let api = FakeCoachAPI(restoration: CoachRestorationResponse(
+            messages: [], activePersona: .vital, pendingCard: nil
+        ))
+        let viewModel = CoachViewModel(api: api)
+        viewModel.loadWorkspace()
+        await waitUntil { !viewModel.isLoadingWorkspace }
+        api.workspaceActionFailure = TestFailure.unavailable
+
+        viewModel.performWorkspaceAction(.skip)
+        await waitUntil { !viewModel.isPerformingWorkspaceAction }
+        let firstActionId = api.workspaceActionRequests.first?.actionId
+
+        api.workspaceActionFailure = nil
+        viewModel.retryWorkspaceAction()
+        await waitUntil { api.workspaceActionRequests.count == 2 && !viewModel.isPerformingWorkspaceAction }
+
+        XCTAssertNotEqual(api.workspaceActionRequests[1].actionId, firstActionId)
+        XCTAssertNotNil(UUID(uuidString: api.workspaceActionRequests[1].actionId))
+    }
+
+    func testDuplicateWorkspaceTapsShareOnlyTheSingleInFlightRequest() async {
+        let api = FakeCoachAPI(restoration: CoachRestorationResponse(
+            messages: [], activePersona: .vital, pendingCard: nil
+        ))
+        api.holdWorkspaceAction = true
+        let viewModel = CoachViewModel(api: api)
+        viewModel.loadWorkspace()
+        await waitUntil { !viewModel.isLoadingWorkspace }
+
+        viewModel.performWorkspaceAction(.skip)
+        await waitUntil { api.workspaceActionRequests.count == 1 }
+        viewModel.performWorkspaceAction(.skip)
+
+        XCTAssertEqual(api.workspaceActionRequests.count, 1)
+        XCTAssertNotNil(UUID(uuidString: api.workspaceActionRequests[0].actionId))
+
+        api.finishHeldWorkspaceAction()
+        await waitUntil { !viewModel.isPerformingWorkspaceAction }
+    }
+
     private func workspaceFixture(
         status: CoachWorkspaceStatus,
         durationMinutes: Int,
-        planItemId: String?
+        planItemId: String?,
+        materialSignature: String = "signature"
     ) -> CoachWorkspaceSnapshot {
         let action = CoachWorkspaceAction(
             title: "Keep it easy",
@@ -662,7 +760,7 @@ final class CoachSpecialistStateTests: XCTestCase {
                 category: "training",
                 action: action,
                 evidence: CoachWorkspaceEvidence(fresh: true, sources: [], constraintGate: false),
-                materialSignature: "signature"
+                materialSignature: materialSignature
             ),
             state: CoachWorkspaceState(
                 status: status,
@@ -700,6 +798,7 @@ private final class FakeCoachAPI: CoachAPIProviding {
 
     struct WorkspaceActionRequest {
         let recommendationId: String
+        let materialSignature: String
         let actionId: String
         let action: CoachWorkspaceActionKind
         let adjustment: CoachWorkspaceAdjustmentRequest?
@@ -767,12 +866,14 @@ private final class FakeCoachAPI: CoachAPIProviding {
 
     func performCoachWorkspaceAction(
         recommendationId: String,
+        materialSignature: String,
         actionId: String,
         action: CoachWorkspaceActionKind,
         adjustment: CoachWorkspaceAdjustmentRequest?
     ) async throws -> CoachWorkspaceInteraction {
         workspaceActionRequests.append(WorkspaceActionRequest(
             recommendationId: recommendationId,
+            materialSignature: materialSignature,
             actionId: actionId,
             action: action,
             adjustment: adjustment
@@ -796,6 +897,19 @@ private final class FakeCoachAPI: CoachAPIProviding {
 
     func failHeldWorkspaceAction(_ error: Error) {
         heldWorkspaceActionContinuation?.resume(throwing: error)
+        heldWorkspaceActionContinuation = nil
+    }
+
+    func finishHeldWorkspaceAction() {
+        heldWorkspaceActionContinuation?.resume(returning: CoachWorkspaceInteraction(
+            id: "workspace-interaction-1",
+            recommendationId: workspace.recommendation.id,
+            actionId: workspaceActionRequests.last?.actionId ?? "missing-action",
+            action: workspaceActionRequests.last?.action ?? .skip,
+            adjustment: workspaceActionRequests.last?.adjustment,
+            planItemId: "plan-1",
+            createdAt: "2026-08-11T12:00:00.000Z"
+        ))
         heldWorkspaceActionContinuation = nil
     }
 

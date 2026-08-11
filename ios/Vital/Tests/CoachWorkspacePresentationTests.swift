@@ -53,6 +53,22 @@ final class CoachWorkspacePresentationTests: XCTestCase {
         }
     }
 
+    func testWorkspaceActionRequestIncludesCurrentMaterialSignature() throws {
+        let data = try APIClient.encodeCoachWorkspaceActionRequest(
+            recommendationId: "recommendation-1",
+            materialSignature: "material-v2",
+            actionId: "action-1",
+            action: .complete,
+            adjustment: nil
+        )
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        XCTAssertEqual(object["recommendationId"] as? String, "recommendation-1")
+        XCTAssertEqual(object["materialSignature"] as? String, "material-v2")
+        XCTAssertEqual(object["actionId"] as? String, "action-1")
+        XCTAssertEqual(object["action"] as? String, "complete")
+    }
+
     func testMoveRecommendationOffersOnlyBoundedMoveAdjustments() {
         let recommendation = CoachWorkspaceRecommendation.fixture(kind: "move")
 
@@ -139,6 +155,44 @@ final class CoachWorkspacePresentationTests: XCTestCase {
 
         XCTAssertFalse(CoachWorkspacePresentation.allowsPlanControls(for: workspace))
         XCTAssertTrue(CoachWorkspacePresentation.isCalibrationGuidance(for: workspace))
+    }
+
+    func testReadyWorkspaceExposesAddAdjustAndSkipControls() {
+        let workspace = CoachWorkspaceSnapshot.fixture(status: .ready)
+
+        XCTAssertEqual(
+            CoachWorkspacePresentation.controls(for: workspace),
+            [.addToPlan, .adjust, .skip, .evidence, .talk]
+        )
+    }
+
+    func testPlannedWorkspaceExposesAdjustCompleteAndSkipControls() {
+        let workspace = CoachWorkspaceSnapshot.fixture(status: .planned)
+
+        XCTAssertEqual(
+            CoachWorkspacePresentation.controls(for: workspace),
+            [.adjust, .complete, .skip, .evidence, .talk]
+        )
+    }
+
+    func testTerminalWorkspaceKeepsOnlyEvidenceAndTalkControls() {
+        XCTAssertEqual(
+            CoachWorkspacePresentation.controls(for: .fixture(status: .skipped)),
+            [.evidence, .talk]
+        )
+        XCTAssertEqual(
+            CoachWorkspacePresentation.controls(for: .fixture(status: .completed)),
+            [.evidence, .talk]
+        )
+    }
+
+    func testCalibrationWorkspaceKeepsRefreshEvidenceAndTalkControls() {
+        let workspace = CoachWorkspaceSnapshot.fixture(status: .calibration)
+
+        XCTAssertEqual(
+            CoachWorkspacePresentation.controls(for: workspace),
+            [.refresh, .evidence, .talk]
+        )
     }
 
     func testEvidenceUsesMetricUnitsAndAnObservedTimestamp() {

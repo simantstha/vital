@@ -32,6 +32,16 @@ enum CoachWorkspaceAdjustment: Equatable, Identifiable {
     }
 }
 
+enum CoachWorkspaceControl: Equatable {
+    case addToPlan
+    case adjust
+    case skip
+    case complete
+    case refresh
+    case evidence
+    case talk
+}
+
 enum CoachWorkspacePresentation {
     static func allowsPlanControls(for workspace: CoachWorkspaceSnapshot) -> Bool {
         workspace.state.status == .ready
@@ -43,6 +53,22 @@ enum CoachWorkspacePresentation {
         workspace.state.status == .calibration
             || !workspace.recommendation.evidence.fresh
             || workspace.recommendation.evidence.constraintGate
+    }
+
+    static func controls(for workspace: CoachWorkspaceSnapshot) -> [CoachWorkspaceControl] {
+        if isCalibrationGuidance(for: workspace) {
+            return [.refresh, .evidence, .talk]
+        }
+        switch workspace.state.status {
+        case .ready:
+            return [.addToPlan, .adjust, .skip, .evidence, .talk]
+        case .planned:
+            return [.adjust, .complete, .skip, .evidence, .talk]
+        case .skipped, .completed:
+            return [.evidence, .talk]
+        case .calibration:
+            return [.refresh, .evidence, .talk]
+        }
     }
 
     static func calibrationGuidance(for workspace: CoachWorkspaceSnapshot) -> String {
@@ -118,7 +144,7 @@ struct CoachWorkspaceView: View {
     }
 
     private var isCalibration: Bool { CoachWorkspacePresentation.isCalibrationGuidance(for: workspace) }
-    private var allowsPlanControls: Bool { CoachWorkspacePresentation.allowsPlanControls(for: workspace) }
+    private var controls: [CoachWorkspaceControl] { CoachWorkspacePresentation.controls(for: workspace) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
@@ -169,7 +195,7 @@ struct CoachWorkspaceView: View {
                 stateLabel("Skipped for today", icon: "forward.fill")
             } else if workspace.state.status == .completed {
                 stateLabel("Completed", icon: "checkmark.circle.fill")
-            } else if allowsPlanControls {
+            } else if controls.contains(.addToPlan) {
                 Button {
                     onAction(.accept, nil)
                 } label: {
@@ -280,22 +306,52 @@ struct CoachWorkspaceView: View {
 
     @ViewBuilder
     private var secondaryActions: some View {
-        let controls = Group {
-            if allowsPlanControls {
-                Button("Adjust") { activeSheet = .adjust }
-                    .buttonStyle(CoachWorkspaceSecondaryButtonStyle())
-                    .disabled(isPerformingAction || CoachWorkspacePresentation.adjustmentOptions(for: recommendation).isEmpty)
+        if dynamicTypeSize.isAccessibilitySize {
+            VStack(spacing: Theme.Spacing.sm) {
+                transitionControls
+                referenceControls
             }
+        } else {
+            VStack(spacing: Theme.Spacing.sm) {
+                HStack(spacing: Theme.Spacing.sm) { transitionControls }
+                HStack(spacing: Theme.Spacing.sm) { referenceControls }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var transitionControls: some View {
+        if controls.contains(.adjust) {
+            Button("Adjust") { activeSheet = .adjust }
+                .buttonStyle(CoachWorkspaceSecondaryButtonStyle())
+                .disabled(isPerformingAction || CoachWorkspacePresentation.adjustmentOptions(for: recommendation).isEmpty)
+                .accessibilityHint("Choose a safe adjustment for this recommendation")
+        }
+        if controls.contains(.complete) {
+            Button("Mark complete") { onAction(.complete, nil) }
+                .buttonStyle(CoachWorkspaceSecondaryButtonStyle())
+                .disabled(isPerformingAction)
+                .accessibilityHint("Marks this recommendation complete")
+        }
+        if controls.contains(.skip) {
+            Button("Skip") { onAction(.skip, nil) }
+                .buttonStyle(CoachWorkspaceSecondaryButtonStyle())
+                .disabled(isPerformingAction)
+                .accessibilityHint("Skips this recommendation for today")
+        }
+    }
+
+    @ViewBuilder
+    private var referenceControls: some View {
+        if controls.contains(.evidence) {
             Button("See evidence") { activeSheet = .evidence }
                 .buttonStyle(CoachWorkspaceSecondaryButtonStyle())
+        }
+        if controls.contains(.talk) {
             Button("Talk it through") { onAction(.openChat, nil) }
                 .buttonStyle(CoachWorkspaceSecondaryButtonStyle())
                 .disabled(isPerformingAction)
-        }
-        if dynamicTypeSize.isAccessibilitySize {
-            VStack(spacing: Theme.Spacing.sm) { controls }
-        } else {
-            HStack(spacing: Theme.Spacing.sm) { controls }
+                .accessibilityHint("Opens this recommendation in coach chat")
         }
     }
 }

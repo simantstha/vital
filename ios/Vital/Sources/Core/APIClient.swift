@@ -383,6 +383,7 @@ struct APIClient {
     @discardableResult
     func performCoachWorkspaceAction(
         recommendationId: String,
+        materialSignature: String,
         actionId: String,
         action: CoachWorkspaceActionKind,
         adjustment: CoachWorkspaceAdjustmentRequest? = nil
@@ -394,12 +395,13 @@ struct APIClient {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 15
-        request.httpBody = try encoder.encode(CoachWorkspaceActionRequest(
+        request.httpBody = try Self.encodeCoachWorkspaceActionRequest(
             recommendationId: recommendationId,
+            materialSignature: materialSignature,
             actionId: actionId,
             action: action,
             adjustment: adjustment
-        ))
+        )
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
         return try Self.decodeCoachWorkspaceAction(statusCode: http.statusCode, data: data)
@@ -589,6 +591,22 @@ struct APIClient {
 
     static func decodeCoachWorkspaceAction(_ data: Data) throws -> CoachWorkspaceInteraction {
         try JSONDecoder().decode(CoachWorkspaceActionResponse.self, from: data).interaction
+    }
+
+    static func encodeCoachWorkspaceActionRequest(
+        recommendationId: String,
+        materialSignature: String,
+        actionId: String,
+        action: CoachWorkspaceActionKind,
+        adjustment: CoachWorkspaceAdjustmentRequest?
+    ) throws -> Data {
+        try JSONEncoder().encode(CoachWorkspaceActionRequest(
+            recommendationId: recommendationId,
+            materialSignature: materialSignature,
+            actionId: actionId,
+            action: action,
+            adjustment: adjustment
+        ))
     }
 
     static func decodeCoachWorkspaceAction(
@@ -1730,6 +1748,7 @@ private struct CoachWorkspaceDisabledResponse: Decodable {
 
 private struct CoachWorkspaceActionRequest: Encodable {
     let recommendationId: String
+    let materialSignature: String
     let actionId: String
     let action: CoachWorkspaceActionKind
     let adjustment: CoachWorkspaceAdjustmentRequest?
@@ -1919,6 +1938,7 @@ protocol CoachAPIProviding {
     func fetchCoachWorkspace() async throws -> CoachWorkspaceAvailability
     func performCoachWorkspaceAction(
         recommendationId: String,
+        materialSignature: String,
         actionId: String,
         action: CoachWorkspaceActionKind,
         adjustment: CoachWorkspaceAdjustmentRequest?
@@ -1932,6 +1952,7 @@ extension CoachAPIProviding {
 
     func performCoachWorkspaceAction(
         recommendationId: String,
+        materialSignature: String,
         actionId: String,
         action: CoachWorkspaceActionKind,
         adjustment: CoachWorkspaceAdjustmentRequest?

@@ -356,11 +356,7 @@ final class CoachViewModel: ObservableObject {
         guard let workspaceSnapshot, !isPerformingWorkspaceAction else { return }
         if action == .accept, workspaceSnapshot.state.status == .planned { return }
 
-        let actionId = Self.workspaceActionId(
-            recommendationId: workspaceSnapshot.recommendation.id,
-            action: action,
-            adjustment: adjustment
-        )
+        let actionId = UUID().uuidString
         isPerformingWorkspaceAction = true
         workspaceActionErrorMessage = nil
         lastWorkspaceAction = (action, adjustment)
@@ -377,6 +373,7 @@ final class CoachViewModel: ObservableObject {
             do {
                 let interaction = try await api.performCoachWorkspaceAction(
                     recommendationId: workspaceSnapshot.recommendation.id,
+                    materialSignature: workspaceSnapshot.recommendation.materialSignature,
                     actionId: actionId,
                     action: action,
                     adjustment: adjustment
@@ -436,19 +433,6 @@ final class CoachViewModel: ObservableObject {
         workspaceActionMessage = nil
         workspaceActionErrorMessage = nil
         lastWorkspaceAction = nil
-    }
-
-    static func workspaceActionId(
-        recommendationId: String,
-        action: CoachWorkspaceActionKind,
-        adjustment: CoachWorkspaceAdjustmentRequest?
-    ) -> String {
-        let adjustmentKey = [
-            adjustment?.timeMinutes.map(String.init),
-            adjustment?.durationMinutes.map(String.init),
-            adjustment?.intensity,
-        ].compactMap { $0 }.joined(separator: ":")
-        return "ios-workspace:\(recommendationId):\(action.rawValue):\(adjustmentKey.isEmpty ? "default" : adjustmentKey)"
     }
 
     private static func applying(_ adjustment: CoachWorkspaceAdjustmentRequest?, to current: CoachWorkspaceAction) -> CoachWorkspaceAction {
