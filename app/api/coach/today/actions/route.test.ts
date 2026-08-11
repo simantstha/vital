@@ -1,13 +1,18 @@
 import assert from 'node:assert/strict';
 import test, { mock } from 'node:test';
 import * as realSchema from '@/db/schema';
+import type { ApplyCoachActionInput } from '@/lib/coachWorkspaceRepository';
 
-let appliedActionInput: Record<string, unknown> | undefined;
+let appliedActionInput: ApplyCoachActionInput | undefined;
 let created = true;
+
+function lastAppliedAction(): ApplyCoachActionInput | undefined {
+  return appliedActionInput;
+}
 
 mock.module('@/db', { namedExports: { db: {}, schema: realSchema } });
 mock.module('@/lib/coachWorkspaceRepository', { namedExports: {
-  applyCoachAction: async (input: Record<string, unknown>) => {
+  applyCoachAction: async (input: ApplyCoachActionInput) => {
     appliedActionInput = input;
     return {
       created,
@@ -72,8 +77,8 @@ test('POST accepts only the Coach Workspace action vocabulary and delegates acce
   }));
 
   assert.equal(accepted.status, 201);
-  assert.equal(appliedActionInput?.action, 'accept');
-  assert.equal(appliedActionInput?.planItemId, undefined);
+  assert.equal(lastAppliedAction()?.action, 'accept');
+  assert.equal(Object.hasOwn(lastAppliedAction() ?? {}, 'planItemId'), false);
 
   const unsupported = await POST(new Request('http://local/api/coach/today/actions', {
     method: 'POST', headers: { 'x-user-id': 'user-1' },
@@ -95,7 +100,9 @@ test('POST sends a bounded adjustment to the atomic repository operation', async
   }));
 
   assert.equal(response.status, 201);
-  assert.deepEqual(appliedActionInput?.adjustment, { timeMinutes: 1080, durationMinutes: 45, intensity: 'moderate' });
+  assert.deepEqual(lastAppliedAction()?.adjustment, {
+    timeMinutes: 1080, durationMinutes: 45, intensity: 'moderate',
+  });
 });
 
 test('POST rejects an empty adjustment instead of creating a no-op interaction', async () => {

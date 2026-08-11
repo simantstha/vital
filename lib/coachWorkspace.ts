@@ -42,7 +42,8 @@ export interface CoachWorkspaceAction {
 export interface ActionAdjustment {
   timeMinutes?: number;
   durationMinutes?: number;
-  intensity?: 'easy' | 'moderate';
+  // Client JSON is untrusted; applyActionAdjustment narrows this by action type.
+  intensity?: string;
 }
 
 const FRESHNESS_MS = 36 * 60 * 60 * 1_000;

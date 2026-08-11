@@ -10,6 +10,7 @@ import {
   type DailyRecommendationInput,
 } from '@/lib/coachWorkspace';
 import { getCalibration } from '@/lib/brain/baselines';
+import { applySkipPlanMutation } from '@/lib/coachWorkspaceSkip';
 
 const METRICS = ['hrv_sdnn', 'resting_hr', 'sleep_minutes'] as const;
 
@@ -175,7 +176,43 @@ export async function applyCoachAction(input: ApplyCoachActionInput): Promise<{
       return { created: false, interaction: existing };
     }
 
-    if (input.action === 'skip' || input.action === 'open_chat') {
+    if (input.action === 'skip') {
+      const interaction = await applySkipPlanMutation({
+        latestLinkedPlanId: async ({ userId, recommendationId }) => {
+          const [link] = await tx.select({ planItemId: schema.coach_recommendation_interactions.plan_item_id })
+            .from(schema.coach_recommendation_interactions)
+            .where(and(
+              eq(schema.coach_recommendation_interactions.recommendation_id, recommendationId),
+              eq(schema.coach_recommendation_interactions.user_id, userId),
+              isNotNull(schema.coach_recommendation_interactions.plan_item_id),
+            )).orderBy(desc(schema.coach_recommendation_interactions.created_at)).limit(1);
+          return link?.planItemId ?? null;
+        },
+        markPlanSkipped: async ({ userId, localDay, planItemId }) => {
+          const [updated] = await tx.update(schema.plan_items).set({ status: 'skipped', updated_at: new Date() })
+            .where(and(
+              eq(schema.plan_items.id, planItemId),
+              eq(schema.plan_items.user_id, userId),
+              eq(schema.plan_items.local_day, localDay),
+            )).returning({ id: schema.plan_items.id });
+          return updated != null;
+        },
+        linkInteraction: async ({ interactionId, planItemId }) => {
+          const [linked] = await tx.update(schema.coach_recommendation_interactions).set({ plan_item_id: planItemId })
+            .where(eq(schema.coach_recommendation_interactions.id, interactionId)).returning();
+          if (!linked) throw new Error('Unable to link skipped plan item.');
+          return linked;
+        },
+      }, {
+        userId: input.userId,
+        recommendationId: recommendation.id,
+        localDay: recommendation.local_day,
+        interaction: inserted,
+      });
+      return { created: true, interaction };
+    }
+
+    if (input.action === 'open_chat') {
       return { created: true, interaction: inserted };
     }
 
