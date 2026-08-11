@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNotNull } from 'drizzle-orm';
+import { and, desc, eq, inArray } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import {
   createDailyRecommendation,
@@ -11,13 +11,19 @@ import {
 } from '@/lib/coachWorkspace';
 import { getCalibration } from '@/lib/brain/baselines';
 import { applySkipPlanMutation } from '@/lib/coachWorkspaceSkip';
-import { resolveReplayBeforeEligibility } from '@/lib/coachWorkspaceActionReplay';
+import {
+  assertCurrentMaterialSignature,
+  assertReplayMatchesSubmission,
+  resolveReplayBeforeEligibility,
+  withLockedRecommendationMutation,
+} from '@/lib/coachWorkspaceActionReplay';
 import { hydrationInteractionPredicate } from '@/lib/coachWorkspaceQueries';
 import {
   adjustmentWithMaterialSignature,
   assertActionAllowedForRecommendation,
   deriveCoachWorkspaceState,
   materialSignatureFromAdjustment,
+  latestCurrentOccurrencePlanId,
   shouldMutatePlanForAction,
   type CoachWorkspaceState,
   type HydrationAction,
@@ -86,6 +92,7 @@ export async function loadDailyRecommendationInput(
 }
 
 export type PersistedRecommendation = typeof schema.daily_coach_recommendations.$inferSelect;
+type CoachWorkspaceTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 export async function persistDailyRecommendation(
   userId: string,
@@ -191,6 +198,7 @@ export interface ApplyCoachActionInput {
   recommendationId: string;
   actionId: string;
   action: CoachWorkspaceInteractionAction;
+  materialSignature: string;
   adjustment?: ActionAdjustment;
 }
 
@@ -227,8 +235,18 @@ export async function applyCoachAction(input: ApplyCoachActionInput): Promise<{
   created: boolean;
   interaction: typeof schema.coach_recommendation_interactions.$inferSelect;
 }> {
-  return db.transaction(async tx => {
+  return withLockedRecommendationMutation({
+    transaction: operation => db.transaction(operation),
+    lockRecommendation: async (tx: CoachWorkspaceTransaction) => {
+      const [recommendation] = await tx.select().from(schema.daily_coach_recommendations).where(and(
+        eq(schema.daily_coach_recommendations.id, input.recommendationId),
+        eq(schema.daily_coach_recommendations.user_id, input.userId),
+      )).limit(1).for('update');
+      return recommendation ?? null;
+    },
+  }, async (tx: CoachWorkspaceTransaction, lockedRecommendation) => {
     const resolved = await resolveReplayBeforeEligibility({
+      lockRecommendation: async () => lockedRecommendation,
       findReplay: async () => {
         const [existing] = await tx.select().from(schema.coach_recommendation_interactions).where(and(
           eq(schema.coach_recommendation_interactions.user_id, input.userId),
@@ -236,14 +254,13 @@ export async function applyCoachAction(input: ApplyCoachActionInput): Promise<{
         )).limit(1);
         return existing ?? null;
       },
-      loadRecommendation: async () => {
-        const [recommendation] = await tx.select().from(schema.daily_coach_recommendations).where(and(
-          eq(schema.daily_coach_recommendations.id, input.recommendationId),
-          eq(schema.daily_coach_recommendations.user_id, input.userId),
-        )).limit(1);
-        return recommendation ?? null;
-      },
+      assertReplay: existing => assertReplayMatchesSubmission({
+        recommendationId: existing.recommendation_id,
+        action: existing.action,
+        adjustment: existing.adjustment,
+      }, input),
       assertEligible: recommendation => {
+        assertCurrentMaterialSignature(recommendation.material_signature, input.materialSignature);
         assertActionAllowedForRecommendation(recommendation.category, input.action);
       },
     });
@@ -255,7 +272,7 @@ export async function applyCoachAction(input: ApplyCoachActionInput): Promise<{
       recommendation_id: recommendation.id,
       action_id: input.actionId,
       action: input.action,
-      adjustment: adjustmentWithMaterialSignature(input.adjustment, recommendation.material_signature),
+      adjustment: adjustmentWithMaterialSignature(input.adjustment, input.materialSignature),
       plan_item_id: null,
     }).onConflictDoNothing().returning();
 
@@ -265,6 +282,11 @@ export async function applyCoachAction(input: ApplyCoachActionInput): Promise<{
         eq(schema.coach_recommendation_interactions.action_id, input.actionId),
       )).limit(1);
       if (!existing) throw new Error('Unable to reload idempotent action.');
+      assertReplayMatchesSubmission({
+        recommendationId: existing.recommendation_id,
+        action: existing.action,
+        adjustment: existing.adjustment,
+      }, input);
       return { created: false, interaction: existing };
     }
 
@@ -275,14 +297,16 @@ export async function applyCoachAction(input: ApplyCoachActionInput): Promise<{
     if (input.action === 'skip') {
       const interaction = await applySkipPlanMutation({
         latestLinkedPlanId: async ({ userId, recommendationId }) => {
-          const [link] = await tx.select({ planItemId: schema.coach_recommendation_interactions.plan_item_id })
+          const links = await tx.select({
+            adjustment: schema.coach_recommendation_interactions.adjustment,
+            planItemId: schema.coach_recommendation_interactions.plan_item_id,
+          })
             .from(schema.coach_recommendation_interactions)
             .where(and(
               eq(schema.coach_recommendation_interactions.recommendation_id, recommendationId),
               eq(schema.coach_recommendation_interactions.user_id, userId),
-              isNotNull(schema.coach_recommendation_interactions.plan_item_id),
-            )).orderBy(desc(schema.coach_recommendation_interactions.created_at)).limit(1);
-          return link?.planItemId ?? null;
+            )).orderBy(desc(schema.coach_recommendation_interactions.created_at)).limit(50);
+          return latestCurrentOccurrencePlanId(links, input.materialSignature);
         },
         markPlanSkipped: async ({ userId, localDay, planItemId }) => {
           const [updated] = await tx.update(schema.plan_items).set({ status: 'skipped', updated_at: new Date() })
@@ -313,15 +337,17 @@ export async function applyCoachAction(input: ApplyCoachActionInput): Promise<{
       ? applyActionAdjustment(baseAction, input.adjustment ?? {})
       : baseAction;
 
-    const [existingPlanLink] = await tx.select({ planItemId: schema.coach_recommendation_interactions.plan_item_id })
+    const existingPlanLinks = await tx.select({
+      adjustment: schema.coach_recommendation_interactions.adjustment,
+      planItemId: schema.coach_recommendation_interactions.plan_item_id,
+    })
       .from(schema.coach_recommendation_interactions)
       .where(and(
         eq(schema.coach_recommendation_interactions.recommendation_id, recommendation.id),
         eq(schema.coach_recommendation_interactions.user_id, input.userId),
-        isNotNull(schema.coach_recommendation_interactions.plan_item_id),
-      )).orderBy(desc(schema.coach_recommendation_interactions.created_at)).limit(1);
+      )).orderBy(desc(schema.coach_recommendation_interactions.created_at)).limit(50);
 
-    let planItemId = existingPlanLink?.planItemId ?? null;
+    let planItemId = latestCurrentOccurrencePlanId(existingPlanLinks, input.materialSignature);
     if (input.action === 'complete') {
       if (!planItemId) throw new Error('No plan item is linked to this recommendation.');
       const [completed] = await tx.update(schema.plan_items).set({ status: 'done', updated_at: new Date() }).where(and(

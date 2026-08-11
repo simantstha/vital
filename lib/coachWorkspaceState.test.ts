@@ -4,6 +4,7 @@ import {
   adjustmentWithMaterialSignature,
   assertActionAllowedForRecommendation,
   deriveCoachWorkspaceState,
+  latestCurrentOccurrencePlanId,
   materialSignatureFromAdjustment,
   shouldMutatePlanForAction,
   type HydrationInteraction,
@@ -124,6 +125,49 @@ test('interaction from an older material signature does not hydrate against curr
   });
 
   assert.deepEqual(state, { status: 'ready', planItemId: null, effectiveAction: baseAction });
+});
+
+test('A to B to A material transitions hydrate only the newest A occurrence', () => {
+  const state = deriveCoachWorkspaceState({
+    category: 'training', action: baseAction, materialSignature: 'signature-a',
+    userId: 'user-1', localDay: '2026-08-11',
+    interactions: [
+      interaction({ action: 'accept', planItemId: 'plan-a2', materialSignature: 'signature-a', createdAt: new Date('2026-08-11T17:00:00Z') }),
+      interaction({ action: 'accept', planItemId: 'plan-b', materialSignature: 'signature-b', createdAt: new Date('2026-08-11T16:00:00Z') }),
+      interaction({ action: 'accept', planItemId: 'plan-a1', materialSignature: 'signature-a' }),
+    ],
+    planItem: { id: 'plan-a2', userId: 'user-1', localDay: '2026-08-11', status: 'pending', kind: 'move' },
+  });
+
+  assert.equal(state.status, 'planned');
+  assert.equal(state.planItemId, 'plan-a2');
+});
+
+test('A to B to A is ready before the returning A occurrence is accepted', () => {
+  const state = deriveCoachWorkspaceState({
+    category: 'training', action: baseAction, materialSignature: 'signature-a',
+    userId: 'user-1', localDay: '2026-08-11',
+    interactions: [
+      interaction({ action: 'accept', planItemId: 'plan-b', materialSignature: 'signature-b', createdAt: new Date('2026-08-11T16:00:00Z') }),
+      interaction({ action: 'accept', planItemId: 'plan-a1', materialSignature: 'signature-a' }),
+    ],
+    planItem: { id: 'plan-a1', userId: 'user-1', localDay: '2026-08-11', status: 'pending', kind: 'move' },
+  });
+
+  assert.deepEqual(state, { status: 'ready', planItemId: null, effectiveAction: baseAction });
+});
+
+test('plan mutation never reuses a link from a prior material occurrence', () => {
+  assert.equal(latestCurrentOccurrencePlanId([
+    { adjustment: { __materialSignature: 'signature-b' }, planItemId: 'plan-b' },
+    { adjustment: { __materialSignature: 'signature-a' }, planItemId: 'plan-a1' },
+  ], 'signature-a'), null);
+
+  assert.equal(latestCurrentOccurrencePlanId([
+    { adjustment: { __materialSignature: 'signature-a' }, planItemId: 'plan-a2' },
+    { adjustment: { __materialSignature: 'signature-b' }, planItemId: 'plan-b' },
+    { adjustment: { __materialSignature: 'signature-a' }, planItemId: 'plan-a1' },
+  ], 'signature-a'), 'plan-a2');
 });
 
 test('calibration rejects plan-mutating actions but permits skip and open_chat', () => {

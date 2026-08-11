@@ -80,7 +80,7 @@ test('POST /api/coach/today/actions returns an idempotent replay unchanged', asy
   const request = () => new Request('http://local/api/coach/today/actions', {
     method: 'POST', headers: { 'x-user-id': 'user-1' },
     body: JSON.stringify({
-      actionId: 'tap-1', recommendationId: 'recommendation-1', action: 'complete',
+      actionId: 'tap-1', recommendationId: 'recommendation-1', action: 'complete', materialSignature: 'signature-a',
     }),
   });
 
@@ -100,16 +100,17 @@ test('POST accepts only the Coach Workspace action vocabulary and delegates acce
   const { POST } = await routePromise;
   const accepted = await POST(new Request('http://local/api/coach/today/actions', {
     method: 'POST', headers: { 'x-user-id': 'user-1' },
-    body: JSON.stringify({ actionId: 'accept-1', recommendationId: 'recommendation-1', action: 'accept' }),
+    body: JSON.stringify({ actionId: 'accept-1', recommendationId: 'recommendation-1', action: 'accept', materialSignature: 'signature-a' }),
   }));
 
   assert.equal(accepted.status, 201);
   assert.equal(lastAppliedAction()?.action, 'accept');
+  assert.equal(lastAppliedAction()?.materialSignature, 'signature-a');
   assert.equal(Object.hasOwn(lastAppliedAction() ?? {}, 'planItemId'), false);
 
   const unsupported = await POST(new Request('http://local/api/coach/today/actions', {
     method: 'POST', headers: { 'x-user-id': 'user-1' },
-    body: JSON.stringify({ actionId: 'dismiss-1', recommendationId: 'recommendation-1', action: 'dismiss' }),
+    body: JSON.stringify({ actionId: 'dismiss-1', recommendationId: 'recommendation-1', action: 'dismiss', materialSignature: 'signature-a' }),
   }));
   assert.equal(unsupported.status, 400);
 });
@@ -123,6 +124,7 @@ test('POST sends a bounded adjustment to the atomic repository operation', async
     method: 'POST', headers: { 'x-user-id': 'user-1' },
     body: JSON.stringify({
       actionId: 'adjust-1', recommendationId: 'recommendation-1', action: 'adjust',
+      materialSignature: 'signature-a',
       adjustment: { timeMinutes: 1080, durationMinutes: 45, intensity: 'moderate' },
     }),
   }));
@@ -137,7 +139,7 @@ test('POST rejects an empty adjustment instead of creating a no-op interaction',
   const { POST } = await routePromise;
   const response = await POST(new Request('http://local/api/coach/today/actions', {
     method: 'POST', headers: { 'x-user-id': 'user-1' },
-    body: JSON.stringify({ actionId: 'adjust-empty', recommendationId: 'recommendation-1', action: 'adjust', adjustment: {} }),
+    body: JSON.stringify({ actionId: 'adjust-empty', recommendationId: 'recommendation-1', action: 'adjust', materialSignature: 'signature-a', adjustment: {} }),
   }));
 
   assert.equal(response.status, 400);
@@ -147,7 +149,7 @@ test('POST rejects null-only adjustment fields', async () => {
   const { POST } = await routePromise;
   const response = await POST(new Request('http://local/api/coach/today/actions', {
     method: 'POST', headers: { 'x-user-id': 'user-1' },
-    body: JSON.stringify({ actionId: 'adjust-null', recommendationId: 'recommendation-1', action: 'adjust', adjustment: { timeMinutes: null } }),
+    body: JSON.stringify({ actionId: 'adjust-null', recommendationId: 'recommendation-1', action: 'adjust', materialSignature: 'signature-a', adjustment: { timeMinutes: null } }),
   }));
 
   assert.equal(response.status, 400);
@@ -158,9 +160,38 @@ test('POST surfaces repository calibration rejection as a client error', async (
   const { POST } = await routePromise;
   const response = await POST(new Request('http://local/api/coach/today/actions', {
     method: 'POST', headers: { 'x-user-id': 'user-1' },
-    body: JSON.stringify({ actionId: 'accept-calibration', recommendationId: 'calibration-1', action: 'accept' }),
+    body: JSON.stringify({ actionId: 'accept-calibration', recommendationId: 'calibration-1', action: 'accept', materialSignature: 'signature-a' }),
   }));
   applyError = undefined;
 
   assert.equal(response.status, 400);
+});
+
+test('POST requires the card material signature', async () => {
+  const { POST } = await routePromise;
+  const response = await POST(new Request('http://local/api/coach/today/actions', {
+    method: 'POST', headers: { 'x-user-id': 'user-1' },
+    body: JSON.stringify({ actionId: 'accept-no-signature', recommendationId: 'recommendation-1', action: 'accept' }),
+  }));
+
+  assert.equal(response.status, 400);
+  assert.deepEqual(await response.json(), { error: 'materialSignature is required.' });
+});
+
+test('POST maps stale cards and reused action IDs to conflict', async () => {
+  const { POST } = await routePromise;
+  for (const error of [
+    new Error('Stale Coach Workspace card.'),
+    new Error('actionId was already used with a different payload.'),
+  ]) {
+    applyError = error;
+    const response = await POST(new Request('http://local/api/coach/today/actions', {
+      method: 'POST', headers: { 'x-user-id': 'user-1' },
+      body: JSON.stringify({
+        actionId: 'conflict-1', recommendationId: 'recommendation-1', action: 'accept', materialSignature: 'signature-stale',
+      }),
+    }));
+    assert.equal(response.status, 409);
+  }
+  applyError = undefined;
 });

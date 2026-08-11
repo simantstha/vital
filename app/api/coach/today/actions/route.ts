@@ -55,12 +55,15 @@ export async function POST(request: Request): Promise<NextResponse> {
     return NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 });
   }
 
-  const { actionId, recommendationId, action } = body;
+  const { actionId, recommendationId, action, materialSignature } = body;
   if (typeof actionId !== 'string' || actionId.trim() === '') {
     return NextResponse.json({ error: 'actionId is required.' }, { status: 400 });
   }
   if (typeof recommendationId !== 'string' || recommendationId.trim() === '') {
     return NextResponse.json({ error: 'recommendationId is required.' }, { status: 400 });
+  }
+  if (typeof materialSignature !== 'string' || materialSignature.trim() === '') {
+    return NextResponse.json({ error: 'materialSignature is required.' }, { status: 400 });
   }
   if (typeof action !== 'string' || !VALID_ACTIONS.has(action as CoachWorkspaceInteractionAction)) {
     return NextResponse.json({ error: 'action must be accept, adjust, skip, complete, or open_chat.' }, { status: 400 });
@@ -85,12 +88,19 @@ export async function POST(request: Request): Promise<NextResponse> {
       recommendationId,
       actionId,
       action: action as CoachWorkspaceInteractionAction,
+      materialSignature,
       adjustment: adjustment ?? undefined,
     });
     return NextResponse.json({ interaction: serialize(result.interaction) }, { status: result.created ? 201 : 200 });
   } catch (err) {
     const message = String(err);
-    const status = /not found/i.test(message) ? 404 : /invalid|must be|not allowed|required/i.test(message) ? 400 : 409;
+    const status = /not found/i.test(message)
+      ? 404
+      : /stale|already used|conflict/i.test(message)
+        ? 409
+        : /invalid|must be|not allowed|required/i.test(message)
+          ? 400
+          : 409;
     return NextResponse.json({ error: `Coach Workspace action error: ${message}` }, { status });
   }
 }

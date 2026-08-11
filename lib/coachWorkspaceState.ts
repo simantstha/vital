@@ -42,6 +42,33 @@ export function materialSignatureFromAdjustment(value: unknown): string | null {
   return typeof signature === 'string' && signature.length > 0 ? signature : null;
 }
 
+export function latestCurrentOccurrencePlanId(
+  rows: Array<{ adjustment: unknown; planItemId: string | null }>,
+  materialSignature: string,
+): string | null {
+  for (const row of rows) {
+    const signature = materialSignatureFromAdjustment(row.adjustment);
+    if (signature !== materialSignature) return null;
+    if (row.planItemId) return row.planItemId;
+  }
+  return null;
+}
+
+function currentOccurrenceInteractions(
+  interactions: HydrationInteraction[],
+  materialSignature: string,
+): HydrationInteraction[] {
+  const hasPersistedContext = interactions.some(interaction => interaction.materialSignature != null);
+  if (!hasPersistedContext) return interactions;
+
+  const current: HydrationInteraction[] = [];
+  for (const interaction of interactions) {
+    if (interaction.materialSignature !== materialSignature) break;
+    current.push(interaction);
+  }
+  return current;
+}
+
 function parseAction(value: unknown): CoachWorkspaceAction {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Recommendation action is invalid.');
   const action = value as Record<string, unknown>;
@@ -93,9 +120,7 @@ export function deriveCoachWorkspaceState(input: {
     return { status: 'calibration', planItemId: null, effectiveAction: baseAction };
   }
 
-  const compatibleInteractions = input.interactions.filter(interaction =>
-    interaction.materialSignature == null || interaction.materialSignature === input.materialSignature,
-  );
+  const compatibleInteractions = currentOccurrenceInteractions(input.interactions, input.materialSignature);
   const stateful = compatibleInteractions.find(interaction => interaction.action !== 'open_chat');
   if (!stateful) return { status: 'ready', planItemId: null, effectiveAction: baseAction };
 
