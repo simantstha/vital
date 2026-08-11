@@ -471,7 +471,7 @@ export const plan_items = p.pgTable('plan_items', {
 
 export const daily_coach_recommendations = p.pgTable('daily_coach_recommendations', {
   id:                 p.uuid('id').primaryKey().defaultRandom(),
-  user_id:            p.uuid('user_id').notNull().references(() => users.id),
+  user_id:            p.uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   local_day:          p.text('local_day').notNull(),
   category:           p.text('category').notNull(), // training | recovery | sleep | calibration
   action:             p.jsonb('action').notNull(),
@@ -490,14 +490,15 @@ export const daily_coach_recommendations = p.pgTable('daily_coach_recommendation
 // calibration or dismissal action has no timeline row to complete.
 export const coach_recommendation_interactions = p.pgTable('coach_recommendation_interactions', {
   id:                       p.uuid('id').primaryKey().defaultRandom(),
-  user_id:                  p.uuid('user_id').notNull().references(() => users.id),
-  recommendation_id:        p.uuid('recommendation_id').notNull().references(() => daily_coach_recommendations.id),
+  user_id:                  p.uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  recommendation_id:        p.uuid('recommendation_id').notNull().references(() => daily_coach_recommendations.id, { onDelete: 'cascade' }),
   action_id:                p.text('action_id').notNull(),
-  action:                   p.text('action').notNull(), // accept | dismiss | complete
-  plan_item_id:             p.uuid('plan_item_id').references(() => plan_items.id),
+  action:                   p.text('action').notNull(), // accept | adjust | skip | complete | open_chat
+  adjustment:               p.jsonb('adjustment'),
+  plan_item_id:             p.uuid('plan_item_id').references(() => plan_items.id, { onDelete: 'set null' }),
   created_at:               p.timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [
-  p.check('coach_recommendation_interactions_action_check', sql`${t.action} in ('accept', 'dismiss', 'complete')`),
+  p.check('coach_recommendation_interactions_action_check', sql`${t.action} in ('accept', 'adjust', 'skip', 'complete', 'open_chat')`),
   p.uniqueIndex('coach_recommendation_interactions_user_action_idx').on(t.user_id, t.action_id),
   p.index('coach_recommendation_interactions_recommendation_idx').on(t.recommendation_id),
 ]);
