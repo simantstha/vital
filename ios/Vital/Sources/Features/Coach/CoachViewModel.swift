@@ -337,6 +337,14 @@ final class CoachViewModel: ObservableObject {
         }
     }
 
+    /// Scene activation can cross a local-day boundary while the Coach tab is
+    /// still retained. Reload the server-owned workspace so its recommendation
+    /// and plan state replace the snapshot we showed before the app slept.
+    /// `loadWorkspace()` coalesces this with an initial or manual refresh.
+    func refreshWorkspaceForActiveScene() {
+        loadWorkspace()
+    }
+
     func performWorkspaceAction(
         _ action: CoachWorkspaceActionKind,
         adjustment: CoachWorkspaceAdjustmentRequest? = nil

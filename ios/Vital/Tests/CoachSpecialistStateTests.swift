@@ -515,6 +515,42 @@ final class CoachSpecialistStateTests: XCTestCase {
         XCTAssertEqual(viewModel.workspaceSnapshot?.effectiveAction.durationMinutes, 45)
     }
 
+    func testActiveSceneWorkspaceRefreshReplacesThePreviousDaySnapshot() async {
+        let api = FakeCoachAPI(restoration: CoachRestorationResponse(
+            messages: [], activePersona: .vital, pendingCard: nil
+        ))
+        api.workspace = workspaceFixture(status: .planned, durationMinutes: 30, planItemId: "plan-yesterday")
+        let viewModel = CoachViewModel(api: api)
+        viewModel.loadWorkspace()
+        await waitUntil { !viewModel.isLoadingWorkspace }
+
+        api.workspace = workspaceFixture(status: .calibration, durationMinutes: 45, planItemId: nil)
+        viewModel.refreshWorkspaceForActiveScene()
+        await waitUntil { !viewModel.isLoadingWorkspace }
+
+        XCTAssertEqual(viewModel.workspaceSnapshot?.state.status, .calibration)
+        XCTAssertNil(viewModel.workspaceSnapshot?.state.planItemId)
+        XCTAssertEqual(viewModel.workspaceSnapshot?.effectiveAction.durationMinutes, 45)
+    }
+
+    func testActiveSceneWorkspaceRefreshCoalescesWithAnInFlightLoad() async {
+        let api = FakeCoachAPI(restoration: CoachRestorationResponse(
+            messages: [], activePersona: .vital, pendingCard: nil
+        ))
+        api.holdWorkspaceLoad = true
+        let viewModel = CoachViewModel(api: api)
+
+        viewModel.refreshWorkspaceForActiveScene()
+        await waitUntil { api.workspaceRequestCount == 1 }
+        XCTAssertTrue(viewModel.isLoadingWorkspace)
+
+        viewModel.refreshWorkspaceForActiveScene()
+        XCTAssertEqual(api.workspaceRequestCount, 1)
+
+        api.finishHeldWorkspaceLoad()
+        await waitUntil { !viewModel.isLoadingWorkspace }
+    }
+
     func testWorkspaceLoadFailureKeepsTheLastHydratedState() async {
         let api = FakeCoachAPI(restoration: CoachRestorationResponse(
             messages: [], activePersona: .vital, pendingCard: nil
@@ -627,10 +663,13 @@ private final class FakeCoachAPI: CoachAPIProviding {
     var workspaceFailure: Error?
     var workspaceActionFailure: Error?
     var workspaceActionRequests: [WorkspaceActionRequest] = []
+    private(set) var workspaceRequestCount = 0
+    var holdWorkspaceLoad = false
     private(set) var restorationRequestCount = 0
     var holdActionStreamOpen = false
     private var heldActionContinuation: AsyncThrowingStream<CoachStreamEvent, Error>.Continuation?
     private var shouldFinishHeldAction = false
+    private var heldWorkspaceContinuation: CheckedContinuation<CoachWorkspaceSnapshot, Never>?
 
     init(restoration: CoachRestorationResponse) {
         self.restoration = restoration
@@ -654,8 +693,19 @@ private final class FakeCoachAPI: CoachAPIProviding {
     }
 
     func fetchCoachWorkspace() async throws -> CoachWorkspaceSnapshot {
+        workspaceRequestCount += 1
         if let workspaceFailure { throw workspaceFailure }
+        if holdWorkspaceLoad {
+            return await withCheckedContinuation { continuation in
+                heldWorkspaceContinuation = continuation
+            }
+        }
         return workspace
+    }
+
+    func finishHeldWorkspaceLoad() {
+        heldWorkspaceContinuation?.resume(returning: workspace)
+        heldWorkspaceContinuation = nil
     }
 
     func performCoachWorkspaceAction(

@@ -95,6 +95,7 @@ enum CoachWorkspacePresentation {
 
 struct CoachWorkspaceView: View {
     let workspace: CoachWorkspaceSnapshot
+    let isLoadingWorkspace: Bool
     let isPerformingAction: Bool
     let actionMessage: String?
     let actionError: String?
@@ -251,11 +252,20 @@ struct CoachWorkspaceView: View {
             Button {
                 onRefresh()
             } label: {
-                Label("Refresh signals", systemImage: "arrow.clockwise")
+                if isLoadingWorkspace {
+                    HStack(spacing: Theme.Spacing.sm) {
+                        ProgressView().controlSize(.small)
+                        Text("Refreshing signals…")
+                    }
                     .frame(maxWidth: .infinity, minHeight: 48)
+                } else {
+                    Label("Refresh signals", systemImage: "arrow.clockwise")
+                        .frame(maxWidth: .infinity, minHeight: 48)
+                }
             }
             .buttonStyle(CoachWorkspacePrimaryButtonStyle())
-            .disabled(isPerformingAction)
+            .disabled(isLoadingWorkspace || isPerformingAction)
+            .accessibilityLabel(isLoadingWorkspace ? "Refreshing signals" : "Refresh signals")
         }
     }
 
@@ -411,6 +421,7 @@ private struct CoachWorkspaceSecondaryButtonStyle: ButtonStyle {
 #Preview("Loaded coach workspace") {
     CoachWorkspaceView(
         workspace: .previewLoaded,
+        isLoadingWorkspace: false,
         isPerformingAction: false,
         actionMessage: nil,
         actionError: nil,
@@ -425,6 +436,7 @@ private struct CoachWorkspaceSecondaryButtonStyle: ButtonStyle {
 #Preview("Calibration coach workspace") {
     CoachWorkspaceView(
         workspace: .previewCalibration,
+        isLoadingWorkspace: false,
         isPerformingAction: false,
         actionMessage: nil,
         actionError: nil,

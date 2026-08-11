@@ -61,7 +61,10 @@ struct CoachView: View {
         // must not leave a stream task running against a gone view.
         .onDisappear { vm.cancelStreaming() }
         .onChange(of: scenePhase) { _, newPhase in
-            if newPhase == .active { vm.refreshIfStale() }
+            if newPhase == .active {
+                vm.refreshIfStale()
+                vm.refreshWorkspaceForActiveScene()
+            }
         }
         .onChange(of: vm.activePersona.id) { _, personaID in
             specialistGlowExpanded = false
@@ -227,6 +230,7 @@ struct CoachView: View {
         if let workspace = vm.workspaceSnapshot {
             CoachWorkspaceView(
                 workspace: workspace,
+                isLoadingWorkspace: vm.isLoadingWorkspace,
                 isPerformingAction: vm.isPerformingWorkspaceAction,
                 actionMessage: vm.workspaceActionMessage,
                 actionError: vm.workspaceActionErrorMessage ?? vm.workspaceErrorMessage,
