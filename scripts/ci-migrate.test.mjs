@@ -412,5 +412,5 @@ test('loads the exact committed 0016 legacy snapshot and every migration SQL has
   assert.equal(state.artifacts[16].tag, '0016_famous_sleepwalker');
   assert.match(state.artifacts[16].hash, /^[a-f0-9]{64}$/);
   assert.equal(state.expectedLegacySchema.tables.length, 21);
-  assert.equal(state.expectedHead.tag, '0019_flaky_rumiko_fujikawa');
+  assert.equal(state.expectedHead.tag, '0020_bent_radioactive_man');
 });

@@ -11,6 +11,8 @@
  *   propose_fact       — create a pending fact for explicit confirmation
  *   remember_fact      — legacy direct ontology write (not specialist-allowed)
  *   confirm_fact       — resolve a pending_fact to confirmed/rejected
+ *   resolve_fact       — retract a confirmed node (status → 'resolved'; never deletes;
+ *                        not specialist-allowed)
  *   log_meal           — nutrition lookup → meal_logged event
  *   get_metric_trend   — daily_metrics trend + mean/min/max + baseline direction
  *   get_sleep_summary  — nightly sleep minutes + stages + consistency
@@ -229,6 +231,39 @@ export const BRAIN_TOOLS: Tool[] = [
         },
       },
       required: ['factId', 'action'],
+    },
+  },
+  {
+    name: 'resolve_fact',
+    description:
+      'Retract a confirmed fact that no longer applies — e.g. an injury that healed, a ' +
+      'condition that resolved, a medication that was stopped, an allergy the user has ' +
+      'outgrown. This is the ONLY way to retract a fact; it marks the node resolved, it ' +
+      'never deletes it, and the change is reversible. Use whenever the user states a ' +
+      'previously recorded fact is no longer true. Do not create a new node for this — ' +
+      'always resolve the existing one.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        label: {
+          type: 'string',
+          description:
+            'Label of the existing fact to resolve, e.g. "Adductor injury". Matched ' +
+            'case-insensitively against the user\'s active ontology nodes. Provide this ' +
+            'or id.',
+        },
+        id: {
+          type: 'string',
+          description:
+            'Optional UUID of the node to resolve, if already known (e.g. from a prior ' +
+            'query_ontology call). Takes priority over label when both are given.',
+        },
+        evidence: {
+          type: 'string',
+          description: 'The exact user quote confirming the fact no longer applies.',
+        },
+      },
+      required: ['evidence'],
     },
   },
   {
@@ -518,6 +553,8 @@ export function toolCallLabel(name: string, input: Record<string, unknown>): str
       return 'Preparing that for your confirmation…';
     case 'confirm_fact':
       return 'Updating that…';
+    case 'resolve_fact':
+      return 'Updating your record…';
     case 'log_meal':
       return 'Logging your meal…';
     case 'get_metric_trend':
@@ -981,7 +1018,7 @@ export async function executeToolCall(
     let rows = await db
       .select()
       .from(schema.nodes)
-      .where(eq(schema.nodes.user_id, userId))
+      .where(and(eq(schema.nodes.user_id, userId), eq(schema.nodes.status, 'active')))
       .orderBy(desc(schema.nodes.weight));
 
     if (nodeType) rows = rows.filter(n => n.type === nodeType);
@@ -1063,7 +1100,7 @@ export async function executeToolCall(
       const allNodes = await db
         .select({ id: schema.nodes.id, label: schema.nodes.label })
         .from(schema.nodes)
-        .where(eq(schema.nodes.user_id, userId));
+        .where(and(eq(schema.nodes.user_id, userId), eq(schema.nodes.status, 'active')));
 
       const toNode = allNodes.find(
         n => n.label.toLowerCase() === linksTo.toLowerCase(),
@@ -1098,6 +1135,23 @@ export async function executeToolCall(
     return result.ok
       ? JSON.stringify(result)
       : `No pending_fact found with id ${factId}.`;
+  }
+
+  // ── resolve_fact ──────────────────────────────────────────────────────────
+  if (name === 'resolve_fact') {
+    const evidence = String(input.evidence ?? '').trim();
+    if (!evidence) return 'Error: evidence is required.';
+
+    const result = await resolveFact(
+      drizzleNodeResolutionStore,
+      {
+        id:    input.id != null ? String(input.id) : null,
+        label: input.label != null ? String(input.label) : null,
+        evidence,
+      },
+      userId,
+    );
+    return JSON.stringify(result);
   }
 
   // ── log_meal ──────────────────────────────────────────────────────────────
@@ -1337,5 +1391,105 @@ const drizzlePendingFactConfirmationStore: PendingFactConfirmationStore = {
       source: 'confirmed',
       weight: 0.9,
     }).onConflictDoNothing();
+  },
+};
+
+// ── resolve_fact ──────────────────────────────────────────────────────────────
+// Retraction is a status flip (active → resolved), never a delete — the row
+// (and its history) stays intact and the change is reversible. The store
+// abstraction mirrors PendingFactConfirmationStore above: lookup and mutation
+// are both scoped to (user_id, status='active') so a duplicate or racing call
+// on an already-resolved fact never throws and never double-applies.
+
+export interface NodeResolutionStore {
+  findActiveNode(request: {
+    userId: string;
+    id: string | null;
+    label: string | null;
+  }): Promise<{ id: string; label: string; type: string } | null>;
+  resolveNode(request: {
+    id: string;
+    userId: string;
+    resolvedAt: Date;
+  }): Promise<{ id: string; label: string; type: string } | null>;
+}
+
+export async function resolveFact(
+  store: NodeResolutionStore,
+  input: { id?: string | null; label?: string | null; evidence: string },
+  userId: string,
+  resolvedAt = new Date(),
+): Promise<
+  | { ok: true; resolved: true; nodeId: string; label: string; nodeType: string; evidence: string }
+  | { ok: false; resolved: false; reason: string }
+> {
+  const id = input.id?.trim() || null;
+  const label = input.label?.trim() || null;
+
+  if (!id && !label) {
+    return { ok: false, resolved: false, reason: 'A label or id is required to resolve a fact.' };
+  }
+
+  const noMatch = () => ({
+    ok: false as const,
+    resolved: false as const,
+    reason: id
+      ? `No matching active fact found for id "${id}".`
+      : `No matching active fact found for label "${label}".`,
+  });
+
+  const match = await store.findActiveNode({ userId, id, label });
+  if (!match) return noMatch();
+
+  // Re-scoped to (id, userId) inside resolveNode's own active-status filter,
+  // so a race between lookup and update also collapses to "no match" instead
+  // of a crash or a double-resolve.
+  const updated = await store.resolveNode({ id: match.id, userId, resolvedAt });
+  if (!updated) return noMatch();
+
+  return {
+    ok: true,
+    resolved: true,
+    nodeId: updated.id,
+    label: updated.label,
+    nodeType: updated.type,
+    evidence: input.evidence,
+  };
+}
+
+const drizzleNodeResolutionStore: NodeResolutionStore = {
+  async findActiveNode({ userId, id, label }) {
+    const scope = [eq(schema.nodes.user_id, userId), eq(schema.nodes.status, 'active')];
+
+    if (id) {
+      const [row] = await db
+        .select({ id: schema.nodes.id, label: schema.nodes.label, type: schema.nodes.type })
+        .from(schema.nodes)
+        .where(and(...scope, eq(schema.nodes.id, id)))
+        .limit(1);
+      return row ?? null;
+    }
+
+    // Label match is case-insensitive; fetch the user's active nodes and
+    // compare in JS, consistent with the linksTo lookup in remember_fact above.
+    const rows = await db
+      .select({ id: schema.nodes.id, label: schema.nodes.label, type: schema.nodes.type })
+      .from(schema.nodes)
+      .where(and(...scope));
+
+    const target = (label ?? '').toLowerCase();
+    return rows.find(row => row.label.toLowerCase() === target) ?? null;
+  },
+  async resolveNode({ id, userId, resolvedAt }) {
+    const [updated] = await db
+      .update(schema.nodes)
+      .set({ status: 'resolved', resolved_at: resolvedAt })
+      .where(and(
+        eq(schema.nodes.id, id),
+        eq(schema.nodes.user_id, userId),
+        eq(schema.nodes.status, 'active'),
+      ))
+      .returning({ id: schema.nodes.id, label: schema.nodes.label, type: schema.nodes.type });
+    return updated ?? null;
   },
 };

@@ -354,7 +354,7 @@ export async function assembleContext(userId: string): Promise<CoachContext> {
 
     db.select()
       .from(schema.nodes)
-      .where(eq(schema.nodes.user_id, userId))
+      .where(and(eq(schema.nodes.user_id, userId), eq(schema.nodes.status, 'active')))
       .orderBy(desc(schema.nodes.weight)),
 
     db.select({

@@ -74,7 +74,11 @@ export async function loadDailyRecommendationInput(
     )),
     db.select({ id: schema.nodes.id, type: schema.nodes.type, label: schema.nodes.label })
       .from(schema.nodes)
-      .where(and(eq(schema.nodes.user_id, userId), eq(schema.nodes.source, 'confirmed'))),
+      .where(and(
+        eq(schema.nodes.user_id, userId),
+        eq(schema.nodes.source, 'confirmed'),
+        eq(schema.nodes.status, 'active'),
+      )),
     getCalibration(userId),
   ]);
 

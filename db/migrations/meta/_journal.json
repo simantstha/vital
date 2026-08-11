@@ -141,6 +141,13 @@
       "when": 1786472331421,
       "tag": "0019_flaky_rumiko_fujikawa",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1786478350736,
+      "tag": "0020_bent_radioactive_man",
+      "breakpoints": true
     }
   ]
 }
