@@ -13,6 +13,7 @@ struct CoachView: View {
     /// tried voice — not as a permanent nag.
     @State private var didAttemptDeniedMic = false
     @State private var isScrolledNearBottom = true
+    @State private var showWorkspaceStickySummary = false
     @State private var specialistGlowExpanded = false
     @State private var pendingConfirmedAction: SpecialistAction?
 
@@ -53,6 +54,7 @@ struct CoachView: View {
         .task {
             vm.refreshIfStale()
             vm.loadOpener()
+            vm.loadWorkspace()
         }
         // Leaving the view mid-stream (e.g. onboarding CoachIntro → Continue)
         // must not leave a stream task running against a gone view.
@@ -138,6 +140,8 @@ struct CoachView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: Theme.Spacing.md) {
+                    coachWorkspace
+
                     ForEach(vm.rows) { row in
                         switch row {
                         case .message(let msg):
@@ -180,6 +184,23 @@ struct CoachView: View {
             } action: { _, nearBottom in
                 isScrolledNearBottom = nearBottom
             }
+            .onScrollGeometryChange(for: Bool.self) { geometry in
+                geometry.visibleRect.minY > 260
+            } action: { _, shouldShow in
+                showWorkspaceStickySummary = shouldShow
+            }
+            .overlay(alignment: .top) {
+                if showWorkspaceStickySummary, let recommendation = vm.workspaceRecommendation {
+                    CoachWorkspaceCompactSummary(
+                        recommendation: recommendation,
+                        isPlanned: vm.workspacePlanState == .planned
+                    )
+                    .padding(.horizontal, Theme.Spacing.lg)
+                    .padding(.top, Theme.Spacing.xs)
+                    .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
+                    .allowsHitTesting(false)
+                }
+            }
             .onChange(of: vm.rows) {
                 scrollToBottomIfPinned(proxy)
             }
@@ -192,6 +213,40 @@ struct CoachView: View {
             .onChange(of: vm.pendingHandoffCard) {
                 scrollToBottomIfPinned(proxy)
             }
+        }
+    }
+
+    @ViewBuilder
+    private var coachWorkspace: some View {
+        if let recommendation = vm.workspaceRecommendation {
+            CoachWorkspaceView(
+                recommendation: recommendation,
+                isPerformingAction: vm.isPerformingWorkspaceAction,
+                isPlanned: vm.workspacePlanState == .planned,
+                onAction: { action, adjustment in
+                    vm.performWorkspaceAction(action, adjustment: adjustment)
+                }
+            )
+            .id("coach-workspace-\(recommendation.id)")
+        } else if vm.isLoadingWorkspace {
+            HStack(spacing: Theme.Spacing.sm) {
+                ProgressView()
+                Text("Preparing today’s coach brief…")
+                    .font(Theme.Typography.bodySmall)
+                    .foregroundStyle(Theme.Colors.textSecondary)
+            }
+            .frame(maxWidth: .infinity, minHeight: 72)
+            .background(Theme.Colors.card)
+            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous))
+            .accessibilityLabel("Preparing today’s coach brief")
+        } else if let error = vm.workspaceErrorMessage {
+            ErrorCard(
+                title: "Today’s brief is unavailable",
+                message: error,
+                actionLabel: "Try again",
+                actionIcon: "arrow.clockwise",
+                onAction: vm.loadWorkspace
+            )
         }
     }
 

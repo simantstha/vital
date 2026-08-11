@@ -178,6 +178,14 @@ enum CoachSpecialistState: Equatable {
     case recoverableRollback(String)
 }
 
+enum CoachWorkspacePlanState: Equatable {
+    case ready
+    case planning
+    case planned
+    case skipped
+    case completed
+}
+
 // MARK: - ViewModel
 
 @MainActor
@@ -195,6 +203,11 @@ final class CoachViewModel: ObservableObject {
     @Published private(set) var pendingHandoffCard: CoachHandoffCard? = nil
     @Published private(set) var specialistState: CoachSpecialistState = .vital
     @Published private(set) var isPerformingSpecialistAction: Bool = false
+    @Published private(set) var workspaceRecommendation: CoachWorkspaceRecommendation? = nil
+    @Published private(set) var workspacePlanState: CoachWorkspacePlanState = .ready
+    @Published private(set) var isLoadingWorkspace: Bool = false
+    @Published private(set) var isPerformingWorkspaceAction: Bool = false
+    @Published private(set) var workspaceErrorMessage: String? = nil
 
     /// True from the moment recording stops until the cloud STT upload (or
     /// its fallback to the Apple transcript) has resolved and been handed
@@ -209,6 +222,7 @@ final class CoachViewModel: ObservableObject {
     private var streamTask: Task<Void, Never>? = nil
     private var openerTask: Task<Void, Never>? = nil
     private var actionTask: Task<Void, Never>? = nil
+    private var workspaceTask: Task<Void, Never>? = nil
     private var hasRestoredConversation = false
     private var lastActivityAt: Date? = nil
     private var transcriptionTask: Task<Void, Never>? = nil
@@ -288,6 +302,120 @@ final class CoachViewModel: ObservableObject {
         self.mode = mode
         self.api = api
         bindVoice()
+    }
+
+    // MARK: - Daily Coach Workspace
+
+    /// The regular Coach tab adds one deterministic, server-owned daily
+    /// recommendation above the conversation. Onboarding intentionally keeps
+    /// its existing chat-first experience.
+    func loadWorkspace() {
+        guard mode == nil, !isLoadingWorkspace else { return }
+        isLoadingWorkspace = workspaceRecommendation == nil
+        workspaceErrorMessage = nil
+        workspaceTask = Task {
+            defer {
+                isLoadingWorkspace = false
+                workspaceTask = nil
+            }
+            do {
+                let recommendation = try await api.fetchCoachWorkspace()
+                workspaceRecommendation = recommendation
+            } catch is CancellationError {
+                return
+            } catch {
+                // A workspace failure must never block the established coach
+                // thread; leave chat usable and show a local retry affordance.
+                workspaceErrorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func performWorkspaceAction(
+        _ action: CoachWorkspaceActionKind,
+        adjustment: CoachWorkspaceAdjustmentRequest? = nil
+    ) {
+        guard let recommendation = workspaceRecommendation, !isPerformingWorkspaceAction else { return }
+        if action == .accept, workspacePlanState == .planned { return }
+
+        let actionId = Self.workspaceActionId(
+            recommendationId: recommendation.id,
+            action: action,
+            adjustment: adjustment
+        )
+        isPerformingWorkspaceAction = true
+        workspaceErrorMessage = nil
+        if action == .accept { workspacePlanState = .planning }
+
+        workspaceTask = Task {
+            defer {
+                isPerformingWorkspaceAction = false
+                workspaceTask = nil
+                if workspacePlanState == .planning { workspacePlanState = .ready }
+            }
+            do {
+                _ = try await api.performCoachWorkspaceAction(
+                    recommendationId: recommendation.id,
+                    actionId: actionId,
+                    action: action,
+                    adjustment: adjustment
+                )
+                switch action {
+                case .accept:
+                    workspacePlanState = .planned
+                case .adjust:
+                    applyWorkspaceAdjustment(adjustment)
+                    // The API performs a plan upsert atomically for an
+                    // adjustment, so the command center immediately reflects
+                    // the newly planned state instead of offering a second,
+                    // conflicting Add to plan tap.
+                    workspacePlanState = .planned
+                case .skip:
+                    workspacePlanState = .skipped
+                case .complete:
+                    workspacePlanState = .completed
+                case .openChat:
+                    input = "Can we talk through \(recommendation.action.title.lowercased())?"
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                workspaceErrorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    static func workspaceActionId(
+        recommendationId: String,
+        action: CoachWorkspaceActionKind,
+        adjustment: CoachWorkspaceAdjustmentRequest?
+    ) -> String {
+        let adjustmentKey = [
+            adjustment?.timeMinutes.map(String.init),
+            adjustment?.durationMinutes.map(String.init),
+            adjustment?.intensity,
+        ].compactMap { $0 }.joined(separator: ":")
+        return "ios-workspace:\(recommendationId):\(action.rawValue):\(adjustmentKey.isEmpty ? "default" : adjustmentKey)"
+    }
+
+    private func applyWorkspaceAdjustment(_ adjustment: CoachWorkspaceAdjustmentRequest?) {
+        guard let adjustment, let recommendation = workspaceRecommendation else { return }
+        let current = recommendation.action
+        workspaceRecommendation = CoachWorkspaceRecommendation(
+            id: recommendation.id,
+            localDay: recommendation.localDay,
+            category: recommendation.category,
+            action: CoachWorkspaceAction(
+                title: current.title,
+                copy: current.copy,
+                kind: current.kind,
+                timeMinutes: adjustment.timeMinutes ?? current.timeMinutes,
+                durationMinutes: adjustment.durationMinutes ?? current.durationMinutes,
+                intensity: adjustment.intensity ?? current.intensity
+            ),
+            evidence: recommendation.evidence,
+            materialSignature: recommendation.materialSignature
+        )
     }
 
     /// Forwards the two voice objects' own change notifications into this
@@ -578,6 +706,10 @@ final class CoachViewModel: ObservableObject {
         actionTask?.cancel()
         actionTask = nil
         isPerformingSpecialistAction = false
+        workspaceTask?.cancel()
+        workspaceTask = nil
+        isLoadingWorkspace = false
+        isPerformingWorkspaceAction = false
         transcriptionTask?.cancel()
         transcriptionTask = nil
         isTranscribing = false

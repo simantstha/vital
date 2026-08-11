@@ -364,6 +364,43 @@ struct APIClient {
         try await get("/api/coach")
     }
 
+    // MARK: - Coach Workspace
+
+    /// Fetches the server-authored, deterministic recommendation for the
+    /// user's local day. The server owns freshness and safety gating; iOS only
+    /// presents the recommendation and explicit user actions.
+    func fetchCoachWorkspace() async throws -> CoachWorkspaceRecommendation {
+        let tz = TimeZone.current.identifier
+        let encoded = tz.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? tz
+        let response: CoachWorkspaceResponse = try await get("/api/coach/today?tz=\(encoded)")
+        return response.recommendation
+    }
+
+    @discardableResult
+    func performCoachWorkspaceAction(
+        recommendationId: String,
+        actionId: String,
+        action: CoachWorkspaceActionKind,
+        adjustment: CoachWorkspaceAdjustmentRequest? = nil
+    ) async throws -> CoachWorkspaceInteraction {
+        guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/coach/today/actions") else {
+            throw APIError.invalidURL
+        }
+        var request = authorizedRequest(url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 15
+        request.httpBody = try encoder.encode(CoachWorkspaceActionRequest(
+            recommendationId: recommendationId,
+            actionId: actionId,
+            action: action,
+            adjustment: adjustment
+        ))
+        let (data, response) = try await session.data(for: request)
+        try validate(response)
+        return try decoder.decode(CoachWorkspaceActionResponse.self, from: data).interaction
+    }
+
     // MARK: - Coach TTS
 
     /// Fetches ElevenLabs-synthesized speech for one sentence from the backend
@@ -521,6 +558,12 @@ struct APIClient {
 
     static func decodeCoachRestoration(_ data: Data) throws -> CoachRestorationResponse {
         try JSONDecoder().decode(CoachRestorationResponse.self, from: data)
+    }
+
+    /// Keeps the Coach Workspace wire shape covered without requiring a live
+    /// session in unit tests.
+    static func decodeCoachWorkspace(_ data: Data) throws -> CoachWorkspaceRecommendation {
+        try JSONDecoder().decode(CoachWorkspaceResponse.self, from: data).recommendation
     }
 
     /// Decodes one wire-format SSE line. Unknown event types return nil so
@@ -1471,6 +1514,111 @@ struct CoachActionRequestBody: Encodable {
     let action: SpecialistAction
 }
 
+// MARK: - Coach Workspace DTOs
+
+enum CoachWorkspaceActionKind: String, Codable, CaseIterable {
+    case accept
+    case adjust
+    case skip
+    case complete
+    case openChat = "open_chat"
+}
+
+struct CoachWorkspaceAction: Codable, Equatable {
+    let title: String
+    let copy: String
+    let kind: String
+    let timeMinutes: Int
+    let durationMinutes: Int?
+    let intensity: String?
+}
+
+struct CoachWorkspaceEvidenceSource: Codable, Identifiable, Equatable {
+    let metric: String
+    let observedAt: String?
+    let baseline: Double?
+    let value: Double?
+
+    var id: String { metric }
+    var label: String {
+        switch metric {
+        case "restingHr": return "Resting HR"
+        case "hrv": return "HRV"
+        case "sleep": return "Sleep"
+        default: return metric.capitalized
+        }
+    }
+    var icon: String {
+        switch metric {
+        case "restingHr": return "heart"
+        case "hrv": return "waveform.path.ecg"
+        case "sleep": return "moon.zzz"
+        default: return "chart.line.uptrend.xyaxis"
+        }
+    }
+    var detail: String {
+        let valueText = value.map { Self.valueText($0) } ?? "No reading"
+        let baselineText = baseline.map { "Baseline \(Self.valueText($0))" } ?? "No baseline"
+        return "\(valueText) · \(baselineText)"
+    }
+
+    private static func valueText(_ value: Double) -> String {
+        value.rounded() == value ? "\(Int(value))" : String(format: "%.1f", value)
+    }
+}
+
+struct CoachWorkspaceEvidence: Codable, Equatable {
+    let fresh: Bool
+    let sources: [CoachWorkspaceEvidenceSource]
+    let constraintGate: Bool
+}
+
+struct CoachWorkspaceRecommendation: Codable, Equatable, Identifiable {
+    let id: String
+    let localDay: String
+    let category: String
+    var action: CoachWorkspaceAction
+    let evidence: CoachWorkspaceEvidence
+    let materialSignature: String
+}
+
+struct CoachWorkspaceAdjustmentRequest: Codable, Equatable {
+    let timeMinutes: Int?
+    let durationMinutes: Int?
+    let intensity: String?
+
+    init(timeMinutes: Int? = nil, durationMinutes: Int? = nil, intensity: String? = nil) {
+        self.timeMinutes = timeMinutes
+        self.durationMinutes = durationMinutes
+        self.intensity = intensity
+    }
+}
+
+struct CoachWorkspaceInteraction: Codable, Equatable {
+    let id: String
+    let recommendationId: String
+    let actionId: String
+    let action: CoachWorkspaceActionKind
+    let adjustment: CoachWorkspaceAdjustmentRequest?
+    let planItemId: String?
+    let createdAt: String
+}
+
+private struct CoachWorkspaceResponse: Decodable {
+    let recommendation: CoachWorkspaceRecommendation
+}
+
+private struct CoachWorkspaceActionRequest: Encodable {
+    let recommendationId: String
+    let actionId: String
+    let action: CoachWorkspaceActionKind
+    let adjustment: CoachWorkspaceAdjustmentRequest?
+}
+
+private struct CoachWorkspaceActionResponse: Decodable {
+    let interaction: CoachWorkspaceInteraction
+}
+
 struct CoachPersonaSnapshot: Codable, Equatable {
     let id: String
     let title: String
@@ -1648,6 +1796,28 @@ protocol CoachAPIProviding {
         actionId: String,
         action: SpecialistAction
     ) -> AsyncThrowingStream<CoachStreamEvent, Error>
+    func fetchCoachWorkspace() async throws -> CoachWorkspaceRecommendation
+    func performCoachWorkspaceAction(
+        recommendationId: String,
+        actionId: String,
+        action: CoachWorkspaceActionKind,
+        adjustment: CoachWorkspaceAdjustmentRequest?
+    ) async throws -> CoachWorkspaceInteraction
+}
+
+extension CoachAPIProviding {
+    func fetchCoachWorkspace() async throws -> CoachWorkspaceRecommendation {
+        throw APIError.serverError(501)
+    }
+
+    func performCoachWorkspaceAction(
+        recommendationId: String,
+        actionId: String,
+        action: CoachWorkspaceActionKind,
+        adjustment: CoachWorkspaceAdjustmentRequest?
+    ) async throws -> CoachWorkspaceInteraction {
+        throw APIError.serverError(501)
+    }
 }
 
 extension APIClient: CoachAPIProviding {}
