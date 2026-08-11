@@ -11,6 +11,14 @@ import {
 } from '@/lib/coachWorkspace';
 import { getCalibration } from '@/lib/brain/baselines';
 import { applySkipPlanMutation } from '@/lib/coachWorkspaceSkip';
+import {
+  assertActionAllowedForRecommendation,
+  deriveCoachWorkspaceState,
+  shouldMutatePlanForAction,
+  type CoachWorkspaceState,
+  type HydrationAction,
+  type HydrationInteraction,
+} from '@/lib/coachWorkspaceState';
 
 const METRICS = ['hrv_sdnn', 'resting_hr', 'sleep_minutes'] as const;
 
@@ -108,6 +116,69 @@ export async function createOrLoadDailyRecommendation(userId: string, localDay: 
   return persistDailyRecommendation(userId, localDay, createDailyRecommendation(input));
 }
 
+/** Restores the persisted Coach Workspace state for a recommendation. */
+export async function hydrateCoachWorkspaceState(
+  userId: string,
+  recommendation: PersistedRecommendation,
+): Promise<CoachWorkspaceState> {
+  if (recommendation.category === 'calibration') {
+    return deriveCoachWorkspaceState({
+      category: recommendation.category,
+      action: recommendation.action,
+      userId,
+      localDay: recommendation.local_day,
+      interactions: [],
+      planItem: null,
+    });
+  }
+
+  const rows = await db.select({
+    action: schema.coach_recommendation_interactions.action,
+    adjustment: schema.coach_recommendation_interactions.adjustment,
+    planItemId: schema.coach_recommendation_interactions.plan_item_id,
+    createdAt: schema.coach_recommendation_interactions.created_at,
+  }).from(schema.coach_recommendation_interactions).where(and(
+    eq(schema.coach_recommendation_interactions.user_id, userId),
+    eq(schema.coach_recommendation_interactions.recommendation_id, recommendation.id),
+  )).orderBy(desc(schema.coach_recommendation_interactions.created_at)).limit(50);
+
+  const interactions: HydrationInteraction[] = rows
+    .filter(row => ['accept', 'adjust', 'skip', 'complete', 'open_chat'].includes(row.action))
+    .map(row => ({
+      action: row.action as HydrationAction,
+      adjustment: row.adjustment,
+      planItemId: row.planItemId,
+      createdAt: row.createdAt,
+    }));
+  const latestPlanId = interactions.find(interaction =>
+    interaction.action !== 'open_chat' && interaction.planItemId != null,
+  )?.planItemId ?? null;
+
+  let planItem: { id: string; userId: string; localDay: string; status: string } | null = null;
+  if (latestPlanId) {
+    const [row] = await db.select({
+      id: schema.plan_items.id,
+      userId: schema.plan_items.user_id,
+      localDay: schema.plan_items.local_day,
+      status: schema.plan_items.status,
+    }).from(schema.plan_items).where(and(
+      eq(schema.plan_items.id, latestPlanId),
+      eq(schema.plan_items.user_id, userId),
+      eq(schema.plan_items.local_day, recommendation.local_day),
+    )).limit(1);
+    planItem = row ?? null;
+  }
+
+  return deriveCoachWorkspaceState({
+    category: recommendation.category,
+    action: recommendation.action,
+    userId,
+    localDay: recommendation.local_day,
+    interactions,
+    planItem,
+  });
+}
+
 export type CoachWorkspaceInteractionAction = 'accept' | 'adjust' | 'skip' | 'complete' | 'open_chat';
 
 export interface ApplyCoachActionInput {
@@ -157,6 +228,7 @@ export async function applyCoachAction(input: ApplyCoachActionInput): Promise<{
       eq(schema.daily_coach_recommendations.user_id, input.userId),
     )).limit(1);
     if (!recommendation) throw new Error('Recommendation not found.');
+    assertActionAllowedForRecommendation(recommendation.category, input.action);
 
     const [inserted] = await tx.insert(schema.coach_recommendation_interactions).values({
       user_id: input.userId,
@@ -174,6 +246,10 @@ export async function applyCoachAction(input: ApplyCoachActionInput): Promise<{
       )).limit(1);
       if (!existing) throw new Error('Unable to reload idempotent action.');
       return { created: false, interaction: existing };
+    }
+
+    if (!shouldMutatePlanForAction(recommendation.category, input.action)) {
+      return { created: true, interaction: inserted };
     }
 
     if (input.action === 'skip') {
@@ -210,10 +286,6 @@ export async function applyCoachAction(input: ApplyCoachActionInput): Promise<{
         interaction: inserted,
       });
       return { created: true, interaction };
-    }
-
-    if (input.action === 'open_chat') {
-      return { created: true, interaction: inserted };
     }
 
     const baseAction = asPersistedAction(recommendation.action);

@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { db, schema } from '@/db';
 import { eq } from 'drizzle-orm';
 import { getUserIdFromRequest } from '@/lib/auth';
-import { createOrLoadDailyRecommendation } from '@/lib/coachWorkspaceRepository';
+import { createOrLoadDailyRecommendation, hydrateCoachWorkspaceState } from '@/lib/coachWorkspaceRepository';
 import { localDayKey, pickTimeZone } from '@/lib/localDay';
 
 export const dynamic = 'force-dynamic';
@@ -33,7 +33,8 @@ export async function GET(request: Request): Promise<NextResponse> {
     const requestedTz = new URL(request.url).searchParams.get('tz');
     const dayKey = localDayKey(new Date(), pickTimeZone(requestedTz, user?.timezone));
     const recommendation = await createOrLoadDailyRecommendation(userId, dayKey, new Date());
-    return NextResponse.json({ recommendation: serialize(recommendation) });
+    const state = await hydrateCoachWorkspaceState(userId, recommendation);
+    return NextResponse.json({ recommendation: serialize(recommendation), state });
   } catch (err) {
     return NextResponse.json({ error: `Coach Workspace read error: ${String(err)}` }, { status: 500 });
   }

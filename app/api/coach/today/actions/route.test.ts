@@ -5,6 +5,7 @@ import type { ApplyCoachActionInput } from '@/lib/coachWorkspaceRepository';
 
 let appliedActionInput: ApplyCoachActionInput | undefined;
 let created = true;
+let applyError: Error | undefined;
 
 function lastAppliedAction(): ApplyCoachActionInput | undefined {
   return appliedActionInput;
@@ -13,6 +14,7 @@ function lastAppliedAction(): ApplyCoachActionInput | undefined {
 mock.module('@/db', { namedExports: { db: {}, schema: realSchema } });
 mock.module('@/lib/coachWorkspaceRepository', { namedExports: {
   applyCoachAction: async (input: ApplyCoachActionInput) => {
+    if (applyError) throw applyError;
     appliedActionInput = input;
     return {
       created,
@@ -49,6 +51,7 @@ test('POST /api/coach/today/actions validates its idempotency key and action', a
 });
 
 test('POST /api/coach/today/actions returns an idempotent replay unchanged', async () => {
+  applyError = undefined;
   created = true;
   const { POST } = await routePromise;
   const request = () => new Request('http://local/api/coach/today/actions', {
@@ -68,6 +71,7 @@ test('POST /api/coach/today/actions returns an idempotent replay unchanged', asy
 });
 
 test('POST accepts only the Coach Workspace action vocabulary and delegates accept atomically', async () => {
+  applyError = undefined;
   appliedActionInput = undefined;
   created = true;
   const { POST } = await routePromise;
@@ -88,6 +92,7 @@ test('POST accepts only the Coach Workspace action vocabulary and delegates acce
 });
 
 test('POST sends a bounded adjustment to the atomic repository operation', async () => {
+  applyError = undefined;
   appliedActionInput = undefined;
   created = true;
   const { POST } = await routePromise;
@@ -121,6 +126,18 @@ test('POST rejects null-only adjustment fields', async () => {
     method: 'POST', headers: { 'x-user-id': 'user-1' },
     body: JSON.stringify({ actionId: 'adjust-null', recommendationId: 'recommendation-1', action: 'adjust', adjustment: { timeMinutes: null } }),
   }));
+
+  assert.equal(response.status, 400);
+});
+
+test('POST surfaces repository calibration rejection as a client error', async () => {
+  applyError = new Error('accept is not allowed for calibration recommendations.');
+  const { POST } = await routePromise;
+  const response = await POST(new Request('http://local/api/coach/today/actions', {
+    method: 'POST', headers: { 'x-user-id': 'user-1' },
+    body: JSON.stringify({ actionId: 'accept-calibration', recommendationId: 'calibration-1', action: 'accept' }),
+  }));
+  applyError = undefined;
 
   assert.equal(response.status, 400);
 });
