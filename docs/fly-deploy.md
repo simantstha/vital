@@ -38,8 +38,9 @@ Hand that string back, and the rest can be automated.
 
 Do not run production migrations from a workstation. The release workflow runs
 `npm run ci:migrate` before `flyctl deploy`; that gate applies the committed
-`db/migrations/` journal and verifies the database migration-table head. Never
-use `drizzle-kit push` or `--force` against Supabase production.
+`db/migrations/` journal and verifies every ledger row is the exact ordered
+committed prefix through the journal head. Never use `drizzle-kit push` or
+`--force` against Supabase production.
 
 The gate also contains a one-time recovery for the known legacy state where
 the ledger is exactly at committed `0000` but the live schema already matches
@@ -105,6 +106,70 @@ curl -i https://vital-coach.fly.dev/api/today              # 401 Unauthorized (a
 curl -s https://vital-coach.fly.dev/api/today \
   -H "Authorization: Bearer <API_SHARED_SECRET>"           # real JSON
 ```
+
+## Coach Workspace staged rollout and kill switch
+
+`COACH_WORKSPACE_V1` is deliberately absent from `fly.toml`, GitHub Actions,
+and the standard secret list. A release must not automatically turn it on.
+The backend enables Coach Workspace only when the value is the exact,
+case-sensitive lowercase string `true`; unset, `false`, `TRUE`, and `1` all
+remain disabled.
+
+Roll out in this order:
+
+1. Merge through the normal release workflow and wait for the backend job to
+   finish migration, full-ledger verification, build, and Fly deploy.
+2. Confirm the release job is green and the deployed app is healthy:
+
+   ```bash
+   gh run list --workflow=release.yml --limit 1
+   gh run view <run-id> --json status,conclusion,jobs
+   curl -fsS https://vital-coach.fly.dev/api/health
+   fly status --app vital-coach
+   ```
+
+3. Enable the flag manually. `fly secrets set` creates a Fly config release
+   and restarts the app Machines with the currently deployed image:
+
+   ```bash
+   fly secrets set COACH_WORKSPACE_V1=true --app vital-coach
+   fly secrets list --app vital-coach
+   curl -fsS https://vital-coach.fly.dev/api/health
+   ```
+
+4. With a real signed-in session JWT, verify the workspace endpoint returns
+   `200` before treating rollout as complete:
+
+   ```bash
+   curl -i 'https://vital-coach.fly.dev/api/coach/today' \
+     -H 'Authorization: Bearer <session-jwt>'
+   ```
+
+Kill switch / rollback:
+
+1. Disable the workspace first. This is the normal rollback and does not
+   require a database change:
+
+   ```bash
+   fly secrets unset COACH_WORKSPACE_V1 --app vital-coach
+   curl -fsS https://vital-coach.fly.dev/api/health
+   ```
+
+2. If the whole backend image also needs rollback, list prior image references
+   and redeploy the chosen previous image only after disabling the flag:
+
+   ```bash
+   fly releases --app vital-coach --image
+   fly deploy --app vital-coach --image <previous-image-reference>
+   ```
+
+3. Do not delete or rewrite Drizzle ledger rows and do not reverse the additive
+   database migrations as part of this feature rollback.
+
+When disabled, `/api/coach/today` returns the structured
+`COACH_WORKSPACE_DISABLED` 404. Current iOS builds interpret that response as
+feature unavailability, remove the workspace card, and continue presenting the
+legacy Coach chat thread and composer.
 
 ## iOS install
 

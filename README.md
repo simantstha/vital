@@ -162,7 +162,8 @@ Production never uses `drizzle-kit push` (especially not `--force`). The
 release workflow runs `npm run ci:migrate`, which validates the PostgreSQL URL,
 applies only the committed `db/migrations/` journal through Drizzle's pinned
 migrator, and verifies that the database migration table reaches the committed
-journal head before deploying the backend.
+journal head as the exact ordered, hash-matching prefix before deploying the
+backend; missing, reordered, duplicate, or unknown rows fail the release.
 
 For the one production database whose schema was previously advanced through
 `0016_famous_sleepwalker` by schema pushes while its Drizzle ledger remained at
@@ -172,6 +173,32 @@ constraint, index, RLS/policy, and extra object against the committed 0016
 snapshot, then stamps committed migrations 0001–0016 inside an advisory-locked
 transaction. Any mismatch or any other stale/unknown ledger state stops the
 release for manual inspection; it never blindly stamps a database.
+
+### Coach Workspace rollout switch
+
+Coach Workspace is disabled by default and requires the exact, case-sensitive
+Fly environment value `COACH_WORKSPACE_V1=true`. Do not add it to `fly.toml` or
+the release workflow. First let the release workflow finish its migration and
+backend deploy, verify `/api/health`, and only then enable it manually:
+
+```bash
+curl -fsS https://vital-coach.fly.dev/api/health
+fly secrets set COACH_WORKSPACE_V1=true --app vital-coach
+```
+
+To disable immediately, remove the secret (Fly creates a config release and
+restarts the Machines):
+
+```bash
+fly secrets unset COACH_WORKSPACE_V1 --app vital-coach
+```
+
+Unset, `false`, `TRUE`, and `1` are all disabled; only lowercase `true` enables
+the feature. When disabled, the workspace endpoint returns its structured 404
+and current iOS builds clear the workspace UI while keeping the established
+legacy Coach chat thread and composer available. See `docs/fly-deploy.md` for
+the full verification and image-rollback procedure. Never roll back migration
+ledger rows or additive schema migrations to disable this UI.
 
 ### 4. Run
 

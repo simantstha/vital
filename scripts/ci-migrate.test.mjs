@@ -4,6 +4,7 @@ import test from 'node:test';
 
 import {
   assertAppliedMigrationHead,
+  assertCommittedLedgerPrefix,
   assertLegacySchemaMatches,
   buildLegacyStampingPlan,
   classifyLegacyLedger,
@@ -115,6 +116,13 @@ const legacyArtifacts = Array.from({ length: 19 }, (_, idx) => ({
   createdAt: 1710000000000 + idx,
   hash: `hash-${idx}`,
 }));
+
+function ledgerThrough(index) {
+  return legacyArtifacts.slice(0, index + 1).map((artifact) => ({
+    createdAt: artifact.createdAt,
+    hash: artifact.hash,
+  }));
+}
 
 const legacySnapshot = {
   dialect: 'postgresql',
@@ -275,39 +283,53 @@ test('schema diff rejects invalid indexes and unexpected included index columns'
 });
 
 test('only the exact known 0000 ledger is eligible for legacy adoption', () => {
-  const exact0000 = [{ createdAt: legacyArtifacts[0].createdAt, hash: legacyArtifacts[0].hash }];
+  const exact0000 = ledgerThrough(0);
 
   assert.equal(classifyLegacyLedger([], legacyArtifacts), 'fresh');
   assert.equal(classifyLegacyLedger(exact0000, legacyArtifacts), 'adopt');
-  assert.equal(
-    classifyLegacyLedger(
-      [{ createdAt: legacyArtifacts[16].createdAt, hash: legacyArtifacts[16].hash }],
-      legacyArtifacts,
-    ),
-    'current',
-  );
+  assert.equal(classifyLegacyLedger(ledgerThrough(16), legacyArtifacts), 'current');
+  assert.equal(classifyLegacyLedger(ledgerThrough(18), legacyArtifacts), 'current');
   assert.throws(
-    () =>
-      classifyLegacyLedger(
-        [{ createdAt: legacyArtifacts[4].createdAt, hash: legacyArtifacts[4].hash }],
-        legacyArtifacts,
-      ),
+    () => classifyLegacyLedger(ledgerThrough(4), legacyArtifacts),
     /unexpected stale migration ledger/,
   );
+});
+
+test('ledger classification rejects every non-contiguous or mismatched state', () => {
+  const missingFirst = ledgerThrough(16).slice(1);
+  const missingInterior = ledgerThrough(16).filter((_, index) => index !== 8);
+  const outOfOrder = ledgerThrough(16);
+  [outOfOrder[7], outOfOrder[8]] = [outOfOrder[8], outOfOrder[7]];
+  const duplicate = ledgerThrough(16);
+  duplicate.splice(8, 0, { ...duplicate[7] });
+  const unknown = ledgerThrough(16);
+  unknown[9] = { createdAt: 123, hash: 'unknown' };
+  const hashMismatch = ledgerThrough(16);
+  hashMismatch[9] = { ...hashMismatch[9], hash: 'wrong-hash' };
+  const single0016 = [{ createdAt: legacyArtifacts[16].createdAt, hash: legacyArtifacts[16].hash }];
+
+  for (const ledger of [
+    missingFirst,
+    missingInterior,
+    outOfOrder,
+    duplicate,
+    unknown,
+    hashMismatch,
+    single0016,
+  ]) {
+    assert.throws(() => classifyLegacyLedger(ledger, legacyArtifacts), /contiguous committed prefix/);
+  }
+});
+
+test('full-ledger verification requires the exact committed journal prefix through its head', () => {
+  assert.doesNotThrow(() => assertCommittedLedgerPrefix(ledgerThrough(18), legacyArtifacts, 18));
   assert.throws(
-    () => classifyLegacyLedger([{ createdAt: legacyArtifacts[0].createdAt, hash: 'unknown' }], legacyArtifacts),
-    /refusing automatic adoption/,
+    () => assertCommittedLedgerPrefix(ledgerThrough(17), legacyArtifacts, 18),
+    /contiguous committed prefix/,
   );
   assert.throws(
-    () =>
-      classifyLegacyLedger(
-        [
-          { createdAt: legacyArtifacts[16].createdAt, hash: legacyArtifacts[16].hash },
-          { createdAt: 123, hash: 'unexpected-older-row' },
-        ],
-        legacyArtifacts,
-      ),
-    /refusing automatic adoption/,
+    () => assertCommittedLedgerPrefix(ledgerThrough(18).reverse(), legacyArtifacts, 18),
+    /contiguous committed prefix/,
   );
 });
 
@@ -321,13 +343,13 @@ test('legacy stamping plan is exactly committed migrations 0001 through 0016', (
 });
 
 test('legacy stamping refuses a changed target or mismatched ledger', () => {
-  const exact0000 = [{ createdAt: legacyArtifacts[0].createdAt, hash: legacyArtifacts[0].hash }];
+  const exact0000 = ledgerThrough(0);
   const wrongTarget = legacyArtifacts.map((artifact) => ({ ...artifact }));
   wrongTarget[16].tag = '0016_unexpected_target';
 
   assert.throws(() => buildLegacyStampingPlan(exact0000, wrongTarget), /legacy target/);
   assert.throws(
-    () => buildLegacyStampingPlan([{ createdAt: legacyArtifacts[2].createdAt, hash: legacyArtifacts[2].hash }], legacyArtifacts),
+    () => buildLegacyStampingPlan(ledgerThrough(2), legacyArtifacts),
     /unexpected stale migration ledger/,
   );
 });

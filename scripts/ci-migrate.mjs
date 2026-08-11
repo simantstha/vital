@@ -413,35 +413,44 @@ export function classifyLegacyLedger(appliedRows, artifacts) {
   assertLegacyTarget(artifacts);
   if (appliedRows.length === 0) return 'fresh';
 
-  const knownByCreatedAt = new Map(artifacts.map((artifact) => [artifact.createdAt, artifact]));
-  const normalizedRows = appliedRows.map((row) => ({
-    createdAt: Number(row.createdAt),
-    hash: row.hash,
-  }));
-  const seenCreatedAt = new Set();
-  for (const row of normalizedRows) {
-    const knownMigration = knownByCreatedAt.get(row.createdAt);
-    if (!knownMigration || knownMigration.hash !== row.hash || seenCreatedAt.has(row.createdAt)) {
-      throw new Error('Migration ledger is not a committed known state; refusing automatic adoption.');
-    }
-    seenCreatedAt.add(row.createdAt);
-  }
-  const head = normalizedRows.reduce((latest, row) => (row.createdAt > latest.createdAt ? row : latest));
-  const knownHead = knownByCreatedAt.get(head.createdAt);
-  if (
-    knownHead.idx === 0 &&
-    normalizedRows.length === 1 &&
-    head.createdAt === artifacts[0].createdAt &&
-    head.hash === artifacts[0].hash
-  ) {
-    return 'adopt';
-  }
-  if (knownHead.idx < legacyTargetIndex) {
+  const headIndex = appliedRows.length - 1;
+  assertCommittedLedgerPrefix(appliedRows, artifacts, headIndex);
+  if (headIndex === 0) return 'adopt';
+  if (headIndex < legacyTargetIndex) {
     throw new Error(
-      `Found unexpected stale migration ledger at ${knownHead.tag}; inspect production manually before retrying.`,
+      `Found unexpected stale migration ledger at ${artifacts[headIndex].tag}; inspect production manually before retrying.`,
     );
   }
   return 'current';
+}
+
+export function assertCommittedLedgerPrefix(appliedRows, artifacts, expectedHeadIndex) {
+  const expectedHead = artifacts[expectedHeadIndex];
+  const expectedLength = expectedHeadIndex + 1;
+  if (
+    !Number.isInteger(expectedHeadIndex) ||
+    expectedHeadIndex < 0 ||
+    !expectedHead ||
+    appliedRows.length !== expectedLength
+  ) {
+    throw new Error(
+      'Migration ledger is not the exact contiguous committed prefix; inspect production manually before retrying.',
+    );
+  }
+
+  for (let index = 0; index < expectedLength; index += 1) {
+    const applied = appliedRows[index];
+    const committed = artifacts[index];
+    if (
+      !applied ||
+      Number(applied.createdAt) !== committed.createdAt ||
+      applied.hash !== committed.hash
+    ) {
+      throw new Error(
+        `Migration ledger is not the exact contiguous committed prefix through ${expectedHead.tag}; mismatch at position ${index}. Inspect production manually before retrying.`,
+      );
+    }
+  }
 }
 
 export function buildLegacyStampingPlan(appliedRows, artifacts) {
@@ -449,13 +458,6 @@ export function buildLegacyStampingPlan(appliedRows, artifacts) {
     throw new Error('Legacy stamping is only allowed from the exact known 0000 ledger state.');
   }
   return artifacts.slice(1, legacyTargetIndex + 1);
-}
-
-function latestLedgerRow(rows) {
-  if (rows.length === 0) return undefined;
-  return rows.reduce((latest, row) =>
-    Number(row.createdAt) > Number(latest.createdAt) ? row : latest,
-  );
 }
 
 export async function performLegacyAdoption({
@@ -485,9 +487,7 @@ export async function performLegacyAdoption({
     }
 
     const adoptedLedger = await readLedger(transaction);
-    const target = artifacts[legacyTargetIndex];
-    const adoptedHead = latestLedgerRow(adoptedLedger);
-    assertAppliedMigrationHead(adoptedHead, target);
+    assertCommittedLedgerPrefix(adoptedLedger, artifacts, legacyTargetIndex);
     return 'adopted';
   });
 }
@@ -767,12 +767,11 @@ export async function runMigrations({ databaseUrl = process.env.DATABASE_URL, mi
       migrationsTable: migrationTable,
     });
 
-    const [appliedHead] = await client.unsafe(
-      'select hash, created_at from "drizzle"."__drizzle_migrations" order by created_at desc, id desc limit 1',
-    );
-    assertAppliedMigrationHead(
-      appliedHead && { hash: appliedHead.hash, createdAt: appliedHead.created_at },
-      committedState.expectedHead,
+    const appliedLedger = await readMigrationLedger(client);
+    assertCommittedLedgerPrefix(
+      appliedLedger,
+      committedState.artifacts,
+      committedState.artifacts.length - 1,
     );
     operationFailed = false;
     console.log(`Migration head verified: ${committedState.expectedHead.tag}`);
