@@ -13,8 +13,10 @@ struct CoachView: View {
     /// tried voice — not as a permanent nag.
     @State private var didAttemptDeniedMic = false
     @State private var isScrolledNearBottom = true
+    @State private var showWorkspaceStickySummary = false
     @State private var specialistGlowExpanded = false
     @State private var pendingConfirmedAction: SpecialistAction?
+    @FocusState private var composerFocused: Bool
 
     /// `mode` is forwarded to every `/api/coach` call via `CoachViewModel`.
     /// The Coach tab uses the default (nil); the onboarding CoachIntro step
@@ -53,12 +55,16 @@ struct CoachView: View {
         .task {
             vm.refreshIfStale()
             vm.loadOpener()
+            vm.loadWorkspace()
         }
         // Leaving the view mid-stream (e.g. onboarding CoachIntro → Continue)
         // must not leave a stream task running against a gone view.
         .onDisappear { vm.cancelStreaming() }
         .onChange(of: scenePhase) { _, newPhase in
-            if newPhase == .active { vm.refreshIfStale() }
+            if newPhase == .active {
+                vm.refreshIfStale()
+                vm.refreshWorkspaceForActiveScene()
+            }
         }
         .onChange(of: vm.activePersona.id) { _, personaID in
             specialistGlowExpanded = false
@@ -138,6 +144,8 @@ struct CoachView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: Theme.Spacing.md) {
+                    coachWorkspace
+
                     ForEach(vm.rows) { row in
                         switch row {
                         case .message(let msg):
@@ -180,6 +188,22 @@ struct CoachView: View {
             } action: { _, nearBottom in
                 isScrolledNearBottom = nearBottom
             }
+            .onScrollGeometryChange(for: Bool.self) { geometry in
+                geometry.visibleRect.minY > 260
+            } action: { _, shouldShow in
+                showWorkspaceStickySummary = shouldShow
+            }
+            .overlay(alignment: .top) {
+                if showWorkspaceStickySummary, let workspace = vm.workspaceSnapshot {
+                    CoachWorkspaceCompactSummary(
+                        workspace: workspace
+                    )
+                    .padding(.horizontal, Theme.Spacing.lg)
+                    .padding(.top, Theme.Spacing.xs)
+                    .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
+                    .allowsHitTesting(false)
+                }
+            }
             .onChange(of: vm.rows) {
                 scrollToBottomIfPinned(proxy)
             }
@@ -192,6 +216,56 @@ struct CoachView: View {
             .onChange(of: vm.pendingHandoffCard) {
                 scrollToBottomIfPinned(proxy)
             }
+            .onChange(of: vm.workspaceChatRequestToken) {
+                withAnimation(reduceMotion ? nil : Theme.Motion.exit) {
+                    proxy.scrollTo("bottom", anchor: .bottom)
+                }
+                composerFocused = true
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var coachWorkspace: some View {
+        if let workspace = vm.workspaceSnapshot {
+            CoachWorkspaceView(
+                workspace: workspace,
+                isLoadingWorkspace: vm.isLoadingWorkspace,
+                isPerformingAction: vm.isPerformingWorkspaceAction,
+                actionMessage: vm.workspaceActionMessage,
+                actionError: vm.workspaceActionErrorMessage ?? vm.workspaceErrorMessage,
+                onAction: { action, adjustment in
+                    vm.performWorkspaceAction(action, adjustment: adjustment)
+                },
+                onRefresh: vm.loadWorkspace,
+                onRetry: {
+                    if vm.workspaceActionErrorMessage != nil {
+                        vm.retryWorkspaceAction()
+                    } else {
+                        vm.loadWorkspace()
+                    }
+                }
+            )
+            .id("coach-workspace-\(workspace.recommendation.id)")
+        } else if vm.isLoadingWorkspace {
+            HStack(spacing: Theme.Spacing.sm) {
+                ProgressView()
+                Text("Preparing today’s coach brief…")
+                    .font(Theme.Typography.bodySmall)
+                    .foregroundStyle(Theme.Colors.textSecondary)
+            }
+            .frame(maxWidth: .infinity, minHeight: 72)
+            .background(Theme.Colors.card)
+            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous))
+            .accessibilityLabel("Preparing today’s coach brief")
+        } else if let error = vm.workspaceErrorMessage {
+            ErrorCard(
+                title: "Today’s brief is unavailable",
+                message: error,
+                actionLabel: "Try again",
+                actionIcon: "arrow.clockwise",
+                onAction: vm.loadWorkspace
+            )
         }
     }
 
@@ -300,6 +374,7 @@ struct CoachView: View {
                     // typing over it would fight the mic. Also disabled while
                     // the recorded clip is being transcribed.
                     .disabled(vm.transcriber.isRecording || vm.isTranscribing)
+                    .focused($composerFocused)
                     .onSubmit {
                         vm.send()
                     }

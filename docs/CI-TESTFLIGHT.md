@@ -111,9 +111,53 @@ release workflow deploys the worker.
 - Both are injected at archive time via `xcargs`; nothing to bump by hand.
 
 ## What CI does per run
-1. **backend** job: `drizzle-kit push` to Supabase, then `flyctl deploy`.
+1. **backend** job: runs backend tests and a production build, then executes
+   `npm run ci:migrate` against Supabase before `flyctl deploy`. The migration
+   gate accepts only a complete PostgreSQL `DATABASE_URL`, reads only committed
+   `db/migrations/` files via the package-lock-pinned Drizzle migrator, and
+   verifies every `drizzle.__drizzle_migrations` row is the exact ordered
+   committed prefix through the journal head. Do not use `drizzle-kit push` or
+   `--force` in production.
+
+   One-time legacy adoption is narrowly limited to an exact committed `0000`
+   ledger with expected target `0016_famous_sleepwalker`. Under a transaction
+   and advisory lock, CI compares the live `public` catalog to the committed
+   0016 snapshot—including all app tables, columns/types/nullability/defaults,
+   PK/unique/check/FK constraints, indexes, RLS/policies, and unexpected public
+   objects. Only an exact match allows CI to insert the committed 0001–0016
+   hashes/timestamps, verify the adopted head, and continue with 0017+. A
+   mismatch or any other stale/unknown ledger fails with operator guidance.
 2. **ios** job (after backend): write `Secrets.swift`, `xcodegen generate`,
    `bundle exec fastlane beta` → archive → upload to TestFlight.
+
+## Coach Workspace production rollout
+
+The release workflow intentionally does **not** set `COACH_WORKSPACE_V1`.
+After the backend job has migrated, verified the complete ordered Drizzle
+ledger, deployed, and passed health checks, an operator may enable the feature:
+
+```bash
+gh run view <run-id> --json status,conclusion,jobs
+curl -fsS https://vital-coach.fly.dev/api/health
+fly secrets set COACH_WORKSPACE_V1=true --app vital-coach
+```
+
+The value is literal and case-sensitive: only lowercase `true` enables it.
+Unset, `false`, `TRUE`, and `1` keep it disabled. Verify health again, then use
+a signed-in session JWT to confirm `/api/coach/today` returns `200`.
+
+Use the kill switch before any image rollback:
+
+```bash
+fly secrets unset COACH_WORKSPACE_V1 --app vital-coach
+curl -fsS https://vital-coach.fly.dev/api/health
+```
+
+Disabled iOS clients recognize the structured workspace-disabled 404, hide the
+workspace surface, and retain the legacy Coach chat. If a backend image rollback
+is also required, use `fly releases --app vital-coach --image` followed by
+`fly deploy --app vital-coach --image <previous-image-reference>`. Do not alter
+the migration ledger or roll back additive migrations for this kill switch.
 
 ## Notes / gotchas
 - The runner needs an Xcode with the SDK matching `deploymentTarget` in

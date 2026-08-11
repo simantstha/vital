@@ -464,6 +464,48 @@ export const plan_items = p.pgTable('plan_items', {
   p.index('plan_items_user_day_idx').on(t.user_id, t.local_day),
 ]);
 
+// ─── daily_coach_recommendations ─────────────────────────────────────────────
+// One deterministic Coach Workspace decision per user/local day. `evidence`
+// records only the persisted metrics and confirmed constraints used to make the
+// choice; it deliberately has no model output or filesystem-memory input.
+
+export const daily_coach_recommendations = p.pgTable('daily_coach_recommendations', {
+  id:                 p.uuid('id').primaryKey().defaultRandom(),
+  user_id:            p.uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  local_day:          p.text('local_day').notNull(),
+  category:           p.text('category').notNull(), // training | recovery | sleep | calibration
+  action:             p.jsonb('action').notNull(),
+  evidence:           p.jsonb('evidence').notNull(),
+  material_signature: p.text('material_signature').notNull(),
+  created_at:         p.timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updated_at:         p.timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  p.check('daily_coach_recommendations_category_check', sql`${t.category} in ('training', 'recovery', 'sleep', 'calibration')`),
+  p.uniqueIndex('daily_coach_recommendations_user_day_idx').on(t.user_id, t.local_day),
+]);
+
+// Append-only record of explicit action taps. `action_id` is client supplied
+// and unique per user, so retries return the original interaction instead of
+// duplicating an acceptance/completion. A plan item link is optional because a
+// calibration or dismissal action has no timeline row to complete.
+export const coach_recommendation_interactions = p.pgTable('coach_recommendation_interactions', {
+  id:                       p.uuid('id').primaryKey().defaultRandom(),
+  user_id:                  p.uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  recommendation_id:        p.uuid('recommendation_id').notNull().references(() => daily_coach_recommendations.id, { onDelete: 'cascade' }),
+  action_id:                p.text('action_id').notNull(),
+  action:                   p.text('action').notNull(), // accept | adjust | skip | complete | open_chat
+  adjustment:               p.jsonb('adjustment'),
+  plan_item_id:             p.uuid('plan_item_id').references(() => plan_items.id, { onDelete: 'set null' }),
+  occurrence_seq:           p.bigserial('occurrence_seq', { mode: 'number' }).notNull(),
+  created_at:               p.timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  p.check('coach_recommendation_interactions_action_check', sql`${t.action} in ('accept', 'adjust', 'skip', 'complete', 'open_chat')`),
+  p.uniqueIndex('coach_recommendation_interactions_user_action_idx').on(t.user_id, t.action_id),
+  p.uniqueIndex('coach_recommendation_interactions_occurrence_seq_idx').on(t.occurrence_seq),
+  p.index('coach_recommendation_interactions_recommendation_idx').on(t.recommendation_id),
+  p.index('coach_recommendation_interactions_recommendation_occurrence_idx').on(t.recommendation_id, t.occurrence_seq),
+]);
+
 // ─── calendar_blocks ─────────────────────────────────────────────────────────
 // Coach calendar awareness (see docs Calendar Integration plan). iOS syncs
 // EventKit busy blocks here with explicit user consent — title only, never

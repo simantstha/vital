@@ -1,0 +1,3 @@
+ALTER TABLE "coach_recommendation_interactions" ADD COLUMN "occurrence_seq" bigserial NOT NULL;--> statement-breakpoint
+CREATE UNIQUE INDEX "coach_recommendation_interactions_occurrence_seq_idx" ON "coach_recommendation_interactions" USING btree ("occurrence_seq");--> statement-breakpoint
+CREATE INDEX "coach_recommendation_interactions_recommendation_occurrence_idx" ON "coach_recommendation_interactions" USING btree ("recommendation_id","occurrence_seq");
