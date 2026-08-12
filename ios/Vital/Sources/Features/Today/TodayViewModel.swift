@@ -70,6 +70,10 @@ final class TodayViewModel: ObservableObject {
     @Published var errorMessage: String? = nil
     @Published private(set) var didLoadToday = false
 
+    /// Coalesces the five call sites that can trigger a load so two runs can't
+    /// interleave and flip `isLoading` out from under each other.
+    private var loadTask: Task<Void, Never>?
+
     // Greeting
     @Published var greeting: String = ""
     @Published var dateSubtitle: String = ""
@@ -192,6 +196,24 @@ final class TodayViewModel: ObservableObject {
     // MARK: - Called from TodayView.task
 
     func loadHealthData() async {
+        if let existing = loadTask {
+            await existing.value
+            return
+        }
+        // Unstructured on purpose: a caller being cancelled (tab switch, an
+        // interrupted pull-to-refresh) must not cancel the load itself.
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.performLoad()
+        }
+        loadTask = task
+        defer { loadTask = nil }
+        await task.value
+    }
+
+    private func performLoad() async {
+        // A recovered load heals the banner; Retry is no longer the only way out.
+        errorMessage = nil
         withAnimation(Theme.Motion.appear) { isLoading = true }
         didLoadToday = false
         // Run HealthKit + API calls concurrently. /api/today and /api/plan run
@@ -221,7 +243,7 @@ final class TodayViewModel: ObservableObject {
             try await apiClient.resolvePendingFact(id: id, action: action)
             pendingFacts.removeAll { $0.id == id }
         } catch {
-            errorMessage = error.localizedDescription
+            if !error.isCancellation { errorMessage = error.localizedDescription }
             print("[Vital] resolvePendingFact failed: \(error.localizedDescription)")
         }
     }
@@ -293,7 +315,7 @@ final class TodayViewModel: ObservableObject {
         do {
             return try await apiClient.fetchToday()
         } catch {
-            errorMessage = error.localizedDescription
+            if !error.isCancellation { errorMessage = error.localizedDescription }
             print("[Vital] fetchToday failed: \(error.localizedDescription)")
             return nil
         }
@@ -737,11 +759,12 @@ final class TodayViewModel: ObservableObject {
     }
 
     private func loadPendingFacts() async {
+        // Fail-soft: pending facts are a secondary surface and shouldn't claim
+        // "Couldn't load today's data" like refreshStreak() and loadPlanResponse() below.
         do {
             let response = try await apiClient.fetchPendingFacts()
             pendingFacts = response.items
         } catch {
-            errorMessage = error.localizedDescription
             print("[Vital] fetchPendingFacts failed: \(error.localizedDescription)")
         }
     }
