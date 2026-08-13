@@ -42,4 +42,36 @@ final class MarkdownTextTests: XCTestCase {
             "Second paragraph.",
         ])
     }
+
+    func testParsingSameStringTwiceYieldsEqualBlocksWithEqualIds() {
+        let markdown = """
+        ## Heading
+
+        First paragraph.
+
+        - item one
+        - item two
+        """
+        let first = MarkdownBlock.parse(markdown)
+        let second = MarkdownBlock.parse(markdown)
+
+        XCTAssertEqual(first, second)
+        XCTAssertEqual(first.map(\.id), second.map(\.id))
+    }
+
+    /// Regression guard for the per-token identity churn that made the whole
+    /// bubble flicker: growing the tail of a streaming reply must not change
+    /// the id or text of any block that had already settled.
+    func testAppendingToTailLeavesPrecedingBlockIdsAndValuesUnchanged() {
+        let base = "## Heading\n\nFirst paragraph is done.\n\nSecond paragraph is st"
+        let grown = base + "ill streaming in"
+
+        let before = MarkdownBlock.parse(base)
+        let after = MarkdownBlock.parse(grown)
+
+        XCTAssertEqual(before.count, after.count)
+        XCTAssertEqual(Array(before.dropLast()), Array(after.dropLast()))
+        XCTAssertEqual(before.last?.id, after.last?.id)
+        XCTAssertNotEqual(before.last?.text, after.last?.text)
+    }
 }
