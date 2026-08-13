@@ -787,8 +787,12 @@ private enum TestFailure: Error {
     case unavailable
 }
 
+// Not `private`: reused by CoachAnswerBundleTests (same test target) to drive
+// CoachViewModel through a real send()/stream lifecycle for its
+// stopGenerating() regression test. `private` on a top-level declaration is
+// file-scoped in Swift, which would otherwise make it invisible there.
 @MainActor
-private final class FakeCoachAPI: CoachAPIProviding {
+final class FakeCoachAPI: CoachAPIProviding {
     struct ActionRequest {
         let sessionId: String
         let cardOccurrenceId: String

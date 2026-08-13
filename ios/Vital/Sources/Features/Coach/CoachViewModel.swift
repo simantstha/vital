@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import SwiftUI
 
 // MARK: - Chat message model
 
@@ -73,9 +74,11 @@ struct AssistantTurn: Identifiable, Equatable {
 
     var speakerLabel: String { persona.title }
 
-    var visibleText: String {
-        isChecking ? "" : text
-    }
+    // Text must never disappear once it has streamed in — a mid-turn tool
+    // call describes work happening alongside/after the prose, not a reason
+    // to hide it. `visibleText` used to blank out during `isChecking`; kept
+    // as an alias for `text` so existing call sites don't need to change.
+    var visibleText: String { text }
 
     var statusSummary: String? {
         if let active = toolCalls.first(where: { !$0.isDone }) {
@@ -212,6 +215,11 @@ final class CoachViewModel: ObservableObject {
     @Published private(set) var workspaceActionErrorMessage: String? = nil
     @Published private(set) var workspaceChatRequestToken = 0
 
+    /// Cheap signal for the view's scroll logic: increments once per reveal
+    /// drain tick (see `pendingReveal` below) instead of `rows`, which would
+    /// otherwise deep-compare the whole growing transcript on every token.
+    @Published private(set) var revealVersion: Int = 0
+
     /// True from the moment recording stops until the cloud STT upload (or
     /// its fallback to the Apple transcript) has resolved and been handed
     /// off to `send()`.
@@ -254,6 +262,28 @@ final class CoachViewModel: ObservableObject {
     /// lazily on the first text delta (not up front), so the typing indicator
     /// renders where the reply will appear rather than below an empty bubble.
     private var pendingAssistantId: UUID? = nil
+
+    // MARK: - Reveal buffer
+
+    /// Network deltas queue here instead of landing straight in the turn.
+    /// `speaker.feed(delta:)` still reads the raw delta directly in `send()` —
+    /// only the visual path is buffered, so TTS is never delayed behind the
+    /// reveal cadence.
+    private var pendingReveal: String = ""
+    private var revealTask: Task<Void, Never>? = nil
+    /// Bumped every time `startRevealTaskIfNeeded()` spins up a new drain
+    /// loop. A cancelled task's own exit path only nils `revealTask` if its
+    /// captured generation still matches — otherwise a task cancelled by
+    /// `flushPendingReveal()` (which nils `revealTask` itself) could resume
+    /// just after a newer drain loop already started, nil out that newer
+    /// task's handle, and let `startRevealTaskIfNeeded()` spawn a second
+    /// concurrent drain loop that double-drains the buffer.
+    private var revealGeneration: Int = 0
+    /// The turn/persona the drain loop writes into — set on every enqueue so
+    /// a mid-turn persona change (`.personaChanged`) is reflected even for
+    /// text still sitting in the buffer.
+    private var revealTargetId: UUID? = nil
+    private var revealTargetPersona: CoachPersonaSnapshot? = nil
 
     // MARK: - Voice
 
@@ -681,8 +711,12 @@ final class CoachViewModel: ObservableObject {
         openerTask = nil
         isOpening = false
 
-        // Append user message
-        rows.append(.message(ChatMessage(role: .user, text: trimmed)))
+        // Append user message. Animated: this is an insert-shaped mutation
+        // (a brand-new row appearing), unlike the per-token text mutation
+        // later, which must stay unanimated.
+        withAnimation(Theme.Motion.appear) {
+            rows.append(.message(ChatMessage(role: .user, text: trimmed)))
+        }
         lastActivityAt = Date()
 
         // The assistant bubble is created lazily on the first token (see
@@ -726,13 +760,23 @@ final class CoachViewModel: ObservableObject {
                         break
                     }
                 }
+                flushPendingReveal()
                 finishTurn(assistantId, persona: turnPersona)
                 lastActivityAt = Date()
                 if sentByVoice { speaker.finish() }
+            } catch is CancellationError {
+                // A deliberate stop (stopGenerating()) or teardown
+                // (cancelStreaming()) already did its own cleanup
+                // synchronously — this is just the for-await loop noticing
+                // the cancellation afterward. Must not fall through to the
+                // generic catch below, which would flash a fake "couldn't
+                // reach the server" error over a reply the user chose to stop.
+                return
             } catch {
                 // Surface the error in the assistant bubble. Since the bubble is
                 // created lazily, it may not exist yet (error before any token) —
                 // insert one if the reply never started.
+                flushPendingReveal()
                 let errorText = "Sorry, I couldn't reach the server. Please try again."
                 if let idx = rows.firstIndex(where: { $0.id == assistantId.uuidString }),
                    case .assistantTurn(var turn) = rows[idx] {
@@ -759,6 +803,9 @@ final class CoachViewModel: ObservableObject {
     func cancelStreaming() {
         streamTask?.cancel()
         streamTask = nil
+        revealTask?.cancel()
+        revealTask = nil
+        pendingReveal = ""
         isStreaming = false
         openerTask?.cancel()
         openerTask = nil
@@ -775,6 +822,32 @@ final class CoachViewModel: ObservableObject {
         isTranscribing = false
         transcriber.stop()
         speaker.stop()
+    }
+
+    /// Composer "stop" tap: narrower than `cancelStreaming()`, which is a
+    /// full teardown that also kills workspace load, transcription, and TTS.
+    /// This only ends the in-flight reply. Implemented as a direct,
+    /// synchronous cleanup rather than just cancelling `streamTask` and
+    /// waiting — the `for try await` loop in `send()` only notices
+    /// cancellation at its next suspension point, which can lag behind the
+    /// tap, so the turn is flushed and finished here immediately instead.
+    func stopGenerating() {
+        guard isStreaming else { return }
+        streamTask?.cancel()
+        streamTask = nil
+        flushPendingReveal()
+        // Only finish a turn that already has a row. `finishTurn` goes
+        // through `mutateTurn`, whose no-row branch lazily *creates* the row
+        // — fine for a real in-flight reply, but stopping during the
+        // thinking phase (before any token arrived) would otherwise append a
+        // permanent empty `AssistantTurn` that renders nothing yet still
+        // occupies a transcript slot.
+        if let id = pendingAssistantId, rows.contains(where: { $0.id == id.uuidString }) {
+            finishTurn(id, persona: revealTargetPersona ?? activePersona)
+        }
+        speaker.stop()
+        isStreaming = false
+        pendingAssistantId = nil
     }
 
     // MARK: - Manual chat reset
@@ -928,9 +1001,79 @@ final class CoachViewModel: ObservableObject {
 
     // MARK: - Row mutation helpers
 
+    /// Entry point for every network text delta. Rather than writing straight
+    /// into the turn, deltas queue in `pendingReveal` and a drain loop
+    /// releases them at a steady cadence (see `startRevealTaskIfNeeded` /
+    /// `drainRevealTick`) — this is what turns lumpy 3–40 character network
+    /// bursts into a calm, finished-looking reveal instead of flickering text.
     private func appendText(_ delta: String, toTurn id: UUID, persona: CoachPersonaSnapshot) {
-        mutateTurn(id, persona: persona) { turn in
-            turn.appendText(delta)
+        guard !Theme.Motion.isReduced else {
+            // Reduce Motion bypasses the buffer entirely: no reveal cadence
+            // to animate, so there's nothing to gain from delaying the text.
+            mutateTurn(id, persona: persona) { turn in
+                turn.appendText(delta)
+            }
+            return
+        }
+        revealTargetId = id
+        revealTargetPersona = persona
+        pendingReveal += delta
+        startRevealTaskIfNeeded()
+    }
+
+    private func startRevealTaskIfNeeded() {
+        guard revealTask == nil else { return }
+        revealGeneration += 1
+        let generation = revealGeneration
+        revealTask = Task { @MainActor [weak self] in
+            while true {
+                guard let self, !Task.isCancelled, !self.pendingReveal.isEmpty else {
+                    // Only clear the handle if this is still the current
+                    // generation — see `revealGeneration`'s doc comment.
+                    if self?.revealGeneration == generation { self?.revealTask = nil }
+                    return
+                }
+                self.drainRevealTick()
+                try? await Task.sleep(for: .milliseconds(16))
+            }
+        }
+    }
+
+    /// One reveal-buffer tick. The chunk size is adaptive rather than fixed —
+    /// it targets draining the *current* backlog in ~7 frames (~120ms at
+    /// 16ms/tick) instead of a constant characters-per-tick. That way a small
+    /// burst trickles in smoothly over those 7 frames instead of landing in
+    /// one, while a large backlog (e.g. the network catching up after a
+    /// pause) still drains fast enough that the reveal never perceptibly
+    /// falls behind the network.
+    private func drainRevealTick() {
+        let charsPerTick = max(1, Int(ceil(Double(pendingReveal.count) / 7.0)))
+        let cut = pendingReveal.index(pendingReveal.startIndex, offsetBy: min(charsPerTick, pendingReveal.count))
+        let chunk = String(pendingReveal[pendingReveal.startIndex..<cut])
+        pendingReveal.removeSubrange(pendingReveal.startIndex..<cut)
+        if let id = revealTargetId, let persona = revealTargetPersona {
+            mutateTurn(id, persona: persona) { turn in
+                turn.appendText(chunk)
+            }
+        }
+        revealVersion += 1
+    }
+
+    /// Pushes any text still sitting in the reveal buffer straight into the
+    /// turn and stops the drain loop. Called on stream done, on error, and
+    /// from `stopGenerating()`, before the turn is finished — because the
+    /// adaptive rate keeps the backlog small, this flush is imperceptible.
+    private func flushPendingReveal() {
+        revealTask?.cancel()
+        revealTask = nil
+        guard !pendingReveal.isEmpty else { return }
+        let remaining = pendingReveal
+        pendingReveal = ""
+        if let id = revealTargetId, let persona = revealTargetPersona {
+            mutateTurn(id, persona: persona) { turn in
+                turn.appendText(remaining)
+            }
+            revealVersion += 1
         }
     }
 
@@ -941,8 +1084,15 @@ final class CoachViewModel: ObservableObject {
     }
 
     private func applyToolData(id: String, viz: CoachViz, toTurn turnId: UUID, persona: CoachPersonaSnapshot) {
-        mutateTurn(turnId, persona: persona) { turn in
-            turn.applyToolData(id: id, viz: viz)
+        // Card insertion is insert-shaped (a new row-level element appearing
+        // in an existing turn), so unlike the per-token text mutation it's
+        // animated — this is what makes the CoachDataCardView's
+        // `.transition(.opacity.combined(with: .move(edge: .leading)))`
+        // actually play instead of hard-cutting in.
+        withAnimation(Theme.Motion.appear) {
+            mutateTurn(turnId, persona: persona) { turn in
+                turn.applyToolData(id: id, viz: viz)
+            }
         }
     }
 
@@ -963,12 +1113,20 @@ final class CoachViewModel: ObservableObject {
     private func mutateTurn(_ id: UUID, persona: CoachPersonaSnapshot, _ update: (inout AssistantTurn) -> Void) {
         if let idx = rows.firstIndex(where: { $0.id == id.uuidString }),
            case .assistantTurn(var turn) = rows[idx] {
+            // Not animated: this branch is also hit by the per-token text
+            // drain (~60x/second) once the turn exists, and animating that
+            // would make every character spring in individually.
             update(&turn)
             rows[idx] = .assistantTurn(turn)
         } else {
+            // Animated: this is the lazy creation of a brand-new turn row —
+            // an insert, hit exactly once per turn — so it's what actually
+            // lets the assistant bubble's `.transition(.opacity)` play.
             var turn = AssistantTurn(id: id, persona: persona)
             update(&turn)
-            rows.append(.assistantTurn(turn))
+            withAnimation(Theme.Motion.appear) {
+                rows.append(.assistantTurn(turn))
+            }
         }
     }
 }

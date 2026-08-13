@@ -13,6 +13,7 @@ struct CoachView: View {
     /// tried voice — not as a permanent nag.
     @State private var didAttemptDeniedMic = false
     @State private var isScrolledNearBottom = true
+    @State private var scrollPhase: ScrollPhase = .idle
     @State private var showWorkspaceStickySummary = false
     @State private var specialistGlowExpanded = false
     @State private var pendingConfirmedAction: SpecialistAction?
@@ -186,7 +187,23 @@ struct CoachView: View {
             .onScrollGeometryChange(for: Bool.self) { geometry in
                 geometry.visibleRect.maxY >= geometry.contentSize.height - 80
             } action: { _, nearBottom in
-                isScrolledNearBottom = nearBottom
+                if nearBottom {
+                    // Re-pinning always applies, however the user (or a
+                    // programmatic scroll) got back within range.
+                    isScrolledNearBottom = true
+                } else if scrollPhase == .interacting || scrollPhase == .decelerating {
+                    // Only treat "moved away from bottom" as the user
+                    // scrolling up while they're actually touching or still
+                    // coasting from a touch. An animated programmatic scroll
+                    // (the reveal-buffer catch-up, or a discrete-insertion
+                    // scroll) also changes `visibleRect`, but isn't a real
+                    // scroll-phase interaction — without this gate it used to
+                    // get misread as the user scrolling away and unpin itself.
+                    isScrolledNearBottom = false
+                }
+            }
+            .onScrollPhaseChange { _, newPhase in
+                scrollPhase = newPhase
             }
             .onScrollGeometryChange(for: Bool.self) { geometry in
                 geometry.visibleRect.minY > 260
@@ -204,8 +221,31 @@ struct CoachView: View {
                     .allowsHitTesting(false)
                 }
             }
-            .onChange(of: vm.rows) {
-                scrollToBottomIfPinned(proxy)
+            .overlay(alignment: .bottom) {
+                if !isScrolledNearBottom && vm.isStreaming {
+                    Button {
+                        isScrolledNearBottom = true
+                        withAnimation(reduceMotion ? nil : Theme.Motion.snap) {
+                            proxy.scrollTo("bottom", anchor: .bottom)
+                        }
+                    } label: {
+                        Chip(text: "Jump to latest", icon: "arrow.down")
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.bottom, Theme.Spacing.sm)
+                    .transition(.opacity)
+                }
+            }
+            // Without an explicit animation tied to the condition, the
+            // `.transition(.opacity)` above never plays — SwiftUI only
+            // animates a transition when the view's appearance/disappearance
+            // happens inside an animated state change.
+            .animation(reduceMotion ? nil : Theme.Motion.snap, value: isScrolledNearBottom)
+            // Fires once per reveal-buffer drain tick instead of on every
+            // `rows` mutation — kills the per-token O(transcript) equality
+            // check `onChange(of: vm.rows)` used to do ~60x/second.
+            .onChange(of: vm.revealVersion) {
+                scrollToBottomDuringReveal(proxy)
             }
             .onChange(of: vm.isStreaming) {
                 scrollToBottomIfPinned(proxy)
@@ -271,9 +311,19 @@ struct CoachView: View {
 
     private func scrollToBottomIfPinned(_ proxy: ScrollViewProxy) {
         guard isScrolledNearBottom else { return }
-        withAnimation(Theme.Motion.exit) {
+        withAnimation(reduceMotion ? nil : Theme.Motion.exit) {
             proxy.scrollTo("bottom", anchor: .bottom)
         }
+    }
+
+    /// Scroll path for the reveal buffer's per-tick growth. Deliberately no
+    /// animation: the content growing underneath already supplies visual
+    /// continuity, and re-triggering `Theme.Motion.exit` on top of that ~60
+    /// times a second would self-interrupt and read as stutter rather than
+    /// glue. Still gated on the pin so it never fights a deliberate scroll-up.
+    private func scrollToBottomDuringReveal(_ proxy: ScrollViewProxy) {
+        guard isScrolledNearBottom else { return }
+        proxy.scrollTo("bottom", anchor: .bottom)
     }
 
     @ViewBuilder
@@ -381,21 +431,32 @@ struct CoachView: View {
 
                 micButton
 
-                Button(action: vm.send) {
-                    Image(systemName: "arrow.up")
+                Button(action: {
+                    if vm.isStreaming {
+                        vm.stopGenerating()
+                    } else {
+                        vm.send()
+                    }
+                }) {
+                    Image(systemName: vm.isStreaming ? "stop.fill" : "arrow.up")
                         .font(.system(size: 14, weight: .bold))
                         .foregroundStyle(Theme.Colors.onAccent)
                         .frame(width: 32, height: 32)
                         .background(
                             Circle()
                                 .fill(
-                                    canSend
+                                    (canSend || vm.isStreaming)
                                         ? Theme.Colors.accent
                                         : Theme.Colors.accent.opacity(0.3)
                                 )
                         )
                 }
-                .disabled(!canSend)
+                // `canSend` already requires `!vm.isStreaming`, so a bare
+                // `!canSend` would disable the button for the entire reply —
+                // a dead control during the most important moment. While
+                // streaming the button is always enabled (it's now the stop
+                // control); otherwise it falls back to the normal send gating.
+                .disabled(!canSend && !vm.isStreaming)
                 .animation(Theme.Motion.micro, value: vm.isStreaming)
             }
             .padding(.horizontal, Theme.Spacing.md)
@@ -574,6 +635,8 @@ struct CoachView: View {
 private struct AssistantTurnView: View {
     let turn: AssistantTurn
 
+    private var isStreamingTurn: Bool { !turn.isFinished }
+
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
             ForEach(turn.dataCards) { card in
@@ -581,17 +644,37 @@ private struct AssistantTurnView: View {
                     .transition(.opacity.combined(with: .move(edge: .leading)))
             }
 
-            if let status = turn.statusSummary {
-                ToolCallActivityView(label: status, isChecking: turn.isChecking)
+            // Order is conditional on whether prose has started. Before any
+            // text has streamed in, the tool-call chip is the only thing
+            // happening, so it stays above (where the empty bubble would be).
+            // Once prose exists, a mid-turn tool call describes work
+            // happening after what was just said, so the chip moves below it.
+            if turn.text.isEmpty {
+                statusChip
+                proseBubble
+            } else {
+                proseBubble
+                statusChip
             }
+        }
+    }
 
-            if !turn.visibleText.isEmpty {
-                MessageBubbleView(
-                    message: ChatMessage(id: turn.id, role: .assistant, text: turn.visibleText),
-                    presentation: CoachViewPresentation.assistantTurn(for: turn)
-                )
-                .transition(.opacity)
-            }
+    @ViewBuilder
+    private var statusChip: some View {
+        if let status = turn.statusSummary {
+            ToolCallActivityView(label: status, isChecking: turn.isChecking)
+        }
+    }
+
+    @ViewBuilder
+    private var proseBubble: some View {
+        if !turn.text.isEmpty {
+            MessageBubbleView(
+                message: ChatMessage(id: turn.id, role: .assistant, text: turn.text),
+                presentation: CoachViewPresentation.assistantTurn(for: turn),
+                showsCaret: isStreamingTurn
+            )
+            .transition(.opacity)
         }
     }
 }
@@ -601,6 +684,7 @@ private struct AssistantTurnView: View {
 private struct MessageBubbleView: View {
     let message: ChatMessage
     var presentation: CoachViewPresentation.Bubble? = nil
+    var showsCaret: Bool = false
 
     var body: some View {
         if message.role == .system {
@@ -647,7 +731,7 @@ private struct MessageBubbleView: View {
             Text(message.text.asMarkdown)
                 .lineSpacing(3)
         } else {
-            MarkdownText(markdown: message.text)
+            MarkdownText(markdown: message.text, showsCaret: showsCaret)
         }
     }
 }

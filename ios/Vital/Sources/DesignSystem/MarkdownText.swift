@@ -11,44 +11,110 @@ import SwiftUI
 struct MarkdownText: View {
     let markdown: String
     var lineSpacing: CGFloat = 3
+    /// When true, the last block — if it's a paragraph or list item — renders
+    /// a trailing caret to mark the live edge of a streaming reply. Defaults
+    /// false so the `MealDetailView` call site (static recipe text) is
+    /// unaffected.
+    var showsCaret: Bool = false
+
+    // The caret is concatenated directly into a `Text` run (see
+    // `caretAwareText`), and a concatenated `Text` can't be partially
+    // `.accessibilityHidden` — so under VoiceOver it must not be rendered at
+    // all, or VoiceOver reads the "▌" glyph as part of the reply. The
+    // environment key (not `UIAccessibility.isVoiceOverRunning`) is what
+    // makes this re-render if VoiceOver is toggled mid-session.
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
 
     private var blocks: [MarkdownBlock] { MarkdownBlock.parse(markdown) }
 
     var body: some View {
+        // Parsed once per body evaluation, not once per block — `parse` is a
+        // cheap O(n) scan, but calling it again inside the loop below (e.g.
+        // to check "is this the last block") would multiply that cost by the
+        // block count for no reason.
+        let currentBlocks = blocks
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-            ForEach(blocks) { block in
-                switch block.kind {
-                case .paragraph:
-                    Text(block.text.asMarkdown)
-                        .lineSpacing(lineSpacing)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                case .heading(let level):
-                    Text(block.text.asMarkdown)
-                        .font(headingFont(level: level))
-                        .foregroundStyle(Theme.Colors.textPrimary)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.top, level == 1 ? Theme.Spacing.xs : 0)
-
-                case .listItem(let marker):
-                    HStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.sm) {
-                        Text(marker)
-                            .monospacedDigit()
-                        Text(block.text.asMarkdown)
-                            .lineSpacing(lineSpacing)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-
-                case .table(let header, let rows):
-                    TableBlockView(header: header, rows: rows)
-
-                case .divider:
-                    Divider()
-                        .background(Theme.Colors.glassBorder)
-                        .padding(.vertical, Theme.Spacing.xs)
-                }
+            ForEach(currentBlocks) { block in
+                MarkdownBlockView(
+                    block: block,
+                    lineSpacing: lineSpacing,
+                    showsCaret: showsCaret
+                        && block.id == currentBlocks.last?.id
+                        && Self.isCaretEligible(block.kind)
+                        && !voiceOverEnabled
+                )
+                .equatable()
             }
+        }
+    }
+
+    private static func isCaretEligible(_ kind: MarkdownBlock.Kind) -> Bool {
+        switch kind {
+        case .paragraph, .listItem:
+            return true
+        case .heading, .table, .divider:
+            return false
+        }
+    }
+}
+
+// MARK: - Block rendering
+
+/// Renders a single `MarkdownBlock`. Extracted from `MarkdownText.body` and
+/// made `Equatable` so `.equatable()` lets SwiftUI skip re-evaluating `body`
+/// for blocks whose content hasn't changed — the actual fix for the
+/// per-token flicker, since `String.asMarkdown` builds an `AttributedString`
+/// and walks all its runs to strip links, which otherwise reran for every
+/// settled paragraph on every keystroke-speed token.
+private struct MarkdownBlockView: View, Equatable {
+    let block: MarkdownBlock
+    let lineSpacing: CGFloat
+    let showsCaret: Bool
+
+    var body: some View {
+        switch block.kind {
+        case .paragraph:
+            caretAwareText(block.text)
+                .lineSpacing(lineSpacing)
+                .fixedSize(horizontal: false, vertical: true)
+
+        case .heading(let level):
+            Text(block.text.asMarkdown)
+                .font(headingFont(level: level))
+                .foregroundStyle(Theme.Colors.textPrimary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, level == 1 ? Theme.Spacing.xs : 0)
+
+        case .listItem(let marker):
+            HStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.sm) {
+                Text(marker)
+                    .monospacedDigit()
+                caretAwareText(block.text)
+                    .lineSpacing(lineSpacing)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+        case .table(let header, let rows):
+            TableBlockView(header: header, rows: rows)
+
+        case .divider:
+            Divider()
+                .background(Theme.Colors.glassBorder)
+                .padding(.vertical, Theme.Spacing.xs)
+        }
+    }
+
+    /// Text concatenation (not an overlay) so the caret stays inside the text
+    /// flow and wraps naturally at the line end. Solid, not blinking — a
+    /// caret that blinks while characters are actively arriving reads as
+    /// noise, and a solid caret needs no timer and no Reduce Motion case.
+    @ViewBuilder
+    private func caretAwareText(_ text: String) -> some View {
+        if showsCaret {
+            Text(text.asMarkdown) + Text("▌").foregroundStyle(Theme.Colors.accent.opacity(0.7))
+        } else {
+            Text(text.asMarkdown)
         }
     }
 
@@ -113,7 +179,7 @@ private struct TableBlockView: View {
 /// A single rendered block: a paragraph, heading, list item with a leading
 /// marker glyph ("•" for bullets, "1." for ordered items), divider, or GFM
 /// table.
-struct MarkdownBlock: Identifiable {
+struct MarkdownBlock: Identifiable, Equatable {
     enum Kind: Equatable {
         case paragraph
         case heading(level: Int)
@@ -122,13 +188,20 @@ struct MarkdownBlock: Identifiable {
         case divider
     }
 
-    let id = UUID()
+    /// Document position, assigned once at the end of `parse` (not `UUID()`
+    /// minted fresh on every parse). Every block except the growing tail
+    /// keeps the same id as a reply streams in, which is what lets
+    /// `ForEach` — and `.equatable()` on `MarkdownBlockView` — recognize
+    /// settled blocks as unchanged instead of tearing down and rebuilding
+    /// the whole bubble on every token.
+    let id: Int
     let kind: Kind
     /// Body for paragraph / list item; empty for tables (they carry their cells
     /// in the `.table` case payload).
     let text: String
 
-    init(kind: Kind, text: String = "") {
+    init(id: Int = 0, kind: Kind, text: String = "") {
+        self.id = id
         self.kind = kind
         self.text = text
     }
@@ -205,7 +278,11 @@ struct MarkdownBlock: Identifiable {
             i += 1
         }
         flushParagraph()
-        return blocks
+        // Assign stable ids by document position, post-parse, so the parsing
+        // control flow above is untouched.
+        return blocks.enumerated().map { index, block in
+            MarkdownBlock(id: index, kind: block.kind, text: block.text)
+        }
     }
 
     /// Recognizes `- `, `* `, `+ ` (bullets) and `1. ` / `1) ` (ordered) prefixes.
