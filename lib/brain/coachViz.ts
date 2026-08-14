@@ -14,6 +14,7 @@
 
 import { LB_PER_KG } from '../metricFormat';
 import type { UnitSystem } from '../units';
+import { METRIC_CATALOG } from '../metricCatalog';
 
 export type CoachViz =
   | {
@@ -42,19 +43,22 @@ export type CoachViz =
       deltaPct: number | null;
     };
 
-const METRIC_META: Record<string, { label: string; unit: string }> = {
-  hrv_sdnn:           { label: 'HRV',           unit: 'ms' },
-  resting_hr:         { label: 'Resting HR',    unit: 'bpm' },
-  hr_avg:             { label: 'Avg HR',        unit: 'bpm' },
-  steps:              { label: 'Steps',         unit: '' },
-  active_energy_kcal: { label: 'Active energy', unit: 'kcal' },
-  body_mass_kg:       { label: 'Weight',        unit: 'kg' },
-  sleep_minutes:      { label: 'Sleep',         unit: 'min' },
-};
-
-/** Metric metadata, unit-aware: `body_mass_kg` reports `unit: 'lb'` for an imperial user. */
+/**
+ * Metric metadata, unit-aware: `body_mass_kg` reports `unit: 'lb'` for an
+ * imperial user. Derived from lib/metricCatalog.ts's METRIC_CATALOG — this
+ * function uses each spec's **storageUnit**, not displayUnit, because
+ * buildCoachViz's values are never scaled by lib/metricCatalog.ts's
+ * `toDisplay()` (only `convertMetricValue()` above, which is a no-op except
+ * for `body_mass_kg`/imperial); the label just needs to describe whatever
+ * unit the value is actually in. `steps` keeps its historical empty-string
+ * unit (label alone reads fine: "Steps · last 7 days") rather than the
+ * catalog's `'count'`.
+ */
 function meta(metric: string, unitSystem: UnitSystem): { label: string; unit: string } {
-  const base = METRIC_META[metric] ?? { label: metric, unit: '' };
+  const spec = METRIC_CATALOG[metric];
+  const base = spec
+    ? { label: spec.label, unit: spec.storageUnit === 'count' ? '' : spec.storageUnit }
+    : { label: metric, unit: '' };
   if (metric === 'body_mass_kg' && unitSystem === 'imperial') return { ...base, unit: 'lb' };
   return base;
 }

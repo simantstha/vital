@@ -32,7 +32,7 @@
 
 import type { Tool } from '@anthropic-ai/sdk/resources/messages';
 import { db, schema } from '@/db';
-import { eq, and, gte, gt, lt, asc, desc } from 'drizzle-orm';
+import { eq, and, gte, gt, lt, asc, desc, inArray, sql } from 'drizzle-orm';
 import { lookupBarcode } from '@/lib/openFoodFacts';
 import { searchCandidates, type Candidate } from '@/lib/nutrition/candidates';
 import type { BaselineStats } from '@/lib/brain/baselines';
@@ -669,6 +669,77 @@ export async function queryAllBaselines(userId: string): Promise<BaselineSnapsho
     stats:       r.stats as BaselineStats | null,
     established: r.established,
     dataDays:    r.data_days,
+  }));
+}
+
+export interface MetricPointRow extends MetricPoint {
+  metric: string;
+}
+
+/**
+ * Multi-metric raw daily_metrics rows over the trailing window — one SELECT
+ * via `inArray` for however many metrics are requested. This is the N+1 fix
+ * for the Trends batch endpoint (app/api/trends/route.ts): mirrors
+ * queryMetricPoints(), just not pinned to a single metric.
+ */
+export async function queryMetricPointsMulti(
+  userId: string,
+  metrics: string[],
+  days: number,
+): Promise<MetricPointRow[]> {
+  if (metrics.length === 0) return [];
+  const since = isoDateDaysAgo(days);
+  const rows = await db
+    .select({
+      metric: schema.daily_metrics.metric,
+      date:   schema.daily_metrics.date,
+      value:  schema.daily_metrics.value,
+    })
+    .from(schema.daily_metrics)
+    .where(
+      and(
+        eq(schema.daily_metrics.user_id, userId),
+        inArray(schema.daily_metrics.metric, metrics),
+        gte(schema.daily_metrics.date, since),
+      ),
+    )
+    .orderBy(asc(schema.daily_metrics.date));
+
+  return rows.map(r => ({ metric: r.metric, date: r.date, value: r.value }));
+}
+
+export interface MetricDataDaysRow {
+  metric:   string;
+  dataDays: number;
+  lastDate: string | null;
+}
+
+/**
+ * Fresh per-metric data-day counts (90-day window) + most recent date, one
+ * GROUP BY for however many metrics are requested. Same freshness rationale
+ * as getCalibration() (lib/brain/baselines.ts:130-133): the
+ * `baselines.data_days` snapshot only refreshes on recomputeBaselines() and
+ * can lag a backfill, so Trends recomputes straight from daily_metrics.
+ */
+export async function queryMetricDataDays(
+  userId: string,
+  metrics: string[],
+): Promise<MetricDataDaysRow[]> {
+  if (metrics.length === 0) return [];
+  const rows = await db
+    .select({
+      metric:   schema.daily_metrics.metric,
+      dataDays: sql<number>`count(distinct ${schema.daily_metrics.date}) filter (where ${schema.daily_metrics.date} >= current_date - interval '90 days')`,
+      lastDate: sql<string | null>`max(${schema.daily_metrics.date})`,
+    })
+    .from(schema.daily_metrics)
+    .where(and(eq(schema.daily_metrics.user_id, userId), inArray(schema.daily_metrics.metric, metrics)))
+    .groupBy(schema.daily_metrics.metric);
+
+  return rows.map(r => ({
+    metric:   r.metric,
+    dataDays: Number(r.dataDays ?? 0),
+    lastDate: r.lastDate ?? null,
   }));
 }
 
