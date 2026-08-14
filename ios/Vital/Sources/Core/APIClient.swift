@@ -204,6 +204,18 @@ struct APIClient {
         try await get("/api/trends?metric=\(metric)&days=\(days)")
     }
 
+    /// Batch fetch — one round trip for every tile on the Trends grid index,
+    /// each series carrying its baseline stats (`?metrics=a,b,c`, the branch
+    /// added alongside the single-metric `?metric=` route). `metrics` are raw
+    /// `daily_metrics` names (`hrv_sdnn`, not the legacy `hrv` alias `fetchTrends`
+    /// still speaks). Unknown names are dropped server-side and echoed back in
+    /// `unknownMetrics` rather than 400ing the whole request.
+    func fetchTrendsBatch(metrics: [String], days: Int) async throws -> TrendsBatchResponse {
+        let joined = metrics.joined(separator: ",")
+        let encoded = joined.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? joined
+        return try await get("/api/trends?metrics=\(encoded)&days=\(days)")
+    }
+
     // MARK: - Today's plan
 
     /// Fetches today's plan timeline. Sends the device's current timezone —
@@ -1417,10 +1429,50 @@ struct TrendsResponse: Decodable {
     let calibration: CalibrationStatus?
 }
 
+/// `baselines.stats` snapshot for one metric — every field independently
+/// nullable (e.g. `sd30` is null for a user with a single day of data;
+/// `stddev_samp` of one row is undefined). Values arrive in the same
+/// display units as `points` (the server already applied `toDisplay`/
+/// `toDisplayStats` from `lib/metricCatalog.ts` — a pure multiplicative
+/// scale, so converting `sd30` alongside the mean/percentiles is exact).
+struct TrendsBaselineDTO: Decodable, Equatable {
+    let mean7: Double?
+    let mean30: Double?
+    let mean60: Double?
+    let sd30: Double?
+    let p25: Double?
+    let p50: Double?
+    let p75: Double?
+}
+
+/// One metric's entry in a `/api/trends?metrics=` batch response. `baseline`
+/// is nil when the user has no `baselines` row for this metric yet;
+/// `established` is recomputed server-side from the fresh `dataDays` rather
+/// than trusting the (possibly stale) `baselines.established` snapshot.
+struct TrendsSeriesDTO: Decodable {
+    let metric: String
+    let label: String
+    let unit: String
+    let points: [TrendPoint]
+    let baseline: TrendsBaselineDTO?
+    let dataDays: Int
+    let established: Bool
+    let lastDate: String?
+}
+
+struct TrendsBatchResponse: Decodable {
+    let days: Int
+    let series: [String: TrendsSeriesDTO]
+    let unknownMetrics: [String]
+    let calibration: CalibrationStatus?
+}
+
 @MainActor
 protocol TrendsAPIProviding {
     func fetchTrends(metric: String, days: Int) async throws -> TrendsResponse
+    func fetchTrendsBatch(metrics: [String], days: Int) async throws -> TrendsBatchResponse
 }
+
 
 extension APIClient: TrendsAPIProviding {}
 

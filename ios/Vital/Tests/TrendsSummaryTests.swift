@@ -442,6 +442,12 @@ private final class FakeTrendsAPI: TrendsAPIProviding {
     /// called, so tests can control response ordering deterministically.
     var delayedMetric: String?
     private var continuation: CheckedContinuation<Void, Never>?
+    var batchResponse: TrendsBatchResponse = TrendsBatchResponse(
+        days: 30,
+        series: [:],
+        unknownMetrics: [],
+        calibration: nil
+    )
 
     func fetchTrends(metric: String, days: Int) async throws -> TrendsResponse {
         if metric == delayedMetric {
@@ -449,6 +455,10 @@ private final class FakeTrendsAPI: TrendsAPIProviding {
         }
         if let error { throw error }
         return responses[metric] ?? TrendsResponse(metric: metric, points: [], calibration: nil)
+    }
+
+    func fetchTrendsBatch(metrics: [String], days: Int) async throws -> TrendsBatchResponse {
+        return batchResponse
     }
 
     func release() {
