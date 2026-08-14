@@ -268,19 +268,7 @@ private extension TrendsView {
     }
 
     var emptyChartPlaceholder: some View {
-        HStack {
-            Spacer()
-            VStack(spacing: Theme.Spacing.sm) {
-                Image(systemName: "chart.line.uptrend.xyaxis")
-                    .font(.system(size: 28))
-                    .foregroundStyle(Theme.Colors.textSecondary)
-                Text("No data yet")
-                    .font(Theme.Typography.bodySmall)
-                    .foregroundStyle(Theme.Colors.textSecondary)
-            }
-            Spacer()
-        }
-        .frame(height: 180)
+        EmptyStateView(icon: "chart.line.uptrend.xyaxis", message: "No data yet", height: 180)
     }
 
     var trendChart: some View {
@@ -453,30 +441,6 @@ private struct TrendSummaryCard<Chart: View>: View {
             Text(footnote.prefix)
                 .font(.system(size: 13))
                 .foregroundStyle(Theme.Colors.textSecondary)
-        }
-    }
-}
-
-// MARK: - Stat badge
-
-private struct StatBadge: View {
-    let label: String
-    let value: String
-
-    var body: some View {
-        VitalCard(padding: Theme.Spacing.md, cornerRadius: Theme.Radius.md) {
-            VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
-                Text(label.uppercased())
-                    .font(Theme.Typography.labelSmall)
-                    .foregroundStyle(Theme.Colors.textSecondary)
-                    .tracking(0.5)
-                Text(value)
-                    .font(Theme.Typography.numericSmall(13))
-                    .foregroundStyle(Theme.Colors.textPrimary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }
