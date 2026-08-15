@@ -318,34 +318,18 @@ final class TrendsSummaryTests: XCTestCase {
         XCTAssertEqual(TrendsSummary.vitalsNote([47, 47, 48, 48, 49, 49, 49]), "7-day")
     }
 
-    // MARK: - TrendMetric.unitLabel
-
-    func testUnitLabelConvertsWeightAndDistanceButLeavesNeutralMetricsUnchanged() {
-        XCTAssertEqual(TrendMetric.weight.unitLabel(.metric), "kg")
-        XCTAssertEqual(TrendMetric.weight.unitLabel(.imperial), "lb")
-        XCTAssertEqual(TrendMetric.distance.unitLabel(.metric), "km")
-        XCTAssertEqual(TrendMetric.distance.unitLabel(.imperial), "mi")
-
-        for metric: TrendMetric in [.hrv, .sleep, .steps, .vo2, .rhr] {
-            XCTAssertEqual(metric.unitLabel(.metric), metric.unitLabel(.imperial),
-                            "\(metric) should be unaffected by unit system")
-        }
-        XCTAssertEqual(TrendMetric.hrv.unitLabel(.metric), "ms")
-        XCTAssertEqual(TrendMetric.sleep.unitLabel(.metric), "h")
-        XCTAssertEqual(TrendMetric.steps.unitLabel(.metric), "steps")
-        XCTAssertEqual(TrendMetric.vo2.unitLabel(.metric), "ml/kg·min")
-        XCTAssertEqual(TrendMetric.rhr.unitLabel(.metric), "bpm")
-    }
 }
 
-// MARK: - TrendsViewModel.load() — metric/response integrity
+// MARK: - TrendsViewModel.load() — batch loader integrity
 
-/// Regression coverage for the mislabeled-metric bug: `selectedMetric` used
-/// to change synchronously on tap while `points` only updated after the
-/// network round-trip, so the header briefly (or, on error, indefinitely)
-/// showed one metric's numbers under another metric's name. `load()` now
-/// binds points to the metric/days that produced them via `LoadedSeries`,
-/// and a generation counter drops any response superseded by a later tap.
+/// Coverage for the grid index's batch loader: `load()` now fetches every
+/// catalog metric in one `fetchTrendsBatch` round trip instead of one
+/// `fetchTrends` per tap, keyed by raw metric name rather than bound to a
+/// single `selectedMetric`. The race-guard regression this class used to
+/// pin (a slow response landing after a faster, newer one) still applies —
+/// it's now a pull-to-refresh racing a fresh `load()` instead of two taps —
+/// so `testSlowFirstBatchResponseDoesNotOverwriteNewerSecondResponse` below
+/// is the direct descendant of that original test.
 @MainActor
 final class TrendsViewModelLoadTests: XCTestCase {
 
@@ -353,80 +337,149 @@ final class TrendsViewModelLoadTests: XCTestCase {
         TrendPoint(date: dateKey, value: value)
     }
 
-    func testSuccessfulLoadExposesLoadedMatchingTheRequestedMetric() async {
+    private func hrvSeries(
+        value: Double,
+        dataDays: Int = 20,
+        established: Bool = true,
+        baseline: TrendsBaselineDTO? = nil
+    ) -> TrendsSeriesDTO {
+        TrendsSeriesDTO(
+            metric: "hrv_sdnn", label: "HRV", unit: "ms",
+            points: [point("2026-07-01", value)],
+            baseline: baseline, dataDays: dataDays, established: established, lastDate: nil
+        )
+    }
+
+    func testSuccessfulLoadPopulatesLoadedKeyedByRawMetricName() async {
         let fake = FakeTrendsAPI()
-        fake.responses["steps"] = TrendsResponse(
-            metric: "steps",
-            points: [point("2026-07-01", 4200), point("2026-07-02", 5300)],
-            calibration: nil
+        fake.batchResponse = TrendsBatchResponse(
+            days: 30,
+            series: ["hrv_sdnn": hrvSeries(value: 48)],
+            unknownMetrics: [],
+            calibration: CalibrationStatus(status: "ready", metrics: [:])
         )
         let vm = TrendsViewModel(apiClient: fake)
-        vm.selectedMetric = .steps
-        vm.selectedDays = 30
 
         await vm.load()
 
-        XCTAssertEqual(vm.loaded?.metric, .steps)
-        XCTAssertEqual(vm.loaded?.days, 30)
-        XCTAssertEqual(vm.loaded?.points.count, 2)
+        XCTAssertEqual(vm.loaded["hrv_sdnn"]?.points.first?.value, 48)
+        XCTAssertEqual(vm.calibration?.status, "ready")
         XCTAssertFalse(vm.isLoading)
         XCTAssertNil(vm.errorMessage)
     }
 
-    func testFailedLoadClearsLoaded() async {
+    /// A key the batch response returns that isn't in `MetricCatalog` (an
+    /// older client requesting a name a newer/older backend doesn't
+    /// recognize, or vice versa) must be dropped, not crash or surface as a
+    /// tile with no spec to render against.
+    func testKeyNotInCatalogIsDroppedFromLoaded() async {
         let fake = FakeTrendsAPI()
-        fake.responses["hrv"] = TrendsResponse(
-            metric: "hrv",
-            points: [point("2026-07-01", 55)],
+        fake.batchResponse = TrendsBatchResponse(
+            days: 30,
+            series: [
+                "hrv_sdnn": hrvSeries(value: 48),
+                "not_a_real_metric": hrvSeries(value: 1),
+            ],
+            unknownMetrics: [],
             calibration: nil
         )
         let vm = TrendsViewModel(apiClient: fake)
-        vm.selectedMetric = .hrv
-        vm.selectedDays = 14
-        await vm.load()
-        XCTAssertNotNil(vm.loaded, "precondition: first load should have succeeded")
 
-        fake.error = TestFailure.unavailable
         await vm.load()
 
-        XCTAssertNil(vm.loaded)
-        XCTAssertNotNil(vm.errorMessage)
+        XCTAssertNotNil(vm.loaded["hrv_sdnn"])
+        XCTAssertNil(vm.loaded["not_a_real_metric"])
     }
 
-    /// Two taps in quick succession — a slow first response for the metric
-    /// tapped first must not land after (and overwrite) a faster response
-    /// for the metric tapped second.
-    func testSlowFirstResponseDoesNotOverwriteNewerSecondResponse() async {
+    /// A refresh failure must not wipe the grid back to empty — the
+    /// previous `loaded` content stays on screen (with an `ErrorCard` above
+    /// it) rather than every tile vanishing because pull-to-refresh hit a
+    /// transient network error.
+    func testFailedLoadSetsErrorMessageButPreservesPreviousLoaded() async {
         let fake = FakeTrendsAPI()
-        fake.responses["hrv"] = TrendsResponse(
-            metric: "hrv",
-            points: [point("2026-07-01", 55)],
-            calibration: nil
+        fake.batchResponse = TrendsBatchResponse(
+            days: 30, series: ["hrv_sdnn": hrvSeries(value: 48)], unknownMetrics: [], calibration: nil
         )
-        fake.responses["rhr"] = TrendsResponse(
-            metric: "rhr",
-            points: [point("2026-07-01", 60)],
-            calibration: nil
+        let vm = TrendsViewModel(apiClient: fake)
+        await vm.load()
+        XCTAssertFalse(vm.loaded.isEmpty, "precondition: first load should have succeeded")
+
+        fake.batchError = TestFailure.unavailable
+        await vm.load()
+
+        XCTAssertNotNil(vm.errorMessage)
+        XCTAssertEqual(vm.loaded["hrv_sdnn"]?.points.first?.value, 48, "stale-but-valid data must survive a failed refresh")
+    }
+
+    /// The generation-guard regression test, ported from the explorer's
+    /// two-taps scenario to the batch loader's pull-to-refresh scenario: a
+    /// slow first `load()` must not overwrite a faster second `load()` that
+    /// completed while the first was still in flight.
+    func testSlowFirstBatchResponseDoesNotOverwriteNewerSecondResponse() async {
+        let fake = FakeTrendsAPI()
+        fake.batchResponse = TrendsBatchResponse(
+            days: 30, series: ["hrv_sdnn": hrvSeries(value: 999)], unknownMetrics: [], calibration: nil
         )
-        fake.delayedMetric = "hrv"
+        fake.delayNextBatch = true
 
         let vm = TrendsViewModel(apiClient: fake)
-        vm.selectedMetric = .hrv
-        vm.selectedDays = 14
-
         let firstLoad = Task { await vm.load() }
-        await Task.yield() // let the first load reach the fetchTrends("hrv") await
+        await Task.yield() // let the first load reach the fetchTrendsBatch await
 
-        vm.selectedMetric = .rhr
-        await vm.load() // resolves immediately — not the delayed metric
+        fake.batchResponse = TrendsBatchResponse(
+            days: 30, series: ["hrv_sdnn": hrvSeries(value: 60)], unknownMetrics: [], calibration: nil
+        )
+        await vm.load() // resolves immediately — not the delayed call
 
-        XCTAssertEqual(vm.loaded?.metric, .rhr, "the faster, newer response should win")
+        XCTAssertEqual(vm.loaded["hrv_sdnn"]?.points.first?.value, 60, "the faster, newer response should win")
 
-        fake.release() // now let the stale hrv response land
+        fake.releaseBatch() // now let the stale first response land
         await firstLoad.value
 
-        XCTAssertEqual(vm.loaded?.metric, .rhr, "a superseded response must not overwrite the newer one")
-        XCTAssertEqual(vm.loaded?.points.first?.value, 60)
+        XCTAssertEqual(vm.loaded["hrv_sdnn"]?.points.first?.value, 60, "a superseded response must not overwrite the newer one")
+    }
+}
+
+// MARK: - TrendsViewModel.makeSeries — unit conversion happens exactly once
+
+/// Pure coverage (no network) for the decode-time conversion: `displayScale`
+/// applied once to **both** `points[].value` and every `baseline` field.
+/// `MetricCatalogTests` already pins `displayScale` itself; this is the
+/// integration point that proves `makeSeries` actually applies it to both
+/// places rather than just the headline value. `@MainActor` because
+/// `makeSeries` lives on `TrendsViewModel`, which is itself `@MainActor`.
+@MainActor
+final class TrendsViewModelMakeSeriesTests: XCTestCase {
+
+    func testDisplayScaleAppliesOnceToBothPointsAndBaselineForImperial() {
+        let spec = MetricCatalog.spec(for: "body_mass_kg")!
+        let dto = TrendsSeriesDTO(
+            metric: "body_mass_kg", label: "Weight", unit: "kg",
+            points: [TrendPoint(date: "2026-07-01", value: 70.0)],
+            baseline: TrendsBaselineDTO(mean7: 70.0, mean30: 70.0, mean60: 70.0, sd30: 0.05, p25: 69.5, p50: 70.0, p75: 70.5),
+            dataDays: 30, established: true, lastDate: "2026-07-01"
+        )
+
+        let series = TrendsViewModel.makeSeries(from: dto, spec: spec, system: .imperial)
+
+        let scale = UnitConvert.lbPerKg
+        XCTAssertEqual(series.points.first?.value ?? 0, 70.0 * scale, accuracy: 1e-9)
+        XCTAssertEqual(series.baseline?.mean30 ?? 0, 70.0 * scale, accuracy: 1e-9)
+        XCTAssertEqual(series.baseline?.sd30 ?? 0, 0.05 * scale, accuracy: 1e-9, "sd30 must scale too — a smart-scale wobble must stay the same fraction of the mean after conversion")
+        XCTAssertEqual(series.baseline?.p75 ?? 0, 70.5 * scale, accuracy: 1e-9)
+    }
+
+    func testDisplayScaleIsANoOpForMetricSystem() {
+        let spec = MetricCatalog.spec(for: "body_mass_kg")!
+        let dto = TrendsSeriesDTO(
+            metric: "body_mass_kg", label: "Weight", unit: "kg",
+            points: [TrendPoint(date: "2026-07-01", value: 70.0)],
+            baseline: nil, dataDays: 30, established: true, lastDate: nil
+        )
+
+        let series = TrendsViewModel.makeSeries(from: dto, spec: spec, system: .metric)
+
+        XCTAssertEqual(series.points.first?.value, 70.0)
     }
 }
 
@@ -442,12 +495,20 @@ private final class FakeTrendsAPI: TrendsAPIProviding {
     /// called, so tests can control response ordering deterministically.
     var delayedMetric: String?
     private var continuation: CheckedContinuation<Void, Never>?
+
     var batchResponse: TrendsBatchResponse = TrendsBatchResponse(
         days: 30,
         series: [:],
         unknownMetrics: [],
         calibration: nil
     )
+    var batchError: Error?
+    /// When true, the NEXT `fetchTrendsBatch` call suspends until
+    /// `releaseBatch()` is called — lets a test start a slow `load()`, let a
+    /// second (fast) `load()` finish first, and prove the slow one can't
+    /// clobber the fresher result once it's finally released.
+    var delayNextBatch = false
+    private var batchContinuation: CheckedContinuation<Void, Never>?
 
     func fetchTrends(metric: String, days: Int) async throws -> TrendsResponse {
         if metric == delayedMetric {
@@ -458,11 +519,21 @@ private final class FakeTrendsAPI: TrendsAPIProviding {
     }
 
     func fetchTrendsBatch(metrics: [String], days: Int) async throws -> TrendsBatchResponse {
+        if delayNextBatch {
+            delayNextBatch = false
+            await withCheckedContinuation { batchContinuation = $0 }
+        }
+        if let batchError { throw batchError }
         return batchResponse
     }
 
     func release() {
         continuation?.resume()
         continuation = nil
+    }
+
+    func releaseBatch() {
+        batchContinuation?.resume()
+        batchContinuation = nil
     }
 }

@@ -1,63 +1,73 @@
 import SwiftUI
-import Charts
 
 struct TrendsView: View {
     @StateObject private var vm = TrendsViewModel()
-    @ObservedObject private var unitPref = UnitPreference.shared
+    @State private var path: [String] = []
+    /// Toggled on every tile tap purely to drive `.sensoryFeedback` below —
+    /// tile taps are one of the three user-committed actions the motion
+    /// policy allows a haptic on (never data arriving from `vm.load()`).
+    @State private var tileTapTick = false
+
+    private static let gridColumns = [
+        GridItem(.flexible(), spacing: Theme.Spacing.md),
+        GridItem(.flexible()),
+    ]
 
     var body: some View {
-        ZStack {
-            Theme.Colors.canvas.ignoresSafeArea()
+        NavigationStack(path: $path) {
+            ZStack {
+                Theme.Colors.canvas.ignoresSafeArea()
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: Theme.Spacing.xl) {
-                    headerSection
+                ScrollView {
+                    VStack(alignment: .leading, spacing: Theme.Spacing.xl) {
+                        headerSection
 
-                    if vm.calibration?.status == "calibrating" {
-                        calibratingBanner
-                    }
+                        if vm.calibration?.status == "calibrating" {
+                            calibratingBanner
+                        }
 
-                    if let summaryErrorMessage = vm.summaryErrorMessage {
-                        ErrorCard(title: "Couldn't load your 7-day summary", message: summaryErrorMessage) {
-                            Task {
-                                vm.summaryErrorMessage = nil
-                                await vm.loadSummary()
+                        if let summaryErrorMessage = vm.summaryErrorMessage {
+                            ErrorCard(title: "Couldn't load your 7-day summary", message: summaryErrorMessage) {
+                                Task {
+                                    vm.summaryErrorMessage = nil
+                                    await vm.loadSummary()
+                                }
                             }
                         }
-                    }
 
-                    summaryCards
-
-                    VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
-                        SectionHeader(title: "Explore")
-                        metricPicker
-                        daysPicker
+                        WeeklyHeadlineStrip(vm: vm)
 
                         if let errorMessage = vm.errorMessage {
-                            ErrorCard(title: "Couldn't load this chart", message: errorMessage) {
+                            ErrorCard(title: "Couldn't load your trends", message: errorMessage) {
                                 Task {
                                     vm.errorMessage = nil
                                     await vm.load()
                                 }
                             }
+                            .motionTransition(.fade)
                         }
 
-                        chartCard
-                        statsRow
+                        gridBody
                     }
+                    .padding(.horizontal, Theme.Spacing.xl)
+                    .padding(.top, Theme.Spacing.lg)
+                    .padding(.bottom, 40)
                 }
-                .padding(.horizontal, Theme.Spacing.xl)
-                .padding(.top, Theme.Spacing.lg)
-                .padding(.bottom, 40)
+                .scrollIndicators(.hidden)
+                .refreshable {
+                    await vm.load()
+                    await vm.loadSummary()
+                }
             }
-            .scrollIndicators(.hidden)
+            .navigationDestination(for: String.self) { metricKey in
+                MetricDetailView(metricKey: metricKey)
+            }
         }
         .task {
             await vm.load()
             await vm.loadSummary()
         }
-        .onChange(of: vm.selectedMetric) { Task { await vm.load() } }
-        .onChange(of: vm.selectedDays)   { Task { await vm.load() } }
+        .sensoryFeedback(Theme.Haptics.selection, trigger: tileTapTick)
     }
 }
 
@@ -70,21 +80,15 @@ private extension TrendsView {
             Text("Trends")
                 .screenTitleStyle()
                 .foregroundStyle(Theme.Colors.textPrimary)
-            Text(rangeSubtitle)
+            Text(subtitle)
                 .font(.system(size: 15))
                 .foregroundStyle(Theme.Colors.textSecondary)
         }
     }
 
-    private var rangeSubtitle: String {
-        switch vm.selectedDays {
-        case 7:   return "Last 7 days"
-        case 14:  return "Last 14 days"
-        case 30:  return "Last 30 days"
-        case 90:  return "Last 3 months"
-        case 365: return "Last year"
-        default:  return "Last \(vm.selectedDays) days"
-        }
+    var subtitle: String {
+        let count = visibleMetricCount
+        return "Last 30 days · \(count) metric\(count == 1 ? "" : "s") tracked"
     }
 
     var calibratingBanner: some View {
@@ -93,7 +97,7 @@ private extension TrendsView {
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(Theme.Colors.accentContent)
                 .padding(.top, 1)
-            Text("Baselines are still calibrating — trends firm up as more days come in.")
+            Text("Baselines are still calibrating — \"your normal\" appears once each metric has 14 days.")
                 .font(.system(size: 14))
                 .foregroundStyle(Theme.Colors.accentContent)
         }
@@ -107,340 +111,86 @@ private extension TrendsView {
     }
 }
 
-// MARK: - Last 7 days summary cards
+// MARK: - Grid index
 
 private extension TrendsView {
 
-    var summaryCards: some View {
-        VStack(spacing: Theme.Spacing.lg) {
-            let sleepGoalHours = Double(vm.sleepGoalMinutes) / 60.0
-            TrendSummaryCard(
-                title: "Sleep",
-                value: vm.sleepValueText,
-                unit: "avg",
-                note: "goal \(TrendsSummary.hoursLabel(sleepGoalHours))h",
-                footnote: vm.sleepFootnote
-            ) {
-                TrendBarChart(values: vm.sleepWindow.values, dayLabels: vm.sleepWindow.dayLabels, goalHours: sleepGoalHours)
-            }
-
-            TrendSummaryCard(
-                title: "HRV",
-                value: vm.hrvValueText,
-                unit: "ms",
-                note: vm.hrvNote,
-                footnote: vm.hrvFootnote
-            ) {
-                TrendLineChart(values: vm.hrvWindow.values, dayLabels: vm.hrvWindow.dayLabels)
-            }
-
-            TrendSummaryCard(
-                title: "Resting HR",
-                value: vm.rhrValueText,
-                unit: "bpm",
-                note: vm.rhrNote,
-                footnote: vm.rhrFootnote
-            ) {
-                TrendLineChart(values: vm.rhrWindow.values, dayLabels: vm.rhrWindow.dayLabels)
-            }
-        }
-    }
-}
-
-// MARK: - Explorer (existing metric/range explorer, restyled)
-
-private extension TrendsView {
-
-    var metricPicker: some View {
-        Menu {
-            ForEach(TrendMetric.allCases) { metric in
-                Button {
-                    vm.selectedMetric = metric
-                } label: {
-                    if vm.selectedMetric == metric {
-                        Label(metric.displayName, systemImage: "checkmark")
-                    } else {
-                        Text(metric.displayName)
-                    }
-                }
-            }
-        } label: {
-            HStack(spacing: Theme.Spacing.xs) {
-                Text(vm.selectedMetric.displayName)
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(Theme.Colors.textPrimary)
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Theme.Colors.textSecondary)
-                Spacer()
-            }
-            .padding(.horizontal, Theme.Spacing.lg)
-            .padding(.vertical, Theme.Spacing.sm)
-            .background(
-                Capsule().fill(Theme.Colors.card)
-            )
-            .shadow(color: Theme.Colors.cardShadow, radius: 2, x: 0, y: 1)
-        }
-        .buttonStyle(.plain)
+    var sections: [TrendsSection] {
+        TrendsIndexSections.build(loaded: vm.loaded, today: Date())
     }
 
-    var daysPicker: some View {
-        HStack(spacing: Theme.Spacing.sm) {
-            ForEach([14, 30, 90, 365], id: \.self) { days in
-                Button {
-                    vm.selectedDays = days
-                } label: {
-                    Text(Self.rangeLabel(days))
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(
-                            vm.selectedDays == days
-                                ? Theme.Colors.accentContent
-                                : Theme.Colors.textSecondary
-                        )
-                        .padding(.horizontal, Theme.Spacing.md)
-                        .padding(.vertical, Theme.Spacing.xs)
-                        .background(
-                            Capsule()
-                                .fill(vm.selectedDays == days ? Theme.Colors.accentSoft : Color.clear)
-                        )
-                        .animation(Theme.Motion.quick, value: vm.selectedDays)
-                }
-                .buttonStyle(.plain)
-            }
-            Spacer()
-        }
-        .sensoryFeedback(Theme.Haptics.selection, trigger: vm.selectedDays)
-    }
-
-    // MARK: - Chart card
-
-    /// True once `vm.loaded` reflects the metric/range currently selected —
-    /// false during the window between a tap and its `load()` completing (or
-    /// after that load fails). The hero value, unit, delta chip, and every
-    /// number in `statsRow` must only render while this is true: otherwise
-    /// they'd still be showing the *previous* selection's numbers under the
-    /// metric name the user just tapped.
-    var isShowingCurrentSelection: Bool {
-        vm.loaded?.metric == vm.selectedMetric && vm.loaded?.days == vm.selectedDays
-    }
-
-    var chartCard: some View {
-        VitalCard {
-            VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
-                HStack(alignment: .lastTextBaseline) {
-                    VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
-                        Text(isShowingCurrentSelection ? vm.currentValue : "--")
-                            .font(Theme.Typography.numericHero(36))
-                            .foregroundStyle(Theme.Colors.textPrimary)
-                            .contentTransition(.numericText())
-                        Text(isShowingCurrentSelection ? vm.selectedMetric.unitLabel(unitPref.current) : "--")
-                            .font(Theme.Typography.labelSmall)
-                            .foregroundStyle(Theme.Colors.textSecondary)
-                    }
-                    Spacer()
-                    if isShowingCurrentSelection, let pct = vm.trendDeltaPct {
-                        trendChip(pct)
-                    }
-                    Text(vm.selectedMetric.displayName)
-                        .font(Theme.Typography.labelSmall)
-                        .foregroundStyle(Theme.Colors.textSecondary)
-                        .tracking(0.6)
-                }
-
-                if vm.isLoading {
-                    HStack {
-                        Spacer()
-                        ProgressView()
-                            .tint(Theme.Colors.accentContent)
-                        Spacer()
-                    }
-                    .frame(height: 180)
-                    .motionTransition(.fade)
-                } else if vm.points.isEmpty {
-                    emptyChartPlaceholder
-                        .motionTransition(.fade)
-                } else {
-                    trendChart
-                        .motionTransition(.fade)
-                }
-            }
-        }
-    }
-
-    var emptyChartPlaceholder: some View {
-        EmptyStateView(icon: "chart.line.uptrend.xyaxis", message: "No data yet", height: 180)
-    }
-
-    var trendChart: some View {
-        Chart(vm.points) { pt in
-            // Area gradient
-            AreaMark(
-                x: .value("Date", pt.date),
-                y: .value("Value", pt.value)
-            )
-            .interpolationMethod(.catmullRom)
-            .foregroundStyle(
-                LinearGradient(
-                    colors: [
-                        Theme.Colors.accent.opacity(0.25),
-                        Theme.Colors.accent.opacity(0.00)
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-            )
-
-            // Line
-            LineMark(
-                x: .value("Date", pt.date),
-                y: .value("Value", pt.value)
-            )
-            .interpolationMethod(.catmullRom)
-            .foregroundStyle(Theme.Colors.accentContent)
-            .lineStyle(StrokeStyle(lineWidth: 2.5))
-
-            // Point marks
-            PointMark(
-                x: .value("Date", pt.date),
-                y: .value("Value", pt.value)
-            )
-            .foregroundStyle(Theme.Colors.accentContent)
-            .symbolSize(28)
-        }
-        .chartXAxis {
-            // Let Charts choose ~6 evenly-spaced ticks so the axis stays legible
-            // across every range (14d → 1Y) instead of overcrowding at 90/365d.
-            AxisMarks(values: .automatic(desiredCount: 6)) { _ in
-                AxisGridLine(stroke: StrokeStyle(lineWidth: 0.3))
-                    .foregroundStyle(Theme.Colors.glassBorder)
-                // Long ranges: month-only labels; short ranges: month + day.
-                AxisValueLabel(
-                    format: vm.selectedDays > 90
-                        ? .dateTime.month(.abbreviated)
-                        : .dateTime.month(.abbreviated).day()
-                )
-                    .foregroundStyle(Theme.Colors.textSecondary)
-                    .font(Theme.Typography.labelSmall)
-            }
-        }
-        .chartYAxis {
-            AxisMarks(position: .leading) { value in
-                AxisGridLine(stroke: StrokeStyle(lineWidth: 0.3))
-                    .foregroundStyle(Theme.Colors.glassBorder)
-                AxisValueLabel()
-                    .foregroundStyle(Theme.Colors.textSecondary)
-                    .font(Theme.Typography.labelSmall)
-            }
-        }
-        .frame(height: 180)
-    }
-
-    // MARK: - Stats row
-
-    var statsRow: some View {
-        HStack(spacing: Theme.Spacing.sm) {
-            if isShowingCurrentSelection {
-                StatBadge(label: "Latest",  value: vm.currentValue + " " + vm.selectedMetric.unitLabel(unitPref.current))
-                StatBadge(label: "Average", value: vm.averageValue + " " + vm.selectedMetric.unitLabel(unitPref.current))
-                StatBadge(label: "Range",   value: vm.rangeLabel.isEmpty ? "--" : vm.rangeLabel)
-            } else {
-                StatBadge(label: "Latest",  value: "--")
-                StatBadge(label: "Average", value: "--")
-                StatBadge(label: "Range",   value: "--")
-            }
-        }
-    }
-
-    // ── Trend chip (first → last change over the visible window) ──────────────
-
-    func trendChip(_ pct: Int) -> some View {
-        let rising = pct >= 0
-        return HStack(spacing: 2) {
-            Image(systemName: rising ? "arrow.up.right" : "arrow.down.right")
-                .font(.system(size: 10, weight: .bold))
-            Text("\(abs(pct))%")
-                .font(.system(size: 12, weight: .semibold))
-        }
-        .foregroundStyle(Theme.Colors.accentContent)
-        .padding(.horizontal, Theme.Spacing.sm)
-        .padding(.vertical, 3)
-        .background(
-            Capsule().fill(Theme.Colors.accent.opacity(0.15))
-        )
-    }
-
-    // ── Range pill labels: compact for long windows ("3M", "1Y") ─────────────
-
-    static func rangeLabel(_ days: Int) -> String {
-        switch days {
-        case 365: return "1Y"
-        case 90:  return "3M"
-        default:  return "\(days)d"
-        }
-    }
-}
-
-// MARK: - Trend summary card (Sleep / HRV / Resting HR)
-
-/// The v3 mock's `TrendCard`: title + note row, a big value line, a chart,
-/// and a data-driven footnote (optionally with a bold span).
-private struct TrendSummaryCard<Chart: View>: View {
-    let title: String
-    let value: String
-    let unit: String?
-    let note: String
-    let footnote: TrendsSummary.Footnote
-    @ViewBuilder var chart: () -> Chart
-
-    var body: some View {
-        VitalCard {
-            VStack(alignment: .leading, spacing: 0) {
-                HStack(alignment: .firstTextBaseline) {
-                    Text(title.uppercased())
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(Theme.Colors.textSecondary)
-                        .tracking(1.3)
-                    Spacer()
-                    Text(note)
-                        .font(.system(size: 13))
-                        .foregroundStyle(Theme.Colors.textTertiary)
-                }
-
-                HStack(alignment: .lastTextBaseline, spacing: 6) {
-                    Text(value)
-                        .font(.system(size: 30, weight: .bold))
-                        .monospacedDigit()
-                        .foregroundStyle(Theme.Colors.textPrimary)
-                    if let unit {
-                        Text(unit)
-                            .font(.system(size: 14))
-                            .foregroundStyle(Theme.Colors.textSecondary)
-                    }
-                }
-                .padding(.top, Theme.Spacing.sm)
-
-                chart()
-                    .padding(.top, Theme.Spacing.lg)
-
-                footnoteView
-                    .padding(.top, Theme.Spacing.md)
-            }
-        }
+    var visibleMetricCount: Int {
+        sections.reduce(0) { $0 + $1.tiles.count }
     }
 
     @ViewBuilder
-    private var footnoteView: some View {
-        if let bold = footnote.bold {
-            (
-                Text(footnote.prefix).foregroundStyle(Theme.Colors.textSecondary)
-                + Text(bold).foregroundStyle(Theme.Colors.textPrimary).fontWeight(.semibold)
-                + Text(footnote.suffix).foregroundStyle(Theme.Colors.textSecondary)
+    var gridBody: some View {
+        if vm.isLoading && vm.loaded.isEmpty {
+            loadingGrid
+                .motionTransition(.fade)
+        } else if sections.isEmpty {
+            EmptyStateView(
+                icon: "chart.xyaxis.line",
+                message: "No trends yet — check back once your data syncs.",
+                height: 160
             )
-            .font(.system(size: 13))
+            .motionTransition(.fade)
         } else {
-            Text(footnote.prefix)
-                .font(.system(size: 13))
-                .foregroundStyle(Theme.Colors.textSecondary)
+            VStack(alignment: .leading, spacing: Theme.Spacing.xl) {
+                ForEach(sections, id: \.group.rawValue) { section in
+                    VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+                        sectionHeaderView(section.group)
+                        LazyVGrid(columns: Self.gridColumns, spacing: Theme.Spacing.md) {
+                            ForEach(section.tiles, id: \.key) { tile in
+                                tileButton(tile)
+                            }
+                        }
+                    }
+                }
+            }
+            .motionTransition(.fade)
         }
+    }
+
+    var loadingGrid: some View {
+        LazyVGrid(columns: Self.gridColumns, spacing: Theme.Spacing.md) {
+            ForEach(0..<6, id: \.self) { _ in SkeletonView() }
+        }
+    }
+
+    func sectionTitle(_ group: MetricGroup) -> String {
+        switch group {
+        case .recovery: return "Recovery"
+        case .sleep:    return "Sleep"
+        case .activity: return "Activity"
+        case .body:     return "Body"
+        case .whoop:    return "Whoop"
+        }
+    }
+
+    func sectionHeaderView(_ group: MetricGroup) -> some View {
+        HStack(spacing: Theme.Spacing.sm) {
+            Text(sectionTitle(group).uppercased())
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Theme.Colors.textSecondary)
+                .tracking(1.3)
+            // WHOOP metrics get their own source badge — hrv_sdnn/whoop_hrv_rmssd
+            // are different measurements on different scales from different
+            // devices, and conflating them has already burned this codebase once.
+            if group == .whoop {
+                Chip(text: "WHOOP")
+            }
+            Spacer()
+        }
+    }
+
+    func tileButton(_ tile: TrendsTile) -> some View {
+        Button {
+            tileTapTick.toggle()
+            path.append(tile.key)
+        } label: {
+            MetricTileView(tile: tile)
+        }
+        .buttonStyle(TilePressStyle())
     }
 }
