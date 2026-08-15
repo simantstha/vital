@@ -5,12 +5,21 @@ struct Chip: View {
     let text: String
     var icon: String? = nil
     var isAccent: Bool = false
+    /// Explicit semantic tint (foreground + a matching translucent fill),
+    /// for callers whose color isn't the binary accent/neutral `isAccent`
+    /// covers — e.g. the Trends grid's verdict chips, tinted by
+    /// `TrendDirection.resolve(...).color` (positive/alert/gray per metric
+    /// polarity, never the lime accent). Takes precedence over `isAccent`
+    /// when set; existing call sites that only pass `isAccent` are unaffected.
+    var tint: Color? = nil
 
     private var fillColor: Color {
-        isAccent ? Theme.Colors.accentSoft : Theme.Colors.glassFill
+        if let tint { return tint.opacity(0.16) }
+        return isAccent ? Theme.Colors.accentSoft : Theme.Colors.glassFill
     }
     private var foreground: Color {
-        isAccent ? Theme.Colors.accentContent : Theme.Colors.textSecondary
+        if let tint { return tint }
+        return isAccent ? Theme.Colors.accentContent : Theme.Colors.textSecondary
     }
 
     var body: some View {
