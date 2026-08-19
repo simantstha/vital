@@ -106,20 +106,47 @@ enum TrendsSummary {
         return "\(hours)h \(String(format: "%02d", minutes))m"
     }
 
+    /// Never overclaims across missing nights: with fewer than 7 of 7 synced,
+    /// the copy states how many nights actually synced before saying
+    /// anything about them, and never uses an absolute word like "Every" —
+    /// only the full 7-of-7 case gets that copy. Missing nights are neither
+    /// counted as short nor silently folded into a full-week claim.
     static func sleepFootnote(
         _ values: [Double?],
         goalHours: Double = 8.0
     ) -> Footnote {
         let available = values.compactMap { $0 }
         guard !available.isEmpty else { return .plain("No sleep synced yet.") }
+
         let shortThresholdHours = shortSleepThreshold(for: goalHours)
         let shortCount = available.filter { $0 < shortThresholdHours }.count
-        guard shortCount > 0 else {
+        let syncedCount = available.count
+        let totalSlots = values.count
+        let fullWeekSynced = syncedCount == totalSlots
+
+        if shortCount == 0 {
+            guard fullWeekSynced else {
+                let claim: String
+                switch syncedCount {
+                case 1: claim = "it's near your \(hoursLabel(goalHours))h goal."
+                case 2: claim = "both near your \(hoursLabel(goalHours))h goal."
+                default: claim = "all near your \(hoursLabel(goalHours))h goal."
+                }
+                return Footnote(
+                    prefix: "Only ",
+                    bold: "\(syncedCount) of \(totalSlots) nights",
+                    suffix: " synced — \(claim)"
+                )
+            }
             return .plain("Every night near your \(hoursLabel(goalHours))h goal this week.")
         }
+
+        let bold = fullWeekSynced
+            ? "\(shortCount) of \(totalSlots) nights"
+            : "\(shortCount) of \(syncedCount) synced nights"
         return Footnote(
             prefix: "Under \(hoursLabel(shortThresholdHours))h on ",
-            bold: "\(shortCount) of 7 nights",
+            bold: bold,
             suffix: ". Gray bars are short nights."
         )
     }

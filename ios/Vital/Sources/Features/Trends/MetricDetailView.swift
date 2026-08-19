@@ -11,6 +11,7 @@ struct MetricDetailView: View {
     @StateObject private var vm: MetricDetailViewModel
     @ObservedObject private var unitPref = UnitPreference.shared
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     /// Continuous plot-space date from `.chartXSelection` — NOT snapped to a
     /// data point. `snappedPoint` below derives the actual point to render.
@@ -72,28 +73,55 @@ struct MetricDetailView: View {
 
 private extension MetricDetailView {
 
+    /// Two layouts: the normal single-row pill, and — at AX Dynamic Type
+    /// sizes — a stacked layout with the title on its own row. The pill's
+    /// `HStack` (chevron + title + chip/date, all squeezed into one row)
+    /// works at default text sizes but has nowhere to put an AX5-scaled
+    /// title and chip side by side without truncating the title; stacking
+    /// avoids that rather than clipping either.
+    @ViewBuilder
     var header: some View {
-        GlassCard(padding: Theme.Spacing.md, cornerRadius: Theme.Radius.pill) {
-            HStack(spacing: Theme.Spacing.sm) {
-                Button {
-                    dismiss()
-                } label: {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(Theme.Colors.textSecondary)
+        if dynamicTypeSize.isAccessibilitySize {
+            GlassCard(padding: Theme.Spacing.md, cornerRadius: Theme.Radius.lg) {
+                VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                    HStack {
+                        backButton
+                        Spacer()
+                        headerTrailing
+                    }
+                    Text(spec?.displayName ?? metricKey)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(Theme.Colors.textPrimary)
                 }
-                .buttonStyle(.plain)
+            }
+        } else {
+            GlassCard(padding: Theme.Spacing.md, cornerRadius: Theme.Radius.pill) {
+                HStack(spacing: Theme.Spacing.sm) {
+                    backButton
 
-                Text(spec?.displayName ?? metricKey)
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(Theme.Colors.textPrimary)
-                    .lineLimit(1)
+                    Text(spec?.displayName ?? metricKey)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(Theme.Colors.textPrimary)
+                        .lineLimit(1)
 
-                Spacer(minLength: Theme.Spacing.sm)
+                    Spacer(minLength: Theme.Spacing.sm)
 
-                headerTrailing
+                    headerTrailing
+                }
             }
         }
+    }
+
+    var backButton: some View {
+        Button {
+            dismiss()
+        } label: {
+            Image(systemName: "chevron.left")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(Theme.Colors.textSecondary)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Back")
     }
 
     /// Scrubbed values render here, in the header — never a floating
@@ -215,6 +243,8 @@ private extension MetricDetailView {
                         .overlay(Capsule().strokeBorder(isOn ? .clear : Theme.Colors.glassBorder, lineWidth: 0.5))
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(range.accessibilityLabel)
+                .accessibilityAddTraits(isOn ? .isSelected : [])
             }
         }
     }
@@ -424,6 +454,48 @@ private extension MetricDetailView {
         }
         .chartYAxis(.hidden)
         .chartYScale(domain: chartYDomain)
+        // VoiceOver: a Swift Chart with dozens of marks is otherwise a
+        // single opaque image. The descriptor exposes every plotted point
+        // for a swipe-through audit; the label/value pair covers the
+        // "glance" summary (metric, range, latest, 30-day mean, verdict) and
+        // whatever's currently scrubbed.
+        .accessibilityChartDescriptor(
+            MetricChartDescriptor(
+                points: chartPoints,
+                metricName: spec?.displayName ?? metricKey,
+                spec: spec,
+                unitSystem: unitPref.current,
+                yDomain: chartYDomain
+            )
+        )
+        .accessibilityLabel(chartAccessibilityLabel)
+        .accessibilityValue(chartAccessibilityValue ?? "")
+    }
+
+    var chartAccessibilityLabel: String {
+        MetricChartAccessibility.summaryLabel(
+            metricName: spec?.displayName ?? metricKey,
+            rangeLabel: vm.range.accessibilityLabel,
+            latest: latestRawValue,
+            mean30: vm.series?.baseline?.mean30,
+            spec: spec,
+            unitSystem: unitPref.current,
+            verdict: latestVerdict
+        )
+    }
+
+    /// `nil` (and the modifier above falls back to an empty string) when
+    /// nothing is scrubbed — the label above already states the latest
+    /// reading, so there's nothing stale to announce as a "value" until the
+    /// user actually starts scrubbing.
+    var chartAccessibilityValue: String? {
+        guard let snappedPoint else { return nil }
+        return MetricChartAccessibility.scrubbedValueText(
+            date: snappedPoint.date,
+            value: snappedPoint.value,
+            spec: spec,
+            unitSystem: unitPref.current
+        )
     }
 
     var legend: some View {

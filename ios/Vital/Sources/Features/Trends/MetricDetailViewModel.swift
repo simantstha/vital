@@ -18,6 +18,17 @@ enum TrendsDetailRange: Int, CaseIterable, Identifiable {
         case .oneYear:      return "1Y"
         }
     }
+
+    /// Full-word range description for VoiceOver — `label` is a compact
+    /// pill caption ("30d", "3M"), too terse to read aloud unambiguously.
+    var accessibilityLabel: String {
+        switch self {
+        case .fourteenDays: return "14 days"
+        case .thirtyDays:   return "30 days"
+        case .threeMonths:  return "3 months"
+        case .oneYear:      return "1 year"
+        }
+    }
 }
 
 /// Loads one metric's series at a selected range for `MetricDetailView`.

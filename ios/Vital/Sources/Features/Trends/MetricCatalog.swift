@@ -81,6 +81,39 @@ extension MetricSpec {
         return unitLabel.isEmpty ? formatted : "\(formatted) \(unitLabel)"
     }
 
+    /// Full-word unit name for VoiceOver labels. `unit(_:)` above renders the
+    /// compact `ms`/`bpm`/`kcal` abbreviation for sighted display — a screen
+    /// reader spells it out instead, so an a11y label never reuses the
+    /// visual abbreviation verbatim. Empty for genuinely unitless counts
+    /// (steps, flights), matching `unit(_:)`.
+    func accessibilityUnitName(_ system: UnitSystem) -> String {
+        switch key {
+        case "body_mass_kg": return system == .imperial ? "pounds" : "kilograms"
+        case "distance_m":   return system == .imperial ? "miles" : "kilometers"
+        default:              return Self.accessibilityUnitNames[key] ?? ""
+        }
+    }
+
+    private static let accessibilityUnitNames: [String: String] = [
+        "hrv_sdnn": "milliseconds",
+        "resting_hr": "beats per minute",
+        "hr_avg": "beats per minute",
+        "steps": "",
+        "active_energy_kcal": "kilocalories",
+        "vo2_max": "milliliters per kilogram per minute",
+        "exercise_min": "minutes",
+        "flights": "",
+        "basal_energy_kcal": "kilocalories",
+        "sleep_minutes": "hours",
+        "whoop_day_strain": "strain",
+        "whoop_recovery": "percent",
+        "whoop_hrv_rmssd": "milliseconds",
+        "whoop_resting_hr": "beats per minute",
+        "whoop_spo2": "percent",
+        "whoop_skin_temp": "degrees Celsius",
+        "whoop_sleep_min": "minutes",
+    ]
+
     /// Base (metric-system) unit labels, mirroring `lib/metricCatalog.ts`'s
     /// `displayUnit` per metric. `body_mass_kg` and `distance_m` are handled
     /// separately in `unit(_:)` since they vary by `UnitSystem`; counts
