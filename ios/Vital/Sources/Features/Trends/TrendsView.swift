@@ -7,11 +7,17 @@ struct TrendsView: View {
     /// tile taps are one of the three user-committed actions the motion
     /// policy allows a haptic on (never data arriving from `vm.load()`).
     @State private var tileTapTick = false
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
-    private static let gridColumns = [
-        GridItem(.flexible(), spacing: Theme.Spacing.md),
-        GridItem(.flexible()),
-    ]
+    /// Single column at accessibility Dynamic Type sizes — a 2-up tile is
+    /// already tight at the default text size (see `MetricTileView`'s chip
+    /// copy note), and AX1–AX5 text simply can't fit two columns without
+    /// clipping or crushing the sparkline/value row.
+    private var gridColumns: [GridItem] {
+        dynamicTypeSize.isAccessibilitySize
+            ? [GridItem(.flexible())]
+            : [GridItem(.flexible(), spacing: Theme.Spacing.md), GridItem(.flexible())]
+    }
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -140,7 +146,7 @@ private extension TrendsView {
                 ForEach(sections, id: \.group.rawValue) { section in
                     VStack(alignment: .leading, spacing: Theme.Spacing.md) {
                         sectionHeaderView(section.group)
-                        LazyVGrid(columns: Self.gridColumns, spacing: Theme.Spacing.md) {
+                        LazyVGrid(columns: gridColumns, spacing: Theme.Spacing.md) {
                             ForEach(section.tiles, id: \.key) { tile in
                                 tileButton(tile)
                             }
@@ -153,7 +159,7 @@ private extension TrendsView {
     }
 
     var loadingGrid: some View {
-        LazyVGrid(columns: Self.gridColumns, spacing: Theme.Spacing.md) {
+        LazyVGrid(columns: gridColumns, spacing: Theme.Spacing.md) {
             ForEach(0..<6, id: \.self) { _ in SkeletonView() }
         }
     }

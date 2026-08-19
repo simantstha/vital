@@ -15,6 +15,7 @@ import SwiftUI
 struct MetricTileView: View {
     let tile: TrendsTile
     @ObservedObject private var unitPref = UnitPreference.shared
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     private var spec: MetricSpec? { MetricCatalog.spec(for: tile.key) }
 
@@ -29,7 +30,10 @@ struct MetricTileView: View {
                 Text(spec?.displayName ?? tile.key)
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(Theme.Colors.textSecondary)
-                    .lineLimit(1)
+                    // AX sizes: let the name wrap to a 2nd line rather than
+                    // clip — `.frame(minHeight:)` below already lets the
+                    // tile grow to fit.
+                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
 
                 valueRow
                     .padding(.top, 5)
@@ -45,6 +49,13 @@ struct MetricTileView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .opacity(isDimmed ? 0.42 : 1.0)
+        // A single combined VoiceOver stop — e.g. "HRV, 52 milliseconds,
+        // above your normal" — instead of exposing the name/value/chip/
+        // sparkline as four separate nodes. `TrendsView`'s wrapping `Button`
+        // still supplies the tap/navigation and the button trait; this only
+        // replaces what gets read.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(MetricTileAccessibility.label(tile: tile, spec: spec, unitSystem: unitPref.current))
     }
 
     private var isDimmed: Bool {
@@ -98,6 +109,9 @@ struct MetricTileView: View {
                     tint: sparklineTint(spec: spec, verdict: verdict),
                     height: Self.sparklineSlotHeight
                 )
+                // Decorative — the value + verdict already say everything
+                // the sparkline conveys; VoiceOver shouldn't stop on it.
+                .accessibilityHidden(true)
             } else {
                 Color.clear.frame(height: Self.sparklineSlotHeight)
             }
@@ -140,14 +154,20 @@ struct MetricTileView: View {
     /// drifted (steps, strain, weight) renders gray, not accidentally
     /// positive/alert. `.normal`/`.calibrating`/`.noData` are always neutral
     /// (there is no direction to tint).
+    ///
+    /// Copy is deliberately shorter than `MetricDetailView`'s header chip
+    /// ("above normal" here vs. "above your normal" there) — at 2-up tile
+    /// width the longer phrasing wrapped to two lines ("↑ above / your
+    /// normal"), making tiles in the same row uneven height. The detail view
+    /// has the full pill width to itself and keeps the longer phrasing.
     private func verdictChip(_ verdict: Verdict, polarity: MetricPolarity) -> some View {
         switch verdict {
         case .above:
-            return Chip(text: "↑ above your normal", tint: TrendDirection.resolve(polarity, rising: true).color)
+            return Chip(text: "↑ above normal", tint: TrendDirection.resolve(polarity, rising: true).color)
         case .below:
-            return Chip(text: "↓ below your normal", tint: TrendDirection.resolve(polarity, rising: false).color)
+            return Chip(text: "↓ below normal", tint: TrendDirection.resolve(polarity, rising: false).color)
         case .normal:
-            return Chip(text: "in your normal range")
+            return Chip(text: "normal")
         case .calibrating(let daysRemaining):
             let text = daysRemaining > 0
                 ? "\(daysRemaining) more day\(daysRemaining == 1 ? "" : "s")"

@@ -249,6 +249,101 @@ final class TrendsSummaryTests: XCTestCase {
         ))
     }
 
+    // MARK: - sleepFootnote — missing-night integrity
+    //
+    // Regression coverage for the bug where 2 of 7 synced nights (both near
+    // goal) rendered as "Every night near your 8h goal this week." — an
+    // absolute claim about 7 nights built from data about 2. These pin: (a)
+    // the full 7/7 copy is untouched, (b) any partial week states coverage
+    // before making a claim, and (c) "Every" never appears when a night is
+    // missing.
+
+    func testSleepFootnoteWithFullWeekSyncedAndNoShortNightsKeepsUnqualifiedEveryCopy() {
+        // 7 of 7 synced, none short — the one case allowed to say "Every".
+        let values: [Double?] = [6.0, 6.5, 7.0, 7.5, 8.0, 8.2, 7.9]
+
+        let footnote = TrendsSummary.sleepFootnote(values)
+
+        XCTAssertEqual(footnote, .plain("Every night near your 8h goal this week."))
+    }
+
+    func testSleepFootnoteWithTwoOfSevenSyncedAndNoShortNightsStatesCoverageBeforeClaim() {
+        // The exact bug scenario: 2 nights synced, both near goal. Must not
+        // claim "Every night" — must say 2 of 7 synced first.
+        let values: [Double?] = [nil, nil, nil, nil, nil, 7.5, 8.0]
+
+        let footnote = TrendsSummary.sleepFootnote(values)
+
+        XCTAssertEqual(footnote, TrendsSummary.Footnote(
+            prefix: "Only ",
+            bold: "2 of 7 nights",
+            suffix: " synced — both near your 8h goal."
+        ))
+    }
+
+    func testSleepFootnoteWithOneOfSevenSyncedUsesSingularClaim() {
+        let values: [Double?] = [nil, nil, nil, nil, nil, nil, 7.8]
+
+        let footnote = TrendsSummary.sleepFootnote(values)
+
+        XCTAssertEqual(footnote, TrendsSummary.Footnote(
+            prefix: "Only ",
+            bold: "1 of 7 nights",
+            suffix: " synced — it's near your 8h goal."
+        ))
+    }
+
+    func testSleepFootnoteWithThreeOfSevenSyncedAndNoShortNightsUsesAllClaim() {
+        let values: [Double?] = [nil, nil, nil, nil, 6.5, 7.0, 7.5]
+
+        let footnote = TrendsSummary.sleepFootnote(values)
+
+        XCTAssertEqual(footnote, TrendsSummary.Footnote(
+            prefix: "Only ",
+            bold: "3 of 7 nights",
+            suffix: " synced — all near your 8h goal."
+        ))
+    }
+
+    func testSleepFootnoteWithTwoOfSevenSyncedAndOneShortNightCountsAgainstSyncedNotSeven() {
+        // 1 short night out of 2 synced — the bold span must read "1 of 2
+        // synced nights", not "1 of 7 nights" (which would imply 6 more
+        // nights of data that were never observed).
+        let values: [Double?] = [nil, nil, nil, nil, nil, 5.0, 7.5]
+
+        let footnote = TrendsSummary.sleepFootnote(values)
+
+        XCTAssertEqual(footnote, TrendsSummary.Footnote(
+            prefix: "Under 6h on ",
+            bold: "1 of 2 synced nights",
+            suffix: ". Gray bars are short nights."
+        ))
+    }
+
+    func testSleepFootnoteWithZeroOfSevenSyncedStillReportsNoData() {
+        XCTAssertEqual(
+            TrendsSummary.sleepFootnote(Array(repeating: nil, count: 7)),
+            .plain("No sleep synced yet.")
+        )
+    }
+
+    func testSleepFootnoteNeverSaysEveryWhenAnyNightIsMissing() {
+        let partialScenarios: [[Double?]] = [
+            [nil, nil, nil, nil, nil, nil, 7.8],                 // 1/7, no short
+            [nil, nil, nil, nil, nil, 7.5, 8.0],                 // 2/7, no short
+            [nil, nil, nil, nil, 6.5, 7.0, 7.5],                 // 3/7, no short
+            [nil, nil, nil, nil, nil, 5.0, 7.5],                 // 2/7, 1 short
+            [5.9, 7.1, nil, 5.9, 5.7, nil, 5.5],                 // 5/7, some short
+        ]
+
+        for values in partialScenarios {
+            let footnote = TrendsSummary.sleepFootnote(values)
+            XCTAssertFalse(footnote.prefix.contains("Every"), "prefix leaked an absolute claim for \(values)")
+            XCTAssertFalse((footnote.bold ?? "").contains("Every"), "bold leaked an absolute claim for \(values)")
+            XCTAssertFalse(footnote.suffix.contains("Every"), "suffix leaked an absolute claim for \(values)")
+        }
+    }
+
     // MARK: - lineFootnote (HRV / Resting HR)
 
     func testLineFootnoteReportsNoReadingsWhenAllValuesMissing() {

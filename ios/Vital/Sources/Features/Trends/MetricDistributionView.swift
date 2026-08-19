@@ -78,6 +78,33 @@ enum DistributionStats {
         guard let minValue = values.min() else { return false }
         return latest <= minValue
     }
+
+    /// "Your latest reading — 52 ms — is higher than 62% of your 90
+    /// readings in the last 90 days." Moved out of `MetricDistributionView`
+    /// (which now just calls this) so the sentence composition is
+    /// independently testable without SwiftUI. When `latest` is the max or
+    /// min, states that directly rather than a trivial percentile rank.
+    static func caption(result: Result, latest: Double, values: [Double], spec: MetricSpec, unitSystem: UnitSystem) -> String {
+        let sampleCount = values.count
+        let formattedValue = spec.format(latest, unitSystem)
+
+        if isMaximum(latest, in: values) {
+            return "Your latest reading — \(formattedValue) — is the highest of your \(sampleCount) readings in the last 90 days."
+        } else if isMinimum(latest, in: values) {
+            return "Your latest reading — \(formattedValue) — is the lowest of your \(sampleCount) readings in the last 90 days."
+        } else {
+            return "Your latest reading — \(formattedValue) — is higher than \(result.percentileRank)% of your \(sampleCount) readings in the last 90 days."
+        }
+    }
+
+    /// The distribution card's single combined VoiceOver label — leads with
+    /// the median (the one stat the visual chart's median rule-mark conveys
+    /// that `caption` alone doesn't), then the same caption sentence sighted
+    /// users see.
+    static func accessibilityLabel(result: Result, latest: Double, values: [Double], spec: MetricSpec, unitSystem: UnitSystem) -> String {
+        let medianText = spec.format(result.median, unitSystem)
+        return "Distribution chart. Median \(medianText). " + caption(result: result, latest: latest, values: values, spec: spec, unitSystem: unitSystem)
+    }
 }
 
 // MARK: - View
@@ -123,47 +150,17 @@ struct MetricDistributionView: View {
                     .chartYAxis(.hidden)
                     .frame(height: 84)
 
-                    Text(caption(result))
+                    Text(DistributionStats.caption(result: result, latest: latest, values: values, spec: spec, unitSystem: unitSystem))
                         .font(Theme.Typography.bodySmall)
                         .foregroundStyle(Theme.Colors.textTertiary)
                 }
             }
+            // Single combined VoiceOver stop for the whole card — otherwise
+            // the histogram's bars and the caption `Text` read as separate
+            // nodes, and the bars alone (unlabeled `BarMark`s) are noise.
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(DistributionStats.accessibilityLabel(result: result, latest: latest, values: values, spec: spec, unitSystem: unitSystem))
         }
     }
 
-    /// "Your latest reading" rather than "Today's" — `latest` is always the
-    /// most recent raw point regardless of what's scrubbed (the header can
-    /// show a scrubbed-to date/value while this caption keeps describing the
-    /// true latest reading), and "today" would be an outright wrong claim on
-    /// a day where the newest sync is stale. `values.count` is the actual
-    /// number of **readings** (not days) in the fixed 90-day window
-    /// (`MetricDetailViewModel.distributionSeries`), which can be far fewer
-    /// than 90 with sync gaps; stating the true sample size is the whole
-    /// point of this feature. When `latest` is the max or min, describe that
-    /// directly rather than a trivial percentile rank.
-    private func caption(_ result: DistributionStats.Result) -> String {
-        let sampleCount = values.count
-        let formattedValue = spec.format(latest, unitSystem)
-
-        if DistributionStats.isMaximum(latest, in: values) {
-            return "Your latest reading — \(formattedValue) — is the highest of your \(sampleCount) readings in the last 90 days."
-        } else if DistributionStats.isMinimum(latest, in: values) {
-            return "Your latest reading — \(formattedValue) — is the lowest of your \(sampleCount) readings in the last 90 days."
-        } else {
-            let percentile = ordinal(result.percentileRank)
-            return "Your latest reading — \(formattedValue) — is higher than \(result.percentileRank)% of your \(sampleCount) readings in the last 90 days."
-        }
-    }
-
-    private func ordinal(_ n: Int) -> String {
-        let suffix: String
-        switch (n % 100, n % 10) {
-        case (11, _), (12, _), (13, _): suffix = "th"
-        case (_, 1): suffix = "st"
-        case (_, 2): suffix = "nd"
-        case (_, 3): suffix = "rd"
-        default: suffix = "th"
-        }
-        return "\(n)\(suffix)"
-    }
 }
