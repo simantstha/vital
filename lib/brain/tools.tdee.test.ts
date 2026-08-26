@@ -82,3 +82,69 @@ test('regression guard: a female and male of identical weight get different budg
   const budgetMale = macrosForGoal('general', shared.weightKg, tdeeMale);
   assert.notEqual(budgetFemale.targetCal, budgetMale.targetCal);
 });
+
+// ── Percent-of-TDEE goal adjustments (fixes the -400/+200/+100 offset bug) ──
+
+test('60kg/160cm/55F weight_loss target scales as a percentage, not a fixed 400 kcal cut', async () => {
+  const { estimateTDEE, macrosForGoal } = await loadTools();
+  const tdee = estimateTDEE({ weightKg: 60, heightCm: 160, age: 55, biologicalSex: 'female' }, []);
+  assert.equal(tdee, 1513);
+
+  const { targetCal } = macrosForGoal('weight_loss', 60, tdee);
+  // Old fixed -400 offset gave 1113 — below her own BMR of 1164, with no warning.
+  // The new -15% multiplier gives 1286, safely above BMR.
+  assert.equal(targetCal, 1286);
+  assert.ok(targetCal > 1164, 'target must stay above BMR');
+});
+
+test('90kg/185cm/30M weight_loss target stays close to the old fixed-offset result', async () => {
+  const { estimateTDEE, macrosForGoal } = await loadTools();
+  const tdee = estimateTDEE({ weightKg: 90, heightCm: 185, age: 30, biologicalSex: 'male' }, []);
+
+  const { targetCal } = macrosForGoal('weight_loss', 90, tdee);
+  const oldFixedOffsetTarget = tdee - 400;
+  // Typical/large users should barely move under the new percentage math.
+  assert.ok(
+    Math.abs(targetCal - oldFixedOffsetTarget) <= 50,
+    `expected ${targetCal} to be within 50 kcal of the old fixed-offset ${oldFixedOffsetTarget}`,
+  );
+});
+
+// ── Activity multiplier from training frequency ─────────────────────────────
+
+test('activityMultiplierForFrequency maps days/week to the NEAT-only base multiplier', async () => {
+  const { activityMultiplierForFrequency, DEFAULT_ACTIVITY_MULTIPLIER } = await loadTools();
+
+  assert.equal(activityMultiplierForFrequency(0), 1.2);
+  assert.equal(activityMultiplierForFrequency(1), 1.2);
+  assert.equal(activityMultiplierForFrequency(2), 1.3);
+  assert.equal(activityMultiplierForFrequency(3), 1.3);
+  assert.equal(activityMultiplierForFrequency(4), 1.35);
+  assert.equal(activityMultiplierForFrequency(5), 1.35);
+  assert.equal(activityMultiplierForFrequency(6), 1.4);
+  assert.equal(activityMultiplierForFrequency(7), 1.4);
+
+  // Numeric string (iOS-adjacent data can arrive either way).
+  assert.equal(activityMultiplierForFrequency('5'), 1.35);
+
+  // Missing/unparseable falls back to the unchanged default.
+  assert.equal(activityMultiplierForFrequency(undefined), DEFAULT_ACTIVITY_MULTIPLIER);
+  assert.equal(activityMultiplierForFrequency(null), DEFAULT_ACTIVITY_MULTIPLIER);
+  assert.equal(activityMultiplierForFrequency('not a number'), DEFAULT_ACTIVITY_MULTIPLIER);
+  assert.equal(activityMultiplierForFrequency(''), DEFAULT_ACTIVITY_MULTIPLIER);
+  assert.equal(activityMultiplierForFrequency('   '), DEFAULT_ACTIVITY_MULTIPLIER);
+  assert.equal(DEFAULT_ACTIVITY_MULTIPLIER, 1.3);
+
+  // Out-of-range clamps to 0..7 rather than extrapolating.
+  assert.equal(activityMultiplierForFrequency(-3), 1.2);
+  assert.equal(activityMultiplierForFrequency(14), 1.4);
+});
+
+test('estimateTDEE honors an explicit activityMultiplier and defaults to 1.3 when omitted', async () => {
+  const { estimateTDEE } = await loadTools();
+  const bio = { weightKg: 70, heightCm: 175, age: 30, biologicalSex: 'male' as const };
+  // BMR = 1648.75 (see the worked example above)
+  assert.equal(estimateTDEE(bio, []), Math.round(1648.75 * 1.3));
+  assert.equal(estimateTDEE({ ...bio, activityMultiplier: 1.4 }, []), Math.round(1648.75 * 1.4));
+  assert.equal(estimateTDEE({ ...bio, activityMultiplier: 1.2 }, []), Math.round(1648.75 * 1.2));
+});
