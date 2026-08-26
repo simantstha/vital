@@ -434,6 +434,55 @@ export interface Biometrics {
   heightCm: number | null;
   age: number | null;
   biologicalSex: string | null;
+  /**
+   * Base activity multiplier applied to BMR to get maintenance TDEE, before
+   * per-workout calories are added on top. Defaults to 1.3 (today's fixed
+   * behavior) when omitted. See `activityMultiplierForFrequency` — the caller
+   * (dietBudget.ts) derives this from the user's training frequency.
+   */
+  activityMultiplier?: number;
+}
+
+/**
+ * Base (NEAT-only) activity multiplier by self-reported training days/week.
+ *
+ * Deliberately capped at 1.4, NOT the textbook 1.5-1.55 for "very active" —
+ * `estimateTDEE` already adds explicit per-workout calories in the loop
+ * below (see the run/cycle/swim/strength/walk branches), so this multiplier
+ * must carry ONLY non-exercise daily activity (NEAT). Pushing it to 1.5+
+ * would double-count the same training volume once as a higher base
+ * multiplier and again as explicit workout kcal. Do not "correct" this
+ * upward without also removing (or heavily discounting) the workout loop.
+ */
+export const ACTIVITY_MULTIPLIER_BY_FREQUENCY: ReadonlyArray<{ maxDays: number; multiplier: number }> = [
+  { maxDays: 1, multiplier: 1.2 },
+  { maxDays: 3, multiplier: 1.3 },
+  { maxDays: 5, multiplier: 1.35 },
+  { maxDays: 7, multiplier: 1.4 },
+];
+
+/** Fallback base multiplier when frequency is missing/unparseable — today's unchanged behavior. */
+export const DEFAULT_ACTIVITY_MULTIPLIER = 1.3;
+
+/**
+ * Maps a weekly training-day count to the base (NEAT-only) activity
+ * multiplier. Accepts a number or numeric string (iOS sends Int, the
+ * training-history.json type says string — this tolerates either), clamps
+ * to 0..7, and falls back to DEFAULT_ACTIVITY_MULTIPLIER for anything
+ * missing or unparseable.
+ */
+export function activityMultiplierForFrequency(frequency: unknown): number {
+  const raw =
+    typeof frequency === 'number' ? frequency :
+    typeof frequency === 'string' ? (
+      frequency.trim().length === 0 ? NaN : Number(frequency.trim())
+    ) :
+    NaN;
+  if (!Number.isFinite(raw)) return DEFAULT_ACTIVITY_MULTIPLIER;
+
+  const days = Math.min(7, Math.max(0, raw));
+  const bucket = ACTIVITY_MULTIPLIER_BY_FREQUENCY.find((b) => days <= b.maxDays);
+  return bucket ? bucket.multiplier : DEFAULT_ACTIVITY_MULTIPLIER;
 }
 
 /** Fallback height (cm) when the user's profile has none on file. */
@@ -469,7 +518,8 @@ export function estimateTDEE(bio: Biometrics, workouts: WorkoutInput[]): number 
   const sexOffset = sex === 'male' ? 5 : sex === 'female' ? -161 : -78;
 
   const bmr = 10 * weightKg + 6.25 * heightCm - 5 * age + sexOffset;
-  let tdee = bmr * 1.3; // lightly-active base
+  const activityMultiplier = bio.activityMultiplier ?? DEFAULT_ACTIVITY_MULTIPLIER;
+  let tdee = bmr * activityMultiplier; // NEAT-only base — workout kcal added below
 
   for (const w of workouts) {
     if (w.calories != null && w.calories > 0) {
@@ -501,26 +551,28 @@ export function estimateTDEE(bio: Biometrics, workouts: WorkoutInput[]): number 
   return Math.round(tdee);
 }
 
+/**
+ * Goal calorie adjustments as a percentage of TDEE rather than a fixed kcal
+ * offset. Fixed offsets (-400/+200/+100) were calibrated against a ~2400
+ * kcal "typical" TDEE, where -400 is ~17%. Applied to a small woman's
+ * ~1500 kcal TDEE that same -400 is ~26% — a much harsher deficit than
+ * intended, and one that could undercut her own BMR. As a percentage, the
+ * cut scales with the person instead of being a one-size number.
+ */
+export const GOAL_TDEE_MULTIPLIER: Record<string, number> = {
+  weight_loss: 0.85, // -15%
+  muscle:      1.08,
+  endurance:   1.05,
+  general:     1.0,
+};
+
 export function macrosForGoal(
   goal: string,
   weightKg: number,
   tdee: number,
 ): { targetCal: number; c: number; p: number; f: number } {
-  let targetCal: number;
-
-  switch (goal) {
-    case 'weight_loss':
-      targetCal = tdee - 400;
-      break;
-    case 'muscle':
-      targetCal = tdee + 200;
-      break;
-    case 'endurance':
-      targetCal = tdee + 100;
-      break;
-    default: // 'general'
-      targetCal = tdee;
-  }
+  const multiplier = GOAL_TDEE_MULTIPLIER[goal] ?? GOAL_TDEE_MULTIPLIER.general;
+  const targetCal = tdee * multiplier;
 
   // Ratio table (protein-g/kg + fat-fraction per goal) lives in dietBudget.ts
   // so the auto TDEE-derived split and the coach's custom-kcal split stay identical.

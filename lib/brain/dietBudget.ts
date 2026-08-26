@@ -16,8 +16,10 @@
 import { db, schema } from '@/db';
 import { eq } from 'drizzle-orm';
 import {
+  activityMultiplierForFrequency,
   estimateTDEE,
   macrosForGoal,
+  normalizeBiologicalSex,
   queryMetricPoints,
   queryWorkouts,
   type WorkoutInput,
@@ -38,6 +40,14 @@ export const KCAL_MAX = 6000;
 // 6,000 kcal budget is ~1,500 g. Cap only to reject obvious typos, not real
 // auto-calculated values (600 g was too low and rejected valid budgets).
 export const GRAMS_MAX = 1500;
+
+// Low-energy-availability floor: below these thresholds, sustained deficits
+// carry real physiological risk (hormonal disruption, bone density loss —
+// "RED-S"), independent of how the number was arrived at. Sex-specific
+// because typical energy needs differ; unknown sex uses the LOWER threshold
+// so we never under-protect on a guess.
+export const LOW_ENERGY_KCAL_FEMALE = 1200;
+export const LOW_ENERGY_KCAL_MALE = 1500;
 
 export function normalizeGoal(goal: string | null | undefined): DietGoal {
   return (DIET_GOALS as readonly string[]).includes(goal ?? '')
@@ -101,6 +111,27 @@ export interface DietBudget {
   fat:        number;   // grams
   /** Present only for auto — the raw maintenance TDEE before the goal adjustment. */
   tdee?:      number;
+  /**
+   * Present when targetKcal is at/under the sex-aware low-energy-availability
+   * threshold (see LOW_ENERGY_KCAL_FEMALE/MALE). Optional and additive so
+   * existing iOS Codable clients that don't know this field are unaffected.
+   * For 'auto' budgets, appliedFloor === true means we raised targetKcal to
+   * the threshold rather than serve a lower deficit. For 'custom' (pinned)
+   * budgets we never floor — appliedFloor is always false and the warning is
+   * informational only.
+   */
+  lowEnergyWarning?: { thresholdKcal: number; appliedFloor: boolean; message: string } | null;
+}
+
+/** Sex-aware low-energy-availability threshold — unknown sex uses the lower (safer) value. */
+function lowEnergyThresholdKcal(biologicalSex: string | null): number {
+  return normalizeBiologicalSex(biologicalSex) === 'male' ? LOW_ENERGY_KCAL_MALE : LOW_ENERGY_KCAL_FEMALE;
+}
+
+function lowEnergyMessage(thresholdKcal: number, appliedFloor: boolean): string {
+  return appliedFloor
+    ? `This is below the ~${thresholdKcal.toLocaleString()} kcal a day that's generally considered a safe floor, so we've eased the deficit rather than cut further.`
+    : `This is below the ~${thresholdKcal.toLocaleString()} kcal a day that's generally considered a safe floor. Since you've set this manually, we've kept your number but wanted to flag it.`;
 }
 
 /** The four override columns we read/write on `users`. */
@@ -122,6 +153,19 @@ export async function computeAutoBudget(userId: string, goal: DietGoal): Promise
   const weightKg = weightPts.at(-1)?.value ?? DEFAULT_WEIGHT_KG;
   const profile = parseProfileDetails(readMemoryFile(userId, 'core-profile.md'));
 
+  // training-history.json's `frequency` may be missing, malformed, a number
+  // (iOS sends Int), or a numeric string (the TS type says string) —
+  // activityMultiplierForFrequency tolerates all of that and falls back to
+  // the unchanged default (1.3) on anything it can't parse.
+  let frequency: unknown;
+  try {
+    const raw = readMemoryFile(userId, 'training-history.json');
+    frequency = raw ? JSON.parse(raw)?.frequency : undefined;
+  } catch {
+    frequency = undefined;
+  }
+  const activityMultiplier = activityMultiplierForFrequency(frequency);
+
   const num = (v: unknown): number | undefined => (typeof v === 'number' ? v : undefined);
   const workouts: WorkoutInput[] = workoutRows.map(w => ({
     type:        String(w.type ?? w.workoutType ?? 'workout'),
@@ -135,9 +179,30 @@ export async function computeAutoBudget(userId: string, goal: DietGoal): Promise
     heightCm:      profile.heightCm,
     age:           profile.age,
     biologicalSex: profile.biologicalSex,
+    activityMultiplier,
   }, workouts);
   const { targetCal, c, p, f } = macrosForGoal(goal, weightKg, tdee);
-  return { mode: 'auto', goal, targetKcal: targetCal, protein: p, carbs: c, fat: f, tdee };
+
+  // Low-energy-availability floor: an AUTO budget never prescribes a target
+  // below the sex-aware safe threshold — ease the deficit (raise targetKcal
+  // to the threshold) rather than let a small/older/female user land below
+  // their own BMR with no warning. Macros are re-split off the floored kcal
+  // so protein/carb/fat stay internally consistent with targetKcal.
+  const thresholdKcal = lowEnergyThresholdKcal(profile.biologicalSex);
+  if (targetCal < thresholdKcal) {
+    const floored = splitMacrosForKcal(goal, weightKg, thresholdKcal);
+    return {
+      mode: 'auto', goal, targetKcal: thresholdKcal,
+      protein: floored.protein, carbs: floored.carbs, fat: floored.fat,
+      tdee,
+      lowEnergyWarning: { thresholdKcal, appliedFloor: true, message: lowEnergyMessage(thresholdKcal, true) },
+    };
+  }
+
+  return {
+    mode: 'auto', goal, targetKcal: targetCal, protein: p, carbs: c, fat: f, tdee,
+    lowEnergyWarning: null,
+  };
 }
 
 /**
@@ -149,6 +214,11 @@ export async function resolveDietBudget(user: DietGoalRow, userId: string): Prom
 
   if (user.target_kcal != null) {
     const kcal = user.target_kcal;
+    // Custom (user/coach-pinned) budgets are never blocked or floored — the
+    // person deliberately chose this number. We only attach an informational
+    // warning when it's under the sex-aware low-energy-availability threshold.
+    const profile = parseProfileDetails(readMemoryFile(userId, 'core-profile.md'));
+    const thresholdKcal = lowEnergyThresholdKcal(profile.biologicalSex);
     return {
       mode:       'custom',
       goal,
@@ -158,6 +228,9 @@ export async function resolveDietBudget(user: DietGoalRow, userId: string): Prom
       protein: user.protein_target_g ?? Math.round((kcal * 0.30) / 4),
       carbs:   user.carbs_target_g   ?? Math.round((kcal * 0.40) / 4),
       fat:     user.fat_target_g     ?? Math.round((kcal * 0.30) / 9),
+      lowEnergyWarning: kcal < thresholdKcal
+        ? { thresholdKcal, appliedFloor: false, message: lowEnergyMessage(thresholdKcal, false) }
+        : null,
     };
   }
 
