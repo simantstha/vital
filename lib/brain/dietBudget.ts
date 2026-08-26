@@ -22,6 +22,8 @@ import {
   queryWorkouts,
   type WorkoutInput,
 } from '@/lib/brain/tools';
+import { readMemoryFile } from '@/lib/memory';
+import { parseProfileDetails } from '@/lib/profileDetails';
 
 export type DietGoal = 'weight_loss' | 'muscle' | 'endurance' | 'general';
 export const DIET_GOALS: readonly DietGoal[] = ['weight_loss', 'muscle', 'endurance', 'general'];
@@ -118,6 +120,7 @@ export async function computeAutoBudget(userId: string, goal: DietGoal): Promise
   ]);
 
   const weightKg = weightPts.at(-1)?.value ?? DEFAULT_WEIGHT_KG;
+  const profile = parseProfileDetails(readMemoryFile(userId, 'core-profile.md'));
 
   const num = (v: unknown): number | undefined => (typeof v === 'number' ? v : undefined);
   const workouts: WorkoutInput[] = workoutRows.map(w => ({
@@ -127,7 +130,12 @@ export async function computeAutoBudget(userId: string, goal: DietGoal): Promise
     distanceKm:  num(w.distance_m) != null ? num(w.distance_m)! / 1000 : num(w.distanceKm),
   }));
 
-  const tdee = estimateTDEE(weightKg, workouts);
+  const tdee = estimateTDEE({
+    weightKg,
+    heightCm:      profile.heightCm,
+    age:           profile.age,
+    biologicalSex: profile.biologicalSex,
+  }, workouts);
   const { targetCal, c, p, f } = macrosForGoal(goal, weightKg, tdee);
   return { mode: 'auto', goal, targetKcal: targetCal, protein: p, carbs: c, fat: f, tdee };
 }

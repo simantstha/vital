@@ -36,7 +36,9 @@ import { eq, and, gte, gt, lt, asc, desc, inArray, sql } from 'drizzle-orm';
 import { lookupBarcode } from '@/lib/openFoodFacts';
 import { searchCandidates, type Candidate } from '@/lib/nutrition/candidates';
 import type { BaselineStats } from '@/lib/brain/baselines';
-import { applyDietBudgetUpdate, splitMacrosForKcal } from '@/lib/brain/dietBudget';
+import { applyDietBudgetUpdate, splitMacrosForKcal, DEFAULT_WEIGHT_KG } from '@/lib/brain/dietBudget';
+import { readMemoryFile } from '@/lib/memory';
+import { parseProfileDetails } from '@/lib/profileDetails';
 
 // ── Tool definitions (Anthropic API schema) ────────────────────────────────
 
@@ -427,9 +429,46 @@ export interface WorkoutInput {
   calories?: number;
 }
 
-export function estimateTDEE(weightKg: number, workouts: WorkoutInput[]): number {
-  // Mifflin-St Jeor for 175 cm, 30-year-old male (profile defaults)
-  const bmr = 10 * weightKg + 6.25 * 175 - 5 * 30 + 5;
+export interface Biometrics {
+  weightKg: number;
+  heightCm: number | null;
+  age: number | null;
+  biologicalSex: string | null;
+}
+
+/** Fallback height (cm) when the user's profile has none on file. */
+export const FALLBACK_HEIGHT_CM = 170;
+/** Fallback age (years) when the user's profile has none on file. */
+export const FALLBACK_AGE = 35;
+
+/**
+ * Normalizes free-text biological sex into the two values the Mifflin-St
+ * Jeor sex term needs. Case-insensitive, trimmed; anything unrecognized
+ * (including empty/missing) maps to null so callers can apply a sex-neutral
+ * fallback instead of silently guessing.
+ */
+export function normalizeBiologicalSex(sex: string | null): 'male' | 'female' | null {
+  if (sex == null) return null;
+  const normalized = sex.trim().toLowerCase();
+  if (normalized === 'male' || normalized === 'm' || normalized === 'man') return 'male';
+  if (normalized === 'female' || normalized === 'f' || normalized === 'woman') return 'female';
+  return null;
+}
+
+export function estimateTDEE(bio: Biometrics, workouts: WorkoutInput[]): number {
+  const { weightKg } = bio;
+  const heightCm = bio.heightCm ?? FALLBACK_HEIGHT_CM;
+  const age = bio.age ?? FALLBACK_AGE;
+  const sex = normalizeBiologicalSex(bio.biologicalSex);
+
+  // Mifflin-St Jeor's sex term is +5 for male, -161 for female — a 166 kcal
+  // swing. When sex is unknown, use the midpoint of those two offsets (-78)
+  // rather than defaulting to male: defaulting to male would bias every
+  // unknown-sex user's BMR ~166 kcal high, over-budgeting calories for
+  // roughly half the user base.
+  const sexOffset = sex === 'male' ? 5 : sex === 'female' ? -161 : -78;
+
+  const bmr = 10 * weightKg + 6.25 * heightCm - 5 * age + sexOffset;
   let tdee = bmr * 1.3; // lightly-active base
 
   for (const w of workouts) {
@@ -1100,13 +1139,21 @@ export async function executeToolCall(
 
   // ── calculate_macros ──────────────────────────────────────────────────────
   if (name === 'calculate_macros') {
-    const goal     = String(input.goal ?? 'general');
-    const weightKg = Number(input.weightKg ?? 70);
+    const goal    = String(input.goal ?? 'general');
+    const profile = parseProfileDetails(readMemoryFile(userId, 'core-profile.md'));
+    const weightKg = typeof input.weightKg === 'number'
+      ? input.weightKg
+      : (profile.weightKg ?? DEFAULT_WEIGHT_KG);
     const workouts = Array.isArray(input.todayWorkouts)
       ? (input.todayWorkouts as WorkoutInput[])
       : [];
 
-    const tdee = estimateTDEE(weightKg, workouts);
+    const tdee = estimateTDEE({
+      weightKg,
+      heightCm:      profile.heightCm,
+      age:           profile.age,
+      biologicalSex: profile.biologicalSex,
+    }, workouts);
     const { targetCal, c, p, f } = macrosForGoal(goal, weightKg, tdee);
 
     return JSON.stringify({
