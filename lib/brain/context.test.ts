@@ -82,3 +82,30 @@ test('a missing weight/distance omits those lines regardless of unitSystem', asy
   assert.doesNotMatch(text, /- Weight:/);
   assert.match(text, /Workout: strength 30min/);
 });
+
+test('a diet budget with a lowEnergyWarning emits a SAFETY line the coach can explain', async () => {
+  const { buildPromptText } = await contextPromise;
+  const ctx = baseCtx('metric');
+  (ctx as Record<string, unknown>).dietBudget = {
+    mode: 'auto', goal: 'weight_loss', targetKcal: 1200, protein: 130, carbs: 90, fat: 40, tdee: 1600,
+    lowEnergyWarning: { thresholdKcal: 1200, appliedFloor: true, message: 'eased the deficit' },
+  };
+
+  const text = buildPromptText(ctx as Parameters<typeof buildPromptText>[0]);
+
+  assert.match(text, /SAFETY: target is at\/below the ~1200 kcal low-energy-availability floor\./);
+  assert.match(text, /We raised the target to this floor rather than cut further/);
+});
+
+test('a diet budget with no lowEnergyWarning omits the SAFETY line', async () => {
+  const { buildPromptText } = await contextPromise;
+  const ctx = baseCtx('metric');
+  (ctx as Record<string, unknown>).dietBudget = {
+    mode: 'auto', goal: 'general', targetKcal: 2400, protein: 150, carbs: 250, fat: 80, tdee: 2400,
+    lowEnergyWarning: null,
+  };
+
+  const text = buildPromptText(ctx as Parameters<typeof buildPromptText>[0]);
+
+  assert.doesNotMatch(text, /SAFETY:/);
+});

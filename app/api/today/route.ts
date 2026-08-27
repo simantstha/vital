@@ -17,6 +17,7 @@
  *     protein: number,
  *     carbs: number,
  *     fat: number,
+ *     lowEnergyWarning: { thresholdKcal: number, appliedFloor: boolean, message: string } | null,
  *   },
  *   insight: string,
  *   plan: [{ name: string, kcal: number, why: string }],
@@ -220,6 +221,9 @@ export async function GET(request: Request): Promise<NextResponse> {
       protein:       consumedProtein,
       carbs:         consumedCarbs,
       fat:           consumedFat,
+      // Present when targetKcal is at/under the sex-aware low-energy-
+      // availability floor — see lib/brain/dietBudget.ts. null otherwise.
+      lowEnergyWarning: budget.lowEnergyWarning ?? null,
     },
     insight,
     plan,

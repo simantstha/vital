@@ -275,7 +275,7 @@ final class LogsPagerTests: XCTestCase {
     // MARK: - dietDayData
 
     func testDietDayDataSumsMacrosAcrossMultipleEntries() {
-        let goal = DietBudgetDTO(mode: "auto", goal: "general", targetKcal: 2014, protein: 150, carbs: 220, fat: 65, tdee: 2200)
+        let goal = DietBudgetDTO(mode: "auto", goal: "general", targetKcal: 2014, protein: 150, carbs: 220, fat: 65, tdee: 2200, lowEnergyWarning: nil)
         let entries = [
             MealLogEntryDTO(id: "1", name: "Lunch", kcal: 640, protein: 40, carbs: 60, fat: 20, slot: "lunch", loggedAt: "2026-07-11T12:00:00.000Z"),
             MealLogEntryDTO(id: "2", name: "Dinner", kcal: 640, protein: 46, carbs: 58, fat: 20, slot: "dinner", loggedAt: "2026-07-11T19:41:00.000Z"),
@@ -293,7 +293,7 @@ final class LogsPagerTests: XCTestCase {
     }
 
     func testDietDayDataClampsRemainingAtZeroWhenEatenExceedsTarget() {
-        let goal = DietBudgetDTO(mode: "auto", goal: "general", targetKcal: 1000, protein: 100, carbs: 100, fat: 50, tdee: 1800)
+        let goal = DietBudgetDTO(mode: "auto", goal: "general", targetKcal: 1000, protein: 100, carbs: 100, fat: 50, tdee: 1800, lowEnergyWarning: nil)
         let entries = [
             MealLogEntryDTO(id: "1", name: "Feast", kcal: 1500, protein: 80, carbs: 200, fat: 60, slot: nil, loggedAt: "2026-07-11T12:00:00.000Z"),
         ]

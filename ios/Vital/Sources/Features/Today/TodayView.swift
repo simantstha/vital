@@ -74,6 +74,12 @@ struct TodayView: View {
                                 proteinGoal: vm.diet.protein.target,
                                 onOpen: { showLogSheet = true }
                             )
+                            if let warning = vm.diet.lowEnergyWarning {
+                                CautionBanner(
+                                    title: CautionBanner.lowEnergyTitle(appliedFloor: warning.appliedFloor),
+                                    message: warning.message
+                                )
+                            }
                         }
                         .motionTransition(.fade)
                     }

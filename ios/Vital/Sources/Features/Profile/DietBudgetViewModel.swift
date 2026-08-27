@@ -39,6 +39,21 @@ final class DietBudgetViewModel: ObservableObject {
 
     @Published var goalOptions: [GoalOption] = []
 
+    /// Set whenever the server's resolved budget is at/under the low-energy
+    /// floor. Saving already happened (custom targets are never blocked) —
+    /// this only drives the confirm-banner UI in the editor.
+    @Published private(set) var lowEnergyWarning: LowEnergyWarning?
+    /// The kcal value the user explicitly chose to keep despite the warning
+    /// (via "Keep {value}"). Compared against `targetKcal` so the banner
+    /// re-surfaces if they edit the number again.
+    @Published private var acknowledgedLowEnergyKcal: Int?
+
+    /// Whether the confirm banner + its two buttons should show. Custom mode
+    /// only — an auto budget is never user-editable to a risky number.
+    var showLowEnergyWarning: Bool {
+        mode == "custom" && lowEnergyWarning != nil && acknowledgedLowEnergyKcal != targetKcal
+    }
+
     private let api = APIClient.shared
 
     var goalDisplay: String { Self.goalLabels[goal] ?? "Maintain" }
@@ -87,6 +102,20 @@ final class DietBudgetViewModel: ObservableObject {
 
     func resetToAuto() { setMode("auto") }
 
+    /// "Use {thresholdKcal}" — raises the target to the safe floor and saves.
+    func useSafeFloor() {
+        guard let threshold = lowEnergyWarning?.thresholdKcal else { return }
+        targetKcal = threshold
+        Task { await persist() }
+    }
+
+    /// "Keep {value}" — the target was already saved (custom targets are
+    /// never blocked); this just acknowledges the warning so the banner
+    /// stops showing for this value.
+    func keepCurrentTarget() {
+        acknowledgedLowEnergyKcal = targetKcal
+    }
+
     // ── Networking ───────────────────────────────────────────────────────────
 
     private func persist() async {
@@ -116,6 +145,7 @@ final class DietBudgetViewModel: ObservableObject {
         protein = r.current.protein
         carbs = r.current.carbs
         fat = r.current.fat
+        lowEnergyWarning = r.current.lowEnergyWarning
 
         autoKcal = r.auto.targetKcal
         autoProtein = r.auto.protein

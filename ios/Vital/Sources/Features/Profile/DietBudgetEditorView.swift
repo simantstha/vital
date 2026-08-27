@@ -20,6 +20,9 @@ struct DietBudgetEditorView: View {
                             heroCard
                             splitBar
                             if vm.mode == "custom" {
+                                if vm.showLowEnergyWarning {
+                                    lowEnergyWarningSection
+                                }
                                 macroEditors
                                 resetButton
                             } else {
@@ -109,6 +112,50 @@ struct DietBudgetEditorView: View {
                 .frame(width: 40, height: 40)
                 .background(Circle().fill(Theme.Colors.glassFill))
                 .overlay(Circle().strokeBorder(Theme.Colors.glassBorder, lineWidth: 1))
+        }
+    }
+
+    // ── Low-energy floor confirm banner (custom mode only) ────────────────────
+    // The number is already saved — #136 deliberately never overrides a
+    // pinned budget. This just makes the choice explicit rather than silent.
+
+    private var lowEnergyWarningSection: some View {
+        VStack(spacing: Theme.Spacing.sm) {
+            CautionBanner(title: "Below the safe floor", message: vm.lowEnergyWarning?.message ?? "")
+
+            HStack(spacing: Theme.Spacing.sm) {
+                Button {
+                    vm.useSafeFloor()
+                } label: {
+                    Text("Use \(vm.lowEnergyWarning?.thresholdKcal ?? vm.targetKcal)")
+                        .font(Theme.Typography.bodySmall)
+                        .fontWeight(.medium)
+                        .foregroundStyle(Theme.Colors.textPrimary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, Theme.Spacing.sm + 2)
+                        .background(
+                            RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
+                                .strokeBorder(Theme.Colors.glassBorder, lineWidth: 1)
+                        )
+                }
+                .buttonStyle(.plain)
+
+                Button {
+                    vm.keepCurrentTarget()
+                } label: {
+                    Text("Keep \(vm.targetKcal)")
+                        .font(Theme.Typography.bodySmall)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(Theme.Colors.onAccent)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, Theme.Spacing.sm + 2)
+                        .background(
+                            RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
+                                .fill(Theme.Colors.accent)
+                        )
+                }
+                .buttonStyle(.plain)
+            }
         }
     }
 
