@@ -1354,6 +1354,17 @@ struct TodayMetrics: Decodable {
     let restingHr: TodayMetricValue
 }
 
+/// Present when the effective target is at/under the sex-aware low-energy-
+/// availability floor (see lib/brain/dietBudget.ts). `appliedFloor` means the
+/// server raised an auto-calculated target to the floor rather than serve a
+/// deeper deficit; for a pinned/custom target it's always false and the
+/// warning is informational only.
+struct LowEnergyWarning: Decodable {
+    let thresholdKcal: Int
+    let appliedFloor: Bool
+    let message: String
+}
+
 struct TodayDietBudget: Decodable {
     let targetKcal: Int
     let consumedKcal: Int
@@ -1368,6 +1379,8 @@ struct TodayDietBudget: Decodable {
     let fatTarget: Int?
     let mode: String?  // "auto" | "custom"
     let goal: String?
+    // Optional for backwards-compat with an older backend during rollout.
+    let lowEnergyWarning: LowEnergyWarning?
 }
 
 struct TodayPlanItem: Decodable {
@@ -1408,6 +1421,8 @@ struct DietBudgetDTO: Decodable {
     let carbs: Int
     let fat: Int
     let tdee: Int?         // present for auto only
+    // Optional for backwards-compat with an older backend during rollout.
+    let lowEnergyWarning: LowEnergyWarning?
 }
 
 struct DietGoalResponse: Decodable {

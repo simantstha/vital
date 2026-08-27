@@ -129,6 +129,30 @@ enum Theme {
         /// Identity edge glow stays the manifest cyan in either appearance.
         static let specialistEdgeGlow = Color(red: 0.298, green: 0.788, blue: 0.941)
 
+        /// Caution — guidance the user should read but that isn't a failure
+        /// (e.g. a diet target near the low-energy floor). Distinct from
+        /// `alert`, which is reserved for red/failure states. Amber:
+        /// light: #B4741A / dark: #E8A94D.
+        static let caution = Color(uiColor: UIColor { tc in
+            tc.userInterfaceStyle == .dark
+                ? UIColor(red: 0.910, green: 0.663, blue: 0.302, alpha: 1)
+                : UIColor(red: 0.706, green: 0.455, blue: 0.102, alpha: 1)
+        })
+
+        /// Soft fill for a caution banner — light: #FBF0DC / dark: #2A2216.
+        static let cautionSoft = Color(uiColor: UIColor { tc in
+            tc.userInterfaceStyle == .dark
+                ? UIColor(red: 0.165, green: 0.133, blue: 0.086, alpha: 1)
+                : UIColor(red: 0.984, green: 0.941, blue: 0.863, alpha: 1)
+        })
+
+        /// Hairline border for a caution banner — light: #E4C489 / dark: #5C4620.
+        static let cautionLine = Color(uiColor: UIColor { tc in
+            tc.userInterfaceStyle == .dark
+                ? UIColor(red: 0.361, green: 0.275, blue: 0.125, alpha: 1)
+                : UIColor(red: 0.894, green: 0.769, blue: 0.537, alpha: 1)
+        })
+
     }
 
     // MARK: - Spacing

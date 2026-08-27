@@ -242,6 +242,14 @@ export function buildPromptText(
       `- Target: ${b.targetKcal} kcal (${b.carbs}g C / ${b.protein}g P / ${b.fat}g F)`,
     );
     lines.push(`- Remaining today: ${b.targetKcal - mealTotal.kcal} kcal`);
+    if (b.lowEnergyWarning) {
+      lines.push(
+        `- SAFETY: target is at/below the ~${b.lowEnergyWarning.thresholdKcal} kcal low-energy-availability floor.`,
+      );
+      if (b.lowEnergyWarning.appliedFloor) {
+        lines.push('  We raised the target to this floor rather than cut further — do not suggest going lower.');
+      }
+    }
   }
 
   // ── Schedule (next 48h calendar_blocks, if the user has synced) ────────────
