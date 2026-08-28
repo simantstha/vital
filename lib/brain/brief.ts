@@ -24,7 +24,7 @@ import {
   DEFAULT_SLEEP_GOAL_MIN,
   type HrvMetric,
 } from '@/lib/brain/recovery';
-import { localDayKey, pickTimeZone } from '@/lib/localDay';
+import { localDayKey, pickTimeZone, previousDayKey, localHour } from '@/lib/localDay';
 import { resolveUnitSystem, type UnitSystem } from '@/lib/units';
 import { KM_PER_MILE } from '@/lib/metricFormat';
 import type { DailyBrief } from '@/lib/types';
@@ -70,13 +70,10 @@ function metersToUnitDistance(m: number, units: UnitSystem): number {
 
 export async function generateDailyBriefFromDb(userId: string): Promise<DailyBrief> {
   const now = new Date();
-  const todayStart = new Date(
+  const eightWeeksAgo = new Date(
     Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
   );
-  const eightWeeksAgo = new Date(todayStart);
   eightWeeksAgo.setUTCDate(eightWeeksAgo.getUTCDate() - 56);
-  const sevenDaysAgo = new Date(todayStart);
-  sevenDaysAgo.setUTCDate(sevenDaysAgo.getUTCDate() - 7);
 
   // One events read (weight/meals/workouts still live there), plus the hrv_sdnn
   // baseline row and calibration status via the shared helpers. Biometrics come
@@ -138,6 +135,34 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
   // still correct, just not travel-instant (see lib/localDay.ts).
   const tz = pickTimeZone(null, userRow?.timezone);
 
+  const todayKey = localDayKey(now, tz);
+  const thisWeekKey = weekStartKeyFromLocalDay(todayKey);
+
+  // The 7 local days strictly BEFORE today (for recentActivities), and the 3
+  // local days strictly BEFORE today (for recentNutrition) — built in one
+  // backwards walk so both sets agree on what "before today" means.
+  const recentDayKeys = new Set<string>();
+  const nutritionDayKeys = new Set<string>();
+  {
+    let cursor = todayKey;
+    for (let i = 0; i < 7; i++) {
+      cursor = previousDayKey(cursor);
+      recentDayKeys.add(cursor);
+      if (i < 3) nutritionDayKeys.add(cursor);
+    }
+  }
+
+  // localDayKey() builds a fresh Intl.DateTimeFormat per call; events are now
+  // day-keyed across six separate passes below, so memoize per-event.
+  const dayKeyMemo = new WeakMap<object, string>();
+  const dayOf = (e: { timestamp: Date }): string => {
+    const cached = dayKeyMemo.get(e);
+    if (cached) return cached;
+    const key = localDayKey(e.timestamp, tz);
+    dayKeyMemo.set(e, key);
+    return key;
+  };
+
   // Display-unit preference — resolved once here (same select as timezone,
   // no extra query), threaded only into distance formatting below. Fixes the
   // pre-existing bug where this brief hardcoded miles for every user
@@ -157,8 +182,8 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
     .map(n => ({ type: String(n.type), label: String(n.label) }))
     .slice(0, 15);
 
-  const todayEvents   = events.filter(e => e.timestamp >= todayStart);
-  const recentEvents  = events.filter(e => e.timestamp >= sevenDaysAgo && e.timestamp < todayStart);
+  const todayEvents   = events.filter(e => dayOf(e) === todayKey);
+  const recentEvents  = events.filter(e => recentDayKeys.has(dayOf(e)));
   const latestWeight  = events.find(e => e.type === 'weight_logged');
 
   // ── Today's biometrics (latest daily_metrics point; null when unsynced) ────
@@ -269,12 +294,10 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
 
   // ── Current week mileage ──────────────────────────────────────────────────
 
-  const weekStart = new Date(todayStart);
-  weekStart.setUTCDate(weekStart.getUTCDate() - weekStart.getUTCDay()); // Sunday
   const thisWeekRuns = events.filter(
     e =>
       e.type === 'workout_completed' &&
-      e.timestamp >= weekStart &&
+      weekStartKeyFromLocalDay(dayOf(e)) === thisWeekKey &&
       (str(pl(e.payload).type) ?? '').toLowerCase().includes('run'),
   );
   const weeklyDistance = thisWeekRuns.reduce((sum, e) => {
@@ -301,8 +324,7 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
       : 0;
     const paceMin = Math.floor(paceMinUnit);
     const paceSec = Math.round((paceMinUnit - paceMin) * 60);
-    const ts = lastRunEvent.timestamp;
-    const h  = ts.getHours();
+    const h  = localHour(lastRunEvent.timestamp, tz);
     const dayTime =
       h < 9 ? 'morning' : h < 12 ? 'late morning' : h < 17 ? 'afternoon' : 'evening';
 
@@ -389,7 +411,7 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
 
       return {
         type:        kind,
-        date:        localDayKey(e.timestamp, tz),
+        date:        dayOf(e),
         distance:    distM > 0 ? distUnit.toFixed(1) : undefined,
         pace:        paceMinUnit > 0 ? `${paceMin}:${paceSec < 10 ? '0' : ''}${paceSec}` : undefined,
         hr:          num(p.avg_hr) ?? num(p.average_heart_rate),
@@ -414,7 +436,7 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
     // week's Sunday — calendar arithmetic on an already-local key (like
     // lib/streak.ts's previousDayKey), so it's DST-proof and never buckets a
     // late-night local workout into the wrong (UTC) week.
-    const key = weekStartKeyFromLocalDay(localDayKey(e.timestamp, tz));
+    const key = weekStartKeyFromLocalDay(dayOf(e));
     if (!weekBuckets.has(key)) {
       weekBuckets.set(key, { weekStart: key, runDistance: 0, walkDistance: 0, gymMin: 0, gymSessions: 0 });
     }
@@ -442,12 +464,9 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
 
   // ── Recent nutrition (last 3 days, excluding today) ───────────────────────
 
-  const threeDaysAgo = new Date(todayStart);
-  threeDaysAgo.setUTCDate(threeDaysAgo.getUTCDate() - 3);
-
   const mealDayMap = new Map<string, { calories: number; carbs: number; protein: number; fat: number }>();
-  for (const e of events.filter(ev => ev.type === 'meal_logged' && ev.timestamp >= threeDaysAgo && ev.timestamp < todayStart)) {
-    const key = localDayKey(e.timestamp, tz);
+  for (const e of events.filter(ev => ev.type === 'meal_logged' && nutritionDayKeys.has(dayOf(ev)))) {
+    const key = dayOf(e);
     if (!mealDayMap.has(key)) mealDayMap.set(key, { calories: 0, carbs: 0, protein: 0, fat: 0 });
     const day = mealDayMap.get(key)!;
     const p   = pl(e.payload);
@@ -502,5 +521,6 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
     weightKg,
     foodProfile: restrictions.length || preferences.length ? { restrictions, preferences } : undefined,
     calibrating: calibration.status === 'calibrating',
+    timeZone: tz,
   });
 }

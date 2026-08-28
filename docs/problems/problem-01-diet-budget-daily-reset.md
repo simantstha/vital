@@ -1,8 +1,9 @@
 # Problem 01 — Diet budget doesn't reset to zero at the start of each local day
 
-**Status:** Diagnosed, not fixed
+**Status:** Fixed
 **Reported:** 2026-07-09
 **Area:** Backend — `GET /api/today` diet budget (consumed side)
+**Fixed:** Core fix landed in `lib/localDay.ts` and `app/api/today/route.ts`; follow-up integration sweep completed on `fix/local-day-sweep`
 
 ---
 

@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { getUserMemoryDir } from './memory';
+import { localDayKey } from './localDay';
 
 function overridesFile(userId: string): string {
   return path.join(getUserMemoryDir(userId), 'overrides.json');
@@ -34,25 +35,33 @@ export interface PendingBarcode {
   expiresAt: number;   // epoch ms — 5-minute TTL
 }
 
-function today(): string {
-  return new Date().toISOString().split('T')[0];
+/**
+ * The current day key, in the user's local calendar day when `tz` is a valid
+ * IANA id, else UTC. Never do timezone offset arithmetic — see lib/localDay.ts.
+ * `tz` is optional (and this module deliberately never imports `@/db` to look
+ * one up itself — it's pure-`fs` and its testability depends on that), so
+ * callers thread the user's stored timezone through from wherever they have
+ * DB access.
+ */
+function todayKey(tz?: string | null): string {
+  return localDayKey(new Date(), tz);
 }
 
 function ensureDir(userId: string) {
   try { fs.mkdirSync(getUserMemoryDir(userId), { recursive: true }); } catch { /* ok */ }
 }
 
-export function readCoachState(userId: string): CoachState {
+export function readCoachState(userId: string, tz?: string | null): CoachState {
   try {
     const state = JSON.parse(fs.readFileSync(overridesFile(userId), 'utf-8')) as CoachState;
-    if (state.date !== today()) return { date: today(), mealOverrides: [] };
+    if (state.date !== todayKey(tz)) return { date: todayKey(tz), mealOverrides: [] };
     return state;
-  } catch { return { date: today(), mealOverrides: [] }; }
+  } catch { return { date: todayKey(tz), mealOverrides: [] }; }
 }
 
-export function writeMealOverride(userId: string, override: MealOverride) {
+export function writeMealOverride(userId: string, override: MealOverride, tz?: string | null) {
   ensureDir(userId);
-  const state = readCoachState(userId);
+  const state = readCoachState(userId, tz);
   const idx = state.mealOverrides.findIndex(o => o.meal === override.meal);
   if (idx >= 0) state.mealOverrides[idx] = override;
   else state.mealOverrides.push(override);

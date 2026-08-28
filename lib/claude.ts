@@ -5,6 +5,7 @@ import { writeHrvBaselineToProfile } from '@/lib/brain/baselines';
 import { parseProfileDetails, formatIdentityForPrompt } from '@/lib/profileDetails';
 import type { UnitSystem } from '@/lib/units';
 import type { RecoveryConfidence, RecoveryGap, RecoveryHistoryDay } from '@/lib/brain/recovery';
+import { localDayKey } from '@/lib/localDay';
 
 // ── Inline types (formerly imported from lib/whoop + lib/strava) ──────────────
 
@@ -123,6 +124,8 @@ interface BriefContext {
   foodProfile?: { restrictions: Array<{ type: string; label: string }>; preferences: Array<{ type: string; label: string }> };
   /** True while baselines are still calibrating (< 14 days of history) — recovery score is provisional. */
   calibrating?: boolean;
+  /** IANA tz for the date label and the returned day key; undefined → UTC. */
+  timeZone?: string;
 }
 
 /**
@@ -156,7 +159,12 @@ function applyIdentityUnits(markdown: string, units: UnitSystem): string {
 }
 
 export async function generateDailyBrief(userId: string, ctx: BriefContext): Promise<DailyBrief> {
-  const today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+  const today = new Date().toLocaleDateString('en-US', {
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+    ...(ctx.timeZone ? { timeZone: ctx.timeZone } : {}),
+  });
   const userProfile = applyIdentityUnits(
     readMemoryFile(userId, 'core-profile.md') ?? readUserProfile(userId),
     ctx.unitSystem ?? 'metric',
@@ -325,7 +333,7 @@ Respond ONLY with valid JSON, no markdown, no explanation:
   }
 
   return {
-    date: new Date().toISOString().split('T')[0],
+    date: localDayKey(new Date(), ctx.timeZone),
     generatedAt: new Date().toISOString(),
     body: parsed.body,
     chips: parsed.chips,

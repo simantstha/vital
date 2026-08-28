@@ -1,4 +1,4 @@
-import { localDayKey } from './localDay';
+import { localDayKey, previousDayKey } from './localDay';
 
 type ActivityInput = {
   timeZone?: string;
@@ -29,13 +29,6 @@ export function collectQualifyingDays(input: ActivityInput): Set<string> {
   }
 
   return days;
-}
-
-function previousDayKey(dayKey: string): string {
-  const [year, month, day] = dayKey.split('-').map(Number);
-  const date = new Date(Date.UTC(year, month - 1, day));
-  date.setUTCDate(date.getUTCDate() - 1);
-  return date.toISOString().slice(0, 10);
 }
 
 export function calculateStreakDays(
