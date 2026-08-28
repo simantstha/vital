@@ -27,7 +27,7 @@ import { resolveDietBudget, type DietBudget } from './dietBudget';
 import { getCachedBrief, briefCacheKey, type CachedBrief } from './briefCache';
 import { getConversationStart } from './conversationWindow';
 import { buildWhoopContextLine } from './whoopContext';
-import { localDayKey } from '../localDay';
+import { localDayKey, pickTimeZone, previousDayKey } from '../localDay';
 import { resolveUnitSystem, type UnitSystem } from '../units';
 import { formatDistance, formatWeight } from '../metricFormat';
 
@@ -331,9 +331,17 @@ export function buildPromptText(
 
 export async function assembleContext(userId: string): Promise<CoachContext> {
   const now = new Date();
-  const todayStart = new Date(
+  const utcMidnightToday = new Date(
     Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
   );
+  // Deliberate UTC-anchored superset, refined to the user's exact local day in
+  // JS below (never do timezone offset arithmetic — see lib/localDay.ts). One
+  // day back from UTC midnight strictly covers every real UTC offset (bounded
+  // ±14h), so no local-day event is ever missed. This mirrors the pattern in
+  // app/api/today/route.ts, but subtracts only 1 day (not /api/today's 3):
+  // assembleContext runs on every coach turn, the opener, and every meal log
+  // — a hot path where a wider window means a wider row scan on every call.
+  const eventsSince = new Date(utcMidnightToday.getTime() - 24 * 3_600_000);
 
   // Only messages within the current conversation (since the last 4h
   // inactivity gap or manual "New chat" reset) are eligible for the prompt —
@@ -355,7 +363,7 @@ export async function assembleContext(userId: string): Promise<CoachContext> {
       .where(
         and(
           eq(schema.events.user_id, userId),
-          gte(schema.events.timestamp, todayStart),
+          gte(schema.events.timestamp, eventsSince),
         ),
       )
       .orderBy(desc(schema.events.timestamp)),
@@ -390,8 +398,11 @@ export async function assembleContext(userId: string): Promise<CoachContext> {
   // already selected above for timezone/diet-budget.
   const unitSystem = resolveUnitSystem(usersRow?.unit_system);
 
-  // Compute user's local date/time in their timezone
-  const tz = usersRow?.timezone ?? 'UTC';
+  // Compute user's local date/time in their timezone. pickTimeZone validates
+  // the stored IANA id (an invalid one — e.g. corrupted data — falls back to
+  // undefined here, then 'UTC' below) rather than a raw `??`, which would let
+  // garbage leak straight into formatScheduleLine/Intl.DateTimeFormat calls.
+  const tz = pickTimeZone(null, usersRow?.timezone) ?? 'UTC';
   const nowFormat: Intl.DateTimeFormatOptions = {
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
     hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
@@ -411,10 +422,20 @@ export async function assembleContext(userId: string): Promise<CoachContext> {
   // for non-UTC users — previously this used the UTC day, which could miss a
   // same-day cache the app already warmed (or worse, hit a stale one).
   const localToday = localDayKey(now, tz);
-  const localYesterday = localDayKey(new Date(now.getTime() - 24 * 3_600_000), tz);
+  // Calendar arithmetic on the already-local day key, not a 24h Date
+  // subtraction — subtracting 24h from `now` skips a day across a 23-hour
+  // spring-forward date, which would poison the daily_metrics lookup below.
+  const localYesterday = previousDayKey(localToday);
 
-  // Today snapshot
-  const today = buildDaySnapshot(localToday, todayEvents);
+  // Today snapshot — refine the UTC-superset `todayEvents` down to exactly
+  // the events that fall on the user's local day (comparing localDayKey
+  // values, never offset arithmetic). `.filter` preserves the desc-timestamp
+  // ordering buildDaySnapshot relies on for its first-wins hrv/sleep/weight
+  // picks, so no re-sort is needed.
+  const today = buildDaySnapshot(
+    localToday,
+    todayEvents.filter(e => localDayKey(e.timestamp, tz) === localToday),
+  );
 
   // Ontology partition
   const hardConstraints = allNodes.filter(n => HARD_CONSTRAINT_TYPES.has(n.type));

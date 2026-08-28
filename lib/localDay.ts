@@ -48,3 +48,31 @@ export function pickTimeZone(
   if (isValidTimeZone(storedTz)) return storedTz;
   return undefined;
 }
+
+/**
+ * The previous calendar day's YYYY-MM-DD key for an already-local `dayKey`.
+ * Pure calendar arithmetic — never subtract 24h from a Date, that skips a
+ * day across a spring-forward transition.
+ */
+export function previousDayKey(dayKey: string): string {
+  const [year, month, day] = dayKey.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  date.setUTCDate(date.getUTCDate() - 1);
+  return date.toISOString().slice(0, 10);
+}
+
+/**
+ * The hour (0-23) of `date` in `tz`. UTC fallback when tz is invalid/missing.
+ */
+export function localHour(date: Date, tz: string | null | undefined): number {
+  if (!isValidTimeZone(tz)) return date.getUTCHours();
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz,
+    hour: 'numeric',
+    // hourCycle: 'h23' (not hour12: false) — some ICU builds render midnight
+    // as "24" under hour12: false, which would silently break callers.
+    hourCycle: 'h23',
+  }).formatToParts(date);
+  const hour = parts.find(part => part.type === 'hour')?.value;
+  return Number(hour);
+}

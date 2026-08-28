@@ -1,7 +1,7 @@
 # Problem 01 — FIX PLAN: local-day diet budget reset (travel-aware)
 
 **Companion to:** `problem-01-diet-budget-daily-reset.md`
-**Status:** Planned, not yet implemented
+**Status:** Implemented
 **Decisions locked (2026-07-09):**
 - **TZ source:** store an IANA `timezone` on the user **and refresh it from the
   device on every `/api/today` call** → always reflects where the user currently
@@ -203,17 +203,39 @@ re-reads the device zone each call, so travel is handled automatically.
 
 ## 10. Out of scope (deferred follow-ups — record, don't fix now)
 
-These keep their UTC day boundary for this pass; they don't affect the reported
-diet-budget bug:
-- `lib/brain/brief.ts:47` — `todayStart` and the week/history/meal buckets that
-  build the *insight content*. **Known minor inconsistency:** after this fix the
-  brief's cache *key* is local-day but its *content* is still computed on
-  UTC-day. Acceptable for now; flagged for a later "full local-day sweep."
-- `lib/brain/context.ts:271` — coach "today".
-- Misc `toISOString().split('T')[0]` day usages: `lib/coachState.ts:38`,
-  `lib/memory.ts:90`, `lib/baselines.ts:111`, `lib/claude.ts:77,226`,
-  `app/api/logs` & `app/api/trends` "since N days" windows (these are rolling
-  windows, far less sensitive than a hard day boundary).
+### Completed on `fix/local-day-sweep`:
+
+- **`lib/brain/brief.ts`** — `todayStart`, `sevenDaysAgo`, `threeDaysAgo` window
+  edges and the UTC-week `weeklyDistance` bucket now compare local day keys; daily
+  insight content is now computed on the user's local calendar day. `lastRun.dayTime`
+  now uses `localHour` instead of server-local `getHours()`.
+
+- **`lib/brain/context.ts`** — the coach's today-events query was widened to a
+  UTC-anchored superset and then refined to the local day in JS before
+  `buildDaySnapshot`. `localYesterday` now uses `previousDayKey` for consistent
+  day-boundary semantics. The stored timezone is validated via `pickTimeZone`.
+
+- **`lib/coachState.ts`** — `mealOverrides` now reset at the user's local
+  midnight. The user's timezone is threaded in as an optional parameter from
+  `app/api/coach-state/route.ts`.
+
+- **`lib/claude.ts:328`** — the returned `DailyBrief.date` is now the local day
+  key, so it agrees with the local cache key that `app/api/brief/route.ts`
+  already uses.
+
+### Still deferred (unchanged, deliberately):
+
+- **Cosmetic `YYYY-MM-DD` stamps** written into markdown — `lib/memory.ts:90`,
+  `lib/brain/baselines.ts:111`, `lib/claude.ts:78`. No boundary logic involved;
+  these are just date formatting in logs/summaries.
+
+- **Rolling "since N days" windows** in `app/api/logs`, `app/api/trends`, and
+  `brief.ts`'s 56-day `eightWeeksAgo`. These are rolling windows from now, not
+  hard day boundaries, so they're far less sensitive to UTC vs. local day
+  distinctions. **Critical:** `eightWeeksAgo` must NOT be widened to a local-day
+  boundary — the oldest `weeklyMileage` bucket is a partial week cut exactly at
+  day 56, so changing it would shift the 8-week training-load table for UTC users
+  too.
 
 ## 11. Verification plan
 
@@ -232,14 +254,14 @@ diet-budget bug:
 
 ## 12. Implementation checklist
 
-- [ ] `lib/localDay.ts` — add `isValidTimeZone`, `localDayKey`, `pickTimeZone`
-- [ ] `db/schema.ts` — add nullable `timezone` to `users`; generate migration
-- [ ] `app/api/today/route.ts` — local-day bucketing, tz persist, local cache key
-- [ ] `app/api/brief/route.ts` — read stored tz, local-day cache key
-- [ ] `lib/brain/briefCache.ts` — remove/deprecate `todayKey()`
-- [ ] `ios/.../APIClient.swift` — send `?tz=` from `fetchToday()`
-- [ ] Unit test for `localDayKey`; manual API + device verification
-- [ ] After deploy: confirm `users.timezone` column exists in prod (migration
+- [x] `lib/localDay.ts` — add `isValidTimeZone`, `localDayKey`, `pickTimeZone`
+- [x] `db/schema.ts` — add nullable `timezone` to `users`; generate migration
+- [x] `app/api/today/route.ts` — local-day bucketing, tz persist, local cache key
+- [x] `app/api/brief/route.ts` — read stored tz, local-day cache key
+- [x] `lib/brain/briefCache.ts` — remove/deprecate `todayKey()`
+- [x] `ios/.../APIClient.swift` — send `?tz=` from `fetchToday()`
+- [x] Unit test for `localDayKey`; manual API + device verification
+- [x] After deploy: confirm `users.timezone` column exists in prod (migration
       actually applied — see §4 caveat)
 - [ ] Update `memory/project_uniapply.md` if the diet-budget/day-boundary
       behavior is documented there
