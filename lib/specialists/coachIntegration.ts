@@ -8,10 +8,7 @@ import type {
   PersonaSnapshot,
 } from './orchestration';
 import { specialistPersona, VITAL_PERSONA } from './orchestration';
-import {
-  PROPOSE_RETURN_TO_VITAL_TOOL,
-  PROPOSE_SPECIALIST_HANDOFF_TOOL,
-} from './coachRuntime';
+import { PROPOSE_RETURN_TO_VITAL_TOOL } from './coachRuntime';
 
 interface CoachConfigurationInput {
   enabled: boolean;
@@ -21,6 +18,7 @@ interface CoachConfigurationInput {
   basePrompt: string;
   baseTools: Tool[];
   specialistPrompt: CompiledSpecialistPrompt | null;
+  handoffTool: Tool | null;
 }
 
 export interface CoachConfiguration {
@@ -62,7 +60,9 @@ export function selectCoachConfiguration(input: CoachConfigurationInput): CoachC
     model: input.baseModel,
     system: input.basePrompt,
     context: null,
-    tools: input.session ? input.baseTools : [...input.baseTools, PROPOSE_SPECIALIST_HANDOFF_TOOL],
+    tools: input.session || !input.handoffTool
+      ? input.baseTools
+      : [...input.baseTools, input.handoffTool],
     speaker: 'coach',
   };
 }

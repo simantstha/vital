@@ -9,7 +9,7 @@ import {
   accumulateModelUsage,
   isModelStreamInterruption,
   SpecialistCoachRuntime,
-  PROPOSE_SPECIALIST_HANDOFF_TOOL,
+  proposeSpecialistHandoffTool,
   PROPOSE_RETURN_TO_VITAL_TOOL,
 } from './coachRuntime';
 import Anthropic from '@anthropic-ai/sdk';
@@ -37,6 +37,7 @@ function setup() {
 test('proposal tool creates only a pending proposal and logs no private handoff content', async () => {
   const { runtime, logs } = setup();
   const session = await runtime.proposeHandoff(USER, {
+    specialistId: 'running-coach',
     objective: 'Create a safe 10K training week',
     summary: 'Private health summary that must not be logged',
     relevantFacts: ['Runs twice weekly'],
@@ -51,7 +52,7 @@ test('proposal tool creates only a pending proposal and logs no private handoff 
 test('return tool validates the complete summary and leaves specialist active pending confirmation', async () => {
   const { runtime, sessions } = setup();
   const proposed = await runtime.proposeHandoff(USER, {
-    objective: 'Plan a week', summary: 'Runner', relevantFacts: [],
+    specialistId: 'running-coach', objective: 'Plan a week', summary: 'Runner', relevantFacts: [],
   });
   await sessions.transition(USER, proposed.id, 'active');
   const returned = await runtime.proposeReturn(USER, proposed.id, {
@@ -71,7 +72,7 @@ test('return tool validates the complete summary and leaves specialist active pe
 test('explicit active-session return completes immediately with a compact return record', async () => {
   const { runtime, sessions } = setup();
   const proposed = await runtime.proposeHandoff(USER, {
-    objective: 'Plan a week', summary: 'Runner', relevantFacts: [],
+    specialistId: 'running-coach', objective: 'Plan a week', summary: 'Runner', relevantFacts: [],
   });
   await sessions.transition(USER, proposed.id, 'active');
   const completed = await runtime.completeExplicitReturn(USER, proposed.id);
@@ -85,7 +86,7 @@ test('explicit active-session return completes immediately with a compact return
 test('premium model failure restores Vital while aborted stream preserves active session', async () => {
   const failedSetup = setup();
   const failedProposal = await failedSetup.runtime.proposeHandoff(USER, {
-    objective: 'Plan a week', summary: 'Runner', relevantFacts: [],
+    specialistId: 'running-coach', objective: 'Plan a week', summary: 'Runner', relevantFacts: [],
   });
   await failedSetup.sessions.transition(USER, failedProposal.id, 'active');
   const failed = await failedSetup.runtime.handleModelFailure(
@@ -96,7 +97,7 @@ test('premium model failure restores Vital while aborted stream preserves active
 
   const abortedSetup = setup();
   const abortedProposal = await abortedSetup.runtime.proposeHandoff(USER, {
-    objective: 'Plan a week', summary: 'Runner', relevantFacts: [],
+    specialistId: 'running-coach', objective: 'Plan a week', summary: 'Runner', relevantFacts: [],
   });
   await abortedSetup.sessions.transition(USER, abortedProposal.id, 'active');
   const abort = new Error('client disconnected');
@@ -129,10 +130,39 @@ test('model usage aggregates billed input and output tokens across premium round
 });
 
 test('coach tools expose the exact proposal and structured-return contracts', () => {
-  assert.equal(PROPOSE_SPECIALIST_HANDOFF_TOOL.name, 'propose_specialist_handoff');
-  assert.deepEqual(PROPOSE_SPECIALIST_HANDOFF_TOOL.input_schema.required, ['objective', 'summary', 'relevantFacts']);
+  const { manifests } = setup();
+  const tool = proposeSpecialistHandoffTool(manifests.list());
+  assert.equal(tool.name, 'propose_specialist_handoff');
+  assert.deepEqual(tool.input_schema.required, ['specialistId', 'objective', 'summary', 'relevantFacts']);
+  const specialistIdProperty = (tool.input_schema.properties as Record<string, { enum?: string[] }>).specialistId;
+  assert.deepEqual(specialistIdProperty.enum, ['running-coach', 'nutritionist', 'strength-coach']);
+  assert.ok(tool.description);
+  for (const manifest of manifests.list()) {
+    assert.ok(tool.description!.includes(manifest.triggerDescription));
+  }
   assert.equal(PROPOSE_RETURN_TO_VITAL_TOOL.name, 'propose_return_to_vital');
   assert.deepEqual(PROPOSE_RETURN_TO_VITAL_TOOL.input_schema.required, [
     'outcomes', 'decisions', 'recommendations', 'unresolvedRisks', 'nextSteps',
   ]);
+});
+
+test('proposeHandoff resolves the requested specialist and rejects an unknown one', async () => {
+  const { runtime } = setup();
+  const session = await runtime.proposeHandoff(USER, {
+    specialistId: 'nutritionist', objective: 'Plan a week', summary: 'Runner', relevantFacts: [],
+  });
+  assert.equal(session.manifestId, 'nutritionist');
+
+  await assert.rejects(
+    runtime.proposeHandoff(USER, {
+      specialistId: '', objective: 'Plan a week', summary: 'Runner', relevantFacts: [],
+    }),
+    /specialistId is required/,
+  );
+  await assert.rejects(
+    runtime.proposeHandoff(USER, {
+      specialistId: 'unknown', objective: 'Plan a week', summary: 'Runner', relevantFacts: [],
+    }),
+    /Unknown specialist: unknown/,
+  );
 });

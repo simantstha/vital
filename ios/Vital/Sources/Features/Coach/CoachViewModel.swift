@@ -181,14 +181,6 @@ enum CoachSpecialistState: Equatable {
     case recoverableRollback(String)
 }
 
-enum CoachWorkspacePlanState: Equatable {
-    case ready
-    case planning
-    case planned
-    case skipped
-    case completed
-}
-
 // MARK: - ViewModel
 
 @MainActor
@@ -206,14 +198,6 @@ final class CoachViewModel: ObservableObject {
     @Published private(set) var pendingHandoffCard: CoachHandoffCard? = nil
     @Published private(set) var specialistState: CoachSpecialistState = .vital
     @Published private(set) var isPerformingSpecialistAction: Bool = false
-    @Published private(set) var workspaceSnapshot: CoachWorkspaceSnapshot? = nil
-    @Published private(set) var workspacePlanState: CoachWorkspacePlanState = .ready
-    @Published private(set) var isLoadingWorkspace: Bool = false
-    @Published private(set) var isPerformingWorkspaceAction: Bool = false
-    @Published private(set) var workspaceErrorMessage: String? = nil
-    @Published private(set) var workspaceActionMessage: String? = nil
-    @Published private(set) var workspaceActionErrorMessage: String? = nil
-    @Published private(set) var workspaceChatRequestToken = 0
 
     /// Cheap signal for the view's scroll logic: increments once per reveal
     /// drain tick (see `pendingReveal` below) instead of `rows`, which would
@@ -233,8 +217,6 @@ final class CoachViewModel: ObservableObject {
     private var streamTask: Task<Void, Never>? = nil
     private var openerTask: Task<Void, Never>? = nil
     private var actionTask: Task<Void, Never>? = nil
-    private var workspaceTask: Task<Void, Never>? = nil
-    private var lastWorkspaceAction: (action: CoachWorkspaceActionKind, adjustment: CoachWorkspaceAdjustmentRequest?)?
     private var hasRestoredConversation = false
     private var lastActivityAt: Date? = nil
     private var transcriptionTask: Task<Void, Never>? = nil
@@ -336,176 +318,6 @@ final class CoachViewModel: ObservableObject {
         self.mode = mode
         self.api = api
         bindVoice()
-    }
-
-    // MARK: - Daily Coach Workspace
-
-    /// The regular Coach tab adds one deterministic, server-owned daily
-    /// recommendation above the conversation. Onboarding intentionally keeps
-    /// its existing chat-first experience.
-    func loadWorkspace() {
-        guard mode == nil, !isLoadingWorkspace, !isPerformingWorkspaceAction else { return }
-        isLoadingWorkspace = true
-        workspaceErrorMessage = nil
-        workspaceTask = Task {
-            defer {
-                isLoadingWorkspace = false
-                workspaceTask = nil
-            }
-            do {
-                switch try await api.fetchCoachWorkspace() {
-                case .available(let snapshot):
-                    workspaceSnapshot = snapshot
-                    workspacePlanState = Self.planState(for: snapshot.state.status)
-                    workspaceActionErrorMessage = nil
-                case .disabled:
-                    clearDisabledWorkspace()
-                }
-            } catch is CancellationError {
-                return
-            } catch {
-                // A workspace failure must never block the established coach
-                // thread; leave chat usable and show a local retry affordance.
-                workspaceErrorMessage = error.localizedDescription
-            }
-        }
-    }
-
-    /// Scene activation can cross a local-day boundary while the Coach tab is
-    /// still retained. Reload the server-owned workspace so its recommendation
-    /// and plan state replace the snapshot we showed before the app slept.
-    /// `loadWorkspace()` coalesces this with an initial or manual refresh.
-    func refreshWorkspaceForActiveScene() {
-        loadWorkspace()
-    }
-
-    func performWorkspaceAction(
-        _ action: CoachWorkspaceActionKind,
-        adjustment: CoachWorkspaceAdjustmentRequest? = nil
-    ) {
-        guard let workspaceSnapshot, !isPerformingWorkspaceAction else { return }
-        if action == .accept, workspaceSnapshot.state.status == .planned { return }
-
-        let actionId = UUID().uuidString
-        isPerformingWorkspaceAction = true
-        workspaceActionErrorMessage = nil
-        lastWorkspaceAction = (action, adjustment)
-        workspaceActionMessage = Self.workspaceActionProgress(action)
-        if action == .accept { workspacePlanState = .planning }
-
-        workspaceTask = Task {
-            defer {
-                isPerformingWorkspaceAction = false
-                workspaceActionMessage = nil
-                workspaceTask = nil
-                if workspacePlanState == .planning { workspacePlanState = .ready }
-            }
-            do {
-                let interaction = try await api.performCoachWorkspaceAction(
-                    recommendationId: workspaceSnapshot.recommendation.id,
-                    materialSignature: workspaceSnapshot.recommendation.materialSignature,
-                    actionId: actionId,
-                    action: action,
-                    adjustment: adjustment
-                )
-                switch action {
-                case .accept:
-                    workspacePlanState = .planned
-                    self.workspaceSnapshot = Self.updating(
-                        workspaceSnapshot,
-                        status: .planned,
-                        planItemId: interaction.planItemId,
-                        effectiveAction: workspaceSnapshot.effectiveAction
-                    )
-                case .adjust:
-                    let effectiveAction = Self.applying(adjustment, to: workspaceSnapshot.effectiveAction)
-                    // The API performs a plan upsert atomically for an
-                    // adjustment, so the command center immediately reflects
-                    // the newly planned state instead of offering a second,
-                    // conflicting Add to plan tap.
-                    workspacePlanState = .planned
-                    self.workspaceSnapshot = Self.updating(
-                        workspaceSnapshot,
-                        status: .planned,
-                        planItemId: interaction.planItemId,
-                        effectiveAction: effectiveAction
-                    )
-                case .skip:
-                    workspacePlanState = .skipped
-                    self.workspaceSnapshot = Self.updating(workspaceSnapshot, status: .skipped, planItemId: interaction.planItemId, effectiveAction: workspaceSnapshot.effectiveAction)
-                case .complete:
-                    workspacePlanState = .completed
-                    self.workspaceSnapshot = Self.updating(workspaceSnapshot, status: .completed, planItemId: interaction.planItemId, effectiveAction: workspaceSnapshot.effectiveAction)
-                case .openChat:
-                    input = "Can we talk through \(workspaceSnapshot.effectiveAction.title.lowercased())?"
-                    workspaceChatRequestToken += 1
-                    send()
-                }
-            } catch APIError.coachWorkspaceDisabled {
-                clearDisabledWorkspace()
-            } catch is CancellationError {
-                return
-            } catch {
-                workspaceActionErrorMessage = error.localizedDescription
-            }
-        }
-    }
-
-    func retryWorkspaceAction() {
-        guard let lastWorkspaceAction else { return }
-        performWorkspaceAction(lastWorkspaceAction.action, adjustment: lastWorkspaceAction.adjustment)
-    }
-
-    private func clearDisabledWorkspace() {
-        workspaceSnapshot = nil
-        workspacePlanState = .ready
-        workspaceErrorMessage = nil
-        workspaceActionMessage = nil
-        workspaceActionErrorMessage = nil
-        lastWorkspaceAction = nil
-    }
-
-    private static func applying(_ adjustment: CoachWorkspaceAdjustmentRequest?, to current: CoachWorkspaceAction) -> CoachWorkspaceAction {
-        guard let adjustment else { return current }
-        return CoachWorkspaceAction(
-                title: current.title,
-                copy: current.copy,
-                kind: current.kind,
-                timeMinutes: adjustment.timeMinutes ?? current.timeMinutes,
-                durationMinutes: adjustment.durationMinutes ?? current.durationMinutes,
-                intensity: adjustment.intensity ?? current.intensity
-            )
-    }
-
-    private static func updating(
-        _ snapshot: CoachWorkspaceSnapshot,
-        status: CoachWorkspaceStatus,
-        planItemId: String?,
-        effectiveAction: CoachWorkspaceAction
-    ) -> CoachWorkspaceSnapshot {
-        CoachWorkspaceSnapshot(
-            recommendation: snapshot.recommendation,
-            state: CoachWorkspaceState(status: status, planItemId: planItemId, effectiveAction: effectiveAction)
-        )
-    }
-
-    private static func planState(for status: CoachWorkspaceStatus) -> CoachWorkspacePlanState {
-        switch status {
-        case .ready, .calibration: return .ready
-        case .planned: return .planned
-        case .skipped: return .skipped
-        case .completed: return .completed
-        }
-    }
-
-    private static func workspaceActionProgress(_ action: CoachWorkspaceActionKind) -> String {
-        switch action {
-        case .accept: return "Adding to today’s plan…"
-        case .adjust: return "Updating today’s plan…"
-        case .skip: return "Skipping today’s plan…"
-        case .complete: return "Marking complete…"
-        case .openChat: return "Opening your coach chat…"
-        }
     }
 
     /// Forwards the two voice objects' own change notifications into this
@@ -813,10 +625,6 @@ final class CoachViewModel: ObservableObject {
         actionTask?.cancel()
         actionTask = nil
         isPerformingSpecialistAction = false
-        workspaceTask?.cancel()
-        workspaceTask = nil
-        isLoadingWorkspace = false
-        isPerformingWorkspaceAction = false
         transcriptionTask?.cancel()
         transcriptionTask = nil
         isTranscribing = false
@@ -825,7 +633,7 @@ final class CoachViewModel: ObservableObject {
     }
 
     /// Composer "stop" tap: narrower than `cancelStreaming()`, which is a
-    /// full teardown that also kills workspace load, transcription, and TTS.
+    /// full teardown that also kills transcription and TTS.
     /// This only ends the in-flight reply. Implemented as a direct,
     /// synchronous cleanup rather than just cancelling `streamTask` and
     /// waiting — the `for try await` loop in `send()` only notices
