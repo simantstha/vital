@@ -476,6 +476,11 @@ export const plan_items = p.pgTable('plan_items', {
 ]);
 
 // ─── daily_coach_recommendations ─────────────────────────────────────────────
+// ORPHANED: Coach Workspace feature was removed. This table is no longer read
+// or written by any code, but is retained deliberately to prevent drizzle-kit
+// from emitting a destructive DROP TABLE. Deletion must be a separate,
+// deliberate migration.
+//
 // One deterministic Coach Workspace decision per user/local day. `evidence`
 // records only the persisted metrics and confirmed constraints used to make the
 // choice; it deliberately has no model output or filesystem-memory input.
@@ -495,6 +500,11 @@ export const daily_coach_recommendations = p.pgTable('daily_coach_recommendation
   p.uniqueIndex('daily_coach_recommendations_user_day_idx').on(t.user_id, t.local_day),
 ]);
 
+// ORPHANED: Coach Workspace feature was removed. This table is no longer read
+// or written by any code, but is retained deliberately to prevent drizzle-kit
+// from emitting a destructive DROP TABLE. Deletion must be a separate,
+// deliberate migration.
+//
 // Append-only record of explicit action taps. `action_id` is client supplied
 // and unique per user, so retries return the original interaction instead of
 // duplicating an acceptance/completion. A plan item link is optional because a

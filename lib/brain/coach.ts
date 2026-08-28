@@ -44,6 +44,7 @@ import {
 } from '@/lib/specialists/actionRepository';
 import {
   accumulateModelUsage,
+  proposeSpecialistHandoffTool,
   SpecialistCoachRuntime,
   type AggregatedModelUsage,
 } from '@/lib/specialists/coachRuntime';
@@ -197,6 +198,13 @@ export async function* runCoach(
       unitSystem: ctx.unitSystem,
     });
   }
+  // Built lazily and only when specialists are enabled: specialistRegistry.list()
+  // reaches SPECIALIST_MODEL and throws when that env var is unset, so a
+  // module-level const would crash the process at import time in any
+  // environment without it.
+  const handoffTool = specialistsEnabled
+    ? proposeSpecialistHandoffTool(specialistRegistry.list())
+    : null;
   const configuration = selectCoachConfiguration({
     enabled: specialistsEnabled,
     session: currentSession,
@@ -205,6 +213,7 @@ export async function* runCoach(
     basePrompt: baseSystemPrompt,
     baseTools,
     specialistPrompt,
+    handoffTool,
   });
 
   // 4. Build the initial user message content ───────────────────────────────

@@ -1,5 +1,5 @@
 import type { Tool } from '@anthropic-ai/sdk/resources/messages';
-import type { SpecialistRegistry } from './registry';
+import type { SpecialistManifest, SpecialistRegistry } from './registry';
 import {
   type SpecialistSession,
   type SpecialistSessionRepository,
@@ -41,25 +41,36 @@ export function isModelStreamInterruption(error: unknown): boolean {
     error.message === 'Request was aborted.';
 }
 
-export const PROPOSE_SPECIALIST_HANDOFF_TOOL: Tool = {
-  name: 'propose_specialist_handoff',
-  description:
-    'Propose bringing the Running Coach into this same chat for a deeper consultation. ' +
-    'This creates a confirmation card only and never changes persona automatically.',
-  input_schema: {
-    type: 'object',
-    properties: {
-      objective: { type: 'string', description: 'The bounded consultation objective.' },
-      summary: { type: 'string', description: 'Compact context the specialist needs.' },
-      relevantFacts: {
-        type: 'array',
-        items: { type: 'string' },
-        description: 'Only facts directly relevant to the consultation.',
+export function proposeSpecialistHandoffTool(manifests: SpecialistManifest[]): Tool {
+  const specialistList = manifests
+    .map((manifest) => `- ${manifest.name} (${manifest.id}): ${manifest.triggerDescription}`)
+    .join('\n');
+  return {
+    name: 'propose_specialist_handoff',
+    description:
+      'Propose bringing a Vital specialist into this same chat for a deeper consultation. ' +
+      'This creates a confirmation card only and never changes persona automatically.\n\n' +
+      `Available specialists:\n${specialistList}`,
+    input_schema: {
+      type: 'object',
+      properties: {
+        specialistId: {
+          type: 'string',
+          enum: manifests.map((manifest) => manifest.id),
+          description: 'The id of the specialist to bring in.',
+        },
+        objective: { type: 'string', description: 'The bounded consultation objective.' },
+        summary: { type: 'string', description: 'Compact context the specialist needs.' },
+        relevantFacts: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Only facts directly relevant to the consultation.',
+        },
       },
+      required: ['specialistId', 'objective', 'summary', 'relevantFacts'],
     },
-    required: ['objective', 'summary', 'relevantFacts'],
-  },
-};
+  };
+}
 
 export const PROPOSE_RETURN_TO_VITAL_TOOL: Tool = {
   name: 'propose_return_to_vital',
@@ -80,6 +91,7 @@ export const PROPOSE_RETURN_TO_VITAL_TOOL: Tool = {
 };
 
 interface ProposeHandoffInput {
+  specialistId: string;
   objective: string;
   summary: string;
   relevantFacts: string[];
@@ -115,12 +127,13 @@ export class SpecialistCoachRuntime<
   }
 
   async proposeHandoff(userId: string, input: ProposeHandoffInput): Promise<SpecialistSession> {
+    if (!input.specialistId?.trim()) throw new Error('specialistId is required');
     if (!input.objective?.trim()) throw new Error('objective is required');
     if (!input.summary?.trim()) throw new Error('summary is required');
     if (!Array.isArray(input.relevantFacts) || input.relevantFacts.some((fact) => typeof fact !== 'string')) {
       throw new Error('relevantFacts must be an array of strings');
     }
-    const manifest = this.dependencies.manifests.get('running-coach');
+    const manifest = this.dependencies.manifests.get(input.specialistId.trim());
     const now = this.now();
     const session = await this.dependencies.sessions.propose({
       userId,

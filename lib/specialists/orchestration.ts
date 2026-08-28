@@ -17,7 +17,7 @@ export type SpecialistAction =
 export type SpecialistConfirmation = 'accept' | 'decline';
 
 export interface PersonaSnapshot {
-  id: 'vital' | 'running-coach';
+  id: 'vital' | 'running-coach' | 'nutritionist' | 'strength-coach';
   title: string;
   subtitle: string;
   accent: string;

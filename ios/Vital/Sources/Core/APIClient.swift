@@ -376,49 +376,6 @@ struct APIClient {
         try await get("/api/coach")
     }
 
-    // MARK: - Coach Workspace
-
-    /// Fetches the server-authored, deterministic recommendation for the
-    /// user's local day. The server owns freshness and safety gating; iOS only
-    /// presents the recommendation and explicit user actions.
-    func fetchCoachWorkspace() async throws -> CoachWorkspaceAvailability {
-        let tz = TimeZone.current.identifier
-        let encoded = tz.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? tz
-        guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/coach/today?tz=\(encoded)") else {
-            throw APIError.invalidURL
-        }
-        let (data, response) = try await session.data(for: authorizedRequest(url))
-        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
-        return try Self.decodeCoachWorkspaceAvailability(statusCode: http.statusCode, data: data)
-    }
-
-    @discardableResult
-    func performCoachWorkspaceAction(
-        recommendationId: String,
-        materialSignature: String,
-        actionId: String,
-        action: CoachWorkspaceActionKind,
-        adjustment: CoachWorkspaceAdjustmentRequest? = nil
-    ) async throws -> CoachWorkspaceInteraction {
-        guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/coach/today/actions") else {
-            throw APIError.invalidURL
-        }
-        var request = authorizedRequest(url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 15
-        request.httpBody = try Self.encodeCoachWorkspaceActionRequest(
-            recommendationId: recommendationId,
-            materialSignature: materialSignature,
-            actionId: actionId,
-            action: action,
-            adjustment: adjustment
-        )
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
-        return try Self.decodeCoachWorkspaceAction(statusCode: http.statusCode, data: data)
-    }
-
     // MARK: - Coach TTS
 
     /// Fetches ElevenLabs-synthesized speech for one sentence from the backend
@@ -576,66 +533,6 @@ struct APIClient {
 
     static func decodeCoachRestoration(_ data: Data) throws -> CoachRestorationResponse {
         try JSONDecoder().decode(CoachRestorationResponse.self, from: data)
-    }
-
-    /// Keeps the Coach Workspace wire shape covered without requiring a live
-    /// session in unit tests.
-    static func decodeCoachWorkspace(_ data: Data) throws -> CoachWorkspaceSnapshot {
-        try JSONDecoder().decode(CoachWorkspaceResponse.self, from: data).snapshot
-    }
-
-    static func decodeCoachWorkspaceAvailability(
-        statusCode: Int,
-        data: Data,
-        onSessionExpired: () -> Void = {
-            NotificationCenter.default.post(name: .vitalSessionExpired, object: nil)
-        }
-    ) throws -> CoachWorkspaceAvailability {
-        if statusCode == 404,
-           let response = try? JSONDecoder().decode(CoachWorkspaceDisabledResponse.self, from: data),
-           response.code == "COACH_WORKSPACE_DISABLED" {
-            return .disabled
-        }
-        if statusCode == 401 { onSessionExpired() }
-        guard statusCode < 400 else { throw APIError.serverError(statusCode) }
-        return .available(try decodeCoachWorkspace(data))
-    }
-
-    static func decodeCoachWorkspaceAction(_ data: Data) throws -> CoachWorkspaceInteraction {
-        try JSONDecoder().decode(CoachWorkspaceActionResponse.self, from: data).interaction
-    }
-
-    static func encodeCoachWorkspaceActionRequest(
-        recommendationId: String,
-        materialSignature: String,
-        actionId: String,
-        action: CoachWorkspaceActionKind,
-        adjustment: CoachWorkspaceAdjustmentRequest?
-    ) throws -> Data {
-        try JSONEncoder().encode(CoachWorkspaceActionRequest(
-            recommendationId: recommendationId,
-            materialSignature: materialSignature,
-            actionId: actionId,
-            action: action,
-            adjustment: adjustment
-        ))
-    }
-
-    static func decodeCoachWorkspaceAction(
-        statusCode: Int,
-        data: Data,
-        onSessionExpired: () -> Void = {
-            NotificationCenter.default.post(name: .vitalSessionExpired, object: nil)
-        }
-    ) throws -> CoachWorkspaceInteraction {
-        if statusCode == 404,
-           let response = try? JSONDecoder().decode(CoachWorkspaceDisabledResponse.self, from: data),
-           response.code == "COACH_WORKSPACE_DISABLED" {
-            throw APIError.coachWorkspaceDisabled
-        }
-        if statusCode == 401 { onSessionExpired() }
-        guard statusCode < 400 else { throw APIError.serverError(statusCode) }
-        return try decodeCoachWorkspaceAction(data)
     }
 
     /// Decodes one wire-format SSE line. Unknown event types return nil so
@@ -1014,7 +911,6 @@ enum APIError: Error, LocalizedError, Equatable {
     case invalidURL
     case serverError(Int)
     case coachStreamError(String)
-    case coachWorkspaceDisabled
     /// POST /api/nutrition/barcode genuinely found no match for the scanned
     /// code (mirrors the server's 404 + `offerTextSearch: true`). Distinct
     /// from `.serverError` so callers can fall back to text search instead
@@ -1033,7 +929,6 @@ enum APIError: Error, LocalizedError, Equatable {
         case .invalidURL:         return "Invalid backend URL."
         case .serverError(let c): return "Server returned HTTP \(c)."
         case .coachStreamError(let message): return message
-        case .coachWorkspaceDisabled: return "Coach Workspace is unavailable."
         case .barcodeNotFound:    return "Product not found. Try searching by name instead."
         case .whoopAuthorizeURLMissing: return "Couldn't start the WHOOP connection. Try again later."
         case .whoopConnectFailed: return "WHOOP didn't finish connecting. Please try again."
@@ -1643,188 +1538,6 @@ struct CoachActionRequestBody: Encodable {
     let action: SpecialistAction
 }
 
-// MARK: - Coach Workspace DTOs
-
-enum CoachWorkspaceActionKind: String, Codable, CaseIterable {
-    case accept
-    case adjust
-    case skip
-    case complete
-    case openChat = "open_chat"
-}
-
-struct CoachWorkspaceAction: Codable, Equatable {
-    let title: String
-    let copy: String
-    let kind: String
-    let timeMinutes: Int
-    let durationMinutes: Int?
-    let intensity: String?
-}
-
-struct CoachWorkspaceEvidenceSource: Codable, Identifiable, Equatable {
-    let metric: String
-    let observedAt: String?
-    let baseline: Double?
-    let value: Double?
-
-    var id: String { metric }
-    var label: String {
-        switch metric {
-        case "restingHr": return "Resting HR"
-        case "hrv": return "HRV"
-        case "sleep": return "Sleep"
-        default: return metric.capitalized
-        }
-    }
-    var icon: String {
-        switch metric {
-        case "restingHr": return "heart"
-        case "hrv": return "waveform.path.ecg"
-        case "sleep": return "moon.zzz"
-        default: return "chart.line.uptrend.xyaxis"
-        }
-    }
-    var measurementText: String {
-        let valueText = value.map { Self.valueText($0, metric: metric) } ?? "No reading"
-        let baselineText = baseline.map { "Baseline \(Self.valueText($0, metric: metric))" } ?? "No baseline"
-        return "\(valueText) · \(baselineText)"
-    }
-
-    var observedText: String {
-        guard let observedAt else { return "No observed timestamp" }
-        guard let date = Self.isoParser.date(from: observedAt) ?? Self.isoParserWithoutFraction.date(from: observedAt) else {
-            return "Observed \(observedAt)"
-        }
-        return "Observed \(Self.observedFormatter.string(from: date))"
-    }
-
-    var detail: String { "\(measurementText) · \(observedText)" }
-
-    private static let isoParser: ISO8601DateFormatter = {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter
-    }()
-    private static let isoParserWithoutFraction: ISO8601DateFormatter = {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter
-    }()
-    private static let observedFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale.current
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .short
-        return formatter
-    }()
-
-    private static func valueText(_ value: Double, metric: String) -> String {
-        switch metric {
-        case "hrv": return "\(numberText(value)) ms"
-        case "restingHr": return "\(numberText(value)) bpm"
-        case "sleep":
-            let minutes = Int(value.rounded())
-            return "\(minutes / 60)h \(minutes % 60)m"
-        default: return numberText(value)
-        }
-    }
-
-    private static func numberText(_ value: Double) -> String {
-        value.rounded() == value ? "\(Int(value))" : String(format: "%.1f", value)
-    }
-}
-
-struct CoachWorkspaceEvidence: Codable, Equatable {
-    let fresh: Bool
-    let sources: [CoachWorkspaceEvidenceSource]
-    let constraintGate: Bool
-}
-
-struct CoachWorkspaceRecommendation: Codable, Equatable, Identifiable {
-    let id: String
-    let localDay: String
-    let category: String
-    var action: CoachWorkspaceAction
-    let evidence: CoachWorkspaceEvidence
-    let materialSignature: String
-}
-
-enum CoachWorkspaceStatus: String, Codable, Equatable, CaseIterable {
-    case ready
-    case calibration
-    case planned
-    case skipped
-    case completed
-}
-
-enum CoachWorkspaceAvailability: Equatable {
-    case available(CoachWorkspaceSnapshot)
-    case disabled
-}
-
-struct CoachWorkspaceState: Codable, Equatable {
-    let status: CoachWorkspaceStatus
-    let planItemId: String?
-    let effectiveAction: CoachWorkspaceAction?
-}
-
-struct CoachWorkspaceSnapshot: Codable, Equatable {
-    let recommendation: CoachWorkspaceRecommendation
-    var state: CoachWorkspaceState
-
-    var effectiveAction: CoachWorkspaceAction {
-        state.effectiveAction ?? recommendation.action
-    }
-}
-
-struct CoachWorkspaceAdjustmentRequest: Codable, Equatable {
-    let timeMinutes: Int?
-    let durationMinutes: Int?
-    let intensity: String?
-
-    init(timeMinutes: Int? = nil, durationMinutes: Int? = nil, intensity: String? = nil) {
-        self.timeMinutes = timeMinutes
-        self.durationMinutes = durationMinutes
-        self.intensity = intensity
-    }
-}
-
-struct CoachWorkspaceInteraction: Codable, Equatable {
-    let id: String
-    let recommendationId: String
-    let actionId: String
-    let action: CoachWorkspaceActionKind
-    let adjustment: CoachWorkspaceAdjustmentRequest?
-    let planItemId: String?
-    let createdAt: String
-}
-
-private struct CoachWorkspaceResponse: Decodable {
-    let recommendation: CoachWorkspaceRecommendation
-    let state: CoachWorkspaceState
-
-    var snapshot: CoachWorkspaceSnapshot {
-        CoachWorkspaceSnapshot(recommendation: recommendation, state: state)
-    }
-}
-
-private struct CoachWorkspaceDisabledResponse: Decodable {
-    let code: String
-}
-
-private struct CoachWorkspaceActionRequest: Encodable {
-    let recommendationId: String
-    let materialSignature: String
-    let actionId: String
-    let action: CoachWorkspaceActionKind
-    let adjustment: CoachWorkspaceAdjustmentRequest?
-}
-
-private struct CoachWorkspaceActionResponse: Decodable {
-    let interaction: CoachWorkspaceInteraction
-}
-
 struct CoachPersonaSnapshot: Codable, Equatable {
     let id: String
     let title: String
@@ -2002,30 +1715,6 @@ protocol CoachAPIProviding {
         actionId: String,
         action: SpecialistAction
     ) -> AsyncThrowingStream<CoachStreamEvent, Error>
-    func fetchCoachWorkspace() async throws -> CoachWorkspaceAvailability
-    func performCoachWorkspaceAction(
-        recommendationId: String,
-        materialSignature: String,
-        actionId: String,
-        action: CoachWorkspaceActionKind,
-        adjustment: CoachWorkspaceAdjustmentRequest?
-    ) async throws -> CoachWorkspaceInteraction
-}
-
-extension CoachAPIProviding {
-    func fetchCoachWorkspace() async throws -> CoachWorkspaceAvailability {
-        throw APIError.serverError(501)
-    }
-
-    func performCoachWorkspaceAction(
-        recommendationId: String,
-        materialSignature: String,
-        actionId: String,
-        action: CoachWorkspaceActionKind,
-        adjustment: CoachWorkspaceAdjustmentRequest?
-    ) async throws -> CoachWorkspaceInteraction {
-        throw APIError.serverError(501)
-    }
 }
 
 extension APIClient: CoachAPIProviding {}
