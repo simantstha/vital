@@ -41,6 +41,7 @@ function result(): SpecialistActionResult {
         },
       },
     ],
+    replayed: false,
   };
 }
 

@@ -199,6 +199,22 @@ final class CoachViewModel: ObservableObject {
     @Published private(set) var specialistState: CoachSpecialistState = .vital
     @Published private(set) var isPerformingSpecialistAction: Bool = false
 
+    /// Whether a turn is being produced by *either* entry point — a normal
+    /// `send()` or an accepted handoff streaming the specialist's opening
+    /// turn through `performSpecialistAction`. Both write to the same
+    /// `rows`/`pendingAssistantId` state, so both mutually exclude each other
+    /// (see the guards on those two methods) and every composer affordance
+    /// that must not start a competing turn keys off this rather than
+    /// `isStreaming` alone — otherwise the controls stay live during a
+    /// handoff and their taps silently no-op against the guard.
+    ///
+    /// Deliberately *not* what the composer's stop button keys off:
+    /// `stopGenerating()` only ends a `send()`, and a specialist action is
+    /// not user-cancellable the same way, so that button stays bound to
+    /// `isStreaming` and renders a disabled arrow (never a stop control)
+    /// mid-handoff.
+    var isBusy: Bool { isStreaming || isPerformingSpecialistAction }
+
     /// Cheap signal for the view's scroll logic: increments once per reveal
     /// drain tick (see `pendingReveal` below) instead of `rows`, which would
     /// otherwise deep-compare the whole growing transcript on every token.
@@ -294,7 +310,11 @@ final class CoachViewModel: ObservableObject {
     /// surfaced yet. Once tokens arrive the bubble takes over and the dots hide.
     var showTypingIndicator: Bool {
         if isOpening { return true }
-        guard isStreaming else { return false }
+        // `isPerformingSpecialistAction` also covers the gap after an
+        // accepted handoff dismisses its card (nothing else on screen
+        // signals activity there) up until the specialist's opening turn
+        // produces its first token — without it the UI goes idle mid-handoff.
+        guard isStreaming || isPerformingSpecialistAction else { return false }
         let assistantStarted = pendingAssistantId.map { id in
             rows.contains { $0.id == id.uuidString }
         } ?? false
@@ -364,7 +384,11 @@ final class CoachViewModel: ObservableObject {
         if transcriber.isRecording {
             transcriber.stop()
         } else {
-            guard !isStreaming, !isTranscribing else { return }
+            // `!isBusy`: recording started mid-handoff would transcribe fine
+            // and then hand off to `send()`, which the same flag rejects —
+            // the user would speak a whole message into a silent no-op.
+            // Stopping (the branch above) stays unconditional.
+            guard !isBusy, !isTranscribing else { return }
             speaker.stop()
             input = ""
             isVoiceInputActive = true
@@ -423,7 +447,9 @@ final class CoachViewModel: ObservableObject {
     /// `toggleVoiceRecording` already follows, no new setting invented).
     func sendExternalVoiceTranscript(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !isStreaming else { return }
+        // `!isBusy`: this funnels into `send()`, so bail before touching
+        // `input`/`speaker` rather than letting that guard silently drop it.
+        guard !trimmed.isEmpty, !isBusy else { return }
         speaker.stop()
         input = trimmed
         pendingSentByVoice = true
@@ -505,7 +531,12 @@ final class CoachViewModel: ObservableObject {
 
     func send() {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !isStreaming else { return }
+        // `!isBusy` rather than `!isStreaming`: an accepted handoff/return can
+        // now stream a real specialist turn on the action path (see
+        // `performSpecialistAction`), so a send that lands mid-stream there
+        // would race it for `pendingAssistantId` and `rows` — block it the
+        // same way an in-flight `send()` already blocks a second `send()`.
+        guard !trimmed.isEmpty, !isBusy else { return }
 
         let sentByVoice = pendingSentByVoice
         pendingSentByVoice = false
@@ -549,29 +580,15 @@ final class CoachViewModel: ObservableObject {
 
             do {
                 let stream = api.streamCoach(message: trimmed, imageBase64: nil, mode: mode)
-                for try await event in stream {
-                    switch event {
-                    case .text(let delta):
-                        appendText(delta, toTurn: assistantId, persona: turnPersona)
-                        // .toolCall/.toolData are never spoken — only prose.
-                        if sentByVoice { speaker.feed(delta: delta) }
-                    case .toolCall(let id, let name, let label, let done):
-                        applyToolCall(id: id, name: name, label: label, done: done, toTurn: assistantId, persona: turnPersona)
-                    case .toolData(let id, let viz):
-                        applyToolData(id: id, viz: viz, toTurn: assistantId, persona: turnPersona)
-                    case .handoffCard(let card):
-                        applyHandoffCard(card)
-                    case .personaChanged(let persona):
+                try await drainCoachEvents(
+                    stream,
+                    assistantId: assistantId,
+                    persona: &turnPersona,
+                    speakDeltas: sentByVoice,
+                    onPersonaChanging: { [self] persona in
                         receivedVitalRollback = activePersona.id != "vital" && persona.id == "vital"
-                        turnPersona = persona
-                        updateTurnPersona(assistantId, persona: persona)
-                        applyPersona(persona)
-                    case .error(let message):
-                        throw APIError.coachStreamError(message)
-                    case .done:
-                        break
                     }
-                }
+                )
                 flushPendingReveal()
                 finishTurn(assistantId, persona: turnPersona)
                 lastActivityAt = Date()
@@ -605,6 +622,55 @@ final class CoachViewModel: ObservableObject {
                 if receivedVitalRollback {
                     specialistState = .recoverableRollback(error.localizedDescription)
                 }
+            }
+        }
+    }
+
+    /// Consumes one coach SSE stream into the transcript: text deltas append
+    /// to the turn (and are spoken if `speakDeltas`), `tool_call`/`tool_data`
+    /// mutate the same turn, `handoff_card` updates the authoritative card
+    /// state, and `persona_changed` updates both `persona` (so any content
+    /// that arrives after it — including the turn's own lazy creation — is
+    /// attributed correctly) and the turn already on screen. `done` and
+    /// unknown/no-op cases fall through; an `error` event throws so the
+    /// caller's own catch block handles it the same way a transport failure
+    /// would.
+    ///
+    /// Shared by `send()` and `performSpecialistAction()` — the two paths
+    /// diverging (the action path used to silently drop `.text`) was the
+    /// original defect this fixes, so this is the single place either path
+    /// is allowed to interpret a `CoachStreamEvent`.
+    private func drainCoachEvents(
+        _ stream: AsyncThrowingStream<CoachStreamEvent, Error>,
+        assistantId: UUID,
+        persona: inout CoachPersonaSnapshot,
+        speakDeltas: Bool,
+        onPersonaChanging: ((CoachPersonaSnapshot) -> Void)? = nil
+    ) async throws {
+        for try await event in stream {
+            switch event {
+            case .text(let delta):
+                appendText(delta, toTurn: assistantId, persona: persona)
+                // .toolCall/.toolData are never spoken — only prose.
+                if speakDeltas { speaker.feed(delta: delta) }
+            case .toolCall(let id, let name, let label, let done):
+                applyToolCall(id: id, name: name, label: label, done: done, toTurn: assistantId, persona: persona)
+            case .toolData(let id, let viz):
+                applyToolData(id: id, viz: viz, toTurn: assistantId, persona: persona)
+            case .handoffCard(let card):
+                applyHandoffCard(card)
+            case .personaChanged(let newPersona):
+                // Called before `persona` is overwritten, so callers can
+                // still see the pre-change value (e.g. `send()` uses it to
+                // detect a Vital rollback for error recovery).
+                onPersonaChanging?(newPersona)
+                persona = newPersona
+                updateTurnPersona(assistantId, persona: newPersona)
+                applyPersona(newPersona)
+            case .error(let message):
+                throw APIError.coachStreamError(message)
+            case .done:
+                break
             }
         }
     }
@@ -664,7 +730,11 @@ final class CoachViewModel: ObservableObject {
     /// and concurrent streams. Calls server reset endpoint, then clears
     /// transcript and refreshes with a fresh opener.
     func startNewChat() {
-        guard mode == nil, !isStreaming else { return }
+        // `!isBusy`: this clears `rows` and resets `activePersona`, so running
+        // it while an accepted handoff is still streaming would drop the
+        // specialist's opening turn into a transcript that was just emptied
+        // and fight the persona the action is transitioning to.
+        guard mode == nil, !isBusy else { return }
         openerTask?.cancel()
         openerTask = nil
         isOpening = false
@@ -691,7 +761,9 @@ final class CoachViewModel: ObservableObject {
     /// in lib/brain/conversationWindow.ts; server is authoritative.
     /// This is only the client-side trigger for stale conversations.
     func refreshIfStale() {
-        guard mode == nil, !isStreaming, openerTask == nil else { return }
+        // `!isBusy`: like `startNewChat`, this empties `rows` — it must not
+        // fire while an accepted handoff is streaming into them.
+        guard mode == nil, !isBusy, openerTask == nil else { return }
         guard let lastActivity = lastActivityAt else { return }
         let secondsSinceActivity = Date().timeIntervalSince(lastActivity)
         guard secondsSinceActivity > 4 * 3600 else { return }
@@ -714,7 +786,11 @@ final class CoachViewModel: ObservableObject {
     /// Executes an explicit card action. The in-flight flag is set before the
     /// task starts so repeated taps cannot race a second request onto the wire.
     func performSpecialistAction(_ action: SpecialistAction) {
-        guard let card = pendingHandoffCard, !isPerformingSpecialistAction else { return }
+        // `!isBusy`: a normal `send()` and an accepted handoff can now both
+        // stream real content into `rows`/`pendingAssistantId` — the two must
+        // never run concurrently (same guard `send()` uses, from the other
+        // side).
+        guard let card = pendingHandoffCard, !isBusy else { return }
         let sessionId = card.sessionId
         let cardOccurrenceId = card.cardOccurrenceId
         let actionId = Self.stableActionId(
@@ -725,26 +801,63 @@ final class CoachViewModel: ObservableObject {
         isPerformingSpecialistAction = true
         errorMessage = nil
 
+        // Accepting a handoff/return can continue straight into the
+        // specialist's (or Vital's) opening turn on the same SSE response —
+        // `persona_changed` arrives before that turn's first token, so the
+        // bubble is set up exactly like `send()`'s: created lazily on first
+        // content, attributed via `persona` (updated as events land, see
+        // `drainCoachEvents`) rather than the stale `activePersona` this
+        // action is about to move away from.
+        let assistantId = UUID()
+        var turnPersona = activePersona
+        pendingAssistantId = assistantId
+
         actionTask = Task {
             defer {
+                // Stays set for the whole task — including any streamed
+                // specialist reply, not just the two lifecycle events — so
+                // `showTypingIndicator` (which also checks this flag) can't
+                // report idle mid-handoff. Decline/replay have no reply to
+                // stream, so this clears at the same point it always did:
+                // once the (near-instant) stream closes.
                 isPerformingSpecialistAction = false
+                pendingAssistantId = nil
                 actionTask = nil
             }
             do {
-                for try await event in api.streamCoachAction(
+                let stream = api.streamCoachAction(
                     sessionId: sessionId,
                     cardOccurrenceId: cardOccurrenceId,
                     actionId: actionId,
                     action: action
-                ) {
-                    switch event {
-                    case .handoffCard(let card): applyHandoffCard(card)
-                    case .personaChanged(let persona): applyPersona(persona)
-                    case .error(let message): throw APIError.coachStreamError(message)
-                    case .text, .toolCall, .toolData, .done: break
-                    }
+                )
+                try await drainCoachEvents(
+                    stream,
+                    assistantId: assistantId,
+                    persona: &turnPersona,
+                    speakDeltas: false
+                )
+                flushPendingReveal()
+                // Decline and a replayed actionId never produce content, so
+                // no turn row exists — only finish one if content actually
+                // streamed, the same guard `stopGenerating()` uses to avoid
+                // leaving a permanent empty bubble behind.
+                if rows.contains(where: { $0.id == assistantId.uuidString }) {
+                    finishTurn(assistantId, persona: turnPersona)
+                    lastActivityAt = Date()
                 }
+            } catch is CancellationError {
+                return
             } catch {
+                // A partially-streamed specialist turn must not linger
+                // unfinished (it would keep showing its streaming caret
+                // forever) — finish it in place before rolling the UI back
+                // to a known Vital state, mirroring `send()`'s own recovery.
+                if let idx = rows.firstIndex(where: { $0.id == assistantId.uuidString }),
+                   case .assistantTurn(var turn) = rows[idx] {
+                    turn.finish()
+                    rows[idx] = .assistantTurn(turn)
+                }
                 // An action failure is recoverable: return the controls to a
                 // known Vital state and let a fresh restoration reconcile any
                 // transition that may have completed server-side.

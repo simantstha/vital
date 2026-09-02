@@ -14,8 +14,6 @@ export type SpecialistAction =
   | 'accept_return'
   | 'decline_return';
 
-export type SpecialistConfirmation = 'accept' | 'decline';
-
 export interface PersonaSnapshot {
   id: 'vital' | 'running-coach' | 'nutritionist' | 'strength-coach';
   title: string;
@@ -43,6 +41,16 @@ export interface PersonaChangedEvent {
 export interface SpecialistActionResult {
   session: SpecialistSession;
   events: [HandoffCardEvent, PersonaChangedEvent];
+  /**
+   * false only for the single `apply()` call that actually performed the
+   * status transition. true for a memoized replay (same actionId reused) AND
+   * for the rare concurrent caller that found the transition already done by
+   * someone else — i.e. every case where THIS call didn't cause the
+   * transition. Callers use this to gate side effects (a model call, a
+   * persisted message) that must run exactly once per real transition, never
+   * again on a client retry.
+   */
+  replayed: boolean;
 }
 
 export interface ApplySpecialistActionInput {
@@ -116,13 +124,6 @@ export function isSpecialistsEnabled(
   return environment.SPECIALISTS_ENABLED === 'true';
 }
 
-export function parseSpecialistConfirmation(text: string): SpecialistConfirmation | null {
-  const normalized = text.trim().toLowerCase().replace(/[.!]+$/, '').trim();
-  if (/^(yes|yep|yeah|accept|bring them in)$/.test(normalized)) return 'accept';
-  if (/^(no|decline|not now|no thanks)$/.test(normalized)) return 'decline';
-  return null;
-}
-
 export function parseActiveSpecialistReturn(text: string): boolean {
   const normalized = text.trim().toLowerCase().replace(/[.!]+$/, '').trim();
   return /^(?:(?:return|go back|switch back) to vital(?: coach)?|back to vital(?: coach)?|end specialist consultation)$/.test(normalized);
@@ -191,18 +192,24 @@ export class SpecialistActionCoordinator<
     if (session.cardOccurrenceId !== input.cardOccurrenceId) {
       throw new Error(`Card occurrence ${input.cardOccurrenceId} is no longer current`);
     }
-    if (claim.result) return claim.result;
+    if (claim.result) return { ...claim.result, replayed: true };
     if (claim.isNew && session.status !== expected[input.action]) {
       throw new Error(`Action ${input.action} is invalid while session is ${session.status}`);
     }
+    // Only this flag — set exclusively by a transition this call performed
+    // itself — may report replayed: false below. The catch-and-recover branch
+    // means a concurrent caller won the race; that makes this call a replay
+    // too, even though nothing was memoized yet.
+    let transitioned = false;
     if (session.status === expected[input.action]) {
       try {
         session = await this.sessions.transition(input.userId, input.sessionId, target);
+        transitioned = true;
       } catch (error) {
         if (!(error instanceof ConcurrentSpecialistSessionUpdateError)) throw error;
-        const replayed = await this.sessions.get(input.userId, input.sessionId);
-        if (!replayed) throw error;
-        session = replayed;
+        const recovered = await this.sessions.get(input.userId, input.sessionId);
+        if (!recovered) throw error;
+        session = recovered;
       }
     }
     if (session.status !== target) {
@@ -226,6 +233,7 @@ export class SpecialistActionCoordinator<
         },
         { type: 'persona_changed', persona },
       ],
+      replayed: !transitioned,
     };
     return this.actions.complete(
       input.userId,

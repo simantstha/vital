@@ -11,7 +11,6 @@ import {
   buildSpecialistPrompt,
   isSpecialistsEnabled,
   parseActiveSpecialistReturn,
-  parseSpecialistConfirmation,
   validateReturnHandoff,
 } from './orchestration';
 
@@ -40,16 +39,6 @@ test('specialist feature flag is disabled by default and requires literal true',
   assert.equal(isSpecialistsEnabled({ SPECIALISTS_ENABLED: 'false' }), false);
   assert.equal(isSpecialistsEnabled({ SPECIALISTS_ENABLED: '1' }), false);
   assert.equal(isSpecialistsEnabled({ SPECIALISTS_ENABLED: 'true' }), true);
-});
-
-test('text confirmation accepts only explicit whole-message affirmations or declines', () => {
-  for (const text of ['yes', 'Yes.', 'bring them in', 'accept', 'no', 'No thanks.', 'not now', 'decline']) {
-    assert.notEqual(parseSpecialistConfirmation(text), null, text);
-  }
-  assert.equal(parseSpecialistConfirmation('yes, but tell me more first'), null);
-  assert.equal(parseSpecialistConfirmation('I am not sure'), null);
-  assert.equal(parseSpecialistConfirmation('maybe later'), null);
-  assert.equal(parseSpecialistConfirmation('yesterday was hard'), null);
 });
 
 test('active specialist return accepts only explicit whole-message requests', () => {
@@ -96,7 +85,9 @@ test('accepted handoff is user-scoped, idempotent by action id, and emits person
   };
   const first = await actions.apply(input);
   const duplicate = await actions.apply(input);
-  assert.deepEqual(duplicate, first);
+  assert.equal(first.replayed, false);
+  assert.equal(duplicate.replayed, true);
+  assert.deepEqual(duplicate, { ...first, replayed: true });
   assert.equal((await sessions.get(USER_A, proposed.id))?.status, 'active');
   assert.deepEqual(first.events.map((event) => event.type), ['handoff_card', 'persona_changed']);
   assert.equal(first.events[1].persona.id, 'running-coach');
@@ -141,6 +132,12 @@ test('concurrent duplicate actions replay one transition and recover a failed re
   };
   const [first, second] = await Promise.all([actions.apply(input), actions.apply(input)]);
   assert.deepEqual(first, second);
+  // Exactly one of the two overlapping calls could have caused the
+  // transition; whichever's result won the write race is what both callers
+  // see back (InMemorySpecialistActionStore.complete() is itself
+  // idempotent), so this is deterministic per engine but not meaningful to
+  // pin to a specific caller — only that the flag exists and is consistent.
+  assert.equal(typeof first.replayed, 'boolean');
   assert.equal((await sessions.get(USER_A, proposed.id))?.status, 'active');
 
   const returning = await sessions.transition(USER_A, proposed.id, 'return_proposed', {
@@ -160,6 +157,10 @@ test('concurrent duplicate actions replay one transition and recover a failed re
   const recovered = await actions.apply(returnInput);
   assert.equal(recovered.session.status, 'completed');
   assert.equal(recovered.events[1].persona.id, 'vital');
+  // The failed attempt already transitioned the session before its result
+  // write failed — this retry only rediscovers that, it must not report a
+  // fresh transition (a caller gating a continuation on it must not re-run).
+  assert.equal(recovered.replayed, true);
 });
 
 test('an idempotency key cannot be replayed for a different request', async () => {
@@ -256,6 +257,7 @@ test('return actions require the return proposal and restore Vital only on accep
   });
   assert.equal(declined.session.status, 'active');
   assert.equal(declined.events[1].persona.id, 'running-coach');
+  assert.equal(declined.replayed, false);
 
   const secondReturn = await sessions.transition(USER_A, proposed.id, 'return_proposed', {
     expiresAt: LATER,
@@ -278,6 +280,7 @@ test('return actions require the return proposal and restore Vital only on accep
   });
   assert.equal(accepted.session.status, 'completed');
   assert.equal(accepted.events[1].persona.id, 'vital');
+  assert.equal(accepted.replayed, false);
 });
 
 test('specialist prompt reloads trusted safety and omits model-written safety fields', () => {
