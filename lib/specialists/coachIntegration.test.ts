@@ -41,7 +41,11 @@ test('flag off returns the exact legacy model prompt and tools', () => {
     specialistPrompt: null, handoffTool: null,
   });
   assert.equal(selected.model, 'claude-sonnet-4-6');
-  assert.equal(selected.system, 'legacy prompt');
+  // The prompt text is unchanged; it just travels as a block array now so the
+  // last block can carry the tools+system cache breakpoint.
+  assert.deepEqual(selected.system, [
+    { type: 'text', text: 'legacy prompt', cache_control: { type: 'ephemeral' } },
+  ]);
   assert.equal(selected.tools, baseTools);
   assert.equal(selected.speaker, 'coach');
 });
@@ -79,7 +83,10 @@ test('enabled Vital adds proposal tool while active and return-pending sessions 
       handoffTool,
     });
     assert.equal(selected.model, 'claude-opus-test');
-    assert.equal(selected.system, 'trusted specialist prompt');
+    // Specialist turns are the expensive ones — they must carry the breakpoint too.
+    assert.deepEqual(selected.system, [
+      { type: 'text', text: 'trusted specialist prompt', cache_control: { type: 'ephemeral' } },
+    ]);
     assert.deepEqual(selected.tools.map((tool) => tool.name), [
       'get_metric_trend', 'get_sleep_summary', 'propose_return_to_vital',
     ]);

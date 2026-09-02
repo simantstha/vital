@@ -126,7 +126,16 @@ test('model usage aggregates billed input and output tokens across premium round
     cache_read_input_tokens: 10,
     output_tokens: 15,
   });
-  assert.deepEqual(usage, { inputTokens: 210, outputTokens: 55 });
+  // inputTokens is unchanged (still the FULL prompt: raw + both cache figures);
+  // the cache split is now broken out so prompt caching is observable in the logs.
+  assert.deepEqual(usage, {
+    inputTokens: 210,
+    outputTokens: 55,
+    cacheCreationInputTokens: 20,
+    cacheReadInputTokens: 40,
+  });
+  // The identity the split must preserve: total prompt = raw + write + read.
+  assert.equal(usage.inputTokens, 150 + usage.cacheCreationInputTokens + usage.cacheReadInputTokens);
 });
 
 test('coach tools expose the exact proposal and structured-return contracts', () => {

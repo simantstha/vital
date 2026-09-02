@@ -17,8 +17,17 @@ interface AnthropicUsage {
 }
 
 export interface AggregatedModelUsage {
+  /**
+   * Total prompt tokens — the uncached remainder PLUS both cache figures.
+   * (`usage.input_tokens` alone is only the uncached part, so a well-cached
+   * turn would otherwise look like it shrank rather than got cheaper.)
+   */
   inputTokens: number;
   outputTokens: number;
+  /** Prompt tokens written to cache, billed at ~1.25x. Nonzero on the round that seeds the cache. */
+  cacheCreationInputTokens: number;
+  /** Prompt tokens served from cache, billed at ~0.1x. Zero here across a multi-round turn means a breakpoint is misplaced. */
+  cacheReadInputTokens: number;
 }
 
 export function accumulateModelUsage(
@@ -31,6 +40,10 @@ export function accumulateModelUsage(
       (usage.cache_creation_input_tokens ?? 0) +
       (usage.cache_read_input_tokens ?? 0),
     outputTokens: (current?.outputTokens ?? 0) + usage.output_tokens,
+    cacheCreationInputTokens: (current?.cacheCreationInputTokens ?? 0) +
+      (usage.cache_creation_input_tokens ?? 0),
+    cacheReadInputTokens: (current?.cacheReadInputTokens ?? 0) +
+      (usage.cache_read_input_tokens ?? 0),
   };
 }
 
@@ -106,6 +119,8 @@ interface RuntimeLog extends Record<string, unknown> {
   latencyMs?: number;
   inputTokens?: number;
   outputTokens?: number;
+  cacheCreationInputTokens?: number;
+  cacheReadInputTokens?: number;
 }
 
 interface RuntimeDependencies<R extends SpecialistSessionRepository> {
@@ -191,7 +206,13 @@ export class SpecialistCoachRuntime<
 
   logModelUsage(
     session: SpecialistSession,
-    usage: { latencyMs: number; inputTokens?: number; outputTokens?: number },
+    usage: {
+      latencyMs: number;
+      inputTokens?: number;
+      outputTokens?: number;
+      cacheCreationInputTokens?: number;
+      cacheReadInputTokens?: number;
+    },
   ): void {
     this.log({
       event: 'specialist_model_usage',
@@ -202,6 +223,11 @@ export class SpecialistCoachRuntime<
       latencyMs: usage.latencyMs,
       inputTokens: usage.inputTokens,
       outputTokens: usage.outputTokens,
+      // The cache split is what makes the prompt-caching effect observable in
+      // production: a healthy multi-round turn writes once and reads on every
+      // later round. cacheReadInputTokens pinned at 0 means no cache is landing.
+      cacheCreationInputTokens: usage.cacheCreationInputTokens,
+      cacheReadInputTokens: usage.cacheReadInputTokens,
     });
   }
 
