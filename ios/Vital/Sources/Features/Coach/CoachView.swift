@@ -128,7 +128,10 @@ struct CoachView: View {
             }
             .accessibilityLabel("New chat")
             .opacity(vm.isOnboarding ? 0.0 : 1.0)
-            .disabled(vm.isStreaming)
+            // `isBusy`, not `isStreaming`: `startNewChat()` clears `rows`, and
+            // it is guarded against running mid-handoff — so the button has to
+            // dim then too, or it's a lit control that silently does nothing.
+            .disabled(vm.isBusy)
         }
         .padding(.horizontal, Theme.Spacing.lg)
         .padding(.top, Theme.Spacing.md)
@@ -380,11 +383,18 @@ struct CoachView: View {
                                 )
                         )
                 }
-                // `canSend` already requires `!vm.isStreaming`, so a bare
+                // `canSend` already requires `!vm.isBusy`, so a bare
                 // `!canSend` would disable the button for the entire reply —
                 // a dead control during the most important moment. While
                 // streaming the button is always enabled (it's now the stop
                 // control); otherwise it falls back to the normal send gating.
+                //
+                // The second clause stays `isStreaming`, NOT `isBusy`: a
+                // specialist action isn't user-cancellable (`stopGenerating()`
+                // only ends a `send()`), so mid-handoff this must evaluate to
+                // disabled. Widening it to `isBusy` would flip it back to
+                // enabled — reintroducing exactly the dead tap target this
+                // pairing exists to prevent.
                 .disabled(!canSend && !vm.isStreaming)
                 .animation(Theme.Motion.micro, value: vm.isStreaming)
             }
@@ -433,7 +443,9 @@ struct CoachView: View {
                         Chip(text: prompt, isAccent: true)
                     }
                     .buttonStyle(.plain)
-                    .disabled(vm.isStreaming)
+                    // These tap straight into `vm.send()`, so they follow the
+                    // same busy state that guards it.
+                    .disabled(vm.isBusy)
                 }
             }
             .padding(.horizontal, Theme.Spacing.lg)
@@ -442,9 +454,14 @@ struct CoachView: View {
         .scrollIndicators(.hidden)
     }
 
+    /// `!vm.isBusy` rather than `!vm.isStreaming`: an accepted handoff streams
+    /// the specialist's opening turn through the *action* path, which leaves
+    /// `isStreaming` false the whole time. Gating on `isStreaming` alone left
+    /// the composer lit and tappable during a handoff while `vm.send()` — which
+    /// is guarded on the same busy state — silently dropped the tap.
     private var canSend: Bool {
         !vm.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !vm.isStreaming
+            && !vm.isBusy
             && !vm.transcriber.isRecording
             && !vm.isTranscribing
     }
@@ -494,7 +511,11 @@ struct CoachView: View {
             .scaleEffect(vm.transcriber.isRecording ? 1.08 : 1.0)
         }
         .buttonStyle(.plain)
-        .disabled((vm.isStreaming && !vm.transcriber.isRecording) || vm.isTranscribing)
+        // `isBusy`: recording started mid-handoff would transcribe fine and
+        // then hand off to `send()`, which rejects it — the user would speak a
+        // whole message into a no-op. The `!isRecording` clause is unchanged,
+        // so stopping an in-progress recording always stays available.
+        .disabled((vm.isBusy && !vm.transcriber.isRecording) || vm.isTranscribing)
         .ambient(Theme.Motion.pulse, value: vm.transcriber.isRecording)
     }
 

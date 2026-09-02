@@ -492,6 +492,155 @@ final class CoachSpecialistStateTests: XCTestCase {
         XCTAssertEqual(viewModel.specialistState, .activeConsultation(runningCoach))
     }
 
+    func testAcceptHandoffStreamsSpecialistOpeningTurnAttributedToSpecialist() async {
+        let card = CoachHandoffCard(
+            phase: .proposed, sessionId: "session-1", cardOccurrenceId: "proposal-occurrence",
+            specialist: runningCoach,
+            objective: "Plan a safe week", returnSummary: nil
+        )
+        let api = FakeCoachAPI(restoration: CoachRestorationResponse(
+            messages: [], activePersona: .vital, pendingCard: card
+        ))
+        // No new SSE event types: the accept path just starts emitting the
+        // same text/tool_call events `send()` already handles, with
+        // persona_changed landing before the specialist's first token.
+        api.nextActionEvents = [
+            .handoffCard(card.dismissed),
+            .personaChanged(runningCoach),
+            .toolCall(id: "context", name: "get_workouts", label: "Checking runs", done: false),
+            .text("Thanks for the context — "),
+            .text("let's plan your week."),
+            .toolCall(id: "context", name: "get_workouts", label: "Checking runs", done: true),
+        ]
+        let viewModel = CoachViewModel(api: api)
+        await viewModel.restoreConversation()
+
+        viewModel.performSpecialistAction(.acceptHandoff)
+        await waitUntil { !viewModel.isPerformingSpecialistAction }
+
+        guard case .assistantTurn(let turn) = viewModel.rows.last else {
+            return XCTFail("Expected the specialist's opening reply to stream into an assistant turn")
+        }
+        XCTAssertEqual(turn.speakerLabel, "Running Coach")
+        XCTAssertEqual(turn.text, "Thanks for the context — let's plan your week.")
+        XCTAssertTrue(turn.isFinished)
+        XCTAssertTrue(turn.toolCalls.allSatisfy(\.isDone))
+        XCTAssertEqual(viewModel.specialistState, .activeConsultation(runningCoach))
+    }
+
+    func testDeclineHandoffStillProducesNoAssistantTurn() async {
+        let card = CoachHandoffCard(
+            phase: .proposed, sessionId: "session-1", cardOccurrenceId: "proposal-occurrence",
+            specialist: runningCoach,
+            objective: "Plan a safe week", returnSummary: nil
+        )
+        let api = FakeCoachAPI(restoration: CoachRestorationResponse(
+            messages: [], activePersona: .vital, pendingCard: card
+        ))
+        // A decline never continues into a model turn server-side, so the
+        // stream still ends on just the two lifecycle events plus `done` —
+        // that must keep producing zero transcript rows, exactly as before.
+        api.nextActionEvents = [
+            .handoffCard(card.dismissed),
+            .personaChanged(.vital),
+        ]
+        let viewModel = CoachViewModel(api: api)
+        await viewModel.restoreConversation()
+        let rowsBefore = viewModel.rows
+
+        viewModel.performSpecialistAction(.declineHandoff)
+        await waitUntil { !viewModel.isPerformingSpecialistAction }
+
+        XCTAssertEqual(viewModel.rows, rowsBefore)
+        XCTAssertNil(viewModel.pendingHandoffCard)
+        XCTAssertEqual(viewModel.specialistState, .vital)
+    }
+
+    func testSendIsBlockedWhileASpecialistActionIsStreaming() async {
+        let card = CoachHandoffCard(
+            phase: .proposed, sessionId: "session-1", cardOccurrenceId: "proposal-occurrence",
+            specialist: runningCoach,
+            objective: "Plan a safe week", returnSummary: nil
+        )
+        let api = FakeCoachAPI(restoration: CoachRestorationResponse(
+            messages: [], activePersona: .vital, pendingCard: card
+        ))
+        api.holdActionStreamOpen = true
+        let viewModel = CoachViewModel(api: api)
+        await viewModel.restoreConversation()
+
+        viewModel.performSpecialistAction(.acceptHandoff)
+        XCTAssertTrue(viewModel.isPerformingSpecialistAction)
+
+        // The affordance half: every composer control (send button, mic,
+        // suggestion chips, New chat) gates on `isBusy`, so it must report
+        // busy here — gating them on `isStreaming` instead left them lit and
+        // tappable during a handoff while `send()` silently dropped the tap.
+        XCTAssertTrue(viewModel.isBusy)
+        // ...but NOT via `isStreaming`, which is what the send button's stop
+        // affordance keys off. A specialist action isn't user-cancellable, so
+        // the control must render as a disabled arrow, never a stop button.
+        XCTAssertFalse(viewModel.isStreaming)
+
+        // send() must not race the still-streaming specialist turn for
+        // `pendingAssistantId`/`rows` — it should no-op while the action is
+        // in flight, the same way a second `send()` already no-ops today.
+        viewModel.input = "Should be blocked"
+        viewModel.send()
+
+        XCTAssertEqual(viewModel.input, "Should be blocked")
+        XCTAssertFalse(viewModel.rows.contains {
+            guard case .message(let message) = $0 else { return false }
+            return message.role == .user && message.text == "Should be blocked"
+        })
+
+        api.finishHeldAction()
+        await waitUntil { !viewModel.isPerformingSpecialistAction }
+        // Once the action settles the composer frees up again — otherwise
+        // this guard would strand the user in a permanently disabled UI.
+        XCTAssertFalse(viewModel.isBusy)
+    }
+
+    func testComposerEntryPointsAllNoOpWhileASpecialistActionStreams() async {
+        let card = CoachHandoffCard(
+            phase: .proposed, sessionId: "session-1", cardOccurrenceId: "proposal-occurrence",
+            specialist: runningCoach,
+            objective: "Plan a safe week", returnSummary: nil
+        )
+        let restoredMessage = CoachRestoredMessage(
+            id: "20000000-0000-4000-8000-000000000001",
+            role: "assistant", speaker: "coach", content: "Want a running specialist?",
+            timestamp: "2026-07-11T12:05:00.000Z",
+            specialistSessionId: nil, specialistMetadata: nil
+        )
+        let api = FakeCoachAPI(restoration: CoachRestorationResponse(
+            messages: [restoredMessage], activePersona: .vital, pendingCard: card
+        ))
+        api.holdActionStreamOpen = true
+        let viewModel = CoachViewModel(api: api)
+        await viewModel.restoreConversation()
+        let rowsBefore = viewModel.rows
+
+        viewModel.performSpecialistAction(.acceptHandoff)
+        XCTAssertTrue(viewModel.isBusy)
+
+        // Each of these backs a control that is now `.disabled(vm.isBusy)`.
+        // They must also be inert at the model level: a disabled affordance
+        // isn't a guarantee, and both `startNewChat` and the voice path would
+        // otherwise clear or race the transcript the handoff is streaming into.
+        viewModel.startNewChat()
+        viewModel.toggleVoiceRecording()
+        viewModel.sendExternalVoiceTranscript("Voice while handing off")
+        viewModel.refreshIfStale()
+
+        XCTAssertEqual(viewModel.rows, rowsBefore)
+        XCTAssertFalse(viewModel.transcriber.isRecording)
+        XCTAssertEqual(api.restorationRequestCount, 1)
+
+        api.finishHeldAction()
+        await waitUntil { !viewModel.isPerformingSpecialistAction }
+    }
+
     private func waitUntil(
         _ predicate: @escaping @MainActor () -> Bool,
         file: StaticString = #filePath,
