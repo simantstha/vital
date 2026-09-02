@@ -308,6 +308,23 @@ async function* streamCoachTurn(userId: string, seed: TurnSeed): AsyncGenerator<
   const modelStartedAt = Date.now();
   let modelUsage: AggregatedModelUsage | undefined;
 
+  // The single rolling message breakpoint. configuration.system already spends
+  // one of the API's 4 cache_control breakpoints per request, so this one MOVES
+  // instead of accumulating: each round clears the previous round's marker
+  // before marking the newly appended turn. Without the clear, a 10-round turn
+  // would carry 11 breakpoints and be rejected.
+  //
+  // Marking the most recent turn means round N+1 reads the whole conversation
+  // prefix — system + tools + every prior round's tool traffic — rather than
+  // reprocessing it. (This also keeps us inside the 20-block cache lookback
+  // window: consecutive breakpoints are one round apart, not a whole turn.)
+  let cachedMessageBlock: { cache_control?: { type: 'ephemeral' } } | null = null;
+  const rollMessageBreakpoint = (block: { cache_control?: { type: 'ephemeral' } }) => {
+    if (cachedMessageBlock) delete cachedMessageBlock.cache_control;
+    block.cache_control = { type: 'ephemeral' };
+    cachedMessageBlock = block;
+  };
+
   for (let round = 0; round < MAX_ROUNDS; round++) {
     let finalMsg: Message;
     try {
@@ -334,9 +351,10 @@ async function* streamCoachTurn(userId: string, seed: TurnSeed): AsyncGenerator<
       }
 
       finalMsg = await stream.finalMessage();
-      if (configuration.speaker === 'specialist') {
-        modelUsage = accumulateModelUsage(modelUsage, finalMsg.usage);
-      }
+      // Accumulated for EVERY turn, not just specialist ones (which is all it
+      // covered before): the coach path is the app's main surface and needs a
+      // cache-hit signal too — see the usage log at the end of this function.
+      modelUsage = accumulateModelUsage(modelUsage, finalMsg.usage);
     } catch (error) {
       if (configuration.speaker === 'specialist' && currentSession) {
         const preservedOrFailed = await specialistRuntime.handleModelFailure(
@@ -379,7 +397,12 @@ async function* streamCoachTurn(userId: string, seed: TurnSeed): AsyncGenerator<
 
     // Sequential (not Promise.all) so each tool's started/done SSE pair
     // brackets its own execution — the iOS chat UI renders these live.
-    const toolResults: Array<{ type: 'tool_result'; tool_use_id: string; content: string }> = [];
+    const toolResults: Array<{
+      type: 'tool_result';
+      tool_use_id: string;
+      content: string;
+      cache_control?: { type: 'ephemeral' };
+    }> = [];
     for (const block of toolBlocks) {
       const input = block.input as Record<string, unknown>;
       const callId = randomUUID();
@@ -426,6 +449,11 @@ async function* streamCoachTurn(userId: string, seed: TurnSeed): AsyncGenerator<
     }
 
     messages.push({ role: 'user', content: toolResults });
+    // Mark the newly appended turn so the NEXT round reads this whole prefix.
+    // The last tool_result is the final block of the last message, i.e. the
+    // end of everything the next request will re-send unchanged.
+    const lastToolResult = toolResults[toolResults.length - 1];
+    if (lastToolResult) rollMessageBreakpoint(lastToolResult);
     // Reset accumulated text — the next turn is the new response
     assistantText = '';
   }
@@ -458,10 +486,34 @@ async function* streamCoachTurn(userId: string, seed: TurnSeed): AsyncGenerator<
     })
     .returning({ id: schema.messages.id });
 
+  // Usage + cache telemetry for EVERY turn. This is the only place the
+  // prompt-caching effect is observable in production: caching fails SILENTLY
+  // — interpolate a timestamp or a request id into the system prompt and the
+  // hit rate drops to zero with no error, no exception, and no failing test.
+  // A sustained cacheReadInputTokens of 0 across multi-round turns is the
+  // signal that something invalidated the prefix.
+  //
+  // Both paths emit the same field names under a `*_model_usage` event, so a
+  // single `grep model_usage` answers "are we getting cache hits" across the
+  // specialist and coach surfaces at once.
+  const turnUsage = {
+    latencyMs: Date.now() - modelStartedAt,
+    inputTokens: modelUsage?.inputTokens ?? 0,
+    outputTokens: modelUsage?.outputTokens ?? 0,
+    cacheCreationInputTokens: modelUsage?.cacheCreationInputTokens ?? 0,
+    cacheReadInputTokens: modelUsage?.cacheReadInputTokens ?? 0,
+  };
   if (configuration.speaker === 'specialist' && currentSession) {
-    specialistRuntime.logModelUsage(currentSession, {
-      latencyMs: Date.now() - modelStartedAt,
-      ...modelUsage,
+    specialistRuntime.logModelUsage(currentSession, turnUsage);
+  } else {
+    console.info('coach_lifecycle', {
+      event: 'coach_model_usage',
+      userId,
+      speaker: configuration.speaker,
+      model: configuration.model,
+      // Non-null when a card is pending but Vital is still the speaker.
+      sessionId: currentSession?.id ?? null,
+      ...turnUsage,
     });
   }
   yield { type: 'done', messageId: saved.id };
