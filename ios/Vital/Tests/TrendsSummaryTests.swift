@@ -518,8 +518,18 @@ final class TrendsViewModelLoadTests: XCTestCase {
         fake.delayNextBatch = true
 
         let vm = TrendsViewModel(apiClient: fake)
+        // Await the first load actually suspending inside `fetchTrendsBatch`.
+        // This used to be a single `await Task.yield()`, which is a bet that
+        // one scheduling hop is enough to get the task there. If it isn't,
+        // the *second* `load()` below consumes `delayNextBatch` instead and
+        // suspends on a continuation that `releaseBatch()` never reaches —
+        // the test then hangs rather than failing, which is the worst way for
+        // a suite to be untrustworthy. The fake now says when it has arrived.
+        let firstLoadSuspended = expectation(description: "the first load suspends inside fetchTrendsBatch")
+        fake.onBatchSuspended = { firstLoadSuspended.fulfill() }
         let firstLoad = Task { await vm.load() }
-        await Task.yield() // let the first load reach the fetchTrendsBatch await
+        await fulfillment(of: [firstLoadSuspended], timeout: 10)
+        fake.onBatchSuspended = nil
 
         fake.batchResponse = TrendsBatchResponse(
             days: 30, series: ["hrv_sdnn": hrvSeries(value: 60)], unknownMetrics: [], calibration: nil
@@ -605,6 +615,11 @@ private final class FakeTrendsAPI: TrendsAPIProviding {
     var delayNextBatch = false
     private var batchContinuation: CheckedContinuation<Void, Never>?
 
+    /// Fired when `fetchTrendsBatch` has actually suspended on
+    /// `delayNextBatch`. Lets a test await the slow load reaching the network
+    /// rather than assuming a scheduling hop got it there.
+    var onBatchSuspended: (@MainActor () -> Void)? = nil
+
     func fetchTrends(metric: String, days: Int) async throws -> TrendsResponse {
         if metric == delayedMetric {
             await withCheckedContinuation { continuation = $0 }
@@ -616,7 +631,10 @@ private final class FakeTrendsAPI: TrendsAPIProviding {
     func fetchTrendsBatch(metrics: [String], days: Int) async throws -> TrendsBatchResponse {
         if delayNextBatch {
             delayNextBatch = false
-            await withCheckedContinuation { batchContinuation = $0 }
+            await withCheckedContinuation {
+                batchContinuation = $0
+                onBatchSuspended?()
+            }
         }
         if let batchError { throw batchError }
         return batchResponse
