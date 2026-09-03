@@ -1,10 +1,14 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { db, schema } from '../db';
 import { ApnsClient } from '../lib/apnsClient';
+import { generateDailyBriefFromDb } from '../lib/brain/brief';
+import { getDailyBrief, upsertDailyBrief } from '../lib/brain/dailyBriefRepository';
+import { prewarmDailyBrief } from '../lib/dailyBriefPrewarm';
 import { generateAnalysis, proactiveAnalysisModel, type AnalysisFailureEvent } from '../lib/proactiveAnalysisGeneration';
 import { deliverNotification, runClaimedAnalysis, type AnalysisContext, type AnalysisJob, type CoachAnalysis } from '../lib/proactiveHealthWorker';
 import { claimAnalysisJobs, claimDueMorningBriefs, completeMorningBrief, ensureDefaultPreferencesForRegisteredUsers, failMorningBrief, listReadyNotificationCandidates, workerRepository } from '../lib/proactiveHealthWorkerRepository';
 import { analysisAlert, workerErrorEvent, type WorkerStage } from '../lib/proactiveHealthWorkerSupport';
+import { getUserUnitSystem } from '../lib/units';
 import { createWhoopTokenStore } from '../lib/whoop/client';
 import { createWhoopSyncRepository, runWhoopSync } from '../lib/whoop/sync';
 import { createWhoopWorkerRepository, runWhoopWorkerPass } from '../lib/whoop/workerPass';
@@ -71,6 +75,27 @@ async function tick(reportStage: (stage: WorkerStage) => void): Promise<void> {
     } catch (error) {
       console.error(JSON.stringify(workerErrorEvent('process-morning-brief', error)));
       await failMorningBrief(claim, new Date());
+    }
+
+    // Pre-warm the Today-screen daily brief (distinct from the notification
+    // content above — see the plan doc's "two different morning brief
+    // artifacts" note) for the SAME claimed morning slot, so it's already in
+    // Postgres by the time the user opens the app. Independent of, and never
+    // gated by, the notification outcome above: a failed/retried
+    // notification must not block the Today brief, and vice versa. Skipped
+    // when a brief for today already exists (e.g. the user opened before
+    // their slot and /api/today's on-demand fallback already generated one)
+    // so a retried notification slot doesn't re-spend a Claude call here.
+    reportStage('prewarm-daily-brief');
+    try {
+      await prewarmDailyBrief(claim.userId, claim.localDate, {
+        getUserUnitSystem,
+        getDailyBrief,
+        generateDailyBriefFromDb,
+        upsertDailyBrief,
+      });
+    } catch (error) {
+      console.error(JSON.stringify(workerErrorEvent('prewarm-daily-brief', error)));
     }
   }
 

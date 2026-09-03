@@ -32,7 +32,7 @@ import { db, schema } from '@/db';
 import { eq, and, gte, desc } from 'drizzle-orm';
 import { getUserIdFromRequest } from '@/lib/auth';
 import { generateDailyBriefFromDb } from '@/lib/brain/brief';
-import { getCachedBrief, setCachedBrief, briefCacheKey } from '@/lib/brain/briefCache';
+import { getDailyBrief, upsertDailyBrief } from '@/lib/brain/dailyBriefRepository';
 import { getCalibration } from '@/lib/brain/baselines';
 import { queryMetricPoints, type MetricPoint } from '@/lib/brain/tools';
 import { resolveDietBudget } from '@/lib/brain/dietBudget';
@@ -164,26 +164,31 @@ export async function GET(request: Request): Promise<NextResponse> {
     consumedFat     += Math.round(num(p.f)    ?? num(p.fat)      ?? 0);
   }
 
-  // ── Brief (insight + plan) — cached; regenerated in the background ────────
-  // The Claude brief takes 15–27s, so we never block this response on it.
-  // Cache hit → return it. Cache miss → return empty (the iOS app keeps its
-  // own default insight/plan) and warm the cache in the background.
+  // ── Brief (insight + plan) — persisted in Postgres; regenerated in the
+  //    background on a miss. The proactive worker pre-warms this at the
+  //    user's morning slot (scripts/proactive-health-worker.ts), so most
+  //    opens hit; this on-demand path is the fallback for a user who opens
+  //    before their slot or whose pre-warm failed. The Claude generation
+  //    itself takes 15–27s, so we never block this response on it — the
+  //    Postgres read above is a single indexed row lookup, fast enough to
+  //    await directly. Hit → return it. Miss → return empty (the iOS app
+  //    keeps its own default insight/plan) and warm it in the background.
   let insight = '';
   let plan: Array<{ name: string; kcal: number; why: string }> = [];
 
-  const cacheKey = briefCacheKey(userId, dayKey, resolveUnitSystem(userRow?.unit_system));
-  const cached = getCachedBrief(cacheKey);
-  if (cached) {
-    insight = cached.insight;
-    plan    = cached.plan;
+  const unitSystem = resolveUnitSystem(userRow?.unit_system);
+  const persistedBrief = await getDailyBrief(userId, dayKey, unitSystem);
+  if (persistedBrief) {
+    insight = persistedBrief.insight;
+    plan    = persistedBrief.plan;
   } else {
     void generateDailyBriefFromDb(userId)
-      .then(brief => {
-        setCachedBrief(cacheKey, {
+      .then(brief =>
+        upsertDailyBrief(userId, dayKey, unitSystem, {
           insight: brief.body,
           plan: brief.meals.map(m => ({ name: m.k, kcal: m.kcal, why: m.why })),
-        });
-      })
+        }),
+      )
       .catch(err => console.error('[/api/today] background brief generation failed:', err));
   }
 

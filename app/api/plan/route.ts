@@ -13,13 +13,14 @@
  * this route. Instead, every GET additively inserts:
  *   - a "Lights out" sleep item (once — skipped if a same-titled row already
  *     exists for today), and
- *   - any meal from the *cached* daily brief (`getCachedBrief` — never
- *     awaits/triggers a fresh Claude call) whose title isn't already present
- *     for today.
- * This means the plan may show only "Lights out" on the very first GET of
- * the day (before the brief has finished generating in the background via
- * /api/today) and fills in meals on a subsequent GET once the brief lands —
- * no polling needed beyond the client's normal refresh cadence.
+ *   - any meal from the *persisted* daily brief (`getDailyBrief` — reads the
+ *     `daily_briefs` table directly, never triggers a fresh Claude call)
+ *     whose title isn't already present for today.
+ * This means the plan may show only "Lights out" before the brief has been
+ * generated (either by the proactive worker's morning pre-warm, or by
+ * /api/today's on-demand fallback) and fills in meals on a subsequent GET
+ * once the brief lands — no polling needed beyond the client's normal
+ * refresh cadence.
  *
  * Status is server-tracked as pending/done/skipped only — now/next/later is
  * a client-side, clock-derived display concern (see TodayViewModel).
@@ -37,7 +38,7 @@ import { NextResponse } from 'next/server';
 import { db, schema } from '@/db';
 import { eq, and } from 'drizzle-orm';
 import { getUserIdFromRequest } from '@/lib/auth';
-import { getCachedBrief, briefCacheKey } from '@/lib/brain/briefCache';
+import { getDailyBrief } from '@/lib/brain/dailyBriefRepository';
 import { localDayKey, pickTimeZone } from '@/lib/localDay';
 import { formatSleepSubtitle } from '@/lib/profileDetails';
 import { resolveUnitSystem } from '@/lib/units';
@@ -158,7 +159,7 @@ export async function GET(request: Request): Promise<NextResponse> {
     });
   }
 
-  const cached = getCachedBrief(briefCacheKey(userId, dayKey, resolveUnitSystem(userRow?.unit_system)));
+  const cached = await getDailyBrief(userId, dayKey, resolveUnitSystem(userRow?.unit_system));
   if (cached) {
     const times = heuristicMealTimes(cached.plan);
     for (const meal of cached.plan) {

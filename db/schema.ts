@@ -446,6 +446,36 @@ export const push_attempts = p.pgTable('push_attempts', {
   p.index('push_attempts_user_attempted_idx').on(t.user_id, t.attempted_at),
 ]);
 
+// ─── daily_briefs ────────────────────────────────────────────────────────────
+// Persisted Today-screen daily brief (insight + meal plan from
+// generateDailyBriefFromDb / lib/brain/brief.ts), keyed on the same tuple the
+// deleted in-memory Map cache used (see lib/brain/briefCache.ts, removed):
+// (user_id, local-day, unit_system) — local_day is a YYYY-MM-DD key using the
+// same convention as plan_items.local_day (lib/localDay.ts), not UTC.
+// unit_system is part of the key (not just the date) so a mid-day units flip
+// regenerates the brief in the new unit system instead of serving
+// yesterday's-units prose until local midnight — same reasoning the old
+// briefCacheKey() comment documented.
+//
+// Written by two paths: the proactive worker's morning pre-warm (claims the
+// user's morning slot via claimDueMorningBriefs, then generates and upserts
+// here — scripts/proactive-health-worker.ts) and the on-demand fallback in
+// /api/today for a user who opens before their slot or whose pre-warm failed.
+// Upsert-on-write (unique on the tuple) — a later generation for the same
+// tuple replaces the earlier one, so retries/regeneration are idempotent.
+export const daily_briefs = p.pgTable('daily_briefs', {
+  id:           p.uuid('id').primaryKey().defaultRandom(),
+  user_id:      p.uuid('user_id').notNull().references(() => users.id),
+  local_day:    p.text('local_day').notNull(),
+  unit_system:  p.text('unit_system').notNull(),                              // 'metric' | 'imperial' — see lib/units.ts
+  insight:      p.text('insight').notNull(),
+  plan:         p.jsonb('plan').notNull(),                                    // Array<{ name, kcal, why }>
+  generated_at: p.timestamp('generated_at', { withTimezone: true }).defaultNow().notNull(),
+  updated_at:   p.timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  p.uniqueIndex('daily_briefs_user_day_units_idx').on(t.user_id, t.local_day, t.unit_system),
+]);
+
 // ─── plan_items ──────────────────────────────────────────────────────────────
 // Server-persisted rows for the Today "plan" timeline (redesign v3 Phase 2).
 // One row per plan entry per (user, local calendar day) — local_day is a
@@ -639,6 +669,9 @@ export type NewBaseline    = typeof baselines.$inferInsert;
 
 export type PlanItemRow    = typeof plan_items.$inferSelect;                  // 'PlanItem' avoided — collides with iOS-side name in spirit, not compilation, but keep distinct
 export type NewPlanItemRow = typeof plan_items.$inferInsert;
+
+export type DailyBriefRow    = typeof daily_briefs.$inferSelect;
+export type NewDailyBriefRow = typeof daily_briefs.$inferInsert;
 
 export type CalendarBlock    = typeof calendar_blocks.$inferSelect;
 export type NewCalendarBlock = typeof calendar_blocks.$inferInsert;
