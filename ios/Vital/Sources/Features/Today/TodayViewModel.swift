@@ -6,25 +6,40 @@ import SwiftUI
 
 // MARK: - Local metric models (UI layer)
 
+// `value`/`bpm`/`hours`+`minutes` are optional so "not measured yet" (a
+// fresh account with no HealthKit reading and no server data) is a distinct,
+// representable state from "measured zero" — never seed or decode these as
+// a literal `0` (and never a sentinel like `-1` either). See `displayValue`
+// / `formatted` for the "—" placeholder each drives in `TodayView`.
+
 struct HRVMetric {
-    let value: Int
+    let value: Int?
     let trend: TrendDirection
     let delta: String
+
+    var displayValue: String { value.map { "\($0)" } ?? "—" }
+    var displayUnit: String { value == nil ? "" : "ms" }
 }
 
 struct SleepMetric {
-    let hours: Int
-    let minutes: Int
+    let hours: Int?
+    let minutes: Int?
     let trend: TrendDirection
     let delta: String
 
-    var formatted: String { "\(hours)h \(minutes)m" }
+    var formatted: String {
+        guard let hours, let minutes else { return "—" }
+        return "\(hours)h \(minutes)m"
+    }
 }
 
 struct RestingHRMetric {
-    let bpm: Int
+    let bpm: Int?
     let trend: TrendDirection
     let delta: String
+
+    var displayValue: String { bpm.map { "\($0)" } ?? "—" }
+    var displayUnit: String { bpm == nil ? "" : "bpm" }
 }
 
 struct MacroProgress {
@@ -90,10 +105,15 @@ final class TodayViewModel: ObservableObject {
     // from calibration status. For now, kept nil so no fabricated hint is shown.
     @Published var planHint: String? = nil
 
-    // Biometrics — neutral until real data loads (view is gated on isLoading)
-    @Published var hrv = HRVMetric(value: 0, trend: .neutral, delta: "—")
-    @Published var sleep = SleepMetric(hours: 0, minutes: 0, trend: .neutral, delta: "—")
-    @Published var restingHR = RestingHRMetric(bpm: 0, trend: .neutral, delta: "—")
+    // Biometrics — seeded `nil` ("not measured"), not `0`. `isLoading`
+    // gating does NOT cover this case: a fresh account's load completes
+    // *successfully* with no HRV/sleep/resting-HR data at all, so these
+    // published values are exactly what TodayView renders once loading
+    // finishes. A seeded `0` would then read as a measured 0 ms HRV instead
+    // of the "—" placeholder the optional now produces.
+    @Published var hrv = HRVMetric(value: nil, trend: .neutral, delta: "—")
+    @Published var sleep = SleepMetric(hours: nil, minutes: nil, trend: .neutral, delta: "—")
+    @Published var restingHR = RestingHRMetric(bpm: nil, trend: .neutral, delta: "—")
 
     // Diet — driven from /api/today
     @Published var diet = DietCard(
@@ -337,7 +357,11 @@ final class TodayViewModel: ObservableObject {
         }
     }
 
-    private func applyTodayResponse(_ r: TodayResponse) {
+    /// Not `private` so tests can drive it directly with a hand-built
+    /// `TodayResponse` — `apiClient` isn't injectable, so this is the seam
+    /// that lets tests exercise the empty-insight / null-metric paths
+    /// without a live network call.
+    func applyTodayResponse(_ r: TodayResponse) {
         // Calibration state — extract if present
         if let cal = r.calibration {
             calibrationStatus = cal.status
@@ -474,7 +498,9 @@ final class TodayViewModel: ObservableObject {
     /// Applies the `/api/plan` result, or falls back to the Phase 1
     /// client-side derivation when the endpoint isn't available, then merges
     /// in today's calendar events (Phase 8) — see `mergeAndSetPlanItems`.
-    private func applyPlanResult(_ response: PlanResponse?, todayPlan: [TodayPlanItem]) {
+    /// Not `private` for the same reason as `applyTodayResponse` — lets
+    /// tests exercise the empty-plan fallback path directly.
+    func applyPlanResult(_ response: PlanResponse?, todayPlan: [TodayPlanItem]) {
         let serverItems: [PlanItem]
         if let response {
             serverItems = response.items.map { planItem(from: $0, todayPlan: todayPlan) }

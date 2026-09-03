@@ -17,34 +17,45 @@ struct PlanTimelineView: View {
     /// the footer never nags again (Phase 8).
     var onSyncCalendar: (() -> Void)? = nil
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-            header
+    /// `true` when there's nothing to show — e.g. `/api/today` returned an
+    /// empty `plan` and no calendar/local items merged in. Exposed so
+    /// callers embedding this view in a spaced stack (see `TodayView`) can
+    /// skip it entirely instead of leaving an empty card shell (or a
+    /// floating gap where one would have been).
+    var isEmpty: Bool { items.isEmpty }
 
-            VitalCard(padding: 0, cornerRadius: Theme.Radius.xl) {
-                VStack(spacing: 0) {
-                    ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                        Button {
-                            onItemTap(item)
-                        } label: {
-                            PlanRowView(item: item, onLogItem: onLogItem)
-                        }
-                        .buttonStyle(.vital)
-                        .overlay(alignment: .top) {
-                            if index > 0 {
-                                Rectangle()
-                                    .fill(Theme.Colors.glassBorder)
-                                    .frame(height: 0.5)
+    var body: some View {
+        if isEmpty {
+            EmptyView()
+        } else {
+            VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                header
+
+                VitalCard(padding: 0, cornerRadius: Theme.Radius.xl) {
+                    VStack(spacing: 0) {
+                        ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                            Button {
+                                onItemTap(item)
+                            } label: {
+                                PlanRowView(item: item, onLogItem: onLogItem)
+                            }
+                            .buttonStyle(.vital)
+                            .overlay(alignment: .top) {
+                                if index > 0 {
+                                    Rectangle()
+                                        .fill(Theme.Colors.glassBorder)
+                                        .frame(height: 0.5)
+                                }
                             }
                         }
                     }
                 }
-            }
 
-            if let onSyncCalendar {
-                syncCalendarRow(action: onSyncCalendar)
-            } else {
-                caption
+                if let onSyncCalendar {
+                    syncCalendarRow(action: onSyncCalendar)
+                } else {
+                    caption
+                }
             }
         }
     }
