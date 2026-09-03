@@ -63,8 +63,8 @@ import {
   type HandoffCardPayload,
 } from '@/lib/specialists/coachIntegration';
 
-const MODEL        = 'claude-sonnet-4-6';
-const MAX_TOKENS   = 2500;
+const MODEL        = 'claude-sonnet-5';
+const MAX_TOKENS   = 3500;
 const MAX_ROUNDS   = 10;   // max tool-use iterations before hard stop
 
 // Tool names dispatched to lib/memory.ts's handleToolCall instead of
@@ -333,6 +333,14 @@ async function* streamCoachTurn(userId: string, seed: TurnSeed): AsyncGenerator<
       const stream = client.messages.stream({
         model:      configuration.model,
         max_tokens: MAX_TOKENS,
+        // Sonnet 5 runs adaptive thinking by default when this is omitted
+        // (Sonnet 4.6 did not). This loop only yields on text_delta below —
+        // thinking_delta is silently dropped — so leaving thinking enabled
+        // would render as a silent pause before any text appears, and
+        // thinking tokens would eat into MAX_TOKENS. Disable explicitly to
+        // preserve today's behavior rather than adopting a new mode blind.
+        thinking:   { type: 'disabled' },
+        output_config: { effort: 'medium' },
         system:     configuration.system,
         tools:      configuration.tools,
         messages,
