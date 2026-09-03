@@ -37,10 +37,10 @@ const handoffTool = { name: 'propose_specialist_handoff', input_schema: { type: 
 test('flag off returns the exact legacy model prompt and tools', () => {
   const selected = selectCoachConfiguration({
     enabled: false, session: null, manifest: null,
-    baseModel: 'claude-sonnet-4-6', basePrompt: 'legacy prompt', baseTools,
+    baseModel: 'claude-sonnet-5', basePrompt: 'legacy prompt', baseTools,
     specialistPrompt: null, handoffTool: null,
   });
-  assert.equal(selected.model, 'claude-sonnet-4-6');
+  assert.equal(selected.model, 'claude-sonnet-5');
   // The prompt text is unchanged; it just travels as a block array now so the
   // last block can carry the tools+system cache breakpoint.
   assert.deepEqual(selected.system, [
@@ -53,7 +53,7 @@ test('flag off returns the exact legacy model prompt and tools', () => {
 test('handoffTool null (specialists never resolved) falls back to base tools only', () => {
   const selected = selectCoachConfiguration({
     enabled: true, session: null, manifest: null,
-    baseModel: 'claude-sonnet-4-6', basePrompt: 'legacy prompt', baseTools,
+    baseModel: 'claude-sonnet-5', basePrompt: 'legacy prompt', baseTools,
     specialistPrompt: null, handoffTool: null,
   });
   assert.deepEqual(selected.tools.map((tool) => tool.name), [
@@ -65,7 +65,7 @@ test('enabled Vital adds proposal tool while active and return-pending sessions 
   const manifest = new SpecialistRegistry({ SPECIALIST_MODEL: 'claude-opus-test' }).get('running-coach');
   const vital = selectCoachConfiguration({
     enabled: true, session: null, manifest: null,
-    baseModel: 'claude-sonnet-4-6', basePrompt: 'legacy prompt', baseTools,
+    baseModel: 'claude-sonnet-5', basePrompt: 'legacy prompt', baseTools,
     specialistPrompt: null, handoffTool,
   });
   assert.deepEqual(vital.tools.map((tool) => tool.name), [
@@ -75,7 +75,7 @@ test('enabled Vital adds proposal tool while active and return-pending sessions 
   for (const status of ['active', 'return_proposed'] as const) {
     const selected = selectCoachConfiguration({
       enabled: true, session: session(status), manifest,
-      baseModel: 'claude-sonnet-4-6', basePrompt: 'legacy prompt', baseTools,
+      baseModel: 'claude-sonnet-5', basePrompt: 'legacy prompt', baseTools,
       specialistPrompt: {
         system: 'trusted specialist prompt', context: 'untrusted consultation context',
         model: manifest.model, allowedTools: manifest.allowedTools,

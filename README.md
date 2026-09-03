@@ -230,7 +230,7 @@ Releases are **automatic on every push to `main`** via `.github/workflows/releas
 - **iOS:** SwiftUI, HealthKit, XcodeGen, fastlane match → TestFlight
 - **Backend:** Next.js 16 (App Router, TypeScript), deployed on Fly.io
 - **Database:** Postgres (Supabase) via drizzle-orm + postgres.js — event-sourced ontology model
-- **AI:** Anthropic `claude-sonnet-4-6` — coach (tool-use + SSE), daily brief, meal-photo Vision
+- **AI:** Anthropic `claude-sonnet-5` — coach (tool-use + SSE), daily brief, meal-photo Vision
 - **Auth:** Sign in with Apple + session JWTs (jose)
 - **Nutrition:** Open Food Facts (barcode) + CalorieNinjas (search)
 - Custom glassmorphic design system on both surfaces (no UI library)

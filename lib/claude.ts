@@ -317,8 +317,14 @@ Respond ONLY with valid JSON, no markdown, no explanation:
 }`;
 
   const message = await client.messages.create({
-    model: 'claude-sonnet-4-6',
-    max_tokens: 1500,
+    model: 'claude-sonnet-5',
+    max_tokens: 2100,
+    // Sonnet 5 runs adaptive thinking by default when this is omitted (Sonnet
+    // 4.6 did not) — disable explicitly to keep this single-turn JSON call
+    // behavior-identical to before the model swap. `effort: 'low'` matches a
+    // short, non-agentic, schema-constrained call.
+    thinking: { type: 'disabled' },
+    output_config: { effort: 'low' },
     messages: [{ role: 'user', content: prompt }],
   });
 

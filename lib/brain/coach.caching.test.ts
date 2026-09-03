@@ -15,8 +15,9 @@ import * as realSchema from '../../db/schema';
  *   - reports a read for the longest prefix already seen, a write for the
  *     remainder up to the last breakpoint, and `input_tokens` for whatever
  *     follows it
- *   - enforces the 4-breakpoint cap and the 2048-token minimum prefix
- *     (claude-sonnet-4-6) — both of which silently degrade in production
+ *   - enforces the 4-breakpoint cap and a 4096-token minimum prefix
+ *     (see CACHE_MIN_TOKENS below for which model that number describes) —
+ *     both of which silently degrade in production
  *
  * That makes the assertions load-bearing: move a breakpoint, stop rolling it,
  * or shrink the prefix below the minimum, and these numbers change.
@@ -29,8 +30,20 @@ import * as realSchema from '../../db/schema';
 process.env.SPECIALIST_MODEL ??= 'claude-test-specialist';
 process.env.SPECIALISTS_ENABLED = 'false';
 
-/** claude-sonnet-4-6's minimum cacheable prefix. Below this the API caches nothing. */
-const CACHE_MIN_TOKENS = 2048;
+/**
+ * Minimum cacheable prefix, below which the API caches nothing.
+ *
+ * claude-sonnet-4-6's documented minimum is 2048 tokens. claude-sonnet-5 is
+ * not listed in Anthropic's per-model minimum-prefix table as of this
+ * writing — its exact minimum is unconfirmed. We use the highest minimum
+ * documented for any current model (4096, the Opus 4.5/4.6/4.7/4.8 +
+ * Haiku 4.5 tier) as a conservative stand-in: this repo's real tools+system
+ * prefix measures ~8,269 tokens, which clears 4096 with room to spare, so
+ * simulating against the stricter number still proves caching survives the
+ * model swap either way. If Anthropic publishes Sonnet 5's actual minimum,
+ * replace this with the real figure.
+ */
+const CACHE_MIN_TOKENS = 4096;
 /** The API's hard cap on cache_control breakpoints in one request. */
 const MAX_BREAKPOINTS = 4;
 
@@ -63,7 +76,15 @@ interface StreamParams {
   system: Array<{ text: string; cache_control?: unknown }>;
   tools: unknown[];
   messages: Array<{ role: string; content: unknown }>;
+  thinking?: { type: string };
 }
+
+// Every round's `thinking` param, captured so we can prove the coach path
+// keeps thinking explicitly disabled. Sonnet 5 runs adaptive thinking by
+// default when the field is omitted (Sonnet 4.6 did not) — a future refactor
+// that silently drops this field would re-enable thinking in a streaming
+// loop that only yields text_delta, and this is the test that would catch it.
+const thinkingParams: Array<{ type: string } | undefined> = [];
 
 function simulateCaching(params: StreamParams): RoundUsage {
   // Flatten the request into render order. Tools lead, so a breakpoint on the
@@ -133,6 +154,7 @@ let responseQueue: FakeResponse[] = [];
 const fakeAnthropicClient = {
   messages: {
     stream: (params: StreamParams) => {
+      thinkingParams.push(params.thinking);
       const usage = simulateCaching(params);
       const response = responseQueue.shift() ?? { text: 'done' };
       const content = response.toolName
@@ -271,6 +293,20 @@ test('a multi-round turn writes the tools+system prefix once, then reads it back
   const total = (u: RoundUsage) =>
     u.input_tokens + u.cache_creation_input_tokens + u.cache_read_input_tokens;
   assert.ok(total(third) >= total(first), 'later rounds carry MORE prompt, just cheaper');
+});
+
+test('every round explicitly disables thinking, so it cannot silently re-enable on a model that defaults it on', () => {
+  assert.equal(thinkingParams.length, 3, 'expected one captured thinking param per round');
+  for (const thinking of thinkingParams) {
+    assert.deepEqual(
+      thinking,
+      { type: 'disabled' },
+      'coach.ts must pass thinking: {type: "disabled"} on every round — ' +
+        'omitting it lets Sonnet 5 default to adaptive thinking, which this ' +
+        'streaming loop cannot render (it only yields text_delta) and which ' +
+        'would eat into MAX_TOKENS',
+    );
+  }
 });
 
 test('the coach path logs the cache split, so a silent cache regression is visible in production', () => {
