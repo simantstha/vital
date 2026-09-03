@@ -9,7 +9,7 @@
 import { NextResponse } from 'next/server';
 import { db, schema } from '@/db';
 import { eq } from 'drizzle-orm';
-import { setCachedBrief, briefCacheKey } from '@/lib/brain/briefCache';
+import { upsertDailyBrief } from '@/lib/brain/dailyBriefRepository';
 import { generateDailyBriefFromDb } from '@/lib/brain/brief';
 import { getUserIdFromRequest } from '@/lib/auth';
 import { localDayKey } from '@/lib/localDay';
@@ -38,17 +38,18 @@ async function handle(request: Request) {
 async function generate(userId: string) {
   try {
     const brief = await generateDailyBriefFromDb(userId);
-    // Warm the shared per-user brief cache (also read by /api/today) so it
-    // doesn't have to regenerate again for the rest of the day. Key by the
-    // user's local day (from their stored tz) so it matches /api/today and
-    // rolls over at local midnight, not UTC midnight.
+    // Persist to the shared per-user daily_briefs table (also read by
+    // /api/today and /api/plan) so it doesn't have to regenerate again for
+    // the rest of the day. Key by the user's local day (from their stored
+    // tz) so it matches /api/today and rolls over at local midnight, not UTC
+    // midnight.
     const [user] = await db
       .select({ timezone: schema.users.timezone, unit_system: schema.users.unit_system })
       .from(schema.users)
       .where(eq(schema.users.id, userId))
       .limit(1);
     const dayKey = localDayKey(new Date(), user?.timezone);
-    setCachedBrief(briefCacheKey(userId, dayKey, resolveUnitSystem(user?.unit_system)), {
+    await upsertDailyBrief(userId, dayKey, resolveUnitSystem(user?.unit_system), {
       insight: brief.body,
       plan: brief.meals.map(m => ({ name: m.k, kcal: m.kcal, why: m.why })),
     });

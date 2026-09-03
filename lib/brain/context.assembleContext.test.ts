@@ -22,8 +22,10 @@ import { localDayKey } from '../localDay';
  * per the task, the helper modules (conversationWindow, baselines, tools,
  * dietBudget) are mocked wholesale rather than modeling every table they'd
  * otherwise touch (raw db.execute for calibration, calendar_blocks, etc).
- * Only events/nodes/messages/users/daily_metrics need a real fake `@/db`
- * table-branch, copied from app/api/today/route.test.ts's shape.
+ * Only events/nodes/messages/users/daily_metrics/daily_briefs need a real
+ * fake `@/db` table-branch, copied from app/api/today/route.test.ts's shape.
+ * (daily_briefs joined that list when the Today-screen brief moved from an
+ * in-process Map to Postgres — see lib/brain/dailyBriefRepository.ts.)
  *
  * Determinism: all fixture timestamps are built relative to a computed
  * UTC-midnight anchor, and the wall clock is pinned with node:test's
@@ -57,6 +59,13 @@ const fakeDb = {
       }
       if (table === realSchema.daily_metrics) {
         return { where: async () => [] };
+      }
+      if (table === realSchema.daily_briefs) {
+        // Empty → getDailyBrief returns null → ctx.cachedBrief is undefined,
+        // byte-identical to what the old in-memory Map returned in a fresh
+        // test process (it was always cold here). These tests pin local-day /
+        // timezone behavior, not brief content, so a miss is the right fixture.
+        return { where: () => ({ limit: async () => [] }) };
       }
       throw new Error(`unexpected table in select().from(): ${String(table)}`);
     },

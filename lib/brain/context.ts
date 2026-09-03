@@ -24,7 +24,7 @@ import {
   queryScheduleWindow, formatScheduleLine, type ScheduleBlock,
 } from './tools';
 import { resolveDietBudget, type DietBudget } from './dietBudget';
-import { getCachedBrief, briefCacheKey, type CachedBrief } from './briefCache';
+import { getDailyBrief, type CachedBrief } from './dailyBriefRepository';
 import { getConversationStart } from './conversationWindow';
 import { buildWhoopContextLine } from './whoopContext';
 import { localDayKey, pickTimeZone, previousDayKey } from '../localDay';
@@ -444,11 +444,11 @@ export async function assembleContext(userId: string): Promise<CoachContext> {
   // Messages in chronological order for the prompt
   const recentMessages = [...rawMessages].reverse();
 
-  // Diet budget + today's cached brief (meal plan) — keyed by the same local
-  // day as /api/today's briefCacheKey call (see above), so a warm cache hits
-  // regardless of UTC/local day skew.
+  // Diet budget + today's persisted brief (meal plan) — keyed by the same
+  // local day as /api/today's getDailyBrief call (see above), so a
+  // pre-warmed or on-demand brief is found regardless of UTC/local day skew.
   const dietBudget  = usersRow ? await resolveDietBudget(usersRow, userId) : undefined;
-  const cachedBrief = getCachedBrief(briefCacheKey(userId, localToday, unitSystem));
+  const cachedBrief = await getDailyBrief(userId, localToday, unitSystem) ?? undefined;
 
   // WHOOP context line (Task 7) — daily_metrics is day-keyed to the user's
   // *local* day (lib/whoop/mapping.ts's localDayKey), same key as above.

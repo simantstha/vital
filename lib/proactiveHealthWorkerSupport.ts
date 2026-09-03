@@ -64,6 +64,7 @@ export const WORKER_STAGES = [
   'deliver-notification',
   'claim-morning-briefs',
   'process-morning-brief',
+  'prewarm-daily-brief',
   'whoop-sync',
 ] as const;
 
