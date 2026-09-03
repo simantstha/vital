@@ -54,19 +54,29 @@ struct TodayView: View {
                             }
                             calibrationCard
                             pendingFactsBanner
-                            PlanTimelineView(
-                                items: vm.planItems,
-                                onItemTap: { actionsItem = $0 },
-                                onLogItem: { item in
-                                    vm.setStatus(id: item.id, .done)
-                                    vm.toastMessage = "Logged — nice work"
-                                },
-                                onOpenAdd: { showAddItem = true },
-                                onSyncCalendar: vm.calendarSyncState == .notDetermined
-                                    ? { Task { await vm.syncCalendar() } }
-                                    : nil
-                            )
-                            CoachBubble(message: vm.coachInsight)
+                            // Guarded here (not just inside the view) so an
+                            // empty payload doesn't leave a floating
+                            // `Theme.Spacing.xl` gap in this VStack where the
+                            // card/bubble would have been — a custom View's
+                            // internal "render nothing" choice isn't visible
+                            // to the parent stack's spacing calculation.
+                            if !vm.planItems.isEmpty {
+                                PlanTimelineView(
+                                    items: vm.planItems,
+                                    onItemTap: { actionsItem = $0 },
+                                    onLogItem: { item in
+                                        vm.setStatus(id: item.id, .done)
+                                        vm.toastMessage = "Logged — nice work"
+                                    },
+                                    onOpenAdd: { showAddItem = true },
+                                    onSyncCalendar: vm.calendarSyncState == .notDetermined
+                                        ? { Task { await vm.syncCalendar() } }
+                                        : nil
+                                )
+                            }
+                            if !CoachBubble.isEmpty(vm.coachInsight) {
+                                CoachBubble(message: vm.coachInsight)
+                            }
                             metricsGrid
                             FuelStripView(
                                 kcalRemaining: vm.diet.kcalRemaining,
@@ -293,8 +303,8 @@ private extension TodayView {
         HStack(spacing: Theme.Spacing.sm) {
             MetricTile(
                 label: "HRV",
-                value: "\(vm.hrv.value)",
-                unit: "ms",
+                value: vm.hrv.displayValue,
+                unit: vm.hrv.displayUnit,
                 trend: vm.hrv.trend,
                 delta: vm.hrv.delta
             )
@@ -307,8 +317,8 @@ private extension TodayView {
             )
             MetricTile(
                 label: "Resting HR",
-                value: "\(vm.restingHR.bpm)",
-                unit: "bpm",
+                value: vm.restingHR.displayValue,
+                unit: vm.restingHR.displayUnit,
                 trend: vm.restingHR.trend,
                 delta: vm.restingHR.delta
             )
