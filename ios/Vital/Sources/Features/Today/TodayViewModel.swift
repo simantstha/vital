@@ -82,14 +82,21 @@ struct MealRow: Identifiable, Equatable {
 @MainActor
 final class TodayViewModel: ObservableObject {
 
-    // Loading / error state — the view gates on isLoading so a fresh launch
-    // shows a spinner instead of a flash of stale/fake numbers.
-    @Published var isLoading = true
-    @Published var errorMessage: String? = nil
+    // Loading / error state — the view switches on `loadState` so a fresh
+    // launch shows a skeleton, a real failure with no data on screen shows
+    // `.failed`, and a partial failure (some data already loaded) never gets
+    // blanked out from underneath the user — see `hasRenderableContent`.
+    enum LoadState: Equatable {
+        case loading
+        case loaded
+        case failed(String)
+    }
+
+    @Published private(set) var loadState: LoadState = .loading
     @Published private(set) var didLoadToday = false
 
     /// Coalesces the five call sites that can trigger a load so two runs can't
-    /// interleave and flip `isLoading` out from under each other.
+    /// interleave and flip `loadState` out from under each other.
     private var loadTask: Task<Void, Never>?
 
     // Greeting
@@ -105,7 +112,7 @@ final class TodayViewModel: ObservableObject {
     // from calibration status. For now, kept nil so no fabricated hint is shown.
     @Published var planHint: String? = nil
 
-    // Biometrics — seeded `nil` ("not measured"), not `0`. `isLoading`
+    // Biometrics — seeded `nil` ("not measured"), not `0`. `loadState`
     // gating does NOT cover this case: a fresh account's load completes
     // *successfully* with no HRV/sleep/resting-HR data at all, so these
     // published values are exactly what TodayView renders once loading
@@ -235,28 +242,93 @@ final class TodayViewModel: ObservableObject {
     }
 
     private func performLoad() async {
-        // A recovered load heals the banner; Retry is no longer the only way out.
-        errorMessage = nil
-        withAnimation(Theme.Motion.appear) { isLoading = true }
+        if shouldShowLoadingSkeleton {
+            withAnimation(Theme.Motion.appear) { loadState = .loading }
+        }
         didLoadToday = false
         // Run HealthKit + API calls concurrently. /api/today and /api/plan run
         // side by side (not one-after-the-other) — the plan step below waits
         // for both to finish so it can match meal-kind plan rows against
         // /api/today's `plan` array for the MealDetailView flow.
         async let healthTask: () = loadFromHealthKit()
-        async let todayResult = loadTodayResponse()
+        async let todayOutcome = loadTodayResponse()
         async let factsTask: () = loadPendingFacts()
         async let planResult = loadPlanResponse()
 
-        let (_, today, _, plan) = await (healthTask, todayResult, factsTask, planResult)
+        let (_, today, _, plan) = await (healthTask, todayOutcome, factsTask, planResult)
 
-        if let today {
-            applyTodayResponse(today)
+        switch today {
+        case .success(let response):
+            applyTodayResponse(response)
             didLoadToday = true
-        }
-        applyPlanResult(plan, todayPlan: today?.plan ?? [])
+            applyPlanResult(plan, todayPlan: response.plan)
+            withAnimation(Theme.Motion.appear) { loadState = .loaded }
 
-        withAnimation(Theme.Motion.appear) { isLoading = false }
+        case .cancelled:
+            // A stale in-flight load was superseded (tab switch, interrupted
+            // refresh) — never surface this as failure. See
+            // `loadStateAfterCancellation` for the exact rule and why it's
+            // almost always a no-op now that `.loading` is only entered when
+            // the screen was empty to begin with.
+            applyPlanResult(plan, todayPlan: [])
+            let resolved = Self.loadStateAfterCancellation(from: loadState)
+            if resolved != loadState {
+                withAnimation(Theme.Motion.appear) { loadState = resolved }
+            }
+
+        case .failure(let message):
+            applyPlanResult(plan, todayPlan: [])
+            withAnimation(Theme.Motion.appear) {
+                loadState = loadStateAfterFailure(message: message)
+            }
+            if hasRenderableContent {
+                toastMessage = "Couldn't refresh — showing your last data"
+            }
+        }
+    }
+
+    /// True once there's real user data on screen worth protecting from a
+    /// blank-out — used to decide whether a failed load replaces the dashboard
+    /// with `.failed` or just surfaces a non-blocking toast on top of what's
+    /// already there. Deliberately checks the currently-published values (which
+    /// persist across loads until overwritten), not a "did a load ever succeed"
+    /// flag — a pull-to-refresh failure after a prior successful load must find
+    /// this `true` even though this load's `today` fetch just failed.
+    private var hasRenderableContent: Bool {
+        hrv.value != nil
+            || sleep.hours != nil
+            || restingHR.bpm != nil
+            || diet.kcalTarget > 0
+            || !planItems.isEmpty
+    }
+
+    /// Not `private` — lets tests pin the partial-failure rule (a failed load
+    /// must not blank a screen that already has real data on it) without
+    /// driving a live network call. Mirrors the decision `performLoad` makes.
+    func loadStateAfterFailure(message: String) -> LoadState {
+        hasRenderableContent ? .loaded : .failed(message)
+    }
+
+    /// Only swap the dashboard for a skeleton when there is nothing to swap
+    /// out. A refresh over real data leaves it rendered — `.refreshable`
+    /// already draws its own spinner, and replacing a populated dashboard with
+    /// a full-shape skeleton on every pull-to-refresh is exactly the churn this
+    /// state machine exists to remove. Not `private` — lets tests pin that a
+    /// refresh with content on screen never enters `.loading`.
+    var shouldShowLoadingSkeleton: Bool { !hasRenderableContent }
+
+    /// A superseded request (tab switch, interrupted refresh, a `URLError
+    /// .cancelled` from a network transition) carries no data, so it must never
+    /// overwrite what is on screen — and because `performLoad` now only enters
+    /// `.loading` when the screen was empty, there is normally nothing to
+    /// restore. The one case that still needs rescuing is an empty first load
+    /// cancelled before anything resolved it: nothing re-triggers a load until
+    /// the user switches tabs or pulls to refresh, so leaving `.loading` in
+    /// place would strand the skeleton indefinitely. Static and parameterized so
+    /// tests can pin every prior state without a network seam (`loadState` is
+    /// `private(set)`, so a test cannot stage `.loaded` any other way).
+    static func loadStateAfterCancellation(from current: LoadState) -> LoadState {
+        current == .loading ? .loaded : current
     }
 
     // MARK: - Pending facts
@@ -266,7 +338,7 @@ final class TodayViewModel: ObservableObject {
             try await apiClient.resolvePendingFact(id: id, action: action)
             pendingFacts.removeAll { $0.id == id }
         } catch {
-            if !error.isCancellation { errorMessage = error.localizedDescription }
+            if !error.isCancellation { toastMessage = "Couldn't save — try again" }
             print("[Vital] resolvePendingFact failed: \(error.localizedDescription)")
         }
     }
@@ -334,13 +406,24 @@ final class TodayViewModel: ObservableObject {
         }
     }
 
-    private func loadTodayResponse() async -> TodayResponse? {
+    /// Distinguishes a superseded in-flight request (tab switch, interrupted
+    /// pull-to-refresh) from a real failure — `performLoad` must never let a
+    /// cancellation touch `loadState`, but a real failure must. Collapsing
+    /// both into a single `nil` (the old signature) made that distinction
+    /// impossible to act on at the call site.
+    private enum FetchOutcome<T> {
+        case success(T)
+        case failure(String)
+        case cancelled
+    }
+
+    private func loadTodayResponse() async -> FetchOutcome<TodayResponse> {
         do {
-            return try await apiClient.fetchToday()
+            return .success(try await apiClient.fetchToday())
         } catch {
-            if !error.isCancellation { errorMessage = error.localizedDescription }
+            if error.isCancellation { return .cancelled }
             print("[Vital] fetchToday failed: \(error.localizedDescription)")
-            return nil
+            return .failure(error.localizedDescription)
         }
     }
 
