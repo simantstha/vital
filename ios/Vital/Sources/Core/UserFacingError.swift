@@ -1,16 +1,28 @@
 import Foundation
 
-/// Whether the operation that failed could have changed something on the
-/// server. A failed *read* can safely be framed as "nothing changed" — the
-/// user's existing data is untouched. A failed *write* must never be framed
-/// that way: the request may have committed before the failure occurred, so
-/// claiming "your data is safe" (or, just as bad, implying it *wasn't*
-/// saved when it actually was) is an assertion we cannot back up. That
+/// What the user was actually doing, which decides the verb in the copy —
+/// and, more importantly, decides what we are allowed to *claim* happened.
+///
+/// A failed `.read` can safely be framed as "nothing changed" — the user's
+/// existing data is untouched. A failed `.write` must never be framed that
+/// way: the request may have committed before the failure occurred, so
+/// claiming "your data is safe" (or, just as bad, implying it *wasn't* saved
+/// when it actually was) is an assertion we cannot back up. That
 /// fabricated-certainty gap is the release-blocking bug class this mapping
 /// exists to close — see `docs/superpowers/plans/2026-09-05-user-facing-error-copy.md`.
+///
+/// The same rule is why a fetch that only computes a local estimate is
+/// `.read` even though it goes over the network: saying "couldn't save" when
+/// no save was attempted is a small false statement about what happened, and
+/// it is the same bug class in miniature.
+///
+/// `.signIn` exists because "save" and "load" are both wrong on the sign-in
+/// screen — the user isn't storing or retrieving anything, they're trying to
+/// get in.
 enum ErrorContext {
     case read
     case write
+    case signIn
 }
 
 /// Single mapping from any `Error` to short, plain, user-safe copy.
@@ -27,11 +39,15 @@ enum ErrorContext {
 /// Four situations get distinct copy because the user's next action
 /// differs — collapsing them into one generic string would make a fixable
 /// problem (airplane mode) look identical to an outage:
-///  - **Offline** — the user can fix this themselves; say so.
+///  - **Offline** — the user can fix this themselves; say so. Checked first,
+///    so airplane mode on the sign-in screen still reads as offline.
+///  - **Session expired (401/403)** — retry is a dead end; they need to sign
+///    in again, not tap a button that will 401 a second time. Deliberately
+///    *not* applied to `.signIn`: a rejected credential on the sign-in screen
+///    is not an expired session, and "sign in again to continue" there is a
+///    loop with no exit.
 ///  - **Our server failing (5xx)** — not the user's fault; a retry may work
 ///    shortly.
-///  - **Session expired (401/403)** — retry is a dead end; they need to sign
-///    in again, not tap a button that will 401 a second time.
 ///  - **Everything else** (decoding failures, unrecognized errors) — a bug
 ///    on our side. Copy stays generic, but the raw error is still logged in
 ///    full so this stays debuggable in production.
@@ -68,13 +84,16 @@ enum UserFacingError {
         if let apiError = error as? APIError {
             switch apiError {
             case .serverError(let code):
-                if code == 401 || code == 403 {
+                // `context != .signIn`: a 401/403 while signing in means the
+                // credential was rejected, not that a session lapsed. Telling
+                // someone already looking at the sign-in screen to "sign in
+                // again to continue" sends them nowhere — that case falls
+                // through to the sign-in copy below.
+                if (code == 401 || code == 403), context != .signIn {
                     return "Your session expired — sign in again to continue."
                 }
                 if (500...599).contains(code) {
-                    return context == .write
-                        ? "Couldn't save — something went wrong on our end. Try again shortly."
-                        : "Couldn't load — something went wrong on our end. Try again shortly."
+                    return "Couldn't \(verb(context)) — something went wrong on our end. Try again shortly."
                 }
                 return generic(context)
             case .invalidURL:
@@ -96,9 +115,17 @@ enum UserFacingError {
     }
 
     private static func generic(_ context: ErrorContext) -> String {
-        context == .write
-            ? "Couldn't save — try again."
-            : "Couldn't load — try again."
+        "Couldn't \(verb(context)) — try again."
+    }
+
+    /// The one place the per-context wording lives, so the generic and 5xx
+    /// strings can never drift apart when a context is added.
+    private static func verb(_ context: ErrorContext) -> String {
+        switch context {
+        case .read:   return "load"
+        case .write:  return "save"
+        case .signIn: return "sign in"
+        }
     }
 
     private static func isOffline(_ error: Error) -> Bool {

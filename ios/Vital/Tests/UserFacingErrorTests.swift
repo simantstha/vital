@@ -78,6 +78,55 @@ final class UserFacingErrorTests: XCTestCase {
         XCTAssertNotEqual(read, write, "a failed read and a failed write must not collapse into identical copy")
     }
 
+    func testAllThreeContextsProduceDistinctGenericCopy() {
+        struct SomeOtherError: Error {}
+        let copies = [ErrorContext.read, .write, .signIn]
+            .map { UserFacingError.copy(for: SomeOtherError(), context: $0) }
+        XCTAssertEqual(Set(copies).count, 3, "each context must produce its own copy: \(copies)")
+    }
+
+    // MARK: - Sign-in context
+
+    /// "Couldn't save — try again." is wrong on the sign-in screen: the user
+    /// isn't storing anything, they're trying to get in.
+    func testSignInContextProducesSignInCopyNotSaveCopy() {
+        struct SomeOtherError: Error {}
+        let copy = UserFacingError.copy(for: SomeOtherError(), context: .signIn)
+
+        XCTAssertTrue(copy.localizedCaseInsensitiveContains("sign in"), "expected sign-in copy, got: \(copy)")
+        XCTAssertFalse(copy.localizedCaseInsensitiveContains("save"))
+        XCTAssertFalse(copy.localizedCaseInsensitiveContains("load"))
+    }
+
+    func testServerFailureDuringSignInUsesSignInVerbNotSaveOrLoad() {
+        let copy = UserFacingError.copy(for: APIError.serverError(500), context: .signIn)
+        XCTAssertTrue(copy.localizedCaseInsensitiveContains("sign in"), "expected sign-in copy, got: \(copy)")
+        XCTAssertFalse(copy.localizedCaseInsensitiveContains("save"))
+        XCTAssertFalse(copy.localizedCaseInsensitiveContains("load"))
+    }
+
+    /// A 401/403 while signing in is a rejected credential, not a lapsed
+    /// session. "Sign in again to continue" on the sign-in screen itself is a
+    /// loop with no exit, so that case must fall through to sign-in copy.
+    func testUnauthorizedDuringSignInDoesNotClaimSessionExpired() {
+        for code in [401, 403] {
+            let copy = UserFacingError.copy(for: APIError.serverError(code), context: .signIn)
+            XCTAssertFalse(
+                copy.localizedCaseInsensitiveContains("expired"),
+                "a rejected sign-in credential must not be reported as an expired session: \(copy)"
+            )
+            XCTAssertFalse(copy.localizedCaseInsensitiveContains("again to continue"))
+            XCTAssertTrue(copy.localizedCaseInsensitiveContains("sign in"), "expected sign-in copy, got: \(copy)")
+        }
+    }
+
+    /// Offline is checked before the sign-in bucket, so airplane mode on the
+    /// sign-in screen still tells the user the actionable thing.
+    func testOfflineDuringSignInStillReadsAsOffline() {
+        let copy = UserFacingError.copy(for: URLError(.notConnectedToInternet), context: .signIn)
+        XCTAssertTrue(copy.localizedCaseInsensitiveContains("offline") || copy.localizedCaseInsensitiveContains("connection"))
+    }
+
     // MARK: - Already-human-safe APIError cases pass through unchanged
 
     func testAlreadyHumanSafeCasesPassThroughUnchanged() {
@@ -140,7 +189,7 @@ final class UserFacingErrorTests: XCTestCase {
         let statusCodePattern = try! NSRegularExpression(pattern: "\\b\\d{3}\\b")
 
         for error in sampleErrors {
-            for context in [ErrorContext.read, .write] {
+            for context in [ErrorContext.read, .write, .signIn] {
                 let copy = UserFacingError.copy(for: error, context: context)
                 let lowered = copy.lowercased()
 
