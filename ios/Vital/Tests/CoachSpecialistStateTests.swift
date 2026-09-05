@@ -1,3 +1,4 @@
+import Combine
 import XCTest
 @testable import Vital
 
@@ -148,16 +149,16 @@ final class CoachSpecialistStateTests: XCTestCase {
         await viewModel.restoreConversation()
 
         viewModel.performSpecialistAction(.declineReturn)
-        await waitUntil { !viewModel.isPerformingSpecialistAction }
+        await waitForSpecialistActionToSettle(viewModel)
         api.nextMessageEvents = [.handoffCard(second), .handoffCard(first.dismissed)]
         viewModel.input = "Keep coaching"
         viewModel.send()
-        await waitUntil { !viewModel.isStreaming }
+        await waitForStreamToFinish(viewModel)
         XCTAssertEqual(viewModel.pendingHandoffCard, second)
 
         api.nextActionEvents = [.handoffCard(second.dismissed), .personaChanged(runningCoach)]
         viewModel.performSpecialistAction(.declineReturn)
-        await waitUntil { !viewModel.isPerformingSpecialistAction }
+        await waitForSpecialistActionToSettle(viewModel)
 
         XCTAssertEqual(api.actionRequests.map(\.cardOccurrenceId), [
             first.cardOccurrenceId,
@@ -225,7 +226,7 @@ final class CoachSpecialistStateTests: XCTestCase {
 
         viewModel.performSpecialistAction(.acceptHandoff)
         viewModel.performSpecialistAction(.acceptHandoff)
-        await waitUntil { api.actionRequests.count == 1 }
+        await waitForActionRequest(api)
 
         XCTAssertEqual(api.actionRequests.count, 1)
         XCTAssertTrue(viewModel.isPerformingSpecialistAction)
@@ -252,7 +253,7 @@ final class CoachSpecialistStateTests: XCTestCase {
         await viewModel.restoreConversation()
 
         viewModel.performSpecialistAction(.acceptHandoff)
-        await waitUntil { !viewModel.isPerformingSpecialistAction }
+        await waitForSpecialistActionToSettle(viewModel)
 
         XCTAssertEqual(viewModel.specialistState, .activeConsultation(runningCoach))
         XCTAssertTrue(viewModel.rows.contains {
@@ -271,7 +272,7 @@ final class CoachSpecialistStateTests: XCTestCase {
         viewModel.input = "What should I run today?"
 
         viewModel.send()
-        await waitUntil { !viewModel.isStreaming }
+        await waitForStreamToFinish(viewModel)
 
         XCTAssertEqual(viewModel.activePersona, runningCoach)
         XCTAssertEqual(viewModel.specialistState, .activeConsultation(runningCoach))
@@ -291,7 +292,7 @@ final class CoachSpecialistStateTests: XCTestCase {
         viewModel.input = "What should I run?"
 
         viewModel.send()
-        await waitUntil { !viewModel.isStreaming }
+        await waitForStreamToFinish(viewModel)
 
         XCTAssertEqual(viewModel.activePersona, .vital)
         guard let turn = viewModel.rows.compactMap({ row -> AssistantTurn? in
@@ -325,7 +326,7 @@ final class CoachSpecialistStateTests: XCTestCase {
         viewModel.input = "yes"
 
         viewModel.send()
-        await waitUntil { !viewModel.isStreaming }
+        await waitForStreamToFinish(viewModel)
 
         guard let turn = viewModel.rows.compactMap({ row -> AssistantTurn? in
             guard case .assistantTurn(let turn) = row else { return nil }
@@ -349,7 +350,7 @@ final class CoachSpecialistStateTests: XCTestCase {
         viewModel.input = "return to Vital"
 
         viewModel.send()
-        await waitUntil { !viewModel.isStreaming }
+        await waitForStreamToFinish(viewModel)
 
         guard case .assistantTurn(let turn) = viewModel.rows.last else {
             return XCTFail("Expected assistant turn")
@@ -368,7 +369,7 @@ final class CoachSpecialistStateTests: XCTestCase {
         viewModel.input = "Help with this workout"
 
         viewModel.send()
-        await waitUntil { !viewModel.isStreaming }
+        await waitForStreamToFinish(viewModel)
 
         XCTAssertEqual(viewModel.activePersona, .vital)
         guard case .recoverableRollback = viewModel.specialistState else {
@@ -394,7 +395,7 @@ final class CoachSpecialistStateTests: XCTestCase {
         viewModel.input = "Continue with Vital"
 
         viewModel.send()
-        await waitUntil { !viewModel.isStreaming }
+        await waitForStreamToFinish(viewModel)
 
         XCTAssertEqual(viewModel.activePersona, .vital)
         XCTAssertNil(viewModel.pendingHandoffCard)
@@ -419,7 +420,7 @@ final class CoachSpecialistStateTests: XCTestCase {
         viewModel.input = "Continue with Vital"
 
         viewModel.send()
-        await waitUntil { !viewModel.isStreaming }
+        await waitForStreamToFinish(viewModel)
 
         XCTAssertEqual(viewModel.activePersona, .vital)
         XCTAssertNil(viewModel.pendingHandoffCard)
@@ -450,7 +451,7 @@ final class CoachSpecialistStateTests: XCTestCase {
         await viewModel.restoreConversation()
 
         viewModel.performSpecialistAction(.acceptReturn)
-        await waitUntil { !viewModel.isPerformingSpecialistAction }
+        await waitForSpecialistActionToSettle(viewModel)
 
         XCTAssertEqual(viewModel.activePersona, .vital)
         guard case .message(let historical) = viewModel.rows.first else {
@@ -483,7 +484,7 @@ final class CoachSpecialistStateTests: XCTestCase {
         api.nextActionFailure = TestFailure.interrupted
 
         viewModel.performSpecialistAction(.acceptHandoff)
-        await waitUntil { !viewModel.isPerformingSpecialistAction }
+        await waitForSpecialistActionToSettle(viewModel)
 
         XCTAssertEqual(api.restorationRequestCount, 2)
         XCTAssertEqual(viewModel.rows, originalRows)
@@ -516,7 +517,7 @@ final class CoachSpecialistStateTests: XCTestCase {
         await viewModel.restoreConversation()
 
         viewModel.performSpecialistAction(.acceptHandoff)
-        await waitUntil { !viewModel.isPerformingSpecialistAction }
+        await waitForSpecialistActionToSettle(viewModel)
 
         guard case .assistantTurn(let turn) = viewModel.rows.last else {
             return XCTFail("Expected the specialist's opening reply to stream into an assistant turn")
@@ -549,7 +550,7 @@ final class CoachSpecialistStateTests: XCTestCase {
         let rowsBefore = viewModel.rows
 
         viewModel.performSpecialistAction(.declineHandoff)
-        await waitUntil { !viewModel.isPerformingSpecialistAction }
+        await waitForSpecialistActionToSettle(viewModel)
 
         XCTAssertEqual(viewModel.rows, rowsBefore)
         XCTAssertNil(viewModel.pendingHandoffCard)
@@ -595,7 +596,7 @@ final class CoachSpecialistStateTests: XCTestCase {
         })
 
         api.finishHeldAction()
-        await waitUntil { !viewModel.isPerformingSpecialistAction }
+        await waitForSpecialistActionToSettle(viewModel)
         // Once the action settles the composer frees up again — otherwise
         // this guard would strand the user in a permanently disabled UI.
         XCTAssertFalse(viewModel.isBusy)
@@ -638,18 +639,135 @@ final class CoachSpecialistStateTests: XCTestCase {
         XCTAssertEqual(api.restorationRequestCount, 1)
 
         api.finishHeldAction()
-        await waitUntil { !viewModel.isPerformingSpecialistAction }
+        await waitForSpecialistActionToSettle(viewModel)
     }
 
-    private func waitUntil(
-        _ predicate: @escaping @MainActor () -> Bool,
+    // MARK: - Waiting for asynchronous work
+
+    // These replace a `for _ in 0..<100 where !predicate() { await Task.yield() }`
+    // spin-wait, which was the single source of this suite's flakiness: the
+    // same commit produced 5 assertion failures on one run and 0 on the next.
+    //
+    // `Task.yield()` only promises to let *already-runnable* work on this
+    // executor take a turn. It is not a clock and it is not a signal, so a
+    // fixed 100-iteration budget was really a bet that the work under test
+    // would finish within 100 main-actor scheduling turns. On a cold test
+    // process that bet loses: the test host app boots alongside the tests and
+    // floods the main actor with its own callbacks (HealthKit authorization
+    // queries, URLSession failures against a dev server that isn't running),
+    // and the awaited continuation may be resumed from a different executor
+    // entirely, which no number of main-actor yields can hurry along. The
+    // loop then burned all 100 turns without the state ever changing and
+    // reported a false failure — followed by a cascade of downstream
+    // assertions failing against half-finished state, which is why one flaky
+    // wait showed up as five failures.
+    //
+    // Note the same helper passed 25/25 back-to-back iterations in a warm
+    // process; only cold runs failed. That is the signature of a scheduling
+    // bet, not of a race in the code under test.
+    //
+    // The replacement waits on the real signal instead of guessing: the view
+    // model is an `ObservableObject`, so every `@Published` mutation it makes
+    // publishes through `objectWillChange`, and the fake API reports when a
+    // request actually reaches it. Nothing polls, and every wait carries a
+    // deadline so a genuinely stuck condition fails loudly and quickly
+    // instead of hanging or passing by luck.
+
+    /// Waits for the specialist action started by `performSpecialistAction`
+    /// to finish, including the restoration it performs on failure.
+    private func waitForSpecialistActionToSettle(
+        _ viewModel: CoachViewModel,
         file: StaticString = #filePath,
         line: UInt = #line
     ) async {
-        for _ in 0..<100 where !predicate() {
-            await Task.yield()
-        }
-        XCTAssertTrue(predicate(), file: file, line: line)
+        await waitUntil(
+            viewModel,
+            "isPerformingSpecialistAction returns to false",
+            file: file,
+            line: line
+        ) { !viewModel.isPerformingSpecialistAction }
+    }
+
+    /// Waits for the turn started by `send()` to finish streaming, including
+    /// the reveal-buffer flush and the error recovery on a failed stream.
+    private func waitForStreamToFinish(
+        _ viewModel: CoachViewModel,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async {
+        await waitUntil(
+            viewModel,
+            "isStreaming returns to false",
+            file: file,
+            line: line
+        ) { !viewModel.isStreaming }
+    }
+
+    /// Waits until the in-flight specialist action has actually reached the
+    /// API. `performSpecialistAction` dispatches into a `Task`, so the
+    /// request is recorded asynchronously; this awaits the fake's own
+    /// callback rather than watching `actionRequests` change from outside.
+    private func waitForActionRequest(
+        _ api: FakeCoachAPI,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async {
+        guard api.actionRequests.isEmpty else { return }
+        let recorded = expectation(description: "a specialist action reaches the API")
+        recorded.assertForOverFulfill = false
+        api.onActionRequest = { recorded.fulfill() }
+        await fulfillment(of: [recorded], timeout: Self.waitTimeout)
+        api.onActionRequest = nil
+    }
+
+    /// Generous on purpose: it is a deadlock backstop, not a tuning knob.
+    /// Every wait here settles in milliseconds when it settles at all, so a
+    /// long timeout costs nothing on a passing run while still bounding a
+    /// hung one.
+    private static let waitTimeout: TimeInterval = 10
+
+    /// Re-evaluates `predicate` whenever `viewModel` announces a change,
+    /// failing with the awaited condition named if it never holds.
+    private func waitUntil(
+        _ viewModel: CoachViewModel,
+        _ condition: String,
+        timeout: TimeInterval = CoachSpecialistStateTests.waitTimeout,
+        file: StaticString = #filePath,
+        line: UInt = #line,
+        _ predicate: @escaping @MainActor () -> Bool
+    ) async {
+        if predicate() { return }
+
+        let satisfied = expectation(description: condition)
+        // The predicate can hold across several successive published changes;
+        // only the first one matters.
+        satisfied.assertForOverFulfill = false
+
+        let cancellable = viewModel.objectWillChange
+            // `objectWillChange` fires from `willSet`, i.e. *before* the new
+            // value is stored, so evaluating the predicate synchronously here
+            // would still read the pre-change state. Hopping through the main
+            // queue re-checks on the next turn, once the setter — and the rest
+            // of the synchronous work surrounding it — has completed.
+            .receive(on: DispatchQueue.main)
+            .sink { _ in
+                MainActor.assumeIsolated {
+                    if predicate() { satisfied.fulfill() }
+                }
+            }
+        defer { cancellable.cancel() }
+
+        await fulfillment(of: [satisfied], timeout: timeout)
+
+        // `fulfillment` already reports the timeout; this pins the failure to
+        // the awaited condition and to the caller's line rather than to the
+        // helper's.
+        XCTAssertTrue(
+            predicate(),
+            "Timed out after \(timeout)s waiting for \(condition).",
+            file: file,
+            line: line
+        )
     }
 }
 
@@ -677,6 +795,13 @@ final class FakeCoachAPI: CoachAPIProviding {
     var nextActionEvents: [CoachStreamEvent] = []
     var nextActionFailure: Error?
     var actionRequests: [ActionRequest] = []
+
+    /// Fired once per recorded request, so a test can await the action task
+    /// actually reaching the API instead of polling `actionRequests`.
+    /// `performSpecialistAction` records asynchronously, and appending to
+    /// this array publishes nothing the view model observes, so this is the
+    /// only real signal that the request landed.
+    var onActionRequest: (@MainActor () -> Void)? = nil
     private(set) var restorationRequestCount = 0
     var holdActionStreamOpen = false
     private var heldActionContinuation: AsyncThrowingStream<CoachStreamEvent, Error>.Continuation?
@@ -719,6 +844,7 @@ final class FakeCoachAPI: CoachAPIProviding {
             actionId: actionId,
             action: action
         ))
+        onActionRequest?()
         if holdActionStreamOpen {
             return AsyncThrowingStream { continuation in
                 heldActionContinuation = continuation
