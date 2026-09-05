@@ -35,23 +35,24 @@ struct TodayView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: Theme.Spacing.xl) {
                     greetingSection
-                    // Gate the data-bearing content so a fresh launch shows a
-                    // spinner instead of a flash of stale/fake numbers.
-                    if vm.isLoading {
-                        ProgressView()
-                            .frame(maxWidth: .infinity)
-                            .padding(.top, 60)
+                    // Gate the data-bearing content on the tri-state load so a
+                    // fresh launch shows a skeleton, a real failure with no
+                    // data on screen shows `.failed` instead of stacking an
+                    // error card on top of an empty dashboard, and a partial
+                    // failure (some data already loaded) keeps rendering it.
+                    switch vm.loadState {
+                    case .loading:
+                        todaySkeleton
                             .motionTransition(.fade)
-                    } else {
+
+                    case .failed(let message):
+                        ErrorCard(title: "Couldn't load today's data", message: message) {
+                            Task { await vm.loadHealthData() }
+                        }
+                        .motionTransition(.fade)
+
+                    case .loaded:
                         Group {
-                            if let errorMessage = vm.errorMessage {
-                                ErrorCard(title: "Couldn't load today's data", message: errorMessage) {
-                                    Task {
-                                        vm.errorMessage = nil
-                                        await vm.loadHealthData()
-                                    }
-                                }
-                            }
                             calibrationCard
                             pendingFactsBanner
                             // Guarded here (not just inside the view) so an
@@ -294,6 +295,22 @@ private extension TodayView {
                     VitalProgressBar(fraction: vm.calibrationProgress, tint: Theme.Colors.accent, height: 4)
                 }
             }
+        }
+    }
+
+    // ── Loading skeleton ────────────────────────────────────────────────────
+
+    /// Mirrors Today's real geometry once loaded: a coach-bubble block, the
+    /// 3-across HRV/Sleep/Resting-HR metrics row, and a fuel-strip block.
+    var todaySkeleton: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.xl) {
+            SkeletonBlock(height: 70)
+            HStack(spacing: Theme.Spacing.sm) {
+                SkeletonView()
+                SkeletonView()
+                SkeletonView()
+            }
+            SkeletonBlock(height: 90)
         }
     }
 
