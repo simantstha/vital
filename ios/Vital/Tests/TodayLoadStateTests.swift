@@ -94,4 +94,52 @@ final class TodayLoadStateTests: XCTestCase {
         XCTAssertNotEqual(TodayViewModel.LoadState.failed("a"), TodayViewModel.LoadState.failed("b"))
         XCTAssertNotEqual(TodayViewModel.LoadState.loading, TodayViewModel.LoadState.loaded)
     }
+
+    func testCancelledRefreshWithContentOnScreenDoesNotStrandSkeleton() {
+        let result = TodayViewModel.loadStateAfterCancellation(from: .loaded)
+
+        XCTAssertEqual(result, .loaded)
+        XCTAssertNotEqual(result, .loading)
+    }
+
+    func testCancelledFirstLoadRecoversFromLoading() {
+        let result = TodayViewModel.loadStateAfterCancellation(from: .loading)
+
+        XCTAssertEqual(result, .loaded)
+    }
+
+    func testCancelledLoadPreservesFailedState() {
+        let result = TodayViewModel.loadStateAfterCancellation(from: .failed("Server returned HTTP 500."))
+
+        XCTAssertEqual(result, .failed("Server returned HTTP 500."))
+    }
+
+    func testRefreshWithExistingContentNeverEntersLoading() throws {
+        let viewModel = TodayViewModel(fetchStreak: { StreakResponse(streakDays: 0) })
+        let response = try JSONDecoder().decode(TodayResponse.self, from: Data("""
+        {
+          "metrics": {
+            "hrv": {"value": 52, "unit": "ms", "deltaPct": 4},
+            "sleep": {"value": 7.5, "unit": "hours", "deltaPct": 2},
+            "restingHr": {"value": 58, "unit": "bpm", "deltaPct": -1}
+          },
+          "dietBudget": {
+            "targetKcal": 2000, "consumedKcal": 0, "remaining": 2000,
+            "protein": 0, "carbs": 0, "fat": 0
+          },
+          "insight": "",
+          "plan": [],
+          "calibration": null
+        }
+        """.utf8))
+        viewModel.applyTodayResponse(response)
+
+        XCTAssertFalse(viewModel.shouldShowLoadingSkeleton)
+    }
+
+    func testFirstLoadWithNoContentShowsSkeleton() {
+        let viewModel = TodayViewModel(fetchStreak: { StreakResponse(streakDays: 0) })
+
+        XCTAssertTrue(viewModel.shouldShowLoadingSkeleton)
+    }
 }

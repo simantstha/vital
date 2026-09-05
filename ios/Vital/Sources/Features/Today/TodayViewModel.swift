@@ -242,8 +242,9 @@ final class TodayViewModel: ObservableObject {
     }
 
     private func performLoad() async {
-        let wasLoading = (loadState == .loading)
-        withAnimation(Theme.Motion.appear) { loadState = .loading }
+        if shouldShowLoadingSkeleton {
+            withAnimation(Theme.Motion.appear) { loadState = .loading }
+        }
         didLoadToday = false
         // Run HealthKit + API calls concurrently. /api/today and /api/plan run
         // side by side (not one-after-the-other) — the plan step below waits
@@ -265,14 +266,14 @@ final class TodayViewModel: ObservableObject {
 
         case .cancelled:
             // A stale in-flight load was superseded (tab switch, interrupted
-            // refresh) — never surface this as failure or touch loadState;
-            // whatever was on screen stands. The one exception: if this was
-            // the very first load ever and it got cancelled before resolving,
-            // leaving `loadState` at `.loading` would hang the skeleton
-            // forever, so fall through to `.loaded` in that case only.
+            // refresh) — never surface this as failure. See
+            // `loadStateAfterCancellation` for the exact rule and why it's
+            // almost always a no-op now that `.loading` is only entered when
+            // the screen was empty to begin with.
             applyPlanResult(plan, todayPlan: [])
-            if wasLoading {
-                withAnimation(Theme.Motion.appear) { loadState = .loaded }
+            let resolved = Self.loadStateAfterCancellation(from: loadState)
+            if resolved != loadState {
+                withAnimation(Theme.Motion.appear) { loadState = resolved }
             }
 
         case .failure(let message):
@@ -306,6 +307,28 @@ final class TodayViewModel: ObservableObject {
     /// driving a live network call. Mirrors the decision `performLoad` makes.
     func loadStateAfterFailure(message: String) -> LoadState {
         hasRenderableContent ? .loaded : .failed(message)
+    }
+
+    /// Only swap the dashboard for a skeleton when there is nothing to swap
+    /// out. A refresh over real data leaves it rendered — `.refreshable`
+    /// already draws its own spinner, and replacing a populated dashboard with
+    /// a full-shape skeleton on every pull-to-refresh is exactly the churn this
+    /// state machine exists to remove. Not `private` — lets tests pin that a
+    /// refresh with content on screen never enters `.loading`.
+    var shouldShowLoadingSkeleton: Bool { !hasRenderableContent }
+
+    /// A superseded request (tab switch, interrupted refresh, a `URLError
+    /// .cancelled` from a network transition) carries no data, so it must never
+    /// overwrite what is on screen — and because `performLoad` now only enters
+    /// `.loading` when the screen was empty, there is normally nothing to
+    /// restore. The one case that still needs rescuing is an empty first load
+    /// cancelled before anything resolved it: nothing re-triggers a load until
+    /// the user switches tabs or pulls to refresh, so leaving `.loading` in
+    /// place would strand the skeleton indefinitely. Static and parameterized so
+    /// tests can pin every prior state without a network seam (`loadState` is
+    /// `private(set)`, so a test cannot stage `.loaded` any other way).
+    static func loadStateAfterCancellation(from current: LoadState) -> LoadState {
+        current == .loading ? .loaded : current
     }
 
     // MARK: - Pending facts
