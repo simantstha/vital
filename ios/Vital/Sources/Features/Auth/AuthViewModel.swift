@@ -138,8 +138,7 @@ final class AuthViewModel: ObservableObject {
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
-                errorMessage = "Sign-in failed (HTTP \(http.statusCode))."
-                return
+                throw APIError.serverError(http.statusCode)
             }
             let auth = try decoder.decode(AuthResponse.self, from: data)
             KeychainStore.saveSessionToken(auth.token)
@@ -150,7 +149,7 @@ final class AuthViewModel: ObservableObject {
             UIApplication.shared.registerForRemoteNotifications()
             await PushNotificationService.shared.hydratePreferences()
         } catch {
-            errorMessage = "Sign-in failed: \(error.localizedDescription)"
+            errorMessage = UserFacingError.message(for: error, context: .write, tag: "sign-in")
         }
     }
 }

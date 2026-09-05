@@ -79,8 +79,7 @@ final class ProfileViewModel: ObservableObject {
             }
             activityStats = Self.activityCells(from: response.stats)
         } catch {
-            errorMessage = error.localizedDescription
-            print("[Vital] fetchProfile failed: \(error.localizedDescription)")
+            errorMessage = UserFacingError.message(for: error, context: .read, tag: "fetchProfile")
         }
         await loadBudget()
         withAnimation(Theme.Motion.appear) { isLoading = false }

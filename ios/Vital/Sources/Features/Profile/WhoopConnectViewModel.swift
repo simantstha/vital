@@ -82,7 +82,7 @@ final class WhoopConnectViewModel: NSObject, ObservableObject {
             let response = try await apiClient.whoopStatus()
             state = Self.state(from: response)
         } catch {
-            state = .error(error.localizedDescription)
+            state = .error(UserFacingError.message(for: error, context: .read, tag: "whoopStatus"))
         }
     }
 
@@ -100,7 +100,7 @@ final class WhoopConnectViewModel: NSObject, ObservableObject {
             // User dismissed the sheet — friendly error, not a hard failure.
             state = .error("WHOOP connection was cancelled.")
         } catch {
-            state = .error(error.localizedDescription)
+            state = .error(UserFacingError.message(for: error, context: .write, tag: "whoopConnect"))
         }
     }
 
@@ -109,7 +109,7 @@ final class WhoopConnectViewModel: NSObject, ObservableObject {
             try await apiClient.whoopDisconnect()
             state = .notConnected
         } catch {
-            state = .error(error.localizedDescription)
+            state = .error(UserFacingError.message(for: error, context: .write, tag: "whoopDisconnect"))
         }
     }
 

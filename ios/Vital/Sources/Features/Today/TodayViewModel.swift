@@ -422,8 +422,7 @@ final class TodayViewModel: ObservableObject {
             return .success(try await apiClient.fetchToday())
         } catch {
             if error.isCancellation { return .cancelled }
-            print("[Vital] fetchToday failed: \(error.localizedDescription)")
-            return .failure(error.localizedDescription)
+            return .failure(UserFacingError.message(for: error, context: .read, tag: "fetchToday"))
         }
     }
 

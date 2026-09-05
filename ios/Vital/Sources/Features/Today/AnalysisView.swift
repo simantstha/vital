@@ -63,7 +63,7 @@ struct AnalysisView: View {
 
     private func load() async {
         do { analysis = try await APIClient.shared.fetchAnalysis(resource: kind.resource, id: id) }
-        catch { self.error = error.localizedDescription }
+        catch { self.error = UserFacingError.message(for: error, context: .read, tag: "fetchAnalysis") }
         withAnimation(Theme.Motion.appear) { loading = false }
     }
 }

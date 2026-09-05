@@ -166,7 +166,7 @@ final class OnboardingViewModel: ObservableObject {
             )
             return response.ok
         } catch {
-            errorMessage = "Couldn't save your answers: \(error.localizedDescription)"
+            errorMessage = UserFacingError.message(for: error, context: .write, tag: "postOnboarding")
             return false
         }
     }

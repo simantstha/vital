@@ -74,8 +74,7 @@ final class CalendarSyncCoordinator: ObservableObject {
             )
             lastSyncDate = Date()
         } catch {
-            lastSyncError = error.localizedDescription
-            print("[CalendarSync] sync failed: \(error.localizedDescription)")
+            lastSyncError = UserFacingError.message(for: error, context: .write, tag: "CalendarSync")
         }
     }
 
