@@ -270,7 +270,7 @@ final class LogMealViewModel: ObservableObject {
                 applyResult(name: r.name, kcal: r.kcal, p: r.p, c: r.c, f: r.f, source: "text")
             }
         } catch {
-            errorMessage = "Search failed: \(error.localizedDescription)"
+            errorMessage = UserFacingError.message(for: error, context: .read, tag: "searchFood")
         }
     }
 
@@ -386,7 +386,7 @@ final class LogMealViewModel: ObservableObject {
             let r = try await api.photoFood(imageBase64: jpeg.base64EncodedString())
             applyResult(name: r.name, kcal: r.kcal, p: r.p, c: r.c, f: r.f, source: "photo")
         } catch {
-            errorMessage = "Photo analysis failed: \(error.localizedDescription)"
+            errorMessage = UserFacingError.message(for: error, context: .read, tag: "photoFood")
         }
     }
 
@@ -406,7 +406,7 @@ final class LogMealViewModel: ObservableObject {
             // fallback offering text search instead of a bare error string.
             barcodeNotFound = true
         } catch {
-            errorMessage = "Barcode lookup failed: \(error.localizedDescription)"
+            errorMessage = UserFacingError.message(for: error, context: .read, tag: "barcodeFood")
         }
     }
 
@@ -519,7 +519,7 @@ final class LogMealViewModel: ObservableObject {
             isLogged      = true
             ReminderScheduler.shared.mealLogged(on: Date())
         } catch {
-            errorMessage = "Log failed: \(error.localizedDescription)"
+            errorMessage = UserFacingError.message(for: error, context: .write, tag: "logMeal")
         }
     }
 

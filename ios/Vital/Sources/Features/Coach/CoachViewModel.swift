@@ -618,9 +618,10 @@ final class CoachViewModel: ObservableObject {
                     turn.finish()
                     rows.append(.assistantTurn(turn))
                 }
-                errorMessage = error.localizedDescription
+                let text = UserFacingError.message(for: error, context: .write, tag: "coach send")
+                errorMessage = text
                 if receivedVitalRollback {
-                    specialistState = .recoverableRollback(error.localizedDescription)
+                    specialistState = .recoverableRollback(text)
                 }
             }
         }
@@ -751,7 +752,7 @@ final class CoachViewModel: ObservableObject {
                 recomputeSpecialistState()
                 loadOpener()
             } catch {
-                errorMessage = error.localizedDescription
+                errorMessage = UserFacingError.message(for: error, context: .write, tag: "resetCoachConversation")
             }
         }
     }
@@ -863,8 +864,9 @@ final class CoachViewModel: ObservableObject {
                 // transition that may have completed server-side.
                 activePersona = .vital
                 pendingHandoffCard = nil
-                specialistState = .recoverableRollback(error.localizedDescription)
-                errorMessage = error.localizedDescription
+                let text = UserFacingError.message(for: error, context: .write, tag: "coach specialist action")
+                specialistState = .recoverableRollback(text)
+                errorMessage = text
                 hasRestoredConversation = false
                 await restoreConversation(force: true, preserveTranscript: true)
             }

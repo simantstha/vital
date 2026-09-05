@@ -54,8 +54,7 @@ final class MealDetailViewModel: ObservableObject {
             let r = try await api.modifyMeal(name: name, kcal: Double(kcal), instruction: nil)
             apply(r)
         } catch {
-            errorMessage = error.localizedDescription
-            print("[Vital] modifyMeal(estimate) failed: \(error.localizedDescription)")
+            errorMessage = UserFacingError.message(for: error, context: .write, tag: "modifyMeal(estimate)")
         }
     }
 
@@ -73,8 +72,7 @@ final class MealDetailViewModel: ObservableObject {
             recipe = ""
             recipeExpanded = false
         } catch {
-            errorMessage = error.localizedDescription
-            print("[Vital] modifyMeal(edit) failed: \(error.localizedDescription)")
+            errorMessage = UserFacingError.message(for: error, context: .write, tag: "modifyMeal(edit)")
         }
     }
 
@@ -93,8 +91,7 @@ final class MealDetailViewModel: ObservableObject {
         do {
             recipe = try await api.mealRecipe(name: name)
         } catch {
-            errorMessage = error.localizedDescription
-            print("[Vital] mealRecipe failed: \(error.localizedDescription)")
+            errorMessage = UserFacingError.message(for: error, context: .write, tag: "mealRecipe")
         }
     }
 
@@ -117,8 +114,7 @@ final class MealDetailViewModel: ObservableObject {
             didLog = true
             ReminderScheduler.shared.mealLogged(on: Date())
         } catch {
-            errorMessage = error.localizedDescription
-            print("[Vital] logMeal(plan) failed: \(error.localizedDescription)")
+            errorMessage = UserFacingError.message(for: error, context: .write, tag: "logMeal(plan)")
         }
     }
 
