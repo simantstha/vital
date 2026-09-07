@@ -54,6 +54,13 @@ final class HealthKitManager: ObservableObject {
             .appleExerciseTime,
             .flightsClimbed,
             .basalEnergyBurned,
+            // Dietary intake — lets a MyFitnessPal (or similar) user's diet
+            // budget reflect what they actually ate instead of always
+            // showing 0 consumed. Never written (toShare stays empty).
+            .dietaryEnergyConsumed,
+            .dietaryProtein,
+            .dietaryCarbohydrates,
+            .dietaryFatTotal,
         ]
 
         for id in quantityIdentifiers {
@@ -359,6 +366,33 @@ final class HealthKitManager: ObservableObject {
         let (latestHeightCm, latestBodyMassKg) = await (heightTask, massTask)
 
         return (dateOfBirth, biologicalSex, latestHeightCm, latestBodyMassKg)
+    }
+
+    // MARK: - Nutrition source attribution
+
+    /// Names of the HealthKit sources (apps) that wrote dietary energy
+    /// samples in `[from, to)`, excluding this app's own source — i.e. the
+    /// third-party food-logging apps (MyFitnessPal, Cronometer, …) a user has
+    /// writing to Health. Uses `HKSourceQuery` (not a sample query) because
+    /// callers only need distinct source names, not the samples themselves —
+    /// one query returns the full source set for the range regardless of how
+    /// many samples it contains.
+    func nutritionSourceNames(from start: Date, to end: Date) async -> [String] {
+        guard HKHealthStore.isHealthDataAvailable(),
+              let type = HKObjectType.quantityType(forIdentifier: .dietaryEnergyConsumed)
+        else { return [] }
+
+        let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: .strictStartDate)
+
+        return await withCheckedContinuation { continuation in
+            let query = HKSourceQuery(sampleType: type, samplePredicate: predicate) { _, sourcesOrNil, _ in
+                let names = (sourcesOrNil ?? [])
+                    .filter { $0 != HKSource.default() }
+                    .map(\.name)
+                continuation.resume(returning: names)
+            }
+            store.execute(query)
+        }
     }
 
     private func fetchLatestQuantitySample(

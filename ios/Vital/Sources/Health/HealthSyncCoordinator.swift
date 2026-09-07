@@ -281,6 +281,12 @@ final class HealthSyncCoordinator: ObservableObject {
         addQuantity(.appleExerciseTime, key: "sync.anchor.exercise", frequency: .hourly)
         addQuantity(.flightsClimbed, key: "sync.anchor.flights", frequency: .hourly)
         addQuantity(.basalEnergyBurned, key: "sync.anchor.basalEnergy", frequency: .hourly)
+        // Dietary intake — a MyFitnessPal (or similar) entry should wake the
+        // app via background delivery just like any other synced metric.
+        addQuantity(.dietaryEnergyConsumed, key: "sync.anchor.dietaryEnergy", frequency: .hourly)
+        addQuantity(.dietaryProtein, key: "sync.anchor.dietaryProtein", frequency: .hourly)
+        addQuantity(.dietaryCarbohydrates, key: "sync.anchor.dietaryCarbs", frequency: .hourly)
+        addQuantity(.dietaryFatTotal, key: "sync.anchor.dietaryFat", frequency: .hourly)
 
         if let sleepType = HKObjectType.categoryType(forIdentifier: .sleepAnalysis) {
             types.append(SyncType(sampleType: sleepType, anchorKey: "sync.anchor.sleep", frequency: sleepBackgroundFrequency))

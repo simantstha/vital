@@ -64,6 +64,12 @@ const fakeDb = {
       if (table === realSchema.whoop_connections) {
         return { where: () => ({ limit: async () => state.whoopConn }) };
       }
+      if (table === realSchema.daily_metrics) {
+        // lib/brain/nutritionIntake.ts's dietary_* read — no test here stages
+        // HealthKit nutrition data, so every day resolves to 'none'/'logged'
+        // off `state.events` alone, matching this file's pre-resolver behavior.
+        return { where: async () => [] };
+      }
       throw new Error(`unexpected select().from(): ${String(table)}`);
     },
   }),

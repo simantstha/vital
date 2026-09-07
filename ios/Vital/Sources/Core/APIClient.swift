@@ -1012,6 +1012,11 @@ struct DailyIngestDay: Encodable {
     let metrics: DailyIngestMetrics?
     let sleep: DailyIngestSleep?
     let workouts: [DailyIngestWorkout]?
+    /// Names of third-party apps (e.g. "MyFitnessPal") that wrote dietary
+    /// samples to Health in the range this day was fetched from — attached
+    /// to every day in a `buildIngestDays` batch, not just days with
+    /// dietary metrics (see `HealthKitBackfill.buildIngestDays(from:to:)`).
+    let nutrition_sources: [String]?
 }
 
 struct DailyIngestMetrics: Encodable {
@@ -1026,6 +1031,10 @@ struct DailyIngestMetrics: Encodable {
     let exercise_min: Double?
     let flights: Double?
     let basal_energy_kcal: Double?
+    let dietary_energy_kcal: Double?
+    let dietary_protein_g: Double?
+    let dietary_carbs_g: Double?
+    let dietary_fat_g: Double?
 }
 
 struct DailyIngestSleep: Encodable {
@@ -1276,6 +1285,12 @@ struct TodayDietBudget: Decodable {
     let goal: String?
     // Optional for backwards-compat with an older backend during rollout.
     let lowEnergyWarning: LowEnergyWarning?
+    // "logged" | "healthkit" | "none" — where today's `consumedKcal` etc. came
+    // from. Optional: older backends and the local mock omit it entirely.
+    let consumedSource: String?
+    // e.g. "MyFitnessPal" — present only when consumedSource == "healthkit"
+    // and the source app reports a name.
+    let consumedSourceName: String?
 }
 
 struct TodayPlanItem: Decodable {
@@ -1318,6 +1333,9 @@ struct DietBudgetDTO: Decodable {
     let tdee: Int?         // present for auto only
     // Optional for backwards-compat with an older backend during rollout.
     let lowEnergyWarning: LowEnergyWarning?
+    // See `TodayDietBudget.consumedSource` / `.consumedSourceName`.
+    let consumedSource: String?
+    let consumedSourceName: String?
 }
 
 struct DietGoalResponse: Decodable {

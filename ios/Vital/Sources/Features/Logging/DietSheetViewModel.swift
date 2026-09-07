@@ -47,11 +47,30 @@ final class DietSheetViewModel: ObservableObject {
 
     @Published var target: Int
     var remaining: Int {
-        max(0, target - loggedEntries.reduce(0) { $0 + $1.kcal })
+        if consumedSource == "healthkit" {
+            return max(0, target - healthKitKcal)
+        }
+        return max(0, target - loggedEntries.reduce(0) { $0 + $1.kcal })
     }
 
     @Published var loggedEntries: [MealLogEntryDTO] = []
     @Published var selectedSlot: DietSlot = .breakfast
+
+    /// "logged" | "healthkit" | "none" — today's `dietBudget.consumedSource`
+    /// from `/api/today`. When "healthkit", `loggedEntries` is expected to be
+    /// empty (no meal_log events exist for the day) and the sheet shows a
+    /// single read-only summary row instead of the empty-state copy.
+    @Published var consumedSource: String?
+    @Published var consumedSourceName: String?
+    @Published var healthKitKcal: Int = 0
+    @Published var healthKitProtein: Int = 0
+    @Published var healthKitCarbs: Int = 0
+    @Published var healthKitFat: Int = 0
+
+    /// "MyFitnessPal · via Apple Health" or "via Apple Health".
+    var healthKitAttributionLabel: String {
+        HealthAttributionLabel.text(sourceName: consumedSourceName)
+    }
 
     /// The user's own recently logged meals (GET /api/nutrition/recents),
     /// shown as the "log again" list in place of the old hardcoded catalogue.
@@ -106,6 +125,37 @@ final class DietSheetViewModel: ObservableObject {
         // On failure, keep whatever recents we already had — same fail-soft
         // contract as goal/logs above: the sheet degrades to the empty
         // state rather than blanking, and the next open retries.
+
+        await refreshConsumedSource()
+    }
+
+    /// Re-fetches `/api/today` and refreshes `consumedSource` +
+    /// `healthKit*` totals so the sheet reflects whichever side (Vital logs
+    /// vs. HealthKit) the server currently considers authoritative for
+    /// today. `/api/today` is the only endpoint carrying today's *consumed*
+    /// totals + source attribution — the diet-goal fetch has only targets.
+    /// Failure here just means no healthkit summary row shows (falls back to
+    /// the ordinary logged-meals list), never a hard error. Must be called
+    /// after every successful mutation (log/delete), since the server flips
+    /// `consumedSource` between "logged" and "healthkit" as the day's meal
+    /// log goes from empty to non-empty and back.
+    private func refreshConsumedSource() async {
+        if let today = try? await apiClient.fetchToday() {
+            let db = today.dietBudget
+            consumedSource = db.consumedSource
+            consumedSourceName = db.consumedSourceName
+            if db.consumedSource == "healthkit" {
+                healthKitKcal = db.consumedKcal
+                healthKitProtein = db.protein
+                healthKitCarbs = db.carbs
+                healthKitFat = db.fat
+            } else {
+                healthKitKcal = 0
+                healthKitProtein = 0
+                healthKitCarbs = 0
+                healthKitFat = 0
+            }
+        }
     }
 
     // MARK: - Log again (recents)
@@ -147,6 +197,7 @@ final class DietSheetViewModel: ObservableObject {
                 loggedAt: Self.isoFormatter.string(from: Date())
             )
             loggedEntries.append(entry)
+            await refreshConsumedSource()
             toastMessage = "Logged — nice work"
             onRefreshToday()
         } catch {
@@ -183,6 +234,7 @@ final class DietSheetViewModel: ObservableObject {
                 loggedAt: Self.isoFormatter.string(from: Date())
             )
             loggedEntries.append(entry)
+            await refreshConsumedSource()
             customName = ""
             customKcal = ""
             toastMessage = "Logged — nice work"
@@ -199,6 +251,7 @@ final class DietSheetViewModel: ObservableObject {
         loggedEntries.removeAll { $0.id == entry.id }
         do {
             try await apiClient.deleteMealLog(id: entry.id)
+            await refreshConsumedSource()
             onRefreshToday()
         } catch {
             loggedEntries = previous

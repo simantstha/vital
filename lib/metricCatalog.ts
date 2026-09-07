@@ -10,7 +10,7 @@
  * and was the root cause of a since-fixed 60×-sleep-band bug — see
  * lib/trendsResponse.ts and lib/metricCatalog.test.ts's "no offset key" test.
  *
- * Metric universe (19 raw names): the 11 `SCALAR_METRICS` from
+ * Metric universe (23 raw names): the 15 `SCALAR_METRICS` from
  * app/api/ingest/daily/route.ts, `sleep_minutes` (a separate HealthKit
  * ingest path, see db/schema.ts:250), and the 7 `whoop_*` names from
  * lib/whoop/mapping.ts.
@@ -48,6 +48,10 @@ export const METRIC_CATALOG: Record<string, MetricSpec> = {
   exercise_min:       { label: 'Exercise Minutes', storageUnit: 'min',       displayUnit: 'min',      scale: 1,      decimals: 0, source: 'healthkit' },
   flights:            { label: 'Flights Climbed',  storageUnit: 'count',     displayUnit: 'count',    scale: 1,      decimals: 0, source: 'healthkit' },
   basal_energy_kcal:  { label: 'Basal Energy',     storageUnit: 'kcal',      displayUnit: 'kcal',     scale: 1,      decimals: 0, source: 'healthkit' },
+  dietary_energy_kcal:{ label: 'Dietary Energy',   storageUnit: 'kcal',      displayUnit: 'kcal',     scale: 1,      decimals: 0, source: 'healthkit' },
+  dietary_protein_g:  { label: 'Dietary Protein',  storageUnit: 'g',         displayUnit: 'g',        scale: 1,      decimals: 0, source: 'healthkit' },
+  dietary_carbs_g:    { label: 'Dietary Carbs',    storageUnit: 'g',         displayUnit: 'g',        scale: 1,      decimals: 0, source: 'healthkit' },
+  dietary_fat_g:      { label: 'Dietary Fat',      storageUnit: 'g',         displayUnit: 'g',        scale: 1,      decimals: 0, source: 'healthkit' },
 
   // HealthKit — sleep (db/schema.ts:250; not in SCALAR_METRICS, its own ingest path)
   sleep_minutes:      { label: 'Sleep',            storageUnit: 'min',       displayUnit: 'h',        scale: 1 / 60, decimals: 1, source: 'healthkit' },

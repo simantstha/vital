@@ -67,6 +67,9 @@ struct DietCard {
     /// Present when the effective target is at/under the low-energy-
     /// availability floor — see `LowEnergyWarning` in APIClient.swift.
     var lowEnergyWarning: LowEnergyWarning? = nil
+    /// "logged" | "healthkit" | "none" — see `TodayDietBudget.consumedSource`.
+    var consumedSource: String? = nil
+    var consumedSourceName: String? = nil
 }
 
 struct MealRow: Identifiable, Equatable {
@@ -557,7 +560,9 @@ final class TodayViewModel: ObservableObject {
             protein: MacroProgress(current: db.protein, target: proteinTarget),
             carbs:   MacroProgress(current: db.carbs,   target: carbsTarget),
             fat:     MacroProgress(current: db.fat,     target: fatTarget),
-            lowEnergyWarning: db.lowEnergyWarning
+            lowEnergyWarning: db.lowEnergyWarning,
+            consumedSource: db.consumedSource,
+            consumedSourceName: db.consumedSourceName
         )
     }
 

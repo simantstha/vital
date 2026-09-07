@@ -86,6 +86,8 @@ struct TodayView: View {
                                 kcalRemaining: vm.diet.kcalRemaining,
                                 proteinHave: vm.diet.protein.current,
                                 proteinGoal: vm.diet.protein.target,
+                                consumedSource: vm.diet.consumedSource,
+                                consumedSourceName: vm.diet.consumedSourceName,
                                 onOpen: { showLogSheet = true }
                             )
                             if let warning = vm.diet.lowEnergyWarning {

@@ -53,6 +53,11 @@ struct DietDayData {
     let protein: MacroProgress
     let carbs: MacroProgress
     let fat: MacroProgress
+    /// "logged" | "healthkit" | "none" — carried through from the diet-goal
+    /// fetch that produced `goal` in `dietDayData(entries:goal:)`. Drives the
+    /// "via Apple Health" attribution label in `DietBudgetCardView`.
+    var consumedSource: String? = nil
+    var consumedSourceName: String? = nil
 }
 
 // MARK: - Pure helpers (network-free)
@@ -228,7 +233,9 @@ enum LogsPagerSummary {
             remaining:  max(goal.targetKcal - eatenKcal, 0),
             protein:    MacroProgress(current: protein, target: goal.protein),
             carbs:      MacroProgress(current: carbs, target: goal.carbs),
-            fat:        MacroProgress(current: fat, target: goal.fat)
+            fat:        MacroProgress(current: fat, target: goal.fat),
+            consumedSource: goal.consumedSource,
+            consumedSourceName: goal.consumedSourceName
         )
     }
 }

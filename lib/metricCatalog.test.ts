@@ -81,11 +81,12 @@ test('no spec in METRIC_CATALOG has an offset key', () => {
 });
 
 test('every metric in SCALAR_METRICS ∪ {sleep_minutes} ∪ whoop_* has a catalog spec', () => {
-  // app/api/ingest/daily/route.ts:42-54
+  // app/api/ingest/daily/route.ts:42-56
   const SCALAR_METRICS = [
     'hrv_sdnn', 'resting_hr', 'hr_avg', 'steps', 'active_energy_kcal',
     'body_mass_kg', 'vo2_max', 'distance_m', 'exercise_min', 'flights',
-    'basal_energy_kcal',
+    'basal_energy_kcal', 'dietary_energy_kcal', 'dietary_protein_g',
+    'dietary_carbs_g', 'dietary_fat_g',
   ];
   // lib/whoop/mapping.ts:76-119
   const WHOOP_METRICS = [
@@ -96,7 +97,7 @@ test('every metric in SCALAR_METRICS ∪ {sleep_minutes} ∪ whoop_* has a catal
   for (const metric of required) {
     assert.ok(METRIC_CATALOG[metric], `METRIC_CATALOG is missing a spec for "${metric}"`);
   }
-  assert.equal(required.size, 19);
+  assert.equal(required.size, 23);
 });
 
 test('toDisplay throws on an unknown metric rather than silently passing the value through', () => {

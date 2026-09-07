@@ -26,6 +26,13 @@ struct RootView: View {
                 RootTabView()
                     .environmentObject(backfillCoordinator)
                     .task {
+                        // Existing installs never revisit onboarding, so this
+                        // is the only path that re-prompts them for a
+                        // HealthKit type added after their first launch (e.g.
+                        // dietary intake) — must run before `startIfNeeded()`,
+                        // which is a permanent no-op once the 365-day backfill
+                        // has completed once.
+                        await backfillCoordinator.refreshAuthorizationIfNeeded()
                         await backfillCoordinator.startIfNeeded()
                         // Idempotent (guarded internally) — covers a user who
                         // signed in this session, since the AppDelegate path

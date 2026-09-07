@@ -29,29 +29,20 @@
 
 import { NextResponse } from 'next/server';
 import { db, schema } from '@/db';
-import { eq, and, gte, desc } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { getUserIdFromRequest } from '@/lib/auth';
 import { generateDailyBriefFromDb } from '@/lib/brain/brief';
 import { getDailyBrief, upsertDailyBrief } from '@/lib/brain/dailyBriefRepository';
 import { getCalibration } from '@/lib/brain/baselines';
 import { queryMetricPoints, type MetricPoint } from '@/lib/brain/tools';
 import { resolveDietBudget } from '@/lib/brain/dietBudget';
+import { resolveDailyIntake } from '@/lib/brain/nutritionIntake';
 import { localDayKey, pickTimeZone, isValidTimeZone } from '@/lib/localDay';
 import { resolveUnitSystem } from '@/lib/units';
 
 export const dynamic = 'force-dynamic';
 
 // ── Payload helpers ─────────────────────────────────────────────────────────
-
-function pl(payload: unknown): Record<string, unknown> {
-  return payload !== null && typeof payload === 'object' && !Array.isArray(payload)
-    ? (payload as Record<string, unknown>)
-    : {};
-}
-
-function num(v: unknown): number | undefined {
-  return typeof v === 'number' ? v : undefined;
-}
 
 function deltaPct(current: number | null, prior: number | null): number | null {
   if (current == null || prior == null || prior === 0) return null;
@@ -90,24 +81,13 @@ export async function GET(request: Request): Promise<NextResponse> {
   // current zone as ?tz= on every request, so this tracks travel automatically.
   const paramTz = new URL(request.url).searchParams.get('tz');
   const now = new Date();
-  // Pull a generous window (a local day starts at most ~14h from UTC midnight,
-  // well inside this) — we refine to "today" by local-day key in JS below.
-  const utcMidnight = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-  const threeDaysAgo = new Date(utcMidnight);
-  threeDaysAgo.setUTCDate(threeDaysAgo.getUTCDate() - 3);
 
   // ── DB read (fast). The LLM brief is served from cache, never awaited here ─
-  let events: (typeof schema.events.$inferSelect)[];
   let calibration: Awaited<ReturnType<typeof getCalibration>>;
   let hrvPts: MetricPoint[], rhrPts: MetricPoint[], sleepPts: MetricPoint[];
   let userRow: (typeof schema.users.$inferSelect) | undefined;
   try {
-    [events, calibration, hrvPts, rhrPts, sleepPts, userRow] = await Promise.all([
-      db
-        .select()
-        .from(schema.events)
-        .where(and(eq(schema.events.user_id, userId), gte(schema.events.timestamp, threeDaysAgo)))
-        .orderBy(desc(schema.events.timestamp)),
+    [calibration, hrvPts, rhrPts, sleepPts, userRow] = await Promise.all([
       getCalibration(userId),
       // Biometric cards read the aggregated daily_metrics store — the same
       // source Trends and the coach data-tools use — so all surfaces agree.
@@ -121,11 +101,9 @@ export async function GET(request: Request): Promise<NextResponse> {
     return NextResponse.json({ error: `DB read error: ${String(err)}` }, { status: 500 });
   }
 
-  // ── Partition by the user's local calendar day (events power the diet
-  //    budget only). Prefer the fresh request tz, else the stored one, else UTC.
+  // Prefer the fresh request tz, else the stored one, else UTC.
   const tz = pickTimeZone(paramTz, userRow?.timezone);
   const dayKey = localDayKey(now, tz);
-  const todayEvents = events.filter(e => localDayKey(e.timestamp, tz) === dayKey);
 
   // Travel-aware: persist the device's current zone so background jobs
   // (/api/brief) compute the same local day. Fire-and-forget; this response
@@ -146,8 +124,11 @@ export async function GET(request: Request): Promise<NextResponse> {
 
   // ── Diet budget ──────────────────────────────────────────────────────────
   // Target + macro targets come from the shared resolver (user override, else
-  // auto-calculated from goal + weight). Consumed macros are summed from
-  // today's meal_logged events.
+  // auto-calculated from goal + weight). Consumed macros come from
+  // resolveDailyIntake: today's meal_logged events if any exist, else
+  // HealthKit's dietary_* metrics (e.g. synced from MyFitnessPal) if a
+  // nonzero reading exists, else zero — see lib/brain/nutritionIntake.ts for
+  // the full precedence and why a >0 guard gates the HealthKit fallback.
   const budget = userRow
     ? await resolveDietBudget(userRow, userId)
     : await resolveDietBudget(
@@ -155,14 +136,12 @@ export async function GET(request: Request): Promise<NextResponse> {
         userId,
       );
 
-  let consumedKcal = 0, consumedProtein = 0, consumedCarbs = 0, consumedFat = 0;
-  for (const e of todayEvents.filter(e => e.type === 'meal_logged')) {
-    const p   = pl(e.payload);
-    consumedKcal    += Math.round(num(p.kcal) ?? num(p.calories) ?? 0);
-    consumedProtein += Math.round(num(p.p)    ?? num(p.protein)  ?? 0);
-    consumedCarbs   += Math.round(num(p.c)    ?? num(p.carbs)    ?? 0);
-    consumedFat     += Math.round(num(p.f)    ?? num(p.fat)      ?? 0);
-  }
+  const intakeByDay = await resolveDailyIntake(userId, [dayKey], tz ?? 'UTC');
+  const intake = intakeByDay.get(dayKey)!;
+  const consumedKcal    = intake.kcal;
+  const consumedProtein = intake.protein;
+  const consumedCarbs   = intake.carbs;
+  const consumedFat     = intake.fat;
 
   // ── Brief (insight + plan) — persisted in Postgres; regenerated in the
   //    background on a miss. The proactive worker pre-warms this at the
@@ -217,6 +196,12 @@ export async function GET(request: Request): Promise<NextResponse> {
       targetKcal:    budget.targetKcal,
       consumedKcal,
       remaining:     Math.max(0, budget.targetKcal - consumedKcal),
+      // Which source resolveDailyIntake used for consumedKcal/protein/carbs/fat
+      // above — 'logged' (Vital meal log), 'healthkit' (e.g. MyFitnessPal via
+      // Apple Health), or 'none'. sourceName is the logging app name when
+      // known (HealthKit only), else null.
+      consumedSource:     intake.source,
+      consumedSourceName: intake.sourceName,
       // Macro TARGETS (from the resolver) — the iOS app used to derive these
       // from a fixed 30/40/30 split; now they're server-authoritative.
       proteinTarget: budget.protein,
