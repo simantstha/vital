@@ -498,7 +498,7 @@ export function benjaminiHochberg(pValues: number[], q: number): boolean[] {
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `node --import tsx --test lib/insights/stats.test.ts`
-Expected: PASS, 13 tests.
+Expected: PASS, 17 tests (6 from Task 1, 11 added here).
 
 - [ ] **Step 5: Commit**
 
