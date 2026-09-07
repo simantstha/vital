@@ -2091,8 +2091,13 @@ test('the full battery reports almost nothing on pure noise', () => {
   // A random walk genuinely drifts, so a small number of level_shift/trend
   // findings are real statements about that walk and are not failures. What
   // must NOT happen is the engine finding something for most users.
+  // Bound deliberately tight. The observed value is 0/40, and the mutations
+  // this guards against produce 3689 (correction removed) and 198 (BH removed)
+  // findings — so there is no legitimate pressure on this bound, and slack here
+  // only buys a blind spot. An earlier 35% bar would have let a regression at
+  // 10/40 users pass silently, which is a canary certifying safety falsely.
   assert.ok(
-    usersWithAnyFinding / USERS < 0.35,
+    usersWithAnyFinding / USERS < 0.10,
     `engine spoke for ${usersWithAnyFinding}/${USERS} pure-noise users (${totalFindings} findings) — it is inventing patterns`,
   );
 });
@@ -2110,8 +2115,9 @@ test('the cross-lag sweep in particular finds almost nothing on noise', () => {
 
   // This is the sweep that would confabulate hardest without BH control:
   // ~150 hypotheses per user, ~6000 across the batch.
+  // Same reasoning: observed 0, mutation produces 3689. Tight by design.
   assert.ok(
-    crossLagFindings / USERS < 0.5,
+    crossLagFindings / USERS < 0.1,
     `cross-lag produced ${crossLagFindings} findings across ${USERS} noise users — the FDR correction is not holding`,
   );
 });
