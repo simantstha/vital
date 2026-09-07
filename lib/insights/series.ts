@@ -35,6 +35,17 @@ export function densify(
   return points;
 }
 
+/** Metrics with enough history for the engine to reason about, per `baselines`. */
+export async function establishedMetrics(userId: string): Promise<Set<string>> {
+  const { db, schema } = await import('@/db');
+
+  const rows = await db
+    .select({ metric: schema.baselines.metric })
+    .from(schema.baselines)
+    .where(and(eq(schema.baselines.user_id, userId), eq(schema.baselines.established, true)));
+  return new Set(rows.map((row) => row.metric));
+}
+
 /** Loads dense series for the given metrics over the window ending at endDay. */
 export async function loadSeries(
   userId: string,
