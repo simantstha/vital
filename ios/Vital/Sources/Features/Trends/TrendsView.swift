@@ -8,6 +8,12 @@ struct TrendsView: View {
     /// policy allows a haptic on (never data arriving from `vm.load()`).
     @State private var tileTapTick = false
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Links each tile's `.matchedTransitionSource` to the destination's
+    /// `.navigationTransition(.zoom(...))`. One namespace for the whole grid
+    /// is correct here — the metric key (already unique per tile) is what
+    /// disambiguates which tile is zooming, not the namespace.
+    @Namespace private var trendsZoomNamespace
 
     /// Single column at accessibility Dynamic Type sizes — a 2-up tile is
     /// already tight at the default text size (see `MetricTileView`'s chip
@@ -66,7 +72,16 @@ struct TrendsView: View {
                 }
             }
             .navigationDestination(for: String.self) { metricKey in
-                MetricDetailView(metricKey: metricKey)
+                // Reduce Motion: fall back to the default push rather than
+                // forcing a zoom — `.navigationTransition` is generic over
+                // the concrete transition type, so the two branches must be
+                // separate view-builder cases, not a ternary on the value.
+                if reduceMotion {
+                    MetricDetailView(metricKey: metricKey)
+                } else {
+                    MetricDetailView(metricKey: metricKey)
+                        .navigationTransition(.zoom(sourceID: metricKey, in: trendsZoomNamespace))
+                }
             }
         }
         .task {
@@ -198,5 +213,6 @@ private extension TrendsView {
             MetricTileView(tile: tile)
         }
         .buttonStyle(TilePressStyle())
+        .matchedTransitionSource(id: tile.key, in: trendsZoomNamespace)
     }
 }
