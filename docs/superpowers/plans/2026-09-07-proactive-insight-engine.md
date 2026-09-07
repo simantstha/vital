@@ -1309,11 +1309,17 @@ test('cross-lag skips pairs with too few overlapping observations', () => {
 });
 
 test('cross-lag pairs values by date, not by array position', () => {
-  // A gap in the input must not silently shift the outcome alignment.
+  // One missing input day (daysAgo=40) must not shift the outcome alignment.
+  // Date-joining gives exactly 89 pairs at lag 0 (90 days less the gap) and 88
+  // at lag 1 (the gap, plus the final day whose D+1 falls outside the window).
+  // An index-join would yield 89 at both lags while silently correlating
+  // mismatched days — which is precisely how a detector manufactures a
+  // relationship that does not exist. Assert the counts, not just a bound.
   const input = generated('steps', (daysAgo) => (daysAgo === 40 ? null : 8000 + (daysAgo % 7) * 500));
   const outcome = generated('sleep_minutes', (daysAgo) => 400 + ((daysAgo % 7) * 500) / 100);
   const findings = detectCrossLag([input], [outcome]);
-  for (const finding of findings) assert.ok(finding.n <= 90);
+  assert.equal(findings.find((f) => f.detail.lag === 0)?.n, 89);
+  assert.equal(findings.find((f) => f.detail.lag === 1)?.n, 88);
 });
 
 test('day-of-week finds a planted weekend effect', () => {
