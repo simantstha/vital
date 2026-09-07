@@ -1329,8 +1329,14 @@ test('day-of-week finds a planted weekend effect', () => {
   assert.equal(finding.signature, 'day_of_week:sleep_minutes');
 });
 
-test('day-of-week stays quiet when every weekday looks the same', () => {
-  assert.equal(detectDayOfWeek(generated('sleep_minutes', (daysAgo) => 420 + (daysAgo % 4))), null);
+test('day-of-week finds nothing convincing when every weekday looks the same', () => {
+  // The 4-day value cycle and the 7-day week have lcm 28 across a 90-day
+  // window, so weekday means genuinely differ by a hair. The hypothesis was
+  // testable and was tested, so a candidate is emitted and counts toward m —
+  // it simply has no support behind it.
+  const finding = detectDayOfWeek(generated('sleep_minutes', (daysAgo) => 420 + (daysAgo % 4)));
+  assert.ok(finding, 'expected a candidate, since the hypothesis was tested');
+  assert.ok(finding.pValue !== null && finding.pValue > 0.2);
 });
 
 test('day-of-week stays quiet without all seven weekdays covered', () => {
@@ -1641,6 +1647,7 @@ Expected: FAIL — cannot find module `./evidence`.
 - [ ] **Step 3: Write minimal implementation**
 
 ```typescript
+import { MIN_ABS_RHO } from './detectors';
 import { benjaminiHochberg } from './stats';
 import type { Finding } from './types';
 
@@ -1649,7 +1656,8 @@ export const FDR_Q = 0.10;
 
 /** Minimum |effect| per finding kind, applied independently of significance. */
 export const MIN_LEVEL_SHIFT_SD = 0.8;
-export const MIN_CROSS_LAG_RHO = 0.35;
+/** Single source of truth lives in detectors.ts — do not fork this threshold. */
+export const MIN_CROSS_LAG_RHO = MIN_ABS_RHO;
 export const MIN_DAY_OF_WEEK_SPREAD = 0;   // magnitude is metric-specific; significance carries this one
 
 function passesEffectFloor(finding: Finding): boolean {
