@@ -11,12 +11,23 @@ export const MIN_LEVEL_SHIFT_SD = 0.8;
 export const MIN_CROSS_LAG_RHO = MIN_ABS_RHO;
 export const MIN_DAY_OF_WEEK_SPREAD = 0;   // magnitude is metric-specific; significance carries this one
 
+/**
+ * Trend slopes are standardised to SD-per-week by detectTrend, so this floor is
+ * comparable across metrics. 0.15 SD/week is roughly 0.65 SD/month — enough
+ * movement to be worth a person's attention. Without a floor here, a
+ * statistically significant but clinically meaningless drift ("your resting
+ * heart rate is trending up", meaning 0.2 bpm across a month) reaches the user
+ * as an insight. level_shift and cross_lag have always had such a floor; trend
+ * did not, which was an asymmetry rather than a decision.
+ */
+export const MIN_TREND_SD_PER_WEEK = 0.15;
+
 function passesEffectFloor(finding: Finding): boolean {
   switch (finding.kind) {
     case 'level_shift': return Math.abs(finding.effect) >= MIN_LEVEL_SHIFT_SD;
     case 'cross_lag':   return Math.abs(finding.effect) >= MIN_CROSS_LAG_RHO;
     case 'day_of_week': return Math.abs(finding.effect) > MIN_DAY_OF_WEEK_SPREAD;
-    case 'trend':       return finding.effect !== 0;
+    case 'trend':       return Math.abs(finding.effect) >= MIN_TREND_SD_PER_WEEK;
     case 'cadence_break': return true;      // the rule itself is the threshold
     default: return false;
   }

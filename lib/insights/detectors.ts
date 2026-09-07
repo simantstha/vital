@@ -171,18 +171,29 @@ export function detectTrend(series: MetricSeries): Finding | null {
   const nEff = effectiveSampleSize(n, lag1Autocorrelation(ys));
   const pValue = t === 0 ? rawP : studentTTwoSidedP(t, Math.max(1, nEff - 2));
 
+  // A raw OLS slope is in the metric's own units, so no cross-metric floor can
+  // be written against it — which is why trend alone had no effect floor while
+  // level_shift and cross_lag did. Standardising to SD-per-week makes the
+  // magnitude comparable across metrics, so evidence.ts can hold trend to the
+  // same kind of bar and a significant-but-meaningless drift (resting heart
+  // rate "trending up" by 0.2 bpm across a month) stops reaching the user.
+  const windowSd = sd(ys);
+  if (windowSd === 0) return null;          // no variation: nothing to trend against
+  const effect = (slope * 7) / windowSd;    // SD per week, comparable across metrics
+
   const direction = slope < 0 ? 'down' : 'up';
   return {
     kind: 'trend',
     signature: `trend:${series.metric}:${direction}`,
     metrics: [series.metric],
-    effect: slope,
-    effectLabel: `${slope > 0 ? '+' : ''}${(slope * 7).toFixed(1)} per week`,
+    effect,
+    effectLabel: `${effect > 0 ? '+' : ''}${effect.toFixed(2)} SD per week`,
     n,
     pValue,
     detail: {
       slopePerDay: Number(slope.toFixed(4)),
       slopePerWeek: Number((slope * 7).toFixed(2)),
+      sdPerWeek: Number(effect.toFixed(3)),
       observedDays: n,
     },
   };
