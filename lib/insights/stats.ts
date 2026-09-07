@@ -48,7 +48,13 @@ function incompleteBeta(x: number, a: number, b: number): number {
   d = 1 / d;
   let result = d;
 
-  for (let i = 1; i <= 300; i += 1) {
+  // The loop starts at i = 2, NOT i = 1. The i = 1 term evaluates to
+  // -((a+b)x)/(a+1), which is exactly what `d`'s initialization above already
+  // folded in; recomputing it corrupts every subsequent convergent and makes
+  // the result wrong by orders of magnitude in the tail. i = 2 yields
+  // (b-1)x/((a+1)(a+2)), which is the first loop term in Numerical Recipes'
+  // betacf. Verify any change here against an independent implementation.
+  for (let i = 2; i <= 300; i += 1) {
     const m = Math.floor(i / 2);
     let numerator: number;
     if (i % 2 === 0) {
@@ -66,7 +72,7 @@ function incompleteBeta(x: number, a: number, b: number): number {
     if (Math.abs(1 - delta) < 1e-12) break;
   }
 
-  return front * (result - 1);
+  return front * result;
 }
 
 /** Two-sided p-value for a Student t statistic. */
@@ -75,7 +81,7 @@ export function studentTTwoSidedP(t: number, df: number): number {
   if (t === 0) return 1;
   const x = df / (df + t * t);
   const p = incompleteBeta(x, df / 2, 0.5);
-  return Math.min(1, Math.max(0, Math.abs(p)));
+  return Math.min(1, Math.max(0, p));
 }
 
 export interface SlopeResult { slope: number; pValue: number; n: number }

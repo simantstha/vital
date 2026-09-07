@@ -22,6 +22,16 @@ test('two-sided t p-value matches known reference values', () => {
   assert.ok(studentTTwoSidedP(10, 10) < 1e-5);
 });
 
+test('t p-values are correct at realistic degrees of freedom, not just df=10', () => {
+  // The perfect-fit tests short-circuit before studentTTwoSidedP is ever
+  // called, so without these the safety-critical tail behaviour is exercised at
+  // exactly one point. Reference values from the standard incomplete beta.
+  assert.ok(Math.abs(studentTTwoSidedP(1, 1) - 0.5) < 0.001);        // Cauchy, exact 0.5
+  assert.ok(Math.abs(studentTTwoSidedP(2, 20) - 0.0593) < 0.001);
+  assert.ok(Math.abs(studentTTwoSidedP(4, 100) - 0.000121) < 0.00002);
+  assert.ok(Math.abs(studentTTwoSidedP(50, 1) - 0.0127) < 0.001);
+});
+
 test('olsSlope recovers a planted slope and calls it significant', () => {
   const xs = Array.from({ length: 30 }, (_, i) => i);
   const ys = xs.map((x) => 3 * x + 10);
