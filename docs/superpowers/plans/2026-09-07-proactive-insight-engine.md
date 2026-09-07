@@ -1076,8 +1076,16 @@ test('level shift finds a planted drop in the last week', () => {
   assert.ok(finding.pValue !== null && finding.pValue < 0.05);
 });
 
-test('level shift stays quiet on a stable series', () => {
-  assert.equal(detectLevelShift(generated('hrv_sdnn', (daysAgo) => 60 + ((daysAgo % 5) - 2))), null);
+test('level shift on a stable series yields only a small, unconvincing candidate', () => {
+  // Detectors emit every hypothesis they TEST; they do not decide what is worth
+  // saying. Gating happens in evidence.ts, which must correct over the full
+  // family — so a stable series still produces a candidate, it just fails the
+  // downstream floor. Pre-filtering here would shrink m and make the
+  // false-discovery-rate correction anti-conservative.
+  const finding = detectLevelShift(generated('hrv_sdnn', (daysAgo) => 60 + ((daysAgo % 5) - 2)));
+  assert.ok(finding, 'expected a candidate, since the hypothesis was tested');
+  assert.ok(Math.abs(finding.effect) < 0.8, 'effect must fail the downstream floor');
+  assert.ok(finding.pValue !== null && finding.pValue > 0.05);
 });
 
 test('level shift stays quiet when the baseline has no variation', () => {
@@ -1284,10 +1292,13 @@ test('cross-lag finds a planted next-day relationship', () => {
   assert.equal(lagOne.signature, 'cross_lag:whoop_day_strain:whoop_recovery:1:down');
 });
 
-test('cross-lag reports nothing for unrelated series', () => {
+test('cross-lag finds nothing convincing in unrelated series', () => {
+  // Candidates are still emitted (they are tested hypotheses and must count
+  // toward m); none of them should clear the magnitude the gate demands.
   const strain = generated('whoop_day_strain', (daysAgo) => 5 + (daysAgo % 10));
   const recovery = generated('whoop_recovery', (daysAgo) => 60 + ((daysAgo * 7) % 11));
   const findings = detectCrossLag([strain], [recovery]);
+  assert.ok(findings.length > 0, 'tested pairs must be emitted even when unimpressive');
   assert.deepEqual(findings.filter((f) => Math.abs(f.effect) >= 0.35), []);
 });
 
@@ -1410,8 +1421,14 @@ export function detectCrossLag(inputs: MetricSeries[], outcomes: MetricSeries[])
         }
         if (xs.length < MIN_PAIRS) continue;
 
+        // Every pair we could test is a hypothesis and MUST be emitted, even
+        // when rho is tiny. Dropping unimpressive pairs here would shrink the
+        // family size m that evidence.ts corrects over — and because |rho| and
+        // the p-value move together, that selection makes Benjamini-Hochberg
+        // anti-conservative. The MIN_PAIRS check above is different in kind: a
+        // pair with too little overlap was never testable, so it is genuinely
+        // not part of the family.
         const { rho, pValue, n } = spearman(xs, ys);
-        if (Math.abs(rho) < MIN_ABS_RHO) continue;
 
         const direction = rho < 0 ? 'down' : 'up';
         findings.push({
@@ -1658,19 +1675,25 @@ function passesEffectFloor(finding: Finding): boolean {
  * low-confidence tier eventually gets spoken aloud.
  */
 export function applyEvidenceGate(findings: Finding[], establishedMetrics: Set<string>): Finding[] {
-  const eligible = findings
-    .filter((f) => f.metrics.every((metric) => establishedMetrics.has(metric)))
-    .filter(passesEffectFloor);
+  // Establishment is a VALIDITY filter: a metric with no established baseline
+  // was never a testable hypothesis, so it never belonged to the family and
+  // removing it does not bias the correction.
+  const eligible = findings.filter((f) => f.metrics.every((metric) => establishedMetrics.has(metric)));
 
   const hypotheses = eligible.filter((f) => f.pValue !== null);
   const rules = eligible.filter((f) => f.pValue === null);
 
-  if (hypotheses.length === 0) return rules;
+  if (hypotheses.length === 0) return rules.filter(passesEffectFloor);
 
+  // ORDER IS LOAD-BEARING: correct over the FULL family first, then apply the
+  // effect floor to the survivors. Applying the floor first would shrink m by
+  // selecting on a quantity that moves with the p-value, which makes
+  // Benjamini-Hochberg anti-conservative — the precise failure it exists to
+  // prevent. Never reorder these two steps.
   const rejected = benjaminiHochberg(hypotheses.map((f) => f.pValue as number), FDR_Q);
-  const survivors = hypotheses.filter((_, index) => rejected[index]);
+  const survivors = hypotheses.filter((_, index) => rejected[index]).filter(passesEffectFloor);
 
-  return [...rules, ...survivors];
+  return [...rules.filter(passesEffectFloor), ...survivors];
 }
 ```
 
