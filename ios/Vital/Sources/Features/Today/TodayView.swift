@@ -78,6 +78,9 @@ struct TodayView: View {
                             if !CoachBubble.isEmpty(vm.coachInsight) {
                                 CoachBubble(message: vm.coachInsight)
                             }
+                            if vm.showHealthKitRecoveryBanner {
+                                healthKitRecoveryBanner
+                            }
                             metricsGrid
                             FuelStripView(
                                 kcalRemaining: vm.diet.kcalRemaining,
@@ -246,6 +249,45 @@ private extension TodayView {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    // ── HealthKit recovery banner ───────────────────────────────────────────
+    //
+    // Shown only when `vm.showHealthKitRecoveryBanner` infers a probable
+    // denial (asked once, zero data anywhere) — see
+    // `TodayViewModel.shouldShowHealthKitRecoveryBanner`. The copy never
+    // asserts the user denied anything, since a fresh Health store with no
+    // data yet looks identical from here; it states what's observable and
+    // offers a real way back for the case where it *was* a denial. There is
+    // no public API to deep-link straight to this app's row in Health's
+    // Sharing screen (verified against the UIKit SDK headers), so the
+    // button opens the Health app itself and the message spells out the
+    // remaining taps. If the Health app is not available on the device, the
+    // button is hidden and only the written instructions are shown.
+    var healthKitRecoveryBanner: some View {
+        VStack(spacing: Theme.Spacing.sm) {
+            CautionBanner(
+                title: "Vital isn't seeing your Health data",
+                message: "That's the same whether Health access wasn't granted or nothing's logged yet. Open Health, tap your profile icon, then Apps → Vital to check."
+            )
+            if HealthKitManager.canOpenHealthApp() {
+                Button {
+                    HealthKitManager.openHealthApp()
+                } label: {
+                    Text("Open Health")
+                        .font(Theme.Typography.bodySmall)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(Theme.Colors.onAccent)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, Theme.Spacing.sm + 2)
+                        .background(
+                            RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
+                                .fill(Theme.Colors.accent)
+                        )
+                }
+                .buttonStyle(.plain)
             }
         }
     }
