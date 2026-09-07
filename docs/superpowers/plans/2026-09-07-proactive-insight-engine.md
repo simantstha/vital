@@ -1725,6 +1725,228 @@ git commit -m "feat(insights): gate findings on establishment, effect size, and 
 
 ---
 
+## Task 9A: Autocorrelation correction (effective sample size)
+
+**Added mid-execution.** The null-data canary (Task 10) was run against the
+engine as built and certified **51–79% of findings on pure noise**: `trend`
+565/720, `level_shift` 485/720, `cross_lag` 3325/6480, with 40/40 synthetic
+users receiving a finding. `day_of_week` scored 0/720 and `cadence_break` never
+fired.
+
+**Root cause.** Every failing detector uses a parametric test that assumes
+independent observations. Ninety consecutive daily health measurements are not
+ninety independent ones — body mass is nearly a random walk, HRV and resting
+heart rate are strongly serially correlated. Regressing an autocorrelated series
+on time, or correlating two of them, produces spuriously significant results.
+`day_of_week` is immune because Kruskal–Wallis across weekday buckets tests
+nothing time-ordered, which corroborates the diagnosis.
+
+This is an engine defect, not a harsh null. Real health data is autocorrelated
+too, so the engine would over-report on real users — less visibly, which is
+worse.
+
+**Files:**
+- Modify: `lib/insights/stats.ts` (add three helpers; add `t` to `SlopeResult`)
+- Modify: `lib/insights/detectors.ts` (thread the correction into three detectors)
+- Test: `lib/insights/stats.test.ts`, `lib/insights/detectors.test.ts` (append)
+
+**Interfaces:**
+- Produces: `lag1Autocorrelation(xs: number[]): number`, `effectiveSampleSize(n: number, r: number): number`, `effectiveSampleSizePair(n: number, rx: number, ry: number): number`; `SlopeResult` gains `t: number`.
+
+**Acceptance criterion: the Task 10 canary must pass**, including its third test
+(a genuinely planted effect is still found). Over-correcting into muteness is a
+failure too.
+
+- [ ] **Step 1: Write the failing tests for the helpers**
+
+```typescript
+import { lag1Autocorrelation, effectiveSampleSize, effectiveSampleSizePair } from './stats';
+
+test('lag-1 autocorrelation is ~0 for alternating data and high for a random walk', () => {
+  const alternating = Array.from({ length: 60 }, (_, i) => (i % 2 === 0 ? 1 : -1));
+  assert.ok(lag1Autocorrelation(alternating) < 0.05); // negative r clamps to 0
+
+  let value = 0;
+  const walk = Array.from({ length: 200 }, (_, i) => { value += ((i * 37) % 11) - 5; return value; });
+  assert.ok(lag1Autocorrelation(walk) > 0.8);
+});
+
+test('lag-1 autocorrelation is 0 for degenerate input', () => {
+  assert.equal(lag1Autocorrelation([1, 2]), 0);
+  assert.equal(lag1Autocorrelation([5, 5, 5, 5, 5]), 0);
+});
+
+test('effective sample size collapses as autocorrelation approaches 1', () => {
+  assert.equal(effectiveSampleSize(90, 0), 90);           // i.i.d.: no penalty
+  assert.ok(Math.abs(effectiveSampleSize(90, 0.5) - 30) < 0.001);
+  assert.ok(effectiveSampleSize(90, 0.99) < 1.5 || effectiveSampleSize(90, 0.99) === 3);
+  assert.ok(effectiveSampleSize(90, 0.99) >= 3);          // floored, never below 3
+});
+
+test('paired effective sample size penalises only when BOTH series are autocorrelated', () => {
+  assert.equal(effectiveSampleSizePair(90, 0, 0.9), 90);  // one i.i.d. series: no penalty
+  assert.ok(effectiveSampleSizePair(90, 0.9, 0.9) < 25);
+  assert.ok(effectiveSampleSizePair(90, 0.9, 0.9) >= 3);
+});
+```
+
+- [ ] **Step 2: Run and confirm RED**
+
+Run: `node --import tsx --test lib/insights/stats.test.ts`
+Expected: FAIL — `lag1Autocorrelation` is not exported.
+
+- [ ] **Step 3: Implement the helpers in `lib/insights/stats.ts`**
+
+```typescript
+/**
+ * Lag-1 autocorrelation. Returns 0 for series too short to estimate it, or with
+ * no variance. Negative serial correlation is clamped to 0: it makes a test
+ * conservative rather than anti-conservative, so there is nothing to correct.
+ */
+export function lag1Autocorrelation(xs: number[]): number {
+  const n = xs.length;
+  if (n < 4) return 0;
+  const m = mean(xs);
+  let numerator = 0;
+  let denominator = 0;
+  for (let i = 0; i < n; i += 1) {
+    const d = xs[i] - m;
+    denominator += d * d;
+    if (i < n - 1) numerator += d * (xs[i + 1] - m);
+  }
+  if (denominator === 0) return 0;
+  const r = numerator / denominator;
+  if (!Number.isFinite(r)) return 0;
+  return Math.min(0.99, Math.max(0, r));
+}
+
+/**
+ * Effective sample size under AR(1)-like serial dependence
+ * (Bartlett / Bretherton): n_eff = n (1 - r) / (1 + r).
+ *
+ * Ninety consecutive daily health observations are not ninety independent ones.
+ * Treating them as independent is exactly what let the null-data canary certify
+ * 51-79% of pure noise. A random walk has r -> 1, so n_eff collapses and the
+ * p-value goes to 1; i.i.d. data has r = 0 and is unaffected. Floored at 3 so
+ * downstream degrees-of-freedom arithmetic stays defined.
+ */
+export function effectiveSampleSize(n: number, r: number): number {
+  if (n <= 0) return 0;
+  const clamped = Math.min(0.99, Math.max(0, r));
+  return Math.max(3, (n * (1 - clamped)) / (1 + clamped));
+}
+
+/**
+ * Effective sample size for a correlation between two autocorrelated series
+ * (Quenouille / Bartlett pair form): n_eff = n (1 - rx ry) / (1 + rx ry).
+ * Note the product: a correlation is only inflated when BOTH series carry
+ * serial structure, so pairing an i.i.d. series with a random walk costs
+ * nothing.
+ */
+export function effectiveSampleSizePair(n: number, rx: number, ry: number): number {
+  if (n <= 0) return 0;
+  const product = Math.min(0.99, Math.max(0, rx * ry));
+  return Math.max(3, (n * (1 - product)) / (1 + product));
+}
+```
+
+Also add `t` to `SlopeResult` and populate it in `olsSlope`, so callers can
+re-evaluate the slope against corrected degrees of freedom:
+
+```typescript
+export interface SlopeResult { slope: number; pValue: number; n: number; t: number }
+```
+
+Return `t: 0` on every degenerate path, and `t: slope / standardError` on the
+normal path. The perfect-fit path (`residualSumSquares === 0`) keeps
+`pValue: slope === 0 ? 1 : 0` and reports `t: 0`.
+
+- [ ] **Step 4: Run and confirm the helper tests pass**
+
+- [ ] **Step 5: Thread the correction into the three parametric detectors**
+
+`detectTrend` — after `olsSlope`, recompute the p-value against corrected df:
+
+```typescript
+  const { slope, pValue: rawP, n, t } = olsSlope(xs, ys);
+  if (slope === 0) return null;
+
+  // Ninety daily observations are not ninety independent ones; see
+  // effectiveSampleSize. Without this, regressing an autocorrelated series on
+  // time produces spuriously significant slopes (the classic spurious
+  // regression), which is what made the null-data canary certify 79% of noise.
+  const nEff = effectiveSampleSize(n, lag1Autocorrelation(ys));
+  const pValue = t === 0 ? rawP : studentTTwoSidedP(t, Math.max(1, nEff - 2));
+```
+
+`detectLevelShift` — estimate `r` once over the whole window (the 7-day recent
+slice is too short to estimate it) and inflate both variances:
+
+```typescript
+  const r = lag1Autocorrelation([...baseline, ...recent]);
+  const nRecentEff = effectiveSampleSize(recent.length, r);
+  const nBaselineEff = effectiveSampleSize(baseline.length, r);
+
+  const varRecent = sd(recent) ** 2 / nRecentEff;
+  const varBaseline = baselineSd ** 2 / nBaselineEff;
+```
+
+and compute the Welch degrees of freedom from `nRecentEff` / `nBaselineEff`
+rather than the raw counts:
+
+```typescript
+  const df =
+    (varRecent + varBaseline) ** 2 /
+    (varRecent ** 2 / Math.max(1, nRecentEff - 1) + varBaseline ** 2 / Math.max(1, nBaselineEff - 1));
+```
+
+`detectCrossLag` — recompute the p-value from `rho` against the paired
+effective sample size:
+
+```typescript
+        const { rho, n } = spearman(xs, ys);
+        const nEff = effectiveSampleSizePair(n, lag1Autocorrelation(xs), lag1Autocorrelation(ys));
+        const pValue = Math.abs(rho) >= 1
+          ? 0
+          : studentTTwoSidedP(rho * Math.sqrt((nEff - 2) / (1 - rho * rho)), Math.max(1, nEff - 2));
+```
+
+Keep emitting every tested pair. **This changes p-values only — no detector may
+start filtering on effect size or significance.** That separation is what keeps
+the FDR family size honest (see Task 9).
+
+- [ ] **Step 6: Update the affected detector tests**
+
+The existing detector tests assert on effect sizes and directions, which are
+unchanged. Where a test asserts a p-value threshold, the corrected p-value will
+be **larger** (more conservative). Re-run and report any test whose assertion no
+longer holds — **do not weaken an assertion.** The planted-effect tests use data
+with strong real signal and should survive; if a planted effect stops being
+detected, that is over-correction and must be reported, not accommodated.
+
+- [ ] **Step 7: Run the full insights suite, then the canary**
+
+Run: `node --import tsx --test lib/insights/*.test.ts`
+Then the canary specifically. **The canary passing is this task's acceptance
+criterion**, including its planted-effect test.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add lib/insights/stats.ts lib/insights/stats.test.ts lib/insights/detectors.ts lib/insights/detectors.test.ts
+git commit -m "fix(insights): correct p-values for serial dependence
+
+Daily health observations are not independent, and the parametric
+detectors treated them as if they were. The null-data canary certified
+51-79% of findings on pure random walks as a result.
+
+Applies a Bartlett/Bretherton effective-sample-size correction to trend,
+level-shift, and cross-lag p-values. A random walk collapses n_eff and
+the p-value goes to 1; i.i.d. data is unaffected."
+```
+
+---
+
 ## Task 10: The null-data canary
 
 **Files:**
