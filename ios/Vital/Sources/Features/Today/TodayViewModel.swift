@@ -122,6 +122,13 @@ final class TodayViewModel: ObservableObject {
     @Published var sleep = SleepMetric(hours: nil, minutes: nil, trend: .neutral, delta: "—")
     @Published var restingHR = RestingHRMetric(bpm: nil, trend: .neutral, delta: "—")
 
+    /// Drives the Today "Vital isn't seeing your Health data" recovery
+    /// banner — see `shouldShowHealthKitRecoveryBanner` for the exact
+    /// inference rule (HealthKit never reports a read denial, so this is
+    /// never more than an inference) and
+    /// docs/superpowers/plans/2026-09-05-healthkit-denial-recovery.md.
+    @Published private(set) var showHealthKitRecoveryBanner = false
+
     // Diet — driven from /api/today
     @Published var diet = DietCard(
         kcalConsumed: 0,
@@ -331,6 +338,22 @@ final class TodayViewModel: ObservableObject {
         current == .loading ? .loaded : current
     }
 
+    /// Denial cannot be *detected* — HealthKit never reports it (see
+    /// `HealthKitManager.requestAuthorization`) — only inferred: the system
+    /// prompt has been shown at least once, and every requested read type
+    /// still has zero samples. If any type has data this must return
+    /// false even when others are empty — a user who granted sleep but not
+    /// HRV, or simply hasn't logged data under a granted type yet, must
+    /// never be told they refused something they didn't. Static and pure
+    /// so tests can pin the rule without touching HealthKit or
+    /// UserDefaults.
+    static func shouldShowHealthKitRecoveryBanner(
+        didRequestAuthorization: Bool,
+        hasAnyHealthData: Bool
+    ) -> Bool {
+        didRequestAuthorization && !hasAnyHealthData
+    }
+
     // MARK: - Pending facts
 
     func resolveFact(id: String, action: String) async {
@@ -391,6 +414,18 @@ final class TodayViewModel: ObservableObject {
             )
             withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) { restingHR = newRestingHR }
         }
+
+        // The three reads above already cover three of HealthKit's read
+        // types — only fall through to the broader (all-types) scan when
+        // none of them found anything, so the common case (data exists)
+        // never pays for it.
+        let hasAnyData = hrvReading != nil || sleepReading != nil || restingHRReading != nil
+            ? true
+            : await healthKit.hasAnyData()
+        showHealthKitRecoveryBanner = Self.shouldShowHealthKitRecoveryBanner(
+            didRequestAuthorization: HealthKitManager.didRequestAuthorization,
+            hasAnyHealthData: hasAnyData
+        )
 
         await HealthSyncCoordinator.shared.syncNow()
         await refreshStreak()

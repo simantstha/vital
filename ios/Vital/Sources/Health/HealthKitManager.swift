@@ -1,5 +1,6 @@
 import Foundation
 import HealthKit
+import UIKit
 
 // MARK: - Reading structs
 
@@ -80,13 +81,102 @@ final class HealthKitManager: ObservableObject {
 
     // MARK: - Authorization
 
+    /// UserDefaults key set the moment `requestAuthorization()` runs with
+    /// HealthKit available — i.e. the system prompt has been shown, or was
+    /// already answered on a prior launch (iOS resolves the call silently
+    /// in that case; the caller can't tell which happened). Combined with
+    /// `hasAnyData()` to *infer* a probable denial — see
+    /// docs/superpowers/plans/2026-09-05-healthkit-denial-recovery.md.
+    private static let didRequestAuthorizationKey = "healthKitDidRequestAuthorization"
+
+    static var didRequestAuthorization: Bool {
+        UserDefaults.standard.bool(forKey: didRequestAuthorizationKey)
+    }
+
     func requestAuthorization() async {
         guard HKHealthStore.isHealthDataAvailable() else { return }
+        UserDefaults.standard.set(true, forKey: Self.didRequestAuthorizationKey)
         do {
             try await store.requestAuthorization(toShare: [], read: readTypes)
         } catch {
-            // Authorization denied or unavailable — callers handle via nil returns.
-            print("[HealthKit] Authorization failed: \(error.localizedDescription)")
+            // This is NOT a denial path. `requestAuthorization` does not
+            // throw when the user taps "Don't Allow" — Apple deliberately
+            // withholds that signal for *read* types so apps can't infer
+            // health conditions from a refusal (see `authorizationStatus
+            // (for:)`'s docs). A caught error here is a genuine failure —
+            // HealthKit becoming unavailable mid-call, an invalid type —
+            // never evidence the user denied anything.
+            print("[HealthKit] Authorization request failed: \(error.localizedDescription)")
+        }
+    }
+
+    /// Returns whether the Health app can be opened on this device.
+    /// Used by the UI to decide whether to show the "Open Health" button.
+    static func canOpenHealthApp() -> Bool {
+        guard let url = URL(string: "x-apple-health://") else { return false }
+        return UIApplication.shared.canOpenURL(url)
+    }
+
+    /// The best available recovery affordance for a probable denial: there
+    /// is no public API to deep-link straight into this app's row of
+    /// Health's Sharing screen (verified against the UIKit SDK headers —
+    /// only `UIApplicationOpenSettingsURLString` and
+    /// `...OpenNotificationSettingsURLString` exist, and this app's own
+    /// Settings page never lists HealthKit permissions at all). `x-apple-
+    /// health://` is Health's own registered URL scheme and reliably
+    /// launches the app (verified on-simulator), landing on its Summary
+    /// tab — callers must pair this with written steps for the remaining
+    /// taps (Profile icon → Apps → Vital).
+    /// Returns whether the URL was successfully opened. If the Health app
+    /// is not available, returns false and the button should be hidden so
+    /// users see only the written recovery steps.
+    static func openHealthApp() -> Bool {
+        guard canOpenHealthApp() else { return false }
+        guard let url = URL(string: "x-apple-health://") else { return false }
+        UIApplication.shared.open(url)
+        return true
+    }
+
+    // MARK: - Denial inference
+
+    /// Returns true as soon as any HealthKit-requested type — a
+    /// characteristic (date of birth, biological sex) or any sample type —
+    /// has at least one value on this device. HealthKit never reports that
+    /// *read* access was denied (see `requestAuthorization` above), so this
+    /// exists purely to let callers infer a probable denial together with
+    /// `didRequestAuthorization`: asked at least once, plus zero data
+    /// anywhere. A single granted-but-populated type must still return
+    /// true — a user who granted sleep but not HRV, or simply hasn't
+    /// logged anything under a granted type yet, must never be told they
+    /// refused something they didn't.
+    func hasAnyData() async -> Bool {
+        guard HKHealthStore.isHealthDataAvailable() else { return false }
+
+        let characteristics = await fetchCharacteristics()
+        if characteristics.dateOfBirth != nil
+            || characteristics.biologicalSex != nil
+            || characteristics.latestHeightCm != nil
+            || characteristics.latestBodyMassKg != nil {
+            return true
+        }
+
+        for type in readTypes.compactMap({ $0 as? HKSampleType }) {
+            if await sampleExists(for: type) { return true }
+        }
+        return false
+    }
+
+    private func sampleExists(for type: HKSampleType) async -> Bool {
+        await withCheckedContinuation { continuation in
+            let query = HKSampleQuery(
+                sampleType: type,
+                predicate: nil,
+                limit: 1,
+                sortDescriptors: nil
+            ) { _, samples, _ in
+                continuation.resume(returning: !(samples ?? []).isEmpty)
+            }
+            store.execute(query)
         }
     }
 
