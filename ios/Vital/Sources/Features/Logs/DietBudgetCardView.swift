@@ -108,14 +108,15 @@ struct DietBudgetCardView: View {
                 Text(label)
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.Colors.textSecondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
                 Spacer()
-                HStack(spacing: 0) {
-                    Text("\(macro.current)")
-                        .foregroundStyle(Theme.Colors.textPrimary)
-                    Text("/\(macro.target)g")
-                        .foregroundStyle(Theme.Colors.textTertiary)
-                }
-                .font(.system(size: 12, weight: .semibold))
+                (Text("\(macro.current)").foregroundStyle(Theme.Colors.textPrimary)
+                 + Text("/\(macro.target)g").foregroundStyle(Theme.Colors.textTertiary))
+                    .font(.system(size: 12, weight: .semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .layoutPriority(1)
             }
             progressBar(fraction: macro.fraction)
         }
