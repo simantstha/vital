@@ -180,6 +180,36 @@ export function mapDailySleepRow(row: DailySleepRow): LogItem {
 }
 
 /**
+ * Read-only feed item for a day whose consumed nutrition resolved to a
+ * HealthKit source (e.g. MyFitnessPal via Apple Health) — see
+ * lib/brain/nutritionIntake.ts's resolveDailyIntake, which is the only thing
+ * that decides a day is 'healthkit' (never called when a meal_logged event
+ * exists that day). Uses the same day-level HealthKit convention as
+ * mapDailySleepRow above (`hasExactTime: false`, `dayKey` set) rather than
+ * inventing a new shape. The 23:59:59.999 anchor (vs. that mapper's noon
+ * anchor) is deliberate: it sorts this item to the top of its day group
+ * through the existing sortLogItemsNewestFirst, without a bespoke sort path.
+ * The id is stable across refetches (SwiftUI list identity), and — having no
+ * underlying event id and no analysisId — the item is inert: nothing in the
+ * client can mistake it for a deletable meal_logged row.
+ */
+export function mapHealthKitNutritionDay(
+  date: string,
+  intake: { kcal: number; sourceName: string | null },
+): LogItem {
+  return {
+    id: `hk-nutrition-${date}`,
+    type: 'nutrition_healthkit',
+    timestamp: `${date}T23:59:59.999Z`,
+    title: intake.sourceName ?? 'Apple Health',
+    subtitle: 'via Apple Health',
+    kcal: intake.kcal,
+    hasExactTime: false,
+    dayKey: date,
+  };
+}
+
+/**
  * `units` (default 'metric') only affects the human-readable `title`/
  * `subtitle` strings. The numeric `km` field ALWAYS stays named `km` and
  * valued in kilometres regardless of `units` — the iOS client decodes it and

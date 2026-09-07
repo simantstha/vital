@@ -4,6 +4,7 @@ import {
   dedupeWorkoutLogItems,
   mapDailySleepRow,
   mapEventToLogItem,
+  mapHealthKitNutritionDay,
   mapHealthKitWorkout,
   sortLogItemsNewestFirst,
   type LogItem,
@@ -23,6 +24,30 @@ test('maps sleep minutes to a stable wake-date sleep session', () => {
       dayKey: '2026-07-14',
     },
   );
+});
+
+test('maps a HealthKit-sourced nutrition day to a stable, inert, day-level feed item', () => {
+  assert.deepEqual(
+    mapHealthKitNutritionDay('2026-07-14', { kcal: 1850, sourceName: 'MyFitnessPal' }),
+    {
+      id: 'hk-nutrition-2026-07-14',
+      type: 'nutrition_healthkit',
+      timestamp: '2026-07-14T23:59:59.999Z',
+      title: 'MyFitnessPal',
+      subtitle: 'via Apple Health',
+      kcal: 1850,
+      hasExactTime: false,
+      dayKey: '2026-07-14',
+    },
+  );
+});
+
+test('falls back to the generic Apple Health title when no source app name is known', () => {
+  const item = mapHealthKitNutritionDay('2026-07-14', { kcal: 900, sourceName: null });
+  assert.equal(item.title, 'Apple Health');
+  // No underlying event id and no analysisId — the client has nothing that
+  // could route a swipe-delete or a meal-log DELETE call back to this item.
+  assert.equal('analysisId' in item, false);
 });
 
 test('normalizes exact workout start times and sorts same-day workouts by their real instants', () => {

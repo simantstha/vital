@@ -288,8 +288,14 @@ struct APIClient {
 
     // MARK: - Activity logs
 
+    /// Sends the device's current timezone so the server buckets
+    /// `dietByDay` (and the injected HealthKit nutrition item) by the user's
+    /// local day — same tz-encoding convention as `fetchToday()` /
+    /// `fetchMealLogs()`.
     func fetchLogs(days: Int = 7) async throws -> LogsResponse {
-        try await get("/api/logs?days=\(days)")
+        let tz = TimeZone.current.identifier
+        let encoded = tz.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? tz
+        return try await get("/api/logs?days=\(days)&tz=\(encoded)")
     }
 
     // MARK: - Profile
@@ -1470,8 +1476,22 @@ struct LogItem: Decodable, Identifiable {
     let analysisId: String?
 }
 
+/// A local day's resolved nutrition intake — `lib/brain/nutritionIntake.ts`'s
+/// `resolveDailyIntake` output, keyed by day in `LogsResponse.dietByDay`.
+/// `source` is "logged" | "healthkit" | "none"; `sourceName` is the logging
+/// app name (HealthKit only) or nil.
+struct DietDayIntakeDTO: Decodable {
+    let kcal: Int
+    let protein: Int
+    let carbs: Int
+    let fat: Int
+    let source: String
+    let sourceName: String?
+}
+
 struct LogsResponse: Decodable {
     let items: [LogItem]
+    let dietByDay: [String: DietDayIntakeDTO]
 }
 
 // MARK: - Profile types

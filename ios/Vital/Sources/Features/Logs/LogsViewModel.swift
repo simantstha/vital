@@ -220,13 +220,39 @@ enum LogsPagerSummary {
 
     // MARK: Diet rollup
 
-    /// Rolls up a day's `MealLogEntryDTO`s against the goal targets into a
+    /// Rolls up a day's consumed totals against the goal targets into a
     /// `DietDayData`. Pure — testable without the network.
-    static func dietDayData(entries: [MealLogEntryDTO], goal: DietBudgetDTO) -> DietDayData {
-        let eatenKcal = entries.reduce(0) { $0 + $1.kcal }
-        let protein   = entries.reduce(0) { $0 + $1.protein }
-        let carbs     = entries.reduce(0) { $0 + $1.carbs }
-        let fat       = entries.reduce(0) { $0 + $1.fat }
+    ///
+    /// `intake` is that day's `/api/logs` `dietByDay` entry (nil before the
+    /// first fetch resolves). When its `source` is "healthkit" — a
+    /// HealthKit-only day, e.g. MyFitnessPal via Apple Health — the server's
+    /// totals win over summing `entries`, since a HealthKit day never has
+    /// `meal_logged` entries to sum in the first place (resolveDailyIntake's
+    /// precedence rule, enforced server-side, not reimplemented here).
+    /// Otherwise `entries` is summed exactly as before. `consumedSource` /
+    /// `consumedSourceName` always come from `intake` — the old
+    /// `DietBudgetDTO` fields of the same name (from `/api/diet-goal`) are
+    /// never populated by that endpoint and are dead.
+    static func dietDayData(
+        entries: [MealLogEntryDTO],
+        goal: DietBudgetDTO,
+        intake: DietDayIntakeDTO?
+    ) -> DietDayData {
+        let eatenKcal: Int
+        let protein: Int
+        let carbs: Int
+        let fat: Int
+        if let intake, intake.source == "healthkit" {
+            eatenKcal = intake.kcal
+            protein   = intake.protein
+            carbs     = intake.carbs
+            fat       = intake.fat
+        } else {
+            eatenKcal = entries.reduce(0) { $0 + $1.kcal }
+            protein   = entries.reduce(0) { $0 + $1.protein }
+            carbs     = entries.reduce(0) { $0 + $1.carbs }
+            fat       = entries.reduce(0) { $0 + $1.fat }
+        }
         return DietDayData(
             targetKcal: goal.targetKcal,
             eatenKcal:  eatenKcal,
@@ -234,8 +260,8 @@ enum LogsPagerSummary {
             protein:    MacroProgress(current: protein, target: goal.protein),
             carbs:      MacroProgress(current: carbs, target: goal.carbs),
             fat:        MacroProgress(current: fat, target: goal.fat),
-            consumedSource: goal.consumedSource,
-            consumedSourceName: goal.consumedSourceName
+            consumedSource: intake?.source,
+            consumedSourceName: intake?.sourceName
         )
     }
 }
@@ -261,6 +287,11 @@ final class LogsViewModel: ObservableObject {
     /// Per-day meal-log cache, keyed by `dayKey`. Today's entry is invalidated
     /// after the diet sheet logs/edits/removes something.
     private var mealLogCache: [String: [MealLogEntryDTO]] = [:]
+    /// Per-day resolved intake (source + totals) from the `/api/logs`
+    /// response's `dietByDay`, keyed by `dayKey`. Refreshed on every `load()`
+    /// — unlike `mealLogCache` there's no separate invalidation path since it
+    /// only ever changes via a full 7-day refetch.
+    private var dietByDay: [String: DietDayIntakeDTO] = [:]
 
     private static let isoParser: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
@@ -280,6 +311,7 @@ final class LogsViewModel: ObservableObject {
         errorMessage = nil
         do {
             let response = try await apiClient.fetchLogs(days: 7)
+            dietByDay = response.dietByDay
             let displayItems: [LogDisplayItem] = response.items.compactMap { item in
                 let date = Self.isoParser.date(from: item.timestamp)
                     ?? Self.isoParserNF.date(from: item.timestamp)
@@ -365,7 +397,7 @@ final class LogsViewModel: ObservableObject {
                 mealLogCache[dayKey] = entries
             }
 
-            let newData = LogsPagerSummary.dietDayData(entries: entries, goal: goal.current)
+            let newData = LogsPagerSummary.dietDayData(entries: entries, goal: goal.current, intake: dietByDay[dayKey])
             withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) {
                 dietDataByDay[dayKey] = newData
             }
@@ -377,12 +409,13 @@ final class LogsViewModel: ObservableObject {
 
     private func symbol(for type: String) -> String {
         switch type {
-        case "meal_logged":       return "fork.knife"
-        case "workout_completed": return "figure.run"
-        case "weight_logged":     return "scalemass"
-        case "hrv_reading":       return "waveform.path.ecg"
-        case "sleep_session":     return "bed.double.fill"
-        default:                  return "circle.fill"
+        case "meal_logged":         return "fork.knife"
+        case "nutrition_healthkit": return "fork.knife"
+        case "workout_completed":   return "figure.run"
+        case "weight_logged":       return "scalemass"
+        case "hrv_reading":         return "waveform.path.ecg"
+        case "sleep_session":       return "bed.double.fill"
+        default:                    return "circle.fill"
         }
     }
 }
