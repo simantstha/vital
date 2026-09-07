@@ -1665,13 +1665,23 @@ export const MIN_LEVEL_SHIFT_SD = 0.8;
 /** Single source of truth lives in detectors.ts — do not fork this threshold. */
 export const MIN_CROSS_LAG_RHO = MIN_ABS_RHO;
 export const MIN_DAY_OF_WEEK_SPREAD = 0;   // magnitude is metric-specific; significance carries this one
+/**
+ * Trend slopes are standardised to SD-per-week by detectTrend, so this floor is
+ * comparable across metrics. 0.15 SD/week is roughly 0.65 SD/month — enough
+ * movement to be worth a person's attention. Without a floor here, a
+ * statistically significant but clinically meaningless drift ("your resting
+ * heart rate is trending up", meaning 0.2 bpm across a month) reaches the user
+ * as an insight. level_shift and cross_lag have always had such a floor; trend
+ * did not, which was an asymmetry rather than a decision.
+ */
+export const MIN_TREND_SD_PER_WEEK = 0.15;
 
 function passesEffectFloor(finding: Finding): boolean {
   switch (finding.kind) {
     case 'level_shift': return Math.abs(finding.effect) >= MIN_LEVEL_SHIFT_SD;
     case 'cross_lag':   return Math.abs(finding.effect) >= MIN_CROSS_LAG_RHO;
     case 'day_of_week': return Math.abs(finding.effect) > MIN_DAY_OF_WEEK_SPREAD;
-    case 'trend':       return finding.effect !== 0;
+    case 'trend':       return Math.abs(finding.effect) >= MIN_TREND_SD_PER_WEEK;
     case 'cadence_break': return true;      // the rule itself is the threshold
     default: return false;
   }
@@ -1914,6 +1924,35 @@ effective sample size:
 Keep emitting every tested pair. **This changes p-values only — no detector may
 start filtering on effect size or significance.** That separation is what keeps
 the FDR family size honest (see Task 9).
+
+- [ ] **Step 5b: Standardise `detectTrend`'s effect to SD-per-week**
+
+A raw OLS slope is in the metric's own units, so no cross-metric floor can be
+written against it — which is why `trend` alone had no effect floor while
+`level_shift` (0.8 SD) and `cross_lag` (0.35 ρ) both did. Standardise it:
+
+```typescript
+  const windowSd = sd(ys);
+  if (windowSd === 0) return null;          // no variation: nothing to trend against
+  const effect = (slope * 7) / windowSd;    // SD per week, comparable across metrics
+```
+
+Report `effect` as that standardised value, and keep the raw slope in `detail`:
+
+```typescript
+    effect,
+    effectLabel: `${effect > 0 ? '+' : ''}${effect.toFixed(2)} SD per week`,
+    detail: {
+      slopePerDay: Number(slope.toFixed(4)),
+      slopePerWeek: Number((slope * 7).toFixed(2)),
+      sdPerWeek: Number(effect.toFixed(3)),
+      observedDays: n,
+    },
+```
+
+Existing tests assert only the sign of `effect` and the `trend:<metric>:<dir>`
+signature, both preserved. The planted-decline fixture yields roughly
+−0.9 SD/week, comfortably clear of the 0.15 floor.
 
 - [ ] **Step 6: Update the affected detector tests**
 
