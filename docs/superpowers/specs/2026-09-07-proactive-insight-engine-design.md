@@ -61,11 +61,11 @@ Deliberately out of scope for this cycle:
 The naive reading of "let Vital look at all the data and find meaning" is to hand
 a model the time series and ask it to find patterns. This fails predictably.
 
-With ~20 metrics there are ~190 metric pairs. At a conventional significance
-threshold roughly **10 of them will appear significant by chance alone**, before
-any real effect exists. A language model shown that data reports them fluently
-and with total confidence, and neither the user nor the developer can separate
-them from real findings.
+The catalog holds 23 metrics, which is 253 unordered pairs. At a conventional
+significance threshold roughly **13 of them will appear significant by chance
+alone**, before any real effect exists. A language model shown that data reports
+them fluently and with total confidence, and neither the user nor the developer
+can separate them from real findings.
 
 This is not hypothetical here. `lib/proactiveAnalysisGrounding.ts` exists as an
 entire subsystem, and the Week-1 integrity sweep happened, because Vital
@@ -108,16 +108,45 @@ size, and (for hypothesis-shaped detectors) an uncorrected p-value.
 | `cadenceBreak` | Did an established rhythm break? | Cadence established from a trailing 28 days at ≥3 occurrences/week. Fires when days-since-last ≥ `max(3, 2 × ceil(7 / weekly_rate))`. |
 | `levelShift` | Has the recent level moved off baseline? | Last 7 days' mean vs. preceding 28-day baseline, in that user's own SD units. Requires ≥7 recent and ≥21 prior observed days, and \|d\| ≥ 0.8. |
 | `trend` | Is it sliding in one direction? | OLS slope over 28 days with a t-test on the slope; requires ≥20 observed days. |
-| `crossLag` | Does one metric move with another? | Spearman ρ between metric A on day *d* and metric B on day *d+k* for k ∈ {0,1,2}. Requires ≥30 paired observations and \|ρ\| ≥ 0.35. |
+| `crossLag` | Does something the user *did* affect how their body *responded*? | Spearman ρ between an **input** metric on day *d* and an **outcome** metric on day *d+k*, k ∈ {0,1}. Requires ≥30 paired observations and \|ρ\| ≥ 0.35. |
 | `dayOfWeek` | Is there a recurring weekday effect? | Kruskal–Wallis across weekdays; requires ≥8 weeks of coverage. |
 
 Spearman rather than Pearson for `crossLag`: health series are non-normal and
 outlier-prone, and rank correlation degrades gracefully where Pearson does not.
 
-`crossLag` is the source of genuinely emergent findings — it will surface
+#### Why `crossLag` is directional, not a blind sweep
+
+`crossLag` is the source of genuinely emergent findings — it surfaces
 relationships nobody enumerated in advance. It is also, by a wide margin, the
-largest contributor to the multiple-comparisons problem, which the next module
-exists to contain.
+largest contributor to the multiple-comparisons problem.
+
+An unrestricted sweep over all 23 catalog metrics is **not viable**, and the
+reason is power rather than correctness. Counting ordered pairs across lags
+{0,1,2} gives ≈1,265 hypotheses per run. Benjamini–Hochberg would control the
+false-discovery rate over that family perfectly well — but against ~90 days of
+data the corrected threshold becomes so strict that essentially no real effect
+ever clears it. The engine would be statistically impeccable and permanently
+silent: all of the safety, none of the discovery.
+
+The sweep is therefore **directional**, over the pairs a coach would actually
+ask about:
+
+- **Inputs** (what the user did): `whoop_day_strain`, `steps`, `exercise_min`,
+  `distance_m`, `active_energy_kcal`, `dietary_energy_kcal`,
+  `dietary_protein_g`, `dietary_carbs_g`, `dietary_fat_g`
+- **Outcomes** (how the body responded): `hrv_sdnn`, `whoop_hrv_rmssd`,
+  `resting_hr`, `whoop_resting_hr`, `whoop_recovery`, `sleep_minutes`,
+  `whoop_sleep_min`, `whoop_spo2`, `whoop_skin_temp`
+
+Inputs → outcomes at lags {0,1} is **≈150 hypotheses instead of ≈1,265** — on
+the order of 8× more power to detect a real effect — while remaining open-ended
+within the space where a causal story is even plausible. It also stops the
+correction being spent on pairs with no coaching meaning, such as `flights`
+against `body_mass_kg`.
+
+This is a deliberate trade of unbounded openness for the statistical power to
+ever say anything. Both metric lists live in one exported constant so the
+boundary is reviewable and extendable in one place.
 
 #### `lib/insights/evidence.ts`
 
@@ -126,8 +155,8 @@ not all the same kind of claim.
 
 - **Hypothesis-shaped detectors** (`levelShift`, `trend`, `crossLag`,
   `dayOfWeek`) are corrected as a **single family per run** via
-  Benjamini–Hochberg at q = 0.10. This is what prevents the ~190-pair sweep from
-  leaking its expected crop of noise findings.
+  Benjamini–Hochberg at q = 0.10. This is what prevents the directional sweep
+  from leaking its expected crop of noise findings.
 - **A minimum effect size is required independently of significance.** With
   enough observations a trivially small correlation becomes "significant"; a
   finding must be both unlikely-by-chance *and* large enough to matter. Both
