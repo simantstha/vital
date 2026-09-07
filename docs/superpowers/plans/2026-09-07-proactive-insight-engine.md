@@ -2147,9 +2147,14 @@ test('the battery finds a MODERATE, realistic effect buried in noise', () => {
     metric: 'whoop_recovery',
     points: strain.points.map((point, index) => ({
       date: point.date,
+      // Noise amplitude 15 (uniform, sd 4.33) is chosen to MATCH the signal's
+      // sd, giving R^2 ~ 0.5 and |rho| ~ 0.7. An earlier version used 40
+      // (sd 11.55), which claimed R^2 ~ 0.5 in its comment but actually planted
+      // R^2 ~ 0.12 — the finding then died at the 0.35 rho floor and the test
+      // looked like an over-correction failure when it was a bad fixture.
       value: index === 0
         ? 70
-        : 70 - 0.7 * (strain.points[index - 1].value as number) + (random() - 0.5) * 40,
+        : 70 - 0.7 * (strain.points[index - 1].value as number) + (random() - 0.5) * 15,
     })),
   };
 
