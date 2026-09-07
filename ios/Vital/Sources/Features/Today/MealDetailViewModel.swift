@@ -54,7 +54,10 @@ final class MealDetailViewModel: ObservableObject {
             let r = try await api.modifyMeal(name: name, kcal: Double(kcal), instruction: nil)
             apply(r)
         } catch {
-            errorMessage = UserFacingError.message(for: error, context: .write, tag: "modifyMeal(estimate)")
+            // `.read`: this fetches an estimate and applies it to local state
+            // — nothing is persisted, so "couldn't save" would claim a save
+            // was attempted when none was. Only `logIt()` below writes.
+            errorMessage = UserFacingError.message(for: error, context: .read, tag: "modifyMeal(estimate)")
         }
     }
 
@@ -72,7 +75,8 @@ final class MealDetailViewModel: ObservableObject {
             recipe = ""
             recipeExpanded = false
         } catch {
-            errorMessage = UserFacingError.message(for: error, context: .write, tag: "modifyMeal(edit)")
+            // `.read` — see `estimateOnOpen`: local state only, no persistence.
+            errorMessage = UserFacingError.message(for: error, context: .read, tag: "modifyMeal(edit)")
         }
     }
 
@@ -91,7 +95,8 @@ final class MealDetailViewModel: ObservableObject {
         do {
             recipe = try await api.mealRecipe(name: name)
         } catch {
-            errorMessage = UserFacingError.message(for: error, context: .write, tag: "mealRecipe")
+            // `.read` — see `estimateOnOpen`: local state only, no persistence.
+            errorMessage = UserFacingError.message(for: error, context: .read, tag: "mealRecipe")
         }
     }
 

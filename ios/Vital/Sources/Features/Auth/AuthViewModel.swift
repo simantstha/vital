@@ -149,7 +149,7 @@ final class AuthViewModel: ObservableObject {
             UIApplication.shared.registerForRemoteNotifications()
             await PushNotificationService.shared.hydratePreferences()
         } catch {
-            errorMessage = UserFacingError.message(for: error, context: .write, tag: "sign-in")
+            errorMessage = UserFacingError.message(for: error, context: .signIn, tag: "sign-in")
         }
     }
 }

@@ -32,7 +32,7 @@ struct SignInView: View {
                             case .success(let authorization):
                                 Task { await authViewModel.signInWithApple(authorization: authorization) }
                             case .failure(let error):
-                                authViewModel.errorMessage = UserFacingError.message(for: error, context: .write, tag: "signInWithApple")
+                                authViewModel.errorMessage = UserFacingError.message(for: error, context: .signIn, tag: "signInWithApple")
                             }
                         }
                         .signInWithAppleButtonStyle(.white)
