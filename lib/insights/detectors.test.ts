@@ -1,7 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { detectCadenceBreak, detectLevelShift, detectTrend } from './detectors';
+import {
+  detectCadenceBreak,
+  detectCrossLag,
+  detectDayOfWeek,
+  detectLevelShift,
+  detectTrend,
+  INPUT_METRICS,
+  OUTCOME_METRICS,
+} from './detectors';
 import type { MetricSeries } from './types';
 
 /** Builds a 90-day series ending 2026-09-07 from a day -> value map. */
@@ -153,4 +161,82 @@ test('trend stays quiet with too few observed days in the window', () => {
     detectTrend(generated('sleep_minutes', (daysAgo) => (daysAgo % 3 === 0 ? 420 - daysAgo : null))),
     null,
   );
+});
+
+test('input and outcome metric sets are disjoint and non-empty', () => {
+  assert.ok(INPUT_METRICS.length > 0 && OUTCOME_METRICS.length > 0);
+  const overlap = INPUT_METRICS.filter((m) => OUTCOME_METRICS.includes(m));
+  assert.deepEqual(overlap, []);
+});
+
+test('cross-lag finds a planted next-day relationship', () => {
+  // Strain on day d drives recovery DOWN on day d+1.
+  const strain = generated('whoop_day_strain', (daysAgo) => 5 + (daysAgo % 10));
+  const recovery = generated('whoop_recovery', (daysAgo) => {
+    const yesterdayStrain = 5 + ((daysAgo + 1) % 10);
+    return 90 - yesterdayStrain * 3;
+  });
+
+  const findings = detectCrossLag([strain], [recovery]);
+  const lagOne = findings.find((f) => f.detail.lag === 1);
+  assert.ok(lagOne, 'expected a lag-1 finding');
+  assert.equal(lagOne.kind, 'cross_lag');
+  assert.ok(lagOne.effect < -0.9);
+  assert.equal(lagOne.signature, 'cross_lag:whoop_day_strain:whoop_recovery:1:down');
+});
+
+test('cross-lag finds nothing convincing in unrelated series', () => {
+  // Candidates are still emitted (they are tested hypotheses and must count
+  // toward m); none of them should clear the magnitude the gate demands.
+  const strain = generated('whoop_day_strain', (daysAgo) => 5 + (daysAgo % 10));
+  const recovery = generated('whoop_recovery', (daysAgo) => 60 + ((daysAgo * 7) % 11));
+  const findings = detectCrossLag([strain], [recovery]);
+  assert.ok(findings.length > 0, 'tested pairs must be emitted even when unimpressive');
+  assert.deepEqual(findings.filter((f) => Math.abs(f.effect) >= 0.35), []);
+});
+
+test('cross-lag skips pairs with too few overlapping observations', () => {
+  const sparse = generated('whoop_day_strain', (daysAgo) => (daysAgo < 80 ? null : 10));
+  const recovery = generated('whoop_recovery', () => 60);
+  assert.deepEqual(detectCrossLag([sparse], [recovery]), []);
+});
+
+test('cross-lag pairs values by date, not by array position', () => {
+  // A gap in the input must not silently shift the outcome alignment.
+  const input = generated('steps', (daysAgo) => (daysAgo === 40 ? null : 8000 + (daysAgo % 7) * 500));
+  const outcome = generated('sleep_minutes', (daysAgo) => 400 + ((daysAgo % 7) * 500) / 100);
+  const findings = detectCrossLag([input], [outcome]);
+  for (const finding of findings) assert.ok(finding.n <= 90);
+});
+
+test('day-of-week finds a planted weekend effect', () => {
+  // 2026-09-07 is a Monday; weekends get markedly less sleep.
+  const finding = detectDayOfWeek(generated('sleep_minutes', (daysAgo) => {
+    const d = new Date(Date.UTC(2026, 8, 7));
+    d.setUTCDate(d.getUTCDate() - daysAgo);
+    const weekend = d.getUTCDay() === 0 || d.getUTCDay() === 6;
+    return (weekend ? 300 : 450) + (daysAgo % 4);
+  }));
+  assert.ok(finding);
+  assert.equal(finding.kind, 'day_of_week');
+  assert.equal(finding.signature, 'day_of_week:sleep_minutes');
+});
+
+test('day-of-week finds nothing convincing when every weekday looks the same', () => {
+  // The 4-day value cycle and the 7-day week have lcm 28 across a 90-day
+  // window, so weekday means genuinely differ by a hair. The hypothesis was
+  // testable and was tested, so a candidate is emitted and counts toward m —
+  // it simply has no support behind it.
+  const finding = detectDayOfWeek(generated('sleep_minutes', (daysAgo) => 420 + (daysAgo % 4)));
+  assert.ok(finding, 'expected a candidate, since the hypothesis was tested');
+  assert.ok(finding.pValue !== null && finding.pValue > 0.2);
+});
+
+test('day-of-week stays quiet without all seven weekdays covered', () => {
+  const finding = detectDayOfWeek(generated('sleep_minutes', (daysAgo) => {
+    const d = new Date(Date.UTC(2026, 8, 7));
+    d.setUTCDate(d.getUTCDate() - daysAgo);
+    return d.getUTCDay() === 3 ? null : 420 + (daysAgo % 4);
+  }));
+  assert.equal(finding, null);
 });

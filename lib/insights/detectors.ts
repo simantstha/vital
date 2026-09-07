@@ -1,4 +1,11 @@
-import { mean, sd, olsSlope, studentTTwoSidedP } from './stats';
+import {
+  mean,
+  sd,
+  olsSlope,
+  studentTTwoSidedP,
+  spearman,
+  kruskalWallisSevenGroups,
+} from './stats';
 import type { Finding, MetricSeries } from './types';
 
 /** Metrics whose rhythm is meaningful enough that breaking it is worth saying. */
@@ -161,6 +168,143 @@ export function detectTrend(series: MetricSeries): Finding | null {
       slopePerDay: Number(slope.toFixed(4)),
       slopePerWeek: Number((slope * 7).toFixed(2)),
       observedDays: n,
+    },
+  };
+}
+
+/**
+ * What the user did. Paired against OUTCOME_METRICS only — see the spec section
+ * "Why crossLag is directional, not a blind sweep". Widening these lists
+ * enlarges the hypothesis family and costs statistical power; do not extend
+ * them without redoing that argument.
+ */
+export const INPUT_METRICS = [
+  'whoop_day_strain', 'steps', 'exercise_min', 'distance_m', 'active_energy_kcal',
+  'dietary_energy_kcal', 'dietary_protein_g', 'dietary_carbs_g', 'dietary_fat_g',
+];
+
+/** How the body responded. */
+export const OUTCOME_METRICS = [
+  'hrv_sdnn', 'whoop_hrv_rmssd', 'resting_hr', 'whoop_resting_hr',
+  'whoop_recovery', 'sleep_minutes', 'whoop_sleep_min', 'whoop_spo2', 'whoop_skin_temp',
+];
+
+const CROSS_LAGS = [0, 1];
+const MIN_PAIRS = 30;
+export const MIN_ABS_RHO = 0.35;
+
+const MIN_WEEKS_FOR_DAY_OF_WEEK = 8;
+
+/**
+ * Correlates each input on day d with each outcome on day d+lag.
+ *
+ * Pairs are joined BY DATE, never by array index — a gap in either series must
+ * not silently shift the alignment and manufacture a relationship.
+ *
+ * Returns raw candidates; the effect floor and FDR correction are applied in
+ * evidence.ts, not here.
+ */
+export function detectCrossLag(inputs: MetricSeries[], outcomes: MetricSeries[]): Finding[] {
+  const findings: Finding[] = [];
+
+  const indexOf = (series: MetricSeries): Map<string, number> => {
+    const map = new Map<string, number>();
+    for (const point of series.points) if (point.value !== null) map.set(point.date, point.value);
+    return map;
+  };
+
+  const shiftDate = (date: string, days: number): string => {
+    const [y, m, d] = date.split('-').map(Number);
+    const shifted = new Date(Date.UTC(y, m - 1, d));
+    shifted.setUTCDate(shifted.getUTCDate() + days);
+    return shifted.toISOString().slice(0, 10);
+  };
+
+  for (const input of inputs) {
+    const inputByDate = indexOf(input);
+    if (inputByDate.size < MIN_PAIRS) continue;
+
+    for (const outcome of outcomes) {
+      const outcomeByDate = indexOf(outcome);
+      if (outcomeByDate.size < MIN_PAIRS) continue;
+
+      for (const lag of CROSS_LAGS) {
+        const xs: number[] = [];
+        const ys: number[] = [];
+        for (const [date, inputValue] of inputByDate) {
+          const outcomeValue = outcomeByDate.get(shiftDate(date, lag));
+          if (outcomeValue === undefined) continue;
+          xs.push(inputValue);
+          ys.push(outcomeValue);
+        }
+        if (xs.length < MIN_PAIRS) continue;
+
+        // Every pair we could test is a hypothesis and MUST be emitted, even
+        // when rho is tiny. Dropping unimpressive pairs here would shrink the
+        // family size m that evidence.ts corrects over — and because |rho| and
+        // the p-value move together, that selection makes Benjamini-Hochberg
+        // anti-conservative. The MIN_PAIRS check above is different in kind: a
+        // pair with too little overlap was never testable, so it is genuinely
+        // not part of the family.
+        const { rho, pValue, n } = spearman(xs, ys);
+
+        const direction = rho < 0 ? 'down' : 'up';
+        findings.push({
+          kind: 'cross_lag',
+          signature: `cross_lag:${input.metric}:${outcome.metric}:${lag}:${direction}`,
+          metrics: [input.metric, outcome.metric],
+          effect: rho,
+          effectLabel: `${direction === 'down' ? 'inverse' : 'positive'} (rho ${rho.toFixed(2)})`,
+          n,
+          pValue,
+          detail: { lag, rho: Number(rho.toFixed(3)), pairs: n, input: input.metric, outcome: outcome.metric },
+        });
+      }
+    }
+  }
+
+  return findings;
+}
+
+/**
+ * Kruskal–Wallis across the seven weekdays. Requires all seven represented
+ * (which fixes df at 6 — see stats.ts) and at least 8 weeks of coverage.
+ */
+export function detectDayOfWeek(series: MetricSeries): Finding | null {
+  const groups: number[][] = Array.from({ length: 7 }, () => []);
+  let observed = 0;
+
+  for (const point of series.points) {
+    if (point.value === null) continue;
+    const [y, m, d] = point.date.split('-').map(Number);
+    groups[new Date(Date.UTC(y, m - 1, d)).getUTCDay()].push(point.value);
+    observed += 1;
+  }
+
+  if (observed < MIN_WEEKS_FOR_DAY_OF_WEEK * 7) return null;
+  if (groups.some((group) => group.length === 0)) return null;
+
+  const { h, pValue, n } = kruskalWallisSevenGroups(groups);
+  if (h === 0) return null;
+
+  const dayMeans = groups.map((group) => group.reduce((a, b) => a + b, 0) / group.length);
+  const highest = dayMeans.indexOf(Math.max(...dayMeans));
+  const lowest = dayMeans.indexOf(Math.min(...dayMeans));
+  const names = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+  return {
+    kind: 'day_of_week',
+    signature: `day_of_week:${series.metric}`,
+    metrics: [series.metric],
+    effect: dayMeans[highest] - dayMeans[lowest],
+    effectLabel: `${names[lowest]} lowest, ${names[highest]} highest`,
+    n,
+    pValue,
+    detail: {
+      highestDay: names[highest],
+      lowestDay: names[lowest],
+      highestMean: Number(dayMeans[highest].toFixed(1)),
+      lowestMean: Number(dayMeans[lowest].toFixed(1)),
     },
   };
 }
