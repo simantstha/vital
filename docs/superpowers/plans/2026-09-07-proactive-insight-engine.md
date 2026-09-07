@@ -89,6 +89,16 @@ test('olsSlope recovers a planted slope and calls it significant', () => {
   assert.equal(result.n, 30);
 });
 
+test('t p-values are correct at realistic degrees of freedom, not just df=10', () => {
+  // The perfect-fit tests below short-circuit before studentTTwoSidedP is ever
+  // called, so without these the safety-critical tail behaviour is exercised at
+  // exactly one point. Reference values from the standard incomplete beta.
+  assert.ok(Math.abs(studentTTwoSidedP(1, 1) - 0.5) < 0.001);        // Cauchy, exact 0.5
+  assert.ok(Math.abs(studentTTwoSidedP(2, 20) - 0.0593) < 0.001);
+  assert.ok(Math.abs(studentTTwoSidedP(4, 100) - 0.000121) < 0.00002);
+  assert.ok(Math.abs(studentTTwoSidedP(50, 1) - 0.0127) < 0.001);
+});
+
 test('olsSlope on a flat series reports no significant trend', () => {
   const xs = Array.from({ length: 30 }, (_, i) => i);
   const ys = xs.map(() => 42);
@@ -156,7 +166,13 @@ function incompleteBeta(x: number, a: number, b: number): number {
   d = 1 / d;
   let result = d;
 
-  for (let i = 1; i <= 300; i += 1) {
+  // The loop starts at i = 2, NOT i = 1. The i = 1 term evaluates to
+  // -((a+b)x)/(a+1), which is exactly what `d`'s initialization above already
+  // folded in; recomputing it corrupts every subsequent convergent and makes
+  // the result wrong by orders of magnitude in the tail. i = 2 yields
+  // (b-1)x/((a+1)(a+2)), which is the first loop term in Numerical Recipes'
+  // betacf. Verify any change here against an independent implementation.
+  for (let i = 2; i <= 300; i += 1) {
     const m = Math.floor(i / 2);
     let numerator: number;
     if (i % 2 === 0) {
@@ -174,7 +190,7 @@ function incompleteBeta(x: number, a: number, b: number): number {
     if (Math.abs(1 - delta) < 1e-12) break;
   }
 
-  return front * (result - 1);
+  return front * result;
 }
 
 /** Two-sided p-value for a Student t statistic. */
