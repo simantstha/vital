@@ -5,6 +5,9 @@ import {
   studentTTwoSidedP,
   spearman,
   kruskalWallisSevenGroups,
+  lag1Autocorrelation,
+  effectiveSampleSize,
+  effectiveSampleSizePair,
 } from './stats';
 import type { Finding, MetricSeries } from './types';
 
@@ -112,16 +115,22 @@ export function detectLevelShift(series: MetricSeries): Finding | null {
   const baselineMean = mean(baseline);
   const effect = (recentMean - baselineMean) / baselineSd;
 
-  // Welch t-test on the two means.
-  const varRecent = sd(recent) ** 2 / recent.length;
-  const varBaseline = baselineSd ** 2 / baseline.length;
+  // Welch t-test on the two means, with degrees of freedom corrected for serial
+  // dependence. `r` is estimated once over the whole window because the 7-day
+  // recent slice is too short to estimate it on its own; see effectiveSampleSize.
+  const r = lag1Autocorrelation([...baseline, ...recent]);
+  const nRecentEff = effectiveSampleSize(recent.length, r);
+  const nBaselineEff = effectiveSampleSize(baseline.length, r);
+
+  const varRecent = sd(recent) ** 2 / nRecentEff;
+  const varBaseline = baselineSd ** 2 / nBaselineEff;
   const denominator = Math.sqrt(varRecent + varBaseline);
   if (denominator === 0) return null;
 
   const t = (recentMean - baselineMean) / denominator;
   const df =
     (varRecent + varBaseline) ** 2 /
-    (varRecent ** 2 / (recent.length - 1) + varBaseline ** 2 / (baseline.length - 1));
+    (varRecent ** 2 / Math.max(1, nRecentEff - 1) + varBaseline ** 2 / Math.max(1, nBaselineEff - 1));
   const pValue = studentTTwoSidedP(t, Math.max(1, df));
 
   const direction = effect < 0 ? 'down' : 'up';
@@ -152,8 +161,15 @@ export function detectTrend(series: MetricSeries): Finding | null {
   });
   if (xs.length < MIN_TREND_OBS) return null;
 
-  const { slope, pValue, n } = olsSlope(xs, ys);
+  const { slope, pValue: rawP, n, t } = olsSlope(xs, ys);
   if (slope === 0) return null;
+
+  // Ninety daily observations are not ninety independent ones; see
+  // effectiveSampleSize. Without this, regressing an autocorrelated series on
+  // time produces spuriously significant slopes (the classic spurious
+  // regression), which is what made the null-data canary certify 79% of noise.
+  const nEff = effectiveSampleSize(n, lag1Autocorrelation(ys));
+  const pValue = t === 0 ? rawP : studentTTwoSidedP(t, Math.max(1, nEff - 2));
 
   const direction = slope < 0 ? 'down' : 'up';
   return {
@@ -246,7 +262,11 @@ export function detectCrossLag(inputs: MetricSeries[], outcomes: MetricSeries[])
         // anti-conservative. The MIN_PAIRS check above is different in kind: a
         // pair with too little overlap was never testable, so it is genuinely
         // not part of the family.
-        const { rho, pValue, n } = spearman(xs, ys);
+        const { rho, n } = spearman(xs, ys);
+        const nEff = effectiveSampleSizePair(n, lag1Autocorrelation(xs), lag1Autocorrelation(ys));
+        const pValue = Math.abs(rho) >= 1
+          ? 0
+          : studentTTwoSidedP(rho * Math.sqrt((nEff - 2) / (1 - rho * rho)), Math.max(1, nEff - 2));
 
         const direction = rho < 0 ? 'down' : 'up';
         findings.push({

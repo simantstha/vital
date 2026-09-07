@@ -84,7 +84,7 @@ export function studentTTwoSidedP(t: number, df: number): number {
   return Math.min(1, Math.max(0, p));
 }
 
-export interface SlopeResult { slope: number; pValue: number; n: number }
+export interface SlopeResult { slope: number; pValue: number; n: number; t: number }
 
 /**
  * Ordinary least squares slope of ys on xs, with a two-sided t-test on the
@@ -94,7 +94,7 @@ export interface SlopeResult { slope: number; pValue: number; n: number }
  */
 export function olsSlope(xs: number[], ys: number[]): SlopeResult {
   const n = Math.min(xs.length, ys.length);
-  if (n < 3) return { slope: 0, pValue: 1, n };
+  if (n < 3) return { slope: 0, pValue: 1, n, t: 0 };
 
   const mx = mean(xs.slice(0, n));
   const my = mean(ys.slice(0, n));
@@ -105,7 +105,7 @@ export function olsSlope(xs: number[], ys: number[]): SlopeResult {
     sxx += (xs[i] - mx) ** 2;
     sxy += (xs[i] - mx) * (ys[i] - my);
   }
-  if (sxx === 0) return { slope: 0, pValue: 1, n };
+  if (sxx === 0) return { slope: 0, pValue: 1, n, t: 0 };
 
   const slope = sxy / sxx;
   const intercept = my - slope * mx;
@@ -116,13 +116,64 @@ export function olsSlope(xs: number[], ys: number[]): SlopeResult {
   }
 
   if (residualSumSquares === 0) {
-    return { slope, pValue: slope === 0 ? 1 : 0, n };
+    return { slope, pValue: slope === 0 ? 1 : 0, n, t: 0 };
   }
 
   const df = n - 2;
   const standardError = Math.sqrt(residualSumSquares / df / sxx);
   const t = slope / standardError;
-  return { slope, pValue: studentTTwoSidedP(t, df), n };
+  return { slope, pValue: studentTTwoSidedP(t, df), n, t };
+}
+
+/**
+ * Lag-1 autocorrelation. Returns 0 for series too short to estimate it, or with
+ * no variance. Negative serial correlation is clamped to 0: it makes a test
+ * conservative rather than anti-conservative, so there is nothing to correct.
+ */
+export function lag1Autocorrelation(xs: number[]): number {
+  const n = xs.length;
+  if (n < 4) return 0;
+  const m = mean(xs);
+  let numerator = 0;
+  let denominator = 0;
+  for (let i = 0; i < n; i += 1) {
+    const d = xs[i] - m;
+    denominator += d * d;
+    if (i < n - 1) numerator += d * (xs[i + 1] - m);
+  }
+  if (denominator === 0) return 0;
+  const r = numerator / denominator;
+  if (!Number.isFinite(r)) return 0;
+  return Math.min(0.99, Math.max(0, r));
+}
+
+/**
+ * Effective sample size under AR(1)-like serial dependence
+ * (Bartlett / Bretherton): n_eff = n (1 - r) / (1 + r).
+ *
+ * Ninety consecutive daily health observations are not ninety independent ones.
+ * Treating them as independent is exactly what let the null-data canary certify
+ * 51-79% of pure noise. A random walk has r -> 1, so n_eff collapses and the
+ * p-value goes to 1; i.i.d. data has r = 0 and is unaffected. Floored at 3 so
+ * downstream degrees-of-freedom arithmetic stays defined.
+ */
+export function effectiveSampleSize(n: number, r: number): number {
+  if (n <= 0) return 0;
+  const clamped = Math.min(0.99, Math.max(0, r));
+  return Math.max(3, (n * (1 - clamped)) / (1 + clamped));
+}
+
+/**
+ * Effective sample size for a correlation between two autocorrelated series
+ * (Quenouille / Bartlett pair form): n_eff = n (1 - rx ry) / (1 + rx ry).
+ * Note the product: a correlation is only inflated when BOTH series carry
+ * serial structure, so pairing an i.i.d. series with a random walk costs
+ * nothing.
+ */
+export function effectiveSampleSizePair(n: number, rx: number, ry: number): number {
+  if (n <= 0) return 0;
+  const product = Math.min(0.99, Math.max(0, rx * ry));
+  return Math.max(3, (n * (1 - product)) / (1 + product));
 }
 
 /** Ranks with average ranks for ties (1-indexed). */

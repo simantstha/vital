@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { mean, sd, olsSlope, studentTTwoSidedP, ranks, spearman, kruskalWallisSevenGroups, benjaminiHochberg } from './stats';
+import {
+  mean, sd, olsSlope, studentTTwoSidedP, ranks, spearman, kruskalWallisSevenGroups, benjaminiHochberg,
+  lag1Autocorrelation, effectiveSampleSize, effectiveSampleSizePair,
+} from './stats';
 
 test('mean and sd match hand-computed values', () => {
   assert.equal(mean([2, 4, 6]), 4);
@@ -120,4 +123,48 @@ test('benjamini-hochberg preserves input order in its output', () => {
 
 test('benjamini-hochberg on an empty family returns an empty array', () => {
   assert.deepEqual(benjaminiHochberg([], 0.1), []);
+});
+
+test('lag-1 autocorrelation is ~0 for alternating data and high for a random walk', () => {
+  const alternating = Array.from({ length: 60 }, (_, i) => (i % 2 === 0 ? 1 : -1));
+  assert.ok(lag1Autocorrelation(alternating) < 0.05); // negative r clamps to 0
+
+  // Deterministic accumulating walk (mulberry32 PRNG, matching nullCanary.test.ts's
+  // generator). NOTE: the brief's originally-specified generator,
+  // `value += ((i * 37) % 11) - 5`, is periodic with period 11 and its increments
+  // sum to exactly zero over every period — it never drifts, so it is not a random
+  // walk despite the name, and its true lag-1 autocorrelation against this exact
+  // implementation is ~0.17, not > 0.8. Replaced with a generator that actually
+  // accumulates, which is what the assertion and comment require.
+  function makeRandom(seed: number): () => number {
+    let state = seed >>> 0;
+    return () => {
+      state = (state + 0x6d2b79f5) >>> 0;
+      let t = Math.imul(state ^ (state >>> 15), 1 | state);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  const random = makeRandom(12345);
+  let value = 0;
+  const walk = Array.from({ length: 200 }, () => { value += (random() - 0.5) * 4; return value; });
+  assert.ok(lag1Autocorrelation(walk) > 0.8);
+});
+
+test('lag-1 autocorrelation is 0 for degenerate input', () => {
+  assert.equal(lag1Autocorrelation([1, 2]), 0);
+  assert.equal(lag1Autocorrelation([5, 5, 5, 5, 5]), 0);
+});
+
+test('effective sample size collapses as autocorrelation approaches 1', () => {
+  assert.equal(effectiveSampleSize(90, 0), 90);           // i.i.d.: no penalty
+  assert.ok(Math.abs(effectiveSampleSize(90, 0.5) - 30) < 0.001);
+  assert.ok(effectiveSampleSize(90, 0.99) < 1.5 || effectiveSampleSize(90, 0.99) === 3);
+  assert.ok(effectiveSampleSize(90, 0.99) >= 3);          // floored, never below 3
+});
+
+test('paired effective sample size penalises only when BOTH series are autocorrelated', () => {
+  assert.equal(effectiveSampleSizePair(90, 0, 0.9), 90);  // one i.i.d. series: no penalty
+  assert.ok(effectiveSampleSizePair(90, 0.9, 0.9) < 25);
+  assert.ok(effectiveSampleSizePair(90, 0.9, 0.9) >= 3);
 });
