@@ -124,3 +124,134 @@ export function olsSlope(xs: number[], ys: number[]): SlopeResult {
   const t = slope / standardError;
   return { slope, pValue: studentTTwoSidedP(t, df), n };
 }
+
+/** Ranks with average ranks for ties (1-indexed). */
+export function ranks(xs: number[]): number[] {
+  const indexed = xs.map((value, index) => ({ value, index }));
+  indexed.sort((a, b) => a.value - b.value);
+
+  const out = new Array<number>(xs.length);
+  let i = 0;
+  while (i < indexed.length) {
+    let j = i;
+    while (j + 1 < indexed.length && indexed[j + 1].value === indexed[i].value) j += 1;
+    const averageRank = (i + j + 2) / 2; // ranks are 1-indexed
+    for (let k = i; k <= j; k += 1) out[indexed[k].index] = averageRank;
+    i = j + 1;
+  }
+  return out;
+}
+
+export interface CorrelationResult { rho: number; pValue: number; n: number }
+
+/**
+ * Spearman rank correlation with a t-approximation p-value. Rank correlation
+ * rather than Pearson because health series are non-normal and outlier-prone.
+ */
+export function spearman(xs: number[], ys: number[]): CorrelationResult {
+  const n = Math.min(xs.length, ys.length);
+  if (n < 3) return { rho: 0, pValue: 1, n };
+
+  const rx = ranks(xs.slice(0, n));
+  const ry = ranks(ys.slice(0, n));
+  const mx = mean(rx);
+  const my = mean(ry);
+
+  let sxy = 0;
+  let sxx = 0;
+  let syy = 0;
+  for (let i = 0; i < n; i += 1) {
+    sxy += (rx[i] - mx) * (ry[i] - my);
+    sxx += (rx[i] - mx) ** 2;
+    syy += (ry[i] - my) ** 2;
+  }
+  if (sxx === 0 || syy === 0) return { rho: 0, pValue: 1, n };
+
+  const rho = sxy / Math.sqrt(sxx * syy);
+  if (Math.abs(rho) >= 1) return { rho, pValue: 0, n };
+
+  const t = rho * Math.sqrt((n - 2) / (1 - rho * rho));
+  return { rho, pValue: studentTTwoSidedP(t, n - 2), n };
+}
+
+/** Chi-square survival function, exact closed form for even df only. */
+function chiSquareSurvivalEvenDf(x: number, df: number): number {
+  if (x <= 0) return 1;
+  const m = df / 2;
+  let term = 1;
+  let sum = 1;
+  for (let k = 1; k < m; k += 1) {
+    term *= x / 2 / k;
+    sum += term;
+  }
+  return Math.min(1, Math.max(0, Math.exp(-x / 2) * sum));
+}
+
+export interface KruskalResult { h: number; pValue: number; n: number }
+
+/**
+ * Kruskal–Wallis across exactly seven weekday groups, with tie correction.
+ * Requiring all seven groups fixes df at 6, so the chi-square survival
+ * function has an exact closed form and no incomplete-gamma routine is
+ * needed. Any other shape reports p = 1 (no finding).
+ */
+export function kruskalWallisSevenGroups(groups: number[][]): KruskalResult {
+  if (groups.length !== 7 || groups.some((g) => g.length === 0)) {
+    return { h: 0, pValue: 1, n: 0 };
+  }
+
+  const all = groups.flat();
+  const n = all.length;
+  if (n < 14) return { h: 0, pValue: 1, n };
+
+  const allRanks = ranks(all);
+
+  let offset = 0;
+  let weighted = 0;
+  for (const group of groups) {
+    let groupRankSum = 0;
+    for (let i = 0; i < group.length; i += 1) groupRankSum += allRanks[offset + i];
+    weighted += (groupRankSum * groupRankSum) / group.length;
+    offset += group.length;
+  }
+
+  let h = (12 / (n * (n + 1))) * weighted - 3 * (n + 1);
+
+  // Tie correction: divide by 1 - Σ(t³ - t) / (n³ - n).
+  const counts = new Map<number, number>();
+  for (const value of all) counts.set(value, (counts.get(value) ?? 0) + 1);
+  let tieSum = 0;
+  for (const count of counts.values()) if (count > 1) tieSum += count ** 3 - count;
+  const correction = 1 - tieSum / (n ** 3 - n);
+  if (correction > 0) h /= correction;
+
+  if (!Number.isFinite(h) || h <= 0) return { h: 0, pValue: 1, n };
+  return { h, pValue: chiSquareSurvivalEvenDf(h, 6), n };
+}
+
+/**
+ * Benjamini–Hochberg step-up procedure. Returns, in input order, whether each
+ * p-value is rejected (i.e. is a discovery) at false-discovery rate q.
+ *
+ * This is the single most important function in the engine: it is what stops
+ * a sweep of ~150 hypotheses from reporting its expected crop of noise as
+ * insight.
+ */
+export function benjaminiHochberg(pValues: number[], q: number): boolean[] {
+  const m = pValues.length;
+  if (m === 0) return [];
+
+  const ordered = pValues
+    .map((p, index) => ({ p, index }))
+    .sort((a, b) => a.p - b.p);
+
+  // Largest k such that p_(k) <= (k/m) * q; reject all ranks up to it.
+  let maxK = 0;
+  for (let k = 1; k <= m; k += 1) {
+    if (ordered[k - 1].p <= (k / m) * q) maxK = k;
+  }
+
+  const out = new Array<boolean>(m).fill(false);
+  for (let k = 0; k < maxK; k += 1) out[ordered[k].index] = true;
+  return out;
+}
