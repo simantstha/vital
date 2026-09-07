@@ -2092,6 +2092,34 @@ test('the battery still finds a genuinely planted effect', () => {
   const certified = applyEvidenceGate(detectCrossLag([strain], [recovery]), established);
   assert.ok(certified.length > 0, 'planted cross-lag effect was not detected — the engine is mute, not safe');
 });
+
+test('the battery finds a MODERATE, realistic effect buried in noise', () => {
+  // The test above plants a near-perfect relationship (rho ~ -1), which no real
+  // health data ever shows. This is the power test: after the autocorrelation
+  // correction the null battery certifies exactly 0 of 4375, and an engine that
+  // only speaks for perfect relationships is the "statistically impeccable and
+  // permanently silent" failure the spec warns about. A real coaching signal —
+  // yesterday's training load explaining roughly half the variance in today's
+  // recovery, on top of genuine day-to-day noise — must survive.
+  const random = makeRandom(4242);
+  const strain = randomWalk('whoop_day_strain', random);
+
+  const recovery: MetricSeries = {
+    metric: 'whoop_recovery',
+    points: strain.points.map((point, index) => ({
+      date: point.date,
+      value: index === 0
+        ? 70
+        : 70 - 0.7 * (strain.points[index - 1].value as number) + (random() - 0.5) * 40,
+    })),
+  };
+
+  const certified = applyEvidenceGate(detectCrossLag([strain], [recovery]), established);
+  assert.ok(
+    certified.length > 0,
+    'a moderate real effect was not detected — the correction is over-conservative and the engine cannot do its job',
+  );
+});
 ```
 
 - [ ] **Step 2: Run the canary**
