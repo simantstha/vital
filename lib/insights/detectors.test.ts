@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { detectCadenceBreak } from './detectors';
+import { detectCadenceBreak, detectLevelShift, detectTrend } from './detectors';
 import type { MetricSeries } from './types';
 
 /** Builds a 90-day series ending 2026-09-07 from a day -> value map. */
@@ -86,4 +86,71 @@ test('treats a recorded zero as a non-active day, not as missing data', () => {
 
 test('returns null for a series with no activity at all', () => {
   assert.equal(detectCadenceBreak(series('exercise_min', {})), null);
+});
+
+/** 90-day series from a generator over day index 0..89 (89 = most recent). */
+function generated(metric: string, fn: (daysAgo: number) => number | null): MetricSeries {
+  const points = [];
+  const end = new Date(Date.UTC(2026, 8, 7));
+  for (let daysAgo = 89; daysAgo >= 0; daysAgo -= 1) {
+    const d = new Date(end);
+    d.setUTCDate(d.getUTCDate() - daysAgo);
+    points.push({ date: d.toISOString().slice(0, 10), value: fn(daysAgo) });
+  }
+  return { metric, points };
+}
+
+test('level shift finds a planted drop in the last week', () => {
+  const finding = detectLevelShift(generated('hrv_sdnn', (daysAgo) => {
+    const wobble = (daysAgo % 5) - 2;              // small deterministic variation
+    return daysAgo < 7 ? 40 + wobble : 60 + wobble;
+  }));
+  assert.ok(finding);
+  assert.equal(finding.kind, 'level_shift');
+  assert.ok(finding.effect < -1);                   // a drop, in SD units
+  assert.equal(finding.signature, 'level_shift:hrv_sdnn:down');
+  assert.ok(finding.pValue !== null && finding.pValue < 0.05);
+});
+
+test('level shift on a stable series yields only a small, unconvincing candidate', () => {
+  // Detectors emit every hypothesis they TEST; they do not decide what is worth
+  // saying. Gating happens in evidence.ts, which must correct over the full
+  // family — so a stable series still produces a candidate, it just fails the
+  // downstream floor. Pre-filtering here would shrink m and make the
+  // false-discovery-rate correction anti-conservative.
+  const finding = detectLevelShift(generated('hrv_sdnn', (daysAgo) => 60 + ((daysAgo % 5) - 2)));
+  assert.ok(finding, 'expected a candidate, since the hypothesis was tested');
+  assert.ok(Math.abs(finding.effect) < 0.8, 'effect must fail the downstream floor');
+  assert.ok(finding.pValue !== null && finding.pValue > 0.05);
+});
+
+test('level shift stays quiet when the baseline has no variation', () => {
+  // sd = 0 would make any change infinitely large; report nothing instead.
+  assert.equal(detectLevelShift(generated('hrv_sdnn', (daysAgo) => (daysAgo < 7 ? 40 : 60))), null);
+});
+
+test('level shift stays quiet with too few recent days', () => {
+  assert.equal(
+    detectLevelShift(generated('hrv_sdnn', (daysAgo) => (daysAgo < 7 ? null : 60 + ((daysAgo % 5) - 2)))),
+    null,
+  );
+});
+
+test('trend finds a planted decline and reports its direction', () => {
+  const finding = detectTrend(generated('sleep_minutes', (daysAgo) => 420 - (27 - Math.min(daysAgo, 27)) * 4));
+  assert.ok(finding);
+  assert.equal(finding.kind, 'trend');
+  assert.ok(finding.effect < 0);
+  assert.equal(finding.signature, 'trend:sleep_minutes:down');
+});
+
+test('trend stays quiet on a flat series', () => {
+  assert.equal(detectTrend(generated('sleep_minutes', () => 420)), null);
+});
+
+test('trend stays quiet with too few observed days in the window', () => {
+  assert.equal(
+    detectTrend(generated('sleep_minutes', (daysAgo) => (daysAgo % 3 === 0 ? 420 - daysAgo : null))),
+    null,
+  );
 });

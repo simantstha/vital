@@ -1,3 +1,4 @@
+import { mean, sd, olsSlope, studentTTwoSidedP } from './stats';
 import type { Finding, MetricSeries } from './types';
 
 /** Metrics whose rhythm is meaningful enough that breaking it is worth saying. */
@@ -63,6 +64,103 @@ export function detectCadenceBreak(series: MetricSeries): Finding | null {
       daysSinceLast,
       sessionsPerWeek: Number(perWeek.toFixed(1)),
       windowDays: observedDays,
+    },
+  };
+}
+
+const RECENT_DAYS = 7;
+const BASELINE_DAYS = 28;
+const MIN_RECENT_OBS = 7;
+const MIN_BASELINE_OBS = 21;
+
+const TREND_DAYS = 28;
+const MIN_TREND_OBS = 20;
+
+/** Observed (non-null) values from the last `count` points. */
+function tailValues(series: MetricSeries, count: number, skip = 0): number[] {
+  const end = series.points.length - skip;
+  const start = Math.max(0, end - count);
+  const out: number[] = [];
+  for (let i = start; i < end; i += 1) {
+    const value = series.points[i].value;
+    if (value !== null) out.push(value);
+  }
+  return out;
+}
+
+/**
+ * Compares the last 7 days against the preceding 28, in units of the user's own
+ * baseline SD. Expressing the change in personal SD is the point: 10 bpm means
+ * something different for a steady resting heart rate than a volatile one.
+ */
+export function detectLevelShift(series: MetricSeries): Finding | null {
+  const recent = tailValues(series, RECENT_DAYS);
+  const baseline = tailValues(series, BASELINE_DAYS, RECENT_DAYS);
+  if (recent.length < MIN_RECENT_OBS || baseline.length < MIN_BASELINE_OBS) return null;
+
+  const baselineSd = sd(baseline);
+  if (baselineSd === 0) return null;    // no variation: any change would read as infinite
+
+  const recentMean = mean(recent);
+  const baselineMean = mean(baseline);
+  const effect = (recentMean - baselineMean) / baselineSd;
+
+  // Welch t-test on the two means.
+  const varRecent = sd(recent) ** 2 / recent.length;
+  const varBaseline = baselineSd ** 2 / baseline.length;
+  const denominator = Math.sqrt(varRecent + varBaseline);
+  if (denominator === 0) return null;
+
+  const t = (recentMean - baselineMean) / denominator;
+  const df =
+    (varRecent + varBaseline) ** 2 /
+    (varRecent ** 2 / (recent.length - 1) + varBaseline ** 2 / (baseline.length - 1));
+  const pValue = studentTTwoSidedP(t, Math.max(1, df));
+
+  const direction = effect < 0 ? 'down' : 'up';
+  return {
+    kind: 'level_shift',
+    signature: `level_shift:${series.metric}:${direction}`,
+    metrics: [series.metric],
+    effect,
+    effectLabel: `${Math.abs(effect).toFixed(1)} SD ${direction === 'down' ? 'below' : 'above'} baseline`,
+    n: recent.length + baseline.length,
+    pValue,
+    detail: {
+      recentMean: Number(recentMean.toFixed(2)),
+      baselineMean: Number(baselineMean.toFixed(2)),
+      recentDays: recent.length,
+      baselineDays: baseline.length,
+    },
+  };
+}
+
+/** Ordinary least squares slope over the last 28 days, with a t-test on the slope. */
+export function detectTrend(series: MetricSeries): Finding | null {
+  const window = series.points.slice(Math.max(0, series.points.length - TREND_DAYS));
+  const xs: number[] = [];
+  const ys: number[] = [];
+  window.forEach((point, index) => {
+    if (point.value !== null) { xs.push(index); ys.push(point.value); }
+  });
+  if (xs.length < MIN_TREND_OBS) return null;
+
+  const { slope, pValue, n } = olsSlope(xs, ys);
+  if (slope === 0) return null;
+
+  const direction = slope < 0 ? 'down' : 'up';
+  return {
+    kind: 'trend',
+    signature: `trend:${series.metric}:${direction}`,
+    metrics: [series.metric],
+    effect: slope,
+    effectLabel: `${slope > 0 ? '+' : ''}${(slope * 7).toFixed(1)} per week`,
+    n,
+    pValue,
+    detail: {
+      slopePerDay: Number(slope.toFixed(4)),
+      slopePerWeek: Number((slope * 7).toFixed(2)),
+      observedDays: n,
     },
   };
 }
