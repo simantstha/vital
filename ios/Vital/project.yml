@@ -69,7 +69,7 @@ targets:
         VitalAPNSEnvironment: "$(APS_ENVIRONMENT)"
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
-        NSHealthShareUsageDescription: "Vital reads your health data to coach you."
+        NSHealthShareUsageDescription: "Vital reads your health and nutrition/food data — including from apps like MyFitnessPal — to coach you."
         NSHealthUpdateUsageDescription: "Vital may write health data on your behalf."
         NSCameraUsageDescription: "Vital uses the camera to scan barcodes and identify food."
         NSMicrophoneUsageDescription: "Vital uses the microphone so you can talk to your coach and log foods by voice."

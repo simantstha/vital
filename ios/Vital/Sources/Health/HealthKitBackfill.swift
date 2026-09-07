@@ -18,6 +18,10 @@ struct DailyHealthData {
     var exerciseMin: Double?      // minutes, cumulativeSum (Apple exercise ring)
     var flights: Double?          // count, cumulativeSum (flights climbed)
     var basalEnergyKcal: Double?  // kcal, cumulativeSum (resting energy)
+    var dietaryEnergyKcal: Double? // kcal, cumulativeSum (food logged to Health)
+    var dietaryProteinG: Double?   // grams, cumulativeSum
+    var dietaryCarbsG: Double?     // grams, cumulativeSum
+    var dietaryFatG: Double?       // grams, cumulativeSum
 }
 
 /// One night's sleep, attributed to the *wake* date (the day the sleep session ended).
@@ -98,11 +102,17 @@ final class HealthKitBackfill {
         async let exercise = dailyQuantity(.appleExerciseTime, options: .cumulativeSum, unit: HKUnit.minute(), start: start, end: end, anchor: anchor)
         async let flights = dailyQuantity(.flightsClimbed, options: .cumulativeSum, unit: HKUnit.count(), start: start, end: end, anchor: anchor)
         async let basalEnergy = dailyQuantity(.basalEnergyBurned, options: .cumulativeSum, unit: HKUnit.kilocalorie(), start: start, end: end, anchor: anchor)
+        async let dietaryEnergy = dailyQuantity(.dietaryEnergyConsumed, options: .cumulativeSum, unit: HKUnit.kilocalorie(), start: start, end: end, anchor: anchor)
+        async let dietaryProtein = dailyQuantity(.dietaryProtein, options: .cumulativeSum, unit: HKUnit.gram(), start: start, end: end, anchor: anchor)
+        async let dietaryCarbs = dailyQuantity(.dietaryCarbohydrates, options: .cumulativeSum, unit: HKUnit.gram(), start: start, end: end, anchor: anchor)
+        async let dietaryFat = dailyQuantity(.dietaryFatTotal, options: .cumulativeSum, unit: HKUnit.gram(), start: start, end: end, anchor: anchor)
 
         let (hrvByDay, restingHrByDay, hrAvgByDay, stepsByDay, activeEnergyByDay, bodyMassByDay) =
             try await (hrv, restingHr, hrAvg, steps, activeEnergy, bodyMass)
         let (vo2ByDay, distanceByDay, exerciseByDay, flightsByDay, basalByDay) =
             try await (vo2, distance, exercise, flights, basalEnergy)
+        let (dietaryEnergyByDay, dietaryProteinByDay, dietaryCarbsByDay, dietaryFatByDay) =
+            try await (dietaryEnergy, dietaryProtein, dietaryCarbs, dietaryFat)
 
         var days = Set(hrvByDay.keys)
         days.formUnion(restingHrByDay.keys)
@@ -115,6 +125,10 @@ final class HealthKitBackfill {
         days.formUnion(exerciseByDay.keys)
         days.formUnion(flightsByDay.keys)
         days.formUnion(basalByDay.keys)
+        days.formUnion(dietaryEnergyByDay.keys)
+        days.formUnion(dietaryProteinByDay.keys)
+        days.formUnion(dietaryCarbsByDay.keys)
+        days.formUnion(dietaryFatByDay.keys)
 
         return days.map { day in
             DailyHealthData(
@@ -129,7 +143,11 @@ final class HealthKitBackfill {
                 distanceM: distanceByDay[day],
                 exerciseMin: exerciseByDay[day],
                 flights: flightsByDay[day],
-                basalEnergyKcal: basalByDay[day]
+                basalEnergyKcal: basalByDay[day],
+                dietaryEnergyKcal: dietaryEnergyByDay[day],
+                dietaryProteinG: dietaryProteinByDay[day],
+                dietaryCarbsG: dietaryCarbsByDay[day],
+                dietaryFatG: dietaryFatByDay[day]
             )
         }
     }
@@ -349,6 +367,13 @@ final class HealthKitBackfill {
         async let workouts = fetchWorkouts(from: start, to: end)
         let (statsResult, sleepResult, workoutsResult) = try await (stats, sleep, workouts)
 
+        // One HKSourceQuery for the whole range, attached to every day below —
+        // NOT per-day, which would fire 365 extra queries during the initial
+        // backfill. `HealthKitManager` owns the query since it's the single
+        // place authorization + source-attribution logic lives.
+        let nutritionSourceNames = await HealthKitManager().nutritionSourceNames(from: start, to: end)
+        let nutritionSources: [String]? = nutritionSourceNames.isEmpty ? nil : nutritionSourceNames
+
         let statsByDay = Dictionary(uniqueKeysWithValues: statsResult.map { ($0.day, $0) })
         let sleepByDay = Dictionary(uniqueKeysWithValues: sleepResult.map { ($0.day, $0) })
         let workoutsByDay = Dictionary(grouping: workoutsResult, by: \.day)
@@ -368,7 +393,9 @@ final class HealthKitBackfill {
             if let stat, stat.hrvSdnn != nil || stat.restingHr != nil || stat.hrAvg != nil
                 || stat.steps != nil || stat.activeEnergyKcal != nil || stat.bodyMassKg != nil
                 || stat.vo2Max != nil || stat.distanceM != nil || stat.exerciseMin != nil
-                || stat.flights != nil || stat.basalEnergyKcal != nil {
+                || stat.flights != nil || stat.basalEnergyKcal != nil
+                || stat.dietaryEnergyKcal != nil || stat.dietaryProteinG != nil
+                || stat.dietaryCarbsG != nil || stat.dietaryFatG != nil {
                 metrics = DailyIngestMetrics(
                     hrv_sdnn: stat.hrvSdnn,
                     resting_hr: stat.restingHr,
@@ -380,7 +407,11 @@ final class HealthKitBackfill {
                     distance_m: stat.distanceM,
                     exercise_min: stat.exerciseMin,
                     flights: stat.flights,
-                    basal_energy_kcal: stat.basalEnergyKcal
+                    basal_energy_kcal: stat.basalEnergyKcal,
+                    dietary_energy_kcal: stat.dietaryEnergyKcal,
+                    dietary_protein_g: stat.dietaryProteinG,
+                    dietary_carbs_g: stat.dietaryCarbsG,
+                    dietary_fat_g: stat.dietaryFatG
                 )
             } else {
                 metrics = nil
@@ -414,7 +445,8 @@ final class HealthKitBackfill {
                 date: formatter.string(from: day),
                 metrics: metrics,
                 sleep: sleepDTO,
-                workouts: workoutsDTO
+                workouts: workoutsDTO,
+                nutrition_sources: nutritionSources
             )
         }
     }

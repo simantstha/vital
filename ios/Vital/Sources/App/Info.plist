@@ -45,7 +45,7 @@
 	<key>NSCameraUsageDescription</key>
 	<string>Vital uses the camera to scan barcodes and identify food.</string>
 	<key>NSHealthShareUsageDescription</key>
-	<string>Vital reads your health data to coach you.</string>
+	<string>Vital reads your health and nutrition/food data — including from apps like MyFitnessPal — to coach you.</string>
 	<key>NSHealthUpdateUsageDescription</key>
 	<string>Vital may write health data on your behalf.</string>
 	<key>NSMicrophoneUsageDescription</key>

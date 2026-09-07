@@ -15,7 +15,11 @@
  *     metrics?: {
  *       hrv_sdnn?: number, resting_hr?: number, hr_avg?: number,
  *       steps?: number, active_energy_kcal?: number, body_mass_kg?: number,
+ *       dietary_energy_kcal?: number, dietary_protein_g?: number,
+ *       dietary_carbs_g?: number, dietary_fat_g?: number,
  *     },
+ *     nutrition_sources?: string[], // e.g. ['MyFitnessPal'] — stored as the
+ *                                   // dietary_energy_kcal row's jsonb payload
  *     sleep?: { minutes: number, stages?: unknown },
  *     workouts?: Array<{ hkUuid: string, [key: string]: unknown }>,
  *   }]
@@ -51,12 +55,21 @@ const SCALAR_METRICS = [
   'exercise_min',
   'flights',
   'basal_energy_kcal',
+  'dietary_energy_kcal',
+  'dietary_protein_g',
+  'dietary_carbs_g',
+  'dietary_fat_g',
 ] as const;
 type ScalarMetric = typeof SCALAR_METRICS[number];
 
 interface DayInput {
   date: string;
   metrics?: Partial<Record<ScalarMetric, number>>;
+  // Third-party app(s) that wrote today's dietary_* samples to Apple Health
+  // (e.g. ['MyFitnessPal']) — stored as the dietary_energy_kcal row's jsonb
+  // payload so lib/brain/nutritionIntake.ts can attribute "via HealthKit"
+  // narration to the actual logging app instead of a bare "Apple Health".
+  nutrition_sources?: string[];
   sleep?: { minutes: number; stages?: unknown };
   workouts?: Array<{ hkUuid: string; [key: string]: unknown }>;
 }
@@ -66,6 +79,9 @@ function isDayInput(d: unknown): d is DayInput {
   const o = d as Record<string, unknown>;
   if (typeof o.date !== 'string' || !DATE_RE.test(o.date)) return false;
   if (o.metrics !== undefined && (o.metrics === null || typeof o.metrics !== 'object')) return false;
+  if (o.nutrition_sources !== undefined) {
+    if (!Array.isArray(o.nutrition_sources) || !o.nutrition_sources.every((s) => typeof s === 'string')) return false;
+  }
   if (o.sleep !== undefined) {
     if (o.sleep === null || typeof o.sleep !== 'object') return false;
     if (typeof (o.sleep as Record<string, unknown>).minutes !== 'number') return false;
@@ -143,7 +159,10 @@ export async function POST(request: Request): Promise<NextResponse> {
       for (const metric of SCALAR_METRICS) {
         const value = day.metrics[metric];
         if (typeof value !== 'number') continue;
-        rows.push({ user_id: userId, date: day.date, metric, value, payload: null, source: 'healthkit' });
+        const payload = metric === 'dietary_energy_kcal' && day.nutrition_sources
+          ? { sources: day.nutrition_sources }
+          : null;
+        rows.push({ user_id: userId, date: day.date, metric, value, payload, source: 'healthkit' });
         touchedMetrics.add(metric);
       }
     }

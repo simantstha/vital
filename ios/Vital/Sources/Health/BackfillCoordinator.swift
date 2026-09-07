@@ -35,6 +35,14 @@ final class BackfillCoordinator: ObservableObject {
     private enum Keys {
         static let completed = "backfill.completed"
         static let lastCompletedDate = "backfill.lastCompletedDate"
+        /// Tracks which set of HealthKit read types this install has been
+        /// prompted for. `requestAuthorization()` is only ever reached from
+        /// onboarding and `startIfNeeded()` — and `startIfNeeded()` is a
+        /// permanent no-op once `completed` is set — so an existing install
+        /// would otherwise never see the system prompt for a type added
+        /// after its first launch. Bump `Config.currentAuthGeneration` (and
+        /// this comment) whenever `HealthKitManager.readTypes` grows.
+        static let authGeneration = "backfill.authGeneration"
     }
 
     private enum Config {
@@ -43,6 +51,13 @@ final class BackfillCoordinator: ObservableObject {
         /// Delay before each retry, in seconds — 3 retries beyond the initial
         /// attempt (4 tries total per chunk).
         static let retryDelaysSeconds: [UInt64] = [1, 4, 16]
+        /// Generation 2 added dietary intake (energy/protein/carbs/fat) —
+        /// see `refreshAuthorizationIfNeeded()`.
+        static let currentAuthGeneration = 2
+        /// How far back to re-post when a generation bump grants a new type,
+        /// so it shows up promptly without waiting on the (permanently
+        /// disabled) 365-day backfill.
+        static let authRefreshDays = 90
     }
 
     private let healthKitManager: HealthKitManager
@@ -64,6 +79,50 @@ final class BackfillCoordinator: ObservableObject {
         self.backfill = backfill
         self.apiClient = apiClient
         self.defaults = defaults
+    }
+
+    /// Re-requests HealthKit authorization when this install hasn't seen the
+    /// current set of read types yet (tracked via `Keys.authGeneration`), then
+    /// re-posts the trailing `Config.authRefreshDays` days so a newly-granted
+    /// type (e.g. dietary intake) shows up right away instead of waiting on
+    /// `startIfNeeded()` — which is a permanent no-op for any install whose
+    /// 365-day backfill already completed. Safe to call every launch: it's a
+    /// no-op once the stored generation catches up, and re-posting existing
+    /// days is harmless (the server upsert is idempotent on
+    /// (user_id, date, metric)). The generation is persisted only after a
+    /// successful upload, so a network failure retries on the next launch
+    /// instead of silently giving up.
+    func refreshAuthorizationIfNeeded() async {
+        guard defaults.integer(forKey: Keys.authGeneration) < Config.currentAuthGeneration else { return }
+
+        // A fresh install (generation 0) hasn't completed the 365-day
+        // backfill yet, so `startIfNeeded()` is about to run and will
+        // request authorization for the full current `readTypes` set anyway
+        // (including the dietary types this generation bump exists for) —
+        // running the 90-day re-post here too would prompt for auth and
+        // upload the same range twice. Just stamp the generation and let
+        // `startIfNeeded()` do the one real backfill.
+        guard defaults.bool(forKey: Keys.completed) else {
+            defaults.set(Config.currentAuthGeneration, forKey: Keys.authGeneration)
+            return
+        }
+
+        await healthKitManager.requestAuthorization()
+
+        do {
+            let end = Date()
+            let start = Calendar.current.date(byAdding: .day, value: -Config.authRefreshDays, to: end) ?? end
+            let days = try await backfill.buildIngestDays(from: start, to: end)
+
+            for chunkStart in stride(from: 0, to: days.count, by: Config.chunkSize) {
+                let chunkEnd = min(chunkStart + Config.chunkSize, days.count)
+                try await uploadWithRetry(Array(days[chunkStart..<chunkEnd]))
+            }
+
+            defaults.set(Config.currentAuthGeneration, forKey: Keys.authGeneration)
+        } catch {
+            lastError = error.localizedDescription
+        }
     }
 
     /// No-op if the backfill already completed. Otherwise requests HealthKit

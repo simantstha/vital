@@ -7,6 +7,9 @@ struct FuelStripView: View {
     let kcalRemaining: Int
     let proteinHave: Int
     let proteinGoal: Int
+    /// "logged" | "healthkit" | "none" — see `TodayDietBudget.consumedSource`.
+    var consumedSource: String? = nil
+    var consumedSourceName: String? = nil
     var onOpen: () -> Void
 
     var body: some View {
@@ -23,6 +26,11 @@ struct FuelStripView: View {
                         .font(.system(size: 13))
                         .foregroundStyle(Theme.Colors.textSecondary)
                         .monospacedDigit()
+                    if consumedSource == "healthkit" {
+                        Text(HealthAttributionLabel.text(sourceName: consumedSourceName))
+                            .font(.system(size: 11))
+                            .foregroundStyle(Theme.Colors.textTertiary)
+                    }
                 }
 
                 Spacer(minLength: Theme.Spacing.sm)

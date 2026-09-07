@@ -24,6 +24,7 @@ import {
   queryScheduleWindow, formatScheduleLine, type ScheduleBlock,
 } from './tools';
 import { resolveDietBudget, type DietBudget } from './dietBudget';
+import { resolveDailyIntake, type DailyIntake } from './nutritionIntake';
 import { getDailyBrief, type CachedBrief } from './dailyBriefRepository';
 import { getConversationStart } from './conversationWindow';
 import { buildWhoopContextLine } from './whoopContext';
@@ -73,6 +74,7 @@ export interface CoachContext {
   baselines: BaselineSnapshot[];    // one row per metric with a baselines row
   calibration: Calibration;         // gates recovery/training prescriptions
   dietBudget?: DietBudget;          // effective calorie/macro targets (auto or pinned)
+  todayIntake?: DailyIntake;        // resolved consumed kcal/macros for `today` — see lib/brain/nutritionIntake.ts
   cachedBrief?: CachedBrief;        // today's app-generated insight + meal plan, if warm
   whoopLine?: string;               // compact "WHOOP (today|yesterday): ..." line, if any whoop_* daily_metrics exist
   unitSystem: UnitSystem;           // display-unit preference — render-only, never storage (see lib/units.ts)
@@ -227,6 +229,17 @@ export function buildPromptText(
       `- Meals logged today: ${ctx.today.meals.length}, ` +
       `${mealTotal.kcal}kcal (${mealTotal.c}g C / ${mealTotal.p}g P / ${mealTotal.f}g F)`,
     );
+  } else if (ctx.todayIntake?.source === 'healthkit') {
+    // No meal_logged events, but a nonzero HealthKit dietary reading exists
+    // (e.g. synced from MyFitnessPal) — see lib/brain/nutritionIntake.ts.
+    // Name the real source so the coach neither nags about "no meals logged"
+    // nor claims the user logged food in Vital.
+    const intake = ctx.todayIntake;
+    const sourceLabel = intake.sourceName ? `Apple Health / ${intake.sourceName}` : 'Apple Health';
+    lines.push(
+      `- Intake today (via ${sourceLabel}): ${intake.kcal} kcal ` +
+      `(${intake.carbs}g C / ${intake.protein}g P / ${intake.fat}g F) — not logged in Vital`,
+    );
   } else {
     lines.push('- No meals logged today yet');
   }
@@ -234,6 +247,10 @@ export function buildPromptText(
   // ── Diet Budget — source of truth for calorie/macro targets ────────────────
   if (ctx.dietBudget) {
     const b = ctx.dietBudget;
+    // Prefer the resolver's total (covers the HealthKit-only case above) —
+    // for 'logged'/'none' it's numerically identical to mealTotal.kcal since
+    // both sum the same today's meal_logged events.
+    const consumedKcal = ctx.todayIntake?.kcal ?? mealTotal.kcal;
     lines.push('\n### Diet Budget');
     lines.push(
       `- Mode: ${b.mode}${b.mode === 'auto' ? ' (auto-calculated)' : ' (user-pinned)'}, goal: ${b.goal}`,
@@ -241,7 +258,7 @@ export function buildPromptText(
     lines.push(
       `- Target: ${b.targetKcal} kcal (${b.carbs}g C / ${b.protein}g P / ${b.fat}g F)`,
     );
-    lines.push(`- Remaining today: ${b.targetKcal - mealTotal.kcal} kcal`);
+    lines.push(`- Remaining today: ${b.targetKcal - consumedKcal} kcal`);
     if (b.lowEnergyWarning) {
       lines.push(
         `- SAFETY: target is at/below the ~${b.lowEnergyWarning.thresholdKcal} kcal low-energy-availability floor.`,
@@ -450,6 +467,10 @@ export async function assembleContext(userId: string): Promise<CoachContext> {
   const dietBudget  = usersRow ? await resolveDietBudget(usersRow, userId) : undefined;
   const cachedBrief = await getDailyBrief(userId, localToday, unitSystem) ?? undefined;
 
+  // Resolved consumed kcal/macros for today (Vital meal log, else a nonzero
+  // HealthKit dietary_* reading, else none) — see lib/brain/nutritionIntake.ts.
+  const todayIntake = (await resolveDailyIntake(userId, [localToday], tz)).get(localToday);
+
   // WHOOP context line (Task 7) — daily_metrics is day-keyed to the user's
   // *local* day (lib/whoop/mapping.ts's localDayKey), same key as above.
   const whoopRows = await db.select({
@@ -478,6 +499,7 @@ export async function assembleContext(userId: string): Promise<CoachContext> {
     baselines,
     calibration,
     dietBudget,
+    todayIntake,
     cachedBrief,
     whoopLine,
     unitSystem,

@@ -25,6 +25,7 @@ import {
   type HrvMetric,
 } from '@/lib/brain/recovery';
 import { localDayKey, pickTimeZone, previousDayKey, localHour } from '@/lib/localDay';
+import { resolveDailyIntake } from '@/lib/brain/nutritionIntake';
 import { resolveUnitSystem, type UnitSystem } from '@/lib/units';
 import { KM_PER_MILE } from '@/lib/metricFormat';
 import type { DailyBrief } from '@/lib/types';
@@ -463,22 +464,23 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
     }));
 
   // ── Recent nutrition (last 3 days, excluding today) ───────────────────────
-
-  const mealDayMap = new Map<string, { calories: number; carbs: number; protein: number; fat: number }>();
-  for (const e of events.filter(ev => ev.type === 'meal_logged' && nutritionDayKeys.has(dayOf(ev)))) {
-    const key = dayOf(e);
-    if (!mealDayMap.has(key)) mealDayMap.set(key, { calories: 0, carbs: 0, protein: 0, fat: 0 });
-    const day = mealDayMap.get(key)!;
-    const p   = pl(e.payload);
-    day.calories += Math.round(num(p.kcal) ?? num(p.calories) ?? 0);
-    day.carbs    += Math.round(num(p.c)    ?? num(p.carbs)    ?? 0);
-    day.protein  += Math.round(num(p.p)    ?? num(p.protein)  ?? 0);
-    day.fat      += Math.round(num(p.f)    ?? num(p.fat)      ?? 0);
-  }
-  const recentNutrition = Array.from(mealDayMap.entries())
-    .sort(([a], [b]) => b.localeCompare(a))
+  // resolveDailyIntake (lib/brain/nutritionIntake.ts) prefers Vital meal logs
+  // per day, else a nonzero HealthKit dietary_* reading (e.g. synced from
+  // MyFitnessPal) — so a HealthKit-only user's nutrition narrative is no
+  // longer permanently empty. Days with neither source ('none') are dropped,
+  // matching the old behavior of only surfacing days with real data.
+  const nutritionIntakeByDay = await resolveDailyIntake(userId, Array.from(nutritionDayKeys), tz ?? 'UTC');
+  const recentNutrition = Array.from(nutritionIntakeByDay.values())
+    .filter(intake => intake.source !== 'none')
+    .sort((a, b) => b.date.localeCompare(a.date))
     .slice(0, 3)
-    .map(([date, macros]) => ({ date, ...macros }));
+    .map(intake => ({
+      date: intake.date,
+      calories: intake.kcal,
+      carbs: intake.carbs,
+      protein: intake.protein,
+      fat: intake.fat,
+    }));
 
   // ── Weight from latest event ──────────────────────────────────────────────
 

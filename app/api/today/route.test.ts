@@ -38,6 +38,17 @@ const state: {
 let generateDailyBriefCallCount = 0;
 const dailyBriefUpserts: unknown[] = [];
 
+// daily_metrics is read two ways in this route's call graph: queryMetricPoints
+// (real, unmocked — chains .where().orderBy()) and, as of the HealthKit
+// nutrition intake resolver, lib/brain/nutritionIntake.ts (awaits .where()
+// directly, no .orderBy()). This thenable satisfies both call shapes off the
+// same fixture instead of needing two branches.
+function rowsOrOrdered<T>(rows: T[]): Promise<T[]> & { orderBy: () => Promise<T[]> } {
+  const p = Promise.resolve(rows) as Promise<T[]> & { orderBy: () => Promise<T[]> };
+  p.orderBy = async () => rows;
+  return p;
+}
+
 const fakeDb = {
   select: () => ({
     from: (table: unknown) => {
@@ -48,7 +59,7 @@ const fakeDb = {
         return { where: () => ({ limit: async () => [state.userRow] }) };
       }
       if (table === realSchema.daily_metrics) {
-        return { where: () => ({ orderBy: async () => [] }) };
+        return { where: () => rowsOrOrdered<never>([]) };
       }
       if (table === realSchema.daily_briefs) {
         return { where: () => ({ limit: async () => (state.dailyBriefRow ? [state.dailyBriefRow] : []) }) };

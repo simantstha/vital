@@ -65,6 +65,13 @@ struct DietBudgetCardView: View {
             }
             .padding(.top, Theme.Spacing.sm)
 
+            if data.consumedSource == "healthkit" {
+                Text(HealthAttributionLabel.text(sourceName: data.consumedSourceName))
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.Colors.textTertiary)
+                    .padding(.top, 2)
+            }
+
             progressBar(fraction: eatenFraction)
                 .animation(Theme.Motion.settle, value: eatenFraction)
                 .padding(.top, Theme.Spacing.lg)

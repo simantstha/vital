@@ -322,7 +322,9 @@ private extension DietSheetView {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
             SectionHeader(title: "Logged today")
 
-            if vm.loggedEntries.isEmpty {
+            if vm.consumedSource == "healthkit" {
+                healthKitSummaryRow
+            } else if vm.loggedEntries.isEmpty {
                 Text("Nothing logged yet — pick a meal above to add your first food.")
                     .font(.system(size: 14))
                     .foregroundStyle(Theme.Colors.textTertiary)
@@ -353,6 +355,32 @@ private extension DietSheetView {
                     }
                 }
             }
+        }
+    }
+
+    /// Read-only stand-in for `loggedGroups` when today's food came from a
+    /// synced app (MyFitnessPal, etc.) rather than manual logging — there are
+    /// no per-meal events to list, only a daily total. Deliberately has no
+    /// delete affordance: this total has no event id, so it can never reach
+    /// `APIClient.deleteMealLog(id:)`.
+    var healthKitSummaryRow: some View {
+        VitalCard(padding: 0) {
+            HStack(spacing: Theme.Spacing.md) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("\(vm.healthKitKcal) kcal")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Theme.Colors.textPrimary)
+                    Text("P\(vm.healthKitProtein) · C\(vm.healthKitCarbs) · F\(vm.healthKitFat)")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.Colors.textSecondary)
+                }
+                Spacer(minLength: Theme.Spacing.sm)
+                Text(vm.healthKitAttributionLabel)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.Colors.textTertiary)
+            }
+            .padding(.horizontal, Theme.Spacing.lg)
+            .padding(.vertical, Theme.Spacing.md)
         }
     }
 
