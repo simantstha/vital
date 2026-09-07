@@ -190,6 +190,12 @@ private extension LogsView {
                         .padding(.vertical, Theme.Spacing.xxl)
                 } else {
                     VStack(spacing: 0) {
+                        // No row here has a delete affordance today — deleting a
+                        // logged meal only happens in the Diet Sheet. If one is
+                        // ever added, it must exclude `type == "nutrition_healthkit"`:
+                        // that row is a synthetic, read-only HealthKit rollup with
+                        // no underlying event id, so a delete call has nothing to
+                        // target and must never reach `deleteMealLog`.
                         ForEach(Array(day.items.enumerated()), id: \.element.id) { index, item in
                             if let analysisId = item.analysisId {
                                 Button {

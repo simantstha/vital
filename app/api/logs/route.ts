@@ -1,8 +1,9 @@
 /**
- * GET /api/logs?days=3
+ * GET /api/logs?days=3&tz=America/Chicago
  *
  * Returns a unified activity log across meal_logged, workout_completed,
- * weight_logged, hrv_reading, and sleep_session events — newest first.
+ * weight_logged, hrv_reading, and sleep_session events — newest first — plus
+ * a per-local-day nutrition intake breakdown.
  *
  * Response:
  * {
@@ -13,7 +14,7 @@
  *     title:     string,
  *     subtitle:  string,
  *     imageThumb?: string,  // meal_logged only, when the log had a photo
- *     kcal?:       number,  // meal_logged only — kcal eaten (not burned)
+ *     kcal?:       number,  // meal_logged / nutrition_healthkit — kcal eaten (not burned)
  *     km?:         number,  // workout_completed only — distance, 2dp
  *     sleepMs?:    number,  // sleep_session only — duration in ms
  *     hasExactTime?: boolean, // HealthKit-derived items only
@@ -25,12 +26,23 @@
  *                           // when a status='ready' (and non-deleted) analysis
  *                           // exists, so clients can deep-link to GET
  *                           // /api/{workout,sleep}-analyses/:id
- *   }]
+ *   }],
+ *   dietByDay: {
+ *     "YYYY-MM-DD": { kcal, protein, carbs, fat, source, sourceName }
+ *   }
  * }
  * (redesign-v3 Phase 6: kcal/km/sleepMs added so the Logs day-pager can
  * summarize a day's entries without re-parsing title/subtitle strings.
  * Each is a conditional-spread field, present only when the source payload
  * carries it — same convention as the pre-existing imageThumb field.)
+ *
+ * `dietByDay` and the synthetic `nutrition_healthkit` item (added below) come
+ * from lib/brain/nutritionIntake.ts's resolveDailyIntake — the same resolver
+ * /api/today uses — so a MyFitnessPal-via-Apple-Health day shows real numbers
+ * here instead of silently reading 0 (the Logs tab never learned about
+ * HealthKit nutrition when /api/today did). resolveDailyIntake also owns the
+ * precedence rule (any meal_logged event that day wins, no HealthKit row);
+ * this route does not reimplement it.
  */
 
 import { NextResponse } from 'next/server';
@@ -38,10 +50,13 @@ import { db, schema } from '@/db';
 import { eq, and, gte, inArray, desc, isNull } from 'drizzle-orm';
 import { getUserIdFromRequest } from '@/lib/auth';
 import { queryMetricPoints, queryWorkouts } from '@/lib/brain/tools';
+import { resolveDailyIntake } from '@/lib/brain/nutritionIntake';
+import { localDayKey, pickTimeZone, previousDayKey } from '@/lib/localDay';
 import {
   dedupeWorkoutLogItems,
   mapDailySleepRow,
   mapEventToLogItem,
+  mapHealthKitNutritionDay,
   mapHealthKitWorkout,
   sortLogItemsNewestFirst,
   type LogItem,
@@ -57,6 +72,7 @@ const LOG_TYPES = ['meal_logged', 'workout_completed', 'weight_logged', 'hrv_rea
 export async function GET(request: Request): Promise<NextResponse> {
   const { searchParams } = new URL(request.url);
   const days = Math.max(1, Math.min(90, Number(searchParams.get('days') ?? '3')));
+  const paramTz = searchParams.get('tz');
 
   let userId: string;
   try {
@@ -65,40 +81,74 @@ export async function GET(request: Request): Promise<NextResponse> {
     return NextResponse.json({ error: String(err) }, { status: 401 });
   }
 
+  const now = new Date();
   const since = new Date();
   since.setUTCDate(since.getUTCDate() - days);
   since.setUTCHours(0, 0, 0, 0);
 
-  const events = await db
-    .select()
-    .from(schema.events)
-    .where(
-      and(
-        eq(schema.events.user_id, userId),
-        gte(schema.events.timestamp, since),
-        inArray(schema.events.type, LOG_TYPES),
-      ),
-    )
-    .orderBy(desc(schema.events.timestamp))
-    .limit(200);
+  const [events, userRow] = await Promise.all([
+    db
+      .select()
+      .from(schema.events)
+      .where(
+        and(
+          eq(schema.events.user_id, userId),
+          gte(schema.events.timestamp, since),
+          inArray(schema.events.type, LOG_TYPES),
+        ),
+      )
+      .orderBy(desc(schema.events.timestamp))
+      .limit(200),
+    db.select().from(schema.users).where(eq(schema.users.id, userId)).limit(1).then((r) => r[0]),
+  ]);
+
+  // Prefer the fresh request tz (tracks travel), else the stored one, else
+  // UTC — same precedence as /api/today. Local day keys walk backwards from
+  // today via previousDayKey (pure calendar arithmetic, DST-proof) rather
+  // than any UTC offset math.
+  const tz = pickTimeZone(paramTz, userRow?.timezone) ?? 'UTC';
+  const dayKeys: string[] = [localDayKey(now, tz)];
+  for (let i = 1; i < days; i++) dayKeys.push(previousDayKey(dayKeys[i - 1]));
 
   // HealthKit workouts and sleep are synced into daily_metrics rather than the
   // events ledger. Workout startTime is an exact instant when available; daily
   // sleep remains day-level data attributed to its existing wake date.
-  const [workouts, sleepRows, units] = await Promise.all([
+  const [workouts, sleepRows, units, intakeByDay] = await Promise.all([
     queryWorkouts(userId, days),
     queryMetricPoints(userId, 'sleep_minutes', days),
     getUserUnitSystem(userId),
+    resolveDailyIntake(userId, dayKeys, tz),
   ]);
   const eventItems = events.map((e) => mapEventToLogItem(e, units));
   const workoutItems = workouts.map((w, i) => mapHealthKitWorkout(w, i, units));
   const sleepItems = sleepRows.map(mapDailySleepRow);
 
+  // One read-only feed item per day where resolveDailyIntake found a
+  // HealthKit-only source (e.g. MyFitnessPal via Apple Health) — never when a
+  // meal_logged event exists that day, since resolveDailyIntake's precedence
+  // rule already excludes those days from resolving to 'healthkit'.
+  const dietItems: LogItem[] = [];
+  const dietByDay: Record<string, {
+    kcal: number; protein: number; carbs: number; fat: number;
+    source: string; sourceName: string | null;
+  }> = {};
+  for (const date of dayKeys) {
+    const intake = intakeByDay.get(date);
+    if (!intake) continue;
+    dietByDay[date] = {
+      kcal: intake.kcal, protein: intake.protein, carbs: intake.carbs, fat: intake.fat,
+      source: intake.source, sourceName: intake.sourceName,
+    };
+    if (intake.source === 'healthkit') {
+      dietItems.push(mapHealthKitNutritionDay(date, intake));
+    }
+  }
+
   const items = dedupeWorkoutLogItems(
-    sortLogItemsNewestFirst([...eventItems, ...workoutItems, ...sleepItems]),
+    sortLogItemsNewestFirst([...eventItems, ...workoutItems, ...sleepItems, ...dietItems]),
   );
 
-  return NextResponse.json({ items: await withAnalysisIds(userId, items) });
+  return NextResponse.json({ items: await withAnalysisIds(userId, items), dietByDay });
 }
 
 // ── Proactive-analysis linkage ──────────────────────────────────────────────

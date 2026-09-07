@@ -281,7 +281,7 @@ final class LogsPagerTests: XCTestCase {
             MealLogEntryDTO(id: "2", name: "Dinner", kcal: 640, protein: 46, carbs: 58, fat: 20, slot: "dinner", loggedAt: "2026-07-11T19:41:00.000Z"),
         ]
 
-        let data = LogsPagerSummary.dietDayData(entries: entries, goal: goal)
+        let data = LogsPagerSummary.dietDayData(entries: entries, goal: goal, intake: nil)
 
         XCTAssertEqual(data.targetKcal, 2014)
         XCTAssertEqual(data.eatenKcal, 1280)
@@ -290,6 +290,7 @@ final class LogsPagerTests: XCTestCase {
         XCTAssertEqual(data.carbs.current, 118)
         XCTAssertEqual(data.fat.current, 40)
         XCTAssertEqual(data.protein.target, 150)
+        XCTAssertNil(data.consumedSource)
     }
 
     func testDietDayDataClampsRemainingAtZeroWhenEatenExceedsTarget() {
@@ -298,9 +299,45 @@ final class LogsPagerTests: XCTestCase {
             MealLogEntryDTO(id: "1", name: "Feast", kcal: 1500, protein: 80, carbs: 200, fat: 60, slot: nil, loggedAt: "2026-07-11T12:00:00.000Z"),
         ]
 
-        let data = LogsPagerSummary.dietDayData(entries: entries, goal: goal)
+        let data = LogsPagerSummary.dietDayData(entries: entries, goal: goal, intake: nil)
 
         XCTAssertEqual(data.eatenKcal, 1500)
         XCTAssertEqual(data.remaining, 0)
+    }
+
+    /// The Logs-tab regression this whole feature exists to fix: a
+    /// MyFitnessPal-via-Apple-Health day used to read 0 consumed because this
+    /// rollup only ever summed `entries` (always empty on a HealthKit day,
+    /// per resolveDailyIntake's precedence rule) and ignored server intake
+    /// entirely.
+    func testDietDayDataUsesServerIntakeTotalsOnAHealthKitDayInsteadOfSummingEmptyEntries() {
+        let goal = DietBudgetDTO(mode: "auto", goal: "general", targetKcal: 2200, protein: 150, carbs: 220, fat: 65, tdee: 2200, lowEnergyWarning: nil, consumedSource: nil, consumedSourceName: nil)
+        let intake = DietDayIntakeDTO(kcal: 1850, protein: 90, carbs: 200, fat: 60, source: "healthkit", sourceName: "MyFitnessPal")
+
+        let data = LogsPagerSummary.dietDayData(entries: [], goal: goal, intake: intake)
+
+        XCTAssertEqual(data.eatenKcal, 1850)
+        XCTAssertEqual(data.remaining, 350)
+        XCTAssertEqual(data.protein.current, 90)
+        XCTAssertEqual(data.carbs.current, 200)
+        XCTAssertEqual(data.fat.current, 60)
+        XCTAssertEqual(data.consumedSource, "healthkit")
+        XCTAssertEqual(data.consumedSourceName, "MyFitnessPal")
+    }
+
+    /// Only `source == "healthkit"` switches the rollup away from summing
+    /// `entries` — any other intake source (e.g. a stale "logged" carried
+    /// over from a prior fetch) still defers to the real logged entries.
+    func testDietDayDataStillSumsEntriesWhenIntakeSourceIsNotHealthKit() {
+        let goal = DietBudgetDTO(mode: "auto", goal: "general", targetKcal: 2000, protein: 150, carbs: 220, fat: 65, tdee: 2200, lowEnergyWarning: nil, consumedSource: nil, consumedSourceName: nil)
+        let intake = DietDayIntakeDTO(kcal: 500, protein: 30, carbs: 40, fat: 10, source: "logged", sourceName: nil)
+        let entries = [
+            MealLogEntryDTO(id: "1", name: "Lunch", kcal: 500, protein: 30, carbs: 40, fat: 10, slot: "lunch", loggedAt: "2026-07-11T12:00:00.000Z"),
+        ]
+
+        let data = LogsPagerSummary.dietDayData(entries: entries, goal: goal, intake: intake)
+
+        XCTAssertEqual(data.eatenKcal, 500)
+        XCTAssertEqual(data.consumedSource, "logged")
     }
 }
