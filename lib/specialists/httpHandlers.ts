@@ -10,6 +10,7 @@ interface CoachHttpDependencies {
     message: string,
     imageBase64?: string,
     mode?: 'onboarding',
+    findingId?: string,
   ): AsyncGenerator<CoachEvent>;
   runAction(userId: string, action: SpecialistActionRequest): AsyncGenerator<CoachEvent>;
   restore(userId: string): Promise<CoachRestoration>;
@@ -106,7 +107,12 @@ export function createCoachHttpHandlers(dependencies: CoachHttpDependencies) {
       if (message) {
         const imageBase64 = typeof body.imageBase64 === 'string' ? body.imageBase64 : undefined;
         const mode = body.mode === 'onboarding' ? 'onboarding' as const : undefined;
-        return streamEvents(dependencies.runCoach(userId, message, imageBase64, mode));
+        // Set when the user tapped a coach-nudge push notification's deep
+        // link (vital://coach-nudge/<pendingNudgeId>) — see
+        // lib/brain/context.ts's resolveNudgeFinding for the user_id-scoped
+        // lookup and degrade-to-normal-chat behavior on a miss.
+        const findingId = typeof body.findingId === 'string' ? body.findingId : undefined;
+        return streamEvents(dependencies.runCoach(userId, message, imageBase64, mode, findingId));
       }
 
       let action: SpecialistActionRequest | null;

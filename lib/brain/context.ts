@@ -78,7 +78,15 @@ export interface CoachContext {
   cachedBrief?: CachedBrief;        // today's app-generated insight + meal plan, if warm
   whoopLine?: string;               // compact "WHOOP (today|yesterday): ..." line, if any whoop_* daily_metrics exist
   unitSystem: UnitSystem;           // display-unit preference — render-only, never storage (see lib/units.ts)
+  nudgeFinding?: NudgeFindingSummary; // the finding behind a tapped coach-nudge deep link, if `findingId` resolved — see resolveNudgeFinding
   promptText: string;               // compact text block ready for Claude
+}
+
+/** The statistical finding behind a coach-nudge deep link, trimmed to what the coach needs to discuss it. */
+export interface NudgeFindingSummary {
+  kind: string;
+  effectLabel: string;
+  detail: Record<string, string | number>;
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -314,6 +322,19 @@ export function buildPromptText(
     );
   }
 
+  // ── Nudge finding (only if the user tapped a coach-nudge notification) ─────
+  if (ctx.nudgeFinding) {
+    lines.push('\n### What this conversation was opened about');
+    lines.push(
+      `- A nudge notification was sent about: ${ctx.nudgeFinding.effectLabel} (${ctx.nudgeFinding.kind})`,
+    );
+    const detail = Object.entries(ctx.nudgeFinding.detail)
+      .map(([key, value]) => `${key}=${value}`)
+      .join(', ');
+    if (detail) lines.push(`  Supporting detail: ${detail}`);
+    lines.push('  The user tapped this notification to open the chat — discuss it directly, do not ask them to re-explain.');
+  }
+
   // ── Recent conversation ────────────────────────────────────────────────────
   if (ctx.recentMessages.length > 0) {
     lines.push('\n### Current Conversation (last 20 messages, chronological)');
@@ -344,9 +365,94 @@ export function buildPromptText(
   return lines.join('\n');
 }
 
+// ── Coach-nudge finding lookup ───────────────────────────────────────────────
+//
+// A tapped push notification carries `vital://coach-nudge/<pendingNudgeId>`
+// (see lib/insights/nudgeWorker.ts). The route resolves that id into the
+// finding the nudge was about so the coach can discuss it without the user
+// re-explaining. This is IDOR-shaped: the nudge id is a UUID, but a UUID
+// being hard to guess is not access control, so every lookup is scoped by
+// (userId, findingId) — never findingId alone.
+//
+// Mirrors lib/brain/tools.ts's NodeResolutionStore / resolveFact split: an
+// injectable store interface + a pure function against it, so the security
+// property (wrong user -> no result) is testable without a database — see
+// lib/brain/context.nudgeFinding.test.ts.
+
+export interface NudgeFindingLookup {
+  /** Scoped to (id, user_id) — must never resolve another user's nudge. */
+  findPendingNudge(userId: string, findingId: string): Promise<{ signature: string } | null>;
+  /** The most recently computed finding for this user+signature, if any. */
+  findLatestFinding(userId: string, signature: string): Promise<NudgeFindingSummary | null>;
+}
+
+/**
+ * Resolves the finding behind a coach-nudge deep link, if any. Never throws:
+ * a malformed findingId (e.g. not a UUID) throws at the DB layer inside the
+ * store, and is caught here so the whole coach request degrades to a normal
+ * chat rather than failing. An absent findingId is a no-op — the store is
+ * never queried.
+ */
+export async function resolveNudgeFinding(
+  lookup: NudgeFindingLookup,
+  userId: string,
+  findingId: string | undefined | null,
+): Promise<NudgeFindingSummary | undefined> {
+  const id = findingId?.trim();
+  if (!id) return undefined;
+
+  try {
+    const nudge = await lookup.findPendingNudge(userId, id);
+    if (!nudge) return undefined;
+
+    const finding = await lookup.findLatestFinding(userId, nudge.signature);
+    return finding ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+const drizzleNudgeFindingLookup: NudgeFindingLookup = {
+  async findPendingNudge(userId, findingId) {
+    // THE SECURITY-CRITICAL PREDICATE: scoped by user_id, not id alone.
+    const [row] = await db
+      .select({ payload: schema.pending_nudges.payload })
+      .from(schema.pending_nudges)
+      .where(and(eq(schema.pending_nudges.id, findingId), eq(schema.pending_nudges.user_id, userId)))
+      .limit(1);
+    if (!row) return null;
+
+    const signature = (row.payload as { signature?: unknown } | null)?.signature;
+    return typeof signature === 'string' ? { signature } : null;
+  },
+
+  async findLatestFinding(userId, signature) {
+    const [row] = await db
+      .select({ kind: schema.insight_findings.kind, payload: schema.insight_findings.payload })
+      .from(schema.insight_findings)
+      .where(and(
+        eq(schema.insight_findings.user_id, userId),
+        eq(schema.insight_findings.signature, signature),
+      ))
+      .orderBy(desc(schema.insight_findings.computed_for))
+      .limit(1);
+    if (!row) return null;
+
+    const payload = row.payload as { effectLabel?: unknown; detail?: unknown };
+    if (typeof payload.effectLabel !== 'string') return null;
+
+    const detail =
+      payload.detail && typeof payload.detail === 'object' && !Array.isArray(payload.detail)
+        ? (payload.detail as Record<string, string | number>)
+        : {};
+
+    return { kind: row.kind, effectLabel: payload.effectLabel, detail };
+  },
+};
+
 // ── Main export ───────────────────────────────────────────────────────────────
 
-export async function assembleContext(userId: string): Promise<CoachContext> {
+export async function assembleContext(userId: string, findingId?: string): Promise<CoachContext> {
   const now = new Date();
   const utcMidnightToday = new Date(
     Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
@@ -374,7 +480,7 @@ export async function assembleContext(userId: string): Promise<CoachContext> {
   // schedule is the one exception: a small "next 48h" snapshot is worth the
   // prompt tokens so the coach doesn't need a tool round-trip for "am I free
   // this afternoon" — the full range stays tool-only via get_schedule.
-  const [todayEvents, allNodes, rawMessages, baselines, calibration, [usersRow], schedule] = await Promise.all([
+  const [todayEvents, allNodes, rawMessages, baselines, calibration, [usersRow], schedule, nudgeFinding] = await Promise.all([
     db.select()
       .from(schema.events)
       .where(
@@ -408,6 +514,7 @@ export async function assembleContext(userId: string): Promise<CoachContext> {
     getCalibration(userId),
     db.select().from(schema.users).where(eq(schema.users.id, userId)).limit(1),
     queryScheduleWindow(userId, now, in48h),
+    resolveNudgeFinding(drizzleNudgeFindingLookup, userId, findingId),
   ]);
 
   // Display-unit preference — resolved once here, threaded only into
@@ -503,6 +610,7 @@ export async function assembleContext(userId: string): Promise<CoachContext> {
     cachedBrief,
     whoopLine,
     unitSystem,
+    nudgeFinding,
   };
 
   return { ...partial, promptText: buildPromptText(partial) };
