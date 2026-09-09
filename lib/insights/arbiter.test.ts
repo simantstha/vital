@@ -62,6 +62,19 @@ test('is deterministic across repeated calls', () => {
   );
 });
 
+test('breaks genuine score ties on signature, independent of input order', () => {
+  // The test above uses six distinct effects, so every score differs and the
+  // signature tie-break never fires — delete that half of the comparator and it
+  // still passes. This one constructs a real tie (same kind, same |effect|, no
+  // goal match, no history) and feeds it in both orders. Without the tie-break
+  // the comparator returns 0 and the result depends on sort stability rather
+  // than on a rule, so the two orders would disagree.
+  const a = certified({ signature: 'aaa', effect: -1.5 });
+  const b = certified({ signature: 'bbb', effect: -1.5 });
+  assert.deepEqual(shortlist([b, a], noHistory).map((f) => f.signature), ['aaa', 'bbb']);
+  assert.deepEqual(shortlist([a, b], noHistory).map((f) => f.signature), ['aaa', 'bbb']);
+});
+
 test('returns empty for no findings', () => {
   assert.deepEqual(shortlist([], noHistory), []);
 });
