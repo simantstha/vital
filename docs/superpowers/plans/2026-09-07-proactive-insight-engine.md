@@ -3098,6 +3098,28 @@ git commit -m "feat(ios): open the coach chat from a nudge, pre-seeded"
 - [ ] `VITAL_INSIGHTS_MODE` is unset (or `off`) at merge — **the feature ships dark.**
 - [ ] Open a PR against `main`. Do not merge; the user reviews.
 
+## Known deferred risk — read before scaling the worker
+
+`runDueInsightPasses` uses an **in-memory** per-user-per-day gate to avoid
+re-running the pass on every ~15s tick. That gate is process-local, and
+`withinDeliveryCaps` is check-then-act with no uniqueness constraint on
+`pending_nudges`. On a single worker machine (today's `fly.toml`, which sets no
+explicit count) this is fine.
+
+**If the `worker` process group is ever scaled past one machine**, two replicas
+would each pass their own gate for the same user on the same day, each make a
+separate model call, and could each deliver — producing two nudges in a day and
+defeating the "one per day" promise this feature is built around. Every other
+queue in this worker (`workout_analyses`, `sleep_analyses`,
+`morning_notification_slots`) uses atomic claim-with-lease in the database for
+exactly this reason.
+
+Making it durable is the prerequisite for scaling: add a `local_day` column to
+`pending_nudges` with a unique index on `(user_id, local_day)`, so the daily cap
+is a database invariant rather than a racy read. Not done now because the
+deployment is single-machine and the consequence is a duplicate notification,
+not an incorrect health claim.
+
 ## After merge
 
 1. Set the Fly secret `VITAL_INSIGHTS_MODE=dry-run`.
