@@ -1,11 +1,15 @@
 import Anthropic from '@anthropic-ai/sdk';
+import { and, desc, eq, gte, isNotNull, isNull } from 'drizzle-orm';
 import { db, schema } from '../db';
 import { ApnsClient } from '../lib/apnsClient';
 import { generateDailyBriefFromDb } from '../lib/brain/brief';
 import { getDailyBrief, upsertDailyBrief } from '../lib/brain/dailyBriefRepository';
 import { prewarmDailyBrief } from '../lib/dailyBriefPrewarm';
+import { previousRunSignatures, recordFindings } from '../lib/insights/confirmation';
+import { insightsEnabled, runInsightPass, type InsightPassRepository } from '../lib/insights/nudgeWorker';
+import { establishedMetrics, loadSeries } from '../lib/insights/series';
 import { generateAnalysis, proactiveAnalysisModel, type AnalysisFailureEvent } from '../lib/proactiveAnalysisGeneration';
-import { deliverNotification, runClaimedAnalysis, type AnalysisContext, type AnalysisJob, type CoachAnalysis } from '../lib/proactiveHealthWorker';
+import { currentLocalDate, deliverNotification, runClaimedAnalysis, type AnalysisContext, type AnalysisJob, type CoachAnalysis } from '../lib/proactiveHealthWorker';
 import { claimAnalysisJobs, claimDueMorningBriefs, completeMorningBrief, ensureDefaultPreferencesForRegisteredUsers, failMorningBrief, listReadyNotificationCandidates, workerRepository } from '../lib/proactiveHealthWorkerRepository';
 import { analysisAlert, workerErrorEvent, type WorkerStage } from '../lib/proactiveHealthWorkerSupport';
 import { getUserUnitSystem } from '../lib/units';
@@ -41,6 +45,110 @@ async function analyze(job: AnalysisJob, context: AnalysisContext): Promise<Coac
     },
     report: reportAnalysisFailure,
   });
+}
+
+async function generateNudge(request: { system: string; content: string }): Promise<string> {
+  const response = await anthropic.messages.create({
+    model: proactiveAnalysisModel(process.env),
+    max_tokens: 500,
+    system: request.system,
+    messages: [{ role: 'user', content: request.content }],
+  });
+  const textBlocks = response.content.filter((item) => item.type === 'text');
+  if (textBlocks.length !== 1) throw new Error('insight nudge model returned no text');
+  return textBlocks[0].text;
+}
+
+// Drizzle-backed InsightPassRepository. loadSeries/establishedMetrics/
+// recordFindings/previousRunSignatures already do their own DB I/O (see
+// lib/insights/series.ts and confirmation.ts) and are reused directly; the
+// remaining methods are new queries this stage needs (sent-nudge history for
+// caps/cooldown, voice context, and the pending_nudges write path).
+const insightPassRepository: InsightPassRepository = {
+  loadSeries,
+  establishedMetrics,
+  recordFindings,
+  previousRunSignatures,
+  async sentNudgeHistory(userId, now) {
+    const since = new Date(now.getTime() - 14 * 24 * 60 * 60_000); // covers both the 7-day cap and the 14-day cooldown
+    const rows = await db
+      .select({ kind: schema.pending_nudges.finding_kind, sentAt: schema.pending_nudges.sent_at })
+      .from(schema.pending_nudges)
+      .where(and(eq(schema.pending_nudges.user_id, userId), gte(schema.pending_nudges.sent_at, since)));
+    return rows.filter((row): row is { kind: string; sentAt: Date } => row.kind !== null && row.sentAt !== null);
+  },
+  async voiceContext(userId) {
+    const [user] = await db.select({ goal: schema.users.goal }).from(schema.users).where(eq(schema.users.id, userId)).limit(1);
+    const facts = await db.select({ label: schema.nodes.label }).from(schema.nodes).where(and(eq(schema.nodes.user_id, userId), eq(schema.nodes.status, 'active')));
+    const recentNudges = await db
+      .select({ payload: schema.pending_nudges.payload })
+      .from(schema.pending_nudges)
+      .where(and(eq(schema.pending_nudges.user_id, userId), isNotNull(schema.pending_nudges.sent_at)))
+      .orderBy(desc(schema.pending_nudges.sent_at))
+      .limit(5);
+    const recentlySaid = recentNudges
+      .map((row) => (row.payload as { openingMessage?: unknown } | null)?.openingMessage)
+      .filter((value): value is string => typeof value === 'string');
+    return { goal: user?.goal ?? null, facts: facts.map((f) => f.label), recentlySaid };
+  },
+  async insertPendingNudge(userId, kind, nudge, now) {
+    const [row] = await db.insert(schema.pending_nudges).values({
+      user_id: userId,
+      type: 'coach_nudge',
+      payload: { title: nudge.title, body: nudge.body, openingMessage: nudge.openingMessage, signature: nudge.signature },
+      scheduled_for: now,
+      finding_kind: kind,
+    }).returning({ id: schema.pending_nudges.id });
+    return row.id;
+  },
+  async markNudgeSent(pendingNudgeId, now) {
+    await db.update(schema.pending_nudges).set({ sent_at: now }).where(eq(schema.pending_nudges.id, pendingNudgeId));
+  },
+  listDevices: (userId) => workerRepository.listDevices(userId),
+};
+
+/** Users eligible for an insight pass: anyone with at least one live push device. */
+async function listInsightPassUsers(): Promise<Array<{ userId: string; timezone: string }>> {
+  const rows = await db
+    .selectDistinct({ userId: schema.push_devices.user_id, timezone: schema.notification_preferences.timezone })
+    .from(schema.push_devices)
+    .leftJoin(schema.notification_preferences, eq(schema.notification_preferences.user_id, schema.push_devices.user_id))
+    .where(isNull(schema.push_devices.invalidated_at));
+  return rows.map((row) => ({ userId: row.userId, timezone: row.timezone ?? 'UTC' }));
+}
+
+// The statistical battery + (in dry-run and live) a model call are too
+// expensive to redo on every ~15s tick, and — unlike the other stages —
+// pending_nudges has no lease/claim columns to make repeat runs cheap. Track
+// the last local day this process ran an insight pass for each user, purely
+// in memory: a process restart costs at most one extra pass per user that
+// day, never a correctness problem (recordFindings/previousRunSignatures are
+// keyed by day and idempotent), so this doesn't need to survive restarts.
+const insightPassDayByUser = new Map<string, string>();
+
+async function runDueInsightPasses(now: Date): Promise<void> {
+  const mode = insightsEnabled(process.env);
+  if (mode === 'off') return;
+
+  const users = await listInsightPassUsers();
+  for (const user of users) {
+    const localDay = currentLocalDate(now, user.timezone);
+    if (insightPassDayByUser.get(user.userId) === localDay) continue;
+    insightPassDayByUser.set(user.userId, localDay);
+    try {
+      await runInsightPass({
+        repository: insightPassRepository,
+        generateNudge,
+        push: (device, alert, route) => apns.send(device, alert, route),
+        mode,
+        userId: user.userId,
+        now,
+        localDay,
+      });
+    } catch (error) {
+      console.error(JSON.stringify(workerErrorEvent('insight-pass', error)));
+    }
+  }
 }
 
 async function tick(reportStage: (stage: WorkerStage) => void): Promise<void> {
@@ -106,6 +214,11 @@ async function tick(reportStage: (stage: WorkerStage) => void): Promise<void> {
   });
   if (whoopResult.aborted) {
     console.error(JSON.stringify({ event: 'whoop_worker_pass_aborted', synced: whoopResult.synced.length, skipped: whoopResult.skipped.length }));
+  }
+
+  if (insightsEnabled(process.env) !== 'off') {
+    reportStage('insight-pass');
+    await runDueInsightPasses(now);
   }
 }
 
