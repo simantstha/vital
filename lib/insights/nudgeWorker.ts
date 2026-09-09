@@ -88,6 +88,34 @@ export interface InsightPassRepository {
   listDevices(userId: string): Promise<PushDevice[]>;
 }
 
+export interface InsightPassUser { userId: string; timezone: string }
+
+/**
+ * The two candidate populations for an insight pass, kept as separate queries
+ * so `selectInsightPassUsers` only ever runs the one its mode calls for.
+ */
+export interface InsightPassUserSource {
+  /** Every user the engine could evaluate, regardless of delivery eligibility. */
+  listAllUsers(): Promise<InsightPassUser[]>;
+  /** Only users with at least one live (non-invalidated) push device. */
+  listUsersWithLiveDevice(): Promise<InsightPassUser[]>;
+}
+
+/**
+ * Picks which population an insight pass evaluates, by mode.
+ *
+ * Dry-run observes what the engine WOULD say, so it must not filter by
+ * delivery eligibility — scoping to users with an active push device biases
+ * the sample toward the already-engaged, who are the least likely to reveal
+ * a nudge that reads as nagging. Live delivery still requires a device.
+ */
+export async function selectInsightPassUsers(
+  source: InsightPassUserSource,
+  mode: 'dry-run' | 'live',
+): Promise<InsightPassUser[]> {
+  return mode === 'live' ? source.listUsersWithLiveDevice() : source.listAllUsers();
+}
+
 export interface InsightPassDeps {
   repository: InsightPassRepository;
   /** Calls the model with the voice request; returns the raw text response. */

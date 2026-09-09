@@ -6,7 +6,7 @@ import { generateDailyBriefFromDb } from '../lib/brain/brief';
 import { getDailyBrief, upsertDailyBrief } from '../lib/brain/dailyBriefRepository';
 import { prewarmDailyBrief } from '../lib/dailyBriefPrewarm';
 import { previousRunSignatures, recordFindings } from '../lib/insights/confirmation';
-import { insightsEnabled, runInsightPass, type InsightPassRepository } from '../lib/insights/nudgeWorker';
+import { insightsEnabled, runInsightPass, selectInsightPassUsers, type InsightPassRepository, type InsightPassUserSource } from '../lib/insights/nudgeWorker';
 import { establishedMetrics, loadSeries } from '../lib/insights/series';
 import { generateAnalysis, proactiveAnalysisModel, type AnalysisFailureEvent } from '../lib/proactiveAnalysisGeneration';
 import { currentLocalDate, deliverNotification, runClaimedAnalysis, type AnalysisContext, type AnalysisJob, type CoachAnalysis } from '../lib/proactiveHealthWorker';
@@ -107,15 +107,26 @@ const insightPassRepository: InsightPassRepository = {
   listDevices: (userId) => workerRepository.listDevices(userId),
 };
 
-/** Users eligible for an insight pass: anyone with at least one live push device. */
-async function listInsightPassUsers(): Promise<Array<{ userId: string; timezone: string }>> {
-  const rows = await db
-    .selectDistinct({ userId: schema.push_devices.user_id, timezone: schema.notification_preferences.timezone })
-    .from(schema.push_devices)
-    .leftJoin(schema.notification_preferences, eq(schema.notification_preferences.user_id, schema.push_devices.user_id))
-    .where(isNull(schema.push_devices.invalidated_at));
-  return rows.map((row) => ({ userId: row.userId, timezone: row.timezone ?? 'UTC' }));
-}
+// Which population an insight pass evaluates depends on the mode — the branch
+// and its reasoning live in selectInsightPassUsers. Both queries carry the
+// user's notification timezone (UTC fallback), which resolves their local day.
+const insightPassUserSource: InsightPassUserSource = {
+  async listAllUsers() {
+    const rows = await db
+      .select({ userId: schema.users.id, timezone: schema.notification_preferences.timezone })
+      .from(schema.users)
+      .leftJoin(schema.notification_preferences, eq(schema.notification_preferences.user_id, schema.users.id));
+    return rows.map((row) => ({ userId: row.userId, timezone: row.timezone ?? 'UTC' }));
+  },
+  async listUsersWithLiveDevice() {
+    const rows = await db
+      .selectDistinct({ userId: schema.push_devices.user_id, timezone: schema.notification_preferences.timezone })
+      .from(schema.push_devices)
+      .leftJoin(schema.notification_preferences, eq(schema.notification_preferences.user_id, schema.push_devices.user_id))
+      .where(isNull(schema.push_devices.invalidated_at));
+    return rows.map((row) => ({ userId: row.userId, timezone: row.timezone ?? 'UTC' }));
+  },
+};
 
 // The statistical battery + (in dry-run and live) a model call are too
 // expensive to redo on every ~15s tick, and — unlike the other stages —
@@ -130,7 +141,7 @@ async function runDueInsightPasses(now: Date): Promise<void> {
   const mode = insightsEnabled(process.env);
   if (mode === 'off') return;
 
-  const users = await listInsightPassUsers();
+  const users = await selectInsightPassUsers(insightPassUserSource, mode);
   for (const user of users) {
     const localDay = currentLocalDate(now, user.timezone);
     if (insightPassDayByUser.get(user.userId) === localDay) continue;

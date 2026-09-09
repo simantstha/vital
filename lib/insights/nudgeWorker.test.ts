@@ -5,9 +5,11 @@ import { COOLDOWN_DAYS } from './arbiter';
 import {
   insightsEnabled,
   runInsightPass,
+  selectInsightPassUsers,
   withinDeliveryCaps,
   type InsightPassDeps,
   type InsightPassRepository,
+  type InsightPassUserSource,
   type SentNudge,
 } from './nudgeWorker';
 import type { MetricSeries } from './types';
@@ -321,6 +323,51 @@ test('silent when delivery caps are exceeded', async () => {
   assert.equal(outcome.delivered, false);
   if (!outcome.delivered) assert.equal(outcome.reason, 'caps_exceeded');
   assert.equal(calls.insertPendingNudge.length, 0);
+});
+
+// ─── selectInsightPassUsers ─────────────────────────────────────────────────
+
+/**
+ * Two genuinely different populations: `with-device` has a live push device,
+ * `no-device` does not. The fake returns each as a fixed list rather than
+ * filtering, so these tests assert which QUERY the mode chooses — the branch
+ * actually under test — and cannot pass by accident through fake filtering.
+ */
+function makeUserSource(): { source: InsightPassUserSource; calls: string[] } {
+  const calls: string[] = [];
+  const source: InsightPassUserSource = {
+    async listAllUsers() {
+      calls.push('listAllUsers');
+      return [
+        { userId: 'with-device', timezone: 'UTC' },
+        { userId: 'no-device', timezone: 'UTC' },
+      ];
+    },
+    async listUsersWithLiveDevice() {
+      calls.push('listUsersWithLiveDevice');
+      return [{ userId: 'with-device', timezone: 'UTC' }];
+    },
+  };
+  return { source, calls };
+}
+
+test('dry-run observes users with no push device', async () => {
+  const { source, calls } = makeUserSource();
+
+  const users = await selectInsightPassUsers(source, 'dry-run');
+
+  assert.deepEqual(users.map((u) => u.userId), ['with-device', 'no-device']);
+  // Dry-run must not run the delivery-eligibility query at all.
+  assert.deepEqual(calls, ['listAllUsers']);
+});
+
+test('live delivery excludes users with no push device', async () => {
+  const { source, calls } = makeUserSource();
+
+  const users = await selectInsightPassUsers(source, 'live');
+
+  assert.deepEqual(users.map((u) => u.userId), ['with-device']);
+  assert.deepEqual(calls, ['listUsersWithLiveDevice']);
 });
 
 test('dry-run computes and logs but never delivers', async () => {
