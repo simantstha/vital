@@ -1,11 +1,10 @@
+import { previousDayKey } from '@/lib/localDay';
 import type { CertifiedFinding, Finding } from './types';
 
-function previousDay(localDay: string): string {
-  const [y, m, d] = localDay.split('-').map(Number);
-  const date = new Date(Date.UTC(y, m - 1, d));
-  date.setUTCDate(date.getUTCDate() - 1);
-  return date.toISOString().slice(0, 10);
-}
+// Day-before arithmetic lives in lib/localDay.ts and is already tested there
+// for year, month, leap-day, and DST boundaries. Do not reimplement it here —
+// an untested duplicate of a tested date utility is how the two silently drift
+// apart.
 
 /**
  * Keeps only findings that also survived yesterday's run.
@@ -34,7 +33,7 @@ export async function previousRunSignatures(userId: string, localDay: string): P
     .from(schema.insight_findings)
     .where(and(
       eq(schema.insight_findings.user_id, userId),
-      eq(schema.insight_findings.computed_for, previousDay(localDay)),
+      eq(schema.insight_findings.computed_for, previousDayKey(localDay)),
     ));
   return new Set(rows.map((row) => row.signature));
 }
