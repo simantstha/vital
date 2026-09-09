@@ -1,3 +1,4 @@
+import { stripCompleteJsonFence } from '@/lib/proactiveAnalysisGrounding';
 import type { CertifiedFinding } from './types';
 
 export interface Nudge {
@@ -81,9 +82,15 @@ function nonEmpty(value: unknown): value is string {
  * the run then sends nothing, which is the correct outcome.
  */
 export function parseNudge(raw: string, allowedSignatures: string[]): Nudge | null {
+  // Strip a markdown fence before parsing. A model told "respond with JSON
+  // only" still sometimes wraps its output in ```json ... ```, and this repo
+  // already paid for that once — see stripCompleteJsonFence's use in
+  // parseAnalysisText. Without it a fenced reply is indistinguishable from
+  // malformed JSON, so the run silently sends nothing: safe, but it degrades
+  // the whole feature to zero nudges while looking perfectly healthy.
   let parsed: unknown;
   try {
-    parsed = JSON.parse(raw);
+    parsed = JSON.parse(stripCompleteJsonFence(raw));
   } catch {
     return null;
   }

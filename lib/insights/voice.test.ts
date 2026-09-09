@@ -64,3 +64,19 @@ test('rejects empty or whitespace-only copy', () => {
     null,
   );
 });
+
+test('parses a response the model wrapped in a markdown fence', () => {
+  // Models fence their output even when told not to. Without fence-stripping
+  // this is indistinguishable from malformed JSON and the feature silently
+  // delivers nothing — see stripCompleteJsonFence in proactiveAnalysisGrounding.
+  const body = JSON.stringify({
+    signature: 'cadence_break:exercise_min',
+    title: 'Four days off',
+    body: "You've been steady at five a week. What happened?",
+    openingMessage: "You've been training about five times a week, and it's been four days. What's going on?",
+  });
+  const nudge = parseNudge('```json\n' + body + '\n```', ['cadence_break:exercise_min']);
+  assert.ok(nudge);
+  assert.equal(nudge.signature, 'cadence_break:exercise_min');
+  assert.equal(nudge.title, 'Four days off');
+});
