@@ -80,7 +80,15 @@ export function detectCadenceBreak(series: MetricSeries): Finding | null {
 
 const RECENT_DAYS = 7;
 const BASELINE_DAYS = 28;
-const MIN_RECENT_OBS = 7;
+// One less than RECENT_DAYS: a pass that runs at local-day rollover sees
+// today's daily_metrics row not yet written (loadSeries ends its window at
+// the user's current, incomplete local day), so the 7-day recent window is
+// routinely missing exactly one observation. Requiring all 7 made this
+// detector — KIND_WEIGHT 60, second-highest in the engine — return null on
+// every such run, silently discarding real shifts. Every other detector
+// tolerates gaps; this one now tolerates the one gap that is structurally
+// guaranteed. Two or more missing days still fails the guard.
+const MIN_RECENT_OBS = 6;
 const MIN_BASELINE_OBS = 21;
 
 const TREND_DAYS = 28;

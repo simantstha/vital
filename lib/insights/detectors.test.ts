@@ -144,6 +144,39 @@ test('level shift stays quiet with too few recent days', () => {
   );
 });
 
+test('level shift survives a missing today, mirroring a pass that runs before today\'s row lands', () => {
+  // Same planted 12-unit drop as "level shift finds a planted drop in the last
+  // week", but daysAgo === 0 (today) is null — exactly what happens when the
+  // pass runs at local-day rollover, before today's daily_metrics row exists.
+  // A single missing day in the 7-day recent window must not zero out the
+  // finding: tailValues drops the null, leaving 6 real observations that still
+  // show the shift.
+  const finding = detectLevelShift(generated('hrv_sdnn', (daysAgo) => {
+    if (daysAgo === 0) return null;
+    const wobble = (daysAgo % 5) - 2;
+    return daysAgo < 7 ? 40 + wobble : 60 + wobble;
+  }));
+  assert.ok(finding, 'a missing today must not suppress an otherwise-clear level shift');
+  assert.equal(finding.kind, 'level_shift');
+  assert.ok(finding.effect < -1);
+  assert.equal(finding.signature, 'level_shift:hrv_sdnn:down');
+  assert.ok(finding.pValue !== null && finding.pValue < 0.05);
+});
+
+test('level shift stays quiet with two missing days in the recent window', () => {
+  // The gap tolerance is exactly one missing day (MIN_RECENT_OBS = 6). Two
+  // missing days out of the last 7 must still return null, pinning the floor
+  // so it cannot silently regress to "any number of gaps is fine".
+  assert.equal(
+    detectLevelShift(generated('hrv_sdnn', (daysAgo) => {
+      if (daysAgo <= 1) return null;
+      const wobble = (daysAgo % 5) - 2;
+      return daysAgo < 7 ? 40 + wobble : 60 + wobble;
+    })),
+    null,
+  );
+});
+
 test('trend finds a planted decline and reports its direction', () => {
   const finding = detectTrend(generated('sleep_minutes', (daysAgo) => 420 - (27 - Math.min(daysAgo, 27)) * 4));
   assert.ok(finding);
