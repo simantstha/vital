@@ -71,6 +71,24 @@ final class ProactiveNotificationsTests: XCTestCase {
         XCTAssertNil(PushRoute(userInfo: ["type": "morning_brief", "id": id, "deepLink": "vital://sleep-analysis/\(id)"]))
     }
 
+    func testParsesCoachNudgeRoute() {
+        let userInfo: [AnyHashable: Any] = [
+            "type": "coach_nudge",
+            "id": "abc-123",
+            "deepLink": "vital://coach-nudge/abc-123",
+        ]
+        XCTAssertEqual(PushRoute(userInfo: userInfo), .coachNudge("abc-123"))
+    }
+
+    func testRejectsCoachNudgeWithMismatchedHost() {
+        let userInfo: [AnyHashable: Any] = [
+            "type": "coach_nudge",
+            "id": "abc-123",
+            "deepLink": "vital://something-else/abc-123",
+        ]
+        XCTAssertNil(PushRoute(userInfo: userInfo))
+    }
+
     func testServerPreferencesPreserveLocalReminderSettings() {
         let mapped = NotificationPreferences.fromLocal(
             morningEnabled: false, morningMinutes: 510,

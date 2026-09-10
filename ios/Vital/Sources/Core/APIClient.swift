@@ -439,7 +439,7 @@ struct APIClient {
 
     // MARK: - Coach (SSE streaming)
 
-    func streamCoach(message: String, imageBase64: String? = nil, mode: String? = nil) -> AsyncThrowingStream<CoachStreamEvent, Error> {
+    func streamCoach(message: String, imageBase64: String? = nil, mode: String? = nil, findingId: String? = nil) -> AsyncThrowingStream<CoachStreamEvent, Error> {
         AsyncThrowingStream { continuation in
             Task {
                 do {
@@ -453,7 +453,7 @@ struct APIClient {
                     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
                     request.timeoutInterval = 60
 
-                    let body = CoachRequestBody(message: message, imageBase64: imageBase64, mode: mode)
+                    let body = CoachRequestBody(message: message, imageBase64: imageBase64, mode: mode, findingId: findingId)
                     request.httpBody = try encoder.encode(body)
 
                     let (bytes, response) = try await session.bytes(for: request)
@@ -1560,6 +1560,10 @@ private struct CoachRequestBody: Encodable {
     let message: String
     let imageBase64: String?
     let mode: String?
+    /// The `pending_nudges.id` behind a tapped coach-nudge deep link, if any
+    /// — see `CoachViewModel.openFromNudge` and `/api/coach`'s findingId
+    /// support (lib/brain/context.ts's resolveNudgeFinding).
+    let findingId: String?
 }
 
 enum SpecialistAction: String, Codable, CaseIterable {
@@ -1745,7 +1749,8 @@ protocol CoachAPIProviding {
     func streamCoach(
         message: String,
         imageBase64: String?,
-        mode: String?
+        mode: String?,
+        findingId: String?
     ) -> AsyncThrowingStream<CoachStreamEvent, Error>
     func streamCoachAction(
         sessionId: String,

@@ -112,12 +112,14 @@ enum PushRoute: Equatable, Identifiable {
     case workoutAnalysis(String)
     case sleepAnalysis(String)
     case morningBrief(String?)   // nil = legacy `vital://today` payload
+    case coachNudge(String)      // pending_nudges.id — see lib/insights/nudgeWorker.ts
 
     var id: String {
         switch self {
         case .workoutAnalysis(let id): "workout:\(id)"
         case .sleepAnalysis(let id): "sleep:\(id)"
         case .morningBrief(let id): "morning:\(id ?? "legacy")"
+        case .coachNudge(let id): "nudge:\(id)"
         }
     }
 
@@ -128,6 +130,17 @@ enum PushRoute: Equatable, Identifiable {
         // Legacy: briefs delivered before they were persisted carry no id.
         if type == "morning_brief", url.host == "today", url.path.isEmpty, userInfo["id"] == nil {
             self = .morningBrief(nil); return
+        }
+        // coach_nudge is checked before the UUID-format guard below: its id
+        // (pending_nudges.id) is only ever passed through as an opaque
+        // findingId in a POST body, never used to build a REST path the way
+        // workout/sleep/morning-brief ids are — the server already re-scopes
+        // it by (id, user_id) and degrades to a normal chat on a miss (see
+        // lib/brain/context.ts's resolveNudgeFinding), so client-side UUID
+        // shape isn't a security boundary here the way it is for those.
+        if type == "coach_nudge", url.host == "coach-nudge",
+           let id = userInfo["id"] as? String, !id.isEmpty, url.path == "/\(id)" {
+            self = .coachNudge(id); return
         }
         guard let id = userInfo["id"] as? String, UUID(uuidString: id) != nil,
               url.path == "/\(id)" else { return nil }

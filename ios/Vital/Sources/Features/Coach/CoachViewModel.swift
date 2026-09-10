@@ -527,9 +527,37 @@ final class CoachViewModel: ObservableObject {
         }
     }
 
+    // MARK: - Nudge entry point (coach-nudge push notification)
+
+    /// Entry point for a tapped `coach_nudge` push notification
+    /// (`vital://coach-nudge/<pendingNudgeId>` — see `PushRoute.coachNudge`).
+    /// Auto-starts the conversation's first turn with the nudge's finding
+    /// attached as `findingId`, so the coach's reply engages with what it
+    /// already nudged about (Task 15's `/api/coach` support) instead of the
+    /// generic ephemeral opener. This is why PR #120's regression — a
+    /// notification tap that opened a no-op sheet — can't happen here: the
+    /// tap always lands in a live, context-aware exchange.
+    ///
+    /// The exact wording the model wrote for the push notification
+    /// (`pending_nudges.payload.openingMessage`) is never sent to the client
+    /// — only `findingId` is. This trigger phrase is what stands in for it:
+    /// honest (it describes exactly what the user did), and it reads
+    /// naturally even if a later `restoreConversation()` renders it back as
+    /// an ordinary user message.
+    func openFromNudge(findingId: String) {
+        guard mode == nil, !isBusy else { return }
+        // A nudge open supersedes the generic opener fetch — same rule
+        // `send()` already applies to any opener fetch still in flight.
+        openerTask?.cancel()
+        openerTask = nil
+        isOpening = false
+        input = "I saw your notification — tell me more."
+        send(findingId: findingId)
+    }
+
     // MARK: - Send
 
-    func send() {
+    func send(findingId: String? = nil) {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         // `!isBusy` rather than `!isStreaming`: an accepted handoff/return can
         // now stream a real specialist turn on the action path (see
@@ -579,7 +607,7 @@ final class CoachViewModel: ObservableObject {
             }
 
             do {
-                let stream = api.streamCoach(message: trimmed, imageBase64: nil, mode: mode)
+                let stream = api.streamCoach(message: trimmed, imageBase64: nil, mode: mode, findingId: findingId)
                 try await drainCoachEvents(
                     stream,
                     assistantId: assistantId,

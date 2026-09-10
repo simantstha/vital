@@ -76,6 +76,16 @@ struct RootTabView: View {
             case .morningBrief(let id):
                 if let id { MorningBriefView(id: id) }
                 else { Color.clear.onAppear { selected = .today; router.route = nil } }
+            case .coachNudge(let id):
+                // No detail screen to present — jump straight to the coach
+                // tab and kick off the finding-aware turn. Same
+                // no-visible-sheet idiom as the legacy morningBrief(nil) case
+                // above: this exists only to run a side effect and dismiss.
+                Color.clear.onAppear {
+                    coachVM.openFromNudge(findingId: id)
+                    selected = .coach
+                    router.route = nil
+                }
             }
         }
     }
