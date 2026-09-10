@@ -91,15 +91,22 @@ const insightPassRepository: InsightPassRepository = {
       .filter((value): value is string => typeof value === 'string');
     return { goal: user?.goal ?? null, facts: facts.map((f) => f.label), recentlySaid };
   },
-  async insertPendingNudge(userId, kind, nudge, now) {
-    const [row] = await db.insert(schema.pending_nudges).values({
+  async insertPendingNudge(userId, localDay, kind, nudge, now) {
+    // onConflictDoNothing + an empty .returning() is the race resolution: the
+    // unique index on (user_id, local_day) lets exactly one concurrent
+    // worker's insert succeed for a given user's day, and the loser gets no
+    // row back here rather than an error — see nudgeWorker.ts's contract.
+    const rows = await db.insert(schema.pending_nudges).values({
       user_id: userId,
       type: 'coach_nudge',
       payload: { title: nudge.title, body: nudge.body, openingMessage: nudge.openingMessage, signature: nudge.signature },
       scheduled_for: now,
       finding_kind: kind,
-    }).returning({ id: schema.pending_nudges.id });
-    return row.id;
+      local_day: localDay,
+    })
+      .onConflictDoNothing({ target: [schema.pending_nudges.user_id, schema.pending_nudges.local_day] })
+      .returning({ id: schema.pending_nudges.id });
+    return rows[0]?.id ?? null;
   },
   async markNudgeSent(pendingNudgeId, now) {
     await db.update(schema.pending_nudges).set({ sent_at: now }).where(eq(schema.pending_nudges.id, pendingNudgeId));

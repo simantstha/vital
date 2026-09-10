@@ -292,9 +292,16 @@ export const pending_nudges = p.pgTable('pending_nudges', {
   scheduled_for: p.timestamp('scheduled_for', { withTimezone: true }).notNull(),
   sent_at:       p.timestamp('sent_at', { withTimezone: true }),                 // nullable until sent
   finding_kind:  p.text('finding_kind'),                                         // nullable: no rows exist yet
+  // Nullable so the migration is additive-safe (old code runs against this
+  // schema during the deploy window without ever populating it). The unique
+  // index below is the actual "one nudge per user per local day" invariant —
+  // Postgres treats NULLs as distinct under a unique index, so unpopulated
+  // rows never collide with each other or with populated ones.
+  local_day:     p.text('local_day'),
 }, (t) => [
   p.index('pending_nudges_user_scheduled_idx').on(t.user_id, t.scheduled_for),
   p.index('pending_nudges_user_kind_sent_idx').on(t.user_id, t.finding_kind, t.sent_at),
+  p.uniqueIndex('pending_nudges_user_local_day_idx').on(t.user_id, t.local_day),
 ]);
 
 // ─── insight_findings ────────────────────────────────────────────────────────

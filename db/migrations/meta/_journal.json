@@ -162,6 +162,13 @@
       "when": 1788784561332,
       "tag": "0022_mute_blob",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1789061204487,
+      "tag": "0023_youthful_nighthawk",
+      "breakpoints": true
     }
   ]
 }

@@ -82,8 +82,18 @@ export interface InsightPassRepository {
   /** Sent nudges within the lookback the caps/cooldown/novelty logic needs (>= COOLDOWN_DAYS). */
   sentNudgeHistory(userId: string, now: Date): Promise<SentNudge[]>;
   voiceContext(userId: string): Promise<VoiceUserContext>;
-  /** Inserts a pending_nudges row with finding_kind set; returns its id. */
-  insertPendingNudge(userId: string, kind: string, nudge: Nudge, now: Date): Promise<string>;
+  /**
+   * Inserts a pending_nudges row with finding_kind and local_day set, and
+   * returns its id — or `null` if a row for (userId, localDay) already
+   * exists. That's the actual "one nudge per user per local day" guarantee:
+   * a unique index on (user_id, local_day) backs this insert, so when two
+   * worker processes race to deliver the same user's nudge on the same day,
+   * exactly one insert wins and the other observes `null` here. The in-memory
+   * per-process gate and withinDeliveryCaps upstream are cheap filters that
+   * catch most of the redundant work before it reaches this point; this is
+   * the line that actually can't race.
+   */
+  insertPendingNudge(userId: string, localDay: string, kind: string, nudge: Nudge, now: Date): Promise<string | null>;
   markNudgeSent(pendingNudgeId: string, now: Date): Promise<void>;
   listDevices(userId: string): Promise<PushDevice[]>;
 }
@@ -237,7 +247,11 @@ export async function runInsightPass(deps: InsightPassDeps): Promise<InsightPass
     return { delivered: false, reason: 'dry_run' };
   }
 
-  const pendingNudgeId = await repository.insertPendingNudge(userId, chosen.kind, nudge, now);
+  const pendingNudgeId = await repository.insertPendingNudge(userId, localDay, chosen.kind, nudge, now);
+  // null means another worker's insert already claimed (userId, localDay) —
+  // the unique index, not this check, is what makes that safe under a race;
+  // this branch just makes sure the loser doesn't also push.
+  if (pendingNudgeId === null) return { delivered: false, reason: 'caps_exceeded' };
 
   const devices = await repository.listDevices(userId);
   let pushed = false;

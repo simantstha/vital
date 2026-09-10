@@ -113,6 +113,8 @@ interface RepoOverrides {
   facts?: string[];
   recentlySaid?: string[];
   goal?: string | null;
+  /** What insertPendingNudge resolves to — null simulates a losing race (unique-index conflict). */
+  insertPendingNudgeResult?: string | null;
 }
 
 function makeRepository(overrides: RepoOverrides = {}): { repo: InsightPassRepository; calls: Record<string, unknown[]> } {
@@ -141,9 +143,9 @@ function makeRepository(overrides: RepoOverrides = {}): { repo: InsightPassRepos
     async voiceContext() {
       return { goal: overrides.goal ?? null, facts: overrides.facts ?? [], recentlySaid: overrides.recentlySaid ?? [] };
     },
-    async insertPendingNudge(userId, kind, nudge) {
-      calls.insertPendingNudge.push({ userId, kind, nudge });
-      return 'pending-nudge-1';
+    async insertPendingNudge(userId, localDay, kind, nudge) {
+      calls.insertPendingNudge.push({ userId, localDay, kind, nudge });
+      return overrides.insertPendingNudgeResult === undefined ? 'pending-nudge-1' : overrides.insertPendingNudgeResult;
     },
     async markNudgeSent(pendingNudgeId) {
       calls.markNudgeSent.push({ pendingNudgeId });
@@ -323,6 +325,50 @@ test('silent when delivery caps are exceeded', async () => {
   assert.equal(outcome.delivered, false);
   if (!outcome.delivered) assert.equal(outcome.reason, 'caps_exceeded');
   assert.equal(calls.insertPendingNudge.length, 0);
+});
+
+test('a losing insert (unique-index conflict on user_id+local_day) results in no push', async () => {
+  // Simulates a second worker process that already won the race for today:
+  // insertPendingNudge's onConflictDoNothing().returning() comes back empty,
+  // and the repository fake mirrors that by resolving to null.
+  const series = cadenceSeries('exercise_min', 5);
+  const { repo, calls } = makeRepository({
+    series: [series],
+    established: new Set(['exercise_min']),
+    previousSignatures: new Set(['cadence_break:exercise_min']),
+    insertPendingNudgeResult: null,
+  });
+  const pushCalls: unknown[] = [];
+  const deps = makeDeps(repo, { push: async (device, alert, route) => { pushCalls.push({ device, alert, route }); return { outcome: 'sent', retireToken: false }; } });
+
+  const outcome = await runInsightPass(deps);
+
+  assert.equal(outcome.delivered, false);
+  if (!outcome.delivered) assert.equal(outcome.reason, 'caps_exceeded');
+  assert.equal(calls.insertPendingNudge.length, 1); // the insert was attempted...
+  assert.equal(pushCalls.length, 0);                // ...but nothing was pushed
+  assert.equal(calls.markNudgeSent.length, 0);
+});
+
+test('a winning insert (no conflict) does push', async () => {
+  const series = cadenceSeries('exercise_min', 5);
+  const { repo, calls } = makeRepository({
+    series: [series],
+    established: new Set(['exercise_min']),
+    previousSignatures: new Set(['cadence_break:exercise_min']),
+    insertPendingNudgeResult: 'pending-nudge-42',
+  });
+  const pushCalls: unknown[] = [];
+  const deps = makeDeps(repo, { push: async (device, alert, route) => { pushCalls.push({ device, alert, route }); return { outcome: 'sent', retireToken: false }; } });
+
+  const outcome = await runInsightPass(deps);
+
+  assert.equal(outcome.delivered, true);
+  if (outcome.delivered) assert.equal(outcome.pendingNudgeId, 'pending-nudge-42');
+  assert.equal(pushCalls.length, 1);
+  assert.equal(calls.markNudgeSent.length, 1);
+  const inserted = calls.insertPendingNudge[0] as { localDay: string };
+  assert.equal(inserted.localDay, LOCAL_DAY);
 });
 
 // ─── selectInsightPassUsers ─────────────────────────────────────────────────
