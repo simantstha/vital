@@ -828,7 +828,7 @@ final class FakeCoachAPI: CoachAPIProviding {
         // No-op for testing
     }
 
-    func streamCoach(message: String, imageBase64: String?, mode: String?) -> AsyncThrowingStream<CoachStreamEvent, Error> {
+    func streamCoach(message: String, imageBase64: String?, mode: String?, findingId: String?) -> AsyncThrowingStream<CoachStreamEvent, Error> {
         stream(events: nextMessageEvents, failure: nextMessageFailure)
     }
 

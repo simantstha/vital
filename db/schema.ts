@@ -291,8 +291,31 @@ export const pending_nudges = p.pgTable('pending_nudges', {
   payload:       p.jsonb('payload').notNull(),
   scheduled_for: p.timestamp('scheduled_for', { withTimezone: true }).notNull(),
   sent_at:       p.timestamp('sent_at', { withTimezone: true }),                 // nullable until sent
+  finding_kind:  p.text('finding_kind'),                                         // nullable: no rows exist yet
 }, (t) => [
   p.index('pending_nudges_user_scheduled_idx').on(t.user_id, t.scheduled_for),
+  p.index('pending_nudges_user_kind_sent_idx').on(t.user_id, t.finding_kind, t.sent_at),
+]);
+
+// ─── insight_findings ────────────────────────────────────────────────────────
+// Per-run memory for the proactive insight engine. Every finding that survives
+// the statistical gates is recorded here, whether or not it was ever spoken
+// aloud, so the next run can require a finding to persist across two
+// consecutive runs before it becomes eligible. Running the battery daily is
+// itself repeated testing; without cross-run confirmation a borderline finding
+// eventually surfaces by chance.
+
+export const insight_findings = p.pgTable('insight_findings', {
+  id:           p.uuid('id').primaryKey().defaultRandom(),
+  user_id:      p.uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  signature:    p.text('signature').notNull(),          // stable identity: kind + metrics + direction
+  kind:         p.text('kind').notNull(),
+  computed_for: p.text('computed_for').notNull(),       // the user's local day, 'YYYY-MM-DD'
+  payload:      p.jsonb('payload').notNull(),           // effect, n, pValue, detail
+  created_at:   p.timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  p.uniqueIndex('insight_findings_user_signature_day_idx').on(t.user_id, t.signature, t.computed_for),
+  p.index('insight_findings_user_signature_idx').on(t.user_id, t.signature),
 ]);
 
 // ─── proactive health analysis + push delivery ─────────────────────────────
@@ -686,3 +709,6 @@ export type NewFoodCache    = typeof food_cache.$inferInsert;
 
 export type WhoopConnection    = typeof whoop_connections.$inferSelect;
 export type NewWhoopConnection = typeof whoop_connections.$inferInsert;
+
+export type InsightFinding    = typeof insight_findings.$inferSelect;
+export type NewInsightFinding = typeof insight_findings.$inferInsert;

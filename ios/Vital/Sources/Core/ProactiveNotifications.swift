@@ -112,12 +112,14 @@ enum PushRoute: Equatable, Identifiable {
     case workoutAnalysis(String)
     case sleepAnalysis(String)
     case morningBrief(String?)   // nil = legacy `vital://today` payload
+    case coachNudge(String)      // pending_nudges.id — see lib/insights/nudgeWorker.ts
 
     var id: String {
         switch self {
         case .workoutAnalysis(let id): "workout:\(id)"
         case .sleepAnalysis(let id): "sleep:\(id)"
         case .morningBrief(let id): "morning:\(id ?? "legacy")"
+        case .coachNudge(let id): "nudge:\(id)"
         }
     }
 
@@ -135,6 +137,7 @@ enum PushRoute: Equatable, Identifiable {
         case "workout_analysis" where url.host == "workout-analysis": self = .workoutAnalysis(id)
         case "sleep_analysis" where url.host == "sleep-analysis": self = .sleepAnalysis(id)
         case "morning_brief" where url.host == "morning-brief": self = .morningBrief(id)
+        case "coach_nudge" where url.host == "coach-nudge": self = .coachNudge(id)
         default: return nil
         }
     }

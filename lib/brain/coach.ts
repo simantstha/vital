@@ -134,6 +134,7 @@ export async function* runCoach(
   userMessage: string,
   imageBase64?: string,
   mode?: 'onboarding',
+  findingId?: string,
 ): AsyncGenerator<CoachEvent> {
   // 1. Persist the user message ──────────────────────────────────────────────
   await db.insert(schema.messages).values({
@@ -146,14 +147,14 @@ export async function* runCoach(
     sources:   [],
   });
 
-  yield* streamCoachTurn(userId, { kind: 'user', text: userMessage, imageBase64, mode });
+  yield* streamCoachTurn(userId, { kind: 'user', text: userMessage, imageBase64, mode, findingId });
 }
 
 /** The two ways a coach turn can begin: the user's own message (today's
  * path), or the opening of a specialist consultation (or a return to Vital)
  * that was just accepted via a card — see runSpecialistAction. */
 type TurnSeed =
-  | { kind: 'user'; text: string; imageBase64?: string; mode?: 'onboarding' }
+  | { kind: 'user'; text: string; imageBase64?: string; mode?: 'onboarding'; findingId?: string }
   | { kind: 'handoff_opening'; session: SpecialistSession };
 
 /**
@@ -191,7 +192,7 @@ async function* streamCoachTurn(userId: string, seed: TurnSeed): AsyncGenerator<
   const specialistsEnabled = isSpecialistsEnabled() && !isOnboarding;
 
   // 2. Assemble context from Postgres (deterministic) ────────────────────────
-  const ctx = await assembleContext(userId);
+  const ctx = await assembleContext(userId, seed.kind === 'user' ? seed.findingId : undefined);
 
   const pendingEvents: CoachEvent[] = [];
   let currentSession: SpecialistSession | null;

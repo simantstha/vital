@@ -66,6 +66,7 @@ export const WORKER_STAGES = [
   'process-morning-brief',
   'prewarm-daily-brief',
   'whoop-sync',
+  'insight-pass',
 ] as const;
 
 export type WorkerStage = (typeof WORKER_STAGES)[number];
