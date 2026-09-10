@@ -131,23 +131,13 @@ enum PushRoute: Equatable, Identifiable {
         if type == "morning_brief", url.host == "today", url.path.isEmpty, userInfo["id"] == nil {
             self = .morningBrief(nil); return
         }
-        // coach_nudge is checked before the UUID-format guard below: its id
-        // (pending_nudges.id) is only ever passed through as an opaque
-        // findingId in a POST body, never used to build a REST path the way
-        // workout/sleep/morning-brief ids are — the server already re-scopes
-        // it by (id, user_id) and degrades to a normal chat on a miss (see
-        // lib/brain/context.ts's resolveNudgeFinding), so client-side UUID
-        // shape isn't a security boundary here the way it is for those.
-        if type == "coach_nudge", url.host == "coach-nudge",
-           let id = userInfo["id"] as? String, !id.isEmpty, url.path == "/\(id)" {
-            self = .coachNudge(id); return
-        }
         guard let id = userInfo["id"] as? String, UUID(uuidString: id) != nil,
               url.path == "/\(id)" else { return nil }
         switch type {
         case "workout_analysis" where url.host == "workout-analysis": self = .workoutAnalysis(id)
         case "sleep_analysis" where url.host == "sleep-analysis": self = .sleepAnalysis(id)
         case "morning_brief" where url.host == "morning-brief": self = .morningBrief(id)
+        case "coach_nudge" where url.host == "coach-nudge": self = .coachNudge(id)
         default: return nil
         }
     }

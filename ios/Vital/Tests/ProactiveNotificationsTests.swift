@@ -74,17 +74,31 @@ final class ProactiveNotificationsTests: XCTestCase {
     func testParsesCoachNudgeRoute() {
         let userInfo: [AnyHashable: Any] = [
             "type": "coach_nudge",
-            "id": "abc-123",
-            "deepLink": "vital://coach-nudge/abc-123",
+            "id": "3F2504E0-4F89-11D3-9A0C-0305E82C3301",
+            "deepLink": "vital://coach-nudge/3F2504E0-4F89-11D3-9A0C-0305E82C3301",
         ]
-        XCTAssertEqual(PushRoute(userInfo: userInfo), .coachNudge("abc-123"))
+        XCTAssertEqual(PushRoute(userInfo: userInfo), .coachNudge("3F2504E0-4F89-11D3-9A0C-0305E82C3301"))
     }
 
     func testRejectsCoachNudgeWithMismatchedHost() {
         let userInfo: [AnyHashable: Any] = [
             "type": "coach_nudge",
+            "id": "3F2504E0-4F89-11D3-9A0C-0305E82C3301",
+            "deepLink": "vital://something-else/3F2504E0-4F89-11D3-9A0C-0305E82C3301",
+        ]
+        XCTAssertNil(PushRoute(userInfo: userInfo))
+    }
+
+    /// Pins the shared UUID-format guard for `coach_nudge` specifically. The
+    /// route deliberately sits *inside* that guard alongside its three
+    /// siblings, so a non-UUID id is rejected before the type switch is ever
+    /// reached — consistency with the sibling routes matters more than the
+    /// fact that today's server re-scopes the id anyway.
+    func testRejectsCoachNudgeWithNonUuidId() {
+        let userInfo: [AnyHashable: Any] = [
+            "type": "coach_nudge",
             "id": "abc-123",
-            "deepLink": "vital://something-else/abc-123",
+            "deepLink": "vital://coach-nudge/abc-123",
         ]
         XCTAssertNil(PushRoute(userInfo: userInfo))
     }
