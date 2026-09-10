@@ -170,8 +170,32 @@ not all the same kind of claim.
 - **Cross-run confirmation.** The pass runs daily, which is itself repeated
   testing: a borderline finding will eventually surface by chance given enough
   days. A finding must therefore **persist across two consecutive daily runs**
-  before it becomes eligible to speak. This is the safeguard against day-shopping
-  and it matters as much as the within-run correction.
+  before it becomes eligible to speak.
+
+  ⚠️ **Measured, and weaker than this design originally claimed.** The original
+  justification — "noise rarely repeats, real effects persist" — assumed the two
+  runs are near-independent tests. They are not: consecutive runs over a 90-day
+  rolling window share **89 of 90 days** of data. Measured over 200 synthetic
+  pure-noise users through the real gate:
+
+  | null | certified on day N | still confirmed across two runs |
+  |---|---|---|
+  | i.i.d. | 22/200 | 16/200 |
+  | AR(1) φ=0.3 | 18/200 | 11/200 |
+  | AR(1) φ=0.5 | 9/200 | 8/200 |
+
+  Confirmation removes roughly 25–40% of false positives, not the order of
+  magnitude assumed. At φ≈0.3 — where real daily HRV, resting heart rate, and
+  sleep sit — about **5.5% of pure-noise users get a confirmed finding every
+  day**. The delivery caps then throttle the *rate*, not the *falsity*: a user
+  whose data is pure noise would receive roughly one unfounded nudge a
+  fortnight, indefinitely.
+
+  This does not invalidate the layered design, but it does mean confirmation is
+  a modest filter rather than a second independent gate. Closing the gap needs
+  either a genuinely independent second test (a held-out window rather than a
+  shifted one) or an acceptance that the residual rate is what the dry-run must
+  measure on real data. **Resolve before going live.**
 
 Findings that fail any gate are **dropped, not downgraded**. There is no
 "low-confidence finding" tier — a tier like that inevitably gets spoken aloud.

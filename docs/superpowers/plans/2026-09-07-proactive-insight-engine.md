@@ -3120,6 +3120,48 @@ is a database invariant rather than a racy read. Not done now because the
 deployment is single-machine and the consequence is a duplicate notification,
 not an incorrect health claim.
 
+## Blockers before `VITAL_INSIGHTS_MODE=live`
+
+The final whole-branch review found five issues that do not block merge (the
+feature ships dark) but **must be resolved before any real user is nudged**.
+Listed in the order I'd take them.
+
+1. **The nudge's prose is ungrounded.** `parseNudge` validates the chosen
+   signature and that three strings are non-empty. Nothing checks the words. The
+   rule "never state a number not present in the finding" is prompt-only. This
+   repo already owns `lib/proactiveAnalysisGrounding.ts`, which validates output
+   against its evidence — `voice.ts` imports it, but only for fence-stripping.
+   Wire up real grounding validation.
+
+2. **The chat elaboration has no guardrail at all.** `lib/brain/context.ts`
+   injects the finding's `kind`, `effectLabel`, and raw `detail` under an
+   instruction to "discuss it directly", with nothing saying that a `cross_lag`
+   finding is *correlational*. The push notification is at least authored under
+   `voice.ts`'s system rules; the chat turn the user actually reads is authored
+   under none of them. This is precisely where a certified rho becomes a causal
+   story about someone's body.
+
+3. **Storage-unit numbers reach both prompts unlabelled and unconverted.**
+   `distance_m` is metres, `whoop_skin_temp` is °C, `body_mass_kg` is kg — and
+   they are interpolated raw as `recentMean=8432`. `CoachContext.unitSystem`
+   exists and every other numeric prompt section routes through
+   `formatDistance`/`formatWeight`. This is the same class as the shipped
+   imperial/metric incident.
+
+4. **The canary tests the wrong null.** It builds random walks (lag-1 r ≈ 0.89),
+   which is the regime `effectiveSampleSize` annihilates — hence 0/40. Real
+   health metrics sit far closer to i.i.d., which is the adversarial direction
+   for BH rather than for the autocorrelation correction. Add a low-φ / i.i.d.
+   arm. Also note its bound (0.10) is numerically identical to `FDR_Q`, so it
+   cannot distinguish "controlling correctly" from "saturated at the design
+   limit".
+
+5. **Cross-run confirmation is weaker than designed** — see the spec's amended
+   section. Consecutive runs share 89 of 90 days, so confirmation removes ~25–40%
+   of false positives rather than an order of magnitude. Either make the second
+   test genuinely independent, or accept the residual rate and let the dry-run
+   measure it on real data.
+
 ## After merge
 
 1. Set the Fly secret `VITAL_INSIGHTS_MODE=dry-run`.
