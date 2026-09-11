@@ -187,6 +187,55 @@ test('a null notification claim (e.g. the freshness gate suppressing a stale eve
   assert.deepEqual(calls, ['claim-null']);
 });
 
+test('onNotify callback is called exactly once when a notification is successfully claimed and delivered', async () => {
+  const calls: string[] = [];
+  const repo = fakeRepository(calls, true);
+  let onNotifyCount = 0;
+  await runClaimedAnalysis(
+    job(),
+    repo,
+    async () => valid,
+    async () => { calls.push('push'); return { outcome: 'sent', retireToken: false }; },
+    new Date('2026-07-13T12:00:00Z'),
+    5,
+    async () => { onNotifyCount += 1; },
+  );
+  assert.equal(onNotifyCount, 1, 'onNotify must be called exactly once when notification is claimed');
+});
+
+test('onNotify is never called when notification type is disabled', async () => {
+  const calls: string[] = [];
+  const repo = fakeRepository(calls, false);
+  let onNotifyCount = 0;
+  await runClaimedAnalysis(
+    job(),
+    repo,
+    async () => valid,
+    async () => { calls.push('push'); return { outcome: 'sent', retireToken: false }; },
+    new Date('2026-07-13T12:00:00Z'),
+    5,
+    async () => { onNotifyCount += 1; },
+  );
+  assert.equal(onNotifyCount, 0, 'onNotify must never be called when context.enabled is false');
+});
+
+test('onNotify is never called when claimNotification returns null', async () => {
+  const calls: string[] = [];
+  const repo = fakeRepository(calls, true);
+  repo.claimNotification = async () => { calls.push('claim-null'); return null; };
+  let onNotifyCount = 0;
+  await runClaimedAnalysis(
+    job(),
+    repo,
+    async () => valid,
+    async () => { calls.push('push'); return { outcome: 'sent', retireToken: false }; },
+    new Date('2026-07-13T12:00:00Z'),
+    5,
+    async () => { onNotifyCount += 1; },
+  );
+  assert.equal(onNotifyCount, 0, 'onNotify must never be called when claimNotification returns null');
+});
+
 function job(): AnalysisJob {
   return { id: 'j1', kind: 'workout', userId: 'u1', localDate: '2026-07-12', input: {}, retryCount: 0, notificationRetryCount: 0, leaseToken: 'lease' };
 }
