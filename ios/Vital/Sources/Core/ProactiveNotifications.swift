@@ -92,6 +92,57 @@ struct AnalysisResponse: Codable, Equatable {
     let createdAt: Date
 }
 
+// MARK: - Notification inbox wire types
+
+/// A single row from `GET /api/notifications` — `type` drives both the row's
+/// icon/label and which detail screen a tap opens (see `NotificationsView`).
+/// `readAt` is `var` (not `let`) so `NotificationsViewModel` can flip it
+/// in place for the optimistic mark-read update.
+struct NotificationItemDTO: Codable, Equatable, Identifiable {
+    let id: String
+    let type: String
+    let targetId: String
+    let title: String
+    let body: String
+    let deepLink: String
+    let createdAt: Date
+    var readAt: Date?
+}
+
+struct NotificationsListResponse: Codable, Equatable {
+    let items: [NotificationItemDTO]
+    let unreadCount: Int
+}
+
+/// `POST /api/notifications/read` accepts either `{"ids":[...]}` or
+/// `{"all":true}` — never both — so encoding is hand-written to omit
+/// whichever side is nil rather than emitting a spurious `null` field.
+struct MarkNotificationsReadRequest: Encodable {
+    let ids: [String]?
+    let all: Bool?
+
+    private enum CodingKeys: String, CodingKey { case ids, all }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(ids, forKey: .ids)
+        try container.encodeIfPresent(all, forKey: .all)
+    }
+}
+
+struct MarkNotificationsReadResponse: Decodable, Equatable {
+    let updated: Int
+}
+
+/// `GET /api/nudges/{id}` — deliberately narrower than `AnalysisResponse`:
+/// no `metrics`/`result` breakdown, just the finding's own title/body.
+struct NudgeDetailResponse: Codable, Equatable {
+    let id: String
+    let title: String
+    let body: String
+    let createdAt: Date
+}
+
 /// A coach-analysis-shaped detail screen: which resource to fetch, how to title
 /// it, and which metrics layout (if any) its payload carries.
 struct AnalysisKind: Equatable {
@@ -349,4 +400,49 @@ extension APIClient {
         guard status < 400 else { throw APIError.serverError(status) }
         return try JSONDecoder.vital.decode(AnalysisResponse.self, from: data)
     }
+
+    func fetchNotifications(limit: Int) async throws -> NotificationsListResponse {
+        guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/notifications?limit=\(limit)") else { throw APIError.invalidURL }
+        var request = URLRequest(url: url)
+        if let token = KeychainStore.loadSessionToken() { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 500
+        guard status < 400 else { throw APIError.serverError(status) }
+        return try JSONDecoder.vital.decode(NotificationsListResponse.self, from: data)
+    }
+
+    func markNotificationsRead(ids: [String]?, all: Bool?) async throws -> Int {
+        guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/notifications/read") else { throw APIError.invalidURL }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token = KeychainStore.loadSessionToken() { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        request.httpBody = try JSONEncoder().encode(MarkNotificationsReadRequest(ids: ids, all: all))
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 500
+        guard status < 400 else { throw APIError.serverError(status) }
+        return try JSONDecoder.vital.decode(MarkNotificationsReadResponse.self, from: data).updated
+    }
+
+    func fetchNudge(id: String) async throws -> NudgeDetailResponse {
+        guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/nudges/\(id)") else { throw APIError.invalidURL }
+        var request = URLRequest(url: url)
+        if let token = KeychainStore.loadSessionToken() { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 500
+        guard status < 400 else { throw APIError.serverError(status) }
+        return try JSONDecoder.vital.decode(NudgeDetailResponse.self, from: data)
+    }
 }
+
+/// Same seam as `TrendsAPIProviding`/`CoachAPIProviding` in `APIClient.swift`
+/// — lets `NotificationsViewModel` be tested against a fake without a live
+/// network stack.
+@MainActor
+protocol NotificationsAPIProviding {
+    func fetchNotifications(limit: Int) async throws -> NotificationsListResponse
+    func markNotificationsRead(ids: [String]?, all: Bool?) async throws -> Int
+    func fetchNudge(id: String) async throws -> NudgeDetailResponse
+}
+
+extension APIClient: NotificationsAPIProviding {}

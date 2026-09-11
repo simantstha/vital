@@ -202,6 +202,9 @@ extension NotificationManager: UNUserNotificationCenterDelegate {
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
+        // Refresh the bell badge while the app is foregrounded and a push
+        // lands — banner presentation below is unaffected either way.
+        Task { @MainActor in await NotificationsViewModel.shared.refresh() }
         completionHandler([.banner, .sound])
     }
 
