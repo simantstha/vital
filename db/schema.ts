@@ -292,9 +292,16 @@ export const pending_nudges = p.pgTable('pending_nudges', {
   scheduled_for: p.timestamp('scheduled_for', { withTimezone: true }).notNull(),
   sent_at:       p.timestamp('sent_at', { withTimezone: true }),                 // nullable until sent
   finding_kind:  p.text('finding_kind'),                                         // nullable: no rows exist yet
+  // Nullable so the migration is additive-safe (old code runs against this
+  // schema during the deploy window without ever populating it). The unique
+  // index below is the actual "one nudge per user per local day" invariant —
+  // Postgres treats NULLs as distinct under a unique index, so unpopulated
+  // rows never collide with each other or with populated ones.
+  local_day:     p.text('local_day'),
 }, (t) => [
   p.index('pending_nudges_user_scheduled_idx').on(t.user_id, t.scheduled_for),
   p.index('pending_nudges_user_kind_sent_idx').on(t.user_id, t.finding_kind, t.sent_at),
+  p.uniqueIndex('pending_nudges_user_local_day_idx').on(t.user_id, t.local_day),
 ]);
 
 // ─── insight_findings ────────────────────────────────────────────────────────
@@ -467,6 +474,41 @@ export const push_attempts = p.pgTable('push_attempts', {
   p.check('push_attempts_status_check', sql`${t.status} in ('pending', 'sent', 'transient_failure', 'permanent_failure')`),
   p.uniqueIndex('push_attempts_idempotency_attempt_idx').on(t.idempotency_key, t.attempt_number),
   p.index('push_attempts_user_attempted_idx').on(t.user_id, t.attempted_at),
+]);
+
+// ─── notification_inbox ────────────────────────────────────────────────────────
+// The user-facing delivery record: what we told the user, kept so it's
+// visible in-app after the banner is dismissed — distinct from push_attempts
+// above, which is delivery telemetry (per-attempt APNs status/latency, never
+// shown to the user). target_id is the same id already embedded in the
+// worker's deep link (job.id / claim.slotId / pendingNudgeId), so a tapped
+// inbox row and a tapped push resolve to the same content.
+// Rows are recorded independently of the APNs delivery outcome: a failed send
+// or a retired device token still leaves a row in the inbox. Note: the coach-nudge
+// path records inside the per-device push callback, so a user with zero
+// registered devices gets no nudge row—unlike the analysis and morning-brief
+// paths, which record before iterating devices.
+export const notification_inbox = p.pgTable('notification_inbox', {
+  id:         p.uuid('id').primaryKey().defaultRandom(),
+  user_id:    p.uuid('user_id').notNull().references(() => users.id),
+  type:       p.text('type').notNull(),
+  // Deliberately text, not uuid: morning-brief slot ids and analysis ids are
+  // uuids, but target_id is only ever echoed back into a deep link, never
+  // joined against another table, so keeping it text avoids a cast on a
+  // value whose only job is round-tripping.
+  target_id:  p.text('target_id').notNull(),
+  title:      p.text('title').notNull(),
+  body:       p.text('body').notNull(),
+  deep_link:  p.text('deep_link').notNull(),
+  created_at: p.timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  read_at:    p.timestamp('read_at', { withTimezone: true }),                   // nullable; null = unread
+}, (t) => [
+  p.check('notification_inbox_type_check', sql`${t.type} in ('workout_analysis', 'sleep_analysis', 'morning_brief', 'coach_nudge')`),
+  // Makes recording idempotent across push retries — the same (user, type,
+  // target) never produces a second inbox row no matter how many times the
+  // worker retries delivery.
+  p.uniqueIndex('notification_inbox_user_type_target_idx').on(t.user_id, t.type, t.target_id),
+  p.index('notification_inbox_user_created_idx').on(t.user_id, t.created_at),
 ]);
 
 // ─── daily_briefs ────────────────────────────────────────────────────────────
@@ -712,3 +754,6 @@ export type NewWhoopConnection = typeof whoop_connections.$inferInsert;
 
 export type InsightFinding    = typeof insight_findings.$inferSelect;
 export type NewInsightFinding = typeof insight_findings.$inferInsert;
+
+export type NotificationInboxRow    = typeof notification_inbox.$inferSelect;
+export type NewNotificationInboxRow = typeof notification_inbox.$inferInsert;

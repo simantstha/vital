@@ -78,6 +78,17 @@ export function fallbackAnalysis(kind: AnalysisKind, input: unknown): CoachAnaly
   };
 }
 
+/**
+ * `onNotify` fires at the single moment this function commits to notifying —
+ * after `claimNotification` hands back a token, before any device is touched.
+ * Every earlier return deliberately skips it: lease lost, `!context.enabled`
+ * (the user switched these notifications off), `storeReady` failing, or a null
+ * claim from the freshness gate suppressing a stale event. So a caller
+ * recording user-facing delivery history never records a notification we
+ * decided not to send. It runs inside the try/catch, so it must not throw —
+ * see recordDelivery in lib/notificationInbox.ts, which swallows its own
+ * failures by contract.
+ */
 export async function runClaimedAnalysis(
   job: AnalysisJob,
   repository: WorkerRepository,
@@ -85,6 +96,7 @@ export async function runClaimedAnalysis(
   push: (device: PushDevice, analysis: CoachAnalysis) => Promise<PushOutcome>,
   now: Date,
   maxRetries = 5,
+  onNotify: () => Promise<void> = async () => {},
 ): Promise<void> {
   try {
     if (!await repository.renewAnalysisLease(job, now)) return;
@@ -95,6 +107,7 @@ export async function runClaimedAnalysis(
     if (!await repository.storeReady(job, result)) return;
     const notificationToken = await repository.claimNotification(job, now);
     if (!notificationToken) return;
+    await onNotify();
     await deliverNotification(job, result, notificationToken, repository, push, now, maxRetries);
   } catch (error) {
     console.error(JSON.stringify(workerErrorEvent('process-analysis-job', error)));
@@ -104,6 +117,7 @@ export async function runClaimedAnalysis(
       if (!await repository.storeReady(job, fallback)) return;
       const notificationToken = await repository.claimNotification(job, now);
       if (!notificationToken) return;
+      await onNotify();
       await deliverNotification(job, fallback, notificationToken, repository, push, now, maxRetries);
       return;
     }

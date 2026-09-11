@@ -22,10 +22,15 @@ struct TodayView: View {
     @State private var actionsItem: PlanItem? = nil
     @State private var selectedMeal: MealRow? = nil
     @State private var mealDetailPlanItemID: PlanItem.ID? = nil
+    @State private var showNotifications = false
+
+    /// Shared with the bell badge here and the Today/RootTabView push route —
+    /// see `NotificationsViewModel.shared`.
+    @ObservedObject private var notificationsVM = NotificationsViewModel.shared
 
     /// The voice FAB must never overlap an open sheet.
     private var isAnySheetOpen: Bool {
-        showLogSheet || showAddItem || actionsItem != nil || selectedMeal != nil
+        showLogSheet || showAddItem || actionsItem != nil || selectedMeal != nil || showNotifications
     }
 
     var body: some View {
@@ -110,6 +115,7 @@ struct TodayView: View {
                 await vm.loadHealthData()
                 if vm.didLoadToday { ReminderScheduler.shared.briefViewed(at: Date()) }
             }
+            .task { await notificationsVM.refresh() }
 
             if !isAnySheetOpen {
                 VoiceFABView(
@@ -186,6 +192,9 @@ struct TodayView: View {
                 }
                 Task { await vm.loadHealthData() }
             }
+        }
+        .sheet(isPresented: $showNotifications) {
+            NotificationsView(coachVM: coachVM, switchToCoachTab: switchToCoachTab)
         }
     }
 }
@@ -297,26 +306,62 @@ private extension TodayView {
     // ── Header ──────────────────────────────────────────────────────────────
 
     var greetingSection: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-            Text(vm.dateSubtitle)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(Theme.Colors.textSecondary)
+        HStack(alignment: .top, spacing: Theme.Spacing.sm) {
+            VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                Text(vm.dateSubtitle)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Theme.Colors.textSecondary)
 
-            Text(vm.greeting)
-                .font(.system(size: 30, weight: .bold))
-                .tracking(-0.4)
-                .foregroundStyle(Theme.Colors.textPrimary)
+                Text(vm.greeting)
+                    .font(.system(size: 30, weight: .bold))
+                    .tracking(-0.4)
+                    .foregroundStyle(Theme.Colors.textPrimary)
 
-            HStack(spacing: Theme.Spacing.sm) {
-                Chip(text: "\(vm.streakDays)-day streak", icon: "flame.fill", isAccent: true)
-                if let hint = vm.planHint {
-                    Text(hint)
-                        .font(.system(size: 13))
-                        .foregroundStyle(Theme.Colors.textSecondary)
+                HStack(spacing: Theme.Spacing.sm) {
+                    Chip(text: "\(vm.streakDays)-day streak", icon: "flame.fill", isAccent: true)
+                    if let hint = vm.planHint {
+                        Text(hint)
+                            .font(.system(size: 13))
+                            .foregroundStyle(Theme.Colors.textSecondary)
+                    }
+                }
+                .padding(.top, Theme.Spacing.xxs)
+            }
+
+            Spacer(minLength: Theme.Spacing.sm)
+
+            bellButton
+        }
+    }
+
+    // ── Notification bell ───────────────────────────────────────────────────
+
+    private var bellButton: some View {
+        Button { showNotifications = true } label: {
+            ZStack(alignment: .topTrailing) {
+                Circle()
+                    .fill(Theme.Colors.glassFill)
+                    .overlay(Circle().strokeBorder(Theme.Colors.glassBorder, lineWidth: 1))
+                    .frame(width: 40, height: 40)
+
+                Image(systemName: "bell")
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(Theme.Colors.textPrimary)
+                    .frame(width: 40, height: 40)
+
+                if notificationsVM.unreadCount > 0 {
+                    Text(notificationsVM.unreadCount > 9 ? "9+" : "\(notificationsVM.unreadCount)")
+                        .font(.system(size: 10.5, weight: .bold))
+                        .foregroundStyle(Theme.Colors.onAccent)
+                        .frame(minWidth: 18, minHeight: 18)
+                        .background(Circle().fill(Theme.Colors.accent))
+                        .overlay(Circle().strokeBorder(Theme.Colors.canvas, lineWidth: 2))
+                        .offset(x: 4, y: -4)
                 }
             }
-            .padding(.top, Theme.Spacing.xxs)
         }
+        .buttonStyle(.vital(scale: 0.94))
+        .padding(.top, 2)
     }
 
     // ── Calibration card ────────────────────────────────────────────────────
