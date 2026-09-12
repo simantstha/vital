@@ -251,10 +251,65 @@ test('analysis GET returns only an authenticated user ready non-deleted public D
     createdAt: '2026-07-12T12:00:00.000Z',
   });
 
-  for (const hidden of [null, { ...record, userId: 'user-b' }, { ...record, status: 'processing' }, { ...record, deletedAt: new Date() }]) {
+  // Note: `status: 'processing'` with a non-null result is no longer a hidden case
+  // (a re-queued re-analysis keeps its previously delivered result servable) — see
+  // the regression test below for that scenario instead.
+  for (const hidden of [null, { ...record, userId: 'user-b' }, { ...record, result: null }, { ...record, deletedAt: new Date() }]) {
     const hiddenHandler = createAnalysisHttpHandler({ authenticate, kind: 'sleep', repository: repository({ async getAnalysis() { return hidden; } }) });
     assert.equal((await hiddenHandler.GET(request(`/api/sleep-analyses/${record.id}`, 'GET', undefined, 'user-a'), { params: Promise.resolve({ id: record.id }) })).status, 404);
   }
+});
+
+test('analysis GET serves a re-queued record that still holds its previous result (regression)', async () => {
+  // Reproduces the bug: a HealthKit re-sync resets status to 'pending' and delays
+  // re-analysis, but the notification/inbox link the user already tapped must keep
+  // resolving to the result it announced, not 404.
+  const record: AnalysisRecord = {
+    id: '44444444-4444-4444-8444-444444444444', userId: 'user-a', status: 'pending', deletedAt: null,
+    date: '2026-09-01',
+    input: { minutes: 400, stages: { core: 300, deep: 50, rem: 40, awake: 10 } },
+    result: { summary: 'Solid night' }, createdAt: new Date('2026-09-01T08:00:00Z'),
+  };
+  const handler = createAnalysisHttpHandler({
+    authenticate,
+    kind: 'sleep',
+    repository: repository({ async getAnalysis() { return record; } }),
+  });
+  const response = await handler.GET(request(`/api/sleep-analyses/${record.id}`, 'GET', undefined, 'user-a'), { params: Promise.resolve({ id: record.id }) });
+  assert.equal(response.status, 200);
+  assert.deepEqual((await response.json()).result, { summary: 'Solid night' });
+});
+
+test('analysis GET 404s a record with no result at all', async () => {
+  const record: AnalysisRecord = {
+    id: '55555555-5555-4555-8555-555555555555', userId: 'user-a', status: 'pending', deletedAt: null,
+    date: '2026-09-01',
+    input: { minutes: 400, stages: { core: 300, deep: 50, rem: 40, awake: 10 } },
+    result: null, createdAt: new Date('2026-09-01T08:00:00Z'),
+  };
+  const handler = createAnalysisHttpHandler({
+    authenticate,
+    kind: 'sleep',
+    repository: repository({ async getAnalysis() { return record; } }),
+  });
+  const response = await handler.GET(request(`/api/sleep-analyses/${record.id}`, 'GET', undefined, 'user-a'), { params: Promise.resolve({ id: record.id }) });
+  assert.equal(response.status, 404);
+});
+
+test('analysis GET 404s a deleted workout even if it still has a result', async () => {
+  const record: AnalysisRecord = {
+    id: '66666666-6666-4666-8666-666666666666', userId: 'user-a', status: 'ready', deletedAt: new Date('2026-09-01T09:00:00Z'),
+    date: '2026-09-01',
+    input: { type: 'running', durationMin: 30, kcal: 300, distanceM: 5000, avgHr: 140, maxHr: 165, paceMinPerKm: 6, startTime: '2026-09-01T07:00:00Z' },
+    result: { summary: 'Good run' }, createdAt: new Date('2026-09-01T08:00:00Z'),
+  };
+  const handler = createAnalysisHttpHandler({
+    authenticate,
+    kind: 'workout',
+    repository: repository({ async getAnalysis() { return record; } }),
+  });
+  const response = await handler.GET(request(`/api/workout-analyses/${record.id}`, 'GET', undefined, 'user-a'), { params: Promise.resolve({ id: record.id }) });
+  assert.equal(response.status, 404);
 });
 
 test('analysis GET echoes the sleep input payload as metrics', async () => {

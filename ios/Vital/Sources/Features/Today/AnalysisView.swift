@@ -63,6 +63,13 @@ struct AnalysisView: View {
 
     private func load() async {
         do { analysis = try await APIClient.shared.fetchAnalysis(resource: kind.resource, id: id) }
+        catch APIError.serverError(404) {
+            // Genuinely gone (deleted or never had a result) — leave `error` nil so the
+            // view falls back to its "This analysis is no longer available." copy
+            // instead of a generic "Couldn't load — try again." Still log for production
+            // visibility; discard the copy since we don't show it here.
+            _ = UserFacingError.message(for: APIError.serverError(404), context: .read, tag: "fetchAnalysis")
+        }
         catch { self.error = UserFacingError.message(for: error, context: .read, tag: "fetchAnalysis") }
         withAnimation(Theme.Motion.appear) { loading = false }
     }

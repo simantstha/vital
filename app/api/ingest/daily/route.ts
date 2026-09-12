@@ -250,7 +250,8 @@ export async function POST(request: Request): Promise<NextResponse> {
               retry_count: 0,
               next_attempt_at: entry.receivedAt,
               lease_expires_at: null,
-              result: null,
+              // Keep the previously delivered result readable from its notification/inbox
+              // link until the re-analysis overwrites it via storeReady.
               deleted_at: null,
               updated_at: entry.receivedAt,
               notification_state: entry.notificationState,
@@ -287,7 +288,8 @@ export async function POST(request: Request): Promise<NextResponse> {
               status: 'pending',
               retry_count: 0,
               lease_expires_at: null,
-              result: null,
+              // Keep the previously delivered result readable from its notification/inbox
+              // link until the re-analysis overwrites it via storeReady.
               updated_at: entry.receivedAt,
               notification_state: entry.notificationState,
             },
