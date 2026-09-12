@@ -235,13 +235,13 @@ test('screenshot-style meta-response repairs into digit-free prose', async () =>
   assert.deepEqual(result, valid);
 });
 
-const initialFailures: Array<{ name: string; response: string; category: AnalysisFailureCategory }> = [
+const initialFailures: Array<{ name: string; response: string; category: AnalysisFailureCategory; detail?: string }> = [
   { name: 'parse', response: '{private rejected text', category: 'parse_failure' },
-  { name: 'schema', response: JSON.stringify({ headline: 'private rejected text' }), category: 'schema_failure' },
+  { name: 'schema', response: JSON.stringify({ headline: 'private rejected text' }), category: 'schema_failure', detail: 'invalid shortInsight' },
   { name: 'grounding', response: JSON.stringify({ ...valid, narrative: 'private rejected text 99' }), category: 'grounding_failure' },
 ];
 
-for (const { name, response, category } of initialFailures) {
+for (const { name, response, category, detail } of initialFailures) {
   test(`initial ${name} failure repairs once with the same payload and no rejected data`, async () => {
     const calls: AnalysisGenerationRequest[] = [];
     const events: AnalysisFailureEvent[] = [];
@@ -256,24 +256,43 @@ for (const { name, response, category } of initialFailures) {
 
     assert.equal(calls.length, 2);
     const initialPayload = payloadOf(calls[0]);
-    assert.deepEqual(payloadOf(calls[1]), { category, request: initialPayload });
+    assert.deepEqual(payloadOf(calls[1]), { category, request: initialPayload, ...(detail ? { detail } : {}) });
     assert.equal(calls[1].content.includes('private rejected text'), false);
     assert.equal(calls[1].content.includes('Proactive analysis content validation failed'), false);
     assert.deepEqual(events, [
-      analysisFailureEvent('initial', category, 'repair_started'),
+      analysisFailureEvent('initial', category, 'repair_started', detail),
       analysisFailureEvent('repair', category, 'repair_succeeded'),
     ]);
     assert.deepEqual(result, valid);
   });
 }
 
-const repairFailures: Array<{ name: string; response: string; category: AnalysisFailureCategory }> = [
+// The repair payload is the model's only chance to see why the initial
+// attempt was rejected — this pins that a schema failure's `detail` (the
+// exact field parseCoachAnalysis named) reaches the repair request content,
+// not just the reported event.
+test('the repair payload carries the schema failure detail naming the offending field', async () => {
+  const calls: AnalysisGenerationRequest[] = [];
+  await generateAnalysis({
+    source,
+    generate: async (request) => {
+      calls.push(request);
+      return request.attempt === 'initial' ? JSON.stringify({ ...valid, nextSteps: 'rest' }) : validResponse();
+    },
+    report: () => {},
+  });
+
+  assert.equal(calls.length, 2);
+  assert.equal(payloadOf(calls[1]).detail, 'invalid nextSteps');
+});
+
+const repairFailures: Array<{ name: string; response: string; category: AnalysisFailureCategory; detail?: string }> = [
   { name: 'parse', response: '{', category: 'parse_failure' },
-  { name: 'schema', response: JSON.stringify({ ...valid, nextSteps: 'rest' }), category: 'schema_failure' },
+  { name: 'schema', response: JSON.stringify({ ...valid, nextSteps: 'rest' }), category: 'schema_failure', detail: 'invalid nextSteps' },
   { name: 'grounding', response: JSON.stringify({ ...valid, narrative: 'HRV was 46 ms.' }), category: 'grounding_failure' },
 ];
 
-for (const { name, response, category } of repairFailures) {
+for (const { name, response, category, detail } of repairFailures) {
   test(`repair ${name} failure is exhausted after exactly two calls`, async () => {
     const calls: AnalysisGenerationRequest[] = [];
     const events: AnalysisFailureEvent[] = [];
@@ -284,12 +303,12 @@ for (const { name, response, category } of repairFailures) {
         return request.attempt === 'initial' ? '{' : response;
       },
       report: (event) => events.push(event),
-    }), (error: unknown) => error instanceof AnalysisContentError && error.category === category);
+    }), (error: unknown) => error instanceof AnalysisContentError && error.category === category && error.detail === detail);
 
     assert.equal(calls.length, 2);
     assert.deepEqual(events, [
       analysisFailureEvent('initial', 'parse_failure', 'repair_started'),
-      analysisFailureEvent('repair', category, 'repair_exhausted'),
+      analysisFailureEvent('repair', category, 'repair_exhausted', detail),
     ]);
   });
 }
