@@ -13,7 +13,13 @@ const META_RESPONSE = /\b(?:unable to process|placeholder tokens?|template varia
 export type AnalysisFailureCategory = 'parse_failure' | 'schema_failure' | 'grounding_failure';
 
 export class AnalysisContentError extends Error {
-  constructor(readonly category: AnalysisFailureCategory) {
+  /**
+   * `detail` is a short, non-user-content diagnostic string (e.g. the field
+   * name parseCoachAnalysis rejected) — never the model's prose or the
+   * user's health data — so it's safe to log via `fly logs` and to hand back
+   * to the repair model as a pointer to what to fix.
+   */
+  constructor(readonly category: AnalysisFailureCategory, readonly detail?: string) {
     super('Proactive analysis content validation failed.');
     this.name = 'AnalysisContentError';
   }
@@ -48,8 +54,8 @@ export function parseAnalysisText(text: string): CoachAnalysis {
   let validated: CoachAnalysis;
   try {
     validated = parseCoachAnalysis(decoded);
-  } catch {
-    throw new AnalysisContentError('schema_failure');
+  } catch (error) {
+    throw new AnalysisContentError('schema_failure', error instanceof Error ? error.message : undefined);
   }
 
   for (const value of authoredStrings(validated)) {

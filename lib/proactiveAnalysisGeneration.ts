@@ -19,6 +19,8 @@ export interface AnalysisFailureEvent {
   attempt: AnalysisAttempt;
   category: AnalysisFailureCategory;
   outcome: AnalysisFailureOutcome;
+  /** Short diagnostic string from AnalysisContentError, e.g. "invalid shortInsight" — see its doc comment for why it's safe to log. */
+  detail?: string;
 }
 
 export interface AnalysisGenerationRequest {
@@ -51,8 +53,9 @@ export function analysisFailureEvent(
   attempt: AnalysisAttempt,
   category: AnalysisFailureCategory,
   outcome: AnalysisFailureOutcome,
+  detail?: string,
 ): AnalysisFailureEvent {
-  return { event: 'proactive_analysis_failure', attempt, category, outcome };
+  return { event: 'proactive_analysis_failure', attempt, category, outcome, ...(detail ? { detail } : {}) };
 }
 
 function analysisRequest(attempt: AnalysisAttempt, system: string, payload: unknown): AnalysisGenerationRequest {
@@ -81,9 +84,10 @@ export async function generateAnalysis(args: GenerateAnalysisArgs): Promise<Coac
     initialError = error;
   }
 
-  args.report(analysisFailureEvent('initial', initialError.category, 'repair_started'));
+  args.report(analysisFailureEvent('initial', initialError.category, 'repair_started', initialError.detail));
   const repairPayload = {
     category: initialError.category,
+    detail: initialError.detail,
     request: formattedSource,
   };
 
@@ -94,7 +98,7 @@ export async function generateAnalysis(args: GenerateAnalysisArgs): Promise<Coac
     return result;
   } catch (error) {
     if (!(error instanceof AnalysisContentError)) throw error;
-    args.report(analysisFailureEvent('repair', error.category, 'repair_exhausted'));
+    args.report(analysisFailureEvent('repair', error.category, 'repair_exhausted', error.detail));
     throw error;
   }
 }
