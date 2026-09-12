@@ -138,11 +138,12 @@ export const proactiveHealthRepository: ProactiveHealthRepository = {
       }).from(schema.morning_notification_slots).where(and(
         eq(schema.morning_notification_slots.id, id),
         eq(schema.morning_notification_slots.user_id, userId),
-        eq(schema.morning_notification_slots.status, 'sent'),
         isNotNull(schema.morning_notification_slots.result),
       )).limit(1);
-      // `status: 'ready'` is a synthesized DTO signal (slots use 'sent'),
-      // consistent with how the sleep branch below synthesizes `deletedAt: null`.
+      // `status: 'ready'` is a synthesized DTO signal (slots use 'sent' rather than
+      // 'ready'), consistent with how the sleep branch below synthesizes
+      // `deletedAt: null`. Presence of `result` (not a status filter) is what gates
+      // visibility — see the workout/sleep branches below for why.
       return row ? { ...row, status: 'ready', deletedAt: null, input: null } : null;
     }
     if (kind === 'workout') {
@@ -158,7 +159,6 @@ export const proactiveHealthRepository: ProactiveHealthRepository = {
       }).from(schema.workout_analyses).where(and(
         eq(schema.workout_analyses.id, id),
         eq(schema.workout_analyses.user_id, userId),
-        eq(schema.workout_analyses.status, 'ready'),
         isNull(schema.workout_analyses.deleted_at),
       )).limit(1);
       return row ?? null;
@@ -174,7 +174,6 @@ export const proactiveHealthRepository: ProactiveHealthRepository = {
     }).from(schema.sleep_analyses).where(and(
       eq(schema.sleep_analyses.id, id),
       eq(schema.sleep_analyses.user_id, userId),
-      eq(schema.sleep_analyses.status, 'ready'),
     )).limit(1);
     return row ? { ...row, deletedAt: null } : null;
   },

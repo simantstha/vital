@@ -266,10 +266,14 @@ export function createAnalysisHttpHandler(
         userId,
         normalizedId,
       );
+      // A record can be re-queued for re-analysis (e.g. a HealthKit re-sync resets
+      // status to 'pending') while still holding the result its notification/inbox
+      // link announced. Only "no result at all" or "deleted" means genuinely gone —
+      // gating on status here would 404 a link the user was just notified about.
       if (
         !analysis
         || analysis.userId !== userId
-        || analysis.status !== 'ready'
+        || !analysis.result
         || analysis.deletedAt !== null
       ) return Response.json({ error: 'Analysis not found.' }, { status: 404 });
       return Response.json({
