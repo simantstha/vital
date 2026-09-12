@@ -27,23 +27,54 @@
  * is the Drizzle-backed production implementation of the DB half.
  *
  * One user at a time, sequentially (never Promise.all — see the plan: a rate
- * limit hit while fetching for one user must stop the whole pass, not race
- * ahead into more 429s for other users):
+ * limit hit while fetching for one user must not race ahead into more 429s
+ * for other users). Failures are triaged by BLAST RADIUS, which is the whole
+ * reason there are two distinct outcomes below — the question is never "how
+ * bad is this error" but "is this about WHOOP, or about this one connection?"
+ *
+ *   - Global backpressure — a 429 or a 5xx from WHOOP (on WhoopApiError or
+ *     WhoopTokenError) is a signal about OUR api quota or WHOOP's own health,
+ *     not about the connection that happened to be next in line. Retrying the
+ *     remaining connections would just spend the same exhausted quota and
+ *     deepen the rate limit, so the pass stops iterating and leaves them for
+ *     the next tick. Reported as `backpressure: true`.
+ *
+ *   - Per-connection failure — a dead grant, an unexpected DB error, anything
+ *     else. Scoped to that one connection, so it is logged, recorded in
+ *     `failed`, and the loop continues. This isolation is load-bearing: a
+ *     single connection whose refresh token was revoked (and which therefore
+ *     failed every tick forever) previously aborted the whole pass and
+ *     starved WHOOP sync for EVERY user, retrying every 15s indefinitely.
+ *     One bad connection must never block the others.
+ *
  *   - WhoopConnectionInactiveError (connection revoked/errored under us,
- *     mid-pass) → skip just that user, continue to the next.
- *   - Anything else (WhoopApiError — including 429 — WhoopTokenError, or an
- *     unexpected DB error) → log and abort the ENTIRE pass for this tick;
- *     the next tick (in ~15s, see scripts/proactive-health-worker.ts) picks
- *     up exactly where this one left off, since `last_synced_at` was only
- *     updated for connections that finished before the abort.
+ *     mid-pass) → not a failure at all; skip just that user and continue.
+ *     Recorded in `skipped`, never in `failed`.
+ *
+ * In every case the next tick (in ~15s, see scripts/proactive-health-worker.ts)
+ * re-picks up whatever is still due, since `last_synced_at` only advances for
+ * connections that actually completed.
  */
 
 import { and, eq, isNull, lt, or } from 'drizzle-orm';
 import type * as WhoopSchema from '../../db/schema';
-import { WhoopConnectionInactiveError } from './client';
+import { WhoopApiError, WhoopConnectionInactiveError, WhoopTokenError } from './client';
 
 const SYNC_INTERVAL_MS = 60 * 60_000; // 1 hour
 const SYNC_WINDOW_MS = 48 * 3_600_000; // 48 hours
+
+/**
+ * Is this error a signal about WHOOP as a whole (our rate-limit quota, or
+ * their availability) rather than about one connection? Those are the only
+ * errors that justify stopping the pass — see the blast-radius triage in the
+ * module comment. Deliberately keyed on the HTTP status, not the error class:
+ * a 429 is equally a global signal whether it surfaced from a data call
+ * (WhoopApiError) or a token refresh (WhoopTokenError).
+ */
+function isBackpressureSignal(err: unknown): boolean {
+  if (!(err instanceof WhoopApiError) && !(err instanceof WhoopTokenError)) return false;
+  return err.status === 429 || err.status >= 500;
+}
 
 export interface WhoopConnectionForSync {
   id: string;
@@ -74,9 +105,10 @@ export interface WhoopWorkerPassDeps {
 }
 
 export interface WhoopWorkerPassResult {
-  synced: string[];   // connection ids that completed successfully this tick
-  skipped: string[];  // connection ids skipped (WhoopConnectionInactiveError)
-  aborted: boolean;    // true if the pass stopped early on a non-inactive error
+  synced: string[];      // connection ids that completed successfully this tick
+  skipped: string[];     // connection ids skipped (WhoopConnectionInactiveError)
+  failed: string[];      // connection ids that errored for their own reasons; the loop continued past each
+  backpressure: boolean; // true if a 429/5xx from WHOOP stopped the pass early, leaving the rest of `due` untried
 }
 
 export async function runWhoopWorkerPass(now: Date, deps: WhoopWorkerPassDeps): Promise<WhoopWorkerPassResult> {
@@ -88,6 +120,8 @@ export async function runWhoopWorkerPass(now: Date, deps: WhoopWorkerPassDeps): 
 
   const synced: string[] = [];
   const skipped: string[] = [];
+  const failed: string[] = [];
+  let backpressure = false;
 
   for (const connection of due) {
     try {
@@ -99,12 +133,21 @@ export async function runWhoopWorkerPass(now: Date, deps: WhoopWorkerPassDeps): 
         skipped.push(connection.id);
         continue;
       }
-      console.error(`[whoop-worker] aborting reconciliation pass at connection ${connection.id}: ${String(err)}`);
-      return { synced, skipped, aborted: true };
+      if (isBackpressureSignal(err)) {
+        // Global signal — stop the pass rather than spending the same
+        // exhausted quota on everyone still queued behind this connection.
+        console.error(`[whoop-worker] backing off the rest of the reconciliation pass at connection ${connection.id}: ${String(err)}`);
+        backpressure = true;
+        break;
+      }
+      // Scoped to this connection — isolate it and keep going, so one dead
+      // grant can't starve every other user's sync.
+      console.error(`[whoop-worker] connection ${connection.id} failed, continuing to the next: ${String(err)}`);
+      failed.push(connection.id);
     }
   }
 
-  return { synced, skipped, aborted: false };
+  return { synced, skipped, failed, backpressure };
 }
 
 // ─── Drizzle-backed repository (production wiring) ───────────────────────────

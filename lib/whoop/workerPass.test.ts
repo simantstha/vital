@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as schema from '../../db/schema';
-import { WhoopApiError, WhoopConnectionInactiveError } from './client';
+import { WhoopApiError, WhoopConnectionInactiveError, WhoopTokenError } from './client';
 import {
   createWhoopWorkerRepository,
   runWhoopWorkerPass,
@@ -67,7 +67,8 @@ test('runWhoopWorkerPass syncs every due connection one at a time and marks each
 
   assert.deepEqual(result.synced.sort(), ['conn-1', 'conn-2']);
   assert.equal(result.skipped.length, 0);
-  assert.equal(result.aborted, false);
+  assert.equal(result.failed.length, 0);
+  assert.equal(result.backpressure, false);
   assert.deepEqual(syncCalls.sort(), ['conn-1', 'conn-2']);
 });
 
@@ -97,12 +98,16 @@ test('runWhoopWorkerPass skips a WhoopConnectionInactiveError and continues to t
   assert.deepEqual(syncCalls, ['conn-1', 'conn-2']);
   assert.deepEqual(result.skipped, ['conn-1']);
   assert.deepEqual(result.synced, ['conn-2']);
-  assert.equal(result.aborted, false);
+  assert.deepEqual(result.failed, []); // inactive lands in skipped, never in failed
+  assert.equal(result.backpressure, false);
 });
 
-test('runWhoopWorkerPass aborts the whole pass on a WhoopApiError (e.g. 429) and does not process later connections', async () => {
+// Global backpressure: a 429 is a signal about our WHOOP quota, not about
+// conn-1 specifically, so the pass must stop rather than burn the same
+// exhausted quota on everyone still queued behind it.
+test('runWhoopWorkerPass stops the pass on a 429 and does NOT attempt the remaining connections', async () => {
   const now = new Date('2026-07-19T12:00:00.000Z');
-  const connections = [conn({ id: 'conn-1' }), conn({ id: 'conn-2' })];
+  const connections = [conn({ id: 'conn-1' }), conn({ id: 'conn-2' }), conn({ id: 'conn-3' })];
   const syncCalls: string[] = [];
   const deps = makeDeps(connections, async (target) => {
     syncCalls.push(target.connectionId);
@@ -111,20 +116,86 @@ test('runWhoopWorkerPass aborts the whole pass on a WhoopApiError (e.g. 429) and
 
   const result = await runWhoopWorkerPass(now, deps);
 
-  assert.deepEqual(syncCalls, ['conn-1']); // never reached conn-2
-  assert.equal(result.aborted, true);
+  assert.deepEqual(syncCalls, ['conn-1']); // never raced ahead into more 429s
+  assert.equal(result.backpressure, true);
   assert.deepEqual(result.synced, []);
   assert.deepEqual(result.skipped, []);
+  assert.deepEqual(result.failed, []); // a pass-level outcome, not a connection failure
 });
 
-test('runWhoopWorkerPass aborts on an unexpected error too (not just WhoopApiError)', async () => {
+test('runWhoopWorkerPass stops the pass on a WHOOP 5xx the same way it does on a 429', async () => {
   const now = new Date('2026-07-19T12:00:00.000Z');
-  const deps = makeDeps([conn()], async () => { throw new Error('db exploded'); });
+  const connections = [conn({ id: 'conn-1' }), conn({ id: 'conn-2' }), conn({ id: 'conn-3' })];
+  const syncCalls: string[] = [];
+  const deps = makeDeps(connections, async (target) => {
+    syncCalls.push(target.connectionId);
+    if (target.connectionId === 'conn-1') throw new WhoopApiError('whoop is down', 503);
+  });
 
   const result = await runWhoopWorkerPass(now, deps);
 
-  assert.equal(result.aborted, true);
+  assert.deepEqual(syncCalls, ['conn-1']);
+  assert.equal(result.backpressure, true);
   assert.deepEqual(result.synced, []);
+  assert.deepEqual(result.failed, []);
+});
+
+test('runWhoopWorkerPass treats a 429 surfaced from a token refresh as backpressure too', async () => {
+  const now = new Date('2026-07-19T12:00:00.000Z');
+  const connections = [conn({ id: 'conn-1' }), conn({ id: 'conn-2' })];
+  const syncCalls: string[] = [];
+  const deps = makeDeps(connections, async (target) => {
+    syncCalls.push(target.connectionId);
+    if (target.connectionId === 'conn-1') throw new WhoopTokenError('WHOOP token request failed (429)', 429);
+  });
+
+  const result = await runWhoopWorkerPass(now, deps);
+
+  assert.deepEqual(syncCalls, ['conn-1']);
+  assert.equal(result.backpressure, true);
+});
+
+// Regression test for the production incident this fix addresses: one WHOOP
+// connection with a revoked grant (surfacing as a generic, non-inactive
+// error since the revocation hadn't been marked status='error' yet) must not
+// starve every other user's sync. The first of three connections throws;
+// the other two must still be attempted and sync successfully.
+test('runWhoopWorkerPass attempts and syncs the remaining connections after the first one throws a generic error', async () => {
+  const now = new Date('2026-07-19T12:00:00.000Z');
+  const connections = [conn({ id: 'conn-1' }), conn({ id: 'conn-2' }), conn({ id: 'conn-3' })];
+  const syncCalls: string[] = [];
+  const deps = makeDeps(connections, async (target) => {
+    syncCalls.push(target.connectionId);
+    if (target.connectionId === 'conn-1') throw new Error('WHOOP token request failed (400)');
+  });
+
+  const result = await runWhoopWorkerPass(now, deps);
+
+  assert.deepEqual(syncCalls, ['conn-1', 'conn-2', 'conn-3']);
+  assert.deepEqual(result.failed, ['conn-1']);
+  assert.deepEqual(result.synced.sort(), ['conn-2', 'conn-3']);
+  assert.deepEqual(result.skipped, []);
+  assert.equal(result.backpressure, false);
+});
+
+// The exact production shape: a dead grant surfacing as a 400 WhoopTokenError.
+// A 4xx is about this connection's credentials, so it must isolate — proving
+// the backpressure predicate keys on 429/5xx and not merely on the error class.
+test('runWhoopWorkerPass isolates a 400 WhoopTokenError rather than treating it as backpressure', async () => {
+  const now = new Date('2026-07-19T12:00:00.000Z');
+  const connections = [conn({ id: 'conn-1' }), conn({ id: 'conn-2' }), conn({ id: 'conn-3' })];
+  const syncCalls: string[] = [];
+  const deps = makeDeps(connections, async (target) => {
+    syncCalls.push(target.connectionId);
+    if (target.connectionId === 'conn-1') throw new WhoopTokenError('WHOOP token request failed (400)', 400);
+  });
+
+  const result = await runWhoopWorkerPass(now, deps);
+
+  assert.deepEqual(syncCalls, ['conn-1', 'conn-2', 'conn-3']);
+  assert.deepEqual(result.failed, ['conn-1']);
+  assert.deepEqual(result.synced.sort(), ['conn-2', 'conn-3']);
+  assert.equal(result.backpressure, false);
 });
 
 test('runWhoopWorkerPass is a no-op when nothing is due', async () => {
@@ -133,7 +204,7 @@ test('runWhoopWorkerPass is a no-op when nothing is due', async () => {
 
   const result = await runWhoopWorkerPass(now, deps);
 
-  assert.deepEqual(result, { synced: [], skipped: [], aborted: false });
+  assert.deepEqual(result, { synced: [], skipped: [], failed: [], backpressure: false });
 });
 
 // ─── createWhoopWorkerRepository (Drizzle plumbing) ──────────────────────────

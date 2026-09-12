@@ -18,9 +18,13 @@
  * bundles the connection id with a `WhoopTokenStore` (see
  * `createWhoopTokenStore` below) so the refresh check + token rotation runs
  * inside one `SELECT ... FOR UPDATE` transaction on the `whoop_connections`
- * row, serializing refreshes per connection. A refresh that fails with
- * `invalid_grant` marks the connection `status='error'` inside that same
- * transaction (surfaced in iOS as "reconnect WHOOP").
+ * row, serializing refreshes per connection. A refresh that fails with a
+ * permanent auth error (400/401/403 — `invalid_grant` is the common case,
+ * but any 4xx in that range on a refresh-token grant means WHOOP will never
+ * accept this refresh token again) marks the connection `status='error'`
+ * inside that same transaction (surfaced in iOS as "reconnect WHOOP").
+ * Transient failures (429, 5xx, network errors) are left `status='active'`
+ * so the next tick retries.
  */
 
 import { eq } from 'drizzle-orm';
@@ -403,7 +407,14 @@ export async function withValidToken<T>(
       });
       return tokens.access_token;
     } catch (err) {
-      if (err instanceof WhoopTokenError && err.code === 'invalid_grant') {
+      // A refresh-token grant that comes back 400/401/403 is dead — WHOOP
+      // will never accept this refresh token again, `code` notwithstanding
+      // (production has seen a persistent 400 with no `invalid_grant` body
+      // that never got marked, starving the whole worker pass — see
+      // lib/whoop/workerPass.ts). 429/5xx and network errors are transient
+      // and must keep retrying, so they fall through un-marked.
+      if (err instanceof WhoopTokenError && (err.status === 400 || err.status === 401 || err.status === 403)) {
+        console.error(`[whoop] refresh failed permanently for connection ${connection.id} (status=${err.status}, code=${err.code ?? 'unknown'}); marking status=error`);
         await tx.markError(connection.id);
       }
       throw err;

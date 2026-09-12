@@ -244,6 +244,61 @@ test('withValidToken marks the connection status=error on invalid_grant and neve
   assert.equal(store.saved.length, 0);
 });
 
+for (const status of [400, 401, 403] as const) {
+  test(`withValidToken marks the connection status=error on a ${status} refresh failure regardless of code`, async (t) => {
+    process.env.WHOOP_CLIENT_ID = 'client-1';
+    process.env.WHOOP_CLIENT_SECRET = 'secret-1';
+    process.env.WHOOP_REDIRECT_URI = 'https://vital.example/api/whoop/callback';
+
+    // No `error` field in the body at all — this is the production case:
+    // a persistent 400 with a body that never parses to `invalid_grant`,
+    // which previously left the connection status='active' forever.
+    t.mock.method(globalThis, 'fetch', async () => jsonResponse(status, {}));
+
+    const store = new FakeTokenStore({
+      id: 'conn-1',
+      access_token: 'old-access',
+      refresh_token: 'dead-refresh',
+      expires_at: new Date(Date.now() + 1000),
+      status: 'active',
+    });
+
+    await assert.rejects(
+      () => withValidToken({ id: 'conn-1', store }, async () => 'unreachable'),
+      WhoopTokenError,
+    );
+
+    assert.deepEqual(store.errored, ['conn-1']);
+    assert.equal(store.saved.length, 0);
+  });
+}
+
+for (const status of [429, 500, 503] as const) {
+  test(`withValidToken does NOT mark the connection status=error on a transient ${status} refresh failure`, async (t) => {
+    process.env.WHOOP_CLIENT_ID = 'client-1';
+    process.env.WHOOP_CLIENT_SECRET = 'secret-1';
+    process.env.WHOOP_REDIRECT_URI = 'https://vital.example/api/whoop/callback';
+
+    t.mock.method(globalThis, 'fetch', async () => jsonResponse(status, {}));
+
+    const store = new FakeTokenStore({
+      id: 'conn-1',
+      access_token: 'old-access',
+      refresh_token: 'still-good-refresh',
+      expires_at: new Date(Date.now() + 1000),
+      status: 'active',
+    });
+
+    await assert.rejects(
+      () => withValidToken({ id: 'conn-1', store }, async () => 'unreachable'),
+      WhoopTokenError,
+    );
+
+    assert.deepEqual(store.errored, []); // left active so the next tick retries
+    assert.equal(store.saved.length, 0);
+  });
+}
+
 test('withValidToken rejects a non-active connection without attempting a refresh', async (t) => {
   const fetchMock = t.mock.method(globalThis, 'fetch', async () => {
     throw new Error('should not be called — connection is not active');
