@@ -255,8 +255,23 @@ async function tick(reportStage: (stage: WorkerStage) => void): Promise<void> {
     listActiveConnections: () => whoopWorkerRepository.listActiveConnections(),
     runSync: (target, windowStart, windowEnd) => runWhoopSync(target, whoopTokenStore, whoopSyncRepository, windowStart, windowEnd),
   });
-  if (whoopResult.aborted) {
-    console.error(JSON.stringify({ event: 'whoop_worker_pass_aborted', synced: whoopResult.synced.length, skipped: whoopResult.skipped.length }));
+  // Two separable signals, logged as distinct events so `fly logs` can tell
+  // "some connections are broken" apart from "WHOOP is rate-limiting us".
+  if (whoopResult.failed.length > 0) {
+    console.error(JSON.stringify({
+      event: 'whoop_worker_pass_connection_failures',
+      synced: whoopResult.synced.length,
+      skipped: whoopResult.skipped.length,
+      failed: whoopResult.failed.length,
+    }));
+  }
+  if (whoopResult.backpressure) {
+    console.error(JSON.stringify({
+      event: 'whoop_worker_pass_backpressure',
+      synced: whoopResult.synced.length,
+      skipped: whoopResult.skipped.length,
+      failed: whoopResult.failed.length,
+    }));
   }
 
   if (insightsEnabled(process.env) !== 'off') {
