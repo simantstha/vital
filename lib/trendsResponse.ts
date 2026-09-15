@@ -33,11 +33,12 @@
 import { METRIC_CATALOG, toDisplay, toDisplayStats } from './metricCatalog';
 import type { BaselineStats } from './brain/baselines';
 import type { MetricPointRow, MetricDataDaysRow, BaselineSnapshot } from './brain/tools';
+import { ESTABLISHED_MIN_DAYS } from './brain/metricThresholds';
 
-// Must match lib/brain/baselines.ts's ESTABLISHED_MIN_DAYS. Duplicated
-// (rather than imported) so this module stays DB-free: lib/brain/baselines.ts
-// imports `@/db`, which throws at module load without DATABASE_URL set.
-const ESTABLISHED_MIN_DAYS = 14;
+// Imported from lib/brain/metricThresholds.ts rather than lib/brain/baselines.ts
+// directly: baselines.ts imports `@/db`, which throws at module load without
+// DATABASE_URL set, and this module must stay DB-free. metricThresholds.ts
+// exists specifically to hold constants like this one without that import.
 
 export interface TrendsSeriesPoint {
   date: string;

@@ -14,6 +14,7 @@
 import { db, schema } from '@/db';
 import { sql } from 'drizzle-orm';
 import { readMemoryFile, writeMemoryFile } from '@/lib/memory';
+import { ESTABLISHED_MIN_DAYS } from './metricThresholds';
 
 export interface BaselineStats {
   mean7: number | null;
@@ -26,7 +27,6 @@ export interface BaselineStats {
 }
 
 const CALIBRATION_METRICS = ['hrv_sdnn', 'resting_hr', 'sleep_minutes'] as const;
-const ESTABLISHED_MIN_DAYS = 14;
 
 function n(v: unknown): number | null {
   return v == null ? null : Number(v);
