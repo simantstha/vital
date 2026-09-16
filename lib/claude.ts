@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { DailyBrief } from './types';
 import { readMemoryFile, writeMemoryFile } from '@/lib/memory';
+import { readCoreProfile } from '@/lib/coreProfileStore';
 import { writeHrvBaselineToProfile } from '@/lib/brain/baselines';
 import { parseProfileDetails, formatIdentityForPrompt } from '@/lib/profileDetails';
 import type { UnitSystem } from '@/lib/units';
@@ -166,7 +167,7 @@ export async function generateDailyBrief(userId: string, ctx: BriefContext): Pro
     ...(ctx.timeZone ? { timeZone: ctx.timeZone } : {}),
   });
   const userProfile = applyIdentityUnits(
-    readMemoryFile(userId, 'core-profile.md') ?? readUserProfile(userId),
+    (await readCoreProfile(userId)) ?? readUserProfile(userId),
     ctx.unitSystem ?? 'metric',
   );
 
@@ -335,7 +336,7 @@ Respond ONLY with valid JSON, no markdown, no explanation:
   if (parsed.profileUpdate) appendCoachNote(userId, parsed.profileUpdate);
 
   if (ctx.history?.avgHrv7d) {
-    writeHrvBaselineToProfile(userId, ctx.history.avgHrv7d);
+    await writeHrvBaselineToProfile(userId, ctx.history.avgHrv7d);
   }
 
   return {

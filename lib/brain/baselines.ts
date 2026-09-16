@@ -13,7 +13,7 @@
 
 import { db, schema } from '@/db';
 import { sql } from 'drizzle-orm';
-import { readMemoryFile, writeMemoryFile } from '@/lib/memory';
+import { readCoreProfile, writeCoreProfile } from '@/lib/coreProfileStore';
 import { ESTABLISHED_MIN_DAYS } from './metricThresholds';
 
 export interface BaselineStats {
@@ -86,7 +86,7 @@ export async function recomputeBaselines(userId: string, metrics: string[]): Pro
       });
 
     if (metric === 'hrv_sdnn' && stats.mean30 != null) {
-      writeHrvBaselineToProfile(userId, Math.round(stats.mean30));
+      await writeHrvBaselineToProfile(userId, Math.round(stats.mean30));
     }
   }
 }
@@ -98,8 +98,8 @@ export async function recomputeBaselines(userId: string, metrics: string[]): Pro
  * the on-ingest baseline recompute and the daily-brief fallback path share
  * one implementation.
  */
-export function writeHrvBaselineToProfile(userId: string, currentAvg: number): void {
-  const profile = readMemoryFile(userId, 'core-profile.md');
+export async function writeHrvBaselineToProfile(userId: string, currentAvg: number): Promise<void> {
+  const profile = await readCoreProfile(userId);
   if (!profile) return;
 
   const match = /hrv baseline:\s*(\d+)\s*ms/i.exec(profile);
@@ -113,7 +113,7 @@ export function writeHrvBaselineToProfile(userId: string, currentAvg: number): v
     /hrv baseline:\s*\d+\s*ms \(updated [^)]+\)/i,
     `HRV baseline: ${currentAvg}ms (updated ${date})`
   );
-  writeMemoryFile(userId, 'core-profile.md', updated);
+  await writeCoreProfile(userId, updated);
 }
 
 export interface Calibration {

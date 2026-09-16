@@ -37,7 +37,7 @@ import { lookupBarcode } from '@/lib/openFoodFacts';
 import { searchCandidates, type Candidate } from '@/lib/nutrition/candidates';
 import type { BaselineStats } from '@/lib/brain/baselines';
 import { applyDietBudgetUpdate, splitMacrosForKcal, DEFAULT_WEIGHT_KG } from '@/lib/brain/dietBudget';
-import { readMemoryFile } from '@/lib/memory';
+import { readCoreProfile } from '@/lib/coreProfileStore';
 import { parseProfileDetails } from '@/lib/profileDetails';
 
 // ── Tool definitions (Anthropic API schema) ────────────────────────────────
@@ -1192,7 +1192,7 @@ export async function executeToolCall(
   // ── calculate_macros ──────────────────────────────────────────────────────
   if (name === 'calculate_macros') {
     const goal    = String(input.goal ?? 'general');
-    const profile = parseProfileDetails(readMemoryFile(userId, 'core-profile.md'));
+    const profile = parseProfileDetails(await readCoreProfile(userId));
     const weightKg = typeof input.weightKg === 'number'
       ? input.weightKg
       : (profile.weightKg ?? DEFAULT_WEIGHT_KG);

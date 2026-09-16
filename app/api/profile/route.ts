@@ -67,7 +67,7 @@ import { db, schema } from '@/db';
 import { eq, and, sql } from 'drizzle-orm';
 import { getUserIdFromRequest } from '@/lib/auth';
 import { getCalibration } from '@/lib/brain/baselines';
-import { readMemoryFile } from '@/lib/memory';
+import { readCoreProfile } from '@/lib/coreProfileStore';
 import { parseProfileDetails, updateIdentityLines, formatSleepSubtitle } from '@/lib/profileDetails';
 import { logWeight } from '@/lib/weightLog';
 import { localDayKey, pickTimeZone } from '@/lib/localDay';
@@ -158,7 +158,7 @@ export async function GET(request: Request): Promise<NextResponse> {
   const avgHrv = Number.isFinite(avgHrvRaw) ? Math.round(avgHrvRaw * 10) / 10 : null;
 
   const workouts = Math.round(Number(aggRow.workouts ?? 0));
-  const profile = parseProfileDetails(readMemoryFile(userId, 'core-profile.md'));
+  const profile = parseProfileDetails(await readCoreProfile(userId));
 
   // ── Response ──────────────────────────────────────────────────────────────
   return NextResponse.json({
@@ -252,7 +252,7 @@ export async function PATCH(request: Request): Promise<NextResponse> {
   }
 
   if (age !== undefined || heightCm !== undefined || weightKg !== undefined) {
-    updateIdentityLines(userId, {
+    await updateIdentityLines(userId, {
       age: age as number | undefined,
       heightCm: heightCm as number | undefined,
       weightKg: weightKg as number | undefined,

@@ -39,6 +39,7 @@ import { eq } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import { getUserIdFromRequest } from '@/lib/auth';
 import { seedUserMemory, readMemoryFile, writeMemoryFile } from '@/lib/memory';
+import { readCoreProfile, writeCoreProfile } from '@/lib/coreProfileStore';
 import { resolveUnitSystem } from '@/lib/units';
 
 export const dynamic = 'force-dynamic';
@@ -222,8 +223,8 @@ export async function POST(request: Request): Promise<NextResponse> {
   seedUserMemory(userId);
 
   // core-profile.md — template fill
-  const template = readMemoryFile(userId, 'core-profile.md') ?? '';
-  writeMemoryFile(userId, 'core-profile.md', fillCoreProfile(template, basics, training));
+  const template = (await readCoreProfile(userId)) ?? '';
+  await writeCoreProfile(userId, fillCoreProfile(template, basics, training));
 
   // Structured JSON merges
   mergeJsonMemoryFile(userId, 'training-history.json', {

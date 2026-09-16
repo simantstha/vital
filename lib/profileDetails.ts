@@ -1,4 +1,4 @@
-import { readMemoryFile, writeMemoryFile } from './memory';
+import { readCoreProfile, writeCoreProfile } from './coreProfileStore';
 import { formatHeight, formatWeight } from './metricFormat';
 import type { UnitSystem } from './units';
 
@@ -136,13 +136,13 @@ export type IdentityPatch = {
  * No-ops silently (does not write) if the user has no core-profile.md yet
  * (not onboarded) or if `patch` has no defined fields.
  */
-export function updateIdentityLines(userId: string, patch: IdentityPatch): void {
+export async function updateIdentityLines(userId: string, patch: IdentityPatch): Promise<void> {
   const hasAge = patch.age !== undefined;
   const hasHeight = patch.heightCm !== undefined;
   const hasWeight = patch.weightKg !== undefined;
   if (!hasAge && !hasHeight && !hasWeight) return;
 
-  const content = readMemoryFile(userId, 'core-profile.md');
+  const content = await readCoreProfile(userId);
   if (content == null) return;
 
   const today = new Date().toISOString().split('T')[0];
@@ -166,7 +166,7 @@ export function updateIdentityLines(userId: string, patch: IdentityPatch): void 
     return line;
   });
 
-  writeMemoryFile(userId, 'core-profile.md', lines.join('\n'));
+  await writeCoreProfile(userId, lines.join('\n'));
 }
 
 // ── Sleep goal subtitle formatting (shared between /api/plan seed + PATCH) ──

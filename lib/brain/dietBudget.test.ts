@@ -31,6 +31,12 @@ const fakeDb = {
       // queryWorkouts
       return { from: () => ({ where: () => ({ orderBy: async () => state.workoutRows }) }) };
     }
+    if ('core_profile_md' in proj) {
+      // lib/coreProfileStore.ts's readCoreProfile — treat state.coreProfileMd
+      // as already the canonical column value so tests don't need to model
+      // the file-fallback/backfill path.
+      return { from: () => ({ where: () => ({ limit: async () => [{ core_profile_md: state.coreProfileMd }] }) }) };
+    }
     throw new Error(`unexpected projection in select(): ${JSON.stringify(proj)}`);
   },
 };

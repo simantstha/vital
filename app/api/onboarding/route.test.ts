@@ -31,6 +31,16 @@ const updateCalls: Array<Record<string, unknown>> = [];
 const writtenFiles: Array<{ userId: string; filename: string; content: string }> = [];
 
 const fakeDb = {
+  // lib/coreProfileStore.ts's readCoreProfile selects users.core_profile_md
+  // before falling back to the file — always null here so every test
+  // exercises the file fallback (CORE_PROFILE_TEMPLATE below), same as
+  // before this column existed.
+  select: () => ({
+    from: (table: unknown) => {
+      if (table === realSchema.users) return { where: () => ({ limit: async () => [{ core_profile_md: null }] }) };
+      throw new Error(`unexpected select().from(): ${String(table)}`);
+    },
+  }),
   update: (table: unknown) => ({
     set: (assigned: Record<string, unknown>) => {
       if (table === realSchema.users) updateCalls.push(assigned);
@@ -83,8 +93,12 @@ test('basics.units: "imperial" lands in users.unit_system', async () => {
   const res = await POST(postRequest(basicsBody('imperial'), { 'x-user-id': 'user-1' }));
 
   assert.equal(res.status, 200);
-  assert.equal(updateCalls.length, 1);
-  assert.equal(updateCalls[0].unit_system, 'imperial');
+  // Two db.update(users) calls land now: this route's own name/onboarded_at/
+  // unit_system update, plus lib/coreProfileStore.ts's writeCoreProfile
+  // persisting core_profile_md — filter to the unit_system one specifically.
+  const unitSystemCalls = updateCalls.filter((c) => 'unit_system' in c);
+  assert.equal(unitSystemCalls.length, 1);
+  assert.equal(unitSystemCalls[0].unit_system, 'imperial');
 });
 
 test('an unrecognised units value normalises to "metric" rather than 400ing', async () => {
@@ -95,8 +109,9 @@ test('an unrecognised units value normalises to "metric" rather than 400ing', as
   const res = await POST(postRequest(basicsBody('furlongs'), { 'x-user-id': 'user-1' }));
 
   assert.equal(res.status, 200);
-  assert.equal(updateCalls.length, 1);
-  assert.equal(updateCalls[0].unit_system, 'metric');
+  const unitSystemCalls = updateCalls.filter((c) => 'unit_system' in c);
+  assert.equal(unitSystemCalls.length, 1);
+  assert.equal(unitSystemCalls[0].unit_system, 'metric');
 });
 
 test('core-profile.md still gets cm/kg regardless of units', async () => {
