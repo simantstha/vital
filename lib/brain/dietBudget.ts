@@ -25,6 +25,7 @@ import {
   type WorkoutInput,
 } from '@/lib/brain/tools';
 import { readMemoryFile } from '@/lib/memory';
+import { readCoreProfile } from '@/lib/coreProfileStore';
 import { parseProfileDetails } from '@/lib/profileDetails';
 
 export type DietGoal = 'weight_loss' | 'muscle' | 'endurance' | 'general';
@@ -151,7 +152,7 @@ export async function computeAutoBudget(userId: string, goal: DietGoal): Promise
   ]);
 
   const weightKg = weightPts.at(-1)?.value ?? DEFAULT_WEIGHT_KG;
-  const profile = parseProfileDetails(readMemoryFile(userId, 'core-profile.md'));
+  const profile = parseProfileDetails(await readCoreProfile(userId));
 
   // training-history.json's `frequency` may be missing, malformed, a number
   // (iOS sends Int), or a numeric string (the TS type says string) —
@@ -217,7 +218,7 @@ export async function resolveDietBudget(user: DietGoalRow, userId: string): Prom
     // Custom (user/coach-pinned) budgets are never blocked or floored — the
     // person deliberately chose this number. We only attach an informational
     // warning when it's under the sex-aware low-energy-availability threshold.
-    const profile = parseProfileDetails(readMemoryFile(userId, 'core-profile.md'));
+    const profile = parseProfileDetails(await readCoreProfile(userId));
     const thresholdKcal = lowEnergyThresholdKcal(profile.biologicalSex);
     return {
       mode:       'custom',

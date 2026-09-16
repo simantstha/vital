@@ -56,6 +56,21 @@ export const users = p.pgTable('users', {
   // weightKg, distances, etc.) remains canonically metric (cm/kg/metres);
   // imperial is purely a client-side rendering choice derived from this flag.
   unit_system: p.text('unit_system'),                                          // 'metric' | 'imperial'; null → client falls back to device locale
+
+  // ── Core profile markdown (canonical store) ─────────────────────────────────
+  // The "core-profile.md" memory file (age/sex/height/weight, HRV baseline,
+  // training notes) used to live ONLY on disk under VITAL_DATA_DIR, a Fly
+  // volume mounted to the `app` process only — the worker machine has no
+  // volume, so every worker-generated daily brief read back a freshly-seeded
+  // blank template instead of the user's real profile (fly.toml sets
+  // VITAL_DATA_DIR globally but the volume is single-attach). This column is
+  // now the canonical store for that content; lib/coreProfileStore.ts reads/
+  // writes it. The on-disk file (lib/memory.ts) is kept only as a legacy
+  // cache / back-compat write target — still read directly by the coach's
+  // read_memory/write_memory tools. Nullable so existing rows self-heal on
+  // first read via lib/coreProfileStore.ts's file-backfill path rather than
+  // needing a migration-time backfill script.
+  core_profile_md: p.text('core_profile_md'),
 });
 
 // ─── events (append-only) ────────────────────────────────────────────────────

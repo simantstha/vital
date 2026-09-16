@@ -176,6 +176,13 @@
       "when": 1789149159630,
       "tag": "0024_blue_micromacro",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1789511212730,
+      "tag": "0025_wandering_toad_men",
+      "breakpoints": true
     }
   ]
 }
