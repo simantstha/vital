@@ -10,10 +10,11 @@
  */
 
 import { db, schema } from '@/db';
-import { eq, and, gte, desc } from 'drizzle-orm';
+import { eq, and, gte, desc, isNull } from 'drizzle-orm';
 import { generateDailyBrief } from '@/lib/claude';
 import { getCalibration } from '@/lib/brain/baselines';
 import { queryBaseline, queryMetricPoints, querySleepSummary, type MetricPoint, type BaselineSnapshot } from '@/lib/brain/tools';
+import { sourcePrecedenceSql } from '@/lib/brain/memoryTiers';
 import {
   computeRecovery,
   selectHrvSource,
@@ -117,8 +118,8 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
     queryMetricPoints(userId, 'resting_hr', 7),
     querySleepSummary(userId, 7),
     db.select().from(schema.nodes)
-      .where(and(eq(schema.nodes.user_id, userId), eq(schema.nodes.status, 'active')))
-      .orderBy(desc(schema.nodes.weight)),
+      .where(and(eq(schema.nodes.user_id, userId), eq(schema.nodes.status, 'active'), isNull(schema.nodes.superseded_by)))
+      .orderBy(desc(sourcePrecedenceSql(schema.nodes.source)), desc(schema.nodes.weight)),
     db.select({
       timezone:           schema.users.timezone,
       unit_system:        schema.users.unit_system,

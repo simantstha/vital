@@ -60,7 +60,10 @@ export const workerRepository: WorkerRepository = {
     // Feeds the proactive analysis prompt as `profile.facts` — must stay
     // filtered to 'active' (see lifecycle comment on `nodes` in db/schema.ts),
     // or a retracted fact ("my injury healed") keeps reaching the model forever.
-    const profileFacts = await db.select({ type: schema.nodes.type, label: schema.nodes.label, properties: schema.nodes.properties }).from(schema.nodes).where(and(eq(schema.nodes.user_id, job.userId), eq(schema.nodes.status, 'active')));
+    // superseded_by IS NULL is the same guarantee for the other half of that
+    // lifecycle: a fact replaced by better information must stop reaching the
+    // model as soon as its replacement lands.
+    const profileFacts = await db.select({ type: schema.nodes.type, label: schema.nodes.label, properties: schema.nodes.properties }).from(schema.nodes).where(and(eq(schema.nodes.user_id, job.userId), eq(schema.nodes.status, 'active'), isNull(schema.nodes.superseded_by)));
     return { enabled, timezone: preference?.timezone ?? 'UTC', baselines, metrics, profile: { user, facts: profileFacts }, unitSystem: resolveUnitSystem(user?.unit_system) };
   },
   async renewAnalysisLease(job, now) { const t = table(job); const rows = await db.update(t).set({ lease_expires_at: new Date(now.getTime() + LEASE_MS), updated_at: now }).where(and(eq(t.id, job.id), eq(t.status, 'processing'), eq(t.lease_token, job.leaseToken))).returning({ id: t.id }); return rows.length === 1; },

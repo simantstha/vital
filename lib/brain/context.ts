@@ -16,9 +16,10 @@
  */
 
 import { db, schema } from '@/db';
-import { eq, and, gte, desc, inArray } from 'drizzle-orm';
+import { eq, and, gte, desc, inArray, isNull } from 'drizzle-orm';
 import type { OntologyNode } from '@/db/schema';
 import { getCalibration, type Calibration } from './baselines';
+import { sourcePrecedenceSql } from './memoryTiers';
 import {
   queryAllBaselines, metricLabel, type BaselineSnapshot,
   queryScheduleWindow, formatScheduleLine, type ScheduleBlock,
@@ -493,8 +494,8 @@ export async function assembleContext(userId: string, findingId?: string): Promi
 
     db.select()
       .from(schema.nodes)
-      .where(and(eq(schema.nodes.user_id, userId), eq(schema.nodes.status, 'active')))
-      .orderBy(desc(schema.nodes.weight)),
+      .where(and(eq(schema.nodes.user_id, userId), eq(schema.nodes.status, 'active'), isNull(schema.nodes.superseded_by)))
+      .orderBy(desc(sourcePrecedenceSql(schema.nodes.source)), desc(schema.nodes.weight)),
 
     db.select({
         role:      schema.messages.role,

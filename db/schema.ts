@@ -106,20 +106,32 @@ export const nodes = p.pgTable('nodes', {
   source:      p.text('source').notNull(),
   weight:      p.real('weight').default(0.9).notNull(),
   created_at:  p.timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
-  // ── Lifecycle (retraction support) ─────────────────────────────────────────
-  // Nodes are never deleted — a retracted fact (e.g. "my injury healed") flips
-  // status to 'resolved' instead, keeping history intact and reversible. All
-  // readers that gate behavior on confirmed facts (workspace constraint gate,
-  // context assembly, brief allergen exclusion, coach tools) must filter to
-  // status = 'active'. Existing rows default to 'active' so old behavior is
-  // unchanged until a fact is explicitly resolved.
-  status:      p.text('status').notNull().default('active'),                     // 'active' | 'resolved'
+  // ── Lifecycle (retraction + supersession support) ──────────────────────────
+  // Nodes are never deleted. Two distinct lifecycle transitions exist and must
+  // not be conflated:
+  //   'resolved'   — the fact is no longer true (e.g. "my injury healed").
+  //                  Set via resolve_fact; resolved_at records when.
+  //   'superseded' — the fact was replaced by better information (e.g. a
+  //                  provisional coach-remembered fact promoted/replaced by a
+  //                  consolidated digest fact, or a digest fact replaced by a
+  //                  fresher digest pass). superseded_by points at the node
+  //                  that replaced it, so history stays traceable.
+  // All readers that gate behavior on confirmed facts (workspace constraint
+  // gate, context assembly, brief allergen exclusion, coach tools) must
+  // filter to status = 'active' AND superseded_by IS NULL. Existing rows
+  // default to 'active' with superseded_by NULL, so old behavior is
+  // unchanged until a fact is explicitly resolved or superseded.
+  status:      p.text('status').notNull().default('active'),                     // 'active' | 'resolved' | 'superseded'
   resolved_at: p.timestamp('resolved_at', { withTimezone: true }),                // nullable until resolved
+  // Self-FK to nodes.id — drizzle requires an explicit return type annotation
+  // on a same-table reference. Nullable: only set once a newer node
+  // supersedes this one; NULL for every row today.
+  superseded_by: p.uuid('superseded_by').references((): p.AnyPgColumn => nodes.id),
 }, (t) => [
   p.index('nodes_user_type_idx').on(t.user_id, t.type),
   p.index('nodes_user_label_idx').on(t.user_id, t.label),
   p.index('nodes_user_status_idx').on(t.user_id, t.status),
-  p.check('nodes_status_check', sql`${t.status} in ('active', 'resolved')`),
+  p.check('nodes_status_check', sql`${t.status} in ('active', 'resolved', 'superseded')`),
 ]);
 
 // ─── edges (ontology) ────────────────────────────────────────────────────────
