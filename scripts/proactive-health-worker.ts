@@ -80,7 +80,7 @@ const insightPassRepository: InsightPassRepository = {
   },
   async voiceContext(userId) {
     const [user] = await db.select({ goal: schema.users.goal }).from(schema.users).where(eq(schema.users.id, userId)).limit(1);
-    const facts = await db.select({ label: schema.nodes.label }).from(schema.nodes).where(and(eq(schema.nodes.user_id, userId), eq(schema.nodes.status, 'active')));
+    const facts = await db.select({ label: schema.nodes.label }).from(schema.nodes).where(and(eq(schema.nodes.user_id, userId), eq(schema.nodes.status, 'active'), isNull(schema.nodes.superseded_by)));
     const recentNudges = await db
       .select({ payload: schema.pending_nudges.payload })
       .from(schema.pending_nudges)

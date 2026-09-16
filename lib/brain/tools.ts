@@ -32,11 +32,12 @@
 
 import type { Tool } from '@anthropic-ai/sdk/resources/messages';
 import { db, schema } from '@/db';
-import { eq, and, gte, gt, lt, asc, desc, inArray, sql } from 'drizzle-orm';
+import { eq, and, gte, gt, lt, asc, desc, inArray, isNull, sql } from 'drizzle-orm';
 import { lookupBarcode } from '@/lib/openFoodFacts';
 import { searchCandidates, type Candidate } from '@/lib/nutrition/candidates';
 import type { BaselineStats } from '@/lib/brain/baselines';
 import { applyDietBudgetUpdate, splitMacrosForKcal, DEFAULT_WEIGHT_KG } from '@/lib/brain/dietBudget';
+import { sourcePrecedenceSql } from '@/lib/brain/memoryTiers';
 import { readCoreProfile } from '@/lib/coreProfileStore';
 import { parseProfileDetails } from '@/lib/profileDetails';
 
@@ -1180,8 +1181,8 @@ export async function executeToolCall(
     let rows = await db
       .select()
       .from(schema.nodes)
-      .where(and(eq(schema.nodes.user_id, userId), eq(schema.nodes.status, 'active')))
-      .orderBy(desc(schema.nodes.weight));
+      .where(and(eq(schema.nodes.user_id, userId), eq(schema.nodes.status, 'active'), isNull(schema.nodes.superseded_by)))
+      .orderBy(desc(sourcePrecedenceSql(schema.nodes.source)), desc(schema.nodes.weight));
 
     if (nodeType) rows = rows.filter(n => n.type === nodeType);
     if (labelContains) rows = rows.filter(n => n.label.toLowerCase().includes(labelContains));
@@ -1270,7 +1271,7 @@ export async function executeToolCall(
       const allNodes = await db
         .select({ id: schema.nodes.id, label: schema.nodes.label })
         .from(schema.nodes)
-        .where(and(eq(schema.nodes.user_id, userId), eq(schema.nodes.status, 'active')));
+        .where(and(eq(schema.nodes.user_id, userId), eq(schema.nodes.status, 'active'), isNull(schema.nodes.superseded_by)));
 
       const toNode = allNodes.find(
         n => n.label.toLowerCase() === linksTo.toLowerCase(),
@@ -1629,7 +1630,7 @@ export async function resolveFact(
 
 const drizzleNodeResolutionStore: NodeResolutionStore = {
   async findActiveNode({ userId, id, label }) {
-    const scope = [eq(schema.nodes.user_id, userId), eq(schema.nodes.status, 'active')];
+    const scope = [eq(schema.nodes.user_id, userId), eq(schema.nodes.status, 'active'), isNull(schema.nodes.superseded_by)];
 
     if (id) {
       const [row] = await db
