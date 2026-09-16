@@ -438,7 +438,7 @@ async function* streamCoachTurn(userId: string, seed: TurnSeed): AsyncGenerator<
         result = JSON.stringify({ status: returning.status, sessionId: returning.id });
       } else {
         result = MEMORY_TOOL_NAMES.has(block.name)
-          ? handleMemoryToolCall(userId, block.name, input)
+          ? await handleMemoryToolCall(userId, block.name, input)
           : await executeToolCall(block.name, input, userId);
       }
 

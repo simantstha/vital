@@ -71,6 +71,20 @@ export const users = p.pgTable('users', {
   // first read via lib/coreProfileStore.ts's file-backfill path rather than
   // needing a migration-time backfill script.
   core_profile_md: p.text('core_profile_md'),
+
+  // ── Other memory files (lossless capture) ──────────────────────────────────
+  // The remaining .vital-memory/<userId>/*.json|.md files (health-conditions,
+  // training-history, nutrition-habits, life-context, lab-results,
+  // coach-observations, user-profile) have the exact same single-attach-
+  // volume problem core_profile_md above was carved out to fix — see
+  // lib/memoryFilesStore.ts. This column is a `{ "<filename>": "<raw file
+  // text>" }` map, stored as opaque strings rather than parsed JSON, because
+  // the coach can overwrite any of these files with arbitrary content via the
+  // write_memory tool, so the shape is not statically knowable here — this
+  // migration is lossless capture only, deliberately not interpretation.
+  // Nullable so existing rows self-heal via lazy file-backfill on first read,
+  // same convention as core_profile_md.
+  memory_files: p.jsonb('memory_files'),
 });
 
 // ─── events (append-only) ────────────────────────────────────────────────────

@@ -176,11 +176,11 @@ function fillCoreProfile(template: string, basics: Basics, training: Training): 
 /** Shallow-merges only the defined (non-undefined) keys of `patch` on top of
  *  the existing file contents, so unrelated/previously-learned keys survive
  *  and re-POSTing the same body is a safe no-op. */
-function mergeJsonMemoryFile(userId: string, filename: string, patch: Record<string, unknown>): void {
+async function mergeJsonMemoryFile(userId: string, filename: string, patch: Record<string, unknown>): Promise<void> {
   const defined = Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined));
   if (Object.keys(defined).length === 0) return;
 
-  const raw = readMemoryFile(userId, filename) ?? '{}';
+  const raw = (await readMemoryFile(userId, filename)) ?? '{}';
   let existing: Record<string, unknown>;
   try {
     existing = JSON.parse(raw);
@@ -189,7 +189,7 @@ function mergeJsonMemoryFile(userId: string, filename: string, patch: Record<str
   }
 
   const merged = { ...existing, ...defined };
-  writeMemoryFile(userId, filename, JSON.stringify(merged, null, 2));
+  await writeMemoryFile(userId, filename, JSON.stringify(merged, null, 2));
 }
 
 // ── Route handler ───────────────────────────────────────────────────────────
@@ -227,24 +227,24 @@ export async function POST(request: Request): Promise<NextResponse> {
   await writeCoreProfile(userId, fillCoreProfile(template, basics, training));
 
   // Structured JSON merges
-  mergeJsonMemoryFile(userId, 'training-history.json', {
+  await mergeJsonMemoryFile(userId, 'training-history.json', {
     frequency: training.frequency,
     types: training.types,
     experience: training.experience,
     volumeNotes: training.volumeNotes,
   });
 
-  mergeJsonMemoryFile(userId, 'health-conditions.json', {
+  await mergeJsonMemoryFile(userId, 'health-conditions.json', {
     injuries: health.injuries,
     conditions: health.conditions,
     medications: health.medications,
   });
 
-  mergeJsonMemoryFile(userId, 'nutrition-habits.json', {
+  await mergeJsonMemoryFile(userId, 'nutrition-habits.json', {
     diet: lifestyle.diet,
   });
 
-  mergeJsonMemoryFile(userId, 'life-context.json', {
+  await mergeJsonMemoryFile(userId, 'life-context.json', {
     sleepSchedule: lifestyle.sleepSchedule,
     stress: lifestyle.stress,
   });

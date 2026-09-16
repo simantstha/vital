@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import type { Tool } from '@anthropic-ai/sdk/resources/messages';
 import { DATA_DIR } from './dataDir';
+import { readStoredMemoryFile, writeStoredMemoryFile } from '@/lib/memoryFilesStore';
 
 const MEMORY_ROOT = path.join(DATA_DIR, '.vital-memory');
 
@@ -19,6 +20,25 @@ const ALLOWED_FILES = [
 
 type MemoryFile = typeof ALLOWED_FILES[number];
 
+/**
+ * Filenames whose canonical store is `users.memory_files` (see
+ * lib/memoryFilesStore.ts) rather than raw disk. 'core-profile.md' is
+ * deliberately excluded — it has its own dedicated `users.core_profile_md`
+ * column and store (lib/coreProfileStore.ts), predating this one.
+ * 'memory-index.md' is excluded too — it's managed manually, never written
+ * by the coach (see MEMORY_TOOLS' write_memory enum below), and stays
+ * disk-only.
+ */
+const POSTGRES_BACKED_FILES = [
+  'health-conditions.json',
+  'training-history.json',
+  'nutrition-habits.json',
+  'life-context.json',
+  'lab-results.json',
+  'coach-observations.md',
+  'user-profile.md',
+] as const;
+
 // ── Per-user directory + seeding ───────────────────────────────────────────
 
 /** Absolute path to a given user's memory directory: <DATA_DIR>/.vital-memory/<userId>/ */
@@ -32,7 +52,7 @@ export function getUserMemoryDir(userId: string): string {
  * path (see Dockerfile + scripts/docker-entrypoint.sh) → the tracked
  * `vital-memory-template/` dir at the repo root (local dev).
  */
-function resolveTemplateDir(): string {
+export function resolveTemplateDir(): string {
   const configured = process.env.VITAL_MEMORY_TEMPLATE_DIR;
   if (configured) return path.resolve(configured);
 
@@ -67,7 +87,15 @@ function memoryPath(userId: string, filename: MemoryFile): string {
   return path.join(getUserMemoryDir(userId), filename);
 }
 
-export function readMemoryFile(userId: string, filename: string): string | null {
+/**
+ * Raw sync disk read, no Postgres column involved. Internal primitive reused
+ * by lib/coreProfileStore.ts and lib/memoryFilesStore.ts for their on-disk
+ * legacy-cache fallback/mirror, and by readMemoryFile below for the two
+ * filenames that stay disk-only (core-profile.md has its own dedicated
+ * column/store; memory-index.md is never Postgres-backed — see
+ * POSTGRES_BACKED_FILES above).
+ */
+export function readMemoryFileFromDisk(userId: string, filename: string): string | null {
   if (!ALLOWED_FILES.includes(filename as MemoryFile)) return null;
   seedUserMemory(userId);
   try {
@@ -77,7 +105,8 @@ export function readMemoryFile(userId: string, filename: string): string | null 
   }
 }
 
-export function writeMemoryFile(userId: string, filename: string, content: string): void {
+/** Raw sync disk write — see readMemoryFileFromDisk. */
+export function writeMemoryFileToDisk(userId: string, filename: string, content: string): void {
   if (!ALLOWED_FILES.includes(filename as MemoryFile)) return;
   seedUserMemory(userId);
   try {
@@ -86,36 +115,62 @@ export function writeMemoryFile(userId: string, filename: string, content: strin
   } catch { /* read-only fs on Vercel */ }
 }
 
-export function appendObservation(userId: string, note: string): void {
+function isPostgresBacked(filename: string): filename is typeof POSTGRES_BACKED_FILES[number] {
+  return (POSTGRES_BACKED_FILES as readonly string[]).includes(filename);
+}
+
+/**
+ * Reads a memory file's content. core-profile.md and memory-index.md are
+ * disk-only (see POSTGRES_BACKED_FILES); the other seven ALLOWED_FILES are
+ * canonically stored in `users.memory_files` (lib/memoryFilesStore.ts), with
+ * disk kept only as a legacy cache — same split as
+ * lib/coreProfileStore.ts's dedicated column for core-profile.md.
+ */
+export async function readMemoryFile(userId: string, filename: string): Promise<string | null> {
+  if (!ALLOWED_FILES.includes(filename as MemoryFile)) return null;
+  if (isPostgresBacked(filename)) return readStoredMemoryFile(userId, filename);
+  return readMemoryFileFromDisk(userId, filename);
+}
+
+/** Writes a memory file's content. See readMemoryFile for the storage split. */
+export async function writeMemoryFile(userId: string, filename: string, content: string): Promise<void> {
+  if (!ALLOWED_FILES.includes(filename as MemoryFile)) return;
+  if (isPostgresBacked(filename)) return writeStoredMemoryFile(userId, filename, content);
+  writeMemoryFileToDisk(userId, filename, content);
+}
+
+export async function appendObservation(userId: string, note: string): Promise<void> {
   const date = new Date().toISOString().split('T')[0];
   const entry = `- [${date}] ${note}`;
-  const content = readMemoryFile(userId, 'coach-observations.md') ?? '# Coach Observations\n\n';
+  const content = (await readMemoryFile(userId, 'coach-observations.md')) ?? '# Coach Observations\n\n';
   const lines = content.split('\n').filter(l => l.startsWith('- ['));
   lines.unshift(entry);
   const updated = '# Coach Observations\n\n' + lines.slice(0, 30).join('\n') + '\n';
-  writeMemoryFile(userId, 'coach-observations.md', updated);
+  await writeMemoryFile(userId, 'coach-observations.md', updated);
 }
 
-export function readHrvBaseline(userId: string): number | null {
-  const profile = readMemoryFile(userId, 'core-profile.md');
+export async function readHrvBaseline(userId: string): Promise<number | null> {
+  const profile = await readMemoryFile(userId, 'core-profile.md');
   if (!profile) return null;
   const match = /hrv baseline:\s*(\d+)\s*ms/i.exec(profile);
   return match ? parseInt(match[1], 10) : null;
 }
 
-export function loadAlwaysOnContext(userId: string): string {
-  const index = readMemoryFile(userId, 'memory-index.md') ?? '';
-  const core = readMemoryFile(userId, 'core-profile.md') ?? '';
-  const conditions = readMemoryFile(userId, 'health-conditions.json') ?? '{}';
-  const observations = readMemoryFile(userId, 'coach-observations.md') ?? '';
-  const labs = readMemoryFile(userId, 'lab-results.json') ?? '{}';
+export async function loadAlwaysOnContext(userId: string): Promise<string> {
+  const [index, core, conditions, observations, labs] = await Promise.all([
+    readMemoryFile(userId, 'memory-index.md'),
+    readMemoryFile(userId, 'core-profile.md'),
+    readMemoryFile(userId, 'health-conditions.json'),
+    readMemoryFile(userId, 'coach-observations.md'),
+    readMemoryFile(userId, 'lab-results.json'),
+  ]);
 
   return [
-    '## Memory Index\n' + index,
-    '## Core Profile\n' + core,
-    '## Health Conditions (SAFETY — always follow these)\n```json\n' + conditions + '\n```',
-    '## Lab Results\n```json\n' + labs + '\n```',
-    observations,
+    '## Memory Index\n' + (index ?? ''),
+    '## Core Profile\n' + (core ?? ''),
+    '## Health Conditions (SAFETY — always follow these)\n```json\n' + (conditions ?? '{}') + '\n```',
+    '## Lab Results\n```json\n' + (labs ?? '{}') + '\n```',
+    observations ?? '',
   ].join('\n\n---\n\n');
 }
 
@@ -175,17 +230,17 @@ export const MEMORY_TOOLS: Tool[] = [
   },
 ] as const;
 
-export function handleToolCall(userId: string, name: string, input: unknown): string {
+export async function handleToolCall(userId: string, name: string, input: unknown): Promise<string> {
   const inp = input as Record<string, string>;
   if (name === 'read_memory') {
-    return readMemoryFile(userId, inp.filename) ?? `File "${inp.filename}" not found.`;
+    return (await readMemoryFile(userId, inp.filename)) ?? `File "${inp.filename}" not found.`;
   }
   if (name === 'write_memory') {
-    writeMemoryFile(userId, inp.filename, inp.content);
+    await writeMemoryFile(userId, inp.filename, inp.content);
     return 'Memory updated.';
   }
   if (name === 'append_observation') {
-    appendObservation(userId, inp.note);
+    await appendObservation(userId, inp.note);
     return 'Observation appended.';
   }
   return 'Unknown tool.';

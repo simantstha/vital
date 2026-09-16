@@ -66,15 +66,15 @@ const SEED_PROFILE = `# Vital — User Profile
 (Claude appends one-sentence insights here after each brief)
 `;
 
-export function readUserProfile(userId: string): string {
-  const existing = readMemoryFile(userId, 'user-profile.md');
+export async function readUserProfile(userId: string): Promise<string> {
+  const existing = await readMemoryFile(userId, 'user-profile.md');
   if (existing) return existing;
-  writeMemoryFile(userId, 'user-profile.md', SEED_PROFILE);
+  await writeMemoryFile(userId, 'user-profile.md', SEED_PROFILE);
   return SEED_PROFILE;
 }
 
-function appendCoachNote(userId: string, note: string) {
-  const content = readMemoryFile(userId, 'user-profile.md') ?? SEED_PROFILE;
+async function appendCoachNote(userId: string, note: string): Promise<void> {
+  const content = (await readMemoryFile(userId, 'user-profile.md')) ?? SEED_PROFILE;
   const marker = '## Coach Notes';
   const idx = content.indexOf(marker);
   const date = new Date().toISOString().split('T')[0];
@@ -88,7 +88,7 @@ function appendCoachNote(userId: string, note: string) {
     const insertAt = nextSection === -1 ? content.length : nextSection;
     updated = content.slice(0, insertAt) + entry + content.slice(insertAt);
   }
-  writeMemoryFile(userId, 'user-profile.md', updated);
+  await writeMemoryFile(userId, 'user-profile.md', updated);
 }
 
 interface BriefContext {
@@ -167,7 +167,7 @@ export async function generateDailyBrief(userId: string, ctx: BriefContext): Pro
     ...(ctx.timeZone ? { timeZone: ctx.timeZone } : {}),
   });
   const userProfile = applyIdentityUnits(
-    (await readCoreProfile(userId)) ?? readUserProfile(userId),
+    (await readCoreProfile(userId)) ?? (await readUserProfile(userId)),
     ctx.unitSystem ?? 'metric',
   );
 
@@ -333,7 +333,7 @@ Respond ONLY with valid JSON, no markdown, no explanation:
   const text = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
   const parsed = JSON.parse(text);
 
-  if (parsed.profileUpdate) appendCoachNote(userId, parsed.profileUpdate);
+  if (parsed.profileUpdate) await appendCoachNote(userId, parsed.profileUpdate);
 
   if (ctx.history?.avgHrv7d) {
     await writeHrvBaselineToProfile(userId, ctx.history.avgHrv7d);
