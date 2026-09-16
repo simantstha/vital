@@ -224,14 +224,15 @@ async function* streamCoachTurn(userId: string, seed: TurnSeed): AsyncGenerator<
   for (const event of pendingEvents) yield event;
 
   // 3. Build persona and tool list ───────────────────────────────────────────
+  const baseTools = isOnboarding ? [...BRAIN_TOOLS, ...MEMORY_TOOLS] : BRAIN_TOOLS;
   const baseSystemPrompt = assemblePersona(
     ctx.hardConstraints,
     undefined,
     isOnboarding,
     ctx.calibration,
     ctx.unitSystem,
+    baseTools.map(t => t.name),
   );
-  const baseTools = isOnboarding ? [...BRAIN_TOOLS, ...MEMORY_TOOLS] : BRAIN_TOOLS;
   let manifest: SpecialistManifest | null = null;
   let specialistPrompt = null;
   if (currentSession && (currentSession.status === 'active' || currentSession.status === 'return_proposed')) {
