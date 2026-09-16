@@ -7,6 +7,7 @@ import type {
 import { ConcurrentSpecialistSessionUpdateError } from './sessions';
 import type { UnitSystem } from '../units';
 import { unitsInstructionBlock } from '../brain/persona';
+import { memoryCurationBlock } from '../brain/memoryCuration';
 
 export type SpecialistAction =
   | 'accept_handoff'
@@ -272,6 +273,7 @@ function trustedHandoffFields(value: unknown): Record<string, unknown> {
 export function buildSpecialistPrompt(input: SpecialistPromptInput): CompiledSpecialistPrompt {
   const moduleText = input.manifest.promptModules.map((module) => module.prompt).join('\n\n');
   const handoff = JSON.stringify(trustedHandoffFields(input.inboundHandoff), null, 2);
+  const curationBlock = memoryCurationBlock(input.manifest.allowedTools);
   return {
     model: input.manifest.model,
     allowedTools: input.manifest.allowedTools,
@@ -280,6 +282,7 @@ export function buildSpecialistPrompt(input: SpecialistPromptInput): CompiledSpe
       moduleText,
       `## Trusted safety rules\n${input.trustedSafetyRules}`,
       unitsInstructionBlock(input.unitSystem ?? 'metric'),
+      ...(curationBlock ? [curationBlock] : []),
       `## Hard constraints\n${input.hardConstraints}`,
       `## Calibration\n${input.calibration}`,
     ].join('\n\n---\n\n'),

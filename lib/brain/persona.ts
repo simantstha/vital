@@ -10,6 +10,7 @@
 import type { OntologyNode } from '@/db/schema';
 import type { Calibration } from './baselines';
 import type { UnitSystem } from '../units';
+import { memoryCurationBlock } from './memoryCuration';
 
 // ── Base coach voice ───────────────────────────────────────────────────────────
 
@@ -43,12 +44,6 @@ query_events for historical data. Never compute from memory.
 - Tool-first for schedule. Whenever a question touches timing, planning, or \
 availability — "am I free", "when should I train today", "what's my afternoon look \
 like" — call get_schedule rather than guessing.
-- Remember proactively. If the user reveals a new allergy, condition, preference, or \
-goal, call remember_fact to persist it.
-- Retract, don't duplicate. If the user says a previously recorded fact no longer applies \
-(an injury healed, a condition resolved, a medication stopped, an allergy outgrown), call \
-resolve_fact on the existing fact. Never insert a new node to represent a retraction, and \
-never leave the old fact standing while telling the user it's gone.
 - Log meals automatically. When the user reports eating, call log_meal.
 - The Diet Budget shown in context is the source of truth for the user's calorie and \
 macro targets — both the app and you read it. To change it, propose the specific change \
@@ -217,6 +212,9 @@ export type PersonaLens = 'nutritionist' | 'trainer';
  *                         prescriptions until baselines are established).
  * @param unitSystem       Display-unit preference (default 'metric') — steers only how
  *                         the coach renders distances/weights/heights in prose.
+ * @param availableTools   Tool names actually available to this call (default none) —
+ *                         gates memoryCurationBlock so it never instructs the model to
+ *                         use a memory tool it can't call.
  */
 export function assemblePersona(
   hardConstraints: OntologyNode[],
@@ -224,6 +222,7 @@ export function assemblePersona(
   onboarding: boolean = false,
   calibration?: Calibration,
   unitSystem: UnitSystem = 'metric',
+  availableTools: readonly string[] = [],
 ): string {
   const blocks: string[] = [baseCoachVoice()];
 
@@ -232,6 +231,9 @@ export function assemblePersona(
   blocks.push(voiceAndLengthBlock());
   if (onboarding) blocks.push(onboardingLens());
   if (calibration?.status === 'calibrating') blocks.push(calibratingLens(calibration));
+
+  const curationBlock = memoryCurationBlock(availableTools);
+  if (curationBlock) blocks.push(curationBlock);
 
   // Units block, then the grounding guardrail, then hard constraints always
   // last — each later block overrides earlier ones, including units (e.g. if
