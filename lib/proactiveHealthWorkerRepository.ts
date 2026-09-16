@@ -57,7 +57,10 @@ export const workerRepository: WorkerRepository = {
     const baselines = await db.select({ metric: schema.baselines.metric, stats: schema.baselines.stats, established: schema.baselines.established }).from(schema.baselines).where(eq(schema.baselines.user_id, job.userId));
     const metrics = await db.select({ date: schema.daily_metrics.date, metric: schema.daily_metrics.metric, value: schema.daily_metrics.value, payload: schema.daily_metrics.payload }).from(schema.daily_metrics).where(and(eq(schema.daily_metrics.user_id, job.userId), eq(schema.daily_metrics.date, job.localDate)));
     const [user] = await db.select({ name: schema.users.name, goal: schema.users.goal, targetKcal: schema.users.target_kcal, proteinTargetG: schema.users.protein_target_g, carbsTargetG: schema.users.carbs_target_g, fatTargetG: schema.users.fat_target_g, unit_system: schema.users.unit_system }).from(schema.users).where(eq(schema.users.id, job.userId)).limit(1);
-    const profileFacts = await db.select({ type: schema.nodes.type, label: schema.nodes.label, properties: schema.nodes.properties }).from(schema.nodes).where(eq(schema.nodes.user_id, job.userId));
+    // Feeds the proactive analysis prompt as `profile.facts` — must stay
+    // filtered to 'active' (see lifecycle comment on `nodes` in db/schema.ts),
+    // or a retracted fact ("my injury healed") keeps reaching the model forever.
+    const profileFacts = await db.select({ type: schema.nodes.type, label: schema.nodes.label, properties: schema.nodes.properties }).from(schema.nodes).where(and(eq(schema.nodes.user_id, job.userId), eq(schema.nodes.status, 'active')));
     return { enabled, timezone: preference?.timezone ?? 'UTC', baselines, metrics, profile: { user, facts: profileFacts }, unitSystem: resolveUnitSystem(user?.unit_system) };
   },
   async renewAnalysisLease(job, now) { const t = table(job); const rows = await db.update(t).set({ lease_expires_at: new Date(now.getTime() + LEASE_MS), updated_at: now }).where(and(eq(t.id, job.id), eq(t.status, 'processing'), eq(t.lease_token, job.leaseToken))).returning({ id: t.id }); return rows.length === 1; },
