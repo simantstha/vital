@@ -160,7 +160,7 @@ export async function computeAutoBudget(userId: string, goal: DietGoal): Promise
   // the unchanged default (1.3) on anything it can't parse.
   let frequency: unknown;
   try {
-    const raw = readMemoryFile(userId, 'training-history.json');
+    const raw = await readMemoryFile(userId, 'training-history.json');
     frequency = raw ? JSON.parse(raw)?.frequency : undefined;
   } catch {
     frequency = undefined;

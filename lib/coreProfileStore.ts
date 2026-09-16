@@ -58,7 +58,7 @@ export async function readCoreProfile(userId: string): Promise<string | null> {
 
   if (row?.core_profile_md != null) return row.core_profile_md;
 
-  const fileContent = readMemoryFile(userId, 'core-profile.md');
+  const fileContent = await readMemoryFile(userId, 'core-profile.md');
   if (fileContent != null && !isBlankTemplate(fileContent)) {
     await db.update(schema.users).set({ core_profile_md: fileContent }).where(eq(schema.users.id, userId));
   }
@@ -108,5 +108,5 @@ export async function writeCoreProfile(userId: string, content: string): Promise
   if (!isBlankTemplate(content)) {
     await db.update(schema.users).set({ core_profile_md: content }).where(eq(schema.users.id, userId));
   }
-  writeMemoryFile(userId, 'core-profile.md', content);
+  await writeMemoryFile(userId, 'core-profile.md', content);
 }
