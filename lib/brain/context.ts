@@ -30,6 +30,7 @@ import { getDailyBrief, type CachedBrief } from './dailyBriefRepository';
 import { getConversationStart } from './conversationWindow';
 import { buildWhoopContextLine } from './whoopContext';
 import { buildSubjectLabelMap, resolveSubjectLabel, withSubjectSuffix } from './factSubject';
+import { buildEntityRoster, type EntityRosterItem, type EntityRosterNode } from './entityDoc';
 import { localDayKey, pickTimeZone, previousDayKey } from '../localDay';
 import { resolveUnitSystem, type UnitSystem } from '../units';
 import { formatDistance, formatWeight } from '../metricFormat';
@@ -73,6 +74,7 @@ export interface CoachContext {
   recentMessages: Array<{ role: string; content: string; timestamp: Date }>;
   hardConstraints: OntologyNode[];  // Allergy, Condition, Medication, Injury
   softFacts: OntologyNode[];        // Goal, Habit, FoodPreference, etc.
+  entityRoster: EntityRosterItem[]; // which entities (People, Pets, etc.) have facts recorded about them, and how many each
   baselines: BaselineSnapshot[];    // one row per metric with a baselines row
   calibration: Calibration;         // gates recovery/training prescriptions
   dietBudget?: DietBudget;          // effective calorie/macro targets (auto or pinned)
@@ -372,6 +374,14 @@ export function buildPromptText(
     }
   }
 
+  // ── Entity roster (people, pets, places, organizations with facts) ────────────
+  if (ctx.entityRoster.length > 0) {
+    lines.push('\n### People & entities');
+    for (const e of ctx.entityRoster) {
+      lines.push(`- ${e.label} (${e.kind}) — ${e.factCount} fact${e.factCount === 1 ? '' : 's'}`);
+    }
+  }
+
   return lines.join('\n');
 }
 
@@ -581,6 +591,16 @@ export async function assembleContext(userId: string, findingId?: string): Promi
   const hardConstraints = allNodes.filter(n => HARD_CONSTRAINT_TYPES.has(n.type) && n.subject_node_id == null);
   const softFacts       = allNodes.filter(n => !HARD_CONSTRAINT_TYPES.has(n.type) || n.subject_node_id != null);
 
+  // Entity roster — which people/pets/places/orgs have facts about them.
+  // Use the same allNodes already fetched for the ontology so no extra query.
+  const rosterNodes: EntityRosterNode[] = allNodes.map(n => ({
+    id: n.id,
+    label: n.label,
+    type: n.type,
+    subject_node_id: n.subject_node_id,
+  }));
+  const entityRoster = buildEntityRoster(rosterNodes);
+
   // Messages in chronological order for the prompt
   const recentMessages = [...rawMessages].reverse();
 
@@ -619,6 +639,7 @@ export async function assembleContext(userId: string, findingId?: string): Promi
     recentMessages,
     hardConstraints,
     softFacts,
+    entityRoster,
     baselines,
     calibration,
     dietBudget,

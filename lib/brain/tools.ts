@@ -90,6 +90,25 @@ export const BRAIN_TOOLS: Tool[] = [
     },
   },
   {
+    name: 'read_entity',
+    description:
+      'Read the full document of active facts recorded about a specific person, pet, place, or ' +
+      'organization (e.g. "Father", "Bella") — grouped by fact type, with verbatim evidence and ' +
+      'source. Call this before answering a question about a named entity; the entity roster in ' +
+      'context only gives a fact count, not the facts themselves. On a miss, the result names the ' +
+      'entities that do exist so you can self-correct instead of inventing one.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        name: {
+          type: 'string',
+          description: 'The entity\'s name or alias as mentioned in conversation (e.g. "Dad", "my dog Bella").',
+        },
+      },
+      required: ['name'],
+    },
+  },
+  {
     name: 'calculate_macros',
     description:
       'Deterministic TDEE and macro calculation. Inputs: user\'s goal, weight, ' +
@@ -599,49 +618,23 @@ export function macrosForGoal(
 // but any kind is valid — that the fact is about. See the safety comment on
 // `nodes.subject_node_id` in db/schema.ts: a third-party fact must never be
 // indistinguishable from a self-fact anywhere it's rendered.
-
-export const KNOWN_SUBJECT_KINDS = ['Person', 'Pet', 'Place', 'Organization'] as const;
-export type SubjectKind = typeof KNOWN_SUBJECT_KINDS[number];
-
-/**
- * Normalizes free-text subjectKind against the known set, case-insensitively.
- * An unrecognised kind is NEVER rejected — it's logged and stored as the raw
- * string, so an unfamiliar entity kind (e.g. "Colleague") never causes the
- * fact itself to be dropped. (rule (b) in memoryCurationBlock — the coach may
- * name new entities freely but must not invent new *kinds* — is instruction
- * to the model; this is the code-side backstop for when it does anyway.)
- */
-export function normalizeSubjectKind(raw: string | null | undefined): string {
-  const trimmed = (raw ?? '').trim();
-  if (!trimmed) return 'Person';
-  const match = KNOWN_SUBJECT_KINDS.find(k => k.toLowerCase() === trimmed.toLowerCase());
-  if (match) return match;
-  console.error(JSON.stringify({ event: 'remember_fact_unknown_subject_kind', subjectKind: trimmed }));
-  return trimmed;
-}
-
-export interface SubjectCandidate {
-  id: string;
-  label: string;
-  properties?: unknown;
-}
-
-/**
- * Case-insensitive match against a candidate's label OR its
- * properties.aliases array — this is what lets "my dad", "Dad", and "Father"
- * all resolve to the same entity instead of fragmenting into duplicates.
- */
-export function matchesSubjectName(candidate: SubjectCandidate, name: string): boolean {
-  const target = name.trim().toLowerCase();
-  if (candidate.label.trim().toLowerCase() === target) return true;
-  const aliases = (candidate.properties as { aliases?: unknown } | null | undefined)?.aliases;
-  return Array.isArray(aliases) && aliases.some(a => typeof a === 'string' && a.trim().toLowerCase() === target);
-}
-
-/** First active candidate matching `name` by label or alias, or null on a miss. */
-export function findSubjectMatch(candidates: readonly SubjectCandidate[], name: string): SubjectCandidate | null {
-  return candidates.find(c => matchesSubjectName(c, name)) ?? null;
-}
+//
+// KNOWN_SUBJECT_KINDS/SubjectKind/normalizeSubjectKind/SubjectCandidate/
+// matchesSubjectName/findSubjectMatch live in ./factSubject (not here) because
+// entityDoc.ts needs them too, and entityDoc.ts is imported back into THIS
+// module (dynamically, by the read_entity tool below) — defining them here
+// would make tools.ts and entityDoc.ts circularly import each other. Re-
+// exported below so existing importers of these names from './tools' are
+// unaffected.
+export {
+  KNOWN_SUBJECT_KINDS,
+  type SubjectKind,
+  normalizeSubjectKind,
+  type SubjectCandidate,
+  matchesSubjectName,
+  findSubjectMatch,
+} from './factSubject';
+import { normalizeSubjectKind, findSubjectMatch, type SubjectCandidate } from './factSubject';
 
 export interface RememberFactStore {
   /** Active, non-superseded nodes of the given kind for this user — matching
@@ -802,6 +795,8 @@ export function toolCallLabel(name: string, input: Record<string, unknown>): str
       return 'Comparing periods…';
     case 'get_schedule':
       return 'Checking your schedule…';
+    case 'read_entity':
+      return 'Reading what I know about them…';
     case 'read_memory':
       return 'Checking my notes on you…';
     case 'write_memory':
@@ -1329,6 +1324,28 @@ export async function executeToolCall(
     if (labelContains) rows = rows.filter(n => n.label.toLowerCase().includes(labelContains));
 
     return JSON.stringify(rows);
+  }
+
+  // ── read_entity ───────────────────────────────────────────────────────────
+  if (name === 'read_entity') {
+    const query = String(input.name ?? '').trim();
+    if (!query) return 'Error: name is required.';
+
+    // Dynamic import (not a top-of-file static one) so tools.ts never
+    // statically depends on entityDoc.ts — entityDoc.ts statically imports
+    // findSubjectMatch/KNOWN_SUBJECT_KINDS from THIS module, and a static
+    // import back here would make the two files circular.
+    const { loadEntityDoc, loadEntityRoster, renderEntityDoc } = await import('./entityDoc');
+
+    const doc = await loadEntityDoc(userId, query);
+    if (doc) return renderEntityDoc(doc);
+
+    const roster = await loadEntityRoster(userId);
+    if (roster.length === 0) {
+      return `No entity named "${query}" found. No people, pets, places, or organizations are recorded yet.`;
+    }
+    const known = roster.map(e => `${e.label} (${e.kind})`).join(', ');
+    return `No entity named "${query}" found. Known entities: ${known}.`;
   }
 
   // ── calculate_macros ──────────────────────────────────────────────────────

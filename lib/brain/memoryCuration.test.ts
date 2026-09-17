@@ -84,3 +84,25 @@ test('baseCoachVoice no longer duplicates the memory rules moved into memoryCura
   const matches = system.match(/Retract, don't duplicate/g) ?? [];
   assert.equal(matches.length, 1, 'the retraction rule should appear exactly once in the assembled prompt');
 });
+
+test('memoryCurationBlock emits read_entity rule only when read_entity tool is available', () => {
+  const withoutReadEntity = memoryCurationBlock(['propose_fact', 'confirm_fact']);
+  assert.doesNotMatch(withoutReadEntity, /read_entity/);
+
+  const withReadEntity = memoryCurationBlock([
+    'query_ontology',
+    'propose_fact',
+    'remember_fact',
+    'confirm_fact',
+    'resolve_fact',
+    'read_entity',
+  ]);
+  assert.match(withReadEntity, /read_entity/);
+  assert.match(withReadEntity, /answering a question about a specific person/i);
+  assert.match(withReadEntity, /full picture/i);
+});
+
+test('read_entity rule warns against inferring from roster line alone', () => {
+  const block = memoryCurationBlock(['read_entity']);
+  assert.match(block, /Never infer detail from the entity roster line alone/i);
+});
