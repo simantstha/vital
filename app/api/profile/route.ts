@@ -68,6 +68,7 @@ import { eq, and, sql } from 'drizzle-orm';
 import { getUserIdFromRequest } from '@/lib/auth';
 import { getCalibration } from '@/lib/brain/baselines';
 import { readCoreProfile } from '@/lib/coreProfileStore';
+import { ensureHealthConstraintNodes } from '@/lib/brain/healthConstraints';
 import { parseProfileDetails, updateIdentityLines, formatSleepSubtitle } from '@/lib/profileDetails';
 import { logWeight } from '@/lib/weightLog';
 import { localDayKey, pickTimeZone } from '@/lib/localDay';
@@ -159,6 +160,18 @@ export async function GET(request: Request): Promise<NextResponse> {
 
   const workouts = Math.round(Number(aggRow.workouts ?? 0));
   const profile = parseProfileDetails(await readCoreProfile(userId));
+
+  // Lazy backfill for users who onboarded before health-constraint nodes
+  // existed (see lib/brain/healthConstraints.ts) — this route runs on the
+  // `app` process, which has the volume, and iOS calls it regularly. Never
+  // allowed to fail this fetch: ensureHealthConstraintNodes already swallows
+  // its own errors, but the call is wrapped here too as defense-in-depth
+  // against a future change to that contract.
+  try {
+    await ensureHealthConstraintNodes(userId);
+  } catch (err) {
+    console.error(`[profile] ensureHealthConstraintNodes failed for user ${userId}:`, err);
+  }
 
   // ── Response ──────────────────────────────────────────────────────────────
   return NextResponse.json({
