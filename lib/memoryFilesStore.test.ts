@@ -40,6 +40,8 @@ const state: {
 
 const updateCalls: Array<{ userId: string; sql: string; patch: Record<string, string> }> = [];
 const writeDiskCalls: Array<{ userId: string; filename: string; content: string }> = [];
+/** Counts column SELECTs, so a test can prove a write path never pre-reads. */
+let selectCount = 0;
 
 function userIdFromCondition(condition: unknown): string {
   const { params } = new PgDialect().sqlToQuery(condition as never);
@@ -53,6 +55,7 @@ const fakeDb = {
       return {
         where: (condition: unknown) => ({
           limit: async (_n: number) => {
+            selectCount += 1;
             const userId = userIdFromCondition(condition);
             return [{ memory_files: state.column[userId] ?? null }];
           },
@@ -136,6 +139,7 @@ function reset() {
   state.file = {};
   updateCalls.length = 0;
   writeDiskCalls.length = 0;
+  selectCount = 0;
 }
 
 test('isSeedTemplate matches the real training-history.json and coach-observations.md templates', async () => {
@@ -180,7 +184,7 @@ test('readStoredMemoryFile prefers the DB column over the file', async () => {
   assert.equal(updateCalls.length, 0, 'a populated column must never trigger a write');
 });
 
-test('a populated file backfills into the column, preserving sibling filenames already stored', async () => {
+test('a populated file backfills into the column via an atomic jsonb merge (not a whole-map overwrite)', async () => {
   reset();
   const { readStoredMemoryFile } = await storePromise;
   state.column['user-1'] = { 'lab-results.json': '{"already":"here"}' };
@@ -190,10 +194,13 @@ test('a populated file backfills into the column, preserving sibling filenames a
 
   assert.equal(result, '{"stressEvents":["real, from disk"]}');
   assert.equal(updateCalls.length, 1);
-  assert.deepEqual(state.column['user-1'], {
-    'lab-results.json': '{"already":"here"}',
-    'life-context.json': '{"stressEvents":["real, from disk"]}',
-  }, 'the pre-existing lab-results.json entry must survive the write');
+  // The load-bearing assertion: the backfill merges ONLY the backfilled
+  // filename, so the pre-existing lab-results.json key is never part of the
+  // payload and Postgres's `||` leaves it in place. (That it *survives* is a
+  // Postgres guarantee — see the COVERAGE BOUNDARY note at the top of this
+  // file — so assert on what we emit, not on the mock's merged result.)
+  assert.match(updateCalls[0].sql, /coalesce\("users"\."memory_files", '\{\}'::jsonb\) \|\| \$1::jsonb/);
+  assert.deepEqual(updateCalls[0].patch, { 'life-context.json': '{"stressEvents":["real, from disk"]}' });
 });
 
 test('seed template does NOT backfill', async () => {
@@ -235,34 +242,38 @@ test('disk mirror is still written when the column write is refused', async () =
   assert.equal(state.file['user-1']['training-history.json'], SEED_JSON);
 });
 
-test('writeStoredMemoryFile updates the column (source of truth) and the legacy file cache for real content', async () => {
+test('writeStoredMemoryFile merges the column (source of truth) and writes the legacy file cache for real content', async () => {
   reset();
   const { writeStoredMemoryFile } = await storePromise;
 
   await writeStoredMemoryFile('user-1', 'nutrition-habits.json', '{"preferences":["vegetarian"]}');
 
-  assert.deepEqual(state.column['user-1'], { 'nutrition-habits.json': '{"preferences":["vegetarian"]}' });
+  assert.equal(updateCalls.length, 1);
+  assert.match(updateCalls[0].sql, /coalesce\("users"\."memory_files", '\{\}'::jsonb\) \|\| \$1::jsonb/);
+  assert.deepEqual(updateCalls[0].patch, { 'nutrition-habits.json': '{"preferences":["vegetarian"]}' });
   assert.deepEqual(writeDiskCalls, [{ userId: 'user-1', filename: 'nutrition-habits.json', content: '{"preferences":["vegetarian"]}' }]);
 });
 
 /**
- * Regression: concurrent writes to DIFFERENT filenames must not clobber each
- * other. An earlier revision of this store read the whole memory_files map
- * into JS, spread it, and wrote the whole map back — so two interleaved
- * writers each held a snapshot taken before the other committed, and
- * whichever UPDATE landed second silently reverted the other's key.
+ * Regression for the lost-update bug. An earlier revision of this store read
+ * the whole memory_files map into JS, spread it, and wrote the whole map
+ * back — so two interleaved writers each held a snapshot taken before the
+ * other committed, and whichever UPDATE landed second silently reverted the
+ * other's key.
  *
  * This is the live production interleaving, not a synthetic one: the
  * `worker` process writes user-profile.md via lib/claude.ts's appendCoachNote
  * on the daily-brief path while the `app` process writes
  * health-conditions.json from onboarding or a write_memory tool call.
  *
- * `Promise.all` puts both calls in flight before either resolves, so under
- * the old implementation both would read the (empty) map at their first
- * await and the second write would win outright. Verified to fail against
- * that implementation before this fix landed.
+ * `Promise.all` puts both calls in flight before either resolves. What this
+ * asserts is that NEITHER writer reads the map first (zero selects) and that
+ * each emits only its own key — i.e. there is no snapshot that could go
+ * stale. It deliberately does NOT assert that both keys are present
+ * afterwards: that is Postgres's `jsonb ||` doing the work, and this suite
+ * has no Postgres (see COVERAGE BOUNDARY at the top of this file).
  */
-test('concurrent writes to different filenames both survive (no lost update)', async () => {
+test('concurrent writes to different filenames each emit an isolated single-key merge (no stale snapshot)', async () => {
   reset();
   const { writeStoredMemoryFile } = await storePromise;
 
@@ -271,19 +282,23 @@ test('concurrent writes to different filenames both survive (no lost update)', a
     writeStoredMemoryFile('user-1', 'health-conditions.json', '{"allergies":["peanut"]}'),
   ]);
 
-  assert.deepEqual(state.column['user-1'], {
-    'user-profile.md': '## Coach Notes\n- [2026-09-16] worker wrote this',
-    'health-conditions.json': '{"allergies":["peanut"]}',
-  }, 'neither concurrent writer may drop the other filename');
+  assert.equal(selectCount, 0, 'a write must not pre-read the map — a read-then-write snapshot is what got lost');
+  assert.equal(updateCalls.length, 2);
+  assert.deepEqual(
+    updateCalls.map(c => c.patch).sort((a, b) => Object.keys(a)[0].localeCompare(Object.keys(b)[0])),
+    [
+      { 'health-conditions.json': '{"allergies":["peanut"]}' },
+      { 'user-profile.md': '## Coach Notes\n- [2026-09-16] worker wrote this' },
+    ],
+    'each writer must send only its own filename, so neither payload can carry (and revert) the other',
+  );
 });
 
 /**
- * Structural counterpart to the test above, and the assertion that actually
- * carries the guarantee: the mock can simulate `jsonb ||` but cannot prove
- * Postgres's row-level atomicity, so pin the emitted SQL instead. Every
- * update must be a single-key jsonb concatenation against the live column
- * value — never a full-map overwrite built in JS, which is what made the
- * lost update possible.
+ * Structural guarantee across BOTH column-writing paths: every update is a
+ * single-key jsonb concatenation against the live column value, never a
+ * full-map overwrite built in JS — the shape that made the lost update
+ * possible.
  */
 test('every column update is a single-key jsonb merge, not a full-map overwrite', async () => {
   reset();
@@ -301,7 +316,7 @@ test('every column update is a single-key jsonb merge, not a full-map overwrite'
       /coalesce\("users"\."memory_files", '\{\}'::jsonb\) \|\| \$1::jsonb/,
       'the update must merge in SQL via jsonb concatenation',
     );
-    assert.deepEqual(
+    assert.equal(
       Object.keys(call.patch).length, 1,
       'the merged payload must carry exactly one filename, never a snapshot of the whole map',
     );
