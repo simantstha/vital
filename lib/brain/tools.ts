@@ -185,9 +185,11 @@ export const BRAIN_TOOLS: Tool[] = [
   {
     name: 'remember_fact',
     description:
-      'Persist a new fact about the user to the ontology. Use when the user reveals ' +
-      'an allergy, condition, medication, goal, food preference, or any other ' +
-      'structured fact worth remembering permanently. Creates a node (weight 0.6).',
+      'Persist a new fact to the ontology. Use when the user reveals an allergy, ' +
+      'condition, medication, goal, food preference, or any other structured fact ' +
+      'worth remembering permanently. Creates a node (weight 0.6). By default the ' +
+      'fact is about the user — pass `subject` when it is about someone else (e.g. ' +
+      '"my father has diabetes"), which scopes it to that person instead.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -205,11 +207,19 @@ export const BRAIN_TOOLS: Tool[] = [
           type: 'string',
           description: 'The exact user quote or signal that surfaced this fact.',
         },
-        linksTo: {
+        subject: {
           type: 'string',
           description:
-            'Optional label of an existing node to create an edge to. ' +
-            'E.g. if remembering an Injury, linksTo might be the activity it affects.',
+            'Optional — who this fact is ABOUT, if not the user themself, e.g. "Father" ' +
+            'or "my dad" or "Rex the dog". Resolves case-insensitively against an existing ' +
+            'entity (by label or alias) before creating a new one, so "my dad" and "Father" ' +
+            'land on the same entity. Omit for facts about the user.',
+        },
+        subjectKind: {
+          type: 'string',
+          description:
+            'Optional entity kind for `subject`, used only when a new entity is created. ' +
+            'One of: Person, Pet, Place, Organization. Defaults to Person.',
         },
       },
       required: ['nodeType', 'label', 'evidence'],
@@ -582,25 +592,156 @@ export function macrosForGoal(
   return { targetCal: Math.round(targetCal), c, p, f };
 }
 
-// ── Ontology helper ────────────────────────────────────────────────────────────
+// ── remember_fact: subject (entity) resolution ─────────────────────────────────
+// A fact has exactly one subject: null means "about the user themself" (every
+// fact before this feature, and the default going forward); a non-null
+// subject_node_id points at another `nodes` row — conventionally type='Person'
+// but any kind is valid — that the fact is about. See the safety comment on
+// `nodes.subject_node_id` in db/schema.ts: a third-party fact must never be
+// indistinguishable from a self-fact anywhere it's rendered.
 
-function predicateFor(nodeType: string): string {
-  const map: Record<string, string> = {
-    Condition:      'has_condition',
-    Allergy:        'has_allergy',
-    Intolerance:    'has_intolerance',
-    Medication:     'takes_medication',
-    FamilyHistory:  'has_family_member',
-    Goal:           'has_goal',
-    Habit:          'has_habit',
-    FoodPreference: 'prefers',
-    Cuisine:        'prefers',
-    PantryItem:     'contains_ingredient',
-    Injury:         'blocks_activity',
-    LabMarker:      'last_value',
-  };
-  return map[nodeType] ?? 'related_to';
+export const KNOWN_SUBJECT_KINDS = ['Person', 'Pet', 'Place', 'Organization'] as const;
+export type SubjectKind = typeof KNOWN_SUBJECT_KINDS[number];
+
+/**
+ * Normalizes free-text subjectKind against the known set, case-insensitively.
+ * An unrecognised kind is NEVER rejected — it's logged and stored as the raw
+ * string, so an unfamiliar entity kind (e.g. "Colleague") never causes the
+ * fact itself to be dropped. (rule (b) in memoryCurationBlock — the coach may
+ * name new entities freely but must not invent new *kinds* — is instruction
+ * to the model; this is the code-side backstop for when it does anyway.)
+ */
+export function normalizeSubjectKind(raw: string | null | undefined): string {
+  const trimmed = (raw ?? '').trim();
+  if (!trimmed) return 'Person';
+  const match = KNOWN_SUBJECT_KINDS.find(k => k.toLowerCase() === trimmed.toLowerCase());
+  if (match) return match;
+  console.error(JSON.stringify({ event: 'remember_fact_unknown_subject_kind', subjectKind: trimmed }));
+  return trimmed;
 }
+
+export interface SubjectCandidate {
+  id: string;
+  label: string;
+  properties?: unknown;
+}
+
+/**
+ * Case-insensitive match against a candidate's label OR its
+ * properties.aliases array — this is what lets "my dad", "Dad", and "Father"
+ * all resolve to the same entity instead of fragmenting into duplicates.
+ */
+export function matchesSubjectName(candidate: SubjectCandidate, name: string): boolean {
+  const target = name.trim().toLowerCase();
+  if (candidate.label.trim().toLowerCase() === target) return true;
+  const aliases = (candidate.properties as { aliases?: unknown } | null | undefined)?.aliases;
+  return Array.isArray(aliases) && aliases.some(a => typeof a === 'string' && a.trim().toLowerCase() === target);
+}
+
+/** First active candidate matching `name` by label or alias, or null on a miss. */
+export function findSubjectMatch(candidates: readonly SubjectCandidate[], name: string): SubjectCandidate | null {
+  return candidates.find(c => matchesSubjectName(c, name)) ?? null;
+}
+
+export interface RememberFactStore {
+  /** Active, non-superseded nodes of the given kind for this user — matching
+   *  happens in JS via findSubjectMatch, consistent with NodeResolutionStore's
+   *  label-matching convention above. */
+  findSubjectCandidates(userId: string, kind: string): Promise<SubjectCandidate[]>;
+  /** Miss path: creates the subject entity AND inserts the fact pointing at
+   *  it in ONE transaction, so a failure between the two writes can never
+   *  leave a dangling, fact-less entity in the ontology. */
+  createSubjectAndFact(request: {
+    userId: string; kind: string; subjectName: string; nodeType: string; label: string; evidence: string;
+  }): Promise<{ nodeId: string; subjectNodeId: string }>;
+  /** Hit path (existing subject) or no-subject path: a single insert. */
+  insertFact(request: {
+    userId: string; nodeType: string; label: string; evidence: string; subjectNodeId: string | null;
+  }): Promise<{ nodeId: string }>;
+}
+
+export async function rememberFact(
+  store: RememberFactStore,
+  input: { nodeType?: string | null; label?: string | null; evidence?: string | null; subject?: string | null; subjectKind?: string | null },
+  userId: string,
+): Promise<
+  | { ok: true; nodeId: string; label: string; nodeType: string; subjectNodeId: string | null }
+  | { ok: false; reason: string }
+> {
+  const nodeType = (input.nodeType ?? 'Habit').trim() || 'Habit';
+  const label    = (input.label ?? '').trim();
+  const evidence = (input.evidence ?? '').trim();
+  const subjectName = input.subject?.trim() || null;
+
+  if (!label) return { ok: false, reason: 'label is required.' };
+
+  if (!subjectName) {
+    const { nodeId } = await store.insertFact({ userId, nodeType, label, evidence, subjectNodeId: null });
+    return { ok: true, nodeId, label, nodeType, subjectNodeId: null };
+  }
+
+  const kind = normalizeSubjectKind(input.subjectKind);
+  const candidates = await store.findSubjectCandidates(userId, kind);
+  const existing = findSubjectMatch(candidates, subjectName);
+
+  if (existing) {
+    const { nodeId } = await store.insertFact({ userId, nodeType, label, evidence, subjectNodeId: existing.id });
+    return { ok: true, nodeId, label, nodeType, subjectNodeId: existing.id };
+  }
+
+  const created = await store.createSubjectAndFact({ userId, kind, subjectName, nodeType, label, evidence });
+  return { ok: true, nodeId: created.nodeId, label, nodeType, subjectNodeId: created.subjectNodeId };
+}
+
+const drizzleRememberFactStore: RememberFactStore = {
+  async findSubjectCandidates(userId, kind) {
+    return db
+      .select({ id: schema.nodes.id, label: schema.nodes.label, properties: schema.nodes.properties })
+      .from(schema.nodes)
+      .where(and(
+        eq(schema.nodes.user_id, userId),
+        eq(schema.nodes.type, kind),
+        eq(schema.nodes.status, 'active'),
+        isNull(schema.nodes.superseded_by),
+      ));
+  },
+  async createSubjectAndFact({ userId, kind, subjectName, nodeType, label, evidence }) {
+    return db.transaction(async (tx) => {
+      const [entity] = await tx.insert(schema.nodes).values({
+        user_id:    userId,
+        type:       kind,
+        label:      subjectName,
+        properties: { evidence, aliases: [] },
+        source:     'coach',
+        weight:     0.6,
+      }).returning({ id: schema.nodes.id });
+
+      const [fact] = await tx.insert(schema.nodes).values({
+        user_id:         userId,
+        type:            nodeType,
+        label,
+        properties:      { evidence },
+        source:          'coach',
+        weight:          0.6,
+        subject_node_id: entity.id,
+      }).returning({ id: schema.nodes.id });
+
+      return { nodeId: fact.id, subjectNodeId: entity.id };
+    });
+  },
+  async insertFact({ userId, nodeType, label, evidence, subjectNodeId }) {
+    const [fact] = await db.insert(schema.nodes).values({
+      user_id:         userId,
+      type:            nodeType,
+      label,
+      properties:      { evidence },
+      source:          'coach',
+      weight:          0.6,
+      subject_node_id: subjectNodeId,
+    }).returning({ id: schema.nodes.id });
+    return { nodeId: fact.id };
+  },
+};
 
 // ── Metric label helper (shared: tool_call SSE labels + prompt formatting) ────
 
@@ -1246,50 +1387,30 @@ export async function executeToolCall(
 
   // ── remember_fact ─────────────────────────────────────────────────────────
   if (name === 'remember_fact') {
-    const nodeType = String(input.nodeType ?? 'Habit');
-    const label    = String(input.label ?? '');
-    const evidence = String(input.evidence ?? '');
-    const linksTo  = input.linksTo != null ? String(input.linksTo) : null;
+    // linksTo is retired: it did an exact-label edge write nothing ever read
+    // (edges are write-only — see db/schema.ts's edges comment). A stray
+    // `linksTo` from an older cached tool schema is ignored silently rather
+    // than erroring — see remember_fact's tool description.
+    const result = await rememberFact(
+      drizzleRememberFactStore,
+      {
+        nodeType:    input.nodeType != null ? String(input.nodeType) : null,
+        label:       input.label != null ? String(input.label) : null,
+        evidence:    input.evidence != null ? String(input.evidence) : null,
+        subject:     input.subject != null ? String(input.subject) : null,
+        subjectKind: input.subjectKind != null ? String(input.subjectKind) : null,
+      },
+      userId,
+    );
 
-    if (!label) return 'Error: label is required.';
-
-    // Insert the new node with weight 0.6 (coach-proposed)
-    const [newNode] = await db
-      .insert(schema.nodes)
-      .values({
-        user_id:    userId,
-        type:       nodeType,
-        label,
-        properties: { evidence },
-        source:     'coach',
-        weight:     0.6,
-      })
-      .returning({ id: schema.nodes.id });
-
-    // Optionally link to an existing node whose label matches linksTo
-    if (linksTo) {
-      const allNodes = await db
-        .select({ id: schema.nodes.id, label: schema.nodes.label })
-        .from(schema.nodes)
-        .where(and(eq(schema.nodes.user_id, userId), eq(schema.nodes.status, 'active'), isNull(schema.nodes.superseded_by)));
-
-      const toNode = allNodes.find(
-        n => n.label.toLowerCase() === linksTo.toLowerCase(),
-      );
-
-      if (toNode) {
-        await db.insert(schema.edges).values({
-          user_id:   userId,
-          from_node: newNode.id,
-          to_node:   toNode.id,
-          predicate: predicateFor(nodeType),
-          source:    'coach',
-          weight:    0.6,
-        });
-      }
-    }
-
-    return JSON.stringify({ ok: true, nodeId: newNode.id, label, nodeType });
+    if (!result.ok) return `Error: ${result.reason}`;
+    return JSON.stringify({
+      ok:            true,
+      nodeId:        result.nodeId,
+      label:         result.label,
+      nodeType:      result.nodeType,
+      subjectNodeId: result.subjectNodeId,
+    });
   }
 
   // ── confirm_fact ──────────────────────────────────────────────────────────
@@ -1642,7 +1763,8 @@ const drizzleNodeResolutionStore: NodeResolutionStore = {
     }
 
     // Label match is case-insensitive; fetch the user's active nodes and
-    // compare in JS, consistent with the linksTo lookup in remember_fact above.
+    // compare in JS, consistent with the subject-entity lookup in
+    // remember_fact's findSubjectCandidates/matchesSubjectName above.
     const rows = await db
       .select({ id: schema.nodes.id, label: schema.nodes.label, type: schema.nodes.type })
       .from(schema.nodes)
@@ -1652,15 +1774,34 @@ const drizzleNodeResolutionStore: NodeResolutionStore = {
     return rows.find(row => row.label.toLowerCase() === target) ?? null;
   },
   async resolveNode({ id, userId, resolvedAt }) {
-    const [updated] = await db
-      .update(schema.nodes)
-      .set({ status: 'resolved', resolved_at: resolvedAt })
-      .where(and(
-        eq(schema.nodes.id, id),
-        eq(schema.nodes.user_id, userId),
-        eq(schema.nodes.status, 'active'),
-      ))
-      .returning({ id: schema.nodes.id, label: schema.nodes.label, type: schema.nodes.type });
-    return updated ?? null;
+    // One transaction: resolving an entity (e.g. "Father") must also resolve
+    // every fact scoped to it via subject_node_id (his Condition, his
+    // Medication, ...) — otherwise those facts are left active-but-subjectless
+    // the moment their subject disappears. When `id` isn't an entity (the
+    // common case — most resolved nodes are plain facts, not subjects of
+    // anything), the cascade update simply matches zero rows.
+    return db.transaction(async (tx) => {
+      const [updated] = await tx
+        .update(schema.nodes)
+        .set({ status: 'resolved', resolved_at: resolvedAt })
+        .where(and(
+          eq(schema.nodes.id, id),
+          eq(schema.nodes.user_id, userId),
+          eq(schema.nodes.status, 'active'),
+        ))
+        .returning({ id: schema.nodes.id, label: schema.nodes.label, type: schema.nodes.type });
+      if (!updated) return null;
+
+      await tx
+        .update(schema.nodes)
+        .set({ status: 'resolved', resolved_at: resolvedAt })
+        .where(and(
+          eq(schema.nodes.user_id, userId),
+          eq(schema.nodes.subject_node_id, id),
+          eq(schema.nodes.status, 'active'),
+        ));
+
+      return updated;
+    });
   },
 };

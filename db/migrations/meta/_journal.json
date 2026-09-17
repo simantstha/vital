@@ -197,6 +197,13 @@
       "when": 1789600102751,
       "tag": "0027_strange_prowler",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1789660368000,
+      "tag": "0028_motionless_leader",
+      "breakpoints": true
     }
   ]
 }

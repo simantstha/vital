@@ -141,10 +141,28 @@ export const nodes = p.pgTable('nodes', {
   // on a same-table reference. Nullable: only set once a newer node
   // supersedes this one; NULL for every row today.
   superseded_by: p.uuid('superseded_by').references((): p.AnyPgColumn => nodes.id),
+  // ── Subject (entity scoping) ────────────────────────────────────────────────
+  // Who this fact is ABOUT. A fact has exactly one subject, hence a FK column
+  // here rather than an edge. NULL means "about the user themself" — that is
+  // every row today, so this column is additive-safe with no backfill. A
+  // non-null value points at another `nodes` row (conventionally type='Person',
+  // but not enforced — Pet/Place/Organization etc. are equally valid subjects)
+  // that the fact is about, e.g. a Condition node labeled "Type 2 diabetes"
+  // with subject_node_id pointing at a Person node labeled "Father".
+  //
+  // SAFETY: every reader that builds the "NEVER VIOLATE" hard-constraint block
+  // (lib/brain/context.ts HARD_CONSTRAINT_TYPES, lib/brain/persona.ts
+  // hardConstraintsInjector) MUST filter to subject_node_id IS NULL — a
+  // third-party Condition must never be presented to the coach as a fact
+  // about the user. Any other reader that renders a non-null-subject fact
+  // must disclose the subject inline (see lib/brain/factSubject.ts) so it's
+  // never rendered indistinguishably from a self-fact.
+  subject_node_id: p.uuid('subject_node_id').references((): p.AnyPgColumn => nodes.id),
 }, (t) => [
   p.index('nodes_user_type_idx').on(t.user_id, t.type),
   p.index('nodes_user_label_idx').on(t.user_id, t.label),
   p.index('nodes_user_status_idx').on(t.user_id, t.status),
+  p.index('nodes_user_subject_idx').on(t.user_id, t.subject_node_id),
   p.check('nodes_status_check', sql`${t.status} in ('active', 'resolved', 'superseded')`),
 ]);
 

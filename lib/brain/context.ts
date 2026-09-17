@@ -29,6 +29,7 @@ import { resolveDailyIntake, type DailyIntake } from './nutritionIntake';
 import { getDailyBrief, type CachedBrief } from './dailyBriefRepository';
 import { getConversationStart } from './conversationWindow';
 import { buildWhoopContextLine } from './whoopContext';
+import { buildSubjectLabelMap, resolveSubjectLabel, withSubjectSuffix } from './factSubject';
 import { localDayKey, pickTimeZone, previousDayKey } from '../localDay';
 import { resolveUnitSystem, type UnitSystem } from '../units';
 import { formatDistance, formatWeight } from '../metricFormat';
@@ -351,6 +352,9 @@ export function buildPromptText(
   if (ctx.hardConstraints.length > 0) {
     lines.push('HARD CONSTRAINTS (never violate):');
     for (const n of ctx.hardConstraints) {
+      // No subject suffix here by construction — ctx.hardConstraints is
+      // already filtered to subject_node_id IS NULL (self-facts only), see
+      // the partition below. A third-party fact must never reach this block.
       lines.push(`- ${n.type}: ${n.label} (weight ${n.weight.toFixed(2)})`);
     }
   } else {
@@ -358,8 +362,13 @@ export function buildPromptText(
   }
   if (ctx.softFacts.length > 0) {
     lines.push('GOALS & PREFERENCES:');
+    // hardConstraints ∪ softFacts is exactly the user's active node set, so
+    // this map resolves every subject entity referenced below without an
+    // extra query — see lib/brain/factSubject.ts.
+    const subjectLabels = buildSubjectLabelMap([...ctx.hardConstraints, ...ctx.softFacts]);
     for (const n of ctx.softFacts.slice(0, 20)) {
-      lines.push(`- ${n.type}: ${n.label} (weight ${n.weight.toFixed(2)})`);
+      const subject = resolveSubjectLabel(n.subject_node_id, subjectLabels);
+      lines.push(withSubjectSuffix(`- ${n.type}: ${n.label} (weight ${n.weight.toFixed(2)})`, subject));
     }
   }
 
@@ -562,9 +571,15 @@ export async function assembleContext(userId: string, findingId?: string): Promi
     todayEvents.filter(e => localDayKey(e.timestamp, tz) === localToday),
   );
 
-  // Ontology partition
-  const hardConstraints = allNodes.filter(n => HARD_CONSTRAINT_TYPES.has(n.type));
-  const softFacts       = allNodes.filter(n => !HARD_CONSTRAINT_TYPES.has(n.type));
+  // Ontology partition. Hard constraints render as "NEVER VIOLATE THESE facts
+  // about this user" (see persona.ts), so a fact about someone else (a
+  // father's Condition) must never land here even if its type is in
+  // HARD_CONSTRAINT_TYPES — subject_node_id IS NULL is required in addition
+  // to the type check. A third-party fact of a hard-constraint type instead
+  // falls through to softFacts, where it renders with its subject disclosed
+  // (see buildPromptText above) rather than disappearing silently.
+  const hardConstraints = allNodes.filter(n => HARD_CONSTRAINT_TYPES.has(n.type) && n.subject_node_id == null);
+  const softFacts       = allNodes.filter(n => !HARD_CONSTRAINT_TYPES.has(n.type) || n.subject_node_id != null);
 
   // Messages in chronological order for the prompt
   const recentMessages = [...rawMessages].reverse();

@@ -62,10 +62,35 @@ export function memoryCurationBlock(availableTools: readonly string[]): string {
       `- Evidence is the user's own words. Whatever tool writes the fact, its evidence field must ` +
       `be a verbatim quote — never a paraphrase or inference. It's the only provenance that exists.`,
     );
-    lines.push(
-      `- Family members' health isn't the user's memory to keep. Record only what bears on the ` +
-      `user's own care (e.g. heritable risk), and keep it factual.`,
-    );
+
+    if (canRemember) {
+      // remember_fact can scope a fact to a subject other than the user, so a
+      // family member's fact has somewhere safe to live — file it there
+      // instead of either attributing it to the user or dropping it.
+      lines.push(
+        `- Family members' health belongs to them, not the user. When a fact is about someone else ` +
+        `(a parent's condition, a partner's allergy), pass \`subject\` to \`remember_fact\` so it's ` +
+        `scoped to that person — never recorded as if it were true of the user.`,
+      );
+      lines.push(
+        `- Entity filing. Before naming a new \`subject\`, check \`query_ontology\` for an entity ` +
+        `that already covers them (by name or nickname) — reuse it so facts about the same person ` +
+        `don't fragment across duplicate entities.`,
+      );
+      lines.push(
+        `- Instances, not structure. Name new entities freely as they come up (a new person, pet, ` +
+        `or place) — but never invent a new entity *kind* beyond Person, Pet, Place, or ` +
+        `Organization. An unrecognised kind makes the graph unqueryable.`,
+      );
+    } else {
+      // No remember_fact means no `subject` capability — the old, blunter
+      // rule still applies: without entity scoping, a family member's fact
+      // has nowhere safe to go, so don't record it at all.
+      lines.push(
+        `- Family members' health isn't the user's memory to keep. Record only what bears on the ` +
+        `user's own care (e.g. heritable risk), and keep it factual.`,
+      );
+    }
   }
 
   if (lines.length === 0) return '';
