@@ -19,6 +19,7 @@ export function memoryCurationBlock(availableTools: readonly string[]): string {
   const canRemember = has('remember_fact');
   const canQuery = has('query_ontology');
   const canResolve = has('resolve_fact');
+  const canReadEntity = has('read_entity');
   const canWriteFacts = canPropose || canRemember || canResolve;
 
   const lines: string[] = [];
@@ -54,6 +55,13 @@ export function memoryCurationBlock(availableTools: readonly string[]): string {
       `- Mind the confirmation threshold. Allergy/Condition/Medication/Injury facts become hard ` +
       `constraints injected as "NEVER VIOLATE" — a mistaken one is permanent. Route those through ` +
       `\`propose_fact\` so the user confirms before it's binding.${rememberClause}`,
+    );
+  }
+
+  if (canReadEntity) {
+    lines.push(
+      `- When answering a question about a specific person, call \`read_entity\` first to pull ` +
+      `the full picture of what you know about them. Never infer detail from the entity roster line alone.`,
     );
   }
 

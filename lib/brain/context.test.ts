@@ -48,6 +48,7 @@ function baseCtx(unitSystem: 'metric' | 'imperial') {
     baselines: [],
     calibration: { status: 'ready' as const, metrics: {} },
     unitSystem,
+    entityRoster: [],
   };
 }
 

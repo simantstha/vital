@@ -112,6 +112,16 @@ test('every specialist manifest passes validation', () => {
   }
 });
 
+test('read_entity is absent from all three specialist allowlists — specialists are read-and-propose only', () => {
+  const registry = new SpecialistRegistry({ SPECIALIST_MODEL: 'claude-specialist-test' });
+  for (const manifest of registry.list()) {
+    assert.ok(
+      !manifest.allowedTools.includes('read_entity'),
+      `${manifest.id} must not allowlist read_entity`,
+    );
+  }
+});
+
 test('every allowlisted tool exists in lib/brain/tools.ts', () => {
   const registry = new SpecialistRegistry({ SPECIALIST_MODEL: 'claude-specialist-test' });
   const knownToolNames = brainToolNames();
