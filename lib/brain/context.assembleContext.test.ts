@@ -37,9 +37,11 @@ import { localDayKey } from '../localDay';
 const state: {
   userRow: Array<{ timezone: string | null; unit_system?: string | null }>;
   events: Array<{ type: string; timestamp: Date; payload: unknown }>;
+  nodes: Array<Record<string, unknown>>;
 } = {
   userRow: [{ timezone: null }],
   events: [],
+  nodes: [],
 };
 
 const fakeDb = {
@@ -49,7 +51,7 @@ const fakeDb = {
         return { where: () => ({ orderBy: async () => state.events }) };
       }
       if (table === realSchema.nodes) {
-        return { where: () => ({ orderBy: async () => [] }) };
+        return { where: () => ({ orderBy: async () => state.nodes }) };
       }
       if (table === realSchema.messages) {
         return { where: () => ({ orderBy: () => ({ limit: async () => [] }) }) };
@@ -174,6 +176,66 @@ test('an invalid stored timezone falls back to UTC without throwing', async () =
 
     assert.equal(ctx.timezone, 'UTC');
   } finally {
+    mock.timers.reset();
+  }
+});
+
+/**
+ * Entity-scoped facts (migration 0028, nodes.subject_node_id): a father's
+ * Condition must NEVER land in ctx.hardConstraints, which renders as
+ * "NEVER VIOLATE THESE facts about this user" (lib/brain/persona.ts) — that
+ * would tell the coach the USER has the father's disease. It must still be
+ * visible somewhere (softFacts), but only with its subject disclosed inline,
+ * never indistinguishable from a self-fact.
+ */
+test('a third-party Condition never lands in hardConstraints and discloses its subject in softFacts/promptText', async () => {
+  mock.timers.enable({ apis: ['Date'], now: Date.UTC(2026, 8, 17, 12, 0, 0) });
+  try {
+    state.userRow = [{ timezone: null }];
+    state.events = [];
+    state.nodes = [
+      {
+        id: 'father-entity', user_id: 'user-1', type: 'Person', label: 'Father',
+        properties: { aliases: [] }, source: 'coach', weight: 0.6,
+        created_at: new Date(), status: 'active', resolved_at: null,
+        superseded_by: null, subject_node_id: null,
+      },
+      {
+        id: 'father-condition', user_id: 'user-1', type: 'Condition', label: 'Type 2 diabetes',
+        properties: {}, source: 'coach', weight: 0.6,
+        created_at: new Date(), status: 'active', resolved_at: null,
+        superseded_by: null, subject_node_id: 'father-entity',
+      },
+      {
+        id: 'self-allergy', user_id: 'user-1', type: 'Allergy', label: 'Peanut allergy',
+        properties: {}, source: 'confirmed', weight: 0.9,
+        created_at: new Date(), status: 'active', resolved_at: null,
+        superseded_by: null, subject_node_id: null,
+      },
+    ];
+
+    const { assembleContext } = await contextPromise;
+    const ctx = await assembleContext('user-1');
+
+    // The father's Condition must be entirely absent from hardConstraints —
+    // only the self-fact (Peanut allergy) belongs there.
+    assert.equal(ctx.hardConstraints.length, 1);
+    assert.equal(ctx.hardConstraints[0].label, 'Peanut allergy');
+    assert.ok(!ctx.hardConstraints.some(n => n.label === 'Type 2 diabetes'));
+
+    // It falls through to softFacts instead of disappearing.
+    assert.ok(ctx.softFacts.some(n => n.label === 'Type 2 diabetes' && n.subject_node_id === 'father-entity'));
+
+    // The rendered prompt text must never place it under HARD CONSTRAINTS,
+    // and must disclose its subject wherever it does appear.
+    const hardBlock = ctx.promptText.slice(
+      ctx.promptText.indexOf('HARD CONSTRAINTS'),
+      ctx.promptText.indexOf('GOALS & PREFERENCES'),
+    );
+    assert.doesNotMatch(hardBlock, /Type 2 diabetes/);
+    assert.match(ctx.promptText, /Condition: Type 2 diabetes.*\(about: Father\)/);
+  } finally {
+    state.nodes = [];
     mock.timers.reset();
   }
 });

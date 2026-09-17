@@ -5,6 +5,7 @@ import { morningKey, notificationKey, type AnalysisJob, type CoachAnalysis, type
 import { rawSqlTimeBindings, rawSqlTimestamp, staleNotificationEvent } from './proactiveHealthWorkerSupport';
 import { claimMorningSlot, compareDueCandidates, failOwnedMorningSlot, freshnessWindowMs, notificationClaimable, notificationFresh, reservedSleepCapacity } from './proactiveHealthTransitions';
 import { resolveUnitSystem } from './units';
+import { buildSubjectLabelMap, resolveSubjectLabel, withSubjectSuffix } from './brain/factSubject';
 
 const LEASE_MS = 5 * 60_000;
 type RawJob = { id: string; user_id: string; local_date: string; input_payload: unknown; retry_count: number; kind: 'workout' | 'sleep'; lease_token: string; result?: unknown; notification_state?: string; notification_lease_expires_at?: Date | null; notification_next_attempt_at?: Date };
@@ -63,7 +64,17 @@ export const workerRepository: WorkerRepository = {
     // superseded_by IS NULL is the same guarantee for the other half of that
     // lifecycle: a fact replaced by better information must stop reaching the
     // model as soon as its replacement lands.
-    const profileFacts = await db.select({ type: schema.nodes.type, label: schema.nodes.label, properties: schema.nodes.properties }).from(schema.nodes).where(and(eq(schema.nodes.user_id, job.userId), eq(schema.nodes.status, 'active'), isNull(schema.nodes.superseded_by)));
+    const profileFactRows = await db.select({ id: schema.nodes.id, type: schema.nodes.type, label: schema.nodes.label, properties: schema.nodes.properties, subject_node_id: schema.nodes.subject_node_id }).from(schema.nodes).where(and(eq(schema.nodes.user_id, job.userId), eq(schema.nodes.status, 'active'), isNull(schema.nodes.superseded_by)));
+    // A fact about someone other than the user (subject_node_id set — see
+    // db/schema.ts) must never reach the analysis prompt indistinguishable
+    // from a self-fact, so the subject is disclosed inline on the label
+    // rather than dropped silently — see lib/brain/factSubject.ts.
+    const subjectLabels = buildSubjectLabelMap(profileFactRows);
+    const profileFacts = profileFactRows.map(f => ({
+      type:       f.type,
+      label:      withSubjectSuffix(f.label, resolveSubjectLabel(f.subject_node_id, subjectLabels)),
+      properties: f.properties,
+    }));
     return { enabled, timezone: preference?.timezone ?? 'UTC', baselines, metrics, profile: { user, facts: profileFacts }, unitSystem: resolveUnitSystem(user?.unit_system) };
   },
   async renewAnalysisLease(job, now) { const t = table(job); const rows = await db.update(t).set({ lease_expires_at: new Date(now.getTime() + LEASE_MS), updated_at: now }).where(and(eq(t.id, job.id), eq(t.status, 'processing'), eq(t.lease_token, job.leaseToken))).returning({ id: t.id }); return rows.length === 1; },

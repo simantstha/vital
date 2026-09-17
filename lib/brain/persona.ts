@@ -178,11 +178,18 @@ right now — don't promise it will happen later via some unnamed process.`;
 // ── Hard-constraints injector ─────────────────────────────────────────────────
 
 function hardConstraintsInjector(constraints: OntologyNode[]): string {
-  if (constraints.length === 0) {
+  // Defense-in-depth: assembleContext already filters to subject_node_id IS
+  // NULL before this is called (see context.ts's hardConstraints partition),
+  // but this block is the literal "NEVER VIOLATE THESE facts about this
+  // user" text — a caller bug upstream must never be able to smuggle a
+  // third-party fact (e.g. a father's Condition) in here.
+  const selfConstraints = constraints.filter(n => n.subject_node_id == null);
+
+  if (selfConstraints.length === 0) {
     return '## Hard constraints\nNone on file. Proceed freely.';
   }
 
-  const lines = constraints.map(
+  const lines = selfConstraints.map(
     n => `- [${n.type}] ${n.label}${n.weight < 0.7 ? ' (unconfirmed — exercise caution)' : ''}`,
   );
 

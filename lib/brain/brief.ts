@@ -27,6 +27,7 @@ import {
 } from '@/lib/brain/recovery';
 import { localDayKey, pickTimeZone, previousDayKey, localHour } from '@/lib/localDay';
 import { resolveDailyIntake } from '@/lib/brain/nutritionIntake';
+import { buildSubjectLabelMap, resolveSubjectLabel, withSubjectSuffix } from '@/lib/brain/factSubject';
 import { resolveUnitSystem, type UnitSystem } from '@/lib/units';
 import { KM_PER_MILE } from '@/lib/metricFormat';
 import type { DailyBrief } from '@/lib/types';
@@ -174,14 +175,27 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
   const unitSystem = resolveUnitSystem(userRow?.unit_system);
   const distanceUnit = unitSystem === 'imperial' ? 'mi' : 'km';
 
-  // Partition food-related nodes into restrictions and preferences
+  // Partition food-related nodes into restrictions and preferences.
+  // `restrictions` renders downstream as "never include these foods in ANY
+  // meal" (lib/claude.ts) — a hard-constraint-equivalent, so it MUST be
+  // self-facts only (subject_node_id IS NULL), same rule as
+  // lib/brain/context.ts's HARD_CONSTRAINT_TYPES partition. A father's
+  // Condition must never exclude foods from the user's own meal plan.
   const restrictions = foodNodes
-    .filter(n => ['Allergy', 'Intolerance', 'Condition'].includes(String(n.type)))
+    .filter(n => ['Allergy', 'Intolerance', 'Condition'].includes(String(n.type)) && n.subject_node_id == null)
     .map(n => ({ type: String(n.type), label: String(n.label) }));
 
+  // `preferences` is soft ("favor liked foods, avoid disliked ones") and may
+  // legitimately include a third-party fact (e.g. cooking for a partner's
+  // dietary preference) — those just need the subject disclosed inline so
+  // they're never mistaken for the user's own preference.
+  const subjectLabels = buildSubjectLabelMap(foodNodes);
   const preferences = foodNodes
     .filter(n => ['FoodPreference', 'Cuisine', 'PantryItem'].includes(String(n.type)))
-    .map(n => ({ type: String(n.type), label: String(n.label) }))
+    .map(n => ({
+      type:  String(n.type),
+      label: withSubjectSuffix(String(n.label), resolveSubjectLabel(n.subject_node_id, subjectLabels)),
+    }))
     .slice(0, 15);
 
   const todayEvents   = events.filter(e => dayOf(e) === todayKey);

@@ -49,6 +49,30 @@ test('assemblePersona keeps hard constraints as the final block even with a memo
   assert.ok(curationIdx < constraintsIdx, 'hard constraints must come last so they shadow the curation block');
 });
 
+test('hardConstraintsInjector filters out a third-party fact even if the caller forgot to (defense in depth)', () => {
+  const system = assemblePersona([
+    { id: 'n1', user_id: 'u1', type: 'Allergy', label: 'Peanuts', weight: 1, properties: {}, subject_node_id: null } as never,
+    { id: 'n2', user_id: 'u1', type: 'Condition', label: 'Type 2 diabetes', weight: 0.6, properties: {}, subject_node_id: 'father-entity' } as never,
+  ]);
+  const hardBlock = system.slice(system.indexOf('## Hard constraints'));
+
+  assert.match(hardBlock, /Peanuts/);
+  assert.doesNotMatch(hardBlock, /Type 2 diabetes/);
+});
+
+test('memoryCurationBlock emits entity-filing rules only when remember_fact is available', () => {
+  const specialistBlock = memoryCurationBlock(['propose_fact', 'confirm_fact']);
+  assert.doesNotMatch(specialistBlock, /Entity filing/);
+  assert.doesNotMatch(specialistBlock, /Instances, not structure/);
+  assert.match(specialistBlock, /isn't the user's memory to keep/);
+
+  const coachBlock = memoryCurationBlock(['query_ontology', 'propose_fact', 'remember_fact', 'confirm_fact', 'resolve_fact']);
+  assert.match(coachBlock, /Entity filing/);
+  assert.match(coachBlock, /Instances, not structure/);
+  assert.match(coachBlock, /belongs to them, not the user/);
+  assert.doesNotMatch(coachBlock, /isn't the user's memory to keep/);
+});
+
 test('baseCoachVoice no longer duplicates the memory rules moved into memoryCurationBlock', () => {
   const system = assemblePersona([], undefined, false, undefined, 'metric', [
     'query_ontology',

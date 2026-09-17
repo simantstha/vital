@@ -17,6 +17,7 @@ import { getUserUnitSystem } from '../lib/units';
 import { createWhoopTokenStore } from '../lib/whoop/client';
 import { createWhoopSyncRepository, runWhoopSync } from '../lib/whoop/sync';
 import { createWhoopWorkerRepository, runWhoopWorkerPass } from '../lib/whoop/workerPass';
+import { buildSubjectLabelMap, resolveSubjectLabel, withSubjectSuffix } from '../lib/brain/factSubject';
 
 const intervalMs = Number(process.env.PROACTIVE_WORKER_INTERVAL_MS ?? 15_000);
 const anthropic = new Anthropic({ apiKey: required('ANTHROPIC_API_KEY') });
@@ -80,7 +81,12 @@ const insightPassRepository: InsightPassRepository = {
   },
   async voiceContext(userId) {
     const [user] = await db.select({ goal: schema.users.goal }).from(schema.users).where(eq(schema.users.id, userId)).limit(1);
-    const facts = await db.select({ label: schema.nodes.label }).from(schema.nodes).where(and(eq(schema.nodes.user_id, userId), eq(schema.nodes.status, 'active'), isNull(schema.nodes.superseded_by)));
+    const factRows = await db.select({ id: schema.nodes.id, label: schema.nodes.label, subject_node_id: schema.nodes.subject_node_id }).from(schema.nodes).where(and(eq(schema.nodes.user_id, userId), eq(schema.nodes.status, 'active'), isNull(schema.nodes.superseded_by)));
+    // "What you know about them:" (lib/insights/voice.ts) — a third-party
+    // fact must disclose its subject inline so the nudge model never speaks
+    // it as if it were true of the user (see lib/brain/factSubject.ts).
+    const subjectLabels = buildSubjectLabelMap(factRows);
+    const facts = factRows.map(f => ({ label: withSubjectSuffix(f.label, resolveSubjectLabel(f.subject_node_id, subjectLabels)) }));
     const recentNudges = await db
       .select({ payload: schema.pending_nudges.payload })
       .from(schema.pending_nudges)
