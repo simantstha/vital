@@ -95,7 +95,13 @@ export interface NudgeFindingSummary {
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const HARD_CONSTRAINT_TYPES = new Set(['Allergy', 'Condition', 'Medication', 'Injury']);
+/**
+ * Exported so callers outside this module (e.g. app/api/memory/route.ts) can
+ * compute `isConstraint` server-side against the single canonical list
+ * instead of duplicating it — the client must never re-derive which types
+ * are binding.
+ */
+export const HARD_CONSTRAINT_TYPES = new Set(['Allergy', 'Condition', 'Medication', 'Injury']);
 
 // ── Payload helpers ───────────────────────────────────────────────────────────
 
