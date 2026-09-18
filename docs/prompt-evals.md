@@ -28,13 +28,36 @@ tool definitions to Claude and checking which tools it decides to call.
   script, not `assembleContext()`. (`lib/brain/tools.ts` does statically
   import `@/db` for its tool *executors* — this script never calls those
   executors, so no query ever runs.)
-- It never executes a tool handler. It reads back the `tool_use` blocks
-  Claude returns and asserts on their `name`/`input`; nothing is written
+- It never executes a real tool handler. Tool results fed back to the model
+  (see "Multi-turn round-trips" below) are canned strings the case defines
+  up front, never a call into `lib/brain/tools.ts`; nothing is written
   anywhere, in Postgres or otherwise.
 - It never runs in CI or as part of `npm test`. `npm test` only discovers
   `*.test.ts` files via Node's built-in test runner; this script is
   intentionally not named that way and is wired to its own `eval:prompts`
   npm script instead.
+
+## Multi-turn round-trips
+
+The harness is agentic, not single-shot: after the model's first response,
+if it contains `tool_use` blocks, the harness appends the assistant turn and
+a `tool_result` for each call, then sends another request — up to
+`MAX_ROUNDS = 4` requests total per run. A case's `check` runs against the
+**cumulative** list of tool calls across every round, not just the first.
+
+This matters because some prompt rules are inherently two-step. `lib/brain/
+memoryCuration.ts`'s "check before you write" rule tells the model to call
+`query_ontology` before writing a fact — a single-shot harness sees the
+`query_ontology` call, gets no result, and has nowhere to go, so it looks
+like the model "stopped" after checking. In production (`lib/brain/
+coach.ts`'s real loop) the tool result comes back and the model proceeds to
+write. Feeding back a result is what lets the eval observe the same
+behaviour production exercises.
+
+Each case can supply an optional `respond(name, input) => string` — a canned
+string for a given tool call, never a real handler. When a case omits it,
+the default is `'[]'` for `query_ontology` (nothing found) and `'{"ok":true}'`
+for everything else.
 
 ## Running it
 
@@ -44,8 +67,8 @@ npm run eval:prompts
 
 Requires `ANTHROPIC_API_KEY` (and `DATABASE_URL`, only because
 `lib/brain/tools.ts` needs it to import — see above) in `.env.local`. **This
-makes real, billable Anthropic API calls** — one Messages API request per
-case per run, `max_tokens: 512`, one tool round-trip, no follow-up turns.
+makes real, billable Anthropic API calls** — up to `MAX_ROUNDS = 4` Messages
+API requests per case per run (fewer once the model stops calling tools).
 
 Options (env vars):
 
@@ -79,13 +102,27 @@ say so explicitly.
 3. **No allergy invented** — onboarding, "Nope, no allergies at all" → no
    fact call recording an allergy.
 4. **Third-party attribution** — normal mode, "My father was diagnosed with
-   type 2 diabetes last year" → `remember_fact` with a `subject` naming the
-   father. A `remember_fact` call missing `subject` is the exact safety
-   regression this guards against (the fact would render as true of the
-   user, not the father).
+   type 2 diabetes last year," `query_ontology` canned to return `[]` (no
+   existing father/diabetes nodes) → at least one `remember_fact`/
+   `propose_fact` call, **and** every such call whose `nodeType` is a
+   hard-constraint type (`Allergy`, `Condition`, `Medication`, `Injury` — the
+   types `lib/brain/persona.ts`'s `hardConstraintsInjector` renders as "NEVER
+   VIOLATE" facts about *this* user) carries a non-empty `subject` naming the
+   father.
+
+   Note the rule is narrower than "every call needs a subject." A father's
+   diabetes is legitimately two facts: a `Condition` about the father
+   (subject: "Father") *and*, separately, an unattributed `FamilyHistory`
+   fact about the user's own heritable risk — that one is correctly about
+   the user and must NOT carry a subject. An earlier version of this eval
+   flagged the unattributed `FamilyHistory` call as a bug; that was a
+   misreading. Only hard-constraint types are dangerous when left
+   unattributed, because an unattributed hard-constraint node is read as
+   binding on the user themself.
 5. **Retract, don't duplicate** — normal mode, context carries an active
-   `Injury: Torn ACL` hard constraint, "My ACL is fully healed now" →
-   `resolve_fact`, never a new `remember_fact`.
+   `Injury: Torn ACL` hard constraint, "My ACL is fully healed now,"
+   `query_ontology` canned to return that same active node (with a plausible
+   id) → `resolve_fact`, never a new `remember_fact`.
 6. **Entity read** — normal mode, context's entity roster lists a `Father`
    entity, "What do you know about my father?" → `read_entity` (the roster
    only carries a fact count, not the facts themselves).
