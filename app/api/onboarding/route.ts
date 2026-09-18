@@ -41,6 +41,7 @@ import { getUserIdFromRequest } from '@/lib/auth';
 import { seedUserMemory, readMemoryFile, writeMemoryFile } from '@/lib/memory';
 import { readCoreProfile, writeCoreProfile } from '@/lib/coreProfileStore';
 import { resolveUnitSystem } from '@/lib/units';
+import { ensureHealthConstraintNodes } from '@/lib/brain/healthConstraints';
 
 export const dynamic = 'force-dynamic';
 
@@ -248,6 +249,13 @@ export async function POST(request: Request): Promise<NextResponse> {
     sleepSchedule: lifestyle.sleepSchedule,
     stress: lifestyle.stress,
   });
+
+  // Promote declared injuries/conditions/medications into ontology nodes so
+  // the coach's hard-constraint safety layer (lib/brain/context.ts) actually
+  // sees them — health-conditions.json alone is never read into any prompt.
+  // Never throws (see lib/brain/healthConstraints.ts), so this can't fail
+  // onboarding.
+  await ensureHealthConstraintNodes(userId);
 
   // Completion flag + name (submitted at onboarding, Apple/dev-auth rows
   // otherwise carry a placeholder name) + unit-system preference. Normalized
