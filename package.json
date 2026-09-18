@@ -10,6 +10,7 @@
     "ci:migrate": "node scripts/ci-migrate.mjs",
     "worker": "node dist/proactive-health-worker.cjs",
     "recover:proactive-analysis": "tsx scripts/recover-proactive-analysis-jobs.ts",
+    "eval:prompts": "tsx scripts/eval-prompt-behaviour.ts",
     "start": "next start",
     "lint": "eslint",
     "test": "node --import tsx --experimental-test-module-mocks --test"
