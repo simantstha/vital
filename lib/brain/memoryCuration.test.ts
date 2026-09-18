@@ -17,6 +17,14 @@ test('a specialist allowlist emits the confirmation-threshold rule but never men
   assert.doesNotMatch(block, /query_ontology/);
 });
 
+test('the retract-guidance rule is absent when resolve_fact is not in the allowlist', () => {
+  const block = memoryCurationBlock(['propose_fact', 'confirm_fact', 'remember_fact', 'query_ontology']);
+  assert.doesNotMatch(block, /resolve_fact/);
+  assert.doesNotMatch(block, /Retract, don't duplicate/);
+  assert.doesNotMatch(block, /do it this turn/i);
+  assert.doesNotMatch(block, /NEVER VIOLATE constraint/);
+});
+
 test('the full coach allowlist emits all six memory-curation rules', () => {
   const block = memoryCurationBlock([
     'query_ontology',
@@ -28,6 +36,9 @@ test('the full coach allowlist emits all six memory-curation rules', () => {
   assert.match(block, /durable facts/i); // 1. salience
   assert.match(block, /query_ontology/); // 2. check before write
   assert.match(block, /resolve_fact/); // 3. retract, don't duplicate
+  assert.match(block, /do it this turn/i); // 3. turn-bound obligation
+  assert.match(block, /NEVER VIOLATE constraint/); // 3. consequence of leaving a fact active
+  assert.match(block, /grounding standard/i); // 3. tied to the grounding guardrail
   assert.match(block, /confirmation threshold/i); // 4. confirmation thresholds
   assert.match(block, /remember_fact/); // 4. mentions remember_fact once both tools are present
   assert.match(block, /verbatim quote/i); // 5. evidence discipline

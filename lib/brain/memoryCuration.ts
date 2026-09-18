@@ -41,9 +41,20 @@ export function memoryCurationBlock(availableTools: readonly string[]): string {
 
   if (canResolve) {
     lines.push(
-      `- Retract, don't duplicate. When a recorded fact stops being true (an injury healed, a ` +
-      `medication stopped), call \`resolve_fact\` on the existing node. Never add a new node to ` +
-      `represent a retraction, and never leave the old fact standing while telling the user it's gone.`,
+      `- Retract, don't duplicate, and do it this turn. When the user says a recorded fact no ` +
+      `longer applies — healed, cleared up, stopped taking, no longer, outgrew, don't have that ` +
+      `any more, it's fine now — call \`resolve_fact\` on the existing node before you reply, not ` +
+      `after. Replying first and meaning to record the retraction later is the failure. Never add ` +
+      `a new node to represent a retraction.`,
+    );
+    lines.push(
+      `- An unresolved fact keeps being injected on every future turn; for Allergy/Condition/` +
+      `Medication/Injury that means it keeps rendering as a NEVER VIOLATE constraint, so a healed ` +
+      `injury would suppress training recommendations indefinitely.`,
+    );
+    lines.push(
+      `- Saying the fact is gone before \`resolve_fact\` has actually run is exactly what the ` +
+      `grounding standard below forbids — the call has to happen in this turn, not just the sentence.`,
     );
   }
 
