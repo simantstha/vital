@@ -17,7 +17,11 @@ final class MemoryViewModel: ObservableObject {
     @Published var errorMessage: String? = nil
     @Published var toastMessage: String? = nil
 
-    private let apiClient = APIClient.shared
+    private let apiClient: MemoryAPIProviding
+
+    init(apiClient: MemoryAPIProviding = APIClient.shared) {
+        self.apiClient = apiClient
+    }
 
     func load() async {
         withAnimation(Theme.Motion.appear) { isLoading = true }

@@ -1635,6 +1635,19 @@ struct EntityDocumentResponse: Decodable {
     let facts: [EntityFact]
 }
 
+/// Same seam as `NotificationsAPIProviding`/`TrendsAPIProviding` — lets
+/// `MemoryViewModel`/`EntityDocumentViewModel` be tested against a fake
+/// without a live network stack.
+@MainActor
+protocol MemoryAPIProviding {
+    func fetchMemory() async throws -> MemoryResponse
+    func fetchEntityDocument(id: String) async throws -> EntityDocumentResponse
+    func fetchPendingFacts() async throws -> PendingFactsResponse
+    func resolvePendingFact(id: String, action: String) async throws
+}
+
+extension APIClient: MemoryAPIProviding {}
+
 // MARK: - Coach SSE types
 
 private struct CoachRequestBody: Encodable {

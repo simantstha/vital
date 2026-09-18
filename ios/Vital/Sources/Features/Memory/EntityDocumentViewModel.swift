@@ -7,7 +7,11 @@ final class EntityDocumentViewModel: ObservableObject {
     @Published var isLoading = true
     @Published var errorMessage: String? = nil
 
-    private let apiClient = APIClient.shared
+    private let apiClient: MemoryAPIProviding
+
+    init(apiClient: MemoryAPIProviding = APIClient.shared) {
+        self.apiClient = apiClient
+    }
 
     func load(id: String) async {
         withAnimation(Theme.Motion.appear) { isLoading = true }

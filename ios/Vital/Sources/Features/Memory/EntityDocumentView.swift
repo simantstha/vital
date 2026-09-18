@@ -45,8 +45,12 @@ struct EntityDocumentView: View {
                                 )
                             }
 
-                            ForEach(EntityDocumentViewModel.groupFactsByType(document.facts)) { group in
-                                factGroupSection(group, entityLabel: document.label)
+                            if document.facts.isEmpty {
+                                emptyFactsCard(label: document.label)
+                            } else {
+                                ForEach(EntityDocumentViewModel.groupFactsByType(document.facts)) { group in
+                                    factGroupSection(group, entityLabel: document.label)
+                                }
                             }
                         }
                         .motionTransition(.fade)
@@ -85,6 +89,15 @@ private extension EntityDocumentView {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    func emptyFactsCard(label: String) -> some View {
+        VitalCard {
+            Text("Nothing recorded about \(label) yet — facts appear here as they come up in chat.")
+                .font(Theme.Typography.bodySmall)
+                .foregroundStyle(Theme.Colors.textSecondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 
     func factGroupSection(_ group: EntityDocumentViewModel.FactGroup, entityLabel: String) -> some View {
