@@ -221,6 +221,10 @@ private extension ProfileView {
                 settingsButton(index: 6, icon: "bell", title: "Notifications", value: notificationsSubtitle) {
                     showNotificationSettings = true
                 }
+
+                settingsLink(index: 7, icon: "brain.head.profile", title: "Memory", value: "What Vital knows") {
+                    MemoryView()
+                }
             }
         }
     }
