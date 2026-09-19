@@ -1,4 +1,5 @@
 import XCTest
+import SwiftUI
 @testable import Vital
 
 @MainActor
@@ -119,6 +120,134 @@ final class MemoryViewModelTests: XCTestCase {
         XCTAssertEqual(EntityDocumentViewModel.sourceBadgeText("confirmed"), "Confirmed")
         XCTAssertEqual(EntityDocumentViewModel.sourceBadgeText("coach"), "From chat")
         XCTAssertEqual(EntityDocumentViewModel.sourceBadgeText("digest"), "Digest")
+    }
+
+    // MARK: - FlowLayout (fact chip overflow — see MemoryView.swift)
+
+    /// `FlowLayout` conforms to SwiftUI's `Layout` protocol, whose
+    /// `Subviews` parameter can only be constructed by SwiftUI's own
+    /// hosting/rendering pass — there's no supported way to build one in a
+    /// plain XCTest. So `FlowLayout.positions(for:maxWidth:spacing:)` was
+    /// factored out as the pure row-wrapping arithmetic that
+    /// `sizeThatFits`/`placeSubviews` both delegate to; these tests drive
+    /// that directly with synthetic item sizes standing in for chip
+    /// measurements.
+    ///
+    /// Regression target: before the fix, chips were measured with
+    /// `.unspecified` (no width constraint), so a long single-line label
+    /// reported its full intrinsic width — far wider than the container —
+    /// and `placeSubviews` placed it at that width past `bounds.maxX`,
+    /// clipping it. The fix caps chip measurement at the container width
+    /// first (so a long chip wraps and reports a narrower size) *and*
+    /// clamps in `positions` — a capped proposal is only a request, and
+    /// `Text` reports back wider than proposed when its content can't
+    /// break (a long URL or compound word in a fact label). These tests
+    /// pin the invariant for both: an item that fits, and one that
+    /// genuinely exceeds the container.
+    func testFlowLayoutDoesNotPlaceAnItemBeyondContainerWidth() {
+        let maxWidth: CGFloat = 300
+        // Two short chips that fit on one row, then one wrapped "chip"
+        // whose measured (already-clamped) width equals the full container
+        // width, standing in for a long fact label that wrapped to
+        // multiple lines within the container.
+        let itemSizes: [CGSize] = [
+            CGSize(width: 80, height: 24),
+            CGSize(width: 100, height: 24),
+            CGSize(width: maxWidth, height: 60),
+        ]
+
+        let (placements, totalSize) = FlowLayout.positions(
+            for: itemSizes,
+            maxWidth: maxWidth,
+            spacing: 8
+        )
+
+        XCTAssertEqual(placements.count, itemSizes.count)
+        for placement in placements {
+            XCTAssertLessThanOrEqual(
+                placement.origin.x + placement.size.width,
+                maxWidth,
+                "chip placed past the container's right edge"
+            )
+        }
+        // The wide item can't share a row with the short ones (80 + 8 +
+        // 100 + 8 + 300 > 300), so it must have wrapped onto its own row.
+        XCTAssertEqual(placements[2].origin.x, 0)
+        XCTAssertGreaterThan(placements[2].origin.y, placements[0].origin.y)
+        XCTAssertLessThanOrEqual(totalSize.width, maxWidth)
+    }
+
+    /// The case that actually matters: an item whose measured width
+    /// *exceeds* the container, as `Text` reports when it hits an
+    /// unbreakable token (long URL, long compound word) and can't wrap
+    /// down to the proposed width. `positions` must clamp it rather than
+    /// place it overflowing — truncated is correct here, off-screen isn't.
+    func testFlowLayoutClampsAnItemWiderThanTheContainer() {
+        let maxWidth: CGFloat = 300
+        let itemSizes: [CGSize] = [
+            CGSize(width: 80, height: 24),
+            CGSize(width: maxWidth + 250, height: 24),  // unbreakable token
+            CGSize(width: 60, height: 24),
+        ]
+
+        let (placements, totalSize) = FlowLayout.positions(
+            for: itemSizes,
+            maxWidth: maxWidth,
+            spacing: 8
+        )
+
+        XCTAssertEqual(placements.count, itemSizes.count)
+        for placement in placements {
+            XCTAssertLessThanOrEqual(
+                placement.origin.x + placement.size.width,
+                maxWidth,
+                "chip placed past the container's right edge"
+            )
+        }
+        // The over-wide item is clamped to the container width and given
+        // its own row; the chip after it starts a fresh row rather than
+        // being pushed off the edge.
+        XCTAssertEqual(placements[1].size.width, maxWidth, "over-wide chip should be clamped to the container")
+        XCTAssertEqual(placements[1].origin.x, 0)
+        XCTAssertGreaterThan(placements[1].origin.y, placements[0].origin.y)
+        XCTAssertEqual(placements[2].origin.x, 0)
+        XCTAssertGreaterThan(placements[2].origin.y, placements[1].origin.y)
+        XCTAssertLessThanOrEqual(totalSize.width, maxWidth)
+    }
+
+    /// An unconstrained proposal (`maxWidth == .infinity`, what SwiftUI
+    /// passes for an unbounded measurement) must not be clamped — `min`
+    /// leaves sizes untouched and everything stays on one row.
+    func testFlowLayoutLeavesSizesUntouchedWhenWidthIsUnconstrained() {
+        let itemSizes: [CGSize] = [
+            CGSize(width: 80, height: 24),
+            CGSize(width: 550, height: 24),
+        ]
+
+        let (placements, _) = FlowLayout.positions(
+            for: itemSizes,
+            maxWidth: .infinity,
+            spacing: 8
+        )
+
+        XCTAssertEqual(placements[0].size.width, 80)
+        XCTAssertEqual(placements[1].size.width, 550, "unbounded measurement must not clamp")
+        XCTAssertEqual(placements[0].origin.y, placements[1].origin.y, "no wrapping without a width bound")
+    }
+
+    func testFlowLayoutPacksShortChipsOntoOneRowBeforeWrapping() {
+        let maxWidth: CGFloat = 200
+        let itemSizes: [CGSize] = [
+            CGSize(width: 60, height: 24),  // "No beef"
+            CGSize(width: 90, height: 24),  // "Nepali cuisine"
+            CGSize(width: 70, height: 24),  // wraps: 60 + 8 + 90 + 8 + 70 > 200
+        ]
+
+        let (placements, _) = FlowLayout.positions(for: itemSizes, maxWidth: maxWidth, spacing: 8)
+
+        XCTAssertEqual(placements[0].origin.y, placements[1].origin.y, "short chips should share row 1")
+        XCTAssertGreaterThan(placements[2].origin.y, placements[0].origin.y, "third chip should wrap to row 2")
+        XCTAssertEqual(placements[2].origin.x, 0)
     }
 
     // MARK: - load() — the states the user actually hits on device

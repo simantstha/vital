@@ -266,13 +266,19 @@ private struct MemoryFactChip: View {
         Text(fact.label)
             .font(.system(size: 13, weight: .semibold))
             .foregroundStyle(fact.isConstraint ? Theme.Colors.accentContent : Theme.Colors.textSecondary)
+            .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
             .background(
-                Capsule()
+                // `RoundedRectangle` (not `Capsule`) so a wrapped multi-line
+                // chip gets sensibly rounded corners instead of a capsule
+                // stretched around a tall block — SwiftUI clamps the corner
+                // radius to half the shorter side, so a single-line chip
+                // still renders pill-shaped, unchanged from before.
+                RoundedRectangle(cornerRadius: Theme.Radius.pill, style: .continuous)
                     .fill(fact.isConstraint ? Theme.Colors.accentSoft : Theme.Colors.glassFill)
                     .overlay(
-                        Capsule()
+                        RoundedRectangle(cornerRadius: Theme.Radius.pill, style: .continuous)
                             .strokeBorder(
                                 fact.isConstraint ? Theme.Colors.accentContent : .clear,
                                 lineWidth: fact.isConstraint ? 1 : 0
@@ -287,44 +293,90 @@ private struct MemoryFactChip: View {
 /// A minimal left-to-right, top-to-bottom wrapping layout for the fact
 /// chips — SwiftUI has no built-in wrapping `HStack`, and chip label
 /// lengths are unpredictable (backend-supplied fact text).
-private struct FlowLayout: Layout {
+///
+/// Internal (not `private`) so `MemoryViewModelTests` can exercise
+/// `positions(for:maxWidth:spacing:)` directly — the `Layout` protocol's
+/// `Subviews` type can only be constructed by SwiftUI itself, so the
+/// row-wrapping arithmetic is factored out into a plain function over
+/// `[CGSize]` that both `sizeThatFits` and `placeSubviews` delegate to,
+/// making it testable without a real view-hosting pass.
+struct FlowLayout: Layout {
     var spacing: CGFloat = Theme.Spacing.sm
 
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let maxWidth = proposal.width ?? .infinity
-        var rowWidth: CGFloat = 0
-        var rowHeight: CGFloat = 0
-        var totalHeight: CGFloat = 0
-
-        for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
-            if rowWidth > 0, rowWidth + spacing + size.width > maxWidth {
-                totalHeight += rowHeight + spacing
-                rowWidth = 0
-                rowHeight = 0
-            }
-            rowWidth += (rowWidth > 0 ? spacing : 0) + size.width
-            rowHeight = max(rowHeight, size.height)
-        }
-        totalHeight += rowHeight
-        return CGSize(width: maxWidth.isFinite ? maxWidth : rowWidth, height: totalHeight)
+    /// One wrapped row placement: `origin` is relative to the container's
+    /// top-left, `size` is the measured (already width-clamped) item size.
+    struct Placement {
+        let origin: CGPoint
+        let size: CGSize
     }
 
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        var x = bounds.minX
-        var y = bounds.minY
+    /// Pure row-wrapping arithmetic: lays `itemSizes` left-to-right, top-to-
+    /// bottom, starting a new row whenever the next item wouldn't fit
+    /// within `maxWidth`. Callers should measure each item against a
+    /// `maxWidth`-capped proposal before calling this — the original
+    /// overflow bug measured with `.unspecified`, so a long single-line
+    /// label reported a width far wider than `maxWidth` and got placed
+    /// past the container edge.
+    ///
+    /// A capped proposal is a *request*, not a guarantee: `Text` reports
+    /// back wider than proposed when its content can't break — an
+    /// unbreakable token such as a long URL or a long compound word in a
+    /// backend-supplied fact label. So each width is also clamped to
+    /// `maxWidth` here, making "nothing is placed past the container edge"
+    /// hold by construction rather than by assumption. Placing such an item
+    /// at the clamped width truncates it, which is the right trade on this
+    /// screen versus letting it run off-screen. When `maxWidth` is infinite
+    /// (an unconstrained proposal) `min` leaves sizes untouched.
+    static func positions(
+        for itemSizes: [CGSize],
+        maxWidth: CGFloat,
+        spacing: CGFloat
+    ) -> (placements: [Placement], totalSize: CGSize) {
+        var placements: [Placement] = []
+        var x: CGFloat = 0
+        var y: CGFloat = 0
         var rowHeight: CGFloat = 0
+        var maxRowWidth: CGFloat = 0
 
-        for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
-            if x > bounds.minX, x + size.width > bounds.maxX {
-                x = bounds.minX
+        for size in itemSizes {
+            let clamped = CGSize(width: min(size.width, maxWidth), height: size.height)
+            if x > 0, x + clamped.width > maxWidth {
+                maxRowWidth = max(maxRowWidth, x - spacing)
+                x = 0
                 y += rowHeight + spacing
                 rowHeight = 0
             }
-            subview.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
-            x += size.width + spacing
-            rowHeight = max(rowHeight, size.height)
+            placements.append(Placement(origin: CGPoint(x: x, y: y), size: clamped))
+            x += clamped.width + spacing
+            rowHeight = max(rowHeight, clamped.height)
+        }
+        maxRowWidth = max(maxRowWidth, x - spacing)
+        let totalHeight = y + rowHeight
+        let totalWidth = maxWidth.isFinite ? maxWidth : max(0, maxRowWidth)
+        return (placements, CGSize(width: totalWidth, height: max(0, totalHeight)))
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        // Cap the measurement at the container width so a long label
+        // reports the size it'll take *wrapped* (multi-line), not its full
+        // single-line intrinsic width — `.unspecified` here is what let
+        // long chips report a width far wider than the container and get
+        // placed past `bounds.maxX`.
+        let sizes = subviews.map { $0.sizeThatFits(ProposedViewSize(width: maxWidth, height: nil)) }
+        return Self.positions(for: sizes, maxWidth: maxWidth, spacing: spacing).totalSize
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let maxWidth = bounds.width
+        let sizes = subviews.map { $0.sizeThatFits(ProposedViewSize(width: maxWidth, height: nil)) }
+        let (placements, _) = Self.positions(for: sizes, maxWidth: maxWidth, spacing: spacing)
+
+        for (subview, placement) in zip(subviews, placements) {
+            subview.place(
+                at: CGPoint(x: bounds.minX + placement.origin.x, y: bounds.minY + placement.origin.y),
+                proposal: ProposedViewSize(width: maxWidth, height: nil)
+            )
         }
     }
 }
