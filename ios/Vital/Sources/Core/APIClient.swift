@@ -364,6 +364,23 @@ struct APIClient {
         try validate(response)
     }
 
+    // MARK: - Memory browser
+
+    /// GET /api/memory — the "About you" fact summary plus every entity
+    /// (person, place, etc.) the ontology has learned about, for the Memory
+    /// tab. See `MemoryResponse` below for the shape.
+    func fetchMemory() async throws -> MemoryResponse {
+        try await get("/api/memory")
+    }
+
+    /// GET /api/memory/entities/{id} — the full fact document for a single
+    /// entity, including verbatim evidence quotes. `id` is percent-encoded
+    /// defensively even though entity ids are currently opaque server ids.
+    func fetchEntityDocument(id: String) async throws -> EntityDocumentResponse {
+        let encoded = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+        return try await get("/api/memory/entities/\(encoded)")
+    }
+
     // MARK: - Coach opener (fresh, data-aware greeting per open)
 
     /// Fetches a short, data-aware opening line for the Coach tab. Generated
@@ -1553,6 +1570,83 @@ struct PendingFact: Decodable, Identifiable {
 struct PendingFactsResponse: Decodable {
     let items: [PendingFact]
 }
+
+// MARK: - Memory browser types
+
+/// One fact under `self` in `GET /api/memory` — `isConstraint` true means the
+/// backend treats it as binding on the user's own health guidance (e.g. an
+/// allergy), which the Memory screen renders with a distinct lime-bordered
+/// chip so the user can tell a note from a rule at a glance.
+struct MemoryFact: Decodable, Identifiable {
+    let id: String
+    let type: String
+    let label: String
+    let isConstraint: Bool
+}
+
+struct MemorySelfSummary: Decodable {
+    let factCount: Int
+    let facts: [MemoryFact]
+}
+
+/// One row in the Memory screen's "People" card.
+struct MemoryEntitySummary: Decodable, Identifiable {
+    let id: String
+    let label: String
+    let kind: String
+    let factCount: Int
+}
+
+struct MemoryResponse: Decodable {
+    let selfSummary: MemorySelfSummary
+    let entities: [MemoryEntitySummary]
+
+    enum CodingKeys: String, CodingKey {
+        case selfSummary = "self"
+        case entities
+    }
+}
+
+/// One fact inside an `EntityDocumentResponse`. `evidence` is the verbatim
+/// substring the ontology extracted the fact from — rendered in quotes,
+/// never paraphrased, so the user can check the source themselves.
+/// `createdAt` stays a `String` — `APIClient`'s decoder has no
+/// `dateDecodingStrategy`, matching `PendingFact.createdAt`.
+struct EntityFact: Decodable, Identifiable {
+    let type: String
+    let label: String
+    let evidence: String
+    let source: String
+    let createdAt: String
+
+    /// The payload carries no fact id; the four fields together are unique
+    /// enough for `ForEach` identity within one entity document.
+    var id: String { "\(type)|\(label)|\(createdAt)" }
+}
+
+/// GET /api/memory/entities/{id}. `isSelf` gates
+/// `EntityDocumentView`'s safety banner — facts about someone else must
+/// never be presented as facts about the user.
+struct EntityDocumentResponse: Decodable {
+    let id: String
+    let label: String
+    let kind: String
+    let isSelf: Bool
+    let facts: [EntityFact]
+}
+
+/// Same seam as `NotificationsAPIProviding`/`TrendsAPIProviding` — lets
+/// `MemoryViewModel`/`EntityDocumentViewModel` be tested against a fake
+/// without a live network stack.
+@MainActor
+protocol MemoryAPIProviding {
+    func fetchMemory() async throws -> MemoryResponse
+    func fetchEntityDocument(id: String) async throws -> EntityDocumentResponse
+    func fetchPendingFacts() async throws -> PendingFactsResponse
+    func resolvePendingFact(id: String, action: String) async throws
+}
+
+extension APIClient: MemoryAPIProviding {}
 
 // MARK: - Coach SSE types
 
