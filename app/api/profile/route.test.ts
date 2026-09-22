@@ -86,11 +86,15 @@ mock.module('@/lib/profileDetails', {
   },
 });
 const loggedWeightCalls: Array<{ userId: string; valueKg: number; timezone: unknown }> = [];
+const importLegacyCalls: Array<{ userId: string; timezone: unknown }> = [];
 mock.module('@/lib/weightRepository', {
   namedExports: {
     logWeightEntry: async (userId: string, input: { valueKg: number; measuredAt: Date; source: string; timezone: unknown }) => {
       loggedWeightCalls.push({ userId, valueKg: input.valueKg, timezone: input.timezone });
       return { id: 'event-1', localDay: '2026-01-01', deduped: false };
+    },
+    importLegacyWeightLogIfPresent: async (userId: string, timezone: unknown) => {
+      importLegacyCalls.push({ userId, timezone });
     },
   },
 });
@@ -150,6 +154,7 @@ test('PATCH looks up the user\'s stored timezone and logs weight under lib/local
   // PATCH fetches users.timezone and threads it into logWeightEntry's
   // timezone, rather than the bare UTC slice the route used before this fix.
   loggedWeightCalls.length = 0;
+  importLegacyCalls.length = 0;
   state.userRow = [{ ...state.userRow[0], timezone: 'America/Chicago' }];
 
   const { PATCH } = await routePromise;
@@ -159,6 +164,12 @@ test('PATCH looks up the user\'s stored timezone and logs weight under lib/local
   assert.equal(loggedWeightCalls.length, 1);
   assert.equal(loggedWeightCalls[0].timezone, 'America/Chicago');
   assert.equal(loggedWeightCalls[0].valueKg, 81.2);
+
+  // The legacy weight-log.json import must run before the write, since iOS
+  // has zero callers of /api/weight-log — this PATCH may be the only write
+  // path a user's weigh-ins ever go through.
+  assert.equal(importLegacyCalls.length, 1);
+  assert.equal(importLegacyCalls[0].timezone, 'America/Chicago');
 });
 
 test('GET returns unitSystem: null when the column is unset', async () => {

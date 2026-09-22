@@ -71,7 +71,7 @@ import { getCalibration } from '@/lib/brain/baselines';
 import { readCoreProfile } from '@/lib/coreProfileStore';
 import { ensureHealthConstraintNodes } from '@/lib/brain/healthConstraints';
 import { parseProfileDetails, updateIdentityLines, formatSleepSubtitle } from '@/lib/profileDetails';
-import { logWeightEntry } from '@/lib/weightRepository';
+import { importLegacyWeightLogIfPresent, logWeightEntry } from '@/lib/weightRepository';
 import { localDayKey, pickTimeZone } from '@/lib/localDay';
 import { parseUnitSystem } from '@/lib/units';
 
@@ -283,6 +283,11 @@ export async function PATCH(request: Request): Promise<NextResponse> {
       .where(eq(schema.users.id, userId))
       .limit(1);
     const tz = pickTimeZone(null, row?.timezone);
+    // Import any legacy weight-log.json first — iOS has zero callers of
+    // /api/weight-log (see lib/weightRepository.ts), so this PATCH path may
+    // be the only write this user's weigh-ins ever go through; a cheap
+    // no-op when the file doesn't exist.
+    await importLegacyWeightLogIfPresent(userId, tz);
     await logWeightEntry(userId, { valueKg: weightKg as number, measuredAt: new Date(), source: 'manual', timezone: tz });
   }
 
