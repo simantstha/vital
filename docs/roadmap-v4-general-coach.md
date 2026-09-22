@@ -1,6 +1,10 @@
 # Vital v4 roadmap — from marathon app to a general AI fitness coach
 
-**Status: DRAFT — awaiting owner decisions in §6 before any code work starts.**
+**Status: APPROVED direction — Phase 0 in progress.** Owner decisions (2026-09-22):
+D1 PR CI + screenshot branch · D2 orchestrator merges its own PRs once CI +
+screenshot review are green · D3 voice pain = hands-free conversation, wait after
+speaking, mic reachability (2.1, 2.3, 3.1 are the voice priorities) · D4 one coach
+voice, specialists invisible behind it · D5 still open (ask with screenshots).
 Date: 2026-09-22 · Author: orchestrating Claude session (planning only — no code changed)
 
 Direction from the owner: Vital is no longer a marathon app. It is a general
