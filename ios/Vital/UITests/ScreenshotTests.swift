@@ -238,7 +238,10 @@ final class ScreenshotTests: XCTestCase {
     }
 
     private func captureOnboarding(_ app: XCUIApplication, scenario: String, appearance: String) {
-        XCTAssertTrue(app.staticTexts["Meet your coach"].waitForExistence(timeout: 15),
+        // OnboardingFlowView's Basics step title (subtitle: "This helps your
+        // coach personalize everything that follows.") — not "Meet your
+        // coach", which is the later CoachIntro step this harness never reaches.
+        XCTAssertTrue(app.staticTexts["Let's get to know you"].waitForExistence(timeout: 15),
                        "Onboarding's Basics step should render [\(appearance)]")
         capture(app, name: "\(scenario)__onboarding__\(appearance)")
     }

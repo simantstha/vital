@@ -87,7 +87,7 @@ enum FixtureData {
             targetKcal: 1850, consumedKcal: 1240,
             protein: 96, proteinTarget: 150, carbs: 110, carbsTarget: 165, fat: 38, fatTarget: 62,
             plan: [
-                FixturePlanItem(title: "Overnight oats with berries", timeMinutes: 480, kind: "meal", subtitle: "Breakfast · 7:00 AM", kcal: 380, why: "High protein start keeps you full past lunch."),
+                FixturePlanItem(title: "Overnight oats with berries", timeMinutes: 420, kind: "meal", subtitle: "Breakfast · 7:00 AM", kcal: 380, why: "High protein start keeps you full past lunch."),
                 FixturePlanItem(title: "30-min incline walk", timeMinutes: 660, kind: "move", subtitle: "Move · 11:00 AM", kcal: nil, why: "Low-impact cardio that fits a deficit."),
                 FixturePlanItem(title: "Grilled chicken salad", timeMinutes: 750, kind: "meal", subtitle: "Lunch · 12:30 PM", kcal: 420, why: "Lean protein, high volume, low calorie density."),
                 FixturePlanItem(title: "Greek yogurt + almonds", timeMinutes: 960, kind: "meal", subtitle: "Snack · 4:00 PM", kcal: 220, why: "Bridges the afternoon without derailing today's budget."),
@@ -281,7 +281,11 @@ enum FixtureData {
         return [
             "metrics": [
                 "hrv": metric(profile.hrv, unit: "ms", delta: 4),
-                "sleep": metric(profile.sleepMinutes, unit: "min", delta: 2),
+                // /api/today sends sleep in HOURS (unit "h"), e.g. 7.25 — see
+                // app/api/today/route.ts's documented response shape.
+                // `profile.sleepMinutes` is authored in minutes for
+                // readability, so convert here.
+                "sleep": metric(profile.sleepMinutes / 60, unit: "h", delta: 2),
                 "restingHr": metric(profile.restingHR, unit: "bpm", delta: -3),
             ],
             "dietBudget": dietBudget,
@@ -345,7 +349,9 @@ enum FixtureData {
         switch metricName {
         case "hrv": base = profile.hrv
         case "rhr": base = profile.restingHR
-        default:    base = profile.sleepMinutes
+        // "sleep" — same `sleep_minutes` metric as trendsBatch below, scaled
+        // to hours server-side (lib/metricCatalog.ts's `scale: 1/60`).
+        default:    base = profile.sleepMinutes / 60
         }
         let points = (0..<7).reversed().map { offset -> [String: Any] in
             ["date": dayString(offset), "value": wiggle(base, offset)]
@@ -371,7 +377,11 @@ enum FixtureData {
         case "hrv_sdnn":            return profile.hrv
         case "resting_hr":          return profile.restingHR
         case "hr_avg":              return profile.restingHR + 18
-        case "sleep_minutes":       return profile.sleepMinutes
+        // `sleep_minutes` is stored in minutes but the server applies
+        // lib/metricCatalog.ts's `scale: 1/60` before sending — the wire
+        // value (and this tile's display unit) is hours, same as
+        // /api/today's `sleep` (see `today(_:)` above).
+        case "sleep_minutes":       return profile.sleepMinutes / 60
         case "steps":                return profile.steps
         case "distance_m":          return profile.distanceKm * 1000
         case "exercise_min":        return 35
