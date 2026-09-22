@@ -85,6 +85,12 @@ final class DietSheetViewModel: ObservableObject {
 
     @Published var toastMessage: String?
 
+    /// Proof call site for `ActionToast` (L1, §5.5): shown instead of the
+    /// plain top-center `toastMessage` when a log can be undone through
+    /// `apiClient.deleteMealLog`. `DietSheetView` hosts it via
+    /// `.actionToastHost(vm.actionToast)`.
+    let actionToast = ActionToastPresenter()
+
     /// Fired (fire-and-forget) after every successful log/delete/target change
     /// so `TodayViewModel`'s diet numbers + fuel strip stay in sync — mirrors
     /// `MealDetailView`'s completion calling `vm.loadHealthData()` in `TodayView`.
@@ -198,7 +204,7 @@ final class DietSheetViewModel: ObservableObject {
             )
             loggedEntries.append(entry)
             await refreshConsumedSource()
-            toastMessage = "Logged — nice work"
+            showLoggedToast(for: entry)
             onRefreshToday()
         } catch {
             // Nothing was mutated locally yet — nothing to revert.
@@ -237,7 +243,7 @@ final class DietSheetViewModel: ObservableObject {
             await refreshConsumedSource()
             customName = ""
             customKcal = ""
-            toastMessage = "Logged — nice work"
+            showLoggedToast(for: entry)
             onRefreshToday()
         } catch {
             toastMessage = "Couldn't save — try again"
@@ -256,6 +262,21 @@ final class DietSheetViewModel: ObservableObject {
         } catch {
             loggedEntries = previous
             toastMessage = "Couldn't save — try again"
+        }
+    }
+
+    /// Shows the bottom `ActionToast` with an Undo action that reverses this
+    /// log via `apiClient.deleteMealLog` — `DietSheetView`/`LogMealView`
+    /// proof call site for L1 (§5.5, §10 row L1). `deleteMealLog` already
+    /// exists in `APIClient`, so Undo is wired here directly; there is no
+    /// equivalent "undo" for other `log_*` tool results yet (coach receipts'
+    /// Undo is §10 row L5, not in scope here).
+    private func showLoggedToast(for entry: MealLogEntryDTO) {
+        actionToast.show(
+            message: "Logged \(entry.name) · \(entry.kcal) kcal",
+            actionTitle: "Undo"
+        ) { [weak self] in
+            Task { await self?.removeEntry(entry) }
         }
     }
 

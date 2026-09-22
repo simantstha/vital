@@ -35,6 +35,7 @@ struct DietSheetView: View {
         }
         .task { await vm.load() }
         .toast(message: $vm.toastMessage)
+        .actionToastHost(vm.actionToast)
         .sheet(isPresented: $showLogMealSheet) {
             LogMealView(initialMethod: logMealMethod)
         }
