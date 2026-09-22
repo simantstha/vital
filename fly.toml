@@ -20,7 +20,8 @@ primary_region = "ord"
   force_https = true
   auto_stop_machines = "suspend"
   auto_start_machines = true
-  min_machines_running = 0
+  # Keep one app machine warm: the first coach/voice turn of the day otherwise pays a cold start (owner decision 2026-09-22, docs/ux-spec-v4.md §11 Q3).
+  min_machines_running = 1
   processes = ["app"]
 
   [[http_service.checks]]
