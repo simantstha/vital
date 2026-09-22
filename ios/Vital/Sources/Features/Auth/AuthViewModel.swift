@@ -34,8 +34,27 @@ final class AuthViewModel: ObservableObject {
     }
 
     init() {
+        // Screenshot harness (VitalUITests/VitalScreenshots, `-VitalFixture
+        // <scenario>`): skip real Sign in with Apple / dev sign-in entirely and
+        // land signed-in — onboarded unless the scenario is specifically
+        // exercising the onboarding flow. Mirrors exactly what `send(_:)` below
+        // does on a real sign-in response, so the rest of the app (AppRouter,
+        // KeychainStore-backed API auth headers) behaves identically. Compiled
+        // out of Release entirely.
+        #if DEBUG
+        if let scenario = FixtureMode.scenario {
+            isAuthenticated = true
+            onboarded = scenario != .onboarding
+            KeychainStore.saveSessionToken(FixtureMode.fakeSessionToken)
+            AppRouter.shared.activateSession(token: FixtureMode.fakeSessionToken)
+        } else {
+            isAuthenticated = KeychainStore.loadSessionToken() != nil
+            onboarded = UserDefaults.standard.bool(forKey: Keys.onboarded)
+        }
+        #else
         isAuthenticated = KeychainStore.loadSessionToken() != nil
         onboarded = UserDefaults.standard.bool(forKey: Keys.onboarded)
+        #endif
 
         // A 401 from any request means the stored token is no longer valid
         // (expired, or signed with a since-rotated secret). Drop the session so

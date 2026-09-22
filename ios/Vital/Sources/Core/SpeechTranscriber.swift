@@ -86,6 +86,15 @@ final class SpeechTranscriber: ObservableObject {
     }
 
     func requestPermissions() async {
+        // Screenshot harness (`-VitalFixture <scenario>`): never show the
+        // system speech-recognition/microphone prompts — a blocking system
+        // alert would stall `XCUIScreen.main.screenshot()`. Never reached in
+        // practice (the screenshot harness never taps mic/voice affordances),
+        // but guarded to match HealthKitManager/NotificationManager in case a
+        // future scenario does. Compiled out of Release entirely.
+        #if DEBUG
+        guard !FixtureMode.isActive else { return }
+        #endif
         await withCheckedContinuation { cont in
             SFSpeechRecognizer.requestAuthorization { _ in
                 cont.resume()

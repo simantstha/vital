@@ -166,15 +166,22 @@ docs-only) skips the surface it didn't touch:
    `project.yml`'s `deploymentTarget`) with `CODE_SIGNING_ALLOWED=NO`. The
    `.xcresult` bundle is uploaded as a build artifact (7-day retention) on
    every run, pass or fail, for debugging.
-4. **pr-checks** — a final `needs: [changes, backend, ios]`, `if: always()`
-   job that fails if any of those came back `failure`/`cancelled` and passes
-   if they succeeded or were skipped (path-filtered out). This is the one
-   check name that exists on every run regardless of which paths changed, so
-   it's the one to add under **Settings → Branches → Branch protection rules
-   → main → Require status checks to pass → `pr-checks`**. Add the
-   individual job names too only if you want a *required* iOS or backend
-   check even when that surface wasn't touched — normally you don't, since
-   they legitimately skip.
+4. **ios-screenshots** (macOS, if iOS changed) — builds `VitalScreenshots`
+   (its own scheme, separate from `Vital`, so this never slows down the
+   `ios` job above) and runs `VitalUITests` against every fixture scenario in
+   both light and dark, then publishes the PNGs. See **iOS screenshot
+   harness** below for how it works and where the images land. Screenshot
+   *publishing* is best-effort (`continue-on-error`) — only a real build/test
+   failure in this job fails `pr-checks`.
+5. **pr-checks** — a final `needs: [changes, backend, ios, ios-screenshots]`,
+   `if: always()` job that fails if any of those came back
+   `failure`/`cancelled` and passes if they succeeded or were skipped
+   (path-filtered out). This is the one check name that exists on every run
+   regardless of which paths changed, so it's the one to add under
+   **Settings → Branches → Branch protection rules → main → Require status
+   checks to pass → `pr-checks`**. Add the individual job names too only if
+   you want a *required* iOS or backend check even when that surface wasn't
+   touched — normally you don't, since they legitimately skip.
 
 **Known gap:** `npx tsc --noEmit` is not part of the `backend` job yet — as of
 this workflow's introduction it fails on `main` with 4 pre-existing type
@@ -183,3 +190,87 @@ errors in test files (`lib/streakRepository.test.ts`,
 change this workflow ships with. Fix those first, then add a
 `npx tsc --noEmit` step to the `backend` job so the type-check stays green
 from the day it's turned on.
+
+---
+
+## iOS screenshot harness
+
+A cloud-container orchestrator (no simulator, can't compile Swift) still
+needs to *see* the app. The `ios-screenshots` PR-checks job renders every
+main screen, in every scenario, in light and dark, and publishes the PNGs
+somewhere a `git fetch` can reach — no TestFlight build or device required.
+
+### How fixture mode works
+
+Everything lives behind `#if DEBUG` in `ios/Vital/Sources/Fixtures/` and is
+compiled out of Release entirely (zero behavior change for a real
+build/TestFlight/App Store user):
+
+- **`FixtureMode.swift`** — parses the `-VitalFixture <scenario>` launch
+  argument into a `Scenario` case. `FixtureMode.isActive` is `false` (and
+  everything below is a no-op) under any normal launch.
+- **`AuthViewModel.init()`** — when fixture mode is active, skips real Sign in
+  with Apple / dev sign-in and lands the app signed-in (via the same
+  `KeychainStore`/`AppRouter` calls a real sign-in makes, with a fake session
+  token), onboarded unless the scenario is `onboarding`.
+- **Permission guards** — `HealthKitManager.requestAuthorization()`,
+  `NotificationManager.requestPermission()`,
+  `CalendarEventsProvider.requestAccess()`, and
+  `SpeechTranscriber.requestPermissions()` all short-circuit under fixture
+  mode, so no system permission alert can ever pop up and block
+  `XCUIScreen.main.screenshot()` (XCUITest doesn't dismiss those on its own).
+- **`FixtureURLProtocol.swift`** — a `URLProtocol` registered process-wide
+  (`URLProtocol.registerClass`, from `AppDelegate`) the moment fixture mode is
+  active. It intercepts every request to the app's own backend host —
+  `APIClient`'s dedicated session, `URLSession.shared`, and every other
+  `.default`-configuration session alike — and answers from `FixtureData`
+  instead. A request to any other host (e.g. WHOOP's OAuth page) is left
+  alone, since no fixture scenario ever triggers one.
+- **`FixtureData.swift`** — one `Profile` per scenario (goal, insight copy,
+  plan/meals, weight/HRV/sleep/steps baselines) and a `response(scenario:
+  method:path:query:)` that builds the exact JSON shape each
+  `APIClient.swift` endpoint's `Decodable` type expects. The `server_error`
+  scenario short-circuits everything to a 500 regardless of path.
+
+### Scenarios
+
+| Scenario | What it shows |
+| --- | --- |
+| `new_user` | Fresh account, no data yet — Today's calibrating state, empty plan/insight |
+| `weight_loss` | Established weight-loss account — a week of meals, downward weight trend, full plan, brief coach insight |
+| `muscle` | Established muscle-gain account |
+| `endurance` | Established endurance account, with a logged run |
+| `server_error` | Every endpoint 500s — exercises every screen's error state |
+| `onboarding` | Signed in but not onboarded — the onboarding questionnaire instead of the tab UI |
+
+### Adding a scenario
+
+1. Add a case to `FixtureMode.Scenario`.
+2. Add a matching `Profile` to `FixtureData.profiles` (or special-case it in
+   `FixtureData.response` the way `.serverError`/`.onboarding` are).
+3. Add a `test_<scenario>()` method to `ScreenshotTests` (or extend
+   `runScreenshots`'s scenario list if it becomes table-driven later).
+
+### Where screenshots land
+
+`VitalUITests` (scheme `VitalScreenshots`, kept separate from the `Vital`
+scheme so the fast unit-test job never runs it) navigates to Today, the diet
+logging sheet, Coach, Trends, Logs, and Profile per scenario/appearance, and
+attaches each as an `XCTAttachment` named
+`<scenario>__<screen>__<light|dark>`.
+
+The `ios-screenshots` job exports those attachments from the `.xcresult`
+bundle (`xcrun xcresulttool export attachments`) and pushes the renamed PNGs
+to the `ci-screenshots` branch (an orphan branch holding nothing but
+screenshots) at:
+
+```
+pr-<PR number>/<short sha>/<scenario>__<screen>__<light|dark>.png
+```
+
+`git fetch origin ci-screenshots` then a checkout/browse gets you the images
+without a simulator. They're also uploaded as a same-run build artifact
+(`ios-screenshots`, 30-day retention) for the PR author to download directly
+— the only path available for a fork PR, since publishing to
+`ci-screenshots` is skipped there (a fork can't be granted `contents: write`
+on this repo).

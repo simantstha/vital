@@ -15,6 +15,16 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
+        // Must run before anything else touches the network: the screenshot
+        // harness (VitalUITests/VitalScreenshots) launches with `-VitalFixture
+        // <scenario>` and needs every request intercepted before AuthViewModel
+        // or RootView's `.task` fire their first ones. No-op (and compiled out
+        // entirely in Release) under every normal launch. See
+        // Fixtures/FixtureURLProtocol.swift.
+        #if DEBUG
+        FixtureURLProtocol.registerIfNeeded()
+        #endif
+
         // Must run before any token reader (below, AuthViewModel.init,
         // APIClient): drops a session token inherited from a previous install,
         // since the Keychain survives app deletion but UserDefaults don't.
