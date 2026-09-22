@@ -105,8 +105,15 @@ export interface ParsedWorkoutUnrecognized {
 export type ParsedWorkout = ParsedWorkoutOk | ParsedWorkoutAmbiguous | ParsedWorkoutUnrecognized;
 
 export interface ParseWorkoutOptions {
-  /** Unit assumed for a bare load number with no explicit "kg"/"lb". Default 'lb'. */
-  defaultLoadUnit?: 'kg' | 'lb';
+  /**
+   * Unit assumed for a bare load number with no explicit "kg"/"lb" (e.g. "at
+   * 225"). Required — deliberately no silent default, since defaulting to lb
+   * for everyone would misload a metric user's "3x5 squat at 100" as 45kg.
+   * Callers pass the user's display unit (lib/units.ts's resolveUnitSystem:
+   * 'imperial' -> 'lb', else 'kg'). An explicit unit in the text ("100 kg",
+   * "225 lb") always overrides this.
+   */
+  defaultUnit: 'kg' | 'lb';
 }
 
 // ── Regexes ──────────────────────────────────────────────────────────────────
@@ -188,8 +195,8 @@ function resolveExercise(
  * Parse a natural-language strength-training phrase into an exercise + sets.
  * Pure function — no DB, no network. See module doc for design rationale.
  */
-export function parseWorkoutPhrase(text: string, options: ParseWorkoutOptions = {}): ParsedWorkout {
-  const defaultUnit = options.defaultLoadUnit ?? 'lb';
+export function parseWorkoutPhrase(text: string, options: ParseWorkoutOptions): ParsedWorkout {
+  const defaultUnit = options.defaultUnit;
   let working = ` ${text.trim().toLowerCase()} `;
 
   if (!text || !text.trim()) {

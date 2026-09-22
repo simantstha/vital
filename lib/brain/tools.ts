@@ -44,6 +44,7 @@ import { readCoreProfile } from '@/lib/coreProfileStore';
 import { parseProfileDetails } from '@/lib/profileDetails';
 import { randomUUID } from 'node:crypto';
 import { parseWorkoutPhrase } from '@/lib/workoutParse';
+import { resolveUnitSystem } from '@/lib/units';
 import {
   getExerciseHistory,
   getLastSessionForExercise,
@@ -1703,11 +1704,16 @@ export async function executeToolCall(
   // ── log_workout ───────────────────────────────────────────────────────────
   if (name === 'log_workout') {
     const [userRow] = await db
-      .select({ timezone: schema.users.timezone })
+      .select({ timezone: schema.users.timezone, unit_system: schema.users.unit_system })
       .from(schema.users)
       .where(eq(schema.users.id, userId))
       .limit(1);
     const timezone = userRow?.timezone ?? 'UTC';
+    // A bare load number with no explicit "kg"/"lb" in the phrase (e.g. "at
+    // 100") must resolve against the user's own display unit, never a
+    // hardcoded default — a metric user's "3x5 squat at 100" is 100kg, not
+    // 45kg. resolveUnitSystem defaults to 'metric' when unset.
+    const defaultUnit: 'kg' | 'lb' = resolveUnitSystem(userRow?.unit_system) === 'imperial' ? 'lb' : 'kg';
 
     // repeatLast: re-log the user's last full session for the named exercise.
     if (input.repeatLast === true) {
@@ -1761,7 +1767,7 @@ export async function executeToolCall(
         }));
       });
     } else if (typeof input.phrase === 'string' && input.phrase.trim()) {
-      const parsed = parseWorkoutPhrase(input.phrase);
+      const parsed = parseWorkoutPhrase(input.phrase, { defaultUnit });
       if (!parsed.ok) {
         return JSON.stringify({
           ok: false,
