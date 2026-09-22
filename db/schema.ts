@@ -758,6 +758,50 @@ export const whoop_connections = p.pgTable('whoop_connections', {
   p.uniqueIndex('whoop_connections_whoop_user_idx').on(t.whoop_user_id),
 ]);
 
+// ─── workout_sets ────────────────────────────────────────────────────────────
+// Structured strength-training log (roadmap 1.3 / ux-spec-v4 §5.4, delivery
+// slice W1). Additive: existing `events` rows of type `workout_completed`
+// (HealthKit auto-import — duration/HR/calories only, no sets/reps/load) are
+// untouched; this table is the new source of truth for *set-level* strength
+// data. `workout_id` optionally links a logged session to the matching
+// HealthKit `workout_completed` event (see lib/workoutRepository.ts's
+// same-day/type match), left null when no HealthKit workout matches (manual
+// or coach-voice logging with no paired Watch session).
+//
+// One row per set. `session_id` groups every set logged together in one
+// logging pass (voice utterance, "Log as done", or the in-app set logger) —
+// it's client-generated (UUID) so a retried POST is idempotent: re-sending
+// the same session_id + set_index upserts rather than duplicating rows.
+// `exercise` is the normalized lowercase canonical name (see
+// lib/workoutParse.ts's alias map, e.g. "squat", "bench press", "deadlift");
+// `exercise_display` preserves what the user actually said/typed for UI.
+// `local_day` is a YYYY-MM-DD key (lib/localDay.ts convention) for
+// day-bucketed history/volume queries without timezone arithmetic.
+// source values: 'manual' (typed/tapped in the logger) | 'coach' (voice/chat
+// log_workout tool) | 'template' ("Log as done" / ghost-value repeat).
+
+export const workout_sets = p.pgTable('workout_sets', {
+  id:               p.uuid('id').primaryKey().defaultRandom(),
+  user_id:          p.uuid('user_id').notNull().references(() => users.id),
+  workout_id:       p.uuid('workout_id'),                                     // nullable; no FK — events.id is not unique-constrained per row shape here, matched by app code, not enforced at DB level
+  performed_at:     p.timestamp('performed_at', { withTimezone: true }).notNull(),
+  local_day:        p.text('local_day').notNull(),
+  exercise:         p.text('exercise').notNull(),                             // normalized lowercase canonical name
+  exercise_display: p.text('exercise_display').notNull(),                     // as reported by the user
+  set_index:        p.integer('set_index').notNull(),                        // 1-based order within the session
+  reps:             p.integer('reps').notNull(),
+  load_kg:          p.real('load_kg'),                                        // nullable — bodyweight movements
+  rpe:              p.real('rpe'),                                            // nullable
+  is_warmup:        p.boolean('is_warmup').default(false).notNull(),
+  source:           p.text('source').notNull(),                               // 'manual' | 'coach' | 'template'
+  session_id:       p.uuid('session_id').notNull(),                           // client-generated; groups sets logged together, enables idempotent re-POST
+  created_at:       p.timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  p.index('workout_sets_user_exercise_performed_idx').on(t.user_id, t.exercise, t.performed_at),
+  p.index('workout_sets_user_session_idx').on(t.user_id, t.session_id),
+  p.uniqueIndex('workout_sets_session_set_idx').on(t.session_id, t.set_index),
+]);
+
 // ─── Inferred TypeScript types ────────────────────────────────────────────────
 // Named to avoid collision with built-in DOM globals (Event, Node).
 
@@ -816,3 +860,6 @@ export type NewInsightFinding = typeof insight_findings.$inferInsert;
 
 export type NotificationInboxRow    = typeof notification_inbox.$inferSelect;
 export type NewNotificationInboxRow = typeof notification_inbox.$inferInsert;
+
+export type WorkoutSet    = typeof workout_sets.$inferSelect;
+export type NewWorkoutSet = typeof workout_sets.$inferInsert;

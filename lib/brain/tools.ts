@@ -19,6 +19,8 @@
  *   get_workouts       — workout list from the workouts metric payload
  *   get_baseline       — baselines row for one metric
  *   compare_periods    — current vs. offset period means + delta
+ *   log_workout        — natural-language or structured strength sets -> workout_sets rows
+ *   get_training_history — per-exercise set/rep/load history + e1RM/volume progression
  *
  * Design rule (Phase 3): the coach prompt carries only small durable facts
  * (profile, baselines snapshot, calibration, today's numbers — see context.ts).
@@ -40,6 +42,15 @@ import { applyDietBudgetUpdate, splitMacrosForKcal, DEFAULT_WEIGHT_KG } from '@/
 import { sourcePrecedenceSql } from '@/lib/brain/memoryTiers';
 import { readCoreProfile } from '@/lib/coreProfileStore';
 import { parseProfileDetails } from '@/lib/profileDetails';
+import { randomUUID } from 'node:crypto';
+import { parseWorkoutPhrase } from '@/lib/workoutParse';
+import {
+  getExerciseHistory,
+  getLastSessionForExercise,
+  getProgressionSummary,
+  logWorkoutSession,
+  type SetInput,
+} from '@/lib/workoutRepository';
 
 // ── Tool definitions (Anthropic API schema) ────────────────────────────────
 
@@ -448,6 +459,75 @@ export const BRAIN_TOOLS: Tool[] = [
       required: [],
     },
   },
+  {
+    name: 'log_workout',
+    description:
+      'Log a strength-training set or sets. Give EITHER `phrase` (a natural-language ' +
+      'description like "3x5 squat at 225" or "20 pushups") OR structured `sets` — never ' +
+      'both. When `phrase` is ambiguous (e.g. "press" — could be bench, overhead, or leg ' +
+      'press), the result comes back with needsClarification: true and a list of ' +
+      'candidate exercises; ask the user which one they meant in ONE short question with ' +
+      'those as options, then re-call this tool with the resolved exercise in `sets`. ' +
+      'Never guess at an ambiguous or unrecognized exercise.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        phrase: {
+          type: 'string',
+          description:
+            'A natural-language workout phrase, e.g. "3 by 5 squat at 225", "bench 5 sets ' +
+            'of 5 at 100 kg", "deadlift 1x5 @ 140kg rpe 8", "20 pushups".',
+        },
+        sets: {
+          type: 'array',
+          description:
+            'Structured sets — use this after a clarification round-trip, or when the ' +
+            'user gave you exact numbers already.',
+          items: {
+            type: 'object',
+            properties: {
+              exercise: { type: 'string', description: 'Exercise name, e.g. "bench press".' },
+              reps: { type: 'number' },
+              loadKg: { type: 'number', description: 'Omit for bodyweight movements.' },
+              rpe: { type: 'number' },
+              setCount: { type: 'number', description: 'How many sets at these reps/load (default 1).' },
+            },
+            required: ['exercise', 'reps'],
+          },
+        },
+        repeatLast: {
+          type: 'boolean',
+          description:
+            'If true, ignore phrase/sets and re-log the user\'s last full session for the ' +
+            'exercise named in `phrase` as-is (ux-spec "Log as done" / "repeat last session").',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'get_training_history',
+    description:
+      'Get logged set/rep/load history for one exercise (or a progression summary across ' +
+      'every exercise): best estimated one-rep max (Epley) per week and weekly training ' +
+      'volume. Use for any question about lift history, PRs, progression, or "what did I ' +
+      'do last time" — never invent past loads or claim there\'s no set-level data; the ' +
+      'database now stores it.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        exercise: {
+          type: 'string',
+          description: 'Optional. One exercise, e.g. "squat". Omit for a summary across all exercises.',
+        },
+        days: {
+          type: 'number',
+          description: 'How many days back to summarize (default 84, max 365). Ignored when exercise is set (returns full history instead).',
+        },
+      },
+      required: [],
+    },
+  },
 ];
 
 // ── Deterministic macro math ──────────────────────────────────────────────────
@@ -803,6 +883,10 @@ export function toolCallLabel(name: string, input: Record<string, unknown>): str
       return 'Saving that…';
     case 'append_observation':
       return 'Jotting that down…';
+    case 'log_workout':
+      return 'Logging your workout…';
+    case 'get_training_history':
+      return 'Pulling up your training history…';
     default:
       return 'Working on it…';
   }
@@ -1616,7 +1700,139 @@ export async function executeToolCall(
     return JSON.stringify({ timezone, busy });
   }
 
+  // ── log_workout ───────────────────────────────────────────────────────────
+  if (name === 'log_workout') {
+    const [userRow] = await db
+      .select({ timezone: schema.users.timezone })
+      .from(schema.users)
+      .where(eq(schema.users.id, userId))
+      .limit(1);
+    const timezone = userRow?.timezone ?? 'UTC';
+
+    // repeatLast: re-log the user's last full session for the named exercise.
+    if (input.repeatLast === true) {
+      const exerciseGuess = String(input.phrase ?? '').trim().toLowerCase();
+      if (!exerciseGuess) return 'Error: phrase (exercise name) is required with repeatLast.';
+
+      const lastSession = await getLastSessionForExercise(userId, exerciseGuess);
+      if (lastSession.length === 0) {
+        return JSON.stringify({ ok: false, reason: 'no_history', message: `No previous session found for "${exerciseGuess}".` });
+      }
+
+      const performedAt = new Date();
+      const rows = await logWorkoutSession({
+        userId,
+        sessionId: randomUUID(),
+        performedAt,
+        timezone,
+        source: 'template',
+        sets: lastSession.map((s, i) => ({
+          exercise:         s.exercise,
+          exerciseDisplay:  s.exercise_display,
+          setIndex:         i + 1,
+          reps:             s.reps,
+          loadKg:           s.load_kg,
+          rpe:              s.rpe,
+          isWarmup:         s.is_warmup,
+        })),
+      });
+
+      return JSON.stringify({ ok: true, repeated: true, sets: rows.map(workoutSetToWire) });
+    }
+
+    let setsToLog: SetInput[] = [];
+
+    if (Array.isArray(input.sets) && input.sets.length > 0) {
+      setsToLog = (input.sets as Array<Record<string, unknown>>).flatMap((s) => {
+        const exercise = String(s.exercise ?? '').trim().toLowerCase();
+        const reps = Number(s.reps);
+        const loadKg = s.loadKg != null ? Number(s.loadKg) : null;
+        const rpe = s.rpe != null ? Number(s.rpe) : null;
+        const setCount = Math.max(1, Math.round(Number(s.setCount ?? 1)));
+        if (!exercise || !Number.isFinite(reps) || reps <= 0) return [];
+        return Array.from({ length: setCount }, () => ({
+          exercise,
+          exerciseDisplay: exercise,
+          setIndex: 0, // reassigned below across the whole flat list
+          reps: Math.round(reps),
+          loadKg,
+          rpe,
+          isWarmup: false,
+        }));
+      });
+    } else if (typeof input.phrase === 'string' && input.phrase.trim()) {
+      const parsed = parseWorkoutPhrase(input.phrase);
+      if (!parsed.ok) {
+        return JSON.stringify({
+          ok: false,
+          needsClarification: parsed.reason === 'ambiguous',
+          reason: parsed.reason,
+          message: parsed.message,
+          candidates: parsed.reason === 'ambiguous' ? parsed.candidates : undefined,
+        });
+      }
+      setsToLog = parsed.sets.map((s) => ({
+        exercise: parsed.exercise,
+        exerciseDisplay: parsed.exerciseDisplay,
+        setIndex: 0,
+        reps: s.reps,
+        loadKg: s.loadKg,
+        rpe: s.rpe,
+        isWarmup: false,
+      }));
+    } else {
+      return 'Error: give either `phrase` or `sets`.';
+    }
+
+    if (setsToLog.length === 0) {
+      return JSON.stringify({ ok: false, reason: 'no_reps', message: 'Could not find a valid set (exercise + reps) to log.' });
+    }
+
+    setsToLog = setsToLog.map((s, i) => ({ ...s, setIndex: i + 1 }));
+
+    const rows = await logWorkoutSession({
+      userId,
+      sessionId: randomUUID(),
+      performedAt: new Date(),
+      timezone,
+      source: 'coach',
+      sets: setsToLog,
+    });
+
+    return JSON.stringify({ ok: true, exercise: setsToLog[0].exercise, sets: rows.map(workoutSetToWire) });
+  }
+
+  // ── get_training_history ─────────────────────────────────────────────────
+  if (name === 'get_training_history') {
+    const exercise = typeof input.exercise === 'string' ? input.exercise.trim().toLowerCase() : null;
+
+    if (exercise) {
+      const history = await getExerciseHistory(userId, exercise, 50);
+      return JSON.stringify({ exercise, sets: history.map(workoutSetToWire) });
+    }
+
+    const days = Math.max(7, Math.min(365, Math.round(Number(input.days ?? 84))));
+    const summary = await getProgressionSummary(userId, days);
+    return JSON.stringify({ days, exercises: summary });
+  }
+
   return `Unknown tool: ${name}`;
+}
+
+function workoutSetToWire(row: typeof schema.workout_sets.$inferSelect) {
+  return {
+    id:              row.id,
+    sessionId:       row.session_id,
+    performedAt:     row.performed_at.toISOString(),
+    exercise:        row.exercise,
+    exerciseDisplay: row.exercise_display,
+    setIndex:        row.set_index,
+    reps:            row.reps,
+    loadKg:          row.load_kg,
+    rpe:             row.rpe,
+    isWarmup:        row.is_warmup,
+    source:          row.source,
+  };
 }
 
 export function buildPendingFactProposal(
