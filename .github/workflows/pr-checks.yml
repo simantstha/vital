@@ -315,7 +315,6 @@ jobs:
       # screenshots is a nice-to-have, not a correctness signal.
       - name: Export screenshot attachments
         if: always()
-        continue-on-error: true
         run: |
           set -euo pipefail
           if [ ! -d build/Screens.xcresult ]; then
@@ -350,17 +349,27 @@ jobs:
           def safe(name):
               return re.sub(r"[^A-Za-z0-9_.-]+", "_", name)
 
+          # xcresulttool appends `_<index>_<UUID>` to the suggested name
+          # before the extension (e.g.
+          # "server_error__logs__dark_0_C1777C02-010F-4176-A41E-42DF36306F90.png")
+          # — strip it so files land as "server_error__logs__dark.png",
+          # matching ScreenshotTests.capture's attachment name exactly.
+          suffix_re = re.compile(r"_\d+_[0-9A-Fa-f-]{36}(?=\.png$)")
+
           count = 0
           for entry in manifest:
               for attachment in entry.get("attachments", []):
-                  src_name = attachment.get("filename")
+                  # Xcode 16's xcresulttool key is `exportedFileName`;
+                  # `filename` is kept as a fallback in case a future/older
+                  # tool version uses that name instead.
+                  src_name = attachment.get("exportedFileName") or attachment.get("filename")
                   suggested = attachment.get("suggestedHumanReadableName") or src_name
                   if not src_name:
                       continue
                   src = os.path.join(out_dir, src_name)
                   if not os.path.exists(src):
                       continue
-                  dst_name = safe(suggested)
+                  dst_name = safe(suffix_re.sub("", suggested))
                   if not dst_name.lower().endswith(".png"):
                       dst_name += ".png"
                   dst = os.path.join(renamed_dir, dst_name)
@@ -372,8 +381,38 @@ jobs:
                   shutil.copyfile(src, dst)
                   count += 1
 
+          # Safety net: the manifest schema changed (or changes again) and
+          # nothing above matched, but xcresulttool did export PNGs — copy
+          # them over unrenamed rather than silently publishing nothing, and
+          # log what the manifest actually looked like so the schema mismatch
+          # is easy to diagnose and fix.
+          if count == 0 and os.path.isdir(out_dir):
+              png_files = [f for f in os.listdir(out_dir) if f.lower().endswith(".png")]
+              if png_files:
+                  first_attachment_keys = None
+                  for entry in manifest:
+                      attachments = entry.get("attachments", [])
+                      if attachments:
+                          first_attachment_keys = sorted(attachments[0].keys())
+                          break
+                  print(
+                      "::warning::xcresulttool's manifest.json schema wasn't recognised "
+                      f"(first attachment's keys: {first_attachment_keys}) — copying "
+                      f"{len(png_files)} PNG(s) into {renamed_dir} unrenamed as a fallback."
+                  )
+                  for f in png_files:
+                      shutil.copyfile(os.path.join(out_dir, f), os.path.join(renamed_dir, f))
+                      count += 1
+
           print(f"Exported {count} screenshot(s) to {renamed_dir}")
           PY
+
+          png_count=$(find build/screens-named -name '*.png' 2>/dev/null | wc -l | tr -d ' ')
+          if [ "$png_count" -eq 0 ]; then
+            echo "::error::xcresulttool produced build/Screens.xcresult but no PNGs ended up in build/screens-named — nothing to upload or publish. See the step log above for the manifest.json shape that was actually produced."
+            exit 1
+          fi
+          echo "Screenshots ready: $png_count PNG(s) in build/screens-named"
 
       - name: Upload screenshots as a build artifact
         if: always()
