@@ -21,6 +21,15 @@ final class CoachSpeaker: NSObject, ObservableObject {
 
     @Published var isSpeaking: Bool = false
 
+    /// Fired once per speaking session, the moment audio for the *first*
+    /// sentence actually starts playing (ElevenLabs `AVAudioPlayer` or the
+    /// on-device `AVSpeechSynthesizer` fallback) — not on every sentence.
+    /// `CoachViewModel` uses this for voice turn telemetry (spec §10 V1,
+    /// `VoiceTurnTimer.Marker.firstTTSAudioPlaybackStart`). Set once, not
+    /// per-turn — `firedPlaybackStart` is what resets per session.
+    var onPlaybackStart: (() -> Void)?
+    private var firedPlaybackStart = false
+
     // MARK: - Queue item
 
     /// One sentence's worth of speech: the plain (markdown-stripped) text and
@@ -173,7 +182,9 @@ final class CoachSpeaker: NSObject, ObservableObject {
 
         await withCheckedContinuation { continuation in
             self.playbackContinuation = continuation
-            if !player.play() {
+            if player.play() {
+                self.notifyPlaybackStartOnce()
+            } else {
                 self.resumePlaybackContinuationIfNeeded()
             }
         }
@@ -191,7 +202,17 @@ final class CoachSpeaker: NSObject, ObservableObject {
         await withCheckedContinuation { continuation in
             self.playbackContinuation = continuation
             synthesizer.speak(utterance)
+            notifyPlaybackStartOnce()
         }
+    }
+
+    /// Calls `onPlaybackStart` at most once per speaking session (i.e. once
+    /// per voice turn, on the first sentence only) — later sentences in the
+    /// same reply must not refire it.
+    private func notifyPlaybackStartOnce() {
+        guard !firedPlaybackStart else { return }
+        firedPlaybackStart = true
+        onPlaybackStart?()
     }
 
     private func resumePlaybackContinuationIfNeeded() {
@@ -204,6 +225,7 @@ final class CoachSpeaker: NSObject, ObservableObject {
 
     private func activateSession() {
         isSessionActive = true
+        firedPlaybackStart = false
         let session = AVAudioSession.sharedInstance()
         do {
             try session.setCategory(.playback, options: .duckOthers)

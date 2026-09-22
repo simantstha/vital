@@ -229,6 +229,11 @@ final class CoachViewModel: ObservableObject {
     /// the view can show the typing indicator during load.
     @Published var isOpening: Bool = false
 
+    /// The derived latencies from the most recently completed voice turn
+    /// (spec §10 V1 telemetry). Only the DEBUG voice HUD (`-VitalVoiceHUD`
+    /// launch arg, `CoachView`) reads this — it's not shown in release UI.
+    @Published private(set) var lastVoiceTurnDurations: VoiceTurnTimer.Durations? = nil
+
     private let api: any CoachAPIProviding
     private var streamTask: Task<Void, Never>? = nil
     private var openerTask: Task<Void, Never>? = nil
@@ -303,6 +308,15 @@ final class CoachViewModel: ObservableObject {
     /// streams in — voice-in implies voice-out, typed messages stay silent.
     private var pendingSentByVoice = false
 
+    /// Latency instrumentation for the in-flight voice turn (spec §10 V1),
+    /// created fresh in `toggleVoiceRecording()` and read through to
+    /// `finish()` in the `speaker.onPlaybackStart` hook wired in
+    /// `bindVoice()`. Nil for typed turns and for turns entered through
+    /// `sendExternalVoiceTranscript` (Today's own mic pipeline isn't wired
+    /// up here — see that method's doc comment) — every mark on it is a
+    /// harmless no-op via optional chaining in that case.
+    private var voiceTurnTimer: VoiceTurnTimer?
+
     // MARK: - Typing indicator
 
     /// Show the standalone typing indicator while the opener loads, or while a
@@ -358,6 +372,10 @@ final class CoachViewModel: ObservableObject {
             .sink { [weak self] text in
                 guard let self, self.isVoiceInputActive else { return }
                 self.input = text
+                // Only meaningful once speech has actually started — an
+                // empty partial (or the reset to "" at the top of `start()`)
+                // isn't a real "last spoken word" moment.
+                if !text.isEmpty { self.voiceTurnTimer?.mark(.lastSpeechPartial) }
             }
             .store(in: &cancellables)
 
@@ -366,9 +384,22 @@ final class CoachViewModel: ObservableObject {
             .sink { [weak self] recording in
                 guard let self, self.isVoiceInputActive, !recording else { return }
                 self.isVoiceInputActive = false
+                self.voiceTurnTimer?.mark(.endpointFired)
                 self.finishVoiceInput()
             }
             .store(in: &cancellables)
+
+        // Fired once per voice turn, the moment the reply's first audio
+        // actually starts playing — the last leg of the voice latency
+        // budget (spec §3.4). Set once here rather than per-turn: `speaker`
+        // is a single long-lived instance, and `voiceTurnTimer` (read at
+        // fire time, not capture time) is whatever turn is currently
+        // in-flight.
+        speaker.onPlaybackStart = { [weak self] in
+            guard let self, let timer = self.voiceTurnTimer else { return }
+            timer.mark(.firstTTSAudioPlaybackStart)
+            self.lastVoiceTurnDurations = timer.finish()
+        }
     }
 
     // MARK: - Voice actions
@@ -392,6 +423,8 @@ final class CoachViewModel: ObservableObject {
             speaker.stop()
             input = ""
             isVoiceInputActive = true
+            voiceTurnTimer = VoiceTurnTimer()
+            voiceTurnTimer?.mark(.recordingStart)
             transcriber.start()
         }
     }
@@ -413,10 +446,13 @@ final class CoachViewModel: ObservableObject {
             }
 
             var finalText = appleTranscript
-            if let recordingURL,
-               let cloudText = await api.uploadSTTAudio(fileURL: recordingURL),
-               !cloudText.isEmpty {
-                finalText = cloudText
+            if let recordingURL {
+                voiceTurnTimer?.mark(.sttUploadStart)
+                let cloudText = await api.uploadSTTAudio(fileURL: recordingURL)
+                voiceTurnTimer?.mark(.sttUploadEnd)
+                if let cloudText, !cloudText.isEmpty {
+                    finalText = cloudText
+                }
             }
 
             // cancelStreaming() (fired by the view's onDisappear) cancels this task mid-upload.
@@ -601,6 +637,7 @@ final class CoachViewModel: ObservableObject {
         streamTask = Task {
             var turnPersona = assistantPersona
             var receivedVitalRollback = false
+            if sentByVoice { voiceTurnTimer?.mark(.sendStart) }
             defer {
                 isStreaming = false
                 pendingAssistantId = nil
@@ -681,7 +718,12 @@ final class CoachViewModel: ObservableObject {
             case .text(let delta):
                 appendText(delta, toTurn: assistantId, persona: persona)
                 // .toolCall/.toolData are never spoken — only prose.
-                if speakDeltas { speaker.feed(delta: delta) }
+                if speakDeltas {
+                    speaker.feed(delta: delta)
+                    // First-write-wins inside VoiceTurnTimer, so marking on
+                    // every delta (not just the first) is harmless.
+                    voiceTurnTimer?.mark(.firstSSEToken)
+                }
             case .toolCall(let id, let name, let label, let done):
                 applyToolCall(id: id, name: name, label: label, done: done, toTurn: assistantId, persona: persona)
             case .toolData(let id, let viz):
