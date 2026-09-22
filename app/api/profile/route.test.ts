@@ -85,13 +85,13 @@ mock.module('@/lib/profileDetails', {
     formatSleepSubtitle: (minutes: number) => `${minutes / 60}h target`,
   },
 });
-const loggedWeightCalls: Array<{ userId: string; date: string; weight: number; unit: string }> = [];
-mock.module('@/lib/weightLog', {
+const loggedWeightCalls: Array<{ userId: string; valueKg: number; timezone: unknown }> = [];
+mock.module('@/lib/weightRepository', {
   namedExports: {
-    logWeight: (userId: string, date: string, weight: number, unit: string) => {
-      loggedWeightCalls.push({ userId, date, weight, unit });
+    logWeightEntry: async (userId: string, input: { valueKg: number; measuredAt: Date; source: string; timezone: unknown }) => {
+      loggedWeightCalls.push({ userId, valueKg: input.valueKg, timezone: input.timezone });
+      return { id: 'event-1', localDay: '2026-01-01', deduped: false };
     },
-    readWeightLog: () => [],
   },
 });
 
@@ -147,8 +147,8 @@ test('PATCH looks up the user\'s stored timezone and logs weight under lib/local
   // that behavior is exhaustively covered for the shared localDayKey /
   // pickTimeZone helpers this route now delegates to in lib/streak.test.ts
   // (including a DST-transition case). This test instead proves the wiring:
-  // PATCH fetches users.timezone and threads it into logWeight's day key,
-  // rather than the bare UTC slice the route used before this fix.
+  // PATCH fetches users.timezone and threads it into logWeightEntry's
+  // timezone, rather than the bare UTC slice the route used before this fix.
   loggedWeightCalls.length = 0;
   state.userRow = [{ ...state.userRow[0], timezone: 'America/Chicago' }];
 
@@ -157,8 +157,8 @@ test('PATCH looks up the user\'s stored timezone and logs weight under lib/local
   assert.equal(res.status, 200);
 
   assert.equal(loggedWeightCalls.length, 1);
-  assert.match(loggedWeightCalls[0].date, /^\d{4}-\d{2}-\d{2}$/);
-  assert.equal(loggedWeightCalls[0].weight, 81.2);
+  assert.equal(loggedWeightCalls[0].timezone, 'America/Chicago');
+  assert.equal(loggedWeightCalls[0].valueKg, 81.2);
 });
 
 test('GET returns unitSystem: null when the column is unset', async () => {
