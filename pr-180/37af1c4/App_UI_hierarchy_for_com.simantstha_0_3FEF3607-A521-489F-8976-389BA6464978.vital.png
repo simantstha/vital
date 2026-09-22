@@ -1,0 +1,31 @@
+Application, 0x103d38480, pid: 13078, label: 'Vital' <App element pid: 13078>
+  Window (Main), 0x103d37830, {{0.0, 0.0}, {402.0, 874.0}} <AX element pid: 13078, elementOrHash.elementID: 4380025920.4>
+    Other, 0x103d42db0, {{0.0, 0.0}, {402.0, 874.0}} <AX element pid: 13078, elementOrHash.elementID: 4382071968.5>
+      Other, 0x103d431d0, {{0.0, 0.0}, {402.0, 874.0}} <AX element pid: 13078, elementOrHash.elementID: 4382366800.6>
+        Other, 0x103d39b40, {{0.0, 0.0}, {402.0, 874.0}} <AX element pid: 13078, elementOrHash.elementID: 4380021808.7>
+          Other, 0x103d44f20, {{0.0, 0.0}, {402.0, 874.0}} <AX element pid: 13078, elementOrHash.elementID: 4380297616.8>
+            ScrollView, 0x103d45340, {{0.0, 90.0}, {402.0, 682.7}} <AX element pid: 13078, elementOrHash.elementID: 4430181376.9>
+              Other, 0x103d44310, {{0.0, 90.0}, {402.0, 466.0}} <AX element pid: 13078, elementOrHash.elementID: 4379048656.11>
+                StaticText, 0x103d39900, {{20.0, 110.0}, {276.7, 33.7}}, label: 'Let's get to know you' <AX element pid: 13078, elementOrHash.elementID: 4380305104.13>
+                StaticText, 0x103d39a20, {{20.0, 147.7}, {312.7, 36.0}}, label: 'This helps your coach personalize everything that follows.' <AX element pid: 13078, elementOrHash.elementID: 4380402928.14>
+                StaticText, 0x103d36b70, {{20.0, 203.7}, {35.0, 13.3}}, label: 'NAME' <AX element pid: 13078, elementOrHash.elementID: 4380403712.15>
+                TextField, 0x103d36c90, {{32.0, 233.0}, {338.0, 22.0}}, placeholderValue: 'Your name' <AX element pid: 13078, elementOrHash.elementID: 4387299840.16>
+                StaticText, 0x103d36db0, {{20.0, 283.0}, {91.3, 13.3}}, label: 'DATE OF BIRTH' <AX element pid: 13078, elementOrHash.elementID: 4380615264.17>
+                DatePicker, 0x103d36ed0, {{20.0, 300.3}, {124.3, 34.3}} <AX element pid: 13078, elementOrHash.elementID: 4380079040.18>
+                  Button, 0x103d3d800, {{20.0, 300.3}, {124.3, 34.3}}, label: 'Date Picker', value: Sep 22, 2001 <AX element pid: 13078, elementOrHash.elementID: 4380079568.31>
+                StaticText, 0x103d3d920, {{20.0, 350.7}, {23.7, 13.3}}, label: 'SEX' <AX element pid: 13078, elementOrHash.elementID: 4380182592.19>
+                StaticText, 0x103d3da40, {{32.0, 374.0}, {30.3, 15.7}}, label: 'Male' <AX element pid: 13078, elementOrHash.elementID: 4380236960.20>
+                StaticText, 0x103d43cf0, {{94.3, 374.0}, {45.7, 15.7}}, label: 'Female' <AX element pid: 13078, elementOrHash.elementID: 4380238064.21>
+                StaticText, 0x103d43e10, {{172.0, 374.0}, {36.0, 15.7}}, label: 'Other' <AX element pid: 13078, elementOrHash.elementID: 4380239168.22>
+                StaticText, 0x103d43f30, {{20.0, 411.7}, {37.3, 13.3}}, label: 'UNITS' <AX element pid: 13078, elementOrHash.elementID: 4380240272.23>
+                StaticText, 0x103d3c5b0, {{32.0, 435.0}, {40.7, 15.7}}, label: 'Metric' <AX element pid: 13078, elementOrHash.elementID: 4380240704.24>
+                StaticText, 0x103d3c6d0, {{104.7, 435.0}, {51.3, 15.7}}, label: 'Imperial' <AX element pid: 13078, elementOrHash.elementID: 4380247248.25>
+                StaticText, 0x103d3c7f0, {{20.0, 472.7}, {78.7, 13.3}}, label: 'HEIGHT (CM)' <AX element pid: 13078, elementOrHash.elementID: 4380306576.26>
+                StaticText, 0x103d3c910, {{207.0, 472.7}, {78.7, 13.3}}, label: 'WEIGHT (KG)' <AX element pid: 13078, elementOrHash.elementID: 4380690112.27>
+                TextField, 0x103d3ca30, {{32.0, 502.0}, {151.0, 22.0}}, placeholderValue: 'cm' <AX element pid: 13078, elementOrHash.elementID: 4422254592.28>
+                TextField, 0x103d3cb50, {{219.0, 502.0}, {151.0, 22.0}}, placeholderValue: 'kg' <AX element pid: 13078, elementOrHash.elementID: 4421711872.29>
+              Other, 0x103d3cc70, {{369.0, 90.0}, {30.0, 682.7}}, label: 'Vertical scroll bar, 1 page', value: 0% <AX element pid: 13078, elementOrHash.elementID: 4379017136.12>
+                Other, 0x103d3cd90, {{396.0, 762.7}, {3.0, 7.0}} <AX element pid: 13078, elementOrHash.elementID: 4379052928.30>
+              Other, 0x103d3ceb0, {{369.0, 90.0}, {30.0, 682.7}}, label: 'Vertical scroll bar, 1 page', value: 0% <AX element pid: 13078, elementOrHash.elementID: 4379017136.12>
+                Other, 0x103d3cfd0, {{396.0, 762.7}, {3.0, 7.0}} <AX element pid: 13078, elementOrHash.elementID: 4379052928.30>
+            Button, 0x103d38830, {{20.0, 772.7}, {362.0, 51.3}}, label: 'Continue', Disabled <AX element pid: 13078, elementOrHash.elementID: 4380336560.10>
