@@ -49,6 +49,10 @@ struct CoachView: View {
             }
 
             specialistEdgeGlow
+
+            #if DEBUG
+            voiceTurnHUD
+            #endif
         }
         // Fetch a fresh, data-aware opener when the Coach tab appears.
         // Check for stale conversations on every appearance.
@@ -272,6 +276,54 @@ struct CoachView: View {
                 .ambient(Theme.Motion.breathe, value: specialistGlowExpanded)
         }
     }
+
+    #if DEBUG
+    /// Tiny top-left overlay with the last voice turn's derived latencies
+    /// (spec §10 V1). Only appears when the app is launched with the
+    /// `-VitalVoiceHUD` argument (Xcode scheme launch arguments, or a
+    /// harness flag) — never shown otherwise, and compiled out of release
+    /// builds entirely.
+    @ViewBuilder
+    private var voiceTurnHUD: some View {
+        if ProcessInfo.processInfo.arguments.contains("-VitalVoiceHUD") {
+            VStack {
+                HStack {
+                    voiceTurnHUDContent
+                    Spacer()
+                }
+                Spacer()
+            }
+            .padding(.top, Theme.Spacing.xxxl)
+            .padding(.leading, Theme.Spacing.md)
+            .allowsHitTesting(false)
+        }
+    }
+
+    @ViewBuilder
+    private var voiceTurnHUDContent: some View {
+        let durations = vm.lastVoiceTurnDurations
+        VStack(alignment: .leading, spacing: 2) {
+            Text("Voice turn")
+                .font(.system(size: 10, weight: .bold))
+            hudRow("endpoint_wait", durations?.endpointWait)
+            hudRow("stt_wait", durations?.sttWait)
+            hudRow("time_to_first_token", durations?.timeToFirstToken)
+            hudRow("speech_end_to_first_audio", durations?.speechEndToFirstAudio)
+        }
+        .font(.system(size: 9, weight: .medium, design: .monospaced))
+        .foregroundStyle(.white)
+        .padding(6)
+        .background(Color.black.opacity(0.7), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private func hudRow(_ label: String, _ value: TimeInterval?) -> some View {
+        HStack(spacing: 4) {
+            Text(label)
+            Spacer(minLength: 8)
+            Text(value.map { String(format: "%.0fms", $0 * 1000) } ?? "–")
+        }
+    }
+    #endif
 
     private func performSpecialistAction(_ action: CoachViewPresentation.CardAction) {
         guard action.isEnabled else { return }
