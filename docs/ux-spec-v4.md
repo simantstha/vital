@@ -471,6 +471,8 @@ Each PR can ship on its own and takes about 2 days or less. Each includes screen
 
 ## 11. Open questions for the owner
 
+> **Owner decisions (2026-09-22):** Q1 — approve IA1 now (Coach Bar on current tabs), decide A/B from IA2 screenshots · Q2 — auto-log + 5 s Undo, confirm only on low confidence or > 1,200 kcal · Q3 — yes, `min_machines_running = 1` · Q4 — on-device first, Scribe as background correction, drop after 2 weeks if within 2 WER points · Q5 — not asked; recommendation (no background voice in v1) stands.
+
 1. **D5: Option A (3 tabs + Coach sheet) or Option B (keep a Coach tab)?** *Rec:* approve IA1 now, since the Bar works under either option. Choose A or B from IA2 screenshots after a week of use. I expect A.
 2. **Auto-log with Undo, or confirm first, for photo and voice meal estimates?** *Rec:* auto-log with a 5 s Undo and Edit. Show a confirm card only when confidence is low or the estimate is over 1,200 kcal.
 3. **Keep one Fly machine warm (`min_machines_running = 1`)?** *Rec:* yes. Otherwise the first voice turn and the brief each day pay for a cold start. V1 telemetry will measure the actual cost.
