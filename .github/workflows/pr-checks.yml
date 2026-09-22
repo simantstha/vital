@@ -394,6 +394,7 @@ jobs:
         continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
           if [ ! -d build/screens-named ] || [ -z "$(ls -A build/screens-named 2>/dev/null)" ]; then
@@ -402,7 +403,12 @@ jobs:
           fi
 
           PR_NUMBER="${{ github.event.pull_request.number }}"
-          SHORT_SHA="$(git rev-parse --short HEAD)"
+          # `git rev-parse --short HEAD` would be the synthetic PR-merge
+          # commit `actions/checkout` builds for a `pull_request` event, not
+          # a commit that exists on the PR branch — derive the short SHA from
+          # the actual PR head instead, so the published path matches a real,
+          # `git fetch`-able commit.
+          SHORT_SHA="${HEAD_SHA:0:7}"
           DEST_DIR="pr-${PR_NUMBER}/${SHORT_SHA}"
           REMOTE="https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git"
 

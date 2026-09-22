@@ -265,7 +265,7 @@ to the `ci-screenshots` branch (an orphan branch holding nothing but
 screenshots) at:
 
 ```
-pr-<PR number>/<short sha>/<scenario>__<screen>__<light|dark>.png
+pr-<PR number>/<first 7 chars of the PR head commit>/<scenario>__<screen>__<light|dark>.png
 ```
 
 `git fetch origin ci-screenshots` then a checkout/browse gets you the images
