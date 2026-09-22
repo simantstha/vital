@@ -204,6 +204,13 @@
       "when": 1789660368000,
       "tag": "0028_motionless_leader",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1790098399904,
+      "tag": "0029_backfill_users_goal_from_profile",
+      "breakpoints": true
     }
   ]
 }
