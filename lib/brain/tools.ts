@@ -14,7 +14,15 @@
  *   resolve_fact       — retract a confirmed node (status → 'resolved'; never deletes;
  *                        not specialist-allowed)
  *   log_meal           — nutrition lookup → meal_logged event
+ *   log_weight         — weigh-in → weight_logged event (lib/weightRepository.ts)
  *   get_metric_trend   — daily_metrics trend + mean/min/max + baseline direction
+ *   get_weight_trend   — smoothed (EWMA) weight trend, manual + HealthKit merged
+ *                        (lib/weightTrend.ts) — a dedicated tool rather than folded
+ *                        into get_metric_trend: body_mass_kg needs cross-source
+ *                        dedup + smoothing get_metric_trend's generic per-metric
+ *                        contract doesn't have, the same reason get_sleep_summary
+ *                        and get_workouts are their own tools instead of metric
+ *                        special-cases.
  *   get_sleep_summary  — nightly sleep minutes + stages + consistency
  *   get_workouts       — workout list from the workouts metric payload
  *   get_baseline       — baselines row for one metric
@@ -52,6 +60,9 @@ import {
   logWorkoutSession,
   type SetInput,
 } from '@/lib/workoutRepository';
+import { getWeightReadings, logWeightEntry } from '@/lib/weightRepository';
+import { computeWeightTrend } from '@/lib/weightTrend';
+import { LB_PER_KG } from '@/lib/metricFormat';
 
 // ── Tool definitions (Anthropic API schema) ────────────────────────────────
 
@@ -334,6 +345,32 @@ export const BRAIN_TOOLS: Tool[] = [
     },
   },
   {
+    name: 'log_weight',
+    description:
+      'Log a body-weight reading and write a weight_logged event to the database. Use ' +
+      'when the user reports a weigh-in (e.g. "182 this morning", "I weighed 81.4kg today").',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        value: {
+          type: 'number',
+          description: 'The weight value, in the unit given by `unit`.',
+        },
+        unit: {
+          type: 'string',
+          description: 'Unit the value is expressed in: "kg" or "lb". Defaults to "lb" if omitted.',
+        },
+        measuredAt: {
+          type: 'string',
+          description:
+            'Optional ISO 8601 timestamp for when the weigh-in happened (e.g. if the user ' +
+            'says "this morning" for an earlier time). Defaults to now.',
+        },
+      },
+      required: ['value'],
+    },
+  },
+  {
     name: 'get_metric_trend',
     description:
       'Get the daily trend for a single HealthKit metric over a date range, with ' +
@@ -354,6 +391,26 @@ export const BRAIN_TOOLS: Tool[] = [
         },
       },
       required: ['metric', 'days'],
+    },
+  },
+  {
+    name: 'get_weight_trend',
+    description:
+      'Get the smoothed body-weight trend (exponentially-weighted moving average, ' +
+      'MacroFactor/Happy Scale style) over the last N days, merging manual and HealthKit ' +
+      'readings, plus 7-day and 30-day kg/week rate of change. Use for any question about ' +
+      'weight trend, rate of loss/gain, or "how is my weight moving" — prefer this over ' +
+      'get_metric_trend(body_mass_kg) for weight, which returns raw daily values with no ' +
+      'smoothing or manual-entry merge.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        days: {
+          type: 'number',
+          description: 'How many days back to look (max 180).',
+        },
+      },
+      required: [],
     },
   },
   {
@@ -864,8 +921,12 @@ export function toolCallLabel(name: string, input: Record<string, unknown>): str
       return 'Updating your record…';
     case 'log_meal':
       return 'Logging your meal…';
+    case 'log_weight':
+      return 'Logging your weigh-in…';
     case 'get_metric_trend':
       return `Checking your ${metricLabel(String(input.metric ?? ''))} trend…`;
+    case 'get_weight_trend':
+      return 'Checking your weight trend…';
     case 'get_sleep_summary':
       return 'Looking at your sleep…';
     case 'get_workouts':
@@ -1635,6 +1696,44 @@ export async function executeToolCall(
     return JSON.stringify(result);
   }
 
+  // ── log_weight ─────────────────────────────────────────────────────────────
+  if (name === 'log_weight') {
+    const value = Number(input.value);
+    if (!Number.isFinite(value)) return 'Error: value is required and must be a number.';
+
+    const rawUnit = input.unit != null ? String(input.unit).toLowerCase() : 'lb';
+    if (rawUnit !== 'kg' && rawUnit !== 'lb' && rawUnit !== 'lbs') {
+      return 'Error: unit must be "kg" or "lb".';
+    }
+    const valueKg = rawUnit === 'kg' ? value : value / LB_PER_KG;
+
+    let measuredAt = new Date();
+    if (input.measuredAt != null) {
+      const parsed = new Date(String(input.measuredAt));
+      if (!Number.isNaN(parsed.getTime())) measuredAt = parsed;
+    }
+
+    const [row] = await db
+      .select({ timezone: schema.users.timezone })
+      .from(schema.users)
+      .where(eq(schema.users.id, userId))
+      .limit(1);
+
+    const result = await logWeightEntry(userId, {
+      valueKg,
+      measuredAt,
+      source: 'coach',
+      timezone: row?.timezone,
+    });
+
+    return JSON.stringify({
+      ok:       true,
+      valueKg:  round2(valueKg),
+      localDay: result.localDay,
+      deduped:  result.deduped,
+    });
+  }
+
   // ── get_metric_trend ──────────────────────────────────────────────────────
   if (name === 'get_metric_trend') {
     const metric = String(input.metric ?? '');
@@ -1642,6 +1741,20 @@ export async function executeToolCall(
     if (!metric) return 'Error: metric is required.';
 
     return JSON.stringify(await queryMetricTrend(userId, metric, days));
+  }
+
+  // ── get_weight_trend ──────────────────────────────────────────────────────
+  if (name === 'get_weight_trend') {
+    const days = Math.max(1, Math.min(180, Number(input.days ?? 90)));
+
+    const [row] = await db
+      .select({ timezone: schema.users.timezone })
+      .from(schema.users)
+      .where(eq(schema.users.id, userId))
+      .limit(1);
+
+    const readings = await getWeightReadings(userId, days, row?.timezone);
+    return JSON.stringify(computeWeightTrend(readings));
   }
 
   // ── get_sleep_summary ─────────────────────────────────────────────────────

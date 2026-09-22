@@ -51,7 +51,8 @@
  * Effects:
  *   - name              → users.name
  *   - age / heightCm     → core-profile.md Identity lines (lib/profileDetails.updateIdentityLines)
- *   - weightKg           → weight-log.json (lib/weightLog.logWeight) AND core-profile.md
+ *   - weightKg           → a `weight_logged` event (lib/weightRepository.logWeightEntry,
+ *     source: 'manual') AND core-profile.md
  *   - sleepGoalMinutes / lightsOutMinutes → users.sleep_goal_minutes / users.lights_out_minutes;
  *     when lightsOutMinutes changes, today's still-pending "Lights out" plan_items
  *     row (if any) is updated in place so Today reflects the change immediately.
@@ -70,7 +71,7 @@ import { getCalibration } from '@/lib/brain/baselines';
 import { readCoreProfile } from '@/lib/coreProfileStore';
 import { ensureHealthConstraintNodes } from '@/lib/brain/healthConstraints';
 import { parseProfileDetails, updateIdentityLines, formatSleepSubtitle } from '@/lib/profileDetails';
-import { logWeight } from '@/lib/weightLog';
+import { importLegacyWeightLogIfPresent, logWeightEntry } from '@/lib/weightRepository';
 import { localDayKey, pickTimeZone } from '@/lib/localDay';
 import { parseUnitSystem } from '@/lib/units';
 
@@ -281,8 +282,13 @@ export async function PATCH(request: Request): Promise<NextResponse> {
       .from(schema.users)
       .where(eq(schema.users.id, userId))
       .limit(1);
-    const today = localDayKey(new Date(), pickTimeZone(null, row?.timezone));
-    logWeight(userId, today, weightKg as number, 'kg');
+    const tz = pickTimeZone(null, row?.timezone);
+    // Import any legacy weight-log.json first — iOS has zero callers of
+    // /api/weight-log (see lib/weightRepository.ts), so this PATCH path may
+    // be the only write this user's weigh-ins ever go through; a cheap
+    // no-op when the file doesn't exist.
+    await importLegacyWeightLogIfPresent(userId, tz);
+    await logWeightEntry(userId, { valueKg: weightKg as number, measuredAt: new Date(), source: 'manual', timezone: tz });
   }
 
   if (sleepGoalMinutes !== undefined || lightsOutMinutes !== undefined) {

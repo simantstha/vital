@@ -5,7 +5,8 @@
  * store — the same store the 1-year backfill + background sync write to, and
  * that the Today screen reads. `daily_metrics` is already unique per (user,
  * date, metric), so no bucketing is needed. Weight additionally merges
- * manual weight-log.json entries (manual wins per day). Also returns the
+ * manual `weight_logged` events (lib/weightRepository.ts, manual wins per
+ * day). Also returns the
  * same calibration status as `/api/today` (cheap GROUP BY, computed on every
  * call) so the client can show a "still calibrating" banner alongside the
  * series.
@@ -26,6 +27,8 @@
  */
 
 import { NextResponse } from 'next/server';
+import { db, schema } from '@/db';
+import { eq } from 'drizzle-orm';
 import { getUserIdFromRequest } from '@/lib/auth';
 import {
   queryMetricPoints,
@@ -33,10 +36,11 @@ import {
   queryMetricDataDays,
   queryAllBaselines,
 } from '@/lib/brain/tools';
-import { readWeightLog } from '@/lib/weightLog';
+import { importLegacyWeightLogIfPresent, queryManualWeightOverlay } from '@/lib/weightRepository';
 import { getCalibration } from '@/lib/brain/baselines';
 import { toDisplay } from '@/lib/metricCatalog';
 import { buildTrendsBatch } from '@/lib/trendsResponse';
+import { pickTimeZone } from '@/lib/localDay';
 
 export const dynamic = 'force-dynamic';
 
@@ -57,6 +61,30 @@ const DAILY_METRIC: Record<string, string> = {
 
 const MAX_BATCH_METRICS = 24;
 const DEFAULT_BATCH_DAYS = 30;
+
+/** Only queried when a weight overlay is actually needed (see both GET branches below). */
+async function resolveUserTimezone(userId: string): Promise<string | undefined> {
+  const [row] = await db
+    .select({ timezone: schema.users.timezone })
+    .from(schema.users)
+    .where(eq(schema.users.id, userId))
+    .limit(1);
+  return pickTimeZone(null, row?.timezone);
+}
+
+/**
+ * Ensures any legacy weight-log.json for this user has been imported into
+ * Postgres before reading the manual-weight overlay — iOS has zero callers
+ * of POST/GET /api/weight-log (lib/weightRepository.ts's lazy-import call
+ * site), so without this, a user who never opens that route would never see
+ * their legacy manual weigh-ins here. importLegacyWeightLogIfPresent() is a
+ * cheap no-op (no DB round trip) when the file doesn't exist — see its
+ * lib/weightRepository.ts header and lib/weightRepository.test.ts.
+ */
+async function ensureLegacyWeightImported(userId: string): Promise<void> {
+  const tz = await resolveUserTimezone(userId);
+  await importLegacyWeightLogIfPresent(userId, tz);
+}
 
 export async function GET(request: Request): Promise<NextResponse> {
   const { searchParams } = new URL(request.url);
@@ -95,13 +123,9 @@ export async function GET(request: Request): Promise<NextResponse> {
 
   // Weight: overlay manual entries (manual wins per day), normalized to kg.
   if (metric === 'weight') {
-    const since = new Date();
-    since.setUTCDate(since.getUTCDate() - days);
-    const sinceStr = since.toISOString().split('T')[0];
-    for (const e of readWeightLog(userId)) {
-      if (e.date < sinceStr) continue;
-      const kg = e.unit === 'lbs' ? e.weight * 0.453592 : e.weight;
-      byDate.set(e.date, toDisplay('body_mass_kg', kg));
+    await ensureLegacyWeightImported(userId);
+    for (const [date, kg] of await queryManualWeightOverlay(userId, days)) {
+      byDate.set(date, toDisplay('body_mass_kg', kg));
     }
   }
 
@@ -137,22 +161,14 @@ async function handleBatch(request: Request, searchParams: URLSearchParams): Pro
     getCalibration(userId),
   ]);
 
-  const manualWeight = requested.includes('body_mass_kg') ? weightLogOverlay(userId, days) : undefined;
+  let manualWeight: Map<string, number> | undefined;
+  if (requested.includes('body_mass_kg')) {
+    await ensureLegacyWeightImported(userId);
+    manualWeight = await queryManualWeightOverlay(userId, days);
+  }
 
   const { series, unknownMetrics } = buildTrendsBatch({ requested, points, baselines, dayCounts, manualWeight });
 
   return NextResponse.json({ days, series, unknownMetrics, calibration });
 }
 
-/** Manual weight-log overlay (manual wins per day), normalized to kg — mirrors the legacy ?metric=weight branch above. */
-function weightLogOverlay(userId: string, days: number): Map<string, number> {
-  const since = new Date();
-  since.setUTCDate(since.getUTCDate() - days);
-  const sinceStr = since.toISOString().split('T')[0];
-  const overlay = new Map<string, number>();
-  for (const e of readWeightLog(userId)) {
-    if (e.date < sinceStr) continue;
-    overlay.set(e.date, e.unit === 'lbs' ? e.weight * 0.453592 : e.weight);
-  }
-  return overlay;
-}
