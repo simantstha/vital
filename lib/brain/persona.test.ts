@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { assemblePersona, unitsInstructionBlock } from './persona';
+import { assemblePersona, safetyBlock, unitsInstructionBlock } from './persona';
 
 test('assemblePersona defaults to metric units when unitSystem is omitted', () => {
   const system = assemblePersona([]);
@@ -68,4 +68,61 @@ test('onboarding block asks about allergies via propose_fact, not remember_fact,
 test('onboarding block does not instruct remember_fact for allergies even when remember_fact is unavailable', () => {
   const system = assemblePersona([], undefined, true, undefined, 'metric', ['propose_fact']);
   assert.match(system, /never remember_fact/);
+});
+
+test('safetyBlock is present in normal mode', () => {
+  const system = assemblePersona([]);
+  assert.match(system, /## Safety/);
+});
+
+test('safetyBlock is present in onboarding mode', () => {
+  const system = assemblePersona([], undefined, true);
+  assert.match(system, /## Safety/);
+});
+
+test('safetyBlock is present in calibrating mode', () => {
+  const calibration = {
+    status: 'calibrating' as const,
+    metrics: {
+      hrv_sdnn: { dataDays: 3, established: false },
+      resting_hr: { dataDays: 3, established: false },
+      sleep_minutes: { dataDays: 3, established: false },
+    },
+  };
+  const system = assemblePersona([], undefined, false, calibration);
+  assert.match(system, /## Safety/);
+});
+
+test('safetyBlock comes after the grounding guardrail and before hard constraints', () => {
+  const system = assemblePersona([]);
+  const groundingIdx = system.indexOf('## Grounding');
+  const safetyIdx = system.indexOf('## Safety');
+  const constraintsIdx = system.indexOf('## Hard constraints');
+  assert.ok(groundingIdx > -1 && safetyIdx > -1 && constraintsIdx > -1);
+  assert.ok(
+    groundingIdx < safetyIdx && safetyIdx < constraintsIdx,
+    'expected order: grounding guardrail, then safety, then hard constraints (last, so it can shadow safety)',
+  );
+});
+
+test('safetyBlock covers the 988 crisis line and the diet budget low-energy floor', () => {
+  const block = safetyBlock();
+  assert.match(block, /988/);
+  assert.match(block, /low-energy-availability floor/);
+  // Never invent a phone number other than 988.
+  assert.doesNotMatch(block, /\b1-?800\b/);
+});
+
+test('safetyBlock covers scope, urgent red flags, and deferring to a clinician for pregnancy/minors/medical conditions', () => {
+  const block = safetyBlock();
+  assert.match(block, /non-clinical/);
+  assert.match(block, /[Nn]ever diagnose/);
+  assert.match(block, /chest pain/);
+  assert.match(block, /Pregnancy/);
+  assert.match(block, /under-18/);
+});
+
+test('assemblePersona always includes the same safetyBlock() text verbatim', () => {
+  const system = assemblePersona([]);
+  assert.ok(system.includes(safetyBlock()));
 });
