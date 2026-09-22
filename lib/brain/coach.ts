@@ -28,7 +28,7 @@ import type { Message, MessageParam } from '@anthropic-ai/sdk/resources/messages
 import { client } from './anthropicClient';
 import { db, schema } from '@/db';
 import { assembleContext } from './context';
-import { assemblePersona } from './persona';
+import { assemblePersona, safetyBlock } from './persona';
 import { BRAIN_TOOLS, executeToolCall, toolCallLabel } from './tools';
 import { buildCoachViz, type CoachViz } from './coachViz';
 import { MEMORY_TOOLS, handleToolCall as handleMemoryToolCall } from '@/lib/memory';
@@ -84,9 +84,16 @@ const specialistRuntime = new SpecialistCoachRuntime({
   manifests: specialistRegistry,
 });
 
-const TRUSTED_SPECIALIST_SAFETY = `Stay within non-clinical fitness, nutrition, sport performance,
-recovery, sleep, and habit coaching. Never diagnose, claim to replace a clinician, or override a
-documented allergy, condition, medication, or injury. Escalate urgent or diagnostic concerns.`;
+// Composes lib/brain/persona.ts's safetyBlock() — the single source of truth
+// for escalation/red-flag guidance — with the specialist-specific scope line
+// (a specialist stays within its own non-clinical domain and never overrides
+// a hard constraint the base coach prompt already carries). Do not duplicate
+// safetyBlock()'s rules here; extend it instead.
+const TRUSTED_SPECIALIST_SAFETY = [
+  `Stay within non-clinical fitness, nutrition, sport performance, recovery, sleep, and habit \
+coaching. Never override a documented allergy, condition, medication, or injury.`,
+  safetyBlock(),
+].join('\n\n');
 
 // ── Yield types ───────────────────────────────────────────────────────────────
 

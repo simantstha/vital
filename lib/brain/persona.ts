@@ -187,6 +187,44 @@ or limitation to one.
 right now — don't promise it will happen later via some unnamed process.`;
 }
 
+// ── Safety block ──────────────────────────────────────────────────────────────
+// Always injected, in every mode (normal, onboarding, calibrating). Before
+// this, the only escalation/red-flag guidance in the codebase was
+// TRUSTED_SPECIALIST_SAFETY (lib/brain/coach.ts), wired only into specialist
+// prompts — which are disabled in production. This is the single source of
+// truth for both; lib/brain/coach.ts's TRUSTED_SPECIALIST_SAFETY composes
+// this exported safetyBlock() with a specialist-only scope line rather than
+// duplicating it.
+
+export function safetyBlock(): string {
+  return `## Safety — read for signals, not on every message
+You are non-clinical coaching, not a clinician. Never diagnose, never claim to \
+replace a doctor or therapist, and never advise changing or stopping a medication.
+
+Urgent physical red flags — chest pain/pressure, fainting, severe shortness of \
+breath, signs of stroke, a severe injury (e.g. can't bear weight): tell them to \
+stop right now and seek urgent care or emergency services. Don't coach through it.
+
+Self-harm or suicidal language: respond with warmth and take it seriously. \
+Encourage reaching out now — in the US, call or text 988 (Suicide & Crisis \
+Lifeline); elsewhere, local emergency services. Stay present in the conversation; \
+don't pivot back to fitness.
+
+Disordered-eating signals — extreme restriction, purging, compensatory exercise, \
+fear or guilt around food, a goal weight that's clearly underweight, or a request \
+for a very-low-calorie target or rapid loss: don't supply targets or tactics that \
+enable it. Respond with care, gently name the concern, and suggest a doctor or \
+eating-disorder specialist. Never set or recommend intake below the Diet Budget's \
+low-energy-availability floor, and cap weight-loss pace recommendations at ~1% of \
+body weight per week.
+
+Pregnancy, an under-18 user, or a declared medical condition: defer calorie-deficit \
+and intense-training prescriptions to their clinician.
+
+Don't moralize or lecture on ordinary diet/training questions — these rules \
+trigger on the signals above, not on every question about food or weight.`;
+}
+
 // ── Hard-constraints injector ─────────────────────────────────────────────────
 
 function hardConstraintsInjector(constraints: OntologyNode[]): string {
@@ -234,6 +272,9 @@ export type PersonaLens = 'nutritionist' | 'trainer';
  * @param availableTools   Tool names actually available to this call (default none) —
  *                         gates memoryCurationBlock so it never instructs the model to
  *                         use a memory tool it can't call.
+ *
+ * safetyBlock() is always included, in every mode, regardless of the params above —
+ * see its own comment for why.
  */
 export function assemblePersona(
   hardConstraints: OntologyNode[],
@@ -254,11 +295,14 @@ export function assemblePersona(
   const curationBlock = memoryCurationBlock(availableTools);
   if (curationBlock) blocks.push(curationBlock);
 
-  // Units block, then the grounding guardrail, then hard constraints always
-  // last — each later block overrides earlier ones, including units (e.g. if
-  // a constraint somehow implied a unit-relevant caveat).
+  // Units block, then the grounding guardrail, then safety, then hard
+  // constraints always last — each later block overrides earlier ones,
+  // including units (e.g. if a constraint somehow implied a unit-relevant
+  // caveat). Safety is always included, in every mode, immediately before
+  // hard constraints so a documented constraint can still shadow it.
   blocks.push(unitsInstructionBlock(unitSystem));
   blocks.push(groundingGuardrailBlock());
+  blocks.push(safetyBlock());
   blocks.push(hardConstraintsInjector(hardConstraints));
 
   return blocks.join('\n\n---\n\n');
