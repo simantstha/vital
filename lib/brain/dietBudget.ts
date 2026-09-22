@@ -56,6 +56,33 @@ export function normalizeGoal(goal: string | null | undefined): DietGoal {
     : 'general';
 }
 
+/**
+ * iOS onboarding (OnboardingFlowView.swift) sends `basics.goal` as one of its
+ * own four ids — lose_fat | build_muscle | improve_endurance | general_health
+ * — which do NOT match the canonical DietGoal ids Profile > Goal
+ * (GoalDetailView.swift) and this module use. Before this mapping existed,
+ * onboarding wrote the raw onboarding id into the free-text core-profile
+ * only and never touched `users.goal`, so a fresh "Lose fat" signup silently
+ * got the 'general' (maintenance) auto budget — normalizeGoal's unknown-goal
+ * fallback — until the user separately visited Profile > Goal and re-picked.
+ *
+ * Maps an onboarding goal id to the canonical DietGoal. Canonical ids pass
+ * through unchanged (defensive, in case a caller already has one). Anything
+ * else unrecognised returns null so the caller can choose to leave
+ * `users.goal` untouched rather than write a wrong value.
+ */
+const ONBOARDING_GOAL_MAP: Readonly<Record<string, DietGoal>> = {
+  lose_fat:          'weight_loss',
+  build_muscle:      'muscle',
+  improve_endurance: 'endurance',
+  general_health:    'general',
+};
+
+export function goalFromOnboarding(raw: string): DietGoal | null {
+  if ((DIET_GOALS as readonly string[]).includes(raw)) return raw as DietGoal;
+  return ONBOARDING_GOAL_MAP[raw] ?? null;
+}
+
 function num(v: unknown): number | undefined {
   return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
 }

@@ -181,3 +181,32 @@ test('custom/pinned budgets above the floor get no warning', async () => {
   assert.equal(budget.targetKcal, 1800);
   assert.equal(budget.lowEnergyWarning, null);
 });
+
+// ── goalFromOnboarding ───────────────────────────────────────────────────────
+// iOS onboarding's basics.goal ids -> canonical DietGoal (see the function's
+// doc comment for the bug this closes: onboarding never set users.goal).
+
+test('goalFromOnboarding maps all four onboarding ids to their canonical DietGoal', async () => {
+  const { goalFromOnboarding } = await dietBudgetPromise;
+
+  assert.equal(goalFromOnboarding('lose_fat'), 'weight_loss');
+  assert.equal(goalFromOnboarding('build_muscle'), 'muscle');
+  assert.equal(goalFromOnboarding('improve_endurance'), 'endurance');
+  assert.equal(goalFromOnboarding('general_health'), 'general');
+});
+
+test('goalFromOnboarding passes canonical DietGoal ids through unchanged', async () => {
+  const { goalFromOnboarding, DIET_GOALS } = await dietBudgetPromise;
+
+  for (const goal of DIET_GOALS) {
+    assert.equal(goalFromOnboarding(goal), goal);
+  }
+});
+
+test('goalFromOnboarding returns null for unrecognised input', async () => {
+  const { goalFromOnboarding } = await dietBudgetPromise;
+
+  assert.equal(goalFromOnboarding('bulk'), null);
+  assert.equal(goalFromOnboarding(''), null);
+  assert.equal(goalFromOnboarding('Lose Fat'), null); // case-sensitive — exact ids only
+});

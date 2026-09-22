@@ -14,6 +14,13 @@ import * as realSchema from '../../../db/schema';
  * users.unit_system via the lenient resolveUnitSystem normalize-on-write
  * (never a 400, even for a value no client should send), and that
  * core-profile.md's Identity section is untouched by units — still cm/kg.
+ *
+ * Also covers the basics.goal -> users.goal bug fix: onboarding used to write
+ * the raw iOS onboarding goal id (lose_fat | build_muscle | improve_endurance
+ * | general_health) only into the free-text core-profile and never set
+ * users.goal, so the diet budget (lib/brain/dietBudget.ts) silently defaulted
+ * a new "Lose fat" signup to the 'general' (maintenance) auto budget until
+ * the user separately re-picked in Profile > Goal.
  */
 
 const CORE_PROFILE_TEMPLATE = [
@@ -24,6 +31,11 @@ const CORE_PROFILE_TEMPLATE = [
   '- Sex: [to be filled]',
   '- Height: [to be filled]',
   '- Current weight: [to be filled] — last updated',
+  '',
+  '## Active Goals',
+  '- Primary: [to be filled]',
+  '- Secondary: [to be filled]',
+  '- Weekly training target: [to be filled]',
   '',
 ].join('\n');
 
@@ -63,7 +75,7 @@ mock.module('@/lib/memory', {
 
 const routePromise = import('./route');
 
-function basicsBody(units: string) {
+function basicsBody(units: string, goal = 'general') {
   return {
     basics: {
       name: 'Test User',
@@ -72,7 +84,7 @@ function basicsBody(units: string) {
       heightCm: 180,
       weightKg: 80,
       units,
-      goal: 'general',
+      goal,
     },
   };
 }
@@ -126,4 +138,88 @@ test('core-profile.md still gets cm/kg regardless of units', async () => {
   assert.ok(coreProfileWrite, 'expected a core-profile.md write');
   assert.match(coreProfileWrite!.content, /180 cm/);
   assert.match(coreProfileWrite!.content, /80 kg/);
+});
+
+// ── basics.goal -> users.goal ────────────────────────────────────────────────
+
+test('each iOS onboarding goal id maps to the canonical DietGoal on users.goal', async () => {
+  const cases: Array<[string, string]> = [
+    ['lose_fat', 'weight_loss'],
+    ['build_muscle', 'muscle'],
+    ['improve_endurance', 'endurance'],
+    ['general_health', 'general'],
+  ];
+
+  for (const [onboardingId, canonical] of cases) {
+    updateCalls.length = 0;
+    writtenFiles.length = 0;
+
+    const { POST } = await routePromise;
+    const res = await POST(postRequest(basicsBody('metric', onboardingId), { 'x-user-id': 'user-1' }));
+    assert.equal(res.status, 200);
+
+    const goalCalls = updateCalls.filter((c) => 'goal' in c);
+    assert.equal(goalCalls.length, 1, `expected exactly one users update carrying goal for ${onboardingId}`);
+    assert.equal(goalCalls[0].goal, canonical);
+  }
+});
+
+test('a canonical DietGoal id passed as basics.goal is written through unchanged', async () => {
+  updateCalls.length = 0;
+  writtenFiles.length = 0;
+
+  const { POST } = await routePromise;
+  const res = await POST(postRequest(basicsBody('metric', 'endurance'), { 'x-user-id': 'user-1' }));
+  assert.equal(res.status, 200);
+
+  const goalCalls = updateCalls.filter((c) => 'goal' in c);
+  assert.equal(goalCalls.length, 1);
+  assert.equal(goalCalls[0].goal, 'endurance');
+});
+
+test('an unrecognised basics.goal leaves users.goal untouched (omitted from the update)', async () => {
+  updateCalls.length = 0;
+  writtenFiles.length = 0;
+
+  const { POST } = await routePromise;
+  const res = await POST(postRequest(basicsBody('metric', 'bulk'), { 'x-user-id': 'user-1' }));
+  assert.equal(res.status, 200);
+
+  // The name/onboarded_at/unit_system update still fires. The route passes
+  // `goal: undefined` (not `null`) in that case — this fake captures the raw
+  // object handed to db.update().set() before drizzle's real dialect layer
+  // runs, and it's drizzle's mapUpdateSet (verified directly against
+  // node_modules/drizzle-orm/utils.cjs) that drops undefined-valued keys
+  // before building the SQL SET clause, so the `goal` column is left
+  // completely untouched at the database level — never written as NULL.
+  const nameUpdateCalls = updateCalls.filter((c) => 'name' in c);
+  assert.equal(nameUpdateCalls.length, 1);
+  assert.equal(nameUpdateCalls[0].goal, undefined, 'goal must not be set to a bogus value');
+});
+
+test('core-profile.md gets a human label for the goal, not the raw onboarding id', async () => {
+  updateCalls.length = 0;
+  writtenFiles.length = 0;
+
+  const { POST } = await routePromise;
+  const res = await POST(postRequest(basicsBody('metric', 'lose_fat'), { 'x-user-id': 'user-1' }));
+  assert.equal(res.status, 200);
+
+  const coreProfileWrite = writtenFiles.find((f) => f.filename === 'core-profile.md');
+  assert.ok(coreProfileWrite, 'expected a core-profile.md write');
+  assert.match(coreProfileWrite!.content, /- Primary: Lose fat/);
+  assert.doesNotMatch(coreProfileWrite!.content, /- Primary: lose_fat/);
+});
+
+test('core-profile.md falls back to the raw goal id when it has no known label', async () => {
+  updateCalls.length = 0;
+  writtenFiles.length = 0;
+
+  const { POST } = await routePromise;
+  const res = await POST(postRequest(basicsBody('metric', 'get_swole'), { 'x-user-id': 'user-1' }));
+  assert.equal(res.status, 200);
+
+  const coreProfileWrite = writtenFiles.find((f) => f.filename === 'core-profile.md');
+  assert.ok(coreProfileWrite, 'expected a core-profile.md write');
+  assert.match(coreProfileWrite!.content, /- Primary: get_swole/);
 });

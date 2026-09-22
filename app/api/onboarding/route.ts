@@ -30,6 +30,17 @@
  *   - Updates users.name (from basics.name), sets users.onboarded_at, and
  *     persists users.unit_system from basics.units (normalized, never 400s —
  *     see lib/units.ts resolveUnitSystem).
+ *   - Maps basics.goal (iOS onboarding's own ids — lose_fat | build_muscle |
+ *     improve_endurance | general_health) to the canonical DietGoal id and
+ *     persists it to users.goal via lib/brain/dietBudget.ts's
+ *     goalFromOnboarding, so the diet budget (GET /api/today, /api/diet-goal)
+ *     picks up the right goal immediately instead of defaulting to 'general'
+ *     until the user separately visits Profile > Goal. An unrecognised goal
+ *     id leaves users.goal untouched rather than writing a wrong value. No
+ *     separate budget recompute is needed: a freshly-onboarded user has no
+ *     pinned override yet (users.target_kcal is null), so the auto budget is
+ *     already derived live from users.goal on every read — there is no
+ *     stored auto-mode kcal to go stale.
  *
  * Response: { ok: true, onboarded: true }
  */
@@ -42,6 +53,7 @@ import { seedUserMemory, readMemoryFile, writeMemoryFile } from '@/lib/memory';
 import { readCoreProfile, writeCoreProfile } from '@/lib/coreProfileStore';
 import { resolveUnitSystem } from '@/lib/units';
 import { ensureHealthConstraintNodes } from '@/lib/brain/healthConstraints';
+import { goalFromOnboarding } from '@/lib/brain/dietBudget';
 
 export const dynamic = 'force-dynamic';
 
@@ -97,6 +109,23 @@ function asObject<T>(v: unknown): T {
 
 // ── core-profile.md template-fill ───────────────────────────────────────────
 
+// Human labels for the core-profile.md free-text "Primary" goal line — keyed
+// on both the raw onboarding ids (OnboardingFlowView.swift) and the
+// canonical DietGoal ids (GoalDetailView.swift / lib/brain/dietBudget.ts) so
+// this reads sensibly regardless of which shape basics.goal arrives in.
+// Anything unrecognised falls back to the raw id (see fillCoreProfile) rather
+// than dropping the text.
+const GOAL_LABELS: Readonly<Record<string, string>> = {
+  lose_fat:          'Lose fat',
+  build_muscle:      'Build muscle',
+  improve_endurance: 'Improve endurance',
+  general_health:    'General health',
+  weight_loss:       'Lose fat',
+  muscle:            'Build muscle',
+  endurance:         'Improve endurance',
+  general:           'General health',
+};
+
 function computeAge(dob: string): number | null {
   const d = new Date(dob);
   if (Number.isNaN(d.getTime())) return null;
@@ -141,7 +170,7 @@ function fillCoreProfile(template: string, basics: Basics, training: Training): 
     }
 
     if (section === 'Active Goals') {
-      if (/^- Primary:/.test(line)) return `- Primary: ${basics.goal}`;
+      if (/^- Primary:/.test(line)) return `- Primary: ${GOAL_LABELS[basics.goal] ?? basics.goal}`;
       if (/^- Secondary:/.test(line)) return '- Secondary: Not specified yet';
       if (/^- Weekly training target:/.test(line)) {
         return `- Weekly training target: ${training.frequency ?? 'Not specified yet'}`;
@@ -263,9 +292,21 @@ export async function POST(request: Request): Promise<NextResponse> {
   // required to be a non-empty string (isBasicsValid), so an older client
   // sending something unexpected (or a future third option) lands on the
   // 'metric' default instead of failing onboarding outright.
+  //
+  // users.goal is set in this same update when basics.goal maps to a known
+  // DietGoal (see goalFromOnboarding above and the route docstring). An
+  // unrecognised id is simply omitted from the `set()` payload — drizzle
+  // drops undefined keys, so the column is left exactly as it was rather
+  // than being cleared or written with a bogus value.
+  const mappedGoal = goalFromOnboarding(basics.goal);
   await db
     .update(schema.users)
-    .set({ name: basics.name, onboarded_at: new Date(), unit_system: resolveUnitSystem(basics.units) })
+    .set({
+      name: basics.name,
+      onboarded_at: new Date(),
+      unit_system: resolveUnitSystem(basics.units),
+      goal: mappedGoal ?? undefined,
+    })
     .where(eq(schema.users.id, userId));
 
   return NextResponse.json({ ok: true, onboarded: true });
