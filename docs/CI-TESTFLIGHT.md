@@ -138,3 +138,48 @@ release workflow deploys the worker.
   Apple still needs a few minutes before the build appears for testers.
 - Backend and app ship together by design. To decouple later, split the two
   jobs into separate workflows.
+
+---
+
+# Pull-request checks
+
+`.github/workflows/pr-checks.yml` is separate from the release workflow above
+— it runs on every pull request targeting `main` (and can be run manually via
+**Actions → PR Checks → Run workflow**) so nothing merges uncompiled. It never
+ships anything and **needs no repo secrets**.
+
+Jobs, each gated by `dorny/paths-filter` so an unrelated change (e.g.
+docs-only) skips the surface it didn't touch:
+
+1. **changes** — detects whether the PR touched `ios/**` and/or the backend
+   paths (same list `release.yml` uses: `app/**`, `lib/**`, `db/**`,
+   `scripts/**`, `supabase/**`, `public/**`, plus the config files, plus the
+   workflow file itself).
+2. **backend** (ubuntu, if backend changed) — `npm ci`, `npm run lint`,
+   `npm test`. No `DATABASE_URL` or other secret is needed; the test suite
+   uses in-memory fakes, not a live database.
+3. **ios** (macOS, if iOS changed) — `xcodegen generate` against a
+   `Secrets.swift` synthesized with a dummy token (never a real secret, and
+   no signing identity is configured), then builds the `Vital` scheme and
+   runs the `VitalTests` unit tests on a dynamically-selected iPhone
+   simulator (first available runtime ≥ iOS 26, matching
+   `project.yml`'s `deploymentTarget`) with `CODE_SIGNING_ALLOWED=NO`. The
+   `.xcresult` bundle is uploaded as a build artifact (7-day retention) on
+   every run, pass or fail, for debugging.
+4. **pr-checks** — a final `needs: [changes, backend, ios]`, `if: always()`
+   job that fails if any of those came back `failure`/`cancelled` and passes
+   if they succeeded or were skipped (path-filtered out). This is the one
+   check name that exists on every run regardless of which paths changed, so
+   it's the one to add under **Settings → Branches → Branch protection rules
+   → main → Require status checks to pass → `pr-checks`**. Add the
+   individual job names too only if you want a *required* iOS or backend
+   check even when that surface wasn't touched — normally you don't, since
+   they legitimately skip.
+
+**Known gap:** `npx tsc --noEmit` is not part of the `backend` job yet — as of
+this workflow's introduction it fails on `main` with 4 pre-existing type
+errors in test files (`lib/streakRepository.test.ts`,
+`lib/whoop/mapping.test.ts` ×2, `lib/whoop/sync.test.ts`), unrelated to any
+change this workflow ships with. Fix those first, then add a
+`npx tsc --noEmit` step to the `backend` job so the type-check stays green
+from the day it's turned on.

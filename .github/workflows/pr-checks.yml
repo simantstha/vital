@@ -1,0 +1,229 @@
+name: PR Checks
+
+# Required CI for pull requests targeting main: nothing merges uncompiled.
+# Runs the backend lint/test suite and an iOS build-and-test pass, gated by
+# which paths actually changed (mirrors the path-filter pattern in
+# release.yml). No secrets are required — the iOS job signs nothing and
+# never uploads anywhere; it just proves the app and its test target build
+# and the unit tests pass on a simulator.
+#
+# `pr-checks` (the last job below) is the one stable check name to mark as
+# required on main — see docs/CI-TESTFLIGHT.md.
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: pr-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    name: Detect changed areas
+    runs-on: ubuntu-latest
+    outputs:
+      # Empty (step skipped on workflow_dispatch, which has no PR diff to
+      # compare against) defaults to 'true' below — manual runs check everything.
+      ios: ${{ steps.filter.outputs.ios || 'true' }}
+      backend: ${{ steps.filter.outputs.backend || 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect changed areas
+        id: filter
+        if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            ios:
+              - 'ios/**'
+              - '.github/workflows/pr-checks.yml'
+            backend:
+              - 'app/**'
+              - 'lib/**'
+              - 'db/**'
+              - 'scripts/**'
+              - 'supabase/**'
+              - 'public/**'
+              - 'middleware.ts'
+              - 'next.config.ts'
+              - 'package.json'
+              - 'package-lock.json'
+              - 'Dockerfile'
+              - 'fly.toml'
+              - 'drizzle.config.ts'
+              - 'tsconfig.json'
+              - '.github/workflows/pr-checks.yml'
+
+  backend:
+    name: Backend — lint + test
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      # NOTE: `npx tsc --noEmit` is deliberately not run here yet. As of this
+      # workflow's introduction it fails on main with 4 pre-existing type
+      # errors (lib/streakRepository.test.ts, lib/whoop/mapping.test.ts x2,
+      # lib/whoop/sync.test.ts) — see docs/CI-TESTFLIGHT.md. Fix those first,
+      # then add a `npx tsc --noEmit` step here so this stays green on day one.
+
+      - name: Test backend
+        run: npm test
+
+  ios:
+    name: iOS — build + test
+    needs: changes
+    if: needs.changes.outputs.ios == 'true'
+    runs-on: macos-latest
+    # Safety net: build + test should take a few minutes; anything approaching
+    # this means a hang — fail fast instead of stalling (macOS runners bill
+    # at 10x the ubuntu rate).
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: ios
+    steps:
+      - uses: actions/checkout@v4
+
+      # The project targets a recent iOS SDK; pin here if a specific Xcode is
+      # needed to match local (project.yml declares deploymentTarget 26.0).
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      # Secrets.swift is gitignored. No real secret is needed to build or run
+      # unit tests — synthesize it from the template with a dummy value.
+      - name: Write Secrets.swift (dummy token, no secrets required)
+        run: |
+          mkdir -p Vital/Sources/Core
+          sed "s|REPLACE_WITH_API_SHARED_SECRET|dummy-pr-check-token|" \
+            Vital/Secrets.example.swift > Vital/Sources/Core/Secrets.swift
+
+      # `brew install xcodegen` costs ~1 min of 10x-billed macOS time; grab the
+      # prebuilt release binary directly instead (same as release.yml).
+      - name: Generate Xcode project (XcodeGen)
+        run: |
+          curl -fsSL -o /tmp/xcodegen.zip https://github.com/yonaskolb/XcodeGen/releases/latest/download/xcodegen.zip
+          unzip -q /tmp/xcodegen.zip -d /tmp
+          cd Vital && /tmp/xcodegen/bin/xcodegen generate
+
+      # Pick a booted-capable iPhone simulator whose runtime matches the
+      # project's deploymentTarget (26.0, per Vital/project.yml). Dynamic
+      # rather than hardcoded so this doesn't silently break — and fails
+      # loudly instead — when the runner's preinstalled runtimes change.
+      - name: Select an iOS 26+ iPhone simulator
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' >> "$GITHUB_ENV"
+          import json, re, subprocess, sys
+
+          raw = subprocess.check_output(
+              ["xcrun", "simctl", "list", "devices", "available", "-j"]
+          )
+          data = json.loads(raw)
+
+          candidates = []
+          for runtime, devices in data.get("devices", {}).items():
+              m = re.search(r"iOS[- ](\d+)[-.](\d+)", runtime)
+              if not m:
+                  continue
+              major, minor = int(m.group(1)), int(m.group(2))
+              if major < 26:
+                  continue
+              for d in devices:
+                  if d.get("isAvailable") and "iPhone" in d.get("name", ""):
+                      candidates.append((major, minor, d["name"], d["udid"]))
+
+          if not candidates:
+              print(
+                  "::error::No available iPhone simulator with an iOS >= 26 "
+                  "runtime was found on this runner. List what IS available "
+                  "with `xcrun simctl list runtimes` / `xcrun simctl list "
+                  "devices available` and either wait for GitHub's macos-latest "
+                  "image to ship an iOS 26 runtime, or pin a specific "
+                  "xcode-version in this workflow that bundles one.",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+
+          candidates.sort(key=lambda c: (c[0], c[1]))
+          major, minor, name, udid = candidates[0]
+          print(f"Selected simulator: {name} — iOS {major}.{minor} (UDID {udid})", file=sys.stderr)
+          print(f"SIM_UDID={udid}")
+          print(f"SIM_NAME={name}")
+          print(f"SIM_RUNTIME={major}.{minor}")
+          PY
+
+      - name: Build for testing & run unit tests
+        run: |
+          set -o pipefail
+          mkdir -p build
+          echo "Testing on: $SIM_NAME (iOS $SIM_RUNTIME), UDID $SIM_UDID"
+          if command -v xcbeautify >/dev/null 2>&1; then
+            xcodebuild test \
+              -project Vital/Vital.xcodeproj \
+              -scheme Vital \
+              -destination "id=$SIM_UDID" \
+              -resultBundlePath build/TestResults.xcresult \
+              CODE_SIGNING_ALLOWED=NO \
+              | xcbeautify
+          else
+            xcodebuild test \
+              -project Vital/Vital.xcodeproj \
+              -scheme Vital \
+              -destination "id=$SIM_UDID" \
+              -resultBundlePath build/TestResults.xcresult \
+              CODE_SIGNING_ALLOWED=NO
+          fi
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-test-results
+          path: ios/build/TestResults.xcresult
+          retention-days: 7
+
+  # Single stable check name to mark as required on main — the jobs above
+  # come and go (skipped) based on which paths changed, which makes them
+  # unreliable branch-protection check names by themselves.
+  pr-checks:
+    name: PR checks
+    needs: [changes, backend, ios]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify required jobs succeeded
+        run: |
+          set -e
+          failed=0
+          for result in "${{ needs.changes.result }}" "${{ needs.backend.result }}" "${{ needs.ios.result }}"; do
+            if [ "$result" = "failure" ] || [ "$result" = "cancelled" ]; then
+              failed=1
+            fi
+          done
+          if [ "$failed" -eq 1 ]; then
+            echo "One or more required jobs failed or were cancelled:"
+            echo "  changes=${{ needs.changes.result }} backend=${{ needs.backend.result }} ios=${{ needs.ios.result }}"
+            exit 1
+          fi
+          echo "All required jobs passed (or were skipped): changes=${{ needs.changes.result }} backend=${{ needs.backend.result }} ios=${{ needs.ios.result }}"
