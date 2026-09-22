@@ -2,22 +2,33 @@
 import Foundation
 
 /// Intercepts every HTTP(S) request to the app's own backend while a fixture
-/// scenario is active and answers from `FixtureData` instead. Registered
-/// process-wide via `URLProtocol.registerClass` (from `AppDelegate`), which is
-/// what lets it cover every session in the app — `APIClient`'s dedicated
-/// session, the ad hoc `URLSession.shared` calls in
-/// `Core/ProactiveNotifications.swift`, and any other `.default`-configuration
-/// session — without threading a custom session through every call site.
+/// scenario is active and answers from `FixtureData` instead.
+///
+/// Registered two ways, both needed: process-wide via
+/// `URLProtocol.registerClass` (from `AppDelegate`) — which reliably covers
+/// `URLSession.shared` (the ad hoc calls in `Core/ProactiveNotifications
+/// .swift`) — and explicitly via `FixtureMode.apply(to:)` on every
+/// `URLSessionConfiguration` the app builds its own `URLSession` from
+/// (`APIClient`'s dedicated session). The process-wide registration alone
+/// does **not** reliably reach a custom-configured session (verified: it was
+/// silently missed, sending every APIClient request out over real — and in
+/// CI, absent — networking), which is why every such call site must also call
+/// `FixtureMode.apply(to:)` right after building its `URLSessionConfiguration`.
 ///
 /// A request to any other host (e.g. WHOOP's OAuth authorize page, reached
 /// only via an explicit user action the screenshot harness never exercises)
 /// is declined in `canInit` and falls through to real networking — harmless
 /// since fixture scenarios never trigger one.
 final class FixtureURLProtocol: URLProtocol {
+    /// `AppConfig.apiBaseURL`'s host + port, computed once. Matching on both
+    /// (not host alone) avoids accidentally intercepting some other
+    /// `localhost`-hosted service running on a different port.
+    private static let backendURL = URL(string: AppConfig.apiBaseURL)
+
     override class func canInit(with request: URLRequest) -> Bool {
         guard FixtureMode.isActive else { return false }
-        guard let host = request.url?.host else { return false }
-        return host == URL(string: AppConfig.apiBaseURL)?.host
+        guard let url = request.url, let host = url.host, let backendURL else { return false }
+        return host == backendURL.host && url.port == backendURL.port
     }
 
     override class func canonicalRequest(for request: URLRequest) -> URLRequest {

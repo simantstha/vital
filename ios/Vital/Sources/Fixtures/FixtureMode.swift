@@ -57,5 +57,21 @@ enum FixtureMode {
     /// in fixture mode is caught by `FixtureURLProtocol` before it reaches
     /// the network.
     static let fakeSessionToken = "vital-fixture-session-token"
+
+    /// Registers `FixtureURLProtocol` on a specific `URLSessionConfiguration`.
+    ///
+    /// `URLProtocol.registerClass` (called from `AppDelegate`) is documented
+    /// to affect `NSURLConnection` and sessions built from the *default*
+    /// configuration — in practice that reliably covers `URLSession.shared`,
+    /// but a `URLSession(configuration:)` built from its own
+    /// `URLSessionConfiguration.default` copy (as `APIClient` does, so it can
+    /// attach a redirect-guarding delegate) does **not** reliably pick up the
+    /// process-wide registration. Every call site that constructs its own
+    /// `URLSessionConfiguration` must call this immediately after creating it
+    /// — a no-op outside fixture mode, and compiled out of Release entirely.
+    static func apply(to config: URLSessionConfiguration) {
+        guard isActive else { return }
+        config.protocolClasses = [FixtureURLProtocol.self] + (config.protocolClasses ?? [])
+    }
 }
 #endif
