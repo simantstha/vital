@@ -148,3 +148,50 @@ test('estimateTDEE honors an explicit activityMultiplier and defaults to 1.3 whe
   assert.equal(estimateTDEE({ ...bio, activityMultiplier: 1.4 }, []), Math.round(1648.75 * 1.4));
   assert.equal(estimateTDEE({ ...bio, activityMultiplier: 1.2 }, []), Math.round(1648.75 * 1.2));
 });
+
+// ── windowDays: multi-day workout windows average, single-day sums ─────────
+
+test('windowDays defaults to 1: a single day\'s workouts add their full kcal to that day\'s TDEE (unchanged single-day semantics)', async () => {
+  const { estimateTDEE } = await loadTools();
+  const bio = { weightKg: 80, heightCm: 180, age: 35, biologicalSex: 'male' as const };
+  const base = estimateTDEE(bio, []);
+  const withOneWorkout = estimateTDEE(bio, [{ type: 'run', calories: 400 }]);
+  assert.equal(withOneWorkout - base, 400, 'a single day\'s calculate_macros-style call must add the workout kcal in full');
+});
+
+test('windowDays=7 averages a week of workouts into a per-day figure instead of summing them onto one day', async () => {
+  const { estimateTDEE } = await loadTools();
+  const bio = { weightKg: 80, heightCm: 180, age: 35, biologicalSex: 'male' as const };
+  const base = estimateTDEE(bio, []);
+
+  // 4 workouts x 400 kcal across a trailing-7-day window (dietBudget.ts's
+  // computeAutoBudget style) — the exact scenario from the bug report:
+  // summing all 1,600 kcal onto one day's TDEE erased the deficit.
+  const fourWorkouts = [
+    { type: 'run', calories: 400 },
+    { type: 'run', calories: 400 },
+    { type: 'run', calories: 400 },
+    { type: 'run', calories: 400 },
+  ];
+
+  const summedWrongly = estimateTDEE(bio, fourWorkouts, 1); // what the old code effectively did
+  const averagedCorrectly = estimateTDEE(bio, fourWorkouts, 7);
+
+  assert.equal(summedWrongly - base, 1600, 'sanity check: windowDays=1 still sums the full 1,600 kcal');
+  // 1600 / 7 ≈ 228.57 kcal/day average — must land close to that, and well
+  // under the full 1,600 kcal the old (unfixed) code would have added.
+  const averagedDelta = averagedCorrectly - base;
+  assert.ok(
+    averagedDelta >= 227 && averagedDelta <= 230,
+    `expected the averaged delta to be ~228.6 kcal/day, got ${averagedDelta}`,
+  );
+  assert.ok(averagedDelta < summedWrongly - base, 'averaged windowDays=7 result must be well under the naive sum');
+});
+
+test('windowDays clamps below 1 to 1 rather than dividing by zero or a negative number', async () => {
+  const { estimateTDEE } = await loadTools();
+  const bio = { weightKg: 70, heightCm: 175, age: 30, biologicalSex: 'male' as const };
+  const workouts = [{ type: 'run', calories: 300 }];
+  assert.equal(estimateTDEE(bio, workouts, 0), estimateTDEE(bio, workouts, 1));
+  assert.equal(estimateTDEE(bio, workouts, -3), estimateTDEE(bio, workouts, 1));
+});

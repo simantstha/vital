@@ -20,13 +20,14 @@ import {
   estimateTDEE,
   macrosForGoal,
   normalizeBiologicalSex,
-  queryMetricPoints,
   queryWorkouts,
   type WorkoutInput,
 } from '@/lib/brain/tools';
 import { readMemoryFile } from '@/lib/memory';
 import { readCoreProfile } from '@/lib/coreProfileStore';
 import { parseProfileDetails } from '@/lib/profileDetails';
+import { getWeightReadings } from '@/lib/weightRepository';
+import { computeWeightTrend } from '@/lib/weightTrend';
 
 export type DietGoal = 'weight_loss' | 'muscle' | 'endurance' | 'general';
 export const DIET_GOALS: readonly DietGoal[] = ['weight_loss', 'muscle', 'endurance', 'general'];
@@ -143,20 +144,30 @@ export interface DietBudget {
    * Present when targetKcal is at/under the sex-aware low-energy-availability
    * threshold (see LOW_ENERGY_KCAL_FEMALE/MALE). Optional and additive so
    * existing iOS Codable clients that don't know this field are unaffected.
-   * For 'auto' budgets, appliedFloor === true means we raised targetKcal to
-   * the threshold rather than serve a lower deficit. For 'custom' (pinned)
-   * budgets we never floor — appliedFloor is always false and the warning is
-   * informational only.
+   * appliedFloor === true means targetKcal was raised to the threshold
+   * rather than serving a lower number: always true for 'auto' budgets that
+   * hit the floor, and true for a 'custom' budget written by the app editor
+   * (PATCH /api/diet-goal) below the floor — see applyDietBudgetUpdate's
+   * DietBudgetUpdateOrigin. A 'custom' budget written by the coach can never
+   * land below the floor at all (rejected outright), and a pre-existing
+   * custom pin that's below the floor (set before this floor existed, or
+   * read straight from resolveDietBudget without a write) reports
+   * appliedFloor: false — informational only, value preserved.
    */
   lowEnergyWarning?: { thresholdKcal: number; appliedFloor: boolean; message: string } | null;
 }
 
-/** Sex-aware low-energy-availability threshold — unknown sex uses the lower (safer) value. */
-function lowEnergyThresholdKcal(biologicalSex: string | null): number {
+/**
+ * Sex-aware low-energy-availability threshold — unknown sex uses the lower
+ * (safer) value. Exported so tools.ts's calculate_macros can floor its own
+ * output using the same threshold (see that tool's handler) without
+ * duplicating the sex-aware logic.
+ */
+export function lowEnergyThresholdKcal(biologicalSex: string | null): number {
   return normalizeBiologicalSex(biologicalSex) === 'male' ? LOW_ENERGY_KCAL_MALE : LOW_ENERGY_KCAL_FEMALE;
 }
 
-function lowEnergyMessage(thresholdKcal: number, appliedFloor: boolean): string {
+export function lowEnergyMessage(thresholdKcal: number, appliedFloor: boolean): string {
   return appliedFloor
     ? `This is below the ~${thresholdKcal.toLocaleString()} kcal a day that's generally considered a safe floor, so we've eased the deficit rather than cut further.`
     : `This is below the ~${thresholdKcal.toLocaleString()} kcal a day that's generally considered a safe floor. Since you've set this manually, we've kept your number but wanted to flag it.`;
@@ -171,14 +182,47 @@ export interface DietGoalRow {
   fat_target_g:     number | null;
 }
 
+/** Number of trailing days of workouts computeAutoBudget looks at. */
+const WORKOUT_WINDOW_DAYS = 7;
+
+/**
+ * Weight used for budget math (auto TDEE + the coach's custom-kcal macro
+ * split): prefers the smoothed EWMA trend weight once it's established (>= 3
+ * weigh-in days spanning >= 5 calendar days — lib/weightTrend.ts), else the
+ * single latest reading from ANY source (manual, coach, or HealthKit), else
+ * DEFAULT_WEIGHT_KG. This merges manual/coach weigh-ins (lib/weightRepository.ts's
+ * getWeightReadings) instead of the old `queryMetricPoints(userId,
+ * 'body_mass_kg', ...)`, which only ever saw HealthKit readings — someone
+ * who logged a manual/coach weigh-in and never synced HealthKit body mass
+ * had their budget computed off DEFAULT_WEIGHT_KG (75kg) or a stale
+ * HealthKit value forever.
+ */
+export async function resolveBudgetWeightKg(userId: string): Promise<number> {
+  // timezone is a no-op inside getWeightReadings (HealthKit rows are already
+  // day-keyed by ingest, manual rows carry their own localDay) — see that
+  // function's doc comment — so it's safe to pass null here rather than
+  // fetch the user's row just for this.
+  const readings = await getWeightReadings(userId, 90, null);
+  if (readings.length === 0) return DEFAULT_WEIGHT_KG;
+
+  const trend = computeWeightTrend(readings);
+  if (trend.established && trend.days.length > 0) {
+    return trend.days[trend.days.length - 1].trendKg;
+  }
+
+  // Not established yet — use the single latest raw reading by measuredAt,
+  // regardless of source.
+  const latest = [...readings].sort((a, b) => a.measuredAt.localeCompare(b.measuredAt)).at(-1)!;
+  return latest.valueKg;
+}
+
 /** Auto budget from goal + latest known weight + last 7 days of workouts. */
 export async function computeAutoBudget(userId: string, goal: DietGoal): Promise<DietBudget> {
-  const [weightPts, workoutRows] = await Promise.all([
-    queryMetricPoints(userId, 'body_mass_kg', 90),
-    queryWorkouts(userId, 7),
+  const [weightKg, workoutRows] = await Promise.all([
+    resolveBudgetWeightKg(userId),
+    queryWorkouts(userId, WORKOUT_WINDOW_DAYS),
   ]);
 
-  const weightKg = weightPts.at(-1)?.value ?? DEFAULT_WEIGHT_KG;
   const profile = parseProfileDetails(await readCoreProfile(userId));
 
   // training-history.json's `frequency` may be missing, malformed, a number
@@ -202,13 +246,18 @@ export async function computeAutoBudget(userId: string, goal: DietGoal): Promise
     distanceKm:  num(w.distance_m) != null ? num(w.distance_m)! / 1000 : num(w.distanceKm),
   }));
 
+  // workouts spans WORKOUT_WINDOW_DAYS (7) trailing days, not a single day —
+  // estimateTDEE must average their kcal across that window rather than sum
+  // them onto one day's TDEE (see its doc comment for the bug this fixes:
+  // 4x/week workouts at 400 kcal each used to add all 1,600 kcal to one
+  // day's target, erasing the deficit).
   const tdee = estimateTDEE({
     weightKg,
     heightCm:      profile.heightCm,
     age:           profile.age,
     biologicalSex: profile.biologicalSex,
     activityMultiplier,
-  }, workouts);
+  }, workouts, WORKOUT_WINDOW_DAYS);
   const { targetCal, c, p, f } = macrosForGoal(goal, weightKg, tdee);
 
   // Low-energy-availability floor: an AUTO budget never prescribes a target
@@ -279,6 +328,27 @@ export interface DietBudgetUpdateBody {
 }
 
 /**
+ * Who initiated a custom-budget write — governs how a below-the-safe-floor
+ * targetKcal is handled (see the 'custom' branch below):
+ *  - 'coach':  the update_diet_budget tool (lib/brain/tools.ts). REJECTED
+ *              outright with a clear Error the model can relay in chat —
+ *              the coach should never silently pin someone to a risky
+ *              number on their behalf.
+ *  - 'app':    PATCH /api/diet-goal (the iOS Daily Budget editor). The
+ *              shipped iOS client (DietBudgetViewModel.swift) saves
+ *              optimistically and only shows a post-save confirm banner —
+ *              it has no retry-with-acknowledgment path, so rejecting the
+ *              write here would just look like "Couldn't save" with no way
+ *              forward. Instead we CLAMP to the floor and return an
+ *              appliedFloor:true warning, which the existing banner already
+ *              knows how to render.
+ * Defaults to 'app' (the more permissive, back-compatible behavior) so any
+ * caller that forgets to pass this explicitly doesn't start hard-rejecting
+ * writes.
+ */
+export type DietBudgetUpdateOrigin = 'coach' | 'app';
+
+/**
  * Validate + write a goal/override change to `users`, then resolve the new
  * effective budget. Throws a plain Error with a user-facing message on any
  * validation failure — callers map that to an HTTP status ('User not found.'
@@ -287,11 +357,17 @@ export interface DietBudgetUpdateBody {
 export async function applyDietBudgetUpdate(
   userId: string,
   body: DietBudgetUpdateBody,
+  origin: DietBudgetUpdateOrigin = 'app',
 ): Promise<{ current: DietBudget; auto: DietBudget }> {
   const [user] = await db.select().from(schema.users).where(eq(schema.users.id, userId)).limit(1);
   if (!user) throw new Error('User not found.');
 
   const update: Partial<typeof schema.users.$inferInsert> = {};
+  // Set when the 'custom' branch below clamps a below-floor targetKcal for
+  // the app-editor path — attached to `current.lowEnergyWarning` after the
+  // write, since resolveDietBudget() has no way to know we just floored it
+  // (the stored target_kcal is already at/above the threshold by then).
+  let appliedFloorWarning: { thresholdKcal: number; message: string } | null = null;
 
   // ── goal ──────────────────────────────────────────────────────────────────
   if (body.goal !== undefined) {
@@ -316,19 +392,45 @@ export async function applyDietBudgetUpdate(
       throw new Error(`targetKcal must be between ${KCAL_MIN} and ${KCAL_MAX}.`);
     }
 
+    // Low-energy-availability floor (see the module header for why). Custom
+    // budgets used to accept anything with only an informational warning —
+    // now a coach-initiated write below the floor is rejected outright, and
+    // an app-editor write is clamped up to the floor. See DietBudgetUpdateOrigin.
+    const profile = parseProfileDetails(await readCoreProfile(userId));
+    const thresholdKcal = lowEnergyThresholdKcal(profile.biologicalSex);
+    let kcalToStore = Math.round(kcal);
+    let flooredKcal = false;
+
+    if (kcalToStore < thresholdKcal) {
+      if (origin === 'coach') {
+        throw new Error(
+          `I can't set a target below ${thresholdKcal.toLocaleString()} kcal/day — that's under the ` +
+          `safe low-energy floor for this profile. Let's pick a number at or above that.`,
+        );
+      }
+      kcalToStore = thresholdKcal;
+      flooredKcal = true;
+      appliedFloorWarning = { thresholdKcal, message: lowEnergyMessage(thresholdKcal, true) };
+    }
+
     const protein = num(body.protein);
     const carbs   = num(body.carbs);
     const fat     = num(body.fat);
 
-    // Explicit macros (editor path) — use verbatim, no re-derivation. Macros
-    // omitted (coach path) — derive from the goal + latest known weight.
+    // Explicit macros (editor path) — use verbatim, no re-derivation, UNLESS
+    // we just floored the kcal target: the editor's macros were computed
+    // against the original (below-floor) number, so re-derive them off the
+    // floored kcal instead to keep protein/carb/fat internally consistent
+    // with the stored target_kcal. Macros omitted entirely (coach path) —
+    // always derive from the goal + budget weight (merged manual/HealthKit
+    // readings, see resolveBudgetWeightKg).
     const macros =
-      protein != null && carbs != null && fat != null
+      !flooredKcal && protein != null && carbs != null && fat != null
         ? { protein, carbs, fat }
         : splitMacrosForKcal(
             normalizeGoal(update.goal ?? user.goal),
-            (await queryMetricPoints(userId, 'body_mass_kg', 90)).at(-1)?.value ?? DEFAULT_WEIGHT_KG,
-            Math.round(kcal),
+            await resolveBudgetWeightKg(userId),
+            kcalToStore,
           );
 
     for (const [label, g] of [
@@ -341,7 +443,7 @@ export async function applyDietBudgetUpdate(
       }
     }
 
-    update.target_kcal = Math.round(kcal);
+    update.target_kcal = kcalToStore;
     update.protein_target_g = Math.round(macros.protein);
     update.carbs_target_g = Math.round(macros.carbs);
     update.fat_target_g = Math.round(macros.fat);
@@ -360,6 +462,9 @@ export async function applyDietBudgetUpdate(
     .returning();
 
   const current = await resolveDietBudget(updated, userId);
+  if (appliedFloorWarning) {
+    current.lowEnergyWarning = { ...appliedFloorWarning, appliedFloor: true };
+  }
   const auto = current.mode === 'auto' ? current : await computeAutoBudget(userId, current.goal);
   return { current, auto };
 }
