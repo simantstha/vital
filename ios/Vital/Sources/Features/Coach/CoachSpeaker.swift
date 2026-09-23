@@ -30,6 +30,16 @@ final class CoachSpeaker: NSObject, ObservableObject {
     var onPlaybackStart: (() -> Void)?
     private var firedPlaybackStart = false
 
+    /// Post-V3 review fix: `CoachViewModel` sets this to
+    /// `{ [weak self] in self?.voiceController.isRecording ?? false }` so
+    /// `deactivateSession()` can tell whether a *new* recording has already
+    /// started on the shared `VoiceAudioSession` by the time this turn's
+    /// playback finishes (e.g. the user re-holds the mic the instant a
+    /// reply stops speaking). Deactivating out from under that would kill
+    /// the mic mid-turn. Nil (never wired) is treated as "not recording" —
+    /// standalone `CoachSpeaker` usage/tests keep today's behavior.
+    var isRecordingProvider: (() -> Bool)?
+
     // MARK: - Queue item
 
     /// One sentence's worth of speech: the plain (markdown-stripped) text and
@@ -226,10 +236,8 @@ final class CoachSpeaker: NSObject, ObservableObject {
     private func activateSession() {
         isSessionActive = true
         firedPlaybackStart = false
-        let session = AVAudioSession.sharedInstance()
         do {
-            try session.setCategory(.playback, options: .duckOthers)
-            try session.setActive(true)
+            try VoiceAudioSession.activate()
         } catch {
             // Non-fatal — playback still attempts to proceed through
             // whatever session state is currently active.
@@ -239,8 +247,13 @@ final class CoachSpeaker: NSObject, ObservableObject {
     private func deactivateSession() {
         guard isSessionActive else { return }
         isSessionActive = false
-        let session = AVAudioSession.sharedInstance()
-        try? session.setActive(false, options: .notifyOthersOnDeactivation)
+        // A recording that started while this turn's audio was still
+        // finishing owns the shared session now — its own eventual ending
+        // (`CoachVoiceController.cancel()`/`resetToIdleAfterEmptyTurn()`,
+        // or a future spoken reply's own `deactivateSession()`) is
+        // responsible for deactivating, not this stale playback session.
+        guard isRecordingProvider?() != true else { return }
+        VoiceAudioSession.deactivate()
     }
 
     // MARK: - Voice selection (fallback path only)
