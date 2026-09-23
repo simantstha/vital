@@ -7,37 +7,42 @@ import UIKit
 /// `docs/redesign-v3-plan.md`). Tap to start listening: a pulse ring grows
 /// around the button, a full-screen lime edge-glow overlay appears, and the
 /// in-progress transcript is shown live as a caption. Tap again (or let one
-/// of `SpeechTranscriber`'s watchdogs auto-stop) to end the turn: the final
-/// transcript is uploaded to the cloud STT proxy (falling back to Apple's
-/// on-device preview if that fails/returns empty — same rule as
-/// `CoachViewModel.finishVoiceInput`) and handed to
-/// `CoachViewModel.sendExternalVoiceTranscript`, which runs it through the
-/// exact same send/stream/speak pipeline a Coach-tab voice turn uses.
+/// of `SpeechTranscriber`'s watchdogs auto-stop) to end the turn.
 ///
-/// Owns its own `SpeechTranscriber` instance rather than reusing
-/// `coachVM.transcriber` — a Today voice turn should never contend with (or
-/// be silently cancelled by) an in-progress recording started from the Coach
-/// tab's own mic button, and vice versa. `coachVM` is still the single
-/// shared instance from `RootTabView`, so both entry points funnel into the
-/// same conversation thread and TTS speaker regardless of which mic recorded.
+/// Drives `coachVM.voiceController` — the same shared record→(cloud
+/// STT)→final-transcript pipeline the Coach tab's own mic button uses (spec
+/// `ux-spec-v4` §3.2, delivery slice V2). A recording started here is the
+/// same recording the Coach tab sees, and vice versa: only one can be live
+/// at a time, since they're the same controller. The controller's
+/// `onFinalTranscript` hook (owned by `CoachViewModel`) already sends every
+/// completed turn through the normal chat pipeline — this view only needs
+/// to know when *its own* turn was the one that landed, so it can fire
+/// `onSent()` (toast + switch to the Coach tab). It does that by capturing
+/// `voiceController.currentTurnID` when it starts a recording and watching
+/// `voiceController.lastDeliveredTurnID` for a match.
 struct VoiceFABView: View {
     @ObservedObject var coachVM: CoachViewModel
 
-    /// Fired once the transcript has been handed to
-    /// `coachVM.sendExternalVoiceTranscript` — the caller shows the "Sent to
-    /// your coach" toast and switches to the Coach tab.
+    /// Fired once this FAB's own transcript has been sent through
+    /// `coachVM` — the caller shows the "Sent to your coach" toast and
+    /// switches to the Coach tab.
     var onSent: () -> Void
 
-    @StateObject private var transcriber = SpeechTranscriber()
-    @State private var isUploading = false
-    @State private var isVoiceTurnActive = false
+    @ObservedObject private var voice: CoachVoiceController
+    @State private var myTurnID: UUID? = nil
     @State private var showDeniedAlert = false
 
     private let fabSize: CGFloat = 60
 
+    init(coachVM: CoachViewModel, onSent: @escaping () -> Void) {
+        self.coachVM = coachVM
+        self.onSent = onSent
+        self._voice = ObservedObject(wrappedValue: coachVM.voiceController)
+    }
+
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
-            if transcriber.isRecording {
+            if voice.isRecording {
                 edgeGlow
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .ignoresSafeArea()
@@ -52,16 +57,16 @@ struct VoiceFABView: View {
             fab
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
-        .animation(Theme.Motion.quick, value: transcriber.isRecording)
-        .onChange(of: transcriber.isRecording) { _, isRecording in
-            guard !isRecording, isVoiceTurnActive else { return }
-            isVoiceTurnActive = false
-            finishAndSend()
+        .animation(Theme.Motion.quick, value: voice.isRecording)
+        .onChange(of: voice.lastDeliveredTurnID) { _, delivered in
+            guard let delivered, delivered == myTurnID else { return }
+            myTurnID = nil
+            onSent()
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
             // Picks up a permission grant made in Settings without requiring
             // an app relaunch, so the FAB "stays usable to retry" per spec.
-            transcriber.refreshPermissionState()
+            voice.refreshPermissionState()
         }
         .alert("Microphone access needed", isPresented: $showDeniedAlert) {
             Button("Settings") {
@@ -80,7 +85,7 @@ struct VoiceFABView: View {
     private var fab: some View {
         Button(action: handleTap) {
             ZStack {
-                if transcriber.isRecording {
+                if voice.isRecording {
                     PulseRing(diameter: fabSize)
                 }
 
@@ -89,19 +94,19 @@ struct VoiceFABView: View {
                     .frame(width: fabSize, height: fabSize)
                     .shadow(color: .black.opacity(0.22), radius: 14, x: 0, y: 8)
 
-                if isUploading {
+                if voice.state == .transcribing {
                     ProgressView()
                         .tint(Theme.Colors.onAccent)
                 } else {
-                    Image(systemName: transcriber.isRecording ? "stop.fill" : "mic.fill")
+                    Image(systemName: voice.isRecording ? "stop.fill" : "mic.fill")
                         .font(.system(size: 22, weight: .semibold))
                         .foregroundStyle(Theme.Colors.onAccent)
                 }
             }
         }
         .buttonStyle(.plain)
-        .disabled(isUploading || (coachVM.isStreaming && !transcriber.isRecording))
-        .opacity(coachVM.isStreaming && !transcriber.isRecording ? 0.5 : 1.0)
+        .disabled(voice.state == .transcribing || (coachVM.isStreaming && !voice.isRecording))
+        .opacity(coachVM.isStreaming && !voice.isRecording ? 0.5 : 1.0)
         .padding(.trailing, Theme.Spacing.xl)
         .padding(.bottom, Theme.Spacing.xxxl)
     }
@@ -116,7 +121,7 @@ struct VoiceFABView: View {
     }
 
     private var captionOverlay: some View {
-        Text(transcriber.transcribedText.isEmpty ? "Listening…" : transcriber.transcribedText)
+        Text(voice.partialTranscript.isEmpty ? "Listening…" : voice.partialTranscript)
             .font(Theme.Typography.bodyMedium)
             .fontWeight(.medium)
             .foregroundStyle(Theme.Colors.onAccent)
@@ -135,58 +140,24 @@ struct VoiceFABView: View {
     // MARK: - Actions
 
     private func handleTap() {
-        switch transcriber.permissionState {
+        switch voice.permissionState {
         case .authorized:
-            if transcriber.isRecording {
-                transcriber.stop()
+            if voice.isRecording {
+                voice.stopRecording()
             } else {
-                guard !isUploading, !coachVM.isStreaming else { return }
-                isVoiceTurnActive = true
-                transcriber.start()
+                guard voice.state != .transcribing, !coachVM.isStreaming else { return }
+                voice.startRecording()
+                myTurnID = voice.currentTurnID
             }
         case .notDetermined:
             Task {
-                await transcriber.requestPermissions()
-                if transcriber.permissionState != .authorized {
+                await voice.requestPermissions()
+                if voice.permissionState != .authorized {
                     showDeniedAlert = true
                 }
             }
         case .denied:
             showDeniedAlert = true
-        }
-    }
-
-    /// Mirrors `CoachViewModel.finishVoiceInput`'s upload-then-fallback rule
-    /// for the one Today-specific difference: instead of populating an
-    /// on-screen text field, the resolved transcript is handed straight to
-    /// `sendExternalVoiceTranscript` and `onSent()` fires so the caller can
-    /// toast + switch tabs.
-    private func finishAndSend() {
-        let appleTranscript = transcriber.transcribedText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let recordingURL = transcriber.recordingURL
-        guard !appleTranscript.isEmpty || recordingURL != nil else { return }
-
-        isUploading = true
-        Task {
-            defer {
-                isUploading = false
-                transcriber.discardRecording()
-            }
-
-            var finalText = appleTranscript
-            if let recordingURL,
-               let cloudText = await APIClient.shared.uploadSTTAudio(fileURL: recordingURL),
-               !cloudText.isEmpty {
-                finalText = cloudText
-            }
-
-            guard !Task.isCancelled else { return }
-
-            let trimmed = finalText.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { return }
-
-            coachVM.sendExternalVoiceTranscript(trimmed)
-            onSent()
         }
     }
 }

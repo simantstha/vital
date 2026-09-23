@@ -220,10 +220,13 @@ final class CoachViewModel: ObservableObject {
     /// otherwise deep-compare the whole growing transcript on every token.
     @Published private(set) var revealVersion: Int = 0
 
-    /// True from the moment recording stops until the cloud STT upload (or
-    /// its fallback to the Apple transcript) has resolved and been handed
-    /// off to `send()`.
-    @Published var isTranscribing: Bool = false
+    /// Whether a voice turn is anywhere between "mic tapped" and "handed to
+    /// `send()`" — recording, transcribing, or the transient hand-off — used
+    /// to gate concurrent sends (typed or voice) against a voice turn still
+    /// in flight. Views read `voiceController.state` directly for anything
+    /// state-shaped (spec §4's "views observe the controller directly"
+    /// note); this is app-level busy logic, not UI state.
+    private var isVoiceTurnActive: Bool { voiceController.state != .idle }
 
     /// True while the fresh opener is being fetched (before any rows exist), so
     /// the view can show the typing indicator during load.
@@ -248,7 +251,6 @@ final class CoachViewModel: ObservableObject {
     private var actionTask: Task<Void, Never>? = nil
     private var hasRestoredConversation = false
     private var lastActivityAt: Date? = nil
-    private var transcriptionTask: Task<Void, Never>? = nil
 
     // Server timestamps come from Date.toISOString(), which includes
     // fractional seconds — a default ISO8601DateFormatter can't parse those.
@@ -298,31 +300,32 @@ final class CoachViewModel: ObservableObject {
 
     // MARK: - Voice
 
-    /// Tap-to-talk transcription and text-to-speech. Owned here (not by the
-    /// view) so a stream survives view identity changes, and so `send()` can
-    /// reach into the speaker directly.
-    let transcriber = SpeechTranscriber()
+    /// The single record→(cloud STT)→final-transcript pipeline shared by the
+    /// Coach tab's mic and Today's voice FAB (`ux-spec-v4` §3.2, delivery
+    /// slice V2). `CoachViewModel` is itself the app's one shared
+    /// voice-conversation owner (see `RootTabView`), so owning the
+    /// controller here — rather than each mic UI owning its own — is what
+    /// makes a recording started from either entry point visible from both.
+    let voiceController = CoachVoiceController()
+
+    /// Text-to-speech for streamed replies. Owned here (not by the view) so
+    /// a stream survives view identity changes, and so `send()` can reach
+    /// into the speaker directly.
     let speaker = CoachSpeaker()
 
     private var cancellables = Set<AnyCancellable>()
-
-    /// True from the moment the mic is tapped until the resulting transcript
-    /// has been handed off to `send()`. Guards the transcript-mirroring and
-    /// stop→send bindings below.
-    private var isVoiceInputActive = false
 
     /// Set right before a voice-originated `send()` call and consumed at the
     /// top of `send()`. Determines whether the reply is spoken aloud as it
     /// streams in — voice-in implies voice-out, typed messages stay silent.
     private var pendingSentByVoice = false
 
-    /// Latency instrumentation for the in-flight voice turn (spec §10 V1),
-    /// created fresh in `toggleVoiceRecording()` and read through to
-    /// `finish()` in the `speaker.onPlaybackStart` hook wired in
-    /// `bindVoice()`. Nil for typed turns and for turns entered through
-    /// `sendExternalVoiceTranscript` (Today's own mic pipeline isn't wired
-    /// up here — see that method's doc comment) — every mark on it is a
-    /// harmless no-op via optional chaining in that case.
+    /// The current voice turn's latency instrumentation (spec §10 V1),
+    /// captured from `voiceController.voiceTurnTimer` the moment its
+    /// `onFinalTranscript` hook fires (see `bindVoice()`) and read through to
+    /// `finish()` in the `speaker.onPlaybackStart` hook below. Nil for typed
+    /// turns — every mark on it is a harmless no-op via optional chaining in
+    /// that case.
     private var voiceTurnTimer: VoiceTurnTimer?
 
     // MARK: - Typing indicator
@@ -362,40 +365,30 @@ final class CoachViewModel: ObservableObject {
         bindVoice()
     }
 
-    /// Forwards the two voice objects' own change notifications into this
-    /// view model's `objectWillChange` so `CoachView` (which only observes
-    /// `vm`, not `vm.transcriber`/`vm.speaker` directly) still re-renders on
-    /// every transcript token and speaking-state flip. Also wires the two
-    /// behavioral rules from the spec: live transcript mirrors into `input`
-    /// while recording, and stopping the recording sends it.
+    /// Forwards `speaker`'s change notifications into this view model's
+    /// `objectWillChange` so `CoachView` (which observes `vm`, not
+    /// `vm.speaker` directly) still re-renders on every speaking-state flip.
+    /// `voiceController` is deliberately NOT forwarded here (spec §4's perf
+    /// note on the old blanket-forwarding pattern) — `CoachView` observes it
+    /// directly for anything voice-state-shaped. Also wires the hook that
+    /// turns a completed voice turn into a normal `send()`.
     private func bindVoice() {
-        transcriber.objectWillChange
-            .sink { [weak self] _ in self?.objectWillChange.send() }
-            .store(in: &cancellables)
         speaker.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
 
-        transcriber.$transcribedText
-            .sink { [weak self] text in
-                guard let self, self.isVoiceInputActive else { return }
-                self.input = text
-                // Only meaningful once speech has actually started — an
-                // empty partial (or the reset to "" at the top of `start()`)
-                // isn't a real "last spoken word" moment.
-                if !text.isEmpty { self.voiceTurnTimer?.mark(.lastSpeechPartial) }
-            }
-            .store(in: &cancellables)
-
-        transcriber.$isRecording
-            .removeDuplicates()
-            .sink { [weak self] recording in
-                guard let self, self.isVoiceInputActive, !recording else { return }
-                self.isVoiceInputActive = false
-                self.voiceTurnTimer?.mark(.endpointFired)
-                self.finishVoiceInput()
-            }
-            .store(in: &cancellables)
+        // The controller's one `onFinalTranscript` hook, owned exclusively
+        // here regardless of which mic UI (Coach tab or Today's FAB) started
+        // the recording — both share this same `voiceController`, so this is
+        // the single place a finished voice turn becomes a chat message.
+        voiceController.onFinalTranscript = { [weak self] text in
+            guard let self else { return }
+            self.voiceTurnTimer = self.voiceController.voiceTurnTimer
+            self.speaker.stop()
+            self.input = text
+            self.pendingSentByVoice = true
+            self.send()
+        }
 
         // Fired once per voice turn, the moment the reply's first audio
         // actually starts playing — the last leg of the voice latency
@@ -413,82 +406,39 @@ final class CoachViewModel: ObservableObject {
     // MARK: - Voice actions
 
     func requestVoicePermissions() async {
-        await transcriber.requestPermissions()
+        await voiceController.requestPermissions()
     }
 
-    /// Mic button action: tap once to start listening (mirroring the live
-    /// transcript into the input field), tap again to stop and send it as a
-    /// normal chat message, flagged so the reply is read aloud.
+    /// Mic button action: tap once to start listening, tap again to stop —
+    /// the resulting transcript is delivered through `voiceController`'s
+    /// `onFinalTranscript` hook (wired in `bindVoice()`), which sends it as
+    /// a normal chat message flagged so the reply is read aloud.
     func toggleVoiceRecording() {
-        if transcriber.isRecording {
-            transcriber.stop()
+        if voiceController.isRecording {
+            voiceController.stopRecording()
         } else {
             // `!isBusy`: recording started mid-handoff would transcribe fine
             // and then hand off to `send()`, which the same flag rejects —
             // the user would speak a whole message into a silent no-op.
             // Stopping (the branch above) stays unconditional.
-            guard !isBusy, !isTranscribing else { return }
+            guard !isBusy, !isVoiceTurnActive else { return }
             speaker.stop()
             input = ""
-            isVoiceInputActive = true
-            voiceTurnTimer = VoiceTurnTimer()
-            voiceTurnTimer?.mark(.recordingStart)
-            transcriber.start()
-        }
-    }
-
-    /// Called once recording stops (manual tap or a watchdog auto-stop).
-    /// Apple's live-preview transcript is the fallback; the accurate cloud
-    /// transcript from `/api/stt` replaces it when the upload succeeds. Only
-    /// sends if either transcript ended up non-empty.
-    private func finishVoiceInput() {
-        let appleTranscript = transcriber.transcribedText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let recordingURL = transcriber.recordingURL
-        guard !appleTranscript.isEmpty || recordingURL != nil else { return }
-
-        isTranscribing = true
-        transcriptionTask = Task {
-            defer {
-                isTranscribing = false
-                transcriber.discardRecording()
-            }
-
-            var finalText = appleTranscript
-            if let recordingURL {
-                voiceTurnTimer?.mark(.sttUploadStart)
-                let cloudText = await api.uploadSTTAudio(fileURL: recordingURL)
-                voiceTurnTimer?.mark(.sttUploadEnd)
-                if let cloudText, !cloudText.isEmpty {
-                    finalText = cloudText
-                }
-            }
-
-            // cancelStreaming() (fired by the view's onDisappear) cancels this task mid-upload.
-            // A cancelled voice turn must not send.
-            guard !Task.isCancelled else { return }
-
-            let trimmed = finalText.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else {
-                input = ""
-                return
-            }
-            input = trimmed
-            pendingSentByVoice = true
-            send()
+            voiceController.startRecording()
         }
     }
 
     // MARK: - External voice entry point (Today's voice FAB)
 
-    /// Entry point for a transcript captured by a mic *outside* this view
-    /// model's own tap-to-talk button — specifically Today's voice FAB
-    /// (`Features/Today/VoiceFABView.swift`), which owns its own
-    /// `SpeechTranscriber` instance and does its own record → cloud-STT
-    /// upload, then hands the final transcript here so it flows through the
-    /// exact same send/stream/speak pipeline as a Coach-tab voice turn: the
-    /// message lands in this shared `rows` thread, and the reply is spoken
-    /// aloud via `speaker` (voice-in implies voice-out — same rule
-    /// `toggleVoiceRecording` already follows, no new setting invented).
+    /// Entry point for a transcript captured by a mic *outside* the Coach
+    /// tab's own tap-to-talk button — specifically Today's voice FAB
+    /// (`Features/Today/VoiceFABView.swift`). Both now record through the
+    /// same shared `voiceController`, whose `onFinalTranscript` hook already
+    /// routes every completed turn through this exact send/stream/speak
+    /// pipeline — so in the normal case Today's FAB never needs to call
+    /// this. It's kept as a public entry point for a transcript sourced any
+    /// other way (or a future one), following the same "voice-in implies
+    /// voice-out" rule `toggleVoiceRecording` does.
     func sendExternalVoiceTranscript(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         // `!isBusy`: this funnels into `send()`, so bail before touching
@@ -781,10 +731,7 @@ final class CoachViewModel: ObservableObject {
         actionTask?.cancel()
         actionTask = nil
         isPerformingSpecialistAction = false
-        transcriptionTask?.cancel()
-        transcriptionTask = nil
-        isTranscribing = false
-        transcriber.stop()
+        voiceController.cancel()
         speaker.stop()
     }
 

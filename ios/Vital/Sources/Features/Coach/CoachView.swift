@@ -4,6 +4,17 @@ import SwiftUI
 
 struct CoachView: View {
     @StateObject private var vm: CoachViewModel
+    /// Observed directly (not through `vm`, which no longer forwards its
+    /// `objectWillChange` — spec §4's perf note) so the mic button and
+    /// composer re-render on every voice-state/transcript change without
+    /// making every token of a *typed* reply also walk through this view's
+    /// diffing. Always `vm.voiceController` — the same shared instance
+    /// Today's `VoiceFABView` drives.
+    @ObservedObject private var voice: CoachVoiceController
+    /// While the cloud STT upload (or its on-device fallback) is resolving —
+    /// `voice.state == .transcribing`, given a name since it's read from
+    /// several places below.
+    private var isTranscribing: Bool { voice.state == .transcribing }
     @Namespace private var bottomAnchor
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
@@ -23,6 +34,7 @@ struct CoachView: View {
         let model = CoachViewModel(mode: mode)
         model.input = initialMessage ?? ""
         _vm = StateObject(wrappedValue: model)
+        _voice = ObservedObject(wrappedValue: model.voiceController)
     }
 
     /// Used by `RootTabView`, which owns a single `CoachViewModel` shared
@@ -34,6 +46,7 @@ struct CoachView: View {
     /// `@StateObject` on `RootTabView`, stable across re-renders).
     init(vm: CoachViewModel) {
         _vm = StateObject(wrappedValue: vm)
+        _voice = ObservedObject(wrappedValue: vm.voiceController)
     }
 
     var body: some View {
@@ -305,7 +318,7 @@ struct CoachView: View {
             }
 
             HStack(spacing: Theme.Spacing.sm) {
-                TextField("Message your coach…", text: $vm.input, axis: .vertical)
+                TextField("Message your coach…", text: composerText, axis: .vertical)
                     .font(Theme.Typography.bodyMedium)
                     .foregroundStyle(Theme.Colors.textPrimary)
                     .tint(Theme.Colors.accentContent)
@@ -313,7 +326,7 @@ struct CoachView: View {
                     // While recording, the field mirrors the live transcript —
                     // typing over it would fight the mic. Also disabled while
                     // the recorded clip is being transcribed.
-                    .disabled(vm.transcriber.isRecording || vm.isTranscribing)
+                    .disabled(voice.isRecording || isTranscribing)
                     .focused($composerFocused)
                     .onSubmit {
                         vm.send()
@@ -412,6 +425,20 @@ struct CoachView: View {
         .scrollIndicators(.hidden)
     }
 
+    /// The composer's displayed text. While a voice turn is live —
+    /// `.listening` through `.transcribing` — it mirrors
+    /// `voice.partialTranscript` directly (a `voice`-scoped change, not a
+    /// `vm.input` one, so the ~60Hz stream of live-transcript tokens doesn't
+    /// walk through `vm`'s heavier `objectWillChange`, spec §4's perf note).
+    /// Anything typed while idle still writes straight to `vm.input`, and a
+    /// completed voice turn lands there too the moment `send()` clears it.
+    private var composerText: Binding<String> {
+        Binding(
+            get: { voice.state == .idle ? vm.input : voice.partialTranscript },
+            set: { vm.input = $0 }
+        )
+    }
+
     /// `!vm.isBusy` rather than `!vm.isStreaming`: an accepted handoff streams
     /// the specialist's opening turn through the *action* path, which leaves
     /// `isStreaming` false the whole time. Gating on `isStreaming` alone left
@@ -420,8 +447,8 @@ struct CoachView: View {
     private var canSend: Bool {
         !vm.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !vm.isBusy
-            && !vm.transcriber.isRecording
-            && !vm.isTranscribing
+            && !voice.isRecording
+            && !isTranscribing
     }
 
     // MARK: - Mic button
@@ -436,13 +463,13 @@ struct CoachView: View {
     /// the inline Settings hint.
     private var micButton: some View {
         Button {
-            switch vm.transcriber.permissionState {
+            switch voice.permissionState {
             case .authorized:
                 vm.toggleVoiceRecording()
             case .notDetermined:
                 Task {
                     await vm.requestVoicePermissions()
-                    if vm.transcriber.permissionState != .authorized {
+                    if voice.permissionState != .authorized {
                         didAttemptDeniedMic = true
                     }
                 }
@@ -452,33 +479,33 @@ struct CoachView: View {
         } label: {
             ZStack {
                 Circle()
-                    .fill(vm.transcriber.isRecording
+                    .fill(voice.isRecording
                           ? Theme.Colors.alert
                           : Theme.Colors.accent.opacity(0.15))
                     .frame(width: 32, height: 32)
-                if vm.isTranscribing {
+                if isTranscribing {
                     ProgressView()
                         .controlSize(.mini)
                         .tint(Theme.Colors.accentContent)
                 } else {
-                    Image(systemName: vm.transcriber.isRecording ? "stop.fill" : "mic.fill")
+                    Image(systemName: voice.isRecording ? "stop.fill" : "mic.fill")
                         .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(vm.transcriber.isRecording ? Theme.Colors.onAccent : Theme.Colors.accentContent)
+                        .foregroundStyle(voice.isRecording ? Theme.Colors.onAccent : Theme.Colors.accentContent)
                 }
             }
-            .scaleEffect(vm.transcriber.isRecording ? 1.08 : 1.0)
+            .scaleEffect(voice.isRecording ? 1.08 : 1.0)
         }
         .buttonStyle(.plain)
         // `isBusy`: recording started mid-handoff would transcribe fine and
         // then hand off to `send()`, which rejects it — the user would speak a
         // whole message into a no-op. The `!isRecording` clause is unchanged,
         // so stopping an in-progress recording always stays available.
-        .disabled((vm.isBusy && !vm.transcriber.isRecording) || vm.isTranscribing)
-        .ambient(Theme.Motion.pulse, value: vm.transcriber.isRecording)
+        .disabled((vm.isBusy && !voice.isRecording) || isTranscribing)
+        .ambient(Theme.Motion.pulse, value: voice.isRecording)
     }
 
     private var showMicPermissionHint: Bool {
-        didAttemptDeniedMic && vm.transcriber.permissionState == .denied
+        didAttemptDeniedMic && voice.permissionState == .denied
     }
 
     private var micPermissionHint: some View {
