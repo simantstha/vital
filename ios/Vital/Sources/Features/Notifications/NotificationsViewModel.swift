@@ -81,7 +81,7 @@ final class NotificationsViewModel: ObservableObject {
                 return
             }
             guard !silent else { return }
-            errorMessage = UserFacingError.message(for: error, context: .read, tag: "fetchNotifications")
+            errorMessage = UserFacingError.message(for: error, context: .read, tag: "fetchNotifications", includesAction: false)
             withAnimation(Theme.Motion.appear) { loadState = .failed }
         }
     }

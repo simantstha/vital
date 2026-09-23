@@ -79,7 +79,7 @@ final class ProfileViewModel: ObservableObject {
             }
             activityStats = Self.activityCells(from: response.stats)
         } catch {
-            errorMessage = UserFacingError.message(for: error, context: .read, tag: "fetchProfile")
+            errorMessage = UserFacingError.message(for: error, context: .read, tag: "fetchProfile", includesAction: false)
         }
         await loadBudget()
         withAnimation(Theme.Motion.appear) { isLoading = false }

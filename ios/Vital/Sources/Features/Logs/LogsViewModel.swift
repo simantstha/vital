@@ -341,7 +341,7 @@ final class LogsViewModel: ObservableObject {
             }
             days = LogsPagerSummary.bucketDays(items: displayItems, today: Date())
         } catch {
-            errorMessage = UserFacingError.message(for: error, context: .read, tag: "fetchLogs")
+            errorMessage = UserFacingError.message(for: error, context: .read, tag: "fetchLogs", includesAction: false)
         }
         withAnimation(Theme.Motion.appear) { isLoading = false }
         selectedIndex = 0
