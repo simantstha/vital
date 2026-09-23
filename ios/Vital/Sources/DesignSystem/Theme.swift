@@ -255,6 +255,15 @@ enum Theme {
     /// loads, a stream token arrives, an error card appears, or a background
     /// refresh lands. There is deliberately no `.warning`/`.error` token here:
     /// an error card in this app is always the result of a load, not a tap.
+    ///
+    /// **Exception (spec §6):** the three `✚` turn-taking cues below —
+    /// `turnEnd`, `yourTurn`, `interrupt` — exist so a voice conversation can
+    /// be followed without looking at the screen, so they fire on state the
+    /// user only *heard themselves cause* (their turn ending, the mic
+    /// re-arming, a barge-in landing), not on something they tapped. They
+    /// require `setAllowHapticsAndSystemSoundsDuringRecording(true)` on the
+    /// active `AVAudioSession` — otherwise iOS silently mutes every haptic
+    /// while the mic is live — which `VoiceAudioSession.activate()` sets.
     enum Haptics {
         /// Picking an option — segmented control, list selection.
         static let selection: SensoryFeedback = .selection
@@ -262,8 +271,24 @@ enum Theme {
         static let commit: SensoryFeedback = .impact(weight: .medium, intensity: 0.7)
         /// A committed action completed successfully.
         static let success: SensoryFeedback = .success
-        /// A light on/off toggle the user tapped.
+        /// A light on/off toggle the user tapped. Spec §3.1/§6: mic
+        /// touch-down and mic stop.
         static let toggle: SensoryFeedback = .impact(weight: .light, intensity: 0.5)
+
+        /// ✚ Turn captured (Listening → Thinking) — the mic stopped and the
+        /// turn is now waiting on a transcript. Wired in V3 from
+        /// `CoachVoiceController.turnEndTrigger`'s Listening → Transcribing
+        /// transition (push-to-talk's closest equivalent); conversation
+        /// mode's own Thinking state (V5) reuses the same token.
+        static let turnEnd: SensoryFeedback = .impact(weight: .light, intensity: 0.6)
+        /// ✚ Mic re-armed after a reply finishes, conversation mode only.
+        /// Defined per spec §6/§10 V3 but unused until auto re-arm lands
+        /// (V5) — no V3 call site fires this yet.
+        static let yourTurn: SensoryFeedback = .selection
+        /// ✚ Barge-in accepted. Defined per spec §6/§10 V3 but unused until
+        /// barge-in/echo cancellation lands (V7) — no V3 call site fires
+        /// this yet.
+        static let interrupt: SensoryFeedback = .impact(weight: .light, intensity: 0.4)
     }
 }
 

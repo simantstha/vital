@@ -243,6 +243,100 @@ final class CoachVoiceControllerTests: XCTestCase {
         XCTAssertEqual(controller.permissionState, .authorized)
     }
 
+    // MARK: - V3: prewarm
+
+    /// `prewarm()` must be a no-op — never prepare the engine and never
+    /// request permission — while permission isn't `.authorized`.
+    func testPrewarmDoesNothingWithoutAuthorizedPermission() {
+        let transcriber = FakeSpeechTranscriber()
+        transcriber.permissionState = .notDetermined
+        let controller = CoachVoiceController(transcriber: transcriber, api: FakeVoiceAPI())
+
+        controller.prewarm()
+        controller.prewarm()
+
+        XCTAssertEqual(transcriber.prewarmCallCount, 0)
+        XCTAssertEqual(transcriber.requestPermissionsCallCount, 0)
+    }
+
+    /// Once permission is authorized, `prewarm()` activates the engine
+    /// exactly once regardless of how many times it's called — both
+    /// `.onAppear`s (Coach tab and `VoiceFABView`) call it on every
+    /// appearance, and it must stay cheap. It must never request
+    /// permission, whatever the caller.
+    func testPrewarmIsIdempotentAndNeverRequestsPermission() {
+        let transcriber = FakeSpeechTranscriber()
+        transcriber.permissionState = .authorized
+        let controller = CoachVoiceController(transcriber: transcriber, api: FakeVoiceAPI())
+
+        controller.prewarm()
+        controller.prewarm()
+        controller.prewarm()
+
+        XCTAssertEqual(transcriber.prewarmCallCount, 1)
+        XCTAssertEqual(transcriber.requestPermissionsCallCount, 0)
+    }
+
+    /// A `prewarm()` that no-op'd for lack of permission must still work
+    /// once permission is later granted (e.g. the Settings-grant refresh
+    /// flow), rather than being permanently latched off by the earlier call.
+    func testPrewarmRunsOnceLaterAuthorizedAfterAnEarlierNoOp() {
+        let transcriber = FakeSpeechTranscriber()
+        transcriber.permissionState = .denied
+        let controller = CoachVoiceController(transcriber: transcriber, api: FakeVoiceAPI())
+
+        controller.prewarm()
+        XCTAssertEqual(transcriber.prewarmCallCount, 0)
+
+        transcriber.permissionState = .authorized
+        transcriber.nextRefreshedPermissionState = .authorized
+        controller.refreshPermissionState()
+        controller.prewarm()
+        controller.prewarm()
+
+        XCTAssertEqual(transcriber.prewarmCallCount, 1)
+    }
+
+    // MARK: - V3: turnEnd haptic trigger
+
+    /// The Listening → Transcribing transition (the endpoint firing) must
+    /// bump `turnEndTrigger` exactly once — this is what a view's
+    /// `.sensoryFeedback(Theme.Haptics.turnEnd, trigger:)` observes; UIKit
+    /// haptics themselves aren't unit-testable, so the counter is the seam.
+    func testEndpointFiredBumpsTurnEndTrigger() async {
+        let transcriber = FakeSpeechTranscriber()
+        let controller = CoachVoiceController(transcriber: transcriber, api: FakeVoiceAPI())
+
+        XCTAssertEqual(controller.turnEndTrigger, 0)
+
+        controller.startRecording()
+        transcriber.isRecording = true
+        transcriber.transcribedText = "log two eggs and toast"
+        transcriber.recordingURL = nil
+        transcriber.isRecording = false // endpoint fired
+
+        await waitUntil(controller, "turn delivered") { controller.state == .idle }
+
+        XCTAssertEqual(controller.turnEndTrigger, 1)
+    }
+
+    /// An endpoint fire with nothing recognized never entered `.transcribing`
+    /// — it goes straight back to `.idle` — so it must not bump the trigger.
+    func testEmptyTurnDoesNotBumpTurnEndTrigger() async {
+        let transcriber = FakeSpeechTranscriber()
+        let controller = CoachVoiceController(transcriber: transcriber, api: FakeVoiceAPI())
+
+        controller.startRecording()
+        transcriber.isRecording = true
+        transcriber.transcribedText = "   "
+        transcriber.recordingURL = nil
+        transcriber.isRecording = false
+
+        try? await Task.sleep(nanoseconds: 20_000_000)
+
+        XCTAssertEqual(controller.turnEndTrigger, 0)
+    }
+
     // MARK: - Helpers
 
     private func waitUntil(
@@ -310,6 +404,12 @@ private final class FakeSpeechTranscriber: SpeechTranscribing {
     private(set) var startCallCount = 0
     private(set) var stopCallCount = 0
     private(set) var discardCallCount = 0
+    private(set) var prewarmCallCount = 0
+    private(set) var requestPermissionsCallCount = 0
+
+    func prewarm() {
+        prewarmCallCount += 1
+    }
 
     /// Mirrors the real `SpeechTranscriber.start()`'s several failure paths
     /// (permission not authorized, recognizer unavailable, audio session
@@ -343,6 +443,7 @@ private final class FakeSpeechTranscriber: SpeechTranscribing {
     }
 
     func requestPermissions() async {
+        requestPermissionsCallCount += 1
         permissionState = .authorized
     }
 }

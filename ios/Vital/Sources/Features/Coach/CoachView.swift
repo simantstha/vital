@@ -26,6 +26,11 @@ struct CoachView: View {
     @State private var isScrolledNearBottom = true
     @State private var scrollPhase: ScrollPhase = .idle
     @FocusState private var composerFocused: Bool
+    /// Guards the mic button's touch-down gesture (spec §3.1/§10 V3: start
+    /// on finger down, not tap-up) so `DragGesture`'s repeated `onChanged`
+    /// firings while a finger is held down only trigger the mic action once
+    /// per press. Reset in `onEnded`.
+    @State private var isMicPressed = false
 
     /// `mode` is forwarded to every `/api/coach` call via `CoachViewModel`.
     /// The Coach tab uses the default (nil); the onboarding CoachIntro step
@@ -69,6 +74,11 @@ struct CoachView: View {
             vm.refreshIfStale()
             vm.loadOpener()
         }
+        // Spec §3.4/§10 V3: pre-warm the shared voice session/engine the
+        // moment the Coach tab is on screen, so the first real tap has less
+        // to do. No-op unless mic permission is already authorized, and
+        // never prompts for it.
+        .onAppear { voice.prewarm() }
         // Leaving the view mid-stream (e.g. onboarding CoachIntro → Continue)
         // must not leave a stream task running against a gone view.
         .onDisappear { vm.cancelStreaming() }
@@ -461,47 +471,85 @@ struct CoachView: View {
     /// server is still spinning up after a first-time grant can abort inside
     /// AudioToolbox; LogMeal's two-step flow avoids this); denied → surface
     /// the inline Settings hint.
+    ///
+    /// Spec §3.1/§10 V3: starts on finger **down**, not tap-up, so a plain
+    /// `Button` (touch-up-inside) won't do — its action is driven by a
+    /// `DragGesture(minimumDistance: 0)` instead, whose `onChanged` fires on
+    /// first touch. `isMicPressed` de-dupes the many `onChanged` callbacks a
+    /// single held touch produces. Losing `Button` also loses its automatic
+    /// accessibility button trait/action, so both are added back explicitly
+    /// — VoiceOver's double-tap invokes `.accessibilityAction`, which calls
+    /// the same `handleMicPress()`.
+    ///
+    /// The visible circle stays 32pt, but the tappable/hit area is grown to
+    /// Apple's 44×44 minimum via `.frame(minWidth:minHeight:)` — this is the
+    /// most important control in the app. That adds ~12pt to this HStack's
+    /// intrinsic width; the `TextField` next to it is flexible and simply
+    /// shrinks to absorb it, and the send button (already 32pt, fixed) is
+    /// unaffected other than shifting a few points right.
     private var micButton: some View {
-        Button {
-            switch voice.permissionState {
-            case .authorized:
-                vm.toggleVoiceRecording()
-            case .notDetermined:
-                Task {
-                    await vm.requestVoicePermissions()
-                    if voice.permissionState != .authorized {
-                        didAttemptDeniedMic = true
-                    }
-                }
-            case .denied:
-                didAttemptDeniedMic = true
+        ZStack {
+            Circle()
+                .fill(voice.isRecording
+                      ? Theme.Colors.alert
+                      : Theme.Colors.accent.opacity(0.15))
+                .frame(width: 32, height: 32)
+            if isTranscribing {
+                ProgressView()
+                    .controlSize(.mini)
+                    .tint(Theme.Colors.accentContent)
+            } else {
+                Image(systemName: voice.isRecording ? "stop.fill" : "mic.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(voice.isRecording ? Theme.Colors.onAccent : Theme.Colors.accentContent)
             }
-        } label: {
-            ZStack {
-                Circle()
-                    .fill(voice.isRecording
-                          ? Theme.Colors.alert
-                          : Theme.Colors.accent.opacity(0.15))
-                    .frame(width: 32, height: 32)
-                if isTranscribing {
-                    ProgressView()
-                        .controlSize(.mini)
-                        .tint(Theme.Colors.accentContent)
-                } else {
-                    Image(systemName: voice.isRecording ? "stop.fill" : "mic.fill")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(voice.isRecording ? Theme.Colors.onAccent : Theme.Colors.accentContent)
-                }
-            }
-            .scaleEffect(voice.isRecording ? 1.08 : 1.0)
         }
-        .buttonStyle(.plain)
-        // `isBusy`: recording started mid-handoff would transcribe fine and
-        // then hand off to `send()`, which rejects it — the user would speak a
-        // whole message into a no-op. The `!isRecording` clause is unchanged,
-        // so stopping an in-progress recording always stays available.
-        .disabled((vm.isBusy && !voice.isRecording) || isTranscribing)
+        .scaleEffect(voice.isRecording ? 1.08 : 1.0)
+        .frame(minWidth: 44, minHeight: 44)
+        .contentShape(Rectangle())
+        .opacity(isMicButtonDisabled ? 0.5 : 1.0)
+        .allowsHitTesting(!isMicButtonDisabled)
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in
+                    guard !isMicPressed else { return }
+                    isMicPressed = true
+                    handleMicPress()
+                }
+                .onEnded { _ in isMicPressed = false }
+        )
+        .accessibilityElement()
+        .accessibilityLabel(voice.isRecording ? "Stop recording" : "Talk to your coach")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { handleMicPress() }
         .ambient(Theme.Motion.pulse, value: voice.isRecording)
+        .sensoryFeedback(Theme.Haptics.toggle, trigger: voice.isRecording)
+        .sensoryFeedback(Theme.Haptics.turnEnd, trigger: voice.turnEndTrigger)
+    }
+
+    /// `isBusy`: recording started mid-handoff would transcribe fine and
+    /// then hand off to `send()`, which rejects it — the user would speak a
+    /// whole message into a no-op. The `!isRecording` clause is unchanged,
+    /// so stopping an in-progress recording always stays available.
+    private var isMicButtonDisabled: Bool {
+        (vm.isBusy && !voice.isRecording) || isTranscribing
+    }
+
+    private func handleMicPress() {
+        guard !isMicButtonDisabled else { return }
+        switch voice.permissionState {
+        case .authorized:
+            vm.toggleVoiceRecording()
+        case .notDetermined:
+            Task {
+                await vm.requestVoicePermissions()
+                if voice.permissionState != .authorized {
+                    didAttemptDeniedMic = true
+                }
+            }
+        case .denied:
+            didAttemptDeniedMic = true
+        }
     }
 
     private var showMicPermissionHint: Bool {

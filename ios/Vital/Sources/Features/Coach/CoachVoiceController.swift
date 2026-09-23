@@ -28,6 +28,7 @@ protocol SpeechTranscribing: AnyObject {
     func discardRecording()
     func refreshPermissionState()
     func requestPermissions() async
+    func prewarm()
 }
 
 extension SpeechTranscriber: SpeechTranscribing {
@@ -104,6 +105,17 @@ final class CoachVoiceController: ObservableObject {
     /// spec).
     @Published private(set) var currentTurnID: UUID? = nil
 
+    /// Bumped every time the controller transitions Listening → Transcribing
+    /// (spec `ux-spec-v4` §6's `turnEnd` haptic — "Turn captured"). A view
+    /// attaches `.sensoryFeedback(Theme.Haptics.turnEnd, trigger:
+    /// voice.turnEndTrigger)` to fire it; this counter is also what
+    /// `CoachVoiceControllerTests` observes, since UIKit haptics themselves
+    /// aren't unit-testable. Only bumped on a real transition into
+    /// `.transcribing` — an endpoint fire with nothing recognized goes
+    /// straight back to `.idle` (`resetToIdleAfterEmptyTurn()`) and does not
+    /// bump this.
+    @Published private(set) var turnEndTrigger: Int = 0
+
     /// Set to a turn's id the moment `onFinalTranscript` is invoked for it —
     /// i.e. only on a real, non-empty, non-cancelled send. Never set for a
     /// cancelled turn or an empty transcript, so a caller diffing this
@@ -131,6 +143,13 @@ final class CoachVoiceController: ObservableObject {
     private var transcriptionTask: Task<Void, Never>?
     private var activeTurnID: UUID?
     private var cancellables = Set<AnyCancellable>()
+
+    /// Set once `prewarm()` has actually activated the session and prepared
+    /// the engine — guards against redoing that work on every `.onAppear`
+    /// (Coach tab and `VoiceFABView` both call it). Deliberately NOT set
+    /// when `prewarm()` no-ops for lack of permission, so a later call made
+    /// once permission is granted still does the real work.
+    private var didPrewarm = false
 
     /// `transcriber` defaults to `nil` rather than `SpeechTranscriber()`
     /// directly: a function parameter's default *expression* is evaluated
@@ -206,6 +225,24 @@ final class CoachVoiceController: ObservableObject {
         permissionState = transcriber.permissionState
     }
 
+    // MARK: - Pre-warm
+
+    /// Activates the shared `VoiceAudioSession` and prepares the
+    /// transcriber's audio engine ahead of the user's first tap (spec
+    /// `ux-spec-v4` §3.4, §10 V3) — called from the Coach tab's and
+    /// `VoiceFABView`'s `.onAppear`. Idempotent and cheap: a no-op on every
+    /// call after the first one that actually ran, and a no-op entirely
+    /// while permission isn't yet `.authorized`. **Never** requests
+    /// permission itself — that stays a user-initiated action
+    /// (`requestPermissions()`), never something a mere tab appearance
+    /// triggers.
+    func prewarm() {
+        guard !didPrewarm, permissionState == .authorized else { return }
+        didPrewarm = true
+        try? VoiceAudioSession.activate()
+        transcriber.prewarm()
+    }
+
     // MARK: - Recording
 
     /// Mic tap: start listening, or stop (and let the endpoint-fired binding
@@ -276,6 +313,7 @@ final class CoachVoiceController: ObservableObject {
         }
 
         state = .transcribing
+        turnEndTrigger += 1
         transcriptionTask = Task { [weak self] in
             guard let self else { return }
             defer { self.transcriber.discardRecording() }

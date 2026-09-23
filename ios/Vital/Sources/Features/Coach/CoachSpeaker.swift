@@ -226,10 +226,8 @@ final class CoachSpeaker: NSObject, ObservableObject {
     private func activateSession() {
         isSessionActive = true
         firedPlaybackStart = false
-        let session = AVAudioSession.sharedInstance()
         do {
-            try session.setCategory(.playback, options: .duckOthers)
-            try session.setActive(true)
+            try VoiceAudioSession.activate()
         } catch {
             // Non-fatal — playback still attempts to proceed through
             // whatever session state is currently active.
@@ -239,8 +237,7 @@ final class CoachSpeaker: NSObject, ObservableObject {
     private func deactivateSession() {
         guard isSessionActive else { return }
         isSessionActive = false
-        let session = AVAudioSession.sharedInstance()
-        try? session.setActive(false, options: .notifyOthersOnDeactivation)
+        VoiceAudioSession.deactivate()
     }
 
     // MARK: - Voice selection (fallback path only)

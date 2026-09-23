@@ -80,6 +80,20 @@ final class SpeechTranscriber: ObservableObject {
         refreshPermissionState()
     }
 
+    // MARK: - Pre-warm
+
+    /// Prepares the `AVAudioEngine` input node ahead of time so the first
+    /// real `start()` afterward has less to do on the critical path (spec
+    /// `ux-spec-v4` §3.4 "Tap → mic live"). Deliberately does nothing with
+    /// permissions or the audio session — `CoachVoiceController.prewarm()`
+    /// gates this on `permissionState == .authorized` before calling it, so
+    /// by the time this runs the caller has already decided it's safe.
+    /// `AVAudioEngine.prepare()` itself is documented as safe to call
+    /// repeatedly, so this is cheap to call from multiple `.onAppear`s.
+    func prewarm() {
+        audioEngine.prepare()
+    }
+
     // MARK: - Permissions
 
     func refreshPermissionState() {
@@ -134,10 +148,8 @@ final class SpeechTranscriber: ObservableObject {
         discardRecording()
         audioFile = nil
 
-        let session = AVAudioSession.sharedInstance()
         do {
-            try session.setCategory(.record, mode: .measurement, options: .duckOthers)
-            try session.setActive(true, options: .notifyOthersOnDeactivation)
+            try VoiceAudioSession.activate()
         } catch {
             errorMessage = "Audio session error: \(error.localizedDescription)"
             return
