@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import UIKit
 
 // MARK: - SpeechTranscribing
 
@@ -18,10 +19,14 @@ protocol SpeechTranscribing: AnyObject {
     var errorMessage: String? { get }
     var endpointDeadline: Date? { get }
     var recordingURL: URL? { get }
+    /// Normalized mic input level, `0...1` (V5: `CoachOrb`'s listening
+    /// animation). 0 while not recording.
+    var inputLevel: Float { get }
 
     var transcribedTextPublisher: AnyPublisher<String, Never> { get }
     var isRecordingPublisher: AnyPublisher<Bool, Never> { get }
     var endpointDeadlinePublisher: AnyPublisher<Date?, Never> { get }
+    var inputLevelPublisher: AnyPublisher<Float, Never> { get }
 
     func start()
     func stop()
@@ -35,6 +40,7 @@ extension SpeechTranscriber: SpeechTranscribing {
     var transcribedTextPublisher: AnyPublisher<String, Never> { $transcribedText.eraseToAnyPublisher() }
     var isRecordingPublisher: AnyPublisher<Bool, Never> { $isRecording.eraseToAnyPublisher() }
     var endpointDeadlinePublisher: AnyPublisher<Date?, Never> { $endpointDeadline.eraseToAnyPublisher() }
+    var inputLevelPublisher: AnyPublisher<Float, Never> { $inputLevel.eraseToAnyPublisher() }
 }
 
 // MARK: - VoiceAudioSessionControlling
@@ -57,6 +63,33 @@ struct VoiceAudioSessionControlling {
     )
 }
 
+// MARK: - VoiceScheduling
+
+/// Seam over the two real-time delays conversation mode needs — the "Your
+/// turn" pause before auto re-arm, and the backgrounded-too-long grace
+/// window (spec `ux-spec-v4` §3.2, delivery slice V5) — so unit tests can
+/// drive both deterministically instead of sleeping for real seconds. Same
+/// DI shape as `VoiceAudioSessionControlling`.
+struct VoiceScheduling {
+    var sleep: @MainActor (TimeInterval) async -> Void
+
+    static let live = VoiceScheduling(sleep: { seconds in
+        try? await Task.sleep(for: .seconds(seconds))
+    })
+}
+
+// MARK: - VoiceEnvironmentQuerying
+
+/// Seam over `UIAccessibility.isVoiceOverRunning` (spec §3.8: "VoiceOver
+/// defaults to push-to-talk" — i.e. a conversation-mode *request* is
+/// downgraded to `.single` while VoiceOver is running) so tests can force
+/// either answer without a real accessibility runtime.
+struct VoiceEnvironmentQuerying {
+    var isVoiceOverRunning: @MainActor () -> Bool
+
+    static let live = VoiceEnvironmentQuerying(isVoiceOverRunning: { UIAccessibility.isVoiceOverRunning })
+}
+
 // MARK: - CoachVoiceController
 
 /// The single tap-to-talk pipeline shared by the Coach tab's mic and Today's
@@ -72,9 +105,10 @@ struct VoiceAudioSessionControlling {
 /// observable from both.
 ///
 /// `state` is deliberately a small, additive enum: V5 (conversation mode,
-/// spec §3.2's full state machine) adds `.thinking`/`.speaking`/`.interrupted`
+/// spec §3.2's full state machine) adds `.thinking`/`.speaking`/`.yourTurn`
 /// alongside these four without changing what they mean, so callers that
-/// switch on today's cases keep compiling once those land.
+/// switch on today's cases keep compiling once those land. `.interrupted`
+/// (barge-in) is out of scope here — V7.
 @MainActor
 final class CoachVoiceController: ObservableObject {
 
@@ -89,11 +123,67 @@ final class CoachVoiceController: ObservableObject {
         case transcribing
         /// The final transcript has been produced and handed to
         /// `onFinalTranscript`. Transient — the controller returns to
-        /// `.idle` right after the hook returns.
+        /// `.idle` right after the hook returns, *unless* `CoachViewModel`
+        /// has already moved it on to `.thinking` (conversation mode).
         case sending
+        /// V5, conversation mode only: the request is in flight and no
+        /// reply audio has started yet. Entered by `markThinking()`.
+        case thinking
+        /// V5, conversation mode only: `CoachSpeaker` is playing the reply.
+        /// The mic is NOT live here (barge-in is out of scope — V7).
+        /// Entered by `markSpeaking()`.
+        case speaking
+        /// V5, conversation mode only: the ~1s "Your turn" pause between a
+        /// reply finishing and the mic re-arming, with no tap. Entered by
+        /// `speakingFinished()`/`replyFinishedWithoutSpeaking()`.
+        case yourTurn
+    }
+
+    /// Which entry-point gesture started (or is currently driving) the
+    /// in-flight/most-recent voice turn — plain push-to-talk, or a
+    /// hands-free conversation that auto re-arms after every reply (spec
+    /// §3.2, delivery slice V5). Reset to `.single` whenever there is no
+    /// live conversation (idle at rest, or after `endConversation()`), so a
+    /// view can gate the `CoachOrb` on `mode == .conversation` alone.
+    enum ConversationMode: Equatable {
+        case single
+        case conversation
+    }
+
+    /// Why a conversation ended — purely informational (nothing branches on
+    /// it inside the controller); `CoachView`/`CoachOrb` can use it to pick
+    /// the right toast/caption if a future PR wants one.
+    enum ConversationEndReason: Equatable {
+        case userEnded
+        case tooManyEmptyListens
+        case backgrounded
+        case navigatedAway
+        case requestFailed
+        case offline
+    }
+
+    /// A transient voice-specific error surfaced as a caption (spec §3.6).
+    /// Cleared as soon as the next listen produces real speech, or the
+    /// conversation ends.
+    enum VoiceError: Equatable {
+        /// "Didn't catch that. Go ahead." — keeps listening; counts toward
+        /// the 2-consecutive-empty-listens cap that ends conversation mode.
+        case didntCatchThat
     }
 
     @Published private(set) var state: VoiceState = .idle
+
+    /// `.conversation` for as long as a hands-free conversation is live —
+    /// across every re-arm, not just the current turn — so a view can gate
+    /// `CoachOrb` on this alone. `.single` at rest and for a plain
+    /// push-to-talk turn.
+    @Published private(set) var mode: ConversationMode = .single
+
+    /// The most recent unresolved voice error (spec §3.6), or nil. Only
+    /// `.didntCatchThat` is modeled here — offline and request-failure
+    /// errors end the conversation outright and surface through
+    /// `CoachViewModel.errorMessage`'s existing `ErrorCard`, not this.
+    @Published private(set) var lastError: VoiceError? = nil
 
     /// Live transcript preview while `state == .listening` — mirrors
     /// `SpeechTranscriber.transcribedText`. Cleared at the start of every
@@ -103,6 +193,12 @@ final class CoachVoiceController: ObservableObject {
     /// Pass-through of the adaptive endpointing countdown (spec §3.3) for a
     /// future UI (the endpoint ring) to render — no view reads this yet.
     @Published private(set) var endpointDeadline: Date? = nil
+
+    /// Mirrors `transcriber.inputLevel` (spec §3.2, `CoachOrb`'s listening
+    /// animation, V5). Unconditional mirror like `isRecording` — a view
+    /// only reads it while `state == .listening`, but nothing here needs to
+    /// enforce that.
+    @Published private(set) var inputLevel: Float = 0
 
     /// Mirrors `transcriber.isRecording` via `isRecordingPublisher` (see
     /// `bind()`) rather than being a computed pass-through — `CoachView` and
@@ -136,6 +232,11 @@ final class CoachVoiceController: ObservableObject {
     /// bump this.
     @Published private(set) var turnEndTrigger: Int = 0
 
+    /// Bumped every time the controller re-arms into `.yourTurn` (spec §6's
+    /// `yourTurn` haptic — "Mic re-armed"). Same observation shape as
+    /// `turnEndTrigger`.
+    @Published private(set) var yourTurnTrigger: Int = 0
+
     /// Set to a turn's id the moment `onFinalTranscript` is invoked for it —
     /// i.e. only on a real, non-empty, non-cancelled send. Never set for a
     /// cancelled turn or an empty transcript, so a caller diffing this
@@ -161,9 +262,26 @@ final class CoachVoiceController: ObservableObject {
     private let transcriber: any SpeechTranscribing
     private let api: any CoachAPIProviding
     private let audioSession: VoiceAudioSessionControlling
+    private let scheduling: VoiceScheduling
+    private let environment: VoiceEnvironmentQuerying
     private var transcriptionTask: Task<Void, Never>?
     private var activeTurnID: UUID?
     private var cancellables = Set<AnyCancellable>()
+
+    /// Consecutive listens (in conversation mode) that produced no
+    /// transcript at all — reset the moment real speech is detected. Two in
+    /// a row ends the conversation (spec §3.2/§3.6).
+    private var emptyListenStreak = 0
+    private static let maxConsecutiveEmptyListens = 2
+
+    /// The `.yourTurn` pause before an automatic re-arm (spec §3.2's "Your
+    /// turn" row) and the backgrounded-too-long grace window (spec §3.2's
+    /// "app backgrounded > 10 s" ending) — both cancellable so a later End,
+    /// a foregrounding, or a fresh turn can't have a stale one fire later.
+    private var yourTurnTask: Task<Void, Never>?
+    private var backgroundTask: Task<Void, Never>?
+    private static let yourTurnDuration: TimeInterval = 1.0
+    private static let backgroundGraceInterval: TimeInterval = 10
 
     /// Set once `prewarm()` has actually configured the session and
     /// prewarmed the transcriber — guards against redoing that work on
@@ -187,12 +305,16 @@ final class CoachVoiceController: ObservableObject {
     init(
         transcriber: (any SpeechTranscribing)? = nil,
         api: any CoachAPIProviding = APIClient.shared,
-        audioSession: VoiceAudioSessionControlling = .live
+        audioSession: VoiceAudioSessionControlling = .live,
+        scheduling: VoiceScheduling = .live,
+        environment: VoiceEnvironmentQuerying = .live
     ) {
         let transcriber = transcriber ?? SpeechTranscriber()
         self.transcriber = transcriber
         self.api = api
         self.audioSession = audioSession
+        self.scheduling = scheduling
+        self.environment = environment
         self.isRecording = transcriber.isRecording
         self.permissionState = transcriber.permissionState
         bind()
@@ -209,6 +331,10 @@ final class CoachVoiceController: ObservableObject {
 
         transcriber.endpointDeadlinePublisher
             .sink { [weak self] deadline in self?.endpointDeadline = deadline }
+            .store(in: &cancellables)
+
+        transcriber.inputLevelPublisher
+            .sink { [weak self] level in self?.inputLevel = level }
             .store(in: &cancellables)
 
         // Unconditional mirror of the transcriber's `isRecording` — kept
@@ -296,8 +422,179 @@ final class CoachVoiceController: ObservableObject {
     /// again must not stomp the turn already in flight; `toggleRecording()`
     /// routes a genuine "stop early" tap to `stopRecording()` instead, which
     /// stays available in every state that has a live recording.
-    func startRecording() {
+    ///
+    /// `mode` (V5, spec §3.2/§3.8): `.conversation` is downgraded to
+    /// `.single` while VoiceOver is running — hands-free listening would
+    /// compete with VoiceOver's own speech — so a caller can always pass the
+    /// gesture's *intended* mode and let this decide the effective one.
+    func startRecording(mode: ConversationMode = .single) {
         guard state == .idle else { return }
+        let effectiveMode = (mode == .conversation && environment.isVoiceOverRunning()) ? .single : mode
+        self.mode = effectiveMode
+        if effectiveMode == .conversation { emptyListenStreak = 0 }
+        lastError = nil
+        beginListening()
+    }
+
+    /// Downgrades an in-flight `.conversation` turn to `.single` — the mic
+    /// touch-down/release gesture (spec §3.1) always starts recording
+    /// immediately as the tentative mode (V3's touch-down-start latency
+    /// win), before it's known whether the press is a quick tap or a
+    /// ≥300 ms hold; a hold means push-to-talk was intended, so the view
+    /// calls this right before `stopRecording()` on release. No-op once
+    /// already `.single`, and a no-op if the turn has already ended.
+    func demoteToSingleTurn() {
+        guard mode == .conversation else { return }
+        mode = .single
+    }
+
+    func stopRecording() {
+        transcriber.stop()
+    }
+
+    /// Ends the in-flight turn — while listening or while awaiting STT — and
+    /// delivers nothing. Idempotent. Also fully exits conversation mode
+    /// (V5): cancels the "Your turn"/backgrounded-grace timers so neither
+    /// can fire afterward, and resets `mode` back to `.single` so a view
+    /// gating `CoachOrb` on `mode == .conversation` hides it immediately.
+    /// Deactivates the shared session (post-V3 review fix): a cancelled
+    /// turn never reaches `CoachSpeaker`, which is otherwise the only thing
+    /// that deactivates it, so without this the user's other audio would
+    /// stay ducked until their next voice turn happens to speak a reply.
+    ///
+    /// **Ordering note (post-V3-fix parity):** `state` is moved off
+    /// `.listening` *before* `transcriber.stop()` runs. `stop()` flips the
+    /// transcriber's `isRecording` to false synchronously, and `bind()`'s
+    /// endpoint-fired sink reacts to exactly that transition whenever
+    /// `state == .listening` — stopping first (state still `.listening`)
+    /// would make a deliberate cancel look like an endpoint firing and
+    /// re-enter `beginTranscription()`, delivering the very words this call
+    /// is meant to discard.
+    func cancel() {
+        yourTurnTask?.cancel()
+        yourTurnTask = nil
+        backgroundTask?.cancel()
+        backgroundTask = nil
+        mode = .single
+        lastError = nil
+        transcriptionTask?.cancel()
+        transcriptionTask = nil
+        state = .idle
+        activeTurnID = nil
+        currentTurnID = nil
+        transcriber.stop()
+        transcriber.discardRecording()
+        voiceTurnTimer = nil
+        partialTranscript = ""
+        audioSession.deactivate()
+    }
+
+    /// The `CoachOrb`'s End control ends conversation mode; `cancel()` is
+    /// the full teardown it needs (mic + timers + session), so this exists
+    /// only as a name that reads clearly from the view layer. Stopping any
+    /// in-progress TTS is `CoachViewModel`'s job (it owns `CoachSpeaker`,
+    /// which this controller never touches) — see
+    /// `CoachViewModel.endVoiceConversation()`.
+    func endConversation(reason: ConversationEndReason = .userEnded) {
+        guard mode == .conversation else { return }
+        cancel()
+    }
+
+    // MARK: - Conversation mode: backgrounding (spec §3.2 "app backgrounded > 10 s")
+
+    /// `CoachView`/`VoiceFABView` call this from `scenePhase` turning
+    /// `.background`. No-op outside conversation mode. Ends the conversation
+    /// after `backgroundGraceInterval` unless `appDidBecomeActive()` cancels
+    /// it first.
+    func appDidEnterBackground() {
+        guard mode == .conversation else { return }
+        backgroundTask?.cancel()
+        backgroundTask = Task { [weak self] in
+            guard let self else { return }
+            await self.scheduling.sleep(Self.backgroundGraceInterval)
+            guard !Task.isCancelled else { return }
+            self.endConversation(reason: .backgrounded)
+        }
+    }
+
+    /// `CoachView`/`VoiceFABView` call this from `scenePhase` turning
+    /// `.active`. Always safe to call — a no-op if no background timer is
+    /// pending.
+    func appDidBecomeActive() {
+        backgroundTask?.cancel()
+        backgroundTask = nil
+    }
+
+    // MARK: - Conversation mode: reply lifecycle (spec §3.2, delivery slice V5)
+    //
+    // `CoachViewModel` drives these three from the existing points it
+    // already has for voice telemetry, rather than this controller
+    // duplicating any streaming/TTS logic: request start (`send()`, right
+    // where `isStreaming` flips true), first TTS audio
+    // (`CoachSpeaker.onPlaybackStart`), and TTS finishing
+    // (`CoachSpeaker.onPlaybackFinished`, new in V5). Every entry is a no-op
+    // outside conversation mode or from an unexpected state, so a typed
+    // send/reply mid-conversation (which never calls these) can't be
+    // confused for a voice one.
+
+    /// "Request in flight, no audio yet." Called synchronously from inside
+    /// the `onFinalTranscript` closure's `send()`, so by the time
+    /// `beginTranscription()`'s continuation resumes after calling that
+    /// closure, `state` has already moved past `.sending` here — see that
+    /// method's own comment.
+    func markThinking() {
+        guard mode == .conversation, state == .sending || state == .idle else { return }
+        state = .thinking
+    }
+
+    /// `CoachSpeaker.onPlaybackStart` — the reply's first audio started.
+    func markSpeaking() {
+        guard mode == .conversation, state == .thinking else { return }
+        state = .speaking
+    }
+
+    /// `CoachSpeaker.onPlaybackFinished` — the reply's TTS queue drained
+    /// naturally (not cut short by a Stop/End/new turn). Re-arms into
+    /// `.yourTurn` then `.listening`, with no tap.
+    func speakingFinished() {
+        guard mode == .conversation, state == .speaking else { return }
+        armYourTurn()
+    }
+
+    /// `CoachViewModel.send()`'s success path calls this when the reply
+    /// never produced any speech at all (e.g. a tool-only turn) —
+    /// `onPlaybackStart`/`onPlaybackFinished` never fire in that case, so
+    /// without this the controller would sit in `.thinking` forever.
+    func replyFinishedWithoutSpeaking() {
+        guard mode == .conversation, state == .thinking else { return }
+        armYourTurn()
+    }
+
+    /// Spec §3.2's "Your turn" row: ~1s pause with the `yourTurn` haptic
+    /// (fired by a view observing `yourTurnTrigger`), then straight back
+    /// into listening — no tap. Cancellable so `cancel()`/`endConversation`
+    /// during the pause can't have this fire after the fact.
+    private func armYourTurn() {
+        state = .yourTurn
+        yourTurnTrigger += 1
+        yourTurnTask?.cancel()
+        yourTurnTask = Task { [weak self] in
+            guard let self else { return }
+            await self.scheduling.sleep(Self.yourTurnDuration)
+            guard !Task.isCancelled else { return }
+            guard self.mode == .conversation, self.state == .yourTurn else { return }
+            self.beginListening()
+        }
+    }
+
+    /// The actual "go live" work shared by a fresh `startRecording()` and
+    /// every automatic re-arm (`armYourTurn()`'s timer, and the
+    /// keep-listening retry after a single empty listen in
+    /// `resetToIdleAfterEmptyTurn()`) — those re-arms must reach this
+    /// directly, bypassing `startRecording()`'s `state == .idle` guard,
+    /// since they fire from `.yourTurn`/`.idle`-mid-retry rather than a
+    /// fresh user tap.
+    private func beginListening() {
         let turnID = UUID()
         activeTurnID = turnID
         currentTurnID = turnID
@@ -314,34 +611,15 @@ final class CoachVoiceController: ObservableObject {
         // endpoint-fired sink in `bind()` only reacts to a true→false
         // transition, so without this check a failed start would leave the
         // controller stuck in `.listening` forever — every later
-        // `startRecording()` a silent no-op until relaunch.
+        // `startRecording()` a silent no-op until relaunch. In conversation
+        // mode this routes into the same empty-listen retry/end-after-2
+        // path as a genuine no-speech listen (bounded to at most
+        // `maxConsecutiveEmptyListens` recursive attempts before
+        // `endConversation` stops it).
         if !transcriber.isRecording {
             resetToIdleAfterEmptyTurn()
             partialTranscript = ""
         }
-    }
-
-    func stopRecording() {
-        transcriber.stop()
-    }
-
-    /// Ends the in-flight turn — while listening or while awaiting STT — and
-    /// delivers nothing. Idempotent. Deactivates the shared session
-    /// (post-V3 review fix): a cancelled turn never reaches `CoachSpeaker`,
-    /// which is otherwise the only thing that deactivates it, so without
-    /// this the user's other audio would stay ducked until their next voice
-    /// turn happens to speak a reply.
-    func cancel() {
-        transcriptionTask?.cancel()
-        transcriptionTask = nil
-        transcriber.stop()
-        transcriber.discardRecording()
-        voiceTurnTimer = nil
-        activeTurnID = nil
-        currentTurnID = nil
-        partialTranscript = ""
-        state = .idle
-        audioSession.deactivate()
     }
 
     // MARK: - Transcription
@@ -356,6 +634,8 @@ final class CoachVoiceController: ObservableObject {
 
         state = .transcribing
         turnEndTrigger += 1
+        lastError = nil
+        if mode == .conversation { emptyListenStreak = 0 }
         transcriptionTask = Task { [weak self] in
             guard let self else { return }
             defer { self.transcriber.discardRecording() }
@@ -383,11 +663,21 @@ final class CoachVoiceController: ObservableObject {
 
             let turnID = self.activeTurnID
             self.state = .sending
+            // `CoachViewModel`'s `onFinalTranscript` handler calls `send()`
+            // synchronously, which — for a conversation-mode turn — calls
+            // `markThinking()` synchronously before this closure returns.
+            // So by the time control comes back here, `state` has already
+            // moved past `.sending` for that case; the check right below
+            // only resets to `.idle` for single-turn (which never calls
+            // `markThinking()`) or the rare case `send()` itself bailed
+            // (e.g. raced by another busy turn).
             self.onFinalTranscript?(trimmed)
             self.lastDeliveredTurnID = turnID
             self.activeTurnID = nil
             self.currentTurnID = nil
-            self.state = .idle
+            if self.state == .sending {
+                self.state = .idle
+            }
         }
     }
 
@@ -399,11 +689,32 @@ final class CoachVoiceController: ObservableObject {
     /// deactivates the shared session itself — otherwise a voice turn that
     /// never got as far as a spoken reply would leave the user's other
     /// audio ducked indefinitely.
+    ///
+    /// V5: in conversation mode, an empty listen doesn't end the
+    /// conversation by itself — spec §3.6's "Didn't catch that. Go ahead."
+    /// keeps listening (no tap, no session churn), counting toward
+    /// `maxConsecutiveEmptyListens`. Only a *second* one in a row ends it.
     private func resetToIdleAfterEmptyTurn() {
         voiceTurnTimer = nil
         activeTurnID = nil
         currentTurnID = nil
+
+        guard mode == .conversation else {
+            state = .idle
+            audioSession.deactivate()
+            return
+        }
+
+        emptyListenStreak += 1
+        if emptyListenStreak >= Self.maxConsecutiveEmptyListens {
+            lastError = nil
+            state = .idle
+            endConversation(reason: .tooManyEmptyListens)
+            return
+        }
+
+        lastError = .didntCatchThat
         state = .idle
-        audioSession.deactivate()
+        beginListening()
     }
 }

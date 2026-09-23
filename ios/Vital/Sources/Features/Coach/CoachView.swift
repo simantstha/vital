@@ -31,6 +31,11 @@ struct CoachView: View {
     /// firings while a finger is held down only trigger the mic action once
     /// per press. Reset in `onEnded`.
     @State private var isMicPressed = false
+    /// Set on touch-down only when that press actually starts a *new*
+    /// recording (not one that stops an in-flight one) — the gesture
+    /// mapping (spec §3.1, V5) reads it back at release to tell a quick tap
+    /// (conversation mode) from a ≥300 ms hold (push-to-talk single turn).
+    @State private var micPressStartedAt: Date? = nil
 
     /// `mode` is forwarded to every `/api/coach` call via `CoachViewModel`.
     /// The Coach tab uses the default (nil); the onboarding CoachIntro step
@@ -87,6 +92,11 @@ struct CoachView: View {
                 vm.refreshIfStale()
             }
         }
+        // Spec §3.2, V5: "app backgrounded > 10 s" ends conversation mode.
+        // Wired at `RootTabView` (always mounted, regardless of which tab
+        // is active) rather than here, since a conversation the Today FAB
+        // started can still be mid-first-listen when the app backgrounds,
+        // before `onSent` has switched to this tab.
     }
 
     // MARK: - Navigation bar
@@ -327,71 +337,83 @@ struct CoachView: View {
                 suggestionChipsRow
             }
 
-            HStack(spacing: Theme.Spacing.sm) {
-                TextField("Message your coach…", text: composerText, axis: .vertical)
-                    .font(Theme.Typography.bodyMedium)
-                    .foregroundStyle(Theme.Colors.textPrimary)
-                    .tint(Theme.Colors.accentContent)
-                    .lineLimit(1...5)
-                    // While recording, the field mirrors the live transcript —
-                    // typing over it would fight the mic. Also disabled while
-                    // the recorded clip is being transcribed.
-                    .disabled(voice.isRecording || isTranscribing)
-                    .focused($composerFocused)
-                    .onSubmit {
-                        vm.send()
-                    }
+            // V5: `CoachOrb` replaces the whole composer row while
+            // conversation mode is active (spec §3.2's "72 pt in the Coach
+            // tab"). At rest (fixtures included — `ScreenshotTests` never
+            // enters conversation mode) `voice.mode` is always `.single`, so
+            // this branch renders exactly today's composer, unchanged.
+            if voice.mode == .conversation {
+                CoachOrb(voice: voice, onEnd: { vm.endVoiceConversation() })
+                    .padding(.horizontal, Theme.Spacing.lg)
+                    .padding(.vertical, Theme.Spacing.md)
+                    .background(Theme.Colors.canvas)
+            } else {
+                HStack(spacing: Theme.Spacing.sm) {
+                    TextField("Message your coach…", text: composerText, axis: .vertical)
+                        .font(Theme.Typography.bodyMedium)
+                        .foregroundStyle(Theme.Colors.textPrimary)
+                        .tint(Theme.Colors.accentContent)
+                        .lineLimit(1...5)
+                        // While recording, the field mirrors the live transcript —
+                        // typing over it would fight the mic. Also disabled while
+                        // the recorded clip is being transcribed.
+                        .disabled(voice.isRecording || isTranscribing)
+                        .focused($composerFocused)
+                        .onSubmit {
+                            vm.send()
+                        }
 
-                micButton
+                    micButton
 
-                Button(action: {
-                    if vm.isStreaming {
-                        vm.stopGenerating()
-                    } else {
-                        vm.send()
+                    Button(action: {
+                        if vm.isStreaming {
+                            vm.stopGenerating()
+                        } else {
+                            vm.send()
+                        }
+                    }) {
+                        Image(systemName: vm.isStreaming ? "stop.fill" : "arrow.up")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(Theme.Colors.onAccent)
+                            .frame(width: 32, height: 32)
+                            .background(
+                                Circle()
+                                    .fill(
+                                        (canSend || vm.isStreaming)
+                                            ? Theme.Colors.accent
+                                            : Theme.Colors.accent.opacity(0.3)
+                                    )
+                            )
                     }
-                }) {
-                    Image(systemName: vm.isStreaming ? "stop.fill" : "arrow.up")
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(Theme.Colors.onAccent)
-                        .frame(width: 32, height: 32)
-                        .background(
-                            Circle()
-                                .fill(
-                                    (canSend || vm.isStreaming)
-                                        ? Theme.Colors.accent
-                                        : Theme.Colors.accent.opacity(0.3)
-                                )
-                        )
+                    // `canSend` already requires `!vm.isBusy`, so a bare
+                    // `!canSend` would disable the button for the entire reply —
+                    // a dead control during the most important moment. While
+                    // streaming the button is always enabled (it's now the stop
+                    // control); otherwise it falls back to the normal send gating.
+                    //
+                    // The second clause stays `isStreaming`, NOT `isBusy`: a
+                    // specialist action isn't user-cancellable (`stopGenerating()`
+                    // only ends a `send()`), so mid-handoff this must evaluate to
+                    // disabled. Widening it to `isBusy` would flip it back to
+                    // enabled — reintroducing exactly the dead tap target this
+                    // pairing exists to prevent.
+                    .disabled(!canSend && !vm.isStreaming)
+                    .animation(Theme.Motion.micro, value: vm.isStreaming)
                 }
-                // `canSend` already requires `!vm.isBusy`, so a bare
-                // `!canSend` would disable the button for the entire reply —
-                // a dead control during the most important moment. While
-                // streaming the button is always enabled (it's now the stop
-                // control); otherwise it falls back to the normal send gating.
-                //
-                // The second clause stays `isStreaming`, NOT `isBusy`: a
-                // specialist action isn't user-cancellable (`stopGenerating()`
-                // only ends a `send()`), so mid-handoff this must evaluate to
-                // disabled. Widening it to `isBusy` would flip it back to
-                // enabled — reintroducing exactly the dead tap target this
-                // pairing exists to prevent.
-                .disabled(!canSend && !vm.isStreaming)
-                .animation(Theme.Motion.micro, value: vm.isStreaming)
+                .padding(.horizontal, Theme.Spacing.md)
+                .padding(.vertical, Theme.Spacing.sm)
+                .background(
+                    Capsule()
+                        .fill(Theme.Colors.card)
+                        .overlay(
+                            Capsule().strokeBorder(Theme.Colors.glassBorder, lineWidth: 0.5)
+                        )
+                )
+                .shadow(color: Theme.Colors.cardShadow, radius: 1, x: 0, y: 1)
+                .padding(.horizontal, Theme.Spacing.lg)
+                .padding(.vertical, Theme.Spacing.md)
+                .background(Theme.Colors.canvas)
             }
-            .padding(.horizontal, Theme.Spacing.md)
-            .padding(.vertical, Theme.Spacing.sm)
-            .background(
-                Capsule()
-                    .fill(Theme.Colors.card)
-                    .overlay(
-                        Capsule().strokeBorder(Theme.Colors.glassBorder, lineWidth: 0.5)
-                    )
-            )
-            .shadow(color: Theme.Colors.cardShadow, radius: 1, x: 0, y: 1)
-            .padding(.horizontal, Theme.Spacing.lg)
-            .padding(.vertical, Theme.Spacing.md)
-            .background(Theme.Colors.canvas)
         }
     }
 
@@ -481,6 +503,18 @@ struct CoachView: View {
     /// — VoiceOver's double-tap invokes `.accessibilityAction`, which calls
     /// the same `handleMicPress()`.
     ///
+    /// **Gesture mapping (spec §3.1, V5):** tap = conversation mode, hold
+    /// ≥ 300 ms = push-to-talk single turn, release to send. A fresh
+    /// recording still always starts on touch-down (V3's latency win) —
+    /// tentatively as `.conversation` — since the gesture isn't known to be
+    /// a tap or a hold until release; a hold detected at release demotes it
+    /// to `.single` right before `stopRecording()` (see
+    /// `CoachVoiceController.demoteToSingleTurn()`). VoiceOver's
+    /// `.accessibilityAction` calls `handleMicPress()` directly with no
+    /// `onEnded` involved at all, so it never measures a hold — the
+    /// controller's own VoiceOver check (spec §3.8) downgrades that
+    /// `.conversation` intent to `.single` regardless.
+    ///
     /// The visible circle stays 32pt, but the tappable/hit area is grown to
     /// Apple's 44×44 minimum via `.frame(minWidth:minHeight:)` — this is the
     /// most important control in the app. That adds ~12pt to this HStack's
@@ -514,9 +548,24 @@ struct CoachView: View {
                 .onChanged { _ in
                     guard !isMicPressed else { return }
                     isMicPressed = true
+                    let startingFresh = !isMicButtonDisabled && voice.state == .idle && !voice.isRecording
+                    micPressStartedAt = startingFresh ? Date() : nil
                     handleMicPress()
                 }
-                .onEnded { _ in isMicPressed = false }
+                .onEnded { _ in
+                    isMicPressed = false
+                    // Only a press that itself started a *new* recording
+                    // (not one that stopped an already-in-flight one) can be
+                    // a hold — `micPressStartedAt` is nil otherwise.
+                    if let startedAt = micPressStartedAt, voice.mode == .conversation, voice.isRecording {
+                        let held = Date().timeIntervalSince(startedAt) >= Self.pushToTalkHoldThreshold
+                        if held {
+                            voice.demoteToSingleTurn()
+                            voice.stopRecording()
+                        }
+                    }
+                    micPressStartedAt = nil
+                }
         )
         .accessibilityElement()
         .accessibilityLabel(voice.isRecording ? "Stop recording" : "Talk to your coach")
@@ -527,6 +576,10 @@ struct CoachView: View {
         .sensoryFeedback(Theme.Haptics.turnEnd, trigger: voice.turnEndTrigger)
     }
 
+    /// The hold threshold spec §3.1 maps to push-to-talk single turn (vs. a
+    /// quick tap, which is conversation mode).
+    private static let pushToTalkHoldThreshold: TimeInterval = 0.3
+
     /// `isBusy`: recording started mid-handoff would transcribe fine and
     /// then hand off to `send()`, which rejects it — the user would speak a
     /// whole message into a no-op. The `!isRecording` clause is unchanged,
@@ -535,11 +588,17 @@ struct CoachView: View {
         (vm.isBusy && !voice.isRecording) || isTranscribing
     }
 
+    /// A *fresh* recording (see `micButton`'s gesture) starts tentatively as
+    /// `.conversation` — the touch-up handler there demotes it to `.single`
+    /// if the press turns out to be a ≥300 ms hold. `.accessibilityAction`
+    /// (VoiceOver) also routes through here with the same intended mode;
+    /// the controller itself downgrades that to `.single` while VoiceOver
+    /// is running (spec §3.8), so this never needs to check VoiceOver.
     private func handleMicPress() {
         guard !isMicButtonDisabled else { return }
         switch voice.permissionState {
         case .authorized:
-            vm.toggleVoiceRecording()
+            vm.toggleVoiceRecording(mode: .conversation)
         case .notDetermined:
             Task {
                 await vm.requestVoicePermissions()

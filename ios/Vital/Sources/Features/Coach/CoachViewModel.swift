@@ -406,6 +406,17 @@ final class CoachViewModel: ObservableObject {
             guard let self, let timer = self.voiceTurnTimer else { return }
             timer.mark(.firstTTSAudioPlaybackStart)
             self.lastVoiceTurnDurations = timer.finish()
+            // Spec §3.2, V5: Listening → Thinking already happened when
+            // `send()` called `markThinking()`; this is Thinking → Speaking.
+            // No-op outside conversation mode.
+            self.voiceController.markSpeaking()
+        }
+
+        // Spec §3.2, V5: the reply's TTS queue drained naturally — re-arm
+        // into "Your turn" then back to listening, no tap. No-op outside
+        // conversation mode (see `CoachVoiceController.speakingFinished()`).
+        speaker.onPlaybackFinished = { [weak self] in
+            self?.voiceController.speakingFinished()
         }
     }
 
@@ -419,7 +430,12 @@ final class CoachViewModel: ObservableObject {
     /// the resulting transcript is delivered through `voiceController`'s
     /// `onFinalTranscript` hook (wired in `bindVoice()`), which sends it as
     /// a normal chat message flagged so the reply is read aloud.
-    func toggleVoiceRecording() {
+    ///
+    /// `mode` (V5): which gesture is starting a *fresh* recording — plain
+    /// push-to-talk (default, unchanged) or hands-free conversation mode.
+    /// Irrelevant to the stop branch, which always just ends whatever's
+    /// already in flight.
+    func toggleVoiceRecording(mode: CoachVoiceController.ConversationMode = .single) {
         if voiceController.isRecording {
             voiceController.stopRecording()
         } else {
@@ -430,8 +446,23 @@ final class CoachViewModel: ObservableObject {
             guard !isBusy, !isVoiceTurnActive else { return }
             speaker.stop()
             input = ""
-            voiceController.startRecording()
+            voiceController.startRecording(mode: mode)
         }
+    }
+
+    /// `CoachOrb`'s End control (spec §3.2 "Ended", delivery slice V5):
+    /// leaves conversation mode immediately, wherever it is in the turn —
+    /// stops TTS if it's speaking (this view model is the only thing that
+    /// owns both `speaker` and `voiceController`, so it's the one place
+    /// that can do both), stops/discards any in-flight recording, cancels
+    /// the "Your turn"/backgrounded-grace timers, and deactivates the
+    /// shared audio session. Deliberately does NOT touch `streamTask`/
+    /// `isStreaming` — an in-flight reply keeps streaming into the
+    /// transcript exactly as a typed turn would, just silently, same as
+    /// `stopGenerating()` not being conflated with this.
+    func endVoiceConversation() {
+        speaker.stop()
+        voiceController.cancel()
     }
 
     // MARK: - External voice entry point (Today's voice FAB)
@@ -608,6 +639,9 @@ final class CoachViewModel: ObservableObject {
         pendingAssistantId = assistantId
 
         isStreaming = true
+        // Spec §3.2, V5: "request in flight, no audio yet" — Listening (or
+        // Transcribing/Sending) → Thinking. No-op outside conversation mode.
+        if sentByVoice { voiceController.markThinking() }
 
         streamTask = Task {
             var turnPersona = assistantPersona
@@ -632,7 +666,20 @@ final class CoachViewModel: ObservableObject {
                 flushPendingReveal()
                 finishTurn(assistantId, persona: turnPersona)
                 lastActivityAt = Date()
-                if sentByVoice { speaker.finish() }
+                if sentByVoice {
+                    speaker.finish()
+                    // Spec §3.2, V5: a reply that never produced any speech
+                    // at all (e.g. a tool-only turn) would otherwise leave
+                    // the controller stuck in `.thinking` forever —
+                    // `onPlaybackStart`/`onPlaybackFinished` never fire for
+                    // it. `speaker.isSpeaking` is already accurate by now:
+                    // `finish()` above synchronously flushes (and enqueues)
+                    // whatever's left in the buffer. No-op outside
+                    // conversation mode.
+                    if !speaker.isSpeaking {
+                        voiceController.replyFinishedWithoutSpeaking()
+                    }
+                }
             } catch is CancellationError {
                 // A deliberate stop (stopGenerating()) or teardown
                 // (cancelStreaming()) already did its own cleanup
@@ -671,6 +718,14 @@ final class CoachViewModel: ObservableObject {
                 // against racing an unrelated reply still speaking.
                 if sentByVoice, !speaker.isSpeaking {
                     VoiceAudioSession.deactivate()
+                }
+                // Spec §3.6, V5: a request failure (offline or otherwise)
+                // ends conversation mode outright rather than sitting in
+                // `.thinking` — the `errorMessage`/`ErrorCard` set above is
+                // the "existing error surface" spec item 4 calls for.
+                // No-op outside conversation mode.
+                if sentByVoice {
+                    voiceController.endConversation(reason: UserFacingError.isOffline(error) ? .offline : .requestFailed)
                 }
             }
         }

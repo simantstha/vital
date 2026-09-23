@@ -43,6 +43,15 @@ final class SpeechTranscriber: ObservableObject {
     /// touching this file again; no UI reads it yet.
     @Published private(set) var endpointDeadline: Date? = nil
 
+    /// Normalized mic input level (roughly `0...1`), derived from the RMS of
+    /// the same audio-tap buffer used for recognition/recording — no extra
+    /// tap install. Published at ≤ 30 Hz (spec `ux-spec-v4` §3.2's
+    /// `CoachOrb`, delivery slice V5: "scales 1.00–1.15 with mic level"),
+    /// throttled on the audio-render thread before the hop to `@MainActor`
+    /// so a 1024-sample buffer's ~43–48 Hz callback rate doesn't flood
+    /// SwiftUI with redundant updates. 0 while not recording.
+    @Published private(set) var inputLevel: Float = 0
+
     /// The just-recorded clip, ready to upload once `isRecording` flips back
     /// to false. Nil if the `.m4a` file couldn't be created (recognition
     /// still proceeds Apple-only in that case). Cleared by `discardRecording()`.
@@ -218,11 +227,15 @@ final class SpeechTranscriber: ObservableObject {
         recordingURL = file != nil ? tempURL : nil
 
         // Captured locally rather than via `self` — the tap closure runs on
-        // the audio thread and must never touch @MainActor state.
+        // the audio thread and must never touch @MainActor state directly;
+        // `levelBridge` is the one seam that's allowed to, since it hops to
+        // `@MainActor` itself before touching anything.
         let fileForTap = file
+        let levelBridge = LevelBridge { [weak self] level in self?.inputLevel = level }
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak req] buf, _ in
             req?.append(buf)
             try? fileForTap?.write(from: buf)
+            levelBridge.report(buf)
         }
 
         audioEngine.prepare()
@@ -251,6 +264,7 @@ final class SpeechTranscriber: ObservableObject {
         // `recordingURL` on that flip to kick off the upload.
         audioFile = nil
         isRecording = false
+        inputLevel = 0
     }
 
     /// Deletes the temp recording file (if any) and clears `recordingURL`.
@@ -324,5 +338,54 @@ final class SpeechTranscriber: ObservableObject {
         noSpeechTask?.cancel(); noSpeechTask = nil
         maxDurationTask?.cancel(); maxDurationTask = nil
         endpointDeadline = nil
+    }
+}
+
+// MARK: - LevelBridge
+
+/// Rate-limits `inputLevel` samples on the audio-render thread (where the
+/// tap callback runs) and hops each one to `@MainActor` — spec `ux-spec-v4`
+/// §3.2's `CoachOrb` listening animation, delivery slice V5: "published at
+/// ≤ 30 Hz on main". `@unchecked Sendable` because `report(_:)` is only ever
+/// invoked serially by `AVAudioEngine` on its one internal render thread —
+/// `lastPublishedAt` is never touched concurrently — and `publish` itself is
+/// `@MainActor`-isolated, only ever called from inside the `Task { @MainActor
+/// in }` hop below, never from the render thread directly.
+private final class LevelBridge: @unchecked Sendable {
+    private let minInterval: TimeInterval = 1.0 / 30.0
+    private var lastPublishedAt: TimeInterval = 0
+    private let publish: @MainActor (Float) -> Void
+
+    init(publish: @escaping @MainActor (Float) -> Void) {
+        self.publish = publish
+    }
+
+    /// Called from the audio-render thread on every tap callback. Computes
+    /// RMS synchronously (cheap, no allocation) and, only if the throttle
+    /// allows it, hops to the main actor to publish.
+    func report(_ buffer: AVAudioPCMBuffer) {
+        let now = ProcessInfo.processInfo.systemUptime
+        guard now - lastPublishedAt >= minInterval else { return }
+        lastPublishedAt = now
+        let level = Self.rms(of: buffer)
+        let publish = self.publish
+        Task { @MainActor in publish(level) }
+    }
+
+    /// Root-mean-square of channel 0, scaled so typical speech (RMS roughly
+    /// 0.01–0.3 for a normalized `Float` PCM buffer) lands well inside
+    /// `0...1` rather than needing the loudest possible input to reach 1.
+    private static func rms(of buffer: AVAudioPCMBuffer) -> Float {
+        guard let channelData = buffer.floatChannelData else { return 0 }
+        let frameCount = Int(buffer.frameLength)
+        guard frameCount > 0 else { return 0 }
+        let samples = channelData[0]
+        var sumOfSquares: Float = 0
+        for i in 0..<frameCount {
+            let sample = samples[i]
+            sumOfSquares += sample * sample
+        }
+        let rms = sqrt(sumOfSquares / Float(frameCount))
+        return min(1, max(0, rms * 6))
     }
 }
