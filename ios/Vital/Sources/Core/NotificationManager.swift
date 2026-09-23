@@ -151,6 +151,12 @@ final class NotificationManager: NSObject, ObservableObject {
 
     @discardableResult
     func requestPermission() async -> Bool {
+        // Screenshot harness (`-VitalFixture <scenario>`): never show the
+        // system notification prompt — a blocking system alert would stall
+        // `XCUIScreen.main.screenshot()`. Compiled out of Release entirely.
+        #if DEBUG
+        guard !FixtureMode.isActive else { return false }
+        #endif
         let granted = (try? await center.requestAuthorization(options: [.alert, .sound, .badge])) ?? false
         await refreshPermissionState()
         if granted { UIApplication.shared.registerForRemoteNotifications() }

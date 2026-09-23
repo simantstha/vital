@@ -203,12 +203,305 @@ jobs:
           path: ios/build/TestResults.xcresult
           retention-days: 7
 
+  ios-screenshots:
+    name: iOS — screenshots
+    needs: changes
+    if: needs.changes.outputs.ios == 'true'
+    runs-on: macos-latest
+    # Screenshot harness (see docs/CI-TESTFLIGHT.md — "iOS screenshot
+    # harness"): runs VitalUITests/VitalScreenshots against every fixture
+    # scenario in both light and dark, then publishes the PNGs to the
+    # `ci-screenshots` branch so an orchestrator without a simulator can
+    # `git fetch` and view them. Deliberately its own job (not folded into
+    # `ios` above) so a slow/flaky screenshot run never blocks the fast
+    # build-and-unit-test signal.
+    timeout-minutes: 40
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: ios
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      # Secrets.swift is gitignored. No real secret is needed to build or run
+      # the screenshot harness — every network response is served by the
+      # DEBUG-only FixtureURLProtocol, never the real backend.
+      - name: Write Secrets.swift (dummy token, no secrets required)
+        run: |
+          mkdir -p Vital/Sources/Core
+          sed "s|REPLACE_WITH_API_SHARED_SECRET|dummy-pr-check-token|" \
+            Vital/Secrets.example.swift > Vital/Sources/Core/Secrets.swift
+
+      - name: Generate Xcode project (XcodeGen)
+        run: |
+          curl -fsSL -o /tmp/xcodegen.zip https://github.com/yonaskolb/XcodeGen/releases/latest/download/xcodegen.zip
+          unzip -q /tmp/xcodegen.zip -d /tmp
+          cd Vital && /tmp/xcodegen/bin/xcodegen generate
+
+      # Same dynamic simulator selection as the `ios` job above — kept as a
+      # literal copy rather than factored out (see the module header note).
+      - name: Select an iOS 26+ iPhone simulator
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' >> "$GITHUB_ENV"
+          import json, re, subprocess, sys
+
+          raw = subprocess.check_output(
+              ["xcrun", "simctl", "list", "devices", "available", "-j"]
+          )
+          data = json.loads(raw)
+
+          candidates = []
+          for runtime, devices in data.get("devices", {}).items():
+              m = re.search(r"iOS[- ](\d+)[-.](\d+)", runtime)
+              if not m:
+                  continue
+              major, minor = int(m.group(1)), int(m.group(2))
+              if major < 26:
+                  continue
+              for d in devices:
+                  if d.get("isAvailable") and "iPhone" in d.get("name", ""):
+                      candidates.append((major, minor, d["name"], d["udid"]))
+
+          if not candidates:
+              print(
+                  "::error::No available iPhone simulator with an iOS >= 26 "
+                  "runtime was found on this runner. List what IS available "
+                  "with `xcrun simctl list runtimes` / `xcrun simctl list "
+                  "devices available` and either wait for GitHub's macos-latest "
+                  "image to ship an iOS 26 runtime, or pin a specific "
+                  "xcode-version in this workflow that bundles one.",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+
+          candidates.sort(key=lambda c: (c[0], c[1]))
+          major, minor, name, udid = candidates[0]
+          print(f"Selected simulator: {name} — iOS {major}.{minor} (UDID {udid})", file=sys.stderr)
+          print(f"SIM_UDID={udid}")
+          print(f"SIM_NAME={name}")
+          print(f"SIM_RUNTIME={major}.{minor}")
+          PY
+
+      - name: Build for testing & run screenshot UI tests
+        run: |
+          set -o pipefail
+          mkdir -p build
+          echo "Testing on: $SIM_NAME (iOS $SIM_RUNTIME), UDID $SIM_UDID"
+          if command -v xcbeautify >/dev/null 2>&1; then
+            xcodebuild test \
+              -project Vital/Vital.xcodeproj \
+              -scheme VitalScreenshots \
+              -destination "id=$SIM_UDID" \
+              -resultBundlePath build/Screens.xcresult \
+              CODE_SIGNING_ALLOWED=NO \
+              | xcbeautify
+          else
+            xcodebuild test \
+              -project Vital/Vital.xcodeproj \
+              -scheme VitalScreenshots \
+              -destination "id=$SIM_UDID" \
+              -resultBundlePath build/Screens.xcresult \
+              CODE_SIGNING_ALLOWED=NO
+          fi
+
+      # Best-effort from here down: only the test step above should fail this
+      # job (or the whole `pr-checks` aggregate) — exporting/publishing
+      # screenshots is a nice-to-have, not a correctness signal.
+      - name: Export screenshot attachments
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ ! -d build/Screens.xcresult ]; then
+            echo "No result bundle produced — nothing to export."
+            exit 0
+          fi
+
+          xcrun xcresulttool export attachments \
+            --path build/Screens.xcresult \
+            --output-path build/screens
+
+          # `manifest.json` maps each exported file to the attachment's
+          # suggested human-readable name (`<scenario>__<screen>__<light|
+          # dark>`, from ScreenshotTests.capture) — rename into
+          # build/screens-named so the artifact/publish step below is just
+          # a flat folder of sensibly-named PNGs.
+          python3 - <<'PY'
+          import json, os, re, shutil
+
+          out_dir = "build/screens"
+          manifest_path = os.path.join(out_dir, "manifest.json")
+          if not os.path.exists(manifest_path):
+              print("No manifest.json — nothing to rename.")
+              raise SystemExit(0)
+
+          with open(manifest_path) as f:
+              manifest = json.load(f)
+
+          renamed_dir = "build/screens-named"
+          os.makedirs(renamed_dir, exist_ok=True)
+
+          def safe(name):
+              return re.sub(r"[^A-Za-z0-9_.-]+", "_", name)
+
+          # xcresulttool appends `_<index>_<UUID>` to the suggested name
+          # before the extension (e.g.
+          # "server_error__logs__dark_0_C1777C02-010F-4176-A41E-42DF36306F90.png")
+          # — strip it so files land as "server_error__logs__dark.png",
+          # matching ScreenshotTests.capture's attachment name exactly.
+          suffix_re = re.compile(r"_\d+_[0-9A-Fa-f-]{36}(?=\.png$)")
+
+          # Only ScreenshotTests.capture's own screenshots (named
+          # "<scenario>__<screen>__light|dark") match this. On a test
+          # *failure*, XCTest also attaches its own failure diagnostics (UI
+          # hierarchy dumps, "Debug description for ...", screen recordings,
+          # …) with unrelated suggested names but a real (often .png)
+          # extension of their own — those must never be renamed into our
+          # naming convention or published as if they were one of our
+          # screenshots, so anything that doesn't match this exactly is
+          # skipped outright rather than coerced into it.
+          valid_name_re = re.compile(r"^[a-z_]+__[A-Za-z]+__(light|dark)\.png$")
+
+          count = 0
+          skipped = 0
+          for entry in manifest:
+              for attachment in entry.get("attachments", []):
+                  # Xcode 16's xcresulttool key is `exportedFileName`;
+                  # `filename` is kept as a fallback in case a future/older
+                  # tool version uses that name instead.
+                  src_name = attachment.get("exportedFileName") or attachment.get("filename")
+                  suggested = attachment.get("suggestedHumanReadableName") or src_name
+                  if not src_name or not suggested:
+                      continue
+                  src = os.path.join(out_dir, src_name)
+                  if not os.path.exists(src):
+                      continue
+                  dst_name = safe(suffix_re.sub("", suggested))
+                  if not valid_name_re.match(dst_name):
+                      skipped += 1
+                      continue
+                  dst = os.path.join(renamed_dir, dst_name)
+                  base, ext = os.path.splitext(dst)
+                  counter = 1
+                  while os.path.exists(dst):
+                      dst = f"{base}_{counter}{ext}"
+                      counter += 1
+                  shutil.copyfile(src, dst)
+                  count += 1
+
+          if skipped:
+              print(f"Skipped {skipped} non-screenshot attachment(s) (XCTest diagnostics, etc.)")
+
+          # Diagnostic only: log what the manifest actually looked like when
+          # nothing matched, so a genuine xcresulttool schema change is easy
+          # to track down — deliberately does NOT fall back to copying
+          # whatever PNGs exist unfiltered; that's exactly how XCTest's own
+          # failure-diagnostic attachments got published as if they were
+          # screenshots once already.
+          if count == 0:
+              first_attachment_keys = None
+              for entry in manifest:
+                  attachments = entry.get("attachments", [])
+                  if attachments:
+                      first_attachment_keys = sorted(attachments[0].keys())
+                      break
+              print(
+                  "::warning::No screenshots matched the expected "
+                  "<scenario>__<screen>__<light|dark>.png naming after export "
+                  f"(first attachment's keys: {first_attachment_keys})."
+              )
+
+          print(f"Exported {count} screenshot(s) to {renamed_dir}")
+          PY
+
+          png_count=$(find build/screens-named -name '*.png' 2>/dev/null | wc -l | tr -d ' ')
+          if [ "$png_count" -eq 0 ]; then
+            echo "::error::xcresulttool produced build/Screens.xcresult but no PNGs ended up in build/screens-named — nothing to upload or publish. See the step log above for the manifest.json shape that was actually produced."
+            exit 1
+          fi
+          echo "Screenshots ready: $png_count PNG(s) in build/screens-named"
+
+      - name: Upload screenshots as a build artifact
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-screenshots
+          path: ios/build/screens-named
+          retention-days: 30
+          if-no-files-found: ignore
+
+      # Forked PRs can't be granted `contents: write` on this repo, so
+      # publishing to `ci-screenshots` is skipped for them — the artifact
+      # upload above is still there for the PR author to download. Never
+      # fails the job either way (`continue-on-error`).
+      - name: Publish screenshots to ci-screenshots branch
+        if: always() && github.event.pull_request.head.repo.full_name == github.repository
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ ! -d build/screens-named ] || [ -z "$(ls -A build/screens-named 2>/dev/null)" ]; then
+            echo "No screenshots to publish."
+            exit 0
+          fi
+
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          # `git rev-parse --short HEAD` would be the synthetic PR-merge
+          # commit `actions/checkout` builds for a `pull_request` event, not
+          # a commit that exists on the PR branch — derive the short SHA from
+          # the actual PR head instead, so the published path matches a real,
+          # `git fetch`-able commit.
+          SHORT_SHA="${HEAD_SHA:0:7}"
+          DEST_DIR="pr-${PR_NUMBER}/${SHORT_SHA}"
+          REMOTE="https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          WORKTREE="$RUNNER_TEMP/ci-screenshots"
+          rm -rf "$WORKTREE"
+
+          if git ls-remote --exit-code --heads "$REMOTE" ci-screenshots >/dev/null 2>&1; then
+            git clone --quiet --depth 1 --branch ci-screenshots "$REMOTE" "$WORKTREE"
+          else
+            git clone --quiet --depth 1 "$REMOTE" "$WORKTREE"
+            (cd "$WORKTREE" && git checkout --orphan ci-screenshots && git rm -rf . >/dev/null 2>&1)
+          fi
+
+          mkdir -p "$WORKTREE/$DEST_DIR"
+          cp build/screens-named/*.png "$WORKTREE/$DEST_DIR/"
+
+          cd "$WORKTREE"
+          git add "$DEST_DIR"
+          git commit --quiet -m "Add screenshots for PR #${PR_NUMBER} (${SHORT_SHA})"
+
+          attempt=0
+          until git push --quiet origin ci-screenshots; do
+            attempt=$((attempt + 1))
+            if [ "$attempt" -ge 3 ]; then
+              echo "::error::Failed to push to ci-screenshots after 3 attempts"
+              exit 1
+            fi
+            git fetch --quiet origin ci-screenshots
+            git rebase --quiet origin/ci-screenshots
+          done
+
+          echo "Published to https://github.com/${{ github.repository }}/tree/ci-screenshots/${DEST_DIR}"
+
   # Single stable check name to mark as required on main — the jobs above
   # come and go (skipped) based on which paths changed, which makes them
   # unreliable branch-protection check names by themselves.
   pr-checks:
     name: PR checks
-    needs: [changes, backend, ios]
+    needs: [changes, backend, ios, ios-screenshots]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -216,14 +509,14 @@ jobs:
         run: |
           set -e
           failed=0
-          for result in "${{ needs.changes.result }}" "${{ needs.backend.result }}" "${{ needs.ios.result }}"; do
+          for result in "${{ needs.changes.result }}" "${{ needs.backend.result }}" "${{ needs.ios.result }}" "${{ needs.ios-screenshots.result }}"; do
             if [ "$result" = "failure" ] || [ "$result" = "cancelled" ]; then
               failed=1
             fi
           done
           if [ "$failed" -eq 1 ]; then
             echo "One or more required jobs failed or were cancelled:"
-            echo "  changes=${{ needs.changes.result }} backend=${{ needs.backend.result }} ios=${{ needs.ios.result }}"
+            echo "  changes=${{ needs.changes.result }} backend=${{ needs.backend.result }} ios=${{ needs.ios.result }} ios-screenshots=${{ needs.ios-screenshots.result }}"
             exit 1
           fi
-          echo "All required jobs passed (or were skipped): changes=${{ needs.changes.result }} backend=${{ needs.backend.result }} ios=${{ needs.ios.result }}"
+          echo "All required jobs passed (or were skipped): changes=${{ needs.changes.result }} backend=${{ needs.backend.result }} ios=${{ needs.ios.result }} ios-screenshots=${{ needs.ios-screenshots.result }}"

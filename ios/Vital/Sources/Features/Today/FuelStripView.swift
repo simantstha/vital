@@ -48,5 +48,9 @@ struct FuelStripView: View {
             )
         }
         .buttonStyle(.plain)
+        // Stable tap/wait target for the screenshot harness (VitalUITests) —
+        // the label text above carries a live kcal number, too brittle to
+        // match on directly.
+        .accessibilityIdentifier("today.fuelStrip")
     }
 }

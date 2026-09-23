@@ -101,6 +101,15 @@ final class HealthKitManager: ObservableObject {
     }
 
     func requestAuthorization() async {
+        // Screenshot harness (`-VitalFixture <scenario>`): never show the
+        // system HealthKit prompt — it would block `XCUIScreen.main
+        // .screenshot()` indefinitely since XCUITest doesn't dismiss system
+        // alerts on its own. Every fixture scenario already lands signed-in
+        // via AuthViewModel, so this is the only guard needed on this path.
+        // Compiled out of Release entirely.
+        #if DEBUG
+        guard !FixtureMode.isActive else { return }
+        #endif
         guard HKHealthStore.isHealthDataAvailable() else { return }
         UserDefaults.standard.set(true, forKey: Self.didRequestAuthorizationKey)
         do {

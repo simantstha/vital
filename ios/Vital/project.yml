@@ -103,6 +103,24 @@ targets:
         SWIFT_VERSION: "5"
         GENERATE_INFOPLIST_FILE: YES
 
+  # Screenshot harness (see docs/CI-TESTFLIGHT.md). Kept out of the `Vital`
+  # scheme's own test targets and given its own `VitalScreenshots` scheme
+  # below so the fast unit-test job (`xcodebuild test -scheme Vital`) never
+  # runs it — only the dedicated `ios-screenshots` PR-checks job does.
+  VitalUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "26.0"
+    sources:
+      - path: UITests
+    dependencies:
+      - target: Vital
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.simantstha.vital.uitests
+        SWIFT_VERSION: "5"
+        GENERATE_INFOPLIST_FILE: YES
+
 schemes:
   Vital:
     build:
@@ -120,3 +138,18 @@ schemes:
       config: Debug
     archive:
       config: Release
+
+  # Screenshot harness only — deliberately separate from the `Vital` scheme
+  # above so `xcodebuild test -scheme Vital` (the fast unit-test job) never
+  # builds or runs VitalUITests. See docs/CI-TESTFLIGHT.md.
+  VitalScreenshots:
+    build:
+      targets:
+        Vital: all
+        VitalUITests: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - VitalUITests
