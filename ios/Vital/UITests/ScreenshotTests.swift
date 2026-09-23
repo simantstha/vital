@@ -221,6 +221,22 @@ final class ScreenshotTests: XCTestCase {
             // fetch resolves (loading shows skeleton placeholders instead).
             XCTAssertTrue(app.staticTexts["HRV"].waitForExistence(timeout: 15),
                            "Trends should render its metric tiles [\(scenario)/\(appearance)]")
+
+            if scenario == "weight_loss" {
+                // Goal-ordered Trends (customer-panel finding, 2026-09-23 —
+                // docs/ux-spec-v4.md §9's screenshot acceptance table:
+                // "Weight card first"): `trends.weightCard` must exist and
+                // sit ABOVE the first recovery tile (HRV), not just
+                // somewhere on screen.
+                let weightCard = app.buttons["trends.weightCard"]
+                XCTAssertTrue(weightCard.waitForExistence(timeout: 10),
+                               "weight_loss Trends should show the weight card [\(appearance)]")
+                let recoveryTile = app.staticTexts["HRV"]
+                XCTAssertTrue(recoveryTile.waitForExistence(timeout: 10),
+                               "weight_loss Trends should still show the recovery section [\(appearance)]")
+                XCTAssertLessThan(weightCard.frame.minY, recoveryTile.frame.minY,
+                                   "weight_loss Trends' weight card should appear above the first recovery card [\(appearance)]")
+            }
         }
         capture(app, name: "\(scenario)__trends__\(appearance)")
     }
