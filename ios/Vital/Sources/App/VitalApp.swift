@@ -69,9 +69,18 @@ struct VitalApp: App {
     var body: some Scene {
         WindowGroup {
             // No forced color scheme — Vital follows the system appearance so
-            // the adaptive Liquid Glass palette renders correctly in light & dark.
+            // the adaptive Liquid Glass palette renders correctly in light &
+            // dark. Except in the DEBUG-only screenshot harness, launched
+            // with `-VitalAppearance dark|light`: XCUITest's usual
+            // `-AppleInterfaceStyle` launch argument isn't reliably honored
+            // by iOS 26 simulators, so the harness forces the scheme itself
+            // here instead — see FixtureMode.appearance. `nil` under any
+            // normal launch, so this is a no-op otherwise.
             RootView()
                 .environmentObject(router)
+                #if DEBUG
+                .preferredColorScheme(FixtureMode.appearance)
+                #endif
         }
     }
 }

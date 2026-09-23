@@ -426,6 +426,61 @@ jobs:
           fi
           echo "Screenshots ready: $png_count PNG(s) in build/screens-named"
 
+      # Catches a regression like the one that motivated this check: the
+      # `-VitalAppearance`/`-AppleInterfaceStyle` launch args silently not
+      # being honored, which produced `__dark` screenshots that were
+      # byte-identical to their `__light` pair (or otherwise rendered light).
+      # Deliberately a warning, not a failure — a real appearance difference
+      # that happens to hash-collide is vanishingly unlikely, but this is a
+      # smoke check, not a pixel-diff tool, so it never blocks the PR.
+      - name: Check for identical light/dark screenshot pairs
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ ! -d build/screens-named ]; then
+            echo "No screenshots to check."
+            exit 0
+          fi
+
+          python3 - <<'PY'
+          import hashlib
+          import os
+          import re
+
+          screens_dir = "build/screens-named"
+          pair_re = re.compile(r"^(.*)__(light|dark)\.png$")
+
+          def md5_of(path):
+              h = hashlib.md5()
+              with open(path, "rb") as f:
+                  for chunk in iter(lambda: f.read(65536), b""):
+                      h.update(chunk)
+              return h.hexdigest()
+
+          hashes = {}
+          for name in sorted(os.listdir(screens_dir)):
+              match = pair_re.match(name)
+              if not match:
+                  continue
+              base, appearance = match.group(1), match.group(2)
+              hashes.setdefault(base, {})[appearance] = md5_of(os.path.join(screens_dir, name))
+
+          identical = sorted(
+              base for base, byAppearance in hashes.items()
+              if "light" in byAppearance and "dark" in byAppearance
+              and byAppearance["light"] == byAppearance["dark"]
+          )
+
+          if identical:
+              names = ", ".join(f"{base}__{{light,dark}}.png" for base in identical)
+              print(
+                  f"::warning::{len(identical)} light/dark screenshot pair(s) are "
+                  f"byte-identical (dark mode likely isn't being applied): {names}"
+              )
+          else:
+              print("No identical light/dark screenshot pairs found.")
+          PY
+
       - name: Upload screenshots as a build artifact
         if: always()
         continue-on-error: true
