@@ -124,6 +124,15 @@ final class CalendarEventsProvider {
     /// Requests full calendar read access (iOS 17+ API — deployment target
     /// is iOS 26). Returns whether access was granted.
     func requestAccess() async -> Bool {
+        // Screenshot harness (`-VitalFixture <scenario>`): never show the
+        // system calendar prompt — a blocking system alert would stall
+        // `XCUIScreen.main.screenshot()`. Never reached in practice (the
+        // screenshot harness never taps the "Sync your calendar" affordance
+        // this gates), but guarded to match HealthKitManager/NotificationManager
+        // in case a future scenario does. Compiled out of Release entirely.
+        #if DEBUG
+        guard !FixtureMode.isActive else { return false }
+        #endif
         do {
             return try await store.requestFullAccessToEvents()
         } catch {

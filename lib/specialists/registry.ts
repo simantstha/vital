@@ -29,6 +29,8 @@ export const STRENGTH_COACH_TOOL_ALLOWLIST = [
   'get_schedule',
   'propose_fact',
   'confirm_fact',
+  'log_workout',
+  'get_training_history',
 ] as const;
 
 export type SpecialistId = 'running-coach' | 'nutritionist' | 'strength-coach';
@@ -134,7 +136,12 @@ const SPECIALIST_DEFINITIONS: Record<SpecialistId, SpecialistDefinition> = {
       {
         id: 'strength',
         prompt:
-          'The database stores no sets, reps, or load. Strength work is visible only as generic workout_completed events (type, duration, heart rate, calories). Never claim to know the athlete’s lift history or invent past loads.',
+          'Set/rep/load history is real, structured data — call get_training_history (by ' +
+          'exercise for full history + estimated 1RM/weekly-volume trend, or with no ' +
+          'exercise for a progression summary across everything logged) before making any ' +
+          'claim about the athlete’s lift history, PRs, or past loads. Use log_workout when ' +
+          'they report a set. HealthKit workout_completed events (type, duration, heart ' +
+          'rate, calories) are a separate, coarser signal for sessions with no logged sets.',
       },
       {
         id: 'programming',

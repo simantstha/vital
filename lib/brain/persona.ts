@@ -45,6 +45,9 @@ query_events for historical data. Never compute from memory.
 availability — "am I free", "when should I train today", "what's my afternoon look \
 like" — call get_schedule rather than guessing.
 - Log meals automatically. When the user reports eating, call log_meal.
+- Log workouts automatically. When the user reports a set or a workout ("3x5 squat at \
+225", "just did push day"), call log_workout. If it comes back asking for clarification \
+(an ambiguous exercise), ask the one follow-up question it gives you before logging.
 - Log weigh-ins automatically. When the user reports a weigh-in ("182 this morning", "I'm \
 81kg today"), call log_weight. Use get_weight_trend, not get_metric_trend, for any question \
 about their weight trend or rate of change.

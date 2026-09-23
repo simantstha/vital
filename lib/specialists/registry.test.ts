@@ -155,11 +155,13 @@ test('nutritionist prompt requires explicit agreement before changing the diet b
   assert.match(dietBudgetModule!.prompt, /explicit agreement/);
 });
 
-test('strength coach prompt discloses the no sets/reps/load data limitation', () => {
+test('strength coach prompt directs it to ground lift-history claims in get_training_history', () => {
   const strengthCoach = new SpecialistRegistry({ SPECIALIST_MODEL: 'claude-specialist-test' }).get('strength-coach');
   const strengthModule = strengthCoach.promptModules.find((module) => module.id === 'strength');
   assert.ok(strengthModule);
-  assert.match(strengthModule!.prompt, /no sets, reps, or load/);
-  assert.match(strengthModule!.prompt, /workout_completed/);
+  assert.match(strengthModule!.prompt, /get_training_history/);
+  assert.match(strengthModule!.prompt, /log_workout/);
+  assert.ok(strengthCoach.allowedTools.includes('get_training_history'));
+  assert.ok(strengthCoach.allowedTools.includes('log_workout'));
   assert.ok(!strengthCoach.allowedTools.includes('update_diet_budget'));
 });

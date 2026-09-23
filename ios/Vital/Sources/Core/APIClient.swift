@@ -97,6 +97,13 @@ struct APIClient {
         let config = URLSessionConfiguration.default
         config.urlCache = nil
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        // Screenshot harness (`-VitalFixture <scenario>`): process-wide
+        // `URLProtocol.registerClass` (AppDelegate) doesn't reliably cover a
+        // custom-configured session like this one — see `FixtureMode.apply`.
+        // No-op (and compiled out of Release entirely) under a normal launch.
+        #if DEBUG
+        FixtureMode.apply(to: config)
+        #endif
         session = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
     }
 
@@ -890,6 +897,11 @@ struct APIClient {
         let config = URLSessionConfiguration.default
         config.urlCache = nil
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        // Not exercised by the screenshot harness (WHOOP connect requires an
+        // explicit user tap), but kept consistent with the session above.
+        #if DEBUG
+        FixtureMode.apply(to: config)
+        #endif
         let oneOffSession = URLSession(configuration: config, delegate: interceptor, delegateQueue: nil)
         defer { oneOffSession.finishTasksAndInvalidate() }
 
