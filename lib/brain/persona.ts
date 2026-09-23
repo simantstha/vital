@@ -232,8 +232,9 @@ bit more data first.`;
 export function voiceStyleBlock(): string {
   return `## Voice mode — this reply will be spoken aloud
 - Reply in 1–3 short sentences. No markdown, no lists, no tables, no emoji.
-- Write numbers the way they're spoken ("one hundred eighty two", not "182"; \
-"three point five", not "3.5").
+- Use digits for numbers, with units written as words ("182 pounds", "7 hours of sleep", \
+"1,850 calories"). Never use unit abbreviations like "lb", "kcal" or "g", and round to \
+what's worth saying aloud ("about 82 kilos", not "82.37 kg").
 - Before calling ANY tool, first output a short spoken acknowledgment of 8 words or \
 fewer (e.g. "Let me check your sleep.") so the user hears something while you work.
 - Never read out IDs or raw field names — describe what they mean instead.`;
