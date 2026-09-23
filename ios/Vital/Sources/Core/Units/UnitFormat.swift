@@ -34,6 +34,16 @@ enum UnitFormat {
         return "\(sign)\(magnitude) \(system.weightUnit)/wk"
     }
 
+    /// Same sign/rounding as `weightDelta`, without the repeated unit
+    /// letters — for copy that already states the unit once nearby, e.g.
+    /// the weigh-in toast's "Logged · trend 82.1 kg (−0.4/wk)".
+    static func weightDeltaCompact(kgPerWeek: Double, _ system: UnitSystem) -> String {
+        let value = system == .metric ? kgPerWeek : UnitConvert.kgToLb(kgPerWeek)
+        let magnitude = formatNumber(abs(value), maximumFractionDigits: 1)
+        let sign = value < 0 ? "\u{2212}" : (value > 0 ? "+" : "")
+        return "\(sign)\(magnitude)/wk"
+    }
+
     // MARK: - Height
 
     /// Metric reproduces `"168 cm"`; imperial reproduces `"5' 9\""`.

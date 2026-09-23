@@ -80,6 +80,7 @@ struct TodayView: View {
                                     proteinHave: vm.diet.protein.current,
                                     proteinGoal: vm.diet.protein.target,
                                     trend: vm.weightLog?.trend,
+                                    entries: vm.weightLog?.entries ?? [],
                                     system: unitPref.current,
                                     chip: vm.weighInChip,
                                     onChipTap: { onWeighInChipTap() },
@@ -178,6 +179,7 @@ struct TodayView: View {
             VitalSheet(detents: [.height(340)]) {
                 WeighInSheet(
                     prefillKg: WeightHeroLogic.lastWeightKg(entries: vm.weightLog?.entries ?? []),
+                    currentTrendKg: vm.weightLog?.trend.days.last?.trendKg,
                     system: unitPref.current,
                     isSaving: vm.isLoggingWeight,
                     onSave: { value in

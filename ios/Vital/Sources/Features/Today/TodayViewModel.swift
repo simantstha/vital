@@ -198,11 +198,7 @@ final class TodayViewModel: ObservableObject {
     @Published private(set) var isLoggingWeight = false
 
     var weighInChip: WeightHeroLogic.WeighInChip {
-        WeightHeroLogic.weighInChip(
-            lastWeightKg: WeightHeroLogic.lastWeightKg(entries: weightLog?.entries ?? []),
-            healthKitTodayKg: healthKitBodyMassTodayKg,
-            system: UnitPreference.shared.current
-        )
+        WeightHeroLogic.weighInChip(healthKitTodayKg: healthKitBodyMassTodayKg)
     }
 
     /// The single "Next up" row shown in place of the full plan list (owner
@@ -1046,7 +1042,6 @@ final class TodayViewModel: ObservableObject {
         defer { isLoggingWeight = false }
 
         let today = TodayViewModel.localDateKey(Date())
-        let weightKg = unitWire == "kg" ? weight : UnitConvert.lbToKg(weight)
 
         do {
             try await apiClient.logWeight(weight: weight, unit: unitWire, date: today)
@@ -1056,7 +1051,15 @@ final class TodayViewModel: ObservableObject {
             // requires a real reversal path — see the task brief). The
             // success haptic still fires (`ActionToastHostModifier`'s
             // `.sensoryFeedback(Theme.Haptics.success, ...)`).
-            actionToast.show(message: "Logged \(UnitFormat.weight(kg: weightKg, system))")
+            //
+            // Dietitian review (2026-09-23): the toast leads with the
+            // refreshed TREND, never the raw number just typed/confirmed —
+            // see `WeightHeroLogic.weighInToastMessage`.
+            actionToast.show(message: WeightHeroLogic.weighInToastMessage(
+                entries: weightLog?.entries ?? [],
+                trend: weightLog?.trend,
+                system: system
+            ))
         } catch {
             toastMessage = "Couldn't save — try again"
             print("[Vital] logWeight failed: \(error.localizedDescription)")

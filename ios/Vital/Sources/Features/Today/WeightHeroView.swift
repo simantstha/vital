@@ -14,6 +14,9 @@ struct WeightHeroView: View {
     let proteinGoal: Int
 
     let trend: WeightTrendDTO?
+    /// Raw weigh-in history — needed (alongside `trend`) for
+    /// `WeightHeroLogic`'s >= 7-day span gate on the weekly-rate line.
+    let entries: [WeightLogEntryDTO]
     let system: UnitSystem
     let chip: WeightHeroLogic.WeighInChip
 
@@ -28,7 +31,9 @@ struct WeightHeroView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var trendHeadline: String { WeightHeroLogic.trendHeadline(trend: trend, system: system) }
-    private var weeklyChange: String? { WeightHeroLogic.weeklyChangeText(trend: trend, system: system) }
+    private var weeklyChange: String? {
+        WeightHeroLogic.weeklyChangeText(trend: trend, entries: entries, system: system)
+    }
 
     /// Last ~30 days of smoothed trend points, converted to the user's unit.
     private var sparklinePoints: [(day: String, value: Double)] {

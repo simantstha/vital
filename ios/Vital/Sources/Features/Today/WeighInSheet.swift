@@ -7,22 +7,32 @@ import SwiftUI
 /// keyboard focused instead of a pre-filled value, per spec.
 struct WeighInSheet: View {
     let prefillKg: Double?
+    /// Current trend weight (kg), if any — backs the plausibility-bounds
+    /// >3%-from-trend confirm (dietitian review, 2026-09-23). `nil` when
+    /// there's no trend yet to compare against (never confirms in that case).
+    let currentTrendKg: Double?
     let system: UnitSystem
     let isSaving: Bool
     var onSave: (Double) -> Void
     var onCancel: () -> Void
 
     @State private var text: String
+    /// Set once the user has already seen and dismissed the >3%-from-trend
+    /// confirm for the value currently in `text` — a second tap of Save then
+    /// actually saves. Reset whenever `text` changes (a re-check is needed).
+    @State private var confirmedDelta = false
     @FocusState private var fieldFocused: Bool
 
     init(
         prefillKg: Double?,
+        currentTrendKg: Double?,
         system: UnitSystem,
         isSaving: Bool,
         onSave: @escaping (Double) -> Void,
         onCancel: @escaping () -> Void
     ) {
         self.prefillKg = prefillKg
+        self.currentTrendKg = currentTrendKg
         self.system = system
         self.isSaving = isSaving
         self.onSave = onSave
@@ -36,9 +46,38 @@ struct WeighInSheet: View {
         Double(text.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: ",", with: "."))
     }
 
+    /// `enteredValue` converted to kg regardless of `system`, for the
+    /// plausibility-bounds and trend-delta checks (both defined in kg).
+    private var enteredValueKg: Double? {
+        guard let value = enteredValue else { return nil }
+        return system == .metric ? value : UnitConvert.lbToKg(value)
+    }
+
+    /// Dietitian-review bounds (§ plausibility, 2026-09-23): a typed value
+    /// outside 25–350 kg is rejected with inline copy rather than silently
+    /// accepted — catches unit mix-ups and stray digits before they corrupt
+    /// the trend.
+    private var boundsErrorText: String? {
+        guard let kg = enteredValueKg, !WeightHeroLogic.isPlausibleWeight(kg: kg) else { return nil }
+        let lo = UnitFormat.weight(kg: WeightHeroLogic.minPlausibleWeightKg, system)
+        let hi = UnitFormat.weight(kg: WeightHeroLogic.maxPlausibleWeightKg, system)
+        return "Enter a weight between \(lo) and \(hi)."
+    }
+
+    /// The one-line ">3% from trend" confirm text, or `nil` when the entry
+    /// is close enough to the current trend (or there's no trend yet).
+    private var deltaConfirmText: String? {
+        guard let kg = enteredValueKg,
+              WeightHeroLogic.exceedsTrendDeltaThreshold(enteredKg: kg, currentTrendKg: currentTrendKg),
+              let currentTrendKg
+        else { return nil }
+        let diff = UnitFormat.weight(kg: abs(kg - currentTrendKg), system)
+        return "That's \(diff) from your trend — save anyway?"
+    }
+
     private var canSave: Bool {
-        guard let value = enteredValue else { return false }
-        return value > 0
+        guard let value = enteredValue, value > 0 else { return false }
+        return boundsErrorText == nil
     }
 
     var body: some View {
@@ -83,20 +122,44 @@ struct WeighInSheet: View {
             .accessibilityElement(children: .combine)
             .accessibilityLabel("Weight: \(text.isEmpty ? "0" : text) \(system.weightUnit)")
 
+            if let boundsErrorText {
+                Text(boundsErrorText)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(Theme.Colors.alert)
+                    .multilineTextAlignment(.center)
+                    .accessibilityIdentifier("weighIn.boundsError")
+            } else if confirmedDelta == false, let deltaConfirmText {
+                // Neutral styling (dietitian review, 2026-09-23) — this is an
+                // honest "does that look right?" prompt, not a warning.
+                Text(deltaConfirmText)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(Theme.Colors.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .accessibilityIdentifier("weighIn.deltaConfirm")
+            }
+
             HStack(spacing: Theme.Spacing.xxl) {
                 stepButton(systemName: "minus", delta: -0.1, accessibilityLabel: "Decrease by 0.1")
                 stepButton(systemName: "plus", delta: 0.1, accessibilityLabel: "Increase by 0.1")
             }
 
             Button {
-                guard let value = enteredValue, value > 0 else { return }
+                guard let value = enteredValue, canSave else { return }
+                // A pending, not-yet-acknowledged >3%-from-trend confirm gets
+                // one tap to surface the copy above, and a second to proceed
+                // — logging never silently overrides an unusual entry, but it
+                // also never hard-blocks it (§5.5: never "are you sure?").
+                if !confirmedDelta, deltaConfirmText != nil {
+                    confirmedDelta = true
+                    return
+                }
                 onSave(value)
             } label: {
                 HStack(spacing: Theme.Spacing.sm) {
                     if isSaving {
                         ProgressView().tint(Theme.Colors.onAccent)
                     }
-                    Text(isSaving ? "Saving…" : "Log \(text.isEmpty ? "0" : text) \(system.weightUnit)")
+                    Text(saveButtonTitle)
                         .font(.system(size: 16, weight: .bold))
                 }
                 .foregroundStyle(Theme.Colors.onAccent)
@@ -119,6 +182,19 @@ struct WeighInSheet: View {
             // First-ever weigh-in: keyboard focused, nothing pre-filled (spec §5.3).
             if prefillKg == nil { fieldFocused = true }
         }
+        .onChange(of: text) { _, _ in
+            // A changed value needs its own bounds/delta re-check.
+            confirmedDelta = false
+        }
+    }
+
+    private var saveButtonTitle: String {
+        if isSaving { return "Saving…" }
+        // Only after the first tap has acknowledged the delta confirm (the
+        // inline "That's … from your trend" text is now hidden) does the
+        // button itself say "Save anyway" — the next tap actually saves.
+        if confirmedDelta, deltaConfirmText != nil { return "Save anyway" }
+        return "Log \(text.isEmpty ? "0" : text) \(system.weightUnit)"
     }
 
     /// Current field value in `system`'s unit, falling back to the prefill
