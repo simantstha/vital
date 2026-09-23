@@ -269,6 +269,7 @@ export const messages = p.pgTable('messages', {
   metadata:   p.jsonb('metadata'),                                              // structured insights seam; nullable
   specialist_session_id: p.uuid('specialist_session_id').references(() => specialist_sessions.id),
   specialist_metadata: p.jsonb('specialist_metadata'),                          // immutable identity/accent snapshot
+  client_turn_id: p.uuid('client_turn_id'),                                     // nullable; client-generated idempotency key for a user turn (voice/retry-safe)
 }, (t) => [
   p.check(
     'messages_role_speaker_check',
@@ -279,6 +280,10 @@ export const messages = p.pgTable('messages', {
     sql`((${t.speaker} = 'specialist' and ${t.specialist_session_id} is not null and ${t.specialist_metadata} is not null) or (${t.speaker} <> 'specialist' and ${t.specialist_session_id} is null and ${t.specialist_metadata} is null))`,
   ),
   p.index('messages_user_timestamp_idx').on(t.user_id, t.timestamp),
+  // Postgres unique indexes treat NULL as distinct per row, so this stays
+  // additive-safe for every existing/legacy row (client_turn_id null) and
+  // only enforces uniqueness once a client actually sends one.
+  p.uniqueIndex('messages_user_client_turn_idx').on(t.user_id, t.client_turn_id),
 ]);
 
 // ─── pending_facts (confirmation-gated learning) ─────────────────────────────

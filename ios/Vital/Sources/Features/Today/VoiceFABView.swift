@@ -31,6 +31,11 @@ struct VoiceFABView: View {
     @ObservedObject private var voice: CoachVoiceController
     @State private var myTurnID: UUID? = nil
     @State private var showDeniedAlert = false
+    /// Guards the FAB's touch-down gesture (spec §3.1/§10 V3: start on
+    /// finger down, not tap-up) so `DragGesture`'s repeated `onChanged`
+    /// firings while a finger is held down only trigger the mic action once
+    /// per press. Reset in `onEnded`.
+    @State private var isFabPressed = false
 
     private let fabSize: CGFloat = 60
 
@@ -68,6 +73,10 @@ struct VoiceFABView: View {
             // an app relaunch, so the FAB "stays usable to retry" per spec.
             voice.refreshPermissionState()
         }
+        // Spec §3.4/§10 V3: pre-warm the shared voice session/engine the
+        // moment Today is on screen. No-op unless mic permission is already
+        // authorized, and never prompts for it.
+        .onAppear { voice.prewarm() }
         .alert("Microphone access needed", isPresented: $showDeniedAlert) {
             Button("Settings") {
                 if let url = URL(string: UIApplication.openSettingsURLString) {
@@ -82,33 +91,59 @@ struct VoiceFABView: View {
 
     // MARK: - FAB button
 
+    /// Spec §3.1/§10 V3: starts on finger **down**, not tap-up, so a plain
+    /// `Button` (touch-up-inside) won't do — its action is driven by a
+    /// `DragGesture(minimumDistance: 0)` instead, whose `onChanged` fires on
+    /// first touch. `isFabPressed` de-dupes the many `onChanged` callbacks a
+    /// single held touch produces. Losing `Button` also loses its automatic
+    /// accessibility button trait/action, so both are added back explicitly
+    /// — VoiceOver's double-tap invokes `.accessibilityAction`, which calls
+    /// the same `handleMicPress()`. `fabSize` (60pt) is already well above
+    /// Apple's 44×44 minimum, so no separate hit-area frame is needed here.
     private var fab: some View {
-        Button(action: handleTap) {
-            ZStack {
-                if voice.isRecording {
-                    PulseRing(diameter: fabSize)
-                }
+        ZStack {
+            if voice.isRecording {
+                PulseRing(diameter: fabSize)
+            }
 
-                Circle()
-                    .fill(Theme.Colors.accent)
-                    .frame(width: fabSize, height: fabSize)
-                    .shadow(color: .black.opacity(0.22), radius: 14, x: 0, y: 8)
+            Circle()
+                .fill(Theme.Colors.accent)
+                .frame(width: fabSize, height: fabSize)
+                .shadow(color: .black.opacity(0.22), radius: 14, x: 0, y: 8)
 
-                if voice.state == .transcribing {
-                    ProgressView()
-                        .tint(Theme.Colors.onAccent)
-                } else {
-                    Image(systemName: voice.isRecording ? "stop.fill" : "mic.fill")
-                        .font(.system(size: 22, weight: .semibold))
-                        .foregroundStyle(Theme.Colors.onAccent)
-                }
+            if voice.state == .transcribing {
+                ProgressView()
+                    .tint(Theme.Colors.onAccent)
+            } else {
+                Image(systemName: voice.isRecording ? "stop.fill" : "mic.fill")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(Theme.Colors.onAccent)
             }
         }
-        .buttonStyle(.plain)
-        .disabled(voice.state == .transcribing || (coachVM.isStreaming && !voice.isRecording))
-        .opacity(coachVM.isStreaming && !voice.isRecording ? 0.5 : 1.0)
+        .contentShape(Circle())
+        .opacity(isFabDisabled ? 0.5 : 1.0)
+        .allowsHitTesting(!isFabDisabled)
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in
+                    guard !isFabPressed else { return }
+                    isFabPressed = true
+                    handleMicPress()
+                }
+                .onEnded { _ in isFabPressed = false }
+        )
+        .accessibilityElement()
+        .accessibilityLabel(voice.isRecording ? "Stop recording" : "Talk to your coach")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { handleMicPress() }
+        .sensoryFeedback(Theme.Haptics.toggle, trigger: voice.isRecording)
+        .sensoryFeedback(Theme.Haptics.turnEnd, trigger: voice.turnEndTrigger)
         .padding(.trailing, Theme.Spacing.xl)
         .padding(.bottom, Theme.Spacing.xxxl)
+    }
+
+    private var isFabDisabled: Bool {
+        voice.state == .transcribing || (coachVM.isStreaming && !voice.isRecording)
     }
 
     // MARK: - Listening overlays
@@ -139,13 +174,13 @@ struct VoiceFABView: View {
 
     // MARK: - Actions
 
-    private func handleTap() {
+    private func handleMicPress() {
         switch voice.permissionState {
         case .authorized:
             if voice.isRecording {
                 voice.stopRecording()
             } else {
-                guard voice.state != .transcribing, !coachVM.isStreaming else { return }
+                guard !isFabDisabled else { return }
                 voice.startRecording()
                 myTurnID = voice.currentTurnID
             }

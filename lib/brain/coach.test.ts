@@ -75,11 +75,12 @@ type FakeResponse = {
 };
 
 let responseQueue: FakeResponse[] = [];
-const streamCalls: Array<{ model: string; system: string; messages: unknown[] }> = [];
+type FakeSystemBlock = { text: string; cache_control?: unknown };
+const streamCalls: Array<{ model: string; system: FakeSystemBlock[]; messages: unknown[] }> = [];
 
 const fakeAnthropicClient = {
   messages: {
-    stream: (params: { model: string; system: string; messages: unknown[] }) => {
+    stream: (params: { model: string; system: FakeSystemBlock[]; messages: unknown[] }) => {
       streamCalls.push(params);
       const response = responseQueue.shift() ?? { text: 'OK', stopReason: 'end_turn' as const };
       return {
@@ -107,13 +108,38 @@ const fakeDb = {
     if (table !== realSchema.messages) throw new Error(`unexpected insert table: ${String(table)}`);
     return {
       values: (vals: Record<string, unknown>) => {
-        insertedMessages.push(vals);
-        const id = `message-${nextMessageId++}`;
-        const promise = Promise.resolve(undefined) as Promise<undefined> & {
-          returning?: () => Promise<Array<{ id: string }>>;
+        // Mirrors the real messages_user_client_turn_idx (unique on
+        // user_id + client_turn_id, NULLs distinct — see db/schema.ts).
+        // runCoach's clientTurnId branch calls .onConflictDoUpdate() instead
+        // of plain insert, so only THAT branch conflicts here.
+        const insert = () => {
+          insertedMessages.push(vals);
+          const id = `message-${nextMessageId++}`;
+          const promise = Promise.resolve(undefined) as Promise<undefined> & {
+            returning?: () => Promise<Array<{ id: string }>>;
+          };
+          promise.returning = async () => [{ id }];
+          return promise;
         };
-        promise.returning = async () => [{ id }];
-        return promise;
+        const result = insert() as ReturnType<typeof insert> & {
+          onConflictDoUpdate?: (opts: { set: Record<string, unknown> }) => Promise<undefined>;
+        };
+        result.onConflictDoUpdate = async (opts) => {
+          // Undo the unconditional push above and replay it as a real upsert:
+          // reuse the existing row for this (user_id, client_turn_id) if one
+          // exists, otherwise keep the just-inserted row as-is.
+          const justInserted = insertedMessages.pop()!;
+          const existingIndex = insertedMessages.findIndex(
+            (m) => m.user_id === justInserted.user_id && m.client_turn_id === justInserted.client_turn_id,
+          );
+          if (existingIndex === -1) {
+            insertedMessages.push(justInserted);
+          } else {
+            insertedMessages[existingIndex] = { ...insertedMessages[existingIndex], ...opts.set };
+          }
+          return undefined;
+        };
+        return result;
       },
     };
   },
@@ -292,6 +318,56 @@ test('plain user message behaves identically after the streamCoachTurn extractio
   assert.equal(insertedMessages[1].content, 'Hi there — how can I help today?');
   assert.equal(insertedMessages[1].specialist_session_id, null);
   assert.equal(events[1].messageId, `message-${nextMessageId - 1}`);
+});
+
+test('voice: true appends the voice-style block as a second, UNCACHED system block, leaving the cached block untouched', async () => {
+  const { runCoach } = await coachPromise;
+  insertedMessages = [];
+  const callsBefore = streamCalls.length;
+
+  responseQueue = [{ text: 'Plain-text reply.', stopReason: 'end_turn' }];
+  for await (const _e of runCoach(randomUUID(), 'how did I sleep?')) { /* drain */ }
+  const plainSystem = streamCalls[streamCalls.length - 1].system;
+
+  responseQueue = [{ text: 'Spoken reply.', stopReason: 'end_turn' }];
+  for await (const _e of runCoach(randomUUID(), 'how did I sleep?', undefined, undefined, undefined, true)) { /* drain */ }
+  const voiceSystem = streamCalls[streamCalls.length - 1].system;
+
+  assert.equal(streamCalls.length, callsBefore + 2);
+
+  // Non-voice: exactly one system block, cached — byte-identical to before
+  // this feature existed (guards the prompt-cache prefix for every plain turn).
+  assert.equal(plainSystem.length, 1);
+  assert.ok(plainSystem[0].cache_control != null);
+  assert.doesNotMatch(plainSystem[0].text, /Voice mode/);
+
+  // Voice: the FIRST block (the cached prefix) is byte-identical to the
+  // non-voice call, cache_control intact — appending the voice block must
+  // never touch it. The voice block itself is a SECOND, uncached block.
+  assert.equal(voiceSystem.length, 2);
+  assert.equal(voiceSystem[0].text, plainSystem[0].text);
+  assert.deepEqual(voiceSystem[0].cache_control, plainSystem[0].cache_control);
+  assert.match(voiceSystem[1].text, /Voice mode/);
+  assert.match(voiceSystem[1].text, /8 words or fewer/);
+  assert.equal(voiceSystem[1].cache_control, undefined);
+});
+
+test('clientTurnId retry is idempotent: a repeated send with the same id creates exactly one user message and updates its text', async () => {
+  const { runCoach } = await coachPromise;
+  insertedMessages = [];
+  const userId = randomUUID();
+  const turnId = randomUUID();
+
+  responseQueue = [{ text: 'First reply.', stopReason: 'end_turn' }];
+  for await (const _e of runCoach(userId, 'how did I sleep', undefined, undefined, undefined, undefined, turnId)) { /* drain */ }
+
+  responseQueue = [{ text: 'Retry reply.', stopReason: 'end_turn' }];
+  for await (const _e of runCoach(userId, 'how did I sleep?', undefined, undefined, undefined, undefined, turnId)) { /* drain */ }
+
+  const userRows = insertedMessages.filter((m) => m.role === 'user');
+  assert.equal(userRows.length, 1, 'a retried request with the same clientTurnId must not create a second user message');
+  assert.equal(userRows[0].content, 'how did I sleep?', 'the retry updates the text (future Scribe-correction path)');
+  assert.equal(userRows[0].client_turn_id, turnId);
 });
 
 test('accepting a handoff continues straight into the specialist\'s streamed opening turn', async () => {

@@ -20,8 +20,8 @@ test('POST preserves legacy event shapes and authenticates before running coach'
       if (!id) throw new Error('unauthenticated');
       return id;
     },
-    runCoach(userId, message, image, mode, findingId) {
-      calledWith = [userId, message, image, mode, findingId];
+    runCoach(userId, message, image, mode, findingId, voice, clientTurnId) {
+      calledWith = [userId, message, image, mode, findingId, voice, clientTurnId];
       return events([
         { type: 'text', text: 'Hello' },
         { type: 'tool_call', id: 'call-1', name: 'get_sleep_summary', label: 'Sleep', status: 'started' },
@@ -42,7 +42,7 @@ test('POST preserves legacy event shapes and authenticates before running coach'
     body: JSON.stringify({ message: ' hello ', imageBase64: 'image', mode: 'onboarding' }),
   }));
   assert.equal(response.status, 200);
-  assert.deepEqual(calledWith, ['user-a', 'hello', 'image', 'onboarding', undefined]);
+  assert.deepEqual(calledWith, ['user-a', 'hello', 'image', 'onboarding', undefined, undefined, undefined]);
   assert.deepEqual((await sse(response)).map((event) => event.type), [
     'text', 'tool_call', 'tool_data', 'done',
   ]);
@@ -53,8 +53,8 @@ test('POST forwards findingId from a tapped coach-nudge deep link so context ass
   const handlers = createCoachHttpHandlers({
     enabled: () => false,
     authenticate: () => 'user-a',
-    runCoach(userId, message, image, mode, findingId) {
-      calledWith = [userId, message, image, mode, findingId];
+    runCoach(userId, message, image, mode, findingId, voice, clientTurnId) {
+      calledWith = [userId, message, image, mode, findingId, voice, clientTurnId];
       return events([{ type: 'done', messageId: 'message-1' }]);
     },
     runAction() { throw new Error('not used'); },
@@ -65,7 +65,46 @@ test('POST forwards findingId from a tapped coach-nudge deep link so context ass
     body: JSON.stringify({ message: 'hello', findingId: 'pending-nudge-1' }),
   }));
   assert.equal(response.status, 200);
-  assert.deepEqual(calledWith, ['user-a', 'hello', undefined, undefined, 'pending-nudge-1']);
+  assert.deepEqual(calledWith, ['user-a', 'hello', undefined, undefined, 'pending-nudge-1', undefined, undefined]);
+});
+
+test('POST forwards a valid voice + clientTurnId, and ignores wrong-typed/malformed values', async () => {
+  let calledWith: unknown[] = [];
+  const handlers = createCoachHttpHandlers({
+    enabled: () => false,
+    authenticate: () => 'user-a',
+    runCoach(userId, message, image, mode, findingId, voice, clientTurnId) {
+      calledWith = [userId, message, image, mode, findingId, voice, clientTurnId];
+      return events([{ type: 'done', messageId: 'message-1' }]);
+    },
+    runAction() { throw new Error('not used'); },
+    async restore() { throw new Error('not used'); },
+  });
+
+  const validTurnId = '3fa85f64-5717-4562-b3fc-2c963f66afa6';
+  const ok = await handlers.POST(new Request('http://local/api/coach', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ message: 'hello', voice: true, clientTurnId: validTurnId }),
+  }));
+  assert.equal(ok.status, 200);
+  assert.deepEqual(calledWith, ['user-a', 'hello', undefined, undefined, undefined, true, validTurnId]);
+
+  // A wrong type for `voice` (string "true", not boolean) is ignored, not
+  // rejected — same as the existing `mode` field's validation style.
+  const badVoiceType = await handlers.POST(new Request('http://local/api/coach', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ message: 'hello', voice: 'true', clientTurnId: 'not-a-uuid' }),
+  }));
+  assert.equal(badVoiceType.status, 200);
+  assert.deepEqual(calledWith, ['user-a', 'hello', undefined, undefined, undefined, undefined, undefined]);
+
+  // voice: false is a legitimate explicit value, not "absent".
+  const explicitFalse = await handlers.POST(new Request('http://local/api/coach', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ message: 'hello', voice: false }),
+  }));
+  assert.equal(explicitFalse.status, 200);
+  assert.equal(calledWith[5], undefined);
 });
 
 test('feature-off POST ignores specialist-looking extra fields like the legacy route', async () => {

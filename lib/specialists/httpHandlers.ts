@@ -11,10 +11,14 @@ interface CoachHttpDependencies {
     imageBase64?: string,
     mode?: 'onboarding',
     findingId?: string,
+    voice?: boolean,
+    clientTurnId?: string,
   ): AsyncGenerator<CoachEvent>;
   runAction(userId: string, action: SpecialistActionRequest): AsyncGenerator<CoachEvent>;
   restore(userId: string): Promise<CoachRestoration>;
 }
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function authentication(request: Request, dependencies: CoachHttpDependencies): string | Response {
   try {
@@ -112,7 +116,20 @@ export function createCoachHttpHandlers(dependencies: CoachHttpDependencies) {
         // lib/brain/context.ts's resolveNudgeFinding for the user_id-scoped
         // lookup and degrade-to-normal-chat behavior on a miss.
         const findingId = typeof body.findingId === 'string' ? body.findingId : undefined;
-        return streamEvents(dependencies.runCoach(userId, message, imageBase64, mode, findingId));
+        // `voice: true` switches runCoach's reply style (see lib/brain/persona.ts's
+        // voiceStyleBlock) — any other type (including a string/number "true") is
+        // ignored, same as `mode` above.
+        const voice = body.voice === true ? true : undefined;
+        // A client-generated idempotency key for THIS user turn — must be a UUID
+        // so it slots into messages.client_turn_id (uuid column). A malformed or
+        // wrong-typed value is ignored rather than rejecting the whole request:
+        // the turn still runs, it just loses retry-safety for that one send.
+        const clientTurnId = typeof body.clientTurnId === 'string' && UUID_RE.test(body.clientTurnId)
+          ? body.clientTurnId
+          : undefined;
+        return streamEvents(
+          dependencies.runCoach(userId, message, imageBase64, mode, findingId, voice, clientTurnId),
+        );
       }
 
       let action: SpecialistActionRequest | null;

@@ -243,6 +243,203 @@ final class CoachVoiceControllerTests: XCTestCase {
         XCTAssertEqual(controller.permissionState, .authorized)
     }
 
+    // MARK: - V3: prewarm
+
+    /// `prewarm()` must be a no-op — never touch the audio session, never
+    /// prewarm the transcriber, never request permission — while permission
+    /// isn't `.authorized`.
+    func testPrewarmDoesNothingWithoutAuthorizedPermission() {
+        let transcriber = FakeSpeechTranscriber()
+        transcriber.permissionState = .notDetermined
+        let session = SpyAudioSession()
+        let controller = CoachVoiceController(transcriber: transcriber, api: FakeVoiceAPI(), audioSession: session.controlling)
+
+        controller.prewarm()
+        controller.prewarm()
+
+        XCTAssertEqual(transcriber.prewarmCallCount, 0)
+        XCTAssertEqual(transcriber.requestPermissionsCallCount, 0)
+        XCTAssertEqual(session.configureCallCount, 0)
+        XCTAssertEqual(session.activateCallCount, 0)
+    }
+
+    /// Once permission is authorized, `prewarm()` configures the session
+    /// (and prewarms the transcriber) exactly once regardless of how many
+    /// times it's called — both `.onAppear`s (Coach tab and
+    /// `VoiceFABView`) call it on every appearance, and it must stay cheap.
+    /// It must never request permission, whatever the caller.
+    ///
+    /// Critically (post-review fix): `prewarm()` must call `configure()`
+    /// only, **never** `activate()` — `.onAppear` can fire just from
+    /// opening the app to the Today tab, and activating a `.duckOthers`
+    /// session there would duck the user's music before they've touched
+    /// the mic. This is the one assertion that guards that regression.
+    func testPrewarmConfiguresButNeverActivatesTheSession() {
+        let transcriber = FakeSpeechTranscriber()
+        transcriber.permissionState = .authorized
+        let session = SpyAudioSession()
+        let controller = CoachVoiceController(transcriber: transcriber, api: FakeVoiceAPI(), audioSession: session.controlling)
+
+        controller.prewarm()
+        controller.prewarm()
+        controller.prewarm()
+
+        XCTAssertEqual(transcriber.prewarmCallCount, 1)
+        XCTAssertEqual(transcriber.requestPermissionsCallCount, 0)
+        XCTAssertEqual(session.configureCallCount, 1)
+        XCTAssertEqual(session.activateCallCount, 0, "prewarm() must never activate the session — that ducks other apps' audio.")
+    }
+
+    /// A `prewarm()` that no-op'd for lack of permission must still work
+    /// once permission is later granted (e.g. the Settings-grant refresh
+    /// flow), rather than being permanently latched off by the earlier call.
+    func testPrewarmRunsOnceLaterAuthorizedAfterAnEarlierNoOp() {
+        let transcriber = FakeSpeechTranscriber()
+        transcriber.permissionState = .denied
+        let controller = CoachVoiceController(transcriber: transcriber, api: FakeVoiceAPI())
+
+        controller.prewarm()
+        XCTAssertEqual(transcriber.prewarmCallCount, 0)
+
+        transcriber.permissionState = .authorized
+        transcriber.nextRefreshedPermissionState = .authorized
+        controller.refreshPermissionState()
+        controller.prewarm()
+        controller.prewarm()
+
+        XCTAssertEqual(transcriber.prewarmCallCount, 1)
+    }
+
+    // MARK: - V3: session released on non-spoken endings
+
+    /// `cancel()` must deactivate the shared session — a cancelled turn
+    /// never reaches `CoachSpeaker`, which is otherwise the only thing that
+    /// deactivates it, so without this the user's other audio would stay
+    /// ducked until their next voice turn happens to speak a reply.
+    func testCancelDeactivatesTheSession() {
+        let transcriber = FakeSpeechTranscriber()
+        let session = SpyAudioSession()
+        let controller = CoachVoiceController(transcriber: transcriber, api: FakeVoiceAPI(), audioSession: session.controlling)
+
+        controller.startRecording()
+        transcriber.isRecording = true
+        controller.cancel()
+
+        XCTAssertEqual(session.deactivateCallCount, 1)
+    }
+
+    /// Regression for #198: `cancel()` while `.listening` used to call
+    /// `transcriber.stop()` *before* tearing `state` down to `.idle`. That
+    /// `stop()` flips the fake's `isRecording` to `false` — indistinguishable
+    /// from a natural endpoint fire to the `isRecordingPublisher` sink that
+    /// starts transcription, which only guards on `state == .listening` —
+    /// so a cancel with a non-empty transcript already sitting in the
+    /// transcriber (very plausible: the user cancels mid-utterance) would
+    /// spin up a brand-new `transcriptionTask`, override the one `cancel()`
+    /// just cancelled, and could still call `onFinalTranscript` and send
+    /// the user's words after they explicitly cancelled — plus double-count
+    /// `cancel()`'s own `deactivate()` when that spurious path also ran
+    /// `resetToIdleAfterEmptyTurn()`. `state = .idle` now happens before
+    /// `transcriber.stop()`, so that sink's guard fails and the stop is
+    /// correctly ignored as `cancel()`'s own echo.
+    func testCancelWhileListeningWithPendingTranscriptDoesNotDeliverOrDoubleDeactivate() async {
+        let transcriber = FakeSpeechTranscriber()
+        let session = SpyAudioSession()
+        let controller = CoachVoiceController(transcriber: transcriber, api: FakeVoiceAPI(), audioSession: session.controlling)
+
+        var delivered: [String] = []
+        controller.onFinalTranscript = { delivered.append($0) }
+
+        controller.startRecording()
+        transcriber.isRecording = true
+        transcriber.transcribedText = "log two eggs"
+
+        controller.cancel()
+
+        // Give any spuriously-spawned transcription task a real chance to
+        // run and (wrongly) deliver before asserting it didn't.
+        try? await Task.sleep(nanoseconds: 20_000_000)
+
+        XCTAssertTrue(delivered.isEmpty)
+        XCTAssertNil(controller.lastDeliveredTurnID)
+        XCTAssertEqual(controller.state, .idle)
+        XCTAssertEqual(session.deactivateCallCount, 1)
+    }
+
+    /// An endpoint fire with nothing recognized (empty transcript, no
+    /// audio clip) resolves straight to `.idle` without ever speaking a
+    /// reply — must still deactivate the session.
+    func testEmptyTurnDeactivatesTheSession() async {
+        let transcriber = FakeSpeechTranscriber()
+        let session = SpyAudioSession()
+        let controller = CoachVoiceController(transcriber: transcriber, api: FakeVoiceAPI(), audioSession: session.controlling)
+
+        controller.startRecording()
+        transcriber.isRecording = true
+        transcriber.transcribedText = "   "
+        transcriber.recordingURL = nil
+        transcriber.isRecording = false
+
+        try? await Task.sleep(nanoseconds: 20_000_000)
+
+        XCTAssertEqual(session.deactivateCallCount, 1)
+    }
+
+    /// `transcriber.start()` returning without ever recording (permission
+    /// revoked mid-flight, recognizer unavailable, engine failure, …) must
+    /// also deactivate — it shares `resetToIdleAfterEmptyTurn()` with the
+    /// empty-transcript case above.
+    func testFailedStartDeactivatesTheSession() {
+        let transcriber = FakeSpeechTranscriber()
+        transcriber.startShouldSucceed = false
+        let session = SpyAudioSession()
+        let controller = CoachVoiceController(transcriber: transcriber, api: FakeVoiceAPI(), audioSession: session.controlling)
+
+        controller.startRecording()
+
+        XCTAssertEqual(session.deactivateCallCount, 1)
+    }
+
+    // MARK: - V3: turnEnd haptic trigger
+
+    /// The Listening → Transcribing transition (the endpoint firing) must
+    /// bump `turnEndTrigger` exactly once — this is what a view's
+    /// `.sensoryFeedback(Theme.Haptics.turnEnd, trigger:)` observes; UIKit
+    /// haptics themselves aren't unit-testable, so the counter is the seam.
+    func testEndpointFiredBumpsTurnEndTrigger() async {
+        let transcriber = FakeSpeechTranscriber()
+        let controller = CoachVoiceController(transcriber: transcriber, api: FakeVoiceAPI())
+
+        XCTAssertEqual(controller.turnEndTrigger, 0)
+
+        controller.startRecording()
+        transcriber.isRecording = true
+        transcriber.transcribedText = "log two eggs and toast"
+        transcriber.recordingURL = nil
+        transcriber.isRecording = false // endpoint fired
+
+        await waitUntil(controller, "turn delivered") { controller.state == .idle }
+
+        XCTAssertEqual(controller.turnEndTrigger, 1)
+    }
+
+    /// An endpoint fire with nothing recognized never entered `.transcribing`
+    /// — it goes straight back to `.idle` — so it must not bump the trigger.
+    func testEmptyTurnDoesNotBumpTurnEndTrigger() async {
+        let transcriber = FakeSpeechTranscriber()
+        let controller = CoachVoiceController(transcriber: transcriber, api: FakeVoiceAPI())
+
+        controller.startRecording()
+        transcriber.isRecording = true
+        transcriber.transcribedText = "   "
+        transcriber.recordingURL = nil
+        transcriber.isRecording = false
+
+        try? await Task.sleep(nanoseconds: 20_000_000)
+
+        XCTAssertEqual(controller.turnEndTrigger, 0)
+    }
+
     // MARK: - Helpers
 
     private func waitUntil(
@@ -294,6 +491,24 @@ final class CoachVoiceControllerTests: XCTestCase {
 
 // MARK: - Fakes
 
+/// Records calls to `VoiceAudioSessionControlling`'s three hooks instead of
+/// touching a real `AVAudioSession` (there is none in the test process).
+/// `controlling` is what's passed to `CoachVoiceController(audioSession:)`.
+@MainActor
+private final class SpyAudioSession {
+    private(set) var configureCallCount = 0
+    private(set) var activateCallCount = 0
+    private(set) var deactivateCallCount = 0
+
+    var controlling: VoiceAudioSessionControlling {
+        VoiceAudioSessionControlling(
+            configure: { [weak self] in self?.configureCallCount += 1 },
+            activate: { [weak self] in self?.activateCallCount += 1 },
+            deactivate: { [weak self] in self?.deactivateCallCount += 1 }
+        )
+    }
+}
+
 @MainActor
 private final class FakeSpeechTranscriber: SpeechTranscribing {
     @Published var transcribedText: String = ""
@@ -310,6 +525,12 @@ private final class FakeSpeechTranscriber: SpeechTranscribing {
     private(set) var startCallCount = 0
     private(set) var stopCallCount = 0
     private(set) var discardCallCount = 0
+    private(set) var prewarmCallCount = 0
+    private(set) var requestPermissionsCallCount = 0
+
+    func prewarm() {
+        prewarmCallCount += 1
+    }
 
     /// Mirrors the real `SpeechTranscriber.start()`'s several failure paths
     /// (permission not authorized, recognizer unavailable, audio session
@@ -343,6 +564,7 @@ private final class FakeSpeechTranscriber: SpeechTranscribing {
     }
 
     func requestPermissions() async {
+        requestPermissionsCallCount += 1
         permissionState = .authorized
     }
 }
@@ -392,7 +614,9 @@ private final class FakeVoiceAPI: CoachAPIProviding {
         message: String,
         imageBase64: String?,
         mode: String?,
-        findingId: String?
+        findingId: String?,
+        voice: Bool?,
+        clientTurnId: String?
     ) -> AsyncThrowingStream<CoachStreamEvent, Error> {
         fatalError("unused by CoachVoiceController")
     }
