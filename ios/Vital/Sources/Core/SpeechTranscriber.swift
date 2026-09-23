@@ -1,6 +1,7 @@
 import Foundation
 import Speech
 import AVFoundation
+import os
 
 // MARK: - Permission state
 
@@ -344,16 +345,27 @@ final class SpeechTranscriber: ObservableObject {
 // MARK: - LevelBridge
 
 /// Rate-limits `inputLevel` samples on the audio-render thread (where the
-/// tap callback runs) and hops each one to `@MainActor` — spec `ux-spec-v4`
-/// §3.2's `CoachOrb` listening animation, delivery slice V5: "published at
-/// ≤ 30 Hz on main". `@unchecked Sendable` because `report(_:)` is only ever
-/// invoked serially by `AVAudioEngine` on its one internal render thread —
-/// `lastPublishedAt` is never touched concurrently — and `publish` itself is
-/// `@MainActor`-isolated, only ever called from inside the `Task { @MainActor
-/// in }` hop below, never from the render thread directly.
+/// tap callback runs, at the buffer's own cadence — about 43–48 Hz for the
+/// 1024-sample buffer `start()` installs) and hops only the ones that clear
+/// the gate to `@MainActor` — spec `ux-spec-v4` §3.2's `CoachOrb` listening
+/// animation, delivery slice V5: "published at ≤ 30 Hz on main". RMS is
+/// still computed on *every* callback (cheap, no allocation, and needed to
+/// decide whether this particular sample is worth publishing at all), but a
+/// `Task { @MainActor in }` — and the actor hop it costs — is only spun up
+/// for the throttled subset, not every buffer.
+///
+/// `lastPublishedAt` is guarded by `OSAllocatedUnfairLock` even though
+/// `report(_:)` is, in practice, only ever invoked serially by
+/// `AVAudioEngine` on its one internal render thread (never concurrently
+/// with itself) — the lock is defense-in-depth against that assumption
+/// rather than a response to any known concurrent caller. `@unchecked
+/// Sendable` is still needed for the class itself because `publish` is a
+/// stored `@MainActor`-isolated closure, which the lock doesn't change;
+/// `publish` is only ever called from inside the `Task { @MainActor in }`
+/// hop below, never from the render thread directly.
 private final class LevelBridge: @unchecked Sendable {
     private let minInterval: TimeInterval = 1.0 / 30.0
-    private var lastPublishedAt: TimeInterval = 0
+    private let lastPublishedAt = OSAllocatedUnfairLock<TimeInterval>(initialState: 0)
     private let publish: @MainActor (Float) -> Void
 
     init(publish: @escaping @MainActor (Float) -> Void) {
@@ -361,13 +373,20 @@ private final class LevelBridge: @unchecked Sendable {
     }
 
     /// Called from the audio-render thread on every tap callback. Computes
-    /// RMS synchronously (cheap, no allocation) and, only if the throttle
-    /// allows it, hops to the main actor to publish.
+    /// RMS synchronously first, then atomically checks-and-updates the
+    /// publish gate; only when that gate is due does this hop to the main
+    /// actor at all — dropping every intermediate value in between.
     func report(_ buffer: AVAudioPCMBuffer) {
-        let now = ProcessInfo.processInfo.systemUptime
-        guard now - lastPublishedAt >= minInterval else { return }
-        lastPublishedAt = now
         let level = Self.rms(of: buffer)
+        let now = ProcessInfo.processInfo.systemUptime
+
+        let due = lastPublishedAt.withLock { last -> Bool in
+            guard now - last >= minInterval else { return false }
+            last = now
+            return true
+        }
+        guard due else { return }
+
         let publish = self.publish
         Task { @MainActor in publish(level) }
     }

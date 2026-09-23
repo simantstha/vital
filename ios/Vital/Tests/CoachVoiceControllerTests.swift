@@ -310,6 +310,34 @@ final class CoachVoiceControllerTests: XCTestCase {
         XCTAssertEqual(transcriber.prewarmCallCount, 1)
     }
 
+    /// V5: `CoachView`'s `.onAppear { voice.prewarm() }` fires again every
+    /// time the Coach tab appears — including when the Today FAB's handoff
+    /// switches to it mid-conversation (spec §10 V5's "reusing the existing
+    /// onSent/tab-switch plumbing"). `prewarm()` must be inert on an
+    /// in-flight turn: it only ever calls `configure()` (never `activate()`)
+    /// and never touches `state`/`mode`, so it can't restart or cancel a
+    /// conversation already in progress.
+    func testPrewarmDoesNotDisturbAnInFlightConversation() {
+        let transcriber = FakeSpeechTranscriber()
+        transcriber.permissionState = .authorized
+        let session = SpyAudioSession()
+        let controller = CoachVoiceController(transcriber: transcriber, api: FakeVoiceAPI(), audioSession: session.controlling)
+
+        // Prewarmed once already, e.g. from Today's own `.onAppear` before
+        // the FAB was ever tapped — matches `didPrewarm`'s real precondition.
+        controller.prewarm()
+
+        controller.startRecording(mode: .conversation)
+        XCTAssertEqual(controller.state, .listening)
+
+        controller.prewarm() // the Coach tab's own `.onAppear`, mid-turn
+
+        XCTAssertEqual(controller.state, .listening, "prewarm() must never disturb an in-flight conversation turn")
+        XCTAssertEqual(controller.mode, .conversation)
+        XCTAssertEqual(transcriber.startCallCount, 1, "prewarm() must not restart the recording")
+        XCTAssertEqual(session.activateCallCount, 0, "prewarm() must never activate() — only configure()")
+    }
+
     // MARK: - V3: session released on non-spoken endings
 
     /// `cancel()` must deactivate the shared session — a cancelled turn
