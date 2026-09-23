@@ -23,7 +23,7 @@ struct EnduranceHeroView: View {
         VitalCard(padding: Theme.Spacing.lg, cornerRadius: Theme.Radius.xl) {
             VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(calibratingText ?? readinessWord?.rawValue ?? EnduranceHeroLogic.ReadinessWord.keepItEasy.rawValue)
+                    Text(calibratingText ?? readinessWord?.rawValue ?? EnduranceHeroLogic.ReadinessWord.goodToTrain.rawValue)
                         .font(.system(size: 20, weight: .bold, design: .rounded))
                         .foregroundStyle(Theme.Colors.textPrimary)
                     if calibratingText == nil, let reasonLine {
@@ -79,7 +79,7 @@ struct EnduranceHeroView: View {
     }
 
     private var accessibilityLabel: String {
-        var parts: [String] = [calibratingText ?? readinessWord?.rawValue ?? EnduranceHeroLogic.ReadinessWord.keepItEasy.rawValue]
+        var parts: [String] = [calibratingText ?? readinessWord?.rawValue ?? EnduranceHeroLogic.ReadinessWord.goodToTrain.rawValue]
         if calibratingText == nil, let reasonLine { parts.append(reasonLine) }
         parts.append(session?.title ?? EnduranceHeroLogic.restDayText)
         if let weeklyVolumeText { parts.append(weeklyVolumeText) }

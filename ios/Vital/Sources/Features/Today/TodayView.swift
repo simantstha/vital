@@ -162,6 +162,12 @@ struct TodayView: View {
                                     kcalRemaining: vm.diet.kcalRemaining,
                                     proteinHave: vm.diet.protein.current,
                                     proteinGoal: vm.diet.protein.target,
+                                    // The muscle hero already shows a protein
+                                    // have/goal line + bar above this strip —
+                                    // don't repeat it (coaching review,
+                                    // 2026-09-23). Endurance's hero doesn't
+                                    // show protein, so it keeps this one.
+                                    showsProtein: !vm.isMuscleGoal,
                                     consumedSource: vm.diet.consumedSource,
                                     consumedSourceName: vm.diet.consumedSourceName,
                                     onOpen: { showLogSheet = true }

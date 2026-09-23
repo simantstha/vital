@@ -102,9 +102,11 @@ final class GoalHeroLogicTests: XCTestCase {
 
     // MARK: - EnduranceHeroLogic.readinessWord
 
-    func testReadinessWordAllNormalIsKeepItEasy() {
+    func testReadinessWordAllNormalIsGoodToTrain() {
+        // Coaching review, 2026-09-23: nothing flagged means "train as
+        // planned", not "hold back" — this is the common case.
         let word = EnduranceHeroLogic.readinessWord(hrv: .normal, sleep: .normal, restingHR: .normal)
-        XCTAssertEqual(word, .keepItEasy)
+        XCTAssertEqual(word, .goodToTrain)
     }
 
     func testReadinessWordHrvAboveAndSleepAboveIsReadyToPush() {
@@ -120,29 +122,54 @@ final class GoalHeroLogicTests: XCTestCase {
     }
 
     func testReadinessWordHrvBelowAndRestingHRAboveIsRecoverToday() {
-        // HRV below normal (bad) and resting HR above normal (bad) → net -2.
+        // HRV below normal (bad) and resting HR above normal (bad) → net -2,
+        // a strong-enough combined negative on its own.
         let word = EnduranceHeroLogic.readinessWord(hrv: .below(z: -1.3), sleep: .normal, restingHR: .above(z: 1.5))
         XCTAssertEqual(word, .recoverToday)
     }
 
-    func testReadinessWordMixedSignalsCancelToKeepItEasy() {
-        // HRV above (good, +1) and resting HR above (bad, -1) cancel out.
-        let word = EnduranceHeroLogic.readinessWord(hrv: .above(z: 1.2), sleep: .normal, restingHR: .above(z: 1.2))
+    func testReadinessWordSingleMildNegativeIsKeepItEasy() {
+        // HRV below normal (bad, -1), everything else normal → net -1, a
+        // mild negative — "Keep it easy", not the stronger "Recover today".
+        let word = EnduranceHeroLogic.readinessWord(hrv: .below(z: -1.2), sleep: .normal, restingHR: .normal)
         XCTAssertEqual(word, .keepItEasy)
+    }
+
+    func testReadinessWordMixedSignalsCancelToGoodToTrain() {
+        // HRV above (good, +1) and resting HR above (bad, -1) cancel out to
+        // a net-0 score — same as all-normal, so "Good to train".
+        let word = EnduranceHeroLogic.readinessWord(hrv: .above(z: 1.2), sleep: .normal, restingHR: .above(z: 1.2))
+        XCTAssertEqual(word, .goodToTrain)
+    }
+
+    func testReadinessWordSingleStronglyBadMetricIsRecoverTodayEvenIfScoreCancels() {
+        // HRV strongly below normal (z <= -2, bad) and resting HR mildly
+        // above normal (bad too) both push negative here, but the point is
+        // that a single |z| >= 2 metric forces "Recover today" regardless
+        // of what the total score alone would say.
+        let word = EnduranceHeroLogic.readinessWord(hrv: .below(z: -2.4), sleep: .normal, restingHR: .normal)
+        XCTAssertEqual(word, .recoverToday)
+    }
+
+    func testReadinessWordStronglyBadRestingHRAloneIsRecoverToday() {
+        // Resting HR strongly ABOVE normal (bad direction, z >= 2) alone
+        // forces "Recover today" even though the raw sum is only -1.
+        let word = EnduranceHeroLogic.readinessWord(hrv: .normal, sleep: .normal, restingHR: .above(z: 2.5))
+        XCTAssertEqual(word, .recoverToday)
     }
 
     func testReadinessWordTreatsNoDataAsNeutralNeverBad() {
         // Missing readings must never read as "bad" — only real signal moves
         // the word away from the neutral default.
         let word = EnduranceHeroLogic.readinessWord(hrv: .noData, sleep: .noData, restingHR: .noData)
-        XCTAssertEqual(word, .keepItEasy)
+        XCTAssertEqual(word, .goodToTrain)
     }
 
     func testReadinessWordTreatsCalibratingAsNeutral() {
         let word = EnduranceHeroLogic.readinessWord(
             hrv: .calibrating(daysRemaining: 3), sleep: .normal, restingHR: .normal
         )
-        XCTAssertEqual(word, .keepItEasy)
+        XCTAssertEqual(word, .goodToTrain)
     }
 
     // MARK: - EnduranceHeroLogic.calibratingText

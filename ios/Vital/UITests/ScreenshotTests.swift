@@ -161,10 +161,11 @@ final class ScreenshotTests: XCTestCase {
 
             if scenario == "endurance" {
                 // The endurance hero (§4.1) — the readiness word (deterministic
-                // from the fixture's flat `trendsBatch` baseline, always
-                // "Keep it easy" — see `EnduranceHeroLogic.readinessWord`'s
+                // from the fixture's flat `trendsBatch` baseline: every
+                // metric lands `.normal`, a net-0 score, which reads as
+                // "Good to train" — see `EnduranceHeroLogic.readinessWord`'s
                 // doc comment) and today's move-kind session title.
-                XCTAssertTrue(waitForText(app, containing: "Keep it easy"),
+                XCTAssertTrue(waitForText(app, containing: "Good to train"),
                                "Today's endurance hero should show a readiness word [\(appearance)]")
                 XCTAssertTrue(waitForText(app, containing: "10km tempo run"),
                                "Today's endurance hero should show today's session [\(appearance)]")

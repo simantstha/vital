@@ -117,24 +117,50 @@ enum EnduranceHeroLogic {
 
     enum ReadinessWord: String, Equatable {
         case readyToPush = "Ready to push"
+        case goodToTrain = "Good to train"
         case keepItEasy = "Keep it easy"
         case recoverToday = "Recover today"
     }
 
-    /// The hero's headline word — the sum of the three gated verdicts'
-    /// scores (HRV and sleep: higher is better; resting HR: lower is
-    /// better). A net-positive reading pushes toward "Ready to push", a
-    /// net-negative one toward "Recover today"; anything else (including
-    /// every metric landing `.normal`, the common case) reads as the
-    /// middle, default "Keep it easy" — never a stronger claim than the
-    /// data supports.
+    /// A `|z| >= 2` on the BAD side of `polarity` — a stronger signal than
+    /// the `abs(z) >= 1` that already separates `.above`/`.below` from
+    /// `.normal` in `TrendsVerdict`. Used only to gate `.recoverToday`: a
+    /// single metric sitting merely one σ off normal (the common `.above`/
+    /// `.below` case) is not "recover today" territory, but a metric two or
+    /// more σ into the bad direction is a strong enough signal on its own,
+    /// independent of what the other two metrics say.
+    private static func isStronglyBad(_ verdict: Verdict, polarity: Polarity) -> Bool {
+        switch verdict {
+        case .below(let z): return polarity == .higherIsBetter && z <= -2
+        case .above(let z): return polarity == .lowerIsBetter && z >= 2
+        case .noData, .calibrating, .normal: return false
+        }
+    }
+
+    /// The hero's headline word — coaching review, 2026-09-23: a normal
+    /// reading across the board (score 0, the common case) means "nothing
+    /// is flagged, train as planned," not "hold back" — so it reads "Good
+    /// to train", never "Keep it easy". The sum of the three gated
+    /// verdicts' scores (HRV and sleep: higher is better; resting HR: lower
+    /// is better) still drives the rest: net-positive → "Ready to push";
+    /// a genuinely strong negative signal — `total <= -2`, OR any single
+    /// metric landing `|z| >= 2` on its bad side even if the other two
+    /// offset it (`isStronglyBad`) — → "Recover today"; anything milder in
+    /// the negative direction (`total == -1`, no strongly-bad metric) →
+    /// the soft "Keep it easy", never the stronger "Recover today" claim
+    /// the data doesn't support.
     static func readinessWord(hrv: Verdict, sleep: Verdict, restingHR: Verdict) -> ReadinessWord {
         let total = score(hrv, polarity: .higherIsBetter)
             + score(sleep, polarity: .higherIsBetter)
             + score(restingHR, polarity: .lowerIsBetter)
+        let anyStronglyBad = isStronglyBad(hrv, polarity: .higherIsBetter)
+            || isStronglyBad(sleep, polarity: .higherIsBetter)
+            || isStronglyBad(restingHR, polarity: .lowerIsBetter)
+
         if total >= 1 { return .readyToPush }
-        if total <= -1 { return .recoverToday }
-        return .keepItEasy
+        if total <= -2 || anyStronglyBad { return .recoverToday }
+        if total <= -1 { return .keepItEasy }
+        return .goodToTrain
     }
 
     /// §4.1's calibrating override — takes priority over any verdict-derived
