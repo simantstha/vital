@@ -772,13 +772,18 @@ export function macrosForGoal(
   goal: string,
   weightKg: number,
   tdee: number,
+  // Height/sex, when known, let splitMacrosForKcal dose protein off adjusted
+  // body weight for a BMI >= 30 user instead of current weight — see
+  // lib/brain/proteinWeight.ts. Optional so existing callers without a
+  // profile on hand are unaffected.
+  proteinWeightOpts: { heightCm?: number | null; biologicalSex?: string | null } = {},
 ): { targetCal: number; c: number; p: number; f: number } {
   const multiplier = GOAL_TDEE_MULTIPLIER[goal] ?? GOAL_TDEE_MULTIPLIER.general;
   const targetCal = tdee * multiplier;
 
   // Ratio table (protein-g/kg + fat-fraction per goal) lives in dietBudget.ts
   // so the auto TDEE-derived split and the coach's custom-kcal split stay identical.
-  const { protein: p, carbs: c, fat: f } = splitMacrosForKcal(goal, weightKg, targetCal);
+  const { protein: p, carbs: c, fat: f } = splitMacrosForKcal(goal, weightKg, targetCal, proteinWeightOpts);
 
   return { targetCal: Math.round(targetCal), c, p, f };
 }
@@ -1548,7 +1553,8 @@ export async function executeToolCall(
       age:           profile.age,
       biologicalSex: profile.biologicalSex,
     }, workouts);
-    let { targetCal, c, p, f } = macrosForGoal(goal, weightKg, tdee);
+    const proteinWeightOpts = { heightCm: profile.heightCm, biologicalSex: profile.biologicalSex };
+    let { targetCal, c, p, f } = macrosForGoal(goal, weightKg, tdee, proteinWeightOpts);
 
     // Low-energy-availability floor: calculate_macros used to return
     // unfloored numbers, so the coach could propose (and the app editor's
@@ -1558,7 +1564,7 @@ export async function executeToolCall(
     const thresholdKcal = lowEnergyThresholdKcal(profile.biologicalSex);
     let lowEnergyWarning: { thresholdKcal: number; appliedFloor: boolean; message: string } | null = null;
     if (targetCal < thresholdKcal) {
-      const floored = splitMacrosForKcal(goal, weightKg, thresholdKcal);
+      const floored = splitMacrosForKcal(goal, weightKg, thresholdKcal, proteinWeightOpts);
       targetCal = thresholdKcal;
       c = floored.carbs;
       p = floored.protein;

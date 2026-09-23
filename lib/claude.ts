@@ -7,6 +7,8 @@ import { parseProfileDetails, formatIdentityForPrompt } from '@/lib/profileDetai
 import type { UnitSystem } from '@/lib/units';
 import type { RecoveryConfidence, RecoveryGap, RecoveryHistoryDay } from '@/lib/brain/recovery';
 import { localDayKey } from '@/lib/localDay';
+import type { WeightTrendResult } from '@/lib/weightTrend';
+import { formatWeightSignalsSection, type WeightSignal } from '@/lib/brain/weightSignals';
 
 // ── Inline types (formerly imported from lib/whoop + lib/strava) ──────────────
 
@@ -122,6 +124,10 @@ interface BriefContext {
   weeklyMileage?: WeeklyLoadRecord[];
   recentNutrition?: Array<{ date: string; calories: number; carbs: number; protein: number; fat: number }>;
   weightKg?: number;
+  /** Smoothed EWMA weight trend (lib/weightTrend.ts) — lib/brain/brief.ts loads this the same way lib/brain/context.ts does. */
+  weightTrend?: WeightTrendResult;
+  /** plateau/too_fast_loss/under_eating/rate_not_yet_reliable — see lib/brain/weightSignals.ts. */
+  weightSignals?: WeightSignal[];
   foodProfile?: { restrictions: Array<{ type: string; label: string }>; preferences: Array<{ type: string; label: string }> };
   /** True while baselines are still calibrating (< 14 days of history) — recovery score is provisional. */
   calibrating?: boolean;
@@ -214,6 +220,22 @@ export async function generateDailyBrief(userId: string, ctx: BriefContext): Pro
       ).join('\n')
     : '';
 
+  // Weight trend & energy signals — same signals + rendering as the coach
+  // chat prompt (lib/brain/context.ts's buildPromptText, lib/brain/
+  // weightSignals.ts's formatWeightSignalsSection), threaded through
+  // separately here since this brief builds its own prompt rather than
+  // going through assembleContext. A too_fast_loss signal must NEVER be
+  // praised — see the explicit instruction #6 below.
+  const hasTooFastLoss = (ctx.weightSignals ?? []).some(s => s.kind === 'too_fast_loss');
+  const weightSignalsSection = ctx.weightTrend
+    ? `\n## Weight Trend & Energy Signals\n` +
+      formatWeightSignalsSection(ctx.weightTrend, ctx.weightSignals ?? [], ctx.unitSystem ?? 'metric').join('\n') +
+      (hasTooFastLoss
+        ? '\nIMPORTANT: a too_fast_loss signal is present above — do NOT praise or celebrate this pace of loss in the body text. ' +
+          'Suggest adding ~200 kcal back, weighted toward protein, and if it is marked WATCH, gently check in on how they are eating and feeling.'
+        : '')
+    : '';
+
   const foodSection = ctx.foodProfile && (ctx.foodProfile.restrictions.length || ctx.foodProfile.preferences.length)
     ? `\n## Food Preferences & Restrictions\n` +
       (ctx.foodProfile.restrictions.length
@@ -277,6 +299,7 @@ export async function generateDailyBrief(userId: string, ctx: BriefContext): Pro
 3. Spot patterns worth calling out (e.g. "your HRV drops when sleep is under 7h")
 4. Keep meals specific and tied to actual training data — not generic advice
 5. Meals MUST NOT contain any food listed under RESTRICTIONS (allergies/intolerances/conditions) — this is a hard rule. Favor PREFERENCES: liked foods and cuisines in, disliked foods out.
+6. If Weight Trend & Energy Signals below shows too_fast_loss, never praise the pace of loss — see the IMPORTANT note in that section for what to say instead. If it shows plateau, don't frame it as a failure. If it shows under_eating, raise it gently, never with judgement. If it shows rate_not_yet_reliable, don't quote a weekly rate.
 
 ## Long-term User Profile
 ${userProfile}
@@ -292,7 +315,7 @@ ${sleepLine}
 - Today's Strain so far: ${ctx.strain}
 - Weekly Distance: ${ctx.weeklyDistance.toFixed(1)}${distanceUnit} this week
 ${ctx.lastRun ? `- Last Run: ${ctx.lastRun.distance}${distanceUnit} at ${ctx.lastRun.pace}/${distanceUnit} (${ctx.lastRun.dayTime}) — "${ctx.lastRun.name}"` : '- No recent runs logged'}
-${historySection}${activitiesSection}${weeklyLoadSection}${nutritionSection}${foodSection}
+${historySection}${activitiesSection}${weeklyLoadSection}${nutritionSection}${weightSignalsSection}${foodSection}
 
 Respond ONLY with valid JSON, no markdown, no explanation:
 

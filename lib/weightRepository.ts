@@ -214,6 +214,31 @@ export async function getWeightReadings(
 }
 
 /**
+ * Same merged reading list as getWeightReadings(), but only runs the
+ * one-time legacy-import side effect when Postgres has NO readings yet.
+ * importLegacyWeightLogIfPresent() awaits a serial logWeightEntry() call per
+ * legacy entry with no "already imported" short-circuit, so calling it
+ * unconditionally on every read (as GET /api/weight-log intentionally still
+ * does — low-traffic, user-initiated) is fine there but was a latency
+ * regression when lib/brain/context.ts and lib/brain/brief.ts started
+ * calling the same unconditional pattern on every coach turn / brief
+ * generation: a user with a large legacy log paid that serial-write cost
+ * before every reply. Once Postgres has ANY reading (including a prior
+ * import's result), this never touches the legacy file again.
+ */
+export async function getWeightReadingsWithLazyImport(
+  userId: string,
+  days: number,
+  timezone: string | null | undefined,
+): Promise<WeightReading[]> {
+  const readings = await getWeightReadings(userId, days, timezone);
+  if (readings.length > 0) return readings;
+
+  await importLegacyWeightLogIfPresent(userId, timezone);
+  return getWeightReadings(userId, days, timezone);
+}
+
+/**
  * One-time lazy import of the legacy per-user weight-log.json (if present)
  * into Postgres as `manual` events. Idempotent via logWeightEntry()'s dedup
  * rule — safe to call on every request. No-op when the file doesn't exist

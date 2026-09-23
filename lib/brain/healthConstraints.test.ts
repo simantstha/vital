@@ -140,7 +140,23 @@ mock.module('@/lib/brain/tools', {
   },
 });
 mock.module('@/lib/brain/dietBudget', {
-  namedExports: { resolveDietBudget: async () => undefined },
+  namedExports: {
+    resolveDietBudget: async () => undefined,
+    lowEnergyThresholdKcal: (sex: string | null) => (sex === 'male' ? 1500 : 1200),
+  },
+});
+// Weight-trend loading (lib/weightRepository.ts) and profile loading
+// (lib/coreProfileStore.ts) feed assembleContext's weight-signals block —
+// mocked wholesale, same as the other helper modules above (this test is
+// about hard-constraint nodes, not weight-signal content — see
+// weightSignals.test.ts).
+mock.module('@/lib/weightRepository', {
+  namedExports: {
+    getWeightReadingsWithLazyImport: async () => [],
+  },
+});
+mock.module('@/lib/coreProfileStore', {
+  namedExports: { readCoreProfile: async () => null },
 });
 
 const healthConstraintsPromise = import('./healthConstraints');

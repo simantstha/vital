@@ -28,6 +28,7 @@ import { readCoreProfile } from '@/lib/coreProfileStore';
 import { parseProfileDetails } from '@/lib/profileDetails';
 import { getWeightReadings } from '@/lib/weightRepository';
 import { computeWeightTrend } from '@/lib/weightTrend';
+import { proteinBasisWeightKg, PROTEIN_GRAMS_CAP } from '@/lib/brain/proteinWeight';
 
 export type DietGoal = 'weight_loss' | 'muscle' | 'endurance' | 'general';
 export const DIET_GOALS: readonly DietGoal[] = ['weight_loss', 'muscle', 'endurance', 'general'];
@@ -88,6 +89,12 @@ function num(v: unknown): number | undefined {
   return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
 }
 
+/** Height/sex needed to dose protein off adjusted body weight for a BMI >= 30 user — see lib/brain/proteinWeight.ts. Both optional so existing callers without a profile on hand fall back to current weight, unchanged. */
+export interface ProteinWeightOpts {
+  heightCm?: number | null;
+  biologicalSex?: string | null;
+}
+
 /**
  * Split a PINNED target calorie figure into protein/carbs/fat grams, using the
  * same per-goal protein-g/kg + fat-fraction ratios `macrosForGoal` (tools.ts)
@@ -95,11 +102,19 @@ function num(v: unknown): number | undefined {
  * calorie adjustment (±400/+200/+100/±0). Shared by `macrosForGoal` (auto
  * path) and `applyDietBudgetUpdate` (custom path, when macros are omitted)
  * so the two stay identical.
+ *
+ * Protein grams are dosed off `proteinBasisWeightKg` (lib/brain/
+ * proteinWeight.ts) — current weight, UNLESS height is known and BMI >= 30,
+ * in which case it's adjusted body weight — and capped at PROTEIN_GRAMS_CAP.
+ * Carbs still absorb whatever calorie remainder is left after protein and
+ * fat, so the result stays internally consistent with targetKcal even when
+ * the protein basis weight differs from `weightKg`.
  */
 export function splitMacrosForKcal(
   goal: string,
   weightKg: number,
   targetKcal: number,
+  proteinWeightOpts: ProteinWeightOpts = {},
 ): { protein: number; carbs: number; fat: number } {
   let proteinGPerKg: number;
   let fatFraction: number;
@@ -122,7 +137,12 @@ export function splitMacrosForKcal(
       fatFraction   = 0.27;
   }
 
-  const protein  = Math.round(proteinGPerKg * weightKg);
+  const proteinBasisKg = proteinBasisWeightKg(
+    weightKg,
+    proteinWeightOpts.heightCm ?? null,
+    proteinWeightOpts.biologicalSex ?? null,
+  );
+  const protein  = Math.min(PROTEIN_GRAMS_CAP, Math.round(proteinGPerKg * proteinBasisKg));
   const fatKcal  = Math.round(targetKcal * fatFraction);
   const fat      = Math.round(fatKcal / 9);
   const carbKcal = Math.max(0, targetKcal - protein * 4 - fatKcal);
@@ -258,7 +278,9 @@ export async function computeAutoBudget(userId: string, goal: DietGoal): Promise
     biologicalSex: profile.biologicalSex,
     activityMultiplier,
   }, workouts, WORKOUT_WINDOW_DAYS);
-  const { targetCal, c, p, f } = macrosForGoal(goal, weightKg, tdee);
+  const { targetCal, c, p, f } = macrosForGoal(goal, weightKg, tdee, {
+    heightCm: profile.heightCm, biologicalSex: profile.biologicalSex,
+  });
 
   // Low-energy-availability floor: an AUTO budget never prescribes a target
   // below the sex-aware safe threshold — ease the deficit (raise targetKcal
@@ -267,7 +289,9 @@ export async function computeAutoBudget(userId: string, goal: DietGoal): Promise
   // so protein/carb/fat stay internally consistent with targetKcal.
   const thresholdKcal = lowEnergyThresholdKcal(profile.biologicalSex);
   if (targetCal < thresholdKcal) {
-    const floored = splitMacrosForKcal(goal, weightKg, thresholdKcal);
+    const floored = splitMacrosForKcal(goal, weightKg, thresholdKcal, {
+      heightCm: profile.heightCm, biologicalSex: profile.biologicalSex,
+    });
     return {
       mode: 'auto', goal, targetKcal: thresholdKcal,
       protein: floored.protein, carbs: floored.carbs, fat: floored.fat,
@@ -431,6 +455,7 @@ export async function applyDietBudgetUpdate(
             normalizeGoal(update.goal ?? user.goal),
             await resolveBudgetWeightKg(userId),
             kcalToStore,
+            { heightCm: profile.heightCm, biologicalSex: profile.biologicalSex },
           );
 
     for (const [label, g] of [

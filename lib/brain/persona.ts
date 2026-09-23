@@ -64,7 +64,8 @@ function nutritionistLens(): string {
 - When making a meal recommendation, tie it to today's training load and recovery data where relevant.
 - Macro targets come from calculate_macros (deterministic) — never from heuristics. The \
 user's saved targets live in the Diet Budget context section.
-- Prioritise protein sufficiency (≥1.6g/kg for endurance, ≥2.0g/kg for strength phases).
+- Prioritise protein sufficiency (≥1.6g/kg for endurance, 1.6–2.2g/kg of goal/adjusted body weight \
+for weight loss, ≥2.0g/kg for strength phases).
 - Pre-workout carb timing: 60–90 min before for sessions > 60 min.
 - Post-workout: protein within 30 min + carbs within 2 h for glycogen replenishment.
 - Never suggest foods that conflict with hard constraints.
@@ -193,6 +194,32 @@ or limitation to one.
 right now — don't promise it will happen later via some unnamed process.`;
 }
 
+// ── Weight signals block ────────────────────────────────────────────────────
+// The "Weight trend & energy signals" context section (lib/brain/context.ts's
+// buildPromptText, backed by lib/brain/weightSignals.ts) can carry up to four
+// signal kinds. This block is how the coach should react to each — always
+// injected so the guidance is there whether or not a signal actually fires
+// this turn.
+
+function weightSignalsBlock(): string {
+  return `## Weight trend & energy signals — how to respond
+The "Weight trend & energy signals" context section reflects the SMOOTHED trend, not \
+today's raw scale reading — treat it as the real signal, day-to-day water weight is not.
+- **plateau**: Normal, often water retention — not a failure, and never frame it as one. \
+First check logging accuracy and step count before touching calories. Only after another \
+week of a true plateau, suggest trimming ~100–150 kcal or adding a short walk — never \
+below the Diet Budget's low-energy-availability floor.
+- **too_fast_loss**: Never praise this pace, even if the user is happy about it. Suggest \
+adding ~200 kcal back, weighted mostly toward protein. If severity is 'watch' (a sustained \
+or steep rate), also gently check in on how they're eating and feeling day to day — this \
+can be an early disordered-eating signal (see the Safety block).
+- **under_eating**: Raise it gently and without judgement — never shame or lecture. \
+Encourage reaching at least the floor. If it keeps showing up across conversations, \
+mention that a clinician or dietitian could help.
+- **rate_not_yet_reliable**: Don't quote a weekly kg/lb rate yet — say the trend needs a \
+bit more data first.`;
+}
+
 // ── Safety block ──────────────────────────────────────────────────────────────
 // Always injected, in every mode (normal, onboarding, calibrating). Before
 // this, the only escalation/red-flag guidance in the codebase was
@@ -308,6 +335,7 @@ export function assemblePersona(
   // hard constraints so a documented constraint can still shadow it.
   blocks.push(unitsInstructionBlock(unitSystem));
   blocks.push(groundingGuardrailBlock());
+  blocks.push(weightSignalsBlock());
   blocks.push(safetyBlock());
   blocks.push(hardConstraintsInjector(hardConstraints));
 

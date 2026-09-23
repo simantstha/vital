@@ -43,6 +43,20 @@ test('unitsInstructionBlock is a pure function of unitSystem', () => {
   assert.match(unitsInstructionBlock('imperial'), /miles/);
 });
 
+test('the nutritionist lens now also covers weight-loss protein by goal/adjusted weight', () => {
+  const system = assemblePersona([]);
+  assert.match(system, /1\.6–2\.2g\/kg of goal\/adjusted body weight/);
+});
+
+test('assemblePersona always includes weight-signal response guidance for all four signal kinds', () => {
+  const system = assemblePersona([]);
+  assert.match(system, /## Weight trend & energy signals/);
+  assert.match(system, /\*\*plateau\*\*/);
+  assert.match(system, /\*\*too_fast_loss\*\*.*[Nn]ever praise/);
+  assert.match(system, /\*\*under_eating\*\*.*gently/);
+  assert.match(system, /\*\*rate_not_yet_reliable\*\*.*[Dd]on't quote a weekly/);
+});
+
 test('onboarding block asks about allergies via propose_fact, not remember_fact, and keeps the original 3 questions', () => {
   const system = assemblePersona([], undefined, true, undefined, 'metric', ['propose_fact', 'remember_fact']);
 

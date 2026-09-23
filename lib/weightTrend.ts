@@ -108,6 +108,25 @@ function weeklyDelta(days: WeightTrendDay[], dayNumbers: number[], windowDays: n
 }
 
 /**
+ * Rate of change in kg/week over the trailing `windowDays`, computed
+ * directly against a `days` array such as `WeightTrendResult.days` —
+ * exported so other pure modules (e.g. lib/brain/weightSignals.ts's 14-day
+ * plateau check) can ask for a window `computeWeightTrend` doesn't already
+ * return, without duplicating the closest-baseline-point search above.
+ */
+export function trendDeltaKgPerWeek(days: WeightTrendDay[], windowDays: number): number | null {
+  if (days.length < 2) return null;
+  const dayNumbers = days.map(d => dayNumber(d.day));
+  return weeklyDelta(days, dayNumbers, windowDays);
+}
+
+/** Calendar days spanned by a trend's `days` array (last day − first day), 0 for an empty/single-day trend. */
+export function trendSpanDays(days: WeightTrendDay[]): number {
+  if (days.length === 0) return 0;
+  return dayNumber(days[days.length - 1].day) - dayNumber(days[0].day);
+}
+
+/**
  * Computes the smoothed weight trend from a set of raw readings. Unsorted
  * input is fine — readings are sorted internally by localDay.
  */
