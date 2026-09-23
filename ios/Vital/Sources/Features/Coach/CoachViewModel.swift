@@ -377,6 +377,12 @@ final class CoachViewModel: ObservableObject {
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
 
+        // Post-V3 review fix: lets `CoachSpeaker.deactivateSession()` tell
+        // whether a new recording is already live on the shared
+        // `VoiceAudioSession` by the time this turn's playback finishes, so
+        // it doesn't deactivate out from under it.
+        speaker.isRecordingProvider = { [weak self] in self?.voiceController.isRecording ?? false }
+
         // The controller's one `onFinalTranscript` hook, owned exclusively
         // here regardless of which mic UI (Coach tab or Today's FAB) started
         // the recording — both share this same `voiceController`, so this is
@@ -656,6 +662,15 @@ final class CoachViewModel: ObservableObject {
                 errorMessage = text
                 if receivedVitalRollback {
                     specialistState = .recoverableRollback(text)
+                }
+                // Post-V3 review fix: a voice-initiated turn whose request
+                // failed never reaches `speaker.finish()`/TTS, which is
+                // otherwise what deactivates the shared `VoiceAudioSession`
+                // — without this, a failed voice send would leave the
+                // user's other audio ducked. `!speaker.isSpeaking` guards
+                // against racing an unrelated reply still speaking.
+                if sentByVoice, !speaker.isSpeaking {
+                    VoiceAudioSession.deactivate()
                 }
             }
         }

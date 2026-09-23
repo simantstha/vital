@@ -37,6 +37,26 @@ extension SpeechTranscriber: SpeechTranscribing {
     var endpointDeadlinePublisher: AnyPublisher<Date?, Never> { $endpointDeadline.eraseToAnyPublisher() }
 }
 
+// MARK: - VoiceAudioSessionControlling
+
+/// Seam over `VoiceAudioSession`'s static API — same DI shape as
+/// `transcriber`/`api` — so unit tests can assert *which* of
+/// configure/activate/deactivate `CoachVoiceController` calls, and when,
+/// without a real `AVAudioSession` (there is none in the test/simulator
+/// process anyway). Closures are `@MainActor` since every call site here is
+/// already on the main actor (this whole type is `@MainActor`).
+struct VoiceAudioSessionControlling {
+    var configure: @MainActor () -> Void
+    var activate: @MainActor () -> Void
+    var deactivate: @MainActor () -> Void
+
+    static let live = VoiceAudioSessionControlling(
+        configure: { try? VoiceAudioSession.configure() },
+        activate: { try? VoiceAudioSession.activate() },
+        deactivate: { VoiceAudioSession.deactivate() }
+    )
+}
+
 // MARK: - CoachVoiceController
 
 /// The single tap-to-talk pipeline shared by the Coach tab's mic and Today's
@@ -140,15 +160,17 @@ final class CoachVoiceController: ObservableObject {
 
     private let transcriber: any SpeechTranscribing
     private let api: any CoachAPIProviding
+    private let audioSession: VoiceAudioSessionControlling
     private var transcriptionTask: Task<Void, Never>?
     private var activeTurnID: UUID?
     private var cancellables = Set<AnyCancellable>()
 
-    /// Set once `prewarm()` has actually activated the session and prepared
-    /// the engine — guards against redoing that work on every `.onAppear`
-    /// (Coach tab and `VoiceFABView` both call it). Deliberately NOT set
-    /// when `prewarm()` no-ops for lack of permission, so a later call made
-    /// once permission is granted still does the real work.
+    /// Set once `prewarm()` has actually configured the session and
+    /// prewarmed the transcriber — guards against redoing that work on
+    /// every `.onAppear` (Coach tab and `VoiceFABView` both call it).
+    /// Deliberately NOT set when `prewarm()` no-ops for lack of permission,
+    /// so a later call made once permission is granted still does the real
+    /// work.
     private var didPrewarm = false
 
     /// `transcriber` defaults to `nil` rather than `SpeechTranscriber()`
@@ -159,14 +181,18 @@ final class CoachVoiceController: ObservableObject {
     /// fails to compile ("call to main actor-isolated initializer in a
     /// synchronous nonisolated context"). Falling back to
     /// `SpeechTranscriber()` inside the (already `@MainActor`) init body
-    /// sidesteps that.
+    /// sidesteps that. `VoiceAudioSessionControlling` isn't `@MainActor`
+    /// itself (it's a plain struct of closures), so `.live` as its default
+    /// doesn't hit the same issue.
     init(
         transcriber: (any SpeechTranscribing)? = nil,
-        api: any CoachAPIProviding = APIClient.shared
+        api: any CoachAPIProviding = APIClient.shared,
+        audioSession: VoiceAudioSessionControlling = .live
     ) {
         let transcriber = transcriber ?? SpeechTranscriber()
         self.transcriber = transcriber
         self.api = api
+        self.audioSession = audioSession
         self.isRecording = transcriber.isRecording
         self.permissionState = transcriber.permissionState
         bind()
@@ -227,19 +253,30 @@ final class CoachVoiceController: ObservableObject {
 
     // MARK: - Pre-warm
 
-    /// Activates the shared `VoiceAudioSession` and prepares the
-    /// transcriber's audio engine ahead of the user's first tap (spec
-    /// `ux-spec-v4` §3.4, §10 V3) — called from the Coach tab's and
-    /// `VoiceFABView`'s `.onAppear`. Idempotent and cheap: a no-op on every
-    /// call after the first one that actually ran, and a no-op entirely
-    /// while permission isn't yet `.authorized`. **Never** requests
-    /// permission itself — that stays a user-initiated action
-    /// (`requestPermissions()`), never something a mere tab appearance
-    /// triggers.
+    /// Configures (but never *activates*) the shared `VoiceAudioSession`
+    /// ahead of the user's first tap (spec `ux-spec-v4` §3.4, §10 V3) —
+    /// called from the Coach tab's and `VoiceFABView`'s `.onAppear`.
+    ///
+    /// **Must not call `audioSession.activate()`** (post-V3 review fix):
+    /// `.onAppear` fires just from the Today tab being on screen, which is
+    /// the launch screen — activating a `.duckOthers` session there would
+    /// duck the user's music/podcast the instant they open the app, before
+    /// they've touched the mic. `configure()` only sets the category/mode/
+    /// options on an inactive session, which doesn't take audio focus from
+    /// anything. Real activation happens in `SpeechTranscriber.start()`,
+    /// which is where the latency win (spec §3.4 "Tap → mic live") actually
+    /// matters — see that type's `prewarm()` for why it no longer prepares
+    /// the audio engine either.
+    ///
+    /// Idempotent and cheap: a no-op on every call after the first one that
+    /// actually ran, and a no-op entirely while permission isn't yet
+    /// `.authorized`. **Never** requests permission itself — that stays a
+    /// user-initiated action (`requestPermissions()`), never something a
+    /// mere tab appearance triggers.
     func prewarm() {
         guard !didPrewarm, permissionState == .authorized else { return }
         didPrewarm = true
-        try? VoiceAudioSession.activate()
+        audioSession.configure()
         transcriber.prewarm()
     }
 
@@ -289,7 +326,11 @@ final class CoachVoiceController: ObservableObject {
     }
 
     /// Ends the in-flight turn — while listening or while awaiting STT — and
-    /// delivers nothing. Idempotent.
+    /// delivers nothing. Idempotent. Deactivates the shared session
+    /// (post-V3 review fix): a cancelled turn never reaches `CoachSpeaker`,
+    /// which is otherwise the only thing that deactivates it, so without
+    /// this the user's other audio would stay ducked until their next voice
+    /// turn happens to speak a reply.
     func cancel() {
         transcriptionTask?.cancel()
         transcriptionTask = nil
@@ -300,6 +341,7 @@ final class CoachVoiceController: ObservableObject {
         currentTurnID = nil
         partialTranscript = ""
         state = .idle
+        audioSession.deactivate()
     }
 
     // MARK: - Transcription
@@ -349,10 +391,19 @@ final class CoachVoiceController: ObservableObject {
         }
     }
 
+    /// Shared by three non-spoken endings: `startRecording()`'s failed-start
+    /// path (`transcriber.start()` returned without ever recording),
+    /// `beginTranscription()`'s empty-on-device-transcript-and-no-clip
+    /// guard, and the transcription task's empty-after-cloud-STT guard.
+    /// None of these reach `CoachSpeaker`, so (post-V3 review fix) this
+    /// deactivates the shared session itself — otherwise a voice turn that
+    /// never got as far as a spoken reply would leave the user's other
+    /// audio ducked indefinitely.
     private func resetToIdleAfterEmptyTurn() {
         voiceTurnTimer = nil
         activeTurnID = nil
         currentTurnID = nil
         state = .idle
+        audioSession.deactivate()
     }
 }
