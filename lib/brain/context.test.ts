@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test, { mock } from 'node:test';
+import type { WeightSignal } from './weightSignals';
 
 /**
  * lib/brain/context.ts imports `@/db` at module load time (directly, and
@@ -49,6 +50,7 @@ function baseCtx(unitSystem: 'metric' | 'imperial') {
     calibration: { status: 'ready' as const, metrics: {} },
     unitSystem,
     entityRoster: [],
+    weightSignals: [] as WeightSignal[],
   };
 }
 
@@ -109,4 +111,60 @@ test('a diet budget with no lowEnergyWarning omits the SAFETY line', async () =>
   const text = buildPromptText(ctx as Parameters<typeof buildPromptText>[0]);
 
   assert.doesNotMatch(text, /SAFETY:/);
+});
+
+// ── Weight trend & energy signals section ───────────────────────────────
+
+test('an established trend with span >= 7 renders trend weight + rate, plus one line per signal', async () => {
+  const { buildPromptText } = await contextPromise;
+  const ctx = baseCtx('metric');
+  (ctx as Record<string, unknown>).weightTrend = {
+    established: true,
+    days: [
+      { day: '2026-07-25', rawKg: 82.5, trendKg: 82.5 },
+      { day: '2026-08-04', rawKg: 81.2, trendKg: 81.2 },
+    ],
+    delta7dKgPerWeek: -1.3,
+    delta30dKgPerWeek: -1.1,
+  };
+  (ctx as Record<string, unknown>).weightSignals = [
+    { kind: 'too_fast_loss', severity: 'watch', facts: { rateKgPerWeek: -1.3, pctPerWeek: 1.6 } },
+  ];
+
+  const text = buildPromptText(ctx as Parameters<typeof buildPromptText>[0]);
+
+  assert.match(text, /### Weight trend & energy signals/);
+  assert.match(text, /- Trend weight: 81\.2 kg \(0\.9 kg\/wk loss\)/);
+  assert.match(text, /- \[WATCH\] Losing faster than recommended: rateKgPerWeek=-1\.3, pctPerWeek=1\.6/);
+});
+
+test('a not-yet-reliable trend tells the coach not to quote a weekly rate', async () => {
+  const { buildPromptText } = await contextPromise;
+  const ctx = baseCtx('metric');
+  (ctx as Record<string, unknown>).weightTrend = {
+    established: true,
+    days: [
+      { day: '2026-08-01', rawKg: 80, trendKg: 80 },
+      { day: '2026-08-06', rawKg: 79.5, trendKg: 79.7 },
+    ],
+    delta7dKgPerWeek: -0.4,
+    delta30dKgPerWeek: null,
+  };
+  (ctx as Record<string, unknown>).weightSignals = [
+    { kind: 'rate_not_yet_reliable', severity: 'info', facts: { spanDays: 5 } },
+  ];
+
+  const text = buildPromptText(ctx as Parameters<typeof buildPromptText>[0]);
+
+  assert.match(text, /- Trend weight: not reliable yet — do not quote a weekly rate\./);
+  assert.match(text, /- \[INFO\] Not enough history yet for a reliable weekly rate: spanDays=5/);
+});
+
+test('no weightTrend at all omits the Weight trend section entirely', async () => {
+  const { buildPromptText } = await contextPromise;
+  const ctx = baseCtx('metric');
+
+  const text = buildPromptText(ctx as Parameters<typeof buildPromptText>[0]);
+
+  assert.doesNotMatch(text, /### Weight trend & energy signals/);
 });

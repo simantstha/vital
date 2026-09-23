@@ -92,7 +92,26 @@ mock.module('@/lib/brain/tools', {
   },
 });
 mock.module('@/lib/brain/dietBudget', {
-  namedExports: { resolveDietBudget: async () => undefined },
+  namedExports: {
+    resolveDietBudget: async () => undefined,
+    // Mirrors the real sex-aware floor (lib/brain/dietBudget.ts) closely
+    // enough for these timezone/entity-scoping tests, which don't assert on
+    // weight-signal content — see weightSignals.test.ts for that behavior.
+    lowEnergyThresholdKcal: (sex: string | null) => (sex === 'male' ? 1500 : 1200),
+  },
+});
+// Weight-trend loading (lib/weightRepository.ts) and profile loading
+// (lib/coreProfileStore.ts) are mocked wholesale, same as the other helper
+// modules above — these tests pin local-day/timezone/entity-scoping
+// behavior, not weight-signal content (see weightSignals.test.ts).
+mock.module('@/lib/weightRepository', {
+  namedExports: {
+    getWeightReadings: async () => [],
+    importLegacyWeightLogIfPresent: async () => {},
+  },
+});
+mock.module('@/lib/coreProfileStore', {
+  namedExports: { readCoreProfile: async () => null },
 });
 
 const contextPromise = import('./context');

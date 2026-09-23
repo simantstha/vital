@@ -24,7 +24,7 @@ import {
   queryAllBaselines, metricLabel, type BaselineSnapshot,
   queryScheduleWindow, formatScheduleLine, type ScheduleBlock,
 } from './tools';
-import { resolveDietBudget, type DietBudget } from './dietBudget';
+import { resolveDietBudget, lowEnergyThresholdKcal, type DietBudget } from './dietBudget';
 import { resolveDailyIntake, type DailyIntake } from './nutritionIntake';
 import { getDailyBrief, type CachedBrief } from './dailyBriefRepository';
 import { getConversationStart } from './conversationWindow';
@@ -34,6 +34,21 @@ import { buildEntityRoster, type EntityRosterItem, type EntityRosterNode } from 
 import { localDayKey, pickTimeZone, previousDayKey } from '../localDay';
 import { resolveUnitSystem, type UnitSystem } from '../units';
 import { formatDistance, formatWeight } from '../metricFormat';
+import { computeWeightTrend, type WeightTrendResult } from '../weightTrend';
+import { getWeightReadings, importLegacyWeightLogIfPresent } from '../weightRepository';
+import {
+  assessWeightSignals,
+  formatWeightSignalsSection,
+  type WeightSignal,
+  type DailyIntakeKcalPoint,
+} from './weightSignals';
+import { readCoreProfile } from '../coreProfileStore';
+import { parseProfileDetails } from '../profileDetails';
+
+/** How many trailing days of weigh-ins assembleContext loads for the smoothed trend (lib/weightTrend.ts). */
+const WEIGHT_TREND_WINDOW_DAYS = 45;
+/** How many trailing local days of resolved intake feed the under_eating signal (lib/brain/weightSignals.ts). */
+const WEIGHT_SIGNALS_INTAKE_WINDOW_DAYS = 7;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -79,6 +94,8 @@ export interface CoachContext {
   calibration: Calibration;         // gates recovery/training prescriptions
   dietBudget?: DietBudget;          // effective calorie/macro targets (auto or pinned)
   todayIntake?: DailyIntake;        // resolved consumed kcal/macros for `today` — see lib/brain/nutritionIntake.ts
+  weightTrend?: WeightTrendResult;  // smoothed EWMA weight trend, last WEIGHT_TREND_WINDOW_DAYS days — see lib/weightTrend.ts
+  weightSignals: WeightSignal[];    // plateau/too-fast-loss/under-eating/rate-not-reliable — see lib/brain/weightSignals.ts
   cachedBrief?: CachedBrief;        // today's app-generated insight + meal plan, if warm
   whoopLine?: string;               // compact "WHOOP (today|yesterday): ..." line, if any whoop_* daily_metrics exist
   unitSystem: UnitSystem;           // display-unit preference — render-only, never storage (see lib/units.ts)
@@ -285,6 +302,12 @@ export function buildPromptText(
         lines.push('  We raised the target to this floor rather than cut further — do not suggest going lower.');
       }
     }
+  }
+
+  // ── Weight trend & energy signals ───────────────────────────────────────
+  if (ctx.weightTrend) {
+    lines.push('\n### Weight trend & energy signals');
+    lines.push(...formatWeightSignalsSection(ctx.weightTrend, ctx.weightSignals, ctx.unitSystem));
   }
 
   // ── Schedule (next 48h calendar_blocks, if the user has synced) ────────────
@@ -610,15 +633,56 @@ export async function assembleContext(userId: string, findingId?: string): Promi
   // Messages in chronological order for the prompt
   const recentMessages = [...rawMessages].reverse();
 
-  // Diet budget + today's persisted brief (meal plan) — keyed by the same
-  // local day as /api/today's getDailyBrief call (see above), so a
-  // pre-warmed or on-demand brief is found regardless of UTC/local day skew.
-  const dietBudget  = usersRow ? await resolveDietBudget(usersRow, userId) : undefined;
-  const cachedBrief = await getDailyBrief(userId, localToday, unitSystem) ?? undefined;
+  // Last WEIGHT_SIGNALS_INTAKE_WINDOW_DAYS local day keys ending at
+  // localToday (oldest first) — feeds both todayIntake (last element) and
+  // the under_eating weight signal below, off ONE resolveDailyIntake call
+  // rather than one call per day.
+  const sevenDayKeys: string[] = [localToday];
+  for (let i = 1; i < WEIGHT_SIGNALS_INTAKE_WINDOW_DAYS; i++) {
+    sevenDayKeys.unshift(previousDayKey(sevenDayKeys[0]));
+  }
+
+  // Diet budget + today's persisted brief (meal plan) + resolved intake +
+  // the weight trend all run in parallel — none of these depend on each
+  // other, only on `tz`/`localToday`/`usersRow` already resolved above.
+  // importLegacyWeightLogIfPresent (a one-time idempotent write) must
+  // complete before getWeightReadings so a first-ever read picks up a
+  // freshly-imported legacy weight-log.json — same ordering as GET
+  // /api/weight-log (app/api/weight-log/route.ts) — but that pair still runs
+  // concurrently with the other independent queries below.
+  const [dietBudget, cachedBriefRow, intakeByDay, weightReadings, coreProfileMd] = await Promise.all([
+    usersRow ? resolveDietBudget(usersRow, userId) : Promise.resolve(undefined),
+    getDailyBrief(userId, localToday, unitSystem),
+    resolveDailyIntake(userId, sevenDayKeys, tz),
+    importLegacyWeightLogIfPresent(userId, tz).then(() => getWeightReadings(userId, WEIGHT_TREND_WINDOW_DAYS, tz)),
+    readCoreProfile(userId),
+  ]);
+  const cachedBrief = cachedBriefRow ?? undefined;
 
   // Resolved consumed kcal/macros for today (Vital meal log, else a nonzero
   // HealthKit dietary_* reading, else none) — see lib/brain/nutritionIntake.ts.
-  const todayIntake = (await resolveDailyIntake(userId, [localToday], tz)).get(localToday);
+  const todayIntake = intakeByDay.get(localToday);
+
+  // Smoothed weight trend (lib/weightTrend.ts) + the plateau/too-fast-loss/
+  // under-eating/rate-not-reliable signals (lib/brain/weightSignals.ts) —
+  // see that module's header for the evidence-based thresholds.
+  const weightTrend = computeWeightTrend(weightReadings);
+  const profileForFloor = parseProfileDetails(coreProfileMd);
+  const floorKcal = lowEnergyThresholdKcal(profileForFloor.biologicalSex);
+  const dailyIntakeKcal: DailyIntakeKcalPoint[] = sevenDayKeys.map((day) => {
+    const intake = intakeByDay.get(day);
+    return {
+      day,
+      kcal: intake && intake.source !== 'none' ? intake.kcal : null,
+      source: intake?.source ?? 'none',
+    };
+  });
+  const weightSignals = assessWeightSignals({
+    trend: weightTrend,
+    dailyIntakeKcal,
+    floorKcal,
+    goal: dietBudget?.goal ?? 'general',
+  });
 
   // WHOOP context line (Task 7) — daily_metrics is day-keyed to the user's
   // *local* day (lib/whoop/mapping.ts's localDayKey), same key as above.
@@ -650,6 +714,8 @@ export async function assembleContext(userId: string, findingId?: string): Promi
     calibration,
     dietBudget,
     todayIntake,
+    weightTrend,
+    weightSignals,
     cachedBrief,
     whoopLine,
     unitSystem,

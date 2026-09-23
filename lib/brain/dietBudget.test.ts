@@ -406,6 +406,41 @@ test('goalFromOnboarding passes canonical DietGoal ids through unchanged', async
   }
 });
 
+// ── Protein by adjusted body weight (BMI >= 30) ─────────────────────────────
+// A registered-dietitian review found protein was dosed at 2.2 g/kg of
+// CURRENT weight even for a BMI >= 30 user — 286 g/day for a 130kg user.
+// splitMacrosForKcal (called via computeAutoBudget -> macrosForGoal) now
+// doses protein off adjusted body weight instead — see
+// lib/brain/proteinWeight.ts and its own test file for the ABW/IBW math.
+
+test('a 130kg/175cm weight_loss user gets well under the old 286g (2.2 g/kg of current weight) figure, and capped at 200g', async () => {
+  const { computeAutoBudget } = await dietBudgetPromise;
+  state.weightRows = [{ date: '2026-08-01', value: 130 }];
+  state.manualWeightRows = [];
+  state.workoutRows = [];
+  state.coreProfileMd = coreProfile({ age: 40, sex: 'male', heightCm: 175, weightKg: 130 });
+  state.trainingHistoryJson = null;
+
+  const budget = await computeAutoBudget('user-1', 'weight_loss');
+
+  // Old behavior: 2.2 g/kg * 130kg = 286g (over the 200g cap either way).
+  assert.ok(budget.protein < 286, `expected well under 286g, got ${budget.protein}g`);
+  assert.ok(budget.protein <= 200, `expected the 200g cap to apply, got ${budget.protein}g`);
+});
+
+test('a 70kg/175cm weight_loss user (BMI ~22.9, under the obesity threshold) is unchanged — still 2.2 g/kg of current weight', async () => {
+  const { computeAutoBudget } = await dietBudgetPromise;
+  state.weightRows = [{ date: '2026-08-01', value: 70 }];
+  state.manualWeightRows = [];
+  state.workoutRows = [];
+  state.coreProfileMd = coreProfile({ age: 30, sex: 'male', heightCm: 175, weightKg: 70 });
+  state.trainingHistoryJson = null;
+
+  const budget = await computeAutoBudget('user-1', 'weight_loss');
+
+  assert.equal(budget.protein, Math.round(2.2 * 70), 'protein must be unaffected for a non-obese BMI user');
+});
+
 test('goalFromOnboarding returns null for unrecognised input', async () => {
   const { goalFromOnboarding } = await dietBudgetPromise;
 

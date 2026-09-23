@@ -31,6 +31,17 @@ import { buildSubjectLabelMap, resolveSubjectLabel, withSubjectSuffix } from '@/
 import { resolveUnitSystem, type UnitSystem } from '@/lib/units';
 import { KM_PER_MILE } from '@/lib/metricFormat';
 import type { DailyBrief } from '@/lib/types';
+import { computeWeightTrend } from '@/lib/weightTrend';
+import { getWeightReadings, importLegacyWeightLogIfPresent } from '@/lib/weightRepository';
+import { assessWeightSignals, type DailyIntakeKcalPoint } from '@/lib/brain/weightSignals';
+import { lowEnergyThresholdKcal } from '@/lib/brain/dietBudget';
+import { readCoreProfile } from '@/lib/coreProfileStore';
+import { parseProfileDetails } from '@/lib/profileDetails';
+
+/** How many trailing days of weigh-ins the brief loads for the smoothed trend (lib/weightTrend.ts) — same window as lib/brain/context.ts. */
+const WEIGHT_TREND_WINDOW_DAYS = 45;
+/** How many trailing local days of resolved intake feed the under_eating signal (lib/brain/weightSignals.ts). */
+const WEIGHT_SIGNALS_INTAKE_WINDOW_DAYS = 7;
 
 // ── Payload helpers ─────────────────────────────────────────────────────────
 
@@ -125,6 +136,7 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
       timezone:           schema.users.timezone,
       unit_system:        schema.users.unit_system,
       sleep_goal_minutes: schema.users.sleep_goal_minutes,
+      goal:               schema.users.goal,
     }).from(schema.users).where(eq(schema.users.id, userId)).limit(1),
     queryBaseline(userId, 'whoop_hrv_rmssd'),
     queryMetricPoints(userId, 'whoop_hrv_rmssd', 14),
@@ -510,6 +522,44 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
     }
   }
 
+  // ── Weight trend & energy signals ─────────────────────────────────────────
+  // Same signals the coach chat prompt gets (lib/brain/context.ts,
+  // lib/brain/weightSignals.ts) — the brief does NOT build its prompt from
+  // assembleContext/buildPromptText (it has its own prompt in lib/claude.ts),
+  // so these are computed and threaded through separately here. Critically,
+  // this is what stops the brief from ever praising a too-fast loss.
+  const signalDayKeys: string[] = [todayKey];
+  {
+    let cursor = todayKey;
+    for (let i = 1; i < WEIGHT_SIGNALS_INTAKE_WINDOW_DAYS; i++) {
+      cursor = previousDayKey(cursor);
+      signalDayKeys.unshift(cursor);
+    }
+  }
+  const [weightReadings, signalIntakeByDay, coreProfileMd] = await Promise.all([
+    importLegacyWeightLogIfPresent(userId, tz).then(() => getWeightReadings(userId, WEIGHT_TREND_WINDOW_DAYS, tz)),
+    resolveDailyIntake(userId, signalDayKeys, tz ?? 'UTC'),
+    readCoreProfile(userId),
+  ]);
+  const weightTrend = computeWeightTrend(weightReadings);
+  const dailyIntakeKcal: DailyIntakeKcalPoint[] = signalDayKeys.map((day) => {
+    const intake = signalIntakeByDay.get(day);
+    return {
+      day,
+      kcal: intake && intake.source !== 'none' ? intake.kcal : null,
+      source: intake?.source ?? 'none',
+    };
+  });
+  const floorKcal = lowEnergyThresholdKcal(parseProfileDetails(coreProfileMd).biologicalSex);
+  const weightSignals = assessWeightSignals({
+    trend: weightTrend,
+    dailyIntakeKcal,
+    floorKcal,
+    // users.goal is already the canonical DietGoal id (goalFromOnboarding
+    // normalizes onboarding's ids at write time) — no need to re-normalize.
+    goal: userRow?.goal ?? 'general',
+  });
+
   // ── Delegate to lib/claude.ts generateDailyBrief ─────────────────────────
   return generateDailyBrief(userId, {
     recovery: recoveryResult.score,
@@ -536,6 +586,8 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
     weeklyMileage,
     recentNutrition,
     weightKg,
+    weightTrend,
+    weightSignals,
     foodProfile: restrictions.length || preferences.length ? { restrictions, preferences } : undefined,
     calibrating: calibration.status === 'calibrating',
     timeZone: tz,

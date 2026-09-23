@@ -96,6 +96,28 @@ mock.module('@/lib/claude', {
     },
   },
 });
+// Weight-trend loading (lib/weightRepository.ts) and profile loading
+// (lib/coreProfileStore.ts) feed the weight-signals block the brief now
+// passes into lib/claude.ts's generateDailyBrief — mocked wholesale, same as
+// the other helper modules above, since this file's tests are about
+// local-day bucketing, not weight-signal content (see weightSignals.test.ts).
+mock.module('@/lib/weightRepository', {
+  namedExports: {
+    getWeightReadings: async () => [],
+    importLegacyWeightLogIfPresent: async () => {},
+  },
+});
+mock.module('@/lib/coreProfileStore', {
+  namedExports: { readCoreProfile: async () => null },
+});
+mock.module('@/lib/brain/dietBudget', {
+  namedExports: {
+    // Mirrors the real sex-aware floor (lib/brain/dietBudget.ts) closely
+    // enough for these local-day-bucketing tests, which don't assert on
+    // weight-signal content (see weightSignals.test.ts).
+    lowEnergyThresholdKcal: (sex: string | null) => (sex === 'male' ? 1500 : 1200),
+  },
+});
 
 const briefPromise = import('./brief');
 
