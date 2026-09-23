@@ -32,6 +32,32 @@ final class CoachVoiceControllerTests: XCTestCase {
         XCTAssertEqual(controller.currentTurnID, firstTurnID)
     }
 
+    /// A `start()` that never actually begins recording (denied permission,
+    /// unavailable recognizer, an audio session/engine failure) must not
+    /// leave the controller stuck in `.listening` forever — it has to fall
+    /// back to `.idle` so a later tap can try again.
+    func testStartRecordingResetsToIdleWhenTranscriberFailsToStart() {
+        let transcriber = FakeSpeechTranscriber()
+        transcriber.startShouldSucceed = false
+        let controller = CoachVoiceController(transcriber: transcriber, api: FakeVoiceAPI())
+
+        controller.startRecording()
+
+        XCTAssertEqual(controller.state, .idle)
+        XCTAssertNil(controller.currentTurnID)
+        XCTAssertEqual(controller.partialTranscript, "")
+        XCTAssertEqual(transcriber.startCallCount, 1)
+
+        // A later, successful start works normally — the failed attempt
+        // above didn't leave anything wedged.
+        transcriber.startShouldSucceed = true
+        controller.startRecording()
+
+        XCTAssertEqual(controller.state, .listening)
+        XCTAssertEqual(transcriber.startCallCount, 2)
+        XCTAssertNotNil(controller.currentTurnID)
+    }
+
     /// The endpoint firing (the transcriber's `isRecording` flipping back to
     /// false while we're listening) moves to `.transcribing`, and once the
     /// (STT-less, in this test) transcript resolves, `onFinalTranscript`
@@ -179,6 +205,44 @@ final class CoachVoiceControllerTests: XCTestCase {
         XCTAssertEqual(delivered, ["corrected by scribe"])
     }
 
+    /// `isRecording` must be `@Published` on the controller itself (not a
+    /// computed pass-through) — `CoachView`/`VoiceFABView` observe only the
+    /// controller, so a transcriber-only change that isn't accompanied by a
+    /// `state` change (e.g. the mic just stopping) has to still re-publish
+    /// here or those views never re-render for it.
+    func testIsRecordingMirrorsTranscriberRegardlessOfControllerState() {
+        let transcriber = FakeSpeechTranscriber()
+        let controller = CoachVoiceController(transcriber: transcriber, api: FakeVoiceAPI())
+
+        XCTAssertFalse(controller.isRecording)
+
+        controller.startRecording()
+        XCTAssertTrue(controller.isRecording)
+
+        transcriber.isRecording = false // endpoint fires
+        XCTAssertFalse(controller.isRecording)
+    }
+
+    /// `permissionState` is re-read (and re-published) after
+    /// `requestPermissions()` and after `refreshPermissionState()` — the
+    /// latter is how a Settings grant made mid-session (no relaunch) is
+    /// picked up, e.g. `VoiceFABView`'s `didBecomeActiveNotification` hook.
+    func testPermissionStateRefreshesAfterRequestAndManualRefresh() async {
+        let transcriber = FakeSpeechTranscriber()
+        transcriber.permissionState = .notDetermined
+        let controller = CoachVoiceController(transcriber: transcriber, api: FakeVoiceAPI())
+
+        XCTAssertEqual(controller.permissionState, .notDetermined)
+
+        await controller.requestPermissions()
+        XCTAssertEqual(controller.permissionState, .authorized) // the fake grants unconditionally
+
+        transcriber.permissionState = .denied
+        transcriber.nextRefreshedPermissionState = .authorized
+        controller.refreshPermissionState()
+        XCTAssertEqual(controller.permissionState, .authorized)
+    }
+
     // MARK: - Helpers
 
     private func waitUntil(
@@ -247,8 +311,17 @@ private final class FakeSpeechTranscriber: SpeechTranscribing {
     private(set) var stopCallCount = 0
     private(set) var discardCallCount = 0
 
+    /// Mirrors the real `SpeechTranscriber.start()`'s several failure paths
+    /// (permission not authorized, recognizer unavailable, audio session
+    /// activation throwing, engine start throwing) — all of which return
+    /// without ever setting `isRecording = true`.
+    var startShouldSucceed = true
+
     func start() {
         startCallCount += 1
+        if startShouldSucceed {
+            isRecording = true
+        }
     }
 
     func stop() {
@@ -261,7 +334,13 @@ private final class FakeSpeechTranscriber: SpeechTranscribing {
         recordingURL = nil
     }
 
-    func refreshPermissionState() {}
+    /// Applied by `refreshPermissionState()` — lets a test simulate a grant
+    /// picked up from Settings without a real permission prompt.
+    var nextRefreshedPermissionState: SpeechPermissionState?
+
+    func refreshPermissionState() {
+        if let next = nextRefreshedPermissionState { permissionState = next }
+    }
 
     func requestPermissions() async {
         permissionState = .authorized

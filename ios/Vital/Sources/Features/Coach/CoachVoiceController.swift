@@ -83,8 +83,18 @@ final class CoachVoiceController: ObservableObject {
     /// future UI (the endpoint ring) to render — no view reads this yet.
     @Published private(set) var endpointDeadline: Date? = nil
 
-    var isRecording: Bool { transcriber.isRecording }
-    var permissionState: SpeechPermissionState { transcriber.permissionState }
+    /// Mirrors `transcriber.isRecording` via `isRecordingPublisher` (see
+    /// `bind()`) rather than being a computed pass-through — `CoachView` and
+    /// `VoiceFABView` now observe only this controller, not the transcriber
+    /// directly, so a transcriber-only change has to be a `@Published`
+    /// change here too or those views never re-render for it.
+    @Published private(set) var isRecording: Bool = false
+
+    /// Mirrors `transcriber.permissionState`, re-read (not continuously
+    /// bound — permission state changes only at three well-defined points)
+    /// after `requestPermissions()`, after `refreshPermissionState()`, and
+    /// once at `init`.
+    @Published private(set) var permissionState: SpeechPermissionState
 
     /// Identifies the in-flight recording, set fresh in `startRecording()`.
     /// `VoiceFABView` captures this when *it* starts a recording so it can
@@ -128,6 +138,8 @@ final class CoachVoiceController: ObservableObject {
     ) {
         self.transcriber = transcriber
         self.api = api
+        self.isRecording = transcriber.isRecording
+        self.permissionState = transcriber.permissionState
         bind()
     }
 
@@ -142,6 +154,15 @@ final class CoachVoiceController: ObservableObject {
 
         transcriber.endpointDeadlinePublisher
             .sink { [weak self] deadline in self?.endpointDeadline = deadline }
+            .store(in: &cancellables)
+
+        // Unconditional mirror of the transcriber's `isRecording` — kept
+        // separate from the endpoint-detection sink below (which filters on
+        // `state == .listening` and needs `removeDuplicates()` for its
+        // edge-triggered true→false logic) so `isRecording` always tracks
+        // reality regardless of what state the controller thinks it's in.
+        transcriber.isRecordingPublisher
+            .sink { [weak self] recording in self?.isRecording = recording }
             .store(in: &cancellables)
 
         // Recording stopping while we're the one who started it (`.listening`)
@@ -163,6 +184,16 @@ final class CoachVoiceController: ObservableObject {
 
     func requestPermissions() async {
         await transcriber.requestPermissions()
+        permissionState = transcriber.permissionState
+    }
+
+    /// Re-reads permission state after a grant made in Settings — driven by
+    /// `VoiceFABView`'s `didBecomeActiveNotification` handler (and available
+    /// for `CoachView` to use the same way) so a grant is picked up without
+    /// requiring an app relaunch.
+    func refreshPermissionState() {
+        transcriber.refreshPermissionState()
+        permissionState = transcriber.permissionState
     }
 
     // MARK: - Recording
@@ -191,6 +222,19 @@ final class CoachVoiceController: ObservableObject {
         voiceTurnTimer = VoiceTurnTimer()
         voiceTurnTimer?.mark(.recordingStart)
         transcriber.start()
+
+        // `start()` is synchronous and can return without ever putting the
+        // transcriber into a recording state — permission not authorized,
+        // the recognizer unavailable, the audio session failing to activate
+        // (e.g. mid phone-call), or the audio engine failing to start. The
+        // endpoint-fired sink in `bind()` only reacts to a true→false
+        // transition, so without this check a failed start would leave the
+        // controller stuck in `.listening` forever — every later
+        // `startRecording()` a silent no-op until relaunch.
+        if !transcriber.isRecording {
+            resetToIdleAfterEmptyTurn()
+            partialTranscript = ""
+        }
     }
 
     func stopRecording() {
