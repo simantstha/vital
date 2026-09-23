@@ -106,6 +106,11 @@ final class TodayViewModel: ObservableObject {
     @Published var greeting: String = ""
     @Published var dateSubtitle: String = ""
     @Published var streakDays: Int = 0
+    /// Distinguishes "haven't fetched a streak yet" from "fetched and it's
+    /// genuinely 0" — `streakDays` alone can't, since both start/land on 0.
+    /// The chip uses this to avoid asserting "0-day streak" the first time
+    /// `refreshStreak()` fails, before any real value has ever landed.
+    @Published private(set) var hasLoadedStreak = false
 
     // Coach insight — overwritten from /api/today
     @Published var coachInsight: String = ""
@@ -499,6 +504,7 @@ final class TodayViewModel: ObservableObject {
     func refreshStreak() async {
         do {
             streakDays = try await fetchStreak().streakDays
+            hasLoadedStreak = true
         } catch {
             print("[Vital] fetchStreak failed: \(error.localizedDescription)")
         }

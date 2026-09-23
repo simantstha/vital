@@ -415,7 +415,15 @@ private extension TodayView {
                     .foregroundStyle(Theme.Colors.textPrimary)
 
                 HStack(spacing: Theme.Spacing.sm) {
-                    Chip(text: "\(vm.streakDays)-day streak", icon: "flame.fill", isAccent: true)
+                    // Before any streak fetch has ever succeeded, `streakDays`
+                    // is just its zero default, not a real "0-day streak" —
+                    // showing the chip then would assert something we don't
+                    // actually know. Once we've loaded a real value at least
+                    // once, keep showing it (last known good) even through a
+                    // later failed refresh.
+                    if vm.hasLoadedStreak {
+                        Chip(text: "\(vm.streakDays)-day streak", icon: "flame.fill", isAccent: true)
+                    }
                     if let hint = vm.planHint {
                         Text(hint)
                             .font(.system(size: 13))

@@ -209,9 +209,9 @@ private extension ProfileView {
                     SleepGoalView(profileVM: vm)
                 }
 
-                settingsLink(index: 4, icon: "applewatch", title: "Devices",
-                             value: appleWatchConnected ? "Apple Watch · synced" : "Not connected") {
-                    DevicesView(appleWatchConnected: appleWatchConnected)
+                settingsLink(index: 4, icon: "heart.fill", title: "Devices",
+                             value: appleHealthConnected ? "Apple Health · connected" : "Not connected") {
+                    DevicesView(appleHealthConnected: appleHealthConnected)
                 }
 
                 settingsButton(index: 5, icon: "ruler", title: "Units", value: unitPref.current.displayName) {
@@ -307,10 +307,12 @@ private extension ProfileView {
 
     // ── Devices connectivity ──────────────────────────────────────────────
 
-    /// The backend only tracks one combined HealthKit integration ("Apple
-    /// Health") — that's also the channel Apple Watch data flows through, so
-    /// it doubles as the connectivity signal for the mock's "Apple Watch" row.
-    var appleWatchConnected: Bool {
+    /// HealthKit authorization is what we actually know — it says nothing
+    /// about *which* device the data came from, so this row must not claim
+    /// an Apple Watch is present (an iPhone-only user has HealthKit data
+    /// too, e.g. from manual entry or a phone-only workout app). Label it
+    /// "Apple Health", the thing we can actually verify.
+    var appleHealthConnected: Bool {
         vm.integrations.contains { $0.status.lowercased() == "connected" }
     }
 

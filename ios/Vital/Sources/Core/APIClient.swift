@@ -1912,6 +1912,9 @@ protocol CoachAPIProviding {
     func fetchCoachRestoration() async throws -> CoachRestorationResponse
     func fetchCoachOpener() async throws -> String
     func resetCoachConversation() async throws
+    /// The user's diet goal (`weight_loss | muscle | endurance | general`),
+    /// used to pick goal-aware starter chips (`CoachStarterChips`).
+    func fetchDietGoal() async throws -> DietGoalResponse
     func streamCoach(
         message: String,
         imageBase64: String?,

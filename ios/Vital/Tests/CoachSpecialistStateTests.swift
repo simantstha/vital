@@ -790,6 +790,8 @@ final class FakeCoachAPI: CoachAPIProviding {
     }
 
     var restoration: CoachRestorationResponse
+    /// Defaults to `general` — tests exercising goal-aware chips override this.
+    var dietGoal: String = "general"
     var nextMessageEvents: [CoachStreamEvent] = []
     var nextMessageFailure: Error?
     var nextActionEvents: [CoachStreamEvent] = []
@@ -826,6 +828,22 @@ final class FakeCoachAPI: CoachAPIProviding {
 
     func resetCoachConversation() async throws {
         // No-op for testing
+    }
+
+    func fetchDietGoal() async throws -> DietGoalResponse {
+        let dto = DietBudgetDTO(
+            mode: "auto",
+            goal: dietGoal,
+            targetKcal: 2000,
+            protein: 150,
+            carbs: 200,
+            fat: 60,
+            tdee: 2200,
+            lowEnergyWarning: nil,
+            consumedSource: nil,
+            consumedSourceName: nil
+        )
+        return DietGoalResponse(current: dto, auto: dto, goals: ["weight_loss", "muscle", "endurance", "general"])
     }
 
     func streamCoach(message: String, imageBase64: String?, mode: String?, findingId: String?) -> AsyncThrowingStream<CoachStreamEvent, Error> {
