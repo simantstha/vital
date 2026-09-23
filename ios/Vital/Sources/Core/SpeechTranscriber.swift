@@ -36,6 +36,13 @@ final class SpeechTranscriber: ObservableObject {
     @Published var permissionState: SpeechPermissionState = .notDetermined
     @Published var errorMessage: String? = nil
 
+    /// When the current adaptive endpointing window (see `EndpointPolicy`)
+    /// will fire, or nil while not actively waiting on one — i.e. before any
+    /// speech has been detected, or once recording has stopped. Published so
+    /// a future PR can render the countdown ring from spec §3.2 without
+    /// touching this file again; no UI reads it yet.
+    @Published private(set) var endpointDeadline: Date? = nil
+
     /// The just-recorded clip, ready to upload once `isRecording` flips back
     /// to false. Nil if the `.m4a` file couldn't be created (recognition
     /// still proceeds Apple-only in that case). Cleared by `discardRecording()`.
@@ -52,9 +59,6 @@ final class SpeechTranscriber: ObservableObject {
 
     // MARK: - Auto-stop watchdogs
 
-    /// Silence after non-empty speech: auto-stop ~1.8s after the last
-    /// partial transcript, so a natural pause ends the turn.
-    private let silenceThreshold: TimeInterval = 1.8
     /// No speech decoded at all: auto-stop after 10s so a turn with nothing
     /// said doesn't hang open.
     private let noSpeechTimeout: TimeInterval = 10
@@ -65,6 +69,12 @@ final class SpeechTranscriber: ObservableObject {
     private var silenceTask: Task<Void, Never>?
     private var noSpeechTask: Task<Void, Never>?
     private var maxDurationTask: Task<Void, Never>?
+
+    /// When the first non-empty partial of this turn arrived, used to
+    /// compute `speechDuration` for `EndpointPolicy` (short utterances get a
+    /// wider window so they aren't clipped). Nil until speech is detected;
+    /// reset on every `start()`.
+    private var speechStartedAt: Date?
 
     init() {
         refreshPermissionState()
@@ -86,6 +96,15 @@ final class SpeechTranscriber: ObservableObject {
     }
 
     func requestPermissions() async {
+        // Screenshot harness (`-VitalFixture <scenario>`): never show the
+        // system speech-recognition/microphone prompts — a blocking system
+        // alert would stall `XCUIScreen.main.screenshot()`. Never reached in
+        // practice (the screenshot harness never taps mic/voice affordances),
+        // but guarded to match HealthKitManager/NotificationManager in case a
+        // future scenario does. Compiled out of Release entirely.
+        #if DEBUG
+        guard !FixtureMode.isActive else { return }
+        #endif
         await withCheckedContinuation { cont in
             SFSpeechRecognizer.requestAuthorization { _ in
                 cont.resume()
@@ -110,6 +129,8 @@ final class SpeechTranscriber: ObservableObject {
         transcribedText = ""
         errorMessage = nil
         cancelWatchdogs()
+        speechStartedAt = nil
+        endpointDeadline = nil
         discardRecording()
         audioFile = nil
 
@@ -232,15 +253,27 @@ final class SpeechTranscriber: ObservableObject {
     /// end-of-utterance signal with no RMS/noise-floor tuning needed. Once
     /// speech has been detected the no-speech timeout is moot, so it's
     /// cancelled here too.
+    ///
+    /// The wait itself is no longer the fixed 1.8s timer — it's
+    /// `EndpointPolicy`'s adaptive window (spec §3.3), computed fresh on
+    /// every partial from the live transcript and how long the user has
+    /// been speaking, so a complete sentence ends the turn sooner and a
+    /// trailing filler/conjunction gives more room to keep talking.
     private func restartSilenceWatchdog() {
         noSpeechTask?.cancel()
         noSpeechTask = nil
 
+        if speechStartedAt == nil { speechStartedAt = Date() }
+        let speechDuration = Date().timeIntervalSince(speechStartedAt ?? Date())
+        let window = EndpointPolicy.silenceWindow(for: transcribedText, speechDuration: speechDuration)
+        endpointDeadline = Date().addingTimeInterval(window)
+
         silenceTask?.cancel()
         silenceTask = Task { [weak self] in
             guard let self else { return }
-            try? await Task.sleep(for: .seconds(self.silenceThreshold))
+            try? await Task.sleep(for: .seconds(window))
             guard !Task.isCancelled else { return }
+            self.endpointDeadline = nil
             self.stop()
         }
     }
@@ -269,5 +302,6 @@ final class SpeechTranscriber: ObservableObject {
         silenceTask?.cancel(); silenceTask = nil
         noSpeechTask?.cancel(); noSpeechTask = nil
         maxDurationTask?.cancel(); maxDurationTask = nil
+        endpointDeadline = nil
     }
 }

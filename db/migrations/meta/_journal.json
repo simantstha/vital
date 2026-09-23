@@ -211,6 +211,13 @@
       "when": 1790098399904,
       "tag": "0029_backfill_users_goal_from_profile",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1790115567714,
+      "tag": "0030_common_kitty_pryde",
+      "breakpoints": true
     }
   ]
 }

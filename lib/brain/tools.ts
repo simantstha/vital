@@ -14,11 +14,21 @@
  *   resolve_fact       — retract a confirmed node (status → 'resolved'; never deletes;
  *                        not specialist-allowed)
  *   log_meal           — nutrition lookup → meal_logged event
+ *   log_weight         — weigh-in → weight_logged event (lib/weightRepository.ts)
  *   get_metric_trend   — daily_metrics trend + mean/min/max + baseline direction
+ *   get_weight_trend   — smoothed (EWMA) weight trend, manual + HealthKit merged
+ *                        (lib/weightTrend.ts) — a dedicated tool rather than folded
+ *                        into get_metric_trend: body_mass_kg needs cross-source
+ *                        dedup + smoothing get_metric_trend's generic per-metric
+ *                        contract doesn't have, the same reason get_sleep_summary
+ *                        and get_workouts are their own tools instead of metric
+ *                        special-cases.
  *   get_sleep_summary  — nightly sleep minutes + stages + consistency
  *   get_workouts       — workout list from the workouts metric payload
  *   get_baseline       — baselines row for one metric
  *   compare_periods    — current vs. offset period means + delta
+ *   log_workout        — natural-language or structured strength sets -> workout_sets rows
+ *   get_training_history — per-exercise set/rep/load history + e1RM/volume progression
  *
  * Design rule (Phase 3): the coach prompt carries only small durable facts
  * (profile, baselines snapshot, calibration, today's numbers — see context.ts).
@@ -40,6 +50,19 @@ import { applyDietBudgetUpdate, splitMacrosForKcal, DEFAULT_WEIGHT_KG } from '@/
 import { sourcePrecedenceSql } from '@/lib/brain/memoryTiers';
 import { readCoreProfile } from '@/lib/coreProfileStore';
 import { parseProfileDetails } from '@/lib/profileDetails';
+import { randomUUID } from 'node:crypto';
+import { parseWorkoutPhrase } from '@/lib/workoutParse';
+import { resolveUnitSystem } from '@/lib/units';
+import {
+  getExerciseHistory,
+  getLastSessionForExercise,
+  getProgressionSummary,
+  logWorkoutSession,
+  type SetInput,
+} from '@/lib/workoutRepository';
+import { getWeightReadings, logWeightEntry } from '@/lib/weightRepository';
+import { computeWeightTrend } from '@/lib/weightTrend';
+import { LB_PER_KG } from '@/lib/metricFormat';
 
 // ── Tool definitions (Anthropic API schema) ────────────────────────────────
 
@@ -322,6 +345,32 @@ export const BRAIN_TOOLS: Tool[] = [
     },
   },
   {
+    name: 'log_weight',
+    description:
+      'Log a body-weight reading and write a weight_logged event to the database. Use ' +
+      'when the user reports a weigh-in (e.g. "182 this morning", "I weighed 81.4kg today").',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        value: {
+          type: 'number',
+          description: 'The weight value, in the unit given by `unit`.',
+        },
+        unit: {
+          type: 'string',
+          description: 'Unit the value is expressed in: "kg" or "lb". Defaults to "lb" if omitted.',
+        },
+        measuredAt: {
+          type: 'string',
+          description:
+            'Optional ISO 8601 timestamp for when the weigh-in happened (e.g. if the user ' +
+            'says "this morning" for an earlier time). Defaults to now.',
+        },
+      },
+      required: ['value'],
+    },
+  },
+  {
     name: 'get_metric_trend',
     description:
       'Get the daily trend for a single HealthKit metric over a date range, with ' +
@@ -342,6 +391,26 @@ export const BRAIN_TOOLS: Tool[] = [
         },
       },
       required: ['metric', 'days'],
+    },
+  },
+  {
+    name: 'get_weight_trend',
+    description:
+      'Get the smoothed body-weight trend (exponentially-weighted moving average, ' +
+      'MacroFactor/Happy Scale style) over the last N days, merging manual and HealthKit ' +
+      'readings, plus 7-day and 30-day kg/week rate of change. Use for any question about ' +
+      'weight trend, rate of loss/gain, or "how is my weight moving" — prefer this over ' +
+      'get_metric_trend(body_mass_kg) for weight, which returns raw daily values with no ' +
+      'smoothing or manual-entry merge.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        days: {
+          type: 'number',
+          description: 'How many days back to look (max 180).',
+        },
+      },
+      required: [],
     },
   },
   {
@@ -443,6 +512,75 @@ export const BRAIN_TOOLS: Tool[] = [
         days: {
           type: 'number',
           description: 'How many days forward to look (1-14, default 3).',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'log_workout',
+    description:
+      'Log a strength-training set or sets. Give EITHER `phrase` (a natural-language ' +
+      'description like "3x5 squat at 225" or "20 pushups") OR structured `sets` — never ' +
+      'both. When `phrase` is ambiguous (e.g. "press" — could be bench, overhead, or leg ' +
+      'press), the result comes back with needsClarification: true and a list of ' +
+      'candidate exercises; ask the user which one they meant in ONE short question with ' +
+      'those as options, then re-call this tool with the resolved exercise in `sets`. ' +
+      'Never guess at an ambiguous or unrecognized exercise.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        phrase: {
+          type: 'string',
+          description:
+            'A natural-language workout phrase, e.g. "3 by 5 squat at 225", "bench 5 sets ' +
+            'of 5 at 100 kg", "deadlift 1x5 @ 140kg rpe 8", "20 pushups".',
+        },
+        sets: {
+          type: 'array',
+          description:
+            'Structured sets — use this after a clarification round-trip, or when the ' +
+            'user gave you exact numbers already.',
+          items: {
+            type: 'object',
+            properties: {
+              exercise: { type: 'string', description: 'Exercise name, e.g. "bench press".' },
+              reps: { type: 'number' },
+              loadKg: { type: 'number', description: 'Omit for bodyweight movements.' },
+              rpe: { type: 'number' },
+              setCount: { type: 'number', description: 'How many sets at these reps/load (default 1).' },
+            },
+            required: ['exercise', 'reps'],
+          },
+        },
+        repeatLast: {
+          type: 'boolean',
+          description:
+            'If true, ignore phrase/sets and re-log the user\'s last full session for the ' +
+            'exercise named in `phrase` as-is (ux-spec "Log as done" / "repeat last session").',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'get_training_history',
+    description:
+      'Get logged set/rep/load history for one exercise (or a progression summary across ' +
+      'every exercise): best estimated one-rep max (Epley) per week and weekly training ' +
+      'volume. Use for any question about lift history, PRs, progression, or "what did I ' +
+      'do last time" — never invent past loads or claim there\'s no set-level data; the ' +
+      'database now stores it.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        exercise: {
+          type: 'string',
+          description: 'Optional. One exercise, e.g. "squat". Omit for a summary across all exercises.',
+        },
+        days: {
+          type: 'number',
+          description: 'How many days back to summarize (default 84, max 365). Ignored when exercise is set (returns full history instead).',
         },
       },
       required: [],
@@ -783,8 +921,12 @@ export function toolCallLabel(name: string, input: Record<string, unknown>): str
       return 'Updating your record…';
     case 'log_meal':
       return 'Logging your meal…';
+    case 'log_weight':
+      return 'Logging your weigh-in…';
     case 'get_metric_trend':
       return `Checking your ${metricLabel(String(input.metric ?? ''))} trend…`;
+    case 'get_weight_trend':
+      return 'Checking your weight trend…';
     case 'get_sleep_summary':
       return 'Looking at your sleep…';
     case 'get_workouts':
@@ -803,6 +945,10 @@ export function toolCallLabel(name: string, input: Record<string, unknown>): str
       return 'Saving that…';
     case 'append_observation':
       return 'Jotting that down…';
+    case 'log_workout':
+      return 'Logging your workout…';
+    case 'get_training_history':
+      return 'Pulling up your training history…';
     default:
       return 'Working on it…';
   }
@@ -1550,6 +1696,44 @@ export async function executeToolCall(
     return JSON.stringify(result);
   }
 
+  // ── log_weight ─────────────────────────────────────────────────────────────
+  if (name === 'log_weight') {
+    const value = Number(input.value);
+    if (!Number.isFinite(value)) return 'Error: value is required and must be a number.';
+
+    const rawUnit = input.unit != null ? String(input.unit).toLowerCase() : 'lb';
+    if (rawUnit !== 'kg' && rawUnit !== 'lb' && rawUnit !== 'lbs') {
+      return 'Error: unit must be "kg" or "lb".';
+    }
+    const valueKg = rawUnit === 'kg' ? value : value / LB_PER_KG;
+
+    let measuredAt = new Date();
+    if (input.measuredAt != null) {
+      const parsed = new Date(String(input.measuredAt));
+      if (!Number.isNaN(parsed.getTime())) measuredAt = parsed;
+    }
+
+    const [row] = await db
+      .select({ timezone: schema.users.timezone })
+      .from(schema.users)
+      .where(eq(schema.users.id, userId))
+      .limit(1);
+
+    const result = await logWeightEntry(userId, {
+      valueKg,
+      measuredAt,
+      source: 'coach',
+      timezone: row?.timezone,
+    });
+
+    return JSON.stringify({
+      ok:       true,
+      valueKg:  round2(valueKg),
+      localDay: result.localDay,
+      deduped:  result.deduped,
+    });
+  }
+
   // ── get_metric_trend ──────────────────────────────────────────────────────
   if (name === 'get_metric_trend') {
     const metric = String(input.metric ?? '');
@@ -1557,6 +1741,20 @@ export async function executeToolCall(
     if (!metric) return 'Error: metric is required.';
 
     return JSON.stringify(await queryMetricTrend(userId, metric, days));
+  }
+
+  // ── get_weight_trend ──────────────────────────────────────────────────────
+  if (name === 'get_weight_trend') {
+    const days = Math.max(1, Math.min(180, Number(input.days ?? 90)));
+
+    const [row] = await db
+      .select({ timezone: schema.users.timezone })
+      .from(schema.users)
+      .where(eq(schema.users.id, userId))
+      .limit(1);
+
+    const readings = await getWeightReadings(userId, days, row?.timezone);
+    return JSON.stringify(computeWeightTrend(readings));
   }
 
   // ── get_sleep_summary ─────────────────────────────────────────────────────
@@ -1616,7 +1814,144 @@ export async function executeToolCall(
     return JSON.stringify({ timezone, busy });
   }
 
+  // ── log_workout ───────────────────────────────────────────────────────────
+  if (name === 'log_workout') {
+    const [userRow] = await db
+      .select({ timezone: schema.users.timezone, unit_system: schema.users.unit_system })
+      .from(schema.users)
+      .where(eq(schema.users.id, userId))
+      .limit(1);
+    const timezone = userRow?.timezone ?? 'UTC';
+    // A bare load number with no explicit "kg"/"lb" in the phrase (e.g. "at
+    // 100") must resolve against the user's own display unit, never a
+    // hardcoded default — a metric user's "3x5 squat at 100" is 100kg, not
+    // 45kg. resolveUnitSystem defaults to 'metric' when unset.
+    const defaultUnit: 'kg' | 'lb' = resolveUnitSystem(userRow?.unit_system) === 'imperial' ? 'lb' : 'kg';
+
+    // repeatLast: re-log the user's last full session for the named exercise.
+    if (input.repeatLast === true) {
+      const exerciseGuess = String(input.phrase ?? '').trim().toLowerCase();
+      if (!exerciseGuess) return 'Error: phrase (exercise name) is required with repeatLast.';
+
+      const lastSession = await getLastSessionForExercise(userId, exerciseGuess);
+      if (lastSession.length === 0) {
+        return JSON.stringify({ ok: false, reason: 'no_history', message: `No previous session found for "${exerciseGuess}".` });
+      }
+
+      const performedAt = new Date();
+      const rows = await logWorkoutSession({
+        userId,
+        sessionId: randomUUID(),
+        performedAt,
+        timezone,
+        source: 'template',
+        sets: lastSession.map((s, i) => ({
+          exercise:         s.exercise,
+          exerciseDisplay:  s.exercise_display,
+          setIndex:         i + 1,
+          reps:             s.reps,
+          loadKg:           s.load_kg,
+          rpe:              s.rpe,
+          isWarmup:         s.is_warmup,
+        })),
+      });
+
+      return JSON.stringify({ ok: true, repeated: true, sets: rows.map(workoutSetToWire) });
+    }
+
+    let setsToLog: SetInput[] = [];
+
+    if (Array.isArray(input.sets) && input.sets.length > 0) {
+      setsToLog = (input.sets as Array<Record<string, unknown>>).flatMap((s) => {
+        const exercise = String(s.exercise ?? '').trim().toLowerCase();
+        const reps = Number(s.reps);
+        const loadKg = s.loadKg != null ? Number(s.loadKg) : null;
+        const rpe = s.rpe != null ? Number(s.rpe) : null;
+        const setCount = Math.max(1, Math.round(Number(s.setCount ?? 1)));
+        if (!exercise || !Number.isFinite(reps) || reps <= 0) return [];
+        return Array.from({ length: setCount }, () => ({
+          exercise,
+          exerciseDisplay: exercise,
+          setIndex: 0, // reassigned below across the whole flat list
+          reps: Math.round(reps),
+          loadKg,
+          rpe,
+          isWarmup: false,
+        }));
+      });
+    } else if (typeof input.phrase === 'string' && input.phrase.trim()) {
+      const parsed = parseWorkoutPhrase(input.phrase, { defaultUnit });
+      if (!parsed.ok) {
+        return JSON.stringify({
+          ok: false,
+          needsClarification: parsed.reason === 'ambiguous',
+          reason: parsed.reason,
+          message: parsed.message,
+          candidates: parsed.reason === 'ambiguous' ? parsed.candidates : undefined,
+        });
+      }
+      setsToLog = parsed.sets.map((s) => ({
+        exercise: parsed.exercise,
+        exerciseDisplay: parsed.exerciseDisplay,
+        setIndex: 0,
+        reps: s.reps,
+        loadKg: s.loadKg,
+        rpe: s.rpe,
+        isWarmup: false,
+      }));
+    } else {
+      return 'Error: give either `phrase` or `sets`.';
+    }
+
+    if (setsToLog.length === 0) {
+      return JSON.stringify({ ok: false, reason: 'no_reps', message: 'Could not find a valid set (exercise + reps) to log.' });
+    }
+
+    setsToLog = setsToLog.map((s, i) => ({ ...s, setIndex: i + 1 }));
+
+    const rows = await logWorkoutSession({
+      userId,
+      sessionId: randomUUID(),
+      performedAt: new Date(),
+      timezone,
+      source: 'coach',
+      sets: setsToLog,
+    });
+
+    return JSON.stringify({ ok: true, exercise: setsToLog[0].exercise, sets: rows.map(workoutSetToWire) });
+  }
+
+  // ── get_training_history ─────────────────────────────────────────────────
+  if (name === 'get_training_history') {
+    const exercise = typeof input.exercise === 'string' ? input.exercise.trim().toLowerCase() : null;
+
+    if (exercise) {
+      const history = await getExerciseHistory(userId, exercise, 50);
+      return JSON.stringify({ exercise, sets: history.map(workoutSetToWire) });
+    }
+
+    const days = Math.max(7, Math.min(365, Math.round(Number(input.days ?? 84))));
+    const summary = await getProgressionSummary(userId, days);
+    return JSON.stringify({ days, exercises: summary });
+  }
+
   return `Unknown tool: ${name}`;
+}
+
+function workoutSetToWire(row: typeof schema.workout_sets.$inferSelect) {
+  return {
+    id:              row.id,
+    sessionId:       row.session_id,
+    performedAt:     row.performed_at.toISOString(),
+    exercise:        row.exercise,
+    exerciseDisplay: row.exercise_display,
+    setIndex:        row.set_index,
+    reps:            row.reps,
+    loadKg:          row.load_kg,
+    rpe:             row.rpe,
+    isWarmup:        row.is_warmup,
+    source:          row.source,
+  };
 }
 
 export function buildPendingFactProposal(
