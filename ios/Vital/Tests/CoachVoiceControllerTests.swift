@@ -328,6 +328,44 @@ final class CoachVoiceControllerTests: XCTestCase {
         XCTAssertEqual(session.deactivateCallCount, 1)
     }
 
+    /// Regression for #198: `cancel()` while `.listening` used to call
+    /// `transcriber.stop()` *before* tearing `state` down to `.idle`. That
+    /// `stop()` flips the fake's `isRecording` to `false` — indistinguishable
+    /// from a natural endpoint fire to the `isRecordingPublisher` sink that
+    /// starts transcription, which only guards on `state == .listening` —
+    /// so a cancel with a non-empty transcript already sitting in the
+    /// transcriber (very plausible: the user cancels mid-utterance) would
+    /// spin up a brand-new `transcriptionTask`, override the one `cancel()`
+    /// just cancelled, and could still call `onFinalTranscript` and send
+    /// the user's words after they explicitly cancelled — plus double-count
+    /// `cancel()`'s own `deactivate()` when that spurious path also ran
+    /// `resetToIdleAfterEmptyTurn()`. `state = .idle` now happens before
+    /// `transcriber.stop()`, so that sink's guard fails and the stop is
+    /// correctly ignored as `cancel()`'s own echo.
+    func testCancelWhileListeningWithPendingTranscriptDoesNotDeliverOrDoubleDeactivate() async {
+        let transcriber = FakeSpeechTranscriber()
+        let session = SpyAudioSession()
+        let controller = CoachVoiceController(transcriber: transcriber, api: FakeVoiceAPI(), audioSession: session.controlling)
+
+        var delivered: [String] = []
+        controller.onFinalTranscript = { delivered.append($0) }
+
+        controller.startRecording()
+        transcriber.isRecording = true
+        transcriber.transcribedText = "log two eggs"
+
+        controller.cancel()
+
+        // Give any spuriously-spawned transcription task a real chance to
+        // run and (wrongly) deliver before asserting it didn't.
+        try? await Task.sleep(nanoseconds: 20_000_000)
+
+        XCTAssertTrue(delivered.isEmpty)
+        XCTAssertNil(controller.lastDeliveredTurnID)
+        XCTAssertEqual(controller.state, .idle)
+        XCTAssertEqual(session.deactivateCallCount, 1)
+    }
+
     /// An endpoint fire with nothing recognized (empty transcript, no
     /// audio clip) resolves straight to `.idle` without ever speaking a
     /// reply — must still deactivate the session.

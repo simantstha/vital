@@ -331,16 +331,34 @@ final class CoachVoiceController: ObservableObject {
     /// which is otherwise the only thing that deactivates it, so without
     /// this the user's other audio would stay ducked until their next voice
     /// turn happens to speak a reply.
+    ///
+    /// **Ordering matters (post-#198 review fix):** `state` is torn down to
+    /// `.idle` *before* `transcriber.stop()` is called, not after. While
+    /// cancelling out of `.listening`, `transcriber.stop()` flips the
+    /// transcriber's `isRecording` to `false` — the exact same signal a
+    /// natural endpoint fire produces — and the `isRecordingPublisher` sink
+    /// in `bind()` that starts transcription only guards on `state ==
+    /// .listening`. Calling `stop()` while `state` was still `.listening`
+    /// let that sink treat a cancel as an endpoint: it called
+    /// `beginTranscription()`, which (a) deactivated the session a second
+    /// time on an empty transcript, double-counting this method's own
+    /// `deactivate()`, and (b) on a *non-empty* transcript, spun up a brand
+    /// new `transcriptionTask` — overwriting the one `cancel()` just
+    /// cancelled — that could still call `onFinalTranscript` and send the
+    /// user's words after they'd explicitly cancelled. Setting `state =
+    /// .idle` first makes that sink's guard fail, so `stop()`'s
+    /// `isRecording` flip is correctly ignored as an echo of a cancel this
+    /// method already caused, not treated as a fresh endpoint.
     func cancel() {
         transcriptionTask?.cancel()
         transcriptionTask = nil
-        transcriber.stop()
-        transcriber.discardRecording()
         voiceTurnTimer = nil
         activeTurnID = nil
         currentTurnID = nil
         partialTranscript = ""
         state = .idle
+        transcriber.stop()
+        transcriber.discardRecording()
         audioSession.deactivate()
     }
 
