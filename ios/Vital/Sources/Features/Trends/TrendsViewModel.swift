@@ -186,6 +186,14 @@ final class TrendsViewModel: ObservableObject {
     var rhrNote: String { TrendsSummary.vitalsNote(rhrWindow.values) }
     var rhrFootnote: TrendsSummary.Footnote { TrendsSummary.lineFootnote(rhrWindow.values) }
 
+    /// Hide the This Week card only if there's a load error and no previously loaded summary data.
+    /// If summary data was loaded earlier and a refresh fails, keep showing the old data.
+    var showsWeekCard: Bool {
+        guard summaryErrorMessage != nil else { return true }
+        // If there's an error, only hide if we have no previously loaded data
+        return sleepWindow != .empty || hrvWindow != .empty || rhrWindow != .empty
+    }
+
     // MARK: - Helpers
 
     private static let dateFormatter: DateFormatter = {
