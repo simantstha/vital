@@ -202,8 +202,13 @@ final class TodayViewModel: ObservableObject {
     }
 
     /// The single "Next up" row shown in place of the full plan list (owner
-    /// decision, 2026-09-23) — for every goal, not just weight_loss.
-    var nextUpItem: PlanItem? { WeightHeroLogic.nextUpItem(from: planItems) }
+    /// decision, 2026-09-23) — for every goal, not just weight_loss. `nil`
+    /// once every remaining item has passed `WeightHeroLogic
+    /// .nextUpGraceMinutes` ago — screenshot-review fix, 2026-09-23 (a
+    /// not-done 7am breakfast is not "next up" at 3pm).
+    var nextUpItem: PlanItem? {
+        WeightHeroLogic.nextUpItem(from: planItems, nowMinutes: Self.minutesSinceMidnight(Date()))
+    }
 
     /// New-user first-run checklist (§4.2) replaces the three biometric
     /// tiles until real data exists.

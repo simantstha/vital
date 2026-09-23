@@ -44,6 +44,19 @@ struct WeightHeroView: View {
         }
     }
 
+    /// Enforces a floor on the visible range (1.0 kg / 2.0 lb) so a stable
+    /// weight over the window doesn't get zoomed in so far that sub-100g
+    /// noise reads as a dramatic swing — see `WeightHeroLogic.sparklineDomain`.
+    private var sparklineMinSpan: Double { system == .metric ? 1.0 : 2.0 }
+
+    /// `nil` hides the chart entirely (empty `sparklinePoints`) — screenshot-
+    /// review fix, 2026-09-23: Swift Charts includes 0 in a numeric y-domain
+    /// by default, which pins an ~82 kg trend to the very top of the frame
+    /// and reads as a flat divider line rather than a chart.
+    private var sparklineDomain: ClosedRange<Double>? {
+        WeightHeroLogic.sparklineDomain(values: sparklinePoints.map(\.value), minSpan: sparklineMinSpan)
+    }
+
     var body: some View {
         VitalCard(padding: Theme.Spacing.lg, cornerRadius: Theme.Radius.xl) {
             VStack(alignment: .leading, spacing: Theme.Spacing.md) {
@@ -98,8 +111,8 @@ struct WeightHeroView: View {
                             .foregroundStyle(Theme.Colors.textTertiary)
                             .monospacedDigit()
 
-                        if !sparklinePoints.isEmpty {
-                            sparkline
+                        if let sparklineDomain {
+                            sparkline(domain: sparklineDomain)
                                 .frame(height: 36)
                         }
                     }
@@ -116,7 +129,7 @@ struct WeightHeroView: View {
 
     // MARK: - Sparkline
 
-    private var sparkline: some View {
+    private func sparkline(domain: ClosedRange<Double>) -> some View {
         Chart {
             ForEach(Array(sparklinePoints.enumerated()), id: \.offset) { _, point in
                 LineMark(x: .value("Day", point.day), y: .value("Trend", point.value))
@@ -127,6 +140,7 @@ struct WeightHeroView: View {
         }
         .chartXAxis(.hidden)
         .chartYAxis(.hidden)
+        .chartYScale(domain: domain)
         .chartLegend(.hidden)
         // Purely decorative — the numeric trend/weekly-change text above
         // already carries the information a VoiceOver user needs.

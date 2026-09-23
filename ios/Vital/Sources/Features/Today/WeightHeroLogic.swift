@@ -8,13 +8,23 @@ enum WeightHeroLogic {
 
     // MARK: - Next up (replaces the full plan list on Today for every goal)
 
+    /// Screenshot-review fix (2026-09-23): a not-done item hours in the past
+    /// (breakfast, at 3pm) is not "next" by any reasonable reading — this is
+    /// how far back an item can sit and still count as upcoming, so
+    /// something that just started a few minutes ago doesn't flicker out.
+    static let nextUpGraceMinutes = 30
+
     /// The single row Today shows in place of the full plan timeline: the
-    /// next item that isn't already done or skipped, ordered by time of day.
-    /// `nil` when every item is done/skipped or the plan is empty — callers
-    /// must hide the row entirely rather than show an empty card shell.
-    static func nextUpItem(from items: [PlanItem]) -> PlanItem? {
+    /// earliest not-done/not-skipped item whose time is no more than
+    /// `nextUpGraceMinutes` in the past relative to `nowMinutes` (minutes
+    /// since local midnight). `nil` when every remaining candidate has
+    /// already passed that grace window, everything is done/skipped, or the
+    /// plan is empty — callers must hide the row entirely (never show an
+    /// empty card shell) but keep "See full plan" reachable some other way.
+    static func nextUpItem(from items: [PlanItem], nowMinutes: Int) -> PlanItem? {
         items
             .filter { $0.status != .done && $0.status != .skipped }
+            .filter { $0.timeMinutes >= nowMinutes - nextUpGraceMinutes }
             .min { $0.timeMinutes < $1.timeMinutes }
     }
 
@@ -120,6 +130,38 @@ enum WeightHeroLogic {
         }
         let distinctDays = min(3, Set(entries.map(\.date)).count)
         return "Logged — trend appears after 3 weigh-ins (\(distinctDays) of 3)"
+    }
+
+    // MARK: - Sparkline Y-domain (screenshot-review fix, 2026-09-23)
+
+    /// Swift Charts includes 0 in a numeric y-domain by default, so an
+    /// ~82 kg trend rendered without an explicit domain pins to the very
+    /// top of the chart's frame with a huge dead zone below it — reading as
+    /// a flat divider line, not a chart. Callers pass this to
+    /// `.chartYScale(domain:)` instead of leaving it to the default.
+    ///
+    /// `minSpan` enforces a floor on the visible range so near-flat data
+    /// (a stable weight over the window) doesn't get zoomed in so far that
+    /// sub-100g noise reads as a dramatic swing — pass e.g. 1.0 kg / 2.0 lb.
+    /// A range that already exceeds `minSpan` gets `sparklinePadding`
+    /// headroom on each side instead (so the line never touches the frame's
+    /// top/bottom edge); a range at or under `minSpan` — including a
+    /// perfectly flat series — is centered on the data's midpoint at
+    /// exactly `minSpan` wide, with no extra padding on top of that floor.
+    /// `nil` for an empty series — callers must hide the chart entirely
+    /// rather than pass a meaningless domain.
+    static let sparklinePadding = 0.15
+
+    static func sparklineDomain(values: [Double], minSpan: Double) -> ClosedRange<Double>? {
+        guard let lo = values.min(), let hi = values.max() else { return nil }
+        let span = hi - lo
+        let mid = (lo + hi) / 2
+
+        if span >= minSpan {
+            let padding = span * sparklinePadding
+            return (lo - padding)...(hi + padding)
+        }
+        return (mid - minSpan / 2)...(mid + minSpan / 2)
     }
 
     // MARK: - Weigh-in chip (§5.3)

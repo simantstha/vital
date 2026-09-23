@@ -15,14 +15,15 @@ final class WeightHeroLogicTests: XCTestCase {
         )
     }
 
-    func testNextUpPicksEarliestNotDoneOrSkipped() {
+    func testNextUpPicksEarliestUpcomingNotDoneOrSkipped() {
         let items = [
             item(id: "a", timeMinutes: 600, status: .done),
             item(id: "b", timeMinutes: 900, status: .later),
             item(id: "c", timeMinutes: 750, status: .now),
             item(id: "d", timeMinutes: 700, status: .skipped),
         ]
-        XCTAssertEqual(WeightHeroLogic.nextUpItem(from: items)?.id, "c")
+        // now = 700 — "c" (750) and "b" (900) both qualify; "c" is earlier.
+        XCTAssertEqual(WeightHeroLogic.nextUpItem(from: items, nowMinutes: 700)?.id, "c")
     }
 
     func testNextUpIsNilWhenEverythingIsDoneOrSkipped() {
@@ -30,11 +31,76 @@ final class WeightHeroLogicTests: XCTestCase {
             item(id: "a", timeMinutes: 600, status: .done),
             item(id: "b", timeMinutes: 900, status: .skipped),
         ]
-        XCTAssertNil(WeightHeroLogic.nextUpItem(from: items))
+        XCTAssertNil(WeightHeroLogic.nextUpItem(from: items, nowMinutes: 700))
     }
 
     func testNextUpIsNilForEmptyPlan() {
-        XCTAssertNil(WeightHeroLogic.nextUpItem(from: []))
+        XCTAssertNil(WeightHeroLogic.nextUpItem(from: [], nowMinutes: 700))
+    }
+
+    /// Screenshot-review regression: a 7:00 AM breakfast that's still
+    /// "later" (never marked done/skipped) must not show as Next up at
+    /// 3:25 PM — it's hours in the past, not upcoming.
+    func testNextUpExcludesItemsWellInThePast() {
+        let breakfast = item(id: "breakfast", timeMinutes: 7 * 60, status: .later)
+        XCTAssertNil(WeightHeroLogic.nextUpItem(from: [breakfast], nowMinutes: 15 * 60 + 25))
+    }
+
+    /// The 30-minute grace window (`nextUpGraceMinutes`) is inclusive at
+    /// exactly -30 and exclusive one minute further back.
+    func testNextUpGraceBoundaryIncludesExactlyMinus30() {
+        let item9_30 = item(id: "a", timeMinutes: 570, status: .later) // 9:30
+        XCTAssertEqual(WeightHeroLogic.nextUpItem(from: [item9_30], nowMinutes: 600)?.id, "a") // now 10:00
+    }
+
+    func testNextUpGraceBoundaryExcludesMinus31() {
+        let item9_29 = item(id: "a", timeMinutes: 569, status: .later) // 9:29
+        XCTAssertNil(WeightHeroLogic.nextUpItem(from: [item9_29], nowMinutes: 600)) // now 10:00
+    }
+
+    func testNextUpIsNilWhenEveryUpcomingCandidateHasAlreadyPassed() {
+        let items = [
+            item(id: "a", timeMinutes: 420, status: .later),
+            item(id: "b", timeMinutes: 480, status: .now),
+        ]
+        XCTAssertNil(WeightHeroLogic.nextUpItem(from: items, nowMinutes: 1000))
+    }
+
+    func testNextUpStillExcludesDoneAndSkippedEvenWhenUpcoming() {
+        let items = [
+            item(id: "a", timeMinutes: 950, status: .done),
+            item(id: "b", timeMinutes: 960, status: .skipped),
+            item(id: "c", timeMinutes: 1000, status: .later),
+        ]
+        XCTAssertEqual(WeightHeroLogic.nextUpItem(from: items, nowMinutes: 900)?.id, "c")
+    }
+
+    // MARK: - Sparkline Y-domain (screenshot-review fix)
+
+    func testSparklineDomainAddsPaddingForNormalRange() {
+        let domain = WeightHeroLogic.sparklineDomain(values: [80, 82, 84], minSpan: 1.0)
+        // span = 4, padding = 4 * 0.15 = 0.6
+        XCTAssertEqual(domain?.lowerBound ?? .nan, 79.4, accuracy: 0.0001)
+        XCTAssertEqual(domain?.upperBound ?? .nan, 84.6, accuracy: 0.0001)
+    }
+
+    func testSparklineDomainCentersMinSpanForFlatSeries() {
+        let domain = WeightHeroLogic.sparklineDomain(values: [82, 82, 82], minSpan: 1.0)
+        XCTAssertEqual(domain?.lowerBound ?? .nan, 81.5, accuracy: 0.0001)
+        XCTAssertEqual(domain?.upperBound ?? .nan, 82.5, accuracy: 0.0001)
+    }
+
+    func testSparklineDomainEnforcesFloorForNarrowNonFlatRange() {
+        // 0.3 kg observed range, under the 1.0 kg floor — gets the floor's
+        // exact width, centered on the data's own midpoint.
+        let domain = WeightHeroLogic.sparklineDomain(values: [81.9, 82.0, 82.2], minSpan: 1.0)
+        let mid = (81.9 + 82.2) / 2
+        XCTAssertEqual(domain?.lowerBound ?? .nan, mid - 0.5, accuracy: 0.0001)
+        XCTAssertEqual(domain?.upperBound ?? .nan, mid + 0.5, accuracy: 0.0001)
+    }
+
+    func testSparklineDomainNilForEmptySeries() {
+        XCTAssertNil(WeightHeroLogic.sparklineDomain(values: [], minSpan: 1.0))
     }
 
     // MARK: - Entry/trend test fixtures

@@ -93,10 +93,16 @@ struct TodayView: View {
                             // goal (owner decision, 2026-09-23) — guarded here
                             // (not just inside the view) so an empty payload
                             // doesn't leave a floating `Theme.Spacing.xl` gap.
-                            if let nextUp = vm.nextUpItem {
+                            // Shown whenever there's ANY plan item, not only
+                            // when one is upcoming (screenshot-review fix,
+                            // 2026-09-23) — "See full plan" must stay
+                            // reachable even once everything remaining today
+                            // has already passed `vm.nextUpItem`'s grace
+                            // window.
+                            if !vm.planItems.isEmpty {
                                 NextUpRowView(
-                                    item: nextUp,
-                                    onTap: { actionsItem = nextUp },
+                                    item: vm.nextUpItem,
+                                    onTap: { actionsItem = $0 },
                                     onSeeFullPlan: { showFullPlan = true }
                                 )
                             }
