@@ -102,7 +102,7 @@ final class MetricDetailViewModel: ObservableObject {
             }
         } catch {
             guard generation == loadGeneration else { return } // superseded by a newer load
-            errorMessage = UserFacingError.message(for: error, context: .read, tag: "MetricDetailViewModel.load")
+            errorMessage = UserFacingError.message(for: error, context: .read, tag: "MetricDetailViewModel.load", includesAction: false)
         }
         isLoading = false
 

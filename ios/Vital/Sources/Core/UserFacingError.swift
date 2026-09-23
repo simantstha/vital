@@ -64,19 +64,28 @@ enum UserFacingError {
     /// `print("[Vital] <tag> failed: ...")` convention used across the app.
     /// `log` defaults to `print` and exists as a seam for tests to capture
     /// the logged detail without shadowing stdout globally.
+    ///
+    /// `includesAction` (default `true`) controls whether the message includes
+    /// the "Couldn't <verb>" preamble. When `false`, the preamble is omitted,
+    /// suitable for display under an ErrorCard title that already names the action.
     static func message(
         for error: Error,
         context: ErrorContext,
         tag: String,
+        includesAction: Bool = true,
         log: (String) -> Void = { print($0) }
     ) -> String {
         log("[Vital] \(tag) failed: \(String(describing: error))")
-        return copy(for: error, context: context)
+        return copy(for: error, context: context, includesAction: includesAction)
     }
 
     /// Pure mapping (no logging side effect) so tests can assert on the copy
     /// in isolation.
-    static func copy(for error: Error, context: ErrorContext) -> String {
+    ///
+    /// `includesAction` (default `true`) controls whether the message includes
+    /// the "Couldn't <verb>" preamble. When `false`, the preamble is omitted,
+    /// suitable for display under an ErrorCard title that already names the action.
+    static func copy(for error: Error, context: ErrorContext, includesAction: Bool = true) -> String {
         if isOffline(error) {
             return "You're offline — check your connection and try again."
         }
@@ -93,29 +102,37 @@ enum UserFacingError {
                     return "Your session expired — sign in again to continue."
                 }
                 if (500...599).contains(code) {
-                    return "Couldn't \(verb(context)) — something went wrong on our end. Try again shortly."
+                    if includesAction {
+                        return "Couldn't \(verb(context)) — something went wrong on our end. Try again shortly."
+                    } else {
+                        return "Something went wrong on our end. Try again shortly."
+                    }
                 }
-                return generic(context)
+                return generic(context, includesAction: includesAction)
             case .invalidURL:
-                return generic(context)
+                return generic(context, includesAction: includesAction)
             case .coachStreamError:
                 // Server-supplied text — never trusted for presentation,
                 // regardless of what it says.
-                return generic(context)
+                return generic(context, includesAction: includesAction)
             case .barcodeNotFound, .whoopAuthorizeURLMissing, .whoopConnectFailed:
                 // Already human-safe copy — pass through unchanged.
-                return apiError.errorDescription ?? generic(context)
+                return apiError.errorDescription ?? generic(context, includesAction: includesAction)
             }
         }
 
         // DecodingError and anything else unrecognized: a bug on our side.
         // Copy stays generic; `message(for:context:tag:)` already logged the
         // full detail above.
-        return generic(context)
+        return generic(context, includesAction: includesAction)
     }
 
-    private static func generic(_ context: ErrorContext) -> String {
-        "Couldn't \(verb(context)) — try again."
+    private static func generic(_ context: ErrorContext, includesAction: Bool = true) -> String {
+        if includesAction {
+            return "Couldn't \(verb(context)) — try again."
+        } else {
+            return "Try again."
+        }
     }
 
     /// The one place the per-context wording lives, so the generic and 5xx

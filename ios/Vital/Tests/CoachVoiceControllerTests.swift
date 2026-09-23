@@ -328,6 +328,49 @@ final class CoachVoiceControllerTests: XCTestCase {
         XCTAssertEqual(session.deactivateCallCount, 1)
     }
 
+    /// Regression for #198: `cancel()` while `.listening` used to call
+    /// `transcriber.stop()` *before* tearing `state` down to `.idle`. That
+    /// `stop()` flips the fake's `isRecording` to `false` — indistinguishable
+    /// from a natural endpoint fire to the `isRecordingPublisher` sink that
+    /// starts transcription, which only guards on `state == .listening` —
+    /// so a cancel with a non-empty transcript already sitting in the
+    /// transcriber (very plausible: the user cancels mid-utterance) would
+    /// spin up a brand-new `transcriptionTask`, override the one `cancel()`
+    /// just cancelled, and could still call `onFinalTranscript` and send
+    /// the user's words after they explicitly cancelled — plus double-count
+    /// `cancel()`'s own `deactivate()` when that spurious path also ran
+    /// `resetToIdleAfterEmptyTurn()`. `state = .idle` now happens before
+    /// `transcriber.stop()`, so that sink's guard fails and the stop is
+    /// correctly ignored as `cancel()`'s own echo.
+    func testCancelWhileListeningWithPendingTranscriptDoesNotDeliverOrDoubleDeactivate() async {
+        let transcriber = FakeSpeechTranscriber()
+        let session = SpyAudioSession()
+        let controller = CoachVoiceController(transcriber: transcriber, api: FakeVoiceAPI(), audioSession: session.controlling)
+
+        var delivered: [String] = []
+        controller.onFinalTranscript = { delivered.append($0) }
+
+        controller.startRecording()
+        transcriber.isRecording = true
+        transcriber.transcribedText = "log two eggs"
+
+        controller.cancel()
+
+        // Give any spuriously-spawned transcription task a real chance to
+        // run and (wrongly) deliver before asserting it didn't.
+        try? await Task.sleep(nanoseconds: 20_000_000)
+
+        XCTAssertTrue(delivered.isEmpty)
+        XCTAssertNil(controller.lastDeliveredTurnID)
+        XCTAssertEqual(controller.state, .idle)
+        XCTAssertEqual(session.deactivateCallCount, 1)
+        // A spurious `beginTranscription()` re-entry would also have bumped
+        // this (Listening → Transcribing) and called `transcriber.stop()` a
+        // second time via its own downstream cleanup.
+        XCTAssertEqual(controller.turnEndTrigger, 0)
+        XCTAssertEqual(transcriber.stopCallCount, 1)
+    }
+
     /// An endpoint fire with nothing recognized (empty transcript, no
     /// audio clip) resolves straight to `.idle` without ever speaking a
     /// reply — must still deactivate the session.
@@ -503,30 +546,10 @@ final class CoachVoiceControllerTests: XCTestCase {
         XCTAssertEqual(session.deactivateCallCount, 1)
     }
 
-    /// A cancel while `.listening` (with a non-empty partial already sitting
-    /// in `transcribedText`) must never be mistaken for the endpoint firing
-    /// and deliver those words — `transcriber.stop()` still flips
-    /// `isRecording` to false as a side effect of cancelling, and `bind()`'s
-    /// endpoint-fired sink reacts to exactly that transition whenever
-    /// `state == .listening`.
-    func testCancelDuringListeningWithPartialTextNeverDeliversATranscript() {
-        let transcriber = FakeSpeechTranscriber()
-        let controller = CoachVoiceController(transcriber: transcriber, api: FakeVoiceAPI())
-
-        var delivered: [String] = []
-        controller.onFinalTranscript = { delivered.append($0) }
-
-        controller.startRecording()
-        transcriber.isRecording = true
-        transcriber.transcribedText = "log two eggs and to" // still mid-utterance
-
-        controller.cancel()
-
-        XCTAssertTrue(delivered.isEmpty, "cancel() must not re-enter beginTranscription() and deliver the partial words")
-        XCTAssertEqual(controller.turnEndTrigger, 0)
-        XCTAssertEqual(controller.state, .idle)
-        XCTAssertEqual(transcriber.stopCallCount, 1)
-    }
+    // Note: the cancel()-while-.listening reentrancy regression itself is
+    // covered by `testCancelWhileListeningWithPendingTranscriptDoesNotDeliverOrDoubleDeactivate`
+    // above (#198's test, extended with this branch's `turnEndTrigger`/
+    // `stopCallCount` assertions) — not duplicated here.
 
     /// Single mode (today's push-to-talk, unchanged) must never enter
     /// `.thinking`/`.speaking`/`.yourTurn` even if something calls the V5
@@ -833,7 +856,9 @@ private final class FakeVoiceAPI: CoachAPIProviding {
         message: String,
         imageBase64: String?,
         mode: String?,
-        findingId: String?
+        findingId: String?,
+        voice: Bool?,
+        clientTurnId: String?
     ) -> AsyncThrowingStream<CoachStreamEvent, Error> {
         fatalError("unused by CoachVoiceController")
     }

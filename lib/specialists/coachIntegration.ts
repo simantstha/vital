@@ -9,6 +9,7 @@ import type {
 } from './orchestration';
 import { specialistPersona, VITAL_PERSONA } from './orchestration';
 import { PROPOSE_RETURN_TO_VITAL_TOOL } from './coachRuntime';
+import { voiceStyleBlock } from '@/lib/brain/persona';
 
 interface CoachConfigurationInput {
   enabled: boolean;
@@ -19,6 +20,14 @@ interface CoachConfigurationInput {
   baseTools: Tool[];
   specialistPrompt: CompiledSpecialistPrompt | null;
   handoffTool: Tool | null;
+  /**
+   * True on a `voice: true` request. Appends lib/brain/persona.ts's
+   * voiceStyleBlock() as a SECOND, uncached system block after the cached
+   * one (see cachedSystem below) so a voice turn never invalidates the
+   * cache_control breakpoint that plain-text turns rely on, and a non-voice
+   * request's `system` array stays byte-identical to before this flag existed.
+   */
+  voice: boolean;
 }
 
 export interface CoachConfiguration {
@@ -50,11 +59,30 @@ function cachedSystem(prompt: string): TextBlockParam[] {
   return [{ type: 'text', text: prompt, cache_control: { type: 'ephemeral' } }];
 }
 
+/**
+ * Appends voiceStyleBlock() as an extra, uncached system block after the
+ * cached one when `voice` is true. Deliberately NOT given a cache_control of
+ * its own: this repo's system array already spends its one system-side
+ * breakpoint on `cachedSystem`'s block (see coach.ts's rollMessageBreakpoint
+ * comment on the 4-breakpoint cap), and a second cached block here would
+ * either burn another breakpoint for no reuse benefit (voice turns aren't
+ * byte-identical enough across users/turns to be worth caching) or, worse,
+ * vary the CACHED prefix's own byte content if it were merged into it —
+ * either way degrading the win this block is designed not to touch. A plain
+ * (uncached) trailing block adds no bytes to any hashed prefix, so a
+ * non-voice request's `system` array — the array `cachedSystem` alone
+ * returns — is unaffected byte-for-byte.
+ */
+function withVoiceBlock(system: TextBlockParam[], voice: boolean): TextBlockParam[] {
+  if (!voice) return system;
+  return [...system, { type: 'text', text: voiceStyleBlock() }];
+}
+
 export function selectCoachConfiguration(input: CoachConfigurationInput): CoachConfiguration {
   if (!input.enabled) {
     return {
       model: input.baseModel,
-      system: cachedSystem(input.basePrompt),
+      system: withVoiceBlock(cachedSystem(input.basePrompt), input.voice),
       context: null,
       tools: input.baseTools,
       speaker: 'coach',
@@ -67,7 +95,7 @@ export function selectCoachConfiguration(input: CoachConfigurationInput): CoachC
     const allowed = new Set(input.specialistPrompt.allowedTools);
     return {
       model: input.specialistPrompt.model,
-      system: cachedSystem(input.specialistPrompt.system),
+      system: withVoiceBlock(cachedSystem(input.specialistPrompt.system), input.voice),
       context: input.specialistPrompt.context,
       tools: [
         ...input.baseTools.filter((tool) => allowed.has(tool.name)),
@@ -79,7 +107,7 @@ export function selectCoachConfiguration(input: CoachConfigurationInput): CoachC
 
   return {
     model: input.baseModel,
-    system: cachedSystem(input.basePrompt),
+    system: withVoiceBlock(cachedSystem(input.basePrompt), input.voice),
     context: null,
     tools: input.session || !input.handoffTool
       ? input.baseTools

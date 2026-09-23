@@ -527,7 +527,7 @@ final class TodayViewModel: ObservableObject {
             return .success(try await apiClient.fetchToday())
         } catch {
             if error.isCancellation { return .cancelled }
-            return .failure(UserFacingError.message(for: error, context: .read, tag: "fetchToday"))
+            return .failure(UserFacingError.message(for: error, context: .read, tag: "fetchToday", includesAction: false))
         }
     }
 

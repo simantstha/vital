@@ -142,26 +142,53 @@ export async function* runCoach(
   imageBase64?: string,
   mode?: 'onboarding',
   findingId?: string,
+  voice?: boolean,
+  clientTurnId?: string,
 ): AsyncGenerator<CoachEvent> {
   // 1. Persist the user message ──────────────────────────────────────────────
-  await db.insert(schema.messages).values({
-    user_id:   userId,
-    timestamp: new Date(),
-    role:      'user',
-    speaker:   'user',
-    content:   userMessage,
-    images:    imageBase64 ? [imageBase64] : null,
-    sources:   [],
-  });
+  // Idempotent on (userId, clientTurnId) when the client sends one (see
+  // db/schema.ts's messages_user_client_turn_idx): a retried request —
+  // Retry after a failed turn, or a future Scribe correction that edits the
+  // transcribed text — reuses the same row instead of creating a duplicate
+  // user message. onConflictDoUpdate is a no-op update (touches nothing) when
+  // the text hasn't changed, and rewrites `content` when it has.
+  if (clientTurnId) {
+    await db
+      .insert(schema.messages)
+      .values({
+        user_id:        userId,
+        timestamp:      new Date(),
+        role:           'user',
+        speaker:        'user',
+        content:        userMessage,
+        images:         imageBase64 ? [imageBase64] : null,
+        sources:        [],
+        client_turn_id: clientTurnId,
+      })
+      .onConflictDoUpdate({
+        target: [schema.messages.user_id, schema.messages.client_turn_id],
+        set: { content: userMessage, images: imageBase64 ? [imageBase64] : null },
+      });
+  } else {
+    await db.insert(schema.messages).values({
+      user_id:   userId,
+      timestamp: new Date(),
+      role:      'user',
+      speaker:   'user',
+      content:   userMessage,
+      images:    imageBase64 ? [imageBase64] : null,
+      sources:   [],
+    });
+  }
 
-  yield* streamCoachTurn(userId, { kind: 'user', text: userMessage, imageBase64, mode, findingId });
+  yield* streamCoachTurn(userId, { kind: 'user', text: userMessage, imageBase64, mode, findingId, voice });
 }
 
 /** The two ways a coach turn can begin: the user's own message (today's
  * path), or the opening of a specialist consultation (or a return to Vital)
  * that was just accepted via a card — see runSpecialistAction. */
 type TurnSeed =
-  | { kind: 'user'; text: string; imageBase64?: string; mode?: 'onboarding'; findingId?: string }
+  | { kind: 'user'; text: string; imageBase64?: string; mode?: 'onboarding'; findingId?: string; voice?: boolean }
   | { kind: 'handoff_opening'; session: SpecialistSession };
 
 /**
@@ -273,6 +300,7 @@ async function* streamCoachTurn(userId: string, seed: TurnSeed): AsyncGenerator<
     baseTools,
     specialistPrompt,
     handoffTool,
+    voice: seed.kind === 'user' && seed.voice === true,
   });
 
   // 4. Build the initial user message content ───────────────────────────────

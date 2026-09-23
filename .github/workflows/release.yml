@@ -56,31 +56,60 @@ jobs:
       # Skip on tags/manual dispatch (those always release everything); only
       # branch pushes to main need path-based gating to cut idle macOS/backend
       # minutes when a change touches neither surface.
+      #
+      # Compares against the last release tag (latest v*) to prevent cancelled
+      # pending runs from losing their changes. When run N is cancelled while
+      # pending, run N+1 will still see all changes since the tag (compared
+      # against the same base), rather than only run N+1's own changes.
+      # This prevents production from missing run N's changes.
+      #
+      # Known limitation: if a release run tagged but its deploy job then FAILED,
+      # the next run won't redeploy that change. The failed run must be re-run
+      # manually. We accept this tradeoff to fix the cancelled-run issue.
       - name: Detect changed areas
         id: changes
         if: github.event_name == 'push' && github.ref_type == 'branch'
-        uses: dorny/paths-filter@v3
-        with:
-          filters: |
-            ios:
-              - 'ios/**'
-              - '.github/workflows/release.yml'
-            backend:
-              - 'app/**'
-              - 'lib/**'
-              - 'db/**'
-              - 'scripts/**'
-              - 'supabase/**'
-              - 'public/**'
-              - 'middleware.ts'
-              - 'next.config.ts'
-              - 'package.json'
-              - 'package-lock.json'
-              - 'Dockerfile'
-              - 'fly.toml'
-              - 'drizzle.config.ts'
-              - 'tsconfig.json'
-              - '.github/workflows/release.yml'
+        run: |
+          git fetch --tags --quiet
+          LAST_TAG="$(git tag -l 'v*' --sort=-v:refname | head -n1)"
+
+          if [ -n "$LAST_TAG" ]; then
+            BASE="$(git rev-list -n1 "$LAST_TAG")"
+          else
+            # No tags yet; compare from the repository root
+            BASE="$(git rev-list --max-parents=0 HEAD)"
+          fi
+
+          CHANGED_FILES="$(git diff --name-only "$BASE" HEAD)"
+
+          # Determine which areas changed using the same patterns as the previous
+          # dorny/paths-filter configuration.
+          IOS_CHANGED=false
+          BACKEND_CHANGED=false
+
+          while IFS= read -r file; do
+            # iOS patterns: ios/** or .github/workflows/release.yml
+            case "$file" in
+              ios/*)
+                IOS_CHANGED=true
+                ;;
+              .github/workflows/release.yml)
+                IOS_CHANGED=true
+                BACKEND_CHANGED=true
+                ;;
+              # Backend patterns: app/**, lib/**, db/**, scripts/**, supabase/**, public/**
+              app/*|lib/*|db/*|scripts/*|supabase/*|public/*)
+                BACKEND_CHANGED=true
+                ;;
+              # Root level backend files
+              middleware.ts|next.config.ts|package.json|package-lock.json|Dockerfile|fly.toml|drizzle.config.ts|tsconfig.json)
+                BACKEND_CHANGED=true
+                ;;
+            esac
+          done <<< "$CHANGED_FILES"
+
+          [ "$IOS_CHANGED" = true ] && echo "ios=true" >> "$GITHUB_OUTPUT" || echo "ios=false" >> "$GITHUB_OUTPUT"
+          [ "$BACKEND_CHANGED" = true ] && echo "backend=true" >> "$GITHUB_OUTPUT" || echo "backend=false" >> "$GITHUB_OUTPUT"
 
       - name: Resolve version
         id: resolve

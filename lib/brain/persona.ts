@@ -220,6 +220,26 @@ mention that a clinician or dietitian could help.
 bit more data first.`;
 }
 
+// ── Voice-style block ───────────────────────────────────────────────────────
+// Appended only when the request carries `voice: true` (spoken turn — see
+// `/api/coach`'s `voice` field). This is NOT folded into assemblePersona's
+// output: that string is the cached system prefix (lib/specialists/
+// coachIntegration.ts's cachedSystem), and interpolating a per-request flag
+// into it would invalidate the cache_control breakpoint for every plain-text
+// turn too. Instead coach.ts appends this as a second, uncached system block
+// after the cached one — see selectCoachConfiguration / withVoiceBlock.
+
+export function voiceStyleBlock(): string {
+  return `## Voice mode — this reply will be spoken aloud
+- Reply in 1–3 short sentences. No markdown, no lists, no tables, no emoji.
+- Use digits for numbers, with units written as words ("182 pounds", "7 hours of sleep", \
+"1,850 calories"). Never use unit abbreviations like "lb", "kcal" or "g", and round to \
+what's worth saying aloud ("about 82 kilos", not "82.37 kg").
+- Before calling ANY tool, first output a short spoken acknowledgment of 8 words or \
+fewer (e.g. "Let me check your sleep.") so the user hears something while you work.
+- Never read out IDs or raw field names — describe what they mean instead.`;
+}
+
 // ── Safety block ──────────────────────────────────────────────────────────────
 // Always injected, in every mode (normal, onboarding, calibrating). Before
 // this, the only escalation/red-flag guidance in the codebase was
