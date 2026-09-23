@@ -47,7 +47,9 @@ struct TrendsView: View {
                             }
                         }
 
-                        WeeklyHeadlineStrip(vm: vm)
+                        if vm.showsWeekCard {
+                            WeeklyHeadlineStrip(vm: vm)
+                        }
 
                         if let errorMessage = vm.errorMessage {
                             ErrorCard(title: "Couldn't load your trends", message: errorMessage) {
