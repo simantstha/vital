@@ -142,4 +142,53 @@ final class TodayLoadStateTests: XCTestCase {
 
         XCTAssertTrue(viewModel.shouldShowLoadingSkeleton)
     }
+
+    // MARK: - Streak chip: never assert "0-day streak" from a value that was
+    // never actually fetched (see the Profile/Trends error-copy audit).
+
+    enum StreakFailure: Error { case network }
+
+    func testStreakNeverLoadedDoesNotClaimHasLoaded() {
+        let viewModel = TodayViewModel(fetchStreak: { throw StreakFailure.network })
+
+        XCTAssertFalse(viewModel.hasLoadedStreak, "a streak fetch that has never succeeded must not be presented as a known value")
+        XCTAssertEqual(viewModel.streakDays, 0, "default before any fetch")
+    }
+
+    func testFailedStreakRefreshDoesNotFlagHasLoaded() async {
+        let viewModel = TodayViewModel(fetchStreak: { throw StreakFailure.network })
+
+        await viewModel.refreshStreak()
+
+        XCTAssertFalse(viewModel.hasLoadedStreak, "a failed refresh must not make the chip start claiming a 0-day streak")
+    }
+
+    func testSuccessfulStreakRefreshFlagsHasLoaded() async {
+        let viewModel = TodayViewModel(fetchStreak: { StreakResponse(streakDays: 3) })
+
+        await viewModel.refreshStreak()
+
+        XCTAssertTrue(viewModel.hasLoadedStreak)
+        XCTAssertEqual(viewModel.streakDays, 3)
+    }
+
+    func testStreakRefreshFailureAfterASuccessKeepsLastKnownValue() async {
+        var shouldFail = false
+        let viewModel = TodayViewModel(fetchStreak: {
+            if shouldFail { throw StreakFailure.network }
+            return StreakResponse(streakDays: 5)
+        })
+
+        await viewModel.refreshStreak()
+        XCTAssertEqual(viewModel.streakDays, 5)
+        XCTAssertTrue(viewModel.hasLoadedStreak)
+
+        shouldFail = true
+        await viewModel.refreshStreak()
+
+        // Fail-soft: last known good value stays, and the chip keeps showing
+        // it rather than disappearing or resetting to a fabricated 0.
+        XCTAssertEqual(viewModel.streakDays, 5)
+        XCTAssertTrue(viewModel.hasLoadedStreak)
+    }
 }

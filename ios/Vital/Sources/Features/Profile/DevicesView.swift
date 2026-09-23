@@ -1,18 +1,19 @@
 import SwiftUI
 
 /// Pushed from Profile → "Devices" (`NavigationStack` push, not a sheet).
-/// Apple Watch's connected state is passed in from `ProfileView`, which
+/// Apple Health's connected state is passed in from `ProfileView`, which
 /// derives it from `vm.integrations` — the backend only tracks one combined
-/// HealthKit integration ("Apple Health"), which is also the channel Apple
-/// Watch data flows through, so there's no separate watch-specific status to
-/// read. WHOOP has a real OAuth connect flow on this screen — the app never
-/// sees WHOOP tokens: `whoopAuthorizeURL()` fetches the authorize URL from
-/// the backend, `ASWebAuthenticationSession` runs the WHOOP login/consent
-/// page, and the backend callback does the code-for-token exchange
-/// server-side. Oura/Garmin remain non-functional stubs per the redesign-v3
-/// mock — displayed as non-interactive "Coming soon" chips.
+/// HealthKit integration ("Apple Health"). HealthKit authorization says
+/// nothing about which physical device produced the data, so this row must
+/// not claim an Apple Watch specifically — an iPhone-only user authorizes
+/// HealthKit too. WHOOP has a real OAuth connect flow on this screen — the
+/// app never sees WHOOP tokens: `whoopAuthorizeURL()` fetches the authorize
+/// URL from the backend, `ASWebAuthenticationSession` runs the WHOOP
+/// login/consent page, and the backend callback does the code-for-token
+/// exchange server-side. Oura/Garmin remain non-functional stubs per the
+/// redesign-v3 mock — displayed as non-interactive "Coming soon" chips.
 struct DevicesView: View {
-    let appleWatchConnected: Bool
+    let appleHealthConnected: Bool
 
     @StateObject private var whoopVM = WhoopConnectViewModel()
 
@@ -28,9 +29,9 @@ struct DevicesView: View {
 
                     VStack(spacing: Theme.Spacing.md) {
                         connectedRow(
-                            icon: "applewatch",
-                            name: "Apple Watch",
-                            connected: appleWatchConnected
+                            icon: "heart.fill",
+                            name: "Apple Health",
+                            connected: appleHealthConnected
                         )
                         whoopRow
                         stubRow(icon: "circle.circle", name: "Oura")
