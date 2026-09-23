@@ -193,3 +193,45 @@ test('importLegacyWeightLogIfPresent inserts one manual event per legacy entry, 
   const p1 = insertedValues[1].payload as Record<string, unknown>;
   assert.equal(p1.value, 81);
 });
+
+// ── getWeightReadingsWithLazyImport ─────────────────────────────────────────
+// lib/brain/context.ts and lib/brain/brief.ts call this (not
+// importLegacyWeightLogIfPresent directly) on every coach turn / brief — the
+// latency regression this guards against: importLegacyWeightLogIfPresent
+// awaits one serial logWeightEntry() per legacy entry with no
+// "already imported" short-circuit, so calling it unconditionally on a hot
+// path pays that serial-write cost before every reply for a user with a
+// large legacy log. It must only run when Postgres has NO readings yet.
+
+test('getWeightReadingsWithLazyImport does NOT run the legacy import when Postgres readings already exist', async () => {
+  insertedValues = [];
+  state.existingEventRows = [];
+  state.manualEventRows = [
+    { id: 'e1', timestamp: new Date('2026-08-01T07:00:00.000Z'), payload: { value: 80, unit: 'kg', localDay: '2026-08-01' }, source: 'manual' },
+  ];
+  state.dailyMetricRows = [];
+  // A non-empty legacy file too — if the import ran, insertedValues would be non-empty.
+  state.legacyEntries = [{ date: '2026-07-01', weight: 180, unit: 'lbs' }];
+
+  const repo = await repoPromise;
+  const readings = await repo.getWeightReadingsWithLazyImport('user-1', 30, 'UTC');
+
+  assert.equal(readings.length, 1);
+  assert.equal(insertedValues.length, 0, 'the legacy import must NOT run when readings already exist');
+});
+
+test('getWeightReadingsWithLazyImport DOES run the legacy import when there are no readings at all', async () => {
+  insertedValues = [];
+  state.existingEventRows = [];
+  state.manualEventRows = [];
+  state.dailyMetricRows = [];
+  state.legacyEntries = [
+    { date: '2026-07-01', weight: 180, unit: 'lbs' },
+    { date: '2026-07-02', weight: 81, unit: 'kg' },
+  ];
+
+  const repo = await repoPromise;
+  await repo.getWeightReadingsWithLazyImport('user-1', 30, 'UTC');
+
+  assert.equal(insertedValues.length, 2, 'the legacy import must run when there are no readings yet');
+});

@@ -32,7 +32,7 @@ import { resolveUnitSystem, type UnitSystem } from '@/lib/units';
 import { KM_PER_MILE } from '@/lib/metricFormat';
 import type { DailyBrief } from '@/lib/types';
 import { computeWeightTrend } from '@/lib/weightTrend';
-import { getWeightReadings, importLegacyWeightLogIfPresent } from '@/lib/weightRepository';
+import { getWeightReadingsWithLazyImport } from '@/lib/weightRepository';
 import { assessWeightSignals, type DailyIntakeKcalPoint } from '@/lib/brain/weightSignals';
 import { lowEnergyThresholdKcal } from '@/lib/brain/dietBudget';
 import { readCoreProfile } from '@/lib/coreProfileStore';
@@ -536,10 +536,23 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
       signalDayKeys.unshift(cursor);
     }
   }
+  // Neither of these may fail the whole brief: a thrown error degrades to
+  // "no data yet" (no readings -> no weight signals except under_eating,
+  // which doesn't need the trend; no profile -> the lower/safer low-energy
+  // floor) — same non-fatal-failure logging style as lib/brain/
+  // healthConstraints.ts. getWeightReadingsWithLazyImport only pays the
+  // (serial, per-entry) legacy-import cost when Postgres has no readings
+  // yet — see its doc comment in lib/weightRepository.ts.
   const [weightReadings, signalIntakeByDay, coreProfileMd] = await Promise.all([
-    importLegacyWeightLogIfPresent(userId, tz).then(() => getWeightReadings(userId, WEIGHT_TREND_WINDOW_DAYS, tz)),
+    getWeightReadingsWithLazyImport(userId, WEIGHT_TREND_WINDOW_DAYS, tz).catch((err) => {
+      console.error(`[brief] weight trend load failed for user ${userId}:`, err);
+      return [];
+    }),
     resolveDailyIntake(userId, signalDayKeys, tz ?? 'UTC'),
-    readCoreProfile(userId),
+    readCoreProfile(userId).catch((err) => {
+      console.error(`[brief] core profile load failed for user ${userId}:`, err);
+      return null;
+    }),
   ]);
   const weightTrend = computeWeightTrend(weightReadings);
   const dailyIntakeKcal: DailyIntakeKcalPoint[] = signalDayKeys.map((day) => {

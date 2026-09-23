@@ -38,10 +38,13 @@ const state: {
   userRow: Array<{ timezone: string | null; unit_system?: string | null }>;
   events: Array<{ type: string; timestamp: Date; payload: unknown }>;
   nodes: Array<Record<string, unknown>>;
+  /** When true, the mocked getWeightReadingsWithLazyImport rejects instead of returning [] — see the failure-isolation test below. */
+  weightReadingsShouldThrow: boolean;
 } = {
   userRow: [{ timezone: null }],
   events: [],
   nodes: [],
+  weightReadingsShouldThrow: false,
 };
 
 const fakeDb = {
@@ -106,8 +109,10 @@ mock.module('@/lib/brain/dietBudget', {
 // behavior, not weight-signal content (see weightSignals.test.ts).
 mock.module('@/lib/weightRepository', {
   namedExports: {
-    getWeightReadings: async () => [],
-    importLegacyWeightLogIfPresent: async () => {},
+    getWeightReadingsWithLazyImport: async () => {
+      if (state.weightReadingsShouldThrow) throw new Error('simulated weight-readings load failure');
+      return [];
+    },
   },
 });
 mock.module('@/lib/coreProfileStore', {
@@ -255,6 +260,34 @@ test('a third-party Condition never lands in hardConstraints and discloses its s
     assert.match(ctx.promptText, /Condition: Type 2 diabetes.*\(about: Father\)/);
   } finally {
     state.nodes = [];
+    mock.timers.reset();
+  }
+});
+
+/**
+ * Failure isolation: the weight-readings load and the core-profile read are
+ * new dependencies on every coach turn's critical path (see lib/brain/
+ * context.ts's Promise.all comment). A thrown error from either must not
+ * fail the whole assembleContext() call — it degrades to the same "no data
+ * yet" state a brand-new user already produces.
+ */
+test('a getWeightReadings failure does not fail assembleContext — it resolves with no weight signals', async () => {
+  mock.timers.enable({ apis: ['Date'], now: Date.UTC(2026, 8, 1, 12, 0, 0) });
+  try {
+    state.userRow = [{ timezone: null }];
+    state.events = [];
+    state.nodes = [];
+    state.weightReadingsShouldThrow = true;
+
+    const { assembleContext } = await contextPromise;
+    const ctx = await assembleContext('user-1');
+
+    assert.equal(ctx.weightSignals.length, 0, 'no weight signals when the trend failed to load');
+    assert.ok(ctx.weightTrend, 'weightTrend is still a (empty, unestablished) result, not thrown away');
+    assert.equal(ctx.weightTrend!.established, false);
+    assert.doesNotMatch(ctx.promptText, /### Weight trend & energy signals\n- \[/); // no signal lines rendered
+  } finally {
+    state.weightReadingsShouldThrow = false;
     mock.timers.reset();
   }
 });

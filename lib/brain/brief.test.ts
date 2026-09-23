@@ -103,8 +103,7 @@ mock.module('@/lib/claude', {
 // local-day bucketing, not weight-signal content (see weightSignals.test.ts).
 mock.module('@/lib/weightRepository', {
   namedExports: {
-    getWeightReadings: async () => [],
-    importLegacyWeightLogIfPresent: async () => {},
+    getWeightReadingsWithLazyImport: async () => [],
   },
 });
 mock.module('@/lib/coreProfileStore', {

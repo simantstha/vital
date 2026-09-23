@@ -35,7 +35,7 @@ import { localDayKey, pickTimeZone, previousDayKey } from '../localDay';
 import { resolveUnitSystem, type UnitSystem } from '../units';
 import { formatDistance, formatWeight } from '../metricFormat';
 import { computeWeightTrend, type WeightTrendResult } from '../weightTrend';
-import { getWeightReadings, importLegacyWeightLogIfPresent } from '../weightRepository';
+import { getWeightReadingsWithLazyImport } from '../weightRepository';
 import {
   assessWeightSignals,
   formatWeightSignalsSection,
@@ -645,17 +645,30 @@ export async function assembleContext(userId: string, findingId?: string): Promi
   // Diet budget + today's persisted brief (meal plan) + resolved intake +
   // the weight trend all run in parallel — none of these depend on each
   // other, only on `tz`/`localToday`/`usersRow` already resolved above.
-  // importLegacyWeightLogIfPresent (a one-time idempotent write) must
-  // complete before getWeightReadings so a first-ever read picks up a
-  // freshly-imported legacy weight-log.json — same ordering as GET
-  // /api/weight-log (app/api/weight-log/route.ts) — but that pair still runs
-  // concurrently with the other independent queries below.
+  // getWeightReadingsWithLazyImport only pays the (serial, per-entry)
+  // legacy-import cost when Postgres has no readings yet — see its doc
+  // comment in lib/weightRepository.ts for the latency regression this
+  // avoids on the coach's hot path.
+  //
+  // Both the weight-readings load and the core-profile read are new
+  // dependencies on every coach turn's critical path, so neither may fail
+  // the whole assembleContext() call: a thrown error degrades to the same
+  // "no data yet" state a brand-new user already produces (no readings ->
+  // no weight signals except under_eating, which doesn't need the trend;
+  // no profile -> the lower/safer low-energy floor), logged the same way
+  // lib/brain/healthConstraints.ts logs a non-fatal failure.
   const [dietBudget, cachedBriefRow, intakeByDay, weightReadings, coreProfileMd] = await Promise.all([
     usersRow ? resolveDietBudget(usersRow, userId) : Promise.resolve(undefined),
     getDailyBrief(userId, localToday, unitSystem),
     resolveDailyIntake(userId, sevenDayKeys, tz),
-    importLegacyWeightLogIfPresent(userId, tz).then(() => getWeightReadings(userId, WEIGHT_TREND_WINDOW_DAYS, tz)),
-    readCoreProfile(userId),
+    getWeightReadingsWithLazyImport(userId, WEIGHT_TREND_WINDOW_DAYS, tz).catch((err) => {
+      console.error(`[context] weight trend load failed for user ${userId}:`, err);
+      return [];
+    }),
+    readCoreProfile(userId).catch((err) => {
+      console.error(`[context] core profile load failed for user ${userId}:`, err);
+      return null;
+    }),
   ]);
   const cachedBrief = cachedBriefRow ?? undefined;
 

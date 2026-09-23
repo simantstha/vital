@@ -152,8 +152,7 @@ mock.module('@/lib/brain/dietBudget', {
 // weightSignals.test.ts).
 mock.module('@/lib/weightRepository', {
   namedExports: {
-    getWeightReadings: async () => [],
-    importLegacyWeightLogIfPresent: async () => {},
+    getWeightReadingsWithLazyImport: async () => [],
   },
 });
 mock.module('@/lib/coreProfileStore', {
