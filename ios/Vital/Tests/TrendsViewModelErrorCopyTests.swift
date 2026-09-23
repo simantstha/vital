@@ -8,7 +8,7 @@ import XCTest
 /// route through `UserFacingError`, and the state that drives the empty vs.
 /// error UI must never overlap (see `TrendsView.gridBody`/`subtitle`).
 @MainActor
-final class TrendsViewModelLoadTests: XCTestCase {
+final class TrendsViewModelErrorCopyTests: XCTestCase {
 
     func testLoadFailureProducesNoRawHTTPOrStatusCodeText() async {
         let api = FakeTrendsLoadAPI()
@@ -65,7 +65,7 @@ final class TrendsViewModelLoadTests: XCTestCase {
 
 /// Same leak, same fix, in the metric detail screen's loader.
 @MainActor
-final class MetricDetailViewModelLoadTests: XCTestCase {
+final class MetricDetailViewModelErrorCopyTests: XCTestCase {
 
     func testLoadFailureProducesNoRawHTTPOrStatusCodeText() async {
         let api = FakeTrendsLoadAPI()
