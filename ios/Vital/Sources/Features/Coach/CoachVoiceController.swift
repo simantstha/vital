@@ -132,10 +132,20 @@ final class CoachVoiceController: ObservableObject {
     private var activeTurnID: UUID?
     private var cancellables = Set<AnyCancellable>()
 
+    /// `transcriber` defaults to `nil` rather than `SpeechTranscriber()`
+    /// directly: a function parameter's default *expression* is evaluated
+    /// nonisolated at the call site (unlike a stored property initializer,
+    /// which runs inside this type's own actor-isolated init), so a
+    /// default that constructs a `@MainActor` type right in the signature
+    /// fails to compile ("call to main actor-isolated initializer in a
+    /// synchronous nonisolated context"). Falling back to
+    /// `SpeechTranscriber()` inside the (already `@MainActor`) init body
+    /// sidesteps that.
     init(
-        transcriber: any SpeechTranscribing = SpeechTranscriber(),
+        transcriber: (any SpeechTranscribing)? = nil,
         api: any CoachAPIProviding = APIClient.shared
     ) {
+        let transcriber = transcriber ?? SpeechTranscriber()
         self.transcriber = transcriber
         self.api = api
         self.isRecording = transcriber.isRecording
