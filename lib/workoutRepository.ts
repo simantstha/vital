@@ -8,7 +8,7 @@
  * database.
  */
 
-import { and, desc, eq, gte, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, sql } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import type { NewWorkoutSet, WorkoutSet } from '@/db/schema';
 import { localDayKey } from '@/lib/localDay';
@@ -145,6 +145,117 @@ export async function getSetsSince(userId: string, days: number): Promise<Workou
     .from(schema.workout_sets)
     .where(and(eq(schema.workout_sets.user_id, userId), gte(schema.workout_sets.performed_at, since)))
     .orderBy(schema.workout_sets.performed_at);
+}
+
+/**
+ * All sets whose `local_day` falls in `dayKeys` (e.g. the 7 keys of one
+ * local week — see `lib/localDay.ts` weekDayKeys). Bucketed by the
+ * already-computed local-day column rather than a `performed_at` range, so
+ * this is DST/timezone-proof the same way `local_day` itself is: a
+ * Sunday-night set stays in Sunday's bucket regardless of the server's clock.
+ */
+export async function getSetsForLocalDays(userId: string, dayKeys: string[]): Promise<WorkoutSet[]> {
+  if (dayKeys.length === 0) return [];
+  return db
+    .select()
+    .from(schema.workout_sets)
+    .where(and(eq(schema.workout_sets.user_id, userId), inArray(schema.workout_sets.local_day, dayKeys)))
+    .orderBy(schema.workout_sets.performed_at);
+}
+
+/** Distinct local days (YYYY-MM-DD) on which the user logged a non-warmup set. */
+export function completedLocalDays(sets: Pick<WorkoutSet, 'local_day' | 'is_warmup'>[]): Set<string> {
+  const days = new Set<string>();
+  for (const set of sets) {
+    if (!set.is_warmup) days.add(set.local_day);
+  }
+  return days;
+}
+
+// ── Last lift ────────────────────────────────────────────────────────────────
+// "Today's main lift" can't be reliably identified from plan_items — coach
+// GET /api/plan only ever auto-seeds 'meal' and 'sleep' kind rows; 'move'
+// rows exist only when a user manually adds one, with a free-text title that
+// doesn't reliably map to a workout_sets.exercise value. So `lastLift` is
+// instead defined as the most recent top (heaviest) working set of the most
+// recent strength session, regardless of what's planned for today.
+
+export interface LastLift {
+  exercise: string;       // exercise_display, as the user said/typed it
+  date: string;            // local_day of the session
+  sets: number;             // working (non-warmup) sets of this exercise in that session
+  reps: number;             // reps of the top set
+  weightKg: number | null; // load of the top set; null for a bodyweight exercise
+}
+
+/**
+ * Picks the top (heaviest-load) set among `sets` — all assumed to be
+ * non-warmup sets of one exercise from one session. Ties, and the
+ * all-bodyweight case (every load_kg null), keep the first set encountered.
+ * Pure/unit-testable: no DB access.
+ */
+export function pickTopSet<T extends { load_kg: number | null; reps: number }>(sets: T[]): T | undefined {
+  return sets.reduce<T | undefined>((best, cur) => {
+    if (!best) return cur;
+    const bestLoad = best.load_kg ?? -Infinity;
+    const curLoad = cur.load_kg ?? -Infinity;
+    return curLoad > bestLoad ? cur : best;
+  }, undefined);
+}
+
+/**
+ * Given every working set of one exercise from one session (most recent
+ * first is NOT required — order doesn't matter), builds the `lastLift` card.
+ * null when `sets` is empty (nothing logged).
+ */
+export function computeLastLift(sets: WorkoutSet[]): LastLift | null {
+  if (sets.length === 0) return null;
+  const topSet = pickTopSet(sets);
+  if (!topSet) return null;
+  return {
+    exercise: topSet.exercise_display,
+    date:     topSet.local_day,
+    sets:     sets.length,
+    reps:     topSet.reps,
+    weightKg: topSet.load_kg,
+  };
+}
+
+/** The single most recent non-warmup set the user has ever logged, if any. */
+export async function getMostRecentWorkingSet(userId: string): Promise<WorkoutSet | undefined> {
+  const [row] = await db
+    .select()
+    .from(schema.workout_sets)
+    .where(and(eq(schema.workout_sets.user_id, userId), eq(schema.workout_sets.is_warmup, false)))
+    .orderBy(desc(schema.workout_sets.performed_at))
+    .limit(1);
+  return row;
+}
+
+/** Every non-warmup set of `exercise` within one session — the sibling sets of a top set. */
+export async function getSessionExerciseSets(
+  userId: string,
+  sessionId: string,
+  exercise: string,
+): Promise<WorkoutSet[]> {
+  return db
+    .select()
+    .from(schema.workout_sets)
+    .where(and(
+      eq(schema.workout_sets.user_id, userId),
+      eq(schema.workout_sets.session_id, sessionId),
+      eq(schema.workout_sets.exercise, exercise),
+      eq(schema.workout_sets.is_warmup, false),
+    ))
+    .orderBy(asc(schema.workout_sets.set_index));
+}
+
+/** DB-backed convenience wrapper: the lastLift card for `GET /api/training/summary`. */
+export async function getLastLift(userId: string): Promise<LastLift | null> {
+  const latest = await getMostRecentWorkingSet(userId);
+  if (!latest) return null;
+  const sessionSets = await getSessionExerciseSets(userId, latest.session_id, latest.exercise);
+  return computeLastLift(sessionSets);
 }
 
 // ── Pure aggregation (unit-testable without a DB) ───────────────────────────

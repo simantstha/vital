@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { localDayKey, localHour, previousDayKey } from './localDay';
+import { localDayKey, localHour, previousDayKey, weekDayKeys, weekStartKeyForDay } from './localDay';
 
 test('previousDayKey rolls back across a year boundary', () => {
   assert.equal(previousDayKey('2026-01-01'), '2025-12-31');
@@ -48,4 +48,38 @@ test('localDayKey matches the legacy toISOString().split("T")[0] behavior when t
   assert.equal(localDayKey(d, undefined), d.toISOString().split('T')[0]);
   assert.equal(localDayKey(d, null), d.toISOString().split('T')[0]);
   assert.equal(localDayKey(d, 'Not/AZone'), d.toISOString().split('T')[0]);
+});
+
+test('weekStartKeyForDay: Monday maps to itself', () => {
+  assert.equal(weekStartKeyForDay('2026-09-21'), '2026-09-21');
+});
+
+test('weekStartKeyForDay: Sunday maps to the Monday that started its own week', () => {
+  assert.equal(weekStartKeyForDay('2026-09-27'), '2026-09-21');
+});
+
+test('weekDayKeys: Monday..Sunday for the given week start', () => {
+  assert.deepEqual(weekDayKeys('2026-09-21'), [
+    '2026-09-21', '2026-09-22', '2026-09-23', '2026-09-24',
+    '2026-09-25', '2026-09-26', '2026-09-27',
+  ]);
+});
+
+// A Sunday-night workout in the user's local zone must land in the week that
+// is ending, not the Monday of the following week — the whole reason
+// week-bucketing goes through localDayKey → weekStartKeyForDay on the local
+// day key, never on the raw UTC instant.
+test('week boundary: a Sunday-night local workout counts in the week that is ending, not the next one', () => {
+  // 2026-09-28T02:30:00Z is Sunday 2026-09-27 21:30 in America/Chicago (UTC-5, CDT) —
+  // late Sunday night locally, but already Monday in UTC.
+  const loggedAt = new Date('2026-09-28T02:30:00Z');
+  const tz = 'America/Chicago';
+
+  const localDay = localDayKey(loggedAt, tz);
+  assert.equal(localDay, '2026-09-27', 'the workout is on the local Sunday, not the UTC Monday');
+
+  const weekStart = weekStartKeyForDay(localDay);
+  assert.equal(weekStart, '2026-09-21', 'it belongs to the week that started the previous Monday');
+  assert.ok(weekDayKeys(weekStart).includes(localDay));
+  assert.ok(!weekDayKeys('2026-09-28').includes(localDay), 'not the following week');
 });
