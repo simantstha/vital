@@ -35,6 +35,17 @@ final class UserFacingErrorTests: XCTestCase {
         XCTAssertNotEqual(read, write)
     }
 
+    func testServerErrorWithIncludesActionFalseOmitsPreamble() {
+        let withAction = UserFacingError.copy(for: APIError.serverError(500), context: .read, includesAction: true)
+        let withoutAction = UserFacingError.copy(for: APIError.serverError(500), context: .read, includesAction: false)
+
+        XCTAssertTrue(withAction.localizedCaseInsensitiveContains("couldn't"), "with includesAction: true should have preamble")
+        XCTAssertTrue(withAction.contains("load"), "with includesAction: true should include verb")
+        XCTAssertFalse(withoutAction.localizedCaseInsensitiveContains("couldn't"), "with includesAction: false should not have preamble")
+        XCTAssertFalse(withoutAction.contains("load"), "with includesAction: false should not include verb")
+        XCTAssertTrue(withoutAction.contains("Something went wrong"), "both should share core message")
+    }
+
     // MARK: - Auth / session expired
 
     func testUnauthorizedProducesSignInCopyNotRetryCopy() {
@@ -76,6 +87,18 @@ final class UserFacingErrorTests: XCTestCase {
         let read = UserFacingError.copy(for: SomeOtherError(), context: .read)
         let write = UserFacingError.copy(for: SomeOtherError(), context: .write)
         XCTAssertNotEqual(read, write, "a failed read and a failed write must not collapse into identical copy")
+    }
+
+    func testGenericCopyWithIncludesActionFalseOmitsPreamble() {
+        struct SomeOtherError: Error {}
+        let withAction = UserFacingError.copy(for: SomeOtherError(), context: .read, includesAction: true)
+        let withoutAction = UserFacingError.copy(for: SomeOtherError(), context: .read, includesAction: false)
+
+        XCTAssertTrue(withAction.localizedCaseInsensitiveContains("couldn't"), "with includesAction: true should have preamble")
+        XCTAssertTrue(withAction.contains("load"), "with includesAction: true should include verb")
+        XCTAssertFalse(withoutAction.localizedCaseInsensitiveContains("couldn't"), "with includesAction: false should not have preamble")
+        XCTAssertFalse(withoutAction.contains("load"), "with includesAction: false should not include verb")
+        XCTAssertTrue(withoutAction.contains("Try again"), "both should share core message")
     }
 
     func testAllThreeContextsProduceDistinctGenericCopy() {
