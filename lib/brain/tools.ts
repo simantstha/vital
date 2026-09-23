@@ -46,7 +46,13 @@ import { eq, and, gte, gt, lt, asc, desc, inArray, isNull, sql } from 'drizzle-o
 import { lookupBarcode } from '@/lib/openFoodFacts';
 import { searchCandidates, type Candidate } from '@/lib/nutrition/candidates';
 import type { BaselineStats } from '@/lib/brain/baselines';
-import { applyDietBudgetUpdate, splitMacrosForKcal, DEFAULT_WEIGHT_KG } from '@/lib/brain/dietBudget';
+import {
+  applyDietBudgetUpdate,
+  splitMacrosForKcal,
+  DEFAULT_WEIGHT_KG,
+  lowEnergyThresholdKcal,
+  lowEnergyMessage,
+} from '@/lib/brain/dietBudget';
 import { sourcePrecedenceSql } from '@/lib/brain/memoryTiers';
 import { readCoreProfile } from '@/lib/coreProfileStore';
 import { parseProfileDetails } from '@/lib/profileDetails';
@@ -672,7 +678,33 @@ export function normalizeBiologicalSex(sex: string | null): 'male' | 'female' | 
   return null;
 }
 
-export function estimateTDEE(bio: Biometrics, workouts: WorkoutInput[]): number {
+/**
+ * Estimates daily TDEE (Mifflin-St Jeor BMR × activity multiplier + exercise
+ * kcal) from the given workouts.
+ *
+ * `windowDays` says how many calendar days the `workouts` list spans — it
+ * defaults to 1 (a single day's workouts, e.g. calculate_macros's
+ * `todayWorkouts`), which reproduces the exact previous behavior of adding
+ * every listed workout's kcal straight onto one day's TDEE. A caller passing
+ * a multi-day window (e.g. dietBudget.ts's computeAutoBudget, which queries
+ * the trailing 7 days) MUST pass that window size here: the workouts' total
+ * kcal is divided by `windowDays` to get the AVERAGE daily exercise
+ * expenditure, not summed onto a single day. Without this, someone who
+ * worked out 4x/week at 400 kcal a session had all 1,600 kcal added to one
+ * day's TDEE, inflating their target enough to erase their deficit — the
+ * bug this parameter fixes.
+ *
+ * Note on double counting: `bio.activityMultiplier` (1.2-1.4, derived from
+ * self-reported training frequency — see activityMultiplierForFrequency) is
+ * deliberately capped below the textbook "very active" 1.5-1.55 because it's
+ * meant to cover NEAT only; the workouts loop below is what actually prices
+ * in training volume. The two aren't perfectly disjoint in practice (a user
+ * who reports "5 days/week" AND logs those same 5 sessions gets some of
+ * their training volume priced in twice, once via the higher multiplier and
+ * once via explicit kcal) but this is unchanged pre-existing behavior — not
+ * addressed here, see the multiplier table's own comment.
+ */
+export function estimateTDEE(bio: Biometrics, workouts: WorkoutInput[], windowDays: number = 1): number {
   const { weightKg } = bio;
   const heightCm = bio.heightCm ?? FALLBACK_HEIGHT_CM;
   const age = bio.age ?? FALLBACK_AGE;
@@ -687,11 +719,12 @@ export function estimateTDEE(bio: Biometrics, workouts: WorkoutInput[]): number 
 
   const bmr = 10 * weightKg + 6.25 * heightCm - 5 * age + sexOffset;
   const activityMultiplier = bio.activityMultiplier ?? DEFAULT_ACTIVITY_MULTIPLIER;
-  let tdee = bmr * activityMultiplier; // NEAT-only base — workout kcal added below
+  const tdee = bmr * activityMultiplier; // NEAT-only base — average exercise kcal/day added below
 
+  let exerciseKcal = 0;
   for (const w of workouts) {
     if (w.calories != null && w.calories > 0) {
-      tdee += w.calories;
+      exerciseKcal += w.calories;
       continue;
     }
     const t = w.type.toLowerCase();
@@ -699,24 +732,25 @@ export function estimateTDEE(bio: Biometrics, workouts: WorkoutInput[]): number 
     const distKm = w.distanceKm ?? 0;
 
     if (t.includes('run')) {
-      tdee += distKm > 0 ? weightKg * distKm * 1.0 : durMin * 11;
+      exerciseKcal += distKm > 0 ? weightKg * distKm * 1.0 : durMin * 11;
     } else if (t.includes('cycl') || t.includes('bike')) {
-      tdee += distKm > 0 ? weightKg * distKm * 0.5 : durMin * 8;
+      exerciseKcal += distKm > 0 ? weightKg * distKm * 0.5 : durMin * 8;
     } else if (t.includes('swim')) {
-      tdee += durMin * 9;
+      exerciseKcal += durMin * 9;
     } else if (
       t.includes('strength') || t.includes('gym') ||
       t.includes('weight') || t.includes('lift')
     ) {
-      tdee += durMin * 4;
+      exerciseKcal += durMin * 4;
     } else if (t.includes('walk') || t.includes('hike')) {
-      tdee += distKm > 0 ? weightKg * distKm * 0.5 : durMin * 4;
+      exerciseKcal += distKm > 0 ? weightKg * distKm * 0.5 : durMin * 4;
     } else {
-      tdee += durMin * 6; // generic activity
+      exerciseKcal += durMin * 6; // generic activity
     }
   }
 
-  return Math.round(tdee);
+  const days = Math.max(1, windowDays);
+  return Math.round(tdee + exerciseKcal / days);
 }
 
 /**
@@ -1505,18 +1539,38 @@ export async function executeToolCall(
       ? (input.todayWorkouts as WorkoutInput[])
       : [];
 
+    // Single-day semantics: todayWorkouts is one day's workouts, so the
+    // default windowDays=1 (sum, not averaged) is correct here — see
+    // estimateTDEE's doc comment.
     const tdee = estimateTDEE({
       weightKg,
       heightCm:      profile.heightCm,
       age:           profile.age,
       biologicalSex: profile.biologicalSex,
     }, workouts);
-    const { targetCal, c, p, f } = macrosForGoal(goal, weightKg, tdee);
+    let { targetCal, c, p, f } = macrosForGoal(goal, weightKg, tdee);
+
+    // Low-energy-availability floor: calculate_macros used to return
+    // unfloored numbers, so the coach could propose (and the app editor's
+    // "auto" preview could show) a target below the sex-aware safe floor
+    // with no signal at all. Floor it here the same way computeAutoBudget
+    // does, and flag it so callers can warn the user.
+    const thresholdKcal = lowEnergyThresholdKcal(profile.biologicalSex);
+    let lowEnergyWarning: { thresholdKcal: number; appliedFloor: boolean; message: string } | null = null;
+    if (targetCal < thresholdKcal) {
+      const floored = splitMacrosForKcal(goal, weightKg, thresholdKcal);
+      targetCal = thresholdKcal;
+      c = floored.carbs;
+      p = floored.protein;
+      f = floored.fat;
+      lowEnergyWarning = { thresholdKcal, appliedFloor: true, message: lowEnergyMessage(thresholdKcal, true) };
+    }
 
     return JSON.stringify({
       tdee,
       targetCal,
       macros: { c, p, f },
+      lowEnergyWarning,
       note: `TDEE ${tdee} kcal · goal adjustment → ${targetCal} kcal · ${c}g C / ${p}g P / ${f}g F`,
     });
   }
@@ -1528,7 +1582,7 @@ export async function executeToolCall(
         mode:       String(input.mode),
         goal:       input.goal != null ? String(input.goal) : undefined,
         targetKcal: typeof input.targetKcal === 'number' ? input.targetKcal : undefined,
-      });
+      }, 'coach');
       return JSON.stringify({ ok: true, budget: current });
     } catch (err) {
       return `Error: ${err instanceof Error ? err.message : String(err)}`;

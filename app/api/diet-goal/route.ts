@@ -68,7 +68,7 @@ export async function PATCH(request: Request): Promise<NextResponse> {
   }
 
   try {
-    const { current, auto } = await applyDietBudgetUpdate(userId, body);
+    const { current, auto } = await applyDietBudgetUpdate(userId, body, 'app');
     return NextResponse.json({ current, auto, goals: DIET_GOALS });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
