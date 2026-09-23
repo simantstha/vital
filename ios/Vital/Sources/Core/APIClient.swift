@@ -493,7 +493,7 @@ struct APIClient {
 
     // MARK: - Coach (SSE streaming)
 
-    func streamCoach(message: String, imageBase64: String? = nil, mode: String? = nil, findingId: String? = nil) -> AsyncThrowingStream<CoachStreamEvent, Error> {
+    func streamCoach(message: String, imageBase64: String? = nil, mode: String? = nil, findingId: String? = nil, voice: Bool? = nil, clientTurnId: String? = nil) -> AsyncThrowingStream<CoachStreamEvent, Error> {
         AsyncThrowingStream { continuation in
             Task {
                 do {
@@ -507,7 +507,7 @@ struct APIClient {
                     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
                     request.timeoutInterval = 60
 
-                    let body = CoachRequestBody(message: message, imageBase64: imageBase64, mode: mode, findingId: findingId)
+                    let body = CoachRequestBody(message: message, imageBase64: imageBase64, mode: mode, findingId: findingId, voice: voice, clientTurnId: clientTurnId)
                     request.httpBody = try encoder.encode(body)
 
                     let (bytes, response) = try await session.bytes(for: request)
@@ -1730,6 +1730,16 @@ private struct CoachRequestBody: Encodable {
     /// — see `CoachViewModel.openFromNudge` and `/api/coach`'s findingId
     /// support (lib/brain/context.ts's resolveNudgeFinding).
     let findingId: String?
+    /// True when this turn was sent by voice — switches `/api/coach`'s reply
+    /// style server-side (lib/brain/persona.ts's voiceStyleBlock). Optional
+    /// properties on a synthesized Encodable are written via
+    /// `encodeIfPresent`, so `nil` omits the key entirely rather than
+    /// encoding `null`.
+    let voice: Bool?
+    /// Client-generated idempotency key for this user turn (a fresh UUID per
+    /// send) — see `/api/coach`'s clientTurnId support and
+    /// db/schema.ts's messages_user_client_turn_idx.
+    let clientTurnId: String?
 }
 
 enum SpecialistAction: String, Codable, CaseIterable {
@@ -1919,7 +1929,9 @@ protocol CoachAPIProviding {
         message: String,
         imageBase64: String?,
         mode: String?,
-        findingId: String?
+        findingId: String?,
+        voice: Bool?,
+        clientTurnId: String?
     ) -> AsyncThrowingStream<CoachStreamEvent, Error>
     func streamCoachAction(
         sessionId: String,

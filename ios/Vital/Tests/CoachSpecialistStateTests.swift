@@ -847,7 +847,7 @@ final class FakeCoachAPI: CoachAPIProviding {
         return DietGoalResponse(current: dto, auto: dto, goals: ["weight_loss", "muscle", "endurance", "general"])
     }
 
-    func streamCoach(message: String, imageBase64: String?, mode: String?, findingId: String?) -> AsyncThrowingStream<CoachStreamEvent, Error> {
+    func streamCoach(message: String, imageBase64: String?, mode: String?, findingId: String?, voice: Bool?, clientTurnId: String?) -> AsyncThrowingStream<CoachStreamEvent, Error> {
         stream(events: nextMessageEvents, failure: nextMessageFailure)
     }
 

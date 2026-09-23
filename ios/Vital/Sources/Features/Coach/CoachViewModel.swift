@@ -613,7 +613,18 @@ final class CoachViewModel: ObservableObject {
             }
 
             do {
-                let stream = api.streamCoach(message: trimmed, imageBase64: nil, mode: mode, findingId: findingId)
+                // voice: true switches the server's reply style when this turn
+                // was sent by voice (see lib/brain/persona.ts's voiceStyleBlock).
+                // clientTurnId is a fresh UUID per send so a retried request is
+                // idempotent server-side (messages_user_client_turn_idx).
+                let stream = api.streamCoach(
+                    message: trimmed,
+                    imageBase64: nil,
+                    mode: mode,
+                    findingId: findingId,
+                    voice: sentByVoice,
+                    clientTurnId: UUID().uuidString
+                )
                 try await drainCoachEvents(
                     stream,
                     assistantId: assistantId,

@@ -392,7 +392,9 @@ private final class FakeVoiceAPI: CoachAPIProviding {
         message: String,
         imageBase64: String?,
         mode: String?,
-        findingId: String?
+        findingId: String?,
+        voice: Bool?,
+        clientTurnId: String?
     ) -> AsyncThrowingStream<CoachStreamEvent, Error> {
         fatalError("unused by CoachVoiceController")
     }
