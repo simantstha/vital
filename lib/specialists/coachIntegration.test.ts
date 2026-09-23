@@ -38,7 +38,7 @@ test('flag off returns the exact legacy model prompt and tools', () => {
   const selected = selectCoachConfiguration({
     enabled: false, session: null, manifest: null,
     baseModel: 'claude-sonnet-5', basePrompt: 'legacy prompt', baseTools,
-    specialistPrompt: null, handoffTool: null,
+    specialistPrompt: null, handoffTool: null, voice: false,
   });
   assert.equal(selected.model, 'claude-sonnet-5');
   // The prompt text is unchanged; it just travels as a block array now so the
@@ -54,7 +54,7 @@ test('handoffTool null (specialists never resolved) falls back to base tools onl
   const selected = selectCoachConfiguration({
     enabled: true, session: null, manifest: null,
     baseModel: 'claude-sonnet-5', basePrompt: 'legacy prompt', baseTools,
-    specialistPrompt: null, handoffTool: null,
+    specialistPrompt: null, handoffTool: null, voice: false,
   });
   assert.deepEqual(selected.tools.map((tool) => tool.name), [
     'get_metric_trend', 'get_sleep_summary', 'log_meal',
@@ -66,7 +66,7 @@ test('enabled Vital adds proposal tool while active and return-pending sessions 
   const vital = selectCoachConfiguration({
     enabled: true, session: null, manifest: null,
     baseModel: 'claude-sonnet-5', basePrompt: 'legacy prompt', baseTools,
-    specialistPrompt: null, handoffTool,
+    specialistPrompt: null, handoffTool, voice: false,
   });
   assert.deepEqual(vital.tools.map((tool) => tool.name), [
     'get_metric_trend', 'get_sleep_summary', 'log_meal', 'propose_specialist_handoff',
@@ -80,7 +80,7 @@ test('enabled Vital adds proposal tool while active and return-pending sessions 
         system: 'trusted specialist prompt', context: 'untrusted consultation context',
         model: manifest.model, allowedTools: manifest.allowedTools,
       },
-      handoffTool,
+      handoffTool, voice: false,
     });
     assert.equal(selected.model, 'claude-opus-test');
     // Specialist turns are the expensive ones — they must carry the breakpoint too.
@@ -92,6 +92,28 @@ test('enabled Vital adds proposal tool while active and return-pending sessions 
     ]);
     assert.equal(selected.speaker, 'specialist');
   }
+});
+
+test('voice: true appends an extra, uncached system block without touching the cached one', () => {
+  const withoutVoice = selectCoachConfiguration({
+    enabled: false, session: null, manifest: null,
+    baseModel: 'claude-sonnet-5', basePrompt: 'legacy prompt', baseTools,
+    specialistPrompt: null, handoffTool: null, voice: false,
+  });
+  const withVoice = selectCoachConfiguration({
+    enabled: false, session: null, manifest: null,
+    baseModel: 'claude-sonnet-5', basePrompt: 'legacy prompt', baseTools,
+    specialistPrompt: null, handoffTool: null, voice: true,
+  });
+
+  assert.deepEqual(withoutVoice.system, [
+    { type: 'text', text: 'legacy prompt', cache_control: { type: 'ephemeral' } },
+  ]);
+  assert.equal(withVoice.system.length, 2);
+  assert.deepEqual(withVoice.system[0], withoutVoice.system[0]);
+  assert.equal(withVoice.system[1].type, 'text');
+  assert.match((withVoice.system[1] as { text: string }).text, /Voice mode/);
+  assert.equal((withVoice.system[1] as { cache_control?: unknown }).cache_control, undefined);
 });
 
 test('pending proposal produces a proposal card but does not activate specialist', () => {
