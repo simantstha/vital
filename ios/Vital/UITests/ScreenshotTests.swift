@@ -125,6 +125,25 @@ final class ScreenshotTests: XCTestCase {
                            + "if this fails, fixtures likely aren't being intercepted")
             XCTAssertFalse(errorCard.exists,
                             "Today should not show its error card once fixtures load [\(scenario)/\(appearance)]")
+
+            if scenario == "weight_loss" {
+                // The weight_loss hero (§4.1) — a fixture-unique trend delta
+                // string, only ever produced once `/api/weight-log` decodes
+                // and `WeightHeroLogic.weeklyChangeText` computes it, so this
+                // fails loudly the same way the insight assertion above does
+                // if that endpoint's fixture interception ever regresses.
+                XCTAssertTrue(waitForText(app, containing: "0.6 kg/wk this week"),
+                               "Today's weight_loss hero should show the established trend's weekly change [\(appearance)]")
+                XCTAssertTrue(app.buttons["today.weighInChip"].waitForExistence(timeout: 10),
+                               "Today's weight_loss hero should show the weigh-in chip [\(appearance)]")
+            }
+
+            if scenario == "new_user" {
+                // First-run checklist (§4.2) — replaces the three empty
+                // biometric tiles for a fresh, still-calibrating account.
+                XCTAssertTrue(waitForText(app, containing: "Let's get your baseline"),
+                               "Today should show the new-user first-run checklist [\(appearance)]")
+            }
         }
         capture(app, name: "\(scenario)__today__\(appearance)")
     }

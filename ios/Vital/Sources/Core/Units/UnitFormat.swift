@@ -20,6 +20,20 @@ enum UnitFormat {
         }
     }
 
+    /// The weight-trend hero's "−0.4 kg this week" line (§4.1). `kgPerWeek`
+    /// is the server's `delta7dKgPerWeek`/`delta30dKgPerWeek` (already
+    /// kg/week — never re-divide by 7). Rounds to 1 decimal in both systems
+    /// so a near-zero rate (e.g. -0.04 kg/wk) doesn't collapse to a
+    /// misleading bare "0" — it shows "0.0". The sign is written explicitly
+    /// (U+2212 minus, matching the rest of the trend UI) rather than relying
+    /// on the formatter's default hyphen-minus.
+    static func weightDelta(kgPerWeek: Double, _ system: UnitSystem) -> String {
+        let value = system == .metric ? kgPerWeek : UnitConvert.kgToLb(kgPerWeek)
+        let magnitude = formatNumber(abs(value), maximumFractionDigits: 1)
+        let sign = value < 0 ? "\u{2212}" : (value > 0 ? "+" : "")
+        return "\(sign)\(magnitude) \(system.weightUnit)/wk"
+    }
+
     // MARK: - Height
 
     /// Metric reproduces `"168 cm"`; imperial reproduces `"5' 9\""`.

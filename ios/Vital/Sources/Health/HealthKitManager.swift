@@ -332,6 +332,40 @@ final class HealthKitManager: ObservableObject {
         }
     }
 
+    // MARK: - Body mass (today's scale reading, §5.3 one-tap weigh-in)
+
+    /// Latest `.bodyMass` sample recorded today (local calendar day), in kg —
+    /// or `nil` if HealthKit has no scale reading yet today. Drives the
+    /// weigh-in chip's "Confirm 82.4 kg" 1-tap state on Today; a `nil` here
+    /// means the chip falls back to the manual "Weigh in · <last>?" sheet.
+    func fetchTodayBodyMass() async -> Double? {
+        guard HKHealthStore.isHealthDataAvailable(),
+              let type = HKObjectType.quantityType(forIdentifier: .bodyMass)
+        else { return nil }
+
+        let startOfDay = Calendar.current.startOfDay(for: Date())
+        let predicate = HKQuery.predicateForSamples(
+            withStart: startOfDay, end: Date(), options: .strictStartDate
+        )
+        let sort = NSSortDescriptor(key: HKSampleSortIdentifierEndDate, ascending: false)
+
+        return await withCheckedContinuation { continuation in
+            let query = HKSampleQuery(
+                sampleType: type,
+                predicate: predicate,
+                limit: 1,
+                sortDescriptors: [sort]
+            ) { _, samples, _ in
+                guard let sample = samples?.first as? HKQuantitySample else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                continuation.resume(returning: sample.quantity.doubleValue(for: HKUnit.gramUnit(with: .kilo)))
+            }
+            store.execute(query)
+        }
+    }
+
     // MARK: - Characteristics (onboarding prefill)
 
     /// One-shot read of static profile facts for onboarding prefill: date of

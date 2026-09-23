@@ -206,6 +206,10 @@ enum FixtureData {
             return (200, jsonData(notifications))
         case ("GET", "/api/notification-preferences"):
             return (200, jsonData(notificationPreferences()))
+        case ("GET", "/api/weight-log"):
+            return (200, jsonData(weightLog(profile)))
+        case ("POST", "/api/weight-log"):
+            return (200, jsonData(["ok": true]))
         default:
             return (404, jsonData(["error": "unhandled fixture endpoint: \(method) \(path)"]))
         }
@@ -549,6 +553,54 @@ enum FixtureData {
                 "slot": meal.slot, "lastLoggedAt": isoNow, "imageThumb": NSNull(),
             ]
         }
+    }
+
+    // MARK: - GET /api/weight-log → WeightLogResponse (Today weight_loss hero, §5.3)
+
+    /// `established` scenarios get >= 10 weigh-ins spread over the last ~21
+    /// days (well past the server's >= 3 entries / >= 5 days gate — see
+    /// `lib/weightTrend.ts`), trending from `profile.weightKg` at the given
+    /// weekly rate; `newUser` gets none at all (`established: false`, no
+    /// fabricated trend — the hero must show the honest placeholder).
+    private static func weightLog(_ profile: Profile) -> [String: Any] {
+        guard profile.established else {
+            return ["entries": [[String: Any]](), "trend": ["days": [[String: Any]](), "delta7dKgPerWeek": NSNull(), "delta30dKgPerWeek": NSNull(), "established": false]]
+        }
+
+        let offsets = stride(from: 20, through: 0, by: -2).map { $0 } // 11 points, ~3 weeks
+        let dailyRateKg = profile.weightTrendPerWeekKg / 7
+
+        func weightAt(daysAgo: Int) -> Double {
+            // `daysAgo` days in the past sat `dailyRateKg * daysAgo` above
+            // today's weight for a losing (negative) rate — below instead
+            // for a gaining (positive) rate, e.g. the muscle scenario.
+            profile.weightKg - dailyRateKg * Double(daysAgo)
+        }
+
+        let entries = offsets.map { daysAgo -> [String: Any] in
+            [
+                "date": dayString(daysAgo),
+                "weight": round(weightAt(daysAgo: daysAgo) * 100) / 100,
+                "unit": "kg",
+                "source": "manual",
+            ]
+        }
+
+        // Daily trend series for the sparkline — same linear model as the
+        // entries above (a fixture-only simplification of the real EWMA;
+        // still monotonic and smooth, which is all the sparkline needs).
+        let trendDays = (0...20).reversed().map { daysAgo -> [String: Any] in
+            let value = round(weightAt(daysAgo: daysAgo) * 100) / 100
+            return ["day": dayString(daysAgo), "rawKg": value, "trendKg": value]
+        }
+
+        let trend: [String: Any] = [
+            "days": trendDays,
+            "delta7dKgPerWeek": profile.weightTrendPerWeekKg,
+            "delta30dKgPerWeek": profile.weightTrendPerWeekKg,
+            "established": true,
+        ]
+        return ["entries": entries, "trend": trend]
     }
 
     // MARK: - GET /api/notification-preferences → NotificationPreferences
