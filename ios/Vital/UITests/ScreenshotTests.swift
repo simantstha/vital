@@ -3,9 +3,12 @@ import XCTest
 /// Screenshot harness (see docs/CI-TESTFLIGHT.md — "iOS screenshot harness").
 ///
 /// Launches the app once per `FixtureMode.Scenario` × appearance (light/dark)
-/// with `-VitalFixture <scenario>` (and `-AppleInterfaceStyle Dark` for the
-/// dark pass), which puts the DEBUG-only fixture harness in
-/// `ios/Vital/Sources/Fixtures/` in control: real auth/onboarding is skipped,
+/// with `-VitalFixture <scenario>` and `-VitalAppearance light|dark` (the
+/// latter is what actually forces the scheme — see `FixtureMode.appearance` —
+/// since XCUITest's usual `-AppleInterfaceStyle Dark`, also passed for the
+/// dark pass, is not reliably honored on iOS 26 simulators), which puts the
+/// DEBUG-only fixture harness in `ios/Vital/Sources/Fixtures/` in control:
+/// real auth/onboarding is skipped,
 /// every system permission prompt is suppressed, and every network response
 /// comes from a bundled fixture — see `FixtureMode.swift` for exactly what
 /// each scenario represents.
@@ -74,11 +77,17 @@ final class ScreenshotTests: XCTestCase {
 
     private func launch(scenario: String, dark: Bool) -> XCUIApplication {
         let app = XCUIApplication()
-        var args = ["-VitalFixture", scenario]
+        // `-AppleInterfaceStyle Dark` is the standard simulator/XCUITest
+        // trick (also used by fastlane `snapshot`) for forcing dark mode
+        // without touching the simulator's own system-wide appearance
+        // setting — kept here since it's harmless when honored — but it is
+        // NOT reliably honored on iOS 26 simulators, which produced
+        // `__dark` screenshots that actually rendered light. `-VitalAppearance`
+        // is the authoritative fix: FixtureMode (DEBUG-only) parses it and
+        // forces the scheme itself via `.preferredColorScheme` +
+        // `overrideUserInterfaceStyle`, so pass it on every launch.
+        var args = ["-VitalFixture", scenario, "-VitalAppearance", dark ? "dark" : "light"]
         if dark {
-            // Standard simulator/XCUITest trick (also used by fastlane
-            // `snapshot`) for forcing dark mode without touching the
-            // simulator's own system-wide appearance setting.
             args += ["-AppleInterfaceStyle", "Dark"]
         }
         app.launchArguments = args

@@ -53,6 +53,16 @@ struct RootView: View {
             }
         }
         .environmentObject(authViewModel)
+        .task {
+            // Belt-and-suspenders for the DEBUG screenshot harness: forces
+            // every window's trait collection directly, since sheets/
+            // popovers aren't always reliably covered by
+            // `.preferredColorScheme` alone on the window built by
+            // VitalApp's WindowGroup. No-op outside `-VitalAppearance` mode.
+            #if DEBUG
+            FixtureMode.applyInterfaceStyleToWindows()
+            #endif
+        }
         .onOpenURL { url in
             // `vital://` deep links. The WHOOP connect callback
             // (`vital://whoop?status=connected|error`) is normally consumed
@@ -69,6 +79,9 @@ struct RootView: View {
             // grant/deny, and generally keeps the rolling window fresh
             // without waiting on a cold launch.
             guard newPhase == .active else { return }
+            #if DEBUG
+            FixtureMode.applyInterfaceStyleToWindows()
+            #endif
             Task {
                 await NotificationManager.shared.refreshPermissionState()
                 await ReminderScheduler.shared.resync()

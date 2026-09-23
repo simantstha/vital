@@ -1,5 +1,7 @@
 #if DEBUG
 import Foundation
+import SwiftUI
+import UIKit
 
 /// Debug-only screenshot-harness support (see `VitalUITests`). Active only
 /// when the app is launched with `-VitalFixture <scenario>` — never true for
@@ -72,6 +74,56 @@ enum FixtureMode {
     static func apply(to config: URLSessionConfiguration) {
         guard isActive else { return }
         config.protocolClasses = [FixtureURLProtocol.self] + (config.protocolClasses ?? [])
+    }
+
+    /// Parsed once from `-VitalAppearance dark|light`, which `ScreenshotTests`
+    /// passes on every launch. `nil` (system default) under any normal
+    /// launch. Exists because XCUITest's usual `-AppleInterfaceStyle Dark`
+    /// launch argument is not reliably honored by iOS 26 simulators — CI was
+    /// producing `__dark` screenshots that rendered light (several were
+    /// byte-identical to their `__light` pair). Forcing the scheme ourselves
+    /// from a fixture-only launch arg sidesteps that entirely.
+    static let appearance: ColorScheme? = {
+        let args = ProcessInfo.processInfo.arguments
+        guard let flagIndex = args.firstIndex(of: "-VitalAppearance"),
+              args.indices.contains(flagIndex + 1)
+        else { return nil }
+        switch args[flagIndex + 1] {
+        case "dark": return .dark
+        case "light": return .light
+        default: return nil
+        }
+    }()
+
+    /// UIKit mirror of `appearance`. `.preferredColorScheme` on the root view
+    /// covers ordinary SwiftUI content, but sheets/popovers are sometimes
+    /// hosted by a separate `UIWindow`/presentation context that doesn't
+    /// reliably re-derive its trait collection from it — `overrideUserInterfaceStyle`
+    /// set directly on every window is the belt-and-suspenders fix so every
+    /// captured screen (including the diet-logging sheet) matches.
+    static var interfaceStyle: UIUserInterfaceStyle {
+        switch appearance {
+        case .dark: return .dark
+        case .light: return .light
+        case nil: return .unspecified
+        @unknown default: return .unspecified
+        }
+    }
+
+    /// Applies `interfaceStyle` to every window of every connected scene.
+    /// No-op outside `-VitalAppearance` mode. Safe (and cheap) to call
+    /// repeatedly — call it again whenever a new window/sheet may have
+    /// appeared, since `overrideUserInterfaceStyle` only affects windows that
+    /// already exist at the time it's set.
+    @MainActor
+    static func applyInterfaceStyleToWindows() {
+        guard appearance != nil else { return }
+        for scene in UIApplication.shared.connectedScenes {
+            guard let windowScene = scene as? UIWindowScene else { continue }
+            for window in windowScene.windows {
+                window.overrideUserInterfaceStyle = interfaceStyle
+            }
+        }
     }
 }
 #endif
