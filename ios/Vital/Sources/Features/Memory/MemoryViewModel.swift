@@ -38,7 +38,7 @@ final class MemoryViewModel: ObservableObject {
             selfFacts = memory.selfSummary.facts
             entities = memory.entities
         } catch {
-            errorMessage = UserFacingError.message(for: error, context: .read, tag: "fetchMemory")
+            errorMessage = UserFacingError.message(for: error, context: .read, tag: "fetchMemory", includesAction: false)
         }
 
         if let response = await factsTask {

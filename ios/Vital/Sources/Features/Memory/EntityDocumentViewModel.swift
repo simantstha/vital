@@ -19,7 +19,7 @@ final class EntityDocumentViewModel: ObservableObject {
         do {
             document = try await apiClient.fetchEntityDocument(id: id)
         } catch {
-            errorMessage = UserFacingError.message(for: error, context: .read, tag: "fetchEntityDocument")
+            errorMessage = UserFacingError.message(for: error, context: .read, tag: "fetchEntityDocument", includesAction: false)
         }
         withAnimation(Theme.Motion.appear) { isLoading = false }
     }

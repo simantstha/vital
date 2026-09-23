@@ -90,7 +90,7 @@ final class TrendsViewModel: ObservableObject {
             }
         } catch {
             guard generation == loadGeneration else { return } // superseded by a newer load
-            errorMessage = UserFacingError.message(for: error, context: .read, tag: "TrendsViewModel.load")
+            errorMessage = UserFacingError.message(for: error, context: .read, tag: "TrendsViewModel.load", includesAction: false)
         }
         withAnimation(Theme.Motion.appear) { isLoading = false }
     }
@@ -155,7 +155,7 @@ final class TrendsViewModel: ObservableObject {
             hrvWindow   = TrendsSummary.weekWindow(from: hrv.points, today: today)
             rhrWindow   = TrendsSummary.weekWindow(from: rhr.points, today: today)
         } catch {
-            summaryErrorMessage = UserFacingError.message(for: error, context: .read, tag: "TrendsViewModel.loadSummary")
+            summaryErrorMessage = UserFacingError.message(for: error, context: .read, tag: "TrendsViewModel.loadSummary", includesAction: false)
         }
 
         let profile = await profileResp
