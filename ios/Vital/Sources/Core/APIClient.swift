@@ -371,6 +371,36 @@ struct APIClient {
         try validate(response)
     }
 
+    // MARK: - Weight log (Today weight_loss hero, §5.3)
+
+    /// GET /api/weight-log?days=&tz= — merged manual + HealthKit weigh-in
+    /// history plus the smoothed trend (see `app/api/weight-log/route.ts` /
+    /// `lib/weightTrend.ts`). Sends the device's current timezone — same
+    /// convention as `fetchToday()` — so the server buckets entries by the
+    /// user's local day.
+    func fetchWeightLog(days: Int = 35) async throws -> WeightLogResponse {
+        let tz = TimeZone.current.identifier
+        let encoded = tz.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? tz
+        return try await get("/api/weight-log?days=\(days)&tz=\(encoded)")
+    }
+
+    /// POST /api/weight-log — logs a manual (or HealthKit-confirmed) weigh-in.
+    /// `unit` is the wire value the route expects: `"lbs"` or `"kg"` (not
+    /// `UnitSystem.weightUnit`'s `"lb"`/`"kg"`), and `date` is `YYYY-MM-DD`.
+    func logWeight(weight: Double, unit: String, date: String) async throws {
+        guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/weight-log") else {
+            throw APIError.invalidURL
+        }
+        var request = authorizedRequest(url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 15
+        struct Body: Encodable { let weight: Double; let unit: String; let date: String }
+        request.httpBody = try encoder.encode(Body(weight: weight, unit: unit, date: date))
+        let (_, response) = try await session.data(for: request)
+        try validate(response)
+    }
+
     // MARK: - Memory browser
 
     /// GET /api/memory — the "About you" fact summary plus every entity
@@ -1354,6 +1384,36 @@ struct TodayResponse: Decodable {
 
 struct StreakResponse: Decodable {
     let streakDays: Int
+}
+
+// MARK: - Weight log types (§5.3 — mirrors app/api/weight-log/route.ts exactly)
+
+struct WeightLogEntryDTO: Decodable {
+    let date: String   // YYYY-MM-DD
+    let weight: Double // kg
+    let unit: String   // always "kg" on the wire
+    let source: String // "manual" | "healthkit" | "coach"
+}
+
+struct WeightTrendDayDTO: Decodable {
+    let day: String
+    let rawKg: Double
+    let trendKg: Double
+}
+
+struct WeightTrendDTO: Decodable {
+    let days: [WeightTrendDayDTO]
+    let delta7dKgPerWeek: Double?
+    let delta30dKgPerWeek: Double?
+    /// True once there are >= 3 distinct weigh-in days spanning >= 5 calendar
+    /// days — the UI gate documented in docs/ux-spec-v4.md §4 ("Trend appears
+    /// after 3 weigh-ins"). Never fabricate a trend headline when this is false.
+    let established: Bool
+}
+
+struct WeightLogResponse: Decodable {
+    let entries: [WeightLogEntryDTO]
+    let trend: WeightTrendDTO
 }
 
 // MARK: - Diet goal types

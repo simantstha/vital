@@ -20,6 +20,48 @@ enum UnitFormat {
         }
     }
 
+    /// The weight-trend hero's "−0.4 kg this week" line (§4.1). `kgPerWeek`
+    /// is the server's `delta7dKgPerWeek`/`delta30dKgPerWeek` (already
+    /// kg/week — never re-divide by 7). Always shows exactly 1 decimal in
+    /// both systems (`"−1.0"`, not `"−1"`; `"0.0"`, not `"0"`) so a
+    /// near-zero rate (e.g. -0.04 kg/wk) reads as the honest "0.0" it
+    /// rounds to rather than collapsing to a bare, unit-less-looking "0",
+    /// and a whole-number rate ("−1.0") stays visually consistent with
+    /// every other rate on the same line. The sign is derived from the
+    /// ROUNDED value (never the raw one) so a value that rounds to zero
+    /// (e.g. -0.04) never prints as "−0.0" — and is written explicitly
+    /// (U+2212 minus, matching the rest of the trend UI) rather than
+    /// relying on the formatter's default hyphen-minus. Zero gets no sign.
+    static func weightDelta(kgPerWeek: Double, _ system: UnitSystem) -> String {
+        let value = system == .metric ? kgPerWeek : UnitConvert.kgToLb(kgPerWeek)
+        let rounded = roundedToOneDecimal(value)
+        let sign = rounded < 0 ? "\u{2212}" : (rounded > 0 ? "+" : "")
+        let magnitude = String(format: "%.1f", abs(rounded))
+        return "\(sign)\(magnitude) \(system.weightUnit)/wk"
+    }
+
+    /// Same sign/rounding as `weightDelta`, without the repeated unit
+    /// letters — for copy that already states the unit once nearby, e.g.
+    /// the weigh-in toast's "Logged · trend 82.1 kg (−0.4/wk)".
+    static func weightDeltaCompact(kgPerWeek: Double, _ system: UnitSystem) -> String {
+        let value = system == .metric ? kgPerWeek : UnitConvert.kgToLb(kgPerWeek)
+        let rounded = roundedToOneDecimal(value)
+        let sign = rounded < 0 ? "\u{2212}" : (rounded > 0 ? "+" : "")
+        let magnitude = String(format: "%.1f", abs(rounded))
+        return "\(sign)\(magnitude)/wk"
+    }
+
+    /// Rounds to 1 decimal place, normalizing `-0.0` to `0.0` first — Swift's
+    /// `.rounded()` preserves the sign of a value that rounds to zero (e.g.
+    /// `(-0.4).rounded()` is `-0.0`, not `0.0`), and `-0.0 < 0` is `false`
+    /// but `String(format: "%.1f", -0.0)` still prints `"-0.0"`. Comparing
+    /// `-0.0 == 0` is `true` (IEEE 754), so reassigning the literal `0`
+    /// (positive zero) here is what actually clears the sign bit.
+    private static func roundedToOneDecimal(_ value: Double) -> Double {
+        let rounded = (value * 10).rounded() / 10
+        return rounded == 0 ? 0 : rounded
+    }
+
     // MARK: - Height
 
     /// Metric reproduces `"168 cm"`; imperial reproduces `"5' 9\""`.

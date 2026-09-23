@@ -164,12 +164,69 @@ final class TodayViewModel: ObservableObject {
     // Top-center toast host (see `.toast(message:)`).
     @Published var toastMessage: String? = nil
 
+    /// Bottom-pinned actionable confirmations (§5.5) — used by the weigh-in
+    /// flow's "Logged 82.4 kg" toast. `TodayView` attaches
+    /// `.actionToastHost(vm.actionToast)`.
+    let actionToast = ActionToastPresenter()
+
     // Pending facts banner
     @Published var pendingFacts: [PendingFact] = []
 
     // Calibration state — driven from /api/today
     @Published var calibrationStatus: String? = nil
     @Published var calibrationProgress: Double = 0 // 0...1 based on min(dataDays) / 14
+
+    // MARK: - Weight-loss hero (§4.1, §5.3)
+
+    /// "weight_loss" | "muscle" | "endurance" | "general" — from
+    /// `/api/today`'s `dietBudget.goal`. Defaults to "general" (never shows
+    /// the weight_loss hero) until the first load resolves.
+    @Published private(set) var goal: String = "general"
+    var isWeightLossGoal: Bool { goal == "weight_loss" }
+
+    /// `nil` until `/api/weight-log` resolves (or on a fail-soft failure —
+    /// same fail-soft convention as `pendingFacts`/`calibration`). Never
+    /// fabricated: the hero shows the honest "appears after 3 weigh-ins"
+    /// placeholder via `WeightHeroLogic` when `trend.established` is false.
+    @Published private(set) var weightLog: WeightLogResponse? = nil
+
+    /// Today's HealthKit scale reading (kg), if any — drives the weigh-in
+    /// chip's 1-tap "Confirm" state (§5.3).
+    @Published private(set) var healthKitBodyMassTodayKg: Double? = nil
+
+    @Published var showWeighInSheet = false
+    @Published private(set) var isLoggingWeight = false
+
+    var weighInChip: WeightHeroLogic.WeighInChip {
+        WeightHeroLogic.weighInChip(healthKitTodayKg: healthKitBodyMassTodayKg)
+    }
+
+    /// The single "Next up" row shown in place of the full plan list (owner
+    /// decision, 2026-09-23) — for every goal, not just weight_loss. `nil`
+    /// once every remaining item has passed `WeightHeroLogic
+    /// .nextUpGraceMinutes` ago — screenshot-review fix, 2026-09-23 (a
+    /// not-done 7am breakfast is not "next up" at 3pm).
+    var nextUpItem: PlanItem? {
+        WeightHeroLogic.nextUpItem(from: planItems, nowMinutes: Self.minutesSinceMidnight(Date()))
+    }
+
+    /// New-user first-run checklist (§4.2) replaces the three biometric
+    /// tiles until real data exists.
+    var showFirstRunChecklist: Bool {
+        WeightHeroLogic.shouldShowFirstRunChecklist(
+            calibrationStatus: calibrationStatus,
+            hasAnyBiometric: hrv.value != nil || sleep.hours != nil || restingHR.bpm != nil
+        )
+    }
+
+    /// The checklist's third row (§4.2: weigh-in for weight_loss/general,
+    /// first workout for muscle/endurance).
+    var showFirstRunChecklistSecondItemDone: Bool {
+        if goal == "muscle" || goal == "endurance" {
+            return planItems.contains { $0.kind == .move && $0.status == .done }
+        }
+        return !(weightLog?.entries.isEmpty ?? true)
+    }
 
     // MARK: - Dependencies
 
@@ -269,8 +326,12 @@ final class TodayViewModel: ObservableObject {
         async let todayOutcome = loadTodayResponse()
         async let factsTask: () = loadPendingFacts()
         async let planResult = loadPlanResponse()
+        async let weightLogTask: () = loadWeightLog()
+        async let bodyMassTask: () = loadHealthKitBodyMassToday()
+        async let unitPrefTask: () = syncUnitPreference()
 
-        let (_, today, _, plan) = await (healthTask, todayOutcome, factsTask, planResult)
+        let (_, today, _, plan, _, _, _) =
+            await (healthTask, todayOutcome, factsTask, planResult, weightLogTask, bodyMassTask, unitPrefTask)
 
         switch today {
         case .success(let response):
@@ -553,6 +614,7 @@ final class TodayViewModel: ObservableObject {
 
         // Diet budget
         let db = r.dietBudget
+        goal = db.goal ?? "general"
         // Macro targets are now server-authoritative (user override or auto-calc
         // from goal). Fall back to a 30/40/30 split only if an older backend
         // doesn't send them yet.
@@ -925,6 +987,96 @@ final class TodayViewModel: ObservableObject {
         } catch {
             print("[Vital] fetchPendingFacts failed: \(error.localizedDescription)")
         }
+    }
+
+    // MARK: - Weight-loss hero loaders (fail-soft — same convention as loadPendingFacts)
+
+    private func loadWeightLog() async {
+        do {
+            weightLog = try await apiClient.fetchWeightLog()
+        } catch {
+            print("[Vital] fetchWeightLog failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func loadHealthKitBodyMassToday() async {
+        healthKitBodyMassTodayKg = await healthKit.fetchTodayBodyMass()
+    }
+
+    /// Mirrors `ProfileViewModel.load()` / `TrendsViewModel.loadSummary()`'s
+    /// unit-preference sync exactly (see `UnitPreference.applyServerValue`'s
+    /// doc comment) — Today now formats weight itself (the hero), so it must
+    /// resolve the server's `unitSystem` the same way those screens do
+    /// instead of only ever seeing the device-locale default.
+    private func syncUnitPreference() async {
+        do {
+            let response = try await apiClient.fetchProfile()
+            if UnitPreference.shared.applyServerValue(response.unitSystem) {
+                try? await apiClient.updateProfile(unitSystem: UnitPreference.shared.current.rawValue)
+            }
+        } catch {
+            print("[Vital] syncUnitPreference failed: \(error.localizedDescription)")
+        }
+    }
+
+    // MARK: - Weigh-in (§5.3)
+
+    /// Logs a manual weigh-in from the sheet (2 taps) and refreshes the
+    /// hero's trend. `weightInUserUnits` is in `system`'s unit — never
+    /// pre-converted by the caller. Optimistic UI is not attempted here
+    /// (unlike plan mutations): the trend line and rate genuinely change
+    /// server-side (EWMA), so the toast and chip wait for the real refreshed
+    /// numbers rather than showing a value that might not match what
+    /// `loadWeightLog()` returns next.
+    func logManualWeighIn(weightInUserUnits: Double, system: UnitSystem) async {
+        let unitWire = system == .metric ? "kg" : "lbs"
+        await performWeighIn(weight: weightInUserUnits, unitWire: unitWire, system: system)
+    }
+
+    /// 1-tap confirm of today's HealthKit scale reading (§5.3) — always sent
+    /// in kg (HealthKit's native unit; no lossy round-trip through the
+    /// user's display unit), but the confirmation toast still formats in
+    /// whatever the user's actual unit preference is.
+    func confirmHealthKitWeight(kg: Double) async {
+        await performWeighIn(weight: kg, unitWire: "kg", system: UnitPreference.shared.current)
+    }
+
+    private func performWeighIn(weight: Double, unitWire: String, system: UnitSystem) async {
+        guard !isLoggingWeight else { return }
+        isLoggingWeight = true
+        defer { isLoggingWeight = false }
+
+        let today = TodayViewModel.localDateKey(Date())
+
+        do {
+            try await apiClient.logWeight(weight: weight, unit: unitWire, date: today)
+            await loadWeightLog()
+            showWeighInSheet = false
+            // No Undo: there is no delete-a-weigh-in endpoint (§5.5's Undo
+            // requires a real reversal path — see the task brief). The
+            // success haptic still fires (`ActionToastHostModifier`'s
+            // `.sensoryFeedback(Theme.Haptics.success, ...)`).
+            //
+            // Dietitian review (2026-09-23): the toast leads with the
+            // refreshed TREND, never the raw number just typed/confirmed —
+            // see `WeightHeroLogic.weighInToastMessage`.
+            actionToast.show(message: WeightHeroLogic.weighInToastMessage(
+                entries: weightLog?.entries ?? [],
+                trend: weightLog?.trend,
+                system: system
+            ))
+        } catch {
+            toastMessage = "Couldn't save — try again"
+            print("[Vital] logWeight failed: \(error.localizedDescription)")
+        }
+    }
+
+    private static func localDateKey(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = .current
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
     }
 
     private func mealIcon(for name: String) -> String {

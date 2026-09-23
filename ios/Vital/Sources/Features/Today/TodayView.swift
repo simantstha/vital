@@ -23,14 +23,22 @@ struct TodayView: View {
     @State private var selectedMeal: MealRow? = nil
     @State private var mealDetailPlanItemID: PlanItem.ID? = nil
     @State private var showNotifications = false
+    /// "See full plan ›" from the Next-up row — opens the existing
+    /// `PlanTimelineView` in a sheet (owner decision, 2026-09-23).
+    @State private var showFullPlan = false
 
     /// Shared with the bell badge here and the Today/RootTabView push route —
     /// see `NotificationsViewModel.shared`.
     @ObservedObject private var notificationsVM = NotificationsViewModel.shared
 
+    /// Backs the weight_loss hero's trend/weigh-in formatting (§4.1, §5.3) —
+    /// never hardcode kg/lb, always read the live preference.
+    @ObservedObject private var unitPref = UnitPreference.shared
+
     /// The voice FAB must never overlap an open sheet.
     private var isAnySheetOpen: Bool {
-        showLogSheet || showAddItem || actionsItem != nil || selectedMeal != nil || showNotifications
+        showLogSheet || showAddItem || actionsItem != nil || selectedMeal != nil
+            || showNotifications || showFullPlan || vm.showWeighInSheet
     }
 
     var body: some View {
@@ -60,41 +68,80 @@ struct TodayView: View {
                         Group {
                             calibrationCard
                             pendingFactsBanner
-                            // Guarded here (not just inside the view) so an
-                            // empty payload doesn't leave a floating
-                            // `Theme.Spacing.xl` gap in this VStack where the
-                            // card/bubble would have been — a custom View's
-                            // internal "render nothing" choice isn't visible
-                            // to the parent stack's spacing calculation.
-                            if !vm.planItems.isEmpty {
-                                PlanTimelineView(
-                                    items: vm.planItems,
-                                    onItemTap: { actionsItem = $0 },
-                                    onLogItem: { item in
-                                        vm.setStatus(id: item.id, .done)
-                                        vm.toastMessage = "Logged — nice work"
-                                    },
-                                    onOpenAdd: { showAddItem = true },
-                                    onSyncCalendar: vm.calendarSyncState == .notDetermined
-                                        ? { Task { await vm.syncCalendar() } }
-                                        : nil
+
+                            // Goal hero (§4.1) — weight_loss only for T1; other
+                            // goals keep their existing Today content below
+                            // (T2 will add their own heroes).
+                            if vm.isWeightLossGoal {
+                                WeightHeroView(
+                                    kcalRemaining: vm.diet.kcalRemaining,
+                                    kcalTarget: vm.diet.kcalTarget,
+                                    kcalFraction: vm.diet.kcalFraction,
+                                    proteinHave: vm.diet.protein.current,
+                                    proteinGoal: vm.diet.protein.target,
+                                    trend: vm.weightLog?.trend,
+                                    entries: vm.weightLog?.entries ?? [],
+                                    system: unitPref.current,
+                                    chip: vm.weighInChip,
+                                    onChipTap: { onWeighInChipTap() },
+                                    isLogging: vm.isLoggingWeight,
+                                    onOpenDiet: { showLogSheet = true }
                                 )
                             }
+
+                            // "Next up" replaces the full plan list for every
+                            // goal (owner decision, 2026-09-23) — guarded here
+                            // (not just inside the view) so an empty payload
+                            // doesn't leave a floating `Theme.Spacing.xl` gap.
+                            // Shown whenever there's ANY plan item, not only
+                            // when one is upcoming (screenshot-review fix,
+                            // 2026-09-23) — "See full plan" must stay
+                            // reachable even once everything remaining today
+                            // has already passed `vm.nextUpItem`'s grace
+                            // window.
+                            if !vm.planItems.isEmpty {
+                                NextUpRowView(
+                                    item: vm.nextUpItem,
+                                    onTap: { actionsItem = $0 },
+                                    onSeeFullPlan: { showFullPlan = true }
+                                )
+                            }
+
                             if !CoachBubble.isEmpty(vm.coachInsight) {
                                 CoachBubble(message: vm.coachInsight)
                             }
                             if vm.showHealthKitRecoveryBanner {
                                 healthKitRecoveryBanner
                             }
-                            metricsGrid
-                            FuelStripView(
-                                kcalRemaining: vm.diet.kcalRemaining,
-                                proteinHave: vm.diet.protein.current,
-                                proteinGoal: vm.diet.protein.target,
-                                consumedSource: vm.diet.consumedSource,
-                                consumedSourceName: vm.diet.consumedSourceName,
-                                onOpen: { showLogSheet = true }
-                            )
+
+                            // New-user first-run checklist (§4.2) replaces the
+                            // three empty biometric tiles until real data exists.
+                            if vm.showFirstRunChecklist {
+                                FirstRunChecklistView(
+                                    goal: vm.goal,
+                                    mealLogged: vm.diet.kcalConsumed > 0,
+                                    secondItemLogged: vm.showFirstRunChecklistSecondItemDone,
+                                    healthConnected: HealthKitManager.didRequestAuthorization && !vm.showHealthKitRecoveryBanner,
+                                    onLogMeal: { showLogSheet = true },
+                                    onLogSecondItem: { onChecklistSecondItemTap() },
+                                    onConnectHealth: { _ = HealthKitManager.openHealthApp() }
+                                )
+                            } else {
+                                metricsGrid
+                            }
+
+                            // FuelStripView is hidden for weight_loss — the
+                            // hero above already covers calories (§4).
+                            if !vm.isWeightLossGoal {
+                                FuelStripView(
+                                    kcalRemaining: vm.diet.kcalRemaining,
+                                    proteinHave: vm.diet.protein.current,
+                                    proteinGoal: vm.diet.protein.target,
+                                    consumedSource: vm.diet.consumedSource,
+                                    consumedSourceName: vm.diet.consumedSourceName,
+                                    onOpen: { showLogSheet = true }
+                                )
+                            }
                             if let warning = vm.diet.lowEnergyWarning {
                                 CautionBanner(
                                     title: CautionBanner.lowEnergyTitle(appliedFloor: warning.appliedFloor),
@@ -133,6 +180,41 @@ struct TodayView: View {
             }
         }
         .toast(message: $vm.toastMessage)
+        .actionToastHost(vm.actionToast)
+        .sheet(isPresented: $vm.showWeighInSheet) {
+            VitalSheet(detents: [.height(340)]) {
+                WeighInSheet(
+                    prefillKg: WeightHeroLogic.lastWeightKg(entries: vm.weightLog?.entries ?? []),
+                    currentTrendKg: vm.weightLog?.trend.days.last?.trendKg,
+                    system: unitPref.current,
+                    isSaving: vm.isLoggingWeight,
+                    onSave: { value in
+                        Task { await vm.logManualWeighIn(weightInUserUnits: value, system: unitPref.current) }
+                    },
+                    onCancel: { vm.showWeighInSheet = false }
+                )
+            }
+        }
+        .sheet(isPresented: $showFullPlan) {
+            VitalSheet(detents: [.large]) {
+                ScrollView {
+                    PlanTimelineView(
+                        items: vm.planItems,
+                        onItemTap: { showFullPlan = false; actionsItem = $0 },
+                        onLogItem: { item in
+                            vm.setStatus(id: item.id, .done)
+                            vm.toastMessage = "Logged — nice work"
+                        },
+                        onOpenAdd: { showFullPlan = false; showAddItem = true },
+                        onSyncCalendar: vm.calendarSyncState == .notDetermined
+                            ? { Task { await vm.syncCalendar() } }
+                            : nil
+                    )
+                    .padding(.horizontal, Theme.Spacing.xl)
+                    .padding(.bottom, Theme.Spacing.xl)
+                }
+            }
+        }
         .sheet(isPresented: $showLogSheet) {
             VitalSheet(detents: [.large]) {
                 DietSheetView(
@@ -202,6 +284,29 @@ struct TodayView: View {
 // MARK: - Private sub-views
 
 private extension TodayView {
+
+    // ── Weigh-in chip (§5.3) ────────────────────────────────────────────────
+
+    /// One-tap confirm (HealthKit reading present) logs directly; otherwise
+    /// opens the 2-tap manual sheet.
+    func onWeighInChipTap() {
+        let chip = vm.weighInChip
+        if chip.isOneTapConfirm, let kg = chip.confirmValueKg {
+            Task { await vm.confirmHealthKitWeight(kg: kg) }
+        } else {
+            vm.showWeighInSheet = true
+        }
+    }
+
+    // ── First-run checklist (§4.2) ──────────────────────────────────────────
+
+    func onChecklistSecondItemTap() {
+        if vm.goal == "muscle" || vm.goal == "endurance" {
+            showAddItem = true
+        } else {
+            vm.showWeighInSheet = true
+        }
+    }
 
     // ── Pending-fact banner ──────────────────────────────────────────────────
 
@@ -442,8 +547,9 @@ private extension TodayView {
 
 // MARK: - Supporting views (file-private)
 
-/// A thin rounded progress bar.
-private struct VitalProgressBar: View {
+/// A thin rounded progress bar. Not `private` — reused by `WeightHeroView`'s
+/// kcal-remaining bar.
+struct VitalProgressBar: View {
     let fraction: Double
     var tint: Color = Theme.Colors.accent
     var height: CGFloat = 6

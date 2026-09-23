@@ -685,7 +685,7 @@ private struct CalibratingStepView: View {
                         .multilineTextAlignment(.center)
                 }
 
-                VitalProgressBar(fraction: backfillCoordinator.progress)
+                OnboardingProgressBar(fraction: backfillCoordinator.progress)
                     .frame(width: 220)
             }
             .padding(.horizontal, Theme.Spacing.xl)
@@ -713,8 +713,10 @@ private struct CalibratingStepView: View {
 }
 
 /// Local copy of TodayView's thin progress bar — kept file-private here to
-/// avoid reaching into TodayView's private supporting types.
-private struct VitalProgressBar: View {
+/// avoid reaching into TodayView's private supporting types. Named
+/// distinctly from `TodayView.VitalProgressBar` (which became internal for
+/// `WeightHeroView` to reuse) to avoid a top-level redeclaration collision.
+private struct OnboardingProgressBar: View {
     let fraction: Double
     var height: CGFloat = 6
 
