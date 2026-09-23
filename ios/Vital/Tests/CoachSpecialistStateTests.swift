@@ -635,7 +635,8 @@ final class CoachSpecialistStateTests: XCTestCase {
         viewModel.refreshIfStale()
 
         XCTAssertEqual(viewModel.rows, rowsBefore)
-        XCTAssertFalse(viewModel.transcriber.isRecording)
+        XCTAssertFalse(viewModel.voiceController.isRecording)
+        XCTAssertEqual(viewModel.voiceController.state, .idle)
         XCTAssertEqual(api.restorationRequestCount, 1)
 
         api.finishHeldAction()
