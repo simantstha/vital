@@ -107,7 +107,12 @@ private extension TrendsView {
         }
     }
 
+    /// Omits the metric count while the grid load has failed — the count
+    /// comes from `vm.loaded`, which is empty on a failed load, so showing
+    /// "0 metrics tracked" next to the error card would assert something we
+    /// don't actually know (the count isn't 0, we just couldn't fetch it).
     var subtitle: String {
+        guard vm.errorMessage == nil else { return "Last 30 days" }
         let count = visibleMetricCount
         return "Last 30 days · \(count) metric\(count == 1 ? "" : "s") tracked"
     }
@@ -149,6 +154,12 @@ private extension TrendsView {
         if vm.isLoading && vm.loaded.isEmpty {
             loadingGrid
                 .motionTransition(.fade)
+        } else if vm.errorMessage != nil {
+            // The `ErrorCard` above already covers this state with a Retry
+            // action — don't also claim "no trends yet" underneath it. That
+            // copy means "you have no data", which is a different, false
+            // statement when the truth is "we couldn't load your data".
+            EmptyView()
         } else if sections.isEmpty {
             EmptyStateView(
                 icon: "chart.xyaxis.line",
