@@ -14,8 +14,6 @@ struct CoachView: View {
     @State private var didAttemptDeniedMic = false
     @State private var isScrolledNearBottom = true
     @State private var scrollPhase: ScrollPhase = .idle
-    @State private var specialistGlowExpanded = false
-    @State private var pendingConfirmedAction: SpecialistAction?
     @FocusState private var composerFocused: Bool
 
     /// `mode` is forwarded to every `/api/coach` call via `CoachViewModel`.
@@ -48,8 +46,6 @@ struct CoachView: View {
                 inputBar
             }
 
-            specialistEdgeGlow
-
             #if DEBUG
             voiceTurnHUD
             #endif
@@ -68,59 +64,33 @@ struct CoachView: View {
                 vm.refreshIfStale()
             }
         }
-        .onChange(of: vm.activePersona.id) { _, personaID in
-            specialistGlowExpanded = false
-            guard personaID != "vital", !reduceMotion else { return }
-            Task { @MainActor in
-                await Task.yield()
-                specialistGlowExpanded = true
-            }
-        }
-        .confirmationDialog(
-            confirmationTitle,
-            isPresented: confirmationIsPresented,
-            titleVisibility: .visible
-        ) {
-            if let action = pendingConfirmedAction {
-                Button(confirmationButtonTitle(for: action)) {
-                    vm.performSpecialistAction(action)
-                    pendingConfirmedAction = nil
-                }
-            }
-            Button("Cancel", role: .cancel) {
-                pendingConfirmedAction = nil
-            }
-        }
     }
 
     // MARK: - Navigation bar
 
+    /// D4 (one coach voice): Vital is always the speaker in the nav bar, even
+    /// mid-specialist-consultation — no more persona header switch. A
+    /// specialist's contribution surfaces only as a small footer under the
+    /// bubble it produced (see `SpecialistFooterView`).
     private var navigationBar: some View {
-        let header = CoachViewPresentation.header(for: vm.activePersona)
-        let isSpecialist = vm.activePersona.id != "vital"
-
-        return HStack(spacing: Theme.Spacing.md) {
+        HStack(spacing: Theme.Spacing.md) {
             // Avatar
             Circle()
-                .fill((isSpecialist ? Theme.Colors.specialistAccent : Theme.Colors.accent).opacity(0.15))
+                .fill(Theme.Colors.accent.opacity(0.15))
                 .frame(width: 36, height: 36)
                 .overlay(
-                    Image(systemName: header.iconSystemName)
+                    Image(systemName: "message.fill")
                         .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(isSpecialist ? Theme.Colors.specialistAccent : Theme.Colors.accentContent)
-                )
-                .shadow(
-                    color: isSpecialist ? Theme.Colors.specialistEdgeGlow.opacity(0.45) : .clear,
-                    radius: 9
+                        .foregroundStyle(Theme.Colors.accentContent)
                 )
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(header.title)
+                Text("Coach")
                     .font(Theme.Typography.titleMedium)
                     .foregroundStyle(Theme.Colors.textPrimary)
-                Text(header.subtitle)
+                Text("Vital AI")
                     .font(Theme.Typography.labelSmall)
-                    .foregroundStyle(isSpecialist ? Theme.Colors.specialistAccent : Theme.Colors.textSecondary)
+                    .foregroundStyle(Theme.Colors.textSecondary)
             }
 
             Spacer()
@@ -152,24 +122,15 @@ struct CoachView: View {
                     ForEach(vm.rows) { row in
                         switch row {
                         case .message(let msg):
-                            MessageBubbleView(message: msg)
-                                .id(row.id)
+                            MessageBubbleView(
+                                message: msg,
+                                specialistFooter: CoachViewPresentation.specialistFooter(for: msg.specialistMetadata)
+                            )
+                            .id(row.id)
                         case .assistantTurn(let turn):
                             AssistantTurnView(turn: turn)
                                 .id(row.id)
                         }
-                    }
-
-                    if let card = vm.pendingHandoffCard {
-                        SpecialistHandoffCardView(
-                            presentation: CoachViewPresentation.handoffCard(
-                                for: card,
-                                isPerformingAction: vm.isPerformingSpecialistAction
-                            ),
-                            card: card,
-                            perform: performSpecialistAction
-                        )
-                        .id("specialist-handoff-\(card.sessionId)-\(card.phase.rawValue)")
                     }
 
                     if vm.showTypingIndicator {
@@ -239,9 +200,6 @@ struct CoachView: View {
             .onChange(of: vm.isOpening) {
                 scrollToBottomIfPinned(proxy)
             }
-            .onChange(of: vm.pendingHandoffCard) {
-                scrollToBottomIfPinned(proxy)
-            }
         }
     }
 
@@ -260,21 +218,6 @@ struct CoachView: View {
     private func scrollToBottomDuringReveal(_ proxy: ScrollViewProxy) {
         guard isScrolledNearBottom else { return }
         proxy.scrollTo("bottom", anchor: .bottom)
-    }
-
-    @ViewBuilder
-    private var specialistEdgeGlow: some View {
-        if vm.activePersona.id != "vital" {
-            RoundedRectangle(cornerRadius: Theme.Radius.xl, style: .continuous)
-                .stroke(Theme.Colors.specialistEdgeGlow.opacity(0.72), lineWidth: 1)
-                .shadow(color: Theme.Colors.specialistEdgeGlow.opacity(0.55), radius: 10)
-                .padding(2)
-                .opacity(reduceMotion ? 0.58 : (specialistGlowExpanded ? 0.9 : 0.42))
-                .ignoresSafeArea()
-                .allowsHitTesting(false)
-                .onAppear { specialistGlowExpanded = true }
-                .ambient(Theme.Motion.breathe, value: specialistGlowExpanded)
-        }
     }
 
     #if DEBUG
@@ -324,43 +267,6 @@ struct CoachView: View {
         }
     }
     #endif
-
-    private func performSpecialistAction(_ action: CoachViewPresentation.CardAction) {
-        guard action.isEnabled else { return }
-        if action.requiresConfirmation {
-            pendingConfirmedAction = action.action
-        } else {
-            vm.performSpecialistAction(action.action)
-        }
-    }
-
-    private var confirmationIsPresented: Binding<Bool> {
-        Binding(
-            get: { pendingConfirmedAction != nil },
-            set: { if !$0 { pendingConfirmedAction = nil } }
-        )
-    }
-
-    private var confirmationTitle: String {
-        guard let action = pendingConfirmedAction,
-              let card = vm.pendingHandoffCard
-        else { return "Confirm action" }
-        let presentation = CoachViewPresentation.handoffCard(
-            for: card,
-            isPerformingAction: vm.isPerformingSpecialistAction
-        )
-        return [presentation.primaryAction, presentation.secondaryAction]
-            .first(where: { $0.action == action })?.confirmationTitle ?? "Confirm action"
-    }
-
-    private func confirmationButtonTitle(for action: SpecialistAction) -> String {
-        switch action {
-        case .acceptReturn: return "Return to Vital"
-        case .declineReturn: return "Stay with Running Coach"
-        case .acceptHandoff: return "Bring them in"
-        case .declineHandoff: return "Not now"
-        }
-    }
 
     // MARK: - Input bar
 
@@ -466,10 +372,10 @@ struct CoachView: View {
         }
     }
 
-    /// Static conversation starters shown above the composer only until the
-    /// user sends their first message this session (no `.message` row with
-    /// role `.user` in `vm.rows` yet — cheaper than tracking a separate flag
-    /// since `rows` is already the source of truth for the transcript).
+    /// Goal-aware conversation starters shown above the composer only until
+    /// the user sends their first message this session (no `.message` row
+    /// with role `.user` in `vm.rows` yet — cheaper than tracking a separate
+    /// flag since `rows` is already the source of truth for the transcript).
     private var showSuggestionChips: Bool {
         !vm.rows.contains { row in
             if case .message(let msg) = row, msg.role == .user { return true }
@@ -477,17 +383,17 @@ struct CoachView: View {
         }
     }
 
-    private static let suggestionPrompts = [
-        "How am I doing today?",
-        "What should I eat for dinner?",
-        "How was my sleep?",
-        "Plan tomorrow's run",
-    ]
+    /// Roadmap 1.1 / ux-spec-v4 §10 row P1: Vital is a general fitness coach,
+    /// not a marathon app — starter chips are picked from the user's diet
+    /// goal (`CoachStarterChips`) instead of a fixed marathon-flavored list.
+    private var suggestionPrompts: [String] {
+        CoachStarterChips.chips(for: vm.userGoal)
+    }
 
     private var suggestionChipsRow: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: Theme.Spacing.sm) {
-                ForEach(Self.suggestionPrompts, id: \.self) { prompt in
+                ForEach(suggestionPrompts, id: \.self) { prompt in
                     Button {
                         vm.input = prompt
                         vm.send()
@@ -673,7 +579,7 @@ private struct AssistantTurnView: View {
         if !turn.text.isEmpty {
             MessageBubbleView(
                 message: ChatMessage(id: turn.id, role: .assistant, text: turn.text),
-                presentation: CoachViewPresentation.assistantTurn(for: turn),
+                specialistFooter: CoachViewPresentation.specialistFooter(for: turn.persona),
                 showsCaret: isStreamingTurn
             )
             .transition(.opacity)
@@ -685,7 +591,14 @@ private struct AssistantTurnView: View {
 
 private struct MessageBubbleView: View {
     let message: ChatMessage
-    var presentation: CoachViewPresentation.Bubble? = nil
+    /// `nil` for a user/system message, or a non-Vital assistant message with
+    /// no specialist contribution. Callers derive this themselves rather than
+    /// the view reaching for `message.specialistMetadata` on its own — a
+    /// still-streaming `AssistantTurn` carries its persona separately (that
+    /// field is only populated on the persisted/restored `ChatMessage`), so
+    /// `AssistantTurnView` and the plain-message row each compute it their
+    /// own way (see `CoachViewPresentation.specialistFooter(for:)`).
+    var specialistFooter: CoachViewPresentation.SpecialistFooter? = nil
     var showsCaret: Bool = false
 
     var body: some View {
@@ -696,33 +609,22 @@ private struct MessageBubbleView: View {
                 if message.role == .user { Spacer(minLength: 48) }
 
                 VStack(alignment: message.role == .user ? .trailing : .leading, spacing: Theme.Spacing.xs) {
-                    if let label = resolvedPresentation.bubbleLabel {
-                        Text(label)
-                            .font(.system(size: 10, weight: .bold))
-                            .tracking(0.9)
-                            .foregroundStyle(Theme.Colors.specialistAccent)
-                            .accessibilityLabel(resolvedPresentation.speakerLabel)
-                    }
-
                     bubbleContent
                         .font(Theme.Typography.bodyMedium)
                         .foregroundStyle(Theme.Colors.textPrimary)
                         .padding(.horizontal, Theme.Spacing.lg)
                         .padding(.vertical, Theme.Spacing.md)
-                        .bubbleSurface(
-                            isUser: message.role == .user,
-                            isSpecialist: resolvedPresentation.bubbleLabel != nil
-                        )
+                        .bubbleSurface(isUser: message.role == .user)
                         .fixedSize(horizontal: false, vertical: true)
+
+                    if let specialistFooter {
+                        SpecialistFooterView(footer: specialistFooter)
+                    }
                 }
 
                 if message.role == .assistant { Spacer(minLength: 48) }
             }
         }
-    }
-
-    private var resolvedPresentation: CoachViewPresentation.Bubble {
-        presentation ?? CoachViewPresentation.messageBubble(for: message)
     }
 
     /// User bubbles are plain single-line-ish text; the coach reply renders
@@ -738,26 +640,18 @@ private struct MessageBubbleView: View {
     }
 }
 
-/// Chat-bubble surface: a white v3 card for the user, pale-lime for the
-/// default "vital" persona, and unchanged Liquid Glass for a specialist.
+/// D4: one coach voice — every assistant bubble reads as Vital, regardless of
+/// whether a specialist contributed (that's the footer's job now, not the
+/// bubble surface). A white v3 card for the user, pale-lime for the coach.
 private extension View {
     @ViewBuilder
-    func bubbleSurface(isUser: Bool, isSpecialist: Bool) -> some View {
+    func bubbleSurface(isUser: Bool) -> some View {
         if isUser {
             background(
                 RoundedRectangle(cornerRadius: Theme.Radius.xl, style: .continuous)
                     .fill(Theme.Colors.card)
             )
             .shadow(color: Theme.Colors.cardShadow, radius: 1, x: 0, y: 1)
-        } else if isSpecialist {
-            glassEffect(
-                .regular.tint(Theme.Colors.specialistAccent.opacity(0.10)),
-                in: .rect(cornerRadius: Theme.Radius.lg, style: .continuous)
-            )
-            .overlay {
-                RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
-                    .stroke(Theme.Colors.specialistAccent.opacity(0.42), lineWidth: 0.75)
-            }
         } else {
             background(
                 RoundedRectangle(cornerRadius: Theme.Radius.xl, style: .continuous)
@@ -767,81 +661,26 @@ private extension View {
     }
 }
 
-// MARK: - Specialist handoff UI
+// MARK: - Specialist attribution footer
 
-private struct SpecialistHandoffCardView: View {
-    let presentation: CoachViewPresentation.HandoffCard
-    let card: CoachHandoffCard
-    let perform: (CoachViewPresentation.CardAction) -> Void
+/// D4 (one coach voice): the specialist handoff cards and "Stay with …"
+/// confirmations are gone — a specialist's contribution to a Vital reply now
+/// surfaces only as this small, quiet footer under the bubble it produced.
+/// Never spoken by `CoachSpeaker` (only `AssistantTurn.text`/`ChatMessage.text`
+/// feed TTS), and not a tappable control — pure attribution.
+private struct SpecialistFooterView: View {
+    let footer: CoachViewPresentation.SpecialistFooter
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-            HStack(spacing: Theme.Spacing.sm) {
-                Image(systemName: card.specialist.icon)
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(Theme.Colors.specialistAccent)
-                    .frame(width: 32, height: 32)
-                    .background(Circle().fill(Theme.Colors.specialistAccent.opacity(0.14)))
-
-                VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
-                    Text(card.phase == .proposed ? "SPECIALIST HANDOFF" : "RETURN TO VITAL")
-                        .font(.system(size: 10, weight: .bold))
-                        .tracking(0.8)
-                        .foregroundStyle(Theme.Colors.specialistAccent)
-                    Text(card.specialist.title)
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(Theme.Colors.textPrimary)
-                }
-            }
-
-            Text(card.phase == .proposed ? card.objective : "Your running consultation is ready to wrap up.")
-                .font(Theme.Typography.bodyMedium)
-                .foregroundStyle(Theme.Colors.textSecondary)
-
-            if card.phase == .returnProposed,
-               let summary = card.returnSummary {
-                let sections = CoachViewPresentation.returnSummarySections(from: summary)
-                if !sections.isEmpty {
-                    VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-                        ForEach(sections, id: \.title) { section in
-                            VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
-                                Text(section.title.uppercased())
-                                    .font(.system(size: 9, weight: .bold))
-                                    .tracking(0.7)
-                                    .foregroundStyle(Theme.Colors.specialistAccent)
-                                Text(section.items.joined(separator: " • "))
-                                    .font(Theme.Typography.bodySmall)
-                                    .foregroundStyle(Theme.Colors.textPrimary)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                        }
-                    }
-                }
-            }
-
-            HStack(spacing: Theme.Spacing.sm) {
-                actionButton(presentation.primaryAction, prominent: true)
-                actionButton(presentation.secondaryAction, prominent: false)
-            }
+        HStack(spacing: Theme.Spacing.xs) {
+            Image(systemName: footer.icon)
+                .font(.system(size: 10, weight: .semibold))
+            Text(footer.text)
         }
-        .padding(Theme.Spacing.lg)
-        .specialistCardSurface()
-        .accessibilityElement(children: .contain)
-    }
-
-    @ViewBuilder
-    private func actionButton(_ action: CoachViewPresentation.CardAction, prominent: Bool) -> some View {
-        if prominent {
-            Button(action.title) { perform(action) }
-                .buttonStyle(.glassProminent)
-                .tint(Theme.Colors.specialistAccent)
-                .disabled(!action.isEnabled)
-        } else {
-            Button(action.title) { perform(action) }
-                .buttonStyle(.glass)
-                .tint(Theme.Colors.textSecondary)
-                .disabled(!action.isEnabled)
-        }
+        .font(Theme.Typography.labelSmall)
+        .foregroundStyle(Theme.Colors.textTertiary)
+        .padding(.horizontal, Theme.Spacing.xs)
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -871,111 +710,15 @@ private struct JoinedSystemRowView: View {
     }
 }
 
-private extension View {
-    func specialistCardSurface() -> some View {
-        glassEffect(
-            .regular.tint(Theme.Colors.specialistAccent.opacity(0.10)),
-            in: .rect(cornerRadius: Theme.Radius.xl, style: .continuous)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: Theme.Radius.xl, style: .continuous)
-                .stroke(Theme.Colors.specialistAccent.opacity(0.48), lineWidth: 0.75)
-        )
-    }
-}
-
 // MARK: - Specialist presentation contract
 
 enum CoachViewPresentation {
-    struct Header: Equatable {
-        let title: String
-        let subtitle: String
-        let iconSystemName: String
-        let accentHex: String
-    }
-
-    struct CardAction: Equatable {
-        let title: String
-        let action: SpecialistAction
-        let requiresConfirmation: Bool
-        let confirmationTitle: String?
-        let isEnabled: Bool
-    }
-
-    struct HandoffCard: Equatable {
-        let primaryAction: CardAction
-        let secondaryAction: CardAction
-    }
-
-    struct Bubble: Equatable {
-        let speakerLabel: String
-        let bubbleLabel: String?
-        let accentHex: String
-    }
-
-    struct ReturnSummarySection: Equatable {
-        let title: String
-        let items: [String]
-    }
-
-    static func header(for persona: CoachPersonaSnapshot) -> Header {
-        guard persona.id != "vital" else {
-            return Header(
-                title: "Coach",
-                subtitle: "Vital AI",
-                iconSystemName: "message.fill",
-                accentHex: "#C7F23B"
-            )
-        }
-        return Header(
-            title: persona.title,
-            subtitle: persona.subtitle,
-            iconSystemName: persona.icon,
-            accentHex: persona.accent
-        )
-    }
-
-    static func handoffCard(
-        for card: CoachHandoffCard,
-        isPerformingAction: Bool
-    ) -> HandoffCard {
-        let enabled = !isPerformingAction
-        switch card.phase {
-        case .proposed, .dismissed:
-            return HandoffCard(
-                primaryAction: CardAction(
-                    title: "Bring them in",
-                    action: .acceptHandoff,
-                    requiresConfirmation: false,
-                    confirmationTitle: nil,
-                    isEnabled: enabled
-                ),
-                secondaryAction: CardAction(
-                    title: "Not now",
-                    action: .declineHandoff,
-                    requiresConfirmation: false,
-                    confirmationTitle: nil,
-                    isEnabled: enabled
-                )
-            )
-        case .returnProposed:
-            return HandoffCard(
-                primaryAction: CardAction(
-                    title: "Return to Vital",
-                    action: .acceptReturn,
-                    requiresConfirmation: true,
-                    confirmationTitle: "Return to Vital?",
-                    isEnabled: enabled
-                ),
-                secondaryAction: CardAction(
-                    title: "Stay with Running Coach",
-                    action: .declineReturn,
-                    requiresConfirmation: true,
-                    confirmationTitle: "Stay with Running Coach?",
-                    isEnabled: enabled
-                )
-            )
-        }
+    /// D4 (one coach voice, specialists invisible behind it): a small footer
+    /// rendered under a coach bubble a specialist contributed to. Never a
+    /// speaker header, never a card — just quiet attribution.
+    struct SpecialistFooter: Equatable {
+        let icon: String
+        let text: String
     }
 
     static func joinedSystemRowText(for persona: CoachPersonaSnapshot) -> String {
@@ -986,50 +729,37 @@ enum CoachViewPresentation {
         dynamicTypeSize.isAccessibilitySize ? nil : 1
     }
 
-    static func returnSummarySections(from summary: JSONValue) -> [ReturnSummarySection] {
-        guard case .object(let object) = summary else { return [] }
-        let categories = [
-            (key: "outcomes", title: "Outcomes"),
-            (key: "decisions", title: "Decisions"),
-            (key: "recommendations", title: "Recommendations"),
-            (key: "unresolvedRisks", title: "Unresolved risks"),
-            (key: "nextSteps", title: "Next steps"),
-        ]
-
-        return categories.compactMap { category in
-            guard case .array(let values) = object[category.key] else { return nil }
-            let items = values.compactMap { value -> String? in
-                guard case .string(let text) = value else { return nil }
-                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                return trimmed.isEmpty ? nil : trimmed
-            }
-            guard !items.isEmpty else { return nil }
-            return ReturnSummarySection(title: category.title, items: items)
+    /// Maps a specialist id (`SpecialistMessageMetadata.specialistId` /
+    /// `CoachPersonaSnapshot.id`, from `lib/specialists/registry.ts`) to its
+    /// footer copy. Unknown ids (a future specialist this build doesn't know
+    /// about yet) fall back to a generic "Checked with a specialist" rather
+    /// than showing nothing.
+    static func specialistFooter(forSpecialistId id: String) -> SpecialistFooter {
+        switch id {
+        case "nutritionist":
+            return SpecialistFooter(icon: "fork.knife", text: "Checked with your nutritionist")
+        case "strength-coach":
+            return SpecialistFooter(icon: "dumbbell.fill", text: "Checked with your strength coach")
+        case "running-coach":
+            return SpecialistFooter(icon: "figure.run", text: "Checked with your running coach")
+        default:
+            return SpecialistFooter(icon: "person.fill.checkmark", text: "Checked with a specialist")
         }
     }
 
-    static func messageBubble(for message: ChatMessage) -> Bubble {
-        guard let metadata = message.specialistMetadata else {
-            return Bubble(speakerLabel: "Coach", bubbleLabel: nil, accentHex: "#C7F23B")
-        }
-        return Bubble(
-            speakerLabel: metadata.name,
-            bubbleLabel: metadata.name.uppercased(),
-            accentHex: metadata.accentColor
-        )
+    /// For a historical message restored from the server — `nil` when Vital
+    /// answered directly (no specialist contributed).
+    static func specialistFooter(for metadata: SpecialistMessageMetadata?) -> SpecialistFooter? {
+        guard let metadata else { return nil }
+        return specialistFooter(forSpecialistId: metadata.specialistId)
     }
 
-    static func assistantTurn(for turn: AssistantTurn) -> Bubble {
-        guard turn.persona.id != "vital" else {
-            return Bubble(speakerLabel: "Coach", bubbleLabel: nil, accentHex: "#C7F23B")
-        }
-        return Bubble(
-            speakerLabel: turn.persona.title,
-            bubbleLabel: turn.persona.title.uppercased(),
-            accentHex: turn.persona.accent
-        )
+    /// For a still-streaming (or just-finished) assistant turn — `nil` while
+    /// `turn.persona` is Vital itself.
+    static func specialistFooter(for persona: CoachPersonaSnapshot) -> SpecialistFooter? {
+        guard persona.id != "vital" else { return nil }
+        return specialistFooter(forSpecialistId: persona.id)
     }
-
 }
 
 // MARK: - Tool-call activity row

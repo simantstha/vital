@@ -2,6 +2,12 @@ import XCTest
 import SwiftUI
 @testable import Vital
 
+/// D4 (one coach voice, specialists invisible behind it — ux-spec-v4 §7,
+/// roadmap 1.1): the accept/decline handoff card and "Stay with …"
+/// confirmation UI these tests used to cover were removed from `CoachView`.
+/// What's left to test at this layer is the specialist attribution
+/// *footer* mapping (`CoachViewPresentation.specialistFooter`) and the
+/// unchanged "specialist joined" system row.
 @MainActor
 final class CoachSpecialistViewTests: XCTestCase {
     private let runningCoach = CoachPersonaSnapshot(
@@ -13,48 +19,69 @@ final class CoachSpecialistViewTests: XCTestCase {
         sessionId: "session-1"
     )
 
-    func testHeaderPresentationUsesVitalDefaultsAndRunningCoachPersona() {
-        let vital = CoachViewPresentation.header(for: .vital)
-        XCTAssertEqual(vital.title, "Coach")
-        XCTAssertEqual(vital.subtitle, "Vital AI")
-        XCTAssertEqual(vital.iconSystemName, "message.fill")
-        XCTAssertEqual(vital.accentHex, "#C7F23B")
+    private let nutritionist = CoachPersonaSnapshot(
+        id: "nutritionist",
+        title: "Nutritionist",
+        subtitle: "Vital Specialist",
+        accent: "#57CC99",
+        icon: "fork.knife",
+        sessionId: "session-2"
+    )
 
-        let specialist = CoachViewPresentation.header(for: runningCoach)
-        XCTAssertEqual(specialist.title, "Running Coach")
-        XCTAssertEqual(specialist.subtitle, "Vital Specialist")
-        XCTAssertEqual(specialist.iconSystemName, "figure.run")
-        XCTAssertEqual(specialist.accentHex, "#4CC9F0")
+    private let strengthCoach = CoachPersonaSnapshot(
+        id: "strength-coach",
+        title: "Strength Coach",
+        subtitle: "Vital Specialist",
+        accent: "#F4A261",
+        icon: "dumbbell.fill",
+        sessionId: "session-3"
+    )
+
+    func testFooterIsNilForVitalPersonaAndMetadata() {
+        XCTAssertNil(CoachViewPresentation.specialistFooter(for: CoachPersonaSnapshot.vital))
+        XCTAssertNil(CoachViewPresentation.specialistFooter(for: nil as SpecialistMessageMetadata?))
     }
 
-    func testProposedHandoffCardLabelsAndDuplicateActionDisabledState() {
-        let card = proposedCard()
+    func testFooterMapsEachKnownSpecialistToItsOwnIconAndCopy() {
+        let nutritionFooter = CoachViewPresentation.specialistFooter(for: nutritionist)
+        XCTAssertEqual(nutritionFooter?.icon, "fork.knife")
+        XCTAssertEqual(nutritionFooter?.text, "Checked with your nutritionist")
 
-        let idle = CoachViewPresentation.handoffCard(for: card, isPerformingAction: false)
-        XCTAssertEqual(idle.primaryAction.title, "Bring them in")
-        XCTAssertEqual(idle.primaryAction.action, .acceptHandoff)
-        XCTAssertFalse(idle.primaryAction.requiresConfirmation)
-        XCTAssertTrue(idle.primaryAction.isEnabled)
-        XCTAssertEqual(idle.secondaryAction.title, "Not now")
-        XCTAssertEqual(idle.secondaryAction.action, .declineHandoff)
-        XCTAssertFalse(idle.secondaryAction.requiresConfirmation)
-        XCTAssertTrue(idle.secondaryAction.isEnabled)
+        let strengthFooter = CoachViewPresentation.specialistFooter(for: strengthCoach)
+        XCTAssertEqual(strengthFooter?.icon, "dumbbell.fill")
+        XCTAssertEqual(strengthFooter?.text, "Checked with your strength coach")
 
-        let performing = CoachViewPresentation.handoffCard(for: card, isPerformingAction: true)
-        XCTAssertFalse(performing.primaryAction.isEnabled)
-        XCTAssertFalse(performing.secondaryAction.isEnabled)
+        let runningFooter = CoachViewPresentation.specialistFooter(for: runningCoach)
+        XCTAssertEqual(runningFooter?.icon, "figure.run")
+        XCTAssertEqual(runningFooter?.text, "Checked with your running coach")
     }
 
-    func testReturnActionsRequireConfirmationBeforeLeavingRunningCoach() {
-        let card = returnCard()
+    func testFooterFallsBackToGenericCopyForAnUnrecognizedSpecialistId() {
+        let unknown = CoachPersonaSnapshot(
+            id: "sleep-coach",
+            title: "Sleep Coach",
+            subtitle: "Vital Specialist",
+            accent: "#9B5DE5",
+            icon: "moon.stars.fill",
+            sessionId: "session-4"
+        )
+        let footer = CoachViewPresentation.specialistFooter(for: unknown)
+        XCTAssertEqual(footer?.icon, "person.fill.checkmark")
+        XCTAssertEqual(footer?.text, "Checked with a specialist")
+    }
 
-        let presentation = CoachViewPresentation.handoffCard(for: card, isPerformingAction: false)
-        XCTAssertEqual(presentation.primaryAction.action, .acceptReturn)
-        XCTAssertEqual(presentation.secondaryAction.action, .declineReturn)
-        XCTAssertTrue(presentation.primaryAction.requiresConfirmation)
-        XCTAssertTrue(presentation.secondaryAction.requiresConfirmation)
-        XCTAssertEqual(presentation.primaryAction.confirmationTitle, "Return to Vital?")
-        XCTAssertEqual(presentation.secondaryAction.confirmationTitle, "Stay with Running Coach?")
+    func testHistoricalMessageMetadataMapsToTheSameFooterAsTheLivePersona() {
+        let metadata = SpecialistMessageMetadata(
+            specialistId: "nutritionist",
+            manifestVersion: "1.0.0",
+            name: "Nutritionist",
+            role: "Vital Specialist",
+            accentColor: "#57CC99",
+            icon: "fork.knife"
+        )
+        let footer = CoachViewPresentation.specialistFooter(for: metadata)
+        XCTAssertEqual(footer?.icon, "fork.knife")
+        XCTAssertEqual(footer?.text, "Checked with your nutritionist")
     }
 
     func testJoinedSystemRowTextUsesSpecialistTitle() {
@@ -74,74 +101,6 @@ final class CoachSpecialistViewTests: XCTestCase {
         )
     }
 
-    func testReturnSummaryRendersEveryCategoryInDeterministicCompactOrder() {
-        let summary: JSONValue = .object([
-            "nextSteps": .array([.string("Check in next week")]),
-            "unresolvedRisks": .array([.string("Watch the soreness response")]),
-            "recommendations": .array([.string("Keep easy runs conversational")]),
-            "decisions": .array([.string("Run three times")]),
-            "outcomes": .array([.string("Training week planned")]),
-        ])
-
-        XCTAssertEqual(
-            CoachViewPresentation.returnSummarySections(from: summary),
-            [
-                .init(title: "Outcomes", items: ["Training week planned"]),
-                .init(title: "Decisions", items: ["Run three times"]),
-                .init(title: "Recommendations", items: ["Keep easy runs conversational"]),
-                .init(title: "Unresolved risks", items: ["Watch the soreness response"]),
-                .init(title: "Next steps", items: ["Check in next week"]),
-            ]
-        )
-    }
-
-    func testReturnSummaryOmitsEmptyAndMalformedCategories() {
-        let summary: JSONValue = .object([
-            "outcomes": .array([.string("  Week planned  "), .string(" ")]),
-            "decisions": .string("not an array"),
-            "recommendations": .array([]),
-            "unresolvedRisks": .array([.int(4)]),
-            "nextSteps": .array([.string("Review after the long run")]),
-        ])
-
-        XCTAssertEqual(
-            CoachViewPresentation.returnSummarySections(from: summary),
-            [
-                .init(title: "Outcomes", items: ["Week planned"]),
-                .init(title: "Next steps", items: ["Review after the long run"]),
-            ]
-        )
-    }
-
-    func testHistoricalSpecialistBubbleKeepsPermanentLabelAndAccentFromMessageMetadataAfterRollback() {
-        let message = ChatMessage(
-            role: .assistant,
-            text: "Start with an easy ten-minute warmup.",
-            specialistMetadata: SpecialistMessageMetadata(
-                specialistId: "running-coach",
-                manifestVersion: "1.0.0",
-                name: "Running Coach",
-                role: "Vital Specialist",
-                accentColor: "#4CC9F0",
-                icon: "figure.run"
-            )
-        )
-
-        let bubble = CoachViewPresentation.messageBubble(for: message)
-        XCTAssertEqual(bubble.speakerLabel, "Running Coach")
-        XCTAssertEqual(bubble.bubbleLabel, "RUNNING COACH")
-        XCTAssertEqual(bubble.accentHex, "#4CC9F0")
-    }
-
-    func testHistoricalSpecialistTurnKeepsPermanentLabelAndAccentAfterRollback() {
-        let turn = AssistantTurn(id: UUID(), persona: runningCoach)
-
-        let bubble = CoachViewPresentation.assistantTurn(for: turn)
-        XCTAssertEqual(bubble.speakerLabel, "Running Coach")
-        XCTAssertEqual(bubble.bubbleLabel, "RUNNING COACH")
-        XCTAssertEqual(bubble.accentHex, "#4CC9F0")
-    }
-
     func testSpecialistColorsAdaptForLightAndDarkMode() {
         let lightTraits = UITraitCollection(userInterfaceStyle: .light)
         let darkTraits = UITraitCollection(userInterfaceStyle: .dark)
@@ -155,28 +114,6 @@ final class CoachSpecialistViewTests: XCTestCase {
         XCTAssertEqual(
             edgeGlow.resolvedColor(with: lightTraits),
             edgeGlow.resolvedColor(with: darkTraits)
-        )
-    }
-
-    private func proposedCard() -> CoachHandoffCard {
-        CoachHandoffCard(
-            phase: .proposed,
-            sessionId: "session-1",
-            cardOccurrenceId: "proposal-occurrence",
-            specialist: runningCoach,
-            objective: "Plan a safe week",
-            returnSummary: nil
-        )
-    }
-
-    private func returnCard() -> CoachHandoffCard {
-        CoachHandoffCard(
-            phase: .returnProposed,
-            sessionId: "session-1",
-            cardOccurrenceId: "return-occurrence",
-            specialist: runningCoach,
-            objective: "Plan a safe week",
-            returnSummary: nil
         )
     }
 }

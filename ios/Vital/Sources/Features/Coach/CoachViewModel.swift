@@ -229,6 +229,14 @@ final class CoachViewModel: ObservableObject {
     /// the view can show the typing indicator during load.
     @Published var isOpening: Bool = false
 
+    /// The user's diet goal (`weight_loss | muscle | endurance | general`),
+    /// fetched once per view-model lifetime and used to pick the Coach
+    /// composer's starter chips (`CoachStarterChips.chips(for:)`). Defaults
+    /// to `nil` (which the chip picker treats as `general`) until the fetch
+    /// resolves, so a slow network never blocks the chips from rendering —
+    /// they just start generic and refine once the goal loads.
+    @Published private(set) var userGoal: String? = nil
+
     /// The derived latencies from the most recently completed voice turn
     /// (spec §10 V1 telemetry). Only the DEBUG voice HUD (`-VitalVoiceHUD`
     /// launch arg, `CoachView`) reads this — it's not shown in release UI.
@@ -538,12 +546,23 @@ final class CoachViewModel: ObservableObject {
         ))
     }
 
+    /// Fetches the user's diet goal for the starter chips (`userGoal`).
+    /// Fire-and-forget: a failure just leaves `userGoal` nil, which
+    /// `CoachStarterChips.chips(for:)` already treats as `general`.
+    private func loadGoal() {
+        guard mode == nil, userGoal == nil else { return }
+        Task {
+            userGoal = try? await api.fetchDietGoal().current.goal
+        }
+    }
+
     /// Fetches a fresh, data-aware opening line and inserts it as the first
     /// assistant row. No-op if the conversation already has any rows (so it
     /// never clobbers an in-progress chat) or if it's already loading. In
     /// onboarding mode the opener comes from the streaming coach itself, so we
     /// skip this entirely.
     func loadOpener() {
+        loadGoal()
         guard mode == nil, rows.isEmpty, !isOpening, openerTask == nil else { return }
         isOpening = true
         openerTask = Task {
