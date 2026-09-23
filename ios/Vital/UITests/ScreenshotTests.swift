@@ -147,6 +147,29 @@ final class ScreenshotTests: XCTestCase {
                                "Today's weight_loss hero should show the weigh-in chip [\(appearance)]")
             }
 
+            if scenario == "muscle" {
+                // The muscle hero (§4.1) — today's move-kind plan item's
+                // title plus the protein have/goal line, both fixture-unique
+                // (`FixtureData.muscle`'s "Lower-body strength" row and
+                // 158/190 protein numbers) and only rendered once `/api/plan`
+                // and `/api/today` both decode.
+                XCTAssertTrue(waitForText(app, containing: "Lower-body strength"),
+                               "Today's muscle hero should show today's strength session [\(appearance)]")
+                XCTAssertTrue(waitForText(app, containing: "Protein 158 / 190 g"),
+                               "Today's muscle hero should show the protein have/goal line [\(appearance)]")
+            }
+
+            if scenario == "endurance" {
+                // The endurance hero (§4.1) — the readiness word (deterministic
+                // from the fixture's flat `trendsBatch` baseline, always
+                // "Keep it easy" — see `EnduranceHeroLogic.readinessWord`'s
+                // doc comment) and today's move-kind session title.
+                XCTAssertTrue(waitForText(app, containing: "Keep it easy"),
+                               "Today's endurance hero should show a readiness word [\(appearance)]")
+                XCTAssertTrue(waitForText(app, containing: "10km tempo run"),
+                               "Today's endurance hero should show today's session [\(appearance)]")
+            }
+
             if scenario == "new_user" {
                 // First-run checklist (§4.2) — replaces the three empty
                 // biometric tiles for a fresh, still-calibrating account.
