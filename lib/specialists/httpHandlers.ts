@@ -64,6 +64,9 @@ function streamEvents(generator: AsyncGenerator<CoachEvent>): Response {
                 f:    chunk.f,
               });
               break;
+            case 'meal_unlogged':
+              send({ type: chunk.type, id: chunk.id });
+              break;
             case 'done':
               send({ type: chunk.type, messageId: chunk.messageId });
               break;

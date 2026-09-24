@@ -108,6 +108,12 @@ export type CoachEvent =
   // lib/specialists/httpHandlers.ts's streamEvents and iOS's
   // decodeCoachSSELine, both of which drop unknown event types).
   | { type: 'meal_logged'; id: string; name: string; kcal: number; p: number; c: number; f: number }
+  // A meal was just removed by `delete_meal` (the coach's own undo tool —
+  // see lib/brain/tools.ts). Lets the client flip the matching inline
+  // receipt to "Removed" instead of leaving it showing Undo for a meal
+  // that's already gone. Additive, same drop-unknown-event convention as
+  // `meal_logged` above.
+  | { type: 'meal_unlogged'; id: string }
   | HandoffCardPayload
   | HandoffCardEvent
   | PersonaChangedEvent
@@ -519,6 +525,22 @@ async function* streamCoachTurn(userId: string, seed: TurnSeed): AsyncGenerator<
         } catch {
           // result wasn't JSON (e.g. the "Could not find nutrition data…" /
           // barcode-not-found text errors) — nothing was inserted, no event.
+        }
+      }
+
+      // `delete_meal` mirrors log_meal above: surface the deleted id as its
+      // own structured event so the client can flip the matching receipt to
+      // "Removed" instead of only the "Removing that…" chip, which carries
+      // no id to key off.
+      if (block.name === 'delete_meal') {
+        try {
+          const parsed = JSON.parse(result) as Record<string, unknown>;
+          if (parsed.ok && parsed.id != null) {
+            yield { type: 'meal_unlogged', id: String(parsed.id) };
+          }
+        } catch {
+          // result was a plain "Error: …" string (no eligible meal) — nothing
+          // was deleted, no event.
         }
       }
 

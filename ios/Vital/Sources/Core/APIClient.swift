@@ -640,6 +640,9 @@ struct APIClient {
                   let kcal = event.kcal, let p = event.p, let c = event.c, let f = event.f
             else { return nil }
             return .mealLogged(CoachMealReceipt(id: id, name: name, kcal: kcal, p: p, c: c, f: f))
+        case "meal_unlogged":
+            guard let id = event.id else { return nil }
+            return .mealUnlogged(id: id)
         case "handoff_card":
             guard let card = event.handoffCard else { return nil }
             return .handoffCard(card)
@@ -1877,6 +1880,53 @@ struct CoachRestoredMessage: Codable, Equatable {
     let timestamp: String
     let specialistSessionId: String?
     let specialistMetadata: SpecialistMessageMetadata?
+    /// Meal receipts the coach logged during this message's turn — derived
+    /// server-side at restore time (lib/specialists/restoration.ts's
+    /// `attachMealReceipts`), never persisted directly. Absent on older
+    /// backends and on any message with no meals in its turn window.
+    let mealReceipts: [CoachMealReceipt]?
+
+    init(
+        id: String,
+        role: String,
+        speaker: String,
+        content: String,
+        timestamp: String,
+        specialistSessionId: String?,
+        specialistMetadata: SpecialistMessageMetadata?,
+        mealReceipts: [CoachMealReceipt]? = nil
+    ) {
+        self.id = id
+        self.role = role
+        self.speaker = speaker
+        self.content = content
+        self.timestamp = timestamp
+        self.specialistSessionId = specialistSessionId
+        self.specialistMetadata = specialistMetadata
+        self.mealReceipts = mealReceipts
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, role, speaker, content, timestamp
+        case specialistSessionId, specialistMetadata, mealReceipts
+    }
+
+    // Custom decode so a malformed `mealReceipts` (wrong shape, e.g. a future
+    // server bug or an intermediary mangling the payload) is dropped instead
+    // of failing the whole restoration decode — every other field still
+    // decodes normally, and `try?` around just this one key means one bad
+    // element can't sink the entire restored transcript.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        role = try container.decode(String.self, forKey: .role)
+        speaker = try container.decode(String.self, forKey: .speaker)
+        content = try container.decode(String.self, forKey: .content)
+        timestamp = try container.decode(String.self, forKey: .timestamp)
+        specialistSessionId = try container.decodeIfPresent(String.self, forKey: .specialistSessionId)
+        specialistMetadata = try container.decodeIfPresent(SpecialistMessageMetadata.self, forKey: .specialistMetadata)
+        mealReceipts = (try? container.decodeIfPresent([CoachMealReceipt].self, forKey: .mealReceipts)) ?? nil
+    }
 }
 
 enum CoachHandoffPhase: String, Codable, Equatable {
@@ -2005,6 +2055,10 @@ enum CoachStreamEvent: Equatable {
     /// inline receipt (name + macros) and issue an Undo (`deleteMealLog`)
     /// without a round trip. See `CoachMealReceipt`.
     case mealLogged(CoachMealReceipt)
+    /// A `delete_meal` tool call just removed a meal the coach itself logged
+    /// — flips the matching inline receipt to "Removed" (see
+    /// `CoachViewModel.applyMealUnlogged`).
+    case mealUnlogged(id: String)
     case handoffCard(CoachHandoffCard)
     case personaChanged(CoachPersonaSnapshot)
     case done
@@ -2014,7 +2068,7 @@ enum CoachStreamEvent: Equatable {
 /// Payload of a `meal_logged` SSE event (lib/brain/coach.ts). `id` is the
 /// backend `events` row id — the same id `APIClient.deleteMealLog(id:)` takes
 /// for Undo.
-struct CoachMealReceipt: Decodable, Equatable {
+struct CoachMealReceipt: Codable, Equatable {
     let id: String
     let name: String
     let kcal: Int

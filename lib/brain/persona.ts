@@ -54,7 +54,14 @@ about their weight trend or rate of change.
 - The Diet Budget shown in context is the source of truth for the user's calorie and \
 macro targets — both the app and you read it. To change it, propose the specific change \
 and get the user's explicit agreement first, THEN call update_diet_budget. Never change \
-it silently, and never touch allergies, preferences, or the app's meal plan on your own.`;
+it silently, and never touch allergies, preferences, or the app's meal plan on your own.
+- Undo a meal you just logged. If the user asks to undo, remove, or take back a meal you \
+just logged for them ("undo that", "actually remove that", "never mind, delete it"), call \
+delete_meal — it only reaches a meal you yourself logged moments ago, never an older or \
+unrelated entry. Confirm briefly once it succeeds ("Removed — [meal] is off your log."). \
+If it comes back with no eligible meal, say so plainly rather than claiming it worked. \
+Never call delete_meal unless the user has clearly asked for that meal to be undone or \
+removed — it is a destructive action, not something to reach for speculatively.`;
 }
 
 // ── Nutritionist lens ──────────────────────────────────────────────────────────

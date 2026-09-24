@@ -14,6 +14,8 @@
  *   resolve_fact       — retract a confirmed node (status → 'resolved'; never deletes;
  *                        not specialist-allowed)
  *   log_meal           — nutrition lookup → meal_logged event
+ *   delete_meal        — undo a meal the coach itself just logged (safety-scoped:
+ *                        this user, source 'coach', within the last 30 minutes)
  *   log_weight         — weigh-in → weight_logged event (lib/weightRepository.ts)
  *   get_metric_trend   — daily_metrics trend + mean/min/max + baseline direction
  *   get_weight_trend   — smoothed (EWMA) weight trend, manual + HealthKit merged
@@ -69,6 +71,11 @@ import {
 import { getWeightReadings, logWeightEntry } from '@/lib/weightRepository';
 import { computeWeightTrend } from '@/lib/weightTrend';
 import { LB_PER_KG } from '@/lib/metricFormat';
+
+// How recent a coach-logged meal (source = 'coach') must be for delete_meal to
+// reach it — see delete_meal's tool description and executor for the full
+// scoping rationale.
+export const DELETE_MEAL_WINDOW_MINUTES = 30;
 
 // ── Tool definitions (Anthropic API schema) ────────────────────────────────
 
@@ -327,16 +334,6 @@ export const BRAIN_TOOLS: Tool[] = [
       required: ['evidence'],
     },
   },
-  // KNOWN GAP (coach-log-receipts, 2026-09-24): there is no `delete_meal` /
-  // `undo_meal` tool, so "undo that" or "actually remove that" said to the
-  // coach right after a log_meal call has nothing to invoke — the model can
-  // only apologize in prose while the meal stays logged. The user's only
-  // working Undo paths today are the inline coach receipt's Undo button
-  // (this PR) and the Diet sheet's swipe-to-delete. Adding a delete tool
-  // (and teaching persona.ts when the model should reach for it, e.g. only
-  // for the immediately-preceding log_meal call in the same turn/session —
-  // not an arbitrary earlier meal by description) is a real feature, out of
-  // scope here; flagged rather than added without that design.
   {
     name: 'log_meal',
     description:
@@ -358,6 +355,30 @@ export const BRAIN_TOOLS: Tool[] = [
         },
       },
       required: ['text'],
+    },
+  },
+  {
+    name: 'delete_meal',
+    description:
+      'Undo a meal_logged event YOU (the coach) just logged for this user, e.g. when they ' +
+      'say "undo that" or "actually remove that" right after you logged something. Scoped ' +
+      'for safety: it can only delete a meal that belongs to this user, was logged with ' +
+      'source \'coach\' (never a meal logged through the app itself), and was logged within ' +
+      'the last 30 minutes — it can never reach an older or unrelated entry, and never ' +
+      'matches by free-text description. Without `id`, deletes the most recent eligible ' +
+      'meal. Only call this after the user has clearly asked to undo/remove what was just ' +
+      'logged — never speculatively.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        id: {
+          type: 'string',
+          description:
+            'Optional — the exact event id a prior log_meal call in this conversation ' +
+            'returned. Omit to undo the most recent eligible meal.',
+        },
+      },
+      required: [],
     },
   },
   {
@@ -970,6 +991,8 @@ export function toolCallLabel(name: string, input: Record<string, unknown>): str
       return 'Updating your record…';
     case 'log_meal':
       return 'Logging your meal…';
+    case 'delete_meal':
+      return 'Removing that…';
     case 'log_weight':
       return 'Logging your weigh-in…';
     case 'get_metric_trend':
@@ -1768,6 +1791,97 @@ export async function executeToolCall(
     }
 
     return JSON.stringify(result);
+  }
+
+  // ── delete_meal ────────────────────────────────────────────────────────────
+  // Scoping rule (see delete_meal's tool description): a meal is only
+  // eligible when it (1) belongs to this user, (2) has source = 'coach' (only
+  // log_meal writes that — app-side logs use 'search'/'barcode'/'history'/
+  // etc., see app/api/meals/log/route.ts), and (3) was logged within the last
+  // DELETE_MEAL_WINDOW_MINUTES. There is no per-conversation tool-call log
+  // threaded into executeToolCall's (name, input, userId) signature to check
+  // "did THIS conversation's log_meal return this id" directly, so the time
+  // window is the practical, reliably-implementable proxy for "just logged,
+  // in this session" — short enough that it can't reach a meal from a much
+  // earlier conversation (or the app's own logging), even if the model
+  // somehow passed a stale id.
+  if (name === 'delete_meal') {
+    const id = input.id != null ? String(input.id) : null;
+
+    // `events.id` is a Postgres `uuid` column — a malformed value (a
+    // truncated id, "last", a meal name the model hallucinated as an id)
+    // would make `eq(schema.events.id, id)` below throw
+    // "invalid input syntax for type uuid" straight out of the query, which
+    // nothing catches (coach.ts awaits executeToolCall with no try/catch),
+    // aborting the whole turn instead of returning a text error. Validate
+    // BEFORE any query, and don't silently fall back to the latest meal — an
+    // explicit (if malformed) id means the user/model meant a *specific*
+    // meal, not necessarily the most recent one.
+    if (id != null && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+      return "Error: that id isn't a valid meal id — omit it to undo the most recent meal you logged.";
+    }
+
+    const since = new Date(Date.now() - DELETE_MEAL_WINDOW_MINUTES * 60 * 1000);
+
+    const scope = id
+      ? and(
+          eq(schema.events.id, id),
+          eq(schema.events.user_id, userId),
+          eq(schema.events.type, 'meal_logged'),
+          eq(schema.events.source, 'coach'),
+          gte(schema.events.timestamp, since),
+        )
+      : and(
+          eq(schema.events.user_id, userId),
+          eq(schema.events.type, 'meal_logged'),
+          eq(schema.events.source, 'coach'),
+          gte(schema.events.timestamp, since),
+        );
+
+    let target: { id: string; payload: unknown } | undefined;
+    if (id) {
+      [target] = await db
+        .select({ id: schema.events.id, payload: schema.events.payload })
+        .from(schema.events)
+        .where(scope)
+        .limit(1);
+    } else {
+      [target] = await db
+        .select({ id: schema.events.id, payload: schema.events.payload })
+        .from(schema.events)
+        .where(scope)
+        .orderBy(desc(schema.events.timestamp))
+        .limit(1);
+    }
+
+    if (!target) {
+      return id
+        ? `Error: no eligible meal with id ${id} — it must be one you logged for this user in the last ${DELETE_MEAL_WINDOW_MINUTES} minutes.`
+        : `Error: no meal logged in the last ${DELETE_MEAL_WINDOW_MINUTES} minutes is eligible to undo.`;
+    }
+
+    const [deleted] = await db
+      .delete(schema.events)
+      .where(and(
+        eq(schema.events.id, target.id),
+        eq(schema.events.user_id, userId),
+        eq(schema.events.type, 'meal_logged'),
+      ))
+      .returning({ id: schema.events.id });
+
+    if (!deleted) {
+      return 'Error: that meal could not be removed — it may have already been undone.';
+    }
+
+    const p: Record<string, unknown> =
+      target.payload !== null && typeof target.payload === 'object' && !Array.isArray(target.payload)
+        ? (target.payload as Record<string, unknown>)
+        : {};
+    const name_ = typeof p.name === 'string' && p.name
+      ? p.name
+      : (typeof p.description === 'string' ? p.description : 'Meal');
+
+    return JSON.stringify({ ok: true, id: deleted.id, name: name_ });
   }
 
   // ── log_weight ─────────────────────────────────────────────────────────────

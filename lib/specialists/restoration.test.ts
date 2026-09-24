@@ -2,9 +2,12 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { SpecialistRegistry } from './registry';
 import {
+  attachMealReceipts,
   compareRestoredMessages,
   loadCoachRestoration,
   type CoachHistoryRepository,
+  type MealLoggedEventRow,
+  type RestoredCoachMessage,
 } from './restoration';
 import {
   InMemorySpecialistSessionRepository,
@@ -166,4 +169,76 @@ test('disabled restoration rolls an active specialist back to authoritative Vita
   assert.equal(restored.activePersona.id, 'vital');
   assert.equal(restored.pendingCard, null);
   assert.equal((await sessions.get(USER, proposed.id))?.failureReason, 'specialists_disabled');
+});
+
+// ── attachMealReceipts: turn-window derivation ─────────────────────────────
+
+function restoredMessage(opts: { role: string; timestamp: Date }): RestoredCoachMessage {
+  return {
+    id: `msg-${opts.timestamp.toISOString()}`,
+    role: opts.role,
+    speaker: opts.role === 'user' ? 'user' : 'coach',
+    content: 'hi',
+    timestamp: opts.timestamp,
+    specialistSessionId: null,
+    specialistMetadata: null,
+  };
+}
+
+function mealEvent(id: string, timestamp: Date, name = 'Meal'): MealLoggedEventRow {
+  return { id, timestamp, payload: { name, kcal: 300, p: 20, c: 30, f: 10 } };
+}
+
+test('attachMealReceipts assigns a meal to the assistant message whose turn it was logged in', () => {
+  const messages: RestoredCoachMessage[] = [
+    restoredMessage({ role: 'user', timestamp: new Date('2026-07-11T12:00:00Z') }),
+    restoredMessage({ role: 'assistant', timestamp: new Date('2026-07-11T12:00:05Z') }),
+    restoredMessage({ role: 'user', timestamp: new Date('2026-07-11T12:01:00Z') }),
+    restoredMessage({ role: 'assistant', timestamp: new Date('2026-07-11T12:01:05Z') }),
+  ];
+  // Logged between the second user message and the second assistant reply —
+  // must attach to the SECOND assistant message, not the first.
+  const events = [mealEvent('evt-1', new Date('2026-07-11T12:01:02Z'), 'Oats')];
+
+  const result = attachMealReceipts(messages, events);
+
+  assert.equal(result[1].mealReceipts, undefined);
+  assert.deepEqual(result[3].mealReceipts, [{ id: 'evt-1', name: 'Oats', kcal: 300, p: 20, c: 30, f: 10 }]);
+});
+
+test('attachMealReceipts attaches nothing when no event falls inside any turn window', () => {
+  const messages: RestoredCoachMessage[] = [
+    restoredMessage({ role: 'user', timestamp: new Date('2026-07-11T12:00:00Z') }),
+    restoredMessage({ role: 'assistant', timestamp: new Date('2026-07-11T12:00:05Z') }),
+  ];
+  const result = attachMealReceipts(messages, []);
+  assert.equal(result[1].mealReceipts, undefined);
+  // Additive: an untouched message is returned as the SAME object (no
+  // mealReceipts key added) when there are no events to attach.
+  assert.equal(result[1], messages[1]);
+});
+
+test('attachMealReceipts drops a meal_logged event for a deleted meal (simply absent from `events`)', () => {
+  // A hard-deleted meal never appears in the `events` query result passed
+  // in, so it produces no receipt at all — "no card", the simpler of the
+  // two honest options the brief allows.
+  const messages: RestoredCoachMessage[] = [
+    restoredMessage({ role: 'user', timestamp: new Date('2026-07-11T12:00:00Z') }),
+    restoredMessage({ role: 'assistant', timestamp: new Date('2026-07-11T12:00:05Z') }),
+  ];
+  const result = attachMealReceipts(messages, []);
+  assert.equal(result[1].mealReceipts, undefined);
+});
+
+test('attachMealReceipts can attach multiple meals logged in the same turn', () => {
+  const messages: RestoredCoachMessage[] = [
+    restoredMessage({ role: 'user', timestamp: new Date('2026-07-11T12:00:00Z') }),
+    restoredMessage({ role: 'assistant', timestamp: new Date('2026-07-11T12:00:10Z') }),
+  ];
+  const events = [
+    mealEvent('evt-1', new Date('2026-07-11T12:00:02Z'), 'Eggs'),
+    mealEvent('evt-2', new Date('2026-07-11T12:00:04Z'), 'Toast'),
+  ];
+  const result = attachMealReceipts(messages, events);
+  assert.deepEqual(result[1].mealReceipts?.map((r) => r.id), ['evt-1', 'evt-2']);
 });
