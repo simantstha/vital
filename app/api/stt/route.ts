@@ -48,11 +48,13 @@ export async function POST(request: Request): Promise<Response> {
     return new Response('Audio body is required and must be non-empty.', { status: 400 });
   }
   if (audio.byteLength > MAX_AUDIO_BYTES) {
+    console.error(`/api/stt: audio body too large (bytes=${audio.byteLength})`);
     return new Response('Audio body must be at most 10 MB.', { status: 413 });
   }
 
   const apiKey = process.env.ELEVENLABS_API_KEY;
   if (!apiKey) {
+    console.error(`/api/stt: ELEVENLABS_API_KEY not configured (bytes=${audio.byteLength})`);
     return new Response('ElevenLabs STT is not configured.', { status: 503 });
   }
 
@@ -74,13 +76,13 @@ export async function POST(request: Request): Promise<Response> {
       body: form,
     });
   } catch (err) {
-    console.error('ElevenLabs STT request failed:', err);
+    console.error(`/api/stt: request to ElevenLabs failed (bytes=${audio.byteLength}):`, err);
     return new Response('Failed to reach ElevenLabs.', { status: 502 });
   }
 
   if (!upstream.ok) {
     const errorText = await upstream.text().catch(() => '');
-    console.error(`ElevenLabs STT returned ${upstream.status}: ${errorText}`);
+    console.error(`/api/stt: ElevenLabs returned ${upstream.status} (bytes=${audio.byteLength}): ${errorText}`);
     return new Response('ElevenLabs STT request failed.', { status: 502 });
   }
 
@@ -88,10 +90,13 @@ export async function POST(request: Request): Promise<Response> {
   try {
     result = await upstream.json() as { text?: unknown };
   } catch (err) {
-    console.error('ElevenLabs STT returned invalid JSON:', err);
+    console.error(`/api/stt: ElevenLabs returned invalid JSON (bytes=${audio.byteLength}):`, err);
     return new Response('ElevenLabs STT request failed.', { status: 502 });
   }
 
   const text = typeof result.text === 'string' ? result.text : '';
+  // One line per successful request: byte length in, upstream status, and
+  // transcript CHARACTER COUNT only — never the transcript text itself.
+  console.log(`/api/stt: ok (bytes=${audio.byteLength}, upstreamStatus=${upstream.status}, transcriptChars=${text.length})`);
   return Response.json({ text });
 }

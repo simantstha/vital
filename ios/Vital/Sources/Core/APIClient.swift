@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 // MARK: - App configuration
 
@@ -83,6 +84,15 @@ extension Notification.Name {
 
 struct APIClient {
     static let shared = APIClient()
+
+    /// Subsystem/category shared by every `os.Logger` call in this type —
+    /// same convention as `VoiceTurnTimer`'s "voice" category, so Console/
+    /// Instruments can filter the whole voice pipeline (timing + STT
+    /// fallback visibility) together.
+    private static let voiceLogger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "com.simantstha.vital",
+        category: "voice"
+    )
 
     private let encoder: JSONEncoder = {
         let e = JSONEncoder()
@@ -495,7 +505,11 @@ struct APIClient {
     /// caller can fall back to the on-device Apple transcript.
     func uploadSTTAudio(fileURL: URL) async -> String? {
         guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/stt") else { return nil }
-        guard let audioData = try? Data(contentsOf: fileURL) else { return nil }
+        guard let audioData = try? Data(contentsOf: fileURL) else {
+            Self.voiceLogger.error("uploadSTTAudio: could not read recorded file at \(fileURL.lastPathComponent, privacy: .public)")
+            return nil
+        }
+        let fileSizeBytes = audioData.count
         var request = authorizedRequest(url)
         request.httpMethod = "POST"
         request.setValue("audio/mp4", forHTTPHeaderField: "Content-Type")
@@ -504,13 +518,23 @@ struct APIClient {
         do {
             let (data, response) = try await session.data(for: request)
             guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+                let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
+                Self.voiceLogger.error("uploadSTTAudio: non-200 response (status=\(statusCode, privacy: .public), bytes=\(fileSizeBytes, privacy: .public)) — falling back to on-device transcript")
                 return nil
             }
             struct STTResponse: Decodable { let text: String }
-            guard let decoded = try? decoder.decode(STTResponse.self, from: data) else { return nil }
+            guard let decoded = try? decoder.decode(STTResponse.self, from: data) else {
+                Self.voiceLogger.error("uploadSTTAudio: failed to decode response body (bytes=\(fileSizeBytes, privacy: .public)) — falling back to on-device transcript")
+                return nil
+            }
             let trimmed = decoded.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? nil : trimmed
+            if trimmed.isEmpty {
+                Self.voiceLogger.error("uploadSTTAudio: 200 response with empty transcript (bytes=\(fileSizeBytes, privacy: .public)) — falling back to on-device transcript")
+                return nil
+            }
+            return trimmed
         } catch {
+            Self.voiceLogger.error("uploadSTTAudio: request threw \(String(describing: error), privacy: .public) (bytes=\(fileSizeBytes, privacy: .public)) — falling back to on-device transcript")
             return nil
         }
     }
