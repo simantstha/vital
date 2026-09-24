@@ -310,6 +310,34 @@ final class CoachVoiceControllerTests: XCTestCase {
         XCTAssertEqual(transcriber.prewarmCallCount, 1)
     }
 
+    /// V5: `CoachView`'s `.onAppear { voice.prewarm() }` fires again every
+    /// time the Coach tab appears — including when the Today FAB's handoff
+    /// switches to it mid-conversation (spec §10 V5's "reusing the existing
+    /// onSent/tab-switch plumbing"). `prewarm()` must be inert on an
+    /// in-flight turn: it only ever calls `configure()` (never `activate()`)
+    /// and never touches `state`/`mode`, so it can't restart or cancel a
+    /// conversation already in progress.
+    func testPrewarmDoesNotDisturbAnInFlightConversation() {
+        let transcriber = FakeSpeechTranscriber()
+        transcriber.permissionState = .authorized
+        let session = SpyAudioSession()
+        let controller = CoachVoiceController(transcriber: transcriber, api: FakeVoiceAPI(), audioSession: session.controlling)
+
+        // Prewarmed once already, e.g. from Today's own `.onAppear` before
+        // the FAB was ever tapped — matches `didPrewarm`'s real precondition.
+        controller.prewarm()
+
+        controller.startRecording(mode: .conversation)
+        XCTAssertEqual(controller.state, .listening)
+
+        controller.prewarm() // the Coach tab's own `.onAppear`, mid-turn
+
+        XCTAssertEqual(controller.state, .listening, "prewarm() must never disturb an in-flight conversation turn")
+        XCTAssertEqual(controller.mode, .conversation)
+        XCTAssertEqual(transcriber.startCallCount, 1, "prewarm() must not restart the recording")
+        XCTAssertEqual(session.activateCallCount, 0, "prewarm() must never activate() — only configure()")
+    }
+
     // MARK: - V3: session released on non-spoken endings
 
     /// `cancel()` must deactivate the shared session — a cancelled turn
@@ -364,6 +392,11 @@ final class CoachVoiceControllerTests: XCTestCase {
         XCTAssertNil(controller.lastDeliveredTurnID)
         XCTAssertEqual(controller.state, .idle)
         XCTAssertEqual(session.deactivateCallCount, 1)
+        // A spurious `beginTranscription()` re-entry would also have bumped
+        // this (Listening → Transcribing) and called `transcriber.stop()` a
+        // second time via its own downstream cleanup.
+        XCTAssertEqual(controller.turnEndTrigger, 0)
+        XCTAssertEqual(transcriber.stopCallCount, 1)
     }
 
     /// An endpoint fire with nothing recognized (empty transcript, no
@@ -440,6 +473,206 @@ final class CoachVoiceControllerTests: XCTestCase {
         XCTAssertEqual(controller.turnEndTrigger, 0)
     }
 
+    // MARK: - V5: conversation mode
+
+    /// The full happy path: a conversation-mode turn auto re-arms into
+    /// listening with no tap, once `CoachViewModel`'s three hook points
+    /// (simulated directly here, since these controller tests don't wire a
+    /// real `CoachSpeaker`) run through thinking → speaking → yourTurn.
+    func testFullConversationCycleAutoRearmsWithNoTap() async {
+        let transcriber = FakeSpeechTranscriber()
+        let api = FakeVoiceAPI()
+        let controller = CoachVoiceController(transcriber: transcriber, api: api, scheduling: .instant)
+
+        var delivered: [String] = []
+        controller.onFinalTranscript = { text in
+            delivered.append(text)
+            // What `CoachViewModel.send()` does synchronously for a
+            // conversation-mode turn — see `bindVoice()`/`send()`.
+            controller.markThinking()
+        }
+
+        controller.startRecording(mode: .conversation)
+        XCTAssertEqual(controller.mode, .conversation)
+
+        transcriber.isRecording = true
+        transcriber.transcribedText = "how's my sleep"
+        transcriber.recordingURL = nil
+        transcriber.isRecording = false // endpoint fired
+
+        await waitUntil(controller, "moved to thinking") { controller.state == .thinking }
+        XCTAssertEqual(delivered, ["how's my sleep"])
+
+        controller.markSpeaking()
+        XCTAssertEqual(controller.state, .speaking)
+
+        controller.speakingFinished()
+        XCTAssertEqual(controller.state, .yourTurn)
+        XCTAssertEqual(controller.yourTurnTrigger, 1)
+
+        await waitUntil(controller, "re-armed into listening") { controller.state == .listening }
+        XCTAssertEqual(controller.mode, .conversation, "still conversing — no tap re-armed this")
+        XCTAssertEqual(transcriber.startCallCount, 2, "the first listen plus the auto re-arm")
+    }
+
+    /// Spec §3.6: "Didn't catch that. Go ahead." keeps listening after one
+    /// empty listen; a *second* one in a row ends the conversation.
+    func testTwoConsecutiveEmptyListensEndConversationAndDeactivateSession() async {
+        let transcriber = FakeSpeechTranscriber()
+        let session = SpyAudioSession()
+        let controller = CoachVoiceController(transcriber: transcriber, api: FakeVoiceAPI(), audioSession: session.controlling)
+
+        controller.startRecording(mode: .conversation)
+        transcriber.isRecording = true
+        transcriber.transcribedText = "   "
+        transcriber.recordingURL = nil
+        transcriber.isRecording = false // 1st empty listen
+
+        await waitUntil(controller, "re-armed after the first empty listen") { controller.state == .listening }
+        XCTAssertEqual(controller.mode, .conversation, "one empty listen must not end the conversation")
+        XCTAssertEqual(controller.lastError, .didntCatchThat)
+        XCTAssertEqual(session.deactivateCallCount, 0)
+
+        transcriber.isRecording = true
+        transcriber.transcribedText = "   "
+        transcriber.recordingURL = nil
+        transcriber.isRecording = false // 2nd empty listen in a row
+
+        await waitUntil(controller, "conversation ended after 2 empty listens") { controller.mode == .single }
+        XCTAssertEqual(controller.state, .idle)
+        XCTAssertEqual(session.deactivateCallCount, 1)
+    }
+
+    /// The End control (`CoachViewModel.endVoiceConversation()`) calls this
+    /// controller's half of teardown while a reply is speaking — must reset
+    /// `mode`/`state` and deactivate the shared session even from
+    /// `.speaking`, not just from `.listening`/`.transcribing`.
+    func testCancelDuringSpeakingEndsConversationAndDeactivatesSession() async {
+        let transcriber = FakeSpeechTranscriber()
+        let session = SpyAudioSession()
+        let controller = CoachVoiceController(transcriber: transcriber, api: FakeVoiceAPI(), audioSession: session.controlling)
+
+        controller.startRecording(mode: .conversation)
+        transcriber.isRecording = true
+        transcriber.transcribedText = "log a workout"
+        transcriber.recordingURL = nil
+        transcriber.isRecording = false
+
+        // Wait for the (STT-less, so effectively synchronous) transcription
+        // task to actually deliver before driving the reply lifecycle by
+        // hand — `markThinking()` only accepts `.sending`/`.idle`.
+        await waitUntil(controller, "delivered") { controller.state == .idle }
+
+        controller.markThinking()
+        controller.markSpeaking()
+        XCTAssertEqual(controller.state, .speaking)
+
+        controller.cancel()
+
+        XCTAssertEqual(controller.mode, .single)
+        XCTAssertEqual(controller.state, .idle)
+        XCTAssertEqual(session.deactivateCallCount, 1)
+    }
+
+    // Note: the cancel()-while-.listening reentrancy regression itself is
+    // covered by `testCancelWhileListeningWithPendingTranscriptDoesNotDeliverOrDoubleDeactivate`
+    // above (#198's test, extended with this branch's `turnEndTrigger`/
+    // `stopCallCount` assertions) — not duplicated here.
+
+    /// Single mode (today's push-to-talk, unchanged) must never enter
+    /// `.thinking`/`.speaking`/`.yourTurn` even if something calls the V5
+    /// hooks on it — the guards on every one of those require
+    /// `mode == .conversation`.
+    func testSingleModeNeverEntersThinkingSpeakingOrYourTurn() async {
+        let transcriber = FakeSpeechTranscriber()
+        let controller = CoachVoiceController(transcriber: transcriber, api: FakeVoiceAPI())
+
+        controller.startRecording() // defaults to .single
+        transcriber.isRecording = true
+        transcriber.transcribedText = "hello"
+        transcriber.recordingURL = nil
+        transcriber.isRecording = false
+
+        await waitUntil(controller, "delivered") { controller.state == .idle }
+        XCTAssertEqual(controller.mode, .single)
+
+        controller.markThinking()
+        XCTAssertEqual(controller.state, .idle, "single mode must never enter .thinking")
+
+        controller.markSpeaking()
+        XCTAssertEqual(controller.state, .idle)
+
+        controller.speakingFinished()
+        XCTAssertEqual(controller.state, .idle)
+        XCTAssertEqual(controller.yourTurnTrigger, 0, "single mode must never auto re-arm")
+    }
+
+    /// Spec §3.8: VoiceOver running downgrades a *requested* conversation
+    /// turn to `.single` — hands-free listening would compete with
+    /// VoiceOver's own speech.
+    func testVoiceOverRunningForcesSingleModeEvenWhenConversationRequested() {
+        let transcriber = FakeSpeechTranscriber()
+        let controller = CoachVoiceController(
+            transcriber: transcriber,
+            api: FakeVoiceAPI(),
+            environment: VoiceEnvironmentQuerying(isVoiceOverRunning: { true })
+        )
+
+        controller.startRecording(mode: .conversation)
+
+        XCTAssertEqual(controller.mode, .single)
+    }
+
+    /// Spec §3.2: the app backgrounded for more than 10s ends conversation
+    /// mode. Driven by an injectable `VoiceScheduling` (a manually-resumed
+    /// continuation, same shape as `FakeVoiceAPI.holdUpload`) rather than a
+    /// real 10s wait.
+    func testBackgroundedOver10sEndsConversationAndDeactivatesSession() async {
+        let transcriber = FakeSpeechTranscriber()
+        let session = SpyAudioSession()
+        let scheduling = FakeScheduling()
+        let controller = CoachVoiceController(
+            transcriber: transcriber,
+            api: FakeVoiceAPI(),
+            audioSession: session.controlling,
+            scheduling: scheduling.scheduling
+        )
+
+        controller.startRecording(mode: .conversation)
+        transcriber.isRecording = true // mid-listen when backgrounded
+
+        controller.appDidEnterBackground()
+        await poll(timeout: 2.0) { scheduling.sleepCallCount == 1 }
+        XCTAssertEqual(scheduling.lastDuration, 10)
+
+        scheduling.resume() // simulates 10s having elapsed
+
+        await waitUntil(controller, "ended after being backgrounded") { controller.mode == .single }
+        XCTAssertEqual(controller.state, .idle)
+        XCTAssertEqual(session.deactivateCallCount, 1)
+    }
+
+    /// Foregrounding before the grace window elapses must cancel the
+    /// pending background-end — the conversation keeps going.
+    func testBecomingActiveBeforeGraceElapsedCancelsTheBackgroundEnd() async {
+        let transcriber = FakeSpeechTranscriber()
+        let scheduling = FakeScheduling()
+        let controller = CoachVoiceController(transcriber: transcriber, api: FakeVoiceAPI(), scheduling: scheduling.scheduling)
+
+        controller.startRecording(mode: .conversation)
+        transcriber.isRecording = true
+
+        controller.appDidEnterBackground()
+        await poll(timeout: 2.0) { scheduling.sleepCallCount == 1 }
+
+        controller.appDidBecomeActive()
+        scheduling.resume() // the sleep resolves, but its Task was cancelled
+
+        try? await Task.sleep(nanoseconds: 20_000_000)
+
+        XCTAssertEqual(controller.mode, .conversation, "foregrounding in time must cancel the background-end")
+    }
+
     // MARK: - Helpers
 
     private func waitUntil(
@@ -509,6 +742,41 @@ private final class SpyAudioSession {
     }
 }
 
+/// A `VoiceScheduling` whose `sleep` returns immediately — used by tests
+/// that need a real re-arm/background-timer `Task` to actually run (so
+/// cancellation semantics are exercised) but don't want to wait out the
+/// real duration.
+extension VoiceScheduling {
+    fileprivate static let instant = VoiceScheduling(sleep: { _ in })
+}
+
+/// Records calls to `VoiceScheduling.sleep` and lets a test resume one
+/// manually — same shape as `FakeVoiceAPI.holdUpload`/`resumeHeldUpload` —
+/// so background-timer tests can assert on the exact requested duration and
+/// control exactly when it "elapses" instead of sleeping for real.
+@MainActor
+private final class FakeScheduling {
+    private(set) var sleepCallCount = 0
+    private(set) var lastDuration: TimeInterval?
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    var scheduling: VoiceScheduling {
+        VoiceScheduling(sleep: { [weak self] duration in
+            guard let self else { return }
+            self.sleepCallCount += 1
+            self.lastDuration = duration
+            await withCheckedContinuation { continuation in
+                self.continuation = continuation
+            }
+        })
+    }
+
+    func resume() {
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
 @MainActor
 private final class FakeSpeechTranscriber: SpeechTranscribing {
     @Published var transcribedText: String = ""
@@ -517,10 +785,12 @@ private final class FakeSpeechTranscriber: SpeechTranscribing {
     var errorMessage: String? = nil
     @Published var endpointDeadline: Date? = nil
     var recordingURL: URL? = nil
+    @Published var inputLevel: Float = 0
 
     var transcribedTextPublisher: AnyPublisher<String, Never> { $transcribedText.eraseToAnyPublisher() }
     var isRecordingPublisher: AnyPublisher<Bool, Never> { $isRecording.eraseToAnyPublisher() }
     var endpointDeadlinePublisher: AnyPublisher<Date?, Never> { $endpointDeadline.eraseToAnyPublisher() }
+    var inputLevelPublisher: AnyPublisher<Float, Never> { $inputLevel.eraseToAnyPublisher() }
 
     private(set) var startCallCount = 0
     private(set) var stopCallCount = 0

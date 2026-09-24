@@ -76,3 +76,32 @@ export function localHour(date: Date, tz: string | null | undefined): number {
   const hour = parts.find(part => part.type === 'hour')?.value;
   return Number(hour);
 }
+
+/**
+ * YYYY-MM-DD of the Monday that starts the *local* week containing `dayKey`.
+ * Pure calendar-date arithmetic on the already-local key (same pattern as
+ * `previousDayKey` above) — never re-derive a Date from an instant here,
+ * that reintroduces the UTC-vs-local bug this whole module exists to avoid.
+ * `lib/workoutRepository.ts`'s `weekStartKey` does the equivalent thing
+ * directly off a UTC instant, for weekly progression stats where the caller
+ * only has (and only needs) an absolute timestamp.
+ */
+export function weekStartKeyForDay(dayKey: string): string {
+  const [year, month, day] = dayKey.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  const weekday = date.getUTCDay(); // 0 = Sunday
+  const diffToMonday = weekday === 0 ? -6 : 1 - weekday;
+  date.setUTCDate(date.getUTCDate() + diffToMonday);
+  return date.toISOString().slice(0, 10);
+}
+
+/** The local Monday..Sunday day keys (YYYY-MM-DD) for the week starting `weekStart`. */
+export function weekDayKeys(weekStart: string): string[] {
+  const [year, month, day] = weekStart.split('-').map(Number);
+  const start = new Date(Date.UTC(year, month - 1, day));
+  return Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(start);
+    d.setUTCDate(d.getUTCDate() + i);
+    return d.toISOString().slice(0, 10);
+  });
+}
