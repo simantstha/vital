@@ -41,9 +41,11 @@ struct MuscleHeroView: View {
                     Text(lastLiftText)
                         .font(.system(size: 13))
                         .foregroundStyle(Theme.Colors.textSecondary)
+                        .transition(.opacity)
                 }
                 if sessionDots != nil || sessionsThisWeekText != nil {
                     weekRow
+                        .transition(.opacity)
                 }
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Protein \(proteinHave) / \(proteinGoal) g")

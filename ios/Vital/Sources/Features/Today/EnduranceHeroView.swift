@@ -50,6 +50,7 @@ struct EnduranceHeroView: View {
 
                 if sessionDots != nil || sessionsThisWeekText != nil {
                     weekRow
+                        .transition(.opacity)
                 }
 
                 if let weeklyVolumeText {
@@ -57,6 +58,7 @@ struct EnduranceHeroView: View {
                         .font(.system(size: 12))
                         .foregroundStyle(Theme.Colors.textTertiary)
                         .monospacedDigit()
+                        .transition(.opacity)
                 }
             }
         }

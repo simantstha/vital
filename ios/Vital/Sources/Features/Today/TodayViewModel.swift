@@ -261,15 +261,53 @@ final class TodayViewModel: ObservableObject {
 
     /// `nil` until `/api/training/summary` resolves — fetched (fail-soft,
     /// same convention as `weightLog`/`enduranceTrendsBatch`) only for the
-    /// muscle/endurance goals that actually render its data; see
-    /// `performLoad`'s post-`/api/today` fetch, gated on `goal`.
+    /// muscle/endurance goals that actually render its data. Deliberately
+    /// NOT part of `performLoad`'s awaited batch: it's a secondary
+    /// enhancement, not core Today content, so it must never add a network
+    /// round-trip to the time-to-`.loaded` critical path. Instead
+    /// `performLoad` kicks it off unstructured (`refreshTrainingSummary`)
+    /// right after `loadState = .loaded`, and the new hero lines fade in
+    /// (`Theme.Motion.appear` + the views' `.transition(.opacity)`) once it
+    /// arrives — see docs/ux-spec-v4.md §4.1.
     @Published private(set) var trainingSummary: TrainingSummaryResponse? = nil
 
-    private func loadTrainingSummary() async {
-        do {
-            trainingSummary = try await apiClient.fetchTrainingSummary()
-        } catch {
-            print("[Vital] fetchTrainingSummary failed: \(error.localizedDescription)")
+    private var trainingSummaryTask: Task<Void, Never>?
+    /// Bumped on every `refreshTrainingSummary()` call so a stale in-flight
+    /// fetch (superseded by a pull-to-refresh or another reload before the
+    /// first one returned) can detect it lost the race and drop its result
+    /// instead of overwriting newer data — cancelling the previous task
+    /// alone isn't enough, since a request already past its await point can
+    /// still resolve after cancellation.
+    private var trainingSummaryGeneration = 0
+
+    /// Cancels any in-flight fetch and starts a fresh one — called for
+    /// every load (initial + pull-to-refresh) when the goal is muscle or
+    /// endurance, and clears `trainingSummary` immediately for every other
+    /// goal (a goal switch must never leave a stale hero's data behind).
+    private func refreshTrainingSummary() {
+        trainingSummaryTask?.cancel()
+
+        guard isMuscleGoal || isEnduranceGoal else {
+            trainingSummary = nil
+            return
+        }
+
+        trainingSummaryGeneration += 1
+        let generation = trainingSummaryGeneration
+
+        trainingSummaryTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let result = try await self.apiClient.fetchTrainingSummary()
+                guard !Task.isCancelled, generation == self.trainingSummaryGeneration else { return }
+                withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.appear) {
+                    self.trainingSummary = result
+                }
+            } catch {
+                if !error.isCancellation {
+                    print("[Vital] fetchTrainingSummary failed: \(error.localizedDescription)")
+                }
+            }
         }
     }
 
@@ -494,17 +532,15 @@ final class TodayViewModel: ObservableObject {
             applyTodayResponse(response)
             didLoadToday = true
             applyPlanResult(plan, todayPlan: response.plan)
+            withAnimation(Theme.Motion.appear) { loadState = .loaded }
             // `/api/training/summary` only feeds the muscle/endurance heroes
             // — `goal` is only known once `applyTodayResponse` above runs,
-            // so this can't join the concurrent batch further up; fetched
-            // fail-soft, same convention as `loadWeightLog`/
-            // `loadEnduranceTrends`.
-            if isMuscleGoal || isEnduranceGoal {
-                await loadTrainingSummary()
-            } else {
-                trainingSummary = nil
-            }
-            withAnimation(Theme.Motion.appear) { loadState = .loaded }
+            // so this can't join the concurrent batch further up. Kicked off
+            // AFTER `.loaded` (never awaited here): it's a secondary
+            // enhancement, not core Today content, and must never add a
+            // round-trip to the time-to-`.loaded` critical path. See
+            // `refreshTrainingSummary`'s doc comment.
+            refreshTrainingSummary()
 
         case .cancelled:
             // A stale in-flight load was superseded (tab switch, interrupted
