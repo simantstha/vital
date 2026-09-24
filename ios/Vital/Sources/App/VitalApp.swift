@@ -11,10 +11,32 @@ import UserNotifications
 /// screen.
 @MainActor
 final class AppDelegate: NSObject, UIApplicationDelegate {
+    /// Home Screen quick action ("quick log" PRD) — registered dynamically
+    /// below rather than via a static `UIApplicationShortcutItems` Info.plist
+    /// entry, since project.yml/Info.plist changes are out of scope for this
+    /// slice. Routes to the same `vital://log?mode=text` flow as
+    /// `LogDeepLinkRoute.compose(.text)`.
+    static let logMealShortcutType = "com.simantstha.vital.quickAction.logMeal"
+
     func application(
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
+        application.shortcutItems = [
+            UIApplicationShortcutItem(
+                type: Self.logMealShortcutType,
+                localizedTitle: "Log a meal",
+                localizedSubtitle: nil,
+                icon: UIApplicationShortcutIcon(systemImageName: "fork.knife")
+            ),
+        ]
+        // Cold launch via a long-press quick action tap — `performActionFor`
+        // below only fires for a warm/backgrounded launch, so a cold launch
+        // must be handled here instead (returning `true` either way; nothing
+        // about this launch depends on suppressing the rest of startup).
+        if let shortcutItem = launchOptions?[.shortcutItem] as? UIApplicationShortcutItem {
+            handleQuickAction(shortcutItem)
+        }
         // Must run before anything else touches the network: the screenshot
         // harness (VitalUITests/VitalScreenshots) launches with `-VitalFixture
         // <scenario>` and needs every request intercepted before AuthViewModel
@@ -58,6 +80,25 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
                      fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void) {
         Task { @MainActor in NotificationDelegateRouter.route(userInfo) }
         completionHandler(.noData)
+    }
+
+    /// Warm/backgrounded-launch quick-action tap. No custom
+    /// `UIWindowSceneDelegate` is registered, so UIKit forwards this to the
+    /// app delegate (see Apple's `performActionFor` doc note on scene-based
+    /// apps without one).
+    func application(
+        _ application: UIApplication,
+        performActionFor shortcutItem: UIApplicationShortcutItem,
+        completionHandler: @escaping (Bool) -> Void
+    ) {
+        completionHandler(handleQuickAction(shortcutItem))
+    }
+
+    @discardableResult
+    func handleQuickAction(_ shortcutItem: UIApplicationShortcutItem) -> Bool {
+        guard shortcutItem.type == Self.logMealShortcutType else { return false }
+        AppRouter.shared.logDeepLink = .compose(.text)
+        return true
     }
 }
 

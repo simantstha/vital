@@ -46,7 +46,7 @@ import type { Tool } from '@anthropic-ai/sdk/resources/messages';
 import { db, schema } from '@/db';
 import { eq, and, gte, gt, lt, asc, desc, inArray, isNull, sql } from 'drizzle-orm';
 import { lookupBarcode } from '@/lib/openFoodFacts';
-import { searchCandidates, pickLoggableCandidate, type Candidate } from '@/lib/nutrition/candidates';
+import { quickLogMeal } from '@/lib/nutrition/quickLog';
 import type { BaselineStats } from '@/lib/brain/baselines';
 import {
   applyDietBudgetUpdate,
@@ -1739,55 +1739,28 @@ export async function executeToolCall(
       });
     }
 
-    // Text/description path — history-first candidate search
-    const { candidates, estimateFoods, usdaCount } = await searchCandidates(userId, text);
-    const top = pickLoggableCandidate(text, candidates, usdaCount);
-    if (!top) {
+    // Text/description path — history-first candidate search, delegated to
+    // the shared helper (also used by app/api/meals/quick). source: 'coach'
+    // here is load-bearing — delete_meal and the coach's `meal_logged` SSE
+    // event only ever act on 'coach'-sourced rows.
+    const quickLogResult = await quickLogMeal(userId, text, { source: 'coach' });
+    if (!quickLogResult.ok) {
       return `Could not find nutrition data for "${text}". Try being more specific, e.g. "200g grilled chicken breast".`;
     }
 
-    const SOURCE_BY_ORIGIN: Record<Candidate['origin'], string> = {
-      history:  'history',
-      cache:    'cache',
-      usda:     'usda',
-      estimate: 'calorieninjas',
-    };
-    const isEstimate = top.origin === 'estimate' && estimateFoods != null;
-
-    const payload: Record<string, unknown> = {
-      kcal:        top.kcal,
-      c:           top.c,
-      p:           top.p,
-      f:           top.f,
-      name:        top.name,
-      description: text,
-      source:      SOURCE_BY_ORIGIN[top.origin],
-    };
-    if (isEstimate) {
-      payload.items = estimateFoods!.map(fd => `${fd.qty}${fd.unit} ${fd.name}`).join(', ');
-    }
-
-    const [row] = await db.insert(schema.events).values({
-      user_id:   userId,
-      timestamp: new Date(),
-      type:      'meal_logged',
-      payload,
-      source: 'coach',
-    }).returning({ id: schema.events.id });
-
     const result: Record<string, unknown> = {
       ok: true,
-      id: row.id,
+      id: quickLogResult.id,
       query: text,
-      kcal: top.kcal,
-      c: top.c,
-      p: top.p,
-      f: top.f,
-      matched: top.name,
-      origin: top.origin,
+      kcal: quickLogResult.kcal,
+      c: quickLogResult.c,
+      p: quickLogResult.p,
+      f: quickLogResult.f,
+      matched: quickLogResult.name,
+      origin: quickLogResult.origin,
     };
-    if (isEstimate) {
-      result.foods = estimateFoods;
+    if (quickLogResult.isEstimate) {
+      result.foods = quickLogResult.foods;
     }
 
     return JSON.stringify(result);

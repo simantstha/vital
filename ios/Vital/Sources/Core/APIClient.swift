@@ -798,6 +798,34 @@ struct APIClient {
         return try decoder.decode(LogMealResponse.self, from: data)
     }
 
+    /// POST /api/meals/quick — the Siri/App Intents, Shortcuts, Action
+    /// Button and meal-reminder-notification "quick log" entry point.
+    /// Unlike `logMeal`, this never produces (or waits on) a coach reaction
+    /// — quick logs are instant and silent product-wise (see the route's
+    /// doc comment) — and writes `source: 'quick'` server-side, not
+    /// `'coach'`, so `delete_meal` can never reach it; undo goes through
+    /// `deleteMealLog(id:)` below instead.
+    /// Throws `APIError.mealNotFound` (mirroring `.barcodeNotFound`) for the
+    /// route's 404 `{ error: 'not_found' }` — no nutrition candidate matched
+    /// `text`.
+    func quickLogMeal(text: String, tz: String? = nil) async throws -> QuickLogResponse {
+        guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/meals/quick") else {
+            throw APIError.invalidURL
+        }
+        var request = authorizedRequest(url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 15
+        struct Body: Encodable { let text: String; let tz: String? }
+        request.httpBody = try encoder.encode(Body(text: text, tz: tz ?? TimeZone.current.identifier))
+        let (data, response) = try await session.data(for: request)
+        if let http = response as? HTTPURLResponse, http.statusCode == 404 {
+            throw APIError.mealNotFound
+        }
+        try validate(response)
+        return try decoder.decode(QuickLogResponse.self, from: data)
+    }
+
     // MARK: - Diet sheet (today's logged meals)
 
     /// Fetches logged meals for a given local day (redesign-v3 Phase 6 Logs
@@ -1029,6 +1057,11 @@ enum APIError: Error, LocalizedError, Equatable {
     /// The WHOOP login sheet redirected back with `?status=error` (WHOOP
     /// denied the request, or our callback route failed the exchange).
     case whoopConnectFailed
+    /// POST /api/meals/quick genuinely found no nutrition candidate for the
+    /// given text (mirrors the server's 404 `{ error: 'not_found' }`).
+    /// Distinct from `.serverError` so `LogMealIntent` can surface its own
+    /// "try being more specific" dialog instead of a generic failure.
+    case mealNotFound
 
     var errorDescription: String? {
         switch self {
@@ -1038,6 +1071,7 @@ enum APIError: Error, LocalizedError, Equatable {
         case .barcodeNotFound:    return "Product not found. Try searching by name instead."
         case .whoopAuthorizeURLMissing: return "Couldn't start the WHOOP connection. Try again later."
         case .whoopConnectFailed: return "WHOOP didn't finish connecting. Please try again."
+        case .mealNotFound:       return "I couldn't find that food. Try being more specific."
         }
     }
 }
@@ -1345,6 +1379,20 @@ struct LogMealResponse: Decodable {
     let ok: Bool
     let eventId: String
     let coachReaction: String
+}
+
+/// Wire shape of `POST /api/meals/quick`'s 200 response — see that route's
+/// doc comment. `kcalLeft` is null when the server's best-effort diet-budget
+/// computation failed (non-fatal there; the log itself still succeeded).
+struct QuickLogResponse: Decodable {
+    let id: String
+    let name: String
+    let kcal: Int
+    let p: Int
+    let c: Int
+    let f: Int
+    let slot: String
+    let kcalLeft: Int?
 }
 
 // MARK: - Today dashboard types

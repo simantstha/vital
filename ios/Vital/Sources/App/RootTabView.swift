@@ -83,6 +83,18 @@ struct RootTabView: View {
                 selected = .coach
             }
         }
+        // `initial: true` also covers a cold launch straight into a quick
+        // action/deep link, where `router.logDeepLink` is already non-nil
+        // by the time this view first appears — a plain `onChange` only
+        // fires on a *subsequent* change and would miss that case.
+        .onChange(of: router.logDeepLink, initial: true) { _, value in
+            // Switches to Today first; `TodayView` itself observes
+            // `router.logDeepLink` to open the Diet sheet (and clears it
+            // once handled) — see `LogDeepLinkRoute`.
+            if value != nil {
+                selected = .today
+            }
+        }
         .sheet(item: $router.route) { route in
             switch route {
             case .workoutAnalysis(let id): WorkoutAnalysisView(id: id)

@@ -53,8 +53,9 @@ enum ErrorContext {
 ///    full so this stays debuggable in production.
 ///
 /// A handful of `APIError` cases (`.barcodeNotFound`, `.whoopAuthorizeURLMissing`,
-/// `.whoopConnectFailed`) are already written for humans — those pass
-/// through unchanged rather than being flattened to the generic bucket.
+/// `.whoopConnectFailed`, `.mealNotFound`) are already written for humans —
+/// those pass through unchanged rather than being flattened to the generic
+/// bucket.
 /// `.coachStreamError`'s payload is server-supplied text and is never shown
 /// verbatim: treat backend text as untrusted for presentation.
 enum UserFacingError {
@@ -115,7 +116,7 @@ enum UserFacingError {
                 // Server-supplied text — never trusted for presentation,
                 // regardless of what it says.
                 return generic(context, includesAction: includesAction)
-            case .barcodeNotFound, .whoopAuthorizeURLMissing, .whoopConnectFailed:
+            case .barcodeNotFound, .whoopAuthorizeURLMissing, .whoopConnectFailed, .mealNotFound:
                 // Already human-safe copy — pass through unchanged.
                 return apiError.errorDescription ?? generic(context, includesAction: includesAction)
             }

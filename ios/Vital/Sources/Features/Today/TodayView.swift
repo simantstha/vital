@@ -35,6 +35,14 @@ struct TodayView: View {
     /// never hardcode kg/lb, always read the live preference.
     @ObservedObject private var unitPref = UnitPreference.shared
 
+    /// `vital://log` deep links (Siri/App Intents, Shortcuts, the Home
+    /// Screen quick action, a notification's "Edit in Vital") — see
+    /// `LogDeepLinkRoute`. `RootTabView` switches to this tab; this view
+    /// opens the Diet sheet (optionally auto-presenting LogMealView in a
+    /// given input method) and clears the route once handled.
+    @EnvironmentObject private var router: AppRouter
+    @State private var dietSheetAutoOpenMethod: MealInputMethod? = nil
+
     /// The voice FAB must never overlap an open sheet.
     private var isAnySheetOpen: Bool {
         showLogSheet || showAddItem || actionsItem != nil || selectedMeal != nil
@@ -250,9 +258,27 @@ struct TodayView: View {
             VitalSheet(detents: [.large]) {
                 DietSheetView(
                     initialTarget: vm.diet.kcalTarget,
-                    onRefreshToday: { Task { await vm.loadHealthData() } }
+                    onRefreshToday: { Task { await vm.loadHealthData() } },
+                    autoOpenLogMethod: dietSheetAutoOpenMethod
                 )
             }
+        }
+        .onChange(of: showLogSheet) { _, isPresented in
+            // Consume the auto-open request only while it drove this
+            // presentation; an unrelated close (a manual fuel-strip tap
+            // opened afterwards) shouldn't replay a stale deep link.
+            if !isPresented { dietSheetAutoOpenMethod = nil }
+        }
+        .onChange(of: router.logDeepLink, initial: true) { _, route in
+            guard let route else { return }
+            switch route {
+            case .compose(let method):
+                dietSheetAutoOpenMethod = method
+            case .event:
+                dietSheetAutoOpenMethod = nil
+            }
+            showLogSheet = true
+            router.logDeepLink = nil
         }
         .sheet(isPresented: $showAddItem) {
             VitalSheet(detents: [.medium]) {

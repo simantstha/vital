@@ -22,8 +22,17 @@ struct DietSheetView: View {
     @FocusState private var targetFieldFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    init(initialTarget: Int, onRefreshToday: @escaping () -> Void) {
+    /// Set when this sheet was opened from a `vital://log?mode=voice|text`
+    /// deep link (Siri/Shortcuts "log a meal" quick action, notification
+    /// text action, Action Button) — auto-presents `LogMealView` in that
+    /// input method as soon as the sheet appears, instead of waiting for a
+    /// tap on the slot grid / deeper-flows row. `nil` (the ordinary
+    /// fuel-strip-tap open) leaves behavior unchanged.
+    private let autoOpenLogMethod: MealInputMethod?
+
+    init(initialTarget: Int, onRefreshToday: @escaping () -> Void, autoOpenLogMethod: MealInputMethod? = nil) {
         _vm = StateObject(wrappedValue: DietSheetViewModel(initialTarget: initialTarget, onRefreshToday: onRefreshToday))
+        self.autoOpenLogMethod = autoOpenLogMethod
     }
 
     var body: some View {
@@ -40,6 +49,12 @@ struct DietSheetView: View {
             .padding(.bottom, Theme.Spacing.xxl)
         }
         .task { await vm.load() }
+        .onAppear {
+            if let autoOpenLogMethod {
+                logMealMethod = autoOpenLogMethod
+                showLogMealSheet = true
+            }
+        }
         .toast(message: $vm.toastMessage)
         .actionToastHost(vm.actionToast)
         .sheet(isPresented: $showLogMealSheet) {

@@ -199,13 +199,20 @@ final class AppRouter: ObservableObject {
     static let shared = AppRouter()
     @Published var route: PushRoute?
     @Published var coachContext: String?
+    /// Set from `RootView.onOpenURL` for a `vital://log` deep link (Siri/App
+    /// Intents, Shortcuts, the Home Screen quick action, a notification's
+    /// "Edit in Vital"). `TodayView` observes this to open the Diet sheet
+    /// (and optionally auto-present LogMealView in a given input method);
+    /// `RootTabView` observes it to switch to the Today tab first. See
+    /// `LogDeepLinkRoute`.
+    @Published var logDeepLink: LogDeepLinkRoute?
     private var sessionScope: Int?
     func activateSession(token: String?) { sessionScope = token.map(\.hashValue) }
     func handle(_ userInfo: [AnyHashable: Any]) {
         guard sessionScope != nil, let route = PushRoute(userInfo: userInfo) else { return }
         self.route = route
     }
-    func resetSession() { sessionScope = nil; route = nil; coachContext = nil }
+    func resetSession() { sessionScope = nil; route = nil; coachContext = nil; logDeepLink = nil }
 }
 
 @MainActor
