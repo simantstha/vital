@@ -195,6 +195,111 @@ jobs:
               CODE_SIGNING_ALLOWED=NO
           fi
 
+      # Proves what "Extract App Intents Metadata" (part of the build step
+      # above) actually produced, instead of trusting that the step ran.
+      # A device test initially suspected registration itself was failing
+      # (LogMealIntent missing from the Shortcuts app entirely) — that
+      # turned out to be a false alarm: "+ → Add Action" in Shortcuts does
+      # list Vital, which only happens when its App Intents metadata IS
+      # registered; the earlier "nothing in Shortcuts" report was someone
+      # looking at "My Shortcuts" (saved shortcuts), where App Shortcuts
+      # never appear on their own. This check is kept anyway as a permanent
+      # guard, not a fix for a confirmed bug — a future PR that changes
+      # LogMealIntent/UndoQuickLogIntent/VitalShortcuts in a way that DOES
+      # break extraction (or drops an App Shortcut phrase) now fails here
+      # instead of only showing up in a device test.
+      - name: Verify App Intents metadata
+        run: |
+          set -euo pipefail
+
+          # No `-derivedDataPath` is passed to `xcodebuild test` above, so
+          # the built products land in the default DerivedData location.
+          # `build` here is `ios/build` (this job's steps default to
+          # `working-directory: ios`) — kept as a second search root in
+          # case that ever changes to an explicit `-derivedDataPath`.
+          APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData build \
+            -name "Vital.app" -type d -path "*iphonesimulator*" 2>/dev/null | head -1)
+
+          if [ -z "$APP_PATH" ]; then
+            echo "::error::Could not find a built Vital.app (simulator build) under ~/Library/Developer/Xcode/DerivedData or ios/build — the App Intents metadata check has nothing to inspect. The build step above may not have produced a simulator product where expected; list what IS there with 'find ~/Library/Developer/Xcode/DerivedData -maxdepth 6 -iname \"*.app\"' to debug."
+            exit 1
+          fi
+          echo "Found app bundle: $APP_PATH"
+
+          METADATA_DIR="$APP_PATH/Metadata.appintents"
+          if [ ! -d "$METADATA_DIR" ]; then
+            echo "::error::$APP_PATH has no Metadata.appintents/ directory at all — Xcode's 'Extract App Intents Metadata' build step produced nothing, so no App Intent (LogMealIntent, UndoQuickLogIntent) and no App Shortcut phrase is known to Siri/Shortcuts/Spotlight. Check for extractor warnings earlier in this job's build log."
+            exit 1
+          fi
+          echo "Metadata.appintents/ contents:"
+          ls -la "$METADATA_DIR"
+
+          ACTIONS_FILE="$METADATA_DIR/extract.actionsdata"
+          if [ ! -f "$ACTIONS_FILE" ]; then
+            echo "::error::$METADATA_DIR exists but has no extract.actionsdata — the App Intents extractor produced an empty/partial result. Files present: $(ls -A "$METADATA_DIR" | tr '\n' ' ')"
+            exit 1
+          fi
+
+          missing=""
+          for needle in "LogMealIntent" "UndoQuickLogIntent" "Log a meal"; do
+            if ! grep -q "$needle" "$ACTIONS_FILE"; then
+              missing="${missing}\"$needle\" "
+            fi
+          done
+
+          echo ""
+          echo "--- extract.actionsdata: appShortcuts / autoShortcuts section ---"
+          if python3 -m json.tool "$ACTIONS_FILE" > /tmp/extract.actionsdata.json 2>/dev/null; then
+            PRETTY=/tmp/extract.actionsdata.json
+          elif plutil -convert json -o /tmp/extract.actionsdata.json "$ACTIONS_FILE" 2>/dev/null; then
+            PRETTY=/tmp/extract.actionsdata.json
+          else
+            PRETTY=""
+          fi
+
+          if [ -n "$PRETTY" ]; then
+            python3 - "$PRETTY" <<'PY'
+          import json, sys
+
+          with open(sys.argv[1]) as f:
+              data = json.load(f)
+
+          def find_shortcut_sections(node, path=""):
+              hits = []
+              if isinstance(node, dict):
+                  for key, value in node.items():
+                      key_path = f"{path}.{key}" if path else key
+                      if key in ("appShortcuts", "autoShortcuts", "shortcuts", "phrases"):
+                          hits.append((key_path, value))
+                      hits.extend(find_shortcut_sections(value, key_path))
+              elif isinstance(node, list):
+                  for i, item in enumerate(node):
+                      hits.extend(find_shortcut_sections(item, f"{path}[{i}]"))
+              return hits
+
+          hits = find_shortcut_sections(data)
+          if not hits:
+              print("No appShortcuts/autoShortcuts/shortcuts/phrases key found in the parsed JSON.")
+              print("Top-level keys:", list(data.keys()) if isinstance(data, dict) else type(data).__name__)
+          else:
+              for key_path, value in hits:
+                  print(f"=== {key_path} ===")
+                  print(json.dumps(value, indent=2)[:4000])
+          PY
+          else
+            echo "extract.actionsdata isn't parseable as JSON or a plist — falling back to a raw grep of shortcut-ish content:"
+            grep -o '.\{0,80\}\(appShortcuts\|autoShortcuts\|Log a meal\)\{1\}.\{0,200\}' "$ACTIONS_FILE" || true
+          fi
+
+          if [ -n "$missing" ]; then
+            echo ""
+            echo "::error::extract.actionsdata is missing expected content: $missing— Siri/Shortcuts will not offer the missing intent(s)/phrase. See the printed section above for what WAS actually extracted."
+            exit 1
+          fi
+
+          echo ""
+          echo "extract.actionsdata contains LogMealIntent, UndoQuickLogIntent and the \"Log a meal\" App Shortcut phrase."
+
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
