@@ -128,10 +128,13 @@ enum FixtureData {
                 FixturePlanItem(title: "Greek yogurt + almonds", timeMinutes: 960, kind: "meal", subtitle: "Snack · 4:00 PM", kcal: 220, why: "Bridges the afternoon without derailing today's budget."),
                 FixturePlanItem(title: "Salmon, rice, broccoli", timeMinutes: 1140, kind: "meal", subtitle: "Dinner · 7:00 PM", kcal: 520, why: "Balanced macros to close out the day on target."),
             ],
+            // Macros sum to the Profile-level protein/carbs/fat above (96/110/38)
+            // — kcal per meal stays as-is (PR #208 aligned consumedKcal to
+            // these sums already); only the macro grams were adjusted here.
             meals: [
-                FixtureMeal(name: "Overnight oats with berries", kcal: 380, c: 52, p: 18, f: 9, slot: "breakfast"),
-                FixtureMeal(name: "Grilled chicken salad", kcal: 420, c: 24, p: 46, f: 14, slot: "lunch"),
-                FixtureMeal(name: "Greek yogurt + almonds", kcal: 220, c: 16, p: 14, f: 11, slot: "snacks"),
+                FixtureMeal(name: "Overnight oats with berries", kcal: 380, c: 58, p: 24, f: 10, slot: "breakfast"),
+                FixtureMeal(name: "Grilled chicken salad", kcal: 420, c: 30, p: 52, f: 15, slot: "lunch"),
+                FixtureMeal(name: "Greek yogurt + almonds", kcal: 220, c: 22, p: 20, f: 13, slot: "snacks"),
             ],
             weightKg: 82, weightTrendPerWeekKg: -0.6,
             hrv: 58, restingHR: 57, sleepMinutes: 435, steps: 8600, distanceKm: 6.1,
@@ -151,10 +154,15 @@ enum FixtureData {
                 FixturePlanItem(title: "Protein shake + banana", timeMinutes: 990, kind: "meal", subtitle: "Snack · 4:30 PM", kcal: 320, why: "Keeps protein intake spread across the day."),
                 FixturePlanItem(title: "Steak, sweet potato, greens", timeMinutes: 1170, kind: "meal", subtitle: "Dinner · 7:30 PM", kcal: 720, why: "Closes the surplus needed for this week's gain rate."),
             ],
+            // Macros sum to the Profile-level protein/carbs/fat above
+            // (158/210/58) — ScreenshotTests asserts "Protein 158 / 190 g",
+            // so the top-level total is load-bearing; only the per-meal
+            // grams were adjusted to actually add up to it. kcal per meal
+            // unchanged (PR #208 aligned consumedKcal to these sums already).
             meals: [
-                FixtureMeal(name: "Egg + oat protein bowl", kcal: 560, c: 58, p: 42, f: 16, slot: "breakfast"),
-                FixtureMeal(name: "Chicken, rice, avocado", kcal: 680, c: 74, p: 48, f: 20, slot: "lunch"),
-                FixtureMeal(name: "Protein shake + banana", kcal: 320, c: 36, p: 24, f: 4, slot: "snacks"),
+                FixtureMeal(name: "Egg + oat protein bowl", kcal: 560, c: 72, p: 57, f: 22, slot: "breakfast"),
+                FixtureMeal(name: "Chicken, rice, avocado", kcal: 680, c: 88, p: 63, f: 26, slot: "lunch"),
+                FixtureMeal(name: "Protein shake + banana", kcal: 320, c: 50, p: 38, f: 10, slot: "snacks"),
             ],
             weightKg: 79, weightTrendPerWeekKg: 0.35,
             hrv: 62, restingHR: 52, sleepMinutes: 450, steps: 7200, distanceKm: 4.8,
@@ -180,10 +188,14 @@ enum FixtureData {
                 FixturePlanItem(title: "Electrolyte smoothie", timeMinutes: 990, kind: "meal", subtitle: "Snack · 4:30 PM", kcal: 240, why: "Rehydration ahead of tomorrow's easy run."),
                 FixturePlanItem(title: "Pasta with turkey ragu", timeMinutes: 1140, kind: "meal", subtitle: "Dinner · 7:00 PM", kcal: 620, why: "Carb-forward dinner to top off glycogen stores."),
             ],
+            // Macros sum to the Profile-level protein/carbs/fat above
+            // (92/260/46) — kcal per meal unchanged (PR #208 aligned
+            // consumedKcal to these sums already); only the macro grams
+            // were adjusted here.
             meals: [
-                FixtureMeal(name: "Banana + peanut butter toast", kcal: 340, c: 46, p: 10, f: 12, slot: "breakfast"),
-                FixtureMeal(name: "Rice bowl with chicken", kcal: 560, c: 68, p: 38, f: 12, slot: "lunch"),
-                FixtureMeal(name: "Electrolyte smoothie", kcal: 240, c: 42, p: 6, f: 3, slot: "snacks"),
+                FixtureMeal(name: "Banana + peanut butter toast", kcal: 340, c: 81, p: 23, f: 18, slot: "breakfast"),
+                FixtureMeal(name: "Rice bowl with chicken", kcal: 560, c: 103, p: 51, f: 19, slot: "lunch"),
+                FixtureMeal(name: "Electrolyte smoothie", kcal: 240, c: 76, p: 18, f: 9, slot: "snacks"),
             ],
             weightKg: 61, weightTrendPerWeekKg: -0.1,
             hrv: 68, restingHR: 46, sleepMinutes: 445, steps: 11200, distanceKm: 12.4,

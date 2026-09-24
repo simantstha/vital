@@ -52,11 +52,13 @@ struct ErrorCard: View {
                         .font(Theme.Typography.bodySmall)
                         .fontWeight(.medium)
                         .foregroundStyle(Theme.Colors.textPrimary)
+                        .fixedSize(horizontal: false, vertical: true)
                     Text(message)
                         .font(Theme.Typography.labelSmall)
                         .foregroundStyle(Theme.Colors.textSecondary)
                         .lineLimit(2)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
 
                 Spacer(minLength: Theme.Spacing.sm)
 

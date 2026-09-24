@@ -67,10 +67,11 @@ struct TodayView: View {
                             .motionTransition(.fade)
 
                     case .failed(let message):
-                        ErrorCard(title: "Couldn't load today's data", message: message) {
-                            Task { await vm.loadHealthData() }
+                        ErrorStateContainer {
+                            ErrorCard(title: "Couldn't load today's data", message: message) {
+                                Task { await vm.loadHealthData() }
+                            }
                         }
-                        .motionTransition(.fade)
 
                     case .loaded:
                         Group {
@@ -615,7 +616,7 @@ struct VitalProgressBar: View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
                 RoundedRectangle(cornerRadius: height / 2, style: .continuous)
-                    .fill(Theme.Colors.glassFill)
+                    .fill(Theme.Colors.progressTrack)
                 RoundedRectangle(cornerRadius: height / 2, style: .continuous)
                     .fill(tint)
                     .frame(width: geo.size.width * fraction)

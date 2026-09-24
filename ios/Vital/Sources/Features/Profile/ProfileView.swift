@@ -42,13 +42,14 @@ struct ProfileView: View {
                                 .padding(.top, 80)
                                 .motionTransition(.fade)
                         } else if let errorMessage = vm.errorMessage {
-                            ErrorCard(title: "Couldn't load profile", message: errorMessage) {
-                                Task {
-                                    vm.errorMessage = nil
-                                    await vm.load()
+                            ErrorStateContainer {
+                                ErrorCard(title: "Couldn't load profile", message: errorMessage) {
+                                    Task {
+                                        vm.errorMessage = nil
+                                        await vm.load()
+                                    }
                                 }
                             }
-                            .motionTransition(.fade)
                         } else {
                             Group {
                                 avatarSection
