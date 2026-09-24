@@ -15,6 +15,8 @@ struct RootView: View {
     /// `.task` is a safe no-op resume if it's still running.
     @StateObject private var backfillCoordinator = BackfillCoordinator()
 
+    @EnvironmentObject private var router: AppRouter
+
     var body: some View {
         Group {
             if !authViewModel.isAuthenticated {
@@ -71,8 +73,17 @@ struct RootView: View {
             // the system routing it to the app instead (e.g. the session was
             // already dismissed when WHOOP redirected) and the extension
             // point for future `vital://` deep links.
-            guard WhoopCallbackResult(url: url) != nil else { return }
-            NotificationCenter.default.post(name: .vitalWhoopCallbackReceived, object: nil)
+            if WhoopCallbackResult(url: url) != nil {
+                NotificationCenter.default.post(name: .vitalWhoopCallbackReceived, object: nil)
+                return
+            }
+            // `vital://log?mode=voice|text` (quick-log entry points) and
+            // `vital://log?event=<id>` ("Edit in Vital") — see
+            // `LogDeepLinkRoute`. `RootTabView`/`TodayView` do the actual
+            // tab-switch + sheet presentation off `router.logDeepLink`.
+            if let logRoute = LogDeepLinkRoute(url: url) {
+                router.logDeepLink = logRoute
+            }
         }
         .onChange(of: scenePhase) { _, newPhase in
             // Catches the return trip from Settings after a permission

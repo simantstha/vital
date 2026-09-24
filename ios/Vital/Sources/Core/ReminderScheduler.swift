@@ -155,7 +155,8 @@ final class ReminderScheduler {
                         id: mealSlot.identifier(day),
                         title: mealSlot.title,
                         body: mealSlot.body,
-                        fireDate: fireDate
+                        fireDate: fireDate,
+                        category: NotificationIdentifiers.mealReminderCategory
                     )
                 }
             }
@@ -198,11 +199,14 @@ final class ReminderScheduler {
         return calendar.date(byAdding: .minute, value: minutes, to: startOfDay)
     }
 
-    private func schedule(id: String, title: String, body: String, fireDate: Date) {
+    private func schedule(
+        id: String, title: String, body: String, fireDate: Date,
+        category: String = NotificationIdentifiers.reminderCategory
+    ) {
         let components = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: fireDate)
         manager.schedule(
             id: id, title: title, body: body,
-            category: NotificationIdentifiers.reminderCategory,
+            category: category,
             dateComponents: components
         )
     }
