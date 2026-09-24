@@ -238,12 +238,30 @@ final class NotificationManager: NSObject, ObservableObject {
 
     // MARK: - Quick log (meal reminder's "Log what I ate" text action)
 
+    /// `didReceive`'s entry point: wraps `handleQuickLogAction` in a
+    /// `beginBackgroundTask`/`endBackgroundTask` pair for the extra runtime
+    /// iOS grants a background-launched process doing real work — the
+    /// "Log what I ate" text-input action has no `.foreground` option, so
+    /// without this the process can be suspended mid-request. Ends the
+    /// background task on every path (success, thrown error, or the
+    /// system's own expiration handler), and `didReceive` awaits this before
+    /// calling `completionHandler()` — see that method's comment.
+    func runQuickLogAction(text: String, service: QuickLogServicing = LiveQuickLogService()) async {
+        let bgTask = BackgroundTaskGuard()
+        bgTask.begin(name: "quickLog")
+        defer { bgTask.end() }
+        await handleQuickLogAction(text: text, service: service)
+    }
+
     /// Runs `QuickLogNotificationRouter.route(response:)`'s decision: quick-
     /// logs `text` via `QuickLogServicing`, then posts a local confirmation
     /// notification ("Logged X · N kcal"). Best-effort/silent on failure —
     /// a notification action has no UI to show an error in, and quick logs
     /// are meant to never block (see `POST /api/meals/quick`'s doc comment);
-    /// the user can always retry from the app.
+    /// the user can always retry from the app. Bounded by
+    /// `APIClient.quickLogMeal`'s own 15s `timeoutInterval` (see that
+    /// method), so this can't hang indefinitely and outlast the background
+    /// task's runtime.
     func handleQuickLogAction(text: String, service: QuickLogServicing = LiveQuickLogService()) async {
         guard let result = try? await service.quickLog(text: text) else { return }
         postQuickLogConfirmation(name: result.name, kcal: result.kcal)
@@ -266,6 +284,39 @@ final class NotificationManager: NSObject, ObservableObject {
     /// → `"Logged 2 eggs and toast · 320 kcal"`.
     static func quickLogConfirmationTitle(name: String, kcal: Int) -> String {
         "Logged \(name) · \(kcal) kcal"
+    }
+}
+
+// MARK: - Background task guard
+
+/// Thin `beginBackgroundTask`/`endBackgroundTask` wrapper that guarantees
+/// `endBackgroundTask` fires exactly once, however it's triggered — either
+/// `end()` (the normal `defer` path in `runQuickLogAction`) or the system's
+/// own expiration handler (which UIKit is explicitly documented to be able
+/// to invoke on any thread, unlike most `UIApplication` APIs — hence the
+/// lock rather than assuming `@MainActor`). Calling `endBackgroundTask`
+/// twice for one identifier is a hard crash on-device, so this is not
+/// optional belt-and-suspenders — it's the whole point of the type.
+private final class BackgroundTaskGuard: @unchecked Sendable {
+    private let lock = NSLock()
+    private var id: UIBackgroundTaskIdentifier = .invalid
+    private var ended = false
+
+    func begin(name: String) {
+        let taskId = UIApplication.shared.beginBackgroundTask(withName: name) { [weak self] in
+            self?.end()
+        }
+        lock.lock()
+        id = taskId
+        lock.unlock()
+    }
+
+    func end() {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !ended, id != .invalid else { return }
+        ended = true
+        UIApplication.shared.endBackgroundTask(id)
     }
 }
 
@@ -343,13 +394,27 @@ extension NotificationManager: UNUserNotificationCenterDelegate {
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
+        // Computed synchronously, on this call's thread, BEFORE the Task:
+        // `UNNotificationResponse` isn't `Sendable`, so it must not be
+        // captured into the Task below. `route(response:)` itself is a pure,
+        // nonisolated static function (no actor hop needed for this).
         let info = response.notification.request.content.userInfo
+        let route = QuickLogNotificationRouter.route(response: response)
+
         Task { @MainActor in
             NotificationDelegateRouter.route(info)
-            if case .quickLog(let text) = QuickLogNotificationRouter.route(response: response) {
-                await NotificationManager.shared.handleQuickLogAction(text: text)
+            // The "Log what I ate" text-input action has no `.foreground`
+            // option, so iOS runs this in the background with no guaranteed
+            // extra runtime beyond what `beginBackgroundTask` buys — and
+            // critically, `completionHandler()` must NOT fire until the
+            // quick-log network call (and its confirmation notification)
+            // have actually finished, or iOS can suspend the process the
+            // instant this call returns, silently dropping the meal. See
+            // `handleQuickLogAction` for the timeout that upper-bounds this.
+            if case .quickLog(let text) = route {
+                await NotificationManager.shared.runQuickLogAction(text: text)
             }
+            completionHandler()
         }
-        completionHandler()
     }
 }
