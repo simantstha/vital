@@ -41,12 +41,11 @@ struct DietSheetView: View {
                 header
                 remainingRow
                 slotGrid
-                // Hidden entirely when there's nothing to log again — with
-                // no recents, this card only ever showed "Nothing logged
-                // yet", duplicating the one below in `loggedTodaySection`.
-                if !vm.recentsForSelectedSlot.isEmpty {
-                    recentMealsSection
-                }
+                // Always shown — it's also the custom-entry (name + kcal)
+                // row's home. When there are no recents it collapses to just
+                // that row: no "Nothing logged yet" copy here, since
+                // `loggedTodaySection` below already owns that message.
+                recentMealsSection
                 deeperFlowsRow
                 loggedTodaySection
             }
@@ -206,13 +205,19 @@ private extension DietSheetView {
     /// now: the user's own recently logged meals (GET /api/nutrition/recents),
     /// not a fabricated catalogue. Falls back to "Recently logged" (no slot
     /// suffix) when `vm.isRecentsFallback` — i.e. we're showing meals from
-    /// other slots because this one has none of its own yet. Only called
-    /// with a non-empty `recentsForSelectedSlot` (see `body`'s guard) — an
-    /// empty slot has nothing to title.
+    /// other slots because this one has none of its own yet. With no
+    /// recents at all, the card is just the custom-entry row, so "Recently
+    /// logged" would be a lie — "Quick add" instead.
     var recentsSectionTitle: String {
-        vm.isRecentsFallback ? "Recently logged" : "Recently logged · \(vm.selectedSlot.label)"
+        guard !vm.recentsForSelectedSlot.isEmpty else { return "Quick add" }
+        return vm.isRecentsFallback ? "Recently logged" : "Recently logged · \(vm.selectedSlot.label)"
     }
 
+    /// The recents list + custom-entry row. When `recentsForSelectedSlot` is
+    /// empty this collapses to just `customRow` — no "Nothing logged yet"
+    /// copy (that's `loggedTodaySection`'s job) and no empty list — so the
+    /// fastest manual-log path (name + kcal + "+") stays reachable for a new
+    /// user or an empty slot instead of disappearing along with the card.
     var recentMealsSection: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
             SectionHeader(title: recentsSectionTitle)
@@ -299,7 +304,12 @@ private extension DietSheetView {
         .padding(.horizontal, Theme.Spacing.lg)
         .padding(.vertical, Theme.Spacing.md)
         .overlay(alignment: .top) {
-            Rectangle().fill(Theme.Colors.glassBorder).frame(height: 0.5)
+            // Only when it's following a recent-food row — with no recents,
+            // customRow is the card's only content, and the divider would
+            // just sit against the card's own top edge.
+            if !vm.recentsForSelectedSlot.isEmpty {
+                Rectangle().fill(Theme.Colors.glassBorder).frame(height: 0.5)
+            }
         }
     }
 
