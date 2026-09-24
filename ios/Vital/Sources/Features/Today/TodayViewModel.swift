@@ -367,6 +367,19 @@ final class TodayViewModel: ObservableObject {
         )
     }
 
+    /// Combined "3 sessions · 24.5 km this week" line for the endurance hero.
+    /// Returns `nil` when neither sessions nor volume data is available.
+    var enduranceWeeklyOverviewText: String? {
+        guard let week = trainingSummary?.week else { return nil }
+        let sessionsCompleted = week.completedSessions
+        let kmDone = trainingSummary?.volume.done
+        return EnduranceHeroLogic.weeklySessionsAndVolumeText(
+            sessionsCompleted: sessionsCompleted,
+            kmDone: kmDone,
+            system: UnitPreference.shared.current
+        )
+    }
+
     // MARK: - Weight-loss hero (§4.1, §5.3)
 
     /// "weight_loss" | "muscle" | "endurance" | "general" — from

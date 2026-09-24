@@ -244,4 +244,31 @@ enum EnduranceHeroLogic {
         }
         return "\(UnitFormat.distance(km: kmDone, system)) this week"
     }
+
+    /// Combines sessions and volume into one line for the endurance hero.
+    /// When both are available, returns "3 sessions · 24.5 km this week".
+    /// When only one is available, returns just that value.
+    /// When neither is available, returns nil.
+    static func weeklySessionsAndVolumeText(
+        sessionsCompleted: Int?,
+        kmDone: Double?,
+        system: UnitSystem
+    ) -> String? {
+        let sessionsText = sessionsCompleted.map { completed -> String in
+            let n = max(completed, 0)
+            return "\(n) session\(n == 1 ? "" : "s")"
+        }
+        let volumeText = kmDone.map { km -> String in
+            "\(UnitFormat.distance(km: km, system))"
+        }
+
+        if let sessionsText, let volumeText {
+            return "\(sessionsText) · \(volumeText) this week"
+        } else if let sessionsText {
+            return "\(sessionsText) this week"
+        } else if let volumeText {
+            return "\(volumeText) this week"
+        }
+        return nil
+    }
 }

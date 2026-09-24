@@ -16,15 +16,12 @@ struct EnduranceHeroView: View {
 
     /// Today's move-kind plan item, or `nil` for a rest day.
     let session: PlanItem?
-    /// "X km this week" / "X of Y km" — `TodayViewModel
-    /// .enduranceWeeklyVolumeText`. `nil` hides the line.
-    let weeklyVolumeText: String?
     /// Done/total for the "● ● ○ ○" dot row — same rule and source data as
     /// the muscle hero (`TodayViewModel.trainingSessionDots`).
     var sessionDots: (done: Int, total: Int)? = nil
-    /// "2 of 4 sessions" / the no-plan-data fallback —
-    /// `TodayViewModel.trainingSessionsThisWeekText`.
-    var sessionsThisWeekText: String? = nil
+    /// Combined "3 sessions · 24.5 km this week" line — combines both
+    /// sessions and weekly volume into one display. `nil` hides the line.
+    var weeklyOverviewText: String? = nil
 
     var onTapSession: (PlanItem) -> Void
 
@@ -48,16 +45,8 @@ struct EnduranceHeroView: View {
 
                 sessionSection
 
-                if sessionDots != nil || sessionsThisWeekText != nil {
+                if sessionDots != nil || weeklyOverviewText != nil {
                     weekRow
-                        .transition(.opacity)
-                }
-
-                if let weeklyVolumeText {
-                    Text(weeklyVolumeText)
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.Colors.textTertiary)
-                        .monospacedDigit()
                         .transition(.opacity)
                 }
             }
@@ -66,15 +55,15 @@ struct EnduranceHeroView: View {
         .accessibilityLabel(accessibilityLabel)
     }
 
-    /// Same shared dot-row + count convention as `MuscleHeroView.weekRow`.
+    /// Dot row (if plan data exists) or combined overview line.
     @ViewBuilder
     private var weekRow: some View {
         HStack(spacing: Theme.Spacing.sm) {
             if let sessionDots {
                 SessionDotsRow(done: sessionDots.done, total: sessionDots.total)
             }
-            if let sessionsThisWeekText {
-                Text(sessionsThisWeekText)
+            if let weeklyOverviewText {
+                Text(weeklyOverviewText)
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.Colors.textTertiary)
                     .monospacedDigit()
@@ -114,8 +103,7 @@ struct EnduranceHeroView: View {
         var parts: [String] = [calibratingText ?? readinessWord?.rawValue ?? EnduranceHeroLogic.ReadinessWord.goodToTrain.rawValue]
         if calibratingText == nil, let reasonLine { parts.append(reasonLine) }
         parts.append(session?.title ?? EnduranceHeroLogic.restDayText)
-        if let sessionsThisWeekText { parts.append(sessionsThisWeekText) }
-        if let weeklyVolumeText { parts.append(weeklyVolumeText) }
+        if let weeklyOverviewText { parts.append(weeklyOverviewText) }
         return parts.joined(separator: ". ")
     }
 }

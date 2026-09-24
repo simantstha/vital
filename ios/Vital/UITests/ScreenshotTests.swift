@@ -169,6 +169,42 @@ final class ScreenshotTests: XCTestCase {
         element.tap()
     }
 
+    /// Taps the named tab bar button and waits until it actually reports
+    /// `isSelected` before returning — a bare `.tap()` can be swallowed
+    /// (e.g. absorbed by a sheet still mid-dismiss animation, PR #208's
+    /// `captureCoach` failure) and XCUITest doesn't fail on that by itself,
+    /// so the next screen's assertions silently run against whatever tab was
+    /// already showing instead. Retries the tap exactly once if the first
+    /// one didn't register, then fails loudly (naming the tab and the
+    /// scenario/appearance) if it still isn't selected.
+    private func switchToTab(_ name: String, app: XCUIApplication, scenario: String, appearance: String) {
+        let tab = app.tabBars.buttons[name]
+        guard tab.waitForExistence(timeout: 10) else {
+            XCTFail("\(name) tab bar button never appeared [\(scenario)/\(appearance)]")
+            return
+        }
+
+        func waitUntilSelected() -> Bool {
+            let selected = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "isSelected == true"),
+                object: tab
+            )
+            return XCTWaiter().wait(for: [selected], timeout: 5) == .completed
+        }
+
+        tab.tap()
+        if waitUntilSelected() { return }
+
+        // The first tap may have been absorbed by something still animating
+        // off screen (a dismissing sheet, a transition) — one retry covers
+        // that without masking a real failure to switch tabs at all.
+        tab.tap()
+        guard waitUntilSelected() else {
+            XCTFail("\(name) tab never became selected after tapping it twice [\(scenario)/\(appearance)]")
+            return
+        }
+    }
+
     // MARK: - Screens
 
     private func captureToday(_ app: XCUIApplication, scenario: String, appearance: String) {
@@ -239,15 +275,11 @@ final class ScreenshotTests: XCTestCase {
                                "Today's endurance hero should show a readiness word [\(appearance)]")
                 XCTAssertTrue(waitForText(app, containing: "10km tempo run"),
                                "Today's endurance hero should show today's session [\(appearance)]")
-                // Weekly volume — fixture-unique 24.5km done, no target, so
-                // "24.5 km this week" (only rendered once
-                // `/api/training/summary` decodes, #202).
-                XCTAssertTrue(waitForText(app, containing: "24.5 km this week"),
-                               "Today's endurance hero should show this week's volume [\(appearance)]")
-                // No plan data this week for endurance (`plannedSessions:
-                // null`) — the no-dots fallback copy, 3 completed sessions.
-                XCTAssertTrue(waitForText(app, containing: "3 sessions this week"),
-                               "Today's endurance hero should show the no-plan-data session fallback [\(appearance)]")
+                // Combined line showing sessions and weekly volume:
+                // 3 completed sessions, 24.5 km done this week
+                // (no plan data for endurance, so no dots).
+                XCTAssertTrue(waitForText(app, containing: "3 sessions · 24.5 km this week"),
+                               "Today's endurance hero should show sessions and volume combined [\(appearance)]")
             }
 
             if scenario == "new_user" {
@@ -289,16 +321,23 @@ final class ScreenshotTests: XCTestCase {
         let close = app.buttons["Close"]
         if close.waitForExistence(timeout: 5) {
             close.tap()
+            // Wait out the dismiss animation before returning — a caller
+            // that immediately taps a tab bar button while the sheet is
+            // still animating away can have that tap absorbed by the
+            // dismissing sheet instead of reaching the tab bar (2026-09-24,
+            // PR #208: the endurance/light run's "Coach" tap landed while
+            // the Diet sheet was still closing, and `captureCoach` went on
+            // to assert against Today, which was still on screen).
+            guard app.staticTexts["Diet budget"].waitForNonExistence(timeout: 5) else {
+                XCTFail("Diet sheet never finished dismissing after tapping Close "
+                         + "[\(scenario)/\(appearance)]")
+                return
+            }
         }
     }
 
     private func captureCoach(_ app: XCUIApplication, scenario: String, appearance: String) {
-        let tab = app.tabBars.buttons["Coach"]
-        guard tab.waitForExistence(timeout: 10) else {
-            XCTFail("Coach tab bar button never appeared [\(scenario)/\(appearance)]")
-            return
-        }
-        tab.tap()
+        switchToTab("Coach", app: app, scenario: scenario, appearance: appearance)
 
         // The fixture seeds a restored transcript for every *established*
         // scenario except server_error, where every endpoint 500s and
@@ -332,12 +371,7 @@ final class ScreenshotTests: XCTestCase {
     }
 
     private func captureTrends(_ app: XCUIApplication, scenario: String, appearance: String) {
-        let tab = app.tabBars.buttons["Trends"]
-        guard tab.waitForExistence(timeout: 10) else {
-            XCTFail("Trends tab bar button never appeared [\(scenario)/\(appearance)]")
-            return
-        }
-        tab.tap()
+        switchToTab("Trends", app: app, scenario: scenario, appearance: appearance)
 
         if scenario == "server_error" {
             XCTAssertTrue(app.staticTexts["Couldn't load your trends"].waitForExistence(timeout: 15),
@@ -422,12 +456,7 @@ final class ScreenshotTests: XCTestCase {
     }
 
     private func captureLogs(_ app: XCUIApplication, scenario: String, appearance: String) {
-        let tab = app.tabBars.buttons["Logs"]
-        guard tab.waitForExistence(timeout: 10) else {
-            XCTFail("Logs tab bar button never appeared [\(scenario)/\(appearance)]")
-            return
-        }
-        tab.tap()
+        switchToTab("Logs", app: app, scenario: scenario, appearance: appearance)
 
         if scenario == "server_error" {
             XCTAssertTrue(app.staticTexts["Couldn't load your logs"].waitForExistence(timeout: 15),
@@ -442,12 +471,7 @@ final class ScreenshotTests: XCTestCase {
     }
 
     private func captureProfile(_ app: XCUIApplication, scenario: String, appearance: String) {
-        let tab = app.tabBars.buttons["Profile"]
-        guard tab.waitForExistence(timeout: 10) else {
-            XCTFail("Profile tab bar button never appeared [\(scenario)/\(appearance)]")
-            return
-        }
-        tab.tap()
+        switchToTab("Profile", app: app, scenario: scenario, appearance: appearance)
 
         if scenario == "server_error" {
             XCTAssertTrue(app.staticTexts["Couldn't load profile"].waitForExistence(timeout: 15),

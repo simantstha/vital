@@ -119,7 +119,7 @@ enum FixtureData {
             name: "Alex Rivera",
             insight: "You're down 1.2kg this week and sleep is holding steady — keep the deficit gentle through the weekend.",
             established: true,
-            targetKcal: 1850, consumedKcal: 1240,
+            targetKcal: 1850, consumedKcal: 1020,
             protein: 96, proteinTarget: 150, carbs: 110, carbsTarget: 165, fat: 38, fatTarget: 62,
             plan: [
                 FixturePlanItem(title: "Overnight oats with berries", timeMinutes: 420, kind: "meal", subtitle: "Breakfast · 7:00 AM", kcal: 380, why: "High protein start keeps you full past lunch."),
@@ -142,7 +142,7 @@ enum FixtureData {
             name: "Sam Okafor",
             insight: "Protein's on target four days running and yesterday's lift was a PR on squat volume — stay the course.",
             established: true,
-            targetKcal: 2900, consumedKcal: 1980,
+            targetKcal: 2900, consumedKcal: 1560,
             protein: 158, proteinTarget: 190, carbs: 210, carbsTarget: 300, fat: 58, fatTarget: 85,
             plan: [
                 FixturePlanItem(title: "Egg + oat protein bowl", timeMinutes: 420, kind: "meal", subtitle: "Breakfast · 7:00 AM", kcal: 560, why: "Sets up protein synthesis early."),
@@ -171,7 +171,7 @@ enum FixtureData {
             name: "Priya Nandy",
             insight: "This week's long run held goal pace with a lower average HR than last week — aerobic base is building nicely.",
             established: true,
-            targetKcal: 2650, consumedKcal: 1510,
+            targetKcal: 2650, consumedKcal: 1140,
             protein: 92, proteinTarget: 130, carbs: 260, carbsTarget: 340, fat: 46, fatTarget: 75,
             plan: [
                 FixturePlanItem(title: "Banana + peanut butter toast", timeMinutes: 390, kind: "meal", subtitle: "Breakfast · 6:30 AM", kcal: 340, why: "Fast-digesting carbs ahead of the morning run."),
