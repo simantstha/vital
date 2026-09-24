@@ -485,9 +485,24 @@ async function* streamCoachTurn(userId: string, seed: TurnSeed): AsyncGenerator<
         specialistCard = handoffCardForSession(returning, returningManifest);
         result = JSON.stringify({ status: returning.status, sessionId: returning.id });
       } else {
-        result = MEMORY_TOOL_NAMES.has(block.name)
-          ? await handleMemoryToolCall(userId, block.name, input)
-          : await executeToolCall(block.name, input, userId);
+        // Safety net: a coach tool's input comes from the model, not a typed
+        // client — an unexpected error here (e.g. a validation gap missed by
+        // a tool's own guards) must not abort the whole turn the way an
+        // uncaught "invalid input syntax for type uuid" used to. Log it
+        // (never the user's content) and hand the model back a plain error
+        // tool_result so it can apologize/recover and the turn still
+        // completes normally. Tools guard their own known-bad inputs (e.g.
+        // delete_meal/confirm_fact/resolve_fact validate ids with isUuid
+        // before querying) and return their own `Error: …` text results for
+        // those — this only catches what slips past that.
+        try {
+          result = MEMORY_TOOL_NAMES.has(block.name)
+            ? await handleMemoryToolCall(userId, block.name, input)
+            : await executeToolCall(block.name, input, userId);
+        } catch (error) {
+          console.error('coach tool call failed', { tool: block.name, error });
+          result = `Error: the ${block.name} tool failed; tell the user it didn't work and don't retry.`;
+        }
       }
 
       yield { type: 'tool_call', id: callId, name: block.name, label, status: 'done' };
