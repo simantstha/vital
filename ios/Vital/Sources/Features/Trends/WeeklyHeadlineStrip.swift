@@ -32,6 +32,14 @@ struct WeeklyHeadlineStrip: View {
                 footnoteView
             }
         }
+        // Stable UI-test hook: this is the topmost recovery-related content
+        // Trends renders (sleep/HRV/RHR, above every metric-group section) —
+        // `TrendsGoalOrdering`'s "weight card first" screenshot assertion
+        // needs a unique element to compare frames against. `"HRV"` alone
+        // isn't unique — `MetricTileView`'s recovery tile renders the same
+        // text lower on the same screen, and querying `.frame` on an
+        // ambiguous match is a hard XCUITest failure (see #200).
+        .accessibilityIdentifier("trends.recoveryFirst")
     }
 
     private var threeUpRow: some View {

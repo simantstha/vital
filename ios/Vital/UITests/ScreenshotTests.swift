@@ -250,16 +250,30 @@ final class ScreenshotTests: XCTestCase {
                 // Goal-ordered Trends (customer-panel finding, 2026-09-23 —
                 // docs/ux-spec-v4.md §9's screenshot acceptance table:
                 // "Weight card first"): `trends.weightCard` must exist and
-                // sit ABOVE the first recovery tile (HRV), not just
-                // somewhere on screen.
+                // sit ABOVE the topmost recovery-related content.
+                //
+                // NOT `app.staticTexts["HRV"]` here (#200): that label is
+                // ambiguous on this screen — it matches both the "This Week"
+                // strip's HRV stat and the recovery section's metric tile —
+                // and reading `.frame` on an ambiguous query is a hard
+                // XCUITest failure that aborted this whole test method, so
+                // no weight_loss Trends screenshot was ever captured.
+                // `trends.recoveryFirst` (WeeklyHeadlineStrip's own
+                // identifier) is unique and is the topmost of the two, so
+                // comparing against it is the meaningful check.
                 let weightCard = app.buttons["trends.weightCard"]
                 XCTAssertTrue(weightCard.waitForExistence(timeout: 10),
                                "weight_loss Trends should show the weight card [\(appearance)]")
-                let recoveryTile = app.staticTexts["HRV"]
-                XCTAssertTrue(recoveryTile.waitForExistence(timeout: 10),
-                               "weight_loss Trends should still show the recovery section [\(appearance)]")
-                XCTAssertLessThan(weightCard.frame.minY, recoveryTile.frame.minY,
-                                   "weight_loss Trends' weight card should appear above the first recovery card [\(appearance)]")
+                let recoveryFirst = app.otherElements["trends.recoveryFirst"]
+                XCTAssertTrue(recoveryFirst.waitForExistence(timeout: 10),
+                               "weight_loss Trends should still show the This Week recovery card [\(appearance)]")
+                // Both elements are already on-screen without scrolling (the
+                // weight card and This Week strip are the first two things
+                // below the header) — no `app.swipeUp()` needed. Compare in
+                // the same coordinate space (`XCUIElement.frame` is always
+                // screen coordinates) so this holds across appearances.
+                XCTAssertLessThan(weightCard.frame.minY, recoveryFirst.frame.minY,
+                                   "weight_loss Trends' weight card should appear above the This Week recovery card [\(appearance)]")
             }
         }
         capture(app, name: "\(scenario)__trends__\(appearance)")
