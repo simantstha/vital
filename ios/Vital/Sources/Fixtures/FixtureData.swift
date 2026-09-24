@@ -387,7 +387,10 @@ enum FixtureData {
         // /api/today's `sleep` (see `today(_:)` above).
         case "sleep_minutes":       return profile.sleepMinutes / 60
         case "steps":                return profile.steps
-        case "distance_m":          return profile.distanceKm * 1000
+        // `distance_m` is stored in meters but the server applies
+        // lib/metricCatalog.ts's `scale: 1/1000` before sending — the wire
+        // value (and this tile's display unit) is km.
+        case "distance_m":          return profile.distanceKm
         case "exercise_min":        return 35
         case "flights":              return 8
         case "active_energy_kcal":  return 420
