@@ -71,15 +71,20 @@ enum FixtureData {
         let workoutTitle: String?
         let workoutKm: Double?
 
-        // GET /api/training/summary (#202) — defaulted so every existing
-        // scenario literal above needs no change; only `.muscle`/
+        // GET /api/training/summary (#202) — `var`, not `let`: a stored
+        // `let` with a default value is EXCLUDED from Swift's synthesized
+        // memberwise initializer (a constant can't be assigned twice), so a
+        // `let` here would drop these from `Profile.init` entirely and
+        // break every scenario literal that passes them. `var` with a
+        // default IS included as a defaulted parameter — every existing
+        // scenario literal above still needs no change; only `.muscle`/
         // `.endurance` set these, and `trainingSummary(_:)` returns nil
         // (404) when all three are absent, matching a real backend's
         // response for a weight_loss/general account with no training data.
-        let lastLift: FixtureLastLift? = nil
-        let weeklyVolumeKm: Double? = nil
-        let plannedSessionsThisWeek: Int? = nil
-        let completedSessionsThisWeek: Int? = nil
+        var lastLift: FixtureLastLift? = nil
+        var weeklyVolumeKm: Double? = nil
+        var plannedSessionsThisWeek: Int? = nil
+        var completedSessionsThisWeek: Int? = nil
     }
 
     private static let coachOpener =
