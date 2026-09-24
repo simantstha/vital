@@ -329,8 +329,78 @@ final class ScreenshotTests: XCTestCase {
         } else {
             // A metric tile's display name — only rendered once the batch
             // fetch resolves (loading shows skeleton placeholders instead).
-            XCTAssertTrue(app.staticTexts["HRV"].waitForExistence(timeout: 15),
+            // `.firstMatch` (#200): "HRV" isn't unique on this screen (the
+            // "This Week" strip renders its own "hrv" stat too), and this is
+            // only an existence check — any match proves the grid loaded.
+            //
+            // Goal-agnostic, scrolled (#200 round 3): `TrendsGoalOrdering`
+            // deliberately puts weight_loss's Weight card + This Week strip
+            // ahead of every metric-group section, which pushes the
+            // Recovery section's "HRV" tile below the fold — the grid is
+            // lazy, so an off-screen tile genuinely isn't in the
+            // accessibility hierarchy yet, and waiting on it without
+            // scrolling just times out. Scroll (bounded, so a real
+            // regression still fails instead of looping) until it appears;
+            // this doubles as proof that weight_loss's recovery tiles still
+            // exist at all, not just that the fixture batch decoded.
+            let recoveryTile = app.staticTexts["HRV"].firstMatch
+            var swipesToRecovery = 0
+            while !recoveryTile.exists && swipesToRecovery < 4 {
+                app.swipeUp()
+                swipesToRecovery += 1
+            }
+            XCTAssertTrue(recoveryTile.waitForExistence(timeout: 15),
                            "Trends should render its metric tiles [\(scenario)/\(appearance)]")
+
+            if scenario == "weight_loss" {
+                // Scroll back to the top before the goal-ordering frame
+                // assertions below (they need the weight card and This Week
+                // strip on-screen, which the scroll above may have carried
+                // past the fold) and before this screen's capture() at the
+                // bottom of this function (the screenshot should show the
+                // top of Trends, not wherever scrolling for "HRV" left off).
+                for _ in 0..<swipesToRecovery { app.swipeDown() }
+
+                // Goal-ordered Trends (customer-panel finding, 2026-09-23 —
+                // docs/ux-spec-v4.md §9's screenshot acceptance table:
+                // "Weight card first"): `trends.weightCard` must exist and
+                // sit ABOVE the topmost recovery-related content.
+                //
+                // NOT `app.staticTexts["HRV"]` here (#200): that label is
+                // ambiguous on this screen — it matches both the "This Week"
+                // strip's HRV stat and the recovery section's metric tile —
+                // and reading `.frame` on an ambiguous query is a hard
+                // XCUITest failure that aborted this whole test method, so
+                // no weight_loss Trends screenshot was ever captured.
+                // `trends.recoveryFirst` (WeeklyHeadlineStrip's own
+                // identifier, an `.accessibilityElement(children: .contain)`
+                // container so the identifier resolves to exactly that one
+                // element rather than propagating to its HRV/sleep/RHR
+                // children — #200 round 2) is the topmost recovery content,
+                // so comparing against it is the meaningful check.
+                //
+                // `app.descendants(matching: .any).matching(identifier:)`
+                // rather than a typed query (`app.buttons[...]`/
+                // `app.otherElements[...]`) so this doesn't silently miss a
+                // match (or hard-fail on an unexpected type) if either
+                // view's underlying XCUIElementType ever changes —
+                // `.firstMatch` on top means neither line can raise the
+                // "multiple matching elements" error regardless.
+                let weightCard = app.descendants(matching: .any).matching(identifier: "trends.weightCard").firstMatch
+                XCTAssertTrue(weightCard.waitForExistence(timeout: 10),
+                               "weight_loss Trends should show the weight card [\(appearance)]")
+                let recoveryFirst = app.descendants(matching: .any).matching(identifier: "trends.recoveryFirst").firstMatch
+                XCTAssertTrue(recoveryFirst.waitForExistence(timeout: 10),
+                               "weight_loss Trends should still show the This Week recovery card [\(appearance)]")
+                // Both elements are back on-screen after the swipeDown loop
+                // above (the weight card and This Week strip are the first
+                // two things below the header, so scrolling back to the top
+                // brings them both into view together). Compare in the same
+                // coordinate space (`XCUIElement.frame` is always screen
+                // coordinates) so this holds across appearances.
+                XCTAssertLessThan(weightCard.frame.minY, recoveryFirst.frame.minY,
+                                   "weight_loss Trends' weight card should appear above the This Week recovery card [\(appearance)]")
+            }
         }
         capture(app, name: "\(scenario)__trends__\(appearance)")
     }

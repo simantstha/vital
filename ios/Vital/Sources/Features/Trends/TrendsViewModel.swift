@@ -37,6 +37,24 @@ final class TrendsViewModel: ObservableObject {
     @Published var isLoadingSummary = false
     @Published var summaryErrorMessage: String? = nil
 
+    // MARK: Goal-ordered index (customer-panel finding, 2026-09-23 —
+    // docs/ux-spec-v4.md §9's screenshot acceptance table)
+
+    /// "weight_loss" | "muscle" | "endurance" | "general" — same
+    /// `/api/diet-goal` value `TodayViewModel.goal` decodes, fetched
+    /// separately here (Trends has no other reason to hit that endpoint)
+    /// so `TrendsGoalOrdering` can lead with the metric that matters most
+    /// for this goal. Defaults to "general" (unreordered) until it resolves.
+    @Published private(set) var goal: String = "general"
+
+    /// Only fetched for `goal == "weight_loss"` (every other goal has no use
+    /// for it) — the SAME `/api/weight-log` payload Today's weight_loss hero
+    /// uses, so `TrendsWeightCard` renders the identical smoothed trend
+    /// rather than a second, possibly-disagreeing one. `nil` on a fail-soft
+    /// failure (matches `loadSummary()`'s profile fetch) — the card simply
+    /// doesn't render rather than fabricating a trend.
+    @Published private(set) var weightLog: WeightLogResponse? = nil
+
     private let apiClient: TrendsAPIProviding
     /// `loadSummary()` also needs `fetchProfile()`, which is outside the
     /// minimal `TrendsAPIProviding` seam (that protocol exists solely to let
@@ -167,6 +185,24 @@ final class TrendsViewModel: ObservableObject {
             try? await profileClient.updateProfile(unitSystem: UnitPreference.shared.current.rawValue)
         }
         isLoadingSummary = false
+    }
+
+    // MARK: - Load (goal + weight-log — drives goal-ordered sections)
+
+    /// Fail-soft, like `loadSummary()`'s profile fetch: a failure here just
+    /// leaves `goal` at its "general" default (so `TrendsIndexSections`'
+    /// order is unaffected) and `weightLog` at `nil` (so `TrendsWeightCard`
+    /// doesn't render) — it must never blank or error the metric grid, which
+    /// has already loaded independently via `load()`.
+    func loadGoalContext() async {
+        do {
+            let dietGoal = try await profileClient.fetchDietGoal()
+            goal = dietGoal.current.goal
+        } catch {
+            return
+        }
+        guard goal == "weight_loss" else { return }
+        weightLog = try? await profileClient.fetchWeightLog()
     }
 
     // MARK: - Computed stats (Last 7 days summary)
