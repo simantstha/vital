@@ -367,12 +367,17 @@ struct CoachView: View {
                 suggestionChipsRow
             }
 
-            // V5: `CoachOrb` replaces the whole composer row while
-            // conversation mode is active (spec §3.2's "72 pt in the Coach
+            // V5: `CoachOrb` replaces the whole composer row once the press
+            // that started the turn has lifted (spec §3.2's "72 pt in the Coach
             // tab"). At rest (fixtures included — `ScreenshotTests` never
             // enters conversation mode) `voice.mode` is always `.single`, so
             // this branch renders exactly today's composer, unchanged.
-            if voice.mode == .conversation {
+            // Waiting until the finger lifts (gated by `!isMicPressed`) keeps
+            // the mic button mounted under the user's finger so its
+            // `DragGesture` is not torn down during a hold — without this,
+            // push-to-talk holds were never recognised and pauses ended the
+            // turn abruptly.
+            if Self.showsConversationOrb(mode: voice.mode, isMicPressed: isMicPressed) {
                 CoachOrb(voice: voice, onEnd: { vm.endVoiceConversation() })
                     .padding(.horizontal, Theme.Spacing.lg)
                     .padding(.vertical, Theme.Spacing.md)
@@ -643,6 +648,14 @@ struct CoachView: View {
         .ambient(Theme.Motion.pulse, value: voice.isRecording)
         .sensoryFeedback(Theme.Haptics.toggle, trigger: voice.isRecording)
         .sensoryFeedback(Theme.Haptics.turnEnd, trigger: voice.turnEndTrigger)
+    }
+
+    /// The conversation orb replaces the composer only once the press that
+    /// started the turn has lifted. Swapping it in at touch-down removed the
+    /// mic button (and its hold gesture) from under the user's finger, so
+    /// push-to-talk holds were never recognised and pauses ended the turn.
+    nonisolated static func showsConversationOrb(mode: CoachVoiceController.ConversationMode, isMicPressed: Bool) -> Bool {
+        mode == .conversation && !isMicPressed
     }
 
     /// The hold threshold spec §3.1 maps to push-to-talk single turn (vs. a
