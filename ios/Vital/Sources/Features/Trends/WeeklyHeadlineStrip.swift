@@ -39,6 +39,21 @@ struct WeeklyHeadlineStrip: View {
         // isn't unique — `MetricTileView`'s recovery tile renders the same
         // text lower on the same screen, and querying `.frame` on an
         // ambiguous match is a hard XCUITest failure (see #200).
+        //
+        // `.accessibilityElement(children: .contain)` MUST come before
+        // `.accessibilityIdentifier` here (#200 round 2): without it, an
+        // identifier on a plain container view doesn't make the container
+        // itself one queryable element — it's simply inherited by every
+        // accessible descendant (the sleep/HRV/RHR `Text`s), so
+        // `app.otherElements["trends.recoveryFirst"]` matched several
+        // elements and `.frame` hard-failed again. `.contain` (as opposed to
+        // `.combine`, which `TrendsWeightCard`/`WeightHeroView` use because
+        // they want ONE spoken label) makes this card itself one
+        // accessibility element while still exposing its children as their
+        // own elements underneath it — VoiceOver still reads "sleep avg",
+        // "hrv", "resting hr" individually, this identifier just also
+        // resolves to exactly one (the container) XCUIElement.
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("trends.recoveryFirst")
     }
 

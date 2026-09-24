@@ -243,7 +243,10 @@ final class ScreenshotTests: XCTestCase {
         } else {
             // A metric tile's display name — only rendered once the batch
             // fetch resolves (loading shows skeleton placeholders instead).
-            XCTAssertTrue(app.staticTexts["HRV"].waitForExistence(timeout: 15),
+            // `.firstMatch` (#200): "HRV" isn't unique on this screen (the
+            // "This Week" strip renders its own "hrv" stat too), and this is
+            // only an existence check — any match proves the grid loaded.
+            XCTAssertTrue(app.staticTexts["HRV"].firstMatch.waitForExistence(timeout: 15),
                            "Trends should render its metric tiles [\(scenario)/\(appearance)]")
 
             if scenario == "weight_loss" {
@@ -259,12 +262,23 @@ final class ScreenshotTests: XCTestCase {
                 // XCUITest failure that aborted this whole test method, so
                 // no weight_loss Trends screenshot was ever captured.
                 // `trends.recoveryFirst` (WeeklyHeadlineStrip's own
-                // identifier) is unique and is the topmost of the two, so
-                // comparing against it is the meaningful check.
-                let weightCard = app.buttons["trends.weightCard"]
+                // identifier, an `.accessibilityElement(children: .contain)`
+                // container so the identifier resolves to exactly that one
+                // element rather than propagating to its HRV/sleep/RHR
+                // children — #200 round 2) is the topmost recovery content,
+                // so comparing against it is the meaningful check.
+                //
+                // `app.descendants(matching: .any).matching(identifier:)`
+                // rather than a typed query (`app.buttons[...]`/
+                // `app.otherElements[...]`) so this doesn't silently miss a
+                // match (or hard-fail on an unexpected type) if either
+                // view's underlying XCUIElementType ever changes —
+                // `.firstMatch` on top means neither line can raise the
+                // "multiple matching elements" error regardless.
+                let weightCard = app.descendants(matching: .any).matching(identifier: "trends.weightCard").firstMatch
                 XCTAssertTrue(weightCard.waitForExistence(timeout: 10),
                                "weight_loss Trends should show the weight card [\(appearance)]")
-                let recoveryFirst = app.otherElements["trends.recoveryFirst"]
+                let recoveryFirst = app.descendants(matching: .any).matching(identifier: "trends.recoveryFirst").firstMatch
                 XCTAssertTrue(recoveryFirst.waitForExistence(timeout: 10),
                                "weight_loss Trends should still show the This Week recovery card [\(appearance)]")
                 // Both elements are already on-screen without scrolling (the
