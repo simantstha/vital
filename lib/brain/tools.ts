@@ -56,6 +56,7 @@ import {
   lowEnergyMessage,
 } from '@/lib/brain/dietBudget';
 import { sourcePrecedenceSql } from '@/lib/brain/memoryTiers';
+import { isUuid } from '@/lib/brain/uuid';
 import { readCoreProfile } from '@/lib/coreProfileStore';
 import { parseProfileDetails } from '@/lib/profileDetails';
 import { randomUUID } from 'node:crypto';
@@ -1675,6 +1676,11 @@ export async function executeToolCall(
     const action = String(input.action ?? 'confirm') as 'confirm' | 'reject';
 
     if (!factId) return 'Error: factId is required.';
+    // `pending_facts.id` is a Postgres `uuid` column — a malformed model-
+    // supplied factId would otherwise throw "invalid input syntax for type
+    // uuid" straight out of the query below. Validate before any query; see
+    // lib/brain/uuid.ts.
+    if (!isUuid(factId)) return "Error: that isn't a valid fact id.";
     const result = await confirmPendingFact(
       drizzlePendingFactConfirmationStore,
       { factId, action },
@@ -1690,10 +1696,18 @@ export async function executeToolCall(
     const evidence = String(input.evidence ?? '').trim();
     if (!evidence) return 'Error: evidence is required.';
 
+    const rawId = input.id != null ? String(input.id) : null;
+    // `nodes.id` is a Postgres `uuid` column — a malformed model-supplied id
+    // would otherwise throw "invalid input syntax for type uuid" straight
+    // out of findActiveNode's query below. Validate before any query, and
+    // don't silently fall back to a label match — an explicit (if malformed)
+    // id means a specific fact was meant, see lib/brain/uuid.ts.
+    if (rawId != null && !isUuid(rawId)) return "Error: that isn't a valid fact id.";
+
     const result = await resolveFact(
       drizzleNodeResolutionStore,
       {
-        id:    input.id != null ? String(input.id) : null,
+        id:    rawId,
         label: input.label != null ? String(input.label) : null,
         evidence,
       },
@@ -1790,7 +1804,7 @@ export async function executeToolCall(
     // BEFORE any query, and don't silently fall back to the latest meal — an
     // explicit (if malformed) id means the user/model meant a *specific*
     // meal, not necessarily the most recent one.
-    if (id != null && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+    if (id != null && !isUuid(id)) {
       return "Error: that id isn't a valid meal id — omit it to undo the most recent meal you logged.";
     }
 
