@@ -111,6 +111,42 @@ final class ScreenshotTests: XCTestCase {
         return app.staticTexts.matching(predicate).firstMatch.waitForExistence(timeout: timeout)
     }
 
+    /// Waits for `element` to exist, then taps it once it's actually
+    /// `isHittable` — never a bare `.tap()` on a coordinate that might be
+    /// off-screen or obscured. Today's content can extend below the visible
+    /// fold depending on the fixture/time-of-day layout (see `AppClock`'s
+    /// doc comment for the concrete failure this guards against), so a
+    /// bounded number of `swipeUp()`s bring it into view first when needed.
+    /// Fails with a clear, element-naming message (rather than XCUITest's
+    /// own less legible tap-failure error) if the element never becomes
+    /// hittable at all.
+    private func tapWhenHittable(
+        _ element: XCUIElement,
+        app: XCUIApplication,
+        maxSwipes: Int = 3,
+        timeout: TimeInterval = 10,
+        description: String? = nil
+    ) {
+        let name = description ?? element.debugDescription
+        guard element.waitForExistence(timeout: timeout) else {
+            XCTFail("\(name) never appeared to tap")
+            return
+        }
+
+        var swipes = 0
+        while !element.isHittable && swipes < maxSwipes {
+            app.swipeUp()
+            swipes += 1
+        }
+
+        guard element.isHittable else {
+            XCTFail("\(name) exists but never became hittable after \(maxSwipes) swipeUp()s")
+            return
+        }
+
+        element.tap()
+    }
+
     // MARK: - Screens
 
     private func captureToday(_ app: XCUIApplication, scenario: String, appearance: String) {
@@ -188,16 +224,23 @@ final class ScreenshotTests: XCTestCase {
         guard scenario != "server_error" else { return }
 
         let fuelStrip = app.buttons["today.fuelStrip"]
-        guard fuelStrip.waitForExistence(timeout: 10) else {
-            XCTFail("today.fuelStrip missing — can't open the diet sheet [\(scenario)/\(appearance)]")
-            return
-        }
-        fuelStrip.tap()
+        tapWhenHittable(
+            fuelStrip, app: app,
+            description: "today.fuelStrip [\(scenario)/\(appearance)]"
+        )
 
         // DietSheetView's header renders immediately (it isn't gated on its
         // own network load), so this just confirms the sheet actually opened.
-        XCTAssertTrue(app.staticTexts["Diet budget"].waitForExistence(timeout: 10),
-                       "Diet sheet should open from the fuel strip [\(scenario)/\(appearance)]")
+        // A silent no-op tap (fuelStrip hittable but the sheet never
+        // presented — e.g. something else absorbed the touch) must fail
+        // loudly here rather than fall through to capturing Today itself
+        // relabeled as the diet sheet.
+        guard app.staticTexts["Diet budget"].waitForExistence(timeout: 10) else {
+            XCTFail("Diet sheet never opened after tapping today.fuelStrip — "
+                     + "the tap likely missed or was absorbed by another view "
+                     + "[\(scenario)/\(appearance)]")
+            return
+        }
         capture(app, name: "\(scenario)__dietSheet__\(appearance)")
 
         let close = app.buttons["Close"]
