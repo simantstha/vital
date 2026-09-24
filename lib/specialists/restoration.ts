@@ -1,4 +1,4 @@
-import { and, desc, eq, gte } from 'drizzle-orm';
+import { and, asc, desc, eq, gte } from 'drizzle-orm';
 import type { db as applicationDb } from '@/db';
 import * as schema from '@/db/schema';
 import { getConversationStart } from '@/lib/brain/conversationWindow';
@@ -13,20 +13,19 @@ import {
 
 type DrizzleDatabase = typeof applicationDb;
 
-// KNOWN GAP (coach-log-receipts, 2026-09-24): restoration only ever replays
-// each persisted message's `content` (prose) — it does not carry the
-// `tool_calls` column (see `messages.tool_calls` / `toolCallLog` in
-// lib/brain/coach.ts) or any per-tool-call structured result. That means a
-// `meal_logged` receipt (`LogReceiptCard` + Undo) only appears for the LIVE
-// SSE turn that logged it; reopening the Coach tab after a restart, or after
-// the 4h conversation-window reset, shows the assistant's prose reply but no
-// receipt card, even though the meal itself is still logged (Undo is then
-// only reachable from the Diet sheet). Fixing this needs `tool_calls` (or a
-// new column) to carry the log_meal result through restoration, a
-// `RestoredCoachMessage` field for it, an iOS model/decoding change, and
-// `CoachViewModel.restoredRow`/`AssistantTurnView` support for synthesizing a
-// `MealReceiptRow` from history — out of scope here; flagged rather than
-// hacked in per this change's brief.
+// A meal_logged receipt derived at restore time for one restored assistant
+// message — see attachMealReceipts below. Field names mirror the live
+// `meal_logged` SSE event (lib/brain/coach.ts) so iOS can reuse the same
+// decode/receipt-row shape for both.
+export interface MealReceipt {
+  id:   string;
+  name: string;
+  kcal: number;
+  p:    number;
+  c:    number;
+  f:    number;
+}
+
 export interface RestoredCoachMessage {
   id: string;
   role: string;
@@ -35,10 +34,80 @@ export interface RestoredCoachMessage {
   timestamp: Date;
   specialistSessionId: string | null;
   specialistMetadata: SpecialistMessageAttribution['specialist_metadata'] | null;
+  // Meal receipts logged by the coach during this message's turn — see
+  // attachMealReceipts. Undefined (never an empty array) when there are
+  // none, so JSON.stringify drops the key and older app builds see nothing
+  // different.
+  mealReceipts?: MealReceipt[];
 }
 
 export interface CoachHistoryRepository {
   latest(userId: string, limit: number): Promise<RestoredCoachMessage[]>;
+}
+
+// A raw meal_logged event row, as read back for receipt derivation.
+export interface MealLoggedEventRow {
+  id: string;
+  timestamp: Date;
+  payload: unknown;
+}
+
+function payloadRecord(payload: unknown): Record<string, unknown> {
+  return payload !== null && typeof payload === 'object' && !Array.isArray(payload)
+    ? (payload as Record<string, unknown>)
+    : {};
+}
+
+function num(v: unknown): number {
+  return typeof v === 'number' && Number.isFinite(v) ? Math.round(v) : 0;
+}
+
+function eventToReceipt(row: MealLoggedEventRow): MealReceipt {
+  const p = payloadRecord(row.payload);
+  const name = typeof p.name === 'string' && p.name
+    ? p.name
+    : (typeof p.description === 'string' && p.description ? p.description : 'Meal');
+  return { id: row.id, name, kcal: num(p.kcal), p: num(p.p), c: num(p.c), f: num(p.f) };
+}
+
+/**
+ * Derives `mealReceipts` for each restored assistant message WITHOUT a
+ * schema change: the `messages` table only ever persisted `tool_calls`
+ * inputs (lib/brain/coach.ts's `toolCallLog`), never a tool's result, so
+ * there is no stored meal id to read back directly. Instead, each
+ * `meal_logged` event (source = 'coach', still present — a deleted meal
+ * simply produces no card, which is both simpler and honest: the meal really
+ * is gone) is bucketed into the turn window of the assistant message that
+ * would have logged it: `(previous user message's timestamp, this
+ * message's timestamp]`. `events` must be sorted ascending by timestamp;
+ * `messages` must already be in chronological (ascending) order — both true
+ * of `DrizzleCoachHistoryRepository.latest`'s output. Additive: a message
+ * with no meals in its window gets no `mealReceipts` key at all.
+ */
+export function attachMealReceipts(
+  messages: RestoredCoachMessage[],
+  events: MealLoggedEventRow[],
+): RestoredCoachMessage[] {
+  if (events.length === 0) return messages;
+
+  let windowStart = new Date(0);
+  let cursor = 0;
+  return messages.map((message) => {
+    if (message.role !== 'assistant') {
+      if (message.role === 'user') windowStart = message.timestamp;
+      return message;
+    }
+
+    const receipts: MealReceipt[] = [];
+    while (cursor < events.length && events[cursor].timestamp.getTime() <= message.timestamp.getTime()) {
+      if (events[cursor].timestamp.getTime() > windowStart.getTime()) {
+        receipts.push(eventToReceipt(events[cursor]));
+      }
+      cursor++;
+    }
+    windowStart = message.timestamp;
+    return receipts.length > 0 ? { ...message, mealReceipts: receipts } : message;
+  });
 }
 
 export class DrizzleCoachHistoryRepository implements CoachHistoryRepository {
@@ -66,10 +135,30 @@ export class DrizzleCoachHistoryRepository implements CoachHistoryRepository {
       .where(where)
       .orderBy(desc(schema.messages.timestamp), desc(schema.messages.id))
       .limit(limit);
-    return rows.reverse().map((row) => ({
+    const messages: RestoredCoachMessage[] = rows.reverse().map((row) => ({
       ...row,
       specialistMetadata: row.specialistMetadata as SpecialistMessageAttribution['specialist_metadata'] | null,
     }));
+    if (messages.length === 0) return messages;
+
+    // Only ever look back to the oldest restored message's timestamp — never
+    // further, so this can't accidentally attach a meal from before the
+    // restored window (e.g. a prior conversation) to the first message here.
+    const events = await this.database.select({
+      id: schema.events.id,
+      timestamp: schema.events.timestamp,
+      payload: schema.events.payload,
+    })
+      .from(schema.events)
+      .where(and(
+        eq(schema.events.user_id, userId),
+        eq(schema.events.type, 'meal_logged'),
+        eq(schema.events.source, 'coach'),
+        gte(schema.events.timestamp, messages[0].timestamp),
+      ))
+      .orderBy(asc(schema.events.timestamp));
+
+    return attachMealReceipts(messages, events);
   }
 }
 

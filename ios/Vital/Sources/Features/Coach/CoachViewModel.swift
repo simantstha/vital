@@ -565,16 +565,15 @@ final class CoachViewModel: ObservableObject {
         }
     }
 
-    /// KNOWN GAP (coach-log-receipts, 2026-09-24): a restored row is always
-    /// a plain prose bubble, never an `AssistantTurn` with `mealReceipts` —
-    /// `CoachRestoredMessage` (and the server's `RestoredCoachMessage` behind
-    /// it, see `lib/specialists/restoration.ts`'s doc comment) carries only
-    /// `content`, no structured tool-call result. So a `LogReceiptCard` +
-    /// Undo only appears for the live SSE turn that logged the meal — after
-    /// restart or a conversation-window reset, the assistant's text survives
-    /// but the receipt does not (the meal itself is still logged; Undo is
-    /// then only reachable from the Diet sheet). Documented rather than
-    /// hacked around here, per this change's brief.
+    /// Turns one restored message into a transcript row. A plain prose
+    /// bubble (`.message`), unless the server attached `mealReceipts`
+    /// (lib/specialists/restoration.ts's `attachMealReceipts`) — then this
+    /// synthesizes the same `AssistantTurn` shape a live `meal_logged` SSE
+    /// event would have built, so the `LogReceiptCard` + Undo survive a
+    /// restart or conversation-window reset exactly like the live turn that
+    /// created them; `undoMealLog(id:)` finds these receipts by searching
+    /// `rows` the same way it finds a live one, so Undo needs no special
+    /// casing here.
     private static func restoredRow(_ message: CoachRestoredMessage) -> ChatRow? {
         let role: ChatMessage.Role
         switch message.role {
@@ -582,12 +581,50 @@ final class CoachViewModel: ObservableObject {
         case "assistant": role = .assistant
         default: return nil
         }
-        return .message(ChatMessage(
+
+        guard role == .assistant, let receipts = message.mealReceipts, !receipts.isEmpty else {
+            return .message(ChatMessage(
+                id: UUID(uuidString: message.id) ?? UUID(),
+                role: role,
+                text: message.content,
+                specialistMetadata: message.specialistMetadata
+            ))
+        }
+
+        var turn = AssistantTurn(
             id: UUID(uuidString: message.id) ?? UUID(),
-            role: role,
-            text: message.content,
-            specialistMetadata: message.specialistMetadata
-        ))
+            persona: Self.persona(forRestored: message)
+        )
+        turn.appendText(message.content)
+        let timestamp = Self.parseISODate(message.timestamp).map { Self.timeFormatter.string(from: $0) } ?? ""
+        for receipt in receipts {
+            turn.applyMealReceipt(MealReceiptRow(
+                id: receipt.id,
+                name: receipt.name,
+                kcal: receipt.kcal,
+                protein: receipt.p,
+                carbs: receipt.c,
+                fat: receipt.f,
+                timestamp: timestamp
+            ))
+        }
+        turn.finish()
+        return .assistantTurn(turn)
+    }
+
+    /// Reconstructs the `CoachPersonaSnapshot` a restored message was spoken
+    /// by, from its (narrower) persisted `specialistMetadata` — Vital itself
+    /// when there is none.
+    private static func persona(forRestored message: CoachRestoredMessage) -> CoachPersonaSnapshot {
+        guard let meta = message.specialistMetadata else { return .vital }
+        return CoachPersonaSnapshot(
+            id: meta.specialistId,
+            title: meta.name,
+            subtitle: meta.role,
+            accent: meta.accentColor,
+            icon: meta.icon,
+            sessionId: message.specialistSessionId
+        )
     }
 
     /// Fetches the user's diet goal for the starter chips (`userGoal`).
@@ -876,6 +913,8 @@ final class CoachViewModel: ObservableObject {
                 applyToolData(id: id, viz: viz, toTurn: assistantId, persona: persona)
             case .mealLogged(let receipt):
                 applyMealLogged(receipt, toTurn: assistantId, persona: persona)
+            case .mealUnlogged(let id):
+                applyMealUnlogged(id: id)
             case .handoffCard(let card):
                 applyHandoffCard(card)
             case .personaChanged(let newPersona):
@@ -1292,6 +1331,19 @@ final class CoachViewModel: ObservableObject {
                 setMealReceiptState(id: id, turnId: turnId, state: .undoFailed(message), animated: false)
             }
         }
+    }
+
+    /// Handles a `meal_unlogged` SSE event: the coach's own `delete_meal`
+    /// tool call (voice/text "undo that") just removed a meal it had logged.
+    /// Reuses the same `.undone` ("Removed") state Undo drives, and the same
+    /// "tell Today" notification, so the fuel strip and Diet sheet catch up
+    /// exactly as they do for a manual Undo tap. No-op if the id isn't
+    /// showing as a receipt in this session (e.g. it belonged to an earlier,
+    /// already-restored turn not currently on screen).
+    private func applyMealUnlogged(id: String) {
+        guard let turnId = turnId(containingMealReceipt: id) else { return }
+        setMealReceiptState(id: id, turnId: turnId, state: .undone, animated: !Theme.Motion.isReduced)
+        NotificationCenter.default.post(name: .vitalCoachMealLogChanged, object: nil)
     }
 
     private func setMealReceiptState(id: String, turnId: UUID, state: LogReceiptCard.State, animated: Bool) {

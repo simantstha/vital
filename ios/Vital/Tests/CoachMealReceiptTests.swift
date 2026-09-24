@@ -57,6 +57,154 @@ final class CoachMealReceiptTests: XCTestCase {
         ])
     }
 
+    func testMealUnloggedEventDecodesIntoMealUnloggedCase() throws {
+        let event = try XCTUnwrap(APIClient.decodeCoachSSELine(
+            #"data: {"type":"meal_unlogged","id":"evt-123"}"#
+        ))
+        XCTAssertEqual(event, .mealUnlogged(id: "evt-123"))
+    }
+
+    func testMealUnloggedEventMissingIdDecodesToNil() throws {
+        let event = try APIClient.decodeCoachSSELine(#"data: {"type":"meal_unlogged"}"#)
+        XCTAssertNil(event)
+    }
+
+    // MARK: - Restoration: decoding `mealReceipts`
+
+    func testRestoredMessageDecodesPresentMealReceipts() throws {
+        let json = Data(#"""
+        {
+          "messages": [{
+            "id": "20000000-0000-4000-8000-000000000001",
+            "role": "assistant", "speaker": "coach", "content": "Logged it!",
+            "timestamp": "2026-07-11T12:05:00.000Z",
+            "specialistSessionId": null, "specialistMetadata": null,
+            "mealReceipts": [{"id": "evt-1", "name": "Oats", "kcal": 210, "p": 8, "c": 32, "f": 5}]
+          }],
+          "activePersona": {"id": "vital", "title": "Vital Coach", "subtitle": "Your personal coach", "accent": "#7C6CF2", "icon": "sparkles", "sessionId": null},
+          "pendingCard": null
+        }
+        """#.utf8)
+        let restoration = try APIClient.decodeCoachRestoration(json)
+        XCTAssertEqual(restoration.messages.first?.mealReceipts, [
+            CoachMealReceipt(id: "evt-1", name: "Oats", kcal: 210, p: 8, c: 32, f: 5),
+        ])
+    }
+
+    func testRestoredMessageWithoutMealReceiptsDecodesToNil() throws {
+        let json = Data(#"""
+        {
+          "messages": [{
+            "id": "20000000-0000-4000-8000-000000000001",
+            "role": "assistant", "speaker": "coach", "content": "Sure thing.",
+            "timestamp": "2026-07-11T12:05:00.000Z",
+            "specialistSessionId": null, "specialistMetadata": null
+          }],
+          "activePersona": {"id": "vital", "title": "Vital Coach", "subtitle": "Your personal coach", "accent": "#7C6CF2", "icon": "sparkles", "sessionId": null},
+          "pendingCard": null
+        }
+        """#.utf8)
+        let restoration = try APIClient.decodeCoachRestoration(json)
+        XCTAssertNil(restoration.messages.first?.mealReceipts)
+    }
+
+    /// A malformed `mealReceipts` (wrong shape) must not sink the whole
+    /// restoration decode — every other field, including `content`, still
+    /// comes through, with `mealReceipts` simply dropped to nil.
+    func testRestoredMessageWithMalformedMealReceiptsIgnoresThatFieldOnly() throws {
+        let json = Data(#"""
+        {
+          "messages": [{
+            "id": "20000000-0000-4000-8000-000000000001",
+            "role": "assistant", "speaker": "coach", "content": "Logged it!",
+            "timestamp": "2026-07-11T12:05:00.000Z",
+            "specialistSessionId": null, "specialistMetadata": null,
+            "mealReceipts": "not-an-array"
+          }],
+          "activePersona": {"id": "vital", "title": "Vital Coach", "subtitle": "Your personal coach", "accent": "#7C6CF2", "icon": "sparkles", "sessionId": null},
+          "pendingCard": null
+        }
+        """#.utf8)
+        let restoration = try APIClient.decodeCoachRestoration(json)
+        XCTAssertNil(restoration.messages.first?.mealReceipts)
+        XCTAssertEqual(restoration.messages.first?.content, "Logged it!")
+    }
+
+    // MARK: - Restoration: synthesizing receipt rows
+
+    func testRestoreConversationSynthesizesAnAssistantTurnWithAnUndoableReceipt() async {
+        let message = CoachRestoredMessage(
+            id: "20000000-0000-4000-8000-000000000001",
+            role: "assistant",
+            speaker: "coach",
+            content: "Logged it!",
+            timestamp: "2026-07-11T12:05:00.000Z",
+            specialistSessionId: nil,
+            specialistMetadata: nil,
+            mealReceipts: [CoachMealReceipt(id: "evt-1", name: "Oats", kcal: 210, p: 8, c: 32, f: 5)]
+        )
+        let api = FakeCoachAPI(restoration: CoachRestorationResponse(
+            messages: [message], activePersona: .vital, pendingCard: nil
+        ))
+        let viewModel = CoachViewModel(api: api)
+
+        await viewModel.restoreConversation()
+
+        guard case .assistantTurn(let turn) = viewModel.rows.first else {
+            return XCTFail("expected a restored assistantTurn carrying the meal receipt")
+        }
+        XCTAssertEqual(turn.visibleText, "Logged it!")
+        XCTAssertEqual(turn.mealReceipts.map(\.id), ["evt-1"])
+        XCTAssertEqual(turn.mealReceipts.first?.canUndo, true)
+
+        // Undo on a restored receipt works exactly as it does live.
+        viewModel.undoMealLog(id: "evt-1")
+        await waitUntil(viewModel) { Self.cardState(for: "evt-1", in: viewModel) == .undone }
+        XCTAssertEqual(api.deletedMealLogIds, ["evt-1"])
+    }
+
+    /// A restored assistant message with no meals in its turn window stays a
+    /// plain prose bubble — unchanged from before this feature.
+    func testRestoreConversationWithNoMealReceiptsStaysAPlainMessageRow() async {
+        let message = CoachRestoredMessage(
+            id: "20000000-0000-4000-8000-000000000001",
+            role: "assistant",
+            speaker: "coach",
+            content: "Sure thing.",
+            timestamp: "2026-07-11T12:05:00.000Z",
+            specialistSessionId: nil,
+            specialistMetadata: nil
+        )
+        let api = FakeCoachAPI(restoration: CoachRestorationResponse(
+            messages: [message], activePersona: .vital, pendingCard: nil
+        ))
+        let viewModel = CoachViewModel(api: api)
+
+        await viewModel.restoreConversation()
+
+        guard case .message(let restored) = viewModel.rows.first else {
+            return XCTFail("expected a plain message row")
+        }
+        XCTAssertEqual(restored.text, "Sure thing.")
+    }
+
+    // MARK: - Live SSE turn: meal_unlogged flips a receipt to Removed
+
+    func testMealUnloggedEventFlipsTheMatchingReceiptToRemoved() async {
+        let api = FakeCoachAPI(restoration: CoachRestorationResponse(
+            messages: [], activePersona: .vital, pendingCard: nil
+        ))
+        let viewModel = CoachViewModel(api: api)
+        seedMealReceipt(id: "evt-1", into: viewModel)
+        XCTAssertEqual(Self.cardState(for: "evt-1", in: viewModel), .normal)
+
+        api.nextMessageEvents = [.mealUnlogged(id: "evt-1"), .text("Removed it."), .done]
+        viewModel.input = "undo that"
+        viewModel.send()
+
+        await waitUntil(viewModel) { Self.cardState(for: "evt-1", in: viewModel) == .undone }
+    }
+
     // MARK: - AssistantTurn: receipt insertion
 
     func testApplyMealReceiptInsertsOnceAndIgnoresADuplicateId() {
