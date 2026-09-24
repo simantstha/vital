@@ -5,12 +5,23 @@
  *  - `lib/workoutRepository.ts` for logged strength sets (completed
  *    sessions, lastLift).
  *  - `lib/brain/tools.ts`'s `queryWorkouts` for the HealthKit `workouts`
- *    daily_metrics payload (weekly distance) — the same source `get_workouts`
- *    and the coach prompt use, so this agrees with what the coach already
- *    tells the user.
+ *    daily_metrics payload (weekly distance AND completed sessions — the
+ *    same source `get_workouts` and the coach prompt use, so this agrees
+ *    with what the coach already tells the user; fetched once per request
+ *    and shared between the two, never queried twice).
  *  - `plan_items` (kind='move') for planned training sessions — read
  *    directly here, the same way `app/api/plan/route.ts` reads it, since
  *    there's no dedicated plan-items repository yet.
+ *
+ * `completedSessions`/`days[].completed` are a UNION of two signals, deduped
+ * by local day: a logged (non-warmup) `workout_sets` row (strength), or a
+ * HealthKit workout entry that's real training, not a trivial auto-detected
+ * blip (see MIN_HEALTHKIT_WORKOUT_MINUTES below) — an endurance user's runs/
+ * rides/swims never touch `workout_sets`, so counting strength sets alone
+ * would report `completedSessions: 0` for a marathoner who trained all week,
+ * which is exactly the honesty rule's failure mode in the other direction. A
+ * day with both a lift and a run still counts once (it's a Set union, not a
+ * sum).
  *
  * Honesty rule (non-negotiable, see the route's header): every field here is
  * null when the underlying data doesn't exist, never a guessed or zeroed
@@ -26,13 +37,23 @@
 import { and, eq, inArray } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import { weekDayKeys, weekStartKeyForDay } from '@/lib/localDay';
-import { queryWorkouts } from '@/lib/brain/tools';
+import { queryWorkouts, type WorkoutEntry } from '@/lib/brain/tools';
 import {
   completedLocalDays,
   getLastLift,
   getSetsForLocalDays,
   type LastLift,
 } from '@/lib/workoutRepository';
+
+// A HealthKit workout always carries a duration (`DailyIngestWorkout.durationMin`
+// in ios/Vital/Sources/Health/HealthKitBackfill.swift is non-optional), so a
+// day only counts as "completed" from HealthKit data when at least one
+// workout that day is >= this long — a 2-minute walk HealthKit auto-detected
+// shouldn't light up a training dot. If an entry is ever missing the field
+// (e.g. an older/foreign payload shape), it's counted rather than dropped —
+// the honesty rule cuts toward not hiding real activity, not toward stricter
+// filtering than the data can support.
+const MIN_HEALTHKIT_WORKOUT_MINUTES = 10;
 
 export interface WeekDay {
   date:      string;  // YYYY-MM-DD
@@ -72,43 +93,40 @@ async function plannedMoveDays(userId: string, dayKeys: string[]): Promise<Set<s
   return new Set(rows.map(r => r.local_day));
 }
 
-async function resolveWeek(userId: string, todayKey: string): Promise<WeekSummary> {
-  const start = weekStartKeyForDay(todayKey);
-  const dayKeys = weekDayKeys(start);
-
-  const [planned, sets] = await Promise.all([
-    plannedMoveDays(userId, dayKeys),
-    getSetsForLocalDays(userId, dayKeys),
-  ]);
-  const completed = completedLocalDays(sets);
-
-  const days: WeekDay[] = dayKeys.map(date => ({
-    date,
-    planned:   planned.has(date),
-    completed: completed.has(date),
-  }));
-
-  return {
-    start,
-    plannedSessions:   planned.size > 0 ? planned.size : null,
-    completedSessions: completed.size,
-    days,
-  };
+/**
+ * Fetches this local week's HealthKit `workouts` entries — the same source
+ * `resolveVolume`'s distance sum and `resolveWeek`'s completed-day union both
+ * read, so it's fetched once here and shared rather than queried twice.
+ * `queryWorkouts` is date-range-only (no upper bound needed — callers filter
+ * down to the exact week day keys), so `days` just needs to cover back to
+ * the earliest day of the current week.
+ */
+async function fetchWeekWorkouts(userId: string, dayKeys: string[]): Promise<WorkoutEntry[]> {
+  const lookbackDays = Math.min(30, dayKeys.length + 1);
+  const workouts = await queryWorkouts(userId, lookbackDays);
+  return workouts.filter(w => dayKeys.includes(w.date));
 }
 
 /**
- * Sums `distanceM` across every HealthKit workout logged this local week.
- * `queryWorkouts` is date-range-only (no upper bound needed here — we filter
- * down to the exact week day keys below), so `days` just needs to cover back
- * to the earliest day of the current week.
+ * Distinct local days with >= 1 HealthKit workout that's real training, not
+ * a trivial auto-detected blip — see MIN_HEALTHKIT_WORKOUT_MINUTES above.
+ * Pure/unit-testable: takes entries already scoped to the week.
  */
-async function resolveVolume(userId: string, dayKeys: string[]): Promise<VolumeSummary> {
-  const lookbackDays = Math.min(30, dayKeys.length + 1);
-  const workouts = await queryWorkouts(userId, lookbackDays);
-  const inWeek = workouts.filter(w => dayKeys.includes(w.date));
+export function healthKitWorkoutDays(entries: WorkoutEntry[]): Set<string> {
+  const days = new Set<string>();
+  for (const w of entries) {
+    const duration = w.durationMin;
+    if (typeof duration === 'number' && Number.isFinite(duration) && duration < MIN_HEALTHKIT_WORKOUT_MINUTES) {
+      continue; // has a duration field and it's below the floor
+    }
+    days.add(w.date);
+  }
+  return days;
+}
 
-  const withDistance = inWeek.filter(
-    (w): w is typeof w & { distanceM: number } =>
+function resolveVolume(weekWorkouts: WorkoutEntry[]): VolumeSummary {
+  const withDistance = weekWorkouts.filter(
+    (w): w is WorkoutEntry & { distanceM: number } =>
       typeof w.distanceM === 'number' && Number.isFinite(w.distanceM),
   );
 
@@ -120,10 +138,32 @@ async function resolveVolume(userId: string, dayKeys: string[]): Promise<VolumeS
 }
 
 export async function resolveTrainingSummary(userId: string, todayKey: string): Promise<TrainingSummary> {
-  const week = await resolveWeek(userId, todayKey);
-  const [volume, lastLift] = await Promise.all([
-    resolveVolume(userId, week.days.map(d => d.date)),
+  const start = weekStartKeyForDay(todayKey);
+  const dayKeys = weekDayKeys(start);
+
+  const [planned, sets, weekWorkouts, lastLift] = await Promise.all([
+    plannedMoveDays(userId, dayKeys),
+    getSetsForLocalDays(userId, dayKeys),
+    fetchWeekWorkouts(userId, dayKeys),
     getLastLift(userId),
   ]);
-  return { week, volume, lastLift };
+
+  // Completed = logged strength sets OR a real HealthKit workout that day —
+  // a union, deduped by local day, so a day with both counts once.
+  const completed = new Set([...completedLocalDays(sets), ...healthKitWorkoutDays(weekWorkouts)]);
+
+  const days: WeekDay[] = dayKeys.map(date => ({
+    date,
+    planned:   planned.has(date),
+    completed: completed.has(date),
+  }));
+
+  const week: WeekSummary = {
+    start,
+    plannedSessions:   planned.size > 0 ? planned.size : null,
+    completedSessions: completed.size,
+    days,
+  };
+
+  return { week, volume: resolveVolume(weekWorkouts), lastLift };
 }

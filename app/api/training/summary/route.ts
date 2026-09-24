@@ -23,7 +23,7 @@
  *   week: {
  *     start: "YYYY-MM-DD",              // local Monday
  *     plannedSessions: number | null,   // distinct days this week with a 'move' plan item; null when none exist (no plan data, not zero)
- *     completedSessions: number,        // distinct days this week with a logged (non-warmup) set
+ *     completedSessions: number,        // distinct days this week with a logged (non-warmup) set OR a real (>=10min) HealthKit workout — a union, so a day with both counts once
  *     days: [{ date, planned, completed }]  // Mon..Sun, for the "● ● ○ ○" dots
  *   },
  *   volume: { unit: "km", done: number | null, target: number | null }, // done: null when no workout this week carries a distance reading; target: always null today (no plan/goal in this schema defines one)

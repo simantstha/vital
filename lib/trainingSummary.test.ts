@@ -121,6 +121,72 @@ test('completedSessions: counts distinct local days with a logged non-warmup set
   assert.equal(byDate.get('2026-09-25')?.completed, false);
 });
 
+test('completedSessions: a run-only week (no workout_sets at all) still counts from HealthKit workouts', async () => {
+  reset();
+  state.workouts = [
+    { date: '2026-09-23', type: 'run', durationMin: 35, distanceM: 5000 },
+    { date: '2026-09-26', type: 'run', durationMin: 40, distanceM: 6000 },
+  ];
+  const { resolveTrainingSummary } = await modPromise;
+  const summary = await resolveTrainingSummary('user-1', TODAY);
+
+  assert.equal(summary.week.completedSessions, 2, 'a marathoner who ran twice this week is not reported as 0');
+  const byDate = new Map(summary.week.days.map(d => [d.date, d]));
+  assert.equal(byDate.get('2026-09-23')?.completed, true);
+  assert.equal(byDate.get('2026-09-26')?.completed, true);
+  assert.equal(byDate.get('2026-09-24')?.completed, false);
+});
+
+test('completedSessions: a day with both a strength session and a run counts once', async () => {
+  reset();
+  state.sets = [
+    { session_id: 's1', set_index: 1, exercise: 'squat', exercise_display: 'Squat', local_day: '2026-09-22', performed_at: new Date('2026-09-22T08:00:00Z'), reps: 5, load_kg: 100, is_warmup: false },
+  ];
+  state.workouts = [
+    { date: '2026-09-22', type: 'run', durationMin: 30, distanceM: 5000 },
+  ];
+  const { resolveTrainingSummary } = await modPromise;
+  const summary = await resolveTrainingSummary('user-1', TODAY);
+
+  assert.equal(summary.week.completedSessions, 1, 'union, not a sum, of the two signals for the same day');
+  assert.equal(summary.week.days.find(d => d.date === '2026-09-22')?.completed, true);
+});
+
+test('completedSessions: a HealthKit workout from a prior week is excluded', async () => {
+  reset();
+  state.workouts = [
+    { date: '2026-09-14', type: 'run', durationMin: 30, distanceM: 5000 }, // the Monday before this week
+  ];
+  const { resolveTrainingSummary } = await modPromise;
+  const summary = await resolveTrainingSummary('user-1', TODAY);
+
+  assert.equal(summary.week.completedSessions, 0);
+  assert.ok(summary.week.days.every(d => d.completed === false));
+});
+
+test('completedSessions: a trivial (<10min) HealthKit workout does not count', async () => {
+  reset();
+  state.workouts = [
+    { date: '2026-09-23', type: 'walk', durationMin: 5, distanceM: 300 },
+  ];
+  const { resolveTrainingSummary } = await modPromise;
+  const summary = await resolveTrainingSummary('user-1', TODAY);
+
+  assert.equal(summary.week.completedSessions, 0, 'a 5-minute auto-detected blip should not light up a training dot');
+  assert.equal(summary.week.days.find(d => d.date === '2026-09-23')?.completed, false);
+});
+
+test('completedSessions: a HealthKit workout with no duration field at all still counts (never hides real activity)', async () => {
+  reset();
+  state.workouts = [
+    { date: '2026-09-23', type: 'run', distanceM: 5000 }, // no durationMin
+  ];
+  const { resolveTrainingSummary } = await modPromise;
+  const summary = await resolveTrainingSummary('user-1', TODAY);
+
+  assert.equal(summary.week.completedSessions, 1);
+});
+
 test('volume: sums only workouts carrying a distance reading, within the local week', async () => {
   reset();
   state.workouts = [
