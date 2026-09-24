@@ -3,30 +3,36 @@ import XCTest
 
 final class EndpointPolicyTests: XCTestCase {
 
-    // MARK: - Table rows (spec §3.3)
+    // MARK: - Table rows (retuned 2026-09 after a live pause-cutoff bug report)
 
-    func testCompleteSentenceGetsTheShortWindow() {
+    /// The exact bug report: "It was good, but…" must NOT get the shortest
+    /// window just because on-device punctuation made it look terminal.
+    func testCompleteSentenceGetsTheTerminalPunctuationWindow() {
         let window = EndpointPolicy.silenceWindow(
-            for: "Log two eggs and toast for breakfast.",
+            for: "It was good.",
             speechDuration: 2.5
         )
-        XCTAssertEqual(window, EndpointPolicy.minWindow)
+        XCTAssertEqual(window, EndpointPolicy.terminalPunctuationWindow)
+        XCTAssertGreaterThanOrEqual(window, 1.3)
     }
 
-    func testQuestionGetsTheShortWindow() {
+    func testQuestionGetsTheTerminalPunctuationWindow() {
         let window = EndpointPolicy.silenceWindow(
             for: "What's my HRV trend this week?",
             speechDuration: 2.5
         )
-        XCTAssertEqual(window, EndpointPolicy.minWindow)
+        XCTAssertEqual(window, EndpointPolicy.terminalPunctuationWindow)
     }
 
+    /// The other half of the bug report: "it was good but" (trailing
+    /// conjunction) must get the long window, not be cut short.
     func testTrailingConjunctionGetsTheLongWindow() {
         let window = EndpointPolicy.silenceWindow(
-            for: "I had eggs for breakfast and",
+            for: "it was good but",
             speechDuration: 2.5
         )
         XCTAssertEqual(window, EndpointPolicy.fillerWindow)
+        XCTAssertEqual(window, 2.4)
     }
 
     func testTrailingFillerGetsTheLongWindow() {
@@ -64,7 +70,8 @@ final class EndpointPolicyTests: XCTestCase {
     // MARK: - Short-utterance floor
 
     /// A one-word reply ending in terminal punctuation would otherwise get
-    /// the shortest window — but under a second of speech is easy to clip,
+    /// the (now longer, but still shorter than the floor) terminal-
+    /// punctuation window — but under a second of speech is easy to clip,
     /// so the floor takes over regardless of how the utterance ends.
     func testVeryShortUtteranceWidensEvenACompleteSentence() {
         let window = EndpointPolicy.silenceWindow(for: "Yes.", speechDuration: 0.4)
@@ -85,10 +92,11 @@ final class EndpointPolicyTests: XCTestCase {
     }
 
     /// At/above the 1s threshold, the short-utterance floor no longer
-    /// applies.
+    /// applies — falls through to the (now longer) terminal-punctuation
+    /// window instead of the old bare minimum.
     func testSpeechDurationAtThresholdDoesNotTriggerTheFloor() {
         let window = EndpointPolicy.silenceWindow(for: "Done.", speechDuration: 1.0)
-        XCTAssertEqual(window, EndpointPolicy.minWindow)
+        XCTAssertEqual(window, EndpointPolicy.terminalPunctuationWindow)
     }
 
     // MARK: - Edge cases
@@ -106,12 +114,12 @@ final class EndpointPolicyTests: XCTestCase {
     // MARK: - Bounds
 
     /// Every combination this policy can produce stays inside the spec's
-    /// [0.6, 1.2]s bounds.
+    /// [1.2, 2.6]s bounds.
     func testWindowAlwaysStaysWithinSpecBounds() {
         let transcripts = [
             "", " ", "Hello.", "Hello?", "Hello!", "and", "um", "so", "because",
             "182", "182 point", "3 by 5 at", "Log a workout", "yes", "no thanks",
-            "I think it was around 14 or so, but",
+            "I think it was around 14 or so, but", "It was good, but",
         ]
         let durations: [TimeInterval] = [0, 0.1, 0.5, 0.99, 1.0, 1.5, 5, 30]
 

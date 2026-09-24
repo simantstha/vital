@@ -70,11 +70,18 @@ final class SpeechTranscriber: ObservableObject {
     // MARK: - Auto-stop watchdogs
 
     /// No speech decoded at all: auto-stop after 10s so a turn with nothing
-    /// said doesn't hang open.
+    /// said doesn't hang open. Suspended while `autoEndpointingEnabled` is
+    /// false (a held turn) — see `setAutoEndpointing(_:)`.
     private let noSpeechTimeout: TimeInterval = 10
     /// Hard cap regardless of activity, so a stuck recognizer/session can't
-    /// keep the mic open indefinitely.
-    private let maxDuration: TimeInterval = 30
+    /// keep the mic open indefinitely. This one is NOT suspended by
+    /// `setAutoEndpointing(false)` — a held turn still can't run forever —
+    /// it's just raised to `Self.heldMaxDuration`.
+    private static let maxDuration: TimeInterval = 30
+    /// The max-duration cap while held (push-to-talk): a person who is
+    /// actually holding the mic down and talking should get much more room
+    /// than the hands-free 30s cap before being cut off outright.
+    private static let heldMaxDuration: TimeInterval = 60
 
     private var silenceTask: Task<Void, Never>?
     private var noSpeechTask: Task<Void, Never>?
@@ -85,6 +92,36 @@ final class SpeechTranscriber: ObservableObject {
     /// wider window so they aren't clipped). Nil until speech is detected;
     /// reset on every `start()`.
     private var speechStartedAt: Date?
+
+    /// True while auto-endpointing (silence watchdog, no-speech timeout,
+    /// and stopping on a natural `isFinal`) is active — the hands-free
+    /// default. `CoachVoiceController.beginHold()` flips this false the
+    /// moment a press crosses the hold threshold, so a held turn is ended
+    /// ONLY by release (`stop()`) or the held max-duration cap; see
+    /// `setAutoEndpointing(_:)`. Reset to `true` at the top of every
+    /// `start()`.
+    private var autoEndpointingEnabled = true
+
+    /// Recognized-so-far transcript, accumulated across recognition
+    /// *segments*. The on-device recognizer can finalize a segment
+    /// (`isFinal == true`) on its own at a pause even while the user keeps
+    /// talking — historically this class treated that as "the user is
+    /// done" and stopped outright, which is the other half of the
+    /// mid-thought pause-cutoff bug (`beginNewRecognitionSegment()`'s doc
+    /// comment has the fix). `transcribedText` is always
+    /// `committedTranscript` plus the *current* segment's live partial, so
+    /// the preview (and the Apple-transcript fallback) always covers the
+    /// whole utterance, not just the segment since the last finalize.
+    private var committedTranscript: String = ""
+
+    /// Thread-safe indirection the audio tap appends buffers through,
+    /// rather than capturing a `SFSpeechAudioBufferRecognitionRequest`
+    /// directly. A segment restart (`beginNewRecognitionSegment()`) swaps in
+    /// a new request *without* touching the tap or the `.m4a` file — the
+    /// cloud STT needs one continuous recording, so the audio engine/tap/
+    /// file must never restart, only the recognition request feeding off
+    /// the same buffers.
+    private let requestBox = RecognitionRequestBox()
 
     init() {
         refreshPermissionState()
@@ -160,10 +197,12 @@ final class SpeechTranscriber: ObservableObject {
         recognitionTask?.cancel()
         recognitionTask = nil
         transcribedText = ""
+        committedTranscript = ""
         errorMessage = nil
         cancelWatchdogs()
         speechStartedAt = nil
         endpointDeadline = nil
+        autoEndpointingEnabled = true
         discardRecording()
         audioFile = nil
 
@@ -174,39 +213,9 @@ final class SpeechTranscriber: ObservableObject {
             return
         }
 
-        let req = SFSpeechAudioBufferRecognitionRequest()
-        req.shouldReportPartialResults = true
-        // Prefer on-device recognition (private, works offline); falls back
-        // to the server-backed recognizer automatically when unsupported for
-        // the current locale/device. Either way this is only the live
-        // preview now — the accurate transcript comes from the cloud upload
-        // in stop().
-        if recognizer.supportsOnDeviceRecognition {
-            req.requiresOnDeviceRecognition = true
-        }
-        recognitionRequest = req
-
-        recognitionTask = recognizer.recognitionTask(with: req) { [weak self] result, error in
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                if let result {
-                    self.transcribedText = result.bestTranscription.formattedString
-                    if !self.transcribedText.isEmpty {
-                        self.restartSilenceWatchdog()
-                    }
-                    if result.isFinal {
-                        self.stop()
-                    }
-                }
-                if let error, self.isRecording {
-                    // Suppress cancellation codes; surface genuine errors only.
-                    let code = (error as NSError).code
-                    guard code != 203, code != 301 else { return }
-                    self.errorMessage = "Voice error: \(error.localizedDescription)"
-                    self.stop()
-                }
-            }
-        }
+        recognitionRequest = makeRecognitionRequest(for: recognizer)
+        requestBox.current = recognitionRequest
+        recognitionTask = startRecognitionTask(with: recognitionRequest!, recognizer: recognizer)
 
         let inputNode = audioEngine.inputNode
         let format = inputNode.outputFormat(forBus: 0)
@@ -229,12 +238,18 @@ final class SpeechTranscriber: ObservableObject {
 
         // Captured locally rather than via `self` — the tap closure runs on
         // the audio thread and must never touch @MainActor state directly;
-        // `levelBridge` is the one seam that's allowed to, since it hops to
-        // `@MainActor` itself before touching anything.
+        // `levelBridge` (and `requestBox`, which is its own lock-protected
+        // `@unchecked Sendable`) are the two seams allowed to cross that
+        // boundary. `requestBox` — not a captured `req` — is deliberate: a
+        // segment restart (`beginNewRecognitionSegment()`) swaps in a new
+        // recognition request without ever reinstalling this tap, so the
+        // tap must always append to whichever request is *current*, not the
+        // one that existed when the tap was installed.
         let fileForTap = file
         let levelBridge = LevelBridge { [weak self] level in self?.inputLevel = level }
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak req] buf, _ in
-            req?.append(buf)
+        let requestBox = self.requestBox
+        inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { buf, _ in
+            requestBox.append(buf)
             try? fileForTap?.write(from: buf)
             levelBridge.report(buf)
         }
@@ -244,7 +259,7 @@ final class SpeechTranscriber: ObservableObject {
             try audioEngine.start()
             isRecording = true
             startNoSpeechWatchdog()
-            startMaxDurationWatchdog()
+            startMaxDurationWatchdog(duration: Self.maxDuration)
         } catch {
             inputNode.removeTap(onBus: 0)
             errorMessage = "Could not start recording: \(error.localizedDescription)"
@@ -259,6 +274,7 @@ final class SpeechTranscriber: ObservableObject {
         recognitionRequest?.endAudio()
         recognitionRequest = nil
         recognitionTask = nil
+        requestBox.current = nil
         // Closing the file flushes the remaining AAC frames. Do this — and
         // leave `recordingURL` pointing at the finished file — before
         // flipping `isRecording`, since Combine subscribers read
@@ -278,11 +294,158 @@ final class SpeechTranscriber: ObservableObject {
         recordingURL = nil
     }
 
+    // MARK: - Auto-endpointing (hold vs. hands-free)
+
+    /// Suspends or resumes auto-endpointing (silence watchdog, no-speech
+    /// timeout, and stopping on a natural `isFinal`) without touching the
+    /// audio engine/tap/recording file — only `CoachVoiceController
+    /// .beginHold()` calls this today, the moment a press crosses the hold
+    /// threshold, so the turn is from then on ended ONLY by `stop()`
+    /// (release) or the max-duration cap.
+    ///
+    /// A no-op if the value isn't actually changing. `false` immediately
+    /// cancels the silence and no-speech watchdogs (there's no "grace
+    /// period" — the whole point is that nothing but release/max-duration
+    /// should fire while held) and, if currently recording, restarts the
+    /// max-duration watchdog at `Self.heldMaxDuration` instead of
+    /// `Self.maxDuration`. `true` restores the hands-free watchdogs (not
+    /// used by any caller today, but kept symmetric).
+    func setAutoEndpointing(_ enabled: Bool) {
+        guard autoEndpointingEnabled != enabled else { return }
+        autoEndpointingEnabled = enabled
+
+        if !enabled {
+            silenceTask?.cancel(); silenceTask = nil
+            noSpeechTask?.cancel(); noSpeechTask = nil
+            endpointDeadline = nil
+            guard isRecording else { return }
+            startMaxDurationWatchdog(duration: Self.heldMaxDuration)
+        } else {
+            guard isRecording else { return }
+            startMaxDurationWatchdog(duration: Self.maxDuration)
+            if !transcribedText.isEmpty {
+                restartSilenceWatchdog()
+            } else {
+                startNoSpeechWatchdog()
+            }
+        }
+    }
+
+    // MARK: - Recognition (segments)
+
+    /// Pure decision extracted for unit testing (`SpeechTranscriberTests`):
+    /// whether a just-received `isFinal` result is a natural mid-turn
+    /// segment boundary that recognition should continue past (`true` — the
+    /// caller commits the segment and opens a new recognition request on
+    /// the same audio tap/file), versus the expected trailing `isFinal`
+    /// that arrives after `stop()` itself already called `endAudio()` and
+    /// torn the turn down (`false` — nothing more to do).
+    ///
+    /// `isRecording` is the tell: `stop()` flips it to `false`
+    /// synchronously, before the corresponding `isFinal` callback's hop
+    /// back to the main actor can run, so by the time this is evaluated a
+    /// `stop()`-caused final already sees `isRecording == false`. This is
+    /// deliberately not `held`/`autoEndpointingEnabled`-aware — a segment
+    /// restart must happen for a held turn too (auto-endpointing being
+    /// suspended only means nothing SHOULD call `stop()` on a pause; it
+    /// doesn't change what a natural `isFinal` from the recognizer means).
+    static func shouldRestartSegment(isFinal: Bool, isRecording: Bool) -> Bool {
+        isFinal && isRecording
+    }
+
+    private func makeRecognitionRequest(for recognizer: SFSpeechRecognizer) -> SFSpeechAudioBufferRecognitionRequest {
+        let req = SFSpeechAudioBufferRecognitionRequest()
+        req.shouldReportPartialResults = true
+        // Prefer on-device recognition (private, works offline); falls back
+        // to the server-backed recognizer automatically when unsupported for
+        // the current locale/device. Either way this is only the live
+        // preview now — the accurate transcript comes from the cloud upload
+        // in stop().
+        if recognizer.supportsOnDeviceRecognition {
+            req.requiresOnDeviceRecognition = true
+        }
+        return req
+    }
+
+    private func startRecognitionTask(
+        with request: SFSpeechAudioBufferRecognitionRequest,
+        recognizer: SFSpeechRecognizer
+    ) -> SFSpeechRecognitionTask {
+        recognizer.recognitionTask(with: request) { [weak self] result, error in
+            Task { @MainActor [weak self] in
+                self?.handleRecognitionCallback(result: result, error: error)
+            }
+        }
+    }
+
+    /// One handler shared by every recognition segment
+    /// (`beginNewRecognitionSegment()` reuses it for each new request/task),
+    /// so restarting a segment never duplicates this logic.
+    private func handleRecognitionCallback(result: SFSpeechRecognitionResult?, error: Error?) {
+        if let result {
+            let segmentText = result.bestTranscription.formattedString
+            transcribedText = combinedTranscript(withCurrentSegment: segmentText)
+            if !segmentText.isEmpty, autoEndpointingEnabled {
+                restartSilenceWatchdog()
+            }
+            if Self.shouldRestartSegment(isFinal: result.isFinal, isRecording: isRecording) {
+                commitSegment(segmentText)
+                beginNewRecognitionSegment()
+            }
+        }
+        if let error, isRecording {
+            // Suppress cancellation codes; surface genuine errors only.
+            let code = (error as NSError).code
+            guard code != 203, code != 301 else { return }
+            errorMessage = "Voice error: \(error.localizedDescription)"
+            stop()
+        }
+    }
+
+    /// `committedTranscript` (every segment finalized so far) plus
+    /// `segmentText` (the current segment's live-or-final transcript),
+    /// joined with a single space so the live preview/Apple fallback reads
+    /// as one continuous utterance rather than concatenated fragments.
+    private func combinedTranscript(withCurrentSegment segmentText: String) -> String {
+        if committedTranscript.isEmpty { return segmentText }
+        if segmentText.isEmpty { return committedTranscript }
+        return committedTranscript + " " + segmentText
+    }
+
+    private func commitSegment(_ segmentText: String) {
+        let trimmed = segmentText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        committedTranscript = committedTranscript.isEmpty ? trimmed : committedTranscript + " " + trimmed
+    }
+
+    /// Opens a new `SFSpeechAudioBufferRecognitionRequest`/task after a
+    /// segment finalizes mid-turn, continuing recognition on the exact same
+    /// audio engine/tap/`.m4a` file — those must never restart, since the
+    /// cloud STT upload needs one continuous clip. Buffers reach whichever
+    /// request is current via `requestBox` (see `start()`'s tap install),
+    /// so swapping `recognitionRequest`/`requestBox.current` here is all
+    /// that's needed; the tap itself is untouched.
+    ///
+    /// A no-op if recording already stopped by the time this runs (e.g. a
+    /// race with a concurrent `stop()`) or the recognizer stopped being
+    /// available.
+    private func beginNewRecognitionSegment() {
+        recognitionTask = nil
+        recognitionRequest = nil
+        guard isRecording, let recognizer = speechRecognizer, recognizer.isAvailable else { return }
+        let req = makeRecognitionRequest(for: recognizer)
+        recognitionRequest = req
+        requestBox.current = req
+        recognitionTask = startRecognitionTask(with: req, recognizer: recognizer)
+    }
+
     // MARK: - Watchdogs
     //
     // Three independent, cancellation-safe @MainActor tasks. Each just calls
     // stop(), which is idempotent (guards on `isRecording`), so overlapping
-    // fires are harmless.
+    // fires are harmless. The silence and no-speech watchdogs are only ever
+    // (re)started while `autoEndpointingEnabled` — see
+    // `setAutoEndpointing(_:)` and `handleRecognitionCallback(result:error:)`.
 
     /// Restarted on every non-empty partial transcript — partials only
     /// arrive while speech is actively being decoded, so this is a robust
@@ -315,6 +478,7 @@ final class SpeechTranscriber: ObservableObject {
     }
 
     private func startNoSpeechWatchdog() {
+        guard autoEndpointingEnabled else { return }
         noSpeechTask?.cancel()
         noSpeechTask = Task { [weak self] in
             guard let self else { return }
@@ -324,11 +488,11 @@ final class SpeechTranscriber: ObservableObject {
         }
     }
 
-    private func startMaxDurationWatchdog() {
+    private func startMaxDurationWatchdog(duration: TimeInterval) {
         maxDurationTask?.cancel()
         maxDurationTask = Task { [weak self] in
             guard let self else { return }
-            try? await Task.sleep(for: .seconds(self.maxDuration))
+            try? await Task.sleep(for: .seconds(duration))
             guard !Task.isCancelled else { return }
             self.stop()
         }
@@ -339,6 +503,34 @@ final class SpeechTranscriber: ObservableObject {
         noSpeechTask?.cancel(); noSpeechTask = nil
         maxDurationTask?.cancel(); maxDurationTask = nil
         endpointDeadline = nil
+    }
+}
+
+// MARK: - RecognitionRequestBox
+
+/// Lock-protected indirection so the audio-render-thread tap callback can
+/// append buffers to "whichever recognition request is current" without
+/// ever touching `@MainActor` state, and without the tap itself needing to
+/// be reinstalled when `beginNewRecognitionSegment()` swaps that request out
+/// mid-turn. Same `@unchecked Sendable` + `OSAllocatedUnfairLock` shape as
+/// `LevelBridge` just below, for the same reason: `SpeechTranscriber`'s tap
+/// closure runs on `AVAudioEngine`'s render thread, never concurrently with
+/// itself, but the lock is defense-in-depth rather than a response to any
+/// known concurrent caller.
+private final class RecognitionRequestBox: @unchecked Sendable {
+    private let storage = OSAllocatedUnfairLock<SFSpeechAudioBufferRecognitionRequest?>(initialState: nil)
+
+    var current: SFSpeechAudioBufferRecognitionRequest? {
+        get { storage.withLock { $0 } }
+        set { storage.withLock { $0 = newValue } }
+    }
+
+    /// Called from the audio-render thread on every tap callback.
+    /// `SFSpeechAudioBufferRecognitionRequest.append(_:)` is documented as
+    /// safe to call from a real-time audio callback, so this only needs the
+    /// lock to read `current` itself, not to serialize the append.
+    func append(_ buffer: AVAudioPCMBuffer) {
+        current?.append(buffer)
     }
 }
 

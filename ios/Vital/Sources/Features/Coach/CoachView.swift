@@ -47,6 +47,19 @@ struct CoachView: View {
     /// mapping (spec §3.1, V5) reads it back at release to tell a quick tap
     /// (conversation mode) from a ≥300 ms hold (push-to-talk single turn).
     @State private var micPressStartedAt: Date? = nil
+    /// Fires `pushToTalkHoldThreshold` after a fresh touch-down and, if the
+    /// finger is still down then, recognises the press as a hold: calls
+    /// `CoachVoiceController.beginHold()` right then (not at release) so
+    /// auto-endpointing suspends the moment the hold is recognised — a
+    /// pause mid-hold must never end the turn on its own (the bug this
+    /// fixes: holding, talking, pausing mid-thought only sent the tail).
+    /// Cancelled on release.
+    @State private var holdRecognitionTask: Task<Void, Never>? = nil
+    /// True once `holdRecognitionTask` has actually recognised this press as
+    /// a hold — read at release to decide whether to call `stopRecording()`
+    /// (push-to-talk semantics) or leave the turn running (a quick tap,
+    /// which stays live as `.conversation` until it naturally endpoints).
+    @State private var isHoldRecognized = false
 
     /// `mode` is forwarded to every `/api/coach` call via `CoachViewModel`.
     /// The Coach tab uses the default (nil); the onboarding CoachIntro step
@@ -541,13 +554,20 @@ struct CoachView: View {
     /// ≥ 300 ms = push-to-talk single turn, release to send. A fresh
     /// recording still always starts on touch-down (V3's latency win) —
     /// tentatively as `.conversation` — since the gesture isn't known to be
-    /// a tap or a hold until release; a hold detected at release demotes it
-    /// to `.single` right before `stopRecording()` (see
-    /// `CoachVoiceController.demoteToSingleTurn()`). VoiceOver's
-    /// `.accessibilityAction` calls `handleMicPress()` directly with no
-    /// `onEnded` involved at all, so it never measures a hold — the
-    /// controller's own VoiceOver check (spec §3.8) downgrades that
-    /// `.conversation` intent to `.single` regardless.
+    /// a tap or a hold until 300 ms have passed with the finger still down.
+    /// `holdRecognitionTask` recognises the hold live, at the 300 ms mark —
+    /// not only in hindsight at release — and calls
+    /// `CoachVoiceController.beginHold()` right then: that both demotes to
+    /// `.single` (same as the old `demoteToSingleTurn()`) AND suspends
+    /// auto-endpointing, so a pause while the finger is still down can never
+    /// end the turn on its own (see that method's doc comment for the bug
+    /// this fixes). Release then just calls `stopRecording()` if the hold
+    /// was recognised; a quick tap (never recognised as a hold) leaves the
+    /// turn running as `.conversation` until it naturally endpoints.
+    /// VoiceOver's `.accessibilityAction` calls `handleMicPress()` directly
+    /// with no `onEnded`/hold-timer involved at all, so it never measures a
+    /// hold — the controller's own VoiceOver check (spec §3.8) downgrades
+    /// that `.conversation` intent to `.single` regardless.
     ///
     /// The visible circle stays 32pt, but the tappable/hit area is grown to
     /// Apple's 44×44 minimum via `.frame(minWidth:minHeight:)` — this is the
@@ -584,20 +604,33 @@ struct CoachView: View {
                     isMicPressed = true
                     let startingFresh = !isMicButtonDisabled && voice.state == .idle && !voice.isRecording
                     micPressStartedAt = startingFresh ? Date() : nil
+                    isHoldRecognized = false
                     handleMicPress()
+
+                    // Only a press that itself started a *new* recording can
+                    // become a hold — `micPressStartedAt` is nil otherwise
+                    // (e.g. this touch-down was the one that *stopped* an
+                    // already-in-flight recording).
+                    guard startingFresh else { return }
+                    holdRecognitionTask?.cancel()
+                    holdRecognitionTask = Task { @MainActor in
+                        try? await Task.sleep(for: .seconds(Self.pushToTalkHoldThreshold))
+                        guard !Task.isCancelled else { return }
+                        // Still down, and still the same press that started
+                        // this recording — recognise it as a hold right now.
+                        guard isMicPressed, micPressStartedAt != nil else { return }
+                        isHoldRecognized = true
+                        voice.beginHold()
+                    }
                 }
                 .onEnded { _ in
                     isMicPressed = false
-                    // Only a press that itself started a *new* recording
-                    // (not one that stopped an already-in-flight one) can be
-                    // a hold — `micPressStartedAt` is nil otherwise.
-                    if let startedAt = micPressStartedAt, voice.mode == .conversation, voice.isRecording {
-                        let held = Date().timeIntervalSince(startedAt) >= Self.pushToTalkHoldThreshold
-                        if held {
-                            voice.demoteToSingleTurn()
-                            voice.stopRecording()
-                        }
+                    holdRecognitionTask?.cancel()
+                    holdRecognitionTask = nil
+                    if isHoldRecognized {
+                        voice.stopRecording()
                     }
+                    isHoldRecognized = false
                     micPressStartedAt = nil
                 }
         )
