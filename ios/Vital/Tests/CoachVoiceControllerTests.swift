@@ -97,6 +97,99 @@ final class CoachVoiceControllerTests: XCTestCase {
         XCTAssertEqual(delivered.count, 1)
     }
 
+    // MARK: - Hold-to-talk (beginHold)
+
+    /// The core of the pause-cutoff fix: `beginHold()` suspends the
+    /// transcriber's auto-endpointing (asserted on the fake) and demotes to
+    /// `.single`, both at the moment the hold is recognised — not only on
+    /// release.
+    func testBeginHoldSuspendsAutoEndpointingAndDemotesToSingle() {
+        let transcriber = FakeSpeechTranscriber()
+        let controller = CoachVoiceController(transcriber: transcriber, api: FakeVoiceAPI())
+
+        controller.startRecording(mode: .conversation)
+        XCTAssertEqual(controller.mode, .conversation)
+        XCTAssertTrue(transcriber.autoEndpointingCalls.isEmpty)
+
+        controller.beginHold()
+
+        XCTAssertEqual(transcriber.autoEndpointingCalls, [false])
+        XCTAssertEqual(controller.mode, .single)
+    }
+
+    /// No-op outside `.listening` — e.g. a stray call after the turn already
+    /// moved on — so it can't suspend endpointing for some later, unrelated
+    /// turn.
+    func testBeginHoldIsANoOpOutsideListening() {
+        let transcriber = FakeSpeechTranscriber()
+        let controller = CoachVoiceController(transcriber: transcriber, api: FakeVoiceAPI())
+
+        controller.beginHold()
+
+        XCTAssertTrue(transcriber.autoEndpointingCalls.isEmpty)
+        XCTAssertEqual(controller.mode, .single)
+    }
+
+    /// Release (`stopRecording()`) always stops the transcriber, whether or
+    /// not `beginHold()` ran first.
+    func testStopRecordingStopsTheTranscriber() {
+        let transcriber = FakeSpeechTranscriber()
+        let controller = CoachVoiceController(transcriber: transcriber, api: FakeVoiceAPI())
+
+        controller.startRecording(mode: .conversation)
+        controller.beginHold()
+        controller.stopRecording()
+
+        XCTAssertEqual(transcriber.stopCallCount, 1)
+    }
+
+    /// A held turn is never ended by a simulated endpoint: once
+    /// `beginHold()` has suspended auto-endpointing, the fake standing in
+    /// for "the silence watchdog/no-speech timeout fired" (flipping
+    /// `isRecording` false on its own, with no `stop()` call from the
+    /// controller) must not be able to happen in the first place — this
+    /// test asserts the contract at the controller level: as long as
+    /// nothing calls `stopRecording()`, a held turn stays `.listening`
+    /// indefinitely, mirroring the real transcriber's watchdogs having been
+    /// cancelled by `setAutoEndpointing(false)`.
+    func testHeldTurnStaysListeningWithNoStopCall() async {
+        let transcriber = FakeSpeechTranscriber()
+        let controller = CoachVoiceController(transcriber: transcriber, api: FakeVoiceAPI())
+
+        controller.startRecording(mode: .conversation)
+        controller.beginHold()
+
+        // Give any stray async work a chance to run. Nothing here ever
+        // calls `stopRecording()` or flips `transcriber.isRecording`, so —
+        // unlike a hands-free turn — the controller must still be
+        // `.listening` afterward.
+        try? await Task.sleep(nanoseconds: 20_000_000)
+
+        XCTAssertEqual(controller.state, .listening)
+        XCTAssertEqual(transcriber.stopCallCount, 0)
+        XCTAssertEqual(transcriber.autoEndpointingCalls, [false])
+    }
+
+    /// A tap/conversation turn (no `beginHold()`) still auto-endpoints
+    /// normally: the transcriber deciding to stop on its own (endpoint
+    /// firing) moves the controller straight to `.transcribing`, exactly as
+    /// before this change.
+    func testTapTurnStillAutoEndpoints() {
+        let transcriber = FakeSpeechTranscriber()
+        let controller = CoachVoiceController(transcriber: transcriber, api: FakeVoiceAPI())
+
+        controller.startRecording(mode: .conversation)
+        XCTAssertEqual(controller.mode, .conversation)
+
+        transcriber.transcribedText = "how did the run feel, it was good"
+        transcriber.isRecording = false // the transcriber's own endpoint firing
+
+        XCTAssertEqual(controller.state, .transcribing)
+        XCTAssertTrue(transcriber.autoEndpointingCalls.isEmpty)
+    }
+
+    // MARK: - STT upload
+
     /// Cancelling while the cloud STT upload is still in flight must not
     /// deliver a transcript once that upload eventually resolves.
     func testCancelMidTranscribeDeliversNothing() async {
@@ -797,6 +890,15 @@ private final class FakeSpeechTranscriber: SpeechTranscribing {
     private(set) var discardCallCount = 0
     private(set) var prewarmCallCount = 0
     private(set) var requestPermissionsCallCount = 0
+    /// Every value `setAutoEndpointing(_:)` was called with, in order — lets
+    /// a test assert both that it was called and what the last/only value
+    /// was (`autoEndpointingEnabled`).
+    private(set) var autoEndpointingCalls: [Bool] = []
+    var autoEndpointingEnabled: Bool { autoEndpointingCalls.last ?? true }
+
+    func setAutoEndpointing(_ enabled: Bool) {
+        autoEndpointingCalls.append(enabled)
+    }
 
     func prewarm() {
         prewarmCallCount += 1

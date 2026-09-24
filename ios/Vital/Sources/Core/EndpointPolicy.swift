@@ -7,27 +7,50 @@ import Foundation
 /// how long to wait, after the last partial result, before treating the
 /// turn as finished.
 ///
+/// This only governs **hands-free** endpointing (a tap, or conversation
+/// mode's auto re-arm) — a held (push-to-talk) turn suspends this policy
+/// entirely via `SpeechTranscriber.setAutoEndpointing(false)` and ends only
+/// on release or the held max-duration cap; see `CoachVoiceController
+/// .beginHold()`.
+///
+/// **Retuned after a live bug report (2026-09):** the original V1 bounds
+/// (0.6–1.2s, terminal punctuation getting the *shortest* window) cut
+/// people off mid-thought. The owner, holding the mic and talking normally,
+/// paused after "It was good, but…" and only "but" was sent — Apple's
+/// on-device partials add a period at almost every natural pause, so
+/// treating terminal punctuation as the strongest "they're done" signal
+/// fired at exactly the wrong time. These wider bounds, and a terminal-
+/// punctuation window that is no longer the minimum, are a deliberate
+/// trade of a little latency for not truncating sentences.
+///
 /// Kept deliberately dependency-free (no `SpeechTranscriber`/`Speech`
 /// import) so it can be tested in isolation and reused by any future
 /// pipeline (e.g. `CoachVoiceController` in a later PR).
 enum EndpointPolicy {
 
-    /// Spec §3.3's bounds — every window this policy returns falls inside
-    /// this range, regardless of input.
-    static let minWindow: TimeInterval = 0.6
-    static let maxWindow: TimeInterval = 1.2
+    /// Every window this policy returns falls inside this range, regardless
+    /// of input. Widened from the original 0.6–1.2s spec bounds (see the
+    /// type doc comment) after those cut people off mid-thought.
+    static let minWindow: TimeInterval = 1.2
+    static let maxWindow: TimeInterval = 2.6
 
     /// "Anything else (default)" row.
-    static let defaultWindow: TimeInterval = 0.8
-    /// "A trailing filler or conjunction" row.
-    static let fillerWindow: TimeInterval = 1.2
+    static let defaultWindow: TimeInterval = 1.6
+    /// "Ends in terminal punctuation (., !, ?)" row. Deliberately **not**
+    /// `minWindow` — Apple's on-device recognizer punctuates provisionally
+    /// at pauses mid-thought, so a short window here is exactly what
+    /// clipped "It was good, but…" down to "but".
+    static let terminalPunctuationWindow: TimeInterval = 1.3
+    /// "A trailing filler or conjunction" row — the strongest "they're not
+    /// done" signal, so it gets the longest window.
+    static let fillerWindow: TimeInterval = 2.4
     /// "A dangling number or unit" row.
-    static let danglingNumberWindow: TimeInterval = 1.0
+    static let danglingNumberWindow: TimeInterval = 2.0
     /// Below this much speech, treat the utterance as "very short" and widen
     /// the window so a quick reply isn't clipped mid-word.
     static let shortUtteranceThreshold: TimeInterval = 1.0
     /// The floor applied to very short utterances.
-    static let shortUtteranceFloor: TimeInterval = 1.0
+    static let shortUtteranceFloor: TimeInterval = 1.6
 
     /// Trailing words that read as mid-thought rather than turn-final.
     private static let fillerWords: Set<String> = [
@@ -57,7 +80,7 @@ enum EndpointPolicy {
 
         var window: TimeInterval
         if let lastChar = trimmed.last, isTerminalPunctuation(lastChar) {
-            window = minWindow
+            window = terminalPunctuationWindow
         } else if fillerWords.contains(lastWord) {
             window = fillerWindow
         } else if isDanglingNumber(words) {

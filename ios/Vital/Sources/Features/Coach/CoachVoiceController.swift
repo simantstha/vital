@@ -34,6 +34,12 @@ protocol SpeechTranscribing: AnyObject {
     func refreshPermissionState()
     func requestPermissions() async
     func prewarm()
+    /// See `SpeechTranscriber.setAutoEndpointing(_:)`. `false` suspends the
+    /// silence watchdog, no-speech timeout, and stop-on-`isFinal` — used by
+    /// `CoachVoiceController.beginHold()` the moment a press crosses the
+    /// hold threshold, so a held turn ends only on release or the (raised)
+    /// max-duration cap.
+    func setAutoEndpointing(_ enabled: Bool)
 }
 
 extension SpeechTranscriber: SpeechTranscribing {
@@ -440,12 +446,30 @@ final class CoachVoiceController: ObservableObject {
     /// touch-down/release gesture (spec §3.1) always starts recording
     /// immediately as the tentative mode (V3's touch-down-start latency
     /// win), before it's known whether the press is a quick tap or a
-    /// ≥300 ms hold; a hold means push-to-talk was intended, so the view
-    /// calls this right before `stopRecording()` on release. No-op once
-    /// already `.single`, and a no-op if the turn has already ended.
+    /// ≥300 ms hold; a hold means push-to-talk was intended. Called by
+    /// `beginHold()` the moment the hold is recognised (live, at the
+    /// threshold — not only at release). No-op once already `.single`, and
+    /// a no-op if the turn has already ended.
     func demoteToSingleTurn() {
         guard mode == .conversation else { return }
         mode = .single
+    }
+
+    /// Called the moment a press crosses the hold threshold (≥300 ms) —
+    /// well *before* release — fixing the "hold and talk, pause mid-thought,
+    /// only the tail got sent" bug report: while held, NOTHING but release
+    /// (`stopRecording()`) or the transcriber's own (raised) max-duration
+    /// cap should be able to end the turn, so auto-endpointing must be
+    /// suspended as soon as the hold is recognised, not only on release —
+    /// a natural pause during the hold must never itself stop recording.
+    /// Demotes to `.single` (same effect as `demoteToSingleTurn()`, safe to
+    /// call even if that already ran) and suspends the transcriber's
+    /// silence watchdog/no-speech timeout/stop-on-`isFinal`. No-op unless
+    /// actually listening.
+    func beginHold() {
+        guard state == .listening else { return }
+        demoteToSingleTurn()
+        transcriber.setAutoEndpointing(false)
     }
 
     func stopRecording() {
