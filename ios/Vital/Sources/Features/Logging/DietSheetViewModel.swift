@@ -114,7 +114,12 @@ final class DietSheetViewModel: ObservableObject {
     init(initialTarget: Int, onRefreshToday: @escaping () -> Void) {
         self.target = initialTarget
         self.onRefreshToday = onRefreshToday
-        self.selectedSlot = ReminderScheduler.timeAppropriateSlot()
+        // `AppClock.now`, not `Date()` directly — pinned under the DEBUG
+        // screenshot harness (see AppClock.swift) so the highlighted slot
+        // chip / "Recently logged · <slot>" header don't vary with the wall
+        // clock the CI job happens to run at. Real launches: identical to
+        // `Date()`.
+        self.selectedSlot = ReminderScheduler.timeAppropriateSlot(for: AppClock.now)
     }
 
     // MARK: - Load
@@ -275,7 +280,9 @@ final class DietSheetViewModel: ObservableObject {
     /// the existing confirm-card flow instead of silently dropping the shot.
     @discardableResult
     func logPhotoResult(name: String, kcal: Double, c: Double, p: Double, f: Double, imageThumb: String?) async -> Bool {
-        let slot = ReminderScheduler.timeAppropriateSlot()
+        // Same `AppClock.now` reasoning as `init` above — the photo
+        // auto-log's slot must be screenshot-deterministic too.
+        let slot = ReminderScheduler.timeAppropriateSlot(for: AppClock.now)
         do {
             let response = try await apiClient.logMeal(
                 name: name, kcal: kcal, c: c, p: p, f: f,
