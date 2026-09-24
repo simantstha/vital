@@ -187,18 +187,77 @@ final class GoalHeroLogicTests: XCTestCase {
 
     func testWeeklyVolumeTextNilWhenDoneMissing() {
         XCTAssertNil(EnduranceHeroLogic.weeklyVolumeText(kmDone: nil, kmTarget: 40, system: .metric))
+        XCTAssertNil(EnduranceHeroLogic.weeklyVolumeText(kmDone: nil, kmTarget: nil, system: .metric))
     }
 
-    func testWeeklyVolumeTextNilWhenTargetMissing() {
-        XCTAssertNil(EnduranceHeroLogic.weeklyVolumeText(kmDone: 24, kmTarget: nil, system: .metric))
+    func testWeeklyVolumeTextFormatsDoneOnlyWhenNoTarget() {
+        // `volume.target` is always null today (#202) — this is the common
+        // real-world case.
+        let text = EnduranceHeroLogic.weeklyVolumeText(kmDone: 24.5, kmTarget: nil, system: .metric)
+        XCTAssertEqual(text, "24.5 km this week")
     }
 
-    func testWeeklyVolumeTextNilWhenTargetIsZero() {
-        XCTAssertNil(EnduranceHeroLogic.weeklyVolumeText(kmDone: 24, kmTarget: 0, system: .metric))
+    func testWeeklyVolumeTextFormatsDoneOnlyWhenTargetIsZero() {
+        let text = EnduranceHeroLogic.weeklyVolumeText(kmDone: 24, kmTarget: 0, system: .metric)
+        XCTAssertEqual(text, "24 km this week")
     }
 
-    func testWeeklyVolumeTextFormatsWhenBothPresent() {
+    func testWeeklyVolumeTextFormatsDoneOfTargetWhenTargetPresent() {
         let text = EnduranceHeroLogic.weeklyVolumeText(kmDone: 24, kmTarget: 40, system: .metric)
-        XCTAssertEqual(text, "Week 24 km of 40 km")
+        XCTAssertEqual(text, "24 km of 40 km")
+    }
+
+    func testWeeklyVolumeTextRespectsImperialSystem() {
+        let text = EnduranceHeroLogic.weeklyVolumeText(kmDone: 24, kmTarget: nil, system: .imperial)
+        XCTAssertEqual(text, "\(UnitFormat.distance(km: 24, .imperial)) this week")
+    }
+
+    // MARK: - MuscleHeroLogic.sessionsThisWeekFallbackText
+
+    func testSessionsThisWeekFallbackTextSingular() {
+        XCTAssertEqual(MuscleHeroLogic.sessionsThisWeekFallbackText(completed: 1), "1 session this week")
+    }
+
+    func testSessionsThisWeekFallbackTextPlural() {
+        XCTAssertEqual(MuscleHeroLogic.sessionsThisWeekFallbackText(completed: 3), "3 sessions this week")
+    }
+
+    func testSessionsThisWeekFallbackTextClampsNegative() {
+        XCTAssertEqual(MuscleHeroLogic.sessionsThisWeekFallbackText(completed: -1), "0 sessions this week")
+    }
+
+    // MARK: - MuscleHeroLogic.lastLiftText (honesty rule — nil only on bad date)
+
+    func testLastLiftTextWithWeight() {
+        // 2026-09-21 is a Monday.
+        let text = MuscleHeroLogic.lastLiftText(
+            exercise: "Deadlift", date: "2026-09-21", sets: 2, reps: 5, weightKg: 150, system: .metric
+        )
+        XCTAssertEqual(text, "Last (Mon): Deadlift 2×5 @ 150 kg")
+    }
+
+    func testLastLiftTextBodyweightWhenWeightMissing() {
+        let text = MuscleHeroLogic.lastLiftText(
+            exercise: "Pull-up", date: "2026-09-21", sets: 3, reps: 8, weightKg: nil, system: .metric
+        )
+        XCTAssertEqual(text, "Last (Mon): Pull-up 3×8 bodyweight")
+    }
+
+    func testLastLiftTextRespectsImperialSystem() {
+        let text = MuscleHeroLogic.lastLiftText(
+            exercise: "Bench", date: "2026-09-21", sets: 3, reps: 5, weightKg: 84, system: .imperial
+        )
+        XCTAssertEqual(text, "Last (Mon): Bench 3×5 @ \(UnitFormat.weight(kg: 84, .imperial))")
+    }
+
+    func testLastLiftTextNilOnUnparseableDate() {
+        XCTAssertNil(MuscleHeroLogic.lastLiftText(
+            exercise: "Squat", date: "not-a-date", sets: 3, reps: 5, weightKg: 140, system: .metric
+        ))
+    }
+
+    func testWeekdayShortLabelKnownDates() {
+        XCTAssertEqual(MuscleHeroLogic.weekdayShortLabel(forDateString: "2026-09-24"), "Thu")
+        XCTAssertEqual(MuscleHeroLogic.weekdayShortLabel(forDateString: "2026-09-21"), "Mon")
     }
 }

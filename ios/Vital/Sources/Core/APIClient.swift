@@ -401,6 +401,22 @@ struct APIClient {
         try validate(response)
     }
 
+    // MARK: - Training summary (Today muscle/endurance heroes, #202)
+
+    /// GET /api/training/summary?tz= — feeds the muscle/endurance Today
+    /// heroes' "last time" lift, "this week" session dots, and weekly
+    /// endurance volume, all omitted from the original heroes (#199) for
+    /// lack of this endpoint. Sends the device's current timezone — same
+    /// convention as `fetchToday()`/`fetchPlan()` — so the server resolves
+    /// the same local week both endpoints agree on. See
+    /// `lib/trainingSummary.ts`'s doc comment for the exact honesty-rule
+    /// nullability of every field in `TrainingSummaryResponse`.
+    func fetchTrainingSummary() async throws -> TrainingSummaryResponse {
+        let tz = TimeZone.current.identifier
+        let encoded = tz.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? tz
+        return try await get("/api/training/summary?tz=\(encoded)")
+    }
+
     // MARK: - Memory browser
 
     /// GET /api/memory — the "About you" fact summary plus every entity
@@ -1414,6 +1430,54 @@ struct WeightTrendDTO: Decodable {
 struct WeightLogResponse: Decodable {
     let entries: [WeightLogEntryDTO]
     let trend: WeightTrendDTO
+}
+
+// MARK: - Training summary types (Today muscle/endurance heroes, #202)
+
+/// One `Mon..Sun` day of `TrainingWeekDTO.days` — mirrors
+/// `lib/trainingSummary.ts`'s `WeekDay`.
+struct TrainingWeekDayDTO: Decodable {
+    let date: String
+    let planned: Bool
+    let completed: Bool
+}
+
+/// Mirrors `lib/trainingSummary.ts`'s `WeekSummary`. `plannedSessions` is
+/// `null` (not zero) when the user has never added a planned 'move' session
+/// this week — see that file's honesty-rule doc comment.
+struct TrainingWeekDTO: Decodable {
+    let start: String
+    let plannedSessions: Int?
+    let completedSessions: Int
+    let days: [TrainingWeekDayDTO]
+}
+
+/// Mirrors `lib/trainingSummary.ts`'s `VolumeSummary`. `done` is `null` when
+/// no workout this week carries a distance reading at all — distinct from a
+/// real 0km; `target` is always `null` today (no plan/goal defines one) but
+/// decoded for forward-compatibility.
+struct TrainingVolumeDTO: Decodable {
+    let unit: String
+    let done: Double?
+    let target: Double?
+}
+
+/// Mirrors `lib/trainingSummary.ts`'s `LastLift` — the top (heaviest)
+/// working set of the user's most recent strength session. `weightKg` is
+/// `nil` for a bodyweight-only lift, never a fabricated 0.
+struct TrainingLastLiftDTO: Decodable {
+    let exercise: String
+    let date: String
+    let sets: Int
+    let reps: Int
+    let weightKg: Double?
+}
+
+/// GET /api/training/summary's response — see `fetchTrainingSummary()`.
+struct TrainingSummaryResponse: Decodable {
+    let week: TrainingWeekDTO
+    let volume: TrainingVolumeDTO
+    let lastLift: TrainingLastLiftDTO?
 }
 
 // MARK: - Diet goal types

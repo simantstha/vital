@@ -29,26 +29,62 @@ enum MuscleHeroLogic {
     /// than leaving the hero looking empty.
     static let restDayText = "Rest day. Protein still counts."
 
-    // MARK: - "Last time" (backend gap)
-    //
-    // The ux-spec asks for "Last (Mon) Bench 3×5 @ 185 lb" — set/rep/load
-    // history for the session's main lift. That data exists server-side
-    // (`getExerciseHistory` / `get_training_history`, lib/brain/tools.ts) but
-    // is currently reachable ONLY through the coach's tool-call path, not a
-    // REST endpoint `APIClient` can call from Today. There is deliberately
-    // no function here that fabricates or guesses this line — see the PR
-    // report for the exact endpoint this needs
-    // (e.g. `GET /api/training-history?exercise=`).
+    // MARK: - "Last time" (fed by GET /api/training/summary, #202)
 
-    // MARK: - Sessions this week (backend gap)
+    /// Short weekday abbreviation ("Mon") for a `YYYY-MM-DD` day string, as
+    /// used in `lib/localDay.ts` day keys and `/api/training/summary`'s
+    /// `lastLift.date`. Parsed/formatted in a fixed UTC calendar with a
+    /// POSIX locale so a date-only string never shifts a day from a local
+    /// timezone offset and output doesn't vary with the device's locale —
+    /// `nil` only for a malformed date string (never fabricated).
+    static func weekdayShortLabel(forDateString dateString: String) -> String? {
+        guard let date = Self.dayKeyFormatter.date(from: dateString) else { return nil }
+        return Self.weekdayFormatter.string(from: date)
+    }
+
+    private static let dayKeyFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.calendar = Calendar(identifier: .gregorian)
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "UTC")
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
+
+    private static let weekdayFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.calendar = Calendar(identifier: .gregorian)
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "UTC")
+        f.dateFormat = "EEE"
+        return f
+    }()
+
+    /// "Last (Mon): Deadlift 2×5 @ 150 kg" — or "... 2×5 bodyweight" when
+    /// `weightKg` is `nil` (a bodyweight-only lift genuinely has no load to
+    /// show, never a fabricated "@ 0 kg"). `nil` only when `date` can't be
+    /// parsed — the honesty rule enforced at the call site the same way as
+    /// every other function here.
+    static func lastLiftText(
+        exercise: String,
+        date: String,
+        sets: Int,
+        reps: Int,
+        weightKg: Double?,
+        system: UnitSystem
+    ) -> String? {
+        guard let weekday = weekdayShortLabel(forDateString: date) else { return nil }
+        let load = weightKg.map { "@ \(UnitFormat.weight(kg: $0, system))" } ?? "bodyweight"
+        return "Last (\(weekday)): \(exercise) \(sets)×\(reps) \(load)"
+    }
+
+    // MARK: - Sessions this week (fed by GET /api/training/summary, #202)
     //
-    // `/api/plan` only ever returns TODAY's rows — Today has no client-side
-    // view of the last 7 days' planned-vs-completed strength sessions, so
-    // the real count can't be shown yet either (see PR report). This type
-    // documents the intended shape so the counting/formatting logic is
-    // ready the moment a weekly endpoint exists; `TodayViewModel` currently
-    // never constructs `WeeklySessionRecord`s, so `MuscleHeroView` never
-    // renders this row until it does.
+    // `plannedSessions` in the response is `null` when the user has never
+    // added a planned ('move') session for any day this week — distinct
+    // from a real zero. `sessionsThisWeekFallbackText` covers exactly that
+    // case: no dots (nothing planned to compare against), just an honest
+    // count of what was actually completed.
 
     struct WeeklySessionRecord: Equatable {
         /// True for a day the plan called for a strength session.
@@ -83,6 +119,16 @@ enum MuscleHeroLogic {
     static func sessionsThisWeekText(done: Int, total: Int) -> String? {
         guard total > 0 else { return nil }
         return "\(min(max(done, 0), total)) of \(total) sessions"
+    }
+
+    /// "N sessions this week" — the no-plan-data fallback for when
+    /// `plannedSessions` is `null` (see the MARK above): there's nothing
+    /// planned to compare against, so no dots and no "of M", just the honest
+    /// completed count. Always non-nil — a real `completedSessions` (even 0)
+    /// is never itself missing data, unlike `plannedSessions`.
+    static func sessionsThisWeekFallbackText(completed: Int) -> String {
+        let n = max(completed, 0)
+        return "\(n) session\(n == 1 ? "" : "s") this week"
     }
 }
 
@@ -181,19 +227,21 @@ enum EnduranceHeroLogic {
 
     static let restDayText = "No session planned today."
 
-    // MARK: - Weekly volume (backend gap)
+    // MARK: - Weekly volume (fed by GET /api/training/summary, #202)
     //
-    // Same gap as `MuscleHeroLogic`'s weekly-session count: `/api/plan` is
-    // today-only, so there's no client-side week of completed distance to
-    // sum. `weeklyVolumeText` takes the total as an explicit optional so the
-    // honesty rule is enforced at the call site (never invent a total), and
-    // is ready for a `GET /api/training-volume?range=week`-shaped response —
-    // see the PR report.
+    // `volume.target` is always `null` today (no plan/goal in the schema
+    // defines a weekly distance target — see `lib/trainingSummary.ts`), but
+    // this still supports it so the richer "X of Y km" copy is ready the
+    // moment a target exists, with no call-site change needed.
 
-    /// `nil` when `kmDone`/`kmTarget` aren't both available — never show a
-    /// partial or fabricated weekly total.
+    /// `nil` when `kmDone` is missing — never show a fabricated weekly
+    /// total. "X km this week" when there's no target to compare against
+    /// (the common case today); "X of Y km" once a target exists.
     static func weeklyVolumeText(kmDone: Double?, kmTarget: Double?, system: UnitSystem) -> String? {
-        guard let kmDone, let kmTarget, kmTarget > 0 else { return nil }
-        return "Week \(UnitFormat.distance(km: kmDone, system)) of \(UnitFormat.distance(km: kmTarget, system))"
+        guard let kmDone else { return nil }
+        if let kmTarget, kmTarget > 0 {
+            return "\(UnitFormat.distance(km: kmDone, system)) of \(UnitFormat.distance(km: kmTarget, system))"
+        }
+        return "\(UnitFormat.distance(km: kmDone, system)) this week"
     }
 }

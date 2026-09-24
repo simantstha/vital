@@ -257,6 +257,78 @@ final class TodayViewModel: ObservableObject {
         }
     }
 
+    // MARK: - Training summary (Today muscle/endurance heroes, #202)
+
+    /// `nil` until `/api/training/summary` resolves — fetched (fail-soft,
+    /// same convention as `weightLog`/`enduranceTrendsBatch`) only for the
+    /// muscle/endurance goals that actually render its data; see
+    /// `performLoad`'s post-`/api/today` fetch, gated on `goal`.
+    @Published private(set) var trainingSummary: TrainingSummaryResponse? = nil
+
+    private func loadTrainingSummary() async {
+        do {
+            trainingSummary = try await apiClient.fetchTrainingSummary()
+        } catch {
+            print("[Vital] fetchTrainingSummary failed: \(error.localizedDescription)")
+        }
+    }
+
+    /// The muscle hero's "Last (Mon): Deadlift 2×5 @ 150 kg" line — `nil`
+    /// whenever there's no logged strength history yet (never fabricated).
+    var muscleLastLiftText: String? {
+        guard let lift = trainingSummary?.lastLift else { return nil }
+        return MuscleHeroLogic.lastLiftText(
+            exercise: lift.exercise,
+            date: lift.date,
+            sets: lift.sets,
+            reps: lift.reps,
+            weightKg: lift.weightKg,
+            system: UnitPreference.shared.current
+        )
+    }
+
+    /// Planned-vs-completed records for `MuscleHeroLogic.sessionsThisWeek`,
+    /// or `nil` before `trainingSummary` loads.
+    private var weeklySessionRecords: [MuscleHeroLogic.WeeklySessionRecord]? {
+        trainingSummary?.week.days.map {
+            MuscleHeroLogic.WeeklySessionRecord(planned: $0.planned, completed: $0.completed)
+        }
+    }
+
+    /// Done/total for the "● ● ○ ○" dot row shared by both heroes
+    /// (`SessionDotsRow`) — `nil` when `plannedSessions` is null (nothing
+    /// planned this week to compare against) or before `trainingSummary`
+    /// loads. Same rule for muscle and endurance (task's §4 note). Exposed
+    /// as counts rather than `MuscleHeroLogic.sessionDots`'s formatted
+    /// string so the view can color each dot individually.
+    var trainingSessionDots: (done: Int, total: Int)? {
+        guard trainingSummary?.week.plannedSessions != nil, let records = weeklySessionRecords else { return nil }
+        let counts = MuscleHeroLogic.sessionsThisWeek(records)
+        return MuscleHeroLogic.sessionDots(done: counts.done, total: counts.total) != nil ? counts : nil
+    }
+
+    /// "2 of 4 sessions" when `plannedSessions` is known, or the honest
+    /// "N sessions this week" fallback when it's null — `nil` only before
+    /// `trainingSummary` loads.
+    var trainingSessionsThisWeekText: String? {
+        guard let week = trainingSummary?.week else { return nil }
+        if week.plannedSessions != nil, let records = weeklySessionRecords {
+            let counts = MuscleHeroLogic.sessionsThisWeek(records)
+            return MuscleHeroLogic.sessionsThisWeekText(done: counts.done, total: counts.total)
+        }
+        return MuscleHeroLogic.sessionsThisWeekFallbackText(completed: week.completedSessions)
+    }
+
+    /// The endurance hero's "X km this week" / "X of Y km" line — `nil`
+    /// when `volume.done` is null (no workout this week carries a distance
+    /// reading).
+    var enduranceWeeklyVolumeText: String? {
+        guard let volume = trainingSummary?.volume else { return nil }
+        return EnduranceHeroLogic.weeklyVolumeText(
+            kmDone: volume.done, kmTarget: volume.target, system: UnitPreference.shared.current
+        )
+    }
+
     // MARK: - Weight-loss hero (§4.1, §5.3)
 
     /// "weight_loss" | "muscle" | "endurance" | "general" — from
@@ -422,6 +494,16 @@ final class TodayViewModel: ObservableObject {
             applyTodayResponse(response)
             didLoadToday = true
             applyPlanResult(plan, todayPlan: response.plan)
+            // `/api/training/summary` only feeds the muscle/endurance heroes
+            // — `goal` is only known once `applyTodayResponse` above runs,
+            // so this can't join the concurrent batch further up; fetched
+            // fail-soft, same convention as `loadWeightLog`/
+            // `loadEnduranceTrends`.
+            if isMuscleGoal || isEnduranceGoal {
+                await loadTrainingSummary()
+            } else {
+                trainingSummary = nil
+            }
             withAnimation(Theme.Motion.appear) { loadState = .loaded }
 
         case .cancelled:
