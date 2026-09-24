@@ -41,6 +41,10 @@ struct DietSheetView: View {
                 header
                 remainingRow
                 slotGrid
+                // Always shown — it's also the custom-entry (name + kcal)
+                // row's home. When there are no recents it collapses to just
+                // that row: no "Nothing logged yet" copy here, since
+                // `loggedTodaySection` below already owns that message.
                 recentMealsSection
                 deeperFlowsRow
                 loggedTodaySection
@@ -201,48 +205,32 @@ private extension DietSheetView {
     /// now: the user's own recently logged meals (GET /api/nutrition/recents),
     /// not a fabricated catalogue. Falls back to "Recently logged" (no slot
     /// suffix) when `vm.isRecentsFallback` — i.e. we're showing meals from
-    /// other slots because this one has none of its own yet.
+    /// other slots because this one has none of its own yet. With no
+    /// recents at all, the card is just the custom-entry row, so "Recently
+    /// logged" would be a lie — "Quick add" instead.
     var recentsSectionTitle: String {
-        if vm.recentsForSelectedSlot.isEmpty {
-            return "Log again"
-        }
+        guard !vm.recentsForSelectedSlot.isEmpty else { return "Quick add" }
         return vm.isRecentsFallback ? "Recently logged" : "Recently logged · \(vm.selectedSlot.label)"
     }
 
+    /// The recents list + custom-entry row. When `recentsForSelectedSlot` is
+    /// empty this collapses to just `customRow` — no "Nothing logged yet"
+    /// copy (that's `loggedTodaySection`'s job) and no empty list — so the
+    /// fastest manual-log path (name + kcal + "+") stays reachable for a new
+    /// user or an empty slot instead of disappearing along with the card.
     var recentMealsSection: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
             SectionHeader(title: recentsSectionTitle)
 
             VitalCard(padding: 0) {
                 VStack(spacing: 0) {
-                    if vm.recentsForSelectedSlot.isEmpty {
-                        recentsEmptyRow
-                    } else {
-                        ForEach(Array(vm.recentsForSelectedSlot.enumerated()), id: \.element.name) { index, food in
-                            recentFoodRow(food, isFirst: index == 0)
-                        }
+                    ForEach(Array(vm.recentsForSelectedSlot.enumerated()), id: \.element.name) { index, food in
+                        recentFoodRow(food, isFirst: index == 0)
                     }
                     customRow
                 }
             }
         }
-    }
-
-    /// Shown when the user has no recently logged meals at all (or the load
-    /// failed) — points at the entry points that actually produce a first
-    /// meal, in the same card idiom as a populated row so the sheet never
-    /// looks broken or blank.
-    var recentsEmptyRow: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Nothing logged yet")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(Theme.Colors.textPrimary)
-            Text("Log a meal with Photo, Barcode, or Search below — it'll show up here to log again next time.")
-                .font(.system(size: 12))
-                .foregroundStyle(Theme.Colors.textSecondary)
-        }
-        .padding(.horizontal, Theme.Spacing.lg)
-        .padding(.vertical, Theme.Spacing.md)
     }
 
     func recentFoodRow(_ food: RecentFood, isFirst: Bool) -> some View {
@@ -316,7 +304,12 @@ private extension DietSheetView {
         .padding(.horizontal, Theme.Spacing.lg)
         .padding(.vertical, Theme.Spacing.md)
         .overlay(alignment: .top) {
-            Rectangle().fill(Theme.Colors.glassBorder).frame(height: 0.5)
+            // Only when it's following a recent-food row — with no recents,
+            // customRow is the card's only content, and the divider would
+            // just sit against the card's own top edge.
+            if !vm.recentsForSelectedSlot.isEmpty {
+                Rectangle().fill(Theme.Colors.glassBorder).frame(height: 0.5)
+            }
         }
     }
 
@@ -372,7 +365,7 @@ private extension DietSheetView {
             if vm.consumedSource == "healthkit" {
                 healthKitSummaryRow
             } else if vm.loggedEntries.isEmpty {
-                Text("Nothing logged yet — pick a meal above to add your first food.")
+                Text("Nothing logged yet. Snap a photo, scan a barcode, or search.")
                     .font(.system(size: 14))
                     .foregroundStyle(Theme.Colors.textTertiary)
             } else {

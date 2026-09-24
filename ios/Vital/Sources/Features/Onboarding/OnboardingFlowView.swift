@@ -68,6 +68,11 @@ struct OnboardingFlowView: View {
 private struct StepScaffold<Content: View>: View {
     let title: String
     var subtitle: String? = nil
+    /// A short second line under `subtitle`, only used where a step's form
+    /// is short enough to leave a dead zone above the pinned Continue button
+    /// (Basics) — gives the extra vertical space a reason to be there
+    /// instead of reading as a layout bug.
+    var helperText: String? = nil
     var continueTitle: String = "Continue"
     var continueDisabled: Bool = false
     var isBusy: Bool = false
@@ -86,6 +91,11 @@ private struct StepScaffold<Content: View>: View {
                         if let subtitle {
                             Text(subtitle)
                                 .font(Theme.Typography.bodyMedium)
+                                .foregroundStyle(Theme.Colors.textSecondary)
+                        }
+                        if let helperText {
+                            Text(helperText)
+                                .font(Theme.Typography.bodySmall)
                                 .foregroundStyle(Theme.Colors.textSecondary)
                         }
                     }
@@ -108,9 +118,14 @@ private struct StepScaffold<Content: View>: View {
                     .foregroundStyle(Theme.Colors.onAccent)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 16)
-                    .background(continueDisabled ? Theme.Colors.accent.opacity(0.3) : Theme.Colors.accent)
+                    .background(Theme.Colors.accent)
                     .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous))
                 }
+                // Whole-button opacity (not just a diluted background fill)
+                // so the label dims along with the fill — a background-only
+                // dim left full-contrast text sitting on a still-legible
+                // green and read as enabled even with every field empty.
+                .opacity(continueDisabled ? 0.4 : 1.0)
                 .disabled(continueDisabled || isBusy)
 
                 if let onBack {
@@ -238,6 +253,7 @@ private struct BasicsStepView: View {
         StepScaffold(
             title: "Let's get to know you",
             subtitle: "This helps your coach personalize everything that follows.",
+            helperText: "We use this to set your calorie and protein targets. You can change it anytime.",
             continueDisabled: !vm.canContinueFromBasics,
             onContinue: vm.advance
         ) {
@@ -724,7 +740,7 @@ private struct OnboardingProgressBar: View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
                 RoundedRectangle(cornerRadius: height / 2, style: .continuous)
-                    .fill(Theme.Colors.glassFill)
+                    .fill(Theme.Colors.progressTrack)
                 RoundedRectangle(cornerRadius: height / 2, style: .continuous)
                     .fill(Theme.Colors.accent)
                     .frame(width: geo.size.width * fraction)

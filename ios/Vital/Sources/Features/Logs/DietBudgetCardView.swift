@@ -93,7 +93,7 @@ struct DietBudgetCardView: View {
     private func progressBar(fraction: Double) -> some View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
-                Capsule().fill(Theme.Colors.glassFill)
+                Capsule().fill(Theme.Colors.progressTrack)
                 Capsule()
                     .fill(Theme.Colors.accent)
                     .frame(width: max(0, geo.size.width * fraction))

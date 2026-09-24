@@ -50,8 +50,11 @@ struct TrendsView: View {
                                 .motionTransition(.fade)
                         }
 
-                        if let summaryErrorMessage = vm.summaryErrorMessage {
-                            ErrorCard(title: "Couldn't load your 7-day summary", message: summaryErrorMessage) {
+                        if let summaryErrorMessage = vm.summaryErrorMessage, vm.errorMessage == nil {
+                            // Only the weekly summary failed — the grid still
+                            // loads below, so this stays an inline card
+                            // rather than claiming the whole screen.
+                            ErrorCard(title: "Couldn't load your summary", message: summaryErrorMessage) {
                                 Task {
                                     vm.summaryErrorMessage = nil
                                     await vm.loadSummary()
@@ -64,13 +67,27 @@ struct TrendsView: View {
                         }
 
                         if let errorMessage = vm.errorMessage {
-                            ErrorCard(title: "Couldn't load your trends", message: errorMessage) {
-                                Task {
-                                    vm.errorMessage = nil
-                                    await vm.load()
+                            // Whole screen failed (gridBody renders EmptyView
+                            // below) — center the card(s) instead of pinning
+                            // them under the header with a void beneath.
+                            ErrorStateContainer {
+                                VStack(spacing: Theme.Spacing.md) {
+                                    if let summaryErrorMessage = vm.summaryErrorMessage {
+                                        ErrorCard(title: "Couldn't load your summary", message: summaryErrorMessage) {
+                                            Task {
+                                                vm.summaryErrorMessage = nil
+                                                await vm.loadSummary()
+                                            }
+                                        }
+                                    }
+                                    ErrorCard(title: "Couldn't load your trends", message: errorMessage) {
+                                        Task {
+                                            vm.errorMessage = nil
+                                            await vm.load()
+                                        }
+                                    }
                                 }
                             }
-                            .motionTransition(.fade)
                         }
 
                         gridBody

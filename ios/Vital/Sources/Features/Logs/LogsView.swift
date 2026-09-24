@@ -45,6 +45,19 @@ struct LogsView: View {
                         }
                         .padding(.top, 60)
                         .motionTransition(.fade)
+                    } else if let errorMessage = vm.errorMessage, currentDay == nil {
+                        // Whole tab failed — no day/pager data to fall back
+                        // to, so this replaces the screen instead of sitting
+                        // pinned above an empty pager.
+                        ErrorStateContainer {
+                            ErrorCard(title: "Couldn't load your logs", message: errorMessage) {
+                                Task {
+                                    vm.errorMessage = nil
+                                    await vm.load()
+                                }
+                            }
+                        }
+                        .padding(.horizontal, Theme.Spacing.xl)
                     } else {
                         Group {
                             if let errorMessage = vm.errorMessage {

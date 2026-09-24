@@ -115,6 +115,19 @@ enum Theme {
                 : UIColor(white: 0.0, alpha: 0.08)
         })
 
+        /// Empty progress-bar track — dark: white 13% / light: black 4%.
+        /// Deliberately lighter than `glassFill` in dark mode only: an empty
+        /// track (calibration's "0 of 14 days", the kcal/protein bars) using
+        /// `glassFill`'s white-5%-on-near-black-card read as nearly invisible
+        /// (~1.1:1). White 13% lands close to the ~1.5:1 target against
+        /// `card` while staying subtle. Light mode is unchanged — its
+        /// black-4%-on-white track already has plenty of contrast.
+        static let progressTrack = Color(uiColor: UIColor { tc in
+            tc.userInterfaceStyle == .dark
+                ? UIColor(white: 1.0, alpha: 0.13)
+                : UIColor(white: 0.0, alpha: 0.04)
+        })
+
         /// Indigo for sleep / carbs — #8B93FF (fill-only; same in both modes)
         static let indigo = Color(red: 0.545, green: 0.576, blue: 1.000)
 
