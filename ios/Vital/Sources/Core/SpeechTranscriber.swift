@@ -80,6 +80,29 @@ final class SpeechTranscriber: ObservableObject {
         refreshPermissionState()
     }
 
+    // MARK: - Pre-warm
+
+    /// Deliberately a no-op (post-V3 review fix). The original version
+    /// called `audioEngine.prepare()` here to shave time off the first real
+    /// `start()`, but `CoachVoiceController.prewarm()` runs on `.onAppear` —
+    /// possibly just from opening the app — while the shared
+    /// `VoiceAudioSession` is still inactive (see that type's doc comment:
+    /// prewarm only `configure()`s it, never `activate()`s it). Preparing
+    /// the engine's input node against an inactive session risks latching a
+    /// stale or 0-channel format, which `start()` later feeds straight into
+    /// `inputNode.installTap(format:)` — a mismatch there is a crash, not a
+    /// latency win. The real engine prep now happens only inside `start()`,
+    /// right as the session actually activates, which is also where the
+    /// latency budget (spec §3.4 "Tap → mic live") actually pays off.
+    ///
+    /// Kept in `SpeechTranscribing` (rather than removed) so
+    /// `CoachVoiceController.prewarm()` still has a symmetric "prewarm the
+    /// transcriber" step to call — a later, safer version of this can fill
+    /// it back in — and so `FakeSpeechTranscriber.prewarmCallCount` in
+    /// `CoachVoiceControllerTests` keeps meaning "prewarm reached the
+    /// transcriber", independent of what this does internally.
+    func prewarm() {}
+
     // MARK: - Permissions
 
     func refreshPermissionState() {
@@ -134,10 +157,8 @@ final class SpeechTranscriber: ObservableObject {
         discardRecording()
         audioFile = nil
 
-        let session = AVAudioSession.sharedInstance()
         do {
-            try session.setCategory(.record, mode: .measurement, options: .duckOthers)
-            try session.setActive(true, options: .notifyOthersOnDeactivation)
+            try VoiceAudioSession.activate()
         } catch {
             errorMessage = "Audio session error: \(error.localizedDescription)"
             return
