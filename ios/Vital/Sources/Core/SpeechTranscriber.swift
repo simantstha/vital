@@ -353,7 +353,7 @@ final class SpeechTranscriber: ObservableObject {
     /// restart must happen for a held turn too (auto-endpointing being
     /// suspended only means nothing SHOULD call `stop()` on a pause; it
     /// doesn't change what a natural `isFinal` from the recognizer means).
-    static func shouldRestartSegment(isFinal: Bool, isRecording: Bool) -> Bool {
+    nonisolated static func shouldRestartSegment(isFinal: Bool, isRecording: Bool) -> Bool {
         isFinal && isRecording
     }
 
