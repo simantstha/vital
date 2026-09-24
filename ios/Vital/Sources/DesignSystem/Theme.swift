@@ -423,6 +423,9 @@ extension View {
     /// Reduce Motion: no slide/delay, the card just appears (a crossfade is
     /// still provided by the skeleton→content `.motionTransition` this sits
     /// inside, so nothing pops in as a hard cut).
+    ///
+    /// Don't use inside `Lazy*` containers — cell reuse resets `@State` and
+    /// replays the entrance on scroll.
     func staggeredAppear(index: Int) -> some View {
         modifier(StaggeredAppearModifier(index: index))
     }

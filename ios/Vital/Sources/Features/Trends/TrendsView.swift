@@ -229,18 +229,18 @@ private extension TrendsView {
             .motionTransition(.fade)
         } else {
             VStack(alignment: .leading, spacing: Theme.Spacing.xl) {
-                ForEach(Array(sections.enumerated()), id: \.element.group.rawValue) { sectionIndex, section in
+                ForEach(sections, id: \.group.rawValue) { section in
                     VStack(alignment: .leading, spacing: Theme.Spacing.md) {
                         sectionHeaderView(section.group)
                         LazyVGrid(columns: gridColumns, spacing: Theme.Spacing.md) {
-                            ForEach(Array(section.tiles.enumerated()), id: \.element.key) { tileIndex, tile in
+                            // No `.staggeredAppear` here — this is a
+                            // `LazyVGrid`, which discards and re-creates
+                            // offscreen cells (and their `@State`) as they
+                            // scroll in and out, so a staggered entrance
+                            // would replay every time a tile scrolls back
+                            // into view instead of once on first load.
+                            ForEach(section.tiles, id: \.key) { tile in
                                 tileButton(tile)
-                                    // Offset by 2 for the weight/weekly cards
-                                    // above — `staggeredAppear` clamps the
-                                    // index internally, so later sections
-                                    // just settle at the same final delay as
-                                    // the 5th card rather than compounding.
-                                    .staggeredAppear(index: 2 + sectionIndex + tileIndex)
                             }
                         }
                     }
