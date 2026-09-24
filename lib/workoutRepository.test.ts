@@ -192,3 +192,110 @@ test('getLastSessionForExercise: returns [] when nothing is logged', async () =>
   const rows = await getLastSessionForExercise('user-1', 'squat');
   assert.deepEqual(rows, []);
 });
+
+// ── completedLocalDays ───────────────────────────────────────────────────────
+
+test('completedLocalDays: distinct local days with at least one non-warmup set', async () => {
+  const { completedLocalDays } = await repoPromise;
+  const days = completedLocalDays([
+    { local_day: '2026-09-21', is_warmup: false },
+    { local_day: '2026-09-21', is_warmup: false }, // same day, second set
+    { local_day: '2026-09-22', is_warmup: true },  // warmup-only day doesn't count
+    { local_day: '2026-09-23', is_warmup: false },
+  ] as never);
+  assert.deepEqual([...days].sort(), ['2026-09-21', '2026-09-23']);
+});
+
+test('completedLocalDays: empty input -> empty set (never guessed)', async () => {
+  const { completedLocalDays } = await repoPromise;
+  assert.equal(completedLocalDays([]).size, 0);
+});
+
+// ── pickTopSet / computeLastLift ─────────────────────────────────────────────
+
+test('pickTopSet: the heaviest-load set wins', async () => {
+  const { pickTopSet } = await repoPromise;
+  const top = pickTopSet([
+    { reps: 5, load_kg: 100 },
+    { reps: 3, load_kg: 120 },
+    { reps: 8, load_kg: 80 },
+  ]);
+  assert.equal(top?.load_kg, 120);
+});
+
+test('pickTopSet: bodyweight-only sets (all null load) keep the first set', async () => {
+  const { pickTopSet } = await repoPromise;
+  const sets = [{ reps: 10, load_kg: null }, { reps: 8, load_kg: null }];
+  assert.equal(pickTopSet(sets), sets[0]);
+});
+
+test('pickTopSet: empty input returns undefined', async () => {
+  const { pickTopSet } = await repoPromise;
+  assert.equal(pickTopSet([]), undefined);
+});
+
+test('computeLastLift: reports the top set of the given session/exercise sets', async () => {
+  const { computeLastLift } = await repoPromise;
+  const lift = computeLastLift([
+    { exercise_display: 'Bench Press', local_day: '2026-09-21', reps: 5, load_kg: 80 },
+    { exercise_display: 'Bench Press', local_day: '2026-09-21', reps: 5, load_kg: 85 },
+    { exercise_display: 'Bench Press', local_day: '2026-09-21', reps: 3, load_kg: 90 },
+  ] as never);
+  assert.deepEqual(lift, {
+    exercise: 'Bench Press',
+    date:     '2026-09-21',
+    sets:     3,
+    reps:     3,
+    weightKg: 90,
+  });
+});
+
+test('computeLastLift: bodyweight lift reports weightKg null, not zero or guessed', async () => {
+  const { computeLastLift } = await repoPromise;
+  const lift = computeLastLift([
+    { exercise_display: 'Pull-up', local_day: '2026-09-21', reps: 10, load_kg: null },
+  ] as never);
+  assert.equal(lift?.weightKg, null);
+});
+
+test('computeLastLift: null when nothing was logged', async () => {
+  const { computeLastLift } = await repoPromise;
+  assert.equal(computeLastLift([]), null);
+});
+
+// ── getLastLift (DB-backed) ──────────────────────────────────────────────────
+// The shared fakeDb above doesn't filter by `.where()` condition (see its
+// header comment), so this exercises getLastLift's composition
+// (getMostRecentWorkingSet -> getSessionExerciseSets -> computeLastLift)
+// against a fixture that already represents a single session/exercise, the
+// same way the other DB-backed tests in this file work around that limit.
+
+test('getLastLift: returns null when the user has never logged a set', async () => {
+  const { getLastLift } = await repoPromise;
+  state.sets = [];
+  assert.equal(await getLastLift('user-1'), null);
+});
+
+test('getLastLift: builds the lastLift card from the most recent session', async () => {
+  const { getLastLift } = await repoPromise;
+  state.sets = [
+    {
+      session_id: 's1', set_index: 1, exercise: 'squat', exercise_display: 'Squat',
+      local_day: '2026-09-22', performed_at: new Date('2026-09-22T18:00:00Z'),
+      reps: 5, load_kg: 100, is_warmup: false,
+    } as FakeRow,
+    {
+      session_id: 's1', set_index: 2, exercise: 'squat', exercise_display: 'Squat',
+      local_day: '2026-09-22', performed_at: new Date('2026-09-22T18:05:00Z'),
+      reps: 5, load_kg: 105, is_warmup: false,
+    } as FakeRow,
+  ];
+  const lift = await getLastLift('user-1');
+  assert.deepEqual(lift, {
+    exercise: 'Squat',
+    date:     '2026-09-22',
+    sets:     2,
+    reps:     5,
+    weightKg: 105,
+  });
+});
