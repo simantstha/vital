@@ -2,6 +2,7 @@ import SwiftUI
 
 struct RootTabView: View {
     @EnvironmentObject private var router: AppRouter
+    @Environment(\.scenePhase) private var scenePhase
     private enum Tab: Int, CaseIterable {
         case today, coach, trends, logs, profile
 
@@ -63,6 +64,19 @@ struct RootTabView: View {
             .tag(Tab.profile)
         }
         .tint(Theme.Colors.accentContent)
+        // Spec §3.2, V5: "app backgrounded > 10 s" ends conversation mode —
+        // wired here rather than `CoachView`/`VoiceFABView` since this is
+        // always mounted regardless of which tab is active, and a
+        // FAB-started conversation can still be mid-first-listen when the
+        // app backgrounds, before its `onSent` has switched to the Coach
+        // tab. Both hooks are no-ops outside conversation mode.
+        .onChange(of: scenePhase) { _, newPhase in
+            if newPhase == .active {
+                coachVM.voiceController.appDidBecomeActive()
+            } else if newPhase == .background {
+                coachVM.voiceController.appDidEnterBackground()
+            }
+        }
         .onChange(of: router.coachContext) { _, value in
             if let value {
                 coachVM.input = value

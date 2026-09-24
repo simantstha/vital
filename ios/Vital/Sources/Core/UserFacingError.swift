@@ -145,7 +145,12 @@ enum UserFacingError {
         }
     }
 
-    private static func isOffline(_ error: Error) -> Bool {
+    /// Exposed (not `private`) so a caller that needs to *branch* on
+    /// connectivity — not just show copy — can reuse the same classification
+    /// rather than re-deriving it. `CoachViewModel.send()`'s voice error
+    /// path (spec §3.6, delivery slice V5) uses this to pick `.offline` vs
+    /// `.requestFailed` when ending a conversation after a failed turn.
+    static func isOffline(_ error: Error) -> Bool {
         guard let urlError = error as? URLError else { return false }
         switch urlError.code {
         case .notConnectedToInternet, .networkConnectionLost, .cannotConnectToHost,

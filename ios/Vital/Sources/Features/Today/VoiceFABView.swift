@@ -181,7 +181,15 @@ struct VoiceFABView: View {
                 voice.stopRecording()
             } else {
                 guard !isFabDisabled else { return }
-                voice.startRecording()
+                // Spec §3.2/§10 V5: tapping the Today FAB always starts
+                // conversation mode (unlike the Coach composer's mic, which
+                // also supports a held push-to-talk single turn) — the FAB
+                // itself switches to the Coach tab the moment this first
+                // turn is sent (`onSent` below), where `CoachOrb` takes over
+                // for the rest of the conversation. The controller itself
+                // downgrades this to `.single` while VoiceOver is running
+                // (spec §3.8).
+                voice.startRecording(mode: .conversation)
                 myTurnID = voice.currentTurnID
             }
         case .notDetermined:

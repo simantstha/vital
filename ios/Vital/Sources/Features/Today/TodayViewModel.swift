@@ -176,6 +176,87 @@ final class TodayViewModel: ObservableObject {
     @Published var calibrationStatus: String? = nil
     @Published var calibrationProgress: Double = 0 // 0...1 based on min(dataDays) / 14
 
+    // MARK: - Muscle / endurance heroes (§4.1)
+
+    /// Today's move-kind plan row, or `nil` for a rest day — shared by both
+    /// `MuscleHeroView` and `EnduranceHeroView` (`MuscleHeroLogic
+    /// .todaySession` / `EnduranceHeroLogic.todaySession`, identical rule).
+    var todayMoveSession: PlanItem? {
+        MuscleHeroLogic.todaySession(from: planItems)
+    }
+
+    /// Baselines for the endurance readiness word — `nil` until `/api/trends`
+    /// resolves (or on a fail-soft failure, same convention as `weightLog`).
+    /// Fetched for every goal alongside the rest of `performLoad`'s
+    /// concurrent calls (like `weightLog`) rather than gated on `goal`,
+    /// since `goal` itself isn't known until `/api/today` resolves in the
+    /// same batch.
+    @Published private(set) var enduranceTrendsBatch: TrendsBatchResponse? = nil
+
+    private static let enduranceReadinessMetricKeys = ["hrv_sdnn", "resting_hr", "sleep_minutes"]
+
+    /// The gated `Verdict` for one of the three metrics feeding readiness —
+    /// `.noData` whenever the latest reading, the batch fetch, or the
+    /// metric's `MetricSpec` isn't available, never a fabricated judgment.
+    private func enduranceVerdict(key: String, latest: Double?) -> Verdict {
+        guard let latest,
+              let series = enduranceTrendsBatch?.series[key],
+              let spec = MetricCatalog.spec(for: key) else { return .noData }
+        return TrendsVerdict.evaluate(
+            latest: latest,
+            established: series.established,
+            dataDays: series.dataDays,
+            mean30: series.baseline?.mean30,
+            sd30: series.baseline?.sd30,
+            minMeaningfulSD: spec.minMeaningfulSD
+        )
+    }
+
+    private var sleepHoursValue: Double? {
+        guard let hours = sleep.hours, let minutes = sleep.minutes else { return nil }
+        return Double(hours) + Double(minutes) / 60
+    }
+
+    /// §4.1's readiness word, derived only from the same gated `Verdict`
+    /// `TrendsVerdict` already produces for Trends — see
+    /// `EnduranceHeroLogic.readinessWord`.
+    var enduranceReadinessWord: EnduranceHeroLogic.ReadinessWord {
+        EnduranceHeroLogic.readinessWord(
+            hrv: enduranceVerdict(key: "hrv_sdnn", latest: hrv.value.map(Double.init)),
+            sleep: enduranceVerdict(key: "sleep_minutes", latest: sleepHoursValue),
+            restingHR: enduranceVerdict(key: "resting_hr", latest: restingHR.bpm.map(Double.init))
+        )
+    }
+
+    /// §4.1's "Calibrating · day X of 14" override — takes priority over
+    /// `enduranceReadinessWord` in the view. Mirrors `calibrationCard`'s own
+    /// days-collected derivation.
+    var enduranceCalibratingText: String? {
+        guard calibrationStatus == "calibrating" else { return nil }
+        return EnduranceHeroLogic.calibratingText(daysCollected: Int((calibrationProgress * 14).rounded()))
+    }
+
+    /// "HRV +8 % · Sleep 7h 40m · RHR −2 %" — only the metrics that actually
+    /// have a value today; `nil` if none do. Never a raw z-score or σ (§6 /
+    /// `TrendsVerdict`'s doc comment — those never reach UI copy).
+    var enduranceReasonLine: String? {
+        var parts: [String] = []
+        if hrv.value != nil { parts.append("HRV \(hrv.delta)") }
+        if sleep.hours != nil { parts.append("Sleep \(sleep.formatted)") }
+        if restingHR.bpm != nil { parts.append("RHR \(restingHR.delta)") }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    private func loadEnduranceTrends() async {
+        do {
+            enduranceTrendsBatch = try await apiClient.fetchTrendsBatch(
+                metrics: Self.enduranceReadinessMetricKeys, days: 30
+            )
+        } catch {
+            print("[Vital] fetchTrendsBatch (endurance readiness) failed: \(error.localizedDescription)")
+        }
+    }
+
     // MARK: - Weight-loss hero (§4.1, §5.3)
 
     /// "weight_loss" | "muscle" | "endurance" | "general" — from
@@ -183,6 +264,8 @@ final class TodayViewModel: ObservableObject {
     /// the weight_loss hero) until the first load resolves.
     @Published private(set) var goal: String = "general"
     var isWeightLossGoal: Bool { goal == "weight_loss" }
+    var isMuscleGoal: Bool { goal == "muscle" }
+    var isEnduranceGoal: Bool { goal == "endurance" }
 
     /// `nil` until `/api/weight-log` resolves (or on a fail-soft failure —
     /// same fail-soft convention as `pendingFacts`/`calibration`). Never
@@ -329,9 +412,10 @@ final class TodayViewModel: ObservableObject {
         async let weightLogTask: () = loadWeightLog()
         async let bodyMassTask: () = loadHealthKitBodyMassToday()
         async let unitPrefTask: () = syncUnitPreference()
+        async let enduranceTrendsTask: () = loadEnduranceTrends()
 
-        let (_, today, _, plan, _, _, _) =
-            await (healthTask, todayOutcome, factsTask, planResult, weightLogTask, bodyMassTask, unitPrefTask)
+        let (_, today, _, plan, _, _, _, _) =
+            await (healthTask, todayOutcome, factsTask, planResult, weightLogTask, bodyMassTask, unitPrefTask, enduranceTrendsTask)
 
         switch today {
         case .success(let response):
