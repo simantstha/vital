@@ -241,6 +241,15 @@ enum Theme {
         static let pulseRing: Animation = .easeOut(duration: 1.3).repeatForever(autoreverses: false)
         /// Ambient mic-listening pulse loop. Use with `.ambient`.
         static let pulse: Animation = .easeInOut(duration: 0.4).repeatForever(autoreverses: true)
+        /// ✚ Endpointing countdown ring (spec §6, delivery slice V5):
+        /// linear, since it's tracing down a fixed window rather than
+        /// settling into place. `duration` is the adaptive window itself
+        /// (`EndpointPolicy`'s 0.6–1.2s range, read off
+        /// `CoachVoiceController.endpointDeadline`) — not a fixed constant,
+        /// so this is a function rather than a stored `Animation`.
+        static func endpoint(_ duration: TimeInterval) -> Animation {
+            .linear(duration: duration)
+        }
 
         /// Reduce Motion state, for use outside a View body (e.g. deciding
         /// whether to even start an imperative animation). Inside a View,

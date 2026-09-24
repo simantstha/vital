@@ -30,6 +30,14 @@ final class CoachSpeaker: NSObject, ObservableObject {
     var onPlaybackStart: (() -> Void)?
     private var firedPlaybackStart = false
 
+    /// Fired once per speaking session when the queue drains **naturally**
+    /// — not when `stop()` cuts it short (a new turn starting, or an
+    /// explicit Stop/End tap). `CoachViewModel` wires this to
+    /// `CoachVoiceController.speakingFinished()` (spec §3.2, delivery slice
+    /// V5) so conversation mode auto re-arms only after Vital actually
+    /// finished talking, never after a deliberate interruption.
+    var onPlaybackFinished: (() -> Void)?
+
     /// Post-V3 review fix: `CoachViewModel` sets this to
     /// `{ [weak self] in self?.voiceController.isRecording ?? false }` so
     /// `deactivateSession()` can tell whether a *new* recording has already
@@ -180,6 +188,7 @@ final class CoachSpeaker: NSObject, ObservableObject {
         playbackLoopTask = nil
         isSpeaking = false
         deactivateSession()
+        onPlaybackFinished?()
     }
 
     private func playAudio(_ data: Data, generation startGen: Int) async {
