@@ -1,6 +1,7 @@
 import Foundation
 import Combine
 import UIKit
+import os
 
 // MARK: - SpeechTranscribing
 
@@ -284,6 +285,13 @@ final class CoachVoiceController: ObservableObject {
     /// turn" row) and the backgrounded-too-long grace window (spec §3.2's
     /// "app backgrounded > 10 s" ending) — both cancellable so a later End,
     /// a foregrounding, or a fresh turn can't have a stale one fire later.
+    /// Same subsystem/category as `APIClient`'s `uploadSTTAudio` logging and
+    /// `VoiceTurnTimer` — one "voice" category covers the whole pipeline.
+    private static let voiceLogger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "com.simantstha.vital",
+        category: "voice"
+    )
+
     private var yourTurnTask: Task<Void, Never>?
     private var backgroundTask: Task<Void, Never>?
     private static let yourTurnDuration: TimeInterval = 1.0
@@ -681,7 +689,19 @@ final class CoachVoiceController: ObservableObject {
                 self.voiceTurnTimer?.mark(.sttUploadEnd)
                 if let cloudText, !cloudText.isEmpty {
                     finalText = cloudText
+                } else {
+                    // `uploadSTTAudio` already logged the specific failure
+                    // reason (non-200/decode-failure/thrown error/empty
+                    // transcript); this is the "so what" — falling back to
+                    // the on-device Apple transcript, no text logged.
+                    Self.voiceLogger.error("beginTranscription: cloud STT unavailable, using on-device Apple transcript fallback")
                 }
+            } else {
+                // No recording clip at all (the `.m4a` couldn't be created —
+                // see `SpeechTranscriber.start()`) — there was never
+                // anything to upload, so this always resolves from the
+                // on-device Apple transcript.
+                Self.voiceLogger.error("beginTranscription: no recording clip to upload, using on-device Apple transcript fallback")
             }
 
             // A `cancel()` mid-upload already tore this task's flag down —
