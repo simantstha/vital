@@ -1,4 +1,5 @@
 import XCTest
+import CoreGraphics
 
 /// Screenshot harness (see docs/CI-TESTFLIGHT.md — "iOS screenshot harness").
 ///
@@ -111,6 +112,63 @@ final class ScreenshotTests: XCTestCase {
         return app.staticTexts.matching(predicate).firstMatch.waitForExistence(timeout: timeout)
     }
 
+    /// Waits for `element` to exist, then taps it once it's both
+    /// `isHittable` AND clear of the bottom chrome — never a bare `.tap()`
+    /// on a coordinate that might be off-screen or obscured. `isHittable`
+    /// only means the element's centre point is on screen; on iOS 26 the
+    /// floating Liquid Glass tab bar (and Today's mic FAB) overlay the
+    /// scroll content, so an element sitting just above/under that chrome
+    /// can report `isHittable` while its tap is still absorbed by whatever
+    /// is layered on top. "Clear" means the element's frame sits above the
+    /// tab bar (with an 8pt margin) when one exists, or above 80% of the
+    /// screen height otherwise.
+    ///
+    /// Nudges the element into view with a bounded number of gentle,
+    /// slow drags (never a full `swipeUp()`, which can overshoot the
+    /// element past the top of the screen) rather than sleeping. Fails
+    /// with a `description`-labeled message (never XCUITest's own less
+    /// legible tap-failure error, and never a dumped element tree) if the
+    /// element never appears or never clears the chrome.
+    private func tapWhenHittable(
+        _ element: XCUIElement,
+        app: XCUIApplication,
+        maxSwipes: Int = 3,
+        timeout: TimeInterval = 10,
+        description: String
+    ) {
+        guard element.waitForExistence(timeout: timeout) else {
+            XCTFail("\(description) never appeared to tap")
+            return
+        }
+
+        func isClearOfBottomChrome() -> Bool {
+            let tabBar = app.tabBars.firstMatch
+            if tabBar.exists {
+                return element.frame.maxY <= tabBar.frame.minY - 8
+            }
+            return element.frame.maxY <= app.frame.maxY * 0.8
+        }
+
+        var swipes = 0
+        while (!element.isHittable || !isClearOfBottomChrome()) && swipes < maxSwipes {
+            // A gentle drag from 70% down the screen to 45% — a smaller,
+            // slower nudge than `swipeUp()` so a short scroll distance
+            // doesn't overshoot the element off the top of the screen.
+            let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7))
+            let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45))
+            start.press(forDuration: 0.05, thenDragTo: end)
+            swipes += 1
+        }
+
+        guard element.isHittable, isClearOfBottomChrome() else {
+            XCTFail("\(description) exists but never became hittable and clear of "
+                     + "the bottom chrome after \(maxSwipes) scroll attempts")
+            return
+        }
+
+        element.tap()
+    }
+
     // MARK: - Screens
 
     private func captureToday(_ app: XCUIApplication, scenario: String, appearance: String) {
@@ -157,6 +215,18 @@ final class ScreenshotTests: XCTestCase {
                                "Today's muscle hero should show today's strength session [\(appearance)]")
                 XCTAssertTrue(waitForText(app, containing: "Protein 158 / 190 g"),
                                "Today's muscle hero should show the protein have/goal line [\(appearance)]")
+                // The "last time" lift line — fixture-unique "3×5" set/rep
+                // count (`FixtureData.trainingSummary`'s squat lastLift),
+                // only rendered once `/api/training/summary` decodes
+                // (#202) — fails loudly if that endpoint's fixture
+                // interception ever regresses.
+                XCTAssertTrue(waitForText(app, containing: "3×5"),
+                               "Today's muscle hero should show the last-lift set×rep line [\(appearance)]")
+                XCTAssertTrue(waitForText(app, containing: "140 kg"),
+                               "Today's muscle hero should show the last-lift weight [\(appearance)]")
+                // "This week" — 2 of 4 planned sessions (fixture-unique).
+                XCTAssertTrue(waitForText(app, containing: "2 of 4 sessions"),
+                               "Today's muscle hero should show the this-week session count [\(appearance)]")
             }
 
             if scenario == "endurance" {
@@ -169,6 +239,15 @@ final class ScreenshotTests: XCTestCase {
                                "Today's endurance hero should show a readiness word [\(appearance)]")
                 XCTAssertTrue(waitForText(app, containing: "10km tempo run"),
                                "Today's endurance hero should show today's session [\(appearance)]")
+                // Weekly volume — fixture-unique 24.5km done, no target, so
+                // "24.5 km this week" (only rendered once
+                // `/api/training/summary` decodes, #202).
+                XCTAssertTrue(waitForText(app, containing: "24.5 km this week"),
+                               "Today's endurance hero should show this week's volume [\(appearance)]")
+                // No plan data this week for endurance (`plannedSessions:
+                // null`) — the no-dots fallback copy, 3 completed sessions.
+                XCTAssertTrue(waitForText(app, containing: "3 sessions this week"),
+                               "Today's endurance hero should show the no-plan-data session fallback [\(appearance)]")
             }
 
             if scenario == "new_user" {
@@ -188,16 +267,23 @@ final class ScreenshotTests: XCTestCase {
         guard scenario != "server_error" else { return }
 
         let fuelStrip = app.buttons["today.fuelStrip"]
-        guard fuelStrip.waitForExistence(timeout: 10) else {
-            XCTFail("today.fuelStrip missing — can't open the diet sheet [\(scenario)/\(appearance)]")
-            return
-        }
-        fuelStrip.tap()
+        tapWhenHittable(
+            fuelStrip, app: app,
+            description: "today.fuelStrip [\(scenario)/\(appearance)]"
+        )
 
         // DietSheetView's header renders immediately (it isn't gated on its
         // own network load), so this just confirms the sheet actually opened.
-        XCTAssertTrue(app.staticTexts["Diet budget"].waitForExistence(timeout: 10),
-                       "Diet sheet should open from the fuel strip [\(scenario)/\(appearance)]")
+        // A silent no-op tap (fuelStrip hittable but the sheet never
+        // presented — e.g. something else absorbed the touch) must fail
+        // loudly here rather than fall through to capturing Today itself
+        // relabeled as the diet sheet.
+        guard app.staticTexts["Diet budget"].waitForExistence(timeout: 10) else {
+            XCTFail("Diet sheet never opened after tapping today.fuelStrip — "
+                     + "the tap likely missed or was absorbed by another view "
+                     + "[\(scenario)/\(appearance)]")
+            return
+        }
         capture(app, name: "\(scenario)__dietSheet__\(appearance)")
 
         let close = app.buttons["Close"]
@@ -259,8 +345,78 @@ final class ScreenshotTests: XCTestCase {
         } else {
             // A metric tile's display name — only rendered once the batch
             // fetch resolves (loading shows skeleton placeholders instead).
-            XCTAssertTrue(app.staticTexts["HRV"].waitForExistence(timeout: 15),
+            // `.firstMatch` (#200): "HRV" isn't unique on this screen (the
+            // "This Week" strip renders its own "hrv" stat too), and this is
+            // only an existence check — any match proves the grid loaded.
+            //
+            // Goal-agnostic, scrolled (#200 round 3): `TrendsGoalOrdering`
+            // deliberately puts weight_loss's Weight card + This Week strip
+            // ahead of every metric-group section, which pushes the
+            // Recovery section's "HRV" tile below the fold — the grid is
+            // lazy, so an off-screen tile genuinely isn't in the
+            // accessibility hierarchy yet, and waiting on it without
+            // scrolling just times out. Scroll (bounded, so a real
+            // regression still fails instead of looping) until it appears;
+            // this doubles as proof that weight_loss's recovery tiles still
+            // exist at all, not just that the fixture batch decoded.
+            let recoveryTile = app.staticTexts["HRV"].firstMatch
+            var swipesToRecovery = 0
+            while !recoveryTile.exists && swipesToRecovery < 4 {
+                app.swipeUp()
+                swipesToRecovery += 1
+            }
+            XCTAssertTrue(recoveryTile.waitForExistence(timeout: 15),
                            "Trends should render its metric tiles [\(scenario)/\(appearance)]")
+
+            if scenario == "weight_loss" {
+                // Scroll back to the top before the goal-ordering frame
+                // assertions below (they need the weight card and This Week
+                // strip on-screen, which the scroll above may have carried
+                // past the fold) and before this screen's capture() at the
+                // bottom of this function (the screenshot should show the
+                // top of Trends, not wherever scrolling for "HRV" left off).
+                for _ in 0..<swipesToRecovery { app.swipeDown() }
+
+                // Goal-ordered Trends (customer-panel finding, 2026-09-23 —
+                // docs/ux-spec-v4.md §9's screenshot acceptance table:
+                // "Weight card first"): `trends.weightCard` must exist and
+                // sit ABOVE the topmost recovery-related content.
+                //
+                // NOT `app.staticTexts["HRV"]` here (#200): that label is
+                // ambiguous on this screen — it matches both the "This Week"
+                // strip's HRV stat and the recovery section's metric tile —
+                // and reading `.frame` on an ambiguous query is a hard
+                // XCUITest failure that aborted this whole test method, so
+                // no weight_loss Trends screenshot was ever captured.
+                // `trends.recoveryFirst` (WeeklyHeadlineStrip's own
+                // identifier, an `.accessibilityElement(children: .contain)`
+                // container so the identifier resolves to exactly that one
+                // element rather than propagating to its HRV/sleep/RHR
+                // children — #200 round 2) is the topmost recovery content,
+                // so comparing against it is the meaningful check.
+                //
+                // `app.descendants(matching: .any).matching(identifier:)`
+                // rather than a typed query (`app.buttons[...]`/
+                // `app.otherElements[...]`) so this doesn't silently miss a
+                // match (or hard-fail on an unexpected type) if either
+                // view's underlying XCUIElementType ever changes —
+                // `.firstMatch` on top means neither line can raise the
+                // "multiple matching elements" error regardless.
+                let weightCard = app.descendants(matching: .any).matching(identifier: "trends.weightCard").firstMatch
+                XCTAssertTrue(weightCard.waitForExistence(timeout: 10),
+                               "weight_loss Trends should show the weight card [\(appearance)]")
+                let recoveryFirst = app.descendants(matching: .any).matching(identifier: "trends.recoveryFirst").firstMatch
+                XCTAssertTrue(recoveryFirst.waitForExistence(timeout: 10),
+                               "weight_loss Trends should still show the This Week recovery card [\(appearance)]")
+                // Both elements are back on-screen after the swipeDown loop
+                // above (the weight card and This Week strip are the first
+                // two things below the header, so scrolling back to the top
+                // brings them both into view together). Compare in the same
+                // coordinate space (`XCUIElement.frame` is always screen
+                // coordinates) so this holds across appearances.
+                XCTAssertLessThan(weightCard.frame.minY, recoveryFirst.frame.minY,
+                                   "weight_loss Trends' weight card should appear above the This Week recovery card [\(appearance)]")
+            }
         }
         capture(app, name: "\(scenario)__trends__\(appearance)")
     }

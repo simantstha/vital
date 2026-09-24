@@ -38,6 +38,18 @@ struct TrendsView: View {
                             calibratingBanner
                         }
 
+                        // Weight_loss's lead card (customer-panel finding,
+                        // 2026-09-23) — deliberately ahead of `showsWeekCard`
+                        // and `gridBody` below, both of which lead with
+                        // recovery metrics (sleep/HRV/RHR): docs/ux-spec-v4
+                        // .md §9's screenshot acceptance table requires the
+                        // weight card sit above the first recovery card, not
+                        // just above the grid.
+                        if showsWeightCard {
+                            weightCardView
+                                .motionTransition(.fade)
+                        }
+
                         if let summaryErrorMessage = vm.summaryErrorMessage {
                             ErrorCard(title: "Couldn't load your 7-day summary", message: summaryErrorMessage) {
                                 Task {
@@ -71,6 +83,7 @@ struct TrendsView: View {
                 .refreshable {
                     await vm.load()
                     await vm.loadSummary()
+                    await vm.loadGoalContext()
                 }
             }
             .navigationDestination(for: String.self) { metricKey in
@@ -89,6 +102,7 @@ struct TrendsView: View {
         .task {
             await vm.load()
             await vm.loadSummary()
+            await vm.loadGoalContext()
         }
         .sensoryFeedback(Theme.Haptics.selection, trigger: tileTapTick)
     }
@@ -144,7 +158,32 @@ private extension TrendsView {
 private extension TrendsView {
 
     var sections: [TrendsSection] {
-        TrendsIndexSections.build(loaded: vm.loaded, today: Date())
+        let built = TrendsIndexSections.build(loaded: vm.loaded, today: Date())
+        return TrendsGoalOrdering.sections(for: vm.goal, available: built)
+    }
+
+    /// Weight_loss's lead card (customer-panel finding, 2026-09-23) — `nil`
+    /// until `vm.loadGoalContext()` resolves both the goal and the
+    /// `/api/weight-log` fetch it gates on that goal, so it simply doesn't
+    /// render rather than showing a half-loaded card.
+    var showsWeightCard: Bool {
+        vm.goal == "weight_loss" && vm.weightLog != nil
+    }
+
+    var weightCardView: some View {
+        // `body_mass_kg` always has a `MetricCatalog` spec (and so a detail
+        // page) — see MetricCatalog.swift — so the card is always tappable
+        // here; `TrendsWeightCard.onTap` still supports `nil` (rendered
+        // non-interactive) for the day that stops being true.
+        TrendsWeightCard(
+            trend: vm.weightLog?.trend,
+            entries: vm.weightLog?.entries ?? [],
+            system: UnitPreference.shared.current,
+            onTap: {
+                tileTapTick.toggle()
+                path.append("body_mass_kg")
+            }
+        )
     }
 
     var visibleMetricCount: Int {
