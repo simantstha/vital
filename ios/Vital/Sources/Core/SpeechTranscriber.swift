@@ -67,6 +67,10 @@ final class SpeechTranscriber: ObservableObject {
     /// remaining AAC frames) by setting it to nil in `stop()`.
     private var audioFile: AVAudioFile?
 
+    /// Counter incremented on every segment start, captured in recognition
+    /// callbacks to ignore stale results from superseded segments.
+    private var recognitionGeneration = 0
+
     // MARK: - Auto-stop watchdogs
 
     /// No speech decoded at all: auto-stop after 10s so a turn with nothing
@@ -371,9 +375,11 @@ final class SpeechTranscriber: ObservableObject {
         with request: SFSpeechAudioBufferRecognitionRequest,
         recognizer: SFSpeechRecognizer
     ) -> SFSpeechRecognitionTask {
-        recognizer.recognitionTask(with: request) { [weak self] result, error in
+        recognitionGeneration += 1
+        let generation = recognitionGeneration
+        return recognizer.recognitionTask(with: request) { [weak self] result, error in
             Task { @MainActor [weak self] in
-                self?.handleRecognitionCallback(result: result, error: error)
+                self?.handleRecognitionCallback(result: result, error: error, generation: generation)
             }
         }
     }
@@ -381,7 +387,9 @@ final class SpeechTranscriber: ObservableObject {
     /// One handler shared by every recognition segment
     /// (`beginNewRecognitionSegment()` reuses it for each new request/task),
     /// so restarting a segment never duplicates this logic.
-    private func handleRecognitionCallback(result: SFSpeechRecognitionResult?, error: Error?) {
+    private func handleRecognitionCallback(result: SFSpeechRecognitionResult?, error: Error?, generation: Int) {
+        // Ignore late callbacks from a superseded segment's task — a stale error must not stop() the live turn.
+        guard generation == recognitionGeneration else { return }
         if let result {
             let segmentText = result.bestTranscription.formattedString
             transcribedText = combinedTranscript(withCurrentSegment: segmentText)
@@ -445,7 +453,7 @@ final class SpeechTranscriber: ObservableObject {
     // stop(), which is idempotent (guards on `isRecording`), so overlapping
     // fires are harmless. The silence and no-speech watchdogs are only ever
     // (re)started while `autoEndpointingEnabled` — see
-    // `setAutoEndpointing(_:)` and `handleRecognitionCallback(result:error:)`.
+    // `setAutoEndpointing(_:)` and `handleRecognitionCallback(result:error:generation:)`.
 
     /// Restarted on every non-empty partial transcript — partials only
     /// arrive while speech is actively being decoded, so this is a robust

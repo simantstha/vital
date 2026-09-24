@@ -628,6 +628,8 @@ struct CoachView: View {
                     holdRecognitionTask?.cancel()
                     holdRecognitionTask = nil
                     if isHoldRecognized {
+                        // belt-and-braces in case beginHold() no-op'd
+                        voice.demoteToSingleTurn()
                         voice.stopRecording()
                     }
                     isHoldRecognized = false
