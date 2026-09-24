@@ -750,7 +750,15 @@ struct APIClient {
         f: Double,
         source: String,
         imageThumb: String? = nil,
-        slot: String? = nil
+        slot: String? = nil,
+        // Opt-out for callers that never display `LogMealResponse
+        // .coachReaction` (redesign-v4's instant Diet-sheet log paths —
+        // ActionToast's Undo receipt doesn't show it). `nil` (the default)
+        // keeps the server's existing behavior of always producing a
+        // reaction; `false` skips the slow Haiku call server-side. See
+        // `app/api/meals/log/route.ts`'s `reaction` param (PR #206) — an
+        // older server simply ignores the unknown key.
+        reaction: Bool? = nil
     ) async throws -> LogMealResponse {
         guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/meals/log") else {
             throw APIError.invalidURL
@@ -764,9 +772,10 @@ struct APIClient {
             let c: Double; let p: Double; let f: Double; let source: String
             let imageThumb: String?
             let slot: String?
+            let reaction: Bool?
         }
         request.httpBody = try encoder.encode(
-            Body(name: name, kcal: kcal, c: c, p: p, f: f, source: source, imageThumb: imageThumb, slot: slot)
+            Body(name: name, kcal: kcal, c: c, p: p, f: f, source: source, imageThumb: imageThumb, slot: slot, reaction: reaction)
         )
         let (data, response) = try await session.data(for: request)
         try validate(response)

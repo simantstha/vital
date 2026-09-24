@@ -196,7 +196,8 @@ final class DietSheetViewModel: ObservableObject {
                 p: food.p,
                 f: food.f,
                 source: "recent",
-                slot: slot.rawValue
+                slot: slot.rawValue,
+                reaction: false // this path never shows coachReaction
             )
             let entry = MealLogEntryDTO(
                 id: response.eventId,
@@ -234,7 +235,8 @@ final class DietSheetViewModel: ObservableObject {
                 p: 0,
                 f: 0,
                 source: "manual",
-                slot: selectedSlot.rawValue
+                slot: selectedSlot.rawValue,
+                reaction: false // this path never shows coachReaction
             )
             let entry = MealLogEntryDTO(
                 id: response.eventId,
@@ -277,7 +279,8 @@ final class DietSheetViewModel: ObservableObject {
         do {
             let response = try await apiClient.logMeal(
                 name: name, kcal: kcal, c: c, p: p, f: f,
-                source: "photo", imageThumb: imageThumb, slot: slot.rawValue
+                source: "photo", imageThumb: imageThumb, slot: slot.rawValue,
+                reaction: false // ActionToast's Undo receipt never shows coachReaction
             )
             let entry = MealLogEntryDTO(
                 id: response.eventId,
