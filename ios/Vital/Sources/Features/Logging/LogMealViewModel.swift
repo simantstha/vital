@@ -53,6 +53,21 @@ enum PortionMode {
     case scaledHistory(kcal: Double, c: Double, p: Double, f: Double)
 }
 
+// MARK: - Confirm-card prefill (camera-first fallback)
+
+/// Pre-fills `LogMealView`'s Photo tab straight to the confirm card, used
+/// when `PhotoLogFlowView`'s camera-first auto-log can't proceed (analysis
+/// failed, or came back with no name/kcal — see `PhotoLogDecision`) so the
+/// user picks up editing the same shot instead of re-shooting from scratch.
+struct LogMealPrefill {
+    let image: UIImage?
+    let name: String
+    let kcal: Double
+    let c: Double
+    let p: Double
+    let f: Double
+}
+
 // MARK: - ViewModel
 
 @MainActor
@@ -150,6 +165,16 @@ final class LogMealViewModel: ObservableObject {
     }
 
     // MARK: - Pending meal helpers
+
+    /// Entry point for the camera-first fallback (`PhotoLogFlowView` →
+    /// `LogMealView(prefill:)`) — jumps straight to the confirm card with
+    /// whatever the photo analysis already returned, instead of making the
+    /// user reshoot or re-pick.
+    func applyPrefill(_ prefill: LogMealPrefill) {
+        pendingImage = prefill.image
+        resetPortionState()
+        applyResult(name: prefill.name, kcal: prefill.kcal, p: prefill.p, c: prefill.c, f: prefill.f, source: "photo")
+    }
 
     private func applyResult(name: String, kcal: Double, p: Double, c: Double, f: Double, source: String) {
         editedName    = name
@@ -517,6 +542,14 @@ final class LogMealViewModel: ObservableObject {
             )
             coachReaction = response.coachReaction
             isLogged      = true
+            // Duplicate-log guard: without this, `showConfirmCard` stayed
+            // true after a successful log (nothing ever cleared it), so the
+            // still-enabled "Log Meal" button let a second tap fire a
+            // second `POST /api/meals/log` for the same meal. Both cards
+            // are gated on this flag (`if vm.showConfirmCard` /
+            // `if vm.isLogged` in `LogMealView`), so clearing it here also
+            // swaps the confirm card out for the post-log "Done" section.
+            showConfirmCard = false
             ReminderScheduler.shared.mealLogged(on: Date())
         } catch {
             errorMessage = UserFacingError.message(for: error, context: .write, tag: "logMeal")

@@ -110,13 +110,24 @@ final class ReminderScheduler {
         manager.cancel(ids: [mealSlot.identifier(date)])
     }
 
-    private static func fallbackSlot(forHour hour: Int) -> DietSlot {
+    /// Time-of-day → `DietSlot` fallback: <11a breakfast, 11a–3p lunch,
+    /// 3p–6p snack, else dinner. `nonisolated` (pure, no shared state) so it
+    /// can be called from anywhere — including `DietSheetViewModel`'s init,
+    /// which uses it as the ONE shared helper for "what slot is it right now"
+    /// rather than duplicating this boundary logic.
+    nonisolated static func fallbackSlot(forHour hour: Int) -> DietSlot {
         switch hour {
         case ..<11: return .breakfast
         case 11..<15: return .lunch
         case 15..<18: return .snacks
         default: return .dinner
         }
+    }
+
+    /// Convenience over `fallbackSlot(forHour:)` for call sites that have a
+    /// `Date` rather than an hour already extracted.
+    nonisolated static func timeAppropriateSlot(for date: Date = Date(), calendar: Calendar = .current) -> DietSlot {
+        fallbackSlot(forHour: calendar.component(.hour, from: date))
     }
 
     /// Cancels a legacy locally scheduled brief after Today has loaded. This
