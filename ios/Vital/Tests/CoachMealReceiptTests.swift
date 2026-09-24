@@ -81,15 +81,15 @@ final class CoachMealReceiptTests: XCTestCase {
         let viewModel = CoachViewModel(api: api)
         seedMealReceipt(id: "evt-1", into: viewModel)
 
-        XCTAssertEqual(cardState(for: "evt-1", in: viewModel), .normal)
+        XCTAssertEqual(Self.cardState(for: "evt-1", in: viewModel), .normal)
 
         viewModel.undoMealLog(id: "evt-1")
         // undoMealLog sets `.undoing` synchronously before hopping into the
         // Task that awaits the network call, so this is observable
         // immediately — no wait needed.
-        XCTAssertEqual(cardState(for: "evt-1", in: viewModel), .undoing)
+        XCTAssertEqual(Self.cardState(for: "evt-1", in: viewModel), .undoing)
 
-        await waitUntil(viewModel) { cardState(for: "evt-1", in: viewModel) == .undone }
+        await waitUntil(viewModel) { Self.cardState(for: "evt-1", in: viewModel) == .undone }
 
         XCTAssertEqual(api.deletedMealLogIds, ["evt-1"])
     }
@@ -106,11 +106,11 @@ final class CoachMealReceiptTests: XCTestCase {
 
         viewModel.undoMealLog(id: "evt-1")
         await waitUntil(viewModel) {
-            if case .undoFailed = cardState(for: "evt-1", in: viewModel) { return true }
+            if case .undoFailed = Self.cardState(for: "evt-1", in: viewModel) { return true }
             return false
         }
 
-        guard case .undoFailed(let message) = cardState(for: "evt-1", in: viewModel) else {
+        guard case .undoFailed(let message) = Self.cardState(for: "evt-1", in: viewModel) else {
             return XCTFail("expected .undoFailed after a failed delete")
         }
         XCTAssertFalse(message.isEmpty)
@@ -130,7 +130,7 @@ final class CoachMealReceiptTests: XCTestCase {
         // transient failure clears.
         api.deleteMealLogFailure = nil
         viewModel.undoMealLog(id: "evt-1")
-        await waitUntil(viewModel) { cardState(for: "evt-1", in: viewModel) == .undone }
+        await waitUntil(viewModel) { Self.cardState(for: "evt-1", in: viewModel) == .undone }
         XCTAssertEqual(api.deletedMealLogIds, ["evt-1", "evt-1"])
     }
 
