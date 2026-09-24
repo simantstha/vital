@@ -400,7 +400,7 @@ final class TodayViewModel: ObservableObject {
     /// .nextUpGraceMinutes` ago — screenshot-review fix, 2026-09-23 (a
     /// not-done 7am breakfast is not "next up" at 3pm).
     var nextUpItem: PlanItem? {
-        WeightHeroLogic.nextUpItem(from: planItems, nowMinutes: Self.minutesSinceMidnight(Date()))
+        WeightHeroLogic.nextUpItem(from: planItems, nowMinutes: Self.minutesSinceMidnight(AppClock.now))
     }
 
     /// New-user first-run checklist (§4.2) replaces the three biometric
@@ -916,13 +916,13 @@ final class TodayViewModel: ObservableObject {
     /// authorization.
     private func mergeAndSetPlanItems(serverItems: [PlanItem]) {
         lastServerPlanItems = serverItems
-        let calendarItems = calendarProvider.fetchTodayPlanItems(now: Date())
+        let calendarItems = calendarProvider.fetchTodayPlanItems(now: AppClock.now)
         let merged = CalendarPlanMapping.merge(
             serverItems: serverItems,
             calendarItems: calendarItems,
             hiddenCalendarItemIDs: hiddenCalendarItemIDs
         )
-        planItems = computeStatuses(merged, nowMinutes: Self.minutesSinceMidnight(Date()))
+        planItems = computeStatuses(merged, nowMinutes: Self.minutesSinceMidnight(AppClock.now))
         refreshCalendarSyncState()
     }
 
@@ -1157,7 +1157,7 @@ final class TodayViewModel: ObservableObject {
     /// correctly. On failure the optimistic row is pulled back out.
     func addItem(_ item: PlanItem) {
         planItems.append(item)
-        planItems = computeStatuses(planItems, nowMinutes: Self.minutesSinceMidnight(Date()))
+        planItems = computeStatuses(planItems, nowMinutes: Self.minutesSinceMidnight(AppClock.now))
         let tempId = item.id
 
         Task {
@@ -1302,7 +1302,10 @@ final class TodayViewModel: ObservableObject {
     private func refreshGreeting() {
         // Neutral, name-free greeting until real sign-up/accounts exist; the
         // personalized "Morning, <name>" form returns with the next-cycle auth work.
-        let hour = Calendar.current.component(.hour, from: Date())
+        // Routed through `AppClock.now` (not `Date()` directly) so the
+        // screenshot harness's pinned fixture time also pins this — see
+        // `AppClock`'s doc comment.
+        let hour = Calendar.current.component(.hour, from: AppClock.now)
         switch hour {
         case 0..<12: greeting = "Good morning"
         case 12..<17: greeting = "Good afternoon"
@@ -1311,6 +1314,6 @@ final class TodayViewModel: ObservableObject {
 
         let formatter = DateFormatter()
         formatter.dateFormat = "EEEE · MMM d"
-        dateSubtitle = formatter.string(from: Date())
+        dateSubtitle = formatter.string(from: AppClock.now)
     }
 }
