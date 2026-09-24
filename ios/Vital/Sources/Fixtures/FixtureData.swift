@@ -62,8 +62,18 @@ enum FixtureData {
         let workoutKm: Double?
     }
 
+    /// Returning-user opener, shown once a scenario has an established
+    /// baseline (`Profile.established == true`) — praise tied to real
+    /// history is appropriate there.
     private static let coachOpener =
         "Nice work staying consistent this week — what would you like to dig into?"
+
+    /// New/calibrating-user opener (`Profile.established == false`, i.e. the
+    /// `new_user` scenario) — no history to praise yet, so this just invites
+    /// the user to say something instead. Mirrors
+    /// `CoachViewModel.newUserFallbackOpener`.
+    private static let newUserCoachOpener =
+        "Hi, I'm Vital, your coach. Tell me your goal, or just say what you ate or how you slept, and I'll take it from there."
 
     private static let profiles: [FixtureMode.Scenario: Profile] = [
         .newUser: Profile(
@@ -177,9 +187,9 @@ enum FixtureData {
         case ("GET", "/api/pending-facts"):
             return (200, jsonData(["items": [String]()]))
         case ("GET", "/api/coach"):
-            return (200, jsonData(coachRestoration()))
+            return (200, jsonData(coachRestoration(profile)))
         case ("GET", "/api/coach/opener"):
-            return (200, jsonData(["text": coachOpener]))
+            return (200, jsonData(["text": profile.established ? coachOpener : newUserCoachOpener]))
         case ("POST", "/api/coach"):
             // Never exercised by the screenshot harness (see
             // `FixtureURLProtocol.startLoading`) — a well-formed empty SSE
@@ -321,7 +331,23 @@ enum FixtureData {
 
     // MARK: - GET /api/coach → CoachRestorationResponse
 
-    private static func coachRestoration() -> [String: Any] {
+    /// `established` scenarios seed a restored transcript (the returning-user
+    /// opener, already sent) so the Coach tab shows real history. `new_user`
+    /// (`established == false`) seeds none — an empty history is what makes
+    /// `CoachViewModel.loadOpener()` fall through to fetching
+    /// `/api/coach/opener`, whose fixture response is the new-user copy.
+    private static func coachRestoration(_ profile: Profile) -> [String: Any] {
+        let activePersona: [String: Any] = [
+            "id": "vital", "title": "Vital Coach", "subtitle": "Your personal coach",
+            "accent": "#7C6CF2", "icon": "sparkles", "sessionId": NSNull(),
+        ]
+        guard profile.established else {
+            return [
+                "messages": [Any](),
+                "activePersona": activePersona,
+                "pendingCard": NSNull(),
+            ]
+        }
         let message: [String: Any] = [
             "id": "00000000-0000-4000-8000-000000000001",
             "role": "assistant",
@@ -330,10 +356,6 @@ enum FixtureData {
             "timestamp": isoNow,
             "specialistSessionId": NSNull(),
             "specialistMetadata": NSNull(),
-        ]
-        let activePersona: [String: Any] = [
-            "id": "vital", "title": "Vital Coach", "subtitle": "Your personal coach",
-            "accent": "#7C6CF2", "icon": "sparkles", "sessionId": NSNull(),
         ]
         return [
             "messages": [message],

@@ -25,6 +25,17 @@ struct CoachView: View {
     @State private var didAttemptDeniedMic = false
     @State private var isScrolledNearBottom = true
     @State private var scrollPhase: ScrollPhase = .idle
+    /// Whether the calm empty-state anchor (mic glyph + one line of copy)
+    /// belongs in the blank space below the opener bubble: only while the
+    /// conversation is nothing but that opener (no user message sent yet —
+    /// `showSuggestionChips` is already this view's existing signal for
+    /// that), only once the opener bubble actually exists (`!vm.rows.isEmpty`
+    /// — otherwise this would render above the typing indicator during
+    /// load), and never while `CoachOrb` owns the composer for an active
+    /// voice conversation, so the two never compete for the same space.
+    private var showEmptyStateAnchor: Bool {
+        !vm.rows.isEmpty && showSuggestionChips && voice.mode != .conversation
+    }
     @FocusState private var composerFocused: Bool
     /// Guards the mic button's touch-down gesture (spec §3.1/§10 V3: start
     /// on finger down, not tap-up) so `DragGesture`'s repeated `onChanged`
@@ -169,6 +180,12 @@ struct CoachView: View {
                     if vm.showTypingIndicator {
                         TypingIndicatorView()
                             .id("typing")
+                    }
+
+                    if showEmptyStateAnchor {
+                        CoachEmptyStateAnchor()
+                            .padding(.top, Theme.Spacing.xxl)
+                            .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.97, anchor: .top)))
                     }
 
                     // Invisible anchor to scroll to bottom
@@ -376,14 +393,7 @@ struct CoachView: View {
                             .font(.system(size: 14, weight: .bold))
                             .foregroundStyle(Theme.Colors.onAccent)
                             .frame(width: 32, height: 32)
-                            .background(
-                                Circle()
-                                    .fill(
-                                        (canSend || vm.isStreaming)
-                                            ? Theme.Colors.accent
-                                            : Theme.Colors.accent.opacity(0.3)
-                                    )
-                            )
+                            .background(Circle().fill(Theme.Colors.accent))
                     }
                     // `canSend` already requires `!vm.isBusy`, so a bare
                     // `!canSend` would disable the button for the entire reply —
@@ -398,7 +408,15 @@ struct CoachView: View {
                     // enabled — reintroducing exactly the dead tap target this
                     // pairing exists to prevent.
                     .disabled(!canSend && !vm.isStreaming)
-                    .animation(Theme.Motion.micro, value: vm.isStreaming)
+                    // Same 0.5/1.0 muted-vs-lit convention `micButton` uses for
+                    // its own disabled state just above — dims the whole button
+                    // (icon and fill together) rather than only the circle, so an
+                    // empty composer visibly reads as non-interactive instead of
+                    // looking tappable. Layout position/size never changes, only
+                    // opacity, so nothing shifts when it enables.
+                    .opacity((canSend || vm.isStreaming) ? 1.0 : 0.5)
+                    .animation(Theme.Motion.quick, value: vm.isStreaming)
+                    .animation(Theme.Motion.quick, value: canSend)
                 }
                 .padding(.horizontal, Theme.Spacing.md)
                 .padding(.vertical, Theme.Spacing.sm)
@@ -455,6 +473,22 @@ struct CoachView: View {
             .padding(.vertical, Theme.Spacing.sm)
         }
         .scrollIndicators(.hidden)
+        // The row clips at the trailing edge with no affordance that more
+        // chips follow — a trailing fade reads as "scroll for more" the way
+        // the leading edge (always fully opaque, nothing to hint there)
+        // doesn't need to. Purely a rendering mask, so it's Reduce Motion
+        // safe with nothing to disable.
+        .mask(
+            LinearGradient(
+                stops: [
+                    .init(color: .black, location: 0),
+                    .init(color: .black, location: 0.92),
+                    .init(color: .clear, location: 1),
+                ],
+                startPoint: .leading,
+                endPoint: .trailing
+            )
+        )
     }
 
     /// The composer's displayed text. While a voice turn is live —
@@ -477,7 +511,7 @@ struct CoachView: View {
     /// the composer lit and tappable during a handoff while `vm.send()` — which
     /// is guarded on the same busy state — silently dropped the tap.
     private var canSend: Bool {
-        !vm.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        CoachViewModel.isSendableInput(vm.input)
             && !vm.isBusy
             && !voice.isRecording
             && !isTranscribing
@@ -933,6 +967,38 @@ private struct ToolCallActivityView: View {
 
             Spacer()
         }
+    }
+}
+
+// MARK: - Empty-state anchor
+
+/// Calm, centered filler for the large blank area a brand-new/single-opener
+/// conversation otherwise leaves above the starter chips (see
+/// `CoachView.showEmptyStateAnchor`). Pure presentation — no state, no
+/// action — so it's Reduce Motion safe by construction; the only motion
+/// attached to it is the one-shot `.appear` transition applied where it's
+/// inserted into `messageList`.
+private struct CoachEmptyStateAnchor: View {
+    var body: some View {
+        VStack(spacing: Theme.Spacing.lg) {
+            Circle()
+                .fill(Theme.Colors.accentSoft)
+                .frame(width: 88, height: 88)
+                .overlay(
+                    Image(systemName: "mic.fill")
+                        .font(.system(size: 32, weight: .medium))
+                        .foregroundStyle(Theme.Colors.accentContent)
+                )
+
+            Text("Tap the mic and just talk — I'll keep the conversation going.")
+                .font(Theme.Typography.bodySmall)
+                .foregroundStyle(Theme.Colors.textSecondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, Theme.Spacing.xxxl)
+        }
+        .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .combine)
     }
 }
 
