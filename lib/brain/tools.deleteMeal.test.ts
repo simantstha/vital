@@ -38,11 +38,13 @@ function paramFor(sqlText: string, params: readonly unknown[], column: string, o
 
 let rows: FakeEventRow[] = [];
 let deleteCalls: Array<{ id: unknown; user_id: unknown; type: unknown }> = [];
+let selectCallCount = 0;
 
 const fakeDb = {
   select: () => ({
     from: (table: unknown) => {
       if (table !== realSchema.events) throw new Error(`unexpected table in select().from(): ${String(table)}`);
+      selectCallCount++;
       return {
         where: (condition: unknown) => {
           const { sql: sqlText, params } = new PgDialect().sqlToQuery(condition as never);
@@ -119,28 +121,30 @@ test('delete_meal deletes the user\'s most recent coach-logged meal when no id i
   assert.equal(rows.some((r) => r.id === 'evt-old'), true);
 });
 
+const VALID_ID = '11111111-1111-4111-8111-111111111111';
+
 test('delete_meal with an explicit id deletes only that meal when it belongs to this user', async () => {
   rows = [
-    { id: 'evt-1', user_id: 'user-1', type: 'meal_logged', source: 'coach', timestamp: minutesAgo(2), payload: { name: 'Toast' } },
+    { id: VALID_ID, user_id: 'user-1', type: 'meal_logged', source: 'coach', timestamp: minutesAgo(2), payload: { name: 'Toast' } },
   ];
   deleteCalls = [];
 
   const tools = await toolsPromise;
-  const result = JSON.parse(await tools.executeToolCall('delete_meal', { id: 'evt-1' }, 'user-1'));
+  const result = JSON.parse(await tools.executeToolCall('delete_meal', { id: VALID_ID }, 'user-1'));
 
   assert.equal(result.ok, true);
-  assert.equal(result.id, 'evt-1');
+  assert.equal(result.id, VALID_ID);
   assert.equal(rows.length, 0);
 });
 
 test('delete_meal refuses an id that belongs to a different user', async () => {
   rows = [
-    { id: 'evt-1', user_id: 'someone-else', type: 'meal_logged', source: 'coach', timestamp: minutesAgo(2), payload: {} },
+    { id: VALID_ID, user_id: 'someone-else', type: 'meal_logged', source: 'coach', timestamp: minutesAgo(2), payload: {} },
   ];
   deleteCalls = [];
 
   const tools = await toolsPromise;
-  const result = await tools.executeToolCall('delete_meal', { id: 'evt-1' }, 'user-1');
+  const result = await tools.executeToolCall('delete_meal', { id: VALID_ID }, 'user-1');
 
   assert.match(result, /^Error:/);
   assert.equal(deleteCalls.length, 0);
@@ -149,12 +153,12 @@ test('delete_meal refuses an id that belongs to a different user', async () => {
 
 test('delete_meal refuses a meal that was not logged by the coach (app-side log)', async () => {
   rows = [
-    { id: 'evt-1', user_id: 'user-1', type: 'meal_logged', source: 'search', timestamp: minutesAgo(1), payload: {} },
+    { id: VALID_ID, user_id: 'user-1', type: 'meal_logged', source: 'search', timestamp: minutesAgo(1), payload: {} },
   ];
   deleteCalls = [];
 
   const tools = await toolsPromise;
-  const result = await tools.executeToolCall('delete_meal', { id: 'evt-1' }, 'user-1');
+  const result = await tools.executeToolCall('delete_meal', { id: VALID_ID }, 'user-1');
 
   assert.match(result, /^Error:/);
   assert.equal(deleteCalls.length, 0);
@@ -165,13 +169,13 @@ test('delete_meal refuses a meal older than the eligibility window', async () =>
   const tools = await toolsPromise;
   rows = [
     {
-      id: 'evt-1', user_id: 'user-1', type: 'meal_logged', source: 'coach',
+      id: VALID_ID, user_id: 'user-1', type: 'meal_logged', source: 'coach',
       timestamp: minutesAgo(tools.DELETE_MEAL_WINDOW_MINUTES + 5), payload: {},
     },
   ];
   deleteCalls = [];
 
-  const result = await tools.executeToolCall('delete_meal', { id: 'evt-1' }, 'user-1');
+  const result = await tools.executeToolCall('delete_meal', { id: VALID_ID }, 'user-1');
 
   assert.match(result, /^Error:/);
   assert.equal(deleteCalls.length, 0);
@@ -204,4 +208,47 @@ test('delete_meal never matches by free-text description — id is the only opti
 
   assert.equal(result.ok, true);
   assert.equal(result.id, 'evt-1');
+});
+
+test('delete_meal rejects a malformed id before running any query (uuid column guard)', async () => {
+  rows = [
+    { id: 'evt-1', user_id: 'user-1', type: 'meal_logged', source: 'coach', timestamp: minutesAgo(1), payload: { name: 'Oats' } },
+  ];
+  deleteCalls = [];
+  selectCallCount = 0;
+
+  const tools = await toolsPromise;
+  // Note: `input.id: ''` also hits this guard — executeToolCall only takes
+  // the "no id" (undo latest) path when `id` is absent/null, not merely
+  // falsy, so an explicit-but-empty id is still a validation error rather
+  // than silently defaulting.
+  for (const badId of ['last', 'grilled chicken', 'evt-1', '123', '']) {
+    const result = await tools.executeToolCall('delete_meal', { id: badId }, 'user-1');
+    assert.match(
+      result,
+      /^Error: that id isn't a valid meal id/,
+      `expected a validation error for id ${JSON.stringify(badId)}, got: ${result}`,
+    );
+  }
+
+  // The whole point: a malformed id must never reach `events.id` (a
+  // Postgres uuid column) — no select, no delete.
+  assert.equal(selectCallCount, 0);
+  assert.equal(deleteCalls.length, 0);
+  assert.equal(rows.length, 1); // untouched
+});
+
+test('delete_meal accepts a well-formed uuid id regardless of case', async () => {
+  const id = 'AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE';
+  rows = [
+    { id, user_id: 'user-1', type: 'meal_logged', source: 'coach', timestamp: minutesAgo(1), payload: { name: 'Oats' } },
+  ];
+  deleteCalls = [];
+
+  const tools = await toolsPromise;
+  // Uppercase hex letters must pass the validation regex — the DB-level
+  // match itself is exercised by the other id-path tests above.
+  const result = JSON.parse(await tools.executeToolCall('delete_meal', { id }, 'user-1'));
+
+  assert.equal(result.ok, true);
 });

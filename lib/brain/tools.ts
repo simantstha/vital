@@ -1807,6 +1807,20 @@ export async function executeToolCall(
   // somehow passed a stale id.
   if (name === 'delete_meal') {
     const id = input.id != null ? String(input.id) : null;
+
+    // `events.id` is a Postgres `uuid` column — a malformed value (a
+    // truncated id, "last", a meal name the model hallucinated as an id)
+    // would make `eq(schema.events.id, id)` below throw
+    // "invalid input syntax for type uuid" straight out of the query, which
+    // nothing catches (coach.ts awaits executeToolCall with no try/catch),
+    // aborting the whole turn instead of returning a text error. Validate
+    // BEFORE any query, and don't silently fall back to the latest meal — an
+    // explicit (if malformed) id means the user/model meant a *specific*
+    // meal, not necessarily the most recent one.
+    if (id != null && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+      return "Error: that id isn't a valid meal id — omit it to undo the most recent meal you logged.";
+    }
+
     const since = new Date(Date.now() - DELETE_MEAL_WINDOW_MINUTES * 60 * 1000);
 
     const scope = id
