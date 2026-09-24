@@ -186,7 +186,10 @@ final class CoachMealReceiptTests: XCTestCase {
         viewModel.rows = [.assistantTurn(turn)]
     }
 
-    private func cardState(for id: String, in viewModel: CoachViewModel) -> LogReceiptCard.State? {
+    // `static` (not an instance method) so calling it from inside the
+    // `waitUntil` closures below never implicitly captures `self` — it only
+    // needs `viewModel`, which those closures already capture explicitly.
+    private static func cardState(for id: String, in viewModel: CoachViewModel) -> LogReceiptCard.State? {
         for row in viewModel.rows {
             if case .assistantTurn(let turn) = row, let receipt = turn.mealReceipts.first(where: { $0.id == id }) {
                 return receipt.cardState
