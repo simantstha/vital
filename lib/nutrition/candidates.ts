@@ -250,6 +250,45 @@ export function needsEstimate(query: string, usdaCount: number): boolean {
   return /\d/.test(query) || /\band\b/i.test(query) || query.includes(',');
 }
 
+/** Picks the single candidate an automatic (no-user-choice) log should save,
+ * from the same ranked list `searchCandidates` returns for the search UI.
+ * `searchCandidates` orders history first, then cache/USDA, then (only when
+ * `needsEstimate`) the free-text estimate last — great for a picker, wrong
+ * for an auto-log, which would otherwise silently save a single USDA food's
+ * per-serving macros under a multi-food description ("two eggs and toast").
+ *
+ * Rules, in order:
+ *   (a) A history candidate whose normalized name exactly equals the
+ *       normalized query wins — the user has logged this exact thing before.
+ *   (b) Otherwise, if `needsEstimate(query, usdaCount)` is true and an
+ *       `origin: 'estimate'` candidate exists, use it — CalorieNinjas parses
+ *       quantities and multiple foods; USDA/cache rows are single-food,
+ *       per-serving only.
+ *   (c) Otherwise, `candidates[0]` (history-first by construction).
+ *
+ * Never mutates or reorders `candidates` — the iOS search UI displays that
+ * list as-is. */
+export function pickLoggableCandidate(
+  query: string,
+  candidates: Candidate[],
+  usdaCount: number,
+): Candidate | undefined {
+  if (candidates.length === 0) return undefined;
+
+  const normalizedQuery = normalizeName(query);
+  const exactHistory = candidates.find(
+    (c) => c.origin === 'history' && normalizeName(c.name) === normalizedQuery,
+  );
+  if (exactHistory) return exactHistory;
+
+  if (needsEstimate(query, usdaCount)) {
+    const estimate = candidates.find((c) => c.origin === 'estimate');
+    if (estimate) return estimate;
+  }
+
+  return candidates[0];
+}
+
 /** Aggregates meal-history rows into ranked "recent foods": normalizes +
  * dedups by name (route logs use `name`, coach logs use `description`),
  * keeps the latest macros/slot/thumb per name, counts occurrences, sorts by
@@ -417,6 +456,11 @@ async function upsertUsdaRows(db: Database, usdaRows: UsdaFood[]): Promise<void>
 export interface SearchCandidatesResult {
   candidates: Candidate[];
   estimateFoods: NutritionixResult['foods'] | null;
+  /** Count of raw USDA rows fetched for this query (before cache-merge/dedup)
+   * — needed by callers that pick a single candidate for an automatic log
+   * (see `pickLoggableCandidate`) via `needsEstimate`. Additive field; existing
+   * callers destructuring only `{ candidates, estimateFoods }` are unaffected. */
+  usdaCount: number;
 }
 
 /** Merges history, cache/USDA provider candidates, and a free-text estimate
@@ -425,7 +469,7 @@ export interface SearchCandidatesResult {
  * candidates rather than throwing. */
 export async function searchCandidates(userId: string, query: string): Promise<SearchCandidatesResult> {
   const trimmed = query.trim();
-  if (!trimmed) return { candidates: [], estimateFoods: null };
+  if (!trimmed) return { candidates: [], estimateFoods: null, usdaCount: 0 };
 
   const likePattern = `%${escapeLikePattern(trimmed)}%`;
   const db = await loadDb();
@@ -462,5 +506,5 @@ export async function searchCandidates(userId: string, query: string): Promise<S
     }
   }
 
-  return { candidates, estimateFoods };
+  return { candidates, estimateFoods, usdaCount: usdaRows.length };
 }

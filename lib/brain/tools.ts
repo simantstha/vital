@@ -44,7 +44,7 @@ import type { Tool } from '@anthropic-ai/sdk/resources/messages';
 import { db, schema } from '@/db';
 import { eq, and, gte, gt, lt, asc, desc, inArray, isNull, sql } from 'drizzle-orm';
 import { lookupBarcode } from '@/lib/openFoodFacts';
-import { searchCandidates, type Candidate } from '@/lib/nutrition/candidates';
+import { searchCandidates, pickLoggableCandidate, type Candidate } from '@/lib/nutrition/candidates';
 import type { BaselineStats } from '@/lib/brain/baselines';
 import {
   applyDietBudgetUpdate,
@@ -1688,16 +1688,18 @@ export async function executeToolCall(
       const p         = Math.round(product.per100g.p    * factor);
       const f         = Math.round(product.per100g.f    * factor);
 
-      await db.insert(schema.events).values({
+      const barcodeName = `${product.productName} ${servingG}g`;
+      const [barcodeRow] = await db.insert(schema.events).values({
         user_id:   userId,
         timestamp: new Date(),
         type:      'meal_logged',
-        payload:   { kcal, c, p, f, description: `${product.productName} ${servingG}g`, source: 'barcode' },
+        payload:   { kcal, c, p, f, name: barcodeName, description: barcodeName, source: 'barcode' },
         source:    'coach',
-      });
+      }).returning({ id: schema.events.id });
 
       return JSON.stringify({
         ok: true,
+        id: barcodeRow.id,
         product: product.productName,
         servingG,
         kcal, c, p, f,
@@ -1705,8 +1707,8 @@ export async function executeToolCall(
     }
 
     // Text/description path — history-first candidate search
-    const { candidates, estimateFoods } = await searchCandidates(userId, text);
-    const top = candidates[0];
+    const { candidates, estimateFoods, usdaCount } = await searchCandidates(userId, text);
+    const top = pickLoggableCandidate(text, candidates, usdaCount);
     if (!top) {
       return `Could not find nutrition data for "${text}". Try being more specific, e.g. "200g grilled chicken breast".`;
     }
@@ -1724,6 +1726,7 @@ export async function executeToolCall(
       c:           top.c,
       p:           top.p,
       f:           top.f,
+      name:        top.name,
       description: text,
       source:      SOURCE_BY_ORIGIN[top.origin],
     };
@@ -1731,16 +1734,17 @@ export async function executeToolCall(
       payload.items = estimateFoods!.map(fd => `${fd.qty}${fd.unit} ${fd.name}`).join(', ');
     }
 
-    await db.insert(schema.events).values({
+    const [row] = await db.insert(schema.events).values({
       user_id:   userId,
       timestamp: new Date(),
       type:      'meal_logged',
       payload,
       source: 'coach',
-    });
+    }).returning({ id: schema.events.id });
 
     const result: Record<string, unknown> = {
       ok: true,
+      id: row.id,
       query: text,
       kcal: top.kcal,
       c: top.c,
