@@ -107,8 +107,8 @@ struct TodayView: View {
                                     calibratingText: vm.enduranceCalibratingText,
                                     reasonLine: vm.enduranceReasonLine,
                                     session: vm.todayMoveSession,
-                                    weeklyOverviewText: vm.enduranceWeeklyOverviewText,
                                     sessionDots: vm.trainingSessionDots,
+                                    weeklyOverviewText: vm.enduranceWeeklyOverviewText,
                                     onTapSession: { actionsItem = $0 }
                                 )
                             }
