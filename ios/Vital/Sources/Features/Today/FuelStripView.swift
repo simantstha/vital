@@ -7,6 +7,13 @@ struct FuelStripView: View {
     let kcalRemaining: Int
     let proteinHave: Int
     let proteinGoal: Int
+    /// False only for the muscle goal, whose hero (`MuscleHeroView`) already
+    /// shows a "Protein have/goal" line and bar above this strip — coaching
+    /// review, 2026-09-23: without this, Today repeated the same protein
+    /// numbers twice back to back. Every other goal still shows it here
+    /// (endurance's hero doesn't repeat it, and weight_loss/general never
+    /// show this strip's protein line elsewhere).
+    var showsProtein: Bool = true
     /// "logged" | "healthkit" | "none" — see `TodayDietBudget.consumedSource`.
     var consumedSource: String? = nil
     var consumedSourceName: String? = nil
@@ -22,7 +29,7 @@ struct FuelStripView: View {
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(Theme.Colors.textPrimary)
                         .monospacedDigit()
-                    Text("Protein \(proteinHave)/\(proteinGoal)g · tap to log a meal")
+                    Text(showsProtein ? "Protein \(proteinHave)/\(proteinGoal)g · tap to log a meal" : "tap to log a meal")
                         .font(.system(size: 13))
                         .foregroundStyle(Theme.Colors.textSecondary)
                         .monospacedDigit()

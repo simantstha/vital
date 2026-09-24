@@ -89,6 +89,31 @@ struct TodayView: View {
                                 )
                             }
 
+                            if vm.isMuscleGoal {
+                                MuscleHeroView(
+                                    session: vm.todayMoveSession,
+                                    proteinHave: vm.diet.protein.current,
+                                    proteinGoal: vm.diet.protein.target,
+                                    onTapSession: { actionsItem = $0 }
+                                )
+                            }
+
+                            if vm.isEnduranceGoal {
+                                EnduranceHeroView(
+                                    readinessWord: vm.enduranceReadinessWord,
+                                    calibratingText: vm.enduranceCalibratingText,
+                                    reasonLine: vm.enduranceReasonLine,
+                                    session: vm.todayMoveSession,
+                                    // Weekly volume needs history Today
+                                    // doesn't load yet — see
+                                    // `EnduranceHeroLogic.weeklyVolumeText`'s
+                                    // doc comment — so this is always nil
+                                    // rather than a fabricated total (P4).
+                                    weeklyVolumeText: nil,
+                                    onTapSession: { actionsItem = $0 }
+                                )
+                            }
+
                             // "Next up" replaces the full plan list for every
                             // goal (owner decision, 2026-09-23) — guarded here
                             // (not just inside the view) so an empty payload
@@ -137,6 +162,12 @@ struct TodayView: View {
                                     kcalRemaining: vm.diet.kcalRemaining,
                                     proteinHave: vm.diet.protein.current,
                                     proteinGoal: vm.diet.protein.target,
+                                    // The muscle hero already shows a protein
+                                    // have/goal line + bar above this strip —
+                                    // don't repeat it (coaching review,
+                                    // 2026-09-23). Endurance's hero doesn't
+                                    // show protein, so it keeps this one.
+                                    showsProtein: !vm.isMuscleGoal,
                                     consumedSource: vm.diet.consumedSource,
                                     consumedSourceName: vm.diet.consumedSourceName,
                                     onOpen: { showLogSheet = true }
