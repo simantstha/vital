@@ -21,8 +21,15 @@ struct LogMealView: View {
     /// sheet (redesign-v3 Phase 3) deep-link straight into Photo/Barcode.
     private let initialMethod: MealInputMethod
 
-    init(initialMethod: MealInputMethod = .text) {
+    /// Set only by the camera-first fallback (`PhotoLogFlowView`) — skips
+    /// straight to the confirm card, pre-filled from a photo analysis that
+    /// couldn't auto-log. `nil` (every other call site) leaves the normal
+    /// method-picker flow untouched.
+    private let prefill: LogMealPrefill?
+
+    init(initialMethod: MealInputMethod = .text, prefill: LogMealPrefill? = nil) {
         self.initialMethod = initialMethod
+        self.prefill = prefill
     }
 
     var body: some View {
@@ -60,6 +67,15 @@ struct LogMealView: View {
         }
         // When the user switches tabs, cancel any in-flight recording.
         .onChange(of: vm.selectedMethod) {
+            // Skip this for the camera-first fallback's one-time
+            // programmatic `selectedMethod = initialMethod` set in
+            // `onAppear` below — `clearResult()` would otherwise wipe the
+            // `vm.applyPrefill(prefill)` call right after it (`onChange`
+            // can fire on the next render pass, after both onAppear lines
+            // have already run). A prefilled sheet never exposes the
+            // method picker as an ordinary switch surface, so suppressing
+            // this for its whole lifetime is safe.
+            guard prefill == nil else { return }
             vm.stopRecording()
             vm.clearResult()
             photoItem = nil
@@ -70,6 +86,9 @@ struct LogMealView: View {
         }
         .onAppear {
             vm.selectedMethod = initialMethod
+            if let prefill {
+                vm.applyPrefill(prefill)
+            }
         }
         // Paints the UserDefaults-cached recents instantly, then refreshes
         // from the server in the background — runs once per sheet open.

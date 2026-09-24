@@ -54,6 +54,11 @@ final class DietSheetViewModel: ObservableObject {
     }
 
     @Published var loggedEntries: [MealLogEntryDTO] = []
+    /// Defaults to the time-appropriate slot (`ReminderScheduler.
+    /// timeAppropriateSlot`, the one shared helper) rather than always
+    /// `.breakfast`, so opening the sheet at 7pm doesn't land on the wrong
+    /// tab. Set for real in `init`; the `.breakfast` here is just a
+    /// non-optional placeholder for property declaration order.
     @Published var selectedSlot: DietSlot = .breakfast
 
     /// "logged" | "healthkit" | "none" — today's `dietBudget.consumedSource`
@@ -109,6 +114,7 @@ final class DietSheetViewModel: ObservableObject {
     init(initialTarget: Int, onRefreshToday: @escaping () -> Void) {
         self.target = initialTarget
         self.onRefreshToday = onRefreshToday
+        self.selectedSlot = ReminderScheduler.timeAppropriateSlot()
     }
 
     // MARK: - Load
@@ -205,6 +211,7 @@ final class DietSheetViewModel: ObservableObject {
             loggedEntries.append(entry)
             await refreshConsumedSource()
             showLoggedToast(for: entry)
+            ReminderScheduler.shared.mealLogged(slot: slot)
             onRefreshToday()
         } catch {
             // Nothing was mutated locally yet — nothing to revert.
@@ -244,9 +251,53 @@ final class DietSheetViewModel: ObservableObject {
             customName = ""
             customKcal = ""
             showLoggedToast(for: entry)
+            ReminderScheduler.shared.mealLogged(slot: selectedSlot)
             onRefreshToday()
         } catch {
             toastMessage = "Couldn't save — try again"
+        }
+    }
+
+    // MARK: - Photo (camera-first, redesign-v4)
+
+    /// Auto-logs a photo-analysis result the instant it comes back
+    /// confident (Cal AI style: log now, offer Undo) — reuses the exact
+    /// log→append→toast→`mealLogged` pipeline as `logRecentFood`/
+    /// `logCustom` above, just with the name/macros coming from
+    /// `POST /api/nutrition/photo` instead of a recent/custom entry. Callers
+    /// (`PhotoLogFlowView`) must have already applied the zero-kcal/
+    /// empty-name auto-log gate — see `PhotoLogDecision.shouldAutoLog` — this
+    /// method always logs whatever it's given.
+    ///
+    /// Returns `false` on a network failure so the caller can fall back to
+    /// the existing confirm-card flow instead of silently dropping the shot.
+    @discardableResult
+    func logPhotoResult(name: String, kcal: Double, c: Double, p: Double, f: Double, imageThumb: String?) async -> Bool {
+        let slot = ReminderScheduler.timeAppropriateSlot()
+        do {
+            let response = try await apiClient.logMeal(
+                name: name, kcal: kcal, c: c, p: p, f: f,
+                source: "photo", imageThumb: imageThumb, slot: slot.rawValue
+            )
+            let entry = MealLogEntryDTO(
+                id: response.eventId,
+                name: name,
+                kcal: Int(kcal.rounded()),
+                protein: Int(p.rounded()),
+                carbs: Int(c.rounded()),
+                fat: Int(f.rounded()),
+                slot: slot.rawValue,
+                loggedAt: Self.isoFormatter.string(from: Date())
+            )
+            loggedEntries.append(entry)
+            await refreshConsumedSource()
+            showLoggedToast(for: entry)
+            ReminderScheduler.shared.mealLogged(slot: slot)
+            onRefreshToday()
+            return true
+        } catch {
+            toastMessage = "Couldn't save — try again"
+            return false
         }
     }
 

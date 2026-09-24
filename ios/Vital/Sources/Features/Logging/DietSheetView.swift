@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// Full diet logging / editing sheet — opened from Today's fuel strip.
 /// Mirrors the design mock's `DietSheet`: header (remaining vs editable
@@ -14,7 +15,12 @@ struct DietSheetView: View {
 
     @State private var showLogMealSheet = false
     @State private var logMealMethod: MealInputMethod = .text
+    /// Camera-first photo capture (redesign-v4): full-screen over the Diet
+    /// sheet, presented instead of `LogMealView`'s Photo tab whenever the
+    /// device actually has a camera — see `deeperFlowButton`'s Photo case.
+    @State private var showPhotoCaptureFlow = false
     @FocusState private var targetFieldFocused: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(initialTarget: Int, onRefreshToday: @escaping () -> Void) {
         _vm = StateObject(wrappedValue: DietSheetViewModel(initialTarget: initialTarget, onRefreshToday: onRefreshToday))
@@ -41,6 +47,17 @@ struct DietSheetView: View {
         }
         .onChange(of: showLogMealSheet) { _, isPresented in
             // Covers both a completed log and a plain cancel — idempotent.
+            if !isPresented {
+                Task { await vm.load() }
+                vm.onRefreshToday()
+            }
+        }
+        .fullScreenCover(isPresented: $showPhotoCaptureFlow) {
+            PhotoLogFlowView(dietVM: vm)
+        }
+        .onChange(of: showPhotoCaptureFlow) { _, isPresented in
+            // Same idempotent refresh as the LogMealView sheet above — covers
+            // a completed auto-log, a fallback hand-off, and a plain cancel.
             if !isPresented {
                 Task { await vm.load() }
                 vm.onRefreshToday()
@@ -290,17 +307,31 @@ private extension DietSheetView {
 
     var deeperFlowsRow: some View {
         HStack(spacing: Theme.Spacing.sm) {
-            deeperFlowButton(label: "Photo", icon: "photo", method: .photo)
-            deeperFlowButton(label: "Barcode", icon: "barcode.viewfinder", method: .barcode)
-            deeperFlowButton(label: "Search", icon: "magnifyingglass", method: .text)
+            deeperFlowButton(label: "Photo", icon: "photo") {
+                // Camera-first (Cal AI style) whenever the device actually
+                // has a camera; the Simulator (and any camera-less device)
+                // goes straight to the existing library-based LogMealView
+                // Photo tab, unchanged — see build note 1 in the spec.
+                if UIImagePickerController.isSourceTypeAvailable(.camera) {
+                    showPhotoCaptureFlow = true
+                } else {
+                    logMealMethod = .photo
+                    showLogMealSheet = true
+                }
+            }
+            deeperFlowButton(label: "Barcode", icon: "barcode.viewfinder") {
+                logMealMethod = .barcode
+                showLogMealSheet = true
+            }
+            deeperFlowButton(label: "Search", icon: "magnifyingglass") {
+                logMealMethod = .text
+                showLogMealSheet = true
+            }
         }
     }
 
-    func deeperFlowButton(label: String, icon: String, method: MealInputMethod) -> some View {
-        Button {
-            logMealMethod = method
-            showLogMealSheet = true
-        } label: {
+    func deeperFlowButton(label: String, icon: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
             VStack(spacing: Theme.Spacing.xs) {
                 Image(systemName: icon)
                     .font(.system(size: 17, weight: .medium))
@@ -350,6 +381,7 @@ private extension DietSheetView {
                             VStack(spacing: 0) {
                                 ForEach(Array(group.entries.enumerated()), id: \.element.id) { index, entry in
                                     loggedEntryRow(entry, isFirst: index == 0)
+                                        .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
                                 }
                             }
                         }
@@ -357,6 +389,10 @@ private extension DietSheetView {
                 }
             }
         }
+        // Spring insert for a newly-logged entry (photo auto-log, recent,
+        // custom) — Reduce Motion collapses this to the plain fade set on
+        // each row's `.transition` above via `reduceMotion`.
+        .animation(reduceMotion ? nil : Theme.Motion.settle, value: vm.loggedEntries.map(\.id))
     }
 
     /// Read-only stand-in for `loggedGroups` when today's food came from a
