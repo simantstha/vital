@@ -457,6 +457,11 @@ final class TodayViewModel: ObservableObject {
     // the app foregrounds (willEnterForegroundNotification).
     private var calendarStoreObserverToken: NSObjectProtocol?
     private var foregroundObserverToken: NSObjectProtocol?
+    /// "Tell Today" — a coach-driven meal log or its Undo posts
+    /// `.vitalCoachMealLogChanged` (see that name's doc comment); this
+    /// observer re-fetches `/api/today` so the fuel strip's diet card
+    /// updates immediately instead of waiting for pull-to-refresh.
+    private var coachMealLogObserverToken: NSObjectProtocol?
 
     // MARK: - Init
 
@@ -490,6 +495,16 @@ final class TodayViewModel: ObservableObject {
                 self?.mergeAndSetPlanItems(serverItems: self?.lastServerPlanItems ?? [])
             }
         }
+
+        coachMealLogObserverToken = NotificationCenter.default.addObserver(
+            forName: .vitalCoachMealLogChanged,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                await self?.refreshAfterCoachMealLogChange()
+            }
+        }
     }
 
     deinit {
@@ -499,6 +514,20 @@ final class TodayViewModel: ObservableObject {
         if let token = foregroundObserverToken {
             NotificationCenter.default.removeObserver(token)
         }
+        if let token = coachMealLogObserverToken {
+            NotificationCenter.default.removeObserver(token)
+        }
+    }
+
+    /// Re-fetches `/api/today` after a coach-driven meal log (or its Undo) so
+    /// the fuel strip's diet card reflects it immediately. Reuses
+    /// `applyTodayResponse`'s own `withAnimation` blocks (see its diet-budget
+    /// section) rather than adding a second animation here — a silent no-op
+    /// on failure is fine: the next pull-to-refresh or tab revisit still
+    /// catches up, same as any other background refresh in this view model.
+    private func refreshAfterCoachMealLogChange() async {
+        guard let response = try? await apiClient.fetchToday() else { return }
+        applyTodayResponse(response)
     }
 
     // MARK: - Called from TodayView.task

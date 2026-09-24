@@ -53,6 +53,17 @@ function streamEvents(generator: AsyncGenerator<CoachEvent>): Response {
             case 'tool_data':
               send({ type: chunk.type, id: chunk.id, viz: chunk.viz });
               break;
+            case 'meal_logged':
+              send({
+                type: chunk.type,
+                id:   chunk.id,
+                name: chunk.name,
+                kcal: chunk.kcal,
+                p:    chunk.p,
+                c:    chunk.c,
+                f:    chunk.f,
+              });
+              break;
             case 'done':
               send({ type: chunk.type, messageId: chunk.messageId });
               break;

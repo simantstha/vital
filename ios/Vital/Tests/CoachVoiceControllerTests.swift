@@ -899,4 +899,8 @@ private final class FakeVoiceAPI: CoachAPIProviding {
     ) -> AsyncThrowingStream<CoachStreamEvent, Error> {
         fatalError("unused by CoachVoiceController")
     }
+
+    func deleteMealLog(id: String) async throws {
+        fatalError("unused by CoachVoiceController")
+    }
 }

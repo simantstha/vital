@@ -69,6 +69,14 @@ extension Notification.Name {
     /// or invalidated token returns them to the sign-in screen instead of
     /// leaving a "signed in" session where every request silently 401s.
     static let vitalSessionExpired = Notification.Name("vitalSessionExpired")
+
+    /// Posted by `CoachViewModel` right after a `meal_logged` SSE event lands
+    /// (a coach-driven meal log) or a receipt's Undo completes successfully.
+    /// `TodayViewModel` observes this and re-fetches `/api/today` so the fuel
+    /// strip's diet card updates without waiting for pull-to-refresh — the
+    /// same foreground-observer pattern it already uses for calendar/app
+    /// lifecycle events (see `TodayViewModel.init`).
+    static let vitalCoachMealLogChanged = Notification.Name("vitalCoachMealLogChanged")
 }
 
 // MARK: - APIClient
@@ -627,6 +635,11 @@ struct APIClient {
         case "tool_data":
             guard let id = event.id, let viz = event.viz else { return nil }
             return .toolData(id: id, viz: viz)
+        case "meal_logged":
+            guard let id = event.id, let name = event.name,
+                  let kcal = event.kcal, let p = event.p, let c = event.c, let f = event.f
+            else { return nil }
+            return .mealLogged(CoachMealReceipt(id: id, name: name, kcal: kcal, p: p, c: c, f: f))
         case "handoff_card":
             guard let card = event.handoffCard else { return nil }
             return .handoffCard(card)
@@ -1925,6 +1938,11 @@ private struct SSEEvent: Decodable {
     let status: String?
     // tool_data field
     let viz: CoachViz?
+    // meal_logged fields (name/id above are shared with tool_call)
+    let kcal: Int?
+    let p: Int?
+    let c: Int?
+    let f: Int?
     // specialist lifecycle fields
     let phase: CoachHandoffPhase?
     let sessionId: String?
@@ -1983,10 +2001,26 @@ enum CoachStreamEvent: Equatable {
     case text(String)
     case toolCall(id: String, name: String, label: String, done: Bool)
     case toolData(id: String, viz: CoachViz)
+    /// A `log_meal` tool call just inserted a meal — enough to render an
+    /// inline receipt (name + macros) and issue an Undo (`deleteMealLog`)
+    /// without a round trip. See `CoachMealReceipt`.
+    case mealLogged(CoachMealReceipt)
     case handoffCard(CoachHandoffCard)
     case personaChanged(CoachPersonaSnapshot)
     case done
     case error(String)
+}
+
+/// Payload of a `meal_logged` SSE event (lib/brain/coach.ts). `id` is the
+/// backend `events` row id — the same id `APIClient.deleteMealLog(id:)` takes
+/// for Undo.
+struct CoachMealReceipt: Decodable, Equatable {
+    let id: String
+    let name: String
+    let kcal: Int
+    let p: Int
+    let c: Int
+    let f: Int
 }
 
 @MainActor
@@ -2012,6 +2046,9 @@ protocol CoachAPIProviding {
         actionId: String,
         action: SpecialistAction
     ) -> AsyncThrowingStream<CoachStreamEvent, Error>
+    /// Undo for an inline `LogReceiptCard` in the coach transcript — same
+    /// `DELETE /api/meals/log?id=` endpoint `DietSheetViewModel` uses.
+    func deleteMealLog(id: String) async throws
 }
 
 extension APIClient: CoachAPIProviding {}

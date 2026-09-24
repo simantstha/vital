@@ -48,6 +48,29 @@ test('POST preserves legacy event shapes and authenticates before running coach'
   ]);
 });
 
+test('POST forwards a meal_logged event verbatim so the client can render an inline receipt with Undo', async () => {
+  const handlers = createCoachHttpHandlers({
+    enabled: () => false,
+    authenticate: () => 'user-a',
+    runCoach() {
+      return events([
+        { type: 'meal_logged', id: 'evt-123', name: 'Two eggs and toast', kcal: 340, p: 18, c: 28, f: 16 },
+        { type: 'done', messageId: 'message-1' },
+      ]);
+    },
+    runAction() { throw new Error('not used'); },
+    async restore() { throw new Error('not used'); },
+  });
+  const response = await handlers.POST(new Request('http://local/api/coach', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ message: 'I had two eggs and toast' }),
+  }));
+  const [mealLogged] = await sse(response);
+  assert.deepEqual(mealLogged, {
+    type: 'meal_logged', id: 'evt-123', name: 'Two eggs and toast', kcal: 340, p: 18, c: 28, f: 16,
+  });
+});
+
 test('POST forwards findingId from a tapped coach-nudge deep link so context assembly can load it', async () => {
   let calledWith: unknown[] = [];
   const handlers = createCoachHttpHandlers({

@@ -809,6 +809,10 @@ final class FakeCoachAPI: CoachAPIProviding {
     var holdActionStreamOpen = false
     private var heldActionContinuation: AsyncThrowingStream<CoachStreamEvent, Error>.Continuation?
     private var shouldFinishHeldAction = false
+    /// Set by a test to make the next `deleteMealLog(id:)` call throw — used
+    /// to drive `MealReceiptRow`'s undo-failed state.
+    var deleteMealLogFailure: Error?
+    private(set) var deletedMealLogIds: [String] = []
 
     init(restoration: CoachRestorationResponse) {
         self.restoration = restoration
@@ -876,6 +880,11 @@ final class FakeCoachAPI: CoachAPIProviding {
     func finishHeldAction() {
         shouldFinishHeldAction = true
         heldActionContinuation?.finish()
+    }
+
+    func deleteMealLog(id: String) async throws {
+        deletedMealLogIds.append(id)
+        if let deleteMealLogFailure { throw deleteMealLogFailure }
     }
 
     private func stream(

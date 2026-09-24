@@ -13,6 +13,20 @@ import {
 
 type DrizzleDatabase = typeof applicationDb;
 
+// KNOWN GAP (coach-log-receipts, 2026-09-24): restoration only ever replays
+// each persisted message's `content` (prose) — it does not carry the
+// `tool_calls` column (see `messages.tool_calls` / `toolCallLog` in
+// lib/brain/coach.ts) or any per-tool-call structured result. That means a
+// `meal_logged` receipt (`LogReceiptCard` + Undo) only appears for the LIVE
+// SSE turn that logged it; reopening the Coach tab after a restart, or after
+// the 4h conversation-window reset, shows the assistant's prose reply but no
+// receipt card, even though the meal itself is still logged (Undo is then
+// only reachable from the Diet sheet). Fixing this needs `tool_calls` (or a
+// new column) to carry the log_meal result through restoration, a
+// `RestoredCoachMessage` field for it, an iOS model/decoding change, and
+// `CoachViewModel.restoredRow`/`AssistantTurnView` support for synthesizing a
+// `MealReceiptRow` from history — out of scope here; flagged rather than
+// hacked in per this change's brief.
 export interface RestoredCoachMessage {
   id: string;
   role: string;
