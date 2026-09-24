@@ -2,9 +2,10 @@ import SwiftUI
 
 /// Today's endurance goal hero (docs/ux-spec-v4.md §4.1): a readiness word
 /// derived only from the existing gated verdicts, a one-line HRV/Sleep/RHR
-/// reason, and today's session from the plan. Weekly volume needs history
-/// Today doesn't load yet — see `EnduranceHeroLogic.weeklyVolumeText`'s doc
-/// comment — so it's shown only when the caller has it (P4).
+/// reason, today's session from the plan, and a "this week" line. Weekly
+/// volume and the session dots are fed by `GET /api/training/summary`
+/// (#202, `TodayViewModel.trainingSummary`) and hidden whenever that data
+/// is absent — never fabricated (P4).
 struct EnduranceHeroView: View {
     /// `nil` while still calibrating — the headline then shows
     /// `calibratingText` instead of a word derived from possibly-ungated
@@ -15,7 +16,15 @@ struct EnduranceHeroView: View {
 
     /// Today's move-kind plan item, or `nil` for a rest day.
     let session: PlanItem?
+    /// "X km this week" / "X of Y km" — `TodayViewModel
+    /// .enduranceWeeklyVolumeText`. `nil` hides the line.
     let weeklyVolumeText: String?
+    /// Done/total for the "● ● ○ ○" dot row — same rule and source data as
+    /// the muscle hero (`TodayViewModel.trainingSessionDots`).
+    var sessionDots: (done: Int, total: Int)? = nil
+    /// "2 of 4 sessions" / the no-plan-data fallback —
+    /// `TodayViewModel.trainingSessionsThisWeekText`.
+    var sessionsThisWeekText: String? = nil
 
     var onTapSession: (PlanItem) -> Void
 
@@ -39,16 +48,39 @@ struct EnduranceHeroView: View {
 
                 sessionSection
 
+                if sessionDots != nil || sessionsThisWeekText != nil {
+                    weekRow
+                        .transition(.opacity)
+                }
+
                 if let weeklyVolumeText {
                     Text(weeklyVolumeText)
                         .font(.system(size: 12))
                         .foregroundStyle(Theme.Colors.textTertiary)
                         .monospacedDigit()
+                        .transition(.opacity)
                 }
             }
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilityLabel)
+    }
+
+    /// Same shared dot-row + count convention as `MuscleHeroView.weekRow`.
+    @ViewBuilder
+    private var weekRow: some View {
+        HStack(spacing: Theme.Spacing.sm) {
+            if let sessionDots {
+                SessionDotsRow(done: sessionDots.done, total: sessionDots.total)
+            }
+            if let sessionsThisWeekText {
+                Text(sessionsThisWeekText)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.Colors.textTertiary)
+                    .monospacedDigit()
+            }
+        }
+        .accessibilityIdentifier("today.enduranceHero.weekRow")
     }
 
     @ViewBuilder
@@ -82,6 +114,7 @@ struct EnduranceHeroView: View {
         var parts: [String] = [calibratingText ?? readinessWord?.rawValue ?? EnduranceHeroLogic.ReadinessWord.goodToTrain.rawValue]
         if calibratingText == nil, let reasonLine { parts.append(reasonLine) }
         parts.append(session?.title ?? EnduranceHeroLogic.restDayText)
+        if let sessionsThisWeekText { parts.append(sessionsThisWeekText) }
         if let weeklyVolumeText { parts.append(weeklyVolumeText) }
         return parts.joined(separator: ". ")
     }

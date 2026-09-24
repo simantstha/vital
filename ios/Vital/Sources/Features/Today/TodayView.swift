@@ -94,6 +94,9 @@ struct TodayView: View {
                                     session: vm.todayMoveSession,
                                     proteinHave: vm.diet.protein.current,
                                     proteinGoal: vm.diet.protein.target,
+                                    lastLiftText: vm.muscleLastLiftText,
+                                    sessionsThisWeekText: vm.trainingSessionsThisWeekText,
+                                    sessionDots: vm.trainingSessionDots,
                                     onTapSession: { actionsItem = $0 }
                                 )
                             }
@@ -104,12 +107,13 @@ struct TodayView: View {
                                     calibratingText: vm.enduranceCalibratingText,
                                     reasonLine: vm.enduranceReasonLine,
                                     session: vm.todayMoveSession,
-                                    // Weekly volume needs history Today
-                                    // doesn't load yet — see
-                                    // `EnduranceHeroLogic.weeklyVolumeText`'s
-                                    // doc comment — so this is always nil
-                                    // rather than a fabricated total (P4).
-                                    weeklyVolumeText: nil,
+                                    // Fed by GET /api/training/summary (#202)
+                                    // — nil (hiding the line) whenever that
+                                    // hasn't loaded or has no distance data
+                                    // this week (P4).
+                                    weeklyVolumeText: vm.enduranceWeeklyVolumeText,
+                                    sessionDots: vm.trainingSessionDots,
+                                    sessionsThisWeekText: vm.trainingSessionsThisWeekText,
                                     onTapSession: { actionsItem = $0 }
                                 )
                             }

@@ -157,6 +157,18 @@ final class ScreenshotTests: XCTestCase {
                                "Today's muscle hero should show today's strength session [\(appearance)]")
                 XCTAssertTrue(waitForText(app, containing: "Protein 158 / 190 g"),
                                "Today's muscle hero should show the protein have/goal line [\(appearance)]")
+                // The "last time" lift line — fixture-unique "3×5" set/rep
+                // count (`FixtureData.trainingSummary`'s squat lastLift),
+                // only rendered once `/api/training/summary` decodes
+                // (#202) — fails loudly if that endpoint's fixture
+                // interception ever regresses.
+                XCTAssertTrue(waitForText(app, containing: "3×5"),
+                               "Today's muscle hero should show the last-lift set×rep line [\(appearance)]")
+                XCTAssertTrue(waitForText(app, containing: "140 kg"),
+                               "Today's muscle hero should show the last-lift weight [\(appearance)]")
+                // "This week" — 2 of 4 planned sessions (fixture-unique).
+                XCTAssertTrue(waitForText(app, containing: "2 of 4 sessions"),
+                               "Today's muscle hero should show the this-week session count [\(appearance)]")
             }
 
             if scenario == "endurance" {
@@ -169,6 +181,15 @@ final class ScreenshotTests: XCTestCase {
                                "Today's endurance hero should show a readiness word [\(appearance)]")
                 XCTAssertTrue(waitForText(app, containing: "10km tempo run"),
                                "Today's endurance hero should show today's session [\(appearance)]")
+                // Weekly volume — fixture-unique 24.5km done, no target, so
+                // "24.5 km this week" (only rendered once
+                // `/api/training/summary` decodes, #202).
+                XCTAssertTrue(waitForText(app, containing: "24.5 km this week"),
+                               "Today's endurance hero should show this week's volume [\(appearance)]")
+                // No plan data this week for endurance (`plannedSessions:
+                // null`) — the no-dots fallback copy, 3 completed sessions.
+                XCTAssertTrue(waitForText(app, containing: "3 sessions this week"),
+                               "Today's endurance hero should show the no-plan-data session fallback [\(appearance)]")
             }
 
             if scenario == "new_user" {

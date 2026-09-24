@@ -33,6 +33,16 @@ enum FixtureData {
         let why: String
     }
 
+    /// GET /api/training/summary's `lastLift` (#202) for a fixture scenario.
+    /// `date` is a resolved `dayString(_:)` value, not a raw offset.
+    private struct FixtureLastLift {
+        let exercise: String
+        let date: String
+        let sets: Int
+        let reps: Int
+        let weightKg: Double?
+    }
+
     private struct Profile {
         let goal: String
         let name: String
@@ -60,6 +70,21 @@ enum FixtureData {
         let distanceKm: Double
         let workoutTitle: String?
         let workoutKm: Double?
+
+        // GET /api/training/summary (#202) — `var`, not `let`: a stored
+        // `let` with a default value is EXCLUDED from Swift's synthesized
+        // memberwise initializer (a constant can't be assigned twice), so a
+        // `let` here would drop these from `Profile.init` entirely and
+        // break every scenario literal that passes them. `var` with a
+        // default IS included as a defaulted parameter — every existing
+        // scenario literal above still needs no change; only `.muscle`/
+        // `.endurance` set these, and `trainingSummary(_:)` returns nil
+        // (404) when all three are absent, matching a real backend's
+        // response for a weight_loss/general account with no training data.
+        var lastLift: FixtureLastLift? = nil
+        var weeklyVolumeKm: Double? = nil
+        var plannedSessionsThisWeek: Int? = nil
+        var completedSessionsThisWeek: Int? = nil
     }
 
     private static let coachOpener =
@@ -123,7 +148,13 @@ enum FixtureData {
             ],
             weightKg: 79, weightTrendPerWeekKg: 0.35,
             hrv: 62, restingHR: 52, sleepMinutes: 450, steps: 7200, distanceKm: 4.8,
-            workoutTitle: nil, workoutKm: nil
+            workoutTitle: nil, workoutKm: nil,
+            // GET /api/training/summary (#202): last lift squat 3×5 @ 140kg,
+            // 2 of 4 planned sessions done this week.
+            lastLift: FixtureLastLift(exercise: "Squat", date: dayString(2), sets: 3, reps: 5, weightKg: 140),
+            weeklyVolumeKm: nil,
+            plannedSessionsThisWeek: 4,
+            completedSessionsThisWeek: 2
         ),
         .endurance: Profile(
             goal: "endurance",
@@ -146,7 +177,15 @@ enum FixtureData {
             ],
             weightKg: 61, weightTrendPerWeekKg: -0.1,
             hrv: 68, restingHR: 46, sleepMinutes: 445, steps: 11200, distanceKm: 12.4,
-            workoutTitle: "10km tempo run", workoutKm: 10.2
+            workoutTitle: "10km tempo run", workoutKm: 10.2,
+            // GET /api/training/summary (#202): 24.5km done this week, no
+            // target (matches the real API's always-null target today), 3
+            // completed sessions with no plan data (`plannedSessions: null`)
+            // — exercises the "N sessions this week" no-dots fallback copy.
+            lastLift: nil,
+            weeklyVolumeKm: 24.5,
+            plannedSessionsThisWeek: nil,
+            completedSessionsThisWeek: 3
         ),
     ]
 
@@ -210,6 +249,15 @@ enum FixtureData {
             return (200, jsonData(weightLog(profile)))
         case ("POST", "/api/weight-log"):
             return (200, jsonData(["ok": true]))
+        case ("GET", "/api/training/summary"):
+            // Only `.muscle`/`.endurance` carry training-summary data — every
+            // other scenario 404s here, same as a real backend account with
+            // no training history, so the muscle/endurance heroes' new lines
+            // stay fail-soft-hidden everywhere else.
+            guard let data = trainingSummary(profile) else {
+                return (404, jsonData(["error": "no training summary for this fixture scenario"]))
+            }
+            return (200, jsonData(data))
         default:
             return (404, jsonData(["error": "unhandled fixture endpoint: \(method) \(path)"]))
         }
@@ -601,6 +649,65 @@ enum FixtureData {
             "established": true,
         ]
         return ["entries": entries, "trend": trend]
+    }
+
+    // MARK: - GET /api/training/summary → TrainingSummaryResponse (#202)
+
+    /// `nil` (→ 404) when the scenario has no training data at all — mirrors
+    /// a real backend account with no logged sets, HealthKit workouts, or
+    /// plan 'move' items this week; every field the muscle/endurance heroes
+    /// read must then stay hidden rather than fabricated (P4).
+    private static func trainingSummary(_ profile: Profile) -> [String: Any]? {
+        guard profile.lastLift != nil
+                || profile.weeklyVolumeKm != nil
+                || profile.completedSessionsThisWeek != nil else {
+            return nil
+        }
+
+        let planned = profile.plannedSessionsThisWeek ?? 0
+        let completed = profile.completedSessionsThisWeek ?? 0
+        // 7 days, oldest first (Mon..Sun-shaped) — the first `planned` days
+        // are marked planned, the first `completed` of those (or, when
+        // there's no plan data at all, just the first `completed` days
+        // overall) are marked completed. A fixture-only simplification —
+        // real data need not be this front-loaded — but it exercises both
+        // the dots (muscle) and no-dots fallback (endurance) paths.
+        let days = (0..<7).map { i -> [String: Any] in
+            let daysAgo = 6 - i
+            return [
+                "date": dayString(daysAgo),
+                "planned": i < planned,
+                "completed": i < completed,
+            ]
+        }
+
+        let week: [String: Any] = [
+            "start": dayString(6),
+            "plannedSessions": nullable(profile.plannedSessionsThisWeek),
+            "completedSessions": completed,
+            "days": days,
+        ]
+
+        let volume: [String: Any] = [
+            "unit": "km",
+            "done": nullable(profile.weeklyVolumeKm),
+            "target": NSNull(), // always null today — see lib/trainingSummary.ts
+        ]
+
+        let lastLift: Any
+        if let lift = profile.lastLift {
+            lastLift = [
+                "exercise": lift.exercise,
+                "date": lift.date,
+                "sets": lift.sets,
+                "reps": lift.reps,
+                "weightKg": nullable(lift.weightKg),
+            ]
+        } else {
+            lastLift = NSNull()
+        }
+
+        return ["week": week, "volume": volume, "lastLift": lastLift]
     }
 
     // MARK: - GET /api/notification-preferences → NotificationPreferences

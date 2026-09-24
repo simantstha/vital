@@ -257,6 +257,116 @@ final class TodayViewModel: ObservableObject {
         }
     }
 
+    // MARK: - Training summary (Today muscle/endurance heroes, #202)
+
+    /// `nil` until `/api/training/summary` resolves — fetched (fail-soft,
+    /// same convention as `weightLog`/`enduranceTrendsBatch`) only for the
+    /// muscle/endurance goals that actually render its data. Deliberately
+    /// NOT part of `performLoad`'s awaited batch: it's a secondary
+    /// enhancement, not core Today content, so it must never add a network
+    /// round-trip to the time-to-`.loaded` critical path. Instead
+    /// `performLoad` kicks it off unstructured (`refreshTrainingSummary`)
+    /// right after `loadState = .loaded`, and the new hero lines fade in
+    /// (`Theme.Motion.appear` + the views' `.transition(.opacity)`) once it
+    /// arrives — see docs/ux-spec-v4.md §4.1.
+    @Published private(set) var trainingSummary: TrainingSummaryResponse? = nil
+
+    private var trainingSummaryTask: Task<Void, Never>?
+    /// Bumped on every `refreshTrainingSummary()` call so a stale in-flight
+    /// fetch (superseded by a pull-to-refresh or another reload before the
+    /// first one returned) can detect it lost the race and drop its result
+    /// instead of overwriting newer data — cancelling the previous task
+    /// alone isn't enough, since a request already past its await point can
+    /// still resolve after cancellation.
+    private var trainingSummaryGeneration = 0
+
+    /// Cancels any in-flight fetch and starts a fresh one — called for
+    /// every load (initial + pull-to-refresh) when the goal is muscle or
+    /// endurance, and clears `trainingSummary` immediately for every other
+    /// goal (a goal switch must never leave a stale hero's data behind).
+    private func refreshTrainingSummary() {
+        trainingSummaryTask?.cancel()
+
+        guard isMuscleGoal || isEnduranceGoal else {
+            trainingSummary = nil
+            return
+        }
+
+        trainingSummaryGeneration += 1
+        let generation = trainingSummaryGeneration
+
+        trainingSummaryTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let result = try await self.apiClient.fetchTrainingSummary()
+                guard !Task.isCancelled, generation == self.trainingSummaryGeneration else { return }
+                withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.appear) {
+                    self.trainingSummary = result
+                }
+            } catch {
+                if !error.isCancellation {
+                    print("[Vital] fetchTrainingSummary failed: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
+    /// The muscle hero's "Last (Mon): Deadlift 2×5 @ 150 kg" line — `nil`
+    /// whenever there's no logged strength history yet (never fabricated).
+    var muscleLastLiftText: String? {
+        guard let lift = trainingSummary?.lastLift else { return nil }
+        return MuscleHeroLogic.lastLiftText(
+            exercise: lift.exercise,
+            date: lift.date,
+            sets: lift.sets,
+            reps: lift.reps,
+            weightKg: lift.weightKg,
+            system: UnitPreference.shared.current
+        )
+    }
+
+    /// Planned-vs-completed records for `MuscleHeroLogic.sessionsThisWeek`,
+    /// or `nil` before `trainingSummary` loads.
+    private var weeklySessionRecords: [MuscleHeroLogic.WeeklySessionRecord]? {
+        trainingSummary?.week.days.map {
+            MuscleHeroLogic.WeeklySessionRecord(planned: $0.planned, completed: $0.completed)
+        }
+    }
+
+    /// Done/total for the "● ● ○ ○" dot row shared by both heroes
+    /// (`SessionDotsRow`) — `nil` when `plannedSessions` is null (nothing
+    /// planned this week to compare against) or before `trainingSummary`
+    /// loads. Same rule for muscle and endurance (task's §4 note). Exposed
+    /// as counts rather than `MuscleHeroLogic.sessionDots`'s formatted
+    /// string so the view can color each dot individually.
+    var trainingSessionDots: (done: Int, total: Int)? {
+        guard trainingSummary?.week.plannedSessions != nil, let records = weeklySessionRecords else { return nil }
+        let counts = MuscleHeroLogic.sessionsThisWeek(records)
+        return MuscleHeroLogic.sessionDots(done: counts.done, total: counts.total) != nil ? counts : nil
+    }
+
+    /// "2 of 4 sessions" when `plannedSessions` is known, or the honest
+    /// "N sessions this week" fallback when it's null — `nil` only before
+    /// `trainingSummary` loads.
+    var trainingSessionsThisWeekText: String? {
+        guard let week = trainingSummary?.week else { return nil }
+        if week.plannedSessions != nil, let records = weeklySessionRecords {
+            let counts = MuscleHeroLogic.sessionsThisWeek(records)
+            return MuscleHeroLogic.sessionsThisWeekText(done: counts.done, total: counts.total)
+        }
+        return MuscleHeroLogic.sessionsThisWeekFallbackText(completed: week.completedSessions)
+    }
+
+    /// The endurance hero's "X km this week" / "X of Y km" line — `nil`
+    /// when `volume.done` is null (no workout this week carries a distance
+    /// reading).
+    var enduranceWeeklyVolumeText: String? {
+        guard let volume = trainingSummary?.volume else { return nil }
+        return EnduranceHeroLogic.weeklyVolumeText(
+            kmDone: volume.done, kmTarget: volume.target, system: UnitPreference.shared.current
+        )
+    }
+
     // MARK: - Weight-loss hero (§4.1, §5.3)
 
     /// "weight_loss" | "muscle" | "endurance" | "general" — from
@@ -423,6 +533,14 @@ final class TodayViewModel: ObservableObject {
             didLoadToday = true
             applyPlanResult(plan, todayPlan: response.plan)
             withAnimation(Theme.Motion.appear) { loadState = .loaded }
+            // `/api/training/summary` only feeds the muscle/endurance heroes
+            // — `goal` is only known once `applyTodayResponse` above runs,
+            // so this can't join the concurrent batch further up. Kicked off
+            // AFTER `.loaded` (never awaited here): it's a secondary
+            // enhancement, not core Today content, and must never add a
+            // round-trip to the time-to-`.loaded` critical path. See
+            // `refreshTrainingSummary`'s doc comment.
+            refreshTrainingSummary()
 
         case .cancelled:
             // A stale in-flight load was superseded (tab switch, interrupted
