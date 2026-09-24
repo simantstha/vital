@@ -1,4 +1,5 @@
 import XCTest
+import CoreGraphics
 
 /// Screenshot harness (see docs/CI-TESTFLIGHT.md — "iOS screenshot harness").
 ///
@@ -111,36 +112,57 @@ final class ScreenshotTests: XCTestCase {
         return app.staticTexts.matching(predicate).firstMatch.waitForExistence(timeout: timeout)
     }
 
-    /// Waits for `element` to exist, then taps it once it's actually
-    /// `isHittable` — never a bare `.tap()` on a coordinate that might be
-    /// off-screen or obscured. Today's content can extend below the visible
-    /// fold depending on the fixture/time-of-day layout (see `AppClock`'s
-    /// doc comment for the concrete failure this guards against), so a
-    /// bounded number of `swipeUp()`s bring it into view first when needed.
-    /// Fails with a clear, element-naming message (rather than XCUITest's
-    /// own less legible tap-failure error) if the element never becomes
-    /// hittable at all.
+    /// Waits for `element` to exist, then taps it once it's both
+    /// `isHittable` AND clear of the bottom chrome — never a bare `.tap()`
+    /// on a coordinate that might be off-screen or obscured. `isHittable`
+    /// only means the element's centre point is on screen; on iOS 26 the
+    /// floating Liquid Glass tab bar (and Today's mic FAB) overlay the
+    /// scroll content, so an element sitting just above/under that chrome
+    /// can report `isHittable` while its tap is still absorbed by whatever
+    /// is layered on top. "Clear" means the element's frame sits above the
+    /// tab bar (with an 8pt margin) when one exists, or above 80% of the
+    /// screen height otherwise.
+    ///
+    /// Nudges the element into view with a bounded number of gentle,
+    /// slow drags (never a full `swipeUp()`, which can overshoot the
+    /// element past the top of the screen) rather than sleeping. Fails
+    /// with a `description`-labeled message (never XCUITest's own less
+    /// legible tap-failure error, and never a dumped element tree) if the
+    /// element never appears or never clears the chrome.
     private func tapWhenHittable(
         _ element: XCUIElement,
         app: XCUIApplication,
         maxSwipes: Int = 3,
         timeout: TimeInterval = 10,
-        description: String? = nil
+        description: String
     ) {
-        let name = description ?? element.debugDescription
         guard element.waitForExistence(timeout: timeout) else {
-            XCTFail("\(name) never appeared to tap")
+            XCTFail("\(description) never appeared to tap")
             return
         }
 
+        func isClearOfBottomChrome() -> Bool {
+            let tabBar = app.tabBars.firstMatch
+            if tabBar.exists {
+                return element.frame.maxY <= tabBar.frame.minY - 8
+            }
+            return element.frame.maxY <= app.frame.maxY * 0.8
+        }
+
         var swipes = 0
-        while !element.isHittable && swipes < maxSwipes {
-            app.swipeUp()
+        while (!element.isHittable || !isClearOfBottomChrome()) && swipes < maxSwipes {
+            // A gentle drag from 70% down the screen to 45% — a smaller,
+            // slower nudge than `swipeUp()` so a short scroll distance
+            // doesn't overshoot the element off the top of the screen.
+            let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7))
+            let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45))
+            start.press(forDuration: 0.05, thenDragTo: end)
             swipes += 1
         }
 
-        guard element.isHittable else {
-            XCTFail("\(name) exists but never became hittable after \(maxSwipes) swipeUp()s")
+        guard element.isHittable, isClearOfBottomChrome() else {
+            XCTFail("\(description) exists but never became hittable and clear of "
+                     + "the bottom chrome after \(maxSwipes) scroll attempts")
             return
         }
 
