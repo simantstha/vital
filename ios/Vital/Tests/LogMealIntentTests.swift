@@ -4,21 +4,55 @@ import XCTest
 /// A fake `QuickLogServicing` — success/failure driven by `result`/`error`,
 /// records calls so tests can assert what `LogMealIntent`/`UndoQuickLogIntent`
 /// passed through.
+///
+/// `QuickLogServicing` now requires `Sendable` (App Intents itself requires
+/// it for a stored property on an `AppIntent`), so this can't be a plain
+/// mutable class — `@unchecked Sendable` only promises the compiler this
+/// type manages its own thread safety, so `result`/`error`/the two call
+/// logs actually have to be protected, not just declared and left racy.
+/// An `NSLock` (rather than an `actor`) keeps every existing call site —
+/// `fake.result = …`, `fake.quickLogCalls` — synchronous and unchanged.
 final class FakeQuickLogService: QuickLogServicing, @unchecked Sendable {
-    var result: QuickLogResult?
-    var error: Error?
-    private(set) var quickLogCalls: [String] = []
-    private(set) var undoCalls: [String] = []
+    private let lock = NSLock()
+    private var _result: QuickLogResult?
+    private var _error: Error?
+    private var _quickLogCalls: [String] = []
+    private var _undoCalls: [String] = []
+
+    var result: QuickLogResult? {
+        get { lock.lock(); defer { lock.unlock() }; return _result }
+        set { lock.lock(); _result = newValue; lock.unlock() }
+    }
+
+    var error: Error? {
+        get { lock.lock(); defer { lock.unlock() }; return _error }
+        set { lock.lock(); _error = newValue; lock.unlock() }
+    }
+
+    var quickLogCalls: [String] {
+        lock.lock(); defer { lock.unlock() }; return _quickLogCalls
+    }
+
+    var undoCalls: [String] {
+        lock.lock(); defer { lock.unlock() }; return _undoCalls
+    }
 
     func quickLog(text: String) async throws -> QuickLogResult {
-        quickLogCalls.append(text)
-        if let error { throw error }
-        return result ?? QuickLogResult(id: "event-1", name: "food", kcal: 100, slot: "lunch")
+        lock.lock()
+        _quickLogCalls.append(text)
+        let thrown = _error
+        let toReturn = _result
+        lock.unlock()
+        if let thrown { throw thrown }
+        return toReturn ?? QuickLogResult(id: "event-1", name: "food", kcal: 100, slot: "lunch")
     }
 
     func undo(id: String) async throws {
-        undoCalls.append(id)
-        if let error { throw error }
+        lock.lock()
+        _undoCalls.append(id)
+        let thrown = _error
+        lock.unlock()
+        if let thrown { throw thrown }
     }
 }
 
