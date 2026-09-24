@@ -371,6 +371,27 @@ extension ButtonStyle where Self == VitalButtonStyle {
     static func vital(scale: CGFloat) -> VitalButtonStyle { VitalButtonStyle(scale: scale) }
 }
 
+/// Unified press state for tappable cards/rows (fuel strip, plan rows,
+/// profile rows) — 0.98 scale + a slight opacity dim, both animated with
+/// `Theme.Motion.micro`. Prefer `.pressableCard` over `.vital`/`.plain` for
+/// any new card/row press state so every tappable card in the app reads as
+/// one consistent family. Do NOT apply inside a `.glassEffect` container —
+/// see `VitalButtonStyle`'s warning above; glass cards (e.g.
+/// `MetricTileView`'s grid tiles, `TrendsWeightCard`) keep the opacity-only
+/// `TilePressStyle` instead, for the same backdrop-blur-resampling reason.
+struct PressableCardStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.98 : 1.0)
+            .opacity(configuration.isPressed ? 0.88 : 1.0)
+            .animation(Theme.Motion.micro, value: configuration.isPressed)
+    }
+}
+
+extension ButtonStyle where Self == PressableCardStyle {
+    static var pressableCard: PressableCardStyle { PressableCardStyle() }
+}
+
 extension View {
     /// Applies `Theme.Typography.screenTitle` with the mock's tight tracking.
     func screenTitleStyle() -> some View {
@@ -391,5 +412,41 @@ extension View {
     /// large movement when Reduce Motion is on.
     func motionTransition(_ style: MotionTransition) -> some View {
         modifier(MotionTransitionModifier(style: style))
+    }
+
+    /// A short staggered fade + slide-up for a tab's first-load content
+    /// (skeleton → content), applied per card. `index` is clamped to 0...4
+    /// (a 5-item cap) so a longer list can never push the last card's
+    /// entrance past the 0.5s the screenshot harness's `waitForExistence`
+    /// budgets for settling — at 40ms/step plus `Theme.Motion.appear`'s
+    /// 0.25s duration, the slowest card finishes at 0.16s + 0.25s = 0.41s.
+    /// Reduce Motion: no slide/delay, the card just appears (a crossfade is
+    /// still provided by the skeleton→content `.motionTransition` this sits
+    /// inside, so nothing pops in as a hard cut).
+    ///
+    /// Don't use inside `Lazy*` containers — cell reuse resets `@State` and
+    /// replays the entrance on scroll.
+    func staggeredAppear(index: Int) -> some View {
+        modifier(StaggeredAppearModifier(index: index))
+    }
+}
+
+private struct StaggeredAppearModifier: ViewModifier {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let index: Int
+    @State private var appeared = false
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(appeared || reduceMotion ? 1 : 0)
+            .offset(y: appeared || reduceMotion ? 0 : 8)
+            .onAppear {
+                guard !reduceMotion else { return }
+                let step = min(max(index, 0), 4)
+                let delay = Double(step) * 0.04
+                withAnimation(Theme.Motion.appear.delay(delay)) {
+                    appeared = true
+                }
+            }
     }
 }

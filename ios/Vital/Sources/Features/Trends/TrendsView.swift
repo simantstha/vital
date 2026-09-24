@@ -48,6 +48,7 @@ struct TrendsView: View {
                         if showsWeightCard {
                             weightCardView
                                 .motionTransition(.fade)
+                                .staggeredAppear(index: 0)
                         }
 
                         if let summaryErrorMessage = vm.summaryErrorMessage, vm.errorMessage == nil {
@@ -64,6 +65,7 @@ struct TrendsView: View {
 
                         if vm.showsWeekCard {
                             WeeklyHeadlineStrip(vm: vm)
+                                .staggeredAppear(index: 1)
                         }
 
                         if let errorMessage = vm.errorMessage {
@@ -231,6 +233,12 @@ private extension TrendsView {
                     VStack(alignment: .leading, spacing: Theme.Spacing.md) {
                         sectionHeaderView(section.group)
                         LazyVGrid(columns: gridColumns, spacing: Theme.Spacing.md) {
+                            // No `.staggeredAppear` here — this is a
+                            // `LazyVGrid`, which discards and re-creates
+                            // offscreen cells (and their `@State`) as they
+                            // scroll in and out, so a staggered entrance
+                            // would replay every time a tile scrolls back
+                            // into view instead of once on first load.
                             ForEach(section.tiles, id: \.key) { tile in
                                 tileButton(tile)
                             }

@@ -9,6 +9,8 @@ struct DietBudgetCardView: View {
     let readOnly: Bool
     var onTap: (() -> Void)? = nil
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     var body: some View {
         if readOnly {
             VitalCard { content }
@@ -18,7 +20,7 @@ struct DietBudgetCardView: View {
             } label: {
                 VitalCard { content }
             }
-            .buttonStyle(.vital)
+            .buttonStyle(.pressableCard)
         }
     }
 
@@ -53,7 +55,7 @@ struct DietBudgetCardView: View {
                         .font(.system(size: 48, weight: .bold))
                         .monospacedDigit()
                         .foregroundStyle(Theme.Colors.textPrimary)
-                        .contentTransition(.numericText())
+                        .contentTransition(.numericText(value: Double(data.remaining)))
                     Text("kcal left")
                         .font(.system(size: 15))
                         .foregroundStyle(Theme.Colors.textSecondary)
@@ -73,7 +75,7 @@ struct DietBudgetCardView: View {
             }
 
             progressBar(fraction: eatenFraction)
-                .animation(Theme.Motion.settle, value: eatenFraction)
+                .animation(reduceMotion ? nil : Theme.Motion.settle, value: eatenFraction)
                 .padding(.top, Theme.Spacing.lg)
 
             HStack(spacing: Theme.Spacing.md) {
@@ -117,8 +119,10 @@ struct DietBudgetCardView: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
                     .layoutPriority(1)
+                    .contentTransition(.numericText())
             }
             progressBar(fraction: macro.fraction)
+                .animation(reduceMotion ? nil : Theme.Motion.settle, value: macro.fraction)
         }
         .frame(maxWidth: .infinity)
     }

@@ -118,6 +118,7 @@ private extension DietSheetView {
             Text("\(vm.remaining.formatted())")
                 .font(.system(size: 14, weight: .bold))
                 .foregroundStyle(Theme.Colors.textPrimary)
+                .contentTransition(.numericText(value: Double(vm.remaining)))
             Text("kcal left of")
                 .font(.system(size: 14))
                 .foregroundStyle(Theme.Colors.textSecondary)
@@ -150,6 +151,7 @@ private extension DietSheetView {
                     HStack(spacing: 3) {
                         Text(vm.target.formatted())
                             .font(.system(size: 14, weight: .bold))
+                            .contentTransition(.numericText(value: Double(vm.target)))
                         Image(systemName: "pencil")
                             .font(.system(size: 11, weight: .semibold))
                     }

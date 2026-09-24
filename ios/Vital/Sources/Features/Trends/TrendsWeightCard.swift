@@ -73,6 +73,7 @@ struct TrendsWeightCard: View {
                     Text(trendHeadline)
                         .font(.system(size: 20, weight: .bold, design: .rounded))
                         .foregroundStyle(Theme.Colors.textPrimary)
+                        .contentTransition(.numericText())
                     Spacer(minLength: Theme.Spacing.sm)
                     if let weeklyChange {
                         Text(weeklyChange)
@@ -89,6 +90,10 @@ struct TrendsWeightCard: View {
         }
     }
 
+    /// Same newest-point scale/fade-in as `WeightHeroView.sparkline` — kept
+    /// in sync so Today and Trends animate a fresh weigh-in identically.
+    @State private var newestPointRevealed = false
+
     private func sparkline(domain: ClosedRange<Double>) -> some View {
         Chart {
             ForEach(Array(sparklinePoints.enumerated()), id: \.offset) { _, point in
@@ -96,6 +101,12 @@ struct TrendsWeightCard: View {
                     .foregroundStyle(Theme.Colors.accentContent)
                     .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
                     .interpolationMethod(.catmullRom)
+            }
+            if let last = sparklinePoints.last {
+                PointMark(x: .value("Day", last.day), y: .value("Trend", last.value))
+                    .foregroundStyle(Theme.Colors.accentContent)
+                    .symbolSize(reduceMotion || newestPointRevealed ? 26 : 26 * 0.6)
+                    .opacity(reduceMotion || newestPointRevealed ? 1 : 0)
             }
         }
         .chartXAxis(.hidden)
@@ -107,6 +118,12 @@ struct TrendsWeightCard: View {
         // `WeightHeroView.sparkline`'s same call).
         .accessibilityHidden(true)
         .animation(reduceMotion ? nil : Theme.Motion.settle, value: sparklinePoints.map(\.value))
+        .onAppear { newestPointRevealed = true }
+        .onChange(of: sparklinePoints.count) { _, _ in
+            guard !reduceMotion else { return }
+            newestPointRevealed = false
+            withAnimation(Theme.Motion.settle) { newestPointRevealed = true }
+        }
     }
 
     private var accessibilityLabel: String {

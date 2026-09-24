@@ -68,11 +68,6 @@ struct OnboardingFlowView: View {
 private struct StepScaffold<Content: View>: View {
     let title: String
     var subtitle: String? = nil
-    /// A short second line under `subtitle`, only used where a step's form
-    /// is short enough to leave a dead zone above the pinned Continue button
-    /// (Basics) — gives the extra vertical space a reason to be there
-    /// instead of reading as a layout bug.
-    var helperText: String? = nil
     var continueTitle: String = "Continue"
     var continueDisabled: Bool = false
     var isBusy: Bool = false
@@ -91,11 +86,6 @@ private struct StepScaffold<Content: View>: View {
                         if let subtitle {
                             Text(subtitle)
                                 .font(Theme.Typography.bodyMedium)
-                                .foregroundStyle(Theme.Colors.textSecondary)
-                        }
-                        if let helperText {
-                            Text(helperText)
-                                .font(Theme.Typography.bodySmall)
                                 .foregroundStyle(Theme.Colors.textSecondary)
                         }
                     }
@@ -252,8 +242,7 @@ private struct BasicsStepView: View {
     var body: some View {
         StepScaffold(
             title: "Let's get to know you",
-            subtitle: "This helps your coach personalize everything that follows.",
-            helperText: "We use this to set your calorie and protein targets. You can change it anytime.",
+            subtitle: "We use this to set your calorie and protein targets. You can change it anytime.",
             continueDisabled: !vm.canContinueFromBasics,
             onContinue: vm.advance
         ) {

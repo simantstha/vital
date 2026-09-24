@@ -237,7 +237,7 @@ private extension ProfileView {
         NavigationLink { destination() } label: {
             settingsRowContent(icon: icon, title: title, value: value)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.pressableCard)
         .overlay(alignment: .top) { if index > 0 { rowHairline } }
     }
 
@@ -248,7 +248,7 @@ private extension ProfileView {
         Button(action: action) {
             settingsRowContent(icon: icon, title: title, value: value)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.pressableCard)
         .overlay(alignment: .top) { if index > 0 { rowHairline } }
     }
 
@@ -436,7 +436,7 @@ private extension ProfileView {
                     .padding(.vertical, Theme.Spacing.xs)
                 }
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.pressableCard)
         }
     }
 

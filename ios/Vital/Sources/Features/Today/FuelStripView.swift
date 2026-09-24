@@ -29,10 +29,12 @@ struct FuelStripView: View {
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(Theme.Colors.textPrimary)
                         .monospacedDigit()
+                        .contentTransition(.numericText(value: Double(kcalRemaining)))
                     Text(showsProtein ? "Protein \(proteinHave)/\(proteinGoal)g · tap to log a meal" : "tap to log a meal")
                         .font(.system(size: 13))
                         .foregroundStyle(Theme.Colors.textSecondary)
                         .monospacedDigit()
+                        .contentTransition(.numericText())
                     if consumedSource == "healthkit" {
                         Text(HealthAttributionLabel.text(sourceName: consumedSourceName))
                             .font(.system(size: 11))
@@ -54,7 +56,7 @@ struct FuelStripView: View {
                     .shadow(color: Theme.Colors.cardShadow, radius: 2, x: 0, y: 1)
             )
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.pressableCard)
         // Stable tap/wait target for the screenshot harness (VitalUITests) —
         // the label text above carries a live kcal number, too brittle to
         // match on directly.

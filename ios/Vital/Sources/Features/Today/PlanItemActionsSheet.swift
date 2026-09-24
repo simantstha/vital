@@ -17,6 +17,12 @@ struct PlanItemActionsSheet: View {
     var onViewMeal: (() -> Void)?
     var onCancel: () -> Void
 
+    /// Flips on every "Mark done" tap — drives the `.success` haptic below.
+    /// No haptic fired here before (coaching gap, pass-2 motion review,
+    /// 2026-09-24): the row's own "Log" pill already has `Theme.Haptics
+    /// .commit`, but marking done from this sheet had none.
+    @State private var markDoneTapped = false
+
     private struct Action {
         let label: String
         let icon: String
@@ -31,7 +37,10 @@ struct PlanItemActionsSheet: View {
             acts.append(Action(label: "View meal", icon: "fork.knife", danger: false, handler: onViewMeal))
         }
         if item.status != .done {
-            acts.append(Action(label: "Mark done", icon: "checkmark", danger: false, handler: onMarkDone))
+            acts.append(Action(label: "Mark done", icon: "checkmark", danger: false, handler: {
+                markDoneTapped.toggle()
+                onMarkDone()
+            }))
         }
         if item.status != .skipped && item.status != .done {
             acts.append(Action(label: "Skip today", icon: "circle.slash", danger: false, handler: onSkip))
@@ -88,6 +97,7 @@ struct PlanItemActionsSheet: View {
         }
         .padding(.horizontal, Theme.Spacing.xl)
         .padding(.bottom, Theme.Spacing.xxl)
+        .sensoryFeedback(Theme.Haptics.success, trigger: markDoneTapped)
     }
 
     private var header: some View {
