@@ -48,6 +48,7 @@ struct TrendsView: View {
                         if showsWeightCard {
                             weightCardView
                                 .motionTransition(.fade)
+                                .staggeredAppear(index: 0)
                         }
 
                         if let summaryErrorMessage = vm.summaryErrorMessage, vm.errorMessage == nil {
@@ -64,6 +65,7 @@ struct TrendsView: View {
 
                         if vm.showsWeekCard {
                             WeeklyHeadlineStrip(vm: vm)
+                                .staggeredAppear(index: 1)
                         }
 
                         if let errorMessage = vm.errorMessage {
@@ -227,12 +229,18 @@ private extension TrendsView {
             .motionTransition(.fade)
         } else {
             VStack(alignment: .leading, spacing: Theme.Spacing.xl) {
-                ForEach(sections, id: \.group.rawValue) { section in
+                ForEach(Array(sections.enumerated()), id: \.element.group.rawValue) { sectionIndex, section in
                     VStack(alignment: .leading, spacing: Theme.Spacing.md) {
                         sectionHeaderView(section.group)
                         LazyVGrid(columns: gridColumns, spacing: Theme.Spacing.md) {
-                            ForEach(section.tiles, id: \.key) { tile in
+                            ForEach(Array(section.tiles.enumerated()), id: \.element.key) { tileIndex, tile in
                                 tileButton(tile)
+                                    // Offset by 2 for the weight/weekly cards
+                                    // above — `staggeredAppear` clamps the
+                                    // index internally, so later sections
+                                    // just settle at the same final delay as
+                                    // the 5th card rather than compounding.
+                                    .staggeredAppear(index: 2 + sectionIndex + tileIndex)
                             }
                         }
                     }

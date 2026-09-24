@@ -866,7 +866,7 @@ final class TodayViewModel: ObservableObject {
         let carbsTarget   = db.carbsTarget   ?? Int((Double(db.targetKcal) * 0.40 / 4).rounded())
         let fatTarget     = db.fatTarget     ?? Int((Double(db.targetKcal) * 0.30 / 9).rounded())
 
-        diet = DietCard(
+        let newDiet = DietCard(
             kcalConsumed: db.consumedKcal,
             kcalTarget:   db.targetKcal,
             protein: MacroProgress(current: db.protein, target: proteinTarget),
@@ -876,6 +876,11 @@ final class TodayViewModel: ObservableObject {
             consumedSource: db.consumedSource,
             consumedSourceName: db.consumedSourceName
         )
+        // Drives the kcal-left numeric roll + progress-bar fill on Today's
+        // hero/fuel strip (`.contentTransition(.numericText(value:))` needs
+        // an animation context to actually roll rather than jump) — mirrors
+        // the hrv/sleep/restingHR `withAnimation` calls just above.
+        withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) { diet = newDiet }
     }
 
     // MARK: - Plan timeline (Phase 2: server-persisted via /api/plan)
@@ -1145,12 +1150,19 @@ final class TodayViewModel: ObservableObject {
         guard let idx = planItems.firstIndex(where: { $0.id == id }) else { return }
 
         if planItems[idx].source == .calendar {
-            planItems[idx].status = status
+            withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) {
+                planItems[idx].status = status
+            }
             return
         }
 
         let previousStatus = planItems[idx].status
-        planItems[idx].status = status
+        // Animates the row's checkmark symbolEffect + opacity dim (see
+        // `PlanRowView`) rather than snapping — same reasoning as the
+        // hrv/sleep/restingHR/diet `withAnimation` calls above.
+        withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) {
+            planItems[idx].status = status
+        }
 
         Task {
             do {
@@ -1158,7 +1170,9 @@ final class TodayViewModel: ObservableObject {
                 await refreshStreak()
             } catch {
                 if let idx = planItems.firstIndex(where: { $0.id == id }) {
-                    planItems[idx].status = previousStatus
+                    withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) {
+                        planItems[idx].status = previousStatus
+                    }
                 }
                 toastMessage = "Couldn't save — try again"
                 print("[Vital] updatePlanItem failed: \(error.localizedDescription)")
@@ -1237,7 +1251,14 @@ final class TodayViewModel: ObservableObject {
 
     private func loadWeightLog() async {
         do {
-            weightLog = try await apiClient.fetchWeightLog()
+            let fresh = try await apiClient.fetchWeightLog()
+            // Drives the hero's "Trend 82 kg" numeric roll and the
+            // sparkline's new-point animation (both `contentTransition`/
+            // `.animation(value:)` need an animation context to roll/extend
+            // rather than jump) — fires after every weigh-in refresh.
+            withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) {
+                weightLog = fresh
+            }
         } catch {
             print("[Vital] fetchWeightLog failed: \(error.localizedDescription)")
         }

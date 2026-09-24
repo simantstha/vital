@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import SwiftUI
 
 // MARK: - Diet slot
 
@@ -130,8 +131,14 @@ final class DietSheetViewModel: ObservableObject {
         async let recentsTask = apiClient.fetchNutritionRecents()
         do {
             let (goal, logs) = try await (goalTask, logsTask)
-            target = goal.current.targetKcal
-            loggedEntries = logs.items
+            // Animates the "N kcal left of M" roll (`.numericText(value:)`
+            // needs an animation context to roll rather than jump) whenever
+            // this refires — sheet reopen, a log/undo, or a coach log
+            // landing while the sheet is open.
+            withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) {
+                target = goal.current.targetKcal
+                loggedEntries = logs.items
+            }
         } catch {
             // Keep whatever we already had (initialTarget / previous list) —
             // the sheet stays usable; the next open retries.
@@ -161,16 +168,18 @@ final class DietSheetViewModel: ObservableObject {
             let db = today.dietBudget
             consumedSource = db.consumedSource
             consumedSourceName = db.consumedSourceName
-            if db.consumedSource == "healthkit" {
-                healthKitKcal = db.consumedKcal
-                healthKitProtein = db.protein
-                healthKitCarbs = db.carbs
-                healthKitFat = db.fat
-            } else {
-                healthKitKcal = 0
-                healthKitProtein = 0
-                healthKitCarbs = 0
-                healthKitFat = 0
+            withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) {
+                if db.consumedSource == "healthkit" {
+                    healthKitKcal = db.consumedKcal
+                    healthKitProtein = db.protein
+                    healthKitCarbs = db.carbs
+                    healthKitFat = db.fat
+                } else {
+                    healthKitKcal = 0
+                    healthKitProtein = 0
+                    healthKitCarbs = 0
+                    healthKitFat = 0
+                }
             }
         }
     }
@@ -214,7 +223,9 @@ final class DietSheetViewModel: ObservableObject {
                 slot: slot.rawValue,
                 loggedAt: Self.isoFormatter.string(from: Date())
             )
-            loggedEntries.append(entry)
+            withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) {
+                loggedEntries.append(entry)
+            }
             await refreshConsumedSource()
             showLoggedToast(for: entry)
             ReminderScheduler.shared.mealLogged(slot: slot)
@@ -253,7 +264,9 @@ final class DietSheetViewModel: ObservableObject {
                 slot: selectedSlot.rawValue,
                 loggedAt: Self.isoFormatter.string(from: Date())
             )
-            loggedEntries.append(entry)
+            withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) {
+                loggedEntries.append(entry)
+            }
             await refreshConsumedSource()
             customName = ""
             customKcal = ""
@@ -299,7 +312,9 @@ final class DietSheetViewModel: ObservableObject {
                 slot: slot.rawValue,
                 loggedAt: Self.isoFormatter.string(from: Date())
             )
-            loggedEntries.append(entry)
+            withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) {
+                loggedEntries.append(entry)
+            }
             await refreshConsumedSource()
             showLoggedToast(for: entry)
             ReminderScheduler.shared.mealLogged(slot: slot)
@@ -315,13 +330,17 @@ final class DietSheetViewModel: ObservableObject {
 
     func removeEntry(_ entry: MealLogEntryDTO) async {
         let previous = loggedEntries
-        loggedEntries.removeAll { $0.id == entry.id }
+        withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) {
+            loggedEntries.removeAll { $0.id == entry.id }
+        }
         do {
             try await apiClient.deleteMealLog(id: entry.id)
             await refreshConsumedSource()
             onRefreshToday()
         } catch {
-            loggedEntries = previous
+            withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) {
+                loggedEntries = previous
+            }
             toastMessage = "Couldn't save — try again"
         }
     }
@@ -345,12 +364,12 @@ final class DietSheetViewModel: ObservableObject {
 
     func updateTarget(_ newValue: Int) async {
         let previous = target
-        target = newValue
+        withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) { target = newValue }
         do {
             try await apiClient.updateDietGoal(mode: "custom", targetKcal: newValue)
             onRefreshToday()
         } catch {
-            target = previous
+            withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) { target = previous }
             toastMessage = "Couldn't save — try again"
         }
     }

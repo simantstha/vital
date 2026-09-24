@@ -202,7 +202,10 @@ final class TrendsViewModel: ObservableObject {
             return
         }
         guard goal == "weight_loss" else { return }
-        weightLog = try? await profileClient.fetchWeightLog()
+        let fresh = try? await profileClient.fetchWeightLog()
+        withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) {
+            weightLog = fresh
+        }
     }
 
     // MARK: - Computed stats (Last 7 days summary)

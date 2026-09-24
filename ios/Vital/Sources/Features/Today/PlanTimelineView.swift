@@ -39,7 +39,7 @@ struct PlanTimelineView: View {
                             } label: {
                                 PlanRowView(item: item, onLogItem: onLogItem)
                             }
-                            .buttonStyle(.vital)
+                            .buttonStyle(.pressableCard)
                             .overlay(alignment: .top) {
                                 if index > 0 {
                                     Rectangle()
@@ -129,6 +129,8 @@ private struct PlanRowView: View {
     let item: PlanItem
     let onLogItem: (PlanItem) -> Void
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     /// Flips on every "Log" pill tap — drives the commit haptic below.
     /// `onLogItem` is a caller-owned closure with no observable state of its
     /// own, so this local toggle is the state the tap "mutates" for
@@ -203,6 +205,7 @@ private struct PlanRowView: View {
         .contentShape(Rectangle())
         .background(isNow ? Theme.Colors.accentSoft.opacity(0.6) : Color.clear)
         .opacity(isDone ? 0.6 : (isSkipped ? 0.5 : 1.0))
+        .animation(reduceMotion ? nil : Theme.Motion.standard, value: item.status)
     }
 
     @ViewBuilder
@@ -211,6 +214,8 @@ private struct PlanRowView: View {
             Image(systemName: "checkmark")
                 .font(.system(size: 15, weight: .bold))
                 .foregroundStyle(Theme.Colors.accentContent)
+                .contentTransition(.symbolEffect(.replace))
+                .symbolEffect(.bounce, value: isDone)
         } else if isSkipped {
             Image(systemName: "xmark")
                 .font(.system(size: 14, weight: .bold))

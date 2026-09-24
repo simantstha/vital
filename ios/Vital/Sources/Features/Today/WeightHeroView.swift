@@ -74,7 +74,7 @@ struct WeightHeroView: View {
                                         .font(.system(size: 34, weight: .bold, design: .rounded))
                                         .foregroundStyle(Theme.Colors.textPrimary)
                                         .monospacedDigit()
-                                        .contentTransition(.numericText())
+                                        .contentTransition(.numericText(value: Double(max(0, kcalRemaining))))
                                     Text("kcal left")
                                         .font(.system(size: 15, weight: .semibold))
                                         .foregroundStyle(Theme.Colors.textSecondary)
@@ -83,6 +83,7 @@ struct WeightHeroView: View {
                                     .font(.system(size: 13))
                                     .foregroundStyle(Theme.Colors.textSecondary)
                                     .monospacedDigit()
+                                    .contentTransition(.numericText())
                             }
 
                             Spacer(minLength: Theme.Spacing.sm)
@@ -93,6 +94,7 @@ struct WeightHeroView: View {
                                     .foregroundStyle(Theme.Colors.textPrimary)
                                     .multilineTextAlignment(.trailing)
                                     .fixedSize(horizontal: false, vertical: true)
+                                    .contentTransition(.numericText())
                                 if let weeklyChange {
                                     Text(weeklyChange)
                                         .font(.system(size: 12))
@@ -110,6 +112,7 @@ struct WeightHeroView: View {
                             .font(.system(size: 11))
                             .foregroundStyle(Theme.Colors.textTertiary)
                             .monospacedDigit()
+                            .contentTransition(.numericText())
 
                         if let sparklineDomain {
                             sparkline(domain: sparklineDomain)
@@ -117,7 +120,7 @@ struct WeightHeroView: View {
                         }
                     }
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.pressableCard)
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel(accessibilityLabel)
                 .accessibilityIdentifier("today.fuelStrip")
@@ -129,6 +132,13 @@ struct WeightHeroView: View {
 
     // MARK: - Sparkline
 
+    /// Scale/fade-in for the newest trend point after a weigh-in — starts
+    /// small+transparent and springs up whenever a new point count arrives.
+    /// `false` under Reduce Motion, so the point is simply present at full
+    /// size (no line-extend cue at all, matching `MotionTransition`'s "no
+    /// large movement" rule).
+    @State private var newestPointRevealed = false
+
     private func sparkline(domain: ClosedRange<Double>) -> some View {
         Chart {
             ForEach(Array(sparklinePoints.enumerated()), id: \.offset) { _, point in
@@ -136,6 +146,12 @@ struct WeightHeroView: View {
                     .foregroundStyle(Theme.Colors.accentContent)
                     .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
                     .interpolationMethod(.catmullRom)
+            }
+            if let last = sparklinePoints.last {
+                PointMark(x: .value("Day", last.day), y: .value("Trend", last.value))
+                    .foregroundStyle(Theme.Colors.accentContent)
+                    .symbolSize(reduceMotion || newestPointRevealed ? 26 : 26 * 0.6)
+                    .opacity(reduceMotion || newestPointRevealed ? 1 : 0)
             }
         }
         .chartXAxis(.hidden)
@@ -146,6 +162,12 @@ struct WeightHeroView: View {
         // already carries the information a VoiceOver user needs.
         .accessibilityHidden(true)
         .animation(reduceMotion ? nil : Theme.Motion.settle, value: sparklinePoints.map(\.value))
+        .onAppear { newestPointRevealed = true }
+        .onChange(of: sparklinePoints.count) { _, _ in
+            guard !reduceMotion else { return }
+            newestPointRevealed = false
+            withAnimation(Theme.Motion.settle) { newestPointRevealed = true }
+        }
     }
 
     // MARK: - Weigh-in chip

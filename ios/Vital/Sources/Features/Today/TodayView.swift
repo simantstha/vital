@@ -76,6 +76,7 @@ struct TodayView: View {
                     case .loaded:
                         Group {
                             calibrationCard
+                                .staggeredAppear(index: 0)
                             pendingFactsBanner
 
                             // Goal hero (§4.1) — weight_loss only for T1; other
@@ -96,6 +97,7 @@ struct TodayView: View {
                                     isLogging: vm.isLoggingWeight,
                                     onOpenDiet: { showLogSheet = true }
                                 )
+                                .staggeredAppear(index: 1)
                             }
 
                             if vm.isMuscleGoal {
@@ -108,6 +110,7 @@ struct TodayView: View {
                                     sessionDots: vm.trainingSessionDots,
                                     onTapSession: { actionsItem = $0 }
                                 )
+                                .staggeredAppear(index: 1)
                             }
 
                             if vm.isEnduranceGoal {
@@ -120,6 +123,7 @@ struct TodayView: View {
                                     weeklyOverviewText: vm.enduranceWeeklyOverviewText,
                                     onTapSession: { actionsItem = $0 }
                                 )
+                                .staggeredAppear(index: 1)
                             }
 
                             // "Next up" replaces the full plan list for every
@@ -138,6 +142,7 @@ struct TodayView: View {
                                     onTap: { actionsItem = $0 },
                                     onSeeFullPlan: { showFullPlan = true }
                                 )
+                                .staggeredAppear(index: 2)
                             }
 
                             if !CoachBubble.isEmpty(vm.coachInsight) {
@@ -159,8 +164,10 @@ struct TodayView: View {
                                     onLogSecondItem: { onChecklistSecondItemTap() },
                                     onConnectHealth: { _ = HealthKitManager.openHealthApp() }
                                 )
+                                .staggeredAppear(index: 3)
                             } else {
                                 metricsGrid
+                                    .staggeredAppear(index: 3)
                             }
 
                             // FuelStripView is hidden for weight_loss — the
@@ -180,6 +187,7 @@ struct TodayView: View {
                                     consumedSourceName: vm.diet.consumedSourceName,
                                     onOpen: { showLogSheet = true }
                                 )
+                                .staggeredAppear(index: 4)
                             }
                             if let warning = vm.diet.lowEnergyWarning {
                                 CautionBanner(
@@ -612,6 +620,8 @@ struct VitalProgressBar: View {
     var tint: Color = Theme.Colors.accent
     var height: CGFloat = 6
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
@@ -620,7 +630,7 @@ struct VitalProgressBar: View {
                 RoundedRectangle(cornerRadius: height / 2, style: .continuous)
                     .fill(tint)
                     .frame(width: geo.size.width * fraction)
-                    .animation(Theme.Motion.settle, value: fraction)
+                    .animation(reduceMotion ? nil : Theme.Motion.settle, value: fraction)
             }
         }
         .frame(height: height)
