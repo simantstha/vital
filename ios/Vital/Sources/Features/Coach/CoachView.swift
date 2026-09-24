@@ -172,7 +172,7 @@ struct CoachView: View {
                             )
                             .id(row.id)
                         case .assistantTurn(let turn):
-                            AssistantTurnView(turn: turn)
+                            AssistantTurnView(turn: turn, onUndoMeal: { vm.undoMealLog(id: $0) })
                                 .id(row.id)
                         }
                     }
@@ -710,6 +710,12 @@ struct CoachView: View {
 
 private struct AssistantTurnView: View {
     let turn: AssistantTurn
+    /// Wired to `CoachViewModel.undoMealLog(id:)` — kept as a plain closure
+    /// (not a `vm` reference) so this view stays a pure function of `turn`,
+    /// same as the rest of the file's row views.
+    var onUndoMeal: (String) -> Void = { _ in }
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var isStreamingTurn: Bool { !turn.isFinished }
 
@@ -718,6 +724,25 @@ private struct AssistantTurnView: View {
             ForEach(turn.dataCards) { card in
                 CoachDataCardView(viz: card.viz)
                     .transition(.opacity.combined(with: .move(edge: .leading)))
+            }
+
+            ForEach(turn.mealReceipts) { receipt in
+                LogReceiptCard(
+                    icon: "fork.knife",
+                    title: "Logged \(receipt.name)",
+                    detail: receipt.detail,
+                    timestamp: receipt.timestamp,
+                    state: receipt.cardState,
+                    onUndo: receipt.canUndo ? { onUndoMeal(receipt.id) } : nil
+                )
+                .accessibilityLabel(mealReceiptAccessibilityLabel(receipt))
+                .accessibilityAction(named: "Undo") {
+                    if receipt.canUndo { onUndoMeal(receipt.id) }
+                }
+                .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .leading)))
+                .sensoryFeedback(Theme.Haptics.success, trigger: receipt.cardState) { _, new in
+                    new == .undone
+                }
             }
 
             // Order is conditional on whether prose has started. Before any
@@ -739,6 +764,20 @@ private struct AssistantTurnView: View {
     private var statusChip: some View {
         if let status = turn.statusSummary {
             ToolCallActivityView(label: status, isChecking: turn.isChecking)
+        }
+    }
+
+    /// "Logged <name>, <kcal> kilocalories" per spec, with the receipt's
+    /// current Undo state appended — overrides `LogReceiptCard`'s own generic
+    /// label (which reads the raw `title`/`detail` strings) with this exact
+    /// wording.
+    private func mealReceiptAccessibilityLabel(_ receipt: MealReceiptRow) -> String {
+        let base = "Logged \(receipt.name), \(receipt.kcal) kilocalories"
+        switch receipt.cardState {
+        case .undone:                    return "\(base), removed"
+        case .undoing:                   return "\(base), removing"
+        case .undoFailed(let message):   return "\(base), \(message)"
+        case .normal, .pending:          return base
         }
     }
 

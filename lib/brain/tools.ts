@@ -327,6 +327,16 @@ export const BRAIN_TOOLS: Tool[] = [
       required: ['evidence'],
     },
   },
+  // KNOWN GAP (coach-log-receipts, 2026-09-24): there is no `delete_meal` /
+  // `undo_meal` tool, so "undo that" or "actually remove that" said to the
+  // coach right after a log_meal call has nothing to invoke — the model can
+  // only apologize in prose while the meal stays logged. The user's only
+  // working Undo paths today are the inline coach receipt's Undo button
+  // (this PR) and the Diet sheet's swipe-to-delete. Adding a delete tool
+  // (and teaching persona.ts when the model should reach for it, e.g. only
+  // for the immediately-preceding log_meal call in the same turn/session —
+  // not an arbitrary earlier meal by description) is a real feature, out of
+  // scope here; flagged rather than added without that design.
   {
     name: 'log_meal',
     description:

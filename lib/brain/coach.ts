@@ -101,6 +101,13 @@ export type CoachEvent =
   | { type: 'text'; text: string }
   | { type: 'tool_call'; id: string; name: string; label: string; status: 'started' | 'done' }
   | { type: 'tool_data'; id: string; viz: CoachViz }
+  // A meal was just inserted by `log_meal` — carries enough for the client to
+  // render an inline receipt (name + macros) and issue an Undo (DELETE
+  // /api/meals/log?id=) without a round trip. Additive: older app builds that
+  // don't recognize `meal_logged` simply ignore it (see
+  // lib/specialists/httpHandlers.ts's streamEvents and iOS's
+  // decodeCoachSSELine, both of which drop unknown event types).
+  | { type: 'meal_logged'; id: string; name: string; kcal: number; p: number; c: number; f: number }
   | HandoffCardPayload
   | HandoffCardEvent
   | PersonaChangedEvent
@@ -488,6 +495,31 @@ async function* streamCoachTurn(userId: string, seed: TurnSeed): AsyncGenerator<
         if (viz) yield { type: 'tool_data', id: callId, viz };
       } catch {
         // result wasn't JSON (or not chartable) — no viz, just the chip.
+      }
+
+      // `log_meal` writes the event synchronously and returns its id in the
+      // same call — surface that id (+ macros) as its own structured event so
+      // the client can render an inline receipt with Undo instead of only the
+      // "Logged your meal" chip above, which carries no id to delete by.
+      if (block.name === 'log_meal') {
+        try {
+          const parsed = JSON.parse(result) as Record<string, unknown>;
+          if (parsed.ok && parsed.id != null) {
+            const name = String(parsed.matched ?? parsed.product ?? parsed.query ?? 'Meal');
+            yield {
+              type: 'meal_logged',
+              id:   String(parsed.id),
+              name,
+              kcal: Number(parsed.kcal) || 0,
+              p:    Number(parsed.p) || 0,
+              c:    Number(parsed.c) || 0,
+              f:    Number(parsed.f) || 0,
+            };
+          }
+        } catch {
+          // result wasn't JSON (e.g. the "Could not find nutrition data…" /
+          // barcode-not-found text errors) — nothing was inserted, no event.
+        }
       }
 
       toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: result });

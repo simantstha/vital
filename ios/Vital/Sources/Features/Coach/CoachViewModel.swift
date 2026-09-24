@@ -55,6 +55,40 @@ struct CoachDataRow: Identifiable, Equatable {
     let viz: CoachViz
 }
 
+// MARK: - Inline meal receipt row
+
+/// The receipt inserted into the transcript for a `log_meal` tool call
+/// (`meal_logged` SSE event) — the coach half of "meal logs instant + Undo".
+/// Lives in the turn (not a 5-second toast) so Undo stays reachable for the
+/// whole session, exactly like `LogReceiptCard`'s doc comment describes.
+struct MealReceiptRow: Identifiable, Equatable {
+    /// The backend `events` row id — what `APIClient.deleteMealLog(id:)`
+    /// deletes and what Undo is keyed on.
+    let id: String
+    let name: String
+    let kcal: Int
+    let protein: Int
+    let carbs: Int
+    let fat: Int
+    /// Preformatted at receipt-creation time (the event fires the moment the
+    /// meal is inserted, i.e. "now") — see `CoachViewModel.timeString(_:)`.
+    let timestamp: String
+    var cardState: LogReceiptCard.State = .normal
+
+    /// "520 kcal · 32P 40C 18F" — compact macro line for `LogReceiptCard`'s
+    /// detail row (the title itself carries "Logged <name>").
+    var detail: String {
+        "\(kcal) kcal · \(protein)P \(carbs)C \(fat)F"
+    }
+
+    var canUndo: Bool {
+        switch cardState {
+        case .normal, .undoFailed: return true
+        case .pending, .undoing, .undone: return false
+        }
+    }
+}
+
 // MARK: - Assistant answer bundle
 
 /// One coach reply, grouped as stable UI: data cards first, transient tool
@@ -65,6 +99,7 @@ struct AssistantTurn: Identifiable, Equatable {
     private(set) var text: String = ""
     private(set) var toolCalls: [ToolCallRow] = []
     private(set) var dataCards: [CoachDataRow] = []
+    private(set) var mealReceipts: [MealReceiptRow] = []
     private(set) var isFinished: Bool = false
 
     init(id: UUID, persona: CoachPersonaSnapshot = .vital) {
@@ -119,6 +154,18 @@ struct AssistantTurn: Identifiable, Equatable {
     mutating func applyToolData(id: String, viz: CoachViz) {
         guard !dataCards.contains(where: { $0.id == id }) else { return }
         dataCards.append(CoachDataRow(id: id, viz: viz))
+    }
+
+    mutating func applyMealReceipt(_ receipt: MealReceiptRow) {
+        guard !mealReceipts.contains(where: { $0.id == receipt.id }) else { return }
+        mealReceipts.append(receipt)
+    }
+
+    /// Drives the receipt's Undo state machine (logged → undoing → removed /
+    /// error). No-op if the id isn't in this turn.
+    mutating func updateMealReceipt(id: String, state: LogReceiptCard.State) {
+        guard let idx = mealReceipts.firstIndex(where: { $0.id == id }) else { return }
+        mealReceipts[idx].cardState = state
     }
 
     mutating func finish() {
@@ -518,6 +565,16 @@ final class CoachViewModel: ObservableObject {
         }
     }
 
+    /// KNOWN GAP (coach-log-receipts, 2026-09-24): a restored row is always
+    /// a plain prose bubble, never an `AssistantTurn` with `mealReceipts` —
+    /// `CoachRestoredMessage` (and the server's `RestoredCoachMessage` behind
+    /// it, see `lib/specialists/restoration.ts`'s doc comment) carries only
+    /// `content`, no structured tool-call result. So a `LogReceiptCard` +
+    /// Undo only appears for the live SSE turn that logged the meal — after
+    /// restart or a conversation-window reset, the assistant's text survives
+    /// but the receipt does not (the meal itself is still logged; Undo is
+    /// then only reachable from the Diet sheet). Documented rather than
+    /// hacked around here, per this change's brief.
     private static func restoredRow(_ message: CoachRestoredMessage) -> ChatRow? {
         let role: ChatMessage.Role
         switch message.role {
@@ -817,6 +874,8 @@ final class CoachViewModel: ObservableObject {
                 applyToolCall(id: id, name: name, label: label, done: done, toTurn: assistantId, persona: persona)
             case .toolData(let id, let viz):
                 applyToolData(id: id, viz: viz, toTurn: assistantId, persona: persona)
+            case .mealLogged(let receipt):
+                applyMealLogged(receipt, toTurn: assistantId, persona: persona)
             case .handoffCard(let card):
                 applyHandoffCard(card)
             case .personaChanged(let newPersona):
@@ -1159,6 +1218,92 @@ final class CoachViewModel: ObservableObject {
     private func applyToolCall(id: String, name: String, label: String, done: Bool, toTurn turnId: UUID, persona: CoachPersonaSnapshot) {
         mutateTurn(turnId, persona: persona) { turn in
             turn.applyToolCall(id: id, name: name, label: label, done: done)
+        }
+    }
+
+    /// Formats "now" as e.g. "2:14 PM" for a fresh `MealReceiptRow` —
+    /// `meal_logged` fires the instant `log_meal` inserts the row, so the
+    /// wall-clock time it arrives IS the logged time (no server timestamp is
+    /// sent on the event).
+    private static let timeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.timeStyle = .short
+        f.dateStyle = .none
+        return f
+    }()
+
+    private func applyMealLogged(_ receipt: CoachMealReceipt, toTurn turnId: UUID, persona: CoachPersonaSnapshot) {
+        let row = MealReceiptRow(
+            id: receipt.id,
+            name: receipt.name,
+            kcal: receipt.kcal,
+            protein: receipt.p,
+            carbs: receipt.c,
+            fat: receipt.f,
+            timestamp: Self.timeFormatter.string(from: AppClock.now)
+        )
+        // Insert-shaped, same as applyToolData's card insertion — this is
+        // what lets LogReceiptCard's own transition play instead of a hard cut.
+        withAnimation(Theme.Motion.appear) {
+            mutateTurn(turnId, persona: persona) { turn in
+                turn.applyMealReceipt(row)
+            }
+        }
+
+        // "Tell Today": a coach meal log is exactly as fresh as a manual one —
+        // the fuel strip should not wait for pull-to-refresh. See
+        // `Notification.Name.vitalCoachMealLogChanged`'s doc comment.
+        NotificationCenter.default.post(name: .vitalCoachMealLogChanged, object: nil)
+        ReminderScheduler.shared.mealLogged(slot: ReminderScheduler.timeAppropriateSlot(for: AppClock.now))
+    }
+
+    /// Finds which turn currently holds a receipt with this id — a receipt's
+    /// turn isn't tracked separately from `rows`, so Undo (fired from a tap
+    /// on the card, long after the turn stopped streaming) has to search for
+    /// it the same way `mutateTurn` looks up any other row.
+    private func turnId(containingMealReceipt id: String) -> UUID? {
+        for row in rows {
+            if case .assistantTurn(let turn) = row, turn.mealReceipts.contains(where: { $0.id == id }) {
+                return turn.id
+            }
+        }
+        return nil
+    }
+
+    /// `LogReceiptCard`'s Undo action for an inline coach meal receipt.
+    /// Marks the card `.undoing`, calls the same delete endpoint the Diet
+    /// sheet uses, then collapses it to "Removed" on success (with a
+    /// Reduce-Motion-aware transition + haptic) or shows an inline error and
+    /// leaves the card actionable for a retry on failure.
+    func undoMealLog(id: String) {
+        guard let turnId = turnId(containingMealReceipt: id) else { return }
+        setMealReceiptState(id: id, turnId: turnId, state: .undoing, animated: false)
+
+        Task {
+            do {
+                try await api.deleteMealLog(id: id)
+                setMealReceiptState(
+                    id: id, turnId: turnId, state: .undone,
+                    animated: !Theme.Motion.isReduced
+                )
+                NotificationCenter.default.post(name: .vitalCoachMealLogChanged, object: nil)
+            } catch {
+                let message = UserFacingError.message(for: error, context: .write, tag: "coach undo meal log")
+                setMealReceiptState(id: id, turnId: turnId, state: .undoFailed(message), animated: false)
+            }
+        }
+    }
+
+    private func setMealReceiptState(id: String, turnId: UUID, state: LogReceiptCard.State, animated: Bool) {
+        let update: () -> Void = { [self] in
+            mutateTurn(turnId, persona: activePersona) { turn in
+                turn.updateMealReceipt(id: id, state: state)
+            }
+        }
+        if animated {
+            withAnimation(Theme.Motion.standard, update)
+        } else {
+            update()
         }
     }
 

@@ -17,6 +17,12 @@ struct LogReceiptCard: View {
         /// `SkeletonView`'s doc comment: the motion policy forbids
         /// `repeatForever` loops, even for loading states).
         case pending
+        /// Undo tapped, request in flight — the button becomes non-tappable
+        /// text so a second tap can't fire a second delete.
+        case undoing
+        /// The Undo request failed — an inline message replaces the detail
+        /// line and the card keeps its Undo button so the user can retry.
+        case undoFailed(String)
     }
 
     let icon: String
@@ -42,9 +48,9 @@ struct LogReceiptCard: View {
                         .strikethrough(state == .undone)
                         .lineLimit(1)
 
-                    Text(state == .pending ? "Analyzing…" : detail)
+                    Text(detailText)
                         .font(Theme.Typography.bodySmall)
-                        .foregroundStyle(Theme.Colors.textSecondary)
+                        .foregroundStyle(isUndoError ? Theme.Colors.alert : Theme.Colors.textSecondary)
                         .lineLimit(1)
 
                     Text(timestamp)
@@ -63,6 +69,21 @@ struct LogReceiptCard: View {
         .accessibilityLabel(accessibilityLabel)
     }
 
+    /// The detail line's text: the analyzing placeholder, the failed-Undo
+    /// message, or the normal macro summary.
+    private var detailText: String {
+        switch state {
+        case .pending: return "Analyzing…"
+        case .undoFailed(let message): return message
+        default: return detail
+        }
+    }
+
+    private var isUndoError: Bool {
+        if case .undoFailed = state { return true }
+        return false
+    }
+
     @ViewBuilder
     private var trailing: some View {
         switch state {
@@ -70,11 +91,15 @@ struct LogReceiptCard: View {
             EmptyView()
 
         case .undone:
-            Text("Undone")
+            Text("Removed")
                 .font(Theme.Typography.labelSmall)
                 .foregroundStyle(Theme.Colors.textTertiary)
 
-        case .normal:
+        case .undoing:
+            ProgressView()
+                .controlSize(.mini)
+
+        case .normal, .undoFailed:
             HStack(spacing: Theme.Spacing.sm) {
                 if let onEdit {
                     Button("Edit", action: onEdit)
@@ -84,7 +109,7 @@ struct LogReceiptCard: View {
                 if let onUndo {
                     Button("Undo", action: onUndo)
                         .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(Theme.Colors.accentContent)
+                        .foregroundStyle(state == .normal ? Theme.Colors.accentContent : Theme.Colors.alert)
                 }
             }
             .buttonStyle(.vital(scale: 1.0))
@@ -95,6 +120,8 @@ struct LogReceiptCard: View {
         switch state {
         case .pending: return "\(title), analyzing"
         case .undone:  return "\(title), \(detail), undone"
+        case .undoing: return "\(title), \(detail), removing"
+        case .undoFailed(let message): return "\(title), \(detail), \(message)"
         case .normal:  return "\(title), \(detail), logged \(timestamp)"
         }
     }
