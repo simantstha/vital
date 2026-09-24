@@ -107,13 +107,8 @@ struct TodayView: View {
                                     calibratingText: vm.enduranceCalibratingText,
                                     reasonLine: vm.enduranceReasonLine,
                                     session: vm.todayMoveSession,
-                                    // Fed by GET /api/training/summary (#202)
-                                    // — nil (hiding the line) whenever that
-                                    // hasn't loaded or has no distance data
-                                    // this week (P4).
-                                    weeklyVolumeText: vm.enduranceWeeklyVolumeText,
+                                    weeklyOverviewText: vm.enduranceWeeklyOverviewText,
                                     sessionDots: vm.trainingSessionDots,
-                                    sessionsThisWeekText: vm.trainingSessionsThisWeekText,
                                     onTapSession: { actionsItem = $0 }
                                 )
                             }

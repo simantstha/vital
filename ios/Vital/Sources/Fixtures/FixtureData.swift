@@ -119,8 +119,8 @@ enum FixtureData {
             name: "Alex Rivera",
             insight: "You're down 1.2kg this week and sleep is holding steady — keep the deficit gentle through the weekend.",
             established: true,
-            targetKcal: 1850, consumedKcal: 1240,
-            protein: 96, proteinTarget: 150, carbs: 110, carbsTarget: 165, fat: 38, fatTarget: 62,
+            targetKcal: 1850, consumedKcal: 1020,
+            protein: 78, proteinTarget: 150, carbs: 92, carbsTarget: 165, fat: 34, fatTarget: 62,
             plan: [
                 FixturePlanItem(title: "Overnight oats with berries", timeMinutes: 420, kind: "meal", subtitle: "Breakfast · 7:00 AM", kcal: 380, why: "High protein start keeps you full past lunch."),
                 FixturePlanItem(title: "30-min incline walk", timeMinutes: 660, kind: "move", subtitle: "Move · 11:00 AM", kcal: nil, why: "Low-impact cardio that fits a deficit."),
@@ -142,8 +142,8 @@ enum FixtureData {
             name: "Sam Okafor",
             insight: "Protein's on target four days running and yesterday's lift was a PR on squat volume — stay the course.",
             established: true,
-            targetKcal: 2900, consumedKcal: 1980,
-            protein: 158, proteinTarget: 190, carbs: 210, carbsTarget: 300, fat: 58, fatTarget: 85,
+            targetKcal: 2900, consumedKcal: 1560,
+            protein: 114, proteinTarget: 190, carbs: 168, carbsTarget: 300, fat: 40, fatTarget: 85,
             plan: [
                 FixturePlanItem(title: "Egg + oat protein bowl", timeMinutes: 420, kind: "meal", subtitle: "Breakfast · 7:00 AM", kcal: 560, why: "Sets up protein synthesis early."),
                 FixturePlanItem(title: "Lower-body strength", timeMinutes: 630, kind: "move", subtitle: "Train · 10:30 AM", kcal: nil, why: "Progressive overload on squat + deadlift."),
@@ -171,8 +171,8 @@ enum FixtureData {
             name: "Priya Nandy",
             insight: "This week's long run held goal pace with a lower average HR than last week — aerobic base is building nicely.",
             established: true,
-            targetKcal: 2650, consumedKcal: 1510,
-            protein: 92, proteinTarget: 130, carbs: 260, carbsTarget: 340, fat: 46, fatTarget: 75,
+            targetKcal: 2650, consumedKcal: 1140,
+            protein: 54, proteinTarget: 130, carbs: 156, carbsTarget: 340, fat: 27, fatTarget: 75,
             plan: [
                 FixturePlanItem(title: "Banana + peanut butter toast", timeMinutes: 390, kind: "meal", subtitle: "Breakfast · 6:30 AM", kcal: 340, why: "Fast-digesting carbs ahead of the morning run."),
                 FixturePlanItem(title: "10km tempo run", timeMinutes: 420, kind: "move", subtitle: "Run · 7:00 AM", kcal: nil, why: "Race-pace intervals to build lactate threshold."),

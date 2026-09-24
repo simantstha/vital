@@ -260,4 +260,64 @@ final class GoalHeroLogicTests: XCTestCase {
         XCTAssertEqual(MuscleHeroLogic.weekdayShortLabel(forDateString: "2026-09-24"), "Thu")
         XCTAssertEqual(MuscleHeroLogic.weekdayShortLabel(forDateString: "2026-09-21"), "Mon")
     }
+
+    // MARK: - EnduranceHeroLogic.weeklySessionsAndVolumeText (combined line)
+
+    func testWeeklySessionsAndVolumeTextBothPresent() {
+        // Fixture endurance scenario: 3 sessions, 24.5 km
+        let text = EnduranceHeroLogic.weeklySessionsAndVolumeText(
+            sessionsCompleted: 3, kmDone: 24.5, system: .metric
+        )
+        XCTAssertEqual(text, "3 sessions · 24.5 km this week")
+    }
+
+    func testWeeklySessionsAndVolumeTextSingleSession() {
+        // Singular form when only 1 session
+        let text = EnduranceHeroLogic.weeklySessionsAndVolumeText(
+            sessionsCompleted: 1, kmDone: 12.0, system: .metric
+        )
+        XCTAssertEqual(text, "1 session · 12 km this week")
+    }
+
+    func testWeeklySessionsAndVolumeTextOnlySessionsNoVolume() {
+        // Only sessions available
+        let text = EnduranceHeroLogic.weeklySessionsAndVolumeText(
+            sessionsCompleted: 3, kmDone: nil, system: .metric
+        )
+        XCTAssertEqual(text, "3 sessions this week")
+    }
+
+    func testWeeklySessionsAndVolumeTextOnlyVolumeNoSessions() {
+        // Only volume available
+        let text = EnduranceHeroLogic.weeklySessionsAndVolumeText(
+            sessionsCompleted: nil, kmDone: 24.5, system: .metric
+        )
+        XCTAssertEqual(text, "24.5 km this week")
+    }
+
+    func testWeeklySessionsAndVolumeTextNeitherPresent() {
+        // Neither available
+        let text = EnduranceHeroLogic.weeklySessionsAndVolumeText(
+            sessionsCompleted: nil, kmDone: nil, system: .metric
+        )
+        XCTAssertNil(text)
+    }
+
+    func testWeeklySessionsAndVolumeTextRespectsImperialSystem() {
+        let text = EnduranceHeroLogic.weeklySessionsAndVolumeText(
+            sessionsCompleted: 2, kmDone: 24.0, system: .imperial
+        )
+        XCTAssertEqual(
+            text,
+            "2 sessions · \(UnitFormat.distance(km: 24.0, .imperial)) this week"
+        )
+    }
+
+    func testWeeklySessionsAndVolumeTextClampsNegativeSessions() {
+        // Negative sessions should be clamped to 0 (honesty rule)
+        let text = EnduranceHeroLogic.weeklySessionsAndVolumeText(
+            sessionsCompleted: -1, kmDone: 10.0, system: .metric
+        )
+        XCTAssertEqual(text, "0 sessions · 10 km this week")
+    }
 }
