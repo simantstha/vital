@@ -559,14 +559,53 @@ final class CoachViewModel: ObservableObject {
             }
             await restoreConversation()
             guard rows.isEmpty else { return }
+            // `hasRestoredConversation`, at this point, means restoration
+            // succeeded *and* found no messages to restore (had it found
+            // any, `rows` wouldn't be empty and the guard above would have
+            // already returned) — i.e. this is a verified fresh account with
+            // no conversation history yet. If restoration instead failed
+            // (feature-flagged/older backend), we can't tell, so this falls
+            // back to the previous generic greeting rather than assuming
+            // either state. Either way this reuses data already being
+            // fetched for restoration — no extra network call.
             let text = (try? await api.fetchCoachOpener())
-                ?? "Hey! I'm your Vital coach. Ask me anything about your health trends, sleep, or how to optimize your day."
+                ?? Self.fallbackOpenerText(isVerifiedNewConversation: hasRestoredConversation)
             // The user may have started typing/sending while we waited — only
             // seed the opener if the transcript is still empty.
             if rows.isEmpty {
-                rows.append(.message(ChatMessage(role: .assistant, text: text)))
+                withAnimation(Theme.Motion.appear) {
+                    rows.append(.message(ChatMessage(role: .assistant, text: text)))
+                }
             }
         }
+    }
+
+    /// Shown when `/api/coach/opener` can't be reached and the transcript is
+    /// verifiably brand new (no health data/history to reference yet) —
+    /// invites the user to start somewhere instead of praising history they
+    /// don't have.
+    nonisolated static let newUserFallbackOpener =
+        "Hi, I'm Vital, your coach. Tell me your goal, or just say what you ate or how you slept, and I'll take it from there."
+
+    /// Shown when `/api/coach/opener` can't be reached and the transcript's
+    /// new-vs-returning state is unknown (restoration itself failed) — the
+    /// original neutral greeting, safe either way.
+    nonisolated static let returningFallbackOpener =
+        "Hey! I'm your Vital coach. Ask me anything about your health trends, sleep, or how to optimize your day."
+
+    /// Pure selection rule, kept `nonisolated` so it's directly unit-testable
+    /// with no `@MainActor` hop. `isVerifiedNewConversation` should be
+    /// `hasRestoredConversation` read right after `restoreConversation()`
+    /// returns with an empty transcript (see `loadOpener()`).
+    nonisolated static func fallbackOpenerText(isVerifiedNewConversation: Bool) -> String {
+        isVerifiedNewConversation ? newUserFallbackOpener : returningFallbackOpener
+    }
+
+    /// Pure send-enabled rule: whitespace-only or empty input never sends.
+    /// Kept `nonisolated` (and free of any instance state) so it's directly
+    /// unit-testable and reusable from `CoachView`'s `canSend`.
+    nonisolated static func isSendableInput(_ text: String) -> Bool {
+        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     // MARK: - Nudge entry point (coach-nudge push notification)

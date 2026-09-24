@@ -5,18 +5,26 @@
  *
  * POST
  * Body: { name: string, kcal: number, c: number, p: number, f: number, source: string,
- *         imageThumb?: string, slot?: 'breakfast'|'lunch'|'snacks'|'dinner' }
+ *         imageThumb?: string, slot?: 'breakfast'|'lunch'|'snacks'|'dinner', reaction?: boolean }
  *   — imageThumb: optional small base64 JPEG (no data-URL prefix)
  *   — slot: optional meal-slot tag (redesign-v3 diet sheet); omitted by older
  *     call sites (LogMealViewModel's photo/barcode/search flows), stored inside
  *     `payload` alongside the macros when present.
+ *   — reaction: optional; `false` (or `?reaction=0` / `?reaction=false` query
+ *     param) skips step 3 below entirely so the response comes back
+ *     immediately. Callers that never display `coachReaction` (the Diet
+ *     sheet's "log again"/custom-log flows) should pass this. Omitted →
+ *     unchanged behavior, so older app builds keep getting a reaction.
  * Response: { ok: true, eventId: string, coachReaction: string }
+ *   — coachReaction is '' when `reaction: false` was passed, or on a
+ *     non-fatal context/Claude error.
  *
  * 1. Resolves the authenticated user (getUserIdFromRequest).
  * 2. Inserts a `meal_logged` event into the append-only events ledger.
- * 3. Assembles today's context via lib/brain/context.assembleContext.
- * 4. Makes ONE claude-haiku-4-5 call to produce a 1-2 sentence coach reaction
- *    in observation-not-prescription voice.
+ * 3. Unless opted out via `reaction: false`, assembles today's context via
+ *    lib/brain/context.assembleContext and makes ONE claude-haiku-4-5 call to
+ *    produce a 1-2 sentence coach reaction in observation-not-prescription
+ *    voice.
  *
  * Returns 400 on bad shape, 502 on upstream failure.
  * Coach reaction errors are non-fatal — eventId is still returned with an
@@ -36,7 +44,9 @@
  *   values (not matching /^\d{4}-\d{2}-\d{2}$/) return 400. Omitted → behavior
  *   is byte-identical to before (today's local day).
  * Response: { items: [{ id, name, kcal, protein, carbs, fat, slot, loggedAt }] }
- * (ascending by loggedAt)
+ * (ascending by loggedAt). `name` falls back to `payload.description` when
+ * `payload.name` is missing/empty — coach-logged rows (lib/brain/tools.ts
+ * `log_meal`) historically wrote only `description`.
  *
  * DELETE
  * ?id= is the eventId POST returned. Hard-deletes the row. This is a
@@ -72,6 +82,7 @@ interface LogMealBody {
   source: string;
   imageThumb?: string;
   slot?: string;
+  reaction?: boolean;
 }
 
 function isValidBody(b: unknown): b is LogMealBody {
@@ -85,7 +96,8 @@ function isValidBody(b: unknown): b is LogMealBody {
     typeof o.f      === 'number'  && Number.isFinite(o.f) &&
     typeof o.source === 'string'  && o.source.trim().length > 0 &&
     (o.imageThumb === undefined || typeof o.imageThumb === 'string') &&
-    (o.slot === undefined || typeof o.slot === 'string')
+    (o.slot === undefined || typeof o.slot === 'string') &&
+    (o.reaction === undefined || typeof o.reaction === 'boolean')
   );
 }
 
@@ -122,7 +134,16 @@ export async function POST(request: Request): Promise<NextResponse> {
     );
   }
 
-  const { name, kcal, c, p, f, source, imageThumb, slot } = body;
+  const { name, kcal, c, p, f, source, imageThumb, slot, reaction } = body;
+
+  // Opt-out for callers that never display the coach reaction (e.g. the
+  // Diet sheet's "log again"/custom-log flows) — skips assembleContext + the
+  // Haiku call below so those saves return immediately instead of waiting on
+  // it. Body `reaction: false` or `?reaction=0` opts out; default (both
+  // omitted) is unchanged so older app builds keep getting a reaction.
+  const url = new URL(request.url);
+  const reactionParam = url.searchParams.get('reaction');
+  const wantsReaction = reaction !== false && reactionParam !== '0' && reactionParam !== 'false';
 
   if (slot !== undefined && !VALID_SLOTS.includes(slot)) {
     return NextResponse.json(
@@ -168,27 +189,29 @@ export async function POST(request: Request): Promise<NextResponse> {
   // Non-fatal: a Claude or context error still returns ok + eventId.
 
   let coachReaction = '';
-  try {
-    const ctx = await assembleContext(userId);
+  if (wantsReaction) {
+    try {
+      const ctx = await assembleContext(userId);
 
-    const msg = await client.messages.create({
-      model:      'claude-haiku-4-5',
-      max_tokens: 120,
-      system: `You are Vital Coach — a calm, data-aware personal health companion.
+      const msg = await client.messages.create({
+        model:      'claude-haiku-4-5',
+        max_tokens: 120,
+        system: `You are Vital Coach — a calm, data-aware personal health companion.
 Speak in first-person observation voice ("That puts you at…", "Nice — you're tracking…").
 Never prescribe or advise. Respond in 1–2 short sentences only. No emojis. No markdown.`,
-      messages: [{
-        role: 'user',
-        content:
-          `${ctx.promptText}\n\n---\n\n` +
-          `User just logged: ${name} — ${kcal} kcal, ${c}g carbs, ${p}g protein, ${f}g fat.\n` +
-          `Give a brief observation about this meal in the context of their day.`,
-      }],
-    });
+        messages: [{
+          role: 'user',
+          content:
+            `${ctx.promptText}\n\n---\n\n` +
+            `User just logged: ${name} — ${kcal} kcal, ${c}g carbs, ${p}g protein, ${f}g fat.\n` +
+            `Give a brief observation about this meal in the context of their day.`,
+        }],
+      });
 
-    coachReaction = (msg.content[0] as { text: string }).text.trim();
-  } catch (err) {
-    console.error('[meals/log] Coach reaction error (non-fatal):', err);
+      coachReaction = (msg.content[0] as { text: string }).text.trim();
+    } catch (err) {
+      console.error('[meals/log] Coach reaction error (non-fatal):', err);
+    }
   }
 
   return NextResponse.json({ ok: true, eventId, coachReaction });
@@ -232,7 +255,9 @@ export async function GET(request: Request): Promise<NextResponse> {
       const p = pl(e.payload);
       return {
         id:      e.id,
-        name:    typeof p.name === 'string' ? p.name : '',
+        name:    typeof p.name === 'string' && p.name
+          ? p.name
+          : (typeof p.description === 'string' ? p.description : ''),
         kcal:    Math.round(num(p.kcal) ?? 0),
         protein: Math.round(num(p.p) ?? 0),
         carbs:   Math.round(num(p.c) ?? 0),

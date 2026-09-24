@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  pickLoggableCandidate,
   normalizeName,
   dedupHistory,
   mergeProviderCandidates,
@@ -8,6 +9,7 @@ import {
   aggregateRecents,
   type HistoryRow,
   type ProviderCacheRow,
+  type Candidate,
 } from './candidates';
 import type { UsdaFood } from './usda';
 
@@ -208,6 +210,74 @@ test('needsEstimate: false for a plain single-food query with USDA results', () 
 
 test('needsEstimate: does not false-positive on words containing "and" as a substring', () => {
   assert.equal(needsEstimate('sandwich', 5), false);
+});
+
+// ─── pickLoggableCandidate ───────────────────────────────────────────────────
+
+function candidate(overrides: Partial<Candidate> = {}): Candidate {
+  return {
+    origin: 'usda',
+    name: 'Chicken Breast, Grilled',
+    kcal: 284,
+    c: 0,
+    p: 53,
+    f: 6,
+    ...overrides,
+  };
+}
+
+test('pickLoggableCandidate: empty candidate list returns undefined', () => {
+  assert.equal(pickLoggableCandidate('anything', [], 0), undefined);
+});
+
+test('pickLoggableCandidate: a history candidate whose normalized name exactly matches the query wins', () => {
+  const history = candidate({ origin: 'history', name: 'Grilled Chicken Breast', kcal: 300 });
+  const usda = candidate({ origin: 'usda', name: 'Chicken Breast, Grilled', kcal: 284 });
+  const result = pickLoggableCandidate('grilled chicken breast', [usda, history], 1);
+  assert.equal(result, history);
+});
+
+test('pickLoggableCandidate: a history candidate that only partially matches the query does not win', () => {
+  const history = candidate({ origin: 'history', name: 'Grilled Chicken Breast Salad', kcal: 450 });
+  const usda = candidate({ origin: 'usda', name: 'Chicken Breast, Grilled', kcal: 284 });
+  const result = pickLoggableCandidate('grilled chicken breast', [usda, history], 1);
+  // No exact history match and no estimate candidate/needsEstimate signal
+  // for this single-food query -> falls through to candidates[0].
+  assert.equal(result, usda);
+});
+
+test('pickLoggableCandidate: multi-food phrase with an estimate candidate present picks the estimate, not candidates[0]', () => {
+  const usda = candidate({ origin: 'usda', name: 'Egg, whole, cooked', kcal: 78 });
+  const estimate = candidate({
+    origin: 'estimate',
+    name: 'two eggs and toast',
+    kcal: 350,
+    c: 30,
+    p: 18,
+    f: 15,
+  });
+  const result = pickLoggableCandidate('two eggs and toast', [usda, estimate], 1);
+  assert.equal(result, estimate);
+});
+
+test('pickLoggableCandidate: digits in an otherwise single-food query with an estimate candidate picks the estimate', () => {
+  const usda = candidate({ origin: 'usda', name: 'Chicken Breast, Grilled', kcal: 284 });
+  const estimate = candidate({ origin: 'estimate', name: '200g chicken breast', kcal: 330 });
+  const result = pickLoggableCandidate('200g chicken breast', [usda, estimate], 1);
+  assert.equal(result, estimate);
+});
+
+test('pickLoggableCandidate: single food with no estimate candidate falls back to candidates[0]', () => {
+  const usda = candidate({ origin: 'usda', name: 'Chicken Breast, Grilled', kcal: 284 });
+  const cache = candidate({ origin: 'cache', name: 'Chicken Breast', kcal: 290 });
+  const result = pickLoggableCandidate('chicken breast', [usda, cache], 5);
+  assert.equal(result, usda);
+});
+
+test('pickLoggableCandidate: needsEstimate is true (usdaCount 0) but no estimate candidate exists -> falls back to candidates[0]', () => {
+  const historyPartial = candidate({ origin: 'history', name: 'Chicken Breast Bowl', kcal: 400 });
+  const result = pickLoggableCandidate('chicken breast', [historyPartial], 0);
+  assert.equal(result, historyPartial);
 });
 
 // ─── aggregateRecents ────────────────────────────────────────────────────────

@@ -300,14 +300,30 @@ final class ScreenshotTests: XCTestCase {
         }
         tab.tap()
 
-        // The fixture always seeds a restored transcript for every scenario
-        // except server_error, where every endpoint 500s and
+        // The fixture seeds a restored transcript for every *established*
+        // scenario except server_error, where every endpoint 500s and
         // CoachViewModel.loadOpener() falls back to its own hardcoded
-        // greeting — either way the Coach tab never stays empty once its
-        // `.task` resolves, so this is fixture-driven either way.
+        // greeting. `new_user` seeds no history on purpose (see
+        // `FixtureData.coachRestoration`), so it falls through to the
+        // fixture's `/api/coach/opener` response instead — the new-user
+        // copy, not the returning-user "Nice work…" praise, since there's no
+        // history yet to praise. Either way the Coach tab never stays empty
+        // once its `.task` resolves, so this is fixture-driven either way.
         if scenario == "server_error" {
             XCTAssertTrue(waitForText(app, containing: "Ask me anything about your health trends"),
                            "Coach should fall back to its hardcoded opener when every endpoint 500s [\(appearance)]")
+        } else if scenario == "new_user" {
+            XCTAssertTrue(waitForText(app, containing: "Tell me your goal"),
+                           "Coach should show the new-user opener, not returning-user praise [\(appearance)]")
+            XCTAssertFalse(app.staticTexts.matching(
+                NSPredicate(format: "label CONTAINS[c] %@", "Nice work staying consistent")
+            ).firstMatch.exists,
+                            "new_user's coach screen must not praise history the user doesn't have [\(appearance)]")
+            // The centered empty-state anchor (§3 of the coach-first-impression
+            // fix) — shown only while the transcript is nothing but the
+            // opener, which is exactly new_user's state here.
+            XCTAssertTrue(waitForText(app, containing: "Tap the mic and just talk"),
+                           "Coach's empty state should show its calm mic-prompt line [\(appearance)]")
         } else {
             XCTAssertTrue(waitForText(app, containing: "what would you like to dig into"),
                            "Coach should show the fixture-seeded restored message [\(scenario)/\(appearance)]")
