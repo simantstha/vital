@@ -173,14 +173,31 @@ export async function quickLogMeal(
   const isExactHistory = top?.origin === 'history' && normalizeName(top.name) === normalizeName(text);
 
   if (!isExactHistory) {
-    const grounded = await estimateMeal({ text, userId });
-    if (grounded.items.length > 0) {
-      return insertGroundedMeal(userId, text, grounded, options);
+    // estimateMeal makes a real Anthropic API call (lib/brain/anthropicClient)
+    // and can throw on an outage/timeout/429 — before this file routed
+    // everything through the estimator, a model failure never touched this
+    // path at all (it only affected the photo route, which already 502s on
+    // failure — see app/api/nutrition/photo/route.ts). Uncaught here, a
+    // model outage would now break ALL quick/coach TEXT logging, not just
+    // photo logging. Catch it and fall through to the same plain
+    // history/cache/USDA candidate safety net used when the estimator finds
+    // nothing, so a log still succeeds (with a less accurate default
+    // portion) instead of failing outright.
+    try {
+      const grounded = await estimateMeal({ text, userId });
+      if (grounded.items.length > 0) {
+        return insertGroundedMeal(userId, text, grounded, options);
+      }
+      // The estimator found nothing loggable (e.g. truly unrecognized
+      // text) — fall through to the best plain history/cache/USDA
+      // candidate as a safety net, which for this same case is typically
+      // also empty and correctly yields { ok: false }.
+    } catch (err) {
+      console.error(
+        '[quickLog] estimator failed, falling back to candidate:',
+        err instanceof Error ? err.message : String(err),
+      );
     }
-    // The estimator found nothing loggable (e.g. a transient parse failure,
-    // or truly unrecognized text) — fall through to the best plain
-    // history/cache/USDA candidate as a safety net, which for this same
-    // case is typically also empty and correctly yields { ok: false }.
   }
 
   if (!top) return { ok: false };

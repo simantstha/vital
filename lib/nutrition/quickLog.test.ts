@@ -9,6 +9,7 @@ import {
   type SearchCandidatesResult,
 } from './candidates';
 import type { EstimateResult } from './estimator';
+import type { QuickLogResult } from './quickLog';
 
 /**
  * Drives the real quickLogMeal against fake `@/db`, `@/lib/nutrition/candidates`
@@ -29,9 +30,13 @@ const state: {
   /** What the estimator returns for the query under test. Empty items ==
    *  "the estimator found nothing loggable". */
   estimateResult: EstimateResult;
+  /** When set, the mocked estimateMeal rejects with this instead of
+   *  resolving — drives the "estimator failed" resilience test below. */
+  estimateError: Error | null;
 } = {
   searchResult: { candidates: [], estimateFoods: null, usdaCount: 0 },
   estimateResult: { name: '', kcal: 0, c: 0, p: 0, f: 0, items: [] },
+  estimateError: null,
 };
 
 let searchCandidatesCalls: Array<{ userId: string; query: string; skipEstimate?: boolean }> = [];
@@ -67,6 +72,7 @@ mock.module('@/lib/nutrition/estimator', {
   namedExports: {
     estimateMeal: async (input: { userId: string; text?: string }) => {
       estimateMealCalls.push({ userId: input.userId, text: input.text });
+      if (state.estimateError) throw state.estimateError;
       return state.estimateResult;
     },
   },
@@ -94,6 +100,7 @@ function reset() {
   insertedValues = [];
   state.searchResult = { candidates: [], estimateFoods: null, usdaCount: 0 };
   state.estimateResult = { name: '', kcal: 0, c: 0, p: 0, f: 0, items: [] };
+  state.estimateError = null;
 }
 
 // ─── A single plain food (no quantity language) now ALSO routes through the
@@ -149,6 +156,54 @@ test('quickLogMeal routes a single plain food (no quantity language, USDA hit pr
   assert.equal(result.kcal, 380);
   assert.equal(result.isEstimate, true);
   assert.equal(result.origin, 'estimate');
+});
+
+// Resilience: estimateMeal makes a real Anthropic API call and can reject
+// (outage, timeout, 429). Before this file routed every query through the
+// estimator, a model failure never touched quickLogMeal at all — uncaught,
+// it would now break ALL quick/coach text logging instead of just the photo
+// route (which already 502s on failure, and stays that way). The log must
+// still succeed via the plain USDA/cache/history candidate safety net.
+test('quickLogMeal falls back to the USDA candidate and still logs when estimateMeal rejects', async () => {
+  reset();
+  nextInsertedId = 'event-fallback';
+  state.searchResult = {
+    candidates: [{ origin: 'usda', name: 'Chicken Breast, Grilled', kcal: 284, c: 0, p: 53, f: 6 }],
+    estimateFoods: null,
+    usdaCount: 1,
+  };
+  state.estimateError = new Error('Anthropic API error: 529 overloaded');
+
+  const originalConsoleError = console.error;
+  const consoleErrorCalls: unknown[][] = [];
+  console.error = (...args: unknown[]) => { consoleErrorCalls.push(args); };
+
+  let result: QuickLogResult;
+  try {
+    const { quickLogMeal } = await quickLogPromise;
+    result = await quickLogMeal('user-1', 'grilled chicken breast', { source: 'quick' });
+  } finally {
+    console.error = originalConsoleError;
+  }
+
+  assert.deepEqual(estimateMealCalls, [{ userId: 'user-1', text: 'grilled chicken breast' }]);
+
+  // Logged the error with a clear tag instead of throwing.
+  assert.equal(consoleErrorCalls.length, 1);
+  assert.match(String(consoleErrorCalls[0][0]), /\[quickLog\] estimator failed, falling back to candidate/);
+  assert.match(String(consoleErrorCalls[0][1]), /529 overloaded/);
+
+  // The log still succeeds, from the plain USDA candidate.
+  assert.equal(result.ok, true);
+  if (!result.ok) throw new Error('unreachable');
+  assert.equal(result.id, 'event-fallback');
+  assert.equal(result.kcal, 284);
+  assert.equal(result.origin, 'usda');
+  assert.equal(result.isEstimate, false);
+
+  const payload = insertedValues[0].payload as Record<string, unknown>;
+  assert.equal(payload.source, 'usda');
+  assert.equal(payload.kcal, 284);
 });
 
 test('quickLogMeal short-circuits an exact user-history hit and never calls the estimator', async () => {
