@@ -149,7 +149,7 @@ test('log_meal text path routes a single plain food (no quantity language) throu
   assert.equal(result.id, 'event-usda');
   assert.equal(result.kcal, 380);
   assert.equal(result.origin, 'estimate');
-  assert.deepEqual(result.foods, [{ name: 'grilled chicken breast', qty: 230, unit: 'g', kcal: 380 }]);
+  assert.deepEqual(result.foods, [{ name: 'grilled chicken breast', qty: 230, unit: 'g', kcal: 380, confidence: 'high' }]);
 });
 
 test('log_meal text path with a history candidate maps source to "history" and never calls the estimator', async () => {
@@ -242,8 +242,8 @@ test('log_meal text path routes a multi-food phrase through the estimator and fo
 
   assert.equal(result.id, 'event-estimate');
   assert.deepEqual(result.foods, [
-    { name: 'eggs, fried', qty: 100, unit: 'g', kcal: 140 },
-    { name: 'toast, white bread', qty: 60, unit: 'g', kcal: 210 },
+    { name: 'eggs, fried', qty: 100, unit: 'g', kcal: 140, confidence: 'high' },
+    { name: 'toast, white bread', qty: 60, unit: 'g', kcal: 210, confidence: 'med' },
   ]);
   assert.equal(result.origin, 'estimate');
 });
@@ -284,8 +284,8 @@ test('log_meal text path grounds a multi-food quantity phrase item-by-item inste
   assert.equal(result.origin, 'estimate');
   assert.equal(result.kcal, 543);
   assert.deepEqual(result.foods, [
-    { name: 'chicken breast, grilled', qty: 200, unit: 'g', kcal: 330 },
-    { name: 'white rice, cooked', qty: 150, unit: 'g', kcal: 213 },
+    { name: 'chicken breast, grilled', qty: 200, unit: 'g', kcal: 330, confidence: 'high' },
+    { name: 'white rice, cooked', qty: 150, unit: 'g', kcal: 213, confidence: 'med' },
   ]);
 });
 

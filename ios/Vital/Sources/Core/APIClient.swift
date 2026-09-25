@@ -681,7 +681,7 @@ struct APIClient {
             guard let id = event.id, let name = event.name,
                   let kcal = event.kcal, let p = event.p, let c = event.c, let f = event.f
             else { return nil }
-            return .mealLogged(CoachMealReceipt(id: id, name: name, kcal: kcal, p: p, c: c, f: f))
+            return .mealLogged(CoachMealReceipt(id: id, name: name, kcal: kcal, p: p, c: c, f: f, items: event.items))
         case "meal_unlogged":
             guard let id = event.id else { return nil }
             return .mealUnlogged(id: id)
@@ -917,6 +917,26 @@ struct APIClient {
         request.timeoutInterval = 15
         struct Body: Encodable { let id: String; let factor: Double }
         request.httpBody = try encoder.encode(Body(id: id, factor: factor))
+        let (data, response) = try await session.data(for: request)
+        try validate(response)
+        return try decoder.decode(MealScaleResult.self, from: data)
+    }
+
+    /// Per-item fix for a single row of a receipt's breakdown — the
+    /// `LogReceiptCard` item stepper. Sets ONLY `itemFood`'s grams (server
+    /// rescales that item's macros and folds the delta into the meal's
+    /// totals — see `POST /api/meals/scale`'s doc comment); the rest of the
+    /// meal, and the portion memory it writes, are untouched.
+    func scaleMealLog(id: String, itemFood: String, grams: Double) async throws -> MealScaleResult {
+        guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/meals/scale") else {
+            throw APIError.invalidURL
+        }
+        var request = authorizedRequest(url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 15
+        struct Body: Encodable { let id: String; let itemFood: String; let grams: Double }
+        request.httpBody = try encoder.encode(Body(id: id, itemFood: itemFood, grams: grams))
         let (data, response) = try await session.data(for: request)
         try validate(response)
         return try decoder.decode(MealScaleResult.self, from: data)
@@ -1417,6 +1437,30 @@ struct MealScaleResult: Decodable {
     let ok: Bool
     let id: String
     let name: String
+    let kcal: Double
+    let c: Double
+    let p: Double
+    let f: Double
+    /// Present only for the per-item (`itemFood` + `grams`) mode — that one
+    /// item's new grams/macros. `nil` for the whole-meal factor/grams modes.
+    let item: MealScaleItemResult?
+
+    init(ok: Bool, id: String, name: String, kcal: Double, c: Double, p: Double, f: Double, item: MealScaleItemResult? = nil) {
+        self.ok = ok
+        self.id = id
+        self.name = name
+        self.kcal = kcal
+        self.c = c
+        self.p = p
+        self.f = f
+        self.item = item
+    }
+}
+
+/// The one rescaled item, from `MealScaleResult.item`.
+struct MealScaleItemResult: Decodable, Equatable {
+    let food: String
+    let grams: Double
     let kcal: Double
     let c: Double
     let p: Double
@@ -2114,6 +2158,7 @@ private struct SSEEvent: Decodable {
     let p: Int?
     let c: Int?
     let f: Int?
+    let items: [CoachMealReceiptItem]?
     // specialist lifecycle fields
     let phase: CoachHandoffPhase?
     let sessionId: String?
@@ -2186,6 +2231,20 @@ enum CoachStreamEvent: Equatable {
     case error(String)
 }
 
+/// One item of a receipt's per-item breakdown — mirrors
+/// `lib/brain/coach.ts`'s `meal_logged` event `items` field and
+/// `lib/specialists/restoration.ts`'s `MealReceiptItem`, so a live event and
+/// a restored one decode into the same shape. `confidence` is `"low"` |
+/// `"med"` | `"high"` but kept as a plain `String` here — an unrecognized
+/// future value should still decode (and just not match any known case)
+/// rather than fail the whole receipt.
+struct CoachMealReceiptItem: Codable, Equatable {
+    let food: String
+    let grams: Int
+    let kcal: Int
+    let confidence: String
+}
+
 /// Payload of a `meal_logged` SSE event (lib/brain/coach.ts). `id` is the
 /// backend `events` row id — the same id `APIClient.deleteMealLog(id:)` takes
 /// for Undo.
@@ -2196,6 +2255,22 @@ struct CoachMealReceipt: Codable, Equatable {
     let p: Int
     let c: Int
     let f: Int
+    /// Per-item breakdown — present only for a grounded estimator log
+    /// (lib/nutrition/estimator.ts). `nil` for a flat/legacy/barcode log, and
+    /// on an older backend that doesn't send it yet — Swift's synthesized
+    /// `Codable` conformance already treats a missing key as `nil` for an
+    /// `Optional` property, so no custom decode is needed here.
+    let items: [CoachMealReceiptItem]?
+
+    init(id: String, name: String, kcal: Int, p: Int, c: Int, f: Int, items: [CoachMealReceiptItem]? = nil) {
+        self.id = id
+        self.name = name
+        self.kcal = kcal
+        self.p = p
+        self.c = c
+        self.f = f
+        self.items = items
+    }
 }
 
 /// Outcome of a `POST /api/stt` upload (`APIClient.uploadSTTAudio(fileURL:)`)
@@ -2261,6 +2336,9 @@ protocol CoachAPIProviding {
     func deleteMealLog(id: String) async throws
     /// The portion chips (½× · 1× · 1.5× · 2×) on an inline `LogReceiptCard`.
     func scaleMealLog(id: String, factor: Double) async throws -> MealScaleResult
+    /// The per-item stepper on an inline `LogReceiptCard` — fixes ONE item's
+    /// grams without touching the rest of the meal.
+    func scaleMealLog(id: String, itemFood: String, grams: Double) async throws -> MealScaleResult
 }
 
 extension APIClient: CoachAPIProviding {}

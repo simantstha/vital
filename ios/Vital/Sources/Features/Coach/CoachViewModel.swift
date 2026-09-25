@@ -62,6 +62,17 @@ struct CoachDataRow: Identifiable, Equatable {
 /// Lives in the turn (not a 5-second toast) so Undo stays reachable for the
 /// whole session, exactly like `LogReceiptCard`'s doc comment describes.
 struct MealReceiptRow: Identifiable, Equatable {
+    /// One row of a receipt's per-item breakdown (`CoachMealReceiptItem`).
+    /// `var grams`/`kcal` — a successful per-item scale rewrites just this
+    /// item in place, same rationale as `MealReceiptRow`'s own `var` macros.
+    struct Item: Identifiable, Equatable {
+        var id: String { food }
+        let food: String
+        var grams: Int
+        var kcal: Int
+        let confidence: String
+    }
+
     /// The backend `events` row id — what `APIClient.deleteMealLog(id:)`
     /// deletes and what Undo is keyed on.
     let id: String
@@ -77,6 +88,8 @@ struct MealReceiptRow: Identifiable, Equatable {
     /// meal is inserted, i.e. "now") — see `CoachViewModel.timeString(_:)`.
     let timestamp: String
     var cardState: LogReceiptCard.State = .normal
+    /// Per-item breakdown — empty for a flat/legacy/barcode log.
+    var items: [Item] = []
 
     /// "520 kcal · 32P 40C 18F" — compact macro line for `LogReceiptCard`'s
     /// detail row (the title itself carries "Logged <name>").
@@ -89,6 +102,48 @@ struct MealReceiptRow: Identifiable, Equatable {
         case .normal, .undoFailed: return true
         case .pending, .undoing, .undone: return false
         }
+    }
+
+    /// A readable receipt title from `items`, falling back to the raw
+    /// backend `name` (which can be a lowercase comma list, e.g. "white
+    /// rice, cooked, chicken curry") when there's no breakdown to build one
+    /// from. `nonisolated static` — pure string formatting, no view/actor
+    /// state, so it's directly unit-testable off the main actor.
+    nonisolated static func displayTitle(items: [Item], fallbackName: String) -> String {
+        guard !items.isEmpty else { return fallbackName }
+        let names = items.map(titleCased)
+        switch names.count {
+        case 1:
+            return names[0]
+        case 2:
+            return "\(names[0]) & \(names[1])"
+        default:
+            return "\(names[0]) & \(names.count - 1) more"
+        }
+    }
+
+    /// Picks which item gets the subtle "biggest guess" mark: the
+    /// lowest-confidence item, tie-broken by the largest kcal — the item
+    /// most likely to be wrong is either the one the estimator was least
+    /// sure about, or (among equally-confident items) the one that moves the
+    /// total the most. Returns `nil` for an empty breakdown.
+    nonisolated static func biggestGuess(items: [Item]) -> Item? {
+        let confidenceRank: [String: Int] = ["low": 0, "med": 1, "high": 2]
+        return items.min { a, b in
+            let rankA = confidenceRank[a.confidence] ?? 1
+            let rankB = confidenceRank[b.confidence] ?? 1
+            if rankA != rankB { return rankA < rankB }
+            return a.kcal > b.kcal
+        }
+    }
+
+    private nonisolated static func titleCased(_ s: String) -> String {
+        s.split(separator: " ")
+            .map { word -> String in
+                guard let first = word.first else { return String(word) }
+                return String(first).uppercased() + word.dropFirst()
+            }
+            .joined(separator: " ")
     }
 }
 
@@ -180,6 +235,24 @@ struct AssistantTurn: Identifiable, Equatable {
         mealReceipts[idx].protein = protein
         mealReceipts[idx].carbs = carbs
         mealReceipts[idx].fat = fat
+    }
+
+    /// Applies a successful per-item `POST /api/meals/scale` result (the
+    /// `LogReceiptCard` item stepper): updates the meal's totals AND rewrites
+    /// just that one item's row in place, leaving every other item
+    /// untouched. No-op if either the receipt or the item isn't in this turn.
+    mutating func updateMealReceiptItem(
+        id: String, food: String, itemGrams: Int, itemKcal: Int,
+        kcal: Int, protein: Int, carbs: Int, fat: Int
+    ) {
+        guard let idx = mealReceipts.firstIndex(where: { $0.id == id }) else { return }
+        mealReceipts[idx].kcal = kcal
+        mealReceipts[idx].protein = protein
+        mealReceipts[idx].carbs = carbs
+        mealReceipts[idx].fat = fat
+        guard let itemIdx = mealReceipts[idx].items.firstIndex(where: { $0.food == food }) else { return }
+        mealReceipts[idx].items[itemIdx].grams = itemGrams
+        mealReceipts[idx].items[itemIdx].kcal = itemKcal
     }
 
     mutating func finish() {
@@ -619,11 +692,22 @@ final class CoachViewModel: ObservableObject {
                 protein: receipt.p,
                 carbs: receipt.c,
                 fat: receipt.f,
-                timestamp: timestamp
+                timestamp: timestamp,
+                items: Self.receiptItems(from: receipt.items)
             ))
         }
         turn.finish()
         return .assistantTurn(turn)
+    }
+
+    /// Shared `CoachMealReceiptItem` → `MealReceiptRow.Item` mapping for both
+    /// a live `meal_logged` event (`applyMealLogged`) and a restored one
+    /// (`restoredRow`) — nil/absent decodes to no items, same as an older
+    /// backend that hasn't shipped this field yet.
+    private static func receiptItems(from items: [CoachMealReceiptItem]?) -> [MealReceiptRow.Item] {
+        (items ?? []).map {
+            MealReceiptRow.Item(food: $0.food, grams: $0.grams, kcal: $0.kcal, confidence: $0.confidence)
+        }
     }
 
     /// Reconstructs the `CoachPersonaSnapshot` a restored message was spoken
@@ -1293,7 +1377,8 @@ final class CoachViewModel: ObservableObject {
             protein: receipt.p,
             carbs: receipt.c,
             fat: receipt.f,
-            timestamp: Self.timeFormatter.string(from: AppClock.now)
+            timestamp: Self.timeFormatter.string(from: AppClock.now),
+            items: Self.receiptItems(from: receipt.items)
         )
         // Insert-shaped, same as applyToolData's card insertion — this is
         // what lets LogReceiptCard's own transition play instead of a hard cut.
@@ -1365,6 +1450,39 @@ final class CoachViewModel: ObservableObject {
                     mutateTurn(turnId, persona: activePersona) { turn in
                         turn.updateMealReceiptMacros(
                             id: id,
+                            kcal: Int(result.kcal.rounded()),
+                            protein: Int(result.p.rounded()),
+                            carbs: Int(result.c.rounded()),
+                            fat: Int(result.f.rounded())
+                        )
+                    }
+                }
+                NotificationCenter.default.post(name: .vitalCoachMealLogChanged, object: nil)
+            } catch {
+                // Best-effort — see doc comment above.
+            }
+        }
+    }
+
+    /// `LogReceiptCard`'s per-item stepper — fixes ONE item's grams. Same
+    /// best-effort/silent-failure rationale as the whole-meal `scaleMealLog`
+    /// above: the receipt stays actionable either way. `Today`/Diet totals
+    /// refresh via the same `.vitalCoachMealLogChanged` notification the
+    /// whole-meal chips and Undo already post.
+    func scaleMealLogItem(id: String, food: String, grams: Int) {
+        guard let turnId = turnId(containingMealReceipt: id) else { return }
+
+        Task {
+            do {
+                let result = try await api.scaleMealLog(id: id, itemFood: food, grams: Double(grams))
+                guard let item = result.item else { return }
+                withAnimation(Theme.Motion.standard) {
+                    mutateTurn(turnId, persona: activePersona) { turn in
+                        turn.updateMealReceiptItem(
+                            id: id,
+                            food: item.food,
+                            itemGrams: Int(item.grams.rounded()),
+                            itemKcal: Int(item.kcal.rounded()),
                             kcal: Int(result.kcal.rounded()),
                             protein: Int(result.p.rounded()),
                             carbs: Int(result.c.rounded()),

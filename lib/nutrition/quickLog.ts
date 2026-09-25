@@ -58,6 +58,11 @@ export interface QuickLogFood {
   qty: number;
   unit: string;
   kcal: number;
+  /** Present only for a grounded estimator item — feeds log_meal's `foods`
+   * field, which the coach's `meal_logged` SSE event surfaces as `items` so
+   * iOS can show a per-item receipt breakdown. Absent for the legacy
+   * CalorieNinjas-estimate path (no per-item confidence there). */
+  confidence?: GroundedItem['confidence'];
 }
 
 export interface QuickLogSuccess {
@@ -91,7 +96,7 @@ export interface QuickLogOptions {
 }
 
 function itemsToFoods(items: GroundedItem[]): QuickLogFood[] {
-  return items.map((it) => ({ name: it.food, qty: it.grams, unit: 'g', kcal: it.kcal }));
+  return items.map((it) => ({ name: it.food, qty: it.grams, unit: 'g', kcal: it.kcal, confidence: it.confidence }));
 }
 
 /** Inserts one `meal_logged` event from a grounded, possibly multi-item estimate. */

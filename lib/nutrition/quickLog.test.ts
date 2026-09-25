@@ -313,8 +313,8 @@ test('quickLogMeal routes a quantity/multi-food phrase through the estimator and
   assert.equal(result.isEstimate, true);
   assert.equal(result.kcal, 543);
   assert.deepEqual(result.foods, [
-    { name: 'grilled chicken breast', qty: 200, unit: 'g', kcal: 330 },
-    { name: 'white rice, cooked', qty: 150, unit: 'g', kcal: 213 },
+    { name: 'grilled chicken breast', qty: 200, unit: 'g', kcal: 330, confidence: 'high' },
+    { name: 'white rice, cooked', qty: 150, unit: 'g', kcal: 213, confidence: 'med' },
   ]);
 });
 

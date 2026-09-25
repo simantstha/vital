@@ -165,6 +165,58 @@ test('POST returns 422 for grams scaling when the meal has no gram baseline', as
   assert.equal(res.status, 422);
 });
 
+test('POST with itemFood + grams scales only that item and folds the delta into totals', async () => {
+  resetRow({
+    estimatorItems: [
+      { food: 'white rice, cooked', grams: 300, kcal: 390, c: 84, p: 8, f: 0, source: 'usda', confidence: 'med', portionNote: '' },
+      { food: 'chicken curry', grams: 250, kcal: 358, c: 10, p: 32, f: 20, source: 'model', confidence: 'low', portionNote: '' },
+    ],
+    totalGrams: 550,
+    kcal: 748, c: 94, p: 40, f: 20,
+  });
+  updateCalls = [];
+  portionCorrections = [];
+
+  const { POST } = await routePromise;
+  const res = await POST(req({ id: 'event-1', itemFood: 'white rice, cooked', grams: 450 }));
+  assert.equal(res.status, 200);
+  const body = await res.json();
+
+  // Item scaled by 450/300 = 1.5×: kcal 390 → 585.
+  assert.equal(body.item.grams, 450);
+  assert.equal(body.item.kcal, 585);
+  // Meal total folds in only the rice delta (+195 kcal): 748 + 195 = 943.
+  assert.equal(body.kcal, 943);
+
+  const updatedPayload = updateCalls[0].payload;
+  const items = updatedPayload.estimatorItems as Array<{ food: string; grams: number; kcal: number }>;
+  assert.equal(items[0].grams, 450);
+  assert.equal(items[1].grams, 250); // untouched
+  assert.equal(updatedPayload.totalGrams, 700);
+
+  // Portion memory recorded ONLY for the edited food.
+  assert.deepEqual(portionCorrections, [{ userId: 'user-1', food: 'white rice, cooked', grams: 450 }]);
+});
+
+test('POST with itemFood returns 404 for an unknown item and 422 with no item breakdown', async () => {
+  resetRow({
+    estimatorItems: [{ food: 'white rice, cooked', grams: 300, kcal: 390, c: 84, p: 8, f: 0, source: 'usda', confidence: 'med', portionNote: '' }],
+    totalGrams: 300,
+  });
+  const { POST } = await routePromise;
+  assert.equal((await POST(req({ id: 'event-1', itemFood: 'nonexistent food', grams: 100 }))).status, 404);
+
+  resetRow(); // no estimatorItems
+  assert.equal((await POST(req({ id: 'event-1', itemFood: 'white rice, cooked', grams: 100 }))).status, 422);
+});
+
+test('POST rejects itemFood combined with factor, or itemFood with no grams', async () => {
+  resetRow({ estimatorItems: [{ food: 'x', grams: 100, kcal: 10, c: 1, p: 1, f: 1, source: 'usda', confidence: 'med', portionNote: '' }] });
+  const { POST } = await routePromise;
+  assert.equal((await POST(req({ id: 'event-1', itemFood: 'x', factor: 1.5 }))).status, 400);
+  assert.equal((await POST(req({ id: 'event-1', itemFood: 'x' }))).status, 400);
+});
+
 test('POST scales totals only (no portion memory write) for a flat log with no item breakdown', async () => {
   resetRow();
   portionCorrections = [];

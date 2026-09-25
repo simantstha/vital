@@ -57,6 +57,35 @@ final class CoachMealReceiptTests: XCTestCase {
         ])
     }
 
+    /// `items` present — an estimator-routed log_meal — decodes into
+    /// `CoachMealReceipt.items`.
+    func testMealLoggedEventWithItemsDecodesTheBreakdown() throws {
+        let event = try XCTUnwrap(APIClient.decodeCoachSSELine(
+            #"""
+            data: {"type":"meal_logged","id":"evt-1","name":"White rice, cooked and chicken curry","kcal":942,"p":31,"c":154,"f":20,
+            "items":[{"food":"white rice, cooked","grams":450,"kcal":585,"confidence":"med"},{"food":"chicken curry","grams":250,"kcal":357,"confidence":"low"}]}
+            """#
+        ))
+        XCTAssertEqual(event, .mealLogged(CoachMealReceipt(
+            id: "evt-1", name: "White rice, cooked and chicken curry", kcal: 942, p: 31, c: 154, f: 20,
+            items: [
+                CoachMealReceiptItem(food: "white rice, cooked", grams: 450, kcal: 585, confidence: "med"),
+                CoachMealReceiptItem(food: "chicken curry", grams: 250, kcal: 357, confidence: "low"),
+            ]
+        )))
+    }
+
+    /// `items` absent (a flat/legacy/barcode log, or an older backend) must
+    /// decode to `nil`, not fail or default to an empty array that would read
+    /// as "zero items" — see `CoachMealReceipt.items`'s doc comment.
+    func testMealLoggedEventWithoutItemsDecodesItemsToNil() throws {
+        let event = try XCTUnwrap(APIClient.decodeCoachSSELine(
+            #"data: {"type":"meal_logged","id":"evt-123","name":"Two eggs and toast","kcal":340,"p":18,"c":28,"f":16}"#
+        ))
+        guard case .mealLogged(let receipt) = event else { return XCTFail("expected .mealLogged") }
+        XCTAssertNil(receipt.items)
+    }
+
     func testMealUnloggedEventDecodesIntoMealUnloggedCase() throws {
         let event = try XCTUnwrap(APIClient.decodeCoachSSELine(
             #"data: {"type":"meal_unlogged","id":"evt-123"}"#
@@ -128,6 +157,51 @@ final class CoachMealReceiptTests: XCTestCase {
         let restoration = try APIClient.decodeCoachRestoration(json)
         XCTAssertNil(restoration.messages.first?.mealReceipts)
         XCTAssertEqual(restoration.messages.first?.content, "Logged it!")
+    }
+
+    /// A restored `mealReceipts` entry that carries `items` (a restored
+    /// estimator log) decodes them the same way the live SSE event does.
+    func testRestoredMessageDecodesMealReceiptItems() throws {
+        let json = Data(#"""
+        {
+          "messages": [{
+            "id": "20000000-0000-4000-8000-000000000001",
+            "role": "assistant", "speaker": "coach", "content": "Logged it!",
+            "timestamp": "2026-07-11T12:05:00.000Z",
+            "specialistSessionId": null, "specialistMetadata": null,
+            "mealReceipts": [{
+              "id": "evt-1", "name": "Rice and curry", "kcal": 942, "p": 31, "c": 154, "f": 20,
+              "items": [{"food": "white rice, cooked", "grams": 450, "kcal": 585, "confidence": "med"}]
+            }]
+          }],
+          "activePersona": {"id": "vital", "title": "Vital Coach", "subtitle": "Your personal coach", "accent": "#7C6CF2", "icon": "sparkles", "sessionId": null},
+          "pendingCard": null
+        }
+        """#.utf8)
+        let restoration = try APIClient.decodeCoachRestoration(json)
+        XCTAssertEqual(restoration.messages.first?.mealReceipts?.first?.items, [
+            CoachMealReceiptItem(food: "white rice, cooked", grams: 450, kcal: 585, confidence: "med"),
+        ])
+    }
+
+    /// A restored `mealReceipts` entry with no `items` key (a flat log, or an
+    /// older backend) decodes `items` to `nil`, same as the live SSE path.
+    func testRestoredMessageWithoutMealReceiptItemsDecodesItemsToNil() throws {
+        let json = Data(#"""
+        {
+          "messages": [{
+            "id": "20000000-0000-4000-8000-000000000001",
+            "role": "assistant", "speaker": "coach", "content": "Logged it!",
+            "timestamp": "2026-07-11T12:05:00.000Z",
+            "specialistSessionId": null, "specialistMetadata": null,
+            "mealReceipts": [{"id": "evt-1", "name": "Oats", "kcal": 210, "p": 8, "c": 32, "f": 5}]
+          }],
+          "activePersona": {"id": "vital", "title": "Vital Coach", "subtitle": "Your personal coach", "accent": "#7C6CF2", "icon": "sparkles", "sessionId": null},
+          "pendingCard": null
+        }
+        """#.utf8)
+        let restoration = try APIClient.decodeCoachRestoration(json)
+        XCTAssertNil(restoration.messages.first?.mealReceipts?.first?.items)
     }
 
     // MARK: - Restoration: synthesizing receipt rows
