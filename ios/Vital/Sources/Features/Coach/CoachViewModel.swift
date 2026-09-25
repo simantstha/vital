@@ -111,7 +111,7 @@ struct MealReceiptRow: Identifiable, Equatable {
     /// state, so it's directly unit-testable off the main actor.
     nonisolated static func displayTitle(items: [Item], fallbackName: String) -> String {
         guard !items.isEmpty else { return fallbackName }
-        let names = items.map(titleCased)
+        let names = items.map { Self.titleCased($0.food) }
         switch names.count {
         case 1:
             return names[0]
