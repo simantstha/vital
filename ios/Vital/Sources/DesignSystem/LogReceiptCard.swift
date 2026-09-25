@@ -67,7 +67,7 @@ struct LogReceiptCard: View {
     /// non-interactive (still shown, just not tappable).
     var onScaleItem: ((String, Int) -> Void)?
 
-    @State private var editingItem: ItemRow?
+    @SwiftUI.State private var editingItem: ItemRow?
 
     var body: some View {
         VitalCard(padding: Theme.Spacing.md, cornerRadius: Theme.Radius.lg) {
