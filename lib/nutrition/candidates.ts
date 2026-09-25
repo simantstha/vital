@@ -453,6 +453,64 @@ async function upsertUsdaRows(db: Database, usdaRows: UsdaFood[]): Promise<void>
   }
 }
 
+export interface ProviderPer100gMatch {
+  name: string;
+  per100g: { kcal: number; c: number; p: number; f: number };
+  source: 'cache' | 'usda';
+}
+
+/**
+ * Single-food per-100g lookup used by lib/nutrition/estimator.ts's grounding
+ * step (source 2: "food_cache / USDA"). Cache first (fast, no rate limit),
+ * then a live USDA search — freshly-fetched USDA rows are upserted into the
+ * cache exactly like searchCandidates does, so a repeat lookup for the same
+ * food later hits the cache. Returns null (never throws) when neither source
+ * has a usable (non-null kcal) match.
+ */
+export async function lookupProviderPer100g(food: string): Promise<ProviderPer100gMatch | null> {
+  const trimmed = food.trim();
+  if (!trimmed) return null;
+
+  const db = await loadDb();
+  const likePattern = `%${escapeLikePattern(trimmed)}%`;
+
+  const cacheRows = await fetchCacheRows(db, likePattern).catch(() => [] as ProviderCacheRow[]);
+  const cacheHit = cacheRows.find((row) => row.kcal_100g != null);
+  if (cacheHit) {
+    return {
+      name: cacheHit.name,
+      per100g: {
+        kcal: cacheHit.kcal_100g as number,
+        c: cacheHit.carbs_100g ?? 0,
+        p: cacheHit.protein_100g ?? 0,
+        f: cacheHit.fat_100g ?? 0,
+      },
+      source: 'cache',
+    };
+  }
+
+  const usdaRows = await searchFoods(trimmed).catch(() => [] as UsdaFood[]);
+  if (usdaRows.length > 0) {
+    // Best-effort — never blocks the lookup on the write.
+    void upsertUsdaRows(db, usdaRows);
+  }
+  const usdaHit = usdaRows.find((food) => food.per100g.kcal != null);
+  if (usdaHit) {
+    return {
+      name: usdaHit.name,
+      per100g: {
+        kcal: usdaHit.per100g.kcal as number,
+        c: usdaHit.per100g.c ?? 0,
+        p: usdaHit.per100g.p ?? 0,
+        f: usdaHit.per100g.f ?? 0,
+      },
+      source: 'usda',
+    };
+  }
+
+  return null;
+}
+
 export interface SearchCandidatesResult {
   candidates: Candidate[];
   estimateFoods: NutritionixResult['foods'] | null;

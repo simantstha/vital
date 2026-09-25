@@ -66,10 +66,13 @@ struct MealReceiptRow: Identifiable, Equatable {
     /// deletes and what Undo is keyed on.
     let id: String
     let name: String
-    let kcal: Int
-    let protein: Int
-    let carbs: Int
-    let fat: Int
+    // var (not let): scaleMealLog(id:factor:) rewrites these in place via
+    // updateMealReceiptMacros after a successful portion-chip correction —
+    // the row keeps its identity (id/name/timestamp), only the macros change.
+    var kcal: Int
+    var protein: Int
+    var carbs: Int
+    var fat: Int
     /// Preformatted at receipt-creation time (the event fires the moment the
     /// meal is inserted, i.e. "now") — see `CoachViewModel.timeString(_:)`.
     let timestamp: String
@@ -166,6 +169,17 @@ struct AssistantTurn: Identifiable, Equatable {
     mutating func updateMealReceipt(id: String, state: LogReceiptCard.State) {
         guard let idx = mealReceipts.firstIndex(where: { $0.id == id }) else { return }
         mealReceipts[idx].cardState = state
+    }
+
+    /// Applies a successful `POST /api/meals/scale` result to a receipt's
+    /// macros — the portion chips' (½× · 1× · 1.5× · 2×) effect. No-op if the
+    /// id isn't in this turn.
+    mutating func updateMealReceiptMacros(id: String, kcal: Int, protein: Int, carbs: Int, fat: Int) {
+        guard let idx = mealReceipts.firstIndex(where: { $0.id == id }) else { return }
+        mealReceipts[idx].kcal = kcal
+        mealReceipts[idx].protein = protein
+        mealReceipts[idx].carbs = carbs
+        mealReceipts[idx].fat = fat
     }
 
     mutating func finish() {
@@ -1329,6 +1343,38 @@ final class CoachViewModel: ObservableObject {
             } catch {
                 let message = UserFacingError.message(for: error, context: .write, tag: "coach undo meal log")
                 setMealReceiptState(id: id, turnId: turnId, state: .undoFailed(message), animated: false)
+            }
+        }
+    }
+
+    /// `LogReceiptCard`'s portion-chip action (½× · 1× · 1.5× · 2×) for an
+    /// inline coach meal receipt — POSTs the multiplier to
+    /// `/api/meals/scale`, then rewrites the receipt's macros on success. No
+    /// card-state transition (unlike Undo): the receipt stays `.normal` and
+    /// actionable so the user can tap another chip. Silently no-ops on
+    /// failure — a portion correction is a low-stakes convenience, not worth
+    /// an inline error row, and the API-side kcal shown before the tap
+    /// already stands.
+    func scaleMealLog(id: String, factor: Double) {
+        guard let turnId = turnId(containingMealReceipt: id) else { return }
+
+        Task {
+            do {
+                let result = try await api.scaleMealLog(id: id, factor: factor)
+                withAnimation(Theme.Motion.standard) {
+                    mutateTurn(turnId, persona: activePersona) { turn in
+                        turn.updateMealReceiptMacros(
+                            id: id,
+                            kcal: Int(result.kcal.rounded()),
+                            protein: Int(result.p.rounded()),
+                            carbs: Int(result.c.rounded()),
+                            fat: Int(result.f.rounded())
+                        )
+                    }
+                }
+                NotificationCenter.default.post(name: .vitalCoachMealLogChanged, object: nil)
+            } catch {
+                // Best-effort — see doc comment above.
             }
         }
     }

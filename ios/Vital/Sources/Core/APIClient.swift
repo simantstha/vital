@@ -902,6 +902,26 @@ struct APIClient {
         try validate(response)
     }
 
+    /// Scales a logged meal by `factor` (the portion chips — ½× · 1× · 1.5×
+    /// · 2×) via `POST /api/meals/scale`, which also records the resulting
+    /// portion as this user's remembered typical grams for that meal's items
+    /// (see the route's doc comment). Server-side only; `grams`-mode isn't
+    /// exposed here since the chips only ever send a multiplier.
+    func scaleMealLog(id: String, factor: Double) async throws -> MealScaleResult {
+        guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/meals/scale") else {
+            throw APIError.invalidURL
+        }
+        var request = authorizedRequest(url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 15
+        struct Body: Encodable { let id: String; let factor: Double }
+        request.httpBody = try encoder.encode(Body(id: id, factor: factor))
+        let (data, response) = try await session.data(for: request)
+        try validate(response)
+        return try decoder.decode(MealScaleResult.self, from: data)
+    }
+
     // MARK: - Ingest
 
     func postIngest(_ deltas: [HealthDelta]) async throws {
@@ -1390,6 +1410,17 @@ struct MealModifyResult: Decodable {
     let p: Double
     let f: Double
     let why: String
+}
+
+/// Result of POST /api/meals/scale — the scaled meal's new macros.
+struct MealScaleResult: Decodable {
+    let ok: Bool
+    let id: String
+    let name: String
+    let kcal: Double
+    let c: Double
+    let p: Double
+    let f: Double
 }
 
 struct BarcodeResult: Decodable {
@@ -2228,6 +2259,8 @@ protocol CoachAPIProviding {
     /// Undo for an inline `LogReceiptCard` in the coach transcript — same
     /// `DELETE /api/meals/log?id=` endpoint `DietSheetViewModel` uses.
     func deleteMealLog(id: String) async throws
+    /// The portion chips (½× · 1× · 1.5× · 2×) on an inline `LogReceiptCard`.
+    func scaleMealLog(id: String, factor: Double) async throws -> MealScaleResult
 }
 
 extension APIClient: CoachAPIProviding {}

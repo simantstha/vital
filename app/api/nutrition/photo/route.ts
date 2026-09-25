@@ -3,24 +3,38 @@
  *
  * Body: { imageBase64: string }   — raw base64 (or data-URL; prefix is stripped)
  * Response: { name, kcal, c, p, f, items[] }
+ *   items[]: { name, qty, unit, kcal } — same shape the pre-v2 CalorieNinjas
+ *   path returned (qty is now grams, unit is always "g"), so the iOS decoder
+ *   (NutritionResult) needs no changes; see it in
+ *   ios/Vital/Sources/Core/APIClient.swift.
  *
- * Two-step approach:
- *   1. claude-haiku-4-5 classifies the image and extracts a food query with
- *      realistic portion estimates.
- *   2. CalorieNinjas lookup via lookupNutrition — fast, deterministic numbers.
- *   3. Fallback: claude-haiku-4-5 direct macro estimate when the DB has no match.
+ * v2 (lib/nutrition/estimator.ts): ONE claude-sonnet-5 vision call reasons
+ * directly about realistic per-item portions (plate/bowl/utensil size,
+ * cooked-vs-raw, visible oil) instead of writing a free-text query that got
+ * thrown away and re-guessed by a second, cruder text parser — see
+ * estimator.ts's header comment for the full rationale (this is the fix for
+ * "meal logging is way off"). Each item is then grounded against real
+ * per-100g nutrition data (this user's own history, then food_cache/USDA)
+ * before the model's own macro guess is used.
  *
- * Returns 400 on bad input, 502 on upstream failure.
+ * This route only ESTIMATES — like before, it does not write a `meal_logged`
+ * event itself. LogMealViewModel shows the result for the user to review/
+ * edit, then saves it via POST /api/meals/log (flat macros only, no item
+ * breakdown), same as the barcode/search paths. Only the text-log path
+ * (lib/nutrition/quickLog.ts's insertGroundedMeal) currently persists the
+ * per-item `estimatorItems` breakdown that seeds future history grounding —
+ * see the Risks section of this feature's PR description for that gap.
+ *
+ * Returns 400 on bad input, 401 on missing/invalid auth, 422 when the model
+ * finds no food in the photo, 502 on upstream failure.
  */
 
 import { NextResponse } from 'next/server';
-import Anthropic from '@anthropic-ai/sdk';
 import sharp from 'sharp';
-import { lookupNutrition } from '@/lib/nutritionix';
+import { getUserIdFromRequest } from '@/lib/auth';
+import { estimateMeal } from '@/lib/nutrition/estimator';
 
 export const dynamic = 'force-dynamic';
-
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 // ── normalize to a vision-API-safe JPEG ────────────────────────────────────────
 // Modern phone cameras (e.g. 48MP sensors) can exceed Claude's 8000px-per-side
@@ -37,94 +51,16 @@ async function normalizeImage(b64: string): Promise<string> {
   return resized.toString('base64');
 }
 
-// ── Classification step ──────────────────────────────────────────────────────
-
-async function classifyMealPhoto(b64: string): Promise<{
-  query: string;
-  items: string[];
-} | null> {
-  const msg = await client.messages.create({
-    model: 'claude-haiku-4-5',
-    max_tokens: 300,
-    messages: [{
-      role: 'user',
-      content: [
-        {
-          type: 'image',
-          source: { type: 'base64', media_type: 'image/jpeg', data: b64 },
-        },
-        {
-          type: 'text',
-          text: `Classify this image. Respond with JSON only, no markdown.
-
-If it shows food or a meal: {"type":"meal_photo","query":"<natural language list, e.g. '6oz grilled chicken breast, 1 cup brown rice, 1 cup steamed broccoli'>","items":["<item 1>","<item 2>"]}
-Otherwise: {"type":"other"}
-
-For meal_photo: estimate realistic portion sizes. query must be comma-separated items with quantities and cooking method.`,
-        },
-      ],
-    }],
-  });
-
-  try {
-    const raw = (msg.content[0] as { text: string }).text;
-    const parsed = JSON.parse(raw.replace(/```json\n?|```/g, '').trim()) as {
-      type: string;
-      query?: string;
-      items?: string[];
-    };
-    if (parsed.type === 'meal_photo' && parsed.query) {
-      return { query: parsed.query, items: parsed.items ?? [] };
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-// ── Direct Claude vision macro estimate (fallback) ────────────────────────────
-
-async function estimateDirectly(b64: string): Promise<{
-  name: string; kcal: number; c: number; p: number; f: number;
-  items: Array<{ name: string; qty: number; unit: string; kcal: number }>;
-}> {
-  const msg = await client.messages.create({
-    model: 'claude-haiku-4-5',
-    max_tokens: 400,
-    messages: [{
-      role: 'user',
-      content: [
-        {
-          type: 'image',
-          source: { type: 'base64', media_type: 'image/jpeg', data: b64 },
-        },
-        {
-          type: 'text',
-          text: `You are a nutrition expert. Estimate the macros for this meal photo.
-Respond with JSON only, no markdown:
-{"name":"<meal description>","kcal":N,"c":N,"p":N,"f":N,"items":[{"name":"<item>","qty":N,"unit":"g","kcal":N}]}
-All numeric values must be integers. Base estimates on visible portion sizes.`,
-        },
-      ],
-    }],
-  });
-
-  const raw = (msg.content[0] as { text: string }).text;
-  try {
-    return JSON.parse(raw.replace(/```json\n?|```/g, '').trim()) as {
-      name: string; kcal: number; c: number; p: number; f: number;
-      items: Array<{ name: string; qty: number; unit: string; kcal: number }>;
-    };
-  } catch {
-    throw new UnrecognizedImageError();
-  }
-}
-
-class UnrecognizedImageError extends Error {}
-
 // ── Route handler ─────────────────────────────────────────────────────────────
 
 export async function POST(request: Request): Promise<NextResponse> {
+  let userId: string;
+  try {
+    userId = getUserIdFromRequest(request);
+  } catch (err) {
+    return NextResponse.json({ error: String(err) }, { status: 401 });
+  }
+
   let body: unknown;
   try {
     body = await request.json();
@@ -156,34 +92,28 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   try {
-    // Step 1: classify and extract food query
-    const classification = await classifyMealPhoto(b64);
+    const estimate = await estimateMeal({ imageB64: b64, userId });
 
-    if (classification) {
-      // Step 2: try CalorieNinjas lookup for deterministic numbers
-      const nutrition = await lookupNutrition(classification.query);
-      if (nutrition) {
-        return NextResponse.json({
-          name:  classification.query,
-          kcal:  nutrition.kcal,
-          c:     nutrition.c,
-          p:     nutrition.p,
-          f:     nutrition.f,
-          items: nutrition.foods,
-        });
-      }
-    }
-
-    // Step 3: fallback — direct Claude vision macro estimate
-    const estimate = await estimateDirectly(b64);
-    return NextResponse.json(estimate);
-  } catch (err) {
-    if (err instanceof UnrecognizedImageError) {
+    if (estimate.items.length === 0) {
       return NextResponse.json(
         { error: 'Could not identify food in this photo. Try a clearer shot or log it manually.' },
         { status: 422 },
       );
     }
+
+    return NextResponse.json({
+      name:  estimate.name,
+      kcal:  estimate.kcal,
+      c:     estimate.c,
+      p:     estimate.p,
+      f:     estimate.f,
+      items: estimate.items.map((it) => ({ name: it.food, qty: it.grams, unit: 'g', kcal: it.kcal })),
+      // Additive — not decoded by the current iOS NutritionResult, but kept
+      // for a future client and for anything that wants the full grounded
+      // breakdown without a second round trip.
+      estimatorItems: estimate.items,
+    });
+  } catch (err) {
     console.error('[nutrition/photo] Error:', err);
     return NextResponse.json(
       { error: 'Failed to analyze image.' },
