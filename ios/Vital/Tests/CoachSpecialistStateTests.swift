@@ -818,8 +818,8 @@ final class FakeCoachAPI: CoachAPIProviding {
         self.restoration = restoration
     }
 
-    func uploadSTTAudio(fileURL: URL) async -> String? {
-        nil
+    func uploadSTTAudio(fileURL: URL) async -> STTUploadResult {
+        .failure(.network)
     }
 
     func fetchCoachRestoration() async throws -> CoachRestorationResponse {

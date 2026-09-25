@@ -138,15 +138,22 @@ struct CoachOrb: View {
         if let error = voice.lastError {
             switch error {
             case .didntCatchThat: return "Didn't catch that. Go ahead."
+            case .transcriptionFailed: return "Couldn't transcribe that — try again"
             }
         }
         switch voice.state {
         case .idle:
             return "Tap to talk"
-        case .listening, .transcribing:
-            return voice.partialTranscript.isEmpty ? "Listening…" : voice.partialTranscript
+        // No live Apple words on screen (owner decision, spec
+        // `voice-cloud-only-stt`) — the orb's own level-driven scale
+        // (`orbScale`) is the listening indicator; the caption itself never
+        // mirrors `voice.partialTranscript`.
+        case .listening:
+            return "Listening…"
+        case .transcribing:
+            return "Transcribing…"
         case .sending:
-            return voice.partialTranscript.isEmpty ? "Listening…" : voice.partialTranscript
+            return "Listening…"
         case .thinking:
             return "Thinking…"
         case .speaking:

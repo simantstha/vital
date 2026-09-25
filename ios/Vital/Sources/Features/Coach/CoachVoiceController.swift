@@ -176,6 +176,14 @@ final class CoachVoiceController: ObservableObject {
         /// "Didn't catch that. Go ahead." — keeps listening; counts toward
         /// the 2-consecutive-empty-listens cap that ends conversation mode.
         case didntCatchThat
+        /// Cloud STT is the only source of the sent transcript now (no
+        /// on-device Apple fallback) — this fires whenever a turn had audio
+        /// to transcribe but `uploadSTTAudio` came back with a failure, or
+        /// there was no recording file at all. The payload is the short
+        /// diagnostic line (`STTUploadFailure.diagnostic`, e.g. "ElevenLabs
+        /// 401: missing_permissions") shown alongside "Couldn't transcribe
+        /// that — try again".
+        case transcriptionFailed(String)
     }
 
     @Published private(set) var state: VoiceState = .idle
@@ -484,6 +492,16 @@ final class CoachVoiceController: ObservableObject {
         transcriber.stop()
     }
 
+    /// Dismisses the current `lastError` (spec §3.6/ transcription-failure
+    /// error card's "Dismiss" action) without touching anything else —
+    /// `CoachView`'s single-mode `ErrorCard` calls this; a fresh listen
+    /// clears `lastError` on its own (`startRecording()`/`beginListening()`
+    /// via `beginTranscription()`'s reset), so this only needs to cover the
+    /// user dismissing it by hand.
+    func clearError() {
+        lastError = nil
+    }
+
     /// Ends the in-flight turn — while listening or while awaiting STT — and
     /// delivers nothing. Idempotent. Also fully exits conversation mode
     /// (V5): cancels the "Your turn"/backgrounded-grace timers so neither
@@ -666,6 +684,12 @@ final class CoachVoiceController: ObservableObject {
 
     // MARK: - Transcription
 
+    /// The Apple on-device transcript is read only to decide whether *any*
+    /// speech was detected at all (the guard just below) — never as text
+    /// that can be sent. Cloud STT (`api.uploadSTTAudio`) is the sole source
+    /// of the transcript handed to `onFinalTranscript`; see the "No live
+    /// Apple words on screen" / "sent text comes ONLY from cloud STT" owner
+    /// decision.
     private func beginTranscription() {
         let appleTranscript = transcriber.transcribedText.trimmingCharacters(in: .whitespacesAndNewlines)
         let recordingURL = transcriber.recordingURL
@@ -682,57 +706,81 @@ final class CoachVoiceController: ObservableObject {
             guard let self else { return }
             defer { self.transcriber.discardRecording() }
 
-            var finalText = appleTranscript
-            if let recordingURL {
-                self.voiceTurnTimer?.mark(.sttUploadStart)
-                let cloudText = await self.api.uploadSTTAudio(fileURL: recordingURL)
-                self.voiceTurnTimer?.mark(.sttUploadEnd)
-                if let cloudText, !cloudText.isEmpty {
-                    finalText = cloudText
-                } else {
-                    // `uploadSTTAudio` already logged the specific failure
-                    // reason (non-200/decode-failure/thrown error/empty
-                    // transcript); this is the "so what" — falling back to
-                    // the on-device Apple transcript, no text logged.
-                    Self.voiceLogger.error("beginTranscription: cloud STT unavailable, using on-device Apple transcript fallback")
-                }
-            } else {
-                // No recording clip at all (the `.m4a` couldn't be created —
-                // see `SpeechTranscriber.start()`) — there was never
-                // anything to upload, so this always resolves from the
-                // on-device Apple transcript.
-                Self.voiceLogger.error("beginTranscription: no recording clip to upload, using on-device Apple transcript fallback")
-            }
-
-            // A `cancel()` mid-upload already tore this task's flag down —
-            // must not fall through to a send.
-            guard !Task.isCancelled else { return }
-            self.transcriptionTask = nil
-
-            let trimmed = finalText.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else {
-                self.resetToIdleAfterEmptyTurn()
+            guard let recordingURL else {
+                // Apple detected speech, but the `.m4a` clip never got
+                // created (see `SpeechTranscriber.start()`) — there's
+                // nothing to upload, and with no Apple fallback anymore
+                // there's nothing to send either.
+                Self.voiceLogger.error("beginTranscription: no recording clip to upload")
+                guard !Task.isCancelled else { return }
+                self.failTranscription(diagnostic: "No recording to transcribe")
                 return
             }
 
-            let turnID = self.activeTurnID
-            self.state = .sending
-            // `CoachViewModel`'s `onFinalTranscript` handler calls `send()`
-            // synchronously, which — for a conversation-mode turn — calls
-            // `markThinking()` synchronously before this closure returns.
-            // So by the time control comes back here, `state` has already
-            // moved past `.sending` for that case; the check right below
-            // only resets to `.idle` for single-turn (which never calls
-            // `markThinking()`) or the rare case `send()` itself bailed
-            // (e.g. raced by another busy turn).
-            self.onFinalTranscript?(trimmed)
-            self.lastDeliveredTurnID = turnID
-            self.activeTurnID = nil
-            self.currentTurnID = nil
-            if self.state == .sending {
-                self.state = .idle
+            self.voiceTurnTimer?.mark(.sttUploadStart)
+            let result = await self.api.uploadSTTAudio(fileURL: recordingURL)
+            self.voiceTurnTimer?.mark(.sttUploadEnd)
+
+            // A `cancel()` mid-upload already tore this task's flag down —
+            // must not fall through to a send (or an error) for a turn the
+            // user already dismissed.
+            guard !Task.isCancelled else { return }
+
+            switch result {
+            case .success(let text):
+                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else {
+                    Self.voiceLogger.error("beginTranscription: cloud STT returned an empty transcript")
+                    self.failTranscription(diagnostic: "Empty transcript")
+                    return
+                }
+                self.transcriptionTask = nil
+                self.deliver(trimmed)
+            case .failure(let failure):
+                Self.voiceLogger.error("beginTranscription: cloud STT failed (\(failure.diagnostic, privacy: .public))")
+                self.failTranscription(diagnostic: failure.diagnostic)
             }
         }
+    }
+
+    /// Delivers a resolved cloud transcript — the only path that calls
+    /// `onFinalTranscript`. Factored out of `beginTranscription()`'s task so
+    /// `failTranscription(diagnostic:)` can sit next to it as the other,
+    /// nothing-sent outcome.
+    private func deliver(_ trimmedText: String) {
+        let turnID = activeTurnID
+        state = .sending
+        // `CoachViewModel`'s `onFinalTranscript` handler calls `send()`
+        // synchronously, which — for a conversation-mode turn — calls
+        // `markThinking()` synchronously before this closure returns. So by
+        // the time control comes back here, `state` has already moved past
+        // `.sending` for that case; the check right below only resets to
+        // `.idle` for single-turn (which never calls `markThinking()`) or
+        // the rare case `send()` itself bailed (e.g. raced by another busy
+        // turn).
+        onFinalTranscript?(trimmedText)
+        lastDeliveredTurnID = turnID
+        activeTurnID = nil
+        currentTurnID = nil
+        if state == .sending {
+            state = .idle
+        }
+    }
+
+    /// A cloud STT failure (or no recording file at all) — nothing is ever
+    /// sent. Single mode: goes idle with a visible, dismissable
+    /// `.transcriptionFailed` error (spec: "Couldn't transcribe that — try
+    /// again" + this diagnostic). Conversation mode: routes through the
+    /// existing empty-listen re-listen/end-after-2 path
+    /// (`resetToIdleAfterEmptyTurn`) so the conversation keeps going, but
+    /// still surfaces the diagnostic — overriding whatever that path set
+    /// `lastError` to (`.didntCatchThat`, or `nil` if it ended the
+    /// conversation), since a *failure* is more specific than "no speech
+    /// detected" and the caller should see why.
+    private func failTranscription(diagnostic: String) {
+        transcriptionTask = nil
+        resetToIdleAfterEmptyTurn()
+        lastError = .transcriptionFailed(diagnostic)
     }
 
     /// Shared by three non-spoken endings: `startRecording()`'s failed-start

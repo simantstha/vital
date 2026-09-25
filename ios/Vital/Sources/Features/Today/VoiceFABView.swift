@@ -155,11 +155,19 @@ struct VoiceFABView: View {
             .allowsHitTesting(false)
     }
 
+    /// No live Apple words on screen (owner decision, spec
+    /// `voice-cloud-only-stt`) — a fixed "Listening…"/"Transcribing…" label
+    /// plus a `VoiceLevelMeter` instead of `voice.partialTranscript`.
     private var captionOverlay: some View {
-        Text(voice.partialTranscript.isEmpty ? "Listening…" : voice.partialTranscript)
-            .font(Theme.Typography.bodyMedium)
-            .fontWeight(.medium)
-            .foregroundStyle(Theme.Colors.onAccent)
+        HStack(spacing: Theme.Spacing.sm) {
+            Text(voice.state == .transcribing ? "Transcribing…" : "Listening…")
+                .font(Theme.Typography.bodyMedium)
+                .fontWeight(.medium)
+                .foregroundStyle(Theme.Colors.onAccent)
+            if voice.state != .transcribing {
+                VoiceLevelMeter(level: voice.inputLevel, color: Theme.Colors.onAccent)
+            }
+        }
             .multilineTextAlignment(.center)
             .padding(.horizontal, Theme.Spacing.lg)
             .padding(.vertical, Theme.Spacing.md)

@@ -355,6 +355,24 @@ struct CoachView: View {
                 .padding(.top, Theme.Spacing.sm)
             }
 
+            // Single-mode cloud-STT failure (spec: "Couldn't transcribe
+            // that — try again"). Conversation mode surfaces the same
+            // `voice.lastError` through `CoachOrb`'s caption instead — that
+            // orb replaces this whole row while `mode == .conversation`, so
+            // this and the caption never show at the same time.
+            if voice.mode != .conversation, let voiceError = voice.lastError, case .transcriptionFailed(let diagnostic) = voiceError {
+                ErrorCard(
+                    title: "Couldn't transcribe that",
+                    message: "Try again. (\(diagnostic))",
+                    actionLabel: "Dismiss",
+                    actionIcon: "xmark"
+                ) {
+                    voice.clearError()
+                }
+                .padding(.horizontal, Theme.Spacing.lg)
+                .padding(.top, Theme.Spacing.sm)
+            }
+
             if vm.speaker.isSpeaking {
                 stopSpeakingRow
             }
@@ -384,19 +402,32 @@ struct CoachView: View {
                     .background(Theme.Colors.canvas)
             } else {
                 HStack(spacing: Theme.Spacing.sm) {
-                    TextField("Message your coach…", text: composerText, axis: .vertical)
-                        .font(Theme.Typography.bodyMedium)
-                        .foregroundStyle(Theme.Colors.textPrimary)
-                        .tint(Theme.Colors.accentContent)
-                        .lineLimit(1...5)
-                        // While recording, the field mirrors the live transcript —
-                        // typing over it would fight the mic. Also disabled while
-                        // the recorded clip is being transcribed.
-                        .disabled(voice.isRecording || isTranscribing)
-                        .focused($composerFocused)
-                        .onSubmit {
-                            vm.send()
+                    ZStack(alignment: .leading) {
+                        TextField("Message your coach…", text: composerText, axis: .vertical)
+                            .font(Theme.Typography.bodyMedium)
+                            .foregroundStyle(Theme.Colors.textPrimary)
+                            .tint(Theme.Colors.accentContent)
+                            .lineLimit(1...5)
+                            // Disabled while recording (typing over a live
+                            // turn would fight the mic) and while the
+                            // recorded clip is being transcribed.
+                            .disabled(voice.isRecording || isTranscribing)
+                            .focused($composerFocused)
+                            .onSubmit {
+                                vm.send()
+                            }
+                            .opacity(isVoiceComposerActive ? 0 : 1)
+
+                        // No live Apple words on screen (owner decision,
+                        // spec `voice-cloud-only-stt`) — while a voice turn
+                        // is live, this replaces the composer's text
+                        // entirely with "Listening…"/"Transcribing…" plus a
+                        // level meter driven by `voice.inputLevel`, instead
+                        // of `voice.partialTranscript`.
+                        if isVoiceComposerActive {
+                            voiceListeningRow
                         }
+                    }
 
                     micButton
 
@@ -509,18 +540,45 @@ struct CoachView: View {
         )
     }
 
-    /// The composer's displayed text. While a voice turn is live —
-    /// `.listening` through `.transcribing` — it mirrors
-    /// `voice.partialTranscript` directly (a `voice`-scoped change, not a
-    /// `vm.input` one, so the ~60Hz stream of live-transcript tokens doesn't
-    /// walk through `vm`'s heavier `objectWillChange`, spec §4's perf note).
-    /// Anything typed while idle still writes straight to `vm.input`, and a
-    /// completed voice turn lands there too the moment `send()` clears it.
+    /// The composer's displayed text. No live Apple words on screen (owner
+    /// decision, spec `voice-cloud-only-stt`): unlike before, this never
+    /// mirrors `voice.partialTranscript` — while a voice turn is live the
+    /// `TextField` is hidden entirely behind `voiceListeningRow`, so this
+    /// binding only ever needs `vm.input`. Apple recognition keeps running
+    /// invisibly underneath (still driving endpointing), it's just never
+    /// rendered. A completed voice turn lands in `vm.input` the moment
+    /// `send()` clears it, same as before.
     private var composerText: Binding<String> {
         Binding(
-            get: { voice.state == .idle ? vm.input : voice.partialTranscript },
+            get: { vm.input },
             set: { vm.input = $0 }
         )
+    }
+
+    /// True while the composer's `TextField` should be replaced by
+    /// `voiceListeningRow` — `.listening` (mic live) through `.transcribing`
+    /// (cloud STT upload in flight). `.sending` isn't included: by then a
+    /// final transcript already resolved and `send()` is about to clear
+    /// `vm.input`, so there's nothing to hide behind a listening row for.
+    private var isVoiceComposerActive: Bool {
+        voice.state == .listening || voice.state == .transcribing
+    }
+
+    /// Replaces the composer's text entirely while a voice turn is live —
+    /// spec `voice-cloud-only-stt` #1: a "Listening…"/"Transcribing…" label
+    /// plus a simple live level meter driven by `voice.inputLevel`, no
+    /// partial transcript text anywhere.
+    private var voiceListeningRow: some View {
+        HStack(spacing: Theme.Spacing.sm) {
+            Text(voice.state == .transcribing ? "Transcribing…" : "Listening…")
+                .font(Theme.Typography.bodyMedium)
+                .foregroundStyle(Theme.Colors.textSecondary)
+            if voice.state == .listening {
+                VoiceLevelMeter(level: voice.inputLevel)
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(voice.state == .transcribing ? "Transcribing" : "Listening")
     }
 
     /// `!vm.isBusy` rather than `!vm.isStreaming`: an accepted handoff streams

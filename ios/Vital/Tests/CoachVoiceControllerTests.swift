@@ -60,12 +60,14 @@ final class CoachVoiceControllerTests: XCTestCase {
 
     /// The endpoint firing (the transcriber's `isRecording` flipping back to
     /// false while we're listening) moves to `.transcribing`, and once the
-    /// (STT-less, in this test) transcript resolves, `onFinalTranscript`
-    /// fires exactly once with the trimmed text before the controller
-    /// returns to `.idle`.
+    /// cloud transcript resolves, `onFinalTranscript` fires exactly once
+    /// with the trimmed cloud text — never the on-device Apple text, which
+    /// is no longer a fallback source (spec `voice-cloud-only-stt`) — before
+    /// the controller returns to `.idle`.
     func testEndpointFiredMovesToTranscribingThenDeliversFinalTranscriptExactlyOnce() async {
         let transcriber = FakeSpeechTranscriber()
         let api = FakeVoiceAPI()
+        api.sttResult = .success("log two eggs and toast")
         let controller = CoachVoiceController(transcriber: transcriber, api: api)
 
         var delivered: [String] = []
@@ -75,8 +77,8 @@ final class CoachVoiceControllerTests: XCTestCase {
         let turnID = controller.currentTurnID
         transcriber.isRecording = true // the mic is live
 
-        transcriber.transcribedText = "log two eggs and toast"
-        transcriber.recordingURL = nil // nothing to upload — resolves from the on-device transcript
+        transcriber.transcribedText = "log two eggs and toast" // Apple's rough preview — never sent
+        transcriber.recordingURL = URL(fileURLWithPath: "/tmp/turn.m4a")
         transcriber.isRecording = false // endpoint fired / watchdog auto-stop
 
         XCTAssertEqual(controller.state, .transcribing)
@@ -84,7 +86,7 @@ final class CoachVoiceControllerTests: XCTestCase {
         await waitUntil(controller, "final transcript delivered") { controller.state == .idle }
 
         XCTAssertEqual(delivered, ["log two eggs and toast"])
-        XCTAssertEqual(api.uploadCallCount, 0)
+        XCTAssertEqual(api.uploadCallCount, 1)
         XCTAssertEqual(controller.lastDeliveredTurnID, turnID)
         XCTAssertEqual(controller.state, .idle)
         XCTAssertNil(controller.currentTurnID)
@@ -220,7 +222,7 @@ final class CoachVoiceControllerTests: XCTestCase {
         XCTAssertEqual(controller.state, .idle)
 
         // The network call "comes back" only after cancellation.
-        api.resumeHeldUpload(with: "wait for it, corrected")
+        api.resumeHeldUpload(with: .success("wait for it, corrected"))
         try? await Task.sleep(nanoseconds: 20_000_000)
 
         XCTAssertTrue(delivered.isEmpty)
@@ -252,12 +254,66 @@ final class CoachVoiceControllerTests: XCTestCase {
         XCTAssertNil(controller.currentTurnID)
     }
 
-    /// A failed (or empty) cloud STT response falls back to the on-device
-    /// transcript rather than dropping the turn.
-    func testCloudSTTFailureFallsBackToOnDeviceText() async {
+    /// Single mode: a cloud STT failure delivers nothing (no on-device
+    /// Apple fallback anymore — spec `voice-cloud-only-stt`), goes idle, and
+    /// surfaces a visible `.transcriptionFailed` error carrying the
+    /// diagnostic from `STTUploadFailure.diagnostic`.
+    func testCloudSTTFailureInSingleModeDeliversNothingAndSetsDiagnosticError() async {
         let transcriber = FakeSpeechTranscriber()
         let api = FakeVoiceAPI()
-        api.sttResult = nil // simulates offline / 503 / no ElevenLabs key
+        api.sttResult = .failure(.http(status: 401, detail: "missing_permissions"))
+        let controller = CoachVoiceController(transcriber: transcriber, api: api)
+
+        var delivered: [String] = []
+        controller.onFinalTranscript = { delivered.append($0) }
+
+        controller.startRecording()
+        XCTAssertEqual(controller.mode, .single)
+        transcriber.isRecording = true
+        transcriber.transcribedText = "roughly what apple heard, never sent"
+        transcriber.recordingURL = URL(fileURLWithPath: "/tmp/turn.m4a")
+        transcriber.isRecording = false
+
+        await waitUntil(controller, "failure resolved") { controller.state == .idle }
+
+        XCTAssertTrue(delivered.isEmpty)
+        XCTAssertEqual(api.uploadCallCount, 1)
+        XCTAssertEqual(transcriber.discardCallCount, 1)
+        XCTAssertEqual(controller.lastError, .transcriptionFailed("ElevenLabs 401: missing_permissions"))
+    }
+
+    /// Conversation mode: a cloud STT failure also delivers nothing, but
+    /// routes through the existing empty-listen path so the conversation
+    /// re-listens (rather than ending outright) — and still sets the
+    /// diagnostic error alongside it.
+    func testCloudSTTFailureInConversationModeReListensAndSetsDiagnosticError() async {
+        let transcriber = FakeSpeechTranscriber()
+        let api = FakeVoiceAPI()
+        api.sttResult = .failure(.network)
+        let controller = CoachVoiceController(transcriber: transcriber, api: api)
+
+        var delivered: [String] = []
+        controller.onFinalTranscript = { delivered.append($0) }
+
+        controller.startRecording(mode: .conversation)
+        transcriber.isRecording = true
+        transcriber.transcribedText = "roughly what apple heard, never sent"
+        transcriber.recordingURL = URL(fileURLWithPath: "/tmp/turn.m4a")
+        transcriber.isRecording = false
+
+        await waitUntil(controller, "re-armed after the failed upload") { controller.state == .listening }
+
+        XCTAssertTrue(delivered.isEmpty)
+        XCTAssertEqual(controller.mode, .conversation, "a single STT failure must not end the conversation")
+        XCTAssertEqual(controller.lastError, .transcriptionFailed("Network error"))
+    }
+
+    /// No recording file to upload at all (Apple detected speech but the
+    /// `.m4a` clip never got created) — nothing is sent, same as an actual
+    /// upload failure.
+    func testNoRecordingURLDeliversNothing() async {
+        let transcriber = FakeSpeechTranscriber()
+        let api = FakeVoiceAPI()
         let controller = CoachVoiceController(transcriber: transcriber, api: api)
 
         var delivered: [String] = []
@@ -265,23 +321,24 @@ final class CoachVoiceControllerTests: XCTestCase {
 
         controller.startRecording()
         transcriber.isRecording = true
-        transcriber.transcribedText = "on device fallback text"
-        transcriber.recordingURL = URL(fileURLWithPath: "/tmp/turn.m4a")
+        transcriber.transcribedText = "apple heard something, but no clip"
+        transcriber.recordingURL = nil
         transcriber.isRecording = false
 
-        await waitUntil(controller, "fallback transcript delivered") { controller.state == .idle }
+        await waitUntil(controller, "resolved with nothing to upload") { controller.state == .idle }
 
-        XCTAssertEqual(delivered, ["on device fallback text"])
-        XCTAssertEqual(api.uploadCallCount, 1)
-        XCTAssertEqual(transcriber.discardCallCount, 1)
+        XCTAssertTrue(delivered.isEmpty)
+        XCTAssertEqual(api.uploadCallCount, 0, "never even attempted — there was no file")
+        XCTAssertEqual(controller.lastError, .transcriptionFailed("No recording to transcribe"))
     }
 
-    /// The cloud transcript replaces the on-device preview when the upload
-    /// succeeds with non-empty text.
-    func testCloudSTTSuccessReplacesOnDeviceText() async {
+    /// The cloud transcript is what's delivered — never the on-device Apple
+    /// preview, even when they differ (spec `voice-cloud-only-stt`: "cloud
+    /// success → sends cloud text, even if the fake Apple text differs").
+    func testCloudSTTSuccessSendsCloudTextEvenWhenAppleTextDiffers() async {
         let transcriber = FakeSpeechTranscriber()
         let api = FakeVoiceAPI()
-        api.sttResult = "corrected by scribe"
+        api.sttResult = .success("corrected by scribe")
         let controller = CoachVoiceController(transcriber: transcriber, api: api)
 
         var delivered: [String] = []
@@ -575,6 +632,7 @@ final class CoachVoiceControllerTests: XCTestCase {
     func testFullConversationCycleAutoRearmsWithNoTap() async {
         let transcriber = FakeSpeechTranscriber()
         let api = FakeVoiceAPI()
+        api.sttResult = .success("how's my sleep")
         let controller = CoachVoiceController(transcriber: transcriber, api: api, scheduling: .instant)
 
         var delivered: [String] = []
@@ -589,12 +647,12 @@ final class CoachVoiceControllerTests: XCTestCase {
         XCTAssertEqual(controller.mode, .conversation)
 
         transcriber.isRecording = true
-        transcriber.transcribedText = "how's my sleep"
-        transcriber.recordingURL = nil
+        transcriber.transcribedText = "how's my sleep, roughly"
+        transcriber.recordingURL = URL(fileURLWithPath: "/tmp/turn.m4a")
         transcriber.isRecording = false // endpoint fired
 
         await waitUntil(controller, "moved to thinking") { controller.state == .thinking }
-        XCTAssertEqual(delivered, ["how's my sleep"])
+        XCTAssertEqual(delivered, ["how's my sleep"], "the cloud transcript, not Apple's rough preview")
 
         controller.markSpeaking()
         XCTAssertEqual(controller.state, .speaking)
@@ -643,17 +701,19 @@ final class CoachVoiceControllerTests: XCTestCase {
     func testCancelDuringSpeakingEndsConversationAndDeactivatesSession() async {
         let transcriber = FakeSpeechTranscriber()
         let session = SpyAudioSession()
-        let controller = CoachVoiceController(transcriber: transcriber, api: FakeVoiceAPI(), audioSession: session.controlling)
+        let api = FakeVoiceAPI()
+        api.sttResult = .success("log a workout")
+        let controller = CoachVoiceController(transcriber: transcriber, api: api, audioSession: session.controlling)
 
         controller.startRecording(mode: .conversation)
         transcriber.isRecording = true
-        transcriber.transcribedText = "log a workout"
-        transcriber.recordingURL = nil
+        transcriber.transcribedText = "log a workout, roughly"
+        transcriber.recordingURL = URL(fileURLWithPath: "/tmp/turn.m4a")
         transcriber.isRecording = false
 
-        // Wait for the (STT-less, so effectively synchronous) transcription
-        // task to actually deliver before driving the reply lifecycle by
-        // hand — `markThinking()` only accepts `.sending`/`.idle`.
+        // Wait for the transcription task to actually deliver before
+        // driving the reply lifecycle by hand — `markThinking()` only
+        // accepts `.sending`/`.idle`.
         await waitUntil(controller, "delivered") { controller.state == .idle }
 
         controller.markThinking()
@@ -946,12 +1006,16 @@ private final class FakeSpeechTranscriber: SpeechTranscribing {
 /// fails loudly if a future change starts relying on one.
 @MainActor
 private final class FakeVoiceAPI: CoachAPIProviding {
-    var sttResult: String? = nil
+    /// What the next (non-held) `uploadSTTAudio` call resolves to. Defaults
+    /// to a generic network failure — a test opts into success via
+    /// `sttResult = .success(...)` and into a specific failure via
+    /// `.failure(...)`, same shape as the real `STTUploadResult`.
+    var sttResult: STTUploadResult = .failure(.network)
     var holdUpload = false
     private(set) var uploadCallCount = 0
-    private var heldContinuation: CheckedContinuation<String?, Never>?
+    private var heldContinuation: CheckedContinuation<STTUploadResult, Never>?
 
-    func uploadSTTAudio(fileURL: URL) async -> String? {
+    func uploadSTTAudio(fileURL: URL) async -> STTUploadResult {
         uploadCallCount += 1
         if holdUpload {
             return await withCheckedContinuation { continuation in
@@ -961,8 +1025,8 @@ private final class FakeVoiceAPI: CoachAPIProviding {
         return sttResult
     }
 
-    func resumeHeldUpload(with text: String?) {
-        heldContinuation?.resume(returning: text)
+    func resumeHeldUpload(with result: STTUploadResult) {
+        heldContinuation?.resume(returning: result)
         heldContinuation = nil
     }
 
