@@ -25,6 +25,14 @@ struct LogReceiptCard: View {
         case undoFailed(String)
     }
 
+    /// One quick portion-correction chip — ½×, 1×, 1.5×, or 2× the logged
+    /// amount. `POST /api/meals/scale` (see `CoachViewModel.scaleMealLog`)
+    /// applies the multiplier and remembers the resulting portion for next
+    /// time (see that endpoint's doc comment). `1×` is shown but disabled
+    /// (nothing to change) so the row always reads as a complete ½·1·1.5·2
+    /// scale rather than three unexplained buttons.
+    static let scaleFactors: [Double] = [0.5, 1.0, 1.5, 2.0]
+
     let icon: String
     let title: String
     /// e.g. "520 kcal · 32 g protein" or "82.4 kg".
@@ -35,38 +43,72 @@ struct LogReceiptCard: View {
     var state: State = .normal
     var onUndo: (() -> Void)?
     var onEdit: (() -> Void)?
+    /// Portion-chip action: `nil` hides the chip row entirely (e.g. a
+    /// weigh-in receipt, or once the card is `.undone`). Non-nil shows the
+    /// ½×/1×/1.5×/2× row in `.normal` state only.
+    var onScale: ((Double) -> Void)?
 
     var body: some View {
         VitalCard(padding: Theme.Spacing.md, cornerRadius: Theme.Radius.lg) {
-            HStack(spacing: Theme.Spacing.md) {
-                IconBadge(systemName: icon, style: state == .undone ? .neutral : .soft)
+            VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                HStack(spacing: Theme.Spacing.md) {
+                    IconBadge(systemName: icon, style: state == .undone ? .neutral : .soft)
 
-                VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
-                    Text(title)
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(Theme.Colors.textPrimary)
-                        .strikethrough(state == .undone)
-                        .lineLimit(1)
+                    VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
+                        Text(title)
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(Theme.Colors.textPrimary)
+                            .strikethrough(state == .undone)
+                            .lineLimit(1)
 
-                    Text(detailText)
-                        .font(Theme.Typography.bodySmall)
-                        .foregroundStyle(isUndoError ? Theme.Colors.alert : Theme.Colors.textSecondary)
-                        .lineLimit(1)
+                        Text(detailText)
+                            .font(Theme.Typography.bodySmall)
+                            .foregroundStyle(isUndoError ? Theme.Colors.alert : Theme.Colors.textSecondary)
+                            .lineLimit(1)
 
-                    Text(timestamp)
-                        .font(Theme.Typography.labelSmall)
-                        .foregroundStyle(Theme.Colors.textTertiary)
+                        Text(timestamp)
+                            .font(Theme.Typography.labelSmall)
+                            .foregroundStyle(Theme.Colors.textTertiary)
+                    }
+
+                    Spacer(minLength: Theme.Spacing.sm)
+
+                    trailing
                 }
 
-                Spacer(minLength: Theme.Spacing.sm)
-
-                trailing
+                if state == .normal, let onScale {
+                    scaleChips(onScale)
+                }
             }
         }
         .opacity(state == .undone ? 0.55 : 1.0)
         .redacted(reason: state == .pending ? .placeholder : [])
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilityLabel)
+    }
+
+    private func scaleChips(_ onScale: @escaping (Double) -> Void) -> some View {
+        HStack(spacing: Theme.Spacing.xs) {
+            ForEach(Self.scaleFactors, id: \.self) { factor in
+                Button {
+                    onScale(factor)
+                } label: {
+                    Text(Self.scaleLabel(factor))
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(factor == 1.0 ? Theme.Colors.textTertiary : Theme.Colors.textSecondary)
+                        .padding(.horizontal, Theme.Spacing.sm)
+                        .padding(.vertical, Theme.Spacing.xxs)
+                        .background(Capsule().fill(Theme.Colors.glassFill))
+                }
+                .disabled(factor == 1.0)
+                .accessibilityLabel("Scale portion to \(Self.scaleLabel(factor))")
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private static func scaleLabel(_ factor: Double) -> String {
+        factor == factor.rounded() ? "\(Int(factor))×" : "\(factor)×"
     }
 
     /// The detail line's text: the analyzing placeholder, the failed-Undo
@@ -147,7 +189,8 @@ private struct LogReceiptCardPreviewList: View {
                     detail: "520 kcal · 32 g protein",
                     timestamp: "2:14 PM",
                     onUndo: {},
-                    onEdit: {}
+                    onEdit: {},
+                    onScale: { _ in }
                 )
                 LogReceiptCard(
                     icon: "scalemass",

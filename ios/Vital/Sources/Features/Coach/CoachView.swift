@@ -185,7 +185,11 @@ struct CoachView: View {
                             )
                             .id(row.id)
                         case .assistantTurn(let turn):
-                            AssistantTurnView(turn: turn, onUndoMeal: { vm.undoMealLog(id: $0) })
+                            AssistantTurnView(
+                                turn: turn,
+                                onUndoMeal: { vm.undoMealLog(id: $0) },
+                                onScaleMeal: { id, factor in vm.scaleMealLog(id: id, factor: factor) }
+                            )
                                 .id(row.id)
                         }
                     }
@@ -820,6 +824,10 @@ private struct AssistantTurnView: View {
     /// (not a `vm` reference) so this view stays a pure function of `turn`,
     /// same as the rest of the file's row views.
     var onUndoMeal: (String) -> Void = { _ in }
+    /// Wired to `CoachViewModel.scaleMealLog(id:factor:)` — the portion
+    /// chips (½× · 1× · 1.5× · 2×). Same plain-closure rationale as
+    /// `onUndoMeal` above.
+    var onScaleMeal: (String, Double) -> Void = { _, _ in }
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -839,7 +847,8 @@ private struct AssistantTurnView: View {
                     detail: receipt.detail,
                     timestamp: receipt.timestamp,
                     state: receipt.cardState,
-                    onUndo: receipt.canUndo ? { onUndoMeal(receipt.id) } : nil
+                    onUndo: receipt.canUndo ? { onUndoMeal(receipt.id) } : nil,
+                    onScale: { factor in onScaleMeal(receipt.id, factor) }
                 )
                 .accessibilityLabel(mealReceiptAccessibilityLabel(receipt))
                 .accessibilityAction(named: "Undo") {

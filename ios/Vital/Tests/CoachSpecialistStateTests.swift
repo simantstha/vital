@@ -813,6 +813,12 @@ final class FakeCoachAPI: CoachAPIProviding {
     /// to drive `MealReceiptRow`'s undo-failed state.
     var deleteMealLogFailure: Error?
     private(set) var deletedMealLogIds: [String] = []
+    /// Set by a test to make the next `scaleMealLog(id:factor:)` call throw —
+    /// `scaleMealLog` fails silently (see its doc comment), so tests assert
+    /// the receipt is left unchanged rather than a visible error state.
+    var scaleMealLogFailure: Error?
+    var scaleMealLogResult: MealScaleResult?
+    private(set) var scaledMealLogCalls: [(id: String, factor: Double)] = []
 
     init(restoration: CoachRestorationResponse) {
         self.restoration = restoration
@@ -885,6 +891,12 @@ final class FakeCoachAPI: CoachAPIProviding {
     func deleteMealLog(id: String) async throws {
         deletedMealLogIds.append(id)
         if let deleteMealLogFailure { throw deleteMealLogFailure }
+    }
+
+    func scaleMealLog(id: String, factor: Double) async throws -> MealScaleResult {
+        scaledMealLogCalls.append((id: id, factor: factor))
+        if let scaleMealLogFailure { throw scaleMealLogFailure }
+        return scaleMealLogResult ?? MealScaleResult(ok: true, id: id, name: "Scaled meal", kcal: 0, c: 0, p: 0, f: 0)
     }
 
     private func stream(
