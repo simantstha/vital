@@ -7,8 +7,9 @@ import test from 'node:test';
  * lib/nutrition/usda.test.ts. Covers auth, body validation, the missing-key
  * 503, upstream failure/error-status/bad-JSON → 502, and the success path,
  * so the logging added alongside those paths (see app/api/stt/route.ts) has
- * a real caller exercising each branch — not asserting on log output
- * itself, just that the existing response contract is unchanged.
+ * a real caller exercising each branch — including the self-diagnosing JSON
+ * error bodies iOS now parses into a "ElevenLabs 401: missing_permissions"
+ * style message (`CoachVoiceController.VoiceError.transcriptionFailed`).
  */
 
 function request(body: BodyInit | null, headers: Record<string, string> = {}): Request {
@@ -47,9 +48,11 @@ test('POST 503s when ELEVENLABS_API_KEY is not configured', async (t) => {
   const { POST } = await import('./route');
   const res = await POST(request(new Uint8Array([1, 2, 3]), { 'x-user-id': 'user-1' }));
   assert.equal(res.status, 503);
+  const body = await res.json() as { error: string };
+  assert.equal(body.error, 'not_configured');
 });
 
-test('POST 502s when the ElevenLabs request throws', async (t) => {
+test('POST 502s with error:fetch_failed when the ElevenLabs request throws', async (t) => {
   process.env.ELEVENLABS_API_KEY = 'test-key';
   t.mock.method(globalThis, 'fetch', async () => {
     throw new Error('network down');
@@ -58,9 +61,11 @@ test('POST 502s when the ElevenLabs request throws', async (t) => {
   const { POST } = await import('./route');
   const res = await POST(request(new Uint8Array([1, 2, 3]), { 'x-user-id': 'user-1' }));
   assert.equal(res.status, 502);
+  const body = await res.json() as { error: string };
+  assert.equal(body.error, 'fetch_failed');
 });
 
-test('POST 502s when ElevenLabs returns a non-OK status', async (t) => {
+test('POST 502s with error:upstream, upstreamStatus and a plain-string detail when ElevenLabs returns a non-OK status', async (t) => {
   process.env.ELEVENLABS_API_KEY = 'test-key';
   t.mock.method(globalThis, 'fetch', async () => ({
     ok: false,
@@ -71,9 +76,46 @@ test('POST 502s when ElevenLabs returns a non-OK status', async (t) => {
   const { POST } = await import('./route');
   const res = await POST(request(new Uint8Array([1, 2, 3]), { 'x-user-id': 'user-1' }));
   assert.equal(res.status, 502);
+  const body = await res.json() as { error: string; upstreamStatus: number; detail: string };
+  assert.equal(body.error, 'upstream');
+  assert.equal(body.upstreamStatus, 400);
+  assert.equal(body.detail, 'unknown');
 });
 
-test('POST 502s when ElevenLabs returns invalid JSON', async (t) => {
+test('POST 502s with the upstream detail.status when ElevenLabs returns a scoped-key-style JSON error', async (t) => {
+  process.env.ELEVENLABS_API_KEY = 'test-key';
+  t.mock.method(globalThis, 'fetch', async () => ({
+    ok: false,
+    status: 401,
+    text: async () => JSON.stringify({ detail: { status: 'missing_permissions', message: 'The API key you used is missing the permission speech_to_text' } }),
+  } as Response));
+
+  const { POST } = await import('./route');
+  const res = await POST(request(new Uint8Array([1, 2, 3]), { 'x-user-id': 'user-1' }));
+  assert.equal(res.status, 502);
+  const body = await res.json() as { error: string; upstreamStatus: number; detail: string };
+  assert.equal(body.error, 'upstream');
+  assert.equal(body.upstreamStatus, 401);
+  assert.equal(body.detail, 'missing_permissions');
+});
+
+test('POST truncates a long upstream detail string to 120 chars', async (t) => {
+  process.env.ELEVENLABS_API_KEY = 'test-key';
+  const longDetail = 'x'.repeat(500);
+  t.mock.method(globalThis, 'fetch', async () => ({
+    ok: false,
+    status: 500,
+    text: async () => JSON.stringify({ detail: longDetail }),
+  } as Response));
+
+  const { POST } = await import('./route');
+  const res = await POST(request(new Uint8Array([1, 2, 3]), { 'x-user-id': 'user-1' }));
+  assert.equal(res.status, 502);
+  const body = await res.json() as { detail: string };
+  assert.equal(body.detail.length, 120);
+});
+
+test('POST 502s with error:bad_json when ElevenLabs returns invalid JSON', async (t) => {
   process.env.ELEVENLABS_API_KEY = 'test-key';
   t.mock.method(globalThis, 'fetch', async () => ({
     ok: true,
@@ -84,6 +126,8 @@ test('POST 502s when ElevenLabs returns invalid JSON', async (t) => {
   const { POST } = await import('./route');
   const res = await POST(request(new Uint8Array([1, 2, 3]), { 'x-user-id': 'user-1' }));
   assert.equal(res.status, 502);
+  const body = await res.json() as { error: string };
+  assert.equal(body.error, 'bad_json');
 });
 
 test('POST 200s with the transcript on a successful upstream call', async (t) => {

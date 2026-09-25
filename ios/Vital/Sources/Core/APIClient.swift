@@ -499,15 +499,18 @@ struct APIClient {
     // MARK: - Coach STT
 
     /// Uploads a recorded `.m4a` clip to the backend STT proxy (POST
-    /// /api/stt, ElevenLabs Scribe) and returns the transcript. Returns nil
-    /// on any failure — network error, non-200 (including 503 when the
-    /// server has no ElevenLabs key), or an empty/missing transcript — so the
-    /// caller can fall back to the on-device Apple transcript.
-    func uploadSTTAudio(fileURL: URL) async -> String? {
-        guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/stt") else { return nil }
+    /// /api/stt, ElevenLabs Scribe) and returns either the transcript or a
+    /// self-diagnosing failure. There is no on-device Apple fallback
+    /// anymore (per the owner decision to go cloud-STT-only, like the Claude
+    /// app) — `CoachVoiceController.beginTranscription()` surfaces
+    /// `failure.diagnostic` directly to the user rather than silently
+    /// degrading, so every failure branch here must carry a short, real
+    /// reason instead of collapsing to `nil`.
+    func uploadSTTAudio(fileURL: URL) async -> STTUploadResult {
+        guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/stt") else { return .failure(.network) }
         guard let audioData = try? Data(contentsOf: fileURL) else {
             Self.voiceLogger.error("uploadSTTAudio: could not read recorded file at \(fileURL.lastPathComponent, privacy: .public)")
-            return nil
+            return .failure(.file)
         }
         let fileSizeBytes = audioData.count
         var request = authorizedRequest(url)
@@ -517,25 +520,40 @@ struct APIClient {
         request.httpBody = audioData
         do {
             let (data, response) = try await session.data(for: request)
-            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-                let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
-                Self.voiceLogger.error("uploadSTTAudio: non-200 response (status=\(statusCode, privacy: .public), bytes=\(fileSizeBytes, privacy: .public)) — falling back to on-device transcript")
-                return nil
+            guard let http = response as? HTTPURLResponse else {
+                Self.voiceLogger.error("uploadSTTAudio: no HTTP response (bytes=\(fileSizeBytes, privacy: .public))")
+                return .failure(.network)
+            }
+            guard http.statusCode == 200 else {
+                struct STTErrorBody: Decodable {
+                    let error: String?
+                    let upstreamStatus: Int?
+                    let detail: String?
+                }
+                let body = try? decoder.decode(STTErrorBody.self, from: data)
+                Self.voiceLogger.error("uploadSTTAudio: non-200 response (status=\(http.statusCode, privacy: .public), error=\(body?.error ?? "?", privacy: .public), bytes=\(fileSizeBytes, privacy: .public))")
+                if body?.error == "upstream" {
+                    let status = body?.upstreamStatus ?? http.statusCode
+                    let detail = body?.detail ?? "unknown"
+                    return .failure(.http(status: status, detail: detail))
+                }
+                let detail = body?.error ?? "status \(http.statusCode)"
+                return .failure(.http(status: http.statusCode, detail: detail))
             }
             struct STTResponse: Decodable { let text: String }
             guard let decoded = try? decoder.decode(STTResponse.self, from: data) else {
-                Self.voiceLogger.error("uploadSTTAudio: failed to decode response body (bytes=\(fileSizeBytes, privacy: .public)) — falling back to on-device transcript")
-                return nil
+                Self.voiceLogger.error("uploadSTTAudio: failed to decode response body (bytes=\(fileSizeBytes, privacy: .public))")
+                return .failure(.http(status: http.statusCode, detail: "bad_response"))
             }
             let trimmed = decoded.text.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed.isEmpty {
-                Self.voiceLogger.error("uploadSTTAudio: 200 response with empty transcript (bytes=\(fileSizeBytes, privacy: .public)) — falling back to on-device transcript")
-                return nil
+                Self.voiceLogger.error("uploadSTTAudio: 200 response with empty transcript (bytes=\(fileSizeBytes, privacy: .public))")
+                return .failure(.http(status: http.statusCode, detail: "empty_transcript"))
             }
-            return trimmed
+            return .success(trimmed)
         } catch {
-            Self.voiceLogger.error("uploadSTTAudio: request threw \(String(describing: error), privacy: .public) (bytes=\(fileSizeBytes, privacy: .public)) — falling back to on-device transcript")
-            return nil
+            Self.voiceLogger.error("uploadSTTAudio: request threw \(String(describing: error), privacy: .public) (bytes=\(fileSizeBytes, privacy: .public))")
+            return .failure(.network)
         }
     }
 
@@ -2149,9 +2167,44 @@ struct CoachMealReceipt: Codable, Equatable {
     let f: Int
 }
 
+/// Outcome of a `POST /api/stt` upload (`APIClient.uploadSTTAudio(fileURL:)`)
+/// — either the cloud transcript, or a self-diagnosing failure. There is no
+/// implicit "nil means try something else" here anymore: cloud STT is the
+/// only source of the sent transcript (owner decision, spec
+/// `voice-cloud-only-stt`), so every failure carries enough to build a real
+/// diagnostic line rather than a silent degrade.
+enum STTUploadResult: Equatable {
+    case success(String)
+    case failure(STTUploadFailure)
+}
+
+/// Why an STT upload failed. `.http` covers every response the backend
+/// proxy returned deliberately (its own `not_configured`/`fetch_failed`/
+/// `upstream`/`bad_json` JSON bodies — see `app/api/stt/route.ts`) as well as
+/// a response this client itself couldn't parse; `.network` is a local
+/// `URLSession` failure (offline, timeout, thrown error) or a non-HTTP
+/// response; `.file` is failing to read the recorded clip off disk before
+/// any request was even made.
+enum STTUploadFailure: Equatable {
+    case file
+    case network
+    case http(status: Int, detail: String)
+
+    /// The short line surfaced to the user, e.g. "ElevenLabs 401:
+    /// missing_permissions" — `CoachVoiceController.VoiceError
+    /// .transcriptionFailed(_:)`'s payload.
+    var diagnostic: String {
+        switch self {
+        case .file: return "Couldn't read the recording"
+        case .network: return "Network error"
+        case .http(let status, let detail): return "ElevenLabs \(status): \(detail)"
+        }
+    }
+}
+
 @MainActor
 protocol CoachAPIProviding {
-    func uploadSTTAudio(fileURL: URL) async -> String?
+    func uploadSTTAudio(fileURL: URL) async -> STTUploadResult
     func fetchCoachRestoration() async throws -> CoachRestorationResponse
     func fetchCoachOpener() async throws -> String
     func resetCoachConversation() async throws

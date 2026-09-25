@@ -505,9 +505,7 @@ final class LogMealViewModel: ObservableObject {
         }
 
         var finalText = appleTranscript
-        if let recordingURL,
-           let cloudText = await api.uploadSTTAudio(fileURL: recordingURL),
-           !cloudText.isEmpty {
+        if let recordingURL, case .success(let cloudText) = await api.uploadSTTAudio(fileURL: recordingURL), !cloudText.isEmpty {
             finalText = cloudText
         }
 

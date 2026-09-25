@@ -3,9 +3,11 @@
  *
  * Proxies a recorded audio clip to ElevenLabs' Scribe speech-to-text
  * endpoint and returns the transcript, so the ElevenLabs API key never
- * reaches the iOS app. Used as the accurate cloud transcript that replaces
- * Apple's on-device live-preview transcript once voice input stops; the app
- * falls back to the Apple transcript on any non-200 response here.
+ * reaches the iOS app. This is now the ONLY source of the sent transcript —
+ * the iOS app no longer falls back to Apple's on-device transcript (see
+ * `CoachVoiceController.beginTranscription()`), so every non-2xx/failure
+ * response here must carry enough detail for the client to show a useful
+ * diagnostic instead of silently degrading.
  *
  * Request body:
  *   raw audio bytes (Content-Type: audio/mp4), capped at 10 MB
@@ -15,13 +17,19 @@
  *   400                — missing/empty body
  *   401                — no authenticated session (see lib/auth)
  *   413                — body exceeds 10 MB
- *   503                — ELEVENLABS_API_KEY is not configured
- *   502                — ElevenLabs returned a non-OK response
+ *   503 { error: 'not_configured' }               — ELEVENLABS_API_KEY unset
+ *   502 { error: 'fetch_failed' }                  — request to ElevenLabs threw
+ *   502 { error: 'upstream', upstreamStatus, detail } — ElevenLabs returned non-OK
+ *   502 { error: 'bad_json' }                      — ElevenLabs returned invalid JSON
+ *
+ * `detail` on the `upstream` error is ElevenLabs' own short reason
+ * (`detail.status` or `detail.message` from its JSON error body, or a plain
+ * string `detail`), truncated to 120 chars. The ElevenLabs API key itself is
+ * never included in any response.
  *
  * Env vars:
- *   ELEVENLABS_API_KEY   — required; unset means the route always 503s so the
- *                          client falls back to the Apple transcript. Shared
- *                          with /api/tts.
+ *   ELEVENLABS_API_KEY   — required; unset means the route always 503s.
+ *                          Shared with /api/tts.
  */
 
 import { getUserIdFromRequest } from '@/lib/auth';
@@ -29,6 +37,30 @@ import { getUserIdFromRequest } from '@/lib/auth';
 export const dynamic = 'force-dynamic';
 
 const MAX_AUDIO_BYTES = 10 * 1024 * 1024; // 10 MB
+
+/**
+ * Pulls a short, human-readable reason out of ElevenLabs' error body, e.g.
+ * `{"detail":{"status":"missing_permissions","message":"..."}}` or
+ * `{"detail":"some string"}`. Falls back to `'unknown'` for a non-JSON or
+ * unrecognized body — never throws, since this only ever runs against text
+ * we've already decided to log and cannot control the shape of.
+ */
+function extractUpstreamDetail(rawText: string): string {
+  if (!rawText) return 'unknown';
+  try {
+    const parsed = JSON.parse(rawText) as { detail?: unknown };
+    const detail = parsed?.detail;
+    if (typeof detail === 'string' && detail) return detail;
+    if (detail && typeof detail === 'object') {
+      const d = detail as { status?: unknown; message?: unknown };
+      if (typeof d.status === 'string' && d.status) return d.status;
+      if (typeof d.message === 'string' && d.message) return d.message;
+    }
+    return 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
 
 export async function POST(request: Request): Promise<Response> {
   try {
@@ -55,12 +87,18 @@ export async function POST(request: Request): Promise<Response> {
   const apiKey = process.env.ELEVENLABS_API_KEY;
   if (!apiKey) {
     console.error(`/api/stt: ELEVENLABS_API_KEY not configured (bytes=${audio.byteLength})`);
-    return new Response('ElevenLabs STT is not configured.', { status: 503 });
+    return Response.json({ error: 'not_configured' }, { status: 503 });
   }
 
   const form = new FormData();
   form.append('file', new Blob([audio], { type: 'audio/mp4' }), 'audio.m4a');
-  form.append('model_id', 'scribe_v1');
+  // scribe_v1 was deprecated and removed by ElevenLabs on 2026-07-09 — every
+  // request against it now fails upstream, which is what silently degraded
+  // every voice turn to the poor on-device Apple fallback. scribe_v2 is the
+  // current non-realtime transcription model.
+  // https://elevenlabs.io/docs/changelog/2026/6/8
+  // https://elevenlabs.io/docs/api-reference/speech-to-text/convert
+  form.append('model_id', 'scribe_v2');
   form.append('language_code', 'en');
   form.append('tag_audio_events', 'false');
 
@@ -77,13 +115,17 @@ export async function POST(request: Request): Promise<Response> {
     });
   } catch (err) {
     console.error(`/api/stt: request to ElevenLabs failed (bytes=${audio.byteLength}):`, err);
-    return new Response('Failed to reach ElevenLabs.', { status: 502 });
+    return Response.json({ error: 'fetch_failed' }, { status: 502 });
   }
 
   if (!upstream.ok) {
     const errorText = await upstream.text().catch(() => '');
     console.error(`/api/stt: ElevenLabs returned ${upstream.status} (bytes=${audio.byteLength}): ${errorText}`);
-    return new Response('ElevenLabs STT request failed.', { status: 502 });
+    const detail = extractUpstreamDetail(errorText).slice(0, 120);
+    return Response.json(
+      { error: 'upstream', upstreamStatus: upstream.status, detail },
+      { status: 502 }
+    );
   }
 
   let result: { text?: unknown };
@@ -91,7 +133,7 @@ export async function POST(request: Request): Promise<Response> {
     result = await upstream.json() as { text?: unknown };
   } catch (err) {
     console.error(`/api/stt: ElevenLabs returned invalid JSON (bytes=${audio.byteLength}):`, err);
-    return new Response('ElevenLabs STT request failed.', { status: 502 });
+    return Response.json({ error: 'bad_json' }, { status: 502 });
   }
 
   const text = typeof result.text === 'string' ? result.text : '';
