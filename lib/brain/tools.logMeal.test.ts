@@ -34,7 +34,8 @@ const state: {
   estimateResult: { name: '', kcal: 0, c: 0, p: 0, f: 0, items: [] },
 };
 
-let searchCandidatesCalls: Array<{ userId: string; query: string }> = [];
+let searchCandidatesCalls: Array<{ userId: string; query: string; skipEstimate?: boolean }> = [];
+let estimateMealCalls: Array<{ userId: string; text: string | undefined }> = [];
 let insertedValues: Array<Record<string, unknown>> = [];
 let nextInsertedId = 'event-1';
 
@@ -55,8 +56,8 @@ const fakeDb = {
 mock.module('@/db', { namedExports: { db: fakeDb, schema: realSchema } });
 mock.module('@/lib/nutrition/candidates', {
   namedExports: {
-    searchCandidates: async (userId: string, query: string) => {
-      searchCandidatesCalls.push({ userId, query });
+    searchCandidates: async (userId: string, query: string, options?: { skipEstimate?: boolean }) => {
+      searchCandidatesCalls.push({ userId, query, skipEstimate: options?.skipEstimate });
       return state.searchResult;
     },
     // Real, pure selector — exercised indirectly through log_meal so this
@@ -69,7 +70,10 @@ mock.module('@/lib/nutrition/candidates', {
 });
 mock.module('@/lib/nutrition/estimator', {
   namedExports: {
-    estimateMeal: async (_input: { userId: string; text?: string }) => state.estimateResult,
+    estimateMeal: async (input: { userId: string; text?: string }) => {
+      estimateMealCalls.push({ userId: input.userId, text: input.text });
+      return state.estimateResult;
+    },
   },
 });
 mock.module('@/lib/openFoodFacts', {
@@ -97,14 +101,31 @@ function historyCandidate(overrides: Partial<Candidate> = {}): Candidate {
   };
 }
 
-test('log_meal text path inserts the top candidate\'s macros with source mapped from origin', async () => {
+// A single plain food with no quantity language ("grilled chicken breast")
+// now ALSO routes through the estimator, same as every other non-exact-
+// history query — see lib/nutrition/quickLog.ts's header comment and
+// quickLog.test.ts's matching test for the full rationale: routing only on
+// `needsEstimate` left plain, quantity-word-free phrases with a USDA hit
+// (like "a plate of rice" — see the dedicated test below) auto-logging a
+// fixed default USDA serving, which was the owner's actual complaint. This
+// test used to assert candidates[0]'s fixed serving was logged untouched;
+// it now asserts the (mocked) grounded estimator's result instead.
+test('log_meal text path routes a single plain food (no quantity language) through the estimator', async () => {
   searchCandidatesCalls = [];
+  estimateMealCalls = [];
   insertedValues = [];
   nextInsertedId = 'event-usda';
   state.searchResult = {
-    candidates: [historyCandidate({ origin: 'usda', name: 'Chicken Breast, Grilled', kcal: 284, c: 0, p: 53, f: 6 })],
+    candidates: [{ origin: 'usda', name: 'Chicken Breast, Grilled', kcal: 284, c: 0, p: 53, f: 6 }],
     estimateFoods: null,
     usdaCount: 1,
+  };
+  state.estimateResult = {
+    name: 'grilled chicken breast',
+    kcal: 380, c: 0, p: 71, f: 9,
+    items: [
+      { food: 'grilled chicken breast', grams: 230, kcal: 380, c: 0, p: 71, f: 9, source: 'usda', confidence: 'high', portionNote: '~230g, a large breast' },
+    ],
   };
 
   const tools = await toolsPromise;
@@ -112,34 +133,69 @@ test('log_meal text path inserts the top candidate\'s macros with source mapped 
     await tools.executeToolCall('log_meal', { text: 'grilled chicken breast' }, 'user-1'),
   );
 
-  assert.deepEqual(searchCandidatesCalls, [{ userId: 'user-1', query: 'grilled chicken breast' }]);
+  // searchCandidates is still called (needed for the exact-history check
+  // and as a fallback), but with skipEstimate: true.
+  assert.deepEqual(searchCandidatesCalls, [{ userId: 'user-1', query: 'grilled chicken breast', skipEstimate: true }]);
+  assert.deepEqual(estimateMealCalls, [{ userId: 'user-1', text: 'grilled chicken breast' }]);
+
   assert.equal(insertedValues.length, 1);
   const payload = insertedValues[0].payload as Record<string, unknown>;
-  assert.equal(payload.kcal, 284);
-  assert.equal(payload.c, 0);
-  assert.equal(payload.p, 53);
-  assert.equal(payload.f, 6);
-  assert.equal(payload.name, 'Chicken Breast, Grilled');
+  assert.equal(payload.kcal, 380); // grounded ~230g portion, not the fixed 284 kcal default serving
+  assert.equal(payload.name, 'grilled chicken breast');
   assert.equal(payload.description, 'grilled chicken breast');
-  assert.equal(payload.source, 'usda');
-  assert.equal('items' in payload, false);
+  assert.equal(payload.source, 'estimator');
 
   assert.equal(result.ok, true);
   assert.equal(result.id, 'event-usda');
-  assert.equal(result.kcal, 284);
-  assert.equal(result.matched, 'Chicken Breast, Grilled');
-  assert.equal(result.origin, 'usda');
-  assert.equal('foods' in result, false);
+  assert.equal(result.kcal, 380);
+  assert.equal(result.origin, 'estimate');
+  assert.deepEqual(result.foods, [{ name: 'grilled chicken breast', qty: 230, unit: 'g', kcal: 380 }]);
 });
 
-test('log_meal text path with a history candidate maps source to "history"', async () => {
+test('log_meal text path with a history candidate maps source to "history" and never calls the estimator', async () => {
   insertedValues = [];
+  estimateMealCalls = [];
   state.searchResult = { candidates: [historyCandidate()], estimateFoods: null, usdaCount: 0 };
 
   const tools = await toolsPromise;
   await tools.executeToolCall('log_meal', { text: 'grilled chicken breast' }, 'user-1');
 
+  assert.equal(estimateMealCalls.length, 0);
   assert.equal((insertedValues[0].payload as Record<string, unknown>).source, 'history');
+});
+
+// "a plate of rice" — no digit, no "and", no comma, and USDA has a "rice"
+// hit — is the owner's exact original complaint: needsEstimate would be
+// false here, so before this fix it auto-logged one generic default USDA
+// serving regardless of "a plate of". Exercised through the coach's
+// log_meal tool (not just quickLogMeal directly) so the full tools.ts <->
+// quickLog.ts <-> estimator.ts wiring is covered for this case too.
+test('log_meal text path routes "a plate of rice" through the estimator even though needsEstimate would be false', async () => {
+  insertedValues = [];
+  estimateMealCalls = [];
+  nextInsertedId = 'event-rice';
+  state.searchResult = {
+    candidates: [{ origin: 'usda', name: 'Rice, white, cooked', kcal: 205, c: 45, p: 4, f: 0 }],
+    estimateFoods: null,
+    usdaCount: 1,
+  };
+  assert.equal(needsEstimate('a plate of rice', 1), false);
+  state.estimateResult = {
+    name: 'white rice, cooked',
+    kcal: 494, c: 106, p: 10, f: 1,
+    items: [{ food: 'white rice, cooked', grams: 380, kcal: 494, c: 106, p: 10, f: 1, source: 'usda', confidence: 'high', portionNote: 'full dinner plate, ~2 cups' }],
+  };
+
+  const tools = await toolsPromise;
+  const result = JSON.parse(
+    await tools.executeToolCall('log_meal', { text: 'a plate of rice' }, 'user-1'),
+  );
+
+  assert.deepEqual(estimateMealCalls, [{ userId: 'user-1', text: 'a plate of rice' }]);
+  const payload = insertedValues[0].payload as Record<string, unknown>;
+  assert.equal(payload.kcal, 494);
+  assert.equal(payload.source, 'estimator');
+  assert.equal(result.kcal, 494);
 });
 
 test('log_meal text path returns "Could not find nutrition data" when neither candidates nor the estimator match', async () => {

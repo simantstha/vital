@@ -521,11 +521,32 @@ export interface SearchCandidatesResult {
   usdaCount: number;
 }
 
+export interface SearchCandidatesOptions {
+  /** Skips the internal CalorieNinjas free-text-estimate fetch (and the
+   * `origin: 'estimate'` candidate it would add) even when `needsEstimate`
+   * would otherwise trigger it. Additive/opt-in — omitted or false leaves
+   * this function's behavior, including for the manual search picker
+   * (app/api/nutrition/search), completely unchanged.
+   *
+   * lib/nutrition/quickLog.ts's automatic (no-user-choice) log path passes
+   * `true`: since EVERY non-exact-history text query there now routes
+   * through lib/nutrition/estimator.ts's own grounded estimate instead of
+   * this CalorieNinjas one (see quickLogMeal), fetching this candidate on
+   * that path is pure wasted work — a real network call whose result is
+   * simply thrown away. */
+  skipEstimate?: boolean;
+}
+
 /** Merges history, cache/USDA provider candidates, and a free-text estimate
- * (when needed) into a single ranked list. History and provider fetches
- * both run under Promise.allSettled — a failed source contributes no
- * candidates rather than throwing. */
-export async function searchCandidates(userId: string, query: string): Promise<SearchCandidatesResult> {
+ * (when needed, and not skipped — see `SearchCandidatesOptions`) into a
+ * single ranked list. History and provider fetches both run under
+ * Promise.allSettled — a failed source contributes no candidates rather
+ * than throwing. */
+export async function searchCandidates(
+  userId: string,
+  query: string,
+  options: SearchCandidatesOptions = {},
+): Promise<SearchCandidatesResult> {
   const trimmed = query.trim();
   if (!trimmed) return { candidates: [], estimateFoods: null, usdaCount: 0 };
 
@@ -549,7 +570,7 @@ export async function searchCandidates(userId: string, query: string): Promise<S
   const candidates = [...dedupHistory(historyRows, trimmed), ...mergeProviderCandidates(cacheRows, usdaRows)];
 
   let estimateFoods: NutritionixResult['foods'] | null = null;
-  if (needsEstimate(trimmed, usdaRows.length)) {
+  if (!options.skipEstimate && needsEstimate(trimmed, usdaRows.length)) {
     const estimate = await lookupNutrition(trimmed);
     if (estimate) {
       candidates.push({

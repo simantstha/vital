@@ -11,22 +11,39 @@
  *     Button "quick log", which must NOT be reachable by delete_meal and must
  *     NOT trigger a coach reaction).
  *
- * Two ways a query resolves to one logged `meal_logged` event:
- *   - An EXACT user-history hit (the normalized query matches a food this
- *     user has logged before by name) or a single plain food with no
- *     quantity language short-circuits straight to the top history-first
- *     candidate (lib/nutrition/candidates.ts) — fast, and re-logs exactly
- *     what the user logged before.
- *   - A phrase with quantity language ("200g", "and", a comma — see
- *     candidates.ts's `needsEstimate`) or that matched nothing in
- *     history/cache/USDA goes through lib/nutrition/estimator.ts's grounded
- *     multi-item estimator instead of a single default-portion candidate —
- *     this is what fixes "a plate of rice" logging as one generic ~150 kcal
- *     serving (see estimator.ts's header comment for why).
+ * Only TWO things short-circuit straight to a plain candidate instead of the
+ * estimator:
+ *   - barcode input — handled entirely in tools.ts's log_meal before it ever
+ *     calls this function; never reaches quickLogMeal.
+ *   - an EXACT user-history hit — the normalized query matches a food this
+ *     user has logged before by name (pickLoggableCandidate rule (a)) — fast,
+ *     and re-logs exactly what the user logged before.
+ *
+ * EVERY other free-text query — including a single plain food with no
+ * quantity language at all, like "grilled chicken breast" or "a plate of
+ * rice" — goes through lib/nutrition/estimator.ts's grounded estimator
+ * instead of one default-portion candidate. An earlier version of this file
+ * only routed a query through the estimator when
+ * lib/nutrition/candidates.ts's `needsEstimate` said so (digits, "and", a
+ * comma, or no USDA hit) — but that left "a plate of rice" (no quantity
+ * word, and USDA has a plain "rice" hit) and "a bowl of oatmeal with banana"
+ * ("with", not "and") still auto-logging one generic default USDA serving,
+ * which is the owner's exact original complaint. The estimator still grounds
+ * a genuinely single, plain food via the same USDA/cache per-100g lookup
+ * this file used to use directly (lib/nutrition/candidates.ts's
+ * `lookupProviderPer100g`) — it just also reasons about a realistic serving
+ * size first, instead of trusting a fixed "default serving" number.
+ *
+ * `needsEstimate` and `searchCandidates`'s default behavior are UNCHANGED —
+ * both still back the manual search picker (app/api/nutrition/search) as
+ * before. This file only stops relying on `needsEstimate` for its own
+ * routing decision, and passes `skipEstimate: true` to `searchCandidates` so
+ * the now-always-superseded CalorieNinjas free-text estimate isn't fetched
+ * on this auto-log path for nothing (see `SearchCandidatesOptions`).
  */
 
 import { db, schema } from '@/db';
-import { searchCandidates, pickLoggableCandidate, normalizeName, needsEstimate, type Candidate } from '@/lib/nutrition/candidates';
+import { searchCandidates, pickLoggableCandidate, normalizeName, type Candidate } from '@/lib/nutrition/candidates';
 import { estimateMeal, type GroundedItem } from '@/lib/nutrition/estimator';
 
 const SOURCE_BY_ORIGIN: Record<Candidate['origin'], string> = {
@@ -134,37 +151,39 @@ async function insertGroundedMeal(
 }
 
 /**
- * Resolves free-text `text` to a loggable nutrition candidate — a single
- * exact-history/plain-food match, or (for quantity/multi-food phrases) a
- * grounded multi-item estimate — and inserts one `meal_logged` event for
- * `userId`. Returns `{ ok: false }` when nothing matches and the estimator
- * also comes up empty (nothing is inserted).
+ * Resolves free-text `text` to one logged `meal_logged` event for `userId`:
+ * an exact-history re-log (fast, personal), or — for every other query — a
+ * grounded multi-item estimate from lib/nutrition/estimator.ts. Returns
+ * `{ ok: false }` when nothing matches at all (nothing is inserted).
  */
 export async function quickLogMeal(
   userId: string,
   text: string,
   options: QuickLogOptions,
 ): Promise<QuickLogResult> {
-  const { candidates, estimateFoods, usdaCount } = await searchCandidates(userId, text);
+  // skipEstimate: true — see this file's header comment. The legacy
+  // CalorieNinjas 'estimate' candidate is never used by this auto-log path
+  // any more, so fetching it here would be a wasted network call.
+  const { candidates, usdaCount } = await searchCandidates(userId, text, { skipEstimate: true });
   const top = pickLoggableCandidate(text, candidates, usdaCount);
 
-  // Exact history hits short-circuit — fast, and re-logs exactly what this
-  // user logged before (see candidates.ts's pickLoggableCandidate rule (a)).
+  // The ONLY short-circuit left: an exact user-history hit (see this file's
+  // header comment for why every other query — including a single plain
+  // food — now goes through the estimator instead).
   const isExactHistory = top?.origin === 'history' && normalizeName(top.name) === normalizeName(text);
 
-  if (!isExactHistory && needsEstimate(text, usdaCount)) {
+  if (!isExactHistory) {
     const grounded = await estimateMeal({ text, userId });
     if (grounded.items.length > 0) {
       return insertGroundedMeal(userId, text, grounded, options);
     }
-    // The estimator found nothing loggable (e.g. an unrecognized food) —
-    // fall through to the plain candidate list below, which for this same
+    // The estimator found nothing loggable (e.g. a transient parse failure,
+    // or truly unrecognized text) — fall through to the best plain
+    // history/cache/USDA candidate as a safety net, which for this same
     // case is typically also empty and correctly yields { ok: false }.
   }
 
   if (!top) return { ok: false };
-
-  const isEstimate = top.origin === 'estimate' && estimateFoods != null;
 
   const payload: Record<string, unknown> = {
     kcal:        top.kcal,
@@ -175,9 +194,6 @@ export async function quickLogMeal(
     description: text,
     source:      SOURCE_BY_ORIGIN[top.origin],
   };
-  if (isEstimate) {
-    payload.items = estimateFoods!.map(fd => `${fd.qty}${fd.unit} ${fd.name}`).join(', ');
-  }
   if (options.slot) {
     payload.slot = options.slot;
   }
@@ -198,8 +214,11 @@ export async function quickLogMeal(
     p: top.p,
     c: top.c,
     f: top.f,
-    isEstimate,
+    // top.origin can only be 'history' (the exact-history short-circuit
+    // above) or 'cache'/'usda' (the estimator-found-nothing safety net) at
+    // this point — never 'estimate': searchCandidates was called with
+    // skipEstimate: true, so no origin: 'estimate' candidate exists to pick.
+    isEstimate: false,
     origin: top.origin,
-    ...(isEstimate ? { foods: estimateFoods! } : {}),
   };
 }
