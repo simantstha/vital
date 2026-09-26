@@ -475,16 +475,11 @@ final class ScreenshotTests: XCTestCase {
             description: "HRV metric tile [\(scenario)/\(appearance)]"
         )
 
-        // Wait for MetricDetailView to render — using "DISTRIBUTION" (a section header that
-        // only renders once the detail screen is live and the chart has enough data) as the
-        // stable signal. Non-established scenarios or sparse data may not show this section,
-        // so we use a generous timeout instead of asserting it must exist.
-        guard app.staticTexts["DISTRIBUTION"].waitForExistence(timeout: 10) else {
-            // Even if DISTRIBUTION doesn't appear, the detail screen is likely open (e.g. sparse data
-            // or still-calibrating metrics render other sections first). Proceed with capture
-            // and let any missing content fail the test via visual inspection of the screenshot.
-            return
-        }
+        // Wait for MetricDetailView to render — using the detail range switcher's "3 months"
+        // button as the stable signal. This button always renders once the screen has loaded,
+        // regardless of data availability (unlike section headers like "DISTRIBUTION" which only
+        // appear with sufficient data). Always capture, even if the wait fails.
+        _ = app.buttons["3 months"].waitForExistence(timeout: 10)
 
         capture(app, name: "\(scenario)__hrv_detail__\(appearance)")
 
@@ -507,10 +502,8 @@ final class ScreenshotTests: XCTestCase {
         }
 
         // Wait for the detail view to dismiss before returning, so the next test section sees Trends.
-        guard app.staticTexts["DISTRIBUTION"].waitForNonExistence(timeout: 5) else {
-            XCTFail("HRV metric detail view never finished dismissing [\(scenario)/\(appearance)]")
-            return
-        }
+        XCTAssertTrue(app.buttons["3 months"].waitForNonExistence(timeout: 5),
+                       "HRV metric detail view never finished dismissing [\(scenario)/\(appearance)]")
     }
 
     private func captureLogs(_ app: XCUIApplication, scenario: String, appearance: String) {
