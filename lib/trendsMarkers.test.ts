@@ -121,6 +121,16 @@ test('markersFromDailyMetrics: a null payload falls back to `value`', () => {
   assert.deepEqual(markers, [{ date: '2026-09-01', kind: 'workout', label: '1 workout', count: 1 }]);
 });
 
+test('markersFromDailyMetrics: an empty-array payload (workout deleted, day re-synced) is dropped', () => {
+  const markers = markersFromDailyMetrics([dmRow('2026-09-01', [])]);
+  assert.deepEqual(markers, []);
+});
+
+test('markersFromDailyMetrics: a value of 0 with a non-array payload is dropped', () => {
+  const markers = markersFromDailyMetrics([dmRow('2026-09-01', null, 0)]);
+  assert.deepEqual(markers, []);
+});
+
 test('markersFromDailyMetrics: results are sorted oldest to newest', () => {
   const markers = markersFromDailyMetrics([
     dmRow('2026-09-05', [{ hkUuid: 'a', type: 'running' }]),
@@ -145,6 +155,18 @@ test('mergeWorkoutMarkers: a day present in both sources keeps only the daily_me
   const primary: Marker[] = [{ date: '2026-09-01', kind: 'workout', label: 'Running', count: 1 }];
   const secondary: Marker[] = [{ date: '2026-09-01', kind: 'workout', label: '3 workouts', count: 3 }];
   assert.deepEqual(mergeWorkoutMarkers(primary, secondary), primary);
+});
+
+test('mergeWorkoutMarkers: a zero-count primary marker does not suppress a WHOOP event on the same date', () => {
+  const primary: Marker[] = [{ date: '2026-09-01', kind: 'workout', label: '0 workouts', count: 0 }];
+  const secondary: Marker[] = [{ date: '2026-09-01', kind: 'workout', label: 'Cycling', count: 1 }];
+  assert.deepEqual(mergeWorkoutMarkers(primary, secondary), secondary);
+});
+
+test('mergeWorkoutMarkers: drops zero-count markers from either source entirely', () => {
+  const primary: Marker[] = [{ date: '2026-09-01', kind: 'workout', label: '0 workouts', count: 0 }];
+  const secondary: Marker[] = [{ date: '2026-09-02', kind: 'workout', label: '0 workouts', count: 0 }];
+  assert.deepEqual(mergeWorkoutMarkers(primary, secondary), []);
 });
 
 test('mergeWorkoutMarkers: merges disjoint dates from both sources, sorted oldest to newest', () => {

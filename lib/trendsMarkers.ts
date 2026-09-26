@@ -107,7 +107,10 @@ function soleWorkoutType(payload: unknown): string | undefined {
 /**
  * Builds one marker per `daily_metrics` 'workouts' row. `count` is the
  * payload array's length; a malformed/missing payload (not an array) falls
- * back to the row's `value` rather than dropping the day.
+ * back to the row's `value` rather than dropping the day. Rows with
+ * `count <= 0` are dropped entirely — an empty-array payload or a `value` of
+ * 0 happens when HealthKit re-syncs a day after its only workout was
+ * deleted, and that's not a workout day.
  */
 export function markersFromDailyMetrics(rows: DailyMetricWorkoutRow[]): Marker[] {
   return rows
@@ -119,6 +122,7 @@ export function markersFromDailyMetrics(rows: DailyMetricWorkoutRow[]): Marker[]
         : `${count} workout${count === 1 ? '' : 's'}`;
       return { date: row.date, kind: 'workout' as const, label, count };
     })
+    .filter((marker) => marker.count > 0)
     .sort((a, b) => a.date.localeCompare(b.date));
 }
 
@@ -127,9 +131,16 @@ export function markersFromDailyMetrics(rows: DailyMetricWorkoutRow[]): Marker[]
  * `events`-sourced marker for a date `daily_metrics` didn't cover — never
  * both for the same date, which would double-count one workout recorded by
  * both HealthKit and WHOOP.
+ *
+ * Both inputs are filtered to `count > 0` before anything else — in
+ * particular, a zero-count primary marker (see `markersFromDailyMetrics`'s
+ * doc comment) is dropped BEFORE `primaryDates` is built, so it can never
+ * suppress a real WHOOP-sourced marker on the same date.
  */
 export function mergeWorkoutMarkers(primary: Marker[], secondary: Marker[]): Marker[] {
-  const primaryDates = new Set(primary.map((m) => m.date));
-  return [...primary, ...secondary.filter((m) => !primaryDates.has(m.date))]
+  const nonEmptyPrimary = primary.filter((m) => m.count > 0);
+  const nonEmptySecondary = secondary.filter((m) => m.count > 0);
+  const primaryDates = new Set(nonEmptyPrimary.map((m) => m.date));
+  return [...nonEmptyPrimary, ...nonEmptySecondary.filter((m) => !primaryDates.has(m.date))]
     .sort((a, b) => a.date.localeCompare(b.date));
 }

@@ -67,6 +67,14 @@ test('days is clamped to [1, 365]', async () => {
   assert.equal(tooSmall.days, 1);
 });
 
+test('a non-numeric ?days= falls back to 90 instead of surviving as NaN', async () => {
+  resetState();
+  const { GET } = await routePromise;
+  const res = await GET(request('?days=abc', { 'x-user-id': 'user-1' }));
+  const body = await res.json();
+  assert.equal(body.days, 90);
+});
+
 test('buckets workout_completed events into local-day markers, oldest to newest', async () => {
   resetState();
   state.eventRows = [

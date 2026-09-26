@@ -33,9 +33,22 @@ function isoDateDaysAgo(days: number): string {
   return d.toISOString().split('T')[0];
 }
 
+const DEFAULT_DAYS = 90;
+
+/**
+ * `Number('abc')` is NaN, which survives both `Math.min` and `Math.max`
+ * unscathed — so an unparseable `?days=` must be caught explicitly and
+ * replaced with the default before clamping, not just clamped.
+ */
+function parseDaysParam(raw: string | null): number {
+  const parsed = raw === null ? DEFAULT_DAYS : Number(raw);
+  const days = Number.isFinite(parsed) ? parsed : DEFAULT_DAYS;
+  return Math.max(1, Math.min(365, Math.floor(days)));
+}
+
 export async function GET(request: Request): Promise<NextResponse> {
   const { searchParams } = new URL(request.url);
-  const days = Math.max(1, Math.min(365, Number(searchParams.get('days') ?? '90')));
+  const days = parseDaysParam(searchParams.get('days'));
 
   let userId: string;
   try {
