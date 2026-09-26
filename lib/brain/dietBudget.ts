@@ -29,6 +29,14 @@ import { parseProfileDetails } from '@/lib/profileDetails';
 import { getWeightReadings } from '@/lib/weightRepository';
 import { computeWeightTrend } from '@/lib/weightTrend';
 import { proteinBasisWeightKg, PROTEIN_GRAMS_CAP } from '@/lib/brain/proteinWeight';
+import { resolveDailyIntake } from '@/lib/brain/nutritionIntake';
+import { previousDayKey } from '@/lib/localDay';
+import {
+  computeLearnedExpenditure,
+  WINDOW_DAYS as LEARNED_TDEE_WINDOW_DAYS,
+  type LearnedExpenditureConfidence,
+  type DailyIntakeKcalPoint as LearnedExpenditureIntakePoint,
+} from '@/lib/brain/learnedExpenditure';
 
 export type DietGoal = 'weight_loss' | 'muscle' | 'endurance' | 'general';
 export const DIET_GOALS: readonly DietGoal[] = ['weight_loss', 'muscle', 'endurance', 'general'];
@@ -175,6 +183,15 @@ export interface DietBudget {
    * appliedFloor: false — informational only, value preserved.
    */
   lowEnergyWarning?: { thresholdKcal: number; appliedFloor: boolean; message: string } | null;
+  /**
+   * Present only for 'auto' budgets — the formula-vs-learned TDEE decision
+   * (Stage 2 adaptive expenditure, see lib/brain/learnedExpenditure.ts).
+   * Optional and additive, like lowEnergyWarning above, so existing iOS
+   * Codable clients that don't know this field are unaffected. Absent (not
+   * merely null) for a 'custom' (user-pinned) budget, which this module
+   * never recomputes TDEE for at all.
+   */
+  expenditure?: DietBudgetExpenditure;
 }
 
 /**
@@ -204,6 +221,112 @@ export interface DietGoalRow {
 
 /** Number of trailing days of workouts computeAutoBudget looks at. */
 const WORKOUT_WINDOW_DAYS = 7;
+
+// ── Learned (adaptive) TDEE — Stage 2 ───────────────────────────────────────
+// See lib/brain/learnedExpenditure.ts for the full algorithm + evidence.
+// This section wires it into the auto-budget path: an auto budget's `tdee`
+// (and therefore its targetKcal/macros) uses the LEARNED number once
+// confidence reaches 'medium', falling back to the formula estimate below
+// that — never for a 'custom' (user-pinned) budget, which this module never
+// touches.
+
+/** Confidence tiers at/above which computeAutoBudget prefers the learned TDEE over the Mifflin-St Jeor formula. */
+const LEARNED_TDEE_CONFIDENCE_GATE: ReadonlySet<LearnedExpenditureConfidence> = new Set(['medium', 'high']);
+
+/**
+ * Additive summary of the formula-vs-learned TDEE decision — attached to an
+ * AUTO DietBudget's new `expenditure` field so a future UI can show "learned
+ * from N days" and so the coach (lib/brain/context.ts) can cite it honestly.
+ * Entirely optional/additive: existing iOS Codable clients that don't know
+ * this field are unaffected (see DietBudget.expenditure's own doc comment).
+ */
+export interface DietBudgetExpenditure {
+  /** Mifflin-St Jeor estimate — unchanged existing math (lib/brain/tools.ts's estimateTDEE). */
+  formulaTdee: number;
+  /** computeLearnedExpenditure's output tdee — a blend/clamp of logged data against the formula; equals formulaTdee verbatim when confidence is 'none'. */
+  learnedTdee: number;
+  confidence: LearnedExpenditureConfidence;
+  /** Which number the budget's macros were actually computed from this time. */
+  source: 'formula' | 'learned';
+  /** Calendar days of intake data considered (<= learnedExpenditure.ts's WINDOW_DAYS). */
+  daysUsed: number;
+  /** Non-partial logged/healthkit days within that window — the number to cite ("learned from N days"). */
+  loggedDays: number;
+}
+
+/**
+ * Computes the learned-TDEE summary for a user against a given formula
+ * estimate. NEVER throws: any failure (DB error, insufficient data) degrades
+ * to a formula-only summary, the same non-fatal-failure pattern
+ * lib/brain/context.ts uses for its own best-effort loads — a learned-TDEE
+ * outage must never break the (existing, load-bearing) auto-budget path.
+ *
+ * NOTE on timezone: this buckets daily intake by UTC calendar day, not the
+ * user's local day (unlike lib/brain/context.ts / lib/brain/brief.ts, which
+ * both know the caller's tz). computeAutoBudget's signature is (userId,
+ * goal) only — it has no tz on hand without an extra `users` lookup. A day
+ * boundary can therefore be up to ~14h off from the user's real local day.
+ * This is judged acceptable because the learned estimate averages over a
+ * WINDOW_DAYS-long (28-day) window — a single day's boundary being off by
+ * up to 14h barely moves a 28-day average — but it IS a known, deliberate
+ * simplification, not an oversight; revisit if per-day precision ever
+ * matters here (e.g. a "which day was excluded" UI).
+ */
+export async function computeLearnedExpenditureSummary(
+  userId: string,
+  formulaTdee: number,
+): Promise<DietBudgetExpenditure> {
+  const fallback: DietBudgetExpenditure = {
+    formulaTdee: Math.round(formulaTdee),
+    learnedTdee: Math.round(formulaTdee),
+    confidence: 'none',
+    source: 'formula',
+    daysUsed: 0,
+    loggedDays: 0,
+  };
+
+  try {
+    const todayKey = new Date().toISOString().slice(0, 10);
+    const dayKeys: string[] = [todayKey];
+    for (let i = 1; i < LEARNED_TDEE_WINDOW_DAYS; i++) {
+      dayKeys.unshift(previousDayKey(dayKeys[0]));
+    }
+
+    const [intakeByDay, weightReadings] = await Promise.all([
+      resolveDailyIntake(userId, dayKeys, 'UTC'),
+      // A window wider than LEARNED_TDEE_WINDOW_DAYS so the EWMA trend has
+      // run-in room before the window we actually score — mirrors
+      // resolveBudgetWeightKg's own 90-day pull, just narrower since we only
+      // need a well-established trend, not the absolute latest weight.
+      getWeightReadings(userId, LEARNED_TDEE_WINDOW_DAYS + 30, null),
+    ]);
+
+    const dailyIntakeKcal: LearnedExpenditureIntakePoint[] = dayKeys.map((day) => {
+      const intake = intakeByDay.get(day);
+      return {
+        day,
+        kcal: intake && intake.source !== 'none' ? intake.kcal : null,
+        source: intake?.source ?? 'none',
+      };
+    });
+
+    const trend = computeWeightTrend(weightReadings);
+    const result = computeLearnedExpenditure(dailyIntakeKcal, trend, formulaTdee);
+    const source: 'formula' | 'learned' = LEARNED_TDEE_CONFIDENCE_GATE.has(result.confidence) ? 'learned' : 'formula';
+
+    return {
+      formulaTdee: Math.round(formulaTdee),
+      learnedTdee: result.tdee,
+      confidence: result.confidence,
+      source,
+      daysUsed: result.daysUsed,
+      loggedDays: result.loggedDays,
+    };
+  } catch (err) {
+    console.error(`[dietBudget] learned-expenditure computation failed for user ${userId}:`, err);
+    return fallback;
+  }
+}
 
 /**
  * Weight used for budget math (auto TDEE + the coach's custom-kcal macro
@@ -271,13 +394,24 @@ export async function computeAutoBudget(userId: string, goal: DietGoal): Promise
   // them onto one day's TDEE (see its doc comment for the bug this fixes:
   // 4x/week workouts at 400 kcal each used to add all 1,600 kcal to one
   // day's target, erasing the deficit).
-  const tdee = estimateTDEE({
+  const formulaTdee = estimateTDEE({
     weightKg,
     heightCm:      profile.heightCm,
     age:           profile.age,
     biologicalSex: profile.biologicalSex,
     activityMultiplier,
   }, workouts, WORKOUT_WINDOW_DAYS);
+
+  // Stage 2 adaptive expenditure (lib/brain/learnedExpenditure.ts): once
+  // there's enough logged intake + a well-established weight trend
+  // (confidence >= 'medium'), the LEARNED TDEE — not the Mifflin-St Jeor
+  // formula — is what this budget's macros are actually computed from. Below
+  // that confidence, `source` is 'formula' and `tdee` is unchanged from
+  // today's behavior. Never fails the budget path — see
+  // computeLearnedExpenditureSummary's doc comment.
+  const expenditure = await computeLearnedExpenditureSummary(userId, formulaTdee);
+  const tdee = expenditure.source === 'learned' ? expenditure.learnedTdee : formulaTdee;
+
   const { targetCal, c, p, f } = macrosForGoal(goal, weightKg, tdee, {
     heightCm: profile.heightCm, biologicalSex: profile.biologicalSex,
   });
@@ -295,13 +429,13 @@ export async function computeAutoBudget(userId: string, goal: DietGoal): Promise
     return {
       mode: 'auto', goal, targetKcal: thresholdKcal,
       protein: floored.protein, carbs: floored.carbs, fat: floored.fat,
-      tdee,
+      tdee, expenditure,
       lowEnergyWarning: { thresholdKcal, appliedFloor: true, message: lowEnergyMessage(thresholdKcal, true) },
     };
   }
 
   return {
-    mode: 'auto', goal, targetKcal: targetCal, protein: p, carbs: c, fat: f, tdee,
+    mode: 'auto', goal, targetKcal: targetCal, protein: p, carbs: c, fat: f, tdee, expenditure,
     lowEnergyWarning: null,
   };
 }

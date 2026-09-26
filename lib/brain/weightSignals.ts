@@ -41,9 +41,25 @@ export const UNDER_EATING_MIN_DAYS_WITH_DATA = 3;
 /** A 'logged' day under this many kcal is treated as a partial/incomplete log and excluded from the under_eating average. */
 export const PARTIAL_LOG_KCAL_THRESHOLD = 300;
 
+/** weekend_overeating looks at this many trailing calendar days — long enough (3-4 weeks) to average out any single wild weekend, short enough to still reflect a CURRENT pattern rather than one from months ago. */
+export const WEEKEND_PATTERN_WINDOW_DAYS = 28;
+/** Minimum number of logged weekday days required within the window before the pattern is trusted. */
+export const WEEKEND_PATTERN_MIN_WEEKDAY_DAYS = 6;
+/** Minimum number of logged weekend days required within the window before the pattern is trusted — lower than the weekday minimum because a 4-week window has at most 8 weekend days total (Sat+Sun × 4). */
+export const WEEKEND_PATTERN_MIN_WEEKEND_DAYS = 4;
+/** weekend_overeating fires when weekend average intake exceeds weekday average by more than this fraction... */
+export const WEEKEND_OVEREATING_PCT_THRESHOLD = 0.25;
+/** ...AND by more than this many absolute kcal/day — both conditions must hold, so a small base intake (e.g. a very lean small person) whose weekend is 25%+ higher but only +150 kcal doesn't fire on a difference that isn't actionable. */
+export const WEEKEND_OVEREATING_KCAL_THRESHOLD = 400;
+
 // ── Types ────────────────────────────────────────────────────────────────
 
-export type WeightSignalKind = 'too_fast_loss' | 'plateau' | 'under_eating' | 'rate_not_yet_reliable';
+export type WeightSignalKind =
+  | 'too_fast_loss'
+  | 'plateau'
+  | 'under_eating'
+  | 'rate_not_yet_reliable'
+  | 'weekend_overeating';
 export type WeightSignalSeverity = 'info' | 'watch';
 
 export interface WeightSignal {
@@ -66,6 +82,15 @@ export interface AssessWeightSignalsInput {
   floorKcal: number;
   /** The user's diet goal, as used by dietBudget.ts (e.g. 'weight_loss'). */
   goal: string;
+  /**
+   * Trailing WEEKEND_PATTERN_WINDOW_DAYS (28) local days of resolved intake,
+   * for the weekend_overeating signal — a WIDER window than
+   * `dailyIntakeKcal`'s 7 days, since a weekday/weekend split needs several
+   * weeks to average out one wild weekend. Optional: omit (or pass []) to
+   * skip the weekend_overeating check entirely, e.g. for a caller that
+   * hasn't loaded the wider window.
+   */
+  weekendPatternIntakeKcal?: DailyIntakeKcalPoint[];
 }
 
 function round1(n: number): number {
@@ -174,6 +199,50 @@ function assessRateNotYetReliable(trend: WeightTrendResult): WeightSignal | null
   };
 }
 
+// ── Rule 5: weekend_overeating ───────────────────────────────────────────
+
+/** Sunday=0 ... Saturday=6, computed purely from the YYYY-MM-DD calendar day (UTC-anchored — day-of-week doesn't depend on time zone). */
+function isWeekendDay(day: string): boolean {
+  const [y, m, d] = day.split('-').map(Number);
+  const dow = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+  return dow === 0 || dow === 6;
+}
+
+function assessWeekendOvereating(weekendPatternIntakeKcal: DailyIntakeKcalPoint[] | undefined): WeightSignal | null {
+  if (!weekendPatternIntakeKcal || weekendPatternIntakeKcal.length === 0) return null;
+
+  const withData = weekendPatternIntakeKcal.filter(d => d.source !== 'none' && d.kcal != null);
+  const weekdayDays = withData.filter(d => !isWeekendDay(d.day));
+  const weekendDays = withData.filter(d => isWeekendDay(d.day));
+
+  if (weekdayDays.length < WEEKEND_PATTERN_MIN_WEEKDAY_DAYS) return null;
+  if (weekendDays.length < WEEKEND_PATTERN_MIN_WEEKEND_DAYS) return null;
+
+  const weekdayAvg = weekdayDays.reduce((sum, d) => sum + (d.kcal as number), 0) / weekdayDays.length;
+  const weekendAvg = weekendDays.reduce((sum, d) => sum + (d.kcal as number), 0) / weekendDays.length;
+
+  if (weekdayAvg <= 0) return null;
+
+  const diffKcal = weekendAvg - weekdayAvg;
+  const diffPct = diffKcal / weekdayAvg;
+
+  if (diffPct <= WEEKEND_OVEREATING_PCT_THRESHOLD) return null;
+  if (diffKcal <= WEEKEND_OVEREATING_KCAL_THRESHOLD) return null;
+
+  return {
+    kind: 'weekend_overeating',
+    severity: 'info',
+    facts: {
+      weekdayAvgKcal: Math.round(weekdayAvg),
+      weekendAvgKcal: Math.round(weekendAvg),
+      diffKcal: Math.round(diffKcal),
+      diffPct: round1(diffPct * 100),
+      weekdayDaysCounted: weekdayDays.length,
+      weekendDaysCounted: weekendDays.length,
+    },
+  };
+}
+
 // ── Public entry point ───────────────────────────────────────────────────
 
 /**
@@ -182,7 +251,7 @@ function assessRateNotYetReliable(trend: WeightTrendResult): WeightSignal | null
  * signal depends on DB access — every input is already-resolved data.
  */
 export function assessWeightSignals(input: AssessWeightSignalsInput): WeightSignal[] {
-  const { trend, dailyIntakeKcal, floorKcal, goal } = input;
+  const { trend, dailyIntakeKcal, floorKcal, goal, weekendPatternIntakeKcal } = input;
 
   const signals: WeightSignal[] = [];
   const tooFastLoss = assessTooFastLoss(trend);
@@ -197,6 +266,9 @@ export function assessWeightSignals(input: AssessWeightSignalsInput): WeightSign
   const rateNotYetReliable = assessRateNotYetReliable(trend);
   if (rateNotYetReliable) signals.push(rateNotYetReliable);
 
+  const weekendOvereating = assessWeekendOvereating(weekendPatternIntakeKcal);
+  if (weekendOvereating) signals.push(weekendOvereating);
+
   return signals;
 }
 
@@ -207,6 +279,7 @@ const SIGNAL_LABEL: Record<WeightSignalKind, string> = {
   plateau: 'Weight plateau',
   under_eating: 'Average intake below the safe floor',
   rate_not_yet_reliable: 'Not enough history yet for a reliable weekly rate',
+  weekend_overeating: 'Weekend intake notably higher than weekdays',
 };
 
 function formatFacts(facts: Record<string, number | string>): string {

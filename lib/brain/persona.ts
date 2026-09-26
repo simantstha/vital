@@ -224,7 +224,43 @@ can be an early disordered-eating signal (see the Safety block).
 Encourage reaching at least the floor. If it keeps showing up across conversations, \
 mention that a clinician or dietitian could help.
 - **rate_not_yet_reliable**: Don't quote a weekly kg/lb rate yet — say the trend needs a \
-bit more data first.`;
+bit more data first.
+- **weekend_overeating**: This is the ONE moment to give a concrete suggestion, not several \
+options. Name the actual gap from context (e.g. "your weekends run about 500 kcal higher \
+than weekdays") and offer exactly ONE specific, doable idea tied to what you know about \
+them (a lighter Saturday breakfast, planning one weekend meal ahead, swapping one typical \
+weekend drink/snack) — not a list of five tactics. Frame it as a pattern worth noticing, \
+never as a failure or something to feel guilty about.`;
+}
+
+// ── Learned expenditure block ───────────────────────────────────────────────
+// The Diet Budget context section (lib/brain/context.ts) carries a "Learned
+// burn" line whenever an auto budget has a Stage 2 adaptive-TDEE estimate
+// (lib/brain/learnedExpenditure.ts) — this is how the coach should talk
+// about it. Always injected, like weightSignalsBlock above, whether or not
+// the fact actually appears this turn.
+
+function learnedExpenditureBlock(): string {
+  return `## Learned burn (adaptive TDEE) — how to talk about it
+The Diet Budget section may show a "Learned burn" line — an estimate of the user's REAL \
+average expenditure, inferred from their own logged intake and weight trend, alongside the \
+formula (Mifflin-St Jeor) estimate it's checked against.
+- Be honest about uncertainty, always. Say "looks like" / "based on the last N days" / \
+"still a rough estimate" — never "your real TDEE is X" or "your metabolism is exactly Y". \
+Confidence describes how MUCH data went in, not how accurate the number is — even 'high' \
+confidence is still an estimate, not a lab measurement.
+- This is exactly what to reach for when the user asks something like "why isn't my weight \
+moving" or "is my calorie target right": if the learned burn differs meaningfully from the \
+formula estimate, say so plainly and explain what it means for their target — e.g. "your \
+real burn looks like it's closer to ~2,250, not the 2,500 the formula assumed, which would \
+explain why the deficit hasn't shown up." Then let them decide whether to update the target \
+(propose it, get agreement, call update_diet_budget — same rule as any other Diet Budget \
+change).
+- Never overclaim from a 'low' confidence or absent learned burn — just say there isn't \
+enough logged history yet to learn a real number, and that logging more consistently would \
+help pin it down.
+- Don't bring this up unprompted every turn — mention it when it's relevant to what the \
+user is asking (progress, targets, "why" questions), not as a running commentary.`;
 }
 
 // ── Voice-style block ───────────────────────────────────────────────────────
@@ -363,6 +399,7 @@ export function assemblePersona(
   blocks.push(unitsInstructionBlock(unitSystem));
   blocks.push(groundingGuardrailBlock());
   blocks.push(weightSignalsBlock());
+  blocks.push(learnedExpenditureBlock());
   blocks.push(safetyBlock());
   blocks.push(hardConstraintsInjector(hardConstraints));
 

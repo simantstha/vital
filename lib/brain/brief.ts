@@ -33,15 +33,20 @@ import { KM_PER_MILE } from '@/lib/metricFormat';
 import type { DailyBrief } from '@/lib/types';
 import { computeWeightTrend } from '@/lib/weightTrend';
 import { getWeightReadingsWithLazyImport } from '@/lib/weightRepository';
-import { assessWeightSignals, type DailyIntakeKcalPoint } from '@/lib/brain/weightSignals';
+import { assessWeightSignals, WEEKEND_PATTERN_WINDOW_DAYS, type DailyIntakeKcalPoint } from '@/lib/brain/weightSignals';
 import { lowEnergyThresholdKcal } from '@/lib/brain/dietBudget';
 import { readCoreProfile } from '@/lib/coreProfileStore';
 import { parseProfileDetails } from '@/lib/profileDetails';
 
 /** How many trailing days of weigh-ins the brief loads for the smoothed trend (lib/weightTrend.ts) — same window as lib/brain/context.ts. */
 const WEIGHT_TREND_WINDOW_DAYS = 45;
-/** How many trailing local days of resolved intake feed the under_eating signal (lib/brain/weightSignals.ts). */
-const WEIGHT_SIGNALS_INTAKE_WINDOW_DAYS = 7;
+/**
+ * How many trailing local days of resolved intake the brief loads —
+ * WEEKEND_PATTERN_WINDOW_DAYS (28, weightSignals.ts) rather than the
+ * under_eating signal's own narrower 7-day need, so the same
+ * resolveDailyIntake call also feeds the weekend_overeating signal.
+ */
+const WEIGHT_SIGNALS_INTAKE_WINDOW_DAYS = WEEKEND_PATTERN_WINDOW_DAYS;
 
 // ── Payload helpers ─────────────────────────────────────────────────────────
 
@@ -555,14 +560,18 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
     }),
   ]);
   const weightTrend = computeWeightTrend(weightReadings);
-  const dailyIntakeKcal: DailyIntakeKcalPoint[] = signalDayKeys.map((day) => {
+  const toSignalIntakePoint = (day: string): DailyIntakeKcalPoint => {
     const intake = signalIntakeByDay.get(day);
     return {
       day,
       kcal: intake && intake.source !== 'none' ? intake.kcal : null,
       source: intake?.source ?? 'none',
     };
-  });
+  };
+  // under_eating only needs the trailing 7 days; weekend_overeating needs
+  // the full (now 28-day) window — see weightSignals.ts.
+  const dailyIntakeKcal: DailyIntakeKcalPoint[] = signalDayKeys.slice(-7).map(toSignalIntakePoint);
+  const weekendPatternIntakeKcal: DailyIntakeKcalPoint[] = signalDayKeys.map(toSignalIntakePoint);
   const floorKcal = lowEnergyThresholdKcal(parseProfileDetails(coreProfileMd).biologicalSex);
   const weightSignals = assessWeightSignals({
     trend: weightTrend,
@@ -571,6 +580,7 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
     // users.goal is already the canonical DietGoal id (goalFromOnboarding
     // normalizes onboarding's ids at write time) — no need to re-normalize.
     goal: userRow?.goal ?? 'general',
+    weekendPatternIntakeKcal,
   });
 
   // ── Delegate to lib/claude.ts generateDailyBrief ─────────────────────────
