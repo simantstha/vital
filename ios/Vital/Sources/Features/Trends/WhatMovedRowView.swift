@@ -43,7 +43,10 @@ struct WhatMovedRowView: View {
 
             Sparkline(
                 values: row.sparklineValues,
-                style: spec.sparkline,
+                // Always a line here, regardless of `spec.sparkline` — a
+                // 96pt-wide bar sparkline (e.g. sleep's tile style) is noise
+                // at this width; tiles keep their own spec style.
+                style: .line,
                 tint: tint,
                 height: 34,
                 bandLower: row.mean30 - row.sd30,

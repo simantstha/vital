@@ -249,7 +249,7 @@ enum FixtureData {
         case ("GET", "/api/trends"):
             return query.contains("metrics=")
                 ? (200, jsonData(trendsBatch(profile, scenario: scenario, query: query)))
-                : (200, jsonData(trendsSingle(profile, query: query)))
+                : (200, jsonData(trendsSingle(profile, scenario: scenario, query: query)))
         case ("GET", "/api/logs"):
             return (200, jsonData(logs(profile)))
         case ("GET", "/api/diet-goal"):
@@ -321,12 +321,6 @@ enum FixtureData {
         return dayFormatter.string(from: date)
     }
 
-    /// Small deterministic (no randomness — reproducible screenshots)
-    /// day-to-day variation so a sparkline isn't a flat line.
-    private static func wiggle(_ base: Double, _ offset: Int) -> Double {
-        base + Double(offset % 3 - 1) * (base * 0.03)
-    }
-
     // MARK: - Deterministic noise (Trends phase-1 realistic fixture series)
 
     /// A stable per-string seed — deliberately NOT `String.hashValue`, whose
@@ -359,6 +353,31 @@ enum FixtureData {
         let noise = (n - 0.5) * 2 * amplitude * 0.5
         let drift = sin((Double(offset) + Double(seed % 17)) / 9.0) * amplitude * 0.2
         return base + noise + drift
+    }
+
+    /// Shared per-day value generator behind BOTH `trendsSingle` and
+    /// `trendsBatch`, so the single-metric 7-day responses the weekly summary
+    /// strip (sleep avg/hrv/resting hr, `WeeklyHeadlineStrip`) fetches always
+    /// agree with the batch series tiles/"What moved" use for the SAME
+    /// metric — same `key`, same `base`/`sd`/`seed` in, same value out.
+    ///
+    /// `offset` is days-ago (0 = today). For a designated "moved" metric
+    /// (`pushesAbove` non-nil), the ±1.8σ override ramps linearly from 0 at
+    /// `offset == 6` up to full strength at `offset == 1`, then holds at
+    /// `offset == 0` — a believable multi-day drift into the reading rather
+    /// than a single-day spike — while every other metric (and offsets
+    /// beyond 6, for longer windows) keeps the flat baseline plus noise.
+    /// `mean30`/`sd30` are served as constants independent of this — see
+    /// `trendsBatch`'s `baseline` — so the ramp doesn't skew the verdict math
+    /// non-designated metrics are checked against.
+    private static func seriesValue(offset: Int, base: Double, sd: Double, dailyTrend: Double, seed: Int, pushesAbove: Bool?) -> Double {
+        let trend = dailyTrend * Double(offset)
+        if let pushesAbove, offset <= 6 {
+            let rampFraction: Double = offset == 0 ? 1.0 : Double(6 - offset) / 5.0
+            let overrideDelta = (pushesAbove ? 1.8 : -1.8) * sd * rampFraction
+            return base + trend + overrideDelta
+        }
+        return trend + noisyValue(seed: seed, offset: offset, base: base, amplitude: sd)
     }
 
     /// Per-scenario metrics whose LATEST ("today") reading is deliberately
@@ -475,21 +494,35 @@ enum FixtureData {
 
     // MARK: - GET /api/trends?metric= → TrendsResponse
 
-    private static func trendsSingle(_ profile: Profile, query: String) -> [String: Any] {
+    /// Metric aliases `/api/trends?metric=` accepts, mapped to the
+    /// `trendsBatch` key with the same underlying series — kept in sync so
+    /// the weekly summary strip's sleep avg/hrv/resting hr always agree with
+    /// the batch series tiles/"What moved" read for the same metric.
+    /// `"sleep"` maps to `sleep_minutes`, whose wire value (despite the key
+    /// name) is HOURS, not minutes — see `baseValue`'s comment; `trendsBatch`
+    /// already serves it that way, so this alias keeps the two in the same
+    /// unit as well as the same values.
+    private static let singleMetricAliases: [String: String] = [
+        "sleep": "sleep_minutes",
+        "hrv": "hrv_sdnn",
+        "rhr": "resting_hr",
+    ]
+
+    private static func trendsSingle(_ profile: Profile, scenario: FixtureMode.Scenario?, query: String) -> [String: Any] {
         let metricName = query
             .split(separator: "&")
             .first { $0.hasPrefix("metric=") }
             .map { String($0.dropFirst("metric=".count)) } ?? "sleep"
-        let base: Double
-        switch metricName {
-        case "hrv": base = profile.hrv
-        case "rhr": base = profile.restingHR
-        // "sleep" — same `sleep_minutes` metric as trendsBatch below, scaled
-        // to hours server-side (lib/metricCatalog.ts's `scale: 1/60`).
-        default:    base = profile.sleepMinutes / 60
-        }
+        let key = singleMetricAliases[metricName] ?? "sleep_minutes"
+        let base = baseValue(key, profile)
+        let dailyTrend = key == "body_mass_kg" ? profile.weightTrendPerWeekKg / 7 : 0
+        let sd = base * 0.06
+        let seed = stableSeed(key)
+        let pushesAbove = (movedMetrics[scenario ?? .newUser] ?? [:])[key]
+
         let points = (0..<7).reversed().map { offset -> [String: Any] in
-            ["date": dayString(offset), "value": wiggle(base, offset)]
+            let value = seriesValue(offset: offset, base: base, sd: sd, dailyTrend: dailyTrend, seed: seed, pushesAbove: pushesAbove)
+            return ["date": dayString(offset), "value": value]
         }
         return ["metric": metricName, "points": points, "calibration": calibration(profile)]
     }
@@ -565,15 +598,7 @@ enum FixtureData {
             let pushesAbove = moved[key]
 
             let points = (0..<pointCount).reversed().map { offset -> [String: Any] in
-                let trend = dailyTrend * Double(offset)
-                if offset == 0, let pushesAbove {
-                    // "Today" — deliberately pinned to ~1.8σ off the mean so
-                    // the verdict clears `TrendsVerdict`'s |z| >= 1 gate
-                    // unambiguously (see `movedMetrics`'s doc comment).
-                    let overrideDelta = (pushesAbove ? 1.8 : -1.8) * sd
-                    return ["date": dayString(offset), "value": base + trend + overrideDelta]
-                }
-                let value = trend + noisyValue(seed: seed, offset: offset, base: base, amplitude: sd)
+                let value = seriesValue(offset: offset, base: base, sd: sd, dailyTrend: dailyTrend, seed: seed, pushesAbove: pushesAbove)
                 return ["date": dayString(offset), "value": value]
             }
             let baseline: [String: Any] = [

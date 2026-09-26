@@ -218,7 +218,12 @@ private struct PeriodSwitcher: View {
                     .background {
                         if isOn {
                             Capsule()
-                                .fill(Theme.Colors.card)
+                                .fill(Theme.Colors.switcherThumb)
+                                // Subtle in light mode only — `cardShadow` is
+                                // `.clear` in dark, where a shadow wouldn't
+                                // read against the dark canvas anyway (same
+                                // pattern as `VitalCard`).
+                                .shadow(color: Theme.Colors.cardShadow, radius: 3, y: 1)
                                 .matchedGeometryEffect(id: "selectedPeriod", in: capsuleNamespace)
                         }
                     }

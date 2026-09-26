@@ -101,6 +101,19 @@ enum Theme {
                 : UIColor(red: 0.894, green: 0.898, blue: 0.878, alpha: 1)
         })
 
+        /// Selected-segment "thumb" for a control sitting on a `glassFill`
+        /// track (e.g. `PeriodSwitcher`) — light: solid white, dark: white
+        /// ~17%. Deliberately its own token rather than reusing `card`: on a
+        /// dark `glassFill` track over the near-black `canvas`, `card`
+        /// (~#151A21) sits so close to both that the selected segment was
+        /// nearly invisible; white at 17% reads as a clearly lighter surface
+        /// against either.
+        static let switcherThumb = Color(uiColor: UIColor { tc in
+            tc.userInterfaceStyle == .dark
+                ? UIColor(white: 1.0, alpha: 0.17)
+                : UIColor.white
+        })
+
         /// Glass fill — dark: white 5% / light: black 4%
         static let glassFill = Color(uiColor: UIColor { tc in
             tc.userInterfaceStyle == .dark
