@@ -20,6 +20,8 @@ type BaselineFixture = { stats: { mean30: number | null } | null; established: b
 type MetricPointFixture = { date: string; value: number };
 type SleepSummaryFixture = { nights: Array<{ date: string; minutes: number; stages: unknown }> };
 
+type WeightReadingFixture = { measuredAt: string; valueKg: number; source: 'manual' | 'healthkit' | 'coach'; localDay: string };
+
 const state: {
   userRow: Array<{ timezone: string | null; unit_system?: string | null; sleep_goal_minutes?: number | null }>;
   events: Array<{ type: string; timestamp: Date; payload: unknown }>;
@@ -27,6 +29,7 @@ const state: {
   baselines: Record<string, BaselineFixture | null>;
   metricPoints: Record<string, MetricPointFixture[]>;
   sleepSummaries: Record<string, SleepSummaryFixture>;
+  weightReadings: WeightReadingFixture[];
 } = {
   userRow: [{ timezone: 'America/Chicago' }],
   events: [],
@@ -34,6 +37,7 @@ const state: {
   baselines: {},
   metricPoints: {},
   sleepSummaries: {},
+  weightReadings: [],
 };
 
 // The recovery-scoring additions (lib/brain/brief.ts reading whoop_connections
@@ -47,6 +51,7 @@ beforeEach(() => {
   state.baselines = {};
   state.metricPoints = {};
   state.sleepSummaries = {};
+  state.weightReadings = [];
 });
 
 const fakeDb = {
@@ -103,7 +108,7 @@ mock.module('@/lib/claude', {
 // local-day bucketing, not weight-signal content (see weightSignals.test.ts).
 mock.module('@/lib/weightRepository', {
   namedExports: {
-    getWeightReadingsWithLazyImport: async () => [],
+    getWeightReadingsWithLazyImport: async () => state.weightReadings,
   },
 });
 mock.module('@/lib/coreProfileStore', {
@@ -494,4 +499,31 @@ test('recentNutrition never includes today, includes today-3, and excludes today
   assert.ok(!dates.includes(todayKey), 'today must never appear in recentNutrition');
   assert.ok(dates.includes(today3), 'today-3 must appear in recentNutrition');
   assert.ok(!dates.includes(today4), 'today-4 must not appear in recentNutrition');
+});
+
+test('the brief\'s weekly weight-change number matches what the hero (GET /api/weight-log) would compute from the same readings', async () => {
+  const { computeWeightTrend } = await import('../weightTrend');
+  const readings = [
+    // >=3 distinct days spanning >=5 days, so trend.established is true —
+    // see lib/weightTrend.ts's computeWeightTrend doc comment.
+    { measuredAt: '2026-08-01T08:00:00.000Z', valueKg: 84.0, source: 'manual' as const, localDay: '2026-08-01' },
+    { measuredAt: '2026-08-05T08:00:00.000Z', valueKg: 83.4, source: 'manual' as const, localDay: '2026-08-05' },
+    { measuredAt: '2026-08-08T08:00:00.000Z', valueKg: 83.0, source: 'manual' as const, localDay: '2026-08-08' },
+    { measuredAt: '2026-08-12T08:00:00.000Z', valueKg: 82.5, source: 'manual' as const, localDay: '2026-08-12' },
+  ];
+  state.weightReadings = readings;
+  state.userRow = [{ timezone: 'America/Chicago' }];
+  state.events = [];
+  capturedCtx = null;
+
+  const { generateDailyBriefFromDb } = await briefPromise;
+  await generateDailyBriefFromDb('user-1');
+
+  // What GET /api/weight-log (app/api/weight-log/route.ts) would compute for
+  // the iOS hero from these exact same readings.
+  const heroTrend = computeWeightTrend(readings);
+
+  const briefTrend = capturedCtx!.weightTrend as { delta7dKgPerWeek: number | null; established: boolean };
+  assert.equal(briefTrend.delta7dKgPerWeek, heroTrend.delta7dKgPerWeek);
+  assert.equal(briefTrend.established, heroTrend.established);
 });

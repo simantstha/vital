@@ -117,7 +117,7 @@ enum FixtureData {
         .weightLoss: Profile(
             goal: "weight_loss",
             name: "Alex Rivera",
-            insight: "You're down 1.2kg this week and sleep is holding steady — keep the deficit gentle through the weekend.",
+            insight: "You're down 0.6kg this week and sleep is holding steady — keep the deficit gentle through the weekend.",
             established: true,
             targetKcal: 1850, consumedKcal: 1020,
             protein: 96, proteinTarget: 150, carbs: 110, carbsTarget: 165, fat: 38, fatTarget: 62,

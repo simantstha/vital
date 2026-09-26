@@ -301,6 +301,7 @@ export async function generateDailyBrief(userId: string, ctx: BriefContext): Pro
 4. Keep meals specific and tied to actual training data — not generic advice
 5. Meals MUST NOT contain any food listed under RESTRICTIONS (allergies/intolerances/conditions) — this is a hard rule. Favor PREFERENCES: liked foods and cuisines in, disliked foods out.
 6. If Weight Trend & Energy Signals below shows too_fast_loss, never praise the pace of loss — see the IMPORTANT note in that section for what to say instead. If it shows plateau, don't frame it as a failure. If it shows under_eating, raise it gently, never with judgement. If it shows rate_not_yet_reliable, don't quote a weekly rate.
+7. If you state a weekly weight-change number anywhere in the body text, it MUST be quoted exactly from the "Trend weight" line in the Weight Trend & Energy Signals section below — never compute, estimate, or state a different weekly-change number from any other data (e.g. two raw weigh-ins).
 
 ## Long-term User Profile
 ${userProfile}
