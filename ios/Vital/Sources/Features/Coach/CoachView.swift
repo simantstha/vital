@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 // MARK: - Root view
 
@@ -946,6 +947,13 @@ private struct MessageBubbleView: View {
                         .padding(.horizontal, Theme.Spacing.lg)
                         .padding(.vertical, Theme.Spacing.md)
                         .bubbleSurface(isUser: message.role == .user)
+                        .contextMenu {
+                            Button {
+                                UIPasteboard.general.string = ChatCopy.copyableText(message.text)
+                            } label: {
+                                Label("Copy", systemImage: "doc.on.doc")
+                            }
+                        }
                         .fixedSize(horizontal: false, vertical: true)
 
                     if let specialistFooter {
