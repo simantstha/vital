@@ -23,6 +23,24 @@ struct Sparkline: View {
     var bandUpper: Double? = nil
     /// Draws a small filled dot on the latest non-nil value when true.
     var showsLatestDot: Bool = false
+    /// Trends-phase-2 index motion: when true, the line (and band) wipe in
+    /// left→right over 0.6s easeOut on first appearance, then the latest
+    /// dot pops (scale 0.6→1 + fade) 0.15s after the line completes — see
+    /// `Theme.Motion`'s storyboard notes. Defaults to `false`, which keeps
+    /// every existing caller's rendering exactly as before (drawn fully,
+    /// immediately, with no `@State`/`onAppear` side effects). Callers
+    /// (`MetricTileView`, `WhatMovedRowView`) pass `true` only on the render
+    /// where `TrendsViewModel.hasAnimatedIn` is still `false` — i.e. the
+    /// screen's first load — so the reveal plays once per session, not on
+    /// every period switch or pull-to-refresh.
+    var animatesOnAppear: Bool = false
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// 0 = nothing drawn yet, 1 = fully drawn. Starts at 1 (already fully
+    /// revealed) so a non-animating caller's very first frame renders
+    /// identically to before this property existed.
+    @State private var revealFraction: CGFloat = 1
+    @State private var dotRevealed: Bool = true
 
     private var nonNilCount: Int {
         values.reduce(0) { $0 + ($1 == nil ? 0 : 1) }
@@ -49,18 +67,65 @@ struct Sparkline: View {
     }
 
     var body: some View {
-        Canvas { context, size in
-            guard nonNilCount >= 3, size.width > 0, size.height > 0 else { return }
-            drawBand(context: context, size: size)
-            switch style {
-            case .line: drawLine(context: context, size: size)
-            case .bar:  drawBar(context: context, size: size)
+        ZStack(alignment: .topLeading) {
+            Canvas { context, size in
+                guard nonNilCount >= 3, size.width > 0, size.height > 0 else { return }
+                drawBand(context: context, size: size)
+                switch style {
+                case .line: drawLine(context: context, size: size)
+                case .bar:  drawBar(context: context, size: size)
+                }
+                // The animated reveal draws its own dot as a separately
+                // scaled/faded SwiftUI overlay below (Canvas draw calls
+                // can't be individually animated) — only draw it here for
+                // the non-animating (default) path.
+                if showsLatestDot, !animatesOnAppear {
+                    drawLatestDot(context: context, size: size)
+                }
             }
-            if showsLatestDot {
-                drawLatestDot(context: context, size: size)
+            .mask(alignment: .leading) {
+                // Native SwiftUI `.frame`/`.scaleEffect` changes interpolate
+                // smoothly under `withAnimation`; a `Canvas`'s own draw
+                // calls do not (there's no `Animatable` here), so the
+                // "draws in" reveal is a wipe mask over the whole canvas
+                // rather than a per-frame redraw.
+                Rectangle().scaleEffect(x: revealFraction, y: 1, anchor: .leading)
+            }
+
+            if animatesOnAppear, showsLatestDot, nonNilCount >= 3 {
+                GeometryReader { proxy in
+                    latestDotOverlay(size: proxy.size)
+                }
             }
         }
         .frame(height: height)
+        .onAppear(perform: startRevealIfNeeded)
+    }
+
+    private func startRevealIfNeeded() {
+        guard animatesOnAppear, !reduceMotion else {
+            revealFraction = 1
+            dotRevealed = true
+            return
+        }
+        revealFraction = 0
+        dotRevealed = false
+        withAnimation(.easeOut(duration: 0.6)) { revealFraction = 1 }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+            withAnimation(.spring(response: 0.15, dampingFraction: 0.8)) { dotRevealed = true }
+        }
+    }
+
+    @ViewBuilder
+    private func latestDotOverlay(size: CGSize) -> some View {
+        if let point = latestDotPosition(size: size) {
+            Circle()
+                .fill(tint)
+                .frame(width: 5.5, height: 5.5)
+                .position(point)
+                .scaleEffect(dotRevealed ? 1 : 0.6)
+                .opacity(dotRevealed ? 1 : 0)
+        }
     }
 
     // MARK: - Normal band
@@ -76,13 +141,18 @@ struct Sparkline: View {
 
     // MARK: - Latest-point dot
 
-    private func drawLatestDot(context: GraphicsContext, size: CGSize) {
-        guard let lastIndex = values.lastIndex(where: { $0 != nil }), let value = values[lastIndex] else { return }
+    private func latestDotPosition(size: CGSize) -> CGPoint? {
+        guard let lastIndex = values.lastIndex(where: { $0 != nil }), let value = values[lastIndex] else { return nil }
         let count = values.count
         let x = (CGFloat(lastIndex) + 0.5) / CGFloat(max(count, 1)) * size.width
         let y = yPosition(value, size: size)
+        return CGPoint(x: x, y: y)
+    }
+
+    private func drawLatestDot(context: GraphicsContext, size: CGSize) {
+        guard let point = latestDotPosition(size: size) else { return }
         let radius: CGFloat = 2.75
-        let dot = Path(ellipseIn: CGRect(x: x - radius, y: y - radius, width: radius * 2, height: radius * 2))
+        let dot = Path(ellipseIn: CGRect(x: point.x - radius, y: point.y - radius, width: radius * 2, height: radius * 2))
         context.fill(dot, with: .color(tint))
     }
 

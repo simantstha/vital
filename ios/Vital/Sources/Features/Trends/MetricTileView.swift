@@ -21,6 +21,11 @@ import SwiftUI
 /// so the chart alone carries what used to need the chip's context.
 struct MetricTileView: View {
     let tile: TrendsTile
+    /// Trends-phase-2 index motion: true only on the render where
+    /// `TrendsViewModel.hasAnimatedIn` is still `false` (the screen's first
+    /// load) — see `Sparkline.animatesOnAppear`'s doc comment. Defaults to
+    /// `false` so every existing preview/call site is unaffected.
+    var animatesIn: Bool = false
     @ObservedObject private var unitPref = UnitPreference.shared
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
@@ -219,7 +224,8 @@ struct MetricTileView: View {
                     height: Self.sparklineSlotHeight,
                     bandLower: band?.lower,
                     bandUpper: band?.upper,
-                    showsLatestDot: true
+                    showsLatestDot: true,
+                    animatesOnAppear: animatesIn
                 )
                 // Decorative — the value + delta line already say everything
                 // the sparkline conveys; VoiceOver shouldn't stop on it.
