@@ -188,7 +188,8 @@ struct CoachView: View {
                             AssistantTurnView(
                                 turn: turn,
                                 onUndoMeal: { vm.undoMealLog(id: $0) },
-                                onScaleMeal: { id, factor in vm.scaleMealLog(id: id, factor: factor) }
+                                onScaleMeal: { id, factor in vm.scaleMealLog(id: id, factor: factor) },
+                                onScaleMealItem: { id, food, grams in vm.scaleMealLogItem(id: id, food: food, grams: grams) }
                             )
                                 .id(row.id)
                         }
@@ -828,6 +829,10 @@ private struct AssistantTurnView: View {
     /// chips (½× · 1× · 1.5× · 2×). Same plain-closure rationale as
     /// `onUndoMeal` above.
     var onScaleMeal: (String, Double) -> Void = { _, _ in }
+    /// Wired to `CoachViewModel.scaleMealLogItem(id:food:grams:)` — the
+    /// per-item stepper sheet on one receipt row. Same plain-closure
+    /// rationale as `onUndoMeal` above.
+    var onScaleMealItem: (String, String, Int) -> Void = { _, _, _ in }
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -843,12 +848,16 @@ private struct AssistantTurnView: View {
             ForEach(turn.mealReceipts) { receipt in
                 LogReceiptCard(
                     icon: "fork.knife",
-                    title: "Logged \(receipt.name)",
+                    title: "Logged \(MealReceiptRow.displayTitle(items: receipt.items, fallbackName: receipt.name))",
                     detail: receipt.detail,
                     timestamp: receipt.timestamp,
                     state: receipt.cardState,
                     onUndo: receipt.canUndo ? { onUndoMeal(receipt.id) } : nil,
-                    onScale: { factor in onScaleMeal(receipt.id, factor) }
+                    onScale: { factor in onScaleMeal(receipt.id, factor) },
+                    items: receipt.items.map {
+                        LogReceiptCard.ItemRow(food: $0.food, grams: $0.grams, kcal: $0.kcal, confidence: $0.confidence)
+                    },
+                    onScaleItem: { food, grams in onScaleMealItem(receipt.id, food, grams) }
                 )
                 .accessibilityLabel(mealReceiptAccessibilityLabel(receipt))
                 .accessibilityAction(named: "Undo") {

@@ -160,6 +160,44 @@ test('a barcode log_meal result (no "matched" field) falls back to "product" for
   });
 });
 
+test('an estimator-routed log_meal (with a "foods" breakdown) yields a meal_logged event with items', async () => {
+  const { runCoach } = await coachPromise;
+  responseQueue = [
+    { text: '', toolName: 'log_meal' },
+    { text: 'Logged it!' },
+  ];
+  toolResultQueue = [
+    JSON.stringify({
+      ok: true, id: 'evt-789', query: 'a plate of rice with chicken curry',
+      kcal: 942, c: 154, p: 31, f: 20, matched: 'White rice, cooked and chicken curry', origin: 'estimate',
+      foods: [
+        { name: 'white rice, cooked', qty: 450, unit: 'g', kcal: 585, confidence: 'med' },
+        { name: 'chicken curry', qty: 250, unit: 'g', kcal: 357, confidence: 'low' },
+      ],
+    }),
+  ];
+
+  const events: Array<Record<string, unknown>> = [];
+  for await (const event of runCoach(randomUUID(), 'a plate of rice with chicken curry')) {
+    events.push(event as unknown as Record<string, unknown>);
+  }
+
+  const mealLogged = events.find((e) => e.type === 'meal_logged');
+  assert.deepEqual(mealLogged, {
+    type: 'meal_logged',
+    id:   'evt-789',
+    name: 'White rice, cooked and chicken curry',
+    kcal: 942,
+    p:    31,
+    c:    154,
+    f:    20,
+    items: [
+      { food: 'white rice, cooked', grams: 450, kcal: 585, confidence: 'med' },
+      { food: 'chicken curry', grams: 250, kcal: 357, confidence: 'low' },
+    ],
+  });
+});
+
 test('a failed log_meal (no nutrition match — plain text, not JSON) yields no meal_logged event', async () => {
   const { runCoach } = await coachPromise;
   responseQueue = [

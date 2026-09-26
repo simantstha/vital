@@ -6,6 +6,19 @@ import SwiftUI
 /// Pure view — no networking, no state beyond what's passed in; the caller
 /// owns the underlying log entry and supplies `onUndo`/`onEdit`.
 struct LogReceiptCard: View {
+    /// One row of a receipt's per-item breakdown, shown under the
+    /// title/total when present. Mirrors `MealReceiptRow.Item`.
+    struct ItemRow: Identifiable, Equatable {
+        var id: String { food }
+        let food: String
+        let grams: Int
+        let kcal: Int
+        let confidence: String
+    }
+
+    /// Max item rows shown before collapsing the rest into "+N more".
+    static let maxVisibleItems = 4
+
     enum State: Equatable {
         /// The normal, actionable state — Undo/Edit both shown (`onEdit`
         /// only if the caller passed one).
@@ -47,6 +60,14 @@ struct LogReceiptCard: View {
     /// weigh-in receipt, or once the card is `.undone`). Non-nil shows the
     /// ½×/1×/1.5×/2× row in `.normal` state only.
     var onScale: ((Double) -> Void)?
+    /// Per-item breakdown — empty hides the item rows entirely (a weigh-in
+    /// receipt, a flat/legacy log with no items, or once `.undone`).
+    var items: [ItemRow] = []
+    /// Per-item fix action: `(food, newGrams)`. `nil` makes item rows
+    /// non-interactive (still shown, just not tappable).
+    var onScaleItem: ((String, Int) -> Void)?
+
+    @SwiftUI.State private var editingItem: ItemRow?
 
     var body: some View {
         VitalCard(padding: Theme.Spacing.md, cornerRadius: Theme.Radius.lg) {
@@ -76,6 +97,10 @@ struct LogReceiptCard: View {
                     trailing
                 }
 
+                if state == .normal, !items.isEmpty {
+                    itemRows
+                }
+
                 if state == .normal, let onScale {
                     scaleChips(onScale)
                 }
@@ -85,6 +110,86 @@ struct LogReceiptCard: View {
         .redacted(reason: state == .pending ? .placeholder : [])
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilityLabel)
+        .sheet(item: $editingItem) { item in
+            MealItemStepperSheet(item: item) { newGrams in
+                onScaleItem?(item.food, newGrams)
+                editingItem = nil
+            }
+        }
+    }
+
+    /// The item breakdown: max `maxVisibleItems` rows, then "+N more". The
+    /// lowest-confidence/biggest item is marked "biggest guess" — see
+    /// `MealReceiptRow.biggestGuess(items:)`, which this view calls with its
+    /// own `ItemRow`s reduced to the same shape it needs.
+    private var itemRows: some View {
+        let visible = Array(items.prefix(Self.maxVisibleItems))
+        let hiddenCount = items.count - visible.count
+        let biggestGuessFood = Self.biggestGuessFood(items)
+
+        return VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
+            ForEach(visible) { item in
+                Button {
+                    guard onScaleItem != nil else { return }
+                    editingItem = item
+                } label: {
+                    HStack(spacing: Theme.Spacing.xs) {
+                        Text(Self.itemLine(item))
+                            .font(Theme.Typography.bodySmall)
+                            .foregroundStyle(Theme.Colors.textSecondary)
+                            .lineLimit(1)
+                        if item.food == biggestGuessFood {
+                            Text("biggest guess")
+                                .font(Theme.Typography.labelSmall)
+                                .foregroundStyle(Theme.Colors.textTertiary)
+                        }
+                        Spacer(minLength: Theme.Spacing.xs)
+                        if onScaleItem != nil {
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(Theme.Colors.textTertiary)
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+                .disabled(onScaleItem == nil)
+                .accessibilityLabel(Self.itemLine(item) + (item.food == biggestGuessFood ? ", biggest guess" : ""))
+                .accessibilityHint(onScaleItem != nil ? "Double tap to adjust the portion" : "")
+            }
+            if hiddenCount > 0 {
+                Text("+\(hiddenCount) more")
+                    .font(Theme.Typography.labelSmall)
+                    .foregroundStyle(Theme.Colors.textTertiary)
+            }
+        }
+        .padding(.leading, Theme.Spacing.xxs)
+    }
+
+    /// "White rice, cooked · 450 g · 585" — one item's compact row text.
+    private static func itemLine(_ item: ItemRow) -> String {
+        "\(titleCase(item.food)) · \(item.grams) g · \(item.kcal)"
+    }
+
+    private static func titleCase(_ s: String) -> String {
+        s.split(separator: " ")
+            .map { word -> String in
+                guard let first = word.first else { return String(word) }
+                return String(first).uppercased() + word.dropFirst()
+            }
+            .joined(separator: " ")
+    }
+
+    /// Lowest-confidence item, tie-broken by largest kcal — same rule as
+    /// `MealReceiptRow.biggestGuess(items:)`, duplicated here in terms of
+    /// `ItemRow` so this view has no dependency on the Coach feature module.
+    private static func biggestGuessFood(_ items: [ItemRow]) -> String? {
+        let confidenceRank: [String: Int] = ["low": 0, "med": 1, "high": 2]
+        return items.min { a, b in
+            let rankA = confidenceRank[a.confidence] ?? 1
+            let rankB = confidenceRank[b.confidence] ?? 1
+            if rankA != rankB { return rankA < rankB }
+            return a.kcal > b.kcal
+        }?.food
     }
 
     private func scaleChips(_ onScale: @escaping (Double) -> Void) -> some View {
@@ -166,6 +271,86 @@ struct LogReceiptCard: View {
         case .undoFailed(let message): return "\(title), \(detail), \(message)"
         case .normal:  return "\(title), \(detail), logged \(timestamp)"
         }
+    }
+}
+
+/// The per-item fix sheet a `LogReceiptCard` item row opens: −/+ in 25 g
+/// steps, plus ½×/1×/1.5× presets against the item's ORIGINAL grams (the
+/// value it opened with, not whatever the stepper currently reads — so
+/// repeated presets stay predictable rather than compounding).
+private struct MealItemStepperSheet: View {
+    let item: LogReceiptCard.ItemRow
+    let onConfirm: (Int) -> Void
+
+    @State private var grams: Int
+    @Environment(\.dismiss) private var dismiss
+
+    static let step = 25
+    static let presets: [(label: String, factor: Double)] = [("½×", 0.5), ("1×", 1.0), ("1.5×", 1.5)]
+
+    init(item: LogReceiptCard.ItemRow, onConfirm: @escaping (Int) -> Void) {
+        self.item = item
+        self.onConfirm = onConfirm
+        _grams = State(initialValue: item.grams)
+    }
+
+    var body: some View {
+        VStack(spacing: Theme.Spacing.lg) {
+            Text(item.food.prefix(1).uppercased() + item.food.dropFirst())
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(Theme.Colors.textPrimary)
+                .multilineTextAlignment(.center)
+                .padding(.top, Theme.Spacing.lg)
+
+            HStack(spacing: Theme.Spacing.xl) {
+                stepperButton("minus.circle.fill") {
+                    grams = max(Self.step, grams - Self.step)
+                }
+                Text("\(grams) g")
+                    .font(.system(size: 30, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+                    .frame(minWidth: 110)
+                    .accessibilityLabel("\(grams) grams")
+                stepperButton("plus.circle.fill") {
+                    grams += Self.step
+                }
+            }
+
+            HStack(spacing: Theme.Spacing.sm) {
+                ForEach(Self.presets, id: \.label) { preset in
+                    Button(preset.label) {
+                        grams = max(Self.step, Int((Double(item.grams) * preset.factor).rounded()))
+                    }
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Theme.Colors.textSecondary)
+                    .padding(.horizontal, Theme.Spacing.md)
+                    .padding(.vertical, Theme.Spacing.xs)
+                    .background(Capsule().fill(Theme.Colors.glassFill))
+                }
+            }
+            .buttonStyle(.plain)
+
+            Button("Update") {
+                onConfirm(grams)
+                dismiss()
+            }
+            .buttonStyle(.vital(scale: 1.0))
+            .frame(maxWidth: .infinity)
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, Theme.Spacing.lg)
+        .presentationDetents([.height(280)])
+        .presentationDragIndicator(.visible)
+    }
+
+    private func stepperButton(_ systemName: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 32))
+                .foregroundStyle(Theme.Colors.accentContent)
+        }
+        .buttonStyle(.plain)
     }
 }
 

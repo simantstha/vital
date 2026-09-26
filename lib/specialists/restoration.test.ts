@@ -242,3 +242,39 @@ test('attachMealReceipts can attach multiple meals logged in the same turn', () 
   const result = attachMealReceipts(messages, events);
   assert.deepEqual(result[1].mealReceipts?.map((r) => r.id), ['evt-1', 'evt-2']);
 });
+
+test('attachMealReceipts surfaces payload.estimatorItems as the receipt\'s items', () => {
+  const messages: RestoredCoachMessage[] = [
+    restoredMessage({ role: 'user', timestamp: new Date('2026-07-11T12:00:00Z') }),
+    restoredMessage({ role: 'assistant', timestamp: new Date('2026-07-11T12:00:10Z') }),
+  ];
+  const events: MealLoggedEventRow[] = [
+    {
+      id: 'evt-1',
+      timestamp: new Date('2026-07-11T12:00:02Z'),
+      payload: {
+        name: 'White rice, cooked and chicken curry', kcal: 942, p: 31, c: 154, f: 20,
+        estimatorItems: [
+          { food: 'white rice, cooked', grams: 450, kcal: 585, c: 129, p: 10, f: 1, source: 'usda', confidence: 'med', portionNote: '~1.5 cups' },
+          { food: 'chicken curry', grams: 250, kcal: 357, c: 25, p: 21, f: 19, source: 'model', confidence: 'low', portionNote: 'plate' },
+        ],
+      },
+    },
+  ];
+
+  const result = attachMealReceipts(messages, events);
+  assert.deepEqual(result[1].mealReceipts?.[0].items, [
+    { food: 'white rice, cooked', grams: 450, kcal: 585, confidence: 'med' },
+    { food: 'chicken curry', grams: 250, kcal: 357, confidence: 'low' },
+  ]);
+});
+
+test('attachMealReceipts leaves items undefined for a flat log with no estimatorItems', () => {
+  const messages: RestoredCoachMessage[] = [
+    restoredMessage({ role: 'user', timestamp: new Date('2026-07-11T12:00:00Z') }),
+    restoredMessage({ role: 'assistant', timestamp: new Date('2026-07-11T12:00:10Z') }),
+  ];
+  const events = [mealEvent('evt-1', new Date('2026-07-11T12:00:02Z'), 'Eggs')];
+  const result = attachMealReceipts(messages, events);
+  assert.equal(result[1].mealReceipts?.[0].items, undefined);
+});

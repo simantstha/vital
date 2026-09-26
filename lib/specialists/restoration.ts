@@ -17,6 +17,17 @@ type DrizzleDatabase = typeof applicationDb;
 // message — see attachMealReceipts below. Field names mirror the live
 // `meal_logged` SSE event (lib/brain/coach.ts) so iOS can reuse the same
 // decode/receipt-row shape for both.
+// One item of a restored receipt's per-item breakdown — mirrors the
+// `meal_logged` SSE event's `items` field (lib/brain/coach.ts) so iOS's
+// `CoachMealReceiptItem` decodes both the live event and a restored one the
+// same way.
+export interface MealReceiptItem {
+  food:       string;
+  grams:      number;
+  kcal:       number;
+  confidence: string;
+}
+
 export interface MealReceipt {
   id:   string;
   name: string;
@@ -24,6 +35,10 @@ export interface MealReceipt {
   p:    number;
   c:    number;
   f:    number;
+  // Present only when the event carries `payload.estimatorItems` (a
+  // grounded estimator log) — same drop-if-absent convention as the rest of
+  // this interface's optional fields.
+  items?: MealReceiptItem[];
 }
 
 export interface RestoredCoachMessage {
@@ -62,12 +77,31 @@ function num(v: unknown): number {
   return typeof v === 'number' && Number.isFinite(v) ? Math.round(v) : 0;
 }
 
+function eventToReceiptItems(payload: Record<string, unknown>): MealReceiptItem[] | undefined {
+  const raw = payload.estimatorItems;
+  if (!Array.isArray(raw)) return undefined;
+  const items: MealReceiptItem[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') continue;
+    const e = entry as Record<string, unknown>;
+    if (typeof e.food !== 'string') continue;
+    items.push({
+      food: e.food,
+      grams: num(e.grams),
+      kcal: num(e.kcal),
+      confidence: typeof e.confidence === 'string' ? e.confidence : 'low',
+    });
+  }
+  return items.length > 0 ? items : undefined;
+}
+
 function eventToReceipt(row: MealLoggedEventRow): MealReceipt {
   const p = payloadRecord(row.payload);
   const name = typeof p.name === 'string' && p.name
     ? p.name
     : (typeof p.description === 'string' && p.description ? p.description : 'Meal');
-  return { id: row.id, name, kcal: num(p.kcal), p: num(p.p), c: num(p.c), f: num(p.f) };
+  const items = eventToReceiptItems(p);
+  return { id: row.id, name, kcal: num(p.kcal), p: num(p.p), c: num(p.c), f: num(p.f), ...(items ? { items } : {}) };
 }
 
 /**

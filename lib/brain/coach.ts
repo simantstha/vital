@@ -107,7 +107,15 @@ export type CoachEvent =
   // don't recognize `meal_logged` simply ignore it (see
   // lib/specialists/httpHandlers.ts's streamEvents and iOS's
   // decodeCoachSSELine, both of which drop unknown event types).
-  | { type: 'meal_logged'; id: string; name: string; kcal: number; p: number; c: number; f: number }
+  | {
+      type: 'meal_logged'; id: string; name: string; kcal: number; p: number; c: number; f: number;
+      // Present only when log_meal routed through the grounded estimator
+      // (lib/nutrition/estimator.ts) — the per-item breakdown so iOS can
+      // show which foods/portions the total is made of, and let the user
+      // fix just one via POST /api/meals/scale's itemFood mode. Additive,
+      // same drop-unknown-field convention as the rest of this event.
+      items?: Array<{ food: string; grams: number; kcal: number; confidence: string }>;
+    }
   // A meal was just removed by `delete_meal` (the coach's own undo tool —
   // see lib/brain/tools.ts). Lets the client flip the matching inline
   // receipt to "Removed" instead of leaving it showing Undo for a meal
@@ -527,6 +535,17 @@ async function* streamCoachTurn(userId: string, seed: TurnSeed): AsyncGenerator<
           const parsed = JSON.parse(result) as Record<string, unknown>;
           if (parsed.ok && parsed.id != null) {
             const name = String(parsed.matched ?? parsed.product ?? parsed.query ?? 'Meal');
+            const rawFoods = Array.isArray(parsed.foods) ? parsed.foods : null;
+            const items = rawFoods
+              ? rawFoods
+                  .filter((f): f is Record<string, unknown> => !!f && typeof f === 'object')
+                  .map((f) => ({
+                    food:       String(f.name ?? ''),
+                    grams:      Number(f.qty) || 0,
+                    kcal:       Number(f.kcal) || 0,
+                    confidence: typeof f.confidence === 'string' ? f.confidence : 'low',
+                  }))
+              : undefined;
             yield {
               type: 'meal_logged',
               id:   String(parsed.id),
@@ -535,6 +554,7 @@ async function* streamCoachTurn(userId: string, seed: TurnSeed): AsyncGenerator<
               p:    Number(parsed.p) || 0,
               c:    Number(parsed.c) || 0,
               f:    Number(parsed.f) || 0,
+              ...(items && items.length > 0 ? { items } : {}),
             };
           }
         } catch {

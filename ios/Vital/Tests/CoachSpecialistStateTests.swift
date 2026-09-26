@@ -819,6 +819,12 @@ final class FakeCoachAPI: CoachAPIProviding {
     var scaleMealLogFailure: Error?
     var scaleMealLogResult: MealScaleResult?
     private(set) var scaledMealLogCalls: [(id: String, factor: Double)] = []
+    /// Set by a test to make the next per-item `scaleMealLog(id:itemFood:grams:)`
+    /// call throw or return a specific result — same silent-failure rationale
+    /// as the whole-meal variant above.
+    var scaleMealLogItemFailure: Error?
+    var scaleMealLogItemResult: MealScaleResult?
+    private(set) var scaledMealLogItemCalls: [(id: String, itemFood: String, grams: Double)] = []
 
     init(restoration: CoachRestorationResponse) {
         self.restoration = restoration
@@ -897,6 +903,15 @@ final class FakeCoachAPI: CoachAPIProviding {
         scaledMealLogCalls.append((id: id, factor: factor))
         if let scaleMealLogFailure { throw scaleMealLogFailure }
         return scaleMealLogResult ?? MealScaleResult(ok: true, id: id, name: "Scaled meal", kcal: 0, c: 0, p: 0, f: 0)
+    }
+
+    func scaleMealLog(id: String, itemFood: String, grams: Double) async throws -> MealScaleResult {
+        scaledMealLogItemCalls.append((id: id, itemFood: itemFood, grams: grams))
+        if let scaleMealLogItemFailure { throw scaleMealLogItemFailure }
+        return scaleMealLogItemResult ?? MealScaleResult(
+            ok: true, id: id, name: "Scaled meal", kcal: 0, c: 0, p: 0, f: 0,
+            item: MealScaleItemResult(food: itemFood, grams: grams, kcal: 0, c: 0, p: 0, f: 0)
+        )
     }
 
     private func stream(
