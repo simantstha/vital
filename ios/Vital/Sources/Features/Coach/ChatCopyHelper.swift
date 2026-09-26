@@ -17,8 +17,9 @@ enum ChatCopy {
         text = text.replacingOccurrences(of: "`", with: "")
 
         // Convert markdown bullets to bullet point
-        // Match leading - or * with optional whitespace
-        text = text.replacingOccurrences(of: #"^\s*[-*]\s+"#, with: "• ", options: .regularExpression)
+        // Match leading - or * with optional horizontal whitespace
+        // (?m) enables multiline mode so ^ matches each line, [ \t] matches only spaces/tabs (not newlines)
+        text = text.replacingOccurrences(of: #"(?m)^[ \t]*[-*][ \t]+"#, with: "• ", options: .regularExpression)
 
         // Trim whitespace
         text = text.trimmingCharacters(in: .whitespacesAndNewlines)
