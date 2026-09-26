@@ -16,17 +16,28 @@ struct WeeklyHeadlineStrip: View {
     var body: some View {
         GlassCard {
             VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-                Text("THIS WEEK")
-                    .font(.system(size: 11, weight: .semibold))
-                    .tracking(1.2)
-                    .foregroundStyle(Theme.Colors.textSecondary)
+                // Trends-phase-2: sentence case, matches `TrendsWeightCard`'s
+                // "Weight" header treatment — replaces the old
+                // uppercase-tracked "THIS WEEK" label.
+                Text("Sleep this week")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(Theme.Colors.textPrimary)
 
                 threeUpRow
 
                 TrendBarChart(
                     values: vm.sleepWindow.values,
                     dayLabels: vm.sleepWindow.dayLabels,
-                    goalHours: sleepGoalHours
+                    goalHours: sleepGoalHours,
+                    fullDayLabels: vm.sleepWindow.fullDayLabels,
+                    // Not `vm.hasAnimatedIn`: `sleepWindow` loads via the
+                    // separate `loadSummary()` call, which by design can
+                    // finish after `load()` has already flipped
+                    // `hasAnimatedIn` true (see `TrendsWeightCard`'s same
+                    // note in `TrendsView`) — this card's own `@State`-gated
+                    // `onAppear` in `TrendBarChart` already plays the
+                    // entrance exactly once per session instead.
+                    animatesIn: true
                 )
 
                 footnoteView
@@ -88,20 +99,22 @@ struct WeeklyHeadlineStrip: View {
 
     // MARK: - Two-tone footnote (extracted from the deleted `TrendSummaryCard`)
 
-    @ViewBuilder
-    private var footnoteView: some View {
+    /// Trends-phase-2: `Text` `+` concatenation is deprecated — the two-tone
+    /// footnote is built as one `AttributedString` instead, with the bold
+    /// span's color/weight set as attributes on just that range.
+    private var footnoteView: Text {
         let footnote = TrendsSummary.sleepFootnote(vm.sleepWindow.values, goalHours: sleepGoalHours)
+        var attributed = AttributedString(footnote.prefix)
+        attributed.foregroundColor = Theme.Colors.textSecondary
         if let bold = footnote.bold {
-            (
-                Text(footnote.prefix).foregroundStyle(Theme.Colors.textSecondary)
-                + Text(bold).foregroundStyle(Theme.Colors.textPrimary).fontWeight(.semibold)
-                + Text(footnote.suffix).foregroundStyle(Theme.Colors.textSecondary)
-            )
-            .font(.system(size: 13))
-        } else {
-            Text(footnote.prefix)
-                .font(.system(size: 13))
-                .foregroundStyle(Theme.Colors.textSecondary)
+            var boldSpan = AttributedString(bold)
+            boldSpan.foregroundColor = Theme.Colors.textPrimary
+            boldSpan.font = .system(size: 13, weight: .semibold)
+            attributed.append(boldSpan)
+            var suffix = AttributedString(footnote.suffix)
+            suffix.foregroundColor = Theme.Colors.textSecondary
+            attributed.append(suffix)
         }
+        return Text(attributed).font(.system(size: 13))
     }
 }

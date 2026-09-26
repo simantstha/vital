@@ -267,7 +267,7 @@ private extension TrendsView {
                                 tileTapTick.toggle()
                                 path.append(row.key)
                             } label: {
-                                WhatMovedRowView(row: row, unitSystem: unitPref.current)
+                                WhatMovedRowView(row: row, unitSystem: unitPref.current, animatesIn: !vm.hasAnimatedIn)
                             }
                             .buttonStyle(.plain)
                         }
@@ -305,7 +305,16 @@ private extension TrendsView {
             onTap: {
                 tileTapTick.toggle()
                 path.append("body_mass_kg")
-            }
+            },
+            // Not `!vm.hasAnimatedIn`: `weightLog` loads via the separate,
+            // later `loadGoalContext()` call (after `load()`/`loadSummary()`
+            // have already flipped `hasAnimatedIn` true), so that flag would
+            // already read `true` by the time this card ever gets data and
+            // the entrance would never play. This card mounts into the tree
+            // exactly once data first arrives, so its own `@State`
+            // (`TrendsWeightCard`'s `onAppear`) already plays the entrance
+            // exactly once per session without needing a shared flag.
+            animatesIn: true
         )
     }
 
@@ -414,7 +423,7 @@ private extension TrendsView {
             tileTapTick.toggle()
             path.append(tile.key)
         } label: {
-            MetricTileView(tile: tile)
+            MetricTileView(tile: tile, animatesIn: !vm.hasAnimatedIn)
         }
         .buttonStyle(TilePressStyle())
         .matchedTransitionSource(id: tile.key, in: trendsZoomNamespace)

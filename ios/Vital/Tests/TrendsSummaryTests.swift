@@ -40,6 +40,9 @@ final class TrendsSummaryTests: XCTestCase {
         XCTAssertEqual(window.values.count, 7)
         XCTAssertEqual(window.values, [54, 55, 56, 57, 58, 59, 60])
         XCTAssertEqual(window.dayLabels.count, 7)
+        XCTAssertEqual(window.fullDayLabels.count, 7)
+        // `fixedToday` is 2026-07-12, a Sunday — the last (today) slot.
+        XCTAssertEqual(window.fullDayLabels.last, "Sunday")
     }
 
     func testWeekWindowLeavesMissingDaysNil() {

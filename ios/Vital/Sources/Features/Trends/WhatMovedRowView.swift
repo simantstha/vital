@@ -7,6 +7,8 @@ import SwiftUI
 struct WhatMovedRowView: View {
     let row: WhatMovedRow
     let unitSystem: UnitSystem
+    /// See `MetricTileView.animatesIn`'s doc comment — same one-render gate.
+    var animatesIn: Bool = false
 
     var body: some View {
         if let spec = MetricCatalog.spec(for: row.key) {
@@ -51,7 +53,8 @@ struct WhatMovedRowView: View {
                 height: 34,
                 bandLower: row.mean30 - row.sd30,
                 bandUpper: row.mean30 + row.sd30,
-                showsLatestDot: true
+                showsLatestDot: true,
+                animatesOnAppear: animatesIn
             )
             .frame(width: 96, height: 34)
             .accessibilityHidden(true)

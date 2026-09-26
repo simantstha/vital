@@ -14,10 +14,16 @@ enum TrendsSummary {
     struct WeekWindow: Equatable {
         let values: [Double?]
         let dayLabels: [String]
+        /// Full weekday names ("Monday" … "Sunday"), same 7 slots, oldest →
+        /// newest — Trends-phase-2's per-bar VoiceOver labels need the full
+        /// name (`dayLabels`' single letters aren't enough to speak
+        /// unambiguously).
+        let fullDayLabels: [String]
 
         static let empty = WeekWindow(
             values: Array(repeating: nil, count: 7),
-            dayLabels: Array(repeating: "", count: 7)
+            dayLabels: Array(repeating: "", count: 7),
+            fullDayLabels: Array(repeating: "", count: 7)
         )
     }
 
@@ -47,6 +53,13 @@ enum TrendsSummary {
         return f
     }()
 
+    private static let weekdayFullFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "EEEE" // full weekday name, e.g. "Friday"
+        f.locale = Locale(identifier: "en_US")
+        return f
+    }()
+
     /// Maps day-keyed points onto the 7 local calendar days ending `today`
     /// (oldest → newest). Points outside the window are ignored; days
     /// without a matching point are `nil`.
@@ -64,13 +77,15 @@ enum TrendsSummary {
 
         var values: [Double?] = []
         var dayLabels: [String] = []
+        var fullDayLabels: [String] = []
         for offset in -6...0 {
             guard let day = cal.date(byAdding: .day, value: offset, to: startOfToday) else { continue }
             let key = dateKeyFormatter.string(from: day)
             values.append(byDate[key])
             dayLabels.append(weekdayLetterFormatter.string(from: day))
+            fullDayLabels.append(weekdayFullFormatter.string(from: day))
         }
-        return WeekWindow(values: values, dayLabels: dayLabels)
+        return WeekWindow(values: values, dayLabels: dayLabels, fullDayLabels: fullDayLabels)
     }
 
     // MARK: Sleep
