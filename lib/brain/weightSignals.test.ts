@@ -282,3 +282,139 @@ test('rate_not_yet_reliable: does not fire when the trend is not established at 
 test('sanity: TOO_FAST_LOSS_PCT_PER_WEEK constant matches the documented 1.0%/wk threshold', () => {
   assert.equal(TOO_FAST_LOSS_PCT_PER_WEEK, 1.0);
 });
+
+// ── weekend_overeating ───────────────────────────────────────────────────
+
+/** 2026-08-03 is a Monday — builds `days` consecutive local days from there with `weekdayKcal` Mon-Fri and `weekendKcal` Sat/Sun, all 'logged'. */
+function weekendWindow(startDate: string, days: number, weekdayKcal: number, weekendKcal: number): DailyIntakeKcalPoint[] {
+  const start = new Date(`${startDate}T00:00:00Z`);
+  const out: DailyIntakeKcalPoint[] = [];
+  for (let i = 0; i < days; i++) {
+    const d = new Date(start.getTime() + i * 86_400_000);
+    const day = d.toISOString().slice(0, 10);
+    const dow = d.getUTCDay();
+    const isWeekend = dow === 0 || dow === 6;
+    out.push({ day, kcal: isWeekend ? weekendKcal : weekdayKcal, source: 'logged' });
+  }
+  return out;
+}
+
+const MONDAY_START = '2026-08-03';
+const NO_TREND = trendResult(daysSpanning('2026-08-01', 2, 80, 80), { established: false });
+
+test('weekend_overeating: fires when weekend avg exceeds weekday avg by both > 25% and > 400 kcal', () => {
+  // Weekday 2000 kcal, weekend 2800 kcal: +800 kcal (+40%) — clears both bars.
+  const weekendPatternIntakeKcal = weekendWindow(MONDAY_START, 28, 2000, 2800);
+  const signals = assessWeightSignals({
+    trend: NO_TREND,
+    dailyIntakeKcal: noIntake(),
+    floorKcal: DEFAULT_FLOOR,
+    goal: 'weight_loss',
+    weekendPatternIntakeKcal,
+  });
+
+  const sig = signals.find(s => s.kind === 'weekend_overeating');
+  assert.ok(sig, 'weekend_overeating should fire');
+  assert.equal(sig!.severity, 'info');
+  assert.equal(sig!.facts.weekdayAvgKcal, 2000);
+  assert.equal(sig!.facts.weekendAvgKcal, 2800);
+  assert.equal(sig!.facts.diffKcal, 800);
+  assert.equal(sig!.facts.diffPct, 40);
+});
+
+test('weekend_overeating: does not fire when the % difference is above threshold but the absolute kcal gap is not', () => {
+  // Weekday 1000, weekend 1400: +400 kcal exactly (+40%), diff must be > 400, not >=.
+  const weekendPatternIntakeKcal = weekendWindow(MONDAY_START, 28, 1000, 1400);
+  const signals = assessWeightSignals({
+    trend: NO_TREND,
+    dailyIntakeKcal: noIntake(),
+    floorKcal: DEFAULT_FLOOR,
+    goal: 'weight_loss',
+    weekendPatternIntakeKcal,
+  });
+
+  assert.equal(signals.find(s => s.kind === 'weekend_overeating'), undefined);
+});
+
+test('weekend_overeating: does not fire when the absolute kcal gap is above threshold but the % difference is not', () => {
+  // Weekday 3000, weekend 3450: +450 kcal but only 15% — must clear BOTH bars.
+  const weekendPatternIntakeKcal = weekendWindow(MONDAY_START, 28, 3000, 3450);
+  const signals = assessWeightSignals({
+    trend: NO_TREND,
+    dailyIntakeKcal: noIntake(),
+    floorKcal: DEFAULT_FLOOR,
+    goal: 'weight_loss',
+    weekendPatternIntakeKcal,
+  });
+
+  assert.equal(signals.find(s => s.kind === 'weekend_overeating'), undefined);
+});
+
+test('weekend_overeating: does not fire with too few logged weekday days', () => {
+  // Only 4 logged weekday days total (below WEEKEND_PATTERN_MIN_WEEKDAY_DAYS).
+  const weekendPatternIntakeKcal: DailyIntakeKcalPoint[] = [
+    { day: '2026-08-03', kcal: 2000, source: 'logged' }, // Mon
+    { day: '2026-08-04', kcal: 2000, source: 'logged' }, // Tue
+    { day: '2026-08-05', kcal: 2000, source: 'logged' }, // Wed
+    { day: '2026-08-06', kcal: 2000, source: 'logged' }, // Thu
+    { day: '2026-08-01', kcal: 2900, source: 'logged' }, // Sat
+    { day: '2026-08-02', kcal: 2900, source: 'logged' }, // Sun
+    { day: '2026-08-08', kcal: 2900, source: 'logged' }, // Sat
+    { day: '2026-08-09', kcal: 2900, source: 'logged' }, // Sun
+  ];
+  const signals = assessWeightSignals({
+    trend: NO_TREND,
+    dailyIntakeKcal: noIntake(),
+    floorKcal: DEFAULT_FLOOR,
+    goal: 'weight_loss',
+    weekendPatternIntakeKcal,
+  });
+
+  assert.equal(signals.find(s => s.kind === 'weekend_overeating'), undefined);
+});
+
+test('weekend_overeating: does not fire with too few logged weekend days', () => {
+  const weekendPatternIntakeKcal = weekendWindow(MONDAY_START, 12, 2000, 2900).filter(
+    d => !(d.day === '2026-08-08' || d.day === '2026-08-09'), // drop one weekend
+  );
+  const signals = assessWeightSignals({
+    trend: NO_TREND,
+    dailyIntakeKcal: noIntake(),
+    floorKcal: DEFAULT_FLOOR,
+    goal: 'weight_loss',
+    weekendPatternIntakeKcal,
+  });
+
+  assert.equal(signals.find(s => s.kind === 'weekend_overeating'), undefined);
+});
+
+test('weekend_overeating: is skipped entirely when weekendPatternIntakeKcal is omitted', () => {
+  const signals = assessWeightSignals({
+    trend: NO_TREND,
+    dailyIntakeKcal: noIntake(),
+    floorKcal: DEFAULT_FLOOR,
+    goal: 'weight_loss',
+  });
+
+  assert.equal(signals.find(s => s.kind === 'weekend_overeating'), undefined);
+});
+
+test('weekend_overeating: excludes partial/no-data days from both averages', () => {
+  const base = weekendWindow(MONDAY_START, 28, 2000, 2800);
+  // Sprinkle in some 'none' days that should be excluded, not counted as 0.
+  const weekendPatternIntakeKcal: DailyIntakeKcalPoint[] = base.map((d, i) =>
+    i % 10 === 0 ? { ...d, kcal: null, source: 'none' as const } : d,
+  );
+  const signals = assessWeightSignals({
+    trend: NO_TREND,
+    dailyIntakeKcal: noIntake(),
+    floorKcal: DEFAULT_FLOOR,
+    goal: 'weight_loss',
+    weekendPatternIntakeKcal,
+  });
+
+  const sig = signals.find(s => s.kind === 'weekend_overeating');
+  assert.ok(sig, 'weekend_overeating should still fire ignoring none-days');
+  assert.equal(sig!.facts.weekdayAvgKcal, 2000);
+  assert.equal(sig!.facts.weekendAvgKcal, 2800);
+});

@@ -18,6 +18,7 @@
  *     carbs: number,
  *     fat: number,
  *     lowEnergyWarning: { thresholdKcal: number, appliedFloor: boolean, message: string } | null,
+ *     expenditure: { formulaTdee, learnedTdee, confidence, source, daysUsed, loggedDays } | null,
  *   },
  *   insight: string,
  *   plan: [{ name: string, kcal: number, why: string }],
@@ -214,6 +215,20 @@ export async function GET(request: Request): Promise<NextResponse> {
       // Present when targetKcal is at/under the sex-aware low-energy-
       // availability floor — see lib/brain/dietBudget.ts. null otherwise.
       lowEnergyWarning: budget.lowEnergyWarning ?? null,
+      // Stage 2 adaptive expenditure (lib/brain/learnedExpenditure.ts) — only
+      // present for an 'auto' budget. Additive/optional so existing iOS
+      // decoders that don't know this field are unaffected; a future UI can
+      // use it to show "learned from N days".
+      expenditure: budget.expenditure
+        ? {
+            formulaTdee: budget.expenditure.formulaTdee,
+            learnedTdee: budget.expenditure.learnedTdee,
+            confidence:  budget.expenditure.confidence,
+            source:      budget.expenditure.source,
+            daysUsed:    budget.expenditure.daysUsed,
+            loggedDays:  budget.expenditure.loggedDays,
+          }
+        : null,
     },
     insight,
     plan,
