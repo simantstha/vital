@@ -204,7 +204,11 @@ struct TodayView: View {
                 .padding(.bottom, Theme.Spacing.lg)
             }
             .scrollIndicators(.hidden)
-            .contentMargins(.bottom, isAnySheetOpen ? 0 : (60 + 32 + 12), for: .scrollContent)
+            .safeAreaInset(edge: .bottom) {
+                if !isAnySheetOpen {
+                    Color.clear.frame(height: 60 + 32 + 12)
+                }
+            }
             .refreshable { await vm.loadHealthData() }
             .task {
                 await vm.loadHealthData()
