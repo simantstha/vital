@@ -176,13 +176,11 @@ struct MetricTileView: View {
                 // `.above`/`.below` — this branch is unreachable in
                 // practice, but falls back to plain copy rather than
                 // fabricating a delta with no `mean30`.
-                let fallbackText: String
-                switch verdict {
-                case .above: fallbackText = "above normal"
-                case .below: fallbackText = "below normal"
-                default:     fallbackText = ""
-                }
-                Text(fallbackText)
+                let isAbove: Bool = {
+                    if case .above = verdict { return true }
+                    return false
+                }()
+                Text(isAbove ? "above normal" : "below normal")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
