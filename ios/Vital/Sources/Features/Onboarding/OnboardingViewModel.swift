@@ -113,17 +113,29 @@ final class OnboardingViewModel: ObservableObject {
 
     func advance() {
         guard let next = Step(rawValue: step.rawValue + 1) else { return }
-        stepDirection = .forward
-        withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) {
-            step = next
-        }
+        move(to: next, direction: .forward)
     }
 
     func back() {
         guard let previous = Step(rawValue: step.rawValue - 1) else { return }
-        stepDirection = .backward
-        withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) {
-            step = previous
+        move(to: previous, direction: .backward)
+    }
+
+    /// Sets the direction before the step changes. When the direction flips
+    /// (back, then forward) the outgoing step must re-render with the new
+    /// transition before it's removed, or SwiftUI animates it out with the
+    /// stale one — so the step change waits one main-queue turn in that case.
+    private func move(to target: Step, direction: StepDirection) {
+        let apply = { [weak self] in
+            withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) {
+                self?.step = target
+            }
+        }
+        if stepDirection == direction {
+            apply()
+        } else {
+            stepDirection = direction
+            DispatchQueue.main.async(execute: apply)
         }
     }
 

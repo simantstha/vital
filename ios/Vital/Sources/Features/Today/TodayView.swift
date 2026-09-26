@@ -542,7 +542,6 @@ private extension TodayView {
                         .offset(x: 4, y: -4)
                 }
             }
-            .accessibilityHidden(true)
         }
         .buttonStyle(.vital(scale: 0.94))
         .padding(.top, 2)
