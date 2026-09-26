@@ -29,4 +29,20 @@ final class DistributionStatsTodaySentenceTests: XCTestCase {
         let sentence = DistributionStats.todaySentence(result: result, latest: 50, values: values)
         XCTAssertTrue(sentence.contains("6 days"))
     }
+
+    func testSaysHighestWhenLatestIsTheMaximum() {
+        let values = Array(stride(from: 1.0, through: 90.0, by: 1.0)) // 90 samples
+        let result = DistributionStats.compute(values: values, latest: 90)!
+        let sentence = DistributionStats.todaySentence(result: result, latest: 90, values: values)
+        XCTAssertEqual(sentence, "Today is your highest in the last 90 days.")
+        XCTAssertFalse(sentence.contains("100%"))
+    }
+
+    func testSaysLowestWhenLatestIsTheMinimum() {
+        let values = Array(stride(from: 1.0, through: 90.0, by: 1.0)) // 90 samples
+        let result = DistributionStats.compute(values: values, latest: 1)!
+        let sentence = DistributionStats.todaySentence(result: result, latest: 1, values: values)
+        XCTAssertEqual(sentence, "Today is your lowest in the last 90 days.")
+        XCTAssertFalse(sentence.contains("100%"))
+    }
 }

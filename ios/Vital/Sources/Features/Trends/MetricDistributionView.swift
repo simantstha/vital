@@ -103,10 +103,16 @@ enum DistributionStats {
     /// as-is for its own call sites/tests). Uses "lower than" whenever
     /// `latest` sits at or below the median, `"higher than"` otherwise, so
     /// the wording always agrees with which side of the distribution
-    /// `latest` actually falls on.
+    /// `latest` actually falls on. When `latest` is the window's max or min,
+    /// a percentile against itself reads as a non-statement ("higher than
+    /// 100% of your last 90 days") — say "highest"/"lowest" directly instead.
     static func todaySentence(result: Result, latest: Double, values: [Double]) -> String {
         let sampleCount = values.count
-        if latest <= result.median {
+        if isMaximum(latest, in: values) {
+            return "Today is your highest in the last \(sampleCount) days."
+        } else if isMinimum(latest, in: values) {
+            return "Today is your lowest in the last \(sampleCount) days."
+        } else if latest <= result.median {
             let rank = 100 - result.percentileRank
             return "Today is lower than \(rank)% of your last \(sampleCount) days."
         } else {

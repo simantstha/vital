@@ -446,7 +446,11 @@ private extension MetricDetailView {
             //    floor and would otherwise wash out the band it's meant to
             //    frame. The band must be the more prominent shape.
             ForEach(chartPoints) { point in
-                AreaMark(x: .value("Date", point.date), y: .value("Value", point.value))
+                AreaMark(
+                    x: .value("Date", point.date),
+                    yStart: .value("Floor", chartYDomain.lowerBound),
+                    yEnd: .value("Value", point.value)
+                )
                     .interpolationMethod(.catmullRom)
                     .foregroundStyle(
                         LinearGradient(
@@ -524,6 +528,11 @@ private extension MetricDetailView {
             }
         }
         .chartYScale(domain: chartYDomain)
+        // Guard against the area fill (or any future mark) spilling outside
+        // the plot area — the AreaMark above is already floored at the
+        // domain's lower bound, but this keeps a rendering glitch from ever
+        // painting past the card's edges.
+        .chartPlotStyle { $0.clipped() }
         // Range change morphs the chart in place rather than cross-fading —
         // the surrounding content stays mounted (no `.motionTransition` on
         // this subtree), so this is the only animation driving the swap.
@@ -865,12 +874,25 @@ private extension MetricDetailView {
 
 private extension MetricDetailView {
 
+    /// Reduces `displayedVerdict` — the SAME verdict the hero delta pill
+    /// (`deltaPillText`/`deltaPillColor`) renders — to the direction the
+    /// coach chips need, so the chips can never contradict what the hero is
+    /// showing. Never re-derives above/below from raw values independently.
+    var coachDirection: MetricRelatedMetrics.Direction {
+        switch displayedVerdict {
+        case .above: return .above
+        case .below: return .below
+        case .normal: return .normal
+        case .calibrating, .noData: return .unknown
+        }
+    }
+
     var askCoachSection: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
             sectionHeader("ASK YOUR COACH")
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: Theme.Spacing.sm) {
-                    ForEach(MetricRelatedMetrics.coachQuestions(for: metricKey, displayName: displayName), id: \.self) { question in
+                    ForEach(MetricRelatedMetrics.coachQuestions(for: metricKey, displayName: displayName, direction: coachDirection), id: \.self) { question in
                         Button {
                             AppRouter.shared.coachContext = question
                         } label: {

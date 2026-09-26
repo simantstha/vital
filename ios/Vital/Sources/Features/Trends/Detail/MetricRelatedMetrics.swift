@@ -48,33 +48,63 @@ enum MetricRelatedMetrics {
         "whoop_skin_temp": ["whoop_recovery"],
     ]
 
+    /// Where today's reading sits relative to "normal" — the same shape of
+    /// judgment the hero delta pill renders, reduced to just the direction
+    /// so `coachQuestions` can pick a chip that doesn't contradict it.
+    /// `.unknown` covers both "still calibrating" and "no data": there's no
+    /// verdict to be directional about, so chips must not assume one.
+    enum Direction {
+        case above, below, normal, unknown
+    }
+
     /// Suggested "Ask your coach" question chips for a metric — 3 short,
     /// tappable prompts that pre-fill the Coach input via
-    /// `AppRouter.shared.coachContext`.
-    static func coachQuestions(for metricKey: String, displayName: String) -> [String] {
+    /// `AppRouter.shared.coachContext`. `direction` gates any chip that
+    /// asserts "higher"/"lower"/"up"/"down" so it never contradicts the
+    /// screen's own verdict (e.g. offering "Why is my HRV lower than
+    /// usual?" while HRV reads above normal).
+    static func coachQuestions(for metricKey: String, displayName: String, direction: Direction) -> [String] {
         switch metricKey {
         case "hrv_sdnn", "whoop_hrv_rmssd":
+            let directional: String
+            switch direction {
+            case .below:   directional = "Why is my HRV lower than usual?"
+            case .above:   directional = "Why is my HRV higher than usual?"
+            case .normal, .unknown: directional = "What affects my HRV?"
+            }
             return [
-                "Why is my HRV lower than usual?",
+                directional,
                 "What can I do to improve my HRV?",
                 "Is today a good day to train hard?",
             ]
         case "resting_hr", "whoop_resting_hr":
+            let directional: String
+            switch direction {
+            case .above:   directional = "Why is my resting heart rate up today?"
+            case .below:   directional = "Why is my resting heart rate lower today?"
+            case .normal, .unknown: directional = "What affects my resting heart rate?"
+            }
             return [
-                "Why is my resting heart rate up today?",
+                directional,
                 "Should I be worried about my resting HR?",
                 "How does sleep affect my resting heart rate?",
             ]
         case "sleep_minutes", "whoop_sleep_min":
+            let directional = direction == .below
+                ? "Why did I sleep less last night?"
+                : "What affects how much I sleep?"
             return [
                 "How can I sleep more consistently?",
-                "Why did I sleep less last night?",
+                directional,
                 "What's a good sleep goal for me?",
             ]
         case "steps":
+            let directional = direction == .below
+                ? "Why is my step count down this week?"
+                : "What affects my step count?"
             return [
                 "How many steps should I aim for?",
-                "Why is my step count down this week?",
+                directional,
                 "Does step count matter on strength days?",
             ]
         default:
