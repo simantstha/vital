@@ -9,6 +9,7 @@ import type { RecoveryConfidence, RecoveryGap, RecoveryHistoryDay } from '@/lib/
 import { localDayKey } from '@/lib/localDay';
 import type { WeightTrendResult } from '@/lib/weightTrend';
 import { formatWeightSignalsSection, type WeightSignal } from '@/lib/brain/weightSignals';
+import { CLAUDE_SONNET_MODEL } from '@/lib/aiModels';
 
 // ── Inline types (formerly imported from lib/whoop + lib/strava) ──────────────
 
@@ -341,7 +342,7 @@ Respond ONLY with valid JSON, no markdown, no explanation:
 }`;
 
   const message = await client.messages.create({
-    model: 'claude-sonnet-5',
+    model: CLAUDE_SONNET_MODEL,
     max_tokens: 2100,
     // Sonnet 5 runs adaptive thinking by default when this is omitted (Sonnet
     // 4.6 did not) — disable explicitly to keep this single-turn JSON call

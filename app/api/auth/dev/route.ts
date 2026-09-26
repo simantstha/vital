@@ -16,20 +16,10 @@
 import { NextResponse } from 'next/server';
 import { db, schema } from '@/db';
 import { eq } from 'drizzle-orm';
-import { issueSessionJwt } from '@/lib/auth';
+import { issueSessionJwt, safeEqual } from '@/lib/auth';
 
 const DEV_EMAIL = 'dev@vital.local';
 const DEV_NAME  = 'Dev User';
-
-/** Length-aware constant-time string comparison (no early-exit on mismatch). */
-function safeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let result = 0;
-  for (let i = 0; i < a.length; i++) {
-    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  }
-  return result === 0;
-}
 
 /**
  * Upsert-style helper: returns the UUID of dev@vital.local, creating the
