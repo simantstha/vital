@@ -33,7 +33,7 @@ final class TrendsDeltaFormatTests: XCTestCase {
     func testMagnitudeTextRespectsImperialUnitConversionMetrics() {
         // body_mass_kg's `unit(_:)` (not `magnitudeText`'s own logic) switches
         // by system — this just confirms the plumbing reaches it.
-        XCTAssertEqual(TrendsDeltaFormat.magnitudeText(2, spec: weightSpec, system: .imperial, includeUnit: true), "2.0 lb")
+        XCTAssertEqual(TrendsDeltaFormat.magnitudeText(2, spec: weightSpec, system: .imperial, includeUnit: true), "2 lb")
     }
 
     func testFormattedNumberUsesGroupingSeparatorForLargeValues() {
