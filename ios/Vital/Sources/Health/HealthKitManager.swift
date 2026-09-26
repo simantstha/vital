@@ -176,10 +176,16 @@ final class HealthKitManager: ObservableObject {
             return true
         }
 
-        for type in readTypes.compactMap({ $0 as? HKSampleType }) {
-            if await sampleExists(for: type) { return true }
+        return await withTaskGroup(of: Bool.self) { group in
+            for type in readTypes.compactMap({ $0 as? HKSampleType }) {
+                group.addTask { await self.sampleExists(for: type) }
+            }
+            for await found in group where found {
+                group.cancelAll()
+                return true
+            }
+            return false
         }
-        return false
     }
 
     private func sampleExists(for type: HKSampleType) async -> Bool {
