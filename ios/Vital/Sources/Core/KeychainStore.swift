@@ -1,5 +1,6 @@
 import Foundation
 import Security
+import os
 
 /// Minimal generic-password Keychain wrapper for the session token.
 ///
@@ -8,6 +9,14 @@ import Security
 enum KeychainStore {
     private static let service = "com.vital.session"
     private static let account = "sessionToken"
+
+    /// Same `Logger(subsystem:category:)` convention as `APIClient`'s
+    /// `voiceLogger`/`VoiceTurnTimer.logger` — lets Console/Instruments
+    /// filter Keychain persistence failures on their own.
+    private static let logger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "com.simantstha.vital",
+        category: "keychain"
+    )
 
     /// Saves (or replaces) the session token.
     static func saveSessionToken(_ token: String) {
@@ -20,13 +29,19 @@ enum KeychainStore {
         ]
 
         // Remove any existing item first — SecItemAdd fails on a duplicate.
-        SecItemDelete(query as CFDictionary)
+        let deleteStatus = SecItemDelete(query as CFDictionary)
+        if deleteStatus != errSecSuccess, deleteStatus != errSecItemNotFound {
+            logger.error("saveSessionToken: SecItemDelete failed with status \(deleteStatus, privacy: .public)")
+        }
 
         var attributes = query
         attributes[kSecValueData as String] = data
         attributes[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
 
-        SecItemAdd(attributes as CFDictionary, nil)
+        let addStatus = SecItemAdd(attributes as CFDictionary, nil)
+        if addStatus != errSecSuccess {
+            logger.error("saveSessionToken: SecItemAdd failed with status \(addStatus, privacy: .public)")
+        }
     }
 
     /// Loads the session token, or nil if none is stored.
@@ -56,7 +71,11 @@ enum KeychainStore {
             kSecAttrService as String: service,
             kSecAttrAccount as String: account
         ]
-        SecItemDelete(query as CFDictionary)
+        let status = SecItemDelete(query as CFDictionary)
+        // errSecItemNotFound just means there was nothing to delete — fine.
+        if status != errSecSuccess, status != errSecItemNotFound {
+            logger.error("deleteSessionToken: SecItemDelete failed with status \(status, privacy: .public)")
+        }
     }
 
     /// Keychain items survive app deletion, but UserDefaults do not. On the

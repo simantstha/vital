@@ -248,8 +248,7 @@ struct LiveNotificationPreferencesTransport: NotificationPreferencesTransport {
         if let token = KeychainStore.loadSessionToken() { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         if let body { request.setValue("application/json", forHTTPHeaderField: "Content-Type"); request.httpBody = try JSONEncoder().encode(body) }
         let (data, response) = try await URLSession.shared.data(for: request)
-        let status = (response as? HTTPURLResponse)?.statusCode ?? 500
-        guard status < 400 else { throw APIError.serverError(status) }
+        try APIClient.shared.validate(response)
         return try JSONDecoder().decode(T.self, from: data)
     }
 }
@@ -393,7 +392,7 @@ final class PushNotificationService: ObservableObject {
         if let sessionToken { request.setValue("Bearer \(sessionToken)", forHTTPHeaderField: "Authorization") }
         request.httpBody = try JSONEncoder().encode(body)
         let (_, response) = try await URLSession.shared.data(for: request)
-        guard (response as? HTTPURLResponse)?.statusCode ?? 500 < 400 else { throw APIError.serverError((response as? HTTPURLResponse)?.statusCode ?? 500) }
+        try APIClient.shared.validate(response)
     }
 }
 
@@ -403,8 +402,7 @@ extension APIClient {
         var request = URLRequest(url: url)
         if let token = KeychainStore.loadSessionToken() { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         let (data, response) = try await URLSession.shared.data(for: request)
-        let status = (response as? HTTPURLResponse)?.statusCode ?? 500
-        guard status < 400 else { throw APIError.serverError(status) }
+        try validate(response)
         return try JSONDecoder.vital.decode(AnalysisResponse.self, from: data)
     }
 
@@ -413,8 +411,7 @@ extension APIClient {
         var request = URLRequest(url: url)
         if let token = KeychainStore.loadSessionToken() { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         let (data, response) = try await URLSession.shared.data(for: request)
-        let status = (response as? HTTPURLResponse)?.statusCode ?? 500
-        guard status < 400 else { throw APIError.serverError(status) }
+        try validate(response)
         return try JSONDecoder.vital.decode(NotificationsListResponse.self, from: data)
     }
 
@@ -426,8 +423,7 @@ extension APIClient {
         if let token = KeychainStore.loadSessionToken() { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         request.httpBody = try JSONEncoder().encode(MarkNotificationsReadRequest(ids: ids, all: all))
         let (data, response) = try await URLSession.shared.data(for: request)
-        let status = (response as? HTTPURLResponse)?.statusCode ?? 500
-        guard status < 400 else { throw APIError.serverError(status) }
+        try validate(response)
         return try JSONDecoder.vital.decode(MarkNotificationsReadResponse.self, from: data).updated
     }
 
@@ -436,8 +432,7 @@ extension APIClient {
         var request = URLRequest(url: url)
         if let token = KeychainStore.loadSessionToken() { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         let (data, response) = try await URLSession.shared.data(for: request)
-        let status = (response as? HTTPURLResponse)?.statusCode ?? 500
-        guard status < 400 else { throw APIError.serverError(status) }
+        try validate(response)
         return try JSONDecoder.vital.decode(NudgeDetailResponse.self, from: data)
     }
 }

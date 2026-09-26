@@ -199,7 +199,17 @@ final class NotificationManager: NSObject, ObservableObject {
         #if DEBUG
         guard !FixtureMode.isActive else { return false }
         #endif
-        let granted = (try? await center.requestAuthorization(options: [.alert, .sound, .badge])) ?? false
+        let granted: Bool
+        do {
+            granted = try await center.requestAuthorization(options: [.alert, .sound, .badge])
+        } catch {
+            // Not a denial path — `requestAuthorization` doesn't throw when
+            // the user taps "Don't Allow" (see `HealthKitManager
+            // .requestAuthorization`'s matching comment for the analogous
+            // HealthKit case). A caught error here is a genuine failure.
+            print("[Vital] requestAuthorization failed: \(error.localizedDescription)")
+            granted = false
+        }
         await refreshPermissionState()
         if granted { UIApplication.shared.registerForRemoteNotifications() }
         return granted

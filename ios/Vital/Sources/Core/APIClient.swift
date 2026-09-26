@@ -144,7 +144,7 @@ struct APIClient {
     /// `APIError.serverError` for any >= 400 response, and additionally
     /// broadcasts `.vitalSessionExpired` on a 401 so the app can drop a dead
     /// session. Every request path routes its response through this.
-    private func validate(_ response: URLResponse) throws {
+    func validate(_ response: URLResponse) throws {
         guard let http = response as? HTTPURLResponse, http.statusCode >= 400 else { return }
         if http.statusCode == 401 {
             NotificationCenter.default.post(name: .vitalSessionExpired, object: nil)
@@ -561,7 +561,7 @@ struct APIClient {
 
     func streamCoach(message: String, imageBase64: String? = nil, mode: String? = nil, findingId: String? = nil, voice: Bool? = nil, clientTurnId: String? = nil) -> AsyncThrowingStream<CoachStreamEvent, Error> {
         AsyncThrowingStream { continuation in
-            Task {
+            let task = Task {
                 do {
                     guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/coach") else {
                         continuation.finish(throwing: APIError.invalidURL)
@@ -587,6 +587,7 @@ struct APIClient {
                     }
 
                     for try await line in bytes.lines {
+                        try Task.checkCancellation()
                         guard let event = try? Self.decodeCoachSSELine(line) else { continue }
                         switch event {
                         case .done:
@@ -601,10 +602,16 @@ struct APIClient {
                     }
 
                     continuation.finish()
+                } catch is CancellationError {
+                    // Consumer stopped iterating (view disappeared, enclosing
+                    // Task cancelled) — nobody is listening, so finish quietly
+                    // instead of surfacing a spurious error.
+                    continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)
                 }
             }
+            continuation.onTermination = { _ in task.cancel() }
         }
     }
 
@@ -617,7 +624,7 @@ struct APIClient {
         action: SpecialistAction
     ) -> AsyncThrowingStream<CoachStreamEvent, Error> {
         AsyncThrowingStream { continuation in
-            Task {
+            let task = Task {
                 do {
                     guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/coach") else {
                         continuation.finish(throwing: APIError.invalidURL)
@@ -637,6 +644,7 @@ struct APIClient {
                     let (bytes, response) = try await session.bytes(for: request)
                     try validate(response)
                     for try await line in bytes.lines {
+                        try Task.checkCancellation()
                         guard let event = try? Self.decodeCoachSSELine(line) else { continue }
                         switch event {
                         case .done:
@@ -650,10 +658,15 @@ struct APIClient {
                         }
                     }
                     continuation.finish()
+                } catch is CancellationError {
+                    // Consumer stopped iterating — finish quietly rather than
+                    // surfacing a spurious error to nobody.
+                    continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)
                 }
             }
+            continuation.onTermination = { _ in task.cancel() }
         }
     }
 
