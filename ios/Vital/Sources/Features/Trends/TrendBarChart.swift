@@ -208,7 +208,7 @@ struct TrendBarChart: View {
     @ViewBuilder
     private var goalLine: some View {
         let fraction = TrendBarChartLogic.fraction(value: goalHours, chartMax: chartMax)
-        VStack(alignment: .trailing, spacing: 3) {
+        VStack(alignment: .leading, spacing: 3) {
             Text("\(TrendsSummary.hoursLabel(goalHours))h goal")
                 .font(.system(size: 10, weight: .bold))
                 .foregroundStyle(Theme.Colors.textSecondary)
@@ -216,6 +216,7 @@ struct TrendBarChart: View {
                 .stroke(Theme.Colors.textSecondary.opacity(0.55), style: StrokeStyle(lineWidth: 1.5, dash: [4, 4]))
                 .frame(height: 1.5)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .opacity(goalLineVisible || startsGrown ? 1 : 0)
         .offset(y: -(chartHeight * CGFloat(fraction)))
     }

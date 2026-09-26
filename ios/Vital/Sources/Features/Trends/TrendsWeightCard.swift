@@ -18,6 +18,19 @@ enum TrendsWeightCardLogic {
         let tone: PillTone
     }
 
+    /// Parses a date string in "yyyy-MM-dd" format or longer ISO timestamp.
+    /// For longer timestamps (e.g., "2026-09-01T10:30:00Z"), takes the first 10 characters.
+    /// Uses en_US_POSIX locale and UTC for consistent parsing.
+    /// Returns `nil` if parsing fails.
+    static func chartDate(_ isoDay: String) -> Date? {
+        let dayString = isoDay.count > 10 ? String(isoDay.prefix(10)) : isoDay
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(abbreviation: "UTC")
+        return formatter.date(from: dayString)
+    }
+
     /// "↓ 0.6 kg/wk" tinted `.positive` (weight_loss: a loss is progress
     /// toward the goal), "↑ 0.3 kg/wk" tinted `.caution` (a gain is moving
     /// away from it), or "→ 0.0 kg/wk" tinted `.neutral` for a flat week.
@@ -109,12 +122,13 @@ struct TrendsWeightCard: View {
 
     /// Mirrors `WeightHeroView.sparklinePoints` exactly (last ~30 days,
     /// established trend only) so the two cards never disagree about what
-    /// "the trend line" looks like.
-    private var sparklinePoints: [(day: String, value: Double)] {
+    /// "the trend line" looks like. Each point includes the parsed Date for chart x-axis.
+    private var sparklinePoints: [(day: String, date: Date?, value: Double)] {
         guard let trend, trend.established else { return [] }
         return trend.days.suffix(30).map { day in
             let value = system == .metric ? day.trendKg : UnitConvert.kgToLb(day.trendKg)
-            return (day.day, value)
+            let date = Self.chartDate(day.day)
+            return (day.day, date, value)
         }
     }
 
@@ -123,14 +137,22 @@ struct TrendsWeightCard: View {
     /// Multiple entries on the same day all plot (a scale can be logged
     /// more than once); never averaged or deduped, since these are
     /// decorative context for the trend line, not a second trend.
-    private var rawEntryPoints: [(day: String, value: Double)] {
-        guard let firstDay = sparklinePoints.first?.day else { return [] }
+    private var rawEntryPoints: [(day: String, date: Date?, value: Double)] {
+        guard let firstDayDate = sparklinePoints.first?.date else { return [] }
         return entries
-            .filter { $0.date >= firstDay }
-            .sorted { $0.date < $1.date }
+            .filter { entry in
+                guard let entryDate = Self.chartDate(entry.date) else { return false }
+                return entryDate >= firstDayDate
+            }
+            .sorted { entry1, entry2 in
+                guard let date1 = Self.chartDate(entry1.date),
+                      let date2 = Self.chartDate(entry2.date) else { return false }
+                return date1 < date2
+            }
             .map { entry in
                 let value = system == .metric ? entry.weight : UnitConvert.kgToLb(entry.weight)
-                return (entry.date, value)
+                let date = Self.chartDate(entry.date)
+                return (entry.date, date, value)
             }
     }
 
@@ -250,20 +272,27 @@ struct TrendsWeightCard: View {
     @State private var lineRevealFraction: CGFloat = 1
 
     private func chart(domain: ClosedRange<Double>) -> some View {
-        Chart {
+        let firstDate = sparklinePoints.first?.date ?? Date()
+        let lastDate = sparklinePoints.last?.date ?? Date()
+
+        return Chart {
             ForEach(Array(rawEntryPoints.enumerated()), id: \.offset) { _, point in
-                PointMark(x: .value("Day", point.day), y: .value("Reading", point.value))
-                    .foregroundStyle(Theme.Colors.textTertiary.opacity(0.55))
-                    .symbolSize(14)
+                if let date = point.date {
+                    PointMark(x: .value("Day", date, unit: .day), y: .value("Reading", point.value))
+                        .foregroundStyle(Theme.Colors.textTertiary.opacity(0.55))
+                        .symbolSize(14)
+                }
             }
             ForEach(Array(sparklinePoints.enumerated()), id: \.offset) { _, point in
-                LineMark(x: .value("Day", point.day), y: .value("Trend", point.value))
-                    .foregroundStyle(Theme.Colors.accentContent)
-                    .lineStyle(StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
-                    .interpolationMethod(.catmullRom)
+                if let date = point.date {
+                    LineMark(x: .value("Day", date, unit: .day), y: .value("Trend", point.value))
+                        .foregroundStyle(Theme.Colors.accentContent)
+                        .lineStyle(StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
+                        .interpolationMethod(.catmullRom)
+                }
             }
-            if let last = sparklinePoints.last {
-                PointMark(x: .value("Day", last.day), y: .value("Trend", last.value))
+            if let last = sparklinePoints.last, let date = last.date {
+                PointMark(x: .value("Day", date, unit: .day), y: .value("Trend", last.value))
                     .foregroundStyle(Theme.Colors.accentContent)
                     .symbolSize(reduceMotion || newestPointRevealed ? 34 : 34 * 0.6)
                     .opacity(reduceMotion || newestPointRevealed ? 1 : 0)
@@ -277,6 +306,7 @@ struct TrendsWeightCard: View {
             }
         }
         .chartYScale(domain: domain)
+        .chartXScale(domain: firstDate...lastDate)
         .chartLegend(.hidden)
         // Purely decorative — `trendHeadline`/`ratePill`/`sublineText` above
         // already carry the information a VoiceOver user needs (matches

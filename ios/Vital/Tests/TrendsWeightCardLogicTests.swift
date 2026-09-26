@@ -98,4 +98,42 @@ final class TrendsWeightCardLogicTests: XCTestCase {
         let text = TrendsWeightCardLogic.sublineText(firstValue: 180.0, lastValue: 177.0, firstDayLabel: "28 Aug", system: .imperial)
         XCTAssertEqual(text, "−3.0 lb since 28 Aug")
     }
+
+    // MARK: - chartDate
+
+    func testChartDateParsesValidISODay() {
+        let date = TrendsWeightCardLogic.chartDate("2026-09-15")
+        XCTAssertNotNil(date)
+
+        let calendar = Calendar(identifier: .gregorian)
+        let components = calendar.dateComponents([.year, .month, .day], from: date!)
+        XCTAssertEqual(components.year, 2026)
+        XCTAssertEqual(components.month, 9)
+        XCTAssertEqual(components.day, 15)
+    }
+
+    func testChartDateExtractsFirstTenCharactersFromLongerTimestamp() {
+        let date = TrendsWeightCardLogic.chartDate("2026-09-15T10:30:00Z")
+        XCTAssertNotNil(date)
+
+        let calendar = Calendar(identifier: .gregorian)
+        let components = calendar.dateComponents([.year, .month, .day], from: date!)
+        XCTAssertEqual(components.year, 2026)
+        XCTAssertEqual(components.month, 9)
+        XCTAssertEqual(components.day, 15)
+    }
+
+    func testChartDateReturnsNilForGarbageInput() {
+        let date = TrendsWeightCardLogic.chartDate("not-a-date")
+        XCTAssertNil(date)
+    }
+
+    func testChartDateOrderingLaterDayAfterEarlierDay() {
+        let earlierDate = TrendsWeightCardLogic.chartDate("2026-09-01")
+        let laterDate = TrendsWeightCardLogic.chartDate("2026-09-15")
+
+        XCTAssertNotNil(earlierDate)
+        XCTAssertNotNil(laterDate)
+        XCTAssertLessThan(earlierDate!, laterDate!)
+    }
 }
