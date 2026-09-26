@@ -62,8 +62,9 @@ import {
   toolCallForPersistence,
   type HandoffCardPayload,
 } from '@/lib/specialists/coachIntegration';
+import { CLAUDE_SONNET_MODEL } from '@/lib/aiModels';
 
-const MODEL        = 'claude-sonnet-5';
+const MODEL        = CLAUDE_SONNET_MODEL;
 const MAX_TOKENS   = 3500;
 const MAX_ROUNDS   = 10;   // max tool-use iterations before hard stop
 

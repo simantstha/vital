@@ -32,8 +32,9 @@ import * as schema from '@/db/schema';
 import { client } from '@/lib/brain/anthropicClient';
 import { normalizeName, lookupProviderPer100g } from './candidates';
 import type { PortionMemoryEntry } from './portionMemory';
+import { CLAUDE_SONNET_MODEL } from '@/lib/aiModels';
 
-const MODEL = 'claude-sonnet-5';
+const MODEL = CLAUDE_SONNET_MODEL;
 const MAX_TOKENS = 1500;
 const HISTORY_SCAN_LIMIT = 150;
 

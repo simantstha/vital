@@ -64,6 +64,7 @@ import { eq, and } from 'drizzle-orm';
 import { getUserIdFromRequest } from '@/lib/auth';
 import { assembleContext } from '@/lib/brain/context';
 import { localDayKey, pickTimeZone } from '@/lib/localDay';
+import { CLAUDE_HAIKU_MODEL } from '@/lib/aiModels';
 
 export const dynamic = 'force-dynamic';
 
@@ -194,7 +195,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       const ctx = await assembleContext(userId);
 
       const msg = await client.messages.create({
-        model:      'claude-haiku-4-5',
+        model:      CLAUDE_HAIKU_MODEL,
         max_tokens: 120,
         system: `You are Vital Coach — a calm, data-aware personal health companion.
 Speak in first-person observation voice ("That puts you at…", "Nice — you're tracking…").

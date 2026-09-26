@@ -1,3 +1,5 @@
+export const CALORIENINJAS_URL = 'https://api.calorieninjas.com/v1/nutrition';
+
 interface CalorieNinjasFood {
   name: string;
   calories: number;
@@ -18,7 +20,7 @@ export interface NutritionixResult {
 export async function lookupNutrition(query: string): Promise<NutritionixResult | null> {
   try {
     const res = await fetch(
-      `https://api.calorieninjas.com/v1/nutrition?query=${encodeURIComponent(query)}`,
+      `${CALORIENINJAS_URL}?query=${encodeURIComponent(query)}`,
       { headers: { 'X-Api-Key': process.env.CALORIENINJAS_API_KEY ?? '' } }
     );
 

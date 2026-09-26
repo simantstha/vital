@@ -13,6 +13,9 @@ import { jwtVerify } from 'jose';
  *
  * Behaviour:
  *   - /api/health is always public (used by Fly health checks).
+ *   - /api/health/vendors is always public: it's a server-to-server probe
+ *     called by .github/workflows/vendor-health.yml, gated instead on its
+ *     own HEALTHCHECK_TOKEN bearer check (see app/api/health/vendors/route.ts).
  *   - /api/auth/* is always public (that's how a client obtains a session
  *     JWT in the first place).
  *   - /api/whoop/callback is always public: it's a browser redirect from
@@ -48,6 +51,7 @@ export async function middleware(req: NextRequest) {
 
   if (
     pathname === '/api/health' ||
+    pathname === '/api/health/vendors' ||
     pathname.startsWith('/api/auth/') ||
     pathname === '/api/whoop/callback' ||
     pathname === '/api/whoop/webhook'

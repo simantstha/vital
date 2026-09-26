@@ -9,7 +9,8 @@ export interface UsdaFood {
   per100g: { kcal: number | null; p: number | null; c: number | null; f: number | null };
 }
 
-const SEARCH_URL = 'https://api.nal.usda.gov/fdc/v1/foods/search';
+export const USDA_SEARCH_URL = 'https://api.nal.usda.gov/fdc/v1/foods/search';
+const SEARCH_URL = USDA_SEARCH_URL;
 const NUTRIENT_IDS = { kcal: 1008, p: 1003, c: 1005, f: 1004 } as const;
 const GRAM_UNITS = new Set(['g', 'grm', 'ml']);
 

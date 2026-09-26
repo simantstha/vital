@@ -21,6 +21,7 @@ import { NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
 import { getUserIdFromRequest } from '@/lib/auth';
 import { assembleContext } from '@/lib/brain/context';
+import { CLAUDE_HAIKU_MODEL } from '@/lib/aiModels';
 
 export const dynamic = 'force-dynamic';
 
@@ -41,7 +42,7 @@ export async function GET(request: Request): Promise<NextResponse> {
     const ctx = await assembleContext(userId);
 
     const msg = await client.messages.create({
-      model:      'claude-haiku-4-5',
+      model:      CLAUDE_HAIKU_MODEL,
       max_tokens: 120,
       system: `You are Vital Coach — a calm, data-aware personal health companion opening a new chat.
 Greet the user and surface ONE specific, interesting observation drawn from their data below
