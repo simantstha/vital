@@ -822,9 +822,9 @@ private extension MetricDetailView {
     }
 
     func driverRow(_ driver: DriverDTO) -> some View {
-        let sentence = MetricDriverCopy.sentence(driver: driver, outcomeSpec: spec, unitSystem: unitPref.current)
+        let sentence = MetricDriverCopy.sentence(driver: driver, outcomeMetricKey: metricKey, outcomeSpec: spec, unitSystem: unitPref.current)
         let sampleLine = MetricDriverCopy.sampleSizeLine(pairs: driver.pairs)
-        let accessibilityLabel = MetricDriverCopy.accessibilityLabel(driver: driver, outcomeSpec: spec, unitSystem: unitPref.current)
+        let accessibilityLabel = MetricDriverCopy.accessibilityLabel(driver: driver, outcomeMetricKey: metricKey, outcomeSpec: spec, unitSystem: unitPref.current)
 
         return GlassCard(padding: Theme.Spacing.md, cornerRadius: Theme.Radius.md) {
             VStack(alignment: .leading, spacing: 4) {

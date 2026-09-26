@@ -48,6 +48,31 @@ enum MetricDriverCopy {
         "dietary_fat_g": "g",
     ]
 
+    /// Explicit lead-phrase per `lib/insights/detectors.ts`'s `INPUT_METRICS`
+    /// — a generic "On days with higher \(name)" reads naturally for almost
+    /// nothing (nobody says "higher-step days" or "higher-dietary carbs
+    /// days"), so every one of the 9 possible server inputs gets its own
+    /// natural-English lead-in instead. Any OTHER key (there shouldn't be
+    /// one — the server never sends an input outside `INPUT_METRICS` — but
+    /// this is never force-unwrapped) falls back to the old generic phrase.
+    private static let leadPhrases: [String: String] = [
+        "steps": "On days with more steps",
+        "exercise_min": "On days with more exercise",
+        "distance_m": "On days you cover more distance",
+        "active_energy_kcal": "On more active days",
+        "whoop_day_strain": "On higher-strain days",
+        "dietary_energy_kcal": "On days you eat more",
+        "dietary_protein_g": "On higher-protein days",
+        "dietary_carbs_g": "On higher-carb days",
+        "dietary_fat_g": "On higher-fat days",
+    ]
+
+    /// "On days with more steps" / "On higher-carb days" / … — see
+    /// `leadPhrases` above.
+    static func leadPhrase(for inputKey: String) -> String {
+        leadPhrases[inputKey] ?? "On days with higher \(inputDisplayName(inputKey).lowercased())"
+    }
+
     /// "that day" for lag 0, "the next day" for lag 1 (and defensively for
     /// any other value — the server only ever sends 0 or 1).
     static func lagPhrase(_ lag: Int) -> String {
@@ -62,20 +87,23 @@ enum MetricDriverCopy {
         direction == "down" ? "lower" : "higher"
     }
 
-    /// "On days with higher steps, your HRV the next day tends to be lower
-    /// — 48 vs 56 ms." The comparison clause is appended only when the
-    /// engine cleared its own tercile-size gate for BOTH sides (`driver.high`
-    /// and `driver.low` both non-nil); the first number is always the
-    /// HIGH-input side, matching this sentence's own "days with higher
-    /// input" framing.
+    /// "On days with more steps, your HRV the next day tends to be lower —
+    /// 48 vs 56 ms." The comparison clause is appended only when the engine
+    /// cleared its own tercile-size gate for BOTH sides (`driver.high` and
+    /// `driver.low` both non-nil); the first number is always the
+    /// HIGH-input side, matching the lead phrase's own "more"/"higher"
+    /// framing. `outcomeMetricKey` is the raw outcome metric this section is
+    /// for (e.g. `hrv_sdnn`) — used ONLY as the display-name fallback when
+    /// `outcomeSpec` is nil; never `driver.input`, which names the INPUT,
+    /// not the outcome.
     static func sentence(
         driver: DriverDTO,
+        outcomeMetricKey: String,
         outcomeSpec: MetricSpec?,
         unitSystem: UnitSystem
     ) -> String {
-        let inputName = inputDisplayName(driver.input).lowercased()
-        let outcomeName = outcomeSpec?.displayName ?? driver.input
-        var text = "On days with higher \(inputName), your \(outcomeName) \(lagPhrase(driver.lag)) tends to be \(directionWord(driver.direction))"
+        let outcomeName = outcomeSpec?.displayName ?? outcomeMetricKey
+        var text = "\(leadPhrase(for: driver.input)), your \(outcomeName) \(lagPhrase(driver.lag)) tends to be \(directionWord(driver.direction))"
         if let comparison = comparisonClause(driver: driver, outcomeSpec: outcomeSpec, unitSystem: unitSystem) {
             text += " — \(comparison)"
         }
@@ -111,9 +139,10 @@ enum MetricDriverCopy {
     /// size, as two separate spoken sentences.
     static func accessibilityLabel(
         driver: DriverDTO,
+        outcomeMetricKey: String,
         outcomeSpec: MetricSpec?,
         unitSystem: UnitSystem
     ) -> String {
-        "\(sentence(driver: driver, outcomeSpec: outcomeSpec, unitSystem: unitSystem)) \(sampleSizeLine(pairs: driver.pairs))."
+        "\(sentence(driver: driver, outcomeMetricKey: outcomeMetricKey, outcomeSpec: outcomeSpec, unitSystem: unitSystem)) \(sampleSizeLine(pairs: driver.pairs))."
     }
 }

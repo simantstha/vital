@@ -21,63 +21,78 @@ final class MetricDriverCopyTests: XCTestCase {
         DriverDTO(input: input, lag: lag, direction: direction, rho: rho, pairs: pairs, high: high, low: low, highInputMean: 11000, lowInputMean: 6500)
     }
 
-    // MARK: - sentence(driver:outcomeSpec:unitSystem:)
+    /// Convenience matching `MetricDetailView`'s own call — the outcome
+    /// metric is always `hrv_sdnn` in these tests, same as `Self.hrvSpec`.
+    private func sentence(_ d: DriverDTO) -> String {
+        MetricDriverCopy.sentence(driver: d, outcomeMetricKey: "hrv_sdnn", outcomeSpec: Self.hrvSpec, unitSystem: .metric)
+    }
+
+    // MARK: - sentence(driver:outcomeMetricKey:outcomeSpec:unitSystem:)
 
     func testSentenceLagZeroReadsThatDay() {
         let d = driver(lag: 0, direction: "up")
-        let text = MetricDriverCopy.sentence(driver: d, outcomeSpec: Self.hrvSpec, unitSystem: .metric)
+        let text = sentence(d)
         XCTAssertTrue(text.contains("that day"), text)
         XCTAssertFalse(text.contains("the next day"), text)
     }
 
     func testSentenceLagOneReadsTheNextDay() {
         let d = driver(lag: 1)
-        let text = MetricDriverCopy.sentence(driver: d, outcomeSpec: Self.hrvSpec, unitSystem: .metric)
+        let text = sentence(d)
         XCTAssertTrue(text.contains("the next day"), text)
     }
 
     func testSentenceDirectionDownReadsLower() {
         let d = driver(direction: "down")
-        let text = MetricDriverCopy.sentence(driver: d, outcomeSpec: Self.hrvSpec, unitSystem: .metric)
+        let text = sentence(d)
         XCTAssertTrue(text.contains("tends to be lower"), text)
     }
 
     func testSentenceDirectionUpReadsHigher() {
         let d = driver(direction: "up")
-        let text = MetricDriverCopy.sentence(driver: d, outcomeSpec: Self.hrvSpec, unitSystem: .metric)
+        let text = sentence(d)
         XCTAssertTrue(text.contains("tends to be higher"), text)
     }
 
-    /// Names the high side of the input, e.g. "on days with higher steps".
-    func testSentenceNamesHighSideOfInput() {
-        let d = driver(input: "steps")
-        let text = MetricDriverCopy.sentence(driver: d, outcomeSpec: Self.hrvSpec, unitSystem: .metric)
-        XCTAssertTrue(text.contains("higher steps"), text)
+    /// Exact copy for the steps driver, matching the fixture/spec example.
+    func testSentenceExactCopyForSteps() {
+        let d = driver(input: "steps", lag: 1, direction: "down", high: DriverBucketDTO(mean: 54, n: 21), low: DriverBucketDTO(mean: 62, n: 21))
+        XCTAssertEqual(
+            sentence(d),
+            "On days with more steps, your HRV the next day tends to be lower — 54 vs 62 ms."
+        )
     }
 
-    /// Input display name/unit come from `MetricCatalog`, not a hard-coded
-    /// table — `steps` is a catalog metric.
-    func testSentenceUsesCatalogDisplayNameForCatalogInput() {
-        let d = driver(input: "steps")
-        let text = MetricDriverCopy.sentence(driver: d, outcomeSpec: Self.hrvSpec, unitSystem: .metric)
-        XCTAssertEqual(MetricCatalog.spec(for: "steps")?.displayName.lowercased(), "steps")
-        XCTAssertTrue(text.contains("higher steps"), text)
+    /// Exact copy for the dietary carbs driver.
+    func testSentenceExactCopyForDietaryCarbs() {
+        let d = driver(input: "dietary_carbs_g", lag: 0, direction: "up", high: DriverBucketDTO(mean: 61, n: 19), low: DriverBucketDTO(mean: 55, n: 19))
+        XCTAssertEqual(
+            sentence(d),
+            "On higher-carb days, your HRV that day tends to be higher — 61 vs 55 ms."
+        )
     }
 
-    /// `dietary_carbs_g` has no `MetricCatalog` entry — must fall back
-    /// gracefully rather than printing the raw key.
-    func testSentenceFallsBackForNonCatalogDietInput() {
-        let d = driver(input: "dietary_carbs_g", lag: 0, direction: "up")
-        let text = MetricDriverCopy.sentence(driver: d, outcomeSpec: Self.hrvSpec, unitSystem: .metric)
-        XCTAssertTrue(text.contains("higher dietary carbs"), text)
-        XCTAssertFalse(text.contains("dietary_carbs_g"), text)
+    /// Every one of the 9 server `INPUT_METRICS` keys gets an explicit,
+    /// natural-English lead phrase — never the old generic "higher steps"/
+    /// "higher dietary carbs" framing, and never a raw underscored key.
+    func testLeadPhraseCoversEveryInputMetric() {
+        let inputMetrics = [
+            "whoop_day_strain", "steps", "exercise_min", "distance_m", "active_energy_kcal",
+            "dietary_energy_kcal", "dietary_protein_g", "dietary_carbs_g", "dietary_fat_g",
+        ]
+        for key in inputMetrics {
+            let phrase = MetricDriverCopy.leadPhrase(for: key)
+            XCTAssertFalse(phrase.contains("higher steps"), "\(key) -> \(phrase)")
+            XCTAssertFalse(phrase.lowercased().contains("dietary"), "\(key) -> \(phrase)")
+            XCTAssertFalse(phrase.contains("_"), "\(key) -> \(phrase)")
+        }
     }
 
     /// Both `high` and `low` present → the concrete comparison is appended,
     /// high-input side first, in the outcome's own catalog unit/decimals.
     func testSentenceAppendsComparisonWhenBothBucketsPresent() {
         let d = driver(high: DriverBucketDTO(mean: 48, n: 21), low: DriverBucketDTO(mean: 56, n: 21))
-        let text = MetricDriverCopy.sentence(driver: d, outcomeSpec: Self.hrvSpec, unitSystem: .metric)
+        let text = sentence(d)
         XCTAssertTrue(text.contains("48 vs 56 ms"), text)
     }
 
@@ -85,14 +100,25 @@ final class MetricDriverCopyTests: XCTestCase {
     /// than rendering a partial/misleading one.
     func testSentenceOmitsComparisonWhenHighIsNil() {
         let d = driver(high: nil, low: DriverBucketDTO(mean: 56, n: 21))
-        let text = MetricDriverCopy.sentence(driver: d, outcomeSpec: Self.hrvSpec, unitSystem: .metric)
+        let text = sentence(d)
         XCTAssertFalse(text.contains("vs"), text)
     }
 
     func testSentenceOmitsComparisonWhenLowIsNil() {
         let d = driver(high: DriverBucketDTO(mean: 48, n: 21), low: nil)
-        let text = MetricDriverCopy.sentence(driver: d, outcomeSpec: Self.hrvSpec, unitSystem: .metric)
+        let text = sentence(d)
         XCTAssertFalse(text.contains("vs"), text)
+    }
+
+    /// The BUG this test guards: the outcome-name fallback must use the
+    /// OUTCOME metric key, never `driver.input` (the input metric) — a
+    /// missing `outcomeSpec` for an `hrv_sdnn` outcome must still say "HRV"-
+    /// adjacent copy about `hrv_sdnn`, not about `steps`.
+    func testSentenceOutcomeNameFallsBackToOutcomeKeyNotInputKey() {
+        let d = driver(input: "steps")
+        let text = MetricDriverCopy.sentence(driver: d, outcomeMetricKey: "hrv_sdnn", outcomeSpec: nil, unitSystem: .metric)
+        XCTAssertTrue(text.contains("your hrv_sdnn"), text)
+        XCTAssertFalse(text.contains("your steps"), text)
     }
 
     // MARK: - sampleSizeLine(pairs:)
@@ -115,7 +141,7 @@ final class MetricDriverCopyTests: XCTestCase {
         ]
         let forbidden = ["cause", "causes", "caused", "because", "leads to", "leading to"]
         for d in cases {
-            let text = MetricDriverCopy.sentence(driver: d, outcomeSpec: Self.hrvSpec, unitSystem: .metric).lowercased()
+            let text = sentence(d).lowercased()
             for word in forbidden {
                 XCTAssertFalse(text.contains(word), "\(text) unexpectedly contains \"\(word)\"")
             }
@@ -126,13 +152,12 @@ final class MetricDriverCopyTests: XCTestCase {
         XCTAssertEqual(MetricDriverCopy.footer, "Patterns in your own data, not proof of cause.")
     }
 
-    // MARK: - accessibilityLabel(driver:outcomeSpec:unitSystem:)
+    // MARK: - accessibilityLabel(driver:outcomeMetricKey:outcomeSpec:unitSystem:)
 
     func testAccessibilityLabelCombinesSentenceAndSampleSize() {
         let d = driver()
-        let label = MetricDriverCopy.accessibilityLabel(driver: d, outcomeSpec: Self.hrvSpec, unitSystem: .metric)
-        let sentence = MetricDriverCopy.sentence(driver: d, outcomeSpec: Self.hrvSpec, unitSystem: .metric)
-        XCTAssertTrue(label.hasPrefix(sentence), label)
+        let label = MetricDriverCopy.accessibilityLabel(driver: d, outcomeMetricKey: "hrv_sdnn", outcomeSpec: Self.hrvSpec, unitSystem: .metric)
+        XCTAssertTrue(label.hasPrefix(sentence(d)), label)
         XCTAssertTrue(label.contains("Based on 64 days"), label)
     }
 
