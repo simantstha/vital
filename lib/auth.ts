@@ -47,6 +47,21 @@ export function getSessionSecret(): Uint8Array {
 }
 
 /**
+ * Length-aware constant-time string comparison (no early-exit on mismatch).
+ * Shared by every route that gates on a static bearer secret rather than a
+ * signed JWT (app/api/auth/dev, app/api/health/vendors) so none of them ever
+ * compares tokens with a short-circuiting `===`.
+ */
+export function safeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let result = 0;
+  for (let i = 0; i < a.length; i++) {
+    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return result === 0;
+}
+
+/**
  * Verifies a Sign in with Apple identity token against Apple's published
  * JWKS. Returns the Apple user id (`sub`) and email, if present in the token.
  *

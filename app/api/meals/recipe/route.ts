@@ -15,6 +15,7 @@
 import { NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
 import { getUserIdFromRequest } from '@/lib/auth';
+import { CLAUDE_HAIKU_MODEL } from '@/lib/aiModels';
 
 export const dynamic = 'force-dynamic';
 
@@ -67,7 +68,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   let recipe: string;
   try {
     const msg = await client.messages.create({
-      model:      'claude-haiku-4-5',
+      model:      CLAUDE_HAIKU_MODEL,
       max_tokens: 600,
       system:
         `You are a concise home-cooking assistant. Given a dish, return a short, ` +

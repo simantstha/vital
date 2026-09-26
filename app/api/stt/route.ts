@@ -33,6 +33,7 @@
  */
 
 import { getUserIdFromRequest } from '@/lib/auth';
+import { ELEVENLABS_STT_URL, ELEVENLABS_STT_MODEL_ID } from '@/lib/elevenlabs';
 
 export const dynamic = 'force-dynamic';
 
@@ -94,17 +95,14 @@ export async function POST(request: Request): Promise<Response> {
   form.append('file', new Blob([audio], { type: 'audio/mp4' }), 'audio.m4a');
   // scribe_v1 was deprecated and removed by ElevenLabs on 2026-07-09 — every
   // request against it now fails upstream, which is what silently degraded
-  // every voice turn to the poor on-device Apple fallback. scribe_v2 is the
-  // current non-realtime transcription model.
-  // https://elevenlabs.io/docs/changelog/2026/6/8
-  // https://elevenlabs.io/docs/api-reference/speech-to-text/convert
-  form.append('model_id', 'scribe_v2');
+  // every voice turn to the poor on-device Apple fallback. See lib/elevenlabs.ts.
+  form.append('model_id', ELEVENLABS_STT_MODEL_ID);
   form.append('language_code', 'en');
   form.append('tag_audio_events', 'false');
 
   let upstream: Response;
   try {
-    upstream = await fetch('https://api.elevenlabs.io/v1/speech-to-text', {
+    upstream = await fetch(ELEVENLABS_STT_URL, {
       method: 'POST',
       headers: {
         'xi-api-key': apiKey,
