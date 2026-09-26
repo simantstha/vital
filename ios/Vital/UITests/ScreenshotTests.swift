@@ -478,8 +478,9 @@ final class ScreenshotTests: XCTestCase {
         // Wait for MetricDetailView to render — using the detail range switcher's "3 months"
         // button as the stable signal. This button always renders once the screen has loaded,
         // regardless of data availability (unlike section headers like "DISTRIBUTION" which only
-        // appear with sufficient data). Always capture, even if the wait fails.
-        _ = app.buttons["3 months"].waitForExistence(timeout: 10)
+        // appear with sufficient data). Assert the detail screen loaded before capturing.
+        XCTAssertTrue(app.buttons["3 months"].waitForExistence(timeout: 10),
+                       "HRV detail should load [\(scenario)/\(appearance)]")
 
         capture(app, name: "\(scenario)__hrv_detail__\(appearance)")
 
