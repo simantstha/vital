@@ -97,6 +97,23 @@ enum DistributionStats {
         }
     }
 
+    /// "Today is higher than 84% of your last 90 days" / "lower than" below
+    /// the median — the detail view's required percentile sentence,
+    /// distinct from `caption`'s "your latest reading — X —" phrasing (kept
+    /// as-is for its own call sites/tests). Uses "lower than" whenever
+    /// `latest` sits at or below the median, `"higher than"` otherwise, so
+    /// the wording always agrees with which side of the distribution
+    /// `latest` actually falls on.
+    static func todaySentence(result: Result, latest: Double, values: [Double]) -> String {
+        let sampleCount = values.count
+        if latest <= result.median {
+            let rank = 100 - result.percentileRank
+            return "Today is lower than \(rank)% of your last \(sampleCount) days."
+        } else {
+            return "Today is higher than \(result.percentileRank)% of your last \(sampleCount) days."
+        }
+    }
+
     /// The distribution card's single combined VoiceOver label — leads with
     /// the median (the one stat the visual chart's median rule-mark conveys
     /// that `caption` alone doesn't), then the same caption sentence sighted
@@ -150,7 +167,7 @@ struct MetricDistributionView: View {
                     .chartYAxis(.hidden)
                     .frame(height: 84)
 
-                    Text(DistributionStats.caption(result: result, latest: latest, values: values, spec: spec, unitSystem: unitSystem))
+                    Text(DistributionStats.todaySentence(result: result, latest: latest, values: values))
                         .font(Theme.Typography.bodySmall)
                         .foregroundStyle(Theme.Colors.textTertiary)
                 }
