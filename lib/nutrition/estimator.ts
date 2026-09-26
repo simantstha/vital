@@ -94,6 +94,120 @@ export interface EstimateResult {
   items: GroundedItem[];
 }
 
+// ─── Client-submitted estimatorItems validation (photo-log save path) ─────────
+//
+// POST /api/nutrition/photo returns `estimatorItems` (this file's
+// `GroundedItem[]`) additively alongside the flat macros; the iOS client
+// round-trips that same array back on POST /api/meals/log so the save can
+// store the per-item breakdown (see that route). Nothing about grounding
+// runs again here — this only re-validates shape/bounds on data the server
+// itself produced moments earlier (or a client could have tampered with), so
+// a malformed/hostile body can't corrupt the events ledger.
+
+const MAX_ESTIMATOR_ITEMS = 20;
+const MAX_ITEM_GRAMS = 5000;
+const MAX_FOOD_NAME_LENGTH = 200;
+const CONFIDENCES: readonly string[] = ['low', 'med', 'high'];
+const SOURCES: readonly string[] = ['history', 'usda', 'cache', 'model'];
+// Rounding/clamping slack on top of groundItem's own MAX_KCAL_PER_100G scale
+// check — a legitimate item can be a few kcal over the strict per-100g*grams
+// figure due to Math.round on both sides of the original computation.
+const KCAL_BOUND_SLACK = 10;
+
+/**
+ * Validates a client-submitted `estimatorItems` array (already-grounded
+ * `GroundedItem[]`, as returned by POST /api/nutrition/photo) against shape
+ * and plausibility bounds. Returns `null` — never throws — on anything
+ * malformed: a non-array, an empty array, too many items, a bad/missing
+ * field, a non-finite or out-of-range number, or a kcal value that's wildly
+ * inconsistent with its own grams (a manipulated or corrupted payload).
+ * Callers treat `null` as "reject the whole array" (400), distinct from a
+ * validly-shaped array whose *totals* don't match the meal's edited macros
+ * (which callers instead silently drop — see `estimatorItemsMatchTotals`).
+ */
+export function validateEstimatorItems(raw: unknown): GroundedItem[] | null {
+  if (!Array.isArray(raw) || raw.length === 0 || raw.length > MAX_ESTIMATOR_ITEMS) return null;
+
+  const out: GroundedItem[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') return null;
+    const e = entry as Record<string, unknown>;
+
+    const food = typeof e.food === 'string' ? e.food.trim() : '';
+    if (!food || food.length > MAX_FOOD_NAME_LENGTH) return null;
+
+    const grams = Number(e.grams);
+    if (!Number.isFinite(grams) || grams <= 0 || grams > MAX_ITEM_GRAMS) return null;
+
+    const kcal = Number(e.kcal);
+    const c = Number(e.c);
+    const p = Number(e.p);
+    const f = Number(e.f);
+    if (![kcal, c, p, f].every((v) => Number.isFinite(v) && v >= 0)) return null;
+
+    // Sanity bound: this item's kcal can't imply a per-100g density above
+    // MAX_KCAL_PER_100G (plus rounding slack) — catches a tampered/garbage
+    // kcal value that grams alone wouldn't rule out.
+    const maxPlausibleKcal = (MAX_KCAL_PER_100G * grams) / 100 + KCAL_BOUND_SLACK;
+    if (kcal > maxPlausibleKcal) return null;
+
+    const confidence = e.confidence;
+    if (typeof confidence !== 'string' || !CONFIDENCES.includes(confidence)) return null;
+
+    const source = e.source;
+    if (typeof source !== 'string' || !SOURCES.includes(source)) return null;
+
+    const portionNote = typeof e.portionNote === 'string' ? e.portionNote.slice(0, 500) : '';
+
+    out.push({
+      food,
+      grams,
+      kcal,
+      c,
+      p,
+      f,
+      source: source as GroundedItem['source'],
+      confidence: confidence as Confidence,
+      portionNote,
+    });
+  }
+  return out;
+}
+
+/**
+ * True when `items`' own summed macros are within `tolerance` (relative,
+ * default 5%) of `totals` on every one of kcal/c/p/f. Used by POST
+ * /api/meals/log to decide whether a client-submitted `estimatorItems`
+ * breakdown still agrees with the (possibly user-edited-in-the-review-step)
+ * flat macros it's being saved alongside — if the user changed the numbers
+ * enough to disagree with the item breakdown, the breakdown is stale and
+ * must be dropped rather than stored contradicting the totals it sits next
+ * to (see that route's POST handler).
+ */
+export function estimatorItemsMatchTotals(
+  items: GroundedItem[],
+  totals: { kcal: number; c: number; p: number; f: number },
+  tolerance = 0.05,
+): boolean {
+  const sum = items.reduce(
+    (acc, it) => ({ kcal: acc.kcal + it.kcal, c: acc.c + it.c, p: acc.p + it.p, f: acc.f + it.f }),
+    { kcal: 0, c: 0, p: 0, f: 0 },
+  );
+
+  const within = (a: number, b: number): boolean => {
+    if (Math.abs(a - b) < 1e-9) return true; // exact/near-exact match, incl. both 0
+    const denom = Math.max(Math.abs(a), Math.abs(b), 1);
+    return Math.abs(a - b) / denom <= tolerance;
+  };
+
+  return (
+    within(sum.kcal, totals.kcal) &&
+    within(sum.c, totals.c) &&
+    within(sum.p, totals.p) &&
+    within(sum.f, totals.f)
+  );
+}
+
 export interface EstimatorInput {
   text?: string;
   imageB64?: string;

@@ -816,7 +816,14 @@ struct APIClient {
         // reaction; `false` skips the slow Haiku call server-side. See
         // `app/api/meals/log/route.ts`'s `reaction` param (PR #206) — an
         // older server simply ignores the unknown key.
-        reaction: Bool? = nil
+        reaction: Bool? = nil,
+        // Optional per-item grounded breakdown (see `PhotoEstimatorItem`),
+        // round-tripped from `photoFood`'s `NutritionResult.estimatorItems`
+        // — see app/api/meals/log/route.ts's doc comment for the server-side
+        // validation/5%-totals-match rule. `nil` (every non-photo call site,
+        // and a photo save whose totals no longer match after an edit) omits
+        // the key entirely, unchanged from before this field existed.
+        estimatorItems: [PhotoEstimatorItem]? = nil
     ) async throws -> LogMealResponse {
         guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/meals/log") else {
             throw APIError.invalidURL
@@ -831,9 +838,13 @@ struct APIClient {
             let imageThumb: String?
             let slot: String?
             let reaction: Bool?
+            let estimatorItems: [PhotoEstimatorItem]?
         }
         request.httpBody = try encoder.encode(
-            Body(name: name, kcal: kcal, c: c, p: p, f: f, source: source, imageThumb: imageThumb, slot: slot, reaction: reaction)
+            Body(
+                name: name, kcal: kcal, c: c, p: p, f: f, source: source, imageThumb: imageThumb, slot: slot,
+                reaction: reaction, estimatorItems: estimatorItems
+            )
         )
         let (data, response) = try await session.data(for: request)
         try validate(response)
@@ -1376,6 +1387,33 @@ struct NutritionResult: Decodable {
     // type still decodes the flat photoFood/legacy shape, which never sends
     // it, without failing.
     let candidates: [NutritionCandidate]?
+    /// POST /api/nutrition/photo's additive per-item grounded breakdown (see
+    /// lib/nutrition/estimator.ts's `GroundedItem`) — nil for every other
+    /// caller of this same decodable (text search, an older server). Round-
+    /// tripped unchanged to POST /api/meals/log on save so the log carries
+    /// the per-item breakdown too — see `LogMealViewModel.logMeal()` /
+    /// `DietSheetViewModel.logPhotoResult`.
+    let estimatorItems: [PhotoEstimatorItem]?
+}
+
+/// One item of a grounded meal estimate's per-item breakdown — mirrors
+/// lib/nutrition/estimator.ts's `GroundedItem` exactly (same field names/
+/// shape) so the JSON round-trips byte-for-byte from POST /api/nutrition/
+/// photo's `estimatorItems` straight back into POST /api/meals/log's body
+/// without any reshaping. `source`/`confidence` are kept as plain `String`
+/// (not a Swift enum) deliberately: this client only ever stores and
+/// forwards them, never branches on their value, so a server-added case
+/// (e.g. a new grounding source) can't fail to decode here.
+struct PhotoEstimatorItem: Codable, Equatable {
+    let food: String
+    let grams: Double
+    let kcal: Double
+    let c: Double
+    let p: Double
+    let f: Double
+    let source: String
+    let confidence: String
+    let portionNote: String
 }
 
 /// One ranked match from POST /api/nutrition/search's `candidates` array —

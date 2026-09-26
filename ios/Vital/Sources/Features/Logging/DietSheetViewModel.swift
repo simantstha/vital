@@ -291,8 +291,18 @@ final class DietSheetViewModel: ObservableObject {
     ///
     /// Returns `false` on a network failure so the caller can fall back to
     /// the existing confirm-card flow instead of silently dropping the shot.
+    ///
+    /// `estimatorItems`: the photo analysis's per-item grounded breakdown
+    /// (`NutritionResult.estimatorItems`), passed straight through unedited —
+    /// the camera-first flow never lets the user tweak macros before this
+    /// call, so there's no totals-mismatch case to guard here (the server
+    /// still re-validates/re-checks totals regardless — see
+    /// app/api/meals/log/route.ts).
     @discardableResult
-    func logPhotoResult(name: String, kcal: Double, c: Double, p: Double, f: Double, imageThumb: String?) async -> Bool {
+    func logPhotoResult(
+        name: String, kcal: Double, c: Double, p: Double, f: Double, imageThumb: String?,
+        estimatorItems: [PhotoEstimatorItem]? = nil
+    ) async -> Bool {
         // Same `AppClock.now` reasoning as `init` above — the photo
         // auto-log's slot must be screenshot-deterministic too.
         let slot = ReminderScheduler.timeAppropriateSlot(for: AppClock.now)
@@ -300,7 +310,8 @@ final class DietSheetViewModel: ObservableObject {
             let response = try await apiClient.logMeal(
                 name: name, kcal: kcal, c: c, p: p, f: f,
                 source: "photo", imageThumb: imageThumb, slot: slot.rawValue,
-                reaction: false // ActionToast's Undo receipt never shows coachReaction
+                reaction: false, // ActionToast's Undo receipt never shows coachReaction
+                estimatorItems: estimatorItems
             )
             let entry = MealLogEntryDTO(
                 id: response.eventId,

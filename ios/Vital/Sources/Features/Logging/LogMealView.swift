@@ -535,21 +535,22 @@ private extension LogMealView {
                                     .foregroundStyle(Theme.Colors.accentContent)
                             }
                         } else if vm.transcriber.isRecording {
-                            Text("Listening…")
-                                .font(Theme.Typography.bodyMedium)
-                                .foregroundStyle(Theme.Colors.accentContent)
+                            VStack(spacing: Theme.Spacing.sm) {
+                                Text("Listening…")
+                                    .font(Theme.Typography.bodyMedium)
+                                    .foregroundStyle(Theme.Colors.accentContent)
+                                // No live Apple partial-transcript text here
+                                // (owner decision, spec `voice-cloud-only-stt`
+                                // — on-device text is frequently garbled and
+                                // is never what actually gets searched; see
+                                // `finishVoiceInput()`) — just a level meter
+                                // showing the mic is live.
+                                VoiceLevelMeter(level: vm.transcriber.inputLevel, color: Theme.Colors.accentContent)
+                            }
                         } else {
                             Text("Tap to speak a food name")
                                 .font(Theme.Typography.bodyMedium)
                                 .foregroundStyle(Theme.Colors.textSecondary)
-                        }
-
-                        if !vm.transcriber.transcribedText.isEmpty {
-                            Text("\u{201C}\(vm.transcriber.transcribedText)\u{201D}")
-                                .font(Theme.Typography.bodySmall)
-                                .italic()
-                                .foregroundStyle(Theme.Colors.textPrimary)
-                                .multilineTextAlignment(.center)
                         }
                     }
                     .frame(maxWidth: .infinity)

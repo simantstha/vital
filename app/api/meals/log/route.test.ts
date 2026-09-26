@@ -175,3 +175,102 @@ test('POST with reaction omitted (default) still calls assembleContext (unchange
   assert.equal(body.coachReaction, '');
   assert.equal(assembleContextCalls, 1, 'assembleContext must still be called by default');
 });
+
+// ─── POST: estimatorItems (photo-log per-item breakdown) ────────────────────
+
+function estimatorItem(overrides: Record<string, unknown> = {}) {
+  return {
+    food: 'white rice, cooked',
+    grams: 300,
+    kcal: 390,
+    c: 84,
+    p: 8,
+    f: 1,
+    source: 'usda',
+    confidence: 'high',
+    portionNote: 'full dinner plate',
+    ...overrides,
+  };
+}
+
+test('POST without estimatorItems logs a plain flat meal (unchanged behavior)', async () => {
+  insertedValues = [];
+  const { POST } = await routePromise;
+  const res = await POST(postRequest(
+    { name: 'Chicken Salad', kcal: 400, c: 20, p: 30, f: 15, source: 'search', reaction: false },
+  ));
+  assert.equal(res.status, 200);
+  assert.equal(insertedValues.length, 1);
+  const payload = insertedValues[0].payload as Record<string, unknown>;
+  assert.equal('estimatorItems' in payload, false);
+  assert.equal('totalGrams' in payload, false);
+});
+
+test('POST with valid estimatorItems whose totals match stores estimatorItems + totalGrams', async () => {
+  insertedValues = [];
+  const items = [estimatorItem({ kcal: 390, c: 84, p: 8, f: 1, grams: 300 }), estimatorItem({ food: 'grilled chicken', kcal: 250, c: 0, p: 46, f: 6, grams: 150 })];
+  const { POST } = await routePromise;
+  const res = await POST(postRequest({
+    name: 'Rice and chicken', kcal: 640, c: 84, p: 54, f: 7, source: 'photo', reaction: false,
+    estimatorItems: items,
+  }));
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.ok, true);
+  assert.equal(insertedValues.length, 1);
+  const payload = insertedValues[0].payload as Record<string, unknown>;
+  assert.deepEqual(payload.estimatorItems, items);
+  assert.equal(payload.totalGrams, 450);
+  assert.equal(payload.items, '300g white rice, cooked, 150g grilled chicken');
+});
+
+test('POST with estimatorItems whose totals mismatch by >5% (user edited macros) drops the items but still logs', async () => {
+  insertedValues = [];
+  const items = [estimatorItem({ kcal: 390, c: 84, p: 8, f: 1, grams: 300 })];
+  const { POST } = await routePromise;
+  // User dialed kcal down from 390 to 250 in the review step — well beyond 5%.
+  const res = await POST(postRequest({
+    name: 'White rice, cooked', kcal: 250, c: 84, p: 8, f: 1, source: 'photo', reaction: false,
+    estimatorItems: items,
+  }));
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.ok, true);
+  assert.equal(insertedValues.length, 1);
+  const payload = insertedValues[0].payload as Record<string, unknown>;
+  assert.equal('estimatorItems' in payload, false);
+  assert.equal('totalGrams' in payload, false);
+});
+
+test('POST with an invalid estimatorItems shape (non-array) is rejected with 400 and nothing is inserted', async () => {
+  insertedValues = [];
+  const { POST } = await routePromise;
+  const res = await POST(postRequest({
+    name: 'Rice', kcal: 390, c: 84, p: 8, f: 1, source: 'photo', reaction: false,
+    estimatorItems: 'not an array',
+  }));
+  assert.equal(res.status, 400);
+  assert.equal(insertedValues.length, 0);
+});
+
+test('POST with an invalid estimatorItems entry (missing food, negative grams) is rejected with 400', async () => {
+  insertedValues = [];
+  const { POST } = await routePromise;
+  const res = await POST(postRequest({
+    name: 'Rice', kcal: 390, c: 84, p: 8, f: 1, source: 'photo', reaction: false,
+    estimatorItems: [{ grams: -5, kcal: 390, c: 84, p: 8, f: 1, source: 'usda', confidence: 'high', portionNote: '' }],
+  }));
+  assert.equal(res.status, 400);
+  assert.equal(insertedValues.length, 0);
+});
+
+test('POST with an empty estimatorItems array is rejected with 400', async () => {
+  insertedValues = [];
+  const { POST } = await routePromise;
+  const res = await POST(postRequest({
+    name: 'Rice', kcal: 390, c: 84, p: 8, f: 1, source: 'photo', reaction: false,
+    estimatorItems: [],
+  }));
+  assert.equal(res.status, 400);
+  assert.equal(insertedValues.length, 0);
+});

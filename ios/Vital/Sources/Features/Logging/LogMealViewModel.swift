@@ -66,6 +66,13 @@ struct LogMealPrefill {
     let c: Double
     let p: Double
     let f: Double
+    /// The photo analysis's per-item breakdown, when the analysis itself
+    /// succeeded (just not confidently enough to auto-log) — `nil` for a
+    /// genuine analysis/log failure, which never has one. Declared last with
+    /// a default so every existing call site (positional, pre-dating this
+    /// field) keeps compiling unchanged via Swift's memberwise init. See
+    /// `LogMealViewModel.applyPrefill`.
+    var estimatorItems: [PhotoEstimatorItem]? = nil
 }
 
 // MARK: - ViewModel
@@ -108,6 +115,12 @@ final class LogMealViewModel: ObservableObject {
     /// Full-resolution image the user picked (photo method) — shown in the confirm card.
     @Published var pendingImage: UIImage? = nil
     private var pendingSource: String = "text"
+    /// Set only by `handlePhotoItem`'s successful photo analysis (and cleared
+    /// by every other result path via `applyResult`'s default `nil`) — the
+    /// per-item breakdown `logMeal()` round-trips to `POST /api/meals/log`,
+    /// dropped there if the user has since edited the macros away from what
+    /// these items sum to by more than 5% (`estimatorItemsMatchTotals`).
+    private var pendingEstimatorItems: [PhotoEstimatorItem]? = nil
 
     // ── Portion controls (confirm card) ─────────────────────────────────────
     @Published var portionMode: PortionMode? = nil
@@ -173,13 +186,27 @@ final class LogMealViewModel: ObservableObject {
     func applyPrefill(_ prefill: LogMealPrefill) {
         pendingImage = prefill.image
         resetPortionState()
-        applyResult(name: prefill.name, kcal: prefill.kcal, p: prefill.p, c: prefill.c, f: prefill.f, source: "photo")
+        applyResult(
+            name: prefill.name, kcal: prefill.kcal, p: prefill.p, c: prefill.c, f: prefill.f, source: "photo",
+            estimatorItems: prefill.estimatorItems
+        )
     }
 
-    private func applyResult(name: String, kcal: Double, p: Double, c: Double, f: Double, source: String) {
+    /// `estimatorItems`: the photo-analysis per-item grounded breakdown
+    /// (`NutritionResult.estimatorItems`), carried alongside the flat macros
+    /// so `logMeal()` can round-trip it to `POST /api/meals/log` on save —
+    /// see that method and `app/api/meals/log/route.ts`'s doc comment.
+    /// `nil` for every non-photo result path (text/barcode/recent/candidate),
+    /// which also clears out any breakdown left over from a previous photo
+    /// result in this same sheet session.
+    private func applyResult(
+        name: String, kcal: Double, p: Double, c: Double, f: Double, source: String,
+        estimatorItems: [PhotoEstimatorItem]? = nil
+    ) {
         editedName    = name
         setMacroFields(kcal: kcal, p: p, c: c, f: f)
         pendingSource = source
+        pendingEstimatorItems = estimatorItems
         showConfirmCard = true
         errorMessage = nil
     }
@@ -409,7 +436,7 @@ final class LogMealViewModel: ObservableObject {
             pendingImage = uiImage
             let jpeg = uiImage?.jpegData(compressionQuality: 0.6) ?? transfer.data
             let r = try await api.photoFood(imageBase64: jpeg.base64EncodedString())
-            applyResult(name: r.name, kcal: r.kcal, p: r.p, c: r.c, f: r.f, source: "photo")
+            applyResult(name: r.name, kcal: r.kcal, p: r.p, c: r.c, f: r.f, source: "photo", estimatorItems: r.estimatorItems)
         } catch {
             errorMessage = UserFacingError.message(for: error, context: .read, tag: "photoFood")
         }
@@ -488,11 +515,15 @@ final class LogMealViewModel: ObservableObject {
     }
 
     /// Called once recording stops (manual tap or a watchdog auto-stop).
-    /// Apple's live-preview transcript is the fallback; the accurate cloud
-    /// transcript from `/api/stt` replaces it when the upload succeeds.
-    /// Preserves the previous behavior of auto-searching as soon as a
-    /// transcript is available, now on any stop rather than only a final
-    /// on-device result.
+    /// Cloud STT (`api.uploadSTTAudio`) is the SOLE source of the text that
+    /// gets searched — mirrors `CoachVoiceController.beginTranscription()`'s
+    /// owner decision (spec `voice-cloud-only-stt`): the on-device Apple
+    /// transcript is read only to decide whether *any* speech was detected
+    /// at all (the guard just below), never as text that gets auto-filled
+    /// into `searchText`, since it's frequently garbled. A cloud failure (or
+    /// no recording clip at all) surfaces a visible, dismissable
+    /// `errorMessage` with the diagnostic instead of silently degrading to
+    /// the garbled on-device guess.
     private func finishVoiceInput() async {
         let appleTranscript = transcriber.transcribedText.trimmingCharacters(in: .whitespacesAndNewlines)
         let recordingURL = transcriber.recordingURL
@@ -504,16 +535,26 @@ final class LogMealViewModel: ObservableObject {
             transcriber.discardRecording()
         }
 
-        var finalText = appleTranscript
-        if let recordingURL, case .success(let cloudText) = await api.uploadSTTAudio(fileURL: recordingURL), !cloudText.isEmpty {
-            finalText = cloudText
+        guard let recordingURL else {
+            // Apple detected speech, but the `.m4a` clip never got created —
+            // there's nothing to upload, and with no Apple fallback anymore
+            // there's nothing to search either.
+            errorMessage = "Couldn't transcribe that — try again (No recording to transcribe)"
+            return
         }
 
-        let trimmed = finalText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-
-        searchText = trimmed
-        await searchByText()
+        switch await api.uploadSTTAudio(fileURL: recordingURL) {
+        case .success(let cloudText):
+            let trimmed = cloudText.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                errorMessage = "Couldn't transcribe that — try again (Empty transcript)"
+                return
+            }
+            searchText = trimmed
+            await searchByText()
+        case .failure(let failure):
+            errorMessage = "Couldn't transcribe that — try again (\(failure.diagnostic))"
+        }
     }
 
     // MARK: - Log meal
@@ -530,13 +571,27 @@ final class LogMealViewModel: ObservableObject {
         // Logs feed can show it. Kept tiny to stay light in the events ledger.
         let thumb = pendingImage.flatMap { Self.thumbnailBase64($0) }
 
+        // Only send the photo's per-item breakdown along if the user hasn't
+        // edited the macros away from what those items sum to (beyond 5%) —
+        // see `estimatorItemsMatchTotals`'s doc comment. A mismatched/absent
+        // breakdown sends `nil`; the server independently re-checks this
+        // same rule regardless (app/api/meals/log/route.ts), so this is a
+        // client-side courtesy, not the only guard.
+        let estimatorItemsToSend: [PhotoEstimatorItem]?
+        if let items = pendingEstimatorItems,
+           Self.estimatorItemsMatchTotals(items, kcal: kcal, c: carbs, p: protein, f: fat) {
+            estimatorItemsToSend = items
+        } else {
+            estimatorItemsToSend = nil
+        }
+
         isLoading    = true
         errorMessage = nil
         defer { isLoading = false }
         do {
             let response = try await api.logMeal(
                 name: name, kcal: kcal, c: carbs, p: protein, f: fat,
-                source: pendingSource, imageThumb: thumb
+                source: pendingSource, imageThumb: thumb, estimatorItems: estimatorItemsToSend
             )
             coachReaction = response.coachReaction
             isLogged      = true
@@ -552,6 +607,31 @@ final class LogMealViewModel: ObservableObject {
         } catch {
             errorMessage = UserFacingError.message(for: error, context: .write, tag: "logMeal")
         }
+    }
+
+    /// True when `items`' own summed macros are within `tolerance` (relative,
+    /// default 5%) of the given flat totals — mirrors
+    /// `lib/nutrition/estimator.ts`'s `estimatorItemsMatchTotals` exactly
+    /// (same rule, same 5% default) so the client-side courtesy check here
+    /// and the server's authoritative one agree. `nonisolated static`: pure
+    /// arithmetic with no actor-isolated state, so it's callable — and unit
+    /// testable — without `@MainActor`/`await`.
+    nonisolated static func estimatorItemsMatchTotals(
+        _ items: [PhotoEstimatorItem], kcal: Double, c: Double, p: Double, f: Double, tolerance: Double = 0.05
+    ) -> Bool {
+        guard !items.isEmpty else { return false }
+        let sumKcal = items.reduce(0) { $0 + $1.kcal }
+        let sumC    = items.reduce(0) { $0 + $1.c }
+        let sumP    = items.reduce(0) { $0 + $1.p }
+        let sumF    = items.reduce(0) { $0 + $1.f }
+
+        func within(_ a: Double, _ b: Double) -> Bool {
+            if abs(a - b) < 1e-9 { return true } // exact/near-exact match, incl. both 0
+            let denom = max(abs(a), abs(b), 1)
+            return abs(a - b) / denom <= tolerance
+        }
+
+        return within(sumKcal, kcal) && within(sumC, c) && within(sumP, p) && within(sumF, f)
     }
 
     /// Downscale to a small square-ish JPEG and base64-encode it (no data-URL prefix).
@@ -574,6 +654,7 @@ final class LogMealViewModel: ObservableObject {
         coachReaction   = nil
         errorMessage    = nil
         pendingImage    = nil
+        pendingEstimatorItems = nil
         editedName      = ""
         editedKcal      = ""
         editedProtein   = ""
