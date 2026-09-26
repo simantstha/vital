@@ -153,7 +153,7 @@ struct TrendsWeightCard: View {
         return parsedEntries
             .filter { $0.date >= firstDayDate }
             .sorted { $0.date < $1.date }
-            .map { ($0.day, $0.date, $0.value) }
+            .map { (day: $0.day, date: Optional($0.date), value: $0.value) }
     }
 
     private var sparklineMinSpan: Double { system == .metric ? 1.0 : 2.0 }
@@ -275,12 +275,8 @@ struct TrendsWeightCard: View {
         // Extract all parsed dates to compute safe x-domain bounds.
         // Using compactMap avoids the crash risk of fallback Date() values.
         let dates = sparklinePoints.compactMap(\.date)
-        let xDomain: ClosedRange<Date> = if let lo = dates.min(), let hi = dates.max() {
-            lo...hi
-        } else {
-            let now = Date()
-            now...now // Fallback: a valid range with equal bounds
-        }
+        let now = Date()
+        let xDomain: ClosedRange<Date> = (dates.min() ?? now)...(dates.max() ?? now)
 
         return Chart {
             ForEach(Array(rawEntryPoints.enumerated()), id: \.offset) { _, point in
