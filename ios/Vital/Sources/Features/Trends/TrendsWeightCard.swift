@@ -132,7 +132,7 @@ struct TrendsWeightCard: View {
         guard let trend, trend.established else { return [] }
         return trend.days.suffix(30).map { day in
             let value = system == .metric ? day.trendKg : UnitConvert.kgToLb(day.trendKg)
-            let date = Self.chartDate(day.day)
+            let date = TrendsWeightCardLogic.chartDate(day.day)
             return (day.day, date, value)
         }
     }
@@ -146,7 +146,7 @@ struct TrendsWeightCard: View {
         guard let firstDayDate = sparklinePoints.first?.date else { return [] }
         // Parse each entry once, then filter and sort
         let parsedEntries = entries.compactMap { entry -> (day: String, date: Date, value: Double)? in
-            guard let date = Self.chartDate(entry.date) else { return nil }
+            guard let date = TrendsWeightCardLogic.chartDate(entry.date) else { return nil }
             let value = system == .metric ? entry.weight : UnitConvert.kgToLb(entry.weight)
             return (entry.date, date, value)
         }
