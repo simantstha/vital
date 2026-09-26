@@ -542,9 +542,13 @@ private extension TodayView {
                         .offset(x: 4, y: -4)
                 }
             }
+            .accessibilityHidden(true)
         }
         .buttonStyle(.vital(scale: 0.94))
         .padding(.top, 2)
+        .accessibilityLabel(notificationsVM.unreadCount > 0
+            ? "Notifications, \(notificationsVM.unreadCount) unread"
+            : "Notifications")
     }
 
     // ── Calibration card ────────────────────────────────────────────────────

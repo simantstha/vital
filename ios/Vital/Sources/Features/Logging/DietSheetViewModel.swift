@@ -91,6 +91,14 @@ final class DietSheetViewModel: ObservableObject {
 
     @Published var toastMessage: String?
 
+    /// True until `load()`'s first call completes — success or failure —
+    /// so the sheet can show a quiet loading state instead of "Nothing
+    /// logged yet" for a user who actually has entries today (see
+    /// `PhotoLogFlowView.analyzingOverlay` for the calm-loading pattern this
+    /// follows). Never flips back to true on a later reload (sheet reopen,
+    /// pull to refresh) — only the very first load is "initial."
+    @Published private(set) var isInitialLoading = true
+
     /// Proof call site for `ActionToast` (L1, §5.5): shown instead of the
     /// plain top-center `toastMessage` when a log can be undone through
     /// `apiClient.deleteMealLog`. `DietSheetView` hosts it via
@@ -126,6 +134,11 @@ final class DietSheetViewModel: ObservableObject {
     // MARK: - Load
 
     func load() async {
+        defer {
+            withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) {
+                isInitialLoading = false
+            }
+        }
         async let goalTask = apiClient.fetchDietGoal()
         async let logsTask = apiClient.fetchTodayMealLogs()
         async let recentsTask = apiClient.fetchNutritionRecents()

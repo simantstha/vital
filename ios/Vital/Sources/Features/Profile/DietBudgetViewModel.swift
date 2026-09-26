@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 
 /// Backs the Daily Budget editor. Local state drives the UI instantly; every
 /// committed change is persisted via PATCH /api/diet-goal, which returns the
@@ -59,7 +60,7 @@ final class DietBudgetViewModel: ObservableObject {
     var goalDisplay: String { Self.goalLabels[goal] ?? "Maintain" }
 
     func load() async {
-        isLoading = true
+        withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.appear) { isLoading = true }
         errorMessage = nil
         do {
             let r = try await api.fetchDietGoal()
@@ -68,7 +69,7 @@ final class DietBudgetViewModel: ObservableObject {
         } catch {
             errorMessage = "Couldn't load your budget."
         }
-        isLoading = false
+        withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.appear) { isLoading = false }
     }
 
     // ── Local mutations (each persists) ─────────────────────────────────────

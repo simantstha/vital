@@ -95,18 +95,22 @@ final class NotificationsViewModel: ObservableObject {
     /// already-read row) can never double-decrement `unreadCount`.
     func markRead(id: String) async {
         guard let index = items.firstIndex(where: { $0.id == id }), items[index].readAt == nil else { return }
-        items[index].readAt = Date()
-        unreadCount = max(0, unreadCount - 1)
+        withAnimation(Theme.Motion.standard) {
+            items[index].readAt = Date()
+            unreadCount = max(0, unreadCount - 1)
+        }
         _ = try? await apiClient.markNotificationsRead(ids: [id], all: nil)
     }
 
     func markAllRead() async {
         guard unreadCount > 0 else { return }
         let now = Date()
-        for index in items.indices where items[index].readAt == nil {
-            items[index].readAt = now
+        withAnimation(Theme.Motion.standard) {
+            for index in items.indices where items[index].readAt == nil {
+                items[index].readAt = now
+            }
+            unreadCount = 0
         }
-        unreadCount = 0
         _ = try? await apiClient.markNotificationsRead(ids: nil, all: true)
     }
 }

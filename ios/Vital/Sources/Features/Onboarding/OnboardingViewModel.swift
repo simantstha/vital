@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 
 /// Draft state and navigation for the onboarding questionnaire (Phase 5 of
 /// the ios-pivot plan). Collects Basics → Goal → Training → HealthSafety →
@@ -10,6 +11,8 @@ final class OnboardingViewModel: ObservableObject {
     enum Step: Int, CaseIterable {
         case basics, goal, training, healthSafety, lifestyle, coachIntro, calibrating
     }
+
+    enum StepDirection { case forward, backward }
 
     @Published var step: Step = .basics
 
@@ -103,14 +106,25 @@ final class OnboardingViewModel: ObservableObject {
             && (weightKg ?? 0) > 0
     }
 
+    /// Direction of the most recent step change, so `OnboardingFlowView` can
+    /// pick a matching push transition (forward slides in from the trailing
+    /// edge, back slides in from the leading edge).
+    @Published private(set) var stepDirection: StepDirection = .forward
+
     func advance() {
         guard let next = Step(rawValue: step.rawValue + 1) else { return }
-        step = next
+        stepDirection = .forward
+        withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) {
+            step = next
+        }
     }
 
     func back() {
         guard let previous = Step(rawValue: step.rawValue - 1) else { return }
-        step = previous
+        stepDirection = .backward
+        withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) {
+            step = previous
+        }
     }
 
     /// Submits the full questionnaire, then advances to CoachIntro only on
