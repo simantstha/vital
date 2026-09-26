@@ -31,7 +31,7 @@ struct TrendsTile: Equatable {
     /// without re-deriving either from `content` alone. Defaults to `nil`
     /// so every existing call site (tests included) that builds a
     /// `TrendsTile` without a baseline keeps compiling unchanged.
-    let baseline: TrendsBaselineDTO? = nil
+    var baseline: TrendsBaselineDTO? = nil
 }
 
 /// One section of the grid index — a `MetricGroup` plus the tiles that
