@@ -72,7 +72,7 @@ struct LogMealPrefill {
     /// a default so every existing call site (positional, pre-dating this
     /// field) keeps compiling unchanged via Swift's memberwise init. See
     /// `LogMealViewModel.applyPrefill`.
-    let estimatorItems: [PhotoEstimatorItem]? = nil
+    var estimatorItems: [PhotoEstimatorItem]? = nil
 }
 
 // MARK: - ViewModel

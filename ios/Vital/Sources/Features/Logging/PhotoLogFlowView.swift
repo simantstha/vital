@@ -64,7 +64,7 @@ struct PhotoLogFlowView: View {
         /// `LogMealPrefill` below so the confirm-card fallback can still
         /// save it. Declared last with a default so existing positional
         /// call sites keep compiling.
-        let estimatorItems: [PhotoEstimatorItem]? = nil
+        var estimatorItems: [PhotoEstimatorItem]? = nil
     }
 
     var body: some View {
