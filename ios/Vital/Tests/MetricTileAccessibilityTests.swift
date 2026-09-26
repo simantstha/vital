@@ -65,6 +65,41 @@ final class MetricTileAccessibilityTests: XCTestCase {
         XCTAssertEqual(label, "Steps, 500, above your normal")
     }
 
+    // MARK: - Baseline known: the label includes the delta magnitude + good/watch
+
+    func testChartLabelAboveVerdictIncludesDeltaAndGoodWhenBaselineIsKnown() {
+        let tile = TrendsTile(
+            key: "hrv_sdnn",
+            content: .chart(value: 61, sparklineValues: [50, 55, 61], verdict: .above(z: 1.5)),
+            baseline: TrendsBaselineDTO(mean7: 54, mean30: 54, mean60: 54, sd30: 5, p25: 50, p50: 54, p75: 58)
+        )
+        let label = MetricTileAccessibility.label(tile: tile, spec: hrvSpec, unitSystem: .metric)
+        XCTAssertEqual(label, "HRV, 61 milliseconds, 7 above your normal, good")
+    }
+
+    /// `resting_hr` is lower-is-better — rising above normal is NOT good,
+    /// so this must read "to watch", not "good".
+    func testChartLabelAboveVerdictReadsToWatchWhenDirectionIsUnfavorable() {
+        let restingHRSpec = MetricCatalog.spec(for: "resting_hr")!
+        let tile = TrendsTile(
+            key: "resting_hr",
+            content: .chart(value: 65, sparklineValues: [55, 58, 65], verdict: .above(z: 1.4)),
+            baseline: TrendsBaselineDTO(mean7: 58, mean30: 58, mean60: 58, sd30: 5, p25: 54, p50: 58, p75: 62)
+        )
+        let label = MetricTileAccessibility.label(tile: tile, spec: restingHRSpec, unitSystem: .metric)
+        XCTAssertEqual(label, "Resting HR, 65 beats per minute, 7 above your normal, to watch")
+    }
+
+    func testChartLabelBelowVerdictIncludesDeltaWhenBaselineIsKnown() {
+        let tile = TrendsTile(
+            key: "hrv_sdnn",
+            content: .chart(value: 47, sparklineValues: [54, 50, 47], verdict: .below(z: -1.4)),
+            baseline: TrendsBaselineDTO(mean7: 54, mean30: 54, mean60: 54, sd30: 5, p25: 50, p50: 54, p75: 58)
+        )
+        let label = MetricTileAccessibility.label(tile: tile, spec: hrvSpec, unitSystem: .metric)
+        XCTAssertEqual(label, "HRV, 47 milliseconds, 7 below your normal, to watch")
+    }
+
     // MARK: - Unit system switches the spoken unit word, not just the abbreviation
 
     func testChartLabelBodyMassMetricSpeaksKilograms() {

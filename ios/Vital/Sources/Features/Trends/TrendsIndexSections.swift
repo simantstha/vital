@@ -24,6 +24,14 @@ enum TileContent: Equatable {
 struct TrendsTile: Equatable {
     let key: String
     let content: TileContent
+    /// This metric's 30-day baseline stats, when the batch response had one
+    /// — same source `TrendsVerdict.evaluate` already gated `content`'s
+    /// verdict against. Threaded through so the tile's sparkline can shade
+    /// the mean30±sd30 "normal" band and "What moved" can sort by |z|
+    /// without re-deriving either from `content` alone. Defaults to `nil`
+    /// so every existing call site (tests included) that builds a
+    /// `TrendsTile` without a baseline keeps compiling unchanged.
+    let baseline: TrendsBaselineDTO? = nil
 }
 
 /// One section of the grid index — a `MetricGroup` plus the tiles that
@@ -58,7 +66,7 @@ enum TrendsIndexSections {
                 guard let spec = MetricCatalog.spec(for: key) else { return nil }
 
                 guard !series.points.isEmpty else {
-                    return TrendsTile(key: key, content: .dimmed(lastDate: series.lastDate))
+                    return TrendsTile(key: key, content: .dimmed(lastDate: series.lastDate), baseline: series.baseline)
                 }
 
                 let sortedPoints = series.points.sorted { $0.date < $1.date }
@@ -67,7 +75,8 @@ enum TrendsIndexSections {
                 guard sortedPoints.count >= 3 else {
                     return TrendsTile(
                         key: key,
-                        content: .sparse(value: latestValue, readingCount: sortedPoints.count)
+                        content: .sparse(value: latestValue, readingCount: sortedPoints.count),
+                        baseline: series.baseline
                     )
                 }
 
@@ -85,7 +94,8 @@ enum TrendsIndexSections {
                         value: latestValue,
                         sparklineValues: sortedPoints.map(\.value),
                         verdict: verdict
-                    )
+                    ),
+                    baseline: series.baseline
                 )
             }
             return tiles.isEmpty ? nil : TrendsSection(group: group, tiles: tiles)

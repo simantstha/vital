@@ -20,8 +20,32 @@ enum MetricTileAccessibility {
             return "\(name), \(valueText), \(readings)"
         case .chart(let value, _, let verdict):
             let valueText = formattedValue(value, spec: spec, unitSystem: unitSystem)
+            if let moved = movedPhrase(value: value, verdict: verdict, tile: tile, spec: spec) {
+                return "\(name), \(valueText), \(moved)"
+            }
             return "\(name), \(valueText), \(verdictPhrase(verdict))"
         }
+    }
+
+    /// For an `.above`/`.below` reading only: "7 above your normal, good" —
+    /// the delta magnitude (in this metric's own units, same source
+    /// `MetricTileView`'s delta line reads) plus the good/watch judgment,
+    /// e.g. "HRV, 61 milliseconds, 7 above your normal, good". `nil` for
+    /// every other verdict, or when `tile.baseline` doesn't carry a
+    /// `mean30` (verdict math already requires one to reach `.above`/
+    /// `.below`, so this is defensive, not a real path).
+    private static func movedPhrase(value: Double, verdict: Verdict, tile: TrendsTile, spec: MetricSpec?) -> String? {
+        guard let spec, let mean30 = tile.baseline?.mean30 else { return nil }
+        let rising: Bool
+        switch verdict {
+        case .above: rising = true
+        case .below: rising = false
+        default: return nil
+        }
+        let delta = value - mean30
+        let deltaText = TrendsDeltaFormat.formattedNumber(abs(delta), decimals: spec.decimals)
+        let isGood = TrendDirection.resolve(spec.polarity, rising: rising).isGood
+        return "\(deltaText) \(rising ? "above" : "below") your normal, \(isGood ? "good" : "to watch")"
     }
 
     /// Mirrors `TrendsVerdict`'s "never surface σ to UI copy" rule — same

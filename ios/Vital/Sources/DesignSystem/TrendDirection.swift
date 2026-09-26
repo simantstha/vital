@@ -27,4 +27,17 @@ enum TrendDirection: Equatable {
         case .upNeutral, .downNeutral: return Theme.Colors.textSecondary
         }
     }
+
+    /// True when this resolved direction is the "positive" outcome for its
+    /// metric — the same good/bad split the Trends headline and "What
+    /// moved" section use to bucket a moved metric as "good" vs. "to watch".
+    /// A polarity-neutral metric's direction (`upNeutral`/`downNeutral`) is
+    /// never "good" — there's no favorable direction to credit, so it lands
+    /// in "to watch" alongside a genuinely bad reading.
+    var isGood: Bool {
+        switch self {
+        case .upGood, .downGood: return true
+        default:                 return false
+        }
+    }
 }

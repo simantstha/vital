@@ -11,12 +11,20 @@ import SwiftUI
 @MainActor
 final class TrendsViewModel: ObservableObject {
 
-    /// The grid index always requests 30 days, never 365 — the plan reserves
-    /// longer ranges (and weekly downsampling) for the PR5 detail view's
-    /// range pills.
-    static let windowDays = 30
-
     // MARK: Grid index state (batch)
+
+    /// The header's 7D/30D/90D period switch — defaults to 30D (the
+    /// previous fixed window). Changing it reloads only the grid (`load()`)
+    /// — never the weekly summary strip or goal context, which are
+    /// independent of this window. The backend already clamps the
+    /// requested value to 1...365, so every `TrendsPeriod` case is a safe
+    /// literal to send as-is.
+    @Published var period: TrendsPeriod = .thirtyDays {
+        didSet {
+            guard oldValue != period else { return }
+            Task { await load() }
+        }
+    }
 
     /// One entry per metric the batch response returned, already converted
     /// to the user's display unit system at decode time — see `makeSeries`.
@@ -26,6 +34,27 @@ final class TrendsViewModel: ObservableObject {
     @Published private(set) var loaded: [String: MetricSeries] = [:]
     @Published var isLoading = false
     @Published var errorMessage: String? = nil
+
+    /// Goal-ordered grid sections, cached here (recomputed only when
+    /// `loaded` or `goal` actually changes) rather than as a computed
+    /// property `TrendsView.body` re-derives on every render — see the
+    /// plan's performance pass.
+    @Published private(set) var sections: [TrendsSection] = []
+    /// The "What moved" card's rows — at most `TrendsWhatMoved.maxRows`,
+    /// sorted by |z| descending. Empty (and the section hidden) whenever no
+    /// metric is `.above`/`.below` its normal.
+    @Published private(set) var whatMovedRows: [WhatMovedRow] = []
+    /// The header's one-line summary, replacing the old static "Last 30
+    /// days · N metrics tracked" subtitle.
+    @Published private(set) var headline: TrendsHeadline.Summary = TrendsHeadline.summary(goodCount: 0, watchCount: 0, period: .thirtyDays)
+
+    /// Set once, after the FIRST successful `load()` this session — gates
+    /// the grid's staggered entrance motion so it plays exactly once rather
+    /// than replaying on every period switch or pull-to-refresh. Flipped a
+    /// beat after `loaded` itself updates (see `load()`) so the very first
+    /// render — the one `TrendsView`'s `.staggeredAppear` needs to see
+    /// `false` — still gets the entrance.
+    @Published private(set) var hasAnimatedIn = false
 
     // MARK: Summary state (Last 7 days headline strip)
 
@@ -89,7 +118,7 @@ final class TrendsViewModel: ObservableObject {
         do {
             let response = try await apiClient.fetchTrendsBatch(
                 metrics: MetricCatalog.indexKeys,
-                days: Self.windowDays
+                days: period.days
             )
             // Superseded by a newer `load()` — e.g. a pull-to-refresh that
             // lands after a slower in-flight call, the same hazard the
@@ -102,15 +131,40 @@ final class TrendsViewModel: ObservableObject {
                 guard let spec = MetricCatalog.spec(for: key) else { continue }
                 newLoaded[key] = Self.makeSeries(from: dto, spec: spec, system: system)
             }
+            let isFirstLoad = !hasAnimatedIn
             withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) {
                 loaded = newLoaded
                 calibration = response.calibration
+            }
+            recomputeDerived()
+            if isFirstLoad {
+                // Flipped on a later run-loop turn (not synchronously here)
+                // so THIS render still sees `hasAnimatedIn == false` — that's
+                // what lets `TrendsView`'s `.staggeredAppear` play on the
+                // tiles/rows this very update creates. A later `load()` (a
+                // period switch, pull-to-refresh) sees it already `true` and
+                // renders its rows without the entrance.
+                Task { @MainActor in hasAnimatedIn = true }
             }
         } catch {
             guard generation == loadGeneration else { return } // superseded by a newer load
             errorMessage = UserFacingError.message(for: error, context: .read, tag: "TrendsViewModel.load", includesAction: false)
         }
         withAnimation(Theme.Motion.appear) { isLoading = false }
+    }
+
+    /// Rebuilds `sections`/`whatMovedRows`/`headline` from `loaded` + `goal`
+    /// — the only place any of the three are computed, so `TrendsView`
+    /// never recomputes them per render. Called after `loaded` changes
+    /// (`load()`) and after `goal` changes (`loadGoalContext()`), since both
+    /// feed `sections`' ordering.
+    private func recomputeDerived() {
+        let built = TrendsIndexSections.build(loaded: loaded, today: Date())
+        sections = TrendsGoalOrdering.sections(for: goal, available: built)
+        whatMovedRows = TrendsWhatMoved.topRows(sections: built)
+        let allMoved = TrendsWhatMoved.movedRows(sections: built)
+        let goodCount = allMoved.filter(\.isGood).count
+        headline = TrendsHeadline.summary(goodCount: goodCount, watchCount: allMoved.count - goodCount, period: period)
     }
 
     /// Converts one batch series DTO into a display-ready `MetricSeries`:
@@ -198,6 +252,7 @@ final class TrendsViewModel: ObservableObject {
         do {
             let dietGoal = try await profileClient.fetchDietGoal()
             goal = dietGoal.current.goal
+            recomputeDerived() // `goal` feeds `sections`' ordering
         } catch {
             return
         }

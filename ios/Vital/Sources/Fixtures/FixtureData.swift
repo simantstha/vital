@@ -248,7 +248,7 @@ enum FixtureData {
             return (200, Data("data: {\"type\":\"done\"}\n\n".utf8))
         case ("GET", "/api/trends"):
             return query.contains("metrics=")
-                ? (200, jsonData(trendsBatch(profile)))
+                ? (200, jsonData(trendsBatch(profile, scenario: scenario, query: query)))
                 : (200, jsonData(trendsSingle(profile, query: query)))
         case ("GET", "/api/logs"):
             return (200, jsonData(logs(profile)))
@@ -326,6 +326,55 @@ enum FixtureData {
     private static func wiggle(_ base: Double, _ offset: Int) -> Double {
         base + Double(offset % 3 - 1) * (base * 0.03)
     }
+
+    // MARK: - Deterministic noise (Trends phase-1 realistic fixture series)
+
+    /// A stable per-string seed — deliberately NOT `String.hashValue`, whose
+    /// hash seed is randomized per process launch (`SipHash` with a random
+    /// key), which would make every "noisy" series a different shape on
+    /// every app launch and break the screenshot harness's reproducibility.
+    private static func stableSeed(_ key: String) -> Int {
+        key.unicodeScalars.reduce(0) { $0 &+ Int($1.value) }
+    }
+
+    /// Deterministic pseudo-random value in [0, 1) — a classic sine-hash,
+    /// not cryptographic, just reproducible across runs for the same `seed`.
+    private static func pseudoRandom01(_ seed: Int) -> Double {
+        let x = sin(Double(seed) * 12.9898) * 43758.5453
+        return x - x.rounded(.down)
+    }
+
+    /// One noisy day's value: `base` plus a small pseudo-random wiggle and a
+    /// slow sine drift, both scaled to `amplitude` (typically a fraction of
+    /// `sd`, so the visual noise never itself masquerades as an out-of-band
+    /// reading — `trendsBatch` overrides this entirely for the single
+    /// "today" point a persona's `movedMetrics` entry deliberately pushes
+    /// out of range).
+    /// Coefficients sum to 0.7 (well under the ±1σ verdict boundary), so a
+    /// metric with no `movedMetrics` override for this scenario can never
+    /// accidentally read as `.above`/`.below` purely from noise, even in the
+    /// unlikely case both terms land at their theoretical extremes at once.
+    private static func noisyValue(seed: Int, offset: Int, base: Double, amplitude: Double) -> Double {
+        let n = pseudoRandom01(seed &+ offset &* 97)
+        let noise = (n - 0.5) * 2 * amplitude * 0.5
+        let drift = sin((Double(offset) + Double(seed % 17)) / 9.0) * amplitude * 0.2
+        return base + noise + drift
+    }
+
+    /// Per-scenario metrics whose LATEST ("today") reading is deliberately
+    /// pushed out of its normal band, so `TrendsWhatMoved`/the headline have
+    /// something to show — the persona spec's 2-3 "moved" metrics per
+    /// scenario. `true` pushes the latest reading above the mean, `false`
+    /// below; every other metric's latest reading stays within the noise
+    /// band above and lands `.normal`.
+    private static let movedMetrics: [FixtureMode.Scenario: [String: Bool]] = [
+        // weight_loss: resting HR below normal (good — lowerIsBetter), HRV
+        // above (good — higherIsBetter), sleep minutes below (watch —
+        // higherIsBetter).
+        .weightLoss: ["resting_hr": false, "hrv_sdnn": true, "sleep_minutes": false],
+        // endurance: HRV below (watch), resting HR above (watch).
+        .endurance: ["hrv_sdnn": false, "resting_hr": true],
+    ]
 
     // MARK: - Shared calibration block
 
@@ -483,21 +532,53 @@ enum FixtureData {
         }
     }
 
-    private static func trendsBatch(_ profile: Profile) -> [String: Any] {
-        let pointCount = 14
+    /// `scenario` picks this scenario's `movedMetrics` overrides; `query`
+    /// supplies the requested `days=` (the Trends phase-1 period switch),
+    /// clamped the same way the real backend clamps it, and used only to
+    /// size the generated point count — a real 7D/30D/90D fixture load all
+    /// shares the same per-metric baseline stats below.
+    private static func trendsBatch(_ profile: Profile, scenario: FixtureMode.Scenario?, query: String) -> [String: Any] {
+        let requestedDays = query
+            .split(separator: "&")
+            .first { $0.hasPrefix("days=") }
+            .flatMap { Int($0.dropFirst("days=".count)) } ?? 30
+        let days = min(max(requestedDays, 1), 365)
+        // Bounded well under `days` for very long windows — the fixture
+        // only needs enough points for a realistic sparkline, not a literal
+        // one-row-per-day payload out to 365.
+        let pointCount = min(max(days, 3), 90)
+
+        let moved = movedMetrics[scenario ?? .newUser] ?? [:]
+
         var series: [String: Any] = [:]
         for key in batchMetricKeys {
             let base = baseValue(key, profile)
             // Only body weight actually trends day over day in this fixture;
-            // every other metric is a flat baseline plus `wiggle`'s noise.
+            // every other metric is a flat baseline plus noise.
             let dailyTrend = key == "body_mass_kg" ? profile.weightTrendPerWeekKg / 7 : 0
+            // A realistic-looking sd — independent of the noise amplitude
+            // below, same as the baseline stats were already decoupled from
+            // `wiggle`'s noise before this change. Comfortably clears every
+            // `MetricSpec.minMeaningfulSD` floor.
+            let sd = base * 0.06
+            let seed = stableSeed(key)
+            let pushesAbove = moved[key]
+
             let points = (0..<pointCount).reversed().map { offset -> [String: Any] in
-                let value = base + dailyTrend * Double(offset) + (wiggle(base, offset) - base)
+                let trend = dailyTrend * Double(offset)
+                if offset == 0, let pushesAbove {
+                    // "Today" — deliberately pinned to ~1.8σ off the mean so
+                    // the verdict clears `TrendsVerdict`'s |z| >= 1 gate
+                    // unambiguously (see `movedMetrics`'s doc comment).
+                    let overrideDelta = (pushesAbove ? 1.8 : -1.8) * sd
+                    return ["date": dayString(offset), "value": base + trend + overrideDelta]
+                }
+                let value = trend + noisyValue(seed: seed, offset: offset, base: base, amplitude: sd)
                 return ["date": dayString(offset), "value": value]
             }
             let baseline: [String: Any] = [
                 "mean7": base, "mean30": base, "mean60": base,
-                "sd30": base * 0.05, "p25": base * 0.95, "p50": base, "p75": base * 1.05,
+                "sd30": sd, "p25": base - 0.67 * sd, "p50": base, "p75": base + 0.67 * sd,
             ]
             let entry: [String: Any] = [
                 // `label`/`unit` are decoded but never rendered — TrendsViewModel
@@ -513,7 +594,7 @@ enum FixtureData {
             series[key] = entry
         }
         return [
-            "days": 30,
+            "days": days,
             "series": series,
             "unknownMetrics": [String](),
             "calibration": calibration(profile),
