@@ -485,8 +485,15 @@ final class ScreenshotTests: XCTestCase {
         // Screen segment must be letters only to match CI export regex: ^[a-z_]+__[A-Za-z]+__(light|dark)\.png$
         capture(app, name: "\(scenario)__hrvDetail__\(appearance)")
 
-        // Scroll down to see more of the detail view (e.g. the stats row, chart, or records section).
+        // Scroll down to bring the "What moves your HRV" drivers section
+        // (added right after the stats row, before Distribution) on screen —
+        // present for weight_loss/muscle/endurance's HRV fixture, empty (and
+        // this capture simply shows Distribution/records instead) for
+        // new_user, which has no certified drivers.
         app.swipeUp()
+        capture(app, name: "\(scenario)__hrvDetailDrivers__\(appearance)")
+
+        // One more scroll to see the rest of the detail view (e.g. the chart, records section, or more).
         app.swipeUp()
         capture(app, name: "\(scenario)__hrvDetailMore__\(appearance)")
 

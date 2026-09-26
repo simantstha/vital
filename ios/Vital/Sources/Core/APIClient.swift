@@ -241,6 +241,21 @@ struct APIClient {
         return try await get("/api/trends?metrics=\(encoded)&days=\(days)")
     }
 
+    /// "What moves your HRV" — `metric` is a raw `daily_metrics` outcome name
+    /// (e.g. `hrv_sdnn`). See `app/api/trends/drivers/route.ts` for the
+    /// contract: `drivers` is empty (never a 400/404) when the engine has no
+    /// certified cross-lag findings for this metric yet.
+    func fetchTrendsDrivers(metric: String) async throws -> TrendsDriversResponse {
+        let encoded = metric.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? metric
+        return try await get("/api/trends/drivers?metric=\(encoded)")
+    }
+
+    /// Day-keyed chart markers (workouts only, for now) for the detail
+    /// chart's floor annotations. See `app/api/trends/markers/route.ts`.
+    func fetchTrendsMarkers(days: Int) async throws -> TrendsMarkersResponse {
+        try await get("/api/trends/markers?days=\(days)")
+    }
+
     // MARK: - Today's plan
 
     /// Fetches today's plan timeline. Sends the device's current timezone —
@@ -1803,6 +1818,73 @@ protocol TrendsAPIProviding {
 
 
 extension APIClient: TrendsAPIProviding {}
+
+// MARK: - Trends drivers ("What moves your HRV")
+
+/// A tercile mean + its sample size — `nil` on the wire (and here) when the
+/// engine's `MIN_TERCILE_PAIRS` gate wasn't cleared. See
+/// `lib/insights/drivers.ts`'s `DriverBucket`.
+struct DriverBucketDTO: Decodable, Equatable {
+    let mean: Double
+    let n: Int
+}
+
+/// One `GET /api/trends/drivers` row. `input`/`metric` are raw
+/// `daily_metrics` names (`steps`, `dietary_carbs_g`), never the display
+/// name — `MetricDriverCopy` looks the display name/unit up in
+/// `MetricCatalog` itself. `direction` is the sign of the association
+/// ('up'/'down'), never decoded as a richer enum since the server is the
+/// only writer and any other string would just mean "no confident
+/// direction" — callers treat non-'down' as 'up', matching the server's own
+/// `effect < 0 ? 'down' : 'up'`.
+struct DriverDTO: Decodable, Equatable {
+    let input: String
+    let lag: Int
+    let direction: String
+    let rho: Double
+    let pairs: Int
+    let high: DriverBucketDTO?
+    let low: DriverBucketDTO?
+    let highInputMean: Double?
+    let lowInputMean: Double?
+}
+
+struct TrendsDriversResponse: Decodable, Equatable {
+    let metric: String
+    let computedFor: String?
+    let drivers: [DriverDTO]
+}
+
+// MARK: - Trends markers (chart event annotations)
+
+/// One `GET /api/trends/markers` row. `kind` is decoded as a plain `String`,
+/// never a closed enum — see `lib/trendsMarkers.ts`'s `MarkerKind` doc
+/// comment: a future kind must decode without failing, and the client only
+/// ever draws `"workout"`.
+struct TrendsMarkerDTO: Decodable, Equatable {
+    let date: String
+    let kind: String
+    let label: String
+    let count: Int
+}
+
+struct TrendsMarkersResponse: Decodable, Equatable {
+    let days: Int
+    let markers: [TrendsMarkerDTO]
+}
+
+/// `MetricDetailViewModel`'s own API seam — a superset of `TrendsAPIProviding`
+/// kept SEPARATE from it (rather than adding these two methods to that
+/// protocol directly) so `TrendsViewModel`'s existing `TrendsAPIProviding`
+/// fakes (`TrendsSummaryTests`, `TrendsViewModelErrorCopyTests`) don't need
+/// to grow drivers/markers stubs they never exercise.
+@MainActor
+protocol MetricDetailAPIProviding: TrendsAPIProviding {
+    func fetchTrendsDrivers(metric: String) async throws -> TrendsDriversResponse
+    func fetchTrendsMarkers(days: Int) async throws -> TrendsMarkersResponse
+}
+
+extension APIClient: MetricDetailAPIProviding {}
 
 // MARK: - Plan types
 

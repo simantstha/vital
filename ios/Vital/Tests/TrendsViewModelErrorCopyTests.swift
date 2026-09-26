@@ -82,7 +82,7 @@ final class MetricDetailViewModelErrorCopyTests: XCTestCase {
 }
 
 @MainActor
-private final class FakeTrendsLoadAPI: TrendsAPIProviding {
+private final class FakeTrendsLoadAPI: MetricDetailAPIProviding {
     var batchError: Error?
     var singleError: Error?
     var batchResponse = TrendsBatchResponse(days: 30, series: [:], unknownMetrics: [], calibration: nil)
@@ -95,5 +95,13 @@ private final class FakeTrendsLoadAPI: TrendsAPIProviding {
     func fetchTrendsBatch(metrics: [String], days: Int) async throws -> TrendsBatchResponse {
         if let batchError { throw batchError }
         return batchResponse
+    }
+
+    func fetchTrendsDrivers(metric: String) async throws -> TrendsDriversResponse {
+        return TrendsDriversResponse(metric: metric, computedFor: nil, drivers: [])
+    }
+
+    func fetchTrendsMarkers(days: Int) async throws -> TrendsMarkersResponse {
+        return TrendsMarkersResponse(days: days, markers: [])
     }
 }

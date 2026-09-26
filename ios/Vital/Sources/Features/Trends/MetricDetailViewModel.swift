@@ -68,6 +68,20 @@ final class MetricDetailViewModel: ObservableObject {
     @Published private(set) var relatedSeries: [String: MetricSeries] = [:]
     private var relatedLoadStarted = false
 
+    /// "What moves your HRV" rows — certified `cross_lag` associations from
+    /// `GET /api/trends/drivers`, fetched once in the background (this
+    /// metric's outcome findings don't depend on the selected range).
+    /// Empty (never a placeholder) until it arrives or on failure — same
+    /// "supplementary, no placeholder" treatment as `distributionSeries`.
+    @Published private(set) var drivers: [DriverDTO] = []
+    private var driversLoadStarted = false
+
+    /// Workout markers for the chart floor, keyed to the CURRENT `range` —
+    /// unlike `distributionSeries`, this reloads on every range change (see
+    /// `selectRange(_:)`) since a marker's relevance is tied to the visible
+    /// window.
+    @Published private(set) var markers: [TrendsMarkerDTO] = []
+
     /// The date the user is currently scrubbing, if any — `nil` when not
     /// touching the chart. Lives here rather than local `@State` in the view
     /// so a range-pill switch or a fresh load can clear stale scrub state in
@@ -76,7 +90,7 @@ final class MetricDetailViewModel: ObservableObject {
 
     var spec: MetricSpec? { MetricCatalog.spec(for: metricKey) }
 
-    private let apiClient: TrendsAPIProviding
+    private let apiClient: MetricDetailAPIProviding
 
     /// Bumped at the top of every `load()` call; a response is only applied
     /// if its generation is still the newest one in flight. Guards against a
@@ -85,7 +99,7 @@ final class MetricDetailViewModel: ObservableObject {
     /// stale data — the same hazard `TrendsViewModel.load()` guards against.
     private var loadGeneration = 0
 
-    init(metricKey: String, apiClient: TrendsAPIProviding = APIClient.shared) {
+    init(metricKey: String, apiClient: MetricDetailAPIProviding = APIClient.shared) {
         self.metricKey = metricKey
         self.apiClient = apiClient
     }
@@ -127,6 +141,14 @@ final class MetricDetailViewModel: ObservableObject {
             relatedLoadStarted = true
             Task { await loadRelatedSeries() }
         }
+        if !driversLoadStarted {
+            driversLoadStarted = true
+            Task { await loadDrivers() }
+        }
+        // Unlike the two gates above, markers are tied to `range` and are
+        // reloaded on every `load()` call — including the one `selectRange`
+        // triggers on a range-pill tap.
+        Task { await loadMarkers() }
     }
 
     /// Range-pill tap. Clears any in-progress scrub — the old scrub position
@@ -177,6 +199,32 @@ final class MetricDetailViewModel: ObservableObject {
             relatedSeries = built
         } catch {
             // Supplementary section — swallow and stay omitted.
+        }
+    }
+
+    /// "What moves your HRV" — silent on failure, no placeholder, same
+    /// treatment as `loadDistributionWindow()`/`loadRelatedSeries()`. Fetched
+    /// once, independent of `range`: the engine's findings aren't scoped to
+    /// the detail's selected window.
+    private func loadDrivers() async {
+        do {
+            let response = try await apiClient.fetchTrendsDrivers(metric: metricKey)
+            drivers = response.drivers
+        } catch {
+            // Supplementary section — swallow and stay omitted.
+        }
+    }
+
+    /// Workout markers for the chart floor, scoped to the CURRENT `range` —
+    /// reloaded by every `load()` call (see its doc comment), silent on
+    /// failure like the other supplementary fetches above.
+    private func loadMarkers() async {
+        do {
+            let response = try await apiClient.fetchTrendsMarkers(days: range.rawValue)
+            markers = response.markers
+        } catch {
+            // Supplementary section — swallow and stay with whatever markers
+            // (possibly none) are already loaded.
         }
     }
 }
