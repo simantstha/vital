@@ -18,17 +18,22 @@ enum TrendsWeightCardLogic {
         let tone: PillTone
     }
 
+    /// Cached DateFormatter for parsing "yyyy-MM-dd" format dates.
+    /// Uses en_US_POSIX locale and UTC timezone for consistent parsing.
+    private static let chartDayFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(abbreviation: "UTC")
+        return f
+    }()
+
     /// Parses a date string in "yyyy-MM-dd" format or longer ISO timestamp.
     /// For longer timestamps (e.g., "2026-09-01T10:30:00Z"), takes the first 10 characters.
-    /// Uses en_US_POSIX locale and UTC for consistent parsing.
     /// Returns `nil` if parsing fails.
     static func chartDate(_ isoDay: String) -> Date? {
         let dayString = isoDay.count > 10 ? String(isoDay.prefix(10)) : isoDay
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone(abbreviation: "UTC")
-        return formatter.date(from: dayString)
+        return chartDayFormatter.date(from: dayString)
     }
 
     /// "↓ 0.6 kg/wk" tinted `.positive` (weight_loss: a loss is progress
@@ -139,21 +144,16 @@ struct TrendsWeightCard: View {
     /// decorative context for the trend line, not a second trend.
     private var rawEntryPoints: [(day: String, date: Date?, value: Double)] {
         guard let firstDayDate = sparklinePoints.first?.date else { return [] }
-        return entries
-            .filter { entry in
-                guard let entryDate = Self.chartDate(entry.date) else { return false }
-                return entryDate >= firstDayDate
-            }
-            .sorted { entry1, entry2 in
-                guard let date1 = Self.chartDate(entry1.date),
-                      let date2 = Self.chartDate(entry2.date) else { return false }
-                return date1 < date2
-            }
-            .map { entry in
-                let value = system == .metric ? entry.weight : UnitConvert.kgToLb(entry.weight)
-                let date = Self.chartDate(entry.date)
-                return (entry.date, date, value)
-            }
+        // Parse each entry once, then filter and sort
+        let parsedEntries = entries.compactMap { entry -> (day: String, date: Date, value: Double)? in
+            guard let date = Self.chartDate(entry.date) else { return nil }
+            let value = system == .metric ? entry.weight : UnitConvert.kgToLb(entry.weight)
+            return (entry.date, date, value)
+        }
+        return parsedEntries
+            .filter { $0.date >= firstDayDate }
+            .sorted { $0.date < $1.date }
+            .map { ($0.day, $0.date, $0.value) }
     }
 
     private var sparklineMinSpan: Double { system == .metric ? 1.0 : 2.0 }
@@ -272,8 +272,15 @@ struct TrendsWeightCard: View {
     @State private var lineRevealFraction: CGFloat = 1
 
     private func chart(domain: ClosedRange<Double>) -> some View {
-        let firstDate = sparklinePoints.first?.date ?? Date()
-        let lastDate = sparklinePoints.last?.date ?? Date()
+        // Extract all parsed dates to compute safe x-domain bounds.
+        // Using compactMap avoids the crash risk of fallback Date() values.
+        let dates = sparklinePoints.compactMap(\.date)
+        let xDomain: ClosedRange<Date> = if let lo = dates.min(), let hi = dates.max() {
+            lo...hi
+        } else {
+            let now = Date()
+            now...now // Fallback: a valid range with equal bounds
+        }
 
         return Chart {
             ForEach(Array(rawEntryPoints.enumerated()), id: \.offset) { _, point in
@@ -306,7 +313,7 @@ struct TrendsWeightCard: View {
             }
         }
         .chartYScale(domain: domain)
-        .chartXScale(domain: firstDate...lastDate)
+        .chartXScale(domain: xDomain)
         .chartLegend(.hidden)
         // Purely decorative — `trendHeadline`/`ratePill`/`sublineText` above
         // already carry the information a VoiceOver user needs (matches
