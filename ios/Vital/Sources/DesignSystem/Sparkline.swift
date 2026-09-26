@@ -16,30 +16,74 @@ struct Sparkline: View {
     var style: SparklineStyle = .line
     var tint: Color = Theme.Colors.accentContent
     var height: CGFloat = 40
+    /// The "your normal" band (mean30 ± sd30) to shade behind the series,
+    /// in the same display units as `values`. Both nil (the default) omits
+    /// the band entirely — every existing call site is unaffected.
+    var bandLower: Double? = nil
+    var bandUpper: Double? = nil
+    /// Draws a small filled dot on the latest non-nil value when true.
+    var showsLatestDot: Bool = false
 
     private var nonNilCount: Int {
         values.reduce(0) { $0 + ($1 == nil ? 0 : 1) }
     }
 
     /// Value range padded ~12% so a near-flat series doesn't fill the frame
-    /// edge to edge, matching `TrendLineChart`'s padding approach.
+    /// edge to edge, matching `TrendLineChart`'s padding approach. Widened
+    /// to include the band (when present) so a normal range that sits
+    /// outside the plotted series' own min/max is never clipped.
     private var scale: (lo: Double, hi: Double) {
-        let available = values.compactMap { $0 }
+        var available = values.compactMap { $0 }
+        if let bandLower { available.append(bandLower) }
+        if let bandUpper { available.append(bandUpper) }
         guard let lo = available.min(), let hi = available.max() else { return (0, 1) }
         guard hi > lo else { return (lo - 1, hi + 1) }
         let pad = (hi - lo) * 0.12
         return (lo - pad, hi + pad)
     }
 
+    private func yPosition(_ value: Double, size: CGSize) -> CGFloat {
+        let (lo, hi) = scale
+        guard hi > lo else { return size.height / 2 }
+        return size.height - CGFloat((value - lo) / (hi - lo)) * size.height
+    }
+
     var body: some View {
         Canvas { context, size in
             guard nonNilCount >= 3, size.width > 0, size.height > 0 else { return }
+            drawBand(context: context, size: size)
             switch style {
             case .line: drawLine(context: context, size: size)
             case .bar:  drawBar(context: context, size: size)
             }
+            if showsLatestDot {
+                drawLatestDot(context: context, size: size)
+            }
         }
         .frame(height: height)
+    }
+
+    // MARK: - Normal band
+
+    private func drawBand(context: GraphicsContext, size: CGSize) {
+        guard let bandLower, let bandUpper else { return }
+        let top = yPosition(bandUpper, size: size)
+        let bottom = yPosition(bandLower, size: size)
+        guard bottom > top else { return }
+        let rect = CGRect(x: 0, y: top, width: size.width, height: bottom - top)
+        context.fill(Path(rect), with: .color(tint.opacity(0.12)))
+    }
+
+    // MARK: - Latest-point dot
+
+    private func drawLatestDot(context: GraphicsContext, size: CGSize) {
+        guard let lastIndex = values.lastIndex(where: { $0 != nil }), let value = values[lastIndex] else { return }
+        let count = values.count
+        let x = (CGFloat(lastIndex) + 0.5) / CGFloat(max(count, 1)) * size.width
+        let y = yPosition(value, size: size)
+        let radius: CGFloat = 2.75
+        let dot = Path(ellipseIn: CGRect(x: x - radius, y: y - radius, width: radius * 2, height: radius * 2))
+        context.fill(dot, with: .color(tint))
     }
 
     // MARK: - Line style

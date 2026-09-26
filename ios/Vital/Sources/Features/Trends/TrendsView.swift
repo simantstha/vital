@@ -7,6 +7,9 @@ struct TrendsView: View {
     /// tile taps are one of the three user-committed actions the motion
     /// policy allows a haptic on (never data arriving from `vm.load()`).
     @State private var tileTapTick = false
+    /// Same idiom, for the header's 7D/30D/90D period switch.
+    @State private var periodTapTick = false
+    @ObservedObject private var unitPref = UnitPreference.shared
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Links each tile's `.matchedTransitionSource` to the destination's
@@ -19,11 +22,7 @@ struct TrendsView: View {
     /// already tight at the default text size (see `MetricTileView`'s chip
     /// copy note), and AX1–AX5 text simply can't fit two columns without
     /// clipping or crushing the sparkline/value row.
-    private var gridColumns: [GridItem] {
-        dynamicTypeSize.isAccessibilitySize
-            ? [GridItem(.flexible())]
-            : [GridItem(.flexible(), spacing: Theme.Spacing.md), GridItem(.flexible())]
-    }
+    private var isSingleColumn: Bool { dynamicTypeSize.isAccessibilitySize }
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -36,6 +35,16 @@ struct TrendsView: View {
 
                         if vm.calibration?.status == "calibrating" {
                             calibratingBanner
+                        }
+
+                        // "What moved" (customer-panel finding, Trends
+                        // phase-1) sits above EVERYTHING else, including the
+                        // weight_loss weight card below — it's the single
+                        // "here's what changed" answer the whole screen
+                        // leads with. Hidden entirely (no empty card, no
+                        // header) whenever nothing is `.above`/`.below`.
+                        if !vm.whatMovedRows.isEmpty {
+                            whatMovedSection
                         }
 
                         // Weight_loss's lead card (customer-panel finding,
@@ -124,32 +133,47 @@ struct TrendsView: View {
             await vm.loadGoalContext()
         }
         .sensoryFeedback(Theme.Haptics.selection, trigger: tileTapTick)
+        .sensoryFeedback(Theme.Haptics.selection, trigger: periodTapTick)
     }
 }
 
-// MARK: - Header + calibrating banner
+// MARK: - Header + period switch + calibrating banner
 
 private extension TrendsView {
 
     var headerSection: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-            Text("Trends")
-                .screenTitleStyle()
-                .foregroundStyle(Theme.Colors.textPrimary)
-            Text(subtitle)
-                .font(.system(size: 15))
-                .foregroundStyle(Theme.Colors.textSecondary)
+            HStack(alignment: .firstTextBaseline) {
+                Text("Trends")
+                    .screenTitleStyle()
+                    .foregroundStyle(Theme.Colors.textPrimary)
+                Spacer()
+                PeriodSwitcher(period: $vm.period) { periodTapTick.toggle() }
+            }
+            subtitleText
         }
     }
 
-    /// Omits the metric count while the grid load has failed — the count
-    /// comes from `vm.loaded`, which is empty on a failed load, so showing
-    /// "0 metrics tracked" next to the error card would assert something we
-    /// don't actually know (the count isn't 0, we just couldn't fetch it).
-    var subtitle: String {
-        guard vm.errorMessage == nil else { return "Last 30 days" }
-        let count = visibleMetricCount
-        return "Last 30 days · \(count) metric\(count == 1 ? "" : "s") tracked"
+    /// Replaces the old static "Last 30 days · N metrics tracked" with a
+    /// one-line, data-driven summary (`TrendsHeadline`) — omitted entirely
+    /// while the grid load has failed, same as the old subtitle, since the
+    /// count/verdict data it needs comes from `vm.loaded`, which is empty on
+    /// a failed load.
+    @ViewBuilder
+    var subtitleText: some View {
+        if vm.errorMessage != nil {
+            Text("Last \(vm.period.days) days")
+                .font(.system(size: 15))
+                .foregroundStyle(Theme.Colors.textSecondary)
+        } else {
+            let bold = Text(vm.headline.boldText)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(Theme.Colors.textPrimary)
+            let rest = Text(vm.headline.trailingText)
+                .font(.system(size: 15))
+                .foregroundStyle(Theme.Colors.textSecondary)
+            (bold + rest)
+        }
     }
 
     var calibratingBanner: some View {
@@ -172,14 +196,94 @@ private extension TrendsView {
     }
 }
 
-// MARK: - Grid index
+/// The header's 7D/30D/90D period switch: a native-feeling segmented
+/// control with a sliding selected capsule (`matchedGeometryEffect`).
+/// Reduce Motion substitutes a plain, animation-free swap — no slide, no
+/// fade — rather than a large moving shape.
+private struct PeriodSwitcher: View {
+    @Binding var period: TrendsPeriod
+    var onChange: () -> Void
+    @Namespace private var capsuleNamespace
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(TrendsPeriod.allCases) { option in
+                let isOn = option == period
+                Text(option.label)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(isOn ? Theme.Colors.textPrimary : Theme.Colors.textSecondary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background {
+                        if isOn {
+                            Capsule()
+                                .fill(Theme.Colors.switcherThumb)
+                                // Subtle in light mode only — `cardShadow` is
+                                // `.clear` in dark, where a shadow wouldn't
+                                // read against the dark canvas anyway (same
+                                // pattern as `VitalCard`).
+                                .shadow(color: Theme.Colors.cardShadow, radius: 3, y: 1)
+                                .matchedGeometryEffect(id: "selectedPeriod", in: capsuleNamespace)
+                        }
+                    }
+                    .contentShape(Capsule())
+                    .onTapGesture {
+                        guard period != option else { return }
+                        period = option
+                        onChange()
+                    }
+                    .accessibilityAddTraits(isOn ? [.isButton, .isSelected] : .isButton)
+                    .accessibilityLabel(option.label)
+            }
+        }
+        .padding(3)
+        .background(Capsule().fill(Theme.Colors.glassFill))
+        .animation(reduceMotion ? nil : Theme.Motion.snap, value: period)
+    }
+}
+
+// MARK: - What moved
 
 private extension TrendsView {
 
-    var sections: [TrendsSection] {
-        let built = TrendsIndexSections.build(loaded: vm.loaded, today: Date())
-        return TrendsGoalOrdering.sections(for: vm.goal, available: built)
+    var whatMovedSection: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("What moved")
+                    .font(.system(size: 20, weight: .bold))
+                    .foregroundStyle(Theme.Colors.textPrimary)
+                Spacer()
+                Text("vs your normal")
+                    .font(.system(size: 13))
+                    .foregroundStyle(Theme.Colors.textSecondary)
+            }
+
+            VitalCard(padding: Theme.Spacing.md, cornerRadius: Theme.Radius.lg) {
+                VStack(spacing: 0) {
+                    ForEach(Array(vm.whatMovedRows.enumerated()), id: \.element.key) { index, row in
+                        entrance(index: index) {
+                            Button {
+                                tileTapTick.toggle()
+                                path.append(row.key)
+                            } label: {
+                                WhatMovedRowView(row: row, unitSystem: unitPref.current)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        if index < vm.whatMovedRows.count - 1 {
+                            Divider().overlay(Theme.Colors.glassBorder)
+                        }
+                    }
+                }
+            }
+        }
     }
+}
+
+// MARK: - Grid index
+
+private extension TrendsView {
 
     /// Weight_loss's lead card (customer-panel finding, 2026-09-23) — `nil`
     /// until `vm.loadGoalContext()` resolves both the goal and the
@@ -205,10 +309,6 @@ private extension TrendsView {
         )
     }
 
-    var visibleMetricCount: Int {
-        sections.reduce(0) { $0 + $1.tiles.count }
-    }
-
     @ViewBuilder
     var gridBody: some View {
         if vm.isLoading && vm.loaded.isEmpty {
@@ -220,7 +320,7 @@ private extension TrendsView {
             // copy means "you have no data", which is a different, false
             // statement when the truth is "we couldn't load your data".
             EmptyView()
-        } else if sections.isEmpty {
+        } else if vm.sections.isEmpty {
             EmptyStateView(
                 icon: "chart.xyaxis.line",
                 message: "No trends yet — check back once your data syncs.",
@@ -229,20 +329,10 @@ private extension TrendsView {
             .motionTransition(.fade)
         } else {
             VStack(alignment: .leading, spacing: Theme.Spacing.xl) {
-                ForEach(sections, id: \.group.rawValue) { section in
+                ForEach(vm.sections, id: \.group.rawValue) { section in
                     VStack(alignment: .leading, spacing: Theme.Spacing.md) {
                         sectionHeaderView(section.group)
-                        LazyVGrid(columns: gridColumns, spacing: Theme.Spacing.md) {
-                            // No `.staggeredAppear` here — this is a
-                            // `LazyVGrid`, which discards and re-creates
-                            // offscreen cells (and their `@State`) as they
-                            // scroll in and out, so a staggered entrance
-                            // would replay every time a tile scrolls back
-                            // into view instead of once on first load.
-                            ForEach(section.tiles, id: \.key) { tile in
-                                tileButton(tile)
-                            }
-                        }
+                        sectionTilesView(section.tiles)
                     }
                 }
             }
@@ -251,7 +341,10 @@ private extension TrendsView {
     }
 
     var loadingGrid: some View {
-        LazyVGrid(columns: gridColumns, spacing: Theme.Spacing.md) {
+        let columns = isSingleColumn
+            ? [GridItem(.flexible())]
+            : [GridItem(.flexible(), spacing: Theme.Spacing.md), GridItem(.flexible())]
+        return LazyVGrid(columns: columns, spacing: Theme.Spacing.md) {
             ForEach(0..<6, id: \.self) { _ in SkeletonView() }
         }
     }
@@ -266,12 +359,13 @@ private extension TrendsView {
         }
     }
 
+    /// Sentence case, 20pt bold, no letter tracking — Trends phase-1 drops
+    /// the old uppercase-tracked treatment. The WHOOP source `Chip` stays.
     func sectionHeaderView(_ group: MetricGroup) -> some View {
         HStack(spacing: Theme.Spacing.sm) {
-            Text(sectionTitle(group).uppercased())
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(Theme.Colors.textSecondary)
-                .tracking(1.3)
+            Text(sectionTitle(group))
+                .font(.system(size: 20, weight: .bold))
+                .foregroundStyle(Theme.Colors.textPrimary)
             // WHOOP metrics get their own source badge — hrv_sdnn/whoop_hrv_rmssd
             // are different measurements on different scales from different
             // devices, and conflating them has already burned this codebase once.
@@ -279,6 +373,39 @@ private extension TrendsView {
                 Chip(text: "WHOOP")
             }
             Spacer()
+        }
+    }
+
+    /// Orphan tile: `LazyVGrid` can't span a cell across columns, so a
+    /// section with an odd tile count is laid out as a `VStack` of rows
+    /// instead — a full `HStack` pair per row, with a lone last tile given
+    /// the full row width rather than sitting half-empty next to a gap.
+    /// Single column (unchanged) at accessibility Dynamic Type sizes.
+    @ViewBuilder
+    func sectionTilesView(_ tiles: [TrendsTile]) -> some View {
+        if isSingleColumn {
+            VStack(spacing: Theme.Spacing.md) {
+                ForEach(Array(tiles.enumerated()), id: \.element.key) { index, tile in
+                    entrance(index: index) { tileButton(tile) }
+                }
+            }
+        } else {
+            VStack(spacing: Theme.Spacing.md) {
+                ForEach(Array(TrendsRowGrouping.pairedRows(tiles).enumerated()), id: \.offset) { rowIndex, row in
+                    HStack(spacing: Theme.Spacing.md) {
+                        ForEach(Array(row.enumerated()), id: \.element.key) { columnIndex, tile in
+                            entrance(index: rowIndex * 2 + columnIndex) {
+                                tileButton(tile)
+                                    .frame(maxWidth: .infinity)
+                            }
+                        }
+                        // A lone last tile spans the row alone (no trailing
+                        // empty column) — the `HStack` above already sizes
+                        // it full-width via `.frame(maxWidth: .infinity)`,
+                        // so nothing further is needed here.
+                    }
+                }
+            }
         }
     }
 
@@ -291,5 +418,22 @@ private extension TrendsView {
         }
         .buttonStyle(TilePressStyle())
         .matchedTransitionSource(id: tile.key, in: trendsZoomNamespace)
+    }
+
+    /// Trends-phase-1 entrance: fade in + rise 8pt, staggered 40ms per row,
+    /// on the FIRST successful load only (`vm.hasAnimatedIn`). A later
+    /// period switch or pull-to-refresh renders the same rows without
+    /// replaying it — see `TrendsViewModel.hasAnimatedIn`'s doc comment for
+    /// why that flag lives on the view model rather than a per-cell
+    /// `@State` (which a `LazyVGrid` would have reset on scroll; this
+    /// section is a plain `VStack` precisely so identity — and this
+    /// `@State`-backed modifier — survives).
+    @ViewBuilder
+    func entrance<Content: View>(index: Int, @ViewBuilder content: () -> Content) -> some View {
+        if vm.hasAnimatedIn {
+            content()
+        } else {
+            content().staggeredAppear(index: index)
+        }
     }
 }
