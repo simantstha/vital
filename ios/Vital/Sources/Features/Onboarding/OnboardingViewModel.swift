@@ -126,9 +126,10 @@ final class OnboardingViewModel: ObservableObject {
     /// transition before it's removed, or SwiftUI animates it out with the
     /// stale one — so the step change waits one main-queue turn in that case.
     private func move(to target: Step, direction: StepDirection) {
-        let apply = { [weak self] in
+        let apply: () -> Void = { [weak self] in
+            guard let self else { return }
             withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) {
-                self?.step = target
+                self.step = target
             }
         }
         if stepDirection == direction {
