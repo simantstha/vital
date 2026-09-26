@@ -3,13 +3,16 @@ import test from 'node:test';
 import {
   clampPer100g,
   estimateMeal,
+  estimatorItemsMatchTotals,
   groundItem,
   namesOverlap,
   parseReportToolInput,
   pickHistoryPer100g,
+  validateEstimatorItems,
   MAX_KCAL_PER_100G,
   MIN_KCAL_PER_100G,
   type EstimatorDeps,
+  type GroundedItem,
   type GroundingMatch,
   type ParsedItem,
 } from './estimator';
@@ -276,4 +279,104 @@ test('estimateMeal falls back per-item to the model estimate when both lookups m
   assert.equal(chicken.source, 'usda');
   assert.equal(dal.source, 'model');
   assert.equal(dal.kcal, 290); // 116 * 2.5
+});
+
+// ─── validateEstimatorItems ─────────────────────────────────────────────────
+
+function groundedItem(overrides: Partial<GroundedItem> = {}): GroundedItem {
+  return {
+    food: 'white rice, cooked',
+    grams: 300,
+    kcal: 390,
+    c: 84,
+    p: 8,
+    f: 1,
+    source: 'usda',
+    confidence: 'high',
+    portionNote: 'full dinner plate',
+    ...overrides,
+  };
+}
+
+test('validateEstimatorItems accepts a well-formed array', () => {
+  const items = validateEstimatorItems([groundedItem(), groundedItem({ food: 'chicken breast', grams: 150, kcal: 250, c: 0, p: 46, f: 6 })]);
+  assert.ok(items);
+  assert.equal(items!.length, 2);
+  assert.equal(items![0].food, 'white rice, cooked');
+});
+
+test('validateEstimatorItems rejects a non-array', () => {
+  assert.equal(validateEstimatorItems('not an array'), null);
+  assert.equal(validateEstimatorItems(undefined), null);
+  assert.equal(validateEstimatorItems(null), null);
+});
+
+test('validateEstimatorItems rejects an empty array', () => {
+  assert.equal(validateEstimatorItems([]), null);
+});
+
+test('validateEstimatorItems rejects more than 20 items', () => {
+  const many = Array.from({ length: 21 }, () => groundedItem());
+  assert.equal(validateEstimatorItems(many), null);
+});
+
+test('validateEstimatorItems rejects a missing/empty food name', () => {
+  assert.equal(validateEstimatorItems([groundedItem({ food: '' })]), null);
+  assert.equal(validateEstimatorItems([{ ...groundedItem(), food: undefined }]), null);
+});
+
+test('validateEstimatorItems rejects non-positive or absurd grams', () => {
+  assert.equal(validateEstimatorItems([groundedItem({ grams: 0 })]), null);
+  assert.equal(validateEstimatorItems([groundedItem({ grams: -50 })]), null);
+  assert.equal(validateEstimatorItems([groundedItem({ grams: 10000 })]), null);
+});
+
+test('validateEstimatorItems rejects negative or non-finite macros', () => {
+  assert.equal(validateEstimatorItems([groundedItem({ kcal: -1 })]), null);
+  assert.equal(validateEstimatorItems([groundedItem({ c: NaN })]), null);
+});
+
+test('validateEstimatorItems rejects a kcal implausible for its grams', () => {
+  // 900 kcal/100g is the absolute ceiling (pure oil); 300g at that density
+  // tops out at 2700 kcal, so 5000 is a clear tamper/garbage value.
+  assert.equal(validateEstimatorItems([groundedItem({ grams: 300, kcal: 5000 })]), null);
+});
+
+test('validateEstimatorItems rejects a bad confidence or source', () => {
+  assert.equal(validateEstimatorItems([{ ...groundedItem(), confidence: 'certain' }]), null);
+  assert.equal(validateEstimatorItems([{ ...groundedItem(), source: 'made_up' }]), null);
+});
+
+test('validateEstimatorItems rejects a non-object entry', () => {
+  assert.equal(validateEstimatorItems([null]), null);
+  assert.equal(validateEstimatorItems(['banana']), null);
+});
+
+// ─── estimatorItemsMatchTotals ──────────────────────────────────────────────
+
+test('estimatorItemsMatchTotals is true for an exact match', () => {
+  const items = [groundedItem({ kcal: 200, c: 40, p: 5, f: 2 }), groundedItem({ kcal: 100, c: 10, p: 15, f: 3 })];
+  assert.equal(estimatorItemsMatchTotals(items, { kcal: 300, c: 50, p: 20, f: 5 }), true);
+});
+
+test('estimatorItemsMatchTotals is true within 5% tolerance', () => {
+  const items = [groundedItem({ kcal: 300, c: 50, p: 20, f: 5 })];
+  // 3% over on kcal, exact elsewhere — still within tolerance.
+  assert.equal(estimatorItemsMatchTotals(items, { kcal: 309, c: 50, p: 20, f: 5 }), true);
+});
+
+test('estimatorItemsMatchTotals is false when the user edited macros beyond 5%', () => {
+  const items = [groundedItem({ kcal: 300, c: 50, p: 20, f: 5 })];
+  // User dialed kcal down by 20% in the review step.
+  assert.equal(estimatorItemsMatchTotals(items, { kcal: 240, c: 50, p: 20, f: 5 }), false);
+});
+
+test('estimatorItemsMatchTotals is false when only one macro drifts beyond tolerance', () => {
+  const items = [groundedItem({ kcal: 300, c: 50, p: 20, f: 5 })];
+  assert.equal(estimatorItemsMatchTotals(items, { kcal: 300, c: 50, p: 20, f: 20 }), false);
+});
+
+test('estimatorItemsMatchTotals treats both-zero as a match (e.g. fat)', () => {
+  const items = [groundedItem({ kcal: 100, c: 25, p: 0, f: 0 })];
+  assert.equal(estimatorItemsMatchTotals(items, { kcal: 100, c: 25, p: 0, f: 0 }), true);
 });

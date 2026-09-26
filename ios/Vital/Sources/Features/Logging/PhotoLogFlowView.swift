@@ -59,6 +59,12 @@ struct PhotoLogFlowView: View {
         let c: Double
         let p: Double
         let f: Double
+        /// The photo analysis's per-item breakdown, when available — `nil`
+        /// for a genuine analysis/log failure. Threaded through to
+        /// `LogMealPrefill` below so the confirm-card fallback can still
+        /// save it. Declared last with a default so existing positional
+        /// call sites keep compiling.
+        let estimatorItems: [PhotoEstimatorItem]? = nil
     }
 
     var body: some View {
@@ -96,7 +102,8 @@ struct PhotoLogFlowView: View {
         .fullScreenCover(item: $fallbackPayload) { payload in
             LogMealView(initialMethod: .photo, prefill: LogMealPrefill(
                 image: payload.image, name: payload.name,
-                kcal: payload.kcal, c: payload.c, p: payload.p, f: payload.f
+                kcal: payload.kcal, c: payload.c, p: payload.p, f: payload.f,
+                estimatorItems: payload.estimatorItems
             ))
         }
         .onChange(of: fallbackPayload?.id) { oldValue, newValue in
@@ -204,7 +211,8 @@ struct PhotoLogFlowView: View {
         guard PhotoLogDecision.shouldAutoLog(name: result.name, kcal: result.kcal) else {
             fallbackPayload = FallbackPayload(
                 image: image, name: result.name,
-                kcal: result.kcal, c: result.c, p: result.p, f: result.f
+                kcal: result.kcal, c: result.c, p: result.p, f: result.f,
+                estimatorItems: result.estimatorItems
             )
             return
         }
@@ -212,7 +220,7 @@ struct PhotoLogFlowView: View {
         let thumb = Self.thumbnailBase64(image)
         let ok = await dietVM.logPhotoResult(
             name: result.name, kcal: result.kcal, c: result.c, p: result.p, f: result.f,
-            imageThumb: thumb
+            imageThumb: thumb, estimatorItems: result.estimatorItems
         )
         if ok {
             loggedTrigger.toggle()
@@ -222,7 +230,8 @@ struct PhotoLogFlowView: View {
             // analysis failure, pre-filled with what we already know.
             fallbackPayload = FallbackPayload(
                 image: image, name: result.name,
-                kcal: result.kcal, c: result.c, p: result.p, f: result.f
+                kcal: result.kcal, c: result.c, p: result.p, f: result.f,
+                estimatorItems: result.estimatorItems
             )
         }
     }

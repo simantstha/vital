@@ -5,7 +5,8 @@
  *
  * POST
  * Body: { name: string, kcal: number, c: number, p: number, f: number, source: string,
- *         imageThumb?: string, slot?: 'breakfast'|'lunch'|'snacks'|'dinner', reaction?: boolean }
+ *         imageThumb?: string, slot?: 'breakfast'|'lunch'|'snacks'|'dinner', reaction?: boolean,
+ *         estimatorItems?: GroundedItem[] }
  *   — imageThumb: optional small base64 JPEG (no data-URL prefix)
  *   — slot: optional meal-slot tag (redesign-v3 diet sheet); omitted by older
  *     call sites (LogMealViewModel's photo/barcode/search flows), stored inside
@@ -15,6 +16,23 @@
  *     immediately. Callers that never display `coachReaction` (the Diet
  *     sheet's "log again"/custom-log flows) should pass this. Omitted →
  *     unchanged behavior, so older app builds keep getting a reaction.
+ *   — estimatorItems: optional per-item grounded breakdown, round-tripped
+ *     unchanged from POST /api/nutrition/photo's additive `estimatorItems`
+ *     field (the iOS photo-log flow decodes it and passes it straight
+ *     through here on save). Validated for shape/bounds via
+ *     lib/nutrition/estimator.ts's `validateEstimatorItems` — a malformed
+ *     array is a 400, same as a bad flat macro field. A well-shaped array is
+ *     stored (as `payload.estimatorItems` + `payload.totalGrams`, exactly
+ *     the shape lib/nutrition/quickLog.ts's `insertGroundedMeal` writes for
+ *     the text-log path) ONLY when its own summed macros are still within 5%
+ *     of this request's flat `kcal/c/p/f` (`estimatorItemsMatchTotals`) — if
+ *     the user edited the macros in the review step enough to disagree with
+ *     the item breakdown, the breakdown is stale and is silently dropped
+ *     (the flat log still succeeds) rather than stored contradicting the
+ *     totals it would sit next to. This is what lets a photo-logged meal
+ *     feed POST /api/meals/scale's per-item mode and
+ *     lib/nutrition/estimator.ts's history grounding, same as a
+ *     text/coach-logged estimate.
  * Response: { ok: true, eventId: string, coachReaction: string }
  *   — coachReaction is '' when `reaction: false` was passed, or on a
  *     non-fatal context/Claude error.
@@ -64,6 +82,7 @@ import { eq, and } from 'drizzle-orm';
 import { getUserIdFromRequest } from '@/lib/auth';
 import { assembleContext } from '@/lib/brain/context';
 import { localDayKey, pickTimeZone } from '@/lib/localDay';
+import { validateEstimatorItems, estimatorItemsMatchTotals } from '@/lib/nutrition/estimator';
 
 export const dynamic = 'force-dynamic';
 
@@ -83,6 +102,7 @@ interface LogMealBody {
   imageThumb?: string;
   slot?: string;
   reaction?: boolean;
+  estimatorItems?: unknown;
 }
 
 function isValidBody(b: unknown): b is LogMealBody {
@@ -98,6 +118,9 @@ function isValidBody(b: unknown): b is LogMealBody {
     (o.imageThumb === undefined || typeof o.imageThumb === 'string') &&
     (o.slot === undefined || typeof o.slot === 'string') &&
     (o.reaction === undefined || typeof o.reaction === 'boolean')
+    // o.estimatorItems shape/bounds are validated separately (below, via
+    // validateEstimatorItems) so a bad array gets its own clear 400 message
+    // rather than the generic one this function's callers return.
   );
 }
 
@@ -134,7 +157,24 @@ export async function POST(request: Request): Promise<NextResponse> {
     );
   }
 
-  const { name, kcal, c, p, f, source, imageThumb, slot, reaction } = body;
+  const { name, kcal, c, p, f, source, imageThumb, slot, reaction, estimatorItems: rawEstimatorItems } = body;
+
+  // ── Validate estimatorItems shape/bounds (optional) ──────────────────────
+  // A malformed array (wrong shape, out-of-bounds values) is rejected
+  // outright — see this route's doc comment. A well-shaped array whose
+  // totals disagree with the flat macros above is NOT rejected here; it's
+  // silently dropped further down (after totals are known to be final) so a
+  // user-edited macro correction never fails the whole log.
+  let validatedEstimatorItems: ReturnType<typeof validateEstimatorItems> = null;
+  if (rawEstimatorItems !== undefined) {
+    validatedEstimatorItems = validateEstimatorItems(rawEstimatorItems);
+    if (validatedEstimatorItems === null) {
+      return NextResponse.json(
+        { error: 'estimatorItems must be a non-empty array of valid grounded items.' },
+        { status: 400 },
+      );
+    }
+  }
 
   // Opt-out for callers that never display the coach reaction (e.g. the
   // Diet sheet's "log again"/custom-log flows) — skips assembleContext + the
@@ -163,6 +203,19 @@ export async function POST(request: Request): Promise<NextResponse> {
 
   // ── 2. Insert meal_logged event ────────────────────────────────────────────
 
+  // Only keep a validated estimatorItems array when its own summed macros
+  // still agree (within 5%) with the flat kcal/c/p/f above — see this
+  // route's doc comment. A mismatch means the user edited the macros in the
+  // review step; the item breakdown is dropped rather than stored
+  // contradicting the totals it would sit next to.
+  const estimatorItemsForPayload =
+    validatedEstimatorItems && estimatorItemsMatchTotals(validatedEstimatorItems, { kcal, c, p, f })
+      ? validatedEstimatorItems
+      : null;
+  const totalGrams = estimatorItemsForPayload
+    ? estimatorItemsForPayload.reduce((sum, it) => sum + it.grams, 0)
+    : null;
+
   let eventId: string;
   try {
     const [row] = await db
@@ -175,6 +228,16 @@ export async function POST(request: Request): Promise<NextResponse> {
           name, kcal, c, p, f, source,
           ...(imageThumb ? { imageThumb } : {}),
           ...(slot ? { slot } : {}),
+          // Additive — same shape lib/nutrition/quickLog.ts's
+          // insertGroundedMeal writes for the text-log path (see route doc
+          // comment): payload.items stays a preformatted "<grams>g <food>, …"
+          // string for anything already reading it as such (e.g.
+          // POST /api/meals/scale's per-item mode formatting).
+          ...(estimatorItemsForPayload ? {
+            estimatorItems: estimatorItemsForPayload,
+            totalGrams,
+            items: estimatorItemsForPayload.map((it) => `${it.grams}g ${it.food}`).join(', '),
+          } : {}),
         },
         source,
       })
