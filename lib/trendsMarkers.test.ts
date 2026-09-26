@@ -1,10 +1,21 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { bucketWorkoutMarkers, type RawEvent } from './trendsMarkers';
+import {
+  bucketWorkoutMarkers,
+  markersFromDailyMetrics,
+  mergeWorkoutMarkers,
+  type DailyMetricWorkoutRow,
+  type Marker,
+  type RawEvent,
+} from './trendsMarkers';
 
 function event(timestamp: string, payload: unknown = {}): RawEvent {
   return { timestamp: new Date(timestamp), payload };
+}
+
+function dmRow(date: string, payload: unknown, value?: number): DailyMetricWorkoutRow {
+  return { date, value: value ?? (Array.isArray(payload) ? payload.length : 0), payload };
 }
 
 test('bucketWorkoutMarkers: single workout in a day labels its type', () => {
@@ -79,4 +90,68 @@ test('bucketWorkoutMarkers: two events that are the same local day but different
     'Asia/Tokyo',
   );
   assert.deepEqual(markers, [{ date: '2026-09-02', kind: 'workout', label: '2 workouts', count: 2 }]);
+});
+
+// ─── markersFromDailyMetrics: the HealthKit-derived 'workouts' rows ────────
+
+test('markersFromDailyMetrics: single workout labels its type from the payload', () => {
+  const markers = markersFromDailyMetrics([
+    dmRow('2026-09-01', [{ hkUuid: 'a', type: 'running', durationMin: 30 }]),
+  ]);
+  assert.deepEqual(markers, [{ date: '2026-09-01', kind: 'workout', label: 'Running', count: 1 }]);
+});
+
+test('markersFromDailyMetrics: several workouts in a day use a count label', () => {
+  const markers = markersFromDailyMetrics([
+    dmRow('2026-09-01', [
+      { hkUuid: 'a', type: 'running', durationMin: 30 },
+      { hkUuid: 'b', type: 'cycling', durationMin: 45 },
+    ]),
+  ]);
+  assert.deepEqual(markers, [{ date: '2026-09-01', kind: 'workout', label: '2 workouts', count: 2 }]);
+});
+
+test('markersFromDailyMetrics: a malformed (non-array) payload falls back to `value` for the count', () => {
+  const markers = markersFromDailyMetrics([dmRow('2026-09-01', { not: 'an array' }, 3)]);
+  assert.deepEqual(markers, [{ date: '2026-09-01', kind: 'workout', label: '3 workouts', count: 3 }]);
+});
+
+test('markersFromDailyMetrics: a null payload falls back to `value`', () => {
+  const markers = markersFromDailyMetrics([dmRow('2026-09-01', null, 1)]);
+  assert.deepEqual(markers, [{ date: '2026-09-01', kind: 'workout', label: '1 workout', count: 1 }]);
+});
+
+test('markersFromDailyMetrics: results are sorted oldest to newest', () => {
+  const markers = markersFromDailyMetrics([
+    dmRow('2026-09-05', [{ hkUuid: 'a', type: 'running' }]),
+    dmRow('2026-09-01', [{ hkUuid: 'b', type: 'cycling' }]),
+  ]);
+  assert.deepEqual(markers.map((m) => m.date), ['2026-09-01', '2026-09-05']);
+});
+
+// ─── mergeWorkoutMarkers: daily_metrics wins over events on the same date ──
+
+test('mergeWorkoutMarkers: a daily_metrics-only day passes through', () => {
+  const primary: Marker[] = [{ date: '2026-09-01', kind: 'workout', label: 'Running', count: 1 }];
+  assert.deepEqual(mergeWorkoutMarkers(primary, []), primary);
+});
+
+test('mergeWorkoutMarkers: an events-only day passes through', () => {
+  const secondary: Marker[] = [{ date: '2026-09-02', kind: 'workout', label: 'Cycling', count: 1 }];
+  assert.deepEqual(mergeWorkoutMarkers([], secondary), secondary);
+});
+
+test('mergeWorkoutMarkers: a day present in both sources keeps only the daily_metrics marker (no double count)', () => {
+  const primary: Marker[] = [{ date: '2026-09-01', kind: 'workout', label: 'Running', count: 1 }];
+  const secondary: Marker[] = [{ date: '2026-09-01', kind: 'workout', label: '3 workouts', count: 3 }];
+  assert.deepEqual(mergeWorkoutMarkers(primary, secondary), primary);
+});
+
+test('mergeWorkoutMarkers: merges disjoint dates from both sources, sorted oldest to newest', () => {
+  const primary: Marker[] = [{ date: '2026-09-03', kind: 'workout', label: 'Running', count: 1 }];
+  const secondary: Marker[] = [{ date: '2026-09-01', kind: 'workout', label: 'Cycling', count: 1 }];
+  assert.deepEqual(mergeWorkoutMarkers(primary, secondary), [
+    { date: '2026-09-01', kind: 'workout', label: 'Cycling', count: 1 },
+    { date: '2026-09-03', kind: 'workout', label: 'Running', count: 1 },
+  ]);
 });
