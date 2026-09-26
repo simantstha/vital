@@ -482,12 +482,13 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertTrue(app.buttons["3 months"].waitForExistence(timeout: 10),
                        "HRV detail should load [\(scenario)/\(appearance)]")
 
-        capture(app, name: "\(scenario)__hrv_detail__\(appearance)")
+        // Screen segment must be letters only to match CI export regex: ^[a-z_]+__[A-Za-z]+__(light|dark)\.png$
+        capture(app, name: "\(scenario)__hrvDetail__\(appearance)")
 
         // Scroll down to see more of the detail view (e.g. the stats row, chart, or records section).
         app.swipeUp()
         app.swipeUp()
-        capture(app, name: "\(scenario)__hrv_detail_more__\(appearance)")
+        capture(app, name: "\(scenario)__hrvDetailMore__\(appearance)")
 
         // Navigate back to Trends so later captures still work. Try the navigation bar's back
         // button first (the standard edge-swipe-back and zoom-transition nav pattern); if it
