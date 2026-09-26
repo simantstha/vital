@@ -490,6 +490,14 @@ final class ScreenshotTests: XCTestCase {
         app.swipeUp()
         capture(app, name: "\(scenario)__hrvDetailMore__\(appearance)")
 
+        // One more scroll to bring the "What moves your HRV" drivers section
+        // (added right after the stats row, before Distribution) on screen —
+        // present for weight_loss/muscle/endurance's HRV fixture, empty (and
+        // this capture simply shows Distribution/records instead) for
+        // new_user, which has no certified drivers.
+        app.swipeUp()
+        capture(app, name: "\(scenario)__hrvDetailDrivers__\(appearance)")
+
         // Navigate back to Trends so later captures still work. Try the navigation bar's back
         // button first (the standard edge-swipe-back and zoom-transition nav pattern); if it
         // doesn't exist, fall back to a right-edge swipe (interactive pop gesture) as a safety net.

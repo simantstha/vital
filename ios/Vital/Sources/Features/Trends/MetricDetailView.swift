@@ -70,6 +70,9 @@ struct MetricDetailView: View {
                             }
                             chartCard
                             statsRow
+                            if !vm.drivers.isEmpty {
+                                driversSection
+                            }
                             if showDistribution {
                                 distributionSection
                             }
@@ -352,6 +355,37 @@ private extension MetricDetailView {
         )
     }
 
+    /// One workout-day mark on the chart floor. `id` is the day itself —
+    /// `GET /api/trends/markers` returns at most one `"workout"` marker per
+    /// date (see `lib/trendsMarkers.ts`'s `mergeWorkoutMarkers`).
+    struct WorkoutMarkerPoint: Identifiable {
+        var id: Date { date }
+        let date: Date
+        let label: String
+    }
+
+    /// `vm.markers` parsed to `Date`, filtered to `"workout"` (an unknown
+    /// future `kind` is decoded but never drawn — see `TrendsMarkerDTO`'s
+    /// doc comment) and to dates actually inside the visible range
+    /// (`rawPoints`'s own span) — `vm.markers` is already scoped server-side
+    /// to `range.rawValue` days, but this guards against a stale response
+    /// from a range that just changed.
+    var workoutMarkerPoints: [WorkoutMarkerPoint] {
+        guard let firstDate = rawPoints.first?.date, let lastDate = rawPoints.last?.date else { return [] }
+        return vm.markers.compactMap { marker -> WorkoutMarkerPoint? in
+            guard marker.kind == "workout", let date = Self.isoDayFormatter.date(from: marker.date) else { return nil }
+            guard date >= firstDate, date <= lastDate else { return nil }
+            return WorkoutMarkerPoint(date: date, label: marker.label)
+        }
+    }
+
+    /// The workout marker (if any) landing on the currently scrubbed day —
+    /// feeds the scrub accessibility value below.
+    var scrubbedWorkoutLabel: String? {
+        guard let snappedPoint else { return nil }
+        return workoutMarkerPoints.first { Calendar.current.isDate($0.date, inSameDayAs: snappedPoint.date) }?.label
+    }
+
     func evaluate(_ value: Double?) -> Verdict {
         guard let value, let series = vm.series, let spec else { return .noData }
         return TrendsVerdict.evaluate(
@@ -486,12 +520,23 @@ private extension MetricDetailView {
                     .foregroundStyle(Theme.Colors.accentContent)
             }
 
-            // 6. Stats-row emphasis — Low/High highlight a point + rule,
+            // 6. Workout markers — a small, subtle mark sitting on the
+            //    chart's floor for each workout day in the visible range.
+            //    Drawn AT `chartYDomain.lowerBound`, same floor the area fill
+            //    (step 3) is already anchored to, so it never sits outside
+            //    the plot even without a `.chartPlotStyle` clip.
+            ForEach(workoutMarkerPoints) { marker in
+                PointMark(x: .value("Date", marker.date), y: .value("Workout", chartYDomain.lowerBound))
+                    .symbolSize(20)
+                    .foregroundStyle(Theme.Colors.textSecondary.opacity(0.55))
+            }
+
+            // 7. Stats-row emphasis — Low/High highlight a point + rule,
             //    Average highlights the range's own mean line. Cleared by
             //    tapping the same stat button again.
             statSelectionMarks
 
-            // 7. Scrub rule + emphasized point (with its own halo) —
+            // 8. Scrub rule + emphasized point (with its own halo) —
             //    deliberately NOT wrapped in `withAnimation`, so it tracks
             //    the finger 1:1.
             if let snappedPoint {
@@ -528,11 +573,13 @@ private extension MetricDetailView {
             }
         }
         .chartYScale(domain: chartYDomain)
-        // Guard against the area fill (or any future mark) spilling outside
-        // the plot area — the AreaMark above is already floored at the
-        // domain's lower bound, but this keeps a rendering glitch from ever
-        // painting past the card's edges.
-        .chartPlotStyle { $0.clipped() }
+        // No `.chartPlotStyle { $0.clipped() }` here (PR #236 added one,
+        // then removed it) — every mark above (area fill, workout markers,
+        // the latest-point halo) is already floored/bounded within
+        // `chartYDomain`, and a clip on the plot rect cut the latest-point
+        // halo in half at the chart's trailing edge, since a halo's radius
+        // extends past its own x position. If a future mark needs to be kept
+        // inside the domain, do that at the mark itself, not with a clip.
         // Range change morphs the chart in place rather than cross-fading —
         // the surrounding content stays mounted (no `.motionTransition` on
         // this subtree), so this is the only animation driving the swap.
@@ -603,7 +650,8 @@ private extension MetricDetailView {
             date: snappedPoint.date,
             value: snappedPoint.value,
             spec: spec,
-            unitSystem: unitPref.current
+            unitSystem: unitPref.current,
+            workoutLabel: scrubbedWorkoutLabel
         )
     }
 
@@ -624,6 +672,16 @@ private extension MetricDetailView {
                 Text("30-day average")
                     .font(.system(size: 10.5))
                     .foregroundStyle(Theme.Colors.textSecondary)
+            }
+            if !workoutMarkerPoints.isEmpty {
+                HStack(spacing: 4) {
+                    Circle()
+                        .fill(Theme.Colors.textSecondary.opacity(0.55))
+                        .frame(width: 6, height: 6)
+                    Text("workout")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(Theme.Colors.textSecondary)
+                }
             }
         }
     }
@@ -742,6 +800,45 @@ private extension MetricDetailView {
                 )
             }
         }
+    }
+}
+
+// MARK: - What moves your metric
+
+private extension MetricDetailView {
+
+    var driversSection: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            sectionHeader("WHAT MOVES YOUR \(displayName.uppercased())")
+            VStack(spacing: Theme.Spacing.sm) {
+                ForEach(Array(vm.drivers.enumerated()), id: \.offset) { _, driver in
+                    driverRow(driver)
+                }
+            }
+            Text(MetricDriverCopy.footer)
+                .font(.system(size: 11.5))
+                .foregroundStyle(Theme.Colors.textTertiary)
+        }
+    }
+
+    func driverRow(_ driver: DriverDTO) -> some View {
+        let sentence = MetricDriverCopy.sentence(driver: driver, outcomeSpec: spec, unitSystem: unitPref.current)
+        let sampleLine = MetricDriverCopy.sampleSizeLine(pairs: driver.pairs)
+        let accessibilityLabel = MetricDriverCopy.accessibilityLabel(driver: driver, outcomeSpec: spec, unitSystem: unitPref.current)
+
+        return GlassCard(padding: Theme.Spacing.md, cornerRadius: Theme.Radius.md) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(sentence)
+                    .font(.system(size: 13.5, weight: .medium))
+                    .foregroundStyle(Theme.Colors.textPrimary)
+                Text(sampleLine)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(Theme.Colors.textSecondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(accessibilityLabel)
     }
 }
 
@@ -958,6 +1055,17 @@ private extension MetricDetailView {
     static let dayFormatter: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "EEE, MMM d"
+        return f
+    }()
+
+    /// Parses `TrendsMarkerDTO.date` ("YYYY-MM-DD") the same way
+    /// `TrendsViewModel`'s own `dateFormatter` parses `TrendPoint.date` —
+    /// POSIX locale so a device set to a non-Gregorian calendar/locale can't
+    /// fail this fixed-format parse.
+    static let isoDayFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        f.locale = Locale(identifier: "en_US_POSIX")
         return f
     }()
 }

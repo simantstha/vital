@@ -31,8 +31,14 @@ enum MetricChartAccessibility {
         return parts.joined(separator: ", ")
     }
 
-    static func scrubbedValueText(date: Date, value: Double, spec: MetricSpec?, unitSystem: UnitSystem) -> String {
-        "\(dayFormatter.string(from: date)): \(MetricTileAccessibility.formattedValue(value, spec: spec, unitSystem: unitSystem))"
+    /// `workoutLabel` is non-nil only when the scrubbed day has a workout
+    /// marker (`MetricDetailView.scrubbedWorkoutLabel`) — appended so
+    /// VoiceOver users get the same "workout that day" context sighted users
+    /// get from the chart's floor mark, skipped entirely on a day with none.
+    static func scrubbedValueText(date: Date, value: Double, spec: MetricSpec?, unitSystem: UnitSystem, workoutLabel: String? = nil) -> String {
+        let base = "\(dayFormatter.string(from: date)): \(MetricTileAccessibility.formattedValue(value, spec: spec, unitSystem: unitSystem))"
+        guard let workoutLabel else { return base }
+        return "\(base) — \(workoutLabel)"
     }
 
     private static let dayFormatter: DateFormatter = {

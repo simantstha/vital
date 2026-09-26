@@ -250,6 +250,10 @@ enum FixtureData {
             return query.contains("metrics=")
                 ? (200, jsonData(trendsBatch(profile, scenario: scenario, query: query)))
                 : (200, jsonData(trendsSingle(profile, scenario: scenario, query: query)))
+        case ("GET", "/api/trends/drivers"):
+            return (200, jsonData(trendsDrivers(profile, scenario: scenario, query: query)))
+        case ("GET", "/api/trends/markers"):
+            return (200, jsonData(trendsMarkers(scenario: scenario, query: query)))
         case ("GET", "/api/logs"):
             return (200, jsonData(logs(profile)))
         case ("GET", "/api/diet-goal"):
@@ -624,6 +628,96 @@ enum FixtureData {
             "unknownMetrics": [String](),
             "calibration": calibration(profile),
         ]
+    }
+
+    // MARK: - GET /api/trends/drivers?metric= → TrendsDriversResponse
+
+    /// weight_loss/muscle/endurance get 2 certified `hrv_sdnn` drivers
+    /// (`steps` lag 1 down, `dietary_carbs_g` lag 0 up) whose tercile means
+    /// sit a fixed offset either side of that persona's own `profile.hrv` —
+    /// so the "— N vs M ms" comparison always reads as a believable spread
+    /// around the same HRV the rest of the screen shows. Every other
+    /// scenario/metric combination (including every metric for `new_user`,
+    /// which never has an established baseline for the engine to certify
+    /// anything against) returns an empty `drivers` array, matching the real
+    /// route's own "never a 400/404" contract.
+    private static let driverScenarios: Set<FixtureMode.Scenario> = [.weightLoss, .muscle, .endurance]
+
+    private static func trendsDrivers(_ profile: Profile, scenario: FixtureMode.Scenario?, query: String) -> [String: Any] {
+        let metric = query
+            .split(separator: "&")
+            .first { $0.hasPrefix("metric=") }
+            .map { String($0.dropFirst("metric=".count)) } ?? ""
+
+        guard let scenario, driverScenarios.contains(scenario), metric == "hrv_sdnn" else {
+            return ["metric": metric, "computedFor": NSNull(), "drivers": [Any]()]
+        }
+
+        let hrv = profile.hrv
+        let stepsDriver: [String: Any] = [
+            "input": "steps",
+            "lag": 1,
+            "direction": "down",
+            "rho": -0.42,
+            "pairs": 64,
+            "high": ["mean": hrv - 4, "n": 21],
+            "low": ["mean": hrv + 4, "n": 21],
+            "highInputMean": profile.steps + 2200,
+            "lowInputMean": max(profile.steps - 2200, 0),
+        ]
+        let carbsDriver: [String: Any] = [
+            "input": "dietary_carbs_g",
+            "lag": 0,
+            "direction": "up",
+            "rho": 0.38,
+            "pairs": 58,
+            "high": ["mean": hrv + 3, "n": 19],
+            "low": ["mean": hrv - 3, "n": 19],
+            "highInputMean": 240.0,
+            "lowInputMean": 140.0,
+        ]
+        return [
+            "metric": metric,
+            "computedFor": dayString(0),
+            "drivers": [stepsDriver, carbsDriver],
+        ]
+    }
+
+    // MARK: - GET /api/trends/markers?days= → TrendsMarkersResponse
+
+    /// `?days=`, clamped exactly like the real route
+    /// (`app/api/trends/markers/route.ts`'s `parseDaysParam`) — an
+    /// unparseable value falls back to the same 90-day default.
+    private static func requestedMarkerDays(_ query: String) -> Int {
+        let raw = query
+            .split(separator: "&")
+            .first { $0.hasPrefix("days=") }
+            .flatMap { Int($0.dropFirst("days=".count)) } ?? 90
+        return min(max(raw, 1), 365)
+    }
+
+    /// 3 workouts most weeks, a 4th every other week — deterministic (no
+    /// `Date()`-seeded randomness), so the screenshot harness always renders
+    /// the same floor markers for the same `offset` (days ago, 0 = today).
+    private static func isWorkoutDay(offset: Int) -> Bool {
+        let dayOfWeek = offset % 7
+        if dayOfWeek == 1 || dayOfWeek == 3 || dayOfWeek == 5 { return true }
+        let weekIndex = offset / 7
+        return dayOfWeek == 6 && weekIndex % 2 == 0
+    }
+
+    private static func trendsMarkers(scenario: FixtureMode.Scenario?, query: String) -> [String: Any] {
+        let days = requestedMarkerDays(query)
+        guard scenario != .newUser else {
+            return ["days": days, "markers": [Any]()]
+        }
+        var markers: [[String: Any]] = []
+        for offset in stride(from: days - 1, through: 0, by: -1) {
+            guard isWorkoutDay(offset: offset) else { continue }
+            let label = offset % 4 == 0 ? "Strength Training" : "Run"
+            markers.append(["date": dayString(offset), "kind": "workout", "label": label, "count": 1])
+        }
+        return ["days": days, "markers": markers]
     }
 
     // MARK: - GET /api/logs → LogsResponse
