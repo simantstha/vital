@@ -24,11 +24,11 @@
  */
 
 import { getUserIdFromRequest } from '@/lib/auth';
+import { ELEVENLABS_TTS_MODEL_ID, resolveElevenLabsVoiceId, elevenLabsTtsUrl } from '@/lib/elevenlabs';
 
 export const dynamic = 'force-dynamic';
 
 const MAX_TEXT_LENGTH = 2000;
-const DEFAULT_VOICE_ID = '21m00Tcm4TlvDq8ikWAM'; // Rachel (ElevenLabs stock voice)
 
 export async function POST(request: Request): Promise<Response> {
   try {
@@ -57,19 +57,19 @@ export async function POST(request: Request): Promise<Response> {
     return new Response('ElevenLabs TTS is not configured.', { status: 503 });
   }
 
-  const voiceId = process.env.ELEVENLABS_VOICE_ID || DEFAULT_VOICE_ID;
+  const voiceId = resolveElevenLabsVoiceId();
 
   let upstream: Response;
   try {
     upstream = await fetch(
-      `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream?output_format=mp3_44100_64`,
+      elevenLabsTtsUrl(voiceId),
       {
         method: 'POST',
         headers: {
           'xi-api-key': apiKey,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ text, model_id: 'eleven_flash_v2_5' }),
+        body: JSON.stringify({ text, model_id: ELEVENLABS_TTS_MODEL_ID }),
       }
     );
   } catch (err) {

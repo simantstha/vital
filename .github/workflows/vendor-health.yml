@@ -1,0 +1,61 @@
+name: Vendor Health Check
+
+# Daily alarm for a silently broken third-party dependency. Calls the
+# production GET /api/health/vendors route (see app/api/health/vendors/route.ts
+# and lib/health/vendors.ts), which probes Anthropic (both production model
+# ids), ElevenLabs STT/TTS, CalorieNinjas, and USDA with tiny, cheap requests.
+#
+# Built after ElevenLabs removed the `scribe_v1` STT model on 2026-07-09:
+# every speech-to-text call failed silently for ~2.5 months because nothing
+# exercised that exact model id in isolation. This job fails loudly (and
+# GitHub emails the repo owner) the moment any one vendor breaks.
+#
+# Required repo secret:
+#   HEALTHCHECK_TOKEN — must match the Fly secret of the same name
+#                       (see app/api/health/vendors/route.ts). Set both with:
+#                         flyctl secrets set HEALTHCHECK_TOKEN=<value> -a vital-coach
+#                         gh secret set HEALTHCHECK_TOKEN --body <value>
+
+on:
+  schedule:
+    # 13:00 UTC daily.
+    - cron: "0 13 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  vendor-health:
+    name: Check vendor health
+    runs-on: ubuntu-latest
+    # This is a monitoring job, never CI for a PR/branch build — don't run it
+    # against forks or PR contexts even under workflow_dispatch misuse.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Query GET /api/health/vendors
+        env:
+          HEALTHCHECK_TOKEN: ${{ secrets.HEALTHCHECK_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${HEALTHCHECK_TOKEN:-}" ]; then
+            echo "::error::HEALTHCHECK_TOKEN repo secret is not set."
+            exit 1
+          fi
+
+          response="$(mktemp)"
+          status="$(curl -sS -o "$response" -w '%{http_code}' \
+            --max-time 60 \
+            -H "Authorization: Bearer ${HEALTHCHECK_TOKEN}" \
+            "https://vital-coach.fly.dev/api/health/vendors")"
+
+          echo "HTTP status: ${status}"
+          echo "--- response body ---"
+          cat "$response"
+          echo "---------------------"
+
+          if [ "$status" != "200" ]; then
+            echo "::error::Vendor health check failed (HTTP ${status}) — see response body above for which vendor/model broke."
+            exit 1
+          fi
