@@ -200,6 +200,68 @@ test('does not cap when the new estimate is already within the allowed movement'
   assert.ok(!result.notes.some(n => n.includes('Capped movement')));
 });
 
+test('previousTdee with no previousTdeeAt is treated as a full week elapsed (full cap applies)', () => {
+  const intake = loggedDays(START, 28, 1500);
+  const trend = trendSpanning(START, 27, 90, 89.8);
+  const previousTdee = 2500;
+  const withNoAt = computeLearnedExpenditure(intake, trend, 2400, { previousTdee });
+  const withFullWeekAt = computeLearnedExpenditure(intake, trend, 2400, {
+    previousTdee,
+    previousTdeeAt: new Date('2026-07-01T00:00:00Z'), // 7+ days before `now` default
+    now: new Date('2026-07-08T00:00:00Z'),
+  });
+
+  assert.equal(withNoAt.tdee, withFullWeekAt.tdee);
+});
+
+test('elapsed-time scaling: a call minutes after the previous one allows almost no movement', () => {
+  const intake = loggedDays(START, 28, 1500); // implies a much lower raw learned TDEE
+  const trend = trendSpanning(START, 27, 90, 89.8);
+  const previousTdee = 2500;
+  const now = new Date('2026-08-15T12:05:00Z');
+  const previousTdeeAt = new Date('2026-08-15T12:00:00Z'); // 5 minutes earlier
+
+  const result = computeLearnedExpenditure(intake, trend, 2400, { previousTdee, previousTdeeAt, now });
+
+  // 5 minutes / (7 days) is a tiny fraction of MAX_WEEKLY_MOVE_FRACTION —
+  // the result must stay essentially pinned to previousTdee.
+  assert.ok(Math.abs(result.tdee - previousTdee) <= 1, `expected ~no movement, got ${result.tdee} vs previous ${previousTdee}`);
+});
+
+test('elapsed-time scaling: a call a full week later allows the full MAX_WEEKLY_MOVE_FRACTION', () => {
+  const intake = loggedDays(START, 28, 1500);
+  const trend = trendSpanning(START, 27, 90, 89.8);
+  const previousTdee = 2500;
+  const now = new Date('2026-08-22T12:00:00Z');
+  const previousTdeeAt = new Date('2026-08-15T12:00:00Z'); // exactly 7 days earlier
+
+  const result = computeLearnedExpenditure(intake, trend, 2400, { previousTdee, previousTdeeAt, now });
+
+  const maxDelta = previousTdee * MAX_WEEKLY_MOVE_FRACTION;
+  assert.ok(Math.abs(result.tdee - previousTdee) <= maxDelta + 1);
+  // And it should have moved close to the full allowed amount, since the
+  // raw target (well below 2500) is far enough away to keep pulling.
+  assert.ok(previousTdee - result.tdee >= maxDelta - 2, `expected close to the full weekly cap, got delta ${previousTdee - result.tdee} vs max ${maxDelta}`);
+});
+
+test('elapsed-time scaling: more than a week elapsed is still capped at exactly one week\'s worth, no catch-up', () => {
+  const intake = loggedDays(START, 28, 1500);
+  const trend = trendSpanning(START, 27, 90, 89.8);
+  const previousTdee = 2500;
+  const oneWeekLater = computeLearnedExpenditure(intake, trend, 2400, {
+    previousTdee,
+    previousTdeeAt: new Date('2026-08-15T12:00:00Z'),
+    now: new Date('2026-08-22T12:00:00Z'), // +7 days
+  });
+  const threeWeeksLater = computeLearnedExpenditure(intake, trend, 2400, {
+    previousTdee,
+    previousTdeeAt: new Date('2026-08-15T12:00:00Z'),
+    now: new Date('2026-09-05T12:00:00Z'), // +21 days
+  });
+
+  assert.equal(oneWeekLater.tdee, threeWeeksLater.tdee, 'movement should not compound past one week\'s worth in a single call');
+});
+
 // ── Window trimming ──────────────────────────────────────────────────────
 
 test('only the trailing WINDOW_DAYS of intake are considered', () => {

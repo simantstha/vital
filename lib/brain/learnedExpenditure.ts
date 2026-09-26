@@ -96,7 +96,16 @@ export const CLAMP_FRACTION = 0.35;
 /** Absolute floor below which no TDEE is ever reported, learned or formula — matches dietBudget.ts's KCAL_MIN (the same "not a plausible human maintenance number" floor used for calorie targets generally). Kept as a local literal, not an import, to keep this module dependency-free of dietBudget.ts (dietBudget.ts imports FROM here, not the reverse). */
 export const ABSOLUTE_MIN_TDEE = 800;
 
-/** Maximum fraction the learned TDEE is allowed to move, per call, relative to a previously-reported learned TDEE — the "don't let one noisy week whipsaw the target" guard. Named "weekly" because callers are expected to recompute at most ~daily and this bounds cumulative drift to a sane rate; see computeLearnedExpenditure's doc comment for the stated assumption this relies on. */
+/**
+ * Maximum fraction the applied TDEE is allowed to move per FULL WEEK elapsed
+ * since the previous applied value — the "don't let one noisy window
+ * whipsaw the target" guard, and what makes the movement cap genuinely
+ * time-scaled rather than per-call: see the `previousTdeeAt`/`now` handling
+ * in computeLearnedExpenditure below. Two calls an hour apart allow almost
+ * no movement; two calls a full week apart allow the full 5%; more than a
+ * week's gap is still capped at exactly one week's worth (no unbounded
+ * catch-up after a long absence).
+ */
 export const MAX_WEEKLY_MOVE_FRACTION = 0.05;
 
 /** Bayesian-style blend strength, in "equivalent days of formula evidence", used only at 'low' confidence: weight = loggedDays / (loggedDays + this). A larger prior means more logged days are needed before the learned number dominates the blend. 21 ≈ MIN_TREND_SPAN_DAYS + a week of slack, chosen so 'low' confidence (10-17 logged days) blends roughly 35-45% learned / 55-65% formula, and the blend converges toward pure-learned as logged days climb toward the 'medium' threshold. */
@@ -159,20 +168,29 @@ function clamp(value: number, min: number, max: number): number {
  * full computeWeightTrend() result covering at least that window; only the
  * portion overlapping the intake window is used.
  *
- * `previousTdee`, if supplied, caps how far the new estimate may move from
- * it (MAX_WEEKLY_MOVE_FRACTION) — pass the last learned/blended tdee this
- * user was shown. ASSUMPTION: callers recompute at most about once/day (the
- * cap is expressed as a per-CALL fraction, not a true per-elapsed-week
- * fraction, because this pure function has no clock and is not told how long
- * ago `previousTdee` was computed) — calling it much more often than daily
- * would make the effective per-week cap tighter than intended, which is the
- * safe direction (slower movement, not faster), never the reverse.
+ * `previousTdee`/`previousTdeeAt`, if supplied, cap how far the new estimate
+ * may move from it, SCALED BY ELAPSED TIME: `maxDelta = previousTdee ×
+ * MAX_WEEKLY_MOVE_FRACTION × min(elapsedDays / 7, 1)`. Two calls seconds
+ * apart (e.g. a user refreshing /api/today repeatedly) allow essentially no
+ * movement — this is what stops frequent polling from compounding into fast
+ * drift, unlike a flat per-call cap would. `previousTdeeAt` omitted (but
+ * `previousTdee` given) is treated as a full week elapsed (the cap's normal
+ * ceiling applies) — a reasonable default for a caller that has a prior
+ * value but genuinely doesn't know its age. `now` defaults to `new Date()`
+ * and exists purely for deterministic testing.
+ *
+ * Callers own PERSISTING the applied value + timestamp between calls (this
+ * function is pure and stateless) — see lib/brain/learnedExpenditureMemory.ts
+ * and dietBudget.ts's computeLearnedExpenditureSummary for how that anchor
+ * is loaded/saved, including how the very first crossing into a learned
+ * value is seeded from the formula estimate so it also moves gradually
+ * rather than jumping straight to a raw learned number.
  */
 export function computeLearnedExpenditure(
   dailyIntakeKcal: DailyIntakeKcalPoint[],
   trend: WeightTrendResult,
   formulaTdee: number,
-  opts: { previousTdee?: number } = {},
+  opts: { previousTdee?: number; previousTdeeAt?: string | Date; now?: Date } = {},
 ): LearnedExpenditureResult {
   const notes: string[] = [];
 
@@ -288,12 +306,22 @@ export function computeLearnedExpenditure(
     method = 'learned';
   }
 
-  // ── Cap week-to-week movement ─────────────────────────────────────────
+  // ── Cap movement, scaled by elapsed time since the previous applied value ──
   if (opts.previousTdee != null && Number.isFinite(opts.previousTdee) && opts.previousTdee > 0) {
-    const maxDelta = opts.previousTdee * MAX_WEEKLY_MOVE_FRACTION;
+    const now = opts.now ?? new Date();
+    // No previousTdeeAt on hand -> assume a full week elapsed (the cap's
+    // normal ceiling), not zero -> the safer "at least the standard cap
+    // applies" default, not an accidental full freeze.
+    const prevAt = opts.previousTdeeAt != null ? new Date(opts.previousTdeeAt) : new Date(now.getTime() - 7 * 86_400_000);
+    const elapsedDays = Math.max(0, (now.getTime() - prevAt.getTime()) / 86_400_000);
+    const weekFraction = Math.min(elapsedDays / 7, 1);
+    const maxDelta = opts.previousTdee * MAX_WEEKLY_MOVE_FRACTION * weekFraction;
     const bounded = clamp(tdee, opts.previousTdee - maxDelta, opts.previousTdee + maxDelta);
     if (bounded !== tdee) {
-      notes.push(`Capped movement from previous ${Math.round(opts.previousTdee)} kcal to ${Math.round(bounded)} kcal (max ${Math.round(MAX_WEEKLY_MOVE_FRACTION * 100)}% per update).`);
+      notes.push(
+        `Capped movement from previous ${Math.round(opts.previousTdee)} kcal to ${Math.round(bounded)} kcal ` +
+        `(max ${(MAX_WEEKLY_MOVE_FRACTION * 100).toFixed(1)}%/wk × ${weekFraction.toFixed(2)} week(s) elapsed).`,
+      );
     }
     tdee = bounded;
   }

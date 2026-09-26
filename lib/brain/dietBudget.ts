@@ -30,13 +30,14 @@ import { getWeightReadings } from '@/lib/weightRepository';
 import { computeWeightTrend } from '@/lib/weightTrend';
 import { proteinBasisWeightKg, PROTEIN_GRAMS_CAP } from '@/lib/brain/proteinWeight';
 import { resolveDailyIntake } from '@/lib/brain/nutritionIntake';
-import { previousDayKey } from '@/lib/localDay';
+import { localDayKey, pickTimeZone, previousDayKey } from '@/lib/localDay';
 import {
   computeLearnedExpenditure,
   WINDOW_DAYS as LEARNED_TDEE_WINDOW_DAYS,
   type LearnedExpenditureConfidence,
   type DailyIntakeKcalPoint as LearnedExpenditureIntakePoint,
 } from '@/lib/brain/learnedExpenditure';
+import { loadLearnedExpenditureMemory, saveLearnedExpenditureMemory } from '@/lib/brain/learnedExpenditureMemory';
 
 export type DietGoal = 'weight_loss' | 'muscle' | 'endurance' | 'general';
 export const DIET_GOALS: readonly DietGoal[] = ['weight_loss', 'muscle', 'endurance', 'general'];
@@ -255,26 +256,50 @@ export interface DietBudgetExpenditure {
 }
 
 /**
+ * Best-effort user timezone lookup for day-bucketing intake — same
+ * `pickTimeZone`/UTC-fallback convention lib/localDay.ts documents, and the
+ * same "prefer the stored tz, else UTC" behavior lib/brain/context.ts and
+ * lib/brain/brief.ts use (they additionally accept a fresher request-supplied
+ * tz; computeAutoBudget's signature has no request on hand, so the stored
+ * value is all there is). Swallows its own errors (bad/missing column, fake
+ * test DB, whatever) and falls back to 'UTC' rather than let a timezone
+ * lookup fail the whole learned-expenditure computation.
+ */
+async function resolveUserTimeZoneForLearnedExpenditure(userId: string): Promise<string> {
+  try {
+    const [row] = await db.select({ timezone: schema.users.timezone }).from(schema.users).where(eq(schema.users.id, userId)).limit(1);
+    return pickTimeZone(null, row?.timezone ?? null) ?? 'UTC';
+  } catch {
+    return 'UTC';
+  }
+}
+
+/**
  * Computes the learned-TDEE summary for a user against a given formula
  * estimate. NEVER throws: any failure (DB error, insufficient data) degrades
  * to a formula-only summary, the same non-fatal-failure pattern
  * lib/brain/context.ts uses for its own best-effort loads — a learned-TDEE
  * outage must never break the (existing, load-bearing) auto-budget path.
  *
- * NOTE on timezone: this buckets daily intake by UTC calendar day, not the
- * user's local day (unlike lib/brain/context.ts / lib/brain/brief.ts, which
- * both know the caller's tz). computeAutoBudget's signature is (userId,
- * goal) only — it has no tz on hand without an extra `users` lookup. A day
- * boundary can therefore be up to ~14h off from the user's real local day.
- * This is judged acceptable because the learned estimate averages over a
- * WINDOW_DAYS-long (28-day) window — a single day's boundary being off by
- * up to 14h barely moves a 28-day average — but it IS a known, deliberate
- * simplification, not an oversight; revisit if per-day precision ever
- * matters here (e.g. a "which day was excluded" UI).
+ * Movement cap (see lib/brain/learnedExpenditure.ts's computeLearnedExpenditure
+ * and lib/brain/learnedExpenditureMemory.ts): loads the last applied
+ * TDEE + timestamp, passes it in as `previousTdee`/`previousTdeeAt` so the
+ * cap is scaled by real elapsed time (repeated same-day /api/today calls
+ * don't compound), then persists the new value ONLY when it moved by >= 1
+ * kcal from that anchor AND the anchor itself was read successfully (never
+ * write on a read failure — writing blind over an anchor we couldn't verify
+ * risks erasing real history with a bad guess). No persisted anchor at all
+ * (brand-new, or never crossed into a learned value before) seeds the anchor
+ * at the FORMULA estimate — see computeLearnedExpenditure's doc comment for
+ * why that means the very first crossing into a learned/blended value is
+ * itself capped, not a jump.
+ *
+ * `now` is an optional override purely for deterministic tests.
  */
 export async function computeLearnedExpenditureSummary(
   userId: string,
   formulaTdee: number,
+  opts: { now?: Date } = {},
 ): Promise<DietBudgetExpenditure> {
   const fallback: DietBudgetExpenditure = {
     formulaTdee: Math.round(formulaTdee),
@@ -285,15 +310,18 @@ export async function computeLearnedExpenditureSummary(
     loggedDays: 0,
   };
 
+  const now = opts.now ?? new Date();
+
   try {
-    const todayKey = new Date().toISOString().slice(0, 10);
+    const tz = await resolveUserTimeZoneForLearnedExpenditure(userId);
+    const todayKey = localDayKey(now, tz);
     const dayKeys: string[] = [todayKey];
     for (let i = 1; i < LEARNED_TDEE_WINDOW_DAYS; i++) {
       dayKeys.unshift(previousDayKey(dayKeys[0]));
     }
 
     const [intakeByDay, weightReadings] = await Promise.all([
-      resolveDailyIntake(userId, dayKeys, 'UTC'),
+      resolveDailyIntake(userId, dayKeys, tz),
       // A window wider than LEARNED_TDEE_WINDOW_DAYS so the EWMA trend has
       // run-in room before the window we actually score — mirrors
       // resolveBudgetWeightKg's own 90-day pull, just narrower since we only
@@ -311,7 +339,40 @@ export async function computeLearnedExpenditureSummary(
     });
 
     const trend = computeWeightTrend(weightReadings);
-    const result = computeLearnedExpenditure(dailyIntakeKcal, trend, formulaTdee);
+
+    // Load the movement-cap anchor. A THROW here (vs. a clean `null` for
+    // "nothing stored yet") means we couldn't verify prior state — track
+    // that separately so we skip writing below rather than guess.
+    let persisted: Awaited<ReturnType<typeof loadLearnedExpenditureMemory>> = null;
+    let anchorReadFailed = false;
+    try {
+      persisted = await loadLearnedExpenditureMemory(userId);
+    } catch (err) {
+      console.error(`[dietBudget] learned-expenditure anchor read failed for user ${userId}:`, err);
+      anchorReadFailed = true;
+    }
+
+    const previousTdee = persisted?.tdee ?? formulaTdee;
+    const previousTdeeAt = persisted?.at; // omitted -> computeLearnedExpenditure assumes a full week elapsed
+
+    const result = computeLearnedExpenditure(dailyIntakeKcal, trend, formulaTdee, {
+      previousTdee,
+      previousTdeeAt,
+      now,
+    });
+
+    // Persist the new anchor only when there's an actual learned/blended
+    // signal (confidence !== 'none' — at 'none' the result IS the formula
+    // estimate verbatim, nothing new to remember), it moved >= 1 kcal from
+    // the anchor just used, and the anchor read didn't fail.
+    if (!anchorReadFailed && result.confidence !== 'none' && Math.abs(result.tdee - previousTdee) >= 1) {
+      try {
+        await saveLearnedExpenditureMemory(userId, result.tdee, now);
+      } catch (err) {
+        console.error(`[dietBudget] learned-expenditure anchor write failed for user ${userId}:`, err);
+      }
+    }
+
     const source: 'formula' | 'learned' = LEARNED_TDEE_CONFIDENCE_GATE.has(result.confidence) ? 'learned' : 'formula';
 
     return {
@@ -359,8 +420,15 @@ export async function resolveBudgetWeightKg(userId: string): Promise<number> {
   return latest.valueKg;
 }
 
-/** Auto budget from goal + latest known weight + last 7 days of workouts. */
-export async function computeAutoBudget(userId: string, goal: DietGoal): Promise<DietBudget> {
+/**
+ * Auto budget from goal + latest known weight + last 7 days of workouts.
+ * `opts.now` is an additive, optional override of "the current instant" —
+ * threaded only into the learned-expenditure movement-cap math
+ * (computeLearnedExpenditureSummary) so tests can simulate elapsed time
+ * deterministically without waiting on a real clock. Production callers
+ * never pass it (defaults to `new Date()`).
+ */
+export async function computeAutoBudget(userId: string, goal: DietGoal, opts: { now?: Date } = {}): Promise<DietBudget> {
   const [weightKg, workoutRows] = await Promise.all([
     resolveBudgetWeightKg(userId),
     queryWorkouts(userId, WORKOUT_WINDOW_DAYS),
@@ -409,7 +477,7 @@ export async function computeAutoBudget(userId: string, goal: DietGoal): Promise
   // that confidence, `source` is 'formula' and `tdee` is unchanged from
   // today's behavior. Never fails the budget path — see
   // computeLearnedExpenditureSummary's doc comment.
-  const expenditure = await computeLearnedExpenditureSummary(userId, formulaTdee);
+  const expenditure = await computeLearnedExpenditureSummary(userId, formulaTdee, { now: opts.now });
   const tdee = expenditure.source === 'learned' ? expenditure.learnedTdee : formulaTdee;
 
   const { targetCal, c, p, f } = macrosForGoal(goal, weightKg, tdee, {
