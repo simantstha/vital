@@ -29,6 +29,15 @@ import { parseProfileDetails } from '@/lib/profileDetails';
 import { getWeightReadings } from '@/lib/weightRepository';
 import { computeWeightTrend } from '@/lib/weightTrend';
 import { proteinBasisWeightKg, PROTEIN_GRAMS_CAP } from '@/lib/brain/proteinWeight';
+import { resolveDailyIntake } from '@/lib/brain/nutritionIntake';
+import { localDayKey, pickTimeZone, previousDayKey } from '@/lib/localDay';
+import {
+  computeLearnedExpenditure,
+  WINDOW_DAYS as LEARNED_TDEE_WINDOW_DAYS,
+  type LearnedExpenditureConfidence,
+  type DailyIntakeKcalPoint as LearnedExpenditureIntakePoint,
+} from '@/lib/brain/learnedExpenditure';
+import { loadLearnedExpenditureMemory, saveLearnedExpenditureMemory } from '@/lib/brain/learnedExpenditureMemory';
 
 export type DietGoal = 'weight_loss' | 'muscle' | 'endurance' | 'general';
 export const DIET_GOALS: readonly DietGoal[] = ['weight_loss', 'muscle', 'endurance', 'general'];
@@ -175,6 +184,15 @@ export interface DietBudget {
    * appliedFloor: false — informational only, value preserved.
    */
   lowEnergyWarning?: { thresholdKcal: number; appliedFloor: boolean; message: string } | null;
+  /**
+   * Present only for 'auto' budgets — the formula-vs-learned TDEE decision
+   * (Stage 2 adaptive expenditure, see lib/brain/learnedExpenditure.ts).
+   * Optional and additive, like lowEnergyWarning above, so existing iOS
+   * Codable clients that don't know this field are unaffected. Absent (not
+   * merely null) for a 'custom' (user-pinned) budget, which this module
+   * never recomputes TDEE for at all.
+   */
+  expenditure?: DietBudgetExpenditure;
 }
 
 /**
@@ -204,6 +222,172 @@ export interface DietGoalRow {
 
 /** Number of trailing days of workouts computeAutoBudget looks at. */
 const WORKOUT_WINDOW_DAYS = 7;
+
+// ── Learned (adaptive) TDEE — Stage 2 ───────────────────────────────────────
+// See lib/brain/learnedExpenditure.ts for the full algorithm + evidence.
+// This section wires it into the auto-budget path: an auto budget's `tdee`
+// (and therefore its targetKcal/macros) uses the LEARNED number once
+// confidence reaches 'medium', falling back to the formula estimate below
+// that — never for a 'custom' (user-pinned) budget, which this module never
+// touches.
+
+/** Confidence tiers at/above which computeAutoBudget prefers the learned TDEE over the Mifflin-St Jeor formula. */
+const LEARNED_TDEE_CONFIDENCE_GATE: ReadonlySet<LearnedExpenditureConfidence> = new Set(['medium', 'high']);
+
+/**
+ * Additive summary of the formula-vs-learned TDEE decision — attached to an
+ * AUTO DietBudget's new `expenditure` field so a future UI can show "learned
+ * from N days" and so the coach (lib/brain/context.ts) can cite it honestly.
+ * Entirely optional/additive: existing iOS Codable clients that don't know
+ * this field are unaffected (see DietBudget.expenditure's own doc comment).
+ */
+export interface DietBudgetExpenditure {
+  /** Mifflin-St Jeor estimate — unchanged existing math (lib/brain/tools.ts's estimateTDEE). */
+  formulaTdee: number;
+  /** computeLearnedExpenditure's output tdee — a blend/clamp of logged data against the formula; equals formulaTdee verbatim when confidence is 'none'. */
+  learnedTdee: number;
+  confidence: LearnedExpenditureConfidence;
+  /** Which number the budget's macros were actually computed from this time. */
+  source: 'formula' | 'learned';
+  /** Calendar days of intake data considered (<= learnedExpenditure.ts's WINDOW_DAYS). */
+  daysUsed: number;
+  /** Non-partial logged/healthkit days within that window — the number to cite ("learned from N days"). */
+  loggedDays: number;
+}
+
+/**
+ * Best-effort user timezone lookup for day-bucketing intake — same
+ * `pickTimeZone`/UTC-fallback convention lib/localDay.ts documents, and the
+ * same "prefer the stored tz, else UTC" behavior lib/brain/context.ts and
+ * lib/brain/brief.ts use (they additionally accept a fresher request-supplied
+ * tz; computeAutoBudget's signature has no request on hand, so the stored
+ * value is all there is). Swallows its own errors (bad/missing column, fake
+ * test DB, whatever) and falls back to 'UTC' rather than let a timezone
+ * lookup fail the whole learned-expenditure computation.
+ */
+async function resolveUserTimeZoneForLearnedExpenditure(userId: string): Promise<string> {
+  try {
+    const [row] = await db.select({ timezone: schema.users.timezone }).from(schema.users).where(eq(schema.users.id, userId)).limit(1);
+    return pickTimeZone(null, row?.timezone ?? null) ?? 'UTC';
+  } catch {
+    return 'UTC';
+  }
+}
+
+/**
+ * Computes the learned-TDEE summary for a user against a given formula
+ * estimate. NEVER throws: any failure (DB error, insufficient data) degrades
+ * to a formula-only summary, the same non-fatal-failure pattern
+ * lib/brain/context.ts uses for its own best-effort loads — a learned-TDEE
+ * outage must never break the (existing, load-bearing) auto-budget path.
+ *
+ * Movement cap (see lib/brain/learnedExpenditure.ts's computeLearnedExpenditure
+ * and lib/brain/learnedExpenditureMemory.ts): loads the last applied
+ * TDEE + timestamp, passes it in as `previousTdee`/`previousTdeeAt` so the
+ * cap is scaled by real elapsed time (repeated same-day /api/today calls
+ * don't compound), then persists the new value ONLY when it moved by >= 1
+ * kcal from that anchor AND the anchor itself was read successfully (never
+ * write on a read failure — writing blind over an anchor we couldn't verify
+ * risks erasing real history with a bad guess). No persisted anchor at all
+ * (brand-new, or never crossed into a learned value before) seeds the anchor
+ * at the FORMULA estimate — see computeLearnedExpenditure's doc comment for
+ * why that means the very first crossing into a learned/blended value is
+ * itself capped, not a jump.
+ *
+ * `now` is an optional override purely for deterministic tests.
+ */
+export async function computeLearnedExpenditureSummary(
+  userId: string,
+  formulaTdee: number,
+  opts: { now?: Date } = {},
+): Promise<DietBudgetExpenditure> {
+  const fallback: DietBudgetExpenditure = {
+    formulaTdee: Math.round(formulaTdee),
+    learnedTdee: Math.round(formulaTdee),
+    confidence: 'none',
+    source: 'formula',
+    daysUsed: 0,
+    loggedDays: 0,
+  };
+
+  const now = opts.now ?? new Date();
+
+  try {
+    const tz = await resolveUserTimeZoneForLearnedExpenditure(userId);
+    const todayKey = localDayKey(now, tz);
+    const dayKeys: string[] = [todayKey];
+    for (let i = 1; i < LEARNED_TDEE_WINDOW_DAYS; i++) {
+      dayKeys.unshift(previousDayKey(dayKeys[0]));
+    }
+
+    const [intakeByDay, weightReadings] = await Promise.all([
+      resolveDailyIntake(userId, dayKeys, tz),
+      // A window wider than LEARNED_TDEE_WINDOW_DAYS so the EWMA trend has
+      // run-in room before the window we actually score — mirrors
+      // resolveBudgetWeightKg's own 90-day pull, just narrower since we only
+      // need a well-established trend, not the absolute latest weight.
+      getWeightReadings(userId, LEARNED_TDEE_WINDOW_DAYS + 30, null),
+    ]);
+
+    const dailyIntakeKcal: LearnedExpenditureIntakePoint[] = dayKeys.map((day) => {
+      const intake = intakeByDay.get(day);
+      return {
+        day,
+        kcal: intake && intake.source !== 'none' ? intake.kcal : null,
+        source: intake?.source ?? 'none',
+      };
+    });
+
+    const trend = computeWeightTrend(weightReadings);
+
+    // Load the movement-cap anchor. A THROW here (vs. a clean `null` for
+    // "nothing stored yet") means we couldn't verify prior state — track
+    // that separately so we skip writing below rather than guess.
+    let persisted: Awaited<ReturnType<typeof loadLearnedExpenditureMemory>> = null;
+    let anchorReadFailed = false;
+    try {
+      persisted = await loadLearnedExpenditureMemory(userId);
+    } catch (err) {
+      console.error(`[dietBudget] learned-expenditure anchor read failed for user ${userId}:`, err);
+      anchorReadFailed = true;
+    }
+
+    const previousTdee = persisted?.tdee ?? formulaTdee;
+    const previousTdeeAt = persisted?.at; // omitted -> computeLearnedExpenditure assumes a full week elapsed
+
+    const result = computeLearnedExpenditure(dailyIntakeKcal, trend, formulaTdee, {
+      previousTdee,
+      previousTdeeAt,
+      now,
+    });
+
+    // Persist the new anchor only when there's an actual learned/blended
+    // signal (confidence !== 'none' — at 'none' the result IS the formula
+    // estimate verbatim, nothing new to remember), it moved >= 1 kcal from
+    // the anchor just used, and the anchor read didn't fail.
+    if (!anchorReadFailed && result.confidence !== 'none' && Math.abs(result.tdee - previousTdee) >= 1) {
+      try {
+        await saveLearnedExpenditureMemory(userId, result.tdee, now);
+      } catch (err) {
+        console.error(`[dietBudget] learned-expenditure anchor write failed for user ${userId}:`, err);
+      }
+    }
+
+    const source: 'formula' | 'learned' = LEARNED_TDEE_CONFIDENCE_GATE.has(result.confidence) ? 'learned' : 'formula';
+
+    return {
+      formulaTdee: Math.round(formulaTdee),
+      learnedTdee: result.tdee,
+      confidence: result.confidence,
+      source,
+      daysUsed: result.daysUsed,
+      loggedDays: result.loggedDays,
+    };
+  } catch (err) {
+    console.error(`[dietBudget] learned-expenditure computation failed for user ${userId}:`, err);
+    return fallback;
+  }
+}
 
 /**
  * Weight used for budget math (auto TDEE + the coach's custom-kcal macro
@@ -236,8 +420,15 @@ export async function resolveBudgetWeightKg(userId: string): Promise<number> {
   return latest.valueKg;
 }
 
-/** Auto budget from goal + latest known weight + last 7 days of workouts. */
-export async function computeAutoBudget(userId: string, goal: DietGoal): Promise<DietBudget> {
+/**
+ * Auto budget from goal + latest known weight + last 7 days of workouts.
+ * `opts.now` is an additive, optional override of "the current instant" —
+ * threaded only into the learned-expenditure movement-cap math
+ * (computeLearnedExpenditureSummary) so tests can simulate elapsed time
+ * deterministically without waiting on a real clock. Production callers
+ * never pass it (defaults to `new Date()`).
+ */
+export async function computeAutoBudget(userId: string, goal: DietGoal, opts: { now?: Date } = {}): Promise<DietBudget> {
   const [weightKg, workoutRows] = await Promise.all([
     resolveBudgetWeightKg(userId),
     queryWorkouts(userId, WORKOUT_WINDOW_DAYS),
@@ -271,13 +462,24 @@ export async function computeAutoBudget(userId: string, goal: DietGoal): Promise
   // them onto one day's TDEE (see its doc comment for the bug this fixes:
   // 4x/week workouts at 400 kcal each used to add all 1,600 kcal to one
   // day's target, erasing the deficit).
-  const tdee = estimateTDEE({
+  const formulaTdee = estimateTDEE({
     weightKg,
     heightCm:      profile.heightCm,
     age:           profile.age,
     biologicalSex: profile.biologicalSex,
     activityMultiplier,
   }, workouts, WORKOUT_WINDOW_DAYS);
+
+  // Stage 2 adaptive expenditure (lib/brain/learnedExpenditure.ts): once
+  // there's enough logged intake + a well-established weight trend
+  // (confidence >= 'medium'), the LEARNED TDEE — not the Mifflin-St Jeor
+  // formula — is what this budget's macros are actually computed from. Below
+  // that confidence, `source` is 'formula' and `tdee` is unchanged from
+  // today's behavior. Never fails the budget path — see
+  // computeLearnedExpenditureSummary's doc comment.
+  const expenditure = await computeLearnedExpenditureSummary(userId, formulaTdee, { now: opts.now });
+  const tdee = expenditure.source === 'learned' ? expenditure.learnedTdee : formulaTdee;
+
   const { targetCal, c, p, f } = macrosForGoal(goal, weightKg, tdee, {
     heightCm: profile.heightCm, biologicalSex: profile.biologicalSex,
   });
@@ -295,13 +497,13 @@ export async function computeAutoBudget(userId: string, goal: DietGoal): Promise
     return {
       mode: 'auto', goal, targetKcal: thresholdKcal,
       protein: floored.protein, carbs: floored.carbs, fat: floored.fat,
-      tdee,
+      tdee, expenditure,
       lowEnergyWarning: { thresholdKcal, appliedFloor: true, message: lowEnergyMessage(thresholdKcal, true) },
     };
   }
 
   return {
-    mode: 'auto', goal, targetKcal: targetCal, protein: p, carbs: c, fat: f, tdee,
+    mode: 'auto', goal, targetKcal: targetCal, protein: p, carbs: c, fat: f, tdee, expenditure,
     lowEnergyWarning: null,
   };
 }

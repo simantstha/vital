@@ -515,7 +515,7 @@ final class ScreenshotTests: XCTestCase {
         case "new_user":
             return "Keep logging — a few more days and I'll start spotting real patterns."
         case "weight_loss":
-            return "You're down 1.2kg this week and sleep is holding steady — keep the deficit gentle through the weekend."
+            return "You're down 0.6kg this week and sleep is holding steady — keep the deficit gentle through the weekend."
         case "muscle":
             return "Protein's on target four days running and yesterday's lift was a PR on squat volume — stay the course."
         case "endurance":

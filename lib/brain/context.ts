@@ -39,6 +39,7 @@ import { getWeightReadingsWithLazyImport } from '../weightRepository';
 import {
   assessWeightSignals,
   formatWeightSignalsSection,
+  WEEKEND_PATTERN_WINDOW_DAYS,
   type WeightSignal,
   type DailyIntakeKcalPoint,
 } from './weightSignals';
@@ -47,8 +48,14 @@ import { parseProfileDetails } from '../profileDetails';
 
 /** How many trailing days of weigh-ins assembleContext loads for the smoothed trend (lib/weightTrend.ts). */
 const WEIGHT_TREND_WINDOW_DAYS = 45;
-/** How many trailing local days of resolved intake feed the under_eating signal (lib/brain/weightSignals.ts). */
-const WEIGHT_SIGNALS_INTAKE_WINDOW_DAYS = 7;
+/**
+ * How many trailing local days of resolved intake assembleContext loads —
+ * WEEKEND_PATTERN_WINDOW_DAYS (28, weightSignals.ts) rather than the
+ * under_eating signal's own narrower 7-day need, since the wider pull covers
+ * both: the last 7 entries feed under_eating/todayIntake, the full 28 feed
+ * the weekend_overeating signal — one resolveDailyIntake call either way.
+ */
+const WEIGHT_SIGNALS_INTAKE_WINDOW_DAYS = WEEKEND_PATTERN_WINDOW_DAYS;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -294,6 +301,25 @@ export function buildPromptText(
       `- Target: ${b.targetKcal} kcal (${b.carbs}g C / ${b.protein}g P / ${b.fat}g F)`,
     );
     lines.push(`- Remaining today: ${b.targetKcal - consumedKcal} kcal`);
+    // Stage 2 adaptive expenditure (lib/brain/learnedExpenditure.ts) — only
+    // present for auto budgets. Give the coach the learned-burn fact with
+    // its confidence and day count so it can be honest about uncertainty
+    // (see persona.ts's learnedExpenditureBlock for how to talk about it).
+    if (b.expenditure) {
+      const e = b.expenditure;
+      if (e.source === 'learned') {
+        lines.push(
+          `- Learned burn (from ${e.loggedDays} logged days over the last ${e.daysUsed}): ` +
+          `~${e.learnedTdee} kcal/day real average expenditure, confidence ${e.confidence} ` +
+          `(formula estimate was ${e.formulaTdee} kcal/day) — this target is now based on the learned number.`,
+        );
+      } else if (e.confidence !== 'none') {
+        lines.push(
+          `- Learned burn: not enough data yet to use (confidence ${e.confidence}, ${e.loggedDays} logged days) — ` +
+          `still using the formula estimate (${e.formulaTdee} kcal/day).`,
+        );
+      }
+    }
     if (b.lowEnergyWarning) {
       lines.push(
         `- SAFETY: target is at/below the ~${b.lowEnergyWarning.thresholdKcal} kcal low-energy-availability floor.`,
@@ -633,14 +659,16 @@ export async function assembleContext(userId: string, findingId?: string): Promi
   // Messages in chronological order for the prompt
   const recentMessages = [...rawMessages].reverse();
 
-  // Last WEIGHT_SIGNALS_INTAKE_WINDOW_DAYS local day keys ending at
-  // localToday (oldest first) — feeds both todayIntake (last element) and
-  // the under_eating weight signal below, off ONE resolveDailyIntake call
-  // rather than one call per day.
-  const sevenDayKeys: string[] = [localToday];
+  // Last WEIGHT_SIGNALS_INTAKE_WINDOW_DAYS (28) local day keys ending at
+  // localToday (oldest first) — feeds todayIntake (last element), the
+  // under_eating weight signal (last 7 of these), AND the weekend_overeating
+  // signal (all 28), off ONE resolveDailyIntake call rather than one call
+  // per window.
+  const intakeWindowDayKeys: string[] = [localToday];
   for (let i = 1; i < WEIGHT_SIGNALS_INTAKE_WINDOW_DAYS; i++) {
-    sevenDayKeys.unshift(previousDayKey(sevenDayKeys[0]));
+    intakeWindowDayKeys.unshift(previousDayKey(intakeWindowDayKeys[0]));
   }
+  const sevenDayKeys = intakeWindowDayKeys.slice(-7);
 
   // Diet budget + today's persisted brief (meal plan) + resolved intake +
   // the weight trend all run in parallel — none of these depend on each
@@ -660,7 +688,7 @@ export async function assembleContext(userId: string, findingId?: string): Promi
   const [dietBudget, cachedBriefRow, intakeByDay, weightReadings, coreProfileMd] = await Promise.all([
     usersRow ? resolveDietBudget(usersRow, userId) : Promise.resolve(undefined),
     getDailyBrief(userId, localToday, unitSystem),
-    resolveDailyIntake(userId, sevenDayKeys, tz),
+    resolveDailyIntake(userId, intakeWindowDayKeys, tz),
     getWeightReadingsWithLazyImport(userId, WEIGHT_TREND_WINDOW_DAYS, tz).catch((err) => {
       console.error(`[context] weight trend load failed for user ${userId}:`, err);
       return [];
@@ -682,19 +710,22 @@ export async function assembleContext(userId: string, findingId?: string): Promi
   const weightTrend = computeWeightTrend(weightReadings);
   const profileForFloor = parseProfileDetails(coreProfileMd);
   const floorKcal = lowEnergyThresholdKcal(profileForFloor.biologicalSex);
-  const dailyIntakeKcal: DailyIntakeKcalPoint[] = sevenDayKeys.map((day) => {
+  const toIntakePoint = (day: string): DailyIntakeKcalPoint => {
     const intake = intakeByDay.get(day);
     return {
       day,
       kcal: intake && intake.source !== 'none' ? intake.kcal : null,
       source: intake?.source ?? 'none',
     };
-  });
+  };
+  const dailyIntakeKcal: DailyIntakeKcalPoint[] = sevenDayKeys.map(toIntakePoint);
+  const weekendPatternIntakeKcal: DailyIntakeKcalPoint[] = intakeWindowDayKeys.map(toIntakePoint);
   const weightSignals = assessWeightSignals({
     trend: weightTrend,
     dailyIntakeKcal,
     floorKcal,
     goal: dietBudget?.goal ?? 'general',
+    weekendPatternIntakeKcal,
   });
 
   // WHOOP context line (Task 7) — daily_metrics is day-keyed to the user's
