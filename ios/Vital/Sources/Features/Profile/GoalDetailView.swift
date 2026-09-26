@@ -48,6 +48,7 @@ struct GoalDetailView: View {
 
             if vm.isLoading {
                 ProgressView()
+                    .motionTransition(.fade)
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
@@ -70,6 +71,7 @@ struct GoalDetailView: View {
                     .padding(.bottom, 40)
                 }
                 .scrollIndicators(.hidden)
+                .motionTransition(.fade)
             }
         }
         // Pushed screen — keep the nav bar (and swipe-back) working, same

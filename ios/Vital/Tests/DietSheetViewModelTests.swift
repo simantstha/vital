@@ -56,6 +56,17 @@ final class DietSheetViewModelTests: XCTestCase {
         XCTAssertFalse(vm.isRecentsFallback)
     }
 
+    // MARK: - Initial loading flag
+
+    /// `isInitialLoading` starts true so the sheet shows a quiet placeholder
+    /// rather than "Nothing logged yet" before `load()` has ever run —
+    /// `load()` itself talks to `APIClient.shared` directly, so flipping it
+    /// back to false isn't exercised here (see the file's top doc comment).
+    func testIsInitialLoadingStartsTrue() {
+        let vm = makeViewModel()
+        XCTAssertTrue(vm.isInitialLoading)
+    }
+
     // MARK: - nil-slot entries (pre-slot-tracking meals)
 
     func testRecentsForSelectedSlotFallsBackForNilSlotEntries() {

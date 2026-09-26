@@ -51,7 +51,9 @@ final class MemoryViewModel: ObservableObject {
     func resolveFact(id: String, action: String) async {
         do {
             try await apiClient.resolvePendingFact(id: id, action: action)
-            pendingFacts.removeAll { $0.id == id }
+            withAnimation(Theme.Motion.standard) {
+                pendingFacts.removeAll { $0.id == id }
+            }
         } catch {
             if !error.isCancellation { toastMessage = "Couldn't save — try again" }
         }

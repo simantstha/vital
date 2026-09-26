@@ -330,7 +330,15 @@ private struct AmbientAnimation<V: Equatable>: ViewModifier {
 /// Named transition styles for `.motionTransition`. Reduce Motion means "no
 /// large movement", not "no animation" — a cross-fade is substituted, never
 /// a hard cut.
-enum MotionTransition { case fade, card, fromTop, fromBottom }
+enum MotionTransition {
+    case fade, card, fromTop, fromBottom
+    /// Directional step-wizard push (e.g. `OnboardingFlowView`'s step
+    /// content): `pushForward` for advancing (new content enters from the
+    /// trailing edge, old content exits leading), `pushBackward` for the
+    /// reverse. Reduce Motion still substitutes a plain cross-fade, same as
+    /// every other case here.
+    case pushForward, pushBackward
+}
 
 private struct MotionTransitionModifier: ViewModifier {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -343,6 +351,16 @@ private struct MotionTransitionModifier: ViewModifier {
         case .card:       return .opacity.combined(with: .scale(scale: 0.97, anchor: .top))
         case .fromTop:    return .opacity.combined(with: .move(edge: .top))
         case .fromBottom: return .opacity.combined(with: .move(edge: .bottom))
+        case .pushForward:
+            return .asymmetric(
+                insertion: .opacity.combined(with: .move(edge: .trailing)),
+                removal: .opacity.combined(with: .move(edge: .leading))
+            )
+        case .pushBackward:
+            return .asymmetric(
+                insertion: .opacity.combined(with: .move(edge: .leading)),
+                removal: .opacity.combined(with: .move(edge: .trailing))
+            )
         }
     }
 }
@@ -390,6 +408,29 @@ struct PressableCardStyle: ButtonStyle {
 
 extension ButtonStyle where Self == PressableCardStyle {
     static var pressableCard: PressableCardStyle { PressableCardStyle() }
+}
+
+/// A rectangular hit-test region that can grow (or shrink) independently on
+/// each axis via `.contentShape`, without touching the view's own layout
+/// size — unlike `.frame(minWidth:minHeight:)`, which pushes surrounding
+/// siblings to make room. For small controls packed too tightly to reach the
+/// 44×44pt HIG minimum tap target any other way (chips/buttons a few points
+/// apart in an `HStack`), this widens *only* the tappable area.
+private struct ExpandedTapTarget: Shape {
+    var dx: CGFloat = 0
+    var dy: CGFloat = 0
+    func path(in rect: CGRect) -> Path {
+        Path(rect.insetBy(dx: -dx, dy: -dy))
+    }
+}
+
+extension View {
+    /// See `ExpandedTapTarget`. `dx`/`dy` are how far the hit region extends
+    /// past the view's own edge on each side (so `dy: 8` on an 18pt-tall
+    /// label reaches a 34pt-tall tap target).
+    func expandedTapTarget(dx: CGFloat = 0, dy: CGFloat = 0) -> some View {
+        contentShape(ExpandedTapTarget(dx: dx, dy: dy))
+    }
 }
 
 extension View {

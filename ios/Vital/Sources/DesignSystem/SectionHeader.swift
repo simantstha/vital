@@ -20,6 +20,13 @@ struct SectionHeader: View {
                     Text(actionLabel)
                         .font(Theme.Typography.labelMedium)
                         .foregroundStyle(Theme.Colors.accentContent)
+                        // Widen the *tap target* to ~44pt without widening
+                        // the row itself — a `.frame(minHeight: 44)` here
+                        // would grow this header row's height and push
+                        // everything below it down. `expandedTapTarget`
+                        // extends the hit-test region beyond the label's own
+                        // bounds instead, so the visible row is untouched.
+                        .expandedTapTarget(dx: 11, dy: 11)
                 }
             }
         }

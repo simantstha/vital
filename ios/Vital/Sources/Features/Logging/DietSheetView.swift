@@ -364,12 +364,21 @@ private extension DietSheetView {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
             SectionHeader(title: "Logged today")
 
-            if vm.consumedSource == "healthkit" {
+            if vm.isInitialLoading {
+                // Quiet placeholder while the first load is in flight — same
+                // static-redacted idiom as `SkeletonView`/`PhotoLogFlowView`'s
+                // calm loading state, so a user who already has entries today
+                // doesn't see "Nothing logged yet" flash before they appear.
+                SkeletonBlock(height: 44)
+                    .motionTransition(.fade)
+            } else if vm.consumedSource == "healthkit" {
                 healthKitSummaryRow
+                    .motionTransition(.fade)
             } else if vm.loggedEntries.isEmpty {
                 Text("Nothing logged yet. Snap a photo, scan a barcode, or search.")
                     .font(.system(size: 14))
                     .foregroundStyle(Theme.Colors.textTertiary)
+                    .motionTransition(.fade)
             } else {
                 ForEach(vm.loggedGroups) { group in
                     VStack(alignment: .leading, spacing: Theme.Spacing.xs + 2) {
@@ -396,6 +405,7 @@ private extension DietSheetView {
                             }
                         }
                     }
+                    .motionTransition(.fade)
                 }
             }
         }

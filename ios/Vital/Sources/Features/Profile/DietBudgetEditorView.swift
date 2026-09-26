@@ -13,6 +13,7 @@ struct DietBudgetEditorView: View {
 
                 if vm.isLoading {
                     ProgressView()
+                        .motionTransition(.fade)
                 } else {
                     ScrollView {
                         VStack(spacing: Theme.Spacing.lg) {
@@ -39,6 +40,7 @@ struct DietBudgetEditorView: View {
                         .padding(.bottom, 40)
                     }
                     .scrollIndicators(.hidden)
+                    .motionTransition(.fade)
                 }
             }
             .navigationTitle("Daily Budget")

@@ -204,6 +204,11 @@ struct LogReceiptCard: View {
                         .padding(.horizontal, Theme.Spacing.sm)
                         .padding(.vertical, Theme.Spacing.xxs)
                         .background(Capsule().fill(Theme.Colors.glassFill))
+                        // Chips sit only `Theme.Spacing.xs` (4pt) apart, so a
+                        // horizontal `.frame`/inset would make adjacent chips'
+                        // tap targets overlap — grow the hit area vertically
+                        // only, into the row's own top/bottom whitespace.
+                        .expandedTapTarget(dy: 8)
                 }
                 .disabled(factor == 1.0)
                 .accessibilityLabel("Scale portion to \(Self.scaleLabel(factor))")
@@ -252,11 +257,18 @@ struct LogReceiptCard: View {
                     Button("Edit", action: onEdit)
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(Theme.Colors.textSecondary)
+                        // The row's own height is set by the icon/text
+                        // column beside it (~40pt), so this vertical growth
+                        // fits inside room the row already has — no layout
+                        // change. Horizontal growth is kept small enough to
+                        // clear Undo's own expanded region (8pt apart).
+                        .expandedTapTarget(dx: 3, dy: 13)
                 }
                 if let onUndo {
                     Button("Undo", action: onUndo)
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(state == .normal ? Theme.Colors.accentContent : Theme.Colors.alert)
+                        .expandedTapTarget(dx: 3, dy: 13)
                 }
             }
             .buttonStyle(.vital(scale: 1.0))
@@ -349,6 +361,8 @@ private struct MealItemStepperSheet: View {
             Image(systemName: systemName)
                 .font(.system(size: 32))
                 .foregroundStyle(Theme.Colors.accentContent)
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }

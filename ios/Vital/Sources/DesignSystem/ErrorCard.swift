@@ -66,6 +66,11 @@ struct ErrorCard: View {
                     Label(actionLabel, systemImage: actionIcon)
                         .font(Theme.Typography.labelMedium)
                         .foregroundStyle(Theme.Colors.accentContent)
+                        // Extend the tap target toward ~44pt without growing
+                        // the card — `expandedTapTarget` enlarges the
+                        // hit-test region beyond the label's own bounds
+                        // instead of its layout size.
+                        .expandedTapTarget(dx: 12, dy: 12)
                 }
                 .buttonStyle(.plain)
             }

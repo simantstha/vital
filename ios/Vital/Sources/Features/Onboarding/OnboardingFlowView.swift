@@ -40,24 +40,28 @@ struct OnboardingFlowView: View {
 
     @ViewBuilder
     private var stepContent: some View {
-        switch vm.step {
-        case .basics:
-            BasicsStepView(vm: vm)
-        case .goal:
-            GoalStepView(vm: vm)
-        case .training:
-            TrainingStepView(vm: vm)
-        case .healthSafety:
-            HealthSafetyStepView(vm: vm)
-        case .lifestyle:
-            LifestyleStepView(vm: vm)
-        case .coachIntro:
-            CoachIntroStepView(vm: vm)
-        case .calibrating:
-            CalibratingStepView(vm: vm)
-                .environmentObject(authViewModel)
-                .environmentObject(backfillCoordinator)
+        Group {
+            switch vm.step {
+            case .basics:
+                BasicsStepView(vm: vm)
+            case .goal:
+                GoalStepView(vm: vm)
+            case .training:
+                TrainingStepView(vm: vm)
+            case .healthSafety:
+                HealthSafetyStepView(vm: vm)
+            case .lifestyle:
+                LifestyleStepView(vm: vm)
+            case .coachIntro:
+                CoachIntroStepView(vm: vm)
+            case .calibrating:
+                CalibratingStepView(vm: vm)
+                    .environmentObject(authViewModel)
+                    .environmentObject(backfillCoordinator)
+            }
         }
+        .id(vm.step)
+        .motionTransition(vm.stepDirection == .forward ? .pushForward : .pushBackward)
     }
 }
 
@@ -172,8 +176,14 @@ private struct ChipPicker: View {
     var body: some View {
         FlowLayout(spacing: Theme.Spacing.sm) {
             ForEach(options, id: \.value) { option in
-                Chip(text: option.label, isAccent: isSelected(option.value))
-                    .onTapGesture { onTap(option.value) }
+                let selected = isSelected(option.value)
+                Button {
+                    onTap(option.value)
+                } label: {
+                    Chip(text: option.label, isAccent: selected)
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(selected ? .isSelected : [])
             }
         }
     }
