@@ -453,6 +453,59 @@ final class ScreenshotTests: XCTestCase {
             }
         }
         capture(app, name: "\(scenario)__trends__\(appearance)")
+
+        if scenario != "server_error" {
+            captureMetricDetail(app, scenario: scenario, appearance: appearance)
+        }
+    }
+
+    private func captureMetricDetail(_ app: XCUIApplication, scenario: String, appearance: String) {
+        // Find and tap the HRV metric tile (the Recovery section's metric card, distinct from the
+        // "This Week" strip's lowercase "hrv" stat which is not tappable). Must scroll within
+        // a bounded loop before tapping, since the grid may still be scrolled from the assertion above.
+        let hrvTile = app.staticTexts["HRV"].firstMatch
+        var swipes = 0
+        while !hrvTile.exists && swipes < 4 {
+            app.swipeUp()
+            swipes += 1
+        }
+
+        tapWhenHittable(
+            hrvTile, app: app,
+            description: "HRV metric tile [\(scenario)/\(appearance)]"
+        )
+
+        // Wait for MetricDetailView to render — using the detail range switcher's "3 months"
+        // button as the stable signal. This button always renders once the screen has loaded,
+        // regardless of data availability (unlike section headers like "DISTRIBUTION" which only
+        // appear with sufficient data). Assert the detail screen loaded before capturing.
+        XCTAssertTrue(app.buttons["3 months"].waitForExistence(timeout: 10),
+                       "HRV detail should load [\(scenario)/\(appearance)]")
+
+        // Screen segment must be letters only to match CI export regex: ^[a-z_]+__[A-Za-z]+__(light|dark)\.png$
+        capture(app, name: "\(scenario)__hrvDetail__\(appearance)")
+
+        // Scroll down to see more of the detail view (e.g. the stats row, chart, or records section).
+        app.swipeUp()
+        app.swipeUp()
+        capture(app, name: "\(scenario)__hrvDetailMore__\(appearance)")
+
+        // Navigate back to Trends so later captures still work. Try the navigation bar's back
+        // button first (the standard edge-swipe-back and zoom-transition nav pattern); if it
+        // doesn't exist, fall back to a right-edge swipe (interactive pop gesture) as a safety net.
+        let backButton = app.navigationBars.buttons.element(boundBy: 0)
+        if backButton.waitForExistence(timeout: 5) {
+            backButton.tap()
+        } else {
+            // Swipe from the left edge to trigger the interactive pop gesture, a fallback when
+            // the nav bar button is absent or fails to respond. This keeps the rest of the test
+            // flow alive instead of getting stuck in the detail view.
+            app.swipeRight()
+        }
+
+        // Wait for the detail view to dismiss before returning, so the next test section sees Trends.
+        XCTAssertTrue(app.buttons["3 months"].waitForNonExistence(timeout: 5),
+                       "HRV metric detail view never finished dismissing [\(scenario)/\(appearance)]")
     }
 
     private func captureLogs(_ app: XCUIApplication, scenario: String, appearance: String) {

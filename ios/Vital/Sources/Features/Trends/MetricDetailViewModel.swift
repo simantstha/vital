@@ -58,6 +58,16 @@ final class MetricDetailViewModel: ObservableObject {
     @Published private(set) var distributionSeries: MetricSeries? = nil
     private var distributionLoadStarted = false
 
+    /// "Moves with it" rows + the "what it means today" corroboration clause
+    /// both need a related metric's own 30-day series — keyed by metric key,
+    /// fetched once in the background (mirrors `distributionSeries`'s
+    /// "fetched once, independent of `range`" treatment). A metric absent
+    /// here is either still loading or has no entry in
+    /// `MetricRelatedMetrics.relatedKeys` — both render as "omit", never a
+    /// placeholder.
+    @Published private(set) var relatedSeries: [String: MetricSeries] = [:]
+    private var relatedLoadStarted = false
+
     /// The date the user is currently scrubbing, if any — `nil` when not
     /// touching the chart. Lives here rather than local `@State` in the view
     /// so a range-pill switch or a fresh load can clear stale scrub state in
@@ -113,6 +123,10 @@ final class MetricDetailViewModel: ObservableObject {
             distributionLoadStarted = true
             Task { await loadDistributionWindow() }
         }
+        if !relatedLoadStarted {
+            relatedLoadStarted = true
+            Task { await loadRelatedSeries() }
+        }
     }
 
     /// Range-pill tap. Clears any in-progress scrub — the old scrub position
@@ -143,6 +157,28 @@ final class MetricDetailViewModel: ObservableObject {
             // Supplementary section — swallow and stay omitted.
         }
     }
+
+    /// One batch fetch (30 days — the "Moves with it" sparkline window) for
+    /// every key `MetricRelatedMetrics.relatedKeys(for:)` names. A failure
+    /// here is silent, same treatment as `loadDistributionWindow()` — these
+    /// are supplementary sections, never the primary series this view
+    /// depends on.
+    private func loadRelatedSeries() async {
+        let keys = MetricRelatedMetrics.relatedKeys(for: metricKey)
+        guard !keys.isEmpty else { return }
+        do {
+            let response = try await apiClient.fetchTrendsBatch(metrics: keys, days: 30)
+            let system = UnitPreference.shared.current
+            var built: [String: MetricSeries] = [:]
+            for key in keys {
+                guard let dto = response.series[key], let keySpec = MetricCatalog.spec(for: key) else { continue }
+                built[key] = TrendsViewModel.makeSeries(from: dto, spec: keySpec, system: system)
+            }
+            relatedSeries = built
+        } catch {
+            // Supplementary section — swallow and stay omitted.
+        }
+    }
 }
 
 // MARK: - Pure helpers (testable without I/O)
@@ -156,6 +192,26 @@ extension MetricDetailViewModel {
     /// tests call it synchronously off the main actor.
     nonisolated static func nearestPoint(to date: Date, in points: [ChartPoint]) -> ChartPoint? {
         points.min { abs($0.date.timeIntervalSince(date)) < abs($1.date.timeIntervalSince(date)) }
+    }
+
+    /// The gated verdict for a loaded `MetricSeries`, against its own
+    /// `spec`'s noise floor — the same call `MetricDetailView`'s header chip
+    /// makes for the primary metric, reused here so a related metric's
+    /// verdict (for `MetricMeaning`'s corroboration clause) is never
+    /// re-derived by a second, possibly-diverging code path. `.noData` for a
+    /// missing series/spec or an empty/unsorted-to-empty points array.
+    nonisolated static func verdict(for series: MetricSeries?, spec: MetricSpec?) -> Verdict {
+        guard let series, let spec, let latest = series.points.max(by: { $0.date < $1.date })?.value else {
+            return .noData
+        }
+        return TrendsVerdict.evaluate(
+            latest: latest,
+            established: series.established,
+            dataDays: series.dataDays,
+            mean30: series.baseline?.mean30,
+            sd30: series.baseline?.sd30,
+            minMeaningfulSD: spec.minMeaningfulSD
+        )
     }
 
     /// True when `TrendsDownsample.weekly` actually collapsed `raw` into

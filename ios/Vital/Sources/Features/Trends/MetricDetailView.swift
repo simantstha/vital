@@ -1,23 +1,33 @@
 import SwiftUI
 import Charts
 
-/// The scrollable drill-in for one Trends metric: a glass header pill, a
-/// hero reading, a range picker, the scrubbable chart with its ±1σ band,
-/// three summary stats, and (once there's enough history) a distribution
-/// histogram. Replaces the PR4 stub.
+/// The scrollable drill-in for one Trends metric: a standard nav-bar title
+/// (so edge-swipe back and the zoom transition both work), a hero reading
+/// with a delta pill vs normal, an on-device insight line, a "what it means
+/// today" card, the range picker, the scrubbable chart with its ±1σ band,
+/// an interactive Low/Average/High/Normal stats row, a distribution
+/// histogram, and (Phase 5) "Moves with it", "Your records", "About", and
+/// "Ask your coach" sections.
 struct MetricDetailView: View {
     let metricKey: String
 
     @StateObject private var vm: MetricDetailViewModel
     @ObservedObject private var unitPref = UnitPreference.shared
-    @Environment(\.dismiss) private var dismiss
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     /// Continuous plot-space date from `.chartXSelection` — NOT snapped to a
     /// data point. `snappedPoint` below derives the actual point to render.
     @State private var rawSelection: Date? = nil
     @State private var rangeTapTick = false
     @State private var scrubHapticTick = false
+    @State private var statTapTick = false
+
+    /// Which stats-row button is currently highlighting the chart, if any —
+    /// tapping the same one again clears it (see `statButton(_:label:value:)`).
+    @State private var statSelection: StatSelection? = nil
+
+    enum StatSelection: Equatable {
+        case low, average, high
+    }
 
     init(metricKey: String) {
         self.metricKey = metricKey
@@ -25,31 +35,54 @@ struct MetricDetailView: View {
     }
 
     private var spec: MetricSpec? { vm.spec }
+    private var displayName: String { spec?.displayName ?? metricKey }
 
     var body: some View {
         ZStack {
             Theme.Colors.canvas.ignoresSafeArea()
             ScrollView {
                 VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
-                    header
-
                     if vm.isLoading && vm.series == nil {
                         loadingState
                             .motionTransition(.fade)
                     } else if let errorMessage = vm.errorMessage {
-                        ErrorCard(title: "Couldn't load \(spec?.displayName ?? metricKey)", message: errorMessage) {
+                        ErrorCard(title: "Couldn't load \(displayName)", message: errorMessage) {
                             Task { await vm.load() }
                         }
                         .motionTransition(.fade)
                     } else {
                         VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
                             heroSection
-                            rangePills
+                            if let meaningText {
+                                meaningCard(meaningText)
+                            }
+                            if isCalibrating {
+                                stillLearningCard
+                            }
+                            if let insightText {
+                                Text(insightText)
+                                    .font(.system(size: 13, weight: .medium))
+                                    .foregroundStyle(Theme.Colors.textSecondary)
+                            }
+                            DetailRangeSwitcher(range: vm.range) { newRange in
+                                rangeTapTick.toggle()
+                                vm.selectRange(newRange)
+                            }
                             chartCard
                             statsRow
                             if showDistribution {
                                 distributionSection
                             }
+                            if !movesWithItKeys.isEmpty {
+                                movesWithItSection
+                            }
+                            if let recordsResult {
+                                recordsSection(recordsResult)
+                            }
+                            if let aboutCopy = MetricAbout.copy(for: metricKey) {
+                                aboutSection(aboutCopy)
+                            }
+                            askCoachSection
                         }
                         .motionTransition(.fade)
                     }
@@ -60,109 +93,25 @@ struct MetricDetailView: View {
             }
             .scrollIndicators(.hidden)
         }
-        .navigationBarBackButtonHidden(true)
-        .toolbar(.hidden, for: .navigationBar)
+        .navigationTitle(displayName)
+        .navigationBarTitleDisplayMode(.large)
         .task { await vm.load() }
-        .onChange(of: vm.range) { _, _ in rawSelection = nil }
+        .onChange(of: vm.range) { _, _ in
+            rawSelection = nil
+            statSelection = nil
+        }
         .sensoryFeedback(Theme.Haptics.selection, trigger: rangeTapTick)
         .sensoryFeedback(Theme.Haptics.selection, trigger: scrubHapticTick)
+        .sensoryFeedback(Theme.Haptics.selection, trigger: statTapTick)
     }
 }
 
-// MARK: - Header pill
-
-private extension MetricDetailView {
-
-    /// Two layouts: the normal single-row pill, and — at AX Dynamic Type
-    /// sizes — a stacked layout with the title on its own row. The pill's
-    /// `HStack` (chevron + title + chip/date, all squeezed into one row)
-    /// works at default text sizes but has nowhere to put an AX5-scaled
-    /// title and chip side by side without truncating the title; stacking
-    /// avoids that rather than clipping either.
-    @ViewBuilder
-    var header: some View {
-        if dynamicTypeSize.isAccessibilitySize {
-            GlassCard(padding: Theme.Spacing.md, cornerRadius: Theme.Radius.lg) {
-                VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-                    HStack {
-                        backButton
-                        Spacer()
-                        headerTrailing
-                    }
-                    Text(spec?.displayName ?? metricKey)
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(Theme.Colors.textPrimary)
-                }
-            }
-        } else {
-            GlassCard(padding: Theme.Spacing.md, cornerRadius: Theme.Radius.pill) {
-                HStack(spacing: Theme.Spacing.sm) {
-                    backButton
-
-                    Text(spec?.displayName ?? metricKey)
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(Theme.Colors.textPrimary)
-                        .lineLimit(1)
-
-                    Spacer(minLength: Theme.Spacing.sm)
-
-                    headerTrailing
-                }
-            }
-        }
-    }
-
-    var backButton: some View {
-        Button {
-            dismiss()
-        } label: {
-            Image(systemName: "chevron.left")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(Theme.Colors.textSecondary)
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Back")
-    }
-
-    /// Scrubbed values render here, in the header — never a floating
-    /// `annotation()`, which would clip at the plot edges and cover the
-    /// data being inspected.
-    @ViewBuilder
-    var headerTrailing: some View {
-        if let scrubbedDate = vm.scrubbedDate {
-            Text(Self.dayFormatter.string(from: scrubbedDate))
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(Theme.Colors.textSecondary)
-        } else {
-            headerChip
-        }
-    }
-
-    /// Mirrors `MetricTileView.verdictChip`'s tinting rule — never re-derive
-    /// the polarity→color mapping outside `TrendDirection.resolve`.
-    var headerChip: Chip {
-        let polarity = spec?.polarity ?? .neutral
-        switch latestVerdict {
-        case .above:
-            return Chip(text: "↑ above normal", tint: TrendDirection.resolve(polarity, rising: true).color)
-        case .below:
-            return Chip(text: "↓ below normal", tint: TrendDirection.resolve(polarity, rising: false).color)
-        case .normal:
-            return Chip(text: "in normal range")
-        case .calibrating(let daysRemaining):
-            return Chip(text: daysRemaining > 0 ? "\(daysRemaining)d left" : "not enough data")
-        case .noData:
-            return Chip(text: "no data")
-        }
-    }
-}
-
-// MARK: - Hero + verdict line
+// MARK: - Hero
 
 private extension MetricDetailView {
 
     var heroSection: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
+        VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
             HStack(alignment: .lastTextBaseline, spacing: 6) {
                 Text(heroValueText)
                     .font(Theme.Typography.numericHero(44))
@@ -175,39 +124,53 @@ private extension MetricDetailView {
                         .foregroundStyle(Theme.Colors.textSecondary)
                 }
             }
-            Text(verdictLineText)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(verdictLineColor)
+            if let deltaPillText {
+                Text(deltaPillText)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(deltaPillColor)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(Capsule().fill(deltaPillColor.opacity(0.16)))
+            }
+            Text(dateCaptionText)
+                .font(.system(size: 13))
+                .foregroundStyle(Theme.Colors.textSecondary)
         }
         .padding(.top, Theme.Spacing.xs)
+        .accessibilityElement(children: .combine)
     }
 
     var heroValueText: String {
         guard let value = displayedValue else { return "—" }
-        return Self.formattedNumber(value, decimals: spec?.decimals ?? 0)
+        return TrendsDeltaFormat.formattedNumber(value, decimals: spec?.decimals ?? 0)
     }
 
-    /// The value the hero + verdict line currently show: the scrubbed
-    /// point's value while dragging, otherwise the latest raw reading.
+    /// The value the hero + delta pill currently show: the scrubbed point's
+    /// value while dragging, otherwise the latest raw reading.
     var displayedValue: Double? { snappedPoint?.value ?? latestRawValue }
     var displayedDate: Date? { snappedPoint?.date ?? rawPoints.last?.date }
     var displayedVerdict: Verdict { evaluate(displayedValue) }
 
-    var verdictLineText: String {
-        let text: String
+    /// "↑ 7 ms above your normal" / "↓ 3 bpm below your normal" / "In your
+    /// normal range" — `nil` while calibrating or with no data, when there's
+    /// no "normal" yet to compare against.
+    var deltaPillText: String? {
         switch displayedVerdict {
-        case .above:   text = "Above your normal"
-        case .below:   text = "Below your normal"
-        case .normal:  text = "In your normal range"
-        case .calibrating(let daysRemaining):
-            return daysRemaining > 0 ? "\(daysRemaining) more day\(daysRemaining == 1 ? "" : "s")" : "Not enough variation yet"
-        case .noData:
-            return "No data yet"
+        case .above, .below:
+            guard let spec, let value = displayedValue, let mean30 = vm.series?.baseline?.mean30 else { return nil }
+            let delta = value - mean30
+            let arrow = TrendsDeltaFormat.arrow(delta)
+            let magnitude = TrendsDeltaFormat.magnitudeText(delta, spec: spec, system: unitPref.current, includeUnit: true)
+            let direction = delta >= 0 ? "above" : "below"
+            return "\(arrow) \(magnitude) \(direction) your normal"
+        case .normal:
+            return "In your normal range"
+        case .calibrating, .noData:
+            return nil
         }
-        return "\(text) · \(dateSuffix(displayedDate))"
     }
 
-    var verdictLineColor: Color {
+    var deltaPillColor: Color {
         guard let spec else { return Theme.Colors.textSecondary }
         switch displayedVerdict {
         case .above: return TrendDirection.resolve(spec.polarity, rising: true).color
@@ -216,37 +179,111 @@ private extension MetricDetailView {
         }
     }
 
-    func dateSuffix(_ date: Date?) -> String {
-        guard let date else { return "" }
-        return Calendar.current.isDateInToday(date) ? "today" : Self.dayFormatter.string(from: date)
+    /// "today" for the latest reading, otherwise the scrubbed day spelled
+    /// out — e.g. "Tue, Sep 22". Replaces the old header pill's date chip.
+    var dateCaptionText: String {
+        guard let displayedDate else { return "" }
+        return Calendar.current.isDateInToday(displayedDate) ? "today" : Self.dayFormatter.string(from: displayedDate)
     }
 }
 
-// MARK: - Range pills
+// MARK: - What it means today
 
 private extension MetricDetailView {
 
-    var rangePills: some View {
-        HStack(spacing: Theme.Spacing.sm) {
-            ForEach(TrendsDetailRange.allCases) { range in
-                let isOn = vm.range == range
-                Button {
-                    rangeTapTick.toggle()
-                    vm.selectRange(range)
-                } label: {
-                    Text(range.label)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(isOn ? Theme.Colors.onAccent : Theme.Colors.textSecondary)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, Theme.Spacing.sm)
-                        .background(Capsule().fill(isOn ? Theme.Colors.accent : Theme.Colors.glassFill))
-                        .overlay(Capsule().strokeBorder(isOn ? .clear : Theme.Colors.glassBorder, lineWidth: 0.5))
+    var relatedVerdict: Verdict? {
+        guard let relatedKey = MetricRelatedMetrics.primaryRelated(for: metricKey),
+              let relatedSeries = vm.relatedSeries[relatedKey] else { return nil }
+        return MetricDetailViewModel.verdict(for: relatedSeries, spec: MetricCatalog.spec(for: relatedKey))
+    }
+
+    var meaningText: String? {
+        MetricMeaning.message(metricKey: metricKey, verdict: latestVerdict, relatedVerdict: relatedVerdict)
+    }
+
+    func meaningCard(_ text: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("WHAT IT MEANS TODAY")
+                .font(.system(size: 11, weight: .semibold))
+                .tracking(1.2)
+                .foregroundStyle(Color.white.opacity(0.6))
+            Text(text)
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(Color.white)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(Theme.Spacing.lg)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
+                .fill(Self.meaningCardFill)
+        )
+        .accessibilityElement(children: .combine)
+    }
+
+    static let meaningCardFill = Color(red: 0.067, green: 0.086, blue: 0.114)
+}
+
+// MARK: - Still learning (calibrating)
+
+private extension MetricDetailView {
+
+    var isCalibrating: Bool {
+        if case .calibrating = latestVerdict { return true }
+        return false
+    }
+
+    var calibratingDaysRemaining: Int {
+        if case .calibrating(let daysRemaining) = latestVerdict { return daysRemaining }
+        return 0
+    }
+
+    var calibratingDaysElapsed: Int { max(0, min(14, 14 - calibratingDaysRemaining)) }
+
+    var stillLearningCard: some View {
+        GlassCard(padding: Theme.Spacing.md, cornerRadius: Theme.Radius.lg) {
+            HStack(spacing: Theme.Spacing.md) {
+                calibrationRing
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Still learning your normal")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Theme.Colors.textPrimary)
+                    Text(stillLearningCopy)
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(Theme.Colors.textSecondary)
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel(range.accessibilityLabel)
-                .accessibilityAddTraits(isOn ? .isSelected : [])
             }
         }
+        .accessibilityElement(children: .combine)
+    }
+
+    var stillLearningCopy: String {
+        let remaining = calibratingDaysRemaining
+        let noun = remaining == 1 ? "night" : "nights"
+        return "\(remaining) more \(noun) and I'll know what's typical for you."
+    }
+
+    var calibrationRing: some View {
+        ZStack {
+            Circle()
+                .stroke(Theme.Colors.progressTrack, lineWidth: 4)
+            Circle()
+                .trim(from: 0, to: min(1, Double(calibratingDaysElapsed) / 14))
+                .stroke(Theme.Colors.accentContent, style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+                .animation(Theme.Motion.settle, value: calibratingDaysElapsed)
+            Text("\(calibratingDaysElapsed)/14")
+                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .foregroundStyle(Theme.Colors.textPrimary)
+        }
+        .frame(width: 48, height: 48)
+    }
+}
+
+// MARK: - Insight
+
+private extension MetricDetailView {
+    var insightText: String? {
+        MetricInsight.compute(points: rawPoints, mean30: vm.series?.baseline?.mean30, sd30: vm.series?.baseline?.sd30)
     }
 }
 
@@ -282,9 +319,9 @@ private extension MetricDetailView {
 
     var latestRawValue: Double? { rawPoints.last?.value }
 
-    /// The band is gated on the SAME verdict call the header chip uses —
-    /// one source of truth, never re-derived — so the chart and the chip
-    /// can never disagree about whether "your normal" is known yet.
+    /// The band is gated on the SAME verdict call the hero delta pill uses —
+    /// one source of truth, never re-derived — so the chart and the pill can
+    /// never disagree about whether "your normal" is known yet.
     var latestVerdict: Verdict { evaluate(latestRawValue) }
 
     var showsBand: Bool {
@@ -336,7 +373,11 @@ private extension MetricDetailView {
                     chart
                         .frame(height: 176)
 
-                    if showsBand {
+                    if isCalibrating {
+                        Text("Readings so far — no range yet, so no judgement yet.")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(Theme.Colors.textTertiary)
+                    } else if showsBand {
                         legend
                     } else {
                         Text("your normal range appears after 14 days")
@@ -367,7 +408,7 @@ private extension MetricDetailView {
     var chart: some View {
         Chart {
             // 1. Band — mean30 ± sd30. Emitted only when the verdict isn't
-            //    gated (same call as the header chip). Bounded by two thin
+            //    gated (same call as the hero pill). Bounded by two thin
             //    rule lines at its edges so it reads as a zone with clear
             //    top/bottom, not just a soft wash — this is the shape the
             //    whole feature exists to make visible, so it must win
@@ -419,7 +460,15 @@ private extension MetricDetailView {
                     .foregroundStyle(Theme.Colors.accentContent)
             }
 
-            // 4. PointMark — every point only under 45 marks; above that,
+            // 4. Latest-point halo, drawn behind the small per-point marks
+            //    below so it reads as a soft glow rather than another dot.
+            if let last = chartPoints.last {
+                PointMark(x: .value("Date", last.date), y: .value("Value", last.value))
+                    .symbolSize(160)
+                    .foregroundStyle(Theme.Colors.accentContent.opacity(0.18))
+            }
+
+            // 5. PointMark — every point only under 45 marks; above that,
             //    just the latest, to avoid diffing 90+ marks per frame.
             if chartPoints.count <= 45 {
                 ForEach(chartPoints) { point in
@@ -433,12 +482,21 @@ private extension MetricDetailView {
                     .foregroundStyle(Theme.Colors.accentContent)
             }
 
-            // 5. Scrub rule + emphasized point — deliberately NOT wrapped in
-            //    `withAnimation`, so it tracks the finger 1:1.
+            // 6. Stats-row emphasis — Low/High highlight a point + rule,
+            //    Average highlights the range's own mean line. Cleared by
+            //    tapping the same stat button again.
+            statSelectionMarks
+
+            // 7. Scrub rule + emphasized point (with its own halo) —
+            //    deliberately NOT wrapped in `withAnimation`, so it tracks
+            //    the finger 1:1.
             if let snappedPoint {
                 RuleMark(x: .value("Scrub", snappedPoint.date))
                     .lineStyle(StrokeStyle(lineWidth: 1))
                     .foregroundStyle(Theme.Colors.textPrimary.opacity(0.45))
+                PointMark(x: .value("Date", snappedPoint.date), y: .value("Value", snappedPoint.value))
+                    .symbolSize(160)
+                    .foregroundStyle(Theme.Colors.textPrimary.opacity(0.12))
                 PointMark(x: .value("Date", snappedPoint.date), y: .value("Value", snappedPoint.value))
                     .symbolSize(70)
                     .foregroundStyle(Theme.Colors.accentContent)
@@ -452,8 +510,24 @@ private extension MetricDetailView {
                     .foregroundStyle(Theme.Colors.textTertiary)
             }
         }
-        .chartYAxis(.hidden)
+        .chartYAxis {
+            AxisMarks(position: .trailing, values: .automatic(desiredCount: 3)) { value in
+                AxisGridLine()
+                    .foregroundStyle(Theme.Colors.textTertiary.opacity(0.15))
+                AxisValueLabel {
+                    if let doubleValue = value.as(Double.self) {
+                        Text(TrendsDeltaFormat.formattedNumber(doubleValue, decimals: spec?.decimals ?? 0))
+                            .font(.system(size: 9))
+                            .foregroundStyle(Theme.Colors.textTertiary)
+                    }
+                }
+            }
+        }
         .chartYScale(domain: chartYDomain)
+        // Range change morphs the chart in place rather than cross-fading —
+        // the surrounding content stays mounted (no `.motionTransition` on
+        // this subtree), so this is the only animation driving the swap.
+        .animation(.smooth, value: vm.range)
         // VoiceOver: a Swift Chart with dozens of marks is otherwise a
         // single opaque image. The descriptor exposes every plotted point
         // for a swipe-through audit; the label/value pair covers the
@@ -462,7 +536,7 @@ private extension MetricDetailView {
         .accessibilityChartDescriptor(
             MetricChartDescriptor(
                 points: chartPoints,
-                metricName: spec?.displayName ?? metricKey,
+                metricName: displayName,
                 spec: spec,
                 unitSystem: unitPref.current,
                 yDomain: chartYDomain
@@ -472,9 +546,35 @@ private extension MetricDetailView {
         .accessibilityValue(chartAccessibilityValue ?? "")
     }
 
+    /// Isolated so the `if`/`else if`/`else` in `chart` above stays a single
+    /// content expression rather than a switch-with-branches-that-differ
+    /// inline — each case here just returns `ChartContent`.
+    @ChartContentBuilder
+    var statSelectionMarks: some ChartContent {
+        if statSelection == .low, let point = rangeLowPoint {
+            RuleMark(y: .value("Low", point.value))
+                .lineStyle(StrokeStyle(lineWidth: 1, dash: [2, 3]))
+                .foregroundStyle(Theme.Colors.alert.opacity(0.6))
+            PointMark(x: .value("Date", point.date), y: .value("Value", point.value))
+                .symbolSize(90)
+                .foregroundStyle(Theme.Colors.alert)
+        } else if statSelection == .high, let point = rangeHighPoint {
+            RuleMark(y: .value("High", point.value))
+                .lineStyle(StrokeStyle(lineWidth: 1, dash: [2, 3]))
+                .foregroundStyle(Theme.Colors.positive.opacity(0.6))
+            PointMark(x: .value("Date", point.date), y: .value("Value", point.value))
+                .symbolSize(90)
+                .foregroundStyle(Theme.Colors.positive)
+        } else if statSelection == .average, let average = rangeAverage {
+            RuleMark(y: .value("Range average", average))
+                .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [1, 4]))
+                .foregroundStyle(Theme.Colors.textPrimary.opacity(0.7))
+        }
+    }
+
     var chartAccessibilityLabel: String {
         MetricChartAccessibility.summaryLabel(
-            metricName: spec?.displayName ?? metricKey,
+            metricName: displayName,
             rangeLabel: vm.range.accessibilityLabel,
             latest: latestRawValue,
             mean30: vm.series?.baseline?.mean30,
@@ -520,8 +620,7 @@ private extension MetricDetailView {
     }
 
     func formattedAverage(_ value: Double) -> String {
-        guard let spec else { return Self.formattedNumber(value, decimals: 1) }
-        return Self.formattedNumber(value, decimals: spec.decimals)
+        TrendsDeltaFormat.formattedNumber(value, decimals: spec?.decimals ?? 1)
     }
 }
 
@@ -529,12 +628,53 @@ private extension MetricDetailView {
 
 private extension MetricDetailView {
 
+    var rangeLowPoint: ChartPoint? { rawPoints.min { $0.value < $1.value } }
+    var rangeHighPoint: ChartPoint? { rawPoints.max { $0.value < $1.value } }
+    var rangeAverage: Double? {
+        guard !rawPoints.isEmpty else { return nil }
+        return rawPoints.reduce(0) { $0 + $1.value } / Double(rawPoints.count)
+    }
+
     var statsRow: some View {
         HStack(spacing: Theme.Spacing.sm) {
-            StatBadge(label: "Latest", value: formattedStat(latestRawValue))
-            StatBadge(label: "30-day avg", value: formattedStat(vm.series?.baseline?.mean30))
-            StatBadge(label: "Your normal", value: normalRangeText)
+            statButton(.low, label: "Low", value: formattedStat(rangeLowPoint?.value))
+            statButton(.average, label: "Average", value: formattedStat(rangeAverage))
+            statButton(.high, label: "High", value: formattedStat(rangeHighPoint?.value))
+            StatBadge(label: "Normal (range)", value: normalRangeText)
         }
+    }
+
+    func statButton(_ selection: StatSelection, label: String, value: String) -> some View {
+        let isOn = statSelection == selection
+        return Button {
+            statTapTick.toggle()
+            statSelection = isOn ? nil : selection
+        } label: {
+            VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
+                Text(label.uppercased())
+                    .font(Theme.Typography.labelSmall)
+                    .foregroundStyle(isOn ? Theme.Colors.accentContent : Theme.Colors.textSecondary)
+                    .tracking(0.5)
+                Text(value)
+                    .font(Theme.Typography.numericSmall(13))
+                    .foregroundStyle(Theme.Colors.textPrimary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(Theme.Spacing.md)
+            .background(
+                RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
+                    .fill(Theme.Colors.card)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
+                            .strokeBorder(isOn ? Theme.Colors.accentContent : .clear, lineWidth: 1.5)
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isOn ? .isSelected : [])
+        .accessibilityLabel("\(label), \(value)\(isOn ? ", selected" : "")")
     }
 
     func formattedStat(_ value: Double?) -> String {
@@ -551,8 +691,8 @@ private extension MetricDetailView {
                 return "—"
             }
         }
-        let lo = Self.formattedNumber(mean30 - sd30, decimals: spec.decimals)
-        let hi = Self.formattedNumber(mean30 + sd30, decimals: spec.decimals)
+        let lo = TrendsDeltaFormat.formattedNumber(mean30 - sd30, decimals: spec.decimals)
+        let hi = TrendsDeltaFormat.formattedNumber(mean30 + sd30, decimals: spec.decimals)
         return "\(lo)–\(hi)"
     }
 }
@@ -596,6 +736,173 @@ private extension MetricDetailView {
     }
 }
 
+// MARK: - Moves with it
+
+private extension MetricDetailView {
+
+    var movesWithItKeys: [String] { MetricRelatedMetrics.relatedKeys(for: metricKey) }
+
+    var movesWithItSection: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            sectionHeader("MOVES WITH IT")
+            VStack(spacing: Theme.Spacing.sm) {
+                ForEach(movesWithItKeys, id: \.self) { key in
+                    movesWithItRow(key)
+                }
+            }
+        }
+    }
+
+    func movesWithItRow(_ key: String) -> some View {
+        let relatedSpec = MetricCatalog.spec(for: key)
+        let series = vm.relatedSeries[key]
+        let sortedPoints = (series?.points ?? []).sorted { $0.date < $1.date }
+        let latest = sortedPoints.last?.value
+        let name = relatedSpec?.displayName ?? key
+        let valueText = latest.map { relatedSpec?.format($0, unitPref.current) ?? "\($0)" } ?? "—"
+
+        return GlassCard(padding: Theme.Spacing.md, cornerRadius: Theme.Radius.md) {
+            HStack(spacing: Theme.Spacing.md) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(name)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Theme.Colors.textPrimary)
+                    Text(valueText)
+                        .font(Theme.Typography.numericSmall(15))
+                        .foregroundStyle(Theme.Colors.textSecondary)
+                }
+                Spacer()
+                Sparkline(
+                    values: sortedPoints.map { Optional($0.value) },
+                    style: relatedSpec?.sparkline ?? .line,
+                    tint: Theme.Colors.accentContent,
+                    height: 32
+                )
+                .frame(width: 90)
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(name), \(valueText)")
+    }
+}
+
+// MARK: - Your records
+
+private extension MetricDetailView {
+
+    var recordsResult: MetricRecords.Result? {
+        guard let distributionPoints = vm.distributionSeries?.points, !distributionPoints.isEmpty else { return nil }
+        return MetricRecords.compute(
+            points: distributionPoints,
+            mean30: vm.distributionSeries?.baseline?.mean30,
+            sd30: vm.distributionSeries?.baseline?.sd30
+        )
+    }
+
+    func recordsSection(_ result: MetricRecords.Result) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            sectionHeader("YOUR RECORDS (90 DAYS)")
+            GlassCard(padding: Theme.Spacing.md, cornerRadius: Theme.Radius.lg) {
+                VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                    HStack(spacing: Theme.Spacing.md) {
+                        recordCell(label: "Highest", record: result.highest)
+                        recordCell(label: "Lowest", record: result.lowest)
+                    }
+                    if let streakText = result.streakText {
+                        Text(streakText)
+                            .font(.system(size: 12.5, weight: .medium))
+                            .foregroundStyle(Theme.Colors.textSecondary)
+                    }
+                }
+            }
+        }
+    }
+
+    func recordCell(label: String, record: MetricRecords.Record) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label.uppercased())
+                .font(Theme.Typography.labelSmall)
+                .foregroundStyle(Theme.Colors.textSecondary)
+                .tracking(0.5)
+            Text(formattedStat(record.value))
+                .font(Theme.Typography.numericSmall(15))
+                .foregroundStyle(Theme.Colors.textPrimary)
+            Text(Self.dayFormatter.string(from: record.date))
+                .font(.system(size: 11))
+                .foregroundStyle(Theme.Colors.textTertiary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+// MARK: - About
+
+private extension MetricDetailView {
+
+    func aboutSection(_ copy: MetricAbout.Copy) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            sectionHeader("ABOUT \(displayName.uppercased())")
+            GlassCard(padding: Theme.Spacing.md, cornerRadius: Theme.Radius.lg) {
+                VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                    Text(copy.body)
+                        .font(.system(size: 13.5))
+                        .foregroundStyle(Theme.Colors.textSecondary)
+                    DisclosureGroup("How it's measured") {
+                        Text(copy.measurement)
+                            .font(.system(size: 12.5))
+                            .foregroundStyle(Theme.Colors.textTertiary)
+                            .padding(.top, Theme.Spacing.xs)
+                    }
+                    .font(.system(size: 13, weight: .semibold))
+                    .tint(Theme.Colors.textPrimary)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Ask your coach
+
+private extension MetricDetailView {
+
+    var askCoachSection: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            sectionHeader("ASK YOUR COACH")
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: Theme.Spacing.sm) {
+                    ForEach(MetricRelatedMetrics.coachQuestions(for: metricKey, displayName: displayName), id: \.self) { question in
+                        Button {
+                            AppRouter.shared.coachContext = question
+                        } label: {
+                            Text(question)
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(Theme.Colors.textPrimary)
+                                .padding(.horizontal, Theme.Spacing.md)
+                                .padding(.vertical, Theme.Spacing.sm)
+                                .background(Capsule().fill(Theme.Colors.glassFill))
+                                .overlay(Capsule().strokeBorder(Theme.Colors.glassBorder, lineWidth: 0.5))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityHint("Opens Coach with this question")
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+        }
+    }
+}
+
+// MARK: - Shared section header
+
+private extension MetricDetailView {
+    func sectionHeader(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(Theme.Colors.textSecondary)
+            .tracking(1.3)
+    }
+}
+
 // MARK: - Loading
 
 private extension MetricDetailView {
@@ -631,13 +938,4 @@ private extension MetricDetailView {
         f.dateFormat = "EEE, MMM d"
         return f
     }()
-
-    static func formattedNumber(_ value: Double, decimals: Int) -> String {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .decimal
-        formatter.minimumFractionDigits = 0
-        formatter.maximumFractionDigits = decimals
-        formatter.usesGroupingSeparator = true
-        return formatter.string(from: NSNumber(value: value)) ?? String(format: "%.\(decimals)f", value)
-    }
 }
