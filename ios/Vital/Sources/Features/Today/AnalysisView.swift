@@ -162,7 +162,7 @@ private struct AnalysisHeader: View {
     }
 }
 
-private struct SectionHeader: View {
+private struct AnalysisSectionHeader: View {
     let title: String
     var trailing: String = ""
 
@@ -484,7 +484,7 @@ private struct WorkoutAnalysisContent: View {
     private func paceHistorySection(_ paceHistory: AnalysisContext.PaceHistory) -> some View {
         let total = paceHistory.previous.count + 1
         return VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-            SectionHeader(title: "Compared to your last \(total) runs", trailing: "pace")
+            AnalysisSectionHeader(title: "Compared to your last \(total) runs", trailing: "pace")
             VitalCard(padding: Theme.Spacing.lg) {
                 VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
                     PaceHistoryStrip(previous: paceHistory.previous, current: value.metrics?.paceMinPerKm ?? 0)
@@ -507,7 +507,7 @@ private struct WorkoutAnalysisContent: View {
 
     private func effortSection(_ effort: AnalysisContext.Effort) -> some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-            SectionHeader(title: "Effort")
+            AnalysisSectionHeader(title: "Effort")
             VitalCard {
                 VStack(alignment: .leading, spacing: Theme.Spacing.md) {
                     HStack(alignment: .lastTextBaseline) {
@@ -544,7 +544,7 @@ private struct WorkoutAnalysisContent: View {
 
     private func goingInSection(_ goingIn: AnalysisContext.GoingIn) -> some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-            SectionHeader(title: "Going in")
+            AnalysisSectionHeader(title: "Going in")
             VitalCard(padding: Theme.Spacing.lg) {
                 VStack(alignment: .leading, spacing: 0) {
                     if let sleepMinutes = goingIn.sleepMinutes {
@@ -576,7 +576,7 @@ private struct WorkoutAnalysisContent: View {
     private var howYourBodyTookIt: some View {
         if let nextMorning = context?.nextMorning, nextMorning.hrv != nil || nextMorning.restingHr != nil {
             VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-                SectionHeader(title: "How your body took it")
+                AnalysisSectionHeader(title: "How your body took it")
                 VitalCard(padding: Theme.Spacing.lg) {
                     VStack(alignment: .leading, spacing: 0) {
                         if let hrv = nextMorning.hrv {
@@ -811,7 +811,7 @@ private struct SleepAnalysisContent: View {
     private var stages: some View {
         if let hkStages = metrics?.stages, let usualStages = context?.sleepUsual?.stages {
             VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-                SectionHeader(title: "Stages", trailing: "bar = last night · tick = your usual")
+                AnalysisSectionHeader(title: "Stages", trailing: "bar = last night · tick = your usual")
                 VitalCard(padding: Theme.Spacing.md) {
                     VStack(alignment: .leading, spacing: 0) {
                         stageRow("Deep", minutes: hkStages.deep, usual: usualStages.deep, kind: .deep, isFirst: true)
@@ -886,7 +886,7 @@ private struct SleepAnalysisContent: View {
         guard total > 0 else { return AnyView(EmptyView()) }
         return AnyView(
             VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-                SectionHeader(title: "Stages")
+                AnalysisSectionHeader(title: "Stages")
                 VitalCard {
                     VStack(alignment: .leading, spacing: Theme.Spacing.md) {
                         GeometryReader { geo in
@@ -921,7 +921,7 @@ private struct SleepAnalysisContent: View {
 
     private func beforeBedSection(_ beforeBed: AnalysisContext.BeforeBed, bedTime: Date) -> some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-            SectionHeader(title: "Before bed")
+            AnalysisSectionHeader(title: "Before bed")
             VitalCard(padding: Theme.Spacing.lg) {
                 VStack(alignment: .leading, spacing: 0) {
                     if let workoutEnd = beforeBed.lastWorkoutEndedAt {
@@ -946,7 +946,7 @@ private struct SleepAnalysisContent: View {
 
     private func thisMorningSection(_ thisMorning: AnalysisContext.ThisMorning) -> some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-            SectionHeader(title: "This morning")
+            AnalysisSectionHeader(title: "This morning")
             VitalCard(padding: Theme.Spacing.lg) {
                 VStack(alignment: .leading, spacing: 0) {
                     if let hrv = thisMorning.hrv {
@@ -977,7 +977,7 @@ private struct SleepAnalysisContent: View {
             today: today
         )
         return VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-            SectionHeader(title: "Last 7 nights", trailing: "goal \(AnalysisLogic.formatDuration(goalMinutes))")
+            AnalysisSectionHeader(title: "Last 7 nights", trailing: "goal \(AnalysisLogic.formatDuration(goalMinutes))")
             VitalCard {
                 GeometryReader { geo in
                     ZStack(alignment: .bottomLeading) {

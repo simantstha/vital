@@ -185,25 +185,42 @@ struct AnalysisContext: Codable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case usual, paceHistory, effort, goingIn, nextMorning
-        case goalMinutes
-        case sleepUsual = "usual" // sleep's `usual` shares the JSON key with workout's — see decoder below
-        case week, timing, beforeBed, thisMorning
+        case goalMinutes, week, timing, beforeBed, thisMorning
     }
 
     /// Workout's `usual` (session count + distance/duration/pace/avgHr median)
     /// and sleep's `usual` (nights + minutes + stage median) are two different
     /// shapes sharing the same top-level JSON key `usual` — a response only
-    /// ever carries one or the other, never both, so both are decoded from
-    /// the same key and whichever shape matches wins.
+    /// ever carries one or the other, never both. Both shapes have all-optional
+    /// fields other than their one distinguishing field (`sessions` for
+    /// workout, `nights` for sleep), so a plain `try?` decode of either shape
+    /// against the other's JSON would silently succeed as an empty-but-non-nil
+    /// value instead of failing. Peek at `.usual` once as a discriminator
+    /// (both fields optional, at most one present) and decode only the shape
+    /// whose distinguishing field is actually there.
+    private struct UsualDiscriminator: Decodable {
+        let sessions: Int?
+        let nights: Int?
+    }
+
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        usual = try? c.decodeIfPresent(Usual.self, forKey: .usual)
+        let discriminator = try c.decodeIfPresent(UsualDiscriminator.self, forKey: .usual)
+        if discriminator?.sessions != nil {
+            usual = try c.decodeIfPresent(Usual.self, forKey: .usual)
+            sleepUsual = nil
+        } else if discriminator?.nights != nil {
+            usual = nil
+            sleepUsual = try c.decodeIfPresent(SleepUsual.self, forKey: .usual)
+        } else {
+            usual = nil
+            sleepUsual = nil
+        }
         paceHistory = try c.decodeIfPresent(PaceHistory.self, forKey: .paceHistory)
         effort = try c.decodeIfPresent(Effort.self, forKey: .effort)
         goingIn = try c.decodeIfPresent(GoingIn.self, forKey: .goingIn)
         nextMorning = try c.decodeIfPresent(NextMorning.self, forKey: .nextMorning)
         goalMinutes = try c.decodeIfPresent(Int.self, forKey: .goalMinutes)
-        sleepUsual = try? c.decodeIfPresent(SleepUsual.self, forKey: .sleepUsual)
         week = try c.decodeIfPresent([WeekNight].self, forKey: .week)
         timing = try c.decodeIfPresent(Timing.self, forKey: .timing)
         beforeBed = try c.decodeIfPresent(BeforeBed.self, forKey: .beforeBed)
@@ -231,13 +248,18 @@ struct AnalysisContext: Codable, Equatable {
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encodeIfPresent(usual, forKey: .usual)
+        // `usual`/`sleepUsual` are mutually exclusive (see `init(from:)`) and
+        // share the single `.usual` JSON key — encode whichever is set.
+        if let usual {
+            try c.encode(usual, forKey: .usual)
+        } else if let sleepUsual {
+            try c.encode(sleepUsual, forKey: .usual)
+        }
         try c.encodeIfPresent(paceHistory, forKey: .paceHistory)
         try c.encodeIfPresent(effort, forKey: .effort)
         try c.encodeIfPresent(goingIn, forKey: .goingIn)
         try c.encodeIfPresent(nextMorning, forKey: .nextMorning)
         try c.encodeIfPresent(goalMinutes, forKey: .goalMinutes)
-        try c.encodeIfPresent(sleepUsual, forKey: .sleepUsual)
         try c.encodeIfPresent(week, forKey: .week)
         try c.encodeIfPresent(timing, forKey: .timing)
         try c.encodeIfPresent(beforeBed, forKey: .beforeBed)
