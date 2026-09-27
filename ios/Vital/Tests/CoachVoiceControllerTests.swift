@@ -1077,4 +1077,12 @@ private final class FakeVoiceAPI: CoachAPIProviding {
     func scaleMealLog(id: String, itemFood: String, grams: Double) async throws -> MealScaleResult {
         fatalError("unused by CoachVoiceController")
     }
+
+    func undoMemoryFact(id: String) async throws {
+        fatalError("unused by CoachVoiceController")
+    }
+
+    func resolvePendingFact(id: String, action: String) async throws -> String? {
+        fatalError("unused by CoachVoiceController")
+    }
 }

@@ -43,6 +43,11 @@ struct CoachView: View {
     /// firings while a finger is held down only trigger the mic action once
     /// per press. Reset in `onEnded`.
     @State private var isMicPressed = false
+    /// "Manage memory" (K3's receipt detail footer link) — presented as a
+    /// sheet rather than a `NavigationLink` push since the Coach tab has no
+    /// ambient `NavigationStack` of its own (unlike Profile, which
+    /// `MemoryView`'s own doc comment assumes).
+    @State private var showMemorySheet = false
     /// Set on touch-down only when that press actually starts a *new*
     /// recording (not one that stops an in-flight one) — the gesture
     /// mapping (spec §3.1, V5) reads it back at release to tell a quick tap
@@ -112,6 +117,17 @@ struct CoachView: View {
         // Leaving the view mid-stream (e.g. onboarding CoachIntro → Continue)
         // must not leave a stream task running against a gone view.
         .onDisappear { vm.cancelStreaming() }
+        .sheet(isPresented: $showMemorySheet) {
+            NavigationStack {
+                MemoryView()
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { showMemorySheet = false }
+                        }
+                    }
+            }
+        }
+        .toast(message: $vm.toastMessage)
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .active {
                 vm.refreshIfStale()
@@ -190,7 +206,11 @@ struct CoachView: View {
                                 turn: turn,
                                 onUndoMeal: { vm.undoMealLog(id: $0) },
                                 onScaleMeal: { id, factor in vm.scaleMealLog(id: id, factor: factor) },
-                                onScaleMealItem: { id, food, grams in vm.scaleMealLogItem(id: id, food: food, grams: grams) }
+                                onScaleMealItem: { id, food, grams in vm.scaleMealLogItem(id: id, food: food, grams: grams) },
+                                onUndoMemory: { vm.undoMemoryFact(id: $0) },
+                                onConfirmMemoryProposal: { vm.confirmMemoryProposal(factId: $0) },
+                                onDismissMemoryProposal: { vm.dismissMemoryProposal(factId: $0) },
+                                onManageMemory: { showMemorySheet = true }
                             )
                                 .id(row.id)
                         }
@@ -834,10 +854,53 @@ private struct AssistantTurnView: View {
     /// per-item stepper sheet on one receipt row. Same plain-closure
     /// rationale as `onUndoMeal` above.
     var onScaleMealItem: (String, String, Int) -> Void = { _, _, _ in }
+    /// Wired to `CoachViewModel.undoMemoryFact(id:)` — `MemorySavedChip`'s Undo.
+    var onUndoMemory: (String) -> Void = { _ in }
+    /// Wired to `CoachViewModel.confirmMemoryProposal(factId:)` —
+    /// `MemoryProposalCard`'s "Remember".
+    var onConfirmMemoryProposal: (String) -> Void = { _ in }
+    /// Wired to `CoachViewModel.dismissMemoryProposal(factId:)` —
+    /// `MemoryProposalCard`'s "Not now".
+    var onDismissMemoryProposal: (String) -> Void = { _ in }
+    /// Wired to `CoachView`'s memory sheet — the receipt detail's
+    /// "Manage memory" link.
+    var onManageMemory: () -> Void = {}
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// K3: whether this turn's receipt is expanded in place.
+    @State private var isReceiptExpanded = false
 
     private var isStreamingTurn: Bool { !turn.isFinished }
+
+    /// Which of the working card / pill / nothing to show right now, per
+    /// `CoachActivityLogic.presentation`. A running step's age only matters
+    /// while it could still be within the 400 ms appear-gate or currently
+    /// running, so `now` only needs to be live (ticking) in that window —
+    /// see `activitySection`.
+    private func activityPresentation(now: Date) -> CoachActivityLogic.Presentation {
+        let running = turn.receiptRows.filter { !$0.isDone }
+        let oldestAge = running.map { now.timeIntervalSince($0.startedAt) }.max() ?? 0
+        return CoachActivityLogic.presentation(
+            // Deliberately `receiptRows`, not `turn.hasActivity`: a turn
+            // whose only tool call is a memory WRITE renders exclusively via
+            // `memoryOpRows` (K4's chip/card) — an empty receipt pill would
+            // otherwise flash in alongside it.
+            hasActivity: !turn.receiptRows.isEmpty,
+            hasRunningStep: !running.isEmpty,
+            oldestRunningStepAge: oldestAge,
+            hasProse: !turn.text.isEmpty,
+            isFinished: turn.isFinished
+        )
+    }
+
+    /// Whether the activity section needs a live clock right now — only
+    /// while a step might still be running (so the elapsed counter ticks and
+    /// the 400 ms gate can flip). Once prose starts or the turn finishes,
+    /// the presentation is stable and a `TimelineView` would just waste
+    /// cycles.
+    private var activityNeedsLiveClock: Bool {
+        turn.receiptRows.contains { !$0.isDone } && turn.text.isEmpty && !turn.isFinished
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
@@ -870,25 +933,90 @@ private struct AssistantTurnView: View {
                 }
             }
 
-            // Order is conditional on whether prose has started. Before any
-            // text has streamed in, the tool-call chip is the only thing
-            // happening, so it stays above (where the empty bubble would be).
-            // Once prose exists, a mid-turn tool call describes work
-            // happening after what was just said, so the chip moves below it.
-            if turn.text.isEmpty {
-                statusChip
-                proseBubble
-            } else {
-                proseBubble
-                statusChip
+            // The activity section (working card → receipt pill/detail)
+            // always renders above the prose bubble, whether or not text has
+            // started streaming yet — the working card folds in place into
+            // the pill as the answer starts, rather than jumping to the far
+            // side of it (chat-activity-contract.md §4, K1/K2/K3). Memory
+            // ops (K4) render alongside it, in the same relative order.
+            memoryOpRows
+            activitySection
+            proseBubble
+        }
+    }
+
+    /// K1 → K2 → K3: the working card while a step is running, folding into
+    /// the receipt pill (optionally expanded in place) once prose starts or
+    /// the turn finishes. `EmptyView` when the turn has no tool calls at
+    /// all — chat-activity-contract.md §4.
+    @ViewBuilder
+    private var activitySection: some View {
+        if activityNeedsLiveClock {
+            TimelineView(.periodic(from: turn.workStartedAt ?? Date(), by: 0.1)) { context in
+                activityContent(now: context.date)
+            }
+        } else {
+            activityContent(now: Date())
+        }
+    }
+
+    @ViewBuilder
+    private func activityContent(now: Date) -> some View {
+        switch activityPresentation(now: now) {
+        case .none:
+            EmptyView()
+        case .workingCard:
+            CoachWorkingCard(rows: turn.receiptRows, workStartedAt: turn.workStartedAt ?? now)
+                .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.97, anchor: .top)))
+        case .pill:
+            VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                CoachReceiptPill(
+                    rows: turn.receiptRows,
+                    isExpanded: isReceiptExpanded,
+                    onTap: { withAnimation(reduceMotion ? Theme.Motion.standard : Self.foldSpring) { isReceiptExpanded.toggle() } }
+                )
+                if isReceiptExpanded {
+                    CoachReceiptDetail(rows: turn.receiptRows, onManageMemory: onManageMemory)
+                        .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .top)))
+                }
+            }
+            .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.97, anchor: .top)))
+        }
+    }
+
+    /// The 320 ms working-card→pill fold spring (chat-activity-contract.md
+    /// §4), at the house `dampingFraction: 0.8` every spring in this app uses.
+    fileprivate static let foldSpring: Animation = .spring(response: CoachActivityLogic.foldSpringDuration, dampingFraction: 0.8)
+
+    /// K4: one inline element per finished memory-write tool call, in call
+    /// order — `MemorySavedChip` for `saved`/`updated`/`removed`,
+    /// `MemoryProposalCard` for `proposed`.
+    @ViewBuilder
+    private var memoryOpRows: some View {
+        ForEach(turn.memoryOpRows) { row in
+            if let memory = row.memory {
+                memoryOpView(for: memory)
+                    .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .leading)))
             }
         }
     }
 
     @ViewBuilder
-    private var statusChip: some View {
-        if let status = turn.statusSummary {
-            ToolCallActivityView(label: status, isChecking: turn.isChecking)
+    private func memoryOpView(for memory: CoachMemoryOp) -> some View {
+        if memory.op == .proposed, let factId = memory.factId {
+            MemoryProposalCard(
+                text: memory.text,
+                onRemember: { onConfirmMemoryProposal(factId) },
+                onNotNow: { onDismissMemoryProposal(factId) }
+            )
+        } else {
+            MemorySavedChip(
+                op: memory.op,
+                text: memory.text,
+                // Undo only ever applies to a `saved` write with a stable
+                // factId — chat-activity-contract.md §2/§4.
+                onUndo: memory.op == .saved ? memory.factId.map { factId in { onUndoMemory(factId) } } : nil
+            )
         }
     }
 
@@ -1101,43 +1229,364 @@ enum CoachViewPresentation {
     }
 }
 
-// MARK: - Tool-call activity row
+// MARK: - K1: working card
 
-/// Inline, quiet indicator for the active backend work in an assistant turn.
-/// Completed tool calls are intentionally not left behind as permanent chat
-/// content; the data cards and answer carry the durable result.
-private struct ToolCallActivityView: View {
-    let label: String
-    let isChecking: Bool
+/// "WORKING ON IT" — shown while a tool call is running and no prose has
+/// streamed yet (chat-activity-contract.md §4/K1). Each row shows its kind
+/// icon (memory tint vs. accent tint), a spinner while running, and its
+/// summary line once done.
+struct CoachWorkingCard: View {
+    let rows: [ToolCallRow]
+    let workStartedAt: Date
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
+        TimelineView(.periodic(from: workStartedAt, by: 1)) { context in
+            VStack(alignment: .leading, spacing: 0) {
+                header(elapsedSeconds: max(0, Int(context.date.timeIntervalSince(workStartedAt).rounded(.down))))
+                ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                    stepRow(row)
+                        .padding(.vertical, Theme.Spacing.sm)
+                        .overlay(alignment: .top) {
+                            if index > 0 { hairline }
+                        }
+                        .transition(
+                            reduceMotion
+                                ? .opacity
+                                : .opacity.combined(with: .move(edge: .top)).animation(.easeOut(duration: CoachActivityLogic.stepAppearDuration))
+                        )
+                }
+            }
+        }
+        .padding(.horizontal, Theme.Spacing.md)
+        .padding(.top, Theme.Spacing.xs)
+        .padding(.bottom, Theme.Spacing.xs)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
+                .fill(Theme.Colors.card)
+        )
+        .shadow(color: Theme.Colors.cardShadow, radius: 8, x: 0, y: 2)
+        .accessibilityElement(children: .combine)
+    }
+
+    private func header(elapsedSeconds: Int) -> some View {
         HStack {
-            if isChecking {
-                HStack(spacing: Theme.Spacing.xs) {
-                    ProgressView()
-                        .controlSize(.mini)
-                        .tint(Theme.Colors.textSecondary)
-                    Text(label)
+            Text("WORKING ON IT")
+                .font(Theme.Typography.labelSmall)
+                .tracking(0.6)
+                .foregroundStyle(Theme.Colors.textSecondary)
+            Spacer()
+            Text("\(elapsedSeconds)s")
+                .font(Theme.Typography.labelSmall.monospacedDigit())
+                .foregroundStyle(Theme.Colors.textTertiary)
+        }
+        .padding(.vertical, Theme.Spacing.sm)
+    }
+
+    private var hairline: some View {
+        Rectangle().fill(Theme.Colors.glassBorder).frame(height: 0.5)
+    }
+
+    private func stepRow(_ row: ToolCallRow) -> some View {
+        HStack(alignment: .top, spacing: Theme.Spacing.sm) {
+            stepIcon(row)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(row.label)
+                    .font(Theme.Typography.bodySmall)
+                    .fontWeight(row.isDone ? .regular : .medium)
+                    .foregroundStyle(row.isDone ? Theme.Colors.textSecondary : Theme.Colors.textPrimary)
+                if row.isDone, let summary = row.summary, row.ok != false {
+                    Text(summary)
                         .font(Theme.Typography.labelSmall)
-                        .fontWeight(.medium)
                         .foregroundStyle(Theme.Colors.textSecondary)
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(
-                    Capsule()
-                        .fill(Theme.Colors.glassFill)
-                        .overlay(
-                            Capsule()
-                                .strokeBorder(Theme.Colors.glassBorder, lineWidth: 0.5)
-                        )
-                )
-            } else {
-                Chip(text: label, icon: "checkmark")
             }
-
-            Spacer()
+            Spacer(minLength: 0)
+            stepTrailing(row)
         }
+    }
+
+    private func stepIcon(_ row: ToolCallRow) -> some View {
+        let isMemory = CoachActivityLogic.usesMemoryTint(row.resolvedKind)
+        return Circle()
+            .fill(isMemory ? Theme.Colors.memorySoft : Theme.Colors.accentSoft)
+            .frame(width: 26, height: 26)
+            .overlay(
+                Image(systemName: CoachActivityLogic.icon(forKind: row.resolvedKind))
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(isMemory ? Theme.Colors.memory : Theme.Colors.accentContent)
+            )
+    }
+
+    @ViewBuilder
+    private func stepTrailing(_ row: ToolCallRow) -> some View {
+        if row.isDone {
+            Image(systemName: row.ok == false ? "exclamationmark.circle" : "checkmark")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(row.ok == false ? Theme.Colors.alert : Theme.Colors.positive)
+        } else {
+            ProgressView()
+                .controlSize(.mini)
+                .tint(Theme.Colors.textSecondary)
+        }
+    }
+}
+
+// MARK: - K2: receipt pill
+
+/// The folded working card — a single tappable summary line
+/// (chat-activity-contract.md §4/K2). Expands `CoachReceiptDetail` in place.
+struct CoachReceiptPill: View {
+    let rows: [ToolCallRow]
+    let isExpanded: Bool
+    var onTap: () -> Void = {}
+
+    private var summary: String { CoachActivityLogic.pillSummary(forRows: rows) }
+
+    var body: some View {
+        Button(action: onTap) {
+            HStack(spacing: Theme.Spacing.xs) {
+                Text(summary)
+                    .font(Theme.Typography.labelMedium)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(Theme.Colors.textSecondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Image(systemName: isExpanded ? "chevron.up" : "chevron.right")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Theme.Colors.textTertiary)
+            }
+            .padding(.horizontal, Theme.Spacing.md)
+            .frame(minHeight: 36)
+            .background(
+                Capsule()
+                    .fill(Theme.Colors.card)
+                    .overlay(Capsule().strokeBorder(Theme.Colors.glassBorder, lineWidth: 0.5))
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("coach.receiptPill")
+        .accessibilityLabel("What I looked at: \(summary)")
+        .accessibilityHint(isExpanded ? "Collapses the details" : "Shows the details")
+    }
+}
+
+// MARK: - K3: receipt detail
+
+/// The expanded receipt (chat-activity-contract.md §4/K3): every step with
+/// its summary, memory quotes with the memory-tint leading rule, and a
+/// "Manage memory" link to `MemoryView`.
+struct CoachReceiptDetail: View {
+    let rows: [ToolCallRow]
+    var onManageMemory: () -> Void = {}
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                    stepRow(row)
+                    ForEach(row.sources ?? [], id: \.text) { source in
+                        sourceQuote(source)
+                    }
+                }
+                .padding(.vertical, Theme.Spacing.sm)
+                .overlay(alignment: .top) {
+                    if index > 0 { hairline }
+                }
+            }
+            footer
+                .padding(.top, Theme.Spacing.sm)
+        }
+        .padding(Theme.Spacing.md)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
+                .fill(Theme.Colors.card)
+        )
+        .shadow(color: Theme.Colors.cardShadow, radius: 8, x: 0, y: 2)
+        .accessibilityIdentifier("coach.receiptDetail")
+    }
+
+    private var hairline: some View {
+        Rectangle().fill(Theme.Colors.glassBorder).frame(height: 0.5)
+    }
+
+    private func stepRow(_ row: ToolCallRow) -> some View {
+        HStack(alignment: .top, spacing: Theme.Spacing.sm) {
+            iconBadge(for: row)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(row.label)
+                    .font(Theme.Typography.bodySmall)
+                    .foregroundStyle(Theme.Colors.textSecondary)
+                if let summary = row.summary {
+                    Text(summary)
+                        .font(Theme.Typography.labelSmall)
+                        .foregroundStyle(Theme.Colors.textSecondary)
+                }
+            }
+            Spacer(minLength: 0)
+            Image(systemName: row.ok == false ? "exclamationmark.circle" : "checkmark")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(row.ok == false ? Theme.Colors.alert : Theme.Colors.positive)
+        }
+    }
+
+    private func iconBadge(for row: ToolCallRow) -> some View {
+        let isMemory = CoachActivityLogic.usesMemoryTint(row.resolvedKind)
+        return Circle()
+            .fill(isMemory ? Theme.Colors.memorySoft : Theme.Colors.accentSoft)
+            .frame(width: 26, height: 26)
+            .overlay(
+                Image(systemName: CoachActivityLogic.icon(forKind: row.resolvedKind))
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(isMemory ? Theme.Colors.memory : Theme.Colors.accentContent)
+            )
+    }
+
+    /// One quoted memory source — the memory-tint leading rule per
+    /// chat-activity-contract.md §4.
+    private func sourceQuote(_ source: CoachToolSource) -> some View {
+        HStack(alignment: .top, spacing: 0) {
+            Rectangle()
+                .fill(Theme.Colors.memory)
+                .frame(width: 3)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("“\(source.text)”")
+                    .font(Theme.Typography.bodySmall)
+                    .foregroundStyle(Theme.Colors.textPrimary)
+                Text(source.date.map { "You told me · \(CoachActivityLogic.formattedSourceDate($0))" } ?? "You told me")
+                    .font(Theme.Typography.labelSmall)
+                    .foregroundStyle(Theme.Colors.textSecondary)
+            }
+            .padding(.leading, Theme.Spacing.sm)
+            .padding(.vertical, Theme.Spacing.xs)
+        }
+        .background(Theme.Colors.memorySoft)
+        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous))
+    }
+
+    private var footer: some View {
+        HStack {
+            Text("From Apple Health & your notes")
+                .font(Theme.Typography.labelSmall)
+                .foregroundStyle(Theme.Colors.textSecondary)
+            Spacer()
+            Button("Manage memory", action: onManageMemory)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Theme.Colors.accentContent)
+        }
+        .padding(.top, Theme.Spacing.sm)
+        .overlay(alignment: .top) { hairline }
+    }
+}
+
+// MARK: - K4: memory chip / proposal card
+
+/// "Noted: … · Undo" — a memory write already applied (`saved`), or its
+/// quiet update/removal variants (chat-activity-contract.md §4). Undo is
+/// hidden whenever `onUndo` is `nil` (no `factId`, or not a `saved` op).
+struct MemorySavedChip: View {
+    let op: CoachMemoryOpKind
+    let text: String
+    var onUndo: (() -> Void)? = nil
+
+    /// The chip is a pure function of `op` — a successful Undo rewrites the
+    /// owning `ToolCallRow.memory.op` to `.removed` in the model
+    /// (`CoachViewModel.undoMemoryFact`), which flips this chip to "Removed"
+    /// on the very next render, so no local echo state is needed here.
+    private var verb: String {
+        switch op {
+        case .saved: return "Noted"
+        case .updated: return "Updated"
+        case .removed: return "Removed"
+        case .proposed: return "Noted"
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: Theme.Spacing.xs) {
+            Image(systemName: "arrow.down.circle")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Theme.Colors.memory)
+            Text("\(verb): \(text)")
+                .font(Theme.Typography.labelMedium)
+                .fontWeight(.semibold)
+                .foregroundStyle(Theme.Colors.memory)
+                .lineLimit(2)
+            if let onUndo {
+                Text("·")
+                    .foregroundStyle(Theme.Colors.textSecondary)
+                Button("Undo", action: onUndo)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Theme.Colors.memory)
+            }
+        }
+        .padding(.horizontal, Theme.Spacing.md)
+        .padding(.vertical, Theme.Spacing.sm)
+        .background(Capsule().fill(Theme.Colors.memorySoft))
+        .accessibilityElement(children: .combine)
+        .accessibilityAction(named: "Undo") { onUndo?() }
+    }
+}
+
+/// "Save to memory?" (chat-activity-contract.md §4/K4) — Remember / Not now,
+/// wired to the existing pending-facts confirm/dismiss API.
+struct MemoryProposalCard: View {
+    let text: String
+    var onRemember: () -> Void = {}
+    var onNotNow: () -> Void = {}
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            HStack(spacing: Theme.Spacing.sm) {
+                Circle()
+                    .fill(Theme.Colors.memorySoft)
+                    .frame(width: 26, height: 26)
+                    .overlay(
+                        Image(systemName: "doc.text")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(Theme.Colors.memory)
+                    )
+                Text("SAVE TO MEMORY?")
+                    .font(Theme.Typography.labelSmall)
+                    .tracking(0.6)
+                    .foregroundStyle(Theme.Colors.textSecondary)
+                Spacer()
+            }
+            Text(text)
+                .font(Theme.Typography.bodyMedium)
+                .fontWeight(.semibold)
+                .foregroundStyle(Theme.Colors.textPrimary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: Theme.Spacing.sm) {
+                Button(action: onRemember) {
+                    Text("Remember")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(Theme.Colors.onAccent)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, Theme.Spacing.sm)
+                        .background(Theme.Colors.accent)
+                        .clipShape(Capsule())
+                }
+                Button(action: onNotNow) {
+                    Text("Not now")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(Theme.Colors.textSecondary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, Theme.Spacing.sm)
+                        .background(Theme.Colors.glassFill)
+                        .clipShape(Capsule())
+                        .overlay(Capsule().strokeBorder(Theme.Colors.glassBorder, lineWidth: 1))
+                }
+            }
+        }
+        .padding(Theme.Spacing.md)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
+                .fill(Theme.Colors.card)
+        )
+        .shadow(color: Theme.Colors.cardShadow, radius: 8, x: 0, y: 2)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Save to memory: \(text)")
     }
 }
 

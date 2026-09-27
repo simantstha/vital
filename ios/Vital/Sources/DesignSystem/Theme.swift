@@ -179,6 +179,23 @@ enum Theme {
                 : UIColor(red: 0.894, green: 0.769, blue: 0.537, alpha: 1)
         })
 
+        /// Memory tint (chat-activity-contract.md §4) — the purple used for
+        /// memory-kind steps, quote rules, and the memory chip/card family.
+        /// Light: #6D4AB8 / dark: #B9A3F0.
+        static let memory = Color(uiColor: UIColor { tc in
+            tc.userInterfaceStyle == .dark
+                ? UIColor(red: 0.725, green: 0.639, blue: 0.941, alpha: 1)
+                : UIColor(red: 0.427, green: 0.290, blue: 0.722, alpha: 1)
+        })
+
+        /// Soft fill for a memory-tinted icon badge/card — light: #F1ECFA /
+        /// dark: `memory` @ 14%.
+        static let memorySoft = Color(uiColor: UIColor { tc in
+            tc.userInterfaceStyle == .dark
+                ? UIColor(red: 0.725, green: 0.639, blue: 0.941, alpha: 0.14)
+                : UIColor(red: 0.945, green: 0.925, blue: 0.980, alpha: 1)
+        })
+
     }
 
     // MARK: - Spacing

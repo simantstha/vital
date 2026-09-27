@@ -370,9 +370,10 @@ private final class FakeMemoryAPI: MemoryAPIProviding {
         return pendingFactsResponse
     }
 
-    func resolvePendingFact(id: String, action: String) async throws {
+    func resolvePendingFact(id: String, action: String) async throws -> String? {
         resolveCalls.append((id, action))
         if let resolveError { throw resolveError }
+        return nil
     }
 
     func releaseMemory() {

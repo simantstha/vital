@@ -390,7 +390,15 @@ struct APIClient {
         try await get("/api/pending-facts")
     }
 
-    func resolvePendingFact(id: String, action: String) async throws {
+    /// Confirms or dismisses a pending fact. Returns the newly-promoted
+    /// fact's `nodeId` on a `confirm` that actually promoted one (see
+    /// `app/api/pending-facts/resolve/route.ts`) — `nil` on `reject`, or on a
+    /// `confirm` with nothing to promote. This is the ONLY id
+    /// `APIClient.undoMemoryFact(id:)` accepts for a fact confirmed this way;
+    /// the pending fact's own `id` (this call's `id` parameter) is a
+    /// different row and is never a valid undo target.
+    @discardableResult
+    func resolvePendingFact(id: String, action: String) async throws -> String? {
         guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/pending-facts/resolve") else {
             throw APIError.invalidURL
         }
@@ -400,6 +408,23 @@ struct APIClient {
         request.timeoutInterval = 10
         struct Body: Encodable { let id: String; let action: String }
         request.httpBody = try encoder.encode(Body(id: id, action: action))
+        let (data, response) = try await session.data(for: request)
+        try validate(response)
+        struct ResolveResponse: Decodable { let nodeId: String? }
+        return (try? decoder.decode(ResolveResponse.self, from: data))?.nodeId
+    }
+
+    /// `POST /api/memory/facts/{factId}/undo` — chat-activity-contract.md §2.
+    /// Reverts a memory-write's `saved` result. 404 for an unknown id or
+    /// another user's fact; 401 without auth (both surfaced via `validate`).
+    func undoMemoryFact(id: String) async throws {
+        let encoded = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+        guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/memory/facts/\(encoded)/undo") else {
+            throw APIError.invalidURL
+        }
+        var request = authorizedRequest(url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 10
         let (_, response) = try await session.data(for: request)
         try validate(response)
     }
@@ -701,7 +726,11 @@ struct APIClient {
             return event.delta.map(CoachStreamEvent.text)
         case "tool_call":
             guard let id = event.id, let name = event.name, let status = event.status else { return nil }
-            return .toolCall(id: id, name: name, label: event.label ?? name, done: status == "done")
+            return .toolCall(
+                id: id, name: name, label: event.label ?? name, done: status == "done",
+                kind: event.kind, ok: event.ok, summary: event.summary,
+                sources: event.sources, memory: event.memory
+            )
         case "tool_data":
             guard let id = event.id, let viz = event.viz else { return nil }
             return .toolData(id: id, viz: viz)
@@ -2102,7 +2131,11 @@ protocol MemoryAPIProviding {
     func fetchMemory() async throws -> MemoryResponse
     func fetchEntityDocument(id: String) async throws -> EntityDocumentResponse
     func fetchPendingFacts() async throws -> PendingFactsResponse
-    func resolvePendingFact(id: String, action: String) async throws
+    /// Returns the newly-promoted fact's `nodeId` on `confirm` (`nil` on
+    /// `reject`) — see `APIClient.resolvePendingFact(id:action:)`'s doc
+    /// comment. `MemoryViewModel`/`TodayViewModel` currently ignore it.
+    @discardableResult
+    func resolvePendingFact(id: String, action: String) async throws -> String?
 }
 
 extension APIClient: MemoryAPIProviding {}
@@ -2183,6 +2216,10 @@ struct CoachRestoredMessage: Codable, Equatable {
     /// `attachMealReceipts`), never persisted directly. Absent on older
     /// backends and on any message with no meals in its turn window.
     let mealReceipts: [CoachMealReceipt]?
+    /// The turn's tool-call activity, in call order — chat-activity-contract.md
+    /// §3. `nil`/absent on a message with no tool calls, or on an older
+    /// backend that doesn't send it yet.
+    let activity: [CoachActivityItem]?
 
     init(
         id: String,
@@ -2192,7 +2229,8 @@ struct CoachRestoredMessage: Codable, Equatable {
         timestamp: String,
         specialistSessionId: String?,
         specialistMetadata: SpecialistMessageMetadata?,
-        mealReceipts: [CoachMealReceipt]? = nil
+        mealReceipts: [CoachMealReceipt]? = nil,
+        activity: [CoachActivityItem]? = nil
     ) {
         self.id = id
         self.role = role
@@ -2202,18 +2240,19 @@ struct CoachRestoredMessage: Codable, Equatable {
         self.specialistSessionId = specialistSessionId
         self.specialistMetadata = specialistMetadata
         self.mealReceipts = mealReceipts
+        self.activity = activity
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, role, speaker, content, timestamp
-        case specialistSessionId, specialistMetadata, mealReceipts
+        case specialistSessionId, specialistMetadata, mealReceipts, activity
     }
 
-    // Custom decode so a malformed `mealReceipts` (wrong shape, e.g. a future
-    // server bug or an intermediary mangling the payload) is dropped instead
-    // of failing the whole restoration decode — every other field still
-    // decodes normally, and `try?` around just this one key means one bad
-    // element can't sink the entire restored transcript.
+    // Custom decode so a malformed `mealReceipts`/`activity` (wrong shape,
+    // e.g. a future server bug or an intermediary mangling the payload) is
+    // dropped instead of failing the whole restoration decode — every other
+    // field still decodes normally, and `try?` around just these two keys
+    // means one bad element can't sink the entire restored transcript.
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(String.self, forKey: .id)
@@ -2224,7 +2263,22 @@ struct CoachRestoredMessage: Codable, Equatable {
         specialistSessionId = try container.decodeIfPresent(String.self, forKey: .specialistSessionId)
         specialistMetadata = try container.decodeIfPresent(SpecialistMessageMetadata.self, forKey: .specialistMetadata)
         mealReceipts = (try? container.decodeIfPresent([CoachMealReceipt].self, forKey: .mealReceipts)) ?? nil
+        activity = (try? container.decodeIfPresent([CoachActivityItem].self, forKey: .activity)) ?? nil
     }
+}
+
+/// One entry of a restored assistant message's `activity` array —
+/// chat-activity-contract.md §3. `label` is already the DONE-form label
+/// (e.g. "Checked your sleep"), unlike a live `tool_call` event's label,
+/// which may still be present-tense while the step is running.
+struct CoachActivityItem: Codable, Equatable {
+    let name: String
+    let label: String
+    let kind: String?
+    let ok: Bool?
+    let summary: String?
+    let sources: [CoachToolSource]?
+    let memory: CoachMemoryOp?
 }
 
 enum CoachHandoffPhase: String, Codable, Equatable {
@@ -2301,6 +2355,12 @@ private struct SSEEvent: Decodable {
     let returnSummary: JSONValue?
     let persona: CoachPersonaSnapshot?
     let error: String?
+    // chat-activity-contract.md §1 — tool_call started/done extras, all optional.
+    let kind: String?
+    let ok: Bool?
+    let summary: String?
+    let sources: [CoachToolSource]?
+    let memory: CoachMemoryOp?
 
     var handoffCard: CoachHandoffCard? {
         guard let phase, let sessionId, let cardOccurrenceId, let specialist, let objective else { return nil }
@@ -2343,12 +2403,63 @@ struct CoachViz: Decodable, Hashable {
     let delta: Double?
 }
 
+/// A source note surfaced by a memory READ (`read_memory`/`query_ontology`/
+/// `read_entity`) — chat-activity-contract.md §1. `date` is when the fact was
+/// recorded, if known.
+struct CoachToolSource: Codable, Equatable {
+    let text: String
+    let date: String?
+
+    init(text: String, date: String? = nil) {
+        self.text = text
+        self.date = date
+    }
+}
+
+/// What a memory WRITE tool call did — chat-activity-contract.md §1. An
+/// unrecognized future `op` value fails just this nested decode (see
+/// `SSEEvent`'s lenient handling and `CoachActivityItem`'s), never the whole
+/// event/message.
+enum CoachMemoryOpKind: String, Codable, Equatable {
+    case saved
+    case proposed
+    case updated
+    case removed
+}
+
+struct CoachMemoryOp: Codable, Equatable {
+    let op: CoachMemoryOpKind
+    let text: String
+    /// Present for `saved` (the id `POST /api/memory/facts/{id}/undo`
+    /// accepts) and `proposed` (the pending fact's id, for the existing
+    /// pending-facts confirm/dismiss API). `nil` for `saved` when the write
+    /// has no stable undo target (e.g. a free-text observation append) — the
+    /// app then hides Undo — and always `nil` for `updated`/`removed`.
+    let factId: String?
+
+    init(op: CoachMemoryOpKind, text: String, factId: String? = nil) {
+        self.op = op
+        self.text = text
+        self.factId = factId
+    }
+}
+
 /// A single event surfaced from the coach SSE stream: a text delta to append to
 /// the streaming reply, a tool-call lifecycle update (started/done) rendered as
 /// an inline activity row, or the structured data for a chartable tool.
 enum CoachStreamEvent: Equatable {
     case text(String)
-    case toolCall(id: String, name: String, label: String, done: Bool)
+    /// `kind`/`ok`/`summary`/`sources`/`memory` are chat-activity-contract.md
+    /// §1's new fields — all optional so an older backend (which sends none
+    /// of them) still decodes. `kind` can arrive on `started` too; `ok`/
+    /// `summary`/`sources`/`memory` are `done`-only per the contract, but
+    /// decoding doesn't enforce that — an unexpected value on `started` is
+    /// just carried through harmlessly.
+    case toolCall(
+        id: String, name: String, label: String, done: Bool,
+        kind: String? = nil, ok: Bool? = nil, summary: String? = nil,
+        sources: [CoachToolSource]? = nil, memory: CoachMemoryOp? = nil
+    )
     case toolData(id: String, viz: CoachViz)
     /// A `log_meal` tool call just inserted a meal — enough to render an
     /// inline receipt (name + macros) and issue an Undo (`deleteMealLog`)
@@ -2472,6 +2583,15 @@ protocol CoachAPIProviding {
     /// The per-item stepper on an inline `LogReceiptCard` — fixes ONE item's
     /// grams without touching the rest of the meal.
     func scaleMealLog(id: String, itemFood: String, grams: Double) async throws -> MealScaleResult
+    /// Undo for a "Noted: … · Undo" memory chip (chat-activity-contract.md §2).
+    func undoMemoryFact(id: String) async throws
+    /// Remember / Not now on a `MemoryProposalCard` — the existing
+    /// pending-facts confirm/dismiss API, reused verbatim (see
+    /// `MemoryViewModel.resolveFact`). Returns the confirmed fact's `nodeId`
+    /// — the only id `undoMemoryFact(id:)` accepts for it — or `nil` on
+    /// reject, or on a confirm with nothing promoted.
+    @discardableResult
+    func resolvePendingFact(id: String, action: String) async throws -> String?
 }
 
 extension APIClient: CoachAPIProviding {}
