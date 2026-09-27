@@ -382,3 +382,122 @@ test('analysis GET passes one canonical UUID to the repository', async () => {
   assert.equal(response.status, 404);
   assert.equal(repositoryId, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
 });
+
+// ── analysis v2 §1: additive `context` ──────────────────────────────────────
+
+test('workout analysis GET attaches context from the repository, leaving the existing fields unchanged', async () => {
+  const record: AnalysisRecord = {
+    id: '77777777-7777-4777-8777-777777777777', userId: 'user-a', status: 'ready', deletedAt: null,
+    date: '2026-09-01',
+    input: { type: 'running', durationMin: 30, distanceM: 5000, avgHr: 140, maxHr: 165, paceMinPerKm: 6, startTime: '2026-09-01T07:00:00Z' },
+    result: { headline: 'Solid run' }, createdAt: new Date('2026-09-01T08:00:00Z'),
+  };
+  const seenContextCalls: Array<[string, AnalysisRecord]> = [];
+  const context = {
+    usual: { sessions: 5, distanceM: 4800 },
+    effort: { restingHr: 52, maxHr: 180, avgPct: 0.62, zone: 'steady' },
+  };
+  const handler = createAnalysisHttpHandler({
+    authenticate,
+    kind: 'workout',
+    repository: repository({
+      async getAnalysis() { return record; },
+      async getWorkoutAnalysisContext(userId, analysis) { seenContextCalls.push([userId, analysis]); return context; },
+    }),
+  });
+  const response = await handler.GET(request(`/api/workout-analyses/${record.id}`, 'GET', undefined, 'user-a'), { params: Promise.resolve({ id: record.id }) });
+  assert.equal(response.status, 200);
+  assert.deepEqual(seenContextCalls, [['user-a', record]]);
+  const body = await response.json();
+  assert.deepEqual(body, {
+    id: record.id, date: '2026-09-01', result: { headline: 'Solid run' },
+    metrics: record.input,
+    createdAt: '2026-09-01T08:00:00.000Z',
+    context,
+  });
+});
+
+test('sleep analysis GET attaches context from the repository', async () => {
+  const record: AnalysisRecord = {
+    id: '88888888-8888-4888-8888-888888888888', userId: 'user-a', status: 'ready', deletedAt: null,
+    date: '2026-09-02',
+    input: { minutes: 420, stages: { core: 250, deep: 60, rem: 70, awake: 20 } },
+    result: { headline: 'Good night' }, createdAt: new Date('2026-09-02T07:00:00Z'),
+  };
+  const context = { goalMinutes: 480, usual: { nights: 10, minutes: 415 } };
+  const handler = createAnalysisHttpHandler({
+    authenticate,
+    kind: 'sleep',
+    repository: repository({
+      async getAnalysis() { return record; },
+      async getSleepAnalysisContext() { return context; },
+    }),
+  });
+  const response = await handler.GET(request(`/api/sleep-analyses/${record.id}`, 'GET', undefined, 'user-a'), { params: Promise.resolve({ id: record.id }) });
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.deepEqual(body.context, context);
+  assert.deepEqual(body.metrics, record.input);
+});
+
+test('analysis GET omits `context` entirely when the repository has nothing (never sends null)', async () => {
+  const record: AnalysisRecord = {
+    id: '99999999-9999-4999-8999-999999999999', userId: 'user-a', status: 'ready', deletedAt: null,
+    date: '2026-09-03',
+    input: { type: 'running', durationMin: 20, startTime: '2026-09-03T07:00:00Z' },
+    result: { headline: 'Quick run' }, createdAt: new Date('2026-09-03T08:00:00Z'),
+  };
+  const handler = createAnalysisHttpHandler({
+    authenticate,
+    kind: 'workout',
+    repository: repository({
+      async getAnalysis() { return record; },
+      async getWorkoutAnalysisContext() { return undefined; },
+    }),
+  });
+  const response = await handler.GET(request(`/api/workout-analyses/${record.id}`, 'GET', undefined, 'user-a'), { params: Promise.resolve({ id: record.id }) });
+  const body = await response.json();
+  assert.equal('context' in body, false);
+});
+
+test('analysis GET never calls a context getter for a repository that does not implement one (back-compat)', async () => {
+  const record: AnalysisRecord = {
+    id: '10101010-1010-4101-8101-101010101010', userId: 'user-a', status: 'ready', deletedAt: null,
+    date: '2026-09-04',
+    input: { type: 'running', durationMin: 20 },
+    result: { headline: 'Run' }, createdAt: new Date('2026-09-04T08:00:00Z'),
+  };
+  const handler = createAnalysisHttpHandler({
+    authenticate,
+    kind: 'workout',
+    repository: repository({ async getAnalysis() { return record; } }), // no getWorkoutAnalysisContext at all
+  });
+  const response = await handler.GET(request(`/api/workout-analyses/${record.id}`, 'GET', undefined, 'user-a'), { params: Promise.resolve({ id: record.id }) });
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal('context' in body, false);
+  assert.deepEqual(body.metrics, record.input);
+});
+
+test('morning brief GET never calls a workout/sleep context getter even if the repository has one', async () => {
+  const record: AnalysisRecord = {
+    id: '20202020-2020-4202-8202-202020202020', userId: 'user-a', status: 'ready', deletedAt: null,
+    date: '2026-09-05',
+    input: null,
+    result: { headline: 'Morning brief' }, createdAt: new Date('2026-09-05T08:00:00Z'),
+  };
+  let calls = 0;
+  const handler = createAnalysisHttpHandler({
+    authenticate,
+    kind: 'morningBrief',
+    repository: repository({
+      async getAnalysis() { return record; },
+      async getWorkoutAnalysisContext() { calls++; return { usual: { sessions: 5 } }; },
+      async getSleepAnalysisContext() { calls++; return { goalMinutes: 480 }; },
+    }),
+  });
+  const response = await handler.GET(request(`/api/morning-briefs/${record.id}`, 'GET', undefined, 'user-a'), { params: Promise.resolve({ id: record.id }) });
+  const body = await response.json();
+  assert.equal(calls, 0);
+  assert.equal('context' in body, false);
+});
