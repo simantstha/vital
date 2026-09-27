@@ -12,6 +12,7 @@ import {
   type PushDeviceRow,
 } from './pushDeviceReconciliation';
 import { shouldPersistDefaultPreferences } from './proactiveHealthTransitions';
+import { getSleepAnalysisContext, getWorkoutAnalysisContext } from './analysisContextRepository';
 
 function preferencesDto(row: typeof schema.notification_preferences.$inferSelect): NotificationPreferences {
   return {
@@ -156,6 +157,7 @@ export const proactiveHealthRepository: ProactiveHealthRepository = {
         input: schema.workout_analyses.input_payload,
         result: schema.workout_analyses.result,
         createdAt: schema.workout_analyses.created_at,
+        source: schema.workout_analyses.source,
       }).from(schema.workout_analyses).where(and(
         eq(schema.workout_analyses.id, id),
         eq(schema.workout_analyses.user_id, userId),
@@ -171,10 +173,14 @@ export const proactiveHealthRepository: ProactiveHealthRepository = {
       input: schema.sleep_analyses.input_payload,
       result: schema.sleep_analyses.result,
       createdAt: schema.sleep_analyses.created_at,
+      source: schema.sleep_analyses.source,
     }).from(schema.sleep_analyses).where(and(
       eq(schema.sleep_analyses.id, id),
       eq(schema.sleep_analyses.user_id, userId),
     )).limit(1);
     return row ? { ...row, deletedAt: null } : null;
   },
+
+  getWorkoutAnalysisContext,
+  getSleepAnalysisContext,
 };
