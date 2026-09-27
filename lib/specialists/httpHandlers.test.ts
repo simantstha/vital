@@ -24,7 +24,7 @@ test('POST preserves legacy event shapes and authenticates before running coach'
       calledWith = [userId, message, image, mode, findingId, voice, clientTurnId];
       return events([
         { type: 'text', text: 'Hello' },
-        { type: 'tool_call', id: 'call-1', name: 'get_sleep_summary', label: 'Sleep', status: 'started' },
+        { type: 'tool_call', id: 'call-1', name: 'get_sleep_summary', label: 'Sleep', status: 'started', kind: 'data' },
         { type: 'tool_data', id: 'call-1', viz: { kind: 'stat', title: 'Sleep', value: '8h' } as never },
         { type: 'done', messageId: 'message-1' },
       ]);

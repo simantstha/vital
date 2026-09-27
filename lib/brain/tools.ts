@@ -72,6 +72,7 @@ import {
 import { getWeightReadings, logWeightEntry } from '@/lib/weightRepository';
 import { computeWeightTrend } from '@/lib/weightTrend';
 import { LB_PER_KG } from '@/lib/metricFormat';
+import { metricLabel, EVENT_TYPE_LABELS } from './toolLabels';
 
 // How recent a coach-logged meal (source = 'coach') must be for delete_meal to
 // reach it — see delete_meal's tool description and executor for the full
@@ -946,30 +947,12 @@ const drizzleRememberFactStore: RememberFactStore = {
 };
 
 // ── Metric label helper (shared: tool_call SSE labels + prompt formatting) ────
-
-const METRIC_LABELS: Record<string, string> = {
-  hrv_sdnn:            'HRV',
-  resting_hr:          'resting heart rate',
-  hr_avg:              'heart rate',
-  steps:               'steps',
-  active_energy_kcal:  'active energy',
-  body_mass_kg:        'weight',
-  sleep_minutes:       'sleep',
-  workouts:            'workouts',
-};
-
-export function metricLabel(metric: string): string {
-  return METRIC_LABELS[metric] ?? metric;
-}
-
-const EVENT_TYPE_LABELS: Record<string, string> = {
-  hrv_reading:        'HRV readings',
-  sleep_session:      'sleep sessions',
-  workout_completed:  'workouts',
-  steps_recorded:     'step counts',
-  meal_logged:        'meals',
-  weight_logged:      'weight logs',
-};
+// Moved to lib/brain/toolLabels.ts (a pure, zero-import leaf) so
+// lib/brain/toolActivity.ts can reuse the exact same strings without pulling
+// in this file's `@/db` dependency. Re-exported here unchanged so every
+// existing importer of metricLabel/EVENT_TYPE_LABELS from './tools' keeps
+// working.
+export { metricLabel, EVENT_TYPE_LABELS } from './toolLabels';
 
 /** Human label for an in-flight tool call, surfaced via SSE tool_call events. */
 export function toolCallLabel(name: string, input: Record<string, unknown>): string {
@@ -1688,7 +1671,7 @@ export async function executeToolCall(
     );
     return result.ok
       ? JSON.stringify(result)
-      : `No pending_fact found with id ${factId}.`;
+      : `Error: No pending_fact found with id ${factId}.`;
   }
 
   // ── resolve_fact ──────────────────────────────────────────────────────────
@@ -2276,7 +2259,10 @@ export async function resolveFact(
   };
 }
 
-const drizzleNodeResolutionStore: NodeResolutionStore = {
+// Exported so app/api/memory/facts/[factId]/undo can reuse the exact same
+// resolve/supersede logic remember_fact's undo relies on (§2 of the
+// chat-activity contract), instead of re-implementing the status flip.
+export const drizzleNodeResolutionStore: NodeResolutionStore = {
   async findActiveNode({ userId, id, label }) {
     const scope = [eq(schema.nodes.user_id, userId), eq(schema.nodes.status, 'active'), isNull(schema.nodes.superseded_by)];
 

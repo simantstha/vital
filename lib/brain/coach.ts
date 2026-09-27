@@ -63,6 +63,17 @@ import {
   type HandoffCardPayload,
 } from '@/lib/specialists/coachIntegration';
 import { CLAUDE_SONNET_MODEL } from '@/lib/aiModels';
+import {
+  doneLabel,
+  extractMemoryOp,
+  extractMemorySources,
+  isToolResultOk,
+  toolKind,
+  toolResultSummary,
+  type MemoryOp,
+  type MemorySource,
+  type ToolKind,
+} from './toolActivity';
 
 const MODEL        = CLAUDE_SONNET_MODEL;
 const MAX_TOKENS   = 3500;
@@ -100,7 +111,17 @@ coaching. Never override a documented allergy, condition, medication, or injury.
 
 export type CoachEvent =
   | { type: 'text'; text: string }
-  | { type: 'tool_call'; id: string; name: string; label: string; status: 'started' | 'done' }
+  | {
+      type: 'tool_call'; id: string; name: string; label: string; status: 'started' | 'done';
+      kind: ToolKind;
+      // Only ever populated on a 'done' event — see toolActivity.ts and the
+      // chat-activity contract (§1). Never invented: ok/summary/sources/memory
+      // all trace back to the tool's own input or result text.
+      ok?: boolean;
+      summary?: string;
+      sources?: MemorySource[];
+      memory?: MemoryOp;
+    }
   | { type: 'tool_data'; id: string; viz: CoachViz }
   // A meal was just inserted by `log_meal` — carries enough for the client to
   // render an inline receipt (name + macros) and issue an Undo (DELETE
@@ -474,9 +495,15 @@ async function* streamCoachTurn(userId: string, seed: TurnSeed): AsyncGenerator<
       const input = block.input as Record<string, unknown>;
       const callId = randomUUID();
       const label  = toolCallLabel(block.name, input);
+      const kind   = toolKind(block.name);
 
-      toolCallLog.push(toolCallForPersistence(block.name, input));
-      yield { type: 'tool_call', id: callId, name: block.name, label, status: 'started' };
+      // Cloned into a plain mutable record (not the toolCallForPersistence
+      // literal itself) so the done-form fields below can be filled in after
+      // the call finishes, per §3 of the chat-activity contract — the same
+      // object reference is what ends up in messages.tool_calls jsonb.
+      const persistedEntry: Record<string, unknown> = { ...toolCallForPersistence(block.name, input) };
+      toolCallLog.push(persistedEntry);
+      yield { type: 'tool_call', id: callId, name: block.name, label, status: 'started', kind };
 
       let result: string;
       let specialistCard: HandoffCardPayload | null = null;
@@ -514,8 +541,34 @@ async function* streamCoachTurn(userId: string, seed: TurnSeed): AsyncGenerator<
         }
       }
 
-      yield { type: 'tool_call', id: callId, name: block.name, label, status: 'done' };
+      // Chat-activity contract §1: computed once per call, from the tool's
+      // own input/result only — never invented. `ok` is false on the same
+      // "Error"-prefix a failed/thrown call always carries (see the catch
+      // above), or when the result is a JSON object reporting its own
+      // `ok: false` (e.g. resolve_fact's "no matching fact",
+      // log_workout's needs-clarification reply) — see isToolResultOk.
+      const ok = isToolResultOk(result);
+      const summary = ok ? toolResultSummary(block.name, input, result, ctx.unitSystem) : undefined;
+      const sources = ok ? extractMemorySources(block.name, result) : undefined;
+      const memory  = ok ? extractMemoryOp(block.name, input, result) : undefined;
+
+      yield {
+        type: 'tool_call', id: callId, name: block.name, label, status: 'done', kind, ok,
+        ...(summary ? { summary } : {}),
+        ...(sources ? { sources } : {}),
+        ...(memory ? { memory } : {}),
+      };
       if (specialistCard) yield specialistCard;
+
+      // Persist the same done-form fields into the tool_calls jsonb entry
+      // pushed at 'started' time above — §3 of the contract, so GET
+      // /api/coach's history can derive `activity` without a schema change.
+      persistedEntry.label = doneLabel(block.name, input);
+      persistedEntry.kind = kind;
+      persistedEntry.ok = ok;
+      if (summary) persistedEntry.summary = summary;
+      if (sources) persistedEntry.sources = sources;
+      if (memory) persistedEntry.memory = memory;
 
       // For the chartable data tools, also surface the structured result so the
       // client can render an inline mini-chart / stat card (falls back to the
