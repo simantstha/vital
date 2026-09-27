@@ -21,9 +21,19 @@ function assertCategory(category: AnalysisContentError['category'], run: () => u
 
 test('the digit guard rejects every Unicode numeric code point', () => {
   for (const content of ['raw 45', 'raw ٤٥', 'raw Ⅻ', 'raw ²']) {
-    assertCategory('grounding_failure', () => assertNoRawNumbers(content));
+    assertCategory('grounding_failure', () => assertNoRawNumbers(content, 'narrative'));
   }
-  assert.doesNotThrow(() => assertNoRawNumbers('Noticeably faster than your recent sessions.'));
+  assert.doesNotThrow(() => assertNoRawNumbers('Noticeably faster than your recent sessions.', 'narrative'));
+});
+
+test('the digit guard names the failing field in the detail', () => {
+  try {
+    assertNoRawNumbers('You ran 45 minutes.', 'narrative');
+    assert.fail('expected assertNoRawNumbers to throw');
+  } catch (error) {
+    assert.ok(error instanceof AnalysisContentError);
+    assert.equal(error.detail, 'digit in narrative');
+  }
 });
 
 test('strips one complete JSON code fence and leaves other text untouched', () => {
@@ -81,6 +91,26 @@ test('rejects a numeral in any authored field, not just the narrative', () => {
     { nextSteps: ['Rest for 2 days.'] },
   ]) {
     assertCategory('grounding_failure', () => parseAnalysisText(JSON.stringify({ ...validAnalysis, ...override })));
+  }
+});
+
+test('names the failing field in the grounding_failure detail, never the model text', () => {
+  const cases: Array<[Record<string, unknown>, string]> = [
+    [{ narrative: 'You ran 45 minutes.' }, 'digit in narrative'],
+    [{ headline: 'Run for 45 minutes' }, 'digit in headline'],
+    [{ observations: ['Heart rate averaged 150 bpm.'] }, 'digit in observations'],
+    [{ nextSteps: ['Rest for 2 days.'] }, 'digit in nextSteps'],
+    [{ shortInsight: 'Unable to process workout data.' }, 'meta response in shortInsight'],
+  ];
+  for (const [override, expectedDetail] of cases) {
+    try {
+      parseAnalysisText(JSON.stringify({ ...validAnalysis, ...override }));
+      assert.fail('expected parseAnalysisText to throw');
+    } catch (error) {
+      assert.ok(error instanceof AnalysisContentError);
+      assert.equal(error.category, 'grounding_failure');
+      assert.equal(error.detail, expectedDetail);
+    }
   }
 });
 
