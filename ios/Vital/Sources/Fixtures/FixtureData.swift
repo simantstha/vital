@@ -217,7 +217,7 @@ enum FixtureData {
     /// `FixtureMode.isActive` (impossible in practice — `FixtureURLProtocol
     /// .canInit` already gates on it), handled defensively rather than force-
     /// unwrapped.
-    static func response(scenario: FixtureMode.Scenario?, method: String, path: String, query: String) -> (Int, Data) {
+    static func response(scenario: FixtureMode.Scenario?, method: String, path: String, query: String, body: Data = Data()) -> (Int, Data) {
         guard let scenario else { return (404, jsonData(["error": "no active fixture scenario"])) }
 
         if scenario == .serverError {
@@ -236,7 +236,18 @@ enum FixtureData {
         case ("GET", "/api/streak"):
             return (200, jsonData(["streakDays": profile.established ? 6 : 1]))
         case ("GET", "/api/pending-facts"):
-            return (200, jsonData(["items": [String]()]))
+            return (200, jsonData(["items": pendingFacts(profile)]))
+        case ("GET", "/api/memory"):
+            return (200, jsonData(memory(profile)))
+        // Dynamic-id routes (memory-contract.md §2/§3) — matched by prefix
+        // since `FixtureData.response` only sees the request's path, not a
+        // router's path params.
+        case ("PATCH", let p) where p.hasPrefix("/api/memory/facts/"):
+            return (200, jsonData(editedMemoryFact(id: String(p.dropFirst("/api/memory/facts/".count)), body: body)))
+        case ("POST", let p) where p.hasPrefix("/api/memory/facts/") && p.hasSuffix("/undo"):
+            return (200, jsonData(["ok": true]))
+        case ("GET", let p) where p.hasPrefix("/api/memory/entities/"):
+            return (200, jsonData(entityDocument(id: String(p.dropFirst("/api/memory/entities/".count)))))
         case ("GET", "/api/coach"):
             return (200, jsonData(coachRestoration(profile)))
         case ("GET", "/api/coach/opener"):
@@ -1044,6 +1055,112 @@ enum FixtureData {
         }
 
         return ["week": week, "volume": volume, "lastLift": lastLift]
+    }
+
+    // MARK: - GET /api/memory → MemoryResponse (memory-contract.md §1/§4)
+
+    /// One `self.facts[]` item, with the new §1 fields (`recordedAt`,
+    /// `origin`, `group`) — matches `W3-Memory`/`W4-Memory-Actions`'s facts
+    /// exactly, so `MemoryLogic.groupedSections` renders the same three
+    /// groups (Health 3, Goals 2, Routines & preferences 3) the mock shows.
+    private struct FixtureFact {
+        let id: String
+        let type: String
+        let label: String
+        let isConstraint: Bool
+        let daysAgo: Int
+        let origin: String
+        let group: String
+    }
+
+    private static let memoryFacts: [FixtureFact] = [
+        FixtureFact(id: "fixture-fact-peanut", type: "Allergy", label: "Peanut allergy", isConstraint: true, daysAgo: 400, origin: "told", group: "health"),
+        FixtureFact(id: "fixture-fact-knee", type: "Injury", label: "Knee pain since Sunday", isConstraint: false, daysAgo: 6, origin: "told", group: "health"),
+        // Same id `coachRestoration`'s `memorySavedExchange` uses for its
+        // "Noted: Lactose intolerant" chip — same fact, same fixture id.
+        FixtureFact(id: "fixture-fact-lactose", type: "Intolerance", label: "Lactose intolerant", isConstraint: true, daysAgo: 1, origin: "told", group: "health"),
+        FixtureFact(id: "fixture-fact-weight-goal", type: "Goal", label: "Lose 5 kg by December", isConstraint: false, daysAgo: 21, origin: "onboarding", group: "goals"),
+        FixtureFact(id: "fixture-fact-marathon", type: "Goal", label: "Break 4 hours in the marathon", isConstraint: false, daysAgo: 120, origin: "told", group: "goals"),
+        FixtureFact(id: "fixture-fact-morning-run", type: "Habit", label: "Prefers running in the morning", isConstraint: false, daysAgo: 40, origin: "told", group: "routines"),
+        FixtureFact(id: "fixture-fact-night-feeds", type: "Habit", label: "New baby — night feeds about 2 a night", isConstraint: false, daysAgo: 23, origin: "told", group: "routines"),
+        FixtureFact(id: "fixture-fact-coffee", type: "Habit", label: "Coffee before 10 am only", isConstraint: false, daysAgo: 15, origin: "confirmed", group: "routines"),
+    ]
+
+    private static func memoryFactJSON(_ fact: FixtureFact) -> [String: Any] {
+        [
+            "id": fact.id, "type": fact.type, "label": fact.label, "isConstraint": fact.isConstraint,
+            "recordedAt": dayString(fact.daysAgo), "origin": fact.origin, "group": fact.group,
+        ]
+    }
+
+    /// Dad (3 facts) and Maya (2 facts) — `W3-Memory`'s People card.
+    private static let memoryEntities: [[String: Any]] = [
+        ["id": "fixture-entity-dad", "label": "Dad", "kind": "Father", "factCount": 3],
+        ["id": "fixture-entity-maya", "label": "Maya", "kind": "Partner", "factCount": 2],
+    ]
+
+    private static func memory(_ profile: Profile) -> [String: Any] {
+        guard profile.established else {
+            return ["self": ["factCount": 0, "facts": [Any]()], "entities": [Any]()]
+        }
+        return [
+            "self": ["factCount": memoryFacts.count, "facts": memoryFacts.map(memoryFactJSON)],
+            "entities": memoryEntities,
+        ]
+    }
+
+    // MARK: - GET /api/pending-facts → PendingFactsResponse
+
+    /// One "Did I get this right?" card (memory-contract.md §1/§4), with a
+    /// `reason` — matches `W3-Memory`'s pending card verbatim. Empty for
+    /// `new_user`, same as every other established-only fixture list here.
+    private static func pendingFacts(_ profile: Profile) -> [[String: Any]] {
+        guard profile.established else { return [] }
+        return [
+            [
+                "id": "fixture-pending-6am",
+                "proposedNode": ["type": "Habit", "label": "You usually train at 6 am on weekdays"],
+                "evidence": "Workouts logged at 6:0x am on 12 of the last 15 weekdays.",
+                "salience": 0.82,
+                "createdAt": isoDaysAgo(1),
+                "reason": "Noticed from your workouts over the last 3 weeks",
+            ],
+        ]
+    }
+
+    // MARK: - PATCH /api/memory/facts/{id} → { ok, fact } (memory-contract.md §2)
+
+    /// The fixture never actually persists a supersede — it just echoes the
+    /// requested label back as a "new" node with a fresh id, close enough for
+    /// exercising `MemoryViewModel.saveEdit`'s replace-the-row-in-place path
+    /// without a real backend.
+    private static func editedMemoryFact(id: String, body: Data) -> [String: Any] {
+        let object = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any]
+        let label = object?["label"] as? String ?? "Updated fact"
+        let fact: [String: Any] = [
+            "id": "\(id)-edited", "type": "Habit", "label": label, "isConstraint": false,
+            "recordedAt": dayString(0), "origin": "told", "group": "routines",
+        ]
+        return ["ok": true, "fact": fact]
+    }
+
+    // MARK: - GET /api/memory/entities/{id} → EntityDocumentResponse
+
+    private static func entityDocument(id: String) -> [String: Any] {
+        let isMaya = id == "fixture-entity-maya"
+        let label = isMaya ? "Maya" : "Dad"
+        let kind = isMaya ? "Partner" : "Father"
+        let facts: [[String: Any]] = isMaya
+            ? [
+                ["type": "Relationship", "label": "Partner", "evidence": "my partner Maya", "source": "coach", "createdAt": isoDaysAgo(60)],
+                ["type": "Allergy", "label": "Shellfish allergy", "evidence": "Maya can't have shellfish", "source": "coach", "createdAt": isoDaysAgo(45)],
+              ]
+            : [
+                ["type": "Condition", "label": "Type 2 diabetes", "evidence": "my dad has type 2 diabetes", "source": "coach", "createdAt": isoDaysAgo(200)],
+                ["type": "Medication", "label": "Metformin", "evidence": "he's on metformin", "source": "coach", "createdAt": isoDaysAgo(200)],
+                ["type": "FamilyHistory", "label": "Family history of diabetes", "evidence": "runs in the family", "source": "coach", "createdAt": isoDaysAgo(200)],
+              ]
+        return ["id": id, "label": label, "kind": kind, "isSelf": false, "facts": facts]
     }
 
     // MARK: - GET /api/notification-preferences → NotificationPreferences
