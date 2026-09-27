@@ -6,7 +6,7 @@ import { generateDailyBriefFromDb } from '../lib/brain/brief';
 import { getDailyBrief, upsertDailyBrief } from '../lib/brain/dailyBriefRepository';
 import { prewarmDailyBrief } from '../lib/dailyBriefPrewarm';
 import { previousRunSignatures, recordFindings } from '../lib/insights/confirmation';
-import { insightsEnabled, runInsightPass, selectInsightPassUsers, type InsightPassRepository, type InsightPassUserSource } from '../lib/insights/nudgeWorker';
+import { insightPassLogEvent, insightsEnabled, runInsightPass, selectInsightPassUsers, type InsightPassRepository, type InsightPassUserSource } from '../lib/insights/nudgeWorker';
 import { establishedMetrics, loadSeries } from '../lib/insights/series';
 import { generateAnalysis, proactiveAnalysisModel, type AnalysisFailureEvent } from '../lib/proactiveAnalysisGeneration';
 import { currentLocalDate, deliverNotification, runClaimedAnalysis, type AnalysisContext, type AnalysisJob, type CoachAnalysis } from '../lib/proactiveHealthWorker';
@@ -161,7 +161,7 @@ async function runDueInsightPasses(now: Date): Promise<void> {
     if (insightPassDayByUser.get(user.userId) === localDay) continue;
     insightPassDayByUser.set(user.userId, localDay);
     try {
-      await runInsightPass({
+      const outcome = await runInsightPass({
         repository: insightPassRepository,
         generateNudge,
         push: async (device, alert, route) => {
@@ -173,6 +173,7 @@ async function runDueInsightPasses(now: Date): Promise<void> {
         now,
         localDay,
       });
+      console.log(JSON.stringify(insightPassLogEvent({ userId: user.userId, localDay, mode, outcome })));
     } catch (error) {
       console.error(JSON.stringify(workerErrorEvent('insight-pass', error)));
     }

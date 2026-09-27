@@ -151,9 +151,23 @@ export type InsightSilenceReason =
   | 'caps_exceeded'
   | 'dry_run';
 
+/**
+ * Stage counts for one pass, present on EVERY outcome so a dry-run "no
+ * candidates" can be told apart from a broken detector or a broken evidence
+ * gate just by reading the log line — see insightPassLogEvent below. A stage
+ * the pass never reached reports 0, not undefined: e.g. a `no_candidates`
+ * outcome has confirmed = 0 and shortlisted = 0.
+ */
+export interface InsightPassStats {
+  candidates: number;
+  survivors: number;
+  confirmed: number;
+  shortlisted: number;
+}
+
 export type InsightPassOutcome =
-  | { delivered: false; reason: InsightSilenceReason }
-  | { delivered: true; pendingNudgeId: string; kind: string; pushed: boolean };
+  | { delivered: false; reason: InsightSilenceReason; stats: InsightPassStats }
+  | { delivered: true; pendingNudgeId: string; kind: string; pushed: boolean; stats: InsightPassStats };
 
 function emptySeries(metric: string): MetricSeries {
   return { metric, points: [] };
@@ -216,42 +230,57 @@ export async function runInsightPass(deps: InsightPassDeps): Promise<InsightPass
   // still appearing to work. Must run before any of the early returns below.
   await repository.recordFindings(userId, localDay, survivors);
 
-  if (survivors.length === 0) return { delivered: false, reason: 'no_candidates' };
+  if (survivors.length === 0) {
+    return { delivered: false, reason: 'no_candidates', stats: { candidates: candidates.length, survivors: 0, confirmed: 0, shortlisted: 0 } };
+  }
 
   const previousSignatures = await repository.previousRunSignatures(userId, localDay);
   const confirmed = confirmAgainstPreviousRun(survivors, previousSignatures);
-  if (confirmed.length === 0) return { delivered: false, reason: 'not_confirmed' };
+  if (confirmed.length === 0) {
+    return { delivered: false, reason: 'not_confirmed', stats: { candidates: candidates.length, survivors: survivors.length, confirmed: 0, shortlisted: 0 } };
+  }
 
   const history = await repository.sentNudgeHistory(userId, now);
   const context = await repository.voiceContext(userId);
 
   const arbiterContext: ArbiterContext = { goal: context.goal, recentKinds: recentKindsSince(history, now) };
   const shortlisted = shortlist(confirmed, arbiterContext);
-  if (shortlisted.length === 0) return { delivered: false, reason: 'empty_shortlist' };
+  if (shortlisted.length === 0) {
+    return { delivered: false, reason: 'empty_shortlist', stats: { candidates: candidates.length, survivors: survivors.length, confirmed: confirmed.length, shortlisted: 0 } };
+  }
+
+  // Fixed for the rest of the pass: every remaining stage either speaks one of
+  // these `shortlisted` findings or stays silent about all of them, so the
+  // stage counts don't change again.
+  const stats: InsightPassStats = { candidates: candidates.length, survivors: survivors.length, confirmed: confirmed.length, shortlisted: shortlisted.length };
 
   const request = buildVoiceRequest(shortlisted, { goal: context.goal, facts: context.facts, recentlySaid: context.recentlySaid });
   const raw = await deps.generateNudge(request);
   const nudge = parseNudge(raw, shortlisted.map((f) => f.signature));
-  if (!nudge) return { delivered: false, reason: 'no_nudge' };
+  if (!nudge) return { delivered: false, reason: 'no_nudge', stats };
 
   // parseNudge already enforced the signature is one we offered; this lookup
   // cannot fail, but a `?? null` chain here would silently paper over a
   // contract break between voice.ts and this function, so fail the same way.
   const chosen = shortlisted.find((f) => f.signature === nudge.signature);
-  if (!chosen) return { delivered: false, reason: 'no_nudge' };
+  if (!chosen) return { delivered: false, reason: 'no_nudge', stats };
 
-  if (!withinDeliveryCaps(history, now, chosen.kind)) return { delivered: false, reason: 'caps_exceeded' };
+  if (!withinDeliveryCaps(history, now, chosen.kind)) return { delivered: false, reason: 'caps_exceeded', stats };
 
   if (mode === 'dry-run') {
+    // Carries the nudge's user-derived title/body text — kept only for manual
+    // dry-run review, never for aggregate monitoring; see insightPassLogEvent
+    // for the structured, text-free line every outcome (this one included)
+    // also gets.
     console.log(JSON.stringify({ stage: 'insight-dry-run', userId, nudge }));
-    return { delivered: false, reason: 'dry_run' };
+    return { delivered: false, reason: 'dry_run', stats };
   }
 
   const pendingNudgeId = await repository.insertPendingNudge(userId, localDay, chosen.kind, nudge, now);
   // null means another worker's insert already claimed (userId, localDay) —
   // the unique index, not this check, is what makes that safe under a race;
   // this branch just makes sure the loser doesn't also push.
-  if (pendingNudgeId === null) return { delivered: false, reason: 'caps_exceeded' };
+  if (pendingNudgeId === null) return { delivered: false, reason: 'caps_exceeded', stats };
 
   const devices = await repository.listDevices(userId);
   let pushed = false;
@@ -265,5 +294,35 @@ export async function runInsightPass(deps: InsightPassDeps): Promise<InsightPass
   }
   if (pushed) await repository.markNudgeSent(pendingNudgeId, now);
 
-  return { delivered: true, pendingNudgeId, kind: chosen.kind, pushed };
+  return { delivered: true, pendingNudgeId, kind: chosen.kind, pushed, stats };
+}
+
+/**
+ * Turns one pass's outcome into the structured, privacy-safe log line every
+ * pass emits (see scripts/proactive-health-worker.ts's runDueInsightPasses).
+ * Pure and exported so it's unit-testable without a DB or a model call.
+ *
+ * Deliberately excludes nudge title/body text and any health values — only
+ * ids, counts, the silence reason, and the delivered kind, so this line is
+ * safe to leave on indefinitely (unlike the `insight-dry-run` line, which
+ * exists only for manual dry-run review and carries the nudge text).
+ */
+export function insightPassLogEvent(input: {
+  userId: string;
+  localDay: string;
+  mode: 'dry-run' | 'live';
+  outcome: InsightPassOutcome;
+}): Record<string, unknown> {
+  const { userId, localDay, mode, outcome } = input;
+  const base = {
+    event: 'insight_pass' as const,
+    userId,
+    localDay,
+    mode,
+    delivered: outcome.delivered,
+    reason: outcome.delivered ? null : outcome.reason,
+    ...(outcome.delivered ? { kind: outcome.kind, pushed: outcome.pushed } : {}),
+    ...outcome.stats,
+  };
+  return base;
 }
