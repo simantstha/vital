@@ -139,6 +139,29 @@ test('an unrepairable model output still stores and delivers a fallback notifica
   assert.match(expected.headline, /^Run logged$/);
 });
 
+test('fallbackAnalysis has empty observations and nextSteps, and promises nothing to check back on', () => {
+  for (const [kind, input] of [['workout', { type: 'Run' }], ['sleep', {}]] as const) {
+    const result = fallbackAnalysis(kind, input);
+    assert.deepEqual(result.observations, []);
+    assert.deepEqual(result.nextSteps, []);
+    assert.doesNotMatch(result.narrative, /check back/i);
+    assert.doesNotMatch(result.shortInsight, /check back/i);
+    assert.doesNotMatch(result.headline, /check back/i);
+  }
+});
+
+test('fallbackAnalysis narrative and shortInsight use the expected copy', () => {
+  const workout = fallbackAnalysis('workout', { type: 'Run' });
+  assert.equal(workout.headline, 'Run logged');
+  assert.equal(workout.shortInsight, "We've saved this workout to your history.");
+  assert.equal(workout.narrative, "We've saved this workout and it counts toward your trends. I couldn't put together a proper read on it this time.");
+
+  const sleep = fallbackAnalysis('sleep', {});
+  assert.equal(sleep.headline, 'Sleep logged');
+  assert.equal(sleep.shortInsight, "We've saved last night's sleep to your history.");
+  assert.equal(sleep.narrative, "We've saved last night's sleep and it counts toward your trends. I couldn't put together a proper read on it this time.");
+});
+
 test('a non-content error still retries instead of falling back', async () => {
   const calls: string[] = [];
   const repo = fakeRepository(calls, true);

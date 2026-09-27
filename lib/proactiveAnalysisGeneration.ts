@@ -43,7 +43,9 @@ const CONTENT_CONTRACT = `Name the workout type or sleep in the headline using a
 
 export const PROACTIVE_ANALYSIS_SYSTEM_PROMPT = `You are Vital coach. Return JSON only with exactly headline, shortInsight, narrative, observations, and nextSteps. ${SCHEMA_CONTRACT} Keep the output observational and non-diagnostic. ${NUMBER_CONTRACT} ${CONTENT_CONTRACT}`;
 
-export const PROACTIVE_ANALYSIS_REPAIR_PROMPT = `Repair the Vital coach response for the supplied failure category and request. Return a full replacement as JSON only with exactly headline, shortInsight, narrative, observations, and nextSteps. ${SCHEMA_CONTRACT} Keep the output observational and non-diagnostic. ${NUMBER_CONTRACT} ${CONTENT_CONTRACT}`;
+const REPAIR_CONTRACT = `When previousResponse is present, revise it: change only what category and detail name, and leave everything else in the response exactly as it was. For a "digit in <field>" detail, edit only that field by removing the figure or rephrasing it qualitatively — never spell the number out as a word (e.g. "forty-five") to dodge the rule. For a "meta response in <field>" detail, edit only that field to remove the placeholder or template language. When previousResponse is absent, generate a full replacement from request as usual.`;
+
+export const PROACTIVE_ANALYSIS_REPAIR_PROMPT = `Repair the Vital coach response for the supplied failure category and detail. Return the corrected response as JSON only with exactly headline, shortInsight, narrative, observations, and nextSteps. ${REPAIR_CONTRACT} ${SCHEMA_CONTRACT} Keep the output observational and non-diagnostic. ${NUMBER_CONTRACT} ${CONTENT_CONTRACT}`;
 
 export function proactiveAnalysisModel(env: NodeJS.ProcessEnv): string {
   return env.PROACTIVE_ANALYSIS_MODEL ?? DEFAULT_PROACTIVE_ANALYSIS_MODEL;
@@ -72,12 +74,15 @@ function analysisRequest(attempt: AnalysisAttempt, system: string, payload: unkn
  * the caller can fall back. `args.source` itself is never mutated — see formatAnalysisSource's doc
  * comment for why that matters.
  */
+const PREVIOUS_RESPONSE_MAX_CHARS = 4000;
+
 export async function generateAnalysis(args: GenerateAnalysisArgs): Promise<CoachAnalysis> {
   const formattedSource = formatAnalysisSource(args.source, args.units ?? 'metric');
   let initialError: AnalysisContentError;
+  let initialText: string | undefined;
 
   try {
-    const initialText = await args.generate(analysisRequest('initial', PROACTIVE_ANALYSIS_SYSTEM_PROMPT, formattedSource));
+    initialText = await args.generate(analysisRequest('initial', PROACTIVE_ANALYSIS_SYSTEM_PROMPT, formattedSource));
     return parseAnalysisText(initialText);
   } catch (error) {
     if (!(error instanceof AnalysisContentError)) throw error;
@@ -89,6 +94,7 @@ export async function generateAnalysis(args: GenerateAnalysisArgs): Promise<Coac
     category: initialError.category,
     detail: initialError.detail,
     request: formattedSource,
+    ...(initialText ? { previousResponse: initialText.slice(0, PREVIOUS_RESPONSE_MAX_CHARS) } : {}),
   };
 
   try {

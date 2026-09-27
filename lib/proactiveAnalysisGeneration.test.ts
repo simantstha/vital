@@ -129,7 +129,7 @@ test('both the initial and repair requests carry the same pre-formatted source',
   assert.deepEqual(calls.map((call) => call.attempt), ['initial', 'repair']);
   const formatted = formatAnalysisSource(source) as unknown as Record<string, unknown>;
   assert.deepEqual(payloadOf(calls[0]), formatted);
-  assert.deepEqual(payloadOf(calls[1]), { category: 'parse_failure', request: formatted });
+  assert.deepEqual(payloadOf(calls[1]), { category: 'parse_failure', request: formatted, previousResponse: '{' });
 });
 
 test('live response inspection accepts plain JSON and one complete JSON fence', () => {
@@ -201,7 +201,7 @@ test('a numeral in the prose fails as a grounding failure and triggers one repai
 
   assert.deepEqual(calls.map((call) => call.attempt), ['initial', 'repair']);
   assert.deepEqual(events, [
-    analysisFailureEvent('initial', 'grounding_failure', 'repair_started'),
+    analysisFailureEvent('initial', 'grounding_failure', 'repair_started', 'digit in narrative'),
     analysisFailureEvent('repair', 'grounding_failure', 'repair_succeeded'),
   ]);
   assert.deepEqual(result, valid);
@@ -226,23 +226,28 @@ test('screenshot-style meta-response repairs into digit-free prose', async () =>
   });
 
   assert.equal(calls.length, 2);
-  assert.equal(calls[1].content.includes('Unable to process workout data'), false);
-  assert.equal(calls[1].content.includes('placeholder tokens'), false);
+  // The repair sees the previous response verbatim so it can revise just the flagged field.
+  assert.equal(calls[1].content.includes('Unable to process workout data'), true);
   assert.deepEqual(events, [
-    analysisFailureEvent('initial', 'grounding_failure', 'repair_started'),
+    analysisFailureEvent('initial', 'grounding_failure', 'repair_started', 'meta response in headline'),
     analysisFailureEvent('repair', 'grounding_failure', 'repair_succeeded'),
   ]);
+  // But the reported/logged event never carries the model's text.
+  for (const event of events) {
+    assert.equal(JSON.stringify(event).includes('Unable to process workout data'), false);
+    assert.equal(JSON.stringify(event).includes('placeholder tokens'), false);
+  }
   assert.deepEqual(result, valid);
 });
 
 const initialFailures: Array<{ name: string; response: string; category: AnalysisFailureCategory; detail?: string }> = [
   { name: 'parse', response: '{private rejected text', category: 'parse_failure' },
   { name: 'schema', response: JSON.stringify({ headline: 'private rejected text' }), category: 'schema_failure', detail: 'invalid shortInsight' },
-  { name: 'grounding', response: JSON.stringify({ ...valid, narrative: 'private rejected text 99' }), category: 'grounding_failure' },
+  { name: 'grounding', response: JSON.stringify({ ...valid, narrative: 'private rejected text 99' }), category: 'grounding_failure', detail: 'digit in narrative' },
 ];
 
 for (const { name, response, category, detail } of initialFailures) {
-  test(`initial ${name} failure repairs once with the same payload and no rejected data`, async () => {
+  test(`initial ${name} failure repairs once, and the repair request carries the failed response text`, async () => {
     const calls: AnalysisGenerationRequest[] = [];
     const events: AnalysisFailureEvent[] = [];
     const result = await generateAnalysis({
@@ -256,16 +261,42 @@ for (const { name, response, category, detail } of initialFailures) {
 
     assert.equal(calls.length, 2);
     const initialPayload = payloadOf(calls[0]);
-    assert.deepEqual(payloadOf(calls[1]), { category, request: initialPayload, ...(detail ? { detail } : {}) });
-    assert.equal(calls[1].content.includes('private rejected text'), false);
+    assert.deepEqual(payloadOf(calls[1]), {
+      category,
+      request: initialPayload,
+      previousResponse: response,
+      ...(detail ? { detail } : {}),
+    });
+    // The repair sees exactly what it wrote so it can revise one field instead of
+    // regenerating from scratch, but the internal error message must never leak into it.
     assert.equal(calls[1].content.includes('Proactive analysis content validation failed'), false);
     assert.deepEqual(events, [
       analysisFailureEvent('initial', category, 'repair_started', detail),
       analysisFailureEvent('repair', category, 'repair_succeeded'),
     ]);
+    // Failure events (what gets logged/reported) never carry the model's text — only category/detail.
+    for (const event of events) {
+      assert.equal(JSON.stringify(event).includes('private rejected text'), false);
+    }
     assert.deepEqual(result, valid);
   });
 }
+
+test('the repair request content includes previousResponse equal to the first attempt text', async () => {
+  const calls: AnalysisGenerationRequest[] = [];
+  const failedResponse = JSON.stringify({ ...valid, narrative: 'You ran for 38 minutes.' });
+  await generateAnalysis({
+    source,
+    generate: async (request) => {
+      calls.push(request);
+      return request.attempt === 'initial' ? failedResponse : validResponse();
+    },
+    report: () => {},
+  });
+
+  assert.equal(calls.length, 2);
+  assert.equal(payloadOf(calls[1]).previousResponse, failedResponse);
+});
 
 // The repair payload is the model's only chance to see why the initial
 // attempt was rejected — this pins that a schema failure's `detail` (the
@@ -289,7 +320,7 @@ test('the repair payload carries the schema failure detail naming the offending 
 const repairFailures: Array<{ name: string; response: string; category: AnalysisFailureCategory; detail?: string }> = [
   { name: 'parse', response: '{', category: 'parse_failure' },
   { name: 'schema', response: JSON.stringify({ ...valid, nextSteps: 'rest' }), category: 'schema_failure', detail: 'invalid nextSteps' },
-  { name: 'grounding', response: JSON.stringify({ ...valid, narrative: 'HRV was 46 ms.' }), category: 'grounding_failure' },
+  { name: 'grounding', response: JSON.stringify({ ...valid, narrative: 'HRV was 46 ms.' }), category: 'grounding_failure', detail: 'digit in narrative' },
 ];
 
 for (const { name, response, category, detail } of repairFailures) {
@@ -331,6 +362,40 @@ for (const { name, error } of [
     assert.deepEqual(events, []);
   });
 }
+
+test('reported failure events never contain the model text, even a unique marker string', async () => {
+  const marker = 'MARKER-XYZZY-42-UNIQUE';
+  const events: AnalysisFailureEvent[] = [];
+  const failingResponse = JSON.stringify({ ...valid, narrative: `${marker} ran 45 minutes.` });
+  await generateAnalysis({
+    source,
+    generate: async (request) => (request.attempt === 'initial' ? failingResponse : validResponse()),
+    report: (event) => events.push(event),
+  });
+
+  for (const event of events) {
+    assert.equal(JSON.stringify(event).includes(marker), false);
+  }
+});
+
+test('the repair payload truncates a long previousResponse to 4000 characters', async () => {
+  const calls: AnalysisGenerationRequest[] = [];
+  const longResponse = '{' + 'x'.repeat(5000);
+  await generateAnalysis({
+    source,
+    generate: async (request) => {
+      calls.push(request);
+      return request.attempt === 'initial' ? longResponse : validResponse();
+    },
+    report: () => {},
+  });
+
+  assert.equal(calls.length, 2);
+  const previousResponse = payloadOf(calls[1]).previousResponse;
+  assert.equal(typeof previousResponse, 'string');
+  assert.equal((previousResponse as string).length, 4000);
+  assert.equal(previousResponse, longResponse.slice(0, 4000));
+});
 
 test('source objects remain unchanged and unfrozen', async () => {
   const mutableSource = structuredClone(source);

@@ -72,9 +72,9 @@ export function fallbackAnalysis(kind: AnalysisKind, input: unknown): CoachAnaly
   return {
     headline: `${label} logged`,
     shortInsight: `We've saved ${subject} to your history.`,
-    narrative: `We've logged ${subject}. A detailed analysis wasn't available this time, but the data is saved and will factor into your trends.`,
-    observations: ['Detailed analysis was unavailable for this entry, but the data has been recorded.'],
-    nextSteps: ['Check back later for a full breakdown, or keep logging to build your trend history.'],
+    narrative: `We've saved ${subject} and it counts toward your trends. I couldn't put together a proper read on it this time.`,
+    observations: [],
+    nextSteps: [],
   };
 }
 

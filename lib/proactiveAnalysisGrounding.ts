@@ -25,8 +25,8 @@ export class AnalysisContentError extends Error {
   }
 }
 
-export function assertNoRawNumbers(content: string): void {
-  if (RAW_NUMBER.test(content)) throw new AnalysisContentError('grounding_failure');
+export function assertNoRawNumbers(content: string, field: string): void {
+  if (RAW_NUMBER.test(content)) throw new AnalysisContentError('grounding_failure', `digit in ${field}`);
 }
 
 export function stripCompleteJsonFence(text: string): string {
@@ -34,8 +34,14 @@ export function stripCompleteJsonFence(text: string): string {
   return fence ? fence[1] : text;
 }
 
-function authoredStrings(value: CoachAnalysis): string[] {
-  return [value.headline, value.shortInsight, value.narrative, ...value.observations, ...value.nextSteps];
+function authoredStrings(value: CoachAnalysis): Array<{ field: string; text: string }> {
+  return [
+    { field: 'headline', text: value.headline },
+    { field: 'shortInsight', text: value.shortInsight },
+    { field: 'narrative', text: value.narrative },
+    ...value.observations.map((text) => ({ field: 'observations', text })),
+    ...value.nextSteps.map((text) => ({ field: 'nextSteps', text })),
+  ];
 }
 
 /**
@@ -58,9 +64,9 @@ export function parseAnalysisText(text: string): CoachAnalysis {
     throw new AnalysisContentError('schema_failure', error instanceof Error ? error.message : undefined);
   }
 
-  for (const value of authoredStrings(validated)) {
-    if (META_RESPONSE.test(value)) throw new AnalysisContentError('grounding_failure');
-    assertNoRawNumbers(value);
+  for (const { field, text } of authoredStrings(validated)) {
+    if (META_RESPONSE.test(text)) throw new AnalysisContentError('grounding_failure', `meta response in ${field}`);
+    assertNoRawNumbers(text, field);
   }
 
   return validated;
