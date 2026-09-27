@@ -347,6 +347,63 @@ final class TrendsSummaryTests: XCTestCase {
         }
     }
 
+    // MARK: - nightsAtGoalCount (calm-layout revamp — WeeklyHeadlineStrip's
+    // "N of 7 nights at goal" stat)
+
+    func testNightsAtGoalCountsNightsMeetingOrExceedingTheGoalExactly() {
+        // Goal 8h: 7.9 misses, 8.0/8.2 meet/exceed it.
+        let values: [Double?] = [7.9, 8.0, 8.2, nil, 7.5, 6.0, 8.5]
+        XCTAssertEqual(TrendsSummary.nightsAtGoalCount(values, goalHours: 8.0), 3)
+    }
+
+    func testNightsAtGoalCountIsZeroWhenNoNightReachesTheGoal() {
+        let values: [Double?] = [7.9, 7.5, 7.0, 6.5]
+        XCTAssertEqual(TrendsSummary.nightsAtGoalCount(values, goalHours: 8.0), 0)
+    }
+
+    func testNightsAtGoalCountIgnoresMissingNights() {
+        XCTAssertEqual(TrendsSummary.nightsAtGoalCount(Array(repeating: nil, count: 7), goalHours: 8.0), 0)
+    }
+
+    // MARK: - hoursMinutesText
+
+    func testHoursMinutesTextFormatsWithZeroPaddedMinutes() {
+        XCTAssertEqual(TrendsSummary.hoursMinutesText(8.1), "8h 06m")
+        XCTAssertEqual(TrendsSummary.hoursMinutesText(7.2), "7h 12m")
+        XCTAssertEqual(TrendsSummary.hoursMinutesText(6.75), "6h 45m")
+    }
+
+    // MARK: - longestShortestFootnote (calm-layout revamp — replaces the old
+    // short-nights caption under the sleep card)
+
+    private let weekdayLabels = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+    func testLongestShortestFootnotePicksTheLongestAndShortestSyncedNights() {
+        let values: [Double?] = [7.0, 7.5, 6.5, 7.2, 8.1, 7.2, nil] // Sunday missing
+        let footnote = TrendsSummary.longestShortestFootnote(values, fullDayLabels: weekdayLabels)
+        XCTAssertEqual(footnote, .plain("Longest night Friday, 8h 06m. Shortest Wednesday, 6h 30m."))
+    }
+
+    func testLongestShortestFootnoteReportsNoDataWhenEveryNightIsMissing() {
+        let footnote = TrendsSummary.longestShortestFootnote(Array(repeating: nil, count: 7), fullDayLabels: weekdayLabels)
+        XCTAssertEqual(footnote, .plain("No sleep synced yet."))
+    }
+
+    func testLongestShortestFootnoteNamesTheOneNightWhenOnlyOneSynced() {
+        let values: [Double?] = [nil, nil, nil, nil, 8.1, nil, nil]
+        let footnote = TrendsSummary.longestShortestFootnote(values, fullDayLabels: weekdayLabels)
+        XCTAssertEqual(footnote, .plain("Only Friday synced this week — 8h 06m."))
+    }
+
+    func testLongestShortestFootnoteNeverPicksANightWithNoData() {
+        // Regression guard: a missing night must never win "longest" or
+        // "shortest" by virtue of `nil` sorting oddly — only synced nights
+        // are ever candidates.
+        let values: [Double?] = [nil, 6.0, nil, nil, nil, nil, 9.0]
+        let footnote = TrendsSummary.longestShortestFootnote(values, fullDayLabels: weekdayLabels)
+        XCTAssertEqual(footnote, .plain("Longest night Sunday, 9h 00m. Shortest Tuesday, 6h 00m."))
+    }
+
     // MARK: - lineFootnote (HRV / Resting HR)
 
     func testLineFootnoteReportsNoReadingsWhenAllValuesMissing() {

@@ -44,9 +44,15 @@ final class TrendsViewModel: ObservableObject {
     /// sorted by |z| descending. Empty (and the section hidden) whenever no
     /// metric is `.above`/`.below` its normal.
     @Published private(set) var whatMovedRows: [WhatMovedRow] = []
-    /// The header's one-line summary, replacing the old static "Last 30
-    /// days · N metrics tracked" subtitle.
-    @Published private(set) var headline: TrendsHeadline.Summary = TrendsHeadline.summary(goodCount: 0, watchCount: 0, period: .thirtyDays)
+    /// The header's status — learning / steady / moved (calm-layout revamp,
+    /// replacing both the old static "Last 30 days · N metrics tracked"
+    /// subtitle and the separate "Baselines are still calibrating" banner,
+    /// which used to render at the same time as an "Everything's normal"
+    /// headline and directly contradict it). Defaults to `.learning` at the
+    /// full 14 days remaining — the same honest "nothing confirmed yet"
+    /// starting point `TrendsHeadline.status` itself falls back to for an
+    /// empty `verdicts` list.
+    @Published private(set) var headlineStatus: TrendsHeadline.Status = .learning(TrendsHeadline.LearningProgress(daysRemaining: 14))
 
     /// Set once, after the FIRST successful `load()` this session — gates
     /// the grid's staggered entrance motion so it plays exactly once rather
@@ -164,7 +170,18 @@ final class TrendsViewModel: ObservableObject {
         whatMovedRows = TrendsWhatMoved.topRows(sections: built)
         let allMoved = TrendsWhatMoved.movedRows(sections: built)
         let goodCount = allMoved.filter(\.isGood).count
-        headline = TrendsHeadline.summary(goodCount: goodCount, watchCount: allMoved.count - goodCount, period: period)
+        // Every verdict behind a `.chart` tile this period, regardless of
+        // group or goal ordering — a tile still `.sparse`/`.dimmed`/hidden
+        // contributes nothing, which is what lets an all-`.sparse` grid read
+        // as "no metric is established" (an empty list) in
+        // `TrendsHeadline.status`.
+        let verdicts: [Verdict] = built.flatMap { section in
+            section.tiles.compactMap { tile -> Verdict? in
+                if case .chart(_, _, let verdict) = tile.content { return verdict }
+                return nil
+            }
+        }
+        headlineStatus = TrendsHeadline.status(verdicts: verdicts, goodCount: goodCount, watchCount: allMoved.count - goodCount, period: period)
     }
 
     /// Converts one batch series DTO into a display-ready `MetricSeries`:

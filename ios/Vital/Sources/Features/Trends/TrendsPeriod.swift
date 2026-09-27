@@ -32,4 +32,18 @@ enum TrendsPeriod: Int, CaseIterable, Identifiable, Equatable {
         case .ninetyDays:  return "in the last 3 months"
         }
     }
+
+    /// The bare noun `TrendsHeadline`'s "A steady <word>." copy (W1 design,
+    /// calm-layout revamp) uses — distinct from `headlineWord`, which is a
+    /// full prose phrase ("in the last 3 months") that doesn't fit after
+    /// "A steady". 90 days reads as "quarter" here, matching how a person
+    /// would actually describe that span, even though `headlineWord` spells
+    /// it out as "in the last 3 months" instead.
+    var steadyPeriodWord: String {
+        switch self {
+        case .sevenDays:   return "week"
+        case .thirtyDays:  return "month"
+        case .ninetyDays:  return "quarter"
+        }
+    }
 }

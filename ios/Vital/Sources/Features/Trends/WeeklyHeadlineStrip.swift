@@ -1,17 +1,18 @@
 import SwiftUI
 
-/// The Trends grid index's headline strip — one `GlassCard`: "THIS WEEK", a
-/// 3-up row (sleep avg / HRV / resting HR), the existing goal-aware
-/// `TrendBarChart` 7-night sleep week, and a two-tone data-driven footnote.
-/// Consumes `TrendsSummary`'s existing pure helpers (unchanged — see that
-/// file's "file move only" note in the Trends revamp plan); this view owns
-/// only layout. The two-tone footnote renderer is intentionally local here
-/// rather than promoted to DesignSystem — it had exactly one call site
-/// before this rewrite (the deleted `TrendSummaryCard`) and still does.
+/// The Trends grid index's sleep-only card (calm-layout revamp, W1/W2
+/// designs) — one `GlassCard`: "Sleep this week", the sleep average plus
+/// nights-at-goal count, the existing goal-aware `TrendBarChart` 7-night
+/// week, and a longest/shortest-night footnote. HRV and resting HR moved out
+/// of this card entirely (Trends calm-layout revamp) — the metric-group list
+/// below already shows both, and repeating them here read as redundant.
+/// Consumes `TrendsSummary`'s existing pure helpers; this view owns only
+/// layout.
 struct WeeklyHeadlineStrip: View {
     @ObservedObject var vm: TrendsViewModel
 
     private var sleepGoalHours: Double { Double(vm.sleepGoalMinutes) / 60.0 }
+    private var nightsAtGoal: Int { TrendsSummary.nightsAtGoalCount(vm.sleepWindow.values, goalHours: sleepGoalHours) }
 
     var body: some View {
         GlassCard {
@@ -23,7 +24,7 @@ struct WeeklyHeadlineStrip: View {
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(Theme.Colors.textPrimary)
 
-                threeUpRow
+                twoUpRow
 
                 TrendBarChart(
                     values: vm.sleepWindow.values,
@@ -44,10 +45,10 @@ struct WeeklyHeadlineStrip: View {
             }
         }
         // Stable UI-test hook: this is the topmost recovery-related content
-        // Trends renders (sleep/HRV/RHR, above every metric-group section) —
-        // `TrendsGoalOrdering`'s "weight card first" screenshot assertion
+        // Trends renders (the sleep card, above every metric-group section)
+        // — `TrendsGoalOrdering`'s "weight card first" screenshot assertion
         // needs a unique element to compare frames against. `"HRV"` alone
-        // isn't unique — `MetricTileView`'s recovery tile renders the same
+        // isn't unique — the Recovery group's own list row renders the same
         // text lower on the same screen, and querying `.frame` on an
         // ambiguous match is a hard XCUITest failure (see #200).
         //
@@ -55,24 +56,22 @@ struct WeeklyHeadlineStrip: View {
         // `.accessibilityIdentifier` here (#200 round 2): without it, an
         // identifier on a plain container view doesn't make the container
         // itself one queryable element — it's simply inherited by every
-        // accessible descendant (the sleep/HRV/RHR `Text`s), so
+        // accessible descendant (this card's own `Text`s), so
         // `app.otherElements["trends.recoveryFirst"]` matched several
         // elements and `.frame` hard-failed again. `.contain` (as opposed to
         // `.combine`, which `TrendsWeightCard`/`WeightHeroView` use because
         // they want ONE spoken label) makes this card itself one
         // accessibility element while still exposing its children as their
-        // own elements underneath it — VoiceOver still reads "sleep avg",
-        // "hrv", "resting hr" individually, this identifier just also
-        // resolves to exactly one (the container) XCUIElement.
+        // own elements underneath it. Kept unchanged by the calm-layout
+        // revamp — UI tests still depend on this exact identifier/element.
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("trends.recoveryFirst")
     }
 
-    private var threeUpRow: some View {
+    private var twoUpRow: some View {
         HStack(spacing: 0) {
-            headlineStat(value: vm.sleepValueText, label: "sleep avg")
-            headlineStat(value: vm.hrvValueText, unit: "ms", label: "hrv")
-            headlineStat(value: vm.rhrValueText, unit: "bpm", label: "resting hr")
+            headlineStat(value: vm.sleepValueText, label: "average")
+            headlineStat(value: "\(nightsAtGoal) of 7", label: "nights at goal")
         }
     }
 
@@ -101,9 +100,13 @@ struct WeeklyHeadlineStrip: View {
 
     /// Trends-phase-2: `Text` `+` concatenation is deprecated — the two-tone
     /// footnote is built as one `AttributedString` instead, with the bold
-    /// span's color/weight set as attributes on just that range.
+    /// span's color/weight set as attributes on just that range. Calm-layout
+    /// revamp: this now reads `longestShortestFootnote` (longest/shortest
+    /// night) instead of `sleepFootnote`'s short-nights count — `sleepFootnote`
+    /// itself is left in place (still exercised by `TrendsSummaryTests`) since
+    /// deleting it isn't part of this change.
     private var footnoteView: Text {
-        let footnote = TrendsSummary.sleepFootnote(vm.sleepWindow.values, goalHours: sleepGoalHours)
+        let footnote = TrendsSummary.longestShortestFootnote(vm.sleepWindow.values, fullDayLabels: vm.sleepWindow.fullDayLabels)
         var attributed = AttributedString(footnote.prefix)
         attributed.foregroundColor = Theme.Colors.textSecondary
         if let bold = footnote.bold {
