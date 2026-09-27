@@ -222,6 +222,7 @@ private extension TrendsView {
                         .font(.system(size: 14))
                         .foregroundStyle(Theme.Colors.textSecondary)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .accessibilityElement(children: .combine)
