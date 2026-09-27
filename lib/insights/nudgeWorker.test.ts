@@ -3,11 +3,13 @@ import test from 'node:test';
 
 import { COOLDOWN_DAYS } from './arbiter';
 import {
+  insightPassLogEvent,
   insightsEnabled,
   runInsightPass,
   selectInsightPassUsers,
   withinDeliveryCaps,
   type InsightPassDeps,
+  type InsightPassOutcome,
   type InsightPassRepository,
   type InsightPassUserSource,
   type SentNudge,
@@ -190,6 +192,7 @@ test('happy path: computes, confirms, shortlists, generates, and delivers', asyn
   if (outcome.delivered) {
     assert.equal(outcome.pendingNudgeId, 'pending-nudge-1');
     assert.equal(outcome.kind, 'cadence_break');
+    assert.deepEqual(outcome.stats, { candidates: 1, survivors: 1, confirmed: 1, shortlisted: 1 });
   }
   assert.equal(calls.insertPendingNudge.length, 1);
   const inserted = calls.insertPendingNudge[0] as { kind: string };
@@ -231,7 +234,10 @@ test('records every gate-surviving finding, not just the one spoken', async () =
     ['cadence_break:exercise_min', 'cadence_break:whoop_day_strain'],
   );
   // Only one of the two recorded findings became the spoken nudge.
-  if (outcome.delivered) assert.equal(outcome.kind, 'cadence_break');
+  if (outcome.delivered) {
+    assert.equal(outcome.kind, 'cadence_break');
+    assert.deepEqual(outcome.stats, { candidates: 2, survivors: 2, confirmed: 2, shortlisted: 2 });
+  }
 });
 
 test('silent when no metric has an established baseline', async () => {
@@ -242,7 +248,10 @@ test('silent when no metric has an established baseline', async () => {
   const outcome = await runInsightPass(deps);
 
   assert.equal(outcome.delivered, false);
-  if (!outcome.delivered) assert.equal(outcome.reason, 'no_candidates');
+  if (!outcome.delivered) {
+    assert.equal(outcome.reason, 'no_candidates');
+    assert.deepEqual(outcome.stats, { candidates: 1, survivors: 0, confirmed: 0, shortlisted: 0 });
+  }
   assert.equal(calls.insertPendingNudge.length, 0);
 });
 
@@ -253,7 +262,10 @@ test('silent when no detector produces a candidate', async () => {
   const outcome = await runInsightPass(deps);
 
   assert.equal(outcome.delivered, false);
-  if (!outcome.delivered) assert.equal(outcome.reason, 'no_candidates');
+  if (!outcome.delivered) {
+    assert.equal(outcome.reason, 'no_candidates');
+    assert.deepEqual(outcome.stats, { candidates: 0, survivors: 0, confirmed: 0, shortlisted: 0 });
+  }
   assert.equal(calls.insertPendingNudge.length, 0);
 });
 
@@ -269,7 +281,10 @@ test('silent when nothing is confirmed across two runs', async () => {
   const outcome = await runInsightPass(deps);
 
   assert.equal(outcome.delivered, false);
-  if (!outcome.delivered) assert.equal(outcome.reason, 'not_confirmed');
+  if (!outcome.delivered) {
+    assert.equal(outcome.reason, 'not_confirmed');
+    assert.deepEqual(outcome.stats, { candidates: 1, survivors: 1, confirmed: 0, shortlisted: 0 });
+  }
   // Still recorded today's finding, even though it wasn't confirmed or spoken.
   assert.equal(calls.recordFindings.length, 1);
   const recorded = calls.recordFindings[0] as { findings: unknown[] };
@@ -290,7 +305,10 @@ test('silent when the shortlist is empty (cooldown covers every confirmed findin
   const outcome = await runInsightPass(deps);
 
   assert.equal(outcome.delivered, false);
-  if (!outcome.delivered) assert.equal(outcome.reason, 'empty_shortlist');
+  if (!outcome.delivered) {
+    assert.equal(outcome.reason, 'empty_shortlist');
+    assert.deepEqual(outcome.stats, { candidates: 1, survivors: 1, confirmed: 1, shortlisted: 0 });
+  }
   assert.equal(calls.insertPendingNudge.length, 0);
 });
 
@@ -306,7 +324,10 @@ test('silent when the model response fails to parse into a nudge', async () => {
   const outcome = await runInsightPass(deps);
 
   assert.equal(outcome.delivered, false);
-  if (!outcome.delivered) assert.equal(outcome.reason, 'no_nudge');
+  if (!outcome.delivered) {
+    assert.equal(outcome.reason, 'no_nudge');
+    assert.deepEqual(outcome.stats, { candidates: 1, survivors: 1, confirmed: 1, shortlisted: 1 });
+  }
   assert.equal(calls.insertPendingNudge.length, 0);
 });
 
@@ -323,7 +344,10 @@ test('silent when delivery caps are exceeded', async () => {
   const outcome = await runInsightPass(deps);
 
   assert.equal(outcome.delivered, false);
-  if (!outcome.delivered) assert.equal(outcome.reason, 'caps_exceeded');
+  if (!outcome.delivered) {
+    assert.equal(outcome.reason, 'caps_exceeded');
+    assert.deepEqual(outcome.stats, { candidates: 1, survivors: 1, confirmed: 1, shortlisted: 1 });
+  }
   assert.equal(calls.insertPendingNudge.length, 0);
 });
 
@@ -344,7 +368,10 @@ test('a losing insert (unique-index conflict on user_id+local_day) results in no
   const outcome = await runInsightPass(deps);
 
   assert.equal(outcome.delivered, false);
-  if (!outcome.delivered) assert.equal(outcome.reason, 'caps_exceeded');
+  if (!outcome.delivered) {
+    assert.equal(outcome.reason, 'caps_exceeded');
+    assert.deepEqual(outcome.stats, { candidates: 1, survivors: 1, confirmed: 1, shortlisted: 1 });
+  }
   assert.equal(calls.insertPendingNudge.length, 1); // the insert was attempted...
   assert.equal(pushCalls.length, 0);                // ...but nothing was pushed
   assert.equal(calls.markNudgeSent.length, 0);
@@ -364,7 +391,10 @@ test('a winning insert (no conflict) does push', async () => {
   const outcome = await runInsightPass(deps);
 
   assert.equal(outcome.delivered, true);
-  if (outcome.delivered) assert.equal(outcome.pendingNudgeId, 'pending-nudge-42');
+  if (outcome.delivered) {
+    assert.equal(outcome.pendingNudgeId, 'pending-nudge-42');
+    assert.deepEqual(outcome.stats, { candidates: 1, survivors: 1, confirmed: 1, shortlisted: 1 });
+  }
   assert.equal(pushCalls.length, 1);
   assert.equal(calls.markNudgeSent.length, 1);
   const inserted = calls.insertPendingNudge[0] as { localDay: string };
@@ -436,11 +466,98 @@ test('dry-run computes and logs but never delivers', async () => {
   }
 
   assert.equal(outcome.delivered, false);
-  if (!outcome.delivered) assert.equal(outcome.reason, 'dry_run');
+  if (!outcome.delivered) {
+    assert.equal(outcome.reason, 'dry_run');
+    assert.deepEqual(outcome.stats, { candidates: 1, survivors: 1, confirmed: 1, shortlisted: 1 });
+  }
   assert.equal(calls.insertPendingNudge.length, 0);
   assert.equal(logs.length, 1);
   const logged = JSON.parse(logs[0]);
   assert.equal(logged.stage, 'insight-dry-run');
   assert.equal(logged.userId, 'user-1');
   assert.equal(logged.nudge.signature, 'cadence_break:exercise_min');
+});
+
+// ─── insightPassLogEvent ────────────────────────────────────────────────────
+
+test('insightPassLogEvent shapes a silent (non-delivered) outcome', () => {
+  const outcome: InsightPassOutcome = {
+    delivered: false,
+    reason: 'not_confirmed',
+    stats: { candidates: 2, survivors: 1, confirmed: 0, shortlisted: 0 },
+  };
+
+  const event = insightPassLogEvent({ userId: 'user-1', localDay: LOCAL_DAY, mode: 'dry-run', outcome });
+
+  assert.deepEqual(event, {
+    event: 'insight_pass',
+    userId: 'user-1',
+    localDay: LOCAL_DAY,
+    mode: 'dry-run',
+    delivered: false,
+    reason: 'not_confirmed',
+    candidates: 2,
+    survivors: 1,
+    confirmed: 0,
+    shortlisted: 0,
+  });
+});
+
+test('insightPassLogEvent shapes a delivered outcome, with reason null and kind/pushed present', () => {
+  const outcome: InsightPassOutcome = {
+    delivered: true,
+    pendingNudgeId: 'pending-nudge-1',
+    kind: 'cadence_break',
+    pushed: true,
+    stats: { candidates: 1, survivors: 1, confirmed: 1, shortlisted: 1 },
+  };
+
+  const event = insightPassLogEvent({ userId: 'user-1', localDay: LOCAL_DAY, mode: 'live', outcome });
+
+  assert.deepEqual(event, {
+    event: 'insight_pass',
+    userId: 'user-1',
+    localDay: LOCAL_DAY,
+    mode: 'live',
+    delivered: true,
+    reason: null,
+    kind: 'cadence_break',
+    pushed: true,
+    candidates: 1,
+    survivors: 1,
+    confirmed: 1,
+    shortlisted: 1,
+  });
+});
+
+test('insightPassLogEvent never carries nudge title/body text or health values for a dry_run outcome', () => {
+  const outcome: InsightPassOutcome = {
+    delivered: false,
+    reason: 'dry_run',
+    stats: { candidates: 1, survivors: 1, confirmed: 1, shortlisted: 1 },
+  };
+
+  const event = insightPassLogEvent({ userId: 'user-1', localDay: LOCAL_DAY, mode: 'dry-run', outcome });
+  const keys = Object.keys(event);
+
+  assert.equal('nudge' in event, false);
+  assert.equal('title' in event, false);
+  assert.equal('body' in event, false);
+  assert.deepEqual(
+    keys.sort(),
+    ['candidates', 'confirmed', 'delivered', 'event', 'localDay', 'mode', 'reason', 'shortlisted', 'survivors', 'userId'].sort(),
+  );
+});
+
+test('insightPassLogEvent omits kind/pushed for a non-delivered outcome', () => {
+  const outcome: InsightPassOutcome = {
+    delivered: false,
+    reason: 'caps_exceeded',
+    stats: { candidates: 1, survivors: 1, confirmed: 1, shortlisted: 1 },
+  };
+
+  const event = insightPassLogEvent({ userId: 'user-1', localDay: LOCAL_DAY, mode: 'live', outcome });
+
+  assert.equal('kind' in event, false);
+  assert.equal('pushed' in event, false);
 });
