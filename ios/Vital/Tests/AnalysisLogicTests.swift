@@ -19,17 +19,18 @@ final class AnalysisLogicTests: XCTestCase {
     func testDistanceChipAboveUsualIsNeutralWithPlusSign() {
         let chip = AnalysisLogic.distanceChip(distanceM: 11_400, usualDistanceM: 10_000, unit: .metric)
         XCTAssertEqual(chip.tone, .neutral)
-        XCTAssertEqual(chip.text, "+1.4 km vs usual")
+        XCTAssertEqual(chip.text, "+1.4 km")
     }
 
     func testDistanceChipBelowUsualUsesMinusSign() {
         let chip = AnalysisLogic.distanceChip(distanceM: 8_000, usualDistanceM: 10_000, unit: .metric)
-        XCTAssertEqual(chip.text, "\u{2212}2 km vs usual")
+        XCTAssertEqual(chip.text, "\u{2212}2 km")
     }
 
     func testDistanceChipImperial() {
         let chip = AnalysisLogic.distanceChip(distanceM: 11_400, usualDistanceM: 10_000, unit: .imperial)
-        XCTAssertTrue(chip.text.hasSuffix("mi vs usual"), "expected a mi-suffixed chip, got \(chip.text)")
+        XCTAssertTrue(chip.text.hasSuffix("mi"), "expected a mi-suffixed chip, got \(chip.text)")
+        XCTAssertFalse(chip.text.contains("vs usual"), "stats-row chips use the short form, got \(chip.text)")
     }
 
     // MARK: - Pace chip
@@ -62,7 +63,7 @@ final class AnalysisLogicTests: XCTestCase {
     func testAvgHrChipDeltaIsNeutral() {
         let chip = AnalysisLogic.avgHrChip(avgHr: 158, usualAvgHr: 140)
         XCTAssertEqual(chip.tone, .neutral)
-        XCTAssertEqual(chip.text, "+18 bpm vs usual")
+        XCTAssertEqual(chip.text, "+18 bpm")
     }
 
     // MARK: - Pace rank phrase
@@ -295,6 +296,28 @@ final class AnalysisLogicTests: XCTestCase {
 
     func testFormatDurationRoundsToNearestMinute() {
         XCTAssertEqual(AnalysisLogic.formatDuration(42.6), "43m")
+    }
+
+    // MARK: - Workout duration label (stopwatch style)
+
+    func testWorkoutDurationLabelUnderAnHour() {
+        // 52.23 min = 52 min 13.8 sec, rounds to 52:14 — NOT "0:52", the bug
+        // from treating the whole Double as minutes-rounded-to-an-Int.
+        XCTAssertEqual(AnalysisLogic.workoutDurationLabel(52.23), "52:14")
+    }
+
+    func testWorkoutDurationLabelJustUnderAnHour() {
+        // 59.99 min = 59 min 59.4 sec, rounds to 59:59 — still under an hour.
+        XCTAssertEqual(AnalysisLogic.workoutDurationLabel(59.99), "59:59")
+    }
+
+    func testWorkoutDurationLabelExactlyAnHour() {
+        XCTAssertEqual(AnalysisLogic.workoutDurationLabel(60), "1:00:00")
+    }
+
+    func testWorkoutDurationLabelOverAnHour() {
+        // 81.5 min = 4890 sec = 1h 21m 30s.
+        XCTAssertEqual(AnalysisLogic.workoutDurationLabel(81.5), "1:21:30")
     }
 
     // MARK: - Before-bed window

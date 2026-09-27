@@ -584,7 +584,7 @@ final class ScreenshotTests: XCTestCase {
     /// `^[a-z_]+__[A-Za-z]+__(light|dark)\.png$`.
     private func captureLogsAnalyses(_ app: XCUIApplication, scenario: String, appearance: String) {
         let workoutRow = app.buttons["logs.workoutRow"].firstMatch
-        tapWhenHittable(workoutRow, app: app, description: "Logs' workout row [\(scenario)/\(appearance)]")
+        tapWhenHittable(workoutRow, app: app, maxSwipes: 6, description: "Logs' workout row [\(scenario)/\(appearance)]")
         let workoutHeader = app.descendants(matching: .any).matching(identifier: "analysisWorkout.header").firstMatch
         XCTAssertTrue(workoutHeader.waitForExistence(timeout: 15),
                        "Tapping the workout row should open the workout AnalysisView [\(scenario)/\(appearance)]")
@@ -595,7 +595,7 @@ final class ScreenshotTests: XCTestCase {
                        "Dismissing the workout analysis should return to Logs [\(scenario)/\(appearance)]")
 
         let sleepRow = app.buttons["logs.sleepRow"].firstMatch
-        tapWhenHittable(sleepRow, app: app, description: "Logs' sleep row [\(scenario)/\(appearance)]")
+        tapWhenHittable(sleepRow, app: app, maxSwipes: 6, description: "Logs' sleep row [\(scenario)/\(appearance)]")
         let sleepHeader = app.descendants(matching: .any).matching(identifier: "analysisSleep.header").firstMatch
         XCTAssertTrue(sleepHeader.waitForExistence(timeout: 15),
                        "Tapping the sleep row should open the sleep AnalysisView [\(scenario)/\(appearance)]")

@@ -127,6 +127,12 @@ private struct AnalysisHeader: View {
     let title: String
     let subline: String
     let doneAction: () -> Void
+    /// Applied to the title `Text` alone, never to the header container —
+    /// an identifier on a container propagates to (and silently replaces)
+    /// its children's own identifiers, which previously clobbered the Done
+    /// button's `analysis.done` and left the screenshot harness with
+    /// nothing tappable to dismiss the sheet.
+    var titleIdentifier: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
@@ -138,7 +144,6 @@ private struct AnalysisHeader: View {
                         .tracking(0.5)
                         .foregroundStyle(Theme.Colors.textSecondary)
                 }
-                .accessibilityIdentifier("analysis.kicker")
                 Spacer()
                 Button("Done", action: doneAction)
                     .buttonStyle(.plain)
@@ -154,6 +159,7 @@ private struct AnalysisHeader: View {
                 .tracking(-0.3)
                 .foregroundStyle(Theme.Colors.textPrimary)
                 .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier(titleIdentifier ?? "")
             Text(subline)
                 .font(.system(size: 15))
                 .foregroundStyle(Theme.Colors.textSecondary)
@@ -183,6 +189,14 @@ private struct AnalysisSectionHeader: View {
 
 private struct ChipView: View {
     let chip: AnalysisLogic.Chip
+    /// `false` (default, every `DataRow` chip): the chip never truncates —
+    /// `.fixedSize()` keeps it at its full intrinsic width and the row's
+    /// label wraps instead if the row runs tight (see `DataRow`).
+    /// `true` (the stats-row tiles, where the chip sits in a narrow fixed
+    /// column with nothing that can wrap next to it): the chip may shrink
+    /// its text down to `minimumScaleFactor`, but still never truncates
+    /// with an ellipsis.
+    var scalesToFit: Bool = false
 
     private var foreground: Color {
         switch chip.tone {
@@ -201,6 +215,16 @@ private struct ChipView: View {
     }
 
     var body: some View {
+        Group {
+            if scalesToFit {
+                label.minimumScaleFactor(0.85)
+            } else {
+                label.fixedSize()
+            }
+        }
+    }
+
+    private var label: some View {
         Text(chip.text)
             .font(.system(size: 12, weight: .bold))
             .foregroundStyle(foreground)
@@ -228,7 +252,12 @@ private struct DataRow: View {
             Text(label)
                 .font(.system(size: 15))
                 .foregroundStyle(Theme.Colors.textPrimary)
-            Spacer()
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            // Never truncates (`ChipView`'s default `scalesToFit: false`) —
+            // the label above wraps to a second line instead if the row
+            // runs tight, so a chip like "50 bpm · below normal" is always
+            // fully readable.
             ChipView(chip: chip)
         }
         .padding(.vertical, Theme.Spacing.sm + 1)
@@ -362,9 +391,9 @@ private struct WorkoutAnalysisContent: View {
                     kickerText: startDate.map { AnalysisLogic.workoutKicker(type: type, startTime: $0) } ?? type.uppercased(),
                     title: value.result.headline,
                     subline: value.result.shortInsight,
-                    doneAction: doneAction
+                    doneAction: doneAction,
+                    titleIdentifier: "analysisWorkout.header"
                 )
-                .accessibilityIdentifier("analysisWorkout.header")
 
                 statsRow
 
@@ -421,7 +450,7 @@ private struct WorkoutAnalysisContent: View {
                 chip: usual?.distanceM.map { AnalysisLogic.distanceChip(distanceM: distanceM, usualDistanceM: $0, unit: unitPref.current) }
             )]
             if let durationMin = metrics.durationMin {
-                list.append(Stat(value: Self.durationLabel(durationMin), unit: "", label: "time", chip: nil))
+                list.append(Stat(value: AnalysisLogic.workoutDurationLabel(durationMin), unit: "", label: "time", chip: nil))
             }
             if let pace = metrics.paceMinPerKm {
                 list.append(Stat(
@@ -433,7 +462,7 @@ private struct WorkoutAnalysisContent: View {
         }
         var list: [Stat] = []
         if let durationMin = metrics.durationMin {
-            list.append(Stat(value: Self.durationLabel(durationMin), unit: "", label: "time", chip: nil))
+            list.append(Stat(value: AnalysisLogic.workoutDurationLabel(durationMin), unit: "", label: "time", chip: nil))
         }
         if let kcal = metrics.kcal {
             list.append(Stat(value: "\(Int(kcal.rounded()))", unit: "kcal", label: "energy", chip: nil))
@@ -445,11 +474,6 @@ private struct WorkoutAnalysisContent: View {
             ))
         }
         return list
-    }
-
-    private static func durationLabel(_ minutes: Double) -> String {
-        let total = Int(minutes.rounded())
-        return "\(total / 60):\(String(format: "%02d", total % 60))"
     }
 
     @ViewBuilder
@@ -467,7 +491,7 @@ private struct WorkoutAnalysisContent: View {
                             }
                             Text(stat.label).font(.system(size: 12)).foregroundStyle(Theme.Colors.textSecondary)
                             if let chip = stat.chip {
-                                ChipView(chip: chip).padding(.top, Theme.Spacing.xxs)
+                                ChipView(chip: chip, scalesToFit: true).padding(.top, Theme.Spacing.xxs)
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -732,9 +756,9 @@ private struct SleepAnalysisContent: View {
                     kickerText: context?.timing.map { AnalysisLogic.sleepKicker(bedTime: $0.bedTime, wakeTime: $0.wakeTime) } ?? "LAST NIGHT",
                     title: value.result.headline,
                     subline: value.result.shortInsight,
-                    doneAction: doneAction
+                    doneAction: doneAction,
+                    titleIdentifier: "analysisSleep.header"
                 )
-                .accessibilityIdentifier("analysisSleep.header")
 
                 hero
 

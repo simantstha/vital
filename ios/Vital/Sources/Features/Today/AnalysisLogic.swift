@@ -33,7 +33,10 @@ enum AnalysisLogic {
     // MARK: - Workout stat chips
 
     /// Distance has no inherent "good" direction — the chip is always
-    /// neutral, just stating the delta (or "usual").
+    /// neutral, just stating the delta (or "usual"). Short form ("+1.4 km"),
+    /// no "vs usual" suffix — the stats row already sits under a section
+    /// whose whole point is comparison, and the full-width suffix was
+    /// clipping in the narrow stat column at 390pt.
     static func distanceChip(distanceM: Double, usualDistanceM: Double, unit: UnitSystem) -> Chip {
         if isWithinUsualTolerance(distanceM, usualDistanceM) {
             return Chip(text: "usual", tone: .neutral)
@@ -41,7 +44,7 @@ enum AnalysisLogic {
         let deltaKm = (distanceM - usualDistanceM) / 1000
         let sign = deltaKm >= 0 ? "+" : "\u{2212}"
         let magnitude = UnitFormat.distance(km: abs(deltaKm), unit, placeholder: "0")
-        return Chip(text: "\(sign)\(magnitude) vs usual", tone: .neutral)
+        return Chip(text: "\(sign)\(magnitude)", tone: .neutral)
     }
 
     /// Pace is inverted — a LOWER minutes-per-km is faster. The chip reads
@@ -59,14 +62,14 @@ enum AnalysisLogic {
 
     /// Average heart rate has no inherent "good" direction for a single
     /// workout (a harder session naturally runs higher) — neutral, like
-    /// distance.
+    /// distance. Short form ("+18 bpm"), same reasoning as `distanceChip`.
     static func avgHrChip(avgHr: Double, usualAvgHr: Double) -> Chip {
         if isWithinUsualTolerance(avgHr, usualAvgHr) {
             return Chip(text: "usual", tone: .neutral)
         }
         let delta = Int((avgHr - usualAvgHr).rounded())
         let sign = delta >= 0 ? "+" : "\u{2212}"
-        return Chip(text: "\(sign)\(abs(delta)) bpm vs usual", tone: .neutral)
+        return Chip(text: "\(sign)\(abs(delta)) bpm", tone: .neutral)
     }
 
     // MARK: - Pace history strip
@@ -314,6 +317,23 @@ enum AnalysisLogic {
         let hours = total / 60
         let mins = total % 60
         return hours > 0 ? "\(hours)h \(mins)m" : "\(mins)m"
+    }
+
+    /// Stopwatch-style label for a workout's `durationMin` (a `Double` whose
+    /// fractional part is seconds, e.g. `52.23` min = 52 min 13.8 sec — NOT
+    /// 52 whole minutes rounded, which is what a naive `Int(minutes.rounded())`
+    /// would give, and which previously rendered a 52-minute run as "0:52").
+    /// "m:ss" under an hour ("52:14"), "h:mm:ss" at an hour or more
+    /// ("1:21:30").
+    static func workoutDurationLabel(_ minutes: Double) -> String {
+        let totalSeconds = Int((minutes * 60).rounded())
+        let hours = totalSeconds / 3600
+        let mins = (totalSeconds % 3600) / 60
+        let secs = totalSeconds % 60
+        if hours > 0 {
+            return "\(hours):\(String(format: "%02d", mins)):\(String(format: "%02d", secs))"
+        }
+        return "\(mins):\(String(format: "%02d", secs))"
     }
 
     // MARK: - Before-bed proximity
