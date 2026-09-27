@@ -218,4 +218,19 @@ final class CoachAnswerBundleTests: XCTestCase {
         XCTAssertEqual(turn.receiptRows.count, 2)
         XCTAssertEqual(CoachActivityLogic.pillSummary(forRows: turn.receiptRows), "Sleep and 1 of your notes")
     }
+
+    /// A done-only event (arriving for an unseen id with no prior `started`)
+    /// appends one done row with the done-form label, rather than being
+    /// silently dropped. This ensures a step that arrives already done is not
+    /// lost from the receipt.
+    func testDoneOnlyEventForNewIdAppendsOneRow() {
+        var turn = AssistantTurn(id: UUID())
+        turn.applyToolCall(id: "metric", name: "get_metric_trend", label: "Checking your HRV trend…", done: true)
+
+        XCTAssertEqual(turn.toolCalls.count, 1)
+        let row = turn.toolCalls.first
+        XCTAssertEqual(row?.id, "metric")
+        XCTAssertTrue(row?.isDone ?? false)
+        XCTAssertEqual(row?.label, "Checked HRV trend")
+    }
 }

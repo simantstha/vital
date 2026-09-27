@@ -234,6 +234,10 @@ struct AssistantTurn: Identifiable, Equatable {
         self.persona = persona
     }
 
+    /// Applies a tool_call event to the turn. Updates an existing row by id,
+    /// or appends a new one. Done-only events (arriving for an unseen id with
+    /// `done: true`) are kept: appended as finished rows so a step that
+    /// arrives already done is not silently dropped.
     mutating func applyToolCall(
         id: String, name: String, label: String, done: Bool,
         kind: String? = nil, ok: Bool? = nil, summary: String? = nil,
@@ -254,7 +258,9 @@ struct AssistantTurn: Identifiable, Equatable {
             row.sources = sources ?? row.sources
             row.memory = memory ?? row.memory
             toolCalls[idx] = row
-        } else if !done {
+        } else if done {
+            toolCalls.append(ToolCallRow(id: id, name: name, label: Self.doneLabel(from: label), isDone: true, kind: kind, ok: ok, summary: summary, sources: sources, memory: memory))
+        } else {
             toolCalls.append(ToolCallRow(id: id, name: name, label: label, kind: kind, ok: ok, summary: summary, sources: sources, memory: memory))
         }
     }
