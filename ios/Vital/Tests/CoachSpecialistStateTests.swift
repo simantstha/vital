@@ -86,6 +86,91 @@ final class CoachSpecialistStateTests: XCTestCase {
         XCTAssertEqual(persona, .personaChanged(runningCoach))
     }
 
+    /// chat-activity-contract.md §1 — `kind`/`ok`/`summary`/`sources`/`memory`
+    /// are all-new, all-optional fields on `tool_call`. A `done` event
+    /// carrying every one of them must decode into the matching
+    /// `CoachStreamEvent.toolCall` associated values.
+    func testToolCallDoneEventDecodesTheNewActivityFields() throws {
+        let json = ##"""
+        data: {"type":"tool_call","id":"t1","name":"get_sleep_summary","label":"Checked your sleep","status":"done","kind":"data","ok":true,"summary":"Last 7 nights · avg 5 h 57 m"}
+        """##
+        let event = try XCTUnwrap(APIClient.decodeCoachSSELine(json))
+        XCTAssertEqual(event, .toolCall(
+            id: "t1", name: "get_sleep_summary", label: "Checked your sleep", done: true,
+            kind: "data", ok: true, summary: "Last 7 nights · avg 5 h 57 m"
+        ))
+    }
+
+    /// A memory READ carries `sources`; a memory WRITE carries `memory`.
+    func testToolCallDoneEventDecodesSourcesAndMemoryOp() throws {
+        let readJSON = ##"""
+        data: {"type":"tool_call","id":"t2","name":"read_memory","label":"Checked your notes","status":"done","kind":"memory","ok":true,"sources":[{"text":"New baby born 2 Sep — night feeds.","date":"2026-09-04"},{"text":"Prefers running in the morning."}]}
+        """##
+        let read = try XCTUnwrap(APIClient.decodeCoachSSELine(readJSON))
+        guard case .toolCall(_, _, _, _, _, _, _, let sources, let memory) = read else {
+            return XCTFail("expected .toolCall")
+        }
+        XCTAssertEqual(sources, [
+            CoachToolSource(text: "New baby born 2 Sep — night feeds.", date: "2026-09-04"),
+            CoachToolSource(text: "Prefers running in the morning."),
+        ])
+        XCTAssertNil(memory)
+
+        let writeJSON = ##"""
+        data: {"type":"tool_call","id":"t3","name":"propose_fact","label":"Noting that","status":"done","kind":"memory","ok":true,"memory":{"op":"proposed","text":"Lactose intolerant","factId":"fact-1"}}
+        """##
+        let write = try XCTUnwrap(APIClient.decodeCoachSSELine(writeJSON))
+        XCTAssertEqual(write, .toolCall(
+            id: "t3", name: "propose_fact", label: "Noting that", done: true,
+            kind: "memory", ok: true, memory: CoachMemoryOp(op: .proposed, text: "Lactose intolerant", factId: "fact-1")
+        ))
+    }
+
+    /// An older backend sends none of the new fields — decoding must still
+    /// succeed, with every new field nil.
+    func testToolCallEventWithNoNewFieldsStillDecodes() throws {
+        let json = #"data: {"type":"tool_call","id":"t4","name":"get_workouts","label":"Checking","status":"started"}"#
+        let event = try XCTUnwrap(APIClient.decodeCoachSSELine(json))
+        XCTAssertEqual(event, .toolCall(id: "t4", name: "get_workouts", label: "Checking", done: false))
+    }
+
+    /// chat-activity-contract.md §3 — a restored assistant message's
+    /// `activity` array, in call order, with older-row fallback (`{ name,
+    /// label }` only) alongside a fully-populated entry.
+    func testRestorationDecodesActivityArray() throws {
+        let json = """
+        {
+          "messages": [{
+            "id": "message-1",
+            "role": "assistant",
+            "speaker": "vital",
+            "content": "Mostly sleep.",
+            "timestamp": "2026-09-20T12:05:00.000Z",
+            "specialistSessionId": null,
+            "specialistMetadata": null,
+            "activity": [
+              { "name": "read_memory", "label": "Checked your notes", "kind": "memory", "ok": true, "sources": [{"text": "New baby born 2 Sep."}] },
+              { "name": "get_sleep_summary", "label": "Checked your sleep", "kind": "data", "ok": true, "summary": "Avg 5 h 57 m" },
+              { "name": "get_old_tool", "label": "Checked something" }
+            ]
+          }],
+          "activePersona": {
+            "id": "vital", "title": "Vital Coach", "subtitle": "Your personal coach",
+            "accent": "#7C6CF2", "icon": "sparkles", "sessionId": null
+          },
+          "pendingCard": null
+        }
+        """
+        let restored = try APIClient.decodeCoachRestoration(Data(json.utf8))
+        let activity = try XCTUnwrap(restored.messages.first?.activity)
+        XCTAssertEqual(activity.count, 3)
+        XCTAssertEqual(activity[0].name, "read_memory")
+        XCTAssertEqual(activity[0].sources, [CoachToolSource(text: "New baby born 2 Sep.")])
+        XCTAssertEqual(activity[1].summary, "Avg 5 h 57 m")
+        XCTAssertEqual(activity[2].label, "Checked something")
+        XCTAssertNil(activity[2].kind)
+    }
+
     func testEverySpecialistActionEncodesStableWireRequest() throws {
         let expected = ["accept_handoff", "decline_handoff", "accept_return", "decline_return"]
 
@@ -912,6 +997,20 @@ final class FakeCoachAPI: CoachAPIProviding {
             ok: true, id: id, name: "Scaled meal", kcal: 0, c: 0, p: 0, f: 0,
             item: MealScaleItemResult(food: itemFood, grams: grams, kcal: 0, c: 0, p: 0, f: 0)
         )
+    }
+
+    var undoneMemoryFactIds: [String] = []
+    var undoMemoryFactFailure: Error?
+    func undoMemoryFact(id: String) async throws {
+        undoneMemoryFactIds.append(id)
+        if let undoMemoryFactFailure { throw undoMemoryFactFailure }
+    }
+
+    var resolvedPendingFacts: [(id: String, action: String)] = []
+    var resolvePendingFactFailure: Error?
+    func resolvePendingFact(id: String, action: String) async throws {
+        resolvedPendingFacts.append((id: id, action: action))
+        if let resolvePendingFactFailure { throw resolvePendingFactFailure }
     }
 
     private func stream(

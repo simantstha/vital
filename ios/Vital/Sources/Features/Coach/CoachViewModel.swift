@@ -43,6 +43,23 @@ struct ToolCallRow: Identifiable, Equatable {
     let name: String
     var label: String
     var isDone: Bool = false
+    /// chat-activity-contract.md §1's new tool_call fields — `var`, not
+    /// `let`: a `started` row is created with these possibly nil/partial and
+    /// the matching `done` event fills them in in place (see
+    /// `AssistantTurn.applyToolCall`).
+    var kind: String? = nil
+    var ok: Bool? = nil
+    var summary: String? = nil
+    var sources: [CoachToolSource]? = nil
+    var memory: CoachMemoryOp? = nil
+    /// Wall-clock time this row started — drives the working card's 400 ms
+    /// appear-gate and elapsed-seconds counter (`CoachActivityLogic`). Not
+    /// meaningful (and unused) for a row rebuilt from restored `activity`.
+    var startedAt: Date = Date()
+
+    /// `kind` when the server sent one; otherwise derived from `name` so an
+    /// older backend's un-tagged tool call still gets the right icon/grouping.
+    var resolvedKind: String { kind ?? CoachActivityLogic.kind(forToolName: name) }
 }
 
 // MARK: - Inline data card row
@@ -159,11 +176,30 @@ struct AssistantTurn: Identifiable, Equatable {
     private(set) var dataCards: [CoachDataRow] = []
     private(set) var mealReceipts: [MealReceiptRow] = []
     private(set) var isFinished: Bool = false
+    /// When the FIRST tool call of this turn started — the working card's
+    /// elapsed-seconds counter and 400 ms appear-gate are both measured from
+    /// this, not from each individual step. `nil` until a live `tool_call`
+    /// event arrives (never set for a turn rebuilt from restored `activity`,
+    /// which is always already finished and never shows the working card).
+    private(set) var workStartedAt: Date? = nil
 
     init(id: UUID, persona: CoachPersonaSnapshot = .vital) {
         self.id = id
         self.persona = persona
     }
+
+    /// No tool calls in this turn at all → chat-activity-contract.md §4's
+    /// "no tool calls in a turn: no card and no pill".
+    var hasActivity: Bool { !toolCalls.isEmpty }
+
+    /// Steps folded into the receipt pill/card (K1–K3): everything except a
+    /// memory WRITE (`saved`/`proposed`/`updated`/`removed`), which renders
+    /// as its own inline chip/card instead (`MemorySavedChip`/
+    /// `MemoryProposalCard`) — chat-activity-contract.md §4's K4/K5 split.
+    var receiptRows: [ToolCallRow] { toolCalls.filter { $0.memory == nil } }
+
+    /// Finished memory-write rows, each rendered as its own inline element.
+    var memoryOpRows: [ToolCallRow] { toolCalls.filter { $0.memory != nil && $0.isDone } }
 
     var speakerLabel: String { persona.title }
 
@@ -198,15 +234,61 @@ struct AssistantTurn: Identifiable, Equatable {
         self.persona = persona
     }
 
-    mutating func applyToolCall(id: String, name: String, label: String, done: Bool) {
+    mutating func applyToolCall(
+        id: String, name: String, label: String, done: Bool,
+        kind: String? = nil, ok: Bool? = nil, summary: String? = nil,
+        sources: [CoachToolSource]? = nil, memory: CoachMemoryOp? = nil
+    ) {
+        if workStartedAt == nil { workStartedAt = Date() }
         if let idx = toolCalls.firstIndex(where: { $0.id == id }) {
             var row = toolCalls[idx]
             row.isDone = done
             if done { row.label = Self.doneLabel(from: row.label) }
+            // `kind` can arrive on `started` already; a later `done` re-send
+            // (or one that omits it) must never blank out what's already
+            // known, so every new field here only overwrites with a
+            // non-nil value.
+            row.kind = kind ?? row.kind
+            row.ok = ok ?? row.ok
+            row.summary = summary ?? row.summary
+            row.sources = sources ?? row.sources
+            row.memory = memory ?? row.memory
             toolCalls[idx] = row
         } else if !done {
-            toolCalls.append(ToolCallRow(id: id, name: name, label: label))
+            toolCalls.append(ToolCallRow(id: id, name: name, label: label, kind: kind, ok: ok, summary: summary, sources: sources, memory: memory))
         }
+    }
+
+    /// Rebuilds this (already-finished) turn's steps from a restored
+    /// history message's `activity` array — chat-activity-contract.md §3.
+    /// Every row decodes as already done (history only ever carries
+    /// finished steps), so the working card never shows for a restored turn.
+    mutating func applyActivity(_ items: [CoachActivityItem]) {
+        toolCalls = items.enumerated().map { index, item in
+            var row = ToolCallRow(id: "history-\(index)", name: item.name, label: item.label, isDone: true)
+            row.kind = item.kind
+            row.ok = item.ok
+            row.summary = item.summary
+            row.sources = item.sources
+            row.memory = item.memory
+            return row
+        }
+    }
+
+    /// Undo on a "Noted: … · Undo" chip, or Remember/Not now resolving a
+    /// `MemoryProposalCard` — rewrites just the matching row's memory op in
+    /// place (e.g. `saved` → `removed` after a successful undo). No-op if no
+    /// row's `memory.factId` matches.
+    mutating func updateMemoryOp(factId: String, newOp: CoachMemoryOpKind) {
+        guard let idx = toolCalls.firstIndex(where: { $0.memory?.factId == factId }) else { return }
+        guard let current = toolCalls[idx].memory else { return }
+        toolCalls[idx].memory = CoachMemoryOp(op: newOp, text: current.text, factId: current.factId)
+    }
+
+    /// "Not now" on a `MemoryProposalCard` — the row itself is removed
+    /// rather than re-tagged, so the card simply disappears.
+    mutating func removeMemoryOp(factId: String) {
+        toolCalls.removeAll { $0.memory?.factId == factId }
     }
 
     mutating func applyToolData(id: String, viz: CoachViz) {
@@ -328,6 +410,14 @@ final class CoachViewModel: ObservableObject {
     @Published var input: String = ""
     @Published var isStreaming: Bool = false
     @Published var errorMessage: String? = nil
+    /// A brief, dismissible notice for a low-stakes inline action failing —
+    /// `MemorySavedChip`'s Undo, `MemoryProposalCard`'s Remember/Not now.
+    /// Deliberately separate from `errorMessage`, which drives the fixed
+    /// "Couldn't reach your coach" card above the composer — a failed memory
+    /// action isn't that, and the chip/card stays actionable for a retry
+    /// either way, so a toast (`Theme`'s existing `.toast(message:)`) is the
+    /// closer match to chat-activity-contract.md §4's "error toast".
+    @Published var toastMessage: String? = nil
     @Published private(set) var activePersona: CoachPersonaSnapshot = .vital
     @Published private(set) var pendingHandoffCard: CoachHandoffCard? = nil
     @Published private(set) var specialistState: CoachSpecialistState = .vital
@@ -669,7 +759,9 @@ final class CoachViewModel: ObservableObject {
         default: return nil
         }
 
-        guard role == .assistant, let receipts = message.mealReceipts, !receipts.isEmpty else {
+        let receipts = message.mealReceipts ?? []
+        let activity = message.activity ?? []
+        guard role == .assistant, !receipts.isEmpty || !activity.isEmpty else {
             return .message(ChatMessage(
                 id: UUID(uuidString: message.id) ?? UUID(),
                 role: role,
@@ -695,6 +787,9 @@ final class CoachViewModel: ObservableObject {
                 timestamp: timestamp,
                 items: Self.receiptItems(from: receipt.items)
             ))
+        }
+        if !activity.isEmpty {
+            turn.applyActivity(activity)
         }
         turn.finish()
         return .assistantTurn(turn)
@@ -1005,8 +1100,12 @@ final class CoachViewModel: ObservableObject {
                     // every delta (not just the first) is harmless.
                     voiceTurnTimer?.mark(.firstSSEToken)
                 }
-            case .toolCall(let id, let name, let label, let done):
-                applyToolCall(id: id, name: name, label: label, done: done, toTurn: assistantId, persona: persona)
+            case .toolCall(let id, let name, let label, let done, let kind, let ok, let summary, let sources, let memory):
+                applyToolCall(
+                    id: id, name: name, label: label, done: done,
+                    kind: kind, ok: ok, summary: summary, sources: sources, memory: memory,
+                    toTurn: assistantId, persona: persona
+                )
             case .toolData(let id, let viz):
                 applyToolData(id: id, viz: viz, toTurn: assistantId, persona: persona)
             case .mealLogged(let receipt):
@@ -1352,9 +1451,13 @@ final class CoachViewModel: ObservableObject {
         }
     }
 
-    private func applyToolCall(id: String, name: String, label: String, done: Bool, toTurn turnId: UUID, persona: CoachPersonaSnapshot) {
+    private func applyToolCall(
+        id: String, name: String, label: String, done: Bool,
+        kind: String?, ok: Bool?, summary: String?, sources: [CoachToolSource]?, memory: CoachMemoryOp?,
+        toTurn turnId: UUID, persona: CoachPersonaSnapshot
+    ) {
         mutateTurn(turnId, persona: persona) { turn in
-            turn.applyToolCall(id: id, name: name, label: label, done: done)
+            turn.applyToolCall(id: id, name: name, label: label, done: done, kind: kind, ok: ok, summary: summary, sources: sources, memory: memory)
         }
     }
 
@@ -1406,6 +1509,83 @@ final class CoachViewModel: ObservableObject {
             }
         }
         return nil
+    }
+
+    /// Same lookup as `turnId(containingMealReceipt:)`, for a memory op's
+    /// `factId` — the id `MemorySavedChip`'s Undo and `MemoryProposalCard`'s
+    /// Remember/Not now are keyed on.
+    private func turnId(containingMemoryFactId factId: String) -> UUID? {
+        for row in rows {
+            if case .assistantTurn(let turn) = row, turn.toolCalls.contains(where: { $0.memory?.factId == factId }) {
+                return turn.id
+            }
+        }
+        return nil
+    }
+
+    /// `MemorySavedChip`'s Undo — chat-activity-contract.md §2. Optimistic
+    /// UI would need a way back if the endpoint 404s, so this waits for the
+    /// server's `{ ok: true }` before flipping the chip to "Removed",
+    /// showing an error toast on failure instead (the chip stays actionable
+    /// for a retry).
+    func undoMemoryFact(id factId: String) {
+        guard let turnId = turnId(containingMemoryFactId: factId) else { return }
+        Task {
+            do {
+                try await api.undoMemoryFact(id: factId)
+                withAnimation(Theme.Motion.standard) {
+                    mutateTurn(turnId, persona: activePersona) { turn in
+                        turn.updateMemoryOp(factId: factId, newOp: .removed)
+                    }
+                }
+            } catch {
+                if !error.isCancellation {
+                    toastMessage = "Couldn't undo — try again"
+                }
+            }
+        }
+    }
+
+    /// "Remember" on a `MemoryProposalCard` — confirms the pending fact
+    /// through the existing pending-facts API and turns the card into a
+    /// "Noted: …" chip in place (no fresh SSE event fires for this; it's a
+    /// pure client action against the pending fact's id).
+    func confirmMemoryProposal(factId: String) {
+        guard let turnId = turnId(containingMemoryFactId: factId) else { return }
+        Task {
+            do {
+                try await api.resolvePendingFact(id: factId, action: "confirm")
+                withAnimation(Theme.Motion.standard) {
+                    mutateTurn(turnId, persona: activePersona) { turn in
+                        turn.updateMemoryOp(factId: factId, newOp: .saved)
+                    }
+                }
+            } catch {
+                if !error.isCancellation {
+                    toastMessage = "Couldn't save — try again"
+                }
+            }
+        }
+    }
+
+    /// "Not now" on a `MemoryProposalCard` — dismisses the pending fact and
+    /// removes the card.
+    func dismissMemoryProposal(factId: String) {
+        guard let turnId = turnId(containingMemoryFactId: factId) else { return }
+        Task {
+            do {
+                try await api.resolvePendingFact(id: factId, action: "reject")
+                withAnimation(Theme.Motion.standard) {
+                    mutateTurn(turnId, persona: activePersona) { turn in
+                        turn.removeMemoryOp(factId: factId)
+                    }
+                }
+            } catch {
+                if !error.isCancellation {
+                    toastMessage = "Couldn't update — try again"
+                }
+            }
+        }
     }
 
     /// `LogReceiptCard`'s Undo action for an inline coach meal receipt.

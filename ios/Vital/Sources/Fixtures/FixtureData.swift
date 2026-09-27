@@ -468,6 +468,14 @@ enum FixtureData {
     /// (`established == false`) seeds none — an empty history is what makes
     /// `CoachViewModel.loadOpener()` fall through to fetching
     /// `/api/coach/opener`, whose fixture response is the new-user copy.
+    ///
+    /// Every established scenario (weight_loss/muscle/endurance) also gets
+    /// one past exchange exercising chat-activity-contract.md §3's `activity`
+    /// array (a memory read with 2 sources, a sleep read, and an HRV
+    /// baseline read — the exact §4/K2 pill example, "Sleep, HRV and 2 of
+    /// your notes") and a second exchange with a `memory.saved` op, so the
+    /// screenshot harness always has a receipt pill to capture
+    /// (`captureCoach`/`captureCoachReceipt`).
     private static func coachRestoration(_ profile: Profile) -> [String: Any] {
         let activePersona: [String: Any] = [
             "id": "vital", "title": "Vital Coach", "subtitle": "Your personal coach",
@@ -480,7 +488,7 @@ enum FixtureData {
                 "pendingCard": NSNull(),
             ]
         }
-        let message: [String: Any] = [
+        let opener: [String: Any] = [
             "id": "00000000-0000-4000-8000-000000000001",
             "role": "assistant",
             "speaker": "vital",
@@ -490,10 +498,101 @@ enum FixtureData {
             "specialistMetadata": NSNull(),
         ]
         return [
-            "messages": [message],
+            "messages": [opener] + tirednessExchange() + memorySavedExchange(),
             "activePersona": activePersona,
             "pendingCard": NSNull(),
         ]
+    }
+
+    /// "Why am I so tired this week?" — a memory read (2 sources), a sleep
+    /// read, and an HRV baseline read, each with a `summary` — see
+    /// `coachRestoration(_:)`'s doc comment.
+    private static func tirednessExchange() -> [[String: Any]] {
+        let question: [String: Any] = [
+            "id": "00000000-0000-4000-8000-000000000002",
+            "role": "user",
+            "speaker": "user",
+            "content": "Why am I so tired this week?",
+            "timestamp": isoDaysAgo(1),
+            "specialistSessionId": NSNull(),
+            "specialistMetadata": NSNull(),
+        ]
+        let activity: [[String: Any]] = [
+            [
+                "name": "read_memory",
+                "label": "Checked your notes",
+                "kind": "memory",
+                "ok": true,
+                "summary": "2 notes",
+                "sources": [
+                    ["text": "New baby born 2 Sep — night feeds, usually 2 a night.", "date": "2026-09-04"],
+                    ["text": "Prefers running in the morning.", "date": "2026-08-18"],
+                ],
+            ],
+            [
+                "name": "get_sleep_summary",
+                "label": "Checked your sleep",
+                "kind": "data",
+                "ok": true,
+                "summary": "Last 7 nights · avg 5 h 57 m",
+            ],
+            [
+                "name": "get_baseline",
+                "label": "Compared HRV with your normal",
+                "kind": "data",
+                "ok": true,
+                "summary": "51 ms today · normal 55–64 ms",
+            ],
+        ]
+        let answer: [String: Any] = [
+            "id": "00000000-0000-4000-8000-000000000003",
+            "role": "assistant",
+            "speaker": "vital",
+            "content": "Mostly sleep. You've slept under 6 hours on 5 of the last 7 nights, and your HRV is 9 ms under your normal — the pattern you usually get after short nights.",
+            "timestamp": isoDaysAgo(1),
+            "specialistSessionId": NSNull(),
+            "specialistMetadata": NSNull(),
+            "activity": activity,
+        ]
+        return [question, answer]
+    }
+
+    /// A short follow-up that saves a memory fact — `memory.saved` op, so
+    /// the fixture also exercises `MemorySavedChip`/Undo.
+    private static func memorySavedExchange() -> [[String: Any]] {
+        let statement: [String: Any] = [
+            "id": "00000000-0000-4000-8000-000000000004",
+            "role": "user",
+            "speaker": "user",
+            "content": "I found out I'm lactose intolerant btw",
+            "timestamp": isoNow,
+            "specialistSessionId": NSNull(),
+            "specialistMetadata": NSNull(),
+        ]
+        let activity: [[String: Any]] = [
+            [
+                "name": "remember_fact",
+                "label": "Noted",
+                "kind": "memory",
+                "ok": true,
+                "memory": [
+                    "op": "saved",
+                    "text": "Lactose intolerant",
+                    "factId": "fixture-fact-lactose",
+                ],
+            ],
+        ]
+        let answer: [String: Any] = [
+            "id": "00000000-0000-4000-8000-000000000005",
+            "role": "assistant",
+            "speaker": "vital",
+            "content": "Good to know — that changes a few of your usual meals. I'll keep it in mind.",
+            "timestamp": isoNow,
+            "specialistSessionId": NSNull(),
+            "specialistMetadata": NSNull(),
+            "activity": activity,
+        ]
+        return [statement, answer]
     }
 
     // MARK: - GET /api/trends?metric= → TrendsResponse

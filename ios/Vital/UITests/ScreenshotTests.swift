@@ -366,8 +366,36 @@ final class ScreenshotTests: XCTestCase {
         } else {
             XCTAssertTrue(waitForText(app, containing: "what would you like to dig into"),
                            "Coach should show the fixture-seeded restored message [\(scenario)/\(appearance)]")
+            // The fixture's first exchange ("Why am I so tired this week?")
+            // carries an `activity` array (chat-activity-contract.md §3), so
+            // its restored turn should render as a folded receipt pill —
+            // `CoachReceiptPill`'s "coach.receiptPill" identifier.
+            let pill = app.descendants(matching: .any).matching(identifier: "coach.receiptPill").firstMatch
+            XCTAssertTrue(pill.waitForExistence(timeout: 15),
+                           "Coach should show a receipt pill for the fixture's tool-call activity [\(scenario)/\(appearance)]")
+            captureCoachReceipt(app, pill: pill, scenario: scenario, appearance: appearance)
         }
         capture(app, name: "\(scenario)__coach__\(appearance)")
+    }
+
+    /// Taps the receipt pill and captures the expanded detail (K3) — screen
+    /// segment must stay letters-only to match CI's export regex
+    /// (`^[a-z_]+__[A-Za-z]+__(light|dark)\.png$`), hence "coachReceipt" with
+    /// no separating punctuation.
+    private func captureCoachReceipt(_ app: XCUIApplication, pill: XCUIElement, scenario: String, appearance: String) {
+        tapWhenHittable(pill, app: app, description: "Coach receipt pill [\(scenario)/\(appearance)]")
+        // "Manage memory" renders as a `Button`, not a `staticText` —
+        // `waitForText` only searches static text, so check the button
+        // directly; its own text label is a reliable proxy for
+        // `CoachReceiptDetail` having actually expanded.
+        let manageMemoryLink = app.buttons["Manage memory"]
+        XCTAssertTrue(manageMemoryLink.waitForExistence(timeout: 10),
+                       "Tapping the receipt pill should expand the detail with its Manage memory link [\(scenario)/\(appearance)]")
+        capture(app, name: "\(scenario)__coachReceipt__\(appearance)")
+        // Collapse it again so the rest of this scenario's Coach assertions
+        // (and the plain `__coach__` capture right after this call returns)
+        // see the same collapsed state every run.
+        tapWhenHittable(pill, app: app, description: "Coach receipt pill (collapse) [\(scenario)/\(appearance)]")
     }
 
     private func captureTrends(_ app: XCUIApplication, scenario: String, appearance: String) {
