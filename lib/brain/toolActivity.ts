@@ -65,10 +65,29 @@ export function toolKind(name: string): ToolKind {
 
 // ── ok ───────────────────────────────────────────────────────────────────────
 
-/** A tool call is `ok` unless its result text starts with "Error" — the
- * uniform failure marker every tool executor in tools.ts/lib/memory.ts uses. */
+/**
+ * A tool call is NOT ok when its result text starts with "Error" — the
+ * uniform failure marker every tool executor in tools.ts/lib/memory.ts uses
+ * on a thrown/guarded failure — OR when the result parses as a JSON object
+ * whose own `ok` field is `false`. Several tools report a failure this
+ * second way: valid JSON, no "Error" prefix, but `{ ok: false, ... }` — e.g.
+ * resolve_fact's "no matching active fact" and log_workout's
+ * needs-clarification/no-history/no-reps replies. Those mean nothing
+ * actually happened and must not be reported as a successful step.
+ *
+ * Known gap this does NOT cover: confirm_fact's own not-found reply
+ * (`` `No pending_fact found with id ${factId}.` `` — see its branch in
+ * executeToolCall) is neither "Error"-prefixed nor valid JSON, so it still
+ * reads as ok here. toolResultSummary/extractMemoryOp/extractMemorySources
+ * stay honest regardless (JSON.parse fails on that string, so they return
+ * undefined), so no summary/memory/sources is ever fabricated for it — only
+ * the `ok` flag itself can be a false positive in that one case.
+ */
 export function isToolResultOk(resultString: string): boolean {
-  return !resultString.startsWith('Error');
+  if (resultString.startsWith('Error')) return false;
+  const parsed = tryParseJson(resultString);
+  if (isRecord(parsed) && parsed.ok === false) return false;
+  return true;
 }
 
 // ── done-form label (history's `label`) ─────────────────────────────────────
@@ -207,7 +226,7 @@ function memoryFileLabel(filename: string): string {
  * Pure, ≤60-char, honest one-line summary of a tool's result — reuses
  * lib/metricFormat.ts/lib/metricCatalog.ts for units, never fabricates a
  * number or quote. Returns undefined when there's nothing meaningful to say
- * (no data, a failure the raw "Error:" prefix wouldn't catch, an
+ * (no data, a failure isToolResultOk didn't already gate out, an
  * unrecognized shape) — callers omit `summary` in that case.
  */
 export function toolResultSummary(

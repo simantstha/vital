@@ -36,12 +36,52 @@ test('toolKind maps every tool named in the chat-activity contract', async () =>
 
 // ── isToolResultOk ───────────────────────────────────────────────────────────
 
-test('isToolResultOk is false only for the "Error" prefix', async () => {
+test('isToolResultOk is false for the "Error" prefix, and for a JSON object reporting ok:false', async () => {
   const { isToolResultOk } = await activityPromise;
   assert.equal(isToolResultOk('Error: the tool failed'), false);
   assert.equal(isToolResultOk('{"ok":true}'), true);
+  assert.equal(isToolResultOk('{"ok":false,"reason":"no match"}'), false);
   // Not a false positive on unrelated text containing "error".
   assert.equal(isToolResultOk('No errors found today.'), true);
+  // A JSON array (not an object) is never treated as a failure marker.
+  assert.equal(isToolResultOk('[]'), true);
+  assert.equal(isToolResultOk('[{"ok":false}]'), true);
+});
+
+test('isToolResultOk: resolve_fact\'s own not-found reply ({ok:false}, no "Error" prefix) is not ok', async () => {
+  const { isToolResultOk } = await activityPromise;
+  const result = JSON.stringify({ ok: false, resolved: false, reason: 'No matching active fact found for label "x".' });
+  assert.equal(isToolResultOk(result), false);
+});
+
+test('isToolResultOk: log_workout needing clarification ({ok:false}, no "Error" prefix) is not ok', async () => {
+  const { isToolResultOk } = await activityPromise;
+  const needsClarification = JSON.stringify({
+    ok: false, needsClarification: true, reason: 'ambiguous',
+    message: 'Did you mean bench press or incline bench press?',
+    candidates: ['bench press', 'incline bench press'],
+  });
+  assert.equal(isToolResultOk(needsClarification), false);
+
+  const noHistory = JSON.stringify({ ok: false, reason: 'no_history', message: 'No previous session found for "squat".' });
+  assert.equal(isToolResultOk(noHistory), false);
+
+  const noReps = JSON.stringify({ ok: false, reason: 'no_reps', message: 'Could not find a valid set (exercise + reps) to log.' });
+  assert.equal(isToolResultOk(noReps), false);
+});
+
+test('isToolResultOk: confirm_fact\'s own not-found reply is a known gap — plain text, not JSON, so it still reads as ok', async () => {
+  const { isToolResultOk, toolResultSummary, extractMemoryOp } = await activityPromise;
+  // This mirrors executeToolCall's exact confirm_fact not-found branch: a
+  // bare string, never "Error"-prefixed and never valid JSON — the new
+  // JSON-object-with-ok:false rule cannot catch it, unlike resolve_fact and
+  // log_workout above. Documented here rather than silently left untested.
+  const result = 'No pending_fact found with id 11111111-1111-4111-8111-111111111111.';
+  assert.equal(isToolResultOk(result), true);
+  // The gap never fabricates a receipt, though: JSON.parse fails on this
+  // string, so both derived fields stay honestly undefined regardless.
+  assert.equal(toolResultSummary('confirm_fact', { factId: 'x', action: 'confirm' }, result, 'metric'), undefined);
+  assert.equal(extractMemoryOp('confirm_fact', { factId: 'x', action: 'confirm' }, result), undefined);
 });
 
 // ── toolResultSummary — one honest case per family, the error case, and a

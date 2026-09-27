@@ -542,8 +542,11 @@ async function* streamCoachTurn(userId: string, seed: TurnSeed): AsyncGenerator<
       }
 
       // Chat-activity contract §1: computed once per call, from the tool's
-      // own input/result only — never invented. `ok` follows the same
-      // "Error"-prefix rule the model itself relies on to know a call failed.
+      // own input/result only — never invented. `ok` is false on the same
+      // "Error"-prefix a failed/thrown call always carries (see the catch
+      // above), or when the result is a JSON object reporting its own
+      // `ok: false` (e.g. resolve_fact's "no matching fact",
+      // log_workout's needs-clarification reply) — see isToolResultOk.
       const ok = isToolResultOk(result);
       const summary = ok ? toolResultSummary(block.name, input, result, ctx.unitSystem) : undefined;
       const sources = ok ? extractMemorySources(block.name, result) : undefined;
