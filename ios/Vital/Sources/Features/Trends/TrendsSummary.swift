@@ -109,16 +109,60 @@ enum TrendsSummary {
         ((goalHours * 0.75) * 2).rounded() / 2
     }
 
+    /// "8h 06m" — hours + zero-padded minutes with a space, rounded to the
+    /// nearest minute. Shared by `sleepAverageText` and
+    /// `longestShortestFootnote` so the average and the per-night copy in
+    /// the same card never format a duration two different ways.
+    static func hoursMinutesText(_ hours: Double) -> String {
+        let totalMinutes = Int((hours * 60).rounded())
+        let h = totalMinutes / 60
+        let m = totalMinutes % 60
+        return "\(h)h \(String(format: "%02d", m))m"
+    }
+
     /// Average of the available (non-nil) nights, formatted "6h 54m"; nil
     /// when no nights are available.
     static func sleepAverageText(_ values: [Double?]) -> String? {
         let available = values.compactMap { $0 }
         guard !available.isEmpty else { return nil }
         let avgHours = available.reduce(0, +) / Double(available.count)
-        let totalMinutes = Int((avgHours * 60).rounded())
-        let hours = totalMinutes / 60
-        let minutes = totalMinutes % 60
-        return "\(hours)h \(String(format: "%02d", minutes))m"
+        return hoursMinutesText(avgHours)
+    }
+
+    /// "5 of 7" — nights that met or exceeded the nightly `goalHours` goal
+    /// itself, out of the 7-slot window. Deliberately compared against the
+    /// plain goal, not `shortSleepThreshold`'s laxer 75%-of-goal cutoff
+    /// (that threshold answers "was this night short", not "did this night
+    /// hit the goal") — so this never invents a new numeric cutoff, it just
+    /// reuses the goal value the card already has.
+    static func nightsAtGoalCount(_ values: [Double?], goalHours: Double) -> Int {
+        values.compactMap { $0 }.filter { $0 >= goalHours }.count
+    }
+
+    /// The "Longest night Friday, 8h 06m. Shortest Saturday, 7h 12m."
+    /// footnote (Trends calm-layout revamp) that replaced the old
+    /// short-nights caption under `WeeklyHeadlineStrip`'s sleep card —
+    /// picks the longest/shortest among only the nights that actually
+    /// synced, never a night with no data, mirroring `sleepFootnote`'s
+    /// "state coverage before making a claim" rule for a partial week.
+    /// `fullDayLabels` must be the same length and order as `values`
+    /// (`TrendsSummary.WeekWindow`'s own pairing).
+    static func longestShortestFootnote(_ values: [Double?], fullDayLabels: [String]) -> Footnote {
+        let available: [(day: String, hours: Double)] = zip(fullDayLabels, values).compactMap { day, hours in
+            guard let hours else { return nil }
+            return (day, hours)
+        }
+        guard !available.isEmpty else { return .plain("No sleep synced yet.") }
+        guard available.count > 1 else {
+            // One synced night has no "longest vs. shortest" to compare —
+            // name it and how many nights synced instead of repeating the
+            // same night as both ends of a false comparison.
+            let only = available[0]
+            return .plain("Only \(only.day) synced this week — \(hoursMinutesText(only.hours)).")
+        }
+        let longest = available.max { $0.hours < $1.hours }!
+        let shortest = available.min { $0.hours < $1.hours }!
+        return .plain("Longest night \(longest.day), \(hoursMinutesText(longest.hours)). Shortest \(shortest.day), \(hoursMinutesText(shortest.hours)).")
     }
 
     /// Never overclaims across missing nights: with fewer than 7 of 7 synced,

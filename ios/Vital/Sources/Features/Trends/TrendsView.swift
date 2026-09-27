@@ -10,19 +10,12 @@ struct TrendsView: View {
     /// Same idiom, for the header's 7D/30D/90D period switch.
     @State private var periodTapTick = false
     @ObservedObject private var unitPref = UnitPreference.shared
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Links each tile's `.matchedTransitionSource` to the destination's
     /// `.navigationTransition(.zoom(...))`. One namespace for the whole grid
     /// is correct here — the metric key (already unique per tile) is what
     /// disambiguates which tile is zooming, not the namespace.
     @Namespace private var trendsZoomNamespace
-
-    /// Single column at accessibility Dynamic Type sizes — a 2-up tile is
-    /// already tight at the default text size (see `MetricTileView`'s chip
-    /// copy note), and AX1–AX5 text simply can't fit two columns without
-    /// clipping or crushing the sparkline/value row.
-    private var isSingleColumn: Bool { dynamicTypeSize.isAccessibilitySize }
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -33,8 +26,14 @@ struct TrendsView: View {
                     VStack(alignment: .leading, spacing: Theme.Spacing.xl) {
                         headerSection
 
-                        if vm.calibration?.status == "calibrating" {
-                            calibratingBanner
+                        // Calm-layout revamp: the old "Baselines are still
+                        // calibrating" banner (which could render directly
+                        // under an "Everything's normal" headline — a live
+                        // contradiction) is gone. `.learning` is now the ONE
+                        // card for that state; `subtitleText` above renders
+                        // nothing while it's showing.
+                        if case .learning(let progress) = vm.headlineStatus {
+                            learningCard(progress)
                         }
 
                         // "What moved" (customer-panel finding, Trends
@@ -137,7 +136,7 @@ struct TrendsView: View {
     }
 }
 
-// MARK: - Header + period switch + calibrating banner
+// MARK: - Header + period switch + status card
 
 private extension TrendsView {
 
@@ -158,7 +157,9 @@ private extension TrendsView {
     /// one-line, data-driven summary (`TrendsHeadline`) — omitted entirely
     /// while the grid load has failed, same as the old subtitle, since the
     /// count/verdict data it needs comes from `vm.loaded`, which is empty on
-    /// a failed load.
+    /// a failed load. Calm-layout revamp: `.learning` renders nothing here —
+    /// the `learningCard` below the header carries that state's copy
+    /// instead, so it's never said twice.
     @ViewBuilder
     var subtitleText: some View {
         if vm.errorMessage != nil {
@@ -166,33 +167,83 @@ private extension TrendsView {
                 .font(.system(size: 15))
                 .foregroundStyle(Theme.Colors.textSecondary)
         } else {
-            let bold = Text(vm.headline.boldText)
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(Theme.Colors.textPrimary)
-            let rest = Text(vm.headline.trailingText)
-                .font(.system(size: 15))
-                .foregroundStyle(Theme.Colors.textSecondary)
-            (bold + rest)
+            switch vm.headlineStatus {
+            case .learning:
+                EmptyView()
+            case .steady(let period):
+                steadyHeadline(period: period)
+            case .moved(let summary):
+                let bold = Text(summary.boldText)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Theme.Colors.textPrimary)
+                let rest = Text(summary.trailingText)
+                    .font(.system(size: 15))
+                    .foregroundStyle(Theme.Colors.textSecondary)
+                (bold + rest)
+            }
         }
     }
 
-    var calibratingBanner: some View {
-        HStack(alignment: .top, spacing: Theme.Spacing.sm) {
-            Image(systemName: "info.circle")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(Theme.Colors.accentContent)
-                .padding(.top, 1)
-            Text("Baselines are still calibrating — \"your normal\" appears once each metric has 14 days.")
-                .font(.system(size: 14))
-                .foregroundStyle(Theme.Colors.accentContent)
+    /// "✓ A steady month. Nothing moved outside your normal." (W1 design) —
+    /// established, nothing moved this period. `Text` `+` concatenation is
+    /// deprecated, so the two-tone sentence is one `AttributedString`
+    /// instead (same idiom as `WeeklyHeadlineStrip.footnoteView`), with only
+    /// the checkmark icon as a separate sibling view.
+    func steadyHeadline(period: TrendsPeriod) -> some View {
+        var text = AttributedString(TrendsHeadline.steadyHeadlineText(period: period))
+        text.foregroundColor = Theme.Colors.textPrimary
+        text.font = .system(size: 15, weight: .semibold)
+        var subline = AttributedString(" " + TrendsHeadline.steadySubline)
+        subline.foregroundColor = Theme.Colors.textSecondary
+        subline.font = .system(size: 15)
+        text.append(subline)
+
+        return HStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.xs) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(Theme.Colors.positive)
+            Text(text)
         }
-        .padding(Theme.Spacing.lg)
-        .background(
-            // Mock's `rounded-2xl` (16pt) — between Theme.Radius.md and .lg,
-            // kept as a literal since it's a shape radius, not a color.
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Theme.Colors.accentSoft)
-        )
+    }
+
+    /// The "Learning your normal" card (W2 design) — replaces both the old
+    /// one-line subtitle AND the separate calibrating banner while every
+    /// metric shown is still calibrating (or none is established yet).
+    /// Never claims "normal" — see `TrendsHeadline.LearningProgress`.
+    func learningCard(_ progress: TrendsHeadline.LearningProgress) -> some View {
+        VitalCard(padding: Theme.Spacing.lg, cornerRadius: Theme.Radius.lg) {
+            HStack(spacing: Theme.Spacing.md) {
+                learningRing(progress)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Learning your normal")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(Theme.Colors.textPrimary)
+                    Text(progress.bodyText)
+                        .font(.system(size: 14))
+                        .foregroundStyle(Theme.Colors.textSecondary)
+                }
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    /// Mirrors `MetricDetailView.calibrationRing` exactly (same tokens,
+    /// same trim/rotation math) — the two rings should never disagree about
+    /// what "N/14" looks like.
+    func learningRing(_ progress: TrendsHeadline.LearningProgress) -> some View {
+        ZStack {
+            Circle()
+                .stroke(Theme.Colors.progressTrack, lineWidth: 4)
+            Circle()
+                .trim(from: 0, to: min(1, Double(progress.daysDone) / 14))
+                .stroke(Theme.Colors.accentContent, style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+                .animation(Theme.Motion.settle, value: progress.daysDone)
+            Text(progress.ringLabel)
+                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .foregroundStyle(Theme.Colors.textPrimary)
+        }
+        .frame(width: 48, height: 48)
     }
 }
 
@@ -281,7 +332,7 @@ private extension TrendsView {
     }
 }
 
-// MARK: - Grid index
+// MARK: - Metric-group list (calm-layout revamp — was a 2-column tile grid)
 
 private extension TrendsView {
 
@@ -341,7 +392,7 @@ private extension TrendsView {
                 ForEach(vm.sections, id: \.group.rawValue) { section in
                     VStack(alignment: .leading, spacing: Theme.Spacing.md) {
                         sectionHeaderView(section.group)
-                        sectionTilesView(section.tiles)
+                        sectionCard(section.tiles)
                     }
                 }
             }
@@ -349,11 +400,10 @@ private extension TrendsView {
         }
     }
 
+    /// Calm-layout revamp: skeletons stack as a single column now, matching
+    /// the list-row layout they're standing in for (no more 2-column grid).
     var loadingGrid: some View {
-        let columns = isSingleColumn
-            ? [GridItem(.flexible())]
-            : [GridItem(.flexible(), spacing: Theme.Spacing.md), GridItem(.flexible())]
-        return LazyVGrid(columns: columns, spacing: Theme.Spacing.md) {
+        VStack(spacing: Theme.Spacing.md) {
             ForEach(0..<6, id: \.self) { _ in SkeletonView() }
         }
     }
@@ -385,47 +435,31 @@ private extension TrendsView {
         }
     }
 
-    /// Orphan tile: `LazyVGrid` can't span a cell across columns, so a
-    /// section with an odd tile count is laid out as a `VStack` of rows
-    /// instead — a full `HStack` pair per row, with a lone last tile given
-    /// the full row width rather than sitting half-empty next to a gap.
-    /// Single column (unchanged) at accessibility Dynamic Type sizes.
-    @ViewBuilder
-    func sectionTilesView(_ tiles: [TrendsTile]) -> some View {
-        if isSingleColumn {
-            VStack(spacing: Theme.Spacing.md) {
+    /// One `VitalCard` per metric group (W1/W2 calm-layout revamp,
+    /// replacing the old 2-column `MetricTileView` grid): every tile in the
+    /// group renders as a `TrendsMetricRowView` row, divided the same way
+    /// the "What moved" card divides its rows.
+    func sectionCard(_ tiles: [TrendsTile]) -> some View {
+        VitalCard(padding: Theme.Spacing.md, cornerRadius: Theme.Radius.lg) {
+            VStack(spacing: 0) {
                 ForEach(Array(tiles.enumerated()), id: \.element.key) { index, tile in
-                    entrance(index: index) { tileButton(tile) }
-                }
-            }
-        } else {
-            VStack(spacing: Theme.Spacing.md) {
-                ForEach(Array(TrendsRowGrouping.pairedRows(tiles).enumerated()), id: \.offset) { rowIndex, row in
-                    HStack(spacing: Theme.Spacing.md) {
-                        ForEach(Array(row.enumerated()), id: \.element.key) { columnIndex, tile in
-                            entrance(index: rowIndex * 2 + columnIndex) {
-                                tileButton(tile)
-                                    .frame(maxWidth: .infinity)
-                            }
-                        }
-                        // A lone last tile spans the row alone (no trailing
-                        // empty column) — the `HStack` above already sizes
-                        // it full-width via `.frame(maxWidth: .infinity)`,
-                        // so nothing further is needed here.
+                    entrance(index: index) { rowButton(tile) }
+                    if index < tiles.count - 1 {
+                        Divider().overlay(Theme.Colors.glassBorder)
                     }
                 }
             }
         }
     }
 
-    func tileButton(_ tile: TrendsTile) -> some View {
+    func rowButton(_ tile: TrendsTile) -> some View {
         Button {
             tileTapTick.toggle()
             path.append(tile.key)
         } label: {
-            MetricTileView(tile: tile, animatesIn: !vm.hasAnimatedIn)
+            TrendsMetricRowView(tile: tile, animatesIn: !vm.hasAnimatedIn)
         }
-        .buttonStyle(TilePressStyle())
+        .buttonStyle(.plain)
         .matchedTransitionSource(id: tile.key, in: trendsZoomNamespace)
     }
 
@@ -444,5 +478,28 @@ private extension TrendsView {
         } else {
             content().staggeredAppear(index: index)
         }
+    }
+}
+
+// MARK: - Tile press feedback
+//
+// Moved here from the deleted `MetricTileView.swift` (calm-layout revamp —
+// the grid tile itself is gone, but `TrendsWeightCard`'s lead card still
+// uses this exact press style).
+
+/// Trends-phase-1: tiles moved off `GlassCard` onto the solid `VitalCard`
+/// surface, so the old backdrop-blur-resampling hazard that kept press
+/// feedback opacity-only no longer applies — a `VitalCard` is a plain
+/// `RoundedRectangle` fill, not a `.glassEffect()`, so scaling it costs
+/// nothing extra. Reduce Motion still gets opacity-only feedback (no
+/// motion), matching every other press style in this file family.
+struct TilePressStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(!reduceMotion && configuration.isPressed ? 0.97 : 1.0)
+            .opacity(configuration.isPressed ? 0.85 : 1.0)
+            .animation(Theme.Motion.micro, value: configuration.isPressed)
     }
 }

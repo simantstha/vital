@@ -58,6 +58,108 @@ enum TrendsHeadline {
     static func wordForCount(_ n: Int) -> String {
         (n >= 0 && n < numberWords.count) ? numberWords[n] : "\(n)"
     }
+
+    // MARK: - Calm-layout revamp: the top-of-screen status (learning /
+    // steady / moved), replacing the old always-shown one-line subtitle plus
+    // the separate "Baselines are still calibrating" banner (W1/W2 designs).
+    //
+    // Before this, a new user could see "Everything's in your normal range"
+    // (the old `summary(goodCount: 0, watchCount: 0, ...)` copy, still kept
+    // below for its own call sites/tests) directly above a banner saying
+    // baselines were still calibrating — a direct contradiction, since
+    // nothing can be confirmed "normal" before any baseline exists.
+    // `status(verdicts:goodCount:watchCount:period:)` is the single place
+    // that decides which of the three headline states applies, so the view
+    // layer never has to reconcile them itself.
+
+    /// The "Learning your normal" card's progress (W2 design): a ring
+    /// labelled "N/14" plus body copy, shown instead of any
+    /// normal/moved claim while the screen has no established baseline to
+    /// judge against yet.
+    struct LearningProgress: Equatable {
+        /// The smallest `Verdict.calibrating(daysRemaining:)` among the
+        /// metrics shown — see `status(verdicts:...)` for why the smallest
+        /// (not an average, not the slowest metric) is the only honest
+        /// number: it's the next date at which ANY shown metric's baseline
+        /// clears, so "X more days" stays true until that day, and a lower
+        /// number never falsely implies a metric is *further* from ready.
+        let daysRemaining: Int
+
+        /// Days of history already counted toward the fixed 14-day window,
+        /// clamped to 0...14 — the ring's filled fraction is `daysDone/14`.
+        var daysDone: Int { max(0, min(14, 14 - daysRemaining)) }
+
+        /// "2/14" — the ring's center label.
+        var ringLabel: String { "\(daysDone)/14" }
+
+        /// "12 more days and I'll tell you what's unusual. Until then,
+        /// here's what I'm seeing." `daysRemaining == 0` (gate 4/5 of
+        /// `TrendsVerdict` — enough calendar history but not enough real
+        /// variation yet) has no day count left to name, so it reads as
+        /// "not enough variation yet" instead of the false "Zero more days".
+        var bodyText: String {
+            guard daysRemaining > 0 else {
+                return "I don't have enough variation yet to tell you what's unusual. Here's what I'm seeing."
+            }
+            let dayWord = daysRemaining == 1 ? "day" : "days"
+            return "\(wordForCount(daysRemaining).capitalizedFirstLetter) more \(dayWord) and I'll tell you what's unusual. Until then, here's what I'm seeing."
+        }
+    }
+
+    /// The three mutually-exclusive states the Trends header can be in.
+    enum Status: Equatable {
+        /// Every metric shown is still calibrating (or none has cleared
+        /// enough history to have a verdict at all) — never claims "normal".
+        case learning(LearningProgress)
+        /// Every metric shown is established and none moved outside its
+        /// normal range this period.
+        case steady(period: TrendsPeriod)
+        /// At least one metric moved — unchanged from the pre-revamp
+        /// headline (`Summary`'s existing bold/trailing split).
+        case moved(Summary)
+    }
+
+    /// `verdicts` is every `Verdict` behind a tile actually rendered as a
+    /// `.chart` this period (i.e. it has enough points for a verdict at
+    /// all) — a tile still `.sparse`/`.dimmed`/hidden contributes nothing,
+    /// which is exactly what makes an empty `verdicts` read as "no metric is
+    /// established" below.
+    static func status(verdicts: [Verdict], goodCount: Int, watchCount: Int, period: TrendsPeriod) -> Status {
+        // `allSatisfy` on an empty array is vacuously `true` — that's
+        // intentional: "no metric shown has a verdict yet" is exactly as
+        // much "still learning" as "every verdict shown is calibrating".
+        let isLearning = verdicts.allSatisfy { verdict in
+            if case .calibrating = verdict { return true }
+            return false
+        }
+        if isLearning {
+            // Smallest remaining across the calibrating verdicts shown —
+            // see `LearningProgress.daysRemaining`'s doc comment. No
+            // calibrating verdict at all (the empty-`verdicts` case) has no
+            // real "days remaining" to report yet, so it defaults to the
+            // full 14 — 0 days done is the only honest starting point.
+            let remaining = verdicts.compactMap { verdict -> Int? in
+                if case .calibrating(let days) = verdict { return days }
+                return nil
+            }.min() ?? 14
+            return .learning(LearningProgress(daysRemaining: remaining))
+        }
+        if goodCount == 0 && watchCount == 0 {
+            return .steady(period: period)
+        }
+        return .moved(summary(goodCount: goodCount, watchCount: watchCount, period: period))
+    }
+
+    /// "A steady month." — the established/nothing-moved headline (W1
+    /// design). Paired with `steadySubline` below it.
+    static func steadyHeadlineText(period: TrendsPeriod) -> String {
+        "A steady \(period.steadyPeriodWord)."
+    }
+
+    /// The fixed subline under `steadyHeadlineText` — never varies by
+    /// period, since "nothing moved" is the whole statement regardless of
+    /// window length.
+    static let steadySubline = "Nothing moved outside your normal."
 }
 
 private extension String {
