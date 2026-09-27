@@ -226,6 +226,72 @@ test('a new WHOOP-bundle HealthKit copy loses to an existing plain HealthKit row
   assert.equal(repo.workouts.get('hk-whoop-copy')?.notificationState, 'suppressed');
 });
 
+// ─── Same-batch, same-session conflicts (both rows brand new in ONE upload) ──
+
+test('same batch, Watch first then the WHOOP-bundle copy: the Watch row survives', async () => {
+  const repo = new FakeRepository();
+  const watchWorkout = {
+    hkUuid: 'watch-1',
+    startTime: '2026-07-12T10:00:00.000Z',
+    durationMin: 30,
+    sourceBundleId: 'com.apple.health',
+  };
+  const whoopCopy = {
+    hkUuid: 'whoop-copy-1',
+    startTime: '2026-07-12T10:02:00.000Z',
+    durationMin: 25,
+    sourceBundleId: 'com.whoop.app',
+  };
+
+  await reconcileAnalysisIngest(repo, 'user', [
+    { workoutDate: '2026-07-12', workouts: [watchWorkout, whoopCopy] },
+  ], [], receivedAt);
+
+  assert.equal(repo.workouts.get('watch-1')?.status, 'pending');
+  assert.equal(repo.workouts.get('watch-1')?.notificationState, 'pending');
+  assert.equal(repo.workouts.get('whoop-copy-1')?.status, 'deleted');
+  assert.equal(repo.workouts.get('whoop-copy-1')?.notificationState, 'suppressed');
+});
+
+test('same batch, WHOOP-bundle copy first then the Watch row: the Watch row still survives (order-independent)', async () => {
+  const repo = new FakeRepository();
+  const watchWorkout = {
+    hkUuid: 'watch-1',
+    startTime: '2026-07-12T10:00:00.000Z',
+    durationMin: 30,
+    sourceBundleId: 'com.apple.health',
+  };
+  const whoopCopy = {
+    hkUuid: 'whoop-copy-1',
+    startTime: '2026-07-12T10:02:00.000Z',
+    durationMin: 25,
+    sourceBundleId: 'com.whoop.app',
+  };
+
+  // Same two workouts, reversed order within the same upload.
+  await reconcileAnalysisIngest(repo, 'user', [
+    { workoutDate: '2026-07-12', workouts: [whoopCopy, watchWorkout] },
+  ], [], receivedAt);
+
+  assert.equal(repo.workouts.get('watch-1')?.status, 'pending');
+  assert.equal(repo.workouts.get('watch-1')?.notificationState, 'pending');
+  assert.equal(repo.workouts.get('whoop-copy-1')?.status, 'deleted');
+  assert.equal(repo.workouts.get('whoop-copy-1')?.notificationState, 'suppressed');
+});
+
+test('same batch, two genuinely separate (non-overlapping) workouts: both survive', async () => {
+  const repo = new FakeRepository();
+  const morningRun = { hkUuid: 'morning-run', startTime: '2026-07-12T06:00:00.000Z', durationMin: 30 };
+  const eveningLift = { hkUuid: 'evening-lift', startTime: '2026-07-12T18:00:00.000Z', durationMin: 45 };
+
+  await reconcileAnalysisIngest(repo, 'user', [
+    { workoutDate: '2026-07-12', workouts: [morningRun, eveningLift] },
+  ], [], receivedAt);
+
+  assert.equal(repo.workouts.get('morning-run')?.status, 'pending');
+  assert.equal(repo.workouts.get('evening-lift')?.status, 'pending');
+});
+
 test('an already-notified existing row is never suppressed, even by a higher-priority incoming workout', async () => {
   const repo = new FakeRepository();
   repo.workouts.set('whoop:abc', {

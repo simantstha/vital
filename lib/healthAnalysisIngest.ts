@@ -153,9 +153,16 @@ export async function reconcileAnalysisIngest(
     workoutDays.flatMap((day) => day.workouts.map((workout) => workout.hkUuid)),
   );
   const sessionDayKeys = Array.from(new Set(workoutDays.flatMap((day) => dayKeysAround(day.workoutDate))));
-  const sessionCandidates = sessionDayKeys.length > 0
-    ? await repository.listWorkoutSessionCandidates(userId, sessionDayKeys)
-    : [];
+  // Keyed by hkUuid and kept current through the upsert loop below (see its
+  // comment): two same-session HealthKit workouts arriving in the SAME
+  // upload (e.g. the Watch's own run plus WHOOP's copy written into Apple
+  // Health, both brand new) must still resolve against EACH OTHER, not just
+  // against whatever was already persisted before this call started.
+  const sessionCandidates = new Map<string, WorkoutSessionCandidate>(
+    sessionDayKeys.length > 0
+      ? (await repository.listWorkoutSessionCandidates(userId, sessionDayKeys)).map((c) => [c.hkUuid, c])
+      : [],
+  );
   const persistedSleeps = await repository.listSleepAnalyses(
     userId,
     sleepDays.map((day) => day.wakeDate),
@@ -184,13 +191,31 @@ export async function reconcileAnalysisIngest(
     });
 
     if (!window) continue; // nothing to compare against without a parseable window
-    const loserHkUuid = resolveWorkoutSessionConflict(sessionCandidates, {
+    const loserHkUuid = resolveWorkoutSessionConflict(Array.from(sessionCandidates.values()), {
       hkUuid: entry.workout.hkUuid,
       workout: entry.workout,
       startedAt: window.startedAt,
       endedAt: window.endedAt,
     });
-    if (loserHkUuid) await repository.suppressWorkout(userId, loserHkUuid, receivedAt);
+    if (loserHkUuid) {
+      await repository.suppressWorkout(userId, loserHkUuid, receivedAt);
+      // Gone for good within this batch — a later entry in the same upload
+      // must never match a row that's already been suppressed.
+      sessionCandidates.delete(loserHkUuid);
+    }
+    if (loserHkUuid !== entry.workout.hkUuid) {
+      // The incoming row survived (whether by winning a conflict or by
+      // having none) — make it visible to any later entry in this same
+      // batch, so order within the batch can never change the outcome.
+      sessionCandidates.set(entry.workout.hkUuid, {
+        hkUuid: entry.workout.hkUuid,
+        source: 'healthkit',
+        sourceBundleId: extractSourceBundleId(entry.workout),
+        startedAt: window.startedAt,
+        endedAt: window.endedAt,
+        notified: false,
+      });
+    }
   }
 
   for (const day of sleepDays) {
