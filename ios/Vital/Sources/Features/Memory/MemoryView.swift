@@ -1,11 +1,12 @@
+import Foundation
 import SwiftUI
 
 /// Pushed from Profile → "Memory" (`NavigationLink` push, matching every
-/// other Profile destination — see `ProfileView.settingsLink`). Shows what
-/// the ontology has learned about the user ("About you"), everyone else it
-/// has learned about ("People"), and anything still awaiting the user's
-/// confirmation — the last section reuses `fetchPendingFacts()` /
-/// `resolvePendingFact(id:action:)` verbatim, no new endpoints.
+/// other Profile destination — see `ProfileView.settingsLink`). The
+/// redesigned Memory screen (memory-contract.md §4): a client-side search
+/// over facts and people, a "Did I get this right?" confirmation card,
+/// facts grouped into Health / Goals / Routines & preferences / Food /
+/// Other, and People — pushing to the existing `EntityDocumentView`.
 struct MemoryView: View {
     @StateObject private var vm = MemoryViewModel()
 
@@ -32,11 +33,23 @@ struct MemoryView: View {
                         .motionTransition(.fade)
                     } else {
                         Group {
+                            searchField
+
                             if !vm.pendingFacts.isEmpty {
                                 pendingFactsSection
                             }
-                            aboutYouCard
-                            peopleSection
+
+                            ForEach(vm.groupedSections) { section in
+                                factSection(section)
+                            }
+
+                            if !vm.filteredEntities.isEmpty {
+                                peopleSection
+                            }
+
+                            if vm.groupedSections.isEmpty && vm.filteredEntities.isEmpty {
+                                emptyStateCard
+                            }
                         }
                         .motionTransition(.fade)
                     }
@@ -51,6 +64,44 @@ struct MemoryView: View {
         .toolbarBackground(Theme.Colors.canvas, for: .navigationBar)
         .task { await vm.load() }
         .toast(message: $vm.toastMessage)
+        .sheet(item: $vm.editingFact) { fact in
+            EditFactSheet(fact: fact) { newLabel in
+                Task { await vm.saveEdit(fact: fact, newLabel: newLabel) }
+            }
+        }
+        .confirmationDialog(
+            forgetDialogTitle,
+            isPresented: forgetDialogPresented,
+            titleVisibility: .visible,
+            presenting: vm.factPendingForget
+        ) { fact in
+            Button("Forget", role: .destructive) {
+                Task { await vm.forget(fact) }
+            }
+            Button("Cancel", role: .cancel) {
+                vm.factPendingForget = nil
+            }
+        } message: { _ in
+            Text("Your coach won't use it anymore.")
+        }
+    }
+
+    /// "Forget “<label>”?" — the confirmation dialog's title. Empty (never
+    /// actually shown) once `factPendingForget` clears back to `nil`.
+    private var forgetDialogTitle: String {
+        guard let label = vm.factPendingForget?.label else { return "" }
+        return "Forget \u{201C}\(label)\u{201D}?"
+    }
+
+    /// `confirmationDialog(_:isPresented:...)` wants a plain `Bool` binding —
+    /// this derives one from `factPendingForget` so dismissing the dialog any
+    /// way (swipe, the system's own Cancel) clears the source-of-truth field
+    /// on `vm` too.
+    private var forgetDialogPresented: Binding<Bool> {
+        Binding(
+            get: { vm.factPendingForget != nil },
+            set: { isPresented in if !isPresented { vm.factPendingForget = nil } }
+        )
     }
 }
 
@@ -65,70 +116,177 @@ private extension MemoryView {
             Text("Memory")
                 .screenTitleStyle()
                 .foregroundStyle(Theme.Colors.textPrimary)
-            Text("What Vital has learned about you.")
+            Text(vm.headerSubline)
                 .font(Theme.Typography.bodyMedium)
                 .foregroundStyle(Theme.Colors.textSecondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    // ── About you ────────────────────────────────────────────────────────
+    // ── Search ───────────────────────────────────────────────────────────
 
-    var aboutYouCard: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-            SectionHeader(title: "About you")
+    var searchField: some View {
+        HStack(spacing: Theme.Spacing.sm) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(Theme.Colors.textTertiary)
+            TextField("Search memory", text: $vm.searchText)
+                .font(Theme.Typography.bodyMedium)
+                .foregroundStyle(Theme.Colors.textPrimary)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+        }
+        .padding(.horizontal, Theme.Spacing.md)
+        .frame(height: 40)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous)
+                .fill(Theme.Colors.glassFill)
+        )
+    }
 
-            VitalCard {
-                VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-                    Text(vm.selfFactCount == 1 ? "1 fact" : "\(vm.selfFactCount) facts")
-                        .font(Theme.Typography.bodySmall)
-                        .foregroundStyle(Theme.Colors.textSecondary)
+    // ── "Did I get this right?" ─────────────────────────────────────────
 
-                    if vm.selfFacts.isEmpty {
-                        Text("Nothing learned yet — facts appear here as you chat with your coach.")
-                            .font(Theme.Typography.bodySmall)
-                            .foregroundStyle(Theme.Colors.textSecondary)
-                    } else {
-                        FlowLayout(spacing: Theme.Spacing.sm) {
-                            ForEach(vm.selfFacts) { fact in
-                                MemoryFactChip(fact: fact)
-                            }
-                        }
+    var pendingFactsSection: some View {
+        VStack(spacing: Theme.Spacing.md) {
+            ForEach(vm.pendingFacts) { fact in
+                pendingFactCard(fact)
+            }
+        }
+    }
+
+    func pendingFactCard(_ fact: PendingFact) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            HStack(spacing: Theme.Spacing.sm) {
+                GroupIconBadge(systemName: "sparkle")
+                Text("DID I GET THIS RIGHT?")
+                    .font(.system(size: 12, weight: .bold))
+                    .tracking(0.6)
+                    .foregroundStyle(Theme.Colors.textSecondary)
+                Spacer()
+            }
+
+            Text(fact.proposedNode.label)
+                .font(Theme.Typography.bodyLarge)
+                .fontWeight(.semibold)
+                .foregroundStyle(Theme.Colors.textPrimary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Text(MemoryLogic.pendingReasonText(fact.reason))
+                .font(Theme.Typography.bodySmall)
+                .foregroundStyle(Theme.Colors.textSecondary)
+
+            HStack(spacing: Theme.Spacing.sm) {
+                Button {
+                    Task { await vm.resolveFact(id: fact.id, action: "confirm") }
+                } label: {
+                    Text("Yes, remember")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(Theme.Colors.onAccent)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(Theme.Colors.accent)
+                        .clipShape(Capsule())
+                }
+
+                Button {
+                    Task { await vm.resolveFact(id: fact.id, action: "reject") }
+                } label: {
+                    Text("Not quite")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(Theme.Colors.textPrimary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(Theme.Colors.glassFill)
+                        .clipShape(Capsule())
+                        .overlay(
+                            Capsule().strokeBorder(Theme.Colors.glassBorder, lineWidth: 1)
+                        )
+                }
+            }
+        }
+        .padding(Theme.Spacing.lg)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.Radius.xl, style: .continuous)
+                .fill(Theme.Colors.card)
+        )
+    }
+
+    // ── Fact groups ──────────────────────────────────────────────────────
+
+    func factSection(_ section: MemoryLogic.Section) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            groupHeader(section)
+
+            VitalCard(padding: 0) {
+                VStack(spacing: 0) {
+                    ForEach(Array(section.facts.enumerated()), id: \.element.id) { index, fact in
+                        FactRow(
+                            fact: fact,
+                            onEdit: { vm.startEdit(fact) },
+                            onForget: { vm.confirmForget(fact) }
+                        )
+                        .padding(.horizontal, Theme.Spacing.lg)
+                        .overlay(alignment: .top) { if index > 0 { rowHairline } }
                     }
                 }
             }
         }
     }
 
+    func groupHeader(_ section: MemoryLogic.Section) -> some View {
+        HStack(spacing: Theme.Spacing.sm) {
+            GroupIconBadge(systemName: groupIcon(section.group))
+            Text(section.group.title)
+                .font(Theme.Typography.bodyLarge)
+                .fontWeight(.bold)
+                .foregroundStyle(Theme.Colors.textPrimary)
+            Text("\(section.facts.count)")
+                .font(Theme.Typography.labelSmall)
+                .foregroundStyle(Theme.Colors.textSecondary)
+        }
+        .padding(.horizontal, Theme.Spacing.xs)
+    }
+
+    func groupIcon(_ group: MemoryLogic.Group) -> String {
+        switch group {
+        case .health:   return "heart.fill"
+        case .goals:    return "target"
+        case .routines: return "clock"
+        case .food:     return "fork.knife"
+        case .other:    return "ellipsis.circle"
+        }
+    }
+
     // ── People ───────────────────────────────────────────────────────────
 
     var peopleSection: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-            SectionHeader(title: "People")
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            HStack(spacing: Theme.Spacing.sm) {
+                GroupIconBadge(systemName: "person.2.fill")
+                Text("People")
+                    .font(Theme.Typography.bodyLarge)
+                    .fontWeight(.bold)
+                    .foregroundStyle(Theme.Colors.textPrimary)
+                Text("\(vm.filteredEntities.count)")
+                    .font(Theme.Typography.labelSmall)
+                    .foregroundStyle(Theme.Colors.textSecondary)
+            }
+            .padding(.horizontal, Theme.Spacing.xs)
 
-            if vm.entities.isEmpty {
-                VitalCard {
-                    Text("No one else yet — people you mention to your coach show up here.")
-                        .font(Theme.Typography.bodySmall)
-                        .foregroundStyle(Theme.Colors.textSecondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-            } else {
-                VitalCard(padding: 0) {
-                    VStack(spacing: 0) {
-                        ForEach(Array(vm.entities.enumerated()), id: \.element.id) { index, entity in
-                            NavigationLink {
-                                EntityDocumentView(
-                                    entityId: entity.id,
-                                    fallbackLabel: entity.label,
-                                    fallbackKind: entity.kind
-                                )
-                            } label: {
-                                entityRow(entity)
-                            }
-                            .buttonStyle(.plain)
-                            .overlay(alignment: .top) { if index > 0 { rowHairline } }
+            VitalCard(padding: 0) {
+                VStack(spacing: 0) {
+                    ForEach(Array(vm.filteredEntities.enumerated()), id: \.element.id) { index, entity in
+                        NavigationLink {
+                            EntityDocumentView(
+                                entityId: entity.id,
+                                fallbackLabel: entity.label,
+                                fallbackKind: entity.kind
+                            )
+                        } label: {
+                            entityRow(entity)
                         }
+                        .buttonStyle(.plain)
+                        .overlay(alignment: .top) { if index > 0 { rowHairline } }
                     }
                 }
             }
@@ -172,159 +330,165 @@ private extension MemoryView {
         .contentShape(Rectangle())
     }
 
+    // ── Empty state ──────────────────────────────────────────────────────
+
+    var emptyStateCard: some View {
+        VitalCard {
+            Text(
+                vm.searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? "Nothing learned yet — facts appear here as you chat with your coach."
+                    : "No matches for \u{201C}\(vm.searchText)\u{201D}."
+            )
+            .font(Theme.Typography.bodySmall)
+            .foregroundStyle(Theme.Colors.textSecondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
     var rowHairline: some View {
         Rectangle()
             .fill(Theme.Colors.glassBorder)
             .frame(height: 0.5)
     }
-
-    // ── Needs your confirmation ─────────────────────────────────────────
-
-    var pendingFactsSection: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-            SectionHeader(title: "Needs your confirmation")
-
-            VStack(spacing: Theme.Spacing.md) {
-                ForEach(vm.pendingFacts) { fact in
-                    pendingFactCard(fact)
-                }
-            }
-        }
-    }
-
-    func pendingFactCard(_ fact: PendingFact) -> some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-            HStack(spacing: Theme.Spacing.sm) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Theme.Colors.caution)
-                    .accessibilityHidden(true)
-                Text("Vital noticed")
-                    .font(Theme.Typography.labelSmall)
-                    .foregroundStyle(Theme.Colors.caution)
-                    .tracking(0.6)
-                Spacer()
-            }
-
-            Text(fact.proposedNode.label)
-                .font(Theme.Typography.bodyMedium)
-                .fontWeight(.medium)
-                .foregroundStyle(Theme.Colors.textPrimary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            HStack(spacing: Theme.Spacing.sm) {
-                Button {
-                    Task { await vm.resolveFact(id: fact.id, action: "confirm") }
-                } label: {
-                    Text("Confirm")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(Theme.Colors.onAccent)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 8)
-                        .background(Theme.Colors.accent)
-                        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous))
-                }
-
-                Button {
-                    Task { await vm.resolveFact(id: fact.id, action: "reject") }
-                } label: {
-                    Text("Dismiss")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(Theme.Colors.textSecondary)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 8)
-                        .background(Theme.Colors.glassFill)
-                        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous)
-                                .strokeBorder(Theme.Colors.glassBorder, lineWidth: 1)
-                        )
-                }
-            }
-        }
-        .padding(Theme.Spacing.lg)
-        .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.xl, style: .continuous)
-                .fill(Theme.Colors.cautionSoft)
-                .overlay(
-                    RoundedRectangle(cornerRadius: Theme.Radius.xl, style: .continuous)
-                        .strokeBorder(Theme.Colors.cautionLine, lineWidth: 1)
-                )
-        )
-    }
 }
 
-// MARK: - Fact chip
+// MARK: - Group icon badge
 
-/// One "About you" chip. `isConstraint` facts (e.g. an allergy) get a
-/// lime-bordered treatment distinct from ordinary notes, signalling they're
-/// binding on the user's own guidance rather than just background context.
-private struct MemoryFactChip: View {
-    let fact: MemoryFact
+/// A small purple-tinted icon badge for a group header or the pending-fact
+/// card — `Theme.Colors.memory`/`memorySoft` (memory-contract.md §4).
+private struct GroupIconBadge: View {
+    let systemName: String
 
     var body: some View {
-        Text(fact.label)
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(fact.isConstraint ? Theme.Colors.accentContent : Theme.Colors.textSecondary)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(
-                Capsule()
-                    .fill(fact.isConstraint ? Theme.Colors.accentSoft : Theme.Colors.glassFill)
-                    .overlay(
-                        Capsule()
-                            .strokeBorder(
-                                fact.isConstraint ? Theme.Colors.accentContent : .clear,
-                                lineWidth: fact.isConstraint ? 1 : 0
-                            )
-                    )
+        Circle()
+            .fill(Theme.Colors.memorySoft)
+            .frame(width: 24, height: 24)
+            .overlay(
+                Image(systemName: systemName)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Theme.Colors.memory)
             )
     }
 }
 
-// MARK: - Flow layout
+// MARK: - Fact row
 
-/// A minimal left-to-right, top-to-bottom wrapping layout for the fact
-/// chips — SwiftUI has no built-in wrapping `HStack`, and chip label
-/// lengths are unpredictable (backend-supplied fact text).
-private struct FlowLayout: Layout {
-    var spacing: CGFloat = Theme.Spacing.sm
+/// One fact row: label (+ an "Always avoid" tag when `isConstraint`), the
+/// origin/date secondary line, and a "…" menu with Edit/Forget. The label
+/// and secondary line are one accessibility element reading "label, origin
+/// line"; the menu button carries its own "More for <label>" label
+/// (memory-contract.md §4), matching the mock's `aria-label`.
+private struct FactRow: View {
+    let fact: MemoryFact
+    let onEdit: () -> Void
+    let onForget: () -> Void
 
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let maxWidth = proposal.width ?? .infinity
-        var rowWidth: CGFloat = 0
-        var rowHeight: CGFloat = 0
-        var totalHeight: CGFloat = 0
-
-        for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
-            if rowWidth > 0, rowWidth + spacing + size.width > maxWidth {
-                totalHeight += rowHeight + spacing
-                rowWidth = 0
-                rowHeight = 0
-            }
-            rowWidth += (rowWidth > 0 ? spacing : 0) + size.width
-            rowHeight = max(rowHeight, size.height)
-        }
-        totalHeight += rowHeight
-        return CGSize(width: maxWidth.isFinite ? maxWidth : rowWidth, height: totalHeight)
+    private var sourceLine: String {
+        MemoryLogic.sourceLine(origin: fact.origin, recordedAt: fact.recordedAt)
     }
 
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        var x = bounds.minX
-        var y = bounds.minY
-        var rowHeight: CGFloat = 0
-
-        for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
-            if x > bounds.minX, x + size.width > bounds.maxX {
-                x = bounds.minX
-                y += rowHeight + spacing
-                rowHeight = 0
+    var body: some View {
+        HStack(spacing: Theme.Spacing.md) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: Theme.Spacing.sm) {
+                    Text(fact.label)
+                        .font(Theme.Typography.bodyMedium)
+                        .fontWeight(.medium)
+                        .foregroundStyle(Theme.Colors.textPrimary)
+                    if fact.isConstraint {
+                        ConstraintTag()
+                    }
+                }
+                Text(sourceLine)
+                    .font(Theme.Typography.labelSmall)
+                    .foregroundStyle(Theme.Colors.textSecondary)
             }
-            subview.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
-            x += size.width + spacing
-            rowHeight = max(rowHeight, size.height)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(fact.label), \(sourceLine)")
+
+            Spacer(minLength: Theme.Spacing.sm)
+
+            Menu {
+                Button("Edit", action: onEdit)
+                Button("Forget", role: .destructive, action: onForget)
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Theme.Colors.textSecondary)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .accessibilityLabel("More for \(fact.label)")
+        }
+        .padding(.vertical, Theme.Spacing.sm)
+    }
+}
+
+/// "Always avoid" — `isConstraint == true`'s tag, using the caution tokens
+/// (memory-contract.md §4: "The 'Always avoid' tag uses the caution tokens").
+private struct ConstraintTag: View {
+    var body: some View {
+        Text("Always avoid")
+            .font(.system(size: 11, weight: .bold))
+            .foregroundStyle(Theme.Colors.caution)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(
+                Capsule().fill(Theme.Colors.cautionSoft)
+            )
+    }
+}
+
+// MARK: - Edit sheet
+
+/// A text field + Save, disabled while the text is empty or unchanged
+/// (memory-contract.md §4). Save is fire-and-forget into `onSave`; the sheet
+/// dismisses itself once `MemoryViewModel.saveEdit` clears `editingFact`
+/// (the `.sheet(item:)` binding this is presented from), not from a direct
+/// `dismiss()` call here.
+private struct EditFactSheet: View {
+    let fact: MemoryFact
+    let onSave: (String) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var text: String
+
+    init(fact: MemoryFact, onSave: @escaping (String) -> Void) {
+        self.fact = fact
+        self.onSave = onSave
+        _text = State(initialValue: fact.label)
+    }
+
+    private var trimmed: String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var canSave: Bool { !trimmed.isEmpty && trimmed != fact.label }
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
+                TextField("Fact", text: $text)
+                    .font(Theme.Typography.bodyLarge)
+                    .padding(Theme.Spacing.md)
+                    .background(
+                        RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous)
+                            .fill(Theme.Colors.glassFill)
+                    )
+                Spacer()
+            }
+            .padding(Theme.Spacing.xl)
+            .background(Theme.Colors.canvas.ignoresSafeArea())
+            .navigationTitle("Edit")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        onSave(text)
+                    }
+                    .disabled(!canSave)
+                }
+            }
         }
     }
 }

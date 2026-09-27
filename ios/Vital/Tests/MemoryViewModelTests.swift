@@ -33,6 +33,56 @@ final class MemoryViewModelTests: XCTestCase {
         XCTAssertEqual(response.entities[0].label, "Father")
         XCTAssertEqual(response.entities[0].kind, "Person")
         XCTAssertEqual(response.entities[0].factCount, 4)
+
+        // The old-server payload above carries none of memory-contract.md
+        // §1's new fields — they must decode as nil, not throw.
+        XCTAssertNil(response.selfSummary.facts[0].recordedAt)
+        XCTAssertNil(response.selfSummary.facts[0].origin)
+        XCTAssertNil(response.selfSummary.facts[0].group)
+    }
+
+    /// memory-contract.md §1's new, additive fields on a fact — a newer
+    /// server. All three must decode straight through untouched.
+    func testMemoryResponseDecodesNewOptionalFactFields() throws {
+        let data = Data(
+            """
+            { "self": { "factCount": 1, "facts": [
+                { "id": "n1", "type": "Allergy", "label": "Peanut allergy", "isConstraint": true,
+                  "recordedAt": "2026-09-12", "origin": "confirmed", "group": "health" }
+              ] },
+              "entities": [] }
+            """.utf8
+        )
+
+        let response = try JSONDecoder().decode(MemoryResponse.self, from: data)
+
+        let fact = response.selfSummary.facts[0]
+        XCTAssertEqual(fact.recordedAt, "2026-09-12")
+        XCTAssertEqual(fact.origin, "confirmed")
+        XCTAssertEqual(fact.group, "health")
+    }
+
+    /// A pending fact's optional `reason` (memory-contract.md §1) — present
+    /// on a newer server, absent (decodes to nil) on an older one.
+    func testPendingFactDecodesOptionalReason() throws {
+        let withReason = Data(
+            """
+            { "id": "p1", "proposedNode": { "type": "Habit", "label": "Trains at 6am" },
+              "evidence": "e", "salience": 0.8, "createdAt": "2026-09-01",
+              "reason": "Noticed from your workouts over the last 3 weeks" }
+            """.utf8
+        )
+        let decodedWithReason = try JSONDecoder().decode(PendingFact.self, from: withReason)
+        XCTAssertEqual(decodedWithReason.reason, "Noticed from your workouts over the last 3 weeks")
+
+        let withoutReason = Data(
+            """
+            { "id": "p2", "proposedNode": { "type": "Habit", "label": "Trains at 6am" },
+              "evidence": "e", "salience": 0.8, "createdAt": "2026-09-01" }
+            """.utf8
+        )
+        let decodedWithoutReason = try JSONDecoder().decode(PendingFact.self, from: withoutReason)
+        XCTAssertNil(decodedWithoutReason.reason)
     }
 
     /// Same for the entity-document endpoint — `createdAt` must decode as a
@@ -275,6 +325,95 @@ final class MemoryViewModelTests: XCTestCase {
         XCTAssertNil(vm.toastMessage)
     }
 
+    // MARK: - saveEdit
+
+    /// Success replaces the row wholesale with the server's SUPERSEDEd node
+    /// (a new id, per memory-contract.md §2) — never just the label in place.
+    func testSaveEditSuccessReplacesRowWithServersSupersedingFact() async {
+        let api = FakeMemoryAPI()
+        let original = MemoryFact(id: "n1", type: "Habit", label: "Prefers running in the morning", isConstraint: false)
+        api.editResult = MemoryFact(id: "n2", type: "Habit", label: "Prefers running at dawn", isConstraint: false, recordedAt: "2026-09-27", origin: "told", group: "routines")
+        let vm = MemoryViewModel(apiClient: api)
+        vm.selfFacts = [original]
+
+        await vm.saveEdit(fact: original, newLabel: "Prefers running at dawn")
+
+        XCTAssertEqual(vm.selfFacts.map(\.id), ["n2"])
+        XCTAssertEqual(vm.selfFacts.map(\.label), ["Prefers running at dawn"])
+        XCTAssertEqual(api.editCalls.count, 1)
+        XCTAssertEqual(api.editCalls.first?.id, "n1")
+        XCTAssertEqual(api.editCalls.first?.label, "Prefers running at dawn")
+        XCTAssertNil(vm.editingFact, "the edit sheet should have dismissed")
+        XCTAssertNil(vm.toastMessage)
+    }
+
+    /// Failure restores the ORIGINAL fact (undoing the optimistic label
+    /// change) and surfaces a toast — same rollback idiom as `resolveFact`.
+    func testSaveEditFailureRollsBackToOriginalFactAndShowsToast() async {
+        let api = FakeMemoryAPI()
+        api.editError = URLError(.notConnectedToInternet)
+        let original = MemoryFact(id: "n1", type: "Habit", label: "Prefers running in the morning", isConstraint: false)
+        let vm = MemoryViewModel(apiClient: api)
+        vm.selfFacts = [original]
+
+        await vm.saveEdit(fact: original, newLabel: "Prefers running at dawn")
+
+        XCTAssertEqual(vm.selfFacts, [original])
+        XCTAssertEqual(vm.toastMessage, "Couldn't save — try again")
+    }
+
+    /// An empty or unchanged label is a no-op: no API call, no row change —
+    /// the sheet's own Save button is disabled for this, but the view model
+    /// guards it too.
+    func testSaveEditNoOpForEmptyOrUnchangedLabel() async {
+        let api = FakeMemoryAPI()
+        let original = MemoryFact(id: "n1", type: "Habit", label: "Prefers running in the morning", isConstraint: false)
+        let vm = MemoryViewModel(apiClient: api)
+        vm.selfFacts = [original]
+        vm.editingFact = original
+
+        await vm.saveEdit(fact: original, newLabel: "   ")
+        await vm.saveEdit(fact: original, newLabel: original.label)
+
+        XCTAssertEqual(vm.selfFacts, [original])
+        XCTAssertTrue(api.editCalls.isEmpty)
+        XCTAssertNil(vm.editingFact)
+    }
+
+    // MARK: - forget
+
+    /// Success removes the row immediately and calls the existing undo
+    /// endpoint — memory-contract.md §3 reuses `POST .../undo` verbatim.
+    func testForgetSuccessRemovesRowAndCallsUndo() async {
+        let api = FakeMemoryAPI()
+        let fact = MemoryFact(id: "n1", type: "Habit", label: "Prefers running in the morning", isConstraint: false)
+        let vm = MemoryViewModel(apiClient: api)
+        vm.selfFacts = [fact]
+        vm.factPendingForget = fact
+
+        await vm.forget(fact)
+
+        XCTAssertTrue(vm.selfFacts.isEmpty)
+        XCTAssertEqual(api.undoCalls, ["n1"])
+        XCTAssertNil(vm.factPendingForget, "the confirmation dialog should have dismissed")
+        XCTAssertNil(vm.toastMessage)
+    }
+
+    /// Failure restores the row in place and shows a toast.
+    func testForgetFailureRestoresRowAndShowsToast() async {
+        let api = FakeMemoryAPI()
+        api.undoError = URLError(.notConnectedToInternet)
+        let first = MemoryFact(id: "n1", type: "Habit", label: "First", isConstraint: false)
+        let second = MemoryFact(id: "n2", type: "Habit", label: "Second", isConstraint: false)
+        let vm = MemoryViewModel(apiClient: api)
+        vm.selfFacts = [first, second]
+
+        await vm.forget(first)
+
+        XCTAssertEqual(vm.selfFacts, [first, second])
+        XCTAssertEqual(vm.toastMessage, "Couldn't save — try again")
+    }
+
     // MARK: - EntityDocumentViewModel.load
 
     func testEntityDocumentLoadSuccessPopulatesDocument() async {
@@ -348,6 +487,15 @@ private final class FakeMemoryAPI: MemoryAPIProviding {
     var resolveError: Error?
     var resolveCalls: [(id: String, action: String)] = []
 
+    var editError: Error?
+    var editCalls: [(id: String, label: String)] = []
+    /// The fact `editMemoryFact` returns on success — a caller sets this to
+    /// whatever the "new, superseding" node should look like.
+    var editResult: MemoryFact = MemoryFact(id: "edited", type: "Habit", label: "", isConstraint: false)
+
+    var undoError: Error?
+    var undoCalls: [String] = []
+
     func fetchMemory() async throws -> MemoryResponse {
         if delayNextMemory {
             delayNextMemory = false
@@ -379,5 +527,16 @@ private final class FakeMemoryAPI: MemoryAPIProviding {
     func releaseMemory() {
         memoryContinuation?.resume()
         memoryContinuation = nil
+    }
+
+    func editMemoryFact(id: String, label: String) async throws -> MemoryFact {
+        editCalls.append((id, label))
+        if let editError { throw editError }
+        return editResult
+    }
+
+    func undoMemoryFact(id: String) async throws {
+        undoCalls.append(id)
+        if let undoError { throw undoError }
     }
 }

@@ -45,7 +45,12 @@ final class FixtureURLProtocol: URLProtocol {
             scenario: FixtureMode.scenario,
             method: request.httpMethod ?? "GET",
             path: url.path,
-            query: url.query ?? ""
+            query: url.query ?? "",
+            // Only the memory-fact PATCH (memory-contract.md §2) reads this —
+            // every other fixture endpoint ignores it. `request.httpBody` is
+            // populated here because `APIClient` sets it directly (never
+            // `httpBodyStream`) on every request that has one.
+            body: request.httpBody ?? Data()
         )
 
         // POST /api/coach (SSE streaming) is never reached by the screenshot

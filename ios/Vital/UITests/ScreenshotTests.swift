@@ -70,6 +70,7 @@ final class ScreenshotTests: XCTestCase {
                 captureTrends(app, scenario: scenario, appearance: appearance)
                 captureLogs(app, scenario: scenario, appearance: appearance)
                 captureProfile(app, scenario: scenario, appearance: appearance)
+                captureMemory(app, scenario: scenario, appearance: appearance)
             }
 
             app.terminate()
@@ -581,6 +582,51 @@ final class ScreenshotTests: XCTestCase {
                            "Profile should show the \(scenario) fixture's name [\(appearance)]")
         }
         capture(app, name: "\(scenario)__profile__\(appearance)")
+    }
+
+    /// Reached from Profile — `ProfileView.settingsCard`'s "Memory" row
+    /// pushes `MemoryView` — so this must run right after `captureProfile`,
+    /// which leaves the app on the Profile tab. Not attempted for
+    /// `server_error`, whose Profile tab shows only its error card with no
+    /// settings rows to tap.
+    private func captureMemory(_ app: XCUIApplication, scenario: String, appearance: String) {
+        guard scenario != "server_error" else { return }
+
+        let memoryLink = app.staticTexts["Memory"].firstMatch
+        tapWhenHittable(
+            memoryLink, app: app,
+            description: "Profile's Memory settings row [\(scenario)/\(appearance)]"
+        )
+
+        if scenario == "new_user" {
+            // The fixture serves an empty `/api/memory` for new_user (no
+            // established history yet) — the redesigned screen's empty state.
+            XCTAssertTrue(waitForText(app, containing: "Nothing learned yet"),
+                           "new_user's Memory screen should show its empty state [\(appearance)]")
+        } else {
+            // Fixture-unique facts (`FixtureData.memoryFacts`) — only ever
+            // rendered once `/api/memory` decodes, so this fails loudly if
+            // fixture interception ever regresses for this endpoint.
+            XCTAssertTrue(waitForText(app, containing: "Peanut allergy"),
+                           "\(scenario)'s Memory screen should show the established fixture's facts [\(appearance)]")
+            XCTAssertTrue(waitForText(app, containing: "Always avoid"),
+                           "\(scenario)'s Memory screen should tag a constraint fact [\(appearance)]")
+            XCTAssertTrue(waitForText(app, containing: "Routines & preferences"),
+                           "\(scenario)'s Memory screen should group facts into sections [\(appearance)]")
+        }
+        capture(app, name: "\(scenario)__memory__\(appearance)")
+
+        // Navigate back to Profile so nothing after this in the scenario
+        // relies on Memory still being on screen (it's currently last, but
+        // this keeps the harness safe if a screen is ever added after it).
+        let backButton = app.navigationBars.buttons.element(boundBy: 0)
+        if backButton.waitForExistence(timeout: 5) {
+            backButton.tap()
+        } else {
+            app.swipeRight()
+        }
+        XCTAssertTrue(app.staticTexts[profileName(for: scenario)].waitForExistence(timeout: 5),
+                       "Memory screen never finished dismissing back to Profile [\(scenario)/\(appearance)]")
     }
 
     private func captureOnboarding(_ app: XCUIApplication, scenario: String, appearance: String) {

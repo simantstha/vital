@@ -492,6 +492,29 @@ struct APIClient {
         return try await get("/api/memory/entities/\(encoded)")
     }
 
+    /// PATCH /api/memory/facts/{factId} — memory-contract.md §2. The server
+    /// SUPERSEDEs the fact rather than overwriting it, so the returned
+    /// `fact` is a NEW node with a new `id`; `MemoryViewModel.saveEdit`
+    /// replaces the edited row with it wholesale rather than patching the
+    /// label in place. 404 for an unknown/foreign/inactive fact, 400 for an
+    /// empty or over-length label, 401 without auth (all via `validate`).
+    func editMemoryFact(id: String, label: String) async throws -> MemoryFact {
+        let encoded = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+        guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/memory/facts/\(encoded)") else {
+            throw APIError.invalidURL
+        }
+        var request = authorizedRequest(url)
+        request.httpMethod = "PATCH"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 10
+        struct Body: Encodable { let label: String }
+        request.httpBody = try encoder.encode(Body(label: label))
+        let (data, response) = try await session.data(for: request)
+        try validate(response)
+        struct EditResponse: Decodable { let ok: Bool; let fact: MemoryFact }
+        return try decoder.decode(EditResponse.self, from: data).fact
+    }
+
     // MARK: - Coach opener (fresh, data-aware greeting per open)
 
     /// Fetches a short, data-aware opening line for the Coach tab. Generated
@@ -2053,6 +2076,11 @@ struct PendingFact: Decodable, Identifiable {
     let evidence: String
     let salience: Double
     let createdAt: String
+    /// Short (≤140 char) evidence/reason text for "Did I get this right?"
+    /// (memory-contract.md §1/§4) — optional: an older server, or a pending
+    /// row with no stored reason, omits it, and `MemoryLogic.pendingReasonText`
+    /// falls back to "Noticed from your data".
+    var reason: String? = nil
 }
 
 struct PendingFactsResponse: Decodable {
@@ -2065,11 +2093,26 @@ struct PendingFactsResponse: Decodable {
 /// backend treats it as binding on the user's own health guidance (e.g. an
 /// allergy), which the Memory screen renders with a distinct lime-bordered
 /// chip so the user can tell a note from a rule at a glance.
-struct MemoryFact: Decodable, Identifiable {
+struct MemoryFact: Decodable, Identifiable, Equatable {
     let id: String
     let type: String
     let label: String
     let isConstraint: Bool
+    /// "YYYY-MM-DD", the fact's `created_at` as a day in the user's timezone
+    /// (memory-contract.md §1). `var`, not `let` — a `let` with a default
+    /// value drops out of the synthesized memberwise initializer, which
+    /// every fixture/test call site below relies on. Optional: an older
+    /// server won't send it, and `MemoryLogic.sourceLine` falls back to just
+    /// the origin phrase when it's absent.
+    var recordedAt: String? = nil
+    /// "told" | "noticed" | "confirmed" | "onboarding" (memory-contract.md
+    /// §1). Optional for the same reason as `recordedAt`; an unrecognized or
+    /// missing value reads the same as "told" (`MemoryLogic.originPhrase`).
+    var origin: String? = nil
+    /// "health" | "goals" | "routines" | "food" | "other" (memory-contract.md
+    /// §1). Optional; when absent, `MemoryLogic.group(for:)` derives it
+    /// client-side from `type`.
+    var group: String? = nil
 }
 
 struct MemorySelfSummary: Decodable {
@@ -2136,6 +2179,15 @@ protocol MemoryAPIProviding {
     /// comment. `MemoryViewModel`/`TodayViewModel` currently ignore it.
     @discardableResult
     func resolvePendingFact(id: String, action: String) async throws -> String?
+    /// PATCH /api/memory/facts/{factId} (memory-contract.md §2) — Edit on a
+    /// fact row's "…" menu. See `APIClient.editMemoryFact(id:label:)`'s doc
+    /// comment for why the response replaces the row wholesale.
+    func editMemoryFact(id: String, label: String) async throws -> MemoryFact
+    /// Forget on a fact row's "…" menu — the same undo endpoint
+    /// `MemorySavedChip`'s coach-transcript Undo uses (declared for
+    /// `CoachAPIProviding` too; `APIClient`'s single implementation
+    /// satisfies both).
+    func undoMemoryFact(id: String) async throws
 }
 
 extension APIClient: MemoryAPIProviding {}
