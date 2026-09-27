@@ -391,11 +391,21 @@ final class ScreenshotTests: XCTestCase {
         let manageMemoryLink = app.buttons["Manage memory"]
         XCTAssertTrue(manageMemoryLink.waitForExistence(timeout: 10),
                        "Tapping the receipt pill should expand the detail with its Manage memory link [\(scenario)/\(appearance)]")
+        // `CoachReceiptDetail`'s own identifier — waited on directly (rather
+        // than relying on "Manage memory" alone) so the detail wait below,
+        // after collapsing, checks the same element.
+        let detail = app.descendants(matching: .any).matching(identifier: "coach.receiptDetail").firstMatch
+        XCTAssertTrue(detail.waitForExistence(timeout: 10),
+                       "Receipt detail should exist once expanded [\(scenario)/\(appearance)]")
         capture(app, name: "\(scenario)__coachReceipt__\(appearance)")
         // Collapse it again so the rest of this scenario's Coach assertions
         // (and the plain `__coach__` capture right after this call returns)
-        // see the same collapsed state every run.
+        // see the same collapsed state every run — wait for the fold-out
+        // animation to fully finish so `__coach__` doesn't catch a ghost of
+        // the detail mid-collapse.
         tapWhenHittable(pill, app: app, description: "Coach receipt pill (collapse) [\(scenario)/\(appearance)]")
+        XCTAssertTrue(detail.waitForNonExistence(timeout: 5),
+                       "Receipt detail should fully collapse before the next capture [\(scenario)/\(appearance)]")
     }
 
     private func captureTrends(_ app: XCUIApplication, scenario: String, appearance: String) {

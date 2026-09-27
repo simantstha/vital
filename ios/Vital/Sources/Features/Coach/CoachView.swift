@@ -933,22 +933,15 @@ private struct AssistantTurnView: View {
                 }
             }
 
-            // Order is conditional on whether prose has started. Before any
-            // text has streamed in, the activity section (working card/pill)
-            // is the only thing happening, so it stays above (where the
-            // empty bubble would be). Once prose exists, a mid-turn tool
-            // call describes work happening after what was just said, so it
-            // moves below it. Memory ops (K4) always render right where
-            // their own tool call landed relative to prose — same rule.
-            if turn.text.isEmpty {
-                memoryOpRows
-                activitySection
-                proseBubble
-            } else {
-                proseBubble
-                memoryOpRows
-                activitySection
-            }
+            // The activity section (working card → receipt pill/detail)
+            // always renders above the prose bubble, whether or not text has
+            // started streaming yet — the working card folds in place into
+            // the pill as the answer starts, rather than jumping to the far
+            // side of it (chat-activity-contract.md §4, K1/K2/K3). Memory
+            // ops (K4) render alongside it, in the same relative order.
+            memoryOpRows
+            activitySection
+            proseBubble
         }
     }
 
@@ -1410,6 +1403,7 @@ struct CoachReceiptDetail: View {
                 .fill(Theme.Colors.card)
         )
         .shadow(color: Theme.Colors.cardShadow, radius: 8, x: 0, y: 2)
+        .accessibilityIdentifier("coach.receiptDetail")
     }
 
     private var hairline: some View {
@@ -1459,7 +1453,7 @@ struct CoachReceiptDetail: View {
                 Text("“\(source.text)”")
                     .font(Theme.Typography.bodySmall)
                     .foregroundStyle(Theme.Colors.textPrimary)
-                Text(source.date.map { "You told me · \($0)" } ?? "You told me")
+                Text(source.date.map { "You told me · \(CoachActivityLogic.formattedSourceDate($0))" } ?? "You told me")
                     .font(Theme.Typography.labelSmall)
                     .foregroundStyle(Theme.Colors.textSecondary)
             }

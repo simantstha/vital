@@ -168,4 +168,27 @@ final class CoachActivityLogicTests: XCTestCase {
         XCTAssertEqual(CoachActivityLogic.doneLabelFallback(forToolName: "get_sleep_summary"), "Checked get sleep summary")
         XCTAssertEqual(CoachActivityLogic.doneLabelFallback(forToolName: ""), "Checked that")
     }
+
+    // MARK: - Source quote date
+
+    func testFormattedSourceDateOmitsYearWhenSameAsNow() {
+        let now = DateComponents(calendar: .init(identifier: .gregorian), year: 2026, month: 9, day: 27).date!
+        let formatter = DateFormatter()
+        formatter.setLocalizedDateFormatFromTemplate("dMMM")
+        let expected = formatter.string(from: DateComponents(calendar: .init(identifier: .gregorian), year: 2026, month: 9, day: 4).date!)
+        XCTAssertEqual(CoachActivityLogic.formattedSourceDate("2026-09-04", now: now), expected)
+    }
+
+    func testFormattedSourceDateIncludesYearWhenDifferentFromNow() {
+        let now = DateComponents(calendar: .init(identifier: .gregorian), year: 2026, month: 9, day: 27).date!
+        let formatter = DateFormatter()
+        formatter.setLocalizedDateFormatFromTemplate("dMMMy")
+        let expected = formatter.string(from: DateComponents(calendar: .init(identifier: .gregorian), year: 2025, month: 9, day: 4).date!)
+        XCTAssertEqual(CoachActivityLogic.formattedSourceDate("2025-09-04", now: now), expected)
+    }
+
+    func testFormattedSourceDateFallsBackToRawStringOnGarbageInput() {
+        XCTAssertEqual(CoachActivityLogic.formattedSourceDate("not-a-date"), "not-a-date")
+        XCTAssertEqual(CoachActivityLogic.formattedSourceDate(""), "")
+    }
 }

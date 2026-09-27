@@ -183,4 +183,43 @@ enum CoachActivityLogic {
         }
         return pillSummary(entries)
     }
+
+    // MARK: - Source quote date
+
+    /// Parses `source.date`'s wire format ("yyyy-MM-dd") in a fixed
+    /// `en_US_POSIX` locale — the format never varies with the device's
+    /// locale even though the rendered string does.
+    private static let sourceDateParser: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter
+    }()
+
+    /// Renders in the current locale: "4 Sep" for a date in `now`'s year,
+    /// "4 Sep 2025" otherwise. Cached `DateFormatter`s, one per template, so
+    /// repeated calls (one per quote row) don't re-derive the locale's
+    /// preferred ordering on every render.
+    private static let sameYearFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.setLocalizedDateFormatFromTemplate("dMMM")
+        return formatter
+    }()
+
+    private static let otherYearFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.setLocalizedDateFormatFromTemplate("dMMMy")
+        return formatter
+    }()
+
+    /// "You told me · 4 Sep" (current year) or "You told me · 4 Sep 2025"
+    /// (any other year) from the raw "yyyy-MM-dd" wire string — falls back to
+    /// the raw string unchanged if it doesn't parse.
+    static func formattedSourceDate(_ raw: String, now: Date = Date()) -> String {
+        guard let parsed = sourceDateParser.date(from: raw) else { return raw }
+        let calendar = Calendar(identifier: .gregorian)
+        let sameYear = calendar.component(.year, from: parsed) == calendar.component(.year, from: now)
+        let formatter = sameYear ? sameYearFormatter : otherYearFormatter
+        return formatter.string(from: parsed)
+    }
 }
