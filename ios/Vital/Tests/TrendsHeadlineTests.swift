@@ -120,7 +120,7 @@ final class TrendsHeadlineTests: XCTestCase {
         let progress = TrendsHeadline.LearningProgress(daysRemaining: 12)
         XCTAssertEqual(progress.daysDone, 2)
         XCTAssertEqual(progress.ringLabel, "2/14")
-        XCTAssertEqual(progress.bodyText, "Twelve more days and I'll tell you what's unusual. Until then, here's what I'm seeing.")
+        XCTAssertEqual(progress.bodyText, "12 more days and I'll tell you what's unusual. Until then, here's what I'm seeing.")
     }
 
     func testLearningProgressUsesSingularDayForExactlyOneRemaining() {
