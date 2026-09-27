@@ -106,10 +106,13 @@ final class MemoryLogicTests: XCTestCase {
     // MARK: - sourceLine
 
     func testSourceLineCombinesPhraseAndFormattedDate() {
-        let now = ISO8601DateFormatter().date(from: "2026-09-27T00:00:00Z")!
+        let now = DateComponents(calendar: .init(identifier: .gregorian), year: 2026, month: 9, day: 27).date!
+        let formatter = DateFormatter()
+        formatter.setLocalizedDateFormatFromTemplate("dMMM")
+        let expected = formatter.string(from: DateComponents(calendar: .init(identifier: .gregorian), year: 2026, month: 9, day: 12).date!)
         XCTAssertEqual(
             MemoryLogic.sourceLine(origin: "confirmed", recordedAt: "2026-09-12", now: now),
-            "You confirmed · 12 Sep"
+            "You confirmed · \(expected)"
         )
     }
 
