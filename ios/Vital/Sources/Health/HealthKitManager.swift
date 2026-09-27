@@ -269,14 +269,19 @@ final class HealthKitManager: ObservableObject {
                     return
                 }
 
-                let totalSeconds = asleep.reduce(0.0) {
-                    $0 + $1.endDate.timeIntervalSince($1.startDate)
+                // Union overlapping intervals so multiple sources covering
+                // the same night (e.g. Apple Watch + a 3rd-party app, or
+                // WHOOP's copy alongside the Watch's own) don't double-count.
+                let intervals = asleep.map {
+                    SleepIntervalMath.Interval(start: $0.startDate, end: $0.endDate)
                 }
-                let totalMinutes = Int(totalSeconds / 60)
+                let totalMinutes = Int(SleepIntervalMath.unionMinutes(intervals).rounded())
+                let bedTime = asleep.map(\.startDate).min()!
+                let wakeTime = asleep.map(\.endDate).max()!
                 continuation.resume(returning: SleepReading(
                     totalMinutes: totalMinutes,
-                    bedTime: asleep.first!.startDate,
-                    wakeTime: asleep.last!.endDate
+                    bedTime: bedTime,
+                    wakeTime: wakeTime
                 ))
             }
             store.execute(query)
