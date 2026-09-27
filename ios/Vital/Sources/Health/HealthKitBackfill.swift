@@ -55,6 +55,7 @@ struct DailyWorkoutData {
     let paceMinPerKm: Double?    // derived from distance + duration
     let elevationGainM: Double?  // meters ascended (from workout metadata)
     let startTime: String?       // ISO-8601 start instant
+    let sourceBundleId: String?  // bundle id of the app that wrote the workout (e.g. "com.apple.health.XXXX.watch")
 }
 
 // MARK: - HealthKitBackfill
@@ -196,11 +197,11 @@ final class HealthKitBackfill {
         // inflate the night (the "11h 42m for a 7h night" bug). Instead we merge
         // overlapping intervals so each real minute of sleep counts exactly once.
         struct Buckets {
-            var asleep: [Interval] = []   // union of all asleep stages → total
-            var core:   [Interval] = []
-            var deep:   [Interval] = []
-            var rem:    [Interval] = []
-            var awake:  [Interval] = []
+            var asleep: [SleepIntervalMath.Interval] = []   // union of all asleep stages → total
+            var core:   [SleepIntervalMath.Interval] = []
+            var deep:   [SleepIntervalMath.Interval] = []
+            var rem:    [SleepIntervalMath.Interval] = []
+            var awake:  [SleepIntervalMath.Interval] = []
         }
 
         var byDay: [Date: Buckets] = [:]
@@ -209,7 +210,7 @@ final class HealthKitBackfill {
             let wakeDay = calendar.startOfDay(for: sample.endDate)
             guard wakeDay >= start, wakeDay <= end else { continue }
 
-            let iv = Interval(start: sample.startDate, end: sample.endDate)
+            let iv = SleepIntervalMath.Interval(start: sample.startDate, end: sample.endDate)
             var b = byDay[wakeDay] ?? Buckets()
 
             switch sample.value {
@@ -231,47 +232,19 @@ final class HealthKitBackfill {
         }
 
         return byDay.map { day, b in
-            let core  = Self.unionMinutes(b.core)
-            let deep  = Self.unionMinutes(b.deep)
-            let rem   = Self.unionMinutes(b.rem)
-            let awake = Self.unionMinutes(b.awake)
+            let core  = SleepIntervalMath.unionMinutes(b.core)
+            let deep  = SleepIntervalMath.unionMinutes(b.deep)
+            let rem   = SleepIntervalMath.unionMinutes(b.rem)
+            let awake = SleepIntervalMath.unionMinutes(b.awake)
             return DailySleepData(
                 day: day,
-                minutes: Int(Self.unionMinutes(b.asleep).rounded()),
+                minutes: Int(SleepIntervalMath.unionMinutes(b.asleep).rounded()),
                 coreMinutes: core  > 0 ? Int(core.rounded())  : nil,
                 deepMinutes: deep  > 0 ? Int(deep.rounded())  : nil,
                 remMinutes:  rem   > 0 ? Int(rem.rounded())   : nil,
                 awakeMinutes: awake > 0 ? Int(awake.rounded()) : nil
             )
         }
-    }
-
-    /// A half-open time interval `[start, end)`.
-    private struct Interval { let start: Date; let end: Date }
-
-    /// Total minutes covered by the union of the given intervals — overlapping
-    /// ranges are counted once, not summed. This is what lets multiple HealthKit
-    /// sources contribute to the same night without inflating the total.
-    private static func unionMinutes(_ intervals: [Interval]) -> Double {
-        let sorted = intervals
-            .filter { $0.end > $0.start }
-            .sorted { $0.start < $1.start }
-        guard let first = sorted.first else { return 0 }
-
-        var totalSeconds = 0.0
-        var curStart = first.start
-        var curEnd = first.end
-        for iv in sorted.dropFirst() {
-            if iv.start > curEnd {
-                totalSeconds += curEnd.timeIntervalSince(curStart)
-                curStart = iv.start
-                curEnd = iv.end
-            } else if iv.end > curEnd {
-                curEnd = iv.end
-            }
-        }
-        totalSeconds += curEnd.timeIntervalSince(curStart)
-        return totalSeconds / 60
     }
 
     /// Fetches workouts started within the trailing `days` days, attributed to
@@ -341,7 +314,8 @@ final class HealthKitBackfill {
                 maxHr: maxHr,
                 paceMinPerKm: paceMinPerKm,
                 elevationGainM: elevationGainM,
-                startTime: Self.iso8601.string(from: workout.startDate)
+                startTime: Self.iso8601.string(from: workout.startDate),
+                sourceBundleId: workout.sourceRevision.source.bundleIdentifier
             )
         }
     }
@@ -437,7 +411,8 @@ final class HealthKitBackfill {
                     maxHr: w.maxHr,
                     paceMinPerKm: w.paceMinPerKm,
                     elevationGainM: w.elevationGainM,
-                    startTime: w.startTime
+                    startTime: w.startTime,
+                    sourceBundleId: w.sourceBundleId
                 )
             }
 

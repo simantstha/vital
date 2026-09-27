@@ -1373,6 +1373,13 @@ struct DailyIngestWorkout: Encodable {
     let paceMinPerKm: Double?
     let elevationGainM: Double?
     let startTime: String?
+    /// Bundle id of the app that wrote the workout to HealthKit (e.g. the
+    /// Apple Watch's health app, or a 3rd-party app like WHOOP's), from
+    /// `HKWorkout.sourceRevision.source.bundleIdentifier`. Used server-side
+    /// to prioritize which source wins when the same session is recorded
+    /// by multiple sources. Additive/optional — the server accepts unknown
+    /// keys, so old app versions omitting this field keep working.
+    let sourceBundleId: String?
 }
 
 private struct DailyIngestRequestBody: Encodable {
