@@ -70,16 +70,11 @@ test('isToolResultOk: log_workout needing clarification ({ok:false}, no "Error" 
   assert.equal(isToolResultOk(noReps), false);
 });
 
-test('isToolResultOk: confirm_fact\'s own not-found reply is a known gap — plain text, not JSON, so it still reads as ok', async () => {
+test('isToolResultOk: confirm_fact\'s own not-found reply is now "Error"-prefixed and not ok', async () => {
   const { isToolResultOk, toolResultSummary, extractMemoryOp } = await activityPromise;
-  // This mirrors executeToolCall's exact confirm_fact not-found branch: a
-  // bare string, never "Error"-prefixed and never valid JSON — the new
-  // JSON-object-with-ok:false rule cannot catch it, unlike resolve_fact and
-  // log_workout above. Documented here rather than silently left untested.
-  const result = 'No pending_fact found with id 11111111-1111-4111-8111-111111111111.';
-  assert.equal(isToolResultOk(result), true);
-  // The gap never fabricates a receipt, though: JSON.parse fails on this
-  // string, so both derived fields stay honestly undefined regardless.
+  // Mirrors executeToolCall's exact confirm_fact not-found branch.
+  const result = 'Error: No pending_fact found with id 11111111-1111-4111-8111-111111111111.';
+  assert.equal(isToolResultOk(result), false);
   assert.equal(toolResultSummary('confirm_fact', { factId: 'x', action: 'confirm' }, result, 'metric'), undefined);
   assert.equal(extractMemoryOp('confirm_fact', { factId: 'x', action: 'confirm' }, result), undefined);
 });

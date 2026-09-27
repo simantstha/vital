@@ -1671,7 +1671,7 @@ export async function executeToolCall(
     );
     return result.ok
       ? JSON.stringify(result)
-      : `No pending_fact found with id ${factId}.`;
+      : `Error: No pending_fact found with id ${factId}.`;
   }
 
   // ── resolve_fact ──────────────────────────────────────────────────────────
