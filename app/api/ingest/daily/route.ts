@@ -205,6 +205,13 @@ export async function POST(request: Request): Promise<NextResponse> {
         },
         async listWorkoutAnalyses(scopedUserId, workoutDates, currentHkUuids) {
           if (workoutDates.length === 0) return [];
+          // Scoped to source='healthkit': a WHOOP row must never surface here
+          // or reconcilePersistedWorkouts would see it "vanish" from a phone
+          // upload that never mentioned it and mark it deleted (see the guard
+          // comment on reconcilePersistedWorkouts in
+          // lib/healthAnalysisReconciliation.ts, and the multi-device-
+          // analyses contract's "HealthKit reconciliation must never touch
+          // WHOOP rows" rule).
           return tx.select({
             hkUuid: schema.workout_analyses.hk_uuid,
             workoutDate: schema.workout_analyses.workout_date,
@@ -212,14 +219,59 @@ export async function POST(request: Request): Promise<NextResponse> {
             status: schema.workout_analyses.status,
             notificationState: schema.workout_analyses.notification_state,
             notificationSentAt: schema.workout_analyses.notification_sent_at,
+            source: schema.workout_analyses.source,
           }).from(schema.workout_analyses).where(and(
             eq(schema.workout_analyses.user_id, scopedUserId),
+            eq(schema.workout_analyses.source, 'healthkit'),
             or(
               inArray(schema.workout_analyses.workout_date, workoutDates),
               currentHkUuids.length > 0
                 ? inArray(schema.workout_analyses.hk_uuid, currentHkUuids)
                 : undefined,
             ),
+          ));
+        },
+        async listWorkoutSessionCandidates(scopedUserId, dayKeys) {
+          if (dayKeys.length === 0) return [];
+          // Source-agnostic (healthkit + whoop) — feeds the same-session
+          // overlap/priority check (lib/analysisSession.ts) only; never used
+          // for the vanished-hkUuid deletion path above.
+          const rows = await tx.select({
+            hkUuid: schema.workout_analyses.hk_uuid,
+            source: schema.workout_analyses.source,
+            inputPayload: schema.workout_analyses.input_payload,
+            startedAt: schema.workout_analyses.started_at,
+            endedAt: schema.workout_analyses.ended_at,
+            notificationState: schema.workout_analyses.notification_state,
+            notificationSentAt: schema.workout_analyses.notification_sent_at,
+          }).from(schema.workout_analyses).where(and(
+            eq(schema.workout_analyses.user_id, scopedUserId),
+            inArray(schema.workout_analyses.workout_date, dayKeys),
+            ne(schema.workout_analyses.status, 'deleted'),
+          ));
+          return rows.map((row) => {
+            const payload = row.inputPayload as Record<string, unknown> | null;
+            const sourceBundleId = payload && typeof payload.sourceBundleId === 'string' ? payload.sourceBundleId : null;
+            return {
+              hkUuid: row.hkUuid,
+              source: row.source as 'healthkit' | 'whoop',
+              sourceBundleId,
+              startedAt: row.startedAt,
+              endedAt: row.endedAt,
+              notified: Boolean(row.notificationSentAt) || row.notificationState === 'sent',
+            };
+          });
+        },
+        async suppressWorkout(scopedUserId, hkUuid, deletedAt) {
+          await tx.update(schema.workout_analyses).set({
+            status: 'deleted',
+            notification_state: 'suppressed',
+            deleted_at: deletedAt,
+            lease_expires_at: null,
+            updated_at: deletedAt,
+          }).where(and(
+            eq(schema.workout_analyses.user_id, scopedUserId),
+            eq(schema.workout_analyses.hk_uuid, hkUuid),
           ));
         },
         async markWorkoutsDeleted(scopedUserId, hkUuids, deletedAt) {
@@ -234,18 +286,24 @@ export async function POST(request: Request): Promise<NextResponse> {
           ));
         },
         async upsertWorkout(scopedUserId, entry) {
+          // source defaults to 'healthkit' at the schema level — this path
+          // (the phone's own ingest) never writes 'whoop' directly.
           await tx.insert(schema.workout_analyses).values({
             user_id: scopedUserId,
             hk_uuid: entry.workout.hkUuid,
             workout_date: entry.workoutDate,
             content_fingerprint: entry.fingerprint,
             input_payload: entry.workout,
+            started_at: entry.startedAt,
+            ended_at: entry.endedAt,
           }).onConflictDoUpdate({
             target: [schema.workout_analyses.user_id, schema.workout_analyses.hk_uuid],
             set: {
               workout_date: entry.workoutDate,
               content_fingerprint: entry.fingerprint,
               input_payload: entry.workout,
+              started_at: entry.startedAt,
+              ended_at: entry.endedAt,
               status: 'pending',
               retry_count: 0,
               next_attempt_at: entry.receivedAt,
@@ -265,6 +323,7 @@ export async function POST(request: Request): Promise<NextResponse> {
             contentFingerprint: schema.sleep_analyses.content_fingerprint,
             notificationState: schema.sleep_analyses.notification_state,
             notificationSentAt: schema.sleep_analyses.notification_sent_at,
+            source: schema.sleep_analyses.source,
           }).from(schema.sleep_analyses).where(and(
             eq(schema.sleep_analyses.user_id, scopedUserId),
             inArray(schema.sleep_analyses.wake_date, wakeDates),
@@ -283,6 +342,11 @@ export async function POST(request: Request): Promise<NextResponse> {
             set: {
               content_fingerprint: entry.fingerprint,
               input_payload: entry.sleep,
+              // Always 'healthkit' here — reconcileAnalysisIngest guards this
+              // call from ever running against a wake_date whose persisted
+              // row is already source='whoop' ("WHOOP owns the night"), so
+              // this only ever (re)asserts the default for a healthkit row.
+              source: 'healthkit',
               analyze_after: entry.analyzeAfter,
               next_attempt_at: entry.analyzeAfter,
               status: 'pending',

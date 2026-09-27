@@ -103,10 +103,10 @@ export async function POST(request: Request): Promise<NextResponse> {
     return NextResponse.json({ error: 'Malformed payload.' }, { status: 400 });
   }
 
-  let connection: { id: string; user_id: string } | undefined;
+  let connection: { id: string; user_id: string; last_synced_at: Date | null } | undefined;
   try {
     const rows = await db
-      .select({ id: schema.whoop_connections.id, user_id: schema.whoop_connections.user_id })
+      .select({ id: schema.whoop_connections.id, user_id: schema.whoop_connections.user_id, last_synced_at: schema.whoop_connections.last_synced_at })
       .from(schema.whoop_connections)
       .where(eq(schema.whoop_connections.whoop_user_id, whoopUserId))
       .limit(1);
@@ -136,6 +136,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   // response, since WHOOP wants a fast 2XX and retries on timeout.
   const connectionId = connection.id;
   const userId = connection.user_id;
+  const lastSyncedAt = connection.last_synced_at;
   void (async () => {
     let timezone: string | null = null;
     try {
@@ -155,7 +156,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     const repository = createWhoopSyncRepository(db, schema);
 
     await runWhoopSync(
-      { connectionId, userId, timezone },
+      { connectionId, userId, timezone, lastSyncedAt },
       tokenStore,
       repository,
       windowStart,
