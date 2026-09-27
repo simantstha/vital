@@ -60,6 +60,83 @@ final class ProactiveNotificationsTests: XCTestCase {
         XCTAssertEqual(value.result.nextSteps, ["Hydrate"])
     }
 
+    /// The exact `context` shape #248 (`lib/analysisContext.ts`) sends for a
+    /// workout analysis (analysis-v2-contract.md §1) — pins that
+    /// `AnalysisContext`'s custom `Decodable` accepts every sub-object,
+    /// including `effort.avgPct` as a 0...1 fraction (not a percentage).
+    func testAnalysisContextDecodesWorkoutShape() throws {
+        let json = #"""
+        {
+          "id":"8ba804f0-68b2-4d36-98bb-90c9eea911a1","date":"2026-07-12",
+          "result":{"headline":"h","shortInsight":"s","narrative":"n","observations":[],"nextSteps":[]},
+          "createdAt":"2026-07-12T15:00:00.000Z",
+          "context": {
+            "usual": { "sessions": 6, "distanceM": 4800, "durationMin": 29, "paceMinPerKm": 6.1, "avgHr": 145 },
+            "paceHistory": { "previous": [6.4, 6.2, 6.1, 6.3, 6, 6.2], "rank": 2 },
+            "effort": { "restingHr": 52, "maxHr": 182, "avgPct": 0.738, "zone": "steady" },
+            "goingIn": { "sleepMinutes": 412, "hrv": { "value": 61, "unit": "ms", "vsNormal": "normal", "source": "apple" }, "daysSinceLastSameType": 2 },
+            "nextMorning": { "hrv": { "value": 58, "unit": "ms", "vsNormal": "below", "source": "apple" }, "restingHr": { "value": 54, "unit": "bpm", "vsNormal": "normal", "source": "apple" } }
+          }
+        }
+        """#
+        let value = try JSONDecoder.vital.decode(AnalysisResponse.self, from: Data(json.utf8))
+        let context = try XCTUnwrap(value.context)
+        XCTAssertEqual(context.usual?.sessions, 6)
+        XCTAssertEqual(context.usual?.distanceM, 4800)
+        XCTAssertNil(context.sleepUsual, "a workout context must not also decode a sleepUsual from the shared 'usual' key")
+        XCTAssertEqual(context.paceHistory?.previous, [6.4, 6.2, 6.1, 6.3, 6, 6.2])
+        XCTAssertEqual(context.paceHistory?.rank, 2)
+        XCTAssertEqual(context.effort?.avgPct, 0.738)
+        XCTAssertEqual(context.effort?.zone, "steady")
+        XCTAssertEqual(context.goingIn?.sleepMinutes, 412)
+        XCTAssertEqual(context.goingIn?.hrv?.vsNormal, "normal")
+        XCTAssertEqual(context.goingIn?.daysSinceLastSameType, 2)
+        XCTAssertEqual(context.nextMorning?.hrv?.vsNormal, "below")
+        XCTAssertEqual(context.nextMorning?.restingHr?.value, 54)
+    }
+
+    /// Same shared-key ambiguity, sleep side — `usual` here is
+    /// {nights, minutes, stages}, not the workout shape.
+    func testAnalysisContextDecodesSleepShape() throws {
+        let json = #"""
+        {
+          "id":"8ba804f0-68b2-4d36-98bb-90c9eea911a2","date":"2026-07-12",
+          "result":{"headline":"h","shortInsight":"s","narrative":"n","observations":[],"nextSteps":[]},
+          "createdAt":"2026-07-12T15:00:00.000Z",
+          "context": {
+            "goalMinutes": 480,
+            "usual": { "nights": 14, "minutes": 440, "stages": { "core": 262, "deep": 70, "rem": 92, "awake": 14 } },
+            "week": [ { "date": "2026-07-06", "minutes": 420 }, { "date": "2026-07-12", "minutes": 348 } ],
+            "timing": { "bedTime": "2026-07-11T23:52:00.000Z", "wakeTime": "2026-07-12T06:10:00.000Z" },
+            "beforeBed": { "lastWorkoutEndedAt": "2026-07-11T21:40:00.000Z" },
+            "thisMorning": { "hrv": { "value": 48, "unit": "ms", "vsNormal": "below", "source": "apple" } }
+          }
+        }
+        """#
+        let value = try JSONDecoder.vital.decode(AnalysisResponse.self, from: Data(json.utf8))
+        let context = try XCTUnwrap(value.context)
+        XCTAssertNil(context.usual, "a sleep context must not also decode a workout usual from the shared 'usual' key")
+        XCTAssertEqual(context.goalMinutes, 480)
+        XCTAssertEqual(context.sleepUsual?.nights, 14)
+        XCTAssertEqual(context.sleepUsual?.stages?.deep, 70)
+        XCTAssertEqual(context.week?.count, 2)
+        XCTAssertEqual(context.week?.last?.minutes, 348)
+        XCTAssertNotNil(context.timing?.bedTime)
+        XCTAssertNotNil(context.beforeBed?.lastWorkoutEndedAt)
+        XCTAssertNil(context.beforeBed?.lastMealAt)
+        XCTAssertEqual(context.thisMorning?.hrv?.value, 48)
+        XCTAssertNil(context.thisMorning?.restingHr)
+    }
+
+    /// A response with no `context` key at all (older API / a kind that
+    /// never carries one) must still decode — `context` stays nil rather
+    /// than failing the whole response.
+    func testAnalysisResponseWithoutContextDecodesContextAsNil() throws {
+        let data = Data(#"{"id":"8ba804f0-68b2-4d36-98bb-90c9eea911a3","date":"2026-07-12","result":{"headline":"h","shortInsight":"s","narrative":"n","observations":[],"nextSteps":[]},"createdAt":"2026-07-12T15:00:00.000Z"}"#.utf8)
+        let value = try JSONDecoder.vital.decode(AnalysisResponse.self, from: data)
+        XCTAssertNil(value.context)
+    }
+
     func testPushRouteParsesAnalysisAndMorningBriefPayloads() {
         let id = "8ba804f0-68b2-4d36-98bb-90c9eea911a1"
         XCTAssertEqual(PushRoute(userInfo: ["type": "workout_analysis", "id": id, "deepLink": "vital://workout-analysis/\(id)"]), .workoutAnalysis(id))

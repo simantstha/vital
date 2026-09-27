@@ -83,6 +83,168 @@ struct AnalysisMetrics: Codable, Equatable {
     let stages: SleepStages?
 }
 
+/// `vsNormal`/comparison-tone shape shared by every recovery-metric reading
+/// in `AnalysisContext` (goingIn/nextMorning/thisMorning HRV and resting HR).
+/// `vsNormal` is only ever present once the metric's 30-day baseline is
+/// established server-side — its absence, not a `"normal"` value, is how the
+/// UI knows to omit the comparison chip.
+struct AnalysisRecoveryReading: Codable, Equatable {
+    let value: Double
+    let unit: String       // "ms" | "bpm"
+    let vsNormal: String?  // "above" | "normal" | "below"
+    let source: String     // "whoop" | "apple"
+}
+
+/// Additive, fully-optional context computed server-side at request time
+/// (analysis-v2-contract.md §1) — every field, at every nesting level, is
+/// optional so a section with no underlying data simply decodes to `nil`
+/// and its UI section hides rather than showing fabricated numbers.
+struct AnalysisContext: Codable, Equatable {
+
+    // MARK: Workout
+
+    struct Usual: Codable, Equatable {
+        let sessions: Int
+        let distanceM: Double?
+        let durationMin: Double?
+        let paceMinPerKm: Double?
+        let avgHr: Double?
+    }
+
+    struct PaceHistory: Codable, Equatable {
+        let previous: [Double] // min/km, oldest → newest
+        let rank: Int          // 1 = fastest among previous + this one
+    }
+
+    struct Effort: Codable, Equatable {
+        let restingHr: Double
+        let maxHr: Double
+        let avgPct: Double
+        let zone: String // "easy" | "steady" | "hard" | "max"
+    }
+
+    struct GoingIn: Codable, Equatable {
+        let sleepMinutes: Double?
+        let hrv: AnalysisRecoveryReading?
+        let daysSinceLastSameType: Int?
+    }
+
+    struct NextMorning: Codable, Equatable {
+        let hrv: AnalysisRecoveryReading?
+        let restingHr: AnalysisRecoveryReading?
+    }
+
+    // MARK: Sleep
+
+    struct SleepUsual: Codable, Equatable {
+        struct Stages: Codable, Equatable {
+            let core: Double?
+            let deep: Double?
+            let rem: Double?
+            let awake: Double?
+        }
+        let nights: Int
+        let minutes: Double
+        let stages: Stages?
+    }
+
+    struct WeekNight: Codable, Equatable {
+        let date: String // 'YYYY-MM-DD'
+        let minutes: Double
+    }
+
+    struct Timing: Codable, Equatable {
+        let bedTime: Date
+        let wakeTime: Date
+    }
+
+    struct BeforeBed: Codable, Equatable {
+        let lastWorkoutEndedAt: Date?
+        let lastMealAt: Date?
+    }
+
+    struct ThisMorning: Codable, Equatable {
+        let hrv: AnalysisRecoveryReading?
+        let restingHr: AnalysisRecoveryReading?
+    }
+
+    // Workout fields
+    let usual: Usual?
+    let paceHistory: PaceHistory?
+    let effort: Effort?
+    let goingIn: GoingIn?
+    let nextMorning: NextMorning?
+
+    // Sleep fields
+    let goalMinutes: Int?
+    let sleepUsual: SleepUsual?
+    let week: [WeekNight]?
+    let timing: Timing?
+    let beforeBed: BeforeBed?
+    let thisMorning: ThisMorning?
+
+    private enum CodingKeys: String, CodingKey {
+        case usual, paceHistory, effort, goingIn, nextMorning
+        case goalMinutes
+        case sleepUsual = "usual" // sleep's `usual` shares the JSON key with workout's — see decoder below
+        case week, timing, beforeBed, thisMorning
+    }
+
+    /// Workout's `usual` (session count + distance/duration/pace/avgHr median)
+    /// and sleep's `usual` (nights + minutes + stage median) are two different
+    /// shapes sharing the same top-level JSON key `usual` — a response only
+    /// ever carries one or the other, never both, so both are decoded from
+    /// the same key and whichever shape matches wins.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        usual = try? c.decodeIfPresent(Usual.self, forKey: .usual)
+        paceHistory = try c.decodeIfPresent(PaceHistory.self, forKey: .paceHistory)
+        effort = try c.decodeIfPresent(Effort.self, forKey: .effort)
+        goingIn = try c.decodeIfPresent(GoingIn.self, forKey: .goingIn)
+        nextMorning = try c.decodeIfPresent(NextMorning.self, forKey: .nextMorning)
+        goalMinutes = try c.decodeIfPresent(Int.self, forKey: .goalMinutes)
+        sleepUsual = try? c.decodeIfPresent(SleepUsual.self, forKey: .sleepUsual)
+        week = try c.decodeIfPresent([WeekNight].self, forKey: .week)
+        timing = try c.decodeIfPresent(Timing.self, forKey: .timing)
+        beforeBed = try c.decodeIfPresent(BeforeBed.self, forKey: .beforeBed)
+        thisMorning = try c.decodeIfPresent(ThisMorning.self, forKey: .thisMorning)
+    }
+
+    /// Memberwise init retained for fixtures/tests building a context
+    /// literally rather than decoding it from JSON.
+    init(usual: Usual? = nil, paceHistory: PaceHistory? = nil, effort: Effort? = nil,
+         goingIn: GoingIn? = nil, nextMorning: NextMorning? = nil,
+         goalMinutes: Int? = nil, sleepUsual: SleepUsual? = nil, week: [WeekNight]? = nil,
+         timing: Timing? = nil, beforeBed: BeforeBed? = nil, thisMorning: ThisMorning? = nil) {
+        self.usual = usual
+        self.paceHistory = paceHistory
+        self.effort = effort
+        self.goingIn = goingIn
+        self.nextMorning = nextMorning
+        self.goalMinutes = goalMinutes
+        self.sleepUsual = sleepUsual
+        self.week = week
+        self.timing = timing
+        self.beforeBed = beforeBed
+        self.thisMorning = thisMorning
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encodeIfPresent(usual, forKey: .usual)
+        try c.encodeIfPresent(paceHistory, forKey: .paceHistory)
+        try c.encodeIfPresent(effort, forKey: .effort)
+        try c.encodeIfPresent(goingIn, forKey: .goingIn)
+        try c.encodeIfPresent(nextMorning, forKey: .nextMorning)
+        try c.encodeIfPresent(goalMinutes, forKey: .goalMinutes)
+        try c.encodeIfPresent(sleepUsual, forKey: .sleepUsual)
+        try c.encodeIfPresent(week, forKey: .week)
+        try c.encodeIfPresent(timing, forKey: .timing)
+        try c.encodeIfPresent(beforeBed, forKey: .beforeBed)
+        try c.encodeIfPresent(thisMorning, forKey: .thisMorning)
+    }
+}
+
 struct AnalysisResponse: Codable, Equatable {
     let id: String
     let date: String
@@ -90,6 +252,10 @@ struct AnalysisResponse: Codable, Equatable {
     /// Absent in older API responses; the metrics card is hidden when nil.
     let metrics: AnalysisMetrics?
     let createdAt: Date
+    /// Additive (analysis-v2-contract.md §1) — nil for older responses or
+    /// when the server has nothing to add; every `AnalysisView` section
+    /// backed by it hides itself rather than showing fabricated data.
+    let context: AnalysisContext?
 }
 
 // MARK: - Notification inbox wire types

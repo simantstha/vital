@@ -266,7 +266,17 @@ enum FixtureData {
         case ("GET", "/api/trends/markers"):
             return (200, jsonData(trendsMarkers(scenario: scenario, query: query)))
         case ("GET", "/api/logs"):
-            return (200, jsonData(logs(profile)))
+            return (200, jsonData(logs(profile, scenario: scenario)))
+        case ("GET", let p) where p.hasPrefix("/api/workout-analyses/"):
+            guard let data = workoutAnalysisFixture(id: String(p.dropFirst("/api/workout-analyses/".count))) else {
+                return (404, jsonData(["error": "no fixture workout analysis for this id"]))
+            }
+            return (200, jsonData(data))
+        case ("GET", let p) where p.hasPrefix("/api/sleep-analyses/"):
+            guard let data = sleepAnalysisFixture(id: String(p.dropFirst("/api/sleep-analyses/".count))) else {
+                return (404, jsonData(["error": "no fixture sleep analysis for this id"]))
+            }
+            return (200, jsonData(data))
         case ("GET", "/api/diet-goal"):
             return (200, jsonData(dietGoal(profile)))
         case ("GET", "/api/meals/log"):
@@ -320,6 +330,18 @@ enum FixtureData {
 
     private static func isoDaysAgo(_ days: Int) -> String {
         let date = Calendar.current.date(byAdding: .day, value: -days, to: Date()) ?? Date()
+        return isoFormatter.string(from: date)
+    }
+
+    /// `daysAgo` days before today, at a specific local hour/minute — for
+    /// analysis-fixture timestamps (workout start times, sleep bed/wake
+    /// times) that need to read as a believable time of day rather than
+    /// "now".
+    private static func isoAt(daysAgo: Int, hour: Int, minute: Int) -> String {
+        var calendar = Calendar.current
+        calendar.timeZone = .current
+        let day = calendar.date(byAdding: .day, value: -daysAgo, to: Date()) ?? Date()
+        let date = calendar.date(bySettingHour: hour, minute: minute, second: 0, of: day) ?? day
         return isoFormatter.string(from: date)
     }
 
@@ -832,7 +854,7 @@ enum FixtureData {
 
     // MARK: - GET /api/logs → LogsResponse
 
-    private static func logs(_ profile: Profile) -> [String: Any] {
+    private static func logs(_ profile: Profile, scenario: FixtureMode.Scenario) -> [String: Any] {
         var items: [[String: Any]] = []
 
         if let firstMeal = profile.meals.first {
@@ -852,7 +874,18 @@ enum FixtureData {
             ])
         }
 
-        if let workoutTitle = profile.workoutTitle, let workoutKm = profile.workoutKm {
+        // Every established scenario carries a workout row and a sleep row
+        // whose `analysisId` resolves to a fixture `/api/workout-analyses/{id}`
+        // and `/api/sleep-analyses/{id}` response with a full `context`
+        // (analysis-v2-contract.md §2) — tapping either opens the redesigned
+        // `AnalysisView`. `.muscle` points its workout row at the routine
+        // (no observations/nextSteps) variant instead of the notable-run one,
+        // so both fixture shapes stay reachable through the app, not just
+        // through unit tests.
+        if profile.established {
+            let workoutAnalysisId = scenario == .muscle ? "fixture-workout-analysis-routine" : "fixture-workout-analysis"
+            let workoutTitle = scenario == .muscle ? "Easy 6k" : (profile.workoutTitle ?? "Morning run")
+            let workoutKm = scenario == .muscle ? 6.1 : (profile.workoutKm ?? 6.2)
             items.append([
                 "id": "fixture-log-workout",
                 "type": "workout_completed",
@@ -865,7 +898,21 @@ enum FixtureData {
                 "kcal": NSNull(),
                 "km": workoutKm,
                 "sleepMs": NSNull(),
-                "analysisId": NSNull(),
+                "analysisId": workoutAnalysisId,
+            ])
+            items.append([
+                "id": "fixture-log-sleep",
+                "type": "sleep_session",
+                "timestamp": isoNow,
+                "hasExactTime": true,
+                "dayKey": NSNull(),
+                "title": "Sleep",
+                "subtitle": "5h 48m last night",
+                "imageThumb": NSNull(),
+                "kcal": NSNull(),
+                "km": NSNull(),
+                "sleepMs": 348.0 * 60 * 1000,
+                "analysisId": "fixture-sleep-analysis",
             ])
         }
 
@@ -878,6 +925,128 @@ enum FixtureData {
         return [
             "items": items,
             "dietByDay": [dayString(0): dayIntake],
+        ]
+    }
+
+    // MARK: - GET /api/workout-analyses/{id} & /api/sleep-analyses/{id} → AnalysisResponse
+    //
+    // Mirrors `AnalysisResponse`/`AnalysisContext` in
+    // Sources/Core/ProactiveNotifications.swift exactly (analysis-v2-contract.md
+    // §1/§2) — every `context` sub-object here is realistic, mutually
+    // consistent data matching the X1 (notable run)/X3 (routine run)/Y1
+    // (rough night) mockups, not placeholder numbers.
+
+    private static func workoutAnalysisFixture(id: String) -> [String: Any]? {
+        switch id {
+        case "fixture-workout-analysis": return notableRunAnalysis()
+        case "fixture-workout-analysis-routine": return routineRunAnalysis()
+        default: return nil
+        }
+    }
+
+    private static func sleepAnalysisFixture(id: String) -> [String: Any]? {
+        switch id {
+        case "fixture-sleep-analysis": return roughNightAnalysis()
+        default: return nil
+        }
+    }
+
+    /// X1 mockup: "Your fastest 10k since June" — a full `context`, every
+    /// section populated.
+    private static func notableRunAnalysis() -> [String: Any] {
+        let metrics: [String: Any] = [
+            "type": "Running", "durationMin": 52.23, "kcal": 612.0,
+            "distanceM": 10_200.0, "avgHr": 158.0, "maxHr": 176.0,
+            "paceMinPerKm": 5.1167, "elevationGainM": 42.0,
+            "startTime": isoAt(daysAgo: 0, hour: 7, minute: 41),
+        ]
+        let context: [String: Any] = [
+            "usual": ["sessions": 8, "distanceM": 8_800.0, "durationMin": 44.0, "paceMinPerKm": 5.3167, "avgHr": 148.0],
+            "paceHistory": ["previous": [5.35, 5.45, 5.40, 5.50, 5.30, 5.55, 5.42], "rank": 1],
+            "effort": ["restingHr": 52.0, "maxHr": 188.0, "avgPct": 0.78, "zone": "hard"],
+            "goingIn": [
+                "sleepMinutes": 490.0,
+                "hrv": ["value": 64.0, "unit": "ms", "vsNormal": "above", "source": "apple"],
+                "daysSinceLastSameType": 3,
+            ],
+            "nextMorning": [
+                "hrv": ["value": 66.0, "unit": "ms", "vsNormal": "above", "source": "apple"],
+                "restingHr": ["value": 50.0, "unit": "bpm", "vsNormal": "below", "source": "apple"],
+            ],
+        ]
+        let result: [String: Any] = [
+            "headline": "Your fastest 10k since June",
+            "shortInsight": "You held a hard effort the whole way and didn't fade at the end.",
+            "narrative": "This is the run your training has been building toward. The long, easy weeks are paying off — you went faster without your heart rate climbing at the end.",
+            "observations": ["You were well rested going in, and it showed: no fade in the last third."],
+            "nextSteps": ["Easy 30 minutes on Monday. Keep it conversational — this was a big one."],
+        ]
+        return [
+            "id": "fixture-workout-analysis", "date": dayString(0),
+            "result": result, "metrics": metrics, "createdAt": isoNow, "context": context,
+        ]
+    }
+
+    /// X3 mockup: "An easy run, right on your normal" — a routine session
+    /// with no observations/nextSteps and an empty narrative, so
+    /// `AnalysisView` hides the Coach's-take and Next-step cards entirely,
+    /// matching the mockup's absence of both.
+    private static func routineRunAnalysis() -> [String: Any] {
+        let metrics: [String: Any] = [
+            "type": "Running", "durationMin": 35.67, "kcal": 340.0,
+            "distanceM": 6_100.0, "avgHr": 131.0, "maxHr": 142.0,
+            "paceMinPerKm": 5.85, "elevationGainM": 12.0,
+            "startTime": isoAt(daysAgo: 0, hour: 6, minute: 52),
+        ]
+        let context: [String: Any] = [
+            "usual": ["sessions": 8, "distanceM": 6_050.0, "durationMin": 35.0, "paceMinPerKm": 5.83, "avgHr": 129.0],
+            "paceHistory": ["previous": [5.60, 5.70, 5.62, 5.75, 5.55, 5.80, 5.65], "rank": 6],
+            "effort": ["restingHr": 52.0, "maxHr": 188.0, "avgPct": 0.58, "zone": "easy"],
+        ]
+        let result: [String: Any] = [
+            "headline": "An easy run, right on your normal",
+            "shortInsight": "Nothing to change — this is what easy days should look like.",
+            "narrative": "",
+            "observations": [String](),
+            "nextSteps": [String](),
+        ]
+        return [
+            "id": "fixture-workout-analysis-routine", "date": dayString(0),
+            "result": result, "metrics": metrics, "createdAt": isoNow, "context": context,
+        ]
+    }
+
+    /// Y1 mockup: "Short night, light on deep sleep" — a full `context`,
+    /// every section populated (rough night, tone-flagged stages).
+    private static func roughNightAnalysis() -> [String: Any] {
+        let metrics: [String: Any] = [
+            "minutes": 348.0,
+            "stages": ["core": 242.0, "deep": 42.0, "rem": 64.0, "awake": 38.0],
+        ]
+        let week: [[String: Any]] = (0...6).reversed().map { offset -> [String: Any] in
+            ["date": dayString(offset), "minutes": offset == 0 ? 348.0 : Double(390 + offset * 6)]
+        }
+        let context: [String: Any] = [
+            "goalMinutes": 450,
+            "usual": ["nights": 14, "minutes": 440.0, "stages": ["core": 262.0, "deep": 70.0, "rem": 92.0, "awake": 14.0]],
+            "week": week,
+            "timing": ["bedTime": isoAt(daysAgo: 1, hour: 23, minute: 52), "wakeTime": isoAt(daysAgo: 0, hour: 6, minute: 10)],
+            "beforeBed": ["lastWorkoutEndedAt": isoAt(daysAgo: 1, hour: 21, minute: 40), "lastMealAt": isoAt(daysAgo: 1, hour: 22, minute: 15)],
+            "thisMorning": [
+                "hrv": ["value": 48.0, "unit": "ms", "vsNormal": "below", "source": "apple"],
+                "restingHr": ["value": 58.0, "unit": "bpm", "vsNormal": "above", "source": "apple"],
+            ],
+        ]
+        let result: [String: Any] = [
+            "headline": "Short night, light on deep sleep",
+            "shortInsight": "You got about an hour and a half less than usual, and woke up more.",
+            "narrative": "One short night won't undo anything. The late hard run is the part worth moving — it's the second time this month a late session came before a night like this.",
+            "observations": [String](),
+            "nextSteps": ["Swap today's intervals for an easy 30 min. Go hard again tomorrow if your HRV is back in range."],
+        ]
+        return [
+            "id": "fixture-sleep-analysis", "date": dayString(0),
+            "result": result, "metrics": metrics, "createdAt": isoNow, "context": context,
         ]
     }
 

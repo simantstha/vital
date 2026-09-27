@@ -61,4 +61,29 @@ final class SleepIntervalMathTests: XCTestCase {
         let zero = interval(100, 100)
         XCTAssertEqual(SleepIntervalMath.unionMinutes([real, zero]), 60, accuracy: 0.001)
     }
+
+    // MARK: - boundingRange
+
+    func testBoundingRangeEmptyInputReturnsNil() {
+        XCTAssertNil(SleepIntervalMath.boundingRange([]))
+    }
+
+    func testBoundingRangeSingleInterval() {
+        let iv = interval(0, 420)
+        let range = SleepIntervalMath.boundingRange([iv])
+        XCTAssertEqual(range?.start, minutes(0))
+        XCTAssertEqual(range?.end, minutes(420))
+    }
+
+    /// The overall bedTime/wakeTime spans the earliest start and latest end
+    /// even across overlapping, out-of-order, multi-source intervals — unlike
+    /// `unionMinutes`, gaps between disjoint intervals don't shrink the range.
+    func testBoundingRangeAcrossMultipleOverlappingIntervals() {
+        let watch = interval(10, 430)
+        let thirdParty = interval(0, 420)
+        let napGap = interval(500, 520)
+        let range = SleepIntervalMath.boundingRange([watch, thirdParty, napGap])
+        XCTAssertEqual(range?.start, minutes(0))
+        XCTAssertEqual(range?.end, minutes(520))
+    }
 }

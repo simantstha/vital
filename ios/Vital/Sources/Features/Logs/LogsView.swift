@@ -217,6 +217,10 @@ private extension LogsView {
                                     LogEntryRow(item: item, isFirst: index == 0)
                                 }
                                 .buttonStyle(.plain)
+                                // Stable hooks for the screenshot harness — it
+                                // taps these rather than matching on row text,
+                                // which varies per fixture scenario.
+                                .accessibilityIdentifier(item.type == "workout_completed" ? "logs.workoutRow" : "logs.sleepRow")
                             } else {
                                 LogEntryRow(item: item, isFirst: index == 0)
                             }
