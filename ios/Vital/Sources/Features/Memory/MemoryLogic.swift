@@ -118,8 +118,12 @@ enum MemoryLogic {
     // MARK: - Header count sentence
 
     /// "What I know about you — N things, only visible to you." — singular
-    /// "1 thing" for a count of exactly one.
+    /// "1 thing" for a count of exactly one, and "Nothing yet — only visible
+    /// to you." when factCount is 0.
     static func headerSubline(factCount: Int) -> String {
+        if factCount == 0 {
+            return "Nothing yet — only visible to you."
+        }
         let noun = factCount == 1 ? "thing" : "things"
         return "What I know about you — \(factCount) \(noun), only visible to you."
     }

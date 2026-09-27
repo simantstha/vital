@@ -162,14 +162,11 @@ struct TrendsMetricRowView: View {
         }
     }
 
-    /// Sleep keeps the app's established indigo identity regardless of
-    /// verdict; every other metric mirrors its moved direction's color —
-    /// same rule `MetricTileView` used, so the row and its accessibility
-    /// label never disagree about what "above normal" looks like.
+    /// Sparkline tint mirrors metric direction's color, using neutral grey
+    /// for all metrics in normal/noData states — same rule `MetricTileView`
+    /// used, so the row and its accessibility label never disagree about
+    /// what "above normal" looks like.
     private func sparklineTint(spec: MetricSpec, verdict: Verdict) -> Color {
-        if spec.key == "sleep_minutes" || spec.key == "whoop_sleep_min" {
-            return Theme.Colors.indigo
-        }
         switch verdict {
         case .above: return TrendDirection.resolve(spec.polarity, rising: true).isGood ? Theme.Colors.positive : Theme.Colors.caution
         case .below: return TrendDirection.resolve(spec.polarity, rising: false).isGood ? Theme.Colors.positive : Theme.Colors.caution

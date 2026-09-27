@@ -140,12 +140,15 @@ final class MemoryLogicTests: XCTestCase {
 
     // MARK: - headerSubline
 
+    func testHeaderSublineUsesNothingYetForZero() {
+        XCTAssertEqual(MemoryLogic.headerSubline(factCount: 0), "Nothing yet — only visible to you.")
+    }
+
     func testHeaderSublineUsesSingularForOne() {
         XCTAssertEqual(MemoryLogic.headerSubline(factCount: 1), "What I know about you — 1 thing, only visible to you.")
     }
 
-    func testHeaderSublineUsesPluralForZeroAndMany() {
-        XCTAssertEqual(MemoryLogic.headerSubline(factCount: 0), "What I know about you — 0 things, only visible to you.")
+    func testHeaderSublineUsesPluralForMany() {
         XCTAssertEqual(MemoryLogic.headerSubline(factCount: 14), "What I know about you — 14 things, only visible to you.")
     }
 
