@@ -1008,9 +1008,13 @@ final class FakeCoachAPI: CoachAPIProviding {
 
     var resolvedPendingFacts: [(id: String, action: String)] = []
     var resolvePendingFactFailure: Error?
-    func resolvePendingFact(id: String, action: String) async throws {
+    /// The `nodeId` a `confirm` should report back — set per-test to
+    /// exercise both "promoted a fact" and "nothing to promote" (`nil`).
+    var resolvePendingFactNodeId: String? = nil
+    func resolvePendingFact(id: String, action: String) async throws -> String? {
         resolvedPendingFacts.append((id: id, action: action))
         if let resolvePendingFactFailure { throw resolvePendingFactFailure }
+        return resolvePendingFactNodeId
     }
 
     private func stream(

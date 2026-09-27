@@ -275,14 +275,29 @@ struct AssistantTurn: Identifiable, Equatable {
         }
     }
 
-    /// Undo on a "Noted: … · Undo" chip, or Remember/Not now resolving a
-    /// `MemoryProposalCard` — rewrites just the matching row's memory op in
-    /// place (e.g. `saved` → `removed` after a successful undo). No-op if no
-    /// row's `memory.factId` matches.
+    /// Undo on a "Noted: … · Undo" chip — rewrites just the matching row's
+    /// memory op in place (`saved` → `removed`), keeping its `factId`
+    /// unchanged. No-op if no row's `memory.factId` matches.
     mutating func updateMemoryOp(factId: String, newOp: CoachMemoryOpKind) {
         guard let idx = toolCalls.firstIndex(where: { $0.memory?.factId == factId }) else { return }
         guard let current = toolCalls[idx].memory else { return }
         toolCalls[idx].memory = CoachMemoryOp(op: newOp, text: current.text, factId: current.factId)
+    }
+
+    /// "Remember" resolving a `MemoryProposalCard` — looks the row up by the
+    /// PENDING fact's id (`pendingFactId`, what the card's Remember/Not now
+    /// buttons are keyed on) and rewrites it to `saved` under the id the
+    /// confirm actually promoted, `newFactId`. These are two different ids
+    /// for the same row (`app/api/pending-facts/resolve/route.ts` promotes
+    /// the pending fact into a brand-new `nodes` row and returns that row's
+    /// id as `nodeId`) — the pending id is never a valid
+    /// `APIClient.undoMemoryFact(id:)` target, so it must not survive onto
+    /// the saved chip. `newFactId: nil` (nothing was promoted) leaves the
+    /// row with no factId at all, which hides Undo.
+    mutating func confirmMemoryOp(pendingFactId: String, newFactId: String?) {
+        guard let idx = toolCalls.firstIndex(where: { $0.memory?.factId == pendingFactId }) else { return }
+        guard let current = toolCalls[idx].memory else { return }
+        toolCalls[idx].memory = CoachMemoryOp(op: .saved, text: current.text, factId: newFactId)
     }
 
     /// "Not now" on a `MemoryProposalCard` — the row itself is removed
@@ -1549,15 +1564,19 @@ final class CoachViewModel: ObservableObject {
     /// "Remember" on a `MemoryProposalCard` — confirms the pending fact
     /// through the existing pending-facts API and turns the card into a
     /// "Noted: …" chip in place (no fresh SSE event fires for this; it's a
-    /// pure client action against the pending fact's id).
+    /// pure client action against the pending fact's id). The endpoint
+    /// promotes the pending fact into a brand-new fact and returns ITS id as
+    /// `nodeId` — that (not the pending fact's own `factId`) is what
+    /// `APIClient.undoMemoryFact(id:)` accepts, so the resulting chip's Undo
+    /// is keyed on `nodeId`, and hidden entirely when `nodeId` is `nil`.
     func confirmMemoryProposal(factId: String) {
         guard let turnId = turnId(containingMemoryFactId: factId) else { return }
         Task {
             do {
-                try await api.resolvePendingFact(id: factId, action: "confirm")
+                let nodeId = try await api.resolvePendingFact(id: factId, action: "confirm")
                 withAnimation(Theme.Motion.standard) {
                     mutateTurn(turnId, persona: activePersona) { turn in
-                        turn.updateMemoryOp(factId: factId, newOp: .saved)
+                        turn.confirmMemoryOp(pendingFactId: factId, newFactId: nodeId)
                     }
                 }
             } catch {

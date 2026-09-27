@@ -390,7 +390,15 @@ struct APIClient {
         try await get("/api/pending-facts")
     }
 
-    func resolvePendingFact(id: String, action: String) async throws {
+    /// Confirms or dismisses a pending fact. Returns the newly-promoted
+    /// fact's `nodeId` on a `confirm` that actually promoted one (see
+    /// `app/api/pending-facts/resolve/route.ts`) — `nil` on `reject`, or on a
+    /// `confirm` with nothing to promote. This is the ONLY id
+    /// `APIClient.undoMemoryFact(id:)` accepts for a fact confirmed this way;
+    /// the pending fact's own `id` (this call's `id` parameter) is a
+    /// different row and is never a valid undo target.
+    @discardableResult
+    func resolvePendingFact(id: String, action: String) async throws -> String? {
         guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/pending-facts/resolve") else {
             throw APIError.invalidURL
         }
@@ -400,8 +408,10 @@ struct APIClient {
         request.timeoutInterval = 10
         struct Body: Encodable { let id: String; let action: String }
         request.httpBody = try encoder.encode(Body(id: id, action: action))
-        let (_, response) = try await session.data(for: request)
+        let (data, response) = try await session.data(for: request)
         try validate(response)
+        struct ResolveResponse: Decodable { let nodeId: String? }
+        return (try? decoder.decode(ResolveResponse.self, from: data))?.nodeId
     }
 
     /// `POST /api/memory/facts/{factId}/undo` — chat-activity-contract.md §2.
@@ -2121,7 +2131,11 @@ protocol MemoryAPIProviding {
     func fetchMemory() async throws -> MemoryResponse
     func fetchEntityDocument(id: String) async throws -> EntityDocumentResponse
     func fetchPendingFacts() async throws -> PendingFactsResponse
-    func resolvePendingFact(id: String, action: String) async throws
+    /// Returns the newly-promoted fact's `nodeId` on `confirm` (`nil` on
+    /// `reject`) — see `APIClient.resolvePendingFact(id:action:)`'s doc
+    /// comment. `MemoryViewModel`/`TodayViewModel` currently ignore it.
+    @discardableResult
+    func resolvePendingFact(id: String, action: String) async throws -> String?
 }
 
 extension APIClient: MemoryAPIProviding {}
@@ -2573,8 +2587,11 @@ protocol CoachAPIProviding {
     func undoMemoryFact(id: String) async throws
     /// Remember / Not now on a `MemoryProposalCard` — the existing
     /// pending-facts confirm/dismiss API, reused verbatim (see
-    /// `MemoryViewModel.resolveFact`).
-    func resolvePendingFact(id: String, action: String) async throws
+    /// `MemoryViewModel.resolveFact`). Returns the confirmed fact's `nodeId`
+    /// — the only id `undoMemoryFact(id:)` accepts for it — or `nil` on
+    /// reject, or on a confirm with nothing promoted.
+    @discardableResult
+    func resolvePendingFact(id: String, action: String) async throws -> String?
 }
 
 extension APIClient: CoachAPIProviding {}

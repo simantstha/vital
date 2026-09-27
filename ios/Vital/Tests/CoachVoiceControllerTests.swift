@@ -1082,7 +1082,7 @@ private final class FakeVoiceAPI: CoachAPIProviding {
         fatalError("unused by CoachVoiceController")
     }
 
-    func resolvePendingFact(id: String, action: String) async throws {
+    func resolvePendingFact(id: String, action: String) async throws -> String? {
         fatalError("unused by CoachVoiceController")
     }
 }

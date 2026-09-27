@@ -154,6 +154,44 @@ final class CoachAnswerBundleTests: XCTestCase {
         XCTAssertEqual(turn.toolCalls.first(where: { $0.id == "b" })?.memory?.op, .proposed)
     }
 
+    /// "Remember" on a `MemoryProposalCard` — the pending fact's id is never
+    /// a valid undo target (`app/api/pending-facts/resolve/route.ts`
+    /// promotes it into a brand-new `nodes` row), so `confirmMemoryOp` must
+    /// look the row up by the OLD (pending) id but rewrite it to the NEW
+    /// (`nodeId`) one — CoachViewModel.confirmMemoryProposal wires the
+    /// server's returned `nodeId` straight into `newFactId`.
+    func testConfirmMemoryOpRewritesToTheReturnedNodeId() {
+        var turn = AssistantTurn(id: UUID())
+        turn.applyToolCall(
+            id: "a", name: "propose_fact", label: "Noting", done: true, kind: "memory",
+            memory: CoachMemoryOp(op: .proposed, text: "Lactose intolerant", factId: "pending-1")
+        )
+
+        turn.confirmMemoryOp(pendingFactId: "pending-1", newFactId: "node-1")
+
+        let memory = turn.toolCalls.first(where: { $0.id == "a" })?.memory
+        XCTAssertEqual(memory?.op, .saved)
+        XCTAssertEqual(memory?.factId, "node-1")
+    }
+
+    /// A confirm that promoted nothing (`nodeId` absent from the response)
+    /// must leave the row with NO factId at all — `MemorySavedChip` hides
+    /// Undo whenever `factId` is `nil`, and a stale pending id surviving
+    /// here would silently point Undo at an id `undoMemoryFact` will 404 on.
+    func testConfirmMemoryOpWithNoNodeIdLeavesNoUndoTarget() {
+        var turn = AssistantTurn(id: UUID())
+        turn.applyToolCall(
+            id: "a", name: "propose_fact", label: "Noting", done: true, kind: "memory",
+            memory: CoachMemoryOp(op: .proposed, text: "Lactose intolerant", factId: "pending-1")
+        )
+
+        turn.confirmMemoryOp(pendingFactId: "pending-1", newFactId: nil)
+
+        let memory = turn.toolCalls.first(where: { $0.id == "a" })?.memory
+        XCTAssertEqual(memory?.op, .saved)
+        XCTAssertNil(memory?.factId)
+    }
+
     /// "Not now" removes the proposal row outright rather than re-tagging it.
     func testRemoveMemoryOpDropsOnlyThatRow() {
         var turn = AssistantTurn(id: UUID())
