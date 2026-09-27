@@ -2318,3 +2318,146 @@ export const drizzleNodeResolutionStore: NodeResolutionStore = {
     });
   },
 };
+
+// ── supersede_fact ────────────────────────────────────────────────────────────
+// Backs PATCH /api/memory/facts/[factId] (Memory contract §2): editing a fact
+// is never an in-place overwrite. A new active node is inserted carrying the
+// edited label plus the old node's user_id/type/properties/subject_node_id/
+// weight (source 'confirmed' — see drizzleFactSupersessionStore.supersede
+// below), the old node is flipped to status='superseded' with
+// superseded_by = <new id>, and both writes happen in one transaction — same
+// "status flip, never mutate the label" spirit as resolveFact above, but with
+// a follow-on insert instead of a terminal resolve.
+
+export interface FactSupersessionStore {
+  /** Active, owned, non-entity node lookup — the same three predicates the
+   *  PATCH route's caller must already have applied (ownership + active +
+   *  "not an entity node", the latter via loadEntityRoster) before calling
+   *  supersedeFact, plus the id scope itself. */
+  findActiveNode(request: {
+    userId: string;
+    id: string;
+  }): Promise<{
+    id: string;
+    type: string;
+    label: string;
+    properties: unknown;
+    weight: number;
+    subject_node_id: string | null;
+  } | null>;
+  /** Inserts the replacement node and marks the old one superseded, in one
+   *  transaction. Returns null if the old node was no longer active/owned by
+   *  the time the transaction ran (a race with e.g. undo/resolve). */
+  supersede(request: {
+    oldId: string;
+    userId: string;
+    newLabel: string;
+    type: string;
+    properties: unknown;
+    subject_node_id: string | null;
+    weight: number;
+  }): Promise<{ id: string; type: string; label: string; created_at: Date } | null>;
+}
+
+export async function supersedeFact(
+  store: FactSupersessionStore,
+  input: { id: string; label: string },
+  userId: string,
+): Promise<
+  | { ok: true; fact: { id: string; type: string; label: string; created_at: Date } }
+  | { ok: false; reason: string }
+> {
+  const match = await store.findActiveNode({ userId, id: input.id });
+  if (!match) return { ok: false, reason: `No fact found with id "${input.id}".` };
+
+  const updated = await store.supersede({
+    oldId: match.id,
+    userId,
+    newLabel: input.label,
+    type: match.type,
+    properties: match.properties,
+    subject_node_id: match.subject_node_id,
+    weight: match.weight,
+  });
+  if (!updated) return { ok: false, reason: `No fact found with id "${input.id}".` };
+
+  return { ok: true, fact: updated };
+}
+
+// Exported so app/api/memory/facts/[factId]'s PATCH route can reuse the exact
+// same supersede semantics rather than re-implementing the transaction.
+export const drizzleFactSupersessionStore: FactSupersessionStore = {
+  async findActiveNode({ userId, id }) {
+    const [row] = await db
+      .select({
+        id: schema.nodes.id,
+        type: schema.nodes.type,
+        label: schema.nodes.label,
+        properties: schema.nodes.properties,
+        weight: schema.nodes.weight,
+        subject_node_id: schema.nodes.subject_node_id,
+      })
+      .from(schema.nodes)
+      .where(and(
+        eq(schema.nodes.id, id),
+        eq(schema.nodes.user_id, userId),
+        eq(schema.nodes.status, 'active'),
+        isNull(schema.nodes.superseded_by),
+      ))
+      .limit(1);
+    return row ?? null;
+  },
+  async supersede({ oldId, userId, newLabel, type, properties, subject_node_id, weight }) {
+    return db.transaction(async (tx) => {
+      const [created] = await tx.insert(schema.nodes).values({
+        user_id: userId,
+        type,
+        label: newLabel,
+        properties: properties as Record<string, unknown> | null,
+        // No 'user' (or "user-edited") source exists in the FactSource union
+        // (lib/brain/memoryTiers.ts) — an unrecognised source would rank
+        // lowest in sourcePrecedenceSql's ordering, which is wrong for a
+        // fact the user just explicitly typed. 'confirmed' is the closest
+        // existing "the user is the authority here" tier (same one
+        // app/api/pending-facts/resolve and onboarding's
+        // ensureHealthConstraintNodes already write), so an edited fact
+        // keeps (or gains) top precedence and reads as "You confirmed" in
+        // the iOS origin line — see lib/brain/factPresentation.ts.
+        source: 'confirmed',
+        weight,
+        subject_node_id,
+      }).returning({
+        id: schema.nodes.id,
+        type: schema.nodes.type,
+        label: schema.nodes.label,
+        created_at: schema.nodes.created_at,
+      });
+
+      const [old] = await tx
+        .update(schema.nodes)
+        .set({ status: 'superseded', superseded_by: created.id })
+        .where(and(
+          eq(schema.nodes.id, oldId),
+          eq(schema.nodes.user_id, userId),
+          eq(schema.nodes.status, 'active'),
+        ))
+        .returning({ id: schema.nodes.id });
+
+      if (!old) {
+        // The old node stopped being active between findActiveNode and this
+        // transaction (e.g. raced with undo/resolve) — roll back the insert
+        // by throwing; db.transaction rolls back on any thrown error.
+        throw new SupersedeRaceError();
+      }
+
+      return created;
+    }).catch((err) => {
+      if (err instanceof SupersedeRaceError) return null;
+      throw err;
+    });
+  },
+};
+
+/** Internal sentinel used only to unwind drizzleFactSupersessionStore's
+ *  transaction on a lost race — never surfaced outside this module. */
+class SupersedeRaceError extends Error {}

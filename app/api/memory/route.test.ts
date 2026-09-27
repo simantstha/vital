@@ -23,13 +23,19 @@ interface FakeNodeRow {
   subject_node_id: string | null;
   status: string;
   superseded_by: string | null;
+  source: string;
+  created_at: Date;
 }
 
-function mkRow(overrides: Partial<FakeNodeRow> & { id: string; user_id: string; type: string; label: string }): FakeNodeRow {
+function mkRow(
+  overrides: Partial<FakeNodeRow> & { id: string; user_id: string; type: string; label: string },
+): FakeNodeRow {
   return {
     subject_node_id: null,
     status: 'active',
     superseded_by: null,
+    source: 'coach',
+    created_at: new Date('2026-01-15T12:00:00.000Z'),
     ...overrides,
   };
 }
@@ -39,14 +45,25 @@ function setRows(newRows: FakeNodeRow[]): void {
   rows = newRows;
 }
 
-function assertNodesTable(table: unknown): void {
-  if (table !== realSchema.nodes) throw new Error(`unexpected table in select().from(): ${String(table)}`);
+/** users.timezone for the current test — undefined means "no stored tz". */
+let userTimeZone: string | undefined;
+function setUserTimeZone(tz: string | undefined): void {
+  userTimeZone = tz;
 }
 
 const fakeDb = {
   select: (cols: Record<string, unknown>) => ({
     from: (table: unknown) => {
-      assertNodesTable(table);
+      if (table === realSchema.users) {
+        return {
+          where: () => ({
+            limit: async () => (userTimeZone === undefined ? [] : [{ timezone: userTimeZone }]),
+          }),
+        };
+      }
+
+      if (table !== realSchema.nodes) throw new Error(`unexpected table in select().from(): ${String(table)}`);
+
       return {
         where: (condition: unknown) => {
           const { params } = new PgDialect().sqlToQuery(condition as never);
@@ -167,4 +184,72 @@ test('resolved and superseded self-facts are excluded', async () => {
 
   assert.equal(body.self.factCount, 1);
   assert.equal(body.self.facts[0].label, 'Run a 10k');
+});
+
+// ── Memory contract §1: recordedAt/origin/group ─────────────────────────────
+
+test('facts carry recordedAt (local day), origin (from source) and group (from type)', async () => {
+  setUserTimeZone('America/Chicago');
+  setRows([
+    // 2026-01-15T12:00:00Z is still 2026-01-15 in America/Chicago (UTC-6).
+    mkRow({ id: 'told', user_id: 'user-1', type: 'Habit', label: 'Runs daily', source: 'coach' }),
+    mkRow({ id: 'confirmed', user_id: 'user-1', type: 'Allergy', label: 'Peanuts', source: 'confirmed' }),
+    mkRow({ id: 'noticed', user_id: 'user-1', type: 'Goal', label: 'Run a marathon', source: 'digest' }),
+    mkRow({ id: 'unknown-source', user_id: 'user-1', type: 'FoodPreference', label: 'Loves tacos', source: 'mystery' }),
+    mkRow({ id: 'unknown-type', user_id: 'user-1', type: 'SomethingNew', label: 'A new kind of fact', source: 'coach' }),
+  ]);
+
+  const { GET } = await routePromise;
+  const response = await GET(req('user-1'));
+  assert.equal(response.status, 200);
+  const body = await response.json();
+
+  const facts: Record<string, unknown>[] = body.self.facts;
+  const byId = (id: string): Record<string, unknown> => facts.find((f) => f.id === id)!;
+
+  assert.deepEqual(byId('told'), {
+    id: 'told', type: 'Habit', label: 'Runs daily', isConstraint: false,
+    recordedAt: '2026-01-15', origin: 'told', group: 'routines',
+  });
+  assert.equal(byId('confirmed').origin, 'confirmed');
+  assert.equal(byId('confirmed').group, 'health');
+  assert.equal(byId('noticed').origin, 'noticed');
+  assert.equal(byId('noticed').group, 'goals');
+  // unknown source -> 'told' fallback; unknown type -> 'other' fallback.
+  assert.equal(byId('unknown-source').origin, 'told');
+  assert.equal(byId('unknown-source').group, 'food');
+  assert.equal(byId('unknown-type').group, 'other');
+});
+
+test('recordedAt falls back to the UTC day when the user has no stored timezone', async () => {
+  setUserTimeZone(undefined);
+  setRows([
+    mkRow({ id: 'a', user_id: 'user-1', type: 'Goal', label: 'x', created_at: new Date('2026-03-01T23:30:00.000Z') }),
+  ]);
+
+  const { GET } = await routePromise;
+  const response = await GET(req('user-1'));
+  const body = await response.json();
+
+  assert.equal(body.self.facts[0].recordedAt, '2026-03-01');
+});
+
+test('old-style facts (no source/created_at surprises) still map to a valid shape', async () => {
+  setUserTimeZone(undefined);
+  setRows([
+    mkRow({ id: 'plain', user_id: 'user-1', type: 'Habit', label: 'Sleeps 8 hours' }),
+  ]);
+
+  const { GET } = await routePromise;
+  const response = await GET(req('user-1'));
+  const body = await response.json();
+
+  const fact = body.self.facts[0];
+  assert.equal(fact.id, 'plain');
+  assert.equal(fact.type, 'Habit');
+  assert.equal(fact.label, 'Sleeps 8 hours');
+  assert.equal(fact.isConstraint, false);
+  assert.match(fact.recordedAt, /^\d{4}-\d{2}-\d{2}$/);
+  assert.ok(['told', 'noticed', 'confirmed', 'onboarding'].includes(fact.origin));
+  assert.ok(['health', 'goals', 'routines', 'food', 'other'].includes(fact.group));
 });
