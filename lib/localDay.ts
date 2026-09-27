@@ -61,6 +61,14 @@ export function previousDayKey(dayKey: string): string {
   return date.toISOString().slice(0, 10);
 }
 
+/** The next calendar day's YYYY-MM-DD key for an already-local `dayKey` — the mirror of `previousDayKey`. */
+export function nextDayKey(dayKey: string): string {
+  const [year, month, day] = dayKey.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  date.setUTCDate(date.getUTCDate() + 1);
+  return date.toISOString().slice(0, 10);
+}
+
 /**
  * The hour (0-23) of `date` in `tz`. UTC fallback when tz is invalid/missing.
  */

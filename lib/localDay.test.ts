@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { localDayKey, localHour, previousDayKey, weekDayKeys, weekStartKeyForDay } from './localDay';
+import { localDayKey, localHour, nextDayKey, previousDayKey, weekDayKeys, weekStartKeyForDay } from './localDay';
 
 test('previousDayKey rolls back across a year boundary', () => {
   assert.equal(previousDayKey('2026-01-01'), '2025-12-31');
@@ -16,6 +16,18 @@ test('previousDayKey does not skip a day on a US spring-forward date', () => {
   // on this date would land on the same local day again in a DST-observing
   // zone, which is exactly the bug this function exists to avoid.
   assert.equal(previousDayKey('2026-03-09'), '2026-03-08');
+});
+
+test('nextDayKey rolls forward across a year boundary', () => {
+  assert.equal(nextDayKey('2025-12-31'), '2026-01-01');
+});
+
+test('nextDayKey rolls forward across a month boundary', () => {
+  assert.equal(nextDayKey('2026-02-28'), '2026-03-01');
+});
+
+test('nextDayKey is the exact inverse of previousDayKey', () => {
+  assert.equal(nextDayKey(previousDayKey('2026-07-04')), '2026-07-04');
 });
 
 test('localHour reads the hour in the given timezone', () => {

@@ -29,6 +29,11 @@ export interface AnalysisRecord {
   input: unknown;
   result: unknown;
   createdAt: Date;
+  /** 'healthkit' | 'whoop' — which device produced this analysis (workout_analyses.source /
+   *  sleep_analyses.source). Optional: absent for kind 'morningBrief' (no such column) and for
+   *  older test doubles that predate the `context` feature; the real repository always sets it
+   *  for workout/sleep rows. */
+  source?: string;
 }
 
 export type AnalysisKind = 'workout' | 'sleep' | 'morningBrief';
@@ -42,6 +47,16 @@ export interface ProactiveHealthRepository {
     preferences: NotificationPreferences,
   ): Promise<NotificationPreferences>;
   getAnalysis(kind: AnalysisKind, userId: string, id: string): Promise<AnalysisRecord | null>;
+  /**
+   * The additive, deterministic `context` object (analysis v2 §1). Optional
+   * on the interface — and only ever consulted for kind 'workout'/'sleep' —
+   * so a repository double that doesn't implement it (most existing tests)
+   * keeps working unchanged, and morning-brief GETs never call it at all.
+   * `undefined` means "omit the `context` key entirely", same convention as
+   * every optional key inside the object it returns.
+   */
+  getWorkoutAnalysisContext?(userId: string, analysis: AnalysisRecord): Promise<Record<string, unknown> | undefined>;
+  getSleepAnalysisContext?(userId: string, analysis: AnalysisRecord): Promise<Record<string, unknown> | undefined>;
 }
 
 interface HttpDependencies {
@@ -276,12 +291,25 @@ export function createAnalysisHttpHandler(
         || !analysis.result
         || analysis.deletedAt !== null
       ) return Response.json({ error: 'Analysis not found.' }, { status: 404 });
+
+      // The `context` object is additive and best-effort: a section with
+      // insufficient data omits its own keys (lib/analysisContext.ts), and a
+      // repository that doesn't implement the getter at all (e.g. kind ===
+      // 'morningBrief', or a test double) simply gets no `context` key.
+      let analysisContext: Record<string, unknown> | undefined;
+      if (dependencies.kind === 'workout' && dependencies.repository.getWorkoutAnalysisContext) {
+        analysisContext = await dependencies.repository.getWorkoutAnalysisContext(userId, analysis);
+      } else if (dependencies.kind === 'sleep' && dependencies.repository.getSleepAnalysisContext) {
+        analysisContext = await dependencies.repository.getSleepAnalysisContext(userId, analysis);
+      }
+
       return Response.json({
         id: analysis.id,
         date: analysis.date,
         result: analysis.result,
         metrics: analysis.input,
         createdAt: analysis.createdAt.toISOString(),
+        ...(analysisContext !== undefined ? { context: analysisContext } : {}),
       });
     },
   };
