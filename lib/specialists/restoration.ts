@@ -2,6 +2,7 @@ import { and, asc, desc, eq, gte } from 'drizzle-orm';
 import type { db as applicationDb } from '@/db';
 import * as schema from '@/db/schema';
 import { getConversationStart } from '@/lib/brain/conversationWindow';
+import { deriveActivityFromToolCalls, type ActivityStep } from '@/lib/brain/toolActivity';
 import type { SpecialistRegistry } from './registry';
 import type { SpecialistMessageAttribution } from './sessions';
 import type { SpecialistSessionService } from './sessions';
@@ -54,6 +55,11 @@ export interface RestoredCoachMessage {
   // none, so JSON.stringify drops the key and older app builds see nothing
   // different.
   mealReceipts?: MealReceipt[];
+  // Chat-activity contract §3: one entry per tool call this message made, in
+  // call order. Derived from the persisted `messages.tool_calls` jsonb (see
+  // deriveActivityFromToolCalls) — undefined (never an empty array) when the
+  // message made no tool calls, same drop-if-absent convention as above.
+  activity?: ActivityStep[];
 }
 
 export interface CoachHistoryRepository {
@@ -164,15 +170,20 @@ export class DrizzleCoachHistoryRepository implements CoachHistoryRepository {
       timestamp: schema.messages.timestamp,
       specialistSessionId: schema.messages.specialist_session_id,
       specialistMetadata: schema.messages.specialist_metadata,
+      toolCalls: schema.messages.tool_calls,
     })
       .from(schema.messages)
       .where(where)
       .orderBy(desc(schema.messages.timestamp), desc(schema.messages.id))
       .limit(limit);
-    const messages: RestoredCoachMessage[] = rows.reverse().map((row) => ({
-      ...row,
-      specialistMetadata: row.specialistMetadata as SpecialistMessageAttribution['specialist_metadata'] | null,
-    }));
+    const messages: RestoredCoachMessage[] = rows.reverse().map(({ toolCalls, ...row }) => {
+      const activity = deriveActivityFromToolCalls(toolCalls);
+      return {
+        ...row,
+        specialistMetadata: row.specialistMetadata as SpecialistMessageAttribution['specialist_metadata'] | null,
+        ...(activity ? { activity } : {}),
+      };
+    });
     if (messages.length === 0) return messages;
 
     // Only ever look back to the oldest restored message's timestamp — never
