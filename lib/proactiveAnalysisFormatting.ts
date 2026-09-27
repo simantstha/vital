@@ -67,6 +67,13 @@ function formatWorkoutInput(input: unknown, units: UnitSystem): unknown {
         if (n != null) result[key] = `${n} m`;
         break;
       }
+      case 'sourceBundleId':
+        // The HK source app's bundle id is only useful for same-session
+        // dedup (lib/analysisSession.ts) — noise for the model, so it's
+        // dropped rather than passed through. `strain` and `source` (WHOOP
+        // fields) have no dedicated case above and fall through to default,
+        // which is intentional: they pass through verbatim.
+        break;
       default:
         result[key] = value;
     }

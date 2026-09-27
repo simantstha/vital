@@ -450,6 +450,19 @@ export const workout_analyses = p.pgTable('workout_analyses', {
   workout_date:       p.date('workout_date').notNull(),
   content_fingerprint: p.text('content_fingerprint').notNull(),
   input_payload:      p.jsonb('input_payload').notNull(),
+  // Multi-device / WHOOP-only support (see docs/superpowers — the
+  // multi-device-analyses contract). 'healthkit' default keeps this additive:
+  // old code, which never writes 'whoop', still round-trips unchanged. WHOOP
+  // rows use hk_uuid = 'whoop:' || <whoop workout id>, which keeps this NOT
+  // NULL column and the (user_id, hk_uuid) unique index valid and makes WHOOP
+  // re-syncs idempotent. started_at/ended_at back the same-session overlap
+  // rule (lib/analysisSession.ts) that lets a WHOOP workout and the Apple
+  // Watch's copy of the same session dedupe against each other; both are
+  // nullable because they're only parseable when input_payload carries a
+  // startTime/durationMin (older rows may not).
+  source:             p.text('source').default('healthkit').notNull(),
+  started_at:         p.timestamp('started_at', { withTimezone: true }),
+  ended_at:           p.timestamp('ended_at', { withTimezone: true }),
   status:             p.text('status').default('pending').notNull(),
   retry_count:        p.integer('retry_count').default(0).notNull(),
   next_attempt_at:    p.timestamp('next_attempt_at', { withTimezone: true }).defaultNow().notNull(),
@@ -468,6 +481,7 @@ export const workout_analyses = p.pgTable('workout_analyses', {
 }, (t) => [
   p.check('workout_analyses_status_check', sql`${t.status} in ('pending', 'processing', 'ready', 'failed', 'deleted')`),
   p.check('workout_analyses_notification_state_check', sql`${t.notification_state} in ('pending', 'suppressed', 'sending', 'sent', 'failed')`),
+  p.check('workout_analyses_source_check', sql`${t.source} in ('healthkit', 'whoop')`),
   p.uniqueIndex('workout_analyses_user_hk_uuid_idx').on(t.user_id, t.hk_uuid),
   p.index('workout_analyses_queue_idx').on(t.status, t.next_attempt_at),
 ]);
@@ -478,6 +492,11 @@ export const sleep_analyses = p.pgTable('sleep_analyses', {
   wake_date:          p.date('wake_date').notNull(),
   content_fingerprint: p.text('content_fingerprint').notNull(),
   input_payload:      p.jsonb('input_payload').notNull(),
+  // Same 'healthkit' default / additive convention as workout_analyses.source
+  // above — WHOOP owns the night once it's written one (see
+  // lib/healthAnalysisIngest.ts / lib/whoop/sync.ts): keeps one row per
+  // (user_id, wake_date), so one night never double-counts across sources.
+  source:             p.text('source').default('healthkit').notNull(),
   analyze_after:      p.timestamp('analyze_after', { withTimezone: true }).notNull(),
   status:             p.text('status').default('pending').notNull(),
   retry_count:        p.integer('retry_count').default(0).notNull(),
@@ -496,6 +515,7 @@ export const sleep_analyses = p.pgTable('sleep_analyses', {
 }, (t) => [
   p.check('sleep_analyses_status_check', sql`${t.status} in ('pending', 'processing', 'ready', 'failed', 'deleted')`),
   p.check('sleep_analyses_notification_state_check', sql`${t.notification_state} in ('pending', 'suppressed', 'sending', 'sent', 'failed')`),
+  p.check('sleep_analyses_source_check', sql`${t.source} in ('healthkit', 'whoop')`),
   p.uniqueIndex('sleep_analyses_user_wake_date_idx').on(t.user_id, t.wake_date),
   p.index('sleep_analyses_queue_idx').on(t.status, t.next_attempt_at),
 ]);

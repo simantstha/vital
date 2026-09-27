@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict';
 import test, { mock } from 'node:test';
-import type { WhoopConnectionSnapshot, WhoopTokenStore, WhoopTokenStoreTx } from './client';
-import type { WhoopSyncRepository } from './sync';
+import type { WhoopConnectionSnapshot, WhoopTokenStore, WhoopTokenStoreTx, WhoopSleep, WhoopWorkout } from './client';
+import type {
+  PersistedWhoopSleepAnalysis,
+  WhoopAnalysisTransaction,
+  WhoopSleepAnalysisUpsert,
+  WhoopWorkoutAnalysisUpsert,
+  WhoopSyncRepository,
+  WorkoutSessionCandidate,
+} from './sync';
 import type { WhoopSyncWindowInput } from './mapping';
 
 /**
@@ -35,6 +42,13 @@ class FakeSyncRepository implements WhoopSyncRepository {
   listCalls: Array<{ userId: string; windowStart: Date; windowEnd: Date; whoopIds: string[] }> = [];
   markSyncedCalls: Array<{ connectionId: string; syncedAt: Date }> = [];
 
+  // Analysis-side state — a stand-in for workout_analyses/sleep_analyses.
+  lockCalls: string[] = [];
+  workoutAnalyses = new Map<string, WorkoutSessionCandidate>();
+  workoutUpsertCalls: WhoopWorkoutAnalysisUpsert[] = [];
+  sleepAnalyses = new Map<string, PersistedWhoopSleepAnalysis>();
+  sleepUpsertCalls: WhoopSleepAnalysisUpsert[] = [];
+
   async upsertDailyMetrics(userId: string, rows: Array<{ date: string; metric: string; value: number; payload: unknown }>): Promise<void> {
     this.upsertCalls.push({ userId, rows });
   }
@@ -48,10 +62,30 @@ class FakeSyncRepository implements WhoopSyncRepository {
   async markSynced(connectionId: string, syncedAt: Date): Promise<void> {
     this.markSyncedCalls.push({ connectionId, syncedAt });
   }
+  async withUserAnalysisLock<T>(userId: string, fn: (tx: WhoopAnalysisTransaction) => Promise<T>): Promise<T> {
+    this.lockCalls.push(userId);
+    const tx: WhoopAnalysisTransaction = {
+      listWorkoutSessionCandidates: async () => [...this.workoutAnalyses.values()],
+      upsertWhoopWorkoutAnalysis: async (entry) => {
+        this.workoutUpsertCalls.push(entry);
+        this.workoutAnalyses.set(entry.hkUuid, {
+          hkUuid: entry.hkUuid, source: 'whoop', sourceBundleId: null,
+          startedAt: entry.startedAt, endedAt: entry.endedAt, notified: false,
+        });
+      },
+      getSleepAnalysisForWakeDate: async (wakeDate) => this.sleepAnalyses.get(wakeDate) ?? null,
+      upsertWhoopSleepAnalysis: async (entry) => {
+        this.sleepUpsertCalls.push(entry);
+        this.sleepAnalyses.set(entry.wakeDate, { source: 'whoop', notified: false, fingerprint: entry.fingerprint });
+      },
+    };
+    return fn(tx);
+  }
 }
 
 const windowStart = new Date('2026-07-01T00:00:00.000Z');
 const windowEnd = new Date('2026-07-19T00:00:00.000Z');
+const NOT_FIRST_SYNC = new Date('2026-06-01T00:00:00.000Z');
 
 test('syncWhoopWindow upserts mapped daily metrics and reports touched metrics', async () => {
   const { syncWhoopWindow } = await syncModule;
@@ -61,7 +95,7 @@ test('syncWhoopWindow upserts mapped daily metrics and reports touched metrics',
     cycles: [{ id: 1, user_id: 1, start: '2026-07-10T12:00:00.000Z', end: null, score_state: 'SCORED', score: { strain: 9, kilojoule: 100, average_heart_rate: 70, max_heart_rate: 120 } }],
   };
 
-  const result = await syncWhoopWindow(repo, 'user-1', 'UTC', windowStart, windowEnd, input);
+  const result = await syncWhoopWindow(repo, 'user-1', 'UTC', windowStart, windowEnd, input, NOT_FIRST_SYNC);
 
   assert.equal(repo.upsertCalls.length, 1);
   assert.equal(repo.upsertCalls[0].userId, 'user-1');
@@ -76,7 +110,7 @@ test('syncWhoopWindow skips the upsert call entirely when there is nothing mappe
   const { syncWhoopWindow } = await syncModule;
   const repo = new FakeSyncRepository();
 
-  const result = await syncWhoopWindow(repo, 'user-1', 'UTC', windowStart, windowEnd, emptyWindowInput());
+  const result = await syncWhoopWindow(repo, 'user-1', 'UTC', windowStart, windowEnd, emptyWindowInput(), NOT_FIRST_SYNC);
 
   assert.equal(repo.upsertCalls.length, 0);
   assert.deepEqual(result.touchedMetrics, []);
@@ -94,7 +128,7 @@ test('syncWhoopWindow dedupes workout events already present in the window, by w
     ],
   };
 
-  const result = await syncWhoopWindow(repo, 'user-1', 'UTC', windowStart, windowEnd, input);
+  const result = await syncWhoopWindow(repo, 'user-1', 'UTC', windowStart, windowEnd, input, NOT_FIRST_SYNC);
 
   assert.equal(repo.listCalls.length, 1);
   assert.deepEqual(repo.listCalls[0].whoopIds.sort(), ['workout-new', 'workout-old']);
@@ -113,10 +147,160 @@ test('syncWhoopWindow skips insertWorkoutEvents entirely when every workout alre
     workouts: [{ id: 'workout-old', user_id: 1, start: '2026-07-10T12:00:00.000Z', end: '2026-07-10T13:00:00.000Z', sport_name: 'running', score_state: 'SCORED', score: { strain: 5, average_heart_rate: 100, max_heart_rate: 140, kilojoule: 500 } }],
   };
 
-  const result = await syncWhoopWindow(repo, 'user-1', 'UTC', windowStart, windowEnd, input);
+  const result = await syncWhoopWindow(repo, 'user-1', 'UTC', windowStart, windowEnd, input, NOT_FIRST_SYNC);
 
   assert.equal(repo.insertCalls.length, 0);
   assert.equal(result.workoutEventsWritten, 0);
+});
+
+// ─── syncWhoopWindow: creating WHOOP workout/sleep analyses ─────────────────
+
+function whoopWorkout(overrides: Partial<WhoopWorkout> = {}): WhoopWorkout {
+  return {
+    id: 'w-1', user_id: 1,
+    start: '2026-07-18T11:30:00.000Z', end: '2026-07-18T12:00:00.000Z', // 12h before windowEnd — within the 24h gate
+    sport_name: 'running', score_state: 'SCORED',
+    score: { strain: 10, average_heart_rate: 140, max_heart_rate: 170, kilojoule: 2000, distance_meter: 5000 },
+    ...overrides,
+  };
+}
+
+function whoopSleep(overrides: Partial<WhoopSleep> = {}): WhoopSleep {
+  return {
+    id: 's-1', user_id: 1,
+    start: '2026-07-17T23:00:00.000Z', end: '2026-07-18T07:00:00.000Z', // ends well within the 24h gate
+    nap: false, score_state: 'SCORED',
+    score: {
+      stage_summary: {
+        total_in_bed_time_milli: 480 * 60_000,
+        total_awake_time_milli: 30 * 60_000,
+        total_light_sleep_time_milli: 200 * 60_000,
+        total_slow_wave_sleep_time_milli: 100 * 60_000,
+        total_rem_sleep_time_milli: 150 * 60_000,
+      },
+    },
+    ...overrides,
+  };
+}
+
+test('syncWhoopWindow creates a WHOOP workout analysis for a fresh, in-gate workout', async () => {
+  const { syncWhoopWindow } = await syncModule;
+  const repo = new FakeSyncRepository();
+  const input: WhoopSyncWindowInput = { ...emptyWindowInput(), workouts: [whoopWorkout()] };
+
+  await syncWhoopWindow(repo, 'user-1', 'UTC', windowStart, windowEnd, input, NOT_FIRST_SYNC);
+
+  assert.deepEqual(repo.lockCalls, ['user-1']);
+  assert.equal(repo.workoutUpsertCalls.length, 1);
+  const entry = repo.workoutUpsertCalls[0];
+  assert.equal(entry.hkUuid, 'whoop:w-1');
+  assert.equal(entry.input.type, 'Running');
+  assert.equal(entry.nextAttemptAt.toISOString(), '2026-07-18T12:20:00.000Z'); // ended_at + 20 min
+});
+
+test('syncWhoopWindow never creates a workout analysis on the connection\'s first sync', async () => {
+  const { syncWhoopWindow } = await syncModule;
+  const repo = new FakeSyncRepository();
+  const input: WhoopSyncWindowInput = { ...emptyWindowInput(), workouts: [whoopWorkout()] };
+
+  await syncWhoopWindow(repo, 'user-1', 'UTC', windowStart, windowEnd, input, null);
+
+  assert.equal(repo.workoutUpsertCalls.length, 0);
+});
+
+test('syncWhoopWindow never creates a workout analysis for a session that ended over 24h ago', async () => {
+  const { syncWhoopWindow } = await syncModule;
+  const repo = new FakeSyncRepository();
+  const input: WhoopSyncWindowInput = {
+    ...emptyWindowInput(),
+    workouts: [whoopWorkout({ start: '2026-07-15T11:30:00.000Z', end: '2026-07-15T12:00:00.000Z' })],
+  };
+
+  await syncWhoopWindow(repo, 'user-1', 'UTC', windowStart, windowEnd, input, NOT_FIRST_SYNC);
+
+  assert.equal(repo.workoutUpsertCalls.length, 0);
+});
+
+test('syncWhoopWindow skips a WHOOP workout when a surviving same-session HealthKit row already exists', async () => {
+  const { syncWhoopWindow } = await syncModule;
+  const repo = new FakeSyncRepository();
+  repo.workoutAnalyses.set('hk-1', {
+    hkUuid: 'hk-1', source: 'healthkit', sourceBundleId: 'com.apple.health',
+    startedAt: new Date('2026-07-18T11:32:00.000Z'), endedAt: new Date('2026-07-18T12:02:00.000Z'),
+    notified: false,
+  });
+  const input: WhoopSyncWindowInput = { ...emptyWindowInput(), workouts: [whoopWorkout()] };
+
+  await syncWhoopWindow(repo, 'user-1', 'UTC', windowStart, windowEnd, input, NOT_FIRST_SYNC);
+
+  assert.equal(repo.workoutUpsertCalls.length, 0);
+});
+
+test('syncWhoopWindow creates a WHOOP sleep analysis for a fresh, scored, in-gate sleep', async () => {
+  const { syncWhoopWindow } = await syncModule;
+  const repo = new FakeSyncRepository();
+  const input: WhoopSyncWindowInput = { ...emptyWindowInput(), sleeps: [whoopSleep()] };
+
+  await syncWhoopWindow(repo, 'user-1', 'UTC', windowStart, windowEnd, input, NOT_FIRST_SYNC);
+
+  assert.equal(repo.sleepUpsertCalls.length, 1);
+  const entry = repo.sleepUpsertCalls[0];
+  assert.equal(entry.wakeDate, '2026-07-18');
+  assert.equal(entry.input.minutes, 450);
+  assert.equal(entry.analyzeAfter.toISOString(), '2026-07-19T00:30:00.000Z'); // windowEnd + 30 min
+});
+
+test('syncWhoopWindow skips an unscored sleep (no stage_summary yet)', async () => {
+  const { syncWhoopWindow } = await syncModule;
+  const repo = new FakeSyncRepository();
+  const input: WhoopSyncWindowInput = { ...emptyWindowInput(), sleeps: [whoopSleep({ score: null })] };
+
+  await syncWhoopWindow(repo, 'user-1', 'UTC', windowStart, windowEnd, input, NOT_FIRST_SYNC);
+
+  assert.equal(repo.sleepUpsertCalls.length, 0);
+});
+
+test('syncWhoopWindow never overwrites an already-notified HealthKit sleep row for the same wake date', async () => {
+  const { syncWhoopWindow } = await syncModule;
+  const repo = new FakeSyncRepository();
+  repo.sleepAnalyses.set('2026-07-18', { source: 'healthkit', notified: true, fingerprint: 'hk-fp' });
+  const input: WhoopSyncWindowInput = { ...emptyWindowInput(), sleeps: [whoopSleep()] };
+
+  await syncWhoopWindow(repo, 'user-1', 'UTC', windowStart, windowEnd, input, NOT_FIRST_SYNC);
+
+  assert.equal(repo.sleepUpsertCalls.length, 0);
+});
+
+test('syncWhoopWindow (WHOOP owns the night) overwrites an existing un-notified HealthKit sleep row', async () => {
+  const { syncWhoopWindow } = await syncModule;
+  const repo = new FakeSyncRepository();
+  repo.sleepAnalyses.set('2026-07-18', { source: 'healthkit', notified: false, fingerprint: 'hk-fp' });
+  const input: WhoopSyncWindowInput = { ...emptyWindowInput(), sleeps: [whoopSleep()] };
+
+  await syncWhoopWindow(repo, 'user-1', 'UTC', windowStart, windowEnd, input, NOT_FIRST_SYNC);
+
+  assert.equal(repo.sleepUpsertCalls.length, 1);
+});
+
+test('syncWhoopWindow re-syncing the identical WHOOP sleep content is a no-op (idempotent)', async () => {
+  const { syncWhoopWindow } = await syncModule;
+  const repo = new FakeSyncRepository();
+  const input: WhoopSyncWindowInput = { ...emptyWindowInput(), sleeps: [whoopSleep()] };
+  await syncWhoopWindow(repo, 'user-1', 'UTC', windowStart, windowEnd, input, NOT_FIRST_SYNC);
+  assert.equal(repo.sleepUpsertCalls.length, 1);
+
+  await syncWhoopWindow(repo, 'user-1', 'UTC', windowStart, windowEnd, input, NOT_FIRST_SYNC);
+  assert.equal(repo.sleepUpsertCalls.length, 1); // still 1 — the second identical sync wrote nothing new
+});
+
+test('syncWhoopWindow never takes the per-user lock when there are no workouts or sleeps to consider', async () => {
+  const { syncWhoopWindow } = await syncModule;
+  const repo = new FakeSyncRepository();
+  const input: WhoopSyncWindowInput = { ...emptyWindowInput(), cycles: [{ id: 1, user_id: 1, start: '2026-07-18T00:00:00.000Z', end: null, score_state: 'SCORED', score: { strain: 5, kilojoule: 100, average_heart_rate: 60, max_heart_rate: 100 } }] };
+
+  await syncWhoopWindow(repo, 'user-1', 'UTC', windowStart, windowEnd, input, NOT_FIRST_SYNC);
+
+  assert.deepEqual(repo.lockCalls, []);
 });
 
 // ─── runWhoopSync (end-to-end: client fetch → map → upsert → baselines) ─────
@@ -155,7 +339,7 @@ test('runWhoopSync fetches all four record types, maps, upserts, and recomputes 
   const repo = new FakeSyncRepository();
 
   const result = await runWhoopSync(
-    { connectionId: 'conn-1', userId: 'user-1', timezone: 'UTC' },
+    { connectionId: 'conn-1', userId: 'user-1', timezone: 'UTC', lastSyncedAt: NOT_FIRST_SYNC },
     tokenStore,
     repo,
     windowStart,
@@ -182,7 +366,7 @@ test('runWhoopSync never calls recomputeBaselines when nothing was mapped', asyn
   const repo = new FakeSyncRepository();
 
   const result = await runWhoopSync(
-    { connectionId: 'conn-1', userId: 'user-1', timezone: 'UTC' },
+    { connectionId: 'conn-1', userId: 'user-1', timezone: 'UTC', lastSyncedAt: NOT_FIRST_SYNC },
     tokenStore,
     repo,
     windowStart,
@@ -207,7 +391,7 @@ test('runWhoopSync stamps last_synced_at with windowEnd on success', async (t) =
   const repo = new FakeSyncRepository();
 
   await runWhoopSync(
-    { connectionId: 'conn-1', userId: 'user-1', timezone: 'UTC' },
+    { connectionId: 'conn-1', userId: 'user-1', timezone: 'UTC', lastSyncedAt: NOT_FIRST_SYNC },
     tokenStore,
     repo,
     windowStart,
@@ -232,7 +416,7 @@ test('runWhoopSync does not call markSynced when the sync throws', async (t) => 
   const repo = new FakeSyncRepository();
 
   await assert.rejects(() => runWhoopSync(
-    { connectionId: 'conn-1', userId: 'user-1', timezone: 'UTC' },
+    { connectionId: 'conn-1', userId: 'user-1', timezone: 'UTC', lastSyncedAt: NOT_FIRST_SYNC },
     tokenStore,
     repo,
     windowStart,

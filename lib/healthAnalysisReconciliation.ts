@@ -49,6 +49,16 @@ interface PersistedWorkoutAnalysis {
   workoutDate: string;
   contentFingerprint: string;
   status?: string;
+  /**
+   * Defensive filter (belt-and-suspenders with the SQL query that feeds this
+   * function — see app/api/ingest/daily/route.ts's listWorkoutAnalyses,
+   * scoped to `source = 'healthkit'`): a WHOOP row must never be treated as
+   * "vanished from the HealthKit payload" and marked deleted just because a
+   * phone upload didn't mention its hk_uuid. Rows with no `source` at all
+   * (older callers/tests) are treated as healthkit, matching the schema
+   * column's default.
+   */
+  source?: string;
 }
 
 interface DatedWorkout {
@@ -63,7 +73,8 @@ export function reconcilePersistedWorkouts(
   upserts: Array<DatedWorkout & { fingerprint: string }>;
   removedHkUuids: string[];
 } {
-  const persistedById = new Map(persisted.map((entry) => [entry.hkUuid, entry]));
+  const healthkitPersisted = persisted.filter((entry) => (entry.source ?? 'healthkit') === 'healthkit');
+  const persistedById = new Map(healthkitPersisted.map((entry) => [entry.hkUuid, entry]));
   const currentById = new Map(current.map((entry) => [entry.workout.hkUuid, entry]));
   const upserts = Array.from(currentById.values())
     .map((entry) => ({ ...entry, fingerprint: fingerprintHealthPayload(entry.workout) }))

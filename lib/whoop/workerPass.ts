@@ -101,7 +101,7 @@ export function selectDueWhoopConnections(connections: WhoopConnectionForSync[],
 
 export interface WhoopWorkerPassDeps {
   listActiveConnections(): Promise<WhoopConnectionForSync[]>;
-  runSync(target: { connectionId: string; userId: string; timezone: string | null }, windowStart: Date, windowEnd: Date): Promise<unknown>;
+  runSync(target: { connectionId: string; userId: string; timezone: string | null; lastSyncedAt: Date | null }, windowStart: Date, windowEnd: Date): Promise<unknown>;
 }
 
 export interface WhoopWorkerPassResult {
@@ -125,7 +125,7 @@ export async function runWhoopWorkerPass(now: Date, deps: WhoopWorkerPassDeps): 
 
   for (const connection of due) {
     try {
-      await deps.runSync({ connectionId: connection.id, userId: connection.userId, timezone: connection.timezone }, windowStart, windowEnd);
+      await deps.runSync({ connectionId: connection.id, userId: connection.userId, timezone: connection.timezone, lastSyncedAt: connection.lastSyncedAt }, windowStart, windowEnd);
       synced.push(connection.id);
     } catch (err) {
       if (err instanceof WhoopConnectionInactiveError) {

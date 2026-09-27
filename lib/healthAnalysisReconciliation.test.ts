@@ -89,3 +89,23 @@ test('persisted fingerprints make a stale identical ingest a no-op', () => {
 
   assert.deepEqual(result, { upserts: [], removedHkUuids: [] });
 });
+
+test('a WHOOP row never appears in removedHkUuids just because a phone upload omitted it', () => {
+  // Same guard the SQL query in app/api/ingest/daily/route.ts enforces
+  // (listWorkoutAnalyses scoped to source='healthkit'): this is
+  // belt-and-suspenders defense inside the pure function itself.
+  const result = reconcilePersistedWorkouts([
+    { hkUuid: 'whoop:abc', workoutDate: '2026-07-12', contentFingerprint: 'fp', source: 'whoop' },
+    { hkUuid: 'hk-1', workoutDate: '2026-07-12', contentFingerprint: fingerprintHealthPayload({ hkUuid: 'hk-1' }), source: 'healthkit' },
+  ], [{ workoutDate: '2026-07-12', workout: { hkUuid: 'hk-1' } }]);
+
+  assert.deepEqual(result, { upserts: [], removedHkUuids: [] });
+});
+
+test('a persisted row with no source at all (legacy/old callers) is treated as healthkit', () => {
+  const result = reconcilePersistedWorkouts([
+    { hkUuid: 'legacy-hk', workoutDate: '2026-07-12', contentFingerprint: 'fp' },
+  ], []);
+
+  assert.deepEqual(result.removedHkUuids, ['legacy-hk']);
+});

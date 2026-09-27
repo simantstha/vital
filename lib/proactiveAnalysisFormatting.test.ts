@@ -58,6 +58,27 @@ test('unknown/unwhitelisted workout fields survive verbatim', () => {
   assert.deepEqual(formatted.input.newIosField, { nested: true });
 });
 
+test('sourceBundleId is dropped; strain and source pass through verbatim for a WHOOP workout', () => {
+  const source: ProactiveAnalysisSource = {
+    kind: 'workout',
+    date: '2026-07-13',
+    input: {
+      type: 'Running',
+      startTime: '2026-07-13T06:00:00.000Z',
+      durationMin: 30,
+      strain: 12.3,
+      source: 'whoop',
+      sourceBundleId: 'com.apple.health.something',
+    },
+    availableContext: {},
+  };
+
+  const formatted = formatAnalysisSource(source) as { input: Record<string, unknown> };
+  assert.equal('sourceBundleId' in formatted.input, false);
+  assert.equal(formatted.input.strain, 12.3);
+  assert.equal(formatted.input.source, 'whoop');
+});
+
 test('absent or non-finite workout figures are omitted, never emitted as null', () => {
   const source: ProactiveAnalysisSource = {
     kind: 'workout',

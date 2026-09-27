@@ -129,7 +129,12 @@ export async function GET(request: Request): Promise<NextResponse> {
   const repository = createWhoopSyncRepository(db, schema);
   const windowEnd = new Date();
   const windowStart = new Date(windowEnd.getTime() - BACKFILL_WINDOW_MS);
-  runWhoopSync({ connectionId, userId, timezone }, tokenStore, repository, windowStart, windowEnd).catch((err) => {
+  // lastSyncedAt: null — this is always the connection's first sync (a fresh
+  // connect, or a reconnect that just recreated the row), so the 30-day
+  // backfill below must never create WHOOP workout/sleep analyses (see the
+  // multi-device-analyses contract's "never on a connection's first sync"
+  // rule) — a historical backfill would otherwise fire a notification storm.
+  runWhoopSync({ connectionId, userId, timezone, lastSyncedAt: null }, tokenStore, repository, windowStart, windowEnd).catch((err) => {
     console.error(`[whoop/callback] initial backfill failed for connection ${connectionId}:`, String(err));
   });
 
