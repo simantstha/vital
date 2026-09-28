@@ -161,6 +161,7 @@ struct DevicesView: View {
                                 .foregroundStyle(Theme.Colors.textSecondary)
                         }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
         }
@@ -207,11 +208,12 @@ struct DevicesView: View {
                         .font(.system(size: 12))
                         .foregroundStyle(Theme.Colors.textSecondary)
                 }
-                Spacer(minLength: Theme.Spacing.sm)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 Text(settingsVM.valueLabel(for: metric))
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.Colors.textSecondary)
                     .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
                 Image(systemName: "chevron.right")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(Theme.Colors.textTertiary)
