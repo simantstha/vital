@@ -886,10 +886,18 @@ enum FixtureData {
             let workoutAnalysisId = scenario == .muscle ? "fixture-workout-analysis-routine" : "fixture-workout-analysis"
             let workoutTitle = scenario == .muscle ? "Easy 6k" : (profile.workoutTitle ?? "Morning run")
             let workoutKm = scenario == .muscle ? 6.1 : (profile.workoutKm ?? 6.2)
+            // Matches the corresponding analysis fixture's own `startTime`
+            // (routineRunAnalysis / notableRunAnalysis below) — the row's
+            // subtitle says "Completed this morning", so `isoNow` (whatever
+            // time the test happens to run) previously showed a nonsensical
+            // "11:59 PM" instead.
+            let workoutTimestamp = scenario == .muscle
+                ? isoAt(daysAgo: 0, hour: 6, minute: 52)
+                : isoAt(daysAgo: 0, hour: 7, minute: 41)
             items.append([
                 "id": "fixture-log-workout",
                 "type": "workout_completed",
-                "timestamp": isoNow,
+                "timestamp": workoutTimestamp,
                 "hasExactTime": true,
                 "dayKey": NSNull(),
                 "title": workoutTitle,
@@ -903,7 +911,8 @@ enum FixtureData {
             items.append([
                 "id": "fixture-log-sleep",
                 "type": "sleep_session",
-                "timestamp": isoNow,
+                // Matches roughNightAnalysis's own `timing.wakeTime` below.
+                "timestamp": isoAt(daysAgo: 0, hour: 6, minute: 10),
                 "hasExactTime": true,
                 "dayKey": NSNull(),
                 "title": "Sleep",

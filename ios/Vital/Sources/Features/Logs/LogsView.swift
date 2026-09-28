@@ -3,7 +3,7 @@ import SwiftUI
 /// Sheet target for a log row's proactive analysis — `kind` is the row's
 /// log type (workout_completed / sleep_session), `analysisId` the ready
 /// analysis to open.
-private struct AnalysisSheetTarget: Identifiable {
+private struct AnalysisSheetTarget: Identifiable, Equatable {
     let kind: String
     let analysisId: String
     var id: String { analysisId }
@@ -17,6 +17,18 @@ struct LogsView: View {
     @ObservedObject private var unitPref = UnitPreference.shared
     @State private var showDietSheet = false
     @State private var analysisTarget: AnalysisSheetTarget?
+    /// A row tapped while the *previous* analysis sheet is still animating
+    /// out. `.sheet(item:)` silently drops a presentation requested during
+    /// another one's dismissal — `analysisTarget` is already back to `nil`
+    /// by then (SwiftUI clears the binding as soon as `dismiss()` is
+    /// called, well before the close animation finishes), so there's no way
+    /// to tell "a dismissal is in flight" from `analysisTarget` alone. See
+    /// `isAnalysisSheetDismissing`/`presentAnalysis(_:)` below.
+    @State private var queuedAnalysisTarget: AnalysisSheetTarget?
+    /// `true` from the moment `analysisTarget` flips to `nil` until the
+    /// sheet's `onDismiss` actually fires — i.e. exactly the window a new
+    /// presentation would otherwise get silently dropped in.
+    @State private var isAnalysisSheetDismissing = false
     /// Bumped only inside an *enabled* pager button's own action — never
     /// bound to `vm.selectedIndex` directly, since `LogsViewModel.load()`
     /// resets that to 0 on every pull-to-refresh, which would fire a
@@ -104,12 +116,38 @@ struct LogsView: View {
                 )
             }
         }
-        .sheet(item: $analysisTarget) { target in
+        .sheet(item: $analysisTarget, onDismiss: {
+            isAnalysisSheetDismissing = false
+            if let queuedAnalysisTarget {
+                self.queuedAnalysisTarget = nil
+                // One more tick past `onDismiss` itself — presenting
+                // synchronously inside it can still race the sheet's own
+                // teardown on some OS versions.
+                DispatchQueue.main.async { analysisTarget = queuedAnalysisTarget }
+            }
+        }) { target in
             if target.kind == "workout_completed" {
                 WorkoutAnalysisView(id: target.analysisId)
             } else {
                 SleepAnalysisView(id: target.analysisId)
             }
+        }
+        .onChange(of: analysisTarget) { oldValue, newValue in
+            if oldValue != nil && newValue == nil {
+                isAnalysisSheetDismissing = true
+            }
+        }
+    }
+
+    /// Presents a log row's analysis sheet, queuing it instead when the
+    /// previous one is still mid-dismissal (see `isAnalysisSheetDismissing`'s
+    /// doc comment) — a real user tapping the sleep row right after
+    /// dismissing the workout one must not silently get nothing.
+    private func presentAnalysis(_ target: AnalysisSheetTarget) {
+        if isAnalysisSheetDismissing {
+            queuedAnalysisTarget = target
+        } else {
+            analysisTarget = target
         }
     }
 }
@@ -212,7 +250,7 @@ private extension LogsView {
                         ForEach(Array(day.items.enumerated()), id: \.element.id) { index, item in
                             if let analysisId = item.analysisId {
                                 Button {
-                                    analysisTarget = AnalysisSheetTarget(kind: item.type, analysisId: analysisId)
+                                    presentAnalysis(AnalysisSheetTarget(kind: item.type, analysisId: analysisId))
                                 } label: {
                                     LogEntryRow(item: item, isFirst: index == 0)
                                 }

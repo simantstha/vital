@@ -591,12 +591,29 @@ final class ScreenshotTests: XCTestCase {
         capture(app, name: "\(scenario)__workoutAnalysis__\(appearance)")
         let workoutDone = app.buttons["analysis.done"].firstMatch
         tapWhenHittable(workoutDone, app: app, description: "Workout AnalysisView Done button [\(scenario)/\(appearance)]")
+        // Wait for the workout sheet to actually finish closing (not just
+        // for Logs to reappear underneath it) before touching the next row.
+        // `.sheet(item:)` silently drops a presentation requested while the
+        // PREVIOUS one is still mid-dismissal, and `analysisTarget` in
+        // LogsView flips back to nil well before that close animation
+        // finishes — so racing straight into the sleep-row tap here landed
+        // the tap, but the new sheet just never appeared.
+        XCTAssertTrue(workoutHeader.waitForNonExistence(timeout: 5),
+                       "Workout AnalysisView should fully dismiss before the next tap [\(scenario)/\(appearance)]")
         XCTAssertTrue(app.staticTexts["LOG ENTRIES"].waitForExistence(timeout: 10),
                        "Dismissing the workout analysis should return to Logs [\(scenario)/\(appearance)]")
 
         let sleepRow = app.buttons["logs.sleepRow"].firstMatch
         tapWhenHittable(sleepRow, app: app, maxSwipes: 6, description: "Logs' sleep row [\(scenario)/\(appearance)]")
         let sleepHeader = app.descendants(matching: .any).matching(identifier: "analysisSleep.header").firstMatch
+        if !sleepHeader.waitForExistence(timeout: 3) {
+            // Belt-and-suspenders: even with the dismissal wait above, a
+            // tap that lands in the same beat as some other in-flight
+            // transition can still be swallowed. One retry, not a weaker
+            // assertion — the final wait below still fails the test if the
+            // sheet genuinely never opens.
+            tapWhenHittable(sleepRow, app: app, maxSwipes: 6, description: "Logs' sleep row (retry) [\(scenario)/\(appearance)]")
+        }
         XCTAssertTrue(sleepHeader.waitForExistence(timeout: 15),
                        "Tapping the sleep row should open the sleep AnalysisView [\(scenario)/\(appearance)]")
         capture(app, name: "\(scenario)__sleepAnalysis__\(appearance)")
