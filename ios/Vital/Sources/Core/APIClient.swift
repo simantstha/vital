@@ -1210,6 +1210,41 @@ struct APIClient {
         let (_, response) = try await session.data(for: request)
         try validate(response)
     }
+
+    // MARK: - Devices settings (phase 2 "both devices" contract, PR A/C)
+
+    /// GET /api/devices — see `app/api/devices/route.ts` / `lib/devicesHttp.ts`
+    /// for the exact response shape this decodes.
+    func fetchDevices() async throws -> DevicesResponse {
+        try await get("/api/devices")
+    }
+
+    /// PATCH /api/devices — sets ONE metric's explicit preference at a time
+    /// (the settings screen's picker rows each patch independently); `value`
+    /// nil resets that metric to automatic. Mirrors `lib/devicesContext.ts`'s
+    /// `parseDevicePatch` contract: `{ primary: { <metric>: 'apple' |
+    /// 'whoop' | null } }`.
+    @discardableResult
+    func updateDevicePrimary(metric: DevicesLogic.Metric, value: DevicesLogic.DeviceKind?) async throws -> DevicesResponse {
+        guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/devices") else {
+            throw APIError.invalidURL
+        }
+        var request = authorizedRequest(url)
+        request.httpMethod = "PATCH"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 15
+        // Built by hand (not JSONEncoder) so exactly one metric key is
+        // present in `primary` — `parseDevicePatch` on the server treats an
+        // absent key as "leave unchanged", so the two untouched metrics must
+        // never appear in the body, not even as `null` (which would reset
+        // them to automatic too).
+        let valueJSON: Any = value.map { $0.rawValue } ?? NSNull()
+        let body: [String: Any] = ["primary": [metric.rawValue: valueJSON]]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (data, response) = try await session.data(for: request)
+        try validate(response)
+        return try decoder.decode(DevicesResponse.self, from: data)
+    }
 }
 
 // MARK: - Errors
@@ -1306,6 +1341,46 @@ struct WhoopStatusResponse: Decodable {
         case lastSyncedAt = "last_synced_at"
     }
 }
+
+// MARK: - Devices settings DTOs (phase 2 "both devices" contract)
+
+/// One entry of GET /api/devices' `devices` array.
+struct DeviceStatusDTO: Decodable {
+    let id: DevicesLogic.DeviceKind
+    let connected: Bool
+    let lastSyncAt: String? // ISO8601, nil if never synced
+}
+
+/// `primary` (resolved) or `explicit` (user override) — both keyed the same
+/// way, so one Decodable shape covers both fields of `DevicesResponse`.
+/// `workouts`/`sleep`/`recovery` are `DeviceKind?` here since only
+/// `explicit` allows `null`; `primary`'s three fields are never actually
+/// null on the wire, but decoding them as optional costs nothing and keeps
+/// one shared type instead of two near-identical ones.
+struct DevicePrimariesDTO: Decodable {
+    let workouts: DevicesLogic.DeviceKind?
+    let sleep: DevicesLogic.DeviceKind?
+    let recovery: DevicesLogic.DeviceKind?
+}
+
+/// Wire shape of GET/PATCH /api/devices — see `lib/devicesHttp.ts`'s
+/// `devicesResponseBody`.
+struct DevicesResponse: Decodable {
+    let devices: [DeviceStatusDTO]
+    let primary: DevicePrimariesDTO
+    let explicit: DevicePrimariesDTO
+    let mergedThisMonth: Int
+}
+
+/// Testing seam for `DevicesSettingsViewModel` — same idiom as
+/// `MemoryAPIProviding`.
+protocol DevicesAPIProviding {
+    func fetchDevices() async throws -> DevicesResponse
+    @discardableResult
+    func updateDevicePrimary(metric: DevicesLogic.Metric, value: DevicesLogic.DeviceKind?) async throws -> DevicesResponse
+}
+
+extension APIClient: DevicesAPIProviding {}
 
 // MARK: - Ingest body
 

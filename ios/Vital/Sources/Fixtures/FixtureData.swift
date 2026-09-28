@@ -305,6 +305,8 @@ enum FixtureData {
                 return (404, jsonData(["error": "no training summary for this fixture scenario"]))
             }
             return (200, jsonData(data))
+        case ("GET", "/api/devices"):
+            return (200, jsonData(devices(scenario: scenario)))
         default:
             return (404, jsonData(["error": "unhandled fixture endpoint: \(method) \(path)"]))
         }
@@ -1233,6 +1235,34 @@ enum FixtureData {
         }
 
         return ["week": week, "volume": volume, "lastLift": lastLift]
+    }
+
+    // MARK: - GET /api/devices → DevicesResponse (phase 2 "both devices" contract)
+
+    /// Apple Watch is "connected" (synced recently) for every non-onboarding
+    /// scenario. WHOOP is connected only for `endurance` — the one scenario
+    /// with a both-devices story — so the Devices settings screen exercises
+    /// its "Automatic · <resolved>" picker rows and lets the WHOOP option
+    /// appear; every other scenario shows Apple Watch alone, WHOOP reading
+    /// "Not connected".
+    private static func devices(scenario: FixtureMode.Scenario) -> [String: Any] {
+        let whoopConnected = scenario == .endurance
+        let deviceRows: [[String: Any]] = [
+            ["id": "apple", "connected": true, "lastSyncAt": isoAt(daysAgo: 0, hour: 0, minute: 0)],
+            ["id": "whoop", "connected": whoopConnected, "lastSyncAt": whoopConnected ? isoAt(daysAgo: 0, hour: 0, minute: 0) : NSNull()],
+        ]
+        let primary: [String: Any] = [
+            "workouts": "apple",
+            "sleep": whoopConnected ? "whoop" : "apple",
+            "recovery": whoopConnected ? "whoop" : "apple",
+        ]
+        let explicit: [String: Any] = ["workouts": NSNull(), "sleep": NSNull(), "recovery": NSNull()]
+        return [
+            "devices": deviceRows,
+            "primary": primary,
+            "explicit": explicit,
+            "mergedThisMonth": whoopConnected ? 3 : 0,
+        ]
     }
 
     // MARK: - GET /api/memory → MemoryResponse (memory-contract.md §1/§4)

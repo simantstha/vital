@@ -71,6 +71,7 @@ final class ScreenshotTests: XCTestCase {
                 captureLogs(app, scenario: scenario, appearance: appearance)
                 captureProfile(app, scenario: scenario, appearance: appearance)
                 captureMemory(app, scenario: scenario, appearance: appearance)
+                captureDevices(app, scenario: scenario, appearance: appearance)
             }
 
             app.terminate()
@@ -680,6 +681,46 @@ final class ScreenshotTests: XCTestCase {
         }
         XCTAssertTrue(app.staticTexts[profileName(for: scenario)].waitForExistence(timeout: 5),
                        "Memory screen never finished dismissing back to Profile [\(scenario)/\(appearance)]")
+    }
+
+    /// Reached from Profile — `ProfileView.settingsCard`'s "Devices" row
+    /// pushes `DevicesView` — so this must run after `captureProfile`, same
+    /// pattern as `captureMemory` right above it. Not attempted for
+    /// `server_error`, whose Profile tab shows only its error card.
+    private func captureDevices(_ app: XCUIApplication, scenario: String, appearance: String) {
+        guard scenario != "server_error" else { return }
+
+        let devicesLink = app.staticTexts["Devices"].firstMatch
+        tapWhenHittable(
+            devicesLink, app: app,
+            description: "Profile's Devices settings row [\(scenario)/\(appearance)]"
+        )
+
+        // Only rendered once the fixture's `/api/devices` resolves — fails
+        // loudly if fixture interception for this endpoint ever regresses.
+        XCTAssertTrue(waitForText(app, containing: "Primary device for"),
+                       "\(scenario)'s Devices screen should show the Primary device for section [\(appearance)]")
+
+        if scenario == "endurance" {
+            // `FixtureData.devices` connects WHOOP only for `endurance`, the
+            // one scenario with a both-devices story.
+            XCTAssertTrue(waitForText(app, containing: "WHOOP"),
+                           "endurance's Devices screen should show WHOOP as connected [\(appearance)]")
+            XCTAssertTrue(waitForText(app, containing: "merged this month"),
+                           "endurance's Devices screen should show a merged-this-month caption [\(appearance)]")
+        }
+
+        capture(app, name: "\(scenario)__devices__\(appearance)")
+
+        // Navigate back to Profile — same tidy-up `captureMemory` does.
+        let backButton = app.navigationBars.buttons.element(boundBy: 0)
+        if backButton.waitForExistence(timeout: 5) {
+            backButton.tap()
+        } else {
+            app.swipeRight()
+        }
+        XCTAssertTrue(app.staticTexts[profileName(for: scenario)].waitForExistence(timeout: 5),
+                       "Devices screen never finished dismissing back to Profile [\(scenario)/\(appearance)]")
     }
 
     private func captureOnboarding(_ app: XCUIApplication, scenario: String, appearance: String) {

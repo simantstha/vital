@@ -231,7 +231,13 @@ final class AnalysisLogicTests: XCTestCase {
         XCTAssertEqual(AnalysisLogic.workoutKickerActivity(type: "Yoga"), "YOGA")
     }
 
-    func testWorkoutKickerMatchesItsOwnFormatter() {
+    /// The default `locale` these tests pass explicitly everywhere below —
+    /// determinism belongs in the tests, not in production (which defaults
+    /// to `.current`, the device's own locale, so a 24-hour-time user sees
+    /// "19:41", not "7:41 PM").
+    private static let posixLocale = Locale(identifier: "en_US_POSIX")
+
+    func testWorkoutKickerMatchesItsOwnFormatterAndIsFullyUppercased() {
         var components = DateComponents()
         components.year = 2026; components.month = 9; components.day = 26
         components.hour = 7; components.minute = 41
@@ -239,17 +245,27 @@ final class AnalysisLogicTests: XCTestCase {
         calendar.timeZone = TimeZone(identifier: "America/Los_Angeles")!
         let date = calendar.date(from: components)!
 
-        let kicker = AnalysisLogic.workoutKicker(type: "Running", startTime: date, timeZone: calendar.timeZone)
+        let kicker = AnalysisLogic.workoutKicker(
+            type: "Running", startTime: date, timeZone: calendar.timeZone, locale: Self.posixLocale
+        )
         // Built with the exact same building blocks the logic under test
-        // uses, never a hardcoded "SAT 7:41 AM" — locale-independent.
+        // uses (a weekday formatter + the system short time style, both
+        // pinned to en_US_POSIX explicitly here), never a hardcoded
+        // "RUN · SAT 7:41 AM" — locale-independent because the test pins
+        // the locale, not because production does.
         let df = DateFormatter()
-        df.locale = Locale(identifier: "en_US_POSIX")
+        df.locale = Self.posixLocale
         df.timeZone = calendar.timeZone
-        df.dateFormat = "EEE h:mm a"
-        XCTAssertEqual(kicker, "RUN · \(df.string(from: date))")
+        df.dateFormat = "EEE"
+        let time = date.formatted(
+            Date.FormatStyle(date: .omitted, time: .shortened, locale: Self.posixLocale, calendar: .current, timeZone: calendar.timeZone)
+        )
+        XCTAssertEqual(kicker, "RUN · \(df.string(from: date)) \(time)".uppercased())
+        // #249 polish: the kicker is fully uppercased, not just the activity word.
+        XCTAssertEqual(kicker, kicker.uppercased())
     }
 
-    func testSleepKickerFormat() {
+    func testSleepKickerFormatIsFullyUppercased() {
         var components = DateComponents()
         components.year = 2026; components.month = 9; components.day = 26
         components.hour = 23; components.minute = 52
@@ -260,14 +276,16 @@ final class AnalysisLogicTests: XCTestCase {
         let wake = calendar.date(from: components)!
 
         let df = DateFormatter()
-        df.locale = Locale(identifier: "en_US_POSIX")
+        df.locale = Self.posixLocale
         df.timeZone = calendar.timeZone
         df.dateFormat = "EEE"
-        let expected = "LAST NIGHT · \(df.string(from: bed)) \u{2192} \(df.string(from: wake))"
-        XCTAssertEqual(AnalysisLogic.sleepKicker(bedTime: bed, wakeTime: wake, timeZone: calendar.timeZone), expected)
+        let expected = "LAST NIGHT · \(df.string(from: bed)) \u{2192} \(df.string(from: wake))".uppercased()
+        let kicker = AnalysisLogic.sleepKicker(bedTime: bed, wakeTime: wake, timeZone: calendar.timeZone, locale: Self.posixLocale)
+        XCTAssertEqual(kicker, expected)
+        XCTAssertEqual(kicker, kicker.uppercased())
     }
 
-    func testClockTimeIsLowercaseAmPm() {
+    func testClockTimeUsesSystemShortTimeStyle() {
         var components = DateComponents()
         components.year = 2026; components.month = 9; components.day = 26
         components.hour = 23; components.minute = 52
@@ -275,13 +293,57 @@ final class AnalysisLogicTests: XCTestCase {
         calendar.timeZone = TimeZone(identifier: "UTC")!
         let date = calendar.date(from: components)!
 
-        let df = DateFormatter()
-        df.locale = Locale(identifier: "en_US_POSIX")
-        df.timeZone = calendar.timeZone
-        df.dateFormat = "h:mm a"
-        let expected = df.string(from: date).lowercased()
+        // Built with the exact same `Date.FormatStyle` the logic under
+        // test uses, with the test pinning en_US_POSIX explicitly —
+        // locale-independent because the test controls the locale.
+        let expected = date.formatted(
+            Date.FormatStyle(date: .omitted, time: .shortened, locale: Self.posixLocale, calendar: .current, timeZone: calendar.timeZone)
+        )
+        XCTAssertEqual(AnalysisLogic.clockTime(date, timeZone: calendar.timeZone, locale: Self.posixLocale), expected)
+    }
 
-        XCTAssertEqual(AnalysisLogic.clockTime(date, timeZone: calendar.timeZone), expected)
+    /// Production `clockTime` defaults `locale` to `.current` (the device's
+    /// own), which is the whole point: a user in a 24-hour-time locale must
+    /// see "19:41", never a 12-hour "7:41 PM" forced on them. This asserts
+    /// that behavior directly for two real 24-hour locales, building the
+    /// expectation with the same `Date.FormatStyle` rather than a
+    /// hardcoded string.
+    func testClockTimeRespectsA24HourLocaleAndShowsNoAmPm() {
+        var components = DateComponents()
+        components.year = 2026; components.month = 9; components.day = 26
+        components.hour = 19; components.minute = 41
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        let date = calendar.date(from: components)!
+
+        for identifier in ["en_GB", "de_DE"] {
+            let locale = Locale(identifier: identifier)
+            let expected = date.formatted(
+                Date.FormatStyle(date: .omitted, time: .shortened, locale: locale, calendar: .current, timeZone: calendar.timeZone)
+            )
+            let actual = AnalysisLogic.clockTime(date, timeZone: calendar.timeZone, locale: locale)
+            XCTAssertEqual(actual, expected, "locale \(identifier)")
+            XCTAssertFalse(actual.uppercased().contains("AM"), "\(identifier) is a 24-hour locale and should show no AM/PM, got '\(actual)'")
+            XCTAssertFalse(actual.uppercased().contains("PM"), "\(identifier) is a 24-hour locale and should show no AM/PM, got '\(actual)'")
+        }
+    }
+
+    func testClockTimeAndWorkoutKickerAgreeOnTheSameTimeFormat() {
+        // #249 polish: one time format everywhere — the kicker's embedded
+        // time must be exactly `clockTime`'s output (just uppercased along
+        // with the rest of the kicker), not a separately-formatted value.
+        var components = DateComponents()
+        components.year = 2026; components.month = 9; components.day = 26
+        components.hour = 7; components.minute = 41
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/Los_Angeles")!
+        let date = calendar.date(from: components)!
+
+        let kicker = AnalysisLogic.workoutKicker(
+            type: "Running", startTime: date, timeZone: calendar.timeZone, locale: Self.posixLocale
+        )
+        let time = AnalysisLogic.clockTime(date, timeZone: calendar.timeZone, locale: Self.posixLocale)
+        XCTAssertTrue(kicker.hasSuffix(time.uppercased()), "expected kicker '\(kicker)' to end with '\(time.uppercased())'")
     }
 
     // MARK: - Duration formatting
