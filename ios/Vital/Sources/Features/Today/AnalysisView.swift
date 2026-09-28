@@ -1322,7 +1322,7 @@ struct SleepAnalysisContent: View {
     /// The "bar = last night · tick = your usual" card, pulled out of
     /// `stages` so the devices stages switch (below) can reuse it for the
     /// primary device's tab without duplicating its own section header.
-    private func stageRowsCard(_ hkStages: AnalysisMetrics.SleepStages, usualStages: AnalysisMetrics.SleepStages) -> some View {
+    private func stageRowsCard(_ hkStages: AnalysisMetrics.SleepStages, usualStages: AnalysisContext.SleepUsual.Stages) -> some View {
         VitalCard(padding: Theme.Spacing.md) {
             VStack(alignment: .leading, spacing: 0) {
                 stageRow("Deep", minutes: hkStages.deep, usual: usualStages.deep, kind: .deep, isFirst: true)
