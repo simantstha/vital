@@ -44,30 +44,6 @@ struct LogsView: View {
         ZStack {
             Theme.Colors.canvas.ignoresSafeArea()
 
-            #if DEBUG
-            // PR #249 diagnostics only — invisible (zero-size, clear) but
-            // still in the accessibility tree, so a UI test can read its
-            // label without relying on stdout. `FixtureMode.isActive` keeps
-            // it out of a real launch even though the file itself is
-            // DEBUG-only anyway.
-            //
-            // `TimelineView` re-reads `AnalysisDebugLog.shared.text` on a
-            // timer rather than observing it — `AnalysisDebugLog` is
-            // deliberately a plain (non-`ObservableObject`) class; see its
-            // doc comment for the infinite update loop that caused.
-            if FixtureMode.isActive {
-                TimelineView(.periodic(from: .now, by: 0.5)) { _ in
-                    let text = AnalysisDebugLog.shared.text
-                    Text(text.isEmpty ? "(none)" : text)
-                        .font(.system(size: 1))
-                        .foregroundStyle(.clear)
-                        .frame(width: 1, height: 1)
-                        .accessibilityIdentifier("logs.debugLastAnalysisEvent")
-                }
-                .frame(width: 1, height: 1)
-            }
-            #endif
-
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     headerSection
@@ -131,19 +107,6 @@ struct LogsView: View {
             .scrollIndicators(.hidden)
             .refreshable { await vm.load() }
         }
-        #if DEBUG
-        // PR #249 probe: `logs.sleepRow`'s tap is hittable per XCUITest but
-        // its Button action never fires — this pins down where the tap
-        // itself actually lands (something else consuming it first, vs.
-        // the touch never reaching this view hierarchy at all). Global
-        // coordinates, `.simultaneousGesture` so it observes without
-        // intercepting/blocking the real gesture underneath it.
-        .simultaneousGesture(
-            SpatialTapGesture(coordinateSpace: .global).onEnded { value in
-                AnalysisDebugLog.shared.append("rootTap@\(Int(value.location.x)),\(Int(value.location.y))")
-            }
-        )
-        #endif
         .task { await vm.load() }
         .sheet(isPresented: $showDietSheet) {
             VitalSheet(detents: [.large]) {
@@ -163,21 +126,11 @@ struct LogsView: View {
                 DispatchQueue.main.async { analysisTarget = queuedAnalysisTarget }
             }
         }) { target in
-            Group {
-                if target.kind == "workout_completed" {
-                    WorkoutAnalysisView(id: target.analysisId)
-                } else {
-                    SleepAnalysisView(id: target.analysisId)
-                }
+            if target.kind == "workout_completed" {
+                WorkoutAnalysisView(id: target.analysisId)
+            } else {
+                SleepAnalysisView(id: target.analysisId)
             }
-            #if DEBUG
-            // `.onAppear`, never a `let _ = ...append(...)` directly in the
-            // builder — appending from inside body evaluation is what
-            // caused the infinite update loop `AnalysisDebugLog`'s doc
-            // comment describes. `.onAppear` fires once, after layout, with
-            // no further body re-evaluation triggered by it.
-            .onAppear { AnalysisDebugLog.shared.append("sheetContent.onAppear(\(target.kind))") }
-            #endif
         }
         .onChange(of: analysisTarget) { oldValue, newValue in
             if oldValue != nil && newValue == nil {
@@ -191,18 +144,9 @@ struct LogsView: View {
     /// doc comment) — a real user tapping the sleep row right after
     /// dismissing the workout one must not silently get nothing.
     private func presentAnalysis(_ target: AnalysisSheetTarget) {
-        #if DEBUG
-        AnalysisDebugLog.shared.append("presentAnalysis(\(target.kind))")
-        #endif
         if isAnalysisSheetDismissing {
-            #if DEBUG
-            AnalysisDebugLog.shared.append("queued(\(target.kind))")
-            #endif
             queuedAnalysisTarget = target
         } else {
-            #if DEBUG
-            AnalysisDebugLog.shared.append("set(\(target.kind))")
-            #endif
             analysisTarget = target
         }
     }
@@ -315,22 +259,8 @@ private extension LogsView {
                                 // taps these rather than matching on row text,
                                 // which varies per fixture scenario.
                                 .accessibilityIdentifier(item.type == "workout_completed" ? "logs.workoutRow" : "logs.sleepRow")
-                                #if DEBUG
-                                // PR #249 probe — see the root ZStack's
-                                // matching comment. Confirms whether THIS
-                                // Button's own action closure is what
-                                // ultimately fires for a given tap.
-                                .simultaneousGesture(
-                                    TapGesture().onEnded { AnalysisDebugLog.shared.append("rowTap(\(item.type))") }
-                                )
-                                #endif
                             } else {
                                 LogEntryRow(item: item, isFirst: index == 0)
-                                #if DEBUG
-                                .simultaneousGesture(
-                                    TapGesture().onEnded { AnalysisDebugLog.shared.append("plainRowTap(\(item.type))") }
-                                )
-                                #endif
                             }
                         }
                     }
@@ -360,11 +290,6 @@ private extension LogsView {
                 }
                 .buttonStyle(.plain)
                 .padding(.top, Theme.Spacing.md)
-                #if DEBUG
-                .simultaneousGesture(
-                    TapGesture().onEnded { AnalysisDebugLog.shared.append("addTap") }
-                )
-                #endif
             }
         }
         .padding(.horizontal, Theme.Spacing.xl)
@@ -420,5 +345,14 @@ private struct LogEntryRow: View {
                 Rectangle().fill(Theme.Colors.glassBorder).frame(height: 0.5)
             }
         }
+        // This row's label sits inside a `.buttonStyle(.plain)` Button, which
+        // (with no background) is only hit-testable on its drawn glyphs —
+        // the Spacer between the title/subtitle and the trailing meta text
+        // is empty space, not part of the tap target. A row whose meta text
+        // happens to start well right of center (e.g. "auto" on a short
+        // sleep row) could then have a real dead zone in its middle where a
+        // tap lands on nothing. `.contentShape` makes the whole padded row
+        // tappable, matching what it visually looks like.
+        .contentShape(Rectangle())
     }
 }

@@ -582,38 +582,17 @@ final class ScreenshotTests: XCTestCase {
     /// see `FixtureData.logs`. Screen segments are letters-only
     /// ("workoutAnalysis"/"sleepAnalysis") to match the export regex
     /// `^[a-z_]+__[A-Za-z]+__(light|dark)\.png$`.
-    ///
-    /// `weight_loss` captures sleep FIRST, then workout — an evidence-
-    /// gathering order swap (not a fix) to tell whether the sleep sheet
-    /// only fails as a *second* presentation (a dismissal-timing problem)
-    /// or fails regardless of order (something sleep-specific, e.g. the
-    /// sleep `AnalysisView` itself failing to present or build). Every
-    /// other scenario keeps the normal workout → sleep order.
     private func captureLogsAnalyses(_ app: XCUIApplication, scenario: String, appearance: String) {
-        if scenario == "weight_loss" {
-            captureSleepAnalysis(app, scenario: scenario, appearance: appearance)
-            captureWorkoutAnalysis(app, scenario: scenario, appearance: appearance)
-        } else {
-            captureWorkoutAnalysis(app, scenario: scenario, appearance: appearance)
-            captureSleepAnalysis(app, scenario: scenario, appearance: appearance)
-        }
+        captureWorkoutAnalysis(app, scenario: scenario, appearance: appearance)
+        captureSleepAnalysis(app, scenario: scenario, appearance: appearance)
     }
 
     private func captureWorkoutAnalysis(_ app: XCUIApplication, scenario: String, appearance: String) {
         let workoutRow = app.buttons["logs.workoutRow"].firstMatch
         tapWhenHittable(workoutRow, app: app, maxSwipes: 6, description: "Logs' workout row [\(scenario)/\(appearance)]")
         let workoutHeader = app.descendants(matching: .any).matching(identifier: "analysisWorkout.header").firstMatch
-        let workoutAppeared = workoutHeader.waitForExistence(timeout: 15)
-        // Diagnostics folded into the assertion message itself (not
-        // print()) — xcbeautify strips stdout before it reaches the CI log,
-        // so a print() here would never actually be seen. Read AFTER the
-        // wait, on failure only — see `diagnostics(_:)`'s doc comment for
-        // why this stays cheap.
-        XCTAssertTrue(workoutAppeared,
-                       workoutAppeared
-                           ? "Tapping the workout row should open the workout AnalysisView [\(scenario)/\(appearance)]"
-                           : "Tapping the workout row should open the workout AnalysisView [\(scenario)/\(appearance)]. "
-                             + diagnostics(app))
+        XCTAssertTrue(workoutHeader.waitForExistence(timeout: 15),
+                       "Tapping the workout row should open the workout AnalysisView [\(scenario)/\(appearance)]")
         capture(app, name: "\(scenario)__workoutAnalysis__\(appearance)")
         let workoutDone = app.buttons["analysis.done"].firstMatch
         tapWhenHittable(workoutDone, app: app, description: "Workout AnalysisView Done button [\(scenario)/\(appearance)]")
@@ -624,12 +603,8 @@ final class ScreenshotTests: XCTestCase {
         // LogsView flips back to nil well before that close animation
         // finishes — so racing straight into the next tap could land the
         // tap while the new sheet never appears.
-        let workoutDismissed = workoutHeader.waitForNonExistence(timeout: 5)
-        let workoutDismissMessage = workoutDismissed
-            ? "Workout AnalysisView should fully dismiss before the next tap [\(scenario)/\(appearance)]"
-            : "Workout AnalysisView should fully dismiss before the next tap [\(scenario)/\(appearance)]. "
-              + diagnostics(app)
-        XCTAssertTrue(workoutDismissed, workoutDismissMessage)
+        XCTAssertTrue(workoutHeader.waitForNonExistence(timeout: 5),
+                       "Workout AnalysisView should fully dismiss before the next tap [\(scenario)/\(appearance)]")
         XCTAssertTrue(app.staticTexts["LOG ENTRIES"].waitForExistence(timeout: 10),
                        "Dismissing the workout analysis should return to Logs [\(scenario)/\(appearance)]")
     }
@@ -638,61 +613,13 @@ final class ScreenshotTests: XCTestCase {
         let sleepRow = app.buttons["logs.sleepRow"].firstMatch
         tapWhenHittable(sleepRow, app: app, maxSwipes: 6, description: "Logs' sleep row [\(scenario)/\(appearance)]")
         let sleepHeader = app.descendants(matching: .any).matching(identifier: "analysisSleep.header").firstMatch
-        if !sleepHeader.waitForExistence(timeout: 3) {
-            // Belt-and-suspenders: even with the dismissal wait above, a
-            // tap that lands in the same beat as some other in-flight
-            // transition can still be swallowed. One retry, not a weaker
-            // assertion — the final check below still fails the test if
-            // the sheet genuinely never opens.
-            tapWhenHittable(sleepRow, app: app, maxSwipes: 6, description: "Logs' sleep row (retry) [\(scenario)/\(appearance)]")
-        }
-        let sleepAppeared = sleepHeader.waitForExistence(timeout: 15)
-        let sleepAppearedMessage = sleepAppeared
-            ? "Tapping the sleep row should open the sleep AnalysisView [\(scenario)/\(appearance)]"
-            : "Tapping the sleep row should open the sleep AnalysisView [\(scenario)/\(appearance)]. "
-              + diagnostics(app)
-              + " logs.sleepRow.frame=\(app.buttons["logs.sleepRow"].firstMatch.frame) "
-              + "staticText[Sleep].frame=\(app.staticTexts["Sleep"].frame) "
-              + "staticText[5h 48m last night].frame=\(app.staticTexts["5h 48m last night"].frame)"
-        XCTAssertTrue(sleepAppeared, sleepAppearedMessage)
+        XCTAssertTrue(sleepHeader.waitForExistence(timeout: 15),
+                       "Tapping the sleep row should open the sleep AnalysisView [\(scenario)/\(appearance)]")
         capture(app, name: "\(scenario)__sleepAnalysis__\(appearance)")
         let sleepDone = app.buttons["analysis.done"].firstMatch
         tapWhenHittable(sleepDone, app: app, description: "Sleep AnalysisView Done button [\(scenario)/\(appearance)]")
         XCTAssertTrue(app.staticTexts["LOG ENTRIES"].waitForExistence(timeout: 10),
                        "Dismissing the sleep analysis should return to Logs [\(scenario)/\(appearance)]")
-    }
-
-    /// Everything useful for diagnosing why a tap on `logs.workoutRow` /
-    /// `logs.sleepRow` didn't land where expected, folded into one string
-    /// so it lands in the XCTest failure's own `##[error]` line — `print()`
-    /// output is stripped by `xcbeautify` before it reaches the CI log, so
-    /// it never actually surfaces there.
-    ///
-    /// Deliberately narrow and called only after a wait has already failed
-    /// (never pre-emptively before a tap) — an earlier, heavier version of
-    /// this (scanning every `app.buttons` element on screen) made
-    /// `endurance`/`muscle` hang with "Timed out while evaluating UI query"
-    /// before their first screenshot even landed. Includes: the
-    /// `logs.sleepRow` count and frame; `app.sheets.count` and whether
-    /// `analysis.done` exists; the `logs.debugLastAnalysisEvent` breadcrumb
-    /// (see `AnalysisDebugLog`), read fresh right here (after whatever wait
-    /// just failed, so it reflects the sheet-presentation path's actual
-    /// last step); and `app.debugDescription`, sliced to start at
-    /// "LOG ENTRIES" (or the very start if that string isn't present) and
-    /// capped at 4000 chars.
-    private func diagnostics(_ app: XCUIApplication) -> String {
-        let sleepRow = app.buttons["logs.sleepRow"].firstMatch
-        let debugEvent = app.descendants(matching: .any).matching(identifier: "logs.debugLastAnalysisEvent").firstMatch
-        let debugEventLabel = debugEvent.exists ? debugEvent.label : "(logs.debugLastAnalysisEvent not found)"
-
-        let fullDescription = app.debugDescription
-        let sliceStart = fullDescription.range(of: "LOG ENTRIES")?.lowerBound ?? fullDescription.startIndex
-        let flattened = String(fullDescription[sliceStart...]).replacingOccurrences(of: "\n", with: " | ")
-        let cappedDescription = flattened.count > 4000 ? String(flattened.prefix(4000)) + "…(truncated)" : flattened
-
-        return "DIAG logs.sleepRow(count=\(app.buttons.matching(identifier: "logs.sleepRow").count), frame=\(sleepRow.frame)) "
-            + "sheets=\(app.sheets.count) analysis.done.exists=\(app.buttons["analysis.done"].exists) "
-            + "debugEvent=[\(debugEventLabel)] debugDescription=[\(cappedDescription)]"
     }
 
     private func captureProfile(_ app: XCUIApplication, scenario: String, appearance: String) {

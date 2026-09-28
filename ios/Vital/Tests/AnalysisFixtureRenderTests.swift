@@ -3,21 +3,19 @@ import SwiftUI
 import UIKit
 @testable import Vital
 
-/// PR #249 evidence-gathering: the published `weight_loss__sleepAnalysis__light.png`
-/// screenshot shows plain Logs with no sheet at all — no error state, no
-/// crash. Two remaining explanations this file rules in/out directly,
-/// bypassing the UI test's tap-and-wait choreography entirely:
+/// Decode + render regression coverage for the analysis-v2 fixtures,
+/// independent of (and much cheaper than) the UI test's tap-and-wait
+/// choreography:
 ///
-/// 1. The sleep fixture bytes fail to decode into `AnalysisResponse` with
-///    the exact decoder `APIClient.fetchAnalysis` uses (`JSONDecoder.vital`)
-///    — `testSleepFixtureDecodes` would fail loudly here instead of
-///    silently in the UI test.
-/// 2. `SleepAnalysisContent`'s `body` throws/traps while laying out that
-///    decoded data — `testSleepAnalysisContentLaysOutWithoutCrashing`
+/// 1. The sleep fixture bytes must decode into `AnalysisResponse` with the
+///    exact decoder `APIClient.fetchAnalysis` uses (`JSONDecoder.vital`) —
+///    `testSleepFixtureDecodes` fails loudly here if that ever regresses,
+///    instead of silently in the UI test.
+/// 2. `SleepAnalysisContent`'s `body` must not throw/trap while laying out
+///    that decoded data — `testSleepAnalysisContentLaysOutWithoutCrashing`
 ///    forces a real layout+render pass via `ImageRenderer`.
 ///
-/// The workout fixture/content is exercised identically as the control,
-/// since the workout capture is known-good.
+/// The workout fixture/content is exercised identically as the control.
 @MainActor
 final class AnalysisFixtureRenderTests: XCTestCase {
 
