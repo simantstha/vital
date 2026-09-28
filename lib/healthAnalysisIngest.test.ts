@@ -7,6 +7,7 @@ import {
   type PersistedWorkoutAnalysis,
   type WorkoutAnalysisUpsert,
   type SleepAnalysisUpsert,
+  type SecondarySleepWrite,
   type WorkoutSessionCandidate,
 } from './healthAnalysisIngest';
 import { fingerprintHealthPayload } from './healthAnalysisReconciliation';
@@ -18,6 +19,7 @@ type FakeWorkoutRow = PersistedWorkoutAnalysis & {
   sourceBundleId?: string | null;
   startedAt?: Date | null;
   endedAt?: Date | null;
+  mergedIntoHkUuid?: string;
 };
 
 class FakeRepository implements AnalysisIngestRepository {
@@ -28,7 +30,15 @@ class FakeRepository implements AnalysisIngestRepository {
     result: unknown;
     analyzeAfter: Date;
     notificationState: string;
+    secondarySource?: 'healthkit' | 'whoop' | null;
+    secondaryPayload?: unknown;
   }>();
+  secondarySleepWrites: SecondarySleepWrite[] = [];
+  workoutDevicePreference: 'apple' | 'whoop' | null = null;
+  sleepDevicePreference: 'apple' | 'whoop' | null = null;
+
+  async getWorkoutDevicePreference(): Promise<'apple' | 'whoop' | null> { return this.workoutDevicePreference; }
+  async getSleepDevicePreference(): Promise<'apple' | 'whoop' | null> { return this.sleepDevicePreference; }
 
   async lockUser(): Promise<void> { this.calls.push('lock'); }
   async listWorkoutAnalyses(): Promise<PersistedWorkoutAnalysis[]> {
@@ -58,10 +68,10 @@ class FakeRepository implements AnalysisIngestRepository {
       if (row) this.workouts.set(hkUuid, { ...row, status: 'deleted' });
     }
   }
-  async suppressWorkout(_userId: string, hkUuid: string): Promise<void> {
+  async suppressWorkout(_userId: string, hkUuid: string, survivorHkUuid: string): Promise<void> {
     this.calls.push('suppress-workout');
     const row = this.workouts.get(hkUuid);
-    if (row) this.workouts.set(hkUuid, { ...row, status: 'deleted', notificationState: 'suppressed' });
+    if (row) this.workouts.set(hkUuid, { ...row, status: 'deleted', notificationState: 'suppressed', mergedIntoHkUuid: survivorHkUuid });
   }
   async upsertWorkout(_userId: string, entry: WorkoutAnalysisUpsert): Promise<void> {
     this.calls.push('upsert-workout');
@@ -95,7 +105,18 @@ class FakeRepository implements AnalysisIngestRepository {
       notificationState: entry.notificationState,
       notificationSentAt: this.sleeps.get(entry.wakeDate)?.notificationSentAt ?? null,
       source: 'healthkit',
+      inputPayload: entry.sleep,
+      secondarySource: entry.archiveSecondary ? entry.archiveSecondary.source : this.sleeps.get(entry.wakeDate)?.secondarySource ?? null,
+      secondaryPayload: entry.archiveSecondary ? entry.archiveSecondary.payload : this.sleeps.get(entry.wakeDate)?.secondaryPayload,
     });
+  }
+  async writeSecondarySleep(_userId: string, entry: SecondarySleepWrite): Promise<void> {
+    this.calls.push('write-secondary-sleep');
+    this.secondarySleepWrites.push(entry);
+    const existing = this.sleeps.get(entry.wakeDate);
+    if (existing) {
+      this.sleeps.set(entry.wakeDate, { ...existing, secondarySource: entry.secondarySource, secondaryPayload: entry.secondaryPayload });
+    }
   }
 }
 
@@ -192,6 +213,7 @@ test('a new Apple Watch workout suppresses an existing overlapping WHOOP row (WH
 
   assert.equal(repo.workouts.get('whoop:abc')?.status, 'deleted');
   assert.equal(repo.workouts.get('whoop:abc')?.notificationState, 'suppressed');
+  assert.equal(repo.workouts.get('whoop:abc')?.mergedIntoHkUuid, 'hk-1');
   assert.equal(repo.workouts.get('hk-1')?.status, 'pending');
 });
 
@@ -352,4 +374,88 @@ test('a HealthKit sleep upsert never overwrites an existing WHOOP sleep row for 
   assert.ok(!repo.calls.includes('upsert-sleep'));
   assert.equal(repo.sleeps.get('2026-07-12')?.source, 'whoop');
   assert.deepEqual(repo.sleeps.get('2026-07-12')?.result, { headline: 'WHOOP sleep' });
+});
+
+test('null preference: the non-owning HealthKit payload for a WHOOP-owned night is stored as secondary, not dropped', async () => {
+  const repo = new FakeRepository();
+  repo.sleeps.set('2026-07-12', {
+    wakeDate: '2026-07-12', contentFingerprint: 'whoop-fp',
+    status: 'ready', result: { headline: 'WHOOP sleep' }, analyzeAfter: new Date(0),
+    notificationState: 'pending', notificationSentAt: null, source: 'whoop',
+  });
+
+  const sleep = { minutes: 430 };
+  await reconcileAnalysisIngest(repo, 'user', [], [{ wakeDate: '2026-07-12', sleep }], receivedAt);
+
+  assert.ok(!repo.calls.includes('upsert-sleep'));
+  assert.deepEqual(repo.secondarySleepWrites, [{ wakeDate: '2026-07-12', secondarySource: 'healthkit', secondaryPayload: sleep }]);
+  // Primary row is untouched.
+  assert.equal(repo.sleeps.get('2026-07-12')?.source, 'whoop');
+  assert.deepEqual(repo.sleeps.get('2026-07-12')?.result, { headline: 'WHOOP sleep' });
+});
+
+// ─── Device preference (phase 2 "both devices" contract, PR A) ──────────────
+
+test("'whoop' workout preference lets an incoming WHOOP-bundle HealthKit row lose to nothing — a plain WHOOP row instead survives over Apple Health", async () => {
+  const repo = new FakeRepository();
+  repo.workoutDevicePreference = 'whoop';
+  repo.workouts.set('whoop:abc', {
+    hkUuid: 'whoop:abc', workoutDate: '2026-07-12', contentFingerprint: 'fp',
+    status: 'pending', notificationState: 'pending', notificationSentAt: null,
+    source: 'whoop',
+    startedAt: new Date('2026-07-12T10:00:00.000Z'),
+    endedAt: new Date('2026-07-12T10:30:00.000Z'),
+  });
+
+  const workout = {
+    hkUuid: 'hk-1',
+    startTime: '2026-07-12T10:05:00.000Z',
+    durationMin: 25,
+    sourceBundleId: 'com.apple.health',
+  };
+  await reconcileAnalysisIngest(repo, 'user', [{ workoutDate: '2026-07-12', workouts: [workout] }], [], receivedAt);
+
+  // With the 'whoop' preference, WHOOP now outranks even native Apple Health, so
+  // the pre-existing WHOOP row survives and the incoming HealthKit row is suppressed.
+  assert.equal(repo.workouts.get('whoop:abc')?.status, 'pending');
+  assert.equal(repo.workouts.get('hk-1')?.status, 'deleted');
+  assert.equal(repo.workouts.get('hk-1')?.notificationState, 'suppressed');
+});
+
+test("'apple' sleep preference: HealthKit takes over an existing not-yet-notified WHOOP row and archives its payload as secondary", async () => {
+  const repo = new FakeRepository();
+  repo.sleepDevicePreference = 'apple';
+  const whoopPayload = { minutes: 400, source: 'whoop' };
+  repo.sleeps.set('2026-07-12', {
+    wakeDate: '2026-07-12', contentFingerprint: 'whoop-fp',
+    status: 'ready', result: { headline: 'WHOOP sleep' }, analyzeAfter: new Date(0),
+    notificationState: 'pending', notificationSentAt: null, source: 'whoop',
+    inputPayload: whoopPayload,
+  });
+
+  const sleep = { minutes: 430 };
+  await reconcileAnalysisIngest(repo, 'user', [], [{ wakeDate: '2026-07-12', sleep }], receivedAt);
+
+  assert.ok(repo.calls.includes('upsert-sleep'));
+  assert.equal(repo.sleeps.get('2026-07-12')?.source, 'healthkit');
+  assert.equal(repo.sleeps.get('2026-07-12')?.secondarySource, 'whoop');
+  assert.deepEqual(repo.sleeps.get('2026-07-12')?.secondaryPayload, whoopPayload);
+});
+
+test("'apple' sleep preference: an already-notified WHOOP row is never demoted — the HealthKit payload is stored as secondary instead", async () => {
+  const repo = new FakeRepository();
+  repo.sleepDevicePreference = 'apple';
+  repo.sleeps.set('2026-07-12', {
+    wakeDate: '2026-07-12', contentFingerprint: 'whoop-fp',
+    status: 'ready', result: { headline: 'WHOOP sleep' }, analyzeAfter: new Date(0),
+    notificationState: 'sent', notificationSentAt: receivedAt, source: 'whoop',
+  });
+
+  const sleep = { minutes: 430 };
+  await reconcileAnalysisIngest(repo, 'user', [], [{ wakeDate: '2026-07-12', sleep }], receivedAt);
+
+  assert.ok(!repo.calls.includes('upsert-sleep'));
+  assert.equal(repo.sleeps.get('2026-07-12')?.source, 'whoop');
+  assert.equal(repo.sleeps.get('2026-07-12')?.notificationState, 'sent');
+  assert.deepEqual(repo.secondarySleepWrites, [{ wakeDate: '2026-07-12', secondarySource: 'healthkit', secondaryPayload: sleep }]);
 });

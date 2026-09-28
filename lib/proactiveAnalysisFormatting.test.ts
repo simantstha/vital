@@ -79,6 +79,30 @@ test('sourceBundleId is dropped; strain and source pass through verbatim for a W
   assert.equal(formatted.input.source, 'whoop');
 });
 
+test('hrSeries, running, and zonesSec are dropped from the model input (noise, only rendered client-side)', () => {
+  const source: ProactiveAnalysisSource = {
+    kind: 'workout',
+    date: '2026-07-13',
+    input: {
+      type: 'Running',
+      startTime: '2026-07-13T06:00:00.000Z',
+      durationMin: 30,
+      hrSeries: [120, 130, 140],
+      running: { cadenceSpm: 170, groundContactMs: 240, powerW: 280, strideM: 1.1 },
+      zonesSec: [60, 120, 300, 600, 180],
+      zoneBasis: 'reserve',
+    },
+    availableContext: {},
+  };
+
+  const formatted = formatAnalysisSource(source) as { input: Record<string, unknown> };
+  assert.equal('hrSeries' in formatted.input, false);
+  assert.equal('running' in formatted.input, false);
+  assert.equal('zonesSec' in formatted.input, false);
+  // zoneBasis has no dedicated case — passes through verbatim, harmlessly.
+  assert.equal(formatted.input.zoneBasis, 'reserve');
+});
+
 test('absent or non-finite workout figures are omitted, never emitted as null', () => {
   const source: ProactiveAnalysisSource = {
     kind: 'workout',

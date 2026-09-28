@@ -112,12 +112,29 @@ export interface WhoopSleep {
   score?: WhoopSleepScore | null;
 }
 
+/**
+ * Time in each WHOOP HR zone, in milliseconds. WHOOP's zone 0 is "below
+ * zone 1" (no meaningful training-load floor) and is dropped when mapping to
+ * `zonesSec` (see lib/whoop/analysisPayloads.ts's buildWhoopWorkoutInput) —
+ * only zones one through five are reported, matching the 5-bucket shape the
+ * Apple Watch's reserve-based zones use.
+ */
+export interface WhoopZoneDurations {
+  zone_zero_milli: number;
+  zone_one_milli: number;
+  zone_two_milli: number;
+  zone_three_milli: number;
+  zone_four_milli: number;
+  zone_five_milli: number;
+}
+
 export interface WhoopWorkoutScore {
   strain: number;
   average_heart_rate: number;
   max_heart_rate: number;
   kilojoule: number;
   distance_meter?: number | null;
+  zone_durations?: WhoopZoneDurations | null;
 }
 
 export interface WhoopWorkout {

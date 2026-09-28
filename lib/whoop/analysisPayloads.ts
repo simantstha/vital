@@ -9,7 +9,7 @@
  * convention lib/whoop/mapping.ts already follows for daily_metrics).
  */
 
-import type { WhoopSleep, WhoopWorkout } from './client';
+import type { WhoopSleep, WhoopWorkout, WhoopZoneDurations } from './client';
 
 const KILOJOULE_PER_KCAL = 4.184;
 
@@ -35,7 +35,29 @@ export interface WhoopWorkoutAnalysisInput {
   maxHr?: number;
   distanceM?: number;
   strain?: number;
+  /** 5 buckets of seconds (zone 1 through zone 5 — WHOOP's zone 0 is dropped, see zonesFromWhoopZoneDurations). */
+  zonesSec?: number[];
+  zoneBasis?: 'maxHr';
   source: 'whoop';
+}
+
+/**
+ * Maps WHOOP's `zone_durations` (milliseconds, zones 0-5) into the 5-bucket
+ * `zonesSec` shape (whole seconds, zones 1-5 — zone 0 is "below zone 1",
+ * dropped as noise). Returns `undefined` when WHOOP hasn't reported zone
+ * durations for this workout at all ("omit it when absent" — phase 2 "both
+ * devices" contract, PR A "Zones").
+ */
+export function zonesFromWhoopZoneDurations(zoneDurations: WhoopZoneDurations | null | undefined): number[] | undefined {
+  if (!zoneDurations) return undefined;
+  const millisToSec = (ms: number) => Math.round(ms / 1000);
+  return [
+    millisToSec(zoneDurations.zone_one_milli),
+    millisToSec(zoneDurations.zone_two_milli),
+    millisToSec(zoneDurations.zone_three_milli),
+    millisToSec(zoneDurations.zone_four_milli),
+    millisToSec(zoneDurations.zone_five_milli),
+  ];
 }
 
 /**
@@ -62,6 +84,11 @@ export function buildWhoopWorkoutInput(workout: WhoopWorkout): WhoopWorkoutAnaly
   if (score?.max_heart_rate != null) result.maxHr = score.max_heart_rate;
   if (score?.distance_meter != null) result.distanceM = score.distance_meter;
   if (score?.strain != null) result.strain = score.strain;
+  const zonesSec = zonesFromWhoopZoneDurations(score?.zone_durations);
+  if (zonesSec != null) {
+    result.zonesSec = zonesSec;
+    result.zoneBasis = 'maxHr';
+  }
   return result;
 }
 

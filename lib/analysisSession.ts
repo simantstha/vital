@@ -81,10 +81,31 @@ export interface SessionCandidate {
   notified: boolean;
 }
 
-/** 1 = highest priority (survives first), 3 = lowest (a WHOOP row). */
-export function priorityRank(candidate: Pick<SessionCandidate, 'source' | 'sourceBundleId'>): 1 | 2 | 3 {
+/**
+ * `users.primary_workout_device` — the "both devices" contract's preference
+ * override (phase 2, PR A). null/undefined and 'apple' both mean "current
+ * order" (Apple Health first); only 'whoop' changes the ranking.
+ */
+export type WorkoutDevicePreference = 'apple' | 'whoop' | null | undefined;
+
+/**
+ * 1 = highest priority (survives first), 3 = lowest. With no preference (or
+ * 'apple'), this is the original fixed order: Apple Health bundle (or no
+ * bundle) > other HealthKit > WHOOP. With preference 'whoop', WHOOP moves to
+ * rank 1 and the two HealthKit ranks shift down by one, keeping their
+ * relative order (native Apple Health beats a third-party HealthKit write).
+ */
+export function priorityRank(
+  candidate: Pick<SessionCandidate, 'source' | 'sourceBundleId'>,
+  preferredDevice?: WorkoutDevicePreference,
+): 1 | 2 | 3 {
+  const isNativeOrUnknownHealthKit = !candidate.sourceBundleId || candidate.sourceBundleId.startsWith('com.apple.health');
+  if (preferredDevice === 'whoop') {
+    if (candidate.source === 'whoop') return 1;
+    return isNativeOrUnknownHealthKit ? 2 : 3;
+  }
   if (candidate.source === 'whoop') return 3;
-  return !candidate.sourceBundleId || candidate.sourceBundleId.startsWith('com.apple.health') ? 1 : 2;
+  return isNativeOrUnknownHealthKit ? 1 : 2;
 }
 
 export interface SessionConflictResolution {
@@ -102,13 +123,17 @@ export interface SessionConflictResolution {
  * Decides which of two same-session candidates survives. `existing` is
  * already-persisted; `incoming` is the row about to be written. A
  * already-notified `existing` always wins, regardless of priority — the
- * incoming row is the one suppressed in that case (see module doc).
+ * incoming row is the one suppressed in that case (see module doc). This
+ * also means an already-notified row is never demoted by a preference change
+ * (phase 2, PR A: "An already-notified row is never demoted").
  */
 export function resolveSessionConflict(
   existing: SessionCandidate,
   incoming: SessionCandidate,
+  preferredDevice?: WorkoutDevicePreference,
 ): SessionConflictResolution {
-  const incomingOutranks = !existing.notified && priorityRank(incoming) < priorityRank(existing);
+  const incomingOutranks = !existing.notified
+    && priorityRank(incoming, preferredDevice) < priorityRank(existing, preferredDevice);
   return incomingOutranks
     ? { survivorKey: incoming.key, loserKey: existing.key, outcome: 'incoming_wins' }
     : { survivorKey: existing.key, loserKey: incoming.key, outcome: 'existing_wins' };

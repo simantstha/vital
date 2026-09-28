@@ -31,10 +31,12 @@ import {
   resolveSessionConflict,
   type SessionCandidate,
   type SessionIdentity,
+  type WorkoutDevicePreference,
 } from '../analysisSession';
 import { recomputeBaselines } from '../brain/baselines';
 import { fingerprintHealthPayload } from '../healthAnalysisReconciliation';
 import { localDayKey } from '../localDay';
+import { resolveSleepWrite, type SleepDevicePreference, type SleepSource } from '../sleepOwnership';
 import { buildWhoopSleepInput, buildWhoopWorkoutInput } from './analysisPayloads';
 import { shouldCreateWhoopAnalysis } from './analysisGate';
 import {
@@ -73,6 +75,8 @@ export interface PersistedWhoopSleepAnalysis {
   source: 'healthkit' | 'whoop';
   notified: boolean;
   fingerprint: string;
+  /** The persisted row's own input_payload — needed to archive it into secondary_payload on an ownership swap (phase 2 PR A). */
+  inputPayload?: unknown;
 }
 
 export interface WhoopSleepAnalysisUpsert {
@@ -80,6 +84,13 @@ export interface WhoopSleepAnalysisUpsert {
   input: Record<string, unknown>;
   fingerprint: string;
   analyzeAfter: Date;
+  /** Set when this WHOOP write is taking over the night from a persisted HealthKit row — archive it rather than lose it. */
+  archiveSecondary?: { source: SleepSource; payload: unknown } | null;
+}
+
+export interface SecondaryWhoopSleepWrite {
+  wakeDate: string;
+  secondaryPayload: unknown;
 }
 
 /**
@@ -91,8 +102,21 @@ export interface WhoopSleepAnalysisUpsert {
 export interface WhoopAnalysisTransaction {
   listWorkoutSessionCandidates(dayKeys: string[]): Promise<WorkoutSessionCandidate[]>;
   upsertWhoopWorkoutAnalysis(entry: WhoopWorkoutAnalysisUpsert): Promise<void>;
+  /**
+   * Marks a same-session loser: status='deleted', notification_state='suppressed',
+   * deleted_at=deletedAt, merged_into_id=<survivorHkUuid's row id>. Only
+   * called when a 'whoop' workout-device preference lets the incoming WHOOP
+   * workout outrank an existing HealthKit row — `survivorHkUuid` (the WHOOP
+   * row) must already be persisted by the time this runs.
+   */
+  suppressWorkoutSession(loserHkUuid: string, survivorHkUuid: string, deletedAt: Date): Promise<void>;
   getSleepAnalysisForWakeDate(wakeDate: string): Promise<PersistedWhoopSleepAnalysis | null>;
   upsertWhoopSleepAnalysis(entry: WhoopSleepAnalysisUpsert): Promise<void>;
+  /** Stores the non-owning WHOOP payload without touching the owning (HealthKit) row's primary fields. */
+  writeSecondaryWhoopSleep(entry: SecondaryWhoopSleepWrite): Promise<void>;
+  /** `users.primary_workout_device` / `users.primary_sleep_device` (phase 2 "both devices" contract, PR A). */
+  getWorkoutDevicePreference(): Promise<'apple' | 'whoop' | null>;
+  getSleepDevicePreference(): Promise<'apple' | 'whoop' | null>;
 }
 
 export interface WhoopSyncRepository {
@@ -134,6 +158,7 @@ async function createWhoopWorkoutAnalyses(
   now: Date,
   isFirstSync: boolean,
   workouts: WhoopWorkout[],
+  preferredDevice: WorkoutDevicePreference,
 ): Promise<void> {
   const eligible = workouts
     .map((workout) => {
@@ -164,11 +189,16 @@ async function createWhoopWorkoutAnalyses(
       return isSameSession(candidateIdentity, incomingIdentity);
     });
 
+    let loserOfMatch: string | null = null;
     if (match) {
       const existingCandidate: SessionCandidate = { key: match.hkUuid, source: match.source, sourceBundleId: match.sourceBundleId, notified: match.notified };
       const incomingCandidate: SessionCandidate = { key: hkUuid, source: 'whoop', sourceBundleId: null, notified: false };
-      const resolution = resolveSessionConflict(existingCandidate, incomingCandidate);
+      const resolution = resolveSessionConflict(existingCandidate, incomingCandidate, preferredDevice);
       if (resolution.outcome === 'existing_wins') continue; // a surviving row already covers this session — skip the insert entirely
+      // Only reachable with a 'whoop' preference outranking the existing
+      // HealthKit row — suppress it as a same-session duplicate once the
+      // WHOOP row (the survivor) has been written below.
+      loserOfMatch = resolution.loserKey;
     }
 
     const input = buildWhoopWorkoutInput(workout) as unknown as Record<string, unknown>;
@@ -181,6 +211,10 @@ async function createWhoopWorkoutAnalyses(
       fingerprint: fingerprintHealthPayload(input),
       nextAttemptAt: new Date(endedAt.getTime() + 20 * 60_000), // 20-min grace lets the Apple Watch's own copy arrive first and win
     });
+
+    if (loserOfMatch) {
+      await tx.suppressWorkoutSession(loserOfMatch, hkUuid, now);
+    }
   }
 }
 
@@ -198,6 +232,7 @@ async function createWhoopSleepAnalysis(
   now: Date,
   isFirstSync: boolean,
   sleeps: WhoopSleep[],
+  preferredDevice: SleepDevicePreference,
 ): Promise<void> {
   for (const sleep of sleeps) {
     if (sleep.nap) continue;
@@ -212,14 +247,32 @@ async function createWhoopSleepAnalysis(
     const wakeDate = localDayKey(endedAt, timezone);
     const fingerprint = fingerprintHealthPayload(input);
     const persisted = await tx.getSleepAnalysisForWakeDate(wakeDate);
-    if (persisted?.source === 'healthkit' && persisted.notified) continue; // WHOOP owns the night, but never un-sends a notification
     if (persisted?.source === 'whoop' && persisted.fingerprint === fingerprint) continue; // idempotent re-sync, no-op
+
+    // Sleep ownership (phase 2 "both devices" contract, PR A) — see
+    // lib/sleepOwnership.ts. null preference reproduces today's "WHOOP owns
+    // the night" behavior exactly; 'apple' makes HealthKit own it instead.
+    const decision = resolveSleepWrite({
+      persisted: persisted ? { source: persisted.source, notified: persisted.notified } : null,
+      incomingSource: 'whoop',
+      preferredDevice,
+    });
+
+    if (decision.action === 'secondary') {
+      // The owning row (HealthKit) is untouched; WHOOP's payload for the
+      // same night is preserved rather than dropped.
+      await tx.writeSecondaryWhoopSleep({ wakeDate, secondaryPayload: input });
+      continue;
+    }
 
     await tx.upsertWhoopSleepAnalysis({
       wakeDate,
       input,
       fingerprint,
       analyzeAfter: new Date(now.getTime() + 30 * 60_000), // same 30-min quiet period as the HealthKit path (sleepAnalysisCandidate)
+      archiveSecondary: decision.archivePersistedAsSecondary && persisted
+        ? { source: persisted.source, payload: persisted.inputPayload }
+        : null,
     });
   }
 }
@@ -269,8 +322,12 @@ export async function syncWhoopWindow(
   const isFirstSync = lastSyncedAt == null;
   if (data.workouts.length > 0 || data.sleeps.length > 0) {
     await repository.withUserAnalysisLock(userId, async (tx) => {
-      await createWhoopWorkoutAnalyses(tx, timezone, windowEnd, isFirstSync, data.workouts);
-      await createWhoopSleepAnalysis(tx, timezone, windowEnd, isFirstSync, data.sleeps);
+      const [workoutPreference, sleepPreference] = await Promise.all([
+        tx.getWorkoutDevicePreference(),
+        tx.getSleepDevicePreference(),
+      ]);
+      await createWhoopWorkoutAnalyses(tx, timezone, windowEnd, isFirstSync, data.workouts, workoutPreference);
+      await createWhoopSleepAnalysis(tx, timezone, windowEnd, isFirstSync, data.sleeps, sleepPreference);
     });
   }
 
@@ -492,12 +549,26 @@ export function createWhoopSyncRepository(database: unknown, schema: typeof Whoo
               setWhere: ne(schema.workout_analyses.content_fingerprint, entry.fingerprint),
             });
           },
+          async suppressWorkoutSession(loserHkUuid, survivorHkUuid, deletedAt) {
+            await tx.update(schema.workout_analyses).set({
+              status: 'deleted',
+              notification_state: 'suppressed',
+              deleted_at: deletedAt,
+              lease_expires_at: null,
+              updated_at: deletedAt,
+              merged_into_id: sql`(select id from workout_analyses where user_id = ${userId} and hk_uuid = ${survivorHkUuid})`,
+            }).where(and(
+              eq(schema.workout_analyses.user_id, userId),
+              eq(schema.workout_analyses.hk_uuid, loserHkUuid),
+            ));
+          },
           async getSleepAnalysisForWakeDate(wakeDate) {
             const rows = await tx.select({
               source: schema.sleep_analyses.source,
               notificationState: schema.sleep_analyses.notification_state,
               notificationSentAt: schema.sleep_analyses.notification_sent_at,
               contentFingerprint: schema.sleep_analyses.content_fingerprint,
+              inputPayload: schema.sleep_analyses.input_payload,
             }).from(schema.sleep_analyses).where(and(
               eq(schema.sleep_analyses.user_id, userId),
               eq(schema.sleep_analyses.wake_date, wakeDate),
@@ -508,11 +579,18 @@ export function createWhoopSyncRepository(database: unknown, schema: typeof Whoo
               source: row.source as 'healthkit' | 'whoop',
               notified: Boolean(row.notificationSentAt) || row.notificationState === 'sent',
               fingerprint: row.contentFingerprint as string,
+              inputPayload: row.inputPayload,
             };
           },
           async upsertWhoopSleepAnalysis(entry) {
             // Same "preserve 'sent', never reset it" rule as the workout upsert above.
             const preserveSentState = sql`case when ${schema.sleep_analyses.notification_state} = 'sent' then 'sent' else 'pending' end`;
+            // Only overwrite secondary_source/secondary_payload when this write is
+            // archiving a persisted row of the OTHER source (an ownership swap) —
+            // otherwise leave whatever secondary data is already there untouched
+            // (a plain re-sync of the same WHOOP row must never clobber it).
+            const secondarySource = entry.archiveSecondary ? entry.archiveSecondary.source : sql`${schema.sleep_analyses.secondary_source}`;
+            const secondaryPayload = entry.archiveSecondary ? entry.archiveSecondary.payload : sql`${schema.sleep_analyses.secondary_payload}`;
             await tx.insert(schema.sleep_analyses).values([{
               user_id: userId,
               wake_date: entry.wakeDate,
@@ -521,6 +599,8 @@ export function createWhoopSyncRepository(database: unknown, schema: typeof Whoo
               source: 'whoop',
               analyze_after: entry.analyzeAfter,
               next_attempt_at: entry.analyzeAfter,
+              secondary_source: entry.archiveSecondary?.source ?? null,
+              secondary_payload: entry.archiveSecondary?.payload ?? null,
             }]).onConflictDoUpdate({
               target: [schema.sleep_analyses.user_id, schema.sleep_analyses.wake_date],
               set: {
@@ -534,8 +614,32 @@ export function createWhoopSyncRepository(database: unknown, schema: typeof Whoo
                 lease_expires_at: null,
                 updated_at: sql`now()`,
                 notification_state: preserveSentState,
+                secondary_source: secondarySource,
+                secondary_payload: secondaryPayload,
               },
             });
+          },
+          async writeSecondaryWhoopSleep(entry) {
+            // Never touches the owning row's primary fields (source/input_payload/
+            // status/notification_*) — only the secondary slot.
+            await tx.update(schema.sleep_analyses).set({
+              secondary_source: 'whoop',
+              secondary_payload: entry.secondaryPayload,
+              updated_at: sql`now()`,
+            }).where(and(
+              eq(schema.sleep_analyses.user_id, userId),
+              eq(schema.sleep_analyses.wake_date, entry.wakeDate),
+            ));
+          },
+          async getWorkoutDevicePreference() {
+            const rows = await tx.select({ value: schema.users.primary_workout_device })
+              .from(schema.users).where(eq(schema.users.id, userId));
+            return (rows[0]?.value as 'apple' | 'whoop' | null | undefined) ?? null;
+          },
+          async getSleepDevicePreference() {
+            const rows = await tx.select({ value: schema.users.primary_sleep_device })
+              .from(schema.users).where(eq(schema.users.id, userId));
+            return (rows[0]?.value as 'apple' | 'whoop' | null | undefined) ?? null;
           },
         });
       });

@@ -232,12 +232,21 @@ export function computeRecovery(input: RecoveryInput): RecoveryScore {
  * baseline) is preferred over no source at all. Evaluated top-down; the
  * first matching rule wins.
  */
+/**
+ * `preferred` is `users.primary_recovery_device` (phase 2, PR A: "Recovery").
+ * When set, the preferred source is used whenever it has a recent point
+ * (>= 1 day) — even if the other source also has one — overriding the
+ * default "WHOOP wins when fresh" rule below. When the preferred source has
+ * NO recent point, selection falls back to the existing (unpreferenced)
+ * order, rather than reporting nothing at all.
+ */
 export function selectHrvSource(input: {
   whoopConnected: boolean;
   whoopRecentPointDays: number;
   whoopBaselineDataDays: number;
   healthkitRecentPointDays: number;
   healthkitBaselineDataDays: number;
+  preferred?: 'apple' | 'whoop' | null;
 }): HrvMetric | null {
   const {
     whoopConnected,
@@ -245,7 +254,11 @@ export function selectHrvSource(input: {
     whoopBaselineDataDays,
     healthkitRecentPointDays,
     healthkitBaselineDataDays,
+    preferred,
   } = input;
+
+  if (preferred === 'whoop' && whoopConnected && whoopRecentPointDays >= 1) return 'whoop_hrv_rmssd';
+  if (preferred === 'apple' && healthkitRecentPointDays >= 1) return 'hrv_sdnn';
 
   if (whoopConnected && whoopRecentPointDays >= 1) return 'whoop_hrv_rmssd';
   if (healthkitRecentPointDays >= 1) return 'hrv_sdnn';
