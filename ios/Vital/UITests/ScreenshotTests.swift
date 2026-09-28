@@ -171,12 +171,17 @@ final class ScreenshotTests: XCTestCase {
         element.tap()
     }
 
-    /// Waits for an element to exist, become hittable, and have a stable frame
-    /// (unchanged across two consecutive polls ~0.25s apart). Fails the test
-    /// with a clear message if the element never settles within the timeout.
-    /// Used to avoid capturing mid-animation — particularly for views
-    /// cross-fading content (e.g. AnalysisView transitioning between tabs
-    /// with `.motionTransition(.fade)`).
+    /// Waits for an element to exist and become hittable with a stable frame
+    /// across a 0.5s window. XCUITest cannot detect opacity changes, so when
+    /// the app's `Theme.Motion.appear` fade animation (0.25s `easeOut`) is
+    /// cross-fading content at this element, a frame-stability check cannot
+    /// distinguish mid-fade from fully-faded. This 0.5s window (double the
+    /// fade duration) ensures cross-faded content has finished appearing by
+    /// the time the method returns. If `Theme.Motion.appear` is increased,
+    /// raise this window accordingly.
+    ///
+    /// Fails the test with a clear message if the element never settles
+    /// within the timeout.
     private func waitForSettled(
         _ element: XCUIElement,
         timeout: TimeInterval = 5.0,
@@ -189,7 +194,7 @@ final class ScreenshotTests: XCTestCase {
 
         let deadline: Date = Date(timeIntervalSinceNow: timeout)
         var previousFrame: CGRect? = nil
-        let pollInterval: TimeInterval = 0.25
+        let pollInterval: TimeInterval = 0.5
 
         while Date.now < deadline {
             guard element.isHittable else {
