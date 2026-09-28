@@ -401,4 +401,121 @@ final class AnalysisLogicTests: XCTestCase {
         let event = bed.addingTimeInterval(600)
         XCTAssertFalse(AnalysisLogic.isWithinWindow(eventTime: event, bedTime: bed, windowHours: 4))
     }
+
+    // MARK: - Devices (phase 2 "both devices" contract, PR C item 4)
+
+    func testDeviceDisplayNameMatchesDevicesLogic() {
+        XCTAssertEqual(AnalysisLogic.deviceDisplayName(.apple), "Apple Watch")
+        XCTAssertEqual(AnalysisLogic.deviceDisplayName(.whoop), "WHOOP")
+    }
+
+    func testDefaultDeviceSelectionIsAlwaysThePrimary() {
+        XCTAssertEqual(AnalysisLogic.defaultDeviceSelection(primary: .apple), .apple)
+        XCTAssertEqual(AnalysisLogic.defaultDeviceSelection(primary: .whoop), .whoop)
+    }
+
+    // MARK: - HR curve points
+
+    func testHrCurvePointsEmptySeriesReturnsNoPoints() {
+        XCTAssertEqual(AnalysisLogic.hrCurvePoints(series: []), [])
+    }
+
+    func testHrCurvePointsSingleValueReturnsOneCenteredPointWithoutDividingByZero() {
+        let points = AnalysisLogic.hrCurvePoints(series: [150])
+        XCTAssertEqual(points, [AnalysisLogic.HRPoint(x: 0, y: 0.5)])
+    }
+
+    func testHrCurvePointsConstantSeriesReadsAtVerticalCenterWithoutDividingByZero() {
+        let points = AnalysisLogic.hrCurvePoints(series: [140, 140, 140, 140])
+        XCTAssertEqual(points.count, 4)
+        for point in points {
+            XCTAssertEqual(point.y, 0.5, accuracy: 0.0001)
+        }
+        XCTAssertEqual(points.first?.x, 0, accuracy: 0.0001)
+        XCTAssertEqual(points.last?.x, 1, accuracy: 0.0001)
+    }
+
+    func testHrCurvePointsNormalizesToUnitRange() {
+        let points = AnalysisLogic.hrCurvePoints(series: [100, 150, 200])
+        XCTAssertEqual(points.count, 3)
+        XCTAssertEqual(points[0].x, 0, accuracy: 0.0001)
+        XCTAssertEqual(points[0].y, 0, accuracy: 0.0001)
+        XCTAssertEqual(points[1].x, 0.5, accuracy: 0.0001)
+        XCTAssertEqual(points[1].y, 0.5, accuracy: 0.0001)
+        XCTAssertEqual(points[2].x, 1, accuracy: 0.0001)
+        XCTAssertEqual(points[2].y, 1, accuracy: 0.0001)
+    }
+
+    func testHrSeriesAvgMaxOfEmptySeriesIsNil() {
+        XCTAssertNil(AnalysisLogic.hrSeriesAvgMax([]))
+    }
+
+    func testHrSeriesAvgMax() throws {
+        let stats = try XCTUnwrap(AnalysisLogic.hrSeriesAvgMax([100, 150, 200]))
+        XCTAssertEqual(stats.avg, 150, accuracy: 0.0001)
+        XCTAssertEqual(stats.max, 200, accuracy: 0.0001)
+    }
+
+    // MARK: - Zone bars
+
+    func testZoneBarsEmptyInputReturnsNoBars() {
+        XCTAssertEqual(AnalysisLogic.zoneBars(secondsByZone: []), [])
+    }
+
+    func testZoneBarsFractionsRelativeToLargestZone() {
+        let bars = AnalysisLogic.zoneBars(secondsByZone: [149, 209, 2448, 298, 30])
+        XCTAssertEqual(bars.count, 5)
+        XCTAssertEqual(bars[2].fraction, 1, accuracy: 0.0001, "the largest zone always fills the bar")
+        XCTAssertEqual(bars[0].fraction, 149.0 / 2448.0, accuracy: 0.0001)
+        XCTAssertEqual(bars[4].fraction, 30.0 / 2448.0, accuracy: 0.0001)
+    }
+
+    func testZoneBarsTimeLabelsAreMinutesSeconds() {
+        let bars = AnalysisLogic.zoneBars(secondsByZone: [149, 209])
+        XCTAssertEqual(bars[0].timeLabel, "2:29")
+        XCTAssertEqual(bars[1].timeLabel, "3:29")
+    }
+
+    func testZoneBarsPercentLabelsSumApproximatelyTo100() {
+        let bars = AnalysisLogic.zoneBars(secondsByZone: [149, 209, 2448, 298, 30])
+        let percents = bars.map { Int($0.percentLabel.dropLast()) ?? 0 }
+        let total = percents.reduce(0, +)
+        XCTAssertTrue((99...101).contains(total), "rounded percents should sum close to 100, got \(total)")
+    }
+
+    func testZoneLabelsReserveBasisUsesZoneNumbers() {
+        XCTAssertEqual(AnalysisLogic.zoneLabels(basis: "reserve"), ["Zone 1", "Zone 2", "Zone 3", "Zone 4", "Zone 5"])
+        XCTAssertEqual(AnalysisLogic.zoneLabels(basis: nil), ["Zone 1", "Zone 2", "Zone 3", "Zone 4", "Zone 5"])
+    }
+
+    func testZoneLabelsMaxHrBasisUsesPercentBands() {
+        XCTAssertEqual(AnalysisLogic.zoneLabels(basis: "maxHr"), ["50–60%", "60–70%", "70–80%", "80–90%", "90%+"])
+    }
+
+    func testMmssFormatsWholeSeconds() {
+        XCTAssertEqual(AnalysisLogic.mmss(149), "2:29")
+        XCTAssertEqual(AnalysisLogic.mmss(30), "0:30")
+        XCTAssertEqual(AnalysisLogic.mmss(0), "0:00")
+    }
+
+    // MARK: - Sleep devices disagreement
+
+    func testSleepDevicesDisagreeAtThresholdIsTrue() {
+        XCTAssertTrue(AnalysisLogic.sleepDevicesDisagree(minutesA: 348, minutesB: 358))
+    }
+
+    func testSleepDevicesDisagreeJustUnderThresholdIsFalse() {
+        XCTAssertFalse(AnalysisLogic.sleepDevicesDisagree(minutesA: 348, minutesB: 357))
+    }
+
+    func testSleepDevicesAgreeWithinToleranceIsFalse() {
+        XCTAssertFalse(AnalysisLogic.sleepDevicesDisagree(minutesA: 348, minutesB: 350))
+    }
+
+    func testSleepDevicesDisagreeIsOrderIndependent() {
+        XCTAssertEqual(
+            AnalysisLogic.sleepDevicesDisagree(minutesA: 348, minutesB: 370),
+            AnalysisLogic.sleepDevicesDisagree(minutesA: 370, minutesB: 348)
+        )
+    }
 }

@@ -595,6 +595,11 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertTrue(workoutHeader.waitForExistence(timeout: 15),
                        "Tapping the workout row should open the workout AnalysisView [\(scenario)/\(appearance)]")
         capture(app, name: "\(scenario)__workoutAnalysis__\(appearance)")
+
+        if scenario == "endurance" {
+            captureWorkoutAnalysisWhoopTab(app, scenario: scenario, appearance: appearance)
+        }
+
         let workoutDone = app.buttons["analysis.done"].firstMatch
         tapWhenHittable(workoutDone, app: app, description: "Workout AnalysisView Done button [\(scenario)/\(appearance)]")
         // Wait for the workout sheet to actually finish closing (not just
@@ -608,6 +613,24 @@ final class ScreenshotTests: XCTestCase {
                        "Workout AnalysisView should fully dismiss before the next tap [\(scenario)/\(appearance)]")
         XCTAssertTrue(app.staticTexts["LOG ENTRIES"].waitForExistence(timeout: 10),
                        "Dismissing the workout analysis should return to Logs [\(scenario)/\(appearance)]")
+    }
+
+    /// `endurance`-only: taps the "The data" device switch's WHOOP segment
+    /// (`analysis.deviceSwitch.whoop`) and captures the WHOOP tab (phase 2
+    /// "both devices" contract, PR C item 5). Runs while still inside the
+    /// workout AnalysisView sheet opened by `captureWorkoutAnalysis`, right
+    /// after that method's own `analysisWorkout.header` capture — the Apple
+    /// Watch tab (the switch's default) is what `endurance__workoutAnalysis`
+    /// already shows. Segment name is letters-only ("workoutAnalysisWhoop")
+    /// to match the export regex `^[a-z_]+__[A-Za-z]+__(light|dark)\.png$`.
+    private func captureWorkoutAnalysisWhoopTab(_ app: XCUIApplication, scenario: String, appearance: String) {
+        let whoopSwitch = app.buttons["analysis.deviceSwitch.whoop"].firstMatch
+        // "The data" section (and its switch) sits below the fold on first
+        // open — scroll it into view the same gentle, bounded way every
+        // other off-screen element in this harness does, rather than a bare
+        // `swipeUp()` that could overshoot it back off the top of the screen.
+        tapWhenHittable(whoopSwitch, app: app, maxSwipes: 6, description: "Workout AnalysisView's WHOOP device switch [\(scenario)/\(appearance)]")
+        capture(app, name: "\(scenario)__workoutAnalysisWhoop__\(appearance)")
     }
 
     private func captureSleepAnalysis(_ app: XCUIApplication, scenario: String, appearance: String) {
