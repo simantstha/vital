@@ -425,14 +425,16 @@ final class AnalysisLogicTests: XCTestCase {
         XCTAssertEqual(points, [AnalysisLogic.HRPoint(x: 0, y: 0.5)])
     }
 
-    func testHrCurvePointsConstantSeriesReadsAtVerticalCenterWithoutDividingByZero() {
+    func testHrCurvePointsConstantSeriesReadsAtVerticalCenterWithoutDividingByZero() throws {
         let points = AnalysisLogic.hrCurvePoints(series: [140, 140, 140, 140])
         XCTAssertEqual(points.count, 4)
         for point in points {
             XCTAssertEqual(point.y, 0.5, accuracy: 0.0001)
         }
-        XCTAssertEqual(points.first?.x, 0, accuracy: 0.0001)
-        XCTAssertEqual(points.last?.x, 1, accuracy: 0.0001)
+        let first = try XCTUnwrap(points.first)
+        let last = try XCTUnwrap(points.last)
+        XCTAssertEqual(first.x, 0, accuracy: 0.0001)
+        XCTAssertEqual(last.x, 1, accuracy: 0.0001)
     }
 
     func testHrCurvePointsNormalizesToUnitRange() {
