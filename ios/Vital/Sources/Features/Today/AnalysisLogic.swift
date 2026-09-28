@@ -373,4 +373,118 @@ enum AnalysisLogic {
         let hours = bedTime.timeIntervalSince(eventTime) / 3600
         return hours >= 0 && hours <= windowHours
     }
+
+    // MARK: - Devices (phase 2 "both devices" contract, PR C item 4)
+
+    /// Display name for a device — thin passthrough to
+    /// `DevicesLogic.deviceName` so the Analysis screen and the Devices
+    /// settings screen never disagree on how a device is named.
+    static func deviceDisplayName(_ device: DevicesLogic.DeviceKind) -> String {
+        DevicesLogic.deviceName(device)
+    }
+
+    /// The device switch's default selection — always the primary device's
+    /// own tab (contract: "It defaults to the primary device").
+    static func defaultDeviceSelection(primary: DevicesLogic.DeviceKind) -> DevicesLogic.DeviceKind {
+        primary
+    }
+
+    // MARK: - Heart-rate curve
+
+    /// A single point on the normalized heart-rate curve — `x`/`y` both
+    /// 0...1, `x` left→right across the workout, `y` bottom→top of its own
+    /// min/max range (NOT an absolute bpm scale — the view maps this onto
+    /// whatever frame it's drawn in).
+    struct HRPoint: Equatable {
+        let x: Double
+        let y: Double
+    }
+
+    /// Normalizes a raw `hrSeries` (bpm, evenly spaced in time) into 0...1
+    /// plot points. Handles the edge cases a naive `(v - lo) / (hi - lo)`
+    /// wouldn't: an empty series returns no points, a single-sample series
+    /// returns one centered point (nothing to draw a line through), and a
+    /// perfectly flat series (`hi == lo`) reads every point at the vertical
+    /// center rather than dividing by zero.
+    static func hrCurvePoints(series: [Double]) -> [HRPoint] {
+        guard !series.isEmpty else { return [] }
+        guard series.count > 1 else { return [HRPoint(x: 0, y: 0.5)] }
+        let lo = series.min() ?? 0
+        let hi = series.max() ?? 0
+        let range = hi - lo
+        return series.enumerated().map { index, value in
+            let x = Double(index) / Double(series.count - 1)
+            let y = range > 0 ? (value - lo) / range : 0.5
+            return HRPoint(x: x, y: y)
+        }
+    }
+
+    /// (avg, max) of a raw `hrSeries`, for the curve card's "avg N · max N"
+    /// caption when the session itself doesn't already carry `avgHr`/`maxHr`.
+    /// `nil` for an empty series — never a fabricated 0.
+    static func hrSeriesAvgMax(_ series: [Double]) -> (avg: Double, max: Double)? {
+        guard !series.isEmpty else { return nil }
+        let maxValue = series.max() ?? 0
+        let avg = series.reduce(0, +) / Double(series.count)
+        return (avg, maxValue)
+    }
+
+    // MARK: - Time-in-zones bars
+
+    struct ZoneBar: Equatable {
+        let label: String
+        /// 0...1, relative to the LARGEST zone — the longest zone always
+        /// fills the bar, matching the mockup's `zone_bars` helper.
+        let fraction: Double
+        let timeLabel: String    // "3:29" (mm:ss)
+        let percentLabel: String // "78%" of the total time across all zones
+    }
+
+    /// Apple's heart-rate-reserve zone labels vs WHOOP's max-HR-share labels
+    /// (contract: zones "from your heart-rate reserve" for Apple, "as a
+    /// share of your max heart rate" for WHOOP) — picked by `zoneBasis`.
+    static func zoneLabels(basis: String?) -> [String] {
+        basis == "maxHr"
+            ? ["50–60%", "60–70%", "70–80%", "80–90%", "90%+"]
+            : ["Zone 1", "Zone 2", "Zone 3", "Zone 4", "Zone 5"]
+    }
+
+    /// "N:SS" for a whole-seconds duration — the zone bars' own duration
+    /// label, distinct from `formatDuration`'s "Nh Nm" (which reads wrong at
+    /// zone-bar scale: "0m" for anything under a minute).
+    static func mmss(_ seconds: Double) -> String {
+        let total = Int(seconds.rounded())
+        let minutes = total / 60
+        let secs = total % 60
+        return "\(minutes):\(String(format: "%02d", secs))"
+    }
+
+    /// Builds the 5 zone bars from `zonesSec` — empty input yields no bars
+    /// (a hidden section) rather than 5 empty ones.
+    static func zoneBars(secondsByZone: [Double], basis: String? = nil) -> [ZoneBar] {
+        guard !secondsByZone.isEmpty else { return [] }
+        let labels = zoneLabels(basis: basis)
+        let total = secondsByZone.reduce(0, +)
+        let maxValue = secondsByZone.max() ?? 0
+        return secondsByZone.enumerated().map { index, seconds in
+            let fraction = maxValue > 0 ? seconds / maxValue : 0
+            let percent = total > 0 ? Int((seconds / total * 100).rounded()) : 0
+            return ZoneBar(
+                label: index < labels.count ? labels[index] : "Zone \(index + 1)",
+                fraction: min(max(fraction, 0), 1),
+                timeLabel: mmss(seconds),
+                percentLabel: "\(percent)%"
+            )
+        }
+    }
+
+    // MARK: - Sleep devices disagreement
+
+    /// The "devices disagree" card only appears when the two devices' asleep
+    /// minutes differ by at least this much (contract §3).
+    static let sleepDisagreeThresholdMinutes: Double = 10
+
+    static func sleepDevicesDisagree(minutesA: Double, minutesB: Double) -> Bool {
+        abs(minutesA - minutesB) >= sleepDisagreeThresholdMinutes
+    }
 }

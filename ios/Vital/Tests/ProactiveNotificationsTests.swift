@@ -137,6 +137,110 @@ final class ProactiveNotificationsTests: XCTestCase {
         XCTAssertNil(value.context)
     }
 
+    // MARK: - context.devices (phase 2 "both devices" contract, lib/analysisContext.ts)
+
+    /// The exact `context.devices` shape `buildWorkoutDevicesContext` sends —
+    /// primary session first, with `kcal`; the other session omits `kcal`
+    /// (server: "the UI says not counted").
+    func testAnalysisContextDecodesWorkoutDevicesShape() throws {
+        let json = #"""
+        {
+          "id":"8ba804f0-68b2-4d36-98bb-90c9eea911a4","date":"2026-07-12",
+          "result":{"headline":"h","shortInsight":"s","narrative":"n","observations":[],"nextSteps":[]},
+          "createdAt":"2026-07-12T15:00:00.000Z",
+          "context": {
+            "devices": {
+              "primary": "apple",
+              "sessions": [
+                {
+                  "source": "apple", "durationMin": 52.23, "distanceM": 10200, "avgHr": 158, "maxHr": 176,
+                  "kcal": 612, "zonesSec": [149, 209, 2448, 298, 30], "zoneBasis": "reserve",
+                  "hrSeries": [110, 130, 150, 158, 176],
+                  "running": { "cadenceSpm": 172, "groundContactMs": 238, "powerW": 268, "strideM": 1.14 }
+                },
+                {
+                  "source": "whoop", "durationMin": 52, "avgHr": 156, "strain": 14.8,
+                  "zonesSec": [242, 490, 1060, 1152, 190], "zoneBasis": "maxHr"
+                }
+              ]
+            }
+          }
+        }
+        """#
+        let value = try JSONDecoder.vital.decode(AnalysisResponse.self, from: Data(json.utf8))
+        let context = try XCTUnwrap(value.context)
+        let devices = try XCTUnwrap(context.devices)
+        XCTAssertEqual(devices.primary, .apple)
+        XCTAssertEqual(devices.sessions?.count, 2)
+        let apple = try XCTUnwrap(devices.sessions?.first)
+        XCTAssertEqual(apple.source, .apple)
+        XCTAssertEqual(apple.kcal, 612)
+        XCTAssertEqual(apple.zonesSec, [149, 209, 2448, 298, 30])
+        XCTAssertEqual(apple.zoneBasis, "reserve")
+        XCTAssertEqual(apple.hrSeries, [110, 130, 150, 158, 176])
+        XCTAssertEqual(apple.running?.cadenceSpm, 172)
+        XCTAssertEqual(apple.running?.groundContactMs, 238)
+        let whoop = try XCTUnwrap(devices.sessions?.last)
+        XCTAssertEqual(whoop.source, .whoop)
+        XCTAssertNil(whoop.kcal, "the non-primary session must omit kcal — 'not counted'")
+        XCTAssertEqual(whoop.strain, 14.8)
+        XCTAssertEqual(whoop.zoneBasis, "maxHr")
+        XCTAssertNil(whoop.hrSeries)
+        XCTAssertNil(whoop.running)
+    }
+
+    /// The exact `context.devices` shape `buildSleepDevicesContext` sends —
+    /// `minutes` + optional `stages`, no workout-only fields.
+    func testAnalysisContextDecodesSleepDevicesShape() throws {
+        let json = #"""
+        {
+          "id":"8ba804f0-68b2-4d36-98bb-90c9eea911a5","date":"2026-07-12",
+          "result":{"headline":"h","shortInsight":"s","narrative":"n","observations":[],"nextSteps":[]},
+          "createdAt":"2026-07-12T15:00:00.000Z",
+          "context": {
+            "devices": {
+              "primary": "whoop",
+              "sessions": [
+                { "source": "whoop", "minutes": 348, "stages": { "core": 242, "deep": 42, "rem": 64, "awake": 38 } },
+                { "source": "apple", "minutes": 370, "stages": { "core": 250, "deep": 48, "rem": 58, "awake": 14 } }
+              ]
+            }
+          }
+        }
+        """#
+        let value = try JSONDecoder.vital.decode(AnalysisResponse.self, from: Data(json.utf8))
+        let context = try XCTUnwrap(value.context)
+        let devices = try XCTUnwrap(context.devices)
+        XCTAssertEqual(devices.primary, .whoop)
+        let whoop = try XCTUnwrap(devices.sessions?.first)
+        XCTAssertEqual(whoop.minutes, 348)
+        XCTAssertEqual(whoop.stages?.deep, 42)
+        XCTAssertNil(whoop.durationMin, "sleep sessions never carry workout-only fields")
+        let apple = try XCTUnwrap(devices.sessions?.last)
+        XCTAssertEqual(apple.minutes, 370)
+        XCTAssertEqual(apple.stages?.core, 250)
+    }
+
+    /// A context with no `devices` key at all must still decode, with
+    /// `devices` nil — the common case for every non-endurance fixture
+    /// scenario and every analysis before phase 2.
+    func testAnalysisContextWithoutDevicesDecodesDevicesAsNil() throws {
+        let json = #"""
+        {
+          "id":"8ba804f0-68b2-4d36-98bb-90c9eea911a6","date":"2026-07-12",
+          "result":{"headline":"h","shortInsight":"s","narrative":"n","observations":[],"nextSteps":[]},
+          "createdAt":"2026-07-12T15:00:00.000Z",
+          "context": {
+            "usual": { "sessions": 6, "distanceM": 4800, "durationMin": 29, "paceMinPerKm": 6.1, "avgHr": 145 }
+          }
+        }
+        """#
+        let value = try JSONDecoder.vital.decode(AnalysisResponse.self, from: Data(json.utf8))
+        let context = try XCTUnwrap(value.context)
+        XCTAssertNil(context.devices)
+        XCTAssertEqual(context.usual?.sessions, 6, "the rest of the context must still decode normally")
+    }
+
     func testPushRouteParsesAnalysisAndMorningBriefPayloads() {
         let id = "8ba804f0-68b2-4d36-98bb-90c9eea911a1"
         XCTAssertEqual(PushRoute(userInfo: ["type": "workout_analysis", "id": id, "deepLink": "vital://workout-analysis/\(id)"]), .workoutAnalysis(id))

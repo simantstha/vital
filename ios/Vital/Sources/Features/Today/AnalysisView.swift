@@ -369,6 +369,165 @@ private struct AskCoachLink: View {
     }
 }
 
+// MARK: - Device chip / switch (phase 2 "both devices" contract, PR C items 2/3)
+
+/// Small "Apple Watch" / "WHOOP" pill — the source chips row under the
+/// header, and the sleep screen's "<Primary> · primary for sleep" chip
+/// (via `label`).
+private struct DeviceSourceChip: View {
+    let device: DevicesLogic.DeviceKind
+    var label: String? = nil
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: device == .apple ? "applewatch" : "waveform.path.ecg")
+                .font(.system(size: 11, weight: .semibold))
+            Text(label ?? AnalysisLogic.deviceDisplayName(device))
+                .font(.system(size: 12, weight: .semibold))
+                .lineLimit(1)
+        }
+        .foregroundStyle(Theme.Colors.textSecondary)
+        .padding(.horizontal, Theme.Spacing.sm)
+        .padding(.vertical, 5)
+        .background(Theme.Colors.glassFill, in: Capsule())
+        .fixedSize()
+    }
+}
+
+/// The "Apple Watch | WHOOP" segmented control — defaults to the primary
+/// device (set by the caller's `@State` initial value), identifiers
+/// `analysis.deviceSwitch.apple` / `analysis.deviceSwitch.whoop` (contract).
+/// Identifiers sit on the `Button`s themselves (leaves), never on the
+/// container, per the #249/#253 review lesson that a container's identifier
+/// overrides its children's.
+private struct DeviceSwitchControl: View {
+    @Binding var selected: DevicesLogic.DeviceKind
+    let options: [DevicesLogic.DeviceKind]
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(options, id: \.self) { option in
+                segment(option)
+            }
+        }
+        .padding(2)
+        .background(Theme.Colors.glassFill, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    private func segment(_ option: DevicesLogic.DeviceKind) -> some View {
+        let isOn = option == selected
+        return Button {
+            selected = option
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: option == .apple ? "applewatch" : "waveform.path.ecg")
+                    .font(.system(size: 13, weight: .semibold))
+                Text(AnalysisLogic.deviceDisplayName(option))
+                    .font(.system(size: 14, weight: isOn ? .bold : .semibold))
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+            .foregroundStyle(isOn ? Theme.Colors.textPrimary : Theme.Colors.textSecondary)
+            .frame(maxWidth: .infinity, minHeight: 36)
+            // `.buttonStyle(.plain)` + a `Spacer`-like `maxWidth: .infinity`
+            // frame needs an explicit hit-testing shape (#249/#253 lesson) —
+            // otherwise only the icon+text's own intrinsic size is tappable.
+            .contentShape(Rectangle())
+            .background {
+                if isOn {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Theme.Colors.switcherThumb)
+                        .shadow(color: Theme.Colors.cardShadow, radius: 3, y: 1)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier(option == .apple ? "analysis.deviceSwitch.apple" : "analysis.deviceSwitch.whoop")
+    }
+}
+
+/// Plain 0...21 strain scale with a single marker at `value` — WHOOP's own
+/// strain card. The mockup's richer scale (a suggested range, a running day
+/// total) needs data `context.devices` doesn't carry per session, so this is
+/// deliberately simpler: just where today's session strain sits on WHOOP's
+/// 0-21 scale.
+private struct StrainScaleView: View {
+    let value: Double
+
+    private var fraction: Double {
+        min(max(value / 21, 0), 1)
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(Theme.Colors.glassFill)
+                    .frame(height: 10)
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(Theme.Colors.accent)
+                    .frame(width: geo.size.width * CGFloat(fraction), height: 10)
+            }
+        }
+    }
+}
+
+/// One `AnalysisLogic.ZoneBar` row: label, fill bar, mm:ss, percent.
+private struct ZoneBarRow: View {
+    let bar: AnalysisLogic.ZoneBar
+
+    var body: some View {
+        HStack(spacing: Theme.Spacing.md) {
+            Text(bar.label)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Theme.Colors.textSecondary)
+                .frame(width: 58, alignment: .leading)
+                .lineLimit(1)
+                .fixedSize()
+            GeometryReader { geo in
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(Theme.Colors.indigo)
+                    .frame(width: max(geo.size.width * CGFloat(bar.fraction), 3), height: 10)
+            }
+            .frame(height: 10)
+            Text(bar.timeLabel)
+                .font(Theme.Typography.numericSmall(14))
+                .foregroundStyle(Theme.Colors.textPrimary)
+                .frame(width: 46, alignment: .trailing)
+                .fixedSize()
+            Text(bar.percentLabel)
+                .font(.system(size: 11))
+                .foregroundStyle(Theme.Colors.textSecondary)
+                .frame(width: 32, alignment: .trailing)
+                .fixedSize()
+        }
+        .padding(.vertical, 4)
+    }
+}
+
+/// Draws a normalized heart-rate curve (`AnalysisLogic.hrCurvePoints`) as a
+/// `Canvas`-hosted `Path` — the same approach `Sparkline` already uses
+/// (never Swift Charts) for this app's line charts.
+private struct HeartRateCurveView: View {
+    let points: [AnalysisLogic.HRPoint]
+
+    var body: some View {
+        Canvas { context, size in
+            guard points.count >= 2 else { return }
+            var path = Path()
+            for (index, point) in points.enumerated() {
+                let cgPoint = CGPoint(x: point.x * size.width, y: (1 - point.y) * size.height * 0.85 + size.height * 0.08)
+                if index == 0 {
+                    path.move(to: cgPoint)
+                } else {
+                    path.addLine(to: cgPoint)
+                }
+            }
+            context.stroke(path, with: .color(Theme.Colors.textPrimary), style: StrokeStyle(lineWidth: 1.8, lineCap: .round, lineJoin: .round))
+        }
+    }
+}
+
 // MARK: - Workout content
 
 // Internal (not `private`) purely so `AnalysisFixtureRenderTests` can
@@ -381,11 +540,44 @@ struct WorkoutAnalysisContent: View {
     let kind: AnalysisKind
     @EnvironmentObject private var router: AppRouter
     @ObservedObject private var unitPref = UnitPreference.shared
+    /// Which device's tab is showing in "The data" — defaults to the
+    /// primary device (contract) via the custom `init` below, kept in
+    /// `@State` since the fixture/decoded `value` never changes after load.
+    @State private var selectedDevice: DevicesLogic.DeviceKind
+
+    init(value: AnalysisResponse, doneAction: @escaping () -> Void, kind: AnalysisKind) {
+        self.value = value
+        self.doneAction = doneAction
+        self.kind = kind
+        let primary = value.context?.devices?.primary ?? .apple
+        _selectedDevice = State(initialValue: AnalysisLogic.defaultDeviceSelection(primary: primary))
+    }
 
     private var metrics: AnalysisMetrics? { value.metrics }
     private var context: AnalysisContext? { value.context }
     private var type: String { metrics?.type ?? "Workout" }
     private var startDate: Date? { metrics?.startTime.flatMap(AnalysisView.parseISO) }
+
+    // MARK: Devices
+
+    private var hasBothDeviceSessions: Bool {
+        (context?.devices?.sessions?.count ?? 0) >= 2
+    }
+
+    private func deviceSession(_ device: DevicesLogic.DeviceKind) -> AnalysisContext.DeviceSession? {
+        context?.devices?.sessions?.first { $0.source == device }
+    }
+
+    private var devicesPrimary: DevicesLogic.DeviceKind {
+        context?.devices?.primary ?? .apple
+    }
+
+    /// Fallback for a single-device (or no-`devices`) session — "the single
+    /// session's own data" (contract): shown without the switch.
+    private var singleDeviceFallbackSession: AnalysisContext.DeviceSession? {
+        guard !hasBothDeviceSessions else { return nil }
+        return context?.devices?.sessions?.first
+    }
 
     var body: some View {
         ScrollView {
@@ -399,7 +591,11 @@ struct WorkoutAnalysisContent: View {
                     titleIdentifier: "analysisWorkout.header"
                 )
 
+                deviceSourceChipsRow
+
                 statsRow
+
+                devicesSection
 
                 if let paceHistory = context?.paceHistory, let metrics, metrics.paceMinPerKm != nil {
                     paceHistorySection(paceHistory)
@@ -438,6 +634,199 @@ struct WorkoutAnalysisContent: View {
 
     private func hasGoingInData(_ goingIn: AnalysisContext.GoingIn) -> Bool {
         goingIn.sleepMinutes != nil || goingIn.hrv != nil || goingIn.daysSinceLastSameType != nil
+    }
+
+    // MARK: Devices — "The data" (phase 2 "both devices" contract, PR C item 2)
+
+    @ViewBuilder
+    private var deviceSourceChipsRow: some View {
+        if hasBothDeviceSessions, let sessions = context?.devices?.sessions {
+            HStack(spacing: Theme.Spacing.sm) {
+                ForEach(sessions.indices, id: \.self) { index in
+                    if let source = sessions[index].source {
+                        DeviceSourceChip(device: source)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var devicesSection: some View {
+        if hasBothDeviceSessions {
+            VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                AnalysisSectionHeader(title: "The data", trailing: "both devices recorded this")
+                DeviceSwitchControl(selected: $selectedDevice, options: [.apple, .whoop])
+                if selectedDevice == .apple, let appleSession = deviceSession(.apple) {
+                    appleDeviceCards(appleSession)
+                }
+                if selectedDevice == .whoop, let whoopSession = deviceSession(.whoop) {
+                    whoopDeviceCards(whoopSession)
+                }
+            }
+        } else if let session = singleDeviceFallbackSession {
+            singleDeviceFallbackCards(session)
+        }
+    }
+
+    /// Apple Watch tab: heart-rate curve, time in zones, running form —
+    /// each shown only when its own data is present.
+    private func appleDeviceCards(_ session: AnalysisContext.DeviceSession) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            if let hrSeries = session.hrSeries, hrSeries.count >= 2 {
+                heartRateCurveCard(hrSeries: hrSeries, avgHr: session.avgHr, maxHr: session.maxHr)
+            }
+            if let zonesSec = session.zonesSec, !zonesSec.isEmpty {
+                zonesCard(zonesSec: zonesSec, basis: session.zoneBasis)
+            }
+            if let running = session.running {
+                runningFormCard(running)
+            }
+        }
+    }
+
+    /// WHOOP tab: strain, zones (max-HR-share basis), avg HR (vs the
+    /// Watch's own), energy "not counted" from the primary device.
+    private func whoopDeviceCards(_ session: AnalysisContext.DeviceSession) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            if let strain = session.strain {
+                strainCard(strain)
+            }
+            if let zonesSec = session.zonesSec, !zonesSec.isEmpty {
+                zonesCard(zonesSec: zonesSec, basis: session.zoneBasis)
+            }
+            avgHrEnergyCard(session)
+            if session.kcal == nil {
+                caloriesCountOnceCaption
+            }
+        }
+    }
+
+    /// No `devices`, or only one session recorded — show whichever of this
+    /// session's own cards have data, with no switch (contract §2).
+    private func singleDeviceFallbackCards(_ session: AnalysisContext.DeviceSession) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            if let hrSeries = session.hrSeries, hrSeries.count >= 2 {
+                heartRateCurveCard(hrSeries: hrSeries, avgHr: session.avgHr, maxHr: session.maxHr)
+            }
+            if let zonesSec = session.zonesSec, !zonesSec.isEmpty {
+                zonesCard(zonesSec: zonesSec, basis: session.zoneBasis)
+            }
+            if let running = session.running {
+                runningFormCard(running)
+            }
+        }
+    }
+
+    private func heartRateCurveCard(hrSeries: [Double], avgHr: Double?, maxHr: Double?) -> some View {
+        let stats = AnalysisLogic.hrSeriesAvgMax(hrSeries)
+        let avg = avgHr ?? stats?.avg
+        let peak = maxHr ?? stats?.max
+        return VitalCard(padding: Theme.Spacing.lg) {
+            VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                HStack {
+                    Text("Heart rate").font(.system(size: 15, weight: .bold)).foregroundStyle(Theme.Colors.textPrimary)
+                    Spacer()
+                    if let avg, let peak {
+                        Text("avg \(Int(avg.rounded())) · max \(Int(peak.rounded()))")
+                            .font(.system(size: 12))
+                            .foregroundStyle(Theme.Colors.textSecondary)
+                    }
+                }
+                HeartRateCurveView(points: AnalysisLogic.hrCurvePoints(series: hrSeries))
+                    .frame(height: 90)
+            }
+        }
+    }
+
+    private func zoneCaption(basis: String?) -> String {
+        basis == "maxHr"
+            ? "WHOOP measures zones as a share of your max heart rate, so they won't match the Watch's exactly."
+            : "Zones from your heart-rate reserve."
+    }
+
+    private func zonesCard(zonesSec: [Double], basis: String?) -> some View {
+        let bars = AnalysisLogic.zoneBars(secondsByZone: zonesSec, basis: basis)
+        return VitalCard(padding: Theme.Spacing.lg) {
+            VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
+                Text("Time in zones").font(.system(size: 15, weight: .bold)).foregroundStyle(Theme.Colors.textPrimary)
+                ForEach(Array(bars.enumerated()), id: \.offset) { _, bar in
+                    ZoneBarRow(bar: bar)
+                }
+                Text(zoneCaption(basis: basis))
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.Colors.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, Theme.Spacing.xs)
+            }
+        }
+    }
+
+    private func runningFormCard(_ running: AnalysisContext.DeviceRunning) -> some View {
+        VitalCard(padding: Theme.Spacing.lg) {
+            VStack(alignment: .leading, spacing: 0) {
+                if let cadence = running.cadenceSpm {
+                    DataRow(icon: "figure.run", label: "Cadence",
+                            chip: .init(text: "\(Int(cadence.rounded())) spm", tone: .neutral), isFirst: true)
+                }
+                if let groundContact = running.groundContactMs {
+                    DataRow(icon: "timer", label: "Ground contact",
+                            chip: .init(text: "\(Int(groundContact.rounded())) ms", tone: .neutral),
+                            isFirst: running.cadenceSpm == nil)
+                }
+                if let power = running.powerW {
+                    DataRow(icon: "bolt.fill", label: "Power",
+                            chip: .init(text: "\(Int(power.rounded())) W", tone: .neutral),
+                            isFirst: running.cadenceSpm == nil && running.groundContactMs == nil)
+                }
+            }
+        }
+    }
+
+    private func strainCard(_ strain: Double) -> some View {
+        VitalCard(padding: Theme.Spacing.lg) {
+            VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                HStack(alignment: .lastTextBaseline) {
+                    Text("Strain").font(.system(size: 15, weight: .bold)).foregroundStyle(Theme.Colors.textPrimary)
+                    Spacer()
+                    Text(String(format: "%.1f", strain))
+                        .font(Theme.Typography.numericSmall(18))
+                        .foregroundStyle(Theme.Colors.textPrimary)
+                }
+                StrainScaleView(value: strain).frame(height: 14)
+            }
+        }
+    }
+
+    private func avgHrChipText(avgHr: Double, watchAvg: Double?) -> String {
+        guard let watchAvg else { return "\(Int(avgHr.rounded())) bpm" }
+        return "\(Int(avgHr.rounded())) bpm · Watch: \(Int(watchAvg.rounded()))"
+    }
+
+    private func avgHrEnergyCard(_ session: AnalysisContext.DeviceSession) -> some View {
+        let watchAvg = deviceSession(.apple)?.avgHr
+        return VitalCard(padding: Theme.Spacing.lg) {
+            VStack(alignment: .leading, spacing: 0) {
+                if let avgHr = session.avgHr {
+                    DataRow(icon: "heart.fill", label: "Average heart rate",
+                            chip: .init(text: avgHrChipText(avgHr: avgHr, watchAvg: watchAvg), tone: .neutral),
+                            isFirst: true)
+                }
+                DataRow(icon: "flame.fill", label: "Energy",
+                        chip: .init(text: session.kcal.map { "\(Int($0.rounded())) kcal" } ?? "not counted", tone: .neutral),
+                        isFirst: session.avgHr == nil)
+            }
+        }
+    }
+
+    /// "Calories count once, from your primary device for workouts —
+    /// <primary name>." (contract) — shown under the energy row only when
+    /// THIS session's own kcal was omitted (i.e. it isn't the primary).
+    private var caloriesCountOnceCaption: some View {
+        Text("Calories count once, from your primary device for workouts — \(AnalysisLogic.deviceDisplayName(devicesPrimary)).")
+            .font(.system(size: 12))
+            .foregroundStyle(Theme.Colors.textSecondary)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     // MARK: Stats row
@@ -790,9 +1179,39 @@ struct SleepAnalysisContent: View {
     let doneAction: () -> Void
     let kind: AnalysisKind
     @EnvironmentObject private var router: AppRouter
+    /// Which device's stages are showing — defaults to the primary device
+    /// (contract), same pattern as `WorkoutAnalysisContent`.
+    @State private var selectedDevice: DevicesLogic.DeviceKind
+
+    init(value: AnalysisResponse, doneAction: @escaping () -> Void, kind: AnalysisKind) {
+        self.value = value
+        self.doneAction = doneAction
+        self.kind = kind
+        let primary = value.context?.devices?.primary ?? .apple
+        _selectedDevice = State(initialValue: AnalysisLogic.defaultDeviceSelection(primary: primary))
+    }
 
     private var metrics: AnalysisMetrics? { value.metrics }
     private var context: AnalysisContext? { value.context }
+
+    // MARK: Devices
+
+    private var hasBothDeviceSessions: Bool {
+        (context?.devices?.sessions?.count ?? 0) >= 2
+    }
+
+    private func deviceSession(_ device: DevicesLogic.DeviceKind) -> AnalysisContext.DeviceSession? {
+        context?.devices?.sessions?.first { $0.source == device }
+    }
+
+    private var devicesPrimary: DevicesLogic.DeviceKind {
+        context?.devices?.primary ?? .apple
+    }
+
+    private var otherDevice: DevicesLogic.DeviceKind? {
+        guard hasBothDeviceSessions else { return nil }
+        return devicesPrimary == .apple ? .whoop : .apple
+    }
 
     var body: some View {
         ScrollView {
@@ -808,7 +1227,15 @@ struct SleepAnalysisContent: View {
 
                 hero
 
-                stages
+                deviceSourceChip
+
+                if hasBothDeviceSessions {
+                    devicesStagesSection
+                } else {
+                    stages
+                }
+
+                devicesDisagreeCard
 
                 if let beforeBed = context?.beforeBed, beforeBed.lastWorkoutEndedAt != nil || beforeBed.lastMealAt != nil,
                    let bedTime = context?.timing?.bedTime {
@@ -885,17 +1312,24 @@ struct SleepAnalysisContent: View {
         if let hkStages = metrics?.stages, let usualStages = context?.sleepUsual?.stages {
             VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
                 AnalysisSectionHeader(title: "Stages", trailing: "bar = last night · tick = your usual")
-                VitalCard(padding: Theme.Spacing.md) {
-                    VStack(alignment: .leading, spacing: 0) {
-                        stageRow("Deep", minutes: hkStages.deep, usual: usualStages.deep, kind: .deep, isFirst: true)
-                        stageRow("REM", minutes: hkStages.rem, usual: usualStages.rem, kind: .rem, isFirst: false)
-                        stageRow("Core", minutes: hkStages.core, usual: usualStages.core, kind: .core, isFirst: false)
-                        stageRow("Awake", minutes: hkStages.awake, usual: usualStages.awake, kind: .awake, isFirst: false)
-                    }
-                }
+                stageRowsCard(hkStages, usualStages: usualStages)
             }
         } else if let hkStages = metrics?.stages {
             stackedStageBar(hkStages)
+        }
+    }
+
+    /// The "bar = last night · tick = your usual" card, pulled out of
+    /// `stages` so the devices stages switch (below) can reuse it for the
+    /// primary device's tab without duplicating its own section header.
+    private func stageRowsCard(_ hkStages: AnalysisMetrics.SleepStages, usualStages: AnalysisContext.SleepUsual.Stages) -> some View {
+        VitalCard(padding: Theme.Spacing.md) {
+            VStack(alignment: .leading, spacing: 0) {
+                stageRow("Deep", minutes: hkStages.deep, usual: usualStages.deep, kind: .deep, isFirst: true)
+                stageRow("REM", minutes: hkStages.rem, usual: usualStages.rem, kind: .rem, isFirst: false)
+                stageRow("Core", minutes: hkStages.core, usual: usualStages.core, kind: .core, isFirst: false)
+                stageRow("Awake", minutes: hkStages.awake, usual: usualStages.awake, kind: .awake, isFirst: false)
+            }
         }
     }
 
@@ -954,6 +1388,18 @@ struct SleepAnalysisContent: View {
     /// No `usual` baseline: fall back to a single stacked stage bar + legend
     /// (analysis-v2-contract.md §2).
     private func stackedStageBar(_ stages: AnalysisMetrics.SleepStages) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            AnalysisSectionHeader(title: "Stages")
+            stackedStageBarCard(stages)
+        }
+    }
+
+    /// The stacked-bar-and-legend card alone, no section header — pulled out
+    /// of `stackedStageBar` so the devices stages switch (below) can reuse it
+    /// for a secondary device's tab (which has no `usual` baseline of its
+    /// own to compare against — "never one against the other") without a
+    /// duplicate "Stages" header.
+    private func stackedStageBarCard(_ stages: AnalysisMetrics.SleepStages) -> AnyView {
         let segments: [(String, Double, Color)] = [
             ("Deep", stages.deep ?? 0, stageColor(.deep)),
             ("REM", stages.rem ?? 0, stageColor(.rem)),
@@ -963,36 +1409,92 @@ struct SleepAnalysisContent: View {
         let total = segments.reduce(0) { $0 + $1.1 }
         guard total > 0 else { return AnyView(EmptyView()) }
         return AnyView(
-            VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-                AnalysisSectionHeader(title: "Stages")
-                VitalCard {
-                    VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-                        GeometryReader { geo in
-                            HStack(spacing: 2) {
-                                ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
-                                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                        .fill(segment.2)
-                                        .frame(width: geo.size.width * CGFloat(segment.1 / total))
-                                }
+            VitalCard {
+                VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+                    GeometryReader { geo in
+                        HStack(spacing: 2) {
+                            ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
+                                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                    .fill(segment.2)
+                                    .frame(width: geo.size.width * CGFloat(segment.1 / total))
                             }
                         }
-                        .frame(height: 14)
-                        .accessibilityElement(children: .ignore)
-                        .accessibilityLabel(segments.map { "\($0.0) \(AnalysisLogic.formatDuration($0.1))" }.joined(separator: ", "))
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 96), alignment: .leading)], alignment: .leading, spacing: Theme.Spacing.xs) {
-                            ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
-                                HStack(spacing: Theme.Spacing.xs) {
-                                    Circle().fill(segment.2).frame(width: 8, height: 8)
-                                    Text("\(segment.0) \(AnalysisLogic.formatDuration(segment.1))")
-                                        .font(.system(size: 11))
-                                        .foregroundStyle(Theme.Colors.textSecondary)
-                                }
+                    }
+                    .frame(height: 14)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(segments.map { "\($0.0) \(AnalysisLogic.formatDuration($0.1))" }.joined(separator: ", "))
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 96), alignment: .leading)], alignment: .leading, spacing: Theme.Spacing.xs) {
+                        ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
+                            HStack(spacing: Theme.Spacing.xs) {
+                                Circle().fill(segment.2).frame(width: 8, height: 8)
+                                Text("\(segment.0) \(AnalysisLogic.formatDuration(segment.1))")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(Theme.Colors.textSecondary)
                             }
                         }
                     }
                 }
             }
         )
+    }
+
+    // MARK: Devices — Stages switch + disagreement card (phase 2 "both
+    // devices" contract, PR C item 3)
+
+    @ViewBuilder
+    private var deviceSourceChip: some View {
+        if hasBothDeviceSessions {
+            DeviceSourceChip(device: devicesPrimary, label: "\(AnalysisLogic.deviceDisplayName(devicesPrimary)) · primary for sleep")
+        }
+    }
+
+    private var devicesStagesSection: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            AnalysisSectionHeader(title: "Stages", trailing: "both devices recorded this")
+            DeviceSwitchControl(selected: $selectedDevice, options: [.apple, .whoop])
+            stagesCard(for: selectedDevice)
+        }
+    }
+
+    /// The selected device's own stages card: the primary device reuses the
+    /// usual-baseline rows (falling back to the stacked bar if no baseline
+    /// exists yet), the other device always gets the stacked bar — it has no
+    /// `usual` of its own in this context, and per the "devices disagree"
+    /// card's own copy, one device is never compared against the other's.
+    @ViewBuilder
+    private func stagesCard(for device: DevicesLogic.DeviceKind) -> some View {
+        if device == devicesPrimary {
+            if let hkStages = metrics?.stages, let usualStages = context?.sleepUsual?.stages {
+                stageRowsCard(hkStages, usualStages: usualStages)
+            } else if let hkStages = metrics?.stages {
+                stackedStageBarCard(hkStages)
+            }
+        } else if let otherStages = deviceSession(device)?.stages {
+            stackedStageBarCard(otherStages)
+        }
+    }
+
+    /// "The devices disagree a little" — only when both sessions have
+    /// `minutes` and they differ by ≥10 min (contract §3).
+    @ViewBuilder
+    private var devicesDisagreeCard: some View {
+        if hasBothDeviceSessions, let other = otherDevice,
+           let primaryMinutes = deviceSession(devicesPrimary)?.minutes,
+           let otherMinutes = deviceSession(other)?.minutes,
+           AnalysisLogic.sleepDevicesDisagree(minutesA: primaryMinutes, minutesB: otherMinutes) {
+            VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                Text("The devices disagree a little")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(Theme.Colors.textPrimary)
+                Text("\(AnalysisLogic.deviceDisplayName(other)) counted \(AnalysisLogic.formatDuration(otherMinutes)) asleep. Each device estimates stages its own way, so I compare every night against the same device's normal — never one against the other.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(Theme.Colors.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(Theme.Spacing.lg)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Theme.Colors.glassFill, in: RoundedRectangle(cornerRadius: Theme.Radius.xl, style: .continuous))
+        }
     }
 
     // MARK: Before bed

@@ -168,6 +168,53 @@ struct AnalysisContext: Codable, Equatable {
         let restingHr: AnalysisRecoveryReading?
     }
 
+    // MARK: Devices (phase 2 "both devices" contract, PR C — mirrors
+    // `lib/analysisContext.ts`'s `WorkoutDevicesContext`/`SleepDevicesContext`
+    // exactly; only present when BOTH devices recorded the workout/sleep).
+
+    /// One device's running-form averages for a workout — nil per-field, same
+    /// as everywhere else in this file, so a device that never reported a
+    /// given metric simply omits it rather than showing a fabricated 0.
+    struct DeviceRunning: Codable, Equatable {
+        let cadenceSpm: Double?
+        let groundContactMs: Double?
+        let powerW: Double?
+        let strideM: Double?
+    }
+
+    /// One device's recording of the session. Workout-only fields
+    /// (`durationMin`…`running`) and sleep-only fields (`minutes`, `stages`)
+    /// never collide on a JSON key, so a single all-optional shape covers
+    /// both `WorkoutDeviceSession` and `SleepDeviceSession` without the
+    /// `usual`/`sleepUsual` discriminator dance above — an unused field for
+    /// whichever kind this analysis is just decodes to nil.
+    struct DeviceSession: Codable, Equatable {
+        let source: DevicesLogic.DeviceKind?
+        // Workout fields
+        let durationMin: Double?
+        let distanceM: Double?
+        let avgHr: Double?
+        let maxHr: Double?
+        /// Only present on the primary session (contract: "kcal appears only
+        /// on the primary session... the UI says 'not counted'").
+        let kcal: Double?
+        let strain: Double?
+        let zonesSec: [Double]?
+        let zoneBasis: String? // "reserve" | "maxHr"
+        let hrSeries: [Double]?
+        let running: DeviceRunning?
+        // Sleep fields
+        let minutes: Double?
+        let stages: AnalysisMetrics.SleepStages?
+    }
+
+    struct Devices: Codable, Equatable {
+        let primary: DevicesLogic.DeviceKind?
+        /// Primary session first (contract) — callers look up a specific
+        /// device's session by `source` rather than relying on order.
+        let sessions: [DeviceSession]?
+    }
+
     // Workout fields
     let usual: Usual?
     let paceHistory: PaceHistory?
@@ -183,9 +230,13 @@ struct AnalysisContext: Codable, Equatable {
     let beforeBed: BeforeBed?
     let thisMorning: ThisMorning?
 
+    // Shared (workout + sleep)
+    let devices: Devices?
+
     private enum CodingKeys: String, CodingKey {
         case usual, paceHistory, effort, goingIn, nextMorning
         case goalMinutes, week, timing, beforeBed, thisMorning
+        case devices
     }
 
     /// Workout's `usual` (session count + distance/duration/pace/avgHr median)
@@ -225,6 +276,7 @@ struct AnalysisContext: Codable, Equatable {
         timing = try c.decodeIfPresent(Timing.self, forKey: .timing)
         beforeBed = try c.decodeIfPresent(BeforeBed.self, forKey: .beforeBed)
         thisMorning = try c.decodeIfPresent(ThisMorning.self, forKey: .thisMorning)
+        devices = try c.decodeIfPresent(Devices.self, forKey: .devices)
     }
 
     /// Memberwise init retained for fixtures/tests building a context
@@ -232,7 +284,8 @@ struct AnalysisContext: Codable, Equatable {
     init(usual: Usual? = nil, paceHistory: PaceHistory? = nil, effort: Effort? = nil,
          goingIn: GoingIn? = nil, nextMorning: NextMorning? = nil,
          goalMinutes: Int? = nil, sleepUsual: SleepUsual? = nil, week: [WeekNight]? = nil,
-         timing: Timing? = nil, beforeBed: BeforeBed? = nil, thisMorning: ThisMorning? = nil) {
+         timing: Timing? = nil, beforeBed: BeforeBed? = nil, thisMorning: ThisMorning? = nil,
+         devices: Devices? = nil) {
         self.usual = usual
         self.paceHistory = paceHistory
         self.effort = effort
@@ -244,6 +297,7 @@ struct AnalysisContext: Codable, Equatable {
         self.timing = timing
         self.beforeBed = beforeBed
         self.thisMorning = thisMorning
+        self.devices = devices
     }
 
     func encode(to encoder: Encoder) throws {
@@ -264,6 +318,7 @@ struct AnalysisContext: Codable, Equatable {
         try c.encodeIfPresent(timing, forKey: .timing)
         try c.encodeIfPresent(beforeBed, forKey: .beforeBed)
         try c.encodeIfPresent(thisMorning, forKey: .thisMorning)
+        try c.encodeIfPresent(devices, forKey: .devices)
     }
 }
 

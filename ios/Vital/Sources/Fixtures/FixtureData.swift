@@ -268,12 +268,12 @@ enum FixtureData {
         case ("GET", "/api/logs"):
             return (200, jsonData(logs(profile, scenario: scenario)))
         case ("GET", let p) where p.hasPrefix("/api/workout-analyses/"):
-            guard let data = workoutAnalysisFixture(id: String(p.dropFirst("/api/workout-analyses/".count))) else {
+            guard let data = workoutAnalysisFixture(id: String(p.dropFirst("/api/workout-analyses/".count)), scenario: scenario) else {
                 return (404, jsonData(["error": "no fixture workout analysis for this id"]))
             }
             return (200, jsonData(data))
         case ("GET", let p) where p.hasPrefix("/api/sleep-analyses/"):
-            guard let data = sleepAnalysisFixture(id: String(p.dropFirst("/api/sleep-analyses/".count))) else {
+            guard let data = sleepAnalysisFixture(id: String(p.dropFirst("/api/sleep-analyses/".count)), scenario: scenario) else {
                 return (404, jsonData(["error": "no fixture sleep analysis for this id"]))
             }
             return (200, jsonData(data))
@@ -947,31 +947,34 @@ enum FixtureData {
     // consistent data matching the X1 (notable run)/X3 (routine run)/Y1
     // (rough night) mockups, not placeholder numbers.
 
-    private static func workoutAnalysisFixture(id: String) -> [String: Any]? {
+    private static func workoutAnalysisFixture(id: String, scenario: FixtureMode.Scenario) -> [String: Any]? {
         switch id {
-        case "fixture-workout-analysis": return notableRunAnalysis()
+        case "fixture-workout-analysis": return notableRunAnalysis(scenario: scenario)
         case "fixture-workout-analysis-routine": return routineRunAnalysis()
         default: return nil
         }
     }
 
-    private static func sleepAnalysisFixture(id: String) -> [String: Any]? {
+    private static func sleepAnalysisFixture(id: String, scenario: FixtureMode.Scenario) -> [String: Any]? {
         switch id {
-        case "fixture-sleep-analysis": return roughNightAnalysis()
+        case "fixture-sleep-analysis": return roughNightAnalysis(scenario: scenario)
         default: return nil
         }
     }
 
     /// X1 mockup: "Your fastest 10k since June" — a full `context`, every
-    /// section populated.
-    private static func notableRunAnalysis() -> [String: Any] {
+    /// section populated. `.endurance` additionally gets a two-session
+    /// `context.devices` (phase 2 "both devices" contract, PR C item 5,
+    /// mockups Z4/Z5) — every other scenario stays single-device so their
+    /// existing `workoutAnalysis` screenshots are unaffected.
+    private static func notableRunAnalysis(scenario: FixtureMode.Scenario) -> [String: Any] {
         let metrics: [String: Any] = [
             "type": "Running", "durationMin": 52.23, "kcal": 612.0,
             "distanceM": 10_200.0, "avgHr": 158.0, "maxHr": 176.0,
             "paceMinPerKm": 5.1167, "elevationGainM": 42.0,
             "startTime": isoAt(daysAgo: 0, hour: 7, minute: 41),
         ]
-        let context: [String: Any] = [
+        var context: [String: Any] = [
             "usual": ["sessions": 8, "distanceM": 8_800.0, "durationMin": 44.0, "paceMinPerKm": 5.3167, "avgHr": 148.0],
             "paceHistory": ["previous": [5.35, 5.45, 5.40, 5.50, 5.30, 5.55, 5.42], "rank": 1],
             "effort": ["restingHr": 52.0, "maxHr": 188.0, "avgPct": 0.78, "zone": "hard"],
@@ -985,6 +988,9 @@ enum FixtureData {
                 "restingHr": ["value": 50.0, "unit": "bpm", "vsNormal": "below", "source": "apple"],
             ],
         ]
+        if scenario == .endurance {
+            context["devices"] = workoutDevicesContextFixture()
+        }
         let result: [String: Any] = [
             "headline": "Your fastest 10k since June",
             "shortInsight": "You held a hard effort the whole way and didn't fade at the end.",
@@ -996,6 +1002,59 @@ enum FixtureData {
             "id": "fixture-workout-analysis", "date": dayString(0),
             "result": result, "metrics": metrics, "createdAt": isoNow, "context": context,
         ]
+    }
+
+    /// `context.devices` for `.endurance`'s workout analysis
+    /// (`WorkoutDevicesContext` — `lib/analysisContext.ts`): Apple Watch
+    /// primary (matches `notableRunAnalysis`'s own top-level `metrics`, so
+    /// the Apple Watch tab and the un-switched stats row agree), WHOOP
+    /// secondary with its own strain/zones and no `kcal` ("not counted").
+    private static func workoutDevicesContextFixture() -> [String: Any] {
+        let appleSession: [String: Any] = [
+            "source": "apple",
+            "durationMin": 52.23, "distanceM": 10_200.0, "avgHr": 158.0, "maxHr": 176.0, "kcal": 612.0,
+            "zonesSec": [149.0, 209.0, 2448.0, 298.0, 30.0], "zoneBasis": "reserve",
+            "hrSeries": enduranceHrSeries(),
+            "running": ["cadenceSpm": 172.0, "groundContactMs": 238.0, "powerW": 268.0, "strideM": 1.14],
+        ]
+        let whoopSession: [String: Any] = [
+            "source": "whoop",
+            "durationMin": 52.0, "avgHr": 156.0, "strain": 14.8,
+            "zonesSec": [242.0, 490.0, 1060.0, 1152.0, 190.0], "zoneBasis": "maxHr",
+        ]
+        return ["primary": "apple", "sessions": [appleSession, whoopSession]]
+    }
+
+    /// ~100-point resampled heart-rate series for the endurance both-devices
+    /// fixture — mirrors the shape of the design mockup's `hr_series()`
+    /// generator (a warm-up ramp, a steady middle with small drift, a
+    /// finishing kick), but with a deterministic xorshift RNG rather than
+    /// Swift's seedable-but-not-cross-platform-stable `Random(seed:)`, so
+    /// this fixture — and its screenshot — never varies run to run.
+    private static func enduranceHrSeries() -> [Double] {
+        var series: [Double] = []
+        var drift = 0.0
+        var seed: UInt64 = 7
+        func nextUnit() -> Double {
+            seed ^= seed << 13
+            seed ^= seed >> 7
+            seed ^= seed << 17
+            return Double(seed % 2000) / 1000.0 - 1 // -1...1
+        }
+        let count = 104
+        for i in 0..<count {
+            let t = Double(i) / Double(count - 1) * 52.0
+            drift = 0.7 * drift + nextUnit() * 1.6
+            let warmup: Double = 112 + 44 * (1 - exp(-t / 3.5))
+            let steady: Double = 157 + drift + (t - 10) * 0.05
+            var v: Double = t < 10 ? warmup : steady
+            if t > 47.5 {
+                let kick: Double = 163 + (t - 47.5) * 2.9 + drift * 0.3
+                v = kick
+            }
+            series.append(min(v, 176))
+        }
+        return series
     }
 
     /// X3 mockup: "An easy run, right on your normal" — a routine session
@@ -1029,7 +1088,12 @@ enum FixtureData {
 
     /// Y1 mockup: "Short night, light on deep sleep" — a full `context`,
     /// every section populated (rough night, tone-flagged stages).
-    private static func roughNightAnalysis() -> [String: Any] {
+    /// `.endurance` additionally gets a two-session `context.devices`
+    /// (phase 2 "both devices" contract, PR C item 5, mockup S4) whose
+    /// asleep minutes differ by 22 — enough to trigger the "devices
+    /// disagree" card (≥10 min, `AnalysisLogic.sleepDevicesDisagree`) —
+    /// every other scenario stays single-device.
+    private static func roughNightAnalysis(scenario: FixtureMode.Scenario) -> [String: Any] {
         let metrics: [String: Any] = [
             "minutes": 348.0,
             "stages": ["core": 242.0, "deep": 42.0, "rem": 64.0, "awake": 38.0],
@@ -1037,7 +1101,7 @@ enum FixtureData {
         let week: [[String: Any]] = (0...6).reversed().map { offset -> [String: Any] in
             ["date": dayString(offset), "minutes": offset == 0 ? 348.0 : Double(390 + offset * 6)]
         }
-        let context: [String: Any] = [
+        var context: [String: Any] = [
             "goalMinutes": 450,
             "usual": ["nights": 14, "minutes": 440.0, "stages": ["core": 262.0, "deep": 70.0, "rem": 92.0, "awake": 14.0]],
             "week": week,
@@ -1048,6 +1112,9 @@ enum FixtureData {
                 "restingHr": ["value": 58.0, "unit": "bpm", "vsNormal": "above", "source": "apple"],
             ],
         ]
+        if scenario == .endurance {
+            context["devices"] = sleepDevicesContextFixture()
+        }
         let result: [String: Any] = [
             "headline": "Short night, light on deep sleep",
             "shortInsight": "You got about an hour and a half less than usual, and woke up more.",
@@ -1059,6 +1126,23 @@ enum FixtureData {
             "id": "fixture-sleep-analysis", "date": dayString(0),
             "result": result, "metrics": metrics, "createdAt": isoNow, "context": context,
         ]
+    }
+
+    /// `context.devices` for `.endurance`'s sleep analysis
+    /// (`SleepDevicesContext` — `lib/analysisContext.ts`): WHOOP primary
+    /// (matches `FixtureData.devices`'s "sleep": "whoop" for `.endurance`,
+    /// and `roughNightAnalysis`'s own top-level `metrics.minutes`), Apple
+    /// Watch secondary counting 22 more minutes asleep.
+    private static func sleepDevicesContextFixture() -> [String: Any] {
+        let whoopSession: [String: Any] = [
+            "source": "whoop", "minutes": 348.0,
+            "stages": ["core": 242.0, "deep": 42.0, "rem": 64.0, "awake": 38.0],
+        ]
+        let appleSession: [String: Any] = [
+            "source": "apple", "minutes": 370.0,
+            "stages": ["core": 250.0, "deep": 48.0, "rem": 58.0, "awake": 14.0],
+        ]
+        return ["primary": "whoop", "sessions": [whoopSession, appleSession]]
     }
 
     // MARK: - GET /api/diet-goal → DietGoalResponse
