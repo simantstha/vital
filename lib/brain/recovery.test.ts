@@ -164,6 +164,54 @@ test('selectHrvSource: WHOOP not connected falls back to HealthKit even with WHO
   assert.equal(source, 'hrv_sdnn');
 });
 
+test("selectHrvSource: preferred 'apple' with a recent HealthKit point wins even though WHOOP also has one", () => {
+  const source = selectHrvSource({
+    whoopConnected: true,
+    whoopRecentPointDays: 2,
+    whoopBaselineDataDays: 30,
+    healthkitRecentPointDays: 5,
+    healthkitBaselineDataDays: 30,
+    preferred: 'apple',
+  });
+  assert.equal(source, 'hrv_sdnn');
+});
+
+test("selectHrvSource: preferred 'whoop' with a recent WHOOP point wins (same as default, made explicit)", () => {
+  const source = selectHrvSource({
+    whoopConnected: true,
+    whoopRecentPointDays: 2,
+    whoopBaselineDataDays: 30,
+    healthkitRecentPointDays: 5,
+    healthkitBaselineDataDays: 30,
+    preferred: 'whoop',
+  });
+  assert.equal(source, 'whoop_hrv_rmssd');
+});
+
+test("selectHrvSource: preferred 'apple' with NO recent HealthKit point falls back to the default order (WHOOP)", () => {
+  const source = selectHrvSource({
+    whoopConnected: true,
+    whoopRecentPointDays: 2,
+    whoopBaselineDataDays: 30,
+    healthkitRecentPointDays: 0,
+    healthkitBaselineDataDays: 30,
+    preferred: 'apple',
+  });
+  assert.equal(source, 'whoop_hrv_rmssd');
+});
+
+test("selectHrvSource: preferred 'whoop' with NO recent WHOOP point (or not connected) falls back to the default order (HealthKit)", () => {
+  const source = selectHrvSource({
+    whoopConnected: false,
+    whoopRecentPointDays: 0,
+    whoopBaselineDataDays: 30,
+    healthkitRecentPointDays: 5,
+    healthkitBaselineDataDays: 30,
+    preferred: 'whoop',
+  });
+  assert.equal(source, 'hrv_sdnn');
+});
+
 test('sleepEfficiencyFromHealthKitStages derives efficiency from asleep/awake minutes', () => {
   assert.equal(sleepEfficiencyFromHealthKitStages(435, { awake: 45 }), 91);
   assert.equal(sleepEfficiencyFromHealthKitStages(435, { awakeMinutes: 45 }), 91);

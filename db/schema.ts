@@ -85,7 +85,23 @@ export const users = p.pgTable('users', {
   // Nullable so existing rows self-heal via lazy file-backfill on first read,
   // same convention as core_profile_md.
   memory_files: p.jsonb('memory_files'),
-});
+
+  // ── Per-metric primary device (phase 2 — "both devices" contract, PR A) ────
+  // Explicit user override for which connected device's data wins for each
+  // metric family. null means "auto" (today's existing priority/ownership/
+  // source-selection behavior, unchanged) — set only when the user picks a
+  // device on the Devices settings screen (PATCH /api/devices). Read by
+  // lib/analysisSession.ts's priorityRank (workouts), the sleep-ownership
+  // check in lib/healthAnalysisIngest.ts / lib/whoop/sync.ts, and
+  // lib/brain/recovery.ts's selectHrvSource (recovery).
+  primary_workout_device:  p.text('primary_workout_device'),
+  primary_sleep_device:    p.text('primary_sleep_device'),
+  primary_recovery_device: p.text('primary_recovery_device'),
+}, (t) => [
+  p.check('users_primary_workout_device_check', sql`${t.primary_workout_device} in ('apple', 'whoop')`),
+  p.check('users_primary_sleep_device_check', sql`${t.primary_sleep_device} in ('apple', 'whoop')`),
+  p.check('users_primary_recovery_device_check', sql`${t.primary_recovery_device} in ('apple', 'whoop')`),
+]);
 
 // ─── events (append-only) ────────────────────────────────────────────────────
 // The immutable ledger. Nothing is ever updated or deleted here.
@@ -478,12 +494,22 @@ export const workout_analyses = p.pgTable('workout_analyses', {
   created_at:         p.timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updated_at:         p.timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
   deleted_at:         p.timestamp('deleted_at', { withTimezone: true }),
+  // Phase 2 "both devices" contract, PR A: set on the LOSER of a same-session
+  // conflict ONLY when it's suppressed as a duplicate (never for a HealthKit
+  // deletion — see lib/healthAnalysisIngest.ts / lib/whoop/sync.ts). Lets the
+  // survivor's analysis context (lib/analysisContext.ts) find the other
+  // device's row for `context.devices`, either by matching merged_into_id =
+  // this row's id (this row is the survivor) or by following this row's own
+  // merged_into_id (this row is itself the loser — the API always serves the
+  // survivor, but the pure/test-level helpers handle both directions).
+  merged_into_id:     p.uuid('merged_into_id'),
 }, (t) => [
   p.check('workout_analyses_status_check', sql`${t.status} in ('pending', 'processing', 'ready', 'failed', 'deleted')`),
   p.check('workout_analyses_notification_state_check', sql`${t.notification_state} in ('pending', 'suppressed', 'sending', 'sent', 'failed')`),
   p.check('workout_analyses_source_check', sql`${t.source} in ('healthkit', 'whoop')`),
   p.uniqueIndex('workout_analyses_user_hk_uuid_idx').on(t.user_id, t.hk_uuid),
   p.index('workout_analyses_queue_idx').on(t.status, t.next_attempt_at),
+  p.foreignKey({ columns: [t.merged_into_id], foreignColumns: [t.id], name: 'workout_analyses_merged_into_id_fk' }),
 ]);
 
 export const sleep_analyses = p.pgTable('sleep_analyses', {
@@ -512,10 +538,19 @@ export const sleep_analyses = p.pgTable('sleep_analyses', {
   notification_next_attempt_at: p.timestamp('notification_next_attempt_at', { withTimezone: true }).defaultNow().notNull(),
   created_at:         p.timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updated_at:         p.timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  // Phase 2 "both devices" contract, PR A: when the non-owning source arrives
+  // for a night the other source already owns, its payload is kept here
+  // instead of being dropped (the old `if (persisted?.source === 'whoop')
+  // continue;` behavior lost the HealthKit night entirely). `secondary_source`
+  // names which source that payload is from — always the opposite of
+  // `source` above.
+  secondary_source:   p.text('secondary_source'),
+  secondary_payload:  p.jsonb('secondary_payload'),
 }, (t) => [
   p.check('sleep_analyses_status_check', sql`${t.status} in ('pending', 'processing', 'ready', 'failed', 'deleted')`),
   p.check('sleep_analyses_notification_state_check', sql`${t.notification_state} in ('pending', 'suppressed', 'sending', 'sent', 'failed')`),
   p.check('sleep_analyses_source_check', sql`${t.source} in ('healthkit', 'whoop')`),
+  p.check('sleep_analyses_secondary_source_check', sql`${t.secondary_source} in ('healthkit', 'whoop')`),
   p.uniqueIndex('sleep_analyses_user_wake_date_idx').on(t.user_id, t.wake_date),
   p.index('sleep_analyses_queue_idx').on(t.status, t.next_attempt_at),
 ]);

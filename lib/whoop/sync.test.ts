@@ -3,6 +3,7 @@ import test, { mock } from 'node:test';
 import type { WhoopConnectionSnapshot, WhoopTokenStore, WhoopTokenStoreTx, WhoopSleep, WhoopWorkout } from './client';
 import type {
   PersistedWhoopSleepAnalysis,
+  SecondaryWhoopSleepWrite,
   WhoopAnalysisTransaction,
   WhoopSleepAnalysisUpsert,
   WhoopWorkoutAnalysisUpsert,
@@ -48,6 +49,10 @@ class FakeSyncRepository implements WhoopSyncRepository {
   workoutUpsertCalls: WhoopWorkoutAnalysisUpsert[] = [];
   sleepAnalyses = new Map<string, PersistedWhoopSleepAnalysis>();
   sleepUpsertCalls: WhoopSleepAnalysisUpsert[] = [];
+  secondarySleepWrites: SecondaryWhoopSleepWrite[] = [];
+  suppressedWorkoutSessions: Array<{ loserHkUuid: string; survivorHkUuid: string }> = [];
+  workoutDevicePreference: 'apple' | 'whoop' | null = null;
+  sleepDevicePreference: 'apple' | 'whoop' | null = null;
 
   async upsertDailyMetrics(userId: string, rows: Array<{ date: string; metric: string; value: number; payload: unknown }>): Promise<void> {
     this.upsertCalls.push({ userId, rows });
@@ -73,11 +78,22 @@ class FakeSyncRepository implements WhoopSyncRepository {
           startedAt: entry.startedAt, endedAt: entry.endedAt, notified: false,
         });
       },
+      suppressWorkoutSession: async (loserHkUuid, survivorHkUuid) => {
+        this.suppressedWorkoutSessions.push({ loserHkUuid, survivorHkUuid });
+        this.workoutAnalyses.delete(loserHkUuid);
+      },
       getSleepAnalysisForWakeDate: async (wakeDate) => this.sleepAnalyses.get(wakeDate) ?? null,
       upsertWhoopSleepAnalysis: async (entry) => {
         this.sleepUpsertCalls.push(entry);
-        this.sleepAnalyses.set(entry.wakeDate, { source: 'whoop', notified: false, fingerprint: entry.fingerprint });
+        this.sleepAnalyses.set(entry.wakeDate, {
+          source: 'whoop', notified: false, fingerprint: entry.fingerprint, inputPayload: entry.input,
+        });
       },
+      writeSecondaryWhoopSleep: async (entry) => {
+        this.secondarySleepWrites.push(entry);
+      },
+      getWorkoutDevicePreference: async () => this.workoutDevicePreference,
+      getSleepDevicePreference: async () => this.sleepDevicePreference,
     };
     return fn(tx);
   }
@@ -291,6 +307,56 @@ test('syncWhoopWindow re-syncing the identical WHOOP sleep content is a no-op (i
 
   await syncWhoopWindow(repo, 'user-1', 'UTC', windowStart, windowEnd, input, NOT_FIRST_SYNC);
   assert.equal(repo.sleepUpsertCalls.length, 1); // still 1 — the second identical sync wrote nothing new
+});
+
+test('syncWhoopWindow (null sleep preference, current behavior): a non-owning HealthKit night is preserved as secondary, not dropped', async () => {
+  const { syncWhoopWindow } = await syncModule;
+  const repo = new FakeSyncRepository();
+  repo.sleepAnalyses.set('2026-07-18', { source: 'healthkit', notified: true, fingerprint: 'hk-fp' });
+  const input: WhoopSyncWindowInput = { ...emptyWindowInput(), sleeps: [whoopSleep()] };
+
+  await syncWhoopWindow(repo, 'user-1', 'UTC', windowStart, windowEnd, input, NOT_FIRST_SYNC);
+
+  assert.equal(repo.sleepUpsertCalls.length, 0);
+  assert.equal(repo.secondarySleepWrites.length, 1);
+  assert.equal(repo.secondarySleepWrites[0].wakeDate, '2026-07-18');
+  // The HealthKit row stays the primary/owning row, untouched.
+  assert.equal(repo.sleepAnalyses.get('2026-07-18')?.source, 'healthkit');
+});
+
+test("syncWhoopWindow ('apple' sleep preference): a WHOOP night never overwrites the owning HealthKit row — stored as secondary instead", async () => {
+  const { syncWhoopWindow } = await syncModule;
+  const repo = new FakeSyncRepository();
+  repo.sleepDevicePreference = 'apple';
+  repo.sleepAnalyses.set('2026-07-18', { source: 'healthkit', notified: false, fingerprint: 'hk-fp' });
+  const input: WhoopSyncWindowInput = { ...emptyWindowInput(), sleeps: [whoopSleep()] };
+
+  await syncWhoopWindow(repo, 'user-1', 'UTC', windowStart, windowEnd, input, NOT_FIRST_SYNC);
+
+  assert.equal(repo.sleepUpsertCalls.length, 0);
+  assert.equal(repo.secondarySleepWrites.length, 1);
+  assert.equal(repo.sleepAnalyses.get('2026-07-18')?.source, 'healthkit');
+});
+
+test("syncWhoopWindow ('whoop' workout preference): a WHOOP workout now beats an existing HealthKit row for the same session", async () => {
+  const { syncWhoopWindow } = await syncModule;
+  const repo = new FakeSyncRepository();
+  repo.workoutDevicePreference = 'whoop';
+  repo.workoutAnalyses.set('hk-1', {
+    hkUuid: 'hk-1', source: 'healthkit', sourceBundleId: 'com.apple.health',
+    startedAt: new Date('2026-07-18T11:32:00.000Z'), endedAt: new Date('2026-07-18T12:02:00.000Z'),
+    notified: false,
+  });
+  const input: WhoopSyncWindowInput = { ...emptyWindowInput(), workouts: [whoopWorkout()] };
+
+  await syncWhoopWindow(repo, 'user-1', 'UTC', windowStart, windowEnd, input, NOT_FIRST_SYNC);
+
+  // With the default (null) preference this same setup is skipped entirely
+  // (see "skips a WHOOP workout when a surviving same-session HealthKit row
+  // already exists" above) — 'whoop' preference flips that outcome.
+  assert.equal(repo.workoutUpsertCalls.length, 1);
+  // The suppressed HealthKit row is marked merged_into_id -> the surviving WHOOP row.
+  assert.deepEqual(repo.suppressedWorkoutSessions, [{ loserHkUuid: 'hk-1', survivorHkUuid: 'whoop:w-1' }]);
 });
 
 test('syncWhoopWindow never takes the per-user lock when there are no workouts or sleeps to consider', async () => {

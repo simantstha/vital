@@ -74,6 +74,17 @@ function formatWorkoutInput(input: unknown, units: UnitSystem): unknown {
         // fields) have no dedicated case above and fall through to default,
         // which is intentional: they pass through verbatim.
         break;
+      case 'hrSeries':
+      case 'running':
+      case 'zonesSec':
+        // Phase 2 "both devices" contract, PR A, "Model input": the raw
+        // heart-rate series and running-dynamics block are only ever
+        // rendered client-side (context.devices) — noise for the model, same
+        // reasoning as sourceBundleId above. `zonesSec` is dropped for the
+        // same reason (the zone bars are a UI concept the model doesn't need
+        // to reason about); `zoneBasis` has no dedicated case and falls
+        // through to default, which is harmless either way.
+        break;
       default:
         result[key] = value;
     }

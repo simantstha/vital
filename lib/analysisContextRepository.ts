@@ -24,6 +24,8 @@ import { selectHrvSource, type HrvMetric } from './brain/recovery';
 import { queryBaseline } from './brain/tools';
 import {
   assembleWeek,
+  buildSleepDevicesContext,
+  buildWorkoutDevicesContext,
   computeBeforeBed,
   computeEffort,
   computePaceHistory,
@@ -34,6 +36,7 @@ import {
   type MetricReading,
   type PreviousWorkoutSample,
   type RecoverySource,
+  type WorkoutDeviceRow,
 } from './analysisContext';
 
 const MAX_PREVIOUS_SESSIONS = 8;
@@ -188,7 +191,7 @@ export async function getWorkoutAnalysisContext(
     return d.toISOString().slice(0, 10);
   })();
 
-  const [previousRows, maxHrRows, recovery] = await Promise.all([
+  const [previousRows, maxHrRows, recovery, otherByMergedInto, selfRow] = await Promise.all([
     type
       ? db.select({ inputPayload: schema.workout_analyses.input_payload, workoutDate: schema.workout_analyses.workout_date })
           .from(schema.workout_analyses)
@@ -211,6 +214,20 @@ export async function getWorkoutAnalysisContext(
         lte(schema.workout_analyses.workout_date, workoutDateKey),
       )),
     resolveRecoverySelection(userId),
+    // The row whose merged_into_id points at this analysis: this analysis is
+    // the survivor, and `other` is the same-session loser (the common case —
+    // the API always serves the survivor).
+    db.select({ source: schema.workout_analyses.source, inputPayload: schema.workout_analyses.input_payload })
+      .from(schema.workout_analyses)
+      .where(and(eq(schema.workout_analyses.user_id, userId), eq(schema.workout_analyses.merged_into_id, analysis.id)))
+      .limit(1),
+    // This analysis's own merged_into_id: set only when THIS row is itself
+    // the loser (contract: "if this row is itself the loser, its
+    // merged_into_id target").
+    db.select({ mergedIntoId: schema.workout_analyses.merged_into_id })
+      .from(schema.workout_analyses)
+      .where(and(eq(schema.workout_analyses.user_id, userId), eq(schema.workout_analyses.id, analysis.id)))
+      .limit(1),
   ]);
 
   // previousRows come back newest-first (for the LIMIT 8); reverse for
@@ -281,6 +298,28 @@ export async function getWorkoutAnalysisContext(
     if (Object.keys(nextMorning).length > 0) context.nextMorning = nextMorning;
   }
 
+  // context.devices: only present when the OTHER device also recorded this
+  // session (see db/schema.ts's merged_into_id doc and the module comment
+  // above).
+  const thisRow: WorkoutDeviceRow = { source: (analysis.source as 'healthkit' | 'whoop') ?? 'healthkit', payload: input };
+  const mergedLoser = otherByMergedInto[0];
+  if (mergedLoser) {
+    // This analysis is the survivor; `mergedLoser` is the suppressed same-session row.
+    context.devices = buildWorkoutDevicesContext(thisRow, { source: mergedLoser.source as 'healthkit' | 'whoop', payload: mergedLoser.inputPayload });
+  } else if (selfRow[0]?.mergedIntoId) {
+    // This analysis is itself the loser — fetch the survivor it points at.
+    const [survivorRow] = await db.select({ source: schema.workout_analyses.source, inputPayload: schema.workout_analyses.input_payload })
+      .from(schema.workout_analyses)
+      .where(and(eq(schema.workout_analyses.user_id, userId), eq(schema.workout_analyses.id, selfRow[0].mergedIntoId)))
+      .limit(1);
+    if (survivorRow) {
+      context.devices = buildWorkoutDevicesContext(
+        { source: survivorRow.source as 'healthkit' | 'whoop', payload: survivorRow.inputPayload },
+        thisRow,
+      );
+    }
+  }
+
   return Object.keys(context).length > 0 ? context : undefined;
 }
 
@@ -305,7 +344,7 @@ export async function getSleepAnalysisContext(
   const usualWindowStart = shiftDayKey(wakeDateKey, -SLEEP_USUAL_WINDOW_NIGHTS);
   const usualWindowEnd = shiftDayKey(wakeDateKey, -1);
 
-  const [userRows, recovery, previousRows, weekRows] = await Promise.all([
+  const [userRows, recovery, previousRows, weekRows, secondaryRows] = await Promise.all([
     userSleepGoalQuery(userId),
     resolveRecoverySelection(userId),
     db.select({ date: schema.daily_metrics.date, value: schema.daily_metrics.value, payload: schema.daily_metrics.payload })
@@ -326,6 +365,10 @@ export async function getSleepAnalysisContext(
         gte(schema.daily_metrics.date, shiftDayKey(wakeDateKey, -(WEEK_NIGHTS - 1))),
         lte(schema.daily_metrics.date, wakeDateKey),
       )),
+    db.select({ secondarySource: schema.sleep_analyses.secondary_source, secondaryPayload: schema.sleep_analyses.secondary_payload })
+      .from(schema.sleep_analyses)
+      .where(and(eq(schema.sleep_analyses.user_id, userId), eq(schema.sleep_analyses.id, analysis.id)))
+      .limit(1),
   ]);
 
   const goalMinutes = userRows[0]?.sleepGoalMinutes ?? DEFAULT_SLEEP_GOAL_MIN;
@@ -391,6 +434,18 @@ export async function getSleepAnalysisContext(
     if (hrvReading) thisMorning.hrv = hrvReading;
     if (rhrReading) thisMorning.restingHr = rhrReading;
     if (Object.keys(thisMorning).length > 0) context.thisMorning = thisMorning;
+  }
+
+  // context.devices: "only when secondary_payload exists" (contract) — the
+  // non-owning source's payload, preserved by lib/sleepOwnership.ts's
+  // ownership rules instead of being dropped.
+  const secondary = secondaryRows[0];
+  if (secondary?.secondarySource && secondary.secondaryPayload != null) {
+    const devices = buildSleepDevicesContext(
+      { source: metricSource, payload: input },
+      { source: secondary.secondarySource as 'healthkit' | 'whoop', payload: secondary.secondaryPayload },
+    );
+    if (devices) context.devices = devices;
   }
 
   return context;

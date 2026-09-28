@@ -93,9 +93,37 @@ function isDayInput(d: unknown): d is DayInput {
       && typeof workout === 'object'
       && typeof (workout as Record<string, unknown>).hkUuid === 'string'
       && (workout as Record<string, unknown>).hkUuid !== ''
+      && isValidWorkoutHrSeries((workout as Record<string, unknown>).hrSeries)
+      && isValidWorkoutRunning((workout as Record<string, unknown>).running)
     ))) return false;
   }
   return true;
+}
+
+const MAX_HR_SERIES_POINTS = 120;
+
+/**
+ * `hrSeries` (phase 2 "both devices" contract, PR A / "Also"): optional,
+ * evenly-spaced bpm samples across the workout, at most 120 points (the iOS
+ * ingest PR's resampling contract). Every other unknown workout field
+ * continues to pass through untyped (see the `[key: string]: unknown`
+ * index signature on DayInput.workouts) — only these two new fields get a
+ * dedicated whitelist check, since a malformed array/object here would
+ * otherwise be stored and rendered as-is by the iOS zone/HR-curve UI.
+ */
+function isValidWorkoutHrSeries(value: unknown): boolean {
+  if (value === undefined) return true;
+  return Array.isArray(value) && value.length <= MAX_HR_SERIES_POINTS && value.every((v) => typeof v === 'number' && Number.isFinite(v));
+}
+
+const RUNNING_FIELDS = ['cadenceSpm', 'groundContactMs', 'powerW', 'strideM'] as const;
+
+/** `running` (phase 2 "both devices" contract, PR A / "Also"): optional running-dynamics block, each field an optional finite number. */
+function isValidWorkoutRunning(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  const r = value as Record<string, unknown>;
+  return RUNNING_FIELDS.every((key) => r[key] === undefined || (typeof r[key] === 'number' && Number.isFinite(r[key] as number)));
 }
 
 interface Row {
@@ -262,13 +290,18 @@ export async function POST(request: Request): Promise<NextResponse> {
             };
           });
         },
-        async suppressWorkout(scopedUserId, hkUuid, deletedAt) {
+        async suppressWorkout(scopedUserId, hkUuid, survivorHkUuid, deletedAt) {
           await tx.update(schema.workout_analyses).set({
             status: 'deleted',
             notification_state: 'suppressed',
             deleted_at: deletedAt,
             lease_expires_at: null,
             updated_at: deletedAt,
+            // Phase 2 "both devices" contract, PR A: points at the survivor's
+            // row id (never at a HealthKit-deletion — this path only runs for
+            // a same-session suppression). The survivor must already exist by
+            // the time this runs; see reconcileAnalysisIngest's call order.
+            merged_into_id: sql`(select id from workout_analyses where user_id = ${scopedUserId} and hk_uuid = ${survivorHkUuid})`,
           }).where(and(
             eq(schema.workout_analyses.user_id, scopedUserId),
             eq(schema.workout_analyses.hk_uuid, hkUuid),
@@ -324,12 +357,20 @@ export async function POST(request: Request): Promise<NextResponse> {
             notificationState: schema.sleep_analyses.notification_state,
             notificationSentAt: schema.sleep_analyses.notification_sent_at,
             source: schema.sleep_analyses.source,
+            inputPayload: schema.sleep_analyses.input_payload,
           }).from(schema.sleep_analyses).where(and(
             eq(schema.sleep_analyses.user_id, scopedUserId),
             inArray(schema.sleep_analyses.wake_date, wakeDates),
           ));
         },
         async upsertSleep(scopedUserId, entry) {
+          // Only overwrite secondary_source/secondary_payload when this write
+          // is archiving a persisted row of the OTHER source (an ownership
+          // swap, phase 2 PR A) — otherwise leave any existing secondary data
+          // untouched (a plain refresh of the same source's night must never
+          // clobber it).
+          const secondarySource = entry.archiveSecondary ? entry.archiveSecondary.source : sql`${schema.sleep_analyses.secondary_source}`;
+          const secondaryPayload = entry.archiveSecondary ? entry.archiveSecondary.payload : sql`${schema.sleep_analyses.secondary_payload}`;
           await tx.insert(schema.sleep_analyses).values({
             user_id: scopedUserId,
             wake_date: entry.wakeDate,
@@ -337,15 +378,16 @@ export async function POST(request: Request): Promise<NextResponse> {
             input_payload: entry.sleep,
             analyze_after: entry.analyzeAfter,
             next_attempt_at: entry.analyzeAfter,
+            secondary_source: entry.archiveSecondary?.source ?? null,
+            secondary_payload: entry.archiveSecondary?.payload ?? null,
           }).onConflictDoUpdate({
             target: [schema.sleep_analyses.user_id, schema.sleep_analyses.wake_date],
             set: {
               content_fingerprint: entry.fingerprint,
               input_payload: entry.sleep,
-              // Always 'healthkit' here — reconcileAnalysisIngest guards this
-              // call from ever running against a wake_date whose persisted
-              // row is already source='whoop' ("WHOOP owns the night"), so
-              // this only ever (re)asserts the default for a healthkit row.
+              // Always 'healthkit' here — this path is HealthKit's own
+              // ingest; the sleep-ownership decision (lib/sleepOwnership.ts)
+              // already gated whether this call happens at all.
               source: 'healthkit',
               analyze_after: entry.analyzeAfter,
               next_attempt_at: entry.analyzeAfter,
@@ -356,9 +398,34 @@ export async function POST(request: Request): Promise<NextResponse> {
               // link until the re-analysis overwrites it via storeReady.
               updated_at: entry.receivedAt,
               notification_state: entry.notificationState,
+              secondary_source: secondarySource,
+              secondary_payload: secondaryPayload,
             },
             setWhere: ne(schema.sleep_analyses.content_fingerprint, entry.fingerprint),
           });
+        },
+        async writeSecondarySleep(scopedUserId, entry) {
+          // Never touches the owning row's primary fields — only the
+          // secondary slot. A no-op if no row exists yet for this wake_date
+          // (resolveSleepWrite only returns 'secondary' when one does).
+          await tx.update(schema.sleep_analyses).set({
+            secondary_source: entry.secondarySource,
+            secondary_payload: entry.secondaryPayload,
+            updated_at: sql`now()`,
+          }).where(and(
+            eq(schema.sleep_analyses.user_id, scopedUserId),
+            eq(schema.sleep_analyses.wake_date, entry.wakeDate),
+          ));
+        },
+        async getWorkoutDevicePreference(scopedUserId) {
+          const [row] = await tx.select({ value: schema.users.primary_workout_device })
+            .from(schema.users).where(eq(schema.users.id, scopedUserId)).limit(1);
+          return (row?.value as 'apple' | 'whoop' | null | undefined) ?? null;
+        },
+        async getSleepDevicePreference(scopedUserId) {
+          const [row] = await tx.select({ value: schema.users.primary_sleep_device })
+            .from(schema.users).where(eq(schema.users.id, scopedUserId)).limit(1);
+          return (row?.value as 'apple' | 'whoop' | null | undefined) ?? null;
         },
       };
 

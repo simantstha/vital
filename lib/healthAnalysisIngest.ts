@@ -5,6 +5,7 @@ import {
   isSameSession,
   type SessionCandidate,
   type SessionIdentity,
+  type WorkoutDevicePreference,
 } from './analysisSession';
 import {
   reconcilePersistedWorkouts,
@@ -12,6 +13,7 @@ import {
   sleepAnalysisCandidate,
   type HealthKitWorkout,
 } from './healthAnalysisReconciliation';
+import { resolveSleepWrite, type SleepDevicePreference, type SleepSource } from './sleepOwnership';
 
 export interface PersistedWorkoutAnalysis {
   hkUuid: string;
@@ -29,8 +31,16 @@ export interface PersistedSleepAnalysis {
   contentFingerprint: string;
   notificationState?: string;
   notificationSentAt?: Date | null;
-  /** 'healthkit' | 'whoop' — WHOOP owns the night once it's written one (see reconcileAnalysisIngest below). */
+  /** 'healthkit' | 'whoop' — the source that currently owns this night's primary row (see reconcileAnalysisIngest below). */
   source?: string;
+  /**
+   * The persisted row's own input_payload — only needed when an ownership
+   * swap (phase 2 PR A) must archive it into secondary_payload before being
+   * overwritten. Optional so older callers/test doubles that never select it
+   * keep working (a swap simply can't archive without it, which is no worse
+   * than today's behavior of not swapping at all).
+   */
+  inputPayload?: unknown;
 }
 
 /**
@@ -66,6 +76,19 @@ export interface SleepAnalysisUpsert {
   analyzeAfter: Date;
   notificationState: 'pending' | 'sent';
   receivedAt: Date;
+  /**
+   * Set when this primary write is taking over the night from a persisted
+   * row of the OTHER source (an ownership swap) — that row's payload must be
+   * archived into secondary_source/secondary_payload rather than overwritten
+   * and lost. `null`/absent means no archiving is needed.
+   */
+  archiveSecondary?: { source: SleepSource; payload: unknown } | null;
+}
+
+export interface SecondarySleepWrite {
+  wakeDate: string;
+  secondarySource: SleepSource;
+  secondaryPayload: unknown;
 }
 
 export interface AnalysisIngestRepository {
@@ -80,10 +103,22 @@ export interface AnalysisIngestRepository {
   listWorkoutSessionCandidates(userId: string, dayKeys: string[]): Promise<WorkoutSessionCandidate[]>;
   markWorkoutsDeleted(userId: string, hkUuids: string[], receivedAt: Date): Promise<void>;
   upsertWorkout(userId: string, entry: WorkoutAnalysisUpsert): Promise<void>;
-  /** Marks a same-session loser: status='deleted', notification_state='suppressed', deleted_at=receivedAt. Never called on an already-notified row (see resolveSessionConflict). */
-  suppressWorkout(userId: string, hkUuid: string, receivedAt: Date): Promise<void>;
+  /**
+   * Marks a same-session loser: status='deleted', notification_state='suppressed',
+   * deleted_at=receivedAt, merged_into_id=<the survivor's row id, looked up by
+   * survivorHkUuid>. Never called on an already-notified row (see
+   * resolveSessionConflict). `survivorHkUuid` must already be a persisted row
+   * by the time this is called — never set for a HealthKit deletion, only for
+   * a same-session suppression (see db/schema.ts's merged_into_id doc).
+   */
+  suppressWorkout(userId: string, hkUuid: string, survivorHkUuid: string, receivedAt: Date): Promise<void>;
   listSleepAnalyses(userId: string, wakeDates: string[]): Promise<PersistedSleepAnalysis[]>;
   upsertSleep(userId: string, entry: SleepAnalysisUpsert): Promise<void>;
+  /** Stores the non-owning source's payload without touching the owning row's primary fields — see lib/sleepOwnership.ts. */
+  writeSecondarySleep(userId: string, entry: SecondarySleepWrite): Promise<void>;
+  /** `users.primary_workout_device` / `users.primary_sleep_device` (phase 2 "both devices" contract, PR A). Optional: absent means "no preference support" (treated as null/auto), keeping older test doubles compiling unchanged. */
+  getWorkoutDevicePreference?(userId: string): Promise<'apple' | 'whoop' | null>;
+  getSleepDevicePreference?(userId: string): Promise<'apple' | 'whoop' | null>;
 }
 
 function notificationState(
@@ -100,15 +135,14 @@ function extractSourceBundleId(workout: HealthKitWorkout): string | null {
 /**
  * Resolves a new/changed HealthKit workout against any already-persisted
  * same-session row (HealthKit or WHOOP) using the overlap + priority rules in
- * lib/analysisSession.ts. Returns the hkUuid that must end up suppressed
- * (deleted + notification_state='suppressed'), which is either the
- * newly-written incoming row itself, an existing candidate, or null when
- * there's no conflict at all.
+ * lib/analysisSession.ts. Returns the full survivor/loser resolution, or null
+ * when there's no conflict at all.
  */
 function resolveWorkoutSessionConflict(
   candidates: WorkoutSessionCandidate[],
   incoming: { hkUuid: string; workout: HealthKitWorkout; startedAt: Date; endedAt: Date },
-): string | null {
+  preferredDevice: WorkoutDevicePreference,
+): { loserHkUuid: string; survivorHkUuid: string } | null {
   const incomingIdentity: SessionIdentity = { startedAt: incoming.startedAt, endedAt: incoming.endedAt, source: 'healthkit' };
   const match = candidates.find((candidate) => {
     if (candidate.hkUuid === incoming.hkUuid) return false;
@@ -134,8 +168,12 @@ function resolveWorkoutSessionConflict(
     sourceBundleId: extractSourceBundleId(incoming.workout),
     notified: false, // a workout we're inserting/updating this tick has never been notified yet
   };
-  const resolution = resolveSessionConflict(existingCandidate, incomingCandidate);
-  return resolution.loserKey;
+  const resolution = resolveSessionConflict(existingCandidate, incomingCandidate, preferredDevice);
+  return { loserHkUuid: resolution.loserKey, survivorHkUuid: resolution.survivorKey };
+}
+
+function isNotified(persisted?: { notificationState?: string; notificationSentAt?: Date | null }): boolean {
+  return Boolean(persisted?.notificationSentAt) || persisted?.notificationState === 'sent';
 }
 
 export async function reconcileAnalysisIngest(
@@ -146,6 +184,11 @@ export async function reconcileAnalysisIngest(
   receivedAt: Date,
 ): Promise<void> {
   await repository.lockUser(userId);
+
+  const [workoutPreference, sleepPreference]: [WorkoutDevicePreference, SleepDevicePreference] = await Promise.all([
+    repository.getWorkoutDevicePreference ? repository.getWorkoutDevicePreference(userId) : Promise.resolve(null),
+    repository.getSleepDevicePreference ? repository.getSleepDevicePreference(userId) : Promise.resolve(null),
+  ]);
 
   const persistedWorkouts = await repository.listWorkoutAnalyses(
     userId,
@@ -191,17 +234,18 @@ export async function reconcileAnalysisIngest(
     });
 
     if (!window) continue; // nothing to compare against without a parseable window
-    const loserHkUuid = resolveWorkoutSessionConflict(Array.from(sessionCandidates.values()), {
+    const conflict = resolveWorkoutSessionConflict(Array.from(sessionCandidates.values()), {
       hkUuid: entry.workout.hkUuid,
       workout: entry.workout,
       startedAt: window.startedAt,
       endedAt: window.endedAt,
-    });
-    if (loserHkUuid) {
-      await repository.suppressWorkout(userId, loserHkUuid, receivedAt);
+    }, workoutPreference);
+    const loserHkUuid = conflict?.loserHkUuid ?? null;
+    if (conflict) {
+      await repository.suppressWorkout(userId, conflict.loserHkUuid, conflict.survivorHkUuid, receivedAt);
       // Gone for good within this batch — a later entry in the same upload
       // must never match a row that's already been suppressed.
-      sessionCandidates.delete(loserHkUuid);
+      sessionCandidates.delete(conflict.loserHkUuid);
     }
     if (loserHkUuid !== entry.workout.hkUuid) {
       // The incoming row survived (whether by winning a conflict or by
@@ -220,13 +264,35 @@ export async function reconcileAnalysisIngest(
 
   for (const day of sleepDays) {
     const persisted = sleepsByDate.get(day.wakeDate);
-    // WHOOP owns the night: once a source='whoop' row exists for this
-    // wake_date, a later HealthKit upsert must never overwrite it (see the
-    // multi-device-analyses contract's "WHOOP owns the night" rule).
-    if (persisted?.source === 'whoop') continue;
+    const persistedSource: SleepSource = (persisted?.source as SleepSource | undefined) ?? 'healthkit';
+
+    // Sleep ownership (phase 2 "both devices" contract, PR A) — see
+    // lib/sleepOwnership.ts. null preference reproduces today's "WHOOP owns
+    // the night" behavior exactly; 'apple' makes HealthKit own it instead.
+    const decision = resolveSleepWrite({
+      persisted: persisted ? { source: persistedSource, notified: isNotified(persisted) } : null,
+      incomingSource: 'healthkit',
+      preferredDevice: sleepPreference,
+    });
+
+    if (decision.action === 'secondary') {
+      // The owning row (a different source) is untouched; this device's
+      // payload for the same night is preserved rather than dropped.
+      await repository.writeSecondarySleep(userId, {
+        wakeDate: day.wakeDate,
+        secondarySource: 'healthkit',
+        secondaryPayload: day.sleep,
+      });
+      continue;
+    }
 
     const candidate = sleepAnalysisCandidate(day.wakeDate, day.sleep, receivedAt);
-    if (persisted && !shouldRefreshSleepAnalysis(persisted.contentFingerprint, candidate.fingerprint)) {
+    // The "unchanged content, skip the write" shortcut only makes sense when
+    // the persisted row was already ours (same source) — a persisted row
+    // from the OTHER source (an ownership swap) never matches our
+    // fingerprint space and must always proceed to the upsert below.
+    if (persisted && persistedSource === 'healthkit'
+      && !shouldRefreshSleepAnalysis(persisted.contentFingerprint, candidate.fingerprint)) {
       continue;
     }
     await repository.upsertSleep(userId, {
@@ -234,6 +300,9 @@ export async function reconcileAnalysisIngest(
       sleep: day.sleep,
       notificationState: notificationState(persisted),
       receivedAt,
+      archiveSecondary: decision.archivePersistedAsSecondary && persisted
+        ? { source: persistedSource, payload: persisted.inputPayload }
+        : null,
     });
   }
 }

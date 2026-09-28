@@ -91,6 +91,22 @@ test('priorityRank: whoop is always rank 3', () => {
   assert.equal(priorityRank({ source: 'whoop', sourceBundleId: null }), 3);
 });
 
+test("priorityRank: null/undefined/'apple' preference all keep the original order", () => {
+  for (const pref of [undefined, null, 'apple' as const]) {
+    assert.equal(priorityRank({ source: 'healthkit', sourceBundleId: 'com.apple.health' }, pref), 1);
+    assert.equal(priorityRank({ source: 'healthkit', sourceBundleId: null }, pref), 1);
+    assert.equal(priorityRank({ source: 'healthkit', sourceBundleId: 'com.strava.run' }, pref), 2);
+    assert.equal(priorityRank({ source: 'whoop', sourceBundleId: null }, pref), 3);
+  }
+});
+
+test("priorityRank: 'whoop' preference moves WHOOP to rank 1, keeps the two HealthKit ranks in the same relative order", () => {
+  assert.equal(priorityRank({ source: 'whoop', sourceBundleId: null }, 'whoop'), 1);
+  assert.equal(priorityRank({ source: 'healthkit', sourceBundleId: 'com.apple.health' }, 'whoop'), 2);
+  assert.equal(priorityRank({ source: 'healthkit', sourceBundleId: null }, 'whoop'), 2);
+  assert.equal(priorityRank({ source: 'healthkit', sourceBundleId: 'com.strava.run' }, 'whoop'), 3);
+});
+
 function candidate(overrides: Partial<SessionCandidate> = {}): SessionCandidate {
   return { key: 'k', source: 'healthkit', sourceBundleId: null, notified: false, ...overrides };
 }
@@ -128,6 +144,24 @@ test('resolveSessionConflict: an already-notified existing row is never demoted,
   assert.equal(result.outcome, 'existing_wins');
   assert.equal(result.survivorKey, 'whoop-1');
   assert.equal(result.loserKey, 'hk-1');
+});
+
+test("resolveSessionConflict: 'whoop' preference lets a WHOOP row beat an existing HealthKit row", () => {
+  const existing = candidate({ key: 'hk-1', source: 'healthkit', sourceBundleId: 'com.apple.health' });
+  const incoming = candidate({ key: 'whoop-1', source: 'whoop' });
+  const result = resolveSessionConflict(existing, incoming, 'whoop');
+  assert.equal(result.outcome, 'incoming_wins');
+  assert.equal(result.survivorKey, 'whoop-1');
+  assert.equal(result.loserKey, 'hk-1');
+});
+
+test("resolveSessionConflict: 'whoop' preference never demotes an already-notified existing HealthKit row", () => {
+  const existing = candidate({ key: 'hk-1', source: 'healthkit', sourceBundleId: 'com.apple.health', notified: true });
+  const incoming = candidate({ key: 'whoop-1', source: 'whoop' });
+  const result = resolveSessionConflict(existing, incoming, 'whoop');
+  assert.equal(result.outcome, 'existing_wins');
+  assert.equal(result.survivorKey, 'hk-1');
+  assert.equal(result.loserKey, 'whoop-1');
 });
 
 test('parseWorkoutWindow: parses a valid ISO startTime + durationMin', () => {

@@ -3,11 +3,14 @@ import test from 'node:test';
 import {
   appleStagesFromPayload,
   assembleWeek,
+  buildSleepDevicesContext,
+  buildWorkoutDevicesContext,
   computeBeforeBed,
   computeEffort,
   computePaceHistory,
   computeSleepUsual,
   computeUsualWorkout,
+  deviceIdFromSource,
   effortZoneFromPct,
   median,
   recoverySourceFromMetricSource,
@@ -311,4 +314,99 @@ test('sleepNightFromDailyMetric: WHOOP with no usable stage summary (unscored sl
 test('sleepNightFromDailyMetric: WHOOP with awake time exceeding in-bed time yields no asleep minutes', () => {
   const stageSummary = { total_awake_time_milli: 500 * 60_000 };
   assert.equal(sleepNightFromDailyMetric('whoop', 480, stageSummary), undefined);
+});
+
+// ── context.devices ─────────────────────────────────────────────────────────
+
+test('deviceIdFromSource: healthkit -> apple, whoop -> whoop', () => {
+  assert.equal(deviceIdFromSource('healthkit'), 'apple');
+  assert.equal(deviceIdFromSource('whoop'), 'whoop');
+});
+
+test('buildWorkoutDevicesContext: primary session first, kcal only on primary', () => {
+  const context = buildWorkoutDevicesContext(
+    { source: 'healthkit', payload: { durationMin: 30, distanceM: 5000, avgHr: 140, maxHr: 170, kcal: 300, hrSeries: [120, 150], running: { cadenceSpm: 170, groundContactMs: 240 } } },
+    { source: 'whoop', payload: { durationMin: 31, avgHr: 138, maxHr: 168, strain: 12.3, kcal: 320, zonesSec: [60, 120, 300, 600, 180], zoneBasis: 'maxHr' } },
+  );
+
+  assert.equal(context.primary, 'apple');
+  assert.equal(context.sessions.length, 2);
+  const [primarySession, otherSession] = context.sessions;
+  assert.equal(primarySession.source, 'apple');
+  assert.equal(primarySession.kcal, 300);
+  assert.deepEqual(primarySession.hrSeries, [120, 150]);
+  assert.deepEqual(primarySession.running, { cadenceSpm: 170, groundContactMs: 240 });
+  assert.equal(otherSession.source, 'whoop');
+  // The non-primary device's kcal is dropped — "not counted", nothing double-counted.
+  assert.ok(!('kcal' in otherSession));
+  assert.equal(otherSession.strain, 12.3);
+  assert.deepEqual(otherSession.zonesSec, [60, 120, 300, 600, 180]);
+  assert.equal(otherSession.zoneBasis, 'maxHr');
+});
+
+test('buildWorkoutDevicesContext: WHOOP as the primary/survivor', () => {
+  const context = buildWorkoutDevicesContext(
+    { source: 'whoop', payload: { durationMin: 45, strain: 14.1, kcal: 500 } },
+    { source: 'healthkit', payload: { durationMin: 44, avgHr: 145, kcal: 480 } },
+  );
+  assert.equal(context.primary, 'whoop');
+  assert.equal(context.sessions[0].source, 'whoop');
+  assert.equal(context.sessions[0].kcal, 500);
+  assert.equal(context.sessions[1].source, 'apple');
+  assert.ok(!('kcal' in context.sessions[1]));
+});
+
+test('buildWorkoutDevicesContext: missing/non-finite fields are omitted, never fabricated', () => {
+  const context = buildWorkoutDevicesContext(
+    { source: 'healthkit', payload: { durationMin: 30 } },
+    { source: 'whoop', payload: {} },
+  );
+  assert.ok(!('distanceM' in context.sessions[0]));
+  assert.ok(!('avgHr' in context.sessions[1]));
+  assert.ok(!('strain' in context.sessions[1]));
+  assert.ok(!('zonesSec' in context.sessions[1]));
+  assert.ok(!('hrSeries' in context.sessions[0]));
+  assert.ok(!('running' in context.sessions[0]));
+});
+
+test('buildWorkoutDevicesContext: an empty running block is omitted entirely', () => {
+  const context = buildWorkoutDevicesContext(
+    { source: 'healthkit', payload: { durationMin: 30, running: {} } },
+    { source: 'whoop', payload: {} },
+  );
+  assert.ok(!('running' in context.sessions[0]));
+});
+
+test('buildSleepDevicesContext: both sources present -> primary first with stages', () => {
+  const context = buildSleepDevicesContext(
+    { source: 'whoop', payload: { minutes: 430, stages: { core: 200, deep: 80, rem: 120, awake: 30 } } },
+    { source: 'healthkit', payload: { minutes: 425, stages: { core: 210, deep: 75, rem: 110, awake: 25 } } },
+  );
+  assert.ok(context);
+  assert.equal(context!.primary, 'whoop');
+  assert.equal(context!.sessions[0].source, 'whoop');
+  assert.equal(context!.sessions[0].minutes, 430);
+  assert.deepEqual(context!.sessions[0].stages, { core: 200, deep: 80, rem: 120, awake: 30 });
+  assert.equal(context!.sessions[1].source, 'apple');
+  assert.equal(context!.sessions[1].minutes, 425);
+});
+
+test('buildSleepDevicesContext: no stages is fine, minutes alone is enough', () => {
+  const context = buildSleepDevicesContext(
+    { source: 'healthkit', payload: { minutes: 400 } },
+    { source: 'whoop', payload: { minutes: 410 } },
+  );
+  assert.ok(context);
+  assert.ok(!('stages' in context!.sessions[0]));
+});
+
+test('buildSleepDevicesContext: undefined when either side has no real minutes figure', () => {
+  assert.equal(buildSleepDevicesContext(
+    { source: 'healthkit', payload: { minutes: 400 } },
+    { source: 'whoop', payload: {} },
+  ), undefined);
+  assert.equal(buildSleepDevicesContext(
+    { source: 'healthkit', payload: {} },
+    { source: 'whoop', payload: { minutes: 400 } },
+  ), undefined);
 });

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildWhoopSleepInput, buildWhoopWorkoutInput, titleCaseSportName } from './analysisPayloads';
+import { buildWhoopSleepInput, buildWhoopWorkoutInput, titleCaseSportName, zonesFromWhoopZoneDurations } from './analysisPayloads';
 import type { WhoopSleep, WhoopWorkout } from './client';
 
 test('titleCaseSportName: single word', () => {
@@ -70,6 +70,50 @@ test('buildWhoopWorkoutInput: no score at all -> only the always-present fields'
     durationMin: 45,
     source: 'whoop',
   });
+});
+
+test('zonesFromWhoopZoneDurations: maps zones 1-5 to whole seconds, dropping zone zero', () => {
+  const zones = zonesFromWhoopZoneDurations({
+    zone_zero_milli: 60_000,
+    zone_one_milli: 120_000,
+    zone_two_milli: 180_000,
+    zone_three_milli: 240_000,
+    zone_four_milli: 300_000,
+    zone_five_milli: 30_000,
+  });
+  assert.deepEqual(zones, [120, 180, 240, 300, 30]);
+});
+
+test('zonesFromWhoopZoneDurations: undefined when zone_durations is absent', () => {
+  assert.equal(zonesFromWhoopZoneDurations(undefined), undefined);
+  assert.equal(zonesFromWhoopZoneDurations(null), undefined);
+});
+
+test('buildWhoopWorkoutInput: maps zone_durations into zonesSec + zoneBasis: maxHr', () => {
+  const input = buildWhoopWorkoutInput(workout({
+    score: {
+      strain: 12.3,
+      average_heart_rate: 140,
+      max_heart_rate: 170,
+      kilojoule: 2000,
+      zone_durations: {
+        zone_zero_milli: 0,
+        zone_one_milli: 60_000,
+        zone_two_milli: 120_000,
+        zone_three_milli: 300_000,
+        zone_four_milli: 600_000,
+        zone_five_milli: 180_000,
+      },
+    },
+  }));
+  assert.deepEqual(input.zonesSec, [60, 120, 300, 600, 180]);
+  assert.equal(input.zoneBasis, 'maxHr');
+});
+
+test('buildWhoopWorkoutInput: omits zonesSec/zoneBasis entirely when WHOOP reports no zone_durations', () => {
+  const input = buildWhoopWorkoutInput(workout());
+  assert.ok(!('zonesSec' in input));
+  assert.ok(!('zoneBasis' in input));
 });
 
 function sleep(overrides: Partial<WhoopSleep> = {}): WhoopSleep {

@@ -340,3 +340,182 @@ export function sleepNightFromDailyMetric(
   if (!derived) return undefined;
   return { minutes: derived.asleepMinutes, stages: whoopStagesFromSummary(payload) };
 }
+
+// ── context.devices (phase 2 "both devices" contract, PR A) ────────────────
+// Only present when BOTH devices recorded the session — see
+// db/schema.ts's workout_analyses.merged_into_id and
+// sleep_analyses.secondary_source/secondary_payload docs, and
+// lib/analysisContextRepository.ts for how the "other" row is found.
+
+/** The `context.devices` DTO's device id — 'healthkit' maps to 'apple', same convention as RecoverySource. */
+export type DeviceId = 'apple' | 'whoop';
+
+export function deviceIdFromSource(source: 'healthkit' | 'whoop'): DeviceId {
+  return source === 'whoop' ? 'whoop' : 'apple';
+}
+
+export interface WorkoutDeviceRunning {
+  cadenceSpm?: number;
+  groundContactMs?: number;
+  powerW?: number;
+  strideM?: number;
+}
+
+export interface WorkoutDeviceSession {
+  source: DeviceId;
+  durationMin?: number;
+  distanceM?: number;
+  avgHr?: number;
+  maxHr?: number;
+  /** Only present on the primary session — "kcal appears only on the primary session" (contract). */
+  kcal?: number;
+  strain?: number;
+  zonesSec?: number[];
+  zoneBasis?: 'reserve' | 'maxHr';
+  hrSeries?: number[];
+  running?: WorkoutDeviceRunning;
+}
+
+export interface WorkoutDevicesContext {
+  primary: DeviceId;
+  /** Primary session first (contract). */
+  sessions: WorkoutDeviceSession[];
+}
+
+/** A `workout_analyses.input_payload` field reader — mirrors the local `pl`/`num` helpers used throughout this module and lib/analysisContextRepository.ts. */
+function plainObject(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function numberArray(value: unknown): number[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const numbers = value.filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
+  return numbers.length > 0 ? numbers : undefined;
+}
+
+function workoutSessionFromPayload(
+  source: 'healthkit' | 'whoop',
+  payload: unknown,
+  isPrimary: boolean,
+): WorkoutDeviceSession {
+  const p = plainObject(payload);
+  const session: WorkoutDeviceSession = { source: deviceIdFromSource(source) };
+
+  const durationMin = finiteNumber(p.durationMin);
+  if (durationMin != null) session.durationMin = durationMin;
+  const distanceM = finiteNumber(p.distanceM);
+  if (distanceM != null) session.distanceM = distanceM;
+  const avgHr = finiteNumber(p.avgHr);
+  if (avgHr != null) session.avgHr = avgHr;
+  const maxHr = finiteNumber(p.maxHr);
+  if (maxHr != null) session.maxHr = maxHr;
+  if (isPrimary) {
+    // "kcal appears only on the primary session. The other session omits it,
+    // and the UI says 'not counted'." — counted totals come only from the
+    // primary device, so nothing is counted twice.
+    const kcal = finiteNumber(p.kcal);
+    if (kcal != null) session.kcal = kcal;
+  }
+  const strain = finiteNumber(p.strain);
+  if (strain != null) session.strain = strain;
+  const zonesSec = numberArray(p.zonesSec);
+  if (zonesSec != null) session.zonesSec = zonesSec;
+  if (p.zoneBasis === 'reserve' || p.zoneBasis === 'maxHr') session.zoneBasis = p.zoneBasis;
+  const hrSeries = numberArray(p.hrSeries);
+  if (hrSeries != null) session.hrSeries = hrSeries;
+  if (p.running !== null && typeof p.running === 'object' && !Array.isArray(p.running)) {
+    const r = p.running as Record<string, unknown>;
+    const running: WorkoutDeviceRunning = {};
+    const cadenceSpm = finiteNumber(r.cadenceSpm);
+    if (cadenceSpm != null) running.cadenceSpm = cadenceSpm;
+    const groundContactMs = finiteNumber(r.groundContactMs);
+    if (groundContactMs != null) running.groundContactMs = groundContactMs;
+    const powerW = finiteNumber(r.powerW);
+    if (powerW != null) running.powerW = powerW;
+    const strideM = finiteNumber(r.strideM);
+    if (strideM != null) running.strideM = strideM;
+    if (Object.keys(running).length > 0) session.running = running;
+  }
+
+  return session;
+}
+
+export interface WorkoutDeviceRow {
+  source: 'healthkit' | 'whoop';
+  payload: unknown;
+}
+
+/**
+ * Builds `context.devices` for a workout analysis from the survivor's and the
+ * other (suppressed same-session) row's payloads. `survivor` becomes the
+ * primary session (first, with kcal); `other` is the secondary session
+ * (no kcal — "not counted").
+ */
+export function buildWorkoutDevicesContext(
+  survivor: WorkoutDeviceRow,
+  other: WorkoutDeviceRow,
+): WorkoutDevicesContext {
+  return {
+    primary: deviceIdFromSource(survivor.source),
+    sessions: [
+      workoutSessionFromPayload(survivor.source, survivor.payload, true),
+      workoutSessionFromPayload(other.source, other.payload, false),
+    ],
+  };
+}
+
+export interface SleepDeviceSession {
+  source: DeviceId;
+  minutes: number;
+  stages?: SleepStages;
+}
+
+export interface SleepDevicesContext {
+  primary: DeviceId;
+  sessions: SleepDeviceSession[];
+}
+
+/**
+ * `sleep_analyses.input_payload` already stores `minutes` (asleep minutes)
+ * and `stages` (already in `{core,deep,rem,awake}` minutes) for BOTH sources
+ * — lib/whoop/analysisPayloads.ts's buildWhoopSleepInput and the HealthKit
+ * ingest route both normalize to this shape before it's ever persisted — so,
+ * unlike the daily_metrics-derived `sleepNightFromDailyMetric` above, no
+ * source-specific conversion is needed here.
+ */
+function sleepSessionFromPayload(source: 'healthkit' | 'whoop', payload: unknown): SleepDeviceSession | undefined {
+  const p = plainObject(payload);
+  const minutes = finiteNumber(p.minutes);
+  if (minutes == null) return undefined;
+  const session: SleepDeviceSession = { source: deviceIdFromSource(source), minutes };
+  const stages = appleStagesFromPayload(p.stages);
+  if (stages) session.stages = stages;
+  return session;
+}
+
+export interface SleepDeviceRow {
+  source: 'healthkit' | 'whoop';
+  payload: unknown;
+}
+
+/**
+ * Builds `context.devices` for a sleep analysis, only when both the primary
+ * row and the secondary payload yield a real minutes figure — "only when
+ * secondary_payload exists" (contract), and never a fabricated 0 for either
+ * side.
+ */
+export function buildSleepDevicesContext(
+  primary: SleepDeviceRow,
+  secondary: SleepDeviceRow,
+): SleepDevicesContext | undefined {
+  const primarySession = sleepSessionFromPayload(primary.source, primary.payload);
+  const secondarySession = sleepSessionFromPayload(secondary.source, secondary.payload);
+  if (!primarySession || !secondarySession) return undefined;
+  return { primary: deviceIdFromSource(primary.source), sessions: [primarySession, secondarySession] };
+}
