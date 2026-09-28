@@ -33,6 +33,11 @@ struct DailySleepData {
     let deepMinutes: Int?
     let remMinutes: Int?
     let awakeMinutes: Int?
+    /// Earliest start / latest end across this night's asleep intervals
+    /// (§3, analysis-v2-contract.md) — nil only when there's no asleep time
+    /// at all for the day (`unionMinutes` on an empty bucket).
+    let bedTime: Date?
+    let wakeTime: Date?
 
     /// Whether the source data distinguished sleep stages at all (vs. a single
     /// "asleepUnspecified" block from older watches / manual entries).
@@ -236,13 +241,16 @@ final class HealthKitBackfill {
             let deep  = SleepIntervalMath.unionMinutes(b.deep)
             let rem   = SleepIntervalMath.unionMinutes(b.rem)
             let awake = SleepIntervalMath.unionMinutes(b.awake)
+            let bounds = SleepIntervalMath.boundingRange(b.asleep)
             return DailySleepData(
                 day: day,
                 minutes: Int(SleepIntervalMath.unionMinutes(b.asleep).rounded()),
                 coreMinutes: core  > 0 ? Int(core.rounded())  : nil,
                 deepMinutes: deep  > 0 ? Int(deep.rounded())  : nil,
                 remMinutes:  rem   > 0 ? Int(rem.rounded())   : nil,
-                awakeMinutes: awake > 0 ? Int(awake.rounded()) : nil
+                awakeMinutes: awake > 0 ? Int(awake.rounded()) : nil,
+                bedTime: bounds?.start,
+                wakeTime: bounds?.end
             )
         }
     }
@@ -396,7 +404,9 @@ final class HealthKitBackfill {
                     minutes: s.minutes,
                     stages: s.hasStageBreakdown
                         ? DailyIngestSleepStages(core: s.coreMinutes, deep: s.deepMinutes, rem: s.remMinutes, awake: s.awakeMinutes)
-                        : nil
+                        : nil,
+                    bedTime: s.bedTime.map { Self.iso8601.string(from: $0) },
+                    wakeTime: s.wakeTime.map { Self.iso8601.string(from: $0) }
                 )
             }
 

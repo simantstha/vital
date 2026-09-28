@@ -567,6 +567,59 @@ final class ScreenshotTests: XCTestCase {
                            "Logs should render its day-pager [\(scenario)/\(appearance)]")
         }
         capture(app, name: "\(scenario)__logs__\(appearance)")
+
+        if scenario != "server_error" && scenario != "new_user" {
+            captureLogsAnalyses(app, scenario: scenario, appearance: appearance)
+        }
+    }
+
+    /// Reached from Logs: taps the workout row (`logs.workoutRow`) to open
+    /// the redesigned workout `AnalysisView`, captures it, dismisses with
+    /// "Done", then does the same for the sleep row. Every established
+    /// fixture scenario carries both rows with a full-`context` analysis
+    /// behind them (`FixtureData.notableRunAnalysis`/`roughNightAnalysis`,
+    /// `.muscle`'s workout row instead pointing at the routine variant) —
+    /// see `FixtureData.logs`. Screen segments are letters-only
+    /// ("workoutAnalysis"/"sleepAnalysis") to match the export regex
+    /// `^[a-z_]+__[A-Za-z]+__(light|dark)\.png$`.
+    private func captureLogsAnalyses(_ app: XCUIApplication, scenario: String, appearance: String) {
+        captureWorkoutAnalysis(app, scenario: scenario, appearance: appearance)
+        captureSleepAnalysis(app, scenario: scenario, appearance: appearance)
+    }
+
+    private func captureWorkoutAnalysis(_ app: XCUIApplication, scenario: String, appearance: String) {
+        let workoutRow = app.buttons["logs.workoutRow"].firstMatch
+        tapWhenHittable(workoutRow, app: app, maxSwipes: 6, description: "Logs' workout row [\(scenario)/\(appearance)]")
+        let workoutHeader = app.descendants(matching: .any).matching(identifier: "analysisWorkout.header").firstMatch
+        XCTAssertTrue(workoutHeader.waitForExistence(timeout: 15),
+                       "Tapping the workout row should open the workout AnalysisView [\(scenario)/\(appearance)]")
+        capture(app, name: "\(scenario)__workoutAnalysis__\(appearance)")
+        let workoutDone = app.buttons["analysis.done"].firstMatch
+        tapWhenHittable(workoutDone, app: app, description: "Workout AnalysisView Done button [\(scenario)/\(appearance)]")
+        // Wait for the workout sheet to actually finish closing (not just
+        // for Logs to reappear underneath it) before touching the next row.
+        // `.sheet(item:)` silently drops a presentation requested while the
+        // PREVIOUS one is still mid-dismissal, and `analysisTarget` in
+        // LogsView flips back to nil well before that close animation
+        // finishes — so racing straight into the next tap could land the
+        // tap while the new sheet never appears.
+        XCTAssertTrue(workoutHeader.waitForNonExistence(timeout: 5),
+                       "Workout AnalysisView should fully dismiss before the next tap [\(scenario)/\(appearance)]")
+        XCTAssertTrue(app.staticTexts["LOG ENTRIES"].waitForExistence(timeout: 10),
+                       "Dismissing the workout analysis should return to Logs [\(scenario)/\(appearance)]")
+    }
+
+    private func captureSleepAnalysis(_ app: XCUIApplication, scenario: String, appearance: String) {
+        let sleepRow = app.buttons["logs.sleepRow"].firstMatch
+        tapWhenHittable(sleepRow, app: app, maxSwipes: 6, description: "Logs' sleep row [\(scenario)/\(appearance)]")
+        let sleepHeader = app.descendants(matching: .any).matching(identifier: "analysisSleep.header").firstMatch
+        XCTAssertTrue(sleepHeader.waitForExistence(timeout: 15),
+                       "Tapping the sleep row should open the sleep AnalysisView [\(scenario)/\(appearance)]")
+        capture(app, name: "\(scenario)__sleepAnalysis__\(appearance)")
+        let sleepDone = app.buttons["analysis.done"].firstMatch
+        tapWhenHittable(sleepDone, app: app, description: "Sleep AnalysisView Done button [\(scenario)/\(appearance)]")
+        XCTAssertTrue(app.staticTexts["LOG ENTRIES"].waitForExistence(timeout: 10),
+                       "Dismissing the sleep analysis should return to Logs [\(scenario)/\(appearance)]")
     }
 
     private func captureProfile(_ app: XCUIApplication, scenario: String, appearance: String) {

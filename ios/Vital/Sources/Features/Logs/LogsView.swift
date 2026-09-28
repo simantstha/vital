@@ -3,7 +3,7 @@ import SwiftUI
 /// Sheet target for a log row's proactive analysis — `kind` is the row's
 /// log type (workout_completed / sleep_session), `analysisId` the ready
 /// analysis to open.
-private struct AnalysisSheetTarget: Identifiable {
+private struct AnalysisSheetTarget: Identifiable, Equatable {
     let kind: String
     let analysisId: String
     var id: String { analysisId }
@@ -17,6 +17,18 @@ struct LogsView: View {
     @ObservedObject private var unitPref = UnitPreference.shared
     @State private var showDietSheet = false
     @State private var analysisTarget: AnalysisSheetTarget?
+    /// A row tapped while the *previous* analysis sheet is still animating
+    /// out. `.sheet(item:)` silently drops a presentation requested during
+    /// another one's dismissal — `analysisTarget` is already back to `nil`
+    /// by then (SwiftUI clears the binding as soon as `dismiss()` is
+    /// called, well before the close animation finishes), so there's no way
+    /// to tell "a dismissal is in flight" from `analysisTarget` alone. See
+    /// `isAnalysisSheetDismissing`/`presentAnalysis(_:)` below.
+    @State private var queuedAnalysisTarget: AnalysisSheetTarget?
+    /// `true` from the moment `analysisTarget` flips to `nil` until the
+    /// sheet's `onDismiss` actually fires — i.e. exactly the window a new
+    /// presentation would otherwise get silently dropped in.
+    @State private var isAnalysisSheetDismissing = false
     /// Bumped only inside an *enabled* pager button's own action — never
     /// bound to `vm.selectedIndex` directly, since `LogsViewModel.load()`
     /// resets that to 0 on every pull-to-refresh, which would fire a
@@ -104,12 +116,38 @@ struct LogsView: View {
                 )
             }
         }
-        .sheet(item: $analysisTarget) { target in
+        .sheet(item: $analysisTarget, onDismiss: {
+            isAnalysisSheetDismissing = false
+            if let queuedAnalysisTarget {
+                self.queuedAnalysisTarget = nil
+                // One more tick past `onDismiss` itself — presenting
+                // synchronously inside it can still race the sheet's own
+                // teardown on some OS versions.
+                DispatchQueue.main.async { analysisTarget = queuedAnalysisTarget }
+            }
+        }) { target in
             if target.kind == "workout_completed" {
                 WorkoutAnalysisView(id: target.analysisId)
             } else {
                 SleepAnalysisView(id: target.analysisId)
             }
+        }
+        .onChange(of: analysisTarget) { oldValue, newValue in
+            if oldValue != nil && newValue == nil {
+                isAnalysisSheetDismissing = true
+            }
+        }
+    }
+
+    /// Presents a log row's analysis sheet, queuing it instead when the
+    /// previous one is still mid-dismissal (see `isAnalysisSheetDismissing`'s
+    /// doc comment) — a real user tapping the sleep row right after
+    /// dismissing the workout one must not silently get nothing.
+    private func presentAnalysis(_ target: AnalysisSheetTarget) {
+        if isAnalysisSheetDismissing {
+            queuedAnalysisTarget = target
+        } else {
+            analysisTarget = target
         }
     }
 }
@@ -212,11 +250,15 @@ private extension LogsView {
                         ForEach(Array(day.items.enumerated()), id: \.element.id) { index, item in
                             if let analysisId = item.analysisId {
                                 Button {
-                                    analysisTarget = AnalysisSheetTarget(kind: item.type, analysisId: analysisId)
+                                    presentAnalysis(AnalysisSheetTarget(kind: item.type, analysisId: analysisId))
                                 } label: {
                                     LogEntryRow(item: item, isFirst: index == 0)
                                 }
                                 .buttonStyle(.plain)
+                                // Stable hooks for the screenshot harness — it
+                                // taps these rather than matching on row text,
+                                // which varies per fixture scenario.
+                                .accessibilityIdentifier(item.type == "workout_completed" ? "logs.workoutRow" : "logs.sleepRow")
                             } else {
                                 LogEntryRow(item: item, isFirst: index == 0)
                             }
@@ -303,5 +345,14 @@ private struct LogEntryRow: View {
                 Rectangle().fill(Theme.Colors.glassBorder).frame(height: 0.5)
             }
         }
+        // This row's label sits inside a `.buttonStyle(.plain)` Button, which
+        // (with no background) is only hit-testable on its drawn glyphs —
+        // the Spacer between the title/subtitle and the trailing meta text
+        // is empty space, not part of the tap target. A row whose meta text
+        // happens to start well right of center (e.g. "auto" on a short
+        // sleep row) could then have a real dead zone in its middle where a
+        // tap lands on nothing. `.contentShape` makes the whole padded row
+        // tappable, matching what it visually looks like.
+        .contentShape(Rectangle())
     }
 }

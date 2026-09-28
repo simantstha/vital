@@ -1353,6 +1353,12 @@ struct DailyIngestMetrics: Encodable {
 struct DailyIngestSleep: Encodable {
     let minutes: Int
     let stages: DailyIngestSleepStages?
+    /// ISO-8601 instants — earliest start / latest end of the night's asleep
+    /// intervals (analysis-v2-contract.md §3). Additive/optional: the server
+    /// stores the payload as-is, and old app versions omitting these keep
+    /// working.
+    let bedTime: String?
+    let wakeTime: String?
 }
 
 struct DailyIngestSleepStages: Encodable {

@@ -46,4 +46,14 @@ enum SleepIntervalMath {
         totalSeconds += curEnd.timeIntervalSince(curStart)
         return totalSeconds / 60
     }
+
+    /// The earliest `start` and latest `end` across the given intervals —
+    /// used to derive a night's overall bedTime/wakeTime from its (possibly
+    /// multi-source, overlapping) asleep intervals, independent of
+    /// `unionMinutes`'s gap-aware duration math. `nil` for empty input.
+    static func boundingRange(_ intervals: [Interval]) -> (start: Date, end: Date)? {
+        guard let firstStart = intervals.map(\.start).min(),
+              let lastEnd = intervals.map(\.end).max() else { return nil }
+        return (firstStart, lastEnd)
+    }
 }
