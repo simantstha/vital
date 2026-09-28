@@ -15,6 +15,11 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      scenario:
+        description: "Optional: run screenshots for a single scenario (e.g. weight_loss, endurance, muscle, new_user, server_error, onboarding)"
+        required: false
+        type: string
 
 concurrency:
   group: pr-checks-${{ github.ref }}
@@ -64,7 +69,7 @@ jobs:
   backend:
     name: Backend — lint + test
     needs: changes
-    if: needs.changes.outputs.backend == 'true'
+    if: github.event_name == 'pull_request' && needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -92,7 +97,7 @@ jobs:
   ios:
     name: iOS — build + test
     needs: changes
-    if: needs.changes.outputs.ios == 'true'
+    if: github.event_name == 'pull_request' && needs.changes.outputs.ios == 'true'
     runs-on: macos-latest
     # Safety net: build + test should take a few minutes; anything approaching
     # this means a hang — fail fast instead of stalling (macOS runners bill
@@ -311,7 +316,7 @@ jobs:
   ios-screenshots:
     name: iOS — screenshots
     needs: changes
-    if: needs.changes.outputs.ios == 'true'
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.ios == 'true')
     runs-on: macos-latest
     # Screenshot harness (see docs/CI-TESTFLIGHT.md — "iOS screenshot
     # harness"): runs VitalUITests/VitalScreenshots against every fixture
@@ -398,6 +403,38 @@ jobs:
           set -o pipefail
           mkdir -p build
           echo "Testing on: $SIM_NAME (iOS $SIM_RUNTIME), UDID $SIM_UDID"
+
+          # Convert scenario snake_case to camelCase for test method name
+          ONLY_TESTING=""
+          if [ -n "${{ inputs.scenario }}" ]; then
+            case "${{ inputs.scenario }}" in
+              new_user)
+                TEST_METHOD="test_newUser"
+                ;;
+              weight_loss)
+                TEST_METHOD="test_weightLoss"
+                ;;
+              muscle)
+                TEST_METHOD="test_muscle"
+                ;;
+              endurance)
+                TEST_METHOD="test_endurance"
+                ;;
+              server_error)
+                TEST_METHOD="test_serverError"
+                ;;
+              onboarding)
+                TEST_METHOD="test_onboarding"
+                ;;
+              *)
+                echo "::error::Unknown scenario '${{ inputs.scenario }}'. Valid values: new_user, weight_loss, muscle, endurance, server_error, onboarding"
+                exit 1
+                ;;
+            esac
+            ONLY_TESTING="-only-testing:VitalUITests/ScreenshotTests/${TEST_METHOD}"
+            echo "Running single scenario: ${{ inputs.scenario }} (${TEST_METHOD})"
+          fi
+
           if command -v xcbeautify >/dev/null 2>&1; then
             xcodebuild test \
               -project Vital/Vital.xcodeproj \
@@ -405,6 +442,7 @@ jobs:
               -destination "id=$SIM_UDID" \
               -resultBundlePath build/Screens.xcresult \
               CODE_SIGNING_ALLOWED=NO \
+              ${ONLY_TESTING} \
               | xcbeautify
           else
             xcodebuild test \
@@ -412,7 +450,8 @@ jobs:
               -scheme VitalScreenshots \
               -destination "id=$SIM_UDID" \
               -resultBundlePath build/Screens.xcresult \
-              CODE_SIGNING_ALLOWED=NO
+              CODE_SIGNING_ALLOWED=NO \
+              ${ONLY_TESTING}
           fi
 
       # Best-effort from here down: only the test step above should fail this
@@ -596,12 +635,13 @@ jobs:
           retention-days: 30
           if-no-files-found: ignore
 
-      # Forked PRs can't be granted `contents: write` on this repo, so
+      # For PR runs: forked PRs can't be granted `contents: write` on this repo, so
       # publishing to `ci-screenshots` is skipped for them — the artifact
-      # upload above is still there for the PR author to download. Never
-      # fails the job either way (`continue-on-error`).
+      # upload above is still there for the PR author to download.
+      # For manual runs (workflow_dispatch): skip publishing (artifacts are available).
+      # Never fails the job either way (`continue-on-error`).
       - name: Publish screenshots to ci-screenshots branch
-        if: always() && github.event.pull_request.head.repo.full_name == github.repository
+        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
         continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -657,7 +697,7 @@ jobs:
           echo "Published to https://github.com/${{ github.repository }}/tree/ci-screenshots/${DEST_DIR}"
 
   # Single stable check name to mark as required on main — the jobs above
-  # come and go (skipped) based on which paths changed, which makes them
+  # come and go (skipped) based on which paths changed or trigger type, which makes them
   # unreliable branch-protection check names by themselves.
   pr-checks:
     name: PR checks
@@ -669,14 +709,25 @@ jobs:
         run: |
           set -e
           failed=0
-          for result in "${{ needs.changes.result }}" "${{ needs.backend.result }}" "${{ needs.ios.result }}" "${{ needs.ios-screenshots.result }}"; do
-            if [ "$result" = "failure" ] || [ "$result" = "cancelled" ]; then
-              failed=1
-            fi
-          done
+          # backend and ios may be skipped on workflow_dispatch (manual runs),
+          # which is intentional. Only fail if a job actually failed or was cancelled.
+          if [ "${{ needs.changes.result }}" = "failure" ] || [ "${{ needs.changes.result }}" = "cancelled" ]; then
+            echo "Job changes failed or was cancelled"
+            failed=1
+          fi
+          if [ "${{ needs.backend.result }}" = "failure" ] || [ "${{ needs.backend.result }}" = "cancelled" ]; then
+            echo "Job backend failed or was cancelled"
+            failed=1
+          fi
+          if [ "${{ needs.ios.result }}" = "failure" ] || [ "${{ needs.ios.result }}" = "cancelled" ]; then
+            echo "Job ios failed or was cancelled"
+            failed=1
+          fi
+          if [ "${{ needs.ios-screenshots.result }}" = "failure" ] || [ "${{ needs.ios-screenshots.result }}" = "cancelled" ]; then
+            echo "Job ios-screenshots failed or was cancelled"
+            failed=1
+          fi
           if [ "$failed" -eq 1 ]; then
-            echo "One or more required jobs failed or were cancelled:"
-            echo "  changes=${{ needs.changes.result }} backend=${{ needs.backend.result }} ios=${{ needs.ios.result }} ios-screenshots=${{ needs.ios-screenshots.result }}"
             exit 1
           fi
-          echo "All required jobs passed (or were skipped): changes=${{ needs.changes.result }} backend=${{ needs.backend.result }} ios=${{ needs.ios.result }} ios-screenshots=${{ needs.ios-screenshots.result }}"
+          echo "All required jobs passed or were appropriately skipped"
