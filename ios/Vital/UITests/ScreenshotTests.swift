@@ -651,6 +651,9 @@ final class ScreenshotTests: XCTestCase {
             ? "Tapping the sleep row should open the sleep AnalysisView [\(scenario)/\(appearance)]"
             : "Tapping the sleep row should open the sleep AnalysisView [\(scenario)/\(appearance)]. "
               + diagnostics(app)
+              + " logs.sleepRow.frame=\(app.buttons["logs.sleepRow"].firstMatch.frame) "
+              + "staticText[Sleep].frame=\(app.staticTexts["Sleep"].frame) "
+              + "staticText[5h 48m last night].frame=\(app.staticTexts["5h 48m last night"].frame)"
         XCTAssertTrue(sleepAppeared, sleepAppearedMessage)
         capture(app, name: "\(scenario)__sleepAnalysis__\(appearance)")
         let sleepDone = app.buttons["analysis.done"].firstMatch

@@ -131,6 +131,19 @@ struct LogsView: View {
             .scrollIndicators(.hidden)
             .refreshable { await vm.load() }
         }
+        #if DEBUG
+        // PR #249 probe: `logs.sleepRow`'s tap is hittable per XCUITest but
+        // its Button action never fires — this pins down where the tap
+        // itself actually lands (something else consuming it first, vs.
+        // the touch never reaching this view hierarchy at all). Global
+        // coordinates, `.simultaneousGesture` so it observes without
+        // intercepting/blocking the real gesture underneath it.
+        .simultaneousGesture(
+            SpatialTapGesture(coordinateSpace: .global).onEnded { value in
+                AnalysisDebugLog.shared.append("rootTap@\(Int(value.location.x)),\(Int(value.location.y))")
+            }
+        )
+        #endif
         .task { await vm.load() }
         .sheet(isPresented: $showDietSheet) {
             VitalSheet(detents: [.large]) {
@@ -302,8 +315,22 @@ private extension LogsView {
                                 // taps these rather than matching on row text,
                                 // which varies per fixture scenario.
                                 .accessibilityIdentifier(item.type == "workout_completed" ? "logs.workoutRow" : "logs.sleepRow")
+                                #if DEBUG
+                                // PR #249 probe — see the root ZStack's
+                                // matching comment. Confirms whether THIS
+                                // Button's own action closure is what
+                                // ultimately fires for a given tap.
+                                .simultaneousGesture(
+                                    TapGesture().onEnded { AnalysisDebugLog.shared.append("rowTap(\(item.type))") }
+                                )
+                                #endif
                             } else {
                                 LogEntryRow(item: item, isFirst: index == 0)
+                                #if DEBUG
+                                .simultaneousGesture(
+                                    TapGesture().onEnded { AnalysisDebugLog.shared.append("plainRowTap(\(item.type))") }
+                                )
+                                #endif
                             }
                         }
                     }
@@ -333,6 +360,11 @@ private extension LogsView {
                 }
                 .buttonStyle(.plain)
                 .padding(.top, Theme.Spacing.md)
+                #if DEBUG
+                .simultaneousGesture(
+                    TapGesture().onEnded { AnalysisDebugLog.shared.append("addTap") }
+                )
+                #endif
             }
         }
         .padding(.horizontal, Theme.Spacing.xl)
