@@ -156,7 +156,8 @@ final class HeartRateResamplerTests: XCTestCase {
         let series = try? XCTUnwrap(HeartRateResampler.resample(samples: samples, start: referenceStart, end: end))
 
         // A single 15s bin averaging all 13 samples: (120+121+122 + 100+101+...+109) / 13.
-        let expectedSum = 120.0 + 121.0 + 122.0 + (100...109).map(Double.init).reduce(0, +)
+        let tail: Double = (100...109).reduce(0.0) { $0 + Double($1) }
+        let expectedSum: Double = 120.0 + 121.0 + 122.0 + tail
         let expected = (expectedSum / 13 * 10).rounded() / 10
         XCTAssertEqual(series?.count, 1)
         XCTAssertEqual(series?[0], expected)
