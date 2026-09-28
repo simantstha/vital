@@ -29,6 +29,12 @@ struct LogsView: View {
     /// sheet's `onDismiss` actually fires — i.e. exactly the window a new
     /// presentation would otherwise get silently dropped in.
     @State private var isAnalysisSheetDismissing = false
+    #if DEBUG
+    /// PR #249 diagnostics only — see `AnalysisDebugLog`'s doc comment.
+    /// Observed so the hidden `logs.debugLastAnalysisEvent` `Text` below
+    /// re-renders (and so its accessibility label updates) on every append.
+    @ObservedObject private var debugLog = AnalysisDebugLog.shared
+    #endif
     /// Bumped only inside an *enabled* pager button's own action — never
     /// bound to `vm.selectedIndex` directly, since `LogsViewModel.load()`
     /// resets that to 0 on every pull-to-refresh, which would fire a
@@ -43,6 +49,21 @@ struct LogsView: View {
     var body: some View {
         ZStack {
             Theme.Colors.canvas.ignoresSafeArea()
+
+            #if DEBUG
+            // PR #249 diagnostics only — invisible (zero-size, clear) but
+            // still in the accessibility tree, so a UI test can read its
+            // label without relying on stdout. `FixtureMode.isActive` keeps
+            // it out of a real launch even though the file itself is
+            // DEBUG-only anyway.
+            if FixtureMode.isActive {
+                Text(debugLog.text.isEmpty ? "(none)" : debugLog.text)
+                    .font(.system(size: 1))
+                    .foregroundStyle(.clear)
+                    .frame(width: 1, height: 1)
+                    .accessibilityIdentifier("logs.debugLastAnalysisEvent")
+            }
+            #endif
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
@@ -126,6 +147,9 @@ struct LogsView: View {
                 DispatchQueue.main.async { analysisTarget = queuedAnalysisTarget }
             }
         }) { target in
+            #if DEBUG
+            let _ = AnalysisDebugLog.shared.append("sheetBuilder(\(target.kind))")
+            #endif
             if target.kind == "workout_completed" {
                 WorkoutAnalysisView(id: target.analysisId)
             } else {
@@ -144,9 +168,18 @@ struct LogsView: View {
     /// doc comment) — a real user tapping the sleep row right after
     /// dismissing the workout one must not silently get nothing.
     private func presentAnalysis(_ target: AnalysisSheetTarget) {
+        #if DEBUG
+        AnalysisDebugLog.shared.append("presentAnalysis(\(target.kind))")
+        #endif
         if isAnalysisSheetDismissing {
+            #if DEBUG
+            AnalysisDebugLog.shared.append("queued(\(target.kind))")
+            #endif
             queuedAnalysisTarget = target
         } else {
+            #if DEBUG
+            AnalysisDebugLog.shared.append("set(\(target.kind))")
+            #endif
             analysisTarget = target
         }
     }

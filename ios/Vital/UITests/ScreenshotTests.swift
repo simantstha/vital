@@ -616,13 +616,14 @@ final class ScreenshotTests: XCTestCase {
         // finishes — so racing straight into the next tap could land the
         // tap while the new sheet never appears.
         let workoutDismissed = workoutHeader.waitForNonExistence(timeout: 5)
-        if !workoutDismissed {
-            // Diagnostics only — printed to the xcodebuild log, only on
-            // failure, to keep it small.
-            print("WORKOUT_DISMISS_DIAG [\(scenario)/\(appearance)]\n" + app.debugDescription)
-        }
-        XCTAssertTrue(workoutDismissed,
-                       "Workout AnalysisView should fully dismiss before the next tap [\(scenario)/\(appearance)]")
+        // Diagnostics folded into the assertion message itself (not
+        // print()) — xcbeautify strips stdout before it reaches the CI log,
+        // so a print() here would never actually be seen.
+        let workoutDismissMessage = workoutDismissed
+            ? "Workout AnalysisView should fully dismiss before the next tap [\(scenario)/\(appearance)]"
+            : "Workout AnalysisView should fully dismiss before the next tap [\(scenario)/\(appearance)]. "
+              + diagnostics(app)
+        XCTAssertTrue(workoutDismissed, workoutDismissMessage)
         XCTAssertTrue(app.staticTexts["LOG ENTRIES"].waitForExistence(timeout: 10),
                        "Dismissing the workout analysis should return to Logs [\(scenario)/\(appearance)]")
     }
@@ -640,24 +641,41 @@ final class ScreenshotTests: XCTestCase {
             tapWhenHittable(sleepRow, app: app, maxSwipes: 6, description: "Logs' sleep row (retry) [\(scenario)/\(appearance)]")
         }
         let sleepAppeared = sleepHeader.waitForExistence(timeout: 15)
-        if !sleepAppeared {
-            // Diagnostics only — printed to the xcodebuild log, only on
-            // failure, to keep it small.
-            let row = app.buttons["logs.sleepRow"].firstMatch
-            let analysisContainers = app.otherElements.matching(NSPredicate(format: "identifier CONTAINS[c] 'analysis'"))
-            print("SLEEP_SHEET_DIAG [\(scenario)/\(appearance)] logs.sleepRow exists=\(row.exists) "
-                  + "hittable=\(row.isHittable) frame=\(row.frame)")
-            print("SLEEP_SHEET_DIAG [\(scenario)/\(appearance)] sheets=\(app.sheets.count) "
-                  + "otherElementsMatchingAnalysis=\(analysisContainers.count)")
-            print("SLEEP_SHEET_DIAG [\(scenario)/\(appearance)]\n" + app.debugDescription)
-        }
-        XCTAssertTrue(sleepAppeared,
-                       "Tapping the sleep row should open the sleep AnalysisView [\(scenario)/\(appearance)]")
+        // Diagnostics folded into the assertion message itself (not
+        // print()) — xcbeautify strips stdout before it reaches the CI log,
+        // so a print() here would never actually be seen.
+        let sleepAppearedMessage = sleepAppeared
+            ? "Tapping the sleep row should open the sleep AnalysisView [\(scenario)/\(appearance)]"
+            : "Tapping the sleep row should open the sleep AnalysisView [\(scenario)/\(appearance)]. "
+              + diagnostics(app)
+        XCTAssertTrue(sleepAppeared, sleepAppearedMessage)
         capture(app, name: "\(scenario)__sleepAnalysis__\(appearance)")
         let sleepDone = app.buttons["analysis.done"].firstMatch
         tapWhenHittable(sleepDone, app: app, description: "Sleep AnalysisView Done button [\(scenario)/\(appearance)]")
         XCTAssertTrue(app.staticTexts["LOG ENTRIES"].waitForExistence(timeout: 10),
                        "Dismissing the sleep analysis should return to Logs [\(scenario)/\(appearance)]")
+    }
+
+    /// Everything useful for diagnosing why the sleep (or workout) analysis
+    /// sheet didn't present/dismiss as expected, folded into one string so
+    /// it lands in the XCTest failure's own `##[error]` line — `print()`
+    /// output is stripped by `xcbeautify` before it reaches the CI log, so
+    /// it never actually surfaces there. Includes the sleep row's own
+    /// existence/hittability/frame, the sheet-presentation-surface counts,
+    /// whether the Done button exists, the DEBUG-only
+    /// `logs.debugLastAnalysisEvent` breadcrumb (see `AnalysisDebugLog`),
+    /// and a flattened, capped `app.debugDescription`.
+    private func diagnostics(_ app: XCUIApplication) -> String {
+        let sleepRow = app.buttons["logs.sleepRow"].firstMatch
+        let analysisContainers = app.otherElements.matching(NSPredicate(format: "identifier CONTAINS[c] 'analysis'"))
+        let debugEvent = app.descendants(matching: .any).matching(identifier: "logs.debugLastAnalysisEvent").firstMatch
+        let debugEventLabel = debugEvent.exists ? debugEvent.label : "(logs.debugLastAnalysisEvent not found)"
+        let flattened = app.debugDescription.replacingOccurrences(of: "\n", with: " | ")
+        let cappedDescription = flattened.count > 6000 ? String(flattened.prefix(6000)) + "…(truncated)" : flattened
+        return "DIAG logs.sleepRow(exists=\(sleepRow.exists), hittable=\(sleepRow.isHittable), frame=\(sleepRow.frame)) "
+            + "sheets=\(app.sheets.count) otherElementsMatchingAnalysis=\(analysisContainers.count) "
+            + "analysis.done.exists=\(app.buttons["analysis.done"].exists) "
+            + "debugEvent=[\(debugEventLabel)] debugDescription=[\(cappedDescription)]"
     }
 
     private func captureProfile(_ app: XCUIApplication, scenario: String, appearance: String) {

@@ -34,6 +34,10 @@ struct AnalysisView: View {
             }
         }
         .task { await load() }
+        #if DEBUG
+        .onAppear { AnalysisDebugLog.shared.append("AnalysisView.onAppear(\(kind.resource))") }
+        .onDisappear { AnalysisDebugLog.shared.append("AnalysisView.onDisappear(\(kind.resource))") }
+        #endif
     }
 
     private var doneRow: some View {
@@ -104,15 +108,28 @@ struct AnalysisView: View {
     }
 
     private func load() async {
-        do { analysis = try await APIClient.shared.fetchAnalysis(resource: kind.resource, id: id) }
+        do {
+            analysis = try await APIClient.shared.fetchAnalysis(resource: kind.resource, id: id)
+            #if DEBUG
+            AnalysisDebugLog.shared.append("load.success(\(kind.resource))")
+            #endif
+        }
         catch APIError.serverError(404) {
             // Genuinely gone (deleted or never had a result) — leave `error` nil so the
             // view falls back to its "This analysis is no longer available." copy
             // instead of a generic "Couldn't load — try again." Still log for production
             // visibility; discard the copy since we don't show it here.
             _ = UserFacingError.message(for: APIError.serverError(404), context: .read, tag: "fetchAnalysis")
+            #if DEBUG
+            AnalysisDebugLog.shared.append("load.failure(\(kind.resource)):404")
+            #endif
         }
-        catch { self.error = UserFacingError.message(for: error, context: .read, tag: "fetchAnalysis") }
+        catch {
+            self.error = UserFacingError.message(for: error, context: .read, tag: "fetchAnalysis")
+            #if DEBUG
+            AnalysisDebugLog.shared.append("load.failure(\(kind.resource)):\(error)")
+            #endif
+        }
         withAnimation(Theme.Motion.appear) { loading = false }
     }
 }
@@ -371,7 +388,11 @@ private struct AskCoachLink: View {
 
 // MARK: - Workout content
 
-private struct WorkoutAnalysisContent: View {
+// Internal (not `private`) purely so `AnalysisFixtureRenderTests` (PR #249
+// evidence-gathering) can construct it directly from decoded fixture data
+// and force a layout pass, without going through `AnalysisView`'s own
+// network `load()` — no behavior or layout change, access only.
+struct WorkoutAnalysisContent: View {
     let value: AnalysisResponse
     let doneAction: () -> Void
     let kind: AnalysisKind
@@ -739,7 +760,8 @@ private struct EffortZoneBar: View {
 
 // MARK: - Sleep content
 
-private struct SleepAnalysisContent: View {
+// Internal (not `private`) — see `WorkoutAnalysisContent`'s comment above.
+struct SleepAnalysisContent: View {
     let value: AnalysisResponse
     let doneAction: () -> Void
     let kind: AnalysisKind
