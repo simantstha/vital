@@ -451,6 +451,9 @@ struct WorkoutAnalysisContent: View {
             .padding(Theme.Spacing.xl)
             .padding(.bottom, Theme.Spacing.xxl)
         }
+        #if DEBUG
+        .onAppear { AnalysisDebugLog.shared.append("workoutContent.onAppear") }
+        #endif
     }
 
     private func hasGoingInData(_ goingIn: AnalysisContext.GoingIn) -> Bool {
@@ -818,6 +821,9 @@ struct SleepAnalysisContent: View {
             .padding(Theme.Spacing.xl)
             .padding(.bottom, Theme.Spacing.xxl)
         }
+        #if DEBUG
+        .onAppear { AnalysisDebugLog.shared.append("sleepContent.onAppear") }
+        #endif
     }
 
     // MARK: Hero

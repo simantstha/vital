@@ -29,12 +29,6 @@ struct LogsView: View {
     /// sheet's `onDismiss` actually fires — i.e. exactly the window a new
     /// presentation would otherwise get silently dropped in.
     @State private var isAnalysisSheetDismissing = false
-    #if DEBUG
-    /// PR #249 diagnostics only — see `AnalysisDebugLog`'s doc comment.
-    /// Observed so the hidden `logs.debugLastAnalysisEvent` `Text` below
-    /// re-renders (and so its accessibility label updates) on every append.
-    @ObservedObject private var debugLog = AnalysisDebugLog.shared
-    #endif
     /// Bumped only inside an *enabled* pager button's own action — never
     /// bound to `vm.selectedIndex` directly, since `LogsViewModel.load()`
     /// resets that to 0 on every pull-to-refresh, which would fire a
@@ -56,12 +50,21 @@ struct LogsView: View {
             // label without relying on stdout. `FixtureMode.isActive` keeps
             // it out of a real launch even though the file itself is
             // DEBUG-only anyway.
+            //
+            // `TimelineView` re-reads `AnalysisDebugLog.shared.text` on a
+            // timer rather than observing it — `AnalysisDebugLog` is
+            // deliberately a plain (non-`ObservableObject`) class; see its
+            // doc comment for the infinite update loop that caused.
             if FixtureMode.isActive {
-                Text(debugLog.text.isEmpty ? "(none)" : debugLog.text)
-                    .font(.system(size: 1))
-                    .foregroundStyle(.clear)
-                    .frame(width: 1, height: 1)
-                    .accessibilityIdentifier("logs.debugLastAnalysisEvent")
+                TimelineView(.periodic(from: .now, by: 0.5)) { _ in
+                    let text = AnalysisDebugLog.shared.text
+                    Text(text.isEmpty ? "(none)" : text)
+                        .font(.system(size: 1))
+                        .foregroundStyle(.clear)
+                        .frame(width: 1, height: 1)
+                        .accessibilityIdentifier("logs.debugLastAnalysisEvent")
+                }
+                .frame(width: 1, height: 1)
             }
             #endif
 
@@ -147,14 +150,21 @@ struct LogsView: View {
                 DispatchQueue.main.async { analysisTarget = queuedAnalysisTarget }
             }
         }) { target in
-            #if DEBUG
-            let _ = AnalysisDebugLog.shared.append("sheetBuilder(\(target.kind))")
-            #endif
-            if target.kind == "workout_completed" {
-                WorkoutAnalysisView(id: target.analysisId)
-            } else {
-                SleepAnalysisView(id: target.analysisId)
+            Group {
+                if target.kind == "workout_completed" {
+                    WorkoutAnalysisView(id: target.analysisId)
+                } else {
+                    SleepAnalysisView(id: target.analysisId)
+                }
             }
+            #if DEBUG
+            // `.onAppear`, never a `let _ = ...append(...)` directly in the
+            // builder — appending from inside body evaluation is what
+            // caused the infinite update loop `AnalysisDebugLog`'s doc
+            // comment describes. `.onAppear` fires once, after layout, with
+            // no further body re-evaluation triggered by it.
+            .onAppear { AnalysisDebugLog.shared.append("sheetContent.onAppear(\(target.kind))") }
+            #endif
         }
         .onChange(of: analysisTarget) { oldValue, newValue in
             if oldValue != nil && newValue == nil {

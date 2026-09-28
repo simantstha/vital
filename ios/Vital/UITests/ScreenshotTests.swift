@@ -600,22 +600,20 @@ final class ScreenshotTests: XCTestCase {
     }
 
     private func captureWorkoutAnalysis(_ app: XCUIApplication, scenario: String, appearance: String) {
-        // Snapshot the row frames right before the tap that's under
-        // investigation (PR #249: the sleep tap lands on the wrong row) —
-        // collected, not asserted on here, and folded into whichever
-        // assertion below actually fails, so we see the tree as it was at
-        // tap time rather than however it's settled by the time a later
-        // check fails.
-        let preTapDiagnostics = diagnostics(app)
         let workoutRow = app.buttons["logs.workoutRow"].firstMatch
         tapWhenHittable(workoutRow, app: app, maxSwipes: 6, description: "Logs' workout row [\(scenario)/\(appearance)]")
         let workoutHeader = app.descendants(matching: .any).matching(identifier: "analysisWorkout.header").firstMatch
         let workoutAppeared = workoutHeader.waitForExistence(timeout: 15)
+        // Diagnostics folded into the assertion message itself (not
+        // print()) — xcbeautify strips stdout before it reaches the CI log,
+        // so a print() here would never actually be seen. Read AFTER the
+        // wait, on failure only — see `diagnostics(_:)`'s doc comment for
+        // why this stays cheap.
         XCTAssertTrue(workoutAppeared,
                        workoutAppeared
                            ? "Tapping the workout row should open the workout AnalysisView [\(scenario)/\(appearance)]"
                            : "Tapping the workout row should open the workout AnalysisView [\(scenario)/\(appearance)]. "
-                             + "AT TAP TIME: \(preTapDiagnostics)")
+                             + diagnostics(app))
         capture(app, name: "\(scenario)__workoutAnalysis__\(appearance)")
         let workoutDone = app.buttons["analysis.done"].firstMatch
         tapWhenHittable(workoutDone, app: app, description: "Workout AnalysisView Done button [\(scenario)/\(appearance)]")
@@ -627,21 +625,16 @@ final class ScreenshotTests: XCTestCase {
         // finishes — so racing straight into the next tap could land the
         // tap while the new sheet never appears.
         let workoutDismissed = workoutHeader.waitForNonExistence(timeout: 5)
-        // Diagnostics folded into the assertion message itself (not
-        // print()) — xcbeautify strips stdout before it reaches the CI log,
-        // so a print() here would never actually be seen.
         let workoutDismissMessage = workoutDismissed
             ? "Workout AnalysisView should fully dismiss before the next tap [\(scenario)/\(appearance)]"
             : "Workout AnalysisView should fully dismiss before the next tap [\(scenario)/\(appearance)]. "
-              + "AT TAP TIME: \(preTapDiagnostics). NOW: \(diagnostics(app))"
+              + diagnostics(app)
         XCTAssertTrue(workoutDismissed, workoutDismissMessage)
         XCTAssertTrue(app.staticTexts["LOG ENTRIES"].waitForExistence(timeout: 10),
                        "Dismissing the workout analysis should return to Logs [\(scenario)/\(appearance)]")
     }
 
     private func captureSleepAnalysis(_ app: XCUIApplication, scenario: String, appearance: String) {
-        // See captureWorkoutAnalysis's matching comment.
-        let preTapDiagnostics = diagnostics(app)
         let sleepRow = app.buttons["logs.sleepRow"].firstMatch
         tapWhenHittable(sleepRow, app: app, maxSwipes: 6, description: "Logs' sleep row [\(scenario)/\(appearance)]")
         let sleepHeader = app.descendants(matching: .any).matching(identifier: "analysisSleep.header").firstMatch
@@ -654,13 +647,10 @@ final class ScreenshotTests: XCTestCase {
             tapWhenHittable(sleepRow, app: app, maxSwipes: 6, description: "Logs' sleep row (retry) [\(scenario)/\(appearance)]")
         }
         let sleepAppeared = sleepHeader.waitForExistence(timeout: 15)
-        // Diagnostics folded into the assertion message itself (not
-        // print()) — xcbeautify strips stdout before it reaches the CI log,
-        // so a print() here would never actually be seen.
         let sleepAppearedMessage = sleepAppeared
             ? "Tapping the sleep row should open the sleep AnalysisView [\(scenario)/\(appearance)]"
             : "Tapping the sleep row should open the sleep AnalysisView [\(scenario)/\(appearance)]. "
-              + "AT TAP TIME: \(preTapDiagnostics). NOW: \(diagnostics(app))"
+              + diagnostics(app)
         XCTAssertTrue(sleepAppeared, sleepAppearedMessage)
         capture(app, name: "\(scenario)__sleepAnalysis__\(appearance)")
         let sleepDone = app.buttons["analysis.done"].firstMatch
@@ -675,61 +665,31 @@ final class ScreenshotTests: XCTestCase {
     /// output is stripped by `xcbeautify` before it reaches the CI log, so
     /// it never actually surfaces there.
     ///
-    /// Includes, in order: every element matching either row identifier
-    /// (type/frame/label/hittable — there should be exactly one of each,
-    /// but a duplicate or a wrongly-sized one is exactly what would explain
-    /// a tap landing on the wrong row); every button roughly in the day
-    /// card's vertical band (`frame.minY` 400...720, wide enough to cover
-    /// the whole entries list at 390pt width); the count and frame of the
-    /// known row-title static texts ("Morning run", "Sleep", "5h 48m last
-    /// night", and "Overnight oats*" via `BEGINSWITH`); the
-    /// `logs.debugLastAnalysisEvent` breadcrumb (see `AnalysisDebugLog`);
-    /// and `app.debugDescription`, sliced to start at "LOG ENTRIES" (or the
-    /// very start if that string isn't present) and capped at 6000 chars.
+    /// Deliberately narrow and called only after a wait has already failed
+    /// (never pre-emptively before a tap) — an earlier, heavier version of
+    /// this (scanning every `app.buttons` element on screen) made
+    /// `endurance`/`muscle` hang with "Timed out while evaluating UI query"
+    /// before their first screenshot even landed. Includes: the
+    /// `logs.sleepRow` count and frame; `app.sheets.count` and whether
+    /// `analysis.done` exists; the `logs.debugLastAnalysisEvent` breadcrumb
+    /// (see `AnalysisDebugLog`), read fresh right here (after whatever wait
+    /// just failed, so it reflects the sheet-presentation path's actual
+    /// last step); and `app.debugDescription`, sliced to start at
+    /// "LOG ENTRIES" (or the very start if that string isn't present) and
+    /// capped at 4000 chars.
     private func diagnostics(_ app: XCUIApplication) -> String {
-        var parts: [String] = []
-
-        for identifier in ["logs.workoutRow", "logs.sleepRow"] {
-            let matches = app.descendants(matching: .any).matching(identifier: identifier)
-            var line = "\(identifier) count=\(matches.count)"
-            for index in 0..<matches.count {
-                let element = matches.element(boundBy: index)
-                line += " [\(index)] type=\(element.elementType.rawValue) frame=\(element.frame) "
-                    + "label=\(element.label) hittable=\(element.isHittable)"
-            }
-            parts.append(line)
-        }
-
-        let bandButtons = app.buttons.allElementsBoundByIndex
-            .filter { $0.frame.minY >= 400 && $0.frame.minY <= 720 }
-            .map { "id=\($0.identifier) label=\($0.label) frame=\($0.frame)" }
-        parts.append("buttons(minY 400...720)=[\(bandButtons.joined(separator: "; "))]")
-
-        for label in ["Morning run", "Sleep", "5h 48m last night"] {
-            let matches = app.staticTexts.matching(NSPredicate(format: "label == %@", label))
-            var line = "staticText[\(label)] count=\(matches.count)"
-            for index in 0..<matches.count {
-                line += " frame[\(index)]=\(matches.element(boundBy: index).frame)"
-            }
-            parts.append(line)
-        }
-        let oatsMatches = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Overnight oats"))
-        var oatsLine = "staticText[Overnight oats*] count=\(oatsMatches.count)"
-        for index in 0..<oatsMatches.count {
-            oatsLine += " frame[\(index)]=\(oatsMatches.element(boundBy: index).frame)"
-        }
-        parts.append(oatsLine)
-
+        let sleepRow = app.buttons["logs.sleepRow"].firstMatch
         let debugEvent = app.descendants(matching: .any).matching(identifier: "logs.debugLastAnalysisEvent").firstMatch
-        parts.append("debugEvent=[\(debugEvent.exists ? debugEvent.label : "(logs.debugLastAnalysisEvent not found)")]")
+        let debugEventLabel = debugEvent.exists ? debugEvent.label : "(logs.debugLastAnalysisEvent not found)"
 
         let fullDescription = app.debugDescription
         let sliceStart = fullDescription.range(of: "LOG ENTRIES")?.lowerBound ?? fullDescription.startIndex
         let flattened = String(fullDescription[sliceStart...]).replacingOccurrences(of: "\n", with: " | ")
-        let cappedDescription = flattened.count > 6000 ? String(flattened.prefix(6000)) + "…(truncated)" : flattened
-        parts.append("debugDescription=[\(cappedDescription)]")
+        let cappedDescription = flattened.count > 4000 ? String(flattened.prefix(4000)) + "…(truncated)" : flattened
 
-        return "DIAG " + parts.joined(separator: " || ")
+        return "DIAG logs.sleepRow(count=\(app.buttons.matching(identifier: "logs.sleepRow").count), frame=\(sleepRow.frame)) "
+            + "sheets=\(app.sheets.count) analysis.done.exists=\(app.buttons["analysis.done"].exists) "
+            + "debugEvent=[\(debugEventLabel)] debugDescription=[\(cappedDescription)]"
     }
 
     private func captureProfile(_ app: XCUIApplication, scenario: String, appearance: String) {
