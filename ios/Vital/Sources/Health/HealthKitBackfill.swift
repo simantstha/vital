@@ -61,6 +61,8 @@ struct DailyWorkoutData {
     let elevationGainM: Double?  // meters ascended (from workout metadata)
     let startTime: String?       // ISO-8601 start instant
     let sourceBundleId: String?  // bundle id of the app that wrote the workout (e.g. "com.apple.health.XXXX.watch")
+    let hrSeries: [Double]?      // evenly-spaced bpm curve, ≤120 points (phase2-contract.md, PR B) — see HeartRateResampler
+    let running: DailyIngestRunning? // running-dynamics averages, running workouts only
 }
 
 // MARK: - HealthKitBackfill
@@ -271,6 +273,10 @@ final class HealthKitBackfill {
         let energyType = HKObjectType.quantityType(forIdentifier: .activeEnergyBurned)
         let hrType = HKObjectType.quantityType(forIdentifier: .heartRate)
         let distanceType = HKObjectType.quantityType(forIdentifier: .distanceWalkingRunning)
+        let powerType = HKObjectType.quantityType(forIdentifier: .runningPower)
+        let groundContactType = HKObjectType.quantityType(forIdentifier: .runningGroundContactTime)
+        let strideType = HKObjectType.quantityType(forIdentifier: .runningStrideLength)
+        let stepType = HKObjectType.quantityType(forIdentifier: .stepCount)
         let bpm = HKUnit(from: "count/min")
 
         let workouts: [HKWorkout] = try await withCheckedThrowingContinuation { continuation in
@@ -289,7 +295,10 @@ final class HealthKitBackfill {
             store.execute(query)
         }
 
-        return workouts.map { workout in
+        var results: [DailyWorkoutData] = []
+        results.reserveCapacity(workouts.count)
+
+        for workout in workouts {
             var kcal = 0.0
             if let energyType, let stats = workout.statistics(for: energyType), let sum = stats.sumQuantity() {
                 kcal = sum.doubleValue(for: .kilocalorie())
@@ -311,7 +320,47 @@ final class HealthKitBackfill {
                 return durationMin / (d / 1000)
             }()
 
-            return DailyWorkoutData(
+            // Watch HR curve (phase2-contract.md, PR B): one extra HKSampleQuery
+            // per workout, predicated on the workout's own [start, end] window
+            // (not the whole backfill range) — never per-bin. HeartRateResampler
+            // is the pure function that turns the raw samples into `hrSeries`.
+            let hrSeries: [Double]?
+            if let hrType {
+                let hrSamples = (try? await fetchHeartRateSamples(hrType: hrType, unit: bpm, start: workout.startDate, end: workout.endDate)) ?? []
+                hrSeries = HeartRateResampler.resample(samples: hrSamples, start: workout.startDate, end: workout.endDate)
+            } else {
+                hrSeries = nil
+            }
+
+            // Running dynamics (phase2-contract.md, PR B): read straight off
+            // `HKWorkout.statistics(for:)` — the same zero-extra-query
+            // mechanism already used above for kcal/distance/avgHr/maxHr — so
+            // no dedicated query is needed for these either. Running workouts
+            // only; deployment target is iOS 26 (project.yml), well above the
+            // iOS 16 minimum for these quantity types, so no #available guard.
+            let running: DailyIngestRunning?
+            if workout.workoutActivityType == .running {
+                let avgPowerW: Double? = powerType
+                    .flatMap { workout.statistics(for: $0)?.averageQuantity()?.doubleValue(for: .watt()) }
+                let avgGroundContactMs: Double? = groundContactType
+                    .flatMap { workout.statistics(for: $0)?.averageQuantity()?.doubleValue(for: .secondUnit(with: .milli)) }
+                let avgStrideM: Double? = strideType
+                    .flatMap { workout.statistics(for: $0)?.averageQuantity()?.doubleValue(for: .meter()) }
+                let stepSum: Double? = stepType
+                    .flatMap { workout.statistics(for: $0)?.sumQuantity()?.doubleValue(for: .count()) }
+
+                running = RunningDynamicsAverager.average(
+                    stepSum: stepSum,
+                    durationMin: durationMin,
+                    avgPowerW: avgPowerW,
+                    avgGroundContactMs: avgGroundContactMs,
+                    avgStrideM: avgStrideM
+                )
+            } else {
+                running = nil
+            }
+
+            results.append(DailyWorkoutData(
                 day: calendar.startOfDay(for: workout.startDate),
                 hkUuid: workout.uuid.uuidString,
                 type: Self.workoutTypeName(workout.workoutActivityType),
@@ -323,9 +372,43 @@ final class HealthKitBackfill {
                 paceMinPerKm: paceMinPerKm,
                 elevationGainM: elevationGainM,
                 startTime: Self.iso8601.string(from: workout.startDate),
-                sourceBundleId: workout.sourceRevision.source.bundleIdentifier
-            )
+                sourceBundleId: workout.sourceRevision.source.bundleIdentifier,
+                hrSeries: hrSeries,
+                running: running
+            ))
         }
+
+        return results
+    }
+
+    /// One `HKSampleQuery` for raw `.heartRate` samples inside a single
+    /// workout's `[start, end]` window — the source data `HeartRateResampler`
+    /// bins into `hrSeries`. Kept separate from `fetchWorkouts`' fields for
+    /// readability; still exactly one query per workout, per the "keep it
+    /// cheap" rule (phase2-contract.md, PR B).
+    private func fetchHeartRateSamples(
+        hrType: HKQuantityType,
+        unit: HKUnit,
+        start: Date,
+        end: Date
+    ) async throws -> [HeartRateResampler.Sample] {
+        let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: [])
+        let samples: [HKQuantitySample] = try await withCheckedThrowingContinuation { continuation in
+            let query = HKSampleQuery(
+                sampleType: hrType,
+                predicate: predicate,
+                limit: HKObjectQueryNoLimit,
+                sortDescriptors: [NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)]
+            ) { _, samples, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                    return
+                }
+                continuation.resume(returning: (samples as? [HKQuantitySample]) ?? [])
+            }
+            store.execute(query)
+        }
+        return samples.map { HeartRateResampler.Sample(date: $0.startDate, bpm: $0.quantity.doubleValue(for: unit)) }
     }
 
     /// Runs all three fetches and composes the per-day ingest DTO the backend
@@ -422,7 +505,9 @@ final class HealthKitBackfill {
                     paceMinPerKm: w.paceMinPerKm,
                     elevationGainM: w.elevationGainM,
                     startTime: w.startTime,
-                    sourceBundleId: w.sourceBundleId
+                    sourceBundleId: w.sourceBundleId,
+                    hrSeries: w.hrSeries,
+                    running: w.running
                 )
             }
 
