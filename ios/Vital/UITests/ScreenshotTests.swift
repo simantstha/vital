@@ -171,6 +171,51 @@ final class ScreenshotTests: XCTestCase {
         element.tap()
     }
 
+    /// Waits for an element to exist and become hittable with a stable frame
+    /// across a 0.5s window. XCUITest cannot detect opacity changes, so when
+    /// the app's `Theme.Motion.appear` fade animation (0.25s `easeOut`) is
+    /// cross-fading content at this element, a frame-stability check cannot
+    /// distinguish mid-fade from fully-faded. This 0.5s window (double the
+    /// fade duration) ensures cross-faded content has finished appearing by
+    /// the time the method returns. If `Theme.Motion.appear` is increased,
+    /// raise this window accordingly.
+    ///
+    /// Fails the test with a clear message if the element never settles
+    /// within the timeout.
+    private func waitForSettled(
+        _ element: XCUIElement,
+        timeout: TimeInterval = 5.0,
+        description: String
+    ) {
+        guard element.waitForExistence(timeout: timeout) else {
+            XCTFail("\(description) never appeared to settle")
+            return
+        }
+
+        let deadline: Date = Date(timeIntervalSinceNow: timeout)
+        var previousFrame: CGRect? = nil
+        let pollInterval: TimeInterval = 0.5
+
+        while Date.now < deadline {
+            guard element.isHittable else {
+                RunLoop.current.run(until: Date(timeIntervalSinceNow: pollInterval))
+                continue
+            }
+
+            let currentFrame: CGRect = element.frame
+            if let prev = previousFrame, prev == currentFrame {
+                // Frame is stable — element has settled
+                return
+            }
+
+            previousFrame = currentFrame
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: pollInterval))
+        }
+
+        XCTFail("\(description) never settled within \(timeout)s "
+                + "— either it never became hittable or its frame kept changing")
+    }
+
     /// Taps the named tab bar button and waits until it actually reports
     /// `isSelected` before returning — a bare `.tap()` can be swallowed
     /// (e.g. absorbed by a sheet still mid-dismiss animation, PR #208's
@@ -594,6 +639,7 @@ final class ScreenshotTests: XCTestCase {
         let workoutHeader = app.descendants(matching: .any).matching(identifier: "analysisWorkout.header").firstMatch
         XCTAssertTrue(workoutHeader.waitForExistence(timeout: 15),
                        "Tapping the workout row should open the workout AnalysisView [\(scenario)/\(appearance)]")
+        waitForSettled(workoutHeader, timeout: 5.0, description: "Workout AnalysisView header [\(scenario)/\(appearance)]")
         capture(app, name: "\(scenario)__workoutAnalysis__\(appearance)")
 
         if scenario == "endurance" {
@@ -630,6 +676,8 @@ final class ScreenshotTests: XCTestCase {
         // other off-screen element in this harness does, rather than a bare
         // `swipeUp()` that could overshoot it back off the top of the screen.
         tapWhenHittable(whoopSwitch, app: app, maxSwipes: 6, description: "Workout AnalysisView's WHOOP device switch [\(scenario)/\(appearance)]")
+        let workoutHeader = app.descendants(matching: .any).matching(identifier: "analysisWorkout.header").firstMatch
+        waitForSettled(workoutHeader, timeout: 5.0, description: "Workout AnalysisView header (WHOOP tab) [\(scenario)/\(appearance)]")
         capture(app, name: "\(scenario)__workoutAnalysisWhoop__\(appearance)")
     }
 
@@ -639,6 +687,7 @@ final class ScreenshotTests: XCTestCase {
         let sleepHeader = app.descendants(matching: .any).matching(identifier: "analysisSleep.header").firstMatch
         XCTAssertTrue(sleepHeader.waitForExistence(timeout: 15),
                        "Tapping the sleep row should open the sleep AnalysisView [\(scenario)/\(appearance)]")
+        waitForSettled(sleepHeader, timeout: 5.0, description: "Sleep AnalysisView header [\(scenario)/\(appearance)]")
         capture(app, name: "\(scenario)__sleepAnalysis__\(appearance)")
         let sleepDone = app.buttons["analysis.done"].firstMatch
         tapWhenHittable(sleepDone, app: app, description: "Sleep AnalysisView Done button [\(scenario)/\(appearance)]")
@@ -733,6 +782,10 @@ final class ScreenshotTests: XCTestCase {
                            "endurance's Devices screen should show a merged-this-month caption [\(appearance)]")
         }
 
+        let primaryDeviceText = app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS[c] %@", "Primary device for")
+        ).firstMatch
+        waitForSettled(primaryDeviceText, timeout: 5.0, description: "Devices screen content [\(scenario)/\(appearance)]")
         capture(app, name: "\(scenario)__devices__\(appearance)")
 
         // Navigate back to Profile — same tidy-up `captureMemory` does.
