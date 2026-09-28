@@ -277,46 +277,57 @@ enum AnalysisLogic {
         }
     }
 
-    /// "RUN · MON 7:41 AM" — activity plus local weekday + time, fully
-    /// uppercased (analysis-v2-contract.md #249 review polish — every kicker
-    /// across the screen reads in caps, never mixed-case). `timeZone`
-    /// defaults to the device's own so the view always renders in wall-clock
-    /// local time; tests pass an explicit zone for determinism.
-    static func workoutKicker(type: String, startTime: Date, timeZone: TimeZone = .current) -> String {
-        let weekday = dateFormatter(pattern: "EEE", timeZone: timeZone).string(from: startTime)
-        return "\(workoutKickerActivity(type: type)) · \(weekday) \(clockTime(startTime, timeZone: timeZone))".uppercased()
+    /// "RUN · MON 7:41 AM" (US) / "RUN · LUN 19:41" (a 24-hour locale) —
+    /// activity plus local weekday + time, fully uppercased
+    /// (analysis-v2-contract.md #249 review polish — every kicker across the
+    /// screen reads in caps, never mixed-case). `timeZone`/`locale` default
+    /// to the device's own so the view always renders in wall-clock local
+    /// time in the user's own locale; tests pass explicit values for
+    /// determinism. This is user-visible text, so — unlike the internal
+    /// date-key formatters elsewhere in this file — it must NOT pin
+    /// `en_US_POSIX`: a user whose phone is set to 24-hour time should see
+    /// "19:41", not "7:41 PM".
+    static func workoutKicker(type: String, startTime: Date, timeZone: TimeZone = .current, locale: Locale = .current) -> String {
+        let weekday = dateFormatter(pattern: "EEE", timeZone: timeZone, locale: locale).string(from: startTime)
+        return "\(workoutKickerActivity(type: type)) · \(weekday) \(clockTime(startTime, timeZone: timeZone, locale: locale))".uppercased()
     }
 
     /// "LAST NIGHT · SUN → MON" — bed night's weekday through wake night's,
-    /// fully uppercased (see `workoutKicker`'s doc comment).
-    static func sleepKicker(bedTime: Date, wakeTime: Date, timeZone: TimeZone = .current) -> String {
-        let f = dateFormatter(pattern: "EEE", timeZone: timeZone)
+    /// fully uppercased (see `workoutKicker`'s doc comment, including why
+    /// `locale` is user-visible and must not be pinned).
+    static func sleepKicker(bedTime: Date, wakeTime: Date, timeZone: TimeZone = .current, locale: Locale = .current) -> String {
+        let f = dateFormatter(pattern: "EEE", timeZone: timeZone, locale: locale)
         return "LAST NIGHT · \(f.string(from: bedTime)) \u{2192} \(f.string(from: wakeTime))".uppercased()
     }
 
-    /// "7:41 AM" — the system's own short time style
-    /// (`Date.FormatStyle(date: .omitted, time: .shortened)`), the one time
-    /// format used everywhere on this screen (#249 review polish — the
-    /// kicker's time and every standalone clock-time value, e.g. the sleep
-    /// hero's bed/wake times and the "before bed" chips, used to disagree:
-    /// a hand-rolled "h:mm a" pattern here vs. lowercase am/pm). Locale is
-    /// pinned to `en_US_POSIX` (not the device's) so this stays
-    /// locale-independent — same rule every other formatter in this file
-    /// follows.
-    static func clockTime(_ date: Date, timeZone: TimeZone = .current) -> String {
+    /// "7:41 AM" (US) / "19:41" (a 24-hour locale) — the system's own short
+    /// time style (`Date.FormatStyle(date: .omitted, time: .shortened)`),
+    /// the one time format used everywhere on this screen (#249 review
+    /// polish — the kicker's time and every standalone clock-time value,
+    /// e.g. the sleep hero's bed/wake times and the "before bed" chips,
+    /// used to disagree: a hand-rolled "h:mm a" pattern here vs. lowercase
+    /// am/pm). `locale` defaults to the device's own — this is user-visible
+    /// text, so it must render in the user's own 12-/24-hour convention, not
+    /// a hardcoded `en_US_POSIX`; tests pass an explicit `locale` for
+    /// determinism instead.
+    static func clockTime(_ date: Date, timeZone: TimeZone = .current, locale: Locale = .current) -> String {
         date.formatted(
-            Date.FormatStyle(date: .omitted, time: .shortened, locale: Locale(identifier: "en_US_POSIX"), timeZone: timeZone)
+            Date.FormatStyle(date: .omitted, time: .shortened, locale: locale, calendar: .current, timeZone: timeZone)
         )
     }
 
-    /// Builds a fresh, fixed-locale (`en_US_POSIX`) `DateFormatter` for the
-    /// given pattern/zone. A new instance per call (rather than a cached
-    /// shared one) keeps every formatting function here free of mutable
-    /// static state, so tests can pass an explicit `timeZone` without racing
-    /// other callers of the same formatter.
-    private static func dateFormatter(pattern: String, timeZone: TimeZone) -> DateFormatter {
+    /// Builds a fresh `DateFormatter` for the given pattern/zone/locale. A
+    /// new instance per call (rather than a cached shared one) keeps every
+    /// formatting function here free of mutable static state, so tests can
+    /// pass explicit `timeZone`/`locale` values without racing other callers
+    /// of the same formatter. `locale` defaults to the device's own for the
+    /// user-visible callers above (`workoutKicker`/`sleepKicker`); internal,
+    /// non-user-visible callers elsewhere in this file (day-key parsing)
+    /// use their own dedicated `en_US_POSIX`-pinned formatters instead of
+    /// this one, and stay that way.
+    private static func dateFormatter(pattern: String, timeZone: TimeZone, locale: Locale = .current) -> DateFormatter {
         let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
+        f.locale = locale
         f.timeZone = timeZone
         f.dateFormat = pattern
         return f
