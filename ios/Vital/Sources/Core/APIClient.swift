@@ -1386,6 +1386,33 @@ struct DailyIngestWorkout: Encodable {
     /// by multiple sources. Additive/optional — the server accepts unknown
     /// keys, so old app versions omitting this field keep working.
     let sourceBundleId: String?
+    /// Watch heart-rate curve (phase2-contract.md, PR B): bpm values evenly
+    /// spaced across the workout, at most 120 points, built by
+    /// `HeartRateResampler` from raw `.heartRate` samples in the workout's
+    /// time window. nil when there were fewer than 10 samples. The server
+    /// (`app/api/ingest/daily/route.ts`, PR A) stores this as-is under
+    /// `input_payload.hrSeries` and derives heart-rate-reserve zones from it
+    /// at request time — additive/optional, old servers ignore the key.
+    let hrSeries: [Double]?
+    /// Running-dynamics averages over the workout window (phase2-contract.md,
+    /// PR B) — only populated for running workouts. Additive/optional, same
+    /// as `hrSeries`.
+    let running: DailyIngestRunning?
+}
+
+/// Running-dynamics block for a `DailyIngestWorkout` (phase2-contract.md, PR
+/// B). Each field is nil when HealthKit had no samples of that type for the
+/// workout; the whole `running` object is nil (not sent) when every field is
+/// nil — see `RunningDynamicsAverager.average`.
+struct DailyIngestRunning: Encodable {
+    /// Steps per minute: `.stepCount` sum over the workout / duration in minutes.
+    let cadenceSpm: Double?
+    /// Average `.runningGroundContactTime`, in milliseconds.
+    let groundContactMs: Double?
+    /// Average `.runningPower`, in watts.
+    let powerW: Double?
+    /// Average `.runningStrideLength`, in meters.
+    let strideM: Double?
 }
 
 private struct DailyIngestRequestBody: Encodable {

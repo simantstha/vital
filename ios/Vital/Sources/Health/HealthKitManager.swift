@@ -61,6 +61,14 @@ final class HealthKitManager: ObservableObject {
             .dietaryProtein,
             .dietaryCarbohydrates,
             .dietaryFatTotal,
+            // Phase 2 "both devices" contract, PR B: running dynamics sent
+            // alongside a running workout (see HealthKitBackfill.fetchWorkouts
+            // and DailyIngestRunning in APIClient.swift). `.heartRate` above
+            // already covers the `hrSeries` curve — no new read type needed
+            // for that.
+            .runningPower,
+            .runningGroundContactTime,
+            .runningStrideLength,
         ]
 
         for id in quantityIdentifiers {
