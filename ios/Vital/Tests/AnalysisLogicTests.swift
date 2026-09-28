@@ -231,7 +231,7 @@ final class AnalysisLogicTests: XCTestCase {
         XCTAssertEqual(AnalysisLogic.workoutKickerActivity(type: "Yoga"), "YOGA")
     }
 
-    func testWorkoutKickerMatchesItsOwnFormatter() {
+    func testWorkoutKickerMatchesItsOwnFormatterAndIsFullyUppercased() {
         var components = DateComponents()
         components.year = 2026; components.month = 9; components.day = 26
         components.hour = 7; components.minute = 41
@@ -241,15 +241,22 @@ final class AnalysisLogicTests: XCTestCase {
 
         let kicker = AnalysisLogic.workoutKicker(type: "Running", startTime: date, timeZone: calendar.timeZone)
         // Built with the exact same building blocks the logic under test
-        // uses, never a hardcoded "SAT 7:41 AM" — locale-independent.
+        // uses (a locale-fixed weekday formatter + the system short time
+        // style, both pinned to en_US_POSIX), never a hardcoded
+        // "RUN · SAT 7:41 AM" — locale-independent.
         let df = DateFormatter()
         df.locale = Locale(identifier: "en_US_POSIX")
         df.timeZone = calendar.timeZone
-        df.dateFormat = "EEE h:mm a"
-        XCTAssertEqual(kicker, "RUN · \(df.string(from: date))")
+        df.dateFormat = "EEE"
+        let time = date.formatted(
+            Date.FormatStyle(date: .omitted, time: .shortened, locale: Locale(identifier: "en_US_POSIX"), timeZone: calendar.timeZone)
+        )
+        XCTAssertEqual(kicker, "RUN · \(df.string(from: date)) \(time)".uppercased())
+        // #249 polish: the kicker is fully uppercased, not just the activity word.
+        XCTAssertEqual(kicker, kicker.uppercased())
     }
 
-    func testSleepKickerFormat() {
+    func testSleepKickerFormatIsFullyUppercased() {
         var components = DateComponents()
         components.year = 2026; components.month = 9; components.day = 26
         components.hour = 23; components.minute = 52
@@ -263,11 +270,13 @@ final class AnalysisLogicTests: XCTestCase {
         df.locale = Locale(identifier: "en_US_POSIX")
         df.timeZone = calendar.timeZone
         df.dateFormat = "EEE"
-        let expected = "LAST NIGHT · \(df.string(from: bed)) \u{2192} \(df.string(from: wake))"
-        XCTAssertEqual(AnalysisLogic.sleepKicker(bedTime: bed, wakeTime: wake, timeZone: calendar.timeZone), expected)
+        let expected = "LAST NIGHT · \(df.string(from: bed)) \u{2192} \(df.string(from: wake))".uppercased()
+        let kicker = AnalysisLogic.sleepKicker(bedTime: bed, wakeTime: wake, timeZone: calendar.timeZone)
+        XCTAssertEqual(kicker, expected)
+        XCTAssertEqual(kicker, kicker.uppercased())
     }
 
-    func testClockTimeIsLowercaseAmPm() {
+    func testClockTimeUsesSystemShortTimeStyle() {
         var components = DateComponents()
         components.year = 2026; components.month = 9; components.day = 26
         components.hour = 23; components.minute = 52
@@ -275,13 +284,28 @@ final class AnalysisLogicTests: XCTestCase {
         calendar.timeZone = TimeZone(identifier: "UTC")!
         let date = calendar.date(from: components)!
 
-        let df = DateFormatter()
-        df.locale = Locale(identifier: "en_US_POSIX")
-        df.timeZone = calendar.timeZone
-        df.dateFormat = "h:mm a"
-        let expected = df.string(from: date).lowercased()
-
+        // Built with the exact same `Date.FormatStyle` the logic under test
+        // uses, pinned to en_US_POSIX — locale-independent.
+        let expected = date.formatted(
+            Date.FormatStyle(date: .omitted, time: .shortened, locale: Locale(identifier: "en_US_POSIX"), timeZone: calendar.timeZone)
+        )
         XCTAssertEqual(AnalysisLogic.clockTime(date, timeZone: calendar.timeZone), expected)
+    }
+
+    func testClockTimeAndWorkoutKickerAgreeOnTheSameTimeFormat() {
+        // #249 polish: one time format everywhere — the kicker's embedded
+        // time must be exactly `clockTime`'s output (just uppercased along
+        // with the rest of the kicker), not a separately-formatted value.
+        var components = DateComponents()
+        components.year = 2026; components.month = 9; components.day = 26
+        components.hour = 7; components.minute = 41
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/Los_Angeles")!
+        let date = calendar.date(from: components)!
+
+        let kicker = AnalysisLogic.workoutKicker(type: "Running", startTime: date, timeZone: calendar.timeZone)
+        let time = AnalysisLogic.clockTime(date, timeZone: calendar.timeZone)
+        XCTAssertTrue(kicker.hasSuffix(time.uppercased()), "expected kicker '\(kicker)' to end with '\(time.uppercased())'")
     }
 
     // MARK: - Duration formatting

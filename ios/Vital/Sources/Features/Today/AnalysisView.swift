@@ -549,12 +549,12 @@ struct WorkoutAnalysisContent: View {
                                 .foregroundStyle(Theme.Colors.textSecondary)
                         }
                     }
-                    EffortZoneBar(
-                        avgFraction: effort.avgPct,
-                        markerFraction: metrics?.maxHr.map { AnalysisLogic.heartRateRangeFraction($0, restingHr: effort.restingHr, maxHr: effort.maxHr) }
-                    )
-                    .frame(height: 44)
-                    .accessibilityLabel("Effort \(Int((effort.avgPct * 100).rounded()))% of your heart rate range, \(AnalysisLogic.effortZoneLabel(effort.zone).lowercased())")
+                    EffortZoneBar(avgFraction: effort.avgPct, markerFraction: maxHrMarkerFraction(effort))
+                        .frame(height: 44)
+                        .accessibilityLabel("Effort \(Int((effort.avgPct * 100).rounded()))% of your heart rate range, \(AnalysisLogic.effortZoneLabel(effort.zone).lowercased())")
+                    // #249 polish: a small legend so the tick/ring markers on
+                    // the bar above aren't left unexplained.
+                    EffortZoneLegend(showsMaxMarker: maxHrMarkerFraction(effort) != nil)
                     HStack {
                         Text("resting \(Int(effort.restingHr.rounded()))").font(.system(size: 12)).foregroundStyle(Theme.Colors.textSecondary)
                         Spacer()
@@ -566,6 +566,15 @@ struct WorkoutAnalysisContent: View {
                 }
             }
         }
+    }
+
+    /// Fraction (0...1) on the resting→max HR range where this workout's own
+    /// recorded max-HR marker sits, or `nil` when there's no recorded max HR
+    /// to place it at (`EffortZoneBar`'s optional ring marker). Pulled out
+    /// of `effortSection`'s view body so it's a plain function call there,
+    /// not a `let` binding inside the `VitalCard` view-builder closure.
+    private func maxHrMarkerFraction(_ effort: AnalysisContext.Effort) -> Double? {
+        metrics?.maxHr.map { AnalysisLogic.heartRateRangeFraction($0, restingHr: effort.restingHr, maxHr: effort.maxHr) }
     }
 
     // MARK: Going in
@@ -741,6 +750,38 @@ private struct EffortZoneBar: View {
     }
 }
 
+/// Small legend under `EffortZoneBar` explaining its two markers (#249
+/// review polish — the bar's tick/ring were otherwise unlabeled). The ring
+/// entry is omitted entirely when the bar has no max-HR marker to explain
+/// (`showsMaxMarker == false`), rather than describing a marker that isn't
+/// actually drawn.
+private struct EffortZoneLegend: View {
+    let showsMaxMarker: Bool
+
+    var body: some View {
+        HStack(spacing: Theme.Spacing.lg) {
+            HStack(spacing: Theme.Spacing.xs) {
+                Rectangle()
+                    .fill(Theme.Colors.textPrimary)
+                    .frame(width: 2, height: 10)
+                Text("your average")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.Colors.textSecondary)
+            }
+            if showsMaxMarker {
+                HStack(spacing: Theme.Spacing.xs) {
+                    Circle()
+                        .strokeBorder(Theme.Colors.textPrimary, lineWidth: 1.5)
+                        .frame(width: 8, height: 8)
+                    Text("this run's max")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.Colors.textSecondary)
+                }
+            }
+        }
+    }
+}
+
 // MARK: - Sleep content
 
 // Internal (not `private`) — see `WorkoutAnalysisContent`'s comment above.
@@ -809,6 +850,8 @@ struct SleepAnalysisContent: View {
     private var hero: some View {
         if let minutes = metrics?.minutes {
             VitalCard {
+                // #249 polish: the hero card spans the full card width
+                // rather than shrinking to its content's intrinsic size.
                 VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
                     HStack(alignment: .lastTextBaseline, spacing: 6) {
                         Text(AnalysisLogic.formatDuration(minutes))
@@ -829,6 +872,7 @@ struct SleepAnalysisContent: View {
                         ChipView(chip: AnalysisLogic.sleepUsualChip(minutes: minutes, usualMinutes: usual.minutes))
                     }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .accessibilityElement(children: .combine)
         }
@@ -898,7 +942,12 @@ struct SleepAnalysisContent: View {
         case .deep: Color(red: 0.318, green: 0.345, blue: 0.788)
         case .rem: Color(red: 0.725, green: 0.745, blue: 1.0)
         case .core: Theme.Colors.indigo
-        case .awake: Theme.Colors.chartMuted
+        // #249 polish: Awake previously used `chartMuted`, a plain grey
+        // that read as an empty/track segment rather than an actual stage.
+        // `Theme.Colors.caution`'s warm amber is distinct from every other
+        // stage color and from the bar's own track, and (like every other
+        // Theme color) already has matched light/dark variants.
+        case .awake: Theme.Colors.caution
         }
     }
 

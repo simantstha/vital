@@ -277,23 +277,36 @@ enum AnalysisLogic {
         }
     }
 
-    /// "RUN · SAT 7:41 AM" — activity plus local weekday + time. `timeZone`
+    /// "RUN · MON 7:41 AM" — activity plus local weekday + time, fully
+    /// uppercased (analysis-v2-contract.md #249 review polish — every kicker
+    /// across the screen reads in caps, never mixed-case). `timeZone`
     /// defaults to the device's own so the view always renders in wall-clock
     /// local time; tests pass an explicit zone for determinism.
     static func workoutKicker(type: String, startTime: Date, timeZone: TimeZone = .current) -> String {
-        let f = dateFormatter(pattern: "EEE h:mm a", timeZone: timeZone)
-        return "\(workoutKickerActivity(type: type)) · \(f.string(from: startTime))"
+        let weekday = dateFormatter(pattern: "EEE", timeZone: timeZone).string(from: startTime)
+        return "\(workoutKickerActivity(type: type)) · \(weekday) \(clockTime(startTime, timeZone: timeZone))".uppercased()
     }
 
-    /// "LAST NIGHT · SAT → SUN" — bed night's weekday through wake night's.
+    /// "LAST NIGHT · SUN → MON" — bed night's weekday through wake night's,
+    /// fully uppercased (see `workoutKicker`'s doc comment).
     static func sleepKicker(bedTime: Date, wakeTime: Date, timeZone: TimeZone = .current) -> String {
         let f = dateFormatter(pattern: "EEE", timeZone: timeZone)
-        return "LAST NIGHT · \(f.string(from: bedTime)) \u{2192} \(f.string(from: wakeTime))"
+        return "LAST NIGHT · \(f.string(from: bedTime)) \u{2192} \(f.string(from: wakeTime))".uppercased()
     }
 
-    /// "11:52 pm" — lowercase am/pm, no leading zero, matching the mockups.
+    /// "7:41 AM" — the system's own short time style
+    /// (`Date.FormatStyle(date: .omitted, time: .shortened)`), the one time
+    /// format used everywhere on this screen (#249 review polish — the
+    /// kicker's time and every standalone clock-time value, e.g. the sleep
+    /// hero's bed/wake times and the "before bed" chips, used to disagree:
+    /// a hand-rolled "h:mm a" pattern here vs. lowercase am/pm). Locale is
+    /// pinned to `en_US_POSIX` (not the device's) so this stays
+    /// locale-independent — same rule every other formatter in this file
+    /// follows.
     static func clockTime(_ date: Date, timeZone: TimeZone = .current) -> String {
-        dateFormatter(pattern: "h:mm a", timeZone: timeZone).string(from: date).lowercased()
+        date.formatted(
+            Date.FormatStyle(date: .omitted, time: .shortened, locale: Locale(identifier: "en_US_POSIX"), timeZone: timeZone)
+        )
     }
 
     /// Builds a fresh, fixed-locale (`en_US_POSIX`) `DateFormatter` for the
