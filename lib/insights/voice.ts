@@ -56,6 +56,7 @@ export function buildVoiceRequest(
       `  what: ${finding.kind} on ${finding.metrics.join(' + ')}`,
       `  magnitude: ${finding.effectLabel}`,
       `  supporting: ${detail} (n=${finding.n})`,
+      ...(finding.copy ? [`  summary: ${finding.copy.body}`] : []),
       '',
     );
   }

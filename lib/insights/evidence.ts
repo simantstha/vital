@@ -29,6 +29,14 @@ function passesEffectFloor(finding: Finding): boolean {
     case 'day_of_week': return Math.abs(finding.effect) > MIN_DAY_OF_WEEK_SPREAD;
     case 'trend':       return Math.abs(finding.effect) >= MIN_TREND_SD_PER_WEEK;
     case 'cadence_break': return true;      // the rule itself is the threshold
+    // Goal findings are rules too: their thresholds live in goalDetectors.ts.
+    case 'weight_plateau':
+    case 'too_fast_loss':
+    case 'stalled_lift':
+    case 'low_protein_streak':
+    case 'inactivity_streak':
+    case 'off_pace':
+      return true;
     default: return false;
   }
 }

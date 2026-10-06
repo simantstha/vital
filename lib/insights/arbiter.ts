@@ -20,6 +20,15 @@ const KIND_WEIGHT: Record<FindingKind, number> = {
   cross_lag: 45,
   trend: 40,
   day_of_week: 20,
+  // Goal findings (goalDetectors.ts). Safety outranks everything; the rest sit
+  // between the strong statistical shifts and the weak ones, because each is a
+  // direct statement about the goal the user set.
+  too_fast_loss: 105,
+  inactivity_streak: 90,
+  off_pace: 80,
+  weight_plateau: 75,
+  low_protein_streak: 70,
+  stalled_lift: 65,
 };
 
 /** Goal keyword -> metrics that matter more for it. */

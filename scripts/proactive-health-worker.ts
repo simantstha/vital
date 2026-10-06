@@ -6,6 +6,7 @@ import { generateDailyBriefFromDb } from '../lib/brain/brief';
 import { getDailyBrief, upsertDailyBrief } from '../lib/brain/dailyBriefRepository';
 import { prewarmDailyBrief } from '../lib/dailyBriefPrewarm';
 import { previousRunSignatures, recordFindings } from '../lib/insights/confirmation';
+import { loadGoalInsightInput } from '../lib/insights/goalInputs';
 import { insightPassLogEvent, insightsEnabled, runInsightPass, selectInsightPassUsers, type InsightPassRepository, type InsightPassUserSource } from '../lib/insights/nudgeWorker';
 import { establishedMetrics, loadSeries } from '../lib/insights/series';
 import { generateAnalysis, proactiveAnalysisModel, type AnalysisFailureEvent } from '../lib/proactiveAnalysisGeneration';
@@ -71,6 +72,7 @@ async function generateNudge(request: { system: string; content: string }): Prom
 const insightPassRepository: InsightPassRepository = {
   loadSeries,
   establishedMetrics,
+  loadGoalInput: loadGoalInsightInput,
   recordFindings,
   previousRunSignatures,
   async sentNudgeHistory(userId, now) {
