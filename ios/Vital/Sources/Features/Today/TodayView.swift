@@ -22,6 +22,9 @@ struct TodayView: View {
     @State private var showLiftLogger = false
     /// Goal-progress detail sheet — opened from the one-line verdict under the hero.
     @State private var showGoalProgress = false
+    /// Weekly review detail sheet — opened from the Mon-Wed review card.
+    @State private var showWeeklyReview = false
+    @ObservedObject private var weeklyReviewStore = WeeklyReviewStore.shared
     @State private var showAddItem = false
     @State private var actionsItem: PlanItem? = nil
     @State private var selectedMeal: MealRow? = nil
@@ -49,7 +52,7 @@ struct TodayView: View {
 
     /// The voice FAB must never overlap an open sheet.
     private var isAnySheetOpen: Bool {
-        showLogSheet || showLiftLogger || showGoalProgress || showAddItem || actionsItem != nil || selectedMeal != nil
+        showLogSheet || showLiftLogger || showGoalProgress || showWeeklyReview || showAddItem || actionsItem != nil || selectedMeal != nil
             || showNotifications || showFullPlan || vm.showWeighInSheet
     }
 
@@ -143,6 +146,22 @@ struct TodayView: View {
                                     onTap: { showGoalProgress = true }
                                 )
                                 .padding(.top, -Theme.Spacing.md)
+                                .transition(.opacity)
+                            }
+
+                            // Weekly review (v5 Wave 3): the "how did your week go"
+                            // moment, Mon-Wed while unseen, below the goal hero /
+                            // progress line. "Got it" marks it seen.
+                            if WeeklyReviewLogic.shouldShowCard(
+                                weeklyReviewStore.latest,
+                                now: AppClock.now,
+                                ignoreWindow: WeeklyReviewLogic.windowBypassedForFixtures
+                            ), let review = weeklyReviewStore.latest {
+                                WeeklyReviewCard(
+                                    response: review,
+                                    onOpen: { showWeeklyReview = true },
+                                    onGotIt: { weeklyReviewStore.markSeen() }
+                                )
                                 .transition(.opacity)
                             }
 
@@ -329,6 +348,15 @@ struct TodayView: View {
                 }
             }
         }
+        .sheet(isPresented: $showWeeklyReview) {
+            if let review = weeklyReviewStore.latest {
+                VitalSheet(detents: [.large]) {
+                    WeeklyReviewDetailView(response: review, onGotIt: { weeklyReviewStore.markSeen() })
+                }
+            }
+        }
+        .task { await weeklyReviewStore.load() }
+        .sensoryFeedback(Theme.Haptics.commit, trigger: weeklyReviewStore.seenTick)
         .onChange(of: showLogSheet) { _, isPresented in
             // Consume the auto-open request only while it drove this
             // presentation; an unrelated close (a manual fuel-strip tap

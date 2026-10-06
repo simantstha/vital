@@ -111,6 +111,7 @@ struct RootTabView: View {
             case .morningBrief(let id):
                 if let id { MorningBriefView(id: id) }
                 else { Color.clear.onAppear { selected = .today; router.route = nil } }
+            case .weeklyReview(let id): WeeklyReviewPushView(id: id)
             case .coachNudge(let id):
                 NudgeDetailView(id: id, coachVM: coachVM, switchToCoachTab: {
                     withAnimation(Theme.Motion.standard) { selected = .coach }

@@ -520,6 +520,32 @@ struct APIClient {
         return try await get("/api/goal/progress?tz=\(encoded)")
     }
 
+    // MARK: - Weekly review (v5 Wave 3)
+
+    /// GET /api/review/weekly?tz= — the review for the last completed local
+    /// week (computed + stored server-side on first request). Sends the
+    /// device's timezone, same convention as `fetchGoalProgress()`.
+    func fetchWeeklyReview() async throws -> WeeklyReviewResponse {
+        let tz = TimeZone.current.identifier
+        let encoded = tz.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? tz
+        return try await get("/api/review/weekly?tz=\(encoded)")
+    }
+
+    /// POST /api/review/weekly/seen — marks the review seen ("Got it").
+    func markWeeklyReviewSeen(id: String) async throws {
+        guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/review/weekly/seen") else {
+            throw APIError.invalidURL
+        }
+        var request = authorizedRequest(url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 10
+        struct Body: Encodable { let id: String }
+        request.httpBody = try encoder.encode(Body(id: id))
+        let (_, response) = try await session.data(for: request)
+        try validate(response)
+    }
+
     // MARK: - Strength tracking (workout_sets — Trends Strength card + lift logger)
 
     /// GET /api/workouts/summary?days= — weekly best estimated 1RM and weekly

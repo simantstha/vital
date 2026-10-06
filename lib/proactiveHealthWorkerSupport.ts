@@ -67,6 +67,7 @@ export const WORKER_STAGES = [
   'prewarm-daily-brief',
   'whoop-sync',
   'insight-pass',
+  'weekly-review',
 ] as const;
 
 export type WorkerStage = (typeof WORKER_STAGES)[number];
