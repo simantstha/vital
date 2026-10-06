@@ -117,23 +117,53 @@ final class ScreenshotTests: XCTestCase {
         return app.staticTexts.matching(predicate).firstMatch.waitForExistence(timeout: timeout)
     }
 
-    /// True when `element`'s frame sits fully between the top chrome (status
-    /// bar / nav, 100pt) and the bottom chrome (tab bar with an 8pt margin
-    /// when one exists, else 80% of the screen height).
-    private func isClearOfChrome(_ element: XCUIElement, app: XCUIApplication) -> Bool {
+    /// Top clearance used only for elements inside scrolled main content
+    /// (roughly the status bar height). Sheet / nav-bar buttons never go
+    /// through this check — see `tapWhenHittable`'s direct-tap path.
+    private static let topChromeMargin: CGFloat = 54
+
+    /// Bottom limit for content: just above the tab bar (8pt margin) when one
+    /// exists, else 80% of the screen height.
+    private func bottomChromeLimit(app: XCUIApplication) -> CGFloat {
         let tabBar = app.tabBars.firstMatch
-        let bottomLimit = tabBar.exists ? tabBar.frame.minY - 8 : app.frame.maxY * 0.8
-        let topLimit = app.frame.minY + 100
+        return tabBar.exists ? tabBar.frame.minY - 8 : app.frame.maxY * 0.8
+    }
+
+    /// True when `element`'s frame sits fully between the top margin (status
+    /// bar, 54pt) and the bottom chrome (see `bottomChromeLimit`).
+    private func isClearOfChrome(_ element: XCUIElement, app: XCUIApplication) -> Bool {
         let frame = element.frame
-        return frame.minY >= topLimit && frame.maxY <= bottomLimit
+        return frame.minY >= app.frame.minY + Self.topChromeMargin
+            && frame.maxY <= bottomChromeLimit(app: app)
+    }
+
+    /// Find-by-scrolling: if `element` is not in the accessibility hierarchy
+    /// (lazy containers don't build rows until they're near the viewport),
+    /// drag the content up in small steps, checking existence after each,
+    /// up to `maxSwipes`. Returns whether the element exists.
+    @discardableResult
+    private func scrollUntilExists(_ element: XCUIElement, app: XCUIApplication, maxSwipes: Int = 6) -> Bool {
+        if element.exists || element.waitForExistence(timeout: 2) { return true }
+        var swipes = 0
+        while swipes < maxSwipes {
+            let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7))
+            let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            start.press(forDuration: 0.05, thenDragTo: end)
+            swipes += 1
+            if element.waitForExistence(timeout: 1) { return true }
+        }
+        return element.exists
     }
 
     /// Scrolls just far enough to put `element` mid-screen, correcting in
     /// either direction (so it never overshoots off the top and stays there),
     /// until it is hittable and clear of both the top and bottom chrome.
-    /// Returns whether it got there within `maxSwipes` drags.
+    /// If the element isn't in the hierarchy yet it is first found by
+    /// scrolling (`scrollUntilExists`). Returns whether it got there within
+    /// `maxSwipes` drags.
     @discardableResult
     private func scrollIntoComfortableView(_ element: XCUIElement, app: XCUIApplication, maxSwipes: Int = 5) -> Bool {
+        guard scrollUntilExists(element, app: app) else { return false }
         var swipes = 0
         while !(element.isHittable && isClearOfChrome(element, app: app)) && swipes < maxSwipes {
             let screenHeight = max(app.frame.height, 1)
@@ -153,23 +183,31 @@ final class ScreenshotTests: XCTestCase {
         return element.isHittable && isClearOfChrome(element, app: app)
     }
 
-    /// Waits for `element` to exist, then taps it once it's both
-    /// `isHittable` AND clear of the bottom chrome — never a bare `.tap()`
-    /// on a coordinate that might be off-screen or obscured. `isHittable`
-    /// only means the element's centre point is on screen; on iOS 26 the
-    /// floating Liquid Glass tab bar (and Today's mic FAB) overlay the
-    /// scroll content, so an element sitting just above/under that chrome
-    /// can report `isHittable` while its tap is still absorbed by whatever
-    /// is layered on top. "Clear" means the element's frame sits above the
-    /// tab bar (with an 8pt margin) when one exists, or above 80% of the
-    /// screen height otherwise.
+    /// True when `element` is hittable, fully inside the app window, and
+    /// clear of the bottom chrome. No extra top margin, so sheet / nav-bar
+    /// buttons (Done / Close, y of roughly 60-110) qualify.
+    private func isDirectlyTappable(_ element: XCUIElement, app: XCUIApplication) -> Bool {
+        guard element.exists, element.isHittable else { return false }
+        let frame = element.frame
+        return app.frame.contains(frame) && frame.maxY <= bottomChromeLimit(app: app)
+    }
+
+    /// Taps `element` once it is safely tappable — never a bare `.tap()` on a
+    /// coordinate that might be off-screen or obscured. `isHittable` only
+    /// means the centre point is on screen; on iOS 26 the floating Liquid
+    /// Glass tab bar (and Today's mic FAB) overlay the scroll content, so an
+    /// element just above/under that chrome can report `isHittable` while the
+    /// tap is absorbed by whatever is layered on top.
     ///
-    /// Nudges the element into view with a bounded number of gentle,
-    /// slow drags (never a full `swipeUp()`, which can overshoot the
-    /// element past the top of the screen) rather than sleeping. Fails
-    /// with a `description`-labeled message (never XCUITest's own less
-    /// legible tap-failure error, and never a dumped element tree) if the
-    /// element never appears or never clears the chrome.
+    /// 1. Direct path: if the element already exists, is hittable, fully
+    ///    inside the app window and above the tab bar (8pt margin), tap it
+    ///    immediately. This is what sheet / nav-bar buttons take.
+    /// 2. Otherwise find it by scrolling (lazy content), then nudge it into
+    ///    comfortable view (top margin 54pt, bottom tab-bar clearance) with
+    ///    bounded, gentle drags (never a full `swipeUp()`, which can
+    ///    overshoot), and tap.
+    /// Fails with a `description`-labeled message if it never appears or
+    /// never becomes tappable.
     private func tapWhenHittable(
         _ element: XCUIElement,
         app: XCUIApplication,
@@ -177,14 +215,25 @@ final class ScreenshotTests: XCTestCase {
         timeout: TimeInterval = 10,
         description: String
     ) {
-        guard element.waitForExistence(timeout: timeout) else {
+        // Sheets animate in, so give the direct path a short grace window.
+        if element.waitForExistence(timeout: 2), isDirectlyTappable(element, app: app) {
+            element.tap()
+            return
+        }
+
+        guard scrollUntilExists(element, app: app) || element.waitForExistence(timeout: timeout) else {
             XCTFail("\(description) never appeared to tap")
+            return
+        }
+
+        if isDirectlyTappable(element, app: app) {
+            element.tap()
             return
         }
 
         guard scrollIntoComfortableView(element, app: app, maxSwipes: maxSwipes), element.isHittable else {
             XCTFail("\(description) exists but never became hittable and fully on screen "
-                     + "(clear of top and bottom chrome) after \(maxSwipes) scroll attempts")
+                     + "(clear of the tab bar) after \(maxSwipes) scroll attempts")
             return
         }
 
@@ -581,7 +630,9 @@ final class ScreenshotTests: XCTestCase {
         // its button fully on screen (clear of top and bottom chrome) before
         // asserting on / capturing it.
         let openButton = app.descendants(matching: .any).matching(identifier: "weeklyReview.open").firstMatch
-        XCTAssertTrue(openButton.waitForExistence(timeout: 10),
+        // Today's content is lazy, so the button isn't in the hierarchy until
+        // scrolled near: find it by scrolling, then centre it.
+        XCTAssertTrue(scrollUntilExists(openButton, app: app, maxSwipes: 8),
                        "weeklyReview.open never appeared [\(scenario)/\(appearance)]")
         scrollIntoComfortableView(openButton, app: app, maxSwipes: 8)
         // Fixture-unique headline (FixtureData.weeklyReview).
