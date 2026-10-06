@@ -154,7 +154,7 @@ final class FixtureCrossScreenConsistencyTests: XCTestCase {
         let review = json(.endurance, "/api/review/weekly")
         let stat = statValue(review, "Avg sleep")
         XCTAssertEqual(stat?["value"] as? String, avgText)
-        XCTAssertTrue((stat?["comparison"] as? String ?? "").hasPrefix("\(under6) nights under 6h"))
+        XCTAssertEqual(stat?["comparison"] as? String, "week avg · goal 8h 0m")
 
         let messages = json(.endurance, "/api/coach")["messages"] as? [[String: Any]] ?? []
         let answer = messages.compactMap { $0["content"] as? String }.first { $0.hasPrefix("Mostly sleep") } ?? ""
