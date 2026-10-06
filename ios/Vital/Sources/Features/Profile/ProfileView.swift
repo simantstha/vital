@@ -7,6 +7,10 @@ struct ProfileView: View {
     @ObservedObject private var notificationManager = NotificationManager.shared
     @ObservedObject private var unitPref = UnitPreference.shared
     @State private var showSignOutConfirm = false
+    @State private var showDeleteAccountPrompt = false
+    @State private var deleteConfirmationText = ""
+    @State private var isDeletingAccount = false
+    @State private var deleteAccountError: String?
     @State private var showBudgetEditor = false
     @State private var showNotificationSettings = false
     @State private var showUnitsDialog = false
@@ -103,6 +107,44 @@ struct ProfileView: View {
         ) {
             Button("Sign Out", role: .destructive) { authViewModel.signOut() }
             Button("Cancel", role: .cancel) {}
+        }
+        .alert("Delete account?", isPresented: $showDeleteAccountPrompt) {
+            TextField("Type DELETE", text: $deleteConfirmationText)
+                .textInputAutocapitalization(.characters)
+                .autocorrectionDisabled()
+            Button("Delete Account", role: .destructive) { confirmDeleteAccount() }
+            Button("Cancel", role: .cancel) { deleteConfirmationText = "" }
+        } message: {
+            Text("This permanently deletes your account and all of your data from Vital: health metrics, workouts, meals, chat history, memory, goals, and connected-device data. This can't be undone. Type DELETE to confirm.")
+        }
+        .alert(
+            "Couldn't delete account",
+            isPresented: Binding(
+                get: { deleteAccountError != nil },
+                set: { if !$0 { deleteAccountError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { deleteAccountError = nil }
+        } message: {
+            Text(deleteAccountError ?? "")
+        }
+        .overlay {
+            if isDeletingAccount {
+                ZStack {
+                    Color.black.opacity(0.35).ignoresSafeArea()
+                    VStack(spacing: Theme.Spacing.md) {
+                        ProgressView()
+                        Text("Deleting account…")
+                            .font(Theme.Typography.bodySmall)
+                            .foregroundStyle(Theme.Colors.textPrimary)
+                    }
+                    .padding(Theme.Spacing.xl)
+                    .background(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .fill(Theme.Colors.canvas)
+                    )
+                }
+            }
         }
         .confirmationDialog(
             "Units",
@@ -437,31 +479,88 @@ private extension ProfileView {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
             SectionHeader(title: "Account")
 
-            Button {
-                showSignOutConfirm = true
-            } label: {
-                VitalCard {
-                    HStack(spacing: Theme.Spacing.md) {
-                        ZStack {
-                            RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous)
-                                .fill(Theme.Colors.alert.opacity(0.12))
-                                .frame(width: 36, height: 36)
-                            Image(systemName: "rectangle.portrait.and.arrow.right")
-                                .font(.system(size: 15))
-                                .foregroundStyle(Theme.Colors.alert)
-                        }
-
-                        Text("Sign Out")
-                            .font(Theme.Typography.bodySmall)
-                            .fontWeight(.medium)
-                            .foregroundStyle(Theme.Colors.alert)
-
-                        Spacer()
+            VitalCard(padding: 0) {
+                VStack(spacing: 0) {
+                    Link(destination: AppLinks.privacyPolicy) {
+                        accountRowContent(
+                            icon: "hand.raised",
+                            title: "Privacy policy",
+                            tint: Theme.Colors.textPrimary,
+                            showsExternalArrow: true
+                        )
                     }
-                    .padding(.vertical, Theme.Spacing.xs)
+                    .buttonStyle(.pressableCard)
+
+                    accountButton(icon: "rectangle.portrait.and.arrow.right", title: "Sign Out") {
+                        showSignOutConfirm = true
+                    }
+
+                    accountButton(icon: "trash", title: "Delete account") {
+                        deleteConfirmationText = ""
+                        showDeleteAccountPrompt = true
+                    }
+                    .disabled(isDeletingAccount)
                 }
             }
-            .buttonStyle(.pressableCard)
+        }
+    }
+
+    func accountButton(icon: String, title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            accountRowContent(icon: icon, title: title, tint: Theme.Colors.alert, showsExternalArrow: false)
+        }
+        .buttonStyle(.pressableCard)
+        .overlay(alignment: .top) { rowHairline }
+    }
+
+    func accountRowContent(icon: String, title: String, tint: Color, showsExternalArrow: Bool) -> some View {
+        HStack(spacing: Theme.Spacing.md) {
+            ZStack {
+                RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous)
+                    .fill(tint.opacity(0.12))
+                    .frame(width: 36, height: 36)
+                Image(systemName: icon)
+                    .font(.system(size: 15))
+                    .foregroundStyle(tint)
+            }
+
+            Text(title)
+                .font(Theme.Typography.bodySmall)
+                .fontWeight(.medium)
+                .foregroundStyle(tint)
+
+            Spacer()
+
+            if showsExternalArrow {
+                Image(systemName: "arrow.up.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Theme.Colors.textTertiary)
+            }
+        }
+        .padding(.horizontal, Theme.Spacing.lg)
+        .padding(.vertical, Theme.Spacing.md)
+        .contentShape(Rectangle())
+    }
+
+    /// Requires the user to have typed DELETE, then calls the API and (on
+    /// success) clears local session state via `AuthViewModel.deleteAccount()`,
+    /// which flips `isAuthenticated` and returns the app to the auth screen.
+    func confirmDeleteAccount() {
+        let typed = deleteConfirmationText.trimmingCharacters(in: .whitespacesAndNewlines)
+        deleteConfirmationText = ""
+        guard typed == "DELETE" else {
+            deleteAccountError = "You need to type DELETE exactly to confirm. Your account was not deleted."
+            return
+        }
+        guard !isDeletingAccount else { return }
+        isDeletingAccount = true
+        Task {
+            do {
+                try await authViewModel.deleteAccount()
+            } catch {
+                isDeletingAccount = false
+                deleteAccountError = UserFacingError.message(for: error, context: .write, tag: "delete-account", includesAction: false)
+            }
         }
     }
 
