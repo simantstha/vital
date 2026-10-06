@@ -7,6 +7,7 @@ import {
   type WeeklyReview,
   type WeeklyReviewInput,
 } from './weeklyReview';
+import { liftChange4w } from './liftChange';
 import type { WeightReading } from './weightTrend';
 import type { ProgressionSummary } from './workoutRepository';
 
@@ -136,7 +137,7 @@ test('muscle: sessions vs target, best lift change, protein days, weight', () =>
   assert.deepEqual(r.stats.map(s => s.label), ['Sessions', 'Bench Press est. 1RM', 'Protein days hit', 'Weight trend']);
   const sessions = statByLabel(r, 'Sessions')!;
   assert.equal(sessions.value, '4');
-  assert.equal(sessions.comparison, 'target 4');
+  assert.equal(sessions.comparison, 'target 4 for the week');
   assert.equal(sessions.tone, 'good');
   assert.equal(statByLabel(r, 'Bench Press est. 1RM')!.value, '+2.5 kg');
   assert.equal(statByLabel(r, 'Protein days hit')!.value, '7/7');
@@ -199,7 +200,7 @@ test('endurance: falls back to minutes when no distance is recorded', () => {
     ],
   }));
   assert.equal(statByLabel(r, 'Volume')!.value, '120 min');
-  assert.equal(statByLabel(r, 'Volume')!.comparison, null);
+  assert.equal(statByLabel(r, 'Volume')!.comparison, 'for the week');
 });
 
 // ── general ─────────────────────────────────────────────────────────────────
@@ -278,4 +279,87 @@ test('headline never exceeds 80 chars, even with a long lift name', () => {
     },
   }));
   assert.ok(r.headline.length <= REVIEW_HEADLINE_MAX_CHARS);
+});
+
+// ── lift stat uses the shared 4-week definition ─────────────────────────────
+
+const liftWk = (weekStart: string, e: number, sets = 6) => ({ weekStart, bestEstimatedOneRepMaxKg: e, volumeKg: 1, totalSets: sets, totalReps: 30 });
+
+test('muscle: best-lift stat says "vs 4 weeks ago" when that window has data', () => {
+  // anchor = WEEK_START (2026-09-28): recent {09-28, 09-21}, baseline {08-31, 08-24}
+  const progression: ProgressionSummary = {
+    'Bench Press': [liftWk('2026-08-31', 100), liftWk('2026-09-21', 104), liftWk(WEEK_START, 103)],
+  };
+  const r = computeWeeklyReview(base({
+    goal: 'muscle', verdict: 'progressing', weeklySessionsTarget: 3,
+    trainingDays: [WEEK[0], WEEK[2], WEEK[4]],
+    progression,
+    intakeDays: intake(WEEK, [2800, 2850, 2900, 2800, 2750, 2900, 2850], 160),
+  }));
+  const lift = statByLabel(r, 'Bench Press est. 1RM')!;
+  assert.equal(lift.value, '+4 kg'); // best(104, 103) - 100
+  assert.equal(lift.comparison, 'vs 4 weeks ago');
+});
+
+test('muscle: without 4-weeks-ago data the lift stat is labelled "vs last trained week"', () => {
+  const progression: ProgressionSummary = { 'Bench Press': [liftWk(PREV_START, 100), liftWk(WEEK_START, 102.5)] };
+  const r = computeWeeklyReview(base({
+    goal: 'muscle', verdict: 'progressing', weeklySessionsTarget: 3,
+    trainingDays: [WEEK[0], WEEK[2], WEEK[4]],
+    progression,
+    intakeDays: intake(WEEK, [2800, 2850, 2900, 2800, 2750, 2900, 2850], 160),
+  }));
+  assert.equal(statByLabel(r, 'Bench Press est. 1RM')!.comparison, 'vs last trained week');
+});
+
+test('weekly-review lift stat equals the shared definition for the same fixture', () => {
+  const progression: ProgressionSummary = {
+    'Bench Press': [liftWk('2026-08-31', 100), liftWk('2026-09-28', 106.2), liftWk('2026-10-05', 105)],
+  };
+  const review = computeWeeklyReview(base({
+    goal: 'muscle', weekStart: '2026-10-05', verdict: 'progressing', weeklySessionsTarget: 3,
+    trainingDays: ['2026-10-05', '2026-10-07', '2026-10-09'],
+    progression,
+    intakeDays: intake(Array.from({ length: 7 }, (_, i) => addDays('2026-10-05', i)), [2800, 2850, 2900, 2800, 2750, 2900, 2850], 160),
+  }));
+  assert.equal(statByLabel(review, 'Bench Press est. 1RM')!.value, '+6.2 kg');
+  assert.equal(liftChange4w(progression['Bench Press'], '2026-10-05')!.changeKg, 6.2);
+});
+
+// ── recovery-aware next week ────────────────────────────────────────────────
+
+function enduranceRecovery(over: Partial<WeeklyReviewInput>): WeeklyReviewInput {
+  return base({
+    goal: 'endurance',
+    verdict: 'on_track',
+    trainingDays: [WEEK[0], WEEK[2], WEEK[4]],
+    workouts: WEEK.slice(0, 3).map(day => ({ day, durationMin: 40, distanceKm: 8 })),
+    ...over,
+  });
+}
+
+test('nextWeek: 2 poor recovery signals → lighter week, never "repeat this week"', () => {
+  const r = computeWeeklyReview(enduranceRecovery({
+    restingHr: [...PREV.map(day => ({ day, value: 50 })), ...WEEK.map(day => ({ day, value: 56 }))],
+    hrv: [...PREV.map(day => ({ day, value: 70 })), ...WEEK.map(day => ({ day, value: 55 }))],
+  }));
+  assert.match(r.nextWeek, /^Go lighter next week and put sleep first/);
+  assert.match(r.nextWeek, /HRV ran below your normal and resting heart rate rose/);
+  assert.doesNotMatch(r.nextWeek, /Repeat this week/);
+});
+
+test('nextWeek: short sleep + low HRV also triggers the lighter week', () => {
+  const r = computeWeeklyReview(enduranceRecovery({
+    hrv: [...PREV.map(day => ({ day, value: 70 })), ...WEEK.map(day => ({ day, value: 60 }))],
+    sleepMinutes: WEEK.map(day => ({ day, value: 340 })),
+  }));
+  assert.match(r.nextWeek, /sleep averaged short/);
+  assert.match(r.nextWeek, /^Go lighter/);
+});
+
+test('nextWeek: a single poor recovery signal still repeats a good week', () => {
+  const r = computeWeeklyReview(enduranceRecovery({
+    sleepMinutes: WEEK.map(day => ({ day, value: 340 })),
+  }));
+  assert.equal(r.nextWeek.startsWith('Go lighter'), false);
 });

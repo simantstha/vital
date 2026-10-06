@@ -64,55 +64,90 @@ final class TrendsStrengthLogicTests: XCTestCase {
         )
     }
 
-    func testStatusReportsGainOverTheLookbackAsGood() {
+    // Dense 8-week series, last index = current week. Recent = indices 7,6;
+    // baseline = indices 3,2 (the two weeks ending 4 weeks before the current one).
+
+    func testStatusReportsGainVsFourWeeksAgoAsGood() {
         let e1rm: [Double?] = [nil, nil, nil, 100, nil, nil, nil, 110]
         let status = TrendsStrengthLogic.status(e1rm: e1rm, system: .metric)
-        XCTAssertEqual(status.text, "+10 kg in 4 wk")
+        XCTAssertEqual(status.text, "+10 kg vs 4 wk ago")
         XCTAssertEqual(status.tone, .good)
     }
 
     func testStatusShowsOneDecimalForFractionalMetricGain() {
         let e1rm: [Double?] = [nil, nil, nil, 100, nil, nil, nil, 102.5]
-        XCTAssertEqual(TrendsStrengthLogic.status(e1rm: e1rm, system: .metric).text, "+2.5 kg in 4 wk")
+        XCTAssertEqual(TrendsStrengthLogic.status(e1rm: e1rm, system: .metric).text, "+2.5 kg vs 4 wk ago")
     }
 
     func testStatusConvertsGainToPoundsForImperialUsers() {
         let e1rm: [Double?] = [nil, nil, nil, 100, nil, nil, nil, 110]
         // 10 kg = 22.05 lb
-        XCTAssertEqual(TrendsStrengthLogic.status(e1rm: e1rm, system: .imperial).text, "+22 lb in 4 wk")
+        XCTAssertEqual(TrendsStrengthLogic.status(e1rm: e1rm, system: .imperial).text, "+22 lb vs 4 wk ago")
     }
 
     func testStatusReportsNoChangeAsWatch() {
         let flat: [Double?] = [100, 100, 100, 100, 100, 100, 100, 100]
         let status = TrendsStrengthLogic.status(e1rm: flat, system: .metric)
-        XCTAssertEqual(status.text, "No change in 4 wk")
+        XCTAssertEqual(status.text, "No change vs 4 wk ago")
         XCTAssertEqual(status.tone, .watch)
     }
 
     func testStatusTreatsSubThresholdChangeAsNoChange() {
         let e1rm: [Double?] = [nil, nil, nil, 100, nil, nil, nil, 100.6]
-        XCTAssertEqual(TrendsStrengthLogic.status(e1rm: e1rm, system: .metric).text, "No change in 4 wk")
+        XCTAssertEqual(TrendsStrengthLogic.status(e1rm: e1rm, system: .metric).text, "No change vs 4 wk ago")
     }
 
     func testStatusReportsDeclineAsWatchWithTypographicMinus() {
         let e1rm: [Double?] = [nil, nil, nil, 110, nil, nil, nil, 100]
         let status = TrendsStrengthLogic.status(e1rm: e1rm, system: .metric)
-        XCTAssertEqual(status.text, "\u{2212}10 kg in 4 wk")
+        XCTAssertEqual(status.text, "\u{2212}10 kg vs 4 wk ago")
         XCTAssertEqual(status.tone, .watch)
     }
 
-    func testStatusStatesTheRealSpanWhenOnlyAnOlderBaselineExists() {
-        // Latest data is 2 weeks ago (not stale yet); the only earlier point
-        // is 5 weeks before it, outside the 4-week lookback.
-        let e1rm: [Double?] = [100, nil, nil, nil, nil, 110, nil, nil]
-        XCTAssertEqual(TrendsStrengthLogic.status(e1rm: e1rm, system: .metric).text, "+10 kg in 5 wk")
+    func testStatusUsesTheBestOfTheLastTwoWeeksAndTheBestOfTheBaselineWeeks() {
+        // recent = best(104, 103) = 104; baseline = best(100, 98) = 100.
+        let e1rm: [Double?] = [nil, nil, 98, 100, nil, nil, 104, 103]
+        XCTAssertEqual(TrendsStrengthLogic.status(e1rm: e1rm, system: .metric).text, "+4 kg vs 4 wk ago")
     }
 
-    func testStatusFlagsALiftNotTrainedForThreeWeeks() {
-        let e1rm: [Double?] = [100, 102, nil, nil, nil, nil, nil, nil]
+    func testStatusIsNewWhenNothingExistsFourWeeksBack() {
+        // Two points, but index 4 and 5 are outside the baseline window (3, 2).
+        let e1rm: [Double?] = [nil, nil, nil, nil, 100, nil, nil, 110]
+        XCTAssertEqual(TrendsStrengthLogic.status(e1rm: e1rm, system: .metric).text, "New")
+    }
+
+    func testStatusFlagsALiftNotTrainedInTheLastTwoWeeks() {
+        let e1rm: [Double?] = [100, 102, nil, nil, nil, 105, nil, nil]
         let status = TrendsStrengthLogic.status(e1rm: e1rm, system: .metric)
-        XCTAssertEqual(status.text, "Not logged in 6 wk")
+        XCTAssertEqual(status.text, "Not logged in 2 wk")
         XCTAssertEqual(status.tone, .watch)
+        XCTAssertEqual(TrendsStrengthLogic.status(e1rm: [100, 102, nil, nil, nil, nil, nil, nil], system: .metric).text, "Not logged in 6 wk")
+    }
+
+    // MARK: - Parity with lib/liftChange.test.ts (same fixture, same numbers)
+
+    /// Anchor Monday 2026-10-05 → dense keys 2026-08-17 … 2026-10-05 (8 weeks),
+    /// recent = {10-05, 09-28}, baseline = {09-07, 08-31}.
+    func testLiftChangeParityWithTypeScriptFixture() {
+        let k = keys
+        func series(_ points: [String: Double]) -> [Double?] { k.map { points[$0] } }
+
+        let bench = series(["2026-08-31": 100, "2026-09-07": 102.1, "2026-09-28": 107.9, "2026-10-05": 105])
+        XCTAssertEqual(
+            TrendsStrengthLogic.change(e1rm: bench),
+            TrendsStrengthLogic.LiftChange(baselineKg: 102.1, recentKg: 107.9, changeKg: 5.8)
+        )
+        XCTAssertEqual(TrendsStrengthLogic.status(e1rm: bench, system: .metric).text, "+5.8 kg vs 4 wk ago")
+
+        let squat = series(["2026-09-07": 140, "2026-10-05": 138.2])
+        XCTAssertEqual(
+            TrendsStrengthLogic.change(e1rm: squat),
+            TrendsStrengthLogic.LiftChange(baselineKg: 140, recentKg: 138.2, changeKg: -1.8)
+        )
+
+        // Weeks 09-14 / 09-21 are outside both windows.
+        XCTAssertNil(TrendsStrengthLogic.change(e1rm: series(["2026-09-14": 180, "2026-10-05": 190])))
+        XCTAssertNil(TrendsStrengthLogic.change(e1rm: series(["2026-09-07": 100])))
     }
 
     // MARK: - card
@@ -147,7 +182,8 @@ final class TrendsStrengthLogicTests: XCTestCase {
         XCTAssertEqual(squat.sparkline.count, 8)
         XCTAssertNil(squat.sparkline[0])
         XCTAssertEqual(squat.sparkline[7], 108)
-        XCTAssertEqual(squat.status.text, "+8 kg in 4 wk")
+        XCTAssertEqual(squat.status.text, "+8 kg vs 4 wk ago")
+        XCTAssertEqual(squat.changeKg, 8)
         XCTAssertEqual(squat.status.tone, .good)
         XCTAssertEqual(card.lifts[2].status.text, "New") // deadlift: one week of data
     }

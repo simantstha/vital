@@ -248,7 +248,7 @@ test('muscle with neither a weekly-sessions nor a weight target → needs_target
   assertWellFormed(p);
 });
 
-test('muscle: a lift setting a new e1RM best in the last 3 weeks → progressing, with grounded lift reasons', () => {
+test('muscle: a lift whose best e1RM beats its best from 4 weeks ago → progressing, with grounded lift reasons', () => {
   const p = computeGoalProgress(base({
     goal: 'muscle',
     target: { weightKg: null, date: null, weeklySessions: 4 },
@@ -262,7 +262,7 @@ test('muscle: a lift setting a new e1RM best in the last 3 weeks → progressing
   assert.deepEqual(p.safeBand, { minPct: 0.1, maxPct: 0.5 });
   const lift = p.reasons.find(r => r.kind === 'lift');
   assert.ok(lift);
-  assert.match(lift!.text, /\+5 kg over 4 weeks \(100 → 105 kg\)/);
+  assert.match(lift!.text, /\+5 kg vs 4 weeks ago \(100 → 105 kg\)/);
   assert.equal(lift!.tone, 'good');
   const sessions = p.reasons.find(r => r.kind === 'sessions');
   assert.match(sessions!.text, /3 sessions a week vs your target of 4/);
@@ -270,14 +270,14 @@ test('muscle: a lift setting a new e1RM best in the last 3 weeks → progressing
   assertWellFormed(p);
 });
 
-test('muscle: no e1RM gain in 3 weeks → stalled', () => {
+test('muscle: no e1RM gain vs 4 weeks ago → stalled', () => {
   const p = computeGoalProgress(base({
     goal: 'muscle',
     target: { weightKg: null, date: null, weeklySessions: 3 },
     progression: lifts(100, 100),
   }));
   assert.equal(p.verdict, 'stalled');
-  assert.match(p.headline, /no lift has set a new best/i);
+  assert.match(p.headline, /no lift is above its best from 4 weeks ago/i);
   assertWellFormed(p);
 });
 
@@ -458,7 +458,7 @@ test('imperial lift reasons and headline are formatted in lb', () => {
     target: { weightKg: null, date: null, weeklySessions: 4 },
     progression: lifts(100, 105),
   }));
-  assert.match(p.headline, /Bench Press estimated 1RM up 11 lb/);
+  assert.match(p.headline, /Bench Press est\. 1RM up 11 lb/);
   const lift = p.reasons.find(r => r.kind === 'lift');
-  assert.match(lift!.text, /\+11 lb over 4 weeks \(220\.5 → 231\.5 lb\)/);
+  assert.match(lift!.text, /\+11 lb vs 4 weeks ago \(220\.5 → 231\.5 lb\)/);
 });

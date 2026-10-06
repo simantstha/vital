@@ -20,16 +20,28 @@ enum TrendsStrengthLogic {
     static let windowWeeks = 8
     /// How many lifts the card shows.
     static let maxLifts = 3
-    /// "Recent frequency" window used both for ranking lifts and as the
-    /// default progress-chip lookback.
+    /// "Recent frequency" window used for ranking lifts.
     static let lookbackWeeks = 4
+    /// THE one definition of lift progress — mirrors `lib/liftChange.ts`
+    /// (`liftChange4w`), which the Trends goal card and the weekly review use,
+    /// so one lift never shows two different numbers:
+    ///   recent   = best e1RM across the current week and the week before
+    ///   baseline = best e1RM across the two weeks ending 4 weeks before the
+    ///              current week (current-4 and current-5)
+    ///   change   = recent - baseline, rounded to 0.1 kg
+    /// Offsets are in weeks back from the current (last) index of the dense
+    /// weekly series. Both windows need data, else there is no change.
+    static let recentWeekOffsets = [0, 1]
+    static let baselineWeekOffsets = [4, 5]
     /// A change smaller than this (in kg, regardless of the display unit)
     /// reads as "no change" — below it, Epley noise from a different rep
     /// count dominates real progress.
     static let changeThresholdKg = 1.0
     /// A lift not trained for this many weeks gets a "Not logged in N wk"
     /// chip instead of a progress claim about old data.
-    static let staleWeeks = 3
+    /// (Two, because the "recent" window is the current week plus the one
+    /// before — a lift last logged 2+ weeks ago has no recent data.)
+    static let staleWeeks = 2
 
     // MARK: - Types
 
@@ -54,6 +66,9 @@ enum TrendsStrengthLogic {
         /// for a week with no loaded working set.
         let sparkline: [Double?]
         let status: Status
+        /// The shared 4-week change in kg (`change(e1rm:)`), `nil` when either
+        /// window has no data. Raw kg — unit formatting happens in `status`.
+        let changeKg: Double?
 
         var id: String { key }
 
@@ -125,7 +140,8 @@ enum TrendsStrengthLogic {
                 name: displayName(for: candidate.key),
                 currentText: UnitFormat.weight(kg: latest, system),
                 sparkline: e1rm,
-                status: status(e1rm: e1rm, system: system)
+                status: status(e1rm: e1rm, system: system),
+                changeKg: change(e1rm: e1rm)?.changeKg
             )
         }
 
@@ -137,42 +153,63 @@ enum TrendsStrengthLogic {
 
     // MARK: - Status chip
 
-    /// "+2.5 kg in 4 wk" (good) / "No change in 3 wk" (watch) / "New"
-    /// (neutral, fewer than two weeks with data) / "Not logged in 4 wk"
-    /// (watch, nothing in the last `staleWeeks` weeks). `e1rm` is the dense
-    /// oldest-first weekly series, so its last index is the current week.
-    static func status(e1rm: [Double?], system: UnitSystem) -> Status {
-        var points: [(index: Int, value: Double)] = []
-        for (index, value) in e1rm.enumerated() {
-            if let value { points.append((index: index, value: value)) }
+    /// The shared lift-progress number (see `recentWeekOffsets`). `e1rm` is
+    /// the dense oldest-first weekly series, so its last index is the current
+    /// week. Parity-tested against `lib/liftChange.test.ts`.
+    struct LiftChange: Equatable {
+        let baselineKg: Double
+        let recentKg: Double
+        /// recent - baseline, rounded to 0.1 kg (half up, like JS `Math.round`).
+        let changeKg: Double
+    }
+
+    static func change(e1rm: [Double?]) -> LiftChange? {
+        func best(_ offsets: [Int]) -> Double? {
+            var result: Double?
+            for offset in offsets {
+                let index = e1rm.count - 1 - offset
+                guard index >= 0, let value = e1rm[index] else { continue }
+                if result == nil || value > result! { result = value }
+            }
+            return result
         }
-        guard points.count >= 2, let latest = points.last else {
+        guard let recent = best(recentWeekOffsets), let baseline = best(baselineWeekOffsets) else { return nil }
+        let rounded = (recent - baseline) * 10
+        return LiftChange(baselineKg: baseline, recentKg: recent, changeKg: (rounded + 0.5).rounded(.down) / 10)
+    }
+
+    /// "+2.5 kg vs 4 wk ago" (good) / "No change vs 4 wk ago" (watch) / "New"
+    /// (neutral, fewer than two weeks with data or nothing 4 weeks back to
+    /// compare with) / "Not logged in 3 wk" (watch, nothing in the current or
+    /// previous week). The window is always named — it is the same
+    /// "last 2 weeks vs 4 weeks ago" number the goal card shows.
+    static func status(e1rm: [Double?], system: UnitSystem) -> Status {
+        var lastIndex: Int?
+        var pointCount = 0
+        for (index, value) in e1rm.enumerated() where value != nil {
+            pointCount += 1
+            lastIndex = index
+        }
+        guard pointCount >= 2, let lastIndex else {
             return Status(text: "New", tone: .neutral)
         }
 
-        let weeksSinceLast = (e1rm.count - 1) - latest.index
+        let weeksSinceLast = (e1rm.count - 1) - lastIndex
         if weeksSinceLast >= staleWeeks {
             return Status(text: "Not logged in \(weeksSinceLast) wk", tone: .watch)
         }
 
-        // Baseline: the oldest point inside the lookback window before the
-        // latest one; if the lift was skipped for that whole window, fall
-        // back to the previous point so the chip states the real span.
-        let earlier = points.dropLast()
-        let inWindow = earlier.first { latest.index - $0.index <= lookbackWeeks }
-        guard let baseline = inWindow ?? earlier.last else {
+        guard let change = change(e1rm: e1rm) else {
             return Status(text: "New", tone: .neutral)
         }
-
-        let delta = latest.value - baseline.value
-        let span = latest.index - baseline.index
+        let delta = change.changeKg
         if delta >= changeThresholdKg {
-            return Status(text: "+\(magnitudeText(kg: delta, system: system)) in \(span) wk", tone: .good)
+            return Status(text: "+\(magnitudeText(kg: delta, system: system)) vs 4 wk ago", tone: .good)
         }
         if delta <= -changeThresholdKg {
-            return Status(text: "\u{2212}\(magnitudeText(kg: -delta, system: system)) in \(span) wk", tone: .watch)
+            return Status(text: "\u{2212}\(magnitudeText(kg: -delta, system: system)) vs 4 wk ago", tone: .watch)
         }
-        return Status(text: "No change in \(span) wk", tone: .watch)
+        return Status(text: "No change vs 4 wk ago", tone: .watch)
     }
 
     /// Unsigned weight magnitude with its unit — metric up to one decimal

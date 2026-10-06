@@ -124,7 +124,65 @@ enum TrendsHeadline {
     /// all) — a tile still `.sparse`/`.dimmed`/hidden contributes nothing,
     /// which is exactly what makes an empty `verdicts` read as "no metric is
     /// established" below.
-    static func status(verdicts: [Verdict], goodCount: Int, watchCount: Int, period: TrendsPeriod) -> Status {
+    /// Goal-relevant moves that are NOT metric tiles with a verdict — the
+    /// weight_loss goal's weight trend and the Strength card's lifts — so the
+    /// header can't say "A steady month. Nothing moved" above a +8 kg squat or
+    /// a falling weight trend. Plain counts only; `TrendsViewModel` builds it.
+    struct GoalMoves: Equatable {
+        /// A weight-trend change (kg, first to last trend point) at least this
+        /// big counts as a move; smaller is scale noise.
+        static let weightThresholdKg = 0.5
+
+        /// First to last smoothed weight-trend point (kg) for the weight_loss
+        /// goal; `nil` for other goals, an unestablished trend, or when the
+        /// weight metric tile already counted it.
+        var weightDeltaKg: Double? = nil
+        /// Lifts whose shared 4-week e1RM change (`TrendsStrengthLogic.change`)
+        /// is up / down by at least `TrendsStrengthLogic.changeThresholdKg`.
+        var liftsUp: Int = 0
+        var liftsDown: Int = 0
+
+        static let empty = GoalMoves()
+
+        var goodCount: Int {
+            liftsUp + ((weightDeltaKg ?? 0) <= -Self.weightThresholdKg ? 1 : 0)
+        }
+        var watchCount: Int {
+            liftsDown + ((weightDeltaKg ?? 0) >= Self.weightThresholdKg ? 1 : 0)
+        }
+
+        /// `goal` is the diet-goal string ("weight_loss" ...). Weight only
+        /// counts for weight_loss, where down is good.
+        static func make(
+            goal: String,
+            weightTrend: WeightTrendDTO?,
+            strength: TrendsStrengthLogic.Card?,
+            weightAlreadyCounted: Bool
+        ) -> GoalMoves {
+            var moves = GoalMoves()
+            if goal == "weight_loss", !weightAlreadyCounted,
+               let trend = weightTrend, trend.established, trend.days.count >= 2,
+               let first = trend.days.first, let last = trend.days.last {
+                moves.weightDeltaKg = last.trendKg - first.trendKg
+            }
+            for lift in strength?.lifts ?? [] {
+                guard let change = lift.changeKg else { continue }
+                if change >= TrendsStrengthLogic.changeThresholdKg { moves.liftsUp += 1 }
+                if change <= -TrendsStrengthLogic.changeThresholdKg { moves.liftsDown += 1 }
+            }
+            return moves
+        }
+    }
+
+    static func status(
+        verdicts: [Verdict],
+        goodCount rawGoodCount: Int,
+        watchCount rawWatchCount: Int,
+        period: TrendsPeriod,
+        goalMoves: GoalMoves = .empty
+    ) -> Status {
+        let goodCount = rawGoodCount + goalMoves.goodCount
+        let watchCount = rawWatchCount + goalMoves.watchCount
         // `allSatisfy` on an empty array is vacuously `true` — that's
         // intentional: "no metric shown has a verdict yet" is exactly as
         // much "still learning" as "every verdict shown is calibrating".

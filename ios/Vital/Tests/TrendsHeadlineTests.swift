@@ -156,4 +156,78 @@ final class TrendsHeadlineTests: XCTestCase {
     func testSteadySublineIsFixedRegardlessOfPeriod() {
         XCTAssertEqual(TrendsHeadline.steadySubline, "Nothing moved outside your normal.")
     }
+
+    // MARK: - Goal-relevant moves (weight trend, strength)
+
+    private func lift(_ key: String, changeKg: Double?) -> TrendsStrengthLogic.Lift {
+        TrendsStrengthLogic.Lift(
+            key: key,
+            name: key.capitalized,
+            currentText: "100 kg",
+            sparkline: [],
+            status: TrendsStrengthLogic.Status(text: "", tone: .neutral),
+            changeKg: changeKg
+        )
+    }
+
+    private func card(_ lifts: [TrendsStrengthLogic.Lift]) -> TrendsStrengthLogic.Card {
+        TrendsStrengthLogic.Card(
+            lifts: lifts,
+            volume: TrendsStrengthLogic.VolumeLine(thisWeek: "", comparison: nil)
+        )
+    }
+
+    private func weightTrend(from first: Double, to last: Double, established: Bool = true) -> WeightTrendDTO {
+        WeightTrendDTO(
+            days: [
+                WeightTrendDayDTO(day: "2026-09-08", rawKg: first, trendKg: first),
+                WeightTrendDayDTO(day: "2026-10-06", rawKg: last, trendKg: last),
+            ],
+            delta7dKgPerWeek: nil, delta30dKgPerWeek: nil, established: established
+        )
+    }
+
+    func testSteadyBecomesMovedWhenAStrengthLiftIsUp() {
+        let moves = TrendsHeadline.GoalMoves.make(
+            goal: "muscle", weightTrend: nil,
+            strength: card([lift("squat", changeKg: 20), lift("bench press", changeKg: 0.4)]),
+            weightAlreadyCounted: false
+        )
+        XCTAssertEqual(moves.liftsUp, 1)
+        let status = TrendsHeadline.status(verdicts: [.normal], goodCount: 0, watchCount: 0, period: .thirtyDays, goalMoves: moves)
+        guard case .moved(let summary) = status else { return XCTFail("expected .moved, got \(status)") }
+        XCTAssertEqual(summary.fullText, "One thing moved this month — one good.")
+    }
+
+    func testWeightLossTrendDownCountsAsGoodAndUpAsWatch() {
+        let down = TrendsHeadline.GoalMoves.make(goal: "weight_loss", weightTrend: weightTrend(from: 84, to: 82.4), strength: nil, weightAlreadyCounted: false)
+        XCTAssertEqual(down.goodCount, 1)
+        XCTAssertEqual(down.watchCount, 0)
+        let up = TrendsHeadline.GoalMoves.make(goal: "weight_loss", weightTrend: weightTrend(from: 82, to: 83), strength: nil, weightAlreadyCounted: false)
+        XCTAssertEqual(up.watchCount, 1)
+        XCTAssertEqual(up.goodCount, 0)
+    }
+
+    func testWeightIsIgnoredForOtherGoalsFlatTrendsUnestablishedTrendsAndDoubleCounting() {
+        XCTAssertEqual(TrendsHeadline.GoalMoves.make(goal: "muscle", weightTrend: weightTrend(from: 84, to: 80), strength: nil, weightAlreadyCounted: false), .empty)
+        XCTAssertEqual(TrendsHeadline.GoalMoves.make(goal: "weight_loss", weightTrend: weightTrend(from: 82, to: 82.2), strength: nil, weightAlreadyCounted: false).goodCount, 0)
+        XCTAssertEqual(TrendsHeadline.GoalMoves.make(goal: "weight_loss", weightTrend: weightTrend(from: 84, to: 80, established: false), strength: nil, weightAlreadyCounted: false), .empty)
+        XCTAssertEqual(TrendsHeadline.GoalMoves.make(goal: "weight_loss", weightTrend: weightTrend(from: 84, to: 80), strength: nil, weightAlreadyCounted: true), .empty)
+    }
+
+    func testGoalMovesAddToMetricCountsAndDeclinesCountAsWatch() {
+        let moves = TrendsHeadline.GoalMoves.make(
+            goal: "weight_loss", weightTrend: weightTrend(from: 84, to: 82),
+            strength: card([lift("squat", changeKg: -3)]),
+            weightAlreadyCounted: false
+        )
+        let status = TrendsHeadline.status(verdicts: [.normal], goodCount: 1, watchCount: 0, period: .thirtyDays, goalMoves: moves)
+        guard case .moved(let summary) = status else { return XCTFail("expected .moved, got \(status)") }
+        XCTAssertEqual(summary.fullText, "Three things moved this month — two good, one to watch.")
+    }
+
+    func testStaysSteadyWhenNothingMovedIncludingGoalMoves() {
+        let status = TrendsHeadline.status(verdicts: [.normal], goodCount: 0, watchCount: 0, period: .thirtyDays, goalMoves: .empty)
+        guard case .steady = status else { return XCTFail("expected .steady, got \(status)") }
+    }
 }

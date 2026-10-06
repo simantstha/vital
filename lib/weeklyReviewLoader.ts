@@ -69,7 +69,7 @@ export async function computeLastWeekReview(
   const daySet = new Set(dayKeys);
 
   const goal = normalizeGoal(user.goal);
-  const [progress, weightReadings, intakeByDay, budget, progression, sets, workoutEntries, restingHr, sleep] =
+  const [progress, weightReadings, intakeByDay, budget, progression, sets, workoutEntries, restingHr, hrv, sleep] =
     await Promise.all([
       loadGoalProgress(userId, { tz, now }),
       getWeightReadings(userId, WEIGHT_LOOKBACK_DAYS, tz),
@@ -79,6 +79,7 @@ export async function computeLastWeekReview(
       getSetsSince(userId, WINDOW_DAYS + 2),
       queryWorkouts(userId, WINDOW_DAYS),
       seriesWithFallback(userId, 'resting_hr', 'whoop_resting_hr'),
+      seriesWithFallback(userId, 'hrv_sdnn', 'whoop_hrv_rmssd'),
       queryMetricPoints(userId, 'sleep_minutes', WINDOW_DAYS),
     ]);
 
@@ -114,6 +115,7 @@ export async function computeLastWeekReview(
       })),
     progression,
     restingHr,
+    hrv,
     sleepMinutes: sleep.map(p => ({ day: p.date, value: p.value })),
     sleepGoalMinutes: user.sleep_goal_minutes ?? DEFAULT_SLEEP_GOAL_MIN,
     weeklySessionsTarget: user.weekly_sessions_target ?? null,

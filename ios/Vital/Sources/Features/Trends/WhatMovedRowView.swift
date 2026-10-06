@@ -39,6 +39,12 @@ struct WhatMovedRowView: View {
                             .foregroundStyle(Theme.Colors.textSecondary)
                     }
                 }
+                // Window label: the pill's delta is latest reading minus the
+                // 30-day mean (`WhatMovedRow.delta`), so say so.
+                Text("vs your 30-day normal")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Theme.Colors.textSecondary)
+                    .lineLimit(1)
             }
 
             Spacer(minLength: Theme.Spacing.sm)
