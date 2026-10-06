@@ -82,9 +82,6 @@ struct TodayView: View {
 
                     case .loaded:
                         Group {
-                            calibrationCard
-                                .staggeredAppear(index: 0)
-
                             // Goal hero (§4.1) — weight_loss only for T1; other
                             // goals keep their existing Today content below
                             // (T2 will add their own heroes).
@@ -210,6 +207,13 @@ struct TodayView: View {
                                 metricsGrid
                                     .staggeredAppear(index: 3)
                             }
+
+                            // Calibration note sits AFTER the getting-started
+                            // checklist / recovery tiles: a new user should
+                            // see what to do today before being told what
+                            // needs two weeks of data.
+                            calibrationCard
+                                .staggeredAppear(index: 3)
 
                             // FuelStripView is hidden for weight_loss — the
                             // hero above already covers calories (§4).
@@ -682,11 +686,11 @@ private extension TodayView {
             GlassCard(padding: Theme.Spacing.lg) {
                 VStack(alignment: .leading, spacing: Theme.Spacing.md) {
                     VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-                        Text("Calibrating your baselines")
+                        Text(CalibrationCopy.todayTitle)
                             .font(Theme.Typography.bodyMedium)
                             .fontWeight(.semibold)
                             .foregroundStyle(Theme.Colors.textPrimary)
-                        Text("\(daysCollected) of 14 days of data collected")
+                        Text(CalibrationCopy.todayBody(daysCollected: daysCollected))
                             .font(Theme.Typography.bodySmall)
                             .foregroundStyle(Theme.Colors.textSecondary)
                     }
@@ -721,21 +725,24 @@ private extension TodayView {
                 value: vm.hrv.displayValue,
                 unit: vm.hrv.displayUnit,
                 trend: vm.hrv.trend,
-                delta: vm.hrv.delta
+                delta: vm.hrv.delta,
+                explanation: MetricExplainer.explanation(for: "hrv_sdnn")
             )
             MetricTile(
                 label: "Sleep",
                 value: vm.sleep.formatted,
                 unit: "",
                 trend: vm.sleep.trend,
-                delta: vm.sleep.delta
+                delta: vm.sleep.delta,
+                explanation: MetricExplainer.explanation(for: "sleep_minutes")
             )
             MetricTile(
                 label: "Resting HR",
                 value: vm.restingHR.displayValue,
                 unit: vm.restingHR.displayUnit,
                 trend: vm.restingHR.trend,
-                delta: vm.restingHR.delta
+                delta: vm.restingHR.delta,
+                explanation: MetricExplainer.explanation(for: "resting_hr")
             )
         }
     }

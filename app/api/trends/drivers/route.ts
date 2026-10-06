@@ -13,6 +13,12 @@
  * sample size behind its correlation — the client MUST show it alongside
  * any driver it renders.
  *
+ * Display gates (lib/insights/drivers.ts): >= 28 paired days, |rho| >= 0.3,
+ * a high-vs-low tercile gap at least the outcome's typical day-to-day noise,
+ * and at most 3 rows. Activity drivers that worsen the outcome are returned
+ * with `framing: 'adaptation'` (last, max one) unless the user's goal is
+ * muscle/endurance, so clients never headline "do less".
+ *
  * Response: { metric, computedFor: 'YYYY-MM-DD'|null, drivers: Driver[] }
  * — see lib/insights/drivers.ts for the Driver shape. `drivers` is empty
  * (never a 400) when `metric` isn't a recognized outcome metric, or when the
@@ -44,7 +50,7 @@ export async function GET(request: Request): Promise<NextResponse> {
   }
 
   const [row] = await db
-    .select({ timezone: schema.users.timezone })
+    .select({ timezone: schema.users.timezone, goal: schema.users.goal })
     .from(schema.users)
     .where(eq(schema.users.id, userId))
     .limit(1);
@@ -56,6 +62,7 @@ export async function GET(request: Request): Promise<NextResponse> {
     userId,
     metric,
     localToday,
+    row?.goal,
   );
 
   return NextResponse.json(result);

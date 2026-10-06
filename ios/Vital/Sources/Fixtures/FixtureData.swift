@@ -915,7 +915,15 @@ enum FixtureData {
     /// (`steps` lag 1 down, `dietary_carbs_g` lag 0 up) whose tercile means
     /// sit a fixed offset either side of that persona's own `profile.hrv` —
     /// so the "— N vs M ms" comparison always reads as a believable spread
-    /// around the same HRV the rest of the screen shows. Every other
+    /// around the same HRV the rest of the screen shows. Mirrors the
+    /// server's display rules (lib/insights/drivers.ts): every row has
+    /// >= 28 pairs, |rho| >= 0.3 and a tercile gap wider than HRV's typical
+    /// daily wobble; and because steps -> lower HRV reads like "walk less",
+    /// weight_loss (a non-performance goal) gets it as the trailing
+    /// `framing: "adaptation"` row ("Big activity days are followed by
+    /// slightly lower HRV — normal adaptation; keep moving."), never as the
+    /// headline. muscle/endurance keep it as a plain association (leading,
+    /// by |rho|). Every other
     /// scenario/metric combination (including every metric for `new_user`,
     /// which never has an established baseline for the engine to certify
     /// anything against) returns an empty `drivers` array, matching the real
@@ -933,6 +941,7 @@ enum FixtureData {
         }
 
         let hrv = profile.hrv
+        let stepsFraming = scenario == .weightLoss ? "adaptation" : "association"
         let stepsDriver: [String: Any] = [
             "input": "steps",
             "lag": 1,
@@ -943,6 +952,7 @@ enum FixtureData {
             "low": ["mean": hrv + 4, "n": 21],
             "highInputMean": profile.steps + 2200,
             "lowInputMean": max(profile.steps - 2200, 0),
+            "framing": stepsFraming,
         ]
         let carbsDriver: [String: Any] = [
             "input": "dietary_carbs_g",
@@ -954,11 +964,14 @@ enum FixtureData {
             "low": ["mean": hrv - 3, "n": 19],
             "highInputMean": 240.0,
             "lowInputMean": 140.0,
+            "framing": "association",
         ]
         return [
             "metric": metric,
             "computedFor": dayString(0),
-            "drivers": [stepsDriver, carbsDriver],
+            // Same order the server returns: associations by |rho|, an
+            // adaptation row always last.
+            "drivers": scenario == .weightLoss ? [carbsDriver, stepsDriver] : [stepsDriver, carbsDriver],
         ]
     }
 

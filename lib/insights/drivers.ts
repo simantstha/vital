@@ -38,7 +38,17 @@ export interface StoredFinding {
 
 export interface DriverBucket { mean: number; n: number }
 
+/**
+ * 'association' is a plain "X tends to go with Y" row. 'adaptation' marks an
+ * activity driver whose outcome gets slightly worse on big-activity days
+ * (e.g. steps -> lower HRV next day) for a user whose goal is NOT performance
+ * training: the client must frame it as normal adaptation ("keep moving"),
+ * never as advice to do less.
+ */
+export type DriverFraming = 'association' | 'adaptation';
+
 export interface Driver {
+  framing: DriverFraming;
   input: string;
   lag: 0 | 1;
   direction: 'up' | 'down';
@@ -60,6 +70,27 @@ export interface DriversResult {
 export const STALENESS_DAYS = 7;
 
 const MIN_TERCILE_PAIRS = 5;
+
+/**
+ * Display gates, applied on top of the engine's own certification (its
+ * MIN_PAIRS of 30, MIN_ABS_RHO of 0.35, FDR and two-run confirmation). They
+ * are deliberately independent so a future loosening of the engine can't
+ * silently flood the headline section with weak correlations.
+ */
+export const MIN_DRIVER_PAIRS = 28;
+export const MIN_DRIVER_ABS_RHO = 0.3;
+export const MAX_DRIVERS = 3;
+/** Fewer consecutive-day pairs than this and "typical noise" is a guess. */
+const MIN_NOISE_DIFFS = 5;
+
+/** Inputs that mean "the user moved more / trained harder". */
+export const ACTIVITY_INPUTS: ReadonlySet<string> = new Set([
+  'steps', 'exercise_min', 'distance_m', 'active_energy_kcal', 'whoop_day_strain',
+]);
+/** Outcomes where a LOWER value is the healthy direction. */
+const LOWER_IS_BETTER_OUTCOMES: ReadonlySet<string> = new Set(['resting_hr', 'whoop_resting_hr']);
+/** Goals (users.goal ids; unknown/null count as general) whose users are training for performance, so activity load is the point. */
+const PERFORMANCE_GOALS: ReadonlySet<string> = new Set(['muscle', 'endurance']);
 
 function toEpochDays(dayKey: string): number {
   const [y, m, d] = dayKey.split('-').map(Number);
@@ -102,6 +133,7 @@ export function selectDrivers(
   currentDayRows: StoredFinding[],
   previousDaySignatures: Set<string>,
   metric: string,
+  limit: number = MAX_DRIVERS,
 ): PickedDriver[] {
   const findings = currentDayRows.map(toFinding);
   const confirmed = confirmAgainstPreviousRun(findings, previousDaySignatures);
@@ -120,8 +152,10 @@ export function selectDrivers(
   }
 
   return [...byInput.values()]
+    // Display gates: enough paired days and a big-enough correlation.
+    .filter((f) => Number(f.detail.pairs) >= MIN_DRIVER_PAIRS && Math.abs(f.effect) >= MIN_DRIVER_ABS_RHO)
     .sort((a, b) => Math.abs(b.effect) - Math.abs(a.effect))
-    .slice(0, 3)
+    .slice(0, limit)
     .map((finding) => ({
       input: String(finding.detail.input),
       lag: (Number(finding.detail.lag) === 1 ? 1 : 0) as 0 | 1,
@@ -196,6 +230,46 @@ export function terciles(pairs: Pair[]): TercileMagnitude {
   };
 }
 
+function median(values: number[]): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+/**
+ * Typical day-to-day noise of a series: the median absolute change between
+ * consecutive calendar days. A driver whose high-vs-low tercile gap is smaller
+ * than this is indistinguishable from an ordinary day's wobble. Null when
+ * there are too few consecutive-day pairs to say.
+ */
+export function typicalDailyNoise(outcome: MetricSeries): number | null {
+  const byDate = new Map<string, number>();
+  for (const point of outcome.points) if (point.value !== null) byDate.set(point.date, point.value);
+  const diffs: number[] = [];
+  for (const [date, value] of byDate) {
+    const next = byDate.get(shiftDate(date, 1));
+    if (next !== undefined) diffs.push(Math.abs(next - value));
+  }
+  if (diffs.length < MIN_NOISE_DIFFS) return null;
+  return median(diffs);
+}
+
+/** True when the tercile gap is at least the outcome's typical daily noise. */
+export function hasPracticalEffect(magnitude: TercileMagnitude, noise: number | null): boolean {
+  if (!magnitude.high || !magnitude.low || noise === null) return false;
+  return Math.abs(magnitude.high.mean - magnitude.low.mean) >= noise;
+}
+
+/**
+ * True when this driver says "more activity -> a worse outcome" (e.g. more
+ * steps -> lower HRV, or higher resting HR). That is a normal training
+ * response, and as a headline it reads like "move less".
+ */
+export function isActivityWorsensOutcome(input: string, direction: 'up' | 'down', outcome: string): boolean {
+  if (!ACTIVITY_INPUTS.has(input)) return false;
+  return LOWER_IS_BETTER_OUTCOMES.has(outcome) ? direction === 'up' : direction === 'down';
+}
+
 /** DB-backed dependencies `computeDrivers` needs — real wiring lives below. */
 export interface DriversRepository {
   latestComputedFor(userId: string): Promise<string | null>;
@@ -214,6 +288,7 @@ export async function computeDrivers(
   userId: string,
   metric: string,
   localToday: string,
+  goal?: string | null,
 ): Promise<DriversResult> {
   if (!OUTCOME_METRICS.includes(metric)) {
     return { metric, computedFor: null, drivers: [] };
@@ -231,7 +306,9 @@ export async function computeDrivers(
   ]);
   const previousSignatures = new Set(previousRows.map((row) => row.signature));
 
-  const picked = selectDrivers(currentRows, previousSignatures, metric);
+  // Uncapped here: the practical-effect gate below can drop rows, and the cap
+  // of 3 must apply to what survives, not to what was merely strongest.
+  const picked = selectDrivers(currentRows, previousSignatures, metric, Infinity);
   if (picked.length === 0) return { metric, computedFor, drivers: [] };
 
   const inputMetrics = [...new Set(picked.map((p) => p.input))];
@@ -239,11 +316,24 @@ export async function computeDrivers(
   const seriesByMetric = new Map(series.map((s) => [s.metric, s] as const));
   const outcomeSeries = seriesByMetric.get(metric) ?? { metric, points: [] };
 
-  const drivers: Driver[] = picked.map((p) => {
+  const noise = typicalDailyNoise(outcomeSeries);
+  const performanceUser = PERFORMANCE_GOALS.has(goal ?? '');
+
+  const candidates: Driver[] = [];
+  for (const p of picked) {
     const inputSeries = seriesByMetric.get(p.input) ?? { metric: p.input, points: [] };
     const magnitude = terciles(pairByDateLag(inputSeries, outcomeSeries, p.lag));
-    return { ...p, ...magnitude };
-  });
+    if (!hasPracticalEffect(magnitude, noise)) continue;
+    const framing: DriverFraming =
+      !performanceUser && isActivityWorsensOutcome(p.input, p.direction, metric) ? 'adaptation' : 'association';
+    candidates.push({ ...p, framing, ...magnitude });
+  }
+
+  // Plain associations lead (already |rho|-sorted). An 'adaptation' row is
+  // never a headline: it goes last and at most one is kept.
+  const associations = candidates.filter((d) => d.framing === 'association');
+  const adaptation = candidates.find((d) => d.framing === 'adaptation');
+  const drivers = [...associations, ...(adaptation ? [adaptation] : [])].slice(0, MAX_DRIVERS);
 
   return { metric, computedFor, drivers };
 }

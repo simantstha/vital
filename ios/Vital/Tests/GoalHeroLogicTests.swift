@@ -175,12 +175,12 @@ final class GoalHeroLogicTests: XCTestCase {
     // MARK: - EnduranceHeroLogic.calibratingText
 
     func testCalibratingTextFormatsDayOf14() {
-        XCTAssertEqual(EnduranceHeroLogic.calibratingText(daysCollected: 5), "Calibrating · day 5 of 14")
+        XCTAssertEqual(EnduranceHeroLogic.calibratingText(daysCollected: 5), "Learning your normal · day 5 of 14")
     }
 
     func testCalibratingTextClampsToZeroAndFourteen() {
-        XCTAssertEqual(EnduranceHeroLogic.calibratingText(daysCollected: -2), "Calibrating · day 0 of 14")
-        XCTAssertEqual(EnduranceHeroLogic.calibratingText(daysCollected: 30), "Calibrating · day 14 of 14")
+        XCTAssertEqual(EnduranceHeroLogic.calibratingText(daysCollected: -2), "Learning your normal · day 0 of 14")
+        XCTAssertEqual(EnduranceHeroLogic.calibratingText(daysCollected: 30), "Learning your normal · day 14 of 14")
     }
 
     // MARK: - EnduranceHeroLogic.weeklyVolumeText (honesty rule — omitted when missing)

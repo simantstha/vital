@@ -214,7 +214,7 @@ enum EnduranceHeroLogic {
     /// `TodayView.calibrationCard`'s own `Int((progress * 14).rounded())`
     /// derivation so the two surfaces never disagree.
     static func calibratingText(daysCollected: Int) -> String {
-        "Calibrating · day \(min(max(daysCollected, 0), 14)) of 14"
+        "Learning your normal · day \(min(max(daysCollected, 0), 14)) of 14"
     }
 
     // MARK: - Today's session

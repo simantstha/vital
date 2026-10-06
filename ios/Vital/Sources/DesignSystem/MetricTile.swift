@@ -8,16 +8,25 @@ struct MetricTile: View {
     let unit: String
     let trend: TrendDirection
     let delta: String
+    /// One-sentence plain-English explanation (`MetricExplainer`); when
+    /// non-nil an info button sits beside the label.
+    var explanation: String? = nil
 
     var body: some View {
         VitalCard(padding: Theme.Spacing.lg, cornerRadius: Theme.Radius.lg) {
             VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
 
-                Text(label)
-                    .font(.system(size: 13, weight: .regular))
-                    .foregroundStyle(Theme.Colors.textSecondary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
+                HStack(spacing: 2) {
+                    Text(label)
+                        .font(.system(size: 13, weight: .regular))
+                        .foregroundStyle(Theme.Colors.textSecondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                    if let explanation {
+                        Spacer(minLength: 0)
+                        WhatIsThisButton(title: label, text: explanation)
+                    }
+                }
 
                 HStack(alignment: .lastTextBaseline, spacing: 2) {
                     Text(value)
