@@ -39,6 +39,8 @@ import {
   type WeightSignal,
 } from './brain/weightSignals';
 import type { ProgressionSummary } from './workoutRepository';
+import { liftChange4w } from './liftChange';
+import { weekStartKeyForDay } from './localDay';
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
@@ -421,38 +423,26 @@ function proteinReason(input: GoalProgressInput): GoalProgressReason | null {
 interface LiftChange {
   exercise: string;
   totalSets: number;
-  /** e1RM at the earliest week within the last ~5 weeks vs the latest week; null when < 2 weeks. */
+  /** Best e1RM 4 weeks ago (baseline window) vs the last 2 weeks; see lib/liftChange.ts. Null when either window is empty. */
   startKg: number | null;
   endKg: number | null;
   change4wKg: number | null;
-  /** Best e1RM in the last 3 weeks minus the best before; null when either side is missing. */
-  gain3wKg: number | null;
 }
 
 function liftChanges(progression: ProgressionSummary, todayKey: string): LiftChange[] {
   const out: LiftChange[] = [];
-  const windowStart = addDays(todayKey, -35);
-  const recentStart = addDays(todayKey, -21);
+  const anchor = weekStartKeyForDay(todayKey);
   for (const [exercise, weeks] of Object.entries(progression)) {
-    const withE1rm = weeks.filter(w => w.bestEstimatedOneRepMaxKg != null);
-    if (withE1rm.length === 0) continue;
+    if (!weeks.some(w => w.bestEstimatedOneRepMaxKg != null)) continue;
     const totalSets = weeks.reduce((s, w) => s + w.totalSets, 0);
-
-    const inWindow = withE1rm.filter(w => w.weekStart >= windowStart);
-    let startKg: number | null = null;
-    let endKg: number | null = null;
-    let change4wKg: number | null = null;
-    if (inWindow.length >= 2) {
-      startKg = inWindow[0].bestEstimatedOneRepMaxKg as number;
-      endKg = inWindow[inWindow.length - 1].bestEstimatedOneRepMaxKg as number;
-      change4wKg = round1(endKg - startKg);
-    }
-
-    const prior = withE1rm.filter(w => w.weekStart < recentStart).map(w => w.bestEstimatedOneRepMaxKg as number);
-    const recent = withE1rm.filter(w => w.weekStart >= recentStart).map(w => w.bestEstimatedOneRepMaxKg as number);
-    const gain3wKg = prior.length > 0 && recent.length > 0 ? round1(Math.max(...recent) - Math.max(...prior)) : null;
-
-    out.push({ exercise, totalSets, startKg, endKg, change4wKg, gain3wKg });
+    const c = liftChange4w(weeks, anchor);
+    out.push({
+      exercise,
+      totalSets,
+      startKg: c?.baselineKg ?? null,
+      endKg: c?.recentKg ?? null,
+      change4wKg: c?.changeKg ?? null,
+    });
   }
   return out.sort((a, b) => b.totalSets - a.totalSets || a.exercise.localeCompare(b.exercise)).slice(0, 3);
 }
@@ -462,7 +452,7 @@ function liftReason(l: LiftChange, input: GoalProgressInput): GoalProgressReason
   const sign = l.change4wKg > 0 ? '+' : l.change4wKg < 0 ? '−' : '';
   return {
     kind: 'lift',
-    text: `${l.exercise} estimated 1RM ${sign}${fmtWeight(input, Math.abs(l.change4wKg))} over 4 weeks (${weightNum(input, l.startKg)} → ${fmtWeight(input, l.endKg)})`,
+    text: `${l.exercise} est. 1RM ${sign}${fmtWeight(input, Math.abs(l.change4wKg))} vs 4 weeks ago (${weightNum(input, l.startKg)} → ${fmtWeight(input, l.endKg)})`,
     tone: l.change4wKg > 0 ? 'good' : l.change4wKg < 0 ? 'watch' : 'neutral',
   };
 }
@@ -654,17 +644,17 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock): Outcome {
     };
   }
 
-  const comparable = lifts.filter(l => l.gain3wKg != null);
+  const comparable = lifts.filter(l => l.change4wKg != null);
   if (comparable.length > 0) {
-    const best = comparable.reduce((a, b) => ((b.gain3wKg as number) > (a.gain3wKg as number) ? b : a));
-    if ((best.gain3wKg as number) > 0) {
+    const best = comparable.reduce((a, b) => ((b.change4wKg as number) > (a.change4wKg as number) ? b : a));
+    if ((best.change4wKg as number) > 0) {
       return {
         verdict: 'progressing',
-        headline: clip(`Progressing — ${best.exercise} estimated 1RM up ${fmtWeight(input, best.gain3wKg as number)}`),
+        headline: clip(`Progressing — ${best.exercise} est. 1RM up ${fmtWeight(input, best.change4wKg as number)} vs 4 weeks ago`),
         reasons,
       };
     }
-    return { verdict: 'stalled', headline: 'Stalled — no lift has set a new best in 3 weeks', reasons };
+    return { verdict: 'stalled', headline: 'Stalled — no lift is above its best from 4 weeks ago', reasons };
   }
 
   if (w.pctBw != null) {

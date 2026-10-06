@@ -22,6 +22,7 @@ import { PARTIAL_LOG_KCAL_THRESHOLD, TOO_FAST_LOSS_PCT_PER_WEEK } from './brain/
 import { computeWeightTrend, type WeightReading } from './weightTrend';
 import { weekDayKeys, weekStartKeyForDay } from './localDay';
 import type { ProgressionSummary } from './workoutRepository';
+import { liftChange4w } from './liftChange';
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
@@ -92,6 +93,8 @@ export interface WeeklyReviewInput {
   workouts: WeeklyReviewWorkout[];
   progression: ProgressionSummary;
   restingHr: DayValue[];
+  /** Daily HRV; optional so older callers/stored inputs still work. */
+  hrv?: DayValue[];
   sleepMinutes: DayValue[];
   sleepGoalMinutes: number;
   weeklySessionsTarget: number | null;
@@ -223,7 +226,7 @@ function budgetCandidate(input: WeeklyReviewInput, week: Week): Candidate | null
     stat: {
       label: 'Days in budget',
       value: `${hit}/7`,
-      comparison: logged.length < 7 ? `${logged.length} ${plural(logged.length, 'day')} logged` : null,
+      comparison: logged.length < 7 ? `${logged.length} ${plural(logged.length, 'day')} logged` : 'across the week',
       tone,
     },
   };
@@ -246,7 +249,7 @@ function avgKcalCandidate(input: WeeklyReviewInput, week: Week, prevWeek: Week):
     const diff = Math.round(avg - prevAvg);
     comparison = diff === 0 ? 'same as last week' : `${signed(diff, fmtKcal(Math.abs(diff)))} vs last week`;
   }
-  return { stat: { label: 'Avg calories', value: `${fmtKcal(avg)} kcal`, comparison, tone: 'neutral' } };
+  return { stat: { label: 'Avg calories', value: `${fmtKcal(avg)} kcal`, comparison: comparison ?? 'daily avg for the week', tone: 'neutral' } };
 }
 
 function sessionsCandidate(input: WeeklyReviewInput, week: Week, prevWeek: Week): Candidate | null {
@@ -260,7 +263,7 @@ function sessionsCandidate(input: WeeklyReviewInput, week: Week, prevWeek: Week)
   let tone: ReviewTone = 'neutral';
   const cand: Candidate = { stat: { label, value: String(count), comparison: null, tone } };
   if (target != null && input.goal !== 'general') {
-    comparison = `target ${target}`;
+    comparison = `target ${target} for the week`;
     tone = count >= target ? 'good' : count >= target * 0.75 ? 'neutral' : 'watch';
     if (tone === 'good') cand.win = `You hit your ${target}-${plural(target, 'session')} target with ${count}.`;
     if (tone === 'watch') {
@@ -268,7 +271,7 @@ function sessionsCandidate(input: WeeklyReviewInput, week: Week, prevWeek: Week)
       cand.fix = `Schedule ${target} sessions now — you managed ${count} this week.`;
     }
   } else {
-    comparison = prev > 0 || count > 0 ? `${prev} last week` : null;
+    comparison = prev > 0 || count > 0 ? `${prev} last week` : 'for the week';
     if (count > prev && prev > 0) { tone = 'good'; cand.win = `${count} ${plural(count, 'session')}, up from ${prev} last week.`; }
     else if (count < prev) { tone = 'watch'; cand.slip = `${count} ${plural(count, 'session')}, down from ${prev} last week.`; cand.fix = `Get back to ${prev} sessions — put the first one on the calendar today.`; }
   }
@@ -289,7 +292,7 @@ function proteinCandidate(input: WeeklyReviewInput, week: Week): Candidate | nul
     stat: {
       label: 'Protein days hit',
       value: `${hit}/7`,
-      comparison: logged.length < 7 ? `${logged.length} ${plural(logged.length, 'day')} logged` : null,
+      comparison: logged.length < 7 ? `${logged.length} ${plural(logged.length, 'day')} logged` : 'across the week',
       tone,
     },
   };
@@ -301,15 +304,32 @@ function proteinCandidate(input: WeeklyReviewInput, week: Week): Candidate | nul
   return cand;
 }
 
+/**
+ * Best lift of the reviewed week (most sets). The headline number is the shared
+ * 4-week definition from lib/liftChange.ts ("vs 4 weeks ago": best e1RM of the
+ * reviewed + previous week vs the two weeks ending 4 weeks earlier) — the same
+ * number the Trends goal card and iOS Strength card show. When that lift has no
+ * 4-weeks-ago data the stat falls back to the clearly-labelled
+ * "vs last trained week" change instead of inventing one.
+ */
 function liftCandidate(input: WeeklyReviewInput, week: Week): Candidate | null {
-  let best: { exercise: string; sets: number; deltaKg: number } | null = null;
+  let best: { exercise: string; sets: number; deltaKg: number; windowLabel: string } | null = null;
   for (const [exercise, weeks] of Object.entries(input.progression)) {
     const cur = weeks.find(w => w.weekStart === week.days[0]);
     if (!cur || cur.bestEstimatedOneRepMaxKg == null) continue;
-    const earlier = weeks.filter(w => w.weekStart < week.days[0] && w.bestEstimatedOneRepMaxKg != null);
-    if (earlier.length === 0) continue;
-    const prev = earlier[earlier.length - 1].bestEstimatedOneRepMaxKg as number;
-    const cand = { exercise, sets: cur.totalSets, deltaKg: cur.bestEstimatedOneRepMaxKg - prev };
+    let deltaKg: number;
+    let windowLabel: string;
+    const c = liftChange4w(weeks, week.days[0]);
+    if (c) {
+      deltaKg = c.changeKg;
+      windowLabel = 'vs 4 weeks ago';
+    } else {
+      const earlier = weeks.filter(w => w.weekStart < week.days[0] && w.bestEstimatedOneRepMaxKg != null);
+      if (earlier.length === 0) continue;
+      deltaKg = cur.bestEstimatedOneRepMaxKg - (earlier[earlier.length - 1].bestEstimatedOneRepMaxKg as number);
+      windowLabel = 'vs last trained week';
+    }
+    const cand = { exercise, sets: cur.totalSets, deltaKg, windowLabel };
     if (!best || cand.sets > best.sets || (cand.sets === best.sets && cand.exercise < best.exercise)) best = cand;
   }
   if (!best) return null;
@@ -317,10 +337,10 @@ function liftCandidate(input: WeeklyReviewInput, week: Week): Candidate | null {
   const value = rounded === 0 ? weightText(input, 0) : signed(rounded, weightText(input, Math.abs(best.deltaKg)));
   const tone: ReviewTone = best.deltaKg > 0.05 ? 'good' : best.deltaKg < -0.05 ? 'watch' : 'neutral';
   const cand: Candidate = {
-    stat: { label: `${best.exercise} est. 1RM`, value, comparison: 'vs last trained week', tone },
+    stat: { label: `${best.exercise} est. 1RM`, value, comparison: best.windowLabel, tone },
   };
-  if (tone === 'good') cand.win = `${best.exercise} estimated 1RM is up ${weightText(input, Math.abs(best.deltaKg))}.`;
-  if (tone === 'watch') cand.slip = `${best.exercise} estimated 1RM slipped ${weightText(input, Math.abs(best.deltaKg))}.`;
+  if (tone === 'good') cand.win = `${best.exercise} estimated 1RM is up ${weightText(input, Math.abs(best.deltaKg))} ${best.windowLabel}.`;
+  if (tone === 'watch') cand.slip = `${best.exercise} estimated 1RM is down ${weightText(input, Math.abs(best.deltaKg))} ${best.windowLabel}.`;
   return cand;
 }
 
@@ -347,7 +367,7 @@ function volumeCandidate(input: WeeklyReviewInput, week: Week, prevWeek: Week): 
     if (pct >= 5) { tone = 'good'; cand.win = `Training volume is up ${pct}% on last week (${fmt(prevVal)} → ${fmt(curVal)}).`; }
     else if (pct <= -25) { tone = 'watch'; cand.slip = `Training volume fell ${Math.abs(pct)}% from last week (${fmt(prevVal)} → ${fmt(curVal)}).`; cand.fix = `Rebuild toward ${fmt(prevVal)} — add one easy session early in the week.`; }
   }
-  cand.stat.comparison = comparison;
+  cand.stat.comparison = comparison ?? 'for the week';
   cand.stat.tone = tone;
   return cand;
 }
@@ -367,7 +387,7 @@ function restingHrCandidate(input: WeeklyReviewInput, week: Week, prevWeek: Week
     if (diff <= -1) { tone = 'good'; cand.win = `Resting heart rate dropped ${Math.abs(diff)} bpm — a sign recovery is keeping up.`; }
     else if (diff >= 3) { tone = 'watch'; cand.slip = `Resting heart rate rose ${diff} bpm — your body may be carrying fatigue.`; cand.fix = 'Make one session an easy one — resting heart rate rose this week.'; }
   }
-  cand.stat.comparison = comparison;
+  cand.stat.comparison = comparison ?? 'week avg';
   cand.stat.tone = tone;
   return cand;
 }
@@ -383,7 +403,7 @@ function sleepAvgCandidate(input: WeeklyReviewInput, week: Week): Candidate | nu
   const goal = input.sleepGoalMinutes;
   const tone: ReviewTone = avg >= goal * SLEEP_GOAL_FRACTION ? 'good' : avg < goal * 0.8 ? 'watch' : 'neutral';
   const cand: Candidate = {
-    stat: { label: 'Avg sleep', value: fmtDuration(avg), comparison: `goal ${fmtDuration(goal)}`, tone },
+    stat: { label: 'Avg sleep', value: fmtDuration(avg), comparison: `week avg · goal ${fmtDuration(goal)}`, tone },
   };
   if (tone === 'good') cand.win = `You averaged ${fmtDuration(avg)} of sleep, close to your ${fmtDuration(goal)} goal.`;
   if (tone === 'watch') {
@@ -403,7 +423,7 @@ function sleepGoalNightsCandidate(input: WeeklyReviewInput, week: Week): Candida
     stat: {
       label: 'Sleep-goal nights',
       value: `${hit}/7`,
-      comparison: nights.length < 7 ? `${nights.length} ${plural(nights.length, 'night')} tracked` : null,
+      comparison: nights.length < 7 ? `${nights.length} ${plural(nights.length, 'night')} tracked` : 'across the week',
       tone,
     },
   };
@@ -419,7 +439,7 @@ function loggingDaysCandidate(input: WeeklyReviewInput, week: Week): Candidate |
   const logged = loggedIntake(input.intakeDays, week).length;
   if (logged === 0) return null;
   const tone: ReviewTone = logged >= 5 ? 'good' : logged <= 2 ? 'watch' : 'neutral';
-  const cand: Candidate = { stat: { label: 'Logging days', value: `${logged}/7`, comparison: null, tone } };
+  const cand: Candidate = { stat: { label: 'Logging days', value: `${logged}/7`, comparison: 'across the week', tone } };
   if (tone === 'good') cand.win = `You logged food on ${logged} of 7 days.`;
   if (tone === 'watch') {
     cand.slip = `You logged food on only ${logged} of 7 days.`;
@@ -492,7 +512,7 @@ function buildHeadline(input: WeeklyReviewInput, cands: Candidate[]): string {
   } else if (input.goal === 'muscle') {
     if (sessions) {
       parts.push(sessions.comparison?.startsWith('target ')
-        ? `${sessions.value} of ${sessions.comparison.slice(7)} sessions`
+        ? `${sessions.value} of ${sessions.comparison.split(' ')[1]} sessions`
         : `${sessions.value} ${plural(Number(sessions.value), 'session')}`);
     }
     const lift = cands.find(x => x.stat.label.endsWith('est. 1RM'))?.stat;
@@ -523,10 +543,45 @@ function weekendSlip(input: WeeklyReviewInput, week: Week): string | null {
   return gap != null && gap >= WEEKEND_GAP_MIN_KCAL ? `Weekends ran +${fmtKcal(gap)} kcal over your weekdays.` : null;
 }
 
+/** Minimum relative HRV drop vs the week before that counts as "below normal". */
+const HRV_DROP_FRACTION = 0.1;
+/** Resting HR rise (bpm) vs the week before that counts as elevated (same as the resting-HR slip). */
+const RHR_RISE_BPM = 3;
+/** Sleep average under this fraction of goal counts as short. */
+const SHORT_SLEEP_FRACTION = 0.85;
+
+/** Plain-language recovery warnings for the reviewed week; empty when signals are missing or fine. */
+function recoveryFlags(input: WeeklyReviewInput, week: Week): string[] {
+  const prevWeek = makeWeek(addDays(week.days[0], -7));
+  const flags: string[] = [];
+  const pick = (series: DayValue[] | undefined, w: Week) => (series ?? []).filter(p => w.set.has(p.day)).map(p => p.value);
+
+  const hrvCur = pick(input.hrv, week);
+  const hrvPrev = pick(input.hrv, prevWeek);
+  if (hrvCur.length >= MIN_HR_DAYS && hrvPrev.length >= MIN_HR_DAYS) {
+    const prevAvg = mean(hrvPrev) as number;
+    if (prevAvg > 0 && ((mean(hrvCur) as number) - prevAvg) / prevAvg <= -HRV_DROP_FRACTION) flags.push('HRV ran below your normal');
+  }
+  const nights = sleepNights(input, week);
+  if (nights.length >= MIN_SLEEP_NIGHTS && (mean(nights) as number) < input.sleepGoalMinutes * SHORT_SLEEP_FRACTION) {
+    flags.push('sleep averaged short');
+  }
+  const rhrCur = pick(input.restingHr, week);
+  const rhrPrev = pick(input.restingHr, prevWeek);
+  if (rhrCur.length >= MIN_HR_DAYS && rhrPrev.length >= MIN_HR_DAYS && (mean(rhrCur) as number) - (mean(rhrPrev) as number) >= RHR_RISE_BPM) {
+    flags.push('resting heart rate rose');
+  }
+  return flags;
+}
+
 function buildNextWeek(input: WeeklyReviewInput, cands: Candidate[], week: Week): string {
   const gap = input.goal === 'weight_loss' || input.goal === 'muscle' ? weekendGap(input, week) : null;
   if (gap != null && gap >= WEEKEND_GAP_MIN_KCAL) {
     return `Plan Saturday's dinner — weekends ran +${fmtKcal(gap)} kcal over weekdays.`;
+  }
+  const recovery = recoveryFlags(input, week);
+  if (recovery.length >= 2) {
+    return `Go lighter next week and put sleep first — ${(recovery.length === 2 ? recovery.join(' and ') : `${recovery.slice(0, -1).join(', ')} and ${recovery[recovery.length - 1]}`)}.`;
   }
   const fix = cands.find(x => x.stat.tone === 'watch' && x.fix)?.fix;
   if (fix) return fix;

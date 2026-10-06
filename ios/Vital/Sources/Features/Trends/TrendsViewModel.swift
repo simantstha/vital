@@ -196,7 +196,38 @@ final class TrendsViewModel: ObservableObject {
                 return nil
             }
         }
-        headlineStatus = TrendsHeadline.status(verdicts: verdicts, goodCount: goodCount, watchCount: allMoved.count - goodCount, period: period)
+        headlineVerdicts = verdicts
+        headlineGoodCount = goodCount
+        headlineWatchCount = allMoved.count - goodCount
+        weightMetricMoved = allMoved.contains { $0.key == "body_mass_kg" }
+        refreshHeadline()
+    }
+
+    // Inputs `refreshHeadline()` combines, kept so the headline can be
+    // re-derived when the weight log or strength summary arrives after the grid.
+    private var headlineVerdicts: [Verdict] = []
+    private var headlineGoodCount = 0
+    private var headlineWatchCount = 0
+    private var weightMetricMoved = false
+
+    /// Headline = metric-tile moves + goal-relevant moves (weight trend for
+    /// weight_loss, strength lifts), so it never claims "nothing moved" next
+    /// to a visible +kg lift or weight change.
+    private func refreshHeadline() {
+        let strength = workoutSummary.flatMap { TrendsStrengthLogic.card(from: $0, system: .metric, today: Date()) }
+        let goalMoves = TrendsHeadline.GoalMoves.make(
+            goal: goal,
+            weightTrend: weightLog?.trend,
+            strength: strength,
+            weightAlreadyCounted: weightMetricMoved
+        )
+        headlineStatus = TrendsHeadline.status(
+            verdicts: headlineVerdicts,
+            goodCount: headlineGoodCount,
+            watchCount: headlineWatchCount,
+            period: period,
+            goalMoves: goalMoves
+        )
     }
 
     /// Converts one batch series DTO into a display-ready `MetricSeries`:
@@ -293,6 +324,7 @@ final class TrendsViewModel: ObservableObject {
         withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) {
             weightLog = fresh
         }
+        refreshHeadline()
     }
 
     // MARK: - Load (goal progress — fail-soft)
@@ -326,6 +358,7 @@ final class TrendsViewModel: ObservableObject {
             withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) {
                 workoutSummary = fresh
             }
+            refreshHeadline()
         } catch {
             if !error.isCancellation {
                 print("[Vital] fetchWorkoutSummary failed: \(error.localizedDescription)")
