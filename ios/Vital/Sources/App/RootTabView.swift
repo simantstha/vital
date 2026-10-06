@@ -71,7 +71,7 @@ struct RootTabView: View {
         .tint(Theme.Colors.accentContent)
         .onReceive(NotificationCenter.default.publisher(for: .vitalOpenGoalEditor)) { _ in
             goalEditorRequest += 1
-            selected = .profile
+            withAnimation(Theme.Motion.standard) { selected = .profile }
         }
         // Spec §3.2, V5: "app backgrounded > 10 s" ends conversation mode —
         // wired here rather than `CoachView`/`VoiceFABView` since this is
@@ -85,11 +85,6 @@ struct RootTabView: View {
             } else if newPhase == .background {
                 coachVM.voiceController.appDidEnterBackground()
             }
-        }
-        // "Set target" on Trends' goal-progress card (`.vitalOpenGoalEditor`) —
-        // Goal editing lives under Profile, so land there.
-        .onReceive(NotificationCenter.default.publisher(for: .vitalOpenGoalEditor)) { _ in
-            withAnimation(Theme.Motion.standard) { selected = .profile }
         }
         .onChange(of: router.coachContext) { _, value in
             if let value {
