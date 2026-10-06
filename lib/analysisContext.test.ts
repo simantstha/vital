@@ -104,6 +104,14 @@ test('computePaceHistory: rank 1 = fastest among previous + this one', () => {
   assert.deepEqual(history, { previous: [6.2, 6.0, 6.5], rank: 1 });
 });
 
+test('computePaceHistory: rank counts strictly faster runs (lower min/km), so rank and a slow-end dot agree', () => {
+  // 5.85 min/km with four faster (lower) earlier runs -> 5th fastest of 8, not 8th.
+  const history = computePaceHistory([5.6, 5.95, 5.7, 6.05, 5.8, 5.9, 5.65], 5.85);
+  assert.equal(history?.rank, 5);
+  // Slower than every previous run -> last place.
+  assert.equal(computePaceHistory([5.0, 5.1, 5.2], 6.0)?.rank, 4);
+});
+
 test('computePaceHistory: ranks a slower run correctly and keeps oldest->newest order', () => {
   const history = computePaceHistory([5.0, 5.2, 5.1], 6.0); // this run is slowest
   assert.deepEqual(history, { previous: [5.0, 5.2, 5.1], rank: 4 });

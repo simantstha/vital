@@ -105,6 +105,132 @@ final class FixtureCrossScreenConsistencyTests: XCTestCase {
                        "the run ends when the sleep analysis says it did (9:40 PM)")
     }
 
+    // MARK: - Endurance RHR / HRV / sleep agreement
+
+    private func statValue(_ review: [String: Any], _ label: String) -> [String: Any]? {
+        let stats = (review["review"] as? [String: Any])?["stats"] as? [[String: Any]]
+        return stats?.first { ($0["label"] as? String) == label }
+    }
+
+    func test_enduranceRestingHRAgreesAcrossTodayTrendsAndWeeklyReview() {
+        let rhr = todayMetric(.endurance, "restingHr")
+        XCTAssertEqual(rhr, 54, accuracy: 0.01)
+        XCTAssertEqual(latestBatchPoint(.endurance, "resting_hr"), rhr, accuracy: 0.01)
+
+        let review = json(.endurance, "/api/review/weekly")
+        let stat = statValue(review, "Resting HR")
+        XCTAssertEqual(stat?["value"] as? String, "54 bpm")
+        // Weekly review quotes the same gap-to-normal Trends shows (54 vs normal).
+        let series = (json(.endurance, "/api/trends", "metrics=resting_hr&days=30")["series"] as? [String: Any])?["resting_hr"] as? [String: Any]
+        let mean = ((series?["baseline"] as? [String: Any])?["mean30"] as? Double) ?? .nan
+        let gap = Int((rhr - mean).rounded())
+        XCTAssertGreaterThan(gap, 0, "RHR is above normal, never a green improvement")
+        XCTAssertEqual(stat?["comparison"] as? String, "+\(gap) bpm vs your normal")
+        XCTAssertEqual(stat?["tone"] as? String, "watch")
+    }
+
+    func test_enduranceHRVAgreesAcrossTodayTrendsAndGoalProgress() throws {
+        let hrv = todayMetric(.endurance, "hrv")
+        XCTAssertEqual(hrv, 51, accuracy: 0.01)
+        XCTAssertEqual(latestBatchPoint(.endurance, "hrv_sdnn"), hrv, accuracy: 0.01)
+
+        let series = (json(.endurance, "/api/trends", "metrics=hrv_sdnn&days=30")["series"] as? [String: Any])?["hrv_sdnn"] as? [String: Any]
+        let mean = ((series?["baseline"] as? [String: Any])?["mean30"] as? Double) ?? .nan
+        let (_, data) = FixtureData.response(scenario: .endurance, method: "GET", path: "/api/goal/progress", query: "")
+        let progress = try JSONDecoder().decode(GoalProgressDTO.self, from: data)
+        let text = progress.reasons.first { $0.text.contains("HRV") }?.text ?? ""
+        XCTAssertTrue(text.contains("\(Int(hrv.rounded())) vs \(Int(mean.rounded())) ms"), "goal progress HRV reason: \(text)")
+        XCTAssertFalse(text.contains("59"), "old hand-typed HRV numbers are gone")
+    }
+
+    func test_enduranceSleepAgreesAcrossTrendsWeeklyReviewAndCoach() {
+        let points = ((json(.endurance, "/api/trends", "metrics=sleep_minutes&days=7")["series"] as? [String: Any])?["sleep_minutes"] as? [String: Any])?["points"] as? [[String: Any]] ?? []
+        let week = points.suffix(7).compactMap { ($0["value"] as? Double).map { $0 * 60 } }
+        XCTAssertEqual(week.count, 7)
+        let avg = Int((week.reduce(0, +) / 7).rounded())
+        let under6 = week.filter { $0 < 360 }.count
+        let avgText = "\(avg / 60)h \(avg % 60)m"
+
+        let review = json(.endurance, "/api/review/weekly")
+        let stat = statValue(review, "Avg sleep")
+        XCTAssertEqual(stat?["value"] as? String, avgText)
+        XCTAssertTrue((stat?["comparison"] as? String ?? "").hasPrefix("\(under6) nights under 6h"))
+
+        let messages = json(.endurance, "/api/coach")["messages"] as? [[String: Any]] ?? []
+        let answer = messages.compactMap { $0["content"] as? String }.first { $0.hasPrefix("Mostly sleep") } ?? ""
+        XCTAssertTrue(answer.contains("averaged \(avgText) this week"), answer)
+        XCTAssertTrue(answer.contains("\(under6) of the last 7 nights under 6 hours"), answer)
+    }
+
+    func test_coachOpenerIsScenarioAppropriate() {
+        var openers: Set<String> = []
+        for scenario in scenarios + [.newUser] {
+            let text = json(scenario, "/api/coach/opener")["text"] as? String ?? ""
+            XCTAssertFalse(text.isEmpty, "\(scenario)")
+            openers.insert(text)
+        }
+        XCTAssertEqual(openers.count, 4, "each persona gets its own opener")
+        let endurance = json(.endurance, "/api/coach/opener")["text"] as? String ?? ""
+        XCTAssertFalse(endurance.contains("Nice work staying consistent"))
+    }
+
+    // MARK: - New user calibration counters
+
+    func test_newUserCalibrationCountersShareOneDayCount() {
+        let today = json(.newUser, "/api/today")
+        let calMetrics = (today["calibration"] as? [String: Any])?["metrics"] as? [String: [String: Any]] ?? [:]
+        let todayDays = ["hrv_sdnn", "resting_hr", "sleep_minutes"].compactMap { calMetrics[$0]?["dataDays"] as? Int }
+        XCTAssertEqual(todayDays.count, 3)
+
+        let batch = json(.newUser, "/api/trends", "metrics=sleep_minutes&days=30")
+        let series = (batch["series"] as? [String: Any])?["sleep_minutes"] as? [String: Any]
+        let trendsDays = series?["dataDays"] as? Int
+        XCTAssertEqual(Set(todayDays), [trendsDays ?? -1], "Today card and Trends ring read the same day count")
+        XCTAssertEqual((series?["points"] as? [[String: Any]])?.count, trendsDays, "no more sleep bars than days of data")
+        XCTAssertEqual(json(.newUser, "/api/streak")["streakDays"] as? Int, trendsDays, "streak can't exceed days of data")
+    }
+
+    // MARK: - Run analysis pace rank
+
+    func test_paceRankAndStripShareSortDirection() {
+        let previous = [5.60, 5.95, 5.70, 6.05, 5.80, 5.90, 5.65]
+        // 5.85: four earlier runs were faster -> 5th fastest of 8.
+        XCTAssertEqual(AnalysisLogic.paceRank(previous: previous, current: 5.85), 5)
+        XCTAssertEqual(AnalysisLogic.paceRank(previous: previous, current: 5.0), 1)
+        XCTAssertEqual(AnalysisLogic.paceRank(previous: previous, current: 7.0), 8)
+        XCTAssertEqual(AnalysisLogic.paceRank(previous: [5.5, 5.5, 5.5], current: 5.5), 1, "ties share the better rank")
+
+        // Rank 1 (fastest) is the right-most dot; rank = total is the left-most.
+        let all = previous + [5.85]
+        let lo = all.min()!, hi = all.max()!
+        let fastest = AnalysisLogic.paceStripFraction(pace: lo, minPace: lo, maxPace: hi)
+        let slowest = AnalysisLogic.paceStripFraction(pace: hi, minPace: lo, maxPace: hi)
+        XCTAssertEqual(fastest, 1)
+        XCTAssertEqual(slowest, 0)
+        // More faster runs than slower ones in the fixture => dot sits left of centre... verify monotonic with rank.
+        let mid = AnalysisLogic.paceStripFraction(pace: 5.85, minPace: lo, maxPace: hi)
+        XCTAssertTrue(mid > slowest && mid < fastest)
+    }
+
+    func test_routineRunFixtureRankMatchesItsPaces() {
+        let analysis = json(.weightLoss, "/api/workout-analyses/fixture-workout-analysis-routine")
+        let pace = ((analysis["metrics"] as? [String: Any])?["paceMinPerKm"] as? Double) ?? .nan
+        let history = (analysis["context"] as? [String: Any])?["paceHistory"] as? [String: Any]
+        let previous = history?["previous"] as? [Double] ?? []
+        XCTAssertEqual(history?["rank"] as? Int, AnalysisLogic.paceRank(previous: previous, current: pace))
+        XCTAssertEqual(AnalysisLogic.paceRankPhrase(rank: history?["rank"] as? Int ?? 0, previousCount: previous.count),
+                       "5th fastest of your last 8 runs.")
+    }
+
+    func test_weeklyReviewUnseenDotIsNeutralWithoutARealReview() {
+        let thin = WeeklyReviewDTO(weekStart: "2026-09-28", weekEnd: "2026-10-04", verdict: .insufficientData, headline: "x", sufficient: false)
+        let needs = WeeklyReviewDTO(weekStart: "2026-09-28", weekEnd: "2026-10-04", verdict: .needsTarget, headline: "x", sufficient: true)
+        let real = WeeklyReviewDTO(weekStart: "2026-09-28", weekEnd: "2026-10-04", verdict: .onTrack, headline: "x", sufficient: true)
+        XCTAssertTrue(WeeklyReviewRow.unseenDotIsNeutral(thin))
+        XCTAssertTrue(WeeklyReviewRow.unseenDotIsNeutral(needs))
+        XCTAssertFalse(WeeklyReviewRow.unseenDotIsNeutral(real))
+    }
+
     func test_goalProgressFixturesDecode() throws {
         let expectations: [(FixtureMode.Scenario, GoalVerdict)] = [
             (.weightLoss, .onTrack), (.muscle, .progressing), (.endurance, .building), (.newUser, .needsTarget),

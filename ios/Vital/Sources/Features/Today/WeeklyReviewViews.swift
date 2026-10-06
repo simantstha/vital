@@ -183,6 +183,12 @@ struct WeeklyReviewRow: View {
     let response: WeeklyReviewResponse
     var onTap: () -> Void
 
+    /// True for reviews with nothing substantive to celebrate (not enough
+    /// data, or no target set) — the unseen dot renders grey for those.
+    static func unseenDotIsNeutral(_ review: WeeklyReviewDTO) -> Bool {
+        !review.sufficient || review.verdict == .insufficientData || review.verdict == .needsTarget
+    }
+
     var body: some View {
         Button(action: onTap) {
             VitalCard(padding: Theme.Spacing.lg, cornerRadius: Theme.Radius.lg) {
@@ -203,7 +209,13 @@ struct WeeklyReviewRow: View {
                     }
                     Spacer(minLength: Theme.Spacing.sm)
                     if !response.isSeen {
-                        Circle().fill(Theme.Colors.accent).frame(width: 8, height: 8)
+                        // Green "new" dot only when there is a real review to
+                        // read; an insufficient-data / needs-target nudge gets
+                        // a neutral grey dot so it never reads as good news.
+                        Circle()
+                            .fill(WeeklyReviewRow.unseenDotIsNeutral(response.review)
+                                  ? Theme.Colors.textTertiary : Theme.Colors.accent)
+                            .frame(width: 8, height: 8)
                             .accessibilityHidden(true)
                     }
                     Image(systemName: "chevron.right")

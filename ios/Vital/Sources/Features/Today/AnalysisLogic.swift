@@ -74,6 +74,21 @@ enum AnalysisLogic {
 
     // MARK: - Pace history strip
 
+    /// 1 = fastest (lowest min/km) among `previous + [current]`; ties share the
+    /// better rank. Same rule as lib/analysisContext.ts `computePaceHistory`.
+    static func paceRank(previous: [Double], current: Double) -> Int {
+        previous.filter { $0 < current }.count + 1
+    }
+
+    /// Horizontal position (0 = left/slowest, 1 = right/fastest) of `pace` on
+    /// the "Compared to your last N runs" strip. Faster (lower min/km) is on
+    /// the right — the SAME direction `paceRank` counts, so rank 1 is always
+    /// the right-most dot. Returns 0.5 when every pace is identical.
+    static func paceStripFraction(pace: Double, minPace: Double, maxPace: Double) -> Double {
+        guard maxPace > minPace else { return 0.5 }
+        return (maxPace - pace) / (maxPace - minPace)
+    }
+
     /// "Compared to your last N runs" caption, from `paceHistory.rank`
     /// (1 = fastest) among `previous.count + 1` total runs (the previous
     /// runs plus this one).

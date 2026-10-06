@@ -1066,7 +1066,7 @@ private struct PaceHistoryStrip: View {
         }
         let usableWidth = size.width - 20
         func x(for pace: Double) -> CGFloat {
-            let fraction = (maxPace - pace) / (maxPace - minPace)
+            let fraction = AnalysisLogic.paceStripFraction(pace: pace, minPace: minPace, maxPace: maxPace)
             return 10 + CGFloat(fraction) * usableWidth
         }
         return AnyView(
