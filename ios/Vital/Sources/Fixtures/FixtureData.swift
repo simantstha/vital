@@ -1036,7 +1036,7 @@ enum FixtureData {
             // Everyone else: an easy morning run (routine analysis).
             let isLateRun = scenario == .endurance
             let workoutAnalysisId = isLateRun ? "fixture-workout-analysis" : "fixture-workout-analysis-routine"
-            let workoutTitle = isLateRun ? "Late tempo run" : "Easy 6k"
+            let workoutTitle = isLateRun ? "10km tempo run" : "Easy 6k"
             let workoutKm = isLateRun ? 10.2 : 6.1
             // Matches the corresponding analysis fixture's own `startTime`
             // (routineRunAnalysis / notableRunAnalysis below).

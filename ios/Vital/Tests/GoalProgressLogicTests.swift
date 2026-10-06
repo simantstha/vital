@@ -108,7 +108,22 @@ final class GoalProgressLogicTests: XCTestCase {
             goal: "muscle", verdict: .progressing,
             headline: "Progressing — Squat estimated 1RM up 8.3 kg"
         )
-        XCTAssertEqual(GoalProgressLogic.primaryLine(progress, system: .imperial), "Progressing — Squat estimated 1RM up 8.3 kg")
+        XCTAssertEqual(GoalProgressLogic.primaryLine(progress, system: .imperial), "Squat estimated 1RM up 8.3 kg")
+    }
+
+    func testHeadlineWithoutVerdictStripsLeadingVerdictAndDash() {
+        XCTAssertEqual(GoalProgressLogic.headlineWithoutVerdict("Building — weekly distance up 12% over 4 weeks"), "weekly distance up 12% over 4 weeks")
+        XCTAssertEqual(GoalProgressLogic.headlineWithoutVerdict("On track — about 6 kg to go"), "about 6 kg to go")
+        XCTAssertEqual(GoalProgressLogic.headlineWithoutVerdict("progressing – Squat up"), "Squat up")
+        XCTAssertEqual(GoalProgressLogic.headlineWithoutVerdict("Building - Squat up"), "Squat up")
+        XCTAssertEqual(GoalProgressLogic.headlineWithoutVerdict("Ahead of pace — 2 kg to go"), "2 kg to go")
+    }
+
+    func testHeadlineWithoutVerdictLeavesOtherTextAlone() {
+        XCTAssertEqual(GoalProgressLogic.headlineWithoutVerdict("Building muscle takes time"), "Building muscle takes time")
+        XCTAssertEqual(GoalProgressLogic.headlineWithoutVerdict("Set a weekly session goal to track your training"), "Set a weekly session goal to track your training")
+        XCTAssertEqual(GoalProgressLogic.headlineWithoutVerdict("Stalled —"), "Stalled —")
+        XCTAssertNil(GoalProgressLogic.headlineWithoutVerdict("   "))
     }
 
     func testNeedsTargetPromptForWeightGoal() {

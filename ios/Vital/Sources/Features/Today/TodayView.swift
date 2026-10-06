@@ -149,20 +149,24 @@ struct TodayView: View {
                                 .transition(.opacity)
                             }
 
-                            // Weekly review (v5 Wave 3): the "how did your week go"
-                            // moment, Mon-Wed while unseen, below the goal hero /
-                            // progress line. "Got it" marks it seen.
-                            if WeeklyReviewLogic.shouldShowCard(
-                                weeklyReviewStore.latest,
-                                now: AppClock.now,
-                                ignoreWindow: WeeklyReviewLogic.windowBypassedForFixtures
-                            ), let review = weeklyReviewStore.latest {
-                                WeeklyReviewCard(
-                                    response: review,
-                                    onOpen: { showWeeklyReview = true },
-                                    onGotIt: { weeklyReviewStore.markSeen() }
+                            // FuelStripView is hidden for weight_loss — the
+                            // hero above already covers calories (§4).
+                            if !vm.isWeightLossGoal {
+                                FuelStripView(
+                                    kcalRemaining: vm.diet.kcalRemaining,
+                                    proteinHave: vm.diet.protein.current,
+                                    proteinGoal: vm.diet.protein.target,
+                                    // The muscle hero already shows a protein
+                                    // have/goal line + bar above this strip —
+                                    // don't repeat it (coaching review,
+                                    // 2026-09-23). Endurance's hero doesn't
+                                    // show protein, so it keeps this one.
+                                    showsProtein: !vm.isMuscleGoal,
+                                    consumedSource: vm.diet.consumedSource,
+                                    consumedSourceName: vm.diet.consumedSourceName,
+                                    onOpen: { showLogSheet = true }
                                 )
-                                .transition(.opacity)
+                                .staggeredAppear(index: 4)
                             }
 
                             // "Next up" replaces the full plan list for every
@@ -182,6 +186,24 @@ struct TodayView: View {
                                     onSeeFullPlan: { showFullPlan = true }
                                 )
                                 .staggeredAppear(index: 2)
+                            }
+
+                            // Weekly review (v5 Wave 3): the "how did your week go"
+                            // moment, Mon-Wed while unseen. Compact card, placed
+                            // below the fuel strip / next-up row so the daily
+                            // essentials stay above the fold; the full report
+                            // lives in the detail sheet.
+                            if WeeklyReviewLogic.shouldShowCard(
+                                weeklyReviewStore.latest,
+                                now: AppClock.now,
+                                ignoreWindow: WeeklyReviewLogic.windowBypassedForFixtures
+                            ), let review = weeklyReviewStore.latest {
+                                WeeklyReviewCard(
+                                    response: review,
+                                    onOpen: { showWeeklyReview = true },
+                                    onGotIt: { weeklyReviewStore.markSeen() }
+                                )
+                                .transition(.opacity)
                             }
 
                             pendingFactsBanner
@@ -211,27 +233,9 @@ struct TodayView: View {
                                     .staggeredAppear(index: 3)
                             }
 
-                            // FuelStripView is hidden for weight_loss — the
-                            // hero above already covers calories (§4).
+                            // Weight hero is weight-loss only; every other
+                            // goal still gets a way to log a weigh-in.
                             if !vm.isWeightLossGoal {
-                                FuelStripView(
-                                    kcalRemaining: vm.diet.kcalRemaining,
-                                    proteinHave: vm.diet.protein.current,
-                                    proteinGoal: vm.diet.protein.target,
-                                    // The muscle hero already shows a protein
-                                    // have/goal line + bar above this strip —
-                                    // don't repeat it (coaching review,
-                                    // 2026-09-23). Endurance's hero doesn't
-                                    // show protein, so it keeps this one.
-                                    showsProtein: !vm.isMuscleGoal,
-                                    consumedSource: vm.diet.consumedSource,
-                                    consumedSourceName: vm.diet.consumedSourceName,
-                                    onOpen: { showLogSheet = true }
-                                )
-                                .staggeredAppear(index: 4)
-
-                                // Weight hero is weight-loss only; every other
-                                // goal still gets a way to log a weigh-in.
                                 weighInRow
                             }
                             if let warning = vm.diet.lowEnergyWarning {

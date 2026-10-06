@@ -7,6 +7,10 @@ import SwiftUI
 struct WeeklyReviewContent: View {
     let review: WeeklyReviewDTO
     var headlineSize: CGFloat = 20
+    /// Compact (Today card): label + range + verdict chip and a headline capped
+    /// at 2 lines. The stats grid and win / slip / next rows only render in the
+    /// full variant (the detail sheet).
+    var compact = false
 
     private let columns = [
         GridItem(.flexible(), spacing: Theme.Spacing.md),
@@ -34,11 +38,12 @@ struct WeeklyReviewContent: View {
             Text(review.headline)
                 .font(.system(size: headlineSize, weight: .bold, design: .rounded))
                 .foregroundStyle(Theme.Colors.textPrimary)
+                .lineLimit(compact ? 2 : nil)
                 .fixedSize(horizontal: false, vertical: true)
                 .multilineTextAlignment(.leading)
                 .accessibilityIdentifier("weeklyReview.headline")
 
-            if !WeeklyReviewLogic.isNotEnoughData(review) {
+            if !compact, !WeeklyReviewLogic.isNotEnoughData(review) {
                 LazyVGrid(columns: columns, alignment: .leading, spacing: Theme.Spacing.md) {
                     ForEach(review.stats) { stat in
                         WeeklyReviewStatTile(stat: stat)
@@ -47,7 +52,7 @@ struct WeeklyReviewContent: View {
                 .accessibilityIdentifier("weeklyReview.stats")
             }
 
-            let rows = WeeklyReviewLogic.rows(review)
+            let rows = compact ? [] : WeeklyReviewLogic.rows(review)
             if !rows.isEmpty {
                 VStack(alignment: .leading, spacing: Theme.Spacing.md) {
                     ForEach(rows) { row in
@@ -120,9 +125,11 @@ private struct WeeklyReviewRowView: View {
 
 // MARK: - Today card
 
-/// Unseen-review card on Today (Mon-Wed), below the goal hero / progress
-/// line. Tapping the body opens the detail sheet; "Got it" marks the review
-/// seen (`onGotIt`) and hides the card.
+/// Unseen-review card on Today (Mon-Wed), below the fuel strip / next-up
+/// row. Compact on purpose: label + range + verdict chip and the headline.
+/// "See your week" opens the full detail sheet (stats + win / slip / next);
+/// "Got it" marks the review seen (`onGotIt`) and hides the card. Both buttons
+/// sit on the leading side so Today's trailing voice FAB never covers them.
 struct WeeklyReviewCard: View {
     let response: WeeklyReviewResponse
     var onOpen: () -> Void
@@ -131,26 +138,36 @@ struct WeeklyReviewCard: View {
     var body: some View {
         VitalCard(padding: Theme.Spacing.lg, cornerRadius: Theme.Radius.lg) {
             VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-                Button(action: onOpen) {
-                    WeeklyReviewContent(review: response.review)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.pressableCard)
-                .accessibilityHint("Opens your weekly review")
-                .accessibilityIdentifier("weeklyReview.open")
+                WeeklyReviewContent(review: response.review, compact: true)
 
-                HStack {
-                    Spacer()
+                HStack(spacing: Theme.Spacing.sm) {
+                    Button(action: onOpen) {
+                        HStack(spacing: Theme.Spacing.xs) {
+                            Text("See your week")
+                                .font(.system(size: 14, weight: .semibold))
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 11, weight: .semibold))
+                        }
+                        .foregroundStyle(Theme.Colors.accentContent)
+                        .padding(.horizontal, Theme.Spacing.lg)
+                        .padding(.vertical, Theme.Spacing.sm)
+                        .background(Capsule().fill(Theme.Colors.accentSoft))
+                    }
+                    .buttonStyle(.vital(scale: 0.96))
+                    .accessibilityHint("Opens your weekly review")
+                    .accessibilityIdentifier("weeklyReview.open")
+
                     Button(action: onGotIt) {
                         Text("Got it")
                             .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(Theme.Colors.accentContent)
+                            .foregroundStyle(Theme.Colors.textSecondary)
                             .padding(.horizontal, Theme.Spacing.lg)
                             .padding(.vertical, Theme.Spacing.sm)
-                            .background(Capsule().fill(Theme.Colors.accentSoft))
                     }
                     .buttonStyle(.vital(scale: 0.96))
                     .accessibilityIdentifier("weeklyReview.gotIt")
+
+                    Spacer(minLength: 0)
                 }
             }
         }

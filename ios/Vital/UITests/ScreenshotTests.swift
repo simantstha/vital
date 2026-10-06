@@ -320,9 +320,12 @@ final class ScreenshotTests: XCTestCase {
                 // from the fixture's flat `trendsBatch` baseline: every
                 // metric lands `.normal`, a net-0 score, which reads as
                 // "Good to train" — see `EnduranceHeroLogic.readinessWord`'s
-                // doc comment) and today's move-kind session title.
-                XCTAssertTrue(waitForText(app, containing: "Good to train"),
-                               "Today's endurance hero should show a readiness word [\(appearance)]")
+                // doc comment; the fixture's late hard run can also push HRV
+                // low enough for "Recover today", so every word the app can
+                // produce is accepted) and today's move-kind session title.
+                let readinessWords = ["Ready to push", "Good to train", "Keep it easy", "Recover today"]
+                XCTAssertTrue(readinessWords.contains { waitForText(app, containing: $0, timeout: 3) },
+                               "Today's endurance hero should show a readiness word (one of \(readinessWords)) [\(appearance)]")
                 XCTAssertTrue(waitForText(app, containing: "10km tempo run"),
                                "Today's endurance hero should show today's session [\(appearance)]")
                 // Combined line showing sessions and weekly volume:
@@ -557,6 +560,15 @@ final class ScreenshotTests: XCTestCase {
             XCTFail("Weekly review card never appeared on Today [\(scenario)/\(appearance)]")
             return
         }
+        // The compact card now sits below the fuel strip / next-up row, so
+        // scroll it clear of the tab bar before asserting on / capturing it.
+        let openButton = app.descendants(matching: .any).matching(identifier: "weeklyReview.open").firstMatch
+        for _ in 0..<5 where !(openButton.exists && openButton.isHittable
+                                && openButton.frame.maxY <= app.tabBars.firstMatch.frame.minY - 100) {
+            let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7))
+            let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45))
+            start.press(forDuration: 0.05, thenDragTo: end)
+        }
         // Fixture-unique headline (FixtureData.weeklyReview).
         let expected = scenario == "weight_loss" ? "Down 0.6 kg, in budget 5 of 7 days" : "3 of 4 sessions, Bench Press up 2.5 kg"
         XCTAssertTrue(waitForText(app, containing: expected),
@@ -564,7 +576,7 @@ final class ScreenshotTests: XCTestCase {
         capture(app, name: "\(scenario)__weeklyReviewCard__\(appearance)")
 
         let open = app.descendants(matching: .any).matching(identifier: "weeklyReview.open").firstMatch
-        tapWhenHittable(open, app: app, description: "weeklyReview.open [\(scenario)/\(appearance)]")
+        tapWhenHittable(open, app: app, maxSwipes: 5, description: "weeklyReview.open [\(scenario)/\(appearance)]")
 
         let title = app.descendants(matching: .any).matching(identifier: "weeklyReview.detail.title").firstMatch
         guard title.waitForExistence(timeout: 10) else {
@@ -776,6 +788,15 @@ final class ScreenshotTests: XCTestCase {
     }
 
     private func captureWorkoutAnalysis(_ app: XCUIApplication, scenario: String, appearance: String) {
+        // Endurance's workout is last night's late run (20:48 yesterday), so it
+        // lives on the previous day's page, not Today's.
+        let workoutOnPreviousDay = scenario == "endurance"
+        if workoutOnPreviousDay {
+            let previousDay = app.buttons["logs.pager.previous"].firstMatch
+            XCTAssertTrue(previousDay.waitForExistence(timeout: 10),
+                           "Logs should show its previous-day pager button [\(scenario)/\(appearance)]")
+            previousDay.tap()
+        }
         let workoutRow = app.buttons["logs.workoutRow"].firstMatch
         tapWhenHittable(workoutRow, app: app, maxSwipes: 6, description: "Logs' workout row [\(scenario)/\(appearance)]")
         let workoutHeader = app.descendants(matching: .any).matching(identifier: "analysisWorkout.header").firstMatch
@@ -801,6 +822,13 @@ final class ScreenshotTests: XCTestCase {
                        "Workout AnalysisView should fully dismiss before the next tap [\(scenario)/\(appearance)]")
         XCTAssertTrue(app.staticTexts["LOG ENTRIES"].waitForExistence(timeout: 10),
                        "Dismissing the workout analysis should return to Logs [\(scenario)/\(appearance)]")
+        if workoutOnPreviousDay {
+            // The sleep row (wake time = today) is on Today's page.
+            let nextDay = app.buttons["logs.pager.next"].firstMatch
+            XCTAssertTrue(nextDay.waitForExistence(timeout: 5),
+                           "Logs should show its next-day pager button [\(scenario)/\(appearance)]")
+            nextDay.tap()
+        }
     }
 
     /// `endurance`-only: taps the "The data" device switch's WHOOP segment

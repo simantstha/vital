@@ -183,6 +183,8 @@ private extension LogsView {
             pagerButton(systemName: "chevron.left", enabled: vm.selectedIndex < vm.days.count - 1) {
                 vm.selectDay(vm.selectedIndex + 1)
             }
+            .accessibilityLabel("Previous day")
+            .accessibilityIdentifier("logs.pager.previous")
 
             Spacer()
 
@@ -201,6 +203,8 @@ private extension LogsView {
             pagerButton(systemName: "chevron.right", enabled: vm.selectedIndex > 0) {
                 vm.selectDay(vm.selectedIndex - 1)
             }
+            .accessibilityLabel("Next day")
+            .accessibilityIdentifier("logs.pager.next")
         }
         .padding(.horizontal, Theme.Spacing.xl)
         .padding(.bottom, Theme.Spacing.lg)

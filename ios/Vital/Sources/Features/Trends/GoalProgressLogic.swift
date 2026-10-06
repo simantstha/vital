@@ -198,12 +198,39 @@ enum GoalProgressLogic {
         if let text = insufficientDataText(progress) { return text }
         switch progress.verdict {
         case .needsTarget, .insufficientData:
-            return nonEmpty(progress.headline) ?? label(for: progress.verdict)
+            return headlineWithoutVerdict(progress.headline) ?? label(for: progress.verdict)
         default:
             break
         }
         if let line = weightLine(progress, system: system) { return line }
-        return nonEmpty(progress.headline) ?? label(for: progress.verdict)
+        return headlineWithoutVerdict(progress.headline) ?? label(for: progress.verdict)
+    }
+
+    /// Verdict phrases the server prefixes its headlines with ("Building — weekly
+    /// distance up 12%"). Surfaces that already show the verdict chip must not
+    /// repeat it.
+    private static let leadingVerdictPhrases: [String] = [
+        "On track", "Ahead of pace", "Ahead", "Losing too fast", "Behind pace", "Behind",
+        "Stalled", "Progressing", "Building", "Holding steady", "Holding",
+        "Set a target", "Getting started",
+    ]
+
+    /// `headline` with a leading verdict phrase + dash ("Building — ", "On track - ",
+    /// "Progressing – ") removed (case-insensitive). Returns the trimmed headline
+    /// unchanged when there is no such prefix, and keeps it whole if stripping
+    /// would leave nothing. `nil` for an empty headline.
+    static func headlineWithoutVerdict(_ headline: String) -> String? {
+        guard let text = nonEmpty(headline) else { return nil }
+        for phrase in leadingVerdictPhrases {
+            guard text.range(of: phrase, options: [.caseInsensitive, .anchored]) != nil else { continue }
+            var rest = text.dropFirst(phrase.count)
+            // Must be followed by optional spaces then a dash (em, en or hyphen).
+            rest = rest.drop(while: { $0 == " " })
+            guard let dash = rest.first, "—–-".contains(dash) else { continue }
+            rest = rest.drop(while: { "—–- ".contains($0) })
+            if let stripped = nonEmpty(String(rest)) { return stripped }
+        }
+        return text
     }
 
     /// The Today hero's short text beside the verdict chip: the ETA when there
