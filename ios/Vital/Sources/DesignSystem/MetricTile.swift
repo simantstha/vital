@@ -21,10 +21,17 @@ struct MetricTile: View {
                         .font(.system(size: 13, weight: .regular))
                         .foregroundStyle(Theme.Colors.textSecondary)
                         .lineLimit(1)
-                        .minimumScaleFactor(0.8)
+                        .minimumScaleFactor(0.75)
+                        // Win width over the info button so "Resting HR" never
+                        // truncates to "Resting…" in a 3-across tile.
+                        .layoutPriority(1)
+                        .accessibilityLabel(label)
                     if let explanation {
                         Spacer(minLength: 0)
+                        // Narrower than the button's default 24pt min width so
+                        // it doesn't steal the title's room.
                         WhatIsThisButton(title: label, text: explanation)
+                            .frame(width: 18, height: 24)
                     }
                 }
 
@@ -44,9 +51,12 @@ struct MetricTile: View {
                 }
 
                 HStack(spacing: Theme.Spacing.xxs) {
-                    Image(systemName: trend.arrowSystemImage)
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(trend.color)
+                    // No arrow for a neutral reading ("at your normal").
+                    if trend != .neutral {
+                        Image(systemName: trend.arrowSystemImage)
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(trend.color)
+                    }
                     Text(delta)
                         .font(Theme.Typography.labelSmall)
                         .foregroundStyle(trend.color)

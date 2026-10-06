@@ -117,6 +117,42 @@ final class ScreenshotTests: XCTestCase {
         return app.staticTexts.matching(predicate).firstMatch.waitForExistence(timeout: timeout)
     }
 
+    /// True when `element`'s frame sits fully between the top chrome (status
+    /// bar / nav, 100pt) and the bottom chrome (tab bar with an 8pt margin
+    /// when one exists, else 80% of the screen height).
+    private func isClearOfChrome(_ element: XCUIElement, app: XCUIApplication) -> Bool {
+        let tabBar = app.tabBars.firstMatch
+        let bottomLimit = tabBar.exists ? tabBar.frame.minY - 8 : app.frame.maxY * 0.8
+        let topLimit = app.frame.minY + 100
+        let frame = element.frame
+        return frame.minY >= topLimit && frame.maxY <= bottomLimit
+    }
+
+    /// Scrolls just far enough to put `element` mid-screen, correcting in
+    /// either direction (so it never overshoots off the top and stays there),
+    /// until it is hittable and clear of both the top and bottom chrome.
+    /// Returns whether it got there within `maxSwipes` drags.
+    @discardableResult
+    private func scrollIntoComfortableView(_ element: XCUIElement, app: XCUIApplication, maxSwipes: Int = 5) -> Bool {
+        var swipes = 0
+        while !(element.isHittable && isClearOfChrome(element, app: app)) && swipes < maxSwipes {
+            let screenHeight = max(app.frame.height, 1)
+            // Move the element's centre toward 45% of the screen height; the
+            // drag distance is capped so a single nudge can't fling it past.
+            let delta = (screenHeight * 0.45 - element.frame.midY) / screenHeight
+            let clamped = min(max(delta, -0.3), 0.3)
+            let sign: CGFloat = clamped < 0 ? -1 : 1
+            // Always drag by at least 0.1 so a near-miss still moves.
+            let move = sign * max(abs(clamped), 0.1)
+            let startY: CGFloat = 0.55
+            let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: startY))
+            let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: startY + move))
+            start.press(forDuration: 0.05, thenDragTo: end)
+            swipes += 1
+        }
+        return element.isHittable && isClearOfChrome(element, app: app)
+    }
+
     /// Waits for `element` to exist, then taps it once it's both
     /// `isHittable` AND clear of the bottom chrome — never a bare `.tap()`
     /// on a coordinate that might be off-screen or obscured. `isHittable`
@@ -146,28 +182,9 @@ final class ScreenshotTests: XCTestCase {
             return
         }
 
-        func isClearOfBottomChrome() -> Bool {
-            let tabBar = app.tabBars.firstMatch
-            if tabBar.exists {
-                return element.frame.maxY <= tabBar.frame.minY - 8
-            }
-            return element.frame.maxY <= app.frame.maxY * 0.8
-        }
-
-        var swipes = 0
-        while (!element.isHittable || !isClearOfBottomChrome()) && swipes < maxSwipes {
-            // A gentle drag from 70% down the screen to 45% — a smaller,
-            // slower nudge than `swipeUp()` so a short scroll distance
-            // doesn't overshoot the element off the top of the screen.
-            let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7))
-            let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45))
-            start.press(forDuration: 0.05, thenDragTo: end)
-            swipes += 1
-        }
-
-        guard element.isHittable, isClearOfBottomChrome() else {
-            XCTFail("\(description) exists but never became hittable and clear of "
-                     + "the bottom chrome after \(maxSwipes) scroll attempts")
+        guard scrollIntoComfortableView(element, app: app, maxSwipes: maxSwipes), element.isHittable else {
+            XCTFail("\(description) exists but never became hittable and fully on screen "
+                     + "(clear of top and bottom chrome) after \(maxSwipes) scroll attempts")
             return
         }
 
@@ -529,7 +546,7 @@ final class ScreenshotTests: XCTestCase {
         // Fixture-unique content: the weight_loss primary line is composed from
         // structured fields (never the server's kg headline); muscle falls
         // back to the server headline.
-        let expected = scenario == "weight_loss" ? "of 7.7 kg lost" : "Squat estimated 1RM"
+        let expected = scenario == "weight_loss" ? "of 7.7 kg lost" : "Squat est. 1RM +20.4 kg vs 4 weeks ago"
         XCTAssertTrue(waitForText(app, containing: expected),
                        "Goal progress detail should show the \(scenario) fixture's content [\(appearance)]")
         capture(app, name: "\(scenario)__goalProgress__\(appearance)")
@@ -560,23 +577,21 @@ final class ScreenshotTests: XCTestCase {
             XCTFail("Weekly review card never appeared on Today [\(scenario)/\(appearance)]")
             return
         }
-        // The compact card now sits below the fuel strip / next-up row, so
-        // scroll it clear of the tab bar before asserting on / capturing it.
+        // The compact card sits below the fuel strip / next-up row, so scroll
+        // its button fully on screen (clear of top and bottom chrome) before
+        // asserting on / capturing it.
         let openButton = app.descendants(matching: .any).matching(identifier: "weeklyReview.open").firstMatch
-        for _ in 0..<5 where !(openButton.exists && openButton.isHittable
-                                && openButton.frame.maxY <= app.tabBars.firstMatch.frame.minY - 100) {
-            let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7))
-            let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45))
-            start.press(forDuration: 0.05, thenDragTo: end)
-        }
+        XCTAssertTrue(openButton.waitForExistence(timeout: 10),
+                       "weeklyReview.open never appeared [\(scenario)/\(appearance)]")
+        scrollIntoComfortableView(openButton, app: app, maxSwipes: 8)
         // Fixture-unique headline (FixtureData.weeklyReview).
-        let expected = scenario == "weight_loss" ? "Down 0.6 kg, in budget 5 of 7 days" : "3 of 4 sessions, Bench Press up 2.5 kg"
+        let expected = scenario == "weight_loss" ? "Down 0.6 kg, in budget 5 of 7 days" : "3 of 4 sessions, Bench Press up 8.8 kg"
         XCTAssertTrue(waitForText(app, containing: expected),
                        "Weekly review card should show the \(scenario) fixture's headline [\(appearance)]")
         capture(app, name: "\(scenario)__weeklyReviewCard__\(appearance)")
 
         let open = app.descendants(matching: .any).matching(identifier: "weeklyReview.open").firstMatch
-        tapWhenHittable(open, app: app, maxSwipes: 5, description: "weeklyReview.open [\(scenario)/\(appearance)]")
+        tapWhenHittable(open, app: app, maxSwipes: 8, description: "weeklyReview.open [\(scenario)/\(appearance)]")
 
         let title = app.descendants(matching: .any).matching(identifier: "weeklyReview.detail.title").firstMatch
         guard title.waitForExistence(timeout: 10) else {
@@ -1001,7 +1016,7 @@ final class ScreenshotTests: XCTestCase {
         case "weight_loss":
             return "You're down 0.6kg this week, but last night's sleep ran short (6h 50m) — keep the deficit gentle and aim for an earlier night."
         case "muscle":
-            return "Protein's on target four days running and yesterday's lift was a PR on squat volume — stay the course."
+            return "Protein's on target four days running and Sunday's squat was your best in 4 weeks — stay the course."
         case "endurance":
             return "This week's long run held goal pace with a lower average HR than last week — aerobic base is building nicely."
         default:

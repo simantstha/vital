@@ -42,6 +42,26 @@ struct RestingHRMetric {
     var displayUnit: String { bpm == nil ? "" : "bpm" }
 }
 
+/// Trend + copy for a recovery tile's "vs your baseline" percentage. A delta
+/// that rounds to 0 reads "at your normal" with a neutral trend (no arrow)
+/// instead of "↗ +0 %".
+enum RecoveryDelta {
+    static let atNormalText = "at your normal"
+
+    static func make(deltaPct: Int, lowerIsBetter: Bool = false) -> (trend: TrendDirection, text: String) {
+        if deltaPct == 0 { return (.neutral, atNormalText) }
+        let sign = deltaPct > 0 ? "+" : ""
+        let up = deltaPct > 0
+        let trend: TrendDirection
+        if lowerIsBetter {
+            trend = up ? .upBad : .downGood
+        } else {
+            trend = up ? .upGood : .downBad
+        }
+        return (trend, "\(sign)\(deltaPct) %")
+    }
+}
+
 struct MacroProgress {
     let current: Int
     let target: Int
@@ -880,12 +900,11 @@ final class TodayViewModel: ObservableObject {
         // HRV
         if let value = m.hrv.value {
             let deltaPct = m.hrv.deltaPct ?? 0
-            let hrvTrend: TrendDirection = deltaPct >= 0 ? .upGood : .downBad
-            let hrvSign = deltaPct >= 0 ? "+" : ""
+            let hrvDelta = RecoveryDelta.make(deltaPct: deltaPct)
             let newHRV = HRVMetric(
                 value: Int(value.rounded()),
-                trend: hrvTrend,
-                delta: "\(hrvSign)\(deltaPct) %"
+                trend: hrvDelta.trend,
+                delta: hrvDelta.text
             )
             withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) { hrv = newHRV }
         }
@@ -894,13 +913,12 @@ final class TodayViewModel: ObservableObject {
         if let value = m.sleep.value {
             let deltaPct = m.sleep.deltaPct ?? 0
             let totalSleepMins = Int((value * 60).rounded())
-            let sleepTrend: TrendDirection = deltaPct >= 0 ? .upGood : .downBad
-            let sleepSign = deltaPct >= 0 ? "+" : ""
+            let sleepDelta = RecoveryDelta.make(deltaPct: deltaPct)
             let newSleep = SleepMetric(
                 hours: totalSleepMins / 60,
                 minutes: totalSleepMins % 60,
-                trend: sleepTrend,
-                delta: "\(sleepSign)\(deltaPct) %"
+                trend: sleepDelta.trend,
+                delta: sleepDelta.text
             )
             withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) { sleep = newSleep }
         }
@@ -908,12 +926,11 @@ final class TodayViewModel: ObservableObject {
         // Resting HR — lower is better
         if let value = m.restingHr.value {
             let deltaPct = m.restingHr.deltaPct ?? 0
-            let hrTrend: TrendDirection = deltaPct <= 0 ? .downGood : .upBad
-            let hrSign = deltaPct >= 0 ? "+" : ""
+            let hrDelta = RecoveryDelta.make(deltaPct: deltaPct, lowerIsBetter: true)
             let newRestingHR = RestingHRMetric(
                 bpm: Int(value.rounded()),
-                trend: hrTrend,
-                delta: "\(hrSign)\(deltaPct) %"
+                trend: hrDelta.trend,
+                delta: hrDelta.text
             )
             withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) { restingHR = newRestingHR }
         }

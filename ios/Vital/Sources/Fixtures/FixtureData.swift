@@ -172,7 +172,7 @@ enum FixtureData {
         .muscle: Profile(
             goal: "muscle",
             name: "Sam Okafor",
-            insight: "Protein's on target four days running and yesterday's lift was a PR on squat volume — stay the course.",
+            insight: "Protein's on target four days running and Sunday's squat was your best in 4 weeks — stay the course.",
             established: true,
             targetKcal: 2900, consumedKcal: 1560,
             protein: 158, proteinTarget: 190, carbs: 210, carbsTarget: 300, fat: 58, fatTarget: 85,
@@ -667,15 +667,19 @@ enum FixtureData {
     // MARK: - GET /api/plan → PlanResponse
 
     private static func plan(_ profile: Profile) -> [String: Any] {
+        // A plan item whose meal is already in the fixture's logged meals is
+        // "done", so Today's Next-up agrees with the Logs / diet sheet.
+        let loggedMealNames = Set(profile.meals.map { $0.name })
         let items = profile.plan.enumerated().map { index, item -> [String: Any] in
-            [
+            let isLogged = item.kind == "meal" && loggedMealNames.contains(item.title)
+            return [
                 "id": "fixture-plan-\(index)",
                 "timeMinutes": item.timeMinutes,
                 "title": item.title,
                 "subtitle": item.subtitle,
                 "kind": item.kind,
                 "source": "coach",
-                "status": "pending",
+                "status": isLogged ? "done" : "pending",
                 "kcal": nullable(item.kcal),
             ]
         }
