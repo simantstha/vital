@@ -58,7 +58,7 @@ final class ProfileViewModel: ObservableObject {
     /// weight; muscle prefers the weekly session target, falling back to the
     /// target weight; endurance shows the weekly sessions; general just the
     /// goal name. A missing target leaves the bare goal label.
-    static func goalRowLabel(
+    nonisolated static func goalRowLabel(
         goalLabel: String, goalId: String, targetWeightKg: Double?, weeklySessions: Int?, system: UnitSystem
     ) -> String {
         guard !goalLabel.isEmpty else { return goalLabel }
