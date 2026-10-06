@@ -19,7 +19,9 @@ final class OnboardingViewModel: ObservableObject {
     // MARK: - Basics
 
     @Published var name: String = ""
-    @Published var dob: Date = Calendar.current.date(byAdding: .year, value: -25, to: Date()) ?? Date()
+    /// Nil until the user explicitly picks (or HealthKit supplies) a date of
+    /// birth — a pre-filled default date was being submitted by accident.
+    @Published var dob: Date?
     @Published var sex: String = ""
     @Published var heightCm: Double?
     @Published var weightKg: Double?
@@ -30,6 +32,10 @@ final class OnboardingViewModel: ObservableObject {
     @Published var goal: String = ""
     @Published var hasTargetDate: Bool = false
     @Published var targetDate: Date = Calendar.current.date(byAdding: .month, value: 3, to: Date()) ?? Date()
+    /// Optional target weight in kg (canonical; the view converts from lb).
+    @Published var targetWeightKg: Double?
+    /// Workouts per week for build-muscle / endurance goals.
+    @Published var weeklySessionsTarget: Int = 3
 
     // MARK: - Training
 
@@ -101,6 +107,7 @@ final class OnboardingViewModel: ObservableObject {
 
     var canContinueFromBasics: Bool {
         !name.trimmingCharacters(in: .whitespaces).isEmpty
+            && dob != nil
             && !sex.isEmpty
             && (heightCm ?? 0) > 0
             && (weightKg ?? 0) > 0
@@ -110,6 +117,15 @@ final class OnboardingViewModel: ObservableObject {
     /// pick a matching push transition (forward slides in from the trailing
     /// edge, back slides in from the leading edge).
     @Published private(set) var stepDirection: StepDirection = .forward
+
+    /// Picks a goal and resets goal-specific fields, so a stale target weight
+    /// (e.g. a loss target after switching to build muscle) never rides along.
+    func selectGoal(_ newGoal: String) {
+        guard newGoal != goal else { return }
+        goal = newGoal
+        targetWeightKg = nil
+        weeklySessionsTarget = GoalTargetLogic.defaultWeeklySessions(goal: newGoal)
+    }
 
     func advance() {
         guard let next = Step(rawValue: step.rawValue + 1) else { return }
@@ -162,13 +178,17 @@ final class OnboardingViewModel: ObservableObject {
 
         let basics = OnboardingBasics(
             name: name.trimmingCharacters(in: .whitespaces),
-            dob: Self.dateFormatter.string(from: dob),
+            dob: dob.map { Self.dateFormatter.string(from: $0) } ?? "",
             sex: sex,
             heightCm: heightCm ?? 0,
             weightKg: weightKg ?? 0,
             units: units.rawValue,
             goal: goal,
-            targetDate: hasTargetDate ? Self.dateFormatter.string(from: targetDate) : nil
+            targetDate: hasTargetDate ? GoalTargetLogic.dayString(from: targetDate) : nil,
+            targetWeightKg: GoalTargetLogic.showsTargetWeight(goal: goal)
+                ? GoalTargetLogic.validTargetKg(targetWeightKg) : nil,
+            weeklySessionsTarget: GoalTargetLogic.showsWeeklySessions(goal: goal)
+                ? GoalTargetLogic.clampSessions(weeklySessionsTarget) : nil
         )
         let training = OnboardingTraining(
             frequency: frequency,

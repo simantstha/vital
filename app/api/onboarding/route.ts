@@ -9,7 +9,7 @@
  *
  * Request body:
  *   {
- *     basics:    { name, dob, sex, heightCm, weightKg, units, goal, targetDate?, targetWeightKg? },
+ *     basics:    { name, dob, sex, heightCm, weightKg, units, goal, targetDate?, targetWeightKg?, weeklySessionsTarget? },
  *     training?: { frequency?, types?, experience?, volumeNotes? },
  *     health?:   { injuries?, conditions?, medications? },
  *     lifestyle?:{ sleepSchedule?, stress?, diet? },
@@ -44,7 +44,10 @@
  *
  *   - Goal target (roadmap v5): basics.targetDate ('YYYY-MM-DD', future, <= 3
  *     years out) -> users.target_date and basics.targetWeightKg (30-300 kg)
- *     -> users.target_weight_kg. Either present but out of range is a 400.
+ *     -> users.target_weight_kg, basics.weeklySessionsTarget (integer 1-14) ->
+ *     users.weekly_sessions_target. These are optional, so a present-but-
+ *     invalid value is DROPPED (column written null, warning logged) — never a
+ *     400 that would block signup.
  *     When the goal maps to a known DietGoal, users.goal_started_at = now and
  *     users.goal_start_weight_kg = basics.weightKg, anchoring goal progress.
  *
@@ -60,7 +63,7 @@ import { readCoreProfile, writeCoreProfile } from '@/lib/coreProfileStore';
 import { resolveUnitSystem } from '@/lib/units';
 import { ensureHealthConstraintNodes } from '@/lib/brain/healthConstraints';
 import { goalFromOnboarding } from '@/lib/brain/dietBudget';
-import { parseTargetDate, parseTargetWeightKg } from '@/lib/goalTarget';
+import { parseTargetDate, parseTargetWeightKg, parseWeeklySessionsTarget } from '@/lib/goalTarget';
 import { localDayKey, pickTimeZone } from '@/lib/localDay';
 
 export const dynamic = 'force-dynamic';
@@ -77,6 +80,7 @@ interface Basics {
   goal: string;
   targetDate?: string;
   targetWeightKg?: number;
+  weeklySessionsTarget?: number;
 }
 
 interface Training {
@@ -259,17 +263,35 @@ export async function POST(request: Request): Promise<NextResponse> {
   const health = asObject<Health>(body.health);
   const lifestyle = asObject<Lifestyle>(body.lifestyle);
 
-  // Goal-target validation runs before any write so a 400 leaves no partial
-  // onboarding state. targetDate's "future" is judged in the user's stored
-  // timezone (UTC when none is stored yet — fresh signups usually have none).
+  // Goal targets are OPTIONAL at signup, so an invalid value must never block
+  // onboarding: it is dropped (persisted as null) with a warning and the rest
+  // of the submission proceeds. targetDate's "future" is judged in the user's
+  // stored timezone (UTC when none is stored yet — fresh signups usually have
+  // none). `undefined` = key absent/null (column left untouched); `null` =
+  // present but invalid (column written null).
   const rawTargetWeight = basics.targetWeightKg as unknown;
   const rawTargetDate = basics.targetDate as unknown;
-  let targetWeightKg: number | undefined;
-  let targetDate: string | undefined;
+  const rawWeeklySessions = basics.weeklySessionsTarget as unknown;
+  let targetWeightKg: number | null | undefined;
+  let targetDate: string | null | undefined;
+  let weeklySessionsTarget: number | null | undefined;
   if (rawTargetWeight != null) {
     const parsed = parseTargetWeightKg(rawTargetWeight);
-    if (!parsed.ok) return NextResponse.json({ error: parsed.error }, { status: 400 });
-    targetWeightKg = parsed.value;
+    if (parsed.ok) {
+      targetWeightKg = parsed.value;
+    } else {
+      console.warn(`[onboarding] dropping invalid targetWeightKg for user ${userId}: ${parsed.error}`);
+      targetWeightKg = null;
+    }
+  }
+  if (rawWeeklySessions != null) {
+    const parsed = parseWeeklySessionsTarget(rawWeeklySessions);
+    if (parsed.ok) {
+      weeklySessionsTarget = parsed.value;
+    } else {
+      console.warn(`[onboarding] dropping invalid weeklySessionsTarget for user ${userId}: ${parsed.error}`);
+      weeklySessionsTarget = null;
+    }
   }
   if (rawTargetDate != null) {
     const [tzRow] = await db
@@ -279,8 +301,12 @@ export async function POST(request: Request): Promise<NextResponse> {
       .limit(1);
     const todayKey = localDayKey(new Date(), pickTimeZone(null, tzRow?.timezone));
     const parsed = parseTargetDate(rawTargetDate, todayKey);
-    if (!parsed.ok) return NextResponse.json({ error: parsed.error }, { status: 400 });
-    targetDate = parsed.value;
+    if (parsed.ok) {
+      targetDate = parsed.value;
+    } else {
+      console.warn(`[onboarding] dropping invalid targetDate for user ${userId}: ${parsed.error}`);
+      targetDate = null;
+    }
   }
 
   seedUserMemory(userId);
@@ -342,6 +368,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       // Goal target (omitted keys are left untouched by drizzle).
       target_weight_kg: targetWeightKg,
       target_date: targetDate,
+      weekly_sessions_target: weeklySessionsTarget,
       // A known goal starts the progress clock from the onboarding weight.
       goal_started_at: mappedGoal ? new Date() : undefined,
       goal_start_weight_kg: mappedGoal ? basics.weightKg : undefined,

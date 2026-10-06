@@ -163,12 +163,30 @@ export interface GoalProgressInput {
   hrv: DayValue[];
   sleepMinutes: DayValue[];
   sleepGoalMinutes: number;
+  /**
+   * Display unit for weight numbers in `headline` / `reasons` text only
+   * ('imperial' → lb, otherwise kg). Structured numeric fields stay in kg.
+   */
+  unitSystem?: 'metric' | 'imperial' | null;
 }
 
 // ── Small helpers ───────────────────────────────────────────────────────────
 
 const round1 = (n: number): number => Math.round(n * 10) / 10;
 const round2 = (n: number): number => Math.round(n * 100) / 100;
+
+export const KG_TO_LB = 2.20462;
+
+/** A kg value converted to the input's display unit and rounded, no unit suffix. */
+function weightNum(input: GoalProgressInput, kg: number, digits: 1 | 2 = 1): number {
+  const v = input.unitSystem === 'imperial' ? kg * KG_TO_LB : kg;
+  return digits === 2 ? round2(v) : round1(v);
+}
+
+/** Formats a kg value in the input's display unit, e.g. "72.5 kg" / "159.8 lb". */
+function fmtWeight(input: GoalProgressInput, kg: number, digits: 1 | 2 = 1): string {
+  return `${weightNum(input, kg, digits)} ${input.unitSystem === 'imperial' ? 'lb' : 'kg'}`;
+}
 
 function dayNumber(day: string): number {
   const [y, m, d] = day.split('-').map(Number);
@@ -292,7 +310,7 @@ function rateReason(input: GoalProgressInput, w: WeightBlock, band: { minPct: nu
   if (w.rateKg == null || w.pctBw == null) return null;
   const dir = w.rateKg < 0 ? 'down' : 'up';
   const abs = Math.abs(w.pctBw);
-  let text = `Trend weight ${dir} ${round2(Math.abs(w.rateKg))} kg/wk (${round2(abs)}% of bodyweight) over 4 weeks`;
+  let text = `Trend weight ${dir} ${fmtWeight(input, Math.abs(w.rateKg), 2)}/wk (${round2(abs)}% of bodyweight) over 4 weeks`;
   let tone: ReasonTone = 'neutral';
   if (band) {
     const wantedDir = input.goal === 'weight_loss' ? w.rateKg < 0 : w.rateKg > 0;
@@ -439,12 +457,12 @@ function liftChanges(progression: ProgressionSummary, todayKey: string): LiftCha
   return out.sort((a, b) => b.totalSets - a.totalSets || a.exercise.localeCompare(b.exercise)).slice(0, 3);
 }
 
-function liftReason(l: LiftChange): GoalProgressReason | null {
+function liftReason(l: LiftChange, input: GoalProgressInput): GoalProgressReason | null {
   if (l.change4wKg == null || l.startKg == null || l.endKg == null) return null;
   const sign = l.change4wKg > 0 ? '+' : l.change4wKg < 0 ? '−' : '';
   return {
     kind: 'lift',
-    text: `${l.exercise} estimated 1RM ${sign}${round1(Math.abs(l.change4wKg))} kg over 4 weeks (${round1(l.startKg)} → ${round1(l.endKg)} kg)`,
+    text: `${l.exercise} estimated 1RM ${sign}${fmtWeight(input, Math.abs(l.change4wKg))} over 4 weeks (${weightNum(input, l.startKg)} → ${fmtWeight(input, l.endKg)})`,
     tone: l.change4wKg > 0 ? 'good' : l.change4wKg < 0 ? 'watch' : 'neutral',
   };
 }
@@ -546,7 +564,7 @@ function fatLossOutcome(input: GoalProgressInput, w: WeightBlock): Outcome {
   if (w.reached) {
     return {
       verdict: 'ahead',
-      headline: clip(`Target reached — trend ${round1(w.currentKg)} kg vs ${round1(targetKg)} kg goal`),
+      headline: clip(`Target reached — trend ${fmtWeight(input, w.currentKg)} vs ${fmtWeight(input, targetKg)} goal`),
       reasons,
     };
   }
@@ -555,7 +573,7 @@ function fatLossOutcome(input: GoalProgressInput, w: WeightBlock): Outcome {
   if (plateau) {
     return {
       verdict: 'stalled',
-      headline: clip(`Stalled — trend flat at ${round1(w.currentKg)} kg for 2 weeks`),
+      headline: clip(`Stalled — trend flat at ${fmtWeight(input, w.currentKg)} for 2 weeks`),
       reasons,
     };
   }
@@ -574,12 +592,12 @@ function fatLossOutcome(input: GoalProgressInput, w: WeightBlock): Outcome {
     if (w.rateKg >= 0 && absPct > PLATEAU_MAX_PCT_PER_WEEK) {
       return {
         verdict: 'behind',
-        headline: clip(`Trend is up ${round2(w.rateKg)} kg a week, away from your target`),
+        headline: clip(`Trend is up ${fmtWeight(input, w.rateKg, 2)} a week, away from your target`),
         reasons,
       };
     }
     if (w.spanDays >= PLATEAU_MIN_SPAN_DAYS) {
-      return { verdict: 'stalled', headline: clip(`Stalled — trend flat at ${round1(w.currentKg)} kg`), reasons };
+      return { verdict: 'stalled', headline: clip(`Stalled — trend flat at ${fmtWeight(input, w.currentKg)}`), reasons };
     }
     return {
       verdict: 'insufficient_data',
@@ -590,22 +608,22 @@ function fatLossOutcome(input: GoalProgressInput, w: WeightBlock): Outcome {
 
   // Losing at a safe pace.
   if (w.eta == null) {
-    return { verdict: 'behind', headline: clip(`Behind — ${round1(toGo)} kg to go, too slow to project a date`), reasons };
+    return { verdict: 'behind', headline: clip(`Behind — ${fmtWeight(input, toGo)} to go, too slow to project a date`), reasons };
   }
   const when = fmtDate(w.eta, today);
   if (input.target.date != null) {
     if (w.eta <= addDays(input.target.date, -AHEAD_MARGIN_DAYS)) {
-      return { verdict: 'ahead', headline: clip(`Ahead of pace — about ${round1(toGo)} kg to go, around ${when}`), reasons };
+      return { verdict: 'ahead', headline: clip(`Ahead of pace — about ${fmtWeight(input, toGo)} to go, around ${when}`), reasons };
     }
     if (w.eta <= input.target.date) {
-      return { verdict: 'on_track', headline: clip(`On track — about ${round1(toGo)} kg to go, around ${when}`), reasons };
+      return { verdict: 'on_track', headline: clip(`On track — about ${fmtWeight(input, toGo)} to go, around ${when}`), reasons };
     }
-    return { verdict: 'behind', headline: clip(`Behind pace — about ${round1(toGo)} kg to go, around ${when}`), reasons };
+    return { verdict: 'behind', headline: clip(`Behind pace — about ${fmtWeight(input, toGo)} to go, around ${when}`), reasons };
   }
   if (absPct >= FAT_LOSS_BAND.minPct) {
-    return { verdict: 'on_track', headline: clip(`On track — about ${round1(toGo)} kg to go, around ${when}`), reasons };
+    return { verdict: 'on_track', headline: clip(`On track — about ${fmtWeight(input, toGo)} to go, around ${when}`), reasons };
   }
-  return { verdict: 'behind', headline: clip(`Slow pace — about ${round1(toGo)} kg to go, around ${when}`), reasons };
+  return { verdict: 'behind', headline: clip(`Slow pace — about ${fmtWeight(input, toGo)} to go, around ${when}`), reasons };
 }
 
 function muscleOutcome(input: GoalProgressInput, w: WeightBlock): Outcome {
@@ -617,13 +635,13 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock): Outcome {
   const rate = rateReason(input, w, MUSCLE_GAIN_BAND);
   const sessions = sessionsReason(input);
   const protein = proteinReason(input);
-  const liftReasons = lifts.map(liftReason).filter((r): r is GoalProgressReason => r != null);
+  const liftReasons = lifts.map(l => liftReason(l, input)).filter((r): r is GoalProgressReason => r != null);
   const reasons = capReasons([liftReasons[0] ?? null, sessions, protein, rate, liftReasons[1] ?? null]);
 
   if (w.reached) {
     return {
       verdict: 'ahead',
-      headline: clip(`Target weight reached — trend ${round1(w.currentKg as number)} kg`),
+      headline: clip(`Target weight reached — trend ${fmtWeight(input, w.currentKg as number)}`),
       reasons,
     };
   }
@@ -642,7 +660,7 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock): Outcome {
     if ((best.gain3wKg as number) > 0) {
       return {
         verdict: 'progressing',
-        headline: clip(`Progressing — ${best.exercise} estimated 1RM up ${round1(best.gain3wKg as number)} kg`),
+        headline: clip(`Progressing — ${best.exercise} estimated 1RM up ${fmtWeight(input, best.gain3wKg as number)}`),
         reasons,
       };
     }

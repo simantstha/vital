@@ -192,6 +192,10 @@ struct TodayView: View {
                                     onOpen: { showLogSheet = true }
                                 )
                                 .staggeredAppear(index: 4)
+
+                                // Weight hero is weight-loss only; every other
+                                // goal still gets a way to log a weigh-in.
+                                weighInRow
                             }
                             if let warning = vm.diet.lowEnergyWarning {
                                 CautionBanner(
@@ -375,6 +379,48 @@ struct TodayView: View {
 // MARK: - Private sub-views
 
 private extension TodayView {
+
+    // ── Weigh-in entry for non-weight-loss goals ────────────────────────────
+
+    /// Small "Weigh in" row — opens the same sheet the weight hero's chip does.
+    var weighInRow: some View {
+        let last = WeightHeroLogic.lastWeightKg(entries: vm.weightLog?.entries ?? [])
+        return Button {
+            onWeighInChipTap()
+        } label: {
+            HStack(spacing: Theme.Spacing.md) {
+                Image(systemName: "scalemass")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(Theme.Colors.accentContent)
+                Text("Weigh in")
+                    .font(Theme.Typography.bodyMedium)
+                    .fontWeight(.medium)
+                    .foregroundStyle(Theme.Colors.textPrimary)
+                Spacer()
+                if let last {
+                    Text("Last \(UnitFormat.weight(kg: last, unitPref.current))")
+                        .font(Theme.Typography.bodySmall)
+                        .foregroundStyle(Theme.Colors.textSecondary)
+                }
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Theme.Colors.textTertiary)
+            }
+            .padding(.horizontal, Theme.Spacing.lg)
+            .padding(.vertical, Theme.Spacing.md)
+            .frame(maxWidth: .infinity)
+            .background(
+                RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
+                    .fill(Theme.Colors.glassFill)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
+                            .strokeBorder(Theme.Colors.glassBorder, lineWidth: 1)
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Weigh in")
+    }
 
     // ── Weigh-in chip (§5.3) ────────────────────────────────────────────────
 

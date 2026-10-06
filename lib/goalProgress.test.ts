@@ -417,3 +417,48 @@ test('output has exactly the documented top-level keys', () => {
   assert.deepEqual(Object.keys(p.current).sort(), ['changeKg', 'progressPct', 'startWeightKg', 'weightKg']);
   assert.deepEqual(Object.keys(p.dataSufficiency).sort(), ['needed', 'sessionsLast28d', 'weighIns']);
 });
+
+// ── Unit-aware text ─────────────────────────────────────────────────────────
+
+test('imperial users get lb in headlines and reasons; structured fields stay in kg', () => {
+  const readings = ramp(60, 95, -0.07);
+  const input = { weightReadings: readings, target: { weightKg: 85, date: null, weeklySessions: null } };
+  const metric = computeGoalProgress(base(input));
+  const imperial = computeGoalProgress(base({ ...input, unitSystem: 'imperial' }));
+
+  assert.match(metric.headline, /kg to go/);
+  assert.match(imperial.headline, /^On track — about [\d.]+ lb to go/);
+  assert.doesNotMatch(imperial.headline, /kg/);
+  const rate = imperial.reasons.find(r => r.kind === 'rate');
+  assert.match(rate!.text, /lb\/wk/);
+  assert.doesNotMatch(rate!.text, /\bkg\b/);
+
+  // lb number is the kg number converted (to-go distance)
+  const kgToGo = Number(metric.headline.match(/about ([\d.]+) kg/)![1]);
+  const lbToGo = Number(imperial.headline.match(/about ([\d.]+) lb/)![1]);
+  assert.ok(Math.abs(lbToGo - kgToGo * 2.20462) < 0.1, `${lbToGo} vs ${kgToGo}`);
+
+  // structured numerics identical regardless of unit
+  assert.deepEqual(imperial.current, metric.current);
+  assert.deepEqual(imperial.ratePerWeek, metric.ratePerWeek);
+  assert.equal(imperial.eta, metric.eta);
+  assertWellFormed(imperial);
+});
+
+test('null / metric unitSystem keeps kg text', () => {
+  const input = { weightReadings: ramp(60, 95, -0.07), target: { weightKg: 85, date: null, weeklySessions: null } };
+  assert.match(computeGoalProgress(base({ ...input, unitSystem: null })).headline, /kg to go/);
+  assert.match(computeGoalProgress(base({ ...input, unitSystem: 'metric' })).headline, /kg to go/);
+});
+
+test('imperial lift reasons and headline are formatted in lb', () => {
+  const p = computeGoalProgress(base({
+    goal: 'muscle',
+    unitSystem: 'imperial',
+    target: { weightKg: null, date: null, weeklySessions: 4 },
+    progression: lifts(100, 105),
+  }));
+  assert.match(p.headline, /Bench Press estimated 1RM up 11 lb/);
+  const lift = p.reasons.find(r => r.kind === 'lift');
+  assert.match(lift!.text, /\+11 lb over 4 weeks \(220\.5 → 231\.5 lb\)/);
+});

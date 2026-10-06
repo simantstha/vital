@@ -16,6 +16,7 @@ import { healthKitWorkoutDays } from '@/lib/trainingSummary';
 import { queryMetricPoints, queryWorkouts } from '@/lib/brain/tools';
 import { resolveDailyIntake } from '@/lib/brain/nutritionIntake';
 import { normalizeGoal, resolveDietBudget, lowEnergyThresholdKcal } from '@/lib/brain/dietBudget';
+import { resolveUnitSystem } from '@/lib/units';
 import { readCoreProfile } from '@/lib/coreProfileStore';
 import { parseProfileDetails } from '@/lib/profileDetails';
 import {
@@ -122,5 +123,6 @@ export async function loadGoalProgress(
     hrv,
     sleepMinutes: sleep.map(p => ({ day: p.date, value: p.value })),
     sleepGoalMinutes: user.sleep_goal_minutes ?? DEFAULT_SLEEP_GOAL_MIN,
+    unitSystem: resolveUnitSystem(user.unit_system),
   });
 }

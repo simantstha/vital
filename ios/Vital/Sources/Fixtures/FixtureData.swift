@@ -1213,6 +1213,12 @@ enum FixtureData {
             "lightsOutMinutes": 1350,
             "calibration": calibration(profile),
             "unitSystem": "metric",
+            // Goal targets (null for newUser / endurance / general).
+            "targetWeightKg": profile.goal == "weight_loss" ? 76.0 : NSNull(),
+            "targetDate": profile.goal == "weight_loss" ? dayString(-70) : NSNull(),
+            "weeklySessionsTarget": profile.goal == "muscle" ? 4 : NSNull(),
+            "goalStartWeightKg": profile.goal == "weight_loss" ? 82.0 : NSNull(),
+            "goalStartedAt": profile.goal == "weight_loss" ? isoDaysAgo(21) : NSNull(),
         ]
     }
 

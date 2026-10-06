@@ -11,6 +11,9 @@ struct ProfileView: View {
     @State private var showNotificationSettings = false
     @State private var showUnitsDialog = false
     @State private var isResyncing = false
+    @State private var showGoalEditor = false
+    /// Highest `goalEditorRequest` already acted on (see `openGoalEditorIfRequested`).
+    @State private var handledGoalEditorRequest = 0
 
     @AppStorage(NotificationPrefsKeys.briefEnabled) private var notifBriefEnabled = true
     @AppStorage(NotificationPrefsKeys.mealsEnabled) private var notifMealsEnabled = true
@@ -21,8 +24,14 @@ struct ProfileView: View {
     /// "Talk it through with your coach" button can land in the conversation.
     private let switchToCoachTab: () -> Void
 
-    init(switchToCoachTab: @escaping () -> Void = {}) {
+    /// Monotonic counter bumped by `RootTabView` each time `.vitalOpenGoalEditor`
+    /// arrives (it also switches to this tab). A counter rather than a Bool so
+    /// a request made before this tab's first appearance is still honoured.
+    private let goalEditorRequest: Int
+
+    init(switchToCoachTab: @escaping () -> Void = {}, goalEditorRequest: Int = 0) {
         self.switchToCoachTab = switchToCoachTab
+        self.goalEditorRequest = goalEditorRequest
     }
 
     var body: some View {
@@ -73,8 +82,14 @@ struct ProfileView: View {
                 .scrollIndicators(.hidden)
             }
             .toolbar(.hidden, for: .navigationBar)
+            .navigationDestination(isPresented: $showGoalEditor) {
+                GoalDetailView(switchToCoachTab: switchToCoachTab)
+                    .onDisappear { Task { await vm.loadBudget() } }
+            }
         }
         .task { await vm.load() }
+        .onAppear { openGoalEditorIfRequested() }
+        .onChange(of: goalEditorRequest) { openGoalEditorIfRequested() }
         .sheet(isPresented: $showBudgetEditor, onDismiss: { Task { await vm.loadBudget() } }) {
             DietBudgetEditorView()
         }
@@ -99,6 +114,16 @@ struct ProfileView: View {
             }
             Button("Cancel", role: .cancel) {}
         }
+    }
+}
+
+// MARK: - Goal editor deep link
+
+private extension ProfileView {
+    func openGoalEditorIfRequested() {
+        guard goalEditorRequest > handledGoalEditorRequest else { return }
+        handledGoalEditorRequest = goalEditorRequest
+        showGoalEditor = true
     }
 }
 
