@@ -142,6 +142,7 @@ struct NotificationsView: View {
         case "workout_analysis": WorkoutAnalysisView(id: item.targetId)
         case "sleep_analysis": SleepAnalysisView(id: item.targetId)
         case "morning_brief": MorningBriefView(id: item.targetId)
+        case "weekly_review": WeeklyReviewPushView(id: item.targetId)
         default: NudgeDetailView(id: item.targetId, coachVM: coachVM, switchToCoachTab: switchToCoachTab)
         }
     }
@@ -162,6 +163,8 @@ private struct NotificationRowView: View {
             return ("moon.zzz.fill", "Sleep analysis", Theme.Colors.indigo.opacity(0.15), Theme.Colors.indigo)
         case "morning_brief":
             return ("sun.max.fill", "Morning brief", Theme.Colors.cautionSoft, Theme.Colors.caution)
+        case "weekly_review":
+            return ("calendar", "Weekly review", Theme.Colors.accentSoft, Theme.Colors.accentContent)
         default:
             return ("bubble.left.fill", "Coach nudge", Theme.Colors.accentSoft, Theme.Colors.accentContent)
         }

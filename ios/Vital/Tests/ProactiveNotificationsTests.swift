@@ -303,6 +303,27 @@ final class ProactiveNotificationsTests: XCTestCase {
         XCTAssertEqual(mapped.mealDinnerTimeMinutes, 1140)
     }
 
+    func testPreferencesDecodeDefaultsCoachAndWeeklyReviewToTrueWhenMissing() throws {
+        let legacy = """
+        {"morningBriefEnabled":true,"morningBriefTimeMinutes":450,"workoutNotificationsEnabled":true,
+         "sleepNotificationsEnabled":true,"mealsEnabled":true,"mealBreakfastTimeMinutes":480,
+         "mealLunchTimeMinutes":765,"mealSnackTimeMinutes":960,"mealDinnerTimeMinutes":1170,"timezone":"UTC"}
+        """
+        let decoded = try JSONDecoder().decode(NotificationPreferences.self, from: Data(legacy.utf8))
+        XCTAssertTrue(decoded.coachNudgesEnabled)
+        XCTAssertTrue(decoded.weeklyReviewEnabled)
+
+        let off = NotificationPreferences.fromLocal(
+            morningEnabled: true, morningMinutes: 450, workoutEnabled: true, sleepEnabled: true,
+            mealsEnabled: true, breakfastMinutes: 480, lunchMinutes: 765, snackMinutes: 960, dinnerMinutes: 1170,
+            timezone: "UTC", coachNudgesEnabled: false, weeklyReviewEnabled: false
+        )
+        let roundTripped = try JSONDecoder().decode(NotificationPreferences.self, from: JSONEncoder().encode(off))
+        XCTAssertFalse(roundTripped.coachNudgesEnabled)
+        XCTAssertFalse(roundTripped.weeklyReviewEnabled)
+        XCTAssertEqual(roundTripped, off)
+    }
+
     func testLocalScheduleContainsNoMorningBrief() {
         XCTAssertFalse(ReminderScheduler.localReminderKinds.contains(.morningBrief))
         XCTAssertEqual(Set(ReminderScheduler.localReminderKinds), [.meal, .weighIn])

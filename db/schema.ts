@@ -444,6 +444,8 @@ export const notification_preferences = p.pgTable('notification_preferences', {
   workout_notifications_enabled: p.boolean('workout_notifications_enabled').default(true).notNull(),
   sleep_notifications_enabled:   p.boolean('sleep_notifications_enabled').default(true).notNull(),
   meals_enabled:                 p.boolean('meals_enabled').default(true).notNull(),
+  coach_nudges_enabled:          p.boolean('coach_nudges_enabled').default(true).notNull(),
+  weekly_review_enabled:         p.boolean('weekly_review_enabled').default(true).notNull(),
   meal_breakfast_time_minutes:   p.integer('meal_breakfast_time_minutes').default(480).notNull(),
   meal_lunch_time_minutes:       p.integer('meal_lunch_time_minutes').default(765).notNull(),
   meal_snack_time_minutes:       p.integer('meal_snack_time_minutes').default(960).notNull(),
@@ -636,7 +638,7 @@ export const notification_inbox = p.pgTable('notification_inbox', {
   created_at: p.timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   read_at:    p.timestamp('read_at', { withTimezone: true }),                   // nullable; null = unread
 }, (t) => [
-  p.check('notification_inbox_type_check', sql`${t.type} in ('workout_analysis', 'sleep_analysis', 'morning_brief', 'coach_nudge')`),
+  p.check('notification_inbox_type_check', sql`${t.type} in ('workout_analysis', 'sleep_analysis', 'morning_brief', 'coach_nudge', 'weekly_review')`),
   // Makes recording idempotent across push retries — the same (user, type,
   // target) never produces a second inbox row no matter how many times the
   // worker retries delivery.

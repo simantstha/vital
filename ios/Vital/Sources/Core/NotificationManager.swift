@@ -90,6 +90,8 @@ enum NotificationPrefsKeys {
     static let briefMinutes = "notif.brief.minutes"          // default 450 = 7:30am
     static let workoutEnabled = "notif.workout.enabled"
     static let sleepEnabled = "notif.sleep.enabled"
+    static let coachNudgesEnabled = "notif.coachNudges.enabled"   // server-owned; default true
+    static let weeklyReviewEnabled = "notif.weeklyReview.enabled" // server-owned; default true
 
     static let mealsEnabled = "notif.meals.enabled"
     static let mealsBreakfastMinutes = "notif.meals.breakfastMinutes"  // default 480 = 8:00am
@@ -106,6 +108,8 @@ enum NotificationPrefsKeys {
         briefMinutes: 450,
         workoutEnabled: true,
         sleepEnabled: true,
+        coachNudgesEnabled: true,
+        weeklyReviewEnabled: true,
         mealsEnabled: true,
         mealsBreakfastMinutes: 480,
         mealsLunchMinutes: 765,

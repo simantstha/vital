@@ -12,6 +12,8 @@ export interface NotificationPreferences {
   workoutNotificationsEnabled: boolean;
   sleepNotificationsEnabled: boolean;
   mealsEnabled: boolean;
+  coachNudgesEnabled: boolean;
+  weeklyReviewEnabled: boolean;
   mealBreakfastTimeMinutes: number;
   mealLunchTimeMinutes: number;
   mealSnackTimeMinutes: number;
@@ -70,6 +72,8 @@ export const DEFAULT_NOTIFICATION_PREFERENCES: NotificationPreferences = {
   workoutNotificationsEnabled: true,
   sleepNotificationsEnabled: true,
   mealsEnabled: true,
+  coachNudgesEnabled: true,
+  weeklyReviewEnabled: true,
   mealBreakfastTimeMinutes: 480,
   mealLunchTimeMinutes: 765,
   mealSnackTimeMinutes: 960,
@@ -144,7 +148,9 @@ type MealPreferenceKey =
   | 'mealBreakfastTimeMinutes'
   | 'mealLunchTimeMinutes'
   | 'mealSnackTimeMinutes'
-  | 'mealDinnerTimeMinutes';
+  | 'mealDinnerTimeMinutes'
+  | 'coachNudgesEnabled'
+  | 'weeklyReviewEnabled';
 
 type NotificationPreferencesUpdate =
   Omit<NotificationPreferences, MealPreferenceKey> & Partial<Pick<NotificationPreferences, MealPreferenceKey>>;
@@ -156,6 +162,8 @@ function parsePreferences(body: Record<string, unknown>): NotificationPreference
     workoutNotificationsEnabled,
     sleepNotificationsEnabled,
     mealsEnabled,
+    coachNudgesEnabled,
+    weeklyReviewEnabled,
     mealBreakfastTimeMinutes,
     mealLunchTimeMinutes,
     mealSnackTimeMinutes,
@@ -168,6 +176,8 @@ function parsePreferences(body: Record<string, unknown>): NotificationPreference
     || typeof workoutNotificationsEnabled !== 'boolean'
     || typeof sleepNotificationsEnabled !== 'boolean'
     || (mealsEnabled !== undefined && typeof mealsEnabled !== 'boolean')
+    || (coachNudgesEnabled !== undefined && typeof coachNudgesEnabled !== 'boolean')
+    || (weeklyReviewEnabled !== undefined && typeof weeklyReviewEnabled !== 'boolean')
     || (mealBreakfastTimeMinutes !== undefined && !isValidMinutes(mealBreakfastTimeMinutes))
     || (mealLunchTimeMinutes !== undefined && !isValidMinutes(mealLunchTimeMinutes))
     || (mealSnackTimeMinutes !== undefined && !isValidMinutes(mealSnackTimeMinutes))
@@ -181,6 +191,8 @@ function parsePreferences(body: Record<string, unknown>): NotificationPreference
     workoutNotificationsEnabled,
     sleepNotificationsEnabled,
     mealsEnabled: mealsEnabled as boolean | undefined,
+    coachNudgesEnabled: coachNudgesEnabled as boolean | undefined,
+    weeklyReviewEnabled: weeklyReviewEnabled as boolean | undefined,
     mealBreakfastTimeMinutes: mealBreakfastTimeMinutes as number | undefined,
     mealLunchTimeMinutes: mealLunchTimeMinutes as number | undefined,
     mealSnackTimeMinutes: mealSnackTimeMinutes as number | undefined,
@@ -245,6 +257,7 @@ export function createNotificationPreferencesHttpHandlers(dependencies: HttpDepe
       const mealKeys = [
         'mealsEnabled', 'mealBreakfastTimeMinutes', 'mealLunchTimeMinutes',
         'mealSnackTimeMinutes', 'mealDinnerTimeMinutes',
+        'coachNudgesEnabled', 'weeklyReviewEnabled',
       ] as const;
       if (mealKeys.some((key) => update[key] === undefined)) {
         const stored = await dependencies.repository.getNotificationPreferences(userId)
@@ -252,6 +265,8 @@ export function createNotificationPreferencesHttpHandlers(dependencies: HttpDepe
         preferences = {
           ...update,
           mealsEnabled: update.mealsEnabled ?? stored.mealsEnabled,
+          coachNudgesEnabled: update.coachNudgesEnabled ?? stored.coachNudgesEnabled,
+          weeklyReviewEnabled: update.weeklyReviewEnabled ?? stored.weeklyReviewEnabled,
           mealBreakfastTimeMinutes: update.mealBreakfastTimeMinutes ?? stored.mealBreakfastTimeMinutes,
           mealLunchTimeMinutes: update.mealLunchTimeMinutes ?? stored.mealLunchTimeMinutes,
           mealSnackTimeMinutes: update.mealSnackTimeMinutes ?? stored.mealSnackTimeMinutes,

@@ -108,6 +108,8 @@ test('notification preferences return defaults and PUT validates all fields and 
     workoutNotificationsEnabled: true,
     sleepNotificationsEnabled: true,
     mealsEnabled: true,
+    coachNudgesEnabled: true,
+    weeklyReviewEnabled: true,
     mealBreakfastTimeMinutes: 480,
     mealLunchTimeMinutes: 765,
     mealSnackTimeMinutes: 960,
@@ -119,6 +121,7 @@ test('notification preferences return defaults and PUT validates all fields and 
     workoutNotificationsEnabled: false, sleepNotificationsEnabled: true,
     mealsEnabled: false, mealBreakfastTimeMinutes: 500,
     mealLunchTimeMinutes: 780, mealSnackTimeMinutes: 950, mealDinnerTimeMinutes: 1140,
+    coachNudgesEnabled: false, weeklyReviewEnabled: false,
     timezone: 'America/Chicago',
   };
   assert.equal((await handlers.PUT(request('/api/notification-preferences', 'PUT', valid, 'user-a'))).status, 200);
@@ -130,6 +133,8 @@ test('notification preferences return defaults and PUT validates all fields and 
     { ...valid, timezone: 'Not/A_Zone' },
     { ...valid, sleepNotificationsEnabled: undefined },
     { ...valid, mealsEnabled: 'yes' },
+    { ...valid, coachNudgesEnabled: 'no' },
+    { ...valid, weeklyReviewEnabled: null },
     { ...valid, mealBreakfastTimeMinutes: -1 },
     { ...valid, mealLunchTimeMinutes: 1440 },
     { ...valid, mealSnackTimeMinutes: 1.5 },
@@ -143,6 +148,7 @@ test('legacy PUT without meal fields merges stored meal values instead of clobbe
     workoutNotificationsEnabled: true, sleepNotificationsEnabled: true,
     mealsEnabled: false, mealBreakfastTimeMinutes: 505,
     mealLunchTimeMinutes: 790, mealSnackTimeMinutes: 955, mealDinnerTimeMinutes: 1125,
+    coachNudgesEnabled: false, weeklyReviewEnabled: true,
     timezone: 'UTC',
   };
   let saved: NotificationPreferences | undefined;
@@ -169,6 +175,7 @@ test('legacy PUT without meal fields merges stored meal values instead of clobbe
     ...legacy,
     mealsEnabled: false, mealBreakfastTimeMinutes: 505,
     mealLunchTimeMinutes: 790, mealSnackTimeMinutes: 955, mealDinnerTimeMinutes: 1125,
+    coachNudgesEnabled: false, weeklyReviewEnabled: true,
   });
 
   // A subset of meal fields merges per-field: provided values win, absent
@@ -179,7 +186,13 @@ test('legacy PUT without meal fields merges stored meal values instead of clobbe
     ...legacy,
     mealsEnabled: false, mealBreakfastTimeMinutes: 505,
     mealLunchTimeMinutes: 800, mealSnackTimeMinutes: 955, mealDinnerTimeMinutes: 1125,
+    coachNudgesEnabled: false, weeklyReviewEnabled: true,
   });
+
+  // New toggles: provided values win, the absent one merges from stored.
+  assert.equal((await handlers.PUT(request('/api/notification-preferences', 'PUT', { ...legacy, weeklyReviewEnabled: false }, 'user-a'))).status, 200);
+  assert.equal(saved?.weeklyReviewEnabled, false);
+  assert.equal(saved?.coachNudgesEnabled, false);
 
   // (2) A present-but-invalid meal minute still 400s — absence is the only
   // pass-through, never a bad value.
@@ -187,6 +200,7 @@ test('legacy PUT without meal fields merges stored meal values instead of clobbe
     { ...legacy, mealLunchTimeMinutes: 1440 },
     { ...legacy, mealBreakfastTimeMinutes: -1 },
     { ...legacy, mealsEnabled: 'yes' },
+    { ...legacy, coachNudgesEnabled: 1 },
   ]) assert.equal((await handlers.PUT(request('/api/notification-preferences', 'PUT', invalid, 'user-a'))).status, 400);
 
   // (3) A full new-client payload round-trips as-is and never reads the
@@ -196,6 +210,7 @@ test('legacy PUT without meal fields merges stored meal values instead of clobbe
     ...legacy,
     mealsEnabled: true, mealBreakfastTimeMinutes: 470,
     mealLunchTimeMinutes: 760, mealSnackTimeMinutes: 965, mealDinnerTimeMinutes: 1180,
+    coachNudgesEnabled: true, weeklyReviewEnabled: true,
   };
   assert.equal((await handlers.PUT(request('/api/notification-preferences', 'PUT', full, 'user-a'))).status, 200);
   assert.equal(reads, 0);
@@ -220,6 +235,7 @@ test('legacy PUT for a user with no stored row falls back to default meal values
     ...legacy,
     mealsEnabled: true, mealBreakfastTimeMinutes: 480,
     mealLunchTimeMinutes: 765, mealSnackTimeMinutes: 960, mealDinnerTimeMinutes: 1170,
+    coachNudgesEnabled: true, weeklyReviewEnabled: true,
   });
 });
 
