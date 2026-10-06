@@ -1760,14 +1760,16 @@ enum FixtureData {
                 ],
                 "ratePerWeek": ["kg": profile.weightTrendPerWeekKg, "pctBodyweight": 0.44],
                 "safeBand": ["minPct": 0.1, "maxPct": 0.5],
-                "eta": none,
+                // (82 - 79) kg at +0.35 kg/wk ≈ 8.6 weeks.
+                "eta": dayString(-60),
                 "onPaceForTargetDate": none,
                 "verdict": "progressing",
                 "headline": "Progressing — Squat estimated 1RM up 17.5 kg",
                 "reasons": [
+                    // 9 of 16 planned sessions (4/wk x 4) = 56% → amber, leads.
+                    reason("adherence", "9 of 16 planned sessions in 4 weeks (56%)", "watch"),
                     reason("lift", "Squat estimated 1RM +17.5 kg over 4 weeks (145.8 → 163.3 kg)", "good"),
                     reason("lift", "Bench press estimated 1RM +5.8 kg over 4 weeks (102.1 → 107.9 kg)", "good"),
-                    reason("lift", "Deadlift hasn't set a new best in 4 weeks (204.2 kg)", "watch"),
                 ],
                 "dataSufficiency": ["weighIns": 11, "needed": 3, "sessionsLast28d": 9],
             ]
@@ -1783,8 +1785,9 @@ enum FixtureData {
                 "verdict": "building",
                 "headline": "Building — weekly distance up 12% over 4 weeks",
                 "reasons": [
-                    reason("volume", "Weekly distance up 12%: 21.9 → 24.5 km", "good"),
-                    reason("sessions", "Averaging 3 sessions a week vs your target of 4", "neutral"),
+                    // Same 3 completed sessions as the hero's training summary.
+                    reason("week_sessions", "3 of 4 sessions this week", "neutral"),
+                    reason("volume", "Weekly distance up 12%: 21.9 → 24.5 km (last 2 weeks vs the 2 before)", "good"),
                     // Derived from the same profile constants as Today/Trends
                     // (today's HRV vs the series' normal).
                     reason("hrv", "HRV is \(abs(gapToNormal("hrv_sdnn", profile, scenario))) ms below your normal (\(Int(profile.hrv.rounded())) vs \(Int(normalBase("hrv_sdnn", profile, scenario).rounded())) ms)", "watch"),
@@ -1870,14 +1873,14 @@ enum FixtureData {
         case .muscle:
             return review(
                 goal: "muscle", verdict: "progressing",
-                headline: "3 of 4 sessions, Bench Press up 2.5 kg",
+                headline: "3 of 4 sessions, Bench Press up 8.8 kg",
                 stats: [
-                    stat("Sessions", "3", "target 4", "neutral"),
-                    stat("Bench Press est. 1RM", "+2.5 kg", "vs last trained week", "good"),
+                    stat("Sessions", "3", "target 4 for the week", "neutral"),
+                    stat("Bench Press est. 1RM", "+8.8 kg", "vs 4 weeks ago", "good"),
                     stat("Protein days hit", "5/7", nil, "good"),
                     stat("Weight trend", "+0.2 kg", "vs the week before", "good"),
                 ],
-                win: "Bench Press estimated 1RM is up 2.5 kg.",
+                win: "Bench Press estimated 1RM is up 8.8 kg vs 4 weeks ago.",
                 slip: nil,
                 nextWeek: "Repeat this week: same routine, same training days.",
                 sufficient: true
@@ -1893,10 +1896,10 @@ enum FixtureData {
                 goal: "endurance", verdict: "building",
                 headline: "3 sessions, 24.5 km, +12% vs last week",
                 stats: [
-                    stat("Sessions", "3", "target 4", "neutral"),
+                    stat("Sessions", "3", "target 4 for the week", "neutral"),
                     stat("Volume", "24.5 km", "+12% vs last week", "good"),
                     stat("Resting HR", "\(Int(profile.restingHR.rounded())) bpm", rhrComparison, rhrGap > 0 ? "watch" : "good"),
-                    stat("Avg sleep", hoursMinutes(weekSleep.avgMinutes), "\(weekSleep.nightsUnder6h) nights under 6h · goal 8h 0m", weekSleep.avgMinutes < 420 ? "watch" : "good"),
+                    stat("Avg sleep", hoursMinutes(weekSleep.avgMinutes), "week avg · goal 8h 0m", weekSleep.avgMinutes < 420 ? "watch" : "good"),
                 ],
                 win: "Training volume is up 12% on last week (21.9 km → 24.5 km).",
                 slip: nil,

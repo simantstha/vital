@@ -264,8 +264,17 @@ test('muscle: a lift whose best e1RM beats its best from 4 weeks ago → progres
   assert.ok(lift);
   assert.match(lift!.text, /\+5 kg vs 4 weeks ago \(100 → 105 kg\)/);
   assert.equal(lift!.tone, 'good');
-  const sessions = p.reasons.find(r => r.kind === 'sessions');
-  assert.match(sessions!.text, /3 sessions a week vs your target of 4/);
+  const adherence = p.reasons.find(r => r.kind === 'adherence');
+  assert.equal(adherence!.text, '12 of 16 planned sessions in 4 weeks (75%)');
+  assert.equal(adherence!.tone, 'neutral');
+  // Without a session target the older "averaging" wording is kept.
+  const noTarget = computeGoalProgress(base({
+    goal: 'muscle',
+    target: { weightKg: 85, date: null, weeklySessions: null },
+    progression: lifts(100, 105),
+    trainingDays: Array.from({ length: 12 }, (_, i) => addDays(TODAY, -i * 2)),
+  }));
+  assert.match(noTarget.reasons.find(r => r.kind === 'sessions')!.text, /3 sessions a week/);
   assert.ok(p.reasons.some(r => r.kind === 'protein' && /7 of 7/.test(r.text)));
   assertWellFormed(p);
 });
@@ -301,6 +310,73 @@ test('muscle: gaining inside the band with no lift data → progressing, ETA tow
   }));
   assert.equal(p.verdict, 'progressing');
   assert.ok(p.eta);
+});
+
+test('muscle: adherence reason reads "9 of 16 planned sessions in 4 weeks (56%)" and leads, in watch tone, below 60%', () => {
+  const p = computeGoalProgress(base({
+    goal: 'muscle',
+    target: { weightKg: null, date: null, weeklySessions: 4 },
+    progression: lifts(100, 105),
+    trainingDays: Array.from({ length: 9 }, (_, i) => addDays(TODAY, -i * 3)),
+  }));
+  assert.equal(p.verdict, 'progressing', 'verdict stays lift-based');
+  assert.equal(p.reasons[0].kind, 'adherence');
+  assert.equal(p.reasons[0].text, '9 of 16 planned sessions in 4 weeks (56%)');
+  assert.equal(p.reasons[0].tone, 'watch');
+  assertWellFormed(p);
+});
+
+test('muscle: adherence 60-74% is a watch but does not lead; 75-89% neutral; 90%+ good', () => {
+  const mk = (n: number) => computeGoalProgress(base({
+    goal: 'muscle',
+    target: { weightKg: null, date: null, weeklySessions: 4 },
+    progression: lifts(100, 105),
+    trainingDays: Array.from({ length: n }, (_, i) => addDays(TODAY, -i)),
+  }));
+  const mid = mk(11); // 69%
+  assert.equal(mid.reasons.find(r => r.kind === 'adherence')!.tone, 'watch');
+  assert.notEqual(mid.reasons[0].kind, 'adherence');
+  assert.equal(mk(13).reasons.find(r => r.kind === 'adherence')!.tone, 'neutral'); // 81%
+  assert.equal(mk(15).reasons.find(r => r.kind === 'adherence')!.tone, 'good'); // 94%
+});
+
+test('muscle: weight gain at/above the top of the band is a watch reason', () => {
+  const p = computeGoalProgress(base({
+    goal: 'muscle',
+    target: { weightKg: 90, date: null, weeklySessions: 4 },
+    weightReadings: ramp(60, 75, 0.0675),
+    progression: lifts(100, 105),
+  }));
+  assert.ok(p.ratePerWeek.pctBodyweight! >= 0.5, `rate ${p.ratePerWeek.pctBodyweight}`);
+  const rate = p.reasons.find(r => r.kind === 'rate');
+  assert.ok(rate, 'rate reason surfaced');
+  assert.equal(rate!.tone, 'watch');
+  assert.match(rate!.text, /ceiling/);
+});
+
+test('muscle: ETA toward the target weight when gaining inside the band', () => {
+  const p = computeGoalProgress(base({
+    goal: 'muscle',
+    target: { weightKg: 90, date: null, weeklySessions: 4 },
+    weightReadings: ramp(60, 75, 0.04),
+  }));
+  assert.ok(p.eta, 'expected a muscle ETA');
+  assert.ok(p.eta! > TODAY);
+});
+
+test('muscle: ETA is null when the gain is the wrong way or the target is already reached', () => {
+  const wrong = computeGoalProgress(base({
+    goal: 'muscle',
+    target: { weightKg: 85, date: null, weeklySessions: 4 },
+    weightReadings: ramp(60, 80, -0.04),
+  }));
+  assert.equal(wrong.eta, null);
+  const reached = computeGoalProgress(base({
+    goal: 'muscle',
+    target: { weightKg: 75, date: null, weeklySessions: 4 },
+    weightReadings: ramp(60, 75, 0.04),
+  }));
+  assert.equal(reached.eta, null);
 });
 
 test('muscle with a session target but no lifts and no weight data → insufficient_data', () => {
@@ -355,13 +431,23 @@ test('endurance: recent 2 weeks well above the 2 before → building, with volum
   assert.match(p.headline, /^Building — training time up \d+% over 4 weeks/);
   assert.equal(p.reasons.length, 3);
   const kinds = p.reasons.map(r => r.kind);
-  assert.deepEqual(kinds, ['sessions', 'volume', 'resting_hr']);
+  assert.deepEqual(kinds, ['week_sessions', 'volume', 'resting_hr']);
   const rhr = p.reasons.find(r => r.kind === 'resting_hr')!;
   assert.match(rhr.text, /trending down: 54 → 50 bpm/);
   assert.equal(rhr.tone, 'good');
   assert.equal(p.eta, null);
   assert.equal(p.safeBand, null);
   assertWellFormed(p);
+});
+
+test('endurance: leads with "N of T sessions this week" (Mon–today) and keeps the 4-week volume trend with its window', () => {
+  // TODAY 2026-10-06 is a Tuesday: Monday 10-05 + Tuesday 10-06 = 2 sessions this week.
+  const p = computeGoalProgress(enduranceInput([2, 3, 3, 3]));
+  assert.equal(p.reasons[0].kind, 'week_sessions');
+  assert.equal(p.reasons[0].text, '2 of 4 sessions this week');
+  const volume = p.reasons.find(r => r.kind === 'volume');
+  assert.ok(volume);
+  assert.match(volume!.text, /last 2 weeks vs the 2 before/);
 });
 
 test('endurance: steady volume → holding', () => {

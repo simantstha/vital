@@ -247,6 +247,27 @@ final class TodayViewModel: ObservableObject {
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
+    /// One-line "swap to an easy 30 min or rest?" under a hard planned
+    /// session when readiness says to back off — see
+    /// `EnduranceHeroLogic.reconciliationText`.
+    var enduranceReconciliationText: String? {
+        EnduranceHeroLogic.reconciliationText(
+            readinessWord: enduranceReadinessWord,
+            isCalibrating: enduranceCalibratingText != nil,
+            session: todayMoveSession
+        )
+    }
+
+    /// The coach prompt behind a tap on the reconciliation line.
+    var enduranceReconciliationCoachPrompt: String? {
+        guard enduranceReconciliationText != nil, let session = todayMoveSession else { return nil }
+        return EnduranceHeroLogic.reconciliationCoachPrompt(
+            readinessWord: enduranceReadinessWord,
+            reasonLine: enduranceReasonLine,
+            session: session
+        )
+    }
+
     private func loadEnduranceTrends() async {
         do {
             enduranceTrendsBatch = try await apiClient.fetchTrendsBatch(

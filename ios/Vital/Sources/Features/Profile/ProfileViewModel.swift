@@ -37,6 +37,53 @@ final class ProfileViewModel: ObservableObject {
     @Published var budgetKcal: Int?
     @Published var budgetMode: String = "auto"   // "auto" | "custom"
     @Published var budgetGoalLabel: String = ""
+    /// Canonical goal id ("weight_loss" …) behind `budgetGoalLabel`, and the
+    /// targets that make up the Goal row's suffix.
+    @Published var budgetGoalId: String = ""
+    @Published var targetWeightKg: Double? = nil
+    @Published var weeklySessionsTarget: Int? = nil
+
+    /// "Lose weight · 76 kg" / "Build muscle · 4×/week" — the goal plus its
+    /// target when one is set. Reads the live unit preference like
+    /// `profileDetails`.
+    var goalRowLabel: String {
+        Self.goalRowLabel(
+            goalLabel: budgetGoalLabel, goalId: budgetGoalId,
+            targetWeightKg: targetWeightKg, weeklySessions: weeklySessionsTarget,
+            system: UnitPreference.shared.current
+        )
+    }
+
+    /// Pure composition of the Goal row label. Weight-loss shows the target
+    /// weight; muscle prefers the weekly session target, falling back to the
+    /// target weight; endurance shows the weekly sessions; general just the
+    /// goal name. A missing target leaves the bare goal label.
+    static func goalRowLabel(
+        goalLabel: String, goalId: String, targetWeightKg: Double?, weeklySessions: Int?, system: UnitSystem
+    ) -> String {
+        guard !goalLabel.isEmpty else { return goalLabel }
+        let weight = targetWeightKg.map { UnitFormat.weight(kg: $0, system) }
+        let sessions = weeklySessions.map { "\($0)\u{00D7}/week" }
+        let suffix: String?
+        switch goalId {
+        case "weight_loss": suffix = weight
+        case "muscle":      suffix = sessions ?? weight
+        case "endurance":   suffix = sessions
+        default:            suffix = nil
+        }
+        guard let suffix else { return goalLabel }
+        return "\(goalLabel) \u{00B7} \(suffix)"
+    }
+
+    /// Re-reads the goal + its targets (after the goal editor closes) so the
+    /// Goal row reflects a just-saved target.
+    func refreshGoalRow() async {
+        await loadBudget()
+        if let r = try? await apiClient.fetchProfile() {
+            targetWeightKg = r.targetWeightKg
+            weeklySessionsTarget = r.weeklySessionsTarget
+        }
+    }
 
     /// Calibration status for the Profile banner — decoded straight off the
     /// profile response (the route has always returned it; Phase 9 dropped the
@@ -71,6 +118,8 @@ final class ProfileViewModel: ObservableObject {
             sleepGoalMinutes = response.sleepGoalMinutes ?? 480
             lightsOutMinutes = response.lightsOutMinutes ?? 1350
             calibration = response.calibration
+            targetWeightKg = response.targetWeightKg
+            weeklySessionsTarget = response.weeklySessionsTarget
             // Locale-default adoption PATCH: opportunistic housekeeping, not a
             // user-initiated action, so failure is silent and simply retries
             // next launch (see UnitPreference.applyServerValue).
@@ -92,6 +141,7 @@ final class ProfileViewModel: ObservableObject {
             let r = try await apiClient.fetchDietGoal()
             budgetKcal = r.current.targetKcal
             budgetMode = r.current.mode
+            budgetGoalId = r.current.goal
             budgetGoalLabel = DietBudgetViewModel.goalLabels[r.current.goal] ?? r.current.goal
         } catch {
             // Non-fatal — the row just shows a neutral placeholder.

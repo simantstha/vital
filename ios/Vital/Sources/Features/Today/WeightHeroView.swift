@@ -18,6 +18,9 @@ struct WeightHeroView: View {
     /// `WeightHeroLogic`'s >= 7-day span gate on the weekly-rate line.
     let entries: [WeightLogEntryDTO]
     let system: UnitSystem
+    /// Goal target weight (kg) from goal progress, or `nil` — draws a dashed
+    /// target line and a "Target" caption under the sparkline.
+    var targetKg: Double? = nil
     let chip: WeightHeroLogic.WeighInChip
 
     /// One-tap confirm (HealthKit reading present) or opens the manual sheet.
@@ -54,7 +57,32 @@ struct WeightHeroView: View {
     /// by default, which pins an ~82 kg trend to the very top of the frame
     /// and reads as a flat divider line rather than a chart.
     private var sparklineDomain: ClosedRange<Double>? {
-        WeightHeroLogic.sparklineDomain(values: sparklinePoints.map(\.value), minSpan: sparklineMinSpan)
+        WeightHeroLogic.sparklineDomain(values: sparklinePoints.map(\.value), minSpan: sparklineMinSpan, target: targetDisplayValue)
+    }
+
+    /// Target weight in the user's unit, matching `sparklinePoints`.
+    private var targetDisplayValue: Double? {
+        guard let targetKg else { return nil }
+        return system == .metric ? targetKg : UnitConvert.kgToLb(targetKg)
+    }
+
+    /// The dashed line is only drawn when it fits the domain without
+    /// flattening the trend.
+    private var drawnTargetValue: Double? {
+        guard WeightHeroLogic.sparklineTargetVisible(
+            values: sparklinePoints.map(\.value), minSpan: sparklineMinSpan, target: targetDisplayValue
+        ) else { return nil }
+        return targetDisplayValue
+    }
+
+    /// "Start 83.7 kg · Now 82 kg · Target 76 kg" captions (kg-based inputs,
+    /// formatted in the user's unit).
+    private var sparklineCaptions: (start: String, now: String, target: String?)? {
+        guard let trend, trend.established else { return nil }
+        let days = trend.days.suffix(30)
+        return WeightHeroLogic.sparklineCaptions(
+            firstKg: days.first?.trendKg, lastKg: days.last?.trendKg, targetKg: targetKg, system: system
+        )
     }
 
     var body: some View {
@@ -117,6 +145,21 @@ struct WeightHeroView: View {
                         if let sparklineDomain {
                             sparkline(domain: sparklineDomain)
                                 .frame(height: 36)
+                            if let captions = sparklineCaptions {
+                                HStack(spacing: Theme.Spacing.xs) {
+                                    Text(captions.start)
+                                    Spacer(minLength: 0)
+                                    if let target = captions.target {
+                                        Text(target)
+                                        Spacer(minLength: 0)
+                                    }
+                                    Text(captions.now)
+                                }
+                                .font(.system(size: 11))
+                                .foregroundStyle(Theme.Colors.textTertiary)
+                                .monospacedDigit()
+                                .accessibilityIdentifier("today.weightHero.sparklineCaptions")
+                            }
                         }
                     }
                 }
@@ -146,6 +189,11 @@ struct WeightHeroView: View {
                     .foregroundStyle(Theme.Colors.accentContent)
                     .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
                     .interpolationMethod(.catmullRom)
+            }
+            if let target = drawnTargetValue {
+                RuleMark(y: .value("Target", target))
+                    .foregroundStyle(Theme.Colors.textTertiary)
+                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
             }
             if let last = sparklinePoints.last {
                 PointMark(x: .value("Day", last.day), y: .value("Trend", last.value))
@@ -208,6 +256,9 @@ struct WeightHeroView: View {
         parts.append("Protein \(proteinHave) of \(proteinGoal) grams")
         parts.append(trendHeadline)
         if let weeklyChange { parts.append(weeklyChange) }
+        if let captions = sparklineCaptions {
+            parts.append([captions.start, captions.now, captions.target].compactMap { $0 }.joined(separator: ", "))
+        }
         return parts.joined(separator: ". ")
     }
 }

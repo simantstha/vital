@@ -103,7 +103,7 @@ struct GoalProgressCard: View {
     var onSetTarget: () -> Void
 
     var body: some View {
-        if GoalProgressLogic.needsWeightTarget(progress) {
+        if GoalProgressLogic.needsTargetPrompt(progress) {
             promptCard
         } else {
             Button(action: onTap) {
@@ -124,7 +124,9 @@ struct GoalProgressCard: View {
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(Theme.Colors.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)
-                Text("Pick where you want to land and I'll tell you if you're on pace.")
+                Text(GoalProgressLogic.needsSessionTarget(progress)
+                     ? "Pick how many workouts a week you're aiming for and I'll tell you if you're keeping up."
+                     : "Pick where you want to land and I'll tell you if you're on pace.")
                     .font(.system(size: 14))
                     .foregroundStyle(Theme.Colors.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -173,10 +175,11 @@ struct GoalProgressCard: View {
                     bar
                 }
 
-                if let eta = GoalProgressLogic.etaLine(progress) {
-                    Text(eta)
+                if let pace = GoalProgressLogic.paceLine(progress) {
+                    Text(pace)
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(Theme.Colors.textSecondary)
+                        .accessibilityIdentifier("goalProgress.paceLine")
                 }
 
                 let reasons = GoalProgressLogic.visibleReasons(progress)
@@ -375,9 +378,8 @@ struct GoalProgressDetailView: View {
     @ViewBuilder
     private var statsCard: some View {
         let rows = statRows
-        let eta = GoalProgressLogic.etaLine(progress)
-        let targetDate = GoalProgressLogic.targetDateLine(progress)
-        if !rows.isEmpty || eta != nil || targetDate != nil {
+        let pace = GoalProgressLogic.paceLine(progress)
+        if !rows.isEmpty || pace != nil {
             VitalCard(padding: Theme.Spacing.lg, cornerRadius: Theme.Radius.lg) {
                 VStack(alignment: .leading, spacing: Theme.Spacing.md) {
                     ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
@@ -392,15 +394,14 @@ struct GoalProgressDetailView: View {
                                 .monospacedDigit()
                         }
                     }
-                    if let eta {
-                        Text(eta)
+                    // One line relating the projection to the target date
+                    // ("About 2 weeks ahead of your Dec 29 target") instead of
+                    // two unrelated dates.
+                    if let pace {
+                        Text(pace)
                             .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(Theme.Colors.textPrimary)
-                    }
-                    if let targetDate {
-                        Text(targetDate)
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(targetDateColor)
+                            .foregroundStyle(paceColor)
+                            .accessibilityIdentifier("goalProgress.detail.paceLine")
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -408,12 +409,9 @@ struct GoalProgressDetailView: View {
         }
     }
 
-    private var targetDateColor: Color {
-        switch progress.onPaceForTargetDate {
-        case .some(true):  return Theme.Colors.positive
-        case .some(false): return Theme.Colors.caution
-        case .none:        return Theme.Colors.textSecondary
-        }
+    private var paceColor: Color {
+        let tone = GoalProgressLogic.paceTone(progress)
+        return tone == .neutral ? Theme.Colors.textPrimary : GoalProgressLogic.color(for: tone)
     }
 
     private func section<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {

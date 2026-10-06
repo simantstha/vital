@@ -164,6 +164,43 @@ enum WeightHeroLogic {
         return (mid - minSpan / 2)...(mid + minSpan / 2)
     }
 
+    /// A target further than this many (floored) spans from the data would
+    /// flatten the sparkline to a straight line if the domain stretched to
+    /// include it — past that the dashed target line is omitted (the "Target"
+    /// caption still names it).
+    static let sparklineTargetReach = 3.0
+
+    /// Whether the dashed target line can be drawn without flattening the trend.
+    static func sparklineTargetVisible(values: [Double], minSpan: Double, target: Double?) -> Bool {
+        guard let target, let lo = values.min(), let hi = values.max() else { return false }
+        let gap = target < lo ? lo - target : (target > hi ? target - hi : 0)
+        return gap <= max(hi - lo, minSpan) * sparklineTargetReach
+    }
+
+    /// `sparklineDomain` widened to include `target` when it is close enough
+    /// to draw (`sparklineTargetVisible`); identical to the plain domain
+    /// otherwise.
+    static func sparklineDomain(values: [Double], minSpan: Double, target: Double?) -> ClosedRange<Double>? {
+        guard sparklineTargetVisible(values: values, minSpan: minSpan, target: target), let target else {
+            return sparklineDomain(values: values, minSpan: minSpan)
+        }
+        return sparklineDomain(values: values + [target], minSpan: minSpan)
+    }
+
+    /// Captions under the sparkline: "Start 83.7 kg" (first point of the
+    /// window), "Now 82 kg" (latest trend point) and, when a target weight
+    /// exists, "Target 76 kg" — all in the user's unit. `nil` without points.
+    static func sparklineCaptions(
+        firstKg: Double?, lastKg: Double?, targetKg: Double?, system: UnitSystem
+    ) -> (start: String, now: String, target: String?)? {
+        guard let firstKg, let lastKg else { return nil }
+        return (
+            "Start \(UnitFormat.weight(kg: firstKg, system))",
+            "Now \(UnitFormat.weight(kg: lastKg, system))",
+            targetKg.map { "Target \(UnitFormat.weight(kg: $0, system))" }
+        )
+    }
+
     // MARK: - Weigh-in chip (§5.3)
 
     struct WeighInChip: Equatable {

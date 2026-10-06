@@ -23,6 +23,12 @@ struct EnduranceHeroView: View {
     /// sessions and weekly volume into one display. `nil` hides the line.
     var weeklyOverviewText: String? = nil
 
+    /// "Your body says recover — swap to an easy 30 min or rest?" — shown
+    /// under a hard planned session when readiness says to back off. `nil`
+    /// hides it.
+    var reconciliationText: String? = nil
+    var onTapReconciliation: () -> Void = {}
+
     var onTapSession: (PlanItem) -> Void
 
     var body: some View {
@@ -44,6 +50,25 @@ struct EnduranceHeroView: View {
                     .frame(height: 1)
 
                 sessionSection
+
+                if let reconciliationText {
+                    Button(action: onTapReconciliation) {
+                        HStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.xs) {
+                            Text(reconciliationText)
+                                .font(.system(size: 13))
+                                .foregroundStyle(Theme.Colors.caution)
+                                .multilineTextAlignment(.leading)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Spacer(minLength: 0)
+                            Image(systemName: "bubble.left")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(Theme.Colors.textTertiary)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("Opens the coach")
+                    .accessibilityIdentifier("today.enduranceHero.reconcile")
+                }
 
                 if sessionDots != nil || weeklyOverviewText != nil {
                     weekRow
@@ -103,6 +128,7 @@ struct EnduranceHeroView: View {
         var parts: [String] = [calibratingText ?? readinessWord?.rawValue ?? EnduranceHeroLogic.ReadinessWord.goodToTrain.rawValue]
         if calibratingText == nil, let reasonLine { parts.append(reasonLine) }
         parts.append(session?.title ?? EnduranceHeroLogic.restDayText)
+        if let reconciliationText { parts.append(reconciliationText) }
         if let weeklyOverviewText { parts.append(weeklyOverviewText) }
         return parts.joined(separator: ". ")
     }

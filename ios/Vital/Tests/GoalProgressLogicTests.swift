@@ -16,11 +16,12 @@ final class GoalProgressLogicTests: XCTestCase {
     private func weightLoss(
         verdict: GoalVerdict = .onTrack,
         eta: String? = "2026-12-10",
-        headline: String = "On track — about 6 kg to go, around Dec 10"
+        headline: String = "On track — about 6 kg to go, around Dec 10",
+        target: GoalProgressDTO.Target = .init(weightKg: 76, date: "2027-01-15", weeklySessions: nil)
     ) -> GoalProgressDTO {
         GoalProgressDTO(
             goal: "weight_loss",
-            target: .init(weightKg: 76, date: "2027-01-15", weeklySessions: nil),
+            target: target,
             current: .init(weightKg: 82.0, startWeightKg: 83.7, changeKg: -1.7, progressPct: 22),
             ratePerWeek: .init(kg: -0.6, pctBodyweight: -0.73),
             safeBand: .init(minPct: 0.25, maxPct: 1),
@@ -135,7 +136,11 @@ final class GoalProgressLogicTests: XCTestCase {
     func testNeedsTargetForEnduranceUsesServerHeadlineAndNoWeightPrompt() {
         let progress = GoalProgressDTO(goal: "endurance", verdict: .needsTarget, headline: "Set a weekly session goal to track your training")
         XCTAssertFalse(GoalProgressLogic.needsWeightTarget(progress))
-        XCTAssertEqual(GoalProgressLogic.primaryLine(progress, system: .metric), "Set a weekly session goal to track your training")
+        XCTAssertTrue(GoalProgressLogic.needsSessionTarget(progress))
+        XCTAssertTrue(GoalProgressLogic.needsTargetPrompt(progress), "endurance gets a Set target button too")
+        XCTAssertEqual(GoalProgressLogic.primaryLine(progress, system: .metric), "Set a weekly session goal to see your progress")
+        let general = GoalProgressDTO(goal: "general", verdict: .needsTarget)
+        XCTAssertFalse(GoalProgressLogic.needsTargetPrompt(general))
     }
 
     func testInsufficientDataShowsWeighInProgressNeverAnEta() {
@@ -149,7 +154,11 @@ final class GoalProgressLogicTests: XCTestCase {
     }
 
     func testCompactTextPrefersEtaOtherwisePrimaryLine() {
-        XCTAssertEqual(GoalProgressLogic.compactText(weightLoss(), system: .metric, now: now, locale: en), "≈ Dec 10")
+        XCTAssertEqual(GoalProgressLogic.compactText(weightLoss(), system: .metric, now: now, locale: en), "5 wk ahead of Jan 15, 2027")
+        XCTAssertEqual(
+            GoalProgressLogic.compactText(weightLoss(target: .init(weightKg: 76, date: nil, weeklySessions: nil)), system: .metric, now: now, locale: en),
+            "≈ Dec 10"
+        )
         XCTAssertEqual(
             GoalProgressLogic.compactText(weightLoss(eta: nil), system: .metric, now: now, locale: en),
             "1.7 of 7.7 kg lost"
@@ -166,8 +175,39 @@ final class GoalProgressLogicTests: XCTestCase {
     }
 
     func testEtaLineOnlyWhenEtaPresent() {
-        XCTAssertEqual(GoalProgressLogic.etaLine(weightLoss(), now: now, locale: en), "At this pace: around Dec 10")
+        XCTAssertEqual(GoalProgressLogic.etaLine(weightLoss(), now: now, locale: en), "At this pace: ~Dec 10")
         XCTAssertNil(GoalProgressLogic.etaLine(weightLoss(eta: nil), now: now, locale: en))
+    }
+
+    func testPaceVsTargetLineRelatesEtaToTargetDate() {
+        func line(eta: String?, target: String?) -> String? {
+            let p = weightLoss(eta: eta, target: .init(weightKg: 76, date: target, weeklySessions: nil))
+            return GoalProgressLogic.paceVsTargetLine(p, now: now, locale: en)
+        }
+        XCTAssertEqual(line(eta: "2026-12-15", target: "2026-12-29"), "About 2 weeks ahead of your Dec 29 target")
+        XCTAssertEqual(line(eta: "2027-01-19", target: "2026-12-29"), "About 3 weeks behind your Dec 29 target")
+        XCTAssertEqual(line(eta: "2026-12-22", target: "2026-12-29"), "Right on pace for Dec 29", "exactly 7 days is on pace")
+        XCTAssertEqual(line(eta: "2027-01-05", target: "2026-12-29"), "Right on pace for Dec 29", "7 days late is on pace")
+        XCTAssertEqual(line(eta: "2026-12-20", target: "2026-12-29"), "About 1 week ahead of your Dec 29 target")
+        XCTAssertNil(line(eta: nil, target: "2026-12-29"))
+        XCTAssertNil(line(eta: "2026-12-15", target: nil))
+    }
+
+    func testPaceLineFallsBackToEtaThenTargetDate() {
+        let noTarget = weightLoss(target: .init(weightKg: 76, date: nil, weeklySessions: nil))
+        XCTAssertEqual(GoalProgressLogic.paceLine(noTarget, now: now, locale: en), "At this pace: ~Dec 10")
+        let noEta = weightLoss(eta: nil)
+        XCTAssertEqual(GoalProgressLogic.paceLine(noEta, now: now, locale: en), "Target date Jan 15, 2027 · on pace")
+        XCTAssertEqual(GoalProgressLogic.paceTone(weightLoss(eta: "2027-03-01")), .watch)
+        XCTAssertEqual(GoalProgressLogic.paceTone(weightLoss()), .good)
+    }
+
+    func testMuscleEtaShowsAtThisPace() {
+        let muscle = GoalProgressDTO(
+            goal: "muscle", target: .init(weightKg: 82, date: nil, weeklySessions: 4),
+            eta: "2026-11-24", verdict: .progressing
+        )
+        XCTAssertEqual(GoalProgressLogic.etaLine(muscle, now: now, locale: en), "At this pace: ~Nov 24")
     }
 
     func testTargetDateLineReflectsOnPace() {

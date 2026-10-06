@@ -77,6 +77,9 @@ const HRV_DIRECTION_PCT = 5;
 const SLEEP_GOAL_FRACTION = 0.9;
 /** Consistency-composite gain (0–1) that reads as 'building' for the general goal. */
 const GENERAL_BUILDING_DELTA = 0.05;
+/** Planned-session adherence (%) below which the reason is a watch; below LOW the verdict gets an amber lead reason. */
+const ADHERENCE_WATCH_PCT = 75;
+const ADHERENCE_LOW_PCT = 60;
 export const HEADLINE_MAX_CHARS = 70;
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -316,12 +319,13 @@ function rateReason(input: GoalProgressInput, w: WeightBlock, band: { minPct: nu
   let tone: ReasonTone = 'neutral';
   if (band) {
     const wantedDir = input.goal === 'weight_loss' ? w.rateKg < 0 : w.rateKg > 0;
-    if (wantedDir && abs >= band.minPct && abs <= band.maxPct) {
+    if (wantedDir && abs >= band.minPct && abs < band.maxPct) {
       tone = 'good';
       text += `, inside the ${band.minPct}–${band.maxPct}% safe band`;
-    } else if (wantedDir && abs > band.maxPct) {
+    } else if (wantedDir && abs >= band.maxPct) {
+      // At (not just above) the top of the band is already worth a flag.
       tone = 'watch';
-      text += `, faster than the ${band.maxPct}% a week ceiling`;
+      text += `, at or above the ${band.maxPct}% a week ceiling`;
     } else if (wantedDir) {
       tone = 'neutral';
       text += `, under the ${band.minPct}% a week floor`;
@@ -401,6 +405,45 @@ function sessionsReason(input: GoalProgressInput): GoalProgressReason | null {
     kind: 'sessions',
     text: `Averaging ${perWeek} sessions a week vs your target of ${target}`,
     tone: perWeek >= target ? 'good' : perWeek >= target * 0.75 ? 'neutral' : 'watch',
+  };
+}
+
+/** Planned-session adherence over 28 days: done / (weekly target x 4). Null without a target. */
+function sessionAdherence(input: GoalProgressInput): { done: number; planned: number; pct: number } | null {
+  const target = input.target.weeklySessions;
+  if (target == null || target <= 0) return null;
+  const done = sessionsPerWeek(input).count;
+  const planned = target * 4;
+  return { done, planned, pct: Math.round((done / planned) * 100) };
+}
+
+/** "9 of 16 planned sessions in 4 weeks (56%)" — watch under 75%. */
+function adherenceReason(input: GoalProgressInput): GoalProgressReason | null {
+  const a = sessionAdherence(input);
+  if (!a) return null;
+  return {
+    kind: 'adherence',
+    text: `${a.done} of ${a.planned} planned ${plural(a.planned, 'session')} in 4 weeks (${a.pct}%)`,
+    tone: a.pct >= 90 ? 'good' : a.pct >= ADHERENCE_WATCH_PCT ? 'neutral' : 'watch',
+  };
+}
+
+/** Monday (UTC calendar) of the week containing `day`. */
+function weekStart(day: string): string {
+  const dow = (new Date(dayNumber(day) * 86_400_000).getUTCDay() + 6) % 7; // Mon = 0
+  return addDays(day, -dow);
+}
+
+/** "2 of 4 sessions this week" (Mon–today) vs the weekly target. Null without a target. */
+function weekSessionsReason(input: GoalProgressInput): GoalProgressReason | null {
+  const target = input.target.weeklySessions;
+  if (target == null) return null;
+  const start = weekStart(input.todayKey);
+  const done = new Set(input.trainingDays.filter(d => d >= start && d <= input.todayKey)).size;
+  return {
+    kind: 'week_sessions',
+    text: `${done} of ${target} ${plural(target, 'session')} this week`,
+    tone: done >= target ? 'good' : 'neutral',
   };
 }
 
@@ -623,10 +666,23 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock): Outcome {
 
   const lifts = liftChanges(input.progression, input.todayKey);
   const rate = rateReason(input, w, MUSCLE_GAIN_BAND);
-  const sessions = sessionsReason(input);
+  const adherence = adherenceReason(input);
+  const adherenceLow = (sessionAdherence(input)?.pct ?? 100) < ADHERENCE_LOW_PCT;
+  const sessions = adherence ?? sessionsReason(input);
   const protein = proteinReason(input);
   const liftReasons = lifts.map(l => liftReason(l, input)).filter((r): r is GoalProgressReason => r != null);
-  const reasons = capReasons([liftReasons[0] ?? null, sessions, protein, rate, liftReasons[1] ?? null]);
+  // Rate at/above the top of the healthy band is a flag worth surfacing early.
+  const rateTop = rate?.tone === 'watch' && w.rateKg != null && w.rateKg > 0;
+  // Low adherence leads (amber) without overriding the lift-based verdict.
+  const reasons = capReasons([
+    adherenceLow ? adherence : null,
+    liftReasons[0] ?? null,
+    adherenceLow ? null : sessions,
+    rateTop ? rate : null,
+    protein,
+    rateTop ? null : rate,
+    liftReasons[1] ?? null,
+  ]);
 
   if (w.reached) {
     return {
@@ -681,7 +737,7 @@ function enduranceOutcome(input: GoalProgressInput): Outcome {
   }
 
   const { count, perWeek } = sessionsPerWeek(input);
-  const sessions = sessionsReason(input);
+  const sessions = weekSessionsReason(input) ?? sessionsReason(input);
   if (count < MIN_SESSIONS_FOR_ENDURANCE) {
     return {
       verdict: 'insufficient_data',
