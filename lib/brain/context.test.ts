@@ -168,3 +168,38 @@ test('no weightTrend at all omits the Weight trend section entirely', async () =
 
   assert.doesNotMatch(text, /### Weight trend & energy signals/);
 });
+
+// ── Goal progress section ───────────────────────────────────────────────
+
+test('a goalProgress renders a compact Goal progress section with the verdict and numbers in the user\'s unit', async () => {
+  const { buildPromptText } = await contextPromise;
+  const ctx = baseCtx('imperial');
+  (ctx as Record<string, unknown>).goalProgress = {
+    goal: 'weight_loss',
+    target: { weightKg: 76, date: '2026-12-25', weeklySessions: null },
+    current: { weightKg: 82.1, startWeightKg: 85, changeKg: -2.9, progressPct: 32 },
+    ratePerWeek: { kg: -0.45, pctBodyweight: -0.55 },
+    safeBand: { minPct: 0.25, maxPct: 1 },
+    eta: '2026-12-10',
+    onPaceForTargetDate: true,
+    verdict: 'on_track',
+    headline: 'On track — about 13 lb to go, around Dec 10',
+    reasons: [{ kind: 'rate', text: 'Losing 1 lb a week', tone: 'good' }],
+    dataSufficiency: { weighIns: 20, needed: 3, sessionsLast28d: 8 },
+  };
+
+  const text = buildPromptText(ctx as Parameters<typeof buildPromptText>[0]);
+  const section = text.split('### Goal progress')[1]?.split('\n###')[0] ?? '';
+
+  assert.match(text, /### Goal progress/);
+  assert.match(section, /Verdict: on_track/);
+  assert.match(section, /target 167\.6 lb, by 2026-12-25/);
+  assert.match(section, /ETA 2026-12-10/);
+  assert.ok(section.trim().split('\n').length <= 12);
+});
+
+test('no goalProgress omits the Goal progress section entirely', async () => {
+  const { buildPromptText } = await contextPromise;
+  const text = buildPromptText(baseCtx('metric') as Parameters<typeof buildPromptText>[0]);
+  assert.doesNotMatch(text, /### Goal progress/);
+});

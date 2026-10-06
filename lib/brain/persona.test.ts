@@ -140,3 +140,11 @@ test('assemblePersona always includes the same safetyBlock() text verbatim', () 
   const system = assemblePersona([]);
   assert.ok(system.includes(safetyBlock()));
 });
+
+test('the persona keeps the coach consistent with the goal verdict and limits target nagging', () => {
+  const system = assemblePersona([]);
+  assert.match(system, /## Goal progress — stay consistent with the app/);
+  assert.match(system, /never contradict it/);
+  assert.match(system, /ONCE/);
+  assert.match(system, /set_goal_target/);
+});

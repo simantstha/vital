@@ -42,7 +42,7 @@ const MEMORY_TOOLS_SET = new Set([
 ]);
 
 const ACTION_TOOLS_SET = new Set([
-  'log_meal', 'delete_meal', 'log_weight', 'log_workout', 'update_diet_budget',
+  'log_meal', 'delete_meal', 'log_weight', 'set_goal_target', 'log_workout', 'update_diet_budget',
 ]);
 
 const CALENDAR_TOOLS_SET = new Set(['get_schedule']);
@@ -113,6 +113,8 @@ export function doneLabel(name: string, input: Record<string, unknown>): string 
       return 'Removed that';
     case 'log_weight':
       return 'Logged your weigh-in';
+    case 'set_goal_target':
+      return 'Set your goal';
     case 'get_metric_trend':
       return `Checked your ${metricLabel(String(input.metric ?? ''))} trend`;
     case 'get_weight_trend':
@@ -371,6 +373,21 @@ export function toolResultSummary(
       if (valueKg == null) return undefined;
       const w = formatWeight(valueKg, unitSystem);
       return w ? truncate(`Logged · ${w}`) : undefined;
+    }
+
+    case 'set_goal_target': {
+      const parsed = tryParseJson(resultString);
+      if (!isRecord(parsed) || parsed.ok !== true) return undefined;
+      const bits: string[] = [];
+      const kg = num(parsed.targetWeightKg);
+      if (kg != null) {
+        const w = formatWeight(kg, unitSystem);
+        if (w) bits.push(w);
+      }
+      if (typeof parsed.targetDate === 'string') bits.push(`by ${parsed.targetDate}`);
+      const sessions = num(parsed.weeklySessionsTarget);
+      if (sessions != null) bits.push(`${sessions}x/week`);
+      return bits.length ? truncate(`Goal set · ${bits.join(' ')}`) : undefined;
     }
 
     case 'log_workout': {
