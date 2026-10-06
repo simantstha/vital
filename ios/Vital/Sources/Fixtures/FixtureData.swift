@@ -1764,12 +1764,12 @@ enum FixtureData {
                 "eta": dayString(-60),
                 "onPaceForTargetDate": none,
                 "verdict": "progressing",
-                "headline": "Progressing — Squat estimated 1RM up 17.5 kg",
+                "headline": "Progressing — Squat est. 1RM up 20.4 kg vs 4 weeks ago",
                 "reasons": [
                     // 9 of 16 planned sessions (4/wk x 4) = 56% → amber, leads.
                     reason("adherence", "9 of 16 planned sessions in 4 weeks (56%)", "watch"),
-                    reason("lift", "Squat estimated 1RM +17.5 kg over 4 weeks (145.8 → 163.3 kg)", "good"),
-                    reason("lift", "Bench press estimated 1RM +5.8 kg over 4 weeks (102.1 → 107.9 kg)", "good"),
+                    reason("lift", "Squat est. 1RM +20.4 kg vs 4 weeks ago (142.9 → 163.3 kg)", "good"),
+                    reason("lift", "Bench Press est. 1RM +8.8 kg vs 4 weeks ago (99.2 → 107.9 kg)", "good"),
                 ],
                 "dataSufficiency": ["weighIns": 11, "needed": 3, "sessionsLast28d": 9],
             ]
