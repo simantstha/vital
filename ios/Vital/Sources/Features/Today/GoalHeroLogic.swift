@@ -271,4 +271,63 @@ enum EnduranceHeroLogic {
         }
         return nil
     }
+
+    // MARK: - Readiness vs. the planned session
+
+    /// Hard-session vocabulary in a plan row's title/subtitle. The plan item
+    /// carries no structured intensity field, so this reads the words the
+    /// coach/user wrote ("10km tempo run", "6 x 800 intervals", "Long run").
+    private static let hardSessionPattern =
+        #"\b(tempo|intervals?|repeats?|threshold|long|race|hills?|fartlek|sprints?|vo2(max)?|speed|hard|z[45]|zone [45])\b"#
+    private static let easySessionPattern = #"\b(easy|recovery|recover|shake[- ]?out|gentle|walk|rest)\b"#
+    private static let highRPEPattern = #"\brpe\s*([789]|10)\b"#
+
+    /// True for a hard planned session (tempo/interval/long/threshold/race/
+    /// hills/speed, zone 4-5, or an explicit RPE 7+). An "easy"/"recovery"
+    /// title wins over a hard word ("easy long walk"). A non-move item is
+    /// never hard.
+    static func isHardSession(_ session: PlanItem) -> Bool {
+        guard session.kind == .move else { return false }
+        let text = "\(session.title) \(session.subtitle)".lowercased()
+        if text.range(of: highRPEPattern, options: .regularExpression) != nil { return true }
+        if text.range(of: easySessionPattern, options: .regularExpression) != nil { return false }
+        return text.range(of: hardSessionPattern, options: .regularExpression) != nil
+    }
+
+    /// The one-line reconciliation under the session when readiness says to
+    /// back off but the plan says to go hard: "Your body says recover — swap
+    /// to an easy 30 min or rest?". `nil` while calibrating (the headline is
+    /// not a readiness call yet), for readiness words that don't ask to back
+    /// off, with no session, a finished session, or a session that is not hard.
+    static func reconciliationText(
+        readinessWord: ReadinessWord?,
+        isCalibrating: Bool,
+        session: PlanItem?
+    ) -> String? {
+        guard !isCalibrating, let readinessWord, let session,
+              session.status != .done, session.status != .skipped,
+              isHardSession(session) else { return nil }
+        switch readinessWord {
+        case .recoverToday:
+            return "Your body says recover \u{2014} swap to an easy 30 min or rest?"
+        case .keepItEasy:
+            return "Your body says take it easy \u{2014} swap to an easy 30 min or rest?"
+        case .readyToPush, .goodToTrain:
+            return nil
+        }
+    }
+
+    /// The message handed to the coach (`router.coachContext`) when the
+    /// reconciliation line is tapped.
+    static func reconciliationCoachPrompt(
+        readinessWord: ReadinessWord?,
+        reasonLine: String?,
+        session: PlanItem
+    ) -> String {
+        let readiness = (readinessWord ?? .goodToTrain).rawValue.lowercased()
+        var text = "My readiness today reads \"\(readiness)\""
+        if let reasonLine, !reasonLine.isEmpty { text += " (\(reasonLine))" }
+        text += " but my plan has \"\(session.title)\". Should I swap it for an easy 30 minutes or rest?"
+        return text
+    }
 }

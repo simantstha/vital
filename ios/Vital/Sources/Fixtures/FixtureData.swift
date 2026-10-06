@@ -1696,14 +1696,16 @@ enum FixtureData {
                 ],
                 "ratePerWeek": ["kg": profile.weightTrendPerWeekKg, "pctBodyweight": 0.44],
                 "safeBand": ["minPct": 0.1, "maxPct": 0.5],
-                "eta": none,
+                // (82 - 79) kg at +0.35 kg/wk ≈ 8.6 weeks.
+                "eta": dayString(-60),
                 "onPaceForTargetDate": none,
                 "verdict": "progressing",
                 "headline": "Progressing — Squat estimated 1RM up 17.5 kg",
                 "reasons": [
+                    // 9 of 16 planned sessions (4/wk x 4) = 56% → amber, leads.
+                    reason("adherence", "9 of 16 planned sessions in 4 weeks (56%)", "watch"),
                     reason("lift", "Squat estimated 1RM +17.5 kg over 4 weeks (145.8 → 163.3 kg)", "good"),
                     reason("lift", "Bench press estimated 1RM +5.8 kg over 4 weeks (102.1 → 107.9 kg)", "good"),
-                    reason("lift", "Deadlift hasn't set a new best in 4 weeks (204.2 kg)", "watch"),
                 ],
                 "dataSufficiency": ["weighIns": 11, "needed": 3, "sessionsLast28d": 9],
             ]
@@ -1719,8 +1721,9 @@ enum FixtureData {
                 "verdict": "building",
                 "headline": "Building — weekly distance up 12% over 4 weeks",
                 "reasons": [
-                    reason("volume", "Weekly distance up 12%: 21.9 → 24.5 km", "good"),
-                    reason("sessions", "Averaging 3 sessions a week vs your target of 4", "neutral"),
+                    // Same 3 completed sessions as the hero's training summary.
+                    reason("week_sessions", "3 of 4 sessions this week", "neutral"),
+                    reason("volume", "Weekly distance up 12%: 21.9 → 24.5 km (last 2 weeks vs the 2 before)", "good"),
                     reason("hrv", "HRV trending down: 59 → 56 ms (last 2 weeks vs the 2 before)", "watch"),
                 ],
                 "dataSufficiency": ["weighIns": 4, "needed": 3, "sessionsLast28d": 12],

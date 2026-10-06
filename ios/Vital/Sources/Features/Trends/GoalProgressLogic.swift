@@ -86,12 +86,23 @@ enum GoalProgressLogic {
             && progress.current.weightKg != nil
     }
 
-    /// The prompt state: no target to measure against. Only the weight goal
-    /// gets the "set a target weight" button — endurance/general need a weekly
-    /// session goal instead, which has no editor yet, so they just show the
-    /// server headline.
+    /// The weight-loss prompt state: no target weight to measure against.
     static func needsWeightTarget(_ progress: GoalProgressDTO) -> Bool {
         progress.verdict == .needsTarget && progress.goal == "weight_loss"
+    }
+
+    /// Endurance (and a muscle goal with neither target) needs a weekly
+    /// session goal instead of a weight.
+    static func needsSessionTarget(_ progress: GoalProgressDTO) -> Bool {
+        progress.verdict == .needsTarget && (progress.goal == "endurance" || progress.goal == "muscle")
+    }
+
+    /// Any goal whose needs-target state offers a "Set target" button — it
+    /// opens Profile's goal editor (`.vitalOpenGoalEditor`), which shows the
+    /// target weight field for weight/muscle goals and the "workouts per
+    /// week" stepper for muscle/endurance goals.
+    static func needsTargetPrompt(_ progress: GoalProgressDTO) -> Bool {
+        needsWeightTarget(progress) || needsSessionTarget(progress)
     }
 
     /// "Need 3 weigh-ins · 1 of 3" — only for the weight goal (the only one
@@ -173,13 +184,14 @@ enum GoalProgressLogic {
         return formatter.string(from: date)
     }
 
-    /// "At this pace: around Dec 10" — only when the server supplied an ETA.
+    /// "At this pace: ~Dec 10" — only when the server supplied an ETA.
     static func etaLine(_ progress: GoalProgressDTO, now: Date = Date(), locale: Locale = .current) -> String? {
         guard let text = dateText(progress.eta, now: now, locale: locale) else { return nil }
-        return "At this pace: around \(text)"
+        return "At this pace: ~\(text)"
     }
 
-    /// "Target date Jan 15 · on pace" / "· not on pace" / just the date.
+    /// "Target date Jan 15 · on pace" / "· not on pace" / just the date. Used
+    /// only when there is NO ETA to relate the target date to (see `paceLine`).
     static func targetDateLine(_ progress: GoalProgressDTO, now: Date = Date(), locale: Locale = .current) -> String? {
         guard let text = dateText(progress.target.date, now: now, locale: locale) else { return nil }
         switch progress.onPaceForTargetDate {
@@ -189,12 +201,95 @@ enum GoalProgressLogic {
         }
     }
 
+    /// ETA within this many days of the target date reads as "on pace".
+    static let onPaceToleranceDays = 7
+
+    /// Whole days from `from` to `to` ("YYYY-MM-DD" both), positive when `to`
+    /// is later; `nil` if either fails to parse. UTC so the zone never shifts it.
+    static func daysBetween(_ from: String?, _ to: String?) -> Int? {
+        guard let from, let to else { return nil }
+        let parser = DateFormatter()
+        parser.calendar = Calendar(identifier: .gregorian)
+        parser.locale = Locale(identifier: "en_US_POSIX")
+        parser.timeZone = TimeZone(identifier: "UTC")
+        parser.dateFormat = "yyyy-MM-dd"
+        guard let a = parser.date(from: from), let b = parser.date(from: to) else { return nil }
+        return utcCalendar().dateComponents([.day], from: a, to: b).day
+    }
+
+    enum PaceRelation: Equatable {
+        case onPace
+        /// Weeks (rounded, >= 1) the ETA beats the target date by.
+        case ahead(weeks: Int)
+        case behind(weeks: Int)
+    }
+
+    /// ETA vs target date; `nil` unless both exist. Within ±7 days = on pace.
+    static func paceRelation(_ progress: GoalProgressDTO) -> PaceRelation? {
+        guard let days = daysBetween(progress.eta, progress.target.date) else { return nil }
+        if abs(days) <= onPaceToleranceDays { return .onPace }
+        let weeks = max(1, Int((Double(abs(days)) / 7).rounded()))
+        return days > 0 ? .ahead(weeks: weeks) : .behind(weeks: weeks)
+    }
+
+    /// One line relating the projection to the user's target date:
+    /// "About 2 weeks ahead of your Dec 29 target" / "About 3 weeks behind
+    /// your Dec 29 target" / "Right on pace for Dec 29". `nil` without both an
+    /// ETA and a target date.
+    static func paceVsTargetLine(_ progress: GoalProgressDTO, now: Date = Date(), locale: Locale = .current) -> String? {
+        guard let relation = paceRelation(progress),
+              let target = dateText(progress.target.date, now: now, locale: locale) else { return nil }
+        switch relation {
+        case .onPace:
+            return "Right on pace for \(target)"
+        case .ahead(let weeks):
+            return "About \(weeks) \(weeks == 1 ? "week" : "weeks") ahead of your \(target) target"
+        case .behind(let weeks):
+            return "About \(weeks) \(weeks == 1 ? "week" : "weeks") behind your \(target) target"
+        }
+    }
+
+    /// Short form for the Today line: "2 wk ahead of Dec 29" / "On pace for Dec 29".
+    static func compactPaceVsTarget(_ progress: GoalProgressDTO, now: Date = Date(), locale: Locale = .current) -> String? {
+        guard let relation = paceRelation(progress),
+              let target = dateText(progress.target.date, now: now, locale: locale) else { return nil }
+        switch relation {
+        case .onPace:              return "On pace for \(target)"
+        case .ahead(let weeks):    return "\(weeks) wk ahead of \(target)"
+        case .behind(let weeks):   return "\(weeks) wk behind \(target)"
+        }
+    }
+
+    /// The single pace line for the detail sheet: the ETA-vs-target relation
+    /// when both dates exist, else the bare ETA, else the target date alone
+    /// (e.g. no projection yet).
+    static func paceLine(_ progress: GoalProgressDTO, now: Date = Date(), locale: Locale = .current) -> String? {
+        if let line = paceVsTargetLine(progress, now: now, locale: locale) { return line }
+        if let eta = etaLine(progress, now: now, locale: locale) { return eta }
+        return targetDateLine(progress, now: now, locale: locale)
+    }
+
+    /// Tone of `paceLine`: on pace / ahead good, behind caution, else neutral.
+    static func paceTone(_ progress: GoalProgressDTO) -> Tone {
+        switch paceRelation(progress) {
+        case .some(.onPace), .some(.ahead): return .good
+        case .some(.behind):                return .watch
+        case .none:
+            switch progress.onPaceForTargetDate {
+            case .some(true):  return .good
+            case .some(false): return .watch
+            case .none:        return .neutral
+            }
+        }
+    }
+
     // MARK: - Primary lines
 
     /// The card's primary line. Weight goals compose from structured fields;
     /// everything else falls back to the server `headline`.
     static func primaryLine(_ progress: GoalProgressDTO, system: UnitSystem) -> String {
         if needsWeightTarget(progress) { return "Set a target weight to see your progress" }
+        if needsSessionTarget(progress) { return "Set a weekly session goal to see your progress" }
         if let text = insufficientDataText(progress) { return text }
         switch progress.verdict {
         case .needsTarget, .insufficientData:
@@ -233,11 +328,13 @@ enum GoalProgressLogic {
         return text
     }
 
-    /// The Today hero's short text beside the verdict chip: the ETA when there
-    /// is one ("≈ Dec 10"), else the primary line.
+    /// The Today hero's short text beside the verdict chip: the ETA-vs-target
+    /// relation ("2 wk ahead of Dec 29") when there is a target date, else
+    /// the ETA ("≈ Dec 10"), else the primary line.
     static func compactText(_ progress: GoalProgressDTO, system: UnitSystem, now: Date = Date(), locale: Locale = .current) -> String {
         if let eta = dateText(progress.eta, now: now, locale: locale),
            progress.verdict != .needsTarget, progress.verdict != .insufficientData {
+            if let relation = compactPaceVsTarget(progress, now: now, locale: locale) { return relation }
             return "≈ \(eta)"
         }
         return primaryLine(progress, system: system)

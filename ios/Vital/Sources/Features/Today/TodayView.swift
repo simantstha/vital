@@ -98,6 +98,7 @@ struct TodayView: View {
                                     trend: vm.weightLog?.trend,
                                     entries: vm.weightLog?.entries ?? [],
                                     system: unitPref.current,
+                                    targetKg: vm.goalProgress?.target.weightKg,
                                     chip: vm.weighInChip,
                                     onChipTap: { onWeighInChipTap() },
                                     isLogging: vm.isLoggingWeight,
@@ -128,6 +129,16 @@ struct TodayView: View {
                                     session: vm.todayMoveSession,
                                     sessionDots: vm.trainingSessionDots,
                                     weeklyOverviewText: vm.enduranceWeeklyOverviewText,
+                                    reconciliationText: vm.enduranceReconciliationText,
+                                    onTapReconciliation: {
+                                        // Same hand-off as the analysis screens'
+                                        // "Ask coach" links: RootTabView observes
+                                        // `router.coachContext`, prefills the coach
+                                        // input and switches to the Coach tab.
+                                        if let prompt = vm.enduranceReconciliationCoachPrompt {
+                                            router.coachContext = prompt
+                                        }
+                                    },
                                     onTapSession: { actionsItem = $0 }
                                 )
                                 .staggeredAppear(index: 1)

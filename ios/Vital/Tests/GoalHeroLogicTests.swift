@@ -320,4 +320,92 @@ final class GoalHeroLogicTests: XCTestCase {
         )
         XCTAssertEqual(text, "0 sessions · 10 km this week")
     }
+
+    // MARK: - EnduranceHeroLogic readiness vs planned session
+
+    private func session(_ title: String, subtitle: String = "", status: PlanItem.Status = .later, kind: PlanItem.Kind = .move) -> PlanItem {
+        PlanItem(id: "s", timeMinutes: 420, title: title, subtitle: subtitle,
+                 sfSymbol: "figure.run", status: status, source: .coach, kind: kind)
+    }
+
+    func testIsHardSessionRecognisesHardWorkoutsAndSparesEasyOnes() {
+        for title in ["10km tempo run", "6 x 800m intervals", "Long run", "Threshold session", "Hill repeats", "Race day", "VO2max set"] {
+            XCTAssertTrue(EnduranceHeroLogic.isHardSession(session(title)), title)
+        }
+        for title in ["Easy 5km", "Recovery jog", "Easy long walk", "Yoga", "Strength"] {
+            XCTAssertFalse(EnduranceHeroLogic.isHardSession(session(title)), title)
+        }
+        XCTAssertTrue(EnduranceHeroLogic.isHardSession(session("Run", subtitle: "RPE 8")))
+        XCTAssertFalse(EnduranceHeroLogic.isHardSession(session("Run", subtitle: "RPE 4")))
+        XCTAssertFalse(EnduranceHeroLogic.isHardSession(session("Tempo run", kind: .meal)))
+    }
+
+    func testReconciliationShowsWhenReadinessSaysRecoverAndSessionIsHard() {
+        let tempo = session("10km tempo run")
+        XCTAssertEqual(
+            EnduranceHeroLogic.reconciliationText(readinessWord: .recoverToday, isCalibrating: false, session: tempo),
+            "Your body says recover \u{2014} swap to an easy 30 min or rest?"
+        )
+        XCTAssertEqual(
+            EnduranceHeroLogic.reconciliationText(readinessWord: .keepItEasy, isCalibrating: false, session: tempo),
+            "Your body says take it easy \u{2014} swap to an easy 30 min or rest?"
+        )
+    }
+
+    func testReconciliationHiddenWhenNotApplicable() {
+        let tempo = session("10km tempo run")
+        XCTAssertNil(EnduranceHeroLogic.reconciliationText(readinessWord: .goodToTrain, isCalibrating: false, session: tempo))
+        XCTAssertNil(EnduranceHeroLogic.reconciliationText(readinessWord: .readyToPush, isCalibrating: false, session: tempo))
+        XCTAssertNil(EnduranceHeroLogic.reconciliationText(readinessWord: .recoverToday, isCalibrating: true, session: tempo))
+        XCTAssertNil(EnduranceHeroLogic.reconciliationText(readinessWord: .recoverToday, isCalibrating: false, session: nil))
+        XCTAssertNil(EnduranceHeroLogic.reconciliationText(readinessWord: .recoverToday, isCalibrating: false, session: session("Easy 5km")))
+        XCTAssertNil(EnduranceHeroLogic.reconciliationText(readinessWord: .recoverToday, isCalibrating: false, session: session("10km tempo run", status: .done)))
+        XCTAssertNil(EnduranceHeroLogic.reconciliationText(readinessWord: nil, isCalibrating: false, session: tempo))
+    }
+
+    func testReconciliationCoachPromptNamesSessionAndReadiness() {
+        let prompt = EnduranceHeroLogic.reconciliationCoachPrompt(
+            readinessWord: .recoverToday, reasonLine: "HRV -12 %", session: session("10km tempo run")
+        )
+        XCTAssertTrue(prompt.contains("recover today"))
+        XCTAssertTrue(prompt.contains("HRV -12 %"))
+        XCTAssertTrue(prompt.contains("10km tempo run"))
+    }
+
+    // MARK: - WeightHeroLogic sparkline target
+
+    func testSparklineTargetDrawnOnlyWhenNearEnoughNotToFlattenTheTrend() {
+        let values = [82.0, 82.4, 83.0, 83.7]   // span 1.7
+        XCTAssertTrue(WeightHeroLogic.sparklineTargetVisible(values: values, minSpan: 1, target: 80))
+        XCTAssertFalse(WeightHeroLogic.sparklineTargetVisible(values: values, minSpan: 1, target: 76), "6 kg away > 3 spans")
+        XCTAssertTrue(WeightHeroLogic.sparklineTargetVisible(values: values, minSpan: 1, target: 82.5), "inside the range")
+        XCTAssertFalse(WeightHeroLogic.sparklineTargetVisible(values: values, minSpan: 1, target: nil))
+        let near = WeightHeroLogic.sparklineDomain(values: values, minSpan: 1, target: 80)!
+        XCTAssertLessThanOrEqual(near.lowerBound, 80)
+        let far = WeightHeroLogic.sparklineDomain(values: values, minSpan: 1, target: 76)!
+        XCTAssertEqual(far, WeightHeroLogic.sparklineDomain(values: values, minSpan: 1)!)
+    }
+
+    func testSparklineCaptionsAreUnitAware() {
+        let metric = WeightHeroLogic.sparklineCaptions(firstKg: 83.7, lastKg: 82, targetKg: 76, system: .metric)
+        XCTAssertEqual(metric?.start, "Start 83.7 kg")
+        XCTAssertEqual(metric?.now, "Now 82 kg")
+        XCTAssertEqual(metric?.target, "Target 76 kg")
+        let imperial = WeightHeroLogic.sparklineCaptions(firstKg: 83.7, lastKg: 82, targetKg: nil, system: .imperial)
+        XCTAssertEqual(imperial?.start, "Start 185 lb")
+        XCTAssertNil(imperial?.target)
+        XCTAssertNil(WeightHeroLogic.sparklineCaptions(firstKg: nil, lastKg: 82, targetKg: 76, system: .metric))
+    }
+
+    // MARK: - Profile goal row
+
+    func testGoalRowLabelShowsTheTarget() {
+        XCTAssertEqual(ProfileViewModel.goalRowLabel(goalLabel: "Lose weight", goalId: "weight_loss", targetWeightKg: 76, weeklySessions: nil, system: .metric), "Lose weight \u{00B7} 76 kg")
+        XCTAssertEqual(ProfileViewModel.goalRowLabel(goalLabel: "Build muscle", goalId: "muscle", targetWeightKg: 82, weeklySessions: 4, system: .metric), "Build muscle \u{00B7} 4\u{00D7}/week")
+        XCTAssertEqual(ProfileViewModel.goalRowLabel(goalLabel: "Build muscle", goalId: "muscle", targetWeightKg: 82, weeklySessions: nil, system: .metric), "Build muscle \u{00B7} 82 kg")
+        XCTAssertEqual(ProfileViewModel.goalRowLabel(goalLabel: "Endurance", goalId: "endurance", targetWeightKg: nil, weeklySessions: 3, system: .metric), "Endurance \u{00B7} 3\u{00D7}/week")
+        XCTAssertEqual(ProfileViewModel.goalRowLabel(goalLabel: "Lose weight", goalId: "weight_loss", targetWeightKg: nil, weeklySessions: nil, system: .metric), "Lose weight")
+        XCTAssertEqual(ProfileViewModel.goalRowLabel(goalLabel: "Maintain", goalId: "general", targetWeightKg: 70, weeklySessions: 3, system: .metric), "Maintain")
+        XCTAssertEqual(ProfileViewModel.goalRowLabel(goalLabel: "", goalId: "", targetWeightKg: nil, weeklySessions: nil, system: .metric), "")
+    }
 }

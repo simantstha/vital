@@ -88,7 +88,7 @@ struct ProfileView: View {
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(isPresented: $showGoalEditor) {
                 GoalDetailView(switchToCoachTab: switchToCoachTab)
-                    .onDisappear { Task { await vm.loadBudget() } }
+                    .onDisappear { Task { await vm.refreshGoalRow() } }
             }
         }
         .task { await vm.load() }
@@ -263,9 +263,9 @@ private extension ProfileView {
                     PersonalDetailsView(profileVM: vm)
                 }
 
-                settingsLink(index: 1, icon: "target", title: "Goal", value: vm.budgetGoalLabel) {
+                settingsLink(index: 1, icon: "target", title: "Goal", value: vm.goalRowLabel) {
                     GoalDetailView(switchToCoachTab: switchToCoachTab)
-                        .onDisappear { Task { await vm.loadBudget() } }
+                        .onDisappear { Task { await vm.refreshGoalRow() } }
                 }
 
                 settingsButton(index: 2, icon: "flame", title: "Daily budget",
