@@ -82,6 +82,29 @@ struct TodayView: View {
 
                     case .loaded:
                         Group {
+                            // New-user first-run checklist (§4.2): the clearest
+                            // guidance for an account with no data yet, so it
+                            // sits directly under the greeting, ABOVE the goal
+                            // hero, with the calibration note right after it
+                            // (a new user should see what to do today before
+                            // being told what needs two weeks of data). It
+                            // replaces the three empty biometric tiles.
+                            if vm.showFirstRunChecklist {
+                                FirstRunChecklistView(
+                                    goal: vm.goal,
+                                    mealLogged: vm.diet.kcalConsumed > 0,
+                                    secondItemLogged: vm.showFirstRunChecklistSecondItemDone,
+                                    healthConnected: HealthKitManager.didRequestAuthorization && !vm.showHealthKitRecoveryBanner,
+                                    onLogMeal: { showLogSheet = true },
+                                    onLogSecondItem: { onChecklistSecondItemTap() },
+                                    onConnectHealth: { _ = HealthKitManager.openHealthApp() }
+                                )
+                                .staggeredAppear(index: 1)
+
+                                calibrationCard
+                                    .staggeredAppear(index: 1)
+                            }
+
                             // Goal hero (§4.1) — weight_loss only for T1; other
                             // goals keep their existing Today content below
                             // (T2 will add their own heroes).
@@ -223,30 +246,18 @@ struct TodayView: View {
                                 healthKitRecoveryBanner
                             }
 
-                            // New-user first-run checklist (§4.2) replaces the
-                            // three empty biometric tiles until real data exists.
-                            if vm.showFirstRunChecklist {
-                                FirstRunChecklistView(
-                                    goal: vm.goal,
-                                    mealLogged: vm.diet.kcalConsumed > 0,
-                                    secondItemLogged: vm.showFirstRunChecklistSecondItemDone,
-                                    healthConnected: HealthKitManager.didRequestAuthorization && !vm.showHealthKitRecoveryBanner,
-                                    onLogMeal: { showLogSheet = true },
-                                    onLogSecondItem: { onChecklistSecondItemTap() },
-                                    onConnectHealth: { _ = HealthKitManager.openHealthApp() }
-                                )
-                                .staggeredAppear(index: 3)
-                            } else {
+                            // Metrics grid for established users. New users get
+                            // the first-run checklist at the TOP of the screen
+                            // instead (see above the goal hero).
+                            if !vm.showFirstRunChecklist {
                                 metricsGrid
                                     .staggeredAppear(index: 3)
-                            }
 
-                            // Calibration note sits AFTER the getting-started
-                            // checklist / recovery tiles: a new user should
-                            // see what to do today before being told what
-                            // needs two weeks of data.
-                            calibrationCard
-                                .staggeredAppear(index: 3)
+                                // Calibration note for established users sits
+                                // after the recovery tiles.
+                                calibrationCard
+                                    .staggeredAppear(index: 3)
+                            }
 
                             // Weight hero is weight-loss only; every other
                             // goal still gets a way to log a weigh-in.
