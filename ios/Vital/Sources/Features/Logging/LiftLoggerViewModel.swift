@@ -41,7 +41,8 @@ final class LiftLoggerViewModel: ObservableObject {
     let system: UnitSystem
     /// Client-generated UUID for the whole session: groups the sets and makes
     /// a retried POST idempotent (the server upserts on session + set index).
-    let sessionId: String
+    /// Regenerated when payload changes after a failed save.
+    private(set) var sessionId: String
 
     private let api: LiftLoggerAPIProviding
     private let preferredExercise: String?
@@ -49,6 +50,7 @@ final class LiftLoggerViewModel: ObservableObject {
     /// of these is a "template" (repeat) log; anything else is "manual".
     private var seeded: [LiftDraftExercise] = []
     private var hasLoaded = false
+    private var lastSavePayloadSignature: String? = nil
 
     /// `preferredExercise` is the exercise to repeat first (Today's "last
     /// lift") — tried before falling back to whichever exercise the summary
@@ -178,10 +180,16 @@ final class LiftLoggerViewModel: ObservableObject {
         !isSaving && !LiftLoggerLogic.inputs(from: exercises, system: system).isEmpty
     }
 
+    private func payloadSignature() -> String {
+        LiftLoggerLogic.inputs(from: exercises, system: system)
+            .map { "\($0.exercise):\($0.setIndex):\($0.reps):\($0.loadKg ?? 0)" }
+            .joined(separator: "|")
+    }
+
     /// `POST /api/workouts/sets`. On success posts `.vitalWorkoutLogged`
     /// (Trends refreshes its Strength card) and flips `didSave`. On failure
-    /// keeps the form so the user can retry — the same `sessionId` makes the
-    /// retry idempotent.
+    /// keeps the form so the user can retry. Reuses `sessionId` only if payload
+    /// is identical; generates fresh `sessionId` if form changed.
     func save() async {
         guard !isSaving else { return }
         let inputs = LiftLoggerLogic.inputs(from: exercises, system: system)
@@ -189,6 +197,11 @@ final class LiftLoggerViewModel: ObservableObject {
             errorMessage = "Add at least one set with reps."
             return
         }
+        let currentSignature = payloadSignature()
+        if let lastSig = lastSavePayloadSignature, lastSig != currentSignature {
+            sessionId = UUID().uuidString
+        }
+        lastSavePayloadSignature = currentSignature
         isSaving = true
         errorMessage = nil
         do {

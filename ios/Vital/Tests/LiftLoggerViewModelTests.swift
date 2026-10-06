@@ -206,4 +206,40 @@ final class LiftLoggerViewModelTests: XCTestCase {
         XCTAssertNotNil(vm.errorMessage)
         XCTAssertEqual(vm.exercises.count, 1)
     }
+
+    func testSaveRetryWithoutFormChangesReusesSessionId() async {
+        let api = FakeAPI()
+        api.saveError = SaveFailure()
+        let vm = makeViewModel(api)
+        vm.addExercise(named: "squat")
+        let sessionId = vm.sessionId
+
+        await vm.save()
+        XCTAssertEqual(api.savedSessionIds, [sessionId])
+
+        api.saveError = nil
+        await vm.save()
+
+        XCTAssertEqual(api.savedSessionIds, [sessionId, sessionId])
+        XCTAssertTrue(vm.didSave)
+    }
+
+    func testSaveRetryAfterFormChangeGeneratesFreshSessionId() async {
+        let api = FakeAPI()
+        api.saveError = SaveFailure()
+        let vm = makeViewModel(api)
+        vm.addExercise(named: "squat")
+        let sessionId = vm.sessionId
+
+        await vm.save()
+        XCTAssertEqual(api.savedSessionIds, [sessionId])
+
+        vm.addSet(to: vm.exercises[0].id)
+        api.saveError = nil
+        await vm.save()
+
+        XCTAssertEqual(api.savedSessionIds.count, 2)
+        XCTAssertNotEqual(api.savedSessionIds[0], api.savedSessionIds[1])
+        XCTAssertTrue(vm.didSave)
+    }
 }
