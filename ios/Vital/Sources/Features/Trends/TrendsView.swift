@@ -36,6 +36,16 @@ struct TrendsView: View {
                             learningCard(progress)
                         }
 
+                        // Muscle-goal users: their progress IS the lifts, so
+                        // the Strength card leads the screen. Every other
+                        // goal gets it below the metric sections instead
+                        // (see after `gridBody`). Hidden when there's no
+                        // logged-sets data.
+                        if let card = strengthCard, TrendsGoalOrdering.leadsWithStrength(for: vm.goal) {
+                            TrendsStrengthCard(card: card)
+                                .motionTransition(.fade)
+                        }
+
                         // "What moved" (customer-panel finding, Trends
                         // phase-1) sits above EVERYTHING else, including the
                         // weight_loss weight card below — it's the single
@@ -101,6 +111,11 @@ struct TrendsView: View {
                         }
 
                         gridBody
+
+                        if let card = strengthCard, !TrendsGoalOrdering.leadsWithStrength(for: vm.goal) {
+                            TrendsStrengthCard(card: card)
+                                .motionTransition(.fade)
+                        }
                     }
                     .padding(.horizontal, Theme.Spacing.xl)
                     .padding(.top, Theme.Spacing.lg)
@@ -111,6 +126,7 @@ struct TrendsView: View {
                     await vm.load()
                     await vm.loadSummary()
                     await vm.loadGoalContext()
+                    await vm.loadStrength()
                 }
             }
             .navigationDestination(for: String.self) { metricKey in
@@ -130,6 +146,12 @@ struct TrendsView: View {
             await vm.load()
             await vm.loadSummary()
             await vm.loadGoalContext()
+            await vm.loadStrength()
+        }
+        // A lift saved from the logger sheet (Today / Logs) — refresh the
+        // Strength card without waiting for pull-to-refresh.
+        .onReceive(NotificationCenter.default.publisher(for: .vitalWorkoutLogged)) { _ in
+            Task { await vm.loadStrength() }
         }
         .sensoryFeedback(Theme.Haptics.selection, trigger: tileTapTick)
         .sensoryFeedback(Theme.Haptics.selection, trigger: periodTapTick)
@@ -343,6 +365,14 @@ private extension TrendsView {
     /// render rather than showing a half-loaded card.
     var showsWeightCard: Bool {
         vm.goal == "weight_loss" && vm.weightLog != nil
+    }
+
+    /// The Strength card for the current unit system — `nil` (section hidden)
+    /// until `/api/workouts/summary` resolves, when it fails, and when the
+    /// summary has no logged sets.
+    var strengthCard: TrendsStrengthLogic.Card? {
+        guard let summary = vm.workoutSummary else { return nil }
+        return TrendsStrengthLogic.card(from: summary, system: unitPref.current, today: Date())
     }
 
     var weightCardView: some View {

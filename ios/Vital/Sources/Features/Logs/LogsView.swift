@@ -16,6 +16,9 @@ struct LogsView: View {
     @StateObject private var vm = LogsViewModel()
     @ObservedObject private var unitPref = UnitPreference.shared
     @State private var showDietSheet = false
+    /// "Log lift" sheet (`LiftLoggerView`) — opened from the day card's
+    /// "Log a lift" button.
+    @State private var showLiftLogger = false
     @State private var analysisTarget: AnalysisSheetTarget?
     /// A row tapped while the *previous* analysis sheet is still animating
     /// out. `.sheet(item:)` silently drops a presentation requested during
@@ -114,6 +117,11 @@ struct LogsView: View {
                     initialTarget: vm.todayTargetKcal,
                     onRefreshToday: { Task { await vm.invalidateTodayMealCache() } }
                 )
+            }
+        }
+        .sheet(isPresented: $showLiftLogger) {
+            VitalSheet(detents: [.large]) {
+                LiftLoggerView(onSaved: { Task { await vm.load() } })
             }
         }
         .sheet(item: $analysisTarget, onDismiss: {
@@ -290,6 +298,32 @@ private extension LogsView {
                 }
                 .buttonStyle(.plain)
                 .padding(.top, Theme.Spacing.md)
+
+                // Strength logging entry point (roadmap v5 item B) — the
+                // same "Log lift" sheet Today's muscle hero opens.
+                Button {
+                    showLiftLogger = true
+                } label: {
+                    HStack(spacing: Theme.Spacing.xs) {
+                        Image(systemName: "dumbbell")
+                            .font(.system(size: 13, weight: .semibold))
+                        Text("Log a lift")
+                            .font(.system(size: 14, weight: .semibold))
+                    }
+                    .foregroundStyle(Theme.Colors.textSecondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, Theme.Spacing.md + 2)
+                    .background(
+                        RoundedRectangle(cornerRadius: Theme.Radius.xl, style: .continuous)
+                            .strokeBorder(
+                                Theme.Colors.textTertiary.opacity(0.3),
+                                style: StrokeStyle(lineWidth: 1, dash: [5])
+                            )
+                    )
+                }
+                .buttonStyle(.plain)
+                .padding(.top, Theme.Spacing.sm)
+                .accessibilityIdentifier("logs.logLift")
             }
         }
         .padding(.horizontal, Theme.Spacing.xl)

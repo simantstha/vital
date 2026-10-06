@@ -28,12 +28,49 @@ struct MuscleHeroView: View {
     /// exists yet, per the task's scope note).
     var onTapSession: (PlanItem) -> Void
 
+    /// Opens the "Log lift" sheet (`LiftLoggerView`, pre-filled from the last
+    /// session). `nil` hides the button — kept optional so previews/tests that
+    /// build the hero without a presenter are unaffected.
+    var onLogLift: (() -> Void)? = nil
+
     private var proteinFraction: Double {
         guard proteinGoal > 0 else { return 0 }
         return min(1.0, Double(proteinHave) / Double(proteinGoal))
     }
 
     var body: some View {
+        // The "Log lift" button sits OUTSIDE the card's combined
+        // accessibility element below — a `.combine` would swallow it, and
+        // the screenshot harness (and VoiceOver) need it as its own button.
+        VStack(spacing: Theme.Spacing.sm) {
+            card
+            if let onLogLift {
+                logLiftButton(onLogLift)
+            }
+        }
+    }
+
+    private func logLiftButton(_ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: Theme.Spacing.xs) {
+                Image(systemName: "plus")
+                    .font(.system(size: 13, weight: .semibold))
+                Text("Log lift")
+                    .font(.system(size: 15, weight: .semibold))
+            }
+            .foregroundStyle(Theme.Colors.textPrimary)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, Theme.Spacing.md)
+            .background(
+                RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
+                    .fill(Theme.Colors.glassFill)
+            )
+        }
+        .buttonStyle(.vital(scale: 0.98))
+        .accessibilityIdentifier("today.muscleHero.logLift")
+    }
+
+    private var card: some View {
         VitalCard(padding: Theme.Spacing.lg, cornerRadius: Theme.Radius.xl) {
             VStack(alignment: .leading, spacing: Theme.Spacing.md) {
                 sessionSection
