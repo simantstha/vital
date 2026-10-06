@@ -34,11 +34,11 @@ screen (`/api/workouts/summary` has zero iOS callers).
 
 ### Wave 3
 - [x] Weekly review (Sunday card + push): verdict, win / slip / one change.
-- [ ] Goal triggers as proactive nudges (plateau, too fast, stalled lift,
+- [x] Goal triggers as proactive nudges (plateau, too fast, stalled lift,
   low-protein streak, inactivity) — roadmap v4 4.1/4.2.
 - [x] Goal-keyed daily brief prompt (finish v4 1.1/1.4; `lib/claude.ts` is still run-centric).
 - [x] Account deletion + privacy policy (App Store blocker).
-- [ ] Plain-language explainers for HRV / readiness; weak "drivers" suppressed.
+- [x] Plain-language explainers for HRV / readiness; weak "drivers" suppressed.
 
 ## Verification
 Backend: `npm test`, `npx tsc --noEmit`, `npm run lint`. iOS: PR CI build +
@@ -56,7 +56,20 @@ Owner follow-ups:
 - Sign in with Apple token revocation on delete needs an auth-code exchange + client secret (not built).
 
 Next (wave 4):
-- [ ] Goal triggers as proactive nudges (plateau, too fast, stalled lift, low-protein streak, inactivity).
-- [ ] Plain-language explainers for HRV / readiness; suppress weak "drivers" (detectCrossLag thresholds).
-- [ ] Dedicated weekly-review notification toggle + inbox entry.
-- [ ] Second persona review pass on the new screenshots.
+- [x] Goal triggers as proactive nudges (plateau, too fast, stalled lift, low-protein streak, inactivity).
+- [x] Plain-language explainers for HRV / readiness; suppress weak "drivers" (detectCrossLag thresholds).
+- [x] Dedicated weekly-review notification toggle + inbox entry.
+- [x] Second persona review pass on the new screenshots.
+
+### Wave 5 (from persona review pass 2) — shipped
+- [x] One definition per progress number (lift change "vs 4 weeks ago" shared by server + iOS with parity tests; labelled windows).
+- [x] Weekly review advises a lighter week when ≥2 recovery flags; Trends headline counts lifts + weight.
+- [x] Goal sheet: ETA vs target date in one line; muscle ETA + adherence; endurance sessions this week; set-target for every goal.
+- [x] Endurance hero reconciles "Recover today" with a hard planned session.
+- [x] Coach check-ins / weekly review notification toggles; nudges only 08:00–21:00 local (migration 0036).
+- [x] Tile zero-delta reads "at your normal"; fixtures consistent across screens (cross-screen tests).
+
+### Open / next
+- [ ] New-user Today: getting-started checklist still sits below the fold (after metrics) — move it to the top for users without data.
+- [ ] Today hero sparkline target line hidden when target is far below data range (caption only) — consider a compressed axis.
+- [ ] Third persona review once screenshots are green on the final head.
