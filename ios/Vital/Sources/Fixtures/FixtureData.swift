@@ -137,7 +137,7 @@ enum FixtureData {
                 FixtureMeal(name: "Greek yogurt + almonds", kcal: 220, c: 22, p: 20, f: 13, slot: "snacks"),
             ],
             weightKg: 82, weightTrendPerWeekKg: -0.6,
-            hrv: 58, restingHR: 57, sleepMinutes: 435, steps: 8600, distanceKm: 6.1,
+            hrv: 58, restingHR: 57, sleepMinutes: 348, steps: 8600, distanceKm: 6.1,
             workoutTitle: nil, workoutKm: nil
         ),
         .muscle: Profile(
@@ -165,7 +165,7 @@ enum FixtureData {
                 FixtureMeal(name: "Protein shake + banana", kcal: 320, c: 50, p: 38, f: 10, slot: "snacks"),
             ],
             weightKg: 79, weightTrendPerWeekKg: 0.35,
-            hrv: 62, restingHR: 52, sleepMinutes: 450, steps: 7200, distanceKm: 4.8,
+            hrv: 62, restingHR: 52, sleepMinutes: 348, steps: 7200, distanceKm: 4.8,
             workoutTitle: nil, workoutKm: nil,
             // GET /api/training/summary (#202): last lift squat 3×5 @ 140kg,
             // 2 of 4 planned sessions done this week.
@@ -198,7 +198,7 @@ enum FixtureData {
                 FixtureMeal(name: "Electrolyte smoothie", kcal: 240, c: 76, p: 18, f: 9, slot: "snacks"),
             ],
             weightKg: 61, weightTrendPerWeekKg: -0.1,
-            hrv: 68, restingHR: 46, sleepMinutes: 445, steps: 11200, distanceKm: 12.4,
+            hrv: 68, restingHR: 46, sleepMinutes: 348, steps: 11200, distanceKm: 12.4,
             workoutTitle: "10km tempo run", workoutKm: 10.2,
             // GET /api/training/summary (#202): 24.5km done this week, no
             // target (matches the real API's always-null target today), 3
@@ -533,7 +533,7 @@ enum FixtureData {
             "specialistMetadata": NSNull(),
         ]
         return [
-            "messages": [opener] + tirednessExchange() + memorySavedExchange(),
+            "messages": [opener] + tirednessExchange(profile) + memorySavedExchange(),
             "activePersona": activePersona,
             "pendingCard": NSNull(),
         ]
@@ -542,7 +542,7 @@ enum FixtureData {
     /// "Why am I so tired this week?" — a memory read (2 sources), a sleep
     /// read, and an HRV baseline read, each with a `summary` — see
     /// `coachRestoration(_:)`'s doc comment.
-    private static func tirednessExchange() -> [[String: Any]] {
+    private static func tirednessExchange(_ profile: Profile) -> [[String: Any]] {
         let question: [String: Any] = [
             "id": "00000000-0000-4000-8000-000000000002",
             "role": "user",
@@ -552,6 +552,9 @@ enum FixtureData {
             "specialistSessionId": NSNull(),
             "specialistMetadata": NSNull(),
         ]
+        let hrvLow = Int(profile.hrv) - 9
+        let hrvNormalLow = Int(profile.hrv) - 8
+        let hrvNormalHigh = Int(profile.hrv) + 8
         let activity: [[String: Any]] = [
             [
                 "name": "read_memory",
@@ -576,7 +579,7 @@ enum FixtureData {
                 "label": "Compared HRV with your normal",
                 "kind": "data",
                 "ok": true,
-                "summary": "51 ms today · normal 55–64 ms",
+                "summary": "\(hrvLow) ms today · normal \(hrvNormalLow)–\(hrvNormalHigh) ms",
             ],
         ]
         let answer: [String: Any] = [
@@ -859,17 +862,18 @@ enum FixtureData {
     private static func logs(_ profile: Profile, scenario: FixtureMode.Scenario) -> [String: Any] {
         var items: [[String: Any]] = []
 
-        if let firstMeal = profile.meals.first {
+        // Add all logged meals for the day
+        for (index, meal) in profile.meals.enumerated() {
             items.append([
-                "id": "fixture-log-meal",
+                "id": "fixture-log-meal-\(index)",
                 "type": "meal_logged",
                 "timestamp": isoNow,
                 "hasExactTime": true,
                 "dayKey": NSNull(),
-                "title": firstMeal.name,
-                "subtitle": "Logged · \(firstMeal.slot.capitalized)",
+                "title": meal.name,
+                "subtitle": "Logged · \(meal.slot.capitalized)",
                 "imageThumb": NSNull(),
-                "kcal": Double(firstMeal.kcal),
+                "kcal": Double(meal.kcal),
                 "km": NSNull(),
                 "sleepMs": NSNull(),
                 "analysisId": NSNull(),
@@ -972,7 +976,9 @@ enum FixtureData {
             "type": "Running", "durationMin": 52.23, "kcal": 612.0,
             "distanceM": 10_200.0, "avgHr": 158.0, "maxHr": 176.0,
             "paceMinPerKm": 5.1167, "elevationGainM": 42.0,
-            "startTime": isoAt(daysAgo: 0, hour: 7, minute: 41),
+            // Align with sleep analysis's beforeBed.lastWorkoutEndedAt (9:40 PM yesterday)
+            // so the narrative about the late run is consistent with the workout timing.
+            "startTime": isoAt(daysAgo: 1, hour: 21, minute: 30),
         ]
         var context: [String: Any] = [
             "usual": ["sessions": 8, "distanceM": 8_800.0, "durationMin": 44.0, "paceMinPerKm": 5.3167, "avgHr": 148.0],

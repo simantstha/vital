@@ -77,7 +77,6 @@ struct TodayView: View {
                         Group {
                             calibrationCard
                                 .staggeredAppear(index: 0)
-                            pendingFactsBanner
 
                             // Goal hero (§4.1) — weight_loss only for T1; other
                             // goals keep their existing Today content below
@@ -145,6 +144,8 @@ struct TodayView: View {
                                 .staggeredAppear(index: 2)
                             }
 
+                            pendingFactsBanner
+
                             if !CoachBubble.isEmpty(vm.coachInsight) {
                                 CoachBubble(message: vm.coachInsight)
                             }
@@ -206,7 +207,9 @@ struct TodayView: View {
             .scrollIndicators(.hidden)
             .safeAreaInset(edge: .bottom) {
                 if !isAnySheetOpen {
-                    Color.clear.frame(height: 60 + 32 + 12)
+                    // FAB height (~60pt) + spacing (~12pt) + tab bar (~50pt) + extra
+                    // spacing to ensure recovery tiles scroll fully above both.
+                    Color.clear.frame(height: 60 + 12 + 50 + 16)
                 }
             }
             .refreshable { await vm.loadHealthData() }
