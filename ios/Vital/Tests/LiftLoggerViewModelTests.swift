@@ -13,6 +13,8 @@ final class LiftLoggerViewModelTests: XCTestCase {
         var lastByExercise: [String: [WorkoutSetDTO]] = [:]
         var lastRequests: [String] = []
         var savedSessionIds: [String] = []
+        /// Every session id posted, including attempts that threw.
+        var attemptedSessionIds: [String] = []
         var savedSources: [String] = []
         var savedSets: [[WorkoutSetInputDTO]] = []
         var saveError: Error? = nil
@@ -33,6 +35,7 @@ final class LiftLoggerViewModelTests: XCTestCase {
             performedAt: Date,
             tz: String?
         ) async throws -> LogWorkoutSetsResponse {
+            attemptedSessionIds.append(sessionId)
             if let saveError { throw saveError }
             savedSessionIds.append(sessionId)
             savedSources.append(source)
@@ -215,12 +218,15 @@ final class LiftLoggerViewModelTests: XCTestCase {
         let sessionId = vm.sessionId
 
         await vm.save()
-        XCTAssertEqual(api.savedSessionIds, [sessionId])
+        XCTAssertFalse(vm.didSave)
+        XCTAssertEqual(api.attemptedSessionIds, [sessionId])
+        XCTAssertTrue(api.savedSessionIds.isEmpty)
 
         api.saveError = nil
         await vm.save()
 
-        XCTAssertEqual(api.savedSessionIds, [sessionId, sessionId])
+        XCTAssertEqual(api.attemptedSessionIds, [sessionId, sessionId])
+        XCTAssertEqual(api.savedSessionIds, [sessionId])
         XCTAssertTrue(vm.didSave)
     }
 
@@ -232,14 +238,18 @@ final class LiftLoggerViewModelTests: XCTestCase {
         let sessionId = vm.sessionId
 
         await vm.save()
-        XCTAssertEqual(api.savedSessionIds, [sessionId])
+        XCTAssertFalse(vm.didSave)
+        XCTAssertEqual(api.attemptedSessionIds, [sessionId])
 
         vm.addSet(to: vm.exercises[0].id)
         api.saveError = nil
         await vm.save()
 
-        XCTAssertEqual(api.savedSessionIds.count, 2)
-        XCTAssertNotEqual(api.savedSessionIds[0], api.savedSessionIds[1])
+        XCTAssertEqual(api.attemptedSessionIds.count, 2)
+        if api.attemptedSessionIds.count == 2 {
+            XCTAssertNotEqual(api.attemptedSessionIds[0], api.attemptedSessionIds[1])
+            XCTAssertEqual(api.savedSessionIds, [api.attemptedSessionIds[1]])
+        }
         XCTAssertTrue(vm.didSave)
     }
 }
