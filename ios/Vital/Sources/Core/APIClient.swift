@@ -475,6 +475,66 @@ struct APIClient {
         return try await get("/api/training/summary?tz=\(encoded)")
     }
 
+    // MARK: - Strength tracking (workout_sets — Trends Strength card + lift logger)
+
+    /// GET /api/workouts/summary?days= — weekly best estimated 1RM and weekly
+    /// volume per exercise, keyed by canonical exercise name. `exercises` is
+    /// `{}` (never an error) for a user with no logged sets.
+    func fetchWorkoutSummary(days: Int = 84) async throws -> WorkoutSummaryResponse {
+        try await get("/api/workouts/summary?days=\(days)")
+    }
+
+    /// GET /api/workouts/last?exercise= — the most recent full session that
+    /// included `exercise` (every set in that session, all exercises, ordered
+    /// by exercise name then set index). `sets` is `[]` when `exercise` has
+    /// never been logged. `exercise` is the canonical (lowercase) key, i.e. a
+    /// key of `WorkoutSummaryResponse.exercises`.
+    func fetchLastWorkoutSession(exercise: String) async throws -> WorkoutLastSessionResponse {
+        let encoded = exercise.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? exercise
+        return try await get("/api/workouts/last?exercise=\(encoded)")
+    }
+
+    /// POST /api/workouts/sets — logs one session of sets. `sessionId` must be
+    /// a client-generated UUID string (the `session_id` column is a uuid); a
+    /// retried POST with the same id + set indexes upserts rather than
+    /// duplicating. `source` is "manual" | "template" ("coach" is server-side
+    /// only in practice).
+    @discardableResult
+    func logWorkoutSets(
+        sessionId: String,
+        source: String,
+        sets: [WorkoutSetInputDTO],
+        performedAt: Date = Date(),
+        tz: String? = nil
+    ) async throws -> LogWorkoutSetsResponse {
+        guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/workouts/sets") else {
+            throw APIError.invalidURL
+        }
+        var request = authorizedRequest(url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 15
+        struct Body: Encodable {
+            let sessionId: String
+            let performedAt: Date
+            let tz: String
+            let source: String
+            let sets: [WorkoutSetInputDTO]
+        }
+        request.httpBody = try encoder.encode(
+            Body(
+                sessionId: sessionId,
+                performedAt: performedAt,
+                tz: tz ?? TimeZone.current.identifier,
+                source: source,
+                sets: sets
+            )
+        )
+        let (data, response) = try await session.data(for: request)
+        try validate(response)
+        return try decoder.decode(LogWorkoutSetsResponse.self, from: data)
+    }
+
     // MARK: - Memory browser
 
     /// GET /api/memory — the "About you" fact summary plus every entity
@@ -1901,6 +1961,76 @@ struct TrainingSummaryResponse: Decodable {
     let week: TrainingWeekDTO
     let volume: TrainingVolumeDTO
     let lastLift: TrainingLastLiftDTO?
+}
+
+// MARK: - Strength tracking types (mirrors app/api/workouts/{summary,last,sets}/route.ts)
+
+/// One week of one exercise in `GET /api/workouts/summary` — mirrors
+/// `lib/workoutRepository.ts`'s `WeeklyExerciseStat`. `weekStart` is the
+/// UTC Monday as `YYYY-MM-DD`. `bestEstimatedOneRepMaxKg` is `nil` (never 0)
+/// when every set that week was bodyweight.
+struct WorkoutWeeklyStatDTO: Decodable, Equatable {
+    let weekStart: String
+    let bestEstimatedOneRepMaxKg: Double?
+    let volumeKg: Double
+    let totalSets: Int
+    let totalReps: Int
+}
+
+/// GET /api/workouts/summary's response. `exercises` is keyed by canonical
+/// exercise name ("squat", "bench press"); each array is ascending by
+/// `weekStart` and only contains weeks with at least one working set.
+struct WorkoutSummaryResponse: Decodable, Equatable {
+    let days: Int
+    let exercises: [String: [WorkoutWeeklyStatDTO]]
+}
+
+/// One logged set as the server returns it (`toWire` in the sets/last
+/// routes). `loadKg` is `nil` for a bodyweight set.
+struct WorkoutSetDTO: Decodable, Identifiable, Equatable {
+    let id: String
+    let sessionId: String
+    let workoutId: String?
+    let performedAt: String
+    let localDay: String
+    let exercise: String
+    let exerciseDisplay: String
+    let setIndex: Int
+    let reps: Int
+    let loadKg: Double?
+    let rpe: Double?
+    let isWarmup: Bool
+    let source: String
+}
+
+/// GET /api/workouts/last's response — `sets` is `[]` when never logged.
+struct WorkoutLastSessionResponse: Decodable, Equatable {
+    let sets: [WorkoutSetDTO]
+}
+
+/// POST /api/workouts/sets' response.
+struct LogWorkoutSetsResponse: Decodable, Equatable {
+    let ok: Bool
+    let sets: [WorkoutSetDTO]
+}
+
+/// One set in a POST /api/workouts/sets body. `loadKg`/`rpe` are omitted from
+/// the JSON when `nil` (synthesized `Encodable` uses `encodeIfPresent`).
+struct WorkoutSetInputDTO: Encodable, Equatable {
+    let exercise: String
+    let exerciseDisplay: String
+    let setIndex: Int
+    let reps: Int
+    let loadKg: Double?
+    let rpe: Double?
+    let isWarmup: Bool
+}
+
+extension Notification.Name {
+    /// Posted by `LiftLoggerViewModel` after a successful POST
+    /// /api/workouts/sets so Trends' Strength card (a different tab with its
+    /// own view model) re-fetches `/api/workouts/summary`.
+    static let vitalWorkoutLogged = Notification.Name("vitalWorkoutLogged")
 }
 
 // MARK: - Diet goal types

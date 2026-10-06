@@ -18,6 +18,8 @@ struct TodayView: View {
 
     // Sheet / navigation state
     @State private var showLogSheet = false
+    /// "Log lift" sheet (`LiftLoggerView`) — opened from the muscle hero.
+    @State private var showLiftLogger = false
     @State private var showAddItem = false
     @State private var actionsItem: PlanItem? = nil
     @State private var selectedMeal: MealRow? = nil
@@ -45,7 +47,7 @@ struct TodayView: View {
 
     /// The voice FAB must never overlap an open sheet.
     private var isAnySheetOpen: Bool {
-        showLogSheet || showAddItem || actionsItem != nil || selectedMeal != nil
+        showLogSheet || showLiftLogger || showAddItem || actionsItem != nil || selectedMeal != nil
             || showNotifications || showFullPlan || vm.showWeighInSheet
     }
 
@@ -108,7 +110,8 @@ struct TodayView: View {
                                     lastLiftText: vm.muscleLastLiftText,
                                     sessionsThisWeekText: vm.trainingSessionsThisWeekText,
                                     sessionDots: vm.trainingSessionDots,
-                                    onTapSession: { actionsItem = $0 }
+                                    onTapSession: { actionsItem = $0 },
+                                    onLogLift: { showLiftLogger = true }
                                 )
                                 .staggeredAppear(index: 1)
                             }
@@ -273,6 +276,21 @@ struct TodayView: View {
                     initialTarget: vm.diet.kcalTarget,
                     onRefreshToday: { Task { await vm.loadHealthData() } },
                     autoOpenLogMethod: dietSheetAutoOpenMethod
+                )
+            }
+        }
+        .sheet(isPresented: $showLiftLogger) {
+            VitalSheet(detents: [.large]) {
+                LiftLoggerView(
+                    // Repeat the exercise the hero's "last time" line names.
+                    preferredExercise: vm.trainingSummary?.lastLift?.exercise,
+                    onSaved: {
+                        vm.toastMessage = "Lift logged"
+                        // Re-fetches `/api/training/summary` (the hero's
+                        // "last time" + "this week" lines) along with the
+                        // rest of Today.
+                        Task { await vm.loadHealthData() }
+                    }
                 )
             }
         }

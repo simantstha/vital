@@ -46,6 +46,14 @@ enum TrendsGoalOrdering {
         "weight_loss": [.activity, .recovery, .sleep, .body, .whoop],
     ]
 
+    /// Whether Trends' "Strength" card leads the screen (above the weekly
+    /// recovery strip and every metric section) for `goal`. Only the muscle
+    /// goal — its progress IS the lifts; every other goal still sees the card
+    /// when it has data, but below the metric sections.
+    static func leadsWithStrength(for goal: String) -> Bool {
+        goal == "muscle"
+    }
+
     /// The group order to render sections in for `goal`, restricted to the
     /// groups present in `available` — a group `available` doesn't contain
     /// (no tiles for it at all) is simply skipped, never inserted empty.
