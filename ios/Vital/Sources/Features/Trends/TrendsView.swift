@@ -10,6 +10,8 @@ struct TrendsView: View {
     /// Same idiom, for the header's 7D/30D/90D period switch.
     @State private var periodTapTick = false
     @ObservedObject private var unitPref = UnitPreference.shared
+    /// Goal-progress detail sheet (opened by tapping the card at the top).
+    @State private var showGoalProgressDetail = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Links each tile's `.matchedTransitionSource` to the destination's
     /// `.navigationTransition(.zoom(...))`. One namespace for the whole grid
@@ -34,6 +36,22 @@ struct TrendsView: View {
                         // nothing while it's showing.
                         if case .learning(let progress) = vm.headlineStatus {
                             learningCard(progress)
+                        }
+
+                        // "Am I on track?" (v5 Wave 2) leads everything —
+                        // above Strength / "What moved". Hidden entirely
+                        // (never zeros) until `/api/goal/progress` loads, and
+                        // whenever that load fails.
+                        if let progress = vm.goalProgress {
+                            GoalProgressCard(
+                                progress: progress,
+                                system: unitPref.current,
+                                onTap: { showGoalProgressDetail = true },
+                                onSetTarget: {
+                                    NotificationCenter.default.post(name: .vitalOpenGoalEditor, object: nil)
+                                }
+                            )
+                            .motionTransition(.fade)
                         }
 
                         // Muscle-goal users: their progress IS the lifts, so
@@ -127,6 +145,7 @@ struct TrendsView: View {
                     await vm.loadSummary()
                     await vm.loadGoalContext()
                     await vm.loadStrength()
+                    await vm.loadGoalProgress()
                 }
             }
             .navigationDestination(for: String.self) { metricKey in
@@ -147,11 +166,27 @@ struct TrendsView: View {
             await vm.loadSummary()
             await vm.loadGoalContext()
             await vm.loadStrength()
+            await vm.loadGoalProgress()
+        }
+        .sheet(isPresented: $showGoalProgressDetail) {
+            if let progress = vm.goalProgress {
+                VitalSheet(detents: [.large]) {
+                    GoalProgressDetailView(progress: progress, system: unitPref.current)
+                }
+            }
         }
         // A lift saved from the logger sheet (Today / Logs) — refresh the
         // Strength card without waiting for pull-to-refresh.
         .onReceive(NotificationCenter.default.publisher(for: .vitalWorkoutLogged)) { _ in
-            Task { await vm.loadStrength() }
+            Task {
+                await vm.loadStrength()
+                await vm.loadGoalProgress()
+            }
+        }
+        // Target weight / date edited in Profile -> Goal (declared in
+        // GoalNotifications.swift) — re-measure progress against the new target.
+        .onReceive(NotificationCenter.default.publisher(for: .vitalGoalTargetsChanged)) { _ in
+            Task { await vm.loadGoalProgress() }
         }
         .sensoryFeedback(Theme.Haptics.selection, trigger: tileTapTick)
         .sensoryFeedback(Theme.Haptics.selection, trigger: periodTapTick)

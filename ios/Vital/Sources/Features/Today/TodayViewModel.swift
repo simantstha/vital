@@ -311,6 +311,46 @@ final class TodayViewModel: ObservableObject {
         }
     }
 
+    // MARK: - Goal progress (one-line verdict under each goal hero)
+
+    /// `nil` until `/api/goal/progress` resolves or when it fails (fail-soft:
+    /// the line simply isn't shown — never zeros). Like `trainingSummary`, NOT
+    /// part of `performLoad`'s awaited batch: a secondary line must never add
+    /// to the time-to-`.loaded` critical path.
+    @Published private(set) var goalProgress: GoalProgressDTO? = nil
+
+    private var goalProgressTask: Task<Void, Never>?
+    /// Same stale-result guard as `trainingSummaryGeneration`.
+    private var goalProgressGeneration = 0
+
+    func refreshGoalProgress() {
+        goalProgressTask?.cancel()
+        goalProgressGeneration += 1
+        let generation = goalProgressGeneration
+
+        goalProgressTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let result = try await self.apiClient.fetchGoalProgress()
+                guard !Task.isCancelled, generation == self.goalProgressGeneration else { return }
+                withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.appear) {
+                    self.goalProgress = result
+                }
+            } catch {
+                if !error.isCancellation {
+                    print("[Vital] fetchGoalProgress failed: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
+    /// Whether the goal-progress line should render under the hero: needs a
+    /// response, and "set a target" is Trends' job, not a nag on Today.
+    var goalProgressLine: GoalProgressDTO? {
+        guard let goalProgress, goalProgress.verdict != .needsTarget else { return nil }
+        return goalProgress
+    }
+
     /// The muscle hero's "Last (Mon): Deadlift 2×5 @ 150 kg" line — `nil`
     /// whenever there's no logged strength history yet (never fabricated).
     var muscleLastLiftText: String? {
@@ -583,6 +623,7 @@ final class TodayViewModel: ObservableObject {
             // round-trip to the time-to-`.loaded` critical path. See
             // `refreshTrainingSummary`'s doc comment.
             refreshTrainingSummary()
+            refreshGoalProgress()
 
         case .cancelled:
             // A stale in-flight load was superseded (tab switch, interrupted

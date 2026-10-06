@@ -77,8 +77,7 @@ extension Notification.Name {
     /// strip's diet card updates without waiting for pull-to-refresh — the
     /// same foreground-observer pattern it already uses for calendar/app
     /// lifecycle events (see `TodayViewModel.init`).
-    static let vitalCoachMealLogChanged = Notification.Name("vitalCoachMealLogChanged")
-}
+    static let vitalCoachMealLogChanged = Notification.Name("vitalCoachMealLogChanged")}
 
 // MARK: - APIClient
 
@@ -507,6 +506,18 @@ struct APIClient {
         let tz = TimeZone.current.identifier
         let encoded = tz.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? tz
         return try await get("/api/training/summary?tz=\(encoded)")
+    }
+
+    // MARK: - Goal progress (v5 Wave 2 - "am I on track?")
+
+    /// GET /api/goal/progress?tz= — target / current / rate / ETA / verdict /
+    /// reasons for the user's goal. Sends the device's timezone — same
+    /// convention as `fetchToday()` — so the server resolves day math in the
+    /// same local zone. See `GoalProgressDTO`.
+    func fetchGoalProgress() async throws -> GoalProgressDTO {
+        let tz = TimeZone.current.identifier
+        let encoded = tz.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? tz
+        return try await get("/api/goal/progress?tz=\(encoded)")
     }
 
     // MARK: - Strength tracking (workout_sets — Trends Strength card + lift logger)
@@ -1997,6 +2008,222 @@ struct TrainingSummaryResponse: Decodable {
     let week: TrainingWeekDTO
     let volume: TrainingVolumeDTO
     let lastLift: TrainingLastLiftDTO?
+}
+
+// MARK: - Goal progress types (GET /api/goal/progress)
+
+/// `GoalProgress.verdict` on the wire (`lib/goalProgress.ts`). Decoded
+/// tolerantly: any value this build doesn't know (a future server verdict)
+/// maps to `.insufficientData` — never a decode failure, never a fabricated
+/// "on track".
+enum GoalVerdict: String, Equatable, Sendable {
+    case onTrack = "on_track"
+    case ahead
+    case tooFast = "too_fast"
+    case behind
+    case stalled
+    case progressing
+    case building
+    case holding
+    case needsTarget = "needs_target"
+    case insufficientData = "insufficient_data"
+
+    init(wire: String?) {
+        self = wire.flatMap { GoalVerdict(rawValue: $0) } ?? .insufficientData
+    }
+}
+
+/// `GoalProgressReason.tone` — unknown values read as `.neutral`.
+enum GoalReasonTone: String, Equatable, Sendable {
+    case good
+    case watch
+    case neutral
+
+    init(wire: String?) {
+        self = wire.flatMap { GoalReasonTone(rawValue: $0) } ?? .neutral
+    }
+}
+
+struct GoalReasonDTO: Decodable, Equatable {
+    let kind: String
+    let text: String
+    let tone: GoalReasonTone
+
+    private enum CodingKeys: String, CodingKey { case kind, text, tone }
+
+    init(kind: String = "", text: String, tone: GoalReasonTone = .neutral) {
+        self.kind = kind
+        self.text = text
+        self.tone = tone
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        kind = (try? c.decode(String.self, forKey: .kind)) ?? ""
+        text = (try? c.decode(String.self, forKey: .text)) ?? ""
+        tone = GoalReasonTone(wire: try? c.decode(String.self, forKey: .tone))
+    }
+}
+
+/// GET /api/goal/progress's response. Every nullable field may be `null`
+/// (the server's honesty rule — never a guessed number), and every field
+/// here decodes tolerantly (missing/`null`/wrong-typed -> `nil`, `[]` or the
+/// safe default) so a partially-populated or newer payload still renders
+/// rather than hiding the card with a decode error.
+struct GoalProgressDTO: Decodable, Equatable {
+    struct Target: Decodable, Equatable {
+        let weightKg: Double?
+        let date: String?
+        let weeklySessions: Int?
+
+        private enum CodingKeys: String, CodingKey { case weightKg, date, weeklySessions }
+
+        init(weightKg: Double? = nil, date: String? = nil, weeklySessions: Int? = nil) {
+            self.weightKg = weightKg
+            self.date = date
+            self.weeklySessions = weeklySessions
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            weightKg = try? c.decode(Double.self, forKey: .weightKg)
+            date = try? c.decode(String.self, forKey: .date)
+            weeklySessions = try? c.decode(Int.self, forKey: .weeklySessions)
+        }
+    }
+
+    struct Current: Decodable, Equatable {
+        let weightKg: Double?
+        let startWeightKg: Double?
+        let changeKg: Double?
+        /// Nominally 0...100 (the server may exceed on overshoot / go
+        /// negative on regress — `GoalProgressLogic.progressFraction` clamps).
+        let progressPct: Double?
+
+        private enum CodingKeys: String, CodingKey { case weightKg, startWeightKg, changeKg, progressPct }
+
+        init(weightKg: Double? = nil, startWeightKg: Double? = nil, changeKg: Double? = nil, progressPct: Double? = nil) {
+            self.weightKg = weightKg
+            self.startWeightKg = startWeightKg
+            self.changeKg = changeKg
+            self.progressPct = progressPct
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            weightKg = try? c.decode(Double.self, forKey: .weightKg)
+            startWeightKg = try? c.decode(Double.self, forKey: .startWeightKg)
+            changeKg = try? c.decode(Double.self, forKey: .changeKg)
+            progressPct = try? c.decode(Double.self, forKey: .progressPct)
+        }
+    }
+
+    struct Rate: Decodable, Equatable {
+        /// Signed: negative = losing.
+        let kg: Double?
+        let pctBodyweight: Double?
+
+        private enum CodingKeys: String, CodingKey { case kg, pctBodyweight }
+
+        init(kg: Double? = nil, pctBodyweight: Double? = nil) {
+            self.kg = kg
+            self.pctBodyweight = pctBodyweight
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            kg = try? c.decode(Double.self, forKey: .kg)
+            pctBodyweight = try? c.decode(Double.self, forKey: .pctBodyweight)
+        }
+    }
+
+    struct SafeBand: Decodable, Equatable {
+        let minPct: Double
+        let maxPct: Double
+    }
+
+    struct DataSufficiency: Decodable, Equatable {
+        let weighIns: Int
+        let needed: Int
+        let sessionsLast28d: Int
+
+        private enum CodingKeys: String, CodingKey { case weighIns, needed, sessionsLast28d }
+
+        init(weighIns: Int = 0, needed: Int = 3, sessionsLast28d: Int = 0) {
+            self.weighIns = weighIns
+            self.needed = needed
+            self.sessionsLast28d = sessionsLast28d
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            weighIns = (try? c.decode(Int.self, forKey: .weighIns)) ?? 0
+            needed = (try? c.decode(Int.self, forKey: .needed)) ?? 3
+            sessionsLast28d = (try? c.decode(Int.self, forKey: .sessionsLast28d)) ?? 0
+        }
+    }
+
+    /// "weight_loss" | "muscle" | "endurance" | "general" (kept a raw string
+    /// so a future goal never fails decoding).
+    let goal: String
+    let target: Target
+    let current: Current
+    let ratePerWeek: Rate
+    let safeBand: SafeBand?
+    /// "YYYY-MM-DD" — only ever set by the server when it can honestly
+    /// project one (never a fake ETA).
+    let eta: String?
+    let onPaceForTargetDate: Bool?
+    let verdict: GoalVerdict
+    let headline: String
+    let reasons: [GoalReasonDTO]
+    let dataSufficiency: DataSufficiency
+
+    private enum CodingKeys: String, CodingKey {
+        case goal, target, current, ratePerWeek, safeBand, eta, onPaceForTargetDate
+        case verdict, headline, reasons, dataSufficiency
+    }
+
+    init(
+        goal: String,
+        target: Target = Target(),
+        current: Current = Current(),
+        ratePerWeek: Rate = Rate(),
+        safeBand: SafeBand? = nil,
+        eta: String? = nil,
+        onPaceForTargetDate: Bool? = nil,
+        verdict: GoalVerdict,
+        headline: String = "",
+        reasons: [GoalReasonDTO] = [],
+        dataSufficiency: DataSufficiency = DataSufficiency()
+    ) {
+        self.goal = goal
+        self.target = target
+        self.current = current
+        self.ratePerWeek = ratePerWeek
+        self.safeBand = safeBand
+        self.eta = eta
+        self.onPaceForTargetDate = onPaceForTargetDate
+        self.verdict = verdict
+        self.headline = headline
+        self.reasons = reasons
+        self.dataSufficiency = dataSufficiency
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        goal = (try? c.decode(String.self, forKey: .goal)) ?? "general"
+        target = (try? c.decode(Target.self, forKey: .target)) ?? Target()
+        current = (try? c.decode(Current.self, forKey: .current)) ?? Current()
+        ratePerWeek = (try? c.decode(Rate.self, forKey: .ratePerWeek)) ?? Rate()
+        safeBand = try? c.decode(SafeBand.self, forKey: .safeBand)
+        eta = try? c.decode(String.self, forKey: .eta)
+        onPaceForTargetDate = try? c.decode(Bool.self, forKey: .onPaceForTargetDate)
+        verdict = GoalVerdict(wire: try? c.decode(String.self, forKey: .verdict))
+        headline = (try? c.decode(String.self, forKey: .headline)) ?? ""
+        reasons = ((try? c.decode([GoalReasonDTO].self, forKey: .reasons)) ?? []).filter { !$0.text.isEmpty }
+        dataSufficiency = (try? c.decode(DataSufficiency.self, forKey: .dataSufficiency)) ?? DataSufficiency()
+    }
 }
 
 // MARK: - Strength tracking types (mirrors app/api/workouts/{summary,last,sets}/route.ts)
