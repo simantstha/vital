@@ -137,7 +137,7 @@ enum FixtureData {
                 FixtureMeal(name: "Greek yogurt + almonds", kcal: 220, c: 22, p: 20, f: 13, slot: "snacks"),
             ],
             weightKg: 82, weightTrendPerWeekKg: -0.6,
-            hrv: 58, restingHR: 57, sleepMinutes: 435, steps: 8600, distanceKm: 6.1,
+            hrv: 58, restingHR: 57, sleepMinutes: 348, steps: 8600, distanceKm: 6.1,
             workoutTitle: nil, workoutKm: nil
         ),
         .muscle: Profile(
@@ -165,7 +165,7 @@ enum FixtureData {
                 FixtureMeal(name: "Protein shake + banana", kcal: 320, c: 50, p: 38, f: 10, slot: "snacks"),
             ],
             weightKg: 79, weightTrendPerWeekKg: 0.35,
-            hrv: 62, restingHR: 52, sleepMinutes: 450, steps: 7200, distanceKm: 4.8,
+            hrv: 62, restingHR: 52, sleepMinutes: 348, steps: 7200, distanceKm: 4.8,
             workoutTitle: nil, workoutKm: nil,
             // GET /api/training/summary (#202): last lift squat 3×5 @ 140kg,
             // 2 of 4 planned sessions done this week.
@@ -198,7 +198,7 @@ enum FixtureData {
                 FixtureMeal(name: "Electrolyte smoothie", kcal: 240, c: 76, p: 18, f: 9, slot: "snacks"),
             ],
             weightKg: 61, weightTrendPerWeekKg: -0.1,
-            hrv: 68, restingHR: 46, sleepMinutes: 445, steps: 11200, distanceKm: 12.4,
+            hrv: 68, restingHR: 46, sleepMinutes: 348, steps: 11200, distanceKm: 12.4,
             workoutTitle: "10km tempo run", workoutKm: 10.2,
             // GET /api/training/summary (#202): 24.5km done this week, no
             // target (matches the real API's always-null target today), 3
@@ -305,6 +305,13 @@ enum FixtureData {
                 return (404, jsonData(["error": "no training summary for this fixture scenario"]))
             }
             return (200, jsonData(data))
+        case ("GET", "/api/workouts/summary"):
+            return (200, jsonData(workoutSummary(scenario: scenario)))
+        case ("GET", "/api/workouts/last"):
+            return (200, jsonData(workoutLastSession(scenario: scenario)))
+        case ("POST", "/api/workouts/sets"):
+            let saved: [String: Any] = ["ok": true, "sets": [[String: Any]]()]
+            return (200, jsonData(saved))
         case ("GET", "/api/devices"):
             return (200, jsonData(devices(scenario: scenario)))
         default:
@@ -533,7 +540,7 @@ enum FixtureData {
             "specialistMetadata": NSNull(),
         ]
         return [
-            "messages": [opener] + tirednessExchange() + memorySavedExchange(),
+            "messages": [opener] + tirednessExchange(profile) + memorySavedExchange(),
             "activePersona": activePersona,
             "pendingCard": NSNull(),
         ]
@@ -542,7 +549,7 @@ enum FixtureData {
     /// "Why am I so tired this week?" — a memory read (2 sources), a sleep
     /// read, and an HRV baseline read, each with a `summary` — see
     /// `coachRestoration(_:)`'s doc comment.
-    private static func tirednessExchange() -> [[String: Any]] {
+    private static func tirednessExchange(_ profile: Profile) -> [[String: Any]] {
         let question: [String: Any] = [
             "id": "00000000-0000-4000-8000-000000000002",
             "role": "user",
@@ -552,6 +559,9 @@ enum FixtureData {
             "specialistSessionId": NSNull(),
             "specialistMetadata": NSNull(),
         ]
+        let hrvLow = Int(profile.hrv) - 9
+        let hrvNormalLow = Int(profile.hrv) - 8
+        let hrvNormalHigh = Int(profile.hrv) + 8
         let activity: [[String: Any]] = [
             [
                 "name": "read_memory",
@@ -576,7 +586,7 @@ enum FixtureData {
                 "label": "Compared HRV with your normal",
                 "kind": "data",
                 "ok": true,
-                "summary": "51 ms today · normal 55–64 ms",
+                "summary": "\(hrvLow) ms today · normal \(hrvNormalLow)–\(hrvNormalHigh) ms",
             ],
         ]
         let answer: [String: Any] = [
@@ -859,17 +869,18 @@ enum FixtureData {
     private static func logs(_ profile: Profile, scenario: FixtureMode.Scenario) -> [String: Any] {
         var items: [[String: Any]] = []
 
-        if let firstMeal = profile.meals.first {
+        // Add all logged meals for the day
+        for (index, meal) in profile.meals.enumerated() {
             items.append([
-                "id": "fixture-log-meal",
+                "id": "fixture-log-meal-\(index)",
                 "type": "meal_logged",
                 "timestamp": isoNow,
                 "hasExactTime": true,
                 "dayKey": NSNull(),
-                "title": firstMeal.name,
-                "subtitle": "Logged · \(firstMeal.slot.capitalized)",
+                "title": meal.name,
+                "subtitle": "Logged · \(meal.slot.capitalized)",
                 "imageThumb": NSNull(),
-                "kcal": Double(firstMeal.kcal),
+                "kcal": Double(meal.kcal),
                 "km": NSNull(),
                 "sleepMs": NSNull(),
                 "analysisId": NSNull(),
@@ -972,7 +983,9 @@ enum FixtureData {
             "type": "Running", "durationMin": 52.23, "kcal": 612.0,
             "distanceM": 10_200.0, "avgHr": 158.0, "maxHr": 176.0,
             "paceMinPerKm": 5.1167, "elevationGainM": 42.0,
-            "startTime": isoAt(daysAgo: 0, hour: 7, minute: 41),
+            // Align with sleep analysis's beforeBed.lastWorkoutEndedAt (9:40 PM yesterday)
+            // so the narrative about the late run is consistent with the workout timing.
+            "startTime": isoAt(daysAgo: 1, hour: 21, minute: 30),
         ]
         var context: [String: Any] = [
             "usual": ["sessions": 8, "distanceM": 8_800.0, "durationMin": 44.0, "paceMinPerKm": 5.3167, "avgHr": 148.0],
@@ -1319,6 +1332,106 @@ enum FixtureData {
         }
 
         return ["week": week, "volume": volume, "lastLift": lastLift]
+    }
+
+    // MARK: - Strength tracking (GET /api/workouts/summary + /last, POST /sets)
+
+    /// GET /api/workouts/summary → `WorkoutSummaryResponse`. Only `.muscle`
+    /// carries data — 8 weeks of squat/bench/deadlift (+ a recent overhead
+    /// press) with steady progression everywhere except the deadlift, which
+    /// is stalled at 175 kg for the last 4 weeks (and skipped one week, so its
+    /// sparkline shows a gap). Every other scenario returns the real
+    /// backend's empty shape (`exercises: {}`) so the Strength card stays
+    /// hidden. Week keys come from `TrendsStrengthLogic.weekKeys` so the
+    /// fixture always lines up with the card's own current-week math.
+    private static func workoutSummary(scenario: FixtureMode.Scenario) -> [String: Any] {
+        guard scenario == .muscle else {
+            return ["days": 84, "exercises": [String: Any]()]
+        }
+
+        let weeks = TrendsStrengthLogic.weekKeys(endingAt: Date(), count: 8)
+
+        /// One lift's weekly stats from per-week top-set loads (kg, `nil` =
+        /// not trained that week) and working-set counts, all at 5 reps.
+        func series(loads: [Double?], sets: [Int]) -> [[String: Any]] {
+            let reps = 5
+            var out: [[String: Any]] = []
+            for (index, load) in loads.enumerated() {
+                guard let load else { continue }
+                let e1rm = (load * (1 + Double(reps) / 30) * 100).rounded() / 100
+                out.append([
+                    "weekStart": weeks[index],
+                    "bestEstimatedOneRepMaxKg": e1rm,
+                    "volumeKg": Double(sets[index] * reps) * load,
+                    "totalSets": sets[index],
+                    "totalReps": sets[index] * reps,
+                ])
+            }
+            return out
+        }
+
+        let exercises: [String: Any] = [
+            "squat": series(
+                loads: [115, 117.5, 120, 122.5, 125, 130, 135, 140],
+                sets: [3, 3, 3, 3, 3, 3, 3, 3]
+            ),
+            "bench press": series(
+                loads: [80, 82.5, 82.5, 85, 87.5, 87.5, 90, 92.5],
+                sets: [3, 3, 3, 3, 3, 3, 3, 4]
+            ),
+            "deadlift": series(
+                loads: [160, 165, nil, 175, 175, 175, 175, 175],
+                sets: [3, 3, 0, 3, 3, 3, 3, 3]
+            ),
+            "overhead press": series(
+                loads: [nil, nil, nil, nil, nil, nil, 55, 57.5],
+                sets: [0, 0, 0, 0, 0, 0, 3, 3]
+            ),
+        ]
+        return ["days": 84, "exercises": exercises]
+    }
+
+    /// GET /api/workouts/last → `WorkoutLastSessionResponse`. For `.muscle`:
+    /// the most recent session (squat warm-up + 3×5 @ 140 kg, bench 3×5 @
+    /// 92.5 kg) regardless of which `exercise` is asked about — matches the
+    /// real route returning the WHOLE session. Other scenarios: `sets: []`
+    /// (never logged), so the logger opens as an empty form.
+    private static func workoutLastSession(scenario: FixtureMode.Scenario) -> [String: Any] {
+        guard scenario == .muscle else { return ["sets": [[String: Any]]()] }
+
+        let sessionId = "5b1f0c1e-7a54-4c6e-9d57-2f3a6e0c9b11"
+        let performedAt = isoDaysAgo(2)
+        let localDay = dayString(2)
+
+        func makeSet(_ n: Int, exercise: String, display: String, index: Int, reps: Int, loadKg: Double, warmup: Bool) -> [String: Any] {
+            [
+                "id": "fixture-set-\(n)",
+                "sessionId": sessionId,
+                "workoutId": NSNull(),
+                "performedAt": performedAt,
+                "localDay": localDay,
+                "exercise": exercise,
+                "exerciseDisplay": display,
+                "setIndex": index,
+                "reps": reps,
+                "loadKg": loadKg,
+                "rpe": NSNull(),
+                "isWarmup": warmup,
+                "source": "manual",
+            ]
+        }
+
+        // Server order: by exercise name, then set index.
+        let sets: [[String: Any]] = [
+            makeSet(1, exercise: "bench press", display: "Bench press", index: 5, reps: 5, loadKg: 92.5, warmup: false),
+            makeSet(2, exercise: "bench press", display: "Bench press", index: 6, reps: 5, loadKg: 92.5, warmup: false),
+            makeSet(3, exercise: "bench press", display: "Bench press", index: 7, reps: 5, loadKg: 92.5, warmup: false),
+            makeSet(4, exercise: "squat", display: "Squat", index: 1, reps: 5, loadKg: 60, warmup: true),
+            makeSet(5, exercise: "squat", display: "Squat", index: 2, reps: 5, loadKg: 140, warmup: false),
+            makeSet(6, exercise: "squat", display: "Squat", index: 3, reps: 5, loadKg: 140, warmup: false),
+            makeSet(7, exercise: "squat", display: "Squat", index: 4, reps: 5, loadKg: 140, warmup: false),
+        ]
+        return ["sets": sets]
     }
 
     // MARK: - GET /api/devices → DevicesResponse (phase 2 "both devices" contract)

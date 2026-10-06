@@ -35,6 +35,20 @@ export const users = p.pgTable('users', {
   carbs_target_g:   p.integer('carbs_target_g'),
   fat_target_g:     p.integer('fat_target_g'),
 
+  // ── Goal target (roadmap v5 — goal progress) ───────────────────────────────
+  // What the user is measuring progress against. All nullable: null → "no
+  // target set" (GET /api/goal/progress answers verdict 'needs_target'
+  // rather than inventing one). Weights are canonically kg, like every other
+  // weight in this schema. goal_started_at / goal_start_weight_kg anchor
+  // "progress so far" and are reset whenever the goal type or target weight
+  // changes (see lib/goalStart.ts); start weight is null when no weigh-in was
+  // known at that moment.
+  target_weight_kg:      p.real('target_weight_kg'),                           // 30–300; null → no weight target
+  target_date:           p.date('target_date'),                                // 'YYYY-MM-DD' local day; null → no deadline
+  goal_start_weight_kg:  p.real('goal_start_weight_kg'),                       // trend weight when the current goal began
+  goal_started_at:       p.timestamp('goal_started_at', { withTimezone: true }), // when the current goal/target began
+  weekly_sessions_target: p.integer('weekly_sessions_target'),                 // 1–14 training sessions/week; null → none set
+
   // Manual "new chat" boundary (lib/brain/conversationWindow.ts). Set to now()
   // when the user taps "New chat"; messages at/before this timestamp are
   // excluded from both coach restore (GET /api/coach) and the LLM prompt

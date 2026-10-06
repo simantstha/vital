@@ -90,6 +90,14 @@ final class TrendsViewModel: ObservableObject {
     /// doesn't render rather than fabricating a trend.
     @Published private(set) var weightLog: WeightLogResponse? = nil
 
+    // MARK: Strength (workout_sets summary — "Strength" card)
+
+    /// `nil` until `/api/workouts/summary` resolves, and left untouched (not
+    /// zeroed) when a refresh fails — the card only ever renders real data.
+    /// Kept raw (not the derived `TrendsStrengthLogic.Card`) so the view can
+    /// re-derive it with the current unit system and clock each render.
+    @Published private(set) var workoutSummary: WorkoutSummaryResponse? = nil
+
     private let apiClient: TrendsAPIProviding
     /// `loadSummary()` also needs `fetchProfile()`, which is outside the
     /// minimal `TrendsAPIProviding` seam (that protocol exists solely to let
@@ -277,6 +285,26 @@ final class TrendsViewModel: ObservableObject {
         let fresh = try? await profileClient.fetchWeightLog()
         withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) {
             weightLog = fresh
+        }
+    }
+
+    // MARK: - Load (strength summary — fail-soft)
+
+    /// Fail-soft like `loadGoalContext()`: a failure leaves `workoutSummary`
+    /// as it was (nil on a cold start, so the Strength card simply doesn't
+    /// render) and never touches `errorMessage` — strength is a secondary card,
+    /// not core Trends content. An empty `exercises` map is a valid response
+    /// (no lifts logged) and also hides the card via `TrendsStrengthLogic`.
+    func loadStrength() async {
+        do {
+            let fresh = try await profileClient.fetchWorkoutSummary()
+            withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) {
+                workoutSummary = fresh
+            }
+        } catch {
+            if !error.isCancellation {
+                print("[Vital] fetchWorkoutSummary failed: \(error.localizedDescription)")
+            }
         }
     }
 

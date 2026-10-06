@@ -66,6 +66,7 @@ final class ScreenshotTests: XCTestCase {
             } else {
                 captureToday(app, scenario: scenario, appearance: appearance)
                 captureDietSheet(app, scenario: scenario, appearance: appearance)
+                captureLiftLogger(app, scenario: scenario, appearance: appearance)
                 captureCoach(app, scenario: scenario, appearance: appearance)
                 captureTrends(app, scenario: scenario, appearance: appearance)
                 captureLogs(app, scenario: scenario, appearance: appearance)
@@ -383,6 +384,51 @@ final class ScreenshotTests: XCTestCase {
         }
     }
 
+    /// Opens the "Log lift" sheet from Today's muscle hero (muscle scenario
+    /// only — it's the one goal whose Today carries the "Log lift" button and
+    /// the one fixture with a last session to repeat). Screen name
+    /// `liftLogger`.
+    private func captureLiftLogger(_ app: XCUIApplication, scenario: String, appearance: String) {
+        guard scenario == "muscle" else { return }
+
+        let logLift = app.buttons["today.muscleHero.logLift"]
+        tapWhenHittable(
+            logLift, app: app,
+            description: "today.muscleHero.logLift [\(scenario)/\(appearance)]"
+        )
+
+        // The repeat-last-session note only renders once `/api/workouts/last`
+        // has decoded and pre-filled the form — a fixture-unique signal that
+        // fails loudly if that endpoint's interception ever regresses (the
+        // sheet would otherwise open to its empty "No previous session"
+        // form and still look plausible).
+        guard waitForText(app, containing: "Repeating your last session") else {
+            XCTFail("Lift logger never showed its pre-filled last session after tapping "
+                     + "today.muscleHero.logLift [\(scenario)/\(appearance)]")
+            return
+        }
+        XCTAssertTrue(app.buttons["liftLogger.save"].waitForExistence(timeout: 10),
+                       "Lift logger should show its Save button [\(scenario)/\(appearance)]")
+        capture(app, name: "\(scenario)__liftLogger__\(appearance)")
+
+        let close = app.buttons["Close"]
+        if close.waitForExistence(timeout: 5) {
+            close.tap()
+            // Same dismiss-animation wait as `captureDietSheet`: a following
+            // tab-bar tap can be absorbed by a sheet still animating away.
+            guard waitForTextToDisappear(app, containing: "Repeating your last session") else {
+                XCTFail("Lift logger never finished dismissing after tapping Close [\(scenario)/\(appearance)]")
+                return
+            }
+        }
+    }
+
+    /// Polls until no `staticText` label contains `substring` (or `timeout`).
+    private func waitForTextToDisappear(_ app: XCUIApplication, containing substring: String, timeout: TimeInterval = 5) -> Bool {
+        let predicate = NSPredicate(format: "label CONTAINS[c] %@", substring)
+        return app.staticTexts.matching(predicate).firstMatch.waitForNonExistence(timeout: timeout)
+    }
+
     private func captureCoach(_ app: XCUIApplication, scenario: String, appearance: String) {
         switchToTab("Coach", app: app, scenario: scenario, appearance: appearance)
 
@@ -486,6 +532,20 @@ final class ScreenshotTests: XCTestCase {
             }
             XCTAssertTrue(recoveryTile.waitForExistence(timeout: 15),
                            "Trends should render its metric tiles [\(scenario)/\(appearance)]")
+
+            if scenario == "muscle" {
+                // The Strength card leads Trends for the muscle goal
+                // (`TrendsGoalOrdering.leadsWithStrength`) — back to the top
+                // so it's both asserted and captured, then check its volume
+                // row (identifier, not text: the rows are combined/ignored
+                // accessibility elements). Only present once
+                // `/api/workouts/summary` decodes, so this fails loudly if
+                // that fixture's interception ever regresses.
+                for _ in 0..<swipesToRecovery { app.swipeDown() }
+                let strengthVolume = app.descendants(matching: .any).matching(identifier: "trends.strengthCard.volume").firstMatch
+                XCTAssertTrue(strengthVolume.waitForExistence(timeout: 15),
+                               "muscle Trends should show the Strength card's weekly volume line [\(appearance)]")
+            }
 
             if scenario == "weight_loss" {
                 // Scroll back to the top before the goal-ordering frame
