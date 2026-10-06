@@ -77,6 +77,11 @@ struct RootTabView: View {
                 coachVM.voiceController.appDidEnterBackground()
             }
         }
+        // "Set target" on Trends' goal-progress card (`.vitalOpenGoalEditor`) —
+        // Goal editing lives under Profile, so land there.
+        .onReceive(NotificationCenter.default.publisher(for: .vitalOpenGoalEditor)) { _ in
+            withAnimation(Theme.Motion.standard) { selected = .profile }
+        }
         .onChange(of: router.coachContext) { _, value in
             if let value {
                 coachVM.input = value

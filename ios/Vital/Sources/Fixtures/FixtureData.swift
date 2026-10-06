@@ -63,6 +63,11 @@ enum FixtureData {
         let meals: [FixtureMeal]
         let weightKg: Double
         let weightTrendPerWeekKg: Double // negative = losing, positive = gaining
+        // "Today" readings — the SINGLE source for last night's sleep, this
+        // morning's HRV and resting HR, and today's weight. Every screen
+        // (Today tiles, Logs subtitle, Trends latest point + normal band,
+        // sleep/workout analyses, coach receipts) derives from these; see
+        // `todayValue` / `normalBase` / `seriesPoint`.
         let hrv: Double
         let restingHR: Double
         let sleepMinutes: Double
@@ -117,7 +122,7 @@ enum FixtureData {
         .weightLoss: Profile(
             goal: "weight_loss",
             name: "Alex Rivera",
-            insight: "You're down 0.6kg this week and sleep is holding steady — keep the deficit gentle through the weekend.",
+            insight: "You're down 0.6kg this week, but last night's sleep ran short (6h 50m) — keep the deficit gentle and aim for an earlier night.",
             established: true,
             targetKcal: 1850, consumedKcal: 1020,
             protein: 96, proteinTarget: 150, carbs: 110, carbsTarget: 165, fat: 38, fatTarget: 62,
@@ -137,7 +142,7 @@ enum FixtureData {
                 FixtureMeal(name: "Greek yogurt + almonds", kcal: 220, c: 22, p: 20, f: 13, slot: "snacks"),
             ],
             weightKg: 82, weightTrendPerWeekKg: -0.6,
-            hrv: 58, restingHR: 57, sleepMinutes: 348, steps: 8600, distanceKm: 6.1,
+            hrv: 58, restingHR: 57, sleepMinutes: 410, steps: 8600, distanceKm: 6.1,
             workoutTitle: nil, workoutKm: nil
         ),
         .muscle: Profile(
@@ -165,7 +170,7 @@ enum FixtureData {
                 FixtureMeal(name: "Protein shake + banana", kcal: 320, c: 50, p: 38, f: 10, slot: "snacks"),
             ],
             weightKg: 79, weightTrendPerWeekKg: 0.35,
-            hrv: 62, restingHR: 52, sleepMinutes: 348, steps: 7200, distanceKm: 4.8,
+            hrv: 62, restingHR: 52, sleepMinutes: 460, steps: 7200, distanceKm: 4.8,
             workoutTitle: nil, workoutKm: nil,
             // GET /api/training/summary (#202): last lift squat 3×5 @ 140kg,
             // 2 of 4 planned sessions done this week.
@@ -198,7 +203,7 @@ enum FixtureData {
                 FixtureMeal(name: "Electrolyte smoothie", kcal: 240, c: 76, p: 18, f: 9, slot: "snacks"),
             ],
             weightKg: 61, weightTrendPerWeekKg: -0.1,
-            hrv: 68, restingHR: 46, sleepMinutes: 348, steps: 11200, distanceKm: 12.4,
+            hrv: 51, restingHR: 54, sleepMinutes: 348, steps: 11200, distanceKm: 12.4,
             workoutTitle: "10km tempo run", workoutKm: 10.2,
             // GET /api/training/summary (#202): 24.5km done this week, no
             // target (matches the real API's always-null target today), 3
@@ -230,7 +235,7 @@ enum FixtureData {
 
         switch (method, path) {
         case ("GET", "/api/today"):
-            return (200, jsonData(today(profile)))
+            return (200, jsonData(today(profile, scenario: scenario)))
         case ("GET", "/api/plan"):
             return (200, jsonData(plan(profile)))
         case ("GET", "/api/streak"):
@@ -249,7 +254,7 @@ enum FixtureData {
         case ("GET", let p) where p.hasPrefix("/api/memory/entities/"):
             return (200, jsonData(entityDocument(id: String(p.dropFirst("/api/memory/entities/".count)))))
         case ("GET", "/api/coach"):
-            return (200, jsonData(coachRestoration(profile)))
+            return (200, jsonData(coachRestoration(profile, scenario: scenario)))
         case ("GET", "/api/coach/opener"):
             return (200, jsonData(["text": profile.established ? coachOpener : newUserCoachOpener]))
         case ("POST", "/api/coach"):
@@ -268,12 +273,12 @@ enum FixtureData {
         case ("GET", "/api/logs"):
             return (200, jsonData(logs(profile, scenario: scenario)))
         case ("GET", let p) where p.hasPrefix("/api/workout-analyses/"):
-            guard let data = workoutAnalysisFixture(id: String(p.dropFirst("/api/workout-analyses/".count)), scenario: scenario) else {
+            guard let data = workoutAnalysisFixture(id: String(p.dropFirst("/api/workout-analyses/".count)), profile: profile, scenario: scenario) else {
                 return (404, jsonData(["error": "no fixture workout analysis for this id"]))
             }
             return (200, jsonData(data))
         case ("GET", let p) where p.hasPrefix("/api/sleep-analyses/"):
-            guard let data = sleepAnalysisFixture(id: String(p.dropFirst("/api/sleep-analyses/".count)), scenario: scenario) else {
+            guard let data = sleepAnalysisFixture(id: String(p.dropFirst("/api/sleep-analyses/".count)), profile: profile, scenario: scenario) else {
                 return (404, jsonData(["error": "no fixture sleep analysis for this id"]))
             }
             return (200, jsonData(data))
@@ -312,6 +317,8 @@ enum FixtureData {
         case ("POST", "/api/workouts/sets"):
             let saved: [String: Any] = ["ok": true, "sets": [[String: Any]]()]
             return (200, jsonData(saved))
+        case ("GET", "/api/goal/progress"):
+            return (200, jsonData(goalProgress(profile, scenario: scenario)))
         case ("GET", "/api/devices"):
             return (200, jsonData(devices(scenario: scenario)))
         default:
@@ -347,11 +354,14 @@ enum FixtureData {
     /// times) that need to read as a believable time of day rather than
     /// "now".
     private static func isoAt(daysAgo: Int, hour: Int, minute: Int) -> String {
+        isoFormatter.string(from: dateAt(daysAgo: daysAgo, hour: hour, minute: minute))
+    }
+
+    private static func dateAt(daysAgo: Int, hour: Int, minute: Int) -> Date {
         var calendar = Calendar.current
         calendar.timeZone = .current
         let day = calendar.date(byAdding: .day, value: -daysAgo, to: Date()) ?? Date()
-        let date = calendar.date(bySettingHour: hour, minute: minute, second: 0, of: day) ?? day
-        return isoFormatter.string(from: date)
+        return calendar.date(bySettingHour: hour, minute: minute, second: 0, of: day) ?? day
     }
 
     private static let dayFormatter: DateFormatter = {
@@ -438,8 +448,113 @@ enum FixtureData {
         // higherIsBetter).
         .weightLoss: ["resting_hr": false, "hrv_sdnn": true, "sleep_minutes": false],
         // endurance: HRV below (watch), resting HR above (watch).
-        .endurance: ["hrv_sdnn": false, "resting_hr": true],
+        // sleep too: last night's short sleep after the late hard run.
+        .endurance: ["hrv_sdnn": false, "resting_hr": true, "sleep_minutes": false],
     ]
+
+    // MARK: - Single-source "today" values + normal bands
+
+    /// Relative sd of every fixture series (`mean30`/`sd30` are served as
+    /// `base` / `base * sdFraction`).
+    private static let sdFraction = 0.06
+    /// How far (in sd) a "moved" metric's latest reading sits from normal.
+    private static let movedZ = 1.8
+
+    /// The one "today" value for metrics several screens show — `nil` for
+    /// every other metric. Sleep is in HOURS (the wire unit of both
+    /// `/api/today` and the `sleep_minutes` series).
+    private static func todayValue(_ key: String, _ profile: Profile) -> Double? {
+        switch key {
+        case "hrv_sdnn":      return profile.hrv
+        case "resting_hr":    return profile.restingHR
+        case "sleep_minutes": return profile.sleepMinutes / 60
+        case "body_mass_kg":  return profile.weightKg
+        default:              return nil
+        }
+    }
+
+    /// The series' "normal" (`mean30`). For a metric a scenario deliberately
+    /// pushes out of range, it is back-solved so the latest reading
+    /// (`todayValue`) sits exactly `movedZ` sd from it — which keeps the
+    /// profile's "today" number the one every screen shows while "What
+    /// moved" still has something to say.
+    private static func normalBase(_ key: String, _ profile: Profile, _ scenario: FixtureMode.Scenario?) -> Double {
+        let value = baseValue(key, profile)
+        guard todayValue(key, profile) != nil,
+              let pushesAbove = (movedMetrics[scenario ?? .newUser] ?? [:])[key] else { return value }
+        return value / (1 + (pushesAbove ? 1 : -1) * movedZ * sdFraction)
+    }
+
+    /// "above" | "normal" | "below" — where `todayValue` sits against normal.
+    private static func vsNormal(_ key: String, _ scenario: FixtureMode.Scenario?) -> String {
+        guard let pushesAbove = (movedMetrics[scenario ?? .newUser] ?? [:])[key] else { return "normal" }
+        return pushesAbove ? "above" : "below"
+    }
+
+    /// One series point (`offset` = days ago, 0 = today) — shared by
+    /// `trendsSingle`, `trendsBatch`, the sleep analysis' week strip and the
+    /// coach receipts, so they can never disagree. Today's point of any
+    /// metric with a `todayValue` is exactly that value.
+    private static func seriesPoint(key: String, offset: Int, profile: Profile, scenario: FixtureMode.Scenario?) -> Double {
+        if offset == 0, let today = todayValue(key, profile) { return today }
+        let base = normalBase(key, profile, scenario)
+        // `seriesValue` adds `dailyTrend * offset` (days ago), so a LOSING
+        // rate (negative) needs a positive per-day-ago slope: past weights
+        // were higher.
+        let dailyTrend = key == "body_mass_kg" ? -profile.weightTrendPerWeekKg / 7 : 0
+        let pushesAbove = (movedMetrics[scenario ?? .newUser] ?? [:])[key]
+        return seriesValue(
+            offset: offset, base: base, sd: base * sdFraction, dailyTrend: dailyTrend,
+            seed: stableSeed(key), pushesAbove: pushesAbove
+        )
+    }
+
+    /// "49–55" — the HRV detail's "Normal (range)" text (`mean30 ± sd30`, 0
+    /// decimals — see `MetricDetailView.normalRangeText`), reused verbatim by
+    /// the coach's receipt.
+    private static func hrvNormalRange(_ profile: Profile, _ scenario: FixtureMode.Scenario?) -> String {
+        let base = normalBase("hrv_sdnn", profile, scenario)
+        let sd = base * sdFraction
+        return "\(String(format: "%.0f", base - sd))–\(String(format: "%.0f", base + sd))"
+    }
+
+    /// 410 -> "6h 50m" (same format as Today's sleep tile / Logs subtitle).
+    private static func hoursMinutes(_ minutes: Double) -> String {
+        let total = Int(minutes.rounded())
+        return "\(total / 60)h \(total % 60)m"
+    }
+
+    /// "50 minutes" / "an hour" — a difference, rounded to 5.
+    private static func humanDuration(_ minutes: Double) -> String {
+        let rounded = Int((minutes / 5).rounded()) * 5
+        return rounded == 60 ? "an hour" : "\(rounded) minutes"
+    }
+
+    /// Last night's sleep story for a scenario — all derived from
+    /// `profile.sleepMinutes`.
+    private struct SleepStory {
+        let minutes: Double
+        let awake: Double
+        let core: Double
+        let deep: Double
+        let rem: Double
+        let wake: Date
+        let bed: Date
+    }
+
+    private static func sleepStory(_ profile: Profile, scenario: FixtureMode.Scenario) -> SleepStory {
+        let minutes = profile.sleepMinutes
+        let awake: Double = scenario == .endurance ? 38 : (minutes * 0.07).rounded()
+        let deep = (minutes * 0.12).rounded()
+        let rem = (minutes * 0.18).rounded()
+        let wakeHour = 6
+        let wakeMinute = scenario == .endurance ? 10 : (scenario == .muscle ? 20 : 15)
+        let wake = dateAt(daysAgo: 0, hour: wakeHour, minute: wakeMinute)
+        return SleepStory(
+            minutes: minutes, awake: awake, core: minutes - deep - rem, deep: deep, rem: rem,
+            wake: wake, bed: wake.addingTimeInterval(-(minutes + awake) * 60)
+        )
+    }
 
     // MARK: - Shared calibration block
 
@@ -450,9 +565,14 @@ enum FixtureData {
 
     // MARK: - GET /api/today → TodayResponse
 
-    private static func today(_ profile: Profile) -> [String: Any] {
-        func metric(_ value: Double, unit: String, delta: Int) -> [String: Any] {
-            profile.established
+    private static func today(_ profile: Profile, scenario: FixtureMode.Scenario) -> [String: Any] {
+        // `deltaPct` = today vs the series' normal (`normalBase`), so the tile's
+        // delta agrees with Trends' "What moved".
+        func metric(_ key: String, unit: String) -> [String: Any] {
+            let value = todayValue(key, profile) ?? 0
+            let normal = normalBase(key, profile, scenario)
+            let delta = normal == 0 ? 0 : Int(((value - normal) / normal * 100).rounded())
+            return profile.established
                 ? ["value": value, "unit": unit, "deltaPct": delta]
                 : ["value": NSNull(), "unit": unit, "deltaPct": NSNull()]
         }
@@ -468,13 +588,13 @@ enum FixtureData {
         ]
         return [
             "metrics": [
-                "hrv": metric(profile.hrv, unit: "ms", delta: 4),
+                "hrv": metric("hrv_sdnn", unit: "ms"),
                 // /api/today sends sleep in HOURS (unit "h"), e.g. 7.25 — see
                 // app/api/today/route.ts's documented response shape.
                 // `profile.sleepMinutes` is authored in minutes for
                 // readability, so convert here.
-                "sleep": metric(profile.sleepMinutes / 60, unit: "h", delta: 2),
-                "restingHr": metric(profile.restingHR, unit: "bpm", delta: -3),
+                "sleep": metric("sleep_minutes", unit: "h"),
+                "restingHr": metric("resting_hr", unit: "bpm"),
             ],
             "dietBudget": dietBudget,
             "insight": profile.insight,
@@ -518,7 +638,7 @@ enum FixtureData {
     /// your notes") and a second exchange with a `memory.saved` op, so the
     /// screenshot harness always has a receipt pill to capture
     /// (`captureCoach`/`captureCoachReceipt`).
-    private static func coachRestoration(_ profile: Profile) -> [String: Any] {
+    private static func coachRestoration(_ profile: Profile, scenario: FixtureMode.Scenario) -> [String: Any] {
         let activePersona: [String: Any] = [
             "id": "vital", "title": "Vital Coach", "subtitle": "Your personal coach",
             "accent": "#7C6CF2", "icon": "sparkles", "sessionId": NSNull(),
@@ -540,7 +660,7 @@ enum FixtureData {
             "specialistMetadata": NSNull(),
         ]
         return [
-            "messages": [opener] + tirednessExchange(profile) + memorySavedExchange(),
+            "messages": [opener] + tirednessExchange(profile, scenario: scenario) + memorySavedExchange(),
             "activePersona": activePersona,
             "pendingCard": NSNull(),
         ]
@@ -548,8 +668,11 @@ enum FixtureData {
 
     /// "Why am I so tired this week?" — a memory read (2 sources), a sleep
     /// read, and an HRV baseline read, each with a `summary` — see
-    /// `coachRestoration(_:)`'s doc comment.
-    private static func tirednessExchange(_ profile: Profile) -> [[String: Any]] {
+    /// `coachRestoration(_:)`'s doc comment. Every number is derived from the
+    /// same series/profile the Today tiles and Trends read, so the receipt
+    /// ("58 ms today · normal 49–55 ms"), the tile and the HRV detail's
+    /// "Normal (range)" always agree.
+    private static func tirednessExchange(_ profile: Profile, scenario: FixtureMode.Scenario) -> [[String: Any]] {
         let question: [String: Any] = [
             "id": "00000000-0000-4000-8000-000000000002",
             "role": "user",
@@ -559,9 +682,19 @@ enum FixtureData {
             "specialistSessionId": NSNull(),
             "specialistMetadata": NSNull(),
         ]
-        let hrvLow = Int(profile.hrv) - 9
-        let hrvNormalLow = Int(profile.hrv) - 8
-        let hrvNormalHigh = Int(profile.hrv) + 8
+
+        let nights = (0...6).reversed().map {
+            seriesPoint(key: "sleep_minutes", offset: $0, profile: profile, scenario: scenario) * 60
+        }
+        let avgMinutes = nights.reduce(0, +) / Double(nights.count)
+        let shortNights = nights.filter { $0 < 360 }.count
+        let lastNight = hoursMinutes(profile.sleepMinutes)
+        let usualMinutes = normalBase("sleep_minutes", profile, scenario) * 60
+        let hrvToday = Int(profile.hrv.rounded())
+        let hrvRange = hrvNormalRange(profile, scenario)
+        // Signed gap to normal in whole ms (positive = above normal).
+        let hrvGap = Int((profile.hrv - normalBase("hrv_sdnn", profile, scenario)).rounded())
+
         let activity: [[String: Any]] = [
             [
                 "name": "read_memory",
@@ -579,21 +712,32 @@ enum FixtureData {
                 "label": "Checked your sleep",
                 "kind": "data",
                 "ok": true,
-                "summary": "Last 7 nights · avg 5 h 57 m",
+                "summary": "Last 7 nights · avg \(hoursMinutes(avgMinutes))",
             ],
             [
                 "name": "get_baseline",
                 "label": "Compared HRV with your normal",
                 "kind": "data",
                 "ok": true,
-                "summary": "\(hrvLow) ms today · normal \(hrvNormalLow)–\(hrvNormalHigh) ms",
+                "summary": "\(hrvToday) ms today · normal \(hrvRange) ms",
             ],
         ]
+
+        let content: String
+        switch scenario {
+        case .endurance:
+            content = "Mostly sleep. Last night was \(lastNight) and you've averaged \(hoursMinutes(avgMinutes)) this week, with \(shortNights) of the last 7 nights under 6 hours. Your HRV is \(abs(hrvGap)) ms under your normal — the pattern you usually get after short nights."
+        case .weightLoss:
+            content = "Mostly short sleep. Last night was \(lastNight), about \(humanDuration(usualMinutes - profile.sleepMinutes)) under your usual — but your HRV is \(abs(hrvGap)) ms above your normal, so you're recovering fine. An earlier night should settle it."
+        default:
+            content = "Not much points to sleep — last night was \(lastNight) and your HRV (\(hrvToday) ms) is inside your normal \(hrvRange) ms. A heavy training week can feel draining even when recovery looks fine; keep protein up and ease the next session if it lingers."
+        }
+
         let answer: [String: Any] = [
             "id": "00000000-0000-4000-8000-000000000003",
             "role": "assistant",
             "speaker": "vital",
-            "content": "Mostly sleep. You've slept under 6 hours on 5 of the last 7 nights, and your HRV is 9 ms under your normal — the pattern you usually get after short nights.",
+            "content": content,
             "timestamp": isoDaysAgo(1),
             "specialistSessionId": NSNull(),
             "specialistMetadata": NSNull(),
@@ -662,15 +806,8 @@ enum FixtureData {
             .first { $0.hasPrefix("metric=") }
             .map { String($0.dropFirst("metric=".count)) } ?? "sleep"
         let key = singleMetricAliases[metricName] ?? "sleep_minutes"
-        let base = baseValue(key, profile)
-        let dailyTrend = key == "body_mass_kg" ? profile.weightTrendPerWeekKg / 7 : 0
-        let sd = base * 0.06
-        let seed = stableSeed(key)
-        let pushesAbove = (movedMetrics[scenario ?? .newUser] ?? [:])[key]
-
         let points = (0..<7).reversed().map { offset -> [String: Any] in
-            let value = seriesValue(offset: offset, base: base, sd: sd, dailyTrend: dailyTrend, seed: seed, pushesAbove: pushesAbove)
-            return ["date": dayString(offset), "value": value]
+            ["date": dayString(offset), "value": seriesPoint(key: key, offset: offset, profile: profile, scenario: scenario)]
         }
         return ["metric": metricName, "points": points, "calibration": calibration(profile)]
     }
@@ -729,25 +866,17 @@ enum FixtureData {
         // one-row-per-day payload out to 365.
         let pointCount = min(max(days, 3), 90)
 
-        let moved = movedMetrics[scenario ?? .newUser] ?? [:]
-
         var series: [String: Any] = [:]
         for key in batchMetricKeys {
-            let base = baseValue(key, profile)
-            // Only body weight actually trends day over day in this fixture;
-            // every other metric is a flat baseline plus noise.
-            let dailyTrend = key == "body_mass_kg" ? profile.weightTrendPerWeekKg / 7 : 0
-            // A realistic-looking sd — independent of the noise amplitude
-            // below, same as the baseline stats were already decoupled from
-            // `wiggle`'s noise before this change. Comfortably clears every
-            // `MetricSpec.minMeaningfulSD` floor.
-            let sd = base * 0.06
-            let seed = stableSeed(key)
-            let pushesAbove = moved[key]
+            // The series' normal (`mean30`) — see `normalBase`. Only body
+            // weight actually trends day over day in this fixture; every
+            // other metric is a flat baseline plus noise. A realistic-looking
+            // sd that comfortably clears every `MetricSpec.minMeaningfulSD`.
+            let base = normalBase(key, profile, scenario)
+            let sd = base * sdFraction
 
             let points = (0..<pointCount).reversed().map { offset -> [String: Any] in
-                let value = seriesValue(offset: offset, base: base, sd: sd, dailyTrend: dailyTrend, seed: seed, pushesAbove: pushesAbove)
-                return ["date": dayString(offset), "value": value]
+                ["date": dayString(offset), "value": seriesPoint(key: key, offset: offset, profile: profile, scenario: scenario)]
             }
             let baseline: [String: Any] = [
                 "mean7": base, "mean30": base, "mean60": base,
@@ -896,17 +1025,18 @@ enum FixtureData {
         // so both fixture shapes stay reachable through the app, not just
         // through unit tests.
         if profile.established {
-            let workoutAnalysisId = scenario == .muscle ? "fixture-workout-analysis-routine" : "fixture-workout-analysis"
-            let workoutTitle = scenario == .muscle ? "Easy 6k" : (profile.workoutTitle ?? "Morning run")
-            let workoutKm = scenario == .muscle ? 6.1 : (profile.workoutKm ?? 6.2)
+            // Endurance: the late hard run (analysis "fixture-workout-analysis",
+            // 8:48-9:40 PM yesterday — the run the sleep analysis blames).
+            // Everyone else: an easy morning run (routine analysis).
+            let isLateRun = scenario == .endurance
+            let workoutAnalysisId = isLateRun ? "fixture-workout-analysis" : "fixture-workout-analysis-routine"
+            let workoutTitle = isLateRun ? "Late tempo run" : "Easy 6k"
+            let workoutKm = isLateRun ? 10.2 : 6.1
             // Matches the corresponding analysis fixture's own `startTime`
-            // (routineRunAnalysis / notableRunAnalysis below) — the row's
-            // subtitle says "Completed this morning", so `isoNow` (whatever
-            // time the test happens to run) previously showed a nonsensical
-            // "11:59 PM" instead.
-            let workoutTimestamp = scenario == .muscle
-                ? isoAt(daysAgo: 0, hour: 6, minute: 52)
-                : isoAt(daysAgo: 0, hour: 7, minute: 41)
+            // (routineRunAnalysis / notableRunAnalysis below).
+            let workoutTimestamp = isLateRun
+                ? isoAt(daysAgo: 1, hour: 20, minute: 48)
+                : isoAt(daysAgo: 0, hour: 6, minute: 52)
             items.append([
                 "id": "fixture-log-workout",
                 "type": "workout_completed",
@@ -914,26 +1044,27 @@ enum FixtureData {
                 "hasExactTime": true,
                 "dayKey": NSNull(),
                 "title": workoutTitle,
-                "subtitle": "Completed this morning",
+                "subtitle": isLateRun ? "Completed last night" : "Completed this morning",
                 "imageThumb": NSNull(),
                 "kcal": NSNull(),
                 "km": workoutKm,
                 "sleepMs": NSNull(),
                 "analysisId": workoutAnalysisId,
             ])
+            let story = sleepStory(profile, scenario: scenario)
             items.append([
                 "id": "fixture-log-sleep",
                 "type": "sleep_session",
-                // Matches roughNightAnalysis's own `timing.wakeTime` below.
-                "timestamp": isoAt(daysAgo: 0, hour: 6, minute: 10),
+                // Matches the sleep analysis' own `timing.wakeTime`.
+                "timestamp": isoFormatter.string(from: story.wake),
                 "hasExactTime": true,
                 "dayKey": NSNull(),
                 "title": "Sleep",
-                "subtitle": "5h 48m last night",
+                "subtitle": "\(hoursMinutes(story.minutes)) last night",
                 "imageThumb": NSNull(),
                 "kcal": NSNull(),
                 "km": NSNull(),
-                "sleepMs": 348.0 * 60 * 1000,
+                "sleepMs": story.minutes * 60 * 1000,
                 "analysisId": "fixture-sleep-analysis",
             ])
         }
@@ -958,17 +1089,17 @@ enum FixtureData {
     // consistent data matching the X1 (notable run)/X3 (routine run)/Y1
     // (rough night) mockups, not placeholder numbers.
 
-    private static func workoutAnalysisFixture(id: String, scenario: FixtureMode.Scenario) -> [String: Any]? {
+    private static func workoutAnalysisFixture(id: String, profile: Profile, scenario: FixtureMode.Scenario) -> [String: Any]? {
         switch id {
-        case "fixture-workout-analysis": return notableRunAnalysis(scenario: scenario)
-        case "fixture-workout-analysis-routine": return routineRunAnalysis()
+        case "fixture-workout-analysis": return notableRunAnalysis(profile: profile, scenario: scenario)
+        case "fixture-workout-analysis-routine": return routineRunAnalysis(profile: profile, scenario: scenario)
         default: return nil
         }
     }
 
-    private static func sleepAnalysisFixture(id: String, scenario: FixtureMode.Scenario) -> [String: Any]? {
+    private static func sleepAnalysisFixture(id: String, profile: Profile, scenario: FixtureMode.Scenario) -> [String: Any]? {
         switch id {
-        case "fixture-sleep-analysis": return roughNightAnalysis(scenario: scenario)
+        case "fixture-sleep-analysis": return sleepAnalysis(profile: profile, scenario: scenario)
         default: return nil
         }
     }
@@ -978,27 +1109,33 @@ enum FixtureData {
     /// `context.devices` (phase 2 "both devices" contract, PR C item 5,
     /// mockups Z4/Z5) — every other scenario stays single-device so their
     /// existing `workoutAnalysis` screenshots are unaffected.
-    private static func notableRunAnalysis(scenario: FixtureMode.Scenario) -> [String: Any] {
+    private static func notableRunAnalysis(profile: Profile, scenario: FixtureMode.Scenario) -> [String: Any] {
         let metrics: [String: Any] = [
             "type": "Running", "durationMin": 52.23, "kcal": 612.0,
             "distanceM": 10_200.0, "avgHr": 158.0, "maxHr": 176.0,
             "paceMinPerKm": 5.1167, "elevationGainM": 42.0,
-            // Align with sleep analysis's beforeBed.lastWorkoutEndedAt (9:40 PM yesterday)
-            // so the narrative about the late run is consistent with the workout timing.
-            "startTime": isoAt(daysAgo: 1, hour: 21, minute: 30),
+            // 52 min long, so it ends at the sleep analysis'
+            // `beforeBed.lastWorkoutEndedAt` (9:40 PM yesterday); the Logs run
+            // row uses the same start.
+            "startTime": isoAt(daysAgo: 1, hour: 20, minute: 48),
         ]
         var context: [String: Any] = [
             "usual": ["sessions": 8, "distanceM": 8_800.0, "durationMin": 44.0, "paceMinPerKm": 5.3167, "avgHr": 148.0],
             "paceHistory": ["previous": [5.35, 5.45, 5.40, 5.50, 5.30, 5.55, 5.42], "rank": 1],
-            "effort": ["restingHr": 52.0, "maxHr": 188.0, "avgPct": 0.78, "zone": "hard"],
+            "effort": ["restingHr": normalBase("resting_hr", profile, scenario).rounded(), "maxHr": 188.0, "avgPct": 0.78, "zone": "hard"],
+            // The run was LAST NIGHT, so "going in" is the night before it —
+            // well rested, which is the point of the story (the short night
+            // is the one AFTER the run: see `sleepAnalysis`).
             "goingIn": [
                 "sleepMinutes": 490.0,
                 "hrv": ["value": 64.0, "unit": "ms", "vsNormal": "above", "source": "apple"],
                 "daysSinceLastSameType": 3,
             ],
+            // The morning after the run is THIS morning: the same HRV / resting
+            // HR the Today tiles show.
             "nextMorning": [
-                "hrv": ["value": 66.0, "unit": "ms", "vsNormal": "above", "source": "apple"],
-                "restingHr": ["value": 50.0, "unit": "bpm", "vsNormal": "below", "source": "apple"],
+                "hrv": ["value": profile.hrv, "unit": "ms", "vsNormal": vsNormal("hrv_sdnn", scenario), "source": "apple"],
+                "restingHr": ["value": profile.restingHR, "unit": "bpm", "vsNormal": vsNormal("resting_hr", scenario), "source": "apple"],
             ],
         ]
         if scenario == .endurance {
@@ -1074,7 +1211,7 @@ enum FixtureData {
     /// with no observations/nextSteps and an empty narrative, so
     /// `AnalysisView` hides the Coach's-take and Next-step cards entirely,
     /// matching the mockup's absence of both.
-    private static func routineRunAnalysis() -> [String: Any] {
+    private static func routineRunAnalysis(profile: Profile, scenario: FixtureMode.Scenario) -> [String: Any] {
         let metrics: [String: Any] = [
             "type": "Running", "durationMin": 35.67, "kcal": 340.0,
             "distanceM": 6_100.0, "avgHr": 131.0, "maxHr": 142.0,
@@ -1084,7 +1221,13 @@ enum FixtureData {
         let context: [String: Any] = [
             "usual": ["sessions": 8, "distanceM": 6_050.0, "durationMin": 35.0, "paceMinPerKm": 5.83, "avgHr": 129.0],
             "paceHistory": ["previous": [5.60, 5.70, 5.62, 5.75, 5.55, 5.80, 5.65], "rank": 6],
-            "effort": ["restingHr": 52.0, "maxHr": 188.0, "avgPct": 0.58, "zone": "easy"],
+            "effort": ["restingHr": normalBase("resting_hr", profile, scenario).rounded(), "maxHr": 188.0, "avgPct": 0.58, "zone": "easy"],
+            // This morning's run: "going in" = last night's sleep + today's HRV.
+            "goingIn": [
+                "sleepMinutes": profile.sleepMinutes,
+                "hrv": ["value": profile.hrv, "unit": "ms", "vsNormal": vsNormal("hrv_sdnn", scenario), "source": "apple"],
+                "daysSinceLastSameType": 2,
+            ],
         ]
         let result: [String: Any] = [
             "headline": "An easy run, right on your normal",
@@ -1099,42 +1242,80 @@ enum FixtureData {
         ]
     }
 
-    /// Y1 mockup: "Short night, light on deep sleep" — a full `context`,
-    /// every section populated (rough night, tone-flagged stages).
-    /// `.endurance` additionally gets a two-session `context.devices`
-    /// (phase 2 "both devices" contract, PR C item 5, mockup S4) whose
-    /// asleep minutes differ by 22 — enough to trigger the "devices
-    /// disagree" card (≥10 min, `AnalysisLogic.sleepDevicesDisagree`) —
-    /// every other scenario stays single-device.
-    private static func roughNightAnalysis(scenario: FixtureMode.Scenario) -> [String: Any] {
+    /// Y1 mockup family — last night's sleep, entirely derived from
+    /// `profile.sleepMinutes` (see `sleepStory`): `.endurance` is the rough
+    /// night after the late hard run (two-session `context.devices`, phase 2
+    /// "both devices" contract, mockup S4, whose asleep minutes differ by 22
+    /// — enough to trigger the "devices disagree" card, ≥10 min,
+    /// `AnalysisLogic.sleepDevicesDisagree`); `.weightLoss` is a slightly
+    /// short night; everything else is a solid night on the user's normal.
+    private static func sleepAnalysis(profile: Profile, scenario: FixtureMode.Scenario) -> [String: Any] {
+        let story = sleepStory(profile, scenario: scenario)
+        let usualMinutes = (normalBase("sleep_minutes", profile, scenario) * 60).rounded()
+        let usualDeep = (usualMinutes * 0.15).rounded()
+        let usualRem = (usualMinutes * 0.21).rounded()
+        let shortfall = usualMinutes - story.minutes
+
         let metrics: [String: Any] = [
-            "minutes": 348.0,
-            "stages": ["core": 242.0, "deep": 42.0, "rem": 64.0, "awake": 38.0],
+            "minutes": story.minutes,
+            "stages": ["core": story.core, "deep": story.deep, "rem": story.rem, "awake": story.awake],
         ]
         let week: [[String: Any]] = (0...6).reversed().map { offset -> [String: Any] in
-            ["date": dayString(offset), "minutes": offset == 0 ? 348.0 : Double(390 + offset * 6)]
+            [
+                "date": dayString(offset),
+                "minutes": (seriesPoint(key: "sleep_minutes", offset: offset, profile: profile, scenario: scenario) * 60).rounded(),
+            ]
+        }
+        var beforeBed: [String: Any] = ["lastMealAt": isoAt(daysAgo: 1, hour: 19, minute: 15)]
+        if scenario == .endurance {
+            beforeBed["lastWorkoutEndedAt"] = isoAt(daysAgo: 1, hour: 21, minute: 40)
+            beforeBed["lastMealAt"] = isoAt(daysAgo: 1, hour: 22, minute: 15)
         }
         var context: [String: Any] = [
-            "goalMinutes": 450,
-            "usual": ["nights": 14, "minutes": 440.0, "stages": ["core": 262.0, "deep": 70.0, "rem": 92.0, "awake": 14.0]],
+            "goalMinutes": 480,
+            "usual": [
+                "nights": 14, "minutes": usualMinutes,
+                "stages": ["core": usualMinutes - usualDeep - usualRem - 14, "deep": usualDeep, "rem": usualRem, "awake": 14.0],
+            ],
             "week": week,
-            "timing": ["bedTime": isoAt(daysAgo: 1, hour: 23, minute: 52), "wakeTime": isoAt(daysAgo: 0, hour: 6, minute: 10)],
-            "beforeBed": ["lastWorkoutEndedAt": isoAt(daysAgo: 1, hour: 21, minute: 40), "lastMealAt": isoAt(daysAgo: 1, hour: 22, minute: 15)],
+            "timing": ["bedTime": isoFormatter.string(from: story.bed), "wakeTime": isoFormatter.string(from: story.wake)],
+            "beforeBed": beforeBed,
             "thisMorning": [
-                "hrv": ["value": 48.0, "unit": "ms", "vsNormal": "below", "source": "apple"],
-                "restingHr": ["value": 58.0, "unit": "bpm", "vsNormal": "above", "source": "apple"],
+                "hrv": ["value": profile.hrv, "unit": "ms", "vsNormal": vsNormal("hrv_sdnn", scenario), "source": "apple"],
+                "restingHr": ["value": profile.restingHR, "unit": "bpm", "vsNormal": vsNormal("resting_hr", scenario), "source": "apple"],
             ],
         ]
         if scenario == .endurance {
-            context["devices"] = sleepDevicesContextFixture()
+            context["devices"] = sleepDevicesContextFixture(profile: profile, story: story)
         }
-        let result: [String: Any] = [
-            "headline": "Short night, light on deep sleep",
-            "shortInsight": "You got about an hour and a half less than usual, and woke up more.",
-            "narrative": "One short night won't undo anything. The late hard run is the part worth moving — it's the second time this month a late session came before a night like this.",
-            "observations": [String](),
-            "nextSteps": ["Swap today's intervals for an easy 30 min. Go hard again tomorrow if your HRV is back in range."],
-        ]
+
+        let result: [String: Any]
+        switch scenario {
+        case .endurance:
+            result = [
+                "headline": "Short night, light on deep sleep",
+                "shortInsight": "You got about \(humanDuration(shortfall)) less than usual, and woke up more.",
+                "narrative": "One short night won't undo anything. The late hard run is the part worth moving — it's the second time this month a late session came before a night like this.",
+                "observations": [String](),
+                "nextSteps": ["Swap today's intervals for an easy 30 min. Go hard again tomorrow if your HRV is back in range."],
+            ]
+        case .weightLoss:
+            result = [
+                "headline": "A little short of your normal",
+                "shortInsight": "About \(humanDuration(shortfall)) less than usual — not a big dent.",
+                "narrative": "One slightly short night is fine, and your HRV is still above your normal, so you're recovering well. Lights-out a bit earlier tonight puts you back on pattern.",
+                "observations": [String](),
+                "nextSteps": ["Aim for lights-out around 10:30 tonight."],
+            ]
+        default:
+            result = [
+                "headline": "A solid night, right on your normal",
+                "shortInsight": "About what you usually get — a good base for today.",
+                "narrative": "",
+                "observations": [String](),
+                "nextSteps": [String](),
+            ]
+        }
         return [
             "id": "fixture-sleep-analysis", "date": dayString(0),
             "result": result, "metrics": metrics, "createdAt": isoNow, "context": context,
@@ -1144,16 +1325,16 @@ enum FixtureData {
     /// `context.devices` for `.endurance`'s sleep analysis
     /// (`SleepDevicesContext` — `lib/analysisContext.ts`): WHOOP primary
     /// (matches `FixtureData.devices`'s "sleep": "whoop" for `.endurance`,
-    /// and `roughNightAnalysis`'s own top-level `metrics.minutes`), Apple
-    /// Watch secondary counting 22 more minutes asleep.
-    private static func sleepDevicesContextFixture() -> [String: Any] {
+    /// and `sleepAnalysis`'s own top-level `metrics.minutes`), Apple Watch
+    /// secondary counting 22 more minutes asleep.
+    private static func sleepDevicesContextFixture(profile: Profile, story: SleepStory) -> [String: Any] {
         let whoopSession: [String: Any] = [
-            "source": "whoop", "minutes": 348.0,
-            "stages": ["core": 242.0, "deep": 42.0, "rem": 64.0, "awake": 38.0],
+            "source": "whoop", "minutes": story.minutes,
+            "stages": ["core": story.core, "deep": story.deep, "rem": story.rem, "awake": story.awake],
         ]
         let appleSession: [String: Any] = [
-            "source": "apple", "minutes": 370.0,
-            "stages": ["core": 250.0, "deep": 48.0, "rem": 58.0, "awake": 14.0],
+            "source": "apple", "minutes": story.minutes + 22,
+            "stages": ["core": story.core + 8, "deep": story.deep + 6, "rem": story.rem + 8, "awake": 14.0],
         ]
         return ["primary": "whoop", "sessions": [whoopSession, appleSession]]
     }
@@ -1432,6 +1613,121 @@ enum FixtureData {
             makeSet(7, exercise: "squat", display: "Squat", index: 4, reps: 5, loadKg: 140, warmup: false),
         ]
         return ["sets": sets]
+    }
+
+    // MARK: - GET /api/goal/progress → GoalProgressDTO
+
+    /// "Dec 10" — `daysAhead` days from today, as the server's kg-based
+    /// headline would phrase it.
+    private static func shortDate(daysAhead: Int) -> String {
+        let date = Calendar.current.date(byAdding: .day, value: daysAhead, to: Date()) ?? Date()
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = .current
+        f.dateFormat = "MMM d"
+        return f.string(from: date)
+    }
+
+    /// Per scenario, consistent with that scenario's weight / lift / training
+    /// fixtures: `weight_loss` on track (82.0 kg now, 83.7 start, 76 target,
+    /// −0.6 kg/wk, ETA 10 weeks out); `muscle` progressing (squat/bench up,
+    /// deadlift stalled — same lifts as `workoutSummary`); `endurance`
+    /// building; `new_user` needs a target with zero weigh-ins. (`new_user`
+    /// reports `goal: "weight_loss"` here so the card's "set a target weight"
+    /// prompt state is exercised — the real server returns that state for a
+    /// weight-loss user who hasn't picked a target.) `server_error` never
+    /// reaches this (the whole API 500s).
+    private static func goalProgress(_ profile: Profile, scenario: FixtureMode.Scenario) -> [String: Any] {
+        func reason(_ kind: String, _ text: String, _ tone: String) -> [String: Any] {
+            ["kind": kind, "text": text, "tone": tone]
+        }
+        let none: Any = NSNull()
+
+        switch scenario {
+        case .weightLoss:
+            let etaDays = 70
+            let start = 83.7
+            let target = 76.0
+            let current = profile.weightKg
+            let pct = ((start - current) / (start - target) * 100).rounded()
+            return [
+                "goal": "weight_loss",
+                "target": ["weightKg": target, "date": dayString(-(etaDays + 14)), "weeklySessions": none],
+                "current": [
+                    "weightKg": current, "startWeightKg": start,
+                    "changeKg": ((current - start) * 10).rounded() / 10, "progressPct": pct,
+                ],
+                "ratePerWeek": ["kg": profile.weightTrendPerWeekKg, "pctBodyweight": -0.73],
+                "safeBand": ["minPct": 0.25, "maxPct": 1.0],
+                "eta": dayString(-etaDays),
+                "onPaceForTargetDate": true,
+                "verdict": "on_track",
+                "headline": "On track — about 6 kg to go, around \(shortDate(daysAhead: etaDays))",
+                "reasons": [
+                    reason("rate", "Losing 0.6 kg a week — inside the healthy range", "good"),
+                    reason("adherence", "5 of 7 days within your calorie budget", "good"),
+                    reason("weekend", "Weekends average +450 kcal over weekdays", "watch"),
+                ],
+                "dataSufficiency": ["weighIns": 11, "needed": 3, "sessionsLast28d": 0],
+            ]
+        case .muscle:
+            let start = 78.0
+            let target = 82.0
+            let current = profile.weightKg
+            let pct = ((current - start) / (target - start) * 100).rounded()
+            return [
+                "goal": "muscle",
+                "target": ["weightKg": target, "date": none, "weeklySessions": 4],
+                "current": [
+                    "weightKg": current, "startWeightKg": start,
+                    "changeKg": ((current - start) * 10).rounded() / 10, "progressPct": pct,
+                ],
+                "ratePerWeek": ["kg": profile.weightTrendPerWeekKg, "pctBodyweight": 0.44],
+                "safeBand": ["minPct": 0.1, "maxPct": 0.5],
+                "eta": none,
+                "onPaceForTargetDate": none,
+                "verdict": "progressing",
+                "headline": "Progressing — Squat estimated 1RM up 17.5 kg",
+                "reasons": [
+                    reason("lift", "Squat estimated 1RM +17.5 kg over 4 weeks (145.8 → 163.3 kg)", "good"),
+                    reason("lift", "Bench press estimated 1RM +5.8 kg over 4 weeks (102.1 → 107.9 kg)", "good"),
+                    reason("lift", "Deadlift hasn't set a new best in 4 weeks (204.2 kg)", "watch"),
+                ],
+                "dataSufficiency": ["weighIns": 11, "needed": 3, "sessionsLast28d": 9],
+            ]
+        case .endurance:
+            return [
+                "goal": "endurance",
+                "target": ["weightKg": none, "date": none, "weeklySessions": 4],
+                "current": ["weightKg": profile.weightKg, "startWeightKg": none, "changeKg": none, "progressPct": none],
+                "ratePerWeek": ["kg": none, "pctBodyweight": none],
+                "safeBand": none,
+                "eta": none,
+                "onPaceForTargetDate": none,
+                "verdict": "building",
+                "headline": "Building — weekly distance up 12% over 4 weeks",
+                "reasons": [
+                    reason("volume", "Weekly distance up 12%: 21.9 → 24.5 km", "good"),
+                    reason("sessions", "Averaging 3 sessions a week vs your target of 4", "neutral"),
+                    reason("hrv", "HRV trending down: 59 → 56 ms (last 2 weeks vs the 2 before)", "watch"),
+                ],
+                "dataSufficiency": ["weighIns": 4, "needed": 3, "sessionsLast28d": 12],
+            ]
+        default:
+            return [
+                "goal": "weight_loss",
+                "target": ["weightKg": none, "date": none, "weeklySessions": none],
+                "current": ["weightKg": none, "startWeightKg": none, "changeKg": none, "progressPct": none],
+                "ratePerWeek": ["kg": none, "pctBodyweight": none],
+                "safeBand": none,
+                "eta": none,
+                "onPaceForTargetDate": none,
+                "verdict": "needs_target",
+                "headline": "Set a target weight to track your fat-loss progress",
+                "reasons": [Any](),
+                "dataSufficiency": ["weighIns": 0, "needed": 3, "sessionsLast28d": 0],
+            ]
+        }
     }
 
     // MARK: - GET /api/devices → DevicesResponse (phase 2 "both devices" contract)

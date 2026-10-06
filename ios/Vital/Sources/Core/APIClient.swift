@@ -77,15 +77,7 @@ extension Notification.Name {
     /// strip's diet card updates without waiting for pull-to-refresh — the
     /// same foreground-observer pattern it already uses for calendar/app
     /// lifecycle events (see `TodayViewModel.init`).
-    static let vitalCoachMealLogChanged = Notification.Name("vitalCoachMealLogChanged")
-
-    /// Posted by `GoalProgressCard`'s "Set a target weight" button (Trends)
-    /// when the user has no goal target yet. `RootTabView` observes it and
-    /// switches to the Profile tab (where Goal editing lives); a future
-    /// Profile -> Goal target editor (v5 Wave 2) can also observe it to open
-    /// itself directly. Posted with no `object`/`userInfo`.
-    static let vitalOpenGoalEditor = Notification.Name("vitalOpenGoalEditor")
-}
+    static let vitalCoachMealLogChanged = Notification.Name("vitalCoachMealLogChanged")}
 
 // MARK: - APIClient
 
@@ -2196,6 +2188,8 @@ struct GoalProgressDTO: Decodable, Equatable {
         reasons = ((try? c.decode([GoalReasonDTO].self, forKey: .reasons)) ?? []).filter { !$0.text.isEmpty }
         dataSufficiency = (try? c.decode(DataSufficiency.self, forKey: .dataSufficiency)) ?? DataSufficiency()
     }
+}
+
 // MARK: - Strength tracking types (mirrors app/api/workouts/{summary,last,sets}/route.ts)
 
 /// One week of one exercise in `GET /api/workouts/summary` — mirrors

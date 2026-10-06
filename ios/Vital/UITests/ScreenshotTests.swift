@@ -69,6 +69,7 @@ final class ScreenshotTests: XCTestCase {
                 captureLiftLogger(app, scenario: scenario, appearance: appearance)
                 captureCoach(app, scenario: scenario, appearance: appearance)
                 captureTrends(app, scenario: scenario, appearance: appearance)
+                captureGoalProgress(app, scenario: scenario, appearance: appearance)
                 captureLogs(app, scenario: scenario, appearance: appearance)
                 captureProfile(app, scenario: scenario, appearance: appearance)
                 captureMemory(app, scenario: scenario, appearance: appearance)
@@ -501,6 +502,44 @@ final class ScreenshotTests: XCTestCase {
                        "Receipt detail should fully collapse before the next capture [\(scenario)/\(appearance)]")
     }
 
+    /// Opens the goal-progress detail sheet from the "Am I on track?" card at
+    /// the top of Trends (weight_loss: on track toward 76 kg; muscle:
+    /// progressing on squat/bench). Screen name `goalProgress`. Only those two
+    /// scenarios — the others either have no card worth opening (new_user's
+    /// prompt, server_error's hidden card) or aren't part of the ask.
+    private func captureGoalProgress(_ app: XCUIApplication, scenario: String, appearance: String) {
+        guard scenario == "weight_loss" || scenario == "muscle" else { return }
+
+        switchToTab("Trends", app: app, scenario: scenario, appearance: appearance)
+        // Back to the top of Trends, where the card leads.
+        for _ in 0..<4 { app.swipeDown() }
+
+        let card = app.descendants(matching: .any).matching(identifier: "goalProgress.card").firstMatch
+        tapWhenHittable(card, app: app, description: "goalProgress.card [\(scenario)/\(appearance)]")
+
+        let title = app.descendants(matching: .any).matching(identifier: "goalProgress.detail.title").firstMatch
+        guard title.waitForExistence(timeout: 10) else {
+            XCTFail("Goal progress detail sheet never opened after tapping goalProgress.card [\(scenario)/\(appearance)]")
+            return
+        }
+        // Fixture-unique content: the weight_loss primary line is composed from
+        // structured fields (never the server's kg headline); muscle falls
+        // back to the server headline.
+        let expected = scenario == "weight_loss" ? "of 7.7 kg lost" : "Squat estimated 1RM"
+        XCTAssertTrue(waitForText(app, containing: expected),
+                       "Goal progress detail should show the \(scenario) fixture's content [\(appearance)]")
+        capture(app, name: "\(scenario)__goalProgress__\(appearance)")
+
+        let close = app.buttons["Close"]
+        if close.waitForExistence(timeout: 5) {
+            close.tap()
+            guard title.waitForNonExistence(timeout: 5) else {
+                XCTFail("Goal progress sheet never finished dismissing after tapping Close [\(scenario)/\(appearance)]")
+                return
+            }
+        }
+    }
+
     private func captureTrends(_ app: XCUIApplication, scenario: String, appearance: String) {
         switchToTab("Trends", app: app, scenario: scenario, appearance: appearance)
 
@@ -889,7 +928,7 @@ final class ScreenshotTests: XCTestCase {
         case "new_user":
             return "Keep logging — a few more days and I'll start spotting real patterns."
         case "weight_loss":
-            return "You're down 0.6kg this week and sleep is holding steady — keep the deficit gentle through the weekend."
+            return "You're down 0.6kg this week, but last night's sleep ran short (6h 50m) — keep the deficit gentle and aim for an earlier night."
         case "muscle":
             return "Protein's on target four days running and yesterday's lift was a PR on squat volume — stay the course."
         case "endurance":

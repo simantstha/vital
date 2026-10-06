@@ -20,6 +20,8 @@ struct TodayView: View {
     @State private var showLogSheet = false
     /// "Log lift" sheet (`LiftLoggerView`) — opened from the muscle hero.
     @State private var showLiftLogger = false
+    /// Goal-progress detail sheet — opened from the one-line verdict under the hero.
+    @State private var showGoalProgress = false
     @State private var showAddItem = false
     @State private var actionsItem: PlanItem? = nil
     @State private var selectedMeal: MealRow? = nil
@@ -47,7 +49,7 @@ struct TodayView: View {
 
     /// The voice FAB must never overlap an open sheet.
     private var isAnySheetOpen: Bool {
-        showLogSheet || showLiftLogger || showAddItem || actionsItem != nil || selectedMeal != nil
+        showLogSheet || showLiftLogger || showGoalProgress || showAddItem || actionsItem != nil || selectedMeal != nil
             || showNotifications || showFullPlan || vm.showWeighInSheet
     }
 
@@ -126,6 +128,22 @@ struct TodayView: View {
                                     onTapSession: { actionsItem = $0 }
                                 )
                                 .staggeredAppear(index: 1)
+                            }
+
+                            // One-line "am I on track?" verdict (v5 Wave 2) under
+                            // whichever goal hero is showing (the three heroes are
+                            // mutually exclusive) — or on its own for the general
+                            // goal. Hidden until `/api/goal/progress` loads and on
+                            // failure. The negative top padding pulls it up from
+                            // the stack's xl spacing to sit with its hero.
+                            if let progress = vm.goalProgressLine {
+                                GoalProgressLine(
+                                    progress: progress,
+                                    system: unitPref.current,
+                                    onTap: { showGoalProgress = true }
+                                )
+                                .padding(.top, -Theme.Spacing.md)
+                                .transition(.opacity)
                             }
 
                             // "Next up" replaces the full plan list for every
@@ -295,6 +313,16 @@ struct TodayView: View {
                         Task { await vm.loadHealthData() }
                     }
                 )
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .vitalGoalTargetsChanged)) { _ in
+            vm.refreshGoalProgress()
+        }
+        .sheet(isPresented: $showGoalProgress) {
+            if let progress = vm.goalProgress {
+                VitalSheet(detents: [.large]) {
+                    GoalProgressDetailView(progress: progress, system: unitPref.current)
+                }
             }
         }
         .onChange(of: showLogSheet) { _, isPresented in

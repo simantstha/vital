@@ -98,6 +98,13 @@ final class TrendsViewModel: ObservableObject {
     /// re-derive it with the current unit system and clock each render.
     @Published private(set) var workoutSummary: WorkoutSummaryResponse? = nil
 
+    // MARK: Goal progress ("Am I on track?" card)
+
+    /// `nil` until `/api/goal/progress` resolves, and left untouched (never
+    /// zeroed) when a refresh fails — `TrendsView` hides the card whenever
+    /// this is `nil`.
+    @Published private(set) var goalProgress: GoalProgressDTO? = nil
+
     private let apiClient: TrendsAPIProviding
     /// `loadSummary()` also needs `fetchProfile()`, which is outside the
     /// minimal `TrendsAPIProviding` seam (that protocol exists solely to let
@@ -285,6 +292,24 @@ final class TrendsViewModel: ObservableObject {
         let fresh = try? await profileClient.fetchWeightLog()
         withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) {
             weightLog = fresh
+        }
+    }
+
+    // MARK: - Load (goal progress — fail-soft)
+
+    /// Fail-soft like `loadStrength()`: a failure leaves `goalProgress` as it
+    /// was (nil on a cold start, so the card simply doesn't render) and never
+    /// touches `errorMessage`.
+    func loadGoalProgress() async {
+        do {
+            let fresh = try await profileClient.fetchGoalProgress()
+            withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) {
+                goalProgress = fresh
+            }
+        } catch {
+            if !error.isCancellation {
+                print("[Vital] fetchGoalProgress failed: \(error.localizedDescription)")
+            }
         }
     }
 
