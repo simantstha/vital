@@ -134,6 +134,7 @@ struct VoiceFABView: View {
         )
         .accessibilityElement()
         .accessibilityLabel(voice.isRecording ? "Stop recording" : "Talk to your coach")
+        .accessibilityIdentifier("today.voiceFab")
         .accessibilityAddTraits(.isButton)
         .accessibilityAction { handleMicPress() }
         .sensoryFeedback(Theme.Haptics.toggle, trigger: voice.isRecording)

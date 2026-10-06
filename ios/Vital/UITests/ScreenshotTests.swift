@@ -217,7 +217,7 @@ final class ScreenshotTests: XCTestCase {
     ) {
         // Sheets animate in, so give the direct path a short grace window.
         if element.waitForExistence(timeout: 2), isDirectlyTappable(element, app: app) {
-            element.tap()
+            tapAvoidingFab(element)
             return
         }
 
@@ -227,7 +227,7 @@ final class ScreenshotTests: XCTestCase {
         }
 
         if isDirectlyTappable(element, app: app) {
-            element.tap()
+            tapAvoidingFab(element)
             return
         }
 
@@ -237,7 +237,18 @@ final class ScreenshotTests: XCTestCase {
             return
         }
 
-        element.tap()
+        tapAvoidingFab(element)
+    }
+
+    /// Wide elements (full-width rows) can sit under Today's floating mic FAB
+    /// (bottom-right, ~60pt), which absorbs a centre/right tap. Tap those at
+    /// 25% of their width instead; small elements (sheet buttons) tap direct.
+    private func tapAvoidingFab(_ element: XCUIElement) {
+        if element.frame.width > 200 {
+            element.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.5)).tap()
+        } else {
+            element.tap()
+        }
     }
 
     /// Waits for an element to exist and become hittable with a stable frame

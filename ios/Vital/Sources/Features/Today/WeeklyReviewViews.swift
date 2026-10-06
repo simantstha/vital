@@ -171,6 +171,9 @@ struct WeeklyReviewCard: View {
                 }
             }
         }
+        // Keep child identifiers (buttons/title) addressable; without this
+        // SwiftUI propagates this identifier onto descendants.
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("weeklyReview.card")
     }
 }
@@ -288,6 +291,9 @@ struct WeeklyReviewDetailView: View {
             .padding(.bottom, Theme.Spacing.xxxl)
         }
         .scrollIndicators(.hidden)
+        // Keep child identifiers (buttons/title) addressable; without this
+        // SwiftUI propagates this identifier onto descendants.
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("weeklyReview.detail")
     }
 }
