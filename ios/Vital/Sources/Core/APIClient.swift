@@ -384,6 +384,40 @@ struct APIClient {
         try validate(response)
     }
 
+    /// PATCH /api/profile with the three goal targets. Unlike `updateProfile`
+    /// (which omits nil fields), every field is always sent and a nil value is
+    /// encoded as an explicit JSON `null`, which the server treats as "clear".
+    func updateGoalTargets(
+        targetWeightKg: Double?,
+        targetDate: String?,
+        weeklySessionsTarget: Int?
+    ) async throws {
+        guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/profile") else {
+            throw APIError.invalidURL
+        }
+        var request = authorizedRequest(url)
+        request.httpMethod = "PATCH"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 15
+        struct Body: Encodable {
+            let targetWeightKg: Double?
+            let targetDate: String?
+            let weeklySessionsTarget: Int?
+            enum CodingKeys: String, CodingKey { case targetWeightKg, targetDate, weeklySessionsTarget }
+            func encode(to encoder: Encoder) throws {
+                var c = encoder.container(keyedBy: CodingKeys.self)
+                try c.encode(targetWeightKg, forKey: .targetWeightKg)
+                try c.encode(targetDate, forKey: .targetDate)
+                try c.encode(weeklySessionsTarget, forKey: .weeklySessionsTarget)
+            }
+        }
+        request.httpBody = try encoder.encode(
+            Body(targetWeightKg: targetWeightKg, targetDate: targetDate, weeklySessionsTarget: weeklySessionsTarget)
+        )
+        let (_, response) = try await session.data(for: request)
+        try validate(response)
+    }
+
     // MARK: - Pending facts
 
     func fetchPendingFacts() async throws -> PendingFactsResponse {
@@ -1596,6 +1630,8 @@ struct OnboardingBasics: Encodable {
     let units: String
     let goal: String
     let targetDate: String? // 'YYYY-MM-DD'
+    let targetWeightKg: Double? // optional; server drops invalid values
+    let weeklySessionsTarget: Int? // optional, 1–14
 }
 
 struct OnboardingTraining: Encodable {
@@ -2306,6 +2342,15 @@ struct ProfileResponse: Decodable {
     /// hasn't been set for this user yet. `UnitPreference.applyServerValue`
     /// treats nil as a no-op rather than forcing metric.
     let unitSystem: String?
+    /// Goal targets (users.target_weight_kg / target_date / weekly_sessions_target);
+    /// null when unset. `goalStart*` anchor "Started at X on <date>".
+    let targetWeightKg: Double?
+    /// 'YYYY-MM-DD'.
+    let targetDate: String?
+    let weeklySessionsTarget: Int?
+    let goalStartWeightKg: Double?
+    /// ISO timestamp.
+    let goalStartedAt: String?
 }
 
 // MARK: - Pending facts types

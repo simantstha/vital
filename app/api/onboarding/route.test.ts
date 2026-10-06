@@ -223,3 +223,104 @@ test('core-profile.md falls back to the raw goal id when it has no known label',
   assert.ok(coreProfileWrite, 'expected a core-profile.md write');
   assert.match(coreProfileWrite!.content, /- Primary: get_swole/);
 });
+
+// ── Optional goal targets: invalid values are dropped, never a 400 ──────────
+
+function futureDay(daysAhead: number): string {
+  return new Date(Date.now() + daysAhead * 86_400_000).toISOString().slice(0, 10);
+}
+
+function bodyWithTargets(targets: Record<string, unknown>) {
+  const b = basicsBody('metric', 'lose_fat');
+  return { basics: { ...b.basics, ...targets } };
+}
+
+test('valid targetWeightKg / targetDate / weeklySessionsTarget are persisted', async () => {
+  updateCalls.length = 0;
+  writtenFiles.length = 0;
+  const date = futureDay(70);
+
+  const { POST } = await routePromise;
+  const res = await POST(postRequest(
+    bodyWithTargets({ targetWeightKg: 74.44, targetDate: date, weeklySessionsTarget: 4 }),
+    { 'x-user-id': 'user-1' },
+  ));
+  assert.equal(res.status, 200);
+
+  const call = updateCalls.find((c) => 'name' in c)!;
+  assert.equal(call.target_weight_kg, 74.4);
+  assert.equal(call.target_date, date);
+  assert.equal(call.weekly_sessions_target, 4);
+});
+
+test('an invalid targetWeightKg is dropped (null) and onboarding still succeeds', async () => {
+  updateCalls.length = 0;
+  writtenFiles.length = 0;
+
+  const { POST } = await routePromise;
+  const res = await POST(postRequest(bodyWithTargets({ targetWeightKg: 5 }), { 'x-user-id': 'user-1' }));
+  assert.equal(res.status, 200);
+
+  const call = updateCalls.find((c) => 'name' in c)!;
+  assert.equal(call.target_weight_kg, null);
+  assert.equal(call.onboarded_at instanceof Date, true);
+  assert.equal(call.goal, 'weight_loss');
+});
+
+test('an invalid targetDate (past, malformed, or too far out) is dropped (null), not a 400', async () => {
+  for (const bad of ['2020-01-01', 'next spring', futureDay(365 * 5), 20260101]) {
+    updateCalls.length = 0;
+    writtenFiles.length = 0;
+
+    const { POST } = await routePromise;
+    const res = await POST(postRequest(bodyWithTargets({ targetDate: bad }), { 'x-user-id': 'user-1' }));
+    assert.equal(res.status, 200, `targetDate ${String(bad)}`);
+
+    const call = updateCalls.find((c) => 'name' in c)!;
+    assert.equal(call.target_date, null, `targetDate ${String(bad)}`);
+  }
+});
+
+test('an invalid weeklySessionsTarget (0, 15, 3.5, string) is dropped (null), not a 400', async () => {
+  for (const bad of [0, 15, 3.5, 'four']) {
+    updateCalls.length = 0;
+    writtenFiles.length = 0;
+
+    const { POST } = await routePromise;
+    const res = await POST(postRequest(bodyWithTargets({ weeklySessionsTarget: bad }), { 'x-user-id': 'user-1' }));
+    assert.equal(res.status, 200, `weeklySessionsTarget ${String(bad)}`);
+
+    const call = updateCalls.find((c) => 'name' in c)!;
+    assert.equal(call.weekly_sessions_target, null, `weeklySessionsTarget ${String(bad)}`);
+  }
+});
+
+test('one invalid target does not discard the valid ones', async () => {
+  updateCalls.length = 0;
+  writtenFiles.length = 0;
+
+  const { POST } = await routePromise;
+  const res = await POST(postRequest(
+    bodyWithTargets({ targetWeightKg: 'heavy', weeklySessionsTarget: 3 }),
+    { 'x-user-id': 'user-1' },
+  ));
+  assert.equal(res.status, 200);
+
+  const call = updateCalls.find((c) => 'name' in c)!;
+  assert.equal(call.target_weight_kg, null);
+  assert.equal(call.weekly_sessions_target, 3);
+});
+
+test('absent targets leave the columns untouched (undefined, not null)', async () => {
+  updateCalls.length = 0;
+  writtenFiles.length = 0;
+
+  const { POST } = await routePromise;
+  const res = await POST(postRequest(basicsBody('metric', 'lose_fat'), { 'x-user-id': 'user-1' }));
+  assert.equal(res.status, 200);
+
+  const call = updateCalls.find((c) => 'name' in c)!;
+  assert.equal(call.target_weight_kg, undefined);
+  assert.equal(call.target_date, undefined);
+  assert.equal(call.weekly_sessions_target, undefined);
+});

@@ -9,6 +9,8 @@ struct GoalDetailView: View {
     let switchToCoachTab: () -> Void
 
     @StateObject private var vm = DietBudgetViewModel()
+    @StateObject private var targets = GoalTargetsViewModel()
+    @FocusState private var weightFieldFocused: Bool
 
     /// Radio-list rows in fixed display order, with the mock's subtitles.
     private static let goalSubtitles: [(id: String, subtitle: String)] = [
@@ -57,6 +59,7 @@ struct GoalDetailView: View {
                             .foregroundStyle(Theme.Colors.textPrimary)
 
                         radioListCard
+                        targetsCard
                         whatThisMeansCard
                         coachButtonCard
 
@@ -78,7 +81,10 @@ struct GoalDetailView: View {
         // idiom as DevicesView.
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(Theme.Colors.canvas, for: .navigationBar)
-        .task { await vm.load() }
+        .task {
+            await vm.load()
+            await targets.load()
+        }
     }
 
     // ── Radio list (mock's PRadio) ────────────────────────────────────────────
@@ -130,6 +136,146 @@ struct GoalDetailView: View {
                 Rectangle()
                     .fill(Theme.Colors.glassBorder)
                     .frame(height: 0.5)
+            }
+        }
+    }
+
+    // ── Targets (target weight / date / workouts per week) ───────────────────
+
+    @ViewBuilder
+    private var targetsCard: some View {
+        let showWeight = GoalTargetLogic.showsTargetWeight(goal: vm.goal)
+        let showSessions = GoalTargetLogic.showsWeeklySessions(goal: vm.goal)
+        if showWeight || showSessions {
+            VitalCard(padding: Theme.Spacing.lg, cornerRadius: Theme.Radius.md) {
+                VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+                    Text("TARGETS")
+                        .font(.system(size: 11, weight: .bold))
+                        .tracking(1.0)
+                        .foregroundStyle(Theme.Colors.textSecondary)
+
+                    if let started = targets.startedLine {
+                        Text(started)
+                            .font(Theme.Typography.bodySmall)
+                            .foregroundStyle(Theme.Colors.textSecondary)
+                    }
+
+                    if showWeight {
+                        targetWeightRow
+                        targetDateRow
+                    }
+                    if showSessions {
+                        weeklySessionsRow
+                    }
+
+                    if let msg = targets.errorMessage {
+                        Text(msg)
+                            .font(Theme.Typography.bodySmall)
+                            .foregroundStyle(Theme.Colors.alert)
+                    }
+
+                    Button {
+                        weightFieldFocused = false
+                        Task { await targets.save() }
+                    } label: {
+                        HStack {
+                            if targets.isSaving {
+                                ProgressView().tint(Theme.Colors.onAccent)
+                            } else {
+                                Text("Save targets")
+                                    .font(.system(size: 16, weight: .semibold))
+                            }
+                        }
+                        .foregroundStyle(Theme.Colors.onAccent)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .background(Theme.Colors.accent)
+                        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous))
+                    }
+                    .opacity(targets.canSave ? 1.0 : 0.4)
+                    .disabled(!targets.canSave)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    private var targetWeightRow: some View {
+        let units = UnitPreference.shared.current
+        return VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+            HStack {
+                Text("Target weight")
+                    .font(Theme.Typography.bodyMedium)
+                    .foregroundStyle(Theme.Colors.textPrimary)
+                Spacer()
+                TextField("None", text: $targets.targetWeightText)
+                    .keyboardType(.decimalPad)
+                    .multilineTextAlignment(.trailing)
+                    .focused($weightFieldFocused)
+                    .font(Theme.Typography.bodyMedium)
+                    .foregroundStyle(Theme.Colors.textPrimary)
+                    .frame(width: 90)
+                Text(units.weightUnit)
+                    .font(Theme.Typography.bodySmall)
+                    .foregroundStyle(Theme.Colors.textSecondary)
+            }
+            if let error = targets.weightError {
+                Text(error)
+                    .font(Theme.Typography.bodySmall)
+                    .foregroundStyle(Theme.Colors.alert)
+            } else if let warning = GoalTargetLogic.sanityWarning(
+                goal: vm.goal,
+                currentKg: targets.currentWeightKg,
+                targetKg: targets.targetKg,
+                targetDate: targets.hasTargetDate ? targets.targetDate : nil,
+                units: units
+            ) {
+                Text(warning)
+                    .font(Theme.Typography.bodySmall)
+                    .foregroundStyle(Theme.Colors.caution)
+            } else if GoalTargetLogic.isLossGoal(vm.goal),
+                      let hint = GoalTargetLogic.paceHint(
+                        currentKg: targets.currentWeightKg, targetKg: targets.targetKg, units: units
+                      ) {
+                Text(hint)
+                    .font(Theme.Typography.bodySmall)
+                    .foregroundStyle(Theme.Colors.textSecondary)
+            }
+        }
+    }
+
+    private var targetDateRow: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            Toggle("Target date", isOn: $targets.hasTargetDate)
+                .font(Theme.Typography.bodyMedium)
+                .foregroundStyle(Theme.Colors.textPrimary)
+                .tint(Theme.Colors.accent)
+            if targets.hasTargetDate {
+                DatePicker(
+                    "", selection: $targets.targetDate,
+                    in: GoalTargetLogic.targetDateRange(), displayedComponents: .date
+                )
+                .datePickerStyle(.compact)
+                .labelsHidden()
+                .tint(Theme.Colors.accentContent)
+            }
+        }
+    }
+
+    private var weeklySessionsRow: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            Toggle("Weekly workout goal", isOn: $targets.hasWeeklySessions)
+                .font(Theme.Typography.bodyMedium)
+                .foregroundStyle(Theme.Colors.textPrimary)
+                .tint(Theme.Colors.accent)
+            if targets.hasWeeklySessions {
+                Stepper(value: $targets.weeklySessions,
+                        in: GoalTargetLogic.minWeeklySessions...GoalTargetLogic.maxWeeklySessions) {
+                    Text("\(targets.weeklySessions) \(targets.weeklySessions == 1 ? "workout" : "workouts") per week")
+                        .font(Theme.Typography.bodyMedium)
+                        .foregroundStyle(Theme.Colors.textPrimary)
+                }
+                .tint(Theme.Colors.accentContent)
             }
         }
     }
