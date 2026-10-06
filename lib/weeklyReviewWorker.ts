@@ -2,8 +2,8 @@
  * Vital — weekly review worker pass (pure; all I/O injected)
  *
  * On Monday morning (the user's local time, at/after their morning-brief
- * time — the weekly review reuses the morning_brief_enabled preference and
- * time rather than adding a new toggle), generate the review for the week that
+ * time — the send TIME reuses the morning brief time, but the on/off switch is
+ * the separate weekly_review_enabled preference, applied by listCandidates), generate the review for the week that
  * just ended and send exactly ONE push. The pass is wired to the real
  * database / APNs client in scripts/proactive-health-worker.ts.
  *
@@ -20,8 +20,10 @@ export interface WeeklyReviewCandidate {
   userId: string;
   /** Notification-preferences timezone (IANA). */
   timezone: string;
-  /** morning_brief_time_minutes. */
+  /** morning_brief_time_minutes (send time only; enablement is weekly_review_enabled). */
   morningMinutes: number;
+  /** notification_preferences.weekly_review_enabled; false skips the user entirely. Defaults to true when omitted. */
+  weeklyReviewEnabled?: boolean;
 }
 
 export interface WeeklyReviewPassDeps {
@@ -31,6 +33,8 @@ export interface WeeklyReviewPassDeps {
   /** True only for the caller that flips pushed_at from null — the at-most-once guard. */
   claimPush(reviewId: string, now: Date): Promise<boolean>;
   listDevices(userId: string): Promise<PushDevice[]>;
+  /** Best-effort notification-inbox record; never throws. Optional so tests/other callers can omit it. */
+  recordInbox?(userId: string, alert: { title: string; body: string }, route: { type: 'weekly_review'; id: string; deepLink: string }): Promise<void>;
   send(device: PushDevice, alert: { title: string; body: string }, route: { type: 'weekly_review'; id: string; deepLink: string }): Promise<PushOutcome>;
   retireDevice(deviceId: string, now: Date): Promise<void>;
   onError?(userId: string, error: unknown): void;
@@ -68,6 +72,7 @@ export async function runWeeklyReviewPass(
   const results: Array<{ userId: string; outcome: WeeklyReviewOutcome }> = [];
   const candidates = await deps.listCandidates();
   for (const candidate of candidates) {
+    if (candidate.weeklyReviewEnabled === false) continue;
     if (!isWeeklyReviewDue(now, candidate.timezone, candidate.morningMinutes)) continue;
     try {
       const stored = await deps.getOrCreate(candidate.userId, candidate.timezone, now);
@@ -78,6 +83,7 @@ export async function runWeeklyReviewPass(
       if (devices.length === 0) { results.push({ userId: candidate.userId, outcome: 'no_devices' }); continue; }
       const alert = weeklyReviewAlert(stored.review);
       const route = { type: 'weekly_review' as const, id: stored.id, deepLink: `vital://weekly-review/${stored.id}` };
+      await deps.recordInbox?.(candidate.userId, alert, route);
       for (const device of devices) {
         const outcome = await deps.send(device, alert, route);
         if (outcome.retireToken) await deps.retireDevice(device.id, now);

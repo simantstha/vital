@@ -19,7 +19,7 @@
 import { db, schema } from '@/db';
 import { and, count, desc, eq, inArray, isNull } from 'drizzle-orm';
 
-export type NotificationType = 'workout_analysis' | 'sleep_analysis' | 'morning_brief' | 'coach_nudge';
+export type NotificationType = 'workout_analysis' | 'sleep_analysis' | 'morning_brief' | 'coach_nudge' | 'weekly_review';
 
 export interface InboxItem {
   id: string;

@@ -5,6 +5,7 @@ import { COOLDOWN_DAYS } from './arbiter';
 import {
   insightPassLogEvent,
   insightsEnabled,
+  isWithinNudgeSendWindow,
   runInsightPass,
   selectInsightPassUsers,
   withinDeliveryCaps,
@@ -415,13 +416,13 @@ function makeUserSource(): { source: InsightPassUserSource; calls: string[] } {
     async listAllUsers() {
       calls.push('listAllUsers');
       return [
-        { userId: 'with-device', timezone: 'UTC' },
-        { userId: 'no-device', timezone: 'UTC' },
+        { userId: 'with-device', timezone: 'UTC', coachNudgesEnabled: true },
+        { userId: 'no-device', timezone: 'UTC', coachNudgesEnabled: true },
       ];
     },
     async listUsersWithLiveDevice() {
       calls.push('listUsersWithLiveDevice');
-      return [{ userId: 'with-device', timezone: 'UTC' }];
+      return [{ userId: 'with-device', timezone: 'UTC', coachNudgesEnabled: true }];
     },
   };
   return { source, calls };
@@ -560,4 +561,69 @@ test('insightPassLogEvent omits kind/pushed for a non-delivered outcome', () => 
 
   assert.equal('kind' in event, false);
   assert.equal('pushed' in event, false);
+});
+
+// ─── coach_nudges_enabled + send window ─────────────────────────────────────
+
+function firingRepo() {
+  return makeRepository({
+    series: [cadenceSeries('exercise_min', 5)],
+    established: new Set(['exercise_min']),
+    previousSignatures: new Set(['cadence_break:exercise_min']),
+  });
+}
+
+test('coach_nudges_enabled=false still records findings but never creates, generates or pushes a nudge', async () => {
+  const { repo, calls } = firingRepo();
+  let generated = 0;
+  let pushed = 0;
+  const deps = makeDeps(repo, {
+    generateNudge: async () => { generated++; return '{}'; },
+    push: async () => { pushed++; return { outcome: 'sent' as const, retireToken: false }; },
+  });
+  const outcome = await runInsightPass({ ...deps, coachNudgesEnabled: false });
+  assert.equal(outcome.delivered, false);
+  if (!outcome.delivered) assert.equal(outcome.reason, 'nudges_disabled');
+  assert.equal(calls.recordFindings.length, 1);
+  assert.equal((calls.recordFindings[0] as { findings: unknown[] }).findings.length, 1);
+  assert.equal(calls.insertPendingNudge.length, 0);
+  assert.equal(generated, 0);
+  assert.equal(pushed, 0);
+});
+
+test('coach_nudges_enabled=true delivers as before', async () => {
+  const { repo, calls } = firingRepo();
+  const outcome = await runInsightPass({ ...makeDeps(repo), coachNudgesEnabled: true });
+  assert.equal(outcome.delivered, true);
+  assert.equal(calls.insertPendingNudge.length, 1);
+});
+
+test('outside the 08:00-21:00 user-local window records findings but does not deliver', async () => {
+  // NOW is 15:00Z = 03:00 next day in Pacific/Auckland (NZST, UTC+12): outside.
+  const { repo, calls } = firingRepo();
+  const outcome = await runInsightPass({ ...makeDeps(repo), timezone: 'Pacific/Auckland' });
+  assert.equal(outcome.delivered, false);
+  if (!outcome.delivered) assert.equal(outcome.reason, 'outside_send_window');
+  assert.equal(calls.recordFindings.length, 1);
+  assert.equal(calls.insertPendingNudge.length, 0);
+});
+
+test('inside the send window (11:00 America/New_York at 15:00Z) delivers', async () => {
+  const { repo, calls } = firingRepo();
+  const outcome = await runInsightPass({ ...makeDeps(repo), timezone: 'America/New_York' });
+  assert.equal(outcome.delivered, true);
+  assert.equal(calls.insertPendingNudge.length, 1);
+});
+
+test('isWithinNudgeSendWindow: [08:00, 21:00) in the given timezone, UTC fallback for bad zones', () => {
+  const at = (iso: string, tz: string) => isWithinNudgeSendWindow(new Date(iso), tz);
+  assert.equal(at('2026-09-07T07:59:00Z', 'UTC'), false);
+  assert.equal(at('2026-09-07T08:00:00Z', 'UTC'), true);
+  assert.equal(at('2026-09-07T20:59:00Z', 'UTC'), true);
+  assert.equal(at('2026-09-07T21:00:00Z', 'UTC'), false);
+  assert.equal(at('2026-09-07T02:00:00Z', 'UTC'), false);
+  assert.equal(at('2026-09-07T12:00:00Z', 'America/New_York'), true);
+  assert.equal(at('2026-09-07T11:59:00Z', 'America/New_York'), false);
+  assert.equal(at('2026-09-07T12:00:00Z', 'Not/A_Zone'), true);
+  assert.equal(at('2026-09-07T03:00:00Z', 'Not/A_Zone'), false);
 });

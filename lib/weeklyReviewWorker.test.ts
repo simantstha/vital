@@ -96,3 +96,43 @@ test('runWeeklyReviewPass retires dead tokens and isolates per-user errors', asy
   assert.deepEqual(retired, ['d1']);
   assert.deepEqual(out, [{ userId: 'u1', outcome: 'sent' }]);
 });
+
+test('runWeeklyReviewPass skips users with weekly_review_enabled=false without computing, claiming or sending', async () => {
+  let computed = 0;
+  const sent: unknown[] = [];
+  const claimed = new Set<string>();
+  const out = await runWeeklyReviewPass(MON_1300Z, deps({
+    sent, claimed,
+    listCandidates: async () => [{ userId: 'u1', timezone: 'America/New_York', morningMinutes: 450, weeklyReviewEnabled: false }],
+    getOrCreate: async () => { computed++; return null; },
+  }));
+  assert.deepEqual(out, []);
+  assert.equal(computed, 0);
+  assert.equal(sent.length, 0);
+  assert.equal(claimed.size, 0);
+});
+
+test('runWeeklyReviewPass still sends at the morning-brief time when weekly_review_enabled=true', async () => {
+  const sent: unknown[] = [];
+  const out = await runWeeklyReviewPass(MON_1300Z, deps({
+    sent,
+    listCandidates: async () => [{ userId: 'u1', timezone: 'America/New_York', morningMinutes: 450, weeklyReviewEnabled: true }],
+  }));
+  assert.deepEqual(out, [{ userId: 'u1', outcome: 'sent' }]);
+  assert.equal(sent.length, 1);
+});
+
+test('runWeeklyReviewPass records the review in the inbox before sending, only for sendable reviews', async () => {
+  const recorded: unknown[] = [];
+  const recordInbox: WeeklyReviewPassDeps['recordInbox'] = async (userId, alert, route) => { recorded.push({ userId, alert, route }); };
+  await runWeeklyReviewPass(MON_1300Z, deps({ recordInbox }));
+  assert.equal(recorded.length, 1);
+  assert.deepEqual((recorded[0] as { route: unknown }).route, { type: 'weekly_review', id: 'r1', deepLink: 'vital://weekly-review/r1' });
+
+  const none: unknown[] = [];
+  await runWeeklyReviewPass(MON_1300Z, deps({
+    recordInbox: async (u, a, r) => { none.push({ u, a, r }); },
+    getOrCreate: async () => ({ id: 'r3', review: review(false) }),
+  }));
+  assert.equal(none.length, 0);
+});

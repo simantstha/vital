@@ -60,6 +60,28 @@ export function withinDeliveryCaps(history: SentNudge[], now: Date, kind: string
   return true;
 }
 
+// Nudges only land during waking hours, user-local: [08:00, 21:00).
+const NUDGE_WINDOW_START_MINUTES = 8 * 60;
+const NUDGE_WINDOW_END_MINUTES = 21 * 60;
+
+/**
+ * True when `now` falls inside the nudge send window in the user's timezone.
+ * An unknown/invalid timezone falls back to UTC, same as the other workers.
+ */
+export function isWithinNudgeSendWindow(now: Date, timezone: string): boolean {
+  let minutes: number;
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+    }).formatToParts(now);
+    const get = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? '0');
+    minutes = get('hour') * 60 + get('minute');
+  } catch {
+    minutes = now.getUTCHours() * 60 + now.getUTCMinutes();
+  }
+  return minutes >= NUDGE_WINDOW_START_MINUTES && minutes < NUDGE_WINDOW_END_MINUTES;
+}
+
 /** What runInsightPass needs about the user beyond series/findings data. */
 export interface VoiceUserContext {
   goal: string | null;
@@ -105,7 +127,7 @@ export interface InsightPassRepository {
   listDevices(userId: string): Promise<PushDevice[]>;
 }
 
-export interface InsightPassUser { userId: string; timezone: string }
+export interface InsightPassUser { userId: string; timezone: string; coachNudgesEnabled: boolean }
 
 /**
  * The two candidate populations for an insight pass, kept as separate queries
@@ -148,9 +170,18 @@ export interface InsightPassDeps {
   userId: string;
   now: Date;
   localDay: string;
+  /** notification_preferences.coach_nudges_enabled. Defaults to true when omitted. */
+  coachNudgesEnabled?: boolean;
+  /**
+   * The user's IANA timezone. When provided, delivery is gated to the
+   * 08:00-21:00 user-local send window; when omitted the window is not checked.
+   */
+  timezone?: string;
 }
 
 export type InsightSilenceReason =
+  | 'nudges_disabled'
+  | 'outside_send_window'
   | 'no_candidates'
   | 'not_confirmed'
   | 'empty_shortlist'
@@ -242,6 +273,16 @@ export async function runInsightPass(deps: InsightPassDeps): Promise<InsightPass
   // "confirm only what we already told you," defeating the mechanism while
   // still appearing to work. Must run before any of the early returns below.
   await repository.recordFindings(userId, localDay, survivors);
+
+  // Delivery gates. Findings were recorded above regardless, so cross-run
+  // confirmation keeps learning for a user who opted out or whose pass ran
+  // outside waking hours; only creating/delivering a nudge is blocked. Checked
+  // before the model call so a gated user costs nothing further.
+  const gateStats = { candidates: candidates.length, survivors: survivors.length, confirmed: 0, shortlisted: 0 };
+  if (deps.coachNudgesEnabled === false) return { delivered: false, reason: 'nudges_disabled', stats: gateStats };
+  if (deps.timezone !== undefined && !isWithinNudgeSendWindow(now, deps.timezone)) {
+    return { delivered: false, reason: 'outside_send_window', stats: gateStats };
+  }
 
   if (survivors.length === 0) {
     return { delivered: false, reason: 'no_candidates', stats: { candidates: candidates.length, survivors: 0, confirmed: 0, shortlisted: 0 } };

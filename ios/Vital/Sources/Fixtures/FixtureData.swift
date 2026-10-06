@@ -2056,6 +2056,7 @@ enum FixtureData {
             "morningBriefEnabled": true, "morningBriefTimeMinutes": 450,
             "workoutNotificationsEnabled": true, "sleepNotificationsEnabled": true,
             "mealsEnabled": true,
+            "coachNudgesEnabled": true, "weeklyReviewEnabled": true,
             "mealBreakfastTimeMinutes": 480, "mealLunchTimeMinutes": 765,
             "mealSnackTimeMinutes": 960, "mealDinnerTimeMinutes": 1170,
             "timezone": TimeZone.current.identifier,
