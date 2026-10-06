@@ -37,6 +37,7 @@ export const USER_SCOPED_TABLES_IN_DELETE_ORDER = [
   schema.notification_inbox,
   schema.daily_briefs,
   schema.calendar_blocks,
+  schema.weekly_reviews,
   schema.whoop_connections,
   schema.workout_sets,
 ] as const;

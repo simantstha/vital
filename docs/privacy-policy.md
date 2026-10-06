@@ -78,7 +78,7 @@ active, and any analytics/crash-reporting added later.]
 We keep your data while your account exists. **You can delete your account at any
 time in the app: Profile → Account → Delete account.** This permanently deletes your
 profile and all associated data from our database (health metrics, workouts, meals,
-messages, memory, goals, notification records, device tokens, and WHOOP
+messages, memory, goals, weekly reviews, notification records, device tokens, and WHOOP
 connection/tokens) and cannot be undone. Data previously sent to processors is
 governed by their retention terms [owner: confirm, e.g. Anthropic and ElevenLabs
 zero-/limited-retention settings]. Backups may persist for up to [N] days before
