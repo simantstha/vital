@@ -25,6 +25,7 @@ import {
   OUTCOME_METRICS,
 } from './detectors';
 import { applyEvidenceGate } from './evidence';
+import { detectGoalFindings, type GoalInsightInput } from './goalDetectors';
 import type { Finding, MetricSeries } from './types';
 import { buildVoiceRequest, parseNudge, type Nudge } from './voice';
 
@@ -76,6 +77,12 @@ export interface VoiceUserContext {
 export interface InsightPassRepository {
   loadSeries(userId: string, metrics: string[], endDay: string): Promise<MetricSeries[]>;
   establishedMetrics(userId: string): Promise<Set<string>>;
+  /**
+   * Goal-aware inputs (weight signals, protein days, training days, weekly
+   * verdicts...) for goalDetectors.ts. Optional so a repository without goal
+   * data simply produces no goal findings.
+   */
+  loadGoalInput?(userId: string, localDay: string): Promise<GoalInsightInput | null>;
   /** Records the FULL gate-surviving set for the day — see runInsightPass below. */
   recordFindings(userId: string, localDay: string, findings: Finding[]): Promise<void>;
   previousRunSignatures(userId: string, localDay: string): Promise<Set<string>>;
@@ -200,9 +207,10 @@ export async function runInsightPass(deps: InsightPassDeps): Promise<InsightPass
   const { repository, userId, now, localDay, mode } = deps;
 
   const metrics = Array.from(new Set([...INPUT_METRICS, ...OUTCOME_METRICS]));
-  const [series, established] = await Promise.all([
+  const [series, established, goalInput] = await Promise.all([
     repository.loadSeries(userId, metrics, localDay),
     repository.establishedMetrics(userId),
+    repository.loadGoalInput ? repository.loadGoalInput(userId, localDay) : Promise.resolve(null),
   ]);
 
   const seriesByMetric = new Map(series.map((s) => [s.metric, s] as const));
@@ -219,6 +227,11 @@ export async function runInsightPass(deps: InsightPassDeps): Promise<InsightPass
     const trend = detectTrend(s); if (trend) candidates.push(trend);
     const dow = detectDayOfWeek(s); if (dow) candidates.push(dow);
   }
+
+  // Goal findings join the same candidate list and so face the same gates:
+  // evidence gate (rules pass on their own thresholds), two-run confirmation,
+  // arbiter per-kind cooldown, delivery caps and the unique-per-day insert.
+  if (goalInput) candidates.push(...detectGoalFindings(goalInput));
 
   const survivors = applyEvidenceGate(candidates, established);
 
@@ -256,14 +269,18 @@ export async function runInsightPass(deps: InsightPassDeps): Promise<InsightPass
 
   const request = buildVoiceRequest(shortlisted, { goal: context.goal, facts: context.facts, recentlySaid: context.recentlySaid });
   const raw = await deps.generateNudge(request);
-  const nudge = parseNudge(raw, shortlisted.map((f) => f.signature));
-  if (!nudge) return { delivered: false, reason: 'no_nudge', stats };
+  const picked = parseNudge(raw, shortlisted.map((f) => f.signature));
+  if (!picked) return { delivered: false, reason: 'no_nudge', stats };
 
   // parseNudge already enforced the signature is one we offered; this lookup
   // cannot fail, but a `?? null` chain here would silently paper over a
   // contract break between voice.ts and this function, so fail the same way.
-  const chosen = shortlisted.find((f) => f.signature === nudge.signature);
+  const chosen = shortlisted.find((f) => f.signature === picked.signature);
   if (!chosen) return { delivered: false, reason: 'no_nudge', stats };
+
+  // The model chooses WHICH finding to speak; goal findings carry their own
+  // reviewed, unit-aware wording and coach handoff, which replaces the model's.
+  const nudge: Nudge = chosen.copy ? { signature: chosen.signature, ...chosen.copy } : picked;
 
   if (!withinDeliveryCaps(history, now, chosen.kind)) return { delivered: false, reason: 'caps_exceeded', stats };
 
