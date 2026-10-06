@@ -12,6 +12,8 @@ struct TrendsView: View {
     @ObservedObject private var unitPref = UnitPreference.shared
     /// Goal-progress detail sheet (opened by tapping the card at the top).
     @State private var showGoalProgressDetail = false
+    @State private var showWeeklyReviewDetail = false
+    @ObservedObject private var weeklyReviewStore = WeeklyReviewStore.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Links each tile's `.matchedTransitionSource` to the destination's
     /// `.navigationTransition(.zoom(...))`. One namespace for the whole grid
@@ -52,6 +54,13 @@ struct TrendsView: View {
                                 }
                             )
                             .motionTransition(.fade)
+                        }
+
+                        // Weekly review (v5 Wave 3): reopen the latest review any
+                        // time (the Today card only shows Mon-Wed while unseen).
+                        if let review = weeklyReviewStore.latest {
+                            WeeklyReviewRow(response: review, onTap: { showWeeklyReviewDetail = true })
+                                .motionTransition(.fade)
                         }
 
                         // Muscle-goal users: their progress IS the lifts, so
@@ -167,6 +176,14 @@ struct TrendsView: View {
             await vm.loadGoalContext()
             await vm.loadStrength()
             await vm.loadGoalProgress()
+            await weeklyReviewStore.load()
+        }
+        .sheet(isPresented: $showWeeklyReviewDetail) {
+            if let review = weeklyReviewStore.latest {
+                VitalSheet(detents: [.large]) {
+                    WeeklyReviewDetailView(response: review, onGotIt: { weeklyReviewStore.markSeen() })
+                }
+            }
         }
         .sheet(isPresented: $showGoalProgressDetail) {
             if let progress = vm.goalProgress {

@@ -70,6 +70,7 @@ final class ScreenshotTests: XCTestCase {
                 captureCoach(app, scenario: scenario, appearance: appearance)
                 captureTrends(app, scenario: scenario, appearance: appearance)
                 captureGoalProgress(app, scenario: scenario, appearance: appearance)
+                captureWeeklyReview(app, scenario: scenario, appearance: appearance)
                 captureLogs(app, scenario: scenario, appearance: appearance)
                 captureProfile(app, scenario: scenario, appearance: appearance)
                 captureMemory(app, scenario: scenario, appearance: appearance)
@@ -535,6 +536,48 @@ final class ScreenshotTests: XCTestCase {
             close.tap()
             guard title.waitForNonExistence(timeout: 5) else {
                 XCTFail("Goal progress sheet never finished dismissing after tapping Close [\(scenario)/\(appearance)]")
+                return
+            }
+        }
+    }
+
+    /// Weekly review (v5 Wave 3): the unseen-review card on Today (fixtures
+    /// bypass the Mon-Wed window) and its detail sheet. Screen names
+    /// `weeklyReviewCard` (Today) and `weeklyReview` (detail sheet). Only
+    /// weight_loss and muscle — their fixture reviews carry the scenario's
+    /// numbers (-0.6 kg / 5 of 7 days in budget; sessions / bench 1RM).
+    private func captureWeeklyReview(_ app: XCUIApplication, scenario: String, appearance: String) {
+        guard scenario == "weight_loss" || scenario == "muscle" else { return }
+
+        switchToTab("Today", app: app, scenario: scenario, appearance: appearance)
+        for _ in 0..<4 { app.swipeDown() }
+
+        let card = app.descendants(matching: .any).matching(identifier: "weeklyReview.card").firstMatch
+        guard card.waitForExistence(timeout: 15) else {
+            XCTFail("Weekly review card never appeared on Today [\(scenario)/\(appearance)]")
+            return
+        }
+        // Fixture-unique headline (FixtureData.weeklyReview).
+        let expected = scenario == "weight_loss" ? "Down 0.6 kg, in budget 5 of 7 days" : "3 of 4 sessions, Bench Press up 2.5 kg"
+        XCTAssertTrue(waitForText(app, containing: expected),
+                       "Weekly review card should show the \(scenario) fixture's headline [\(appearance)]")
+        capture(app, name: "\(scenario)__weeklyReviewCard__\(appearance)")
+
+        let open = app.descendants(matching: .any).matching(identifier: "weeklyReview.open").firstMatch
+        tapWhenHittable(open, app: app, description: "weeklyReview.open [\(scenario)/\(appearance)]")
+
+        let title = app.descendants(matching: .any).matching(identifier: "weeklyReview.detail.title").firstMatch
+        guard title.waitForExistence(timeout: 10) else {
+            XCTFail("Weekly review detail sheet never opened [\(scenario)/\(appearance)]")
+            return
+        }
+        capture(app, name: "\(scenario)__weeklyReview__\(appearance)")
+
+        let close = app.buttons["Close"]
+        if close.waitForExistence(timeout: 5) {
+            close.tap()
+            guard title.waitForNonExistence(timeout: 5) else {
+                XCTFail("Weekly review sheet never finished dismissing after tapping Close [\(scenario)/\(appearance)]")
                 return
             }
         }

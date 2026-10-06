@@ -319,6 +319,10 @@ enum FixtureData {
             return (200, jsonData(saved))
         case ("GET", "/api/goal/progress"):
             return (200, jsonData(goalProgress(profile, scenario: scenario)))
+        case ("GET", "/api/review/weekly"):
+            return (200, jsonData(weeklyReview(scenario: scenario)))
+        case ("POST", "/api/review/weekly/seen"):
+            return (200, jsonData(["ok": true]))
         case ("GET", "/api/devices"):
             return (200, jsonData(devices(scenario: scenario)))
         default:
@@ -1733,6 +1737,107 @@ enum FixtureData {
                 "reasons": [Any](),
                 "dataSufficiency": ["weighIns": 0, "needed": 3, "sessionsLast28d": 0],
             ]
+        }
+    }
+
+    // MARK: - GET /api/review/weekly → WeeklyReviewResponse
+
+    /// "YYYY-MM-DD" Monday / Sunday of the last completed local week.
+    private static func lastCompletedWeek() -> (start: String, end: String) {
+        var cal = Calendar(identifier: .gregorian)
+        cal.firstWeekday = 2
+        cal.timeZone = .current
+        let today = cal.startOfDay(for: Date())
+        let thisMonday = cal.dateInterval(of: .weekOfYear, for: today)?.start ?? today
+        let start = cal.date(byAdding: .day, value: -7, to: thisMonday) ?? thisMonday
+        let end = cal.date(byAdding: .day, value: 6, to: start) ?? start
+        return (dayFormatter.string(from: start), dayFormatter.string(from: end))
+    }
+
+    /// Unseen review per scenario, consistent with that scenario's
+    /// goal-progress / weight / training fixtures: `weight_loss` -0.6 kg,
+    /// 5 of 7 days in the 1,850 kcal budget, weekends +450 kcal (same as the
+    /// goal-progress reasons); `muscle` 3 of 4 sessions, bench +2.5 kg, 5 of 7
+    /// protein days (190 g target); `endurance` 24.5 km, +12% (21.9 -> 24.5).
+    /// `new_user` (and the unreachable `onboarding`) get the gentle
+    /// "not enough data" review. `server_error` never reaches this.
+    private static func weeklyReview(scenario: FixtureMode.Scenario) -> [String: Any] {
+        func stat(_ label: String, _ value: String, _ comparison: String?, _ tone: String) -> [String: Any] {
+            ["label": label, "value": value, "comparison": nullable(comparison), "tone": tone]
+        }
+        let week = lastCompletedWeek()
+        func review(
+            goal: String, verdict: String, headline: String, stats: [[String: Any]],
+            win: String?, slip: String?, nextWeek: String, sufficient: Bool
+        ) -> [String: Any] {
+            [
+                "id": "00000000-0000-4000-8000-0000000000a1",
+                "seenAt": NSNull(),
+                "createdAt": isoAt(daysAgo: 0, hour: 0, minute: 0),
+                "review": [
+                    "weekStart": week.start, "weekEnd": week.end, "goal": goal, "verdict": verdict,
+                    "headline": headline, "stats": stats,
+                    "win": nullable(win), "slip": nullable(slip), "nextWeek": nextWeek,
+                    "dataSufficiency": ["daysWithData": sufficient ? 7 : 1, "statCount": stats.count, "sufficient": sufficient],
+                ] as [String: Any],
+            ]
+        }
+
+        switch scenario {
+        case .weightLoss:
+            return review(
+                goal: "weight_loss", verdict: "on_track",
+                headline: "Down 0.6 kg, in budget 5 of 7 days",
+                stats: [
+                    stat("Weight trend", "−0.6 kg", "vs the week before", "good"),
+                    stat("Days in budget", "5/7", nil, "good"),
+                    stat("Avg calories", "1,830 kcal", "−120 vs last week", "neutral"),
+                    stat("Workouts", "3", "2 last week", "good"),
+                ],
+                win: "Your weight trend is down 0.6 kg.",
+                slip: "Weekends ran +450 kcal over your weekdays.",
+                nextWeek: "Plan Saturday's dinner — weekends ran +450 kcal over weekdays.",
+                sufficient: true
+            )
+        case .muscle:
+            return review(
+                goal: "muscle", verdict: "progressing",
+                headline: "3 of 4 sessions, Bench Press up 2.5 kg",
+                stats: [
+                    stat("Sessions", "3", "target 4", "neutral"),
+                    stat("Bench Press est. 1RM", "+2.5 kg", "vs last trained week", "good"),
+                    stat("Protein days hit", "5/7", nil, "good"),
+                    stat("Weight trend", "+0.2 kg", "vs the week before", "good"),
+                ],
+                win: "Bench Press estimated 1RM is up 2.5 kg.",
+                slip: nil,
+                nextWeek: "Repeat this week: same routine, same training days.",
+                sufficient: true
+            )
+        case .endurance:
+            return review(
+                goal: "endurance", verdict: "building",
+                headline: "3 sessions, 24.5 km, +12% vs last week",
+                stats: [
+                    stat("Sessions", "3", "target 4", "neutral"),
+                    stat("Volume", "24.5 km", "+12% vs last week", "good"),
+                    stat("Resting HR", "52 bpm", "−1 bpm vs last week", "good"),
+                    stat("Avg sleep", "7h 20m", "goal 8h 0m", "good"),
+                ],
+                win: "Training volume is up 12% on last week (21.9 km → 24.5 km).",
+                slip: nil,
+                nextWeek: "Repeat this week: same routine, same training days.",
+                sufficient: true
+            )
+        default:
+            return review(
+                goal: "weight_loss", verdict: "insufficient_data",
+                headline: "Not enough data for a weekly review yet",
+                stats: [],
+                win: nil, slip: nil,
+                nextWeek: "Log meals, weigh-ins or workouts on a few days and your review will fill in next Monday.",
+                sufficient: false
+            )
         }
     }
 

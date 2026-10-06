@@ -1,5 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
-import { and, desc, eq, gte, isNotNull, isNull } from 'drizzle-orm';
+import { and, desc, eq, gte, isNotNull, isNull, sql } from 'drizzle-orm';
 import { db, schema } from '../db';
 import { ApnsClient } from '../lib/apnsClient';
 import { generateDailyBriefFromDb } from '../lib/brain/brief';
@@ -17,6 +17,8 @@ import { getUserUnitSystem } from '../lib/units';
 import { createWhoopTokenStore } from '../lib/whoop/client';
 import { createWhoopSyncRepository, runWhoopSync } from '../lib/whoop/sync';
 import { createWhoopWorkerRepository, runWhoopWorkerPass } from '../lib/whoop/workerPass';
+import { runWeeklyReviewPass, type WeeklyReviewPassDeps } from '../lib/weeklyReviewWorker';
+import { getOrCreateLastWeekReview } from '../lib/weeklyReviewLoader';
 import { buildSubjectLabelMap, resolveSubjectLabel, withSubjectSuffix } from '../lib/brain/factSubject';
 
 const intervalMs = Number(process.env.PROACTIVE_WORKER_INTERVAL_MS ?? 15_000);
@@ -180,6 +182,39 @@ async function runDueInsightPasses(now: Date): Promise<void> {
   }
 }
 
+// Weekly review (Monday morning, user-local). Reuses the morning-brief
+// preference + time: only users with morning briefs enabled and a live device
+// are candidates. pushed_at is stamped before sending, so each review is
+// pushed at most once even across ticks, restarts or concurrent workers.
+const weeklyReviewDeps: WeeklyReviewPassDeps = {
+  async listCandidates() {
+    const rows = await db
+      .select({ userId: schema.notification_preferences.user_id, timezone: schema.notification_preferences.timezone, morningMinutes: schema.notification_preferences.morning_brief_time_minutes })
+      .from(schema.notification_preferences)
+      .where(and(
+        eq(schema.notification_preferences.morning_brief_enabled, true),
+        sql`exists (select 1 from ${schema.push_devices} d where d.user_id = ${schema.notification_preferences.user_id} and d.invalidated_at is null)`,
+      ));
+    return rows;
+  },
+  async getOrCreate(userId, timezone, now) {
+    const stored = await getOrCreateLastWeekReview(userId, { tz: timezone, now });
+    return stored ? { id: stored.id, review: stored.review } : null;
+  },
+  async claimPush(reviewId, now) {
+    const rows = await db
+      .update(schema.weekly_reviews)
+      .set({ pushed_at: now })
+      .where(and(eq(schema.weekly_reviews.id, reviewId), isNull(schema.weekly_reviews.pushed_at)))
+      .returning({ id: schema.weekly_reviews.id });
+    return rows.length === 1;
+  },
+  listDevices: (userId) => workerRepository.listDevices(userId),
+  send: (device, alert, route) => apns.send(device, alert, route),
+  retireDevice: (deviceId, now) => workerRepository.retireDevice(deviceId, now),
+  onError: (_userId, error) => console.error(JSON.stringify(workerErrorEvent('weekly-review', error))),
+};
+
 async function tick(reportStage: (stage: WorkerStage) => void): Promise<void> {
   const now = new Date();
   reportStage('ensure-default-preferences');
@@ -280,6 +315,9 @@ async function tick(reportStage: (stage: WorkerStage) => void): Promise<void> {
       failed: whoopResult.failed.length,
     }));
   }
+
+  reportStage('weekly-review');
+  await runWeeklyReviewPass(now, weeklyReviewDeps);
 
   if (insightsEnabled(process.env) !== 'off') {
     reportStage('insight-pass');

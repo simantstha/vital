@@ -674,6 +674,24 @@ export const daily_briefs = p.pgTable('daily_briefs', {
   p.uniqueIndex('daily_briefs_user_day_units_idx').on(t.user_id, t.local_day, t.unit_system),
 ]);
 
+// ─── weekly_reviews ──────────────────────────────────────────────────────────
+// One persisted "how did your week go toward your goal" review per user per
+// completed local week (lib/weeklyReview.ts). week_start is the local Monday.
+// payload is the computed WeeklyReview JSON; seen_at is set when the user taps
+// "Got it" on the Today card; pushed_at records that the Monday push went out
+// so the worker sends at most one per review.
+export const weekly_reviews = p.pgTable('weekly_reviews', {
+  id:         p.uuid('id').primaryKey().defaultRandom(),
+  user_id:    p.uuid('user_id').notNull().references(() => users.id),
+  week_start: p.date('week_start').notNull(),
+  payload:    p.jsonb('payload').notNull(),
+  created_at: p.timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  seen_at:    p.timestamp('seen_at', { withTimezone: true }),
+  pushed_at:  p.timestamp('pushed_at', { withTimezone: true }),
+}, (t) => [
+  p.uniqueIndex('weekly_reviews_user_week_idx').on(t.user_id, t.week_start),
+]);
+
 // ─── plan_items ──────────────────────────────────────────────────────────────
 // Server-persisted rows for the Today "plan" timeline (redesign v3 Phase 2).
 // One row per plan entry per (user, local calendar day) — local_day is a
@@ -914,6 +932,9 @@ export type NewPlanItemRow = typeof plan_items.$inferInsert;
 
 export type DailyBriefRow    = typeof daily_briefs.$inferSelect;
 export type NewDailyBriefRow = typeof daily_briefs.$inferInsert;
+
+export type WeeklyReviewRow    = typeof weekly_reviews.$inferSelect;
+export type NewWeeklyReviewRow = typeof weekly_reviews.$inferInsert;
 
 export type CalendarBlock    = typeof calendar_blocks.$inferSelect;
 export type NewCalendarBlock = typeof calendar_blocks.$inferInsert;
