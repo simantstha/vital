@@ -1252,6 +1252,19 @@ struct APIClient {
         try validate(response)
     }
 
+    /// DELETE /api/account — permanently deletes the user's account and all
+    /// server-side data (App Store guideline 5.1.1(v)). 204 on success.
+    func deleteAccount() async throws {
+        guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/account") else {
+            throw APIError.invalidURL
+        }
+        var request = authorizedRequest(url)
+        request.httpMethod = "DELETE"
+        request.timeoutInterval = 30
+        let (_, response) = try await session.data(for: request)
+        try validate(response)
+    }
+
     /// GET /api/whoop/connect returns a 302 to the WHOOP authorize URL
     /// (in the `Location` header) rather than a JSON body — the route is
     /// session-authed via a Bearer header, which a browser-driven redirect

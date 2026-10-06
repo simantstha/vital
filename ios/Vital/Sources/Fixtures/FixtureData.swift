@@ -234,6 +234,8 @@ enum FixtureData {
         let profile = profiles[scenario] ?? profiles[.newUser]!
 
         switch (method, path) {
+        case ("DELETE", "/api/account"):
+            return (204, Data())
         case ("GET", "/api/today"):
             return (200, jsonData(today(profile, scenario: scenario)))
         case ("GET", "/api/plan"):

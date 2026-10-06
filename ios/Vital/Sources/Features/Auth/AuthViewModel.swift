@@ -138,6 +138,20 @@ final class AuthViewModel: ObservableObject {
     func signOut() {
         let token = KeychainStore.loadSessionToken()
         Task { await PushNotificationService.shared.invalidate(sessionToken: token) }
+        clearLocalSession()
+    }
+
+    /// Deletes the account server-side (DELETE /api/account), then clears local
+    /// auth state exactly like sign-out so RootView returns to the auth screen.
+    /// Throws on failure, leaving the session untouched so the user can retry.
+    func deleteAccount() async throws {
+        try await APIClient.shared.deleteAccount()
+        // The server already removed this user's push tokens, so no
+        // `invalidate` call (it would just 401).
+        clearLocalSession()
+    }
+
+    private func clearLocalSession() {
         KeychainStore.deleteSessionToken()
         AppRouter.shared.resetSession()
         PushNotificationService.shared.resetSession()
