@@ -17,6 +17,8 @@
  *   delete_meal        — undo a meal the coach itself just logged (safety-scoped:
  *                        this user, source 'coach', within the last 30 minutes)
  *   log_weight         — weigh-in → weight_logged event (lib/weightRepository.ts)
+ *   set_goal_target    — set target weight / date / weekly-session target by voice
+ *                        (same validation + re-anchoring as PATCH /api/profile)
  *   get_metric_trend   — daily_metrics trend + mean/min/max + baseline direction
  *   get_weight_trend   — smoothed (EWMA) weight trend, manual + HealthKit merged
  *                        (lib/weightTrend.ts) — a dedicated tool rather than folded
@@ -70,6 +72,8 @@ import {
   type SetInput,
 } from '@/lib/workoutRepository';
 import { getWeightReadings, logWeightEntry } from '@/lib/weightRepository';
+import { parseTargetWeightKg, parseTargetDate, parseWeeklySessionsTarget } from '@/lib/goalTarget';
+import { localDayKey, pickTimeZone } from '@/lib/localDay';
 import { computeWeightTrend } from '@/lib/weightTrend';
 import { LB_PER_KG } from '@/lib/metricFormat';
 import { metricLabel, EVENT_TYPE_LABELS } from './toolLabels';
@@ -407,6 +411,37 @@ export const BRAIN_TOOLS: Tool[] = [
         },
       },
       required: ['value'],
+    },
+  },
+  {
+    name: 'set_goal_target',
+    description:
+      'Set the user\'s goal targets (the same ones as Profile → Goal): target weight, target date, ' +
+      'and/or weekly training-session target. Use when the user states a target ("my goal is 76 kg by ' +
+      'Christmas", "I want to train 4 times a week"). Pass ONLY the fields they gave; omitted fields ' +
+      'are left untouched. Resolve relative dates ("by Christmas") to a YYYY-MM-DD in the future using ' +
+      'the current local date from context. Never invent a target the user did not state.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        targetWeight: {
+          type: 'number',
+          description: 'Target body weight, in the unit given by `unit` (30–300 kg).',
+        },
+        unit: {
+          type: 'string',
+          description: 'Unit of targetWeight: "kg" or "lb". Defaults to the user\'s display unit if omitted.',
+        },
+        targetDate: {
+          type: 'string',
+          description: 'Target date, YYYY-MM-DD, in the future and at most 3 years out.',
+        },
+        weeklySessions: {
+          type: 'number',
+          description: 'Training sessions per week, an integer 1–14.',
+        },
+      },
+      required: [],
     },
   },
   {
@@ -979,6 +1014,8 @@ export function toolCallLabel(name: string, input: Record<string, unknown>): str
       return 'Removing that…';
     case 'log_weight':
       return 'Logging your weigh-in…';
+    case 'set_goal_target':
+      return 'Setting your goal…';
     case 'get_metric_trend':
       return `Checking your ${metricLabel(String(input.metric ?? ''))} trend…`;
     case 'get_weight_trend':
@@ -1889,6 +1926,74 @@ export async function executeToolCall(
       valueKg:  round2(valueKg),
       localDay: result.localDay,
       deduped:  result.deduped,
+    });
+  }
+
+  // ── set_goal_target ───────────────────────────────────────────────────────
+  // Mirrors PATCH /api/profile's goal-target handling: same validators
+  // (lib/goalTarget.ts) and the same re-anchoring rule (lib/goalStart.ts) —
+  // a CHANGED target weight restarts goal progress from the current trend.
+  if (name === 'set_goal_target') {
+    const hasWeight = input.targetWeight != null;
+    const hasDate = input.targetDate != null;
+    const hasSessions = input.weeklySessions != null;
+    if (!hasWeight && !hasDate && !hasSessions) {
+      return 'Error: provide at least one of targetWeight, targetDate or weeklySessions.';
+    }
+
+    const [row] = await db
+      .select({
+        timezone: schema.users.timezone,
+        unit_system: schema.users.unit_system,
+        target_weight_kg: schema.users.target_weight_kg,
+      })
+      .from(schema.users)
+      .where(eq(schema.users.id, userId))
+      .limit(1);
+    const units = resolveUnitSystem(row?.unit_system);
+
+    const update: Partial<typeof schema.users.$inferInsert> = {};
+
+    if (hasWeight) {
+      const raw = Number(input.targetWeight);
+      if (!Number.isFinite(raw)) return 'Error: targetWeight must be a number.';
+      const rawUnit = input.unit != null ? String(input.unit).toLowerCase() : (units === 'imperial' ? 'lb' : 'kg');
+      if (rawUnit !== 'kg' && rawUnit !== 'lb' && rawUnit !== 'lbs') return 'Error: unit must be "kg" or "lb".';
+      const r = parseTargetWeightKg(rawUnit === 'kg' ? raw : raw / LB_PER_KG);
+      if (!r.ok) return `Error: ${r.error}`;
+      update.target_weight_kg = r.value;
+    }
+    if (hasDate) {
+      // "Future" is judged on the user's local day.
+      const todayKey = localDayKey(new Date(), pickTimeZone(null, row?.timezone));
+      const r = parseTargetDate(input.targetDate, todayKey);
+      if (!r.ok) return `Error: ${r.error}`;
+      update.target_date = r.value;
+    }
+    if (hasSessions) {
+      const r = parseWeeklySessionsTarget(Number(input.weeklySessions));
+      if (!r.ok) return `Error: ${r.error}`;
+      update.weekly_sessions_target = r.value;
+    }
+
+    let reanchored = false;
+    if (update.target_weight_kg != null && row?.target_weight_kg !== update.target_weight_kg) {
+      // Dynamic import: lib/goalStart.ts pulls in the weight repository, which
+      // other tools.ts test files mock narrowly.
+      const { buildGoalRestart } = await import('@/lib/goalStart');
+      Object.assign(update, await buildGoalRestart(userId));
+      reanchored = true;
+    }
+
+    await db.update(schema.users).set(update).where(eq(schema.users.id, userId));
+
+    return JSON.stringify({
+      ok: true,
+      ...(update.target_weight_kg != null ? { targetWeightKg: update.target_weight_kg } : {}),
+      ...(update.target_date != null ? { targetDate: update.target_date } : {}),
+      ...(update.weekly_sessions_target != null ? { weeklySessionsTarget: update.weekly_sessions_target } : {}),
+      unitSystem: units,
+      reanchored,
     });
   }
 

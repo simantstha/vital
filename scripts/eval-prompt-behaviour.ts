@@ -428,6 +428,85 @@ async function main(): Promise<void> {
         };
       },
     },
+    // Cases 10-12 cover the goal-aware coach: consistency with the deterministic
+    // goal-progress verdict, no repeated target nagging, and setting a target
+    // by voice. Same loose-regex philosophy as cases 7-9.
+    {
+      id: 10,
+      name: 'Goal verdict consistency — an on_track verdict is never contradicted',
+      onboarding: false,
+      hardConstraints: [],
+      contextText: contextBlock([
+        '### Goal progress',
+        '- Goal: fat loss; target 76.0 kg, by 2026-12-25',
+        '- Now: trend 82.1 kg; -2.9 kg since start at 85.0 kg; rate -0.45 kg/wk (-0.55% bw); ETA 2026-12-10; on pace for target date',
+        '- Verdict: on_track — "On track — about 6.1 kg to go, around Dec 10"',
+        '  - Losing 0.45 kg a week, inside the safe band',
+        '  - Within calories on 5 of 7 logged days',
+      ]),
+      userMessage: 'Honestly I feel like I am way behind on my weight goal. Am I?',
+      check: (_calls, text) => {
+        const saysOnTrack = /on track|on pace|ahead of|right where/i.test(text);
+        const saysBehind = /you(?:'re| are) (?:\w+ )?behind|you(?:'re| are) falling behind|off track/i.test(text);
+        const pass = saysOnTrack && !saysBehind;
+        return {
+          pass,
+          reason: saysBehind
+            ? 'reply told the user they are behind/off track while the Goal progress verdict is on_track'
+            : !saysOnTrack
+              ? 'reply never affirmed the on_track verdict'
+              : 'reply agreed with the on_track verdict and did not call the user behind',
+        };
+      },
+    },
+    {
+      id: 11,
+      name: "No target nagging — doesn't push goal-setting when the conversation already did",
+      onboarding: false,
+      hardConstraints: [],
+      contextText: contextBlock([
+        '### Goal progress',
+        '- Goal: fat loss; no target set',
+        '- Verdict: needs_target — "Set a target weight to track your fat-loss progress"',
+        '- No target set yet — setting one is the only thing missing for a real progress verdict.',
+        '',
+        '### Recent conversation',
+        '- user: What should I have for lunch?',
+        '- assistant: Grilled chicken bowl works well. By the way, you can set a target weight in Profile → Goal if you want me to track progress.',
+        '- user: Not now, thanks. What about a snack this afternoon?',
+        '- assistant: Greek yogurt with berries.',
+      ]),
+      userMessage: 'OK and what should I have for dinner tonight?',
+      check: (_calls, text) => {
+        const nags = /(set|add|pick|choose|enter) (?:a |your )?(?:target|goal)|Profile\s*(?:→|->|>)\s*Goal/i.test(text);
+        return {
+          pass: !nags,
+          reason: nags
+            ? 'reply suggested setting a target again after the user already declined once'
+            : 'reply answered the dinner question without re-suggesting a target',
+        };
+      },
+    },
+    {
+      id: 12,
+      name: 'Set goal by voice — set_goal_target with the stated weight and a resolved date',
+      onboarding: false,
+      hardConstraints: [],
+      contextText: NORMAL_CONTEXT_NO_FACTS,
+      userMessage: 'My goal is 76 kg by Christmas.',
+      check: (calls) => {
+        const call = calls.find((c) => c.name === 'set_goal_target');
+        if (!call) return { pass: false, reason: 'set_goal_target was never called for a stated weight target' };
+        const kgOk = call.input.targetWeight === 76 && (call.input.unit == null || /^kg$/i.test(String(call.input.unit)));
+        const dateOk = call.input.targetDate === '2026-12-25';
+        return {
+          pass: kgOk && dateOk,
+          reason: kgOk && dateOk
+            ? 'set_goal_target(76 kg, 2026-12-25)'
+            : `set_goal_target called with ${JSON.stringify(call.input)} — expected targetWeight 76 (kg) and targetDate 2026-12-25`,
+        };
+      },
+    },
   ];
 
   // ── Runner ───────────────────────────────────────────────────────────────

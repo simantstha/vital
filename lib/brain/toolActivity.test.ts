@@ -15,7 +15,7 @@ test('toolKind maps every tool named in the chat-activity contract', async () =>
     'query_ontology', 'read_entity',
     'remember_fact', 'propose_fact', 'confirm_fact', 'resolve_fact',
   ];
-  const action = ['log_meal', 'delete_meal', 'log_weight', 'log_workout', 'update_diet_budget'];
+  const action = ['log_meal', 'delete_meal', 'log_weight', 'set_goal_target', 'log_workout', 'update_diet_budget'];
   const calendar = ['get_schedule'];
   const data = [
     'get_metric_trend', 'get_weight_trend', 'get_sleep_summary', 'get_workouts',
@@ -515,4 +515,12 @@ test('deriveActivityFromToolCalls: skips malformed entries but keeps the rest', 
     { name: 'get_workouts', input: { days: 7 } },
   ]);
   assert.deepEqual(activity, [{ name: 'get_workouts', label: 'Checked your workouts', kind: 'data' }]);
+});
+
+test('toolResultSummary: set_goal_target renders weight in the user\'s unit', async () => {
+  const { toolResultSummary, doneLabel } = await activityPromise;
+  const result = JSON.stringify({ ok: true, targetWeightKg: 76, targetDate: '2026-12-25', weeklySessionsTarget: 4, reanchored: true });
+  assert.equal(toolResultSummary('set_goal_target', {}, result, 'metric'), 'Goal set · 76.0 kg by 2026-12-25 4x/week');
+  assert.equal(toolResultSummary('set_goal_target', {}, result, 'imperial'), 'Goal set · 168 lb by 2026-12-25 4x/week');
+  assert.equal(doneLabel('set_goal_target', {}), 'Set your goal');
 });
