@@ -401,6 +401,9 @@ private extension TrendsView {
                             Divider().overlay(Theme.Colors.glassBorder)
                         }
                     }
+                    Divider().overlay(Theme.Colors.glassBorder)
+                    WhatMovedExplainer(metricKeys: vm.whatMovedRows.map(\.key))
+                        .padding(.top, Theme.Spacing.sm)
                 }
             }
         }

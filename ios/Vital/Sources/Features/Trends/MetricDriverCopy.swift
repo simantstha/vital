@@ -103,11 +103,28 @@ enum MetricDriverCopy {
         unitSystem: UnitSystem
     ) -> String {
         let outcomeName = outcomeSpec?.displayName ?? outcomeMetricKey
+        if isAdaptation(driver) {
+            return adaptationSentence(driver: driver, outcomeName: outcomeName)
+        }
         var text = "\(leadPhrase(for: driver.input)), your \(outcomeName) \(lagPhrase(driver.lag)) tends to be \(directionWord(driver.direction))"
         if let comparison = comparisonClause(driver: driver, outcomeSpec: outcomeSpec, unitSystem: unitSystem) {
             text += " — \(comparison)"
         }
         return text + "."
+    }
+
+    /// True for the server's `framing == "adaptation"` rows: more activity
+    /// followed by a slightly worse recovery number, for a user whose goal
+    /// isn't performance training. Never headline those as "do less".
+    static func isAdaptation(_ driver: DriverDTO) -> Bool {
+        driver.framing == "adaptation"
+    }
+
+    /// "Big activity days are followed by slightly lower HRV — normal
+    /// adaptation; keep moving." No tercile numbers: the point is the
+    /// reassurance, not the size of the dip.
+    static func adaptationSentence(driver: DriverDTO, outcomeName: String) -> String {
+        "Big activity days are followed by slightly \(directionWord(driver.direction)) \(outcomeName) — normal adaptation; keep moving."
     }
 
     /// "48 vs 56 ms" — `nil` when either tercile bucket is missing (the

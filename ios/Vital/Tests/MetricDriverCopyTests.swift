@@ -16,9 +16,32 @@ final class MetricDriverCopyTests: XCTestCase {
         rho: Double = -0.42,
         pairs: Int = 64,
         high: DriverBucketDTO? = DriverBucketDTO(mean: 48, n: 21),
-        low: DriverBucketDTO? = DriverBucketDTO(mean: 56, n: 21)
+        low: DriverBucketDTO? = DriverBucketDTO(mean: 56, n: 21),
+        framing: String? = nil
     ) -> DriverDTO {
-        DriverDTO(input: input, lag: lag, direction: direction, rho: rho, pairs: pairs, high: high, low: low, highInputMean: 11000, lowInputMean: 6500)
+        DriverDTO(input: input, lag: lag, direction: direction, rho: rho, pairs: pairs, high: high, low: low, highInputMean: 11000, lowInputMean: 6500, framing: framing)
+    }
+
+    // MARK: - Adaptation framing
+
+    func testAdaptationDriverReadsAsKeepMovingNotDoLess() {
+        let text = sentence(driver(input: "steps", direction: "down", framing: "adaptation"))
+        XCTAssertEqual(text, "Big activity days are followed by slightly lower HRV — normal adaptation; keep moving.")
+        XCTAssertFalse(text.contains("On days with more steps"), text)
+    }
+
+    func testAssociationOrMissingFramingKeepsTheOriginalSentence() {
+        for framing in [nil, "association"] as [String?] {
+            let text = sentence(driver(framing: framing))
+            XCTAssertTrue(text.hasPrefix("On days with more steps"), text)
+        }
+    }
+
+    func testDriverDTODecodesFramingAndToleratesItsAbsence() throws {
+        let withFraming = #"{"input":"steps","lag":1,"direction":"down","rho":-0.4,"pairs":40,"high":null,"low":null,"highInputMean":null,"lowInputMean":null,"framing":"adaptation"}"#
+        let without = #"{"input":"steps","lag":1,"direction":"down","rho":-0.4,"pairs":40,"high":null,"low":null,"highInputMean":null,"lowInputMean":null}"#
+        XCTAssertEqual(try JSONDecoder().decode(DriverDTO.self, from: Data(withFraming.utf8)).framing, "adaptation")
+        XCTAssertNil(try JSONDecoder().decode(DriverDTO.self, from: Data(without.utf8)).framing)
     }
 
     /// Convenience matching `MetricDetailView`'s own call — the outcome

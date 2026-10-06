@@ -92,18 +92,12 @@ enum TrendsHeadline {
         /// "2/14" — the ring's center label.
         var ringLabel: String { "\(daysDone)/14" }
 
-        /// "12 more days and I'll tell you what's unusual. Until then,
-        /// here's what I'm seeing." `daysRemaining == 0` (gate 4/5 of
+        /// "Calorie, weight and workout tracking work today. Recovery
+        /// insights get personal after 14 days of data (2 of 14)." — see
+        /// `CalibrationCopy.trendsBody`. `daysRemaining == 0` (gate 4/5 of
         /// `TrendsVerdict` — enough calendar history but not enough real
-        /// variation yet) has no day count left to name, so it reads as
-        /// "not enough variation yet" instead of the false "Zero more days".
-        var bodyText: String {
-            guard daysRemaining > 0 else {
-                return "I don't have enough variation yet to tell you what's unusual. Here's what I'm seeing."
-            }
-            let dayWord = daysRemaining == 1 ? "day" : "days"
-            return "\(wordForCount(daysRemaining).capitalizedFirstLetter) more \(dayWord) and I'll tell you what's unusual. Until then, here's what I'm seeing."
-        }
+        /// variation yet) has no day count to name, so it says that instead.
+        var bodyText: String { CalibrationCopy.trendsBody(daysRemaining: daysRemaining) }
     }
 
     /// The three mutually-exclusive states the Trends header can be in.

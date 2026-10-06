@@ -115,3 +115,33 @@ final class MetricCatalogTests: XCTestCase {
         XCTAssertEqual(spec.displayScale(.imperial), 1.0 / UnitConvert.kmPerMile, accuracy: 1e-9)
     }
 }
+
+/// `MetricExplainer` / `CalibrationCopy` — the plain-language layer.
+final class MetricExplainerTests: XCTestCase {
+
+    func testEveryCatalogMetricHasAPlainExplanation() {
+        for spec in MetricCatalog.all {
+            XCTAssertNotNil(MetricExplainer.explanation(for: spec.key), spec.key)
+        }
+        XCTAssertEqual(MetricExplainer.explanation(for: "weight_trend"), "A smoothed average that ignores day-to-day water swings.")
+        XCTAssertNil(MetricExplainer.explanation(for: "not_a_metric"))
+    }
+
+    func testVerdictLineReadsInPlainWordsAndRespectsPolarity() {
+        XCTAssertEqual(MetricExplainer.verdictLine(for: "hrv_sdnn", verdict: .above(z: 1.5)), "Above your normal — you're well recovered")
+        XCTAssertEqual(MetricExplainer.verdictLine(for: "resting_hr", verdict: .below(z: -1.5)), "Below your normal — a good sign")
+        XCTAssertEqual(MetricExplainer.verdictLine(for: "resting_hr", verdict: .above(z: 1.5)), "Above your normal — your body may be under extra strain")
+        XCTAssertEqual(MetricExplainer.verdictLine(for: "flights", verdict: .normal), "Right in your normal range — nothing unusual")
+    }
+
+    func testVerdictLineIsSilentWhileCalibratingOrWithoutData() {
+        XCTAssertNil(MetricExplainer.verdictLine(for: "hrv_sdnn", verdict: .calibrating(daysRemaining: 5)))
+        XCTAssertNil(MetricExplainer.verdictLine(for: "hrv_sdnn", verdict: .noData))
+    }
+
+    func testCalibrationCopyLeadsWithWhatWorksTodayAndClampsTheCount() {
+        XCTAssertEqual(CalibrationCopy.todayBody(daysCollected: 2), "Calorie, weight and workout tracking work today. Recovery insights get personal after 14 days of data (2 of 14).")
+        XCTAssertTrue(CalibrationCopy.todayBody(daysCollected: -3).contains("(0 of 14)"))
+        XCTAssertTrue(CalibrationCopy.todayBody(daysCollected: 40).contains("(14 of 14)"))
+    }
+}

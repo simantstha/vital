@@ -2446,6 +2446,12 @@ struct DriverDTO: Decodable, Equatable {
     let low: DriverBucketDTO?
     let highInputMean: Double?
     let lowInputMean: Double?
+    /// 'association' (plain row) or 'adaptation' — an activity driver that
+    /// worsens a recovery outcome for a non-performance goal; see
+    /// `lib/insights/drivers.ts`'s `DriverFraming`. Optional (and last, so
+    /// the memberwise init keeps its old shape) because older servers omit
+    /// it; `nil` reads as 'association'.
+    var framing: String? = nil
 }
 
 struct TrendsDriversResponse: Decodable, Equatable {

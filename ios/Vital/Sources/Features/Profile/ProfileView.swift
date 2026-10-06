@@ -223,7 +223,7 @@ private extension ProfileView {
     var calibratingBanner: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
             HStack {
-                Text("Calibrating your baselines")
+                Text(CalibrationCopy.todayTitle)
                     .font(Theme.Typography.bodySmall)
                     .fontWeight(.semibold)
                     .foregroundStyle(Theme.Colors.textPrimary)

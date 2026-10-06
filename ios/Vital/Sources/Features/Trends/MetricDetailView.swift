@@ -115,32 +115,50 @@ private extension MetricDetailView {
 
     var heroSection: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-            HStack(alignment: .lastTextBaseline, spacing: 6) {
-                Text(heroValueText)
-                    .font(Theme.Typography.numericHero(44))
-                    .foregroundStyle(Theme.Colors.textPrimary)
-                    .contentTransition(.numericText())
-                    .animation(Theme.Motion.numeric, value: displayedValue)
-                if let unit = spec?.unit(unitPref.current), !unit.isEmpty {
-                    Text(unit)
-                        .font(.system(size: 14))
-                        .foregroundStyle(Theme.Colors.textSecondary)
+            VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                HStack(alignment: .lastTextBaseline, spacing: 6) {
+                    Text(heroValueText)
+                        .font(Theme.Typography.numericHero(44))
+                        .foregroundStyle(Theme.Colors.textPrimary)
+                        .contentTransition(.numericText())
+                        .animation(Theme.Motion.numeric, value: displayedValue)
+                    if let unit = spec?.unit(unitPref.current), !unit.isEmpty {
+                        Text(unit)
+                            .font(.system(size: 14))
+                            .foregroundStyle(Theme.Colors.textSecondary)
+                    }
                 }
+                if let deltaPillText {
+                    Text(deltaPillText)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(deltaPillColor)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(Capsule().fill(deltaPillColor.opacity(0.16)))
+                }
+                if let verdictLine = heroVerdictLine {
+                    Text(verdictLine)
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(Theme.Colors.textPrimary)
+                }
+                Text(dateCaptionText)
+                    .font(.system(size: 13))
+                    .foregroundStyle(Theme.Colors.textSecondary)
             }
-            if let deltaPillText {
-                Text(deltaPillText)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(deltaPillColor)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 4)
-                    .background(Capsule().fill(deltaPillColor.opacity(0.16)))
+            .accessibilityElement(children: .combine)
+            if let explanation = MetricExplainer.explanation(for: metricKey) {
+                WhatIsThisButton(title: displayName, text: explanation, showsLabel: true)
             }
-            Text(dateCaptionText)
-                .font(.system(size: 13))
-                .foregroundStyle(Theme.Colors.textSecondary)
         }
         .padding(.top, Theme.Spacing.xs)
-        .accessibilityElement(children: .combine)
+    }
+
+    /// Plain-language verdict under the big number. Skipped when the
+    /// "What it means today" card already says it for this metric
+    /// (`meaningText != nil`) — never two sentences for the same thing.
+    var heroVerdictLine: String? {
+        guard meaningText == nil else { return nil }
+        return MetricExplainer.verdictLine(for: metricKey, verdict: displayedVerdict)
     }
 
     var heroValueText: String {
@@ -247,7 +265,7 @@ private extension MetricDetailView {
             HStack(spacing: Theme.Spacing.md) {
                 calibrationRing
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Still learning your normal")
+                    Text("Learning your normal")
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(Theme.Colors.textPrimary)
                     Text(stillLearningCopy)
@@ -261,8 +279,10 @@ private extension MetricDetailView {
 
     var stillLearningCopy: String {
         let remaining = calibratingDaysRemaining
-        let noun = remaining == 1 ? "night" : "nights"
-        return "\(remaining) more \(noun) and I'll know what's typical for you."
+        guard remaining > 0 else {
+            return "Your tracking works as usual. Personal insights need a bit more variety in your data."
+        }
+        return "Your numbers show up right away. Insights get personal after \(CalibrationCopy.totalDays) days of data (\(calibratingDaysElapsed) of \(CalibrationCopy.totalDays))."
     }
 
     var calibrationRing: some View {

@@ -120,19 +120,19 @@ final class TrendsHeadlineTests: XCTestCase {
         let progress = TrendsHeadline.LearningProgress(daysRemaining: 12)
         XCTAssertEqual(progress.daysDone, 2)
         XCTAssertEqual(progress.ringLabel, "2/14")
-        XCTAssertEqual(progress.bodyText, "12 more days and I'll tell you what's unusual. Until then, here's what I'm seeing.")
+        XCTAssertEqual(progress.bodyText, "Calorie, weight and workout tracking work today. Recovery insights get personal after 14 days of data (2 of 14).")
     }
 
-    func testLearningProgressUsesSingularDayForExactlyOneRemaining() {
+    func testLearningProgressOneDayRemainingShowsThirteenOfFourteen() {
         let progress = TrendsHeadline.LearningProgress(daysRemaining: 1)
-        XCTAssertEqual(progress.bodyText, "One more day and I'll tell you what's unusual. Until then, here's what I'm seeing.")
+        XCTAssertEqual(progress.bodyText, "Calorie, weight and workout tracking work today. Recovery insights get personal after 14 days of data (13 of 14).")
     }
 
     func testLearningProgressAtZeroRemainingReadsNotEnoughVariationRatherThanZeroDays() {
         let progress = TrendsHeadline.LearningProgress(daysRemaining: 0)
         XCTAssertEqual(progress.daysDone, 14)
         XCTAssertEqual(progress.ringLabel, "14/14")
-        XCTAssertEqual(progress.bodyText, "I don't have enough variation yet to tell you what's unusual. Here's what I'm seeing.")
+        XCTAssertEqual(progress.bodyText, "Your tracking works as usual. Recovery insights need a bit more variety in your data before they get personal.")
         XCTAssertFalse(progress.bodyText.contains("Zero"), "must never say \"Zero more days\"")
     }
 
