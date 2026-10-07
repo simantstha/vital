@@ -230,7 +230,7 @@ export const BRAIN_TOOLS: Tool[] = [
           description:
             'Node type. One of: Condition, Medication, Allergy, Intolerance, Goal, ' +
             'Habit, FoodPreference, Cuisine, PantryItem, LabMarker, Injury, FamilyHistory. ' +
-            'Do NOT use Goal for the user\'s weight/fitness goal or its targets - those live on the profile; use set_goal_targets.',
+            'Do NOT use Goal for the user\'s weight/fitness goal or its targets - those live on the profile; use set_goal_target.',
         },
         label: {
           type: 'string',
@@ -260,7 +260,7 @@ export const BRAIN_TOOLS: Tool[] = [
           description:
             'Node type. One of: Condition, Medication, Allergy, Intolerance, Goal, ' +
             'Habit, FoodPreference, Cuisine, PantryItem, LabMarker, Injury, FamilyHistory. ' +
-            'Do NOT use Goal for the user\'s weight/fitness goal or its targets - those live on the profile; use set_goal_targets.',
+            'Do NOT use Goal for the user\'s weight/fitness goal or its targets - those live on the profile; use set_goal_target.',
         },
         label: {
           type: 'string',
