@@ -62,7 +62,8 @@ import { isUuid } from '@/lib/brain/uuid';
 import { readCoreProfile } from '@/lib/coreProfileStore';
 import { parseProfileDetails } from '@/lib/profileDetails';
 import { randomUUID } from 'node:crypto';
-import { parseWorkoutPhrase } from '@/lib/workoutParse';
+import { parseWorkoutPhrase, MAX_SETS } from '@/lib/workoutParse';
+import { canonicalExercise } from '@/lib/exerciseCanonical';
 import { resolveUnitSystem } from '@/lib/units';
 import {
   getExerciseHistory,
@@ -2114,7 +2115,7 @@ export async function executeToolCall(
 
     // repeatLast: re-log the user's last full session for the named exercise.
     if (input.repeatLast === true) {
-      const exerciseGuess = String(input.phrase ?? '').trim().toLowerCase();
+      const exerciseGuess = canonicalExercise(String(input.phrase ?? '')).key;
       if (!exerciseGuess) return 'Error: phrase (exercise name) is required with repeatLast.';
 
       const lastSession = await getLastSessionForExercise(userId, exerciseGuess);
@@ -2147,15 +2148,16 @@ export async function executeToolCall(
 
     if (Array.isArray(input.sets) && input.sets.length > 0) {
       setsToLog = (input.sets as Array<Record<string, unknown>>).flatMap((s) => {
-        const exercise = String(s.exercise ?? '').trim().toLowerCase();
+        const canon = canonicalExercise(String(s.exercise ?? ''));
+        const exercise = canon.key;
         const reps = Number(s.reps);
         const loadKg = s.loadKg != null ? Number(s.loadKg) : null;
         const rpe = s.rpe != null ? Number(s.rpe) : null;
-        const setCount = Math.max(1, Math.round(Number(s.setCount ?? 1)));
+        const setCount = Math.min(MAX_SETS, Math.max(1, Math.round(Number(s.setCount ?? 1))));
         if (!exercise || !Number.isFinite(reps) || reps <= 0) return [];
         return Array.from({ length: setCount }, () => ({
           exercise,
-          exerciseDisplay: exercise,
+          exerciseDisplay: canon.display,
           setIndex: 0, // reassigned below across the whole flat list
           reps: Math.round(reps),
           loadKg,
@@ -2202,12 +2204,12 @@ export async function executeToolCall(
       sets: setsToLog,
     });
 
-    return JSON.stringify({ ok: true, exercise: setsToLog[0].exercise, sets: rows.map(workoutSetToWire) });
+    return JSON.stringify({ ok: true, exercise: setsToLog[0].exercise, exerciseDisplay: setsToLog[0].exerciseDisplay, sets: rows.map(workoutSetToWire) });
   }
 
   // ── get_training_history ─────────────────────────────────────────────────
   if (name === 'get_training_history') {
-    const exercise = typeof input.exercise === 'string' ? input.exercise.trim().toLowerCase() : null;
+    const exercise = typeof input.exercise === 'string' ? canonicalExercise(input.exercise).key || null : null;
 
     if (exercise) {
       const history = await getExerciseHistory(userId, exercise, 50);

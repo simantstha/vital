@@ -9,8 +9,8 @@
  *   source: 'manual' | 'coach' | 'template',
  *   workoutId?: string | null (optional link to a matching HealthKit workout_completed event),
  *   sets: Array<{
- *     exercise: string,          // canonical name, e.g. "squat" — see lib/workoutParse.ts's alias map
- *     exerciseDisplay?: string,  // defaults to `exercise`
+ *     exercise: string,          // any spelling; normalized via lib/exerciseCanonical.ts ("Bench" -> "bench press")
+ *     exerciseDisplay?: string,  // ignored — the canonical display name is stored and returned
  *     setIndex?: number,         // defaults to 1-based position in the array
  *     reps: number,
  *     loadKg?: number | null,    // omit/null for bodyweight movements
@@ -27,6 +27,7 @@ import { NextResponse } from 'next/server';
 import { eq } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import { getUserIdFromRequest } from '@/lib/auth';
+import { canonicalExercise } from '@/lib/exerciseCanonical';
 import { logWorkoutSession, type SetInput } from '@/lib/workoutRepository';
 
 export const dynamic = 'force-dynamic';
@@ -121,9 +122,14 @@ export async function POST(request: Request): Promise<NextResponse> {
     tz = userRow?.timezone ?? undefined;
   }
 
+  const canon = body.sets.map(s => canonicalExercise(s.exercise));
+  if (canon.some(c => !c.key)) {
+    return NextResponse.json({ error: 'Every set needs a non-empty exercise name.' }, { status: 400 });
+  }
+
   const sets: SetInput[] = body.sets.map((s, i) => ({
-    exercise:        s.exercise.trim().toLowerCase(),
-    exerciseDisplay: s.exerciseDisplay?.trim() || s.exercise.trim(),
+    exercise:        canon[i].key,
+    exerciseDisplay: canon[i].display,
     setIndex:        s.setIndex ?? i + 1,
     reps:            Math.round(s.reps),
     loadKg:          s.loadKg ?? null,
