@@ -716,8 +716,11 @@ export async function assembleContext(userId: string, findingId?: string): Promi
     // Goal-progress verdict — non-fatal like the two loads above. Loaded via
     // dynamic import: the loader pulls in the workout/metric repositories,
     // and a static import would put them on every coach-context import path.
-    import('../goalProgressLoader')
-      .then(m => m.loadGoalProgress(userId, { tz }))
+    import('./goalProgressCache')
+      .then(c => c.getCachedGoalProgress(userId, tz, localToday, async () => {
+        const m = await import('../goalProgressLoader');
+        return m.loadGoalProgress(userId, { tz });
+      }))
       .catch((err) => {
         console.error(`[context] goal progress load failed for user ${userId}:`, err);
         return null;
