@@ -1754,9 +1754,10 @@ enum FixtureData {
     }
 
     /// GET /api/workouts/last → `WorkoutLastSessionResponse`. For `.muscle`:
-    /// the most recent session (squat warm-up + 3×5 @ 140 kg, bench 3×5 @
-    /// 92.5 kg) regardless of which `exercise` is asked about — matches the
-    /// real route returning the WHOLE session. Other scenarios: `sets: []`
+    /// the most recent session (the Mon Legs session in `workoutRecentSessions`:
+    /// squat 60 kg warm-up + 3×5 @ 140 kg, Romanian deadlift, leg press) —
+    /// same id and working sets — regardless of which `exercise` is asked
+    /// about, matching the real route returning the WHOLE session. Other scenarios: `sets: []`
     /// (never logged), so the logger opens as an empty form.
     private static func workoutLastSession(scenario: FixtureMode.Scenario) -> [String: Any] {
         guard scenario == .muscle else { return ["sets": [[String: Any]]()] }
@@ -1784,15 +1785,22 @@ enum FixtureData {
         }
 
         // Server order: by exercise name, then set index.
-        let sets: [[String: Any]] = [
-            makeSet(1, exercise: "bench press", display: "Bench press", index: 5, reps: 5, loadKg: 92.5, warmup: false),
-            makeSet(2, exercise: "bench press", display: "Bench press", index: 6, reps: 5, loadKg: 92.5, warmup: false),
-            makeSet(3, exercise: "bench press", display: "Bench press", index: 7, reps: 5, loadKg: 92.5, warmup: false),
-            makeSet(4, exercise: "squat", display: "Squat", index: 1, reps: 5, loadKg: 60, warmup: true),
-            makeSet(5, exercise: "squat", display: "Squat", index: 2, reps: 5, loadKg: 140, warmup: false),
-            makeSet(6, exercise: "squat", display: "Squat", index: 3, reps: 5, loadKg: 140, warmup: false),
-            makeSet(7, exercise: "squat", display: "Squat", index: 4, reps: 5, loadKg: 140, warmup: false),
-        ]
+        var sets: [[String: Any]] = []
+        var n = 0
+        func add(_ exercise: String, _ display: String, index: Int, reps: Int, loadKg: Double, warmup: Bool = false) {
+            n += 1
+            sets.append(makeSet(n, exercise: exercise, display: display, index: index, reps: reps, loadKg: loadKg, warmup: warmup))
+        }
+        add("leg press", "Leg press", index: 8, reps: 10, loadKg: 180)
+        add("leg press", "Leg press", index: 9, reps: 10, loadKg: 180)
+        add("leg press", "Leg press", index: 10, reps: 10, loadKg: 180)
+        add("romanian deadlift", "Romanian deadlift", index: 5, reps: 8, loadKg: 100)
+        add("romanian deadlift", "Romanian deadlift", index: 6, reps: 8, loadKg: 100)
+        add("romanian deadlift", "Romanian deadlift", index: 7, reps: 8, loadKg: 100)
+        add("squat", "Squat", index: 1, reps: 5, loadKg: 60, warmup: true)
+        add("squat", "Squat", index: 2, reps: 5, loadKg: 140)
+        add("squat", "Squat", index: 3, reps: 5, loadKg: 140)
+        add("squat", "Squat", index: 4, reps: 5, loadKg: 140)
         return ["sets": sets]
     }
 
@@ -1833,7 +1841,7 @@ enum FixtureData {
                 ex("curl", "Curl", reps: 12, loadKg: 20, sets: 3),
             ]),
             session("7d3b2e3a-9c76-4e8a-9f79-4b5c8a2e1d33", daysAgo: 4, [
-                ex("bench press", "Bench press", reps: 5, loadKg: 92.5, sets: 4),
+                ex("bench press", "Bench press", reps: 5, loadKg: 92.5, sets: 3),
                 ex("overhead press", "Overhead press", reps: 8, loadKg: 57.5, sets: 3),
                 ex("triceps pushdown", "Triceps pushdown", reps: 12, loadKg: 35, sets: 3),
             ]),
