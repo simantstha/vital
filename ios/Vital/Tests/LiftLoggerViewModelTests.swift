@@ -362,7 +362,10 @@ final class LiftLoggerViewModelTests: XCTestCase {
     func testCompletionsComeFromTheUsersOwnHistory() async {
         let api = FakeAPI()
         api.summary = summary(["bench press", "squat"])
-        api.recentSessions = [recentSession("s1", day: "2026-10-03", [("overhead press", 3, 55)])]
+        api.recentSessions = [
+            recentSession("s2", day: "2026-10-05", [("squat", 3, 100)]),
+            recentSession("s1", day: "2026-10-03", [("overhead press", 3, 55)]),
+        ]
         let vm = makeViewModel(api)
         await vm.load()
 

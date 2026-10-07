@@ -347,6 +347,6 @@ final class LiftLoggerLogicTests: XCTestCase {
         let yesterday = calendar.date(byAdding: .day, value: -1, to: today)!
         XCTAssertEqual(LiftLoggerLogic.dateLabel(yesterday, today: today, calendar: calendar), "Yesterday")
         let older = calendar.date(byAdding: .day, value: -3, to: today)!
-        XCTAssertEqual(LiftLoggerLogic.dateLabel(older, today: today, calendar: calendar), "Sat, Oct 4")
+        XCTAssertEqual(LiftLoggerLogic.dateLabel(older, today: today, calendar: calendar), "Sun, Oct 4")
     }
 }
