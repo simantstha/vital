@@ -202,7 +202,7 @@ enum WeightHeroLogic {
 
     static func sparklineLayout(values: [Double], minSpan: Double, target: Double?) -> SparklineLayout? {
         guard let base = sparklineDomain(values: values, minSpan: minSpan) else { return nil }
-        guard let target, let lo = values.min(), let hi = values.max() else {
+        guard let target, target.isFinite, let lo = values.min(), let hi = values.max() else {
             return SparklineLayout(domain: base, targetLine: nil, targetCompressed: false)
         }
         if sparklineTargetVisible(values: values, minSpan: minSpan, target: target) {
@@ -217,7 +217,7 @@ enum WeightHeroLogic {
                 targetCompressed: true
             )
         }
-        precondition(target > hi)
+        guard target > hi, target.isFinite else { return SparklineLayout(domain: base, targetLine: nil, targetCompressed: false) }
         return SparklineLayout(
             domain: base.lowerBound...(base.upperBound + span * sparklineCompressedRoom),
             targetLine: base.upperBound + span * sparklineCompressedLineOffset,
