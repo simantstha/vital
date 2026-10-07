@@ -70,6 +70,19 @@ Next (wave 4):
 - [x] Tile zero-delta reads "at your normal"; fixtures consistent across screens (cross-screen tests).
 
 ### Open / next
-- [ ] New-user Today: getting-started checklist still sits below the fold (after metrics) — move it to the top for users without data.
+- [x] New-user Today: getting-started checklist first, incl. "Set your goal target".
 - [ ] Today hero sparkline target line hidden when target is far below data range (caption only) — consider a compressed axis.
-- [ ] Third persona review once screenshots are green on the final head.
+- [x] Third persona review (weight loss 5/5, muscle 4/5, PM 4/5) — blockers fixed in wave 6.
+
+### Wave 6 (from persona review pass 3) — shipped
+- [x] Log lift sheet: labelled Reps / Weight rows (steppers no longer overlap).
+- [x] Endurance weekly distance target (migration 0037): "17.2 of 30 km this week" on hero, goal card, sheet; one labelled volume definition ("last 2 weeks vs the 2 before").
+- [x] New users: one calibration count everywhere; empty weekly review hidden; "First review on Mon …".
+- [x] Coach + daily brief use the same lift-change definition as the cards; weekly review "Next week" never repeats "Slip".
+- [x] Goal pill states the outcome ("82 kg by ~Dec 6"); weight hero shows "→ Goal 76 kg"; HRV detail labels "30-day normal" vs range average.
+
+### Polish backlog (non-blocking)
+- [ ] Endurance Today goal line repeats the hero's km text — show the verdict reason instead.
+- [ ] Mic FAB overlaps the last card at rest (scrolls clear) — consider auto-hiding the FAB on scroll.
+- [ ] Today hero sparkline: compressed axis to draw the target line when it is far below the data.
+- [ ] Sign in with Apple token revocation on account deletion.
