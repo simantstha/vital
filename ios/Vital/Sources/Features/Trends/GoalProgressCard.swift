@@ -66,6 +66,33 @@ private struct GoalWeightBar: View {
     }
 }
 
+// MARK: - Weekly distance bar (endurance)
+
+/// This week's distance against the weekly target: a plain filled bar with the
+/// labelled 4-week average on the left and the target on the right. Only
+/// rendered when the server supplied a distance target AND a measured distance.
+private struct GoalDistanceBar: View {
+    let fraction: Double
+    let averageText: String?
+    let targetText: String
+    let tint: Color
+
+    var body: some View {
+        VStack(spacing: Theme.Spacing.xs) {
+            VitalProgressBar(fraction: fraction, tint: tint, height: 8)
+            HStack {
+                if let averageText { Text(averageText) }
+                Spacer()
+                Text(targetText)
+            }
+            .font(.system(size: 12))
+            .foregroundStyle(Theme.Colors.textTertiary)
+            .monospacedDigit()
+        }
+        .accessibilityHidden(true)
+    }
+}
+
 // MARK: - Reason row
 
 private struct GoalReasonRow: View {
@@ -125,7 +152,9 @@ struct GoalProgressCard: View {
                     .foregroundStyle(Theme.Colors.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)
                 Text(GoalProgressLogic.needsSessionTarget(progress)
-                     ? "Pick how many workouts a week you're aiming for and I'll tell you if you're keeping up."
+                     ? (progress.goal == "endurance"
+                        ? "Pick a weekly distance (or how many workouts a week) you're aiming for and I'll tell you if you're keeping up."
+                        : "Pick how many workouts a week you're aiming for and I'll tell you if you're keeping up.")
                      : "Pick where you want to land and I'll tell you if you're on pace.")
                     .font(.system(size: 14))
                     .foregroundStyle(Theme.Colors.textSecondary)
@@ -171,6 +200,8 @@ struct GoalProgressCard: View {
                         tint: Theme.Colors.accent,
                         height: 6
                     )
+                } else if let bar = distanceBar {
+                    bar
                 } else if let bar = weightBar {
                     bar
                 }
@@ -206,6 +237,17 @@ struct GoalProgressCard: View {
             fraction: fraction,
             startText: UnitFormat.weight(kg: start, system),
             targetText: UnitFormat.weight(kg: target, system),
+            tint: GoalProgressLogic.color(for: GoalProgressLogic.tone(for: progress.verdict) == .watch ? .watch : .good)
+        )
+    }
+
+    private var distanceBar: GoalDistanceBar? {
+        guard let fraction = GoalProgressLogic.distanceFraction(progress),
+              let target = progress.distance?.targetKm else { return nil }
+        return GoalDistanceBar(
+            fraction: fraction,
+            averageText: GoalProgressLogic.distanceAverageLine(progress, system: system),
+            targetText: UnitFormat.distance(km: target, system),
             tint: GoalProgressLogic.color(for: GoalProgressLogic.tone(for: progress.verdict) == .watch ? .watch : .good)
         )
     }
@@ -271,7 +313,9 @@ struct GoalProgressDetailView: View {
                         .accessibilityIdentifier("goalProgress.detail.primary")
                 }
 
-                if let bar = weightBar {
+                if let bar = distanceBar {
+                    bar
+                } else if let bar = weightBar {
                     bar
                 }
 
@@ -350,6 +394,17 @@ struct GoalProgressDetailView: View {
         )
     }
 
+    private var distanceBar: GoalDistanceBar? {
+        guard let fraction = GoalProgressLogic.distanceFraction(progress),
+              let target = progress.distance?.targetKm else { return nil }
+        return GoalDistanceBar(
+            fraction: fraction,
+            averageText: GoalProgressLogic.distanceAverageLine(progress, system: system),
+            targetText: UnitFormat.distance(km: target, system),
+            tint: GoalProgressLogic.color(for: GoalProgressLogic.tone(for: progress.verdict) == .watch ? .watch : .good)
+        )
+    }
+
     /// Label/value rows for whatever the response has — a row is simply
     /// omitted when its value is unknown (never "--" placeholders or zeros).
     private var statRows: [(label: String, value: String)] {
@@ -365,6 +420,15 @@ struct GoalProgressDetailView: View {
         }
         if let rate = GoalProgressLogic.rateText(progress, system: system) {
             rows.append(("Trend", rate))
+        }
+        if let distance = progress.distance {
+            rows.append(("Weekly distance goal", UnitFormat.distance(km: distance.targetKm, system)))
+            if let done = distance.thisWeekKm {
+                rows.append(("This week", UnitFormat.distance(km: done, system)))
+            }
+            if let avg = distance.avg4wKm {
+                rows.append(("4-week average", "\(UnitFormat.distance(km: avg, system))/week"))
+            }
         }
         if let sessions = progress.target.weeklySessions {
             rows.append(("Weekly sessions goal", "\(sessions)"))

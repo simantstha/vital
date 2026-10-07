@@ -524,3 +524,10 @@ test('toolResultSummary: set_goal_target renders weight in the user\'s unit', as
   assert.equal(toolResultSummary('set_goal_target', {}, result, 'imperial'), 'Goal set · 168 lb by 2026-12-25 4x/week');
   assert.equal(doneLabel('set_goal_target', {}), 'Set your goal');
 });
+
+test('toolResultSummary: set_goal_target renders weekly distance in the user\'s unit', async () => {
+  const { toolResultSummary } = await activityPromise;
+  const result = JSON.stringify({ ok: true, weeklyDistanceKmTarget: 32.2 });
+  assert.equal(toolResultSummary('set_goal_target', {}, result, 'metric'), 'Goal set · 32.2 km/week');
+  assert.equal(toolResultSummary('set_goal_target', {}, result, 'imperial'), 'Goal set · 20 mi/week');
+});

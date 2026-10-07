@@ -72,10 +72,10 @@ import {
   type SetInput,
 } from '@/lib/workoutRepository';
 import { getWeightReadings, logWeightEntry } from '@/lib/weightRepository';
-import { parseTargetWeightKg, parseTargetDate, parseWeeklySessionsTarget } from '@/lib/goalTarget';
+import { parseTargetWeightKg, parseTargetDate, parseWeeklySessionsTarget, parseWeeklyDistanceKmTarget } from '@/lib/goalTarget';
 import { localDayKey, pickTimeZone } from '@/lib/localDay';
 import { computeWeightTrend } from '@/lib/weightTrend';
-import { LB_PER_KG } from '@/lib/metricFormat';
+import { KM_PER_MILE, LB_PER_KG } from '@/lib/metricFormat';
 import { metricLabel, EVENT_TYPE_LABELS } from './toolLabels';
 
 // How recent a coach-logged meal (source = 'coach') must be for delete_meal to
@@ -417,7 +417,7 @@ export const BRAIN_TOOLS: Tool[] = [
     name: 'set_goal_target',
     description:
       'Set the user\'s goal targets (the same ones as Profile → Goal): target weight, target date, ' +
-      'and/or weekly training-session target. Use when the user states a target ("my goal is 76 kg by ' +
+      'weekly training-session target, and/or weekly distance target (endurance). Use when the user states a target ("my goal is 76 kg by ' +
       'Christmas", "I want to train 4 times a week"). Pass ONLY the fields they gave; omitted fields ' +
       'are left untouched. Resolve relative dates ("by Christmas") to a YYYY-MM-DD in the future using ' +
       'the current local date from context. Never invent a target the user did not state.',
@@ -439,6 +439,14 @@ export const BRAIN_TOOLS: Tool[] = [
         weeklySessions: {
           type: 'number',
           description: 'Training sessions per week, an integer 1–14.',
+        },
+        weeklyDistance: {
+          type: 'number',
+          description: 'Weekly distance target for endurance goals, in the unit given by `distanceUnit` (1–300 km).',
+        },
+        distanceUnit: {
+          type: 'string',
+          description: 'Unit of weeklyDistance: "km" or "mi". Defaults to the user\'s display unit (mi for imperial, km otherwise).',
         },
       },
       required: [],
@@ -1937,8 +1945,9 @@ export async function executeToolCall(
     const hasWeight = input.targetWeight != null;
     const hasDate = input.targetDate != null;
     const hasSessions = input.weeklySessions != null;
-    if (!hasWeight && !hasDate && !hasSessions) {
-      return 'Error: provide at least one of targetWeight, targetDate or weeklySessions.';
+    const hasDistance = input.weeklyDistance != null;
+    if (!hasWeight && !hasDate && !hasSessions && !hasDistance) {
+      return 'Error: provide at least one of targetWeight, targetDate, weeklySessions or weeklyDistance.';
     }
 
     const [row] = await db
@@ -1975,6 +1984,15 @@ export async function executeToolCall(
       if (!r.ok) return `Error: ${r.error}`;
       update.weekly_sessions_target = r.value;
     }
+    if (hasDistance) {
+      const raw = Number(input.weeklyDistance);
+      if (!Number.isFinite(raw)) return 'Error: weeklyDistance must be a number.';
+      const rawUnit = input.distanceUnit != null ? String(input.distanceUnit).toLowerCase() : (units === 'imperial' ? 'mi' : 'km');
+      if (rawUnit !== 'km' && rawUnit !== 'mi' && rawUnit !== 'miles') return 'Error: distanceUnit must be "km" or "mi".';
+      const r = parseWeeklyDistanceKmTarget(rawUnit === 'km' ? raw : raw * KM_PER_MILE);
+      if (!r.ok) return `Error: ${r.error}`;
+      update.weekly_distance_km_target = r.value;
+    }
 
     let reanchored = false;
     if (update.target_weight_kg != null && row?.target_weight_kg !== update.target_weight_kg) {
@@ -1992,6 +2010,7 @@ export async function executeToolCall(
       ...(update.target_weight_kg != null ? { targetWeightKg: update.target_weight_kg } : {}),
       ...(update.target_date != null ? { targetDate: update.target_date } : {}),
       ...(update.weekly_sessions_target != null ? { weeklySessionsTarget: update.weekly_sessions_target } : {}),
+      ...(update.weekly_distance_km_target != null ? { weeklyDistanceKmTarget: update.weekly_distance_km_target } : {}),
       unitSystem: units,
       reanchored,
     });

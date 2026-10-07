@@ -95,6 +95,7 @@ export async function loadGoalProgress(
     .map(w => ({
       day: w.date,
       durationMin: typeof w.durationMin === 'number' && Number.isFinite(w.durationMin) ? w.durationMin : null,
+      distanceKm: typeof w.distanceM === 'number' && Number.isFinite(w.distanceM) ? w.distanceM / 1000 : null,
     }));
 
   return computeGoalProgress({
@@ -104,6 +105,7 @@ export async function loadGoalProgress(
       weightKg: user.target_weight_kg ?? null,
       date: user.target_date ?? null,
       weeklySessions: user.weekly_sessions_target ?? null,
+      weeklyDistanceKm: user.weekly_distance_km_target ?? null,
     },
     start: {
       weightKg: user.goal_start_weight_kg ?? null,

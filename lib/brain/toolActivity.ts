@@ -14,7 +14,7 @@
  */
 
 import type { UnitSystem } from '../units';
-import { formatMinutes, formatWeight, LB_PER_KG, roundTo } from '../metricFormat';
+import { formatMinutes, formatWeight, KM_PER_MILE, LB_PER_KG, roundTo } from '../metricFormat';
 import { METRIC_CATALOG, toDisplay } from '../metricCatalog';
 import { metricLabel, EVENT_TYPE_LABELS } from './toolLabels';
 
@@ -387,6 +387,13 @@ export function toolResultSummary(
       if (typeof parsed.targetDate === 'string') bits.push(`by ${parsed.targetDate}`);
       const sessions = num(parsed.weeklySessionsTarget);
       if (sessions != null) bits.push(`${sessions}x/week`);
+      const distKm = num(parsed.weeklyDistanceKmTarget);
+      if (distKm != null) {
+        const d = unitSystem === 'imperial'
+          ? `${roundTo(distKm / KM_PER_MILE, 1)} mi`
+          : `${roundTo(distKm, 1)} km`;
+        bits.push(`${d}/week`);
+      }
       return bits.length ? truncate(`Goal set · ${bits.join(' ')}`) : undefined;
     }
 

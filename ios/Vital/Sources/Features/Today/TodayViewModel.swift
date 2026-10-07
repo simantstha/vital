@@ -448,12 +448,25 @@ final class TodayViewModel: ObservableObject {
         )
     }
 
+    /// "24.5 of 30 km this week" + bar fraction for the endurance hero — the
+    /// SAME text the goal card/sheet show (`GoalProgressLogic.distanceLine`),
+    /// from `/api/goal/progress`. `nil` without a weekly distance target or a
+    /// measured distance.
+    var enduranceDistanceProgress: (text: String, fraction: Double)? {
+        guard let goalProgress,
+              let text = GoalProgressLogic.distanceLine(goalProgress, system: UnitPreference.shared.current),
+              let fraction = GoalProgressLogic.distanceFraction(goalProgress) else { return nil }
+        return (text, fraction)
+    }
+
     /// Combined "3 sessions · 24.5 km this week" line for the endurance hero.
-    /// Returns `nil` when neither sessions nor volume data is available.
+    /// Returns `nil` when neither sessions nor volume data is available. With a
+    /// distance target the km live in `enduranceDistanceProgress`'s
+    /// "24.5 of 30 km this week" line instead, so this drops to sessions only.
     var enduranceWeeklyOverviewText: String? {
         guard let week = trainingSummary?.week else { return nil }
         let sessionsCompleted = week.completedSessions
-        let kmDone = trainingSummary?.volume.done
+        let kmDone = enduranceDistanceProgress == nil ? trainingSummary?.volume.done : nil
         return EnduranceHeroLogic.weeklySessionsAndVolumeText(
             sessionsCompleted: sessionsCompleted,
             kmDone: kmDone,

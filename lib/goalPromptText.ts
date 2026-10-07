@@ -9,7 +9,7 @@
 
 import type { GoalKind, GoalProgress } from './goalProgress';
 import type { ProgressionSummary } from './workoutRepository';
-import { LB_PER_KG } from './metricFormat';
+import { KM_PER_MILE, LB_PER_KG } from './metricFormat';
 import type { UnitSystem } from './units';
 
 const GOAL_LABELS: Record<GoalKind, string> = {
@@ -42,6 +42,11 @@ export function formatGoalProgressLines(gp: GoalProgress, units: UnitSystem): st
   if (gp.target.weightKg != null) targetBits.push(`target ${wt(gp.target.weightKg, units)}`);
   if (gp.target.date) targetBits.push(`by ${gp.target.date}`);
   if (gp.target.weeklySessions != null) targetBits.push(`${gp.target.weeklySessions} sessions/week`);
+  if (gp.target.weeklyDistanceKm != null) {
+    targetBits.push(units === 'imperial'
+      ? `${(gp.target.weeklyDistanceKm / KM_PER_MILE).toFixed(1)} mi/week`
+      : `${gp.target.weeklyDistanceKm.toFixed(1)} km/week`);
+  }
   const hasTarget = targetBits.length > 0;
   lines.push(`- Goal: ${GOAL_LABELS[gp.goal]}; ${hasTarget ? targetBits.join(', ') : 'no target set'}`);
 
@@ -56,6 +61,7 @@ export function formatGoalProgressLines(gp: GoalProgress, units: UnitSystem): st
     const pct = gp.ratePerWeek.pctBodyweight != null ? ` (${gp.ratePerWeek.pctBodyweight}% bw)` : '';
     nowBits.push(`rate ${signedWt(gp.ratePerWeek.kg, units, 2)}/wk${pct}`);
   }
+  if (gp.distance?.thisWeekKm != null) nowBits.push(gp.distance.text);
   if (gp.eta) nowBits.push(`ETA ${gp.eta}`);
   if (gp.onPaceForTargetDate != null) nowBits.push(gp.onPaceForTargetDate ? 'on pace for target date' : 'not on pace for target date');
   if (nowBits.length) lines.push(`- Now: ${nowBits.join('; ')}`);

@@ -140,13 +140,14 @@ struct GoalDetailView: View {
         }
     }
 
-    // ── Targets (target weight / date / workouts per week) ───────────────────
+    // ── Targets (target weight / date / workouts per week / weekly distance) ──
 
     @ViewBuilder
     private var targetsCard: some View {
         let showWeight = GoalTargetLogic.showsTargetWeight(goal: vm.goal)
         let showSessions = GoalTargetLogic.showsWeeklySessions(goal: vm.goal)
-        if showWeight || showSessions {
+        let showDistance = GoalTargetLogic.showsWeeklyDistance(goal: vm.goal)
+        if showWeight || showSessions || showDistance {
             VitalCard(padding: Theme.Spacing.lg, cornerRadius: Theme.Radius.md) {
                 VStack(alignment: .leading, spacing: Theme.Spacing.md) {
                     Text("TARGETS")
@@ -163,6 +164,9 @@ struct GoalDetailView: View {
                     if showWeight {
                         targetWeightRow
                         targetDateRow
+                    }
+                    if showDistance {
+                        weeklyDistanceRow
                     }
                     if showSessions {
                         weeklySessionsRow
@@ -258,6 +262,36 @@ struct GoalDetailView: View {
                 .datePickerStyle(.compact)
                 .labelsHidden()
                 .tint(Theme.Colors.accentContent)
+            }
+        }
+    }
+
+    /// Endurance: the measurable weekly target the goal card tracks
+    /// ("24.5 of 30 km this week"). Unit-aware; empty = no distance target.
+    private var weeklyDistanceRow: some View {
+        let units = UnitPreference.shared.current
+        return VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+            HStack {
+                Text("Weekly distance")
+                    .font(Theme.Typography.bodyMedium)
+                    .foregroundStyle(Theme.Colors.textPrimary)
+                Spacer()
+                TextField("None", text: $targets.weeklyDistanceText)
+                    .keyboardType(.decimalPad)
+                    .multilineTextAlignment(.trailing)
+                    .focused($weightFieldFocused)
+                    .font(Theme.Typography.bodyMedium)
+                    .foregroundStyle(Theme.Colors.textPrimary)
+                    .frame(width: 90)
+                    .accessibilityIdentifier("goal.weeklyDistanceField")
+                Text("\(units.distanceUnit)/week")
+                    .font(Theme.Typography.bodySmall)
+                    .foregroundStyle(Theme.Colors.textSecondary)
+            }
+            if let error = targets.distanceError {
+                Text(error)
+                    .font(Theme.Typography.bodySmall)
+                    .foregroundStyle(Theme.Colors.alert)
             }
         }
     }

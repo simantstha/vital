@@ -447,6 +447,8 @@ private struct GoalStepView: View {
     /// Display-unit draft for the optional target weight; committed to
     /// `vm.targetWeightKg` (kg) on every edit, cleared when the goal changes.
     @State private var targetWeightText = ""
+    /// Same for the optional endurance weekly distance (display unit; committed as km).
+    @State private var weeklyDistanceText = ""
 
     private let goals: [(value: String, label: String)] = [
         ("lose_fat", "Lose fat"),
@@ -474,6 +476,22 @@ private struct GoalStepView: View {
 
                 if GoalTargetLogic.showsTargetWeight(goal: vm.goal) {
                     targetWeightSection
+                }
+
+                if GoalTargetLogic.showsWeeklyDistance(goal: vm.goal) {
+                    FieldLabel(title: "Weekly distance (\(vm.units.distanceUnit), optional)") {
+                        TextField(vm.units.distanceUnit, text: $weeklyDistanceText)
+                            .keyboardType(.decimalPad)
+                            .font(Theme.Typography.bodyLarge)
+                            .foregroundStyle(Theme.Colors.textPrimary)
+                            .onboardingFieldSurface()
+                            .accessibilityIdentifier("onboarding.weeklyDistanceField")
+                            .onChange(of: weeklyDistanceText) {
+                                vm.weeklyDistanceKmTarget = weeklyDistanceText.isEmpty
+                                    ? nil
+                                    : UnitFormat.km(fromDistanceEntry: weeklyDistanceText, vm.units)
+                            }
+                    }
                 }
 
                 if GoalTargetLogic.showsWeeklySessions(goal: vm.goal) {
@@ -507,10 +525,15 @@ private struct GoalStepView: View {
             // The step is rebuilt when navigating back to it; re-seed the
             // draft from the canonical kg value.
             targetWeightText = UnitFormat.weightEntryText(kg: vm.targetWeightKg, vm.units)
+            weeklyDistanceText = UnitFormat.distanceEntryText(km: vm.weeklyDistanceKmTarget, vm.units)
         }
-        .onChange(of: vm.goal) { targetWeightText = "" }
+        .onChange(of: vm.goal) {
+            targetWeightText = ""
+            weeklyDistanceText = ""
+        }
         .onChange(of: vm.units) {
             targetWeightText = UnitFormat.weightEntryText(kg: vm.targetWeightKg, vm.units)
+            weeklyDistanceText = UnitFormat.distanceEntryText(km: vm.weeklyDistanceKmTarget, vm.units)
         }
     }
 

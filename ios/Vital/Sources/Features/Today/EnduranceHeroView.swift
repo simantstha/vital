@@ -22,6 +22,10 @@ struct EnduranceHeroView: View {
     /// Combined "3 sessions · 24.5 km this week" line — combines both
     /// sessions and weekly volume into one display. `nil` hides the line.
     var weeklyOverviewText: String? = nil
+    /// "24.5 of 30 km this week" + bar fraction (0...1) — only when the user
+    /// has a weekly distance target and a measured distance (the same text the
+    /// goal card/sheet shows). `nil` hides the bar.
+    var distanceProgress: (text: String, fraction: Double)? = nil
 
     /// "Your body says recover — swap to an easy 30 min or rest?" — shown
     /// under a hard planned session when readiness says to back off. `nil`
@@ -70,7 +74,7 @@ struct EnduranceHeroView: View {
                     .accessibilityIdentifier("today.enduranceHero.reconcile")
                 }
 
-                if sessionDots != nil || weeklyOverviewText != nil {
+                if sessionDots != nil || weeklyOverviewText != nil || distanceProgress != nil {
                     weekRow
                         .transition(.opacity)
                 }
@@ -83,15 +87,25 @@ struct EnduranceHeroView: View {
     /// Dot row (if plan data exists) or combined overview line.
     @ViewBuilder
     private var weekRow: some View {
-        HStack(spacing: Theme.Spacing.sm) {
-            if let sessionDots {
-                SessionDotsRow(done: sessionDots.done, total: sessionDots.total)
-            }
-            if let weeklyOverviewText {
-                Text(weeklyOverviewText)
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.Colors.textTertiary)
+        VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+            if let distanceProgress {
+                Text(distanceProgress.text)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Theme.Colors.textPrimary)
                     .monospacedDigit()
+                    .accessibilityIdentifier("today.enduranceHero.distanceText")
+                VitalProgressBar(fraction: distanceProgress.fraction, tint: Theme.Colors.accent, height: 6)
+            }
+            HStack(spacing: Theme.Spacing.sm) {
+                if let sessionDots {
+                    SessionDotsRow(done: sessionDots.done, total: sessionDots.total)
+                }
+                if let weeklyOverviewText {
+                    Text(weeklyOverviewText)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.Colors.textTertiary)
+                        .monospacedDigit()
+                }
             }
         }
         .accessibilityIdentifier("today.enduranceHero.weekRow")
@@ -129,6 +143,7 @@ struct EnduranceHeroView: View {
         if calibratingText == nil, let reasonLine { parts.append(reasonLine) }
         parts.append(session?.title ?? EnduranceHeroLogic.restDayText)
         if let reconciliationText { parts.append(reconciliationText) }
+        if let distanceProgress { parts.append(distanceProgress.text) }
         if let weeklyOverviewText { parts.append(weeklyOverviewText) }
         return parts.joined(separator: ". ")
     }

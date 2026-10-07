@@ -23,8 +23,12 @@
  *    with >= 3 weigh-ins over >= 7 days and a rate in the right direction.
  *  - muscle — lift e1RM progression (top 3 lifts), weight gain band
  *    0.1–0.5 %bw/wk, sessions/week vs target, protein-target days.
- *  - endurance — training-volume trend, sessions/week vs target, resting HR /
- *    HRV direction. Verdict building/holding.
+ *  - endurance — with a weekly distance target: this week's distance vs target
+ *    (primary progress), 4-week average vs target for the verdict
+ *    (building/holding/behind), no ETA. Otherwise training-volume trend,
+ *    sessions/week vs target, resting HR / HRV direction (building/holding).
+ *    Volume change is ONE definition everywhere: last 2 weeks vs the 2 before
+ *    (ENDURANCE_VOLUME_WINDOW_LABEL), always labelled.
  *  - general — consistency: active days, sleep-goal nights, logging days.
  */
 
@@ -41,6 +45,7 @@ import {
 import type { ProgressionSummary } from './workoutRepository';
 import { liftChange4w } from './liftChange';
 import { weekStartKeyForDay } from './localDay';
+import { KM_PER_MILE } from './metricFormat';
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
@@ -100,6 +105,18 @@ export type GoalVerdict =
 
 export type ReasonTone = 'good' | 'watch' | 'neutral';
 
+export interface GoalDistanceProgress {
+  targetKm: number;
+  /** Distance this local calendar week (Mon–today); null when no workout in the last 28 days carries a distance. */
+  thisWeekKm: number | null;
+  /** Mean weekly distance over the trailing 28 days; null without distance data. */
+  avg4wKm: number | null;
+  /** Local Monday of the week thisWeekKm covers. */
+  weekStart: string;
+  /** e.g. "24.5 of 30 km this week" (mi for imperial users). */
+  text: string;
+}
+
 export interface GoalProgressReason {
   kind: string;
   text: string;
@@ -108,7 +125,9 @@ export interface GoalProgressReason {
 
 export interface GoalProgress {
   goal: GoalKind;
-  target: { weightKg: number | null; date: string | null; weeklySessions: number | null };
+  target: { weightKg: number | null; date: string | null; weeklySessions: number | null; weeklyDistanceKm: number | null };
+  /** Endurance with a weekly distance target only; null otherwise. Distances in km, `text` is unit-aware. */
+  distance: GoalDistanceProgress | null;
   current: {
     weightKg: number | null;
     startWeightKg: number | null;
@@ -152,7 +171,7 @@ export interface GoalProgressInput {
   goal: GoalKind;
   /** User-local today, YYYY-MM-DD. */
   todayKey: string;
-  target: { weightKg: number | null; date: string | null; weeklySessions: number | null };
+  target: { weightKg: number | null; date: string | null; weeklySessions: number | null; weeklyDistanceKm?: number | null };
   start: { weightKg: number | null; startedAt: string | null };
   /** Raw weigh-ins; ~90 days gives the EWMA run-in room. */
   weightReadings: WeightReading[];
@@ -163,7 +182,7 @@ export interface GoalProgressInput {
   /** Distinct local days with a completed session (logged strength set or real HealthKit workout), trailing 28 days. */
   trainingDays: string[];
   /** HealthKit workouts, trailing 28 days (durationMin null when unknown). */
-  workouts: Array<{ day: string; durationMin: number | null }>;
+  workouts: Array<{ day: string; durationMin: number | null; distanceKm?: number | null }>;
   restingHr: DayValue[];
   hrv: DayValue[];
   sleepMinutes: DayValue[];
@@ -731,22 +750,95 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock): Outcome {
   };
 }
 
+/**
+ * The ONE endurance volume-change definition used by goal reasons, the goal
+ * headline and the Today hero: mean weekly volume over the last 2 weeks vs the
+ * 2 weeks before. (The weekly review answers a different, explicitly labelled
+ * question — "vs last week" — for its one-week window.)
+ */
+export const ENDURANCE_VOLUME_WINDOW_LABEL = 'last 2 weeks vs the 2 before';
+
+/** 4-week average distance vs target below this fraction reads as 'behind'. */
+const DISTANCE_BEHIND_FRACTION = 0.8;
+
+function distanceNum(input: GoalProgressInput, km: number): number {
+  return input.unitSystem === 'imperial' ? round1(km / KM_PER_MILE) : round1(km);
+}
+
+/** "24.5 km" / "15.2 mi". */
+function fmtDistance(input: GoalProgressInput, km: number): string {
+  return `${distanceNum(input, km)} ${input.unitSystem === 'imperial' ? 'mi' : 'km'}`;
+}
+
+/** Weekly distance volume (km) for the week `offset` weeks back (0 = trailing 7 days). */
+function distanceInWeek(input: GoalProgressInput, offset: number): { km: number; readings: number } {
+  let km = 0;
+  let readings = 0;
+  for (const w of input.workouts) {
+    if (w.distanceKm == null || !Number.isFinite(w.distanceKm)) continue;
+    const age = dayNumber(input.todayKey) - dayNumber(w.day);
+    if (age >= offset * 7 && age < offset * 7 + 7) {
+      km += w.distanceKm;
+      readings += 1;
+    }
+  }
+  return { km, readings };
+}
+
+/** This calendar week's (Mon–today, user-local) distance; null when no workout in the window carries a distance. */
+function distanceProgress(input: GoalProgressInput): GoalDistanceProgress | null {
+  const targetKm = input.target.weeklyDistanceKm;
+  if (targetKm == null) return null;
+  const start = weekStart(input.todayKey);
+  let weekKm = 0;
+  let total28 = 0;
+  let readings = 0;
+  for (const w of input.workouts) {
+    if (w.distanceKm == null || !Number.isFinite(w.distanceKm)) continue;
+    const age = dayNumber(input.todayKey) - dayNumber(w.day);
+    if (age < 0 || age >= 28) continue;
+    readings += 1;
+    total28 += w.distanceKm;
+    if (w.day >= start && w.day <= input.todayKey) weekKm += w.distanceKm;
+  }
+  const hasData = readings > 0;
+  return {
+    targetKm,
+    thisWeekKm: hasData ? round1(weekKm) : null,
+    avg4wKm: hasData ? round1(total28 / 4) : null,
+    weekStart: start,
+    text: hasData
+      ? `${distanceNum(input, weekKm)} of ${fmtDistance(input, targetKm)} this week`
+      : `0 of ${fmtDistance(input, targetKm)} this week`,
+  };
+}
+
 function enduranceOutcome(input: GoalProgressInput): Outcome {
-  if (input.target.weeklySessions == null) {
-    return { verdict: 'needs_target', headline: 'Set a weekly session goal to track your training', reasons: [] };
+  const distanceTarget = input.target.weeklyDistanceKm;
+  if (input.target.weeklySessions == null && distanceTarget == null) {
+    return { verdict: 'needs_target', headline: 'Set a weekly distance or session goal to track your training', reasons: [] };
   }
 
   const { count, perWeek } = sessionsPerWeek(input);
+  const dist = distanceProgress(input);
   const sessions = weekSessionsReason(input) ?? sessionsReason(input);
+  const distanceWeekReason: GoalProgressReason | null = dist != null && dist.thisWeekKm != null
+    ? {
+        kind: 'week_distance',
+        text: dist.text,
+        tone: dist.thisWeekKm >= dist.targetKm ? 'good' : 'neutral',
+      }
+    : null;
   if (count < MIN_SESSIONS_FOR_ENDURANCE) {
     return {
       verdict: 'insufficient_data',
       headline: 'Log a few more sessions to see your training trend',
-      reasons: capReasons([sessions]),
+      reasons: capReasons([distanceWeekReason, sessions]),
     };
   }
 
-  // Volume: weekly minutes when durations exist, else sessions per week.
+  // Volume: weekly distance when a distance target exists (and distances were
+  // recorded), else weekly minutes when durations exist, else sessions/week.
   const wk = (offset: number) => {
     const days = new Set<string>();
     let minutes = 0;
@@ -758,39 +850,48 @@ function enduranceOutcome(input: GoalProgressInput): Outcome {
       const age = dayNumber(input.todayKey) - dayNumber(d);
       if (age >= offset * 7 && age < offset * 7 + 7) days.add(d);
     }
-    return { minutes, sessions: days.size };
+    return { minutes, sessions: days.size, km: distanceInWeek(input, offset).km };
   };
   const weeks = [wk(0), wk(1), wk(2), wk(3)];
-  const useMinutes = weeks.reduce((s, x) => s + x.minutes, 0) > 0;
-  const metric = (x: { minutes: number; sessions: number }) => (useMinutes ? x.minutes : x.sessions);
+  const useKm = distanceTarget != null && weeks.reduce((s, x) => s + x.km, 0) > 0;
+  const useMinutes = !useKm && weeks.reduce((s, x) => s + x.minutes, 0) > 0;
+  const metric = (x: { minutes: number; sessions: number; km: number }) => (useKm ? x.km : useMinutes ? x.minutes : x.sessions);
   const recent = metric(weeks[0]) + metric(weeks[1]);
   const prior = metric(weeks[2]) + metric(weeks[3]);
   const changePct = prior > 0 ? ((recent - prior) / prior) * 100 : null;
-  const unit = useMinutes ? 'min' : 'sessions';
+  const noun = useKm ? 'distance' : useMinutes ? 'time' : 'sessions';
+  const perWeekText = (v: number): string => (useKm ? fmtDistance(input, v) : `${round1(v)} ${useMinutes ? 'min' : 'sessions'}`);
   const volumeReason: GoalProgressReason | null = prior > 0 || recent > 0
     ? {
         kind: 'volume',
         text: changePct != null
-          ? `Weekly training ${useMinutes ? 'time' : 'sessions'} ${changePct >= 0 ? 'up' : 'down'} ${Math.round(Math.abs(changePct))}% (${round1(prior / 2)} → ${round1(recent / 2)} ${unit} a week, last 2 weeks vs the 2 before)`
-          : `Training ${useMinutes ? 'time' : 'sessions'} restarted: ${round1(recent / 2)} ${unit} a week over the last 2 weeks after none before`,
+          ? `Weekly training ${noun} ${changePct >= 0 ? 'up' : 'down'} ${Math.round(Math.abs(changePct))}% (${perWeekText(prior / 2)} → ${perWeekText(recent / 2)} a week, ${ENDURANCE_VOLUME_WINDOW_LABEL})`
+          : `Training ${noun} restarted: ${perWeekText(recent / 2)} a week over the last 2 weeks after none before`,
         tone: changePct == null || changePct >= ENDURANCE_BUILDING_PCT ? 'good' : changePct <= -15 ? 'watch' : 'neutral',
       }
     : null;
 
-  const reasons = capReasons([sessions, volumeReason, restingHrReason(input), hrvReason(input)]);
+  const reasons = capReasons([distanceWeekReason, sessions, volumeReason, restingHrReason(input), hrvReason(input)]);
+  const building = (prior === 0 && recent > 0) || (changePct != null && changePct >= ENDURANCE_BUILDING_PCT);
+  const buildingHeadline = changePct != null
+    ? clip(`Building — ${useKm ? 'distance' : useMinutes ? 'time' : 'sessions'} up ${Math.round(changePct)}% (${ENDURANCE_VOLUME_WINDOW_LABEL})`)
+    : 'Building — you are back to regular training';
 
-  if ((prior === 0 && recent > 0) || (changePct != null && changePct >= ENDURANCE_BUILDING_PCT)) {
-    return {
-      verdict: 'building',
-      headline: changePct != null
-        ? clip(`Building — training ${useMinutes ? 'time' : 'sessions'} up ${Math.round(changePct)}% over 4 weeks`)
-        : 'Building — you are back to regular training',
-      reasons,
-    };
+  // Distance target: judge the 4-week average against it.
+  if (dist != null && dist.avg4wKm != null) {
+    if (building) return { verdict: 'building', headline: buildingHeadline, reasons };
+    const avgText = `averaging ${distanceNum(input, dist.avg4wKm)} of ${fmtDistance(input, dist.targetKm)} a week`;
+    if (dist.avg4wKm < dist.targetKm * DISTANCE_BEHIND_FRACTION) {
+      return { verdict: 'behind', headline: clip(`Behind — ${avgText} (4-week avg)`), reasons };
+    }
+    return { verdict: 'holding', headline: clip(`Holding steady — ${avgText} (4-week avg)`), reasons };
   }
+
+  if (building) return { verdict: 'building', headline: buildingHeadline, reasons };
+  const target = input.target.weeklySessions;
   return {
     verdict: 'holding',
-    headline: clip(`Holding steady — ${perWeek} sessions a week vs a target of ${input.target.weeklySessions}`),
+    headline: clip(`Holding steady — ${perWeek} sessions a week${target != null ? ` vs a target of ${target}` : ''}`),
     reasons,
   };
 }
@@ -892,7 +993,8 @@ export function computeGoalProgress(input: GoalProgressInput): GoalProgress {
 
   return {
     goal: input.goal,
-    target: { ...input.target },
+    target: { ...input.target, weeklyDistanceKm: input.target.weeklyDistanceKm ?? null },
+    distance: input.goal === 'endurance' ? distanceProgress(input) : null,
     current: {
       weightKg: w.currentKg != null ? round1(w.currentKg) : null,
       startWeightKg: startKg,

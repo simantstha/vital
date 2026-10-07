@@ -2,7 +2,7 @@ import Foundation
 
 /// Pure helpers shared by the onboarding Goal step and Profile → Goal editor:
 /// which target fields a goal shows, validation matching the backend
-/// (lib/goalTarget.ts: 30–300 kg, 1–14 sessions/week), and the "healthy
+/// (lib/goalTarget.ts: 30–300 kg, 1–14 sessions/week, 1–300 km/week), and the "healthy
 /// pace" estimate. No SwiftUI, no networking — unit-tested directly.
 enum GoalTargetLogic {
 
@@ -12,6 +12,8 @@ enum GoalTargetLogic {
     static let maxTargetKg = 300.0
     static let minWeeklySessions = 1
     static let maxWeeklySessions = 14
+    static let minWeeklyDistanceKm = 1.0
+    static let maxWeeklyDistanceKm = 300.0
 
     /// A commonly recommended sustainable loss rate.
     static let healthyKgPerWeek = 0.5
@@ -32,6 +34,12 @@ enum GoalTargetLogic {
         ["build_muscle", "muscle", "improve_endurance", "endurance"].contains(goal)
     }
 
+    /// Endurance goals get an optional weekly distance target (km on the wire,
+    /// shown in the user's unit) — the measurable target the goal card tracks.
+    static func showsWeeklyDistance(goal: String) -> Bool {
+        ["improve_endurance", "endurance"].contains(goal)
+    }
+
     static func isLossGoal(_ goal: String) -> Bool {
         goal == "lose_fat" || goal == "weight_loss"
     }
@@ -46,6 +54,12 @@ enum GoalTargetLogic {
     static func validTargetKg(_ kg: Double?) -> Double? {
         guard let kg, kg.isFinite, kg >= minTargetKg, kg <= maxTargetKg else { return nil }
         return (kg * 10).rounded() / 10
+    }
+
+    /// Weekly distance in km rounded to 0.1, or nil when outside the backend's 1–300 range.
+    static func validWeeklyDistanceKm(_ km: Double?) -> Double? {
+        guard let km, km.isFinite, km >= minWeeklyDistanceKm, km <= maxWeeklyDistanceKm else { return nil }
+        return (km * 10).rounded() / 10
     }
 
     static func clampSessions(_ n: Int) -> Int {

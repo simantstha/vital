@@ -388,10 +388,11 @@ test('muscle with a session target but no lifts and no weight data → insuffici
 
 // ── Endurance ───────────────────────────────────────────────────────────────
 
-test('endurance without a weekly-sessions target → needs_target', () => {
+test('endurance with neither a sessions nor a distance target → needs_target', () => {
   const p = computeGoalProgress(base({ goal: 'endurance' }));
   assert.equal(p.verdict, 'needs_target');
-  assert.match(p.headline, /weekly session goal/);
+  assert.match(p.headline, /weekly distance or session goal/);
+  assert.equal(p.distance, null);
 });
 
 test('endurance with under 3 sessions in 28 days → insufficient_data', () => {
@@ -428,7 +429,7 @@ test('endurance: recent 2 weeks well above the 2 before → building, with volum
   const hrv = Array.from({ length: 28 }, (_, i) => ({ day: addDays(TODAY, -i), value: i < 14 ? 70 : 60 }));
   const p = computeGoalProgress(enduranceInput([4, 3, 2, 2], { restingHr, hrv }));
   assert.equal(p.verdict, 'building');
-  assert.match(p.headline, /^Building — training time up \d+% over 4 weeks/);
+  assert.match(p.headline, /^Building — time up \d+% \(last 2 weeks vs the 2 before\)/);
   assert.equal(p.reasons.length, 3);
   const kinds = p.reasons.map(r => r.kind);
   assert.deepEqual(kinds, ['week_sessions', 'volume', 'resting_hr']);
@@ -497,7 +498,7 @@ test('general: consistent habits → holding', () => {
 test('output has exactly the documented top-level keys', () => {
   const p = computeGoalProgress(base());
   assert.deepEqual(Object.keys(p).sort(), [
-    'current', 'dataSufficiency', 'eta', 'goal', 'headline', 'onPaceForTargetDate',
+    'current', 'dataSufficiency', 'distance', 'eta', 'goal', 'headline', 'onPaceForTargetDate',
     'ratePerWeek', 'reasons', 'safeBand', 'target', 'verdict',
   ]);
   assert.deepEqual(Object.keys(p.current).sort(), ['changeKg', 'progressPct', 'startWeightKg', 'weightKg']);
@@ -547,4 +548,80 @@ test('imperial lift reasons and headline are formatted in lb', () => {
   assert.match(p.headline, /Bench Press est\. 1RM up 11 lb/);
   const lift = p.reasons.find(r => r.kind === 'lift');
   assert.match(lift!.text, /\+11 lb vs 4 weeks ago \(220\.5 → 231\.5 lb\)/);
+});
+
+// ── Endurance with a weekly distance target ─────────────────────────────────
+
+/** Workouts with distances: `kmByDaysAgo` maps days-ago → km. */
+function distanceInput(kmByDaysAgo: Record<number, number>, over: Partial<GoalProgressInput> = {}): GoalProgressInput {
+  const workouts = Object.entries(kmByDaysAgo).map(([ago, km]) => ({ day: addDays(TODAY, -Number(ago)), durationMin: 50, distanceKm: km }));
+  return base({
+    goal: 'endurance',
+    target: { weightKg: null, date: null, weeklySessions: null, weeklyDistanceKm: 30 },
+    trainingDays: workouts.map(w => w.day),
+    workouts,
+    ...over,
+  });
+}
+
+test('endurance distance target alone (no sessions target) is a valid target, not needs_target', () => {
+  const p = computeGoalProgress(distanceInput({ 1: 8, 3: 10, 9: 12, 12: 9 }));
+  assert.notEqual(p.verdict, 'needs_target');
+  assert.equal(p.target.weeklyDistanceKm, 30);
+});
+
+test('endurance distance: this week (Mon-today, Tue) is the primary progress; ETA is not applicable', () => {
+  // TODAY is Tuesday 2026-10-06: Monday 10-05 (1 day ago) + today count; 10-03 (3 days ago) is last week.
+  const p = computeGoalProgress(distanceInput({ 0: 3.5, 1: 5, 3: 10, 9: 12, 16: 9, 23: 10 }));
+  assert.ok(p.distance);
+  assert.equal(p.distance!.weekStart, '2026-10-05');
+  assert.equal(p.distance!.thisWeekKm, 8.5);
+  assert.equal(p.distance!.text, '8.5 of 30 km this week');
+  assert.equal(p.reasons[0].kind, 'week_distance');
+  assert.equal(p.eta, null);
+  assert.equal(p.onPaceForTargetDate, null);
+  assertWellFormed(p);
+});
+
+test('endurance distance: 4-week average well under target and flat → behind', () => {
+  const p = computeGoalProgress(distanceInput({ 1: 6, 4: 6, 8: 6, 11: 6, 15: 6, 18: 6, 22: 6, 25: 6 }));
+  assert.equal(p.verdict, 'behind');
+  assert.match(p.headline, /Behind — averaging 12 of 30 km a week \(4-week avg\)/);
+  assertWellFormed(p);
+});
+
+test('endurance distance: average at/above target and steady → holding', () => {
+  const p = computeGoalProgress(distanceInput({ 1: 15, 4: 15, 8: 15, 11: 15, 15: 15, 18: 15, 22: 15, 25: 15 }));
+  assert.equal(p.verdict, 'holding');
+  assert.match(p.headline, /Holding steady — averaging 30 of 30 km a week/);
+});
+
+test('endurance distance: last 2 weeks up on the 2 before → building, labelled with the window', () => {
+  const p = computeGoalProgress(distanceInput({ 1: 12, 4: 10, 8: 10, 11: 10, 15: 5, 18: 5, 22: 4, 25: 4 }));
+  assert.equal(p.verdict, 'building');
+  assert.match(p.headline, /^Building — distance up \d+% \(last 2 weeks vs the 2 before\)$/);
+  const volume = p.reasons.find(r => r.kind === 'volume');
+  assert.match(volume!.text, /last 2 weeks vs the 2 before/);
+  assert.match(volume!.text, /km a week/);
+});
+
+test('endurance distance text is unit-aware (miles) while structured km stay metric', () => {
+  const p = computeGoalProgress(distanceInput({ 1: 8, 4: 8, 8: 8, 11: 8 }, { unitSystem: 'imperial' }));
+  assert.equal(p.distance!.thisWeekKm, 8);
+  assert.equal(p.distance!.targetKm, 30);
+  assert.equal(p.distance!.text, '5 of 18.6 mi this week');
+});
+
+test('endurance distance target with no distance readings: this week is null, verdict falls back to sessions', () => {
+  const p = computeGoalProgress(enduranceInput([3, 3, 3, 3], {
+    target: { weightKg: null, date: null, weeklySessions: 3, weeklyDistanceKm: 30 },
+  }));
+  assert.equal(p.distance!.thisWeekKm, null);
+  assert.equal(p.distance!.avg4wKm, null);
+  assert.equal(p.verdict, 'holding');
+});
+
+test('non-endurance goals never carry a distance block', () => {
+  const p = computeGoalProgress(base({ goal: 'muscle', target: { weightKg: null, date: null, weeklySessions: 3, weeklyDistanceKm: 30 } }));
+  assert.equal(p.distance, null);
 });

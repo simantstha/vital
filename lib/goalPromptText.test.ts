@@ -6,7 +6,8 @@ import type { GoalProgress } from './goalProgress';
 function gp(over: Partial<GoalProgress> = {}): GoalProgress {
   return {
     goal: 'weight_loss',
-    target: { weightKg: 76, date: '2026-12-25', weeklySessions: 4 },
+    target: { weightKg: 76, date: '2026-12-25', weeklySessions: 4, weeklyDistanceKm: null },
+    distance: null,
     current: { weightKg: 82.1, startWeightKg: 85, changeKg: -2.9, progressPct: 32 },
     ratePerWeek: { kg: -0.45, pctBodyweight: -0.55 },
     safeBand: { minPct: 0.25, maxPct: 1 },
@@ -47,7 +48,7 @@ test('formatGoalProgressLines converts weights to lb for imperial users', () => 
 test('a user with no target sees "no target set" and the needs_target hint', () => {
   const text = formatGoalProgressLines(
     gp({
-      target: { weightKg: null, date: null, weeklySessions: null },
+      target: { weightKg: null, date: null, weeklySessions: null, weeklyDistanceKm: null },
       current: { weightKg: null, startWeightKg: null, changeKg: null, progressPct: null },
       ratePerWeek: { kg: null, pctBodyweight: null },
       eta: null,
@@ -118,4 +119,17 @@ test('brief goal section: a missing verdict is stated as unavailable, never inve
   const text = buildBriefGoalSection({ goal: 'weight_loss', progress: null }, 'metric');
   assert.match(text, /unavailable right now/);
   assert.doesNotMatch(text, /Verdict:/);
+});
+
+test('endurance distance target and this-week progress are quoted unit-aware', () => {
+  const g = gp({
+    goal: 'endurance',
+    target: { weightKg: null, date: null, weeklySessions: null, weeklyDistanceKm: 30 },
+    distance: { targetKm: 30, thisWeekKm: 8, avg4wKm: 24.5, weekStart: '2026-10-05', text: '8 of 30 km this week' },
+  });
+  const metric = formatGoalProgressLines(g, 'metric').join('\n');
+  assert.match(metric, /30\.0 km\/week/);
+  assert.match(metric, /8 of 30 km this week/);
+  const imperial = formatGoalProgressLines(g, 'imperial').join('\n');
+  assert.match(imperial, /18\.6 mi\/week/);
 });

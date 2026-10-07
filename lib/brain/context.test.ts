@@ -176,7 +176,8 @@ test('a goalProgress renders a compact Goal progress section with the verdict an
   const ctx = baseCtx('imperial');
   (ctx as Record<string, unknown>).goalProgress = {
     goal: 'weight_loss',
-    target: { weightKg: 76, date: '2026-12-25', weeklySessions: null },
+    target: { weightKg: 76, date: '2026-12-25', weeklySessions: null, weeklyDistanceKm: null },
+    distance: null,
     current: { weightKg: 82.1, startWeightKg: 85, changeKg: -2.9, progressPct: 32 },
     ratePerWeek: { kg: -0.45, pctBodyweight: -0.55 },
     safeBand: { minPct: 0.25, maxPct: 1 },

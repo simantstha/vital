@@ -36,6 +36,9 @@ final class OnboardingViewModel: ObservableObject {
     @Published var targetWeightKg: Double?
     /// Workouts per week for build-muscle / endurance goals.
     @Published var weeklySessionsTarget: Int = 3
+    /// Optional weekly distance target in km for the endurance goal (canonical;
+    /// the view converts from mi).
+    @Published var weeklyDistanceKmTarget: Double?
 
     // MARK: - Training
 
@@ -124,6 +127,7 @@ final class OnboardingViewModel: ObservableObject {
         guard newGoal != goal else { return }
         goal = newGoal
         targetWeightKg = nil
+        weeklyDistanceKmTarget = nil
         weeklySessionsTarget = GoalTargetLogic.defaultWeeklySessions(goal: newGoal)
     }
 
@@ -188,7 +192,9 @@ final class OnboardingViewModel: ObservableObject {
             targetWeightKg: GoalTargetLogic.showsTargetWeight(goal: goal)
                 ? GoalTargetLogic.validTargetKg(targetWeightKg) : nil,
             weeklySessionsTarget: GoalTargetLogic.showsWeeklySessions(goal: goal)
-                ? GoalTargetLogic.clampSessions(weeklySessionsTarget) : nil
+                ? GoalTargetLogic.clampSessions(weeklySessionsTarget) : nil,
+            weeklyDistanceKmTarget: GoalTargetLogic.showsWeeklyDistance(goal: goal)
+                ? GoalTargetLogic.validWeeklyDistanceKm(weeklyDistanceKmTarget) : nil
         )
         let training = OnboardingTraining(
             frequency: frequency,
