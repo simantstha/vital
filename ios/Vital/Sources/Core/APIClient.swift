@@ -383,14 +383,16 @@ struct APIClient {
         try validate(response)
     }
 
-    /// PATCH /api/profile with the four goal targets. Unlike `updateProfile`
+    /// PATCH /api/profile with the goal targets (incl. the optional endurance race). Unlike `updateProfile`
     /// (which omits nil fields), every field is always sent and a nil value is
     /// encoded as an explicit JSON `null`, which the server treats as "clear".
     func updateGoalTargets(
         targetWeightKg: Double?,
         targetDate: String?,
         weeklySessionsTarget: Int?,
-        weeklyDistanceKmTarget: Double? = nil
+        weeklyDistanceKmTarget: Double? = nil,
+        raceDate: String? = nil,
+        raceDistanceKm: Double? = nil
     ) async throws {
         guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/profile") else {
             throw APIError.invalidURL
@@ -404,19 +406,26 @@ struct APIClient {
             let targetDate: String?
             let weeklySessionsTarget: Int?
             let weeklyDistanceKmTarget: Double?
-            enum CodingKeys: String, CodingKey { case targetWeightKg, targetDate, weeklySessionsTarget, weeklyDistanceKmTarget }
+            let raceDate: String?
+            let raceDistanceKm: Double?
+            enum CodingKeys: String, CodingKey {
+                case targetWeightKg, targetDate, weeklySessionsTarget, weeklyDistanceKmTarget, raceDate, raceDistanceKm
+            }
             func encode(to encoder: Encoder) throws {
                 var c = encoder.container(keyedBy: CodingKeys.self)
                 try c.encode(targetWeightKg, forKey: .targetWeightKg)
                 try c.encode(targetDate, forKey: .targetDate)
                 try c.encode(weeklySessionsTarget, forKey: .weeklySessionsTarget)
                 try c.encode(weeklyDistanceKmTarget, forKey: .weeklyDistanceKmTarget)
+                try c.encode(raceDate, forKey: .raceDate)
+                try c.encode(raceDistanceKm, forKey: .raceDistanceKm)
             }
         }
         request.httpBody = try encoder.encode(
             Body(
                 targetWeightKg: targetWeightKg, targetDate: targetDate,
-                weeklySessionsTarget: weeklySessionsTarget, weeklyDistanceKmTarget: weeklyDistanceKmTarget
+                weeklySessionsTarget: weeklySessionsTarget, weeklyDistanceKmTarget: weeklyDistanceKmTarget,
+                raceDate: raceDate, raceDistanceKm: raceDistanceKm
             )
         )
         let (_, response) = try await session.data(for: request)
@@ -2177,6 +2186,44 @@ struct GoalProgressDTO: Decodable, Equatable {
         }
     }
 
+    /// Endurance race countdown; `nil` without a race date or once it has passed.
+    struct Race: Decodable, Equatable {
+        /// 'YYYY-MM-DD'.
+        let date: String
+        let distanceKm: Double?
+        let label: String?
+        /// 0 during race week (fewer than 7 days out).
+        let weeksToGo: Int
+        let daysToGo: Int
+
+        /// Server label, falling back to one derived from the distance.
+        var displayLabel: String {
+            if let label, !label.isEmpty { return label }
+            return RaceLogic.label(forKm: distanceKm)
+        }
+
+        private enum CodingKeys: String, CodingKey { case date, distanceKm, label, weeksToGo, daysToGo }
+
+        init(date: String, distanceKm: Double? = nil, label: String? = nil, weeksToGo: Int, daysToGo: Int) {
+            self.date = date
+            self.distanceKm = distanceKm
+            self.label = label
+            self.weeksToGo = weeksToGo
+            self.daysToGo = daysToGo
+        }
+
+        /// Throws without a date or day count so the enclosing `try?` drops the whole race.
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            date = try c.decode(String.self, forKey: .date)
+            let days = try c.decode(Int.self, forKey: .daysToGo)
+            daysToGo = days
+            distanceKm = try? c.decode(Double.self, forKey: .distanceKm)
+            label = try? c.decode(String.self, forKey: .label)
+            weeksToGo = (try? c.decode(Int.self, forKey: .weeksToGo)) ?? (days < 7 ? 0 : Int((Double(days) / 7).rounded(.up)))
+        }
+    }
+
     struct Current: Decodable, Equatable {
         let weightKg: Double?
         let startWeightKg: Double?
@@ -2254,6 +2301,8 @@ struct GoalProgressDTO: Decodable, Equatable {
     let target: Target
     /// Endurance weekly-distance progress; `nil` for every other goal / no distance target.
     let distance: Distance?
+    /// Endurance race countdown; `nil` when no race is set / it has passed / older servers.
+    let race: Race?
     let current: Current
     let ratePerWeek: Rate
     let safeBand: SafeBand?
@@ -2269,7 +2318,7 @@ struct GoalProgressDTO: Decodable, Equatable {
     let lastWeighInDaysAgo: Int?
 
     private enum CodingKeys: String, CodingKey {
-        case goal, target, distance, current, ratePerWeek, safeBand, eta, onPaceForTargetDate
+        case goal, target, distance, race, current, ratePerWeek, safeBand, eta, onPaceForTargetDate
         case verdict, headline, reasons, dataSufficiency, lastWeighInDaysAgo
     }
 
@@ -2277,6 +2326,7 @@ struct GoalProgressDTO: Decodable, Equatable {
         goal: String,
         target: Target = Target(),
         distance: Distance? = nil,
+        race: Race? = nil,
         current: Current = Current(),
         ratePerWeek: Rate = Rate(),
         safeBand: SafeBand? = nil,
@@ -2292,6 +2342,7 @@ struct GoalProgressDTO: Decodable, Equatable {
         self.lastWeighInDaysAgo = lastWeighInDaysAgo
         self.target = target
         self.distance = distance
+        self.race = race
         self.current = current
         self.ratePerWeek = ratePerWeek
         self.safeBand = safeBand
@@ -2308,6 +2359,7 @@ struct GoalProgressDTO: Decodable, Equatable {
         goal = (try? c.decode(String.self, forKey: .goal)) ?? "general"
         target = (try? c.decode(Target.self, forKey: .target)) ?? Target()
         distance = try? c.decode(Distance.self, forKey: .distance)
+        race = try? c.decode(Race.self, forKey: .race)
         current = (try? c.decode(Current.self, forKey: .current)) ?? Current()
         ratePerWeek = (try? c.decode(Rate.self, forKey: .ratePerWeek)) ?? Rate()
         safeBand = try? c.decode(SafeBand.self, forKey: .safeBand)
@@ -2720,6 +2772,9 @@ struct ProfileResponse: Decodable {
     let weeklySessionsTarget: Int?
     /// users.weekly_distance_km_target (km); null when unset.
     let weeklyDistanceKmTarget: Double?
+    /// users.race_date ('YYYY-MM-DD') / users.race_distance_km; null when unset.
+    let raceDate: String?
+    let raceDistanceKm: Double?
     let goalStartWeightKg: Double?
     /// ISO timestamp.
     let goalStartedAt: String?

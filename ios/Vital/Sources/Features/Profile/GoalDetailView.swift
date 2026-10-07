@@ -167,6 +167,7 @@ struct GoalDetailView: View {
                     }
                     if showDistance {
                         weeklyDistanceRow
+                        raceRow
                     }
                     if showSessions {
                         weeklySessionsRow
@@ -292,6 +293,46 @@ struct GoalDetailView: View {
                 Text(error)
                     .font(Theme.Typography.bodySmall)
                     .foregroundStyle(Theme.Colors.alert)
+            }
+        }
+    }
+
+    /// Endurance: optional race (date + distance). Clearing removes both.
+    private var raceRow: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            HStack {
+                Text("Race")
+                    .font(Theme.Typography.bodyMedium)
+                    .foregroundStyle(Theme.Colors.textPrimary)
+                Spacer()
+                if targets.hasRaceDate {
+                    Button("Clear") { targets.clearRace() }
+                        .font(Theme.Typography.bodySmall)
+                        .tint(Theme.Colors.accentContent)
+                        .accessibilityIdentifier("goal.raceClear")
+                } else {
+                    Button("Add race date") { targets.hasRaceDate = true }
+                        .font(Theme.Typography.bodySmall)
+                        .tint(Theme.Colors.accentContent)
+                        .accessibilityIdentifier("goal.raceAdd")
+                }
+            }
+            if targets.hasRaceDate {
+                DatePicker(
+                    "Race date", selection: $targets.raceDate,
+                    in: RaceLogic.dateRange(), displayedComponents: .date
+                )
+                .datePickerStyle(.compact)
+                .font(Theme.Typography.bodyMedium)
+                .tint(Theme.Colors.accentContent)
+                .accessibilityIdentifier("goal.raceDate")
+                Picker("Race distance", selection: $targets.raceDistanceKm) {
+                    ForEach(RaceLogic.presets) { preset in
+                        Text(preset.title).tag(preset.km)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .accessibilityIdentifier("goal.raceDistance")
             }
         }
     }

@@ -13,6 +13,8 @@ struct EnduranceHeroView: View {
     let readinessWord: EnduranceHeroLogic.ReadinessWord?
     let calibratingText: String?
     let reasonLine: String?
+    /// "Half marathon · 12 weeks to go" — only when a race is set.
+    var raceText: String? = nil
 
     /// Today's move-kind plan item, or `nil` for a rest day.
     let session: PlanItem?
@@ -38,6 +40,12 @@ struct EnduranceHeroView: View {
     var body: some View {
         VitalCard(padding: Theme.Spacing.lg, cornerRadius: Theme.Radius.xl) {
             VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                if let raceText {
+                    Text(raceText)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Theme.Colors.accentContent)
+                        .accessibilityIdentifier("today.raceCountdown")
+                }
                 VStack(alignment: .leading, spacing: 2) {
                     Text(calibratingText ?? readinessWord?.rawValue ?? EnduranceHeroLogic.ReadinessWord.goodToTrain.rawValue)
                         .font(.system(size: 20, weight: .bold, design: .rounded))
@@ -139,7 +147,9 @@ struct EnduranceHeroView: View {
     }
 
     private var accessibilityLabel: String {
-        var parts: [String] = [calibratingText ?? readinessWord?.rawValue ?? EnduranceHeroLogic.ReadinessWord.goodToTrain.rawValue]
+        var parts: [String] = []
+        if let raceText { parts.append(raceText) }
+        parts.append(calibratingText ?? readinessWord?.rawValue ?? EnduranceHeroLogic.ReadinessWord.goodToTrain.rawValue)
         if calibratingText == nil, let reasonLine { parts.append(reasonLine) }
         parts.append(session?.title ?? EnduranceHeroLogic.restDayText)
         if let reconciliationText { parts.append(reconciliationText) }

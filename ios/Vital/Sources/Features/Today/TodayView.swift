@@ -153,6 +153,7 @@ struct TodayView: View {
                                     readinessWord: vm.enduranceReadinessWord,
                                     calibratingText: vm.enduranceCalibratingText,
                                     reasonLine: vm.enduranceReasonLine,
+                                    raceText: vm.enduranceRaceText,
                                     session: vm.todayMoveSession,
                                     sessionDots: vm.trainingSessionDots,
                                     weeklyOverviewText: vm.enduranceWeeklyOverviewText,
