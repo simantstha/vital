@@ -100,21 +100,27 @@ export function parseGoalKind(raw: unknown): GoalKind | null {
  * in onboarding): states the goal and sets the expectation instead of asking
  * for it. Null when the goal is unknown.
  */
-export function newUserGoalOpener(goal: unknown): string | null {
+export function newUserGoalOpener(goal: unknown, gp?: GoalProgress | null, units: UnitSystem = 'metric'): string | null {
   const kind = parseGoalKind(goal);
   if (!kind) return null;
   const g = NEW_USER_GOAL[kind];
+  // A target weight already set in onboarding: state it instead of asking again.
+  const targetKg = gp?.target.weightKg;
+  if (targetKg != null) {
+    const unit = units === 'imperial' ? 'lb' : 'kg';
+    return `Your goal: ${weightAmount(targetKg, units)} ${unit}. Once you've logged a few days I'll tell you how it's going.`;
+  }
   return `${g.lead} Once you've logged a few days I'll tell you how it's going — ${g.ask}`;
 }
 
 /** The required first sentence(s) of the opener, or null when nothing goal-specific is known. */
 export function requiredOpenerLine(gp: GoalProgress | null | undefined, goal: unknown, units: UnitSystem): string | null {
-  return goalOpenerLine(gp, units) ?? newUserGoalOpener(gp?.goal ?? goal);
+  return goalOpenerLine(gp, units) ?? newUserGoalOpener(gp?.goal ?? goal, gp, units);
 }
 
 /** Deterministic opener used when the model call fails. Null means the caller keeps its generic fallback. */
 export function goalFallbackOpener(gp: GoalProgress | null | undefined, goal: unknown, units: UnitSystem): string | null {
   const line = goalOpenerLine(gp, units);
   if (line) return `${line} ${OPENER_INVITE}`;
-  return newUserGoalOpener(gp?.goal ?? goal);
+  return newUserGoalOpener(gp?.goal ?? goal, gp, units);
 }

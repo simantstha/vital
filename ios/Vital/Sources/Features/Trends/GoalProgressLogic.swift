@@ -105,14 +105,44 @@ enum GoalProgressLogic {
         needsWeightTarget(progress) || needsSessionTarget(progress)
     }
 
+    /// True once the weigh-in COUNT is met. The server can still say
+    /// insufficient_data then (it also needs the readings to span ~7 days), so
+    /// "3 of 3" must never be shown as if something were missing.
+    static func weighInCountMet(_ progress: GoalProgressDTO) -> Bool {
+        progress.dataSufficiency.weighIns >= max(progress.dataSufficiency.needed, 1)
+    }
+
     /// "Need 3 weigh-ins · 1 of 3" — only for the weight goal (the only one
     /// whose insufficiency is measured in weigh-ins); `nil` otherwise so the
-    /// caller falls back to the server headline.
+    /// caller falls back to the server headline. Once the count is met but the
+    /// server still lacks a trend (needs a 7-day span), shows the server
+    /// headline instead, or a generic "keep weighing in" line.
     static func insufficientDataText(_ progress: GoalProgressDTO) -> String? {
         guard progress.verdict == .insufficientData, progress.goal == "weight_loss" else { return nil }
+        if weighInCountMet(progress) {
+            return headlineWithoutVerdict(progress.headline)
+                ?? "Keep weighing in — your trend needs about a week of weigh-ins"
+        }
         let needed = max(progress.dataSufficiency.needed, 1)
         let have = min(max(progress.dataSufficiency.weighIns, 0), needed)
         return "Need \(needed) weigh-ins · \(have) of \(needed)"
+    }
+
+    /// The weigh-in count bar is only meaningful while weigh-ins are missing.
+    static func showsWeighInProgressBar(_ progress: GoalProgressDTO) -> Bool {
+        progress.verdict == .insufficientData && progress.goal == "weight_loss" && !weighInCountMet(progress)
+    }
+
+    /// Days without a weigh-in at which the card nudges the user.
+    static let staleWeighInDays = 4
+
+    /// "Last weigh-in 6 days ago — step on the scale to update" for a weight
+    /// goal whose newest weigh-in is >= 4 days old; `nil` otherwise (including
+    /// when the server doesn't send `lastWeighInDaysAgo`).
+    static func staleWeighInText(_ progress: GoalProgressDTO) -> String? {
+        guard progress.goal == "weight_loss",
+              let days = progress.lastWeighInDaysAgo, days >= staleWeighInDays else { return nil }
+        return "Last weigh-in \(days) days ago — step on the scale to update"
     }
 
     /// Fraction of weigh-ins collected, for the insufficient-data mini bar.
@@ -378,8 +408,13 @@ enum GoalProgressLogic {
     ) -> String {
         // Only when there is a distance line the hero could be duplicating —
         // weight/muscle goals have no distance block and must be unaffected.
+        if let stale = staleWeighInText(progress), progress.verdict != .needsTarget { return stale }
         if heroShowsDistance, distanceLine(progress, system: system) != nil,
-           let reason = distanceReasonText(progress, system: system) { return reason }
+           let reason = distanceReasonText(progress, system: system) { return compactReason(reason) }
+        // A muscle goal's Today line leads with the lift story (the card above
+        // is a lifting card), falling back to the weight ETA when there is none.
+        if progress.goal == "muscle", progress.verdict != .needsTarget, progress.verdict != .insufficientData,
+           let lift = liftReasonText(progress) { return compactReason(lift) }
         if let eta = dateText(progress.eta, now: now, locale: locale),
            progress.verdict != .needsTarget, progress.verdict != .insufficientData {
             if let relation = compactPaceVsTarget(progress, now: now, locale: locale) { return relation }
@@ -391,6 +426,35 @@ enum GoalProgressLogic {
             return "≈ \(eta)"
         }
         return primaryLine(progress, system: system)
+    }
+
+    /// Shortens server reason copy for the one-line Today strip:
+    /// "weekly distance up 12% (last 2 weeks vs the 2 before)" ->
+    /// "distance up 12% · 2 wk vs prior 2".
+    static func compactReason(_ text: String) -> String {
+        var out = text.replacingOccurrences(of: "weekly distance", with: "distance", options: .caseInsensitive)
+        if let range = out.range(of: #"\s*\(last (\d+) weeks? vs the (\d+) before\)"#, options: .regularExpression) {
+            let match = String(out[range])
+            let numbers = match.split(whereSeparator: { !$0.isNumber }).map(String.init)
+            if numbers.count == 2 {
+                out.replaceSubrange(range, with: " · \(numbers[0]) wk vs prior \(numbers[1])")
+            }
+        }
+        return out
+    }
+
+    /// The lift-related story for a muscle goal ("Squat +20.4 kg vs 4 wk"):
+    /// the first reason of kind "lift", else the server headline when it
+    /// mentions a lift/1RM, minus its verdict prefix. `nil` when absent.
+    static func liftReasonText(_ progress: GoalProgressDTO) -> String? {
+        if let reason = progress.reasons.first(where: { $0.kind.lowercased().contains("lift") }),
+           let text = nonEmpty(reason.text) { return text }
+        if let headline = headlineWithoutVerdict(progress.headline),
+           headline.range(of: "1RM", options: .caseInsensitive) != nil
+            || headline.range(of: #"\b(squat|bench|deadlift|overhead press|row|lift)\b"#, options: [.regularExpression, .caseInsensitive]) != nil {
+            return headline
+        }
+        return nil
     }
 
     /// Why the verdict is what it is, in one short phrase, for a surface that

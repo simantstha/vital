@@ -197,6 +197,21 @@ final class WeightHeroLogicTests: XCTestCase {
                         "\u{2212}0.2 kg/wk this week")
     }
 
+    func testWeeklyChangeUsesGoalProgressFourWeekRateWhenProvided() {
+        let trend = WeightTrendDTO(
+            days: [WeightTrendDayDTO(day: day(daysAgo: 0), rawKg: 82, trendKg: 82)],
+            delta7dKgPerWeek: -0.8, delta30dKgPerWeek: -0.4, established: true
+        )
+        let entries = [entry(daysAgo: 10), entry(daysAgo: 0)]
+        XCTAssertEqual(
+            WeightHeroLogic.weeklyChangeText(trend: trend, entries: entries, system: .metric, goalRateKgPerWeek: -0.4),
+            "\u{2212}0.4 kg/wk over 4 weeks"
+        )
+        // Not established: still nothing, even with a goal rate.
+        let young = WeightTrendDTO(days: [], delta7dKgPerWeek: nil, delta30dKgPerWeek: nil, established: false)
+        XCTAssertNil(WeightHeroLogic.weeklyChangeText(trend: young, entries: entries, system: .metric, goalRateKgPerWeek: -0.4))
+    }
+
     func testWeeklyChangePositiveRateShowsPlusSign() {
         let trend = WeightTrendDTO(
             days: [WeightTrendDayDTO(day: day(daysAgo: 0), rawKg: 79, trendKg: 79)],

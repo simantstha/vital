@@ -207,10 +207,9 @@ final class TodayViewModel: ObservableObject {
 
     /// Baselines for the endurance readiness word — `nil` until `/api/trends`
     /// resolves (or on a fail-soft failure, same convention as `weightLog`).
-    /// Fetched for every goal alongside the rest of `performLoad`'s
-    /// concurrent calls (like `weightLog`) rather than gated on `goal`,
-    /// since `goal` itself isn't known until `/api/today` resolves in the
-    /// same batch.
+    /// Fetched only for the endurance goal (its sole consumer is the readiness
+    /// word): prefetched alongside `performLoad`'s batch when the goal is
+    /// already known, otherwise right after `/api/today` reveals it.
     @Published private(set) var enduranceTrendsBatch: TrendsBatchResponse? = nil
 
     private static let enduranceReadinessMetricKeys = ["hrv_sdnn", "resting_hr", "sleep_minutes"]
@@ -390,6 +389,23 @@ final class TodayViewModel: ObservableObject {
     var goalProgressLine: GoalProgressDTO? {
         guard let goalProgress, goalProgress.verdict != .needsTarget else { return nil }
         return goalProgress
+    }
+
+    /// The 4-week rate (kg/wk, signed) the weight hero shows so it matches the
+    /// goal card; `nil` without goal progress (the hero then falls back to its
+    /// own 7-day rate).
+    var heroGoalRateKgPerWeek: Double? {
+        guard let kg = goalProgress?.ratePerWeek.kg, kg.isFinite else { return nil }
+        return kg
+    }
+
+    /// The HRV / Sleep / Resting HR tiles. The endurance hero already prints
+    /// those three in its readiness reason line, so the tiles are hidden there
+    /// (only while that line is actually showing: not while calibrating, and
+    /// only when at least one value exists).
+    var showMetricTiles: Bool {
+        guard isEnduranceGoal else { return true }
+        return !(enduranceCalibratingText == nil && enduranceReasonLine != nil)
     }
 
     /// The muscle hero's "Last (Mon): Deadlift 2×5 @ 150 kg" line — `nil`
@@ -678,15 +694,33 @@ final class TodayViewModel: ObservableObject {
         async let weightLogTask: () = loadWeightLog()
         async let bodyMassTask: () = loadHealthKitBodyMassToday()
         async let unitPrefTask: () = syncUnitPreference()
-        async let enduranceTrendsTask: () = loadEnduranceTrends()
+        // The trends batch's only consumer is the endurance readiness word,
+        // and the goal isn't known until /api/today resolves. When we already
+        // know the user is on the endurance goal (a refresh), prefetch it
+        // alongside the rest; otherwise it is fetched below only if /api/today
+        // reveals an endurance goal. Every other goal skips it entirely.
+        let trendsPrefetch: Task<Void, Never>? = isEnduranceGoal
+            ? Task { @MainActor [weak self] in await self?.loadEnduranceTrends() }
+            : nil
 
-        let (_, today, _, plan, _, _, _, _) =
-            await (healthTask, todayOutcome, factsTask, planResult, weightLogTask, bodyMassTask, unitPrefTask, enduranceTrendsTask)
+        let (_, today, _, plan, _, _, _) =
+            await (healthTask, todayOutcome, factsTask, planResult, weightLogTask, bodyMassTask, unitPrefTask)
 
         switch today {
         case .success(let response):
             applyTodayResponse(response)
             didLoadToday = true
+            if isEnduranceGoal {
+                if let trendsPrefetch {
+                    await trendsPrefetch.value
+                } else {
+                    // Awaited (endurance only) so the readiness word never
+                    // flashes a verdict computed without its baselines.
+                    await loadEnduranceTrends()
+                }
+            } else {
+                trendsPrefetch?.cancel()
+            }
             applyPlanResult(plan, todayPlan: response.plan)
             withAnimation(Theme.Motion.appear) { loadState = .loaded }
             // `/api/training/summary` only feeds the muscle/endurance heroes
@@ -698,6 +732,7 @@ final class TodayViewModel: ObservableObject {
             // `refreshTrainingSummary`'s doc comment.
             refreshTrainingSummary()
             refreshGoalProgress()
+            startPostLoadSync()
 
         case .cancelled:
             // A stale in-flight load was superseded (tab switch, interrupted
@@ -719,6 +754,31 @@ final class TodayViewModel: ObservableObject {
             if hasRenderableContent {
                 toastMessage = "Couldn't refresh — showing your last data"
             }
+            startPostLoadSync()
+        }
+    }
+
+    /// In-flight HealthKit upload + streak refresh, so overlapping loads don't stack syncs.
+    private var postLoadSyncTask: Task<Void, Never>?
+
+    /// HealthKit upload and the streak fetch used to be awaited inside
+    /// `performLoad`, so the user stared at a skeleton for the whole upload.
+    /// They now run AFTER Today has rendered (never awaited by the load
+    /// itself, so pull-to-refresh's spinner doesn't wait on them either); when
+    /// the upload finishes, `/api/today` is re-fetched silently so numbers the
+    /// server derives from the fresh data catch up. The silent refresh only
+    /// applies while Today is `.loaded` and a failure is ignored (the screen
+    /// already shows good data).
+    private func startPostLoadSync() {
+        guard postLoadSyncTask == nil else { return }
+        postLoadSyncTask = Task { @MainActor [weak self] in
+            await HealthSyncCoordinator.shared.syncNow()
+            guard let self else { return }
+            await self.refreshStreak()
+            if self.loadState == .loaded, let response = try? await self.apiClient.fetchToday() {
+                self.applyTodayResponse(response)
+            }
+            self.postLoadSyncTask = nil
         }
     }
 
@@ -855,8 +915,8 @@ final class TodayViewModel: ObservableObject {
             hasAnyHealthData: hasAnyData
         )
 
-        await HealthSyncCoordinator.shared.syncNow()
-        await refreshStreak()
+        // HealthKit upload + streak run after Today renders — see
+        // `startPostLoadSync`.
     }
 
     /// Streak is intentionally fail-soft: the rest of Today remains usable,

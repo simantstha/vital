@@ -94,8 +94,22 @@ enum WeightHeroLogic {
     /// `weeklyDelta` already reports a partial-window rate over whatever
     /// span exists — still an honest, non-fabricated number once the span
     /// gate above is satisfied.
-    static func weeklyChangeText(trend: WeightTrendDTO?, entries: [WeightLogEntryDTO], system: UnitSystem) -> String? {
+    ///
+    /// `goalRateKgPerWeek`: when the goal-progress card has a 4-week rate, the
+    /// hero shows that SAME number ("−0.9 lb/wk over 4 weeks") so the hero and
+    /// the card never disagree; without it the 7-day rate above is used.
+    static func weeklyChangeText(
+        trend: WeightTrendDTO?, entries: [WeightLogEntryDTO], system: UnitSystem,
+        goalRateKgPerWeek: Double? = nil
+    ) -> String? {
         guard let trend, trend.established else { return nil }
+        if let goalRate = goalRateKgPerWeek, goalRate.isFinite {
+            var text = "\(UnitFormat.weightDelta(kgPerWeek: goalRate, system)) over 4 weeks"
+            if isFasterThanRecommended(deltaPerWeek: goalRate, currentTrendKg: trend.days.last?.trendKg) {
+                text += " · faster than recommended"
+            }
+            return text
+        }
         guard let span = daySpan(entries: entries), span >= minimumSpanDaysForWeeklyRate else { return nil }
         guard let deltaPerWeek = trend.delta7dKgPerWeek ?? trend.delta30dKgPerWeek else { return nil }
 

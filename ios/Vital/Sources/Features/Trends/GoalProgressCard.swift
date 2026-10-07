@@ -194,7 +194,7 @@ struct GoalProgressCard: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .multilineTextAlignment(.leading)
 
-                if progress.verdict == .insufficientData, progress.goal == "weight_loss" {
+                if GoalProgressLogic.showsWeighInProgressBar(progress) {
                     VitalProgressBar(
                         fraction: GoalProgressLogic.insufficientDataFraction(progress),
                         tint: Theme.Colors.accent,
@@ -211,6 +211,14 @@ struct GoalProgressCard: View {
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(Theme.Colors.textSecondary)
                         .accessibilityIdentifier("goalProgress.paceLine")
+                }
+
+                if let stale = GoalProgressLogic.staleWeighInText(progress) {
+                    Text(stale)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Theme.Colors.caution)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("goalProgress.staleWeighIn")
                 }
 
                 let reasons = GoalProgressLogic.visibleReasons(progress)
@@ -277,8 +285,9 @@ struct GoalProgressLine: View {
                 Text(text)
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(Theme.Colors.textSecondary)
-                    .lineLimit(1)
+                    .lineLimit(2)
                     .minimumScaleFactor(0.85)
+                    .multilineTextAlignment(.leading)
                 Spacer(minLength: Theme.Spacing.xs)
                 Image(systemName: "chevron.right")
                     .font(.system(size: 12, weight: .semibold))

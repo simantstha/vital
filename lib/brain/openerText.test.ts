@@ -77,7 +77,7 @@ test('new-user opener states the onboarding goal instead of asking for it', () =
 
 test('requiredOpenerLine prefers progress, then the goal, then null', () => {
   assert.match(requiredOpenerLine(gp(), 'weight_loss', 'metric') ?? '', /^You're 1\.7 of 7\.7 kg down/);
-  assert.match(requiredOpenerLine(gp({ verdict: 'needs_target' }), 'general', 'metric') ?? '', /^Your goal is to lose weight/);
+  assert.match(requiredOpenerLine(gp({ verdict: 'needs_target', target: { weightKg: null, date: null, weeklySessions: null, weeklyDistanceKm: null } }), 'general', 'metric') ?? '', /^Your goal is to lose weight/);
   assert.match(requiredOpenerLine(undefined, 'muscle', 'metric') ?? '', /^Your goal is to build muscle/);
   assert.equal(requiredOpenerLine(undefined, undefined, 'metric'), null);
 });
@@ -86,4 +86,14 @@ test('goalFallbackOpener appends the invite to a progress line only', () => {
   assert.match(goalFallbackOpener(gp(), 'weight_loss', 'metric') ?? '', /target\. What would you like to dig into\?$/);
   assert.match(goalFallbackOpener(undefined, 'weight_loss', 'metric') ?? '', /want to set a target weight\?$/);
   assert.equal(goalFallbackOpener(undefined, null, 'metric'), null);
+});
+
+test('new-user opener states an existing target weight instead of asking for one', () => {
+  const withTarget = gp({ target: { weightKg: 71.67, date: null, weeklySessions: null, weeklyDistanceKm: null } });
+  const imperial = newUserGoalOpener('weight_loss', withTarget, 'imperial') ?? '';
+  assert.match(imperial, /^Your goal: 158 lb\. Once you've logged a few days I'll tell you how it's going\.$/);
+  assert.doesNotMatch(imperial, /want to set/);
+  assert.match(newUserGoalOpener('weight_loss', withTarget, 'metric') ?? '', /^Your goal: 71\.7 kg\./);
+  const noTarget = gp({ target: { weightKg: null, date: null, weeklySessions: null, weeklyDistanceKm: null } });
+  assert.match(newUserGoalOpener('weight_loss', noTarget, 'imperial') ?? '', /want to set a target weight\?$/);
 });

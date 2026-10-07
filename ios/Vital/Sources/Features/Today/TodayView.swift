@@ -125,6 +125,7 @@ struct TodayView: View {
                                     entries: vm.weightLog?.entries ?? [],
                                     system: unitPref.current,
                                     targetKg: vm.goalProgress?.target.weightKg,
+                                    goalRateKgPerWeek: vm.heroGoalRateKgPerWeek,
                                     chip: vm.weighInChip,
                                     onChipTap: { onWeighInChipTap() },
                                     isLogging: vm.isLoggingWeight,
@@ -186,6 +187,16 @@ struct TodayView: View {
                                 )
                                 .padding(.top, -Theme.Spacing.md)
                                 .transition(.opacity)
+                            }
+
+                            // Safety first: the low-energy caution sits directly
+                            // under the hero (and its one-line verdict), above
+                            // everything else.
+                            if let warning = vm.diet.lowEnergyWarning {
+                                CautionBanner(
+                                    title: CautionBanner.lowEnergyTitle(appliedFloor: warning.appliedFloor),
+                                    message: warning.message
+                                )
                             }
 
                             // FuelStripView is hidden for weight_loss — the
@@ -258,8 +269,12 @@ struct TodayView: View {
                             // the first-run checklist at the TOP of the screen
                             // instead (see above the goal hero).
                             if !vm.showFirstRunChecklist {
-                                metricsGrid
-                                    .staggeredAppear(index: 3)
+                                // Endurance's hero already prints HRV / Sleep /
+                                // RHR in its readiness line — don't repeat them.
+                                if vm.showMetricTiles {
+                                    metricsGrid
+                                        .staggeredAppear(index: 3)
+                                }
 
                                 // Calibration note for established users sits
                                 // after the recovery tiles.
@@ -269,14 +284,10 @@ struct TodayView: View {
 
                             // Weight hero is weight-loss only; every other
                             // goal still gets a way to log a weigh-in.
-                            if !vm.isWeightLossGoal {
+                            // Hidden while the first-run checklist is up — its
+                            // "Add today's weight" item is the same action.
+                            if !vm.isWeightLossGoal && !vm.showFirstRunChecklist {
                                 weighInRow
-                            }
-                            if let warning = vm.diet.lowEnergyWarning {
-                                CautionBanner(
-                                    title: CautionBanner.lowEnergyTitle(appliedFloor: warning.appliedFloor),
-                                    message: warning.message
-                                )
                             }
                         }
                         .motionTransition(.fade)
