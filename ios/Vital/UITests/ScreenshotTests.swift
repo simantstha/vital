@@ -44,6 +44,37 @@ final class ScreenshotTests: XCTestCase {
         // FixtureURLProtocol once did) fails the test instead of quietly
         // producing a wrong-looking screenshot.
         continueAfterFailure = true
+
+        // System alerts (permission prompts, Apple Intelligence sheets, ...)
+        // that appear over the app. Prefer dismiss-style buttons: the harness
+        // never wants to grant or follow anything.
+        addUIInterruptionMonitor(withDescription: "System alert") { alert in
+            for label in ["Not Now", "Don't Allow", "Later", "Close", "Dismiss", "Cancel", "OK"] {
+                let button = alert.buttons[label]
+                if button.exists {
+                    button.tap()
+                    return true
+                }
+            }
+            return false
+        }
+    }
+
+    /// Simulator notification banners (e.g. "Apple Intelligence") draw over
+    /// the app in screenshots and are not UI interruptions XCTest reports.
+    /// Swipe any visible banner up and wait (at most `timeout`) for it to go
+    /// away. Best-effort: never fails the test, no-op without a banner.
+    private func dismissSystemBanners(timeout: TimeInterval = 3) {
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let banner = springboard.otherElements["NotificationShortLookView"].firstMatch
+        let deadline = Date().addingTimeInterval(timeout)
+        while banner.exists && Date() < deadline {
+            // Dragging the banner up off the top edge dismisses it.
+            let start = banner.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            let end = banner.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: -1.5))
+            start.press(forDuration: 0.05, thenDragTo: end)
+            Thread.sleep(forTimeInterval: 0.4)
+        }
     }
 
     // MARK: - One XCTest method per scenario (both appearances)
@@ -102,6 +133,7 @@ final class ScreenshotTests: XCTestCase {
     }
 
     private func capture(_ app: XCUIApplication, name: String) {
+        dismissSystemBanners()
         let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         attachment.name = name
         attachment.lifetime = .keepAlways

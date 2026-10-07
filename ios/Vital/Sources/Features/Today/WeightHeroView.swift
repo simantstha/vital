@@ -36,7 +36,7 @@ struct WeightHeroView: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private var trendHeadline: String { WeightHeroLogic.trendHeadline(trend: trend, system: system) }
+    private var trendHeadline: String? { WeightHeroLogic.heroHeaderTrendText(trend: trend, system: system) }
     private var weeklyChange: String? {
         WeightHeroLogic.weeklyChangeText(
             trend: trend, entries: entries, system: system, goalRateKgPerWeek: goalRateKgPerWeek
@@ -125,12 +125,14 @@ struct WeightHeroView: View {
                             Spacer(minLength: Theme.Spacing.sm)
 
                             VStack(alignment: .trailing, spacing: 2) {
-                                Text(trendHeadline)
-                                    .font(.system(size: 13, weight: .semibold))
-                                    .foregroundStyle(Theme.Colors.textPrimary)
-                                    .multilineTextAlignment(.trailing)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                    .contentTransition(.numericText())
+                                if let trendHeadline {
+                                    Text(trendHeadline)
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .foregroundStyle(Theme.Colors.textPrimary)
+                                        .multilineTextAlignment(.trailing)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                        .contentTransition(.numericText())
+                                }
                                 if let weeklyChange {
                                     Text(weeklyChange)
                                         .font(.system(size: 12))
@@ -267,7 +269,7 @@ struct WeightHeroView: View {
     private var accessibilityLabel: String {
         var parts = ["\(max(0, kcalRemaining)) kilocalories left of \(kcalTarget)"]
         parts.append("Protein \(proteinHave) of \(proteinGoal) grams")
-        parts.append(trendHeadline)
+        if let trendHeadline { parts.append(trendHeadline) }
         if let weeklyChange { parts.append(weeklyChange) }
         if let captions = sparklineCaptions {
             parts.append([captions.start, captions.now, captions.target].compactMap { $0 }.joined(separator: ", "))

@@ -12,7 +12,7 @@ struct WeeklyHeadlineStrip: View {
     @ObservedObject var vm: TrendsViewModel
 
     private var sleepGoalHours: Double { Double(vm.sleepGoalMinutes) / 60.0 }
-    private var nightsAtGoal: Int { TrendsSummary.nightsAtGoalCount(vm.sleepWindow.values, goalHours: sleepGoalHours) }
+    private var nightsAtGoalText: String? { TrendsSummary.nightsAtGoalText(vm.sleepWindow.values, goalHours: sleepGoalHours) }
 
     var body: some View {
         GlassCard {
@@ -24,8 +24,19 @@ struct WeeklyHeadlineStrip: View {
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(Theme.Colors.textPrimary)
 
-                twoUpRow
+                if let nightsAtGoalText {
+                    twoUpRow(nightsAtGoalText)
+                } else {
+                    // No synced nights (e.g. Apple Health not connected yet):
+                    // say so instead of "0 of 7 nights at goal" / "7h 00m".
+                    Text("No sleep data yet. Connect Apple Health to see your week.")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Theme.Colors.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("trends.sleepEmpty")
+                }
 
+                if nightsAtGoalText != nil {
                 TrendBarChart(
                     values: vm.sleepWindow.values,
                     dayLabels: vm.sleepWindow.dayLabels,
@@ -42,6 +53,7 @@ struct WeeklyHeadlineStrip: View {
                 )
 
                 footnoteView
+                }
             }
         }
         // Stable UI-test hook: this is the topmost recovery-related content
@@ -68,10 +80,10 @@ struct WeeklyHeadlineStrip: View {
         .accessibilityIdentifier("trends.recoveryFirst")
     }
 
-    private var twoUpRow: some View {
+    private func twoUpRow(_ nightsAtGoalText: String) -> some View {
         HStack(spacing: 0) {
             headlineStat(value: vm.sleepValueText, label: "average")
-            headlineStat(value: "\(nightsAtGoal) of 7", label: "nights at goal")
+            headlineStat(value: nightsAtGoalText, label: "nights at goal")
         }
     }
 

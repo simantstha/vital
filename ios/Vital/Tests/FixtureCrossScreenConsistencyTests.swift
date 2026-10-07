@@ -222,8 +222,8 @@ final class FixtureCrossScreenConsistencyTests: XCTestCase {
         let series = (batch["series"] as? [String: Any])?["sleep_minutes"] as? [String: Any]
         let trendsDays = series?["dataDays"] as? Int
         XCTAssertEqual(Set(todayDays), [trendsDays ?? -1], "Today card and Trends ring read the same day count")
-        XCTAssertEqual((series?["points"] as? [[String: Any]])?.count, trendsDays, "no more sleep bars than days of data")
-        XCTAssertEqual(json(.newUser, "/api/streak")["streakDays"] as? Int, trendsDays, "streak can't exceed days of data")
+        XCTAssertEqual((series?["points"] as? [[String: Any]])?.count, 0, "new_user has no Apple Health, so no sleep bars")
+        XCTAssertEqual(json(.newUser, "/api/streak")["streakDays"] as? Int, 0, "nothing logged -> no streak chip")
     }
 
     // MARK: - Run analysis pace rank

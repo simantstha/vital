@@ -132,6 +132,16 @@ final class TodayViewModel: ObservableObject {
     /// `refreshStreak()` fails, before any real value has ever landed.
     @Published private(set) var hasLoadedStreak = false
 
+    /// Streak chip copy, or nil when there is nothing true to say (not loaded
+    /// yet, or 0). The server counts a day when the user logged a meal,
+    /// finished a workout, sent a coach message or completed a plan item, so
+    /// the copy says "in a row" rather than claiming everything was "logged".
+    /// TodayView keeps the chip's slot reserved either way (no layout jump).
+    var streakChipText: String? {
+        guard hasLoadedStreak, streakDays > 0 else { return nil }
+        return streakDays == 1 ? "1 day in a row" : "\(streakDays) days in a row"
+    }
+
     // Coach insight — overwritten from /api/today
     @Published var coachInsight: String = ""
 

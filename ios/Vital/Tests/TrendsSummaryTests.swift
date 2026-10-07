@@ -347,6 +347,12 @@ final class TrendsSummaryTests: XCTestCase {
         }
     }
 
+    func testNightsAtGoalTextCountsOnlyNightsWithData() {
+        XCTAssertNil(TrendsSummary.nightsAtGoalText(Array(repeating: nil, count: 7), goalHours: 8.0))
+        XCTAssertEqual(TrendsSummary.nightsAtGoalText([nil, 8.5, nil, 7.0, nil, nil, nil], goalHours: 8.0), "1 of 2")
+        XCTAssertEqual(TrendsSummary.nightsAtGoalText([8, 8, 8, 8, 8, 8, 8], goalHours: 8.0), "7 of 7")
+    }
+
     // MARK: - nightsAtGoalCount (calm-layout revamp — WeeklyHeadlineStrip's
     // "N of 7 nights at goal" stat)
 

@@ -139,6 +139,15 @@ enum TrendsSummary {
         values.compactMap { $0 }.filter { $0 >= goalHours }.count
     }
 
+    /// "3 of 5" — nights at goal out of the nights that actually have data
+    /// (never "0 of 7" for a week with no synced sleep). `nil` when no night
+    /// has data, so the card can show its empty state instead.
+    static func nightsAtGoalText(_ values: [Double?], goalHours: Double) -> String? {
+        let withData = values.compactMap { $0 }.count
+        guard withData > 0 else { return nil }
+        return "\(nightsAtGoalCount(values, goalHours: goalHours)) of \(withData)"
+    }
+
     /// The "Longest night Friday, 8h 06m. Shortest Saturday, 7h 12m."
     /// footnote (Trends calm-layout revamp) that replaced the old
     /// short-nights caption under `WeeklyHeadlineStrip`'s sleep card —
