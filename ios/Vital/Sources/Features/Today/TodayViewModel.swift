@@ -529,8 +529,8 @@ final class TodayViewModel: ObservableObject {
         }
     }
 
-    static func profileHasGoalTarget(_ r: ProfileResponse) -> Bool {
-        r.targetWeightKg != nil || r.weeklySessionsTarget != nil
+    nonisolated static func profileHasGoalTarget(_ r: ProfileResponse) -> Bool {
+        r.targetWeightKg != nil || r.weeklySessionsTarget != nil || r.weeklyDistanceKmTarget != nil
     }
 
     /// The checklist's third row (§4.2: weigh-in for weight_loss/general,
