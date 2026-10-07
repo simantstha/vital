@@ -186,4 +186,167 @@ final class LiftLoggerLogicTests: XCTestCase {
         ])
         XCTAssertEqual(LiftLoggerLogic.summaryLine(for: exercise, system: .metric), "2 sets · top 3 × 150 kg")
     }
+
+    // MARK: - typed entry
+
+    func testParseRepsClampsAndRejectsGarbage() {
+        XCTAssertEqual(LiftLoggerLogic.parseReps("8"), 8)
+        XCTAssertEqual(LiftLoggerLogic.parseReps(" 12 "), 12)
+        XCTAssertEqual(LiftLoggerLogic.parseReps("0"), 1)
+        XCTAssertEqual(LiftLoggerLogic.parseReps("500"), 100)
+        XCTAssertNil(LiftLoggerLogic.parseReps(""))
+        XCTAssertNil(LiftLoggerLogic.parseReps("8.5"))
+        XCTAssertNil(LiftLoggerLogic.parseReps("abc"))
+    }
+
+    func testParseLoadHandlesCommaDecimalsClampsAndIsUnitAware() {
+        XCTAssertEqual(LiftLoggerLogic.parseLoad("142.5", system: .metric), 142.5)
+        XCTAssertEqual(LiftLoggerLogic.parseLoad("142,5", system: .metric), 142.5)
+        XCTAssertEqual(LiftLoggerLogic.parseLoad("-5", system: .metric), 0)
+        XCTAssertEqual(LiftLoggerLogic.parseLoad("5000", system: .metric), 1000)
+        XCTAssertEqual(LiftLoggerLogic.parseLoad("1500", system: .imperial), 1500)
+        XCTAssertEqual(LiftLoggerLogic.parseLoad("5000", system: .imperial), 2200)
+        XCTAssertEqual(LiftLoggerLogic.parseLoad("102.456", system: .metric), 102.46)
+        XCTAssertNil(LiftLoggerLogic.parseLoad("", system: .metric))
+        XCTAssertNil(LiftLoggerLogic.parseLoad("x", system: .metric))
+        XCTAssertNil(LiftLoggerLogic.parseLoad("inf", system: .metric))
+    }
+
+    func testEditTextAndNumberText() {
+        XCTAssertEqual(LiftLoggerLogic.numberText(140), "140")
+        XCTAssertEqual(LiftLoggerLogic.numberText(142.5), "142.5")
+        XCTAssertEqual(LiftLoggerLogic.numberText(2.25), "2.25")
+        XCTAssertEqual(LiftLoggerLogic.editText(forLoad: 0), "")
+        XCTAssertEqual(LiftLoggerLogic.editText(forLoad: 60), "60")
+    }
+
+    // MARK: - RPE
+
+    func testRPEOptionsAndClamping() {
+        XCTAssertEqual(LiftLoggerLogic.rpeOptions.first, 6)
+        XCTAssertEqual(LiftLoggerLogic.rpeOptions.last, 10)
+        XCTAssertEqual(LiftLoggerLogic.rpeOptions.count, 9)
+        XCTAssertEqual(LiftLoggerLogic.clampRPE(8.3), 8.5)
+        XCTAssertEqual(LiftLoggerLogic.clampRPE(3), 6)
+        XCTAssertEqual(LiftLoggerLogic.clampRPE(12), 10)
+        XCTAssertNil(LiftLoggerLogic.clampRPE(nil))
+        XCTAssertEqual(LiftLoggerLogic.rpeText(8.5), "8.5")
+        XCTAssertEqual(LiftLoggerLogic.rpeText(nil), "—")
+    }
+
+    func testInputsCarryWarmupAndRPE() {
+        let drafts = [LiftDraftExercise(key: "squat", name: "Squat", sets: [
+            LiftDraftSet(reps: 5, load: 60, isWarmup: true),
+            LiftDraftSet(reps: 5, load: 140, rpe: 8.5),
+        ])]
+        let inputs = LiftLoggerLogic.inputs(from: drafts, system: .metric)
+        XCTAssertEqual(inputs.map { $0.isWarmup }, [true, false])
+        XCTAssertEqual(inputs.map { $0.rpe }, [nil, 8.5])
+    }
+
+    // MARK: - seeding / hints
+
+    private func rawDTO(_ exercise: String, _ index: Int, reps: Int, kg: Double?, warmup: Bool = false) -> WorkoutSetDTO {
+        WorkoutSetDTO(
+            id: "\(exercise)-\(index)", sessionId: "s", workoutId: nil, performedAt: "2026-10-01T10:00:00.000Z",
+            localDay: "2026-10-01", exercise: exercise, exerciseDisplay: exercise.capitalized, setIndex: index,
+            reps: reps, loadKg: kg, rpe: nil, isWarmup: warmup, source: "manual"
+        )
+    }
+
+    func testHistoryKeepsOnlyThisExercisesWorkingSetsInOrder() {
+        let sets = [
+            rawDTO("bench press", 4, reps: 5, kg: 80),
+            rawDTO("squat", 3, reps: 6, kg: 105),
+            rawDTO("squat", 1, reps: 5, kg: 60, warmup: true),
+            rawDTO("squat", 2, reps: 8, kg: 100),
+        ]
+        let history = LiftLoggerLogic.history(forKey: "squat", from: sets, system: .metric)
+        XCTAssertEqual(history, [LiftLastRef(reps: 8, load: 100), LiftLastRef(reps: 6, load: 105)])
+    }
+
+    func testHistoryConvertsToPounds() {
+        let history = LiftLoggerLogic.history(forKey: "squat", from: [rawDTO("squat", 1, reps: 5, kg: 100)], system: .imperial)
+        XCTAssertEqual(history.first?.load, 220.5)
+    }
+
+    func testSeededSetsFromHistoryOrBlank() {
+        let seeded = LiftLoggerLogic.seededSets(from: [LiftLastRef(reps: 8, load: 100), LiftLastRef(reps: 6, load: 105)])
+        XCTAssertEqual(seeded.map { $0.reps }, [8, 6])
+        XCTAssertEqual(seeded.map { $0.last }, [LiftLastRef(reps: 8, load: 100), LiftLastRef(reps: 6, load: 105)])
+
+        let blank = LiftLoggerLogic.seededSets(from: [])
+        XCTAssertEqual(blank.count, 1)
+        XCTAssertEqual(blank[0].reps, 5)
+        XCTAssertEqual(blank[0].load, 0)
+        XCTAssertNil(blank[0].last)
+    }
+
+    func testHintText() {
+        XCTAssertEqual(LiftLoggerLogic.hintText(LiftLastRef(reps: 8, load: 185)), "last: 185×8")
+        XCTAssertEqual(LiftLoggerLogic.hintText(LiftLastRef(reps: 10, load: 62.5)), "last: 62.5×10")
+        XCTAssertEqual(LiftLoggerLogic.hintText(LiftLastRef(reps: 12, load: 0)), "last: BW×12")
+    }
+
+    // MARK: - recent sessions
+
+    private func session(_ id: String, day: String, names: [String]) -> RecentSessionDTO {
+        RecentSessionDTO(
+            sessionId: id, performedAt: "\(day)T10:00:00.000Z", localDay: day,
+            exercises: names.map {
+                RecentSessionExerciseDTO(
+                    exercise: $0.lowercased(), display: $0, sets: 3,
+                    topSet: RecentSessionTopSetDTO(reps: 5, loadKg: 100), setDetails: nil
+                )
+            }
+        )
+    }
+
+    func testSessionTitleUsesWeekdayAndAtMostThreeNames() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        let today = calendar.date(from: DateComponents(year: 2026, month: 10, day: 7))!
+        // 2026-10-05 is a Monday.
+        let long = session("a", day: "2026-10-05", names: ["Bench", "OHP", "Dips", "Fly"])
+        XCTAssertEqual(LiftLoggerLogic.sessionTitle(long, today: today, calendar: calendar), "Mon · Bench, OHP, Dips, …")
+        let short = session("b", day: "2026-10-06", names: ["Row"])
+        XCTAssertEqual(LiftLoggerLogic.sessionTitle(short, today: today, calendar: calendar), "Yesterday · Row")
+        let same = session("c", day: "2026-10-07", names: ["Squat", "RDL"])
+        XCTAssertEqual(LiftLoggerLogic.sessionTitle(same, today: today, calendar: calendar), "Today · Squat, RDL")
+    }
+
+    func testDraftsFromSessionFallBackToTopSetCopies() {
+        let drafts = LiftLoggerLogic.drafts(from: session("a", day: "2026-10-05", names: ["Squat"]), system: .metric)
+        XCTAssertEqual(drafts.count, 1)
+        XCTAssertEqual(drafts[0].sets.count, 3)
+        XCTAssertEqual(drafts[0].sets[0].load, 100)
+        XCTAssertEqual(drafts[0].key, "squat")
+    }
+
+    // MARK: - autocomplete
+
+    func testCompletionsPrefixFirstThenSubstringExcludingUsed() {
+        let options = [
+            LiftExerciseOption(key: "bench press", display: "Bench press"),
+            LiftExerciseOption(key: "incline bench press", display: "Incline bench press"),
+            LiftExerciseOption(key: "squat", display: "Squat"),
+            LiftExerciseOption(key: "barbell row", display: "Barbell row"),
+        ]
+        let result = LiftLoggerLogic.completions(for: "Bench", in: options, excluding: [])
+        XCTAssertEqual(result.map { $0.key }, ["bench press", "incline bench press"])
+        let excluded = LiftLoggerLogic.completions(for: "bench", in: options, excluding: ["bench press"])
+        XCTAssertEqual(excluded.map { $0.key }, ["incline bench press"])
+        XCTAssertTrue(LiftLoggerLogic.completions(for: "  ", in: options, excluding: []).isEmpty)
+    }
+
+    func testDateLabel() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        let today = calendar.date(from: DateComponents(year: 2026, month: 10, day: 7, hour: 12))!
+        XCTAssertEqual(LiftLoggerLogic.dateLabel(today, today: today, calendar: calendar), "Today")
+        let yesterday = calendar.date(byAdding: .day, value: -1, to: today)!
+        XCTAssertEqual(LiftLoggerLogic.dateLabel(yesterday, today: today, calendar: calendar), "Yesterday")
+        let older = calendar.date(byAdding: .day, value: -3, to: today)!
+        XCTAssertEqual(LiftLoggerLogic.dateLabel(older, today: today, calendar: calendar), "Sat, Oct 4")
+    }
 }

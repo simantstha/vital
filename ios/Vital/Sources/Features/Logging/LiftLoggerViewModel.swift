@@ -1,13 +1,14 @@
 import Foundation
 import SwiftUI
 
-/// The three strength endpoints the lift logger needs — a seam so
+/// The strength endpoints the lift logger needs — a seam so
 /// `LiftLoggerViewModelTests` can inject a fake. `APIClient` conforms below
 /// (same idiom as `TrendsAPIProviding`).
 @MainActor
 protocol LiftLoggerAPIProviding {
     func fetchWorkoutSummary(days: Int) async throws -> WorkoutSummaryResponse
     func fetchLastWorkoutSession(exercise: String) async throws -> WorkoutLastSessionResponse
+    func fetchRecentWorkoutSessions(limit: Int) async throws -> WorkoutRecentSessionsResponse
     func logWorkoutSets(
         sessionId: String,
         source: String,
@@ -37,6 +38,16 @@ final class LiftLoggerViewModel: ObservableObject {
     @Published var errorMessage: String? = nil
     /// Backing text of the "add exercise" field.
     @Published var newExerciseName = ""
+    /// Recent distinct sessions (newest first) for the "Repeat: …" menu.
+    @Published private(set) var recentSessions: [RecentSessionDTO] = []
+    /// Session id currently pre-filled into the form (`nil` = none/manual).
+    @Published private(set) var repeatedSessionId: String? = nil
+    /// The day being logged (sent as `performedAt`); defaults to now, capped
+    /// at today by the view's DatePicker.
+    @Published var performedDate = Date()
+    /// Canonical key → display for every exercise the user has logged (summary
+    /// keys + recent sessions) — feeds autocomplete.
+    @Published private(set) var knownExercises: [LiftExerciseOption] = []
 
     let system: UnitSystem
     /// Client-generated UUID for the whole session: groups the sets and makes
@@ -86,12 +97,22 @@ final class LiftLoggerViewModel: ObservableObject {
         do {
             let summary = try await api.fetchWorkoutSummary(days: 84)
             suggestions = summary.exercises.keys.sorted()
+            rebuildKnownExercises()
             if let seed = LiftLoggerLogic.seedExercise(from: summary), !candidates.contains(seed) {
                 candidates.append(seed)
             }
         } catch {
             if !error.isCancellation {
                 print("[Vital] LiftLoggerViewModel.load summary failed: \(error.localizedDescription)")
+            }
+        }
+
+        do {
+            recentSessions = try await api.fetchRecentWorkoutSessions(limit: 8).sessions
+            rebuildKnownExercises()
+        } catch {
+            if !error.isCancellation {
+                print("[Vital] LiftLoggerViewModel.load sessions failed: \(error.localizedDescription)")
             }
         }
 
@@ -102,6 +123,7 @@ final class LiftLoggerViewModel: ObservableObject {
                 if !drafts.isEmpty {
                     exercises = drafts
                     seeded = drafts
+                    repeatedSessionId = last.sets.first?.sessionId
                     break
                 }
             } catch {
@@ -111,7 +133,53 @@ final class LiftLoggerViewModel: ObservableObject {
             }
         }
 
+        // Nothing seeded via /last (older backend, fail-soft) but the sessions
+        // list has history: repeat the newest one.
+        if exercises.isEmpty, let latest = recentSessions.first {
+            applySession(latest)
+        }
+
         isLoading = false
+    }
+
+    private func rebuildKnownExercises() {
+        var byKey: [String: String] = [:]
+        for key in suggestions { byKey[key] = LiftLoggerLogic.displayName(forKey: key) }
+        for session in recentSessions {
+            for exercise in session.exercises { byKey[exercise.exercise] = exercise.display }
+        }
+        knownExercises = byKey.map { LiftExerciseOption(key: $0.key, display: $0.value) }
+            .sorted { $0.key < $1.key }
+    }
+
+    // MARK: - Pick a session to repeat
+
+    /// Replaces the form with a recent session (the "Repeat: …" menu).
+    func repeatSession(id: String) {
+        guard let session = recentSessions.first(where: { $0.sessionId == id }) else { return }
+        applySession(session)
+    }
+
+    private func applySession(_ session: RecentSessionDTO) {
+        let drafts = LiftLoggerLogic.drafts(from: session, system: system)
+        guard !drafts.isEmpty else { return }
+        exercises = drafts
+        seeded = drafts
+        repeatedSessionId = session.sessionId
+    }
+
+    /// The recent session currently repeated, for the menu's label.
+    var repeatedSession: RecentSessionDTO? {
+        recentSessions.first { $0.sessionId == repeatedSessionId }
+    }
+
+    // MARK: - Autocomplete
+
+    /// The user's own past exercises matching the "add exercise" field.
+    var completions: [LiftExerciseOption] {
+        LiftLoggerLogic.completions(
+            for: newExerciseName, in: knownExercises, excluding: Set(exercises.map { $0.key })
+        )
     }
 
     // MARK: - Editing
@@ -124,9 +192,17 @@ final class LiftLoggerViewModel: ObservableObject {
     /// (the common "same again" case); a fresh exercise starts at 5 reps.
     func addSet(to exerciseID: UUID) {
         guard let i = index(ofExercise: exerciseID) else { return }
-        let previous = exercises[i].sets.last
+        // Copy the last WORKING set (a warm-up's light load isn't "same again").
+        let previous = exercises[i].sets.last(where: { !$0.isWarmup }) ?? exercises[i].sets.last
+        let history = exercises[i].history
+        let next = exercises[i].sets.filter { !$0.isWarmup }.count
         exercises[i].sets.append(
-            LiftDraftSet(reps: previous?.reps ?? 5, load: previous?.load ?? 0, isWarmup: false)
+            LiftDraftSet(
+                reps: previous?.reps ?? LiftLoggerLogic.defaultReps,
+                load: previous?.load ?? 0,
+                isWarmup: false,
+                last: next < history.count ? history[next] : nil
+            )
         )
     }
 
@@ -160,9 +236,42 @@ final class LiftLoggerViewModel: ObservableObject {
         // A canonical key shown as-is ("bench press") reads better title-cased;
         // a name the user typed keeps their capitalization.
         let name = trimmed == key ? LiftLoggerLogic.displayName(forKey: key) : trimmed
-        exercises.append(
-            LiftDraftExercise(key: key, name: name, sets: [LiftDraftSet(reps: 5, load: 0)])
+        let draft = LiftDraftExercise(
+            key: key, name: name, sets: [LiftDraftSet(reps: LiftLoggerLogic.defaultReps, load: 0)]
         )
+        exercises.append(draft)
+        // Smart seeding: fill from this exercise's own last session when the
+        // fetch lands (fail-soft; the blank set stays usable meanwhile).
+        Task { [weak self] in await self?.seedFromHistory(exerciseID: draft.id) }
+    }
+
+    /// Fetches `/api/workouts/last` for the exercise and pre-fills its sets
+    /// (working sets of THAT exercise only) with per-set "last: …" hints. Only
+    /// replaces the sets while the user hasn't touched the placeholder set,
+    /// so a fast typist is never overwritten.
+    func seedFromHistory(exerciseID: UUID) async {
+        guard let i = index(ofExercise: exerciseID) else { return }
+        let key = exercises[i].key
+        let placeholderID = exercises[i].sets.first?.id
+        let response: WorkoutLastSessionResponse
+        do {
+            response = try await api.fetchLastWorkoutSession(exercise: key)
+        } catch {
+            if !error.isCancellation {
+                print("[Vital] LiftLoggerViewModel.seedFromHistory failed: \(error.localizedDescription)")
+            }
+            return
+        }
+        let history = LiftLoggerLogic.history(forKey: key, from: response.sets, system: system)
+        guard !history.isEmpty, let j = index(ofExercise: exerciseID) else { return }
+        exercises[j].history = history
+        let untouched = exercises[j].sets.count == 1
+            && exercises[j].sets[0].id == placeholderID
+            && exercises[j].sets[0].reps == LiftLoggerLogic.defaultReps
+            && exercises[j].sets[0].load == 0
+            && !exercises[j].sets[0].isWarmup
+            && exercises[j].sets[0].rpe == nil
+        if untouched { exercises[j].sets = LiftLoggerLogic.seededSets(from: history) }
     }
 
     /// True when the form was pre-filled from the user's last session.
@@ -182,7 +291,7 @@ final class LiftLoggerViewModel: ObservableObject {
 
     private func payloadSignature() -> String {
         LiftLoggerLogic.inputs(from: exercises, system: system)
-            .map { "\($0.exercise):\($0.setIndex):\($0.reps):\($0.loadKg ?? 0)" }
+            .map { "\($0.exercise):\($0.setIndex):\($0.reps):\($0.loadKg ?? 0):\($0.isWarmup):\($0.rpe ?? 0)" }
             .joined(separator: "|")
     }
 
@@ -209,7 +318,7 @@ final class LiftLoggerViewModel: ObservableObject {
                 sessionId: sessionId,
                 source: LiftLoggerLogic.source(drafts: exercises, seeded: seeded),
                 sets: inputs,
-                performedAt: Date(),
+                performedAt: performedDate,
                 tz: TimeZone.current.identifier
             )
             NotificationCenter.default.post(name: .vitalWorkoutLogged, object: nil)

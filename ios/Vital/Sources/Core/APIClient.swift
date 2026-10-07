@@ -571,6 +571,13 @@ struct APIClient {
         return try await get("/api/workouts/last?exercise=\(encoded)")
     }
 
+    /// GET /api/workouts/sessions?limit= — the user's most recent distinct
+    /// strength sessions, newest first (the lift logger's "Repeat: …" menu).
+    /// `sessions` is `[]` when nothing has been logged.
+    func fetchRecentWorkoutSessions(limit: Int = 8) async throws -> WorkoutRecentSessionsResponse {
+        try await get("/api/workouts/sessions?limit=\(limit)")
+    }
+
     /// POST /api/workouts/sets — logs one session of sets. `sessionId` must be
     /// a client-generated UUID string (the `session_id` column is a uuid); a
     /// retried POST with the same id + set indexes upserts rather than
@@ -2352,6 +2359,42 @@ struct WorkoutSetDTO: Decodable, Identifiable, Equatable {
 /// GET /api/workouts/last's response — `sets` is `[]` when never logged.
 struct WorkoutLastSessionResponse: Decodable, Equatable {
     let sets: [WorkoutSetDTO]
+}
+
+/// One working set of a `RecentSessionExerciseDTO` (`setDetails`).
+struct RecentSessionSetDTO: Decodable, Equatable {
+    let reps: Int
+    let loadKg: Double?
+    let rpe: Double?
+}
+
+struct RecentSessionTopSetDTO: Decodable, Equatable {
+    let reps: Int
+    let loadKg: Double?
+}
+
+/// One exercise of a session in `GET /api/workouts/sessions` — `exercise` is
+/// the canonical key, `display` what the user typed, `sets` the working-set
+/// count. `setDetails` is optional so an older backend still decodes.
+struct RecentSessionExerciseDTO: Decodable, Equatable {
+    let exercise: String
+    let display: String
+    let sets: Int
+    let topSet: RecentSessionTopSetDTO
+    let setDetails: [RecentSessionSetDTO]?
+}
+
+struct RecentSessionDTO: Decodable, Identifiable, Equatable {
+    let sessionId: String
+    let performedAt: String
+    let localDay: String
+    let exercises: [RecentSessionExerciseDTO]
+    var id: String { sessionId }
+}
+
+/// GET /api/workouts/sessions' response.
+struct WorkoutRecentSessionsResponse: Decodable, Equatable {
+    let sessions: [RecentSessionDTO]
 }
 
 /// POST /api/workouts/sets' response.

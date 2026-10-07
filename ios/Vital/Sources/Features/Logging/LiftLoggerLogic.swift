@@ -9,13 +9,36 @@ struct LiftDraftSet: Identifiable, Equatable {
     var reps: Int
     var load: Double
     var isWarmup: Bool
+    /// Optional rate of perceived exertion, 6...10 in 0.5 steps; `nil` = unset.
+    var rpe: Double?
+    /// What this set did last time (display unit) — drives the "last: 185×8"
+    /// caption; `nil` when there is no history for this set position.
+    var last: LiftLastRef?
 
-    init(id: UUID = UUID(), reps: Int, load: Double, isWarmup: Bool = false) {
+    init(
+        id: UUID = UUID(), reps: Int, load: Double, isWarmup: Bool = false,
+        rpe: Double? = nil, last: LiftLastRef? = nil
+    ) {
         self.id = id
         self.reps = reps
         self.load = load
         self.isWarmup = isWarmup
+        self.rpe = rpe
+        self.last = last
     }
+}
+
+/// A past working set in the user's display unit (see `LiftDraftSet.last`).
+struct LiftLastRef: Equatable {
+    var reps: Int
+    var load: Double
+}
+
+/// One autocomplete / chip candidate: canonical key + the display the user
+/// last typed for it.
+struct LiftExerciseOption: Equatable {
+    let key: String
+    let display: String
 }
 
 /// One exercise block (a Form section) in the lift logger. `key` is the
@@ -26,12 +49,16 @@ struct LiftDraftExercise: Identifiable, Equatable {
     var key: String
     var name: String
     var sets: [LiftDraftSet]
+    /// Working sets from the last session of THIS exercise, in set order —
+    /// "Add set" uses the next one as its hint. Empty when unknown.
+    var history: [LiftLastRef]
 
-    init(id: UUID = UUID(), key: String, name: String, sets: [LiftDraftSet]) {
+    init(id: UUID = UUID(), key: String, name: String, sets: [LiftDraftSet], history: [LiftLastRef] = []) {
         self.id = id
         self.key = key
         self.name = name
         self.sets = sets
+        self.history = history
     }
 }
 
@@ -44,6 +71,186 @@ enum LiftLoggerLogic {
     static let minReps = 1
     static let maxReps = 100
     static let maxLoad = 1000.0
+    static let defaultReps = 5
+
+    /// Upper clamp for typed/stepped loads, in the display unit (1000 kg ≈ 2200 lb).
+    static func maxLoad(for system: UnitSystem) -> Double {
+        system == .metric ? maxLoad : 2200
+    }
+
+    // MARK: - Typed entry
+
+    /// Parses typed reps ("8", " 12 ") → clamped to `minReps...maxReps`.
+    /// `nil` for empty/non-numeric input (caller keeps the old value).
+    /// Decimals ("8.5") are rejected rather than silently truncated.
+    static func parseReps(_ text: String) -> Int? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let value = Int(trimmed) else { return nil }
+        return min(max(value, minReps), maxReps)
+    }
+
+    /// Parses a typed load in the display unit ("142.5", "142,5", "0") →
+    /// clamped to `0...maxLoad(for:)` and rounded to 2 decimals. `nil` for
+    /// empty/non-numeric/non-finite input.
+    static func parseLoad(_ text: String, system: UnitSystem) -> Double? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: ",", with: ".")
+        guard !trimmed.isEmpty, let value = Double(trimmed), value.isFinite else { return nil }
+        let clamped = min(max(value, 0), maxLoad(for: system))
+        return (clamped * 100).rounded() / 100
+    }
+
+    /// "142.5" / "140" — whole numbers unadorned, otherwise up to two decimals
+    /// (trailing zeros dropped), no unit. Used for editing and hints.
+    static func numberText(_ value: Double) -> String {
+        if value.truncatingRemainder(dividingBy: 1) == 0 { return String(Int(value)) }
+        var text = String(format: "%.2f", value)
+        while text.hasSuffix("0") { text.removeLast() }
+        return text
+    }
+
+    /// Text pre-filled into the weight field when editing starts: empty for
+    /// bodyweight (0) so the user can just type.
+    static func editText(forLoad load: Double) -> String {
+        load > 0 ? numberText(load) : ""
+    }
+
+    // MARK: - RPE
+
+    /// 6, 6.5, … 10.
+    static let rpeOptions: [Double] = stride(from: 6.0, through: 10.0, by: 0.5).map { $0 }
+
+    /// "8" / "8.5"; `nil` → "—".
+    static func rpeText(_ rpe: Double?) -> String {
+        guard let rpe else { return "—" }
+        return numberText(rpe)
+    }
+
+    /// Snaps to the nearest 0.5 and clamps to 6...10; `nil` stays `nil`.
+    static func clampRPE(_ rpe: Double?) -> Double? {
+        guard let rpe, rpe.isFinite else { return nil }
+        return min(max((rpe * 2).rounded() / 2, 6), 10)
+    }
+
+    // MARK: - Last-time hints
+
+    /// "last: 185×8" (number in the display unit, no unit suffix so the row
+    /// stays compact); bodyweight reads "last: BW×8".
+    static func hintText(_ ref: LiftLastRef) -> String {
+        let load = ref.load > 0 ? numberText(ref.load) : "BW"
+        return "last: \(load)×\(ref.reps)"
+    }
+
+    /// Working (non-warm-up) sets of `key` from a fetched session, as display-
+    /// unit refs in set order. `/api/workouts/last` returns the WHOLE session,
+    /// so other exercises' sets are filtered out here. Empty → no history.
+    static func history(forKey key: String, from sets: [WorkoutSetDTO], system: UnitSystem) -> [LiftLastRef] {
+        sets
+            .filter { $0.exercise == key && !$0.isWarmup }
+            .sorted { $0.setIndex < $1.setIndex }
+            .map {
+                LiftLastRef(
+                    reps: min(max($0.reps, minReps), maxReps),
+                    load: displayLoad(fromKg: $0.loadKg, system: system)
+                )
+            }
+    }
+
+    /// Pre-filled sets for a newly added exercise from its history (each with
+    /// its own hint); a single blank 5-rep set when there is none.
+    static func seededSets(from history: [LiftLastRef]) -> [LiftDraftSet] {
+        guard !history.isEmpty else { return [LiftDraftSet(reps: defaultReps, load: 0)] }
+        return history.map { LiftDraftSet(reps: $0.reps, load: $0.load, last: $0) }
+    }
+
+    // MARK: - Recent sessions ("Repeat: …")
+
+    /// "Today" / "Yesterday" / "Mon" for a `yyyy-MM-dd` day key relative to
+    /// `today`; the raw key when it can't be parsed.
+    static func dayLabel(localDay: String, today: Date = Date(), calendar: Calendar = .current) -> String {
+        let parser = DateFormatter()
+        parser.calendar = calendar
+        parser.timeZone = calendar.timeZone
+        parser.locale = Locale(identifier: "en_US_POSIX")
+        parser.dateFormat = "yyyy-MM-dd"
+        guard let day = parser.date(from: localDay) else { return localDay }
+        if calendar.isDate(day, inSameDayAs: today) { return "Today" }
+        if let yesterday = calendar.date(byAdding: .day, value: -1, to: today),
+           calendar.isDate(day, inSameDayAs: yesterday) { return "Yesterday" }
+        let weekday = DateFormatter()
+        weekday.calendar = calendar
+        weekday.timeZone = calendar.timeZone
+        weekday.locale = Locale(identifier: "en_US_POSIX")
+        weekday.dateFormat = "EEE"
+        return weekday.string(from: day)
+    }
+
+    /// "Mon · Bench press, Overhead press, Triceps pushdown" — at most three
+    /// names, then "…".
+    static func sessionTitle(_ session: RecentSessionDTO, today: Date = Date(), calendar: Calendar = .current) -> String {
+        let day = dayLabel(localDay: session.localDay, today: today, calendar: calendar)
+        let names = session.exercises.prefix(3).map { $0.display }
+        let more = session.exercises.count > 3 ? ", …" : ""
+        return names.isEmpty ? day : "\(day) · \(names.joined(separator: ", "))\(more)"
+    }
+
+    /// Drafts for a picked recent session — one block per exercise, using the
+    /// per-set details when the server sent them, else `sets` copies of the
+    /// top set.
+    static func drafts(from session: RecentSessionDTO, system: UnitSystem) -> [LiftDraftExercise] {
+        session.exercises.compactMap { exercise -> LiftDraftExercise? in
+            let details: [RecentSessionSetDTO]
+            if let setDetails = exercise.setDetails, !setDetails.isEmpty {
+                details = setDetails
+            } else {
+                details = Array(
+                    repeating: RecentSessionSetDTO(reps: exercise.topSet.reps, loadKg: exercise.topSet.loadKg, rpe: nil),
+                    count: max(exercise.sets, 1)
+                )
+            }
+            let sets = details.map {
+                LiftDraftSet(
+                    reps: min(max($0.reps, minReps), maxReps),
+                    load: displayLoad(fromKg: $0.loadKg, system: system)
+                )
+            }
+            return LiftDraftExercise(key: exercise.exercise, name: exercise.display, sets: sets)
+        }
+    }
+
+    // MARK: - Autocomplete
+
+    /// The user's own past exercises matching what they've typed — prefix
+    /// matches first, then substring matches, never ones already in the form;
+    /// at most `limit`. Empty query → none.
+    static func completions(
+        for query: String,
+        in options: [LiftExerciseOption],
+        excluding usedKeys: Set<String>,
+        limit: Int = 5
+    ) -> [LiftExerciseOption] {
+        let q = canonicalKey(from: query)
+        guard !q.isEmpty else { return [] }
+        let pool = options.filter { !usedKeys.contains($0.key) }
+        let prefix = pool.filter { $0.key.hasPrefix(q) || $0.display.lowercased().hasPrefix(q) }
+        let contains = pool.filter { option in
+            !prefix.contains(option) && (option.key.contains(q) || option.display.lowercased().contains(q))
+        }
+        return Array((prefix + contains).prefix(limit))
+    }
+
+    /// "Today" / "Yesterday" / "Mon, Oct 5" for the date control.
+    static func dateLabel(_ date: Date, today: Date = Date(), calendar: Calendar = .current) -> String {
+        if calendar.isDate(date, inSameDayAs: today) { return "Today" }
+        if let yesterday = calendar.date(byAdding: .day, value: -1, to: today),
+           calendar.isDate(date, inSameDayAs: yesterday) { return "Yesterday" }
+        let f = DateFormatter()
+        f.calendar = calendar
+        f.timeZone = calendar.timeZone
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "EEE, MMM d"
+        return f.string(from: date)
+    }
 
     /// Stepper increment for the load field, in the display unit: 2.5 kg or
     /// 5 lb (the smallest plates most gyms stock).
@@ -70,10 +277,7 @@ enum LiftLoggerLogic {
     /// "142.5" / "140" — whole numbers unadorned, otherwise one decimal.
     static func loadText(_ load: Double, system: UnitSystem) -> String {
         guard load > 0 else { return "Bodyweight" }
-        let number = load.truncatingRemainder(dividingBy: 1) == 0
-            ? String(Int(load))
-            : String(format: "%.1f", load)
-        return "\(number) \(system.weightUnit)"
+        return "\(numberText(load)) \(system.weightUnit)"
     }
 
     /// "bench press" -> "Bench Press"; "  Back  Squat " -> "Back Squat".
@@ -162,7 +366,7 @@ enum LiftLoggerLogic {
                         setIndex: result.count + 1,
                         reps: set.reps,
                         loadKg: kg(fromDisplayLoad: set.load, system: system),
-                        rpe: nil,
+                        rpe: clampRPE(set.rpe),
                         isWarmup: set.isWarmup
                     )
                 )

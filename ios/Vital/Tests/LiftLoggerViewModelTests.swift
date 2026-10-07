@@ -12,6 +12,8 @@ final class LiftLoggerViewModelTests: XCTestCase {
         var summary = WorkoutSummaryResponse(days: 84, exercises: [:])
         var lastByExercise: [String: [WorkoutSetDTO]] = [:]
         var lastRequests: [String] = []
+        var recentSessions: [RecentSessionDTO] = []
+        var savedPerformedAt: [Date] = []
         var savedSessionIds: [String] = []
         /// Every session id posted, including attempts that threw.
         var attemptedSessionIds: [String] = []
@@ -28,6 +30,10 @@ final class LiftLoggerViewModelTests: XCTestCase {
             return WorkoutLastSessionResponse(sets: lastByExercise[exercise] ?? [])
         }
 
+        func fetchRecentWorkoutSessions(limit: Int) async throws -> WorkoutRecentSessionsResponse {
+            WorkoutRecentSessionsResponse(sessions: recentSessions)
+        }
+
         func logWorkoutSets(
             sessionId: String,
             source: String,
@@ -39,6 +45,7 @@ final class LiftLoggerViewModelTests: XCTestCase {
             if let saveError { throw saveError }
             savedSessionIds.append(sessionId)
             savedSources.append(source)
+            savedPerformedAt.append(performedAt)
             savedSets.append(sets)
             return LogWorkoutSetsResponse(ok: true, sets: [])
         }
@@ -251,5 +258,133 @@ final class LiftLoggerViewModelTests: XCTestCase {
             XCTAssertEqual(api.savedSessionIds, [api.attemptedSessionIds[1]])
         }
         XCTAssertTrue(vm.didSave)
+    }
+
+    // MARK: - fast logging
+
+    private func recentSession(_ id: String, day: String, _ exercises: [(String, Int, Double)]) -> RecentSessionDTO {
+        RecentSessionDTO(
+            sessionId: id, performedAt: "\(day)T10:00:00.000Z", localDay: day,
+            exercises: exercises.map { key, sets, kg in
+                RecentSessionExerciseDTO(
+                    exercise: key, display: key.capitalized, sets: sets,
+                    topSet: RecentSessionTopSetDTO(reps: 5, loadKg: kg),
+                    setDetails: (0..<sets).map { _ in RecentSessionSetDTO(reps: 5, loadKg: kg, rpe: nil) }
+                )
+            }
+        )
+    }
+
+    private func warmupDTO(_ exercise: String, index: Int, loadKg: Double) -> WorkoutSetDTO {
+        WorkoutSetDTO(
+            id: "id-\(exercise)-\(index)", sessionId: "s1", workoutId: nil,
+            performedAt: "2026-10-05T10:00:00.000Z", localDay: "2026-10-05", exercise: exercise,
+            exerciseDisplay: exercise.capitalized, setIndex: index, reps: 5, loadKg: loadKg,
+            rpe: nil, isWarmup: true, source: "manual"
+        )
+    }
+
+    func testAddingAnExerciseSeedsItFromItsOwnLastSessionWithHints() async throws {
+        let api = FakeAPI()
+        // /last returns the WHOLE session: other exercises and warm-ups must be ignored.
+        api.lastByExercise["squat"] = [
+            warmupDTO("squat", index: 1, loadKg: 60),
+            setDTO("squat", index: 2, reps: 8, loadKg: 100),
+            setDTO("squat", index: 3, reps: 6, loadKg: 105),
+            setDTO("bench press", index: 4, reps: 5, loadKg: 80),
+        ]
+        let vm = makeViewModel(api)
+        vm.addExercise(named: "squat")
+        let id = try XCTUnwrap(vm.exercises.first?.id)
+
+        await vm.seedFromHistory(exerciseID: id)
+
+        let sets = try XCTUnwrap(vm.exercises.first?.sets)
+        XCTAssertEqual(sets.map { $0.reps }, [8, 6])
+        XCTAssertEqual(sets.map { $0.load }, [100, 105])
+        XCTAssertEqual(sets.first?.last, LiftLastRef(reps: 8, load: 100))
+    }
+
+    func testSeedingDoesNotOverwriteASetTheUserAlreadyEdited() async throws {
+        let api = FakeAPI()
+        api.lastByExercise["squat"] = [setDTO("squat", index: 1, reps: 8, loadKg: 100)]
+        let vm = makeViewModel(api)
+        vm.addExercise(named: "squat")
+        let exercise = try XCTUnwrap(vm.exercises.first)
+        vm.exercises[0].sets[0].load = 90
+
+        await vm.seedFromHistory(exerciseID: exercise.id)
+
+        XCTAssertEqual(vm.exercises[0].sets.count, 1)
+        XCTAssertEqual(vm.exercises[0].sets[0].load, 90)
+        XCTAssertEqual(vm.exercises[0].history.count, 1)
+    }
+
+    func testAddSetAfterSeedingShowsTheNextHistoryHint() async throws {
+        let api = FakeAPI()
+        api.lastByExercise["squat"] = [
+            setDTO("squat", index: 1, reps: 8, loadKg: 100),
+            setDTO("squat", index: 2, reps: 6, loadKg: 105),
+            setDTO("squat", index: 3, reps: 5, loadKg: 110),
+        ]
+        let vm = makeViewModel(api)
+        vm.addExercise(named: "squat")
+        let id = try XCTUnwrap(vm.exercises.first?.id)
+        await vm.seedFromHistory(exerciseID: id)
+        vm.removeSets(in: id, at: IndexSet(integer: 2))
+
+        vm.addSet(to: id)
+
+        let added = try XCTUnwrap(vm.exercises.first?.sets.last)
+        XCTAssertEqual(added.reps, 6)           // copies the previous set
+        XCTAssertEqual(added.last, LiftLastRef(reps: 5, load: 110))
+    }
+
+    func testPickingARecentSessionReplacesTheForm() async {
+        let api = FakeAPI()
+        api.recentSessions = [
+            recentSession("s-legs", day: "2026-10-03", [("squat", 3, 140)]),
+            recentSession("s-push", day: "2026-10-01", [("bench press", 4, 90), ("overhead press", 3, 55)]),
+        ]
+        let vm = makeViewModel(api)
+        await vm.load()
+        // No /last data: falls back to the newest session.
+        XCTAssertEqual(vm.repeatedSessionId, "s-legs")
+
+        vm.repeatSession(id: "s-push")
+
+        XCTAssertEqual(vm.exercises.map { $0.key }, ["bench press", "overhead press"])
+        XCTAssertEqual(vm.exercises.first?.sets.count, 4)
+        XCTAssertEqual(vm.repeatedSessionId, "s-push")
+        XCTAssertTrue(vm.isRepeatingLast)
+    }
+
+    func testCompletionsComeFromTheUsersOwnHistory() async {
+        let api = FakeAPI()
+        api.summary = summary(["bench press", "squat"])
+        api.recentSessions = [recentSession("s1", day: "2026-10-03", [("overhead press", 3, 55)])]
+        let vm = makeViewModel(api)
+        await vm.load()
+
+        vm.newExerciseName = "ben"
+        XCTAssertEqual(vm.completions.map { $0.key }, ["bench press"])
+        vm.newExerciseName = "press"
+        XCTAssertEqual(Set(vm.completions.map { $0.key }), ["bench press", "overhead press"])
+    }
+
+    func testSaveSendsTheChosenDateAndWarmupAndRPE() async {
+        let api = FakeAPI()
+        let vm = makeViewModel(api)
+        vm.addExercise(named: "squat")
+        vm.exercises[0].sets[0].isWarmup = true
+        vm.exercises[0].sets[0].rpe = 8.5
+        let yesterday = Date(timeIntervalSinceNow: -86_400)
+        vm.performedDate = yesterday
+
+        await vm.save()
+
+        XCTAssertEqual(api.savedPerformedAt, [yesterday])
+        XCTAssertEqual(api.savedSets.first?.first?.isWarmup, true)
+        XCTAssertEqual(api.savedSets.first?.first?.rpe, 8.5)
     }
 }
