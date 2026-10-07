@@ -137,6 +137,81 @@ export async function getLastSessionForExercise(
     .orderBy(schema.workout_sets.exercise, schema.workout_sets.set_index);
 }
 
+export interface RecentSessionExercise {
+  exercise: string;   // canonical, lowercase
+  display: string;
+  sets: number;       // working (non-warmup) sets
+  topSet: { reps: number; loadKg: number | null };
+  /** Additive: every working set in set order, so a client can repeat the session without a second fetch. */
+  setDetails: { reps: number; loadKg: number | null; rpe: number | null }[];
+}
+
+export interface RecentSession {
+  sessionId: string;
+  performedAt: string; // ISO
+  localDay: string;
+  exercises: RecentSessionExercise[];
+}
+
+/**
+ * Groups raw sets (any order) into recent sessions, newest first, capped at
+ * `limit`. Warm-up sets are ignored; a session with no working sets is
+ * dropped. Exercises appear in the order of their first set_index. Pure.
+ */
+export function groupRecentSessions(
+  sets: (Pick<WorkoutSet, 'session_id' | 'performed_at' | 'local_day' | 'exercise' | 'exercise_display' | 'set_index' | 'reps' | 'load_kg' | 'is_warmup'> & { rpe?: number | null })[],
+  limit: number,
+): RecentSession[] {
+  const bySession = new Map<string, typeof sets>();
+  for (const set of sets) {
+    if (set.is_warmup) continue;
+    const list = bySession.get(set.session_id);
+    if (list) list.push(set);
+    else bySession.set(set.session_id, [set]);
+  }
+  const sessions: RecentSession[] = [];
+  for (const [sessionId, rows] of bySession) {
+    const ordered = [...rows].sort((a, b) => a.set_index - b.set_index);
+    const byExercise = new Map<string, typeof ordered>();
+    for (const row of ordered) {
+      const list = byExercise.get(row.exercise);
+      if (list) list.push(row);
+      else byExercise.set(row.exercise, [row]);
+    }
+    const exercises: RecentSessionExercise[] = [];
+    for (const [exercise, exRows] of byExercise) {
+      const top = pickTopSet(exRows);
+      if (!top) continue;
+      exercises.push({
+        exercise,
+        display: exRows[0].exercise_display,
+        sets: exRows.length,
+        topSet: { reps: top.reps, loadKg: top.load_kg },
+        setDetails: exRows.map(r => ({ reps: r.reps, loadKg: r.load_kg, rpe: r.rpe ?? null })),
+      });
+    }
+    sessions.push({
+      sessionId,
+      performedAt: ordered[0].performed_at.toISOString(),
+      localDay: ordered[0].local_day,
+      exercises,
+    });
+  }
+  sessions.sort((a, b) => b.performedAt.localeCompare(a.performedAt));
+  return sessions.slice(0, limit);
+}
+
+/** The user's most recent `limit` distinct strength sessions, newest first. */
+export async function getRecentSessions(userId: string, limit = 8): Promise<RecentSession[]> {
+  const rows = await db
+    .select()
+    .from(schema.workout_sets)
+    .where(eq(schema.workout_sets.user_id, userId))
+    .orderBy(desc(schema.workout_sets.performed_at), asc(schema.workout_sets.set_index))
+    .limit(Math.max(1, limit) * 80);
+  return groupRecentSessions(rows, limit);
+}
+
 /** All sets logged within the last `days` days, oldest first (for aggregation). */
 export async function getSetsSince(userId: string, days: number): Promise<WorkoutSet[]> {
   const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);

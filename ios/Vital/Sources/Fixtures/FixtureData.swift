@@ -348,6 +348,8 @@ enum FixtureData {
             return (200, jsonData(workoutSummary(scenario: scenario)))
         case ("GET", "/api/workouts/last"):
             return (200, jsonData(workoutLastSession(scenario: scenario)))
+        case ("GET", "/api/workouts/sessions"):
+            return (200, jsonData(workoutRecentSessions(scenario: scenario)))
         case ("POST", "/api/workouts/sets"):
             let saved: [String: Any] = ["ok": true, "sets": [[String: Any]]()]
             return (200, jsonData(saved))
@@ -1792,6 +1794,51 @@ enum FixtureData {
             makeSet(7, exercise: "squat", display: "Squat", index: 4, reps: 5, loadKg: 140, warmup: false),
         ]
         return ["sets": sets]
+    }
+
+    // MARK: - GET /api/workouts/sessions → WorkoutRecentSessionsResponse
+
+    /// PPL-style history for `.muscle` (newest first: Thu Legs, Tue Pull,
+    /// Mon Push, then last week's Legs); empty for every other scenario.
+    /// Sessions are anchored to days-ago offsets so the menu stays plausible.
+    private static func workoutRecentSessions(scenario: FixtureMode.Scenario) -> [String: Any] {
+        guard scenario == .muscle else { return ["sessions": [[String: Any]]()] }
+
+        func ex(_ key: String, _ display: String, reps: Int, loadKg: Double, sets: Int) -> [String: Any] {
+            [
+                "exercise": key,
+                "display": display,
+                "sets": sets,
+                "topSet": ["reps": reps, "loadKg": loadKg],
+                "setDetails": (0..<sets).map { _ in ["reps": reps, "loadKg": loadKg] as [String: Any] },
+            ]
+        }
+        func session(_ id: String, daysAgo: Int, _ exercises: [[String: Any]]) -> [String: Any] {
+            [
+                "sessionId": id,
+                "performedAt": isoDaysAgo(daysAgo),
+                "localDay": dayString(daysAgo),
+                "exercises": exercises,
+            ]
+        }
+        let sessions: [[String: Any]] = [
+            session("5b1f0c1e-7a54-4c6e-9d57-2f3a6e0c9b11", daysAgo: 2, [
+                ex("squat", "Squat", reps: 5, loadKg: 140, sets: 3),
+                ex("romanian deadlift", "Romanian deadlift", reps: 8, loadKg: 100, sets: 3),
+                ex("leg press", "Leg press", reps: 10, loadKg: 180, sets: 3),
+            ]),
+            session("6c2a1d2f-8b65-4d7f-8e68-3a4b7f1d0c22", daysAgo: 3, [
+                ex("barbell row", "Barbell row", reps: 8, loadKg: 80, sets: 4),
+                ex("pull-up", "Pull-up", reps: 8, loadKg: 0, sets: 3),
+                ex("curl", "Curl", reps: 12, loadKg: 20, sets: 3),
+            ]),
+            session("7d3b2e3a-9c76-4e8a-9f79-4b5c8a2e1d33", daysAgo: 4, [
+                ex("bench press", "Bench press", reps: 5, loadKg: 92.5, sets: 4),
+                ex("overhead press", "Overhead press", reps: 8, loadKg: 57.5, sets: 3),
+                ex("triceps pushdown", "Triceps pushdown", reps: 12, loadKg: 35, sets: 3),
+            ]),
+        ]
+        return ["sessions": sessions]
     }
 
     // MARK: - GET /api/goal/progress → GoalProgressDTO
