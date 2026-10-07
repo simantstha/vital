@@ -60,6 +60,8 @@ struct MetricTile: View {
                     Text(delta)
                         .font(Theme.Typography.labelSmall)
                         .foregroundStyle(trend.color)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)

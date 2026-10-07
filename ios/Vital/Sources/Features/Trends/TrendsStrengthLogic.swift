@@ -148,7 +148,7 @@ enum TrendsStrengthLogic {
             return Lift(
                 key: candidate.key,
                 name: displayName(for: candidate.key),
-                currentText: UnitFormat.weight(kg: latest, system),
+                currentText: wholeWeightText(kg: latest, system: system),
                 sparkline: e1rm,
                 status: status(e1rm: e1rm, system: system),
                 changeKg: change(e1rm: e1rm)?.changeKg,
@@ -218,13 +218,43 @@ enum TrendsStrengthLogic {
             return Status(text: "New", tone: .neutral)
         }
         let delta = change.changeKg
-        if isProgressing(changeKg: delta, baselineKg: change.baselineKg) {
-            return Status(text: "+\(magnitudeText(kg: delta, system: system)) vs 4 wk ago", tone: .good)
+        // Whole kg/lb, computed from the ROUNDED endpoints (mirrors
+        // `liftDisplayChange` in lib/liftChange.ts) so "+6 kg" always matches
+        // the "102 -> 108" the goal card shows. A change too small to survive
+        // rounding reads as "No change" rather than "+0 kg".
+        let shown = displayChange(change, system: system)
+        if isProgressing(changeKg: delta, baselineKg: change.baselineKg), shown.change > 0 {
+            return Status(text: "+\(shown.change) \(system.weightUnit) vs 4 wk ago", tone: .good)
         }
-        if isDeclining(changeKg: delta, baselineKg: change.baselineKg) {
-            return Status(text: "\u{2212}\(magnitudeText(kg: -delta, system: system)) vs 4 wk ago", tone: .watch)
+        if isDeclining(changeKg: delta, baselineKg: change.baselineKg), shown.change < 0 {
+            return Status(text: "\u{2212}\(-shown.change) \(system.weightUnit) vs 4 wk ago", tone: .watch)
         }
         return Status(text: "No change vs 4 wk ago", tone: .watch)
+    }
+
+    /// Whole-unit endpoints and the change between the ROUNDED endpoints —
+    /// the single user-facing e1RM number format (an estimated 1RM to 0.1 kg
+    /// is false precision). Mirrors `liftDisplayChange` in `lib/liftChange.ts`
+    /// (JS `Math.round` and `.rounded()` agree for positive e1RMs).
+    struct DisplayChange: Equatable {
+        let baseline: Int
+        let recent: Int
+        let change: Int
+    }
+
+    static func displayChange(_ change: LiftChange, system: UnitSystem) -> DisplayChange {
+        func whole(_ kg: Double) -> Int {
+            Int((system == .metric ? kg : UnitConvert.kgToLb(kg)).rounded())
+        }
+        let baseline = whole(change.baselineKg)
+        let recent = whole(change.recentKg)
+        return DisplayChange(baseline: baseline, recent: recent, change: recent - baseline)
+    }
+
+    /// A lift's e1RM as a whole-unit string ("142 kg" / "314 lb").
+    static func wholeWeightText(kg: Double, system: UnitSystem) -> String {
+        let value = system == .metric ? kg : UnitConvert.kgToLb(kg)
+        return "\(Int(value.rounded())) \(system.weightUnit)"
     }
 
     /// Mirrors `isLiftProgressing`: a real gain is >= +1% of the baseline.
@@ -237,20 +267,10 @@ enum TrendsStrengthLogic {
         changeKg < 0 && -changeKg >= baselineKg * progressMinFraction - 1e-9
     }
 
-    /// Unsigned weight magnitude with its unit — metric up to one decimal
-    /// ("2.5 kg", "3 kg"), imperial whole pounds ("6 lb").
+    /// Unsigned weight magnitude with its unit, whole kg / whole lb
+    /// ("3 kg", "6 lb").
     static func magnitudeText(kg: Double, system: UnitSystem) -> String {
-        let magnitude = abs(kg)
-        switch system {
-        case .metric:
-            let rounded = (magnitude * 10).rounded() / 10
-            let number = rounded.truncatingRemainder(dividingBy: 1) == 0
-                ? String(Int(rounded))
-                : String(format: "%.1f", rounded)
-            return "\(number) \(system.weightUnit)"
-        case .imperial:
-            return "\(Int(UnitConvert.kgToLb(magnitude).rounded())) \(system.weightUnit)"
-        }
+        wholeWeightText(kg: abs(kg), system: system)
     }
 
     // MARK: - Volume line

@@ -74,15 +74,32 @@ final class TrendsStrengthLogicTests: XCTestCase {
         XCTAssertEqual(status.tone, .good)
     }
 
-    func testStatusShowsOneDecimalForFractionalMetricGain() {
+    /// e1RM is an estimate: whole kg, with the change taken from the rounded
+    /// endpoints (100 -> 102.5 shows 100 -> 103, so +3 kg).
+    func testStatusShowsWholeKgForFractionalMetricGain() {
         let e1rm: [Double?] = [nil, nil, nil, 100, nil, nil, nil, 102.5]
-        XCTAssertEqual(TrendsStrengthLogic.status(e1rm: e1rm, system: .metric).text, "+2.5 kg vs 4 wk ago")
+        XCTAssertEqual(TrendsStrengthLogic.status(e1rm: e1rm, system: .metric).text, "+3 kg vs 4 wk ago")
+    }
+
+    /// The persona-review case: 99.2 -> 107.9 is +8.7 kg unrounded, which printed
+    /// "+8.8 kg (99.2 -> 107.9)". Now 99 -> 108 and +9, and the numbers add up.
+    func testDisplayChangeIsComputedFromRoundedEndpoints() {
+        let c = TrendsStrengthLogic.LiftChange(baselineKg: 99.2, recentKg: 107.9, changeKg: 8.7)
+        XCTAssertEqual(
+            TrendsStrengthLogic.displayChange(c, system: .metric),
+            TrendsStrengthLogic.DisplayChange(baseline: 99, recent: 108, change: 9)
+        )
+        // Parity with liftDisplayChange (lib/liftChange.test.ts): 100 -> 105 kg is 220 -> 231 lb.
+        XCTAssertEqual(
+            TrendsStrengthLogic.displayChange(.init(baselineKg: 100, recentKg: 105, changeKg: 5), system: .imperial),
+            TrendsStrengthLogic.DisplayChange(baseline: 220, recent: 231, change: 11)
+        )
     }
 
     func testStatusConvertsGainToPoundsForImperialUsers() {
         let e1rm: [Double?] = [nil, nil, nil, 100, nil, nil, nil, 110]
-        // 10 kg = 22.05 lb
-        XCTAssertEqual(TrendsStrengthLogic.status(e1rm: e1rm, system: .imperial).text, "+22 lb vs 4 wk ago")
+        // 100 kg = 220 lb, 110 kg = 243 lb (rounded endpoints) -> +23 lb
+        XCTAssertEqual(TrendsStrengthLogic.status(e1rm: e1rm, system: .imperial).text, "+23 lb vs 4 wk ago")
     }
 
     func testStatusReportsNoChangeAsWatch() {
@@ -177,7 +194,8 @@ final class TrendsStrengthLogicTests: XCTestCase {
             TrendsStrengthLogic.change(e1rm: bench),
             TrendsStrengthLogic.LiftChange(baselineKg: 102.1, recentKg: 107.9, changeKg: 5.8)
         )
-        XCTAssertEqual(TrendsStrengthLogic.status(e1rm: bench, system: .metric).text, "+5.8 kg vs 4 wk ago")
+        // Whole kg from rounded endpoints: 102.1 -> 107.9 shows 102 -> 108 = +6.
+        XCTAssertEqual(TrendsStrengthLogic.status(e1rm: bench, system: .metric).text, "+6 kg vs 4 wk ago")
 
         let squat = series(["2026-09-07": 140, "2026-10-05": 138.2])
         XCTAssertEqual(
@@ -202,7 +220,8 @@ final class TrendsStrengthLogicTests: XCTestCase {
             TrendsStrengthLogic.change(e1rm: bench),
             TrendsStrengthLogic.LiftChange(baselineKg: 101, recentKg: 106.4, changeKg: 5.4)
         )
-        XCTAssertEqual(TrendsStrengthLogic.status(e1rm: bench, system: .metric).text, "+5.4 kg vs 4 wk ago")
+        // 101 -> 106.4 shows 101 -> 106 = +5.
+        XCTAssertEqual(TrendsStrengthLogic.status(e1rm: bench, system: .metric).text, "+5 kg vs 4 wk ago")
 
         // The end week is searched only 3 weeks back (10-05, 09-28, 09-21).
         XCTAssertNil(TrendsStrengthLogic.change(e1rm: series(["2026-09-14": 100])))
@@ -298,8 +317,8 @@ final class TrendsStrengthLogicTests: XCTestCase {
 
     func testMagnitudeText() {
         XCTAssertEqual(TrendsStrengthLogic.magnitudeText(kg: 3, system: .metric), "3 kg")
-        XCTAssertEqual(TrendsStrengthLogic.magnitudeText(kg: 2.5, system: .metric), "2.5 kg")
-        XCTAssertEqual(TrendsStrengthLogic.magnitudeText(kg: -2.5, system: .metric), "2.5 kg")
+        XCTAssertEqual(TrendsStrengthLogic.magnitudeText(kg: 2.4, system: .metric), "2 kg")
+        XCTAssertEqual(TrendsStrengthLogic.magnitudeText(kg: -2.5, system: .metric), "3 kg")
         XCTAssertEqual(TrendsStrengthLogic.magnitudeText(kg: 2.5, system: .imperial), "6 lb")
     }
 

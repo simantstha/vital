@@ -83,6 +83,65 @@ export function liftChange4w(weeks: LiftWeekPoint[], anchorWeekStart: string): L
   return { baselineKg, recentKg, changeKg: Math.round((recentKg - baselineKg) * 10) / 10 };
 }
 
+/** kg -> lb, same factor as lib/goalProgress.ts (KG_TO_LB); duplicated to keep this file import-free. */
+const LB_PER_KG = 2.20462;
+
+export interface HeadlineLift {
+  /** Canonical exercise key ("squat"). */
+  exercise: string;
+  change: LiftChange4w;
+}
+
+/**
+ * THE headline-lift rule, shared by the Trends goal card / Today line and the
+ * weekly review (mirrored by TrendsStrengthLogic.headlineLift on iOS): of
+ * every lift with a 4-week change (`liftChange4w`), the one with the largest
+ * e1RM change in kg. Gains are preferred; only when no lift is up is the
+ * largest drop chosen, so one regressing lift never hides a progressing one.
+ * Ties break on the exercise key (ascending). Null when no lift has a
+ * comparable change.
+ */
+export function pickHeadlineLift(
+  progression: Record<string, LiftWeekPoint[]>,
+  anchorWeekStart: string,
+): HeadlineLift | null {
+  let best: HeadlineLift | null = null;
+  for (const [exercise, weeks] of Object.entries(progression)) {
+    const change = liftChange4w(weeks, anchorWeekStart);
+    if (!change) continue;
+    if (best == null || headlineBeats(change.changeKg, exercise, best.change.changeKg, best.exercise)) {
+      best = { exercise, change };
+    }
+  }
+  return best;
+}
+
+function headlineBeats(a: number, aKey: string, b: number, bKey: string): boolean {
+  if (a > 0 || b > 0) return a > b || (a === b && aKey < bKey);
+  // Nothing is up: the biggest drop (most negative) leads.
+  return a < b || (a === b && aKey < bKey);
+}
+
+export interface LiftDisplayChange {
+  /** Whole display units (kg, or lb for imperial). */
+  baseline: number;
+  recent: number;
+  /** recent - baseline of the ROUNDED endpoints, so the shown numbers always add up. */
+  change: number;
+}
+
+/**
+ * User-facing e1RM numbers: whole kg (whole lb for imperial) — an estimated
+ * 1RM to 0.1 kg is false precision. The change is computed from the rounded
+ * endpoints ("99 → 108, +9"), never rounded separately.
+ */
+export function liftDisplayChange(c: LiftChange4w, imperial: boolean): LiftDisplayChange {
+  const f = imperial ? LB_PER_KG : 1;
+  const baseline = Math.round(c.baselineKg * f);
+  const recent = Math.round(c.recentKg * f);
+  return { baseline, recent, change: recent - baseline };
+}
+
 /** True when the change is a real gain: >= +1% of the baseline. */
 export function isLiftProgressing(c: LiftChange4w): boolean {
   return c.changeKg >= c.baselineKg * LIFT_PROGRESS_MIN_FRACTION - 1e-9 && c.changeKg > 0;

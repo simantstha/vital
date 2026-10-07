@@ -172,14 +172,14 @@ private extension MetricDetailView {
     var displayedDate: Date? { snappedPoint?.date ?? rawPoints.last?.date }
     var displayedVerdict: Verdict { evaluate(displayedValue) }
 
-    /// "↑ 3 ms above your normal range" / "↓ 3 bpm below your normal range" /
-    /// "Within your normal (49–55)" — distance is to the band edge the chart
-    /// draws. `nil` while calibrating or with no data.
+    /// "↑ 6 ms above your normal (51 ms)" / "↓ 3 bpm below your normal (60 bpm)" /
+    /// "Within your normal range (49–55)" — distance is to the 30-day normal
+    /// value (the same reference Trends' What-moved rows use). `nil` while calibrating or with no data.
     var deltaPillText: String? {
         switch displayedVerdict {
         case .above, .below, .normal:
             guard let spec, let value = displayedValue, let band = bandBounds else { return nil }
-            return TrendsDeltaFormat.bandPillText(value: value, lower: band.lower, upper: band.upper, spec: spec, system: unitPref.current)
+            return TrendsDeltaFormat.normalPillText(value: value, lower: band.lower, upper: band.upper, spec: spec, system: unitPref.current)
         case .calibrating, .noData:
             return nil
         }
@@ -729,7 +729,7 @@ private extension MetricDetailView {
             statButton(.low, label: "Low", value: formattedStat(rangeLowPoint?.value))
             statButton(.average, label: "Avg · \(vm.range.label)", value: formattedStat(rangeAverage))
             statButton(.high, label: "High", value: formattedStat(rangeHighPoint?.value))
-            StatBadge(label: "Normal (range)", value: normalRangeText)
+            StatBadge(label: "Normal range", value: normalRangeText)
         }
     }
 

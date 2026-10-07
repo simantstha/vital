@@ -28,23 +28,25 @@ enum TrendsDeltaFormat {
         return unit.isEmpty ? numberText : "\(numberText) \(unit)"
     }
 
-    /// Hero pill copy for the metric detail screen, measured against the
-    /// same "normal" band the chart and range tile draw (mean30 ± sd30) —
-    /// not against the mean, which made "6 above" disagree with a band edge
-    /// only 3 below the value. Inside the band → "Within your normal
-    /// (49–55)"; outside → distance to the nearest edge.
-    static func bandPillText(value: Double, lower: Double, upper: Double, spec: MetricSpec, system: UnitSystem) -> String {
+    /// Hero pill copy for the metric detail screen. ONE definition of "your
+    /// normal" everywhere a number accompanies the word: the 30-day normal
+    /// VALUE (mean30, the middle of the band), in the metric's unit — the same
+    /// reference Trends' "What moved" rows use ("6 ms below your normal"). The
+    /// shaded band (mean30 +/- sd30) is only ever called the "normal range":
+    /// inside it the pill names the range, outside it the pill measures the
+    /// distance to the normal value and states that value.
+    static func normalPillText(value: Double, lower: Double, upper: Double, spec: MetricSpec, system: UnitSystem) -> String {
+        let normal = (lower + upper) / 2
+        if value > upper || value < lower {
+            let m = magnitudeText(value - normal, spec: spec, system: system, includeUnit: true)
+            let ref = magnitudeText(normal, spec: spec, system: system, includeUnit: true)
+            return value > upper
+                ? "\(arrow(1)) \(m) above your normal (\(ref))"
+                : "\(arrow(-1)) \(m) below your normal (\(ref))"
+        }
         let lo = formattedNumber(lower, decimals: spec.decimals)
         let hi = formattedNumber(upper, decimals: spec.decimals)
-        if value > upper {
-            let m = magnitudeText(value - upper, spec: spec, system: system, includeUnit: true)
-            return "\(arrow(1)) \(m) above your normal range"
-        }
-        if value < lower {
-            let m = magnitudeText(lower - value, spec: spec, system: system, includeUnit: true)
-            return "\(arrow(-1)) \(m) below your normal range"
-        }
-        return "Within your normal (\(lo)–\(hi))"
+        return "Within your normal range (\(lo)\u{2013}\(hi))"
     }
 
     private static var cachedFormatters: [Int: NumberFormatter] = [:]

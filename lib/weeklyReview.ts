@@ -22,7 +22,7 @@ import { PARTIAL_LOG_KCAL_THRESHOLD, TOO_FAST_LOSS_PCT_PER_WEEK } from './brain/
 import { computeWeightTrend, type WeightReading } from './weightTrend';
 import { localDayKey, weekDayKeys, weekStartKeyForDay } from './localDay';
 import type { ProgressionSummary } from './workoutRepository';
-import { isDeload, liftChange4w, liftDisplayName } from './liftChange';
+import { isDeload, liftDisplayChange, liftDisplayName, pickHeadlineLift } from './liftChange';
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
@@ -328,45 +328,57 @@ function totalVolumeByWeek(progression: ProgressionSummary): Record<string, numb
 }
 
 /**
- * Best lift of the reviewed week (most sets). The headline number is the shared
- * 4-week definition from lib/liftChange.ts ("vs 4 weeks ago": best e1RM of the
- * reviewed + previous week vs the two weeks ending 4 weeks earlier) — the same
- * number the Trends goal card and iOS Strength card show. When that lift has no
- * 4-weeks-ago data the stat falls back to the clearly-labelled
- * "vs last trained week" change instead of inventing one.
+ * Headline lift of the review: the shared pick from lib/liftChange.ts
+ * (`pickHeadlineLift` — largest 4-week e1RM change, the same lift the Trends
+ * goal card names) with the shared 4-week number ("vs 4 weeks ago"), shown in
+ * whole kg/lb. When no lift has 4-weeks-ago data the stat falls back to the
+ * most-trained lift's clearly-labelled "vs last trained week" change instead
+ * of inventing one.
  */
 function liftCandidate(input: WeeklyReviewInput, week: Week): Candidate | null {
-  let best: { exercise: string; name: string; sets: number; deltaKg: number; windowLabel: string } | null = null;
-  for (const [exercise, weeks] of Object.entries(input.progression)) {
-    const cur = weeks.find(w => w.weekStart === week.days[0]);
-    if (!cur || cur.bestEstimatedOneRepMaxKg == null) continue;
-    let deltaKg: number;
-    let windowLabel: string;
-    const c = liftChange4w(weeks, week.days[0]);
-    if (c) {
-      deltaKg = c.changeKg;
-      windowLabel = 'vs 4 weeks ago';
-    } else {
+  const imperial = isImperial(input);
+  const unit = imperial ? 'lb' : 'kg';
+  let best: { name: string; shown: number; windowLabel: string } | null = null;
+  // ONE headline-lift rule (lib/liftChange.ts pickHeadlineLift): the lift with
+  // the largest 4-week e1RM change — the same lift the Trends goal card names.
+  const picked = pickHeadlineLift(input.progression, week.days[0]);
+  if (picked) {
+    best = {
+      name: liftDisplayName(picked.exercise, input.exerciseDisplay),
+      shown: liftDisplayChange(picked.change, imperial).change,
+      windowLabel: 'vs 4 weeks ago',
+    };
+  } else {
+    // No lift has 4-weeks-ago data: clearly-labelled "vs last trained week" for the most-trained lift.
+    let top: { exercise: string; sets: number; deltaKg: number } | null = null;
+    for (const [exercise, weeks] of Object.entries(input.progression)) {
+      const cur = weeks.find(w => w.weekStart === week.days[0]);
+      if (!cur || cur.bestEstimatedOneRepMaxKg == null) continue;
       const earlier = weeks.filter(w => w.weekStart < week.days[0] && w.bestEstimatedOneRepMaxKg != null);
       if (earlier.length === 0) continue;
-      deltaKg = cur.bestEstimatedOneRepMaxKg - (earlier[earlier.length - 1].bestEstimatedOneRepMaxKg as number);
-      windowLabel = 'vs last trained week';
+      const deltaKg = cur.bestEstimatedOneRepMaxKg - (earlier[earlier.length - 1].bestEstimatedOneRepMaxKg as number);
+      if (!top || cur.totalSets > top.sets || (cur.totalSets === top.sets && exercise < top.exercise)) top = { exercise, sets: cur.totalSets, deltaKg };
     }
-    const cand = { exercise, name: liftDisplayName(exercise, input.exerciseDisplay), sets: cur.totalSets, deltaKg, windowLabel };
-    if (!best || cand.sets > best.sets || (cand.sets === best.sets && cand.exercise < best.exercise)) best = cand;
+    if (top) {
+      best = {
+        name: liftDisplayName(top.exercise, input.exerciseDisplay),
+        shown: Math.round(top.deltaKg * (imperial ? KG_TO_LB : 1)),
+        windowLabel: 'vs last trained week',
+      };
+    }
   }
   if (!best) return null;
-  const rounded = round1(isImperial(input) ? best.deltaKg * KG_TO_LB : best.deltaKg);
-  const value = rounded === 0 ? weightText(input, 0) : signed(rounded, weightText(input, Math.abs(best.deltaKg)));
+  const value = best.shown === 0 ? `0 ${unit}` : signed(best.shown, `${Math.abs(best.shown)} ${unit}`);
   // A deload (week volume < 60% of the 4-week average) lowers e1RM on purpose:
   // never a slip, just a neutral "Lighter week".
-  const lighter = best.deltaKg < -0.05 && isDeload(totalVolumeByWeek(input.progression), week.days[0], 1);
-  const tone: ReviewTone = lighter ? 'neutral' : best.deltaKg > 0.05 ? 'good' : best.deltaKg < -0.05 ? 'watch' : 'neutral';
+  const lighter = best.shown < 0 && isDeload(totalVolumeByWeek(input.progression), week.days[0], 1);
+  const tone: ReviewTone = lighter ? 'neutral' : best.shown > 0 ? 'good' : best.shown < 0 ? 'watch' : 'neutral';
   const cand: Candidate = {
     stat: { label: `${best.name} est. 1RM`, value, comparison: lighter ? `Lighter week · ${best.windowLabel}` : best.windowLabel, tone },
   };
-  if (tone === 'good') cand.win = `${best.name} estimated 1RM is up ${weightText(input, Math.abs(best.deltaKg))} ${best.windowLabel}.`;
-  if (tone === 'watch') cand.slip = `${best.name} estimated 1RM is down ${weightText(input, Math.abs(best.deltaKg))} ${best.windowLabel}.`;
+  const shownText = `${Math.abs(best.shown)} ${unit}`;
+  if (tone === 'good') cand.win = `${best.name} estimated 1RM is up ${shownText} ${best.windowLabel}.`;
+  if (tone === 'watch') cand.slip = `${best.name} estimated 1RM is down ${shownText} ${best.windowLabel}.`;
   return cand;
 }
 
@@ -548,7 +560,11 @@ function buildHeadline(input: WeeklyReviewInput, cands: Candidate[]): string {
     }
     const lift = cands.find(x => x.stat.label.endsWith('est. 1RM'))?.stat;
     const protein = by('Protein days hit');
-    if (lift && lift.tone === 'good') parts.push(`${lift.label.replace(' est. 1RM', '')} up ${lift.value.replace('+', '')}`);
+    if (lift && lift.tone === 'good') {
+      // The lift change is a 4-week number inside a one-week sentence: say so.
+      const window = lift.comparison?.includes('4 weeks') ? 'over 4 wks' : 'vs last trained wk';
+      parts.push(`${lift.label} ${lift.value} ${window}`);
+    }
     else if (protein) parts.push(`protein ${protein.value.replace('/', ' of ')} ${loggedWord(protein)}days`);
     else if (weight) parts.push(`weight ${weight.value}`);
   } else if (input.goal === 'endurance') {

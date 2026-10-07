@@ -321,7 +321,9 @@ test('muscle: adherence reason reads "9 of 16 planned sessions in 4 weeks (56%)"
     progression: lifts(100, 105),
     trainingDays: Array.from({ length: 9 }, (_, i) => addDays(TODAY, -i * 3)),
   }));
-  assert.equal(p.verdict, 'progressing', 'verdict stays lift-based');
+  // 56% of planned sessions: lifts are up but the verdict is not the strongest positive.
+  assert.equal(p.verdict, 'behind');
+  assert.match(p.headline, /^Lifts up, sessions behind/);
   assert.equal(p.reasons[0].kind, 'adherence');
   assert.equal(p.reasons[0].text, '9 of 16 planned sessions in 4 weeks (56%)');
   assert.equal(p.reasons[0].tone, 'watch');
@@ -546,10 +548,57 @@ test('imperial lift reasons and headline are formatted in lb', () => {
     unitSystem: 'imperial',
     target: { weightKg: null, date: null, weeklySessions: 4 },
     progression: lifts(100, 105),
+    trainingDays: Array.from({ length: 14 }, (_, i) => addDays(TODAY, -i)),
   }));
-  assert.match(p.headline, /Bench Press est\. 1RM up 11 lb/);
+  assert.match(p.headline, /Bench Press est\. 1RM \+11 lb/);
   const lift = p.reasons.find(r => r.kind === 'lift');
-  assert.match(lift!.text, /\+11 lb vs 4 weeks ago \(220\.5 → 231\.5 lb\)/);
+  assert.match(lift!.text, /\+11 lb vs 4 weeks ago \(220 → 231 lb\)/);
+});
+
+// ── One definition: headline lift, whole-unit e1RM, honest muscle verdict ───
+
+const hl = (weekStart: string, e: number, sets: number) => ({
+  weekStart, bestEstimatedOneRepMaxKg: e, volumeKg: 1000, totalSets: sets, totalReps: sets * 6,
+});
+const fourteen = Array.from({ length: 14 }, (_, i) => addDays(TODAY, -i));
+
+test('muscle: the headline lift is the biggest e1RM change, not the most-trained lift', () => {
+  const p = computeGoalProgress(base({
+    goal: 'muscle', target: { weightKg: null, date: null, weeklySessions: 3 }, trainingDays: fourteen,
+    progression: {
+      'bench press': [hl('2026-09-07', 99.2, 30), hl('2026-10-05', 107.9, 30)],
+      squat: [hl('2026-09-07', 120, 6), hl('2026-10-05', 140.4, 6)],
+    },
+  }));
+  assert.equal(p.verdict, 'progressing');
+  assert.match(p.headline, /^Progressing — Squat est\. 1RM \+20 kg vs 4 weeks ago$/);
+  assert.match(p.reasons.find(r => r.kind === 'lift')!.text, /^Squat est\. 1RM \+20 kg vs 4 weeks ago \(120 → 140 kg\)$/);
+});
+
+test('muscle: lift reason change is computed from the rounded endpoints (99.2 → 107.9 reads +9, 99 → 108)', () => {
+  const p = computeGoalProgress(base({
+    goal: 'muscle', target: { weightKg: null, date: null, weeklySessions: 3 }, trainingDays: fourteen,
+    progression: { 'bench press': [hl('2026-09-07', 99.2, 6), hl('2026-10-05', 107.9, 6)] },
+  }));
+  assert.equal(p.reasons.find(r => r.kind === 'lift')!.text, 'Bench Press est. 1RM +9 kg vs 4 weeks ago (99 → 108 kg)');
+});
+
+test('muscle: lifts up but <70% of planned sessions → "Lifts up, sessions behind", not progressing', () => {
+  const mk = (n: number) => computeGoalProgress(base({
+    goal: 'muscle', target: { weightKg: null, date: null, weeklySessions: 4 },
+    trainingDays: Array.from({ length: n }, (_, i) => addDays(TODAY, -i)),
+    progression: { squat: [hl('2026-09-07', 120, 6), hl('2026-10-05', 130, 6)] },
+  }));
+  const low = mk(10); // 10/16 = 63%
+  assert.equal(low.verdict, 'behind');
+  assert.equal(low.headline, 'Lifts up, sessions behind — Squat +10 kg');
+  assert.equal(mk(12).verdict, 'progressing'); // 75%
+  // No weekly target: nothing to be behind on.
+  const noTarget = computeGoalProgress(base({
+    goal: 'muscle', target: { weightKg: 85, date: null, weeklySessions: null },
+    progression: { squat: [hl('2026-09-07', 120, 6), hl('2026-10-05', 130, 6)] },
+  }));
+  assert.equal(noTarget.verdict, 'progressing');
 });
 
 // ── Endurance with a weekly distance target ─────────────────────────────────
@@ -664,17 +713,18 @@ test('start weight falls back to the first weigh-in overall; stays null with no 
 });
 
 test('muscle: "Progressing" needs +1%, a +0.5% drift is a stall; names are display-cased', () => {
+  const twelve = Array.from({ length: 12 }, (_, i) => addDays(TODAY, -i));
   const small = computeGoalProgress(base({
-    goal: 'muscle', target: { weightKg: null, date: null, weeklySessions: 3 },
+    goal: 'muscle', target: { weightKg: null, date: null, weeklySessions: 3 }, trainingDays: twelve,
     progression: { 'bench press': [wk('2026-09-07', 100), wk('2026-10-05', 100.5)] },
   }));
   assert.equal(small.verdict, 'stalled');
   const real = computeGoalProgress(base({
-    goal: 'muscle', target: { weightKg: null, date: null, weeklySessions: 3 },
+    goal: 'muscle', target: { weightKg: null, date: null, weeklySessions: 3 }, trainingDays: twelve,
     progression: { 'bench press': [wk('2026-09-07', 100), wk('2026-10-05', 102)] },
   }));
   assert.equal(real.verdict, 'progressing');
-  assert.match(real.headline, /Bench Press est\. 1RM up 2 kg/);
+  assert.match(real.headline, /Bench Press est\. 1RM \+2 kg vs 4 weeks ago/);
   assert.match(real.reasons.find(r => r.kind === 'lift')!.text, /^Bench Press est\. 1RM/);
 });
 
@@ -682,6 +732,7 @@ test('muscle: an empty current week is skipped, so Monday before training is not
   // TODAY is Tuesday; current week (10-05) has no sets. End week = 09-28.
   const p = computeGoalProgress(base({
     goal: 'muscle', target: { weightKg: null, date: null, weeklySessions: 3 },
+    trainingDays: Array.from({ length: 12 }, (_, i) => addDays(TODAY, -i)),
     progression: { squat: [wk('2026-08-31', 100), wk('2026-09-28', 104)] },
   }));
   assert.equal(p.verdict, 'progressing');
