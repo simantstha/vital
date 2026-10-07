@@ -81,7 +81,9 @@ final class WeeklyReviewLogicTests: XCTestCase {
         XCTAssertNotEqual(WeeklyReviewLogic.verdictLabel(full), GoalProgressLogic.label(for: .onTrack))
         XCTAssertEqual(WeeklyReviewLogic.weekLabel(for: .behind), "Mixed week")
         XCTAssertEqual(WeeklyReviewLogic.weekLabel(for: .stalled), "Tough week")
-        XCTAssertEqual(WeeklyReviewLogic.weekLabel(for: .insufficientData), "Lighter week")
+        XCTAssertEqual(WeeklyReviewLogic.weekLabel(for: .building), "Good week")
+        XCTAssertEqual(WeeklyReviewLogic.weekLabel(for: .insufficientData), "Early days")
+        XCTAssertEqual(WeeklyReviewLogic.weekLabel(for: .needsTarget), "Set a target")
         XCTAssertEqual(WeeklyReviewLogic.rows(full).map(\.kind), [.win, .slip, .next])
         XCTAssertEqual(WeeklyReviewLogic.rows(full).last?.title, "Next week")
     }

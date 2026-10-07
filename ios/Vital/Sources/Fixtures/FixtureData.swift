@@ -1159,7 +1159,7 @@ enum FixtureData {
                 "subtitle": isLateRun ? "Completed last night" : "Completed this morning",
                 "imageThumb": NSNull(),
                 "kcal": NSNull(),
-                "km": workoutKm,
+                "km": isWalk ? NSNull() : workoutKm as Any,
                 "sleepMs": NSNull(),
                 "analysisId": workoutAnalysisId,
             ])
@@ -1358,18 +1358,16 @@ enum FixtureData {
     /// `.muscle`'s routine cardio: the same routine-session shape as
     /// `routineRunAnalysis` (no observations / nextSteps, empty narrative) but
     /// a 20-minute incline walk, so the lifter persona doesn't share
-    /// `.weightLoss`'s "Easy 6k".
+    /// `.weightLoss`'s "Easy 6k". Deliberately no distance / pace /
+    /// `paceHistory`: those drive run-only copy ("last N runs", min/km).
     private static func routineWalkAnalysis(profile: Profile, scenario: FixtureMode.Scenario) -> [String: Any] {
         let metrics: [String: Any] = [
             "type": "Walking", "durationMin": 20.0, "kcal": 110.0,
-            "distanceM": 1_600.0, "avgHr": 108.0, "maxHr": 121.0,
-            "paceMinPerKm": 12.5, "elevationGainM": 35.0,
+            "avgHr": 108.0, "maxHr": 121.0, "elevationGainM": 35.0,
             "startTime": isoAt(daysAgo: 0, hour: 6, minute: 52),
         ]
-        let previous = [12.9, 12.3, 12.7, 12.2, 12.6, 12.4, 12.8]
         let context: [String: Any] = [
-            "usual": ["sessions": 8, "distanceM": 1_550.0, "durationMin": 20.0, "paceMinPerKm": 12.6, "avgHr": 107.0],
-            "paceHistory": ["previous": previous, "rank": AnalysisLogic.paceRank(previous: previous, current: 12.5)],
+            "usual": ["sessions": 8, "durationMin": 20.0, "avgHr": 107.0],
             "effort": ["restingHr": normalBase("resting_hr", profile, scenario).rounded(), "maxHr": 188.0, "avgPct": 0.57, "zone": "easy"],
             "goingIn": [
                 "sleepMinutes": profile.sleepMinutes,

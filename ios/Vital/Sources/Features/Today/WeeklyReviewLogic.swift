@@ -86,10 +86,13 @@ enum WeeklyReviewLogic {
 
     static func weekLabel(for verdict: GoalVerdict) -> String {
         switch verdict {
-        case .onTrack, .ahead, .progressing: return "Good week"
-        case .behind, .holding, .building:   return "Mixed week"
+        case .onTrack, .ahead, .progressing, .building: return "Good week"
+        case .behind, .holding:              return "Mixed week"
         case .stalled, .tooFast:             return "Tough week"
-        case .needsTarget, .insufficientData: return "Lighter week"
+        // "Lighter week" is reserved for a deliberate deload (no such verdict
+        // exists in the enum; lib/weeklyReview.ts only uses it in a stat line).
+        case .needsTarget:                   return "Set a target"
+        case .insufficientData:              return "Early days"
         }
     }
 
