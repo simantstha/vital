@@ -377,4 +377,76 @@ final class GoalProgressLogicTests: XCTestCase {
         XCTAssertEqual(p.distance?.thisWeekKm, 8.5)
         XCTAssertNil(p.distance?.avg4wKm)
     }
+
+    // MARK: - Day-1 honesty, stale weigh-ins, compact Today line
+
+    func testInsufficientDataWithCountMetShowsServerHeadlineNotNeedThree() {
+        let progress = GoalProgressDTO(
+            goal: "weight_loss", eta: nil, verdict: .insufficientData,
+            headline: "Getting started — two weeks of weigh-ins will show whether you are plateauing",
+            dataSufficiency: .init(weighIns: 3, needed: 3, sessionsLast28d: 0)
+        )
+        XCTAssertTrue(GoalProgressLogic.weighInCountMet(progress))
+        XCTAssertFalse(GoalProgressLogic.showsWeighInProgressBar(progress))
+        XCTAssertEqual(GoalProgressLogic.primaryLine(progress, system: .metric),
+                       "two weeks of weigh-ins will show whether you are plateauing")
+        let noHeadline = GoalProgressDTO(
+            goal: "weight_loss", verdict: .insufficientData,
+            dataSufficiency: .init(weighIns: 4, needed: 3, sessionsLast28d: 0)
+        )
+        XCTAssertTrue(GoalProgressLogic.primaryLine(noHeadline, system: .metric).hasPrefix("Keep weighing in"))
+    }
+
+    func testInsufficientDataBelowCountStillShowsCounterAndBar() {
+        let progress = GoalProgressDTO(
+            goal: "weight_loss", verdict: .insufficientData,
+            dataSufficiency: .init(weighIns: 1, needed: 3, sessionsLast28d: 0)
+        )
+        XCTAssertTrue(GoalProgressLogic.showsWeighInProgressBar(progress))
+        XCTAssertEqual(GoalProgressLogic.primaryLine(progress, system: .metric), "Need 3 weigh-ins · 1 of 3")
+    }
+
+    func testStaleWeighInTextThresholdAndCompactLine() {
+        func stale(_ days: Int?) -> GoalProgressDTO {
+            GoalProgressDTO(
+                goal: "weight_loss", target: .init(weightKg: 76), eta: "2026-12-10", verdict: .onTrack,
+                lastWeighInDaysAgo: days
+            )
+        }
+        XCTAssertNil(GoalProgressLogic.staleWeighInText(stale(nil)))
+        XCTAssertNil(GoalProgressLogic.staleWeighInText(stale(3)))
+        XCTAssertEqual(GoalProgressLogic.staleWeighInText(stale(4)), "Last weigh-in 4 days ago — step on the scale to update")
+        XCTAssertEqual(GoalProgressLogic.compactText(stale(6), system: .metric, now: now, locale: en),
+                       "Last weigh-in 6 days ago — step on the scale to update")
+        XCTAssertEqual(GoalProgressLogic.compactText(stale(1), system: .metric, now: now, locale: en), "76 kg by ~Dec 10")
+    }
+
+    func testLastWeighInDaysAgoDecodesTolerantly() throws {
+        func decode(_ extra: String) throws -> GoalProgressDTO {
+            let json = "{\"goal\":\"weight_loss\",\"verdict\":\"on_track\",\"headline\":\"x\",\"reasons\":[]\(extra)}"
+            return try JSONDecoder().decode(GoalProgressDTO.self, from: Data(json.utf8))
+        }
+        XCTAssertEqual(try decode(",\"lastWeighInDaysAgo\":5").lastWeighInDaysAgo, 5)
+        XCTAssertEqual(try decode(",\"lastWeighInDaysAgo\":5.0").lastWeighInDaysAgo, 5)
+        XCTAssertNil(try decode(",\"lastWeighInDaysAgo\":\"soon\"").lastWeighInDaysAgo)
+        XCTAssertNil(try decode("").lastWeighInDaysAgo)
+    }
+
+    func testMuscleCompactLinePrefersLiftReasonOverWeightEta() {
+        let muscle = GoalProgressDTO(
+            goal: "muscle", target: .init(weightKg: 90), eta: "2026-12-06", verdict: .progressing,
+            reasons: [GoalReasonDTO(kind: "lift", text: "Squat +20.4 kg vs 4 wk", tone: .good)]
+        )
+        XCTAssertEqual(GoalProgressLogic.compactText(muscle, system: .metric, now: now, locale: en), "Squat +20.4 kg vs 4 wk")
+        let noLift = GoalProgressDTO(goal: "muscle", target: .init(weightKg: 90), eta: "2026-12-06", verdict: .progressing)
+        XCTAssertEqual(GoalProgressLogic.compactText(noLift, system: .metric, now: now, locale: en), "90 kg by ~Dec 6")
+    }
+
+    func testCompactReasonShortensEnduranceVolumeCopy() {
+        XCTAssertEqual(
+            GoalProgressLogic.compactReason("weekly distance up 12% (last 2 weeks vs the 2 before)"),
+            "distance up 12% · 2 wk vs prior 2"
+        )
+        XCTAssertEqual(GoalProgressLogic.compactReason("Resting heart rate down"), "Resting heart rate down")
+    }
 }

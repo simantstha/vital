@@ -42,6 +42,9 @@ const CORE_PROFILE_TEMPLATE = [
 const updateCalls: Array<Record<string, unknown>> = [];
 const writtenFiles: Array<{ userId: string; filename: string; content: string }> = [];
 
+const weightCalls: Array<Record<string, unknown>> = [];
+let priorOnboardedAt: Date | null = null;
+
 const fakeDb = {
   // lib/coreProfileStore.ts's readCoreProfile selects users.core_profile_md
   // before falling back to the file — always null here so every test
@@ -49,7 +52,7 @@ const fakeDb = {
   // before this column existed.
   select: () => ({
     from: (table: unknown) => {
-      if (table === realSchema.users) return { where: () => ({ limit: async () => [{ core_profile_md: null }] }) };
+      if (table === realSchema.users) return { where: () => ({ limit: async () => [{ core_profile_md: null, onboarded_at: priorOnboardedAt, timezone: null }] }) };
       throw new Error(`unexpected select().from(): ${String(table)}`);
     },
   }),
@@ -62,6 +65,14 @@ const fakeDb = {
 };
 
 mock.module('@/db', { namedExports: { db: fakeDb, schema: realSchema } });
+mock.module('@/lib/weightRepository', {
+  namedExports: {
+    logWeightEntry: async (_userId: string, input: Record<string, unknown>) => {
+      weightCalls.push(input);
+      return { id: 'w1', localDay: '2026-01-01', deduped: false };
+    },
+  },
+});
 mock.module('@/lib/memory', {
   namedExports: {
     seedUserMemory: () => {},
@@ -323,4 +334,28 @@ test('absent targets leave the columns untouched (undefined, not null)', async (
   assert.equal(call.target_weight_kg, undefined);
   assert.equal(call.target_date, undefined);
   assert.equal(call.weekly_sessions_target, undefined);
+});
+
+test('first onboarding logs the onboarding weight as a manual weigh-in', async () => {
+  weightCalls.length = 0;
+  priorOnboardedAt = null;
+
+  const { POST } = await routePromise;
+  const res = await POST(postRequest(basicsBody('imperial', 'lose_fat'), { 'x-user-id': 'user-1' }));
+  assert.equal(res.status, 200);
+
+  assert.equal(weightCalls.length, 1);
+  assert.equal(weightCalls[0].valueKg, 80);
+  assert.equal(weightCalls[0].source, 'manual');
+});
+
+test('re-posting onboarding for an already-onboarded user does not log another weigh-in', async () => {
+  weightCalls.length = 0;
+  priorOnboardedAt = new Date('2026-01-01T00:00:00Z');
+
+  const { POST } = await routePromise;
+  const res = await POST(postRequest(basicsBody('imperial', 'lose_fat'), { 'x-user-id': 'user-1' }));
+  priorOnboardedAt = null;
+  assert.equal(res.status, 200);
+  assert.equal(weightCalls.length, 0);
 });

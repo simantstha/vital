@@ -21,6 +21,9 @@ struct WeightHeroView: View {
     /// Goal target weight (kg) from goal progress, or `nil` — draws a dashed
     /// target line and a "Target" caption under the sparkline.
     var targetKg: Double? = nil
+    /// Goal-progress 4-week rate (kg/wk, signed). When present the hero shows it
+    /// ("over 4 weeks") so it agrees with the goal card below.
+    var goalRateKgPerWeek: Double? = nil
     let chip: WeightHeroLogic.WeighInChip
 
     /// One-tap confirm (HealthKit reading present) or opens the manual sheet.
@@ -35,7 +38,9 @@ struct WeightHeroView: View {
 
     private var trendHeadline: String { WeightHeroLogic.trendHeadline(trend: trend, system: system) }
     private var weeklyChange: String? {
-        WeightHeroLogic.weeklyChangeText(trend: trend, entries: entries, system: system)
+        WeightHeroLogic.weeklyChangeText(
+            trend: trend, entries: entries, system: system, goalRateKgPerWeek: goalRateKgPerWeek
+        )
     }
 
     /// Last ~30 days of smoothed trend points, converted to the user's unit.
@@ -130,6 +135,8 @@ struct WeightHeroView: View {
                                     Text(weeklyChange)
                                         .font(.system(size: 12))
                                         .foregroundStyle(Theme.Colors.textSecondary)
+                                        .multilineTextAlignment(.trailing)
+                                        .fixedSize(horizontal: false, vertical: true)
                                 }
                             }
                         }

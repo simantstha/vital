@@ -2258,10 +2258,12 @@ struct GoalProgressDTO: Decodable, Equatable {
     let headline: String
     let reasons: [GoalReasonDTO]
     let dataSufficiency: DataSufficiency
+    /// Whole days since the newest weigh-in; optional (older servers omit it).
+    let lastWeighInDaysAgo: Int?
 
     private enum CodingKeys: String, CodingKey {
         case goal, target, distance, current, ratePerWeek, safeBand, eta, onPaceForTargetDate
-        case verdict, headline, reasons, dataSufficiency
+        case verdict, headline, reasons, dataSufficiency, lastWeighInDaysAgo
     }
 
     init(
@@ -2276,9 +2278,11 @@ struct GoalProgressDTO: Decodable, Equatable {
         verdict: GoalVerdict,
         headline: String = "",
         reasons: [GoalReasonDTO] = [],
-        dataSufficiency: DataSufficiency = DataSufficiency()
+        dataSufficiency: DataSufficiency = DataSufficiency(),
+        lastWeighInDaysAgo: Int? = nil
     ) {
         self.goal = goal
+        self.lastWeighInDaysAgo = lastWeighInDaysAgo
         self.target = target
         self.distance = distance
         self.current = current
@@ -2306,6 +2310,13 @@ struct GoalProgressDTO: Decodable, Equatable {
         headline = (try? c.decode(String.self, forKey: .headline)) ?? ""
         reasons = ((try? c.decode([GoalReasonDTO].self, forKey: .reasons)) ?? []).filter { !$0.text.isEmpty }
         dataSufficiency = (try? c.decode(DataSufficiency.self, forKey: .dataSufficiency)) ?? DataSufficiency()
+        if let days = try? c.decode(Int.self, forKey: .lastWeighInDaysAgo) {
+            lastWeighInDaysAgo = days
+        } else if let days = try? c.decode(Double.self, forKey: .lastWeighInDaysAgo), days.isFinite {
+            lastWeighInDaysAgo = Int(days)
+        } else {
+            lastWeighInDaysAgo = nil
+        }
     }
 }
 
