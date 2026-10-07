@@ -501,7 +501,7 @@ test('output has exactly the documented top-level keys', () => {
   const p = computeGoalProgress(base());
   assert.deepEqual(Object.keys(p).sort(), [
     'current', 'dataSufficiency', 'distance', 'eta', 'goal', 'headline', 'lastWeighInDaysAgo', 'onPaceForTargetDate',
-    'ratePerWeek', 'reasons', 'safeBand', 'target', 'verdict',
+    'race', 'ratePerWeek', 'reasons', 'safeBand', 'target', 'verdict',
   ]);
   assert.deepEqual(Object.keys(p.current).sort(), ['changeKg', 'progressPct', 'startWeightKg', 'weightKg']);
   assert.deepEqual(Object.keys(p.dataSufficiency).sort(), ['needed', 'sessionsLast28d', 'weighIns']);
@@ -763,4 +763,44 @@ test('stalled verdict never carries an ETA or on-pace flag', () => {
   assert.equal(p.verdict, 'stalled');
   assert.equal(p.eta, null);
   assert.equal(p.onPaceForTargetDate, null);
+});
+
+test('endurance race: label, weeks/days to go and the race reason leads (cap 3)', () => {
+  const p = computeGoalProgress(enduranceInput([4, 3, 2, 2], { race: { date: addDays(TODAY, 84), distanceKm: 21.1 } }));
+  assert.ok(p.race);
+  assert.equal(p.race.label, 'Half marathon');
+  assert.equal(p.race.daysToGo, 84);
+  assert.equal(p.race.weeksToGo, 12);
+  assert.equal(p.reasons[0].kind, 'race');
+  assert.match(p.reasons[0].text, /^Half marathon in 12 weeks \(\w{3} \d{1,2}\)$/);
+  assert.ok(p.reasons.length <= 3);
+});
+
+test('endurance race: race week reads in days with weeksToGo 0; race day is "today"', () => {
+  const week = computeGoalProgress(enduranceInput([3, 3, 3, 3], { race: { date: addDays(TODAY, 5), distanceKm: 42.2 } }));
+  assert.equal(week.race?.weeksToGo, 0);
+  assert.equal(week.race?.label, 'Marathon');
+  assert.match(week.reasons[0].text, /^Marathon in 5 days/);
+  const today = computeGoalProgress(enduranceInput([3, 3, 3, 3], { race: { date: TODAY, distanceKm: 10 } }));
+  assert.equal(today.race?.daysToGo, 0);
+  assert.match(today.reasons[0].text, /^10K is today/);
+});
+
+test('endurance race: a passed race is null; labels cover 5K / custom / no distance; verdict is unchanged', () => {
+  const without = computeGoalProgress(enduranceInput([4, 3, 2, 2]));
+  const passed = computeGoalProgress(enduranceInput([4, 3, 2, 2], { race: { date: addDays(TODAY, -1), distanceKm: 21.1 } }));
+  assert.equal(passed.race, null);
+  assert.deepEqual(passed.reasons, without.reasons);
+  assert.equal(without.race, null);
+  const with5k = computeGoalProgress(enduranceInput([4, 3, 2, 2], { race: { date: addDays(TODAY, 30), distanceKm: 5 } }));
+  assert.equal(with5k.verdict, without.verdict);
+  assert.equal(with5k.headline, without.headline);
+  assert.equal(with5k.race?.label, '5K');
+  assert.equal(computeGoalProgress(enduranceInput([4, 3, 2, 2], { race: { date: addDays(TODAY, 30), distanceKm: 15 } })).race?.label, '15 km race');
+  assert.equal(computeGoalProgress(enduranceInput([4, 3, 2, 2], { race: { date: addDays(TODAY, 30), distanceKm: null } })).race?.label, 'Race');
+});
+
+test('race is ignored for non-endurance goals', () => {
+  const p = computeGoalProgress(base({ goal: 'muscle', race: { date: addDays(TODAY, 30), distanceKm: 10 } }));
+  assert.equal(p.race, null);
 });

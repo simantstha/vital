@@ -59,6 +59,43 @@ export function parseWeeklySessionsTarget(v: unknown): ParseResult<number> {
   return { ok: true, value: v };
 }
 
+export const RACE_DATE_MAX_YEARS = 2;
+export const RACE_DISTANCE_MIN_KM = 1;
+export const RACE_DISTANCE_MAX_KM = 250;
+
+/**
+ * Race date (endurance goal): a real 'YYYY-MM-DD' day from `todayKey`
+ * (inclusive — race day itself is valid) to RACE_DATE_MAX_YEARS years out.
+ */
+export function parseRaceDate(v: unknown, todayKey: string): ParseResult<string> {
+  const bad = (): ParseResult<string> => ({
+    ok: false,
+    error: `raceDate must be a YYYY-MM-DD date from today to ${RACE_DATE_MAX_YEARS} years out.`,
+  });
+  if (typeof v !== 'string') return bad();
+  const m = DAY_RE.exec(v);
+  if (!m) return bad();
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const date = new Date(Date.UTC(y, mo - 1, d));
+  if (date.getUTCFullYear() !== y || date.getUTCMonth() !== mo - 1 || date.getUTCDate() !== d) return bad();
+  if (v < todayKey) return bad();
+
+  const t = DAY_RE.exec(todayKey);
+  if (!t) return bad();
+  const limit = new Date(Date.UTC(Number(t[1]) + RACE_DATE_MAX_YEARS, Number(t[2]) - 1, Number(t[3])))
+    .toISOString().slice(0, 10);
+  if (v > limit) return bad();
+  return { ok: true, value: v };
+}
+
+/** Race distance in km: finite number within 1–250 (covers the 5 / 10 / 21.1 / 42.2 presets), rounded to 0.1 km. */
+export function parseRaceDistanceKm(v: unknown): ParseResult<number> {
+  if (typeof v !== 'number' || !Number.isFinite(v) || v < RACE_DISTANCE_MIN_KM || v > RACE_DISTANCE_MAX_KM) {
+    return { ok: false, error: `raceDistanceKm must be a number between ${RACE_DISTANCE_MIN_KM} and ${RACE_DISTANCE_MAX_KM}.` };
+  }
+  return { ok: true, value: Math.round(v * 10) / 10 };
+}
+
 /** Weekly endurance distance target in km: finite number within 1–300, rounded to 0.1 km. */
 export function parseWeeklyDistanceKmTarget(v: unknown): ParseResult<number> {
   if (typeof v !== 'number' || !Number.isFinite(v) || v < WEEKLY_DISTANCE_MIN_KM || v > WEEKLY_DISTANCE_MAX_KM) {

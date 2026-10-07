@@ -119,6 +119,17 @@ export interface GoalDistanceProgress {
   text: string;
 }
 
+export interface GoalRaceProgress {
+  /** Race day, YYYY-MM-DD (user-local). */
+  date: string;
+  distanceKm: number | null;
+  /** "Half marathon" | "Marathon" | "10K" | "5K" | "<n> km race" | "Race" (no distance). */
+  label: string;
+  /** Whole weeks to go; 0 during race week (fewer than 7 days out). */
+  weeksToGo: number;
+  daysToGo: number;
+}
+
 export interface GoalProgressReason {
   kind: string;
   text: string;
@@ -130,6 +141,8 @@ export interface GoalProgress {
   target: { weightKg: number | null; date: string | null; weeklySessions: number | null; weeklyDistanceKm: number | null };
   /** Endurance with a weekly distance target only; null otherwise. Distances in km, `text` is unit-aware. */
   distance: GoalDistanceProgress | null;
+  /** Endurance with a race date that has not passed; null otherwise. */
+  race?: GoalRaceProgress | null;
   current: {
     weightKg: number | null;
     startWeightKg: number | null;
@@ -176,6 +189,8 @@ export interface GoalProgressInput {
   /** User-local today, YYYY-MM-DD. */
   todayKey: string;
   target: { weightKg: number | null; date: string | null; weeklySessions: number | null; weeklyDistanceKm?: number | null };
+  /** Endurance only: optional race (see GoalProgress.race). Does not affect the verdict. */
+  race?: { date: string | null; distanceKm: number | null } | null;
   /**
    * `weightKg` null with `startedAt` set means no weigh-in existed when the goal
    * began; the start weight is then derived from the first weigh-in on/after
@@ -862,6 +877,44 @@ function distanceProgress(input: GoalProgressInput): GoalDistanceProgress | null
   };
 }
 
+const RACE_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+export function raceLabel(distanceKm: number | null): string {
+  if (distanceKm == null) return 'Race';
+  if (Math.abs(distanceKm - 21.1) < 0.05) return 'Half marathon';
+  if (Math.abs(distanceKm - 42.2) < 0.05) return 'Marathon';
+  if (distanceKm === 10) return '10K';
+  if (distanceKm === 5) return '5K';
+  return `${Number.isInteger(distanceKm) ? distanceKm : round1(distanceKm)} km race`;
+}
+
+/** Endurance race countdown; null without a date or once the race day has passed. */
+function raceProgress(input: GoalProgressInput): GoalRaceProgress | null {
+  const date = input.race?.date;
+  if (input.goal !== 'endurance' || !date) return null;
+  const daysToGo = dayNumber(date) - dayNumber(input.todayKey);
+  if (!Number.isFinite(daysToGo) || daysToGo < 0) return null;
+  const distanceKm = input.race?.distanceKm ?? null;
+  return {
+    date,
+    distanceKm,
+    label: raceLabel(distanceKm),
+    weeksToGo: daysToGo < 7 ? 0 : Math.ceil(daysToGo / 7),
+    daysToGo,
+  };
+}
+
+function raceReason(race: GoalRaceProgress): GoalProgressReason {
+  const [, m, d] = race.date.split('-').map(Number);
+  const when = `${RACE_MONTHS[m - 1]} ${d}`;
+  const text = race.daysToGo === 0
+    ? `${race.label} is today (${when})`
+    : race.weeksToGo === 0
+      ? `${race.label} in ${race.daysToGo} ${plural(race.daysToGo, 'day')} (${when})`
+      : `${race.label} in ${race.weeksToGo} ${plural(race.weeksToGo, 'week')} (${when})`;
+  return { kind: 'race', text, tone: 'neutral' };
+}
+
 function enduranceOutcome(input: GoalProgressInput): Outcome {
   const distanceTarget = input.target.weeklyDistanceKm;
   if (input.target.weeklySessions == null && distanceTarget == null) {
@@ -1037,6 +1090,10 @@ export function computeGoalProgress(input: GoalProgressInput): GoalProgress {
     default: outcome = generalOutcome(input);
   }
 
+  // Race countdown leads the reasons (cap 3) without touching the verdict.
+  const race = raceProgress(input);
+  if (race) outcome = { ...outcome, reasons: [raceReason(race), ...outcome.reasons].slice(0, 3) };
+
   const safeBand =
     input.goal === 'weight_loss' ? { ...FAT_LOSS_BAND }
     : input.goal === 'muscle' ? { ...MUSCLE_GAIN_BAND }
@@ -1063,6 +1120,7 @@ export function computeGoalProgress(input: GoalProgressInput): GoalProgress {
     goal: input.goal,
     target: { ...input.target, weeklyDistanceKm: input.target.weeklyDistanceKm ?? null },
     distance: input.goal === 'endurance' ? distanceProgress(input) : null,
+    race,
     current: {
       weightKg: w.currentKg != null ? round1(w.currentKg) : null,
       startWeightKg: startKg,

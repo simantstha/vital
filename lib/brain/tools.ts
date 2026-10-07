@@ -73,7 +73,7 @@ import {
   type SetInput,
 } from '@/lib/workoutRepository';
 import { getWeightReadings, logWeightEntry } from '@/lib/weightRepository';
-import { parseTargetWeightKg, parseTargetDate, parseWeeklySessionsTarget, parseWeeklyDistanceKmTarget } from '@/lib/goalTarget';
+import { parseTargetWeightKg, parseTargetDate, parseWeeklySessionsTarget, parseWeeklyDistanceKmTarget, parseRaceDate, parseRaceDistanceKm } from '@/lib/goalTarget';
 import { localDayKey, pickTimeZone } from '@/lib/localDay';
 import { computeWeightTrend } from '@/lib/weightTrend';
 import { KM_PER_MILE, LB_PER_KG } from '@/lib/metricFormat';
@@ -451,6 +451,14 @@ export const BRAIN_TOOLS: Tool[] = [
         distanceUnit: {
           type: 'string',
           description: 'Unit of weeklyDistance: "km" or "mi". Defaults to the user\'s display unit (mi for imperial, km otherwise).',
+        },
+        raceDate: {
+          type: 'string',
+          description: 'Endurance race day, YYYY-MM-DD, today or later and at most 2 years out.',
+        },
+        raceDistanceKm: {
+          type: 'number',
+          description: 'Race distance in km (1–250): 5, 10, 21.1 (half marathon) or 42.2 (marathon).',
         },
       },
       required: [],
@@ -1951,8 +1959,10 @@ export async function executeToolCall(
     const hasDate = input.targetDate != null;
     const hasSessions = input.weeklySessions != null;
     const hasDistance = input.weeklyDistance != null;
-    if (!hasWeight && !hasDate && !hasSessions && !hasDistance) {
-      return 'Error: provide at least one of targetWeight, targetDate, weeklySessions or weeklyDistance.';
+    const hasRaceDate = input.raceDate != null;
+    const hasRaceDistance = input.raceDistanceKm != null;
+    if (!hasWeight && !hasDate && !hasSessions && !hasDistance && !hasRaceDate && !hasRaceDistance) {
+      return 'Error: provide at least one of targetWeight, targetDate, weeklySessions, weeklyDistance, raceDate or raceDistanceKm.';
     }
 
     const [row] = await db
@@ -1998,6 +2008,18 @@ export async function executeToolCall(
       if (!r.ok) return `Error: ${r.error}`;
       update.weekly_distance_km_target = r.value;
     }
+    if (hasRaceDate) {
+      // Race day may be today; judged on the user's local day.
+      const todayKey = localDayKey(new Date(), pickTimeZone(null, row?.timezone));
+      const r = parseRaceDate(input.raceDate, todayKey);
+      if (!r.ok) return `Error: ${r.error}`;
+      update.race_date = r.value;
+    }
+    if (hasRaceDistance) {
+      const r = parseRaceDistanceKm(Number(input.raceDistanceKm));
+      if (!r.ok) return `Error: ${r.error}`;
+      update.race_distance_km = r.value;
+    }
 
     let reanchored = false;
     if (update.target_weight_kg != null && row?.target_weight_kg !== update.target_weight_kg) {
@@ -2020,6 +2042,8 @@ export async function executeToolCall(
       ...(update.target_date != null ? { targetDate: update.target_date } : {}),
       ...(update.weekly_sessions_target != null ? { weeklySessionsTarget: update.weekly_sessions_target } : {}),
       ...(update.weekly_distance_km_target != null ? { weeklyDistanceKmTarget: update.weekly_distance_km_target } : {}),
+      ...(update.race_date != null ? { raceDate: update.race_date } : {}),
+      ...(update.race_distance_km != null ? { raceDistanceKm: update.race_distance_km } : {}),
       unitSystem: units,
       reanchored,
     });

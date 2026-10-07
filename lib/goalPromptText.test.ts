@@ -135,3 +135,12 @@ test('endurance distance target and this-week progress are quoted unit-aware', (
   const imperial = formatGoalProgressLines(g, 'imperial').join('\n');
   assert.match(imperial, /18\.6 mi\/week/);
 });
+
+test('formatGoalProgressLines includes the race countdown when present', () => {
+  const text = formatGoalProgressLines(
+    gp({ goal: 'endurance', race: { date: '2026-12-30', distanceKm: 21.1, label: 'Half marathon', weeksToGo: 12, daysToGo: 84 } }),
+    'metric',
+  ).join('\n');
+  assert.match(text, /- Race: Half marathon on 2026-12-30 \(in 12 weeks\)/);
+  assert.doesNotMatch(formatGoalProgressLines(gp(), 'metric').join('\n'), /Race:/);
+});
