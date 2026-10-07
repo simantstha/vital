@@ -166,9 +166,15 @@ enum WeightHeroLogic {
 
     /// A target further than this many (floored) spans from the data would
     /// flatten the sparkline to a straight line if the domain stretched to
-    /// include it — past that the dashed target line is omitted (the "Target"
-    /// caption still names it).
+    /// include it. Past that the line is drawn at a COMPRESSED position
+    /// (`sparklineLayout`) rather than at its true value.
     static let sparklineTargetReach = 3.0
+
+    /// How much extra room (as a fraction of the trend's span) a far target
+    /// adds below/above the trend, and where inside it the dashed line sits.
+    /// The trend keeps ~62% of the height; the line sits ~9% from the edge.
+    static let sparklineCompressedRoom = 0.6
+    static let sparklineCompressedLineOffset = 0.45
 
     /// Whether the dashed target line can be drawn without flattening the trend.
     static func sparklineTargetVisible(values: [Double], minSpan: Double, target: Double?) -> Bool {
@@ -181,10 +187,50 @@ enum WeightHeroLogic {
     /// to draw (`sparklineTargetVisible`); identical to the plain domain
     /// otherwise.
     static func sparklineDomain(values: [Double], minSpan: Double, target: Double?) -> ClosedRange<Double>? {
-        guard sparklineTargetVisible(values: values, minSpan: minSpan, target: target), let target else {
-            return sparklineDomain(values: values, minSpan: minSpan)
+        sparklineLayout(values: values, minSpan: minSpan, target: target)?.domain
+    }
+
+    /// Everything the sparkline needs to draw: the y-domain, the dashed target
+    /// line's y position (`nil` without a target) and whether that position is
+    /// compressed (the real target is far outside the trend, so the line is a
+    /// marker near the edge, not to scale — the caption flags it with "↓"/"↑").
+    struct SparklineLayout: Equatable {
+        let domain: ClosedRange<Double>
+        let targetLine: Double?
+        let targetCompressed: Bool
+    }
+
+    static func sparklineLayout(values: [Double], minSpan: Double, target: Double?) -> SparklineLayout? {
+        guard let base = sparklineDomain(values: values, minSpan: minSpan) else { return nil }
+        guard let target, target.isFinite, let lo = values.min(), let hi = values.max() else {
+            return SparklineLayout(domain: base, targetLine: nil, targetCompressed: false)
         }
-        return sparklineDomain(values: values + [target], minSpan: minSpan)
+        if sparklineTargetVisible(values: values, minSpan: minSpan, target: target) {
+            let domain = sparklineDomain(values: values + [target], minSpan: minSpan) ?? base
+            return SparklineLayout(domain: domain, targetLine: target, targetCompressed: false)
+        }
+        let span = base.upperBound - base.lowerBound
+        if target < lo {
+            return SparklineLayout(
+                domain: (base.lowerBound - span * sparklineCompressedRoom)...base.upperBound,
+                targetLine: base.lowerBound - span * sparklineCompressedLineOffset,
+                targetCompressed: true
+            )
+        }
+        guard target > hi, target.isFinite else { return SparklineLayout(domain: base, targetLine: nil, targetCompressed: false) }
+        return SparklineLayout(
+            domain: base.lowerBound...(base.upperBound + span * sparklineCompressedRoom),
+            targetLine: base.upperBound + span * sparklineCompressedLineOffset,
+            targetCompressed: true
+        )
+    }
+
+    /// Arrow before the goal caption: "↓ Goal 76 kg" when the dashed line is
+    /// a compressed marker for a target below the trend, "↑" above, "→" when
+    /// the line is to scale.
+    static func sparklineTargetArrow(layout: SparklineLayout?, targetKg: Double?, lastKg: Double?) -> String {
+        guard let layout, layout.targetCompressed, let targetKg, let lastKg else { return "→" }
+        return targetKg < lastKg ? "↓" : "↑"
     }
 
     /// Captions under the sparkline: "Start 83.7 kg" (first point of the

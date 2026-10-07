@@ -34,6 +34,43 @@ final class GoalProgressLogicTests: XCTestCase {
         )
     }
 
+    private func endurance(headline: String, reasons: [GoalReasonDTO] = []) -> GoalProgressDTO {
+        GoalProgressDTO(
+            goal: "endurance",
+            target: .init(weeklyDistanceKm: 30),
+            distance: .init(targetKm: 30, thisWeekKm: 17.2, avg4wKm: 23.2, weekStart: "2026-10-05"),
+            verdict: .building,
+            headline: headline,
+            reasons: reasons
+        )
+    }
+
+    // MARK: - Hero already shows distance
+
+    func testCompactTextRepeatsDistanceOnlyWhenHeroDoesNotShowIt() {
+        let progress = endurance(headline: "Building — distance up 12% (last 2 wk vs 2 before)")
+        XCTAssertEqual(GoalProgressLogic.compactText(progress, system: .metric, now: now, locale: en),
+                       "17.2 of 30 km this week")
+        XCTAssertEqual(GoalProgressLogic.compactText(progress, system: .metric, heroShowsDistance: true, now: now, locale: en),
+                       "distance up 12% (last 2 wk vs 2 before)")
+    }
+
+    func testDistanceReasonFallsBackToFirstReasonAndNeverTheDistanceLine() {
+        let reasons = [GoalReasonDTO(kind: "volume", text: "Distance up 12%", tone: .good)]
+        XCTAssertEqual(GoalProgressLogic.distanceReasonText(endurance(headline: "", reasons: reasons), system: .metric),
+                       "Distance up 12%")
+        XCTAssertEqual(GoalProgressLogic.distanceReasonText(
+            endurance(headline: "Building — 17.2 of 30 km this week", reasons: reasons), system: .metric),
+                       "Distance up 12%")
+        XCTAssertNil(GoalProgressLogic.distanceReasonText(endurance(headline: ""), system: .metric))
+    }
+
+    func testWeightLossCompactTextIgnoresHeroDistanceFlag() {
+        // No distance block: weight loss keeps "5 wk ahead of ..." either way.
+        let flagged = GoalProgressLogic.compactText(weightLoss(), system: .metric, heroShowsDistance: true, now: now, locale: en)
+        XCTAssertEqual(flagged, GoalProgressLogic.compactText(weightLoss(), system: .metric, now: now, locale: en))
+    }
+
     // MARK: - Labels + tone
 
     func testEveryVerdictHasTheSpecifiedLabel() {

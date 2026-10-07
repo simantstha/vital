@@ -459,6 +459,12 @@ final class TodayViewModel: ObservableObject {
         return (text, fraction)
     }
 
+    /// True when the endurance hero already shows the weekly-distance progress
+    /// line + bar, so the goal line below it must not repeat it.
+    var goalLineHeroShowsDistance: Bool {
+        isEnduranceGoal && enduranceDistanceProgress != nil
+    }
+
     /// Combined "3 sessions · 24.5 km this week" line for the endurance hero.
     /// Returns `nil` when neither sessions nor volume data is available. With a
     /// distance target the km live in `enduranceDistanceProgress`'s

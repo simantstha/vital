@@ -261,13 +261,20 @@ struct GoalProgressCard: View {
 struct GoalProgressLine: View {
     let progress: GoalProgressDTO
     let system: UnitSystem
+    /// The hero above already shows this week's distance progress (endurance
+    /// with a weekly km target) — show the verdict's reason instead of repeating it.
+    var heroShowsDistance = false
     var onTap: () -> Void
+
+    private var text: String {
+        GoalProgressLogic.compactText(progress, system: system, heroShowsDistance: heroShowsDistance)
+    }
 
     var body: some View {
         Button(action: onTap) {
             HStack(spacing: Theme.Spacing.sm) {
                 GoalVerdictChip(verdict: progress.verdict)
-                Text(GoalProgressLogic.compactText(progress, system: system))
+                Text(text)
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(Theme.Colors.textSecondary)
                     .lineLimit(1)
@@ -282,7 +289,7 @@ struct GoalProgressLine: View {
         }
         .buttonStyle(.pressableCard)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(GoalProgressLogic.label(for: progress.verdict)). \(GoalProgressLogic.compactText(progress, system: system))")
+        .accessibilityLabel("\(GoalProgressLogic.label(for: progress.verdict)). \(text)")
         .accessibilityHint("Opens your goal progress")
         .accessibilityIdentifier("goalProgress.todayLine")
     }
