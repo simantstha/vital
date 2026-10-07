@@ -9,7 +9,7 @@ import {
   type WeeklyReview,
   type WeeklyReviewInput,
 } from './weeklyReview';
-import { liftChange4w } from './liftChange';
+import { liftChange4w, pickHeadlineLift } from './liftChange';
 import type { WeightReading } from './weightTrend';
 import type { ProgressionSummary } from './workoutRepository';
 
@@ -142,10 +142,10 @@ test('muscle: sessions vs target, best lift change, protein days, weight', () =>
   assert.equal(sessions.value, '4');
   assert.equal(sessions.comparison, 'target 4 for the week');
   assert.equal(sessions.tone, 'good');
-  assert.equal(statByLabel(r, 'Bench Press est. 1RM')!.value, '+2.5 kg');
+  assert.equal(statByLabel(r, 'Bench Press est. 1RM')!.value, '+3 kg');
   assert.equal(statByLabel(r, 'Protein days hit')!.value, '7/7');
   assert.match(statByLabel(r, 'Weight trend')!.value, /^\+/);
-  assert.match(r.headline, /^4 of 4 sessions, Bench Press up 2\.5 kg$/);
+  assert.match(r.headline, /^4 of 4 sessions, Bench Press est\. 1RM \+3 kg vs last trained wk$/);
 });
 
 test('muscle: missed session target becomes the slip and drives nextWeek', () => {
@@ -326,8 +326,25 @@ test('weekly-review lift stat equals the shared definition for the same fixture'
     progression,
     intakeDays: intake(Array.from({ length: 7 }, (_, i) => addDays('2026-10-05', i)), [2800, 2850, 2900, 2800, 2750, 2900, 2850], 160),
   }));
-  assert.equal(statByLabel(review, 'Bench Press est. 1RM')!.value, '+6.2 kg');
+  assert.equal(statByLabel(review, 'Bench Press est. 1RM')!.value, '+6 kg');
   assert.equal(liftChange4w(progression['Bench Press'], '2026-10-05')!.changeKg, 6.2);
+});
+
+test('muscle: weekly review names the same headline lift as the goal card, labelled over 4 wks', () => {
+  const progression: ProgressionSummary = {
+    'Bench Press': [liftWk('2026-08-31', 99.2, 30), liftWk(WEEK_START, 107.9, 30)],
+    Squat: [liftWk('2026-08-31', 120, 6), liftWk(WEEK_START, 140.4, 6)],
+  };
+  const r = computeWeeklyReview(base({
+    goal: 'muscle', verdict: 'progressing', weeklySessionsTarget: 4,
+    trainingDays: [WEEK[0], WEEK[2], WEEK[4]],
+    progression,
+    intakeDays: intake(WEEK, [2800, 2850, 2900, 2800, 2750, 2900, 2850], 160),
+  }));
+  assert.equal(statByLabel(r, 'Squat est. 1RM')!.value, '+20 kg');
+  assert.equal(statByLabel(r, 'Bench Press est. 1RM'), undefined);
+  assert.equal(r.headline, '3 of 4 sessions, Squat est. 1RM +20 kg over 4 wks');
+  assert.equal(pickHeadlineLift(progression, WEEK_START)!.exercise, 'Squat');
 });
 
 // ── recovery-aware next week ────────────────────────────────────────────────

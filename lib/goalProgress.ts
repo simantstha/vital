@@ -43,7 +43,7 @@ import {
   type WeightSignal,
 } from './brain/weightSignals';
 import type { ProgressionSummary } from './workoutRepository';
-import { isLiftProgressing, liftChange4w, liftDisplayName } from './liftChange';
+import { isLiftProgressing, liftChange4w, liftDisplayChange, liftDisplayName, pickHeadlineLift } from './liftChange';
 import { weekStartKeyForDay } from './localDay';
 import { KM_PER_MILE } from './metricFormat';
 
@@ -87,6 +87,8 @@ const GENERAL_BUILDING_DELTA = 0.05;
 /** Planned-session adherence (%) below which the reason is a watch; below LOW the verdict gets an amber lead reason. */
 const ADHERENCE_WATCH_PCT = 75;
 const ADHERENCE_LOW_PCT = 60;
+/** Muscle verdict: below this 4-week session adherence (%) a lift gain reads "Lifts up, sessions behind", not "Progressing". */
+const ADHERENCE_BEHIND_PCT = 70;
 export const HEADLINE_MAX_CHARS = 70;
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -536,6 +538,9 @@ interface LiftChange {
 function liftChanges(progression: ProgressionSummary, todayKey: string, display?: Record<string, string>): LiftChange[] {
   const out: LiftChange[] = [];
   const anchor = weekStartKeyForDay(todayKey);
+  // The shared headline lift (lib/liftChange.ts) always leads, even when it is
+  // not one of the 3 most-trained lifts.
+  const headlineKey = pickHeadlineLift(progression, anchor)?.exercise ?? null;
   for (const [exercise, weeks] of Object.entries(progression)) {
     if (!weeks.some(w => w.bestEstimatedOneRepMaxKg != null)) continue;
     const totalSets = weeks.reduce((s, w) => s + w.totalSets, 0);
@@ -549,17 +554,35 @@ function liftChanges(progression: ProgressionSummary, todayKey: string, display?
       change4wKg: c?.changeKg ?? null,
     });
   }
-  return out.sort((a, b) => b.totalSets - a.totalSets || a.exercise.localeCompare(b.exercise)).slice(0, 3);
+  const byVolume = out.sort((a, b) => b.totalSets - a.totalSets || a.exercise.localeCompare(b.exercise));
+  const head = byVolume.find(l => l.exercise === headlineKey);
+  const rest = byVolume.filter(l => l !== head);
+  return (head ? [head, ...rest] : rest).slice(0, 3);
 }
 
 function liftReason(l: LiftChange, input: GoalProgressInput): GoalProgressReason | null {
-  if (l.change4wKg == null || l.startKg == null || l.endKg == null) return null;
-  const sign = l.change4wKg > 0 ? '+' : l.change4wKg < 0 ? '−' : '';
+  const d = displayLift(l, input);
+  if (d == null) return null;
   return {
     kind: 'lift',
-    text: `${l.name} est. 1RM ${sign}${fmtWeight(input, Math.abs(l.change4wKg))} vs 4 weeks ago (${weightNum(input, l.startKg)} → ${fmtWeight(input, l.endKg)})`,
-    tone: l.change4wKg > 0 ? 'good' : l.change4wKg < 0 ? 'watch' : 'neutral',
+    text: `${l.name} est. 1RM ${d.change === 0 ? 'unchanged' : liftDeltaText(d)} vs 4 weeks ago (${d.baseline} → ${d.recent} ${d.unit})`,
+    tone: d.change > 0 ? 'good' : d.change < 0 ? 'watch' : 'neutral',
   };
+}
+
+interface LiftDisplay { baseline: number; recent: number; change: number; unit: string }
+
+/** Whole-unit display numbers for a lift's 4-week change; the change is computed from the rounded endpoints. */
+function displayLift(l: LiftChange, input: GoalProgressInput): LiftDisplay | null {
+  if (l.change4wKg == null || l.startKg == null || l.endKg == null) return null;
+  const imperial = input.unitSystem === 'imperial';
+  const d = liftDisplayChange({ baselineKg: l.startKg, recentKg: l.endKg, changeKg: l.change4wKg }, imperial);
+  return { ...d, unit: imperial ? 'lb' : 'kg' };
+}
+
+/** "+9 kg" / "−3 lb" (always signed). */
+function liftDeltaText(d: LiftDisplay): string {
+  return `${d.change < 0 ? '−' : '+'}${Math.abs(d.change)} ${d.unit}`;
 }
 
 // ── Vitals direction (endurance) ────────────────────────────────────────────
@@ -730,6 +753,7 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock): Outcome {
   const rate = rateReason(input, w, MUSCLE_GAIN_BAND);
   const adherence = adherenceReason(input);
   const adherenceLow = (sessionAdherence(input)?.pct ?? 100) < ADHERENCE_LOW_PCT;
+  const sessionsBehind = (sessionAdherence(input)?.pct ?? 100) < ADHERENCE_BEHIND_PCT;
   const sessions = adherence ?? sessionsReason(input);
   const protein = proteinReason(input);
   const liftReasons = lifts.map(l => liftReason(l, input)).filter((r): r is GoalProgressReason => r != null);
@@ -762,14 +786,26 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock): Outcome {
     };
   }
 
-  const comparable = lifts.filter(l => l.change4wKg != null);
-  if (comparable.length > 0) {
-    const best = comparable.reduce((a, b) => ((b.change4wKg as number) > (a.change4wKg as number) ? b : a));
+  // The headline lift is the shared pick (largest 4-week e1RM change,
+  // lib/liftChange.ts); `lifts` lists it first, so the verdict, the headline
+  // and the lead lift reason all name the same lift.
+  const best = lifts[0]?.change4wKg != null ? lifts[0] : null;
+  const bestDisplay = best ? displayLift(best, input) : null;
+  if (best && bestDisplay) {
     // Same bar as the stalled-lift nudge: up at least 1% on 4 weeks ago.
     if (isLiftProgressing({ baselineKg: best.startKg as number, recentKg: best.endKg as number, changeKg: best.change4wKg as number })) {
+      // Lifts are up but the planned sessions are not happening: no strongest
+      // positive verdict next to an amber adherence reason.
+      if (sessionsBehind) {
+        return {
+          verdict: 'behind',
+          headline: clip(`Lifts up, sessions behind — ${best.name} ${liftDeltaText(bestDisplay)}`),
+          reasons,
+        };
+      }
       return {
         verdict: 'progressing',
-        headline: clip(`Progressing — ${best.name} est. 1RM up ${fmtWeight(input, best.change4wKg as number)} vs 4 weeks ago`),
+        headline: clip(`Progressing — ${best.name} est. 1RM ${liftDeltaText(bestDisplay)} vs 4 weeks ago`),
         reasons,
       };
     }
