@@ -82,7 +82,22 @@ Next (wave 4):
 - [x] Goal pill states the outcome ("82 kg by ~Dec 6"); weight hero shows "→ Goal 76 kg"; HRV detail labels "30-day normal" vs range average.
 
 ### Polish backlog (non-blocking)
-- [ ] Endurance Today goal line repeats the hero's km text — show the verdict reason instead.
-- [ ] Mic FAB overlaps the last card at rest (scrolls clear) — consider auto-hiding the FAB on scroll.
-- [ ] Today hero sparkline: compressed axis to draw the target line when it is far below the data.
+- [x] Endurance Today goal line shows the verdict reason (no duplicate km).
+- [x] Mic FAB shrinks/dims while scrolling down, restores on scroll up / top / bottom.
+- [x] Weight sparkline draws a compressed goal line ("↓ Goal 76 kg") when the target is far off.
 - [ ] Sign in with Apple token revocation on account deletion.
+
+### Wave 8 (persona review pass 4: coach, onboarding, logs, profile, analyses) — shipped
+- [x] Coach must address any note it cites (persona rule + eval case 13); opener states goal status in the cards' numbers ("1.7 of 7.7 kg down, ~2 weeks ahead of Dec 30").
+- [x] New-user coach opener uses the onboarding goal instead of asking for it again.
+- [x] One goal source: Memory shows the profile goal read-only ("Edit in Profile"); goal facts no longer stored/injected.
+- [x] Profile keeps Sign Out / Delete account visible during outages; coach-offline banner; server vs offline error glyphs.
+- [x] HRV detail: one "normal" (band), driver means bounded by the series, explicit windows, distribution axis scaled to data.
+- [x] Effort bar fills the zone actually used, plain-language effort ("Mostly easy effort — conversational pace").
+- [x] Logs meal rows show kcal and open the diet sheet; Devices sync freshness (amber > 6 h, red > 48 h).
+- [x] Onboarding: real imported-days count, "Last step" copy, gentle target-weight nudge.
+
+### Remaining backlog (non-blocking)
+- [ ] HRV hero pill "above your normal" is measured vs the 30-day mean while the chart's normal is a band — align wording.
+- [ ] Sign in with Apple token revocation on account deletion (needs auth-code exchange + client secret).
+- [ ] Run prompt evals 10–13 against the real model (needs API key).
