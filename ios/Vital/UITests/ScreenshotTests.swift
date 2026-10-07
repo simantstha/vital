@@ -443,7 +443,21 @@ final class ScreenshotTests: XCTestCase {
         // presented — e.g. something else absorbed the touch) must fail
         // loudly here rather than fall through to capturing Today itself
         // relabeled as the diet sheet.
-        guard app.staticTexts["Diet budget"].waitForExistence(timeout: 10) else {
+        var sheetOpened = app.staticTexts["Diet budget"].waitForExistence(timeout: 10)
+        if !sheetOpened {
+            // One retry: if Today's layout shifted under the first tap (late
+            // content such as the streak chip), re-resolve the strip and tap
+            // it again once it is hittable.
+            let retryStrip = app.buttons["today.fuelStrip"]
+            if retryStrip.waitForExistence(timeout: 5) {
+                let hittable = NSPredicate(format: "isHittable == true")
+                let exp = XCTNSPredicateExpectation(predicate: hittable, object: retryStrip)
+                _ = XCTWaiter().wait(for: [exp], timeout: 5)
+                if retryStrip.isHittable { retryStrip.tap() }
+            }
+            sheetOpened = app.staticTexts["Diet budget"].waitForExistence(timeout: 10)
+        }
+        guard sheetOpened else {
             XCTFail("Diet sheet never opened after tapping today.fuelStrip — "
                      + "the tap likely missed or was absorbed by another view "
                      + "[\(scenario)/\(appearance)]")
