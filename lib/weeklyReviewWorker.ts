@@ -14,7 +14,8 @@
  */
 
 import type { PushDevice, PushOutcome } from './proactiveHealthWorker';
-import type { WeeklyReview } from './weeklyReview';
+import { lastCompletedWeekStart, type WeeklyReview } from './weeklyReview';
+import { localDayKey } from './localDay';
 
 export interface WeeklyReviewCandidate {
   userId: string;
@@ -27,11 +28,14 @@ export interface WeeklyReviewCandidate {
 }
 
 export interface WeeklyReviewPassDeps {
+  /** Should already exclude users whose current-week review has pushed_at set. */
   listCandidates(): Promise<WeeklyReviewCandidate[]>;
   /** Computes + stores the last completed week's review when missing. */
   getOrCreate(userId: string, timezone: string, now: Date): Promise<{ id: string; review: WeeklyReview } | null>;
   /** True only for the caller that flips pushed_at from null — the at-most-once guard. */
   claimPush(reviewId: string, now: Date): Promise<boolean>;
+  /** Undo a claim (pushed_at back to null) when nothing could be sent, so the review can still go once a device registers. Optional. */
+  releaseClaim?(reviewId: string): Promise<void>;
   listDevices(userId: string): Promise<PushDevice[]>;
   /** Best-effort notification-inbox record; never throws. Optional so tests/other callers can omit it. */
   recordInbox?(userId: string, alert: { title: string; body: string }, route: { type: 'weekly_review'; id: string; deepLink: string }): Promise<void>;
@@ -65,32 +69,83 @@ export function weeklyReviewAlert(review: WeeklyReview): { title: string; body: 
 
 export type WeeklyReviewOutcome = 'sent' | 'no_devices' | 'insufficient_data' | 'already_pushed' | 'no_review';
 
+/** Max review computations (getOrCreate calls) per tick; the rest wait for the next tick. */
+export const WEEKLY_REVIEW_MAX_PER_TICK = 25;
+/** After a failure, leave the user alone this long so a broken user can't cost ~25 queries every 15 s tick. */
+export const WEEKLY_REVIEW_ERROR_BACKOFF_MS = 5 * 60_000;
+
+/** In-memory, per-process progress. Pass the same object on every tick. */
+export interface WeeklyReviewPassState {
+  /** `${userId}|${reviewedWeekStart}` of reviews finished for this process (pushed / claimed / nothing to do). */
+  done: Set<string>;
+  /** Same key -> epoch ms before which the user is not retried after an error. */
+  retryAt: Map<string, number>;
+}
+
+export function createWeeklyReviewPassState(): WeeklyReviewPassState {
+  return { done: new Set(), retryAt: new Map() };
+}
+
 export async function runWeeklyReviewPass(
   now: Date,
   deps: WeeklyReviewPassDeps,
+  state: WeeklyReviewPassState = createWeeklyReviewPassState(),
+  opts: { maxPerTick?: number } = {},
 ): Promise<Array<{ userId: string; outcome: WeeklyReviewOutcome }>> {
+  const maxPerTick = opts.maxPerTick ?? WEEKLY_REVIEW_MAX_PER_TICK;
   const results: Array<{ userId: string; outcome: WeeklyReviewOutcome }> = [];
   const candidates = await deps.listCandidates();
+  let computed = 0;
   for (const candidate of candidates) {
     if (candidate.weeklyReviewEnabled === false) continue;
     if (!isWeeklyReviewDue(now, candidate.timezone, candidate.morningMinutes)) continue;
+    const key = `${candidate.userId}|${lastCompletedWeekStart(localDayKey(now, candidate.timezone))}`;
+    if (state.done.has(key)) continue;
+    if ((state.retryAt.get(key) ?? 0) > now.getTime()) continue;
+    if (computed >= maxPerTick) break; // bounded work per tick; the rest go next tick
+    computed++;
+
+    let stage = 'getOrCreate';
+    let reviewId: string | null = null;
+    let claimed = false;
     try {
       const stored = await deps.getOrCreate(candidate.userId, candidate.timezone, now);
-      if (!stored) { results.push({ userId: candidate.userId, outcome: 'no_review' }); continue; }
-      if (!(await deps.claimPush(stored.id, now))) { results.push({ userId: candidate.userId, outcome: 'already_pushed' }); continue; }
-      if (!stored.review.dataSufficiency.sufficient) { results.push({ userId: candidate.userId, outcome: 'insufficient_data' }); continue; }
+      if (!stored) { state.done.add(key); results.push({ userId: candidate.userId, outcome: 'no_review' }); continue; }
+      reviewId = stored.id;
+      stage = 'claimPush';
+      if (!(await deps.claimPush(stored.id, now))) { state.done.add(key); results.push({ userId: candidate.userId, outcome: 'already_pushed' }); continue; }
+      claimed = true;
+      if (!stored.review.dataSufficiency.sufficient) { state.done.add(key); results.push({ userId: candidate.userId, outcome: 'insufficient_data' }); continue; }
+      stage = 'listDevices';
       const devices = await deps.listDevices(candidate.userId);
-      if (devices.length === 0) { results.push({ userId: candidate.userId, outcome: 'no_devices' }); continue; }
+      if (devices.length === 0) {
+        // Nothing was (or could be) sent: hand the claim back so the review can
+        // still go if a device registers later today. Not marked done.
+        stage = 'releaseClaim';
+        await deps.releaseClaim?.(stored.id);
+        claimed = false;
+        results.push({ userId: candidate.userId, outcome: 'no_devices' });
+        continue;
+      }
       const alert = weeklyReviewAlert(stored.review);
       const route = { type: 'weekly_review' as const, id: stored.id, deepLink: `vital://weekly-review/${stored.id}` };
+      stage = 'recordInbox';
       await deps.recordInbox?.(candidate.userId, alert, route);
+      stage = 'send';
       for (const device of devices) {
         const outcome = await deps.send(device, alert, route);
         if (outcome.retireToken) await deps.retireDevice(device.id, now);
       }
+      state.done.add(key);
       results.push({ userId: candidate.userId, outcome: 'sent' });
     } catch (error) {
-      deps.onError?.(candidate.userId, error);
+      state.retryAt.set(key, now.getTime() + WEEKLY_REVIEW_ERROR_BACKOFF_MS);
+      const detail = error instanceof Error ? error.message : String(error);
+      const where = `weekly review ${reviewId ?? '(none)'} failed at ${stage} (user ${candidate.userId}, tz ${candidate.timezone})`;
+      deps.onError?.(
+        candidate.userId,
+        new Error(claimed ? `${where} AFTER claim; at-most-once, will not be re-sent: ${detail}` : `${where}: ${detail}`, { cause: error }),
+      );
     }
   }
   return results;

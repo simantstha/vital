@@ -20,6 +20,7 @@ import { normalizeGoal, resolveDietBudget } from '@/lib/brain/dietBudget';
 import { resolveUnitSystem } from '@/lib/units';
 import { loadGoalProgress } from '@/lib/goalProgressLoader';
 import type { DayValue, GoalProgressBudget } from '@/lib/goalProgress';
+import { endOfLocalWeek, shouldRecomputeReview } from '@/lib/weeklyReviewFreshness';
 import { computeWeeklyReview, lastCompletedWeekStart, type WeeklyReview } from '@/lib/weeklyReview';
 
 const WEIGHT_LOOKBACK_DAYS = 90;
@@ -53,6 +54,8 @@ function addDays(day: string, n: number): string {
   return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
 }
 
+const lastRecomputeAt = new Map<string, number>();
+
 /** Computes (without persisting) the review for the last completed local week. Null when the user is gone. */
 export async function computeLastWeekReview(
   userId: string,
@@ -71,7 +74,7 @@ export async function computeLastWeekReview(
   const goal = normalizeGoal(user.goal);
   const [progress, weightReadings, intakeByDay, budget, progression, sets, workoutEntries, restingHr, hrv, sleep] =
     await Promise.all([
-      loadGoalProgress(userId, { tz, now }),
+      loadGoalProgress(userId, { tz, now: endOfLocalWeek(weekStart, tz) }),
       getWeightReadings(userId, WEIGHT_LOOKBACK_DAYS, tz),
       resolveDailyIntake(userId, dayKeys, tz),
       resolveDietBudget(user, userId),
@@ -130,7 +133,7 @@ export async function computeLastWeekReview(
  */
 export async function getOrCreateLastWeekReview(
   userId: string,
-  opts: { tz?: string | null; now?: Date } = {},
+  opts: { tz?: string | null; now?: Date; /** Skip the recompute throttle (the push path). */ forceFresh?: boolean } = {},
 ): Promise<StoredWeeklyReview | null> {
   const [user] = await db
     .select({ timezone: schema.users.timezone })
@@ -151,7 +154,25 @@ export async function getOrCreateLastWeekReview(
   };
 
   const existing = await find();
-  if (existing) return toStored(existing);
+  if (existing) {
+    const now = opts.now ?? new Date();
+    const memoKey = `${userId}|${weekStart}`;
+    if (!shouldRecomputeReview({ seenAt: existing.seen_at, createdAt: existing.created_at }, now, lastRecomputeAt.get(memoKey) ?? null, { force: opts.forceFresh })) {
+      return toStored(existing);
+    }
+    // Unseen and young: re-read the data so a late Sunday sync isn't lost.
+    // pushed_at / seen_at are untouched, so the push stays at-most-once.
+    try {
+      const fresh = await computeLastWeekReview(userId, { ...opts, tz });
+      lastRecomputeAt.set(memoKey, now.getTime());
+      if (!fresh) return toStored(existing);
+      await db.update(schema.weekly_reviews).set({ payload: fresh }).where(and(eq(schema.weekly_reviews.id, existing.id), isNull(schema.weekly_reviews.seen_at)));
+      return toStored({ ...existing, payload: fresh });
+    } catch (err) {
+      console.error(`[weeklyReview] recompute failed for user ${userId}; serving stored payload:`, err);
+      return toStored(existing);
+    }
+  }
 
   const review = await computeLastWeekReview(userId, { ...opts, tz });
   if (!review) return null;
