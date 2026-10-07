@@ -247,8 +247,8 @@ private extension MemoryView {
                     }
                     .font(Theme.Typography.labelSmall)
                     .fontWeight(.semibold)
-                    .foregroundStyle(Theme.Colors.accent)
-                    .accessibilityIdentifier("memory.goal.editInProfile")
+                    .foregroundStyle(Theme.Colors.accentContent)
+                    .accessibilityIdentifier("memory.goal.edit")
                 }
             }
         }

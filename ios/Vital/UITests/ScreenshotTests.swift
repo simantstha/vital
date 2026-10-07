@@ -991,7 +991,7 @@ final class ScreenshotTests: XCTestCase {
                            "\(scenario)'s Memory screen should tag a constraint fact [\(appearance)]")
             XCTAssertTrue(waitForText(app, containing: "Routines & preferences"),
                            "\(scenario)'s Memory screen should group facts into sections [\(appearance)]")
-            XCTAssertTrue(waitForText(app, containing: "Edit in Profile"),
+            XCTAssertTrue(app.buttons["memory.goal.edit"].waitForExistence(timeout: 10),
                            "\(scenario)'s Memory screen should show the profile goal read-only [\(appearance)]")
         }
         capture(app, name: "\(scenario)__memory__\(appearance)")
