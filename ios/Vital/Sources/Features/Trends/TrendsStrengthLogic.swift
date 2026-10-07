@@ -25,12 +25,17 @@ enum TrendsStrengthLogic {
     /// THE one definition of lift progress — mirrors `lib/liftChange.ts`
     /// (`liftChange4w`), which the Trends goal card and the weekly review use,
     /// so one lift never shows two different numbers:
-    ///   recent   = best e1RM across the current week and the week before
-    ///   baseline = best e1RM across the two weeks ending 4 weeks before the
-    ///              current week (current-4 and current-5)
+    ///   end      = the newest week with an e1RM among the current week and the
+    ///              two before it (an empty current week — e.g. Monday before
+    ///              training — is skipped, not read as a regression)
+    ///   recent   = best e1RM across `end` and the week before it
+    ///   baseline = best e1RM across the two weeks ending 4 weeks before `end`
+    ///              (end-4 and end-5)
     ///   change   = recent - baseline, rounded to 0.1 kg
-    /// Offsets are in weeks back from the current (last) index of the dense
-    /// weekly series. Both windows need data, else there is no change.
+    /// Offsets are in weeks back from `end` (recent/baseline) or from the
+    /// current (last) index of the dense weekly series (`endSearchOffsets`).
+    /// Both windows need data, else there is no change.
+    static let endSearchOffsets = [0, 1, 2]
     static let recentWeekOffsets = [0, 1]
     static let baselineWeekOffsets = [4, 5]
     /// A change smaller than this (in kg, regardless of the display unit)
@@ -39,8 +44,9 @@ enum TrendsStrengthLogic {
     static let changeThresholdKg = 1.0
     /// A lift not trained for this many weeks gets a "Not logged in N wk"
     /// chip instead of a progress claim about old data.
-    /// (Two, because the "recent" window is the current week plus the one
-    /// before — a lift last logged 2+ weeks ago has no recent data.)
+    /// (Two: the current week may still be empty — Monday before training —
+    /// so one idle week is fine, but a lift last logged 2+ weeks ago gets
+    /// the "Not logged" chip.)
     static let staleWeeks = 2
 
     // MARK: - Types
@@ -164,10 +170,14 @@ enum TrendsStrengthLogic {
     }
 
     static func change(e1rm: [Double?]) -> LiftChange? {
+        guard let endIndex = endSearchOffsets
+            .map({ e1rm.count - 1 - $0 })
+            .first(where: { $0 >= 0 && e1rm[$0] != nil })
+        else { return nil }
         func best(_ offsets: [Int]) -> Double? {
             var result: Double?
             for offset in offsets {
-                let index = e1rm.count - 1 - offset
+                let index = endIndex - offset
                 guard index >= 0, let value = e1rm[index] else { continue }
                 if result == nil || value > result! { result = value }
             }

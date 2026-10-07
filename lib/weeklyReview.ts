@@ -22,7 +22,7 @@ import { PARTIAL_LOG_KCAL_THRESHOLD, TOO_FAST_LOSS_PCT_PER_WEEK } from './brain/
 import { computeWeightTrend, type WeightReading } from './weightTrend';
 import { weekDayKeys, weekStartKeyForDay } from './localDay';
 import type { ProgressionSummary } from './workoutRepository';
-import { liftChange4w } from './liftChange';
+import { isDeload, liftChange4w, liftDisplayName } from './liftChange';
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
@@ -99,6 +99,14 @@ export interface WeeklyReviewInput {
   sleepGoalMinutes: number;
   weeklySessionsTarget: number | null;
   unitSystem?: 'metric' | 'imperial' | null;
+  /** exercise key -> display name; falls back to Title Case ("bench press" -> "Bench Press"). */
+  exerciseDisplay?: Record<string, string>;
+  /**
+   * Local day the user signed up / the goal began (YYYY-MM-DD). Days before it
+   * (e.g. HealthKit backfill) never count toward the "enough data" gate or the
+   * first review's day counts. Omitted -> every day counts.
+   */
+  signupDay?: string | null;
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -158,16 +166,18 @@ function fmtDuration(min: number): string {
 interface Week {
   days: string[];
   set: Set<string>;
+  /** Days on/after signup only (== set when no signupDay). */
+  eligible: Set<string>;
 }
 
-function makeWeek(weekStart: string): Week {
+function makeWeek(weekStart: string, signupDay?: string | null): Week {
   const days = weekDayKeys(weekStart);
-  return { days, set: new Set(days) };
+  return { days, set: new Set(days), eligible: new Set(signupDay ? days.filter(d => d >= signupDay) : days) };
 }
 
 function loggedIntake(days: GoalProgressIntakeDay[], week: Week): GoalProgressIntakeDay[] {
   return days.filter(
-    d => week.set.has(d.day) && d.source !== 'none' && d.kcal != null && d.kcal >= PARTIAL_LOG_KCAL_THRESHOLD,
+    d => week.eligible.has(d.day) && d.source !== 'none' && d.kcal != null && d.kcal >= PARTIAL_LOG_KCAL_THRESHOLD,
   );
 }
 
@@ -225,7 +235,7 @@ function budgetCandidate(input: WeeklyReviewInput, week: Week): Candidate | null
   const cand: Candidate = {
     stat: {
       label: 'Days in budget',
-      value: `${hit}/7`,
+      value: `${hit}/${logged.length}`,
       comparison: logged.length < 7 ? `${logged.length} ${plural(logged.length, 'day')} logged` : 'across the week',
       tone,
     },
@@ -291,7 +301,7 @@ function proteinCandidate(input: WeeklyReviewInput, week: Week): Candidate | nul
   const cand: Candidate = {
     stat: {
       label: 'Protein days hit',
-      value: `${hit}/7`,
+      value: `${hit}/${logged.length}`,
       comparison: logged.length < 7 ? `${logged.length} ${plural(logged.length, 'day')} logged` : 'across the week',
       tone,
     },
@@ -304,6 +314,19 @@ function proteinCandidate(input: WeeklyReviewInput, week: Week): Candidate | nul
   return cand;
 }
 
+/** weekStart -> total training volume across every lift (set count when nothing was loaded). */
+function totalVolumeByWeek(progression: ProgressionSummary): Record<string, number> {
+  const kg: Record<string, number> = {};
+  const sets: Record<string, number> = {};
+  for (const weeks of Object.values(progression)) {
+    for (const w of weeks) {
+      kg[w.weekStart] = (kg[w.weekStart] ?? 0) + w.volumeKg;
+      sets[w.weekStart] = (sets[w.weekStart] ?? 0) + w.totalSets;
+    }
+  }
+  return Object.values(kg).some(v => v > 0) ? kg : sets;
+}
+
 /**
  * Best lift of the reviewed week (most sets). The headline number is the shared
  * 4-week definition from lib/liftChange.ts ("vs 4 weeks ago": best e1RM of the
@@ -313,7 +336,7 @@ function proteinCandidate(input: WeeklyReviewInput, week: Week): Candidate | nul
  * "vs last trained week" change instead of inventing one.
  */
 function liftCandidate(input: WeeklyReviewInput, week: Week): Candidate | null {
-  let best: { exercise: string; sets: number; deltaKg: number; windowLabel: string } | null = null;
+  let best: { exercise: string; name: string; sets: number; deltaKg: number; windowLabel: string } | null = null;
   for (const [exercise, weeks] of Object.entries(input.progression)) {
     const cur = weeks.find(w => w.weekStart === week.days[0]);
     if (!cur || cur.bestEstimatedOneRepMaxKg == null) continue;
@@ -329,18 +352,21 @@ function liftCandidate(input: WeeklyReviewInput, week: Week): Candidate | null {
       deltaKg = cur.bestEstimatedOneRepMaxKg - (earlier[earlier.length - 1].bestEstimatedOneRepMaxKg as number);
       windowLabel = 'vs last trained week';
     }
-    const cand = { exercise, sets: cur.totalSets, deltaKg, windowLabel };
+    const cand = { exercise, name: liftDisplayName(exercise, input.exerciseDisplay), sets: cur.totalSets, deltaKg, windowLabel };
     if (!best || cand.sets > best.sets || (cand.sets === best.sets && cand.exercise < best.exercise)) best = cand;
   }
   if (!best) return null;
   const rounded = round1(isImperial(input) ? best.deltaKg * KG_TO_LB : best.deltaKg);
   const value = rounded === 0 ? weightText(input, 0) : signed(rounded, weightText(input, Math.abs(best.deltaKg)));
-  const tone: ReviewTone = best.deltaKg > 0.05 ? 'good' : best.deltaKg < -0.05 ? 'watch' : 'neutral';
+  // A deload (week volume < 60% of the 4-week average) lowers e1RM on purpose:
+  // never a slip, just a neutral "Lighter week".
+  const lighter = best.deltaKg < -0.05 && isDeload(totalVolumeByWeek(input.progression), week.days[0], 1);
+  const tone: ReviewTone = lighter ? 'neutral' : best.deltaKg > 0.05 ? 'good' : best.deltaKg < -0.05 ? 'watch' : 'neutral';
   const cand: Candidate = {
-    stat: { label: `${best.exercise} est. 1RM`, value, comparison: best.windowLabel, tone },
+    stat: { label: `${best.name} est. 1RM`, value, comparison: lighter ? `Lighter week · ${best.windowLabel}` : best.windowLabel, tone },
   };
-  if (tone === 'good') cand.win = `${best.exercise} estimated 1RM is up ${weightText(input, Math.abs(best.deltaKg))} ${best.windowLabel}.`;
-  if (tone === 'watch') cand.slip = `${best.exercise} estimated 1RM is down ${weightText(input, Math.abs(best.deltaKg))} ${best.windowLabel}.`;
+  if (tone === 'good') cand.win = `${best.name} estimated 1RM is up ${weightText(input, Math.abs(best.deltaKg))} ${best.windowLabel}.`;
+  if (tone === 'watch') cand.slip = `${best.name} estimated 1RM is down ${weightText(input, Math.abs(best.deltaKg))} ${best.windowLabel}.`;
   return cand;
 }
 
@@ -422,7 +448,7 @@ function sleepGoalNightsCandidate(input: WeeklyReviewInput, week: Week): Candida
   const cand: Candidate = {
     stat: {
       label: 'Sleep-goal nights',
-      value: `${hit}/7`,
+      value: `${hit}/${nights.length}`,
       comparison: nights.length < 7 ? `${nights.length} ${plural(nights.length, 'night')} tracked` : 'across the week',
       tone,
     },
@@ -486,12 +512,17 @@ function buildCandidates(input: WeeklyReviewInput, week: Week, prevWeek: Week): 
 function countDataDays(input: WeeklyReviewInput, week: Week): number {
   const days = new Set<string>();
   for (const d of loggedIntake(input.intakeDays, week)) days.add(d.day);
-  for (const r of input.weightReadings) if (week.set.has(r.localDay)) days.add(r.localDay);
-  for (const d of input.trainingDays) if (week.set.has(d)) days.add(d);
-  for (const w of input.workouts) if (week.set.has(w.day)) days.add(w.day);
-  for (const p of input.sleepMinutes) if (week.set.has(p.day) && p.value > 0) days.add(p.day);
-  for (const p of input.restingHr) if (week.set.has(p.day)) days.add(p.day);
+  for (const r of input.weightReadings) if (week.eligible.has(r.localDay)) days.add(r.localDay);
+  for (const d of input.trainingDays) if (week.eligible.has(d)) days.add(d);
+  for (const w of input.workouts) if (week.eligible.has(w.day)) days.add(w.day);
+  for (const p of input.sleepMinutes) if (week.eligible.has(p.day) && p.value > 0) days.add(p.day);
+  for (const p of input.restingHr) if (week.eligible.has(p.day)) days.add(p.day);
   return days.size;
+}
+
+/** "logged " / "tracked " when the stat's denominator is a partial week, else "". */
+function loggedWord(stat: WeeklyReviewStat, word = 'logged '): string {
+  return stat.comparison != null && /\d+ (days? logged|nights? tracked)/.test(stat.comparison) ? word : '';
 }
 
 function buildHeadline(input: WeeklyReviewInput, cands: Candidate[]): string {
@@ -507,7 +538,7 @@ function buildHeadline(input: WeeklyReviewInput, cands: Candidate[]): string {
       parts.push(rounded.startsWith('−') ? `Down ${rounded.slice(1)}` : rounded.startsWith('+') ? `Up ${rounded.slice(1)}` : 'Weight steady');
     }
     const budget = by('Days in budget');
-    if (budget) parts.push(`in budget ${budget.value.replace('/', ' of ')} days`);
+    if (budget) parts.push(`in budget ${budget.value.replace('/', ' of ')} ${loggedWord(budget)}days`);
     else if (sessions) parts.push(sessionCount(sessions));
   } else if (input.goal === 'muscle') {
     if (sessions) {
@@ -518,7 +549,7 @@ function buildHeadline(input: WeeklyReviewInput, cands: Candidate[]): string {
     const lift = cands.find(x => x.stat.label.endsWith('est. 1RM'))?.stat;
     const protein = by('Protein days hit');
     if (lift && lift.tone === 'good') parts.push(`${lift.label.replace(' est. 1RM', '')} up ${lift.value.replace('+', '')}`);
-    else if (protein) parts.push(`protein ${protein.value.replace('/', ' of ')} days`);
+    else if (protein) parts.push(`protein ${protein.value.replace('/', ' of ')} ${loggedWord(protein)}days`);
     else if (weight) parts.push(`weight ${weight.value}`);
   } else if (input.goal === 'endurance') {
     if (sessions) parts.push(`${sessions.value} ${plural(Number(sessions.value), 'session')}`);
@@ -528,7 +559,7 @@ function buildHeadline(input: WeeklyReviewInput, cands: Candidate[]): string {
     if (sessions) parts.push(`${sessions.value} active ${plural(Number(sessions.value), 'day')}`);
     const sleep = by('Sleep-goal nights');
     const logging = by('Logging days');
-    if (sleep) parts.push(`slept to goal ${sleep.value.replace('/', ' of ')} nights`);
+    if (sleep) parts.push(`slept to goal ${sleep.value.replace('/', ' of ')} ${loggedWord(sleep, 'tracked ')}nights`);
     else if (logging) parts.push(`logged ${logging.value.replace('/', ' of ')} days`);
   }
   if (parts.length === 0 && cands.length > 0) parts.push(`${cands[0].stat.label}: ${cands[0].stat.value}`);
@@ -627,8 +658,8 @@ function emptyReview(input: WeeklyReviewInput, week: Week, daysWithData: number,
 }
 
 export function computeWeeklyReview(input: WeeklyReviewInput): WeeklyReview {
-  const week = makeWeek(input.weekStart);
-  const prevWeek = makeWeek(addDays(input.weekStart, -7));
+  const week = makeWeek(input.weekStart, input.signupDay);
+  const prevWeek = makeWeek(addDays(input.weekStart, -7), input.signupDay);
   const daysWithData = countDataDays(input, week);
   const cands = buildCandidates(input, week, prevWeek);
 

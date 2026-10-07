@@ -150,6 +150,24 @@ final class TrendsStrengthLogicTests: XCTestCase {
         XCTAssertNil(TrendsStrengthLogic.change(e1rm: series(["2026-09-07": 100])))
     }
 
+    /// Same fixture as `lib/liftChange.test.ts` "empty current week": the
+    /// current week (10-05) has no sets, so `end` = 09-28; recent =
+    /// {09-28, 09-21}, baseline = {08-31, 08-24}.
+    func testLiftChangeSkipsAnEmptyCurrentWeek() {
+        let k = keys
+        func series(_ points: [String: Double]) -> [Double?] { k.map { points[$0] } }
+
+        let bench = series(["2026-08-24": 100, "2026-08-31": 101, "2026-09-21": 103, "2026-09-28": 106.4])
+        XCTAssertEqual(
+            TrendsStrengthLogic.change(e1rm: bench),
+            TrendsStrengthLogic.LiftChange(baselineKg: 101, recentKg: 106.4, changeKg: 5.4)
+        )
+        XCTAssertEqual(TrendsStrengthLogic.status(e1rm: bench, system: .metric).text, "+5.4 kg vs 4 wk ago")
+
+        // The end week is searched only 3 weeks back (10-05, 09-28, 09-21).
+        XCTAssertNil(TrendsStrengthLogic.change(e1rm: series(["2026-09-14": 100])))
+    }
+
     // MARK: - card
 
     private func exercises() -> [String: [WorkoutWeeklyStatDTO]] {

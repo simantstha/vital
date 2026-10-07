@@ -391,3 +391,75 @@ test('nextWeek is never a copy of the slip, for every goal fixture', () => {
   }
   assert.ok(withSlip > 0, 'fixtures should exercise at least one slip');
 });
+
+// ── verdict consistency ─────────────────────────────────────────────────────
+
+test('partial logging: "in budget 3 of 3 logged days", not 3 of 7', () => {
+  const r = computeWeeklyReview(base({
+    weightReadings: weigh([...PREV, ...WEEK], i => 82 - i * 0.07),
+    intakeDays: intake(WEEK.slice(0, 3), [1900, 1950, 2000]),
+    trainingDays: [WEEK[1], WEEK[3]],
+  }));
+  const budget = statByLabel(r, 'Days in budget')!;
+  assert.equal(budget.value, '3/3');
+  assert.equal(budget.comparison, '3 days logged');
+  assert.match(r.headline, /in budget 3 of 3 logged days/);
+});
+
+test('signupDay: days before signup do not count toward the data gate or the logged-day stats', () => {
+  const backfilled = base({
+    // HealthKit backfill: resting HR + workouts + sleep on days before the user signed up.
+    restingHr: WEEK.map(day => ({ day, value: 55 })),
+    sleepMinutes: WEEK.map(day => ({ day, value: 450 })),
+    workouts: WEEK.map(day => ({ day, durationMin: 40, distanceKm: null })),
+    trainingDays: WEEK,
+    goal: 'general',
+  });
+  assert.equal(computeWeeklyReview(backfilled).dataSufficiency.sufficient, true);
+  const signedUpSunday = computeWeeklyReview({ ...backfilled, signupDay: WEEK[6] });
+  assert.equal(signedUpSunday.dataSufficiency.daysWithData, 1);
+  assert.equal(signedUpSunday.dataSufficiency.sufficient, false);
+});
+
+test('lift names are display-cased in the stat and win text', () => {
+  const r = computeWeeklyReview(base({
+    goal: 'muscle',
+    verdict: 'progressing',
+    weeklySessionsTarget: 3,
+    trainingDays: [WEEK[0], WEEK[2], WEEK[4]],
+    progression: {
+      'bench press': [
+        { weekStart: '2026-08-31', bestEstimatedOneRepMaxKg: 100, volumeKg: 3000, totalSets: 9, totalReps: 45 },
+        { weekStart: WEEK_START, bestEstimatedOneRepMaxKg: 105, volumeKg: 3200, totalSets: 10, totalReps: 50 },
+      ],
+    },
+  }));
+  const lift = r.stats.find(s => s.label.endsWith('est. 1RM'))!;
+  assert.equal(lift.label, 'Bench Press est. 1RM');
+});
+
+test('a deload week with a lower e1RM is "Lighter week" and never a slip', () => {
+  const mk = (weekStart: string, e: number, volumeKg: number) => ({ weekStart, bestEstimatedOneRepMaxKg: e, volumeKg, totalSets: 8, totalReps: 40 });
+  const progression: ProgressionSummary = {
+    'bench press': [
+      mk('2026-08-24', 100, 3000), mk('2026-08-31', 100, 3000), mk('2026-09-07', 100, 3000),
+      mk('2026-09-14', 100, 3000), mk('2026-09-21', 97, 3000), mk(WEEK_START, 96, 1200),
+    ],
+  };
+  const lighter = computeWeeklyReview(base({
+    goal: 'muscle', verdict: 'stalled', weeklySessionsTarget: 3,
+    trainingDays: [WEEK[0], WEEK[2], WEEK[4]], progression,
+  }));
+  const stat = lighter.stats.find(s => s.label.endsWith('est. 1RM'))!;
+  assert.equal(stat.tone, 'neutral');
+  assert.match(stat.comparison ?? '', /^Lighter week/);
+  assert.doesNotMatch(lighter.slip ?? '', /estimated 1RM is down/);
+
+  // Same drop at normal volume is still a slip.
+  const normal = computeWeeklyReview(base({
+    goal: 'muscle', verdict: 'stalled', weeklySessionsTarget: 3,
+    trainingDays: [WEEK[0], WEEK[2], WEEK[4]],
+    progression: { 'bench press': progression['bench press'].map(w => (w.weekStart === WEEK_START ? { ...w, volumeKg: 3000 } : w)) },
+  }));
+  assert.match(normal.slip ?? '', /Bench Press estimated 1RM is down/);
+});
