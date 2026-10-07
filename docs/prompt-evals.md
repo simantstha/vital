@@ -164,8 +164,15 @@ say so explicitly.
     `targetWeight: 76` (unit kg or omitted) and `targetDate: '2026-12-25'`.
     Exercises the tool description in `lib/brain/tools.ts` and persona's
     "Set goal targets by voice" rule.
+13. **Honour cited memory** — normal mode, context carries the note "New baby
+    born 2 Sep — night feeds, usually 2 a night" and short sleep, user asks
+    "Why am I so tired this week?" → reply must acknowledge the baby / night
+    feeds (`/baby|night feed|feeds|newborn/i`) rather than answering with
+    generic "go to bed earlier" advice. Exercises `lib/brain/persona.ts`'s
+    `citedContextBlock()`: a note surfaced as a source must shape the answer,
+    and an irrelevant note must not be cited.
 
-Cases 7-11 check the reply text as well as tool calls: the runner concatenates
+Cases 7-11 and 13 check the reply text as well as tool calls: the runner concatenates
 every `text` content block across every round of the case's run (a round can
 end on `tool_use` with no text of its own, so the text a case cares about may
 land in a different round than the tool calls) and passes it to `check` as a

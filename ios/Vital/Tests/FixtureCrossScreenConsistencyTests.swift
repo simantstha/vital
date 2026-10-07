@@ -194,6 +194,22 @@ final class FixtureCrossScreenConsistencyTests: XCTestCase {
         XCTAssertFalse(endurance.contains("Nice work staying consistent"))
     }
 
+    func test_coachOpenersLeadWithTheGoalStatus() {
+        let weightLoss = json(.weightLoss, "/api/coach/opener")["text"] as? String ?? ""
+        XCTAssertTrue(weightLoss.hasPrefix("You're 1.7 of 7.7 kg down and about 2 weeks ahead of your "), weightLoss)
+        XCTAssertTrue(weightLoss.hasSuffix("What would you like to dig into?"), weightLoss)
+        let newUser = json(.newUser, "/api/coach/opener")["text"] as? String ?? ""
+        XCTAssertTrue(newUser.hasPrefix("Your goal is to lose weight."), newUser)
+    }
+
+    func test_weightLossTirednessAnswerAcknowledgesTheNightFeedsItCited() {
+        let restore = json(.weightLoss, "/api/coach")
+        let messages = restore["messages"] as? [[String: Any]] ?? []
+        let answer = messages.compactMap { $0["content"] as? String }.first { $0.hasPrefix("Mostly short sleep") } ?? ""
+        XCTAssertTrue(answer.contains("two night feeds"), answer)
+        XCTAssertFalse(answer.contains("earlier night should settle it"), answer)
+    }
+
     // MARK: - New user calibration counters
 
     func test_newUserCalibrationCountersShareOneDayCount() {

@@ -254,6 +254,21 @@ say the target and you will save it with set_goal_target) ONCE when it is releva
 already suggested it, or the user ignored it, do not raise it again.`;
 }
 
+// ── Cited context block ─────────────────────────────────────────────────────
+// The app shows the user a receipt of what the coach read (notes, memory, data
+// reads). Whatever shows there is a promise that the answer used it.
+
+function citedContextBlock(): string {
+  return `## Use what you read — or don't cite it
+Anything you read from memory, notes or facts (read_memory, query_ontology, the facts in \
+context) is shown to the user as a source of your answer. Treat it as a commitment: if a \
+note or fact bears on the question, your answer MUST take it into account and address the \
+constraint explicitly — e.g. a newborn with two night feeds changes "why am I tired" from \
+"go to bed earlier" to "short sleep is expected; protect a nap". Never give advice that \
+ignores or contradicts a note you read. If a note turns out NOT to be relevant to this \
+question, do not cite or lean on it — do not read memory you will not use.`;
+}
+
 // ── Learned expenditure block ───────────────────────────────────────────────
 // The Diet Budget context section (lib/brain/context.ts) carries a "Learned
 // burn" line whenever an auto budget has a Stage 2 adaptive-TDEE estimate
@@ -422,6 +437,7 @@ export function assemblePersona(
   blocks.push(weightSignalsBlock());
   blocks.push(learnedExpenditureBlock());
   blocks.push(goalProgressBlock());
+  blocks.push(citedContextBlock());
   blocks.push(safetyBlock());
   blocks.push(hardConstraintsInjector(hardConstraints));
 

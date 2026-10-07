@@ -507,6 +507,34 @@ async function main(): Promise<void> {
         };
       },
     },
+    {
+      id: 13,
+      name: 'Honour cited memory — a note the coach reads must shape the answer',
+      onboarding: false,
+      hardConstraints: [],
+      contextText: contextBlock([
+        ...NORMAL_BASELINES,
+        '',
+        '### Sleep',
+        '- Last night: 5h 40m (usual 7h 10m); HRV 58 ms (normal 49-55 ms)',
+        '',
+        '### Ontology',
+        'No hard constraints on file.',
+        '',
+        '### Notes from memory (read for this question)',
+        '- New baby born 2 Sep — night feeds, usually 2 a night. (noted 2026-09-04)',
+      ]),
+      userMessage: 'Why am I so tired this week?',
+      check: (_calls, text) => {
+        const acknowledges = /(baby|night feeds?|feeds?|newborn|wak(?:e|ing) (?:up )?(?:at night|overnight))/i.test(text);
+        return {
+          pass: acknowledges,
+          reason: acknowledges
+            ? 'reply addressed the night-feeds note in its answer'
+            : 'reply ignored the night-feeds note it was given (generic "sleep earlier" advice)',
+        };
+      },
+    },
   ];
 
   // ── Runner ───────────────────────────────────────────────────────────────

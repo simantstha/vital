@@ -530,7 +530,7 @@ final class ScreenshotTests: XCTestCase {
             XCTAssertTrue(waitForText(app, containing: "Ask me anything about your health trends"),
                            "Coach should fall back to its hardcoded opener when every endpoint 500s [\(appearance)]")
         } else if scenario == "new_user" {
-            XCTAssertTrue(waitForText(app, containing: "Tell me your goal"),
+            XCTAssertTrue(waitForText(app, containing: "Your goal is to lose weight"),
                            "Coach should show the new-user opener, not returning-user praise [\(appearance)]")
             XCTAssertFalse(app.staticTexts.matching(
                 NSPredicate(format: "label CONTAINS[c] %@", "Nice work staying consistent")

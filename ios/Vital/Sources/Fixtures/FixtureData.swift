@@ -104,30 +104,39 @@ enum FixtureData {
     }
 
     /// Returning-user opener, shown once a scenario has an established
-    /// baseline (`Profile.established == true`) — praise tied to real
-    /// history is appropriate there.
-    /// Every established opener keeps the "what would you like to dig into"
-    /// tail (the screenshot harness waits on it) but leads with a line that
-    /// fits the persona's story and the numbers on the other screens.
-    private static func coachOpener(for scenario: FixtureMode.Scenario) -> String {
+    /// baseline (`Profile.established == true`). It leads with the goal
+    /// status in one line — the same wording `lib/brain/openerText.ts` composes
+    /// for the live opener (amount done of total in the user's unit, pace vs
+    /// the target date; the card headline for non-weight goals) — and keeps
+    /// the "what would you like to dig into" tail the screenshot harness
+    /// waits on. Numbers derive from the same constants as `goalProgress(_:scenario:)`.
+    private static func coachOpener(for scenario: FixtureMode.Scenario, profile: Profile) -> String {
+        let invite = "What would you like to dig into?"
         switch scenario {
         case .endurance:
-            return "Your recovery is the thing to watch this week — HRV is down and resting HR is up after the late run. What would you like to dig into?"
+            return "Goal check-in: Building — distance up 12% (last 2 weeks vs the 2 before). \(invite)"
         case .weightLoss:
-            return "You're on track this week — down 0.6 kg and inside your calorie budget most days. What would you like to dig into?"
+            // Mirrors goalProgress(): start 83.7 kg, target 76 kg, target
+            // date 84 days out, ETA 70 days out => 14 days (2 weeks) ahead.
+            let start = 83.7
+            let target = 76.0
+            let done = ((start - profile.weightKg) * 10).rounded() / 10
+            let total = ((start - target) * 10).rounded() / 10
+            return "You're \(trimmedKm(done)) of \(trimmedKm(total)) kg down and about 2 weeks ahead of your \(shortDate(daysAhead: 84)) target. \(invite)"
         case .muscle:
-            return "Your lifts are progressing — bench is up 8.8 kg vs 4 weeks ago and protein is landing. What would you like to dig into?"
+            return "Goal check-in: Progressing — Squat est. 1RM up 20.4 kg vs 4 weeks ago. \(invite)"
         default:
             return "Nice work staying consistent this week — what would you like to dig into?"
         }
     }
 
     /// New/calibrating-user opener (`Profile.established == false`, i.e. the
-    /// `new_user` scenario) — no history to praise yet, so this just invites
-    /// the user to say something instead. Mirrors
-    /// `CoachViewModel.newUserFallbackOpener`.
+    /// `new_user` scenario) — no history to praise yet, so it states the goal
+    /// onboarding already collected (this scenario's goal-progress fixture is
+    /// `weight_loss` with no target) and sets the expectation, instead of
+    /// asking for it. Same copy as `CoachViewModel.newUserGoalOpener`.
     private static let newUserCoachOpener =
-        "Hi, I'm Vital, your coach. Tell me your goal, or just say what you ate or how you slept, and I'll take it from there."
+        CoachViewModel.newUserGoalOpener(goal: "weight_loss") ?? CoachViewModel.newUserFallbackOpener
 
     private static let profiles: [FixtureMode.Scenario: Profile] = [
         .newUser: Profile(
@@ -281,7 +290,7 @@ enum FixtureData {
         case ("GET", "/api/coach"):
             return (200, jsonData(coachRestoration(profile, scenario: scenario)))
         case ("GET", "/api/coach/opener"):
-            return (200, jsonData(["text": profile.established ? coachOpener(for: scenario) : newUserCoachOpener]))
+            return (200, jsonData(["text": profile.established ? coachOpener(for: scenario, profile: profile) : newUserCoachOpener]))
         case ("POST", "/api/coach"):
             // Never exercised by the screenshot harness (see
             // `FixtureURLProtocol.startLoading`) — a well-formed empty SSE
@@ -716,7 +725,7 @@ enum FixtureData {
             "id": "00000000-0000-4000-8000-000000000001",
             "role": "assistant",
             "speaker": "vital",
-            "content": coachOpener(for: scenario),
+            "content": coachOpener(for: scenario, profile: profile),
             "timestamp": isoNow,
             "specialistSessionId": NSNull(),
             "specialistMetadata": NSNull(),
@@ -788,7 +797,7 @@ enum FixtureData {
         case .endurance:
             content = "Mostly sleep. Last night was \(lastNight) and you've averaged \(hoursMinutes(avgMinutes)) this week, with \(shortNights) of the last 7 nights under 6 hours. Your HRV is \(abs(hrvGap)) ms under your normal — the pattern you usually get after short nights."
         case .weightLoss:
-            content = "Mostly short sleep. Last night was \(lastNight), about \(humanDuration(usualMinutes - profile.sleepMinutes)) under your usual — but your HRV is \(abs(hrvGap)) ms above your normal, so you're recovering fine. An earlier night should settle it."
+            content = "Mostly short sleep. Last night was \(lastNight), about \(humanDuration(usualMinutes - profile.sleepMinutes)) under your usual — but your HRV is \(abs(hrvGap)) ms above your normal, so you're recovering fine. With two night feeds, the short sleep is expected — protect a nap or an earlier wind-down on non-feed nights; it's not your training."
         default:
             content = "Not much points to sleep — last night was \(lastNight) and your HRV (\(hrvToday) ms) is inside your normal \(hrvRange) ms. A heavy training week can feel draining even when recovery looks fine; keep protein up and ease the next session if it lingers."
         }
