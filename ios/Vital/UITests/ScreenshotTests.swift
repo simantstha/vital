@@ -1134,7 +1134,7 @@ final class ScreenshotTests: XCTestCase {
         case "weight_loss":
             return "You're down 0.6kg this week, but last night's sleep ran short (6h 50m) — keep the deficit gentle and aim for an earlier night."
         case "muscle":
-            return "Protein's on target four days running and Sunday's squat was your best in 4 weeks — stay the course."
+            return "Protein's on target four days running and Monday's squat was your best in 4 weeks — stay the course."
         case "endurance":
             return "This week's long run held goal pace with a lower average HR than last week — aerobic base is building nicely."
         default:
