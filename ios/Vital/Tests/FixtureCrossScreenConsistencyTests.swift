@@ -149,18 +149,55 @@ final class FixtureCrossScreenConsistencyTests: XCTestCase {
         XCTAssertEqual(stat?["tone"] as? String, "watch")
     }
 
-    func test_enduranceHRVAgreesAcrossTodayTrendsAndGoalProgress() throws {
+    /// ONE HRV normal for endurance: 57 ms (band 54-60), today 51 -> -11% on
+    /// Today, "6 ms below your normal (57 ms)" on the detail, and the detail's
+    /// "Avg 30d" (the mean of the served points) is that same 57.
+    func test_enduranceHRVNormalIsOneNumberAcrossTodayTrendsAndDetail() throws {
         let hrv = todayMetric(.endurance, "hrv")
         XCTAssertEqual(hrv, 51, accuracy: 0.01)
         XCTAssertEqual(latestBatchPoint(.endurance, "hrv_sdnn"), hrv, accuracy: 0.01)
 
+        let todayMetrics = json(.endurance, "/api/today")["metrics"] as? [String: Any]
+        let delta = (todayMetrics?["hrv"] as? [String: Any])?["deltaPct"] as? Int
+        XCTAssertEqual(delta, -11, "Today tile: 51 vs 57 = -10.5% -> -11% vs normal")
+
         let series = (json(.endurance, "/api/trends", "metrics=hrv_sdnn&days=30")["series"] as? [String: Any])?["hrv_sdnn"] as? [String: Any]
-        let mean = ((series?["baseline"] as? [String: Any])?["mean30"] as? Double) ?? .nan
-        let (_, data) = FixtureData.response(scenario: .endurance, method: "GET", path: "/api/goal/progress", query: "")
+        let baseline = series?["baseline"] as? [String: Any]
+        let mean = (baseline?["mean30"] as? Double) ?? .nan
+        let sd = (baseline?["sd30"] as? Double) ?? .nan
+        XCTAssertEqual(mean, 57, accuracy: 0.0001)
+        XCTAssertEqual(String(format: "%.0f\u{2013}%.0f", mean - sd, mean + sd), "54\u{2013}60")
+
+        let values = (series?["points"] as? [[String: Any]] ?? []).compactMap { $0["value"] as? Double }
+        XCTAssertEqual(values.count, 30)
+        XCTAssertEqual(values.reduce(0, +) / Double(values.count), 57, accuracy: 0.0001, "detail Avg 30d is computed from the points")
+
+        let spec = MetricCatalog.spec(for: "hrv_sdnn")!
+        XCTAssertEqual(
+            TrendsDeltaFormat.normalPillText(value: hrv, lower: mean - sd, upper: mean + sd, spec: spec, system: .metric),
+            "\u{2193} 6 ms below your normal (57 ms)"
+        )
+    }
+
+    /// The muscle goal-progress payload mirrors the current server copy:
+    /// whole-kg lift reasons from rounded endpoints, Squat as the headline
+    /// lift, and 9/16 = 56% adherence (< 70%) making the verdict `behind`.
+    func test_muscleGoalProgressMirrorsServerCopy() throws {
+        let (_, data) = FixtureData.response(scenario: .muscle, method: "GET", path: "/api/goal/progress", query: "")
         let progress = try JSONDecoder().decode(GoalProgressDTO.self, from: data)
-        let text = progress.reasons.first { $0.text.contains("HRV") }?.text ?? ""
-        XCTAssertTrue(text.contains("\(Int(hrv.rounded())) vs \(Int(mean.rounded())) ms"), "goal progress HRV reason: \(text)")
-        XCTAssertFalse(text.contains("59"), "old hand-typed HRV numbers are gone")
+        XCTAssertEqual(progress.verdict, .behind)
+        XCTAssertEqual(progress.headline, "Lifts up, sessions behind \u{2014} Squat +20 kg")
+        let lifts = progress.reasons.filter { $0.kind == "lift" }.map(\.text)
+        XCTAssertEqual(lifts, [
+            "Squat est. 1RM +20 kg vs 4 weeks ago (143 \u{2192} 163 kg)",
+            "Bench Press est. 1RM +9 kg vs 4 weeks ago (99 \u{2192} 108 kg)",
+        ])
+        XCTAssertEqual(GoalProgressLogic.label(for: progress.verdict, goal: progress.goal), "Sessions behind")
+        let opener = json(.muscle, "/api/coach/opener")["text"] as? String ?? ""
+        XCTAssertTrue(opener.contains("Lifts up, sessions behind \u{2014} Squat +20 kg"), opener)
+
+        let review = json(.muscle, "/api/review/weekly")["review"] as? [String: Any]
+        XCTAssertEqual(review?["headline"] as? String, "3 of 4 sessions, Squat est. 1RM +20 kg over 4 wks")
     }
 
     func test_enduranceSleepAgreesAcrossTrendsWeeklyReviewAndCoach() {

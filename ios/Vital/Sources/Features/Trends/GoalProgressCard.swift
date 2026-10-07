@@ -6,10 +6,12 @@ import SwiftUI
 /// verdict's tone (see `GoalProgressLogic.tone(for:)`).
 struct GoalVerdictChip: View {
     let verdict: GoalVerdict
+    /// Canonical goal id; makes the muscle `behind` chip read "Sessions behind".
+    var goal: String? = nil
 
     var body: some View {
         Chip(
-            text: GoalProgressLogic.label(for: verdict),
+            text: GoalProgressLogic.label(for: verdict, goal: goal),
             tint: GoalProgressLogic.color(for: GoalProgressLogic.tone(for: verdict))
         )
     }
@@ -181,7 +183,7 @@ struct GoalProgressCard: View {
         VitalCard(padding: Theme.Spacing.lg, cornerRadius: Theme.Radius.lg) {
             VStack(alignment: .leading, spacing: Theme.Spacing.md) {
                 HStack(alignment: .center) {
-                    GoalVerdictChip(verdict: progress.verdict)
+                    GoalVerdictChip(verdict: progress.verdict, goal: progress.goal)
                     Spacer()
                     Image(systemName: "chevron.right")
                         .font(.system(size: 13, weight: .semibold))
@@ -281,7 +283,7 @@ struct GoalProgressLine: View {
     var body: some View {
         Button(action: onTap) {
             HStack(spacing: Theme.Spacing.sm) {
-                GoalVerdictChip(verdict: progress.verdict)
+                GoalVerdictChip(verdict: progress.verdict, goal: progress.goal)
                 Text(text)
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(Theme.Colors.textSecondary)
@@ -298,7 +300,7 @@ struct GoalProgressLine: View {
         }
         .buttonStyle(.pressableCard)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(GoalProgressLogic.label(for: progress.verdict)). \(text)")
+        .accessibilityLabel("\(GoalProgressLogic.label(for: progress.verdict, goal: progress.goal)). \(text)")
         .accessibilityHint("Opens your goal progress")
         .accessibilityIdentifier("goalProgress.todayLine")
     }
@@ -321,7 +323,7 @@ struct GoalProgressDetailView: View {
                 header
 
                 VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-                    GoalVerdictChip(verdict: progress.verdict)
+                    GoalVerdictChip(verdict: progress.verdict, goal: progress.goal)
                     Text(GoalProgressLogic.primaryLine(progress, system: system))
                         .font(.system(size: 24, weight: .bold, design: .rounded))
                         .foregroundStyle(Theme.Colors.textPrimary)

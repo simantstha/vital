@@ -85,6 +85,13 @@ final class GoalProgressLogicTests: XCTestCase {
         }
     }
 
+    func testBehindChipIsGoalAwareForMuscleOnly() {
+        XCTAssertEqual(GoalProgressLogic.label(for: .behind, goal: "muscle"), "Sessions behind")
+        XCTAssertEqual(GoalProgressLogic.label(for: .behind, goal: "weight_loss"), "Behind pace")
+        XCTAssertEqual(GoalProgressLogic.label(for: .behind, goal: nil), "Behind pace")
+        XCTAssertEqual(GoalProgressLogic.label(for: .progressing, goal: "muscle"), "Progressing")
+    }
+
     func testVerdictTones() {
         XCTAssertEqual(GoalProgressLogic.tone(for: .onTrack), .good)
         XCTAssertEqual(GoalProgressLogic.tone(for: .ahead), .good)
@@ -472,9 +479,9 @@ final class GoalProgressLogicTests: XCTestCase {
     func testMuscleCompactLinePrefersLiftReasonOverWeightEta() {
         let muscle = GoalProgressDTO(
             goal: "muscle", target: .init(weightKg: 90), eta: "2026-12-06", verdict: .progressing,
-            reasons: [GoalReasonDTO(kind: "lift", text: "Squat +20.4 kg vs 4 wk", tone: .good)]
+            reasons: [GoalReasonDTO(kind: "lift", text: "Squat +20 kg vs 4 wk", tone: .good)]
         )
-        XCTAssertEqual(GoalProgressLogic.compactText(muscle, system: .metric, now: now, locale: en), "Squat +20.4 kg vs 4 wk")
+        XCTAssertEqual(GoalProgressLogic.compactText(muscle, system: .metric, now: now, locale: en), "Squat +20 kg vs 4 wk")
         let noLift = GoalProgressDTO(goal: "muscle", target: .init(weightKg: 90), eta: "2026-12-06", verdict: .progressing)
         XCTAssertEqual(GoalProgressLogic.compactText(noLift, system: .metric, now: now, locale: en), "90 kg by ~Dec 6")
     }
