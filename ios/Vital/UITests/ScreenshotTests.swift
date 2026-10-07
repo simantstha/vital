@@ -405,11 +405,14 @@ final class ScreenshotTests: XCTestCase {
                                "Today's endurance hero should show a readiness word (one of \(readinessWords)) [\(appearance)]")
                 XCTAssertTrue(waitForText(app, containing: "10km tempo run"),
                                "Today's endurance hero should show today's session [\(appearance)]")
-                // Combined line showing sessions and weekly volume:
-                // 3 completed sessions, 24.5 km done this week
-                // (no plan data for endurance, so no dots).
-                XCTAssertTrue(waitForText(app, containing: "3 sessions · 24.5 km this week"),
-                               "Today's endurance hero should show sessions and volume combined [\(appearance)]")
+                // Sessions line now shows session count only (e.g., "3 sessions this week"),
+                // while distance appears in a separate progress line.
+                XCTAssertTrue(waitForText(app, containing: "sessions"),
+                               "Today's endurance hero should show the sessions line [\(appearance)]")
+                // Distance progress line in the format "X.X of 30 km this week"
+                // (fixture's stable target: 30 km/week; weekday-dependent value: X.X km done).
+                XCTAssertTrue(waitForText(app, containing: "of 30 km this week"),
+                               "Today's endurance hero should show distance progress with the weekly target [\(appearance)]")
             }
 
             if scenario == "new_user" {
