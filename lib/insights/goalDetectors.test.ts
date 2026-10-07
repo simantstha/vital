@@ -314,3 +314,46 @@ test('runInsightPass stays silent on the first day a goal finding appears (needs
   assert.equal(outcome.delivered, false);
   assert.equal(inserted.length, 0);
 });
+
+// ── one stall definition (lib/liftChange.ts) ────────────────────────────────
+
+const wv = (weekStart: string, e: number, volumeKg: number) => ({ weekStart, bestEstimatedOneRepMaxKg: e, volumeKg, totalSets: 5, totalReps: 25 });
+// Current Monday 2026-10-05. Flat 100 kg lift, steady volume across 6 weeks.
+const flatWeeks = [
+  wv('2026-08-31', 100, 1000), wv('2026-09-07', 100, 1000), wv('2026-09-14', 100, 1000),
+  wv('2026-09-21', 100, 1000), wv('2026-09-28', 100, 1000), wv('2026-10-05', 100, 1000),
+];
+
+test('stalled_lift: flat vs 4 weeks ago (< +1%) fires, a +1% gain does not', () => {
+  assert.ok(detectStalledLift(stalledInput({ progression: { squat: flatWeeks } })));
+  const gained = flatWeeks.map((w) => (w.weekStart >= '2026-09-28' ? { ...w, bestEstimatedOneRepMaxKg: 101 } : w));
+  assert.equal(detectStalledLift(stalledInput({ progression: { squat: gained } })), null);
+});
+
+test('stalled_lift: skipped after a break (no sets in the 2 weeks before the recent window)', () => {
+  const afterBreak = flatWeeks.filter((w) => w.weekStart !== '2026-09-14' && w.weekStart !== '2026-09-21');
+  assert.equal(detectStalledLift(stalledInput({ progression: { squat: afterBreak } })), null);
+});
+
+test('stalled_lift: skipped when the recent window is a deload (< 60% of the 4-week average volume)', () => {
+  const deload = flatWeeks.map((w) => (w.weekStart >= '2026-09-28' ? { ...w, volumeKg: 400 } : w));
+  assert.equal(detectStalledLift(stalledInput({ progression: { squat: deload } })), null);
+});
+
+test('stalled_lift: an empty current week does not hide or fake a stall (uses the last 2 weeks with sets)', () => {
+  const noCurrent = flatWeeks.filter((w) => w.weekStart !== '2026-10-05');
+  assert.ok(detectStalledLift(stalledInput({ progression: { squat: noCurrent } })));
+});
+
+test('stalled_lift: display name falls back to Title Case', () => {
+  const f = detectStalledLift(stalledInput({ progression: { 'bench press': flatWeeks }, liftSessionDays: { 'bench press': squatDays }, exerciseDisplay: {} }));
+  assert.ok(f);
+  assert.match(f.copy!.title, /Bench Press/);
+});
+
+test('off_pace ignores reviews of weeks that ended before the goal was re-anchored', () => {
+  assert.ok(detectOffPace(offPaceInput({ goalStartedDay: '2026-09-10' })));
+  // Goal began 2026-09-24: the 09-21 week (ended 09-27) is fine, but a start of 09-28 voids it.
+  assert.ok(detectOffPace(offPaceInput({ goalStartedDay: '2026-09-27' })));
+  assert.equal(detectOffPace(offPaceInput({ goalStartedDay: '2026-09-28' })), null);
+});

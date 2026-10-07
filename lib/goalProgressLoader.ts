@@ -11,7 +11,7 @@ import { eq } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import { localDayKey, pickTimeZone, previousDayKey } from '@/lib/localDay';
 import { getWeightReadings } from '@/lib/weightRepository';
-import { getProgressionSummary, getSetsSince, completedLocalDays } from '@/lib/workoutRepository';
+import { getSetsSince, completedLocalDays, summarizeProgression } from '@/lib/workoutRepository';
 import { healthKitWorkoutDays } from '@/lib/trainingSummary';
 import { queryMetricPoints, queryWorkouts } from '@/lib/brain/tools';
 import { resolveDailyIntake } from '@/lib/brain/nutritionIntake';
@@ -24,6 +24,7 @@ import {
   type DayValue,
   type GoalProgress,
   type GoalProgressBudget,
+  isStrengthWorkoutType,
 } from '@/lib/goalProgress';
 
 const WINDOW_DAYS = 28;
@@ -61,14 +62,13 @@ export async function loadGoalProgress(
 
   const [
     weightReadings, intakeByDay, budget, profileMd,
-    progression, sets, workoutEntries, restingHr, hrv, sleep,
+    progressionSets, workoutEntries, restingHr, hrv, sleep,
   ] = await Promise.all([
     getWeightReadings(userId, WEIGHT_LOOKBACK_DAYS, tz),
     resolveDailyIntake(userId, dayKeys, tz),
     resolveDietBudget(user, userId),
     readCoreProfile(userId),
-    getProgressionSummary(userId, 84),
-    getSetsSince(userId, WINDOW_DAYS + 2),
+    getSetsSince(userId, 84),
     queryWorkouts(userId, WINDOW_DAYS),
     seriesWithFallback(userId, 'resting_hr', 'whoop_resting_hr'),
     seriesWithFallback(userId, 'hrv_sdnn', 'whoop_hrv_rmssd'),
@@ -85,7 +85,18 @@ export async function loadGoalProgress(
     tdeeConfidence: budget.expenditure?.confidence ?? null,
   };
 
+  const progression = summarizeProgression(progressionSets);
+  const sets = progressionSets.filter(set => dayKeys.includes(set.local_day));
+  const exerciseDisplay: Record<string, string> = {};
+  for (const set of progressionSets) if (set.exercise_display) exerciseDisplay[set.exercise] = set.exercise_display;
+
   const daySet = new Set(dayKeys);
+  // Muscle goal: strength sessions only — logged sets plus HealthKit strength
+  // workouts (a run or a walk is not a lifting session).
+  const strengthDays = new Set<string>([
+    ...completedLocalDays(sets),
+    ...healthKitWorkoutDays(workoutEntries.filter(w => isStrengthWorkoutType(typeof w.type === 'string' ? w.type : null))),
+  ]);
   const trainingDays = new Set<string>([
     ...completedLocalDays(sets),
     ...healthKitWorkoutDays(workoutEntries),
@@ -96,6 +107,7 @@ export async function loadGoalProgress(
       day: w.date,
       durationMin: typeof w.durationMin === 'number' && Number.isFinite(w.durationMin) ? w.durationMin : null,
       distanceKm: typeof w.distanceM === 'number' && Number.isFinite(w.distanceM) ? w.distanceM / 1000 : null,
+      type: typeof w.type === 'string' ? w.type : null,
     }));
 
   return computeGoalProgress({
@@ -110,6 +122,7 @@ export async function loadGoalProgress(
     start: {
       weightKg: user.goal_start_weight_kg ?? null,
       startedAt: user.goal_started_at ? user.goal_started_at.toISOString() : null,
+      startedDay: user.goal_started_at ? localDayKey(user.goal_started_at, tz) : null,
     },
     weightReadings,
     intakeDays: dayKeys.map(day => {
@@ -120,6 +133,8 @@ export async function loadGoalProgress(
     budget: budgetInput,
     progression,
     trainingDays: [...trainingDays].filter(d => daySet.has(d)),
+    strengthDays: [...strengthDays].filter(d => daySet.has(d)),
+    exerciseDisplay,
     workouts,
     restingHr,
     hrv,

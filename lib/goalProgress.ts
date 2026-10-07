@@ -43,7 +43,7 @@ import {
   type WeightSignal,
 } from './brain/weightSignals';
 import type { ProgressionSummary } from './workoutRepository';
-import { liftChange4w } from './liftChange';
+import { isLiftProgressing, liftChange4w, liftDisplayName } from './liftChange';
 import { weekStartKeyForDay } from './localDay';
 import { KM_PER_MILE } from './metricFormat';
 
@@ -63,6 +63,8 @@ export const MUSCLE_GAIN_BAND = { minPct: 0.1, maxPct: 0.5 } as const;
 const MAX_ETA_DAYS = 3650;
 /** Fat-loss verdict is 'ahead' when the ETA beats the target date by at least this many days. */
 const AHEAD_MARGIN_DAYS = 14;
+/** An ETA within this many days after the target date still reads as on track (matches iOS GoalProgressLogic and the coach opener). */
+export const ON_PACE_GRACE_DAYS = 7;
 /** A logged day counts as calorie-adherent when kcal <= target x this. */
 const CALORIE_ADHERENCE_TOLERANCE = 1.05;
 /** A day counts as hitting the protein target at >= this fraction of it. */
@@ -107,13 +109,13 @@ export type ReasonTone = 'good' | 'watch' | 'neutral';
 
 export interface GoalDistanceProgress {
   targetKm: number;
-  /** Distance this local calendar week (Mon–today); null when no workout in the last 28 days carries a distance. */
+  /** Running distance this local calendar week (Mon–today); null when no run in the last 28 days carries a distance. */
   thisWeekKm: number | null;
   /** Mean weekly distance over the trailing 28 days; null without distance data. */
   avg4wKm: number | null;
   /** Local Monday of the week thisWeekKm covers. */
   weekStart: string;
-  /** e.g. "24.5 of 30 km this week" (mi for imperial users). */
+  /** e.g. "24.5 of 30 km running this week" (mi for imperial users). */
   text: string;
 }
 
@@ -141,6 +143,8 @@ export interface GoalProgress {
   verdict: GoalVerdict;
   headline: string;
   reasons: GoalProgressReason[];
+  /** Days since the newest weigh-in (0 = today); null with none. The ETA is anchored to that day, not to today. */
+  lastWeighInDaysAgo?: number | null;
   dataSufficiency: { weighIns: number; needed: number; sessionsLast28d: number };
 }
 
@@ -172,7 +176,12 @@ export interface GoalProgressInput {
   /** User-local today, YYYY-MM-DD. */
   todayKey: string;
   target: { weightKg: number | null; date: string | null; weeklySessions: number | null; weeklyDistanceKm?: number | null };
-  start: { weightKg: number | null; startedAt: string | null };
+  /**
+   * `weightKg` null with `startedAt` set means no weigh-in existed when the goal
+   * began; the start weight is then derived from the first weigh-in on/after
+   * the start day (`startedDay`, user-local; defaults to startedAt's date).
+   */
+  start: { weightKg: number | null; startedAt: string | null; startedDay?: string | null };
   /** Raw weigh-ins; ~90 days gives the EWMA run-in room. */
   weightReadings: WeightReading[];
   /** Resolved intake for the trailing 28 local days (any order). */
@@ -181,8 +190,16 @@ export interface GoalProgressInput {
   progression: ProgressionSummary;
   /** Distinct local days with a completed session (logged strength set or real HealthKit workout), trailing 28 days. */
   trainingDays: string[];
-  /** HealthKit workouts, trailing 28 days (durationMin null when unknown). */
-  workouts: Array<{ day: string; durationMin: number | null; distanceKm?: number | null }>;
+  /**
+   * Muscle goal only: distinct local days with a STRENGTH session (logged sets
+   * or a HealthKit strength workout — see isStrengthWorkoutType). When present
+   * the muscle goal counts these instead of every HealthKit workout.
+   */
+  strengthDays?: string[];
+  /** HealthKit workouts, trailing 28 days (durationMin null when unknown; `type` is the HealthKit name, e.g. "Running"). */
+  workouts: Array<{ day: string; durationMin: number | null; distanceKm?: number | null; type?: string | null }>;
+  /** exercise key -> display name (e.g. "bench press" -> "Bench Press"); falls back to Title Case. */
+  exerciseDisplay?: Record<string, string>;
   restingHr: DayValue[];
   hrv: DayValue[];
   sleepMinutes: DayValue[];
@@ -198,6 +215,21 @@ export interface GoalProgressInput {
 
 const round1 = (n: number): number => Math.round(n * 10) / 10;
 const round2 = (n: number): number => Math.round(n * 100) / 100;
+
+/** HealthKit workout type names (see HealthKitBackfill.workoutTypeName) that are strength sessions. */
+export function isStrengthWorkoutType(type: string | null | undefined): boolean {
+  return type != null && /strength/i.test(type);
+}
+
+/** Endurance distance counts running only (type names are HealthKit's, e.g. "Running"). */
+export function isRunningWorkoutType(type: string | null | undefined): boolean {
+  return type != null && /^running$/i.test(type.trim());
+}
+
+/** Days that count as a session for the goal: strength sessions only for muscle. */
+function sessionDays(input: GoalProgressInput): string[] {
+  return input.goal === 'muscle' && input.strengthDays ? input.strengthDays : input.trainingDays;
+}
 
 export const KG_TO_LB = 2.20462;
 
@@ -273,6 +305,8 @@ interface WeightBlock {
   neededKg: number | null;
   eta: string | null;
   onPace: boolean | null;
+  /** Newest weigh-in day (YYYY-MM-DD), null with none. */
+  lastWeighInDay: string | null;
 }
 
 function buildWeightBlock(input: GoalProgressInput): WeightBlock {
@@ -282,6 +316,7 @@ function buildWeightBlock(input: GoalProgressInput): WeightBlock {
   const spanDays = trendSpanDays(days);
   const rateReliable = weighIns >= WEIGH_INS_NEEDED && spanDays >= RATE_MIN_SPAN_DAYS;
   const currentKg = days.length > 0 ? days[days.length - 1].trendKg : null;
+  const lastWeighInDay = days.length > 0 ? days[days.length - 1].day : null;
 
   const rateKg = rateReliable ? trendDeltaKgPerWeek(days, RATE_WINDOW_DAYS) : null;
   const pctBw = rateKg != null && currentKg != null && currentKg > 0 ? (rateKg / currentKg) * 100 : null;
@@ -305,17 +340,22 @@ function buildWeightBlock(input: GoalProgressInput): WeightBlock {
     Math.sign(rateKg) === Math.sign(neededKg) && Math.abs(pctBw) > PLATEAU_MAX_PCT_PER_WEEK
   ) {
     const daysToGo = Math.ceil((Math.abs(neededKg) / Math.abs(rateKg)) * 7);
-    if (daysToGo <= MAX_ETA_DAYS) eta = addDays(input.todayKey, daysToGo);
+    // Anchored to the newest weigh-in, not today: a skipped weigh-in day must
+    // not push the ETA later without any new data. Never earlier than today.
+    if (daysToGo <= MAX_ETA_DAYS) {
+      const anchored = addDays(lastWeighInDay ?? input.todayKey, daysToGo);
+      eta = anchored < input.todayKey ? input.todayKey : anchored;
+    }
   }
 
   let onPace: boolean | null = null;
   if (input.target.date != null) {
     if (reached === true) onPace = true;
-    else if (eta != null) onPace = eta <= input.target.date;
+    else if (eta != null) onPace = eta <= addDays(input.target.date, ON_PACE_GRACE_DAYS);
     else if (reached === false && rateReliable) onPace = false; // moving the wrong way / flat
   }
 
-  return { weighIns, spanDays, rateReliable, trend, currentKg, rateKg, pctBw, reached, neededKg, eta, onPace };
+  return { weighIns, spanDays, rateReliable, trend, currentKg, rateKg, pctBw, reached, neededKg, eta, onPace, lastWeighInDay };
 }
 
 // ── Intake helpers ──────────────────────────────────────────────────────────
@@ -407,7 +447,7 @@ function tdeeReason(input: GoalProgressInput): GoalProgressReason | null {
 }
 
 function sessionsPerWeek(input: GoalProgressInput): { count: number; perWeek: number } {
-  const count = new Set(input.trainingDays.filter(d => inLastDays(d, input.todayKey, 28))).size;
+  const count = new Set(sessionDays(input).filter(d => inLastDays(d, input.todayKey, 28))).size;
   return { count, perWeek: round1(count / 4) };
 }
 
@@ -458,7 +498,7 @@ function weekSessionsReason(input: GoalProgressInput): GoalProgressReason | null
   const target = input.target.weeklySessions;
   if (target == null) return null;
   const start = weekStart(input.todayKey);
-  const done = new Set(input.trainingDays.filter(d => d >= start && d <= input.todayKey)).size;
+  const done = new Set(sessionDays(input).filter(d => d >= start && d <= input.todayKey)).size;
   return {
     kind: 'week_sessions',
     text: `${done} of ${target} ${plural(target, 'session')} this week`,
@@ -484,6 +524,8 @@ function proteinReason(input: GoalProgressInput): GoalProgressReason | null {
 
 interface LiftChange {
   exercise: string;
+  /** Display name (Title Case / the user's own). */
+  name: string;
   totalSets: number;
   /** Best e1RM 4 weeks ago (baseline window) vs the last 2 weeks; see lib/liftChange.ts. Null when either window is empty. */
   startKg: number | null;
@@ -491,7 +533,7 @@ interface LiftChange {
   change4wKg: number | null;
 }
 
-function liftChanges(progression: ProgressionSummary, todayKey: string): LiftChange[] {
+function liftChanges(progression: ProgressionSummary, todayKey: string, display?: Record<string, string>): LiftChange[] {
   const out: LiftChange[] = [];
   const anchor = weekStartKeyForDay(todayKey);
   for (const [exercise, weeks] of Object.entries(progression)) {
@@ -500,6 +542,7 @@ function liftChanges(progression: ProgressionSummary, todayKey: string): LiftCha
     const c = liftChange4w(weeks, anchor);
     out.push({
       exercise,
+      name: liftDisplayName(exercise, display),
       totalSets,
       startKg: c?.baselineKg ?? null,
       endKg: c?.recentKg ?? null,
@@ -514,7 +557,7 @@ function liftReason(l: LiftChange, input: GoalProgressInput): GoalProgressReason
   const sign = l.change4wKg > 0 ? '+' : l.change4wKg < 0 ? '−' : '';
   return {
     kind: 'lift',
-    text: `${l.exercise} est. 1RM ${sign}${fmtWeight(input, Math.abs(l.change4wKg))} vs 4 weeks ago (${weightNum(input, l.startKg)} → ${fmtWeight(input, l.endKg)})`,
+    text: `${l.name} est. 1RM ${sign}${fmtWeight(input, Math.abs(l.change4wKg))} vs 4 weeks ago (${weightNum(input, l.startKg)} → ${fmtWeight(input, l.endKg)})`,
     tone: l.change4wKg > 0 ? 'good' : l.change4wKg < 0 ? 'watch' : 'neutral',
   };
 }
@@ -667,7 +710,7 @@ function fatLossOutcome(input: GoalProgressInput, w: WeightBlock): Outcome {
     if (w.eta <= addDays(input.target.date, -AHEAD_MARGIN_DAYS)) {
       return { verdict: 'ahead', headline: clip(`Ahead of pace — about ${fmtWeight(input, toGo)} to go, around ${when}`), reasons };
     }
-    if (w.eta <= input.target.date) {
+    if (w.eta <= addDays(input.target.date, ON_PACE_GRACE_DAYS)) {
       return { verdict: 'on_track', headline: clip(`On track — about ${fmtWeight(input, toGo)} to go, around ${when}`), reasons };
     }
     return { verdict: 'behind', headline: clip(`Behind pace — about ${fmtWeight(input, toGo)} to go, around ${when}`), reasons };
@@ -683,7 +726,7 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock): Outcome {
     return { verdict: 'needs_target', headline: 'Set a weekly session goal to track your progress', reasons: [] };
   }
 
-  const lifts = liftChanges(input.progression, input.todayKey);
+  const lifts = liftChanges(input.progression, input.todayKey, input.exerciseDisplay);
   const rate = rateReason(input, w, MUSCLE_GAIN_BAND);
   const adherence = adherenceReason(input);
   const adherenceLow = (sessionAdherence(input)?.pct ?? 100) < ADHERENCE_LOW_PCT;
@@ -722,14 +765,15 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock): Outcome {
   const comparable = lifts.filter(l => l.change4wKg != null);
   if (comparable.length > 0) {
     const best = comparable.reduce((a, b) => ((b.change4wKg as number) > (a.change4wKg as number) ? b : a));
-    if ((best.change4wKg as number) > 0) {
+    // Same bar as the stalled-lift nudge: up at least 1% on 4 weeks ago.
+    if (isLiftProgressing({ baselineKg: best.startKg as number, recentKg: best.endKg as number, changeKg: best.change4wKg as number })) {
       return {
         verdict: 'progressing',
-        headline: clip(`Progressing — ${best.exercise} est. 1RM up ${fmtWeight(input, best.change4wKg as number)} vs 4 weeks ago`),
+        headline: clip(`Progressing — ${best.name} est. 1RM up ${fmtWeight(input, best.change4wKg as number)} vs 4 weeks ago`),
         reasons,
       };
     }
-    return { verdict: 'stalled', headline: 'Stalled — no lift is above its best from 4 weeks ago', reasons };
+    return { verdict: 'stalled', headline: 'Stalled — no lift is up 1% on 4 weeks ago', reasons };
   }
 
   if (w.pctBw != null) {
@@ -770,11 +814,16 @@ function fmtDistance(input: GoalProgressInput, km: number): string {
   return `${distanceNum(input, km)} ${input.unitSystem === 'imperial' ? 'mi' : 'km'}`;
 }
 
+/** Workouts that count toward the endurance distance target: running only. */
+function runWorkouts(input: GoalProgressInput): GoalProgressInput['workouts'] {
+  return input.workouts.filter(w => isRunningWorkoutType(w.type));
+}
+
 /** Weekly distance volume (km) for the week `offset` weeks back (0 = trailing 7 days). */
 function distanceInWeek(input: GoalProgressInput, offset: number): { km: number; readings: number } {
   let km = 0;
   let readings = 0;
-  for (const w of input.workouts) {
+  for (const w of runWorkouts(input)) {
     if (w.distanceKm == null || !Number.isFinite(w.distanceKm)) continue;
     const age = dayNumber(input.todayKey) - dayNumber(w.day);
     if (age >= offset * 7 && age < offset * 7 + 7) {
@@ -793,7 +842,7 @@ function distanceProgress(input: GoalProgressInput): GoalDistanceProgress | null
   let weekKm = 0;
   let total28 = 0;
   let readings = 0;
-  for (const w of input.workouts) {
+  for (const w of runWorkouts(input)) {
     if (w.distanceKm == null || !Number.isFinite(w.distanceKm)) continue;
     const age = dayNumber(input.todayKey) - dayNumber(w.day);
     if (age < 0 || age >= 28) continue;
@@ -808,8 +857,8 @@ function distanceProgress(input: GoalProgressInput): GoalDistanceProgress | null
     avg4wKm: hasData ? round1(total28 / 4) : null,
     weekStart: start,
     text: hasData
-      ? `${distanceNum(input, weekKm)} of ${fmtDistance(input, targetKm)} this week`
-      : `0 of ${fmtDistance(input, targetKm)} this week`,
+      ? `${distanceNum(input, weekKm)} of ${fmtDistance(input, targetKm)} running this week`
+      : `0 of ${fmtDistance(input, targetKm)} running this week`,
   };
 }
 
@@ -958,6 +1007,22 @@ function generalOutcome(input: GoalProgressInput): Outcome {
   return { verdict: 'holding', headline: clip(`Holding steady — habit consistency ${rPct}% over 2 weeks`), reasons };
 }
 
+/**
+ * Start weight when none was stored (the user had no weigh-in when the goal
+ * began): the trend at the first weigh-in on/after the goal start day, else the
+ * first weigh-in overall. Null without a goal start or any weigh-in.
+ */
+export function deriveStartWeightKg(
+  trendDays: Array<{ day: string; trendKg: number }>,
+  start: { startedAt: string | null; startedDay?: string | null },
+): number | null {
+  if (start.startedAt == null && start.startedDay == null) return null;
+  if (trendDays.length === 0) return null;
+  const startedDay = start.startedDay ?? (start.startedAt as string).slice(0, 10);
+  const first = trendDays.find(d => d.day >= startedDay) ?? trendDays[0];
+  return round1(first.trendKg);
+}
+
 // ── Public entry point ──────────────────────────────────────────────────────
 
 export function computeGoalProgress(input: GoalProgressInput): GoalProgress {
@@ -977,7 +1042,7 @@ export function computeGoalProgress(input: GoalProgressInput): GoalProgress {
     : input.goal === 'muscle' ? { ...MUSCLE_GAIN_BAND }
     : null;
 
-  const startKg = input.start.weightKg;
+  const startKg = input.start.weightKg ?? deriveStartWeightKg(w.trend.days, input.start);
   const targetKg = input.target.weightKg;
   const changeKg = w.currentKg != null && startKg != null ? round1(w.currentKg - startKg) : null;
   let progressPct: number | null = null;
@@ -989,7 +1054,10 @@ export function computeGoalProgress(input: GoalProgressInput): GoalProgress {
   // The ETA / pace fields are only meaningful when the goal's verdict logic
   // actually engaged the weight trend; endurance/general never project one.
   const usesWeight = input.goal === 'weight_loss' || input.goal === 'muscle';
-  const insufficient = outcome.verdict === 'insufficient_data' || outcome.verdict === 'needs_target';
+  // A stalled verdict (plateau uses a 14-day rate, the ETA a 28-day one) must
+  // not carry a projected date that contradicts it.
+  const insufficient =
+    outcome.verdict === 'insufficient_data' || outcome.verdict === 'needs_target' || outcome.verdict === 'stalled';
 
   return {
     goal: input.goal,
@@ -1011,6 +1079,7 @@ export function computeGoalProgress(input: GoalProgressInput): GoalProgress {
     verdict: outcome.verdict,
     headline: outcome.headline,
     reasons: outcome.reasons,
+    lastWeighInDaysAgo: w.lastWeighInDay != null ? Math.max(0, dayNumber(input.todayKey) - dayNumber(w.lastWeighInDay)) : null,
     dataSufficiency: { weighIns: w.weighIns, needed: WEIGH_INS_NEEDED, sessionsLast28d },
   };
 }

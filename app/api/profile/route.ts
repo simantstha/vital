@@ -92,7 +92,7 @@ import { importLegacyWeightLogIfPresent, logWeightEntry } from '@/lib/weightRepo
 import { localDayKey, pickTimeZone } from '@/lib/localDay';
 import { parseUnitSystem } from '@/lib/units';
 import { parseTargetDate, parseTargetWeightKg, parseWeeklySessionsTarget, parseWeeklyDistanceKmTarget } from '@/lib/goalTarget';
-import { buildGoalRestart } from '@/lib/goalStart';
+import { buildGoalRestart, shouldReanchorGoalForTarget } from '@/lib/goalStart';
 
 export const dynamic = 'force-dynamic';
 
@@ -427,7 +427,13 @@ export async function PATCH(request: Request): Promise<NextResponse> {
           .from(schema.users)
           .where(eq(schema.users.id, userId))
           .limit(1);
-        if (current?.target_weight_kg !== parsedTargetWeight) {
+        // Re-anchor only when a goal starts or flips direction (loss <-> gain);
+        // a same-direction edit keeps the start weight/date so progress made
+        // is not wiped.
+        if (
+          current?.target_weight_kg !== parsedTargetWeight &&
+          await shouldReanchorGoalForTarget(userId, current?.target_weight_kg ?? null, parsedTargetWeight)
+        ) {
           Object.assign(goalUpdate, await buildGoalRestart(userId));
         }
       }

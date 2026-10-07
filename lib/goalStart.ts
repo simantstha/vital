@@ -31,3 +31,44 @@ export async function buildGoalRestart(userId: string, now: Date = new Date()): 
 }> {
   return { goal_started_at: now, goal_start_weight_kg: await resolveGoalStartWeightKg(userId) };
 }
+
+/** Direction of travel from `fromKg` to `targetKg`. */
+export type TargetDirection = 'loss' | 'gain' | 'hold';
+
+export function targetDirection(fromKg: number, targetKg: number): TargetDirection {
+  const diff = targetKg - fromKg;
+  if (Math.abs(diff) < 0.1) return 'hold';
+  return diff < 0 ? 'loss' : 'gain';
+}
+
+/**
+ * Pure: should changing the target weight from `prevTargetKg` to `newTargetKg`
+ * re-anchor goal progress? Only when there was no previous target (a goal is
+ * starting) or the direction of travel from the current weight flips
+ * (loss <-> gain). A same-direction edit keeps the start weight and start
+ * date, so "lost so far" is not wiped. With no known current weight the
+ * direction can't be judged, so progress is kept.
+ */
+export function shouldReanchorForTargetChange(
+  prevTargetKg: number | null,
+  newTargetKg: number,
+  currentKg: number | null,
+): boolean {
+  if (prevTargetKg == null) return true;
+  if (prevTargetKg === newTargetKg) return false;
+  if (currentKg == null) return false;
+  const before = targetDirection(currentKg, prevTargetKg);
+  const after = targetDirection(currentKg, newTargetKg);
+  return before !== after && before !== 'hold' && after !== 'hold';
+}
+
+/** DB-facing: loads the current trend weight and applies shouldReanchorForTargetChange. */
+export async function shouldReanchorGoalForTarget(
+  userId: string,
+  prevTargetKg: number | null,
+  newTargetKg: number,
+): Promise<boolean> {
+  if (prevTargetKg == null) return true;
+  if (prevTargetKg === newTargetKg) return false;
+  return shouldReanchorForTargetChange(prevTargetKg, newTargetKg, await resolveGoalStartWeightKg(userId));
+}

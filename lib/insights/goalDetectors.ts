@@ -23,13 +23,12 @@ import type { UnitSystem } from '../units';
 import type { WeightSignal } from '../brain/weightSignals';
 import type { ProgressionSummary } from '../workoutRepository';
 import type { Finding, GoalFindingKind, NudgeCopy } from './types';
+import { isLiftStalled, liftChange4w, liftDisplayName } from '../liftChange';
 
 // ── Thresholds ──────────────────────────────────────────────────────────────
 
 export const STALLED_LIFT_RECENT_WEEKS = 3;
 export const STALLED_LIFT_MIN_SESSIONS = 3;
-/** A gain smaller than this fraction of the earlier best e1RM does not count as improving. */
-export const STALLED_LIFT_MIN_GAIN_FRACTION = 0.01;
 
 export const LOW_PROTEIN_WINDOW_DAYS = 5;
 export const LOW_PROTEIN_MIN_LOW_DAYS = 4;
@@ -85,6 +84,8 @@ export interface GoalInsightInput {
   exerciseDisplay: Record<string, string>;
   /** Most recent weekly reviews, newest first. */
   weeklyVerdicts: WeeklyVerdict[];
+  /** Local day the current goal began (goal_started_at); reviews that ended before it are ignored by off_pace. */
+  goalStartedDay?: string | null;
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -189,40 +190,36 @@ export function detectTooFastLoss(input: GoalInsightInput): Finding | null {
 export function detectStalledLift(input: GoalInsightInput): Finding | null {
   if (input.goal !== 'muscle') return null;
 
-  const recentStart = shiftDay(mondayOf(input.todayKey), -7 * STALLED_LIFT_RECENT_WEEKS);
+  const anchor = mondayOf(input.todayKey);
+  const recentStart = shiftDay(anchor, -7 * STALLED_LIFT_RECENT_WEEKS);
 
-  let best: { exercise: string; sessions: number; recentBest: number; priorBest: number } | null = null;
+  let best: { exercise: string; sessions: number; peakKg: number } | null = null;
   for (const [exercise, weeks] of Object.entries(input.progression)) {
     const sessions = new Set(
       (input.liftSessionDays[exercise] ?? []).filter((day) => day >= recentStart && day <= input.todayKey),
     ).size;
     if (sessions < STALLED_LIFT_MIN_SESSIONS) continue;
 
-    let recentBest: number | null = null;
-    let priorBest: number | null = null;
-    for (const week of weeks) {
-      const e1rm = week.bestEstimatedOneRepMaxKg;
-      if (e1rm == null) continue;
-      if (week.weekStart >= recentStart) recentBest = Math.max(recentBest ?? 0, e1rm);
-      else priorBest = Math.max(priorBest ?? 0, e1rm);
-    }
-    if (recentBest == null || priorBest == null) continue;                         // nothing to compare against
-    if (recentBest >= priorBest * (1 + STALLED_LIFT_MIN_GAIN_FRACTION)) continue;  // still improving
+    // ONE stall definition (lib/liftChange.ts), the same one the goal card uses:
+    // change vs 4 weeks ago < +1%, not a break/return, not a deload.
+    const change = liftChange4w(weeks, anchor);
+    if (!change || !isLiftStalled(weeks, anchor)) continue;
+    const peakKg = Math.max(change.recentKg, change.baselineKg);
 
     // The "top lift" is the one trained most; ties break alphabetically so the pick is stable.
     if (!best || sessions > best.sessions || (sessions === best.sessions && exercise < best.exercise)) {
-      best = { exercise, sessions, recentBest, priorBest };
+      best = { exercise, sessions, peakKg };
     }
   }
   if (!best) return null;
 
-  const name = input.exerciseDisplay[best.exercise] ?? best.exercise;
-  const peak = weight(best.priorBest, input.unitSystem);
+  const name = liftDisplayName(best.exercise, input.exerciseDisplay);
+  const peak = weight(best.peakKg, input.unitSystem);
   return rule('stalled_lift', `no e1RM gain on ${name} in ${STALLED_LIFT_RECENT_WEEKS}+ weeks`, best.sessions, {
     exercise: name,
     sessions: best.sessions,
     weeks: STALLED_LIFT_RECENT_WEEKS,
-    bestE1rmKg: Number(best.priorBest.toFixed(1)),
+    bestE1rmKg: Number(best.peakKg.toFixed(1)),
   }, {
     title: `Your ${name} has levelled off`,
     body: `Your ${name} estimated max hasn't moved past ${peak} in about ${STALLED_LIFT_RECENT_WEEKS} weeks, over ${best.sessions} sessions. Want to look at why?`,
@@ -305,7 +302,12 @@ export function detectOffPace(input: GoalInsightInput): Finding | null {
   // The two newest reviews must be the two most recent COMPLETED weeks —
   // stale or gappy history is not "consecutive".
   const lastCompletedWeek = shiftDay(mondayOf(input.todayKey), -7);
-  const [latest, previous] = input.weeklyVerdicts;
+  // Reviews of weeks that ended before the goal was re-anchored belong to a
+  // different goal and must not count toward "behind pace".
+  const startedDay = input.goalStartedDay ?? null;
+  const [latest, previous] = input.weeklyVerdicts.filter(
+    (r) => startedDay == null || shiftDay(r.weekStart, 6) >= startedDay,
+  );
   if (!latest || !previous) return null;
   if (latest.weekStart !== lastCompletedWeek || previous.weekStart !== shiftDay(lastCompletedWeek, -7)) return null;
   if (latest.verdict !== 'behind' || previous.verdict !== 'behind') return null;

@@ -33,6 +33,8 @@ export const TOO_FAST_LOSS_SUSTAINED_PCT_PER_WEEK = 1.0;
 
 /** plateau requires at least this many calendar days of trend span. */
 export const PLATEAU_MIN_SPAN_DAYS = 14;
+/** Weigh-in days needed inside the trailing 14-day window before a plateau is called. */
+export const PLATEAU_MIN_WEIGH_INS = 4;
 /** plateau fires when the 14-day trend change is at/under this % of trend weight, per week. */
 export const PLATEAU_MAX_PCT_PER_WEEK = 0.1;
 
@@ -145,6 +147,11 @@ function assessPlateau(trend: WeightTrendResult, goal: string): WeightSignal | n
   if (!trend.established) return null;
   const span = trendSpanDays(trend.days);
   if (span < PLATEAU_MIN_SPAN_DAYS) return null;
+
+  // A flat 14-day line drawn through one or two weigh-ins is not a plateau.
+  const lastMs = Date.parse(`${trend.days[trend.days.length - 1].day}T00:00:00Z`);
+  const inWindow = trend.days.filter(d => (lastMs - Date.parse(`${d.day}T00:00:00Z`)) / 86_400_000 <= 14).length;
+  if (inWindow < PLATEAU_MIN_WEIGH_INS) return null;
 
   const currentTrendKg = trend.days[trend.days.length - 1].trendKg;
   const delta14d = trendDeltaKgPerWeek(trend.days, 14);

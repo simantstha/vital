@@ -137,5 +137,6 @@ export async function loadGoalInsightInput(userId: string, localDay: string): Pr
     liftSessionDays,
     exerciseDisplay,
     weeklyVerdicts,
+    goalStartedDay: user.goal_started_at ? localDayKey(user.goal_started_at, tz) : null,
   };
 }
