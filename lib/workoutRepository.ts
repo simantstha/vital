@@ -11,7 +11,7 @@
 import { and, asc, desc, eq, gte, inArray, sql } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import type { NewWorkoutSet, WorkoutSet } from '@/db/schema';
-import { localDayKey } from '@/lib/localDay';
+import { localDayKey, weekStartKeyForDay } from '@/lib/localDay';
 
 // ── Insert (idempotent by session_id) ───────────────────────────────────────
 
@@ -260,11 +260,21 @@ export async function getLastLift(userId: string): Promise<LastLift | null> {
 
 // ── Pure aggregation (unit-testable without a DB) ───────────────────────────
 
-/** Epley formula: estimated one-rep max from a completed set. */
-export function estimateOneRepMax(loadKg: number, reps: number): number {
-  if (reps <= 0) return 0;
-  if (reps === 1) return loadKg;
-  return loadKg * (1 + reps / 30);
+/** Highest rep count that still yields a meaningful e1RM; Epley overshoots beyond this. */
+export const E1RM_MAX_REPS = 12;
+
+/**
+ * Epley estimated one-rep max. Returns 0 for reps outside 1..E1RM_MAX_REPS
+ * (high-rep sets count toward volume but not toward best e1RM). When `rpe`
+ * (5..10) is given, reps-in-reserve (10 - rpe) is added to the reps, with the
+ * effective count still capped at E1RM_MAX_REPS.
+ */
+export function estimateOneRepMax(loadKg: number, reps: number, rpe?: number | null): number {
+  if (reps <= 0 || reps > E1RM_MAX_REPS) return 0;
+  const rir = rpe != null && Number.isFinite(rpe) && rpe >= 5 && rpe <= 10 ? 10 - rpe : 0;
+  const effective = Math.min(reps + rir, E1RM_MAX_REPS);
+  if (effective <= 1) return loadKg;
+  return loadKg * (1 + effective / 30);
 }
 
 /** YYYY-MM-DD (UTC) of the Monday that starts the week containing `date`. */
@@ -291,14 +301,18 @@ export interface ProgressionSummary {
 interface SetLike {
   exercise: string;
   performed_at: Date;
+  /** Local calendar day (YYYY-MM-DD) the set belongs to; preferred over performed_at for week buckets. */
+  local_day?: string | null;
+  rpe?: number | null;
   reps: number;
   load_kg: number | null;
   is_warmup: boolean;
 }
 
 /**
- * Best estimated 1RM (Epley) per week and weekly training volume, grouped by
- * exercise. Warmup sets are excluded from both — they're not representative
+ * Best estimated 1RM (Epley, sets of <= 12 reps only) per week and weekly training volume, grouped by
+ * exercise. Weeks are Monday-start buckets of the stored `local_day`, so a
+ * Sunday-evening set stays in its own local week. Warmup sets are excluded from both — they're not representative
  * of working capacity. Bodyweight sets (load_kg null) count toward
  * totalSets/totalReps but not volume or 1RM (no load to compute from).
  */
@@ -307,7 +321,7 @@ export function summarizeProgression(sets: SetLike[]): ProgressionSummary {
 
   for (const set of sets) {
     if (set.is_warmup) continue;
-    const week = weekStartKey(set.performed_at);
+    const week = set.local_day ? weekStartKeyForDay(set.local_day) : weekStartKey(set.performed_at);
     let weeks = byExercise.get(set.exercise);
     if (!weeks) {
       weeks = new Map();
@@ -322,8 +336,8 @@ export function summarizeProgression(sets: SetLike[]): ProgressionSummary {
     stat.totalReps += set.reps;
     if (set.load_kg != null) {
       stat.volumeKg += set.reps * set.load_kg;
-      const e1rm = estimateOneRepMax(set.load_kg, set.reps);
-      stat.bestEstimatedOneRepMaxKg = Math.max(stat.bestEstimatedOneRepMaxKg ?? 0, e1rm);
+      const e1rm = estimateOneRepMax(set.load_kg, set.reps, set.rpe);
+      if (e1rm > 0) stat.bestEstimatedOneRepMaxKg = Math.max(stat.bestEstimatedOneRepMaxKg ?? 0, e1rm);
     }
   }
 

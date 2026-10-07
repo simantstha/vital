@@ -135,11 +135,18 @@ test('ambiguous bare "press" asks for clarification instead of guessing', () => 
   assert.ok(result.candidates.includes('overhead press'));
 });
 
-test('unrecognized exercise name returns a no-guess miss, not a made-up exercise', () => {
+test('unknown exercise names are accepted as-is when reps are present', () => {
   const result = parseWorkoutPhrase('3x5 zorbulate at 100kg', { defaultUnit: 'kg' });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.exercise, 'zorbulate');
+  assert.equal(result.exerciseDisplay, 'Zorbulate');
+  assert.equal(result.sets.length, 3);
+});
+
+test('no number at all still fails', () => {
+  const result = parseWorkoutPhrase('zorbulate', { defaultUnit: 'kg' });
   assert.equal(result.ok, false);
-  if (result.ok) return;
-  assert.equal(result.reason, 'no_exercise');
 });
 
 test('missing rep count returns a no-guess miss', () => {

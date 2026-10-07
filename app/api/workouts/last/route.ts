@@ -11,6 +11,7 @@
 
 import { NextResponse } from 'next/server';
 import { getUserIdFromRequest } from '@/lib/auth';
+import { canonicalExercise } from '@/lib/exerciseCanonical';
 import { getLastSessionForExercise } from '@/lib/workoutRepository';
 import { schema } from '@/db';
 
@@ -25,7 +26,7 @@ export async function GET(request: Request): Promise<NextResponse> {
   }
 
   const url = new URL(request.url);
-  const exercise = url.searchParams.get('exercise')?.trim().toLowerCase();
+  const exercise = canonicalExercise(url.searchParams.get('exercise') ?? '').key;
   if (!exercise) {
     return NextResponse.json({ error: 'exercise query param is required.' }, { status: 400 });
   }
