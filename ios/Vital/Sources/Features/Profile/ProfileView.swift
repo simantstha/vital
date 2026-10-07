@@ -55,7 +55,7 @@ struct ProfileView: View {
                                 .padding(.top, 80)
                                 .motionTransition(.fade)
                         } else if let errorMessage = vm.errorMessage {
-                            ErrorStateContainer {
+                            ErrorStateContainer(message: errorMessage) {
                                 ErrorCard(title: "Couldn't load profile", message: errorMessage) {
                                     Task {
                                         vm.errorMessage = nil
@@ -63,6 +63,10 @@ struct ProfileView: View {
                                     }
                                 }
                             }
+                            // Account actions must stay reachable during an
+                            // outage — the user can still sign out.
+                            accountSection
+                            versionFooter
                         } else {
                             Group {
                                 avatarSection

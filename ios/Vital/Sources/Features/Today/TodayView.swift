@@ -74,7 +74,7 @@ struct TodayView: View {
                             .motionTransition(.fade)
 
                     case .failed(let message):
-                        ErrorStateContainer {
+                        ErrorStateContainer(message: message) {
                             ErrorCard(title: "Couldn't load today's data", message: message) {
                                 Task { await vm.loadHealthData() }
                             }

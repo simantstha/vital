@@ -209,4 +209,24 @@ enum GoalTargetLogic {
         }
         return nil
     }
+
+    // MARK: - Missing-target nudge
+
+    /// One-line, non-blocking nudge shown on the onboarding Goal step when a
+    /// loss goal has no (valid) target weight yet. The target stays optional.
+    static func missingTargetNudge(goal: String, targetKg: Double?) -> String? {
+        guard isLossGoal(goal), validTargetKg(targetKg) == nil else { return nil }
+        return "Add a target to see how far you have to go"
+    }
+}
+
+/// Copy for the onboarding flow's status lines, kept pure so it's testable.
+enum OnboardingCopy {
+    /// The Calibrating step's completion line — the real number the backfill
+    /// uploaded, never a hardcoded count. Neutral copy when nothing was
+    /// uploaded (e.g. no HealthKit data / permission skipped).
+    static func importSummary(daysUploaded: Int) -> String {
+        guard daysUploaded > 0 else { return "Your health history is up to date." }
+        return "Imported \(daysUploaded) \(daysUploaded == 1 ? "day" : "days") of health history."
+    }
 }

@@ -11,8 +11,33 @@ final class MemoryLogicTests: XCTestCase {
         }
     }
 
-    func testGroupForTypeMapsGoal() {
-        XCTAssertEqual(MemoryLogic.group(forType: "Goal"), .goals)
+    func testGroupForTypeMapsLegacyGoalToNotes() {
+        XCTAssertEqual(MemoryLogic.group(forType: "Goal"), .other)
+    }
+
+    func testServerGoalsGroupFromOlderBackendFallsBackToNotes() {
+        let fact = MemoryFact(id: "1", type: "Goal", label: "Lose 5 kg", isConstraint: false, group: "goals")
+        XCTAssertEqual(MemoryLogic.group(for: fact), .other)
+    }
+
+    func testGoalSummaryMatchesProfileGoalRow() {
+        XCTAssertEqual(
+            MemoryLogic.goalSummary(goalId: "weight_loss", targetWeightKg: 76, weeklySessions: nil, weeklyDistanceKm: nil, system: .metric),
+            "Lose weight \u{00B7} 76 kg"
+        )
+        XCTAssertEqual(
+            MemoryLogic.goalSummary(goalId: "muscle", targetWeightKg: nil, weeklySessions: 4, weeklyDistanceKm: nil, system: .metric),
+            "Build muscle \u{00B7} 4\u{00D7}/week"
+        )
+        XCTAssertEqual(
+            MemoryLogic.goalSummary(goalId: "general", targetWeightKg: nil, weeklySessions: nil, weeklyDistanceKm: nil, system: .metric),
+            "Maintain"
+        )
+    }
+
+    func testGoalSummaryNilWithoutAKnownGoal() {
+        XCTAssertNil(MemoryLogic.goalSummary(goalId: nil, targetWeightKg: 70, weeklySessions: nil, weeklyDistanceKm: nil, system: .metric))
+        XCTAssertNil(MemoryLogic.goalSummary(goalId: "nonsense", targetWeightKg: nil, weeklySessions: nil, weeklyDistanceKm: nil, system: .metric))
     }
 
     func testGroupForTypeMapsRoutineLikeTypes() {
@@ -45,27 +70,27 @@ final class MemoryLogicTests: XCTestCase {
 
     func testGroupForFactFallsBackToTypeWhenGroupUnrecognized() {
         let fact = MemoryFact(id: "1", type: "Goal", label: "Run a 10k", isConstraint: false, group: "not-a-real-group")
-        XCTAssertEqual(MemoryLogic.group(for: fact), .goals)
+        XCTAssertEqual(MemoryLogic.group(for: fact), .other)
     }
 
     // MARK: - groupedSections — order, titles, empty-group omission
 
-    func testGroupedSectionsOrdersHealthGoalsRoutinesFoodOther() {
+    func testGroupedSectionsOrdersHealthRoutinesFoodNotes() {
         let facts = [
             MemoryFact(id: "1", type: "PantryItem", label: "Oat milk", isConstraint: false),
             MemoryFact(id: "2", type: "Goal", label: "Lose 5kg", isConstraint: false),
             MemoryFact(id: "3", type: "Allergy", label: "Peanuts", isConstraint: true),
         ]
         let sections = MemoryLogic.groupedSections(facts: facts)
-        XCTAssertEqual(sections.map(\.group), [.health, .goals, .food])
-        XCTAssertEqual(sections.map(\.group.title), ["Health", "Goals", "Food"])
+        XCTAssertEqual(sections.map(\.group), [.health, .food, .other])
+        XCTAssertEqual(sections.map(\.group.title), ["Health", "Food", "Notes"])
     }
 
     func testGroupedSectionsOmitsEmptyGroups() {
         let facts = [MemoryFact(id: "1", type: "Goal", label: "Lose 5kg", isConstraint: false)]
         let sections = MemoryLogic.groupedSections(facts: facts)
         XCTAssertEqual(sections.count, 1)
-        XCTAssertEqual(sections[0].group, .goals)
+        XCTAssertEqual(sections[0].group, .other)
     }
 
     func testGroupedSectionsHandlesEmptyInput() {

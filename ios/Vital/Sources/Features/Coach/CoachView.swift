@@ -95,6 +95,9 @@ struct CoachView: View {
 
             VStack(spacing: 0) {
                 navigationBar
+                if vm.isCoachOffline && !vm.isOnboarding {
+                    offlineBanner
+                }
                 messageList
                 inputBar
             }
@@ -185,6 +188,29 @@ struct CoachView: View {
         .padding(.top, Theme.Spacing.md)
         .padding(.bottom, Theme.Spacing.sm)
         .background(Theme.Colors.canvas)
+    }
+
+    // MARK: - Offline banner
+
+    /// Shown only when the coach load failed — the opener below is then the
+    /// generic fallback, and this keeps that from reading as a healthy coach.
+    private var offlineBanner: some View {
+        HStack(spacing: Theme.Spacing.sm) {
+            Image(systemName: "exclamationmark.icloud")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(Theme.Colors.caution)
+                .accessibilityHidden(true)
+            Text(CoachViewModel.offlineBannerText)
+                .font(Theme.Typography.bodySmall)
+                .foregroundStyle(Theme.Colors.textSecondary)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, Theme.Spacing.lg)
+        .padding(.vertical, Theme.Spacing.sm)
+        .background(Theme.Colors.cautionSoft)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("coach.offlineBanner")
+        .motionTransition(.fade)
     }
 
     // MARK: - Message list

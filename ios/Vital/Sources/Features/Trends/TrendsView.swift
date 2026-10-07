@@ -117,7 +117,7 @@ struct TrendsView: View {
                             // Whole screen failed (gridBody renders EmptyView
                             // below) — center the card(s) instead of pinning
                             // them under the header with a void beneath.
-                            ErrorStateContainer {
+                            ErrorStateContainer(message: errorMessage) {
                                 VStack(spacing: Theme.Spacing.md) {
                                     if let summaryErrorMessage = vm.summaryErrorMessage {
                                         ErrorCard(title: "Couldn't load your summary", message: summaryErrorMessage) {

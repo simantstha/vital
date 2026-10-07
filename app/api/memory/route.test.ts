@@ -214,7 +214,8 @@ test('facts carry recordedAt (local day), origin (from source) and group (from t
   assert.equal(byId('confirmed').origin, 'confirmed');
   assert.equal(byId('confirmed').group, 'health');
   assert.equal(byId('noticed').origin, 'noticed');
-  assert.equal(byId('noticed').group, 'goals');
+  // Goal-type facts are legacy free text -> Notes ('other'); profile owns the goal.
+  assert.equal(byId('noticed').group, 'other');
   // unknown source -> 'told' fallback; unknown type -> 'other' fallback.
   assert.equal(byId('unknown-source').origin, 'told');
   assert.equal(byId('unknown-source').group, 'food');

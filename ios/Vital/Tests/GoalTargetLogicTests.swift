@@ -222,6 +222,21 @@ final class GoalTargetLogicTests: XCTestCase {
         XCTAssertNil(UnitFormat.km(fromDistanceEntry: "abc", .metric))
     }
 
+    func testMissingTargetNudgeOnlyForLossGoalWithoutTarget() {
+        XCTAssertEqual(GoalTargetLogic.missingTargetNudge(goal: "lose_fat", targetKg: nil), "Add a target to see how far you have to go")
+        XCTAssertEqual(GoalTargetLogic.missingTargetNudge(goal: "weight_loss", targetKg: nil), "Add a target to see how far you have to go")
+        XCTAssertNil(GoalTargetLogic.missingTargetNudge(goal: "lose_fat", targetKg: 76))
+        XCTAssertNil(GoalTargetLogic.missingTargetNudge(goal: "general_health", targetKg: nil))
+        XCTAssertNil(GoalTargetLogic.missingTargetNudge(goal: "build_muscle", targetKg: nil))
+    }
+
+    func testOnboardingImportSummaryUsesRealCount() {
+        XCTAssertEqual(OnboardingCopy.importSummary(daysUploaded: 212), "Imported 212 days of health history.")
+        XCTAssertEqual(OnboardingCopy.importSummary(daysUploaded: 1), "Imported 1 day of health history.")
+        XCTAssertEqual(OnboardingCopy.importSummary(daysUploaded: 0), "Your health history is up to date.")
+        XCTAssertFalse(OnboardingCopy.importSummary(daysUploaded: 30).contains("365"))
+    }
+
     func testProfileResponseDecodesWeeklyDistanceTarget() throws {
         let json = """
         {

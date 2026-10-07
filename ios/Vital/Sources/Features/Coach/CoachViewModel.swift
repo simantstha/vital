@@ -431,6 +431,13 @@ final class CoachViewModel: ObservableObject {
     @Published var input: String = ""
     @Published var isStreaming: Bool = false
     @Published var errorMessage: String? = nil
+    /// True when the opener/coach load failed (server down or offline), so
+    /// `CoachView` can show a small "Coach is offline" banner instead of
+    /// letting the generic fallback greeting read as a healthy coach.
+    @Published private(set) var isCoachOffline: Bool = false
+    /// Copy for that banner.
+    nonisolated static let offlineBannerText =
+        "Coach is offline \u{2014} your data is safe, try again in a moment."
     /// A brief, dismissible notice for a low-stakes inline action failing —
     /// `MemorySavedChip`'s Undo, `MemoryProposalCard`'s Remember/Not now.
     /// Deliberately separate from `errorMessage`, which drives the fixed
@@ -876,7 +883,9 @@ final class CoachViewModel: ObservableObject {
             // back to the previous generic greeting rather than assuming
             // either state. Either way this reuses data already being
             // fetched for restoration — no extra network call.
-            let text = (try? await api.fetchCoachOpener())
+            let fetchedOpener = try? await api.fetchCoachOpener()
+            isCoachOffline = (fetchedOpener == nil)
+            let text = fetchedOpener
                 ?? Self.fallbackOpenerText(isVerifiedNewConversation: hasRestoredConversation)
             // The user may have started typing/sending while we waited — only
             // seed the opener if the transcript is still empty.

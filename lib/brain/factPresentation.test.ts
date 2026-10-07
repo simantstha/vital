@@ -29,8 +29,11 @@ test('factGroupFromType maps every health type', () => {
   }
 });
 
-test('factGroupFromType maps goals, routines and food types', () => {
-  assert.equal(factGroupFromType('Goal'), 'goals');
+test('factGroupFromType files legacy Goal facts under other (profile is the goal source)', () => {
+  assert.equal(factGroupFromType('Goal'), 'other');
+});
+
+test('factGroupFromType maps routines and food types', () => {
   assert.equal(factGroupFromType('Habit'), 'routines');
   assert.equal(factGroupFromType('FoodPreference'), 'food');
   assert.equal(factGroupFromType('Cuisine'), 'food');

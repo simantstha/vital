@@ -232,6 +232,25 @@ final class UserFacingErrorTests: XCTestCase {
         }
     }
 
+    // MARK: - Error-state glyph
+
+    func testOfflineCopyUsesWifiGlyph() {
+        let copy = UserFacingError.copy(for: URLError(.notConnectedToInternet), context: .read)
+        XCTAssertEqual(UserFacingError.glyph(forMessage: copy), "wifi.exclamationmark")
+    }
+
+    func testServerErrorCopyUsesServerGlyphNotWifi() {
+        for includesAction in [true, false] {
+            let copy = UserFacingError.copy(for: APIError.serverError(500), context: .read, includesAction: includesAction)
+            XCTAssertEqual(UserFacingError.glyph(forMessage: copy), "exclamationmark.icloud", copy)
+        }
+    }
+
+    func testGenericAndMissingMessagesUseServerGlyph() {
+        XCTAssertEqual(UserFacingError.glyph(forMessage: nil), "exclamationmark.icloud")
+        XCTAssertEqual(UserFacingError.glyph(forMessage: "Couldn't load — try again."), "exclamationmark.icloud")
+    }
+
     private enum CodingKeys: String, CodingKey {
         case placeholder
     }
