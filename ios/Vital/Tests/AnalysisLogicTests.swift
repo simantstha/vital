@@ -520,4 +520,27 @@ final class AnalysisLogicTests: XCTestCase {
             AnalysisLogic.sleepDevicesDisagree(minutesA: 370, minutesB: 348)
         )
     }
+
+    // MARK: - Effort bar mapping
+
+    func testEffortZoneIndexFollowsBoundaries() {
+        XCTAssertEqual(AnalysisLogic.effortZoneIndex(avgFraction: 0.58), 0)
+        XCTAssertEqual(AnalysisLogic.effortZoneIndex(avgFraction: 0.60), 1)
+        XCTAssertEqual(AnalysisLogic.effortZoneIndex(avgFraction: 0.74), 1)
+        XCTAssertEqual(AnalysisLogic.effortZoneIndex(avgFraction: 0.75), 2)
+        XCTAssertEqual(AnalysisLogic.effortZoneIndex(avgFraction: 0.90), 3)
+        XCTAssertEqual(AnalysisLogic.effortZoneIndex(avgFraction: 1.4), 3)
+        XCTAssertEqual(AnalysisLogic.effortZoneIndex(avgFraction: -0.2), 0)
+    }
+
+    func testEffortDescriptionUsesPlainLanguageNotPercent() {
+        XCTAssertEqual(AnalysisLogic.effortDescription(avgFraction: 0.58), "Mostly easy effort — conversational pace.")
+        XCTAssertEqual(AnalysisLogic.effortDescription(avgFraction: 0.30), "Light effort — relaxed, easy to chat.")
+        XCTAssertTrue(AnalysisLogic.effortDescription(avgFraction: 0.65).hasPrefix("Steady"))
+        XCTAssertTrue(AnalysisLogic.effortDescription(avgFraction: 0.80).hasPrefix("Hard"))
+        XCTAssertTrue(AnalysisLogic.effortDescription(avgFraction: 0.95).hasPrefix("Max"))
+        for f in [0.1, 0.58, 0.8, 0.95] {
+            XCTAssertFalse(AnalysisLogic.effortDescription(avgFraction: f).contains("%"))
+        }
+    }
 }

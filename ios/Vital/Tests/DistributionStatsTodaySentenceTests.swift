@@ -45,4 +45,21 @@ final class DistributionStatsTodaySentenceTests: XCTestCase {
         XCTAssertEqual(sentence, "Today is your lowest in the last 90 days.")
         XCTAssertFalse(sentence.contains("100%"))
     }
+
+    func testWindowDaysOverridesSampleCount() {
+        let values: [Double] = [40, 42, 44, 46, 48, 50]
+        let result = DistributionStats.compute(values: values, latest: 50)!
+        let sentence = DistributionStats.todaySentence(result: result, latest: 50, values: values, windowDays: 30)
+        XCTAssertEqual(sentence, "Today is your highest in the last 30 days.")
+    }
+
+    func testWindowDaysIsInclusiveSpanCappedAt90() {
+        let cal = Calendar.current
+        let end = Date()
+        let d30 = cal.date(byAdding: .day, value: -29, to: end)!
+        let d200 = cal.date(byAdding: .day, value: -200, to: end)!
+        XCTAssertEqual(DistributionStats.windowDays(firstDate: d30, lastDate: end), 30)
+        XCTAssertEqual(DistributionStats.windowDays(firstDate: d200, lastDate: end), 90)
+        XCTAssertEqual(DistributionStats.windowDays(firstDate: end, lastDate: end), 1)
+    }
 }

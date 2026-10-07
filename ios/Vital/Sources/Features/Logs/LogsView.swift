@@ -271,6 +271,17 @@ private extension LogsView {
                                 // taps these rather than matching on row text,
                                 // which varies per fixture scenario.
                                 .accessibilityIdentifier(item.type == "workout_completed" ? "logs.workoutRow" : "logs.sleepRow")
+                            } else if LogRowFormat.opensDietSheet(type: item.type, isToday: vm.selectedIndex == 0) {
+                                // Logged meals open the diet sheet (where meals are
+                                // viewed/edited). Today only: the sheet is a
+                                // today-scoped surface, so past days stay read-only.
+                                Button {
+                                    showDietSheet = true
+                                } label: {
+                                    LogEntryRow(item: item, isFirst: index == 0, showsChevron: true)
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityIdentifier("logs.mealRow")
                             } else {
                                 LogEntryRow(item: item, isFirst: index == 0)
                             }
@@ -337,9 +348,29 @@ private extension LogsView {
 
 // MARK: - Log entry row
 
+/// Pure row-formatting/navigation rules for the Logs feed.
+enum LogRowFormat {
+    /// "Logged · Snacks" + 220 kcal -> "220 kcal · Snacks". Only meal rows
+    /// with a positive kcal are rewritten; a subtitle that already mentions
+    /// kcal is left alone.
+    static func subtitle(type: String, subtitle: String, kcal: Double?) -> String {
+        guard type == "meal_logged", let kcal, kcal > 0, !subtitle.lowercased().contains("kcal") else { return subtitle }
+        let prefix = "Logged · "
+        let slot = subtitle.hasPrefix(prefix) ? String(subtitle.dropFirst(prefix.count)) : subtitle
+        let kcalText = "\(Int(kcal.rounded())) kcal"
+        return slot.isEmpty || slot == "Logged" ? kcalText : "\(kcalText) · \(slot)"
+    }
+
+    /// Tapping a logged-meal row opens the diet sheet, today only.
+    static func opensDietSheet(type: String, isToday: Bool) -> Bool {
+        isToday && type == "meal_logged"
+    }
+}
+
 private struct LogEntryRow: View {
     let item: LogDisplayItem
     let isFirst: Bool
+    var showsChevron: Bool = false
 
     var body: some View {
         HStack(spacing: Theme.Spacing.md) {
@@ -359,7 +390,7 @@ private struct LogEntryRow: View {
                     .foregroundStyle(Theme.Colors.textPrimary)
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
-                Text(item.subtitle)
+                Text(LogRowFormat.subtitle(type: item.type, subtitle: item.subtitle, kcal: item.kcal))
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.Colors.textSecondary)
                     .lineLimit(1)
@@ -371,7 +402,7 @@ private struct LogEntryRow: View {
                 .font(.system(size: 12))
                 .foregroundStyle(Theme.Colors.textTertiary)
 
-            if item.analysisId != nil {
+            if item.analysisId != nil || showsChevron {
                 Image(systemName: "chevron.right")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(Theme.Colors.textTertiary)
