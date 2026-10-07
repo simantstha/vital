@@ -28,6 +28,26 @@ final class FixtureCrossScreenConsistencyTests: XCTestCase {
         return (points?.last?["value"] as? Double) ?? .nan
     }
 
+    /// Driver tercile means must be averages of readings the records card
+    /// also shows: never above the 90-day series max or below its min.
+    func test_hrvDriverMeansStayInsideTheRecordsRange() {
+        for scenario in scenarios {
+            let series = (json(scenario, "/api/trends", "metrics=hrv_sdnn&days=90")["series"] as? [String: Any])?["hrv_sdnn"] as? [String: Any]
+            let values = ((series?["points"] as? [[String: Any]]) ?? []).compactMap { $0["value"] as? Double }
+            XCTAssertFalse(values.isEmpty, "\(scenario) hrv series")
+            guard let lo = values.min(), let hi = values.max() else { continue }
+            let drivers = json(scenario, "/api/trends/drivers", "metric=hrv_sdnn")["drivers"] as? [[String: Any]] ?? []
+            XCTAssertFalse(drivers.isEmpty, "\(scenario) drivers")
+            for driver in drivers {
+                for side in ["high", "low"] {
+                    let mean = ((driver[side] as? [String: Any])?["mean"] as? Double) ?? .nan
+                    XCTAssertLessThanOrEqual(mean, hi, "\(scenario) \(driver["input"] ?? "") \(side) above series max")
+                    XCTAssertGreaterThanOrEqual(mean, lo, "\(scenario) \(driver["input"] ?? "") \(side) below series min")
+                }
+            }
+        }
+    }
+
     func test_expectedPerScenarioSleep() {
         XCTAssertEqual(todayMetric(.weightLoss, "sleep") * 60, 410, accuracy: 0.01)
         XCTAssertEqual(todayMetric(.muscle, "sleep") * 60, 460, accuracy: 0.01)

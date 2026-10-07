@@ -984,6 +984,18 @@ enum FixtureData {
     /// route's own "never a 400/404" contract.
     private static let driverScenarios: Set<FixtureMode.Scenario> = [.weightLoss, .muscle, .endurance]
 
+    /// Believable tercile means (+/-0.6 sd around the series mean, 1 decimal)
+    /// clamped to the series' own [min, max], so they are always achievable
+    /// averages of readings the records card also shows.
+    static func driverTercileMeans(_ values: [Double]) -> (above: Double, below: Double) {
+        guard let lo = values.min(), let hi = values.max(), !values.isEmpty else { return (0, 0) }
+        let mean = values.reduce(0, +) / Double(values.count)
+        let variance = values.reduce(0) { $0 + ($1 - mean) * ($1 - mean) } / Double(values.count)
+        let step = variance.squareRoot() * 0.6
+        func r1(_ v: Double) -> Double { (v * 10).rounded() / 10 }
+        return (r1(min(mean + step, hi)), r1(max(mean - step, lo)))
+    }
+
     private static func trendsDrivers(_ profile: Profile, scenario: FixtureMode.Scenario?, query: String) -> [String: Any] {
         let metric = query
             .split(separator: "&")
@@ -994,7 +1006,11 @@ enum FixtureData {
             return ["metric": metric, "computedFor": NSNull(), "drivers": [Any]()]
         }
 
-        let hrv = profile.hrv
+        // Tercile means come from the SAME HRV series (the points `trendsBatch` returns) the detail's
+        // chart/records render, so a driver can never quote a value outside
+        // the records' own min/max ("61 vs 55 ms" against a 58 ms high).
+        let hrvSeries = (0..<dataDays(profile)).map { seriesPoint(key: "hrv_sdnn", offset: $0, profile: profile, scenario: scenario) }
+        let (hrvAbove, hrvBelow) = driverTercileMeans(hrvSeries)
         let stepsFraming = scenario == .weightLoss ? "adaptation" : "association"
         let stepsDriver: [String: Any] = [
             "input": "steps",
@@ -1002,8 +1018,8 @@ enum FixtureData {
             "direction": "down",
             "rho": -0.42,
             "pairs": 64,
-            "high": ["mean": hrv - 4, "n": 21],
-            "low": ["mean": hrv + 4, "n": 21],
+            "high": ["mean": hrvBelow, "n": 21],
+            "low": ["mean": hrvAbove, "n": 21],
             "highInputMean": profile.steps + 2200,
             "lowInputMean": max(profile.steps - 2200, 0),
             "framing": stepsFraming,
@@ -1014,8 +1030,8 @@ enum FixtureData {
             "direction": "up",
             "rho": 0.38,
             "pairs": 58,
-            "high": ["mean": hrv + 3, "n": 19],
-            "low": ["mean": hrv - 3, "n": 19],
+            "high": ["mean": hrvAbove, "n": 19],
+            "low": ["mean": hrvBelow, "n": 19],
             "highInputMean": 240.0,
             "lowInputMean": 140.0,
             "framing": "association",

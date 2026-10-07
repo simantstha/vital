@@ -144,6 +144,26 @@ enum AnalysisLogic {
     /// applied to produce `effort.zone`.
     static let effortZoneBoundaries: [Double] = [0.60, 0.75, 0.90]
 
+    /// Which of the four bands (0 easy ... 3 max) an average-effort fraction
+    /// of the heart-rate range falls in. The effort bar fills ONLY this band
+    /// so an easy run never reads as a hard one.
+    static func effortZoneIndex(avgFraction: Double) -> Int {
+        let clamped = min(max(avgFraction, 0), 1)
+        return effortZoneBoundaries.filter { clamped >= $0 }.count
+    }
+
+    /// Plain-language read of an average effort (fraction of heart-rate
+    /// range), replacing the raw "58% of your heart-rate range".
+    static func effortDescription(avgFraction: Double) -> String {
+        switch min(max(avgFraction, 0), 1) {
+        case ..<0.40: return "Light effort — relaxed, easy to chat."
+        case ..<0.60: return "Mostly easy effort — conversational pace."
+        case ..<0.75: return "Steady effort — comfortably hard, short sentences."
+        case ..<0.90: return "Hard effort — breathing heavy, tough to talk."
+        default: return "Max effort — all out, only sustainable briefly."
+        }
+    }
+
     // MARK: - Recovery readings (HRV / resting HR)
 
     enum RecoveryMetric { case hrv, restingHr }

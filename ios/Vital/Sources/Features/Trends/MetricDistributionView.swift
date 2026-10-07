@@ -67,6 +67,29 @@ enum DistributionStats {
         return Result(buckets: buckets, median: median, latestBucketIndex: latestIndex, percentileRank: percentileRank)
     }
 
+    /// X-axis domain for the histogram: the data's min/max padded by 8% of
+    /// the spread each side, so bars fill the plot width instead of Swift
+    /// Charts auto-including zero (which squeezes every bar into the right
+    /// edge for metrics like HRV at 40-60 ms). A zero-spread series gets a
+    /// +/-1 unit window so the domain is never empty.
+    static func xDomain(values: [Double], latest: Double) -> ClosedRange<Double> {
+        let all = values + [latest]
+        guard let lo = all.min(), let hi = all.max() else { return 0...1 }
+        let spread = hi - lo
+        guard spread > 0 else { return (lo - 1)...(hi + 1) }
+        let pad = spread * 0.08
+        return (lo - pad)...(hi + pad)
+    }
+
+    /// Days actually covered by the distribution window: first..last inclusive,
+    /// capped at the fixed 90-day fetch. Used to label records/insight lines
+    /// ("highest in the last 30 days") so they never claim a longer window
+    /// than the data spans.
+    static func windowDays(firstDate: Date, lastDate: Date, calendar: Calendar = .current) -> Int {
+        let span = calendar.dateComponents([.day], from: calendar.startOfDay(for: firstDate), to: calendar.startOfDay(for: lastDate)).day ?? 0
+        return min(max(span + 1, 1), 90)
+    }
+
     /// True if `latest` is the maximum value in `values`.
     static func isMaximum(_ latest: Double, in values: [Double]) -> Bool {
         guard let maxValue = values.max() else { return false }
@@ -106,8 +129,12 @@ enum DistributionStats {
     /// `latest` actually falls on. When `latest` is the window's max or min,
     /// a percentile against itself reads as a non-statement ("higher than
     /// 100% of your last 90 days") — say "highest"/"lowest" directly instead.
-    static func todaySentence(result: Result, latest: Double, values: [Double]) -> String {
-        let sampleCount = values.count
+    ///
+    /// `windowDays` is the real span of days the values cover (see
+    /// `windowDays(firstDate:lastDate:)`) so this line and the records
+    /// header always name the same window; defaults to the value count.
+    static func todaySentence(result: Result, latest: Double, values: [Double], windowDays: Int? = nil) -> String {
+        let sampleCount = windowDays ?? values.count
         if isMaximum(latest, in: values) {
             return "Today is your highest in the last \(sampleCount) days."
         } else if isMinimum(latest, in: values) {
@@ -141,6 +168,8 @@ struct MetricDistributionView: View {
     let latest: Double
     let spec: MetricSpec
     let unitSystem: UnitSystem
+    /// Days the values span (see `DistributionStats.windowDays`); `nil` falls back to the value count.
+    var windowDays: Int? = nil
 
     private var result: DistributionStats.Result? {
         DistributionStats.compute(values: values, latest: latest)
@@ -163,17 +192,13 @@ struct MetricDistributionView: View {
                         RuleMark(x: .value("Median", result.median))
                             .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
                             .foregroundStyle(Theme.Colors.textSecondary.opacity(0.7))
-                            .annotation(position: .top, alignment: .leading) {
-                                Text("median \(spec.format(result.median, unitSystem))")
-                                    .font(.system(size: 9))
-                                    .foregroundStyle(Theme.Colors.textTertiary)
-                            }
                     }
+                    .chartXScale(domain: DistributionStats.xDomain(values: values, latest: latest))
                     .chartXAxis(.hidden)
                     .chartYAxis(.hidden)
                     .frame(height: 84)
 
-                    Text(DistributionStats.todaySentence(result: result, latest: latest, values: values))
+                    Text(DistributionStats.todaySentence(result: result, latest: latest, values: values, windowDays: windowDays))
                         .font(Theme.Typography.bodySmall)
                         .foregroundStyle(Theme.Colors.textTertiary)
                 }

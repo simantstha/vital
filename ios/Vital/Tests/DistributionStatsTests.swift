@@ -125,4 +125,23 @@ final class DistributionStatsTests: XCTestCase {
     func testIsMinimumEmptyArray() {
         XCTAssertFalse(DistributionStats.isMinimum(50, in: []))
     }
+
+    // MARK: - X-axis domain
+
+    func testXDomainHugsDataWithPaddingAndExcludesZero() {
+        let d = DistributionStats.xDomain(values: [40, 50, 60], latest: 55)
+        XCTAssertEqual(d.lowerBound, 40 - 20 * 0.08, accuracy: 0.0001)
+        XCTAssertEqual(d.upperBound, 60 + 20 * 0.08, accuracy: 0.0001)
+        XCTAssertGreaterThan(d.lowerBound, 0)
+    }
+
+    func testXDomainIncludesLatestOutsideValues() {
+        let d = DistributionStats.xDomain(values: [40, 50], latest: 70)
+        XCTAssertGreaterThanOrEqual(d.upperBound, 70)
+    }
+
+    func testXDomainDegenerateSpreadIsNonEmpty() {
+        let d = DistributionStats.xDomain(values: [70, 70], latest: 70)
+        XCTAssertEqual(d, 69...71)
+    }
 }

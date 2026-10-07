@@ -487,7 +487,7 @@ private extension MetricDetailView {
                     .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 4]))
                     .foregroundStyle(Theme.Colors.textSecondary.opacity(0.55))
                     .annotation(position: .top, alignment: .trailing, spacing: 2) {
-                        Text("\(formattedAverage(mean30)) normal")
+                        Text("normal \(formattedAverage(bandLower))–\(formattedAverage(bandUpper))")
                             .font(.system(size: 9))
                             .foregroundStyle(Theme.Colors.textTertiary)
                             .padding(.trailing, 6)
@@ -697,7 +697,7 @@ private extension MetricDetailView {
                 Rectangle()
                     .fill(Theme.Colors.textSecondary.opacity(0.6))
                     .frame(width: 11, height: 2)
-                Text("30-day normal")
+                Text("30-day average")
                     .font(.system(size: 10.5))
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
@@ -824,10 +824,19 @@ private extension MetricDetailView {
                     values: distributionValues,
                     latest: latest,
                     spec: spec,
-                    unitSystem: unitPref.current
+                    unitSystem: unitPref.current,
+                    windowDays: distributionWindowDays
                 )
             }
         }
+    }
+
+    /// Real day span of the fixed distribution fetch — one label for the
+    /// records header and the "Today is your highest in the last N days" line.
+    var distributionWindowDays: Int {
+        let dates = (vm.distributionSeries?.points ?? []).map(\.date)
+        guard let first = dates.min(), let last = dates.max() else { return 90 }
+        return DistributionStats.windowDays(firstDate: first, lastDate: last)
     }
 }
 
@@ -935,7 +944,7 @@ private extension MetricDetailView {
 
     func recordsSection(_ result: MetricRecords.Result) -> some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-            sectionHeader("YOUR RECORDS (90 DAYS)")
+            sectionHeader("YOUR RECORDS (\(distributionWindowDays) DAYS)")
             GlassCard(padding: Theme.Spacing.md, cornerRadius: Theme.Radius.lg) {
                 VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
                     HStack(spacing: Theme.Spacing.md) {

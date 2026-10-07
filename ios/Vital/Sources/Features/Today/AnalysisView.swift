@@ -940,7 +940,7 @@ struct WorkoutAnalysisContent: View {
                     }
                     EffortZoneBar(avgFraction: effort.avgPct, markerFraction: maxHrMarkerFraction(effort))
                         .frame(height: 44)
-                        .accessibilityLabel("Effort \(Int((effort.avgPct * 100).rounded()))% of your heart rate range, \(AnalysisLogic.effortZoneLabel(effort.zone).lowercased())")
+                        .accessibilityLabel("Effort \(AnalysisLogic.effortZoneLabel(effort.zone).lowercased()). \(AnalysisLogic.effortDescription(avgFraction: effort.avgPct))")
                     // #249 polish: a small legend so the tick/ring markers on
                     // the bar above aren't left unexplained.
                     EffortZoneLegend(showsMaxMarker: maxHrMarkerFraction(effort) != nil)
@@ -949,7 +949,7 @@ struct WorkoutAnalysisContent: View {
                         Spacer()
                         Text("highest recorded \(Int(effort.maxHr.rounded()))").font(.system(size: 12)).foregroundStyle(Theme.Colors.textSecondary)
                     }
-                    Text("\(Int((effort.avgPct * 100).rounded()))% of your heart-rate range for most of the run.")
+                    Text(AnalysisLogic.effortDescription(avgFraction: effort.avgPct))
                         .font(.system(size: 13))
                         .foregroundStyle(Theme.Colors.textSecondary)
                 }
@@ -1090,9 +1090,14 @@ private struct EffortZoneBar: View {
     let avgFraction: Double
     let markerFraction: Double?
 
-    private var bandColors: [Color] {
-        [Theme.Colors.glassFill, Theme.Colors.accentSoft, Theme.Colors.accent, Theme.Colors.caution]
+    /// Active band colors by zone. Only the band the run's average effort
+    /// falls in is filled; the rest are muted (`mutedBand`), so an easy run
+    /// shows a filled Easy segment instead of a lit-up Hard/Max.
+    private var activeColors: [Color] {
+        [Theme.Colors.accent.opacity(0.55), Theme.Colors.accentSoft, Theme.Colors.accent, Theme.Colors.caution]
     }
+    private var mutedBand: Color { Theme.Colors.textTertiary.opacity(0.16) }
+    private var activeIndex: Int { AnalysisLogic.effortZoneIndex(avgFraction: avgFraction) }
     private var bandLabels: [String] { ["Easy", "Steady", "Hard", "Max"] }
     /// [0, 0.60, 0.75, 0.90, 1] — the four band edges as fractions of the
     /// full width. A stored computed property (not a local `let`) so the
@@ -1105,7 +1110,7 @@ private struct EffortZoneBar: View {
                 HStack(spacing: 2) {
                     ForEach(0..<4, id: \.self) { i in
                         RoundedRectangle(cornerRadius: 5, style: .continuous)
-                            .fill(bandColors[i])
+                            .fill(i == activeIndex ? activeColors[i] : mutedBand)
                             .frame(width: max(0, geo.size.width * CGFloat(bandBounds[i + 1] - bandBounds[i]) - 2))
                     }
                 }
@@ -1129,7 +1134,7 @@ private struct EffortZoneBar: View {
                     ForEach(0..<4, id: \.self) { i in
                         Text(bandLabels[i])
                             .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(Theme.Colors.textSecondary)
+                            .foregroundStyle(i == activeIndex ? Theme.Colors.textPrimary : Theme.Colors.textTertiary)
                             .frame(width: geo.size.width * CGFloat(bandBounds[i + 1] - bandBounds[i]))
                     }
                 }
