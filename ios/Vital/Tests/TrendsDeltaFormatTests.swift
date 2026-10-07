@@ -7,17 +7,25 @@ final class TrendsDeltaFormatTests: XCTestCase {
     private var weightSpec: MetricSpec { MetricCatalog.spec(for: "body_mass_kg")! } // 1 decimal
     private var stepsSpec: MetricSpec { MetricCatalog.spec(for: "steps")! } // unitless
 
-    func testBandPillInsideBandShowsRange() {
-        XCTAssertEqual(TrendsDeltaFormat.bandPillText(value: 52, lower: 49, upper: 55, spec: hrvSpec, system: .metric), "Within your normal (49–55)")
-        XCTAssertEqual(TrendsDeltaFormat.bandPillText(value: 55, lower: 49, upper: 55, spec: hrvSpec, system: .metric), "Within your normal (49–55)")
+    func testNormalPillInsideBandNamesTheNormalRange() {
+        XCTAssertEqual(TrendsDeltaFormat.normalPillText(value: 52, lower: 49, upper: 55, spec: hrvSpec, system: .metric), "Within your normal range (49\u{2013}55)")
+        XCTAssertEqual(TrendsDeltaFormat.normalPillText(value: 55, lower: 49, upper: 55, spec: hrvSpec, system: .metric), "Within your normal range (49\u{2013}55)")
     }
 
-    func testBandPillAboveMeasuresToUpperEdge() {
-        XCTAssertEqual(TrendsDeltaFormat.bandPillText(value: 58, lower: 49, upper: 55, spec: hrvSpec, system: .metric), "↑ 3 ms above your normal range")
+    /// Normal value = middle of the band (mean30 = 52); 58 is 6 above it, not 3
+    /// above the band edge.
+    func testNormalPillAboveMeasuresToTheNormalValue() {
+        XCTAssertEqual(TrendsDeltaFormat.normalPillText(value: 58, lower: 49, upper: 55, spec: hrvSpec, system: .metric), "\u{2191} 6 ms above your normal (52 ms)")
     }
 
-    func testBandPillBelowMeasuresToLowerEdge() {
-        XCTAssertEqual(TrendsDeltaFormat.bandPillText(value: 45, lower: 49, upper: 55, spec: hrvSpec, system: .metric), "↓ 4 ms below your normal range")
+    func testNormalPillBelowMeasuresToTheNormalValue() {
+        XCTAssertEqual(TrendsDeltaFormat.normalPillText(value: 45, lower: 49, upper: 55, spec: hrvSpec, system: .metric), "\u{2193} 7 ms below your normal (52 ms)")
+    }
+
+    /// The Trends example: HRV 51 vs a 30-day normal of 57 reads "6 ms below your
+    /// normal (57 ms)" on the detail pill too (band 54-60 here).
+    func testNormalPillStatesTheSameReferenceAsTheTrendsRow() {
+        XCTAssertEqual(TrendsDeltaFormat.normalPillText(value: 51, lower: 54, upper: 60, spec: hrvSpec, system: .metric), "\u{2193} 6 ms below your normal (57 ms)")
     }
 
     func testArrowIsUpForNonNegativeDeltaIncludingZero() {

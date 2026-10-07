@@ -219,7 +219,8 @@ final class TrendsViewModel: ObservableObject {
             goal: goal,
             weightTrend: weightLog?.trend,
             strength: strength,
-            weightAlreadyCounted: weightMetricMoved
+            weightAlreadyCounted: weightMetricMoved,
+            goalProgress: goalProgress
         )
         var status = TrendsHeadline.status(
             verdicts: headlineVerdicts,
@@ -353,6 +354,8 @@ final class TrendsViewModel: ObservableObject {
             withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) {
                 goalProgress = fresh
             }
+            // The header counts the goal card's coloured reasons too.
+            refreshHeadline()
         } catch {
             if !error.isCancellation {
                 print("[Vital] fetchGoalProgress failed: \(error.localizedDescription)")

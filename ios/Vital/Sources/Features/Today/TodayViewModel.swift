@@ -50,7 +50,9 @@ enum RecoveryDelta {
 
     static func make(deltaPct: Int, lowerIsBetter: Bool = false) -> (trend: TrendDirection, text: String) {
         if deltaPct == 0 { return (.neutral, atNormalText) }
-        let sign = deltaPct > 0 ? "+" : ""
+        // Percent vs the 30-day normal value (mean), spelled out so the tile
+        // never reads as a bare "-11 %" next to Trends' "ms below your normal".
+        let sign = deltaPct > 0 ? "+" : "\u{2212}"
         let up = deltaPct > 0
         let trend: TrendDirection
         if lowerIsBetter {
@@ -58,7 +60,17 @@ enum RecoveryDelta {
         } else {
             trend = up ? .upGood : .downBad
         }
-        return (trend, "\(sign)\(deltaPct) %")
+        return (trend, "\(sign)\(abs(deltaPct))\(vsNormalSuffix)")
+    }
+
+    /// The tile text's unit + reference ("-11% vs normal"). "Normal" is always the
+    /// 30-day normal VALUE (mean) in ms/bpm/h; the shaded band is called the
+    /// "normal range" wherever it is shown (Trends detail).
+    static let vsNormalSuffix = "% vs normal"
+
+    /// The same delta for a space-tight line ("HRV -11%"): drops " vs normal".
+    static func compact(_ text: String) -> String {
+        text.replacingOccurrences(of: "% vs normal", with: "%")
     }
 }
 
@@ -260,9 +272,9 @@ final class TodayViewModel: ObservableObject {
     /// `TrendsVerdict`'s doc comment — those never reach UI copy).
     var enduranceReasonLine: String? {
         var parts: [String] = []
-        if hrv.value != nil { parts.append("HRV \(hrv.delta)") }
+        if hrv.value != nil { parts.append("HRV \(RecoveryDelta.compact(hrv.delta))") }
         if sleep.hours != nil { parts.append("Sleep \(sleep.formatted)") }
-        if restingHR.bpm != nil { parts.append("RHR \(restingHR.delta)") }
+        if restingHR.bpm != nil { parts.append("RHR \(RecoveryDelta.compact(restingHR.delta))") }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 

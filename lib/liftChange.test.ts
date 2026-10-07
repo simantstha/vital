@@ -107,6 +107,12 @@ test('pickHeadlineLift: a gain beats a bigger drop; with no gain the biggest dro
   assert.equal(pickHeadlineLift({}, ANCHOR), null);
 });
 
+test('liftDisplayChange: parity fixtures with TrendsStrengthLogicTests (bench 102.1 -> 107.9 = +6; 101 -> 106.4 = +5)', () => {
+  assert.deepEqual(liftDisplayChange({ baselineKg: 102.1, recentKg: 107.9, changeKg: 5.8 }, false), { baseline: 102, recent: 108, change: 6 });
+  assert.deepEqual(liftDisplayChange({ baselineKg: 101, recentKg: 106.4, changeKg: 5.4 }, false), { baseline: 101, recent: 106, change: 5 });
+  assert.deepEqual(liftDisplayChange({ baselineKg: 100, recentKg: 110, changeKg: 10 }, true), { baseline: 220, recent: 243, change: 23 });
+});
+
 test('liftDisplayChange: whole units; the change is computed from the rounded endpoints', () => {
   assert.deepEqual(liftDisplayChange({ baselineKg: 99.2, recentKg: 107.9, changeKg: 8.7 }, false), { baseline: 99, recent: 108, change: 9 });
   // 100 kg = 220.46 lb -> 220; 105 kg = 231.5 lb -> 231

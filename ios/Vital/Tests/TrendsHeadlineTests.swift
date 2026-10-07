@@ -238,6 +238,34 @@ final class TrendsHeadlineTests: XCTestCase {
         XCTAssertEqual(summary.fullText, "Three things moved this month — two good, one to watch.")
     }
 
+    /// "Two things moved — both good" above an amber goal-card bullet was the bug:
+    /// the header now counts the goal card's coloured reasons.
+    func testHeaderCountsTheGoalCardsColouredReasonsSoItCannotSayBothGood() {
+        let progress = GoalProgressDTO(
+            goal: "muscle", verdict: .behind,
+            reasons: [
+                GoalReasonDTO(kind: "adherence", text: "9 of 16 planned sessions in 4 weeks (56%)", tone: .watch),
+                GoalReasonDTO(kind: "lift", text: "Squat est. 1RM +20 kg vs 4 weeks ago (120 → 140 kg)", tone: .good),
+                GoalReasonDTO(kind: "protein", text: "Hit your 170 g protein target on 6 of 7 logged days this week", tone: .good),
+                GoalReasonDTO(kind: "sessions", text: "x", tone: .neutral),
+            ]
+        )
+        let moves = TrendsHeadline.GoalMoves.make(
+            goal: "muscle", weightTrend: nil,
+            strength: card([lift("squat", changeKg: 20)]),
+            weightAlreadyCounted: false, goalProgress: progress
+        )
+        // lift reason is counted once (via the Strength card), not twice.
+        XCTAssertEqual(moves.liftsUp, 1)
+        XCTAssertEqual(moves.reasonsGood, 1)
+        XCTAssertEqual(moves.reasonsWatch, 1)
+        XCTAssertEqual(moves.goodCount, 2)
+        XCTAssertEqual(moves.watchCount, 1)
+        let status = TrendsHeadline.status(verdicts: [.normal], goodCount: 0, watchCount: 0, period: .thirtyDays, goalMoves: moves)
+        guard case .moved(let summary) = status else { return XCTFail("expected .moved, got \(status)") }
+        XCTAssertEqual(summary.fullText, "Three things moved this month — two good, one to watch.")
+    }
+
     func testStaysSteadyWhenNothingMovedIncludingGoalMoves() {
         let status = TrendsHeadline.status(verdicts: [.normal], goodCount: 0, watchCount: 0, period: .thirtyDays, goalMoves: .empty)
         guard case .steady = status else { return XCTFail("expected .steady, got \(status)") }

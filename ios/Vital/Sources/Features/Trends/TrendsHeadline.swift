@@ -136,13 +136,25 @@ enum TrendsHeadline {
         var liftsUp: Int = 0
         var liftsDown: Int = 0
 
+        /// Good / watch bullets on the goal card (`GoalProgressDTO.reasons`) that
+        /// no other counter here already covers — so the header counts exactly
+        /// the coloured bullets the user can see ("9 of 16 planned sessions"
+        /// amber) and can never read "both good" above an orange line.
+        var reasonsGood: Int = 0
+        var reasonsWatch: Int = 0
+
+        /// Reason kinds the header already counts another way: lifts (the
+        /// Strength card's `liftsUp`/`liftsDown`), the weight trend, and the
+        /// vitals that are metric tiles (`rate`, `resting_hr`, `hrv`, `sleep`).
+        static let reasonKindsCountedElsewhere: Set<String> = ["lift", "rate", "resting_hr", "hrv", "sleep"]
+
         static let empty = GoalMoves()
 
         var goodCount: Int {
-            liftsUp + ((weightDeltaKg ?? 0) <= -Self.weightThresholdKg ? 1 : 0)
+            liftsUp + reasonsGood + ((weightDeltaKg ?? 0) <= -Self.weightThresholdKg ? 1 : 0)
         }
         var watchCount: Int {
-            liftsDown + ((weightDeltaKg ?? 0) >= Self.weightThresholdKg ? 1 : 0)
+            liftsDown + reasonsWatch + ((weightDeltaKg ?? 0) >= Self.weightThresholdKg ? 1 : 0)
         }
 
         /// `goal` is the diet-goal string ("weight_loss" ...). Weight only
@@ -151,9 +163,17 @@ enum TrendsHeadline {
             goal: String,
             weightTrend: WeightTrendDTO?,
             strength: TrendsStrengthLogic.Card?,
-            weightAlreadyCounted: Bool
+            weightAlreadyCounted: Bool,
+            goalProgress: GoalProgressDTO? = nil
         ) -> GoalMoves {
             var moves = GoalMoves()
+            for reason in goalProgress?.reasons ?? [] where !reasonKindsCountedElsewhere.contains(reason.kind.lowercased()) {
+                switch reason.tone {
+                case .good:    moves.reasonsGood += 1
+                case .watch:   moves.reasonsWatch += 1
+                case .neutral: break
+                }
+            }
             if goal == "weight_loss", !weightAlreadyCounted,
                let trend = weightTrend, trend.established, trend.days.count >= 2,
                let first = trend.days.first, let last = trend.days.last {

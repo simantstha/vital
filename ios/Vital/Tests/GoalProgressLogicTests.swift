@@ -432,6 +432,43 @@ final class GoalProgressLogicTests: XCTestCase {
         XCTAssertNil(try decode("").lastWeighInDaysAgo)
     }
 
+    /// The Today line leads with the user's goal outcome and appends the
+    /// headline lift short; the lift alone only when there is no weight line.
+    func testMuscleCompactLineLeadsWithGoalOutcomeThenHeadlineLift() {
+        let lift = GoalReasonDTO(kind: "lift", text: "Squat est. 1RM +20 kg vs 4 weeks ago (120 → 140 kg)", tone: .good)
+        let muscle = GoalProgressDTO(
+            goal: "muscle", target: .init(weightKg: 83),
+            current: .init(weightKg: 80, startWeightKg: 79, changeKg: 1, progressPct: 25), eta: "2026-12-06", verdict: .progressing,
+            reasons: [lift]
+        )
+        XCTAssertEqual(
+            GoalProgressLogic.compactText(muscle, system: .metric, now: now, locale: en),
+            "1 of 4 kg gained · Squat +20 kg / 4 wk"
+        )
+        // Imperial: weights in lb; the lift short is the server's already-unit-correct text.
+        let imperialLift = GoalReasonDTO(kind: "lift", text: "Squat est. 1RM −44 lb vs 4 weeks ago (264 → 220 lb)", tone: .watch)
+        let imperial = GoalProgressDTO(
+            goal: "muscle", target: .init(weightKg: 83),
+            current: .init(weightKg: 80, startWeightKg: 79, changeKg: 1, progressPct: 25), verdict: .progressing,
+            reasons: [imperialLift]
+        )
+        XCTAssertEqual(
+            GoalProgressLogic.compactText(imperial, system: .imperial, now: now, locale: en),
+            "2.2 of 8.8 lb gained · Squat \u{2212}44 lb / 4 wk"
+        )
+        // No lift reason: the goal outcome alone.
+        let noLift = GoalProgressDTO(
+            goal: "muscle", target: .init(weightKg: 83),
+            current: .init(weightKg: 80, startWeightKg: 79, changeKg: 1, progressPct: 25), verdict: .progressing
+        )
+        XCTAssertEqual(GoalProgressLogic.compactText(noLift, system: .metric, now: now, locale: en), "1 of 4 kg gained")
+        // An "unchanged" lift has no signed change to quote.
+        let flat = GoalReasonDTO(kind: "lift", text: "Squat est. 1RM unchanged vs 4 weeks ago (120 → 120 kg)", tone: .neutral)
+        XCTAssertNil(GoalProgressLogic.liftShortText(GoalProgressDTO(goal: "muscle", verdict: .progressing, reasons: [flat])))
+        // The line fits two Today lines.
+        XCTAssertLessThanOrEqual(GoalProgressLogic.compactText(muscle, system: .metric, now: now, locale: en).count, 48)
+    }
+
     func testMuscleCompactLinePrefersLiftReasonOverWeightEta() {
         let muscle = GoalProgressDTO(
             goal: "muscle", target: .init(weightKg: 90), eta: "2026-12-06", verdict: .progressing,

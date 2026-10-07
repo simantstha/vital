@@ -411,10 +411,17 @@ enum GoalProgressLogic {
         if let stale = staleWeighInText(progress), progress.verdict != .needsTarget { return stale }
         if heroShowsDistance, distanceLine(progress, system: system) != nil,
            let reason = distanceReasonText(progress, system: system) { return compactReason(reason) }
-        // A muscle goal's Today line leads with the lift story (the card above
-        // is a lifting card), falling back to the weight ETA when there is none.
-        if progress.goal == "muscle", progress.verdict != .needsTarget, progress.verdict != .insufficientData,
-           let lift = liftReasonText(progress) { return compactReason(lift) }
+        // A muscle goal's Today line leads with the user's own goal outcome
+        // ("1 of 4 kg gained") and appends the headline lift short
+        // ("· Squat +20 kg / 4 wk"). With no weight target it is the lift story
+        // alone; with neither it falls through to the weight ETA.
+        if progress.goal == "muscle", progress.verdict != .needsTarget, progress.verdict != .insufficientData {
+            if let outcome = weightLine(progress, system: system) {
+                if let short = liftShortText(progress) { return "\(outcome) · \(short)" }
+                return outcome
+            }
+            if let lift = liftReasonText(progress) { return compactReason(lift) }
+        }
         if let eta = dateText(progress.eta, now: now, locale: locale),
            progress.verdict != .needsTarget, progress.verdict != .insufficientData {
             if let relation = compactPaceVsTarget(progress, now: now, locale: locale) { return relation }
@@ -455,6 +462,20 @@ enum GoalProgressLogic {
             return headline
         }
         return nil
+    }
+
+    /// The headline lift as a short tail for the Today line: the server's lift
+    /// reason ("Squat est. 1RM +20 kg vs 4 weeks ago (120 → 140 kg)", always the
+    /// shared headline lift, first) becomes "Squat +20 kg / 4 wk". `nil` when
+    /// there is no lift reason, or it carries no signed change ("unchanged").
+    static func liftShortText(_ progress: GoalProgressDTO) -> String? {
+        guard let reason = progress.reasons.first(where: { $0.kind.lowercased().contains("lift") }),
+              let nameEnd = reason.text.range(of: " est. 1RM"),
+              let delta = reason.text.range(of: #"[+−-]\d+(?:\.\d+)?\s?(?:kg|lb)"#, options: .regularExpression)
+        else { return nil }
+        let name = reason.text[..<nameEnd.lowerBound].trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty else { return nil }
+        return "\(name) \(reason.text[delta]) / 4 wk"
     }
 
     /// Why the verdict is what it is, in one short phrase, for a surface that
