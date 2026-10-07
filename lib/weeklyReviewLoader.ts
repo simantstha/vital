@@ -8,7 +8,7 @@
  * No scoring logic lives here.
  */
 
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, gte, isNull } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import { localDayKey, pickTimeZone, weekDayKeys } from '@/lib/localDay';
 import { getWeightReadings } from '@/lib/weightRepository';
@@ -21,7 +21,7 @@ import { resolveUnitSystem } from '@/lib/units';
 import { loadGoalProgress } from '@/lib/goalProgressLoader';
 import type { DayValue, GoalProgressBudget } from '@/lib/goalProgress';
 import { endOfLocalWeek, shouldRecomputeReview } from '@/lib/weeklyReviewFreshness';
-import { computeWeeklyReview, lastCompletedWeekStart, type WeeklyReview } from '@/lib/weeklyReview';
+import { buildExerciseDisplay, computeWeeklyReview, lastCompletedWeekStart, signupLocalDay, type WeeklyReview } from '@/lib/weeklyReview';
 
 const WEIGHT_LOOKBACK_DAYS = 90;
 const WINDOW_DAYS = 30; // queryWorkouts / queryMetricPoints clamp here
@@ -72,7 +72,7 @@ export async function computeLastWeekReview(
   const daySet = new Set(dayKeys);
 
   const goal = normalizeGoal(user.goal);
-  const [progress, weightReadings, intakeByDay, budget, progression, sets, workoutEntries, restingHr, hrv, sleep] =
+  const [progress, weightReadings, intakeByDay, budget, progression, sets, workoutEntries, restingHr, hrv, sleep, displayRows] =
     await Promise.all([
       loadGoalProgress(userId, { tz, now: endOfLocalWeek(weekStart, tz) }),
       getWeightReadings(userId, WEIGHT_LOOKBACK_DAYS, tz),
@@ -84,6 +84,11 @@ export async function computeLastWeekReview(
       seriesWithFallback(userId, 'resting_hr', 'whoop_resting_hr'),
       seriesWithFallback(userId, 'hrv_sdnn', 'whoop_hrv_rmssd'),
       queryMetricPoints(userId, 'sleep_minutes', WINDOW_DAYS),
+      // Light query over the progression window so every lift in `progression` has its display name.
+      db
+        .selectDistinct({ exercise: schema.workout_sets.exercise, exercise_display: schema.workout_sets.exercise_display })
+        .from(schema.workout_sets)
+        .where(and(eq(schema.workout_sets.user_id, userId), gte(schema.workout_sets.performed_at, new Date(now.getTime() - 84 * 24 * 60 * 60 * 1000)))),
     ]);
 
   const budgetInput: GoalProgressBudget = {
@@ -123,6 +128,8 @@ export async function computeLastWeekReview(
     sleepGoalMinutes: user.sleep_goal_minutes ?? DEFAULT_SLEEP_GOAL_MIN,
     weeklySessionsTarget: user.weekly_sessions_target ?? null,
     unitSystem: resolveUnitSystem(user.unit_system),
+    exerciseDisplay: buildExerciseDisplay(displayRows),
+    signupDay: signupLocalDay(user.created_at, tz),
   });
 }
 

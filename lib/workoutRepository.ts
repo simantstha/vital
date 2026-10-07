@@ -12,6 +12,7 @@ import { and, asc, desc, eq, gte, inArray, sql } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import type { NewWorkoutSet, WorkoutSet } from '@/db/schema';
 import { localDayKey, weekStartKeyForDay } from '@/lib/localDay';
+import { invalidateGoalProgress } from '@/lib/brain/goalProgressCache';
 
 // ── Insert (idempotent by session_id) ───────────────────────────────────────
 
@@ -63,7 +64,7 @@ export async function logWorkoutSession(input: LogSessionInput): Promise<Workout
     session_id:       input.sessionId,
   }));
 
-  return db
+  const rows = await db
     .insert(schema.workout_sets)
     .values(values)
     .onConflictDoUpdate({
@@ -83,6 +84,8 @@ export async function logWorkoutSession(input: LogSessionInput): Promise<Workout
       },
     })
     .returning();
+  invalidateGoalProgress(input.userId);
+  return rows;
 }
 
 // drizzle-orm doesn't expose a typed `excluded` reference the way some ORMs

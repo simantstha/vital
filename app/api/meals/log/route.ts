@@ -78,6 +78,7 @@
 import { NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
 import { db, schema } from '@/db';
+import { invalidateGoalProgress } from '@/lib/brain/goalProgressCache';
 import { eq, and } from 'drizzle-orm';
 import { getUserIdFromRequest } from '@/lib/auth';
 import { assembleContext } from '@/lib/brain/context';
@@ -244,6 +245,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       })
       .returning({ id: schema.events.id });
     eventId = row.id;
+    invalidateGoalProgress(userId);
   } catch (err) {
     console.error('[meals/log] DB insert error:', err);
     return NextResponse.json({ error: 'Database error.' }, { status: 500 });

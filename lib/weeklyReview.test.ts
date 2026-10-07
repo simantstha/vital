@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  buildExerciseDisplay,
+  signupLocalDay,
   computeWeeklyReview,
   lastCompletedWeekStart,
   REVIEW_HEADLINE_MAX_CHARS,
@@ -462,4 +464,20 @@ test('a deload week with a lower e1RM is "Lighter week" and never a slip', () =>
     progression: { 'bench press': progression['bench press'].map(w => (w.weekStart === WEEK_START ? { ...w, volumeKg: 3000 } : w)) },
   }));
   assert.match(normal.slip ?? '', /Bench Press estimated 1RM is down/);
+});
+
+test('buildExerciseDisplay maps key to first non-empty display name', () => {
+  const map = buildExerciseDisplay([
+    { exercise: 'bench press', exercise_display: 'Bench Press' },
+    { exercise: 'bench press', exercise_display: 'bench' },
+    { exercise: 'squat', exercise_display: '  ' },
+  ]);
+  assert.deepEqual(map, { 'bench press': 'Bench Press' });
+});
+
+test('signupLocalDay uses the user timezone', () => {
+  const at = new Date('2026-03-02T03:00:00Z');
+  assert.equal(signupLocalDay(at, 'America/Los_Angeles'), '2026-03-01');
+  assert.equal(signupLocalDay(at, 'UTC'), '2026-03-02');
+  assert.equal(signupLocalDay(null, 'UTC'), null);
 });

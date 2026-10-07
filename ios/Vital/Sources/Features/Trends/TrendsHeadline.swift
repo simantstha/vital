@@ -132,7 +132,7 @@ enum TrendsHeadline {
         /// weight metric tile already counted it.
         var weightDeltaKg: Double? = nil
         /// Lifts whose shared 4-week e1RM change (`TrendsStrengthLogic.change`)
-        /// is up / down by at least `TrendsStrengthLogic.changeThresholdKg`.
+        /// is up / down by at least 1% of its baseline (`TrendsStrengthLogic.isProgressing`).
         var liftsUp: Int = 0
         var liftsDown: Int = 0
 
@@ -160,9 +160,9 @@ enum TrendsHeadline {
                 moves.weightDeltaKg = last.trendKg - first.trendKg
             }
             for lift in strength?.lifts ?? [] {
-                guard let change = lift.changeKg else { continue }
-                if change >= TrendsStrengthLogic.changeThresholdKg { moves.liftsUp += 1 }
-                if change <= -TrendsStrengthLogic.changeThresholdKg { moves.liftsDown += 1 }
+                guard let change = lift.changeKg, let baseline = lift.baselineKg else { continue }
+                if TrendsStrengthLogic.isProgressing(changeKg: change, baselineKg: baseline) { moves.liftsUp += 1 }
+                if TrendsStrengthLogic.isDeclining(changeKg: change, baselineKg: baseline) { moves.liftsDown += 1 }
             }
             return moves
         }
