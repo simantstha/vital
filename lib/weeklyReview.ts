@@ -233,7 +233,7 @@ function budgetCandidate(input: WeeklyReviewInput, week: Week): Candidate | null
   if (tone === 'good') cand.win = `You stayed within your ${fmtKcal(target)} kcal target on ${hit} of ${logged.length} logged days.`;
   if (tone === 'watch') {
     cand.slip = `Only ${hit} of ${logged.length} logged days landed within your ${fmtKcal(target)} kcal target.`;
-    cand.fix = `Pick the two days that ran over your ${fmtKcal(target)} kcal target and plan those meals ahead.`;
+    cand.fix = `Pick the two days most likely to run over and plan those meals ahead.`;
   }
   return cand;
 }
@@ -268,7 +268,7 @@ function sessionsCandidate(input: WeeklyReviewInput, week: Week, prevWeek: Week)
     if (tone === 'good') cand.win = `You hit your ${target}-${plural(target, 'session')} target with ${count}.`;
     if (tone === 'watch') {
       cand.slip = `${count} of ${target} planned ${plural(target, 'session')} done.`;
-      cand.fix = `Schedule ${target} sessions now — you managed ${count} this week.`;
+      cand.fix = `Put ${target} sessions on the calendar now, before the week fills up.`;
     }
   } else {
     comparison = prev > 0 || count > 0 ? `${prev} last week` : 'for the week';
@@ -299,7 +299,7 @@ function proteinCandidate(input: WeeklyReviewInput, week: Week): Candidate | nul
   if (tone === 'good') cand.win = `You hit your ${Math.round(target)} g protein target on ${hit} of ${logged.length} logged days.`;
   if (tone === 'watch') {
     cand.slip = `Protein reached your ${Math.round(target)} g target on only ${hit} of ${logged.length} logged days.`;
-    cand.fix = `Add a protein-first breakfast — you hit ${Math.round(target)} g on only ${hit} of ${logged.length} logged days.`;
+    cand.fix = `Add a protein-first breakfast so the day starts ahead of your target.`;
   }
   return cand;
 }
@@ -408,7 +408,7 @@ function sleepAvgCandidate(input: WeeklyReviewInput, week: Week): Candidate | nu
   if (tone === 'good') cand.win = `You averaged ${fmtDuration(avg)} of sleep, close to your ${fmtDuration(goal)} goal.`;
   if (tone === 'watch') {
     cand.slip = `You averaged ${fmtDuration(avg)} of sleep against a ${fmtDuration(goal)} goal.`;
-    cand.fix = `Move bedtime 30 minutes earlier — you averaged ${fmtDuration(avg)} against a ${fmtDuration(goal)} goal.`;
+    cand.fix = `Move bedtime 30 minutes earlier and keep it there all week.`;
   }
   return cand;
 }
@@ -430,7 +430,7 @@ function sleepGoalNightsCandidate(input: WeeklyReviewInput, week: Week): Candida
   if (tone === 'good') cand.win = `You met your sleep goal on ${hit} of ${nights.length} tracked nights.`;
   if (tone === 'watch') {
     cand.slip = `You met your sleep goal on only ${hit} of ${nights.length} tracked nights.`;
-    cand.fix = `Set a wind-down alarm — you met your sleep goal on only ${hit} of ${nights.length} tracked nights.`;
+    cand.fix = `Set a nightly wind-down alarm an hour before bed.`;
   }
   return cand;
 }
@@ -574,10 +574,31 @@ function recoveryFlags(input: WeeklyReviewInput, week: Week): string[] {
   return flags;
 }
 
-function buildNextWeek(input: WeeklyReviewInput, cands: Candidate[], week: Week): string {
+/** Lowercase, punctuation-free form for the "next week must not copy the slip" check. */
+function normalizeSentence(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+/** Generic, goal-keyed action used when a derived suggestion would just repeat the slip. */
+function fallbackNextWeek(input: WeeklyReviewInput): string {
+  switch (input.goal) {
+    case 'weight_loss': return 'Weigh in at least 3 mornings and log dinner each day so next week reads clearly.';
+    case 'muscle': return 'Log every working set and a weigh-in or two so we can see your lifts and weight move.';
+    case 'endurance': return 'Keep sessions easy and regular, and wear your watch so volume and resting HR show up.';
+    default: return 'Pick two fixed activity days next week and put them on the calendar.';
+  }
+}
+
+/** nextWeek is an action derived from the slip — never a copy of it. */
+function buildNextWeek(input: WeeklyReviewInput, cands: Candidate[], week: Week, slip: string | null): string {
+  const next = buildNextWeekRaw(input, cands, week);
+  return slip != null && normalizeSentence(next) === normalizeSentence(slip) ? fallbackNextWeek(input) : next;
+}
+
+function buildNextWeekRaw(input: WeeklyReviewInput, cands: Candidate[], week: Week): string {
   const gap = input.goal === 'weight_loss' || input.goal === 'muscle' ? weekendGap(input, week) : null;
   if (gap != null && gap >= WEEKEND_GAP_MIN_KCAL) {
-    return `Plan Saturday's dinner — weekends ran +${fmtKcal(gap)} kcal over weekdays.`;
+    return "Plan Saturday's dinner ahead so the weekend lands closer to your weekday average.";
   }
   const recovery = recoveryFlags(input, week);
   if (recovery.length >= 2) {
@@ -587,12 +608,7 @@ function buildNextWeek(input: WeeklyReviewInput, cands: Candidate[], week: Week)
   if (fix) return fix;
   const good = ['on_track', 'ahead', 'progressing', 'building'].includes(input.verdict);
   if (good) return 'Repeat this week: same routine, same training days.';
-  switch (input.goal) {
-    case 'weight_loss': return 'Weigh in at least 3 mornings and log dinner each day so next week reads clearly.';
-    case 'muscle': return 'Log every working set and a weigh-in or two so we can see your lifts and weight move.';
-    case 'endurance': return 'Keep sessions easy and regular, and wear your watch so volume and resting HR show up.';
-    default: return 'Pick two fixed activity days next week and put them on the calendar.';
-  }
+  return fallbackNextWeek(input);
 }
 
 function emptyReview(input: WeeklyReviewInput, week: Week, daysWithData: number, statCount: number): WeeklyReview {
@@ -620,6 +636,7 @@ export function computeWeeklyReview(input: WeeklyReviewInput): WeeklyReview {
     return emptyReview(input, week, daysWithData, cands.length);
   }
 
+  const slip = cands.find(x => x.slip)?.slip ?? weekendSlip(input, week);
   return {
     weekStart: week.days[0],
     weekEnd: week.days[6],
@@ -628,8 +645,8 @@ export function computeWeeklyReview(input: WeeklyReviewInput): WeeklyReview {
     headline: buildHeadline(input, cands),
     stats: cands.map(x => x.stat),
     win: cands.find(x => x.win)?.win ?? null,
-    slip: cands.find(x => x.slip)?.slip ?? weekendSlip(input, week),
-    nextWeek: buildNextWeek(input, cands, week),
+    slip,
+    nextWeek: buildNextWeek(input, cands, week, slip),
     dataSufficiency: { daysWithData, statCount: cands.length, sufficient: true },
   };
 }

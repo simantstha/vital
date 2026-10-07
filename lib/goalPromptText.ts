@@ -9,6 +9,8 @@
 
 import type { GoalKind, GoalProgress } from './goalProgress';
 import type { ProgressionSummary } from './workoutRepository';
+import { liftChange4w } from './liftChange';
+import { weekStartKeyForDay } from './localDay';
 import { LB_PER_KG } from './metricFormat';
 import type { UnitSystem } from './units';
 
@@ -84,14 +86,18 @@ export interface BriefGoalFocus {
   progress: GoalProgress | null;
   /** Muscle goal: weekly best e1RM per lift (getProgressionSummary). */
   progression?: ProgressionSummary;
+  /** User's local day key (YYYY-MM-DD); anchors the shared "vs 4 weeks ago" lift change (lib/liftChange.ts). */
+  todayKey?: string;
   /** Endurance goal: all-sport weekly sessions/minutes, newest first. */
   weeklyVolume?: WeeklyVolumeRow[];
 }
 
-function topLiftLines(progression: ProgressionSummary, units: UnitSystem): string[] {
+function topLiftLines(progression: ProgressionSummary, units: UnitSystem, todayKey?: string): string[] {
+  const anchor = todayKey ? weekStartKeyForDay(todayKey) : null;
   const rows = Object.entries(progression)
     .map(([exercise, weeks]) => ({
       exercise,
+      weeks,
       withE1rm: weeks.filter(w => w.bestEstimatedOneRepMaxKg != null),
       sets: weeks.reduce((s, w) => s + w.totalSets, 0),
     }))
@@ -99,11 +105,16 @@ function topLiftLines(progression: ProgressionSummary, units: UnitSystem): strin
     .sort((a, b) => b.sets - a.sets)
     .slice(0, 3);
   return rows.map(r => {
-    const first = r.withE1rm[0].bestEstimatedOneRepMaxKg as number;
-    const last = r.withE1rm[r.withE1rm.length - 1].bestEstimatedOneRepMaxKg as number;
-    return r.withE1rm.length > 1
-      ? `- ${r.exercise}: est. 1RM ${wt(first, units, 0)} -> ${wt(last, units, 0)} over ${r.withE1rm.length} weeks`
-      : `- ${r.exercise}: est. 1RM ${wt(last, units, 0)} (one week of data)`;
+    // The ONE lift-change definition (lib/liftChange.ts) — the same
+    // "vs 4 weeks ago" number the Trends card, weekly review and goal reasons
+    // quote, so the coach never says a different figure for the same lift.
+    const change = anchor ? liftChange4w(r.weeks, anchor) : null;
+    if (change) {
+      const sign = change.changeKg > 0 ? '+' : change.changeKg < 0 ? '-' : '';
+      return `- ${r.exercise}: est. 1RM ${sign}${wt(Math.abs(change.changeKg), units)} vs 4 weeks ago (${wt(change.baselineKg, units, 0)} -> ${wt(change.recentKg, units, 0)})`;
+    }
+    const latest = r.withE1rm[r.withE1rm.length - 1].bestEstimatedOneRepMaxKg as number;
+    return `- ${r.exercise}: est. 1RM ${wt(latest, units, 0)} (no 4-week comparison yet)`;
   });
 }
 
@@ -123,7 +134,7 @@ export function buildBriefGoalSection(focus: BriefGoalFocus, units: UnitSystem):
   }
 
   if (focus.goal === 'muscle' && focus.progression) {
-    const lifts = topLiftLines(focus.progression, units);
+    const lifts = topLiftLines(focus.progression, units, focus.todayKey);
     if (lifts.length) out.push('Lift progression (top lifts):', ...lifts);
   }
 

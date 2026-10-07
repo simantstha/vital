@@ -98,7 +98,8 @@ test('weight_loss: weight change, days in budget, avg kcal, workouts, weekend ne
   assert.match(r.headline, /^Down \d\.\d kg, in budget 5 of 7 days$/);
   assert.ok(r.win);
   assert.match(r.slip ?? '', /Weekends ran \+\d+ kcal/);
-  assert.match(r.nextWeek, /^Plan Saturday's dinner — weekends ran \+\d+ kcal over weekdays\.$/);
+  assert.equal(r.nextWeek, "Plan Saturday's dinner ahead so the weekend lands closer to your weekday average.");
+  assert.notEqual(r.nextWeek, r.slip);
   assert.equal(r.dataSufficiency.sufficient, true);
 });
 
@@ -156,7 +157,8 @@ test('muscle: missed session target becomes the slip and drives nextWeek', () =>
   const sessions = statByLabel(r, 'Sessions')!;
   assert.equal(sessions.tone, 'watch');
   assert.equal(r.slip, '2 of 4 planned sessions done.');
-  assert.match(r.nextWeek, /^Schedule 4 sessions now — you managed 2 this week\.$/);
+  assert.equal(r.nextWeek, 'Put 4 sessions on the calendar now, before the week fills up.');
+  assert.notEqual(r.nextWeek, r.slip);
 });
 
 // ── endurance ───────────────────────────────────────────────────────────────
@@ -362,4 +364,30 @@ test('nextWeek: a single poor recovery signal still repeats a good week', () => 
     sleepMinutes: WEEK.map(day => ({ day, value: 340 })),
   }));
   assert.equal(r.nextWeek.startsWith('Go lighter'), false);
+});
+
+test('nextWeek is never a copy of the slip, for every goal fixture', () => {
+  const goals = ['weight_loss', 'muscle', 'endurance', 'general'] as const;
+  const inputs: WeeklyReviewInput[] = [weightLossInput()];
+  for (const goal of goals) {
+    inputs.push(base({
+      goal,
+      weeklySessionsTarget: 4,
+      trainingDays: [WEEK[0]],
+      // Over budget on few logged days, low protein, short sleep.
+      intakeDays: intake(WEEK.slice(0, 3), [2600, 2700, 2650], 40),
+      sleepMinutes: WEEK.map(day => ({ day, value: 300 })),
+    }));
+  }
+  let withSlip = 0;
+  for (const input of inputs) {
+    const r = computeWeeklyReview(input);
+    assert.ok(r.nextWeek.length > 0);
+    if (r.slip != null) {
+      withSlip++;
+      assert.notEqual(r.nextWeek, r.slip, `${input.goal}: nextWeek repeats the slip`);
+      assert.doesNotMatch(r.nextWeek, /\d+ of \d+/, `${input.goal}: nextWeek restates the slip's numbers`);
+    }
+  }
+  assert.ok(withSlip > 0, 'fixtures should exercise at least one slip');
 });

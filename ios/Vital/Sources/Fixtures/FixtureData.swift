@@ -116,7 +116,7 @@ enum FixtureData {
         case .weightLoss:
             return "You're on track this week — down 0.6 kg and inside your calorie budget most days. What would you like to dig into?"
         case .muscle:
-            return "Your lifts are progressing — bench is up 2.5 kg and protein is landing. What would you like to dig into?"
+            return "Your lifts are progressing — bench is up 8.8 kg vs 4 weeks ago and protein is landing. What would you like to dig into?"
         default:
             return "Nice work staying consistent this week — what would you like to dig into?"
         }
@@ -1832,7 +1832,7 @@ enum FixtureData {
     /// Unseen review per scenario, consistent with that scenario's
     /// goal-progress / weight / training fixtures: `weight_loss` -0.6 kg,
     /// 5 of 7 days in the 1,850 kcal budget, weekends +450 kcal (same as the
-    /// goal-progress reasons); `muscle` 3 of 4 sessions, bench +2.5 kg, 5 of 7
+    /// goal-progress reasons); `muscle` 3 of 4 sessions, bench +8.8 kg vs 4 weeks ago, 5 of 7
     /// protein days (190 g target); `endurance` 24.5 km, +12% (21.9 -> 24.5).
     /// `new_user` (and the unreachable `onboarding`) get the gentle
     /// "not enough data" review. `server_error` never reaches this.
@@ -1871,7 +1871,7 @@ enum FixtureData {
                 ],
                 win: "Your weight trend is down 0.6 kg.",
                 slip: "Weekends ran +450 kcal over your weekdays.",
-                nextWeek: "Plan Saturday's dinner — weekends ran +450 kcal over weekdays.",
+                nextWeek: "Plan Saturday's dinner ahead so the weekend lands closer to your weekday average.",
                 sufficient: true
             )
         case .muscle:
