@@ -97,7 +97,17 @@ Next (wave 4):
 - [x] Logs meal rows show kcal and open the diet sheet; Devices sync freshness (amber > 6 h, red > 48 h).
 - [x] Onboarding: real imported-days count, "Last step" copy, gentle target-weight nudge.
 
+### Wave 9 (persona review pass 5: real-data journeys) — shipped
+- [x] One identity per exercise (`lib/exerciseCanonical.ts`: "DB bench" → Dumbbell Bench Press); voice parsing handles "225x5" and "225 for 5"; weekly buckets use the user's local Monday; e1RM capped at 12 reps. Backfill script `scripts/backfill-exercise-canonical.ts` (dry run by default) — owner runs it.
+- [x] One verdict everywhere: start weight backfilled from the first weigh-in; one stall rule (< +1% of baseline, break/deload aware) shared by card, nudge and iOS; strength-only session counts, running-only distance; pace grace ±7 days; ETA anchored to the last weigh-in; plateau needs ≥ 4 weigh-ins; weekly review counts hit / logged days; goal edits re-anchor only on a new target or a direction flip (profile + coach tool).
+- [x] Worker load: bounded weekly-review pass (25/tick), reviews refresh until seen, verdict as of the reviewed week, 2-min goal-context cache invalidated on weight / meal / workout / goal writes, one coach nudge per day and none on review day.
+- [x] Fast lift logger: typed values, last-time seeding, repeat any of the last 8 sessions (`/api/workouts/sessions`), warm-up / RPE, date picker, autocomplete — ~250 taps → 3–4 for a repeated session.
+- [x] Journey fixes: onboarding weight logged as the first weigh-in; opener doesn't re-ask a set target; Today renders before HealthKit sync; one weight rate (4-week); "Last weigh-in N days ago" nudge; less Today clutter.
+
+Owner follow-ups added by wave 9:
+- Run `npx tsx scripts/backfill-exercise-canonical.ts` (dry run), review, then `--apply`.
+
 ### Remaining backlog (non-blocking)
-- [ ] HRV hero pill "above your normal" is measured vs the 30-day mean while the chart's normal is a band — align wording.
+- [x] HRV hero pill "above your normal" is measured vs the 30-day mean while the chart's normal is a band — align wording.
 - [ ] Sign in with Apple token revocation on account deletion (needs auth-code exchange + client secret).
 - [ ] Run prompt evals 10–13 against the real model (needs API key).
