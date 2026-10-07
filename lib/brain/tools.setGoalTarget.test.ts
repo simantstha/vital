@@ -124,3 +124,33 @@ test('validation matches PATCH /api/profile and writes nothing on failure', asyn
   assert.equal(updates.length, 0);
   assert.equal(restartCalls, 0);
 });
+
+test('weeklyDistance defaults to km for metric users and stores it without re-anchoring', async () => {
+  reset({ target_weight_kg: 80 });
+  const tools = await toolsPromise;
+  const result = JSON.parse(await tools.executeToolCall('set_goal_target', { weeklyDistance: 30 }, 'user-1'));
+
+  assert.equal(result.weeklyDistanceKmTarget, 30);
+  assert.deepEqual(updates[0], { weekly_distance_km_target: 30 });
+  assert.equal(restartCalls, 0);
+});
+
+test('weeklyDistance is read in miles for imperial users and converted to km', async () => {
+  reset({ unit_system: 'imperial' });
+  const tools = await toolsPromise;
+  const result = JSON.parse(await tools.executeToolCall('set_goal_target', { weeklyDistance: 20 }, 'user-1'));
+  assert.equal(result.weeklyDistanceKmTarget, 32.2); // 20 mi
+
+  reset({ unit_system: 'imperial' });
+  await tools.executeToolCall('set_goal_target', { weeklyDistance: 30, distanceUnit: 'km' }, 'user-1');
+  assert.equal(updates[0].weekly_distance_km_target, 30);
+});
+
+test('weeklyDistance validation: range, unit, writes nothing', async () => {
+  reset();
+  const tools = await toolsPromise;
+  assert.match(await tools.executeToolCall('set_goal_target', { weeklyDistance: 0.5 }, 'user-1'), /Error: weeklyDistanceKmTarget must be a number between 1 and 300/);
+  assert.match(await tools.executeToolCall('set_goal_target', { weeklyDistance: 400 }, 'user-1'), /Error: weeklyDistanceKmTarget/);
+  assert.match(await tools.executeToolCall('set_goal_target', { weeklyDistance: 30, distanceUnit: 'furlong' }, 'user-1'), /Error: distanceUnit must be "km" or "mi"/);
+  assert.equal(updates.length, 0);
+});

@@ -2,7 +2,7 @@ import Foundation
 import SwiftUI
 
 /// Backs the "Targets" card on Profile → Goal: target weight (unit-aware),
-/// target date and workouts per week. Loads from GET /api/profile, saves via
+/// target date, workouts per week and (endurance) weekly distance. Loads from GET /api/profile, saves via
 /// PATCH /api/profile (explicit nulls clear a field), then posts
 /// `.vitalGoalTargetsChanged` so Today/Trends can refresh.
 @MainActor
@@ -14,6 +14,7 @@ final class GoalTargetsViewModel: ObservableObject {
         var targetWeightKg: Double?
         var targetDate: String?
         var weeklySessionsTarget: Int?
+        var weeklyDistanceKmTarget: Double?
     }
 
     @Published var isLoading = true
@@ -26,6 +27,8 @@ final class GoalTargetsViewModel: ObservableObject {
     @Published var targetDate: Date = Calendar.current.date(byAdding: .day, value: 70, to: Date()) ?? Date()
     @Published var hasWeeklySessions = false
     @Published var weeklySessions = 3
+    /// Display-unit text (km or mi, per `UnitPreference`); empty = no distance target.
+    @Published var weeklyDistanceText = ""
 
     @Published private(set) var startWeightKg: Double?
     @Published private(set) var startedAtISO: String?
@@ -37,6 +40,9 @@ final class GoalTargetsViewModel: ObservableObject {
     /// field round-trips the exact kg (imperial display rounds to whole lb).
     private var loadedTargetKg: Double?
     private var seededWeightText = ""
+    /// Same round-trip trick for the weekly distance field.
+    private var loadedDistanceKm: Double?
+    private var seededDistanceText = ""
 
     private let api: APIClient
 
@@ -72,16 +78,43 @@ final class GoalTargetsViewModel: ObservableObject {
         return nil
     }
 
+    /// Parsed km for the distance text; nil when empty or unparseable.
+    private var parsedDistanceKm: Double? {
+        let trimmed = weeklyDistanceText.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return nil }
+        return UnitFormat.km(fromDistanceEntry: trimmed, units)
+    }
+
+    /// Weekly distance target in km: the exact server value while the field is
+    /// untouched, else the validated parse of what was typed.
+    var weeklyDistanceKm: Double? {
+        if weeklyDistanceText == seededDistanceText { return loadedDistanceKm }
+        return GoalTargetLogic.validWeeklyDistanceKm(parsedDistanceKm)
+    }
+
+    /// Non-nil when the text is non-empty but not a usable distance.
+    var distanceError: String? {
+        let trimmed = weeklyDistanceText.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty, weeklyDistanceText != seededDistanceText else { return nil }
+        guard GoalTargetLogic.validWeeklyDistanceKm(parsedDistanceKm) != nil else {
+            let lo = UnitFormat.distanceEntryText(km: GoalTargetLogic.minWeeklyDistanceKm, units)
+            let hi = UnitFormat.distanceEntryText(km: GoalTargetLogic.maxWeeklyDistanceKm, units)
+            return "Enter a distance between \(lo) and \(hi) \(units.distanceUnit)."
+        }
+        return nil
+    }
+
     var payload: Payload {
         Payload(
             targetWeightKg: targetKg,
             targetDate: hasTargetDate ? GoalTargetLogic.dayString(from: targetDate) : nil,
-            weeklySessionsTarget: hasWeeklySessions ? GoalTargetLogic.clampSessions(weeklySessions) : nil
+            weeklySessionsTarget: hasWeeklySessions ? GoalTargetLogic.clampSessions(weeklySessions) : nil,
+            weeklyDistanceKmTarget: weeklyDistanceKm
         )
     }
 
     var isDirty: Bool { payload != baseline }
-    var canSave: Bool { isDirty && weightError == nil && !isSaving && !isLoading }
+    var canSave: Bool { isDirty && weightError == nil && distanceError == nil && !isSaving && !isLoading }
 
     var startedLine: String? {
         GoalTargetLogic.startedLine(weightKg: startWeightKg, startedAtISO: startedAtISO, units: units)
@@ -118,6 +151,9 @@ final class GoalTargetsViewModel: ObservableObject {
         } else {
             hasWeeklySessions = false
         }
+        loadedDistanceKm = r.weeklyDistanceKmTarget
+        seededDistanceText = UnitFormat.distanceEntryText(km: r.weeklyDistanceKmTarget, units)
+        weeklyDistanceText = seededDistanceText
         startWeightKg = r.goalStartWeightKg
         startedAtISO = r.goalStartedAt
         currentWeightKg = r.profile.weightKg
@@ -137,11 +173,14 @@ final class GoalTargetsViewModel: ObservableObject {
             try await api.updateGoalTargets(
                 targetWeightKg: p.targetWeightKg,
                 targetDate: p.targetDate,
-                weeklySessionsTarget: p.weeklySessionsTarget
+                weeklySessionsTarget: p.weeklySessionsTarget,
+                weeklyDistanceKmTarget: p.weeklyDistanceKmTarget
             )
             baseline = p
             loadedTargetKg = p.targetWeightKg
             seededWeightText = targetWeightText
+            loadedDistanceKm = p.weeklyDistanceKmTarget
+            seededDistanceText = weeklyDistanceText
             // A changed target weight re-anchors the start weight server-side.
             await reloadStart()
             NotificationCenter.default.post(name: .vitalGoalTargetsChanged, object: nil)

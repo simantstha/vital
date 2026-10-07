@@ -197,4 +197,42 @@ final class GoalTargetLogicTests: XCTestCase {
         XCTAssertEqual(r.goalStartWeightKg, 82)
         XCTAssertEqual(r.goalStartedAt, "2026-09-15T10:00:00.000Z")
     }
+
+    // MARK: - Weekly distance
+
+    func testWeeklyDistanceShownForEnduranceOnly() {
+        XCTAssertTrue(GoalTargetLogic.showsWeeklyDistance(goal: "improve_endurance"))
+        XCTAssertTrue(GoalTargetLogic.showsWeeklyDistance(goal: "endurance"))
+        XCTAssertFalse(GoalTargetLogic.showsWeeklyDistance(goal: "muscle"))
+        XCTAssertFalse(GoalTargetLogic.showsWeeklyDistance(goal: "weight_loss"))
+    }
+
+    func testValidWeeklyDistanceKmRangeAndRounding() {
+        XCTAssertNil(GoalTargetLogic.validWeeklyDistanceKm(0.5))
+        XCTAssertNil(GoalTargetLogic.validWeeklyDistanceKm(301))
+        XCTAssertNil(GoalTargetLogic.validWeeklyDistanceKm(nil))
+        XCTAssertEqual(GoalTargetLogic.validWeeklyDistanceKm(30.04), 30.0)
+    }
+
+    func testDistanceEntryRoundTripsInBothUnits() throws {
+        XCTAssertEqual(UnitFormat.distanceEntryText(km: 30, .metric), "30")
+        XCTAssertEqual(UnitFormat.distanceEntryText(km: 32.2, .imperial), "20")
+        XCTAssertEqual(try XCTUnwrap(UnitFormat.km(fromDistanceEntry: "20", .imperial)), 32.18688, accuracy: 0.001)
+        XCTAssertEqual(UnitFormat.km(fromDistanceEntry: "12,5", .metric), 12.5)
+        XCTAssertNil(UnitFormat.km(fromDistanceEntry: "abc", .metric))
+    }
+
+    func testProfileResponseDecodesWeeklyDistanceTarget() throws {
+        let json = """
+        {
+          "name": "Alex", "integrations": [],
+          "stats": {"loggedDays": 1, "mealsLogged": 1, "avgHrv": null, "workouts": 0},
+          "profile": {"age": 30, "biologicalSex": "male", "heightCm": 180, "weightKg": 82},
+          "weeklyDistanceKmTarget": 30
+        }
+        """
+        let r = try JSONDecoder().decode(ProfileResponse.self, from: Data(json.utf8))
+        XCTAssertEqual(r.weeklyDistanceKmTarget, 30)
+        XCTAssertTrue(TodayViewModel.profileHasGoalTarget(r))
+    }
 }

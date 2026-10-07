@@ -153,6 +153,7 @@ struct TodayView: View {
                                     session: vm.todayMoveSession,
                                     sessionDots: vm.trainingSessionDots,
                                     weeklyOverviewText: vm.enduranceWeeklyOverviewText,
+                                    distanceProgress: vm.enduranceDistanceProgress,
                                     reconciliationText: vm.enduranceReconciliationText,
                                     onTapReconciliation: {
                                         // Same hand-off as the analysis screens'

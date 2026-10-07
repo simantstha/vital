@@ -105,6 +105,29 @@ enum UnitFormat {
         }
     }
 
+    /// Seeds/round-trips an editable weekly-distance field: up to one decimal
+    /// in the user's unit (whole numbers unadorned), empty when `km` is nil.
+    static func distanceEntryText(km: Double?, _ system: UnitSystem) -> String {
+        guard let km else { return "" }
+        let value = system == .metric ? km : UnitConvert.kmToMiles(km)
+        let rounded = (value * 10).rounded() / 10
+        return rounded.truncatingRemainder(dividingBy: 1) == 0
+            ? String(Int(rounded))
+            : String(format: "%.1f", rounded)
+    }
+
+    /// Parses the text a user typed into a distance field (accepting `,` as a
+    /// decimal separator) in `system`'s unit and converts it to km for the
+    /// API. Returns nil for unparseable input.
+    static func km(fromDistanceEntry text: String, _ system: UnitSystem) -> Double? {
+        guard let value = Double(
+            text.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: ",", with: ".")
+        ) else {
+            return nil
+        }
+        return system == .metric ? value : UnitConvert.milesToKm(value)
+    }
+
     // MARK: - Pace
 
     /// Keeps the `seconds == 60` carry from the pre-existing

@@ -253,5 +253,34 @@ final class FixtureCrossScreenConsistencyTests: XCTestCase {
         XCTAssertEqual(progress.reasons.count, 3)
         XCTAssertNotNil(progress.eta)
     }
+
+    /// Endurance: Today's this-week totals (Monday-start local week) must agree
+    /// with the goal card's distance line, and must differ from last week's
+    /// review (3 sessions, 24.5 km).
+    func test_enduranceThisWeekAgreesAcrossTodayAndGoalCardAndDiffersFromReview() throws {
+        let week = FixtureData.enduranceWeek()
+        XCTAssertEqual(week.days.count, 7)
+        XCTAssertNotEqual(week.km, 24.5, "this week must not equal last week's review volume")
+
+        let summary = json(.endurance, "/api/training/summary")
+        let volume = summary["volume"] as? [String: Any]
+        XCTAssertEqual(volume?["done"] as? Double ?? .nan, week.km, accuracy: 0.001)
+        XCTAssertEqual((summary["week"] as? [String: Any])?["completedSessions"] as? Int, week.sessions)
+        XCTAssertEqual((summary["week"] as? [String: Any])?["start"] as? String, week.start)
+
+        let (_, data) = FixtureData.response(scenario: .endurance, method: "GET", path: "/api/goal/progress", query: "")
+        let progress = try JSONDecoder().decode(GoalProgressDTO.self, from: data)
+        XCTAssertEqual(progress.target.weeklyDistanceKm, 30)
+        XCTAssertEqual(progress.distance?.thisWeekKm ?? .nan, week.km, accuracy: 0.001)
+        XCTAssertEqual(GoalProgressLogic.primaryLine(progress, system: .metric), GoalProgressLogic.distanceLine(progress, system: .metric))
+        XCTAssertTrue(progress.headline.contains("last 2 weeks vs the 2 before"), progress.headline)
+        XCTAssertFalse(progress.headline.contains("over 4 weeks"))
+
+        let profile = json(.endurance, "/api/profile")
+        XCTAssertEqual(profile["weeklyDistanceKmTarget"] as? Double, 30)
+
+        let review = json(.endurance, "/api/review/weekly")
+        XCTAssertEqual(statValue(review, "Volume")?["comparison"] as? String, "+12% vs last week")
+    }
 }
 #endif

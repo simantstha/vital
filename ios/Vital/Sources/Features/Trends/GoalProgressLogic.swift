@@ -91,16 +91,16 @@ enum GoalProgressLogic {
         progress.verdict == .needsTarget && progress.goal == "weight_loss"
     }
 
-    /// Endurance (and a muscle goal with neither target) needs a weekly
-    /// session goal instead of a weight.
+    /// Endurance (needs a weekly distance or session goal) and a muscle goal
+    /// with neither target (needs a weekly session goal) instead of a weight.
     static func needsSessionTarget(_ progress: GoalProgressDTO) -> Bool {
         progress.verdict == .needsTarget && (progress.goal == "endurance" || progress.goal == "muscle")
     }
 
     /// Any goal whose needs-target state offers a "Set target" button — it
     /// opens Profile's goal editor (`.vitalOpenGoalEditor`), which shows the
-    /// target weight field for weight/muscle goals and the "workouts per
-    /// week" stepper for muscle/endurance goals.
+    /// target weight field for weight/muscle goals, the weekly distance field
+    /// for endurance, and the "workouts per week" stepper for muscle/endurance.
     static func needsTargetPrompt(_ progress: GoalProgressDTO) -> Bool {
         needsWeightTarget(progress) || needsSessionTarget(progress)
     }
@@ -152,6 +152,37 @@ enum GoalProgressLogic {
         guard totalKg > 0 else { return nil }
         let verb = losing ? "lost" : "gained"
         return "\(weightAmount(kg: doneKg, system)) of \(weightAmount(kg: totalKg, system)) \(system.weightUnit) \(verb)"
+    }
+
+    // MARK: - Weekly distance (endurance)
+
+    /// 0...1 of this local week's distance against the weekly target (clamped),
+    /// or `nil` without a distance target / without any measured distance.
+    static func distanceFraction(_ progress: GoalProgressDTO) -> Double? {
+        guard let d = progress.distance, d.targetKm > 0,
+              let done = d.thisWeekKm, done.isFinite else { return nil }
+        return min(1, max(0, done / d.targetKm))
+    }
+
+    /// A km value as a bare number in the user's unit, one decimal, trailing
+    /// ".0" dropped: `(30, .metric)` -> "30", `(30, .imperial)` -> "18.6".
+    static func distanceAmount(km: Double, _ system: UnitSystem) -> String {
+        trimmedNumber(system == .metric ? km : UnitConvert.kmToMiles(km))
+    }
+
+    /// "24.5 of 30 km this week" (imperial: "15.2 of 18.6 mi this week") — the
+    /// endurance primary progress. Calendar week (Monday–today, user-local).
+    /// `nil` without a distance target or a measured distance.
+    static func distanceLine(_ progress: GoalProgressDTO, system: UnitSystem) -> String? {
+        guard let d = progress.distance, d.targetKm > 0, let done = d.thisWeekKm else { return nil }
+        return "\(distanceAmount(km: done, system)) of \(distanceAmount(km: d.targetKm, system)) \(system.distanceUnit) this week"
+    }
+
+    /// "4-week avg 23.2 km a week" — explicitly labelled so it is never
+    /// confused with this week's total. `nil` without distance data.
+    static func distanceAverageLine(_ progress: GoalProgressDTO, system: UnitSystem) -> String? {
+        guard let d = progress.distance, let avg = d.avg4wKm else { return nil }
+        return "4-week avg \(distanceAmount(km: avg, system)) \(system.distanceUnit) a week"
     }
 
     // MARK: - Dates
@@ -289,8 +320,13 @@ enum GoalProgressLogic {
     /// everything else falls back to the server `headline`.
     static func primaryLine(_ progress: GoalProgressDTO, system: UnitSystem) -> String {
         if needsWeightTarget(progress) { return "Set a target weight to see your progress" }
-        if needsSessionTarget(progress) { return "Set a weekly session goal to see your progress" }
+        if needsSessionTarget(progress) {
+            return progress.goal == "endurance"
+                ? "Set a weekly distance or session goal to see your progress"
+                : "Set a weekly session goal to see your progress"
+        }
         if let text = insufficientDataText(progress) { return text }
+        if let line = distanceLine(progress, system: system) { return line }
         switch progress.verdict {
         case .needsTarget, .insufficientData:
             return headlineWithoutVerdict(progress.headline) ?? label(for: progress.verdict)

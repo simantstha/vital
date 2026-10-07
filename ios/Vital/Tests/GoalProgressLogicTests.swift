@@ -138,7 +138,9 @@ final class GoalProgressLogicTests: XCTestCase {
         XCTAssertFalse(GoalProgressLogic.needsWeightTarget(progress))
         XCTAssertTrue(GoalProgressLogic.needsSessionTarget(progress))
         XCTAssertTrue(GoalProgressLogic.needsTargetPrompt(progress), "endurance gets a Set target button too")
-        XCTAssertEqual(GoalProgressLogic.primaryLine(progress, system: .metric), "Set a weekly session goal to see your progress")
+        XCTAssertEqual(GoalProgressLogic.primaryLine(progress, system: .metric), "Set a weekly distance or session goal to see your progress")
+        let muscle = GoalProgressDTO(goal: "muscle", verdict: .needsTarget)
+        XCTAssertEqual(GoalProgressLogic.primaryLine(muscle, system: .metric), "Set a weekly session goal to see your progress")
         let general = GoalProgressDTO(goal: "general", verdict: .needsTarget)
         XCTAssertFalse(GoalProgressLogic.needsTargetPrompt(general))
     }
@@ -298,5 +300,44 @@ final class GoalProgressLogicTests: XCTestCase {
         XCTAssertNil(progress.eta)
         XCTAssertEqual(progress.reasons, [])
         XCTAssertEqual(progress.verdict, .onTrack)
+    }
+
+    // MARK: - Endurance weekly distance
+
+    private func distanceProgress(thisWeek: Double? = 24.5, avg: Double? = 23.2) -> GoalProgressDTO {
+        GoalProgressDTO(
+            goal: "endurance",
+            target: .init(weeklyDistanceKm: 30),
+            distance: .init(targetKm: 30, thisWeekKm: thisWeek, avg4wKm: avg, weekStart: "2026-10-05"),
+            verdict: .building,
+            headline: "Building — distance up 12% (last 2 weeks vs the 2 before)"
+        )
+    }
+
+    func testDistanceLineIsPrimaryAndUnitAware() {
+        let p = distanceProgress()
+        XCTAssertEqual(GoalProgressLogic.distanceLine(p, system: .metric), "24.5 of 30 km this week")
+        XCTAssertEqual(GoalProgressLogic.primaryLine(p, system: .metric), "24.5 of 30 km this week")
+        XCTAssertEqual(GoalProgressLogic.distanceLine(p, system: .imperial), "15.2 of 18.6 mi this week")
+        XCTAssertEqual(GoalProgressLogic.distanceAverageLine(p, system: .metric), "4-week avg 23.2 km a week")
+    }
+
+    func testDistanceFractionClampedAndNilWithoutData() throws {
+        XCTAssertEqual(try XCTUnwrap(GoalProgressLogic.distanceFraction(distanceProgress(thisWeek: 15))), 0.5, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(GoalProgressLogic.distanceFraction(distanceProgress(thisWeek: 45))), 1, accuracy: 0.001)
+        XCTAssertNil(GoalProgressLogic.distanceFraction(distanceProgress(thisWeek: nil)))
+        XCTAssertNil(GoalProgressLogic.distanceLine(distanceProgress(thisWeek: nil), system: .metric))
+    }
+
+    func testProgressDTODecodesDistanceBlock() throws {
+        let json = """
+        {"goal":"endurance","target":{"weightKg":null,"date":null,"weeklySessions":null,"weeklyDistanceKm":30},
+         "distance":{"targetKm":30,"thisWeekKm":8.5,"avg4wKm":null,"weekStart":"2026-10-05","text":"8.5 of 30 km this week"},
+         "verdict":"building","headline":"x","reasons":[]}
+        """
+        let p = try JSONDecoder().decode(GoalProgressDTO.self, from: Data(json.utf8))
+        XCTAssertEqual(p.target.weeklyDistanceKm, 30)
+        XCTAssertEqual(p.distance?.thisWeekKm, 8.5)
+        XCTAssertNil(p.distance?.avg4wKm)
     }
 }

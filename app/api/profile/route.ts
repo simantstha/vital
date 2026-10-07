@@ -33,6 +33,7 @@
  *   targetWeightKg:      number | null,   // users.target_weight_kg
  *   targetDate:          string | null,   // users.target_date, 'YYYY-MM-DD'
  *   weeklySessionsTarget: number | null,  // users.weekly_sessions_target
+ *   weeklyDistanceKmTarget: number | null, // users.weekly_distance_km_target (km on the wire)
  *   goalStartWeightKg:   number | null,   // users.goal_start_weight_kg
  *   goalStartedAt:       string | null,   // ISO timestamp, users.goal_started_at
  * }
@@ -55,6 +56,7 @@
  *     targetWeightKg?: number | null,       // 30–300; null clears
  *     targetDate?: string | null,           // 'YYYY-MM-DD', future and <= 3 years out; null clears
  *     weeklySessionsTarget?: integer | null, // 1–14; null clears
+ *     weeklyDistanceKmTarget?: number | null, // 1–300 km; null clears
  *   }
  *
  * Effects:
@@ -68,8 +70,8 @@
  *   - unitSystem          → users.unit_system (strictly validated — 400 on a
  *     present-but-invalid value, unlike onboarding's lenient normalize-on-write).
  *
- *   - targetWeightKg / targetDate / weeklySessionsTarget → users.target_weight_kg /
- *     target_date / weekly_sessions_target. When targetWeightKg changes to a new
+ *   - targetWeightKg / targetDate / weeklySessionsTarget / weeklyDistanceKmTarget →
+ *     users.target_weight_kg / target_date / weekly_sessions_target / weekly_distance_km_target. When targetWeightKg changes to a new
  *     non-null value, goal progress re-anchors: users.goal_started_at = now and
  *     users.goal_start_weight_kg = latest trend weight (null if no weigh-ins).
  *     (A goal-TYPE change re-anchors the same way, in PATCH /api/diet-goal.)
@@ -89,7 +91,7 @@ import { parseProfileDetails, updateIdentityLines, formatSleepSubtitle } from '@
 import { importLegacyWeightLogIfPresent, logWeightEntry } from '@/lib/weightRepository';
 import { localDayKey, pickTimeZone } from '@/lib/localDay';
 import { parseUnitSystem } from '@/lib/units';
-import { parseTargetDate, parseTargetWeightKg, parseWeeklySessionsTarget } from '@/lib/goalTarget';
+import { parseTargetDate, parseTargetWeightKg, parseWeeklySessionsTarget, parseWeeklyDistanceKmTarget } from '@/lib/goalTarget';
 import { buildGoalRestart } from '@/lib/goalStart';
 
 export const dynamic = 'force-dynamic';
@@ -126,6 +128,7 @@ export async function GET(request: Request): Promise<NextResponse> {
         target_weight_kg: schema.users.target_weight_kg,
         target_date: schema.users.target_date,
         weekly_sessions_target: schema.users.weekly_sessions_target,
+        weekly_distance_km_target: schema.users.weekly_distance_km_target,
         goal_start_weight_kg: schema.users.goal_start_weight_kg,
         goal_started_at: schema.users.goal_started_at,
       })
@@ -218,6 +221,7 @@ export async function GET(request: Request): Promise<NextResponse> {
     targetWeightKg: userRow[0]?.target_weight_kg ?? null,
     targetDate: userRow[0]?.target_date ?? null,
     weeklySessionsTarget: userRow[0]?.weekly_sessions_target ?? null,
+    weeklyDistanceKmTarget: userRow[0]?.weekly_distance_km_target ?? null,
     goalStartWeightKg: userRow[0]?.goal_start_weight_kg ?? null,
     goalStartedAt: userRow[0]?.goal_started_at ? new Date(userRow[0].goal_started_at).toISOString() : null,
   });
@@ -250,7 +254,7 @@ export async function PATCH(request: Request): Promise<NextResponse> {
 
   const {
     name, age, heightCm, weightKg, sleepGoalMinutes, lightsOutMinutes, unitSystem,
-    targetWeightKg, targetDate, weeklySessionsTarget,
+    targetWeightKg, targetDate, weeklySessionsTarget, weeklyDistanceKmTarget,
   } = body;
 
   // ── Validation ───────────────────────────────────────────────────────────
@@ -322,6 +326,16 @@ export async function PATCH(request: Request): Promise<NextResponse> {
       const r = parseWeeklySessionsTarget(weeklySessionsTarget);
       if (!r.ok) return NextResponse.json({ error: r.error }, { status: 400 });
       parsedWeeklySessions = r.value;
+    }
+  }
+  let parsedWeeklyDistance: number | null | undefined;
+  if (weeklyDistanceKmTarget !== undefined) {
+    if (weeklyDistanceKmTarget === null) {
+      parsedWeeklyDistance = null;
+    } else {
+      const r = parseWeeklyDistanceKmTarget(weeklyDistanceKmTarget);
+      if (!r.ok) return NextResponse.json({ error: r.error }, { status: 400 });
+      parsedWeeklyDistance = r.value;
     }
   }
 
@@ -399,10 +413,11 @@ export async function PATCH(request: Request): Promise<NextResponse> {
   // ── Goal target ───────────────────────────────────────────────────────────
   // Runs after the weight log above so a same-request weightKg is already part
   // of the trend used for the re-anchored start weight.
-  if (parsedTargetWeight !== undefined || parsedTargetDate !== undefined || parsedWeeklySessions !== undefined) {
+  if (parsedTargetWeight !== undefined || parsedTargetDate !== undefined || parsedWeeklySessions !== undefined || parsedWeeklyDistance !== undefined) {
     const goalUpdate: Partial<typeof schema.users.$inferInsert> = {};
     if (parsedTargetDate !== undefined) goalUpdate.target_date = parsedTargetDate;
     if (parsedWeeklySessions !== undefined) goalUpdate.weekly_sessions_target = parsedWeeklySessions;
+    if (parsedWeeklyDistance !== undefined) goalUpdate.weekly_distance_km_target = parsedWeeklyDistance;
 
     if (parsedTargetWeight !== undefined) {
       goalUpdate.target_weight_kg = parsedTargetWeight;

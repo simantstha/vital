@@ -10,7 +10,8 @@
  * Response (camelCase; every unknown value is null, never guessed):
  * {
  *   goal: 'weight_loss' | 'muscle' | 'endurance' | 'general',
- *   target:  { weightKg, date, weeklySessions },
+ *   target:  { weightKg, date, weeklySessions, weeklyDistanceKm },
+ *   distance: { targetKm, thisWeekKm, avg4wKm, weekStart, text } | null,   // endurance + distance target only
  *   current: { weightKg, startWeightKg, changeKg, progressPct },
  *   ratePerWeek: { kg, pctBodyweight },          // signed: negative = losing
  *   safeBand: { minPct, maxPct } | null,

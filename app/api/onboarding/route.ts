@@ -9,7 +9,7 @@
  *
  * Request body:
  *   {
- *     basics:    { name, dob, sex, heightCm, weightKg, units, goal, targetDate?, targetWeightKg?, weeklySessionsTarget? },
+ *     basics:    { name, dob, sex, heightCm, weightKg, units, goal, targetDate?, targetWeightKg?, weeklySessionsTarget?, weeklyDistanceKmTarget? },
  *     training?: { frequency?, types?, experience?, volumeNotes? },
  *     health?:   { injuries?, conditions?, medications? },
  *     lifestyle?:{ sleepSchedule?, stress?, diet? },
@@ -45,7 +45,8 @@
  *   - Goal target (roadmap v5): basics.targetDate ('YYYY-MM-DD', future, <= 3
  *     years out) -> users.target_date and basics.targetWeightKg (30-300 kg)
  *     -> users.target_weight_kg, basics.weeklySessionsTarget (integer 1-14) ->
- *     users.weekly_sessions_target. These are optional, so a present-but-
+ *     users.weekly_sessions_target, basics.weeklyDistanceKmTarget (1-300 km) ->
+ *     users.weekly_distance_km_target. These are optional, so a present-but-
  *     invalid value is DROPPED (column written null, warning logged) — never a
  *     400 that would block signup.
  *     When the goal maps to a known DietGoal, users.goal_started_at = now and
@@ -63,7 +64,7 @@ import { readCoreProfile, writeCoreProfile } from '@/lib/coreProfileStore';
 import { resolveUnitSystem } from '@/lib/units';
 import { ensureHealthConstraintNodes } from '@/lib/brain/healthConstraints';
 import { goalFromOnboarding } from '@/lib/brain/dietBudget';
-import { parseTargetDate, parseTargetWeightKg, parseWeeklySessionsTarget } from '@/lib/goalTarget';
+import { parseTargetDate, parseTargetWeightKg, parseWeeklySessionsTarget, parseWeeklyDistanceKmTarget } from '@/lib/goalTarget';
 import { localDayKey, pickTimeZone } from '@/lib/localDay';
 
 export const dynamic = 'force-dynamic';
@@ -81,6 +82,7 @@ interface Basics {
   targetDate?: string;
   targetWeightKg?: number;
   weeklySessionsTarget?: number;
+  weeklyDistanceKmTarget?: number;
 }
 
 interface Training {
@@ -275,6 +277,8 @@ export async function POST(request: Request): Promise<NextResponse> {
   let targetWeightKg: number | null | undefined;
   let targetDate: string | null | undefined;
   let weeklySessionsTarget: number | null | undefined;
+  const rawWeeklyDistance = basics.weeklyDistanceKmTarget as unknown;
+  let weeklyDistanceKmTarget: number | null | undefined;
   if (rawTargetWeight != null) {
     const parsed = parseTargetWeightKg(rawTargetWeight);
     if (parsed.ok) {
@@ -291,6 +295,15 @@ export async function POST(request: Request): Promise<NextResponse> {
     } else {
       console.warn(`[onboarding] dropping invalid weeklySessionsTarget for user ${userId}: ${parsed.error}`);
       weeklySessionsTarget = null;
+    }
+  }
+  if (rawWeeklyDistance != null) {
+    const parsed = parseWeeklyDistanceKmTarget(rawWeeklyDistance);
+    if (parsed.ok) {
+      weeklyDistanceKmTarget = parsed.value;
+    } else {
+      console.warn(`[onboarding] dropping invalid weeklyDistanceKmTarget for user ${userId}: ${parsed.error}`);
+      weeklyDistanceKmTarget = null;
     }
   }
   if (rawTargetDate != null) {
@@ -369,6 +382,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       target_weight_kg: targetWeightKg,
       target_date: targetDate,
       weekly_sessions_target: weeklySessionsTarget,
+      weekly_distance_km_target: weeklyDistanceKmTarget,
       // A known goal starts the progress clock from the onboarding weight.
       goal_started_at: mappedGoal ? new Date() : undefined,
       goal_start_weight_kg: mappedGoal ? basics.weightKg : undefined,

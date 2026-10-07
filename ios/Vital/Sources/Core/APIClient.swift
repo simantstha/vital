@@ -383,13 +383,14 @@ struct APIClient {
         try validate(response)
     }
 
-    /// PATCH /api/profile with the three goal targets. Unlike `updateProfile`
+    /// PATCH /api/profile with the four goal targets. Unlike `updateProfile`
     /// (which omits nil fields), every field is always sent and a nil value is
     /// encoded as an explicit JSON `null`, which the server treats as "clear".
     func updateGoalTargets(
         targetWeightKg: Double?,
         targetDate: String?,
-        weeklySessionsTarget: Int?
+        weeklySessionsTarget: Int?,
+        weeklyDistanceKmTarget: Double? = nil
     ) async throws {
         guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/profile") else {
             throw APIError.invalidURL
@@ -402,16 +403,21 @@ struct APIClient {
             let targetWeightKg: Double?
             let targetDate: String?
             let weeklySessionsTarget: Int?
-            enum CodingKeys: String, CodingKey { case targetWeightKg, targetDate, weeklySessionsTarget }
+            let weeklyDistanceKmTarget: Double?
+            enum CodingKeys: String, CodingKey { case targetWeightKg, targetDate, weeklySessionsTarget, weeklyDistanceKmTarget }
             func encode(to encoder: Encoder) throws {
                 var c = encoder.container(keyedBy: CodingKeys.self)
                 try c.encode(targetWeightKg, forKey: .targetWeightKg)
                 try c.encode(targetDate, forKey: .targetDate)
                 try c.encode(weeklySessionsTarget, forKey: .weeklySessionsTarget)
+                try c.encode(weeklyDistanceKmTarget, forKey: .weeklyDistanceKmTarget)
             }
         }
         request.httpBody = try encoder.encode(
-            Body(targetWeightKg: targetWeightKg, targetDate: targetDate, weeklySessionsTarget: weeklySessionsTarget)
+            Body(
+                targetWeightKg: targetWeightKg, targetDate: targetDate,
+                weeklySessionsTarget: weeklySessionsTarget, weeklyDistanceKmTarget: weeklyDistanceKmTarget
+            )
         )
         let (_, response) = try await session.data(for: request)
         try validate(response)
@@ -1682,6 +1688,7 @@ struct OnboardingBasics: Encodable {
     let targetDate: String? // 'YYYY-MM-DD'
     let targetWeightKg: Double? // optional; server drops invalid values
     let weeklySessionsTarget: Int? // optional, 1–14
+    let weeklyDistanceKmTarget: Double? // optional, endurance only, 1–300 km (km on the wire)
 }
 
 struct OnboardingTraining: Encodable {
@@ -2114,13 +2121,16 @@ struct GoalProgressDTO: Decodable, Equatable {
         let weightKg: Double?
         let date: String?
         let weeklySessions: Int?
+        /// Endurance weekly distance target, km (users.weekly_distance_km_target).
+        let weeklyDistanceKm: Double?
 
-        private enum CodingKeys: String, CodingKey { case weightKg, date, weeklySessions }
+        private enum CodingKeys: String, CodingKey { case weightKg, date, weeklySessions, weeklyDistanceKm }
 
-        init(weightKg: Double? = nil, date: String? = nil, weeklySessions: Int? = nil) {
+        init(weightKg: Double? = nil, date: String? = nil, weeklySessions: Int? = nil, weeklyDistanceKm: Double? = nil) {
             self.weightKg = weightKg
             self.date = date
             self.weeklySessions = weeklySessions
+            self.weeklyDistanceKm = weeklyDistanceKm
         }
 
         init(from decoder: Decoder) throws {
@@ -2128,6 +2138,35 @@ struct GoalProgressDTO: Decodable, Equatable {
             weightKg = try? c.decode(Double.self, forKey: .weightKg)
             date = try? c.decode(String.self, forKey: .date)
             weeklySessions = try? c.decode(Int.self, forKey: .weeklySessions)
+            weeklyDistanceKm = try? c.decode(Double.self, forKey: .weeklyDistanceKm)
+        }
+    }
+
+    /// Endurance + weekly distance target only (`distance` is `null` otherwise):
+    /// this local calendar week's (Mon–today) distance against the target.
+    /// `thisWeekKm` / `avg4wKm` are `nil` when no workout in the last 28 days
+    /// carries a distance (honesty rule — never a guessed 0).
+    struct Distance: Decodable, Equatable {
+        let targetKm: Double
+        let thisWeekKm: Double?
+        let avg4wKm: Double?
+        let weekStart: String?
+
+        private enum CodingKeys: String, CodingKey { case targetKm, thisWeekKm, avg4wKm, weekStart }
+
+        init(targetKm: Double, thisWeekKm: Double? = nil, avg4wKm: Double? = nil, weekStart: String? = nil) {
+            self.targetKm = targetKm
+            self.thisWeekKm = thisWeekKm
+            self.avg4wKm = avg4wKm
+            self.weekStart = weekStart
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            targetKm = try c.decode(Double.self, forKey: .targetKm)
+            thisWeekKm = try? c.decode(Double.self, forKey: .thisWeekKm)
+            avg4wKm = try? c.decode(Double.self, forKey: .avg4wKm)
+            weekStart = try? c.decode(String.self, forKey: .weekStart)
         }
     }
 
@@ -2206,6 +2245,8 @@ struct GoalProgressDTO: Decodable, Equatable {
     /// so a future goal never fails decoding).
     let goal: String
     let target: Target
+    /// Endurance weekly-distance progress; `nil` for every other goal / no distance target.
+    let distance: Distance?
     let current: Current
     let ratePerWeek: Rate
     let safeBand: SafeBand?
@@ -2219,13 +2260,14 @@ struct GoalProgressDTO: Decodable, Equatable {
     let dataSufficiency: DataSufficiency
 
     private enum CodingKeys: String, CodingKey {
-        case goal, target, current, ratePerWeek, safeBand, eta, onPaceForTargetDate
+        case goal, target, distance, current, ratePerWeek, safeBand, eta, onPaceForTargetDate
         case verdict, headline, reasons, dataSufficiency
     }
 
     init(
         goal: String,
         target: Target = Target(),
+        distance: Distance? = nil,
         current: Current = Current(),
         ratePerWeek: Rate = Rate(),
         safeBand: SafeBand? = nil,
@@ -2238,6 +2280,7 @@ struct GoalProgressDTO: Decodable, Equatable {
     ) {
         self.goal = goal
         self.target = target
+        self.distance = distance
         self.current = current
         self.ratePerWeek = ratePerWeek
         self.safeBand = safeBand
@@ -2253,6 +2296,7 @@ struct GoalProgressDTO: Decodable, Equatable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         goal = (try? c.decode(String.self, forKey: .goal)) ?? "general"
         target = (try? c.decode(Target.self, forKey: .target)) ?? Target()
+        distance = try? c.decode(Distance.self, forKey: .distance)
         current = (try? c.decode(Current.self, forKey: .current)) ?? Current()
         ratePerWeek = (try? c.decode(Rate.self, forKey: .ratePerWeek)) ?? Rate()
         safeBand = try? c.decode(SafeBand.self, forKey: .safeBand)
@@ -2620,6 +2664,8 @@ struct ProfileResponse: Decodable {
     /// 'YYYY-MM-DD'.
     let targetDate: String?
     let weeklySessionsTarget: Int?
+    /// users.weekly_distance_km_target (km); null when unset.
+    let weeklyDistanceKmTarget: Double?
     let goalStartWeightKg: Double?
     /// ISO timestamp.
     let goalStartedAt: String?

@@ -42,6 +42,7 @@ final class ProfileViewModel: ObservableObject {
     @Published var budgetGoalId: String = ""
     @Published var targetWeightKg: Double? = nil
     @Published var weeklySessionsTarget: Int? = nil
+    @Published var weeklyDistanceKmTarget: Double? = nil
 
     /// "Lose weight · 76 kg" / "Build muscle · 4×/week" — the goal plus its
     /// target when one is set. Reads the live unit preference like
@@ -50,25 +51,29 @@ final class ProfileViewModel: ObservableObject {
         Self.goalRowLabel(
             goalLabel: budgetGoalLabel, goalId: budgetGoalId,
             targetWeightKg: targetWeightKg, weeklySessions: weeklySessionsTarget,
+            weeklyDistanceKm: weeklyDistanceKmTarget,
             system: UnitPreference.shared.current
         )
     }
 
     /// Pure composition of the Goal row label. Weight-loss shows the target
     /// weight; muscle prefers the weekly session target, falling back to the
-    /// target weight; endurance shows the weekly sessions; general just the
-    /// goal name. A missing target leaves the bare goal label.
+    /// target weight; endurance shows the weekly distance ("30 km/week", unit-
+    /// aware), falling back to the weekly sessions; general just the goal
+    /// name. A missing target leaves the bare goal label.
     nonisolated static func goalRowLabel(
-        goalLabel: String, goalId: String, targetWeightKg: Double?, weeklySessions: Int?, system: UnitSystem
+        goalLabel: String, goalId: String, targetWeightKg: Double?, weeklySessions: Int?,
+        weeklyDistanceKm: Double? = nil, system: UnitSystem
     ) -> String {
         guard !goalLabel.isEmpty else { return goalLabel }
         let weight = targetWeightKg.map { UnitFormat.weight(kg: $0, system) }
         let sessions = weeklySessions.map { "\($0)\u{00D7}/week" }
+        let distance = weeklyDistanceKm.map { "\(UnitFormat.distance(km: $0, system))/week" }
         let suffix: String?
         switch goalId {
         case "weight_loss": suffix = weight
         case "muscle":      suffix = sessions ?? weight
-        case "endurance":   suffix = sessions
+        case "endurance":   suffix = distance ?? sessions
         default:            suffix = nil
         }
         guard let suffix else { return goalLabel }
@@ -82,6 +87,7 @@ final class ProfileViewModel: ObservableObject {
         if let r = try? await apiClient.fetchProfile() {
             targetWeightKg = r.targetWeightKg
             weeklySessionsTarget = r.weeklySessionsTarget
+            weeklyDistanceKmTarget = r.weeklyDistanceKmTarget
         }
     }
 
@@ -120,6 +126,7 @@ final class ProfileViewModel: ObservableObject {
             calibration = response.calibration
             targetWeightKg = response.targetWeightKg
             weeklySessionsTarget = response.weeklySessionsTarget
+            weeklyDistanceKmTarget = response.weeklyDistanceKmTarget
             // Locale-default adoption PATCH: opportunistic housekeeping, not a
             // user-initiated action, so failure is silent and simply retries
             // next launch (see UnitPreference.applyServerValue).

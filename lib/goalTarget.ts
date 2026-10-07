@@ -11,6 +11,8 @@ export const TARGET_WEIGHT_MAX_KG = 300;
 export const TARGET_DATE_MAX_YEARS = 3;
 export const WEEKLY_SESSIONS_MIN = 1;
 export const WEEKLY_SESSIONS_MAX = 14;
+export const WEEKLY_DISTANCE_MIN_KM = 1;
+export const WEEKLY_DISTANCE_MAX_KM = 300;
 
 export type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -55,4 +57,12 @@ export function parseWeeklySessionsTarget(v: unknown): ParseResult<number> {
     return { ok: false, error: `weeklySessionsTarget must be an integer between ${WEEKLY_SESSIONS_MIN} and ${WEEKLY_SESSIONS_MAX}.` };
   }
   return { ok: true, value: v };
+}
+
+/** Weekly endurance distance target in km: finite number within 1–300, rounded to 0.1 km. */
+export function parseWeeklyDistanceKmTarget(v: unknown): ParseResult<number> {
+  if (typeof v !== 'number' || !Number.isFinite(v) || v < WEEKLY_DISTANCE_MIN_KM || v > WEEKLY_DISTANCE_MAX_KM) {
+    return { ok: false, error: `weeklyDistanceKmTarget must be a number between ${WEEKLY_DISTANCE_MIN_KM} and ${WEEKLY_DISTANCE_MAX_KM}.` };
+  }
+  return { ok: true, value: Math.round(v * 10) / 10 };
 }

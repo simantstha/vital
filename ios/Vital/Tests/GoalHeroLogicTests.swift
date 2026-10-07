@@ -404,6 +404,8 @@ final class GoalHeroLogicTests: XCTestCase {
         XCTAssertEqual(ProfileViewModel.goalRowLabel(goalLabel: "Build muscle", goalId: "muscle", targetWeightKg: 82, weeklySessions: 4, system: .metric), "Build muscle \u{00B7} 4\u{00D7}/week")
         XCTAssertEqual(ProfileViewModel.goalRowLabel(goalLabel: "Build muscle", goalId: "muscle", targetWeightKg: 82, weeklySessions: nil, system: .metric), "Build muscle \u{00B7} 82 kg")
         XCTAssertEqual(ProfileViewModel.goalRowLabel(goalLabel: "Endurance", goalId: "endurance", targetWeightKg: nil, weeklySessions: 3, system: .metric), "Endurance \u{00B7} 3\u{00D7}/week")
+        XCTAssertEqual(ProfileViewModel.goalRowLabel(goalLabel: "Endurance", goalId: "endurance", targetWeightKg: nil, weeklySessions: 3, weeklyDistanceKm: 30, system: .metric), "Endurance \u{00B7} 30 km/week")
+        XCTAssertEqual(ProfileViewModel.goalRowLabel(goalLabel: "Endurance", goalId: "endurance", targetWeightKg: nil, weeklySessions: nil, weeklyDistanceKm: 32.2, system: .imperial), "Endurance \u{00B7} 20 mi/week")
         XCTAssertEqual(ProfileViewModel.goalRowLabel(goalLabel: "Lose weight", goalId: "weight_loss", targetWeightKg: nil, weeklySessions: nil, system: .metric), "Lose weight")
         XCTAssertEqual(ProfileViewModel.goalRowLabel(goalLabel: "Maintain", goalId: "general", targetWeightKg: 70, weeklySessions: 3, system: .metric), "Maintain")
         XCTAssertEqual(ProfileViewModel.goalRowLabel(goalLabel: "", goalId: "", targetWeightKg: nil, weeklySessions: nil, system: .metric), "")
