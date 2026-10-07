@@ -413,6 +413,15 @@ enum FixtureData {
         return f
     }()
 
+    /// "Dec 30" for the day `daysAgo` days back (negative = future).
+    private static func raceMonthDay(_ daysAgo: Int) -> String {
+        let date = Calendar.current.date(byAdding: .day, value: -daysAgo, to: Date()) ?? Date()
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "MMM d"
+        return f.string(from: date)
+    }
+
     private static func dayString(_ daysAgo: Int) -> String {
         let date = Calendar.current.date(byAdding: .day, value: -daysAgo, to: Date()) ?? Date()
         return dayFormatter.string(from: date)
@@ -1546,6 +1555,8 @@ enum FixtureData {
             "targetDate": profile.goal == "weight_loss" ? dayString(-70) : NSNull(),
             "weeklySessionsTarget": profile.goal == "muscle" ? 4 : NSNull(),
             "weeklyDistanceKmTarget": profile.goal == "endurance" ? enduranceWeeklyDistanceTargetKm : NSNull(),
+            "raceDate": profile.goal == "endurance" ? dayString(-enduranceRaceDaysOut) : NSNull(),
+            "raceDistanceKm": profile.goal == "endurance" ? enduranceRaceDistanceKm : NSNull(),
             "goalStartWeightKg": profile.goal == "weight_loss" ? 82.0 : NSNull(),
             "goalStartedAt": profile.goal == "weight_loss" ? isoDaysAgo(21) : NSNull(),
         ]
@@ -1614,6 +1625,9 @@ enum FixtureData {
 
     /// Endurance weekly distance target (users.weekly_distance_km_target).
     private static let enduranceWeeklyDistanceTargetKm = 30.0
+    /// Endurance fixture race: a half marathon 12 weeks out (relative to now).
+    private static let enduranceRaceDaysOut = 84
+    private static let enduranceRaceDistanceKm = 21.1
 
     /// Earlier-in-the-week runs (index 0 = Monday) the endurance persona has
     /// logged by today; today's tempo run (`workoutKm`) is added on top. Chosen
@@ -1992,6 +2006,10 @@ enum FixtureData {
                     "targetKm": target, "thisWeekKm": week.km, "avg4wKm": 23.2,
                     "weekStart": week.start, "text": thisWeekText,
                 ],
+                "race": [
+                    "date": dayString(-enduranceRaceDaysOut), "distanceKm": enduranceRaceDistanceKm,
+                    "label": "Half marathon", "weeksToGo": enduranceRaceDaysOut / 7, "daysToGo": enduranceRaceDaysOut,
+                ],
                 "current": ["weightKg": profile.weightKg, "startWeightKg": none, "changeKg": none, "progressPct": none],
                 "ratePerWeek": ["kg": none, "pctBodyweight": none],
                 "safeBand": none,
@@ -2001,12 +2019,11 @@ enum FixtureData {
                 // ONE volume definition everywhere (goal card, Today line):
                 // last 2 weeks vs the 2 before — always labelled.
                 "headline": "Building — distance up 12% (last 2 weeks vs the 2 before)",
+                // Server caps reasons at 3 and leads with the race countdown.
                 "reasons": [
+                    reason("race", "Half marathon in \(enduranceRaceDaysOut / 7) weeks (\(raceMonthDay(-enduranceRaceDaysOut)))", "neutral"),
                     reason("week_distance", thisWeekText, week.km >= target ? "good" : "neutral"),
                     reason("volume", "Weekly training distance up 12% (21.9 km → 24.5 km a week, last 2 weeks vs the 2 before)", "good"),
-                    // Derived from the same profile constants as Today/Trends
-                    // (today's HRV vs the series' normal).
-                    reason("hrv", "HRV is \(abs(gapToNormal("hrv_sdnn", profile, scenario))) ms below your normal (\(Int(profile.hrv.rounded())) vs \(Int(normalBase("hrv_sdnn", profile, scenario).rounded())) ms)", "watch"),
                 ],
                 "dataSufficiency": ["weighIns": 4, "needed": 3, "sessionsLast28d": 12],
             ]

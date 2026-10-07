@@ -66,6 +66,12 @@ export function formatGoalProgressLines(gp: GoalProgress, units: UnitSystem): st
   if (gp.distance?.thisWeekKm != null) nowBits.push(gp.distance.text);
   if (gp.eta) nowBits.push(`ETA ${gp.eta}`);
   if (gp.onPaceForTargetDate != null) nowBits.push(gp.onPaceForTargetDate ? 'on pace for target date' : 'not on pace for target date');
+  if (gp.race) {
+    const when = gp.race.daysToGo === 0 ? 'today'
+      : gp.race.weeksToGo === 0 ? `in ${gp.race.daysToGo} day${gp.race.daysToGo === 1 ? '' : 's'}`
+      : `in ${gp.race.weeksToGo} week${gp.race.weeksToGo === 1 ? '' : 's'}`;
+    lines.push(`- Race: ${gp.race.label} on ${gp.race.date} (${when})`);
+  }
   if (nowBits.length) lines.push(`- Now: ${nowBits.join('; ')}`);
 
   lines.push(`- Verdict: ${gp.verdict} — "${gp.headline}"`);

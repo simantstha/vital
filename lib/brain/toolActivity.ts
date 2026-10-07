@@ -394,6 +394,7 @@ export function toolResultSummary(
           : `${roundTo(distKm, 1)} km`;
         bits.push(`${d}/week`);
       }
+      if (typeof parsed.raceDate === 'string') bits.push(`race ${parsed.raceDate}`);
       return bits.length ? truncate(`Goal set · ${bits.join(' ')}`) : undefined;
     }
 

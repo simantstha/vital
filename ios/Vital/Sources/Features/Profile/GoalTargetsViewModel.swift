@@ -15,6 +15,8 @@ final class GoalTargetsViewModel: ObservableObject {
         var targetDate: String?
         var weeklySessionsTarget: Int?
         var weeklyDistanceKmTarget: Double?
+        var raceDate: String?
+        var raceDistanceKm: Double?
     }
 
     @Published var isLoading = true
@@ -29,6 +31,10 @@ final class GoalTargetsViewModel: ObservableObject {
     @Published var weeklySessions = 3
     /// Display-unit text (km or mi, per `UnitPreference`); empty = no distance target.
     @Published var weeklyDistanceText = ""
+    /// Optional endurance race: date toggle + picker, distance via presets.
+    @Published var hasRaceDate = false
+    @Published var raceDate: Date = Calendar.current.date(byAdding: .day, value: 84, to: Date()) ?? Date()
+    @Published var raceDistanceKm: Double = RaceLogic.defaultDistanceKm
 
     @Published private(set) var startWeightKg: Double?
     @Published private(set) var startedAtISO: String?
@@ -109,8 +115,15 @@ final class GoalTargetsViewModel: ObservableObject {
             targetWeightKg: targetKg,
             targetDate: hasTargetDate ? GoalTargetLogic.dayString(from: targetDate) : nil,
             weeklySessionsTarget: hasWeeklySessions ? GoalTargetLogic.clampSessions(weeklySessions) : nil,
-            weeklyDistanceKmTarget: weeklyDistanceKm
+            weeklyDistanceKmTarget: weeklyDistanceKm,
+            raceDate: hasRaceDate ? GoalTargetLogic.dayString(from: raceDate) : nil,
+            raceDistanceKm: hasRaceDate ? raceDistanceKm : nil
         )
+    }
+
+    /// Drops the race (date and distance) — the Save button then sends nulls.
+    func clearRace() {
+        hasRaceDate = false
     }
 
     var isDirty: Bool { payload != baseline }
@@ -154,6 +167,17 @@ final class GoalTargetsViewModel: ObservableObject {
         loadedDistanceKm = r.weeklyDistanceKmTarget
         seededDistanceText = UnitFormat.distanceEntryText(km: r.weeklyDistanceKmTarget, units)
         weeklyDistanceText = seededDistanceText
+        // A race that has already passed reads as "no race": re-saving other
+        // targets must not resend a date the server would now reject.
+        if let day = r.raceDate, let date = GoalTargetLogic.date(fromDay: day),
+           date >= Calendar.current.startOfDay(for: Date()) {
+            hasRaceDate = true
+            raceDate = date
+            raceDistanceKm = RaceLogic.validDistanceKm(r.raceDistanceKm) ?? RaceLogic.defaultDistanceKm
+        } else {
+            hasRaceDate = false
+            raceDistanceKm = RaceLogic.defaultDistanceKm
+        }
         startWeightKg = r.goalStartWeightKg
         startedAtISO = r.goalStartedAt
         currentWeightKg = r.profile.weightKg
@@ -174,7 +198,9 @@ final class GoalTargetsViewModel: ObservableObject {
                 targetWeightKg: p.targetWeightKg,
                 targetDate: p.targetDate,
                 weeklySessionsTarget: p.weeklySessionsTarget,
-                weeklyDistanceKmTarget: p.weeklyDistanceKmTarget
+                weeklyDistanceKmTarget: p.weeklyDistanceKmTarget,
+                raceDate: p.raceDate,
+                raceDistanceKm: p.raceDistanceKm
             )
             baseline = p
             loadedTargetKg = p.targetWeightKg

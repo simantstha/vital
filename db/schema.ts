@@ -49,6 +49,8 @@ export const users = p.pgTable('users', {
   goal_started_at:       p.timestamp('goal_started_at', { withTimezone: true }), // when the current goal/target began
   weekly_sessions_target: p.integer('weekly_sessions_target'),                 // 1–14 training sessions/week; null → none set
   weekly_distance_km_target: p.real('weekly_distance_km_target'),              // 1–300 km/week (endurance); null → none set
+  race_date:             p.date('race_date'),                                  // 'YYYY-MM-DD' endurance race day; null → no race
+  race_distance_km:      p.real('race_distance_km'),                           // 1–250 km (presets 5/10/21.1/42.2); null → unspecified
 
   // Manual "new chat" boundary (lib/brain/conversationWindow.ts). Set to now()
   // when the user taps "New chat"; messages at/before this timestamp are

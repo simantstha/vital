@@ -119,6 +119,7 @@ export async function loadGoalProgress(
       weeklySessions: user.weekly_sessions_target ?? null,
       weeklyDistanceKm: user.weekly_distance_km_target ?? null,
     },
+    race: { date: user.race_date ?? null, distanceKm: user.race_distance_km ?? null },
     start: {
       weightKg: user.goal_start_weight_kg ?? null,
       startedAt: user.goal_started_at ? user.goal_started_at.toISOString() : null,

@@ -485,6 +485,13 @@ final class TodayViewModel: ObservableObject {
         return (text, fraction)
     }
 
+    /// "Half marathon · 12 weeks to go" for the top of the endurance hero, from
+    /// `/api/goal/progress`'s `race`. `nil` when no (future) race is set.
+    var enduranceRaceText: String? {
+        guard let race = goalProgress?.race else { return nil }
+        return RaceLogic.heroLine(race)
+    }
+
     /// True when the endurance hero already shows the weekly-distance progress
     /// line + bar, so the goal line below it must not repeat it.
     var goalLineHeroShowsDistance: Bool {

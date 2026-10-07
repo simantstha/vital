@@ -445,6 +445,9 @@ final class ScreenshotTests: XCTestCase {
                 // (fixture's stable target: 30 km/week; weekday-dependent value: X.X km done).
                 XCTAssertTrue(waitForText(app, containing: "of 30 km this week"),
                                "Today's endurance hero should show distance progress with the weekly target [\(appearance)]")
+                // Race countdown line ("Half marathon · 12 weeks to go") from the fixture's race.
+                XCTAssertTrue(waitForText(app, containing: "Half marathon"),
+                               "Today's endurance hero should show the race countdown [\(appearance)]")
             }
 
             if scenario == "new_user" {

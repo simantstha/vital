@@ -171,3 +171,22 @@ test('weeklyDistance validation: range, unit, writes nothing', async () => {
   assert.match(await tools.executeToolCall('set_goal_target', { weeklyDistance: 30, distanceUnit: 'furlong' }, 'user-1'), /Error: distanceUnit must be "km" or "mi"/);
   assert.equal(updates.length, 0);
 });
+
+test('sets and validates raceDate / raceDistanceKm', async () => {
+  reset();
+  const date = futureDay(84);
+  const tools = await toolsPromise;
+  const ok = JSON.parse(await tools.executeToolCall('set_goal_target', { raceDate: date, raceDistanceKm: 21.1 }, 'user-1'));
+  assert.equal(ok.ok, true);
+  assert.equal(ok.raceDate, date);
+  assert.equal(ok.raceDistanceKm, 21.1);
+  assert.equal(updates[0].race_date, date);
+  assert.equal(updates[0].race_distance_km, 21.1);
+
+  reset();
+  const past = await tools.executeToolCall('set_goal_target', { raceDate: futureDay(-3) }, 'user-1');
+  assert.match(past, /^Error: raceDate/);
+  const far = await tools.executeToolCall('set_goal_target', { raceDistanceKm: 400 }, 'user-1');
+  assert.match(far, /^Error: raceDistanceKm/);
+  assert.equal(updates.length, 0);
+});

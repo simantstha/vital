@@ -315,6 +315,12 @@ final class FixtureCrossScreenConsistencyTests: XCTestCase {
         let profile = json(.endurance, "/api/profile")
         XCTAssertEqual(profile["weeklyDistanceKmTarget"] as? Double, 30)
 
+        // The race is the same on the profile and on the goal-progress payload.
+        XCTAssertEqual(progress.race?.label, "Half marathon")
+        XCTAssertEqual(progress.race?.weeksToGo, 12)
+        XCTAssertEqual(progress.race?.date, profile["raceDate"] as? String)
+        XCTAssertEqual(profile["raceDistanceKm"] as? Double, 21.1)
+
         let review = json(.endurance, "/api/review/weekly")
         XCTAssertEqual(statValue(review, "Volume")?["comparison"] as? String, "+12% vs last week")
     }
