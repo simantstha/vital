@@ -28,6 +28,25 @@ enum TrendsDeltaFormat {
         return unit.isEmpty ? numberText : "\(numberText) \(unit)"
     }
 
+    /// Hero pill copy for the metric detail screen, measured against the
+    /// same "normal" band the chart and range tile draw (mean30 ± sd30) —
+    /// not against the mean, which made "6 above" disagree with a band edge
+    /// only 3 below the value. Inside the band → "Within your normal
+    /// (49–55)"; outside → distance to the nearest edge.
+    static func bandPillText(value: Double, lower: Double, upper: Double, spec: MetricSpec, system: UnitSystem) -> String {
+        let lo = formattedNumber(lower, decimals: spec.decimals)
+        let hi = formattedNumber(upper, decimals: spec.decimals)
+        if value > upper {
+            let m = magnitudeText(value - upper, spec: spec, system: system, includeUnit: true)
+            return "\(arrow(1)) \(m) above your normal range"
+        }
+        if value < lower {
+            let m = magnitudeText(lower - value, spec: spec, system: system, includeUnit: true)
+            return "\(arrow(-1)) \(m) below your normal range"
+        }
+        return "Within your normal (\(lo)–\(hi))"
+    }
+
     private static var cachedFormatters: [Int: NumberFormatter] = [:]
 
     static func formattedNumber(_ value: Double, decimals: Int) -> String {

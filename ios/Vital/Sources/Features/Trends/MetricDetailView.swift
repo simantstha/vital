@@ -172,20 +172,14 @@ private extension MetricDetailView {
     var displayedDate: Date? { snappedPoint?.date ?? rawPoints.last?.date }
     var displayedVerdict: Verdict { evaluate(displayedValue) }
 
-    /// "↑ 7 ms above your normal" / "↓ 3 bpm below your normal" / "In your
-    /// normal range" — `nil` while calibrating or with no data, when there's
-    /// no "normal" yet to compare against.
+    /// "↑ 3 ms above your normal range" / "↓ 3 bpm below your normal range" /
+    /// "Within your normal (49–55)" — distance is to the band edge the chart
+    /// draws. `nil` while calibrating or with no data.
     var deltaPillText: String? {
         switch displayedVerdict {
-        case .above, .below:
-            guard let spec, let value = displayedValue, let mean30 = vm.series?.baseline?.mean30 else { return nil }
-            let delta = value - mean30
-            let arrow = TrendsDeltaFormat.arrow(delta)
-            let magnitude = TrendsDeltaFormat.magnitudeText(delta, spec: spec, system: unitPref.current, includeUnit: true)
-            let direction = delta >= 0 ? "above" : "below"
-            return "\(arrow) \(magnitude) \(direction) your normal"
-        case .normal:
-            return "In your normal range"
+        case .above, .below, .normal:
+            guard let spec, let value = displayedValue, let band = bandBounds else { return nil }
+            return TrendsDeltaFormat.bandPillText(value: value, lower: band.lower, upper: band.upper, spec: spec, system: unitPref.current)
         case .calibrating, .noData:
             return nil
         }

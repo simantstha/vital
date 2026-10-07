@@ -7,6 +7,19 @@ final class TrendsDeltaFormatTests: XCTestCase {
     private var weightSpec: MetricSpec { MetricCatalog.spec(for: "body_mass_kg")! } // 1 decimal
     private var stepsSpec: MetricSpec { MetricCatalog.spec(for: "steps")! } // unitless
 
+    func testBandPillInsideBandShowsRange() {
+        XCTAssertEqual(TrendsDeltaFormat.bandPillText(value: 52, lower: 49, upper: 55, spec: hrvSpec, system: .metric), "Within your normal (49–55)")
+        XCTAssertEqual(TrendsDeltaFormat.bandPillText(value: 55, lower: 49, upper: 55, spec: hrvSpec, system: .metric), "Within your normal (49–55)")
+    }
+
+    func testBandPillAboveMeasuresToUpperEdge() {
+        XCTAssertEqual(TrendsDeltaFormat.bandPillText(value: 58, lower: 49, upper: 55, spec: hrvSpec, system: .metric), "↑ 3 ms above your normal range")
+    }
+
+    func testBandPillBelowMeasuresToLowerEdge() {
+        XCTAssertEqual(TrendsDeltaFormat.bandPillText(value: 45, lower: 49, upper: 55, spec: hrvSpec, system: .metric), "↓ 4 ms below your normal range")
+    }
+
     func testArrowIsUpForNonNegativeDeltaIncludingZero() {
         XCTAssertEqual(TrendsDeltaFormat.arrow(7), "↑")
         XCTAssertEqual(TrendsDeltaFormat.arrow(0), "↑")
