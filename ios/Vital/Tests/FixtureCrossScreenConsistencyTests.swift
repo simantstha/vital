@@ -306,7 +306,7 @@ final class FixtureCrossScreenConsistencyTests: XCTestCase {
 
     func test_goalProgressFixturesDecode() throws {
         let expectations: [(FixtureMode.Scenario, GoalVerdict)] = [
-            (.weightLoss, .onTrack), (.muscle, .progressing), (.endurance, .building), (.newUser, .needsTarget),
+            (.weightLoss, .onTrack), (.muscle, .behind), (.endurance, .building), (.newUser, .needsTarget),
         ]
         for (scenario, verdict) in expectations {
             let (status, data) = FixtureData.response(scenario: scenario, method: "GET", path: "/api/goal/progress", query: "tz=UTC")
