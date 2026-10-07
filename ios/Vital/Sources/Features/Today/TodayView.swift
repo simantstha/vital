@@ -97,7 +97,11 @@ struct TodayView: View {
                                     healthConnected: HealthKitManager.didRequestAuthorization && !vm.showHealthKitRecoveryBanner,
                                     onLogMeal: { showLogSheet = true },
                                     onLogSecondItem: { onChecklistSecondItemTap() },
-                                    onConnectHealth: { _ = HealthKitManager.openHealthApp() }
+                                    goalTargetSet: vm.hasGoalTarget,
+                                    onConnectHealth: { _ = HealthKitManager.openHealthApp() },
+                                    onSetGoalTarget: {
+                                        NotificationCenter.default.post(name: .vitalOpenGoalEditor, object: nil)
+                                    }
                                 )
                                 .staggeredAppear(index: 1)
 
@@ -371,6 +375,7 @@ struct TodayView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .vitalGoalTargetsChanged)) { _ in
             vm.refreshGoalProgress()
+            Task { await vm.refreshGoalTargetFlag() }
         }
         .sheet(isPresented: $showGoalProgress) {
             if let progress = vm.goalProgress {

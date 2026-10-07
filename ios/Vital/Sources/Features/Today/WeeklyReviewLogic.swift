@@ -22,6 +22,10 @@ enum WeeklyReviewLogic {
         ignoreWindow: Bool = false
     ) -> Bool {
         guard let response, !response.isSeen else { return false }
+        // A "log a bit more" nudge isn't a review: showing a card whose only
+        // action leads to the same nudge is noise for a brand-new user. Trends'
+        // row says when the first real review lands instead.
+        guard !isNotEnoughData(response.review) else { return false }
         if ignoreWindow { return true }
         guard let ended = daysSinceWeekEnd(response.review, now: now, calendar: calendar) else { return false }
         return cardWindowDays.contains(ended)
@@ -49,6 +53,28 @@ enum WeeklyReviewLogic {
     /// no verdict chip, no win/slip rows.
     static func isNotEnoughData(_ review: WeeklyReviewDTO) -> Bool {
         !review.sufficient || review.stats.isEmpty
+    }
+
+    /// The next Monday strictly after `now` (reviews are generated for the
+    /// week that just ended, on Monday).
+    static func nextMonday(after now: Date, calendar: Calendar = .current) -> Date {
+        let weekday = calendar.component(.weekday, from: now) // Sunday = 1 ... Monday = 2
+        var ahead = (2 - weekday + 7) % 7
+        if ahead == 0 { ahead = 7 }
+        let start = calendar.startOfDay(for: now)
+        return calendar.date(byAdding: .day, value: ahead, to: start) ?? start
+    }
+
+    /// Trends row subtitle while there isn't enough data: "First review on
+    /// Mon Oct 12". Honest about timing — the review needs a few logged days
+    /// in the week before it, so the copy says so.
+    static func firstReviewText(now: Date, calendar: Calendar = .current) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.calendar = calendar
+        f.timeZone = calendar.timeZone
+        f.dateFormat = "EEE MMM d"
+        return "First review on \(f.string(from: nextMonday(after: now, calendar: calendar))) — log a few days before then"
     }
 
     static func verdictLabel(_ review: WeeklyReviewDTO) -> String? {

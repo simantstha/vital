@@ -487,7 +487,7 @@ private extension MetricDetailView {
                     .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 4]))
                     .foregroundStyle(Theme.Colors.textSecondary.opacity(0.55))
                     .annotation(position: .top, alignment: .trailing, spacing: 2) {
-                        Text("\(formattedAverage(mean30)) avg")
+                        Text("\(formattedAverage(mean30)) normal")
                             .font(.system(size: 9))
                             .foregroundStyle(Theme.Colors.textTertiary)
                             .padding(.trailing, 6)
@@ -573,10 +573,18 @@ private extension MetricDetailView {
         }
         .chartXSelection(value: $rawSelection)
         .chartXAxis {
-            AxisMarks(values: .automatic(desiredCount: 4)) { _ in
-                AxisValueLabel(format: .dateTime.month(.abbreviated).day())
-                    .font(.system(size: 10))
-                    .foregroundStyle(Theme.Colors.textTertiary)
+            AxisMarks(values: .automatic(desiredCount: 3)) { value in
+                // Fixed "MMM d" that never truncates ("O…"): the label view
+                // is `fixedSize`d so the last tick keeps its full width.
+                AxisValueLabel {
+                    if let date = value.as(Date.self) {
+                        Text(date, format: .dateTime.month(.abbreviated).day())
+                            .font(.system(size: 10))
+                            .foregroundStyle(Theme.Colors.textTertiary)
+                            .lineLimit(1)
+                            .fixedSize()
+                    }
+                }
             }
         }
         .chartYAxis {
@@ -689,7 +697,7 @@ private extension MetricDetailView {
                 Rectangle()
                     .fill(Theme.Colors.textSecondary.opacity(0.6))
                     .frame(width: 11, height: 2)
-                Text("30-day average")
+                Text("30-day normal")
                     .font(.system(size: 10.5))
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
@@ -725,7 +733,7 @@ private extension MetricDetailView {
     var statsRow: some View {
         HStack(spacing: Theme.Spacing.sm) {
             statButton(.low, label: "Low", value: formattedStat(rangeLowPoint?.value))
-            statButton(.average, label: "Average", value: formattedStat(rangeAverage))
+            statButton(.average, label: "Avg · \(vm.range.label)", value: formattedStat(rangeAverage))
             statButton(.high, label: "High", value: formattedStat(rangeHighPoint?.value))
             StatBadge(label: "Normal (range)", value: normalRangeText)
         }

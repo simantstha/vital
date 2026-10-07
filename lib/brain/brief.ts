@@ -616,7 +616,7 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
       .sort((a, b) => b.weekStart.localeCompare(a.weekStart))
       .slice(0, 4);
   }
-  const goalFocus: BriefGoalFocus = { goal, progress: goalProgress, progression, weeklyVolume };
+  const goalFocus: BriefGoalFocus = { goal, progress: goalProgress, progression, weeklyVolume, todayKey };
 
   // ── Delegate to lib/claude.ts generateDailyBrief ─────────────────────────
   return generateDailyBrief(userId, {
