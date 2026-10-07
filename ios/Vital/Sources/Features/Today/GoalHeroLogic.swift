@@ -114,11 +114,11 @@ enum MuscleHeroLogic {
             .joined(separator: " ")
     }
 
-    /// "2 of 4 sessions" — `nil` alongside `sessionDots` when there's
+    /// "2 of 4 sessions this week" — `nil` alongside `sessionDots` when there's
     /// nothing planned this week to count.
     static func sessionsThisWeekText(done: Int, total: Int) -> String? {
         guard total > 0 else { return nil }
-        return "\(min(max(done, 0), total)) of \(total) sessions"
+        return "\(min(max(done, 0), total)) of \(total) sessions this week"
     }
 
     /// "N sessions this week" — the no-plan-data fallback for when

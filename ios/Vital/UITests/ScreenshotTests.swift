@@ -388,7 +388,7 @@ final class ScreenshotTests: XCTestCase {
                 XCTAssertTrue(waitForText(app, containing: "140 kg"),
                                "Today's muscle hero should show the last-lift weight [\(appearance)]")
                 // "This week" — 2 of 4 planned sessions (fixture-unique).
-                XCTAssertTrue(waitForText(app, containing: "2 of 4 sessions"),
+                XCTAssertTrue(waitForText(app, containing: "2 of 4 sessions this week"),
                                "Today's muscle hero should show the this-week session count [\(appearance)]")
             }
 

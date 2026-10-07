@@ -97,7 +97,7 @@ final class GoalHeroLogicTests: XCTestCase {
     }
 
     func testSessionsThisWeekTextFormatsDoneOfTotal() {
-        XCTAssertEqual(MuscleHeroLogic.sessionsThisWeekText(done: 2, total: 4), "2 of 4 sessions")
+        XCTAssertEqual(MuscleHeroLogic.sessionsThisWeekText(done: 2, total: 4), "2 of 4 sessions this week")
     }
 
     // MARK: - EnduranceHeroLogic.readinessWord

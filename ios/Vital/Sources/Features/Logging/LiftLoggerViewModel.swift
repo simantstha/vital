@@ -89,9 +89,13 @@ final class LiftLoggerViewModel: ObservableObject {
         isLoading = true
 
         var candidates: [String] = []
+        var preferredCanonicalKey: String? = nil
         if let preferredExercise {
             let key = LiftLoggerLogic.canonicalKey(from: preferredExercise)
-            if !key.isEmpty { candidates.append(key) }
+            if !key.isEmpty {
+                candidates.append(key)
+                preferredCanonicalKey = key
+            }
         }
 
         do {
@@ -116,27 +120,36 @@ final class LiftLoggerViewModel: ObservableObject {
             }
         }
 
-        for key in candidates {
-            do {
-                let last = try await api.fetchLastWorkoutSession(exercise: key)
-                let drafts = LiftLoggerLogic.drafts(from: last.sets, system: system)
-                if !drafts.isEmpty {
-                    exercises = drafts
-                    seeded = drafts
-                    repeatedSessionId = last.sets.first?.sessionId
-                    break
-                }
-            } catch {
-                if !error.isCancellation {
-                    print("[Vital] LiftLoggerViewModel.load last session failed: \(error.localizedDescription)")
-                }
-            }
+        // One coherent rule: when recent sessions load, seed the form with the
+        // WHOLE newest session and point the "Repeat: …" menu at it, so the
+        // label, the note and the form always describe the same thing.
+        if let latest = recentSessions.first {
+            applySession(latest, preferredFirst: preferredCanonicalKey)
         }
 
-        // Nothing seeded via /last (older backend, fail-soft) but the sessions
-        // list has history: repeat the newest one.
-        if exercises.isEmpty, let latest = recentSessions.first {
-            applySession(latest)
+        // Sessions call failed/empty (or had nothing usable): fall back to
+        // `/api/workouts/last`. Its session isn't in the menu, so
+        // `repeatedSessionId` stays nil and the label reads "pick a session".
+        if exercises.isEmpty {
+            for key in candidates {
+                do {
+                    let last = try await api.fetchLastWorkoutSession(exercise: key)
+                    let drafts = Self.reordered(
+                        LiftLoggerLogic.drafts(from: last.sets, system: system),
+                        preferredFirst: preferredCanonicalKey
+                    )
+                    if !drafts.isEmpty {
+                        exercises = drafts
+                        seeded = drafts
+                        repeatedSessionId = nil
+                        break
+                    }
+                } catch {
+                    if !error.isCancellation {
+                        print("[Vital] LiftLoggerViewModel.load last session failed: \(error.localizedDescription)")
+                    }
+                }
+            }
         }
 
         isLoading = false
@@ -160,8 +173,18 @@ final class LiftLoggerViewModel: ObservableObject {
         applySession(session)
     }
 
-    private func applySession(_ session: RecentSessionDTO) {
-        let drafts = LiftLoggerLogic.drafts(from: session, system: system)
+    /// Puts the preferred exercise (if present) first, keeping the rest in order.
+    private static func reordered(_ drafts: [LiftDraftExercise], preferredFirst key: String?) -> [LiftDraftExercise] {
+        guard let key, let i = drafts.firstIndex(where: { $0.key == key }), i > 0 else { return drafts }
+        var out = drafts
+        out.insert(out.remove(at: i), at: 0)
+        return out
+    }
+
+    private func applySession(_ session: RecentSessionDTO, preferredFirst key: String? = nil) {
+        let drafts = Self.reordered(
+            LiftLoggerLogic.drafts(from: session, system: system), preferredFirst: key
+        )
         guard !drafts.isEmpty else { return }
         exercises = drafts
         seeded = drafts
