@@ -877,7 +877,7 @@ final class CoachViewModel: ObservableObject {
             // either state. Either way this reuses data already being
             // fetched for restoration — no extra network call.
             let text = (try? await api.fetchCoachOpener())
-                ?? Self.fallbackOpenerText(isVerifiedNewConversation: hasRestoredConversation)
+                ?? Self.fallbackOpenerText(isVerifiedNewConversation: hasRestoredConversation, goal: userGoal)
             // The user may have started typing/sending while we waited — only
             // seed the opener if the transcript is still empty.
             if rows.isEmpty {
@@ -905,8 +905,93 @@ final class CoachViewModel: ObservableObject {
     /// with no `@MainActor` hop. `isVerifiedNewConversation` should be
     /// `hasRestoredConversation` read right after `restoreConversation()`
     /// returns with an empty transcript (see `loadOpener()`).
-    nonisolated static func fallbackOpenerText(isVerifiedNewConversation: Bool) -> String {
-        isVerifiedNewConversation ? newUserFallbackOpener : returningFallbackOpener
+    ///
+    /// `goal` is the onboarding-collected diet goal ("weight_loss" / "muscle" /
+    /// "endurance" / "general"). When known, a verified-new fallback states
+    /// it instead of asking for it (`newUserGoalOpener`); an unknown goal
+    /// keeps the generic `newUserFallbackOpener`.
+    nonisolated static func fallbackOpenerText(isVerifiedNewConversation: Bool, goal: String? = nil) -> String {
+        guard isVerifiedNewConversation else { return returningFallbackOpener }
+        return newUserGoalOpener(goal: goal) ?? newUserFallbackOpener
+    }
+
+    /// "Your goal is to lose weight. Once you've logged a few days I'll tell
+    /// you how it's going — want to set a target weight?" Mirrors
+    /// `lib/brain/openerText.ts`'s `newUserGoalOpener`. `nil` for an
+    /// unknown/absent goal.
+    nonisolated static func newUserGoalOpener(goal: String?) -> String? {
+        let lead: String
+        let ask: String
+        switch goal {
+        case "weight_loss":
+            lead = "Your goal is to lose weight."
+            ask = "want to set a target weight?"
+        case "muscle":
+            lead = "Your goal is to build muscle."
+            ask = "want to set a target weight or a weekly session goal?"
+        case "endurance":
+            lead = "Your goal is to build endurance."
+            ask = "want to set a weekly distance goal?"
+        case "general":
+            lead = "Your goal is general health."
+            ask = "what would you like to start with?"
+        default:
+            return nil
+        }
+        return "\(lead) Once you've logged a few days I'll tell you how it's going — \(ask)"
+    }
+
+    /// One line stating the goal status for an established user, composed
+    /// from the SAME `GoalProgressLogic` copy the goal cards use (weight
+    /// amounts + pace vs target date), unit-aware. `nil` when there is no
+    /// real progress to state (needs target / not enough data) so the caller
+    /// keeps a neutral opener. Mirrors `lib/brain/openerText.ts`'s
+    /// `goalOpenerLine` — the server composes the live opener; this keeps the
+    /// two in step for any client-side use.
+    nonisolated static func goalStatusOpener(
+        _ progress: GoalProgressDTO,
+        system: UnitSystem,
+        now: Date = Date(),
+        locale: Locale = .current
+    ) -> String? {
+        guard progress.verdict != .needsTarget, progress.verdict != .insufficientData else { return nil }
+        let invite = "What would you like to dig into?"
+        if let target = progress.target.weightKg,
+           let start = progress.current.startWeightKg,
+           let current = progress.current.weightKg {
+            let losing = target < start
+            let total = abs(start - target)
+            let done = max(0, losing ? start - current : current - start)
+            if total > 0, done > 0 {
+                let amount = GoalProgressLogic.weightAmount(kg: done, system)
+                let whole = GoalProgressLogic.weightAmount(kg: total, system)
+                let base = "You're \(amount) of \(whole) \(system.weightUnit) \(losing ? "down" : "up")"
+                if let pace = paceClause(progress, now: now, locale: locale) {
+                    return "\(base) and \(pace). \(invite)"
+                }
+                return "\(base). \(invite)"
+            }
+        }
+        let headline = progress.headline
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        guard !headline.isEmpty else { return nil }
+        return "Goal check-in: \(headline). \(invite)"
+    }
+
+    /// "about 2 weeks ahead of your Dec 30 target" / "right on pace for your
+    /// Dec 30 target", lower-cased to read mid-sentence.
+    private nonisolated static func paceClause(_ progress: GoalProgressDTO, now: Date, locale: Locale) -> String? {
+        guard let relation = GoalProgressLogic.paceRelation(progress),
+              let date = GoalProgressLogic.dateText(progress.target.date, now: now, locale: locale) else { return nil }
+        switch relation {
+        case .onPace:
+            return "right on pace for your \(date) target"
+        case .ahead(let weeks):
+            return "about \(weeks) \(weeks == 1 ? "week" : "weeks") ahead of your \(date) target"
+        case .behind(let weeks):
+            return "about \(weeks) \(weeks == 1 ? "week" : "weeks") behind your \(date) target"
+        }
     }
 
     /// Pure send-enabled rule: whitespace-only or empty input never sends.
