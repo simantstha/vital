@@ -41,6 +41,10 @@ struct WeeklyReviewContent: View {
                 .lineLimit(compact ? 2 : nil)
                 .fixedSize(horizontal: false, vertical: true)
                 .multilineTextAlignment(.leading)
+                // Compact card lives on Today, where the trailing voice FAB
+                // (60pt + 20pt margin) floats over the last card at rest —
+                // leave room so the headline never sits underneath it.
+                .padding(.trailing, compact ? 48 : 0)
                 .accessibilityIdentifier("weeklyReview.headline")
 
             if !compact, !WeeklyReviewLogic.isNotEnoughData(review) {
