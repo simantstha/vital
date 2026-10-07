@@ -45,6 +45,18 @@ enum WeightHeroLogic {
         return "Trend \(UnitFormat.weight(kg: latest.trendKg, system))"
     }
 
+    /// Today hero header variant of `trendHeadline`: once the trend is
+    /// established the number is already shown as "Now 82 kg" under the
+    /// sparkline, so the header drops "Trend 82 kg" (persona review: same
+    /// number twice) and leads with the rate line. Only the honest
+    /// placeholder still renders here.
+    static func heroHeaderTrendText(trend: WeightTrendDTO?, system: UnitSystem) -> String? {
+        guard let trend, trend.established, trend.days.last != nil else {
+            return trendPlaceholderText
+        }
+        return nil
+    }
+
     /// Dietitian-review guard (2026-09-23): a weekly rate loses more meaning
     /// as noise dominates the shorter the observed history is, so it stays
     /// hidden entirely until weigh-ins span at least this many calendar

@@ -310,23 +310,26 @@ private extension LiftLoggerView {
         .padding(.vertical, Theme.Spacing.xs)
     }
 
-    /// Small "W" chip: tap to flag a warm-up set (excluded from working-set
+    /// Outlined "+ Warm-up" chip (filled "Warm-up" when on): tap to flag a warm-up set (excluded from working-set
     /// stats server-side).
     func warmupToggle(number: Int, set: Binding<LiftDraftSet>) -> some View {
         let on = set.wrappedValue.isWarmup
         return Button {
             set.wrappedValue.isWarmup.toggle()
         } label: {
-            Text(on ? "Warm-up" : "W")
-                .font(.system(size: 12, weight: .bold))
+            Text(on ? "Warm-up" : "+ Warm-up")
+                .font(.system(size: 12, weight: on ? .bold : .medium))
                 .foregroundStyle(on ? Theme.Colors.onAccent : Theme.Colors.textSecondary)
-                .padding(.horizontal, on ? 10 : 8)
+                .padding(.horizontal, 10)
                 .padding(.vertical, 3)
-                .background(Capsule().fill(on ? Theme.Colors.accent : Theme.Colors.glassFill))
+                .background(Capsule().fill(on ? Theme.Colors.accent : Color.clear))
+                .overlay(
+                    Capsule().strokeBorder(Theme.Colors.textSecondary.opacity(on ? 0 : 0.5), lineWidth: 1)
+                )
         }
         .buttonStyle(.borderless)
-        .accessibilityLabel("Set \(number) warm-up")
-        .accessibilityValue(on ? "on" : "off")
+        .accessibilityLabel(on ? "Set \(number) warm-up set, double tap to unmark" : "Mark set \(number) as warm-up")
+        .accessibilityAddTraits(on ? .isSelected : [])
         .accessibilityIdentifier("liftLogger.warmup")
     }
 

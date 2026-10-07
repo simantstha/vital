@@ -12,6 +12,21 @@ final class TodayStreakTests: XCTestCase {
         XCTAssertEqual(response.streakDays, 14)
     }
 
+    func testStreakChipTextHiddenUntilLoadedAndWhenZero() async {
+        let viewModel = TodayViewModel(fetchStreak: { StreakResponse(streakDays: 0) })
+        XCTAssertNil(viewModel.streakChipText)
+        await viewModel.refreshStreak()
+        XCTAssertNil(viewModel.streakChipText, "loaded zero streak shows no chip")
+
+        let one = TodayViewModel(fetchStreak: { StreakResponse(streakDays: 1) })
+        await one.refreshStreak()
+        XCTAssertEqual(one.streakChipText, "1 day in a row")
+
+        let six = TodayViewModel(fetchStreak: { StreakResponse(streakDays: 6) })
+        await six.refreshStreak()
+        XCTAssertEqual(six.streakChipText, "6 days in a row")
+    }
+
     func testSuccessfulRefreshPublishesFetchedStreak() async {
         let viewModel = TodayViewModel(fetchStreak: { StreakResponse(streakDays: 7) })
 

@@ -3,7 +3,7 @@ import SwiftUI
 /// Pure decisions + copy for the Weekly Review card (Today), the detail sheet
 /// and the Trends row (v5 Wave 3, docs/roadmap-v5-goal-progress.md). No view
 /// code here so it is unit-testable (`WeeklyReviewLogicTests`). Verdict
-/// labels / tones come from `GoalProgressLogic` — one vocabulary app-wide.
+/// tones come from `GoalProgressLogic`; the pill wording is week-scoped.
 enum WeeklyReviewLogic {
 
     // MARK: - When the Today card shows
@@ -77,8 +77,23 @@ enum WeeklyReviewLogic {
         return "First review on \(f.string(from: nextMonday(after: now, calendar: calendar))) — log a few days before then"
     }
 
+    /// Week-scoped pill word. Deliberately NOT the goal-status vocabulary
+    /// ("On track" etc.) so the weekly card's pill never looks identical to
+    /// the goal pill elsewhere (persona review). `nil` when not enough data.
     static func verdictLabel(_ review: WeeklyReviewDTO) -> String? {
-        isNotEnoughData(review) ? nil : GoalProgressLogic.label(for: review.verdict)
+        isNotEnoughData(review) ? nil : weekLabel(for: review.verdict)
+    }
+
+    static func weekLabel(for verdict: GoalVerdict) -> String {
+        switch verdict {
+        case .onTrack, .ahead, .progressing, .building: return "Good week"
+        case .behind, .holding:              return "Mixed week"
+        case .stalled, .tooFast:             return "Tough week"
+        // "Lighter week" is reserved for a deliberate deload (no such verdict
+        // exists in the enum; lib/weeklyReview.ts only uses it in a stat line).
+        case .needsTarget:                   return "Set a target"
+        case .insufficientData:              return "Early days"
+        }
     }
 
     static func color(for tone: GoalReasonTone) -> Color {

@@ -289,7 +289,7 @@ private extension TrendsView {
             HStack(spacing: Theme.Spacing.md) {
                 learningRing(progress)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Learning your normal")
+                    Text(CalibrationCopy.todayTitle)
                         .font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(Theme.Colors.textPrimary)
                     Text(progress.bodyText)

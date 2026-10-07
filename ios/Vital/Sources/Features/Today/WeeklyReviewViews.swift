@@ -45,8 +45,11 @@ struct WeeklyReviewContent: View {
                         .foregroundStyle(Theme.Colors.textTertiary)
                 }
                 Spacer(minLength: 0)
-                if WeeklyReviewLogic.verdictLabel(review) != nil {
-                    GoalVerdictChip(verdict: review.verdict)
+                if let weekWord = WeeklyReviewLogic.verdictLabel(review) {
+                    Chip(
+                        text: weekWord,
+                        tint: GoalProgressLogic.color(for: GoalProgressLogic.tone(for: review.verdict))
+                    )
                 }
             }
 

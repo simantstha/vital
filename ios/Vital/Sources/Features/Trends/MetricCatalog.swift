@@ -305,7 +305,7 @@ enum MetricExplainer {
 /// the 14-day wait in context — never "0 of 14 days" on its own, which new
 /// users read as "the app is useless for two weeks".
 /// The ONE "days collected toward the 14-day baseline" number, shared by
-/// Today's calibration card, Trends' "Learning your normal" ring and
+/// Today's calibration card, Trends' "Getting to know your normal" ring and
 /// Profile's percent. It is the smallest `dataDays` across the three
 /// recovery metrics in the API's `calibration` block, clamped to 0...14 —
 /// the same field `/api/today` and `/api/trends` both send.
@@ -336,7 +336,7 @@ enum CalibrationCopy {
         return "Calorie, weight and workout tracking work today. Recovery insights get personal after \(totalDays) days of data (\(done) of \(totalDays))."
     }
 
-    /// Trends' "Learning your normal" card body. `daysRemaining == 0` means
+    /// Trends' "Getting to know your normal" card body. `daysRemaining == 0` means
     /// enough calendar history but not enough real variation yet.
     static func trendsBody(daysRemaining: Int) -> String {
         guard daysRemaining > 0 else {

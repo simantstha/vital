@@ -259,7 +259,7 @@ private extension MetricDetailView {
             HStack(spacing: Theme.Spacing.md) {
                 calibrationRing
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Learning your normal")
+                    Text(CalibrationCopy.todayTitle)
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(Theme.Colors.textPrimary)
                     Text(stillLearningCopy)

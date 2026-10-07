@@ -593,7 +593,7 @@ private extension TodayView {
                         Button {
                             Task { await vm.resolveFact(id: fact.id, action: "confirm") }
                         } label: {
-                            Text("Confirm")
+                            Text("Yes, remember")
                                 .font(.system(size: 13, weight: .semibold))
                                 .foregroundStyle(Theme.Colors.onAccent)
                                 .frame(maxWidth: .infinity)
@@ -606,7 +606,7 @@ private extension TodayView {
                         Button {
                             Task { await vm.resolveFact(id: fact.id, action: "reject") }
                         } label: {
-                            Text("Dismiss")
+                            Text("Not quite")
                                 .font(.system(size: 13, weight: .medium))
                                 .foregroundStyle(Theme.Colors.textSecondary)
                                 .frame(maxWidth: .infinity)
@@ -680,22 +680,19 @@ private extension TodayView {
                     .foregroundStyle(Theme.Colors.textPrimary)
 
                 HStack(spacing: Theme.Spacing.sm) {
-                    // Before any streak fetch has ever succeeded, `streakDays`
-                    // is just its zero default, not a real "0-day streak" —
-                    // showing the chip then would assert something we don't
-                    // actually know. Once we've loaded a real value at least
-                    // once, keep showing it (last known good) even through a
-                    // later failed refresh.
-                    if vm.hasLoadedStreak {
-                        Chip(text: "\(vm.streakDays)-day streak", icon: "flame.fill", isAccent: true)
-                    } else {
-                        // Streak loads AFTER `.loaded` (see `startPostLoadSync`).
-                        // Reserve the chip's exact height so its arrival doesn't
-                        // shift everything below the header down mid-interaction.
-                        Chip(text: "0-day streak", icon: "flame.fill", isAccent: true)
-                            .hidden()
-                            .accessibilityHidden(true)
-                    }
+                    // The chip's slot is ALWAYS reserved (hidden placeholder) so a
+                    // late streak load can't shift content below the header. The
+                    // real chip is overlaid only when the streak is loaded and > 0
+                    // (nil -> nothing is claimed for new users / failed first load).
+                    Chip(text: "0 days in a row", icon: "flame.fill", isAccent: true)
+                        .hidden()
+                        .accessibilityHidden(true)
+                        .overlay(alignment: .leading) {
+                            if let streakText = vm.streakChipText {
+                                Chip(text: streakText, icon: "flame.fill", isAccent: true)
+                                    .fixedSize()
+                            }
+                        }
                     if let hint = vm.planHint {
                         Text(hint)
                             .font(.system(size: 13))

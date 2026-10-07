@@ -156,6 +156,12 @@ final class WeightHeroLogicTests: XCTestCase {
             delta7dKgPerWeek: -0.4, delta30dKgPerWeek: -0.35, established: true
         )
         XCTAssertEqual(WeightHeroLogic.trendHeadline(trend: trend, system: .metric), "Trend 82.3 kg")
+        // Hero header drops the duplicate once established; placeholder otherwise.
+        XCTAssertNil(WeightHeroLogic.heroHeaderTrendText(trend: trend, system: .metric))
+        XCTAssertEqual(
+            WeightHeroLogic.heroHeaderTrendText(trend: nil, system: .metric),
+            WeightHeroLogic.trendPlaceholderText
+        )
     }
 
     // MARK: - Weekly-change text: span gate + pace guard (dietitian review)
