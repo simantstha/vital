@@ -95,9 +95,9 @@ struct TodayView: View {
                                     mealLogged: vm.diet.kcalConsumed > 0,
                                     secondItemLogged: vm.showFirstRunChecklistSecondItemDone,
                                     healthConnected: HealthKitManager.didRequestAuthorization && !vm.showHealthKitRecoveryBanner,
+                                    goalTargetSet: vm.hasGoalTarget,
                                     onLogMeal: { showLogSheet = true },
                                     onLogSecondItem: { onChecklistSecondItemTap() },
-                                    goalTargetSet: vm.hasGoalTarget,
                                     onConnectHealth: { _ = HealthKitManager.openHealthApp() },
                                     onSetGoalTarget: {
                                         NotificationCenter.default.post(name: .vitalOpenGoalEditor, object: nil)
