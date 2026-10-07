@@ -69,6 +69,9 @@ struct DevicesView: View {
                 .padding(.bottom, 40)
             }
             .scrollIndicators(.hidden)
+            // Backs the "Pull to sync" hint on a stale row: re-reads the
+            // latest device sync state.
+            .refreshable { await settingsVM.load() }
         }
         // Pushed screen — the nav bar must stay visible so the system back
         // button (and the interactive swipe-back gesture) keep working.
@@ -168,11 +171,19 @@ struct DevicesView: View {
     }
 
     private func deviceStatusRow(kind: DevicesLogic.DeviceKind, isFirst: Bool) -> some View {
-        let connected = kind == .apple ? settingsVM.appleConnected : settingsVM.whoopConnected
+        let freshness = settingsVM.syncFreshness(for: kind)
+        let dotColor: Color = {
+            switch freshness {
+            case .disconnected: return Theme.Colors.textTertiary
+            case .fresh:        return Theme.Colors.positive
+            case .stale:        return Theme.Colors.caution
+            case .veryStale:    return Theme.Colors.alert
+            }
+        }()
         return HStack(spacing: Theme.Spacing.md) {
             IconBadge(systemName: kind == .apple ? "applewatch" : "waveform.path.ecg", style: .soft, size: 36, cornerRadius: 10)
             VStack(alignment: .leading, spacing: 2) {
-                Text(DevicesLogic.deviceName(kind))
+                Text(DevicesLogic.statusRowTitle(kind))
                     .font(Theme.Typography.bodyMedium)
                     .fontWeight(.semibold)
                     .foregroundStyle(Theme.Colors.textPrimary)
@@ -182,7 +193,7 @@ struct DevicesView: View {
             }
             Spacer(minLength: Theme.Spacing.sm)
             Circle()
-                .fill(connected ? Theme.Colors.positive : Theme.Colors.textTertiary)
+                .fill(dotColor)
                 .frame(width: 8, height: 8)
         }
         .padding(.horizontal, Theme.Spacing.lg)

@@ -6,6 +6,13 @@ import XCTest
 /// `@MainActor` hop, mock API, or view involved.
 final class CoachOpenerAndComposerTests: XCTestCase {
 
+    // MARK: - Offline banner
+
+    func testOfflineBannerCopyReassuresAboutData() {
+        XCTAssertTrue(CoachViewModel.offlineBannerText.contains("Coach is offline"))
+        XCTAssertTrue(CoachViewModel.offlineBannerText.contains("your data is safe"))
+    }
+
     // MARK: - Opener fallback selection
 
     /// A verified fresh conversation (restoration succeeded and found no

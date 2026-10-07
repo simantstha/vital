@@ -428,13 +428,18 @@ export function buildPromptText(
   } else {
     lines.push('No hard constraints on file.');
   }
-  if (ctx.softFacts.length > 0) {
+  // The user's goal and targets are canonical on the profile (users.goal +
+  // target columns, rendered above via the diet budget and "Goal progress"). A
+  // legacy free-text Goal fact ("Lose 5 kg by December") can disagree with
+  // that, so the user's own Goal facts are never injected - the profile wins.
+  const promptSoftFacts = ctx.softFacts.filter(n => !(n.type === 'Goal' && n.subject_node_id == null));
+  if (promptSoftFacts.length > 0) {
     lines.push('GOALS & PREFERENCES:');
     // hardConstraints ∪ softFacts is exactly the user's active node set, so
     // this map resolves every subject entity referenced below without an
     // extra query — see lib/brain/factSubject.ts.
     const subjectLabels = buildSubjectLabelMap([...ctx.hardConstraints, ...ctx.softFacts]);
-    for (const n of ctx.softFacts.slice(0, 20)) {
+    for (const n of promptSoftFacts.slice(0, 20)) {
       const subject = resolveSubjectLabel(n.subject_node_id, subjectLabels);
       lines.push(withSubjectSuffix(`- ${n.type}: ${n.label} (weight ${n.weight.toFixed(2)})`, subject));
     }

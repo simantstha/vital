@@ -83,7 +83,11 @@ const TYPE_TO_GROUP: Record<string, FactGroup> = {
   LabMarker: 'health',
   FamilyHistory: 'health',
 
-  Goal: 'goals',
+  // Goal facts are LEGACY free text. The user's goal lives in the profile
+  // columns (users.goal + targets) and is shown read-only on Memory; a stale
+  // free-text goal must never read as a second, competing source of truth, so
+  // it is shown under "Notes" ('other').
+  Goal: 'other',
 
   Habit: 'routines',
 

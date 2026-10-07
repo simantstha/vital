@@ -187,7 +187,7 @@ final class MemoryViewModelTests: XCTestCase {
     /// clean empty state, not an error.
     func testLoadWithEmptyMemoryAndNoPendingFactsLandsInCleanEmptyState() async {
         let api = FakeMemoryAPI() // defaults are already all-empty
-        let vm = MemoryViewModel(apiClient: api)
+        let vm = MemoryViewModel(apiClient: api, goalLoader: { nil })
 
         await vm.load()
 
@@ -204,7 +204,7 @@ final class MemoryViewModelTests: XCTestCase {
     func testLoadWhenFetchMemoryThrowsSetsErrorMessageAndClearsIsLoading() async {
         let api = FakeMemoryAPI()
         api.memoryError = URLError(.notConnectedToInternet)
-        let vm = MemoryViewModel(apiClient: api)
+        let vm = MemoryViewModel(apiClient: api, goalLoader: { nil })
 
         await vm.load()
 
@@ -228,7 +228,7 @@ final class MemoryViewModelTests: XCTestCase {
             entities: [MemoryEntitySummary(id: "e1", label: "Father", kind: "Person", factCount: 2)]
         )
         api.pendingFactsError = URLError(.timedOut)
-        let vm = MemoryViewModel(apiClient: api)
+        let vm = MemoryViewModel(apiClient: api, goalLoader: { nil })
 
         await vm.load()
 
@@ -247,7 +247,7 @@ final class MemoryViewModelTests: XCTestCase {
         api.delayNextMemory = true
         let suspended = expectation(description: "load suspends inside fetchMemory")
         api.onMemorySuspended = { suspended.fulfill() }
-        let vm = MemoryViewModel(apiClient: api)
+        let vm = MemoryViewModel(apiClient: api, goalLoader: { nil })
 
         let task = Task { await vm.load() }
         await fulfillment(of: [suspended], timeout: 10)
@@ -269,7 +269,7 @@ final class MemoryViewModelTests: XCTestCase {
         api.memoryError = URLError(.notConnectedToInternet)
         let suspended = expectation(description: "load suspends inside fetchMemory before failing")
         api.onMemorySuspended = { suspended.fulfill() }
-        let vm = MemoryViewModel(apiClient: api)
+        let vm = MemoryViewModel(apiClient: api, goalLoader: { nil })
 
         let task = Task { await vm.load() }
         await fulfillment(of: [suspended], timeout: 10)
@@ -286,7 +286,7 @@ final class MemoryViewModelTests: XCTestCase {
 
     func testResolveFactSuccessRemovesRowFromPendingFacts() async {
         let api = FakeMemoryAPI()
-        let vm = MemoryViewModel(apiClient: api)
+        let vm = MemoryViewModel(apiClient: api, goalLoader: { nil })
         vm.pendingFacts = [makePendingFact(id: "p1"), makePendingFact(id: "p2")]
 
         await vm.resolveFact(id: "p1", action: "confirm")
@@ -301,7 +301,7 @@ final class MemoryViewModelTests: XCTestCase {
     func testResolveFactFailureLeavesRowInPlaceAndSetsToastMessage() async {
         let api = FakeMemoryAPI()
         api.resolveError = URLError(.notConnectedToInternet)
-        let vm = MemoryViewModel(apiClient: api)
+        let vm = MemoryViewModel(apiClient: api, goalLoader: { nil })
         vm.pendingFacts = [makePendingFact(id: "p1")]
 
         await vm.resolveFact(id: "p1", action: "reject")
@@ -316,7 +316,7 @@ final class MemoryViewModelTests: XCTestCase {
     func testResolveFactCancellationLeavesRowInPlaceWithoutToast() async {
         let api = FakeMemoryAPI()
         api.resolveError = URLError(.cancelled)
-        let vm = MemoryViewModel(apiClient: api)
+        let vm = MemoryViewModel(apiClient: api, goalLoader: { nil })
         vm.pendingFacts = [makePendingFact(id: "p1")]
 
         await vm.resolveFact(id: "p1", action: "confirm")
@@ -333,7 +333,7 @@ final class MemoryViewModelTests: XCTestCase {
         let api = FakeMemoryAPI()
         let original = MemoryFact(id: "n1", type: "Habit", label: "Prefers running in the morning", isConstraint: false)
         api.editResult = MemoryFact(id: "n2", type: "Habit", label: "Prefers running at dawn", isConstraint: false, recordedAt: "2026-09-27", origin: "told", group: "routines")
-        let vm = MemoryViewModel(apiClient: api)
+        let vm = MemoryViewModel(apiClient: api, goalLoader: { nil })
         vm.selfFacts = [original]
 
         await vm.saveEdit(fact: original, newLabel: "Prefers running at dawn")
@@ -353,7 +353,7 @@ final class MemoryViewModelTests: XCTestCase {
         let api = FakeMemoryAPI()
         api.editError = URLError(.notConnectedToInternet)
         let original = MemoryFact(id: "n1", type: "Habit", label: "Prefers running in the morning", isConstraint: false)
-        let vm = MemoryViewModel(apiClient: api)
+        let vm = MemoryViewModel(apiClient: api, goalLoader: { nil })
         vm.selfFacts = [original]
 
         await vm.saveEdit(fact: original, newLabel: "Prefers running at dawn")
@@ -368,7 +368,7 @@ final class MemoryViewModelTests: XCTestCase {
     func testSaveEditNoOpForEmptyOrUnchangedLabel() async {
         let api = FakeMemoryAPI()
         let original = MemoryFact(id: "n1", type: "Habit", label: "Prefers running in the morning", isConstraint: false)
-        let vm = MemoryViewModel(apiClient: api)
+        let vm = MemoryViewModel(apiClient: api, goalLoader: { nil })
         vm.selfFacts = [original]
         vm.editingFact = original
 
@@ -387,7 +387,7 @@ final class MemoryViewModelTests: XCTestCase {
     func testForgetSuccessRemovesRowAndCallsUndo() async {
         let api = FakeMemoryAPI()
         let fact = MemoryFact(id: "n1", type: "Habit", label: "Prefers running in the morning", isConstraint: false)
-        let vm = MemoryViewModel(apiClient: api)
+        let vm = MemoryViewModel(apiClient: api, goalLoader: { nil })
         vm.selfFacts = [fact]
         vm.factPendingForget = fact
 
@@ -405,7 +405,7 @@ final class MemoryViewModelTests: XCTestCase {
         api.undoError = URLError(.notConnectedToInternet)
         let first = MemoryFact(id: "n1", type: "Habit", label: "First", isConstraint: false)
         let second = MemoryFact(id: "n2", type: "Habit", label: "Second", isConstraint: false)
-        let vm = MemoryViewModel(apiClient: api)
+        let vm = MemoryViewModel(apiClient: api, goalLoader: { nil })
         vm.selfFacts = [first, second]
 
         await vm.forget(first)

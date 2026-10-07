@@ -204,3 +204,32 @@ test('no goalProgress omits the Goal progress section entirely', async () => {
   const text = buildPromptText(baseCtx('metric') as Parameters<typeof buildPromptText>[0]);
   assert.doesNotMatch(text, /### Goal progress/);
 });
+
+test('the user\'s own Goal facts are not injected into the prompt (profile goal is canonical); other soft facts still are', async () => {
+  const { buildPromptText } = await contextPromise;
+  const ctx = baseCtx('metric');
+  const node = (id: string, type: string, label: string, subject: string | null = null) => ({
+    id, type, label, weight: 0.8, subject_node_id: subject,
+  });
+  (ctx as Record<string, unknown>).softFacts = [
+    node('g1', 'Goal', 'Lose 5 kg by December'),
+    node('h1', 'Habit', 'Prefers running in the morning'),
+  ];
+
+  const text = buildPromptText(ctx as unknown as Parameters<typeof buildPromptText>[0]);
+
+  assert.doesNotMatch(text, /Lose 5 kg by December/);
+  assert.match(text, /Prefers running in the morning/);
+});
+
+test('a prompt whose only soft fact is a Goal omits the GOALS & PREFERENCES header', async () => {
+  const { buildPromptText } = await contextPromise;
+  const ctx = baseCtx('metric');
+  (ctx as Record<string, unknown>).softFacts = [
+    { id: 'g1', type: 'Goal', label: 'Lose 5 kg by December', weight: 0.8, subject_node_id: null },
+  ];
+
+  const text = buildPromptText(ctx as unknown as Parameters<typeof buildPromptText>[0]);
+
+  assert.doesNotMatch(text, /GOALS & PREFERENCES/);
+});

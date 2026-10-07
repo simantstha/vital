@@ -529,6 +529,8 @@ final class ScreenshotTests: XCTestCase {
         if scenario == "server_error" {
             XCTAssertTrue(waitForText(app, containing: "Ask me anything about your health trends"),
                            "Coach should fall back to its hardcoded opener when every endpoint 500s [\(appearance)]")
+            XCTAssertTrue(waitForText(app, containing: "Coach is offline"),
+                           "Coach should say it is offline when its load failed [\(appearance)]")
         } else if scenario == "new_user" {
             XCTAssertTrue(waitForText(app, containing: "Your goal is to lose weight"),
                            "Coach should show the new-user opener, not returning-user praise [\(appearance)]")
@@ -989,6 +991,8 @@ final class ScreenshotTests: XCTestCase {
                            "\(scenario)'s Memory screen should tag a constraint fact [\(appearance)]")
             XCTAssertTrue(waitForText(app, containing: "Routines & preferences"),
                            "\(scenario)'s Memory screen should group facts into sections [\(appearance)]")
+            XCTAssertTrue(waitForText(app, containing: "Edit in Profile"),
+                           "\(scenario)'s Memory screen should show the profile goal read-only [\(appearance)]")
         }
         capture(app, name: "\(scenario)__memory__\(appearance)")
 

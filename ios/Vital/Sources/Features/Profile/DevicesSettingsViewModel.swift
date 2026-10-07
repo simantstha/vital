@@ -79,6 +79,15 @@ final class DevicesSettingsViewModel: ObservableObject {
         )
     }
 
+    /// Freshness of a device's last sync, for the row's status dot.
+    func syncFreshness(for kind: DevicesLogic.DeviceKind) -> DevicesLogic.SyncFreshness {
+        let device = status(for: kind)
+        return DevicesLogic.syncFreshness(
+            connected: device?.connected ?? false,
+            lastSyncAt: (device?.lastSyncAt).flatMap(Self.parseISO)
+        )
+    }
+
     private static func parseISO(_ iso: String) -> Date? {
         Self.isoFormatter.date(from: iso) ?? Self.isoFormatterNoFractional.date(from: iso)
     }

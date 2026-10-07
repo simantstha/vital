@@ -97,6 +97,36 @@ final class DevicesLogicTests: XCTestCase {
         XCTAssertNotEqual(label, "Not connected")
     }
 
+    // MARK: - Sync freshness
+
+    func testSyncFreshnessThresholds() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        func f(_ hoursAgo: Double) -> DevicesLogic.SyncFreshness {
+            DevicesLogic.syncFreshness(connected: true, lastSyncAt: now.addingTimeInterval(-hoursAgo * 3600), now: now)
+        }
+        XCTAssertEqual(f(0.1), .fresh)
+        XCTAssertEqual(f(6), .fresh)
+        XCTAssertEqual(f(6.5), .stale)
+        XCTAssertEqual(f(12), .stale)
+        XCTAssertEqual(f(48), .stale)
+        XCTAssertEqual(f(49), .veryStale)
+        XCTAssertEqual(DevicesLogic.syncFreshness(connected: false, lastSyncAt: now, now: now), .disconnected)
+        XCTAssertEqual(DevicesLogic.syncFreshness(connected: true, lastSyncAt: nil, now: now), .disconnected)
+    }
+
+    func testStaleSyncLabelHintsPullToSync() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let stale = DevicesLogic.syncStatusLabel(connected: true, lastSyncAt: now.addingTimeInterval(-12 * 3600), now: now)
+        XCTAssertTrue(stale.hasSuffix("Pull to sync"), stale)
+        let fresh = DevicesLogic.syncStatusLabel(connected: true, lastSyncAt: now.addingTimeInterval(-2 * 3600), now: now)
+        XCTAssertFalse(fresh.contains("Pull to sync"), fresh)
+    }
+
+    func testStatusRowTitleUsesAppleHealthName() {
+        XCTAssertEqual(DevicesLogic.statusRowTitle(.apple), "Apple Health (Apple Watch)")
+        XCTAssertEqual(DevicesLogic.statusRowTitle(.whoop), "WHOOP")
+    }
+
     // MARK: - Duplicates caption
 
     func testDuplicatesCaptionOmittedWhenZero() {

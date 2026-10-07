@@ -64,7 +64,7 @@ struct LogsView: View {
                         // Whole tab failed — no day/pager data to fall back
                         // to, so this replaces the screen instead of sitting
                         // pinned above an empty pager.
-                        ErrorStateContainer {
+                        ErrorStateContainer(message: errorMessage) {
                             ErrorCard(title: "Couldn't load your logs", message: errorMessage) {
                                 Task {
                                     vm.errorMessage = nil

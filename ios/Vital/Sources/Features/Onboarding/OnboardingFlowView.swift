@@ -569,6 +569,11 @@ private struct GoalStepView: View {
             Text(hint)
                 .font(Theme.Typography.bodySmall)
                 .foregroundStyle(Theme.Colors.textSecondary)
+        } else if let nudge = GoalTargetLogic.missingTargetNudge(goal: vm.goal, targetKg: vm.targetWeightKg) {
+            // Optional, never blocking — just says what a target unlocks.
+            Text(nudge)
+                .font(Theme.Typography.bodySmall)
+                .foregroundStyle(Theme.Colors.textSecondary)
         }
     }
 }
@@ -754,7 +759,7 @@ private struct CoachIntroStepView: View {
                 Text("Meet your coach")
                     .font(Theme.Typography.titleLarge)
                     .foregroundStyle(Theme.Colors.textPrimary)
-                Text("A couple of quick questions, then we'll start importing your health history.")
+                Text("Last step \u{2014} tell Vital anything it should know.")
                     .font(Theme.Typography.bodyMedium)
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
@@ -805,7 +810,7 @@ private struct CalibratingStepView: View {
                         .font(Theme.Typography.titleMedium)
                         .foregroundStyle(Theme.Colors.textPrimary)
                     Text(backfillCoordinator.isComplete
-                         ? "365 days of health history imported."
+                         ? OnboardingCopy.importSummary(daysUploaded: backfillCoordinator.daysUploaded)
                          : "\(Int((backfillCoordinator.progress * 100).rounded()))% — this keeps going in the background, so feel free to continue.")
                         .font(Theme.Typography.bodyMedium)
                         .foregroundStyle(Theme.Colors.textSecondary)

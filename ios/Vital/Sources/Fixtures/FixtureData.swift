@@ -2067,8 +2067,9 @@ enum FixtureData {
 
     /// One `self.facts[]` item, with the new §1 fields (`recordedAt`,
     /// `origin`, `group`) — matches `W3-Memory`/`W4-Memory-Actions`'s facts
-    /// exactly, so `MemoryLogic.groupedSections` renders the same three
-    /// groups (Health 3, Goals 2, Routines & preferences 3) the mock shows.
+    /// exactly, minus the old free-text Goal facts (the profile owns the goal now),
+    /// so `MemoryLogic.groupedSections` renders Health 3 and Routines &
+    /// preferences 3 (plus a persona-specific extra).
     private struct FixtureFact {
         let id: String
         let type: String
@@ -2085,8 +2086,6 @@ enum FixtureData {
         // Same id `coachRestoration`'s `memorySavedExchange` uses for its
         // "Noted: Lactose intolerant" chip — same fact, same fixture id.
         FixtureFact(id: "fixture-fact-lactose", type: "Intolerance", label: "Lactose intolerant", isConstraint: true, daysAgo: 1, origin: "told", group: "health"),
-        FixtureFact(id: "fixture-fact-weight-goal", type: "Goal", label: "Lose 5 kg by December", isConstraint: false, daysAgo: 21, origin: "onboarding", group: "goals"),
-        FixtureFact(id: "fixture-fact-marathon", type: "Goal", label: "Break 4 hours in the marathon", isConstraint: false, daysAgo: 120, origin: "told", group: "goals"),
         FixtureFact(id: "fixture-fact-morning-run", type: "Habit", label: "Prefers running in the morning", isConstraint: false, daysAgo: 40, origin: "told", group: "routines"),
         FixtureFact(id: "fixture-fact-night-feeds", type: "Habit", label: "New baby — night feeds about 2 a night", isConstraint: false, daysAgo: 23, origin: "told", group: "routines"),
         FixtureFact(id: "fixture-fact-coffee", type: "Habit", label: "Coffee before 10 am only", isConstraint: false, daysAgo: 15, origin: "confirmed", group: "routines"),
@@ -2105,12 +2104,27 @@ enum FixtureData {
         ["id": "fixture-entity-maya", "label": "Maya", "kind": "Partner", "factCount": 2],
     ]
 
+    /// Persona-specific facts. The goal itself is NOT a memory fact (it lives
+    /// on the profile and Memory shows it read-only), so these are only
+    /// context that fits each persona without restating or contradicting it.
+    private static func personaMemoryFacts(_ goal: String) -> [FixtureFact] {
+        switch goal {
+        case "endurance":
+            return [FixtureFact(id: "fixture-fact-race", type: "Note", label: "Racing a half marathon in the spring", isConstraint: false, daysAgo: 60, origin: "told", group: "other")]
+        case "muscle":
+            return [FixtureFact(id: "fixture-fact-gym-days", type: "Habit", label: "Lifts Monday, Wednesday, Friday", isConstraint: false, daysAgo: 30, origin: "told", group: "routines")]
+        default:
+            return []
+        }
+    }
+
     private static func memory(_ profile: Profile) -> [String: Any] {
         guard profile.established else {
             return ["self": ["factCount": 0, "facts": [Any]()], "entities": [Any]()]
         }
+        let facts = memoryFacts + personaMemoryFacts(profile.goal)
         return [
-            "self": ["factCount": memoryFacts.count, "facts": memoryFacts.map(memoryFactJSON)],
+            "self": ["factCount": facts.count, "facts": facts.map(memoryFactJSON)],
             "entities": memoryEntities,
         ]
     }
