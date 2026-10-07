@@ -688,6 +688,13 @@ private extension TodayView {
                     // later failed refresh.
                     if vm.hasLoadedStreak {
                         Chip(text: "\(vm.streakDays)-day streak", icon: "flame.fill", isAccent: true)
+                    } else {
+                        // Streak loads AFTER `.loaded` (see `startPostLoadSync`).
+                        // Reserve the chip's exact height so its arrival doesn't
+                        // shift everything below the header down mid-interaction.
+                        Chip(text: "0-day streak", icon: "flame.fill", isAccent: true)
+                            .hidden()
+                            .accessibilityHidden(true)
                     }
                     if let hint = vm.planHint {
                         Text(hint)

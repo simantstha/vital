@@ -1927,7 +1927,7 @@ struct TodayMetrics: Decodable {
 /// server raised an auto-calculated target to the floor rather than serve a
 /// deeper deficit; for a pinned/custom target it's always false and the
 /// warning is informational only.
-struct LowEnergyWarning: Decodable {
+struct LowEnergyWarning: Decodable, Equatable {
     let thresholdKcal: Int
     let appliedFloor: Bool
     let message: String

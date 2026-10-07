@@ -12,7 +12,7 @@ import SwiftUI
 // a literal `0` (and never a sentinel like `-1` either). See `displayValue`
 // / `formatted` for the "—" placeholder each drives in `TodayView`.
 
-struct HRVMetric {
+struct HRVMetric: Equatable {
     let value: Int?
     let trend: TrendDirection
     let delta: String
@@ -21,7 +21,7 @@ struct HRVMetric {
     var displayUnit: String { value == nil ? "" : "ms" }
 }
 
-struct SleepMetric {
+struct SleepMetric: Equatable {
     let hours: Int?
     let minutes: Int?
     let trend: TrendDirection
@@ -33,7 +33,7 @@ struct SleepMetric {
     }
 }
 
-struct RestingHRMetric {
+struct RestingHRMetric: Equatable {
     let bpm: Int?
     let trend: TrendDirection
     let delta: String
@@ -62,7 +62,7 @@ enum RecoveryDelta {
     }
 }
 
-struct MacroProgress {
+struct MacroProgress: Equatable {
     let current: Int
     let target: Int
     var fraction: Double {
@@ -73,7 +73,7 @@ struct MacroProgress {
     var targetLabel: String  { "\(target)g" }
 }
 
-struct DietCard {
+struct DietCard: Equatable {
     let kcalConsumed: Int
     let kcalTarget: Int
     var kcalRemaining: Int { max(0, kcalTarget - kcalConsumed) }
@@ -769,6 +769,10 @@ final class TodayViewModel: ObservableObject {
     /// server derives from the fresh data catch up. The silent refresh only
     /// applies while Today is `.loaded` and a failure is ignored (the screen
     /// already shows good data).
+    /// It must stay layout-stable: `applyTodayResponse` only publishes fields
+    /// that actually changed, and TodayView reserves the streak chip's row
+    /// height up front so the late `refreshStreak()` result can't push content
+    /// down under a tap (CI endurance/light fuel-strip flake).
     private func startPostLoadSync() {
         guard postLoadSyncTask == nil else { return }
         postLoadSyncTask = Task { @MainActor [weak self] in
@@ -881,7 +885,9 @@ final class TodayViewModel: ObservableObject {
                 trend: .upGood,
                 delta: "\(Int(r.valueMs.rounded())) ms"
             )
-            withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) { hrv = newHRV }
+            if hrv != newHRV {
+                withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) { hrv = newHRV }
+            }
         }
 
         if let r = sleepReading {
@@ -891,7 +897,9 @@ final class TodayViewModel: ObservableObject {
                 trend: .upGood,
                 delta: "\(r.totalMinutes / 60)h \(r.totalMinutes % 60)m"
             )
-            withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) { sleep = newSleep }
+            if sleep != newSleep {
+                withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) { sleep = newSleep }
+            }
         }
 
         if let r = restingHRReading {
@@ -900,7 +908,9 @@ final class TodayViewModel: ObservableObject {
                 trend: .downGood,
                 delta: "\(Int(r.bpm.rounded())) bpm"
             )
-            withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) { restingHR = newRestingHR }
+            if restingHR != newRestingHR {
+                withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) { restingHR = newRestingHR }
+            }
         }
 
         // The three reads above already cover three of HealthKit's read
@@ -970,13 +980,14 @@ final class TodayViewModel: ObservableObject {
     func applyTodayResponse(_ r: TodayResponse) {
         // Calibration state — extract if present
         if let cal = r.calibration {
-            calibrationStatus = cal.status
+            if calibrationStatus != cal.status { calibrationStatus = cal.status }
             // One shared rule with Trends/Profile — see `CalibrationProgress`.
-            calibrationProgress = CalibrationProgress.fraction(cal)
+            let newProgress = CalibrationProgress.fraction(cal)
+            if calibrationProgress != newProgress { calibrationProgress = newProgress }
         }
 
         // Coach insight — keep the existing default if the brief isn't ready yet
-        if !r.insight.isEmpty {
+        if !r.insight.isEmpty, coachInsight != r.insight {
             coachInsight = r.insight
         }
 
@@ -994,7 +1005,9 @@ final class TodayViewModel: ObservableObject {
                 trend: hrvDelta.trend,
                 delta: hrvDelta.text
             )
-            withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) { hrv = newHRV }
+            if hrv != newHRV {
+                withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) { hrv = newHRV }
+            }
         }
 
         // Sleep — value is in hours (e.g. 7.8)
@@ -1008,7 +1021,9 @@ final class TodayViewModel: ObservableObject {
                 trend: sleepDelta.trend,
                 delta: sleepDelta.text
             )
-            withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) { sleep = newSleep }
+            if sleep != newSleep {
+                withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) { sleep = newSleep }
+            }
         }
 
         // Resting HR — lower is better
@@ -1020,12 +1035,17 @@ final class TodayViewModel: ObservableObject {
                 trend: hrDelta.trend,
                 delta: hrDelta.text
             )
-            withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) { restingHR = newRestingHR }
+            if restingHR != newRestingHR {
+                withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) { restingHR = newRestingHR }
+            }
         }
 
         // Diet budget
         let db = r.dietBudget
-        goal = db.goal ?? "general"
+        // Assign-if-changed: `@Published` fires on every set, even an equal one,
+        // and `isEnduranceGoal` (hero, metric tiles) derives from `goal`.
+        let newGoal = db.goal ?? "general"
+        if goal != newGoal { goal = newGoal }
         // Macro targets are now server-authoritative (user override or auto-calc
         // from goal). Fall back to a 30/40/30 split only if an older backend
         // doesn't send them yet.
@@ -1047,7 +1067,9 @@ final class TodayViewModel: ObservableObject {
         // hero/fuel strip (`.contentTransition(.numericText(value:))` needs
         // an animation context to actually roll rather than jump) — mirrors
         // the hrv/sleep/restingHR `withAnimation` calls just above.
-        withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) { diet = newDiet }
+        if diet != newDiet {
+                withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) { diet = newDiet }
+            }
     }
 
     // MARK: - Plan timeline (Phase 2: server-persisted via /api/plan)
