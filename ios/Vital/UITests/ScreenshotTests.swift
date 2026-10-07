@@ -660,7 +660,7 @@ final class ScreenshotTests: XCTestCase {
         // Fixture-unique content: the weight_loss primary line is composed from
         // structured fields (never the server's kg headline); muscle falls
         // back to the server headline.
-        let expected = scenario == "weight_loss" ? "of 7.7 kg lost" : "Squat est. 1RM +20.4 kg vs 4 weeks ago"
+        let expected = scenario == "weight_loss" ? "of 7.7 kg lost" : "Squat est. 1RM +20 kg vs 4 weeks ago"
         XCTAssertTrue(waitForText(app, containing: expected),
                        "Goal progress detail should show the \(scenario) fixture's content [\(appearance)]")
         capture(app, name: "\(scenario)__goalProgress__\(appearance)")
@@ -701,7 +701,7 @@ final class ScreenshotTests: XCTestCase {
                        "weeklyReview.open never appeared [\(scenario)/\(appearance)]")
         scrollIntoComfortableView(openButton, app: app, maxSwipes: 8)
         // Fixture-unique headline (FixtureData.weeklyReview).
-        let expected = scenario == "weight_loss" ? "Down 0.6 kg, in budget 5 of 7 days" : "3 of 4 sessions, Bench Press up 8.8 kg"
+        let expected = scenario == "weight_loss" ? "Down 0.6 kg, in budget 5 of 7 days" : "3 of 4 sessions, Squat est. 1RM +20 kg over 4 wks"
         XCTAssertTrue(waitForText(app, containing: expected),
                        "Weekly review card should show the \(scenario) fixture's headline [\(appearance)]")
         capture(app, name: "\(scenario)__weeklyReviewCard__\(appearance)")

@@ -381,6 +381,26 @@ final class TodayViewModel: ObservableObject {
     /// to the time-to-`.loaded` critical path.
     @Published private(set) var goalProgress: GoalProgressDTO? = nil
 
+    /// True once `/api/goal/progress` has answered (success OR failure) at least
+    /// once. Lets the endurance hero reserve the race line's height only while
+    /// the answer is still pending (see `enduranceRaceLineReserved`).
+    @Published private(set) var goalProgressResolved = false
+
+    /// Whether the profile has a race date (`nil` = profile not loaded yet).
+    /// `/api/today` carries no race info, but the profile fetch Today already
+    /// makes does, so a user known to have NO race never reserves the line.
+    @Published private(set) var profileHasRaceDate: Bool? = nil
+
+    /// The endurance hero's race line ("Half marathon · 12 weeks to go") only
+    /// exists once goal progress loads, which used to push the hero's content
+    /// down a line after first paint. While that answer is pending — and the
+    /// profile hasn't ruled a race out — the hero reserves one line of blank
+    /// space; it fills with the race text, or collapses when there is no race.
+    /// Never reserved after the first answer, so refreshes cause no shift.
+    var enduranceRaceLineReserved: Bool {
+        isEnduranceGoal && goalProgress == nil && !goalProgressResolved && profileHasRaceDate != false
+    }
+
     private var goalProgressTask: Task<Void, Never>?
     /// Same stale-result guard as `trainingSummaryGeneration`.
     private var goalProgressGeneration = 0
@@ -397,10 +417,13 @@ final class TodayViewModel: ObservableObject {
                 guard !Task.isCancelled, generation == self.goalProgressGeneration else { return }
                 withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.appear) {
                     self.goalProgress = result
+                    self.goalProgressResolved = true
                 }
             } catch {
                 if !error.isCancellation {
                     print("[Vital] fetchGoalProgress failed: \(error.localizedDescription)")
+                    // Fail-soft: stop reserving the race line.
+                    if generation == self.goalProgressGeneration { self.goalProgressResolved = true }
                 }
             }
         }
@@ -577,6 +600,7 @@ final class TodayViewModel: ObservableObject {
     func refreshGoalTargetFlag() async {
         if let response = try? await apiClient.fetchProfile() {
             hasGoalTarget = Self.profileHasGoalTarget(response)
+            profileHasRaceDate = response.raceDate != nil
         }
     }
 
@@ -1495,6 +1519,7 @@ final class TodayViewModel: ObservableObject {
         do {
             let response = try await apiClient.fetchProfile()
             hasGoalTarget = Self.profileHasGoalTarget(response)
+            profileHasRaceDate = response.raceDate != nil
             if UnitPreference.shared.applyServerValue(response.unitSystem) {
                 try? await apiClient.updateProfile(unitSystem: UnitPreference.shared.current.rawValue)
             }

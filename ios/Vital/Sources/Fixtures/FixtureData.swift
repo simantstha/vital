@@ -124,7 +124,7 @@ enum FixtureData {
             let total = ((start - target) * 10).rounded() / 10
             return "You're \(trimmedKm(done)) of \(trimmedKm(total)) kg down and about 2 weeks ahead of your \(shortDate(daysAhead: 84)) target. \(invite)"
         case .muscle:
-            return "Goal check-in: Progressing — Squat est. 1RM up 20.4 kg vs 4 weeks ago. \(invite)"
+            return "Goal check-in: Lifts up, sessions behind — Squat +20 kg. \(invite)"
         default:
             return "Nice work staying consistent this week — what would you like to dig into?"
         }
@@ -529,11 +529,23 @@ enum FixtureData {
     /// profile's "today" number the one every screen shows while "What
     /// moved" still has something to say.
     private static func normalBase(_ key: String, _ profile: Profile, _ scenario: FixtureMode.Scenario?) -> Double {
+        if let scenario, let pinned = pinnedNormals[scenario]?[key] { return pinned }
         let value = baseValue(key, profile)
         guard todayValue(key, profile) != nil,
               let pushesAbove = (movedMetrics[scenario ?? .newUser] ?? [:])[key] else { return value }
         return value / (1 + (pushesAbove ? 1 : -1) * movedZ * sdFraction)
     }
+
+    /// Metrics whose "normal" (`mean30`) is a round, human-checkable number
+    /// instead of back-solved from today's reading. Endurance HRV: today 51 ms
+    /// against a normal of 57 ms (band 57 ± 3.4 → "54–60") reads "6 ms below
+    /// your normal (57 ms)" on the detail, "−11% vs normal" on Today
+    /// ((51−57)/57 = −10.5%) and the same in What moved. `seriesPoint` also
+    /// pins the 30-day series MEAN to this value, so the detail's "Avg · 30d"
+    /// stat (computed from the points) agrees with the normal.
+    private static let pinnedNormals: [FixtureMode.Scenario: [String: Double]] = [
+        .endurance: ["hrv_sdnn": 57],
+    ]
 
     /// "above" | "normal" | "below" — where `todayValue` sits against normal.
     private static func vsNormal(_ key: String, _ scenario: FixtureMode.Scenario?) -> String {
@@ -546,6 +558,20 @@ enum FixtureData {
     /// coach receipts, so they can never disagree. Today's point of any
     /// metric with a `todayValue` is exactly that value.
     private static func seriesPoint(key: String, offset: Int, profile: Profile, scenario: FixtureMode.Scenario?) -> Double {
+        let raw = rawSeriesPoint(key: key, offset: offset, profile: profile, scenario: scenario)
+        // Pinned-normal metrics: shift only the settled days (offset >= 7, i.e.
+        // outside the 7-day "moved" ramp and today's exact reading) by one
+        // constant so the full 30-point series averages exactly the normal.
+        guard offset >= 7, let scenario, pinnedNormals[scenario]?[key] != nil else { return raw }
+        let count = dataDays(profile)
+        guard count > 7 else { return raw }
+        let total = (0..<count).reduce(0.0) {
+            $0 + rawSeriesPoint(key: key, offset: $1, profile: profile, scenario: scenario)
+        }
+        return raw + (normalBase(key, profile, scenario) * Double(count) - total) / Double(count - 7)
+    }
+
+    private static func rawSeriesPoint(key: String, offset: Int, profile: Profile, scenario: FixtureMode.Scenario?) -> Double {
         if offset == 0, let today = todayValue(key, profile) { return today }
         let base = normalBase(key, profile, scenario)
         // `seriesValue` adds `dailyTrend * offset` (days ago), so a LOSING
@@ -1981,13 +2007,19 @@ enum FixtureData {
                 // (82 - 79) kg at +0.35 kg/wk ≈ 8.6 weeks.
                 "eta": dayString(-60),
                 "onPaceForTargetDate": none,
-                "verdict": "progressing",
-                "headline": "Progressing — Squat est. 1RM up 20.4 kg vs 4 weeks ago",
+                // Mirrors lib/goalProgress.ts: lifts are up (Squat is the shared
+                // headline lift, the largest 4-week e1RM gain) but session
+                // adherence 9/16 = 56% is under ADHERENCE_BEHIND_PCT (70), so the
+                // verdict is `behind`, not `progressing`.
+                "verdict": "behind",
+                "headline": "Lifts up, sessions behind — Squat +20 kg",
                 "reasons": [
                     // 9 of 16 planned sessions (4/wk x 4) = 56% → amber, leads.
                     reason("adherence", "9 of 16 planned sessions in 4 weeks (56%)", "watch"),
-                    reason("lift", "Squat est. 1RM +20.4 kg vs 4 weeks ago (142.9 → 163.3 kg)", "good"),
-                    reason("lift", "Bench Press est. 1RM +8.8 kg vs 4 weeks ago (99.2 → 107.9 kg)", "good"),
+                    // Whole kg, change from the rounded endpoints (liftDisplayChange):
+                    // the workoutSummary fixture's e1RMs are 142.9 → 163.3 and 99.2 → 107.9.
+                    reason("lift", "Squat est. 1RM +20 kg vs 4 weeks ago (143 → 163 kg)", "good"),
+                    reason("lift", "Bench Press est. 1RM +9 kg vs 4 weeks ago (99 → 108 kg)", "good"),
                 ],
                 "dataSufficiency": ["weighIns": 11, "needed": 3, "sessionsLast28d": 9],
             ]
@@ -2061,7 +2093,7 @@ enum FixtureData {
     /// Unseen review per scenario, consistent with that scenario's
     /// goal-progress / weight / training fixtures: `weight_loss` -0.6 kg,
     /// 5 of 7 days in the 1,850 kcal budget, weekends +450 kcal (same as the
-    /// goal-progress reasons); `muscle` 3 of 4 sessions, bench +8.8 kg vs 4 weeks ago, 5 of 7
+    /// goal-progress reasons); `muscle` 3 of 4 sessions, squat +20 kg vs 4 weeks ago, 5 of 7
     /// protein days (190 g target); `endurance` 24.5 km, +12% (21.9 -> 24.5).
     /// `new_user` (and the unreachable `onboarding`) get the gentle
     /// "not enough data" review. `server_error` never reaches this.
@@ -2106,14 +2138,14 @@ enum FixtureData {
         case .muscle:
             return review(
                 goal: "muscle", verdict: "progressing",
-                headline: "3 of 4 sessions, Bench Press up 8.8 kg",
+                headline: "3 of 4 sessions, Squat est. 1RM +20 kg over 4 wks",
                 stats: [
                     stat("Sessions", "3", "target 4 for the week", "neutral"),
-                    stat("Bench Press est. 1RM", "+8.8 kg", "vs 4 weeks ago", "good"),
+                    stat("Squat est. 1RM", "+20 kg", "vs 4 weeks ago", "good"),
                     stat("Protein days hit", "5/7", nil, "good"),
                     stat("Weight trend", "+0.2 kg", "vs the week before", "good"),
                 ],
-                win: "Bench Press estimated 1RM is up 8.8 kg vs 4 weeks ago.",
+                win: "Squat estimated 1RM is up 20 kg vs 4 weeks ago.",
                 slip: nil,
                 nextWeek: "Repeat this week: same routine, same training days.",
                 sufficient: true

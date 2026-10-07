@@ -154,6 +154,7 @@ struct TodayView: View {
                                     calibratingText: vm.enduranceCalibratingText,
                                     reasonLine: vm.enduranceReasonLine,
                                     raceText: vm.enduranceRaceText,
+                                    reserveRaceLine: vm.enduranceRaceLineReserved,
                                     session: vm.todayMoveSession,
                                     sessionDots: vm.trainingSessionDots,
                                     weeklyOverviewText: vm.enduranceWeeklyOverviewText,

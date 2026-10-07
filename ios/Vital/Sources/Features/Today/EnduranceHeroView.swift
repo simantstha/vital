@@ -15,6 +15,10 @@ struct EnduranceHeroView: View {
     let reasonLine: String?
     /// "Half marathon · 12 weeks to go" — only when a race is set.
     var raceText: String? = nil
+    /// True while the race line is still loading (goal progress pending, race
+    /// not ruled out): reserves exactly one line of height so the hero doesn't
+    /// jump when the race text arrives. Ignored once `raceText` is set.
+    var reserveRaceLine = false
 
     /// Today's move-kind plan item, or `nil` for a rest day.
     let session: PlanItem?
@@ -45,6 +49,11 @@ struct EnduranceHeroView: View {
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(Theme.Colors.accentContent)
                         .accessibilityIdentifier("today.raceCountdown")
+                } else if reserveRaceLine {
+                    // Same font as the race line, so the blank line is exactly as tall.
+                    Text(" ")
+                        .font(.system(size: 12, weight: .semibold))
+                        .accessibilityHidden(true)
                 }
                 VStack(alignment: .leading, spacing: 2) {
                     Text(calibratingText ?? readinessWord?.rawValue ?? EnduranceHeroLogic.ReadinessWord.goodToTrain.rawValue)

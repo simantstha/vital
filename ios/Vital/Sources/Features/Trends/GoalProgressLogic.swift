@@ -51,7 +51,13 @@ enum GoalProgressLogic {
 
     // MARK: - Verdict label
 
-    static func label(for verdict: GoalVerdict) -> String {
+    /// `goal` ("muscle" ...) makes the chip goal-aware: for a muscle goal the
+    /// server's `behind` verdict means the lifts are up but the planned
+    /// sessions are not happening ("Lifts up, sessions behind"), so a generic
+    /// "Behind pace" chip beside it would read as a contradiction. Every other
+    /// goal (and `nil`) keeps the generic label.
+    static func label(for verdict: GoalVerdict, goal: String? = nil) -> String {
+        if verdict == .behind, goal == "muscle" { return "Sessions behind" }
         switch verdict {
         case .onTrack:          return "On track"
         case .ahead:            return "Ahead of pace"
@@ -450,7 +456,7 @@ enum GoalProgressLogic {
         return out
     }
 
-    /// The lift-related story for a muscle goal ("Squat +20.4 kg vs 4 wk"):
+    /// The lift-related story for a muscle goal ("Squat +20 kg vs 4 wk"):
     /// the first reason of kind "lift", else the server headline when it
     /// mentions a lift/1RM, minus its verdict prefix. `nil` when absent.
     static func liftReasonText(_ progress: GoalProgressDTO) -> String? {
