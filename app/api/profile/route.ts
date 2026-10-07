@@ -93,6 +93,7 @@ import { localDayKey, pickTimeZone } from '@/lib/localDay';
 import { parseUnitSystem } from '@/lib/units';
 import { parseTargetDate, parseTargetWeightKg, parseWeeklySessionsTarget, parseWeeklyDistanceKmTarget } from '@/lib/goalTarget';
 import { buildGoalRestart, shouldReanchorGoalForTarget } from '@/lib/goalStart';
+import { invalidateGoalProgress } from '@/lib/brain/goalProgressCache';
 
 export const dynamic = 'force-dynamic';
 
@@ -440,6 +441,7 @@ export async function PATCH(request: Request): Promise<NextResponse> {
     }
 
     await db.update(schema.users).set(goalUpdate).where(eq(schema.users.id, userId));
+    invalidateGoalProgress(userId);
   }
 
   return NextResponse.json({ ok: true });

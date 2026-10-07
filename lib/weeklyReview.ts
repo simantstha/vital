@@ -20,7 +20,7 @@ import type { GoalKind, GoalProgressBudget, GoalProgressIntakeDay, GoalVerdict, 
 import { KG_TO_LB } from './goalProgress';
 import { PARTIAL_LOG_KCAL_THRESHOLD, TOO_FAST_LOSS_PCT_PER_WEEK } from './brain/weightSignals';
 import { computeWeightTrend, type WeightReading } from './weightTrend';
-import { weekDayKeys, weekStartKeyForDay } from './localDay';
+import { localDayKey, weekDayKeys, weekStartKeyForDay } from './localDay';
 import type { ProgressionSummary } from './workoutRepository';
 import { isDeload, liftChange4w, liftDisplayName } from './liftChange';
 
@@ -680,4 +680,19 @@ export function computeWeeklyReview(input: WeeklyReviewInput): WeeklyReview {
     nextWeek: buildNextWeek(input, cands, week, slip),
     dataSufficiency: { daysWithData, statCount: cands.length, sufficient: true },
   };
+}
+
+/** exercise key -> display name from workout-set rows; the first non-empty display seen for a key wins. */
+export function buildExerciseDisplay(rows: ReadonlyArray<{ exercise: string; exercise_display: string | null }>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const r of rows) {
+    const name = r.exercise_display?.trim();
+    if (name && !(r.exercise in out)) out[r.exercise] = name;
+  }
+  return out;
+}
+
+/** Local YYYY-MM-DD of the user's signup (created_at) in `tz`; null when unknown. */
+export function signupLocalDay(createdAt: Date | null | undefined, tz: string): string | null {
+  return createdAt ? localDayKey(createdAt, tz) : null;
 }

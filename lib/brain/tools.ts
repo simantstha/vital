@@ -78,6 +78,7 @@ import { localDayKey, pickTimeZone } from '@/lib/localDay';
 import { computeWeightTrend } from '@/lib/weightTrend';
 import { KM_PER_MILE, LB_PER_KG } from '@/lib/metricFormat';
 import { metricLabel, EVENT_TYPE_LABELS } from './toolLabels';
+import { invalidateGoalProgress } from './goalProgressCache';
 
 // How recent a coach-logged meal (source = 'coach') must be for delete_meal to
 // reach it — see delete_meal's tool description and executor for the full
@@ -1774,6 +1775,7 @@ export async function executeToolCall(
         payload:   { kcal, c, p, f, name: barcodeName, description: barcodeName, source: 'barcode' },
         source:    'coach',
       }).returning({ id: schema.events.id });
+      invalidateGoalProgress(userId);
 
       return JSON.stringify({
         ok: true,
@@ -2001,12 +2003,16 @@ export async function executeToolCall(
     if (update.target_weight_kg != null && row?.target_weight_kg !== update.target_weight_kg) {
       // Dynamic import: lib/goalStart.ts pulls in the weight repository, which
       // other tools.ts test files mock narrowly.
-      const { buildGoalRestart } = await import('@/lib/goalStart');
-      Object.assign(update, await buildGoalRestart(userId));
-      reanchored = true;
+      // Re-anchor only when a goal starts or flips direction (same rule as PATCH /api/profile).
+      const { buildGoalRestart, shouldReanchorGoalForTarget } = await import('@/lib/goalStart');
+      if (await shouldReanchorGoalForTarget(userId, row?.target_weight_kg ?? null, update.target_weight_kg)) {
+        Object.assign(update, await buildGoalRestart(userId));
+        reanchored = true;
+      }
     }
 
     await db.update(schema.users).set(update).where(eq(schema.users.id, userId));
+    invalidateGoalProgress(userId);
 
     return JSON.stringify({
       ok: true,

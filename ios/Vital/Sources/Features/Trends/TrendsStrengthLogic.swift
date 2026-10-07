@@ -38,16 +38,17 @@ enum TrendsStrengthLogic {
     static let endSearchOffsets = [0, 1, 2]
     static let recentWeekOffsets = [0, 1]
     static let baselineWeekOffsets = [4, 5]
-    /// A change smaller than this (in kg, regardless of the display unit)
-    /// reads as "no change" — below it, Epley noise from a different rep
-    /// count dominates real progress.
-    static let changeThresholdKg = 1.0
-    /// A lift not trained for this many weeks gets a "Not logged in N wk"
-    /// chip instead of a progress claim about old data.
-    /// (Two: the current week may still be empty — Monday before training —
-    /// so one idle week is fine, but a lift last logged 2+ weeks ago gets
-    /// the "Not logged" chip.)
-    static let staleWeeks = 2
+    /// A change of at least this fraction of the baseline counts as progress
+    /// (mirrors `LIFT_PROGRESS_MIN_FRACTION` in `lib/liftChange.ts`); anything
+    /// smaller is a stall. Scales with the lift, so 1 kg on a 40 kg press is
+    /// real progress while 1 kg on a 200 kg deadlift is Epley noise.
+    static let progressMinFraction = 0.01
+    /// A lift whose newest e1RM is this many weeks back (or more) gets a
+    /// "Not logged in N wk" chip instead of a progress claim about old data.
+    /// Three = the width of the end-week search (`endSearchOffsets`: the
+    /// current week plus the two before it), so a lift the server can still
+    /// anchor a change on is never shown as "Not logged".
+    static let staleWeeks = endSearchOffsets.count
 
     // MARK: - Types
 
@@ -75,6 +76,9 @@ enum TrendsStrengthLogic {
         /// The shared 4-week change in kg (`change(e1rm:)`), `nil` when either
         /// window has no data. Raw kg — unit formatting happens in `status`.
         let changeKg: Double?
+        /// The baseline e1RM (kg) that `changeKg` is measured against; `nil`
+        /// exactly when `changeKg` is. The progress bar is 1% of this.
+        let baselineKg: Double?
 
         var id: String { key }
 
@@ -147,7 +151,8 @@ enum TrendsStrengthLogic {
                 currentText: UnitFormat.weight(kg: latest, system),
                 sparkline: e1rm,
                 status: status(e1rm: e1rm, system: system),
-                changeKg: change(e1rm: e1rm)?.changeKg
+                changeKg: change(e1rm: e1rm)?.changeKg,
+                baselineKg: change(e1rm: e1rm)?.baselineKg
             )
         }
 
@@ -190,8 +195,8 @@ enum TrendsStrengthLogic {
 
     /// "+2.5 kg vs 4 wk ago" (good) / "No change vs 4 wk ago" (watch) / "New"
     /// (neutral, fewer than two weeks with data or nothing 4 weeks back to
-    /// compare with) / "Not logged in 3 wk" (watch, nothing in the current or
-    /// previous week). The window is always named — it is the same
+    /// compare with) / "Not logged in 3 wk" (watch, nothing in the current week or the
+    /// two weeks before it). The window is always named — it is the same
     /// "last 2 weeks vs 4 weeks ago" number the goal card shows.
     static func status(e1rm: [Double?], system: UnitSystem) -> Status {
         var lastIndex: Int?
@@ -213,13 +218,23 @@ enum TrendsStrengthLogic {
             return Status(text: "New", tone: .neutral)
         }
         let delta = change.changeKg
-        if delta >= changeThresholdKg {
+        if isProgressing(changeKg: delta, baselineKg: change.baselineKg) {
             return Status(text: "+\(magnitudeText(kg: delta, system: system)) vs 4 wk ago", tone: .good)
         }
-        if delta <= -changeThresholdKg {
+        if isDeclining(changeKg: delta, baselineKg: change.baselineKg) {
             return Status(text: "\u{2212}\(magnitudeText(kg: -delta, system: system)) vs 4 wk ago", tone: .watch)
         }
         return Status(text: "No change vs 4 wk ago", tone: .watch)
+    }
+
+    /// Mirrors `isLiftProgressing`: a real gain is >= +1% of the baseline.
+    static func isProgressing(changeKg: Double, baselineKg: Double) -> Bool {
+        changeKg > 0 && changeKg >= baselineKg * progressMinFraction - 1e-9
+    }
+
+    /// The mirror image: a real drop is >= 1% of the baseline.
+    static func isDeclining(changeKg: Double, baselineKg: Double) -> Bool {
+        changeKg < 0 && -changeKg >= baselineKg * progressMinFraction - 1e-9
     }
 
     /// Unsigned weight magnitude with its unit — metric up to one decimal

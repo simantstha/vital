@@ -97,6 +97,37 @@ final class TrendsStrengthLogicTests: XCTestCase {
         XCTAssertEqual(TrendsStrengthLogic.status(e1rm: e1rm, system: .metric).text, "No change vs 4 wk ago")
     }
 
+    func testStatusProgressThresholdIsOnePercentOfBaseline() {
+        // 100 -> 101 is exactly +1%: progressing. 100 -> 100.9 is not.
+        XCTAssertEqual(
+            TrendsStrengthLogic.status(e1rm: [nil, nil, nil, 100, nil, nil, nil, 101], system: .metric).text,
+            "+1 kg vs 4 wk ago"
+        )
+        XCTAssertEqual(
+            TrendsStrengthLogic.status(e1rm: [nil, nil, nil, 100, nil, nil, nil, 100.9], system: .metric).text,
+            "No change vs 4 wk ago"
+        )
+        // The bar scales with the lift: +1 kg on 200 kg is only +0.5% (stall),
+        // while +1 kg on 50 kg is +2% (progress) — a fixed 1 kg would call both progress.
+        XCTAssertEqual(
+            TrendsStrengthLogic.status(e1rm: [nil, nil, nil, 200, nil, nil, nil, 201], system: .metric).text,
+            "No change vs 4 wk ago"
+        )
+        XCTAssertEqual(
+            TrendsStrengthLogic.status(e1rm: [nil, nil, nil, 50, nil, nil, nil, 51], system: .metric).text,
+            "+1 kg vs 4 wk ago"
+        )
+        // Small dips under 1% of baseline are also "no change", not a decline.
+        XCTAssertEqual(
+            TrendsStrengthLogic.status(e1rm: [nil, nil, nil, 200, nil, nil, nil, 199], system: .metric).text,
+            "No change vs 4 wk ago"
+        )
+        XCTAssertEqual(
+            TrendsStrengthLogic.status(e1rm: [nil, nil, nil, 200, nil, nil, nil, 198], system: .metric).text,
+            "\u{2212}2 kg vs 4 wk ago"
+        )
+    }
+
     func testStatusReportsDeclineAsWatchWithTypographicMinus() {
         let e1rm: [Double?] = [nil, nil, nil, 110, nil, nil, nil, 100]
         let status = TrendsStrengthLogic.status(e1rm: e1rm, system: .metric)
@@ -116,12 +147,21 @@ final class TrendsStrengthLogicTests: XCTestCase {
         XCTAssertEqual(TrendsStrengthLogic.status(e1rm: e1rm, system: .metric).text, "New")
     }
 
-    func testStatusFlagsALiftNotTrainedInTheLastTwoWeeks() {
-        let e1rm: [Double?] = [100, 102, nil, nil, nil, 105, nil, nil]
-        let status = TrendsStrengthLogic.status(e1rm: e1rm, system: .metric)
-        XCTAssertEqual(status.text, "Not logged in 2 wk")
+    func testStatusFlagsALiftNotTrainedInTheLastThreeWeeks() {
+        // Newest e1RM 3 weeks back (index 4 of 8): outside the server's 3-week end search.
+        let status = TrendsStrengthLogic.status(e1rm: [100, 102, nil, nil, 105, nil, nil, nil], system: .metric)
+        XCTAssertEqual(status.text, "Not logged in 3 wk")
         XCTAssertEqual(status.tone, .watch)
         XCTAssertEqual(TrendsStrengthLogic.status(e1rm: [100, 102, nil, nil, nil, nil, nil, nil], system: .metric).text, "Not logged in 6 wk")
+    }
+
+    func testStatusStillReportsChangeWhenLastLoggedTwoWeeksBack() {
+        // Newest e1RM 2 weeks back (index 5): within the end search, so the
+        // server reports a change and so does iOS: recent 105 vs baseline 102.
+        let e1rm: [Double?] = [100, 102, nil, nil, nil, 105, nil, nil]
+        let status = TrendsStrengthLogic.status(e1rm: e1rm, system: .metric)
+        XCTAssertEqual(status.text, "+3 kg vs 4 wk ago")
+        XCTAssertEqual(status.tone, .good)
     }
 
     // MARK: - Parity with lib/liftChange.test.ts (same fixture, same numbers)

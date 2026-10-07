@@ -17,6 +17,7 @@ const state: {
 
 let updates: Array<Record<string, unknown>> = [];
 let restartCalls = 0;
+let reanchorAnswer = true;
 
 const fakeDb = {
   select: () => ({
@@ -34,6 +35,7 @@ const fakeDb = {
 mock.module('@/db', { namedExports: { db: fakeDb, schema: realSchema } });
 mock.module('@/lib/goalStart', {
   namedExports: {
+    shouldReanchorGoalForTarget: async () => reanchorAnswer,
     buildGoalRestart: async () => {
       restartCalls += 1;
       return { goal_started_at: new Date('2026-10-06T00:00:00Z'), goal_start_weight_kg: 82.1 };
@@ -46,6 +48,7 @@ const toolsPromise = import('./tools');
 function reset(over: Partial<(typeof state.usersRow)[number]> = {}) {
   updates = [];
   restartCalls = 0;
+  reanchorAnswer = true;
   state.usersRow = [{ timezone: 'UTC', unit_system: 'metric', target_weight_kg: null, ...over }];
 }
 
@@ -88,6 +91,20 @@ test('an imperial user\'s bare number is read in lb and stored in kg, rounded to
   assert.equal(result.ok, true);
   assert.equal(result.unitSystem, 'imperial');
   assert.equal(updates[0].target_weight_kg, 77.1); // 170 lb
+});
+
+test('a changed target the re-anchor rule rejects keeps the goal start (no restart columns)', async () => {
+  reset({ target_weight_kg: 80 });
+  reanchorAnswer = false;
+  const tools = await toolsPromise;
+  const result = JSON.parse(await tools.executeToolCall('set_goal_target', { targetWeight: 76, unit: 'kg' }, 'user-1'));
+
+  assert.equal(result.ok, true);
+  assert.equal(result.reanchored, false);
+  assert.equal(restartCalls, 0);
+  assert.equal(updates[0].target_weight_kg, 76);
+  assert.equal(updates[0].goal_started_at, undefined);
+  assert.equal(updates[0].goal_start_weight_kg, undefined);
 });
 
 test('an unchanged target weight does NOT re-anchor', async () => {

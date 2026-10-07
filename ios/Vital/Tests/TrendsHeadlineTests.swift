@@ -159,14 +159,15 @@ final class TrendsHeadlineTests: XCTestCase {
 
     // MARK: - Goal-relevant moves (weight trend, strength)
 
-    private func lift(_ key: String, changeKg: Double?) -> TrendsStrengthLogic.Lift {
+    private func lift(_ key: String, changeKg: Double?, baselineKg: Double? = 100) -> TrendsStrengthLogic.Lift {
         TrendsStrengthLogic.Lift(
             key: key,
             name: key.capitalized,
             currentText: "100 kg",
             sparkline: [],
             status: TrendsStrengthLogic.Status(text: "", tone: .neutral),
-            changeKg: changeKg
+            changeKg: changeKg,
+            baselineKg: changeKg == nil ? nil : baselineKg
         )
     }
 
@@ -197,6 +198,17 @@ final class TrendsHeadlineTests: XCTestCase {
         let status = TrendsHeadline.status(verdicts: [.normal], goodCount: 0, watchCount: 0, period: .thirtyDays, goalMoves: moves)
         guard case .moved(let summary) = status else { return XCTFail("expected .moved, got \(status)") }
         XCTAssertEqual(summary.fullText, "One thing moved this month — one good.")
+    }
+
+    func testLiftMoveBarIsOnePercentOfBaseline() {
+        // +1 kg on a 200 kg lift is 0.5% (noise); on a 50 kg lift it is 2% (a move).
+        let moves = TrendsHeadline.GoalMoves.make(
+            goal: "muscle", weightTrend: nil,
+            strength: card([lift("deadlift", changeKg: 1, baselineKg: 200), lift("press", changeKg: 1, baselineKg: 50), lift("row", changeKg: -1, baselineKg: 200)]),
+            weightAlreadyCounted: false
+        )
+        XCTAssertEqual(moves.liftsUp, 1)
+        XCTAssertEqual(moves.liftsDown, 0)
     }
 
     func testWeightLossTrendDownCountsAsGoodAndUpAsWatch() {

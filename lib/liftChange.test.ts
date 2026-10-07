@@ -49,6 +49,9 @@ test('progressing needs +1% of baseline', () => {
   assert.equal(isLiftProgressing({ baselineKg: 100, recentKg: 100.5, changeKg: 0.5 }), false);
   assert.equal(isLiftProgressing({ baselineKg: 100, recentKg: 100, changeKg: 0 }), false);
   assert.equal(isLiftProgressing({ baselineKg: 100, recentKg: 98, changeKg: -2 }), false);
+  // Mirrored in TrendsStrengthLogicTests.testStatusProgressThresholdIsOnePercentOfBaseline
+  assert.equal(isLiftProgressing({ baselineKg: 200, recentKg: 201, changeKg: 1 }), false);
+  assert.equal(isLiftProgressing({ baselineKg: 50, recentKg: 51, changeKg: 1 }), true);
 });
 
 const wv = (weekStart: string, e: number, volumeKg: number, totalSets = 5) => ({ weekStart, bestEstimatedOneRepMaxKg: e, volumeKg, totalSets });
