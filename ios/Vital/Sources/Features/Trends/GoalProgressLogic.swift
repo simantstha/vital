@@ -330,11 +330,17 @@ enum GoalProgressLogic {
 
     /// The Today hero's short text beside the verdict chip: the ETA-vs-target
     /// relation ("2 wk ahead of Dec 29") when there is a target date, else
-    /// the ETA ("≈ Dec 10"), else the primary line.
+    /// the target weight + ETA ("82 kg by ~Dec 10") when a target weight
+    /// exists, else the bare ETA ("≈ Dec 10"), else the primary line.
     static func compactText(_ progress: GoalProgressDTO, system: UnitSystem, now: Date = Date(), locale: Locale = .current) -> String {
         if let eta = dateText(progress.eta, now: now, locale: locale),
            progress.verdict != .needsTarget, progress.verdict != .insufficientData {
             if let relation = compactPaceVsTarget(progress, now: now, locale: locale) { return relation }
+            // Say what the date is for: "82 kg by ~Dec 6" (the verdict chip
+            // beside it already says "Progressing" etc.).
+            if let targetKg = progress.target.weightKg {
+                return "\(UnitFormat.weight(kg: targetKg, system)) by ~\(eta)"
+            }
             return "≈ \(eta)"
         }
         return primaryLine(progress, system: system)

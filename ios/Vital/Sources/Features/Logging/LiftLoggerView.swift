@@ -141,7 +141,7 @@ private extension LiftLoggerView {
 
     func setRow(exercise: LiftDraftExercise, set: Binding<LiftDraftSet>) -> some View {
         let number = (exercise.sets.firstIndex { $0.id == set.wrappedValue.id } ?? 0) + 1
-        return VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+        return VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
             HStack(spacing: Theme.Spacing.sm) {
                 Text("Set \(number)")
                     .font(.system(size: 14, weight: .semibold))
@@ -151,24 +151,36 @@ private extension LiftLoggerView {
                 }
                 Spacer()
             }
-            Stepper(
-                value: set.reps,
-                in: LiftLoggerLogic.minReps...LiftLoggerLogic.maxReps
-            ) {
-                Text("\(set.wrappedValue.reps) reps")
-                    .font(.system(size: 16, weight: .semibold))
-                    .monospacedDigit()
-            }
+            LiftStepperLine(
+                title: "Reps",
+                valueText: "\(set.wrappedValue.reps)",
+                accessibilityName: "Set \(number) reps",
+                canDecrement: set.wrappedValue.reps > LiftLoggerLogic.minReps,
+                canIncrement: set.wrappedValue.reps < LiftLoggerLogic.maxReps,
+                onDecrement: {
+                    set.wrappedValue.reps = max(LiftLoggerLogic.minReps, set.wrappedValue.reps - 1)
+                },
+                onIncrement: {
+                    set.wrappedValue.reps = min(LiftLoggerLogic.maxReps, set.wrappedValue.reps + 1)
+                }
+            )
             .accessibilityIdentifier("liftLogger.reps")
-            Stepper(
-                value: set.load,
-                in: 0...LiftLoggerLogic.maxLoad,
-                step: LiftLoggerLogic.loadStep(for: vm.system)
-            ) {
-                Text(LiftLoggerLogic.loadText(set.wrappedValue.load, system: vm.system))
-                    .font(.system(size: 16, weight: .semibold))
-                    .monospacedDigit()
-            }
+            LiftStepperLine(
+                title: "Weight",
+                valueText: LiftLoggerLogic.loadText(set.wrappedValue.load, system: vm.system),
+                accessibilityName: "Set \(number) weight",
+                canDecrement: set.wrappedValue.load > 0,
+                canIncrement: set.wrappedValue.load < LiftLoggerLogic.maxLoad,
+                onDecrement: {
+                    set.wrappedValue.load = max(0, set.wrappedValue.load - LiftLoggerLogic.loadStep(for: vm.system))
+                },
+                onIncrement: {
+                    set.wrappedValue.load = min(
+                        LiftLoggerLogic.maxLoad,
+                        set.wrappedValue.load + LiftLoggerLogic.loadStep(for: vm.system)
+                    )
+                }
+            )
             .accessibilityIdentifier("liftLogger.load")
         }
         .padding(.vertical, Theme.Spacing.xs)
@@ -232,5 +244,64 @@ private extension LiftLoggerView {
         .accessibilityIdentifier("liftLogger.save")
         .padding(.horizontal, Theme.Spacing.xl)
         .padding(.vertical, Theme.Spacing.md)
+    }
+}
+
+// MARK: - Stepper line
+
+/// One labelled line of a set row: "Reps   [−] 5 [+]". Custom (not `Stepper`)
+/// so two lines can sit in one `Form` row without their controls stacking at
+/// the trailing edge; the value sits between the − and + buttons. Exposed to
+/// VoiceOver as a single adjustable element ("Set 1 reps, 5").
+private struct LiftStepperLine: View {
+    let title: String
+    let valueText: String
+    let accessibilityName: String
+    let canDecrement: Bool
+    let canIncrement: Bool
+    let onDecrement: () -> Void
+    let onIncrement: () -> Void
+
+    var body: some View {
+        HStack(spacing: Theme.Spacing.sm) {
+            Text(title)
+                .font(.system(size: 15))
+                .foregroundStyle(Theme.Colors.textSecondary)
+            Spacer(minLength: Theme.Spacing.sm)
+            stepButton(systemName: "minus", enabled: canDecrement, action: onDecrement)
+            Text(valueText)
+                .font(.system(size: 16, weight: .semibold))
+                .monospacedDigit()
+                .foregroundStyle(Theme.Colors.textPrimary)
+                .frame(minWidth: 84)
+                .multilineTextAlignment(.center)
+            stepButton(systemName: "plus", enabled: canIncrement, action: onIncrement)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityName)
+        .accessibilityValue(valueText)
+        .accessibilityAdjustableAction { direction in
+            switch direction {
+            case .increment: if canIncrement { onIncrement() }
+            case .decrement: if canDecrement { onDecrement() }
+            @unknown default: break
+            }
+        }
+    }
+
+    private func stepButton(systemName: String, enabled: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(enabled ? Theme.Colors.textPrimary : Theme.Colors.textTertiary)
+                .frame(width: 44, height: 36)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Theme.Colors.glassFill)
+                )
+        }
+        // Borderless so each button takes its own taps inside a Form row.
+        .buttonStyle(.borderless)
+        .disabled(!enabled)
     }
 }

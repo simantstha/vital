@@ -281,9 +281,10 @@ struct TodayView: View {
             .scrollIndicators(.hidden)
             .safeAreaInset(edge: .bottom) {
                 if !isAnySheetOpen {
-                    // FAB height (~60pt) + spacing (~12pt) + tab bar (~50pt) + extra
-                    // spacing to ensure recovery tiles scroll fully above both.
-                    Color.clear.frame(height: 60 + 12 + 50 + 16)
+                    // Keep in sync with `VoiceFABView`: FAB (60pt) + its bottom
+                    // margin (`Spacing.xxxl`) + 16pt breathing room, plus slack
+                    // for the tab bar, so the last card scrolls fully above the FAB.
+                    Color.clear.frame(height: 60 + Theme.Spacing.xxxl + 16 + 50)
                 }
             }
             .refreshable { await vm.loadHealthData() }
