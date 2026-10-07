@@ -519,6 +519,20 @@ final class TodayViewModel: ObservableObject {
         )
     }
 
+    /// True when the profile has any goal target (target weight or weekly
+    /// sessions) — checks off the checklist's "Set your goal target" row.
+    @Published private(set) var hasGoalTarget = false
+
+    func refreshGoalTargetFlag() async {
+        if let response = try? await apiClient.fetchProfile() {
+            hasGoalTarget = Self.profileHasGoalTarget(response)
+        }
+    }
+
+    static func profileHasGoalTarget(_ r: ProfileResponse) -> Bool {
+        r.targetWeightKg != nil || r.weeklySessionsTarget != nil
+    }
+
     /// The checklist's third row (§4.2: weigh-in for weight_loss/general,
     /// first workout for muscle/endurance).
     var showFirstRunChecklistSecondItemDone: Bool {
@@ -891,13 +905,8 @@ final class TodayViewModel: ObservableObject {
         // Calibration state — extract if present
         if let cal = r.calibration {
             calibrationStatus = cal.status
-            // Calculate progress as min of the three metrics' dataDays / 14 (target)
-            let dataDays = [
-                cal.metrics["hrv_sdnn"]?.dataDays ?? 0,
-                cal.metrics["resting_hr"]?.dataDays ?? 0,
-                cal.metrics["sleep_minutes"]?.dataDays ?? 0
-            ].min() ?? 0
-            calibrationProgress = min(1.0, Double(dataDays) / 14.0)
+            // One shared rule with Trends/Profile — see `CalibrationProgress`.
+            calibrationProgress = CalibrationProgress.fraction(cal)
         }
 
         // Coach insight — keep the existing default if the brief isn't ready yet
@@ -1368,6 +1377,7 @@ final class TodayViewModel: ObservableObject {
     private func syncUnitPreference() async {
         do {
             let response = try await apiClient.fetchProfile()
+            hasGoalTarget = Self.profileHasGoalTarget(response)
             if UnitPreference.shared.applyServerValue(response.unitSystem) {
                 try? await apiClient.updateProfile(unitSystem: UnitPreference.shared.current.rawValue)
             }

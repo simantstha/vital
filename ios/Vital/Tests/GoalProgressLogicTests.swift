@@ -157,6 +157,14 @@ final class GoalProgressLogicTests: XCTestCase {
         XCTAssertEqual(GoalProgressLogic.compactText(weightLoss(), system: .metric, now: now, locale: en), "5 wk ahead of Jan 15, 2027")
         XCTAssertEqual(
             GoalProgressLogic.compactText(weightLoss(target: .init(weightKg: 76, date: nil, weeklySessions: nil)), system: .metric, now: now, locale: en),
+            "76 kg by ~Dec 10"
+        )
+        XCTAssertEqual(
+            GoalProgressLogic.compactText(weightLoss(target: .init(weightKg: 76, date: nil, weeklySessions: nil)), system: .imperial, now: now, locale: en),
+            "\(UnitFormat.weight(kg: 76, .imperial)) by ~Dec 10"
+        )
+        XCTAssertEqual(
+            GoalProgressLogic.compactText(weightLoss(target: .init(weightKg: nil, date: nil, weeklySessions: nil)), system: .metric, now: now, locale: en),
             "≈ Dec 10"
         )
         XCTAssertEqual(

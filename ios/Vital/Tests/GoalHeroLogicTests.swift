@@ -390,7 +390,7 @@ final class GoalHeroLogicTests: XCTestCase {
         let metric = WeightHeroLogic.sparklineCaptions(firstKg: 83.7, lastKg: 82, targetKg: 76, system: .metric)
         XCTAssertEqual(metric?.start, "Start 83.7 kg")
         XCTAssertEqual(metric?.now, "Now 82 kg")
-        XCTAssertEqual(metric?.target, "Target 76 kg")
+        XCTAssertEqual(metric?.target, "Goal 76 kg")
         let imperial = WeightHeroLogic.sparklineCaptions(firstKg: 83.7, lastKg: 82, targetKg: nil, system: .imperial)
         XCTAssertEqual(imperial?.start, "Start 185 lb")
         XCTAssertNil(imperial?.target)

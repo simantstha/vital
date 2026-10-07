@@ -221,13 +221,28 @@ final class TrendsViewModel: ObservableObject {
             strength: strength,
             weightAlreadyCounted: weightMetricMoved
         )
-        headlineStatus = TrendsHeadline.status(
+        var status = TrendsHeadline.status(
             verdicts: headlineVerdicts,
             goodCount: headlineGoodCount,
             watchCount: headlineWatchCount,
             period: period,
             goalMoves: goalMoves
         )
+        // Today's calibration card and this ring must show ONE count: when
+        // still learning with days left, use the API's shared calibration
+        // block (`CalibrationProgress`) rather than the verdict-derived guess
+        // (which reads 0 whenever no tile has a verdict yet). `remaining == 0`
+        // is the "needs variety" state and is left as the verdict says.
+        status = Self.applyingSharedCalibration(status, calibration: calibration)
+        headlineStatus = status
+    }
+
+    /// Internal for tests.
+    static func applyingSharedCalibration(_ status: TrendsHeadline.Status, calibration: CalibrationStatus?) -> TrendsHeadline.Status {
+        guard case .learning(let progress) = status, progress.daysRemaining > 0, let calibration else { return status }
+        let remaining = CalibrationProgress.totalDays - CalibrationProgress.daysDone(calibration)
+        guard remaining > 0 else { return status }
+        return .learning(TrendsHeadline.LearningProgress(daysRemaining: remaining))
     }
 
     /// Converts one batch series DTO into a display-ready `MetricSeries`:

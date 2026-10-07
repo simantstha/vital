@@ -79,10 +79,11 @@ test('brief goal section: muscle lists top lifts with e1RM change in the user\'s
     {
       goal: 'muscle',
       progress: gp({ goal: 'muscle' }),
+      todayKey: '2026-10-07',
       progression: {
         'Back Squat': [
-          { weekStart: '2026-09-13', bestEstimatedOneRepMaxKg: 100, volumeKg: 1, totalSets: 4, totalReps: 20 },
-          { weekStart: '2026-09-27', bestEstimatedOneRepMaxKg: 110, volumeKg: 1, totalSets: 4, totalReps: 20 },
+          { weekStart: '2026-08-31', bestEstimatedOneRepMaxKg: 100, volumeKg: 1, totalSets: 4, totalReps: 20 },
+          { weekStart: '2026-09-28', bestEstimatedOneRepMaxKg: 110, volumeKg: 1, totalSets: 4, totalReps: 20 },
         ],
         'Bench Press': [
           { weekStart: '2026-09-27', bestEstimatedOneRepMaxKg: 80, volumeKg: 1, totalSets: 3, totalReps: 15 },
@@ -92,8 +93,9 @@ test('brief goal section: muscle lists top lifts with e1RM change in the user\'s
     'imperial',
   );
   assert.match(text, /Lift progression/);
-  assert.match(text, /Back Squat: est\. 1RM 220 lb -> 243 lb over 2 weeks/);
-  assert.match(text, /Bench Press: est\. 1RM 176 lb \(one week of data\)/);
+  // +10 kg vs 4 weeks ago, same definition as lib/liftChange.ts (22.0 lb).
+  assert.match(text, /Back Squat: est\. 1RM \+22\.0 lb vs 4 weeks ago \(220 lb -> 243 lb\)/);
+  assert.match(text, /Bench Press: est\. 1RM 176 lb \(no 4-week comparison yet\)/);
   assert.match(text, /protein/);
 });
 

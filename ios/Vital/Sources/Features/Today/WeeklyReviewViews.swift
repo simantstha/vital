@@ -12,10 +12,25 @@ struct WeeklyReviewContent: View {
     /// full variant (the detail sheet).
     var compact = false
 
-    private let columns = [
-        GridItem(.flexible(), spacing: Theme.Spacing.md),
-        GridItem(.flexible(), spacing: Theme.Spacing.md),
-    ]
+    /// 2-up rows built by hand (not `LazyVGrid`, which sizes each cell to its
+    /// own content): the `fixedSize(vertical:)` HStack gives both tiles in a
+    /// row the taller one's height. An odd last tile keeps half width.
+    private var statsGrid: some View {
+        let pairs = stride(from: 0, to: review.stats.count, by: 2).map { i in
+            Array(review.stats[i..<min(i + 2, review.stats.count)])
+        }
+        return VStack(spacing: Theme.Spacing.md) {
+            ForEach(Array(pairs.enumerated()), id: \.offset) { _, pair in
+                HStack(alignment: .top, spacing: Theme.Spacing.md) {
+                    ForEach(pair) { stat in
+                        WeeklyReviewStatTile(stat: stat)
+                    }
+                    if pair.count == 1 { Color.clear.frame(maxWidth: .infinity) }
+                }
+                .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
@@ -41,15 +56,15 @@ struct WeeklyReviewContent: View {
                 .lineLimit(compact ? 2 : nil)
                 .fixedSize(horizontal: false, vertical: true)
                 .multilineTextAlignment(.leading)
+                // Compact card lives on Today, where the trailing voice FAB
+                // (60pt + 20pt margin) floats over the last card at rest —
+                // leave room so the headline never sits underneath it.
+                .padding(.trailing, compact ? 48 : 0)
                 .accessibilityIdentifier("weeklyReview.headline")
 
             if !compact, !WeeklyReviewLogic.isNotEnoughData(review) {
-                LazyVGrid(columns: columns, alignment: .leading, spacing: Theme.Spacing.md) {
-                    ForEach(review.stats) { stat in
-                        WeeklyReviewStatTile(stat: stat)
-                    }
-                }
-                .accessibilityIdentifier("weeklyReview.stats")
+                statsGrid
+                    .accessibilityIdentifier("weeklyReview.stats")
             }
 
             let rows = compact ? [] : WeeklyReviewLogic.rows(review)
@@ -89,7 +104,10 @@ private struct WeeklyReviewStatTile: View {
             }
         }
         .padding(Theme.Spacing.md)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        // `maxHeight: .infinity` + the grid rows' shared height (see
+        // `WeeklyReviewContent.statsGrid`) keeps both tiles in a row equal
+        // even when only one has a comparison line.
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(
             RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
                 .fill(Theme.Colors.glassFill)
@@ -204,7 +222,9 @@ struct WeeklyReviewRow: View {
                         Text("Weekly review")
                             .font(.system(size: 16, weight: .semibold))
                             .foregroundStyle(Theme.Colors.textPrimary)
-                        Text(response.review.headline)
+                        Text(WeeklyReviewLogic.isNotEnoughData(response.review)
+                             ? WeeklyReviewLogic.firstReviewText(now: AppClock.now)
+                             : response.review.headline)
                             .font(.system(size: 13))
                             .foregroundStyle(Theme.Colors.textSecondary)
                             .lineLimit(2)

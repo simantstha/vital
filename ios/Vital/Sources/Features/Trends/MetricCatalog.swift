@@ -304,6 +304,26 @@ enum MetricExplainer {
 /// Trends and metric detail all lead with what already works today and put
 /// the 14-day wait in context — never "0 of 14 days" on its own, which new
 /// users read as "the app is useless for two weeks".
+/// The ONE "days collected toward the 14-day baseline" number, shared by
+/// Today's calibration card, Trends' "Learning your normal" ring and
+/// Profile's percent. It is the smallest `dataDays` across the three
+/// recovery metrics in the API's `calibration` block, clamped to 0...14 —
+/// the same field `/api/today` and `/api/trends` both send.
+enum CalibrationProgress {
+    static let totalDays = 14
+    static let metricKeys = ["hrv_sdnn", "resting_hr", "sleep_minutes"]
+
+    static func daysDone(_ calibration: CalibrationStatus?) -> Int {
+        guard let calibration else { return 0 }
+        let smallest = metricKeys.map { calibration.metrics[$0]?.dataDays ?? 0 }.min() ?? 0
+        return min(max(smallest, 0), totalDays)
+    }
+
+    static func fraction(_ calibration: CalibrationStatus?) -> Double {
+        Double(daysDone(calibration)) / Double(totalDays)
+    }
+}
+
 enum CalibrationCopy {
     static let totalDays = 14
 

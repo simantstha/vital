@@ -159,13 +159,7 @@ final class ProfileViewModel: ObservableObject {
     /// `min(1, minimum dataDays across metrics / 14)` — same rule
     /// `TodayViewModel.applyTodayResponse` uses for its calibration progress.
     var calibrationPercent: Int {
-        guard let calibration else { return 0 }
-        let dataDays = [
-            calibration.metrics["hrv_sdnn"]?.dataDays ?? 0,
-            calibration.metrics["resting_hr"]?.dataDays ?? 0,
-            calibration.metrics["sleep_minutes"]?.dataDays ?? 0,
-        ].min() ?? 0
-        return Int((min(1.0, Double(dataDays) / 14.0) * 100).rounded())
+        Int((CalibrationProgress.fraction(calibration) * 100).rounded())
     }
 
     // MARK: - Pure formatting helpers (testable)

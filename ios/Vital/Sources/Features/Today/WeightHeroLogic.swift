@@ -189,7 +189,7 @@ enum WeightHeroLogic {
 
     /// Captions under the sparkline: "Start 83.7 kg" (first point of the
     /// window), "Now 82 kg" (latest trend point) and, when a target weight
-    /// exists, "Target 76 kg" — all in the user's unit. `nil` without points.
+    /// exists, "Goal 76 kg" — all in the user's unit. `nil` without points.
     static func sparklineCaptions(
         firstKg: Double?, lastKg: Double?, targetKg: Double?, system: UnitSystem
     ) -> (start: String, now: String, target: String?)? {
@@ -197,7 +197,7 @@ enum WeightHeroLogic {
         return (
             "Start \(UnitFormat.weight(kg: firstKg, system))",
             "Now \(UnitFormat.weight(kg: lastKg, system))",
-            targetKg.map { "Target \(UnitFormat.weight(kg: $0, system))" }
+            targetKg.map { "Goal \(UnitFormat.weight(kg: $0, system))" }
         )
     }
 

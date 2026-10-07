@@ -75,7 +75,7 @@ struct WeightHeroView: View {
         return targetDisplayValue
     }
 
-    /// "Start 83.7 kg · Now 82 kg · Target 76 kg" captions (kg-based inputs,
+    /// "Start 83.7 kg … Now 82 kg → Goal 76 kg" captions (kg-based inputs,
     /// formatted in the user's unit).
     private var sparklineCaptions: (start: String, now: String, target: String?)? {
         guard let trend, trend.established else { return nil }
@@ -149,11 +149,14 @@ struct WeightHeroView: View {
                                 HStack(spacing: Theme.Spacing.xs) {
                                     Text(captions.start)
                                     Spacer(minLength: 0)
-                                    if let target = captions.target {
-                                        Text(target)
-                                        Spacer(minLength: 0)
-                                    }
                                     Text(captions.now)
+                                    // Goal sits at the trailing edge, after "Now", so it
+                                    // reads as where the trend is heading — not a centred
+                                    // orphan under a line with no target marker.
+                                    if let target = captions.target {
+                                        Text("→ \(target)")
+                                            .padding(.leading, Theme.Spacing.md)
+                                    }
                                 }
                                 .font(.system(size: 11))
                                 .foregroundStyle(Theme.Colors.textTertiary)
