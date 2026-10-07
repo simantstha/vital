@@ -368,7 +368,15 @@ enum GoalProgressLogic {
     /// relation ("2 wk ahead of Dec 29") when there is a target date, else
     /// the target weight + ETA ("82 kg by ~Dec 10") when a target weight
     /// exists, else the bare ETA ("≈ Dec 10"), else the primary line.
-    static func compactText(_ progress: GoalProgressDTO, system: UnitSystem, now: Date = Date(), locale: Locale = .current) -> String {
+    ///
+    /// `heroShowsDistance`: the endurance hero already shows "17.2 of 30 km
+    /// this week" with a bar, so repeating that distance line here would be
+    /// redundant — show the verdict's reason instead (`distanceReasonText`).
+    static func compactText(
+        _ progress: GoalProgressDTO, system: UnitSystem, heroShowsDistance: Bool = false,
+        now: Date = Date(), locale: Locale = .current
+    ) -> String {
+        if heroShowsDistance, let reason = distanceReasonText(progress, system: system) { return reason }
         if let eta = dateText(progress.eta, now: now, locale: locale),
            progress.verdict != .needsTarget, progress.verdict != .insufficientData {
             if let relation = compactPaceVsTarget(progress, now: now, locale: locale) { return relation }
@@ -380,6 +388,18 @@ enum GoalProgressLogic {
             return "≈ \(eta)"
         }
         return primaryLine(progress, system: system)
+    }
+
+    /// Why the verdict is what it is, in one short phrase, for a surface that
+    /// already shows this week's distance progress ("distance up 12% (last 2
+    /// weeks vs the 2 before)"): the server headline minus its verdict prefix,
+    /// else the first reason. Never the "X of Y km this week" line itself.
+    /// `nil` when nothing other than that line is available.
+    static func distanceReasonText(_ progress: GoalProgressDTO, system: UnitSystem) -> String? {
+        let progressLine = distanceLine(progress, system: system)
+        let candidates = [headlineWithoutVerdict(progress.headline)]
+            + progress.reasons.map { nonEmpty($0.text) }
+        return candidates.compactMap { $0 }.first { $0 != progressLine }
     }
 
     // MARK: - Detail sheet copy

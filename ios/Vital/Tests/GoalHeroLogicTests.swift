@@ -382,8 +382,50 @@ final class GoalHeroLogicTests: XCTestCase {
         XCTAssertFalse(WeightHeroLogic.sparklineTargetVisible(values: values, minSpan: 1, target: nil))
         let near = WeightHeroLogic.sparklineDomain(values: values, minSpan: 1, target: 80)!
         XCTAssertLessThanOrEqual(near.lowerBound, 80)
-        let far = WeightHeroLogic.sparklineDomain(values: values, minSpan: 1, target: 76)!
-        XCTAssertEqual(far, WeightHeroLogic.sparklineDomain(values: values, minSpan: 1)!)
+    }
+
+    func testFarTargetIsCompressedBelowTheTrendNotOmitted() {
+        let values = [82.0, 82.4, 83.0, 83.7]
+        let base = WeightHeroLogic.sparklineDomain(values: values, minSpan: 1)!
+        let layout = WeightHeroLogic.sparklineLayout(values: values, minSpan: 1, target: 76)!
+        XCTAssertTrue(layout.targetCompressed)
+        let line = layout.targetLine!
+        // Trend keeps its own range in the upper part; the line sits below it, inside the domain.
+        XCTAssertEqual(layout.domain.upperBound, base.upperBound, accuracy: 1e-9)
+        XCTAssertLessThan(layout.domain.lowerBound, base.lowerBound)
+        XCTAssertLessThan(line, base.lowerBound)
+        XCTAssertGreaterThan(line, layout.domain.lowerBound)
+        // Not to scale: nowhere near the real 76.
+        XCTAssertGreaterThan(line, 76)
+        XCTAssertEqual(WeightHeroLogic.sparklineDomain(values: values, minSpan: 1, target: 76), layout.domain)
+    }
+
+    func testFarTargetAboveTheTrendCompressesUpward() {
+        let values = [60.0, 60.4, 61.0]
+        let base = WeightHeroLogic.sparklineDomain(values: values, minSpan: 1)!
+        let layout = WeightHeroLogic.sparklineLayout(values: values, minSpan: 1, target: 80)!
+        XCTAssertTrue(layout.targetCompressed)
+        XCTAssertGreaterThan(layout.targetLine!, base.upperBound)
+        XCTAssertLessThan(layout.targetLine!, layout.domain.upperBound)
+    }
+
+    func testNearOrAbsentTargetIsNotCompressed() {
+        let values = [82.0, 82.4, 83.0, 83.7]
+        let near = WeightHeroLogic.sparklineLayout(values: values, minSpan: 1, target: 80)!
+        XCTAssertFalse(near.targetCompressed)
+        XCTAssertEqual(near.targetLine, 80)
+        let none = WeightHeroLogic.sparklineLayout(values: values, minSpan: 1, target: nil)!
+        XCTAssertNil(none.targetLine)
+        XCTAssertNil(WeightHeroLogic.sparklineLayout(values: [], minSpan: 1, target: 76))
+    }
+
+    func testTargetArrowPointsDownForCompressedLossGoal() {
+        let values = [82.0, 83.7]
+        let far = WeightHeroLogic.sparklineLayout(values: values, minSpan: 1, target: 70)
+        XCTAssertEqual(WeightHeroLogic.sparklineTargetArrow(layout: far, targetKg: 70, lastKg: 83.7), "↓")
+        let near = WeightHeroLogic.sparklineLayout(values: values, minSpan: 1, target: 81)
+        XCTAssertEqual(WeightHeroLogic.sparklineTargetArrow(layout: near, targetKg: 81, lastKg: 83.7), "→")
+        XCTAssertEqual(WeightHeroLogic.sparklineTargetArrow(layout: nil, targetKg: nil, lastKg: nil), "→")
     }
 
     func testSparklineCaptionsAreUnitAware() {
@@ -409,5 +451,21 @@ final class GoalHeroLogicTests: XCTestCase {
         XCTAssertEqual(ProfileViewModel.goalRowLabel(goalLabel: "Lose weight", goalId: "weight_loss", targetWeightKg: nil, weeklySessions: nil, system: .metric), "Lose weight")
         XCTAssertEqual(ProfileViewModel.goalRowLabel(goalLabel: "Maintain", goalId: "general", targetWeightKg: 70, weeklySessions: 3, system: .metric), "Maintain")
         XCTAssertEqual(ProfileViewModel.goalRowLabel(goalLabel: "", goalId: "", targetWeightKg: nil, weeklySessions: nil, system: .metric), "")
+    }
+
+    // MARK: - Voice FAB scroll behaviour
+
+    func testFabShrinksOnDownwardScrollAndRestoresOnUpwardOrEdges() {
+        // Scrolling down mid-page -> compact.
+        XCTAssertTrue(VoiceFABScroll.isCompact(current: false, oldOffset: 100, newOffset: 140, maxOffset: 1000))
+        // Scrolling up -> restored.
+        XCTAssertFalse(VoiceFABScroll.isCompact(current: true, oldOffset: 300, newOffset: 260, maxOffset: 1000))
+        // Tiny jitter keeps the current state.
+        XCTAssertTrue(VoiceFABScroll.isCompact(current: true, oldOffset: 300, newOffset: 302, maxOffset: 1000))
+        XCTAssertFalse(VoiceFABScroll.isCompact(current: false, oldOffset: 300, newOffset: 298, maxOffset: 1000))
+        // Top (incl. pull-to-refresh rubber band) and bottom always restore.
+        XCTAssertFalse(VoiceFABScroll.isCompact(current: true, oldOffset: 60, newOffset: 10, maxOffset: 1000))
+        XCTAssertFalse(VoiceFABScroll.isCompact(current: true, oldOffset: 0, newOffset: -40, maxOffset: 1000))
+        XCTAssertFalse(VoiceFABScroll.isCompact(current: false, oldOffset: 960, newOffset: 990, maxOffset: 1000))
     }
 }

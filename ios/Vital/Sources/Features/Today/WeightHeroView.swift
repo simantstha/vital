@@ -56,8 +56,8 @@ struct WeightHeroView: View {
     /// review fix, 2026-09-23: Swift Charts includes 0 in a numeric y-domain
     /// by default, which pins an ~82 kg trend to the very top of the frame
     /// and reads as a flat divider line rather than a chart.
-    private var sparklineDomain: ClosedRange<Double>? {
-        WeightHeroLogic.sparklineDomain(values: sparklinePoints.map(\.value), minSpan: sparklineMinSpan, target: targetDisplayValue)
+    private var sparklineLayout: WeightHeroLogic.SparklineLayout? {
+        WeightHeroLogic.sparklineLayout(values: sparklinePoints.map(\.value), minSpan: sparklineMinSpan, target: targetDisplayValue)
     }
 
     /// Target weight in the user's unit, matching `sparklinePoints`.
@@ -66,13 +66,16 @@ struct WeightHeroView: View {
         return system == .metric ? targetKg : UnitConvert.kgToLb(targetKg)
     }
 
-    /// The dashed line is only drawn when it fits the domain without
-    /// flattening the trend.
-    private var drawnTargetValue: Double? {
-        guard WeightHeroLogic.sparklineTargetVisible(
-            values: sparklinePoints.map(\.value), minSpan: sparklineMinSpan, target: targetDisplayValue
-        ) else { return nil }
-        return targetDisplayValue
+    /// Dashed target line's y position — true value when near the trend,
+    /// otherwise a compressed marker near the chart's edge (see
+    /// `WeightHeroLogic.sparklineLayout`).
+    private var drawnTargetValue: Double? { sparklineLayout?.targetLine }
+
+    /// "→" (to scale), "↓"/"↑" (compressed: the goal is far beyond the chart).
+    private var targetArrow: String {
+        WeightHeroLogic.sparklineTargetArrow(
+            layout: sparklineLayout, targetKg: targetKg, lastKg: trend?.days.last?.trendKg
+        )
     }
 
     /// "Start 83.7 kg … Now 82 kg → Goal 76 kg" captions (kg-based inputs,
@@ -142,8 +145,8 @@ struct WeightHeroView: View {
                             .monospacedDigit()
                             .contentTransition(.numericText())
 
-                        if let sparklineDomain {
-                            sparkline(domain: sparklineDomain)
+                        if let layout = sparklineLayout {
+                            sparkline(domain: layout.domain)
                                 .frame(height: 36)
                             if let captions = sparklineCaptions {
                                 HStack(spacing: Theme.Spacing.xs) {
@@ -154,7 +157,7 @@ struct WeightHeroView: View {
                                     // reads as where the trend is heading — not a centred
                                     // orphan under a line with no target marker.
                                     if let target = captions.target {
-                                        Text("→ \(target)")
+                                        Text("\(targetArrow) \(target)")
                                             .padding(.leading, Theme.Spacing.md)
                                     }
                                 }

@@ -22,6 +22,8 @@ struct TodayView: View {
     @State private var showLiftLogger = false
     /// Goal-progress detail sheet — opened from the one-line verdict under the hero.
     @State private var showGoalProgress = false
+    /// Voice FAB shrinks while Today scrolls down (see `VoiceFABScroll`).
+    @State private var fabCompact = false
     /// Weekly review detail sheet — opened from the Mon-Wed review card.
     @State private var showWeeklyReview = false
     @ObservedObject private var weeklyReviewStore = WeeklyReviewStore.shared
@@ -179,6 +181,7 @@ struct TodayView: View {
                                 GoalProgressLine(
                                     progress: progress,
                                     system: unitPref.current,
+                                    heroShowsDistance: vm.goalLineHeroShowsDistance,
                                     onTap: { showGoalProgress = true }
                                 )
                                 .padding(.top, -Theme.Spacing.md)
@@ -284,6 +287,18 @@ struct TodayView: View {
                 .padding(.bottom, Theme.Spacing.lg)
             }
             .scrollIndicators(.hidden)
+            .onScrollGeometryChange(for: TodayScrollOffsets.self) { geo in
+                TodayScrollOffsets(
+                    y: geo.contentOffset.y + geo.contentInsets.top,
+                    maxY: max(0, geo.contentSize.height - geo.containerSize.height
+                              + geo.contentInsets.top + geo.contentInsets.bottom)
+                )
+            } action: { old, new in
+                let next = VoiceFABScroll.isCompact(
+                    current: fabCompact, oldOffset: old.y, newOffset: new.y, maxOffset: new.maxY
+                )
+                if next != fabCompact { fabCompact = next }
+            }
             .safeAreaInset(edge: .bottom) {
                 if !isAnySheetOpen {
                     // Keep in sync with `VoiceFABView`: FAB (60pt) + its bottom
@@ -302,6 +317,7 @@ struct TodayView: View {
             if !isAnySheetOpen {
                 VoiceFABView(
                     coachVM: coachVM,
+                    isCompact: fabCompact,
                     onSent: {
                         vm.toastMessage = "Sent to your coach"
                         Task {
@@ -805,4 +821,11 @@ struct VitalProgressBar: View {
         }
         .frame(height: height)
     }
+}
+
+/// Scroll snapshot for the Today ScrollView: normalised offset (0 at rest at
+/// the top) and the furthest offset (bottom).
+private struct TodayScrollOffsets: Equatable {
+    var y: Double
+    var maxY: Double
 }
