@@ -376,7 +376,10 @@ enum GoalProgressLogic {
         _ progress: GoalProgressDTO, system: UnitSystem, heroShowsDistance: Bool = false,
         now: Date = Date(), locale: Locale = .current
     ) -> String {
-        if heroShowsDistance, let reason = distanceReasonText(progress, system: system) { return reason }
+        // Only when there is a distance line the hero could be duplicating —
+        // weight/muscle goals have no distance block and must be unaffected.
+        if heroShowsDistance, distanceLine(progress, system: system) != nil,
+           let reason = distanceReasonText(progress, system: system) { return reason }
         if let eta = dateText(progress.eta, now: now, locale: locale),
            progress.verdict != .needsTarget, progress.verdict != .insufficientData {
             if let relation = compactPaceVsTarget(progress, now: now, locale: locale) { return relation }
