@@ -548,7 +548,7 @@ final class FixtureCrossScreenConsistencyTests: XCTestCase {
         XCTAssertEqual(progress.reasons.map(\.kind), ["race", "week_distance", "long_run"])
         let longRun = progress.reasons[2].text
         XCTAssertTrue(longRun.hasPrefix("Long run 14 km \u{00B7} build to 18 km by "), longRun)
-        XCTAssertEqual(RaceLogic.longRunRowText(progress.longRun!, .metric), "14 km \u{00B7} peak target 18 km")
+        XCTAssertEqual(RaceLogic.longRunRowText(progress.longRun!, .metric), "14\u{00A0}km \u{00B7} peak target 18\u{00A0}km")
 
         // The other scenarios never carry a long run.
         for scenario in [FixtureMode.Scenario.weightLoss, .muscle] {
@@ -564,7 +564,7 @@ final class FixtureCrossScreenConsistencyTests: XCTestCase {
             system: .metric
         )
         XCTAssertTrue(row.hasPrefix("Half marathon \u{00B7} "), row)
-        XCTAssertTrue(row.hasSuffix(" \u{00B7} 30 km/wk"), row)
+        XCTAssertTrue(row.hasSuffix(" \u{00B7} 30\u{00A0}km/wk"), row)
         XCTAssertFalse(row.contains("Endurance"), "the race replaces the generic goal word: \(row)")
     }
 
@@ -620,6 +620,60 @@ final class FixtureCrossScreenConsistencyTests: XCTestCase {
             noun: AnalysisLogic.activityNoun(type: walk.metrics?.type)
         )
         XCTAssertEqual(line, AnalysisLogic.SinceLastHard(label: "Since your last hard session", days: 2))
+    }
+
+    /// The effort bar draws "your average" at (avg − resting) / (max − resting)
+    /// of the heart-rate range and the workout's own max-HR ring on the same
+    /// scale, so an avg HR below the max HR must put the tick LEFT of the ring.
+    /// The muscle walk once shipped avgPct 0.57 against avg 108 / max 121 /
+    /// resting 52 (≈ 0.41 / 0.51), drawing the tick past the max ring.
+    func test_workoutEffortAverageTickAgreesWithItsHeartRates() throws {
+        let zones = ["easy", "steady", "hard", "max"]
+        for scenario in scenarios {
+            let id = scenario == .endurance ? "fixture-workout-analysis" : "fixture-workout-analysis-routine"
+            let (_, data) = FixtureData.response(scenario: scenario, method: "GET", path: "/api/workout-analyses/\(id)", query: "")
+            let analysis = try JSONDecoder.vital.decode(AnalysisResponse.self, from: data)
+            let effort = try XCTUnwrap(analysis.context?.effort, "\(scenario) effort")
+            let avgHr = try XCTUnwrap(analysis.metrics?.avgHr, "\(scenario) avgHr")
+            let maxHr = try XCTUnwrap(analysis.metrics?.maxHr, "\(scenario) maxHr")
+
+            let expectedAvg = AnalysisLogic.heartRateRangeFraction(avgHr, restingHr: effort.restingHr, maxHr: effort.maxHr)
+            let ring = AnalysisLogic.heartRateRangeFraction(maxHr, restingHr: effort.restingHr, maxHr: effort.maxHr)
+            XCTAssertEqual(effort.avgPct, expectedAvg, accuracy: 0.01, "\(scenario) avgPct vs its own heart rates")
+            XCTAssertLessThan(effort.avgPct, ring, "\(scenario): the average tick must sit left of the max ring")
+            XCTAssertEqual(zones[AnalysisLogic.effortZoneIndex(avgFraction: effort.avgPct)], effort.zone, "\(scenario) zone")
+        }
+
+        // The persona-review case, pinned: Priya's walk is ~41% of her range, not 57%.
+        let (_, walkData) = FixtureData.response(scenario: .muscle, method: "GET", path: "/api/workout-analyses/fixture-workout-analysis-routine", query: "")
+        let walk = try JSONDecoder.vital.decode(AnalysisResponse.self, from: walkData)
+        XCTAssertEqual(walk.metrics?.avgHr, 108)
+        XCTAssertEqual(walk.metrics?.maxHr, 121)
+        XCTAssertEqual(walk.context?.effort?.restingHr, 52)
+        XCTAssertEqual(walk.context?.effort?.avgPct ?? .nan, 0.41, accuracy: 0.01)
+    }
+
+    /// Priya's insight must acknowledge the sessions her goal line says she is
+    /// behind on ("2 more by Sun") instead of closing with "stay the course".
+    func test_muscleInsightAcknowledgesTheRemainingSessions() throws {
+        let insight = try XCTUnwrap(json(.muscle, "/api/today")["insight"] as? String)
+        XCTAssertFalse(insight.contains("stay the course"), insight)
+
+        let (_, goalData) = FixtureData.response(scenario: .muscle, method: "GET", path: "/api/goal/progress", query: "tz=UTC")
+        let adherence = try XCTUnwrap(try JSONDecoder().decode(GoalProgressDTO.self, from: goalData).adherence)
+        let summary = json(.muscle, "/api/training/summary", "tz=UTC")
+        let days = ((summary["week"] as? [String: Any])?["days"] as? [[String: Any]]) ?? []
+        let done = days.filter { ($0["planned"] as? Bool) == true && ($0["completed"] as? Bool) == true }.count
+        let remaining = adherence.weeklyTarget - done
+        XCTAssertEqual(remaining, 2)
+        XCTAssertTrue(insight.hasSuffix("get the \(remaining) remaining sessions in by Sunday."), insight)
+    }
+
+    /// Sam's insight keeps "0.6 kg" whole, like the rest of the unit copy.
+    func test_weightLossInsightKeepsTheWeightAndUnitTogether() throws {
+        let insight = try XCTUnwrap(json(.weightLoss, "/api/today")["insight"] as? String)
+        XCTAssertTrue(insight.hasPrefix("You're down 0.6\u{00A0}kg this week"), insight)
+        XCTAssertFalse(insight.contains("0.6kg"), insight)
     }
 
     // MARK: - Squat progression

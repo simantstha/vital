@@ -273,7 +273,7 @@ private extension ProfileView {
                 }
 
                 settingsButton(index: 2, icon: "flame", title: "Daily budget",
-                               value: vm.budgetKcal.map { "\($0) kcal" } ?? "--") {
+                               value: UnitFormat.kcal(vm.budgetKcal)) {
                     showBudgetEditor = true
                 }
 

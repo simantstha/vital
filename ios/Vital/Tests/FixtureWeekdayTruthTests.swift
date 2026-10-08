@@ -89,7 +89,7 @@ final class FixtureWeekdayTruthTests: XCTestCase {
     private func expectedMuscleInsight() throws -> String {
         let day = try XCTUnwrap(lastLiftDay, "muscle fixture must carry a last lift")
         let name = try XCTUnwrap(weekday(ofDay: day), "unparseable last-lift day \(day)")
-        return "Protein's on target four days running and \(name)'s squat was your best in 4 weeks \u{2014} stay the course."
+        return "Protein's on target four days running and \(name)'s squat was your best in 4 weeks \u{2014} get the 2 remaining sessions in by Sunday."
     }
 
     private func expectedNextStep() -> String {

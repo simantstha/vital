@@ -19,12 +19,12 @@ final class AnalysisLogicTests: XCTestCase {
     func testDistanceChipAboveUsualIsNeutralWithPlusSign() {
         let chip = AnalysisLogic.distanceChip(distanceM: 11_400, usualDistanceM: 10_000, unit: .metric)
         XCTAssertEqual(chip.tone, .neutral)
-        XCTAssertEqual(chip.text, "+1.4 km")
+        XCTAssertEqual(chip.text, "+1.4\u{00A0}km")
     }
 
     func testDistanceChipBelowUsualUsesMinusSign() {
         let chip = AnalysisLogic.distanceChip(distanceM: 8_000, usualDistanceM: 10_000, unit: .metric)
-        XCTAssertEqual(chip.text, "\u{2212}2 km")
+        XCTAssertEqual(chip.text, "\u{2212}2\u{00A0}km")
     }
 
     func testDistanceChipImperial() {

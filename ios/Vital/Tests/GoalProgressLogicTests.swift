@@ -214,7 +214,7 @@ final class GoalProgressLogicTests: XCTestCase {
         XCTAssertEqual(GoalProgressLogic.compactText(weightLoss(), system: .metric, now: now, locale: en), "5\u{00A0}wk ahead of Jan 15, 2027")
         XCTAssertEqual(
             GoalProgressLogic.compactText(weightLoss(target: .init(weightKg: 76, date: nil, weeklySessions: nil)), system: .metric, now: now, locale: en),
-            "76 kg by ~Dec 10"
+            "76\u{00A0}kg by ~Dec 10"
         )
         XCTAssertEqual(
             GoalProgressLogic.compactText(weightLoss(target: .init(weightKg: 76, date: nil, weeklySessions: nil)), system: .imperial, now: now, locale: en),
@@ -308,8 +308,8 @@ final class GoalProgressLogicTests: XCTestCase {
     }
 
     func testRateTextUsesUserUnit() {
-        XCTAssertEqual(GoalProgressLogic.rateText(weightLoss(), system: .metric), "\u{2212}0.6 kg/wk")
-        XCTAssertEqual(GoalProgressLogic.rateText(weightLoss(), system: .imperial), "\u{2212}1.3 lb/wk")
+        XCTAssertEqual(GoalProgressLogic.rateText(weightLoss(), system: .metric), "\u{2212}0.6\u{00A0}kg/wk")
+        XCTAssertEqual(GoalProgressLogic.rateText(weightLoss(), system: .imperial), "\u{2212}1.3\u{00A0}lb/wk")
     }
 
     // MARK: - Fraction + reasons
@@ -450,7 +450,7 @@ final class GoalProgressLogicTests: XCTestCase {
         XCTAssertEqual(GoalProgressLogic.staleWeighInText(stale(4)), "Last weigh-in 4 days ago — step on the scale to update")
         XCTAssertEqual(GoalProgressLogic.compactText(stale(6), system: .metric, now: now, locale: en),
                        "Last weigh-in 6 days ago — step on the scale to update")
-        XCTAssertEqual(GoalProgressLogic.compactText(stale(1), system: .metric, now: now, locale: en), "76 kg by ~Dec 10")
+        XCTAssertEqual(GoalProgressLogic.compactText(stale(1), system: .metric, now: now, locale: en), "76\u{00A0}kg by ~Dec 10")
     }
 
     func testLastWeighInDaysAgoDecodesTolerantly() throws {
@@ -513,7 +513,7 @@ final class GoalProgressLogicTests: XCTestCase {
         )
         XCTAssertEqual(GoalProgressLogic.compactText(muscle, system: .metric, now: now, locale: en), "Squat +10 kg vs 4 wk")
         let noLift = GoalProgressDTO(goal: "muscle", target: .init(weightKg: 90), eta: "2026-12-06", verdict: .progressing)
-        XCTAssertEqual(GoalProgressLogic.compactText(noLift, system: .metric, now: now, locale: en), "90 kg by ~Dec 6")
+        XCTAssertEqual(GoalProgressLogic.compactText(noLift, system: .metric, now: now, locale: en), "90\u{00A0}kg by ~Dec 6")
     }
 
     // MARK: - Muscle "sessions behind": cause + next step
@@ -681,6 +681,86 @@ final class GoalProgressLogicTests: XCTestCase {
         XCTAssertEqual(GoalProgressLogic.nonBreaking("Half marathon in 12 weeks (Dec 30)"),
                        "Half marathon in 12\u{00A0}weeks (Dec 30)")
         XCTAssertEqual(GoalProgressLogic.nonBreaking(""), "")
+    }
+
+    // MARK: - Detail sheet stats rows (weight rows only when they belong)
+
+    /// A race-goal runner who also has a body weight on file (so "Now 61 kg"
+    /// would be available) but no target weight.
+    private func enduranceWithBodyWeight(targetWeightKg: Double? = nil) -> GoalProgressDTO {
+        GoalProgressDTO(
+            goal: "endurance",
+            target: .init(weightKg: targetWeightKg, weeklyDistanceKm: 30),
+            distance: .init(targetKm: 30, thisWeekKm: 24.5, avg4wKm: 22.6, weekStart: "2026-10-05"),
+            race: .init(date: "2026-12-30", distanceKm: 21.1, label: "Half marathon", weeksToGo: 12, daysToGo: 85),
+            longRun: .init(lastKm: 14, peakKm: 16, targetPeakKm: 18),
+            current: .init(weightKg: 61, startWeightKg: 61.5, changeKg: -0.5),
+            ratePerWeek: .init(kg: -0.1, pctBodyweight: -0.16),
+            verdict: .building,
+            dataSufficiency: .init(weighIns: 11, needed: 3, sessionsLast28d: 12)
+        )
+    }
+
+    func testEnduranceStatRowsHideWeightRowsWithoutATargetWeight() {
+        let progress = enduranceWithBodyWeight()
+        XCTAssertFalse(GoalProgressLogic.showsWeightRows(progress))
+        let rows = GoalProgressLogic.statRows(progress, system: .metric)
+        XCTAssertEqual(
+            rows.map(\.label),
+            ["Race", "Long run", "Weekly distance goal", "This week", "4-week average", "Sessions, last 4 weeks"]
+        )
+        // The table opens with the race, never "Now 61 kg".
+        XCTAssertEqual(rows.first?.label, "Race")
+        XCTAssertEqual(rows.first { $0.label == "Weekly distance goal" }?.value, "30\u{00A0}km")
+        XCTAssertEqual(rows.first { $0.label == "This week" }?.value, "24.5\u{00A0}km")
+    }
+
+    func testEnduranceStatRowsKeepWeightRowsWhenATargetWeightExists() {
+        let progress = enduranceWithBodyWeight(targetWeightKg: 58)
+        XCTAssertTrue(GoalProgressLogic.showsWeightRows(progress))
+        let rows = GoalProgressLogic.statRows(progress, system: .metric)
+        XCTAssertEqual(rows.prefix(4).map(\.label), ["Start", "Now", "Target", "Trend"])
+        XCTAssertEqual(rows.prefix(4).map(\.value), [
+            "61.5\u{00A0}kg", "61\u{00A0}kg", "58\u{00A0}kg", "\u{2212}0.1\u{00A0}kg/wk",
+        ])
+    }
+
+    func testGeneralGoalStatRowsFollowTheSameTargetWeightRule() {
+        let noTarget = GoalProgressDTO(
+            goal: "general",
+            current: .init(weightKg: 70, startWeightKg: 71, changeKg: -1),
+            ratePerWeek: .init(kg: -0.2),
+            verdict: .holding
+        )
+        XCTAssertFalse(GoalProgressLogic.showsWeightRows(noTarget))
+        XCTAssertTrue(GoalProgressLogic.statRows(noTarget, system: .metric).isEmpty)
+
+        let withTarget = GoalProgressDTO(
+            goal: "general",
+            target: .init(weightKg: 68),
+            current: .init(weightKg: 70, startWeightKg: 71, changeKg: -1),
+            ratePerWeek: .init(kg: -0.2),
+            verdict: .holding
+        )
+        XCTAssertTrue(GoalProgressLogic.showsWeightRows(withTarget))
+        XCTAssertEqual(GoalProgressLogic.statRows(withTarget, system: .metric).map(\.label), ["Start", "Now", "Target", "Trend"])
+    }
+
+    func testWeightLossAndMuscleGoalsAlwaysListTheirWeightRows() {
+        let loss = weightLoss()
+        XCTAssertTrue(GoalProgressLogic.showsWeightRows(loss))
+        XCTAssertEqual(GoalProgressLogic.statRows(loss, system: .metric).map(\.label), ["Start", "Now", "Target", "Trend"])
+        XCTAssertEqual(GoalProgressLogic.statRows(loss, system: .metric).map(\.value), [
+            "83.7\u{00A0}kg", "82\u{00A0}kg", "76\u{00A0}kg", "\u{2212}0.6\u{00A0}kg/wk",
+        ])
+        // Muscle without a target weight still shows where the body weight started and is now.
+        let muscle = GoalProgressDTO(
+            goal: "muscle",
+            current: .init(weightKg: 80, startWeightKg: 79, changeKg: 1),
+            verdict: .progressing
+        )
+        XCTAssertTrue(GoalProgressLogic.showsWeightRows(muscle))
+        XCTAssertEqual(GoalProgressLogic.statRows(muscle, system: .metric).map(\.label), ["Start", "Now"])
     }
 
     func testCompactReasonShortensEnduranceVolumeCopy() {

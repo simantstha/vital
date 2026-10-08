@@ -6,17 +6,25 @@ import Foundation
 /// used to be duplicated across `ProfileViewModel` and `PersonalDetailsView`.
 enum UnitFormat {
 
+    /// U+00A0. Every user-facing "number + unit" string built here joins the
+    /// two with a NON-BREAKING space, so a narrow row (Profile's Goal row,
+    /// goal-sheet stats, a toast) can wrap BETWEEN tokens but never strand the
+    /// unit on its own line ("30" / "km/wk"). Entry-field text
+    /// (`weightEntryText`, `distanceEntryText`) stays bare digits, no unit.
+    static let nbsp = "\u{00A0}"
+
     // MARK: - Weight
 
     /// Metric reproduces `ProfileViewModel.formatWeight`'s existing output
-    /// exactly (e.g. `"62.5 kg"`); imperial reproduces `"154 lb"`.
+    /// (e.g. `"62.5 kg"`) and imperial `"154 lb"`, with a non-breaking space
+    /// (`nbsp`) between the number and the unit.
     static func weight(kg: Double?, _ system: UnitSystem, placeholder: String = "--") -> String {
         guard let kg else { return placeholder }
         switch system {
         case .metric:
-            return "\(formatNumber(kg, maximumFractionDigits: 1)) kg"
+            return "\(formatNumber(kg, maximumFractionDigits: 1))\(nbsp)kg"
         case .imperial:
-            return "\(Int(UnitConvert.kgToLb(kg).rounded())) lb"
+            return "\(Int(UnitConvert.kgToLb(kg).rounded()))\(nbsp)lb"
         }
     }
 
@@ -37,7 +45,7 @@ enum UnitFormat {
         let rounded = roundedToOneDecimal(value)
         let sign = rounded < 0 ? "\u{2212}" : (rounded > 0 ? "+" : "")
         let magnitude = String(format: "%.1f", abs(rounded))
-        return "\(sign)\(magnitude) \(system.weightUnit)/wk"
+        return "\(sign)\(magnitude)\(nbsp)\(system.weightUnit)/wk"
     }
 
     /// Same sign/rounding as `weightDelta`, without the repeated unit
@@ -64,12 +72,13 @@ enum UnitFormat {
 
     // MARK: - Height
 
-    /// Metric reproduces `"168 cm"`; imperial reproduces `"5' 9\""`.
+    /// Metric reproduces `"168 cm"` (non-breaking space before the unit);
+    /// imperial reproduces `"5' 9\""`.
     static func height(cm: Double?, _ system: UnitSystem, placeholder: String = "--") -> String {
         guard let cm else { return placeholder }
         switch system {
         case .metric:
-            return "\(Int(cm.rounded())) cm"
+            return "\(Int(cm.rounded()))\(nbsp)cm"
         case .imperial:
             let parts = heightParts(cm: cm)
             return "\(parts.feet)' \(parts.inches)\""
@@ -99,9 +108,9 @@ enum UnitFormat {
         guard let km else { return placeholder }
         switch system {
         case .metric:
-            return "\(formatNumber(km, maximumFractionDigits: 1)) km"
+            return "\(formatNumber(km, maximumFractionDigits: 1))\(nbsp)km"
         case .imperial:
-            return "\(formatNumber(UnitConvert.kmToMiles(km), maximumFractionDigits: 1)) mi"
+            return "\(formatNumber(UnitConvert.kmToMiles(km), maximumFractionDigits: 1))\(nbsp)mi"
         }
     }
 
@@ -120,11 +129,7 @@ enum UnitFormat {
     /// decimal separator) in `system`'s unit and converts it to km for the
     /// API. Returns nil for unparseable input.
     static func km(fromDistanceEntry text: String, _ system: UnitSystem) -> Double? {
-        guard let value = Double(
-            text.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: ",", with: ".")
-        ) else {
-            return nil
-        }
+        guard let value = entryNumber(text) else { return nil }
         return system == .metric ? value : UnitConvert.milesToKm(value)
     }
 
@@ -140,6 +145,27 @@ enum UnitFormat {
         var seconds = Int(((value - Double(wholeMinutes)) * 60).rounded())
         if seconds == 60 { wholeMinutes += 1; seconds = 0 }
         return "\(wholeMinutes)′\(String(format: "%02d", seconds))″"
+    }
+
+    // MARK: - Energy
+
+    /// "1,850" — a whole number with the locale's thousands separator, the
+    /// same grouping Today's budget text gets from `Int.formatted()`, so
+    /// Profile's "Daily budget" and the Logs day header never print "1850"
+    /// next to Today's "1,850". `locale` is injectable for tests.
+    static func kcalNumber(_ value: Int, locale: Locale = .current) -> String {
+        let formatter = NumberFormatter()
+        formatter.locale = locale
+        formatter.numberStyle = .decimal
+        formatter.usesGroupingSeparator = true
+        formatter.maximumFractionDigits = 0
+        return formatter.string(from: NSNumber(value: value)) ?? String(value)
+    }
+
+    /// "1,850 kcal" (non-breaking space), or `placeholder` when `value` is nil.
+    static func kcal(_ value: Int?, locale: Locale = .current, placeholder: String = "--") -> String {
+        guard let value else { return placeholder }
+        return "\(kcalNumber(value, locale: locale))\(nbsp)kcal"
     }
 
     // MARK: - Editable entry-field text (PersonalDetailsView-style editors)
@@ -163,15 +189,21 @@ enum UnitFormat {
     /// decimal separator) and converts it to kg for the API. Returns nil for
     /// unparseable input.
     static func kg(fromEntry text: String, _ system: UnitSystem) -> Double? {
-        guard let value = Double(
-            text.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: ",", with: ".")
-        ) else {
-            return nil
-        }
+        guard let value = entryNumber(text) else { return nil }
         return system == .metric ? value : UnitConvert.lbToKg(value)
     }
 
     // MARK: - Private
+
+    /// Shared by both entry parsers: tolerates a pasted non-breaking space
+    /// (the formatted outputs above use one) and `,` as the decimal separator.
+    private static func entryNumber(_ text: String) -> Double? {
+        Double(
+            text.replacingOccurrences(of: nbsp, with: "")
+                .trimmingCharacters(in: .whitespaces)
+                .replacingOccurrences(of: ",", with: ".")
+        )
+    }
 
     private static func formatNumber(_ value: Double, maximumFractionDigits: Int) -> String {
         let formatter = NumberFormatter()

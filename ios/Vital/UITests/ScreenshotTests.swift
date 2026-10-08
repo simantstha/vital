@@ -394,7 +394,7 @@ final class ScreenshotTests: XCTestCase {
                 // and `WeightHeroLogic.weeklyChangeText` computes it, so this
                 // fails loudly the same way the insight assertion above does
                 // if that endpoint's fixture interception ever regresses.
-                XCTAssertTrue(waitForText(app, containing: "0.6 kg/wk over 4 weeks"),
+                XCTAssertTrue(waitForText(app, containing: "0.6\u{00A0}kg/wk over 4 weeks"),
                                "Today's weight_loss hero should show the established trend's weekly change [\(appearance)]")
                 XCTAssertTrue(app.buttons["today.weighInChip"].waitForExistence(timeout: 10),
                                "Today's weight_loss hero should show the weigh-in chip [\(appearance)]")
@@ -417,7 +417,7 @@ final class ScreenshotTests: XCTestCase {
                 // interception ever regresses.
                 XCTAssertTrue(waitForText(app, containing: "3×5"),
                                "Today's muscle hero should show the last-lift set×rep line [\(appearance)]")
-                XCTAssertTrue(waitForText(app, containing: "140 kg"),
+                XCTAssertTrue(waitForText(app, containing: "140\u{00A0}kg"),
                                "Today's muscle hero should show the last-lift weight [\(appearance)]")
                 // "This week" — 2 of 4 planned sessions (fixture-unique).
                 XCTAssertTrue(waitForText(app, containing: "2 of 4 sessions this week"),
@@ -452,7 +452,7 @@ final class ScreenshotTests: XCTestCase {
                 let readinessWords = ["Ready to push", "Good to train", "Keep it easy", "Recover today"]
                 XCTAssertTrue(readinessWords.contains { waitForText(app, containing: $0, timeout: 3) },
                                "Today's endurance hero should show a readiness word (one of \(readinessWords)) [\(appearance)]")
-                XCTAssertTrue(waitForText(app, containing: "10km tempo run"),
+                XCTAssertTrue(waitForText(app, containing: "8 km easy run"),
                                "Today's endurance hero should show today's session [\(appearance)]")
                 // Sessions line now shows session count only (e.g., "3 sessions this week"),
                 // while distance appears in a separate progress line.
@@ -1221,9 +1221,9 @@ final class ScreenshotTests: XCTestCase {
         case "new_user":
             return "Keep logging — a few more days and I'll start spotting real patterns."
         case "weight_loss":
-            return "You're down 0.6kg this week, but last night's sleep ran short (6h 50m) — keep the deficit gentle and aim for an earlier night."
+            return "You're down 0.6\u{00A0}kg this week, but last night's sleep ran short (6h 50m) — keep the deficit gentle and aim for an earlier night."
         case "muscle":
-            return "squat was your best in 4 weeks — stay the course."
+            return "squat was your best in 4 weeks — get the 2 remaining sessions in by Sunday."
         case "endurance":
             return "This week's long run held goal pace with a lower average HR than last week — aerobic base is building nicely."
         default:

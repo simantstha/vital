@@ -117,11 +117,11 @@ struct TrendsWeightCard: View {
     /// Split from `trendHeadline`'s combined "Trend 82.0 kg" into the two
     /// pieces the big number display needs — reuses `UnitFormat.weight`'s
     /// existing rounding/conversion (never re-derives it) and just parses
-    /// its output apart on the space between number and unit.
+    /// its output apart on the (non-breaking) space between number and unit.
     private var latestWeightParts: (magnitude: String, unit: String)? {
         guard let trend, trend.established, let latest = trend.days.last else { return nil }
         let formatted = UnitFormat.weight(kg: latest.trendKg, system)
-        guard let spaceIndex = formatted.firstIndex(of: " ") else { return (formatted, "") }
+        guard let spaceIndex = formatted.firstIndex(of: "\u{00A0}") else { return (formatted, "") }
         return (String(formatted[formatted.startIndex..<spaceIndex]), String(formatted[formatted.index(after: spaceIndex)...]))
     }
 
