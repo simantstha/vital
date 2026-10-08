@@ -479,7 +479,8 @@ test('endurance: recent 2 weeks well above the 2 before → building, with volum
   assert.match(p.headline, /^Building — time up \d+% \(last 2 weeks vs the 2 before\)/);
   assert.equal(p.reasons.length, 3);
   const kinds = p.reasons.map(r => r.kind);
-  assert.deepEqual(kinds, ['week_sessions', 'volume', 'resting_hr']);
+  // Volume trend first (it drives the verdict), then the rest in priority order; nothing on watch here.
+  assert.deepEqual(kinds, ['volume', 'week_sessions', 'resting_hr']);
   const rhr = p.reasons.find(r => r.kind === 'resting_hr')!;
   assert.match(rhr.text, /trending down: 54 → 50 bpm/);
   assert.equal(rhr.tone, 'good');
@@ -488,14 +489,13 @@ test('endurance: recent 2 weeks well above the 2 before → building, with volum
   assertWellFormed(p);
 });
 
-test('endurance: leads with "N of T sessions this week" (Mon–today) and keeps the 4-week volume trend with its window', () => {
+test('endurance: keeps the 4-week volume trend (with its window) first, then "N of T sessions this week" (Mon–today)', () => {
   // TODAY 2026-10-06 is a Tuesday: Monday 10-05 + Tuesday 10-06 = 2 sessions this week.
   const p = computeGoalProgress(enduranceInput([2, 3, 3, 3]));
-  assert.equal(p.reasons[0].kind, 'week_sessions');
-  assert.equal(p.reasons[0].text, '2 of 4 sessions this week');
-  const volume = p.reasons.find(r => r.kind === 'volume');
-  assert.ok(volume);
-  assert.match(volume!.text, /last 2 weeks vs the 2 before/);
+  assert.equal(p.reasons[0].kind, 'volume');
+  assert.match(p.reasons[0].text, /last 2 weeks vs the 2 before/);
+  const sessions = p.reasons.find(r => r.kind === 'week_sessions');
+  assert.equal(sessions?.text, '2 of 4 sessions this week');
 });
 
 test('endurance: steady volume → holding', () => {
@@ -671,7 +671,8 @@ test('endurance distance: this week (Mon-today, Tue) is the primary progress; ET
   assert.equal(p.distance!.weekStart, '2026-10-05');
   assert.equal(p.distance!.thisWeekKm, 8.5);
   assert.equal(p.distance!.text, '8.5 of 30 km running this week');
-  assert.equal(p.reasons[0].kind, 'week_distance');
+  // The stat states it; the "Why" does not repeat it.
+  assert.equal(p.reasons.some(r => r.kind === 'week_distance'), false);
   assert.equal(p.eta, null);
   assert.equal(p.onPaceForTargetDate, null);
   assertWellFormed(p);
@@ -945,10 +946,11 @@ test('long run: runs older than 28 days are ignored; null without running distan
   assert.equal(computeGoalProgress(base({ goal: 'muscle' })).longRun, null);
 });
 
-test('long run: below target reads "Long run 14 km · build to 18 km by mid-Dec", right after the weekly distance', () => {
+test('long run: below target reads "Long run 14 km · build to 18 km by mid-Dec", right after the volume trend', () => {
   // Race Dec 30 → peak planned 3 weeks out (Dec 9) → "mid-Dec".
   const p = computeGoalProgress(longRunInput([14, 12, 16, 10], { race: { date: '2026-12-30', distanceKm: 21.1 } }));
-  assert.deepEqual(p.reasons.map(r => r.kind), ['race', 'week_distance', 'long_run']);
+  // Race first, the verdict's volume trend always kept, then the long run (this week's distance is the card's stat, not a reason).
+  assert.deepEqual(p.reasons.map(r => r.kind), ['race', 'volume', 'long_run']);
   const lr = p.reasons[2];
   assert.equal(lr.text, 'Long run 14 km · build to 18 km by mid-Dec');
   assert.equal(lr.tone, 'neutral');
@@ -993,9 +995,68 @@ test('long run: text is unit-aware (miles) while structured km stay metric', () 
 test('long run: also shown while the verdict is insufficient_data (race still leads, cap 3)', () => {
   const p = computeGoalProgress(distanceInput({ 3: 14, 10: 12 }, { race: { date: addDays(TODAY, 84), distanceKm: 21.1 } }));
   assert.equal(p.verdict, 'insufficient_data');
-  assert.deepEqual(p.reasons.map(r => r.kind).slice(0, 2), ['race', 'week_distance']);
-  assert.ok(p.reasons.some(r => r.kind === 'long_run'));
+  assert.deepEqual(p.reasons.map(r => r.kind).slice(0, 2), ['race', 'long_run']);
+  assert.equal(p.reasons.some(r => r.kind === 'week_distance'), false);
   assert.ok(p.reasons.length <= 3);
+});
+
+// ── Endurance "Why" selection: race, then the verdict's volume trend, then long run / watch ──
+
+/** A building distance runner (recent 2 weeks up ~125% on the 2 before) 12 weeks from a half marathon. */
+const BUILDING_KM = { 1: 12, 4: 10, 8: 10, 11: 10, 15: 5, 18: 5, 22: 4, 25: 4 };
+const HALF_IN_12_WEEKS = { race: { date: addDays(TODAY, 84), distanceKm: 21.1 } };
+/** Daily series that is `recent` for the last 14 days and `prior` before that. */
+const twoHalves = (recent: number, prior: number) =>
+  Array.from({ length: 28 }, (_, i) => ({ day: addDays(TODAY, -i), value: i < 14 ? recent : prior }));
+
+test('endurance Why: race, then the volume trend behind the verdict, then the long run — never this week\'s distance', () => {
+  const p = computeGoalProgress(distanceInput(BUILDING_KM, HALF_IN_12_WEEKS));
+  assert.equal(p.verdict, 'building');
+  assert.deepEqual(p.reasons.map(r => r.kind), ['race', 'volume', 'long_run']);
+  // The kept volume reason is the one the headline rests on.
+  assert.match(p.reasons[1].text, /^Weekly training distance up \d+% \(/);
+  assert.match(p.reasons[1].text, /last 2 weeks vs the 2 before/);
+  assert.match(p.reasons[2].text, /^Long run 12 km · build to 18 km by /);
+  // This week's distance lives in the stat, not in the reasons.
+  assert.equal(p.reasons.some(r => r.kind === 'week_distance'), false);
+  assert.match(p.distance!.text, /of 30 km running this week$/);
+  assertWellFormed(p);
+});
+
+test('endurance Why: a watch-tone recovery reason outranks the long run and is never cut', () => {
+  // Resting HR up 6 bpm over the last 2 weeks (watch); HRV flat.
+  const p = computeGoalProgress(distanceInput(BUILDING_KM, { ...HALF_IN_12_WEEKS, restingHr: twoHalves(58, 52), hrv: twoHalves(60, 60) }));
+  assert.deepEqual(p.reasons.map(r => r.kind), ['race', 'volume', 'resting_hr']);
+  const rhr = p.reasons[2];
+  assert.equal(rhr.tone, 'watch');
+  assert.match(rhr.text, /^Resting heart rate trending up: 52 → 58 bpm/);
+  assert.equal(p.reasons.some(r => r.kind === 'long_run'), false);
+  // A falling HRV is a watch too.
+  const hrv = computeGoalProgress(distanceInput(BUILDING_KM, { ...HALF_IN_12_WEEKS, hrv: twoHalves(50, 70) }));
+  assert.deepEqual(hrv.reasons.map(r => r.kind), ['race', 'volume', 'hrv']);
+  assert.equal(hrv.reasons[2].tone, 'watch');
+});
+
+test('endurance Why: a good recovery trend does not displace the long run', () => {
+  const p = computeGoalProgress(distanceInput(BUILDING_KM, { ...HALF_IN_12_WEEKS, restingHr: twoHalves(50, 54) }));
+  assert.deepEqual(p.reasons.map(r => r.kind), ['race', 'volume', 'long_run']);
+});
+
+test('endurance Why without a race: volume first, then every watch-tone reason ahead of the rest (cap 3)', () => {
+  const p = computeGoalProgress(distanceInput(BUILDING_KM, { restingHr: twoHalves(58, 52), hrv: twoHalves(50, 70) }));
+  assert.deepEqual(p.reasons.map(r => r.kind), ['volume', 'resting_hr', 'hrv']);
+  assert.deepEqual(p.reasons.map(r => r.tone), ['good', 'watch', 'watch']);
+  // No watch: the remaining slots go to the usual order (sessions before resting HR / HRV).
+  const calm = computeGoalProgress(distanceInput(BUILDING_KM, { restingHr: twoHalves(52, 52), hrv: twoHalves(60, 60) }));
+  assert.deepEqual(calm.reasons.map(r => r.kind), ['volume', 'sessions', 'resting_hr']);
+});
+
+test('endurance Why: a falling volume trend (watch) is still the first reason', () => {
+  const p = computeGoalProgress(distanceInput({ 1: 4, 4: 4, 8: 4, 11: 4, 15: 10, 18: 10, 22: 10, 25: 10 }, { ...HALF_IN_12_WEEKS, restingHr: twoHalves(58, 52) }));
+  assert.equal(p.reasons[0].kind, 'race');
+  assert.equal(p.reasons[1].kind, 'volume');
+  assert.equal(p.reasons[1].tone, 'watch');
+  assert.equal(p.reasons.length, 3);
 });
 
 // ── non-breaking spaces: a value never wraps mid-token (asserts the RAW copy) ──

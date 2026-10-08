@@ -412,7 +412,7 @@ final class FixtureCrossScreenConsistencyTests: XCTestCase {
         XCTAssertEqual(endurance.weekRating, .mixed)
         XCTAssertEqual(plain(endurance.headline), "3 sessions, 24.5 of 30 km, +12% vs last week")
         XCTAssertEqual(plain(endurance.slip), "24.5 of 30 km target \u{2014} 5.5 km short")
-        XCTAssertEqual(plain(endurance.nextWeek), "Aim for 30 km: add ~6 km to your long run or one easy run.")
+        XCTAssertEqual(plain(endurance.nextWeek), "Build to ~27 km: long run 16 km, the rest as easy runs; 30 km the week after.")
         XCTAssertEqual(WeeklyReviewLogic.rows(endurance).map(\.kind), [.win, .slip, .next])
 
         // Whatever the scenario: a mixed / tough week has a Slip and never "Repeat this week".
@@ -539,13 +539,18 @@ final class FixtureCrossScreenConsistencyTests: XCTestCase {
         XCTAssertTrue(opener.contains("distance up 6% (last 2 weeks vs the 2 before)"), opener)
     }
 
-    /// Endurance goal card: race leads, then this week, then the long-run build;
-    /// the detail row and the Profile Goal row carry the same race.
+    /// Endurance goal card: race leads, then the volume trend behind the verdict,
+    /// then the long-run build (this week's distance is the card's stat, not a
+    /// reason); the detail row and the Profile Goal row carry the same race.
     func test_enduranceLongRunAndRaceShowOnGoalCardAndProfileRow() throws {
         let (_, data) = FixtureData.response(scenario: .endurance, method: "GET", path: "/api/goal/progress", query: "")
         let progress = try JSONDecoder().decode(GoalProgressDTO.self, from: data)
         XCTAssertEqual(progress.longRun, GoalProgressDTO.LongRun(lastKm: 14, peakKm: 16, targetPeakKm: 18))
-        XCTAssertEqual(progress.reasons.map(\.kind), ["race", "week_distance", "long_run"])
+        XCTAssertEqual(progress.reasons.map(\.kind), ["race", "volume", "long_run"])
+        XCTAssertEqual(
+            plain(progress.reasons[1].text),
+            "Weekly training distance up 6% (21.9 km \u{2192} 23.2 km a week, last 2 weeks vs the 2 before)"
+        )
         let longRun = progress.reasons[2].text
         XCTAssertTrue(longRun.hasPrefix("Long run 14 km \u{00B7} build to 18 km by "), longRun)
         XCTAssertEqual(RaceLogic.longRunRowText(progress.longRun!, .metric), "14 km \u{00B7} peak target 18 km")

@@ -18,7 +18,7 @@
  * "not enough data" nudge instead of fabricated praise.
  */
 
-import type { GoalKind, GoalProgressBudget, GoalProgressIntakeDay, GoalVerdict, DayValue } from './goalProgress';
+import type { GoalKind, GoalLongRunProgress, GoalProgressBudget, GoalProgressIntakeDay, GoalVerdict, DayValue } from './goalProgress';
 import { KG_TO_LB, isRunningWorkoutType } from './goalProgress';
 import { PARTIAL_LOG_KCAL_THRESHOLD, TOO_FAST_LOSS_PCT_PER_WEEK } from './brain/weightSignals';
 import { computeWeightTrend, type WeightReading } from './weightTrend';
@@ -149,6 +149,12 @@ export interface WeeklyReviewInput {
   weeklySessionsTarget: number | null;
   /** Endurance weekly running-distance target (km); optional so older callers/stored inputs still work. */
   weeklyDistanceKmTarget?: number | null;
+  /**
+   * Endurance long-run progress as of the end of the reviewed week (the same
+   * object goal progress computes, km). Lets "Next week" cap long-run growth
+   * at the peak target; absent / null -> the long run is not mentioned.
+   */
+  longRun?: GoalLongRunProgress | null;
   unitSystem?: 'metric' | 'imperial' | null;
   /** exercise key -> display name; falls back to Title Case ("bench press" -> "Bench Press"). */
   exerciseDisplay?: Record<string, string>;
@@ -982,8 +988,58 @@ function freestWeekday(input: WeeklyReviewInput, week: Week, prevWeek: Week): st
   return WEEKDAY_NAMES[EXTRA_SESSION_DAY_ORDER.find(i => counts[i] === fewest) as number];
 }
 
-/** A shortfall up to this share of the target reads as "add to a run"; a bigger one needs another run. */
-const DISTANCE_TOP_UP_MAX_FRACTION = 0.3;
+/** Weekly distance may grow by at most this fraction week over week (the ~10% rule). */
+const WEEKLY_DISTANCE_GROWTH = 0.1;
+/** The long run may grow by at most this many km in a week. */
+const LONG_RUN_MAX_STEP_KM = 2;
+
+/**
+ * "Next week" for a distance gap: build toward the weekly target without a
+ * jump. Next week's distance is capped at ~10% over this week
+ * (min(target, round(done x 1.10)), in the user's unit); the long run grows by
+ * at most 2 km and never past its peak target; the rest of the growth goes to
+ * easy runs. Spells out the staging ("30 km the week after") when the cap
+ * leaves the target out of reach for one more week.
+ */
+function distanceNextWeek(input: WeeklyReviewInput, gap: Extract<WeekGap, { kind: 'distance' }>): string {
+  const imperial = isImperial(input);
+  const unit = imperial ? 'mi' : 'km';
+  const perKm = imperial ? KM_TO_MI : 1;
+  const done = gap.doneKm * perKm;
+  const target = gap.targetKm * perKm;
+  const targetText = distanceText(input, gap.targetKm);
+
+  // A week with (almost) no running has no base to take 10% of: restart gently.
+  if (done < 1) return `Restart with a couple of easy runs, then build gradually toward ${targetText}.`;
+
+  // At least +1 unit so a very small week still moves; otherwise round(done x 1.10).
+  const grown = Math.max(Math.round(done * (1 + WEEKLY_DISTANCE_GROWTH)), Math.floor(done) + 1);
+  const next = Math.min(target, grown);
+  const staged = next < target;
+  const nextKm = next / perKm;
+
+  // Long run: +2 km at most, never above the peak target; none without long-run data.
+  let longRunPart: string | null = null;
+  const lr = input.longRun;
+  if (lr != null && Number.isFinite(lr.lastKm) && lr.lastKm > 0) {
+    const peak = lr.targetPeakKm;
+    const room = peak != null ? peak - lr.lastKm : Infinity;
+    const step = Math.min(LONG_RUN_MAX_STEP_KM, room);
+    if (step > 0) {
+      const longKm = round1(lr.lastKm + step);
+      if (longKm < nextKm) longRunPart = `long run ${distanceText(input, longKm)}, the rest as easy runs`;
+    } else if (peak != null && peak < nextKm) {
+      longRunPart = `hold your long run at ${distanceText(input, peak)} and put the growth into easy runs`;
+    }
+  }
+
+  if (!staged) return `Aim for ${targetText}: ${longRunPart ?? 'add the extra on easy runs'}.`;
+
+  const nextText = `~${withUnit(next, unit)}`;
+  const reachesTarget = Math.round(next * (1 + WEEKLY_DISTANCE_GROWTH)) >= target;
+  const after = reachesTarget ? `${targetText} the week after` : `then add ~${Math.round(WEEKLY_DISTANCE_GROWTH * 100)}% a week toward ${targetText}`;
+  return `Build to ${nextText}${longRunPart ? `: ${longRunPart}` : ' with easy runs'}; ${after}.`;
+}
 
 /** "Next week" for a mixed / tough week: the concrete action that closes the gap the Slip names. */
 function gapNextWeek(input: WeeklyReviewInput, gap: WeekGap, week: Week, prevWeek: Week): string {
@@ -998,15 +1054,7 @@ function gapNextWeek(input: WeeklyReviewInput, gap: WeekGap, week: Week, prevWee
         ? `${book} — put the missed one on ${day}.`
         : `${book} — lock in the missed ones now, starting with ${day}.`;
     }
-    case 'distance': {
-      const short = gap.targetKm - gap.doneKm;
-      const target = distanceText(input, gap.targetKm);
-      if (short > gap.targetKm * DISTANCE_TOP_UP_MAX_FRACTION) {
-        return `Aim for ${target}: add one more run this week and stretch your long run toward it.`;
-      }
-      const extra = withUnit(Math.max(1, Math.ceil(distanceNumber(input, short))), isImperial(input) ? 'mi' : 'km');
-      return `Aim for ${target}: add ~${extra} to your long run or one easy run.`;
-    }
+    case 'distance': return distanceNextWeek(input, gap);
     case 'budget': return 'Pick the two days most likely to run over and plan those meals ahead.';
     case 'protein': return 'Add a protein-first breakfast so the day starts ahead of your target.';
     case 'weight':

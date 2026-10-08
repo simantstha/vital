@@ -2146,12 +2146,20 @@ enum FixtureData {
                 // ONE volume definition everywhere (goal card, Today line):
                 // last 2 weeks vs the 2 before — always labelled.
                 "headline": "Building — distance up \(enduranceVolumeChangePct)% (last 2 weeks vs the 2 before)",
-                // Server caps reasons at 3: the race countdown leads, then this
-                // week's distance, then the long-run build (which displaces the
-                // volume reason — the headline carries the volume change).
+                // Server caps reasons at 3 (lib/goalProgress.ts `enduranceReasons`):
+                // the race countdown leads, then the volume trend the "Building"
+                // verdict rests on (always kept), then the long-run build. This
+                // week's distance is the card's stat (`distance.text`), not a
+                // reason, so it is not repeated here.
                 "reasons": [
                     reason("race", "Half marathon in \(enduranceRaceDaysOut / 7) weeks (\(raceMonthDay(-enduranceRaceDaysOut)))", "neutral"),
-                    reason("week_distance", thisWeekText, week.km >= target ? "good" : "neutral"),
+                    // The server's own copy, U+00A0 between each value and unit and
+                    // around the arrow (lib/goalProgress.ts `volumeReason`).
+                    reason(
+                        "volume",
+                        "Weekly training distance up \(enduranceVolumeChangePct)% (\(trimmedKm(endurancePrior2WeeksAvgKm))\u{00A0}km\u{00A0}\u{2192}\u{00A0}\(trimmedKm(enduranceLast2WeeksAvgKm))\u{00A0}km a week, last 2 weeks vs the 2 before)",
+                        "good"
+                    ),
                     reason(
                         "long_run",
                         "Long run \(trimmedKm(enduranceLastLongRunKm)) km · build to \(trimmedKm(enduranceLongRunTargetKm)) km by \(longRunBy)",
@@ -2299,7 +2307,10 @@ enum FixtureData {
                 ],
                 win: "Training volume is up 12% on last week (21.9\(nb)km\(nb)→\(nb)24.5\(nb)km).",
                 slip: "24.5 of 30\(nb)km target — 5.5\(nb)km short",
-                nextWeek: "Aim for 30\(nb)km: add ~6\(nb)km to your long run or one easy run.",
+                // lib/weeklyReview.ts `distanceNextWeek`: 24.5 km -> ~10% growth
+                // (27 km), long run 14 -> 16 km (+2 km, under the 18 km peak
+                // target), the rest as easy runs, then the 30 km target.
+                nextWeek: "Build to ~27\(nb)km: long run 16\(nb)km, the rest as easy runs; 30\(nb)km the week after.",
                 sufficient: true
             )
         default:

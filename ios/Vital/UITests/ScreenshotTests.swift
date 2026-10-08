@@ -691,7 +691,7 @@ final class ScreenshotTests: XCTestCase {
         case "muscle":
             expected = "Squat est. 1RM +10\u{00A0}kg vs 4\u{00A0}weeks ago (153\u{00A0}\u{2192}\u{00A0}163\u{00A0}kg)"
         default:
-            // endurance: the long-run build reason (race and week distance precede it).
+            // endurance: the long-run build reason (the race and the volume trend precede it).
             expected = "Long run 14\u{00A0}km \u{00B7} build to 18\u{00A0}km"
         }
         XCTAssertTrue(waitForText(app, containing: expected),
