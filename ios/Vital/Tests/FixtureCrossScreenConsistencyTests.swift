@@ -132,6 +132,13 @@ final class FixtureCrossScreenConsistencyTests: XCTestCase {
         return stats?.first { ($0["label"] as? String) == label }
     }
 
+    /// The weekly-review copy glues numbers to their units (and "a → b" pairs)
+    /// with U+00A0, exactly like the server (lib/displayText.ts); compare it
+    /// with plain spaces unless a test is about the glue itself.
+    private func plain(_ text: String?) -> String? {
+        text?.replacingOccurrences(of: "\u{00A0}", with: " ")
+    }
+
     func test_enduranceRestingHRAgreesAcrossTodayTrendsAndWeeklyReview() {
         let rhr = todayMetric(.endurance, "restingHr")
         XCTAssertEqual(rhr, 54, accuracy: 0.01)
@@ -139,13 +146,13 @@ final class FixtureCrossScreenConsistencyTests: XCTestCase {
 
         let review = json(.endurance, "/api/review/weekly")
         let stat = statValue(review, "Resting HR")
-        XCTAssertEqual(stat?["value"] as? String, "54 bpm")
+        XCTAssertEqual(plain(stat?["value"] as? String), "54 bpm")
         // Weekly review quotes the same gap-to-normal Trends shows (54 vs normal).
         let series = (json(.endurance, "/api/trends", "metrics=resting_hr&days=30")["series"] as? [String: Any])?["resting_hr"] as? [String: Any]
         let mean = ((series?["baseline"] as? [String: Any])?["mean30"] as? Double) ?? .nan
         let gap = Int((rhr - mean).rounded())
         XCTAssertGreaterThan(gap, 0, "RHR is above normal, never a green improvement")
-        XCTAssertEqual(stat?["comparison"] as? String, "+\(gap) bpm vs your normal")
+        XCTAssertEqual(plain(stat?["comparison"] as? String), "+\(gap) bpm vs your normal")
         XCTAssertEqual(stat?["tone"] as? String, "watch")
     }
 
@@ -197,7 +204,7 @@ final class FixtureCrossScreenConsistencyTests: XCTestCase {
         XCTAssertTrue(opener.contains("Lifts up, sessions behind \u{2014} Squat +20 kg"), opener)
 
         let review = json(.muscle, "/api/review/weekly")["review"] as? [String: Any]
-        XCTAssertEqual(review?["headline"] as? String, "3 of 4 sessions, Squat est. 1RM +20 kg over 4 wks")
+        XCTAssertEqual(plain(review?["headline"] as? String), "3 of 4 sessions, Squat est. 1RM +10 kg over 4 wks")
     }
 
     func test_enduranceSleepAgreesAcrossTrendsWeeklyReviewAndCoach() {
@@ -361,6 +368,69 @@ final class FixtureCrossScreenConsistencyTests: XCTestCase {
         XCTAssertNil(thin.weekRating)
         XCTAssertTrue(thin.hasWeekRating)
         XCTAssertNil(WeeklyReviewLogic.verdictLabel(thin))
+    }
+
+    /// The weekly review's pill, Slip and "Next week" tell ONE story
+    /// (lib/weeklyReview.ts `weekGap`): a mixed / tough week's Slip names the
+    /// gap and "Next week" closes it — never "Repeat this week" after a week
+    /// that wasn't good — and the review carries the goal card's own verdict.
+    func test_weeklyReviewPillSlipAndNextWeekTellOneStory() throws {
+        func review(_ scenario: FixtureMode.Scenario) throws -> WeeklyReviewDTO {
+            let (_, data) = FixtureData.response(scenario: scenario, method: "GET", path: "/api/review/weekly", query: "tz=UTC")
+            return try JSONDecoder().decode(WeeklyReviewResponse.self, from: data).review
+        }
+        func goalVerdict(_ scenario: FixtureMode.Scenario) throws -> GoalVerdict {
+            let (_, data) = FixtureData.response(scenario: scenario, method: "GET", path: "/api/goal/progress", query: "tz=UTC")
+            return try JSONDecoder().decode(GoalProgressDTO.self, from: data).verdict
+        }
+
+        // Lifter: 3 of 4 sessions, and the goal card beside it says "Sessions behind".
+        let muscle = try review(.muscle)
+        let muscleGoalVerdict = try goalVerdict(.muscle)
+        XCTAssertEqual(muscle.verdict, muscleGoalVerdict)
+        XCTAssertEqual(muscle.verdict, .behind)
+        XCTAssertEqual(muscle.weekRating, .mixed)
+        XCTAssertEqual(muscle.slip, "3 of 4 sessions \u{2014} one short")
+        XCTAssertEqual(muscle.nextWeek, "Book 4 sessions \u{2014} put the missed one on Saturday.")
+        XCTAssertEqual(WeeklyReviewLogic.rows(muscle).map(\.kind), [.win, .slip, .next])
+
+        // Runner: 24.5 of the 30 km target — the headline, Slip and Next week all say so.
+        let endurance = try review(.endurance)
+        let enduranceGoalVerdict = try goalVerdict(.endurance)
+        XCTAssertEqual(enduranceGoalVerdict, endurance.verdict)
+        XCTAssertEqual(endurance.weekRating, .mixed)
+        XCTAssertEqual(plain(endurance.headline), "3 sessions, 24.5 of 30 km, +12% vs last week")
+        XCTAssertEqual(plain(endurance.slip), "24.5 of 30 km target \u{2014} 5.5 km short")
+        XCTAssertEqual(plain(endurance.nextWeek), "Aim for 30 km: add ~6 km to your long run or one easy run.")
+        XCTAssertEqual(WeeklyReviewLogic.rows(endurance).map(\.kind), [.win, .slip, .next])
+
+        // Whatever the scenario: a mixed / tough week has a Slip and never "Repeat this week".
+        for scenario in scenarios {
+            let r = try review(scenario)
+            if r.weekRating == .mixed || r.weekRating == .tough {
+                XCTAssertNotNil(r.slip, "\(scenario): a \(String(describing: r.weekRating)) week names its gap")
+                XCTAssertFalse(r.nextWeek.contains("Repeat this week"), "\(scenario): \(r.nextWeek)")
+            }
+        }
+    }
+
+    /// Server copy glues a number to its unit (and the halves of "a → b") with
+    /// U+00A0, so a narrow card never wraps mid-value; the fixtures mirror it.
+    func test_weeklyReviewFixtureCopyNeverBreaksANumberFromItsUnit() throws {
+        let breaking = #"\d (kg|lb|km|mi|kcal|bpm|wks)\b|\d → | → \d"#
+        for scenario in scenarios {
+            let (_, data) = FixtureData.response(scenario: scenario, method: "GET", path: "/api/review/weekly", query: "tz=UTC")
+            let review = try JSONDecoder().decode(WeeklyReviewResponse.self, from: data).review
+            var strings: [String?] = [review.headline, review.win, review.slip, review.nextWeek]
+            for stat in review.stats { strings += [stat.value, stat.comparison] }
+            for text in strings.compactMap({ $0 }) {
+                XCTAssertNil(text.range(of: breaking, options: .regularExpression), "\(scenario): \"\(text)\" can wrap mid-value")
+            }
+        }
+        // ...and the glue really is U+00A0.
+        let (_, data) = FixtureData.response(scenario: .muscle, method: "GET", path: "/api/review/weekly", query: "tz=UTC")
+        let muscle = try JSONDecoder().decode(WeeklyReviewResponse.self, from: data).review
+        XCTAssertEqual(muscle.headline, "3 of 4 sessions, Squat est. 1RM +10\u{00A0}kg over 4\u{00A0}wks")
     }
 
     func test_weightLossGoalProgressAgreesWithWeightFixture() throws {

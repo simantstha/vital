@@ -2138,20 +2138,30 @@ enum FixtureData {
     /// Unseen review per scenario, consistent with that scenario's
     /// goal-progress / weight / training fixtures: `weight_loss` -0.6 kg,
     /// 5 of 7 days in the 1,850 kcal budget, weekends +450 kcal (same as the
-    /// goal-progress reasons); `muscle` 3 of 4 sessions, squat +20 kg vs 4 weeks ago, 5 of 7
-    /// protein days (190 g target); `endurance` 24.5 km, +12% (21.9 -> 24.5).
+    /// goal-progress reasons); `muscle` 3 of 4 sessions, squat +10 kg vs 4 weeks ago, 5 of 7
+    /// protein days (190 g target); `endurance` 24.5 of the 30 km target, +12% (21.9 -> 24.5).
     /// `new_user` (and the unreachable `onboarding`) get the gentle
     /// "not enough data" review. `server_error` never reaches this.
+    ///
+    /// Each review is coherent the way lib/weeklyReview.ts makes it: ONE gap
+    /// (`weekGap`) drives the pill, the Slip and "Next week". A mixed week's
+    /// Slip names the gap and "Next week" closes it (never "Repeat this
+    /// week"); a good week keeps its usual slip logic. Strings are the server's
+    /// own copy, including U+00A0 between a number and its unit.
     private static func weeklyReview(scenario: FixtureMode.Scenario) -> [String: Any] {
         func stat(_ label: String, _ value: String, _ comparison: String?, _ tone: String) -> [String: Any] {
             ["label": label, "value": value, "comparison": nullable(comparison), "tone": tone]
         }
         let week = lastCompletedWeek()
+        // U+00A0 NO-BREAK SPACE, as lib/displayText.ts glues "24.5 km" / "+10 kg" / "a → b".
+        let nb = "\u{00A0}"
         // `weekRating` rates THIS week from its own stats (lib/weeklyReview.ts
-        // computeWeekRating) — never the 4-week goal `verdict` beside it. `nil`
-        // encodes JSON null ("can't rate this week").
+        // assessWeek) — never the 4-week goal `verdict` beside it. `nil`
+        // encodes JSON null ("can't rate this week"). `weekGap` is what kept a
+        // mixed / tough week from being good (`nil` -> JSON null).
         func review(
-            goal: String, verdict: String, weekRating: String?, headline: String, stats: [[String: Any]],
+            goal: String, verdict: String, weekRating: String?, weekGap: [String: Any]? = nil,
+            headline: String, stats: [[String: Any]],
             win: String?, slip: String?, nextWeek: String, sufficient: Bool
         ) -> [String: Any] {
             [
@@ -2161,6 +2171,7 @@ enum FixtureData {
                 "review": [
                     "weekStart": week.start, "weekEnd": week.end, "goal": goal, "verdict": verdict,
                     "weekRating": nullable(weekRating),
+                    "weekGap": nullable(weekGap),
                     "headline": headline, "stats": stats,
                     "win": nullable(win), "slip": nullable(slip), "nextWeek": nextWeek,
                     "dataSufficiency": ["daysWithData": sufficient ? 7 : 1, "statCount": stats.count, "sufficient": sufficient],
@@ -2173,15 +2184,15 @@ enum FixtureData {
             return review(
                 // 5 of 7 days in budget (>= 5/7) and weight down at a sane pace: good.
                 goal: "weight_loss", verdict: "on_track", weekRating: "good",
-                headline: "Down 0.6 kg, in budget 5 of 7 days",
+                headline: "Down 0.6\(nb)kg, in budget 5 of 7 days",
                 stats: [
-                    stat("Weight trend", "−0.6 kg", "vs the week before", "good"),
+                    stat("Weight trend", "−0.6\(nb)kg", "vs the week before", "good"),
                     stat("Days in budget", "5/7", nil, "good"),
-                    stat("Avg calories", "1,830 kcal", "−120 vs last week", "neutral"),
+                    stat("Avg calories", "1,830\(nb)kcal", "−120 vs last week", "neutral"),
                     stat("Workouts", "3", "2 last week", "good"),
                 ],
-                win: "Your weight trend is down 0.6 kg.",
-                slip: "Weekends ran +450 kcal over your weekdays.",
+                win: "Your weight trend is down 0.6\(nb)kg.",
+                slip: "Weekends ran +450\(nb)kcal over your weekdays.",
                 nextWeek: "Plan Saturday's dinner ahead so the weekend lands closer to your weekday average.",
                 sufficient: true
             )
@@ -2190,19 +2201,22 @@ enum FixtureData {
                 // 3 of 4 sessions = target - 1 -> mixed (protein 5/7 is not low).
                 // Sessions are strength-only for muscle (logged lifts + strength
                 // workouts, like the goal card's adherence); a run isn't counted.
-                // The goal card beside it says "Sessions behind" (4-week
-                // adherence 9/16): the pill rates this week only.
-                goal: "muscle", verdict: "progressing", weekRating: "mixed",
-                headline: "3 of 4 sessions, Squat est. 1RM +20 kg over 4 wks",
+                // `verdict` is the same `behind` the goal card beside it says
+                // ("Sessions behind", 4-week adherence 9/16); the pill rates
+                // this week only. The one gap (3 of 4 sessions) drives the Slip
+                // and "Next week" — which closes it instead of repeating the week.
+                goal: "muscle", verdict: "behind", weekRating: "mixed",
+                weekGap: ["kind": "sessions", "done": 3, "target": 4],
+                headline: "3 of 4 sessions, Squat est. 1RM +10\(nb)kg over 4\(nb)wks",
                 stats: [
                     stat("Sessions", "3", "target 4 for the week", "neutral"),
-                    stat("Squat est. 1RM", "+20 kg", "vs 4 weeks ago", "good"),
+                    stat("Squat est. 1RM", "+10\(nb)kg", "vs 4 weeks ago", "good"),
                     stat("Protein days hit", "5/7", nil, "good"),
-                    stat("Weight trend", "+0.2 kg", "vs the week before", "good"),
+                    stat("Weight trend", "+0.2\(nb)kg", "vs the week before", "good"),
                 ],
-                win: "Squat estimated 1RM is up 20 kg vs 4 weeks ago.",
-                slip: nil,
-                nextWeek: "Repeat this week: same routine, same training days.",
+                win: "Squat estimated 1RM is up 10\(nb)kg vs 4 weeks ago.",
+                slip: "3 of 4 sessions — one short",
+                nextWeek: "Book 4 sessions — put the missed one on Saturday.",
                 sufficient: true
             )
         case .endurance:
@@ -2210,23 +2224,26 @@ enum FixtureData {
             // 7-night series Trends and the coach use — never hand-typed.
             let profile = profiles[.endurance]!
             let rhrGap = gapToNormal("resting_hr", profile, scenario)
-            let rhrComparison = "\(rhrGap >= 0 ? "+" : "\u{2212}")\(abs(rhrGap)) bpm vs your normal"
+            let rhrComparison = "\(rhrGap >= 0 ? "+" : "\u{2212}")\(abs(rhrGap))\(nb)bpm vs your normal"
             let weekSleep = weekSleepStats(profile, scenario)
             return review(
                 // 24.5 km of the 30 km weekly target = 82% (>= 60%, < 90%): mixed.
+                // The distance shortfall is the gap: the headline carries the
+                // target, the Slip names it and "Next week" adds the km.
                 goal: "endurance", verdict: "building", weekRating: "mixed",
-                headline: "3 sessions, 24.5 km, +12% vs last week",
+                weekGap: ["kind": "distance", "doneKm": 24.5, "targetKm": 30],
+                headline: "3 sessions, 24.5 of 30\(nb)km, +12% vs last week",
                 stats: [
                     // Last week (Mon–Sun), NOT this week — Today's this-week
                     // totals come from `enduranceWeek()` and differ.
                     stat("Sessions", "3", "same as last week", "neutral"),
-                    stat("Volume", "24.5 km", "+12% vs last week", "good"),
-                    stat("Resting HR", "\(Int(profile.restingHR.rounded())) bpm", rhrComparison, rhrGap > 0 ? "watch" : "good"),
+                    stat("Volume", "24.5\(nb)km", "+12% vs last week", "good"),
+                    stat("Resting HR", "\(Int(profile.restingHR.rounded()))\(nb)bpm", rhrComparison, rhrGap > 0 ? "watch" : "good"),
                     stat("Avg sleep", hoursMinutes(weekSleep.avgMinutes), "week avg · goal 8h 0m", weekSleep.avgMinutes < 420 ? "watch" : "good"),
                 ],
-                win: "Training volume is up 12% on last week (21.9 km → 24.5 km).",
-                slip: nil,
-                nextWeek: "Repeat this week: same routine, same training days.",
+                win: "Training volume is up 12% on last week (21.9\(nb)km\(nb)→\(nb)24.5\(nb)km).",
+                slip: "24.5 of 30\(nb)km target — 5.5\(nb)km short",
+                nextWeek: "Aim for 30\(nb)km: add ~6\(nb)km to your long run or one easy run.",
                 sufficient: true
             )
         default:
