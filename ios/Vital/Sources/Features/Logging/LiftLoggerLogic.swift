@@ -14,10 +14,14 @@ struct LiftDraftSet: Identifiable, Equatable {
     /// What this set did last time (display unit) — drives the "last: 185×8"
     /// caption; `nil` when there is no history for this set position.
     var last: LiftLastRef?
+    /// Ticked off while training (the ✓ on the set row). When at least one set
+    /// is ticked, Save logs only the ticked sets. Client-only — never sent to
+    /// the server and ignored by the template-vs-manual comparison.
+    var isDone: Bool
 
     init(
         id: UUID = UUID(), reps: Int, load: Double, isWarmup: Bool = false,
-        rpe: Double? = nil, last: LiftLastRef? = nil
+        rpe: Double? = nil, last: LiftLastRef? = nil, isDone: Bool = false
     ) {
         self.id = id
         self.reps = reps
@@ -25,6 +29,7 @@ struct LiftDraftSet: Identifiable, Equatable {
         self.isWarmup = isWarmup
         self.rpe = rpe
         self.last = last
+        self.isDone = isDone
     }
 }
 
@@ -60,6 +65,42 @@ struct LiftDraftExercise: Identifiable, Equatable {
         self.sets = sets
         self.history = history
     }
+}
+
+/// "Last 3×5 @ 140 kg · try 142.5 kg" — what the last session's working sets
+/// at the top load say about next time. Loads are in the display unit.
+struct LiftProgressionHint: Equatable {
+    /// Heaviest working load last session.
+    let lastLoad: Double
+    /// Reps of each working set performed at `lastLoad`, in set order.
+    let lastReps: [Int]
+    /// Load to try next; equal to `lastLoad` for a "repeat" hint.
+    let suggestedLoad: Double
+
+    /// `true` for a "try …" hint (every set at the top load hit its reps).
+    var isIncrease: Bool { suggestedLoad > lastLoad }
+}
+
+/// What the rest-timer bar shows at a given moment.
+enum LiftRestPhase: Equatable {
+    /// Counting down; `seconds` is the (rounded-up) time left, always >= 1.
+    case running(seconds: Int)
+    /// Just reached 0 — "Rest done" is shown for a few seconds.
+    case done
+    /// Nothing to show (the done message has timed out).
+    case hidden
+}
+
+/// A rest countdown. Date-based on purpose: the view re-derives the label
+/// from `end` on every `TimelineView` tick, so nothing is lost when the view
+/// is re-rendered, and the countdown can't drift.
+struct LiftRestState: Equatable {
+    /// When the rest started — anchors the 1 s `TimelineView` schedule.
+    let start: Date
+    /// When the rest ends ("+30s" pushes this out).
+    var end: Date
+    /// The "rest done" haptic has fired for this timer.
+    var announced = false
 }
 
 /// Pure, network-free logic behind the lift logger sheet — draft building from
@@ -163,6 +204,166 @@ enum LiftLoggerLogic {
         return history.map { LiftDraftSet(reps: $0.reps, load: $0.load, last: $0) }
     }
 
+    // MARK: - Progression hint
+
+    /// Substrings of a canonical exercise key that mark a lower-body compound
+    /// lift ("back squat", "romanian deadlift", "leg press", "hip thrust"…).
+    private static let lowerBodyCompoundStems = ["squat", "deadlift", "leg press", "hip thrust"]
+
+    /// `true` for squat / deadlift / romanian deadlift / leg press / hip thrust
+    /// (and variants such as "front squat" or "sumo deadlift"). Drives both the
+    /// bigger progression step and the longer default rest.
+    static func isLowerBodyCompound(key: String) -> Bool {
+        let normalized = canonicalKey(from: key.replacingOccurrences(of: "-", with: " "))
+        guard !normalized.isEmpty else { return false }
+        if normalized.split(separator: " ").contains("rdl") { return true }
+        return lowerBodyCompoundStems.contains { normalized.contains($0) }
+    }
+
+    /// Suggested load jump after a clean session: +2.5 kg / +5 lb for
+    /// lower-body compounds, +1.25 kg / +2.5 lb for everything else.
+    static func progressionStep(forKey key: String, system: UnitSystem) -> Double {
+        let lower = isLowerBodyCompound(key: key)
+        switch system {
+        case .metric: return lower ? 2.5 : 1.25
+        case .imperial: return lower ? 5 : 2.5
+        }
+    }
+
+    /// Display rounding for suggested loads: nearest 0.5 kg / 1 lb.
+    static func roundToPlate(_ load: Double, system: UnitSystem) -> Double {
+        let unit = system == .metric ? 0.5 : 1.0
+        return (load / unit).rounded() * unit
+    }
+
+    /// Whether two display-unit loads are the same weight (guards float noise).
+    static func sameLoad(_ a: Double, _ b: Double) -> Bool {
+        abs(a - b) < 0.01
+    }
+
+    /// Progression hint from an exercise's last-session working sets, or `nil`
+    /// without history (or for a bodyweight-only exercise — there is no load
+    /// to progress). Only the sets at the TOP load are judged: the first one
+    /// sets the rep target, and if every one of them reached it the hint is
+    /// "try" (top load + step, rounded to the plate step), otherwise "repeat"
+    /// the top load.
+    static func progressionHint(history: [LiftLastRef], key: String, system: UnitSystem) -> LiftProgressionHint? {
+        let working = history.filter { $0.reps >= minReps }
+        guard let topLoad = working.map({ $0.load }).max(), topLoad > 0 else { return nil }
+        let reps = working.filter { sameLoad($0.load, topLoad) }.map { $0.reps }
+        guard let target = reps.first else { return nil }
+        let hitAll = reps.allSatisfy { $0 >= target }
+        var suggested = topLoad
+        if hitAll {
+            let stepped = roundToPlate(topLoad + progressionStep(forKey: key, system: system), system: system)
+            suggested = min(stepped, maxLoad(for: system))
+        }
+        return LiftProgressionHint(lastLoad: topLoad, lastReps: reps, suggestedLoad: max(suggested, topLoad))
+    }
+
+    /// "Last 3×5 @ 140 kg · try 142.5 kg" / "Last 5/5/4 @ 140 kg · repeat 140 kg".
+    static func progressionText(_ hint: LiftProgressionHint, system: UnitSystem) -> String {
+        let uniform = Set(hint.lastReps).count <= 1
+        let repsText = uniform
+            ? "\(hint.lastReps.count)×\(hint.lastReps.first ?? 0)"
+            : hint.lastReps.map(String.init).joined(separator: "/")
+        let last = "Last \(repsText) @ \(loadText(hint.lastLoad, system: system))"
+        let next = hint.isIncrease
+            ? "try \(loadText(hint.suggestedLoad, system: system))"
+            : "repeat \(loadText(hint.lastLoad, system: system))"
+        return "\(last) · \(next)"
+    }
+
+    /// A set the hint may rewrite: a working set that isn't ticked and whose
+    /// load is still last session's top load (i.e. not edited by the user).
+    static func isEligibleForProgression(_ set: LiftDraftSet, hint: LiftProgressionHint) -> Bool {
+        !set.isWarmup && !set.isDone && sameLoad(set.load, hint.lastLoad)
+    }
+
+    /// `true` when tapping the hint would change something: it's a "try" hint
+    /// and at least one set is still eligible.
+    static func canApplyProgression(_ hint: LiftProgressionHint, to sets: [LiftDraftSet]) -> Bool {
+        hint.isIncrease && sets.contains { isEligibleForProgression($0, hint: hint) }
+    }
+
+    /// Sets with the suggested load applied to every eligible set; edited,
+    /// ticked, warm-up and lighter (ramp / back-off) sets are left alone.
+    static func applyingProgression(_ hint: LiftProgressionHint, to sets: [LiftDraftSet]) -> [LiftDraftSet] {
+        guard hint.isIncrease else { return sets }
+        return sets.map { set in
+            guard isEligibleForProgression(set, hint: hint) else { return set }
+            var updated = set
+            updated.load = hint.suggestedLoad
+            return updated
+        }
+    }
+
+    // MARK: - Rest timer
+
+    /// Default rest after a lower-body compound set (2:30).
+    static let lowerBodyRestSeconds: TimeInterval = 150
+    /// Default rest after any other set (2:00).
+    static let defaultRestSeconds: TimeInterval = 120
+    /// What the "+30s" button adds.
+    static let restExtension: TimeInterval = 30
+    /// How long "Rest done" stays on screen after the countdown hits 0.
+    static let restDoneDisplaySeconds: TimeInterval = 4
+
+    /// Rest length for an exercise key: 2:30 for lower-body compounds, else 2:00.
+    static func restDuration(forKey key: String) -> TimeInterval {
+        isLowerBodyCompound(key: key) ? lowerBodyRestSeconds : defaultRestSeconds
+    }
+
+    /// Whole seconds left until `end` (rounded UP so a fresh 2:30 timer reads
+    /// 2:30, not 2:29); 0 once `end` has passed.
+    static func restRemainingSeconds(until end: Date, now: Date) -> Int {
+        let remaining = end.timeIntervalSince(now)
+        guard remaining > 0 else { return 0 }
+        return Int(remaining.rounded(.up))
+    }
+
+    /// "1:58" / "0:07" / "10:00".
+    static func restLabel(seconds: Int) -> String {
+        let total = max(0, seconds)
+        return String(format: "%d:%02d", total / 60, total % 60)
+    }
+
+    /// Running while `now < end`; "Rest done" for `doneDisplay` seconds after
+    /// `end`; hidden after that.
+    static func restPhase(
+        end: Date, now: Date, doneDisplay: TimeInterval = LiftLoggerLogic.restDoneDisplaySeconds
+    ) -> LiftRestPhase {
+        let remaining = restRemainingSeconds(until: end, now: now)
+        if remaining > 0 { return .running(seconds: remaining) }
+        return now.timeIntervalSince(end) < doneDisplay ? .done : .hidden
+    }
+
+    // MARK: - Done ticks / save scope
+
+    /// `true` once any set in the form is ticked.
+    static func hasDoneSets(in drafts: [LiftDraftExercise]) -> Bool {
+        drafts.contains { $0.sets.contains { $0.isDone } }
+    }
+
+    /// What Save should log: only the ticked sets when at least one is ticked
+    /// (exercises left with no ticked sets are dropped), otherwise everything.
+    static func draftsToSave(from drafts: [LiftDraftExercise]) -> [LiftDraftExercise] {
+        guard hasDoneSets(in: drafts) else { return drafts }
+        return drafts.compactMap { exercise in
+            var kept = exercise
+            kept.sets = exercise.sets.filter { $0.isDone }
+            return kept.sets.isEmpty ? nil : kept
+        }
+    }
+
+    /// "Save 7 done sets" / "Save 1 done set" when something is ticked,
+    /// "Save 9 sets" / "Save 1 set" otherwise, "Save lift" with nothing to save.
+    static func saveLabel(setCount: Int, doneOnly: Bool) -> String {
+        guard setCount > 0 else { return "Save lift" }
+        let noun = setCount == 1 ? "set" : "sets"
+        return doneOnly ? "Save \(setCount) done \(noun)" : "Save \(setCount) \(noun)"
+    }
+
     // MARK: - Recent sessions ("Repeat: …")
 
     /// "Today" / "Yesterday" / "Mon" for a `yyyy-MM-dd` day key relative to
@@ -214,7 +415,11 @@ enum LiftLoggerLogic {
                     load: displayLoad(fromKg: $0.loadKg, system: system)
                 )
             }
-            return LiftDraftExercise(key: exercise.exercise, name: exercise.display, sets: sets)
+            // The session endpoint only lists working sets, so the seeded
+            // sets ARE the exercise's last-session history (drives the
+            // progression hint).
+            let history = sets.map { LiftLastRef(reps: $0.reps, load: $0.load) }
+            return LiftDraftExercise(key: exercise.exercise, name: exercise.display, sets: sets, history: history)
         }
     }
 
@@ -316,7 +521,10 @@ enum LiftLoggerLogic {
                     isWarmup: set.isWarmup
                 )
             }
-            return LiftDraftExercise(key: key, name: name, sets: draftSets)
+            return LiftDraftExercise(
+                key: key, name: name, sets: draftSets,
+                history: history(forKey: key, from: sets, system: system)
+            )
         }
     }
 
@@ -377,8 +585,22 @@ enum LiftLoggerLogic {
 
     /// "template" when the user saved the pre-filled "repeat last session"
     /// untouched; "manual" as soon as anything was edited, added or typed.
+    /// Done ticks are ignored: ticking every set of an unedited repeat is still
+    /// a template log (ticking only some saves a subset, which is "manual").
     static func source(drafts: [LiftDraftExercise], seeded: [LiftDraftExercise]) -> String {
-        !seeded.isEmpty && drafts == seeded ? "template" : "manual"
+        !seeded.isEmpty && clearingDone(drafts) == clearingDone(seeded) ? "template" : "manual"
+    }
+
+    private static func clearingDone(_ drafts: [LiftDraftExercise]) -> [LiftDraftExercise] {
+        drafts.map { exercise in
+            var cleared = exercise
+            cleared.sets = exercise.sets.map { set in
+                var copy = set
+                copy.isDone = false
+                return copy
+            }
+            return cleared
+        }
     }
 
     /// Plain summary of a draft exercise, e.g. "3 sets · 5 reps · 100 kg" —

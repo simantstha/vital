@@ -85,6 +85,35 @@ final class LiftLoggerViewModelTests: XCTestCase {
         LiftLoggerViewModel(preferredExercise: preferred, system: .metric, sessionId: "session-under-test", api: api)
     }
 
+    /// A hand-cranked clock + haptic counter, so rest-timer tests never sleep
+    /// and never touch the Taptic engine.
+    private final class RestHarness {
+        var now = Date(timeIntervalSinceReferenceDate: 1_000_000)
+        var hapticCount = 0
+        func advance(_ seconds: TimeInterval) { now = now.addingTimeInterval(seconds) }
+    }
+
+    private func makeTimedViewModel(
+        _ api: FakeAPI, preferred: String? = nil, system: UnitSystem = .metric, harness: RestHarness
+    ) -> LiftLoggerViewModel {
+        LiftLoggerViewModel(
+            preferredExercise: preferred, system: system, sessionId: "session-under-test", api: api,
+            clock: { harness.now }, restHaptic: { harness.hapticCount += 1 }, runsRestTimer: false
+        )
+    }
+
+    /// A VM seeded from `/last` with `exercise` × `sets` sets of `reps` @ `kg`.
+    private func seededViewModel(
+        _ api: FakeAPI, exercise: String = "squat", sets: Int = 3, reps: Int = 5, kg: Double = 140,
+        harness: RestHarness
+    ) async -> LiftLoggerViewModel {
+        api.summary = summary([exercise])
+        api.lastByExercise[exercise] = (1...sets).map { setDTO(exercise, index: $0, reps: reps, loadKg: kg) }
+        let vm = makeTimedViewModel(api, preferred: exercise, harness: harness)
+        await vm.load()
+        return vm
+    }
+
     // MARK: - load
 
     func testLoadPrefillsFromThePreferredExercisesLastSession() async {
@@ -441,5 +470,324 @@ final class LiftLoggerViewModelTests: XCTestCase {
         XCTAssertEqual(api.savedPerformedAt, [yesterday])
         XCTAssertEqual(api.savedSets.first?.first?.isWarmup, true)
         XCTAssertEqual(api.savedSets.first?.first?.rpe, 8.5)
+    }
+
+    // MARK: - progression hint
+
+    func testHintComesFromTheSeededSessionAndTappingItBumpsEveryUneditedSet() async throws {
+        let api = FakeAPI()
+        api.recentSessions = [recentSession("s-legs", day: "2026-10-05", [("squat", 3, 140), ("bench press", 3, 90)])]
+        let vm = makeViewModel(api)
+        await vm.load()
+        let squatID = try XCTUnwrap(vm.exercises.first { $0.key == "squat" }?.id)
+        let benchID = try XCTUnwrap(vm.exercises.first { $0.key == "bench press" }?.id)
+
+        let squatHint = try XCTUnwrap(vm.progressionHint(for: squatID))
+        XCTAssertEqual(LiftLoggerLogic.progressionText(squatHint, system: .metric), "Last 3×5 @ 140 kg · try 142.5 kg")
+        let benchHint = try XCTUnwrap(vm.progressionHint(for: benchID))
+        XCTAssertEqual(LiftLoggerLogic.progressionText(benchHint, system: .metric), "Last 3×5 @ 90 kg · try 91.5 kg")
+        XCTAssertTrue(vm.canApplyProgression(to: squatID))
+
+        vm.applyProgression(to: squatID)
+
+        let squat = try XCTUnwrap(vm.exercises.first { $0.key == "squat" })
+        XCTAssertEqual(squat.sets.map { $0.load }, [142.5, 142.5, 142.5])
+        // Other exercises are untouched and the hint's baseline is unchanged.
+        XCTAssertEqual(vm.exercises.first { $0.key == "bench press" }?.sets.map { $0.load }, [90, 90, 90])
+        XCTAssertEqual(squat.history.map { $0.load }, [140, 140, 140])
+        XCTAssertFalse(vm.canApplyProgression(to: squatID))
+        XCTAssertTrue(vm.canApplyProgression(to: benchID))
+    }
+
+    func testApplyingTheHintSkipsTickedAndEditedSets() async throws {
+        let harness = RestHarness()
+        let vm = await seededViewModel(FakeAPI(), harness: harness)
+        let id = vm.exercises[0].id
+        vm.toggleSetDone(exerciseID: id, setID: vm.exercises[0].sets[0].id)   // already done at 140
+        vm.exercises[0].sets[1].load = 145                                    // edited
+
+        vm.applyProgression(to: id)
+
+        XCTAssertEqual(vm.exercises[0].sets.map { $0.load }, [140, 145, 142.5])
+    }
+
+    func testAMissedSetGivesARepeatHintThatChangesNothing() async throws {
+        let api = FakeAPI()
+        api.summary = summary(["squat"])
+        api.lastByExercise["squat"] = [
+            setDTO("squat", index: 1, reps: 5, loadKg: 140),
+            setDTO("squat", index: 2, reps: 5, loadKg: 140),
+            setDTO("squat", index: 3, reps: 3, loadKg: 140),
+        ]
+        let vm = makeViewModel(api, preferred: "squat")
+        await vm.load()
+        let id = vm.exercises[0].id
+
+        let hint = try XCTUnwrap(vm.progressionHint(for: id))
+        XCTAssertEqual(LiftLoggerLogic.progressionText(hint, system: .metric), "Last 5/5/3 @ 140 kg · repeat 140 kg")
+        XCTAssertFalse(vm.canApplyProgression(to: id))
+        vm.applyProgression(to: id)
+        XCTAssertEqual(vm.exercises[0].sets.map { $0.load }, [140, 140, 140])
+    }
+
+    func testNoHintWithoutHistory() {
+        let vm = makeViewModel(FakeAPI())
+        vm.addExercise(named: "squat")
+
+        XCTAssertNil(vm.progressionHint(for: vm.exercises[0].id))
+        XCTAssertFalse(vm.canApplyProgression(to: vm.exercises[0].id))
+    }
+
+    func testAnExerciseAddedLaterGetsAHintOnceItsHistoryLands() async throws {
+        let api = FakeAPI()
+        api.lastByExercise["bench press"] = [
+            setDTO("bench press", index: 1, reps: 5, loadKg: 90),
+            setDTO("bench press", index: 2, reps: 5, loadKg: 90),
+        ]
+        let vm = makeViewModel(api)
+        vm.addExercise(named: "bench press")
+        let id = try XCTUnwrap(vm.exercises.first?.id)
+        XCTAssertNil(vm.progressionHint(for: id))
+
+        await vm.seedFromHistory(exerciseID: id)
+
+        XCTAssertEqual(vm.progressionHint(for: id)?.suggestedLoad, 91.5)
+        vm.applyProgression(to: id)
+        XCTAssertEqual(vm.exercises[0].sets.map { $0.load }, [91.5, 91.5])
+    }
+
+    func testPoundUsersGetPoundSteps() async throws {
+        let api = FakeAPI()
+        api.recentSessions = [recentSession("s", day: "2026-10-05", [("squat", 3, 102.06)])]
+        let harness = RestHarness()
+        let vm = makeTimedViewModel(api, system: .imperial, harness: harness)
+        await vm.load()
+
+        // 102.06 kg → 225 lb (display unit), +5 lb for a lower-body compound.
+        let hint = try XCTUnwrap(vm.progressionHint(for: vm.exercises[0].id))
+        XCTAssertEqual(hint.lastLoad, 225)
+        XCTAssertEqual(hint.suggestedLoad, 230)
+    }
+
+    // MARK: - done ticks + rest timer
+
+    func testTickingASetStartsAFullLowerBodyRest() async {
+        let harness = RestHarness()
+        let vm = await seededViewModel(FakeAPI(), harness: harness)
+        XCTAssertNil(vm.rest)
+
+        vm.toggleSetDone(exerciseID: vm.exercises[0].id, setID: vm.exercises[0].sets[0].id)
+
+        XCTAssertTrue(vm.exercises[0].sets[0].isDone)
+        XCTAssertEqual(vm.rest?.start, harness.now)
+        XCTAssertEqual(vm.rest?.end, harness.now.addingTimeInterval(150))
+    }
+
+    func testOtherLiftsRestTwoMinutes() async {
+        let harness = RestHarness()
+        let vm = await seededViewModel(FakeAPI(), exercise: "bench press", kg: 90, harness: harness)
+
+        vm.toggleSetDone(exerciseID: vm.exercises[0].id, setID: vm.exercises[0].sets[0].id)
+
+        XCTAssertEqual(vm.rest?.end, harness.now.addingTimeInterval(120))
+    }
+
+    func testUntickingDoesNotRestartOrStopTheTimer() async {
+        let harness = RestHarness()
+        let vm = await seededViewModel(FakeAPI(), harness: harness)
+        let id = vm.exercises[0].id
+        vm.toggleSetDone(exerciseID: id, setID: vm.exercises[0].sets[0].id)
+        let original = vm.rest
+        harness.advance(40)
+
+        vm.toggleSetDone(exerciseID: id, setID: vm.exercises[0].sets[0].id)   // untick
+
+        XCTAssertFalse(vm.exercises[0].sets[0].isDone)
+        XCTAssertEqual(vm.rest, original)
+    }
+
+    func testTickingTheNextSetRestartsTheRest() async {
+        let harness = RestHarness()
+        let vm = await seededViewModel(FakeAPI(), harness: harness)
+        let id = vm.exercises[0].id
+        vm.toggleSetDone(exerciseID: id, setID: vm.exercises[0].sets[0].id)
+        harness.advance(100)
+
+        vm.toggleSetDone(exerciseID: id, setID: vm.exercises[0].sets[1].id)
+
+        XCTAssertEqual(vm.rest?.end, harness.now.addingTimeInterval(150))
+    }
+
+    func testExtendAddsThirtySecondsWhileRunningOnly() async {
+        let harness = RestHarness()
+        let vm = await seededViewModel(FakeAPI(), harness: harness)
+        let start = harness.now
+        vm.toggleSetDone(exerciseID: vm.exercises[0].id, setID: vm.exercises[0].sets[0].id)
+        harness.advance(20)
+
+        vm.extendRest()
+        XCTAssertEqual(vm.rest?.end, start.addingTimeInterval(180))
+        XCTAssertEqual(vm.rest?.start, start)
+
+        // Once the countdown has finished ("Rest done" showing), "+30s" no
+        // longer applies.
+        harness.advance(161)   // 1s past the extended end
+        vm.advanceRest(now: harness.now)
+        XCTAssertEqual(harness.hapticCount, 1)
+        vm.extendRest()
+        XCTAssertEqual(vm.rest?.end, start.addingTimeInterval(180))
+    }
+
+    func testSkipClearsTheTimerWithoutTheDoneHaptic() async {
+        let harness = RestHarness()
+        let vm = await seededViewModel(FakeAPI(), harness: harness)
+        vm.toggleSetDone(exerciseID: vm.exercises[0].id, setID: vm.exercises[0].sets[0].id)
+
+        vm.skipRest()
+        harness.advance(500)
+        let next = vm.advanceRest(now: harness.now)
+
+        XCTAssertNil(vm.rest)
+        XCTAssertNil(next)
+        XCTAssertEqual(harness.hapticCount, 0)
+    }
+
+    func testRestFiresTheHapticOnceAtZeroShowsDoneThenClears() async {
+        let harness = RestHarness()
+        let vm = await seededViewModel(FakeAPI(), harness: harness)
+        let start = harness.now
+        vm.toggleSetDone(exerciseID: vm.exercises[0].id, setID: vm.exercises[0].sets[0].id)
+
+        // Mid-countdown: nothing fires, next wake-up is at the end.
+        XCTAssertEqual(vm.advanceRest(now: start.addingTimeInterval(100)), 50)
+        XCTAssertEqual(harness.hapticCount, 0)
+
+        // At zero: haptic fires, "Rest done" lingers, next wake-up is its timeout.
+        XCTAssertEqual(vm.advanceRest(now: start.addingTimeInterval(150)), 4)
+        XCTAssertEqual(harness.hapticCount, 1)
+        XCTAssertNotNil(vm.rest)
+
+        // Re-checking during the done window doesn't buzz again.
+        XCTAssertEqual(vm.advanceRest(now: start.addingTimeInterval(152)), 2)
+        XCTAssertEqual(harness.hapticCount, 1)
+
+        // Window over: the bar goes away.
+        XCTAssertNil(vm.advanceRest(now: start.addingTimeInterval(154)))
+        XCTAssertNil(vm.rest)
+        XCTAssertEqual(harness.hapticCount, 1)
+    }
+
+    func testARestThatEndedWhileSuspendedClearsQuietly() async {
+        let harness = RestHarness()
+        let vm = await seededViewModel(FakeAPI(), harness: harness)
+        vm.toggleSetDone(exerciseID: vm.exercises[0].id, setID: vm.exercises[0].sets[0].id)
+
+        XCTAssertNil(vm.advanceRest(now: harness.now.addingTimeInterval(600)))
+
+        XCTAssertNil(vm.rest)
+        XCTAssertEqual(harness.hapticCount, 0)
+    }
+
+    func testSavingStopsTheRestTimer() async {
+        let harness = RestHarness()
+        let vm = await seededViewModel(FakeAPI(), harness: harness)
+        vm.toggleSetDone(exerciseID: vm.exercises[0].id, setID: vm.exercises[0].sets[0].id)
+        XCTAssertNotNil(vm.rest)
+
+        await vm.save()
+
+        XCTAssertTrue(vm.didSave)
+        XCTAssertNil(vm.rest)
+    }
+
+    // MARK: - save semantics
+
+    func testSaveButtonCountsEverySetWhenNothingIsTicked() async {
+        let api = FakeAPI()
+        let vm = await seededViewModel(api, harness: RestHarness())
+
+        XCTAssertFalse(vm.hasDoneSets)
+        XCTAssertEqual(vm.saveLabel, "Save 3 sets")
+        XCTAssertTrue(vm.canSave)
+
+        await vm.save()
+
+        XCTAssertEqual(api.savedSets.first?.count, 3)
+        // The screenshot flow: saving the untouched repeat is a template log.
+        XCTAssertEqual(api.savedSources, ["template"])
+    }
+
+    func testSaveLogsOnlyTickedSetsAndSaysSo() async throws {
+        let api = FakeAPI()
+        let vm = await seededViewModel(api, harness: RestHarness())
+        vm.addExercise(named: "bench press")
+        let squatID = vm.exercises[0].id
+        vm.toggleSetDone(exerciseID: squatID, setID: vm.exercises[0].sets[0].id)
+        vm.toggleSetDone(exerciseID: squatID, setID: vm.exercises[0].sets[2].id)
+
+        XCTAssertTrue(vm.hasDoneSets)
+        XCTAssertEqual(vm.saveLabel, "Save 2 done sets")
+
+        await vm.save()
+
+        let saved = try XCTUnwrap(api.savedSets.first)
+        XCTAssertEqual(saved.count, 2)
+        XCTAssertEqual(saved.map { $0.exercise }, ["squat", "squat"])
+        XCTAssertEqual(saved.map { $0.setIndex }, [1, 2])
+        XCTAssertEqual(api.savedSources, ["manual"])
+    }
+
+    func testTickingEverySetStillSavesATemplate() async {
+        let api = FakeAPI()
+        let vm = await seededViewModel(api, harness: RestHarness())
+        for set in vm.exercises[0].sets {
+            vm.toggleSetDone(exerciseID: vm.exercises[0].id, setID: set.id)
+        }
+
+        XCTAssertEqual(vm.saveLabel, "Save 3 done sets")
+        await vm.save()
+
+        XCTAssertEqual(api.savedSets.first?.count, 3)
+        XCTAssertEqual(api.savedSources, ["template"])
+    }
+
+    func testSaveLabelUsesSingularAndFallsBackWhenThereIsNothingToSave() {
+        let vm = makeTimedViewModel(FakeAPI(), harness: RestHarness())
+        XCTAssertEqual(vm.saveLabel, "Save lift")
+        XCTAssertFalse(vm.canSave)
+
+        vm.addExercise(named: "squat")
+        XCTAssertEqual(vm.saveLabel, "Save 1 set")
+        vm.toggleSetDone(exerciseID: vm.exercises[0].id, setID: vm.exercises[0].sets[0].id)
+        XCTAssertEqual(vm.saveLabel, "Save 1 done set")
+        XCTAssertTrue(vm.canSave)
+    }
+
+    func testChangingTheTickedSetsAfterAFailedSaveGetsAFreshSessionId() async {
+        let api = FakeAPI()
+        api.saveError = SaveFailure()
+        let vm = await seededViewModel(api, harness: RestHarness())
+        let sessionId = vm.sessionId
+        await vm.save()
+        XCTAssertFalse(vm.didSave)
+
+        vm.toggleSetDone(exerciseID: vm.exercises[0].id, setID: vm.exercises[0].sets[0].id)
+        api.saveError = nil
+        await vm.save()
+
+        XCTAssertEqual(api.attemptedSessionIds.count, 2)
+        XCTAssertNotEqual(api.attemptedSessionIds[0], api.attemptedSessionIds[1])
+        XCTAssertEqual(api.attemptedSessionIds[0], sessionId)
+        XCTAssertTrue(vm.didSave)
+    }
+
+    func testAddSetDoesNotCopyTheDoneTick() async {
+        let vm = await seededViewModel(FakeAPI(), harness: RestHarness())
+        let id = vm.exercises[0].id
+        vm.toggleSetDone(exerciseID: id, setID: vm.exercises[0].sets[2].id)
+
+        vm.addSet(to: id)
+
+        XCTAssertEqual(vm.exercises[0].sets.map { $0.isDone }, [false, false, true, false])
     }
 }
