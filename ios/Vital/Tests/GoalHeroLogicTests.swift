@@ -264,7 +264,7 @@ final class GoalHeroLogicTests: XCTestCase {
     // MARK: - EnduranceHeroLogic.weeklySessionsAndVolumeText (combined line)
 
     func testWeeklySessionsAndVolumeTextBothPresent() {
-        // Fixture endurance scenario: 3 sessions, 24.5 km
+        // A typical week: 3 sessions, 24.5 km
         let text = EnduranceHeroLogic.weeklySessionsAndVolumeText(
             sessionsCompleted: 3, kmDone: 24.5, system: .metric
         )

@@ -184,7 +184,7 @@ final class WeeklyReviewLogicTests: XCTestCase {
             let json = """
             {"id":"r","review":{"weekStart":"2026-09-28","weekEnd":"2026-10-04","goal":"muscle","verdict":"behind",
              "headline":"h","stats":[{"label":"Sessions","value":"3","comparison":null,"tone":"neutral"},
-                                      {"label":"Weight trend","value":"+0.2 kg","comparison":null,"tone":"good"}],
+                                      {"label":"Weekly avg weight","value":"+0.2 kg","comparison":null,"tone":"good"}],
              "nextWeek":"n","dataSufficiency":{"daysWithData":6,"statCount":2,"sufficient":true}\(extra)}}
             """
             return try JSONDecoder().decode(WeeklyReviewResponse.self, from: Data(json.utf8)).review
@@ -228,7 +228,7 @@ final class WeeklyReviewLogicTests: XCTestCase {
             "headline": "3 of 4 sessions, Bench Press up 2.5 kg",
             "stats": [
               {"label": "Sessions", "value": "3", "comparison": "target 4", "tone": "neutral"},
-              {"label": "Weight trend", "value": "+0.2 kg", "comparison": null, "tone": "mystery"}
+              {"label": "Weekly avg weight", "value": "+0.2 kg", "comparison": null, "tone": "mystery"}
             ],
             "win": "Bench up.", "slip": null, "nextWeek": "Repeat this week.",
             "dataSufficiency": {"daysWithData": 6, "statCount": 2, "sufficient": true}

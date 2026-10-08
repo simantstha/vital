@@ -254,11 +254,11 @@ struct GoalProgressCard: View {
 
     private var distanceBar: GoalDistanceBar? {
         guard let fraction = GoalProgressLogic.distanceFraction(progress),
-              let target = progress.distance?.targetKm else { return nil }
+              let endText = GoalProgressLogic.distanceBarEndText(progress, system: system) else { return nil }
         return GoalDistanceBar(
             fraction: fraction,
             averageText: GoalProgressLogic.distanceAverageLine(progress, system: system),
-            targetText: UnitFormat.distance(km: target, system),
+            targetText: endText,
             tint: GoalProgressLogic.color(for: GoalProgressLogic.tone(for: progress.verdict) == .watch ? .watch : .good)
         )
     }
@@ -422,11 +422,11 @@ struct GoalProgressDetailView: View {
 
     private var distanceBar: GoalDistanceBar? {
         guard let fraction = GoalProgressLogic.distanceFraction(progress),
-              let target = progress.distance?.targetKm else { return nil }
+              let endText = GoalProgressLogic.distanceBarEndText(progress, system: system) else { return nil }
         return GoalDistanceBar(
             fraction: fraction,
             averageText: GoalProgressLogic.distanceAverageLine(progress, system: system),
-            targetText: UnitFormat.distance(km: target, system),
+            targetText: endText,
             tint: GoalProgressLogic.color(for: GoalProgressLogic.tone(for: progress.verdict) == .watch ? .watch : .good)
         )
     }

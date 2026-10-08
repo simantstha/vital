@@ -29,6 +29,10 @@ function wt(kg: number, units: UnitSystem, digits = 1): string {
   return `${v.toFixed(digits)} ${units === 'imperial' ? 'lb' : 'kg'}`;
 }
 
+function distKm(km: number, units: UnitSystem): string {
+  return units === 'imperial' ? `${(km / KM_PER_MILE).toFixed(1)} mi` : `${km.toFixed(1)} km`;
+}
+
 function signedWt(kg: number, units: UnitSystem, digits = 1): string {
   return `${kg > 0 ? '+' : ''}${wt(kg, units, digits)}`;
 }
@@ -74,9 +78,15 @@ export function formatGoalProgressLines(gp: GoalProgress, units: UnitSystem): st
     lines.push(`- Race: ${gp.race.label} on ${gp.race.date} (${when})`);
   }
   if (gp.longRun) {
-    const dist = (km: number) => (units === 'imperial' ? `${(km / KM_PER_MILE).toFixed(1)} mi` : `${km.toFixed(1)} km`);
+    const dist = (km: number) => distKm(km, units);
     const target = gp.longRun.targetPeakKm != null ? `; peak target ${dist(gp.longRun.targetPeakKm)} before the taper` : '';
     lines.push(`- Long run (running only): last ${dist(gp.longRun.lastKm)}; 28-day peak ${dist(gp.longRun.peakKm)}${target}`);
+  }
+  // The ONE target for this week: the safe ~10% step over last week (the same
+  // number the app's bar and the weekly review's "Next week" use). The weekly
+  // goal comes after it, so the coach must not push straight to the goal.
+  if (gp.distance && gp.distance.stepTargetKm < gp.distance.targetKm) {
+    lines.push(`- This week's target: build to ~${distKm(gp.distance.stepTargetKm, units)} (a safe ~10% step over last week); the ${distKm(gp.distance.targetKm, units)}/week goal comes after — do not push past the step this week`);
   }
   if (nowBits.length) lines.push(`- Now: ${nowBits.join('; ')}`);
 

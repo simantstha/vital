@@ -49,6 +49,7 @@ import type { ProgressionSummary } from './workoutRepository';
 import { isLiftProgressing, liftChange4w, liftDisplayChange, liftDisplayName, pickHeadlineLift } from './liftChange';
 import { weekStartKeyForDay } from './localDay';
 import { KM_PER_MILE } from './metricFormat';
+import { weekStepTargetKm } from './enduranceProgression';
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
@@ -120,7 +121,19 @@ export interface GoalDistanceProgress {
   avg4wKm: number | null;
   /** Local Monday of the week thisWeekKm covers. */
   weekStart: string;
-  /** e.g. "24.5 of 30 km running this week" (mi for imperial users). */
+  /**
+   * This week's safe step toward `targetKm`, from LAST week's running km (the
+   * shared rule in lib/enduranceProgression.ts — the same ~27 km the weekly
+   * review's "Next week" says for this week). Equals `targetKm` when last week
+   * was already within 10% of it or there is no last-week data. The progress
+   * bar runs to this number.
+   */
+  stepTargetKm: number;
+  /**
+   * e.g. "22.7 of ~27 km running this week · goal 30 km" when the step is below
+   * the goal, "24.5 of 30 km running this week" when it is the goal (mi for
+   * imperial users).
+   */
   text: string;
 }
 
@@ -917,6 +930,33 @@ function distanceInWeek(input: GoalProgressInput, offset: number): { km: number;
   return { km, readings };
 }
 
+/** Running km (finite distances only) on local days `from`..`to` inclusive; null when no run in the range carries a distance. */
+function runningKmBetween(input: GoalProgressInput, from: string, to: string): number | null {
+  let km = 0;
+  let readings = 0;
+  for (const w of runWorkouts(input)) {
+    if (w.distanceKm == null || !Number.isFinite(w.distanceKm)) continue;
+    if (w.day < from || w.day > to) continue;
+    km += w.distanceKm;
+    readings += 1;
+  }
+  return readings === 0 ? null : km;
+}
+
+/**
+ * This week's safe step (km) toward the weekly target, from LAST calendar
+ * week's (Mon–Sun) running km: the one shared progression rule (~10% over last
+ * week, never past the target). The target itself when last week has no
+ * measured running or was already within 10% of it.
+ */
+function stepTargetKm(input: GoalProgressInput, targetKm: number, thisWeekStart: string): number {
+  const lastWeekKm = runningKmBetween(input, addDays(thisWeekStart, -7), addDays(thisWeekStart, -1));
+  if (lastWeekKm == null) return targetKm;
+  const unitsPerKm = input.unitSystem === 'imperial' ? 1 / KM_PER_MILE : 1;
+  const step = weekStepTargetKm(round1(lastWeekKm), targetKm, unitsPerKm);
+  return step == null ? targetKm : Math.min(targetKm, round1(step));
+}
+
 /** This calendar week's (Mon–today, user-local) distance; null when no workout in the window carries a distance. */
 function distanceProgress(input: GoalProgressInput): GoalDistanceProgress | null {
   const targetKm = input.target.weeklyDistanceKm;
@@ -934,14 +974,20 @@ function distanceProgress(input: GoalProgressInput): GoalDistanceProgress | null
     if (w.day >= start && w.day <= input.todayKey) weekKm += w.distanceKm;
   }
   const hasData = readings > 0;
+  const stepKm = stepTargetKm(input, targetKm, start);
+  const done = hasData ? distanceNum(input, weekKm) : 0;
+  // One target for the week: when last week caps the safe step below the goal,
+  // say both ("22.7 of ~27 km ... · goal 30 km"); otherwise the goal alone.
+  const text = stepKm < targetKm
+    ? `${done} of ~${fmtDistance(input, stepKm)} running this week · goal ${fmtDistance(input, targetKm)}`
+    : `${done} of ${fmtDistance(input, targetKm)} running this week`;
   return {
     targetKm,
     thisWeekKm: hasData ? round1(weekKm) : null,
     avg4wKm: hasData ? round1(total28 / 4) : null,
     weekStart: start,
-    text: hasData
-      ? `${distanceNum(input, weekKm)} of ${fmtDistance(input, targetKm)} running this week`
-      : `0 of ${fmtDistance(input, targetKm)} running this week`,
+    stepTargetKm: stepKm,
+    text,
   };
 }
 

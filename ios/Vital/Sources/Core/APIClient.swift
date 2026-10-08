@@ -2167,14 +2167,22 @@ struct GoalProgressDTO: Decodable, Equatable {
         let thisWeekKm: Double?
         let avg4wKm: Double?
         let weekStart: String?
+        /// This week's safe step toward `targetKm`, from LAST week's running km
+        /// (the same ~10% rule as the weekly review's "Next week"): the target
+        /// the progress bar runs to. Equals `targetKm` when no step applies.
+        /// `nil` from a server that predates it — callers then measure against
+        /// `targetKm` exactly as before.
+        let stepTargetKm: Double?
 
-        private enum CodingKeys: String, CodingKey { case targetKm, thisWeekKm, avg4wKm, weekStart }
+        private enum CodingKeys: String, CodingKey { case targetKm, thisWeekKm, avg4wKm, weekStart, stepTargetKm }
 
-        init(targetKm: Double, thisWeekKm: Double? = nil, avg4wKm: Double? = nil, weekStart: String? = nil) {
+        init(targetKm: Double, thisWeekKm: Double? = nil, avg4wKm: Double? = nil, weekStart: String? = nil,
+             stepTargetKm: Double? = nil) {
             self.targetKm = targetKm
             self.thisWeekKm = thisWeekKm
             self.avg4wKm = avg4wKm
             self.weekStart = weekStart
+            self.stepTargetKm = stepTargetKm
         }
 
         init(from decoder: Decoder) throws {
@@ -2183,6 +2191,7 @@ struct GoalProgressDTO: Decodable, Equatable {
             thisWeekKm = try? c.decode(Double.self, forKey: .thisWeekKm)
             avg4wKm = try? c.decode(Double.self, forKey: .avg4wKm)
             weekStart = try? c.decode(String.self, forKey: .weekStart)
+            stepTargetKm = try? c.decode(Double.self, forKey: .stepTargetKm)
         }
     }
 

@@ -3,8 +3,9 @@ import SwiftUI
 
 // MARK: - Weekly review types (GET /api/review/weekly)
 
-/// One stat tile in the review ("Weight trend", "−0.6 kg", "vs the week
-/// before"). `value` / `comparison` arrive already formatted in the user's
+/// One stat tile in the review ("Weekly avg weight", "−0.6 kg", "vs the week
+/// before" — a one-week change, labelled so it is never read as the goal
+/// sheet's 4-week "kg/wk" trend rate). `value` / `comparison` arrive already formatted in the user's
 /// unit system by the server (lib/weeklyReview.ts) — the app only lays them
 /// out. Tolerant decode: unknown tone -> `.neutral`.
 struct WeeklyReviewStatDTO: Decodable, Equatable, Identifiable {

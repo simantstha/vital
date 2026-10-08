@@ -528,13 +528,16 @@ final class TodayViewModel: ObservableObject {
 
     /// "24.5 of 30 km this week" + bar fraction for the endurance hero — the
     /// SAME text the goal card/sheet show (`GoalProgressLogic.distanceLine`),
-    /// from `/api/goal/progress`. `nil` without a weekly distance target or a
-    /// measured distance.
+    /// from `/api/goal/progress`. When last week caps this week's safe step
+    /// below the goal it reads "22.7 of ~27 km this week · goal 30 km" and the
+    /// bar runs to the ~27 km step. Values stay glued to their unit
+    /// (`nonBreaking`) since the line is longer with the goal beside it. `nil`
+    /// without a weekly distance target or a measured distance.
     var enduranceDistanceProgress: (text: String, fraction: Double)? {
         guard let goalProgress,
               let text = GoalProgressLogic.distanceLine(goalProgress, system: UnitPreference.shared.current),
               let fraction = GoalProgressLogic.distanceFraction(goalProgress) else { return nil }
-        return (text, fraction)
+        return (GoalProgressLogic.nonBreaking(text), fraction)
     }
 
     /// "Half marathon · 12 weeks to go · long run 14/18 km" for the top of the

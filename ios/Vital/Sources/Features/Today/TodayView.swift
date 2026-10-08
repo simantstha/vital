@@ -24,6 +24,9 @@ struct TodayView: View {
     @State private var showGoalProgress = false
     /// Voice FAB shrinks while Today scrolls down (see `VoiceFABScroll`).
     @State private var fabCompact = false
+    /// True once Today has scrolled off its resting position: fades in a
+    /// blurred status-bar backdrop so content never reads through the clock.
+    @State private var statusBarBackdropVisible = false
     /// Weekly review detail sheet — opened from the Mon-Wed review card.
     @State private var showWeeklyReview = false
     @ObservedObject private var weeklyReviewStore = WeeklyReviewStore.shared
@@ -312,6 +315,8 @@ struct TodayView: View {
                     current: fabCompact, oldOffset: old.y, newOffset: new.y, maxOffset: new.maxY
                 )
                 if next != fabCompact { fabCompact = next }
+                let scrolled = new.y > TodayStatusBarBackdrop.scrolledThreshold
+                if scrolled != statusBarBackdropVisible { statusBarBackdropVisible = scrolled }
             }
             .safeAreaInset(edge: .bottom) {
                 if !isAnySheetOpen {
@@ -327,6 +332,10 @@ struct TodayView: View {
                 if vm.didLoadToday { ReminderScheduler.shared.briefViewed(at: Date()) }
             }
             .task { await notificationsVM.refresh() }
+
+            // Content scrolls under the status bar (the ScrollView runs edge to
+            // edge), so once scrolled a thin material covers just that strip.
+            TodayStatusBarBackdrop(isVisible: statusBarBackdropVisible)
 
             if !isAnySheetOpen {
                 VoiceFABView(
@@ -846,4 +855,28 @@ struct VitalProgressBar: View {
 private struct TodayScrollOffsets: Equatable {
     var y: Double
     var maxY: Double
+}
+
+/// A thin material over the status-bar strip only, shown once Today has
+/// scrolled: the ScrollView runs edge to edge, so without it cards and text
+/// scroll straight under the clock. Zero-height and top-anchored — the
+/// background extends only into the top safe area — so it never changes the
+/// layout, hit-testing or any identifier.
+private struct TodayStatusBarBackdrop: View {
+    /// Scroll offset (pt) past which the content has left its resting place.
+    static let scrolledThreshold: Double = 2
+
+    let isVisible: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        Color.clear
+            .background(.ultraThinMaterial)
+            .ignoresSafeArea(edges: .top)
+            .frame(height: 0)
+            .opacity(isVisible ? 1 : 0)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: isVisible)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
 }

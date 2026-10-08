@@ -127,13 +127,30 @@ test('endurance distance target and this-week progress are quoted unit-aware', (
   const g = gp({
     goal: 'endurance',
     target: { weightKg: null, date: null, weeklySessions: null, weeklyDistanceKm: 30 },
-    distance: { targetKm: 30, thisWeekKm: 8, avg4wKm: 24.5, weekStart: '2026-10-05', text: '8 of 30 km this week' },
+    distance: { targetKm: 30, thisWeekKm: 8, avg4wKm: 24.5, weekStart: '2026-10-05', stepTargetKm: 30, text: '8 of 30 km this week' },
   });
   const metric = formatGoalProgressLines(g, 'metric').join('\n');
   assert.match(metric, /30\.0 km\/week/);
   assert.match(metric, /8 of 30 km this week/);
   const imperial = formatGoalProgressLines(g, 'imperial').join('\n');
   assert.match(imperial, /18\.6 mi\/week/);
+});
+
+test('endurance step below the goal: the coach is told this week\'s target, unit-aware; none when the step is the goal', () => {
+  const g = gp({
+    goal: 'endurance',
+    target: { weightKg: null, date: null, weeklySessions: null, weeklyDistanceKm: 30 },
+    distance: { targetKm: 30, thisWeekKm: 22.7, avg4wKm: 22.6, weekStart: '2026-10-05', stepTargetKm: 27, text: '22.7 of ~27 km running this week · goal 30 km' },
+  });
+  const metric = formatGoalProgressLines(g, 'metric');
+  assert.ok(
+    metric.includes("- This week's target: build to ~27.0 km (a safe ~10% step over last week); the 30.0 km/week goal comes after — do not push past the step this week"),
+    metric.join('\n'),
+  );
+  assert.match(metric.join('\n'), /22\.7 of ~27 km running this week · goal 30 km/);
+  assert.match(formatGoalProgressLines(g, 'imperial').join('\n'), /build to ~16\.8 mi .* the 18\.6 mi\/week goal comes after/);
+  const atGoal = formatGoalProgressLines({ ...g, distance: { ...g.distance!, stepTargetKm: 30 } }, 'metric').join('\n');
+  assert.doesNotMatch(atGoal, /This week's target/);
 });
 
 test('formatGoalProgressLines includes the race countdown when present', () => {

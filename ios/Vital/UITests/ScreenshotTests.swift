@@ -454,14 +454,19 @@ final class ScreenshotTests: XCTestCase {
                                "Today's endurance hero should show a readiness word (one of \(readinessWords)) [\(appearance)]")
                 XCTAssertTrue(waitForText(app, containing: "Intervals 6×800 m"),
                                "Today's endurance hero should show today's session [\(appearance)]")
-                // Sessions line now shows session count only (e.g., "3 sessions this week"),
+                // Sessions line now shows session count only (e.g., "2 sessions this week"),
                 // while distance appears in a separate progress line.
                 XCTAssertTrue(waitForText(app, containing: "sessions"),
                                "Today's endurance hero should show the sessions line [\(appearance)]")
-                // Distance progress line in the format "X.X of 30 km this week"
-                // (fixture's stable target: 30 km/week; weekday-dependent value: X.X km done).
-                XCTAssertTrue(waitForText(app, containing: "of 30 km this week"),
-                               "Today's endurance hero should show distance progress with the weekly target [\(appearance)]")
+                // Distance progress line in the format "X.X of ~27 km this week · goal 30 km":
+                // ONE target for the week (the safe ~10% step from last week's 24.5 km, the
+                // same ~27 km the weekly review's Next week names) with the 30 km goal beside it.
+                // (The hero glues each value to its unit with U+00A0, like the goal card,
+                // so the checks stop before the unit.)
+                XCTAssertTrue(waitForText(app, containing: "of ~27"),
+                               "Today's endurance hero should show distance progress against this week's step target [\(appearance)]")
+                XCTAssertTrue(waitForText(app, containing: "goal 30"),
+                               "Today's endurance hero should keep the weekly goal beside the step target [\(appearance)]")
                 // Race countdown line ("Half marathon · 12 weeks to go") from the fixture's race.
                 XCTAssertTrue(waitForText(app, containing: "Half marathon"),
                                "Today's endurance hero should show the race countdown [\(appearance)]")
