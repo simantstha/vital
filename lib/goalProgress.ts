@@ -1053,6 +1053,22 @@ function longRunReason(input: GoalProgressInput, lr: GoalLongRunProgress | null,
   return { kind: 'long_run', text: `Long run ${fmtDistance(input, lr.lastKm)} · ${goal}`, tone: 'neutral' };
 }
 
+/**
+ * Which endurance reasons make the "Why" (cap 3; computeGoalProgress then puts
+ * the race countdown in front, so with a race that is race + 2 of these):
+ *   1. the volume trend — it is what the verdict and headline ("Building —
+ *      distance up 6%") rest on, so it is always kept;
+ *   2. anything on watch (resting HR trending up, HRV trending down): a
+ *      recovery warning must never be cut;
+ *   3. then the rest in fixed priority: long run, sessions, resting HR, HRV.
+ * This week's distance is deliberately not a reason: `distance.text` ("24.5 of
+ * 30 km running this week") already states it as the card's primary stat.
+ */
+function enduranceReasons(volume: GoalProgressReason | null, rest: Array<GoalProgressReason | null>): GoalProgressReason[] {
+  const others = rest.filter((r): r is GoalProgressReason => r != null);
+  return capReasons([volume, ...others.filter(r => r.tone === 'watch'), ...others.filter(r => r.tone !== 'watch')]);
+}
+
 function enduranceOutcome(input: GoalProgressInput): Outcome {
   const distanceTarget = input.target.weeklyDistanceKm;
   if (input.target.weeklySessions == null && distanceTarget == null) {
@@ -1064,18 +1080,11 @@ function enduranceOutcome(input: GoalProgressInput): Outcome {
   const sessions = weekSessionsReason(input) ?? sessionsReason(input);
   const race = raceProgress(input);
   const longRun = longRunReason(input, longRunProgress(input, race), race);
-  const distanceWeekReason: GoalProgressReason | null = dist != null && dist.thisWeekKm != null
-    ? {
-        kind: 'week_distance',
-        text: dist.text,
-        tone: dist.thisWeekKm >= dist.targetKm ? 'good' : 'neutral',
-      }
-    : null;
   if (count < MIN_SESSIONS_FOR_ENDURANCE) {
     return {
       verdict: 'insufficient_data',
       headline: 'Log a few more sessions to see your training trend',
-      reasons: capReasons([distanceWeekReason, longRun, sessions]),
+      reasons: enduranceReasons(null, [longRun, sessions]),
     };
   }
 
@@ -1113,7 +1122,7 @@ function enduranceOutcome(input: GoalProgressInput): Outcome {
       }
     : null;
 
-  const reasons = capReasons([distanceWeekReason, longRun, sessions, volumeReason, restingHrReason(input), hrvReason(input)]);
+  const reasons = enduranceReasons(volumeReason, [longRun, sessions, restingHrReason(input), hrvReason(input)]);
   const building = (prior === 0 && recent > 0) || (changePct != null && changePct >= ENDURANCE_BUILDING_PCT);
   const buildingHeadline = changePct != null
     ? clip(`Building — ${useKm ? 'distance' : useMinutes ? 'time' : 'sessions'} up ${Math.round(changePct)}% (${ENDURANCE_VOLUME_WINDOW_LABEL})`)

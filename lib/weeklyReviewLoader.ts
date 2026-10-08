@@ -137,6 +137,8 @@ export async function computeLastWeekReview(
     sleepGoalMinutes: user.sleep_goal_minutes ?? DEFAULT_SLEEP_GOAL_MIN,
     weeklySessionsTarget: user.weekly_sessions_target ?? null,
     weeklyDistanceKmTarget: user.weekly_distance_km_target ?? null,
+    // Long-run progress as of the reviewed week's end (same object the goal card uses), so "Next week" can cap long-run growth.
+    longRun: progress?.longRun ?? null,
     unitSystem: resolveUnitSystem(user.unit_system),
     exerciseDisplay: buildExerciseDisplay(displayRows),
     signupDay: signupLocalDay(user.created_at, tz),
