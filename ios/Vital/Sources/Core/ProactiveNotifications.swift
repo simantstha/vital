@@ -161,7 +161,13 @@ struct AnalysisContext: Codable, Equatable {
     struct GoingIn: Codable, Equatable {
         let sleepMinutes: Double?
         let hrv: AnalysisRecoveryReading?
+        /// Days since the previous workout of the SAME type (older servers send
+        /// only this one).
         let daysSinceLastSameType: Int?
+        /// Days since the last HARD session of ANY type (additive; absent on
+        /// older servers and when no earlier hard session can be shown).
+        /// Preferred over `daysSinceLastSameType` — see `AnalysisLogic.sinceLastHard`.
+        let daysSinceLastHard: Int?
     }
 
     struct NextMorning: Codable, Equatable {

@@ -1307,6 +1307,8 @@ enum FixtureData {
                 "sleepMinutes": 490.0,
                 "hrv": ["value": 64.0, "unit": "ms", "vsNormal": "above", "source": "apple"],
                 "daysSinceLastSameType": 3,
+                // The previous hard session (any type) was the same tempo run.
+                "daysSinceLastHard": 3,
             ],
             // The morning after the run is THIS morning: the same HRV / resting
             // HR the Today tiles show.
@@ -1407,6 +1409,8 @@ enum FixtureData {
                 "sleepMinutes": profile.sleepMinutes,
                 "hrv": ["value": profile.hrv, "unit": "ms", "vsNormal": vsNormal("hrv_sdnn", scenario), "source": "apple"],
                 "daysSinceLastSameType": 2,
+                // The last HARD session (any type) came before that easy run.
+                "daysSinceLastHard": 4,
             ],
         ]
         let result: [String: Any] = [
@@ -1440,6 +1444,8 @@ enum FixtureData {
                 "sleepMinutes": profile.sleepMinutes,
                 "hrv": ["value": profile.hrv, "unit": "ms", "vsNormal": vsNormal("hrv_sdnn", scenario), "source": "apple"],
                 "daysSinceLastSameType": 2,
+                // The last hard session was the lift (the `lastLift` squat, 2 days ago) — not a walk.
+                "daysSinceLastHard": 2,
             ],
         ]
         let result: [String: Any] = [

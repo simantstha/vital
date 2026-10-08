@@ -559,6 +559,33 @@ final class AnalysisLogicTests: XCTestCase {
         XCTAssertEqual(AnalysisLogic.activityNoun(type: nil), "session")
     }
 
+    /// The Going-in row prefers the server's last-hard-session-of-ANY-type count
+    /// and only falls back to the same-type count (with the activity noun) for
+    /// an older server that does not send the new field.
+    func testSinceLastHardPrefersTheAnyTypeCountAndFallsBackToTheSameTypeOne() {
+        // New server: "session", whatever the activity is.
+        XCTAssertEqual(
+            AnalysisLogic.sinceLastHard(daysSinceLastHard: 2, daysSinceLastSameType: 5, noun: "walk"),
+            AnalysisLogic.SinceLastHard(label: "Since your last hard session", days: 2)
+        )
+        XCTAssertEqual(
+            AnalysisLogic.sinceLastHard(daysSinceLastHard: 0, daysSinceLastSameType: nil, noun: "run"),
+            AnalysisLogic.SinceLastHard(label: "Since your last hard session", days: 0)
+        )
+        // Older server: the previous same-type count with the old noun wording.
+        XCTAssertEqual(
+            AnalysisLogic.sinceLastHard(daysSinceLastHard: nil, daysSinceLastSameType: 2, noun: "walk"),
+            AnalysisLogic.SinceLastHard(label: "Since your last hard walk", days: 2)
+        )
+        XCTAssertEqual(
+            AnalysisLogic.sinceLastHard(daysSinceLastHard: nil, daysSinceLastSameType: 3, noun: "session"),
+            AnalysisLogic.SinceLastHard(label: "Since your last hard session", days: 3)
+        )
+        XCTAssertEqual(AnalysisLogic.sinceLastSameTypeLabel(noun: "ride"), "Since your last hard ride")
+        // Neither: no row.
+        XCTAssertNil(AnalysisLogic.sinceLastHard(daysSinceLastHard: nil, daysSinceLastSameType: nil, noun: "run"))
+    }
+
     /// The effort bar's resting number is the 30-day mean (what the server sends),
     /// not this morning's reading, so it is labelled "usual".
     func testRestingLabelSaysUsual() {

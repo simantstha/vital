@@ -515,6 +515,43 @@ final class FixtureCrossScreenConsistencyTests: XCTestCase {
         }
     }
 
+    // MARK: - Last hard session
+
+    /// Every workout-analysis fixture carries the any-type "days since your last
+    /// hard session" next to the same-type count, and the lifter's is the lift
+    /// itself (the `lastLift` squat), not the easy walk.
+    func test_workoutAnalysisFixturesCarryTheAnyTypeLastHardCount() throws {
+        for scenario in [FixtureMode.Scenario.weightLoss, .muscle, .endurance] {
+            for id in ["fixture-workout-analysis", "fixture-workout-analysis-routine"] {
+                let (status, data) = FixtureData.response(scenario: scenario, method: "GET", path: "/api/workout-analyses/\(id)", query: "")
+                XCTAssertEqual(status, 200, "\(scenario) \(id)")
+                let goingIn = try JSONDecoder.vital.decode(AnalysisResponse.self, from: data).context?.goingIn
+                XCTAssertNotNil(goingIn?.daysSinceLastSameType, "\(scenario) \(id)")
+                XCTAssertNotNil(goingIn?.daysSinceLastHard, "\(scenario) \(id)")
+            }
+        }
+
+        // Muscle: the routine analysis is an easy walk; the last HARD session is the lift, 2 days ago.
+        let (_, walkData) = FixtureData.response(scenario: .muscle, method: "GET", path: "/api/workout-analyses/fixture-workout-analysis-routine", query: "")
+        let walk = try JSONDecoder.vital.decode(AnalysisResponse.self, from: walkData)
+        XCTAssertEqual(walk.metrics?.type, "Walking")
+        XCTAssertEqual(walk.context?.goingIn?.daysSinceLastHard, 2)
+        let summary = json(.muscle, "/api/training/summary")
+        let lastLiftDay = try XCTUnwrap((summary["lastLift"] as? [String: Any])?["date"] as? String)
+        let parser = DateFormatter()
+        parser.locale = Locale(identifier: "en_US_POSIX")
+        parser.dateFormat = "yyyy-MM-dd"
+        let lift = try XCTUnwrap(parser.date(from: lastLiftDay))
+        let liftAge = Calendar.current.dateComponents([.day], from: lift, to: Calendar.current.startOfDay(for: Date())).day
+        XCTAssertEqual(walk.context?.goingIn?.daysSinceLastHard, liftAge, "the last hard session is the last lift")
+        let line = AnalysisLogic.sinceLastHard(
+            daysSinceLastHard: walk.context?.goingIn?.daysSinceLastHard,
+            daysSinceLastSameType: walk.context?.goingIn?.daysSinceLastSameType,
+            noun: AnalysisLogic.activityNoun(type: walk.metrics?.type)
+        )
+        XCTAssertEqual(line, AnalysisLogic.SinceLastHard(label: "Since your last hard session", days: 2))
+    }
+
     // MARK: - Squat progression
 
     /// ONE squat story: the workout summary's weekly e1RMs, through the shared
