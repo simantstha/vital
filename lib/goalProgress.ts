@@ -35,6 +35,7 @@
  */
 
 import type { WeightReading } from './weightTrend';
+import { arrowPair, withUnit } from './displayText';
 import { computeWeightTrend, trendDeltaKgPerWeek, trendSpanDays } from './weightTrend';
 import {
   assessWeightSignals,
@@ -289,7 +290,7 @@ function weightNum(input: GoalProgressInput, kg: number, digits: 1 | 2 = 1): num
 
 /** Formats a kg value in the input's display unit, e.g. "72.5 kg" / "159.8 lb". */
 function fmtWeight(input: GoalProgressInput, kg: number, digits: 1 | 2 = 1): string {
-  return `${weightNum(input, kg, digits)} ${input.unitSystem === 'imperial' ? 'lb' : 'kg'}`;
+  return withUnit(weightNum(input, kg, digits), input.unitSystem === 'imperial' ? 'lb' : 'kg');
 }
 
 function dayNumber(day: string): number {
@@ -455,7 +456,7 @@ function calorieAdherenceReason(input: GoalProgressInput): GoalProgressReason | 
   const frac = hit / logged.length;
   return {
     kind: 'calorie_adherence',
-    text: `Stayed within your ${fmtKcal(target)} kcal target on ${hit} of ${logged.length} logged ${plural(logged.length, 'day')} this week`,
+    text: `Stayed within your ${withUnit(fmtKcal(target), 'kcal')} target on ${hit} of ${logged.length} logged ${plural(logged.length, 'day')} this week`,
     tone: frac >= 0.7 ? 'good' : frac < 0.5 ? 'watch' : 'neutral',
   };
 }
@@ -467,14 +468,14 @@ function signalReasons(signals: WeightSignal[]): { weekend: GoalProgressReason |
     weekend: wk
       ? {
           kind: 'weekend_overeating',
-          text: `Weekends average ${fmtKcal(Number(wk.facts.weekendAvgKcal))} kcal vs ${fmtKcal(Number(wk.facts.weekdayAvgKcal))} on weekdays`,
+          text: `Weekends average ${withUnit(fmtKcal(Number(wk.facts.weekendAvgKcal)), 'kcal')} vs ${fmtKcal(Number(wk.facts.weekdayAvgKcal))} on weekdays`,
           tone: 'watch',
         }
       : null,
     underEating: ue
       ? {
           kind: 'under_eating',
-          text: `Average intake of ${fmtKcal(Number(ue.facts.avgKcal))} kcal is under the ${fmtKcal(Number(ue.facts.floorKcal))} kcal safe floor`,
+          text: `Average intake of ${withUnit(fmtKcal(Number(ue.facts.avgKcal)), 'kcal')} is under the ${withUnit(fmtKcal(Number(ue.facts.floorKcal)), 'kcal')} safe floor`,
           tone: 'watch',
         }
       : null,
@@ -489,7 +490,7 @@ function tdeeReason(input: GoalProgressInput): GoalProgressReason | null {
   if (Math.abs(gap) < TDEE_GAP_MIN_KCAL) return null;
   return {
     kind: 'tdee',
-    text: `Your logs suggest you burn about ${fmtKcal(b.learnedTdee)} kcal a day, ${fmtKcal(Math.abs(gap))} ${gap < 0 ? 'less' : 'more'} than the ${fmtKcal(b.formulaTdee)} formula estimate`,
+    text: `Your logs suggest you burn about ${withUnit(fmtKcal(b.learnedTdee), 'kcal')} a day, ${withUnit(fmtKcal(Math.abs(gap)), 'kcal')} ${gap < 0 ? 'less' : 'more'} than the ${withUnit(fmtKcal(b.formulaTdee), 'kcal')} formula estimate`,
     tone: 'neutral',
   };
 }
@@ -563,7 +564,7 @@ function proteinReason(input: GoalProgressInput): GoalProgressReason | null {
   const frac = hit / logged.length;
   return {
     kind: 'protein',
-    text: `Hit your ${Math.round(target)} g protein target on ${hit} of ${logged.length} logged ${plural(logged.length, 'day')} this week`,
+    text: `Hit your ${withUnit(Math.round(target), 'g')} protein target on ${hit} of ${logged.length} logged ${plural(logged.length, 'day')} this week`,
     tone: frac >= 0.7 ? 'good' : frac < 0.5 ? 'watch' : 'neutral',
   };
 }
@@ -611,7 +612,7 @@ function liftReason(l: LiftChange, input: GoalProgressInput): GoalProgressReason
   if (d == null) return null;
   return {
     kind: 'lift',
-    text: `${l.name} est. 1RM ${d.change === 0 ? 'unchanged' : liftDeltaText(d)} vs 4 weeks ago (${d.baseline} → ${d.recent} ${d.unit})`,
+    text: `${l.name} est. 1RM ${d.change === 0 ? 'unchanged' : liftDeltaText(d)} vs 4 weeks ago (${arrowPair(String(d.baseline), withUnit(d.recent, d.unit))})`,
     tone: d.change > 0 ? 'good' : d.change < 0 ? 'watch' : 'neutral',
   };
 }
@@ -628,7 +629,7 @@ function displayLift(l: LiftChange, input: GoalProgressInput): LiftDisplay | nul
 
 /** "+9 kg" / "−3 lb" (always signed). */
 function liftDeltaText(d: LiftDisplay): string {
-  return `${d.change < 0 ? '−' : '+'}${Math.abs(d.change)} ${d.unit}`;
+  return `${d.change < 0 ? '−' : '+'}${withUnit(Math.abs(d.change), d.unit)}`;
 }
 
 // ── Vitals direction (endurance) ────────────────────────────────────────────
@@ -652,7 +653,7 @@ function restingHrReason(input: GoalProgressInput): GoalProgressReason | null {
   const dir = diff <= -RHR_DIRECTION_BPM ? 'trending down' : diff >= RHR_DIRECTION_BPM ? 'trending up' : 'steady';
   return {
     kind: 'resting_hr',
-    text: `Resting heart rate ${dir}: ${round1(p)} → ${round1(r)} bpm (last 2 weeks vs the 2 before)`,
+    text: `Resting heart rate ${dir}: ${arrowPair(String(round1(p)), withUnit(round1(r), 'bpm'))} (last 2 weeks vs the 2 before)`,
     tone: diff <= -RHR_DIRECTION_BPM ? 'good' : diff >= RHR_DIRECTION_BPM ? 'watch' : 'neutral',
   };
 }
@@ -667,7 +668,7 @@ function hrvReason(input: GoalProgressInput): GoalProgressReason | null {
   const dir = pct >= HRV_DIRECTION_PCT ? 'trending up' : pct <= -HRV_DIRECTION_PCT ? 'trending down' : 'steady';
   return {
     kind: 'hrv',
-    text: `HRV ${dir}: ${Math.round(p)} → ${Math.round(r)} ms (last 2 weeks vs the 2 before)`,
+    text: `HRV ${dir}: ${arrowPair(String(Math.round(p)), withUnit(Math.round(r), 'ms'))} (last 2 weeks vs the 2 before)`,
     tone: pct >= HRV_DIRECTION_PCT ? 'good' : pct <= -HRV_DIRECTION_PCT ? 'watch' : 'neutral',
   };
 }
@@ -893,7 +894,7 @@ function distanceNum(input: GoalProgressInput, km: number): number {
 
 /** "24.5 km" / "15.2 mi". */
 function fmtDistance(input: GoalProgressInput, km: number): string {
-  return `${distanceNum(input, km)} ${input.unitSystem === 'imperial' ? 'mi' : 'km'}`;
+  return withUnit(distanceNum(input, km), input.unitSystem === 'imperial' ? 'mi' : 'km');
 }
 
 /** Workouts that count toward the endurance distance target: running only. */
@@ -952,7 +953,7 @@ export function raceLabel(distanceKm: number | null): string {
   if (Math.abs(distanceKm - 42.2) < 0.05) return 'Marathon';
   if (distanceKm === 10) return '10K';
   if (distanceKm === 5) return '5K';
-  return `${Number.isInteger(distanceKm) ? distanceKm : round1(distanceKm)} km race`;
+  return `${withUnit(Number.isInteger(distanceKm) ? distanceKm : round1(distanceKm), 'km')} race`;
 }
 
 /** Endurance race countdown; null without a date or once the race day has passed. */
@@ -1101,12 +1102,12 @@ function enduranceOutcome(input: GoalProgressInput): Outcome {
   const prior = metric(weeks[2]) + metric(weeks[3]);
   const changePct = prior > 0 ? ((recent - prior) / prior) * 100 : null;
   const noun = useKm ? 'distance' : useMinutes ? 'time' : 'sessions';
-  const perWeekText = (v: number): string => (useKm ? fmtDistance(input, v) : `${round1(v)} ${useMinutes ? 'min' : 'sessions'}`);
+  const perWeekText = (v: number): string => (useKm ? fmtDistance(input, v) : (useMinutes ? withUnit(round1(v), 'min') : `${round1(v)} sessions`));
   const volumeReason: GoalProgressReason | null = prior > 0 || recent > 0
     ? {
         kind: 'volume',
         text: changePct != null
-          ? `Weekly training ${noun} ${changePct >= 0 ? 'up' : 'down'} ${Math.round(Math.abs(changePct))}% (${perWeekText(prior / 2)} → ${perWeekText(recent / 2)} a week, ${ENDURANCE_VOLUME_WINDOW_LABEL})`
+          ? `Weekly training ${noun} ${changePct >= 0 ? 'up' : 'down'} ${Math.round(Math.abs(changePct))}% (${arrowPair(perWeekText(prior / 2), perWeekText(recent / 2))} a week, ${ENDURANCE_VOLUME_WINDOW_LABEL})`
           : `Training ${noun} restarted: ${perWeekText(recent / 2)} a week over the last 2 weeks after none before`,
         tone: changePct == null || changePct >= ENDURANCE_BUILDING_PCT ? 'good' : changePct <= -15 ? 'watch' : 'neutral',
       }

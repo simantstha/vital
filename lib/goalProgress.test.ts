@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  computeGoalProgress,
+  computeGoalProgress as computeGoalProgressRaw,
   HEADLINE_MAX_CHARS,
   isRunningWorkoutType,
   isStrengthWorkoutType,
@@ -9,10 +9,20 @@ import {
   type GoalProgress,
   type GoalProgressInput,
 } from './goalProgress';
+import { NBSP, plainSpaces } from './displayText';
 import type { WeightReading } from './weightTrend';
 import type { ProgressionSummary } from './workoutRepository';
 
 const TODAY = '2026-10-06';
+
+/**
+ * Display copy glues numbers to their units (and "a → b" pairs) with U+00A0 so
+ * a narrow line never wraps mid-value. These tests read the copy with plain
+ * spaces; the NBSP tests at the end of the file assert the raw output.
+ */
+function computeGoalProgress(input: GoalProgressInput): GoalProgress {
+  return JSON.parse(plainSpaces(JSON.stringify(computeGoalProgressRaw(input)))) as GoalProgress;
+}
 
 function addDays(day: string, n: number): string {
   const [y, m, d] = day.split('-').map(Number);
@@ -986,4 +996,40 @@ test('long run: also shown while the verdict is insufficient_data (race still le
   assert.deepEqual(p.reasons.map(r => r.kind).slice(0, 2), ['race', 'week_distance']);
   assert.ok(p.reasons.some(r => r.kind === 'long_run'));
   assert.ok(p.reasons.length <= 3);
+});
+
+// ── non-breaking spaces: a value never wraps mid-token (asserts the RAW copy) ──
+
+test('display copy joins numbers to units and "a → b" pairs with U+00A0', () => {
+  // Lift reason: "+5 kg" and "(100 → 105 kg)" stay whole; words around them keep plain spaces.
+  const muscle = computeGoalProgressRaw(base({
+    goal: 'muscle',
+    target: { weightKg: null, date: null, weeklySessions: 4 },
+    progression: lifts(100, 105),
+    trainingDays: Array.from({ length: 12 }, (_, i) => addDays(TODAY, -i * 2)),
+    intakeDays: Array.from({ length: 7 }, (_, i) => ({ day: addDays(TODAY, -i), kcal: 2800, proteinG: 170, source: 'logged' as const })),
+    budget: { targetKcal: 2800, proteinG: 170, floorKcal: 1500, formulaTdee: null, learnedTdee: null, tdeeConfidence: null },
+  }));
+  const lift = muscle.reasons.find(r => r.kind === 'lift')!;
+  assert.ok(lift.text.includes(`+5${NBSP}kg vs 4 weeks ago (100${NBSP}→${NBSP}105${NBSP}kg)`), lift.text);
+  assert.ok(muscle.reasons.some(r => r.kind === 'protein' && r.text.includes(`170${NBSP}g protein target`)));
+
+  // Weight headline: kg / lb.
+  const loss = computeGoalProgressRaw(base({
+    target: { weightKg: 70, date: null, weeklySessions: null },
+    weightReadings: ramp(40, 90, -0.07),
+  }));
+  assert.match(loss.headline, new RegExp(`\\d${NBSP}kg to go`));
+  const imperial = computeGoalProgressRaw(base({
+    unitSystem: 'imperial',
+    target: { weightKg: 70, date: null, weeklySessions: null },
+    weightReadings: ramp(40, 90, -0.07),
+  }));
+  assert.match(imperial.headline, new RegExp(`\\d${NBSP}lb to go`));
+
+  // Distance copy: km.
+  const run = computeGoalProgressRaw(longRunInput([14, 12, 16, 10], { race: { date: addDays(TODAY, 56), distanceKm: 21.1 } }));
+  assert.ok(run.reasons.find(r => r.kind === 'long_run')!.text.startsWith(`Long run 14${NBSP}km`));
+  assert.ok(run.distance?.text.includes(`${NBSP}km running this week`), run.distance?.text);
+  assert.ok(!/\d (km|kg|lb)\b/.test(run.reasons.map(r => r.text).join(' ')), 'no number is followed by a breaking space + unit');
 });

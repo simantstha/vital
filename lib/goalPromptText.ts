@@ -9,6 +9,7 @@
 
 import type { GoalKind, GoalProgress } from './goalProgress';
 import type { ProgressionSummary } from './workoutRepository';
+import { plainSpaces } from './displayText';
 import { liftChange4w } from './liftChange';
 import { weekStartKeyForDay } from './localDay';
 import { KM_PER_MILE, LB_PER_KG } from './metricFormat';
@@ -63,7 +64,7 @@ export function formatGoalProgressLines(gp: GoalProgress, units: UnitSystem): st
     const pct = gp.ratePerWeek.pctBodyweight != null ? ` (${gp.ratePerWeek.pctBodyweight}% bw)` : '';
     nowBits.push(`rate ${signedWt(gp.ratePerWeek.kg, units, 2)}/wk${pct}`);
   }
-  if (gp.distance?.thisWeekKm != null) nowBits.push(gp.distance.text);
+  if (gp.distance?.thisWeekKm != null) nowBits.push(plainSpaces(gp.distance.text));
   if (gp.eta) nowBits.push(`ETA ${gp.eta}`);
   if (gp.onPaceForTargetDate != null) nowBits.push(gp.onPaceForTargetDate ? 'on pace for target date' : 'not on pace for target date');
   if (gp.race) {
@@ -79,9 +80,9 @@ export function formatGoalProgressLines(gp: GoalProgress, units: UnitSystem): st
   }
   if (nowBits.length) lines.push(`- Now: ${nowBits.join('; ')}`);
 
-  lines.push(`- Verdict: ${gp.verdict} — "${gp.headline}"`);
+  lines.push(`- Verdict: ${gp.verdict} — "${plainSpaces(gp.headline)}"`);
   for (const r of gp.reasons.slice(0, MAX_REASONS)) {
-    lines.push(`  - ${r.text}${r.tone === 'watch' ? ' (watch)' : ''}`);
+    lines.push(`  - ${plainSpaces(r.text)}${r.tone === 'watch' ? ' (watch)' : ''}`);
   }
   if (gp.verdict === 'needs_target') {
     lines.push('- No target set yet — setting one is the only thing missing for a real progress verdict.');

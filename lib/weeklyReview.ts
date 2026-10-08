@@ -11,7 +11,7 @@
  * The verdict is NOT re-derived here: the caller passes the verdict from
  * lib/goalProgress.ts so the review and the goal card can never disagree.
  * That verdict is the 4-week goal verdict as of the reviewed week, so it is
- * NOT a rating of the week itself; `weekRating` (see computeWeekRating) is.
+ * NOT a rating of the week itself; `weekRating` (see assessWeek) is.
  *
  * Honesty rule (same as goalProgress): never invent a number. A stat whose
  * inputs are missing is omitted. With almost no data the review is a gentle
@@ -23,6 +23,7 @@ import { KG_TO_LB, isRunningWorkoutType } from './goalProgress';
 import { PARTIAL_LOG_KCAL_THRESHOLD, TOO_FAST_LOSS_PCT_PER_WEEK } from './brain/weightSignals';
 import { computeWeightTrend, type WeightReading } from './weightTrend';
 import { localDayKey, weekDayKeys, weekStartKeyForDay } from './localDay';
+import { arrowPair, withUnit } from './displayText';
 import type { ProgressionSummary } from './workoutRepository';
 import { isDeload, liftDisplayChange, liftDisplayName, pickHeadlineLift } from './liftChange';
 
@@ -62,6 +63,23 @@ export interface WeeklyReviewStat {
  */
 export type WeekRating = 'good' | 'mixed' | 'tough' | 'light';
 
+/**
+ * The ONE gap between the reviewed week and what it was aiming for, from the
+ * same inputs as `weekRating`. It drives all three prose parts: a mixed/tough
+ * week's Slip names it, and "Next week" closes it. `null` when the week was
+ * good, a deliberate lighter week, or can't be rated.
+ */
+export type WeekGap =
+  | { kind: 'sessions'; done: number; target: number }
+  /** General goal: active days against the "good week" bar. */
+  | { kind: 'activeDays'; done: number; target: number }
+  /** Endurance: running km this week vs the weekly target (km, whatever the display unit). */
+  | { kind: 'distance'; doneKm: number; targetKm: number }
+  | { kind: 'budget'; inBudget: number; logged: number }
+  | { kind: 'protein'; hit: number; logged: number }
+  /** Weight loss with no usable budget days: the week's trend change (kg, signed) was flat or the wrong way / too fast. */
+  | { kind: 'weight'; deltaKg: number };
+
 export interface WeeklyReview {
   /** Monday, YYYY-MM-DD (user-local). */
   weekStart: string;
@@ -71,11 +89,17 @@ export interface WeeklyReview {
   /** The 4-week goal verdict as of this week (shared with the goal card) — NOT a rating of the week; use `weekRating` for that. */
   verdict: GoalVerdict;
   /**
-   * Rating of the reviewed week alone (see computeWeekRating). `null` when the
+   * Rating of the reviewed week alone (see assessWeek). `null` when the
    * week's own stats can't support one. `undefined` on rows stored before this
    * field existed — readers must tolerate its absence (stored JSON, no migration).
    */
   weekRating?: WeekRating | null;
+  /**
+   * What kept the week from being good (see `WeekGap`): the Slip line names it
+   * and "Next week" closes it. `null` for a good / lighter / unrated week.
+   * `undefined` on rows stored before this field existed.
+   */
+  weekGap?: WeekGap | null;
   /** Plain English, <= 80 chars. */
   headline: string;
   /** At most 4, goal-specific; stats without data are omitted. */
@@ -172,11 +196,16 @@ function isImperial(input: WeeklyReviewInput): boolean {
 
 function weightText(input: WeeklyReviewInput, kg: number): string {
   const imperial = isImperial(input);
-  return `${round1(imperial ? kg * KG_TO_LB : kg)} ${imperial ? 'lb' : 'kg'}`;
+  return withUnit(round1(imperial ? kg * KG_TO_LB : kg), imperial ? 'lb' : 'kg');
+}
+
+/** A km distance in the display unit, rounded to 0.1, no unit suffix. */
+function distanceNumber(input: WeeklyReviewInput, km: number): number {
+  return round1(isImperial(input) ? km * KM_TO_MI : km);
 }
 
 function distanceText(input: WeeklyReviewInput, km: number): string {
-  return isImperial(input) ? `${round1(km * KM_TO_MI)} mi` : `${round1(km)} km`;
+  return withUnit(distanceNumber(input, km), isImperial(input) ? 'mi' : 'km');
 }
 
 function clipHeadline(text: string): string {
@@ -219,19 +248,26 @@ interface Candidate {
 
 // ── Per-metric builders ─────────────────────────────────────────────────────
 
-function weightCandidate(input: WeeklyReviewInput, week: Week, prevWeek: Week): Candidate | null {
+/** The week's weight-trend change (kg, signed) and the trend at its end; null without a weigh-in in the week or a baseline from the week before. */
+function weightChange(input: WeeklyReviewInput, week: Week, prevWeek: Week): { deltaKg: number; endKg: number } | null {
   const trend = computeWeightTrend(input.weightReadings).days;
   const end = [...trend].reverse().find(d => d.day <= week.days[6]);
   if (!end || !week.set.has(end.day)) return null; // no weigh-in inside the reviewed week
   const start = [...trend].reverse().find(d => d.day < week.days[0]);
   if (!start || start.day < prevWeek.days[0]) return null; // no usable baseline from the week before
-  const deltaKg = end.trendKg - start.trendKg;
+  return { deltaKg: end.trendKg - start.trendKg, endKg: end.trendKg };
+}
+
+function weightCandidate(input: WeeklyReviewInput, week: Week, prevWeek: Week): Candidate | null {
+  const change = weightChange(input, week, prevWeek);
+  if (!change) return null;
+  const { deltaKg } = change;
   const rounded = round1(isImperial(input) ? deltaKg * KG_TO_LB : deltaKg);
   const text = rounded === 0 ? weightText(input, 0) : weightText(input, Math.abs(deltaKg));
   const value = rounded === 0 ? text : signed(rounded, text);
 
   let tone: ReviewTone = 'neutral';
-  const pct = end.trendKg > 0 ? (deltaKg / end.trendKg) * 100 : 0;
+  const pct = change.endKg > 0 ? (deltaKg / change.endKg) * 100 : 0;
   if (input.goal === 'weight_loss') {
     if (deltaKg <= -0.05) tone = -pct > TOO_FAST_LOSS_PCT_PER_WEEK ? 'watch' : 'good';
     else if (deltaKg >= 0.2) tone = 'watch';
@@ -275,9 +311,9 @@ function budgetCandidate(input: WeeklyReviewInput, week: Week): Candidate | null
       tone,
     },
   };
-  if (tone === 'good') cand.win = `You stayed within your ${fmtKcal(target)} kcal target on ${hit} of ${logged} logged days.`;
+  if (tone === 'good') cand.win = `You stayed within your ${withUnit(fmtKcal(target), 'kcal')} target on ${hit} of ${logged} logged days.`;
   if (tone === 'watch') {
-    cand.slip = `Only ${hit} of ${logged} logged days landed within your ${fmtKcal(target)} kcal target.`;
+    cand.slip = `Only ${hit} of ${logged} logged days landed within your ${withUnit(fmtKcal(target), 'kcal')} target.`;
     cand.fix = `Pick the two days most likely to run over and plan those meals ahead.`;
   }
   return cand;
@@ -294,7 +330,7 @@ function avgKcalCandidate(input: WeeklyReviewInput, week: Week, prevWeek: Week):
     const diff = Math.round(avg - prevAvg);
     comparison = diff === 0 ? 'same as last week' : `${signed(diff, fmtKcal(Math.abs(diff)))} vs last week`;
   }
-  return { stat: { label: 'Avg calories', value: `${fmtKcal(avg)} kcal`, comparison: comparison ?? 'daily avg for the week', tone: 'neutral' } };
+  return { stat: { label: 'Avg calories', value: withUnit(fmtKcal(avg), 'kcal'), comparison: comparison ?? 'daily avg for the week', tone: 'neutral' } };
 }
 
 /** Days that count as a session for the goal: strength sessions only for muscle (mirrors goalProgress `sessionDays`). */
@@ -359,9 +395,9 @@ function proteinCandidate(input: WeeklyReviewInput, week: Week): Candidate | nul
       tone,
     },
   };
-  if (tone === 'good') cand.win = `You hit your ${Math.round(target)} g protein target on ${hit} of ${logged} logged days.`;
+  if (tone === 'good') cand.win = `You hit your ${withUnit(Math.round(target), 'g')} protein target on ${hit} of ${logged} logged days.`;
   if (tone === 'watch') {
-    cand.slip = `Protein reached your ${Math.round(target)} g target on only ${hit} of ${logged} logged days.`;
+    cand.slip = `Protein reached your ${withUnit(Math.round(target), 'g')} target on only ${hit} of ${logged} logged days.`;
     cand.fix = `Add a protein-first breakfast so the day starts ahead of your target.`;
   }
   return cand;
@@ -421,7 +457,7 @@ function liftCandidate(input: WeeklyReviewInput, week: Week): Candidate | null {
     }
   }
   if (!best) return null;
-  const value = best.shown === 0 ? `0 ${unit}` : signed(best.shown, `${Math.abs(best.shown)} ${unit}`);
+  const value = best.shown === 0 ? withUnit(0, unit) : signed(best.shown, withUnit(Math.abs(best.shown), unit));
   // A deload (week volume < 60% of the 4-week average) lowers e1RM on purpose:
   // never a slip, just a neutral "Lighter week".
   const lighter = best.shown < 0 && isDeload(totalVolumeByWeek(input.progression), week.days[0], 1);
@@ -429,10 +465,15 @@ function liftCandidate(input: WeeklyReviewInput, week: Week): Candidate | null {
   const cand: Candidate = {
     stat: { label: `${best.name} est. 1RM`, value, comparison: lighter ? `Lighter week · ${best.windowLabel}` : best.windowLabel, tone },
   };
-  const shownText = `${Math.abs(best.shown)} ${unit}`;
+  const shownText = withUnit(Math.abs(best.shown), unit);
   if (tone === 'good') cand.win = `${best.name} estimated 1RM is up ${shownText} ${best.windowLabel}.`;
   if (tone === 'watch') cand.slip = `${best.name} estimated 1RM is down ${shownText} ${best.windowLabel}.`;
   return cand;
+}
+
+/** True when the user has a positive weekly running-distance target. */
+function hasDistanceTarget(input: WeeklyReviewInput): boolean {
+  return input.weeklyDistanceKmTarget != null && input.weeklyDistanceKmTarget > 0;
 }
 
 function volumeCandidate(input: WeeklyReviewInput, week: Week, prevWeek: Week): Candidate | null {
@@ -443,20 +484,24 @@ function volumeCandidate(input: WeeklyReviewInput, week: Week, prevWeek: Week): 
   };
   const cur = inWeek(week);
   const prev = inWeek(prevWeek);
-  const curKm = sum(cur, w => w.distanceKm);
+  // With a weekly distance target the km shown is the number measured against
+  // it: running only (like the goal card and weekRating), not a ride or a hike.
+  const runningOnly = hasDistanceTarget(input);
+  const kmOf = (w: WeeklyReviewWorkout): number | null => (runningOnly && !isRunningWorkoutType(w.type) ? null : w.distanceKm);
+  const curKm = sum(cur, kmOf);
   const useKm = curKm != null && curKm > 0;
   const curVal = useKm ? curKm : sum(cur, w => w.durationMin);
   if (curVal == null || curVal <= 0) return null;
-  const prevVal = useKm ? sum(prev, w => w.distanceKm) : sum(prev, w => w.durationMin);
-  const fmt = (v: number): string => (useKm ? distanceText(input, v) : `${Math.round(v)} min`);
+  const prevVal = useKm ? sum(prev, kmOf) : sum(prev, w => w.durationMin);
+  const fmt = (v: number): string => (useKm ? distanceText(input, v) : withUnit(Math.round(v), 'min'));
   let comparison: string | null = null;
   let tone: ReviewTone = 'neutral';
   const cand: Candidate = { stat: { label: 'Volume', value: fmt(curVal), comparison, tone } };
   if (prevVal != null && prevVal > 0) {
     const pct = Math.round(((curVal - prevVal) / prevVal) * 100);
     comparison = pct === 0 ? 'same as last week' : `${signed(pct, `${Math.abs(pct)}%`)} vs last week`;
-    if (pct >= 5) { tone = 'good'; cand.win = `Training volume is up ${pct}% on last week (${fmt(prevVal)} → ${fmt(curVal)}).`; }
-    else if (pct <= -25) { tone = 'watch'; cand.slip = `Training volume fell ${Math.abs(pct)}% from last week (${fmt(prevVal)} → ${fmt(curVal)}).`; cand.fix = `Rebuild toward ${fmt(prevVal)} — add one easy session early in the week.`; }
+    if (pct >= 5) { tone = 'good'; cand.win = `Training volume is up ${pct}% on last week (${arrowPair(fmt(prevVal), fmt(curVal))}).`; }
+    else if (pct <= -25) { tone = 'watch'; cand.slip = `Training volume fell ${Math.abs(pct)}% from last week (${arrowPair(fmt(prevVal), fmt(curVal))}).`; cand.fix = `Rebuild toward ${fmt(prevVal)} — add one easy session early in the week.`; }
   }
   cand.stat.comparison = comparison ?? 'for the week';
   cand.stat.tone = tone;
@@ -471,12 +516,12 @@ function restingHrCandidate(input: WeeklyReviewInput, week: Week, prevWeek: Week
   const prev = pick(prevWeek);
   let comparison: string | null = null;
   let tone: ReviewTone = 'neutral';
-  const cand: Candidate = { stat: { label: 'Resting HR', value: `${Math.round(avg)} bpm`, comparison, tone } };
+  const cand: Candidate = { stat: { label: 'Resting HR', value: withUnit(Math.round(avg), 'bpm'), comparison, tone } };
   if (prev.length >= MIN_HR_DAYS) {
     const diff = Math.round(avg - (mean(prev) as number));
-    comparison = diff === 0 ? 'same as last week' : `${signed(diff, String(Math.abs(diff)))} bpm vs last week`;
-    if (diff <= -1) { tone = 'good'; cand.win = `Resting heart rate dropped ${Math.abs(diff)} bpm — a sign recovery is keeping up.`; }
-    else if (diff >= 3) { tone = 'watch'; cand.slip = `Resting heart rate rose ${diff} bpm — your body may be carrying fatigue.`; cand.fix = 'Make one session an easy one — resting heart rate rose this week.'; }
+    comparison = diff === 0 ? 'same as last week' : `${signed(diff, withUnit(Math.abs(diff), 'bpm'))} vs last week`;
+    if (diff <= -1) { tone = 'good'; cand.win = `Resting heart rate dropped ${withUnit(Math.abs(diff), 'bpm')} — a sign recovery is keeping up.`; }
+    else if (diff >= 3) { tone = 'watch'; cand.slip = `Resting heart rate rose ${withUnit(diff, 'bpm')} — your body may be carrying fatigue.`; cand.fix = 'Make one session an easy one — resting heart rate rose this week.'; }
   }
   cand.stat.comparison = comparison ?? 'week avg';
   cand.stat.tone = tone;
@@ -579,6 +624,12 @@ function weekendGap(input: WeeklyReviewInput, week: Week): number | null {
  *
  * `null` = the week's own stats can't support a rating (never invented). The
  * payload is stored JSON, so rows written before this field existed lack it.
+ *
+ * The same pass yields `weekGap` — WHAT pulled the week below "good" (sessions
+ * short, distance short, days out of budget, low protein days, weight moving
+ * the wrong way). The rating, the Slip line and "Next week" are all decided
+ * from that one assessment, so the pill can never say "Mixed week" next to a
+ * Slip that names something else and a "Repeat this week" that ignores it.
  */
 type RatingLevel = 'tough' | 'mixed' | 'good';
 const RATING_LEVELS: readonly RatingLevel[] = ['tough', 'mixed', 'good'];
@@ -620,16 +671,40 @@ function runningKm(input: WeeklyReviewInput, week: Week): number | null {
   return vals.length === 0 ? null : vals.reduce((a, b) => a + b, 0);
 }
 
-function muscleWeekRating(input: WeeklyReviewInput, week: Week): WeekRating | null {
-  const count = weekSessionCount(input, week);
-  const sessions = sessionsLevel(count, input.weeklySessionsTarget);
-  if (count > 0 && sessions !== 'tough' && isLighterWeek(input, week)) return 'light';
-  if (sessions == null) return null;
-  const protein = proteinDays(input, week);
-  return protein != null && protein.hit / protein.logged < PROTEIN_LOW_FRACTION ? levelDown(sessions) : sessions;
+/** A week's rating plus the gap that kept it from "good" (null for good / light / unrated). */
+interface WeekAssessment {
+  rating: WeekRating | null;
+  gap: WeekGap | null;
 }
 
-function weightLossWeekRating(input: WeeklyReviewInput, week: Week, prevWeek: Week): WeekRating | null {
+const UNRATED: WeekAssessment = { rating: null, gap: null };
+
+/** Rating `level` with `gap` only when the level is not good. */
+function rated(level: RatingLevel, gap: WeekGap | null): WeekAssessment {
+  return { rating: level, gap: level === 'good' ? null : gap };
+}
+
+function muscleWeekAssessment(input: WeeklyReviewInput, week: Week): WeekAssessment {
+  const count = weekSessionCount(input, week);
+  const target = input.weeklySessionsTarget;
+  const sessions = sessionsLevel(count, target);
+  if (count > 0 && sessions !== 'tough' && isLighterWeek(input, week)) return { rating: 'light', gap: null };
+  if (sessions == null || target == null) return UNRATED;
+  const protein = proteinDays(input, week);
+  const proteinLow = protein != null && protein.hit / protein.logged < PROTEIN_LOW_FRACTION;
+  // Missing sessions is the gap when there is one; low protein only when every planned session happened.
+  const gap: WeekGap | null = count < target
+    ? { kind: 'sessions', done: count, target }
+    : proteinLow && protein ? { kind: 'protein', hit: protein.hit, logged: protein.logged } : null;
+  return rated(proteinLow ? levelDown(sessions) : sessions, gap);
+}
+
+function weightGap(input: WeeklyReviewInput, week: Week, prevWeek: Week): WeekGap | null {
+  const change = weightChange(input, week, prevWeek);
+  return change ? { kind: 'weight', deltaKg: Math.round(change.deltaKg * 100) / 100 } : null;
+}
+
+function weightLossWeekAssessment(input: WeeklyReviewInput, week: Week, prevWeek: Week): WeekAssessment {
   const days = budgetDays(input, week);
   const weightTone = weightCandidate(input, week, prevWeek)?.stat.tone ?? null;
   if (days) {
@@ -637,36 +712,45 @@ function weightLossWeekRating(input: WeeklyReviewInput, week: Week, prevWeek: We
       days.hit * 7 >= days.logged * BUDGET_GOOD_DAYS_OF_7 ? 'good'
       : days.hit * 7 >= days.logged * BUDGET_MIXED_DAYS_OF_7 ? 'mixed'
       : 'tough';
-    return weightTone === 'watch' ? levelDown(level) : level;
+    // Budget days are the gap while they fall short; the weight trend only when it alone pulled a good budget week down.
+    const gap: WeekGap | null = level !== 'good' ? { kind: 'budget', inBudget: days.hit, logged: days.logged } : weightGap(input, week, prevWeek);
+    return rated(weightTone === 'watch' ? levelDown(level) : level, gap);
   }
-  if (weightTone == null) return null;
-  return weightTone === 'good' ? 'good' : weightTone === 'watch' ? 'tough' : 'mixed';
+  if (weightTone == null) return UNRATED;
+  return rated(weightTone === 'good' ? 'good' : weightTone === 'watch' ? 'tough' : 'mixed', weightGap(input, week, prevWeek));
 }
 
-function enduranceWeekRating(input: WeeklyReviewInput, week: Week, prevWeek: Week): WeekRating | null {
-  const sessions = sessionsLevel(weekSessionCount(input, week), input.weeklySessionsTarget);
+function enduranceWeekAssessment(input: WeeklyReviewInput, week: Week, prevWeek: Week): WeekAssessment {
+  const count = weekSessionCount(input, week);
+  const sessionsTarget = input.weeklySessionsTarget;
+  const sessions = sessionsLevel(count, sessionsTarget);
+  const sessionsGap: WeekGap | null = sessionsTarget != null && count < sessionsTarget ? { kind: 'sessions', done: count, target: sessionsTarget } : null;
   const target = input.weeklyDistanceKmTarget;
   const cur = runningKm(input, week);
   // A week with no run is a measured 0 km only when the week before did carry a distance.
   if (target != null && target > 0 && (cur != null || runningKm(input, prevWeek) != null)) {
-    const frac = (cur ?? 0) / target;
+    const km = cur ?? 0;
+    const frac = km / target;
     const distance: RatingLevel = frac >= DISTANCE_GOOD_FRACTION ? 'good' : frac >= DISTANCE_MIXED_FRACTION ? 'mixed' : 'tough';
-    return sessions === 'tough' ? levelDown(distance) : distance;
+    // Distance short of the target is the gap; a tough sessions count only when distance alone was fine.
+    const gap: WeekGap | null = distance !== 'good' ? { kind: 'distance', doneKm: round1(km), targetKm: target } : sessionsGap;
+    return rated(sessions === 'tough' ? levelDown(distance) : distance, gap);
   }
-  return sessions;
+  return sessions == null ? UNRATED : rated(sessions, sessionsGap);
 }
 
-function generalWeekRating(input: WeeklyReviewInput, week: Week): WeekRating {
+function generalWeekAssessment(input: WeeklyReviewInput, week: Week): WeekAssessment {
   const active = weekSessionCount(input, week);
-  return active >= GENERAL_GOOD_ACTIVE_DAYS ? 'good' : active >= GENERAL_MIXED_ACTIVE_DAYS ? 'mixed' : 'tough';
+  const level: RatingLevel = active >= GENERAL_GOOD_ACTIVE_DAYS ? 'good' : active >= GENERAL_MIXED_ACTIVE_DAYS ? 'mixed' : 'tough';
+  return rated(level, { kind: 'activeDays', done: active, target: GENERAL_GOOD_ACTIVE_DAYS });
 }
 
-function computeWeekRating(input: WeeklyReviewInput, week: Week, prevWeek: Week): WeekRating | null {
+function assessWeek(input: WeeklyReviewInput, week: Week, prevWeek: Week): WeekAssessment {
   switch (input.goal) {
-    case 'muscle': return muscleWeekRating(input, week);
-    case 'weight_loss': return weightLossWeekRating(input, week, prevWeek);
-    case 'endurance': return enduranceWeekRating(input, week, prevWeek);
-    default: return generalWeekRating(input, week);
+    case 'muscle': return muscleWeekAssessment(input, week);
+    case 'weight_loss': return weightLossWeekAssessment(input, week, prevWeek);
+    case 'endurance': return enduranceWeekAssessment(input, week, prevWeek);
+    default: return generalWeekAssessment(input, week);
   }
 }
 
@@ -712,7 +796,7 @@ function loggedWord(stat: WeeklyReviewStat, word = 'logged '): string {
   return stat.comparison != null && /\d+ (days? logged|nights? tracked)/.test(stat.comparison) ? word : '';
 }
 
-function buildHeadline(input: WeeklyReviewInput, cands: Candidate[]): string {
+function buildHeadline(input: WeeklyReviewInput, cands: Candidate[], week: Week): string {
   const by = (label: string): WeeklyReviewStat | undefined => cands.find(x => x.stat.label === label)?.stat;
   const parts: string[] = [];
   const weight = by('Weight trend');
@@ -737,15 +821,28 @@ function buildHeadline(input: WeeklyReviewInput, cands: Candidate[]): string {
     const protein = by('Protein days hit');
     if (lift && lift.tone === 'good') {
       // The lift change is a 4-week number inside a one-week sentence: say so.
-      const window = lift.comparison?.includes('4 weeks') ? 'over 4 wks' : 'vs last trained wk';
+      const window = lift.comparison?.includes('4 weeks') ? `over ${withUnit(4, 'wks')}` : 'vs last trained wk';
       parts.push(`${lift.label} ${lift.value} ${window}`);
     }
     else if (protein) parts.push(`protein ${protein.value.replace('/', ' of ')} ${loggedWord(protein)}days`);
     else if (weight) parts.push(`weight ${weight.value}`);
   } else if (input.goal === 'endurance') {
-    if (sessions) parts.push(`${sessions.value} ${plural(Number(sessions.value), 'session')}`);
+    if (sessions) {
+      parts.push(sessions.comparison?.startsWith('target ')
+        ? `${sessions.value} of ${sessions.comparison.split(' ')[1]} sessions`
+        : `${sessions.value} ${plural(Number(sessions.value), 'session')}`);
+    }
     const volume = by('Volume');
-    if (volume) parts.push(volume.comparison && volume.comparison.includes('%') ? `${volume.value}, ${volume.comparison}` : volume.value);
+    if (volume) {
+      // With a distance target the headline says how far of it the week got
+      // ("24.5 of 30 km"); Volume's km is already the running km measured against it.
+      const km = runningKm(input, week);
+      const kmBased = /\s(km|mi)$/.test(volume.value);
+      const value = hasDistanceTarget(input) && kmBased && km != null
+        ? `${distanceNumber(input, km)} of ${distanceText(input, input.weeklyDistanceKmTarget as number)}`
+        : volume.value;
+      parts.push(volume.comparison && volume.comparison.includes('%') ? `${value}, ${volume.comparison}` : value);
+    }
   } else {
     if (sessions) parts.push(`${sessions.value} active ${plural(Number(sessions.value), 'day')}`);
     const sleep = by('Sleep-goal nights');
@@ -762,7 +859,52 @@ function buildHeadline(input: WeeklyReviewInput, cands: Candidate[]): string {
 function weekendSlip(input: WeeklyReviewInput, week: Week): string | null {
   if (input.goal !== 'weight_loss' && input.goal !== 'muscle') return null;
   const gap = weekendGap(input, week);
-  return gap != null && gap >= WEEKEND_GAP_MIN_KCAL ? `Weekends ran +${fmtKcal(gap)} kcal over your weekdays.` : null;
+  return gap != null && gap >= WEEKEND_GAP_MIN_KCAL ? `Weekends ran +${withUnit(fmtKcal(gap), 'kcal')} over your weekdays.` : null;
+}
+
+const SMALL_NUMBER_WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'];
+
+function numberWord(n: number): string {
+  return SMALL_NUMBER_WORDS[n] ?? String(n);
+}
+
+/** "3 of 4 sessions — one short" / "0 of 4 sessions — none done". */
+function countSlip(done: number, target: number, noun: string): string {
+  const missing = target - done;
+  return `${done} of ${target} ${noun} — ${done === 0 ? 'none done' : `${numberWord(missing)} short`}`;
+}
+
+/**
+ * The Slip line for a mixed / tough week: it ALWAYS names the week's gap (the
+ * same one the pill's rating and "Next week" are built from), ahead of any
+ * other slip candidate.
+ */
+function gapSlip(input: WeeklyReviewInput, gap: WeekGap, week: Week, prevWeek: Week): string {
+  switch (gap.kind) {
+    case 'sessions': return countSlip(gap.done, gap.target, plural(gap.target, 'session'));
+    case 'activeDays': return countSlip(gap.done, gap.target, `active ${plural(gap.target, 'day')}`);
+    case 'distance':
+      return `${distanceNumber(input, gap.doneKm)} of ${distanceText(input, gap.targetKm)} target — ${distanceText(input, gap.targetKm - gap.doneKm)} short`;
+    case 'budget': {
+      const target = input.budget?.targetKcal;
+      return `In budget ${gap.inBudget} of ${gap.logged} logged ${plural(gap.logged, 'day')}${target != null ? ` (${withUnit(fmtKcal(target), 'kcal')} target)` : ''}`;
+    }
+    case 'protein': {
+      const target = input.budget?.proteinG;
+      return `Protein hit ${gap.hit} of ${gap.logged} logged ${plural(gap.logged, 'day')}${target != null && target > 0 ? ` (${withUnit(Math.round(target), 'g')} target)` : ''}`;
+    }
+    case 'weight':
+      return weightCandidate(input, week, prevWeek)?.slip ?? 'Your weight trend barely moved this week.';
+  }
+}
+
+/** Slip: the gap for a mixed / tough week; nothing for a deliberate lighter week; the existing candidate logic for good / unrated weeks. */
+function buildSlip(input: WeeklyReviewInput, cands: Candidate[], week: Week, prevWeek: Week, assessment: WeekAssessment): string | null {
+  if (assessment.rating === 'light') return null;
+  if ((assessment.rating === 'mixed' || assessment.rating === 'tough') && assessment.gap) {
+    return gapSlip(input, assessment.gap, week, prevWeek);
+  }
+  return cands.find(x => x.slip)?.slip ?? weekendSlip(input, week);
 }
 
 /** Minimum relative HRV drop vs the week before that counts as "below normal". */
@@ -801,36 +943,113 @@ function normalizeSentence(text: string): string {
   return text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 }
 
-/** Generic, goal-keyed action used when a derived suggestion would just repeat the slip. */
-function fallbackNextWeek(input: WeeklyReviewInput): string {
+/** Logged-day threshold: below this a user is "sparse" and the logging advice is warranted. */
+const MIN_LOGGED_DAYS_FOR_NO_LOG_ADVICE = 3;
+
+/** Distinct eligible days of the week with logged meals or a logged strength session (sets). */
+function loggedDayCount(input: WeeklyReviewInput, week: Week): number {
+  const days = new Set<string>();
+  for (const d of loggedIntake(input.intakeDays, week)) days.add(d.day);
+  const train = new Set(sessionDays(input));
+  for (const d of week.days) if (week.eligible.has(d) && train.has(d)) days.add(d);
+  return days.size;
+}
+
+/** Generic, goal-keyed action used when no gap or fix applies, or a derived suggestion would just repeat the slip. */
+function fallbackNextWeek(input: WeeklyReviewInput, week: Week): string {
   switch (input.goal) {
     case 'weight_loss': return 'Weigh in at least 3 mornings and log dinner each day so next week reads clearly.';
-    case 'muscle': return 'Log every working set and a weigh-in or two so we can see your lifts and weight move.';
+    case 'muscle':
+      // "Log every working set…" is for sparse loggers only; someone who logged sets/meals most of the week already does.
+      return loggedDayCount(input, week) >= MIN_LOGGED_DAYS_FOR_NO_LOG_ADVICE
+        ? 'Keep the same session days and try to add a rep or a little weight on your main lifts.'
+        : 'Log every working set and a weigh-in or two so we can see your lifts and weight move.';
     case 'endurance': return 'Keep sessions easy and regular, and wear your watch so volume and resting HR show up.';
     default: return 'Pick two fixed activity days next week and put them on the calendar.';
   }
 }
 
-/** nextWeek is an action derived from the slip — never a copy of it. */
-function buildNextWeek(input: WeeklyReviewInput, cands: Candidate[], week: Week, slip: string | null): string {
-  const next = buildNextWeekRaw(input, cands, week);
-  return slip != null && normalizeSentence(next) === normalizeSentence(slip) ? fallbackNextWeek(input) : next;
+const WEEKDAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'] as const;
+/** Tie-break order (Monday = 0) for the day to add a session on: Saturday, then mid-week, before Monday. */
+const EXTRA_SESSION_DAY_ORDER = [5, 3, 1, 6, 4, 2, 0];
+
+/** The weekday with the fewest sessions across the reviewed week and the one before it (ties: Saturday first), e.g. "Saturday". */
+function freestWeekday(input: WeeklyReviewInput, week: Week, prevWeek: Week): string {
+  const train = new Set(sessionDays(input));
+  const counts = [0, 0, 0, 0, 0, 0, 0];
+  for (const w of [prevWeek, week]) w.days.forEach((d, i) => { if (train.has(d)) counts[i] += 1; });
+  const fewest = Math.min(...counts);
+  return WEEKDAY_NAMES[EXTRA_SESSION_DAY_ORDER.find(i => counts[i] === fewest) as number];
 }
 
-function buildNextWeekRaw(input: WeeklyReviewInput, cands: Candidate[], week: Week): string {
-  const gap = input.goal === 'weight_loss' || input.goal === 'muscle' ? weekendGap(input, week) : null;
-  if (gap != null && gap >= WEEKEND_GAP_MIN_KCAL) {
-    return "Plan Saturday's dinner ahead so the weekend lands closer to your weekday average.";
+/** A shortfall up to this share of the target reads as "add to a run"; a bigger one needs another run. */
+const DISTANCE_TOP_UP_MAX_FRACTION = 0.3;
+
+/** "Next week" for a mixed / tough week: the concrete action that closes the gap the Slip names. */
+function gapNextWeek(input: WeeklyReviewInput, gap: WeekGap, week: Week, prevWeek: Week): string {
+  switch (gap.kind) {
+    case 'sessions':
+    case 'activeDays': {
+      const sessions = gap.kind === 'sessions';
+      const missing = gap.target - gap.done;
+      const day = freestWeekday(input, week, prevWeek);
+      const book = sessions ? `Book ${gap.target} ${plural(gap.target, 'session')}` : `Plan ${gap.target} active ${plural(gap.target, 'day')}`;
+      return missing === 1
+        ? `${book} — put the missed one on ${day}.`
+        : `${book} — lock in the missed ones now, starting with ${day}.`;
+    }
+    case 'distance': {
+      const short = gap.targetKm - gap.doneKm;
+      const target = distanceText(input, gap.targetKm);
+      if (short > gap.targetKm * DISTANCE_TOP_UP_MAX_FRACTION) {
+        return `Aim for ${target}: add one more run this week and stretch your long run toward it.`;
+      }
+      const extra = withUnit(Math.max(1, Math.ceil(distanceNumber(input, short))), isImperial(input) ? 'mi' : 'km');
+      return `Aim for ${target}: add ~${extra} to your long run or one easy run.`;
+    }
+    case 'budget': return 'Pick the two days most likely to run over and plan those meals ahead.';
+    case 'protein': return 'Add a protein-first breakfast so the day starts ahead of your target.';
+    case 'weight':
+      return gap.deltaKg < 0
+        ? 'Eat up to your full calorie target each day — a slower loss is easier to keep.'
+        : 'Hold to your calorie target each day and weigh in at least 3 mornings so the trend reads clearly.';
   }
+}
+
+/** nextWeek is an action derived from the gap / slip — never a copy of the slip. */
+function buildNextWeek(input: WeeklyReviewInput, cands: Candidate[], week: Week, prevWeek: Week, assessment: WeekAssessment, slip: string | null): string {
+  const next = buildNextWeekRaw(input, cands, week, prevWeek, assessment);
+  return slip != null && normalizeSentence(next) === normalizeSentence(slip) ? fallbackNextWeek(input, week) : next;
+}
+
+const WEEKEND_NEXT_WEEK = "Plan Saturday's dinner ahead so the weekend lands closer to your weekday average.";
+
+function buildNextWeekRaw(input: WeeklyReviewInput, cands: Candidate[], week: Week, prevWeek: Week, assessment: WeekAssessment): string {
+  const { rating, gap } = assessment;
+  const weekend = input.goal === 'weight_loss' || input.goal === 'muscle' ? weekendGap(input, week) : null;
+  const weekendHigh = weekend != null && weekend >= WEEKEND_GAP_MIN_KCAL;
   const recovery = recoveryFlags(input, week);
-  if (recovery.length >= 2) {
-    return `Go lighter next week and put sleep first — ${(recovery.length === 2 ? recovery.join(' and ') : `${recovery.slice(0, -1).join(', ')} and ${recovery[recovery.length - 1]}`)}.`;
+  const lighter = recovery.length >= 2
+    ? `Go lighter next week and put sleep first — ${(recovery.length === 2 ? recovery.join(' and ') : `${recovery.slice(0, -1).join(', ')} and ${recovery[recovery.length - 1]}`)}.`
+    : null;
+
+  if (rating === 'mixed' || rating === 'tough' || rating === 'light') {
+    // A budget gap with a heavy weekend is closed by planning the weekend.
+    if (gap?.kind === 'budget' && weekendHigh) return WEEKEND_NEXT_WEEK;
+    if (lighter) return lighter;
+    if (rating === 'light') return 'Back to full volume next week: your usual sessions and loads.';
+    if (gap) return gapNextWeek(input, gap, week, prevWeek);
+    return fallbackNextWeek(input, week);
   }
+
+  if (weekendHigh) return WEEKEND_NEXT_WEEK;
+  if (lighter) return lighter;
   const fix = cands.find(x => x.stat.tone === 'watch' && x.fix)?.fix;
   if (fix) return fix;
-  const good = ['on_track', 'ahead', 'progressing', 'building'].includes(input.verdict);
-  if (good) return 'Repeat this week: same routine, same training days.';
-  return fallbackNextWeek(input);
+  // "Repeat" is only for a week that was itself good (and a goal verdict that isn't saying otherwise).
+  const goodVerdict = ['on_track', 'ahead', 'progressing', 'building'].includes(input.verdict);
+  if (rating === 'good' && goodVerdict) return 'Repeat this week: same routine, same training days.';
+  return fallbackNextWeek(input, week);
 }
 
 function emptyReview(input: WeeklyReviewInput, week: Week, daysWithData: number, statCount: number): WeeklyReview {
@@ -840,6 +1059,7 @@ function emptyReview(input: WeeklyReviewInput, week: Week, daysWithData: number,
     goal: input.goal,
     verdict: input.verdict,
     weekRating: null,
+    weekGap: null,
     headline: 'Not enough data for a weekly review yet',
     stats: [],
     win: null,
@@ -859,18 +1079,21 @@ export function computeWeeklyReview(input: WeeklyReviewInput): WeeklyReview {
     return emptyReview(input, week, daysWithData, cands.length);
   }
 
-  const slip = cands.find(x => x.slip)?.slip ?? weekendSlip(input, week);
+  // ONE assessment of the week decides the pill (rating), the Slip line and "Next week".
+  const assessment = assessWeek(input, week, prevWeek);
+  const slip = buildSlip(input, cands, week, prevWeek, assessment);
   return {
     weekStart: week.days[0],
     weekEnd: week.days[6],
     goal: input.goal,
     verdict: input.verdict,
-    weekRating: computeWeekRating(input, week, prevWeek),
-    headline: buildHeadline(input, cands),
+    weekRating: assessment.rating,
+    weekGap: assessment.gap,
+    headline: buildHeadline(input, cands, week),
     stats: cands.map(x => x.stat),
     win: cands.find(x => x.win)?.win ?? null,
     slip,
-    nextWeek: buildNextWeek(input, cands, week, slip),
+    nextWeek: buildNextWeek(input, cands, week, prevWeek, assessment, slip),
     dataSufficiency: { daysWithData, statCount: cands.length, sufficient: true },
   };
 }

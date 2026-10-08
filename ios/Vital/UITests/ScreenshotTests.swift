@@ -710,8 +710,11 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertTrue(scrollUntilExists(openButton, app: app, maxSwipes: 8),
                        "weeklyReview.open never appeared [\(scenario)/\(appearance)]")
         scrollIntoComfortableView(openButton, app: app, maxSwipes: 8)
-        // Fixture-unique headline (FixtureData.weeklyReview).
-        let expected = scenario == "weight_loss" ? "Down 0.6 kg, in budget 5 of 7 days" : "3 of 4 sessions, Squat est. 1RM +20 kg over 4 wks"
+        // Fixture-unique headline (FixtureData.weeklyReview). The server's copy
+        // (and so the fixture's) joins a number to its unit with U+00A0.
+        let expected = scenario == "weight_loss"
+            ? "Down 0.6\u{00A0}kg, in budget 5 of 7 days"
+            : "3 of 4 sessions, Squat est. 1RM +10\u{00A0}kg over 4\u{00A0}wks"
         XCTAssertTrue(waitForText(app, containing: expected),
                        "Weekly review card should show the \(scenario) fixture's headline [\(appearance)]")
         capture(app, name: "\(scenario)__weeklyReviewCard__\(appearance)")

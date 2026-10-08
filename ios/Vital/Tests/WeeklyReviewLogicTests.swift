@@ -113,9 +113,10 @@ final class WeeklyReviewLogicTests: XCTestCase {
         WeeklyReviewDTO(
             weekStart: "2026-09-28", weekEnd: "2026-10-04", goal: "muscle", verdict: verdict,
             weekRating: weekRating, hasWeekRating: hasWeekRating,
-            headline: "3 of 4 sessions, Squat est. 1RM +20 kg over 4 wks",
+            headline: "3 of 4 sessions, Squat est. 1RM +10\u{00A0}kg over 4\u{00A0}wks",
             stats: [WeeklyReviewStatDTO(label: "Sessions", value: "3"), WeeklyReviewStatDTO(label: "Protein days hit", value: "5/7")],
-            nextWeek: "Repeat this week.", sufficient: sufficient
+            slip: "3 of 4 sessions \u{2014} one short",
+            nextWeek: "Book 4 sessions \u{2014} put the missed one on Saturday.", sufficient: sufficient
         )
     }
 
@@ -150,6 +151,17 @@ final class WeeklyReviewLogicTests: XCTestCase {
         // certainly not the goal verdict's wording.
         XCTAssertNil(WeeklyReviewLogic.verdictLabel(rated(verdict: .onTrack, weekRating: nil, hasWeekRating: true)))
         XCTAssertNil(WeeklyReviewLogic.verdictLabel(rated(verdict: .behind, weekRating: nil, hasWeekRating: true)))
+    }
+
+    /// A mixed week names its gap: the Slip row renders right above "Next week"
+    /// (which closes it), never a missing Slip over a "Repeat this week".
+    func testMixedWeekRendersItsSlipAndNextWeekRows() {
+        let mixed = rated(verdict: .behind, weekRating: .mixed)
+        let rows = WeeklyReviewLogic.rows(mixed)
+        XCTAssertEqual(rows.map(\.kind), [.slip, .next])
+        XCTAssertEqual(rows.first?.text, "3 of 4 sessions \u{2014} one short")
+        XCTAssertEqual(rows.last?.title, "Next week")
+        XCTAssertFalse(rows.contains { $0.text.contains("Repeat this week") })
     }
 
     func testNotEnoughDataNeverShowsAWeekPill() {
