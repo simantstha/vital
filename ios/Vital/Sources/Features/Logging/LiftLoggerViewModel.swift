@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import UIKit
 
 /// The strength endpoints the lift logger needs — a seam so
 /// `LiftLoggerViewModelTests` can inject a fake. `APIClient` conforms below
@@ -19,6 +20,23 @@ protocol LiftLoggerAPIProviding {
 }
 
 extension APIClient: LiftLoggerAPIProviding {}
+
+/// Haptics the lift logger fires itself (the rest-done cue has no SwiftUI
+/// value to hang `.sensoryFeedback` on).
+enum LiftLoggerHaptics {
+    /// Success buzz when a rest countdown reaches 0. A no-op under XCTest so
+    /// unit tests never touch the Taptic engine.
+    @MainActor
+    static func restFinished() {
+        guard !isRunningUnderTest else { return }
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+    }
+
+    private static var isRunningUnderTest: Bool {
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+            || NSClassFromString("XCTestCase") != nil
+    }
+}
 
 /// Drives the "Log lift" sheet: seeds the form from the user's last session
 /// ("Repeat last session" — `GET /api/workouts/last`), lets them tweak reps/load
@@ -48,6 +66,9 @@ final class LiftLoggerViewModel: ObservableObject {
     /// Canonical key → display for every exercise the user has logged (summary
     /// keys + recent sessions) — feeds autocomplete.
     @Published private(set) var knownExercises: [LiftExerciseOption] = []
+    /// The rest countdown started by ticking a set (running, or showing "Rest
+    /// done" for a few seconds); `nil` when there is none.
+    @Published private(set) var rest: LiftRestState? = nil
 
     let system: UnitSystem
     /// Client-generated UUID for the whole session: groups the sets and makes
@@ -63,6 +84,13 @@ final class LiftLoggerViewModel: ObservableObject {
     private var hasLoaded = false
     private var lastSavePayloadSignature: String? = nil
 
+    /// Injected so tests can drive the rest timer without sleeping.
+    private let clock: () -> Date
+    private let restHaptic: @MainActor () -> Void
+    /// `false` in tests that step `advanceRest(now:)` by hand.
+    private let runsRestTimer: Bool
+    private var restTask: Task<Void, Never>? = nil
+
     /// `preferredExercise` is the exercise to repeat first (Today's "last
     /// lift") — tried before falling back to whichever exercise the summary
     /// says was trained most recently. Both may be absent (never logged →
@@ -71,12 +99,18 @@ final class LiftLoggerViewModel: ObservableObject {
         preferredExercise: String? = nil,
         system: UnitSystem? = nil,
         sessionId: String = UUID().uuidString,
-        api: LiftLoggerAPIProviding = APIClient.shared
+        api: LiftLoggerAPIProviding = APIClient.shared,
+        clock: @escaping () -> Date = { Date() },
+        restHaptic: @escaping @MainActor () -> Void = { LiftLoggerHaptics.restFinished() },
+        runsRestTimer: Bool = true
     ) {
         self.preferredExercise = preferredExercise
         self.system = system ?? UnitPreference.shared.current
         self.sessionId = sessionId
         self.api = api
+        self.clock = clock
+        self.restHaptic = restHaptic
+        self.runsRestTimer = runsRestTimer
     }
 
     // MARK: - Load ("Repeat last session")
@@ -306,14 +340,145 @@ final class LiftLoggerViewModel: ObservableObject {
         return suggestions.filter { !used.contains($0) }
     }
 
+    // MARK: - Progression hint
+
+    /// "Last 3×5 @ 140 kg · try 142.5 kg" data for an exercise block; `nil`
+    /// without last-session history.
+    func progressionHint(for exerciseID: UUID) -> LiftProgressionHint? {
+        guard let i = index(ofExercise: exerciseID) else { return nil }
+        return LiftLoggerLogic.progressionHint(
+            history: exercises[i].history, key: exercises[i].key, system: system
+        )
+    }
+
+    /// `true` while tapping the hint would still change something.
+    func canApplyProgression(to exerciseID: UUID) -> Bool {
+        guard let i = index(ofExercise: exerciseID),
+              let hint = progressionHint(for: exerciseID) else { return false }
+        return LiftLoggerLogic.canApplyProgression(hint, to: exercises[i].sets)
+    }
+
+    /// Puts the suggested load on every working set that isn't ticked and
+    /// still has last session's top load (edited sets are left alone).
+    func applyProgression(to exerciseID: UUID) {
+        guard let i = index(ofExercise: exerciseID),
+              let hint = progressionHint(for: exerciseID) else { return }
+        exercises[i].sets = LiftLoggerLogic.applyingProgression(hint, to: exercises[i].sets)
+    }
+
+    // MARK: - Done ticks + rest timer
+
+    /// Ticks / unticks a set. Ticking starts a rest timer sized for the
+    /// exercise; unticking never restarts (or stops) one.
+    func toggleSetDone(exerciseID: UUID, setID: UUID) {
+        guard let i = index(ofExercise: exerciseID),
+              let j = exercises[i].sets.firstIndex(where: { $0.id == setID }) else { return }
+        exercises[i].sets[j].isDone.toggle()
+        if exercises[i].sets[j].isDone {
+            startRest(forKey: exercises[i].key)
+        }
+    }
+
+    /// (Re)starts the rest countdown: 2:30 after a lower-body compound set,
+    /// 2:00 after anything else.
+    func startRest(forKey key: String) {
+        let now = clock()
+        rest = LiftRestState(
+            start: now, end: now.addingTimeInterval(LiftLoggerLogic.restDuration(forKey: key))
+        )
+        scheduleRestTimer()
+    }
+
+    /// "+30s" — only while the countdown is still running.
+    func extendRest() {
+        guard var state = rest,
+              case .running = LiftLoggerLogic.restPhase(end: state.end, now: clock()) else { return }
+        state.end = state.end.addingTimeInterval(LiftLoggerLogic.restExtension)
+        rest = state
+        scheduleRestTimer()
+    }
+
+    /// "Skip" — drops the timer without the done cue.
+    func skipRest() {
+        restTask?.cancel()
+        restTask = nil
+        rest = nil
+    }
+
+    /// Moves the rest timer through running → "Rest done" → gone for `now`,
+    /// firing the haptic once when it first reads done. Returns how long to
+    /// wait before the next transition, or `nil` when no timer is left.
+    @discardableResult
+    func advanceRest(now: Date) -> TimeInterval? {
+        guard var state = rest else { return nil }
+        switch LiftLoggerLogic.restPhase(end: state.end, now: now) {
+        case .running:
+            return state.end.timeIntervalSince(now)
+        case .done:
+            if !state.announced {
+                state.announced = true
+                rest = state
+                restHaptic()
+            }
+            return state.end
+                .addingTimeInterval(LiftLoggerLogic.restDoneDisplaySeconds)
+                .timeIntervalSince(now)
+        case .hidden:
+            // The done window passed unseen (app was suspended) — clear
+            // quietly rather than buzz late.
+            rest = nil
+            return nil
+        }
+    }
+
+    /// Wakes at each rest transition to run `advanceRest`. Holds `self` weakly
+    /// across the sleeps so a dismissed sheet can deallocate.
+    private func scheduleRestTimer() {
+        restTask?.cancel()
+        restTask = nil
+        guard runsRestTimer else { return }
+        restTask = Task { [weak self] in
+            while !Task.isCancelled {
+                let wait: TimeInterval? = self.flatMap { $0.advanceRest(now: $0.clock()) }
+                guard let wait else { return }
+                try? await Task.sleep(nanoseconds: UInt64(max(wait, 0.05) * 1_000_000_000))
+            }
+        }
+    }
+
     // MARK: - Save
 
+    /// What Save would log: only the ticked sets once any is ticked.
+    private var setsToSave: [LiftDraftExercise] {
+        LiftLoggerLogic.draftsToSave(from: exercises)
+    }
+
+    /// `true` once at least one set is ticked (Save then logs only those).
+    var hasDoneSets: Bool { LiftLoggerLogic.hasDoneSets(in: exercises) }
+
+    /// Ticked sets across all exercises (drives the tick haptic).
+    var doneSetCount: Int {
+        exercises.reduce(0) { total, exercise in
+            total + exercise.sets.filter { $0.isDone }.count
+        }
+    }
+
+    /// How many sets Save would log right now.
+    var saveSetCount: Int {
+        LiftLoggerLogic.inputs(from: setsToSave, system: system).count
+    }
+
+    /// "Save 7 done sets" / "Save 9 sets" — explicit about what gets saved.
+    var saveLabel: String {
+        LiftLoggerLogic.saveLabel(setCount: saveSetCount, doneOnly: hasDoneSets)
+    }
+
     var canSave: Bool {
-        !isSaving && !LiftLoggerLogic.inputs(from: exercises, system: system).isEmpty
+        !isSaving && saveSetCount > 0
     }
 
     private func payloadSignature() -> String {
-        LiftLoggerLogic.inputs(from: exercises, system: system)
+        LiftLoggerLogic.inputs(from: setsToSave, system: system)
             .map { "\($0.exercise):\($0.setIndex):\($0.reps):\($0.loadKg ?? 0):\($0.isWarmup):\($0.rpe ?? 0)" }
             .joined(separator: "|")
     }
@@ -324,7 +489,8 @@ final class LiftLoggerViewModel: ObservableObject {
     /// is identical; generates fresh `sessionId` if form changed.
     func save() async {
         guard !isSaving else { return }
-        let inputs = LiftLoggerLogic.inputs(from: exercises, system: system)
+        let toSave = setsToSave
+        let inputs = LiftLoggerLogic.inputs(from: toSave, system: system)
         guard !inputs.isEmpty else {
             errorMessage = "Add at least one set with reps."
             return
@@ -339,11 +505,12 @@ final class LiftLoggerViewModel: ObservableObject {
         do {
             _ = try await api.logWorkoutSets(
                 sessionId: sessionId,
-                source: LiftLoggerLogic.source(drafts: exercises, seeded: seeded),
+                source: LiftLoggerLogic.source(drafts: toSave, seeded: seeded),
                 sets: inputs,
                 performedAt: performedDate,
                 tz: TimeZone.current.identifier
             )
+            skipRest()
             NotificationCenter.default.post(name: .vitalWorkoutLogged, object: nil)
             didSave = true
         } catch {

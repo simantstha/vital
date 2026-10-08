@@ -51,6 +51,7 @@ struct LiftLoggerView: View {
             .scrollContentBackground(.hidden)
             .scrollDismissesKeyboard(.interactively)
 
+            restBar
             saveBar
         }
         .task { await vm.load() }
@@ -60,6 +61,7 @@ struct LiftLoggerView: View {
             dismiss()
         }
         .sensoryFeedback(Theme.Haptics.success, trigger: vm.didSave)
+        .sensoryFeedback(Theme.Haptics.toggle, trigger: vm.doneSetCount)
         .toolbar {
             // The number pad has no return key — give typed reps/weight a way out.
             ToolbarItemGroup(placement: .keyboard) {
@@ -210,10 +212,14 @@ private extension LiftLoggerView {
                 }
                 .accessibilityIdentifier("liftLogger.addSet")
             } header: {
-                Text(exercise.name)
-                    .font(.system(size: 15, weight: .bold))
-                    .foregroundStyle(Theme.Colors.textPrimary)
-                    .textCase(nil)
+                VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
+                    Text(exercise.name)
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(Theme.Colors.textPrimary)
+                    progressionHint(for: exercise)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textCase(nil)
             } footer: {
                 Text(LiftLoggerLogic.summaryLine(for: exercise, system: vm.system))
             }
@@ -226,6 +232,7 @@ private extension LiftLoggerView {
         let showRPE = expandedSets.contains(id) || set.wrappedValue.rpe != nil
         return VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
             HStack(spacing: Theme.Spacing.sm) {
+                doneToggle(exerciseID: exercise.id, number: number, set: set)
                 Text("Set \(number)")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(Theme.Colors.textSecondary)
@@ -308,6 +315,70 @@ private extension LiftLoggerView {
             }
         }
         .padding(.vertical, Theme.Spacing.xs)
+    }
+
+    /// "Last 3×5 @ 140 kg · try 142.5 kg" under the exercise name. Tappable
+    /// (applies the suggested load to untouched sets) while it still would
+    /// change something; plain text for "repeat …" hints and once applied.
+    @ViewBuilder
+    func progressionHint(for exercise: LiftDraftExercise) -> some View {
+        if let hint = vm.progressionHint(for: exercise.id) {
+            let text = LiftLoggerLogic.progressionText(hint, system: vm.system)
+            if vm.canApplyProgression(to: exercise.id) {
+                Button {
+                    vm.applyProgression(to: exercise.id)
+                } label: {
+                    HStack(spacing: Theme.Spacing.xs) {
+                        Text(text)
+                            .multilineTextAlignment(.leading)
+                        Image(systemName: "arrow.up.circle.fill")
+                            .accessibilityHidden(true)
+                    }
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Theme.Colors.accentContent)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(text)
+                .accessibilityHint("Applies the suggested weight to sets you haven't changed")
+                .accessibilityIdentifier("liftLogger.progressionHint")
+            } else {
+                Text(text)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(Theme.Colors.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("liftLogger.progressionHint")
+            }
+        }
+    }
+
+    /// ✓ circle at the start of a set row: tap to mark the set done (starts
+    /// the rest timer), tap again to undo. Save logs only ticked sets once any
+    /// is ticked.
+    func doneToggle(exerciseID: UUID, number: Int, set: Binding<LiftDraftSet>) -> some View {
+        let done = set.wrappedValue.isDone
+        let setID = set.wrappedValue.id
+        return Button {
+            vm.toggleSetDone(exerciseID: exerciseID, setID: setID)
+        } label: {
+            ZStack {
+                Circle().fill(done ? Theme.Colors.accent : Color.clear)
+                Circle().strokeBorder(Theme.Colors.textSecondary.opacity(done ? 0 : 0.5), lineWidth: 1.5)
+                if done {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(Theme.Colors.onAccent)
+                }
+            }
+            .frame(width: 26, height: 26)
+            .frame(width: 44, height: 36)
+            .contentShape(Rectangle())
+        }
+        // Borderless so the tap stays on the circle inside a Form row.
+        .buttonStyle(.borderless)
+        .accessibilityLabel(done ? "Set \(number) done, double tap to unmark" : "Mark set \(number) done")
+        .accessibilityAddTraits(done ? .isSelected : [])
+        .accessibilityIdentifier("liftLogger.setDone")
     }
 
     /// Outlined "+ Warm-up" chip (filled "Warm-up" when on): tap to flag a warm-up set (excluded from working-set
@@ -412,6 +483,78 @@ private extension LiftLoggerView {
         }
     }
 
+    /// "Rest 1:58 · +30s · Skip" above the Save button. Renders from the stored
+    /// end date on a 1 s `TimelineView`, so view updates never reset it; the
+    /// done cue (haptic, then clearing) is driven by the view model.
+    @ViewBuilder
+    var restBar: some View {
+        if let rest = vm.rest {
+            TimelineView(.periodic(from: rest.start, by: 1)) { context in
+                restBarContent(rest: rest, now: context.date)
+            }
+        }
+    }
+
+    @ViewBuilder
+    func restBarContent(rest: LiftRestState, now: Date) -> some View {
+        switch LiftLoggerLogic.restPhase(end: rest.end, now: now) {
+        case .running(let seconds):
+            HStack(spacing: Theme.Spacing.sm) {
+                Image(systemName: "timer")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Theme.Colors.textSecondary)
+                    .accessibilityHidden(true)
+                Text("Rest \(LiftLoggerLogic.restLabel(seconds: seconds))")
+                    .font(.system(size: 15, weight: .semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(Theme.Colors.textPrimary)
+                    .accessibilityIdentifier("liftLogger.rest.time")
+                Spacer(minLength: Theme.Spacing.sm)
+                restButton(
+                    "+30s", accessibilityLabel: "Add 30 seconds of rest",
+                    identifier: "liftLogger.rest.extend", tint: Theme.Colors.accentContent
+                ) { vm.extendRest() }
+                restButton(
+                    "Skip", accessibilityLabel: "Skip rest",
+                    identifier: "liftLogger.rest.skip", tint: Theme.Colors.textSecondary
+                ) { vm.skipRest() }
+            }
+            .restBarChrome()
+        case .done:
+            HStack(spacing: Theme.Spacing.sm) {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Theme.Colors.accentContent)
+                    .accessibilityHidden(true)
+                Text("Rest done")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Theme.Colors.textPrimary)
+                    .accessibilityIdentifier("liftLogger.rest.time")
+                Spacer(minLength: 0)
+            }
+            .restBarChrome()
+        case .hidden:
+            EmptyView()
+        }
+    }
+
+    func restButton(
+        _ title: String, accessibilityLabel: String, identifier: String, tint: Color,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(tint)
+                .padding(.horizontal, Theme.Spacing.md)
+                .frame(minHeight: 36)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityIdentifier(identifier)
+    }
+
     var saveBar: some View {
         Button {
             Task { await vm.save() }
@@ -420,7 +563,7 @@ private extension LiftLoggerView {
                 if vm.isSaving {
                     ProgressView().tint(Theme.Colors.onAccent)
                 }
-                Text(vm.isSaving ? "Saving…" : "Save lift")
+                Text(vm.isSaving ? "Saving…" : vm.saveLabel)
                     .font(.system(size: 16, weight: .bold))
             }
             .foregroundStyle(Theme.Colors.onAccent)
@@ -545,5 +688,27 @@ private struct LiftStepperLine: View {
         .buttonStyle(.borderless)
         .disabled(!enabled)
         .accessibilityHidden(true)
+    }
+}
+
+// MARK: - Rest bar chrome
+
+private extension View {
+    /// The compact pill behind the rest timer: full-width, glass fill, inset
+    /// to line up with the Save button below it.
+    func restBarChrome() -> some View {
+        self
+            .padding(.horizontal, Theme.Spacing.md)
+            .padding(.vertical, Theme.Spacing.xs)
+            .background(
+                RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
+                    .fill(Theme.Colors.glassFill)
+            )
+            .padding(.horizontal, Theme.Spacing.xl)
+            .padding(.top, Theme.Spacing.sm)
+            // Keep the button identifiers addressable; without `.contain`
+            // SwiftUI would push this identifier onto the descendants.
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("liftLogger.rest")
     }
 }

@@ -154,7 +154,7 @@ enum FixtureData {
         ),
         .weightLoss: Profile(
             goal: "weight_loss",
-            name: "Alex Rivera",
+            name: "Sam Rivera",
             insight: "You're down 0.6kg this week, but last night's sleep ran short (6h 50m) — keep the deficit gentle and aim for an earlier night.",
             established: true,
             targetKcal: 1850, consumedKcal: 1020,
@@ -181,7 +181,7 @@ enum FixtureData {
         ),
         .muscle: Profile(
             goal: "muscle",
-            name: "Sam Okafor",
+            name: "Priya Okafor",
             insight: "Protein's on target four days running and Monday's squat was your best in 4 weeks — stay the course.",
             established: true,
             targetKcal: 2900, consumedKcal: 1560,
@@ -215,7 +215,7 @@ enum FixtureData {
         ),
         .endurance: Profile(
             goal: "endurance",
-            name: "Priya Nandy",
+            name: "Marcus Nandy",
             insight: "This week's long run held goal pace with a lower average HR than last week — aerobic base is building nicely.",
             established: true,
             targetKcal: 2650, consumedKcal: 1140,

@@ -1117,9 +1117,9 @@ final class ScreenshotTests: XCTestCase {
     private func profileName(for scenario: String) -> String {
         switch scenario {
         case "new_user":    return "Jordan Lee"
-        case "weight_loss": return "Alex Rivera"
-        case "muscle":      return "Sam Okafor"
-        case "endurance":   return "Priya Nandy"
+        case "weight_loss": return "Sam Rivera"
+        case "muscle":      return "Priya Okafor"
+        case "endurance":   return "Marcus Nandy"
         default:            return "Jordan Lee"
         }
     }

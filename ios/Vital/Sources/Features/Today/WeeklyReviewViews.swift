@@ -34,17 +34,23 @@ struct WeeklyReviewContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-            HStack(spacing: Theme.Spacing.sm) {
-                Text("YOUR WEEK")
-                    .font(.system(size: 12, weight: .semibold))
-                    .tracking(1.2)
-                    .foregroundStyle(Theme.Colors.textSecondary)
-                if let range = WeeklyReviewLogic.rangeText(review) {
-                    Text(range)
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.Colors.textTertiary)
+            // Label + range on one line, the verdict chip on its own line
+            // below, leading-aligned. It used to sit at the header's trailing
+            // edge, which is exactly where Today's floating voice FAB (60pt +
+            // 20pt margin) rests and covered it.
+            VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                HStack(spacing: Theme.Spacing.sm) {
+                    Text("YOUR WEEK")
+                        .font(.system(size: 12, weight: .semibold))
+                        .tracking(1.2)
+                        .foregroundStyle(Theme.Colors.textSecondary)
+                    if let range = WeeklyReviewLogic.rangeText(review) {
+                        Text(range)
+                            .font(.system(size: 12))
+                            .foregroundStyle(Theme.Colors.textTertiary)
+                    }
+                    Spacer(minLength: 0)
                 }
-                Spacer(minLength: 0)
                 if let weekWord = WeeklyReviewLogic.verdictLabel(review) {
                     Chip(
                         text: weekWord,
