@@ -1733,11 +1733,23 @@ enum FixtureData {
     static let endurancePeakLongRunKm = 16.0
     static let enduranceLongRunTargetKm = 18.0
 
-    /// Earlier-in-the-week runs (index 0 = Monday) the endurance persona has
-    /// logged by today; today's tempo run (`workoutKm`) is added on top. Chosen
-    /// so this week's running totals never equal LAST week's review (3
-    /// sessions, 24.5 km): e.g. Tue = 2 sessions · 17.2 km, Thu = 3 · 22.7 km.
-    private static let enduranceEarlierRunKm: [Int: Double] = [0: 7.0, 2: 5.5, 4: 5.0, 5: 6.0]
+    /// This week's safe step toward the weekly goal (km): ~10% over LAST week's
+    /// 24.5 km, never past the goal — the single rule in
+    /// lib/enduranceProgression.ts `weekStepTarget` (27 km), the same "Build to
+    /// ~27 km" the weekly review's Next week says for this very week.
+    static let enduranceStepTargetKm: Double = {
+        let last = enduranceWeeklyKm.last ?? 0
+        return min(enduranceWeeklyDistanceTargetKm, max((last * 1.1).rounded(), last.rounded(.down) + 1))
+    }()
+
+    /// Earlier-in-the-week sessions (index 0 = Monday) the endurance persona has
+    /// logged by today (km; 0 = a non-running session, e.g. strength); today's
+    /// tempo run (`workoutKm`, 10.2 km) is added on top. Deliberately light: the
+    /// review plans a 16 km long run later this week, and the week is only
+    /// meant to reach the ~27 km step (10.2 done + 16 long run ≈ 27), never the
+    /// 39 km a second and third run would add. Totals never equal LAST week's
+    /// review (3 sessions, 24.5 km): any weekday is 10.2 km, 2 sessions (Monday: 1).
+    private static let enduranceEarlierRunKm: [Int: Double] = [0: 0.0]
 
     struct EnduranceWeek {
         /// "YYYY-MM-DD" local Monday.
@@ -1777,8 +1789,8 @@ enum FixtureData {
         )
     }
 
-    /// "17.2", "30" — one decimal, trailing ".0" dropped (the server's
-    /// "24.5 of 30 km this week" wording).
+    /// "10.2", "30" — one decimal, trailing ".0" dropped (the server's
+    /// "10.2 of ~27 km running this week · goal 30 km" wording).
     private static func trimmedKm(_ km: Double) -> String {
         let rounded = (km * 10).rounded() / 10
         return rounded.truncatingRemainder(dividingBy: 1) == 0 ? String(Int(rounded)) : String(format: "%.1f", rounded)
@@ -2143,7 +2155,14 @@ enum FixtureData {
             // week"): last 2 weeks 23.2 km/wk vs the 2 before 21.9 => +6%.
             let week = enduranceWeek()
             let target = enduranceWeeklyDistanceTargetKm
-            let thisWeekText = "\(trimmedKm(week.km)) of \(trimmedKm(target)) km this week"
+            // ONE target for the week (lib/goalProgress.ts `distanceProgress`): the
+            // safe step from last week's 24.5 km — the same "~27 km" the weekly
+            // review's Next week names — with the goal beside it. Same copy as the
+            // server (U+00A0 between each value and unit).
+            let step = enduranceStepTargetKm
+            let thisWeekText = step < target
+                ? "\(trimmedKm(week.km)) of ~\(trimmedKm(step))\u{00A0}km running this week · goal \(trimmedKm(target))\u{00A0}km"
+                : "\(trimmedKm(week.km)) of \(trimmedKm(target))\u{00A0}km running this week"
             // Peak long run is planned 3 weeks before the race (lib/goalProgress.ts).
             let longRunBy = looseMonthPosition(daysAhead: enduranceRaceDaysOut - 21)
             return [
@@ -2151,7 +2170,7 @@ enum FixtureData {
                 "target": ["weightKg": none, "date": none, "weeklySessions": none, "weeklyDistanceKm": target],
                 "distance": [
                     "targetKm": target, "thisWeekKm": week.km, "avg4wKm": enduranceFourWeekAvgKm,
-                    "weekStart": week.start, "text": thisWeekText,
+                    "weekStart": week.start, "stepTargetKm": step, "text": thisWeekText,
                 ],
                 "race": [
                     "date": dayString(-enduranceRaceDaysOut), "distanceKm": enduranceRaceDistanceKm,
@@ -2274,7 +2293,7 @@ enum FixtureData {
                 goal: "weight_loss", verdict: "on_track", weekRating: "good",
                 headline: "Down 0.6\(nb)kg, in budget 5 of 7 days",
                 stats: [
-                    stat("Weight trend", "−0.6\(nb)kg", "vs the week before", "good"),
+                    stat("Weekly avg weight", "−0.6\(nb)kg", "vs the week before", "good"),
                     stat("Days in budget", "5/7", nil, "good"),
                     stat("Avg calories", "1,830\(nb)kcal", "−120 vs last week", "neutral"),
                     stat("Workouts", "3", "2 last week", "good"),
@@ -2300,7 +2319,7 @@ enum FixtureData {
                     stat("Sessions", "3", "target 4 for the week", "neutral"),
                     stat("Squat est. 1RM", "+10\(nb)kg", "vs 4 weeks ago", "good"),
                     stat("Protein days hit", "5/7", nil, "good"),
-                    stat("Weight trend", "+0.2\(nb)kg", "vs the week before", "good"),
+                    stat("Weekly avg weight", "+0.2\(nb)kg", "vs the week before", "good"),
                 ],
                 win: "Squat estimated 1RM is up 10\(nb)kg vs 4 weeks ago.",
                 slip: "3 of 4 sessions — one short",

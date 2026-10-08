@@ -26,6 +26,7 @@ import { localDayKey, weekDayKeys, weekStartKeyForDay } from './localDay';
 import { arrowPair, withUnit } from './displayText';
 import type { ProgressionSummary } from './workoutRepository';
 import { isDeload, liftDisplayChange, liftDisplayName, pickHeadlineLift } from './liftChange';
+import { WEEKLY_DISTANCE_GROWTH, longRunAtPeak, longRunStepKm, weekStepTarget } from './enduranceProgression';
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
@@ -45,6 +46,12 @@ const WEEKEND_GAP_MIN_KCAL = 250;
 /** Review is 'sufficient' with at least this many distinct days carrying any data and this many stats. */
 const MIN_DATA_DAYS = 3;
 const MIN_STATS = 2;
+/**
+ * Label of the review's weight stat. It is the week's average weight against the
+ * week before's (a one-week change), NOT the 4-week trend rate ("+0.4 kg/wk")
+ * the goal sheet quotes — the label says so, so the two never read as one number.
+ */
+export const WEIGHT_STAT_LABEL = 'Weekly avg weight';
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -282,7 +289,7 @@ function weightCandidate(input: WeeklyReviewInput, week: Week, prevWeek: Week): 
     else if (deltaKg <= -0.2) tone = 'watch';
   }
   const cand: Candidate = {
-    stat: { label: 'Weight trend', value, comparison: 'vs the week before', tone },
+    stat: { label: WEIGHT_STAT_LABEL, value, comparison: 'vs the week before', tone },
   };
   if (tone === 'good') cand.win = input.goal === 'muscle' ? `Your weight trend is up ${weightText(input, Math.abs(deltaKg))}.` : `Your weight trend is down ${weightText(input, Math.abs(deltaKg))}.`;
   if (tone === 'watch') {
@@ -805,7 +812,7 @@ function loggedWord(stat: WeeklyReviewStat, word = 'logged '): string {
 function buildHeadline(input: WeeklyReviewInput, cands: Candidate[], week: Week): string {
   const by = (label: string): WeeklyReviewStat | undefined => cands.find(x => x.stat.label === label)?.stat;
   const parts: string[] = [];
-  const weight = by('Weight trend');
+  const weight = by(WEIGHT_STAT_LABEL);
   const sessions = cands.find(x => ['Workouts', 'Sessions', 'Active days'].includes(x.stat.label))?.stat;
   const sessionCount = (s: WeeklyReviewStat) => `${s.value} ${plural(Number(s.value), 'workout')}`;
 
@@ -988,18 +995,14 @@ function freestWeekday(input: WeeklyReviewInput, week: Week, prevWeek: Week): st
   return WEEKDAY_NAMES[EXTRA_SESSION_DAY_ORDER.find(i => counts[i] === fewest) as number];
 }
 
-/** Weekly distance may grow by at most this fraction week over week (the ~10% rule). */
-const WEEKLY_DISTANCE_GROWTH = 0.1;
-/** The long run may grow by at most this many km in a week. */
-const LONG_RUN_MAX_STEP_KM = 2;
-
 /**
  * "Next week" for a distance gap: build toward the weekly target without a
- * jump. Next week's distance is capped at ~10% over this week
- * (min(target, round(done x 1.10)), in the user's unit); the long run grows by
- * at most 2 km and never past its peak target; the rest of the growth goes to
- * easy runs. Spells out the staging ("30 km the week after") when the cap
- * leaves the target out of reach for one more week.
+ * jump. Next week's distance is capped at ~10% over this week (the shared
+ * rule in lib/enduranceProgression.ts, in the user's unit — the same step
+ * goalProgress shows as `distance.stepTargetKm` for the week now under way);
+ * the long run grows by at most 2 km and never past its peak target; the rest
+ * of the growth goes to easy runs. Spells out the staging ("30 km the week
+ * after") when the cap leaves the target out of reach for one more week.
  */
 function distanceNextWeek(input: WeeklyReviewInput, gap: Extract<WeekGap, { kind: 'distance' }>): string {
   const imperial = isImperial(input);
@@ -1010,11 +1013,8 @@ function distanceNextWeek(input: WeeklyReviewInput, gap: Extract<WeekGap, { kind
   const targetText = distanceText(input, gap.targetKm);
 
   // A week with (almost) no running has no base to take 10% of: restart gently.
-  if (done < 1) return `Restart with a couple of easy runs, then build gradually toward ${targetText}.`;
-
-  // At least +1 unit so a very small week still moves; otherwise round(done x 1.10).
-  const grown = Math.max(Math.round(done * (1 + WEEKLY_DISTANCE_GROWTH)), Math.floor(done) + 1);
-  const next = Math.min(target, grown);
+  const next = weekStepTarget(done, target);
+  if (next == null) return `Restart with a couple of easy runs, then build gradually toward ${targetText}.`;
   const staged = next < target;
   const nextKm = next / perKm;
 
@@ -1023,10 +1023,8 @@ function distanceNextWeek(input: WeeklyReviewInput, gap: Extract<WeekGap, { kind
   const lr = input.longRun;
   if (lr != null && Number.isFinite(lr.lastKm) && lr.lastKm > 0) {
     const peak = lr.targetPeakKm;
-    const room = peak != null ? peak - lr.lastKm : Infinity;
-    const step = Math.min(LONG_RUN_MAX_STEP_KM, room);
-    if (step > 0) {
-      const longKm = round1(lr.lastKm + step);
+    const longKm = longRunStepKm(lr.lastKm, peak);
+    if (!longRunAtPeak(lr.lastKm, peak)) {
       if (longKm < nextKm) longRunPart = `long run ${distanceText(input, longKm)}, the rest as easy runs`;
     } else if (peak != null && peak < nextKm) {
       longRunPart = `hold your long run at ${distanceText(input, peak)} and put the growth into easy runs`;

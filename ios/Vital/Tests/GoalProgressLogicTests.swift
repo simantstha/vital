@@ -373,11 +373,11 @@ final class GoalProgressLogicTests: XCTestCase {
 
     // MARK: - Endurance weekly distance
 
-    private func distanceProgress(thisWeek: Double? = 24.5, avg: Double? = 23.2) -> GoalProgressDTO {
+    private func distanceProgress(thisWeek: Double? = 24.5, avg: Double? = 23.2, step: Double? = nil) -> GoalProgressDTO {
         GoalProgressDTO(
             goal: "endurance",
             target: .init(weeklyDistanceKm: 30),
-            distance: .init(targetKm: 30, thisWeekKm: thisWeek, avg4wKm: avg, weekStart: "2026-10-05"),
+            distance: .init(targetKm: 30, thisWeekKm: thisWeek, avg4wKm: avg, weekStart: "2026-10-05", stepTargetKm: step),
             verdict: .building,
             headline: "Building — distance up 12% (last 2 weeks vs the 2 before)"
         )
@@ -408,6 +408,64 @@ final class GoalProgressLogicTests: XCTestCase {
         XCTAssertEqual(p.target.weeklyDistanceKm, 30)
         XCTAssertEqual(p.distance?.thisWeekKm, 8.5)
         XCTAssertNil(p.distance?.avg4wKm)
+        XCTAssertNil(p.distance?.stepTargetKm, "an older server omits the step")
+    }
+
+    // MARK: - This week's safe step (one target for the week)
+
+    /// A step below the goal is the week's target: the line names both
+    /// ("22.7 of ~27 km this week · goal 30 km") and the bar runs to the step.
+    func testDistanceLineAndBarUseTheStepTargetWhenItIsBelowTheGoal() throws {
+        let p = distanceProgress(thisWeek: 22.7, step: 27)
+        XCTAssertEqual(GoalProgressLogic.stepTargetKm(p), 27)
+        XCTAssertEqual(GoalProgressLogic.distanceLine(p, system: .metric), "22.7 of ~27 km this week · goal 30 km")
+        XCTAssertEqual(GoalProgressLogic.primaryLine(p, system: .metric), "22.7 of ~27 km this week · goal 30 km")
+        XCTAssertEqual(try XCTUnwrap(GoalProgressLogic.distanceFraction(p)), 22.7 / 27, accuracy: 0.0001)
+        XCTAssertEqual(plain(GoalProgressLogic.distanceBarEndText(p, system: .metric)), "~27 km")
+        // Past the step the bar is simply full.
+        XCTAssertEqual(try XCTUnwrap(GoalProgressLogic.distanceFraction(distanceProgress(thisWeek: 28, step: 27))), 1, accuracy: 0.0001)
+        // Nothing else about the average line changes.
+        XCTAssertEqual(GoalProgressLogic.distanceAverageLine(p, system: .metric), "4-week avg 23.2 km a week")
+    }
+
+    func testDistanceStepIsUnitAware() {
+        // The server sends the step in km (17 whole miles = 27.4 km); the goal 30 km = 18.6 mi.
+        let p = distanceProgress(thisWeek: 22.7, step: 27.4)
+        XCTAssertEqual(GoalProgressLogic.distanceLine(p, system: .imperial), "14.1 of ~17 mi this week · goal 18.6 mi")
+        XCTAssertEqual(plain(GoalProgressLogic.distanceBarEndText(p, system: .imperial)), "~17 mi")
+    }
+
+    /// No step to speak of (the goal itself, absent on an older server, or
+    /// nonsense) is exactly the previous behaviour: one goal target.
+    func testDistanceLineFallsBackToTheGoalWithoutARealStep() throws {
+        for step in [nil, 30, 31, 0, -4, Double.nan] as [Double?] {
+            let p = distanceProgress(thisWeek: 24.5, step: step)
+            XCTAssertNil(GoalProgressLogic.stepTargetKm(p), "step \(String(describing: step))")
+            XCTAssertEqual(GoalProgressLogic.distanceLine(p, system: .metric), "24.5 of 30 km this week")
+            XCTAssertEqual(try XCTUnwrap(GoalProgressLogic.distanceFraction(p)), 24.5 / 30, accuracy: 0.0001)
+            XCTAssertEqual(plain(GoalProgressLogic.distanceBarEndText(p, system: .metric)), "30 km")
+        }
+        // Still nothing without a measured distance.
+        XCTAssertNil(GoalProgressLogic.distanceLine(distanceProgress(thisWeek: nil, step: 27), system: .metric))
+        XCTAssertNil(GoalProgressLogic.distanceFraction(distanceProgress(thisWeek: nil, step: 27)))
+    }
+
+    func testStepTargetDecodesTolerantly() throws {
+        func decode(_ step: String) throws -> GoalProgressDTO {
+            let json = """
+            {"goal":"endurance","distance":{"targetKm":30,"thisWeekKm":22.7,"avg4wKm":22.6,"weekStart":"2026-10-05"\(step)},
+             "verdict":"building","headline":"x","reasons":[]}
+            """
+            return try JSONDecoder().decode(GoalProgressDTO.self, from: Data(json.utf8))
+        }
+        XCTAssertEqual(try decode(",\"stepTargetKm\":27").distance?.stepTargetKm, 27)
+        XCTAssertEqual(try decode(",\"stepTargetKm\":27.4").distance?.stepTargetKm, 27.4)
+        XCTAssertNil(try decode("").distance?.stepTargetKm)
+        XCTAssertNil(try decode(",\"stepTargetKm\":null").distance?.stepTargetKm)
+        XCTAssertNil(try decode(",\"stepTargetKm\":\"nope\"").distance?.stepTargetKm, "wrong type never hides the card")
+        XCTAssertEqual(try decode(",\"stepTargetKm\":\"nope\"").distance?.thisWeekKm, 22.7)
+        let withStep = try decode(",\"stepTargetKm\":27")
+        XCTAssertEqual(GoalProgressLogic.distanceLine(withStep, system: .metric), "22.7 of ~27 km this week · goal 30 km")
     }
 
     // MARK: - Day-1 honesty, stale weigh-ins, compact Today line
@@ -556,7 +614,11 @@ final class GoalProgressLogicTests: XCTestCase {
     func testMuscleBehindLineNamesTheRemainingSessionsWhenTheWeekCountIsKnown() {
         let line = GoalProgressLogic.compactText(muscleBehind(), system: .metric, sessionsDoneThisWeek: 2, now: now, locale: en)
         XCTAssertEqual(plain(line), "9 of 16 sessions in 4 wk · 2 more by Sun")
-        XCTAssertEqual(line, "9 of 16 sessions in 4\u{00A0}wk · 2 more by Sun")
+        // "2 more by Sun" is one unbreakable token: a narrow line wraps before it,
+        // never as "· 2 / more by Sun".
+        XCTAssertEqual(line, "9 of 16 sessions in 4\u{00A0}wk · 2\u{00A0}more\u{00A0}by\u{00A0}Sun")
+        XCTAssertFalse(line.contains("2 more"), "no breaking space between the number and its noun")
+        XCTAssertFalse(line.contains("more by"))
         XCTAssertEqual(GoalProgressLogic.sessionsBehindText(muscleBehind(), doneThisWeek: 2), line)
         XCTAssertLessThanOrEqual(line.count, 48, "fits two Today lines")
         XCTAssertEqual(plain(GoalProgressLogic.sessionsBehindText(muscleBehind(), doneThisWeek: 0)),

@@ -472,6 +472,29 @@ final class FixtureCrossScreenConsistencyTests: XCTestCase {
         XCTAssertEqual(progress.target.weeklyDistanceKm, 30)
         XCTAssertEqual(progress.distance?.thisWeekKm ?? .nan, week.km, accuracy: 0.001)
         XCTAssertEqual(GoalProgressLogic.primaryLine(progress, system: .metric), GoalProgressLogic.distanceLine(progress, system: .metric))
+
+        // ONE target for this week: the safe step from last week's 24.5 km — the
+        // "Build to ~27 km" the weekly review names for this very week — with the
+        // 30 km goal beside it on the Today hero, Trends card and goal sheet alike.
+        XCTAssertEqual(progress.distance?.stepTargetKm, 27)
+        XCTAssertEqual(GoalProgressLogic.stepTargetKm(progress), 27)
+        XCTAssertEqual(
+            GoalProgressLogic.distanceLine(progress, system: .metric),
+            "\(GoalProgressLogic.trimmedNumber(week.km)) of ~27 km this week · goal 30 km"
+        )
+        XCTAssertEqual(GoalProgressLogic.distanceFraction(progress) ?? .nan, week.km / 27, accuracy: 0.0001)
+        let rawDistance = json(.endurance, "/api/goal/progress")["distance"] as? [String: Any]
+        XCTAssertEqual(
+            plain(rawDistance?["text"] as? String),
+            "\(GoalProgressLogic.trimmedNumber(week.km)) of ~27 km running this week · goal 30 km"
+        )
+        let reviewNext = plain((json(.endurance, "/api/review/weekly")["review"] as? [String: Any])?["nextWeek"] as? String) ?? ""
+        XCTAssertTrue(reviewNext.hasPrefix("Build to ~27 km: long run 16 km"), reviewNext)
+        // The plan adds up: what is done this week plus the 16 km long run still
+        // ahead lands on the ~27 km step (it used to be 22.7 + 16 ≈ 39 km).
+        XCTAssertEqual(week.km + 16, 27, accuracy: 1.0)
+        XCTAssertLessThan(week.km + 16, 30, "following the plan never overshoots the goal this week")
+
         XCTAssertTrue(progress.headline.contains("last 2 weeks vs the 2 before"), progress.headline)
         XCTAssertFalse(progress.headline.contains("over 4 weeks"))
 

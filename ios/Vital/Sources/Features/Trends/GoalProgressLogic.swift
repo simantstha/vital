@@ -224,12 +224,25 @@ enum GoalProgressLogic {
 
     // MARK: - Weekly distance (endurance)
 
-    /// 0...1 of this local week's distance against the weekly target (clamped),
-    /// or `nil` without a distance target / without any measured distance.
+    /// This week's safe step toward the weekly goal (km), from last week's
+    /// running (the same ~10% rule as the weekly review's "Next week"), when the
+    /// server sent one that is genuinely below the goal; `nil` otherwise (absent
+    /// on an older server, equal to the goal, or nonsense) — the goal is then
+    /// the one target, exactly as before.
+    static func stepTargetKm(_ progress: GoalProgressDTO) -> Double? {
+        guard let d = progress.distance, d.targetKm > 0,
+              let step = d.stepTargetKm, step.isFinite, step > 0, step < d.targetKm else { return nil }
+        return step
+    }
+
+    /// 0...1 of this local week's distance against THIS WEEK'S target
+    /// (clamped): the safe step when there is one ("of ~27 km"), else the weekly
+    /// goal. `nil` without a distance target / without any measured distance.
     static func distanceFraction(_ progress: GoalProgressDTO) -> Double? {
         guard let d = progress.distance, d.targetKm > 0,
               let done = d.thisWeekKm, done.isFinite else { return nil }
-        return min(1, max(0, done / d.targetKm))
+        let target = stepTargetKm(progress) ?? d.targetKm
+        return min(1, max(0, done / target))
     }
 
     /// A km value as a bare number in the user's unit, one decimal, trailing
@@ -240,10 +253,28 @@ enum GoalProgressLogic {
 
     /// "24.5 of 30 km this week" (imperial: "15.2 of 18.6 mi this week") — the
     /// endurance primary progress. Calendar week (Monday–today, user-local).
-    /// `nil` without a distance target or a measured distance.
+    /// When last week caps this week's safe step below the goal the line says
+    /// both, so there is ONE target for the week with the goal beside it:
+    /// "22.7 of ~27 km this week · goal 30 km". `nil` without a distance target
+    /// or a measured distance.
     static func distanceLine(_ progress: GoalProgressDTO, system: UnitSystem) -> String? {
         guard let d = progress.distance, d.targetKm > 0, let done = d.thisWeekKm else { return nil }
-        return "\(distanceAmount(km: done, system)) of \(distanceAmount(km: d.targetKm, system)) \(system.distanceUnit) this week"
+        let unit = system.distanceUnit
+        let doneText = distanceAmount(km: done, system)
+        let goalText = distanceAmount(km: d.targetKm, system)
+        if let step = stepTargetKm(progress) {
+            return "\(doneText) of ~\(distanceAmount(km: step, system)) \(unit) this week · goal \(goalText) \(unit)"
+        }
+        return "\(doneText) of \(goalText) \(unit) this week"
+    }
+
+    /// The label at the far end of the distance bar: the km the bar runs to
+    /// ("~27 km" with a step, else the weekly goal "30 km"). `nil` without a
+    /// distance target.
+    static func distanceBarEndText(_ progress: GoalProgressDTO, system: UnitSystem) -> String? {
+        guard let d = progress.distance, d.targetKm > 0 else { return nil }
+        if let step = stepTargetKm(progress) { return "~\(UnitFormat.distance(km: step, system))" }
+        return UnitFormat.distance(km: d.targetKm, system)
     }
 
     /// "4-week avg 23.2 km a week" — explicitly labelled so it is never
@@ -548,7 +579,9 @@ enum GoalProgressLogic {
               adherence.planned > 0, adherence.weeklyTarget > 0 else { return nil }
         let nextStep: String
         if let doneThisWeek, adherence.weeklyTarget - max(doneThisWeek, 0) > 0 {
-            nextStep = "\(adherence.weeklyTarget - max(doneThisWeek, 0)) more by Sun"
+            // One unbreakable token: a narrow Today line wraps BEFORE "2 more by
+            // Sun", never as "… · 2 / more by Sun" or "… 2 more by / Sun".
+            nextStep = "\(adherence.weeklyTarget - max(doneThisWeek, 0))\(nbsp)more\(nbsp)by\(nbsp)Sun"
         } else {
             nextStep = "aim for \(adherence.weeklyTarget) this week"
         }

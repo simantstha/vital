@@ -10,6 +10,7 @@ import {
   type WeeklyReviewInput,
 } from './weeklyReview';
 import { NBSP, plainSpaces } from './displayText';
+import { computeGoalProgress, type GoalProgressInput } from './goalProgress';
 import { liftChange4w, pickHeadlineLift } from './liftChange';
 import type { WeightReading } from './weightTrend';
 import type { ProgressionSummary } from './workoutRepository';
@@ -98,8 +99,8 @@ test('weight_loss: weight change, days in budget, avg kcal, workouts, weekend ne
   assertWellFormed(r);
   assert.equal(r.goal, 'weight_loss');
   assert.equal(r.verdict, 'on_track');
-  assert.deepEqual(r.stats.map(s => s.label), ['Weight trend', 'Days in budget', 'Avg calories', 'Workouts']);
-  const weight = statByLabel(r, 'Weight trend')!;
+  assert.deepEqual(r.stats.map(s => s.label), ['Weekly avg weight', 'Days in budget', 'Avg calories', 'Workouts']);
+  const weight = statByLabel(r, 'Weekly avg weight')!;
   assert.match(weight.value, /^−\d\.\d kg$/);
   assert.equal(weight.tone, 'good');
   const budget = statByLabel(r, 'Days in budget')!;
@@ -121,7 +122,7 @@ test('weight_loss: omits stats it lacks data for (no budget logging, no weigh-in
     intakeDays: intake(WEEK.slice(0, 4), [2000, 2000, 2000, 2000]),
   }));
   // no weigh-ins → no weight stat; 4 logged days → budget + avg shown; sessions shown
-  assert.equal(statByLabel(r, 'Weight trend'), undefined);
+  assert.equal(statByLabel(r, 'Weekly avg weight'), undefined);
   assert.ok(statByLabel(r, 'Days in budget'));
   assert.equal(statByLabel(r, 'Days in budget')!.comparison, '4 days logged');
   assert.ok(r.stats.every(s => s.value.length > 0));
@@ -147,14 +148,14 @@ test('muscle: sessions vs target, best lift change, protein days, weight', () =>
     weightReadings: weigh([...PREV, ...WEEK], i => 75 + i * 0.03),
   }));
   assertWellFormed(r);
-  assert.deepEqual(r.stats.map(s => s.label), ['Sessions', 'Bench Press est. 1RM', 'Protein days hit', 'Weight trend']);
+  assert.deepEqual(r.stats.map(s => s.label), ['Sessions', 'Bench Press est. 1RM', 'Protein days hit', 'Weekly avg weight']);
   const sessions = statByLabel(r, 'Sessions')!;
   assert.equal(sessions.value, '4');
   assert.equal(sessions.comparison, 'target 4 for the week');
   assert.equal(sessions.tone, 'good');
   assert.equal(statByLabel(r, 'Bench Press est. 1RM')!.value, '+3 kg');
   assert.equal(statByLabel(r, 'Protein days hit')!.value, '7/7');
-  assert.match(statByLabel(r, 'Weight trend')!.value, /^\+/);
+  assert.match(statByLabel(r, 'Weekly avg weight')!.value, /^\+/);
   assert.match(r.headline, /^4 of 4 sessions, Bench Press est\. 1RM \+3 kg vs last trained wk$/);
 });
 
@@ -267,8 +268,8 @@ test('insufficient data: three data days but fewer than two stats is still not e
 test('imperial users see lb and miles; metric users see kg and km', () => {
   const metric = computeWeeklyReview(weightLossInput());
   const imperial = computeWeeklyReview(weightLossInput({ unitSystem: 'imperial' }));
-  assert.match(statByLabel(metric, 'Weight trend')!.value, / kg$/);
-  assert.match(statByLabel(imperial, 'Weight trend')!.value, / lb$/);
+  assert.match(statByLabel(metric, 'Weekly avg weight')!.value, / kg$/);
+  assert.match(statByLabel(imperial, 'Weekly avg weight')!.value, / lb$/);
   assert.match(imperial.headline, / lb,/);
   assert.doesNotMatch(imperial.headline, /kg/);
 
@@ -626,7 +627,7 @@ test('weekRating weight_loss: weight moving the wrong way pulls the week down on
     weightReadings: weigh([...PREV, ...WEEK], i => 80 + i * 0.1),
   }));
   assert.equal(statByLabel(r, 'Days in budget')!.value, '5/7');
-  assert.equal(statByLabel(r, 'Weight trend')!.tone, 'watch');
+  assert.equal(statByLabel(r, 'Weekly avg weight')!.tone, 'watch');
   assert.equal(r.weekRating, 'mixed'); // 5/7 in budget would be good
 });
 
@@ -966,6 +967,57 @@ test('imperial runner: same rules in miles (weekly ~10%, long run +2 km, never p
   assert.equal(atPeak.nextWeek, 'Build to ~17 mi: hold your long run at 11.2 mi and put the growth into easy runs; 18.6 mi the week after.');
   const noLongRun = computeWeeklyReview(marcusWeek({ unitSystem: 'imperial' }));
   assert.equal(noLongRun.nextWeek, 'Build to ~17 mi with easy runs; 18.6 mi the week after.');
+});
+
+// ── one target for the week: the review's "Next week" == the goal card's step ──
+
+/** The goal-progress input for the week AFTER the reviewed one, on its Thursday (2026-10-08), over the same runs. */
+function goalInputAfter(review: WeeklyReviewInput, thisWeekKm: number): GoalProgressInput {
+  const thisMonday = addDays(WEEK_START, 7);
+  const workouts = [...review.workouts, run(thisMonday, thisWeekKm)];
+  return {
+    goal: 'endurance',
+    todayKey: addDays(thisMonday, 3),
+    target: { weightKg: null, date: null, weeklySessions: null, weeklyDistanceKm: review.weeklyDistanceKmTarget ?? null },
+    start: { weightKg: null, startedAt: null },
+    weightReadings: [],
+    intakeDays: [],
+    budget: null,
+    progression: {},
+    trainingDays: workouts.map(w => w.day),
+    workouts,
+    restingHr: [],
+    hrv: [],
+    sleepMinutes: [],
+    sleepGoalMinutes: 480,
+    unitSystem: review.unitSystem,
+  };
+}
+
+test('the review\'s "Next week" km and the goal card\'s this-week step are the same number (metric and miles)', () => {
+  // [reviewed week's three runs] -> the 10% step; 26.9 km is within 10% of the 30 km target, so the step IS the target.
+  const cases: Array<{ runs: [number, number, number]; stepKm: number }> = [
+    { runs: [8, 8, 8.5], stepKm: 27 },
+    { runs: [6, 6, 6], stepKm: 20 },
+    { runs: [4, 4, 4], stepKm: 13 },
+    { runs: [9, 9, 8.9], stepKm: 30 },
+  ];
+  for (const c of cases) {
+    const input = marcusWeek({ workouts: [run(WEEK[0], c.runs[0]), run(WEEK[2], c.runs[1]), run(WEEK[4], c.runs[2]), run(PREV[0], 7)] });
+    const review = computeWeeklyReview(input);
+    assert.equal(review.weekGap?.kind, 'distance', `${c.runs}`);
+    const reviewKm = Number(review.nextWeek.match(/(?:Build to ~|Aim for )(\d+(?:\.\d+)?)/)![1]);
+    const progress = computeGoalProgress(goalInputAfter(input, 12));
+    assert.equal(reviewKm, c.stepKm, review.nextWeek);
+    assert.equal(progress.distance!.stepTargetKm, c.stepKm, `${c.runs}`);
+    assert.equal(progress.distance!.stepTargetKm, reviewKm);
+  }
+  // Miles: whole miles in both (24.5 km = 15.2 mi -> ~17 mi).
+  const imperialInput = marcusWeek({ unitSystem: 'imperial' });
+  const reviewMi = Number(computeWeeklyReview(imperialInput).nextWeek.match(/Build to ~(\d+) mi/)![1]);
+  const stepKm = computeGoalProgress(goalInputAfter(imperialInput, 12)).distance!.stepTargetKm;
+  assert.equal(reviewMi, 17);
+  assert.equal(Math.round((stepKm / 1.609344) * 10) / 10, reviewMi);
 });
 
 test('a long run that would not leave room for easy runs is left out; a week with no running restarts gently', () => {

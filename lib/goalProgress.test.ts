@@ -670,7 +670,9 @@ test('endurance distance: this week (Mon-today, Tue) is the primary progress; ET
   assert.ok(p.distance);
   assert.equal(p.distance!.weekStart, '2026-10-05');
   assert.equal(p.distance!.thisWeekKm, 8.5);
-  assert.equal(p.distance!.text, '8.5 of 30 km running this week');
+  // Last week (Sep 28 - Oct 4) held one 10 km run: this week's safe step is ~11 km, the goal stays 30 km.
+  assert.equal(p.distance!.stepTargetKm, 11);
+  assert.equal(p.distance!.text, '8.5 of ~11 km running this week · goal 30 km');
   // The stat states it; the "Why" does not repeat it.
   assert.equal(p.reasons.some(r => r.kind === 'week_distance'), false);
   assert.equal(p.eta, null);
@@ -704,7 +706,78 @@ test('endurance distance text is unit-aware (miles) while structured km stay met
   const p = computeGoalProgress(distanceInput({ 1: 8, 4: 8, 8: 8, 11: 8 }, { unitSystem: 'imperial' }));
   assert.equal(p.distance!.thisWeekKm, 8);
   assert.equal(p.distance!.targetKm, 30);
-  assert.equal(p.distance!.text, '5 of 18.6 mi running this week');
+  // Last week 16 km = 9.9 mi -> a step of 11 whole miles (17.7 km); the goal 30 km = 18.6 mi.
+  assert.equal(p.distance!.stepTargetKm, 17.7);
+  assert.equal(p.distance!.text, '5 of ~11 mi running this week · goal 18.6 mi');
+});
+
+// ── Endurance: ONE target for this week (the safe step from last week) ─────
+
+/** TODAY is Tuesday 2026-10-06: this week = Oct 5-6 (0-1 days ago); last week = Sep 28 - Oct 4 (2-8 days ago). */
+test('endurance distance step: 24.5 km last week -> this week builds to ~27 km (goal 30 km), text and field agree', () => {
+  // Marcus: 22.7 km so far this week (Mon + Tue), 24.5 km last week in three runs.
+  const p = computeGoalProgress(distanceInput({ 0: 12.7, 1: 10, 3: 10, 4: 8, 7: 6.5 }));
+  assert.equal(p.distance!.thisWeekKm, 22.7);
+  assert.equal(p.distance!.targetKm, 30);
+  assert.equal(p.distance!.stepTargetKm, 27);
+  assert.equal(p.distance!.text, '22.7 of ~27 km running this week · goal 30 km');
+  assertWellFormed(p);
+  // The raw copy keeps the unit glued to its number (and "goal 30 km" together).
+  const raw = computeGoalProgressRaw(distanceInput({ 0: 12.7, 1: 10, 3: 10, 4: 8, 7: 6.5 }));
+  assert.ok(raw.distance!.text.includes(`~27${NBSP}km`) && raw.distance!.text.endsWith(`goal 30${NBSP}km`), raw.distance!.text);
+});
+
+test('endurance distance step: last week already within 10% of the goal -> the step IS the goal and the text is unchanged', () => {
+  // 28 km last week x 1.10 = 30.8 -> capped at the 30 km goal.
+  const p = computeGoalProgress(distanceInput({ 0: 6, 3: 14, 5: 14 }));
+  assert.equal(p.distance!.stepTargetKm, 30);
+  assert.equal(p.distance!.text, '6 of 30 km running this week');
+  // Last week above the goal: still the goal, never more.
+  const over = computeGoalProgress(distanceInput({ 0: 6, 3: 20, 5: 20 }));
+  assert.equal(over.distance!.stepTargetKm, 30);
+  assert.equal(over.distance!.text, '6 of 30 km running this week');
+});
+
+test('endurance distance step: no last-week running -> the goal; a near-zero last week has no base to grow from', () => {
+  // Runs only this week (and 20 days ago): last week is empty.
+  const none = computeGoalProgress(distanceInput({ 0: 8, 20: 12 }));
+  assert.equal(none.distance!.stepTargetKm, 30);
+  assert.equal(none.distance!.text, '8 of 30 km running this week');
+  // No distance data at all.
+  const noData = computeGoalProgress(enduranceInput([3, 3, 3, 3], {
+    target: { weightKg: null, date: null, weeklySessions: 3, weeklyDistanceKm: 30 },
+  }));
+  assert.equal(noData.distance!.stepTargetKm, 30);
+  assert.equal(noData.distance!.text, '0 of 30 km running this week');
+  // 0.6 km last week: nothing to take 10% of.
+  const tiny = computeGoalProgress(distanceInput({ 0: 5, 4: 0.6 }));
+  assert.equal(tiny.distance!.stepTargetKm, 30);
+  assert.equal(tiny.distance!.text, '5 of 30 km running this week');
+});
+
+test('endurance distance step: only running counts toward last week\'s base, and only last calendar week', () => {
+  const workouts = [
+    { day: addDays(TODAY, -3), durationMin: 50, distanceKm: 10, type: 'Running' },
+    { day: addDays(TODAY, -3), durationMin: 90, distanceKm: 40, type: 'Cycling' },
+    // Sunday before last (Sep 27) is two weeks back, not last week.
+    { day: addDays(TODAY, -9), durationMin: 70, distanceKm: 15, type: 'Running' },
+    { day: TODAY, durationMin: 40, distanceKm: 5, type: 'Running' },
+  ];
+  const p = computeGoalProgress(distanceInput({}, { workouts, trainingDays: workouts.map(w => w.day) }));
+  assert.equal(p.distance!.stepTargetKm, 11); // 10 km x 1.10
+  assert.equal(p.distance!.thisWeekKm, 5);
+});
+
+test('endurance distance step: miles users get a whole-mile step; the structured field stays km', () => {
+  // Marcus in miles: 24.5 km = 15.2 mi last week -> 17 mi (27.4 km), goal 30 km = 18.6 mi; 22.7 km = 14.1 mi so far.
+  const p = computeGoalProgress(distanceInput({ 0: 12.7, 1: 10, 3: 10, 4: 8, 7: 6.5 }, { unitSystem: 'imperial' }));
+  assert.equal(p.distance!.targetKm, 30);
+  assert.equal(p.distance!.stepTargetKm, 27.4);
+  assert.equal(p.distance!.text, '14.1 of ~17 mi running this week · goal 18.6 mi');
+  // Within 10% of the goal in miles (28 km = 17.4 mi x 1.10 = 19.1 > 18.6): the goal.
+  const goal = computeGoalProgress(distanceInput({ 0: 6, 3: 14, 5: 14 }, { unitSystem: 'imperial' }));
+  assert.equal(goal.distance!.stepTargetKm, 30);
+  assert.equal(goal.distance!.text, '3.7 of 18.6 mi running this week');
 });
 
 test('endurance distance target with no distance readings: this week is null, verdict falls back to sessions', () => {
@@ -1019,7 +1092,7 @@ test('endurance Why: race, then the volume trend behind the verdict, then the lo
   assert.match(p.reasons[2].text, /^Long run 12 km · build to 18 km by /);
   // This week's distance lives in the stat, not in the reasons.
   assert.equal(p.reasons.some(r => r.kind === 'week_distance'), false);
-  assert.match(p.distance!.text, /of 30 km running this week$/);
+  assert.match(p.distance!.text, /of ~22 km running this week · goal 30 km$/);
   assertWellFormed(p);
 });
 
