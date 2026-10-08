@@ -455,8 +455,9 @@ final class ScreenshotTests: XCTestCase {
                 XCTAssertTrue(waitForText(app, containing: "Intervals 6×800 m"),
                                "Today's endurance hero should show today's session [\(appearance)]")
                 // Sessions line now shows session count only (e.g., "2 sessions this week"),
-                // while distance appears in a separate progress line.
-                XCTAssertTrue(waitForText(app, containing: "sessions"),
+                // while distance appears in a separate progress line. Match the singular
+                // "session" so Monday's "1 session this week" (Monday-start week) passes too.
+                XCTAssertTrue(waitForText(app, containing: "session"),
                                "Today's endurance hero should show the sessions line [\(appearance)]")
                 // Distance progress line in the format "X.X of ~27 km this week · goal 30 km":
                 // ONE target for the week (the safe ~10% step from last week's 24.5 km, the
