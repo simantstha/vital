@@ -669,6 +669,34 @@ final class FixtureCrossScreenConsistencyTests: XCTestCase {
         XCTAssertTrue(insight.hasSuffix("get the \(remaining) remaining sessions in by Sunday."), insight)
     }
 
+    /// Marcus ran his fastest 10k last night, so today's planned session must not
+    /// be a second 10 km tempo run. It is a hard session ("Intervals 6×800 m"),
+    /// so on his low-readiness day (HRV below / resting HR above normal) the
+    /// Today hero keeps its "swap to an easy 30 min or rest?" reconciliation.
+    func test_endurancePlannedSessionIsDistinctFromLastNightsRunAndStaysHard() throws {
+        let items = json(.endurance, "/api/plan")["items"] as? [[String: Any]] ?? []
+        let move = try XCTUnwrap(items.first { ($0["kind"] as? String) == "move" }, "endurance plan has a run")
+        let title = try XCTUnwrap(move["title"] as? String)
+        XCTAssertEqual(title, "Intervals 6×800 m")
+        XCTAssertFalse(title.contains("10km"), "must differ from last night's 10k")
+
+        let logs = json(.endurance, "/api/logs")["items"] as? [[String: Any]] ?? []
+        let lastNight = try XCTUnwrap(logs.first { ($0["type"] as? String) == "workout_completed" }?["title"] as? String)
+        XCTAssertEqual(lastNight, "10km tempo run")
+        XCTAssertNotEqual(title, lastNight)
+
+        let session = PlanItem(
+            timeMinutes: move["timeMinutes"] as? Int ?? 420, title: title,
+            subtitle: move["subtitle"] as? String ?? "", sfSymbol: "figure.run",
+            status: .later, source: .coach, kind: .move
+        )
+        XCTAssertTrue(EnduranceHeroLogic.isHardSession(session))
+        XCTAssertEqual(
+            EnduranceHeroLogic.reconciliationText(readinessWord: .recoverToday, isCalibrating: false, session: session),
+            "Your body says recover \u{2014} swap to an easy 30 min or rest?"
+        )
+    }
+
     /// Sam's insight keeps "0.6 kg" whole, like the rest of the unit copy.
     func test_weightLossInsightKeepsTheWeightAndUnitTogether() throws {
         let insight = try XCTUnwrap(json(.weightLoss, "/api/today")["insight"] as? String)

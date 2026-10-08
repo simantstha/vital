@@ -329,7 +329,7 @@ final class GoalHeroLogicTests: XCTestCase {
     }
 
     func testIsHardSessionRecognisesHardWorkoutsAndSparesEasyOnes() {
-        for title in ["10km tempo run", "6 x 800m intervals", "Long run", "Threshold session", "Hill repeats", "Race day", "VO2max set"] {
+        for title in ["10km tempo run", "6 x 800m intervals", "Intervals 6×800 m", "Long run", "Threshold session", "Hill repeats", "Race day", "VO2max set"] {
             XCTAssertTrue(EnduranceHeroLogic.isHardSession(session(title)), title)
         }
         for title in ["Easy 5km", "Recovery jog", "Easy long walk", "Yoga", "Strength"] {

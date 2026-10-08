@@ -452,7 +452,7 @@ final class ScreenshotTests: XCTestCase {
                 let readinessWords = ["Ready to push", "Good to train", "Keep it easy", "Recover today"]
                 XCTAssertTrue(readinessWords.contains { waitForText(app, containing: $0, timeout: 3) },
                                "Today's endurance hero should show a readiness word (one of \(readinessWords)) [\(appearance)]")
-                XCTAssertTrue(waitForText(app, containing: "8 km easy run"),
+                XCTAssertTrue(waitForText(app, containing: "Intervals 6×800 m"),
                                "Today's endurance hero should show today's session [\(appearance)]")
                 // Sessions line now shows session count only (e.g., "3 sessions this week"),
                 // while distance appears in a separate progress line.
