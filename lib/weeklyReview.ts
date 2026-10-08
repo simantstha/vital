@@ -107,6 +107,14 @@ export interface WeeklyReviewInput {
   budget: GoalProgressBudget | null;
   /** Distinct local days with a completed session, covering both weeks. */
   trainingDays: string[];
+  /**
+   * Muscle goal only: distinct local days with a STRENGTH session (logged sets
+   * or a HealthKit workout whose type matches /strength/i), covering both
+   * weeks — the same definition lib/goalProgress.ts uses. When present, the
+   * muscle review counts these instead of every training day (a run is not a
+   * lifting session). Other goals ignore it.
+   */
+  strengthDays?: string[];
   workouts: WeeklyReviewWorkout[];
   progression: ProgressionSummary;
   restingHr: DayValue[];
@@ -289,9 +297,14 @@ function avgKcalCandidate(input: WeeklyReviewInput, week: Week, prevWeek: Week):
   return { stat: { label: 'Avg calories', value: `${fmtKcal(avg)} kcal`, comparison: comparison ?? 'daily avg for the week', tone: 'neutral' } };
 }
 
-/** Distinct local days of the week with a completed session. */
+/** Days that count as a session for the goal: strength sessions only for muscle (mirrors goalProgress `sessionDays`). */
+function sessionDays(input: WeeklyReviewInput): string[] {
+  return input.goal === 'muscle' && input.strengthDays ? input.strengthDays : input.trainingDays;
+}
+
+/** Distinct local days of the week with a completed session (strength-only for muscle). */
 function weekSessionCount(input: WeeklyReviewInput, week: Week): number {
-  const train = new Set(input.trainingDays);
+  const train = new Set(sessionDays(input));
   return week.days.filter(d => train.has(d)).length;
 }
 

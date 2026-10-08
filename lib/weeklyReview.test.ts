@@ -713,3 +713,63 @@ test('weekRating is null for the not-enough-data review and always present in th
   const rated = JSON.parse(JSON.stringify(computeWeeklyReview(muscleWeek()))) as Record<string, unknown>;
   assert.equal(rated.weekRating, 'good');
 });
+
+// ── muscle sessions are strength-only (same definition as goal progress) ─────
+
+test('muscle: a run is not a session — Sessions stat, headline and weekRating count strength days only', () => {
+  // 3 strength days + a Friday run: all 4 are "training days", only 3 are strength sessions.
+  const strengthDays = [WEEK[0], WEEK[2], WEEK[4]];
+  const withRun = muscleWeek({ trainingDays: [...strengthDays, WEEK[5]], strengthDays });
+  const r = computeWeeklyReview(withRun);
+  assert.equal(statByLabel(r, 'Sessions')!.value, '3');
+  assert.equal(statByLabel(r, 'Sessions')!.comparison, 'target 4 for the week');
+  assert.match(r.headline, /^3 of 4 sessions/);
+  assert.equal(r.weekRating, 'mixed'); // 4 would have read "good"
+
+  // Without strengthDays (older callers) every training day still counts.
+  const legacy = computeWeeklyReview(muscleWeek({ trainingDays: [...strengthDays, WEEK[5]] }));
+  assert.equal(statByLabel(legacy, 'Sessions')!.value, '4');
+  assert.equal(legacy.weekRating, 'good');
+});
+
+test('muscle: a week with only a run has 0 sessions and is tough', () => {
+  const r = computeWeeklyReview(muscleWeek({ trainingDays: [WEEK[3]], strengthDays: [] }));
+  assert.equal(statByLabel(r, 'Sessions')!.value, '0');
+  assert.match(r.headline, /^0 of 4 sessions/);
+  assert.equal(r.weekRating, 'tough');
+  assert.equal(r.slip, '0 of 4 planned sessions done.');
+});
+
+test("muscle: last week's comparison is strength-only too (no weekly target)", () => {
+  const r = computeWeeklyReview(muscleWeek({
+    weeklySessionsTarget: null,
+    trainingDays: [PREV[0], PREV[1], PREV[2], WEEK[0], WEEK[2]],
+    strengthDays: [PREV[0], WEEK[0], WEEK[2]], // two of last week's three training days were runs
+  }));
+  const sessions = statByLabel(r, 'Sessions')!;
+  assert.equal(sessions.value, '2');
+  assert.equal(sessions.comparison, '1 last week');
+  assert.equal(sessions.tone, 'good'); // 2, up from 1
+});
+
+test('strengthDays only changes the muscle goal; other goals keep counting every training day', () => {
+  const trainingDays = [WEEK[0], WEEK[2], WEEK[4]];
+  const endurance = computeWeeklyReview(base({
+    goal: 'endurance',
+    trainingDays,
+    strengthDays: [],
+    workouts: trainingDays.map(day => ({ day, durationMin: 40, distanceKm: 8, type: 'Running' })),
+  }));
+  assert.equal(statByLabel(endurance, 'Sessions')!.value, '3');
+  const weightLoss = computeWeeklyReview(weightLossInput({ strengthDays: [] }));
+  assert.equal(statByLabel(weightLoss, 'Workouts')!.value, '3');
+  const general = computeWeeklyReview(base({
+    goal: 'general',
+    trainingDays,
+    strengthDays: [],
+    sleepMinutes: WEEK.map(day => ({ day, value: 470 })),
+    intakeDays: intake(WEEK.slice(0, 6), [2100, 2200, 2000, 2100, 2300, 2000]),
+  }));
+  assert.equal(statByLabel(general, 'Active days')!.value, '3');
+  assert.equal(general.weekRating, 'good');
+});

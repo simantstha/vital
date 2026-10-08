@@ -2147,6 +2147,8 @@ enum FixtureData {
         case .muscle:
             return review(
                 // 3 of 4 sessions = target - 1 -> mixed (protein 5/7 is not low).
+                // Sessions are strength-only for muscle (logged lifts + strength
+                // workouts, like the goal card's adherence); a run isn't counted.
                 // The goal card beside it says "Sessions behind" (4-week
                 // adherence 9/16): the pill rates this week only.
                 goal: "muscle", verdict: "progressing", weekRating: "mixed",

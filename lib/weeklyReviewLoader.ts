@@ -19,7 +19,7 @@ import { resolveDailyIntake } from '@/lib/brain/nutritionIntake';
 import { normalizeGoal, resolveDietBudget } from '@/lib/brain/dietBudget';
 import { resolveUnitSystem } from '@/lib/units';
 import { loadGoalProgress } from '@/lib/goalProgressLoader';
-import type { DayValue, GoalProgressBudget } from '@/lib/goalProgress';
+import { isStrengthWorkoutType, type DayValue, type GoalProgressBudget } from '@/lib/goalProgress';
 import { endOfLocalWeek, shouldRecomputeReview } from '@/lib/weeklyReviewFreshness';
 import { buildExerciseDisplay, computeWeeklyReview, lastCompletedWeekStart, signupLocalDay, type WeeklyReview } from '@/lib/weeklyReview';
 
@@ -101,6 +101,13 @@ export async function computeLastWeekReview(
   };
 
   const trainingDays = new Set<string>([...completedLocalDays(sets), ...healthKitWorkoutDays(workoutEntries)]);
+  // Muscle goal: strength sessions only — logged sets plus HealthKit strength
+  // workouts (same definition as lib/goalProgressLoader.ts), so a run is not a
+  // session in the review's Sessions stat, headline or weekRating.
+  const strengthDays = new Set<string>([
+    ...completedLocalDays(sets),
+    ...healthKitWorkoutDays(workoutEntries.filter(w => isStrengthWorkoutType(typeof w.type === 'string' ? w.type : null))),
+  ]);
 
   return computeWeeklyReview({
     goal,
@@ -114,6 +121,7 @@ export async function computeLastWeekReview(
     }),
     budget: budgetInput,
     trainingDays: [...trainingDays].filter(d => daySet.has(d)),
+    strengthDays: [...strengthDays].filter(d => daySet.has(d)),
     workouts: workoutEntries
       .filter(w => daySet.has(w.date))
       .map(w => ({
