@@ -114,7 +114,7 @@ enum FixtureData {
         let invite = "What would you like to dig into?"
         switch scenario {
         case .endurance:
-            return "Goal check-in: Building — distance up 12% (last 2 weeks vs the 2 before). \(invite)"
+            return "Goal check-in: Building — distance up \(enduranceVolumeChangePct)% (last 2 weeks vs the 2 before). \(invite)"
         case .weightLoss:
             // Mirrors goalProgress(): start 83.7 kg, target 76 kg, target
             // date 84 days out, ETA 70 days out => 14 days (2 weeks) ahead.
@@ -420,6 +420,18 @@ enum FixtureData {
         f.locale = Locale(identifier: "en_US_POSIX")
         f.dateFormat = "MMM d"
         return f.string(from: date)
+    }
+
+    /// "mid-Dec" for the day `daysAhead` days from today — mirrors
+    /// lib/goalProgress.ts `looseMonthPosition` (days 1–7 early, 8–22 mid, 23+ late).
+    private static func looseMonthPosition(daysAhead: Int) -> String {
+        let date = Calendar.current.date(byAdding: .day, value: daysAhead, to: Date()) ?? Date()
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "MMM"
+        let month = f.string(from: date)
+        let day = Calendar.current.component(.day, from: date)
+        return day <= 7 ? "early \(month)" : day <= 22 ? "mid-\(month)" : "late \(month)"
     }
 
     private static func dayString(_ daysAgo: Int) -> String {
@@ -1655,6 +1667,22 @@ enum FixtureData {
     private static let enduranceRaceDaysOut = 84
     private static let enduranceRaceDistanceKm = 21.1
 
+    /// Weekly running km, oldest -> newest (the newest is the last completed
+    /// week — the weekly review's "24.5 km", +12% on the 21.9 before it).
+    static let enduranceWeeklyKm: [Double] = [20.1, 23.7, 21.9, 24.5]
+    /// Mean of the last 2 / the 2 before / all 4 of `enduranceWeeklyKm`
+    /// (23.2, 21.9, 22.55 → 22.6) and the resulting volume change (+6%) —
+    /// the single set of numbers behind the goal card, Today line and coach opener.
+    static let enduranceLast2WeeksAvgKm = 23.2
+    static let endurancePrior2WeeksAvgKm = 21.9
+    static let enduranceFourWeekAvgKm = 22.6
+    static let enduranceVolumeChangePct = 6
+    /// Long runs (running only): the latest one, the 28-day peak, and the
+    /// half-marathon peak target (lib/goalProgress.ts `longRunTargetKm`).
+    static let enduranceLastLongRunKm = 14.0
+    static let endurancePeakLongRunKm = 16.0
+    static let enduranceLongRunTargetKm = 18.0
+
     /// Earlier-in-the-week runs (index 0 = Monday) the endurance persona has
     /// logged by today; today's tempo run (`workoutKm`) is added on top. Chosen
     /// so this week's running totals never equal LAST week's review (3
@@ -2025,22 +2053,29 @@ enum FixtureData {
             ]
         case .endurance:
             // This week (Mon–today) comes from the SAME `enduranceWeek()` as
-            // Today's training summary; the 4-week average / volume change use
-            // the review's week figures (24.5 km last week, 21.9 the week
-            // before => 23.2 km/week average, +12%).
+            // Today's training summary. The 4-week average / volume change
+            // derive from `enduranceWeeklyKm` (weeks 20.1, 23.7, 21.9, 24.5 km;
+            // the newest two are the weekly review's "24.5 km, +12% vs last
+            // week"): last 2 weeks 23.2 km/wk vs the 2 before 21.9 => +6%.
             let week = enduranceWeek()
             let target = enduranceWeeklyDistanceTargetKm
             let thisWeekText = "\(trimmedKm(week.km)) of \(trimmedKm(target)) km this week"
+            // Peak long run is planned 3 weeks before the race (lib/goalProgress.ts).
+            let longRunBy = looseMonthPosition(daysAhead: enduranceRaceDaysOut - 21)
             return [
                 "goal": "endurance",
                 "target": ["weightKg": none, "date": none, "weeklySessions": none, "weeklyDistanceKm": target],
                 "distance": [
-                    "targetKm": target, "thisWeekKm": week.km, "avg4wKm": 23.2,
+                    "targetKm": target, "thisWeekKm": week.km, "avg4wKm": enduranceFourWeekAvgKm,
                     "weekStart": week.start, "text": thisWeekText,
                 ],
                 "race": [
                     "date": dayString(-enduranceRaceDaysOut), "distanceKm": enduranceRaceDistanceKm,
                     "label": "Half marathon", "weeksToGo": enduranceRaceDaysOut / 7, "daysToGo": enduranceRaceDaysOut,
+                ],
+                "longRun": [
+                    "lastKm": enduranceLastLongRunKm, "peakKm": endurancePeakLongRunKm,
+                    "targetPeakKm": enduranceLongRunTargetKm,
                 ],
                 "current": ["weightKg": profile.weightKg, "startWeightKg": none, "changeKg": none, "progressPct": none],
                 "ratePerWeek": ["kg": none, "pctBodyweight": none],
@@ -2050,12 +2085,18 @@ enum FixtureData {
                 "verdict": "building",
                 // ONE volume definition everywhere (goal card, Today line):
                 // last 2 weeks vs the 2 before — always labelled.
-                "headline": "Building — distance up 12% (last 2 weeks vs the 2 before)",
-                // Server caps reasons at 3 and leads with the race countdown.
+                "headline": "Building — distance up \(enduranceVolumeChangePct)% (last 2 weeks vs the 2 before)",
+                // Server caps reasons at 3: the race countdown leads, then this
+                // week's distance, then the long-run build (which displaces the
+                // volume reason — the headline carries the volume change).
                 "reasons": [
                     reason("race", "Half marathon in \(enduranceRaceDaysOut / 7) weeks (\(raceMonthDay(-enduranceRaceDaysOut)))", "neutral"),
                     reason("week_distance", thisWeekText, week.km >= target ? "good" : "neutral"),
-                    reason("volume", "Weekly training distance up 12% (21.9 km → 24.5 km a week, last 2 weeks vs the 2 before)", "good"),
+                    reason(
+                        "long_run",
+                        "Long run \(trimmedKm(enduranceLastLongRunKm)) km · build to \(trimmedKm(enduranceLongRunTargetKm)) km by \(longRunBy)",
+                        "neutral"
+                    ),
                 ],
                 "dataSufficiency": ["weighIns": 4, "needed": 3, "sessionsLast28d": 12],
             ]

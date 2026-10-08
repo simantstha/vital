@@ -212,4 +212,16 @@ final class MemoryLogicTests: XCTestCase {
         ]
         XCTAssertEqual(MemoryLogic.filterEntities(entities, query: "may").map(\.id), ["e2"])
     }
+
+    func testGoalSummaryIncludesTheEnduranceRaceLikeTheProfileRow() {
+        XCTAssertEqual(
+            MemoryLogic.goalSummary(goalId: "endurance", targetWeightKg: nil, weeklySessions: nil, weeklyDistanceKm: 30, raceDate: "2999-12-30", raceDistanceKm: 21.1, system: .metric),
+            "Endurance \u{00B7} 30 km/week \u{00B7} Half marathon Dec 30"
+        )
+        XCTAssertEqual(
+            MemoryLogic.goalSummary(goalId: "endurance", targetWeightKg: nil, weeklySessions: nil, weeklyDistanceKm: 30, system: .metric),
+            "Endurance \u{00B7} 30 km/week"
+        )
+    }
+
 }

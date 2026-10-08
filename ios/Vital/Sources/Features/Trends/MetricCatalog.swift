@@ -76,6 +76,8 @@ extension MetricSpec {
     /// Formats an already-scaled value to this metric's rounding precision,
     /// with its unit suffix (omitted for unitless counts like steps).
     func format(_ value: Double, _ system: UnitSystem) -> String {
+        // Sleep reads as "5h 48m", not "5.8 h" (see `TrendsDeltaFormat.isDuration`).
+        if TrendsDeltaFormat.isDuration(self) { return TrendsDeltaFormat.durationText(hours: value) }
         let formatted = String(format: "%.\(decimals)f", value)
         let unitLabel = unit(system)
         return unitLabel.isEmpty ? formatted : "\(formatted) \(unitLabel)"

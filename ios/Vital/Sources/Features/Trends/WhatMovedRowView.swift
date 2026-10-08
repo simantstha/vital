@@ -29,10 +29,10 @@ struct WhatMovedRowView: View {
                     .foregroundStyle(Theme.Colors.textPrimary)
                     .lineLimit(1)
                 HStack(alignment: .lastTextBaseline, spacing: 3) {
-                    Text(TrendsDeltaFormat.formattedNumber(row.value, decimals: spec.decimals))
+                    Text(TrendsDeltaFormat.valueText(row.value, spec: spec))
                         .font(Theme.Typography.numericSmall(17))
                         .foregroundStyle(Theme.Colors.textPrimary)
-                    let unit = spec.unit(unitSystem)
+                    let unit = TrendsDeltaFormat.unitLabel(spec: spec, system: unitSystem)
                     if !unit.isEmpty {
                         Text(unit)
                             .font(.system(size: 11, weight: .medium))

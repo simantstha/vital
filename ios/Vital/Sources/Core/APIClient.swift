@@ -2224,6 +2224,37 @@ struct GoalProgressDTO: Decodable, Equatable {
         }
     }
 
+    /// Endurance long-run readiness (running only, km): the most recent long
+    /// run, the longest single run of the last 28 days and the peak to build to
+    /// before the taper (by race distance; `nil` without a race distance).
+    struct LongRun: Decodable, Equatable {
+        let lastKm: Double?
+        let peakKm: Double?
+        let targetPeakKm: Double?
+
+        private enum CodingKeys: String, CodingKey { case lastKm, peakKm, targetPeakKm }
+
+        init(lastKm: Double? = nil, peakKm: Double? = nil, targetPeakKm: Double? = nil) {
+            self.lastKm = lastKm
+            self.peakKm = peakKm
+            self.targetPeakKm = targetPeakKm
+        }
+
+        /// Throws when neither distance decodes so the enclosing `try?` drops
+        /// the whole long run (a row with nothing to say is not shown).
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            let last = try? c.decode(Double.self, forKey: .lastKm)
+            let peak = try? c.decode(Double.self, forKey: .peakKm)
+            guard last != nil || peak != nil else {
+                throw DecodingError.dataCorruptedError(forKey: .lastKm, in: c, debugDescription: "long run has no distance")
+            }
+            lastKm = last
+            peakKm = peak
+            targetPeakKm = try? c.decode(Double.self, forKey: .targetPeakKm)
+        }
+    }
+
     struct Current: Decodable, Equatable {
         let weightKg: Double?
         let startWeightKg: Double?
@@ -2303,6 +2334,8 @@ struct GoalProgressDTO: Decodable, Equatable {
     let distance: Distance?
     /// Endurance race countdown; `nil` when no race is set / it has passed / older servers.
     let race: Race?
+    /// Endurance long-run readiness; `nil` without running distances / older servers.
+    let longRun: LongRun?
     let current: Current
     let ratePerWeek: Rate
     let safeBand: SafeBand?
@@ -2318,7 +2351,7 @@ struct GoalProgressDTO: Decodable, Equatable {
     let lastWeighInDaysAgo: Int?
 
     private enum CodingKeys: String, CodingKey {
-        case goal, target, distance, race, current, ratePerWeek, safeBand, eta, onPaceForTargetDate
+        case goal, target, distance, race, longRun, current, ratePerWeek, safeBand, eta, onPaceForTargetDate
         case verdict, headline, reasons, dataSufficiency, lastWeighInDaysAgo
     }
 
@@ -2327,6 +2360,7 @@ struct GoalProgressDTO: Decodable, Equatable {
         target: Target = Target(),
         distance: Distance? = nil,
         race: Race? = nil,
+        longRun: LongRun? = nil,
         current: Current = Current(),
         ratePerWeek: Rate = Rate(),
         safeBand: SafeBand? = nil,
@@ -2343,6 +2377,7 @@ struct GoalProgressDTO: Decodable, Equatable {
         self.target = target
         self.distance = distance
         self.race = race
+        self.longRun = longRun
         self.current = current
         self.ratePerWeek = ratePerWeek
         self.safeBand = safeBand
@@ -2360,6 +2395,7 @@ struct GoalProgressDTO: Decodable, Equatable {
         target = (try? c.decode(Target.self, forKey: .target)) ?? Target()
         distance = try? c.decode(Distance.self, forKey: .distance)
         race = try? c.decode(Race.self, forKey: .race)
+        longRun = try? c.decode(LongRun.self, forKey: .longRun)
         current = (try? c.decode(Current.self, forKey: .current)) ?? Current()
         ratePerWeek = (try? c.decode(Rate.self, forKey: .ratePerWeek)) ?? Rate()
         safeBand = try? c.decode(SafeBand.self, forKey: .safeBand)

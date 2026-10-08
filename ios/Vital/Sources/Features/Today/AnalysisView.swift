@@ -556,6 +556,8 @@ struct WorkoutAnalysisContent: View {
     private var metrics: AnalysisMetrics? { value.metrics }
     private var context: AnalysisContext? { value.context }
     private var type: String { metrics?.type ?? "Workout" }
+    /// "run" / "ride" / "walk" / "swim" / "session" — copy never hard-codes "run".
+    private var noun: String { AnalysisLogic.activityNoun(type: metrics?.type) }
     private var startDate: Date? { metrics?.startTime.flatMap(AnalysisView.parseISO) }
 
     // MARK: Devices
@@ -622,7 +624,7 @@ struct WorkoutAnalysisContent: View {
                     }
                 }
 
-                AskCoachLink(label: "Ask coach about this run") {
+                AskCoachLink(label: AnalysisLogic.askCoachLabel(noun: noun)) {
                     router.coachContext = "Let's discuss my \(kind.subject) from \(value.date): \(value.result.headline). \(value.result.shortInsight)"
                     router.route = nil
                 }
@@ -873,21 +875,33 @@ struct WorkoutAnalysisContent: View {
     private var statsRow: some View {
         if !stats.isEmpty {
             VitalCard {
-                HStack(alignment: .top, spacing: Theme.Spacing.md) {
-                    ForEach(Array(stats.enumerated()), id: \.offset) { _, stat in
-                        VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
-                            HStack(alignment: .lastTextBaseline, spacing: 3) {
-                                Text(stat.value).font(Theme.Typography.numericLarge(26)).foregroundStyle(Theme.Colors.textPrimary)
-                                if !stat.unit.isEmpty {
-                                    Text(stat.unit).font(.system(size: 12)).foregroundStyle(Theme.Colors.textSecondary)
+                VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+                    HStack(alignment: .top, spacing: Theme.Spacing.md) {
+                        ForEach(Array(stats.enumerated()), id: \.offset) { _, stat in
+                            VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
+                                HStack(alignment: .lastTextBaseline, spacing: 3) {
+                                    Text(stat.value).font(Theme.Typography.numericLarge(26)).foregroundStyle(Theme.Colors.textPrimary)
+                                    if !stat.unit.isEmpty {
+                                        Text(stat.unit).font(.system(size: 12)).foregroundStyle(Theme.Colors.textSecondary)
+                                    }
+                                }
+                                Text(stat.label).font(.system(size: 12)).foregroundStyle(Theme.Colors.textSecondary)
+                                if let chip = stat.chip {
+                                    ChipView(chip: chip, scalesToFit: true).padding(.top, Theme.Spacing.xxs)
                                 }
                             }
-                            Text(stat.label).font(.system(size: 12)).foregroundStyle(Theme.Colors.textSecondary)
-                            if let chip = stat.chip {
-                                ChipView(chip: chip, scalesToFit: true).padding(.top, Theme.Spacing.xxs)
-                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    // The chips ("+1.4 km", "7 s faster") are deltas — say what
+                    // they are measured against, in one line under the row
+                    // (a per-chip "vs usual" suffix clipped in the narrow columns).
+                    if stats.contains(where: { $0.chip != nil }),
+                       let basis = AnalysisLogic.usualBasisCaption(sessions: context?.usual?.sessions, noun: noun) {
+                        Text(basis)
+                            .font(.system(size: 12))
+                            .foregroundStyle(Theme.Colors.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
             }
@@ -901,18 +915,18 @@ struct WorkoutAnalysisContent: View {
     private func paceHistorySection(_ paceHistory: AnalysisContext.PaceHistory) -> some View {
         let total = paceHistory.previous.count + 1
         return VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-            AnalysisSectionHeader(title: "Compared to your last \(total) runs", trailing: "pace")
+            AnalysisSectionHeader(title: AnalysisLogic.paceHistoryTitle(total: total, noun: noun), trailing: "pace")
             VitalCard(padding: Theme.Spacing.lg) {
                 VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
                     PaceHistoryStrip(previous: paceHistory.previous, current: value.metrics?.paceMinPerKm ?? 0)
                         .frame(height: 40)
-                        .accessibilityLabel(AnalysisLogic.paceRankPhrase(rank: paceHistory.rank, previousCount: paceHistory.previous.count))
+                        .accessibilityLabel(AnalysisLogic.paceRankPhrase(rank: paceHistory.rank, previousCount: paceHistory.previous.count, noun: noun))
                     HStack {
                         Text("slower").font(.system(size: 12)).foregroundStyle(Theme.Colors.textSecondary)
                         Spacer()
                         Text("faster").font(.system(size: 12)).foregroundStyle(Theme.Colors.textSecondary)
                     }
-                    Text(AnalysisLogic.paceRankPhrase(rank: paceHistory.rank, previousCount: paceHistory.previous.count))
+                    Text(AnalysisLogic.paceRankPhrase(rank: paceHistory.rank, previousCount: paceHistory.previous.count, noun: noun))
                         .font(.system(size: 13))
                         .foregroundStyle(Theme.Colors.textSecondary)
                 }
@@ -943,7 +957,7 @@ struct WorkoutAnalysisContent: View {
                         .accessibilityLabel("Effort \(AnalysisLogic.effortZoneLabel(effort.zone).lowercased()). \(AnalysisLogic.effortDescription(avgFraction: effort.avgPct))")
                     // #249 polish: a small legend so the tick/ring markers on
                     // the bar above aren't left unexplained.
-                    EffortZoneLegend(showsMaxMarker: maxHrMarkerFraction(effort) != nil)
+                    EffortZoneLegend(showsMaxMarker: maxHrMarkerFraction(effort) != nil, noun: noun)
                     HStack {
                         Text("resting \(Int(effort.restingHr.rounded()))").font(.system(size: 12)).foregroundStyle(Theme.Colors.textSecondary)
                         Spacer()
@@ -983,11 +997,11 @@ struct WorkoutAnalysisContent: View {
                                 isFirst: goingIn.sleepMinutes == nil)
                     }
                     if let days = goingIn.daysSinceLastSameType {
-                        DataRow(icon: "clock.fill", label: "Since your last hard run",
+                        DataRow(icon: "clock.fill", label: AnalysisLogic.sinceLastHardLabel(noun: noun),
                                 chip: .init(text: "\(days) day\(days == 1 ? "" : "s")", tone: .neutral),
                                 isFirst: goingIn.sleepMinutes == nil && goingIn.hrv == nil)
                     }
-                    Text("From your data before the run started.")
+                    Text(AnalysisLogic.goingInFootnote(noun: noun))
                         .font(.system(size: 12))
                         .foregroundStyle(Theme.Colors.textSecondary)
                         .padding(.top, Theme.Spacing.xs)
@@ -1151,6 +1165,8 @@ private struct EffortZoneBar: View {
 /// actually drawn.
 private struct EffortZoneLegend: View {
     let showsMaxMarker: Bool
+    /// Activity noun ("run", "ride", …) for the max-marker entry.
+    var noun: String = "run"
 
     var body: some View {
         HStack(spacing: Theme.Spacing.lg) {
@@ -1167,7 +1183,7 @@ private struct EffortZoneLegend: View {
                     Circle()
                         .strokeBorder(Theme.Colors.textPrimary, lineWidth: 1.5)
                         .frame(width: 8, height: 8)
-                    Text("this run's max")
+                    Text(AnalysisLogic.maxMarkerLegend(noun: noun))
                         .font(.system(size: 11))
                         .foregroundStyle(Theme.Colors.textSecondary)
                 }

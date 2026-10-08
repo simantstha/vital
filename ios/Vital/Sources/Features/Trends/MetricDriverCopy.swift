@@ -136,10 +136,9 @@ enum MetricDriverCopy {
         unitSystem: UnitSystem
     ) -> String? {
         guard let high = driver.high, let low = driver.low else { return nil }
-        let decimals = outcomeSpec?.decimals ?? 0
-        let unit = outcomeSpec?.unit(unitSystem) ?? ""
-        let highText = TrendsDeltaFormat.formattedNumber(high.mean, decimals: decimals)
-        let lowText = TrendsDeltaFormat.formattedNumber(low.mean, decimals: decimals)
+        let unit = TrendsDeltaFormat.unitLabel(spec: outcomeSpec, system: unitSystem)
+        let highText = TrendsDeltaFormat.valueText(high.mean, spec: outcomeSpec)
+        let lowText = TrendsDeltaFormat.valueText(low.mean, spec: outcomeSpec)
         return unit.isEmpty ? "\(highText) vs \(lowText)" : "\(highText) vs \(lowText) \(unit)"
     }
 

@@ -92,16 +92,16 @@ enum AnalysisLogic {
     /// "Compared to your last N runs" caption, from `paceHistory.rank`
     /// (1 = fastest) among `previous.count + 1` total runs (the previous
     /// runs plus this one).
-    static func paceRankPhrase(rank: Int, previousCount: Int) -> String {
+    static func paceRankPhrase(rank: Int, previousCount: Int, noun: String = "run") -> String {
         let total = previousCount + 1
         guard total > 0 else { return "" }
         if rank <= 1 {
-            return "Quickest of your last \(total) runs."
+            return "Quickest of your last \(total) \(noun)s."
         }
         if rank >= total {
-            return "Slowest of your last \(total) runs."
+            return "Slowest of your last \(total) \(noun)s."
         }
-        return "\(ordinal(rank)) fastest of your last \(total) runs."
+        return "\(ordinal(rank)) fastest of your last \(total) \(noun)s."
     }
 
     private static func ordinal(_ n: Int) -> String {
@@ -310,6 +310,56 @@ enum AnalysisLogic {
         case "Strength Training": return "STRENGTH"
         default: return type.uppercased()
         }
+    }
+
+    // MARK: - Activity noun
+
+    /// Singular noun for the analysed activity, for copy that must not
+    /// hard-code "run": "run" | "ride" | "walk" | "swim", otherwise the neutral
+    /// "session" (strength, hiking, rowing, an unknown or missing type). Reads
+    /// the app's title-case workout type name (`HealthKitBackfill
+    /// .workoutTypeName`, e.g. "Running", "Cycling").
+    static func activityNoun(type: String?) -> String {
+        let t = (type ?? "").lowercased()
+        if t.contains("run") { return "run" }
+        if t.contains("cycl") { return "ride" }
+        if t.contains("walk") { return "walk" }
+        if t.contains("swim") { return "swim" }
+        return "session"
+    }
+
+    /// "Since your last hard run" / "… hard ride" / "… hard session".
+    static func sinceLastHardLabel(noun: String) -> String {
+        "Since your last hard \(noun)"
+    }
+
+    /// Footnote under the "Going in" rows.
+    static func goingInFootnote(noun: String) -> String {
+        "From your data before the \(noun) started."
+    }
+
+    /// Effort-bar legend entry for the recorded max-HR marker.
+    static func maxMarkerLegend(noun: String) -> String {
+        "this \(noun)'s max"
+    }
+
+    /// "Ask coach about this run" / "… this ride".
+    static func askCoachLabel(noun: String) -> String {
+        "Ask coach about this \(noun)"
+    }
+
+    /// "Compared to your last 6 runs" / "… 6 rides".
+    static func paceHistoryTitle(total: Int, noun: String) -> String {
+        "Compared to your last \(total) \(noun)s"
+    }
+
+    /// The basis of the stat chips' deltas ("+1.4 km", "7 s faster"): the
+    /// median of the previous same-type workouts the server compared against
+    /// (`usual.sessions`, lib/analysisContext.ts). `nil` when that count is
+    /// unknown or zero.
+    static func usualBasisCaption(sessions: Int?, noun: String) -> String? {
+        guard let sessions, sessions > 0 else { return nil }
+        return "Changes are vs your usual \u{2014} the median of your last \(sessions) \(noun)\(sessions == 1 ? "" : "s")."
     }
 
     /// "RUN · MON 7:41 AM" (US) / "RUN · LUN 19:41" (a 24-hour locale) —

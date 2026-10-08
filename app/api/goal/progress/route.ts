@@ -12,6 +12,8 @@
  *   goal: 'weight_loss' | 'muscle' | 'endurance' | 'general',
  *   target:  { weightKg, date, weeklySessions, weeklyDistanceKm },
  *   distance: { targetKm, thisWeekKm, avg4wKm, weekStart, text } | null,   // endurance + distance target only
+ *   race: { date, distanceKm, label, weeksToGo, daysToGo } | null,          // endurance + upcoming race only
+ *   longRun: { lastKm, peakKm, targetPeakKm | null } | null,                // endurance + running distances in the last 28 days; km
  *   current: { weightKg, startWeightKg, changeKg, progressPct },
  *   ratePerWeek: { kg, pctBodyweight },          // signed: negative = losing
  *   safeBand: { minPct, maxPct } | null,

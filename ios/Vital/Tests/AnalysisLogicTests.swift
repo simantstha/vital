@@ -543,4 +543,47 @@ final class AnalysisLogicTests: XCTestCase {
             XCTAssertFalse(AnalysisLogic.effortDescription(avgFraction: f).contains("%"))
         }
     }
+
+    // MARK: - Activity noun (non-run workouts never say "run")
+
+    func testActivityNounFollowsTheWorkoutType() {
+        XCTAssertEqual(AnalysisLogic.activityNoun(type: "Running"), "run")
+        XCTAssertEqual(AnalysisLogic.activityNoun(type: "Trail Running"), "run")
+        XCTAssertEqual(AnalysisLogic.activityNoun(type: "Cycling"), "ride")
+        XCTAssertEqual(AnalysisLogic.activityNoun(type: "Walking"), "walk")
+        XCTAssertEqual(AnalysisLogic.activityNoun(type: "Swimming"), "swim")
+        XCTAssertEqual(AnalysisLogic.activityNoun(type: "Strength Training"), "session")
+        XCTAssertEqual(AnalysisLogic.activityNoun(type: "Hiking"), "session")
+        XCTAssertEqual(AnalysisLogic.activityNoun(type: "Workout"), "session")
+        XCTAssertEqual(AnalysisLogic.activityNoun(type: ""), "session")
+        XCTAssertEqual(AnalysisLogic.activityNoun(type: nil), "session")
+    }
+
+    func testWorkoutCopyTakesTheNounInsteadOfHardCodingRun() {
+        XCTAssertEqual(AnalysisLogic.sinceLastHardLabel(noun: "run"), "Since your last hard run")
+        XCTAssertEqual(AnalysisLogic.sinceLastHardLabel(noun: "ride"), "Since your last hard ride")
+        XCTAssertEqual(AnalysisLogic.sinceLastHardLabel(noun: "session"), "Since your last hard session")
+        XCTAssertEqual(AnalysisLogic.goingInFootnote(noun: "walk"), "From your data before the walk started.")
+        XCTAssertEqual(AnalysisLogic.maxMarkerLegend(noun: "ride"), "this ride's max")
+        XCTAssertEqual(AnalysisLogic.askCoachLabel(noun: "swim"), "Ask coach about this swim")
+        XCTAssertEqual(AnalysisLogic.paceHistoryTitle(total: 6, noun: "ride"), "Compared to your last 6 rides")
+        XCTAssertEqual(AnalysisLogic.paceRankPhrase(rank: 1, previousCount: 5, noun: "ride"), "Quickest of your last 6 rides.")
+        XCTAssertEqual(AnalysisLogic.paceRankPhrase(rank: 3, previousCount: 5, noun: "walk"), "3rd fastest of your last 6 walks.")
+        // The default noun is unchanged for existing run callers.
+        XCTAssertEqual(AnalysisLogic.paceRankPhrase(rank: 6, previousCount: 5), "Slowest of your last 6 runs.")
+    }
+
+    func testUsualBasisCaptionNamesWhatTheChipsCompareAgainst() {
+        XCTAssertEqual(
+            AnalysisLogic.usualBasisCaption(sessions: 8, noun: "run"),
+            "Changes are vs your usual \u{2014} the median of your last 8 runs."
+        )
+        XCTAssertEqual(
+            AnalysisLogic.usualBasisCaption(sessions: 5, noun: "session"),
+            "Changes are vs your usual \u{2014} the median of your last 5 sessions."
+        )
+        XCTAssertNil(AnalysisLogic.usualBasisCaption(sessions: nil, noun: "run"))
+        XCTAssertNil(AnalysisLogic.usualBasisCaption(sessions: 0, noun: "run"))
+    }
+
 }
