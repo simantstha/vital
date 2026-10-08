@@ -155,7 +155,7 @@ enum FixtureData {
         .weightLoss: Profile(
             goal: "weight_loss",
             name: "Sam Rivera",
-            insight: "You're down 0.6kg this week, but last night's sleep ran short (6h 50m) — keep the deficit gentle and aim for an earlier night.",
+            insight: "You're down 0.6\u{00A0}kg this week, but last night's sleep ran short (6h 50m) — keep the deficit gentle and aim for an earlier night.",
             established: true,
             targetKcal: 1850, consumedKcal: 1020,
             protein: 96, proteinTarget: 150, carbs: 79, carbsTarget: 165, fat: 35, fatTarget: 62,
@@ -185,7 +185,11 @@ enum FixtureData {
             // The weekday is derived from the SAME relative date as `lastLift`
             // below (2 days ago), so "Tuesday's squat" can never contradict
             // "Last (Tue): Squat 3×5 @ 140 kg" whatever day the fixture runs.
-            insight: "Protein's on target four days running and \(weekdayName(daysAgo: 2))'s squat was your best in 4 weeks — stay the course.",
+            // "2 remaining" = the 4-session weekly target minus the 2 done this
+            // week (`plannedSessionsThisWeek` / `completedSessionsThisWeek`
+            // below), so it agrees with the goal line's "2 more by Sun" (the
+            // goal verdict is "Sessions behind") — pinned in FixtureCrossScreenConsistencyTests.
+            insight: "Protein's on target four days running and \(weekdayName(daysAgo: 2))'s squat was your best in 4 weeks — get the 2 remaining sessions in by Sunday.",
             established: true,
             targetKcal: 2900, consumedKcal: 1560,
             protein: 158, proteinTarget: 190, carbs: 138, carbsTarget: 300, fat: 42, fatTarget: 85,
@@ -225,8 +229,8 @@ enum FixtureData {
             protein: 92, proteinTarget: 130, carbs: 136, carbsTarget: 340, fat: 25, fatTarget: 75,
             plan: [
                 FixturePlanItem(title: "Banana + peanut butter toast", timeMinutes: 390, kind: "meal", subtitle: "Breakfast · 6:30 AM", kcal: 340, why: "Fast-digesting carbs ahead of the morning run."),
-                FixturePlanItem(title: "10km tempo run", timeMinutes: 420, kind: "move", subtitle: "Run · 7:00 AM", kcal: nil, why: "Race-pace intervals to build lactate threshold."),
-                FixturePlanItem(title: "Rice bowl with chicken", timeMinutes: 780, kind: "meal", subtitle: "Lunch · 1:00 PM", kcal: 560, why: "Replenishes glycogen spent on the tempo run."),
+                FixturePlanItem(title: "Intervals 6×800 m", timeMinutes: 420, kind: "move", subtitle: "Run · 7:00 AM", kcal: nil, why: "Race-pace reps to sharpen top-end speed."),
+                FixturePlanItem(title: "Rice bowl with chicken", timeMinutes: 780, kind: "meal", subtitle: "Lunch · 1:00 PM", kcal: 560, why: "Replenishes glycogen spent on the morning intervals."),
                 FixturePlanItem(title: "Electrolyte smoothie", timeMinutes: 990, kind: "meal", subtitle: "Snack · 4:30 PM", kcal: 240, why: "Rehydration ahead of tomorrow's easy run."),
                 FixturePlanItem(title: "Pasta with turkey ragu", timeMinutes: 1140, kind: "meal", subtitle: "Dinner · 7:00 PM", kcal: 620, why: "Carb-forward dinner to top off glycogen stores."),
             ],
@@ -1394,16 +1398,25 @@ enum FixtureData {
     /// matching the mockup's absence of both.
     private static func routineRunAnalysis(profile: Profile, scenario: FixtureMode.Scenario) -> [String: Any] {
         if scenario == .muscle { return routineWalkAnalysis(profile: profile, scenario: scenario) }
+        // `avgHr` feeds BOTH `metrics` (the "avg 131 · max 142 bpm" label) and
+        // `effort.avgPct` (derived exactly as AnalysisView places the bar's
+        // tick), so the two can never disagree.
+        let avgHr = 131.0
+        let restingHr = normalBase("resting_hr", profile, scenario).rounded()
+        let effort: [String: Any] = [
+            "restingHr": restingHr, "maxHr": 188.0, "zone": "easy",
+            "avgPct": AnalysisLogic.heartRateRangeFraction(avgHr, restingHr: restingHr, maxHr: 188.0),
+        ]
         let metrics: [String: Any] = [
             "type": "Running", "durationMin": 35.67, "kcal": 340.0,
-            "distanceM": 6_100.0, "avgHr": 131.0, "maxHr": 142.0,
+            "distanceM": 6_100.0, "avgHr": avgHr, "maxHr": 142.0,
             "paceMinPerKm": 5.85, "elevationGainM": 12.0,
             "startTime": isoAt(daysAgo: 0, hour: 6, minute: 52),
         ]
         let context: [String: Any] = [
             "usual": ["sessions": 8, "distanceM": 6_050.0, "durationMin": 35.0, "paceMinPerKm": 5.83, "avgHr": 129.0],
             "paceHistory": ["previous": [5.60, 5.95, 5.70, 6.05, 5.80, 5.90, 5.65], "rank": 5],
-            "effort": ["restingHr": normalBase("resting_hr", profile, scenario).rounded(), "maxHr": 188.0, "avgPct": 0.58, "zone": "easy"],
+            "effort": effort,
             // This morning's run: "going in" = last night's sleep + today's HRV.
             "goingIn": [
                 "sleepMinutes": profile.sleepMinutes,
@@ -1432,14 +1445,25 @@ enum FixtureData {
     /// `.weightLoss`'s "Easy 6k". Deliberately no distance / pace /
     /// `paceHistory`: those drive run-only copy ("last N runs", min/km).
     private static func routineWalkAnalysis(profile: Profile, scenario: FixtureMode.Scenario) -> [String: Any] {
+        // `avgHr` feeds BOTH `metrics` (the "avg 108 · max 121 bpm" label and the
+        // max-HR ring) and `effort.avgPct`, derived exactly as AnalysisView places
+        // the bar's "your average" tick: (108 − rest 52) / (188 − 52) ≈ 0.41,
+        // left of the max ring at (121 − 52) / 136 ≈ 0.51 — never a hand-typed
+        // fraction that drifts past the max marker.
+        let avgHr = 108.0
+        let restingHr = normalBase("resting_hr", profile, scenario).rounded()
+        let effort: [String: Any] = [
+            "restingHr": restingHr, "maxHr": 188.0, "zone": "easy",
+            "avgPct": AnalysisLogic.heartRateRangeFraction(avgHr, restingHr: restingHr, maxHr: 188.0),
+        ]
         let metrics: [String: Any] = [
             "type": "Walking", "durationMin": 20.0, "kcal": 110.0,
-            "avgHr": 108.0, "maxHr": 121.0, "elevationGainM": 35.0,
+            "avgHr": avgHr, "maxHr": 121.0, "elevationGainM": 35.0,
             "startTime": isoAt(daysAgo: 0, hour: 6, minute: 52),
         ]
         let context: [String: Any] = [
             "usual": ["sessions": 8, "durationMin": 20.0, "avgHr": 107.0],
-            "effort": ["restingHr": normalBase("resting_hr", profile, scenario).rounded(), "maxHr": 188.0, "avgPct": 0.57, "zone": "easy"],
+            "effort": effort,
             "goingIn": [
                 "sleepMinutes": profile.sleepMinutes,
                 "hrv": ["value": profile.hrv, "unit": "ms", "vsNormal": vsNormal("hrv_sdnn", scenario), "source": "apple"],

@@ -431,44 +431,11 @@ struct GoalProgressDetailView: View {
         )
     }
 
-    /// Label/value rows for whatever the response has — a row is simply
-    /// omitted when its value is unknown (never "--" placeholders or zeros).
-    private var statRows: [(label: String, value: String)] {
-        var rows: [(String, String)] = []
-        if let start = progress.current.startWeightKg {
-            rows.append(("Start", UnitFormat.weight(kg: start, system)))
-        }
-        if let current = progress.current.weightKg {
-            rows.append(("Now", UnitFormat.weight(kg: current, system)))
-        }
-        if let target = progress.target.weightKg {
-            rows.append(("Target", UnitFormat.weight(kg: target, system)))
-        }
-        if let rate = GoalProgressLogic.rateText(progress, system: system) {
-            rows.append(("Trend", rate))
-        }
-        if let race = progress.race {
-            rows.append(("Race", RaceLogic.rowText(race)))
-        }
-        if let longRun = progress.longRun, let text = RaceLogic.longRunRowText(longRun, system) {
-            rows.append(("Long run", text))
-        }
-        if let distance = progress.distance {
-            rows.append(("Weekly distance goal", UnitFormat.distance(km: distance.targetKm, system)))
-            if let done = distance.thisWeekKm {
-                rows.append(("This week", UnitFormat.distance(km: done, system)))
-            }
-            if let avg = distance.avg4wKm {
-                rows.append(("4-week average", "\(UnitFormat.distance(km: avg, system))/week"))
-            }
-        }
-        if let sessions = progress.target.weeklySessions {
-            rows.append(("Weekly sessions goal", "\(sessions)"))
-        }
-        if progress.goal != "weight_loss", progress.dataSufficiency.sessionsLast28d > 0 {
-            rows.append(("Sessions, last 4 weeks", "\(progress.dataSufficiency.sessionsLast28d)"))
-        }
-        return rows.map { (label: $0.0, value: $0.1) }
+    /// Label/value rows for whatever the response has (pure logic lives in
+    /// `GoalProgressLogic.statRows`: unknown values are omitted, and weight rows
+    /// are hidden for an endurance/general goal without a target weight).
+    private var statRows: [GoalProgressLogic.StatRow] {
+        GoalProgressLogic.statRows(progress, system: system)
     }
 
     @ViewBuilder

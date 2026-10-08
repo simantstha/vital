@@ -161,11 +161,11 @@ final class GoalTargetLogicTests: XCTestCase {
     func testStartedLine() {
         XCTAssertEqual(
             GoalTargetLogic.startedLine(weightKg: 82, startedAtISO: "2026-09-15T10:00:00Z", units: .metric, calendar: utc),
-            "Started at 82 kg on Sep 15"
+            "Started at 82\u{00A0}kg on Sep 15"
         )
         XCTAssertEqual(
             GoalTargetLogic.startedLine(weightKg: 82, startedAtISO: "2026-09-15T10:00:00.123Z", units: .imperial, calendar: utc),
-            "Started at 181 lb on Sep 15"
+            "Started at 181\u{00A0}lb on Sep 15"
         )
         XCTAssertEqual(
             GoalTargetLogic.startedLine(weightKg: nil, startedAtISO: "2026-09-15T10:00:00Z", units: .metric, calendar: utc),
@@ -173,7 +173,7 @@ final class GoalTargetLogicTests: XCTestCase {
         )
         XCTAssertEqual(
             GoalTargetLogic.startedLine(weightKg: 82, startedAtISO: nil, units: .metric, calendar: utc),
-            "Started at 82 kg"
+            "Started at 82\u{00A0}kg"
         )
         XCTAssertNil(GoalTargetLogic.startedLine(weightKg: nil, startedAtISO: nil, units: .metric, calendar: utc))
     }

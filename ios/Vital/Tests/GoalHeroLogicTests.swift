@@ -194,17 +194,17 @@ final class GoalHeroLogicTests: XCTestCase {
         // `volume.target` is always null today (#202) — this is the common
         // real-world case.
         let text = EnduranceHeroLogic.weeklyVolumeText(kmDone: 24.5, kmTarget: nil, system: .metric)
-        XCTAssertEqual(text, "24.5 km this week")
+        XCTAssertEqual(text, "24.5\u{00A0}km this week")
     }
 
     func testWeeklyVolumeTextFormatsDoneOnlyWhenTargetIsZero() {
         let text = EnduranceHeroLogic.weeklyVolumeText(kmDone: 24, kmTarget: 0, system: .metric)
-        XCTAssertEqual(text, "24 km this week")
+        XCTAssertEqual(text, "24\u{00A0}km this week")
     }
 
     func testWeeklyVolumeTextFormatsDoneOfTargetWhenTargetPresent() {
         let text = EnduranceHeroLogic.weeklyVolumeText(kmDone: 24, kmTarget: 40, system: .metric)
-        XCTAssertEqual(text, "24 km of 40 km")
+        XCTAssertEqual(text, "24\u{00A0}km of 40\u{00A0}km")
     }
 
     func testWeeklyVolumeTextRespectsImperialSystem() {
@@ -233,7 +233,7 @@ final class GoalHeroLogicTests: XCTestCase {
         let text = MuscleHeroLogic.lastLiftText(
             exercise: "Deadlift", date: "2026-09-21", sets: 2, reps: 5, weightKg: 150, system: .metric
         )
-        XCTAssertEqual(text, "Last (Mon): Deadlift 2×5 @ 150 kg")
+        XCTAssertEqual(text, "Last (Mon): Deadlift 2×5 @ 150\u{00A0}kg")
     }
 
     func testLastLiftTextBodyweightWhenWeightMissing() {
@@ -268,7 +268,7 @@ final class GoalHeroLogicTests: XCTestCase {
         let text = EnduranceHeroLogic.weeklySessionsAndVolumeText(
             sessionsCompleted: 3, kmDone: 24.5, system: .metric
         )
-        XCTAssertEqual(text, "3 sessions · 24.5 km this week")
+        XCTAssertEqual(text, "3 sessions · 24.5\u{00A0}km this week")
     }
 
     func testWeeklySessionsAndVolumeTextSingleSession() {
@@ -276,7 +276,7 @@ final class GoalHeroLogicTests: XCTestCase {
         let text = EnduranceHeroLogic.weeklySessionsAndVolumeText(
             sessionsCompleted: 1, kmDone: 12.0, system: .metric
         )
-        XCTAssertEqual(text, "1 session · 12 km this week")
+        XCTAssertEqual(text, "1 session · 12\u{00A0}km this week")
     }
 
     func testWeeklySessionsAndVolumeTextOnlySessionsNoVolume() {
@@ -292,7 +292,7 @@ final class GoalHeroLogicTests: XCTestCase {
         let text = EnduranceHeroLogic.weeklySessionsAndVolumeText(
             sessionsCompleted: nil, kmDone: 24.5, system: .metric
         )
-        XCTAssertEqual(text, "24.5 km this week")
+        XCTAssertEqual(text, "24.5\u{00A0}km this week")
     }
 
     func testWeeklySessionsAndVolumeTextNeitherPresent() {
@@ -318,7 +318,7 @@ final class GoalHeroLogicTests: XCTestCase {
         let text = EnduranceHeroLogic.weeklySessionsAndVolumeText(
             sessionsCompleted: -1, kmDone: 10.0, system: .metric
         )
-        XCTAssertEqual(text, "0 sessions · 10 km this week")
+        XCTAssertEqual(text, "0 sessions · 10\u{00A0}km this week")
     }
 
     // MARK: - EnduranceHeroLogic readiness vs planned session
@@ -329,7 +329,7 @@ final class GoalHeroLogicTests: XCTestCase {
     }
 
     func testIsHardSessionRecognisesHardWorkoutsAndSparesEasyOnes() {
-        for title in ["10km tempo run", "6 x 800m intervals", "Long run", "Threshold session", "Hill repeats", "Race day", "VO2max set"] {
+        for title in ["10km tempo run", "6 x 800m intervals", "Intervals 6×800 m", "Long run", "Threshold session", "Hill repeats", "Race day", "VO2max set"] {
             XCTAssertTrue(EnduranceHeroLogic.isHardSession(session(title)), title)
         }
         for title in ["Easy 5km", "Recovery jog", "Easy long walk", "Yoga", "Strength"] {
@@ -430,11 +430,11 @@ final class GoalHeroLogicTests: XCTestCase {
 
     func testSparklineCaptionsAreUnitAware() {
         let metric = WeightHeroLogic.sparklineCaptions(firstKg: 83.7, lastKg: 82, targetKg: 76, system: .metric)
-        XCTAssertEqual(metric?.start, "Start 83.7 kg")
-        XCTAssertEqual(metric?.now, "Now 82 kg")
-        XCTAssertEqual(metric?.target, "Goal 76 kg")
+        XCTAssertEqual(metric?.start, "Start 83.7\u{00A0}kg")
+        XCTAssertEqual(metric?.now, "Now 82\u{00A0}kg")
+        XCTAssertEqual(metric?.target, "Goal 76\u{00A0}kg")
         let imperial = WeightHeroLogic.sparklineCaptions(firstKg: 83.7, lastKg: 82, targetKg: nil, system: .imperial)
-        XCTAssertEqual(imperial?.start, "Start 185 lb")
+        XCTAssertEqual(imperial?.start, "Start 185\u{00A0}lb")
         XCTAssertNil(imperial?.target)
         XCTAssertNil(WeightHeroLogic.sparklineCaptions(firstKg: nil, lastKg: 82, targetKg: 76, system: .metric))
     }
@@ -442,12 +442,12 @@ final class GoalHeroLogicTests: XCTestCase {
     // MARK: - Profile goal row
 
     func testGoalRowLabelShowsTheTarget() {
-        XCTAssertEqual(ProfileViewModel.goalRowLabel(goalLabel: "Lose weight", goalId: "weight_loss", targetWeightKg: 76, weeklySessions: nil, system: .metric), "Lose weight \u{00B7} 76 kg")
+        XCTAssertEqual(ProfileViewModel.goalRowLabel(goalLabel: "Lose weight", goalId: "weight_loss", targetWeightKg: 76, weeklySessions: nil, system: .metric), "Lose weight \u{00B7} 76\u{00A0}kg")
         XCTAssertEqual(ProfileViewModel.goalRowLabel(goalLabel: "Build muscle", goalId: "muscle", targetWeightKg: 82, weeklySessions: 4, system: .metric), "Build muscle \u{00B7} 4\u{00D7}/week")
-        XCTAssertEqual(ProfileViewModel.goalRowLabel(goalLabel: "Build muscle", goalId: "muscle", targetWeightKg: 82, weeklySessions: nil, system: .metric), "Build muscle \u{00B7} 82 kg")
+        XCTAssertEqual(ProfileViewModel.goalRowLabel(goalLabel: "Build muscle", goalId: "muscle", targetWeightKg: 82, weeklySessions: nil, system: .metric), "Build muscle \u{00B7} 82\u{00A0}kg")
         XCTAssertEqual(ProfileViewModel.goalRowLabel(goalLabel: "Endurance", goalId: "endurance", targetWeightKg: nil, weeklySessions: 3, system: .metric), "Endurance \u{00B7} 3\u{00D7}/week")
-        XCTAssertEqual(ProfileViewModel.goalRowLabel(goalLabel: "Endurance", goalId: "endurance", targetWeightKg: nil, weeklySessions: 3, weeklyDistanceKm: 30, system: .metric), "Endurance \u{00B7} 30 km/week")
-        XCTAssertEqual(ProfileViewModel.goalRowLabel(goalLabel: "Endurance", goalId: "endurance", targetWeightKg: nil, weeklySessions: nil, weeklyDistanceKm: 32.2, system: .imperial), "Endurance \u{00B7} 20 mi/week")
+        XCTAssertEqual(ProfileViewModel.goalRowLabel(goalLabel: "Endurance", goalId: "endurance", targetWeightKg: nil, weeklySessions: 3, weeklyDistanceKm: 30, system: .metric), "Endurance \u{00B7} 30\u{00A0}km/week")
+        XCTAssertEqual(ProfileViewModel.goalRowLabel(goalLabel: "Endurance", goalId: "endurance", targetWeightKg: nil, weeklySessions: nil, weeklyDistanceKm: 32.2, system: .imperial), "Endurance \u{00B7} 20\u{00A0}mi/week")
         XCTAssertEqual(ProfileViewModel.goalRowLabel(goalLabel: "Lose weight", goalId: "weight_loss", targetWeightKg: nil, weeklySessions: nil, system: .metric), "Lose weight")
         XCTAssertEqual(ProfileViewModel.goalRowLabel(goalLabel: "Maintain", goalId: "general", targetWeightKg: 70, weeklySessions: 3, system: .metric), "Maintain")
         XCTAssertEqual(ProfileViewModel.goalRowLabel(goalLabel: "", goalId: "", targetWeightKg: nil, weeklySessions: nil, system: .metric), "")
@@ -484,15 +484,18 @@ final class GoalHeroLogicTests: XCTestCase {
         }
         // The race leads (and replaces the generic "Endurance"), so what survives
         // a narrow row is the race, not the goal word.
-        XCTAssertEqual(label("endurance", km: 30), "Half marathon \u{00B7} Dec 30 \u{00B7} 30 km/wk")
-        XCTAssertEqual(label("endurance", km: 32.2, system: .imperial), "Half marathon \u{00B7} Dec 30 \u{00B7} 20 mi/wk")
+        XCTAssertEqual(label("endurance", km: 30), "Half marathon \u{00B7} Dec 30 \u{00B7} 30\u{00A0}km/wk")
+        XCTAssertEqual(label("endurance", km: 32.2, system: .imperial), "Half marathon \u{00B7} Dec 30 \u{00B7} 20\u{00A0}mi/wk")
         XCTAssertEqual(label("endurance", sessions: 3), "Half marathon \u{00B7} Dec 30 \u{00B7} 3\u{00D7}/wk")
         XCTAssertEqual(label("endurance"), "Half marathon \u{00B7} Dec 30", "race alone is still worth showing")
-        XCTAssertEqual(label("endurance", km: 30, raceKm: nil), "Race \u{00B7} Dec 30 \u{00B7} 30 km/wk")
+        XCTAssertEqual(label("endurance", km: 30, raceKm: nil), "Race \u{00B7} Dec 30 \u{00B7} 30\u{00A0}km/wk")
         XCTAssertFalse(label("endurance", km: 30).contains("Endurance"))
+        // The number never separates from its unit on a wrapped row ("30" / "km/wk").
+        XCTAssertTrue(label("endurance", km: 30).hasSuffix("30\u{00A0}km/wk"))
+        XCTAssertFalse(label("endurance", km: 30).contains("30 km"))
         // A passed race / no race leaves the old label; other goals never show a race.
-        XCTAssertEqual(label("endurance", km: 30, race: "2026-10-01"), "Endurance \u{00B7} 30 km/week")
-        XCTAssertEqual(label("endurance", km: 30, race: nil), "Endurance \u{00B7} 30 km/week")
+        XCTAssertEqual(label("endurance", km: 30, race: "2026-10-01"), "Endurance \u{00B7} 30\u{00A0}km/week")
+        XCTAssertEqual(label("endurance", km: 30, race: nil), "Endurance \u{00B7} 30\u{00A0}km/week")
         XCTAssertEqual(label("muscle", sessions: 4), "Build muscle \u{00B7} 4\u{00D7}/week")
         XCTAssertEqual(label("endurance", race: nil), "Endurance")
     }

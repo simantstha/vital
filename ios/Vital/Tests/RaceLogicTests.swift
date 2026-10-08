@@ -179,10 +179,10 @@ final class RaceLogicTests: XCTestCase {
 
     func testLongRunRowTextShowsTheLastLongRunThenThePeakTarget() {
         let full = GoalProgressDTO.LongRun(lastKm: 14, peakKm: 16, targetPeakKm: 18)
-        XCTAssertEqual(RaceLogic.longRunRowText(full, .metric), "14 km \u{00B7} peak target 18 km")
-        XCTAssertEqual(RaceLogic.longRunRowText(full, .imperial), "8.7 mi \u{00B7} peak target 11.2 mi")
-        XCTAssertEqual(RaceLogic.longRunRowText(.init(lastKm: 14.5, peakKm: 16, targetPeakKm: nil), .metric), "14.5 km")
-        XCTAssertEqual(RaceLogic.longRunRowText(.init(lastKm: nil, peakKm: 16, targetPeakKm: 18), .metric), "peak 16 km \u{00B7} peak target 18 km")
+        XCTAssertEqual(RaceLogic.longRunRowText(full, .metric), "14\u{00A0}km \u{00B7} peak target 18\u{00A0}km")
+        XCTAssertEqual(RaceLogic.longRunRowText(full, .imperial), "8.7\u{00A0}mi \u{00B7} peak target 11.2\u{00A0}mi")
+        XCTAssertEqual(RaceLogic.longRunRowText(.init(lastKm: 14.5, peakKm: 16, targetPeakKm: nil), .metric), "14.5\u{00A0}km")
+        XCTAssertEqual(RaceLogic.longRunRowText(.init(lastKm: nil, peakKm: 16, targetPeakKm: 18), .metric), "peak 16\u{00A0}km \u{00B7} peak target 18\u{00A0}km")
         XCTAssertNil(RaceLogic.longRunRowText(.init(lastKm: nil, peakKm: nil, targetPeakKm: 18), .metric))
     }
 

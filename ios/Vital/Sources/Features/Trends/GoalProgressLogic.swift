@@ -599,6 +599,70 @@ enum GoalProgressLogic {
         return UnitFormat.weightDelta(kgPerWeek: kg, system)
     }
 
+    // MARK: - Detail sheet stats table
+
+    /// One label/value row of the detail sheet's stats card.
+    struct StatRow: Equatable {
+        let label: String
+        let value: String
+    }
+
+    /// Whether the stats table lists body-weight rows (Start / Now / Target
+    /// weight and the weight "Trend" rate). Weight-loss and muscle goals are
+    /// about body weight, so they always do; an endurance or general goal gets
+    /// them only when the user actually set a target weight — otherwise a race
+    /// goal opened with "Now 61 kg" as its first row reads as the wrong story.
+    /// Any future goal id follows the same target-weight rule.
+    static func showsWeightRows(_ progress: GoalProgressDTO) -> Bool {
+        switch progress.goal {
+        case "weight_loss", "muscle": return true
+        default:                      return progress.target.weightKg != nil
+        }
+    }
+
+    /// Label/value rows for whatever the response has — a row is simply
+    /// omitted when its value is unknown (never "--" placeholders or zeros),
+    /// and the weight rows are omitted entirely per `showsWeightRows`.
+    static func statRows(_ progress: GoalProgressDTO, system: UnitSystem) -> [StatRow] {
+        var rows: [StatRow] = []
+        if showsWeightRows(progress) {
+            if let start = progress.current.startWeightKg {
+                rows.append(StatRow(label: "Start", value: UnitFormat.weight(kg: start, system)))
+            }
+            if let current = progress.current.weightKg {
+                rows.append(StatRow(label: "Now", value: UnitFormat.weight(kg: current, system)))
+            }
+            if let target = progress.target.weightKg {
+                rows.append(StatRow(label: "Target", value: UnitFormat.weight(kg: target, system)))
+            }
+            if let rate = rateText(progress, system: system) {
+                rows.append(StatRow(label: "Trend", value: rate))
+            }
+        }
+        if let race = progress.race {
+            rows.append(StatRow(label: "Race", value: RaceLogic.rowText(race)))
+        }
+        if let longRun = progress.longRun, let text = RaceLogic.longRunRowText(longRun, system) {
+            rows.append(StatRow(label: "Long run", value: text))
+        }
+        if let distance = progress.distance {
+            rows.append(StatRow(label: "Weekly distance goal", value: UnitFormat.distance(km: distance.targetKm, system)))
+            if let done = distance.thisWeekKm {
+                rows.append(StatRow(label: "This week", value: UnitFormat.distance(km: done, system)))
+            }
+            if let avg = distance.avg4wKm {
+                rows.append(StatRow(label: "4-week average", value: "\(UnitFormat.distance(km: avg, system))/week"))
+            }
+        }
+        if let sessions = progress.target.weeklySessions {
+            rows.append(StatRow(label: "Weekly sessions goal", value: "\(sessions)"))
+        }
+        if progress.goal != "weight_loss", progress.dataSufficiency.sessionsLast28d > 0 {
+            rows.append(StatRow(label: "Sessions, last 4 weeks", value: "\(progress.dataSufficiency.sessionsLast28d)"))
+        }
+        return rows
+    }
+
     /// Up to `limit` reasons for the compact card.
     static func visibleReasons(_ progress: GoalProgressDTO, limit: Int = 3) -> [GoalReasonDTO] {
         Array(progress.reasons.prefix(limit))
