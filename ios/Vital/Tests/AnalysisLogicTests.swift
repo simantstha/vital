@@ -559,10 +559,17 @@ final class AnalysisLogicTests: XCTestCase {
         XCTAssertEqual(AnalysisLogic.activityNoun(type: nil), "session")
     }
 
+    /// The effort bar's resting number is the 30-day mean (what the server sends),
+    /// not this morning's reading, so it is labelled "usual".
+    func testRestingLabelSaysUsual() {
+        XCTAssertEqual(AnalysisLogic.usualRestingLabel(64), "usual resting 64")
+        XCTAssertEqual(AnalysisLogic.usualRestingLabel(48.74), "usual resting 49")
+        XCTAssertFalse(AnalysisLogic.usualRestingLabel(64).hasPrefix("resting"))
+    }
+
     func testWorkoutCopyTakesTheNounInsteadOfHardCodingRun() {
-        XCTAssertEqual(AnalysisLogic.sinceLastHardLabel(noun: "run"), "Since your last hard run")
-        XCTAssertEqual(AnalysisLogic.sinceLastHardLabel(noun: "ride"), "Since your last hard ride")
-        XCTAssertEqual(AnalysisLogic.sinceLastHardLabel(noun: "session"), "Since your last hard session")
+        // Always "session": a lifter's strength session must never read "Since your last hard walk".
+        XCTAssertEqual(AnalysisLogic.sinceLastHardLabel(), "Since your last hard session")
         XCTAssertEqual(AnalysisLogic.goingInFootnote(noun: "walk"), "From your data before the walk started.")
         XCTAssertEqual(AnalysisLogic.maxMarkerLegend(noun: "ride"), "this ride's max")
         XCTAssertEqual(AnalysisLogic.askCoachLabel(noun: "swim"), "Ask coach about this swim")

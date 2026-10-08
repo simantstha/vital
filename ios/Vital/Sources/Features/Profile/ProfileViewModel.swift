@@ -63,10 +63,11 @@ final class ProfileViewModel: ObservableObject {
     /// Pure composition of the Goal row label. Weight-loss shows the target
     /// weight; muscle prefers the weekly session target, falling back to the
     /// target weight; endurance shows the weekly distance ("30 km/week", unit-
-    /// aware), falling back to the weekly sessions, then the upcoming race
-    /// ("Endurance · 30 km/week · Half marathon Dec 30"); general just the goal
-    /// name. A missing target leaves the bare goal label. `now`/`calendar`
-    /// only decide whether the race is still ahead.
+    /// aware), falling back to the weekly sessions; general just the goal name.
+    /// A missing target leaves the bare goal label. An endurance user with an
+    /// upcoming race LEADS with it and drops the generic goal word, so the part
+    /// that matters survives a narrow row: "Half marathon · Dec 30 · 30 km/wk".
+    /// `now`/`calendar` only decide whether the race is still ahead.
     nonisolated static func goalRowLabel(
         goalLabel: String, goalId: String, targetWeightKg: Double?, weeklySessions: Int?,
         weeklyDistanceKm: Double? = nil, raceDate: String? = nil, raceDistanceKm: Double? = nil,
@@ -81,9 +82,12 @@ final class ProfileViewModel: ObservableObject {
         case "weight_loss": suffix = weight
         case "muscle":      suffix = sessions ?? weight
         case "endurance":
-            let race = RaceLogic.goalRowSuffix(raceDate: raceDate, distanceKm: raceDistanceKm, now: now, calendar: calendar)
-            let parts = [distance ?? sessions, race].compactMap { $0 }
-            suffix = parts.isEmpty ? nil : parts.joined(separator: " \u{00B7} ")
+            if let race = RaceLogic.goalRowSuffix(raceDate: raceDate, distanceKm: raceDistanceKm, now: now, calendar: calendar) {
+                let target = weeklyDistanceKm.map { "\(UnitFormat.distance(km: $0, system))/wk" }
+                    ?? weeklySessions.map { "\($0)\u{00D7}/wk" }
+                return [race, target].compactMap { $0 }.joined(separator: " \u{00B7} ")
+            }
+            suffix = distance ?? sessions
         default:            suffix = nil
         }
         guard let suffix else { return goalLabel }

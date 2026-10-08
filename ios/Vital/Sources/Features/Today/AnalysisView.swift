@@ -959,7 +959,7 @@ struct WorkoutAnalysisContent: View {
                     // the bar above aren't left unexplained.
                     EffortZoneLegend(showsMaxMarker: maxHrMarkerFraction(effort) != nil, noun: noun)
                     HStack {
-                        Text("resting \(Int(effort.restingHr.rounded()))").font(.system(size: 12)).foregroundStyle(Theme.Colors.textSecondary)
+                        Text(AnalysisLogic.usualRestingLabel(effort.restingHr)).font(.system(size: 12)).foregroundStyle(Theme.Colors.textSecondary)
                         Spacer()
                         Text("highest recorded \(Int(effort.maxHr.rounded()))").font(.system(size: 12)).foregroundStyle(Theme.Colors.textSecondary)
                     }
@@ -997,7 +997,7 @@ struct WorkoutAnalysisContent: View {
                                 isFirst: goingIn.sleepMinutes == nil)
                     }
                     if let days = goingIn.daysSinceLastSameType {
-                        DataRow(icon: "clock.fill", label: AnalysisLogic.sinceLastHardLabel(noun: noun),
+                        DataRow(icon: "clock.fill", label: AnalysisLogic.sinceLastHardLabel(),
                                 chip: .init(text: "\(days) day\(days == 1 ? "" : "s")", tone: .neutral),
                                 isFirst: goingIn.sleepMinutes == nil && goingIn.hrv == nil)
                     }

@@ -71,9 +71,30 @@ enum RaceLogic {
         return "\(weeksToGo) \(weeksToGo == 1 ? "week" : "weeks") to go"
     }
 
-    /// Today hero line: "Half marathon · 12 weeks to go".
-    static func heroLine(_ race: GoalProgressDTO.Race) -> String {
-        "\(race.displayLabel) · \(countdownText(weeksToGo: race.weeksToGo, daysToGo: race.daysToGo))"
+    /// Today hero line: "Half marathon · 12 weeks to go", plus the long-run
+    /// progress when the response carries a long run with a target: "Half
+    /// marathon · 12 weeks to go · long run 14/18 km" (`longRunProgressText`).
+    static func heroLine(
+        _ race: GoalProgressDTO.Race, longRun: GoalProgressDTO.LongRun? = nil, system: UnitSystem = .metric
+    ) -> String {
+        var line = "\(race.displayLabel) · \(countdownText(weeksToGo: race.weeksToGo, daysToGo: race.daysToGo))"
+        if let longRun, let progress = longRunProgressText(longRun, system) {
+            line += " · \(progress)"
+        }
+        return line
+    }
+
+    /// "long run 14/18 km" (imperial: "long run 8.7/11.2 mi") — the most recent
+    /// long run against the peak long run to build to. Falls back to the
+    /// 28-day peak when there is no recent long run. `nil` without a target (a
+    /// race with no distance has none) or without any long-run distance, so the
+    /// hero never invents a goal.
+    static func longRunProgressText(_ longRun: GoalProgressDTO.LongRun, _ system: UnitSystem) -> String? {
+        guard let target = longRun.targetPeakKm, target > 0,
+              let done = longRun.lastKm ?? longRun.peakKm else { return nil }
+        let doneText = GoalProgressLogic.distanceAmount(km: done, system)
+        let targetText = GoalProgressLogic.distanceAmount(km: target, system)
+        return "long run \(doneText)/\(targetText) \(system.distanceUnit)"
     }
 
     /// Goal card row: "Half marathon · Dec 30 · 12 wk" (race week: "5 d"; race day: "today").
@@ -92,16 +113,17 @@ enum RaceLogic {
         return parts.joined(separator: " · ")
     }
 
-    /// Profile Goal row suffix: "Half marathon Dec 30". `nil` without a race
-    /// date, with one that does not parse, or once the race day has passed
-    /// (the server drops a passed race too).
+    /// Profile Goal row race part: "Half marathon · Dec 30" (the Goal row leads
+    /// with it, so the race name and day are what survives a narrow row). `nil`
+    /// without a race date, with one that does not parse, or once the race day
+    /// has passed (the server drops a passed race too).
     static func goalRowSuffix(
         raceDate: String?, distanceKm: Double?, now: Date = Date(), calendar: Calendar = .current
     ) -> String? {
         guard let raceDate,
               let day = GoalTargetLogic.date(fromDay: raceDate, calendar: calendar),
               day >= calendar.startOfDay(for: now) else { return nil }
-        return "\(label(forKm: distanceKm)) \(monthDay(day, calendar: calendar))"
+        return "\(label(forKm: distanceKm)) \u{00B7} \(monthDay(day, calendar: calendar))"
     }
 
     // MARK: - Long run (goal detail row)

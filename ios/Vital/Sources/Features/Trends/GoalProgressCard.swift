@@ -107,7 +107,8 @@ private struct GoalReasonRow: View {
                 .frame(width: 8, height: 8)
                 // Align the dot with the first text line's x-height.
                 .alignmentGuide(.firstTextBaseline) { dimensions in dimensions[.bottom] - 1 }
-            Text(reason.text)
+            // Non-breaking so "+10 kg" and "(153 → 163 kg)" never wrap mid-value.
+            Text(GoalProgressLogic.nonBreaking(reason.text))
                 .font(.system(size: 14))
                 .foregroundStyle(Theme.Colors.textPrimary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -190,7 +191,7 @@ struct GoalProgressCard: View {
                         .foregroundStyle(Theme.Colors.textTertiary)
                 }
 
-                Text(GoalProgressLogic.primaryLine(progress, system: system))
+                Text(GoalProgressLogic.nonBreaking(GoalProgressLogic.primaryLine(progress, system: system)))
                     .font(.system(size: 20, weight: .bold, design: .rounded))
                     .foregroundStyle(Theme.Colors.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -274,10 +275,17 @@ struct GoalProgressLine: View {
     /// The hero above already shows this week's distance progress (endurance
     /// with a weekly km target) — show the verdict's reason instead of repeating it.
     var heroShowsDistance = false
+    /// Sessions already done this week, as the muscle hero shows them ("2 of 4
+    /// sessions this week") — lets a `behind` muscle line name the remainder
+    /// ("2 more by Sun"). `nil` when Today has no training summary yet.
+    var sessionsDoneThisWeek: Int? = nil
     var onTap: () -> Void
 
     private var text: String {
-        GoalProgressLogic.compactText(progress, system: system, heroShowsDistance: heroShowsDistance)
+        GoalProgressLogic.compactText(
+            progress, system: system, heroShowsDistance: heroShowsDistance,
+            sessionsDoneThisWeek: sessionsDoneThisWeek
+        )
     }
 
     var body: some View {
@@ -324,7 +332,7 @@ struct GoalProgressDetailView: View {
 
                 VStack(alignment: .leading, spacing: Theme.Spacing.md) {
                     GoalVerdictChip(verdict: progress.verdict, goal: progress.goal)
-                    Text(GoalProgressLogic.primaryLine(progress, system: system))
+                    Text(GoalProgressLogic.nonBreaking(GoalProgressLogic.primaryLine(progress, system: system)))
                         .font(.system(size: 24, weight: .bold, design: .rounded))
                         .foregroundStyle(Theme.Colors.textPrimary)
                         .fixedSize(horizontal: false, vertical: true)

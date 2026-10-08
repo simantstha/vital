@@ -328,9 +328,19 @@ enum AnalysisLogic {
         return "session"
     }
 
-    /// "Since your last hard run" / "… hard ride" / "… hard session".
-    static func sinceLastHardLabel(noun: String) -> String {
-        "Since your last hard \(noun)"
+    /// "Since your last hard session". Always "session", never the activity
+    /// noun: it reads as the gap since the last hard effort of any kind, so a
+    /// lifter's strength session never says "Since your last hard walk".
+    static func sinceLastHardLabel() -> String {
+        "Since your last hard session"
+    }
+
+    /// "usual resting 64" - the resting-HR end of the effort bar. The number is
+    /// the user's 30-day mean resting HR (what the server supplies), NOT this
+    /// morning's reading (Today's tile may show a different value), so it says
+    /// "usual".
+    static func usualRestingLabel(_ restingHr: Double) -> String {
+        "usual resting \(Int(restingHr.rounded()))"
     }
 
     /// Footnote under the "Going in" rows.

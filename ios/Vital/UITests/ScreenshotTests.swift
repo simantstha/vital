@@ -382,7 +382,7 @@ final class ScreenshotTests: XCTestCase {
             // APIClient's requests (as happened once — real, absent-in-CI
             // networking then produces the "You're offline" error card
             // instead of this).
-            XCTAssertTrue(app.staticTexts[insight(for: scenario)].waitForExistence(timeout: 10),
+            XCTAssertTrue(waitForText(app, containing: insight(for: scenario), timeout: 10),
                            "Today should show the \(scenario) fixture's insight text [\(appearance)] — "
                            + "if this fails, fixtures likely aren't being intercepted")
             XCTAssertFalse(errorCard.exists,
@@ -424,13 +424,21 @@ final class ScreenshotTests: XCTestCase {
                                "Today's muscle hero should show the this-week session count [\(appearance)]")
                 // The goal line under the hero: the fixture's verdict is
                 // `behind` (adherence 9 of 16), so it leads with the cause and
-                // the next step instead of "1 of 4 kg gained · Squat …".
+                // the next step instead of "1 of 4 kg gained · Squat …". The hero
+                // above shows "2 of 4 sessions this week", so the next step is the
+                // concrete remainder: "2 more by Sun" (not the generic "aim for 4").
                 let goalLine = app.descendants(matching: .any).matching(identifier: "goalProgress.todayLine").firstMatch
                 XCTAssertTrue(goalLine.waitForExistence(timeout: 10),
                                "Today's muscle hero should show the goal-progress line [\(appearance)]")
-                let goalLineText = goalLine.label.replacingOccurrences(of: "\u{00A0}", with: " ")
-                XCTAssertTrue(goalLineText.contains("9 of 16 sessions in 4 wk · aim for 4 this week"),
-                               "Muscle goal line should lead with the sessions-behind cause and next step, got \"\(goalLineText)\" [\(appearance)]")
+                func goalLineLabel() -> String { goalLine.label.replacingOccurrences(of: "\u{00A0}", with: " ") }
+                // The training summary can land a beat after the goal line; poll briefly.
+                let goalLineDeadline = Date().addingTimeInterval(10)
+                while !goalLineLabel().contains("2 more by Sun") && Date() < goalLineDeadline {
+                    Thread.sleep(forTimeInterval: 0.3)
+                }
+                let goalLineText = goalLineLabel()
+                XCTAssertTrue(goalLineText.contains("9 of 16 sessions in 4 wk · 2 more by Sun"),
+                               "Muscle goal line should lead with the sessions-behind cause and the remaining sessions, got \"\(goalLineText)\" [\(appearance)]")
             }
 
             if scenario == "endurance" {
@@ -457,6 +465,9 @@ final class ScreenshotTests: XCTestCase {
                 // Race countdown line ("Half marathon · 12 weeks to go") from the fixture's race.
                 XCTAssertTrue(waitForText(app, containing: "Half marathon"),
                                "Today's endurance hero should show the race countdown [\(appearance)]")
+                // ...followed by the long-run build ("· long run 14/18 km"), from the same payload.
+                XCTAssertTrue(waitForText(app, containing: "long run 14/18 km"),
+                               "Today's endurance hero race line should carry the long-run progress [\(appearance)]")
             }
 
             if scenario == "new_user" {
@@ -648,11 +659,12 @@ final class ScreenshotTests: XCTestCase {
 
     /// Opens the goal-progress detail sheet from the "Am I on track?" card at
     /// the top of Trends (weight_loss: on track toward 76 kg; muscle:
-    /// progressing on squat/bench). Screen name `goalProgress`. Only those two
+    /// progressing on squat/bench; endurance: building toward the half marathon,
+    /// with the long-run reason). Screen name `goalProgress`. Only those three
     /// scenarios — the others either have no card worth opening (new_user's
     /// prompt, server_error's hidden card) or aren't part of the ask.
     private func captureGoalProgress(_ app: XCUIApplication, scenario: String, appearance: String) {
-        guard scenario == "weight_loss" || scenario == "muscle" else { return }
+        guard scenario == "weight_loss" || scenario == "muscle" || scenario == "endurance" else { return }
 
         switchToTab("Trends", app: app, scenario: scenario, appearance: appearance)
         // Back to the top of Trends, where the card leads.
@@ -669,8 +681,19 @@ final class ScreenshotTests: XCTestCase {
         // Fixture-unique content: the weight_loss primary line is composed from
         // structured fields (never the server's kg headline); muscle falls
         // back to the server headline.
-        // (GoalProgressLogic joins value+unit with U+00A0 so lines never wrap mid-value.)
-        let expected = scenario == "weight_loss" ? "of 7.7\u{00A0}kg lost" : "Squat est. 1RM +20 kg vs 4 weeks ago"
+        // (GoalProgressLogic joins value+unit with U+00A0 so lines never wrap mid-value;
+        // the "Why" rows run through `GoalProgressLogic.nonBreaking`, which also binds the
+        // "153 → 163 kg" arrow pair — a narrow sheet must never wrap as "(153 → / 163 kg)".)
+        let expected: String
+        switch scenario {
+        case "weight_loss":
+            expected = "of 7.7\u{00A0}kg lost"
+        case "muscle":
+            expected = "Squat est. 1RM +10\u{00A0}kg vs 4\u{00A0}weeks ago (153\u{00A0}\u{2192}\u{00A0}163\u{00A0}kg)"
+        default:
+            // endurance: the long-run build reason (race and week distance precede it).
+            expected = "Long run 14\u{00A0}km \u{00B7} build to 18\u{00A0}km"
+        }
         XCTAssertTrue(waitForText(app, containing: expected),
                        "Goal progress detail should show the \(scenario) fixture's content [\(appearance)]")
         capture(app, name: "\(scenario)__goalProgress__\(appearance)")
@@ -691,6 +714,12 @@ final class ScreenshotTests: XCTestCase {
     /// weight_loss and muscle — their fixture reviews carry the scenario's
     /// numbers (-0.6 kg / 5 of 7 days in budget; sessions / bench 1RM).
     private func captureWeeklyReview(_ app: XCUIApplication, scenario: String, appearance: String) {
+        // Endurance has its own review fixture (volume / resting HR / sleep stats):
+        // captured by identifier, without pinning its copy.
+        if scenario == "endurance" {
+            captureEnduranceWeeklyReview(app, appearance: appearance)
+            return
+        }
         guard scenario == "weight_loss" || scenario == "muscle" else { return }
 
         switchToTab("Today", app: app, scenario: scenario, appearance: appearance)
@@ -718,6 +747,50 @@ final class ScreenshotTests: XCTestCase {
 
         let open = app.descendants(matching: .any).matching(identifier: "weeklyReview.open").firstMatch
         tapWhenHittable(open, app: app, maxSwipes: 8, description: "weeklyReview.open [\(scenario)/\(appearance)]")
+
+        let title = app.descendants(matching: .any).matching(identifier: "weeklyReview.detail.title").firstMatch
+        guard title.waitForExistence(timeout: 10) else {
+            XCTFail("Weekly review detail sheet never opened [\(scenario)/\(appearance)]")
+            return
+        }
+        capture(app, name: "\(scenario)__weeklyReview__\(appearance)")
+
+        let close = app.buttons["Close"]
+        if close.waitForExistence(timeout: 5) {
+            close.tap()
+            guard title.waitForNonExistence(timeout: 5) else {
+                XCTFail("Weekly review sheet never finished dismissing after tapping Close [\(scenario)/\(appearance)]")
+                return
+            }
+        }
+    }
+
+    /// Endurance weekly review: the unseen-review card on Today (fixtures bypass
+    /// the Mon-Wed window) and its detail sheet. Screen names `weeklyReviewCard`
+    /// and `weeklyReview`. Follows the muscle / weight_loss flow above but asserts
+    /// on identifiers (card, non-empty headline, detail title) rather than the
+    /// review's copy, so a copy tweak to the endurance fixture never breaks the harness.
+    private func captureEnduranceWeeklyReview(_ app: XCUIApplication, appearance: String) {
+        let scenario = "endurance"
+        switchToTab("Today", app: app, scenario: scenario, appearance: appearance)
+        for _ in 0..<4 { app.swipeDown() }
+
+        let card = app.descendants(matching: .any).matching(identifier: "weeklyReview.card").firstMatch
+        guard card.waitForExistence(timeout: 15) else {
+            XCTFail("Weekly review card never appeared on Today [\(scenario)/\(appearance)]")
+            return
+        }
+        // Today's content is lazy: find the card's button by scrolling, then centre it.
+        let openButton = app.descendants(matching: .any).matching(identifier: "weeklyReview.open").firstMatch
+        XCTAssertTrue(scrollUntilExists(openButton, app: app, maxSwipes: 8),
+                       "weeklyReview.open never appeared [\(scenario)/\(appearance)]")
+        scrollIntoComfortableView(openButton, app: app, maxSwipes: 8)
+        let headline = app.descendants(matching: .any).matching(identifier: "weeklyReview.headline").firstMatch
+        XCTAssertTrue(headline.waitForExistence(timeout: 10) && !headline.label.isEmpty,
+                       "Weekly review card should show a headline [\(scenario)/\(appearance)]")
+        capture(app, name: "\(scenario)__weeklyReviewCard__\(appearance)")
+
+        tapWhenHittable(openButton, app: app, maxSwipes: 8, description: "weeklyReview.open [\(scenario)/\(appearance)]")
 
         let title = app.descendants(matching: .any).matching(identifier: "weeklyReview.detail.title").firstMatch
         guard title.waitForExistence(timeout: 10) else {
@@ -1134,9 +1207,12 @@ final class ScreenshotTests: XCTestCase {
         }
     }
 
-    /// Mirrors `FixtureData`'s per-scenario `Profile.insight` verbatim — see
+    /// Mirrors `FixtureData`'s per-scenario `Profile.insight` — see
     /// `profileName(for:)`'s doc comment for why this is hand-duplicated
-    /// rather than shared.
+    /// rather than shared. Verbatim, except the muscle insight: it names the
+    /// weekday of the last lift ("Tuesday's squat"), derived from a relative
+    /// date so it always matches "Last (Tue)", so only the stable tail is
+    /// asserted (matched with `waitForText(containing:)`, not by exact label).
     private func insight(for scenario: String) -> String {
         switch scenario {
         case "new_user":
@@ -1144,7 +1220,7 @@ final class ScreenshotTests: XCTestCase {
         case "weight_loss":
             return "You're down 0.6kg this week, but last night's sleep ran short (6h 50m) — keep the deficit gentle and aim for an earlier night."
         case "muscle":
-            return "Protein's on target four days running and Monday's squat was your best in 4 weeks — stay the course."
+            return "squat was your best in 4 weeks — stay the course."
         case "endurance":
             return "This week's long run held goal pace with a lower average HR than last week — aerobic base is building nicely."
         default:

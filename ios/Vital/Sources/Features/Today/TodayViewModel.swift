@@ -507,6 +507,15 @@ final class TodayViewModel: ObservableObject {
         return MuscleHeroLogic.sessionsThisWeekFallbackText(completed: week.completedSessions)
     }
 
+    /// Sessions already done this week, the number behind the hero's "2 of 4
+    /// sessions this week" (the dots' done count; the plain completed count
+    /// when nothing is planned). Lets the goal line say "2 more by Sun". `nil`
+    /// before `trainingSummary` loads.
+    var sessionsDoneThisWeek: Int? {
+        if let dots = trainingSessionDots { return dots.done }
+        return trainingSummary?.week.completedSessions
+    }
+
     /// The endurance hero's "X km this week" / "X of Y km" line — `nil`
     /// when `volume.done` is null (no workout this week carries a distance
     /// reading).
@@ -528,11 +537,12 @@ final class TodayViewModel: ObservableObject {
         return (text, fraction)
     }
 
-    /// "Half marathon · 12 weeks to go" for the top of the endurance hero, from
-    /// `/api/goal/progress`'s `race`. `nil` when no (future) race is set.
+    /// "Half marathon · 12 weeks to go · long run 14/18 km" for the top of the
+    /// endurance hero, from `/api/goal/progress`'s `race` (+ `longRun`, when it
+    /// has a target). `nil` when no (future) race is set.
     var enduranceRaceText: String? {
         guard let race = goalProgress?.race else { return nil }
-        return RaceLogic.heroLine(race)
+        return RaceLogic.heroLine(race, longRun: goalProgress?.longRun, system: UnitPreference.shared.current)
     }
 
     /// True when the endurance hero already shows the weekly-distance progress

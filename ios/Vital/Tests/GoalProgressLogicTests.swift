@@ -12,7 +12,7 @@ final class GoalProgressLogicTests: XCTestCase {
     /// assertions compare the plain-space spelling; the NBSP tests below pin
     /// the real characters.
     private func plain(_ text: String?) -> String? {
-        text?.replacingOccurrences(of: "\u{00A0}", with: " ")
+        text?.replacingOccurrences(of: "\u{00A0}", with: " ").replacingOccurrences(of: "\u{2060}", with: "")
     }
 
     private var now: Date {
@@ -283,14 +283,28 @@ final class GoalProgressLogicTests: XCTestCase {
 
     func testSafeBandTextMetric() {
         XCTAssertEqual(
-            GoalProgressLogic.safeBandText(weightLoss(), system: .metric),
+            plain(GoalProgressLogic.safeBandText(weightLoss(), system: .metric)),
             "Healthy pace: 0.25–1% of body weight per week ≈ 0.2–0.8 kg"
         )
     }
 
     func testSafeBandTextImperialUsesLb() {
-        let text = GoalProgressLogic.safeBandText(weightLoss(), system: .imperial)
+        let text = plain(GoalProgressLogic.safeBandText(weightLoss(), system: .imperial))
         XCTAssertEqual(text, "Healthy pace: 0.25–1% of body weight per week ≈ 0.5–1.8 lb")
+    }
+
+    /// The sheet used to wrap as "≈ 0.2– / 0.8 kg": the "≈ value unit" tail is
+    /// glued with U+00A0 and both ranges are bound with U+2060 around the dash
+    /// (an en dash allows a break after it, even before a no-break space).
+    func testSafeBandTextCannotWrapInsideARangeOrBeforeTheUnit() {
+        XCTAssertEqual(
+            GoalProgressLogic.safeBandText(weightLoss(), system: .metric),
+            "Healthy pace: 0.25\u{2060}–\u{2060}1% of body weight per week ≈\u{00A0}0.2\u{2060}–\u{2060}0.8\u{00A0}kg"
+        )
+        XCTAssertEqual(
+            GoalProgressLogic.safeBandText(weightLoss(), system: .imperial),
+            "Healthy pace: 0.25\u{2060}–\u{2060}1% of body weight per week ≈\u{00A0}0.5\u{2060}–\u{2060}1.8\u{00A0}lb"
+        )
     }
 
     func testRateTextUsesUserUnit() {
@@ -453,7 +467,7 @@ final class GoalProgressLogicTests: XCTestCase {
     /// The Today line leads with the user's goal outcome and appends the
     /// headline lift short; the lift alone only when there is no weight line.
     func testMuscleCompactLineLeadsWithGoalOutcomeThenHeadlineLift() {
-        let lift = GoalReasonDTO(kind: "lift", text: "Squat est. 1RM +20 kg vs 4 weeks ago (120 → 140 kg)", tone: .good)
+        let lift = GoalReasonDTO(kind: "lift", text: "Squat est. 1RM +10 kg vs 4 weeks ago (153 → 163 kg)", tone: .good)
         let muscle = GoalProgressDTO(
             goal: "muscle", target: .init(weightKg: 83),
             current: .init(weightKg: 80, startWeightKg: 79, changeKg: 1, progressPct: 25), eta: "2026-12-06", verdict: .progressing,
@@ -461,12 +475,12 @@ final class GoalProgressLogicTests: XCTestCase {
         )
         XCTAssertEqual(
             plain(GoalProgressLogic.compactText(muscle, system: .metric, now: now, locale: en)),
-            "1 of 4 kg gained · Squat +20 kg / 4 wk"
+            "1 of 4 kg gained · Squat +10 kg / 4 wk"
         )
         // Value+unit tokens never break mid-token: the only plain spaces sit between tokens.
         XCTAssertEqual(
             GoalProgressLogic.compactText(muscle, system: .metric, now: now, locale: en),
-            "1 of 4\u{00A0}kg gained · Squat +20\u{00A0}kg /\u{00A0}4\u{00A0}wk"
+            "1 of 4\u{00A0}kg gained · Squat +10\u{00A0}kg /\u{00A0}4\u{00A0}wk"
         )
         // Imperial: weights in lb; the lift short is the server's already-unit-correct text.
         let imperialLift = GoalReasonDTO(kind: "lift", text: "Squat est. 1RM −44 lb vs 4 weeks ago (264 → 220 lb)", tone: .watch)
@@ -495,9 +509,9 @@ final class GoalProgressLogicTests: XCTestCase {
     func testMuscleCompactLinePrefersLiftReasonOverWeightEta() {
         let muscle = GoalProgressDTO(
             goal: "muscle", target: .init(weightKg: 90), eta: "2026-12-06", verdict: .progressing,
-            reasons: [GoalReasonDTO(kind: "lift", text: "Squat +20 kg vs 4 wk", tone: .good)]
+            reasons: [GoalReasonDTO(kind: "lift", text: "Squat +10 kg vs 4 wk", tone: .good)]
         )
-        XCTAssertEqual(GoalProgressLogic.compactText(muscle, system: .metric, now: now, locale: en), "Squat +20 kg vs 4 wk")
+        XCTAssertEqual(GoalProgressLogic.compactText(muscle, system: .metric, now: now, locale: en), "Squat +10 kg vs 4 wk")
         let noLift = GoalProgressDTO(goal: "muscle", target: .init(weightKg: 90), eta: "2026-12-06", verdict: .progressing)
         XCTAssertEqual(GoalProgressLogic.compactText(noLift, system: .metric, now: now, locale: en), "90 kg by ~Dec 6")
     }
@@ -511,10 +525,10 @@ final class GoalProgressLogicTests: XCTestCase {
         GoalProgressDTO(
             goal: "muscle", target: .init(weightKg: 83, weeklySessions: 4),
             current: .init(weightKg: 80, startWeightKg: 79, changeKg: 1, progressPct: 25), eta: "2026-12-06", verdict: verdict,
-            headline: "Lifts up, sessions behind — Squat +20 kg",
+            headline: "Lifts up, sessions behind — Squat +10 kg",
             reasons: [
                 GoalReasonDTO(kind: "adherence", text: "9 of 16 planned sessions in 4 weeks (56%)", tone: .watch),
-                GoalReasonDTO(kind: "lift", text: "Squat est. 1RM +20 kg vs 4 weeks ago (120 → 140 kg)", tone: .good),
+                GoalReasonDTO(kind: "lift", text: "Squat est. 1RM +10 kg vs 4 weeks ago (153 → 163 kg)", tone: .good),
             ],
             adherence: adherence
         )
@@ -537,17 +551,49 @@ final class GoalProgressLogicTests: XCTestCase {
         XCTAssertFalse(line.contains("Squat"))
     }
 
+    /// Once Today knows this week's done count (the hero's "2 of 4 sessions this
+    /// week") the next step is the concrete remainder, not a generic "aim for".
+    func testMuscleBehindLineNamesTheRemainingSessionsWhenTheWeekCountIsKnown() {
+        let line = GoalProgressLogic.compactText(muscleBehind(), system: .metric, sessionsDoneThisWeek: 2, now: now, locale: en)
+        XCTAssertEqual(plain(line), "9 of 16 sessions in 4 wk · 2 more by Sun")
+        XCTAssertEqual(line, "9 of 16 sessions in 4\u{00A0}wk · 2 more by Sun")
+        XCTAssertEqual(GoalProgressLogic.sessionsBehindText(muscleBehind(), doneThisWeek: 2), line)
+        XCTAssertLessThanOrEqual(line.count, 48, "fits two Today lines")
+        XCTAssertEqual(plain(GoalProgressLogic.sessionsBehindText(muscleBehind(), doneThisWeek: 0)),
+                       "9 of 16 sessions in 4 wk · 4 more by Sun")
+        XCTAssertEqual(plain(GoalProgressLogic.sessionsBehindText(muscleBehind(), doneThisWeek: 3)),
+                       "9 of 16 sessions in 4 wk · 1 more by Sun")
+        // The weekly target comes from the payload.
+        let other = muscleBehind(adherence: .init(done: 5, planned: 12, weeklyTarget: 3, pct: 42))
+        XCTAssertEqual(plain(GoalProgressLogic.sessionsBehindText(other, doneThisWeek: 1)),
+                       "5 of 12 sessions in 4 wk · 2 more by Sun")
+    }
+
+    func testMuscleBehindLineFallsBackToAimForWhenTheWeekCountIsUnknownOrTheTargetIsMet() {
+        let aim = "9 of 16 sessions in 4 wk · aim for 4 this week"
+        XCTAssertEqual(plain(GoalProgressLogic.sessionsBehindText(muscleBehind(), doneThisWeek: nil)), aim)
+        XCTAssertEqual(plain(GoalProgressLogic.compactText(muscleBehind(), system: .metric, now: now, locale: en)), aim)
+        // Target already hit (or beaten): never "0 more" / "-1 more".
+        XCTAssertEqual(plain(GoalProgressLogic.sessionsBehindText(muscleBehind(), doneThisWeek: 4)), aim)
+        XCTAssertEqual(plain(GoalProgressLogic.sessionsBehindText(muscleBehind(), doneThisWeek: 5)), aim)
+        // The done count changes nothing for a muscle goal that is not behind.
+        XCTAssertEqual(
+            plain(GoalProgressLogic.compactText(muscleBehind(verdict: .progressing), system: .metric, sessionsDoneThisWeek: 2, now: now, locale: en)),
+            "1 of 4 kg gained · Squat +10 kg / 4 wk"
+        )
+    }
+
     func testMuscleBehindLineOnlyWhenBehindMuscleWithAdherence() {
         // Not behind: the existing goal-outcome + lift line.
         let progressing = muscleBehind(verdict: .progressing)
         XCTAssertNil(GoalProgressLogic.sessionsBehindText(progressing))
         XCTAssertEqual(plain(GoalProgressLogic.compactText(progressing, system: .metric, now: now, locale: en)),
-                       "1 of 4 kg gained · Squat +20 kg / 4 wk")
+                       "1 of 4 kg gained · Squat +10 kg / 4 wk")
         // Older server (no adherence): behind keeps the previous line instead of guessing numbers.
         let legacy = muscleBehind(adherence: nil)
         XCTAssertNil(GoalProgressLogic.sessionsBehindText(legacy))
         XCTAssertEqual(plain(GoalProgressLogic.compactText(legacy, system: .metric, now: now, locale: en)),
-                       "1 of 4 kg gained · Squat +20 kg / 4 wk")
+                       "1 of 4 kg gained · Squat +10 kg / 4 wk")
         // Unusable counts never divide or print nonsense.
         XCTAssertNil(GoalProgressLogic.sessionsBehindText(muscleBehind(adherence: .init(done: 0, planned: 0, weeklyTarget: 0))))
         // Other goals' `behind` ("Behind pace") is untouched even if a payload carried adherence.
@@ -577,13 +623,13 @@ final class GoalProgressLogicTests: XCTestCase {
     /// Wrapping may only happen between tokens: no plain space sits directly
     /// before a unit, and "/ 4 wk" is one token.
     func testValueUnitTokensDoNotBreakMidValue() {
-        let lift = GoalReasonDTO(kind: "lift", text: "Squat est. 1RM +20 kg vs 4 weeks ago (120 → 140 kg)", tone: .good)
+        let lift = GoalReasonDTO(kind: "lift", text: "Squat est. 1RM +10 kg vs 4 weeks ago (153 → 163 kg)", tone: .good)
         let muscle = GoalProgressDTO(
             goal: "muscle", target: .init(weightKg: 83),
             current: .init(weightKg: 80, startWeightKg: 79, changeKg: 1, progressPct: 25), eta: "2026-12-06", verdict: .progressing,
             reasons: [lift]
         )
-        XCTAssertEqual(GoalProgressLogic.liftShortText(muscle), "Squat +20\u{00A0}kg /\u{00A0}4\u{00A0}wk")
+        XCTAssertEqual(GoalProgressLogic.liftShortText(muscle), "Squat +10\u{00A0}kg /\u{00A0}4\u{00A0}wk")
         let strings = [
             GoalProgressLogic.compactText(muscle, system: .metric, now: now, locale: en),
             GoalProgressLogic.compactText(muscleBehind(), system: .metric, now: now, locale: en),
@@ -594,6 +640,47 @@ final class GoalProgressLogicTests: XCTestCase {
                 XCTAssertFalse(text.contains(unit), "\"\(text)\" has a breakable space before \"\(unit)\"")
             }
         }
+    }
+
+    // MARK: - nonBreaking(_:)
+
+    /// Server copy (or copy composed with plain spaces) is shown through
+    /// `nonBreaking` so a narrow line wraps BETWEEN value+unit tokens, never
+    /// "+10 / kg" or "(153 → / 163 kg)".
+    func testNonBreakingKeepsValuesUnitsAndArrowPairsWhole() {
+        let nb = GoalProgressLogic.nbsp
+        XCTAssertEqual(
+            GoalProgressLogic.nonBreaking("Squat est. 1RM +10 kg vs 4 weeks ago (153 → 163 kg)"),
+            "Squat est. 1RM +10\(nb)kg vs 4\(nb)weeks ago (153\(nb)→\(nb)163\(nb)kg)"
+        )
+        XCTAssertEqual(
+            GoalProgressLogic.nonBreaking("3 of 4 sessions, Squat est. 1RM +10 kg over 4 wks"),
+            "3 of 4 sessions, Squat est. 1RM +10\(nb)kg over 4\(nb)wks"
+        )
+        XCTAssertEqual(GoalProgressLogic.nonBreaking("Lifts up, sessions behind — Squat +10 kg"),
+                       "Lifts up, sessions behind — Squat +10\(nb)kg")
+        XCTAssertEqual(GoalProgressLogic.nonBreaking("-0.6 kg/wk, 8 mi, 150 bpm"), "-0.6\(nb)kg/wk, 8\(nb)mi, 150\(nb)bpm")
+    }
+
+    func testNonBreakingBindsNumericRangesAcrossTheDash() {
+        let nb = GoalProgressLogic.nbsp
+        let wj = GoalProgressLogic.wordJoiner
+        XCTAssertEqual(GoalProgressLogic.nonBreaking("≈ 0.2–0.8 kg"), "≈ 0.2\(wj)–\(wj)0.8\(nb)kg")
+        // A dash between words is a normal break opportunity.
+        XCTAssertEqual(GoalProgressLogic.nonBreaking("Building — distance up"), "Building — distance up")
+    }
+
+    func testNonBreakingIsIdempotentAndLeavesOtherTextAlone() {
+        let once = GoalProgressLogic.nonBreaking("Squat est. 1RM +10 kg vs 4 weeks ago (153 → 163 kg), 0.2–0.8 kg")
+        XCTAssertEqual(GoalProgressLogic.nonBreaking(once), once)
+        // Server copy that is already non-breaking passes through unchanged.
+        let already = "Squat est. 1RM +10\u{00A0}kg over 4\u{00A0}wks"
+        XCTAssertEqual(GoalProgressLogic.nonBreaking(already), already)
+        // Words that merely begin with a unit are not units.
+        XCTAssertEqual(GoalProgressLogic.nonBreaking("5 min, 3 weekly, 2 kgs"), "5 min, 3 weekly, 2 kgs")
+        XCTAssertEqual(GoalProgressLogic.nonBreaking("Half marathon in 12 weeks (Dec 30)"),
+                       "Half marathon in 12\u{00A0}weeks (Dec 30)")
+        XCTAssertEqual(GoalProgressLogic.nonBreaking(""), "")
     }
 
     func testCompactReasonShortensEnduranceVolumeCopy() {

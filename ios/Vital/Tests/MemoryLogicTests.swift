@@ -216,7 +216,7 @@ final class MemoryLogicTests: XCTestCase {
     func testGoalSummaryIncludesTheEnduranceRaceLikeTheProfileRow() {
         XCTAssertEqual(
             MemoryLogic.goalSummary(goalId: "endurance", targetWeightKg: nil, weeklySessions: nil, weeklyDistanceKm: 30, raceDate: "2999-12-30", raceDistanceKm: 21.1, system: .metric),
-            "Endurance \u{00B7} 30 km/week \u{00B7} Half marathon Dec 30"
+            "Half marathon \u{00B7} Dec 30 \u{00B7} 30 km/wk"
         )
         XCTAssertEqual(
             MemoryLogic.goalSummary(goalId: "endurance", targetWeightKg: nil, weeklySessions: nil, weeklyDistanceKm: 30, system: .metric),

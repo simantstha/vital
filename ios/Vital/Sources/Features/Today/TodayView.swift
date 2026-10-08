@@ -185,6 +185,7 @@ struct TodayView: View {
                                     progress: progress,
                                     system: unitPref.current,
                                     heroShowsDistance: vm.goalLineHeroShowsDistance,
+                                    sessionsDoneThisWeek: vm.sessionsDoneThisWeek,
                                     onTap: { showGoalProgress = true }
                                 )
                                 .padding(.top, -Theme.Spacing.md)

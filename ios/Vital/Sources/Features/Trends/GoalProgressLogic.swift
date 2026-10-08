@@ -17,6 +17,31 @@ enum GoalProgressLogic {
     /// middle of one ("Squat +20 / kg / 4 wk" -> "Squat +20 kg / 4 wk").
     static let nbsp = "\u{00A0}"
 
+    /// U+2060. Glued to both sides of an en dash inside a numeric range
+    /// ("0.2–0.8") so the line cannot break after the dash — a no-break space
+    /// does not help there (an en dash allows a break after it, even before a
+    /// non-breaking space).
+    static let wordJoiner = "\u{2060}"
+
+    /// Makes copy that arrives (or is composed) with plain spaces safe to wrap:
+    /// a value stays with its unit ("+10 kg", "4 wks"), an arrow pair stays
+    /// whole ("153 → 163 kg") and a numeric range cannot split ("0.2–0.8").
+    /// Wrapping can then only happen BETWEEN these tokens. Idempotent, and a
+    /// no-op for text that is already non-breaking (the server emits U+00A0
+    /// itself), so it is safe to run over any displayed server string. Applied
+    /// where such strings are shown verbatim (goal reasons, the Trends review
+    /// row, the strength chip).
+    static func nonBreaking(_ text: String) -> String {
+        var out = text.replacingOccurrences(of: " \u{2192} ", with: "\(nbsp)\u{2192}\(nbsp)")
+        out = out.replacingOccurrences(
+            of: "(\\d) (kg|lb|km|mi|wks|wk|weeks|week|bpm)\\b", with: "$1\(nbsp)$2", options: .regularExpression
+        )
+        out = out.replacingOccurrences(
+            of: "(\\d)\u{2013}(\\d)", with: "$1\(wordJoiner)\u{2013}\(wordJoiner)$2", options: .regularExpression
+        )
+        return out
+    }
+
     // MARK: - Tone
 
     enum Tone: Equatable {
@@ -418,12 +443,16 @@ enum GoalProgressLogic {
     ///
     /// A muscle goal whose verdict is `behind` (planned sessions not
     /// happening) leads with the cause and the next step instead
-    /// (`sessionsBehindText`): "9 of 16 sessions in 4 wk · aim for 4 this week".
+    /// (`sessionsBehindText`): "9 of 16 sessions in 4 wk · 2 more by Sun" once
+    /// Today knows this week's done count (`sessionsDoneThisWeek`, the same
+    /// number the hero's "2 of 4 sessions this week" shows), else "... · aim for
+    /// 4 this week".
     ///
     /// Value+unit tokens use non-breaking spaces (`nbsp`); compare in tests
     /// after replacing them with plain spaces.
     static func compactText(
         _ progress: GoalProgressDTO, system: UnitSystem, heroShowsDistance: Bool = false,
+        sessionsDoneThisWeek: Int? = nil,
         now: Date = Date(), locale: Locale = .current
     ) -> String {
         // Only when there is a distance line the hero could be duplicating —
@@ -433,10 +462,10 @@ enum GoalProgressLogic {
            let reason = distanceReasonText(progress, system: system) { return compactReason(reason) }
         // A muscle goal's Today line leads with the user's own goal outcome
         // ("1 of 4 kg gained") and appends the headline lift short
-        // ("· Squat +20 kg / 4 wk"). With no weight target it is the lift story
+        // ("· Squat +10 kg / 4 wk"). With no weight target it is the lift story
         // alone; with neither it falls through to the weight ETA.
         if progress.goal == "muscle", progress.verdict != .needsTarget, progress.verdict != .insufficientData {
-            if let cause = sessionsBehindText(progress) { return cause }
+            if let cause = sessionsBehindText(progress, doneThisWeek: sessionsDoneThisWeek) { return cause }
             if let outcome = weightLine(progress, system: system) {
                 if let short = liftShortText(progress) { return "\(outcome) · \(short)" }
                 return outcome
@@ -471,7 +500,7 @@ enum GoalProgressLogic {
         return out
     }
 
-    /// The lift-related story for a muscle goal ("Squat +20 kg vs 4 wk"):
+    /// The lift-related story for a muscle goal ("Squat +10 kg vs 4 wk"):
     /// the first reason of kind "lift", else the server headline when it
     /// mentions a lift/1RM, minus its verdict prefix. `nil` when absent.
     static func liftReasonText(_ progress: GoalProgressDTO) -> String? {
@@ -486,8 +515,8 @@ enum GoalProgressLogic {
     }
 
     /// The headline lift as a short tail for the Today line: the server's lift
-    /// reason ("Squat est. 1RM +20 kg vs 4 weeks ago (120 → 140 kg)", always the
-    /// shared headline lift, first) becomes "Squat +20 kg / 4 wk". `nil` when
+    /// reason ("Squat est. 1RM +10 kg vs 4 weeks ago (153 → 163 kg)", always the
+    /// shared headline lift, first) becomes "Squat +10 kg / 4 wk". `nil` when
     /// there is no lift reason, or it carries no signed change ("unchanged").
     static func liftShortText(_ progress: GoalProgressDTO) -> String? {
         guard let reason = progress.reasons.first(where: { $0.kind.lowercased().contains("lift") }),
@@ -496,22 +525,34 @@ enum GoalProgressLogic {
         else { return nil }
         let name = reason.text[..<nameEnd.lowerBound].trimmingCharacters(in: .whitespaces)
         guard !name.isEmpty else { return nil }
-        // Keep "+20 kg" and "/ 4 wk" whole: wrapping happens between them.
+        // Keep "+10 kg" and "/ 4 wk" whole: wrapping happens between them.
         let change = String(reason.text[delta]).replacingOccurrences(of: " ", with: nbsp)
         return "\(name) \(change) /\(nbsp)4\(nbsp)wk"
     }
 
     /// The muscle `behind` verdict means lifts are up but the planned sessions
     /// are not happening, so say that with the numbers and the next step:
-    /// "9 of 16 sessions in 4 wk · aim for 4 this week". From the payload's
+    /// "9 of 16 sessions in 4 wk · 2 more by Sun". From the payload's
     /// structured `adherence`; `nil` unless this is a muscle goal with a
     /// `behind` verdict and usable counts (older servers omit `adherence`, and
     /// the caller then keeps the weight/lift line).
-    static func sessionsBehindText(_ progress: GoalProgressDTO) -> String? {
+    ///
+    /// `doneThisWeek` is the number of sessions already done this week as Today
+    /// shows it (the hero's "2 of 4 sessions this week"); the next step is then
+    /// the concrete remainder of the weekly target ("2 more by Sun", the week
+    /// ends Sunday). Unknown, or the target already met, falls back to the
+    /// generic "aim for 4 this week" - never "0 more".
+    static func sessionsBehindText(_ progress: GoalProgressDTO, doneThisWeek: Int? = nil) -> String? {
         guard progress.goal == "muscle", progress.verdict == .behind,
               let adherence = progress.adherence,
               adherence.planned > 0, adherence.weeklyTarget > 0 else { return nil }
-        return "\(adherence.done) of \(adherence.planned) sessions in 4\(nbsp)wk · aim for \(adherence.weeklyTarget) this week"
+        let nextStep: String
+        if let doneThisWeek, adherence.weeklyTarget - max(doneThisWeek, 0) > 0 {
+            nextStep = "\(adherence.weeklyTarget - max(doneThisWeek, 0)) more by Sun"
+        } else {
+            nextStep = "aim for \(adherence.weeklyTarget) this week"
+        }
+        return "\(adherence.done) of \(adherence.planned) sessions in 4\(nbsp)wk · \(nextStep)"
     }
 
     /// Why the verdict is what it is, in one short phrase, for a surface that
@@ -538,16 +579,18 @@ enum GoalProgressLogic {
     }
 
     /// "Healthy pace: 0.25–1% of body weight per week ≈ 0.2–0.8 kg" — the kg
-    /// part (in the user's unit) only when the current weight is known.
+    /// part (in the user's unit) only when the current weight is known. Both
+    /// ranges and the "≈ value unit" tail are non-breaking (`nonBreaking`), so
+    /// a narrow sheet wraps between words, never as "≈ 0.2– / 0.8 kg".
     static func safeBandText(_ progress: GoalProgressDTO, system: UnitSystem) -> String? {
         guard let band = progress.safeBand else { return nil }
         var text = "Healthy pace: \(trimmedPercent(band.minPct))–\(trimmedPercent(band.maxPct))% of body weight per week"
         if let weightKg = progress.current.weightKg {
             let low = weightAmount(kg: weightKg * band.minPct / 100, system)
             let high = weightAmount(kg: weightKg * band.maxPct / 100, system)
-            text += " ≈ \(low)–\(high) \(system.weightUnit)"
+            text += " ≈\(nbsp)\(low)–\(high)\(nbsp)\(system.weightUnit)"
         }
-        return text
+        return nonBreaking(text)
     }
 
     /// "−0.6 kg/wk" (signed, user's unit) or `nil` without a measured rate.

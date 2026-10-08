@@ -343,10 +343,12 @@ private extension ProfileView {
             Text(value)
                 .font(.system(size: 13))
                 .foregroundStyle(Theme.Colors.textSecondary)
-                .lineLimit(1)
-                // The endurance Goal row can carry target + race
-                // ("Endurance · 30 km/week · Half marathon Dec 30").
-                .minimumScaleFactor(0.75)
+                // The endurance Goal row can carry race + target ("Half
+                // marathon · Dec 30 · 30 km/wk"): wrap onto a second line
+                // (trailing-aligned, next to the chevron) rather than shrink
+                // or truncate it.
+                .lineLimit(2)
+                .multilineTextAlignment(.trailing)
 
             Image(systemName: "chevron.right")
                 .font(.system(size: 13, weight: .semibold))
