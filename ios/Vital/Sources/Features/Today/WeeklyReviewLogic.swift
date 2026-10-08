@@ -80,19 +80,49 @@ enum WeeklyReviewLogic {
     /// Week-scoped pill word. Deliberately NOT the goal-status vocabulary
     /// ("On track" etc.) so the weekly card's pill never looks identical to
     /// the goal pill elsewhere (persona review). `nil` when not enough data.
+    ///
+    /// The pill rates THE REVIEWED WEEK, so it comes from the server's
+    /// `weekRating` (that week's own stats). The review's `verdict` is the
+    /// 4-week goal verdict and must not drive it ("Sessions behind" over four
+    /// weeks sits right above a "Good week" otherwise). Only reviews stored
+    /// before `weekRating` existed fall back to the old verdict mapping; a
+    /// review that carries the key — even as `null` ("can't rate this week") —
+    /// never does, and shows no pill when there is no rating.
     static func verdictLabel(_ review: WeeklyReviewDTO) -> String? {
-        isNotEnoughData(review) ? nil : weekLabel(for: review.verdict)
+        guard !isNotEnoughData(review) else { return nil }
+        if review.hasWeekRating { return review.weekRating.map { weekLabel(for: $0) } }
+        return weekLabel(for: review.verdict)
     }
 
+    static func weekLabel(for rating: WeekRating) -> String {
+        switch rating {
+        case .good:  return "Good week"
+        case .mixed: return "Mixed week"
+        case .tough: return "Tough week"
+        case .light: return "Lighter week"
+        }
+    }
+
+    /// Legacy mapping, used only for reviews without a `weekRating`.
     static func weekLabel(for verdict: GoalVerdict) -> String {
         switch verdict {
         case .onTrack, .ahead, .progressing, .building: return "Good week"
         case .behind, .holding:              return "Mixed week"
         case .stalled, .tooFast:             return "Tough week"
-        // "Lighter week" is reserved for a deliberate deload (no such verdict
-        // exists in the enum; lib/weeklyReview.ts only uses it in a stat line).
         case .needsTarget:                   return "Set a target"
         case .insufficientData:              return "Early days"
+        }
+    }
+
+    /// Chip tint for the week pill: follows the same source as the label —
+    /// good green, tough amber (never red: a slow week isn't a failure),
+    /// mixed / lighter gray. Legacy reviews use the goal verdict's tone.
+    static func tone(for review: WeeklyReviewDTO) -> GoalProgressLogic.Tone {
+        guard review.hasWeekRating else { return GoalProgressLogic.tone(for: review.verdict) }
+        switch review.weekRating {
+        case .some(.good):  return .good
+        case .some(.tough): return .watch
+        case .some(.mixed), .some(.light), .none: return .neutral
         }
     }
 

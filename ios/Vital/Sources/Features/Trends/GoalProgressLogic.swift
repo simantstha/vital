@@ -10,6 +10,13 @@ import SwiftUI
 /// numbers to compose from (muscle lifts, endurance sessions, general habits).
 enum GoalProgressLogic {
 
+    // MARK: - Non-breaking text
+
+    /// U+00A0. Joins a value to its unit ("+20 kg", "4 wk") inside the strings
+    /// built here so a narrow line can wrap BETWEEN tokens but never in the
+    /// middle of one ("Squat +20 / kg / 4 wk" -> "Squat +20 kg / 4 wk").
+    static let nbsp = "\u{00A0}"
+
     // MARK: - Tone
 
     enum Tone: Equatable {
@@ -187,7 +194,7 @@ enum GoalProgressLogic {
         let doneKg = max(0, losing ? start - current : current - start)
         guard totalKg > 0 else { return nil }
         let verb = losing ? "lost" : "gained"
-        return "\(weightAmount(kg: doneKg, system)) of \(weightAmount(kg: totalKg, system)) \(system.weightUnit) \(verb)"
+        return "\(weightAmount(kg: doneKg, system)) of \(weightAmount(kg: totalKg, system))\(nbsp)\(system.weightUnit) \(verb)"
     }
 
     // MARK: - Weekly distance (endurance)
@@ -322,8 +329,8 @@ enum GoalProgressLogic {
               let target = dateText(progress.target.date, now: now, locale: locale) else { return nil }
         switch relation {
         case .onPace:              return "On pace for \(target)"
-        case .ahead(let weeks):    return "\(weeks) wk ahead of \(target)"
-        case .behind(let weeks):   return "\(weeks) wk behind \(target)"
+        case .ahead(let weeks):    return "\(weeks)\(nbsp)wk ahead of \(target)"
+        case .behind(let weeks):   return "\(weeks)\(nbsp)wk behind \(target)"
         }
     }
 
@@ -408,6 +415,13 @@ enum GoalProgressLogic {
     /// `heroShowsDistance`: the endurance hero already shows "17.2 of 30 km
     /// this week" with a bar, so repeating that distance line here would be
     /// redundant — show the verdict's reason instead (`distanceReasonText`).
+    ///
+    /// A muscle goal whose verdict is `behind` (planned sessions not
+    /// happening) leads with the cause and the next step instead
+    /// (`sessionsBehindText`): "9 of 16 sessions in 4 wk · aim for 4 this week".
+    ///
+    /// Value+unit tokens use non-breaking spaces (`nbsp`); compare in tests
+    /// after replacing them with plain spaces.
     static func compactText(
         _ progress: GoalProgressDTO, system: UnitSystem, heroShowsDistance: Bool = false,
         now: Date = Date(), locale: Locale = .current
@@ -422,6 +436,7 @@ enum GoalProgressLogic {
         // ("· Squat +20 kg / 4 wk"). With no weight target it is the lift story
         // alone; with neither it falls through to the weight ETA.
         if progress.goal == "muscle", progress.verdict != .needsTarget, progress.verdict != .insufficientData {
+            if let cause = sessionsBehindText(progress) { return cause }
             if let outcome = weightLine(progress, system: system) {
                 if let short = liftShortText(progress) { return "\(outcome) · \(short)" }
                 return outcome
@@ -481,7 +496,22 @@ enum GoalProgressLogic {
         else { return nil }
         let name = reason.text[..<nameEnd.lowerBound].trimmingCharacters(in: .whitespaces)
         guard !name.isEmpty else { return nil }
-        return "\(name) \(reason.text[delta]) / 4 wk"
+        // Keep "+20 kg" and "/ 4 wk" whole: wrapping happens between them.
+        let change = String(reason.text[delta]).replacingOccurrences(of: " ", with: nbsp)
+        return "\(name) \(change) /\(nbsp)4\(nbsp)wk"
+    }
+
+    /// The muscle `behind` verdict means lifts are up but the planned sessions
+    /// are not happening, so say that with the numbers and the next step:
+    /// "9 of 16 sessions in 4 wk · aim for 4 this week". From the payload's
+    /// structured `adherence`; `nil` unless this is a muscle goal with a
+    /// `behind` verdict and usable counts (older servers omit `adherence`, and
+    /// the caller then keeps the weight/lift line).
+    static func sessionsBehindText(_ progress: GoalProgressDTO) -> String? {
+        guard progress.goal == "muscle", progress.verdict == .behind,
+              let adherence = progress.adherence,
+              adherence.planned > 0, adherence.weeklyTarget > 0 else { return nil }
+        return "\(adherence.done) of \(adherence.planned) sessions in 4\(nbsp)wk · aim for \(adherence.weeklyTarget) this week"
     }
 
     /// Why the verdict is what it is, in one short phrase, for a surface that

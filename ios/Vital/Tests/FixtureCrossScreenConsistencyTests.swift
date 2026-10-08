@@ -318,6 +318,51 @@ final class FixtureCrossScreenConsistencyTests: XCTestCase {
         XCTAssertEqual(status, 500)
     }
 
+    /// The muscle persona's two Today verdict surfaces no longer contradict
+    /// each other: the goal line says WHY it is behind (structured adherence
+    /// from the goal-progress fixture, matching its own reason text) and the
+    /// weekly pill rates THAT week from the review's own stats.
+    func test_muscleTodayGoalLineAndWeekPillAgree() throws {
+        let (_, goalData) = FixtureData.response(scenario: .muscle, method: "GET", path: "/api/goal/progress", query: "tz=UTC")
+        let progress = try JSONDecoder().decode(GoalProgressDTO.self, from: goalData)
+        let adherence = try XCTUnwrap(progress.adherence)
+        XCTAssertEqual(adherence, GoalProgressDTO.Adherence(done: 9, planned: 16, weeklyTarget: 4, pct: 56))
+        let reason = progress.reasons.first { $0.kind == "adherence" }?.text
+        XCTAssertEqual(reason, "\(adherence.done) of \(adherence.planned) planned sessions in 4 weeks (\(adherence.pct ?? -1)%)")
+        let line = GoalProgressLogic.compactText(progress, system: .metric)
+        XCTAssertEqual(line.replacingOccurrences(of: "\u{00A0}", with: " "), "9 of 16 sessions in 4 wk · aim for 4 this week")
+
+        let (_, reviewData) = FixtureData.response(scenario: .muscle, method: "GET", path: "/api/review/weekly", query: "tz=UTC")
+        let review = try JSONDecoder().decode(WeeklyReviewResponse.self, from: reviewData).review
+        // 3 of a 4-session target = target - 1 -> mixed, whatever the goal verdict says.
+        let sessions = review.stats.first { $0.label == "Sessions" }
+        XCTAssertEqual(sessions?.value, "3")
+        XCTAssertEqual(sessions?.comparison, "target 4 for the week")
+        XCTAssertEqual(review.weekRating, .mixed)
+        XCTAssertEqual(WeeklyReviewLogic.verdictLabel(review), "Mixed week")
+        XCTAssertTrue(review.headline.hasPrefix("3 of 4 sessions"), review.headline)
+    }
+
+    func test_everyScenarioWeeklyReviewCarriesAWeekRatingConsistentWithItsStats() throws {
+        func review(_ scenario: FixtureMode.Scenario) throws -> WeeklyReviewDTO {
+            let (_, data) = FixtureData.response(scenario: scenario, method: "GET", path: "/api/review/weekly", query: "tz=UTC")
+            return try JSONDecoder().decode(WeeklyReviewResponse.self, from: data).review
+        }
+        // 5 of 7 days in budget (>= 5/7) and weight down at a sane pace.
+        let weightLoss = try review(.weightLoss)
+        XCTAssertEqual(weightLoss.weekRating, .good)
+        XCTAssertEqual(WeeklyReviewLogic.verdictLabel(weightLoss), "Good week")
+        // 24.5 km against the 30 km weekly target = 82%: past 60%, short of 90%.
+        let endurance = try review(.endurance)
+        XCTAssertEqual(endurance.weekRating, .mixed)
+        XCTAssertEqual(WeeklyReviewLogic.verdictLabel(endurance), "Mixed week")
+        // Not enough data: the key is present as null, so no pill and no verdict fallback.
+        let thin = try review(.newUser)
+        XCTAssertNil(thin.weekRating)
+        XCTAssertTrue(thin.hasWeekRating)
+        XCTAssertNil(WeeklyReviewLogic.verdictLabel(thin))
+    }
+
     func test_weightLossGoalProgressAgreesWithWeightFixture() throws {
         let (_, data) = FixtureData.response(scenario: .weightLoss, method: "GET", path: "/api/goal/progress", query: "")
         let progress = try JSONDecoder().decode(GoalProgressDTO.self, from: data)

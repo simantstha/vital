@@ -422,6 +422,15 @@ final class ScreenshotTests: XCTestCase {
                 // "This week" — 2 of 4 planned sessions (fixture-unique).
                 XCTAssertTrue(waitForText(app, containing: "2 of 4 sessions this week"),
                                "Today's muscle hero should show the this-week session count [\(appearance)]")
+                // The goal line under the hero: the fixture's verdict is
+                // `behind` (adherence 9 of 16), so it leads with the cause and
+                // the next step instead of "1 of 4 kg gained · Squat …".
+                let goalLine = app.descendants(matching: .any).matching(identifier: "goalProgress.todayLine").firstMatch
+                XCTAssertTrue(goalLine.waitForExistence(timeout: 10),
+                               "Today's muscle hero should show the goal-progress line [\(appearance)]")
+                let goalLineText = goalLine.label.replacingOccurrences(of: "\u{00A0}", with: " ")
+                XCTAssertTrue(goalLineText.contains("9 of 16 sessions in 4 wk · aim for 4 this week"),
+                               "Muscle goal line should lead with the sessions-behind cause and next step, got \"\(goalLineText)\" [\(appearance)]")
             }
 
             if scenario == "endurance" {
@@ -660,7 +669,8 @@ final class ScreenshotTests: XCTestCase {
         // Fixture-unique content: the weight_loss primary line is composed from
         // structured fields (never the server's kg headline); muscle falls
         // back to the server headline.
-        let expected = scenario == "weight_loss" ? "of 7.7 kg lost" : "Squat est. 1RM +20 kg vs 4 weeks ago"
+        // (GoalProgressLogic joins value+unit with U+00A0 so lines never wrap mid-value.)
+        let expected = scenario == "weight_loss" ? "of 7.7\u{00A0}kg lost" : "Squat est. 1RM +20 kg vs 4 weeks ago"
         XCTAssertTrue(waitForText(app, containing: expected),
                        "Goal progress detail should show the \(scenario) fixture's content [\(appearance)]")
         capture(app, name: "\(scenario)__goalProgress__\(appearance)")

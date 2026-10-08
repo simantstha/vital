@@ -21,6 +21,7 @@
  *            'progressing' | 'building' | 'holding' | 'needs_target' | 'insufficient_data',
  *   headline: string,                            // plain English, <= 70 chars
  *   reasons: [{ kind, text, tone: 'good' | 'watch' | 'neutral' }],   // max 3
+ *   adherence: { done, planned, weeklyTarget, pct } | null,        // muscle + weekly sessions target only (28 days: done of weeklyTarget x 4)
  *   dataSufficiency: { weighIns, needed, sessionsLast28d }
  * }
  *

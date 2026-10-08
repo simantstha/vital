@@ -2295,6 +2295,36 @@ struct GoalProgressDTO: Decodable, Equatable {
         }
     }
 
+    /// Muscle + weekly sessions target only (`nil` otherwise / older servers):
+    /// the structured numbers behind the "sessions behind" verdict, so the
+    /// Today line can say WHY and what to aim for without parsing reason copy.
+    /// `planned` = `weeklyTarget` x 4 over the same 28 days as `done`.
+    struct Adherence: Decodable, Equatable {
+        let done: Int
+        let planned: Int
+        let weeklyTarget: Int
+        /// Whole percent, `done / planned`.
+        let pct: Int?
+
+        private enum CodingKeys: String, CodingKey { case done, planned, weeklyTarget, pct }
+
+        init(done: Int, planned: Int, weeklyTarget: Int, pct: Int? = nil) {
+            self.done = done
+            self.planned = planned
+            self.weeklyTarget = weeklyTarget
+            self.pct = pct
+        }
+
+        /// Throws without all three counts so the enclosing `try?` drops the whole block.
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            done = try c.decode(Int.self, forKey: .done)
+            planned = try c.decode(Int.self, forKey: .planned)
+            weeklyTarget = try c.decode(Int.self, forKey: .weeklyTarget)
+            pct = try? c.decode(Int.self, forKey: .pct)
+        }
+    }
+
     /// "weight_loss" | "muscle" | "endurance" | "general" (kept a raw string
     /// so a future goal never fails decoding).
     let goal: String
@@ -2316,10 +2346,12 @@ struct GoalProgressDTO: Decodable, Equatable {
     let dataSufficiency: DataSufficiency
     /// Whole days since the newest weigh-in; optional (older servers omit it).
     let lastWeighInDaysAgo: Int?
+    /// Muscle session adherence over 28 days; `nil` for other goals / no target / older servers.
+    let adherence: Adherence?
 
     private enum CodingKeys: String, CodingKey {
         case goal, target, distance, race, current, ratePerWeek, safeBand, eta, onPaceForTargetDate
-        case verdict, headline, reasons, dataSufficiency, lastWeighInDaysAgo
+        case verdict, headline, reasons, dataSufficiency, lastWeighInDaysAgo, adherence
     }
 
     init(
@@ -2336,10 +2368,12 @@ struct GoalProgressDTO: Decodable, Equatable {
         headline: String = "",
         reasons: [GoalReasonDTO] = [],
         dataSufficiency: DataSufficiency = DataSufficiency(),
-        lastWeighInDaysAgo: Int? = nil
+        lastWeighInDaysAgo: Int? = nil,
+        adherence: Adherence? = nil
     ) {
         self.goal = goal
         self.lastWeighInDaysAgo = lastWeighInDaysAgo
+        self.adherence = adherence
         self.target = target
         self.distance = distance
         self.race = race
@@ -2369,6 +2403,7 @@ struct GoalProgressDTO: Decodable, Equatable {
         headline = (try? c.decode(String.self, forKey: .headline)) ?? ""
         reasons = ((try? c.decode([GoalReasonDTO].self, forKey: .reasons)) ?? []).filter { !$0.text.isEmpty }
         dataSufficiency = (try? c.decode(DataSufficiency.self, forKey: .dataSufficiency)) ?? DataSufficiency()
+        adherence = try? c.decode(Adherence.self, forKey: .adherence)
         if let days = try? c.decode(Int.self, forKey: .lastWeighInDaysAgo) {
             lastWeighInDaysAgo = days
         } else if let days = try? c.decode(Double.self, forKey: .lastWeighInDaysAgo), days.isFinite {

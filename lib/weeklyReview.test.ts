@@ -498,3 +498,278 @@ test('signupLocalDay uses the user timezone', () => {
   assert.equal(signupLocalDay(at, 'UTC'), '2026-03-02');
   assert.equal(signupLocalDay(null, 'UTC'), null);
 });
+
+// ── weekRating: rates THIS week, never the 4-week goal verdict ──────────────
+
+const run = (day: string, distanceKm: number | null, type: string | null = 'Running') => ({ day, durationMin: 45, distanceKm, type });
+
+function muscleWeek(over: Partial<WeeklyReviewInput> = {}): WeeklyReviewInput {
+  return base({
+    goal: 'muscle',
+    verdict: 'progressing',
+    weeklySessionsTarget: 4,
+    trainingDays: [WEEK[0], WEEK[2], WEEK[4], WEEK[5]],
+    intakeDays: intake(WEEK, [2800, 2850, 2900, 2800, 2750, 2900, 2850], 160),
+    ...over,
+  });
+}
+
+test('weekRating muscle: sessions vs the weekly target — target good, target-1 mixed, fewer tough', () => {
+  const rate = (days: string[]) => computeWeeklyReview(muscleWeek({ trainingDays: days })).weekRating;
+  assert.equal(rate([WEEK[0], WEEK[2], WEEK[4], WEEK[5]]), 'good'); // 4 of 4
+  assert.equal(rate([WEEK[0], WEEK[2], WEEK[4]]), 'mixed'); // 3 of 4
+  assert.equal(rate([WEEK[0], WEEK[2]]), 'tough'); // 2 of 4
+  assert.equal(rate([WEEK[0]]), 'tough'); // 1 of 4
+});
+
+test('weekRating muscle: 3 of 4 sessions is "mixed" even when the 4-week goal verdict is good (headline and pill agree)', () => {
+  const progression: ProgressionSummary = {
+    Squat: [liftWk('2026-08-31', 120, 6), liftWk(WEEK_START, 140.4, 6)],
+  };
+  const r = computeWeeklyReview(muscleWeek({ verdict: 'progressing', trainingDays: [WEEK[0], WEEK[2], WEEK[4]], progression }));
+  assert.equal(r.headline, '3 of 4 sessions, Squat est. 1RM +20 kg over 4 wks');
+  assert.equal(r.verdict, 'progressing');
+  assert.equal(r.weekRating, 'mixed');
+});
+
+test('weekRating muscle: ignores the goal verdict in both directions', () => {
+  // "Sessions behind" over the last 4 weeks, but this week hit every planned session.
+  const behindButGoodWeek = computeWeeklyReview(muscleWeek({ verdict: 'behind' }));
+  assert.equal(behindButGoodWeek.verdict, 'behind');
+  assert.equal(behindButGoodWeek.weekRating, 'good');
+  // A "progressing" goal verdict does not rescue a week with one session.
+  const progressingButToughWeek = computeWeeklyReview(muscleWeek({ verdict: 'progressing', trainingDays: [WEEK[3]] }));
+  assert.equal(progressingButToughWeek.weekRating, 'tough');
+  // And the verdict never changes the rating for identical week stats.
+  for (const verdict of ['on_track', 'ahead', 'too_fast', 'behind', 'stalled', 'progressing', 'building', 'holding', 'insufficient_data'] as const) {
+    assert.equal(computeWeeklyReview(muscleWeek({ verdict })).weekRating, 'good', verdict);
+  }
+});
+
+test('weekRating muscle: protein hit on under half the logged days pulls the week down one level', () => {
+  const lowProtein = intake(WEEK, [2800, 2850, 2900, 2800, 2750, 2900, 2850], 40); // 0 of 7 days hit 150 g * 0.9
+  assert.equal(computeWeeklyReview(muscleWeek({ intakeDays: lowProtein })).weekRating, 'mixed'); // 4 of 4 -> mixed
+  assert.equal(computeWeeklyReview(muscleWeek({ intakeDays: lowProtein, trainingDays: [WEEK[0], WEEK[2], WEEK[4]] })).weekRating, 'tough'); // 3 of 4 -> tough
+  // Strong protein never upgrades a missed-session week.
+  assert.equal(computeWeeklyReview(muscleWeek({ trainingDays: [WEEK[0], WEEK[2], WEEK[4]] })).weekRating, 'mixed');
+  // Fewer than 3 logged days: protein is not judged.
+  const twoDays = computeWeeklyReview(muscleWeek({
+    intakeDays: intake(WEEK.slice(0, 2), [2800, 2800], 40),
+    weightReadings: weigh([...PREV, ...WEEK], i => 75 + i * 0.03), // keeps the review sufficient without a protein stat
+  }));
+  assert.equal(statByLabel(twoDays, 'Protein days hit'), undefined);
+  assert.equal(twoDays.weekRating, 'good');
+});
+
+test('weekRating muscle: no weekly sessions target -> null (nothing honest to rate against)', () => {
+  const r = computeWeeklyReview(muscleWeek({ weeklySessionsTarget: null }));
+  assert.equal(r.dataSufficiency.sufficient, true);
+  assert.equal(r.weekRating, null);
+});
+
+test('weekRating muscle: zero sessions is tough even for a 1-a-week target', () => {
+  const r = computeWeeklyReview(muscleWeek({
+    weeklySessionsTarget: 1,
+    trainingDays: [PREV[1]], // trained last week only
+    progression: { 'bench press': [liftWk(PREV_START, 100), liftWk(WEEK_START, 100)] },
+  }));
+  assert.equal(r.weekRating, 'tough');
+});
+
+test('weekRating muscle: a deliberate lighter week (volume < 60% of the prior 4-week average) is "light"', () => {
+  const mk = (weekStart: string, volumeKg: number) => ({ weekStart, bestEstimatedOneRepMaxKg: 100, volumeKg, totalSets: 8, totalReps: 40 });
+  const prior = [mk('2026-08-31', 3000), mk('2026-09-07', 3000), mk('2026-09-14', 3000), mk('2026-09-21', 3000)];
+  const lighter: ProgressionSummary = { 'bench press': [...prior, mk(WEEK_START, 1200)] };
+  const normal: ProgressionSummary = { 'bench press': [...prior, mk(WEEK_START, 2800)] };
+
+  assert.equal(computeWeeklyReview(muscleWeek({ progression: lighter })).weekRating, 'light'); // 4 of 4
+  assert.equal(computeWeeklyReview(muscleWeek({ progression: lighter, trainingDays: [WEEK[0], WEEK[2], WEEK[4]] })).weekRating, 'light'); // 3 of 4: still showed up
+  assert.equal(computeWeeklyReview(muscleWeek({ progression: normal })).weekRating, 'good');
+  // Low volume with most sessions missed is a missed week, not a deload.
+  assert.equal(computeWeeklyReview(muscleWeek({ progression: lighter, trainingDays: [WEEK[0]] })).weekRating, 'tough');
+  // No logged volume this week is "no data", not a deload.
+  assert.equal(computeWeeklyReview(muscleWeek({ progression: { 'bench press': prior } })).weekRating, 'good');
+});
+
+test('weekRating weight_loss: in-budget share of logged days — 5/7 good, 3/7 mixed, below tough', () => {
+  const rate = (kcal: number[]) => computeWeeklyReview(weightLossInput({
+    intakeDays: intake([...PREV, ...WEEK], [2300, 2250, 2400, 2300, 2350, 2500, 2450, ...kcal]),
+  })).weekRating;
+  assert.equal(rate([1900, 1950, 2000, 1850, 2050, 2450, 2500]), 'good'); // 5 of 7
+  assert.equal(rate([1900, 1950, 2000, 2400, 2450, 2500, 2450]), 'mixed'); // 3 of 7
+  assert.equal(rate([1900, 1950, 2400, 2400, 2450, 2500, 2450]), 'tough'); // 2 of 7
+});
+
+test('weekRating weight_loss: scales to partial logging (3 of 3 logged days in budget is good)', () => {
+  const r = computeWeeklyReview(base({
+    weightReadings: weigh([...PREV, ...WEEK], i => 82 - i * 0.07),
+    intakeDays: intake(WEEK.slice(0, 3), [1900, 1950, 2000]),
+    trainingDays: [WEEK[1], WEEK[3]],
+  }));
+  assert.equal(r.weekRating, 'good');
+});
+
+test('weekRating weight_loss: weight moving the wrong way pulls the week down one level', () => {
+  const r = computeWeeklyReview(weightLossInput({
+    weightReadings: weigh([...PREV, ...WEEK], i => 80 + i * 0.1),
+  }));
+  assert.equal(statByLabel(r, 'Days in budget')!.value, '5/7');
+  assert.equal(statByLabel(r, 'Weight trend')!.tone, 'watch');
+  assert.equal(r.weekRating, 'mixed'); // 5/7 in budget would be good
+});
+
+test('weekRating weight_loss: without usable budget days the weight direction alone rates the week', () => {
+  const lossOnly = (kgAt: (i: number) => number) => computeWeeklyReview(base({
+    weightReadings: weigh([...PREV, ...WEEK], kgAt),
+    trainingDays: [WEEK[1], WEEK[3]],
+  }));
+  const down = lossOnly(i => 82 - i * 0.07);
+  assert.equal(statByLabel(down, 'Days in budget'), undefined);
+  assert.equal(down.weekRating, 'good');
+  assert.equal(lossOnly(() => 82).weekRating, 'mixed'); // flat
+  assert.equal(lossOnly(i => 80 + i * 0.1).weekRating, 'tough'); // up
+});
+
+test('weekRating endurance: running distance vs the weekly target — 90% good, 60% mixed, below tough', () => {
+  const rate = (km: number[], over: Partial<WeeklyReviewInput> = {}) => computeWeeklyReview(base({
+    goal: 'endurance',
+    verdict: 'building',
+    weeklyDistanceKmTarget: 30,
+    trainingDays: [WEEK[0], WEEK[2], WEEK[4]],
+    workouts: km.map((k, i) => run(WEEK[i * 2], k)),
+    ...over,
+  })).weekRating;
+  assert.equal(rate([10, 10, 10]), 'good'); // 100%
+  assert.equal(rate([9, 9, 9]), 'good'); // exactly 90%
+  assert.equal(rate([8, 8, 8.5]), 'mixed'); // 24.5 of 30 = 82%
+  assert.equal(rate([6, 6, 6]), 'mixed'); // exactly 60%
+  assert.equal(rate([5, 5, 5]), 'tough'); // 50%
+});
+
+test('weekRating endurance: only running distance counts toward the target', () => {
+  const r = computeWeeklyReview(base({
+    goal: 'endurance',
+    weeklyDistanceKmTarget: 30,
+    trainingDays: [WEEK[0], WEEK[2], WEEK[4]],
+    workouts: [run(WEEK[0], 10), run(WEEK[2], 40, 'Cycling'), run(WEEK[4], 40, null)],
+  }));
+  assert.equal(r.weekRating, 'tough'); // 10 of 30 km running
+});
+
+test('weekRating endurance: a week with no run is 0 km only when the week before had distance', () => {
+  const noRunThisWeek = (prevKm: number | null) => computeWeeklyReview(base({
+    goal: 'endurance',
+    weeklyDistanceKmTarget: 30,
+    trainingDays: [WEEK[0], WEEK[2], WEEK[4]],
+    workouts: [
+      ...(prevKm == null ? [] : [run(PREV[1], prevKm)]),
+      { day: WEEK[0], durationMin: 40, distanceKm: null, type: 'Walking' },
+      { day: WEEK[2], durationMin: 40, distanceKm: null, type: 'Walking' },
+      { day: WEEK[4], durationMin: 40, distanceKm: null, type: 'Walking' },
+    ],
+  }));
+  assert.equal(noRunThisWeek(20).weekRating, 'tough');
+  assert.equal(noRunThisWeek(null).weekRating, null); // nothing measured, no sessions target
+});
+
+test('weekRating endurance: a tough sessions count pulls a distance rating down; with no distance target sessions decide', () => {
+  const week = (over: Partial<WeeklyReviewInput>) => computeWeeklyReview(base({
+    goal: 'endurance',
+    trainingDays: [WEEK[0]],
+    workouts: [run(WEEK[0], 32), { day: WEEK[2], durationMin: 30, distanceKm: null, type: 'Yoga' }, { day: WEEK[3], durationMin: 30, distanceKm: null, type: 'Yoga' }],
+    ...over,
+  }));
+  // One 32 km long run vs a 30 km target: distance good, but 1 of 4 sessions is tough -> mixed.
+  assert.equal(week({ weeklyDistanceKmTarget: 30, weeklySessionsTarget: 4 }).weekRating, 'mixed');
+  assert.equal(week({ weeklyDistanceKmTarget: 30 }).weekRating, 'good');
+  // No distance target: sessions vs target decide.
+  assert.equal(week({ weeklySessionsTarget: 4 }).weekRating, 'tough');
+  assert.equal(week({ weeklySessionsTarget: 1 }).weekRating, 'good');
+  assert.equal(week({}).weekRating, null);
+});
+
+test('weekRating general: active days — 3+ good, 2 mixed, else tough', () => {
+  const rate = (days: string[]) => computeWeeklyReview(base({
+    goal: 'general',
+    verdict: 'building',
+    trainingDays: days,
+    sleepMinutes: WEEK.map(day => ({ day, value: 470 })),
+    intakeDays: intake(WEEK.slice(0, 6), [2100, 2200, 2000, 2100, 2300, 2000]),
+  })).weekRating;
+  assert.equal(rate([WEEK[0], WEEK[2], WEEK[4], WEEK[5]]), 'good');
+  assert.equal(rate([WEEK[0], WEEK[3]]), 'mixed');
+  assert.equal(rate([WEEK[0]]), 'tough');
+});
+
+test('weekRating is null for the not-enough-data review and always present in the payload', () => {
+  for (const goal of ['weight_loss', 'muscle', 'endurance', 'general'] as const) {
+    const r = computeWeeklyReview(base({ goal, verdict: 'insufficient_data', trainingDays: [WEEK[2]] }));
+    assert.equal(r.dataSufficiency.sufficient, false);
+    assert.equal(r.weekRating, null);
+    const parsed = JSON.parse(JSON.stringify(r)) as Record<string, unknown>;
+    assert.ok('weekRating' in parsed, 'null survives JSON so clients can tell "no rating" from an old row');
+    assert.equal(parsed.weekRating, null);
+  }
+  const rated = JSON.parse(JSON.stringify(computeWeeklyReview(muscleWeek()))) as Record<string, unknown>;
+  assert.equal(rated.weekRating, 'good');
+});
+
+// ── muscle sessions are strength-only (same definition as goal progress) ─────
+
+test('muscle: a run is not a session — Sessions stat, headline and weekRating count strength days only', () => {
+  // 3 strength days + a Friday run: all 4 are "training days", only 3 are strength sessions.
+  const strengthDays = [WEEK[0], WEEK[2], WEEK[4]];
+  const withRun = muscleWeek({ trainingDays: [...strengthDays, WEEK[5]], strengthDays });
+  const r = computeWeeklyReview(withRun);
+  assert.equal(statByLabel(r, 'Sessions')!.value, '3');
+  assert.equal(statByLabel(r, 'Sessions')!.comparison, 'target 4 for the week');
+  assert.match(r.headline, /^3 of 4 sessions/);
+  assert.equal(r.weekRating, 'mixed'); // 4 would have read "good"
+
+  // Without strengthDays (older callers) every training day still counts.
+  const legacy = computeWeeklyReview(muscleWeek({ trainingDays: [...strengthDays, WEEK[5]] }));
+  assert.equal(statByLabel(legacy, 'Sessions')!.value, '4');
+  assert.equal(legacy.weekRating, 'good');
+});
+
+test('muscle: a week with only a run has 0 sessions and is tough', () => {
+  const r = computeWeeklyReview(muscleWeek({ trainingDays: [WEEK[3]], strengthDays: [] }));
+  assert.equal(statByLabel(r, 'Sessions')!.value, '0');
+  assert.match(r.headline, /^0 of 4 sessions/);
+  assert.equal(r.weekRating, 'tough');
+  assert.equal(r.slip, '0 of 4 planned sessions done.');
+});
+
+test("muscle: last week's comparison is strength-only too (no weekly target)", () => {
+  const r = computeWeeklyReview(muscleWeek({
+    weeklySessionsTarget: null,
+    trainingDays: [PREV[0], PREV[1], PREV[2], WEEK[0], WEEK[2]],
+    strengthDays: [PREV[0], WEEK[0], WEEK[2]], // two of last week's three training days were runs
+  }));
+  const sessions = statByLabel(r, 'Sessions')!;
+  assert.equal(sessions.value, '2');
+  assert.equal(sessions.comparison, '1 last week');
+  assert.equal(sessions.tone, 'good'); // 2, up from 1
+});
+
+test('strengthDays only changes the muscle goal; other goals keep counting every training day', () => {
+  const trainingDays = [WEEK[0], WEEK[2], WEEK[4]];
+  const endurance = computeWeeklyReview(base({
+    goal: 'endurance',
+    trainingDays,
+    strengthDays: [],
+    workouts: trainingDays.map(day => ({ day, durationMin: 40, distanceKm: 8, type: 'Running' })),
+  }));
+  assert.equal(statByLabel(endurance, 'Sessions')!.value, '3');
+  const weightLoss = computeWeeklyReview(weightLossInput({ strengthDays: [] }));
+  assert.equal(statByLabel(weightLoss, 'Workouts')!.value, '3');
+  const general = computeWeeklyReview(base({
+    goal: 'general',
+    trainingDays,
+    strengthDays: [],
+    sleepMinutes: WEEK.map(day => ({ day, value: 470 })),
+    intakeDays: intake(WEEK.slice(0, 6), [2100, 2200, 2000, 2100, 2300, 2000]),
+  }));
+  assert.equal(statByLabel(general, 'Active days')!.value, '3');
+  assert.equal(general.weekRating, 'good');
+});

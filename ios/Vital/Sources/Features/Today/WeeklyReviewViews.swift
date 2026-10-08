@@ -54,7 +54,7 @@ struct WeeklyReviewContent: View {
                 if let weekWord = WeeklyReviewLogic.verdictLabel(review) {
                     Chip(
                         text: weekWord,
-                        tint: GoalProgressLogic.color(for: GoalProgressLogic.tone(for: review.verdict))
+                        tint: GoalProgressLogic.color(for: WeeklyReviewLogic.tone(for: review))
                     )
                 }
             }

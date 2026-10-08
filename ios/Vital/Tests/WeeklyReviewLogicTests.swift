@@ -74,7 +74,8 @@ final class WeeklyReviewLogicTests: XCTestCase {
         XCTAssertEqual(rows.first?.title, "To get started")
     }
 
-    func testSufficientReviewUsesGoalProgressVerdictLabelAndAllRows() {
+    /// A review stored before `weekRating` existed (the helper sets none) keeps the old verdict mapping.
+    func testSufficientLegacyReviewUsesVerdictMappingAndAllRows() {
         let full = review()
         XCTAssertFalse(WeeklyReviewLogic.isNotEnoughData(full))
         XCTAssertEqual(WeeklyReviewLogic.verdictLabel(full), "Good week")
@@ -102,6 +103,104 @@ final class WeeklyReviewLogicTests: XCTestCase {
         XCTAssertEqual(WeeklyReviewLogic.accessibilityLabel(for: withComparison), "Days in budget, 5 of 7, 6 days logged")
         let plain = WeeklyReviewStatDTO(label: "Workouts", value: "3")
         XCTAssertEqual(WeeklyReviewLogic.accessibilityLabel(for: plain), "Workouts, 3")
+    }
+
+    // MARK: - Week pill rates THE WEEK (weekRating), not the 4-week goal verdict
+
+    private func rated(
+        verdict: GoalVerdict, weekRating: WeekRating?, hasWeekRating: Bool? = nil, sufficient: Bool = true
+    ) -> WeeklyReviewDTO {
+        WeeklyReviewDTO(
+            weekStart: "2026-09-28", weekEnd: "2026-10-04", goal: "muscle", verdict: verdict,
+            weekRating: weekRating, hasWeekRating: hasWeekRating,
+            headline: "3 of 4 sessions, Squat est. 1RM +20 kg over 4 wks",
+            stats: [WeeklyReviewStatDTO(label: "Sessions", value: "3"), WeeklyReviewStatDTO(label: "Protein days hit", value: "5/7")],
+            nextWeek: "Repeat this week.", sufficient: sufficient
+        )
+    }
+
+    func testPillWordFollowsWeekRatingForEveryRating() {
+        XCTAssertEqual(WeeklyReviewLogic.verdictLabel(rated(verdict: .progressing, weekRating: .good)), "Good week")
+        XCTAssertEqual(WeeklyReviewLogic.verdictLabel(rated(verdict: .progressing, weekRating: .mixed)), "Mixed week")
+        XCTAssertEqual(WeeklyReviewLogic.verdictLabel(rated(verdict: .progressing, weekRating: .tough)), "Tough week")
+        XCTAssertEqual(WeeklyReviewLogic.verdictLabel(rated(verdict: .progressing, weekRating: .light)), "Lighter week")
+        XCTAssertEqual(WeeklyReviewLogic.weekLabel(for: WeekRating.good), "Good week")
+        XCTAssertEqual(WeeklyReviewLogic.weekLabel(for: WeekRating.light), "Lighter week")
+    }
+
+    /// The persona bug: the goal chip said "Sessions behind" (4-week verdict
+    /// `behind`) while the weekly pill said "Good week" — now the pill ignores
+    /// the goal verdict entirely whenever the server rated the week.
+    func testPillIgnoresTheGoalVerdictWhenTheWeekIsRated() {
+        for verdict in [GoalVerdict.behind, .stalled, .tooFast, .holding, .onTrack, .progressing, .insufficientData, .needsTarget] {
+            XCTAssertEqual(WeeklyReviewLogic.verdictLabel(rated(verdict: verdict, weekRating: .mixed)), "Mixed week", "\(verdict)")
+        }
+        XCTAssertEqual(WeeklyReviewLogic.verdictLabel(rated(verdict: .behind, weekRating: .good)), "Good week")
+        XCTAssertEqual(WeeklyReviewLogic.verdictLabel(rated(verdict: .onTrack, weekRating: .tough)), "Tough week")
+        // The old mapping would have said "Mixed week" for `.behind`.
+        XCTAssertEqual(WeeklyReviewLogic.weekLabel(for: GoalVerdict.behind), "Mixed week")
+    }
+
+    func testPillFallsBackToTheVerdictMappingOnlyWhenWeekRatingIsAbsent() {
+        // An old stored row: no `weekRating` key at all.
+        XCTAssertEqual(WeeklyReviewLogic.verdictLabel(rated(verdict: .behind, weekRating: nil)), "Mixed week")
+        XCTAssertEqual(WeeklyReviewLogic.verdictLabel(rated(verdict: .stalled, weekRating: nil)), "Tough week")
+        XCTAssertEqual(WeeklyReviewLogic.verdictLabel(rated(verdict: .onTrack, weekRating: nil)), "Good week")
+        // The key is present but null ("can't rate this week"): no pill, and
+        // certainly not the goal verdict's wording.
+        XCTAssertNil(WeeklyReviewLogic.verdictLabel(rated(verdict: .onTrack, weekRating: nil, hasWeekRating: true)))
+        XCTAssertNil(WeeklyReviewLogic.verdictLabel(rated(verdict: .behind, weekRating: nil, hasWeekRating: true)))
+    }
+
+    func testNotEnoughDataNeverShowsAWeekPill() {
+        XCTAssertNil(WeeklyReviewLogic.verdictLabel(rated(verdict: .onTrack, weekRating: .good, sufficient: false)))
+    }
+
+    func testPillToneFollowsTheSameSourceAsTheLabel() {
+        XCTAssertEqual(WeeklyReviewLogic.tone(for: rated(verdict: .behind, weekRating: .good)), .good)
+        XCTAssertEqual(WeeklyReviewLogic.tone(for: rated(verdict: .onTrack, weekRating: .tough)), .watch)
+        XCTAssertEqual(WeeklyReviewLogic.tone(for: rated(verdict: .onTrack, weekRating: .mixed)), .neutral)
+        XCTAssertEqual(WeeklyReviewLogic.tone(for: rated(verdict: .onTrack, weekRating: .light)), .neutral)
+        XCTAssertEqual(WeeklyReviewLogic.tone(for: rated(verdict: .onTrack, weekRating: nil, hasWeekRating: true)), .neutral)
+        // Legacy rows keep the goal verdict's tone.
+        XCTAssertEqual(WeeklyReviewLogic.tone(for: rated(verdict: .behind, weekRating: nil)), .watch)
+        XCTAssertEqual(WeeklyReviewLogic.tone(for: rated(verdict: .onTrack, weekRating: nil)), .good)
+    }
+
+    func testDecodesWeekRatingNullAbsentAndUnknown() throws {
+        func decode(_ extra: String) throws -> WeeklyReviewDTO {
+            let json = """
+            {"id":"r","review":{"weekStart":"2026-09-28","weekEnd":"2026-10-04","goal":"muscle","verdict":"behind",
+             "headline":"h","stats":[{"label":"Sessions","value":"3","comparison":null,"tone":"neutral"},
+                                      {"label":"Weight trend","value":"+0.2 kg","comparison":null,"tone":"good"}],
+             "nextWeek":"n","dataSufficiency":{"daysWithData":6,"statCount":2,"sufficient":true}\(extra)}}
+            """
+            return try JSONDecoder().decode(WeeklyReviewResponse.self, from: Data(json.utf8)).review
+        }
+        // Rated: the pill is the week's, even though the goal verdict is `behind`.
+        let mixed = try decode(",\"weekRating\":\"mixed\"")
+        XCTAssertEqual(mixed.weekRating, .mixed)
+        XCTAssertTrue(mixed.hasWeekRating)
+        XCTAssertEqual(mixed.verdict, .behind)
+        XCTAssertEqual(WeeklyReviewLogic.verdictLabel(mixed), "Mixed week")
+        XCTAssertEqual(try decode(",\"weekRating\":\"light\"").weekRating, .light)
+        // Explicit null: server spoke, nothing to say.
+        let null = try decode(",\"weekRating\":null")
+        XCTAssertNil(null.weekRating)
+        XCTAssertTrue(null.hasWeekRating)
+        XCTAssertNil(WeeklyReviewLogic.verdictLabel(null))
+        // Old stored row: key missing -> legacy verdict mapping.
+        let old = try decode("")
+        XCTAssertNil(old.weekRating)
+        XCTAssertFalse(old.hasWeekRating)
+        XCTAssertEqual(WeeklyReviewLogic.verdictLabel(old), "Mixed week")
+        // A value from the future / a wrong type never reads as a rating, and never falls back to the goal wording.
+        for junk in [",\"weekRating\":\"great\"", ",\"weekRating\":7"] {
+            let unknown = try decode(junk)
+            XCTAssertNil(unknown.weekRating, junk)
+            XCTAssertTrue(unknown.hasWeekRating, junk)
+            XCTAssertNil(WeeklyReviewLogic.verdictLabel(unknown), junk)
+        }
     }
 
     // MARK: - Decoding
