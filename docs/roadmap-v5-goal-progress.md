@@ -107,6 +107,18 @@ Next (wave 4):
 Owner follow-ups added by wave 9:
 - Run `npx tsx scripts/backfill-exercise-canonical.ts` (dry run), review, then `--apply`.
 
+### Wave 10 (persona review pass 6) — shipped
+- [x] Optional race date + distance on the endurance goal (migration 0038): "Half marathon · 12 weeks to go" on Today, race row in the goal sheet, coach knows the race.
+- [x] One definition per number: one headline-lift rule (largest 4-week e1RM gain), whole-kg e1RM from rounded endpoints, "over 4 wks" labels in the weekly review, muscle verdict "Sessions behind" when adherence < 70%, Trends header counts the goal-card bullets, muscle Today line leads with the goal ("1 of 4 kg gained · Squat +20 kg / 4 wk"), one HRV "normal" (30-day value in ms).
+- [x] Copy + fixtures: "+ Warm-up" chip, no duplicate trend number, week-scoped review pill, "6 days in a row" streak, unified names, consistent demo data, banner-proof screenshots, Today layout stable after load (reserved streak / race slots).
+
+### Wave 11 (persona review pass 7: Sam 4.5, Priya 3, Marcus 3) — shipped
+- [x] Weekly pill rates the week itself (server `weekRating`: Good / Mixed / Tough / Lighter week); lifter sessions are strength-only in reviews.
+- [x] "Sessions behind" says why and what next: "9 of 16 sessions in 4 wk · aim for 4 this week"; no mid-value line wraps.
+- [x] Race readiness: long-run peak vs target ("Long run 14 km · build to 18 km by mid-Dec") on the goal card + sheet + coach context.
+- [x] Endurance hero in absolute units ("HRV −6 ms · RHR +5 bpm · Sleep 5h 48m"); sleep in h/m on Trends; race in the Profile goal row; analysis copy says walk/ride/run.
+- [x] Lift logger gym mode: progression hint ("Last 3×5 @ 140 kg · try 142.5 kg"), per-set ✓, rest timer (2:30 lower-body compounds / 2:00 other), "Save 7 done sets".
+
 ### Remaining backlog (non-blocking)
 - [x] HRV hero pill "above your normal" is measured vs the 30-day mean while the chart's normal is a band — align wording.
 - [ ] Sign in with Apple token revocation on account deletion (needs auth-code exchange + client secret).
