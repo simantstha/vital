@@ -160,7 +160,25 @@ export interface GoalProgress {
   reasons: GoalProgressReason[];
   /** Days since the newest weigh-in (0 = today); null with none. The ETA is anchored to that day, not to today. */
   lastWeighInDaysAgo?: number | null;
+  /**
+   * Muscle goal with a weekly sessions target only; null/absent otherwise.
+   * The structured numbers behind the `adherence` reason and the muscle
+   * `behind` verdict (pct < ADHERENCE_BEHIND_PCT), so a client can say WHY the
+   * goal is behind and what to aim for ("9 of 16 sessions in 4 wk · aim for 4
+   * this week") without parsing reason copy. `planned` = weeklyTarget x 4.
+   */
+  adherence?: GoalSessionAdherence | null;
   dataSufficiency: { weighIns: number; needed: number; sessionsLast28d: number };
+}
+
+export interface GoalSessionAdherence {
+  /** Sessions done in the trailing 28 days. */
+  done: number;
+  /** Planned sessions over the same 28 days (weeklyTarget x 4). */
+  planned: number;
+  weeklyTarget: number;
+  /** done / planned, whole percent. */
+  pct: number;
 }
 
 export interface GoalProgressIntakeDay {
@@ -485,12 +503,12 @@ function sessionsReason(input: GoalProgressInput): GoalProgressReason | null {
 }
 
 /** Planned-session adherence over 28 days: done / (weekly target x 4). Null without a target. */
-function sessionAdherence(input: GoalProgressInput): { done: number; planned: number; pct: number } | null {
+function sessionAdherence(input: GoalProgressInput): GoalSessionAdherence | null {
   const target = input.target.weeklySessions;
   if (target == null || target <= 0) return null;
   const done = sessionsPerWeek(input).count;
   const planned = target * 4;
-  return { done, planned, pct: Math.round((done / planned) * 100) };
+  return { done, planned, weeklyTarget: target, pct: Math.round((done / planned) * 100) };
 }
 
 /** "9 of 16 planned sessions in 4 weeks (56%)" — watch under 75%. */
@@ -1174,6 +1192,7 @@ export function computeGoalProgress(input: GoalProgressInput): GoalProgress {
     headline: outcome.headline,
     reasons: outcome.reasons,
     lastWeighInDaysAgo: w.lastWeighInDay != null ? Math.max(0, dayNumber(input.todayKey) - dayNumber(w.lastWeighInDay)) : null,
+    adherence: input.goal === 'muscle' ? sessionAdherence(input) : null,
     dataSufficiency: { weighIns: w.weighIns, needed: WEIGH_INS_NEEDED, sessionsLast28d },
   };
 }

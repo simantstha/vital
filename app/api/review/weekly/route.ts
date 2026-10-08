@@ -12,6 +12,7 @@
  *   review: {
  *     weekStart, weekEnd, goal, verdict (same set as /api/goal/progress),
  *     headline (<= 80 chars),
+ *     weekRating: 'good' | 'mixed' | 'tough' | 'light' | null,   // rates THIS week only (never the 4-week goal verdict); absent on rows stored before it existed
  *     stats: [{ label, value, comparison: string | null, tone: 'good'|'watch'|'neutral' }],   // max 4
  *     win: string | null, slip: string | null, nextWeek: string,
  *     dataSufficiency: { daysWithData, statCount, sufficient }

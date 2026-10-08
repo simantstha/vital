@@ -33,13 +33,40 @@ struct WeeklyReviewStatDTO: Decodable, Equatable, Identifiable {
     }
 }
 
+/// `review.weekRating` on the wire (`lib/weeklyReview.ts` `WeekRating`): how
+/// the reviewed week ITSELF went, from that week's own stats — unlike
+/// `verdict`, which is the 4-week goal verdict as of that week. Unknown
+/// future values fail to parse (`nil`), never read as "good".
+enum WeekRating: String, Equatable, Sendable {
+    case good
+    case mixed
+    case tough
+    /// A deliberate lighter (deload) week.
+    case light
+
+    init?(wire: String?) {
+        guard let wire, let rating = WeekRating(rawValue: wire) else { return nil }
+        self = rating
+    }
+}
+
 /// The `review` object of GET /api/review/weekly.
 struct WeeklyReviewDTO: Decodable, Equatable {
     /// Monday / Sunday of the reviewed local week, "YYYY-MM-DD".
     let weekStart: String
     let weekEnd: String
     let goal: String
+    /// The 4-week GOAL verdict as of the reviewed week — shared with the goal
+    /// card. Not a rating of the week itself; the pill uses `weekRating`.
     let verdict: GoalVerdict
+    /// The reviewed week's own rating, `nil` when the server could not rate it
+    /// from that week's stats (or sent a value this build doesn't know).
+    let weekRating: WeekRating?
+    /// True when the payload carried a `weekRating` key at all (even `null`):
+    /// the server has spoken about this week, so the pill must never fall back
+    /// to the goal-verdict wording. False only for rows stored before the field
+    /// existed.
+    let hasWeekRating: Bool
     let headline: String
     let stats: [WeeklyReviewStatDTO]
     let win: String?
@@ -50,13 +77,15 @@ struct WeeklyReviewDTO: Decodable, Equatable {
     let sufficient: Bool
 
     private enum CodingKeys: String, CodingKey {
-        case weekStart, weekEnd, goal, verdict, headline, stats, win, slip, nextWeek, dataSufficiency
+        case weekStart, weekEnd, goal, verdict, weekRating, headline, stats, win, slip, nextWeek, dataSufficiency
     }
     private struct Sufficiency: Decodable { let sufficient: Bool? }
 
     init(
         weekStart: String, weekEnd: String, goal: String = "weight_loss",
-        verdict: GoalVerdict = .insufficientData, headline: String,
+        verdict: GoalVerdict = .insufficientData,
+        weekRating: WeekRating? = nil, hasWeekRating: Bool? = nil,
+        headline: String,
         stats: [WeeklyReviewStatDTO] = [], win: String? = nil, slip: String? = nil,
         nextWeek: String = "", sufficient: Bool = true
     ) {
@@ -64,6 +93,8 @@ struct WeeklyReviewDTO: Decodable, Equatable {
         self.weekEnd = weekEnd
         self.goal = goal
         self.verdict = verdict
+        self.weekRating = weekRating
+        self.hasWeekRating = hasWeekRating ?? (weekRating != nil)
         self.headline = headline
         self.stats = stats
         self.win = win
@@ -78,6 +109,10 @@ struct WeeklyReviewDTO: Decodable, Equatable {
         weekEnd = try c.decode(String.self, forKey: .weekEnd)
         goal = (try? c.decode(String.self, forKey: .goal)) ?? ""
         verdict = GoalVerdict(wire: try? c.decode(String.self, forKey: .verdict))
+        // `contains` is true for an explicit JSON null too: "server declined to
+        // rate" (null) is different from an old row that has no key at all.
+        hasWeekRating = c.contains(.weekRating)
+        weekRating = WeekRating(wire: try? c.decodeIfPresent(String.self, forKey: .weekRating))
         headline = (try? c.decode(String.self, forKey: .headline)) ?? ""
         stats = (try? c.decode([WeeklyReviewStatDTO].self, forKey: .stats)) ?? []
         win = try? c.decodeIfPresent(String.self, forKey: .win)

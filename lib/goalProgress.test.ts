@@ -344,6 +344,38 @@ test('muscle: adherence 60-74% is a watch but does not lead; 75-89% neutral; 90%
   assert.equal(mk(15).reasons.find(r => r.kind === 'adherence')!.tone, 'good'); // 94%
 });
 
+test('muscle: structured adherence {done, planned, weeklyTarget, pct} matches the adherence reason and the behind verdict', () => {
+  const mk = (n: number) => computeGoalProgress(base({
+    goal: 'muscle',
+    target: { weightKg: null, date: null, weeklySessions: 4 },
+    progression: lifts(100, 105),
+    trainingDays: Array.from({ length: n }, (_, i) => addDays(TODAY, -i)), // inside the 28-day window
+  }));
+  const behind = mk(9);
+  assert.equal(behind.verdict, 'behind');
+  assert.deepEqual(behind.adherence, { done: 9, planned: 16, weeklyTarget: 4, pct: 56 });
+  assert.equal(behind.reasons.find(r => r.kind === 'adherence')!.text, '9 of 16 planned sessions in 4 weeks (56%)');
+  // Not behind: the numbers are still reported (the client only uses them for a behind verdict).
+  const fine = mk(15);
+  assert.equal(fine.verdict, 'progressing');
+  assert.deepEqual(fine.adherence, { done: 15, planned: 16, weeklyTarget: 4, pct: 94 });
+  // JSON survives the wire.
+  assert.deepEqual(JSON.parse(JSON.stringify(behind)).adherence, { done: 9, planned: 16, weeklyTarget: 4, pct: 56 });
+});
+
+test('adherence is null without a weekly sessions target and for non-muscle goals', () => {
+  const noTarget = computeGoalProgress(base({
+    goal: 'muscle', target: { weightKg: 85, date: null, weeklySessions: null },
+    progression: lifts(100, 105),
+  }));
+  assert.equal(noTarget.adherence, null);
+  const endurance = computeGoalProgress(base({
+    goal: 'endurance', target: { weightKg: null, date: null, weeklySessions: 4 },
+    trainingDays: Array.from({ length: 6 }, (_, i) => addDays(TODAY, -i * 3)),
+  }));
+  assert.equal(endurance.adherence, null);
+});
+
 test('muscle: weight gain at/above the top of the band is a watch reason', () => {
   const p = computeGoalProgress(base({
     goal: 'muscle',
@@ -502,7 +534,7 @@ test('general: consistent habits → holding', () => {
 test('output has exactly the documented top-level keys', () => {
   const p = computeGoalProgress(base());
   assert.deepEqual(Object.keys(p).sort(), [
-    'current', 'dataSufficiency', 'distance', 'eta', 'goal', 'headline', 'lastWeighInDaysAgo', 'onPaceForTargetDate',
+    'adherence', 'current', 'dataSufficiency', 'distance', 'eta', 'goal', 'headline', 'lastWeighInDaysAgo', 'onPaceForTargetDate',
     'race', 'ratePerWeek', 'reasons', 'safeBand', 'target', 'verdict',
   ]);
   assert.deepEqual(Object.keys(p.current).sort(), ['changeKg', 'progressPct', 'startWeightKg', 'weightKg']);

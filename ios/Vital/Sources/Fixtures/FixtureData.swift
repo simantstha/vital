@@ -2021,6 +2021,10 @@ enum FixtureData {
                     reason("lift", "Squat est. 1RM +20 kg vs 4 weeks ago (143 → 163 kg)", "good"),
                     reason("lift", "Bench Press est. 1RM +9 kg vs 4 weeks ago (99 → 108 kg)", "good"),
                 ],
+                // lib/goalProgress.ts `adherence`: the structured numbers behind the
+                // reason above (9 of 4/wk x 4 = 16 planned, 56%). Drives Today's
+                // "9 of 16 sessions in 4 wk · aim for 4 this week".
+                "adherence": ["done": 9, "planned": 16, "weeklyTarget": 4, "pct": 56],
                 "dataSufficiency": ["weighIns": 11, "needed": 3, "sessionsLast28d": 9],
             ]
         case .endurance:
@@ -2102,8 +2106,11 @@ enum FixtureData {
             ["label": label, "value": value, "comparison": nullable(comparison), "tone": tone]
         }
         let week = lastCompletedWeek()
+        // `weekRating` rates THIS week from its own stats (lib/weeklyReview.ts
+        // computeWeekRating) — never the 4-week goal `verdict` beside it. `nil`
+        // encodes JSON null ("can't rate this week").
         func review(
-            goal: String, verdict: String, headline: String, stats: [[String: Any]],
+            goal: String, verdict: String, weekRating: String?, headline: String, stats: [[String: Any]],
             win: String?, slip: String?, nextWeek: String, sufficient: Bool
         ) -> [String: Any] {
             [
@@ -2112,6 +2119,7 @@ enum FixtureData {
                 "createdAt": isoAt(daysAgo: 0, hour: 0, minute: 0),
                 "review": [
                     "weekStart": week.start, "weekEnd": week.end, "goal": goal, "verdict": verdict,
+                    "weekRating": nullable(weekRating),
                     "headline": headline, "stats": stats,
                     "win": nullable(win), "slip": nullable(slip), "nextWeek": nextWeek,
                     "dataSufficiency": ["daysWithData": sufficient ? 7 : 1, "statCount": stats.count, "sufficient": sufficient],
@@ -2122,7 +2130,8 @@ enum FixtureData {
         switch scenario {
         case .weightLoss:
             return review(
-                goal: "weight_loss", verdict: "on_track",
+                // 5 of 7 days in budget (>= 5/7) and weight down at a sane pace: good.
+                goal: "weight_loss", verdict: "on_track", weekRating: "good",
                 headline: "Down 0.6 kg, in budget 5 of 7 days",
                 stats: [
                     stat("Weight trend", "−0.6 kg", "vs the week before", "good"),
@@ -2137,7 +2146,10 @@ enum FixtureData {
             )
         case .muscle:
             return review(
-                goal: "muscle", verdict: "progressing",
+                // 3 of 4 sessions = target - 1 -> mixed (protein 5/7 is not low).
+                // The goal card beside it says "Sessions behind" (4-week
+                // adherence 9/16): the pill rates this week only.
+                goal: "muscle", verdict: "progressing", weekRating: "mixed",
                 headline: "3 of 4 sessions, Squat est. 1RM +20 kg over 4 wks",
                 stats: [
                     stat("Sessions", "3", "target 4 for the week", "neutral"),
@@ -2158,7 +2170,8 @@ enum FixtureData {
             let rhrComparison = "\(rhrGap >= 0 ? "+" : "\u{2212}")\(abs(rhrGap)) bpm vs your normal"
             let weekSleep = weekSleepStats(profile, scenario)
             return review(
-                goal: "endurance", verdict: "building",
+                // 24.5 km of the 30 km weekly target = 82% (>= 60%, < 90%): mixed.
+                goal: "endurance", verdict: "building", weekRating: "mixed",
                 headline: "3 sessions, 24.5 km, +12% vs last week",
                 stats: [
                     // Last week (Mon–Sun), NOT this week — Today's this-week
@@ -2175,7 +2188,7 @@ enum FixtureData {
             )
         default:
             return review(
-                goal: "weight_loss", verdict: "insufficient_data",
+                goal: "weight_loss", verdict: "insufficient_data", weekRating: nil,
                 headline: "Not enough data for a weekly review yet",
                 stats: [],
                 win: nil, slip: nil,
