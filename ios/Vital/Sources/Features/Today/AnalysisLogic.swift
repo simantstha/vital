@@ -328,9 +328,43 @@ enum AnalysisLogic {
         return "session"
     }
 
-    /// "Since your last hard run" / "… hard ride" / "… hard session".
-    static func sinceLastHardLabel(noun: String) -> String {
+    /// "Since your last hard session". Always "session", never the activity
+    /// noun: the server's `daysSinceLastHard` counts the last hard effort of ANY
+    /// type, so a lifter's strength session never says "Since your last hard walk".
+    static func sinceLastHardLabel() -> String {
+        "Since your last hard session"
+    }
+
+    /// "Since your last hard run" / "… hard ride" / "… hard session" — the
+    /// wording for an older server that only sends `daysSinceLastSameType`
+    /// (the gap to the previous workout of the same type).
+    static func sinceLastSameTypeLabel(noun: String) -> String {
         "Since your last hard \(noun)"
+    }
+
+    /// The "Going in" row: label + day count.
+    struct SinceLastHard: Equatable {
+        let label: String
+        let days: Int
+    }
+
+    /// Prefers the server's `daysSinceLastHard` (last hard session of ANY type,
+    /// "Since your last hard session"); falls back to the older
+    /// `daysSinceLastSameType` with the activity-noun wording ("Since your last
+    /// hard walk") so a server that predates the new field renders as before.
+    /// `nil` when neither is present.
+    static func sinceLastHard(daysSinceLastHard: Int?, daysSinceLastSameType: Int?, noun: String) -> SinceLastHard? {
+        if let days = daysSinceLastHard { return SinceLastHard(label: sinceLastHardLabel(), days: days) }
+        if let days = daysSinceLastSameType { return SinceLastHard(label: sinceLastSameTypeLabel(noun: noun), days: days) }
+        return nil
+    }
+
+    /// "usual resting 64" - the resting-HR end of the effort bar. The number is
+    /// the user's 30-day mean resting HR (what the server supplies), NOT this
+    /// morning's reading (Today's tile may show a different value), so it says
+    /// "usual".
+    static func usualRestingLabel(_ restingHr: Double) -> String {
+        "usual resting \(Int(restingHr.rounded()))"
     }
 
     /// Footnote under the "Going in" rows.

@@ -124,7 +124,7 @@ enum FixtureData {
             let total = ((start - target) * 10).rounded() / 10
             return "You're \(trimmedKm(done)) of \(trimmedKm(total)) kg down and about 2 weeks ahead of your \(shortDate(daysAhead: 84)) target. \(invite)"
         case .muscle:
-            return "Goal check-in: Lifts up, sessions behind — Squat +20 kg. \(invite)"
+            return "Goal check-in: \(muscleGoalHeadline). \(invite)"
         default:
             return "Nice work staying consistent this week — what would you like to dig into?"
         }
@@ -182,7 +182,10 @@ enum FixtureData {
         .muscle: Profile(
             goal: "muscle",
             name: "Priya Okafor",
-            insight: "Protein's on target four days running and Monday's squat was your best in 4 weeks — stay the course.",
+            // The weekday is derived from the SAME relative date as `lastLift`
+            // below (2 days ago), so "Tuesday's squat" can never contradict
+            // "Last (Tue): Squat 3×5 @ 140 kg" whatever day the fixture runs.
+            insight: "Protein's on target four days running and \(weekdayName(daysAgo: 2))'s squat was your best in 4 weeks — stay the course.",
             established: true,
             targetKcal: 2900, consumedKcal: 1560,
             protein: 158, proteinTarget: 190, carbs: 138, carbsTarget: 300, fat: 42, fatTarget: 85,
@@ -437,6 +440,21 @@ enum FixtureData {
     private static func dayString(_ daysAgo: Int) -> String {
         let date = Calendar.current.date(byAdding: .day, value: -daysAgo, to: Date()) ?? Date()
         return dayFormatter.string(from: date)
+    }
+
+    /// Full English weekday name ("Tuesday") for the day `daysAgo` days back
+    /// (negative = future), in the same local calendar day `dayString(_:)`
+    /// resolves. Any fixture copy that names a weekday for a relative date
+    /// MUST come from here — a hard-coded "Monday" drifts out of sync with
+    /// `dayString(2)` as soon as the fixture runs on a different weekday.
+    static func weekdayName(daysAgo: Int, now: Date = Date()) -> String {
+        let date = Calendar.current.date(byAdding: .day, value: -daysAgo, to: now) ?? now
+        let f = DateFormatter()
+        f.calendar = Calendar(identifier: .gregorian)
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = .current
+        f.dateFormat = "EEEE"
+        return f.string(from: date)
     }
 
     // MARK: - Deterministic noise (Trends phase-1 realistic fixture series)
@@ -1289,6 +1307,8 @@ enum FixtureData {
                 "sleepMinutes": 490.0,
                 "hrv": ["value": 64.0, "unit": "ms", "vsNormal": "above", "source": "apple"],
                 "daysSinceLastSameType": 3,
+                // The previous hard session (any type) was the same tempo run.
+                "daysSinceLastHard": 3,
             ],
             // The morning after the run is THIS morning: the same HRV / resting
             // HR the Today tiles show.
@@ -1305,7 +1325,9 @@ enum FixtureData {
             "shortInsight": "You held a hard effort the whole way and didn't fade at the end.",
             "narrative": "This is the run your training has been building toward. The long, easy weeks are paying off — you went faster without your heart rate climbing at the end.",
             "observations": ["You were well rested going in, and it showed: no fade in the last third."],
-            "nextSteps": ["Easy 30 minutes on Monday. Keep it conversational — this was a big one."],
+            // The run was last night, so the easy day is tomorrow — named from
+            // the real calendar, never a hard-coded weekday.
+            "nextSteps": ["Easy 30 minutes on \(weekdayName(daysAgo: -1)). Keep it conversational — this was a big one."],
         ]
         return [
             "id": "fixture-workout-analysis", "date": dayString(0),
@@ -1387,6 +1409,8 @@ enum FixtureData {
                 "sleepMinutes": profile.sleepMinutes,
                 "hrv": ["value": profile.hrv, "unit": "ms", "vsNormal": vsNormal("hrv_sdnn", scenario), "source": "apple"],
                 "daysSinceLastSameType": 2,
+                // The last HARD session (any type) came before that easy run.
+                "daysSinceLastHard": 4,
             ],
         ]
         let result: [String: Any] = [
@@ -1420,6 +1444,8 @@ enum FixtureData {
                 "sleepMinutes": profile.sleepMinutes,
                 "hrv": ["value": profile.hrv, "unit": "ms", "vsNormal": vsNormal("hrv_sdnn", scenario), "source": "apple"],
                 "daysSinceLastSameType": 2,
+                // The last hard session was the lift (the `lastLift` squat, 2 days ago) — not a walk.
+                "daysSinceLastHard": 2,
             ],
         ]
         let result: [String: Any] = [
@@ -1847,8 +1873,14 @@ enum FixtureData {
         }
 
         let exercises: [String: Any] = [
+            // Squat climbs ~2.5 kg a week (what the logger suggests per
+            // session). The shared 4-week rule reads baseline = best of the
+            // weeks 4 and 5 back (131.25 kg x 5 -> e1RM 153.1) against now
+            // (140 kg x 5 -> 163.3), i.e. 153 -> 163 kg = +10 kg — the numbers
+            // the goal card, headline, coach opener and Today line all quote
+            // (`squatE1RMFourWeeksAgoKg` / `squatE1RMNowKg`).
             "squat": series(
-                loads: [115, 117.5, 120, 122.5, 125, 130, 135, 140],
+                loads: [123.75, 126.25, 128.75, 131.25, 133.75, 136.25, 138.75, 140],
                 sets: [3, 3, 3, 3, 3, 3, 3, 3]
             ),
             "bench press": series(
@@ -1963,6 +1995,30 @@ enum FixtureData {
         return ["sessions": sessions]
     }
 
+    // MARK: - Muscle squat story (one set of numbers)
+
+    /// Squat est. 1RM, whole kg, 4 weeks ago -> now — the rounded endpoints of
+    /// `workoutSummary`'s squat series under the shared 4-week rule
+    /// (`TrendsStrengthLogic.change`). Every muscle surface that quotes the
+    /// squat change (goal-progress reason + headline, coach opener, the Today
+    /// line's "Squat +10 kg / 4 wk", the weekly review) derives from these.
+    static let squatE1RMFourWeeksAgoKg = 153
+    static let squatE1RMNowKg = 163
+    static var squatE1RMChangeKg: Int { squatE1RMNowKg - squatE1RMFourWeeksAgoKg }
+
+    /// The server's goal-progress headline for the muscle persona. Value+unit
+    /// tokens are non-breaking (`GoalProgressLogic.nonBreaking`), like the
+    /// server's copy, so a narrow line never wraps mid-value.
+    static let muscleGoalHeadline = GoalProgressLogic.nonBreaking(
+        "Lifts up, sessions behind — Squat +\(squatE1RMChangeKg) kg"
+    )
+
+    /// The headline lift's goal-progress reason ("Squat est. 1RM +10 kg vs 4
+    /// weeks ago (153 → 163 kg)"), non-breaking like `muscleGoalHeadline`.
+    static let squatGoalReason = GoalProgressLogic.nonBreaking(
+        "Squat est. 1RM +\(squatE1RMChangeKg) kg vs 4 weeks ago (\(squatE1RMFourWeeksAgoKg) → \(squatE1RMNowKg) kg)"
+    )
+
     // MARK: - GET /api/goal/progress → GoalProgressDTO
 
     /// "Dec 10" — `daysAhead` days from today, as the server's kg-based
@@ -2040,18 +2096,18 @@ enum FixtureData {
                 // adherence 9/16 = 56% is under ADHERENCE_BEHIND_PCT (70), so the
                 // verdict is `behind`, not `progressing`.
                 "verdict": "behind",
-                "headline": "Lifts up, sessions behind — Squat +20 kg",
+                "headline": muscleGoalHeadline,
                 "reasons": [
                     // 9 of 16 planned sessions (4/wk x 4) = 56% → amber, leads.
                     reason("adherence", "9 of 16 planned sessions in 4 weeks (56%)", "watch"),
                     // Whole kg, change from the rounded endpoints (liftDisplayChange):
-                    // the workoutSummary fixture's e1RMs are 142.9 → 163.3 and 99.2 → 107.9.
-                    reason("lift", "Squat est. 1RM +20 kg vs 4 weeks ago (143 → 163 kg)", "good"),
-                    reason("lift", "Bench Press est. 1RM +9 kg vs 4 weeks ago (99 → 108 kg)", "good"),
+                    // the workoutSummary fixture's e1RMs are 153.1 → 163.3 and 99.2 → 107.9.
+                    reason("lift", squatGoalReason, "good"),
+                    reason("lift", GoalProgressLogic.nonBreaking("Bench Press est. 1RM +9 kg vs 4 weeks ago (99 → 108 kg)"), "good"),
                 ],
                 // lib/goalProgress.ts `adherence`: the structured numbers behind the
                 // reason above (9 of 4/wk x 4 = 16 planned, 56%). Drives Today's
-                // "9 of 16 sessions in 4 wk · aim for 4 this week".
+                // "9 of 16 sessions in 4 wk · 2 more by Sun" (4 a week, 2 done so far).
                 "adherence": ["done": 9, "planned": 16, "weeklyTarget": 4, "pct": 56],
                 "dataSufficiency": ["weighIns": 11, "needed": 3, "sessionsLast28d": 9],
             ]

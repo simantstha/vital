@@ -60,9 +60,47 @@ final class RaceLogicTests: XCTestCase {
 
     func testHeroLineAndRowText() {
         XCTAssertEqual(RaceLogic.heroLine(race()), "Half marathon · 12 weeks to go")
+        XCTAssertEqual(RaceLogic.heroLine(race(), longRun: nil, system: .metric), "Half marathon · 12 weeks to go")
         XCTAssertEqual(RaceLogic.rowText(race(), calendar: utc), "Half marathon · Dec 30 · 12 wk")
         XCTAssertEqual(RaceLogic.rowText(race(weeks: 0, days: 5), calendar: utc), "Half marathon · Dec 30 · 5 d")
         XCTAssertEqual(RaceLogic.rowText(race(weeks: 0, days: 0), calendar: utc), "Half marathon · Dec 30 · today")
+    }
+
+    // MARK: - Hero line: long-run progress
+
+    func testHeroLineAppendsTheLongRunProgressWhenThereIsATarget() {
+        let longRun = GoalProgressDTO.LongRun(lastKm: 14, peakKm: 16, targetPeakKm: 18)
+        XCTAssertEqual(
+            RaceLogic.heroLine(race(), longRun: longRun, system: .metric),
+            "Half marathon \u{00B7} 12 weeks to go \u{00B7} long run 14/18 km"
+        )
+        // Race week reads in days; the long-run tail is unchanged.
+        XCTAssertEqual(
+            RaceLogic.heroLine(race(weeks: 0, days: 5), longRun: longRun, system: .metric),
+            "Half marathon \u{00B7} 5 days to go \u{00B7} long run 14/18 km"
+        )
+        // Imperial users get miles for both numbers.
+        XCTAssertEqual(
+            RaceLogic.heroLine(race(), longRun: longRun, system: .imperial),
+            "Half marathon \u{00B7} 12 weeks to go \u{00B7} long run 8.7/11.2 mi"
+        )
+        // No recent long run: the 28-day peak stands in.
+        XCTAssertEqual(
+            RaceLogic.heroLine(race(), longRun: GoalProgressDTO.LongRun(lastKm: nil, peakKm: 16, targetPeakKm: 18), system: .metric),
+            "Half marathon \u{00B7} 12 weeks to go \u{00B7} long run 16/18 km"
+        )
+        XCTAssertEqual(RaceLogic.longRunProgressText(longRun, .metric), "long run 14/18 km")
+    }
+
+    func testHeroLineLeavesOutTheLongRunWithoutATarget() {
+        // A race with no distance has no peak to build to: never invent a goal.
+        let noTarget = GoalProgressDTO.LongRun(lastKm: 14, peakKm: 16, targetPeakKm: nil)
+        XCTAssertEqual(RaceLogic.heroLine(race(), longRun: noTarget, system: .metric), "Half marathon \u{00B7} 12 weeks to go")
+        XCTAssertNil(RaceLogic.longRunProgressText(noTarget, .metric))
+        // A target with nothing logged is not progress either.
+        let nothingLogged = GoalProgressDTO.LongRun(lastKm: nil, peakKm: nil, targetPeakKm: 18)
+        XCTAssertNil(RaceLogic.longRunProgressText(nothingLogged, .metric))
+        XCTAssertNil(RaceLogic.longRunProgressText(.init(lastKm: 14, peakKm: 16, targetPeakKm: 0), .metric))
     }
 
     func testMissingLabelFallsBackToDistance() {
@@ -101,9 +139,9 @@ final class RaceLogicTests: XCTestCase {
 
     func testGoalRowSuffixNamesTheRaceAndDay() {
         let now = ISO8601DateFormatter().date(from: "2026-10-06T12:00:00Z")!
-        XCTAssertEqual(RaceLogic.goalRowSuffix(raceDate: "2026-12-30", distanceKm: 21.1, now: now, calendar: utc), "Half marathon Dec 30")
-        XCTAssertEqual(RaceLogic.goalRowSuffix(raceDate: "2026-12-30", distanceKm: nil, now: now, calendar: utc), "Race Dec 30")
-        XCTAssertEqual(RaceLogic.goalRowSuffix(raceDate: "2026-10-06", distanceKm: 10, now: now, calendar: utc), "10K Oct 6", "race day itself still counts")
+        XCTAssertEqual(RaceLogic.goalRowSuffix(raceDate: "2026-12-30", distanceKm: 21.1, now: now, calendar: utc), "Half marathon \u{00B7} Dec 30")
+        XCTAssertEqual(RaceLogic.goalRowSuffix(raceDate: "2026-12-30", distanceKm: nil, now: now, calendar: utc), "Race \u{00B7} Dec 30")
+        XCTAssertEqual(RaceLogic.goalRowSuffix(raceDate: "2026-10-06", distanceKm: 10, now: now, calendar: utc), "10K \u{00B7} Oct 6", "race day itself still counts")
         XCTAssertNil(RaceLogic.goalRowSuffix(raceDate: "2026-10-05", distanceKm: 10, now: now, calendar: utc), "a passed race is dropped")
         XCTAssertNil(RaceLogic.goalRowSuffix(raceDate: nil, distanceKm: 21.1, now: now, calendar: utc))
         XCTAssertNil(RaceLogic.goalRowSuffix(raceDate: "soon", distanceKm: 21.1, now: now, calendar: utc))

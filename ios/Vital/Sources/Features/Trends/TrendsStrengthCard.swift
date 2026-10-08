@@ -54,7 +54,7 @@ struct TrendsStrengthCard: View {
             VStack(alignment: .trailing, spacing: Theme.Spacing.xs) {
                 Sparkline(values: lift.sparkline, style: .line, tint: tint(for: lift.status.tone), height: 28, showsLatestDot: true)
                     .frame(width: 96)
-                Chip(text: lift.status.text, tint: tint(for: lift.status.tone))
+                Chip(text: GoalProgressLogic.nonBreaking(lift.status.text), tint: tint(for: lift.status.tone))
             }
         }
         .padding(.vertical, Theme.Spacing.md)

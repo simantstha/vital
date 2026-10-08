@@ -482,11 +482,14 @@ final class GoalHeroLogicTests: XCTestCase {
                 now: now, calendar: utc, system: system
             )
         }
-        XCTAssertEqual(label("endurance", km: 30), "Endurance \u{00B7} 30 km/week \u{00B7} Half marathon Dec 30")
-        XCTAssertEqual(label("endurance", km: 32.2, system: .imperial), "Endurance \u{00B7} 20 mi/week \u{00B7} Half marathon Dec 30")
-        XCTAssertEqual(label("endurance", sessions: 3), "Endurance \u{00B7} 3\u{00D7}/week \u{00B7} Half marathon Dec 30")
-        XCTAssertEqual(label("endurance"), "Endurance \u{00B7} Half marathon Dec 30", "race alone is still worth showing")
-        XCTAssertEqual(label("endurance", km: 30, raceKm: nil), "Endurance \u{00B7} 30 km/week \u{00B7} Race Dec 30")
+        // The race leads (and replaces the generic "Endurance"), so what survives
+        // a narrow row is the race, not the goal word.
+        XCTAssertEqual(label("endurance", km: 30), "Half marathon \u{00B7} Dec 30 \u{00B7} 30 km/wk")
+        XCTAssertEqual(label("endurance", km: 32.2, system: .imperial), "Half marathon \u{00B7} Dec 30 \u{00B7} 20 mi/wk")
+        XCTAssertEqual(label("endurance", sessions: 3), "Half marathon \u{00B7} Dec 30 \u{00B7} 3\u{00D7}/wk")
+        XCTAssertEqual(label("endurance"), "Half marathon \u{00B7} Dec 30", "race alone is still worth showing")
+        XCTAssertEqual(label("endurance", km: 30, raceKm: nil), "Race \u{00B7} Dec 30 \u{00B7} 30 km/wk")
+        XCTAssertFalse(label("endurance", km: 30).contains("Endurance"))
         // A passed race / no race leaves the old label; other goals never show a race.
         XCTAssertEqual(label("endurance", km: 30, race: "2026-10-01"), "Endurance \u{00B7} 30 km/week")
         XCTAssertEqual(label("endurance", km: 30, race: nil), "Endurance \u{00B7} 30 km/week")

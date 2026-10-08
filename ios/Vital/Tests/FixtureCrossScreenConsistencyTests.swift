@@ -193,15 +193,18 @@ final class FixtureCrossScreenConsistencyTests: XCTestCase {
         let (_, data) = FixtureData.response(scenario: .muscle, method: "GET", path: "/api/goal/progress", query: "")
         let progress = try JSONDecoder().decode(GoalProgressDTO.self, from: data)
         XCTAssertEqual(progress.verdict, .behind)
-        XCTAssertEqual(progress.headline, "Lifts up, sessions behind \u{2014} Squat +20 kg")
+        // Value+unit and arrow pairs are non-breaking, like the server's copy.
+        let nb = "\u{00A0}"
+        XCTAssertEqual(progress.headline, "Lifts up, sessions behind \u{2014} Squat +10\(nb)kg")
         let lifts = progress.reasons.filter { $0.kind == "lift" }.map(\.text)
         XCTAssertEqual(lifts, [
-            "Squat est. 1RM +20 kg vs 4 weeks ago (143 \u{2192} 163 kg)",
-            "Bench Press est. 1RM +9 kg vs 4 weeks ago (99 \u{2192} 108 kg)",
+            "Squat est. 1RM +10\(nb)kg vs 4\(nb)weeks ago (153\(nb)\u{2192}\(nb)163\(nb)kg)",
+            "Bench Press est. 1RM +9\(nb)kg vs 4\(nb)weeks ago (99\(nb)\u{2192}\(nb)108\(nb)kg)",
         ])
         XCTAssertEqual(GoalProgressLogic.label(for: progress.verdict, goal: progress.goal), "Sessions behind")
         let opener = json(.muscle, "/api/coach/opener")["text"] as? String ?? ""
-        XCTAssertTrue(opener.contains("Lifts up, sessions behind \u{2014} Squat +20 kg"), opener)
+        XCTAssertTrue(opener.contains("Lifts up, sessions behind \u{2014} Squat +10\(nb)kg"), opener)
+        XCTAssertFalse(opener.contains("+20"), opener)
 
         let review = json(.muscle, "/api/review/weekly")["review"] as? [String: Any]
         XCTAssertEqual(plain(review?["headline"] as? String), "3 of 4 sessions, Squat est. 1RM +10 kg over 4 wks")
@@ -338,6 +341,14 @@ final class FixtureCrossScreenConsistencyTests: XCTestCase {
         XCTAssertEqual(reason, "\(adherence.done) of \(adherence.planned) planned sessions in 4 weeks (\(adherence.pct ?? -1)%)")
         let line = GoalProgressLogic.compactText(progress, system: .metric)
         XCTAssertEqual(line.replacingOccurrences(of: "\u{00A0}", with: " "), "9 of 16 sessions in 4 wk · aim for 4 this week")
+
+        // With this week's done count (the hero's "2 of 4 sessions this week") the next step is concrete.
+        let summary = json(.muscle, "/api/training/summary", "tz=UTC")
+        let days = ((summary["week"] as? [String: Any])?["days"] as? [[String: Any]]) ?? []
+        let done = days.filter { ($0["planned"] as? Bool) == true && ($0["completed"] as? Bool) == true }.count
+        XCTAssertEqual(done, 2)
+        let concrete = GoalProgressLogic.compactText(progress, system: .metric, sessionsDoneThisWeek: done)
+        XCTAssertEqual(concrete.replacingOccurrences(of: "\u{00A0}", with: " "), "9 of 16 sessions in 4 wk · 2 more by Sun")
 
         let (_, reviewData) = FixtureData.response(scenario: .muscle, method: "GET", path: "/api/review/weekly", query: "tz=UTC")
         let review = try JSONDecoder().decode(WeeklyReviewResponse.self, from: reviewData).review
@@ -552,7 +563,108 @@ final class FixtureCrossScreenConsistencyTests: XCTestCase {
             raceDate: profile["raceDate"] as? String, raceDistanceKm: profile["raceDistanceKm"] as? Double,
             system: .metric
         )
-        XCTAssertTrue(row.hasPrefix("Endurance \u{00B7} 30 km/week \u{00B7} Half marathon "), row)
+        XCTAssertTrue(row.hasPrefix("Half marathon \u{00B7} "), row)
+        XCTAssertTrue(row.hasSuffix(" \u{00B7} 30 km/wk"), row)
+        XCTAssertFalse(row.contains("Endurance"), "the race replaces the generic goal word: \(row)")
+    }
+
+    /// The endurance Today hero's race line also carries the long-run build
+    /// ("long run 14/18 km") from the same goal-progress payload the goal card reads.
+    func test_enduranceHeroRaceLineCarriesTheLongRunProgress() throws {
+        let (_, data) = FixtureData.response(scenario: .endurance, method: "GET", path: "/api/goal/progress", query: "")
+        let progress = try JSONDecoder().decode(GoalProgressDTO.self, from: data)
+        let race = try XCTUnwrap(progress.race)
+        XCTAssertEqual(
+            RaceLogic.heroLine(race, longRun: progress.longRun, system: .metric),
+            "Half marathon \u{00B7} 12 weeks to go \u{00B7} long run 14/18 km"
+        )
+        // The other scenarios have no race or long run to quote.
+        for scenario in [FixtureMode.Scenario.weightLoss, .muscle] {
+            let (_, other) = FixtureData.response(scenario: scenario, method: "GET", path: "/api/goal/progress", query: "")
+            XCTAssertNil(try JSONDecoder().decode(GoalProgressDTO.self, from: other).race, "\(scenario)")
+        }
+    }
+
+    // MARK: - Last hard session
+
+    /// Every workout-analysis fixture carries the any-type "days since your last
+    /// hard session" next to the same-type count, and the lifter's is the lift
+    /// itself (the `lastLift` squat), not the easy walk.
+    func test_workoutAnalysisFixturesCarryTheAnyTypeLastHardCount() throws {
+        for scenario in [FixtureMode.Scenario.weightLoss, .muscle, .endurance] {
+            for id in ["fixture-workout-analysis", "fixture-workout-analysis-routine"] {
+                let (status, data) = FixtureData.response(scenario: scenario, method: "GET", path: "/api/workout-analyses/\(id)", query: "")
+                XCTAssertEqual(status, 200, "\(scenario) \(id)")
+                let goingIn = try JSONDecoder.vital.decode(AnalysisResponse.self, from: data).context?.goingIn
+                XCTAssertNotNil(goingIn?.daysSinceLastSameType, "\(scenario) \(id)")
+                XCTAssertNotNil(goingIn?.daysSinceLastHard, "\(scenario) \(id)")
+            }
+        }
+
+        // Muscle: the routine analysis is an easy walk; the last HARD session is the lift, 2 days ago.
+        let (_, walkData) = FixtureData.response(scenario: .muscle, method: "GET", path: "/api/workout-analyses/fixture-workout-analysis-routine", query: "")
+        let walk = try JSONDecoder.vital.decode(AnalysisResponse.self, from: walkData)
+        XCTAssertEqual(walk.metrics?.type, "Walking")
+        XCTAssertEqual(walk.context?.goingIn?.daysSinceLastHard, 2)
+        let summary = json(.muscle, "/api/training/summary")
+        let lastLiftDay = try XCTUnwrap((summary["lastLift"] as? [String: Any])?["date"] as? String)
+        let parser = DateFormatter()
+        parser.locale = Locale(identifier: "en_US_POSIX")
+        parser.dateFormat = "yyyy-MM-dd"
+        let lift = try XCTUnwrap(parser.date(from: lastLiftDay))
+        let liftAge = Calendar.current.dateComponents([.day], from: lift, to: Calendar.current.startOfDay(for: Date())).day
+        XCTAssertEqual(walk.context?.goingIn?.daysSinceLastHard, liftAge, "the last hard session is the last lift")
+        let line = AnalysisLogic.sinceLastHard(
+            daysSinceLastHard: walk.context?.goingIn?.daysSinceLastHard,
+            daysSinceLastSameType: walk.context?.goingIn?.daysSinceLastSameType,
+            noun: AnalysisLogic.activityNoun(type: walk.metrics?.type)
+        )
+        XCTAssertEqual(line, AnalysisLogic.SinceLastHard(label: "Since your last hard session", days: 2))
+    }
+
+    // MARK: - Squat progression
+
+    /// ONE squat story: the workout summary's weekly e1RMs, through the shared
+    /// 4-week rule, give 153 -> 163 kg (+10 kg) — the same numbers the goal
+    /// card, headline, coach opener and Today line quote — reached by a weekly
+    /// climb no faster than the logger's +2.5 kg/session suggestion.
+    func test_squatProgressionIsOneRealisticStoryAcrossStrengthAndGoalProgress() throws {
+        let (_, data) = FixtureData.response(scenario: .muscle, method: "GET", path: "/api/workouts/summary", query: "")
+        let summary = try JSONDecoder().decode(WorkoutSummaryResponse.self, from: data)
+        let keys = TrendsStrengthLogic.weekKeys(endingAt: Date(), count: TrendsStrengthLogic.windowWeeks)
+        func e1rm(_ key: String) -> [Double?] {
+            TrendsStrengthLogic.weeklySeries(summary.exercises[key] ?? [], keys: keys).map { $0?.bestEstimatedOneRepMaxKg }
+        }
+
+        let squat = try XCTUnwrap(TrendsStrengthLogic.change(e1rm: e1rm("squat")))
+        XCTAssertEqual(TrendsStrengthLogic.displayChange(squat, system: .metric),
+                       TrendsStrengthLogic.DisplayChange(baseline: 153, recent: 163, change: 10))
+        XCTAssertEqual(TrendsStrengthLogic.status(e1rm: e1rm("squat"), system: .metric).text, "+10 kg vs 4 wk ago")
+        XCTAssertEqual(FixtureData.squatE1RMFourWeeksAgoKg, 153)
+        XCTAssertEqual(FixtureData.squatE1RMNowKg, 163)
+
+        // Bench is unchanged: +9 kg (99 -> 108).
+        let bench = try XCTUnwrap(TrendsStrengthLogic.change(e1rm: e1rm("bench press")))
+        XCTAssertEqual(TrendsStrengthLogic.displayChange(bench, system: .metric),
+                       TrendsStrengthLogic.DisplayChange(baseline: 99, recent: 108, change: 9))
+
+        // No week-over-week jump beyond one +2.5 kg step of a 5-rep top set.
+        let squatSeries = e1rm("squat").compactMap { $0 }
+        XCTAssertEqual(squatSeries.count, TrendsStrengthLogic.windowWeeks)
+        let maxStep = 2.5 * (1 + 5.0 / 30) + 0.01
+        for (earlier, later) in zip(squatSeries, squatSeries.dropFirst()) {
+            XCTAssertLessThanOrEqual(later - earlier, maxStep, "squat e1RM climbs faster than +2.5 kg per session")
+        }
+
+        // The goal card quotes the same endpoints (modulo non-breaking spaces).
+        let (_, goalData) = FixtureData.response(scenario: .muscle, method: "GET", path: "/api/goal/progress", query: "")
+        let progress = try JSONDecoder().decode(GoalProgressDTO.self, from: goalData)
+        let squatReason = progress.reasons.first { $0.kind == "lift" }?.text.replacingOccurrences(of: "\u{00A0}", with: " ")
+        XCTAssertEqual(squatReason, "Squat est. 1RM +10 kg vs 4 weeks ago (153 \u{2192} 163 kg)")
+        XCTAssertEqual(
+            GoalProgressLogic.liftShortText(progress)?.replacingOccurrences(of: "\u{00A0}", with: " "),
+            "Squat +10 kg / 4 wk"
+        )
     }
 
 }

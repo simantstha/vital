@@ -169,6 +169,64 @@ export function computeEffort(input: {
   return { restingHr, maxHr, avgPct, zone: effortZoneFromPct(avgPct) };
 }
 
+// ── Workout: days since the last hard session (any type) ─────────────────────
+
+/** "Hard" is the app's own effort vocabulary: the `hard` and `max` zones (avg HR >= 75% of the reserve). */
+export function isHardEffortZone(zone: EffortZone): boolean {
+  return zone === 'hard' || zone === 'max';
+}
+
+/** One earlier workout analysis row, of ANY activity type, as the repository reads it. */
+export interface PriorWorkoutRow {
+  id: string;
+  /** Set on the loser of a same-session duplicate (a suppressed row): never counted. */
+  mergedIntoId?: string | null;
+  /** Local 'YYYY-MM-DD' day key (workout_date). */
+  date: string;
+  /** Epoch ms of started_at, when known. */
+  startedAtMs?: number | null;
+  avgHr?: number;
+}
+
+/**
+ * Whole days from the most recent EARLIER hard workout, of any type, to this
+ * one — what "Since your last hard session" means. Hard is judged exactly like
+ * this workout's own effort (`computeEffort` + `isHardEffortZone`): the same
+ * resting HR and highest recorded max HR, against each earlier session's avg
+ * HR. A session without an avg HR (or without the reference HRs) can't be
+ * shown to be hard, so it is never counted — better no number than a wrong
+ * one; `undefined` when no earlier session qualifies.
+ *
+ * "Earlier" means started before this workout (by started_at when both are
+ * known, else on an earlier local day); this analysis's own row, the survivor
+ * it was merged into, and suppressed same-session duplicates are skipped.
+ */
+export function daysSinceLastHard(input: {
+  current: { id: string; mergedIntoId?: string | null; workoutDateKey: string; referenceMs: number };
+  restingHr?: number;
+  maxHr?: number;
+  previous: PriorWorkoutRow[];
+}): number | undefined {
+  const { current, restingHr, maxHr, previous } = input;
+  let newest: string | undefined;
+  for (const row of previous) {
+    if (row.id === current.id || row.id === current.mergedIntoId || row.mergedIntoId != null) continue;
+    const earlier = row.startedAtMs != null && Number.isFinite(current.referenceMs)
+      ? row.startedAtMs < current.referenceMs
+      : row.date < current.workoutDateKey;
+    if (!earlier) continue;
+    const effort = computeEffort({ restingHr, maxHr, avgHr: row.avgHr });
+    if (!effort || !isHardEffortZone(effort.zone)) continue;
+    if (newest == null || row.date > newest) newest = row.date;
+  }
+  if (newest == null) return undefined;
+  const days = Math.round(
+    (new Date(`${current.workoutDateKey}T00:00:00Z`).getTime() - new Date(`${newest}T00:00:00Z`).getTime())
+    / 86_400_000,
+  );
+  return Number.isFinite(days) && days >= 0 ? days : undefined;
+}
+
 // ── Sleep: usual ─────────────────────────────────────────────────────────────
 
 const MIN_NIGHTS_FOR_USUAL = 5;

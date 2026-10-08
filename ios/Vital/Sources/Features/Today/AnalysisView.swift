@@ -635,7 +635,8 @@ struct WorkoutAnalysisContent: View {
     }
 
     private func hasGoingInData(_ goingIn: AnalysisContext.GoingIn) -> Bool {
-        goingIn.sleepMinutes != nil || goingIn.hrv != nil || goingIn.daysSinceLastSameType != nil
+        goingIn.sleepMinutes != nil || goingIn.hrv != nil
+            || goingIn.daysSinceLastHard != nil || goingIn.daysSinceLastSameType != nil
     }
 
     // MARK: Devices — "The data" (phase 2 "both devices" contract, PR C item 2)
@@ -959,7 +960,7 @@ struct WorkoutAnalysisContent: View {
                     // the bar above aren't left unexplained.
                     EffortZoneLegend(showsMaxMarker: maxHrMarkerFraction(effort) != nil, noun: noun)
                     HStack {
-                        Text("resting \(Int(effort.restingHr.rounded()))").font(.system(size: 12)).foregroundStyle(Theme.Colors.textSecondary)
+                        Text(AnalysisLogic.usualRestingLabel(effort.restingHr)).font(.system(size: 12)).foregroundStyle(Theme.Colors.textSecondary)
                         Spacer()
                         Text("highest recorded \(Int(effort.maxHr.rounded()))").font(.system(size: 12)).foregroundStyle(Theme.Colors.textSecondary)
                     }
@@ -996,9 +997,13 @@ struct WorkoutAnalysisContent: View {
                                 chip: AnalysisLogic.recoveryChip(value: hrv.value, unit: hrv.unit, vsNormal: hrv.vsNormal, metric: .hrv),
                                 isFirst: goingIn.sleepMinutes == nil)
                     }
-                    if let days = goingIn.daysSinceLastSameType {
-                        DataRow(icon: "clock.fill", label: AnalysisLogic.sinceLastHardLabel(noun: noun),
-                                chip: .init(text: "\(days) day\(days == 1 ? "" : "s")", tone: .neutral),
+                    if let since = AnalysisLogic.sinceLastHard(
+                        daysSinceLastHard: goingIn.daysSinceLastHard,
+                        daysSinceLastSameType: goingIn.daysSinceLastSameType,
+                        noun: noun
+                    ) {
+                        DataRow(icon: "clock.fill", label: since.label,
+                                chip: .init(text: "\(since.days) day\(since.days == 1 ? "" : "s")", tone: .neutral),
                                 isFirst: goingIn.sleepMinutes == nil && goingIn.hrv == nil)
                     }
                     Text(AnalysisLogic.goingInFootnote(noun: noun))

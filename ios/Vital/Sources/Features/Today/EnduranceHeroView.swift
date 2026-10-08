@@ -13,7 +13,8 @@ struct EnduranceHeroView: View {
     let readinessWord: EnduranceHeroLogic.ReadinessWord?
     let calibratingText: String?
     let reasonLine: String?
-    /// "Half marathon · 12 weeks to go" — only when a race is set.
+    /// "Half marathon · 12 weeks to go · long run 14/18 km" — only when a race
+    /// is set (the long-run tail only when the race has a long-run target).
     var raceText: String? = nil
     /// True while the race line is still loading (goal progress pending, race
     /// not ruled out): reserves exactly one line of height so the hero doesn't
@@ -48,6 +49,11 @@ struct EnduranceHeroView: View {
                     Text(raceText)
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(Theme.Colors.accentContent)
+                        // One line, like the blank line reserved for it: the
+                        // long-run tail makes this the longest string in the
+                        // hero, so it shrinks a little before it ever truncates.
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
                         .accessibilityIdentifier("today.raceCountdown")
                 } else if reserveRaceLine {
                     // Same font as the race line, so the blank line is exactly as tall.

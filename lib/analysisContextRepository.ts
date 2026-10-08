@@ -10,7 +10,8 @@
  *
  * Query bounds (see the analysis-v2 contract, "Performance"):
  *  - up to 8 previous same-type workouts
- *  - up to 180 days for the highest recorded max HR
+ *  - up to 180 days of workouts (any type) for the highest recorded max HR and
+ *    the days since the last hard session
  *  - up to 14 nights for the sleep "usual"
  *  - up to 7 nights for the "week" strip
  *  - a few-hour window for before-bed events (workouts/meals)
@@ -31,6 +32,7 @@ import {
   computePaceHistory,
   computeSleepUsual,
   computeUsualWorkout,
+  daysSinceLastHard,
   sleepNightFromDailyMetric,
   vsNormal,
   type MetricReading,
@@ -205,7 +207,13 @@ export async function getWorkoutAnalysisContext(
           .orderBy(desc(sql`coalesce(${schema.workout_analyses.started_at}, ${schema.workout_analyses.workout_date}::timestamptz)`))
           .limit(MAX_PREVIOUS_SESSIONS)
       : Promise.resolve([] as Array<{ inputPayload: unknown; workoutDate: string }>),
-    db.select({ inputPayload: schema.workout_analyses.input_payload })
+    db.select({
+      id: schema.workout_analyses.id,
+      mergedIntoId: schema.workout_analyses.merged_into_id,
+      workoutDate: schema.workout_analyses.workout_date,
+      startedAt: schema.workout_analyses.started_at,
+      inputPayload: schema.workout_analyses.input_payload,
+    })
       .from(schema.workout_analyses)
       .where(and(
         eq(schema.workout_analyses.user_id, userId),
@@ -268,12 +276,37 @@ export async function getWorkoutAnalysisContext(
   if (recovery) {
     const restingBaseline = await queryBaseline(userId, recovery.rhrMetric);
     const restingHrValue = restingBaseline?.established ? restingBaseline.stats?.mean30 ?? undefined : undefined;
+    const restingHr = restingHrValue != null ? Math.round(restingHrValue) : undefined;
     const effort = computeEffort({
-      restingHr: restingHrValue != null ? Math.round(restingHrValue) : undefined,
+      restingHr,
       maxHr: maxHrRecorded,
       avgHr: avgHrThis,
     });
     if (effort) context.effort = effort;
+
+    // Days since the last HARD session of ANY type (additive next to
+    // daysSinceLastSameType, which old app builds still read): hard = the same
+    // effort zones this workout is judged by, against the same resting / max HR.
+    const sinceHard = daysSinceLastHard({
+      current: {
+        id: analysis.id,
+        mergedIntoId: selfRow[0]?.mergedIntoId ?? null,
+        workoutDateKey,
+        referenceMs: referenceTimestamp.getTime(),
+      },
+      restingHr,
+      maxHr: maxHrRecorded,
+      previous: maxHrRows.map((row) => ({
+        id: row.id,
+        mergedIntoId: row.mergedIntoId,
+        date: row.workoutDate,
+        startedAtMs: row.startedAt?.getTime() ?? null,
+        avgHr: num(pl(row.inputPayload).avgHr),
+      })),
+    });
+    if (sinceHard != null) {
+      context.goingIn = { ...(context.goingIn as object | undefined), daysSinceLastHard: sinceHard };
+    }
 
     const [sleepRow, hrvReading] = await Promise.all([
       dailyMetricOnDate(userId, recovery.sleepMetric, workoutDateKey),

@@ -231,9 +231,11 @@ struct WeeklyReviewRow: View {
                         Text("Weekly review")
                             .font(.system(size: 16, weight: .semibold))
                             .foregroundStyle(Theme.Colors.textPrimary)
+                        // Non-breaking so the headline's "+10 kg over 4 wks" never
+                        // wraps mid-value on this two-line row.
                         Text(WeeklyReviewLogic.isNotEnoughData(response.review)
                              ? WeeklyReviewLogic.firstReviewText(now: AppClock.now)
-                             : response.review.headline)
+                             : GoalProgressLogic.nonBreaking(response.review.headline))
                             .font(.system(size: 13))
                             .foregroundStyle(Theme.Colors.textSecondary)
                             .lineLimit(2)
