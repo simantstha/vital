@@ -90,12 +90,13 @@ enum MemoryLogic {
     /// screens can never disagree. `nil` when the profile has no goal yet.
     static func goalSummary(
         goalId: String?, targetWeightKg: Double?, weeklySessions: Int?,
-        weeklyDistanceKm: Double?, system: UnitSystem
+        weeklyDistanceKm: Double?, raceDate: String? = nil, raceDistanceKm: Double? = nil, system: UnitSystem
     ) -> String? {
         guard let goalId, let label = DietBudgetViewModel.goalLabels[goalId] else { return nil }
         let line = ProfileViewModel.goalRowLabel(
             goalLabel: label, goalId: goalId, targetWeightKg: targetWeightKg,
-            weeklySessions: weeklySessions, weeklyDistanceKm: weeklyDistanceKm, system: system
+            weeklySessions: weeklySessions, weeklyDistanceKm: weeklyDistanceKm,
+            raceDate: raceDate, raceDistanceKm: raceDistanceKm, system: system
         )
         return line.isEmpty ? nil : line
     }

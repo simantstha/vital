@@ -5,6 +5,7 @@ import {
   HEADLINE_MAX_CHARS,
   isRunningWorkoutType,
   isStrengthWorkoutType,
+  longRunTargetKm,
   type GoalProgress,
   type GoalProgressInput,
 } from './goalProgress';
@@ -534,7 +535,7 @@ test('general: consistent habits → holding', () => {
 test('output has exactly the documented top-level keys', () => {
   const p = computeGoalProgress(base());
   assert.deepEqual(Object.keys(p).sort(), [
-    'adherence', 'current', 'dataSufficiency', 'distance', 'eta', 'goal', 'headline', 'lastWeighInDaysAgo', 'onPaceForTargetDate',
+    'adherence', 'current', 'dataSufficiency', 'distance', 'eta', 'goal', 'headline', 'lastWeighInDaysAgo', 'longRun', 'onPaceForTargetDate',
     'race', 'ratePerWeek', 'reasons', 'safeBand', 'target', 'verdict',
   ]);
   assert.deepEqual(Object.keys(p.current).sort(), ['changeKg', 'progressPct', 'startWeightKg', 'weightKg']);
@@ -886,4 +887,103 @@ test('endurance race: a passed race is null; labels cover 5K / custom / no dista
 test('race is ignored for non-endurance goals', () => {
   const p = computeGoalProgress(base({ goal: 'muscle', race: { date: addDays(TODAY, 30), distanceKm: 10 } }));
   assert.equal(p.race, null);
+});
+
+// ── Endurance long run / race readiness ─────────────────────────────────────
+
+/** One long run per week at days-ago 3 / 10 / 17 / 24 (newest first) plus a 5 km easy run 2 days before each. */
+function longRunInput(longKm: number[], over: Partial<GoalProgressInput> = {}): GoalProgressInput {
+  const kmByDaysAgo: Record<number, number> = {};
+  longKm.forEach((km, i) => {
+    kmByDaysAgo[3 + i * 7] = km;
+    kmByDaysAgo[1 + i * 7] = 5;
+  });
+  return distanceInput(kmByDaysAgo, over);
+}
+
+test('longRunTargetKm: 5K 8, 10K 14, half 18, marathon 32, other 85%, null without a distance', () => {
+  assert.equal(longRunTargetKm(5), 8);
+  assert.equal(longRunTargetKm(10), 14);
+  assert.equal(longRunTargetKm(21.1), 18);
+  assert.equal(longRunTargetKm(21.0975), 18);
+  assert.equal(longRunTargetKm(42.2), 32);
+  assert.equal(longRunTargetKm(15), 13); // round(12.75)
+  assert.equal(longRunTargetKm(30), 26); // round(25.5)
+  assert.equal(longRunTargetKm(null), null);
+  assert.equal(longRunTargetKm(0), null);
+});
+
+test('long run: last long run, 28-day peak and the half-marathon target (running only)', () => {
+  const p = computeGoalProgress(longRunInput([14, 12, 16, 10], { race: { date: addDays(TODAY, 84), distanceKm: 21.1 } }));
+  assert.deepEqual(p.longRun, { lastKm: 14, peakKm: 16, targetPeakKm: 18 });
+  assertWellFormed(p);
+});
+
+test('long run: an easy run after the long run does not replace lastKm; non-running workouts are ignored', () => {
+  const ride = { day: TODAY, durationMin: 120, distanceKm: 60, type: 'Cycling' };
+  const input = longRunInput([14, 12, 16, 10]);
+  const p = computeGoalProgress({ ...input, workouts: [...input.workouts, ride, { day: TODAY, durationMin: 30, distanceKm: 3, type: 'Running' }] });
+  assert.equal(p.longRun?.lastKm, 14);
+  assert.equal(p.longRun?.peakKm, 16);
+});
+
+test('long run: runs older than 28 days are ignored; null without running distances or for other goals', () => {
+  const old = computeGoalProgress(distanceInput({ 28: 20, 40: 21, 3: 9 }));
+  assert.deepEqual(old.longRun, { lastKm: 9, peakKm: 9, targetPeakKm: null });
+  const none = computeGoalProgress(enduranceInput([3, 3, 3, 3]));
+  assert.equal(none.longRun, null);
+  assert.equal(computeGoalProgress(base({ goal: 'muscle' })).longRun, null);
+});
+
+test('long run: below target reads "Long run 14 km · build to 18 km by mid-Dec", right after the weekly distance', () => {
+  // Race Dec 30 → peak planned 3 weeks out (Dec 9) → "mid-Dec".
+  const p = computeGoalProgress(longRunInput([14, 12, 16, 10], { race: { date: '2026-12-30', distanceKm: 21.1 } }));
+  assert.deepEqual(p.reasons.map(r => r.kind), ['race', 'week_distance', 'long_run']);
+  const lr = p.reasons[2];
+  assert.equal(lr.text, 'Long run 14 km · build to 18 km by mid-Dec');
+  assert.equal(lr.tone, 'neutral');
+  assertWellFormed(p);
+});
+
+test('long run: peak at/above the target reads "Long run peak 18 km — on target" (good)', () => {
+  const p = computeGoalProgress(longRunInput([14, 18, 12, 10], { race: { date: addDays(TODAY, 56), distanceKm: 21.1 } }));
+  const lr = p.reasons.find(r => r.kind === 'long_run');
+  assert.equal(lr?.text, 'Long run peak 18 km — on target');
+  assert.equal(lr?.tone, 'good');
+  assert.equal(p.longRun?.peakKm, 18);
+});
+
+test('long run: no reason without a race, a race distance or after the race; the object is still exposed', () => {
+  const noRace = computeGoalProgress(longRunInput([14, 12, 16, 10]));
+  assert.equal(noRace.reasons.some(r => r.kind === 'long_run'), false);
+  assert.deepEqual(noRace.longRun, { lastKm: 14, peakKm: 16, targetPeakKm: null });
+  const noDistance = computeGoalProgress(longRunInput([14, 12, 16, 10], { race: { date: addDays(TODAY, 56), distanceKm: null } }));
+  assert.equal(noDistance.reasons.some(r => r.kind === 'long_run'), false);
+  assert.equal(noDistance.longRun?.targetPeakKm, null);
+  const passed = computeGoalProgress(longRunInput([14, 12, 16, 10], { race: { date: addDays(TODAY, -2), distanceKm: 21.1 } }));
+  assert.equal(passed.reasons.some(r => r.kind === 'long_run'), false);
+  assert.equal(passed.longRun?.targetPeakKm, null);
+});
+
+test('long run: inside the last 3 weeks the build deadline is gone ("peak target"); marathon target is 32', () => {
+  const p = computeGoalProgress(longRunInput([14, 12, 16, 10], { race: { date: addDays(TODAY, 14), distanceKm: 21.1 } }));
+  assert.equal(p.reasons.find(r => r.kind === 'long_run')?.text, 'Long run 14 km · peak target 18 km');
+  const m = computeGoalProgress(longRunInput([14, 12, 16, 10], { race: { date: addDays(TODAY, 120), distanceKm: 42.2 } }));
+  assert.equal(m.longRun?.targetPeakKm, 32);
+  assert.match(m.reasons.find(r => r.kind === 'long_run')!.text, /^Long run 14 km · build to 32 km by (early|mid-|late )/);
+});
+
+test('long run: text is unit-aware (miles) while structured km stay metric', () => {
+  const p = computeGoalProgress(longRunInput([14, 12, 16, 10], { race: { date: addDays(TODAY, 84), distanceKm: 21.1 }, unitSystem: 'imperial' }));
+  assert.equal(p.longRun?.lastKm, 14);
+  assert.equal(p.longRun?.targetPeakKm, 18);
+  assert.ok(p.reasons.find(r => r.kind === 'long_run')!.text.startsWith('Long run 8.7 mi · build to 11.2 mi by'));
+});
+
+test('long run: also shown while the verdict is insufficient_data (race still leads, cap 3)', () => {
+  const p = computeGoalProgress(distanceInput({ 3: 14, 10: 12 }, { race: { date: addDays(TODAY, 84), distanceKm: 21.1 } }));
+  assert.equal(p.verdict, 'insufficient_data');
+  assert.deepEqual(p.reasons.map(r => r.kind).slice(0, 2), ['race', 'week_distance']);
+  assert.ok(p.reasons.some(r => r.kind === 'long_run'));
+  assert.ok(p.reasons.length <= 3);
 });

@@ -468,4 +468,60 @@ final class GoalHeroLogicTests: XCTestCase {
         XCTAssertFalse(VoiceFABScroll.isCompact(current: true, oldOffset: 0, newOffset: -40, maxOffset: 1000))
         XCTAssertFalse(VoiceFABScroll.isCompact(current: false, oldOffset: 960, newOffset: 990, maxOffset: 1000))
     }
+
+    // MARK: - Profile goal row with a race
+
+    func testGoalRowLabelAppendsTheEnduranceRace() {
+        let now = ISO8601DateFormatter().date(from: "2026-10-06T12:00:00Z")!
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(identifier: "UTC")!
+        func label(_ goalId: String, sessions: Int? = nil, km: Double? = nil, race: String? = "2026-12-30", raceKm: Double? = 21.1, system: UnitSystem = .metric) -> String {
+            ProfileViewModel.goalRowLabel(
+                goalLabel: goalId == "endurance" ? "Endurance" : "Build muscle", goalId: goalId, targetWeightKg: nil,
+                weeklySessions: sessions, weeklyDistanceKm: km, raceDate: race, raceDistanceKm: raceKm,
+                now: now, calendar: utc, system: system
+            )
+        }
+        XCTAssertEqual(label("endurance", km: 30), "Endurance \u{00B7} 30 km/week \u{00B7} Half marathon Dec 30")
+        XCTAssertEqual(label("endurance", km: 32.2, system: .imperial), "Endurance \u{00B7} 20 mi/week \u{00B7} Half marathon Dec 30")
+        XCTAssertEqual(label("endurance", sessions: 3), "Endurance \u{00B7} 3\u{00D7}/week \u{00B7} Half marathon Dec 30")
+        XCTAssertEqual(label("endurance"), "Endurance \u{00B7} Half marathon Dec 30", "race alone is still worth showing")
+        XCTAssertEqual(label("endurance", km: 30, raceKm: nil), "Endurance \u{00B7} 30 km/week \u{00B7} Race Dec 30")
+        // A passed race / no race leaves the old label; other goals never show a race.
+        XCTAssertEqual(label("endurance", km: 30, race: "2026-10-01"), "Endurance \u{00B7} 30 km/week")
+        XCTAssertEqual(label("endurance", km: 30, race: nil), "Endurance \u{00B7} 30 km/week")
+        XCTAssertEqual(label("muscle", sessions: 4), "Build muscle \u{00B7} 4\u{00D7}/week")
+        XCTAssertEqual(label("endurance", race: nil), "Endurance")
+    }
+
+    // MARK: - Endurance readiness reason line (absolute units)
+
+    func testRecoveryClauseIsAbsoluteAgainstTheNormal() {
+        XCTAssertEqual(EnduranceHeroLogic.recoveryClause(label: "HRV", value: 51, normal: 57, unit: "ms"), "HRV \u{2212}6 ms")
+        XCTAssertEqual(EnduranceHeroLogic.recoveryClause(label: "RHR", value: 54, normal: 48.74, unit: "bpm"), "RHR +5 bpm")
+        XCTAssertEqual(EnduranceHeroLogic.recoveryClause(label: "HRV", value: 57.2, normal: 57, unit: "ms"), "HRV at your normal")
+        // Same half-to-even rounding as Trends' NumberFormatter: -6.5 -> -6.
+        XCTAssertEqual(EnduranceHeroLogic.recoveryClause(label: "HRV", value: 51, normal: 57.5, unit: "ms"), "HRV \u{2212}6 ms")
+        // Baseline not loaded yet: the bare reading, never a percentage.
+        XCTAssertEqual(EnduranceHeroLogic.recoveryClause(label: "HRV", value: 51, normal: nil, unit: "ms"), "HRV 51 ms")
+        XCTAssertNil(EnduranceHeroLogic.recoveryClause(label: "HRV", value: nil, normal: 57, unit: "ms"))
+    }
+
+    func testReasonLineReadsHrvThenRhrThenSleepInAbsoluteUnits() {
+        let line = EnduranceHeroLogic.reasonLine(hrv: 51, hrvNormal: 57, restingHR: 54, restingHRNormal: 48.74, sleepText: "5h 48m")
+        XCTAssertEqual(line, "HRV \u{2212}6 ms \u{00B7} RHR +5 bpm \u{00B7} Sleep 5h 48m")
+        XCTAssertFalse(line?.contains("%") ?? true, "no percentages on the hero")
+        // Metrics without a value drop out; nothing at all is nil.
+        XCTAssertEqual(
+            EnduranceHeroLogic.reasonLine(hrv: nil, hrvNormal: nil, restingHR: nil, restingHRNormal: nil, sleepText: "7h 10m"),
+            "Sleep 7h 10m"
+        )
+        XCTAssertEqual(
+            EnduranceHeroLogic.reasonLine(hrv: 62, hrvNormal: 57, restingHR: nil, restingHRNormal: nil, sleepText: nil),
+            "HRV +5 ms"
+        )
+        XCTAssertNil(EnduranceHeroLogic.reasonLine(hrv: nil, hrvNormal: 57, restingHR: nil, restingHRNormal: nil, sleepText: nil))
+        XCTAssertNil(EnduranceHeroLogic.reasonLine(hrv: nil, hrvNormal: nil, restingHR: nil, restingHRNormal: nil, sleepText: ""))
+    }
+
 }

@@ -406,5 +406,84 @@ final class FixtureCrossScreenConsistencyTests: XCTestCase {
         let review = json(.endurance, "/api/review/weekly")
         XCTAssertEqual(statValue(review, "Volume")?["comparison"] as? String, "+12% vs last week")
     }
+
+    /// The endurance Today hero reads ms / bpm against the SAME 30-day normal
+    /// the Trends pill states (never a percentage), and sleep as h/m.
+    func test_enduranceHeroReasonLineIsAbsoluteAndAgreesWithTrends() {
+        func normal(_ key: String) -> Double {
+            let series = (json(.endurance, "/api/trends", "metrics=\(key)&days=30")["series"] as? [String: Any])?[key] as? [String: Any]
+            return ((series?["baseline"] as? [String: Any])?["mean30"] as? Double) ?? .nan
+        }
+        let hrv = latestBatchPoint(.endurance, "hrv_sdnn")
+        let rhr = latestBatchPoint(.endurance, "resting_hr")
+        let sleepMinutes = Int((latestBatchPoint(.endurance, "sleep_minutes") * 60).rounded())
+        let line = EnduranceHeroLogic.reasonLine(
+            hrv: hrv, hrvNormal: normal("hrv_sdnn"), restingHR: rhr, restingHRNormal: normal("resting_hr"),
+            sleepText: "\(sleepMinutes / 60)h \(sleepMinutes % 60)m"
+        )
+        XCTAssertEqual(line, "HRV \u{2212}6 ms \u{00B7} RHR +5 bpm \u{00B7} Sleep 5h 48m")
+
+        // Same distance the HRV detail pill states ("6 ms below your normal (57 ms)").
+        let hrvSpec = MetricCatalog.spec(for: "hrv_sdnn")!
+        let mean = normal("hrv_sdnn")
+        let pill = TrendsDeltaFormat.normalPillText(value: hrv, lower: mean - 3.4, upper: mean + 3.4, spec: hrvSpec, system: .metric)
+        XCTAssertEqual(pill, "\u{2193} 6 ms below your normal (57 ms)")
+
+        // ...and the Trends sleep tile / What-moved row spell the same night as h/m.
+        let sleepSpec = MetricCatalog.spec(for: "sleep_minutes")!
+        XCTAssertEqual(TrendsDeltaFormat.valueText(latestBatchPoint(.endurance, "sleep_minutes"), spec: sleepSpec), "5h 48m")
+    }
+
+    /// 2-week averages come from the weekly series and agree with the headline,
+    /// the 4-week average and the coach opener; the weekly review's own
+    /// week-over-week (+12%) is a different, labelled window.
+    func test_enduranceVolumeWindowsAreCoherent() throws {
+        let weeks = FixtureData.enduranceWeeklyKm
+        XCTAssertEqual(weeks, [20.1, 23.7, 21.9, 24.5])
+        let prior2 = (weeks[0] + weeks[1]) / 2
+        let last2 = (weeks[2] + weeks[3]) / 2
+        XCTAssertEqual(prior2, FixtureData.endurancePrior2WeeksAvgKm, accuracy: 0.001)
+        XCTAssertEqual(last2, FixtureData.enduranceLast2WeeksAvgKm, accuracy: 0.001)
+        XCTAssertEqual(Int(((last2 / prior2 - 1) * 100).rounded()), FixtureData.enduranceVolumeChangePct)
+        XCTAssertEqual(weeks.reduce(0, +) / 4, FixtureData.enduranceFourWeekAvgKm, accuracy: 0.06)
+        // Week over week (the review): 21.9 -> 24.5 = +12%.
+        XCTAssertEqual(Int(((weeks[3] / weeks[2] - 1) * 100).rounded()), 12)
+
+        let (_, data) = FixtureData.response(scenario: .endurance, method: "GET", path: "/api/goal/progress", query: "")
+        let progress = try JSONDecoder().decode(GoalProgressDTO.self, from: data)
+        XCTAssertEqual(progress.headline, "Building \u{2014} distance up 6% (last 2 weeks vs the 2 before)")
+        XCTAssertEqual(progress.distance?.avg4wKm ?? .nan, 22.6, accuracy: 0.001)
+        XCTAssertFalse(progress.reasons.contains { $0.text.contains("12%") }, "the 2-week line must not reuse the week-over-week number")
+        let opener = json(.endurance, "/api/coach/opener")["text"] as? String ?? ""
+        XCTAssertTrue(opener.contains("distance up 6% (last 2 weeks vs the 2 before)"), opener)
+    }
+
+    /// Endurance goal card: race leads, then this week, then the long-run build;
+    /// the detail row and the Profile Goal row carry the same race.
+    func test_enduranceLongRunAndRaceShowOnGoalCardAndProfileRow() throws {
+        let (_, data) = FixtureData.response(scenario: .endurance, method: "GET", path: "/api/goal/progress", query: "")
+        let progress = try JSONDecoder().decode(GoalProgressDTO.self, from: data)
+        XCTAssertEqual(progress.longRun, GoalProgressDTO.LongRun(lastKm: 14, peakKm: 16, targetPeakKm: 18))
+        XCTAssertEqual(progress.reasons.map(\.kind), ["race", "week_distance", "long_run"])
+        let longRun = progress.reasons[2].text
+        XCTAssertTrue(longRun.hasPrefix("Long run 14 km \u{00B7} build to 18 km by "), longRun)
+        XCTAssertEqual(RaceLogic.longRunRowText(progress.longRun!, .metric), "14 km \u{00B7} peak target 18 km")
+
+        // The other scenarios never carry a long run.
+        for scenario in [FixtureMode.Scenario.weightLoss, .muscle] {
+            let (_, other) = FixtureData.response(scenario: scenario, method: "GET", path: "/api/goal/progress", query: "")
+            XCTAssertNil(try JSONDecoder().decode(GoalProgressDTO.self, from: other).longRun, "\(scenario)")
+        }
+
+        let profile = json(.endurance, "/api/profile")
+        let row = ProfileViewModel.goalRowLabel(
+            goalLabel: "Endurance", goalId: "endurance", targetWeightKg: nil, weeklySessions: nil,
+            weeklyDistanceKm: profile["weeklyDistanceKmTarget"] as? Double,
+            raceDate: profile["raceDate"] as? String, raceDistanceKm: profile["raceDistanceKm"] as? Double,
+            system: .metric
+        )
+        XCTAssertTrue(row.hasPrefix("Endurance \u{00B7} 30 km/week \u{00B7} Half marathon "), row)
+    }
+
 }
 #endif

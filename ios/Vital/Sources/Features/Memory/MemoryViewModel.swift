@@ -53,6 +53,8 @@ final class MemoryViewModel: ObservableObject {
             targetWeightKg: profile?.targetWeightKg,
             weeklySessions: profile?.weeklySessionsTarget,
             weeklyDistanceKm: profile?.weeklyDistanceKmTarget,
+            raceDate: profile?.raceDate,
+            raceDistanceKm: profile?.raceDistanceKm,
             system: UnitPreference.shared.current
         )
     }

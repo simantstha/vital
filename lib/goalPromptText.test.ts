@@ -144,3 +144,18 @@ test('formatGoalProgressLines includes the race countdown when present', () => {
   assert.match(text, /- Race: Half marathon on 2026-12-30 \(in 12 weeks\)/);
   assert.doesNotMatch(formatGoalProgressLines(gp(), 'metric').join('\n'), /Race:/);
 });
+
+test('formatGoalProgressLines adds one long-run line (unit-aware) only when long-run data exists', () => {
+  const g = gp({
+    goal: 'endurance',
+    longRun: { lastKm: 14, peakKm: 16, targetPeakKm: 18 },
+  });
+  const metric = formatGoalProgressLines(g, 'metric');
+  assert.equal(metric.filter(l => l.startsWith('- Long run')).length, 1);
+  assert.match(metric.join('\n'), /- Long run \(running only\): last 14\.0 km; 28-day peak 16\.0 km; peak target 18\.0 km before the taper/);
+  assert.match(formatGoalProgressLines(g, 'imperial').join('\n'), /last 8\.7 mi; 28-day peak 9\.9 mi; peak target 11\.2 mi/);
+  // No race distance → no target clause.
+  const noTarget = formatGoalProgressLines(gp({ goal: 'endurance', longRun: { lastKm: 14, peakKm: 16, targetPeakKm: null } }), 'metric').join('\n');
+  assert.match(noTarget, /- Long run \(running only\): last 14\.0 km; 28-day peak 16\.0 km$/m);
+  assert.doesNotMatch(formatGoalProgressLines(gp(), 'metric').join('\n'), /Long run/);
+});

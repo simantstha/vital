@@ -277,15 +277,23 @@ final class TodayViewModel: ObservableObject {
         return EnduranceHeroLogic.calibratingText(daysCollected: Int((calibrationProgress * 14).rounded()))
     }
 
-    /// "HRV +8 % · Sleep 7h 40m · RHR −2 %" — only the metrics that actually
-    /// have a value today; `nil` if none do. Never a raw z-score or σ (§6 /
-    /// `TrendsVerdict`'s doc comment — those never reach UI copy).
+    /// The metric's 30-day normal (`mean30`) from the endurance trends batch —
+    /// `nil` until that resolves, or when the series has no baseline yet.
+    private func enduranceNormal(key: String) -> Double? {
+        enduranceTrendsBatch?.series[key]?.baseline?.mean30
+    }
+
+    /// "HRV −6 ms · RHR +5 bpm · Sleep 5h 48m" — only the metrics that
+    /// actually have a value today; `nil` if none do. Deltas are absolute
+    /// (ms / bpm vs the 30-day normal), matching Trends, the metric detail and
+    /// the coach. Never a raw z-score or σ (§6 / `TrendsVerdict`'s doc comment
+    /// — those never reach UI copy).
     var enduranceReasonLine: String? {
-        var parts: [String] = []
-        if hrv.value != nil { parts.append("HRV \(RecoveryDelta.compact(hrv.delta))") }
-        if sleep.hours != nil { parts.append("Sleep \(sleep.formatted)") }
-        if restingHR.bpm != nil { parts.append("RHR \(RecoveryDelta.compact(restingHR.delta))") }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+        EnduranceHeroLogic.reasonLine(
+            hrv: hrv.value.map(Double.init), hrvNormal: enduranceNormal(key: "hrv_sdnn"),
+            restingHR: restingHR.bpm.map(Double.init), restingHRNormal: enduranceNormal(key: "resting_hr"),
+            sleepText: sleep.hours != nil && sleep.minutes != nil ? sleep.formatted : nil
+        )
     }
 
     /// One-line "swap to an easy 30 min or rest?" under a hard planned

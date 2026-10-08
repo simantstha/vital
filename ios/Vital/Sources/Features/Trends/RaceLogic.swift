@@ -92,6 +92,39 @@ enum RaceLogic {
         return parts.joined(separator: " · ")
     }
 
+    /// Profile Goal row suffix: "Half marathon Dec 30". `nil` without a race
+    /// date, with one that does not parse, or once the race day has passed
+    /// (the server drops a passed race too).
+    static func goalRowSuffix(
+        raceDate: String?, distanceKm: Double?, now: Date = Date(), calendar: Calendar = .current
+    ) -> String? {
+        guard let raceDate,
+              let day = GoalTargetLogic.date(fromDay: raceDate, calendar: calendar),
+              day >= calendar.startOfDay(for: now) else { return nil }
+        return "\(label(forKm: distanceKm)) \(monthDay(day, calendar: calendar))"
+    }
+
+    // MARK: - Long run (goal detail row)
+
+    /// Goal detail "Long run" row value: "14 km · peak target 18 km" (the last
+    /// long run, then the peak to build to; imperial users get miles). With no
+    /// last long run it leads with the peak ("peak 16 km · peak target 18 km");
+    /// `nil` when the response carries neither distance.
+    static func longRunRowText(_ longRun: GoalProgressDTO.LongRun, _ system: UnitSystem) -> String? {
+        var parts: [String] = []
+        if let last = longRun.lastKm {
+            parts.append(UnitFormat.distance(km: last, system))
+        } else if let peak = longRun.peakKm {
+            parts.append("peak \(UnitFormat.distance(km: peak, system))")
+        } else {
+            return nil
+        }
+        if let target = longRun.targetPeakKm {
+            parts.append("peak target \(UnitFormat.distance(km: target, system))")
+        }
+        return parts.joined(separator: " \u{00B7} ")
+    }
+
     private static func monthDay(_ date: Date, calendar: Calendar) -> String {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")

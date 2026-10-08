@@ -72,6 +72,11 @@ export function formatGoalProgressLines(gp: GoalProgress, units: UnitSystem): st
       : `in ${gp.race.weeksToGo} week${gp.race.weeksToGo === 1 ? '' : 's'}`;
     lines.push(`- Race: ${gp.race.label} on ${gp.race.date} (${when})`);
   }
+  if (gp.longRun) {
+    const dist = (km: number) => (units === 'imperial' ? `${(km / KM_PER_MILE).toFixed(1)} mi` : `${km.toFixed(1)} km`);
+    const target = gp.longRun.targetPeakKm != null ? `; peak target ${dist(gp.longRun.targetPeakKm)} before the taper` : '';
+    lines.push(`- Long run (running only): last ${dist(gp.longRun.lastKm)}; 28-day peak ${dist(gp.longRun.peakKm)}${target}`);
+  }
   if (nowBits.length) lines.push(`- Now: ${nowBits.join('; ')}`);
 
   lines.push(`- Verdict: ${gp.verdict} — "${gp.headline}"`);

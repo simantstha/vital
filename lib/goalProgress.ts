@@ -28,7 +28,9 @@
  *    (building/holding/behind), no ETA. Otherwise training-volume trend,
  *    sessions/week vs target, resting HR / HRV direction (building/holding).
  *    Volume change is ONE definition everywhere: last 2 weeks vs the 2 before
- *    (ENDURANCE_VOLUME_WINDOW_LABEL), always labelled.
+ *    (ENDURANCE_VOLUME_WINDOW_LABEL), always labelled. With a race, the long-run
+ *    build (last long run / 28-day peak vs a distance-based peak target) is a
+ *    reason right behind the race countdown.
  *  - general — consistency: active days, sleep-goal nights, logging days.
  */
 
@@ -132,6 +134,15 @@ export interface GoalRaceProgress {
   daysToGo: number;
 }
 
+export interface GoalLongRunProgress {
+  /** Distance of the most recent long run (a run >= LONG_RUN_PEAK_FRACTION of the 28-day peak), km. */
+  lastKm: number;
+  /** Longest single run in the last 28 days, km. */
+  peakKm: number;
+  /** Peak long-run distance to build to before the taper (by race distance); null without a race distance. */
+  targetPeakKm: number | null;
+}
+
 export interface GoalProgressReason {
   kind: string;
   text: string;
@@ -145,6 +156,8 @@ export interface GoalProgress {
   distance: GoalDistanceProgress | null;
   /** Endurance with a race date that has not passed; null otherwise. */
   race?: GoalRaceProgress | null;
+  /** Endurance with running distances in the last 28 days; null otherwise. Running only, km. */
+  longRun?: GoalLongRunProgress | null;
   current: {
     weightKg: number | null;
     startWeightKg: number | null;
@@ -969,6 +982,76 @@ function raceReason(race: GoalRaceProgress): GoalProgressReason {
   return { kind: 'race', text, tone: 'neutral' };
 }
 
+/** A run counts as a "long run" when it is at least this fraction of the 28-day peak. */
+const LONG_RUN_PEAK_FRACTION = 0.7;
+/** The peak long run is planned this many days before the race (then taper). */
+const LONG_RUN_PEAK_LEAD_DAYS = 21;
+
+/**
+ * Peak long-run distance (km) a runner should reach before the taper, by race
+ * distance: 5K 8, 10K 14, half 18, marathon 32, otherwise 85% of the race.
+ * Null without a race distance.
+ */
+export function longRunTargetKm(raceDistanceKm: number | null): number | null {
+  if (raceDistanceKm == null || !Number.isFinite(raceDistanceKm) || raceDistanceKm <= 0) return null;
+  if (Math.abs(raceDistanceKm - 5) < 0.05) return 8;
+  if (Math.abs(raceDistanceKm - 10) < 0.05) return 14;
+  if (Math.abs(raceDistanceKm - 21.1) < 0.05) return 18;
+  if (Math.abs(raceDistanceKm - 42.2) < 0.05) return 32;
+  return Math.round(raceDistanceKm * 0.85);
+}
+
+/**
+ * Long-run progress from RUNNING workouts with a distance in the last 28 days
+ * (the same running-only filter as the weekly distance). Null for non-endurance
+ * goals and when no such run exists. `lastKm` is the most recent run that is
+ * itself "long" (>= 70% of the 28-day peak), so an easy 5 km after Sunday's
+ * 14 km does not replace it.
+ */
+function longRunProgress(input: GoalProgressInput, race: GoalRaceProgress | null): GoalLongRunProgress | null {
+  if (input.goal !== 'endurance') return null;
+  const runs: Array<{ day: string; km: number }> = [];
+  for (const w of runWorkouts(input)) {
+    if (w.distanceKm == null || !Number.isFinite(w.distanceKm) || w.distanceKm <= 0) continue;
+    if (!inLastDays(w.day, input.todayKey, 28)) continue;
+    runs.push({ day: w.day, km: w.distanceKm });
+  }
+  if (runs.length === 0) return null;
+  const peak = Math.max(...runs.map(r => r.km));
+  const long = runs
+    .filter(r => r.km >= peak * LONG_RUN_PEAK_FRACTION)
+    .sort((a, b) => (a.day === b.day ? b.km - a.km : a.day < b.day ? 1 : -1));
+  return {
+    lastKm: round1(long[0].km),
+    peakKm: round1(peak),
+    targetPeakKm: race ? longRunTargetKm(race.distanceKm) : null,
+  };
+}
+
+/** "early Dec" / "mid-Dec" / "late Dec" — a loose month position for a YYYY-MM-DD day. */
+function looseMonthPosition(day: string): string {
+  const [, m, d] = day.split('-').map(Number);
+  const month = RACE_MONTHS[m - 1];
+  return d <= 7 ? `early ${month}` : d <= 22 ? `mid-${month}` : `late ${month}`;
+}
+
+/**
+ * "Long run 14 km · build to 18 km by mid-Dec" below the target,
+ * "Long run peak 18 km — on target" once the 28-day peak reaches it. Only with a
+ * race distance (that is what sets the target).
+ */
+function longRunReason(input: GoalProgressInput, lr: GoalLongRunProgress | null, race: GoalRaceProgress | null): GoalProgressReason | null {
+  if (lr == null || race == null || lr.targetPeakKm == null) return null;
+  if (lr.peakKm >= lr.targetPeakKm) {
+    return { kind: 'long_run', text: `Long run peak ${fmtDistance(input, lr.peakKm)} — on target`, tone: 'good' };
+  }
+  const peakBy = addDays(race.date, -LONG_RUN_PEAK_LEAD_DAYS);
+  const goal = peakBy >= input.todayKey
+    ? `build to ${fmtDistance(input, lr.targetPeakKm)} by ${looseMonthPosition(peakBy)}`
+    : `peak target ${fmtDistance(input, lr.targetPeakKm)}`;
+  return { kind: 'long_run', text: `Long run ${fmtDistance(input, lr.lastKm)} · ${goal}`, tone: 'neutral' };
+}
+
 function enduranceOutcome(input: GoalProgressInput): Outcome {
   const distanceTarget = input.target.weeklyDistanceKm;
   if (input.target.weeklySessions == null && distanceTarget == null) {
@@ -978,6 +1061,8 @@ function enduranceOutcome(input: GoalProgressInput): Outcome {
   const { count, perWeek } = sessionsPerWeek(input);
   const dist = distanceProgress(input);
   const sessions = weekSessionsReason(input) ?? sessionsReason(input);
+  const race = raceProgress(input);
+  const longRun = longRunReason(input, longRunProgress(input, race), race);
   const distanceWeekReason: GoalProgressReason | null = dist != null && dist.thisWeekKm != null
     ? {
         kind: 'week_distance',
@@ -989,7 +1074,7 @@ function enduranceOutcome(input: GoalProgressInput): Outcome {
     return {
       verdict: 'insufficient_data',
       headline: 'Log a few more sessions to see your training trend',
-      reasons: capReasons([distanceWeekReason, sessions]),
+      reasons: capReasons([distanceWeekReason, longRun, sessions]),
     };
   }
 
@@ -1027,7 +1112,7 @@ function enduranceOutcome(input: GoalProgressInput): Outcome {
       }
     : null;
 
-  const reasons = capReasons([distanceWeekReason, sessions, volumeReason, restingHrReason(input), hrvReason(input)]);
+  const reasons = capReasons([distanceWeekReason, longRun, sessions, volumeReason, restingHrReason(input), hrvReason(input)]);
   const building = (prior === 0 && recent > 0) || (changePct != null && changePct >= ENDURANCE_BUILDING_PCT);
   const buildingHeadline = changePct != null
     ? clip(`Building — ${useKm ? 'distance' : useMinutes ? 'time' : 'sessions'} up ${Math.round(changePct)}% (${ENDURANCE_VOLUME_WINDOW_LABEL})`)
@@ -1175,6 +1260,7 @@ export function computeGoalProgress(input: GoalProgressInput): GoalProgress {
     target: { ...input.target, weeklyDistanceKm: input.target.weeklyDistanceKm ?? null },
     distance: input.goal === 'endurance' ? distanceProgress(input) : null,
     race,
+    longRun: longRunProgress(input, race),
     current: {
       weightKg: w.currentKg != null ? round1(w.currentKg) : null,
       startWeightKg: startKg,

@@ -192,7 +192,7 @@ struct TrendsMetricRowView: View {
 
     private func valueText(_ value: Double) -> some View {
         HStack(alignment: .lastTextBaseline, spacing: 3) {
-            Text(TrendsDeltaFormat.formattedNumber(value, decimals: spec?.decimals ?? 0))
+            Text(TrendsDeltaFormat.valueText(value, spec: spec))
                 .font(Theme.Typography.numericSmall(17))
                 .foregroundStyle(Theme.Colors.textPrimary)
                 .lineLimit(1)
@@ -201,7 +201,8 @@ struct TrendsMetricRowView: View {
                 // identity) — roll the digits instead of a hard swap.
                 .contentTransition(.numericText())
                 .animation(Theme.Motion.numeric, value: value)
-            if let unit = spec?.unit(unitPref.current), !unit.isEmpty {
+            let unit = TrendsDeltaFormat.unitLabel(spec: spec, system: unitPref.current)
+            if !unit.isEmpty {
                 Text(unit)
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(Theme.Colors.textSecondary)

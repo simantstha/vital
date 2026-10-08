@@ -96,4 +96,56 @@ final class RaceLogicTests: XCTestCase {
         let malformed = #"{"goal":"endurance","verdict":"building","headline":"h","reasons":[],"race":{"label":"x"}}"#
         XCTAssertNil(try JSONDecoder().decode(GoalProgressDTO.self, from: Data(malformed.utf8)).race)
     }
+
+    // MARK: - Goal row suffix
+
+    func testGoalRowSuffixNamesTheRaceAndDay() {
+        let now = ISO8601DateFormatter().date(from: "2026-10-06T12:00:00Z")!
+        XCTAssertEqual(RaceLogic.goalRowSuffix(raceDate: "2026-12-30", distanceKm: 21.1, now: now, calendar: utc), "Half marathon Dec 30")
+        XCTAssertEqual(RaceLogic.goalRowSuffix(raceDate: "2026-12-30", distanceKm: nil, now: now, calendar: utc), "Race Dec 30")
+        XCTAssertEqual(RaceLogic.goalRowSuffix(raceDate: "2026-10-06", distanceKm: 10, now: now, calendar: utc), "10K Oct 6", "race day itself still counts")
+        XCTAssertNil(RaceLogic.goalRowSuffix(raceDate: "2026-10-05", distanceKm: 10, now: now, calendar: utc), "a passed race is dropped")
+        XCTAssertNil(RaceLogic.goalRowSuffix(raceDate: nil, distanceKm: 21.1, now: now, calendar: utc))
+        XCTAssertNil(RaceLogic.goalRowSuffix(raceDate: "soon", distanceKm: 21.1, now: now, calendar: utc))
+    }
+
+    // MARK: - Long run
+
+    func testGoalProgressDecodesLongRunTolerantly() throws {
+        func decode(_ extra: String) throws -> GoalProgressDTO {
+            let json = #"{"goal":"endurance","verdict":"building","headline":"h","reasons":[]\#(extra)}"#
+            return try JSONDecoder().decode(GoalProgressDTO.self, from: Data(json.utf8))
+        }
+        XCTAssertEqual(
+            try decode(#","longRun":{"lastKm":14,"peakKm":16,"targetPeakKm":18}"#).longRun,
+            GoalProgressDTO.LongRun(lastKm: 14, peakKm: 16, targetPeakKm: 18)
+        )
+        // No race distance -> no target, still decodes.
+        XCTAssertEqual(
+            try decode(#","longRun":{"lastKm":14,"peakKm":16,"targetPeakKm":null}"#).longRun,
+            GoalProgressDTO.LongRun(lastKm: 14, peakKm: 16, targetPeakKm: nil)
+        )
+        // Older servers / null / malformed -> nil, never a decode failure.
+        XCTAssertNil(try decode("").longRun)
+        XCTAssertNil(try decode(#","longRun":null"#).longRun)
+        XCTAssertNil(try decode(#","longRun":5"#).longRun)
+        XCTAssertNil(try decode(#","longRun":{"lastKm":"x","peakKm":"y","targetPeakKm":18}"#).longRun)
+        // Bad field types drop only that field.
+        XCTAssertEqual(
+            try decode(#","longRun":{"lastKm":"x","peakKm":16,"targetPeakKm":"18"}"#).longRun,
+            GoalProgressDTO.LongRun(lastKm: nil, peakKm: 16, targetPeakKm: nil)
+        )
+        // The rest of the payload survives a bad longRun.
+        XCTAssertEqual(try decode(#","longRun":"nope""#).headline, "h")
+    }
+
+    func testLongRunRowTextShowsTheLastLongRunThenThePeakTarget() {
+        let full = GoalProgressDTO.LongRun(lastKm: 14, peakKm: 16, targetPeakKm: 18)
+        XCTAssertEqual(RaceLogic.longRunRowText(full, .metric), "14 km \u{00B7} peak target 18 km")
+        XCTAssertEqual(RaceLogic.longRunRowText(full, .imperial), "8.7 mi \u{00B7} peak target 11.2 mi")
+        XCTAssertEqual(RaceLogic.longRunRowText(.init(lastKm: 14.5, peakKm: 16, targetPeakKm: nil), .metric), "14.5 km")
+        XCTAssertEqual(RaceLogic.longRunRowText(.init(lastKm: nil, peakKm: 16, targetPeakKm: 18), .metric), "peak 16 km \u{00B7} peak target 18 km")
+        XCTAssertNil(RaceLogic.longRunRowText(.init(lastKm: nil, peakKm: nil, targetPeakKm: 18), .metric))
+    }
+
 }

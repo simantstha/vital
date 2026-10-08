@@ -344,6 +344,9 @@ private extension ProfileView {
                 .font(.system(size: 13))
                 .foregroundStyle(Theme.Colors.textSecondary)
                 .lineLimit(1)
+                // The endurance Goal row can carry target + race
+                // ("Endurance · 30 km/week · Half marathon Dec 30").
+                .minimumScaleFactor(0.75)
 
             Image(systemName: "chevron.right")
                 .font(.system(size: 13, weight: .semibold))

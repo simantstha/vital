@@ -442,6 +442,9 @@ struct GoalProgressDetailView: View {
         if let race = progress.race {
             rows.append(("Race", RaceLogic.rowText(race)))
         }
+        if let longRun = progress.longRun, let text = RaceLogic.longRunRowText(longRun, system) {
+            rows.append(("Long run", text))
+        }
         if let distance = progress.distance {
             rows.append(("Weekly distance goal", UnitFormat.distance(km: distance.targetKm, system)))
             if let done = distance.thisWeekKm {

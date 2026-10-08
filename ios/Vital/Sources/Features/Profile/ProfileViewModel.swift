@@ -43,6 +43,9 @@ final class ProfileViewModel: ObservableObject {
     @Published var targetWeightKg: Double? = nil
     @Published var weeklySessionsTarget: Int? = nil
     @Published var weeklyDistanceKmTarget: Double? = nil
+    /// Endurance race ('YYYY-MM-DD' / km) — appended to the Goal row.
+    @Published var raceDate: String? = nil
+    @Published var raceDistanceKm: Double? = nil
 
     /// "Lose weight · 76 kg" / "Build muscle · 4×/week" — the goal plus its
     /// target when one is set. Reads the live unit preference like
@@ -52,6 +55,7 @@ final class ProfileViewModel: ObservableObject {
             goalLabel: budgetGoalLabel, goalId: budgetGoalId,
             targetWeightKg: targetWeightKg, weeklySessions: weeklySessionsTarget,
             weeklyDistanceKm: weeklyDistanceKmTarget,
+            raceDate: raceDate, raceDistanceKm: raceDistanceKm,
             system: UnitPreference.shared.current
         )
     }
@@ -59,11 +63,14 @@ final class ProfileViewModel: ObservableObject {
     /// Pure composition of the Goal row label. Weight-loss shows the target
     /// weight; muscle prefers the weekly session target, falling back to the
     /// target weight; endurance shows the weekly distance ("30 km/week", unit-
-    /// aware), falling back to the weekly sessions; general just the goal
-    /// name. A missing target leaves the bare goal label.
+    /// aware), falling back to the weekly sessions, then the upcoming race
+    /// ("Endurance · 30 km/week · Half marathon Dec 30"); general just the goal
+    /// name. A missing target leaves the bare goal label. `now`/`calendar`
+    /// only decide whether the race is still ahead.
     nonisolated static func goalRowLabel(
         goalLabel: String, goalId: String, targetWeightKg: Double?, weeklySessions: Int?,
-        weeklyDistanceKm: Double? = nil, system: UnitSystem
+        weeklyDistanceKm: Double? = nil, raceDate: String? = nil, raceDistanceKm: Double? = nil,
+        now: Date = Date(), calendar: Calendar = .current, system: UnitSystem
     ) -> String {
         guard !goalLabel.isEmpty else { return goalLabel }
         let weight = targetWeightKg.map { UnitFormat.weight(kg: $0, system) }
@@ -73,7 +80,10 @@ final class ProfileViewModel: ObservableObject {
         switch goalId {
         case "weight_loss": suffix = weight
         case "muscle":      suffix = sessions ?? weight
-        case "endurance":   suffix = distance ?? sessions
+        case "endurance":
+            let race = RaceLogic.goalRowSuffix(raceDate: raceDate, distanceKm: raceDistanceKm, now: now, calendar: calendar)
+            let parts = [distance ?? sessions, race].compactMap { $0 }
+            suffix = parts.isEmpty ? nil : parts.joined(separator: " \u{00B7} ")
         default:            suffix = nil
         }
         guard let suffix else { return goalLabel }
@@ -88,6 +98,8 @@ final class ProfileViewModel: ObservableObject {
             targetWeightKg = r.targetWeightKg
             weeklySessionsTarget = r.weeklySessionsTarget
             weeklyDistanceKmTarget = r.weeklyDistanceKmTarget
+            raceDate = r.raceDate
+            raceDistanceKm = r.raceDistanceKm
         }
     }
 
@@ -127,6 +139,8 @@ final class ProfileViewModel: ObservableObject {
             targetWeightKg = response.targetWeightKg
             weeklySessionsTarget = response.weeklySessionsTarget
             weeklyDistanceKmTarget = response.weeklyDistanceKmTarget
+            raceDate = response.raceDate
+            raceDistanceKm = response.raceDistanceKm
             // Locale-default adoption PATCH: opportunistic housekeeping, not a
             // user-initiated action, so failure is silent and simply retries
             // next launch (see UnitPreference.applyServerValue).

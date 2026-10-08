@@ -217,6 +217,38 @@ enum EnduranceHeroLogic {
         "Getting to know your normal · day \(min(max(daysCollected, 0), 14)) of 14"
     }
 
+    // MARK: - Readiness reason line
+
+    /// One recovery clause in absolute units against the 30-day normal — the
+    /// same reference and rounding as Trends' "6 ms below your normal":
+    /// "HRV −6 ms", "RHR +5 bpm", "HRV at your normal" when it rounds to 0.
+    /// While the baseline isn't known the bare reading stands in ("HRV 51 ms"),
+    /// never a percentage. `nil` without a reading.
+    static func recoveryClause(label: String, value: Double?, normal: Double?, unit: String) -> String? {
+        guard let value else { return nil }
+        guard let normal else { return "\(label) \(Int(value.rounded())) \(unit)" }
+        // Half-to-even, like the NumberFormatter behind Trends' delta text.
+        let gap = Int((value - normal).rounded(.toNearestOrEven))
+        if gap == 0 { return "\(label) at your normal" }
+        return "\(label) \(gap > 0 ? "+" : "\u{2212}")\(abs(gap)) \(unit)"
+    }
+
+    /// "HRV −6 ms · RHR +5 bpm · Sleep 5h 48m" — only the metrics that have a
+    /// value today; `nil` if none do. Recovery deltas are absolute (ms / bpm
+    /// vs the 30-day normal) so the hero agrees with Trends, the metric detail
+    /// and the coach; sleep is the plain duration. Never a raw z-score or σ.
+    static func reasonLine(
+        hrv: Double?, hrvNormal: Double?,
+        restingHR: Double?, restingHRNormal: Double?,
+        sleepText: String?
+    ) -> String? {
+        var parts: [String] = []
+        if let hrvPart = recoveryClause(label: "HRV", value: hrv, normal: hrvNormal, unit: "ms") { parts.append(hrvPart) }
+        if let rhrPart = recoveryClause(label: "RHR", value: restingHR, normal: restingHRNormal, unit: "bpm") { parts.append(rhrPart) }
+        if let sleepText, !sleepText.isEmpty { parts.append("Sleep \(sleepText)") }
+        return parts.isEmpty ? nil : parts.joined(separator: " \u{00B7} ")
+    }
+
     // MARK: - Today's session
 
     /// Same rule as `MuscleHeroLogic.todaySession` — the plan's move-kind

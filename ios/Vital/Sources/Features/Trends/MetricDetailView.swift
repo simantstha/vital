@@ -122,7 +122,8 @@ private extension MetricDetailView {
                         .foregroundStyle(Theme.Colors.textPrimary)
                         .contentTransition(.numericText())
                         .animation(Theme.Motion.numeric, value: displayedValue)
-                    if let unit = spec?.unit(unitPref.current), !unit.isEmpty {
+                    let unit = TrendsDeltaFormat.unitLabel(spec: spec, system: unitPref.current)
+                    if !unit.isEmpty {
                         Text(unit)
                             .font(.system(size: 14))
                             .foregroundStyle(Theme.Colors.textSecondary)
@@ -163,7 +164,7 @@ private extension MetricDetailView {
 
     var heroValueText: String {
         guard let value = displayedValue else { return "—" }
-        return TrendsDeltaFormat.formattedNumber(value, decimals: spec?.decimals ?? 0)
+        return TrendsDeltaFormat.valueText(value, spec: spec)
     }
 
     /// The value the hero + delta pill currently show: the scrubbed point's

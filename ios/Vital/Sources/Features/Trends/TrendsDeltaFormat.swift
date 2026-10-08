@@ -22,6 +22,8 @@ enum TrendsDeltaFormat {
     /// appended when `includeUnit` is true and the unit isn't empty (e.g.
     /// steps/flights, which render as a bare count).
     static func magnitudeText(_ delta: Double, spec: MetricSpec, system: UnitSystem, includeUnit: Bool) -> String {
+        // Sleep reads as a duration ("36m", "1h 06m"), never "0.6 h".
+        if isDuration(spec) { return durationText(hours: delta) }
         let numberText = formattedNumber(abs(delta), decimals: spec.decimals)
         guard includeUnit else { return numberText }
         let unit = spec.unit(system)
@@ -44,9 +46,40 @@ enum TrendsDeltaFormat {
                 ? "\(arrow(1)) \(m) above your normal (\(ref))"
                 : "\(arrow(-1)) \(m) below your normal (\(ref))"
         }
-        let lo = formattedNumber(lower, decimals: spec.decimals)
-        let hi = formattedNumber(upper, decimals: spec.decimals)
+        let lo = valueText(lower, spec: spec)
+        let hi = valueText(upper, spec: spec)
         return "Within your normal range (\(lo)\u{2013}\(hi))"
+    }
+
+    // MARK: - Durations (sleep)
+
+    /// Sleep (`sleep_minutes`, whose series values are hours) is the one
+    /// catalog metric that reads as a duration — "5h 48m" — everywhere a value
+    /// or a delta is spelled out, never "5.8 h". Chart axes / compact range
+    /// badges keep plain decimal hours.
+    static func isDuration(_ spec: MetricSpec?) -> Bool {
+        spec?.key == "sleep_minutes"
+    }
+
+    /// An hours value as a duration, rounded to the minute and unsigned:
+    /// 5.8 -> "5h 48m" (the shared `TrendsSummary.hoursMinutesText` format),
+    /// 0.6 -> "36m".
+    static func durationText(hours: Double) -> String {
+        let totalMinutes = Int((abs(hours) * 60).rounded())
+        if totalMinutes < 60 { return "\(totalMinutes)m" }
+        return TrendsSummary.hoursMinutesText(Double(totalMinutes) / 60)
+    }
+
+    /// A metric value as printed beside its unit: the duration for sleep, the
+    /// number rounded to `spec.decimals` otherwise.
+    static func valueText(_ value: Double, spec: MetricSpec?) -> String {
+        isDuration(spec) ? durationText(hours: value) : formattedNumber(value, decimals: spec?.decimals ?? 0)
+    }
+
+    /// The unit label to print beside `valueText(_:spec:)` — empty for a
+    /// duration (the text already carries its h/m).
+    static func unitLabel(spec: MetricSpec?, system: UnitSystem) -> String {
+        isDuration(spec) ? "" : (spec?.unit(system) ?? "")
     }
 
     private static var cachedFormatters: [Int: NumberFormatter] = [:]
