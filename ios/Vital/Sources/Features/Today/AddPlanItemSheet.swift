@@ -58,7 +58,7 @@ struct AddPlanItemSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
             Text("Add to today")
-                .font(.system(size: 18, weight: .bold))
+                .scaledFont(size: 18, weight: .bold)
                 .tracking(-0.2)
                 .foregroundStyle(Theme.Colors.textPrimary)
 
@@ -66,7 +66,7 @@ struct AddPlanItemSheet: View {
 
             TextField("What is it? e.g. Protein shake", text: $title)
                 .focused($titleFocused)
-                .font(.system(size: 15))
+                .scaledFont(size: 15)
                 .foregroundStyle(Theme.Colors.textPrimary)
                 .tint(Theme.Colors.accentContent)
                 .submitLabel(.done)
@@ -97,7 +97,7 @@ struct AddPlanItemSheet: View {
                         Image(systemName: candidate.sfSymbol)
                             .font(.system(size: 17, weight: .medium))
                         Text(candidate.label)
-                            .font(.system(size: 12, weight: .semibold))
+                            .scaledFont(size: 12, weight: .semibold)
                     }
                     .foregroundStyle(selected ? Theme.Colors.accentContent : Theme.Colors.textSecondary)
                     .frame(maxWidth: .infinity)
@@ -153,7 +153,7 @@ struct AddPlanItemSheet: View {
             timePillTapTick += 1
         } label: {
             Text(label)
-                .font(.system(size: 13, weight: .semibold))
+                .scaledFont(size: 13, weight: .semibold)
                 .foregroundStyle(isSelected ? Theme.Colors.accentContent : Theme.Colors.textSecondary)
                 .padding(.horizontal, Theme.Spacing.md)
                 .padding(.vertical, Theme.Spacing.sm + 2)
@@ -167,7 +167,7 @@ struct AddPlanItemSheet: View {
         HStack(spacing: Theme.Spacing.md) {
             Button(action: onCancel) {
                 Text("Cancel")
-                    .font(.system(size: 15, weight: .bold))
+                    .scaledFont(size: 15, weight: .bold)
                     .foregroundStyle(Theme.Colors.textSecondary)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, Theme.Spacing.md + 2)
@@ -178,7 +178,7 @@ struct AddPlanItemSheet: View {
                 add()
             } label: {
                 Text("Add")
-                    .font(.system(size: 15, weight: .bold))
+                    .scaledFont(size: 15, weight: .bold)
                     .foregroundStyle(trimmedTitle.isEmpty ? Theme.Colors.textTertiary : Theme.Colors.card)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, Theme.Spacing.md + 2)

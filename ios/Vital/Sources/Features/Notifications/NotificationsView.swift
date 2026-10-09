@@ -90,10 +90,10 @@ struct NotificationsView: View {
                     .foregroundStyle(Theme.Colors.textTertiary)
             }
             Text("You're all caught up")
-                .font(.system(size: 17, weight: .semibold))
+                .scaledFont(size: 17, weight: .semibold)
                 .foregroundStyle(Theme.Colors.textPrimary)
             Text("Coach nudges, morning briefs and workout recaps will collect here so you can read them whenever you like.")
-                .font(.system(size: 13))
+                .scaledFont(size: 13)
                 .foregroundStyle(Theme.Colors.textSecondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 260)
@@ -114,7 +114,7 @@ struct NotificationsView: View {
             Spacer()
 
             Text("Notifications")
-                .font(.system(size: 17, weight: .semibold))
+                .scaledFont(size: 17, weight: .semibold)
                 .foregroundStyle(Theme.Colors.textPrimary)
 
             Spacer()
@@ -123,7 +123,7 @@ struct NotificationsView: View {
                 Task { await vm.markAllRead() }
             } label: {
                 Text("Mark all read")
-                    .font(.system(size: 13, weight: .semibold))
+                    .scaledFont(size: 13, weight: .semibold)
                     .foregroundStyle(Theme.Colors.accentContent)
                     .frame(width: 44, height: 44, alignment: .trailing)
                     .fixedSize()
@@ -183,15 +183,15 @@ private struct NotificationRowView: View {
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(item.title)
-                    .font(.system(size: 14.5, weight: isUnread ? .semibold : .medium))
+                    .scaledFont(size: 14.5, weight: isUnread ? .semibold : .medium)
                     .foregroundStyle(Theme.Colors.textPrimary)
                     .lineLimit(1)
                 Text(item.body)
-                    .font(.system(size: 12.5))
+                    .scaledFont(size: 12.5)
                     .foregroundStyle(Theme.Colors.textSecondary)
                     .lineLimit(2)
                 Text(style.label)
-                    .font(.system(size: 10.5, weight: .medium))
+                    .scaledFont(size: 10.5, weight: .medium)
                     .foregroundStyle(Theme.Colors.textTertiary)
                     .padding(.top, 2)
             }
@@ -199,7 +199,7 @@ private struct NotificationRowView: View {
             Spacer(minLength: Theme.Spacing.sm)
 
             Text(Self.relativeTime(item.createdAt))
-                .font(.system(size: 11.5))
+                .scaledFont(size: 11.5)
                 .foregroundStyle(Theme.Colors.textTertiary)
         }
         .padding(.vertical, Theme.Spacing.md)

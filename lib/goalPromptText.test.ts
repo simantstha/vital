@@ -160,6 +160,48 @@ test('formatGoalProgressLines includes the race countdown when present', () => {
   ).join('\n');
   assert.match(text, /- Race: Half marathon on 2026-12-30 \(in 12 weeks\)/);
   assert.doesNotMatch(formatGoalProgressLines(gp(), 'metric').join('\n'), /Race:/);
+  // Build phase: no phase line.
+  const build = formatGoalProgressLines(
+    gp({ goal: 'endurance', race: { date: '2026-12-30', distanceKm: 21.1, label: 'Half marathon', weeksToGo: 12, daysToGo: 84, phase: 'build' } }),
+    'metric',
+  ).join('\n');
+  assert.doesNotMatch(build, /Race phase:/);
+});
+
+test('race lifecycle: taper / race week / recovery each get ONE phase line with the target, and no "build to" step', () => {
+  const distance = { targetKm: 50, thisWeekKm: 8, avg4wKm: 30, weekStart: '2026-10-05', stepTargetKm: 30, text: '8 of ~30 km running this week · goal 50 km' };
+  const taper = formatGoalProgressLines(gp({
+    goal: 'endurance',
+    distance,
+    race: { date: '2026-10-22', distanceKm: 21.1, label: 'Half marathon', weeksToGo: 3, daysToGo: 17, phase: 'taper' },
+  }), 'metric');
+  assert.equal(taper.filter(l => l.startsWith('- Race phase')).length, 1);
+  assert.ok(taper.includes('- Race phase: taper — this week\'s target ~30.0 km; cut volume, keep a little intensity — do not push volume or build the long run'), taper.join('\n'));
+  assert.doesNotMatch(taper.join('\n'), /build to|This week's target/);
+
+  const raceWeek = formatGoalProgressLines(gp({
+    goal: 'endurance',
+    distance: { ...distance, stepTargetKm: 16 },
+    race: { date: '2026-10-09', distanceKm: 21.1, label: 'Half marathon', weeksToGo: 0, daysToGo: 3, phase: 'race_week' },
+  }), 'metric').join('\n');
+  assert.match(raceWeek, /- Race: Half marathon on 2026-10-09 \(in 3 days\)/);
+  assert.match(raceWeek, /- Race phase: race week — ~16\.0 km before the race at most; short easy runs, rest 1–2 days before race day — no new volume or hard sessions/);
+
+  const recovery = formatGoalProgressLines(gp({
+    goal: 'endurance',
+    distance: { ...distance, stepTargetKm: 16 },
+    race: { date: '2026-10-03', distanceKm: 21.1, label: 'Half marathon', weeksToGo: 0, daysToGo: 0, phase: 'recovery', daysSince: 3 },
+  }), 'imperial').join('\n');
+  assert.match(recovery, /- Race: Half marathon on 2026-10-03 \(done 3 days ago\)/);
+  assert.match(recovery, /- Race phase: recovery week 1 after the race — easy only, up to 9\.9 mi; do not push volume or intensity — the next step is a new goal/);
+  assert.doesNotMatch(recovery, /in 0 days|today/);
+
+  // Without a weekly distance goal the phase line carries no number.
+  const noDistance = formatGoalProgressLines(gp({
+    goal: 'endurance',
+    race: { date: '2026-10-22', distanceKm: 21.1, label: 'Half marathon', weeksToGo: 3, daysToGo: 17, phase: 'taper' },
+  }), 'metric').join('\n');
+  assert.match(noDistance, /- Race phase: taper; cut volume/);
 });
 
 test('formatGoalProgressLines adds one long-run line (unit-aware) only when long-run data exists', () => {
@@ -175,4 +217,24 @@ test('formatGoalProgressLines adds one long-run line (unit-aware) only when long
   const noTarget = formatGoalProgressLines(gp({ goal: 'endurance', longRun: { lastKm: 14, peakKm: 16, targetPeakKm: null } }), 'metric').join('\n');
   assert.match(noTarget, /- Long run \(running only\): last 14\.0 km; 28-day peak 16\.0 km$/m);
   assert.doesNotMatch(formatGoalProgressLines(gp(), 'metric').join('\n'), /Long run/);
+});
+
+test('a reached goal tells the coach the next step is a new target or maintenance', () => {
+  const text = formatGoalProgressLines(
+    gp({
+      verdict: 'reached',
+      headline: 'Goal reached — 76 kg (Sep 20)',
+      eta: null,
+      current: { weightKg: 75.6, startWeightKg: 85, changeKg: -9.4, progressPct: 100 },
+      reasons: [
+        { kind: 'reached', text: 'Trend weight 75.6 kg is at or past your 76 kg target', tone: 'good' },
+        { kind: 'next_step', text: 'Set a new target or switch to maintenance', tone: 'neutral' },
+      ],
+    }),
+    'metric',
+  ).join('\n');
+  assert.match(text, /Verdict: reached — "Goal reached — 76 kg \(Sep 20\)"/);
+  assert.match(text, /Set a new target or switch to maintenance/);
+  assert.match(text, /Target reached — the next step is a new target or maintenance/);
+  assert.doesNotMatch(formatGoalProgressLines(gp(), 'metric').join('\n'), /Target reached/);
 });

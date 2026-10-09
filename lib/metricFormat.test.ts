@@ -94,3 +94,13 @@ test('formatHeight renders cm (rounded) for metric and feet/inches for imperial;
   assert.equal(formatHeight(NaN, 'imperial'), null);
   assert.equal(formatHeight(Infinity, 'imperial'), null);
 });
+
+test('formatWeight keeps one decimal for imperial values under 1 lb (a 0.4 lb/wk rate is not "0 lb")', () => {
+  assert.equal(formatWeight(0.18, 'imperial'), '0.4 lb');
+  assert.equal(formatWeight(0.3, 'imperial'), '0.7 lb');
+  assert.equal(formatWeight(0, 'imperial'), '0 lb');
+  // 1 lb and up stays whole; metric is unchanged.
+  assert.equal(formatWeight(0.5, 'imperial'), '1 lb');
+  assert.equal(formatWeight(0.7, 'imperial'), '2 lb');
+  assert.equal(formatWeight(0.18, 'metric'), '0.2 kg');
+});

@@ -221,35 +221,43 @@ enum Theme {
     }
 
     // MARK: - Typography
+    /// Every token scales with Dynamic Type (see `ScaledFont.swift`): the
+    /// point size here is what renders at the default text size, and the
+    /// `relativeTo` text style is the curve it follows at other sizes. Apply
+    /// with `.scaledFont(Theme.Typography.bodyMedium)` — never `.font(...)`
+    /// with a fixed `.system(size:)`, which ignores the user's text size.
     enum Typography {
-        // Numeric / SF Rounded
-        static func numericHero(_ size: CGFloat = 40) -> Font {
-            .system(size: size, weight: .bold, design: .rounded)
+        // Numeric / SF Rounded — curve picked from the size (a 40pt hero
+        // follows largeTitle, a 17pt figure follows body). Hero-sized
+        // numbers in dense UI may cap growth with
+        // `.dynamicTypeSize(...DynamicTypeSize.accessibility2)`.
+        static func numericHero(_ size: CGFloat = 40) -> ScaledFontToken {
+            ScaledFontToken(size: size, weight: .bold, design: .rounded)
         }
-        static func numericLarge(_ size: CGFloat = 28) -> Font {
-            .system(size: size, weight: .semibold, design: .rounded)
+        static func numericLarge(_ size: CGFloat = 28) -> ScaledFontToken {
+            ScaledFontToken(size: size, weight: .semibold, design: .rounded)
         }
-        static func numericSmall(_ size: CGFloat = 17) -> Font {
-            .system(size: size, weight: .medium, design: .rounded)
+        static func numericSmall(_ size: CGFloat = 17) -> ScaledFontToken {
+            ScaledFontToken(size: size, weight: .medium, design: .rounded)
         }
 
         // Body — SF Pro
-        static let bodyLarge  = Font.system(size: 17, weight: .regular)
-        static let bodyMedium = Font.system(size: 15, weight: .regular)
-        static let bodySmall  = Font.system(size: 13, weight: .regular)
+        static let bodyLarge  = ScaledFontToken(size: 17, weight: .regular, relativeTo: .body)
+        static let bodyMedium = ScaledFontToken(size: 15, weight: .regular, relativeTo: .subheadline)
+        static let bodySmall  = ScaledFontToken(size: 13, weight: .regular, relativeTo: .footnote)
 
         // Labels
-        static let labelMedium = Font.system(size: 12, weight: .medium)
-        static let labelSmall  = Font.system(size: 11, weight: .medium)
+        static let labelMedium = ScaledFontToken(size: 12, weight: .medium, relativeTo: .caption)
+        static let labelSmall  = ScaledFontToken(size: 11, weight: .medium, relativeTo: .caption2)
 
         // Headings
-        static let titleLarge  = Font.system(size: 28, weight: .bold)
-        static let titleMedium = Font.system(size: 22, weight: .semibold)
+        static let titleLarge  = ScaledFontToken(size: 28, weight: .bold, relativeTo: .title)
+        static let titleMedium = ScaledFontToken(size: 22, weight: .semibold, relativeTo: .title2)
 
         /// Screen-level title (e.g. "Today") — 34pt bold. Prefer the
         /// `.screenTitleStyle()` view modifier below, which also applies the
         /// mock's tight tracking.
-        static let screenTitle = Font.system(size: 34, weight: .bold)
+        static let screenTitle = ScaledFontToken(size: 34, weight: .bold, relativeTo: .largeTitle)
     }
 
     // MARK: - Motion
@@ -467,7 +475,7 @@ extension View {
     /// Applies `Theme.Typography.screenTitle` with the mock's tight tracking.
     func screenTitleStyle() -> some View {
         self
-            .font(Theme.Typography.screenTitle)
+            .scaledFont(Theme.Typography.screenTitle)
             .tracking(-0.4)
     }
 

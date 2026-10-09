@@ -199,4 +199,156 @@ final class RaceLogicTests: XCTestCase {
         XCTAssertNil(RaceLogic.longRunRowText(.init(lastKm: nil, peakKm: nil, targetPeakKm: 18), .metric))
     }
 
+    // MARK: - Race lifecycle (taper / race week / recovery)
+
+    private func lifecycle(
+        date: String = "2026-12-30", weeks: Int, days: Int,
+        phase: GoalProgressDTO.Race.Phase?, daysSince: Int? = nil
+    ) -> GoalProgressDTO.Race {
+        GoalProgressDTO.Race(
+            date: date, distanceKm: 21.1, label: "Half marathon", weeksToGo: weeks, daysToGo: days,
+            phase: phase, daysSince: daysSince
+        )
+    }
+
+    func testRecoveryWeekBoundariesMirrorTheServer() {
+        XCTAssertEqual(RaceLogic.recoveryWeek(daysSince: 1), 1)
+        XCTAssertEqual(RaceLogic.recoveryWeek(daysSince: 7), 1)
+        XCTAssertEqual(RaceLogic.recoveryWeek(daysSince: 8), 2)
+        XCTAssertEqual(RaceLogic.recoveryWeek(daysSince: 14), 2)
+        // A server that sends no day count reads as the first recovery week.
+        XCTAssertEqual(RaceLogic.recoveryWeek(daysSince: nil), 1)
+    }
+
+    func testHeroLineFollowsThePhase() {
+        // Build keeps the plain countdown (and its long-run tail).
+        XCTAssertEqual(RaceLogic.heroLine(lifecycle(weeks: 12, days: 84, phase: .build), calendar: utc), "Half marathon · 12 weeks to go")
+        let longRun = GoalProgressDTO.LongRun(lastKm: 14, peakKm: 16, targetPeakKm: 18)
+        XCTAssertEqual(
+            RaceLogic.heroLine(lifecycle(weeks: 12, days: 84, phase: .build), longRun: longRun, system: .metric, calendar: utc),
+            "Half marathon \u{00B7} 12 weeks to go \u{00B7} long run 14/18\u{00A0}km"
+        )
+        // Taper: the phase, the countdown, no long-run tail (the build-up is over).
+        XCTAssertEqual(
+            RaceLogic.heroLine(lifecycle(weeks: 2, days: 14, phase: .taper), longRun: longRun, system: .metric, calendar: utc),
+            "Half marathon \u{00B7} taper \u{00B7} 2 weeks to go"
+        )
+        XCTAssertEqual(RaceLogic.heroLine(lifecycle(weeks: 3, days: 21, phase: .taper), calendar: utc), "Half marathon · taper · 3 weeks to go")
+        // Race week: the day, not a countdown.
+        XCTAssertEqual(
+            RaceLogic.heroLine(lifecycle(date: "2026-12-31", weeks: 0, days: 5, phase: .raceWeek), longRun: longRun, calendar: utc),
+            "Race week · Dec 31"
+        )
+        XCTAssertEqual(RaceLogic.heroLine(lifecycle(date: "2026-12-31", weeks: 1, days: 7, phase: .raceWeek), calendar: utc), "Race week · Dec 31")
+        XCTAssertEqual(RaceLogic.heroLine(lifecycle(date: "2026-12-31", weeks: 0, days: 0, phase: .raceWeek), calendar: utc), "Race day · Dec 31")
+        // Recovery: done, with the recovery week.
+        XCTAssertEqual(RaceLogic.heroLine(lifecycle(weeks: 0, days: 0, phase: .recovery, daysSince: 3), calendar: utc), "Race done · recovery week 1")
+        XCTAssertEqual(RaceLogic.heroLine(lifecycle(weeks: 0, days: 0, phase: .recovery, daysSince: 9), calendar: utc), "Race done · recovery week 2")
+        XCTAssertEqual(RaceLogic.heroLine(lifecycle(weeks: 0, days: 0, phase: .recovery, daysSince: nil), calendar: utc), "Race done · recovery week 1")
+        // An older server (no phase) is exactly the old countdown.
+        XCTAssertEqual(RaceLogic.heroLine(race(), calendar: utc), "Half marathon · 12 weeks to go")
+    }
+
+    func testRowTextCarriesThePhase() {
+        XCTAssertEqual(RaceLogic.rowText(lifecycle(weeks: 12, days: 84, phase: .build), calendar: utc), "Half marathon · Dec 30 · 12 wk")
+        XCTAssertEqual(RaceLogic.rowText(lifecycle(weeks: 2, days: 14, phase: .taper), calendar: utc), "Half marathon · Dec 30 · taper · 2 wk")
+        XCTAssertEqual(RaceLogic.rowText(lifecycle(weeks: 0, days: 5, phase: .raceWeek), calendar: utc), "Half marathon · Dec 30 · race week · 5 d")
+        XCTAssertEqual(RaceLogic.rowText(lifecycle(weeks: 0, days: 0, phase: .raceWeek), calendar: utc), "Half marathon · Dec 30 · race week · today")
+        XCTAssertEqual(
+            RaceLogic.rowText(lifecycle(weeks: 0, days: 0, phase: .recovery, daysSince: 3), calendar: utc),
+            "Half marathon · Dec 30 · recovery week 1"
+        )
+        XCTAssertEqual(
+            RaceLogic.rowText(lifecycle(weeks: 0, days: 0, phase: .recovery, daysSince: 12), calendar: utc),
+            "Half marathon · Dec 30 · recovery week 2"
+        )
+    }
+
+    func testRecoveryTextAndCallToActionCopy() {
+        XCTAssertEqual(RaceLogic.recoveryText(daysSince: 2), "Race done · recovery week 1")
+        XCTAssertEqual(RaceLogic.nextGoalTitle, "Set your next goal")
+        XCTAssertTrue(RaceLogic.isRecovery(lifecycle(weeks: 0, days: 0, phase: .recovery, daysSince: 1)))
+        XCTAssertFalse(RaceLogic.isRecovery(lifecycle(weeks: 2, days: 14, phase: .taper)))
+        XCTAssertFalse(RaceLogic.isRecovery(race()))
+        XCTAssertFalse(RaceLogic.isRecovery(nil))
+    }
+
+    func testGoalProgressDecodesTaperAndRecoveryPayloads() throws {
+        func decode(_ race: String) throws -> GoalProgressDTO {
+            let json = #"{"goal":"endurance","verdict":"holding","headline":"h","reasons":[],"race":\#(race)}"#
+            return try JSONDecoder().decode(GoalProgressDTO.self, from: Data(json.utf8))
+        }
+        let taper = try decode(#"{"date":"2026-12-30","distanceKm":21.1,"label":"Half marathon","weeksToGo":2,"daysToGo":14,"phase":"taper"}"#)
+        XCTAssertEqual(taper.race?.phase, .taper)
+        XCTAssertNil(taper.race?.daysSince)
+        XCTAssertEqual(taper.race?.daysToGo, 14)
+
+        let raceWeek = try decode(#"{"date":"2026-12-30","weeksToGo":0,"daysToGo":4,"phase":"race_week"}"#)
+        XCTAssertEqual(raceWeek.race?.phase, .raceWeek)
+
+        let recovery = try decode(#"{"date":"2026-12-30","distanceKm":21.1,"label":"Half marathon","weeksToGo":0,"daysToGo":0,"phase":"recovery","daysSince":3}"#)
+        XCTAssertEqual(recovery.race?.phase, .recovery)
+        XCTAssertEqual(recovery.race?.daysSince, 3)
+        XCTAssertEqual(recovery.race?.daysToGo, 0)
+        XCTAssertTrue(GoalProgressLogic.showsNextGoalPrompt(recovery))
+
+        let build = try decode(#"{"date":"2026-12-30","weeksToGo":12,"daysToGo":84,"phase":"build"}"#)
+        XCTAssertEqual(build.race?.phase, .build)
+        XCTAssertFalse(GoalProgressLogic.showsNextGoalPrompt(build))
+    }
+
+    func testRacePhaseDecodingIsTolerant() throws {
+        func decode(_ extra: String) throws -> GoalProgressDTO.Race? {
+            let json = #"{"goal":"endurance","verdict":"holding","headline":"h","reasons":[],"race":{"date":"2026-12-30","weeksToGo":12,"daysToGo":84\#(extra)}}"#
+            return try JSONDecoder().decode(GoalProgressDTO.self, from: Data(json.utf8)).race
+        }
+        // Older server: no phase, still a plain race.
+        XCTAssertNil(try decode("")?.phase)
+        XCTAssertEqual(try decode("")?.daysToGo, 84)
+        // An unknown phase from a newer server, or a wrong type, drops only the phase.
+        XCTAssertNil(try decode(#","phase":"carb_load""#)?.phase)
+        XCTAssertEqual(try decode(#","phase":"carb_load""#)?.weeksToGo, 12)
+        XCTAssertNil(try decode(#","phase":5"#)?.phase)
+        XCTAssertNil(try decode(#","phase":null"#)?.phase)
+        // A bad daysSince drops only that field.
+        XCTAssertNil(try decode(#","phase":"recovery","daysSince":"three""#)?.daysSince)
+        XCTAssertEqual(try decode(#","phase":"recovery","daysSince":"three""#)?.phase, .recovery)
+    }
+
+    func testRecoveryLeadsWithTheRaceDoneHeadlineAndOffersTheNextGoal() {
+        let recovery = GoalProgressDTO(
+            goal: "endurance",
+            distance: GoalProgressDTO.Distance(targetKm: 50, thisWeekKm: 4, stepTargetKm: 16),
+            race: lifecycle(weeks: 0, days: 0, phase: .recovery, daysSince: 3),
+            verdict: .holding,
+            headline: "Race done — Dec 30 · recovery week 1"
+        )
+        XCTAssertTrue(GoalProgressLogic.showsNextGoalPrompt(recovery))
+        XCTAssertEqual(GoalProgressLogic.primaryLine(recovery, system: .metric), "Race done — Dec 30 · recovery week 1")
+        // The goal sheet's race row names the recovery week.
+        let rows = GoalProgressLogic.statRows(recovery, system: .metric)
+        XCTAssertEqual(rows.first(where: { $0.label == "Race" })?.value, RaceLogic.rowText(recovery.race!))
+
+        // Taper / no race: no call to action, and the distance line still leads.
+        let taper = GoalProgressDTO(
+            goal: "endurance",
+            distance: GoalProgressDTO.Distance(targetKm: 50, thisWeekKm: 4, stepTargetKm: 30),
+            race: lifecycle(weeks: 2, days: 14, phase: .taper),
+            verdict: .holding,
+            headline: "Holding steady — averaging 40 of 50 km a week (4-week avg)"
+        )
+        XCTAssertFalse(GoalProgressLogic.showsNextGoalPrompt(taper))
+        XCTAssertTrue(GoalProgressLogic.primaryLine(taper, system: .metric).contains("this week"))
+        XCTAssertFalse(GoalProgressLogic.showsNextGoalPrompt(GoalProgressDTO(goal: "endurance", verdict: .holding)))
+    }
+
+    @MainActor
+    func testSetYourNextGoalOpensTheGoalEditor() {
+        final class Recorder { var posted: [Notification.Name] = [] }
+        let recorder = Recorder()
+        let actions = GoalReachedActions(switchGoal: { _ in }, post: { recorder.posted.append($0) })
+        actions.setNewTarget()
+        XCTAssertEqual(recorder.posted, [.vitalOpenGoalEditor])
+    }
+
 }

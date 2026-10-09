@@ -26,6 +26,26 @@ export function parseTargetWeightKg(v: unknown): ParseResult<number> {
   return { ok: true, value: Math.round(v * 10) / 10 };
 }
 
+/** Specific 400 message for a NEW target date that is today or earlier (PATCH /api/profile). */
+export const TARGET_DATE_NOT_FUTURE_ERROR = 'Target date must be in the future';
+
+/**
+ * True when `v` is a real 'YYYY-MM-DD' calendar day that is `todayKey` or
+ * earlier. Malformed / impossible dates are NOT "past" (parseTargetDate
+ * rejects those with its generic message). Lets PATCH /api/profile give a
+ * specific message for a new past date without changing parseTargetDate's
+ * wording, which the coach tool (set_goal_target) also surfaces.
+ */
+export function isTargetDateNotInFuture(v: unknown, todayKey: string): boolean {
+  if (typeof v !== 'string') return false;
+  const m = DAY_RE.exec(v);
+  if (!m) return false;
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const date = new Date(Date.UTC(y, mo - 1, d));
+  if (date.getUTCFullYear() !== y || date.getUTCMonth() !== mo - 1 || date.getUTCDate() !== d) return false;
+  return v <= todayKey;
+}
+
 /**
  * Target date: a real 'YYYY-MM-DD' calendar day strictly after `todayKey`
  * (the user's local today) and at most TARGET_DATE_MAX_YEARS years out.

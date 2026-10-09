@@ -296,4 +296,111 @@ final class WeeklyReviewLogicTests: XCTestCase {
         ok.reset()
         XCTAssertNil(ok.latest)
     }
+
+    // MARK: - Returning users are not "first review" users
+
+    private var thin: WeeklyReviewDTO {
+        review(stats: [], win: nil, slip: nil, nextWeek: "Log a few more days.", sufficient: false)
+    }
+
+    func testAccountYoungerThanFourteenDaysIsNew() {
+        let now = date(2026, 10, 9)
+        // Created 3 days ago.
+        XCTAssertTrue(WeeklyReviewLogic.isNewAccount(createdAtISO: "2026-10-06T09:00:00.000Z", loggedDays: 40, now: now))
+        // 13 days old is still new, 14+ is not (given real logging history).
+        XCTAssertTrue(WeeklyReviewLogic.isNewAccount(createdAtISO: "2026-09-26T12:00:00Z", loggedDays: 20, now: now))
+        XCTAssertFalse(WeeklyReviewLogic.isNewAccount(createdAtISO: "2026-09-25T09:00:00Z", loggedDays: 20, now: now))
+    }
+
+    func testVeteranReturningAfterAGapIsNotNew() {
+        let now = date(2026, 10, 9)
+        // A 6-month-old account with months of logging history, back after a gap.
+        XCTAssertFalse(WeeklyReviewLogic.isNewAccount(createdAtISO: "2026-04-01T09:00:00.000Z", loggedDays: 90, now: now))
+        // An old account that has barely logged is still getting started.
+        XCTAssertTrue(WeeklyReviewLogic.isNewAccount(createdAtISO: "2026-04-01T09:00:00.000Z", loggedDays: 3, now: now))
+    }
+
+    func testUnknownAccountFactsKeepTheLongStandingFirstReviewCopy() {
+        let now = date(2026, 10, 9)
+        XCTAssertTrue(WeeklyReviewLogic.isNewAccount(createdAtISO: nil, loggedDays: nil, now: now))
+        XCTAssertTrue(WeeklyReviewLogic.isNewAccount(createdAtISO: "garbage", loggedDays: nil, now: now))
+        // Only a count: judged by it.
+        XCTAssertFalse(WeeklyReviewLogic.isNewAccount(createdAtISO: nil, loggedDays: 30, now: now))
+        XCTAssertTrue(WeeklyReviewLogic.isNewAccount(createdAtISO: nil, loggedDays: 5, now: now))
+        // Only an old createdAt: a veteran.
+        XCTAssertFalse(WeeklyReviewLogic.isNewAccount(createdAtISO: "2026-01-01T00:00:00Z", loggedDays: nil, now: now))
+    }
+
+    func testNotEnoughDataSubtitleByAccountAge() {
+        let wed = date(2026, 10, 7)
+        XCTAssertEqual(
+            WeeklyReviewLogic.notEnoughDataSubtitle(isNewAccount: true, now: wed, calendar: utc),
+            "First review on Mon Oct 12 — log a few days before then"
+        )
+        XCTAssertEqual(
+            WeeklyReviewLogic.notEnoughDataSubtitle(isNewAccount: false, now: wed, calendar: utc),
+            "Your next review: Mon Oct 12 — log a few days before then"
+        )
+        XCTAssertFalse(WeeklyReviewLogic.nextReviewText(now: wed, calendar: utc).contains("First"))
+        // The new-account text is the existing one, untouched.
+        XCTAssertEqual(
+            WeeklyReviewLogic.notEnoughDataSubtitle(isNewAccount: true, now: wed, calendar: utc),
+            WeeklyReviewLogic.firstReviewText(now: wed, calendar: utc)
+        )
+    }
+
+    func testNextStepRowTitleByAccountAge() {
+        XCTAssertEqual(WeeklyReviewLogic.rows(thin).first?.title, "To get started", "default stays the new-user copy")
+        XCTAssertEqual(WeeklyReviewLogic.rows(thin, isNewAccount: true).first?.title, "To get started")
+        XCTAssertEqual(WeeklyReviewLogic.rows(thin, isNewAccount: false).first?.title, "For your next review")
+        // A real review is "Next week" whatever the account age.
+        XCTAssertEqual(WeeklyReviewLogic.rows(review(), isNewAccount: false).last?.title, "Next week")
+        XCTAssertEqual(WeeklyReviewLogic.rows(review(), isNewAccount: true).last?.title, "Next week")
+    }
+
+    @MainActor
+    func testStoreMarksAVeteranNotNewOnlyForAThinReview() async {
+        let veteran = WeeklyReviewStore.Account(createdAtISO: "2026-04-01T09:00:00.000Z", loggedDays: 90)
+        var accountFetches = 0
+        let thinStore = WeeklyReviewStore(
+            fetch: { WeeklyReviewResponse(id: "r1", review: self.thin) }, postSeen: { _ in },
+            fetchAccount: { accountFetches += 1; return veteran }, now: { self.date(2026, 10, 9) }
+        )
+        XCTAssertTrue(thinStore.isNewAccount, "defaults to the long-standing copy")
+        await thinStore.load()
+        XCTAssertFalse(thinStore.isNewAccount)
+        XCTAssertEqual(accountFetches, 1)
+
+        // A sufficient review never needs the account (no extra request).
+        let fullStore = WeeklyReviewStore(
+            fetch: { WeeklyReviewResponse(id: "r2", review: self.review()) }, postSeen: { _ in },
+            fetchAccount: { accountFetches += 1; return veteran }, now: { self.date(2026, 10, 9) }
+        )
+        await fullStore.load()
+        XCTAssertTrue(fullStore.isNewAccount)
+        XCTAssertEqual(accountFetches, 1)
+
+        thinStore.reset()
+        XCTAssertTrue(thinStore.isNewAccount)
+    }
+
+    @MainActor
+    func testStoreKeepsFirstReviewCopyForANewAccountOrAFailedProfileRead() async {
+        struct Boom: Error {}
+        let fresh = WeeklyReviewStore.Account(createdAtISO: "2026-10-06T09:00:00.000Z", loggedDays: 1)
+        let newStore = WeeklyReviewStore(
+            fetch: { WeeklyReviewResponse(id: "r1", review: self.thin) }, postSeen: { _ in },
+            fetchAccount: { fresh }, now: { self.date(2026, 10, 9) }
+        )
+        await newStore.load()
+        XCTAssertTrue(newStore.isNewAccount)
+
+        let failing = WeeklyReviewStore(
+            fetch: { WeeklyReviewResponse(id: "r1", review: self.thin) }, postSeen: { _ in },
+            fetchAccount: { throw Boom() }, now: { self.date(2026, 10, 9) }
+        )
+        await failing.load()
+        XCTAssertNotNil(failing.latest, "the review still shows")
+        XCTAssertTrue(failing.isNewAccount, "an unreadable profile never flips the copy")
+    }
 }

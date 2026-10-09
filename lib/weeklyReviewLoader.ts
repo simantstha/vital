@@ -19,6 +19,7 @@ import { resolveDailyIntake } from '@/lib/brain/nutritionIntake';
 import { normalizeGoal, resolveDietBudget } from '@/lib/brain/dietBudget';
 import { resolveUnitSystem } from '@/lib/units';
 import { loadGoalProgress } from '@/lib/goalProgressLoader';
+import { loadRacePeakWeekKm } from '@/lib/racePeakLoader';
 import { isStrengthWorkoutType, type DayValue, type GoalProgressBudget } from '@/lib/goalProgress';
 import { endOfLocalWeek, shouldRecomputeReview } from '@/lib/weeklyReviewFreshness';
 import { buildExerciseDisplay, computeWeeklyReview, lastCompletedWeekStart, signupLocalDay, type WeeklyReview } from '@/lib/weeklyReview';
@@ -72,7 +73,7 @@ export async function computeLastWeekReview(
   const daySet = new Set(dayKeys);
 
   const goal = normalizeGoal(user.goal);
-  const [progress, weightReadings, intakeByDay, budget, progression, sets, workoutEntries, restingHr, hrv, sleep, displayRows] =
+  const [progress, weightReadings, intakeByDay, budget, progression, sets, workoutEntries, restingHr, hrv, sleep, displayRows, racePeakWeekKm] =
     await Promise.all([
       loadGoalProgress(userId, { tz, now: endOfLocalWeek(weekStart, tz) }),
       getWeightReadings(userId, WEIGHT_LOOKBACK_DAYS, tz),
@@ -89,6 +90,9 @@ export async function computeLastWeekReview(
         .selectDistinct({ exercise: schema.workout_sets.exercise, exercise_display: schema.workout_sets.exercise_display })
         .from(schema.workout_sets)
         .where(and(eq(schema.workout_sets.user_id, userId), gte(schema.workout_sets.performed_at, new Date(now.getTime() - 84 * 24 * 60 * 60 * 1000)))),
+      // Race lifecycle: the peak week before the taper (older than the 30-day windows above), read only when the
+      // reviewed or the coming week is a taper / race / recovery week.
+      goal === 'endurance' ? loadRacePeakWeekKm(userId, user.race_date, [weekStart, addDays(weekStart, 7)]) : Promise.resolve(null),
     ]);
 
   const budgetInput: GoalProgressBudget = {
@@ -139,6 +143,9 @@ export async function computeLastWeekReview(
     weeklyDistanceKmTarget: user.weekly_distance_km_target ?? null,
     // Long-run progress as of the reviewed week's end (same object the goal card uses), so "Next week" can cap long-run growth.
     longRun: progress?.longRun ?? null,
+    // Race lifecycle: the race day decides the reviewed / coming week's phase; the peak week sets its targets.
+    raceDate: goal === 'endurance' ? user.race_date ?? null : null,
+    racePeakWeekKm,
     unitSystem: resolveUnitSystem(user.unit_system),
     exerciseDisplay: buildExerciseDisplay(displayRows),
     signupDay: signupLocalDay(user.created_at, tz),

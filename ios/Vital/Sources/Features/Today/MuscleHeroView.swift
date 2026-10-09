@@ -33,6 +33,8 @@ struct MuscleHeroView: View {
     /// build the hero without a presenter are unaffected.
     var onLogLift: (() -> Void)? = nil
 
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     private var proteinFraction: Double {
         guard proteinGoal > 0 else { return 0 }
         return min(1.0, Double(proteinHave) / Double(proteinGoal))
@@ -54,9 +56,9 @@ struct MuscleHeroView: View {
         Button(action: action) {
             HStack(spacing: Theme.Spacing.xs) {
                 Image(systemName: "plus")
-                    .font(.system(size: 13, weight: .semibold))
+                    .scaledFont(size: 13, weight: .semibold)
                 Text("Log lift")
-                    .font(.system(size: 15, weight: .semibold))
+                    .scaledFont(size: 15, weight: .semibold)
             }
             .foregroundStyle(Theme.Colors.textPrimary)
             .frame(maxWidth: .infinity)
@@ -76,7 +78,7 @@ struct MuscleHeroView: View {
                 sessionSection
                 if let lastLiftText {
                     Text(lastLiftText)
-                        .font(.system(size: 13))
+                        .scaledFont(size: 13)
                         .foregroundStyle(Theme.Colors.textSecondary)
                         .transition(.opacity)
                 }
@@ -86,7 +88,7 @@ struct MuscleHeroView: View {
                 }
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Protein \(proteinHave) / \(proteinGoal) g")
-                        .font(.system(size: 13))
+                        .scaledFont(size: 13)
                         .foregroundStyle(Theme.Colors.textSecondary)
                         .monospacedDigit()
                     VitalProgressBar(fraction: proteinFraction, tint: Theme.Colors.accent, height: 6)
@@ -102,13 +104,13 @@ struct MuscleHeroView: View {
     /// the "N of M sessions" / fallback text — either half can be absent.
     @ViewBuilder
     private var weekRow: some View {
-        HStack(spacing: Theme.Spacing.sm) {
+        AccessibilityAdaptiveStack(spacing: Theme.Spacing.sm, stackedSpacing: Theme.Spacing.xs) {
             if let sessionDots {
                 SessionDotsRow(done: sessionDots.done, total: sessionDots.total)
             }
             if let sessionsThisWeekText {
                 Text(sessionsThisWeekText)
-                    .font(.system(size: 12))
+                    .scaledFont(size: 12)
                     .foregroundStyle(Theme.Colors.textTertiary)
                     .monospacedDigit()
             }
@@ -122,15 +124,15 @@ struct MuscleHeroView: View {
             Button { onTapSession(session) } label: {
                 HStack(alignment: .center, spacing: Theme.Spacing.sm) {
                     Image(systemName: "dumbbell.fill")
-                        .font(.system(size: 15, weight: .semibold))
+                        .scaledFont(size: 15, weight: .semibold)
                         .foregroundStyle(Theme.Colors.accentContent)
                     Text(session.title)
-                        .font(.system(size: 17, weight: .bold, design: .rounded))
+                        .scaledFont(size: 17, weight: .bold, design: .rounded)
                         .foregroundStyle(Theme.Colors.textPrimary)
-                        .lineLimit(2)
+                        .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)
                     Spacer(minLength: Theme.Spacing.sm)
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 13, weight: .semibold))
+                        .scaledFont(size: 13, weight: .semibold)
                         .foregroundStyle(Theme.Colors.textTertiary)
                 }
             }
@@ -138,7 +140,7 @@ struct MuscleHeroView: View {
             .accessibilityIdentifier("today.muscleHero.session")
         } else {
             Text(MuscleHeroLogic.restDayText)
-                .font(.system(size: 17, weight: .semibold, design: .rounded))
+                .scaledFont(size: 17, weight: .semibold, design: .rounded)
                 .foregroundStyle(Theme.Colors.textPrimary)
         }
     }

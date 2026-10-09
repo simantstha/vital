@@ -971,7 +971,7 @@ final class CoachViewModel: ObservableObject {
            let current = progress.current.weightKg {
             let losing = target < start
             let total = abs(start - target)
-            let done = max(0, losing ? start - current : current - start)
+            let done = min(total, max(0, losing ? start - current : current - start))
             if total > 0, done > 0 {
                 let amount = GoalProgressLogic.weightAmount(kg: done, system)
                 let whole = GoalProgressLogic.weightAmount(kg: total, system)

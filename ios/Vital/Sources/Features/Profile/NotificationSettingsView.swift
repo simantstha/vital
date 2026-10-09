@@ -79,10 +79,10 @@ struct NotificationSettingsView: View {
         GlassCard {
             HStack {
                 Image(systemName: pushService.preferencesError == nil ? "arrow.triangle.2.circlepath" : "exclamationmark.arrow.triangle.2.circlepath")
-                Text(pushService.preferencesError ?? "Saving notification preferences…").font(Theme.Typography.labelSmall)
+                Text(pushService.preferencesError ?? "Saving notification preferences…").scaledFont(Theme.Typography.labelSmall)
                 Spacer()
                 if pushService.preferencesError != nil {
-                    Button("Retry") { Task { await pushService.retryPreferences() } }.font(Theme.Typography.labelSmall)
+                    Button("Retry") { Task { await pushService.retryPreferences() } }.scaledFont(Theme.Typography.labelSmall)
                 }
             }.foregroundStyle(pushService.preferencesError == nil ? Theme.Colors.textSecondary : Theme.Colors.alert)
         }
@@ -106,14 +106,14 @@ struct NotificationSettingsView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Toggle("Coach check-ins", isOn: $coachNudgesEnabled).tint(Theme.Colors.accent).onChange(of: coachNudgesEnabled) { _, _ in syncServer() }
                     Text("Occasional nudges when Vital spots something about your goal")
-                        .font(Theme.Typography.labelSmall)
+                        .scaledFont(Theme.Typography.labelSmall)
                         .foregroundStyle(Theme.Colors.textSecondary)
                 }
                 Divider().overlay(Theme.Colors.glassBorder)
                 VStack(alignment: .leading, spacing: 2) {
                     Toggle("Weekly review", isOn: $weeklyReviewEnabled).tint(Theme.Colors.accent).onChange(of: weeklyReviewEnabled) { _, _ in syncServer() }
                     Text("Monday summary of your week")
-                        .font(Theme.Typography.labelSmall)
+                        .scaledFont(Theme.Typography.labelSmall)
                         .foregroundStyle(Theme.Colors.textSecondary)
                 }
             }}
@@ -141,11 +141,10 @@ struct NotificationSettingsView: View {
 
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Notifications are off")
-                            .font(Theme.Typography.bodyMedium)
-                            .fontWeight(.medium)
+                            .scaledFont(Theme.Typography.bodyMedium.weight(.medium))
                             .foregroundStyle(Theme.Colors.textPrimary)
                         Text("Open Settings to allow reminders")
-                            .font(Theme.Typography.labelSmall)
+                            .scaledFont(Theme.Typography.labelSmall)
                             .foregroundStyle(Theme.Colors.textSecondary)
                     }
 

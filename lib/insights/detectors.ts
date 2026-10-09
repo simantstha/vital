@@ -17,6 +17,8 @@ export const CADENCE_METRICS = ['exercise_min', 'active_energy_kcal', 'whoop_day
 const CADENCE_WINDOW_DAYS = 28;
 const MIN_SESSIONS_PER_WEEK = 3;
 const MIN_SILENT_DAYS = 3;
+/** Past this the user has lapsed, not slipped; a "N days since the last session" nudge would be stale and naggy (same cap as the goal inactivity nudge). */
+const MAX_SILENT_DAYS = 21;
 
 /**
  * Fires when an established rhythm has gone quiet.
@@ -44,6 +46,7 @@ export function detectCadenceBreak(series: MetricSeries): Finding | null {
   }
   if (daysSinceLast < 0) return null;           // never active — nothing to break
   if (daysSinceLast < MIN_SILENT_DAYS) return null;
+  if (daysSinceLast > MAX_SILENT_DAYS) return null;
 
   // Establish the cadence from the 28 days BEFORE the silence began, so the
   // silence itself doesn't drag the rate down and mask the break.

@@ -90,6 +90,7 @@ final class LiftLoggerViewModelTests: XCTestCase {
     private final class RestHarness {
         var now = Date(timeIntervalSinceReferenceDate: 1_000_000)
         var hapticCount = 0
+        var announcements: [String] = []
         func advance(_ seconds: TimeInterval) { now = now.addingTimeInterval(seconds) }
     }
 
@@ -98,7 +99,8 @@ final class LiftLoggerViewModelTests: XCTestCase {
     ) -> LiftLoggerViewModel {
         LiftLoggerViewModel(
             preferredExercise: preferred, system: system, sessionId: "session-under-test", api: api,
-            clock: { harness.now }, restHaptic: { harness.hapticCount += 1 }, runsRestTimer: false
+            clock: { harness.now }, restHaptic: { harness.hapticCount += 1 },
+            restAnnouncement: { harness.announcements.append($0) }, runsRestTimer: false
         )
     }
 
@@ -686,6 +688,47 @@ final class LiftLoggerViewModelTests: XCTestCase {
 
         XCTAssertNil(vm.rest)
         XCTAssertEqual(harness.hapticCount, 0)
+        XCTAssertTrue(harness.announcements.isEmpty, "nothing is announced late")
+    }
+
+    // MARK: - VoiceOver
+
+    func testRestDoneIsAnnouncedToVoiceOverExactlyOnceAtZero() async {
+        let harness = RestHarness()
+        let vm = await seededViewModel(FakeAPI(), harness: harness)
+        let start = harness.now
+        vm.toggleSetDone(exerciseID: vm.exercises[0].id, setID: vm.exercises[0].sets[0].id)
+
+        // Mid-countdown: silent.
+        vm.advanceRest(now: start.addingTimeInterval(100))
+        XCTAssertTrue(harness.announcements.isEmpty)
+
+        // At zero: "Rest done", alongside the haptic.
+        vm.advanceRest(now: start.addingTimeInterval(150))
+        XCTAssertEqual(harness.announcements, ["Rest done"])
+        XCTAssertEqual(harness.announcements, [LiftLoggerLogic.restDoneAnnouncement])
+        XCTAssertEqual(harness.hapticCount, 1)
+
+        // Re-checking during the done window, and the window ending, stay silent.
+        vm.advanceRest(now: start.addingTimeInterval(152))
+        vm.advanceRest(now: start.addingTimeInterval(154))
+        XCTAssertEqual(harness.announcements, ["Rest done"])
+    }
+
+    func testSkippingTheRestAnnouncesNothing() async {
+        let harness = RestHarness()
+        let vm = await seededViewModel(FakeAPI(), harness: harness)
+        vm.toggleSetDone(exerciseID: vm.exercises[0].id, setID: vm.exercises[0].sets[0].id)
+
+        vm.skipRest()
+        harness.advance(500)
+        vm.advanceRest(now: harness.now)
+
+        XCTAssertTrue(harness.announcements.isEmpty)
+    }
+
+    func testRestButtonsMeetTheMinimumTapTarget() {
+        XCTAssertGreaterThanOrEqual(LiftLoggerLogic.restButtonMinTapSize, 44)
     }
 
     func testSavingStopsTheRestTimer() async {

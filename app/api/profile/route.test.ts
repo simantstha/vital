@@ -22,6 +22,7 @@ const state: {
     name: string; onboarded_at: Date | null; created_at: Date;
     sleep_goal_minutes: number | null; lights_out_minutes: number | null;
     timezone: string | null; unit_system: string | null;
+    target_date?: string | null; target_weight_kg?: number | null;
   }>;
   dmDates: Array<{ date: string }>;
   mealRows: Array<{ timestamp: Date }>;
@@ -97,6 +98,18 @@ mock.module('@/lib/weightRepository', {
       importLegacyCalls.push({ userId, timezone });
     },
   },
+});
+
+// Goal-target PATCH tests: no real trend lookup / cache — only the route's own
+// validation and write decisions are under test.
+mock.module('@/lib/goalStart', {
+  namedExports: {
+    buildGoalRestart: async () => ({ goal_started_at: new Date(), goal_start_weight_kg: null }),
+    shouldReanchorGoalForTarget: async () => false,
+  },
+});
+mock.module('@/lib/brain/goalProgressCache', {
+  namedExports: { invalidateGoalProgress: () => {} },
 });
 
 const routePromise = import('./route');
@@ -211,4 +224,86 @@ test('PATCH 400s on a garbage unitSystem value', async () => {
   assert.equal(res.status, 400);
 
   assert.equal(userUpdateCalls.length, 0);
+});
+
+// ── Target date: a passed date must never dead-end goal edits ───────────────
+
+/** 'YYYY-MM-DD' for today + `offsetDays` in the fixture user's timezone (America/Chicago). */
+function chicagoDay(offsetDays: number): string {
+  const ms = Date.now() + offsetDays * 86_400_000;
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago' }).format(new Date(ms));
+}
+
+test('PATCH accepts an UNCHANGED past targetDate alongside a new target weight (200) and does not rewrite the date', async () => {
+  userUpdateCalls.length = 0;
+  state.userRow = [{ ...state.userRow[0], timezone: 'America/Chicago', target_date: '2020-01-15', target_weight_kg: 80 }];
+
+  const { PATCH } = await routePromise;
+  const res = await PATCH(patchRequest({ targetWeightKg: 76, targetDate: '2020-01-15' }, { 'x-user-id': 'user-1' }));
+  assert.equal(res.status, 200);
+
+  assert.equal(userUpdateCalls.length, 1);
+  assert.equal(userUpdateCalls[0].target_weight_kg, 76);
+  assert.equal('target_date' in userUpdateCalls[0], false, 'an unchanged date is not rewritten');
+});
+
+test('PATCH accepts the unchanged past targetDate on its own (200, nothing written)', async () => {
+  userUpdateCalls.length = 0;
+  state.userRow = [{ ...state.userRow[0], timezone: 'America/Chicago', target_date: '2020-01-15', target_weight_kg: 80 }];
+
+  const { PATCH } = await routePromise;
+  const res = await PATCH(patchRequest({ targetDate: '2020-01-15' }, { 'x-user-id': 'user-1' }));
+  assert.equal(res.status, 200);
+  assert.equal(userUpdateCalls.length, 0);
+});
+
+test('PATCH omitting targetDate still edits the target weight when the stored date has passed', async () => {
+  userUpdateCalls.length = 0;
+  state.userRow = [{ ...state.userRow[0], timezone: 'America/Chicago', target_date: '2020-01-15', target_weight_kg: 80 }];
+
+  const { PATCH } = await routePromise;
+  const res = await PATCH(patchRequest({ targetWeightKg: 75 }, { 'x-user-id': 'user-1' }));
+  assert.equal(res.status, 200);
+  assert.equal(userUpdateCalls[0].target_weight_kg, 75);
+  assert.equal('target_date' in userUpdateCalls[0], false);
+});
+
+test('PATCH 400s a NEW past targetDate with the specific "must be in the future" message', async () => {
+  userUpdateCalls.length = 0;
+  state.userRow = [{ ...state.userRow[0], timezone: 'America/Chicago', target_date: '2020-01-15', target_weight_kg: 80 }];
+
+  const { PATCH } = await routePromise;
+  const res = await PATCH(patchRequest({ targetWeightKg: 76, targetDate: '2021-03-01' }, { 'x-user-id': 'user-1' }));
+  assert.equal(res.status, 400);
+  assert.deepEqual(await res.json(), { error: 'Target date must be in the future' });
+  assert.equal(userUpdateCalls.length, 0, 'a rejected request writes nothing');
+});
+
+test('PATCH 400s a new targetDate of today with the same message, and accepts tomorrow-or-later', async () => {
+  userUpdateCalls.length = 0;
+  state.userRow = [{ ...state.userRow[0], timezone: 'America/Chicago', target_date: null, target_weight_kg: null }];
+
+  const { PATCH } = await routePromise;
+  const today = await PATCH(patchRequest({ targetDate: chicagoDay(0) }, { 'x-user-id': 'user-1' }));
+  assert.equal(today.status, 400);
+  assert.equal((await today.json()).error, 'Target date must be in the future');
+
+  const later = chicagoDay(30);
+  const ok = await PATCH(patchRequest({ targetDate: later }, { 'x-user-id': 'user-1' }));
+  assert.equal(ok.status, 200);
+  assert.equal(userUpdateCalls[0].target_date, later);
+});
+
+test('PATCH keeps the generic message for a malformed targetDate and still lets null clear it', async () => {
+  userUpdateCalls.length = 0;
+  state.userRow = [{ ...state.userRow[0], timezone: 'America/Chicago', target_date: '2020-01-15', target_weight_kg: 80 }];
+
+  const { PATCH } = await routePromise;
+  const bad = await PATCH(patchRequest({ targetDate: 'soon' }, { 'x-user-id': 'user-1' }));
+  assert.equal(bad.status, 400);
+  assert.match((await bad.json()).error, /targetDate must be a YYYY-MM-DD date in the future/);
+
+  const cleared = await PATCH(patchRequest({ targetDate: null }, { 'x-user-id': 'user-1' }));
+  assert.equal(cleared.status, 200);
+  assert.equal(userUpdateCalls[0].target_date, null);
 });

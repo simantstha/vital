@@ -287,6 +287,15 @@ logging sheet, Coach, Trends, Logs, and Profile per scenario/appearance, and
 attaches each as an `XCTAttachment` named
 `<scenario>__<screen>__<light|dark>`.
 
+One extra pass, `test_weightLossAccessibilitySize`, relaunches weight_loss
+(light only) at an accessibility Dynamic Type size
+(`-UIPreferredContentSizeCategoryName UICTContentSizeCategoryAccessibilityL`,
+i.e. AX2) and captures Today and the goal-progress sheet as
+`weight_loss__todayAX__light` / `weight_loss__goalProgressAX__light` — the
+`AX` suffix keeps the screen segment letters-only for the export regex. Every
+other capture runs at the default text size, where the app's
+`.scaledFont(...)` typography renders exactly the design's point sizes.
+
 The `ios-screenshots` job exports those attachments from the `.xcresult`
 bundle (`xcrun xcresulttool export attachments`) and pushes the renamed PNGs
 to the `ci-screenshots` branch (an orphan branch holding nothing but

@@ -55,12 +55,12 @@ struct DevicesView: View {
 
                     if case .error(let message) = whoopVM.state {
                         Text(message)
-                            .font(Theme.Typography.labelSmall)
+                            .scaledFont(Theme.Typography.labelSmall)
                             .foregroundStyle(Theme.Colors.alert)
                     }
 
                     Text("More integrations coming soon.")
-                        .font(.system(size: 12))
+                        .scaledFont(size: 12)
                         .foregroundStyle(Theme.Colors.textTertiary)
                         .frame(maxWidth: .infinity, alignment: .center)
                 }
@@ -147,7 +147,7 @@ struct DevicesView: View {
                 }
                 // Curly quotes match the mockup's copy verbatim.
                 Text("Calories and training load come only from the primary device for workouts, so nothing counts twice. Switching recovery to another device restarts \u{201C}learning your normal\u{201D}, because each device measures HRV differently.")
-                    .font(.system(size: 12))
+                    .scaledFont(size: 12)
                     .foregroundStyle(Theme.Colors.textTertiary)
             }
 
@@ -156,11 +156,11 @@ struct DevicesView: View {
                 VitalCard {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("When two recordings overlap by more than half, I keep one.")
-                            .font(Theme.Typography.bodyMedium)
+                            .scaledFont(Theme.Typography.bodyMedium)
                             .foregroundStyle(Theme.Colors.textPrimary)
                         if let caption = settingsVM.duplicatesCaption {
                             Text(caption)
-                                .font(Theme.Typography.labelSmall)
+                                .scaledFont(Theme.Typography.labelSmall)
                                 .foregroundStyle(Theme.Colors.textSecondary)
                         }
                     }
@@ -184,11 +184,10 @@ struct DevicesView: View {
             IconBadge(systemName: kind == .apple ? "applewatch" : "waveform.path.ecg", style: .soft, size: 36, cornerRadius: 10)
             VStack(alignment: .leading, spacing: 2) {
                 Text(DevicesLogic.statusRowTitle(kind))
-                    .font(Theme.Typography.bodyMedium)
-                    .fontWeight(.semibold)
+                    .scaledFont(Theme.Typography.bodyMedium.weight(.semibold))
                     .foregroundStyle(Theme.Colors.textPrimary)
                 Text(settingsVM.syncStatusLabel(for: kind))
-                    .font(Theme.Typography.labelSmall)
+                    .scaledFont(Theme.Typography.labelSmall)
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
             Spacer(minLength: Theme.Spacing.sm)
@@ -212,16 +211,15 @@ struct DevicesView: View {
             HStack(spacing: Theme.Spacing.md) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(metric.title)
-                        .font(Theme.Typography.bodyMedium)
-                        .fontWeight(.medium)
+                        .scaledFont(Theme.Typography.bodyMedium.weight(.medium))
                         .foregroundStyle(Theme.Colors.textPrimary)
                     Text(metric.subtitle)
-                        .font(.system(size: 12))
+                        .scaledFont(size: 12)
                         .foregroundStyle(Theme.Colors.textSecondary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 Text(settingsVM.valueLabel(for: metric))
-                    .font(.system(size: 13))
+                    .scaledFont(size: 13)
                     .foregroundStyle(Theme.Colors.textSecondary)
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
@@ -245,16 +243,15 @@ struct DevicesView: View {
         HStack(spacing: Theme.Spacing.md) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Steps & activity")
-                    .font(Theme.Typography.bodyMedium)
-                    .fontWeight(.medium)
+                    .scaledFont(Theme.Typography.bodyMedium.weight(.medium))
                     .foregroundStyle(Theme.Colors.textPrimary)
                 Text("Only Apple Watch counts steps")
-                    .font(.system(size: 12))
+                    .scaledFont(size: 12)
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
             Spacer(minLength: Theme.Spacing.sm)
             Text("Apple Watch")
-                .font(.system(size: 13))
+                .scaledFont(size: 13)
                 .foregroundStyle(Theme.Colors.textSecondary)
         }
         .padding(.horizontal, Theme.Spacing.lg)
@@ -271,11 +268,10 @@ struct DevicesView: View {
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(name)
-                        .font(Theme.Typography.bodyMedium)
-                        .fontWeight(.medium)
+                        .scaledFont(Theme.Typography.bodyMedium.weight(.medium))
                         .foregroundStyle(Theme.Colors.textPrimary)
                     Text(connected ? "Connected · syncs automatically" : "Not connected")
-                        .font(Theme.Typography.labelSmall)
+                        .scaledFont(Theme.Typography.labelSmall)
                         .foregroundStyle(connected ? Theme.Colors.positive : Theme.Colors.textSecondary)
                 }
 
@@ -297,11 +293,10 @@ struct DevicesView: View {
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text("WHOOP")
-                        .font(Theme.Typography.bodyMedium)
-                        .fontWeight(.medium)
+                        .scaledFont(Theme.Typography.bodyMedium.weight(.medium))
                         .foregroundStyle(Theme.Colors.textPrimary)
                     Text(whoopSubtitle)
-                        .font(Theme.Typography.labelSmall)
+                        .scaledFont(Theme.Typography.labelSmall)
                         .foregroundStyle(whoopSubtitleColor)
                 }
 
@@ -345,7 +340,7 @@ struct DevicesView: View {
                 Task { await whoopVM.connect() }
             } label: {
                 Text("Connect")
-                    .font(.system(size: 13, weight: .semibold))
+                    .scaledFont(size: 13, weight: .semibold)
                     .foregroundStyle(Theme.Colors.accentContent)
                     .padding(.horizontal, Theme.Spacing.md)
                     .padding(.vertical, Theme.Spacing.xs)
@@ -358,7 +353,7 @@ struct DevicesView: View {
                 Task { await whoopVM.connect() }
             } label: {
                 Text("Reconnect")
-                    .font(.system(size: 13, weight: .semibold))
+                    .scaledFont(size: 13, weight: .semibold)
                     .foregroundStyle(Theme.Colors.alert)
                     .padding(.horizontal, Theme.Spacing.md)
                     .padding(.vertical, Theme.Spacing.xs)
@@ -375,7 +370,7 @@ struct DevicesView: View {
                 Button("Disconnect", role: .destructive) {
                     whoopVM.showDisconnectConfirm = true
                 }
-                .font(.system(size: 13, weight: .semibold))
+                .scaledFont(size: 13, weight: .semibold)
                 .buttonStyle(.plain)
                 .foregroundStyle(Theme.Colors.alert)
             }
@@ -389,18 +384,17 @@ struct DevicesView: View {
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(name)
-                        .font(Theme.Typography.bodyMedium)
-                        .fontWeight(.medium)
+                        .scaledFont(Theme.Typography.bodyMedium.weight(.medium))
                         .foregroundStyle(Theme.Colors.textPrimary)
                     Text("Not connected")
-                        .font(Theme.Typography.labelSmall)
+                        .scaledFont(Theme.Typography.labelSmall)
                         .foregroundStyle(Theme.Colors.textSecondary)
                 }
 
                 Spacer()
 
                 Text("Coming soon")
-                    .font(.system(size: 12, weight: .semibold))
+                    .scaledFont(size: 12, weight: .semibold)
                     .foregroundStyle(Theme.Colors.textTertiary)
                     .padding(.horizontal, Theme.Spacing.md)
                     .padding(.vertical, Theme.Spacing.xs)

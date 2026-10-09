@@ -35,6 +35,7 @@ struct WeightHeroView: View {
     var onOpenDiet: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     private var trendHeadline: String? { WeightHeroLogic.heroHeaderTrendText(trend: trend, system: system) }
     private var weeklyChange: String? {
@@ -63,6 +64,15 @@ struct WeightHeroView: View {
     /// and reads as a flat divider line rather than a chart.
     private var sparklineLayout: WeightHeroLogic.SparklineLayout? {
         WeightHeroLogic.sparklineLayout(values: sparklinePoints.map(\.value), minSpan: sparklineMinSpan, target: targetDisplayValue)
+    }
+
+    /// The trend column sits trailing beside the kcal figure, or leading
+    /// underneath it at accessibility sizes.
+    private var trendColumnAlignment: HorizontalAlignment {
+        dynamicTypeSize.isAccessibilitySize ? .leading : .trailing
+    }
+    private var trendTextAlignment: TextAlignment {
+        dynamicTypeSize.isAccessibilitySize ? .leading : .trailing
     }
 
     /// Target weight in the user's unit, matching `sparklinePoints`.
@@ -103,41 +113,48 @@ struct WeightHeroView: View {
                 // element (mirrors `ActionToastView`'s message-vs-button split).
                 Button(action: onOpenDiet) {
                     VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-                        HStack(alignment: .top, spacing: Theme.Spacing.md) {
+                        // Accessibility sizes stack the trend column under the
+                        // kcal figure instead of squeezing both into one row.
+                        AccessibilityAdaptiveStack(alignment: .top, spacing: Theme.Spacing.md, stackedSpacing: Theme.Spacing.sm) {
                             VStack(alignment: .leading, spacing: 2) {
                                 HStack(alignment: .lastTextBaseline, spacing: 4) {
                                     Text("\(max(0, kcalRemaining).formatted())")
-                                        .font(.system(size: 34, weight: .bold, design: .rounded))
+                                        .scaledFont(size: 34, weight: .bold, design: .rounded)
                                         .foregroundStyle(Theme.Colors.textPrimary)
                                         .monospacedDigit()
                                         .contentTransition(.numericText(value: Double(max(0, kcalRemaining))))
+                                        // Hero number: cap growth so a 4-digit
+                                        // figure still fits the card at AX5.
+                                        .dynamicTypeSize(...DynamicTypeSize.accessibility2)
                                     Text("kcal left")
-                                        .font(.system(size: 15, weight: .semibold))
+                                        .scaledFont(size: 15, weight: .semibold)
                                         .foregroundStyle(Theme.Colors.textSecondary)
                                 }
                                 Text("Protein \(proteinHave) / \(proteinGoal) g")
-                                    .font(.system(size: 13))
+                                    .scaledFont(size: 13)
                                     .foregroundStyle(Theme.Colors.textSecondary)
                                     .monospacedDigit()
                                     .contentTransition(.numericText())
                             }
 
-                            Spacer(minLength: Theme.Spacing.sm)
+                            if !dynamicTypeSize.isAccessibilitySize {
+                                Spacer(minLength: Theme.Spacing.sm)
+                            }
 
-                            VStack(alignment: .trailing, spacing: 2) {
+                            VStack(alignment: trendColumnAlignment, spacing: 2) {
                                 if let trendHeadline {
                                     Text(trendHeadline)
-                                        .font(.system(size: 13, weight: .semibold))
+                                        .scaledFont(size: 13, weight: .semibold)
                                         .foregroundStyle(Theme.Colors.textPrimary)
-                                        .multilineTextAlignment(.trailing)
+                                        .multilineTextAlignment(trendTextAlignment)
                                         .fixedSize(horizontal: false, vertical: true)
                                         .contentTransition(.numericText())
                                 }
                                 if let weeklyChange {
                                     Text(weeklyChange)
-                                        .font(.system(size: 12))
+                                        .scaledFont(size: 12)
                                         .foregroundStyle(Theme.Colors.textSecondary)
-                                        .multilineTextAlignment(.trailing)
+                                        .multilineTextAlignment(trendTextAlignment)
                                         .fixedSize(horizontal: false, vertical: true)
                                 }
                             }
@@ -149,7 +166,7 @@ struct WeightHeroView: View {
                             height: 6
                         )
                         Text("\((kcalTarget - max(0, kcalRemaining)).formatted()) of \(kcalTarget.formatted()) kcal")
-                            .font(.system(size: 11))
+                            .scaledFont(size: 11)
                             .foregroundStyle(Theme.Colors.textTertiary)
                             .monospacedDigit()
                             .contentTransition(.numericText())
@@ -158,7 +175,7 @@ struct WeightHeroView: View {
                             sparkline(domain: layout.domain)
                                 .frame(height: 36)
                             if let captions = sparklineCaptions {
-                                HStack(spacing: Theme.Spacing.xs) {
+                                AccessibilityAdaptiveStack(spacing: Theme.Spacing.xs, stackedSpacing: Theme.Spacing.xxs) {
                                     Text(captions.start)
                                     Spacer(minLength: 0)
                                     Text(captions.now)
@@ -167,10 +184,10 @@ struct WeightHeroView: View {
                                     // orphan under a line with no target marker.
                                     if let target = captions.target {
                                         Text("\(targetArrow) \(target)")
-                                            .padding(.leading, Theme.Spacing.md)
+                                            .padding(.leading, dynamicTypeSize.isAccessibilitySize ? 0 : Theme.Spacing.md)
                                     }
                                 }
-                                .font(.system(size: 11))
+                                .scaledFont(size: 11)
                                 .foregroundStyle(Theme.Colors.textTertiary)
                                 .monospacedDigit()
                                 .accessibilityIdentifier("today.weightHero.sparklineCaptions")
@@ -239,9 +256,9 @@ struct WeightHeroView: View {
         Button(action: onChipTap) {
             HStack(spacing: Theme.Spacing.xs) {
                 Image(systemName: "scalemass")
-                    .font(.system(size: 13, weight: .semibold))
+                    .scaledFont(size: 13, weight: .semibold)
                 Text(chip.title)
-                    .font(.system(size: 13, weight: .semibold))
+                    .scaledFont(size: 13, weight: .semibold)
                 if isLogging {
                     ProgressView()
                         .controlSize(.mini)

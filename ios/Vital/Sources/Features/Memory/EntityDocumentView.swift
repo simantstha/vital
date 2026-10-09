@@ -80,11 +80,11 @@ private extension EntityDocumentView {
 
             if let document = vm.document {
                 Text("\(document.kind) · \(document.facts.count == 1 ? "1 fact" : "\(document.facts.count) facts")")
-                    .font(Theme.Typography.bodyMedium)
+                    .scaledFont(Theme.Typography.bodyMedium)
                     .foregroundStyle(Theme.Colors.textSecondary)
             } else {
                 Text(fallbackKind)
-                    .font(Theme.Typography.bodyMedium)
+                    .scaledFont(Theme.Typography.bodyMedium)
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
         }
@@ -94,7 +94,7 @@ private extension EntityDocumentView {
     func emptyFactsCard(label: String) -> some View {
         VitalCard {
             Text("Nothing recorded about \(label) yet — facts appear here as they come up in chat.")
-                .font(Theme.Typography.bodySmall)
+                .scaledFont(Theme.Typography.bodySmall)
                 .foregroundStyle(Theme.Colors.textSecondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -117,8 +117,7 @@ private extension EntityDocumentView {
             VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
                 HStack(alignment: .top, spacing: Theme.Spacing.sm) {
                     Text(fact.label)
-                        .font(Theme.Typography.bodyMedium)
-                        .fontWeight(.semibold)
+                        .scaledFont(Theme.Typography.bodyMedium.weight(.semibold))
                         .foregroundStyle(Theme.Colors.textPrimary)
                         .fixedSize(horizontal: false, vertical: true)
 
@@ -128,7 +127,7 @@ private extension EntityDocumentView {
                 }
 
                 Text("\u{201C}\(fact.evidence)\u{201D}")
-                    .font(Theme.Typography.bodySmall.italic())
+                    .scaledFont(Theme.Typography.bodySmall).italic()
                     .foregroundStyle(Theme.Colors.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
 
@@ -141,7 +140,7 @@ private extension EntityDocumentView {
                     Spacer()
 
                     Text(EntityDocumentViewModel.dateLabel(fromISO: fact.createdAt))
-                        .font(Theme.Typography.labelSmall)
+                        .scaledFont(Theme.Typography.labelSmall)
                         .foregroundStyle(Theme.Colors.textTertiary)
                 }
             }
