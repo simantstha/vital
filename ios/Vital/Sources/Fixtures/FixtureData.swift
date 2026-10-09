@@ -155,7 +155,7 @@ enum FixtureData {
         .weightLoss: Profile(
             goal: "weight_loss",
             name: "Sam Rivera",
-            insight: "You're down 0.6\u{00A0}kg this week, but last night's sleep ran short (6h 50m) — keep the deficit gentle and aim for an earlier night.",
+            insight: "You were down 0.6\u{00A0}kg last week, but last night's sleep ran short (6h 50m) — keep the deficit gentle and aim for an earlier night.",
             established: true,
             targetKcal: 1850, consumedKcal: 1020,
             protein: 96, proteinTarget: 150, carbs: 79, carbsTarget: 165, fat: 35, fatTarget: 62,
@@ -163,7 +163,7 @@ enum FixtureData {
                 FixturePlanItem(title: "Overnight oats with berries", timeMinutes: 420, kind: "meal", subtitle: "Breakfast · 7:00 AM", kcal: 380, why: "High protein start keeps you full past lunch."),
                 FixturePlanItem(title: "30-min incline walk", timeMinutes: 660, kind: "move", subtitle: "Move · 11:00 AM", kcal: nil, why: "Low-impact cardio that fits a deficit."),
                 FixturePlanItem(title: "Grilled chicken salad", timeMinutes: 750, kind: "meal", subtitle: "Lunch · 12:30 PM", kcal: 420, why: "Lean protein, high volume, low calorie density."),
-                FixturePlanItem(title: "Greek yogurt + almonds", timeMinutes: 960, kind: "meal", subtitle: "Snack · 4:00 PM", kcal: 220, why: "Bridges the afternoon without derailing today's budget."),
+                FixturePlanItem(title: "Lactose-free Greek yogurt + almonds", timeMinutes: 960, kind: "meal", subtitle: "Snack · 4:00 PM", kcal: 220, why: "Bridges the afternoon without derailing today's budget."),
                 FixturePlanItem(title: "Salmon, rice, broccoli", timeMinutes: 1140, kind: "meal", subtitle: "Dinner · 7:00 PM", kcal: 520, why: "Balanced macros to close out the day on target."),
             ],
             // Macros sum to the Profile-level protein/carbs/fat above (96/79/35),
@@ -173,7 +173,7 @@ enum FixtureData {
             meals: [
                 FixtureMeal(name: "Overnight oats with berries", kcal: 380, c: 48, p: 24, f: 10, slot: "breakfast"),
                 FixtureMeal(name: "Grilled chicken salad", kcal: 420, c: 19, p: 52, f: 15, slot: "lunch"),
-                FixtureMeal(name: "Greek yogurt + almonds", kcal: 220, c: 12, p: 20, f: 10, slot: "snacks"),
+                FixtureMeal(name: "Lactose-free Greek yogurt + almonds", kcal: 220, c: 12, p: 20, f: 10, slot: "snacks"),
             ],
             weightKg: 82, weightTrendPerWeekKg: -0.6,
             hrv: 58, restingHR: 57, sleepMinutes: 410, steps: 8600, distanceKm: 6.1,
@@ -197,7 +197,7 @@ enum FixtureData {
                 FixturePlanItem(title: "Egg + oat protein bowl", timeMinutes: 420, kind: "meal", subtitle: "Breakfast · 7:00 AM", kcal: 560, why: "Sets up protein synthesis early."),
                 FixturePlanItem(title: "Lower-body strength", timeMinutes: 630, kind: "move", subtitle: "Train · 10:30 AM", kcal: nil, why: "Progressive overload on squat + deadlift."),
                 FixturePlanItem(title: "Chicken, rice, avocado", timeMinutes: 780, kind: "meal", subtitle: "Lunch · 1:00 PM", kcal: 680, why: "Refeeds glycogen after this morning's session."),
-                FixturePlanItem(title: "Protein shake + banana", timeMinutes: 990, kind: "meal", subtitle: "Snack · 4:30 PM", kcal: 320, why: "Keeps protein intake spread across the day."),
+                FixturePlanItem(title: "Plant protein shake + banana", timeMinutes: 990, kind: "meal", subtitle: "Snack · 4:30 PM", kcal: 320, why: "Keeps protein intake spread across the day."),
                 FixturePlanItem(title: "Steak, sweet potato, greens", timeMinutes: 1170, kind: "meal", subtitle: "Dinner · 7:30 PM", kcal: 720, why: "Closes the surplus needed for this week's gain rate."),
             ],
             // Macros sum to the Profile-level protein/carbs/fat above
@@ -208,7 +208,7 @@ enum FixtureData {
             meals: [
                 FixtureMeal(name: "Egg + oat protein bowl", kcal: 560, c: 50, p: 50, f: 18, slot: "breakfast"),
                 FixtureMeal(name: "Chicken, rice, avocado", kcal: 680, c: 62, p: 63, f: 20, slot: "lunch"),
-                FixtureMeal(name: "Protein shake + banana", kcal: 320, c: 26, p: 45, f: 4, slot: "snacks"),
+                FixtureMeal(name: "Plant protein shake + banana", kcal: 320, c: 26, p: 45, f: 4, slot: "snacks"),
             ],
             weightKg: 79, weightTrendPerWeekKg: 0.35,
             hrv: 62, restingHR: 52, sleepMinutes: 460, steps: 7200, distanceKm: 4.8,
@@ -223,12 +223,12 @@ enum FixtureData {
         .endurance: Profile(
             goal: "endurance",
             name: "Marcus Nandy",
-            insight: "This week's long run held goal pace with a lower average HR than last week — aerobic base is building nicely.",
+            insight: "Last week's long run held goal pace with a lower average HR than the week before — aerobic base is building nicely.",
             established: true,
             targetKcal: 2650, consumedKcal: 1140,
             protein: 92, proteinTarget: 130, carbs: 136, carbsTarget: 340, fat: 25, fatTarget: 75,
             plan: [
-                FixturePlanItem(title: "Banana + peanut butter toast", timeMinutes: 390, kind: "meal", subtitle: "Breakfast · 6:30 AM", kcal: 340, why: "Fast-digesting carbs ahead of the morning run."),
+                FixturePlanItem(title: "Banana + almond butter toast", timeMinutes: 390, kind: "meal", subtitle: "Breakfast · 6:30 AM", kcal: 340, why: "Fast-digesting carbs ahead of the morning run."),
                 FixturePlanItem(title: "Intervals 6×800 m", timeMinutes: 420, kind: "move", subtitle: "Run · 7:00 AM", kcal: nil, why: "Race-pace reps to sharpen top-end speed."),
                 FixturePlanItem(title: "Rice bowl with chicken", timeMinutes: 780, kind: "meal", subtitle: "Lunch · 1:00 PM", kcal: 560, why: "Replenishes glycogen spent on the morning intervals."),
                 FixturePlanItem(title: "Electrolyte smoothie", timeMinutes: 990, kind: "meal", subtitle: "Snack · 4:30 PM", kcal: 240, why: "Rehydration ahead of tomorrow's easy run."),
@@ -239,7 +239,7 @@ enum FixtureData {
             // consumedKcal to these sums already); only the macro grams
             // were adjusted here.
             meals: [
-                FixtureMeal(name: "Banana + peanut butter toast", kcal: 340, c: 38, p: 20, f: 12, slot: "breakfast"),
+                FixtureMeal(name: "Banana + almond butter toast", kcal: 340, c: 38, p: 20, f: 12, slot: "breakfast"),
                 FixtureMeal(name: "Rice bowl with chicken", kcal: 560, c: 62, p: 55, f: 10, slot: "lunch"),
                 FixtureMeal(name: "Electrolyte smoothie", kcal: 240, c: 36, p: 17, f: 3, slot: "snacks"),
             ],
@@ -391,6 +391,12 @@ enum FixtureData {
     }()
 
     private static var isoNow: String { isoFormatter.string(from: Date()) }
+
+    /// `minutes` minutes before now — for "last synced" times, which must read
+    /// as recent (a midnight timestamp reads "Synced 22 hours ago" by evening).
+    private static func isoMinutesAgo(_ minutes: Int) -> String {
+        isoFormatter.string(from: Date().addingTimeInterval(-Double(minutes) * 60))
+    }
 
     private static func isoDaysAgo(_ days: Int) -> String {
         let date = Calendar.current.date(byAdding: .day, value: -days, to: Date()) ?? Date()
@@ -1613,6 +1619,11 @@ enum FixtureData {
 
     // MARK: - GET /api/profile → ProfileResponse
 
+    /// Days before today the demo account was created ("Member since …").
+    /// Nothing the account "told" the coach can predate it: every memory fact
+    /// and entity fact below is dated inside this window.
+    static let memberSinceDaysAgo = 120
+
     private static func profileResponse(_ profile: Profile) -> [String: Any] {
         let stats: [String: Any] = [
             "loggedDays": profile.established ? 24 : dataDays(profile),
@@ -1632,7 +1643,7 @@ enum FixtureData {
             ],
             "stats": stats,
             "profile": details,
-            "createdAt": isoDaysAgo(120),
+            "createdAt": isoDaysAgo(memberSinceDaysAgo),
             "sleepGoalMinutes": 480,
             "lightsOutMinutes": 1350,
             "calibration": calibration(profile),
@@ -2246,7 +2257,8 @@ enum FixtureData {
     /// goal-progress / weight / training fixtures: `weight_loss` -0.6 kg,
     /// 5 of 7 days in the 1,850 kcal budget, weekends +450 kcal (same as the
     /// goal-progress reasons); `muscle` 3 of 4 sessions, squat +10 kg vs 4 weeks ago, 5 of 7
-    /// protein days (190 g target); `endurance` 24.5 of the 30 km target, +12% (21.9 -> 24.5).
+    /// protein days (190 g target); `endurance` 24.5 km against that week's ~24 km safe
+    /// step (21.9 km the week before -> round(21.9 x 1.1) = 24) toward the 30 km goal, +12% (21.9 -> 24.5).
     /// `new_user` (and the unreachable `onboarding`) get the gentle
     /// "not enough data" review. `server_error` never reaches this.
     ///
@@ -2334,12 +2346,15 @@ enum FixtureData {
             let rhrComparison = "\(rhrGap >= 0 ? "+" : "\u{2212}")\(abs(rhrGap))\(nb)bpm vs your normal"
             let weekSleep = weekSleepStats(profile, scenario)
             return review(
-                // 24.5 km of the 30 km weekly target = 82% (>= 60%, < 90%): mixed.
-                // The distance shortfall is the gap: the headline carries the
-                // target, the Slip names it and "Next week" adds the km.
-                goal: "endurance", verdict: "building", weekRating: "mixed",
-                weekGap: ["kind": "distance", "doneKm": 24.5, "targetKm": 30],
-                headline: "3 sessions, 24.5 of 30\(nb)km, +12% vs last week",
+                // The week is graded against ITS safe step, not the full goal
+                // (lib/enduranceProgression.ts `weekStepOrGoalKm`): the week
+                // before ran 21.9 km, so the step was round(21.9 x 1.1) = 24 km
+                // — what Today said all week ("of ~24 km") — and 24.5 km met
+                // it: a good week, no distance gap (`weekGap` stays null). No
+                // sessions target is set, so sessions don't pull it down.
+                // The headline names the step with the goal beside it.
+                goal: "endurance", verdict: "building", weekRating: "good",
+                headline: "3 sessions, 24.5 of ~24\(nb)km — on plan · goal 30\(nb)km, +12% vs last week",
                 stats: [
                     // Last week (Mon–Sun), NOT this week — Today's this-week
                     // totals come from `enduranceWeek()` and differ.
@@ -2349,11 +2364,15 @@ enum FixtureData {
                     stat("Avg sleep", hoursMinutes(weekSleep.avgMinutes), "week avg · goal 8h 0m", weekSleep.avgMinutes < 420 ? "watch" : "good"),
                 ],
                 win: "Training volume is up 12% on last week (21.9\(nb)km\(nb)→\(nb)24.5\(nb)km).",
-                slip: "24.5 of 30\(nb)km target — 5.5\(nb)km short",
-                // lib/weeklyReview.ts `distanceNextWeek`: 24.5 km -> ~10% growth
-                // (27 km), long run 14 -> 16 km (+2 km, under the 18 km peak
-                // target), the rest as easy runs, then the 30 km target.
-                nextWeek: "Build to ~27\(nb)km: long run 16\(nb)km, the rest as easy runs; 30\(nb)km the week after.",
+                // A good week has no distance Slip; the first amber stat names
+                // it (the server's resting-HR slip, as the stat above is "watch").
+                slip: rhrGap > 0 ? "Resting heart rate rose \(rhrGap)\(nb)bpm — your body may be carrying fatigue." : nil,
+                // The step was met but is still under the 30 km goal, so the
+                // build goes on (lib/weeklyReview.ts `distanceNextWeek`, the
+                // shared rule): 24.5 km -> ~10% growth (27 km), long run
+                // 14 -> 16 km (+2 km, under the 18 km peak target), the rest
+                // mostly easy runs, then the 30 km goal.
+                nextWeek: "Build to ~27\(nb)km: long run 16\(nb)km, the rest mostly easy runs; 30\(nb)km the week after.",
                 sufficient: true
             )
         default:
@@ -2370,17 +2389,21 @@ enum FixtureData {
 
     // MARK: - GET /api/devices → DevicesResponse (phase 2 "both devices" contract)
 
-    /// Apple Watch is "connected" (synced recently) for every non-onboarding
-    /// scenario. WHOOP is connected only for `endurance` — the one scenario
-    /// with a both-devices story — so the Devices settings screen exercises
-    /// its "Automatic · <resolved>" picker rows and lets the WHOOP option
-    /// appear; every other scenario shows Apple Watch alone, WHOOP reading
-    /// "Not connected".
+    /// How long ago the connected devices last synced (Apple Watch; WHOOP 5 min earlier).
+    static let deviceSyncMinutesAgo = 20
+
+    /// Apple Watch is "connected" (synced recently — `deviceSyncMinutesAgo`
+    /// before now, so the status never reads stale/amber whatever the time of
+    /// day) for every non-onboarding scenario. WHOOP is connected only for
+    /// `endurance` — the one scenario with a both-devices story — so the
+    /// Devices settings screen exercises its "Automatic · <resolved>" picker
+    /// rows and lets the WHOOP option appear; every other scenario shows Apple
+    /// Watch alone, WHOOP reading "Not connected".
     private static func devices(scenario: FixtureMode.Scenario) -> [String: Any] {
         let whoopConnected = scenario == .endurance
         let deviceRows: [[String: Any]] = [
-            ["id": "apple", "connected": true, "lastSyncAt": isoAt(daysAgo: 0, hour: 0, minute: 0)],
-            ["id": "whoop", "connected": whoopConnected, "lastSyncAt": whoopConnected ? isoAt(daysAgo: 0, hour: 0, minute: 0) : NSNull()],
+            ["id": "apple", "connected": true, "lastSyncAt": isoMinutesAgo(deviceSyncMinutesAgo)],
+            ["id": "whoop", "connected": whoopConnected, "lastSyncAt": whoopConnected ? isoMinutesAgo(deviceSyncMinutesAgo + 5) : NSNull()],
         ]
         let primary: [String: Any] = [
             "workouts": "apple",
@@ -2414,7 +2437,7 @@ enum FixtureData {
     }
 
     private static let memoryFacts: [FixtureFact] = [
-        FixtureFact(id: "fixture-fact-peanut", type: "Allergy", label: "Peanut allergy", isConstraint: true, daysAgo: 400, origin: "told", group: "health"),
+        FixtureFact(id: "fixture-fact-peanut", type: "Allergy", label: "Peanut allergy", isConstraint: true, daysAgo: memberSinceDaysAgo - 5, origin: "told", group: "health"),
         FixtureFact(id: "fixture-fact-knee", type: "Injury", label: "Knee pain since \(shortDate(daysAhead: -10))", isConstraint: false, daysAgo: 6, origin: "told", group: "health"),
         // Same id `coachRestoration`'s `memorySavedExchange` uses for its
         // "Noted: Lactose intolerant" chip — same fact, same fixture id.
@@ -2443,7 +2466,7 @@ enum FixtureData {
     private static func personaMemoryFacts(_ goal: String) -> [FixtureFact] {
         switch goal {
         case "endurance":
-            return [FixtureFact(id: "fixture-fact-race", type: "Note", label: "Racing a half marathon in the spring", isConstraint: false, daysAgo: 60, origin: "told", group: "other")]
+            return [FixtureFact(id: "fixture-fact-race", type: "Note", label: "Racing a half marathon on \(shortDate(daysAhead: enduranceRaceDaysOut))", isConstraint: false, daysAgo: 60, origin: "told", group: "other")]
         case "muscle":
             return [FixtureFact(id: "fixture-fact-gym-days", type: "Habit", label: "Lifts Monday, Wednesday, Friday", isConstraint: false, daysAgo: 30, origin: "told", group: "routines")]
         default:
@@ -2509,9 +2532,9 @@ enum FixtureData {
                 ["type": "Allergy", "label": "Shellfish allergy", "evidence": "Maya can't have shellfish", "source": "coach", "createdAt": isoDaysAgo(45)],
               ]
             : [
-                ["type": "Condition", "label": "Type 2 diabetes", "evidence": "my dad has type 2 diabetes", "source": "coach", "createdAt": isoDaysAgo(200)],
-                ["type": "Medication", "label": "Metformin", "evidence": "he's on metformin", "source": "coach", "createdAt": isoDaysAgo(200)],
-                ["type": "FamilyHistory", "label": "Family history of diabetes", "evidence": "runs in the family", "source": "coach", "createdAt": isoDaysAgo(200)],
+                ["type": "Condition", "label": "Type 2 diabetes", "evidence": "my dad has type 2 diabetes", "source": "coach", "createdAt": isoDaysAgo(memberSinceDaysAgo - 20)],
+                ["type": "Medication", "label": "Metformin", "evidence": "he's on metformin", "source": "coach", "createdAt": isoDaysAgo(memberSinceDaysAgo - 20)],
+                ["type": "FamilyHistory", "label": "Family history of diabetes", "evidence": "runs in the family", "source": "coach", "createdAt": isoDaysAgo(memberSinceDaysAgo - 20)],
               ]
         return ["id": id, "label": label, "kind": kind, "isSelf": false, "facts": facts]
     }

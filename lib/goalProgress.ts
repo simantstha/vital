@@ -49,7 +49,7 @@ import type { ProgressionSummary } from './workoutRepository';
 import { isLiftProgressing, liftChange4w, liftDisplayChange, liftDisplayName, pickHeadlineLift } from './liftChange';
 import { weekStartKeyForDay } from './localDay';
 import { KM_PER_MILE } from './metricFormat';
-import { weekStepTargetKm } from './enduranceProgression';
+import { weekStepOrGoalKm } from './enduranceProgression';
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
@@ -951,10 +951,7 @@ function runningKmBetween(input: GoalProgressInput, from: string, to: string): n
  */
 function stepTargetKm(input: GoalProgressInput, targetKm: number, thisWeekStart: string): number {
   const lastWeekKm = runningKmBetween(input, addDays(thisWeekStart, -7), addDays(thisWeekStart, -1));
-  if (lastWeekKm == null) return targetKm;
-  const unitsPerKm = input.unitSystem === 'imperial' ? 1 / KM_PER_MILE : 1;
-  const step = weekStepTargetKm(round1(lastWeekKm), targetKm, unitsPerKm);
-  return step == null ? targetKm : Math.min(targetKm, round1(step));
+  return weekStepOrGoalKm(lastWeekKm, targetKm, input.unitSystem === 'imperial' ? 1 / KM_PER_MILE : 1);
 }
 
 /** This calendar week's (Mon–today, user-local) distance; null when no workout in the window carries a distance. */

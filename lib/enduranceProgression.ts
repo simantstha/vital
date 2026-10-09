@@ -4,13 +4,16 @@
  * ONE rule for "how much may a runner build next week", shared by every
  * surface that talks about it so two numbers can never describe the same week:
  *
- *  - lib/weeklyReview.ts: "Next week" advice after a short distance week;
+ *  - lib/weeklyReview.ts: "Next week" advice after a short distance week, and
+ *    the bar the finished week itself is graded against;
  *  - lib/goalProgress.ts: `distance.stepTargetKm`, the target the Today hero,
  *    Trends goal card and goal sheet measure THIS week against.
  *
  * The weekly review looks at the last completed week and talks about "next
  * week"; the goal card looks at the current week. Those are the same week, so
- * both read their number from here.
+ * both read their number from here. Likewise the review grades the finished
+ * week against the step the goal card showed WHILE that week was under way
+ * (`weekStepOrGoalKm` of the week before it), never against the full goal.
  *
  * Rule: a week may grow ~10% over the previous one (at least +1 unit so a very
  * small week still moves), never past the weekly target; the long run grows by
@@ -51,6 +54,22 @@ export function weekStepTargetKm(lastWeekKm: number, weeklyTargetKm: number, uni
   const step = weekStepTarget(lastWeekKm * unitsPerKm, target);
   if (step == null) return null;
   return step >= target ? weeklyTargetKm : step / unitsPerKm;
+}
+
+/**
+ * The target a week is measured against, in km: that week's safe step from the
+ * running km of the week BEFORE it (`weekStepTargetKm`, rounded to 0.1 km), or
+ * the weekly target itself when there is no measured base week, the base week
+ * had (almost) no running, or the step reaches the target. Always <= the
+ * target. goalProgress shows it as `distance.stepTargetKm` while the week is
+ * under way; the weekly review grades the finished week against the same
+ * number. `lastWeekKm` is the base week's running km (null = nothing measured).
+ */
+export function weekStepOrGoalKm(lastWeekKm: number | null, weeklyTargetKm: number, unitsPerKm = 1): number {
+  if (lastWeekKm == null) return weeklyTargetKm;
+  const round1 = (n: number): number => Math.round(n * 10) / 10;
+  const step = weekStepTargetKm(round1(lastWeekKm), weeklyTargetKm, unitsPerKm);
+  return step == null ? weeklyTargetKm : Math.min(weeklyTargetKm, round1(step));
 }
 
 /**
