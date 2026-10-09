@@ -16,7 +16,9 @@
  *
  * Honesty rule: never invent a number. Anything unknown is null; verdicts that
  * cannot be supported by the data fall back to 'insufficient_data' or
- * 'needs_target'.
+ * 'needs_target'. A weigh-in older than 14 days supports no weight verdict, a
+ * reached target says so ('reached') instead of reading as "ahead", and "last
+ * 4 weeks" stats shrink to the age of a newer goal.
  *
  * Per goal:
  *  - weight_loss — 4-week trend rate vs the 0.25–1.0 %bw/wk safe band; ETA only
@@ -36,7 +38,7 @@
 
 import type { WeightReading } from './weightTrend';
 import { arrowPair, withUnit } from './displayText';
-import { computeWeightTrend, trendDeltaKgPerWeek, trendSpanDays } from './weightTrend';
+import { computeWeightTrend, trendDeltaKgPerWeek, trendDeltaSpanDays, trendSpanDays } from './weightTrend';
 import {
   assessWeightSignals,
   PARTIAL_LOG_KCAL_THRESHOLD,
@@ -94,12 +96,27 @@ const ADHERENCE_LOW_PCT = 60;
 /** Muscle verdict: below this 4-week session adherence (%) a lift gain reads "Lifts up, sessions behind", not "Progressing". */
 const ADHERENCE_BEHIND_PCT = 70;
 export const HEADLINE_MAX_CHARS = 70;
+/**
+ * Weigh-in staleness. Older than STALE the trend is an out-of-date picture: the
+ * weight verdict becomes insufficient_data ("Last weigh-in N days ago…"). From
+ * AGING (up to STALE) the verdict is kept but no projected date is quoted and a
+ * "Based on a weigh-in N days ago" reason is added.
+ */
+export const WEIGH_IN_AGING_DAYS = 7;
+export const WEIGH_IN_STALE_DAYS = 14;
+/** Reached-goal copy: within this many kg of the target reads as "Holding near target". */
+const HOLDING_NEAR_TARGET_KG = 1;
+/** Longest window (days) the "last 4 weeks" stats look back; a younger goal shrinks it to its age. */
+const STAT_WINDOW_DAYS = 28;
+/** Planned-session adherence is never judged over less than one week. */
+const MIN_SESSION_WINDOW_DAYS = 7;
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
 export type GoalKind = 'weight_loss' | 'muscle' | 'endurance' | 'general';
 
 export type GoalVerdict =
+  | 'reached'
   | 'on_track'
   | 'ahead'
   | 'too_fast'
@@ -158,6 +175,7 @@ export interface GoalLongRunProgress {
 }
 
 export interface GoalProgressReason {
+  /** e.g. 'rate', 'lift', 'adherence', 'reached', 'position', 'next_step' (reached goals: "Set a new target or switch to maintenance"). */
   kind: string;
   text: string;
   tone: ReasonTone;
@@ -188,24 +206,40 @@ export interface GoalProgress {
   /** Days since the newest weigh-in (0 = today); null with none. The ETA is anchored to that day, not to today. */
   lastWeighInDaysAgo?: number | null;
   /**
+   * Days since the newest session in the trailing 28 days (strength sessions
+   * for a muscle goal); null when there was none in that window.
+   */
+  lastSessionDaysAgo?: number | null;
+  /**
+   * Weight goals (weight_loss / muscle) whose weight target is currently
+   * reached: the local day (YYYY-MM-DD) of the first trend point that crossed
+   * the target since the goal started. Null when the target is not reached,
+   * the weigh-in is stale, or the crossing is unknown (e.g. the goal started
+   * already past the target, or no weigh-in before the crossing).
+   */
+  reachedAt?: string | null;
+  /**
    * Muscle goal with a weekly sessions target only; null/absent otherwise.
    * The structured numbers behind the `adherence` reason and the muscle
    * `behind` verdict (pct < ADHERENCE_BEHIND_PCT), so a client can say WHY the
    * goal is behind and what to aim for ("9 of 16 sessions in 4 wk · aim for 4
-   * this week") without parsing reason copy. `planned` = weeklyTarget x 4.
+   * this week") without parsing reason copy. `planned` = weeklyTarget x the
+   * window in weeks (4 for an established goal, fewer while the goal is new).
    */
   adherence?: GoalSessionAdherence | null;
   dataSufficiency: { weighIns: number; needed: number; sessionsLast28d: number };
 }
 
 export interface GoalSessionAdherence {
-  /** Sessions done in the trailing 28 days. */
+  /** Sessions done in the window (the trailing 28 days, or since a younger goal began; never under 7 days). */
   done: number;
-  /** Planned sessions over the same 28 days (weeklyTarget x 4). */
+  /** Planned sessions over the same window (weeklyTarget x windowDays / 7, rounded). */
   planned: number;
   weeklyTarget: number;
   /** done / planned, whole percent. */
   pct: number;
+  /** Days the window covers: 28 for an established goal, fewer (min 7) for a new one. */
+  windowDays: number;
 }
 
 export interface GoalProgressIntakeDay {
@@ -350,6 +384,40 @@ function capReasons(candidates: Array<GoalProgressReason | null>): GoalProgressR
   return candidates.filter((r): r is GoalProgressReason => r != null).slice(0, 3);
 }
 
+// ── Goal-age windows ────────────────────────────────────────────────────────
+// "Last 4 weeks" stats must not pretend a goal that began 9 days ago has 28
+// days behind it: they shrink to the goal's age (a sessions window never under
+// one week), and their copy names the real span.
+
+/** User-local day the goal began (YYYY-MM-DD), null when unknown. */
+function goalStartDay(input: GoalProgressInput): string | null {
+  const day = input.start.startedDay ?? (input.start.startedAt ? input.start.startedAt.slice(0, 10) : null);
+  return day != null && /^\d{4}-\d{2}-\d{2}$/.test(day) ? day : null;
+}
+
+/** Calendar days the goal has been running, counting the start day and today (>= 1); null when the start is unknown. */
+function goalAgeDays(input: GoalProgressInput): number | null {
+  const start = goalStartDay(input);
+  if (start == null) return null;
+  return Math.max(1, dayNumber(input.todayKey) - dayNumber(start) + 1);
+}
+
+/** Days a "last 4 weeks" stat looks back: 28, or the goal's age while it is younger than that. */
+function statWindowDays(input: GoalProgressInput): number {
+  const age = goalAgeDays(input);
+  return age == null ? STAT_WINDOW_DAYS : Math.min(STAT_WINDOW_DAYS, age);
+}
+
+/** Window for session counts and planned-session adherence: statWindowDays, but never under one week. */
+function sessionWindowDays(input: GoalProgressInput): number {
+  return Math.max(MIN_SESSION_WINDOW_DAYS, statWindowDays(input));
+}
+
+/** "4 weeks" for a full window, else "N days". */
+function windowSpanText(days: number): string {
+  return days >= STAT_WINDOW_DAYS ? '4 weeks' : `${days} ${plural(days, 'day')}`;
+}
+
 // ── Weight block (shared by every goal) ─────────────────────────────────────
 
 interface WeightBlock {
@@ -361,14 +429,61 @@ interface WeightBlock {
   rateKg: number | null;
   /** Signed: negative = losing. */
   pctBw: number | null;
+  /** Calendar days the quoted rate really spans (< RATE_WINDOW_DAYS for a short history); null without a rate. */
+  rateSpanDays: number | null;
   /** Target reached for this goal's direction (null when no target weight / no current weight). */
   reached: boolean | null;
   /** targetWeight - current trend (signed), null when unknown. */
   neededKg: number | null;
+  /**
+   * Projected date, anchored to the newest weigh-in (never moved forward to
+   * today). Used for the verdict; the payload hides it once the weigh-in is
+   * `aging` or `stale`.
+   */
   eta: string | null;
   onPace: boolean | null;
   /** Newest weigh-in day (YYYY-MM-DD), null with none. */
   lastWeighInDay: string | null;
+  /** Days from the newest weigh-in to today; null with none. */
+  ageDays: number | null;
+  /** Newest weigh-in is older than WEIGH_IN_STALE_DAYS: the weight picture is out of date. */
+  stale: boolean;
+  /** Newest weigh-in is WEIGH_IN_AGING_DAYS..WEIGH_IN_STALE_DAYS old: verdict kept, no ETA. */
+  aging: boolean;
+  /** First trend day that crossed the target since the goal began; null when not reached / unknown. */
+  reachedAt: string | null;
+}
+
+/** True when `kg` has reached `targetKg` for the goal's direction (within 0.1 kg counts). */
+function weightReachedTarget(goal: GoalKind, targetKg: number, kg: number): boolean {
+  const needed = targetKg - kg;
+  if (Math.abs(needed) < 0.1) return true;
+  if (goal === 'weight_loss') return needed > 0;
+  if (goal === 'muscle') return needed < 0;
+  return false;
+}
+
+/**
+ * Local day of the first trend point that crossed the target since the goal
+ * began. Null when the crossing is not observable: no trend point before it
+ * (the data starts at or past the target), or the goal began already past the
+ * target.
+ */
+function firstCrossingDay(
+  goal: GoalKind,
+  targetKg: number,
+  days: Array<{ day: string; trendKg: number }>,
+  startedDay: string | null,
+): string | null {
+  const hit = (i: number): boolean => weightReachedTarget(goal, targetKg, days[i].trendKg);
+  for (let i = 0; i < days.length; i++) {
+    if (startedDay != null && days[i].day < startedDay) continue;
+    if (!hit(i)) continue;
+    // The point before it must be on the far side of the target.
+    if (i === 0 || hit(i - 1)) return null;
+    return days[i].day;
+  }
+  return null;
 }
 
 function buildWeightBlock(input: GoalProgressInput): WeightBlock {
@@ -379,20 +494,19 @@ function buildWeightBlock(input: GoalProgressInput): WeightBlock {
   const rateReliable = weighIns >= WEIGH_INS_NEEDED && spanDays >= RATE_MIN_SPAN_DAYS;
   const currentKg = days.length > 0 ? days[days.length - 1].trendKg : null;
   const lastWeighInDay = days.length > 0 ? days[days.length - 1].day : null;
+  const ageDays = lastWeighInDay != null ? Math.max(0, dayNumber(input.todayKey) - dayNumber(lastWeighInDay)) : null;
+  const stale = ageDays != null && ageDays > WEIGH_IN_STALE_DAYS;
+  const aging = ageDays != null && ageDays >= WEIGH_IN_AGING_DAYS && !stale;
 
   const rateKg = rateReliable ? trendDeltaKgPerWeek(days, RATE_WINDOW_DAYS) : null;
+  const rateSpanDays = rateKg != null ? trendDeltaSpanDays(days, RATE_WINDOW_DAYS) : null;
   const pctBw = rateKg != null && currentKg != null && currentKg > 0 ? (rateKg / currentKg) * 100 : null;
 
   const targetKg = input.target.weightKg;
   const neededKg = currentKg != null && targetKg != null ? targetKg - currentKg : null;
 
   let reached: boolean | null = null;
-  if (neededKg != null) {
-    if (Math.abs(neededKg) < 0.1) reached = true;
-    else if (input.goal === 'weight_loss') reached = neededKg > 0;
-    else if (input.goal === 'muscle') reached = neededKg < 0;
-    else reached = false;
-  }
+  if (currentKg != null && targetKg != null) reached = weightReachedTarget(input.goal, targetKg, currentKg);
 
   // ETA only with a reliable rate pointing toward the target, a meaningful
   // (non-plateau) pace, and a sane horizon.
@@ -403,11 +517,11 @@ function buildWeightBlock(input: GoalProgressInput): WeightBlock {
   ) {
     const daysToGo = Math.ceil((Math.abs(neededKg) / Math.abs(rateKg)) * 7);
     // Anchored to the newest weigh-in, not today: a skipped weigh-in day must
-    // not push the ETA later without any new data. Never earlier than today.
-    if (daysToGo <= MAX_ETA_DAYS) {
-      const anchored = addDays(lastWeighInDay ?? input.todayKey, daysToGo);
-      eta = anchored < input.todayKey ? input.todayKey : anchored;
-    }
+    // not push the ETA later without any new data. And never pushed FORWARD to
+    // today either: a projection that already lies in the past would otherwise
+    // "beat" any target date. A stale weigh-in simply hides the date (see
+    // `aging` / `stale`).
+    if (daysToGo <= MAX_ETA_DAYS) eta = addDays(lastWeighInDay ?? input.todayKey, daysToGo);
   }
 
   let onPace: boolean | null = null;
@@ -417,7 +531,15 @@ function buildWeightBlock(input: GoalProgressInput): WeightBlock {
     else if (reached === false && rateReliable) onPace = false; // moving the wrong way / flat
   }
 
-  return { weighIns, spanDays, rateReliable, trend, currentKg, rateKg, pctBw, reached, neededKg, eta, onPace, lastWeighInDay };
+  const reachedAt =
+    reached === true && !stale && targetKg != null && (input.goal === 'weight_loss' || input.goal === 'muscle')
+      ? firstCrossingDay(input.goal, targetKg, days, goalStartDay(input))
+      : null;
+
+  return {
+    weighIns, spanDays, rateReliable, trend, currentKg, rateKg, pctBw, rateSpanDays, reached, neededKg,
+    eta, onPace, lastWeighInDay, ageDays, stale, aging, reachedAt,
+  };
 }
 
 // ── Intake helpers ──────────────────────────────────────────────────────────
@@ -436,7 +558,10 @@ function rateReason(input: GoalProgressInput, w: WeightBlock, band: { minPct: nu
   if (w.rateKg == null || w.pctBw == null) return null;
   const dir = w.rateKg < 0 ? 'down' : 'up';
   const abs = Math.abs(w.pctBw);
-  let text = `Trend weight ${dir} ${fmtWeight(input, Math.abs(w.rateKg), 2)}/wk (${round2(abs)}% of bodyweight) over 4 weeks`;
+  // The rate is measured over the history that exists: under 4 weeks of
+  // weigh-ins says the real span ("over 9 days").
+  const span = windowSpanText(w.rateSpanDays ?? RATE_WINDOW_DAYS);
+  let text = `Trend weight ${dir} ${fmtWeight(input, Math.abs(w.rateKg), 2)}/wk (${round2(abs)}% of bodyweight) over ${span}`;
   let tone: ReasonTone = 'neutral';
   if (band) {
     const wantedDir = input.goal === 'weight_loss' ? w.rateKg < 0 : w.rateKg > 0;
@@ -508,19 +633,34 @@ function tdeeReason(input: GoalProgressInput): GoalProgressReason | null {
   };
 }
 
+/** Distinct session days in the trailing `windowDays` local days (today included). */
+function sessionCount(input: GoalProgressInput, windowDays: number): number {
+  return new Set(sessionDays(input).filter(d => inLastDays(d, input.todayKey, windowDays))).size;
+}
+
+/**
+ * `count` is always the trailing 28 days (dataSufficiency, the endurance
+ * gate); `perWeek` averages over the goal-aware window (sessionWindowDays), so
+ * a goal that began 10 days ago is not divided by four weeks.
+ */
 function sessionsPerWeek(input: GoalProgressInput): { count: number; perWeek: number } {
-  const count = new Set(sessionDays(input).filter(d => inLastDays(d, input.todayKey, 28))).size;
-  return { count, perWeek: round1(count / 4) };
+  const windowDays = sessionWindowDays(input);
+  return {
+    count: sessionCount(input, STAT_WINDOW_DAYS),
+    perWeek: round1(sessionCount(input, windowDays) / (windowDays / 7)),
+  };
 }
 
 function sessionsReason(input: GoalProgressInput): GoalProgressReason | null {
-  const { count, perWeek } = sessionsPerWeek(input);
+  const { perWeek } = sessionsPerWeek(input);
+  const windowDays = sessionWindowDays(input);
+  const span = windowSpanText(windowDays);
   const target = input.target.weeklySessions;
-  if (count === 0) {
-    return { kind: 'sessions', text: 'No training sessions logged in the last 4 weeks', tone: 'watch' };
+  if (sessionCount(input, windowDays) === 0) {
+    return { kind: 'sessions', text: `No training sessions logged in the last ${span}`, tone: 'watch' };
   }
   if (target == null) {
-    return { kind: 'sessions', text: `Averaging ${perWeek} sessions a week over the last 4 weeks`, tone: 'neutral' };
+    return { kind: 'sessions', text: `Averaging ${perWeek} sessions a week over the last ${span}`, tone: 'neutral' };
   }
   return {
     kind: 'sessions',
@@ -529,22 +669,28 @@ function sessionsReason(input: GoalProgressInput): GoalProgressReason | null {
   };
 }
 
-/** Planned-session adherence over 28 days: done / (weekly target x 4). Null without a target. */
+/**
+ * Planned-session adherence: done / (weekly target x window in weeks). The
+ * window is the trailing 28 days for an established goal; a goal that began
+ * fewer than 28 days ago is judged over the days it has existed (never under
+ * one week), so a new user is not measured against four weeks of plan.
+ */
 function sessionAdherence(input: GoalProgressInput): GoalSessionAdherence | null {
   const target = input.target.weeklySessions;
   if (target == null || target <= 0) return null;
-  const done = sessionsPerWeek(input).count;
-  const planned = target * 4;
-  return { done, planned, weeklyTarget: target, pct: Math.round((done / planned) * 100) };
+  const windowDays = sessionWindowDays(input);
+  const done = sessionCount(input, windowDays);
+  const planned = Math.max(1, Math.round((target * windowDays) / 7));
+  return { done, planned, weeklyTarget: target, pct: Math.round((done / planned) * 100), windowDays };
 }
 
-/** "9 of 16 planned sessions in 4 weeks (56%)" — watch under 75%. */
+/** "9 of 16 planned sessions in 4 weeks (56%)" (or "in 10 days" for a new goal) — watch under 75%. */
 function adherenceReason(input: GoalProgressInput): GoalProgressReason | null {
   const a = sessionAdherence(input);
   if (!a) return null;
   return {
     kind: 'adherence',
-    text: `${a.done} of ${a.planned} planned ${plural(a.planned, 'session')} in 4 weeks (${a.pct}%)`,
+    text: `${a.done} of ${a.planned} planned ${plural(a.planned, 'session')} in ${windowSpanText(a.windowDays)} (${a.pct}%)`,
     tone: a.pct >= 90 ? 'good' : a.pct >= ADHERENCE_WATCH_PCT ? 'neutral' : 'watch',
   };
 }
@@ -710,15 +856,60 @@ function insufficientWeightOutcome(w: WeightBlock): Outcome {
   };
 }
 
+/** Newest weigh-in older than WEIGH_IN_STALE_DAYS: no verdict from weight, just an honest nudge to weigh in. */
+function staleWeighInOutcome(w: WeightBlock): Outcome {
+  const n = w.ageDays ?? WEIGH_IN_STALE_DAYS + 1;
+  return {
+    verdict: 'insufficient_data',
+    headline: clip(`Last weigh-in ${n} days ago — weigh in to update your progress`),
+    reasons: [{ kind: 'weigh_in_age', text: `Your last weigh-in was ${n} days ago, so your trend may be out of date`, tone: 'neutral' }],
+  };
+}
+
+/** "Based on a weigh-in N days ago" while the newest weigh-in is aging (WEIGH_IN_AGING_DAYS..WEIGH_IN_STALE_DAYS). */
+function agingReason(w: WeightBlock): GoalProgressReason | null {
+  if (!w.aging || w.ageDays == null) return null;
+  return { kind: 'weigh_in_age', text: `Based on a weigh-in ${w.ageDays} days ago`, tone: 'neutral' };
+}
+
+// Reached-goal reasons ────────────────────────────────────────────────────
+
+/** The reach itself, first in the reasons. */
+function reachedLeadReason(input: GoalProgressInput, w: WeightBlock, targetKg: number): GoalProgressReason {
+  const since = w.reachedAt ? `, first reached ${fmtDate(w.reachedAt, input.todayKey)}` : '';
+  return {
+    kind: 'reached',
+    text: `Trend weight ${fmtWeight(input, w.currentKg as number)} is at or past your ${fmtWeight(input, targetKg)} target${since}`,
+    tone: 'good',
+  };
+}
+
+/** Where the trend sits relative to a reached target. Never green: continued movement past the target is not progress. */
+function targetPositionReason(input: GoalProgressInput, w: WeightBlock, targetKg: number): GoalProgressReason {
+  const diff = (w.currentKg as number) - targetKg;
+  if (Math.abs(diff) <= HOLDING_NEAR_TARGET_KG) return { kind: 'position', text: 'Holding near target', tone: 'neutral' };
+  return { kind: 'position', text: `${diff < 0 ? 'Below' : 'Above'} target by ${fmtWeight(input, Math.abs(diff))}`, tone: 'neutral' };
+}
+
+function nextStepReason(): GoalProgressReason {
+  return { kind: 'next_step', text: 'Set a new target or switch to maintenance', tone: 'neutral' };
+}
+
+/** ", around Dec 10" — or "" while the weigh-in is aging (no date quoted) and "any day now" for a date already reached. */
+function aroundText(input: GoalProgressInput, w: WeightBlock, eta: string): string {
+  if (w.aging) return '';
+  return eta <= input.todayKey ? ', any day now' : `, around ${fmtDate(eta, input.todayKey)}`;
+}
+
 function fatLossOutcome(input: GoalProgressInput, w: WeightBlock): Outcome {
   if (input.target.weightKg == null) {
     return { verdict: 'needs_target', headline: 'Set a target weight to track your fat-loss progress', reasons: [] };
   }
+  if (w.stale) return staleWeighInOutcome(w);
   if (!w.rateReliable || w.currentKg == null || w.rateKg == null || w.pctBw == null) {
     return insufficientWeightOutcome(w);
   }
 
-  const today = input.todayKey;
   const targetKg = input.target.weightKg;
   const signals = assessWeightSignals({
     trend: w.trend,
@@ -726,6 +917,7 @@ function fatLossOutcome(input: GoalProgressInput, w: WeightBlock): Outcome {
     floorKcal: input.budget?.floorKcal ?? 0,
     goal: input.goal,
     weekendPatternIntakeKcal: toSignalPoints(input.intakeDays),
+    todayKey: input.todayKey,
   });
   const { weekend, underEating } = signalReasons(signals);
   const rate = rateReason(input, w, FAT_LOSS_BAND);
@@ -734,16 +926,28 @@ function fatLossOutcome(input: GoalProgressInput, w: WeightBlock): Outcome {
   const toGo = Math.abs(w.neededKg ?? 0);
   const absPct = Math.abs(w.pctBw);
 
-  // Priority: the rate itself first, then anything worth a "watch", then the rest.
+  // Priority: the rate itself first, then the "based on an older weigh-in"
+  // caveat, then anything worth a "watch", then the rest.
+  const aging = agingReason(w);
   const watchFirst = (...rs: Array<GoalProgressReason | null>) =>
-    capReasons([rate, ...rs.filter(r => r?.tone === 'watch'), ...rs.filter(r => r?.tone !== 'watch')]);
+    capReasons([rate, aging, ...rs.filter(r => r?.tone === 'watch'), ...rs.filter(r => r?.tone !== 'watch')]);
   const reasons = watchFirst(underEating, adherence, weekend, tdee);
 
   if (w.reached) {
+    // The goal is done: lead with the reach, never show continued loss as a
+    // green "inside the safe band", and say what to do next. A safety watch
+    // (under-eating, still losing past the ceiling) still gets the second slot.
+    const stillFast = w.rateKg < 0 && absPct >= FAT_LOSS_BAND.maxPct ? rate : null;
+    const watch = underEating ?? stillFast;
+    const when = w.reachedAt ? ` (${fmtDate(w.reachedAt, input.todayKey)})` : '';
     return {
-      verdict: 'ahead',
-      headline: clip(`Target reached — trend ${fmtWeight(input, w.currentKg)} vs ${fmtWeight(input, targetKg)} goal`),
-      reasons,
+      verdict: 'reached',
+      headline: clip(`Goal reached — ${fmtWeight(input, targetKg)}${when}`),
+      reasons: capReasons([
+        reachedLeadReason(input, w, targetKg),
+        watch ?? targetPositionReason(input, w, targetKg),
+        nextStepReason(),
+      ]),
     };
   }
 
@@ -788,20 +992,42 @@ function fatLossOutcome(input: GoalProgressInput, w: WeightBlock): Outcome {
   if (w.eta == null) {
     return { verdict: 'behind', headline: clip(`Behind — ${fmtWeight(input, toGo)} to go, too slow to project a date`), reasons };
   }
-  const when = fmtDate(w.eta, today);
+  const around = aroundText(input, w, w.eta);
   if (input.target.date != null) {
     if (w.eta <= addDays(input.target.date, -AHEAD_MARGIN_DAYS)) {
-      return { verdict: 'ahead', headline: clip(`Ahead of pace — about ${fmtWeight(input, toGo)} to go, around ${when}`), reasons };
+      return { verdict: 'ahead', headline: clip(`Ahead of pace — about ${fmtWeight(input, toGo)} to go${around}`), reasons };
     }
     if (w.eta <= addDays(input.target.date, ON_PACE_GRACE_DAYS)) {
-      return { verdict: 'on_track', headline: clip(`On track — about ${fmtWeight(input, toGo)} to go, around ${when}`), reasons };
+      return { verdict: 'on_track', headline: clip(`On track — about ${fmtWeight(input, toGo)} to go${around}`), reasons };
     }
-    return { verdict: 'behind', headline: clip(`Behind pace — about ${fmtWeight(input, toGo)} to go, around ${when}`), reasons };
+    return { verdict: 'behind', headline: clip(`Behind pace — about ${fmtWeight(input, toGo)} to go${around}`), reasons };
   }
   if (absPct >= FAT_LOSS_BAND.minPct) {
-    return { verdict: 'on_track', headline: clip(`On track — about ${fmtWeight(input, toGo)} to go, around ${when}`), reasons };
+    return { verdict: 'on_track', headline: clip(`On track — about ${fmtWeight(input, toGo)} to go${around}`), reasons };
   }
-  return { verdict: 'behind', headline: clip(`Slow pace — about ${fmtWeight(input, toGo)} to go, around ${when}`), reasons };
+  return { verdict: 'behind', headline: clip(`Slow pace — about ${fmtWeight(input, toGo)} to go${around}`), reasons };
+}
+
+/**
+ * Day the first lift comparison becomes possible: the first logged set + 28
+ * days (a comparison needs a baseline 4 weeks before the recent window). The
+ * first set's week comes from the weekly e1RM buckets; its day is refined from
+ * the session days we have when one falls in that week, else the week's Monday.
+ * Null without any lift or when that date has already passed (the baseline is
+ * then missing for another reason, e.g. a gap in training).
+ */
+function firstLiftComparisonDay(input: GoalProgressInput): string | null {
+  let firstWeek: string | null = null;
+  for (const weeks of Object.values(input.progression)) {
+    for (const wk of weeks) {
+      if (wk.bestEstimatedOneRepMaxKg != null && (firstWeek == null || wk.weekStart < firstWeek)) firstWeek = wk.weekStart;
+    }
+  }
+  if (firstWeek == null) return null;
+  const weekEnd = addDays(firstWeek, 6);
+  const inFirstWeek = sessionDays(input).filter(d => d >= (firstWeek as string) && d <= weekEnd).sort();
+  const day = addDays(inFirstWeek[0] ?? firstWeek, 28);
+  return day > input.todayKey ? day : null;
 }
 
 function muscleOutcome(input: GoalProgressInput, w: WeightBlock): Outcome {
@@ -809,51 +1035,81 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock): Outcome {
     return { verdict: 'needs_target', headline: 'Set a weekly session goal to track your progress', reasons: [] };
   }
 
+  const targetKg = input.target.weightKg;
+  // A weigh-in older than WEIGH_IN_STALE_DAYS says nothing about now: no rate,
+  // no "reached" off weeks-old weight.
+  const weightReached = !w.stale && w.reached === true && targetKg != null && w.currentKg != null;
+  const pct = w.stale ? null : w.pctBw;
+
   const lifts = liftChanges(input.progression, input.todayKey, input.exerciseDisplay);
-  const rate = rateReason(input, w, MUSCLE_GAIN_BAND);
+  const rate = w.stale || weightReached ? null : rateReason(input, w, MUSCLE_GAIN_BAND);
   const adherence = adherenceReason(input);
-  const adherenceLow = (sessionAdherence(input)?.pct ?? 100) < ADHERENCE_LOW_PCT;
-  const sessionsBehind = (sessionAdherence(input)?.pct ?? 100) < ADHERENCE_BEHIND_PCT;
+  const adh = sessionAdherence(input);
+  const adherenceLow = (adh?.pct ?? 100) < ADHERENCE_LOW_PCT;
+  const sessionsBehind = (adh?.pct ?? 100) < ADHERENCE_BEHIND_PCT;
   const sessions = adherence ?? sessionsReason(input);
   const protein = proteinReason(input);
   const liftReasons = lifts.map(l => liftReason(l, input)).filter((r): r is GoalProgressReason => r != null);
   // Rate at/above the top of the healthy band is a flag worth surfacing early.
   const rateTop = rate?.tone === 'watch' && w.rateKg != null && w.rateKg > 0;
+  const reachLead = weightReached ? reachedLeadReason(input, w, targetKg as number) : null;
   // Low adherence leads (amber) without overriding the lift-based verdict.
   const reasons = capReasons([
     adherenceLow ? adherence : null,
     liftReasons[0] ?? null,
     adherenceLow ? null : sessions,
+    reachLead,
     rateTop ? rate : null,
     protein,
     rateTop ? null : rate,
+    rate ? agingReason(w) : null,
     liftReasons[1] ?? null,
   ]);
-
-  if (w.reached) {
-    return {
-      verdict: 'ahead',
-      headline: clip(`Target weight reached — trend ${fmtWeight(input, w.currentKg as number)}`),
-      reasons,
-    };
-  }
-
-  if (w.pctBw != null && w.pctBw > MUSCLE_GAIN_BAND.maxPct) {
-    return {
-      verdict: 'too_fast',
-      headline: clip(`Gaining too fast — ${round1(w.pctBw)}% of bodyweight a week`),
-      reasons,
-    };
-  }
 
   // The headline lift is the shared pick (largest 4-week e1RM change,
   // lib/liftChange.ts); `lifts` lists it first, so the verdict, the headline
   // and the lead lift reason all name the same lift.
   const best = lifts[0]?.change4wKg != null ? lifts[0] : null;
   const bestDisplay = best ? displayLift(best, input) : null;
+  const liftsUp = best && bestDisplay
+    ? isLiftProgressing({ baselineKg: best.startKg as number, recentKg: best.endKg as number, changeKg: best.change4wKg as number })
+    : null;
+  const sessionsBehindHeadline = adh ? clip(`Sessions behind — ${adh.done} of ${adh.planned} planned`) : 'Sessions behind';
+
+  // Reaching the weight target never hides training feedback: sessions behind
+  // → behind, stalled lifts → stalled, and only then reached.
+  if (weightReached) {
+    if (sessionsBehind) {
+      return {
+        verdict: 'behind',
+        headline: liftsUp && best && bestDisplay
+          ? clip(`Lifts up, sessions behind — ${best.name} ${liftDeltaText(bestDisplay)}`)
+          : sessionsBehindHeadline,
+        reasons,
+      };
+    }
+    if (liftsUp === false) {
+      return { verdict: 'stalled', headline: 'Stalled — no lift is up 1% on 4 weeks ago', reasons };
+    }
+    const training = reasons.filter(r => r !== reachLead).slice(0, 1);
+    return {
+      verdict: 'reached',
+      headline: clip(`Goal reached — ${fmtWeight(input, targetKg as number)}${w.reachedAt ? ` (${fmtDate(w.reachedAt, input.todayKey)})` : ''}`),
+      reasons: capReasons([reachLead, ...training, nextStepReason()]),
+    };
+  }
+
+  if (pct != null && pct > MUSCLE_GAIN_BAND.maxPct) {
+    return {
+      verdict: 'too_fast',
+      headline: clip(`Gaining too fast — ${round1(pct)}% of bodyweight a week`),
+      reasons,
+    };
+  }
+
   if (best && bestDisplay) {
     // Same bar as the stalled-lift nudge: up at least 1% on 4 weeks ago.
-    if (isLiftProgressing({ baselineKg: best.startKg as number, recentKg: best.endKg as number, changeKg: best.change4wKg as number })) {
+    if (liftsUp) {
       // Lifts are up but the planned sessions are not happening: no strongest
       // positive verdict next to an amber adherence reason.
       if (sessionsBehind) {
@@ -872,15 +1128,29 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock): Outcome {
     return { verdict: 'stalled', headline: 'Stalled — no lift is up 1% on 4 weeks ago', reasons };
   }
 
-  if (w.pctBw != null) {
-    if (w.pctBw >= MUSCLE_GAIN_BAND.minPct) {
+  if (pct != null) {
+    if (pct >= MUSCLE_GAIN_BAND.minPct) {
+      // Weight is moving the right way but the planned sessions are not
+      // happening: a lifter who stopped training never reads "Progressing".
+      if (sessionsBehind) return { verdict: 'behind', headline: sessionsBehindHeadline, reasons };
       return {
         verdict: 'progressing',
-        headline: clip(`Progressing — weight up ${round2(w.pctBw)}% a week, inside the gain band`),
+        headline: clip(`Progressing — weight up ${round2(pct)}% a week, inside the gain band`),
         reasons,
       };
     }
-    return { verdict: 'stalled', headline: clip(`Stalled — weight is not trending up (${round2(w.pctBw)}% a week)`), reasons };
+    return { verdict: 'stalled', headline: clip(`Stalled — weight is not trending up (${round2(pct)}% a week)`), reasons };
+  }
+
+  // No lift baseline yet: say when the first comparison lands rather than
+  // asking for more lifts that cannot create one sooner.
+  const firstComparison = firstLiftComparisonDay(input);
+  if (firstComparison) {
+    return { verdict: 'insufficient_data', headline: clip(`First lift comparison on ${fmtDate(firstComparison, input.todayKey)}`), reasons };
+  }
+  if (w.stale) {
+    const stale = staleWeighInOutcome(w);
+    return { ...stale, reasons: capReasons([...stale.reasons, ...reasons]) };
   }
 
   return {
@@ -990,13 +1260,20 @@ function distanceProgress(input: GoalProgressInput): GoalDistanceProgress | null
 
 const RACE_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-export function raceLabel(distanceKm: number | null): string {
+/**
+ * Race name. Standard distances keep their names (5K, 10K, Half marathon,
+ * Marathon); any other distance reads "<n> km race", or "<n> mi race" for an
+ * imperial user (a 16.1 km race is "10 mi race").
+ */
+export function raceLabel(distanceKm: number | null, unitSystem?: 'metric' | 'imperial' | null): string {
   if (distanceKm == null) return 'Race';
   if (Math.abs(distanceKm - 21.1) < 0.05) return 'Half marathon';
   if (Math.abs(distanceKm - 42.2) < 0.05) return 'Marathon';
   if (distanceKm === 10) return '10K';
   if (distanceKm === 5) return '5K';
-  return `${withUnit(Number.isInteger(distanceKm) ? distanceKm : round1(distanceKm), 'km')} race`;
+  const imperial = unitSystem === 'imperial';
+  const n = round1(imperial ? distanceKm / KM_PER_MILE : distanceKm);
+  return `${withUnit(n, imperial ? 'mi' : 'km')} race`;
 }
 
 /** Endurance race countdown; null without a date or once the race day has passed. */
@@ -1009,7 +1286,7 @@ function raceProgress(input: GoalProgressInput): GoalRaceProgress | null {
   return {
     date,
     distanceKm,
-    label: raceLabel(distanceKm),
+    label: raceLabel(distanceKm, input.unitSystem),
     weeksToGo: daysToGo < 7 ? 0 : Math.ceil(daysToGo / 7),
     daysToGo,
   };
@@ -1155,12 +1432,17 @@ function enduranceOutcome(input: GoalProgressInput): Outcome {
   const changePct = prior > 0 ? ((recent - prior) / prior) * 100 : null;
   const noun = useKm ? 'distance' : useMinutes ? 'time' : 'sessions';
   const perWeekText = (v: number): string => (useKm ? fmtDistance(input, v) : (useMinutes ? withUnit(round1(v), 'min') : `${round1(v)} sessions`));
+  // No training before the last 2 weeks (a new runner, or one starting over):
+  // the average is over the weeks that exist, and the copy says "base", not
+  // "restarted" / "back to regular training".
+  const baseWindowDays = statWindowDays(input);
+  const baseWeeks = Math.min(2, Math.max(1, baseWindowDays / 7));
   const volumeReason: GoalProgressReason | null = prior > 0 || recent > 0
     ? {
         kind: 'volume',
         text: changePct != null
           ? `Weekly training ${noun} ${changePct >= 0 ? 'up' : 'down'} ${Math.round(Math.abs(changePct))}% (${arrowPair(perWeekText(prior / 2), perWeekText(recent / 2))} a week, ${ENDURANCE_VOLUME_WINDOW_LABEL})`
-          : `Training ${noun} restarted: ${perWeekText(recent / 2)} a week over the last 2 weeks after none before`,
+          : `Building your base: ${perWeekText(recent / baseWeeks)} a week${baseWindowDays < 14 ? ' so far' : ' over the last 2 weeks'}`,
         tone: changePct == null || changePct >= ENDURANCE_BUILDING_PCT ? 'good' : changePct <= -15 ? 'watch' : 'neutral',
       }
     : null;
@@ -1169,7 +1451,7 @@ function enduranceOutcome(input: GoalProgressInput): Outcome {
   const building = (prior === 0 && recent > 0) || (changePct != null && changePct >= ENDURANCE_BUILDING_PCT);
   const buildingHeadline = changePct != null
     ? clip(`Building — ${useKm ? 'distance' : useMinutes ? 'time' : 'sessions'} up ${Math.round(changePct)}% (${ENDURANCE_VOLUME_WINDOW_LABEL})`)
-    : 'Building — you are back to regular training';
+    : 'Building your base';
 
   // Distance target: judge the 4-week average against it.
   if (dist != null && dist.avg4wKm != null) {
@@ -1211,16 +1493,21 @@ function generalOutcome(input: GoalProgressInput): Outcome {
     return { active, logging, sleepHit, sleepWithData: sleepNights.length, span, composite: mean(parts) as number };
   };
 
-  const recent = windowStats(0, 14);
-  const prior = windowStats(14, 28);
-  const all28 = windowStats(0, 28);
+  // A goal younger than 28 days is judged over the days it has existed:
+  // "Active on 2 of the last 5 days", not "of the last 28". With no more than 14
+  // days there is no earlier half to compare against.
+  const windowDays = statWindowDays(input);
+  const scaled = (at28: number): number => (at28 * windowDays) / STAT_WINDOW_DAYS;
+  const recent = windowStats(0, Math.min(14, windowDays));
+  const prior = windowDays > 14 ? windowStats(14, windowDays) : null;
+  const all28 = windowStats(0, windowDays);
 
   const dataPoints = all28.active + all28.logging + all28.sleepWithData;
   const reasons = capReasons([
     {
       kind: 'activity',
-      text: `Active on ${all28.active} of the last 28 days`,
-      tone: all28.active >= 12 ? 'good' : all28.active >= 6 ? 'neutral' : 'watch',
+      text: `Active on ${all28.active} of the last ${windowDays} days`,
+      tone: all28.active >= scaled(12) ? 'good' : all28.active >= scaled(6) ? 'neutral' : 'watch',
     },
     all28.sleepWithData >= 3
       ? {
@@ -1231,8 +1518,8 @@ function generalOutcome(input: GoalProgressInput): Outcome {
       : null,
     {
       kind: 'logging',
-      text: `Logged food on ${all28.logging} of the last 28 days`,
-      tone: all28.logging >= 20 ? 'good' : all28.logging >= 10 ? 'neutral' : 'watch',
+      text: `Logged food on ${all28.logging} of the last ${windowDays} days`,
+      tone: all28.logging >= scaled(20) ? 'good' : all28.logging >= scaled(10) ? 'neutral' : 'watch',
     },
   ]);
 
@@ -1245,6 +1532,9 @@ function generalOutcome(input: GoalProgressInput): Outcome {
   }
 
   const rPct = Math.round(recent.composite * 100);
+  if (prior == null) {
+    return { verdict: 'holding', headline: clip(`Early days — habit consistency ${rPct}% so far`), reasons };
+  }
   const pPct = Math.round(prior.composite * 100);
   if (recent.composite >= prior.composite + GENERAL_BUILDING_DELTA) {
     return { verdict: 'building', headline: clip(`Building — habit consistency ${rPct}% vs ${pPct}% before`), reasons };
@@ -1266,6 +1556,16 @@ export function deriveStartWeightKg(
   const startedDay = start.startedDay ?? (start.startedAt as string).slice(0, 10);
   const first = trendDays.find(d => d.day >= startedDay) ?? trendDays[0];
   return round1(first.trendKg);
+}
+
+/** Days since the newest session within the trailing 28 days; null when there was none. */
+function lastSessionDaysAgo(input: GoalProgressInput): number | null {
+  let newest: string | null = null;
+  for (const d of sessionDays(input)) {
+    if (!inLastDays(d, input.todayKey, STAT_WINDOW_DAYS)) continue;
+    if (newest == null || d > newest) newest = d;
+  }
+  return newest == null ? null : dayNumber(input.todayKey) - dayNumber(newest);
 }
 
 // ── Public entry point ──────────────────────────────────────────────────────
@@ -1299,6 +1599,10 @@ export function computeGoalProgress(input: GoalProgressInput): GoalProgress {
     const raw = ((startKg - w.currentKg) / (startKg - targetKg)) * 100;
     progressPct = Math.round(Math.min(100, Math.max(0, raw)));
   }
+  // A reached weight target is 100% done — never 99% off a 0.1 kg tolerance, and
+  // not 0% when the goal began already past it. (A stale weigh-in proves nothing.)
+  const weightGoal = input.goal === 'weight_loss' || input.goal === 'muscle';
+  if (weightGoal && w.reached === true && !w.stale && w.currentKg != null && targetKg != null) progressPct = 100;
 
   // The ETA / pace fields are only meaningful when the goal's verdict logic
   // actually engaged the weight trend; endurance/general never project one.
@@ -1325,12 +1629,16 @@ export function computeGoalProgress(input: GoalProgressInput): GoalProgress {
       pctBodyweight: w.pctBw != null ? round2(w.pctBw) : null,
     },
     safeBand,
-    eta: usesWeight && !insufficient ? w.eta : null,
-    onPaceForTargetDate: usesWeight && !insufficient ? w.onPace : null,
+    // An aging weigh-in (7-14 days) keeps the verdict but quotes no projected
+    // date and no pace call off it; a reached target stays reached.
+    eta: usesWeight && !insufficient && !w.aging ? w.eta : null,
+    onPaceForTargetDate: usesWeight && !insufficient && !(w.aging && w.reached !== true) ? w.onPace : null,
     verdict: outcome.verdict,
     headline: outcome.headline,
     reasons: outcome.reasons,
-    lastWeighInDaysAgo: w.lastWeighInDay != null ? Math.max(0, dayNumber(input.todayKey) - dayNumber(w.lastWeighInDay)) : null,
+    lastWeighInDaysAgo: w.ageDays,
+    lastSessionDaysAgo: lastSessionDaysAgo(input),
+    reachedAt: usesWeight ? w.reachedAt : null,
     adherence: input.goal === 'muscle' ? sessionAdherence(input) : null,
     dataSufficiency: { weighIns: w.weighIns, needed: WEIGH_INS_NEEDED, sessionsLast28d },
   };

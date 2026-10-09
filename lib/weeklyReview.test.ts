@@ -554,7 +554,7 @@ test('weekRating muscle: ignores the goal verdict in both directions', () => {
   const progressingButToughWeek = computeWeeklyReview(muscleWeek({ verdict: 'progressing', trainingDays: [WEEK[3]] }));
   assert.equal(progressingButToughWeek.weekRating, 'tough');
   // And the verdict never changes the rating for identical week stats.
-  for (const verdict of ['on_track', 'ahead', 'too_fast', 'behind', 'stalled', 'progressing', 'building', 'holding', 'insufficient_data'] as const) {
+  for (const verdict of ['reached', 'on_track', 'ahead', 'too_fast', 'behind', 'stalled', 'progressing', 'building', 'holding', 'insufficient_data'] as const) {
     assert.equal(computeWeeklyReview(muscleWeek({ verdict })).weekRating, 'good', verdict);
   }
 });

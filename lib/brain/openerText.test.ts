@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { goalFallbackOpener, goalOpenerLine, newUserGoalOpener, requiredOpenerLine } from './openerText';
+import { goalFallbackOpener, goalOpenerLine, newUserGoalOpener, requiredOpenerLine, returningUserOpener } from './openerText';
 import type { GoalProgress } from '../goalProgress';
 
 function gp(over: Partial<GoalProgress> = {}): GoalProgress {
@@ -96,4 +96,77 @@ test('new-user opener states an existing target weight instead of asking for one
   assert.match(newUserGoalOpener('weight_loss', withTarget, 'metric') ?? '', /^Your goal: 71\.7 kg\./);
   const noTarget = gp({ target: { weightKg: null, date: null, weeklySessions: null, weeklyDistanceKm: null } });
   assert.match(newUserGoalOpener('weight_loss', noTarget, 'imperial') ?? '', /want to set a target weight\?$/);
+});
+
+// ── honest openers: every existing target, returning users, reached goals ────
+
+const NO_TARGETS = { weightKg: null, date: null, weeklySessions: null, weeklyDistanceKm: null };
+
+test('new-user opener states a weekly distance, sessions a week and the race instead of asking for them', () => {
+  const endurance = gp({
+    goal: 'endurance',
+    target: { ...NO_TARGETS, weeklyDistanceKm: 30, weeklySessions: 4 },
+    race: { date: '2027-03-15', distanceKm: 21.1, label: 'Half marathon', weeksToGo: 24, daysToGo: 160 },
+    verdict: 'insufficient_data',
+  });
+  const metric = newUserGoalOpener('endurance', endurance, 'metric') ?? '';
+  assert.equal(metric, "Your goal: 30 km a week, 4 sessions a week and the half marathon on Mar 15. Once you've logged a few days I'll tell you how it's going.");
+  assert.doesNotMatch(metric, /want to set/);
+  const imperial = newUserGoalOpener('endurance', endurance, 'imperial') ?? '';
+  assert.match(imperial, /^Your goal: 18\.6 mi a week, 4 sessions a week and the half marathon on Mar 15\./);
+
+  // One target alone is enough to stop the ask.
+  const distanceOnly = gp({ goal: 'endurance', target: { ...NO_TARGETS, weeklyDistanceKm: 30 }, verdict: 'insufficient_data' });
+  assert.equal(newUserGoalOpener('endurance', distanceOnly, 'metric'), "Your goal: 30 km a week. Once you've logged a few days I'll tell you how it's going.");
+  const sessionsOnly = gp({ goal: 'muscle', target: { ...NO_TARGETS, weeklySessions: 1 }, verdict: 'insufficient_data' });
+  assert.equal(newUserGoalOpener('muscle', sessionsOnly, 'metric'), "Your goal: 1 session a week. Once you've logged a few days I'll tell you how it's going.");
+  const raceOnly = gp({
+    goal: 'endurance', target: NO_TARGETS, verdict: 'insufficient_data',
+    race: { date: '2027-03-15', distanceKm: null, label: 'Race', weeksToGo: 24, daysToGo: 160 },
+  });
+  assert.match(newUserGoalOpener('endurance', raceOnly, 'metric') ?? '', /^Your goal: the race on Mar 15\. Once/);
+  // A target weight still carries its date.
+  const dated = gp({ target: { ...NO_TARGETS, weightKg: 71.67, date: '2026-12-30' } });
+  assert.match(newUserGoalOpener('weight_loss', dated, 'metric') ?? '', /^Your goal: 71\.7 kg by Dec 30\. Once/);
+  // No target at all still asks; a weight-loss goal with only sessions set still asks for the weight.
+  assert.match(newUserGoalOpener('endurance', gp({ goal: 'endurance', target: NO_TARGETS }), 'metric') ?? '', /want to set a weekly distance goal\?$/);
+  assert.match(
+    newUserGoalOpener('weight_loss', gp({ target: { ...NO_TARGETS, weeklySessions: 3 } }), 'metric') ?? '',
+    /^Your goal: 3 sessions a week\. Once you've logged a few days I'll tell you how it's going — want to set a target weight\?$/,
+  );
+});
+
+test('returning user: a weigh-in or session more than 14 days ago gets a welcome-back reset offer', () => {
+  const lapsed = gp({ verdict: 'insufficient_data', lastWeighInDaysAgo: 23 });
+  assert.equal(
+    requiredOpenerLine(lapsed, 'weight_loss', 'metric'),
+    'Welcome back — your last weigh-in was 23 days ago. Want a quick reset plan?',
+  );
+  assert.equal(goalFallbackOpener(lapsed, 'weight_loss', 'metric'), 'Welcome back — your last weigh-in was 23 days ago. Want a quick reset plan?');
+  // 14 days is not yet "returning".
+  assert.doesNotMatch(requiredOpenerLine(gp({ lastWeighInDaysAgo: 14 }), 'weight_loss', 'metric') ?? '', /Welcome back/);
+  assert.doesNotMatch(requiredOpenerLine(gp({ lastWeighInDaysAgo: 3 }), 'weight_loss', 'metric') ?? '', /Welcome back/);
+  // Non-weight goals key off the last session; a stale weigh-in alone does not matter for them.
+  const runner = gp({ goal: 'endurance', target: { ...NO_TARGETS, weeklyDistanceKm: 30 }, verdict: 'insufficient_data', lastSessionDaysAgo: 19, lastWeighInDaysAgo: 40 });
+  assert.equal(requiredOpenerLine(runner, 'endurance', 'metric'), 'Welcome back — your last session was 19 days ago. Want a quick reset plan?');
+  assert.doesNotMatch(
+    requiredOpenerLine(gp({ goal: 'endurance', target: { ...NO_TARGETS, weeklyDistanceKm: 30 }, verdict: 'building', headline: 'Building', lastSessionDaysAgo: 2, lastWeighInDaysAgo: 40 }), 'endurance', 'metric') ?? '',
+    /Welcome back/,
+  );
+  assert.equal(returningUserOpener(undefined), null);
+  assert.equal(returningUserOpener(gp({ lastWeighInDaysAgo: null })), null);
+});
+
+test('reached goal: the opener congratulates and asks for a new target or maintenance, with no second invitation', () => {
+  const reached = gp({
+    verdict: 'reached', headline: 'Goal reached — 76 kg (Sep 20)', eta: null,
+    current: { weightKg: 75.8, startWeightKg: 83.7, changeKg: -7.9, progressPct: 100 },
+  });
+  const line = "You've reached 76 kg — want to set a new target or switch to maintenance?";
+  assert.equal(goalOpenerLine(reached, 'metric'), line);
+  assert.equal(requiredOpenerLine(reached, 'weight_loss', 'metric'), line);
+  assert.equal(goalFallbackOpener(reached, 'weight_loss', 'metric'), line);
+  assert.equal(goalOpenerLine(reached, 'imperial'), "You've reached 167.6 lb — want to set a new target or switch to maintenance?");
+  // Muscle goals reach a weight target the same way.
+  assert.match(goalOpenerLine({ ...reached, goal: 'muscle' }, 'metric') ?? '', /^You've reached 76 kg/);
 });

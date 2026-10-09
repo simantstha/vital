@@ -49,7 +49,9 @@ export async function loadGoalInsightInput(userId: string, localDay: string): Pr
     const readings = await getWeightReadings(userId, WEIGHT_LOOKBACK_DAYS, tz);
     // Intake-based signals (under_eating, weekend_overeating) are not used here,
     // so no intake is passed and they cannot fire.
-    weightSignals = assessWeightSignals({ trend: computeWeightTrend(readings), dailyIntakeKcal: [], floorKcal: 0, goal });
+    // todayKey: plateau / too_fast_loss need a weigh-in within the last few
+    // days, so users who stopped weighing in get no "trend has flattened" push.
+    weightSignals = assessWeightSignals({ trend: computeWeightTrend(readings), dailyIntakeKcal: [], floorKcal: 0, goal, todayKey: localDay });
   }
 
   // Protein adherence inputs (muscle + fat loss).

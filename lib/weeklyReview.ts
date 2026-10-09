@@ -1202,7 +1202,7 @@ function buildNextWeekRaw(input: WeeklyReviewInput, cands: Candidate[], week: We
   const fix = cands.find(x => x.stat.tone === 'watch' && x.fix)?.fix;
   if (fix) return fix;
   // "Repeat" is only for a week that was itself good (and a goal verdict that isn't saying otherwise).
-  const goodVerdict = ['on_track', 'ahead', 'progressing', 'building'].includes(input.verdict);
+  const goodVerdict = ['on_track', 'ahead', 'progressing', 'building', 'reached'].includes(input.verdict);
   if (rating === 'good' && goodVerdict) return 'Repeat this week: same routine, same training days.';
   return fallbackNextWeek(input, week);
 }

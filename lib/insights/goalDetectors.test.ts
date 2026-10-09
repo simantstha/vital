@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { assessWeightSignals } from '../brain/weightSignals';
 import { COOLDOWN_DAYS, shortlist } from './arbiter';
 import { applyEvidenceGate } from './evidence';
 import {
@@ -356,4 +357,24 @@ test('off_pace ignores reviews of weeks that ended before the goal was re-anchor
   // Goal began 2026-09-24: the 09-21 week (ended 09-27) is fine, but a start of 09-28 voids it.
   assert.ok(detectOffPace(offPaceInput({ goalStartedDay: '2026-09-27' })));
   assert.equal(detectOffPace(offPaceInput({ goalStartedDay: '2026-09-28' })), null);
+});
+
+// ── weight_plateau needs a current weigh-in ─────────────────────────────────
+
+test('weight_plateau stays quiet for a user who stopped weighing in (signal comes from todayKey-aware assessWeightSignals)', () => {
+  // A flat, established 20-day trend whose newest weigh-in is `age` days before TODAY.
+  const flatTrend = (age: number) => {
+    const days = Array.from({ length: 21 }, (_, i) => ({ day: day(-(age + 20 - i)), rawKg: 82, trendKg: 82 }));
+    return { days, delta7dKgPerWeek: 0, delta30dKgPerWeek: 0, established: true };
+  };
+  const nudgeFor = (age: number) => detectWeightPlateau(input({
+    goal: 'weight_loss',
+    weightSignals: assessWeightSignals({
+      trend: flatTrend(age), dailyIntakeKcal: [], floorKcal: 0, goal: 'weight_loss', todayKey: TODAY,
+    }),
+  }));
+  assert.ok(nudgeFor(1), 'a current flat trend still nudges');
+  assert.ok(nudgeFor(4), 'weighed in 4 days ago still counts as current');
+  assert.equal(nudgeFor(5), null);
+  assert.equal(nudgeFor(30), null);
 });
