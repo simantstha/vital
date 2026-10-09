@@ -1,0 +1,130 @@
+/*
+ * The app-wide stylesheet locks the body to the viewport (overflow: hidden) and
+ * zeroes all margins, so this page owns its own scroll container and spacing.
+ */
+.page {
+  --bg: #ffffff;
+  --fg: #1a1d23;
+  --muted: #5b6270;
+  --rule: #e2e5ea;
+  --soft: #f4f6f8;
+  --link: #047857;
+
+  position: fixed;
+  inset: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+@media (prefers-color-scheme: dark) {
+  .page {
+    --bg: #0b0d12;
+    --fg: #e8ebf0;
+    --muted: #9aa3b2;
+    --rule: #262b35;
+    --soft: #141821;
+    --link: #6ee7b7;
+  }
+}
+
+.doc {
+  max-width: 44rem;
+  margin: 0 auto;
+  padding: 2rem 1.25rem 4rem;
+  font-size: 1rem;
+  line-height: 1.65;
+  letter-spacing: 0;
+  overflow-wrap: anywhere;
+}
+
+.doc h1 {
+  font-size: 1.9rem;
+  line-height: 1.2;
+  margin: 0 0 1rem;
+}
+
+.doc h2 {
+  font-size: 1.3rem;
+  line-height: 1.3;
+  margin: 2.25rem 0 0.75rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--rule);
+}
+
+.doc h3,
+.doc h4 {
+  font-size: 1.05rem;
+  margin: 1.5rem 0 0.5rem;
+}
+
+.doc p,
+.doc ul,
+.doc ol,
+.doc table,
+.doc blockquote {
+  margin: 0 0 1rem;
+}
+
+.doc ul,
+.doc ol {
+  padding-left: 1.4rem;
+}
+
+.doc li {
+  margin-bottom: 0.35rem;
+}
+
+.doc a {
+  color: var(--link);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.doc code {
+  font-family: var(--font-jetbrains), ui-monospace, monospace;
+  font-size: 0.9em;
+  background: var(--soft);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+}
+
+.doc blockquote {
+  background: var(--soft);
+  border-left: 3px solid var(--link);
+  border-radius: 4px;
+  padding: 0.75rem 1rem;
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+.doc blockquote p:last-child {
+  margin-bottom: 0;
+}
+
+.doc hr {
+  border: 0;
+  border-top: 1px solid var(--rule);
+  margin: 1.5rem 0;
+}
+
+.doc table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.doc th,
+.doc td {
+  text-align: left;
+  vertical-align: top;
+  padding: 0.6rem 0.5rem;
+  border-bottom: 1px solid var(--rule);
+}
+
+.doc th {
+  color: var(--muted);
+  font-weight: 600;
+}
