@@ -119,7 +119,26 @@ Owner follow-ups added by wave 9:
 - [x] Endurance hero in absolute units ("HRV −6 ms · RHR +5 bpm · Sleep 5h 48m"); sleep in h/m on Trends; race in the Profile goal row; analysis copy says walk/ride/run.
 - [x] Lift logger gym mode: progression hint ("Last 3×5 @ 140 kg · try 142.5 kg"), per-set ✓, rest timer (2:30 lower-body compounds / 2:00 other), "Save 7 done sets".
 
+### Wave 12 (persona review pass 8: Sam 5, Priya 4, Marcus 4) — shipped
+- [x] Weekly review tells one story: one week gap drives the pill, the Slip ("3 of 4 sessions — one short") and Next week ("Book 4 sessions — put the missed one on Saturday"); "Repeat this week" only after a good week; target in the endurance headline.
+- [x] Numbers never wrap away from their units (NBSP in server and iOS copy); fixture weekdays derived from relative dates (with a test); squat progression realistic (+10 kg / 4 wk).
+- [x] "Since your last hard session" counts hard workouts of any type (additive `daysSinceLastHard`); Profile row leads with the race; Marcus's Today shows long-run progress; Priya's line ends "2 more by Sun".
+
+### Wave 13 (persona review pass 9: Sam 5, Priya 5, Marcus 4) — shipped
+- [x] Safe endurance progression: ~10% weekly growth, long run +≤2 km and never past the peak target ("Build to ~27 km: long run 16 km, the rest mostly easy runs; 30 km the week after").
+- [x] Endurance "Why" keeps the reason behind the verdict; endurance goal sheet hides weight rows without a weight target; grouped kcal ("1,850 kcal"); UnitFormat joins with NBSP.
+
+### Wave 14 (persona review pass 10: Sam 5, Priya 5, Marcus 4) — shipped
+- [x] One target for the current week: a shared progression step (`lib/enduranceProgression.ts`) on server and every screen ("10.2 of ~27 km this week · goal 30 km"); realistic demo week; "Weekly avg weight" label; status-bar backdrop on Today.
+
+### Wave 15 (persona review pass 11: Sam 5, Priya 5, Marcus 5) — shipped
+- [x] The weekly review grades a runner's finished week against that week's step ("24.5 of ~24 km — on plan · goal 30 km"), with a spike guard (> step × 1.3 and ≥ 3 km over → "well above the safe step", hold next week).
+- [x] Demo data coherent: "last week" coach notes, memory facts agree with meals (allergen test), facts dated after member-since, fresh device sync.
+
+Final persona scores (pass 11): Sam (weight loss) 5/5, Priya (lifter) 5/5, Marcus (half marathon) 5/5 — "I understand where I stand on my goal, why, and what to do next, without confusion."
+
 ### Remaining backlog (non-blocking)
 - [x] HRV hero pill "above your normal" is measured vs the 30-day mean while the chart's normal is a band — align wording.
 - [ ] Sign in with Apple token revocation on account deletion (needs auth-code exchange + client secret).
 - [ ] Run prompt evals 10–13 against the real model (needs API key).
+- [ ] Run `npx tsx scripts/backfill-exercise-canonical.ts` (dry run, then `--apply`) on production data.
