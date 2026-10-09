@@ -202,8 +202,8 @@ enum GoalTargetLogic {
     }
 
     /// Shown instead of a "target should be below/above your weight" warning when
-    /// the current weight already meets the target: not a mistake to fix but a
-    /// goal that's done. Neutral, never alarming.
+    /// the current weight already meets the SAVED target: not a mistake to fix but
+    /// a goal that's done. Neutral, never alarming.
     static let reachedTargetMessage = "You've reached this target — set a new one or switch to maintenance."
 
     /// True when `currentKg` already meets `targetKg` for the goal's direction:
@@ -212,18 +212,37 @@ enum GoalTargetLogic {
         isLossGoal(goal) ? currentKg <= targetKg : currentKg >= targetKg
     }
 
+    /// True when `targetKg` is the target already saved on the server
+    /// (`storedTargetKg`), i.e. the user hasn't typed a new one.
+    static func isStoredTarget(_ targetKg: Double, stored storedTargetKg: Double?) -> Bool {
+        guard let storedTargetKg else { return false }
+        return abs(targetKg - storedTargetKg) < 0.05
+    }
+
     /// Gentle sanity warnings; nil when the target looks reasonable.
+    ///
+    /// When the current weight is already on or past the target, the answer
+    /// depends on whose target it is. The SAVED target (`storedTargetKg`,
+    /// unchanged) is a goal that's done: the neutral `reachedTargetMessage`. A
+    /// target the user is typing now (or any target when no saved one is given,
+    /// as in onboarding) on the wrong side of their weight is still a mistake:
+    /// "Your target should be below/above your current weight."
     static func sanityWarning(
         goal: String,
         currentKg: Double?,
         targetKg: Double?,
         targetDate: Date?,
         units: UnitSystem,
+        storedTargetKg: Double? = nil,
         from now: Date = Date()
     ) -> String? {
         guard let currentKg, let target = validTargetKg(targetKg) else { return nil }
         if isLossGoal(goal) {
-            if currentMeetsTarget(goal: goal, currentKg: currentKg, targetKg: target) { return reachedTargetMessage }
+            if currentMeetsTarget(goal: goal, currentKg: currentKg, targetKg: target) {
+                return isStoredTarget(target, stored: storedTargetKg)
+                    ? reachedTargetMessage
+                    : "Your target should be below your current weight."
+            }
             if (currentKg - target) / currentKg > largeLossFraction {
                 return "That's a big change. Consider a closer first target."
             }
@@ -236,7 +255,9 @@ enum GoalTargetLogic {
                 return "That date needs about \(shown)/week, faster than a healthy pace."
             }
         } else if currentMeetsTarget(goal: goal, currentKg: currentKg, targetKg: target) {
-            return reachedTargetMessage
+            return isStoredTarget(target, stored: storedTargetKg)
+                ? reachedTargetMessage
+                : "Your target should be above your current weight."
         }
         return nil
     }

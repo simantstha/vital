@@ -102,6 +102,12 @@ final class GoalTargetsViewModel: ObservableObject {
         return GoalTargetLogic.validTargetKg(parsedTargetKg)
     }
 
+    /// The target weight saved on the server (last loaded / saved), in kg. The
+    /// sanity warning compares the field against it: an unchanged saved target
+    /// that the current weight already meets reads as "reached", a newly typed
+    /// target on the wrong side of the current weight stays a validation warning.
+    var storedTargetKg: Double? { loadedTargetKg }
+
     /// Non-nil when the text is non-empty but not a usable weight.
     var weightError: String? {
         let trimmed = targetWeightText.trimmingCharacters(in: .whitespaces)

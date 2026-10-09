@@ -484,10 +484,10 @@ struct GoalProgressDetailView: View {
 
                 statsCard
 
-                if !progress.reasons.isEmpty {
+                if !GoalProgressLogic.displayReasons(progress).isEmpty {
                     section(title: "Why") {
                         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-                            ForEach(Array(progress.reasons.enumerated()), id: \.offset) { _, reason in
+                            ForEach(Array(GoalProgressLogic.displayReasons(progress).enumerated()), id: \.offset) { _, reason in
                                 GoalReasonRow(reason: reason)
                             }
                         }

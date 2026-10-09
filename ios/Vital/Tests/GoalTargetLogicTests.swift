@@ -128,7 +128,7 @@ final class GoalTargetLogicTests: XCTestCase {
     func testSanityWarningLoss() {
         XCTAssertEqual(
             GoalTargetLogic.sanityWarning(goal: "lose_fat", currentKg: 82, targetKg: 85, targetDate: nil, units: .metric, from: now),
-            GoalTargetLogic.reachedTargetMessage
+            "Your target should be below your current weight."
         )
         XCTAssertEqual(
             GoalTargetLogic.sanityWarning(goal: "lose_fat", currentKg: 82, targetKg: 55, targetDate: nil, units: .metric, from: now),
@@ -154,7 +154,7 @@ final class GoalTargetLogicTests: XCTestCase {
     func testSanityWarningMuscleTargetMustBeAbove() {
         XCTAssertEqual(
             GoalTargetLogic.sanityWarning(goal: "build_muscle", currentKg: 80, targetKg: 78, targetDate: nil, units: .metric, from: now),
-            GoalTargetLogic.reachedTargetMessage
+            "Your target should be above your current weight."
         )
         XCTAssertNil(
             GoalTargetLogic.sanityWarning(goal: "build_muscle", currentKg: 80, targetKg: 85, targetDate: nil, units: .metric, from: now)
@@ -269,33 +269,84 @@ final class GoalTargetLogicTests: XCTestCase {
         XCTAssertTrue(TodayViewModel.profileHasGoalTarget(r))
     }
 
-    // MARK: - Reached target (no "should be below" scolding)
+    // MARK: - Reached target vs a mistyped one
 
-    func testReachedTargetReplacesTheShouldBeBelowWarning() {
-        let expected = "You've reached this target — set a new one or switch to maintenance."
-        XCTAssertEqual(GoalTargetLogic.reachedTargetMessage, expected)
-        // Current weight at or below a loss target: the goal is met.
-        for target in [82.0, 85.0] {
+    private let reachedMessage = "You've reached this target — set a new one or switch to maintenance."
+
+    /// The SAVED target, unchanged, that the current weight already meets: a goal that's done.
+    func testUnchangedStoredTargetAlreadyMetReadsAsReached() {
+        XCTAssertEqual(GoalTargetLogic.reachedTargetMessage, reachedMessage)
+        // Loss: current 82 is at or below the saved 82 / 85 target.
+        for stored in [82.0, 85.0] {
             XCTAssertEqual(
-                GoalTargetLogic.sanityWarning(goal: "weight_loss", currentKg: 82, targetKg: target, targetDate: nil, units: .metric, from: now),
-                expected
+                GoalTargetLogic.sanityWarning(goal: "weight_loss", currentKg: 82, targetKg: stored, targetDate: nil, units: .metric, storedTargetKg: stored, from: now),
+                reachedMessage
             )
         }
-        // A still-open loss target never gets it.
-        XCTAssertNotEqual(
-            GoalTargetLogic.sanityWarning(goal: "weight_loss", currentKg: 82, targetKg: 55, targetDate: nil, units: .metric, from: now),
-            expected
-        )
-        // Same idea for a muscle (gain) target already met.
+        // Gain (muscle): current 84 is at or above the saved 82 target.
         XCTAssertEqual(
-            GoalTargetLogic.sanityWarning(goal: "muscle", currentKg: 84, targetKg: 82, targetDate: nil, units: .metric, from: now),
-            expected
+            GoalTargetLogic.sanityWarning(goal: "muscle", currentKg: 84, targetKg: 82, targetDate: nil, units: .metric, storedTargetKg: 82, from: now),
+            reachedMessage
+        )
+        // The comparison is to the 0.1 kg the app stores, not exact floating point.
+        XCTAssertEqual(
+            GoalTargetLogic.sanityWarning(goal: "weight_loss", currentKg: 75.9, targetKg: 76.0, targetDate: nil, units: .metric, storedTargetKg: 76.0000001, from: now),
+            reachedMessage
+        )
+    }
+
+    /// A NEW target typed on the wrong side of the current weight is still a validation error.
+    func testNewlyTypedTargetOnTheWrongSideKeepsTheOriginalWarnings() {
+        // Loss: saved target 76 (reached at 75), user types 80 (>= current 75).
+        XCTAssertEqual(
+            GoalTargetLogic.sanityWarning(goal: "weight_loss", currentKg: 75, targetKg: 80, targetDate: nil, units: .metric, storedTargetKg: 76, from: now),
+            "Your target should be below your current weight."
+        )
+        // Typing exactly the current weight is also "not below".
+        XCTAssertEqual(
+            GoalTargetLogic.sanityWarning(goal: "lose_fat", currentKg: 75, targetKg: 75, targetDate: nil, units: .metric, storedTargetKg: 70, from: now),
+            "Your target should be below your current weight."
+        )
+        // Gain: saved target 82 (reached at 84), user types 80 (<= current 84).
+        XCTAssertEqual(
+            GoalTargetLogic.sanityWarning(goal: "muscle", currentKg: 84, targetKg: 80, targetDate: nil, units: .metric, storedTargetKg: 82, from: now),
+            "Your target should be above your current weight."
+        )
+        // No saved target at all (onboarding): the original warnings, never "reached".
+        XCTAssertEqual(
+            GoalTargetLogic.sanityWarning(goal: "lose_fat", currentKg: 82, targetKg: 85, targetDate: nil, units: .metric, from: now),
+            "Your target should be below your current weight."
+        )
+        XCTAssertEqual(
+            GoalTargetLogic.sanityWarning(goal: "build_muscle", currentKg: 80, targetKg: 78, targetDate: nil, units: .metric, from: now),
+            "Your target should be above your current weight."
+        )
+    }
+
+    func testAnOpenStoredTargetOrAValidNewOneIsNotReached() {
+        // Saved target still ahead of the user: no reached message, no warning.
+        XCTAssertNil(
+            GoalTargetLogic.sanityWarning(goal: "weight_loss", currentKg: 82, targetKg: 76, targetDate: nil, units: .metric, storedTargetKg: 76, from: now)
+        )
+        // New valid target below current weight after a reached one.
+        XCTAssertNil(
+            GoalTargetLogic.sanityWarning(goal: "weight_loss", currentKg: 75, targetKg: 72, targetDate: nil, units: .metric, storedTargetKg: 76, from: now)
         )
         XCTAssertNil(
-            GoalTargetLogic.sanityWarning(goal: "muscle", currentKg: 80, targetKg: 82, targetDate: nil, units: .metric, from: now)
+            GoalTargetLogic.sanityWarning(goal: "muscle", currentKg: 80, targetKg: 82, targetDate: nil, units: .metric, storedTargetKg: 82, from: now)
         )
-        // The old scolding copy is gone for good.
-        XCTAssertFalse(expected.contains("should be"))
+        // The other sanity checks are untouched by the stored target.
+        XCTAssertEqual(
+            GoalTargetLogic.sanityWarning(goal: "weight_loss", currentKg: 82, targetKg: 55, targetDate: nil, units: .metric, storedTargetKg: 76, from: now),
+            "That's a big change. Consider a closer first target."
+        )
+    }
+
+    func testIsStoredTargetComparesAtTenthsOfAKilo() {
+        XCTAssertTrue(GoalTargetLogic.isStoredTarget(76, stored: 76))
+        XCTAssertTrue(GoalTargetLogic.isStoredTarget(76.04, stored: 76))
+        XCTAssertFalse(GoalTargetLogic.isStoredTarget(76.1, stored: 76))
+        XCTAssertFalse(GoalTargetLogic.isStoredTarget(76, stored: nil))
     }
 
     func testCurrentMeetsTargetByDirection() {

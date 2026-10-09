@@ -233,7 +233,8 @@ struct GoalDetailView: View {
                 currentKg: targets.currentWeightKg,
                 targetKg: targets.targetKg,
                 targetDate: targets.activeTargetDate,
-                units: units
+                units: units,
+                storedTargetKg: targets.storedTargetKg
             ) {
                 Text(warning)
                     .font(Theme.Typography.bodySmall)

@@ -360,10 +360,11 @@ final class GoalReachedTests: XCTestCase {
             progress.reasons.map { GoalProgressLogic.tone(for: $0.tone) },
             [.good, .neutral, .watch, .neutral, .neutral, .neutral]
         )
-        // 'reached' (good) leads and is what the compact card shows first.
+        // The reached card restates "Goal reached" in its chip and "Reached Sep 20" line,
+        // so the server's 'reached' reason is skipped; the rest keep the server's order.
         let visible = GoalProgressLogic.visibleReasons(progress)
-        XCTAssertEqual(visible.map(\.kind), ["reached", "position", "weigh_in_age"])
-        XCTAssertEqual(visible.first?.tone, .good)
+        XCTAssertEqual(visible.map(\.kind), ["position", "weigh_in_age", "next_step"])
+        XCTAssertEqual(visible.map(\.tone), [.neutral, .watch, .neutral])
         // VoiceOver hears the colour: good / watch, nothing for neutral.
         XCTAssertEqual(progress.reasons.map { GoalProgressLogic.accessibilityToneWord(for: $0.tone) },
                        ["good", nil, "watch", nil, nil, nil])
@@ -372,6 +373,47 @@ final class GoalReachedTests: XCTestCase {
         XCTAssertNil(GoalProgressLogic.liftShortText(progress))
         // And they never change the verdict line.
         XCTAssertEqual(plain(GoalProgressLogic.primaryLine(progress, system: .metric)), "8 of 8 kg lost")
+    }
+
+    // MARK: - The server's 'reached' reason is not rendered twice
+
+    func testReachedPayloadRendersNoReachedRowButEveryOtherKind() throws {
+        let progress = try decode(serverReachedJSON)
+        XCTAssertEqual(progress.reasons.first?.kind, "reached", "the server still sends it")
+
+        let shown = GoalProgressLogic.displayReasons(progress)
+        XCTAssertFalse(shown.contains { $0.kind == "reached" })
+        // Everything else, including a kind this build has never seen, still renders.
+        XCTAssertEqual(shown.map(\.kind), ["position", "weigh_in_age", "next_step", "some_future_kind", ""])
+        XCTAssertEqual(shown.count, progress.reasons.count - 1)
+        // The compact card shows the first three of those; the detail sheet shows all.
+        XCTAssertEqual(GoalProgressLogic.visibleReasons(progress).map(\.kind), ["position", "weigh_in_age", "next_step"])
+        XCTAssertEqual(GoalProgressLogic.visibleReasons(progress, limit: 10).count, 5)
+        XCTAssertFalse(GoalProgressLogic.visibleReasons(progress, limit: 10).contains { $0.kind == "reached" })
+    }
+
+    func testLiftAndAdherenceReasonsStillRenderOnAReachedMuscleGoal() {
+        let reasons = [
+            GoalReasonDTO(kind: "reached", text: "Goal reached — 82 kg (Sep 20)", tone: .good),
+            GoalReasonDTO(kind: "lift", text: "Squat est. 1RM +10 kg vs 4 weeks ago (153 → 163 kg)", tone: .good),
+            GoalReasonDTO(kind: "adherence", text: "9 of 16 planned sessions in 4 weeks (56%)", tone: .watch),
+            GoalReasonDTO(kind: "next_step", text: "Set a new target or switch to maintenance", tone: .neutral),
+        ]
+        let reached = GoalProgressDTO(goal: "muscle", verdict: .reached, reasons: reasons)
+        XCTAssertEqual(GoalProgressLogic.displayReasons(reached).map(\.kind), ["lift", "adherence", "next_step"])
+        XCTAssertEqual(GoalProgressLogic.visibleReasons(reached).map(\.kind), ["lift", "adherence", "next_step"])
+    }
+
+    func testAReachedKindOutsideAReachedVerdictIsLeftAlone() {
+        // Only a reached goal drops it: it is not a chip duplicate anywhere else.
+        let reasons = [GoalReasonDTO(kind: "reached", text: "Reached 82 kg earlier", tone: .good)]
+        let progress = GoalProgressDTO(goal: "weight_loss", verdict: .onTrack, reasons: reasons)
+        XCTAssertEqual(GoalProgressLogic.displayReasons(progress), reasons)
+        XCTAssertEqual(GoalProgressLogic.visibleReasons(progress), reasons)
+        // Case-insensitive on a reached goal, and an empty list is fine.
+        let loud = GoalProgressDTO(goal: "weight_loss", verdict: .reached, reasons: [GoalReasonDTO(kind: "REACHED", text: "x")])
+        XCTAssertTrue(GoalProgressLogic.displayReasons(loud).isEmpty)
+        XCTAssertTrue(GoalProgressLogic.displayReasons(GoalProgressDTO(goal: "weight_loss", verdict: .reached)).isEmpty)
     }
 
     // MARK: - adherence.windowDays

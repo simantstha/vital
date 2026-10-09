@@ -44,13 +44,13 @@ final class GoalTargetsViewModelTests: XCTestCase {
     /// 2026-10-09 12:00 UTC — "2026-09-30" is past and "2026-12-01" future in every time zone.
     private var now: Date { ISO8601DateFormatter().date(from: "2026-10-09T12:00:00Z")! }
 
-    private func profile(targetDate: String?) throws -> ProfileResponse {
+    private func profile(targetDate: String?, weightKg: Double = 81.6) throws -> ProfileResponse {
         let date = targetDate.map { "\"\($0)\"" } ?? "null"
         let json = """
         {
           "name": "Alex", "integrations": [],
           "stats": {"loggedDays": 40, "mealsLogged": 80, "avgHrv": 55, "workouts": 12},
-          "profile": {"age": 30, "biologicalSex": "male", "heightCm": 180, "weightKg": 81.6},
+          "profile": {"age": 30, "biologicalSex": "male", "heightCm": 180, "weightKg": \(weightKg)},
           "createdAt": "2026-04-01T09:00:00.000Z",
           "targetWeightKg": 76,
           "targetDate": \(date),
@@ -61,8 +61,8 @@ final class GoalTargetsViewModelTests: XCTestCase {
         return try JSONDecoder().decode(ProfileResponse.self, from: Data(json.utf8))
     }
 
-    private func loaded(targetDate: String?) async throws -> (GoalTargetsViewModel, FakeAPI) {
-        let api = FakeAPI(profile: try profile(targetDate: targetDate))
+    private func loaded(targetDate: String?, weightKg: Double = 81.6) async throws -> (GoalTargetsViewModel, FakeAPI) {
+        let api = FakeAPI(profile: try profile(targetDate: targetDate, weightKg: weightKg))
         let vm = GoalTargetsViewModel(api: api, now: { self.now })
         await vm.load()
         return (vm, api)
@@ -208,5 +208,31 @@ final class GoalTargetsViewModelTests: XCTestCase {
 
         XCTAssertEqual(api.calls[0].includeTargetDate, true)
         XCTAssertNotNil(api.calls[0].targetDate)
+    }
+
+    // MARK: - Reached target vs a newly typed one
+
+    func testSavedTargetTheWeightAlreadyMeetsReadsAsReachedUntilANewOneIsTyped() async throws {
+        // Saved target 76 kg, current weight 75 kg: the goal is met.
+        let (vm, _) = try await loaded(targetDate: nil, weightKg: 75)
+        XCTAssertEqual(vm.storedTargetKg, 76)
+        XCTAssertEqual(vm.targetKg, 76)
+        func warning() -> String? {
+            GoalTargetLogic.sanityWarning(
+                goal: "weight_loss", currentKg: vm.currentWeightKg, targetKg: vm.targetKg,
+                targetDate: vm.activeTargetDate, units: UnitPreference.shared.current,
+                storedTargetKg: vm.storedTargetKg, from: now
+            )
+        }
+        XCTAssertEqual(warning(), GoalTargetLogic.reachedTargetMessage)
+
+        // The user types a NEW target above their current weight: a validation warning again.
+        vm.targetWeightText = UnitFormat.weightEntryText(kg: 90, UnitPreference.shared.current)
+        XCTAssertNotEqual(vm.targetKg, 76)
+        XCTAssertEqual(warning(), "Your target should be below your current weight.")
+
+        // A new, valid target below the current weight: no warning at all.
+        vm.targetWeightText = UnitFormat.weightEntryText(kg: 70, UnitPreference.shared.current)
+        XCTAssertNil(warning())
     }
 }

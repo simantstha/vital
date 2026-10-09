@@ -778,9 +778,23 @@ enum GoalProgressLogic {
         return rows
     }
 
+    /// The server reason kind that restates "Goal reached" (good tone, leads the
+    /// reasons of a reached goal).
+    static let reachedReasonKind = "reached"
+
+    /// Every reason worth a row. On a reached goal the server's `reached` reason
+    /// just repeats the "Goal reached" chip and the "Reached Sep 20" line, so it is
+    /// skipped there; every other kind (position, next_step, lift, adherence,
+    /// weigh_in_age, anything new) still renders, in the server's order. Off a
+    /// reached goal nothing is filtered.
+    static func displayReasons(_ progress: GoalProgressDTO) -> [GoalReasonDTO] {
+        guard progress.verdict == .reached else { return progress.reasons }
+        return progress.reasons.filter { $0.kind.lowercased() != reachedReasonKind }
+    }
+
     /// Up to `limit` reasons for the compact card.
     static func visibleReasons(_ progress: GoalProgressDTO, limit: Int = 3) -> [GoalReasonDTO] {
-        Array(progress.reasons.prefix(limit))
+        Array(displayReasons(progress).prefix(limit))
     }
 
     private static func nonEmpty(_ text: String) -> String? {
