@@ -88,6 +88,11 @@ export type WeekGap =
    * graded against the step, and `targetKm` stays the goal beside it.
    */
   | { kind: 'distance'; doneKm: number; targetKm: number; stepKm?: number }
+  /**
+   * Endurance: running km far ABOVE that week's safe step (a jump, not a
+   * shortfall — see `isSpikeWeek`). Only when a step below the goal applies.
+   */
+  | { kind: 'spike'; doneKm: number; stepKm: number; targetKm: number }
   | { kind: 'budget'; inBudget: number; logged: number }
   | { kind: 'protein'; hit: number; logged: number }
   /** Weight loss with no usable budget days: the week's trend change (kg, signed) was flat or the wrong way / too fast. */
@@ -637,8 +642,10 @@ function weekendGap(input: WeeklyReviewInput, week: Week): number | null {
  *                 under way) — so a runner who followed the plan is not marked
  *                 down against the full goal; the goal itself when no step
  *                 applies (no running measured the week before, or the step
- *                 reaches the goal). A tough sessions count (vs the sessions
- *                 target) pulls it down a level. Without a distance target (or
+ *                 reaches the goal). A SPIKE — km more than 30% AND at least
+ *                 3 km (2 mi) above that step — is never "on plan": it rates
+ *                 mixed (safety, not praise) with its own gap. A tough sessions
+ *                 count (vs the sessions target) pulls it down a level. Without a distance target (or
  *                 any measured distance) the sessions rating is used; neither
  *                 -> null.
  *  - general:     active days (3+ good, 2 mixed, else tough).
@@ -665,6 +672,10 @@ const BUDGET_MIXED_DAYS_OF_7 = 3;
 /** Endurance: this week's running distance as a share of the weekly target. */
 const DISTANCE_GOOD_FRACTION = 0.9;
 const DISTANCE_MIXED_FRACTION = 0.6;
+/** Endurance spike: running km above the week's step by more than this fraction AND by at least the minimum excess (3 km / 2 mi). */
+const SPIKE_OVER_STEP_FRACTION = 0.3;
+const SPIKE_MIN_EXCESS_KM = 3;
+const SPIKE_MIN_EXCESS_MI = 2;
 /** Muscle: protein hit on a smaller share of logged days than this pulls the week down a level. */
 const PROTEIN_LOW_FRACTION = 0.5;
 /** General goal: active days per week for good / mixed. */
@@ -761,6 +772,18 @@ function weekStepKm(input: WeeklyReviewInput, prevWeek: Week, targetKm: number):
   return weekStepOrGoalKm(runningKm(input, prevWeek), targetKm, isImperial(input) ? 1 / KM_PER_MILE : 1);
 }
 
+/**
+ * A jump, not a good week: running km more than 30% above the week's step AND
+ * at least 3 km (2 mi) over it. Only when a step below the goal applies — with
+ * the goal as the bar, going past it is simply a hit target.
+ */
+function isSpikeWeek(input: WeeklyReviewInput, km: number, stepKm: number, targetKm: number): boolean {
+  if (stepKm >= targetKm) return false;
+  const imperial = isImperial(input);
+  const excess = (km - stepKm) * (imperial ? KM_TO_MI : 1);
+  return km > stepKm * (1 + SPIKE_OVER_STEP_FRACTION) && excess >= (imperial ? SPIKE_MIN_EXCESS_MI : SPIKE_MIN_EXCESS_KM);
+}
+
 function enduranceWeekAssessment(input: WeeklyReviewInput, week: Week, prevWeek: Week): WeekAssessment {
   const count = weekSessionCount(input, week);
   const sessionsTarget = input.weeklySessionsTarget;
@@ -775,11 +798,14 @@ function enduranceWeekAssessment(input: WeeklyReviewInput, week: Week, prevWeek:
     const stepKm = weekStepKm(input, prevWeek, target);
     const stepped = stepKm < target;
     const frac = km / stepKm;
-    const distance: RatingLevel = frac >= DISTANCE_GOOD_FRACTION ? 'good' : frac >= DISTANCE_MIXED_FRACTION ? 'mixed' : 'tough';
-    // Distance short of the bar is the gap; a tough sessions count only when distance alone was fine.
-    const gap: WeekGap | null = distance !== 'good'
-      ? { kind: 'distance', doneKm: round1(km), targetKm: target, ...(stepped ? { stepKm } : {}) }
-      : sessionsGap;
+    const spike = isSpikeWeek(input, km, stepKm, target);
+    const distance: RatingLevel = spike ? 'mixed' : frac >= DISTANCE_GOOD_FRACTION ? 'good' : frac >= DISTANCE_MIXED_FRACTION ? 'mixed' : 'tough';
+    // Distance off the bar (a jump over it, or short of it) is the gap; a tough sessions count only when distance alone was fine.
+    const gap: WeekGap | null = spike
+      ? { kind: 'spike', doneKm: round1(km), stepKm, targetKm: target }
+      : distance !== 'good'
+        ? { kind: 'distance', doneKm: round1(km), targetKm: target, ...(stepped ? { stepKm } : {}) }
+        : sessionsGap;
     const assessment = rated(sessions === 'tough' ? levelDown(distance) : distance, gap);
     // Met the step but not the goal yet: no gap, yet the build goes on next week.
     const build: WeekAssessment['build'] = assessment.rating === 'good' && stepped && km < target
@@ -851,9 +877,14 @@ function loggedWord(stat: WeeklyReviewStat, word = 'logged '): string {
  * "24.5 of 30 km" — or, when the week's safe step was below the goal and the
  * goal wasn't reached, the step it was graded against with the goal beside it:
  * "24.5 of ~24 km — on plan · goal 30 km" (met the step) / "21 of ~24 km · goal
- * 30 km" (short of it). "On plan" compares the numbers as the reader sees them.
+ * 30 km" (short of it); a jump far over the step says so ("20 of ~8 km — well
+ * above the safe step · goal 30 km"). "On plan" compares the numbers as the
+ * reader sees them.
  */
 function distanceHeadline(input: WeeklyReviewInput, km: number, targetKm: number, stepKm: number): string {
+  if (isSpikeWeek(input, km, stepKm, targetKm)) {
+    return `${distanceNumber(input, km)} of ~${distanceText(input, stepKm)} — well above the safe step · goal ${distanceText(input, targetKm)}`;
+  }
   if (stepKm >= targetKm || km >= targetKm) return `${distanceNumber(input, km)} of ${distanceText(input, targetKm)}`;
   const onPlan = distanceNumber(input, km) >= distanceNumber(input, stepKm);
   return `${distanceNumber(input, km)} of ~${distanceText(input, stepKm)}${onPlan ? ' — on plan' : ''} · goal ${distanceText(input, targetKm)}`;
@@ -902,10 +933,13 @@ function buildHeadline(input: WeeklyReviewInput, cands: Candidate[], week: Week,
       const km = runningKm(input, week);
       const kmBased = /\s(km|mi)$/.test(volume.value);
       const target = input.weeklyDistanceKmTarget as number;
+      const stepKm = hasDistanceTarget(input) ? weekStepKm(input, prevWeek, target) : target;
       const value = hasDistanceTarget(input) && kmBased && km != null
-        ? distanceHeadline(input, km, target, weekStepKm(input, prevWeek, target))
+        ? distanceHeadline(input, km, target, stepKm)
         : volume.value;
-      parts.push(volume.comparison && volume.comparison.includes('%') ? `${value}, ${volume.comparison}` : value);
+      // A spike's headline already says it is a jump: no "+186% vs last week" on top (and it would overrun the headline limit).
+      const spike = hasDistanceTarget(input) && kmBased && km != null && isSpikeWeek(input, km, stepKm, target);
+      parts.push(!spike && volume.comparison && volume.comparison.includes('%') ? `${value}, ${volume.comparison}` : value);
     }
   } else {
     if (sessions) parts.push(`${sessions.value} active ${plural(Number(sessions.value), 'day')}`);
@@ -952,6 +986,8 @@ function gapSlip(input: WeeklyReviewInput, gap: WeekGap, week: Week, prevWeek: W
       return gap.stepKm != null
         ? `${distanceNumber(input, gap.doneKm)} of ~${distanceText(input, gap.stepKm)} — ${withUnit(round1(distanceNumber(input, gap.stepKm) - distanceNumber(input, gap.doneKm)), isImperial(input) ? 'mi' : 'km')} short of this week's step`
         : `${distanceNumber(input, gap.doneKm)} of ${distanceText(input, gap.targetKm)} target — ${distanceText(input, gap.targetKm - gap.doneKm)} short`;
+    case 'spike':
+      return `Jumped ${withUnit(round1(distanceNumber(input, gap.doneKm) - distanceNumber(input, gap.stepKm)), isImperial(input) ? 'mi' : 'km')} over this week's step — big jumps raise injury risk`;
     case 'budget': {
       const target = input.budget?.targetKcal;
       return `In budget ${gap.inBudget} of ${gap.logged} logged ${plural(gap.logged, 'day')}${target != null ? ` (${withUnit(fmtKcal(target), 'kcal')} target)` : ''}`;
@@ -1093,6 +1129,22 @@ function distanceNextWeek(input: WeeklyReviewInput, gap: Extract<WeekGap, { kind
   return `Build to ${nextText}${longRunPart ? `: ${longRunPart}` : ' with mostly easy runs'}; ${after}.`;
 }
 
+/**
+ * "Next week" after a spike: hold roughly at the safe step, then build. The
+ * number comes from the shared rule applied to the STEP (what the runner should
+ * have run), never to the spike, so a jump never ratchets next week's target up.
+ */
+function spikeNextWeek(input: WeeklyReviewInput, gap: Extract<WeekGap, { kind: 'spike' }>): string {
+  const unit = isImperial(input) ? 'mi' : 'km';
+  const stepShown = distanceNumber(input, gap.stepKm);
+  const targetShown = distanceNumber(input, gap.targetKm);
+  const next = weekStepTarget(stepShown, targetShown);
+  const targetText = distanceText(input, gap.targetKm);
+  if (next == null) return `Keep next week close to ${distanceText(input, gap.stepKm)}, then build gradually toward ${targetText}.`;
+  if (next >= targetShown) return `Hold at ${targetText} next week rather than going higher.`;
+  return `Hold around ~${withUnit(next, unit)} next week, then build ~${Math.round(WEEKLY_DISTANCE_GROWTH * 100)}% a week toward ${targetText}.`;
+}
+
 /** "Next week" for a mixed / tough week: the concrete action that closes the gap the Slip names. */
 function gapNextWeek(input: WeeklyReviewInput, gap: WeekGap, week: Week, prevWeek: Week): string {
   switch (gap.kind) {
@@ -1107,6 +1159,7 @@ function gapNextWeek(input: WeeklyReviewInput, gap: WeekGap, week: Week, prevWee
         : `${book} — lock in the missed ones now, starting with ${day}.`;
     }
     case 'distance': return distanceNextWeek(input, gap);
+    case 'spike': return spikeNextWeek(input, gap);
     case 'budget': return 'Pick the two days most likely to run over and plan those meals ahead.';
     case 'protein': return 'Add a protein-first breakfast so the day starts ahead of your target.';
     case 'weight':

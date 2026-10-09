@@ -930,10 +930,10 @@ test('below this week\'s step the gap is measured against the step, not the goal
 });
 
 test('graded against the step, a runner who reaches the full goal reads as a plain "30 of 30 km"', () => {
-  const r = computeWeeklyReview(marcusWeek({ workouts: marcusRuns([7], [10, 10, 10]) })); // step 8 km; goal hit
+  const r = computeWeeklyReview(marcusWeek({ workouts: marcusRuns([8, 8, 8], [10, 10, 10]) })); // 24 km before: step 26 km; goal hit, no jump
   assert.equal(r.weekRating, 'good');
   assert.equal(r.weekGap, null);
-  assert.equal(r.headline, '3 sessions, 30 of 30 km, +329% vs last week');
+  assert.equal(r.headline, '3 sessions, 30 of 30 km, +25% vs last week');
   assert.equal(r.nextWeek, 'Repeat this week: same routine, same training days.');
 });
 
@@ -960,10 +960,10 @@ test('runner distance copy: miles for imperial users, a bigger shortfall needs a
   // 18 -> 20 km (+10%) is as far as one week goes; the target is several weeks off, so no "30 km the week after".
   assert.equal(far.nextWeek, 'Build to ~20 km with mostly easy runs; then add ~10% a week toward 30 km.');
 
-  const hit = computeWeeklyReview(marcusWeek({ workouts: [run(WEEK[0], 10), run(WEEK[2], 10), run(WEEK[4], 10), run(PREV[0], 7)] }));
+  const hit = computeWeeklyReview(marcusWeek({ workouts: marcusRuns([8, 8, 8], [10, 10, 10]) }));
   assert.equal(hit.weekRating, 'good');
   assert.equal(hit.weekGap, null);
-  assert.equal(hit.headline, '3 sessions, 30 of 30 km, +329% vs last week');
+  assert.equal(hit.headline, '3 sessions, 30 of 30 km, +25% vs last week');
   assert.equal(hit.nextWeek, 'Repeat this week: same routine, same training days.');
 });
 
@@ -1084,7 +1084,7 @@ test('the review\'s "Next week" km and the goal card\'s this-week step are the s
     { runs: [9, 9, 8.9], stepKm: 30 },
   ];
   for (const c of cases) {
-    const input = marcusWeek({ workouts: [run(WEEK[0], c.runs[0]), run(WEEK[2], c.runs[1]), run(WEEK[4], c.runs[2]), run(PREV[0], 7)] });
+    const input = marcusWeek({ workouts: marcusRuns(undefined, c.runs) });
     const review = computeWeeklyReview(input);
     const reviewKm = Number(review.nextWeek.match(/(?:Build to ~|Aim for )(\d+(?:\.\d+)?)/)![1]);
     const progress = computeGoalProgress(goalInputAfter(input, 12));
@@ -1098,6 +1098,72 @@ test('the review\'s "Next week" km and the goal card\'s this-week step are the s
   const stepKm = computeGoalProgress(goalInputAfter(imperialInput, 12)).distance!.stepTargetKm;
   assert.equal(reviewMi, 17);
   assert.equal(Math.round((stepKm / 1.609344) * 10) / 10, reviewMi);
+});
+
+// ── spike guard: a jump far over the safe step is not "on plan" ──────────────
+
+test('spike (7 km week, then 20 km): not "on plan" — mixed, a jump Slip, and Next week holds near the STEP', () => {
+  const r = computeWeeklyReview(marcusWeek({ workouts: marcusRuns([7], [8, 6, 6]) })); // step round(7 x 1.1) -> 8 km
+  assert.equal(r.weekRating, 'mixed');
+  assert.deepEqual(r.weekGap, { kind: 'spike', doneKm: 20, stepKm: 8, targetKm: 30 });
+  assert.equal(r.headline, '3 sessions, 20 of ~8 km — well above the safe step · goal 30 km');
+  assert.doesNotMatch(r.headline, /on plan/);
+  assert.equal(r.slip, "Jumped 12 km over this week's step — big jumps raise injury risk");
+  // The shared rule applied to the STEP (8 -> 9), not to the spike (20 -> 22): a jump never ratchets the target up.
+  assert.equal(r.nextWeek, 'Hold around ~9 km next week, then build ~10% a week toward 30 km.');
+  assert.doesNotMatch(r.nextWeek, /Repeat this week|Build to/);
+  // With a sessions target the headline still fits the limit untruncated.
+  const withTarget = computeWeeklyReview(marcusWeek({ workouts: marcusRuns([7], [8, 6, 6]), weeklySessionsTarget: 4 }));
+  assert.equal(withTarget.headline, '3 of 4 sessions, 20 of ~8 km — well above the safe step · goal 30 km');
+  assert.ok(withTarget.headline.length <= REVIEW_HEADLINE_MAX_CHARS);
+  // A spike past the goal itself is still a spike: 32 km after 21.9 km (step 24, goal 30).
+  const pastGoal = computeWeeklyReview(marcusWeek({ workouts: marcusRuns(undefined, [11, 10.5, 10.5]) }));
+  assert.equal(pastGoal.weekRating, 'mixed');
+  assert.equal(pastGoal.weekGap?.kind, 'spike');
+  assert.equal(pastGoal.slip, "Jumped 8 km over this week's step — big jumps raise injury risk");
+  assert.equal(pastGoal.nextWeek, 'Hold around ~26 km next week, then build ~10% a week toward 30 km.');
+});
+
+test('spike guard needs BOTH more than 30% over the step AND at least 3 km (2 mi) over it; a mild overshoot stays "on plan"', () => {
+  const week = (prior: number[] | undefined, cur: number[], over: Partial<WeeklyReviewInput> = {}) =>
+    computeWeeklyReview(marcusWeek({ workouts: marcusRuns(prior, cur), ...over }));
+  // 24.5 km against a 24 km step: the Marcus case.
+  const mild = week(undefined, [8, 8, 8.5]);
+  assert.equal(mild.weekRating, 'good');
+  assert.match(mild.headline, /^3 sessions, 24\.5 of ~24 km — on plan · goal 30 km/);
+  // More than 30% over a small step (10.5 vs 8 = +31%) but only 2.5 km over it: no spike.
+  const smallStep = week([7], [3.5, 3.5, 3.5]);
+  assert.equal(smallStep.weekRating, 'good');
+  assert.equal(smallStep.weekGap, null);
+  assert.match(smallStep.headline, /^3 sessions, 10\.5 of ~8 km — on plan · goal 30 km/);
+  // 3+ km over, but within 30% of the step (19 vs 15 = +27%): no spike.
+  const bigStep = week([14], [6, 6.5, 6.5]);
+  assert.equal(bigStep.weekRating, 'good');
+  assert.match(bigStep.headline, /^3 sessions, 19 of ~15 km — on plan · goal 30 km/);
+  // Both (20 vs 15 = +33%, 5 km over): spike.
+  const both = week([14], [6.5, 6.5, 7]);
+  assert.equal(both.weekGap?.kind, 'spike');
+  // No step below the goal (no week before): going past the goal is just a hit target.
+  const noStep = week([], [12, 12, 12]);
+  assert.equal(noStep.weekRating, 'good');
+  assert.equal(noStep.headline, '3 sessions, 36 of 30 km');
+  // A shortfall is never a spike.
+  assert.equal(week(undefined, [7, 7, 7]).weekGap?.kind, 'distance');
+});
+
+test('spike guard in miles: 2 mi minimum, ~5 mi step, "Hold around" in whole miles', () => {
+  const week = (cur: number[]) => computeWeeklyReview(marcusWeek({ unitSystem: 'imperial', workouts: marcusRuns([7], cur) })); // 7 km = 4.3 mi -> step 5 mi
+  const spike = week([8, 6, 6]); // 20 km = 12.4 mi
+  assert.equal(spike.weekRating, 'mixed');
+  assert.deepEqual(spike.weekGap, { kind: 'spike', doneKm: 20, stepKm: 8, targetKm: 30 });
+  assert.equal(spike.headline, '3 sessions, 12.4 of ~5 mi — well above the safe step · goal 18.6 mi');
+  assert.equal(spike.slip, "Jumped 7.4 mi over this week's step — big jumps raise injury risk");
+  assert.equal(spike.nextWeek, 'Hold around ~6 mi next week, then build ~10% a week toward 18.6 mi.');
+  assert.doesNotMatch(`${spike.headline} ${spike.slip} ${spike.nextWeek}`, /\bkm\b/);
+  // 10.6 km = 6.6 mi: +32% over the step but only 1.6 mi over it: on plan.
+  assert.equal(week([3.7, 3.4, 3.5]).weekRating, 'good');
+  // 11.5 km = 7.1 mi: 2.2 mi over the step: spike.
+  assert.equal(week([4, 3.8, 3.7]).weekGap?.kind, 'spike');
 });
 
 test('the step the review grades the finished week against is the step the goal card showed WHILE that week was under way (metric and miles)', () => {
@@ -1306,8 +1372,9 @@ test('coherence: mixed / tough ⇒ the Slip names the gap and Next week never re
       })]);
     }
   }
-  // A 20 km week before puts the step at 22 km; a 28 km week before puts it at the 30 km goal; no week before: the goal too.
-  for (const prior of [20, 28, null]) {
+  // A 20 km week before puts the step at 22 km; a 28 km week before puts it at the 30 km goal; no week before: the goal too;
+  // a 7 km week before puts the step at 8 km, so most rows are jumps (the spike guard).
+  for (const prior of [20, 28, null, 7]) {
     for (const km of [0, 6, 12, 18, 21, 22, 24.5, 27, 30, 36]) {
       inputs.push([`endurance ${km} km after ${prior} km`, marcusWeek({
         workouts: [run(WEEK[0], km), ...(prior == null ? [] : [run(PREV[0], prior)])],
@@ -1360,6 +1427,10 @@ test('review copy joins numbers to units, "a → b" pairs and "over 4 wks" with 
   assert.equal(short.slip, `21 of ~24${NBSP}km — 3${NBSP}km short of this week's step`);
   const toGoal = computeWeeklyReviewRaw(marcusAgainstGoal());
   assert.equal(toGoal.slip, `24.5 of 30${NBSP}km target — 5.5${NBSP}km short`);
+  const spike = computeWeeklyReviewRaw(marcusWeek({ workouts: marcusRuns([7], [8, 6, 6]) }));
+  assert.equal(spike.headline, `3 sessions, 20 of ~8${NBSP}km — well above the safe step · goal 30${NBSP}km`);
+  assert.equal(spike.slip, `Jumped 12${NBSP}km over this week's step — big jumps raise injury risk`);
+  assert.equal(spike.nextWeek, `Hold around ~9${NBSP}km next week, then build ~10% a week toward 30${NBSP}km.`);
 
   const loss = computeWeeklyReviewRaw(weightLossInput());
   assert.match(loss.headline, new RegExp(`^Down \\d\\.\\d${NBSP}kg, in budget 5 of 7 days$`));
@@ -1385,6 +1456,7 @@ test('no number in the review copy is followed by a breaking space and a unit', 
     marcusWeek({ longRun: MARCUS_LONG_RUN }), marcusWeek({ longRun: MARCUS_LONG_RUN, unitSystem: 'imperial' }),
     marcusWeek({ workouts: marcusRuns(undefined, [7, 7, 7]) }), marcusWeek({ unitSystem: 'imperial', workouts: marcusRuns(undefined, [7, 7, 7]) }),
     marcusWeek({ workouts: marcusRuns(undefined, [4, 4, 4]) }), marcusAgainstGoal(), marcusAgainstGoal([], { unitSystem: 'imperial' }),
+    marcusWeek({ workouts: marcusRuns([7], [8, 6, 6]) }), marcusWeek({ unitSystem: 'imperial', workouts: marcusRuns([7], [8, 6, 6]) }),
     marcusWeek({ longRun: { lastKm: 18, peakKm: 18, targetPeakKm: 18 } }),
     weightLossInput({ unitSystem: 'imperial' }),
     weightLossInput({ weightReadings: weigh([...PREV, ...WEEK], i => 80 + i * 0.1) }),
