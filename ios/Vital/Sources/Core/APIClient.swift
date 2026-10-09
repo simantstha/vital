@@ -386,9 +386,15 @@ struct APIClient {
     /// PATCH /api/profile with the goal targets (incl. the optional endurance race). Unlike `updateProfile`
     /// (which omits nil fields), every field is always sent and a nil value is
     /// encoded as an explicit JSON `null`, which the server treats as "clear".
+    /// `includeTargetDate: false` omits the key entirely (server: untouched) —
+    /// distinct from `targetDate: nil`, which sends an explicit null (clears
+    /// the date). The goal sheet omits a target date the user hasn't changed,
+    /// so a date that has since passed can never block an unrelated edit.
+    /// A 400 for a NEW past date surfaces as `APIError.targetDateInPast`.
     func updateGoalTargets(
         targetWeightKg: Double?,
         targetDate: String?,
+        includeTargetDate: Bool = true,
         weeklySessionsTarget: Int?,
         weeklyDistanceKmTarget: Double? = nil,
         raceDate: String? = nil,
@@ -404,6 +410,7 @@ struct APIClient {
         struct Body: Encodable {
             let targetWeightKg: Double?
             let targetDate: String?
+            let includeTargetDate: Bool
             let weeklySessionsTarget: Int?
             let weeklyDistanceKmTarget: Double?
             let raceDate: String?
@@ -414,7 +421,7 @@ struct APIClient {
             func encode(to encoder: Encoder) throws {
                 var c = encoder.container(keyedBy: CodingKeys.self)
                 try c.encode(targetWeightKg, forKey: .targetWeightKg)
-                try c.encode(targetDate, forKey: .targetDate)
+                if includeTargetDate { try c.encode(targetDate, forKey: .targetDate) }
                 try c.encode(weeklySessionsTarget, forKey: .weeklySessionsTarget)
                 try c.encode(weeklyDistanceKmTarget, forKey: .weeklyDistanceKmTarget)
                 try c.encode(raceDate, forKey: .raceDate)
@@ -423,12 +430,16 @@ struct APIClient {
         }
         request.httpBody = try encoder.encode(
             Body(
-                targetWeightKg: targetWeightKg, targetDate: targetDate,
+                targetWeightKg: targetWeightKg, targetDate: targetDate, includeTargetDate: includeTargetDate,
                 weeklySessionsTarget: weeklySessionsTarget, weeklyDistanceKmTarget: weeklyDistanceKmTarget,
                 raceDate: raceDate, raceDistanceKm: raceDistanceKm
             )
         )
-        let (_, response) = try await session.data(for: request)
+        let (data, response) = try await session.data(for: request)
+        if let http = response as? HTTPURLResponse, http.statusCode == 400,
+           APIError.isTargetDateInPastResponse(data) {
+            throw APIError.targetDateInPast
+        }
         try validate(response)
     }
 
@@ -1453,6 +1464,22 @@ enum APIError: Error, LocalizedError, Equatable {
     /// Distinct from `.serverError` so `LogMealIntent` can surface its own
     /// "try being more specific" dialog instead of a generic failure.
     case mealNotFound
+    /// PATCH /api/profile's 400 "Target date must be in the future" for a NEW
+    /// target date that is today or earlier. Carries human copy so the goal
+    /// sheet shows "Pick a date after today" instead of a generic failure.
+    case targetDateInPast
+
+    /// The server's exact 400 message for `targetDateInPast`.
+    static let targetDateInPastServerMessage = "Target date must be in the future"
+
+    /// True when a 400 body is `{ "error": "Target date must be in the future" }`.
+    static func isTargetDateInPastResponse(_ data: Data) -> Bool {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let message = object["error"] as? String else { return false }
+        let normalized = message.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        return normalized == targetDateInPastServerMessage
+    }
 
     var errorDescription: String? {
         switch self {
@@ -1463,6 +1490,7 @@ enum APIError: Error, LocalizedError, Equatable {
         case .whoopAuthorizeURLMissing: return "Couldn't start the WHOOP connection. Try again later."
         case .whoopConnectFailed: return "WHOOP didn't finish connecting. Please try again."
         case .mealNotFound:       return "I couldn't find that food. Try being more specific."
+        case .targetDateInPast:   return "Pick a date after today"
         }
     }
 }
@@ -2106,6 +2134,9 @@ enum GoalVerdict: String, Equatable, Sendable {
     case holding
     case needsTarget = "needs_target"
     case insufficientData = "insufficient_data"
+    /// The target weight has been met (server contract: verdict "reached" +
+    /// `GoalProgressDTO.reachedAt`). A server that predates it never sends it.
+    case reached
 
     init(wire: String?) {
         self = wire.flatMap { GoalVerdict(rawValue: $0) } ?? .insufficientData
@@ -2362,14 +2393,29 @@ struct GoalProgressDTO: Decodable, Equatable {
         let weeklyTarget: Int
         /// Whole percent, `done / planned`.
         let pct: Int?
+        /// How many days `done` / `planned` cover (server: 7...28, shorter for a
+        /// young account). 28 — the original "4 weeks" window — when an older
+        /// server omits it or sends something unusable.
+        let windowDays: Int
 
-        private enum CodingKeys: String, CodingKey { case done, planned, weeklyTarget, pct }
+        /// The window every payload had before `windowDays` existed.
+        static let defaultWindowDays = 28
 
-        init(done: Int, planned: Int, weeklyTarget: Int, pct: Int? = nil) {
+        private enum CodingKeys: String, CodingKey { case done, planned, weeklyTarget, pct, windowDays }
+
+        init(done: Int, planned: Int, weeklyTarget: Int, pct: Int? = nil, windowDays: Int = Adherence.defaultWindowDays) {
             self.done = done
             self.planned = planned
             self.weeklyTarget = weeklyTarget
             self.pct = pct
+            self.windowDays = Adherence.validWindowDays(windowDays)
+        }
+
+        /// 1...28 as sent (a whole number, or a number with a fraction dropped);
+        /// anything else (absent, 0, negative, > 28, non-numeric) reads as 28.
+        static func validWindowDays(_ days: Int?) -> Int {
+            guard let days, (1...defaultWindowDays).contains(days) else { return defaultWindowDays }
+            return days
         }
 
         /// Throws without all three counts so the enclosing `try?` drops the whole block.
@@ -2379,6 +2425,12 @@ struct GoalProgressDTO: Decodable, Equatable {
             planned = try c.decode(Int.self, forKey: .planned)
             weeklyTarget = try c.decode(Int.self, forKey: .weeklyTarget)
             pct = try? c.decode(Int.self, forKey: .pct)
+            var sent: Int? = try? c.decode(Int.self, forKey: .windowDays)
+            if sent == nil, let fractional = try? c.decode(Double.self, forKey: .windowDays),
+               fractional.isFinite, abs(fractional) < 1_000 {
+                sent = Int(fractional)
+            }
+            windowDays = Adherence.validWindowDays(sent)
         }
     }
 
@@ -2405,12 +2457,21 @@ struct GoalProgressDTO: Decodable, Equatable {
     let dataSufficiency: DataSufficiency
     /// Whole days since the newest weigh-in; optional (older servers omit it).
     let lastWeighInDaysAgo: Int?
-    /// Muscle session adherence over 28 days; `nil` for other goals / no target / older servers.
+    /// Muscle session adherence over `adherence.windowDays` (28 unless the server says
+    /// otherwise); `nil` for other goals / no target / older servers.
     let adherence: Adherence?
+    /// "YYYY-MM-DD" (an ISO timestamp is tolerated) the target was first met;
+    /// `nil` unless the verdict is `reached` (and for older servers that never send it).
+    let reachedAt: String?
+    /// Whole days since the newest logged session; `nil` when the server doesn't
+    /// send it (older servers, or no session yet). Decoded for the non-weight
+    /// goals' "back after a gap" nudges, the way `lastWeighInDaysAgo` is for weight.
+    let lastSessionDaysAgo: Int?
 
     private enum CodingKeys: String, CodingKey {
         case goal, target, distance, race, longRun, current, ratePerWeek, safeBand, eta, onPaceForTargetDate
-        case verdict, headline, reasons, dataSufficiency, lastWeighInDaysAgo, adherence
+        case verdict, headline, reasons, dataSufficiency, lastWeighInDaysAgo, adherence, reachedAt
+        case lastSessionDaysAgo
     }
 
     init(
@@ -2429,11 +2490,15 @@ struct GoalProgressDTO: Decodable, Equatable {
         reasons: [GoalReasonDTO] = [],
         dataSufficiency: DataSufficiency = DataSufficiency(),
         lastWeighInDaysAgo: Int? = nil,
-        adherence: Adherence? = nil
+        adherence: Adherence? = nil,
+        reachedAt: String? = nil,
+        lastSessionDaysAgo: Int? = nil
     ) {
         self.goal = goal
         self.lastWeighInDaysAgo = lastWeighInDaysAgo
         self.adherence = adherence
+        self.reachedAt = reachedAt
+        self.lastSessionDaysAgo = lastSessionDaysAgo
         self.target = target
         self.distance = distance
         self.race = race
@@ -2466,13 +2531,19 @@ struct GoalProgressDTO: Decodable, Equatable {
         reasons = ((try? c.decode([GoalReasonDTO].self, forKey: .reasons)) ?? []).filter { !$0.text.isEmpty }
         dataSufficiency = (try? c.decode(DataSufficiency.self, forKey: .dataSufficiency)) ?? DataSufficiency()
         adherence = try? c.decode(Adherence.self, forKey: .adherence)
-        if let days = try? c.decode(Int.self, forKey: .lastWeighInDaysAgo) {
-            lastWeighInDaysAgo = days
-        } else if let days = try? c.decode(Double.self, forKey: .lastWeighInDaysAgo), days.isFinite {
-            lastWeighInDaysAgo = Int(days)
-        } else {
-            lastWeighInDaysAgo = nil
+        reachedAt = try? c.decode(String.self, forKey: .reachedAt)
+        lastWeighInDaysAgo = Self.daysAgo(c, .lastWeighInDaysAgo)
+        lastSessionDaysAgo = Self.daysAgo(c, .lastSessionDaysAgo)
+    }
+
+    /// A whole-day count sent as `5` or `5.0`; `nil` for null, missing or
+    /// anything that isn't a sane number (never a decode failure).
+    private static func daysAgo(_ c: KeyedDecodingContainer<CodingKeys>, _ key: CodingKeys) -> Int? {
+        if let days = try? c.decode(Int.self, forKey: key) { return days }
+        if let days = try? c.decode(Double.self, forKey: key), days.isFinite, abs(days) < 100_000 {
+            return Int(days)
         }
+        return nil
     }
 }
 

@@ -115,6 +115,109 @@ private struct GoalReasonRow: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .accessibilityElement(children: .combine)
+        // The dot's green / amber is colour-only: speak it ("good" / "watch").
+        .accessibilityValue(GoalProgressLogic.accessibilityToneWord(for: reason.tone) ?? "")
+    }
+}
+
+// MARK: - Goal reached: next steps
+
+/// Drives the two next steps offered once a goal is reached. "Set a new target"
+/// opens Profile's goal editor (`.vitalOpenGoalEditor`); "Switch to maintenance"
+/// moves the goal KIND to General through the same PATCH /api/diet-goal the
+/// Profile → Goal radio list uses, then posts `.vitalGoalKindChanged` so Today
+/// and Trends re-read. Closures are injected so the flow is unit-testable.
+@MainActor
+final class GoalReachedActions: ObservableObject {
+    @Published private(set) var isSwitching = false
+    @Published private(set) var errorMessage: String?
+
+    private let switchGoal: (String) async throws -> Void
+    private let post: (Notification.Name) -> Void
+
+    init(
+        switchGoal: @escaping (String) async throws -> Void = { goal in
+            _ = try await APIClient.shared.updateDietGoal(goal: goal)
+        },
+        post: @escaping (Notification.Name) -> Void = { NotificationCenter.default.post(name: $0, object: nil) }
+    ) {
+        self.switchGoal = switchGoal
+        self.post = post
+    }
+
+    /// Opens the goal editor.
+    func setNewTarget() {
+        post(.vitalOpenGoalEditor)
+    }
+
+    /// Returns true when the goal is now maintenance. A failure keeps the
+    /// current goal and leaves a retryable message.
+    @discardableResult
+    func switchToMaintenance() async -> Bool {
+        guard !isSwitching else { return false }
+        isSwitching = true
+        errorMessage = nil
+        defer { isSwitching = false }
+        do {
+            try await switchGoal(GoalProgressLogic.maintenanceGoal)
+            post(.vitalGoalKindChanged)
+            return true
+        } catch {
+            errorMessage = UserFacingError.message(for: error, context: .write, tag: "switchToMaintenance")
+            return false
+        }
+    }
+}
+
+/// "Set a new target" / "Switch to maintenance" — shown on the goal card and the
+/// detail sheet only while the verdict is `reached`. Full-width, >= 44 pt tall.
+struct GoalReachedActionRow: View {
+    @StateObject private var model = GoalReachedActions()
+    /// Called after either action starts/succeeds (the sheet dismisses itself).
+    var onSetNewTarget: () -> Void = {}
+    var onSwitched: () -> Void = {}
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            actionButton(
+                GoalProgressLogic.setNewTargetTitle, identifier: "goalProgress.setNewTarget", filled: true
+            ) {
+                model.setNewTarget()
+                onSetNewTarget()
+            }
+            actionButton(
+                GoalProgressLogic.switchToMaintenanceTitle, identifier: "goalProgress.switchToMaintenance",
+                filled: false
+            ) {
+                Task { if await model.switchToMaintenance() { onSwitched() } }
+            }
+            .disabled(model.isSwitching)
+            .opacity(model.isSwitching ? 0.5 : 1)
+
+            if let message = model.errorMessage {
+                Text(message)
+                    .font(.system(size: 13))
+                    .foregroundStyle(Theme.Colors.alert)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("goalProgress.reachedError")
+            }
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    private func actionButton(
+        _ title: String, identifier: String, filled: Bool, action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(filled ? Theme.Colors.onAccent : Theme.Colors.accentContent)
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .background(Capsule().fill(filled ? Theme.Colors.accent : Theme.Colors.accentSoft))
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.vital(scale: 0.97))
+        .accessibilityIdentifier(identifier)
     }
 }
 
@@ -135,6 +238,8 @@ struct GoalProgressCard: View {
     var body: some View {
         if GoalProgressLogic.needsTargetPrompt(progress) {
             promptCard
+        } else if GoalProgressLogic.isReached(progress) {
+            reachedCard
         } else {
             Button(action: onTap) {
                 summaryCard
@@ -182,6 +287,36 @@ struct GoalProgressCard: View {
 
     private var summaryCard: some View {
         VitalCard(padding: Theme.Spacing.lg, cornerRadius: Theme.Radius.lg) {
+            summaryContent
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityHint("Opens the details")
+    }
+
+    /// Goal reached: the same summary, but the card can't be one big button (the
+    /// two next-step buttons would sit inside another button), so the summary is
+    /// the button and the actions sit beneath it inside the same card.
+    private var reachedCard: some View {
+        VitalCard(padding: Theme.Spacing.lg, cornerRadius: Theme.Radius.lg) {
+            VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
+                Button(action: onTap) {
+                    summaryContent
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityElement(children: .combine)
+                .accessibilityHint("Opens the details")
+                .accessibilityIdentifier("goalProgress.reachedSummary")
+
+                GoalReachedActionRow()
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("goalProgress.card")
+    }
+
+    private var summaryContent: some View {
             VStack(alignment: .leading, spacing: Theme.Spacing.md) {
                 HStack(alignment: .center) {
                     GoalVerdictChip(verdict: progress.verdict, goal: progress.goal)
@@ -234,9 +369,6 @@ struct GoalProgressCard: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityHint("Opens the details")
     }
 
     private var weightBar: GoalWeightBar? {
@@ -339,6 +471,11 @@ struct GoalProgressDetailView: View {
                         .accessibilityIdentifier("goalProgress.detail.primary")
                 }
 
+                // Goal reached: the two ways forward, ahead of the numbers.
+                if GoalProgressLogic.isReached(progress) {
+                    GoalReachedActionRow(onSetNewTarget: { dismiss() }, onSwitched: { dismiss() })
+                }
+
                 if let bar = distanceBar {
                     bar
                 } else if let bar = weightBar {
@@ -347,10 +484,10 @@ struct GoalProgressDetailView: View {
 
                 statsCard
 
-                if !progress.reasons.isEmpty {
+                if !GoalProgressLogic.displayReasons(progress).isEmpty {
                     section(title: "Why") {
                         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-                            ForEach(Array(progress.reasons.enumerated()), id: \.offset) { _, reason in
+                            ForEach(Array(GoalProgressLogic.displayReasons(progress).enumerated()), id: \.offset) { _, reason in
                                 GoalReasonRow(reason: reason)
                             }
                         }

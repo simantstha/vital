@@ -6,6 +6,9 @@ import SwiftUI
 /// by the Today card and the detail sheet so they can never drift apart.
 struct WeeklyReviewContent: View {
     let review: WeeklyReviewDTO
+    /// Picks the not-enough-data row title ("To get started" vs "For your next
+    /// review"); see `WeeklyReviewLogic.isNewAccount`.
+    var isNewAccount = true
     var headlineSize: CGFloat = 20
     /// Compact (Today card): label + range + verdict chip and a headline capped
     /// at 2 lines. The stats grid and win / slip / next rows only render in the
@@ -76,7 +79,7 @@ struct WeeklyReviewContent: View {
                     .accessibilityIdentifier("weeklyReview.stats")
             }
 
-            let rows = compact ? [] : WeeklyReviewLogic.rows(review)
+            let rows = compact ? [] : WeeklyReviewLogic.rows(review, isNewAccount: isNewAccount)
             if !rows.isEmpty {
                 VStack(alignment: .leading, spacing: Theme.Spacing.md) {
                     ForEach(rows) { row in
@@ -123,6 +126,8 @@ private struct WeeklyReviewStatTile: View {
         )
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(WeeklyReviewLogic.accessibilityLabel(for: stat))
+        // The value's green / amber is colour-only: speak it ("good" / "watch").
+        .accessibilityValue(WeeklyReviewLogic.accessibilityToneWord(for: stat.tone) ?? "")
     }
 }
 
@@ -211,6 +216,9 @@ struct WeeklyReviewCard: View {
 /// review any time, seen or not.
 struct WeeklyReviewRow: View {
     let response: WeeklyReviewResponse
+    /// False for an established account back after a gap: the not-enough-data
+    /// subtitle then reads "Your next review: …" instead of "First review on …".
+    var isNewAccount = true
     var onTap: () -> Void
 
     /// True for reviews with nothing substantive to celebrate (not enough
@@ -234,7 +242,7 @@ struct WeeklyReviewRow: View {
                         // Non-breaking so the headline's "+10 kg over 4 wks" never
                         // wraps mid-value on this two-line row.
                         Text(WeeklyReviewLogic.isNotEnoughData(response.review)
-                             ? WeeklyReviewLogic.firstReviewText(now: AppClock.now)
+                             ? WeeklyReviewLogic.notEnoughDataSubtitle(isNewAccount: isNewAccount, now: AppClock.now)
                              : GoalProgressLogic.nonBreaking(response.review.headline))
                             .font(.system(size: 13))
                             .foregroundStyle(Theme.Colors.textSecondary)
@@ -271,6 +279,7 @@ struct WeeklyReviewRow: View {
 /// (marks it seen and dismisses), otherwise just closes.
 struct WeeklyReviewDetailView: View {
     let response: WeeklyReviewResponse
+    var isNewAccount = true
     var onGotIt: () -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -299,7 +308,7 @@ struct WeeklyReviewDetailView: View {
                     .accessibilityLabel("Close")
                 }
 
-                WeeklyReviewContent(review: response.review, headlineSize: 24)
+                WeeklyReviewContent(review: response.review, isNewAccount: isNewAccount, headlineSize: 24)
 
                 if !response.isSeen {
                     Button {
@@ -342,7 +351,7 @@ struct WeeklyReviewPushView: View {
     var body: some View {
         Group {
             if let latest = store.latest {
-                WeeklyReviewDetailView(response: latest, onGotIt: { store.markSeen() })
+                WeeklyReviewDetailView(response: latest, isNewAccount: store.isNewAccount, onGotIt: { store.markSeen() })
             } else if didAttemptLoad {
                 Text("Your weekly review isn't available right now.")
                     .font(.system(size: 15))

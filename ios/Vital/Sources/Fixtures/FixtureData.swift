@@ -2113,6 +2113,8 @@ enum FixtureData {
                 "eta": dayString(-etaDays),
                 "onPaceForTargetDate": true,
                 "verdict": "on_track",
+                "reachedAt": none,
+                "lastSessionDaysAgo": none,
                 "headline": "On track — about 6 kg to go, around \(shortDate(daysAhead: etaDays))",
                 "reasons": [
                     reason("rate", "Losing 0.6 kg a week — inside the healthy range", "good"),
@@ -2143,6 +2145,8 @@ enum FixtureData {
                 // adherence 9/16 = 56% is under ADHERENCE_BEHIND_PCT (70), so the
                 // verdict is `behind`, not `progressing`.
                 "verdict": "behind",
+                "reachedAt": none,
+                "lastSessionDaysAgo": none,
                 "headline": muscleGoalHeadline,
                 "reasons": [
                     // 9 of 16 planned sessions (4/wk x 4) = 56% → amber, leads.
@@ -2155,7 +2159,7 @@ enum FixtureData {
                 // lib/goalProgress.ts `adherence`: the structured numbers behind the
                 // reason above (9 of 4/wk x 4 = 16 planned, 56%). Drives Today's
                 // "9 of 16 sessions in 4 wk · 2 more by Sun" (4 a week, 2 done so far).
-                "adherence": ["done": 9, "planned": 16, "weeklyTarget": 4, "pct": 56],
+                "adherence": ["done": 9, "planned": 16, "weeklyTarget": 4, "pct": 56, "windowDays": 28],
                 "dataSufficiency": ["weighIns": 11, "needed": 3, "sessionsLast28d": 9],
             ]
         case .endurance:
@@ -2197,6 +2201,8 @@ enum FixtureData {
                 "eta": none,
                 "onPaceForTargetDate": none,
                 "verdict": "building",
+                "reachedAt": none,
+                "lastSessionDaysAgo": none,
                 // ONE volume definition everywhere (goal card, Today line):
                 // last 2 weeks vs the 2 before — always labelled.
                 "headline": "Building — distance up \(enduranceVolumeChangePct)% (last 2 weeks vs the 2 before)",
@@ -2232,6 +2238,8 @@ enum FixtureData {
                 "eta": none,
                 "onPaceForTargetDate": none,
                 "verdict": "needs_target",
+                "reachedAt": none,
+                "lastSessionDaysAgo": none,
                 "headline": "Set a target weight to track your fat-loss progress",
                 "reasons": [Any](),
                 "dataSufficiency": ["weighIns": 0, "needed": 3, "sessionsLast28d": 0],

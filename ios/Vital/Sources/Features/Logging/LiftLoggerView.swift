@@ -547,7 +547,8 @@ private extension LiftLoggerView {
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(tint)
                 .padding(.horizontal, Theme.Spacing.md)
-                .frame(minHeight: 36)
+                // HIG minimum tap target (the glyph stays small; the hit area doesn't).
+                .frame(minWidth: LiftLoggerLogic.restButtonMinTapSize, minHeight: LiftLoggerLogic.restButtonMinTapSize)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
