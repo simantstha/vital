@@ -4,9 +4,11 @@
 > the code actually stores and sends (`db/schema.ts`, `app/api/*`). The owner must
 > confirm contact details, retention, jurisdiction-specific clauses (GDPR/CCPA), and
 > host this at the URL used by `AppLinks.privacyPolicy` in the iOS app
-> (currently the placeholder `https://vital.app/privacy`). Items in [brackets] need a decision.
+> (now `https://vital-coach.fly.dev/privacy`, served by the backend from this file).
+> Items in [brackets] need a decision.
 
 **Effective date:** [DATE]
+
 **Contact:** [privacy contact email]
 
 Vital is a personal health and fitness coach. This policy explains what we collect,
