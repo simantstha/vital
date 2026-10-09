@@ -471,8 +471,8 @@ final class ScreenshotTests: XCTestCase {
                 // Race countdown line ("Half marathon · 12 weeks to go") from the fixture's race.
                 XCTAssertTrue(waitForText(app, containing: "Half marathon"),
                                "Today's endurance hero should show the race countdown [\(appearance)]")
-                // ...followed by the long-run build ("· long run 14/18 km"), from the same payload.
-                XCTAssertTrue(waitForText(app, containing: "long run 14/18 km"),
+                // ...followed by the long-run build ("· long run 14/18 km", number and unit joined by U+00A0), from the same payload.
+                XCTAssertTrue(waitForText(app, containing: "long run 14/18\u{00A0}km"),
                                "Today's endurance hero race line should carry the long-run progress [\(appearance)]")
             }
 

@@ -442,12 +442,12 @@ final class GoalHeroLogicTests: XCTestCase {
     // MARK: - Profile goal row
 
     func testGoalRowLabelShowsTheTarget() {
-        XCTAssertEqual(ProfileViewModel.goalRowLabel(goalLabel: "Lose weight", goalId: "weight_loss", targetWeightKg: 76, weeklySessions: nil, system: .metric), "Lose weight \u{00B7} 76\u{00A0}kg")
-        XCTAssertEqual(ProfileViewModel.goalRowLabel(goalLabel: "Build muscle", goalId: "muscle", targetWeightKg: 82, weeklySessions: 4, system: .metric), "Build muscle \u{00B7} 4\u{00D7}/week")
-        XCTAssertEqual(ProfileViewModel.goalRowLabel(goalLabel: "Build muscle", goalId: "muscle", targetWeightKg: 82, weeklySessions: nil, system: .metric), "Build muscle \u{00B7} 82\u{00A0}kg")
-        XCTAssertEqual(ProfileViewModel.goalRowLabel(goalLabel: "Endurance", goalId: "endurance", targetWeightKg: nil, weeklySessions: 3, system: .metric), "Endurance \u{00B7} 3\u{00D7}/week")
-        XCTAssertEqual(ProfileViewModel.goalRowLabel(goalLabel: "Endurance", goalId: "endurance", targetWeightKg: nil, weeklySessions: 3, weeklyDistanceKm: 30, system: .metric), "Endurance \u{00B7} 30\u{00A0}km/week")
-        XCTAssertEqual(ProfileViewModel.goalRowLabel(goalLabel: "Endurance", goalId: "endurance", targetWeightKg: nil, weeklySessions: nil, weeklyDistanceKm: 32.2, system: .imperial), "Endurance \u{00B7} 20\u{00A0}mi/week")
+        XCTAssertEqual(ProfileViewModel.goalRowLabel(goalLabel: "Lose weight", goalId: "weight_loss", targetWeightKg: 76, weeklySessions: nil, system: .metric), "Lose weight \u{00B7}\u{00A0}76\u{00A0}kg")
+        XCTAssertEqual(ProfileViewModel.goalRowLabel(goalLabel: "Build muscle", goalId: "muscle", targetWeightKg: 82, weeklySessions: 4, system: .metric), "Build muscle \u{00B7}\u{00A0}4\u{00D7}/week")
+        XCTAssertEqual(ProfileViewModel.goalRowLabel(goalLabel: "Build muscle", goalId: "muscle", targetWeightKg: 82, weeklySessions: nil, system: .metric), "Build muscle \u{00B7}\u{00A0}82\u{00A0}kg")
+        XCTAssertEqual(ProfileViewModel.goalRowLabel(goalLabel: "Endurance", goalId: "endurance", targetWeightKg: nil, weeklySessions: 3, system: .metric), "Endurance \u{00B7}\u{00A0}3\u{00D7}/week")
+        XCTAssertEqual(ProfileViewModel.goalRowLabel(goalLabel: "Endurance", goalId: "endurance", targetWeightKg: nil, weeklySessions: 3, weeklyDistanceKm: 30, system: .metric), "Endurance \u{00B7}\u{00A0}30\u{00A0}km/week")
+        XCTAssertEqual(ProfileViewModel.goalRowLabel(goalLabel: "Endurance", goalId: "endurance", targetWeightKg: nil, weeklySessions: nil, weeklyDistanceKm: 32.2, system: .imperial), "Endurance \u{00B7}\u{00A0}20\u{00A0}mi/week")
         XCTAssertEqual(ProfileViewModel.goalRowLabel(goalLabel: "Lose weight", goalId: "weight_loss", targetWeightKg: nil, weeklySessions: nil, system: .metric), "Lose weight")
         XCTAssertEqual(ProfileViewModel.goalRowLabel(goalLabel: "Maintain", goalId: "general", targetWeightKg: 70, weeklySessions: 3, system: .metric), "Maintain")
         XCTAssertEqual(ProfileViewModel.goalRowLabel(goalLabel: "", goalId: "", targetWeightKg: nil, weeklySessions: nil, system: .metric), "")
@@ -484,20 +484,33 @@ final class GoalHeroLogicTests: XCTestCase {
         }
         // The race leads (and replaces the generic "Endurance"), so what survives
         // a narrow row is the race, not the goal word.
-        XCTAssertEqual(label("endurance", km: 30), "Half marathon \u{00B7} Dec 30 \u{00B7} 30\u{00A0}km/wk")
-        XCTAssertEqual(label("endurance", km: 32.2, system: .imperial), "Half marathon \u{00B7} Dec 30 \u{00B7} 20\u{00A0}mi/wk")
-        XCTAssertEqual(label("endurance", sessions: 3), "Half marathon \u{00B7} Dec 30 \u{00B7} 3\u{00D7}/wk")
-        XCTAssertEqual(label("endurance"), "Half marathon \u{00B7} Dec 30", "race alone is still worth showing")
-        XCTAssertEqual(label("endurance", km: 30, raceKm: nil), "Race \u{00B7} Dec 30 \u{00B7} 30\u{00A0}km/wk")
+        XCTAssertEqual(label("endurance", km: 30), "Half marathon \u{00B7}\u{00A0}Dec 30 \u{00B7}\u{00A0}30\u{00A0}km/wk")
+        XCTAssertEqual(label("endurance", km: 32.2, system: .imperial), "Half marathon \u{00B7}\u{00A0}Dec 30 \u{00B7}\u{00A0}20\u{00A0}mi/wk")
+        XCTAssertEqual(label("endurance", sessions: 3), "Half marathon \u{00B7}\u{00A0}Dec 30 \u{00B7}\u{00A0}3\u{00D7}/wk")
+        XCTAssertEqual(label("endurance"), "Half marathon \u{00B7}\u{00A0}Dec 30", "race alone is still worth showing")
+        XCTAssertEqual(label("endurance", km: 30, raceKm: nil), "Race \u{00B7}\u{00A0}Dec 30 \u{00B7}\u{00A0}30\u{00A0}km/wk")
         XCTAssertFalse(label("endurance", km: 30).contains("Endurance"))
         // The number never separates from its unit on a wrapped row ("30" / "km/wk").
         XCTAssertTrue(label("endurance", km: 30).hasSuffix("30\u{00A0}km/wk"))
         XCTAssertFalse(label("endurance", km: 30).contains("30 km"))
         // A passed race / no race leaves the old label; other goals never show a race.
-        XCTAssertEqual(label("endurance", km: 30, race: "2026-10-01"), "Endurance \u{00B7} 30\u{00A0}km/week")
-        XCTAssertEqual(label("endurance", km: 30, race: nil), "Endurance \u{00B7} 30\u{00A0}km/week")
-        XCTAssertEqual(label("muscle", sessions: 4), "Build muscle \u{00B7} 4\u{00D7}/week")
+        XCTAssertEqual(label("endurance", km: 30, race: "2026-10-01"), "Endurance \u{00B7}\u{00A0}30\u{00A0}km/week")
+        XCTAssertEqual(label("endurance", km: 30, race: nil), "Endurance \u{00B7}\u{00A0}30\u{00A0}km/week")
+        XCTAssertEqual(label("muscle", sessions: 4), "Build muscle \u{00B7}\u{00A0}4\u{00D7}/week")
         XCTAssertEqual(label("endurance", race: nil), "Endurance")
+        // Each "·" is bound to the segment AFTER it (plain space before, NBSP
+        // after), so a wrap can only land before a dot and a line never ends in
+        // a dangling "·" ("Half marathon · Dec 31 ·" / "30 km/wk").
+        XCTAssertEqual(RaceLogic.goalRowSeparator, " \u{00B7}\u{00A0}")
+        for row in [
+            label("endurance", km: 30), label("endurance"), label("muscle", sessions: 4),
+            label("endurance", km: 30, race: nil),
+        ] {
+            XCTAssertTrue(row.contains(" \u{00B7}\u{00A0}"), row.debugDescription)
+            XCTAssertFalse(row.contains("\u{00B7} "), "a breakable space after the dot: \(row.debugDescription)")
+            XCTAssertFalse(row.contains("\u{00A0}\u{00B7}"), "dot glued to the segment before it: \(row.debugDescription)")
+            XCTAssertFalse(row.hasSuffix("\u{00B7}"))
+        }
     }
 
     // MARK: - Endurance readiness reason line (absolute units)

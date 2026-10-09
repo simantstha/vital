@@ -82,12 +82,30 @@ final class GoalTargetLogicTests: XCTestCase {
     func testPaceHintMetricAndImperial() {
         XCTAssertEqual(
             GoalTargetLogic.paceHint(currentKg: 82, targetKg: 76, units: .metric, from: now, calendar: utc),
-            "At ~0.5 kg/week that's around Dec 29"
+            "At ~0.5\u{00A0}kg/week that's around Dec 29"
         )
         XCTAssertEqual(
             GoalTargetLogic.paceHint(currentKg: 82, targetKg: 76, units: .imperial, from: now, calendar: utc),
-            "At ~1 lb/week that's around Dec 29"
+            "At ~1\u{00A0}lb/week that's around Dec 29"
         )
+    }
+
+    /// The pace hint and the aggressive-date warning glue each value to its unit
+    /// with U+00A0, so a narrow goal sheet wraps between words, never "0.5" / "kg/week".
+    func testNoPlainSpaceBetweenADigitAndAUnit() throws {
+        let in28Days = now.addingTimeInterval(28 * 86_400)
+        for units in [UnitSystem.metric, .imperial] {
+            let hint = try XCTUnwrap(
+                GoalTargetLogic.paceHint(currentKg: 82, targetKg: 76, units: units, from: now, calendar: utc)
+            )
+            assertNoBreakableUnitSpace(hint)
+            XCTAssertTrue(hint.contains("\u{00A0}\(units.weightUnit)/week"), hint)
+            let warning = try XCTUnwrap(GoalTargetLogic.sanityWarning(
+                goal: "weight_loss", currentKg: 82, targetKg: 76, targetDate: in28Days, units: units, from: now
+            ))
+            assertNoBreakableUnitSpace(warning)
+            XCTAssertTrue(warning.contains("\u{00A0}\(units.weightUnit)/week"), warning)
+        }
     }
 
     func testPaceHintNilForMissingOrInvalidInputs() {
@@ -125,7 +143,7 @@ final class GoalTargetLogicTests: XCTestCase {
         let in28Days = now.addingTimeInterval(28 * 86_400)
         XCTAssertEqual(
             GoalTargetLogic.sanityWarning(goal: "weight_loss", currentKg: 82, targetKg: 76, targetDate: in28Days, units: .metric, from: now),
-            "That date needs about 1.5 kg/week, faster than a healthy pace."
+            "That date needs about 1.5\u{00A0}kg/week, faster than a healthy pace."
         )
         let in120Days = now.addingTimeInterval(120 * 86_400)
         XCTAssertNil(

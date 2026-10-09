@@ -14,6 +14,14 @@ import Foundation
 /// silently skipped.
 enum TrendsStrengthLogic {
 
+    // MARK: - Non-breaking
+
+    /// U+00A0 (`UnitFormat.nbsp`). Joins a value to its unit ("142 kg", "4 wk",
+    /// "5.2 t") in every string built here, so a narrow row (the strength
+    /// chip, the volume line) can wrap BETWEEN tokens but never strand a unit
+    /// on its own line.
+    private static let nbsp = UnitFormat.nbsp
+
     // MARK: - Tunables
 
     /// Weeks shown in each lift's sparkline (and considered for ranking).
@@ -211,7 +219,7 @@ enum TrendsStrengthLogic {
 
         let weeksSinceLast = (e1rm.count - 1) - lastIndex
         if weeksSinceLast >= staleWeeks {
-            return Status(text: "Not logged in \(weeksSinceLast) wk", tone: .watch)
+            return Status(text: "Not logged in \(weeksSinceLast)\(nbsp)wk", tone: .watch)
         }
 
         guard let change = change(e1rm: e1rm) else {
@@ -224,12 +232,12 @@ enum TrendsStrengthLogic {
         // rounding reads as "No change" rather than "+0 kg".
         let shown = displayChange(change, system: system)
         if isProgressing(changeKg: delta, baselineKg: change.baselineKg), shown.change > 0 {
-            return Status(text: "+\(shown.change) \(system.weightUnit) vs 4 wk ago", tone: .good)
+            return Status(text: "+\(shown.change)\(nbsp)\(system.weightUnit) vs 4\(nbsp)wk ago", tone: .good)
         }
         if isDeclining(changeKg: delta, baselineKg: change.baselineKg), shown.change < 0 {
-            return Status(text: "\u{2212}\(-shown.change) \(system.weightUnit) vs 4 wk ago", tone: .watch)
+            return Status(text: "\u{2212}\(-shown.change)\(nbsp)\(system.weightUnit) vs 4\(nbsp)wk ago", tone: .watch)
         }
-        return Status(text: "No change vs 4 wk ago", tone: .watch)
+        return Status(text: "No change vs 4\(nbsp)wk ago", tone: .watch)
     }
 
     /// Whole-unit endpoints and the change between the ROUNDED endpoints —
@@ -254,7 +262,7 @@ enum TrendsStrengthLogic {
     /// A lift's e1RM as a whole-unit string ("142 kg" / "314 lb").
     static func wholeWeightText(kg: Double, system: UnitSystem) -> String {
         let value = system == .metric ? kg : UnitConvert.kgToLb(kg)
-        return "\(Int(value.rounded())) \(system.weightUnit)"
+        return "\(Int(value.rounded()))\(nbsp)\(system.weightUnit)"
     }
 
     /// Mirrors `isLiftProgressing`: a real gain is >= +1% of the baseline.
@@ -321,13 +329,13 @@ enum TrendsStrengthLogic {
     static func tonnageText(kg: Double, system: UnitSystem) -> String {
         switch system {
         case .metric:
-            return String(format: "%.1f t", kg / 1000)
+            return String(format: "%.1f\(nbsp)t", kg / 1000)
         case .imperial:
             let lb = UnitConvert.kgToLb(kg)
             if lb >= 1000 {
-                return String(format: "%.1fk lb", lb / 1000)
+                return String(format: "%.1fk\(nbsp)lb", lb / 1000)
             }
-            return "\(Int(lb.rounded())) lb"
+            return "\(Int(lb.rounded()))\(nbsp)lb"
         }
     }
 

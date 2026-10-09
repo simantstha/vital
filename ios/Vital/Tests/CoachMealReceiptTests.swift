@@ -389,7 +389,8 @@ final class CoachMealReceiptTests: XCTestCase {
             return nil
         }.flatMap { $0 }
         XCTAssertEqual(receipts.map(\.id), ["evt-42"])
-        XCTAssertEqual(receipts.first?.detail, "340 kcal · 18P 28C 16F")
+        XCTAssertEqual(receipts.first?.detail, "340\u{00A0}kcal · 18P 28C 16F")
+        assertNoBreakableUnitSpace(receipts.first?.detail ?? "")
     }
 
     // MARK: - Helpers

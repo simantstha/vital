@@ -519,7 +519,7 @@ final class FixtureCrossScreenConsistencyTests: XCTestCase {
         XCTAssertEqual(GoalProgressLogic.stepTargetKm(progress), 27)
         XCTAssertEqual(
             GoalProgressLogic.distanceLine(progress, system: .metric),
-            "\(GoalProgressLogic.trimmedNumber(week.km)) of ~27 km this week · goal 30 km"
+            "\(GoalProgressLogic.trimmedNumber(week.km)) of ~27\u{00A0}km this week · goal 30\u{00A0}km"
         )
         XCTAssertEqual(GoalProgressLogic.distanceFraction(progress) ?? .nan, week.km / 27, accuracy: 0.0001)
         let rawDistance = json(.endurance, "/api/goal/progress")["distance"] as? [String: Any]
@@ -630,8 +630,8 @@ final class FixtureCrossScreenConsistencyTests: XCTestCase {
             raceDate: profile["raceDate"] as? String, raceDistanceKm: profile["raceDistanceKm"] as? Double,
             system: .metric
         )
-        XCTAssertTrue(row.hasPrefix("Half marathon \u{00B7} "), row)
-        XCTAssertTrue(row.hasSuffix(" \u{00B7} 30\u{00A0}km/wk"), row)
+        XCTAssertTrue(row.hasPrefix("Half marathon \u{00B7}\u{00A0}"), row)
+        XCTAssertTrue(row.hasSuffix(" \u{00B7}\u{00A0}30\u{00A0}km/wk"), row)
         XCTAssertFalse(row.contains("Endurance"), "the race replaces the generic goal word: \(row)")
     }
 
@@ -643,7 +643,7 @@ final class FixtureCrossScreenConsistencyTests: XCTestCase {
         let race = try XCTUnwrap(progress.race)
         XCTAssertEqual(
             RaceLogic.heroLine(race, longRun: progress.longRun, system: .metric),
-            "Half marathon \u{00B7} 12 weeks to go \u{00B7} long run 14/18 km"
+            "Half marathon \u{00B7} 12 weeks to go \u{00B7} long run 14/18\u{00A0}km"
         )
         // The other scenarios have no race or long run to quote.
         for scenario in [FixtureMode.Scenario.weightLoss, .muscle] {
@@ -915,7 +915,7 @@ final class FixtureCrossScreenConsistencyTests: XCTestCase {
         let squat = try XCTUnwrap(TrendsStrengthLogic.change(e1rm: e1rm("squat")))
         XCTAssertEqual(TrendsStrengthLogic.displayChange(squat, system: .metric),
                        TrendsStrengthLogic.DisplayChange(baseline: 153, recent: 163, change: 10))
-        XCTAssertEqual(TrendsStrengthLogic.status(e1rm: e1rm("squat"), system: .metric).text, "+10 kg vs 4 wk ago")
+        XCTAssertEqual(TrendsStrengthLogic.status(e1rm: e1rm("squat"), system: .metric).text, "+10\u{00A0}kg vs 4\u{00A0}wk ago")
         XCTAssertEqual(FixtureData.squatE1RMFourWeeksAgoKg, 153)
         XCTAssertEqual(FixtureData.squatE1RMNowKg, 163)
 

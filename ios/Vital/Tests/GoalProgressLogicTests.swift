@@ -58,7 +58,7 @@ final class GoalProgressLogicTests: XCTestCase {
     func testCompactTextRepeatsDistanceOnlyWhenHeroDoesNotShowIt() {
         let progress = endurance(headline: "Building — distance up 12% (last 2 wk vs 2 before)")
         XCTAssertEqual(GoalProgressLogic.compactText(progress, system: .metric, now: now, locale: en),
-                       "17.2 of 30 km this week")
+                       "17.2 of 30\u{00A0}km this week")
         XCTAssertEqual(GoalProgressLogic.compactText(progress, system: .metric, heroShowsDistance: true, now: now, locale: en),
                        "distance up 12% (last 2 wk vs 2 before)")
     }
@@ -69,6 +69,10 @@ final class GoalProgressLogicTests: XCTestCase {
                        "Distance up 12%")
         XCTAssertEqual(GoalProgressLogic.distanceReasonText(
             endurance(headline: "Building — 17.2 of 30 km this week", reasons: reasons), system: .metric),
+                       "Distance up 12%")
+        // The same line spelled with the server's non-breaking spaces is excluded too.
+        XCTAssertEqual(GoalProgressLogic.distanceReasonText(
+            endurance(headline: "Building — 17.2 of 30\u{00A0}km this week", reasons: reasons), system: .metric),
                        "Distance up 12%")
         XCTAssertNil(GoalProgressLogic.distanceReasonText(endurance(headline: ""), system: .metric))
     }
@@ -385,10 +389,23 @@ final class GoalProgressLogicTests: XCTestCase {
 
     func testDistanceLineIsPrimaryAndUnitAware() {
         let p = distanceProgress()
-        XCTAssertEqual(GoalProgressLogic.distanceLine(p, system: .metric), "24.5 of 30 km this week")
-        XCTAssertEqual(GoalProgressLogic.primaryLine(p, system: .metric), "24.5 of 30 km this week")
-        XCTAssertEqual(GoalProgressLogic.distanceLine(p, system: .imperial), "15.2 of 18.6 mi this week")
-        XCTAssertEqual(GoalProgressLogic.distanceAverageLine(p, system: .metric), "4-week avg 23.2 km a week")
+        XCTAssertEqual(GoalProgressLogic.distanceLine(p, system: .metric), "24.5 of 30\u{00A0}km this week")
+        XCTAssertEqual(GoalProgressLogic.primaryLine(p, system: .metric), "24.5 of 30\u{00A0}km this week")
+        XCTAssertEqual(GoalProgressLogic.distanceLine(p, system: .imperial), "15.2 of 18.6\u{00A0}mi this week")
+        XCTAssertEqual(GoalProgressLogic.distanceAverageLine(p, system: .metric), "4-week avg 23.2\u{00A0}km a week")
+    }
+
+    /// Every value+unit in the weekly-distance lines is glued with U+00A0, so a
+    /// narrow card wraps between tokens ("22.7 of ~27 km" / "this week"), never
+    /// "~27" / "km".
+    func testDistanceLinesHaveNoPlainSpaceBetweenADigitAndAUnit() {
+        for system in [UnitSystem.metric, .imperial] {
+            for p in [distanceProgress(), distanceProgress(thisWeek: 22.7, step: 27)] {
+                assertNoBreakableUnitSpace(GoalProgressLogic.distanceLine(p, system: system) ?? "")
+                assertNoBreakableUnitSpace(GoalProgressLogic.primaryLine(p, system: system))
+                assertNoBreakableUnitSpace(GoalProgressLogic.distanceAverageLine(p, system: system) ?? "")
+            }
+        }
     }
 
     func testDistanceFractionClampedAndNilWithoutData() throws {
@@ -418,20 +435,20 @@ final class GoalProgressLogicTests: XCTestCase {
     func testDistanceLineAndBarUseTheStepTargetWhenItIsBelowTheGoal() throws {
         let p = distanceProgress(thisWeek: 22.7, step: 27)
         XCTAssertEqual(GoalProgressLogic.stepTargetKm(p), 27)
-        XCTAssertEqual(GoalProgressLogic.distanceLine(p, system: .metric), "22.7 of ~27 km this week · goal 30 km")
-        XCTAssertEqual(GoalProgressLogic.primaryLine(p, system: .metric), "22.7 of ~27 km this week · goal 30 km")
+        XCTAssertEqual(GoalProgressLogic.distanceLine(p, system: .metric), "22.7 of ~27\u{00A0}km this week · goal 30\u{00A0}km")
+        XCTAssertEqual(GoalProgressLogic.primaryLine(p, system: .metric), "22.7 of ~27\u{00A0}km this week · goal 30\u{00A0}km")
         XCTAssertEqual(try XCTUnwrap(GoalProgressLogic.distanceFraction(p)), 22.7 / 27, accuracy: 0.0001)
         XCTAssertEqual(plain(GoalProgressLogic.distanceBarEndText(p, system: .metric)), "~27 km")
         // Past the step the bar is simply full.
         XCTAssertEqual(try XCTUnwrap(GoalProgressLogic.distanceFraction(distanceProgress(thisWeek: 28, step: 27))), 1, accuracy: 0.0001)
         // Nothing else about the average line changes.
-        XCTAssertEqual(GoalProgressLogic.distanceAverageLine(p, system: .metric), "4-week avg 23.2 km a week")
+        XCTAssertEqual(GoalProgressLogic.distanceAverageLine(p, system: .metric), "4-week avg 23.2\u{00A0}km a week")
     }
 
     func testDistanceStepIsUnitAware() {
         // The server sends the step in km (17 whole miles = 27.4 km); the goal 30 km = 18.6 mi.
         let p = distanceProgress(thisWeek: 22.7, step: 27.4)
-        XCTAssertEqual(GoalProgressLogic.distanceLine(p, system: .imperial), "14.1 of ~17 mi this week · goal 18.6 mi")
+        XCTAssertEqual(GoalProgressLogic.distanceLine(p, system: .imperial), "14.1 of ~17\u{00A0}mi this week · goal 18.6\u{00A0}mi")
         XCTAssertEqual(plain(GoalProgressLogic.distanceBarEndText(p, system: .imperial)), "~17 mi")
     }
 
@@ -441,7 +458,7 @@ final class GoalProgressLogicTests: XCTestCase {
         for step in [nil, 30, 31, 0, -4, Double.nan] as [Double?] {
             let p = distanceProgress(thisWeek: 24.5, step: step)
             XCTAssertNil(GoalProgressLogic.stepTargetKm(p), "step \(String(describing: step))")
-            XCTAssertEqual(GoalProgressLogic.distanceLine(p, system: .metric), "24.5 of 30 km this week")
+            XCTAssertEqual(GoalProgressLogic.distanceLine(p, system: .metric), "24.5 of 30\u{00A0}km this week")
             XCTAssertEqual(try XCTUnwrap(GoalProgressLogic.distanceFraction(p)), 24.5 / 30, accuracy: 0.0001)
             XCTAssertEqual(plain(GoalProgressLogic.distanceBarEndText(p, system: .metric)), "30 km")
         }
@@ -465,7 +482,7 @@ final class GoalProgressLogicTests: XCTestCase {
         XCTAssertNil(try decode(",\"stepTargetKm\":\"nope\"").distance?.stepTargetKm, "wrong type never hides the card")
         XCTAssertEqual(try decode(",\"stepTargetKm\":\"nope\"").distance?.thisWeekKm, 22.7)
         let withStep = try decode(",\"stepTargetKm\":27")
-        XCTAssertEqual(GoalProgressLogic.distanceLine(withStep, system: .metric), "22.7 of ~27 km this week · goal 30 km")
+        XCTAssertEqual(GoalProgressLogic.distanceLine(withStep, system: .metric), "22.7 of ~27\u{00A0}km this week · goal 30\u{00A0}km")
     }
 
     // MARK: - Day-1 honesty, stale weigh-ins, compact Today line

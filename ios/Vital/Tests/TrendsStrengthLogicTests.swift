@@ -70,7 +70,7 @@ final class TrendsStrengthLogicTests: XCTestCase {
     func testStatusReportsGainVsFourWeeksAgoAsGood() {
         let e1rm: [Double?] = [nil, nil, nil, 100, nil, nil, nil, 110]
         let status = TrendsStrengthLogic.status(e1rm: e1rm, system: .metric)
-        XCTAssertEqual(status.text, "+10 kg vs 4 wk ago")
+        XCTAssertEqual(status.text, "+10\u{00A0}kg vs 4\u{00A0}wk ago")
         XCTAssertEqual(status.tone, .good)
     }
 
@@ -78,7 +78,7 @@ final class TrendsStrengthLogicTests: XCTestCase {
     /// endpoints (100 -> 102.5 shows 100 -> 103, so +3 kg).
     func testStatusShowsWholeKgForFractionalMetricGain() {
         let e1rm: [Double?] = [nil, nil, nil, 100, nil, nil, nil, 102.5]
-        XCTAssertEqual(TrendsStrengthLogic.status(e1rm: e1rm, system: .metric).text, "+3 kg vs 4 wk ago")
+        XCTAssertEqual(TrendsStrengthLogic.status(e1rm: e1rm, system: .metric).text, "+3\u{00A0}kg vs 4\u{00A0}wk ago")
     }
 
     /// The persona-review case: 99.2 -> 107.9 is +8.7 kg unrounded, which printed
@@ -99,63 +99,63 @@ final class TrendsStrengthLogicTests: XCTestCase {
     func testStatusConvertsGainToPoundsForImperialUsers() {
         let e1rm: [Double?] = [nil, nil, nil, 100, nil, nil, nil, 110]
         // 100 kg = 220 lb, 110 kg = 243 lb (rounded endpoints) -> +23 lb
-        XCTAssertEqual(TrendsStrengthLogic.status(e1rm: e1rm, system: .imperial).text, "+23 lb vs 4 wk ago")
+        XCTAssertEqual(TrendsStrengthLogic.status(e1rm: e1rm, system: .imperial).text, "+23\u{00A0}lb vs 4\u{00A0}wk ago")
     }
 
     func testStatusReportsNoChangeAsWatch() {
         let flat: [Double?] = [100, 100, 100, 100, 100, 100, 100, 100]
         let status = TrendsStrengthLogic.status(e1rm: flat, system: .metric)
-        XCTAssertEqual(status.text, "No change vs 4 wk ago")
+        XCTAssertEqual(status.text, "No change vs 4\u{00A0}wk ago")
         XCTAssertEqual(status.tone, .watch)
     }
 
     func testStatusTreatsSubThresholdChangeAsNoChange() {
         let e1rm: [Double?] = [nil, nil, nil, 100, nil, nil, nil, 100.6]
-        XCTAssertEqual(TrendsStrengthLogic.status(e1rm: e1rm, system: .metric).text, "No change vs 4 wk ago")
+        XCTAssertEqual(TrendsStrengthLogic.status(e1rm: e1rm, system: .metric).text, "No change vs 4\u{00A0}wk ago")
     }
 
     func testStatusProgressThresholdIsOnePercentOfBaseline() {
         // 100 -> 101 is exactly +1%: progressing. 100 -> 100.9 is not.
         XCTAssertEqual(
             TrendsStrengthLogic.status(e1rm: [nil, nil, nil, 100, nil, nil, nil, 101], system: .metric).text,
-            "+1 kg vs 4 wk ago"
+            "+1\u{00A0}kg vs 4\u{00A0}wk ago"
         )
         XCTAssertEqual(
             TrendsStrengthLogic.status(e1rm: [nil, nil, nil, 100, nil, nil, nil, 100.9], system: .metric).text,
-            "No change vs 4 wk ago"
+            "No change vs 4\u{00A0}wk ago"
         )
         // The bar scales with the lift: +1 kg on 200 kg is only +0.5% (stall),
         // while +1 kg on 50 kg is +2% (progress) — a fixed 1 kg would call both progress.
         XCTAssertEqual(
             TrendsStrengthLogic.status(e1rm: [nil, nil, nil, 200, nil, nil, nil, 201], system: .metric).text,
-            "No change vs 4 wk ago"
+            "No change vs 4\u{00A0}wk ago"
         )
         XCTAssertEqual(
             TrendsStrengthLogic.status(e1rm: [nil, nil, nil, 50, nil, nil, nil, 51], system: .metric).text,
-            "+1 kg vs 4 wk ago"
+            "+1\u{00A0}kg vs 4\u{00A0}wk ago"
         )
         // Small dips under 1% of baseline are also "no change", not a decline.
         XCTAssertEqual(
             TrendsStrengthLogic.status(e1rm: [nil, nil, nil, 200, nil, nil, nil, 199], system: .metric).text,
-            "No change vs 4 wk ago"
+            "No change vs 4\u{00A0}wk ago"
         )
         XCTAssertEqual(
             TrendsStrengthLogic.status(e1rm: [nil, nil, nil, 200, nil, nil, nil, 198], system: .metric).text,
-            "\u{2212}2 kg vs 4 wk ago"
+            "\u{2212}2\u{00A0}kg vs 4\u{00A0}wk ago"
         )
     }
 
     func testStatusReportsDeclineAsWatchWithTypographicMinus() {
         let e1rm: [Double?] = [nil, nil, nil, 110, nil, nil, nil, 100]
         let status = TrendsStrengthLogic.status(e1rm: e1rm, system: .metric)
-        XCTAssertEqual(status.text, "\u{2212}10 kg vs 4 wk ago")
+        XCTAssertEqual(status.text, "\u{2212}10\u{00A0}kg vs 4\u{00A0}wk ago")
         XCTAssertEqual(status.tone, .watch)
     }
 
     func testStatusUsesTheBestOfTheLastTwoWeeksAndTheBestOfTheBaselineWeeks() {
         // recent = best(104, 103) = 104; baseline = best(100, 98) = 100.
         let e1rm: [Double?] = [nil, nil, 98, 100, nil, nil, 104, 103]
-        XCTAssertEqual(TrendsStrengthLogic.status(e1rm: e1rm, system: .metric).text, "+4 kg vs 4 wk ago")
+        XCTAssertEqual(TrendsStrengthLogic.status(e1rm: e1rm, system: .metric).text, "+4\u{00A0}kg vs 4\u{00A0}wk ago")
     }
 
     func testStatusIsNewWhenNothingExistsFourWeeksBack() {
@@ -167,9 +167,9 @@ final class TrendsStrengthLogicTests: XCTestCase {
     func testStatusFlagsALiftNotTrainedInTheLastThreeWeeks() {
         // Newest e1RM 3 weeks back (index 4 of 8): outside the server's 3-week end search.
         let status = TrendsStrengthLogic.status(e1rm: [100, 102, nil, nil, 105, nil, nil, nil], system: .metric)
-        XCTAssertEqual(status.text, "Not logged in 3 wk")
+        XCTAssertEqual(status.text, "Not logged in 3\u{00A0}wk")
         XCTAssertEqual(status.tone, .watch)
-        XCTAssertEqual(TrendsStrengthLogic.status(e1rm: [100, 102, nil, nil, nil, nil, nil, nil], system: .metric).text, "Not logged in 6 wk")
+        XCTAssertEqual(TrendsStrengthLogic.status(e1rm: [100, 102, nil, nil, nil, nil, nil, nil], system: .metric).text, "Not logged in 6\u{00A0}wk")
     }
 
     func testStatusStillReportsChangeWhenLastLoggedTwoWeeksBack() {
@@ -177,7 +177,7 @@ final class TrendsStrengthLogicTests: XCTestCase {
         // server reports a change and so does iOS: recent 105 vs baseline 102.
         let e1rm: [Double?] = [100, 102, nil, nil, nil, 105, nil, nil]
         let status = TrendsStrengthLogic.status(e1rm: e1rm, system: .metric)
-        XCTAssertEqual(status.text, "+3 kg vs 4 wk ago")
+        XCTAssertEqual(status.text, "+3\u{00A0}kg vs 4\u{00A0}wk ago")
         XCTAssertEqual(status.tone, .good)
     }
 
@@ -195,7 +195,7 @@ final class TrendsStrengthLogicTests: XCTestCase {
             TrendsStrengthLogic.LiftChange(baselineKg: 102.1, recentKg: 107.9, changeKg: 5.8)
         )
         // Whole kg from rounded endpoints: 102.1 -> 107.9 shows 102 -> 108 = +6.
-        XCTAssertEqual(TrendsStrengthLogic.status(e1rm: bench, system: .metric).text, "+6 kg vs 4 wk ago")
+        XCTAssertEqual(TrendsStrengthLogic.status(e1rm: bench, system: .metric).text, "+6\u{00A0}kg vs 4\u{00A0}wk ago")
 
         let squat = series(["2026-09-07": 140, "2026-10-05": 138.2])
         XCTAssertEqual(
@@ -221,7 +221,7 @@ final class TrendsStrengthLogicTests: XCTestCase {
             TrendsStrengthLogic.LiftChange(baselineKg: 101, recentKg: 106.4, changeKg: 5.4)
         )
         // 101 -> 106.4 shows 101 -> 106 = +5.
-        XCTAssertEqual(TrendsStrengthLogic.status(e1rm: bench, system: .metric).text, "+5 kg vs 4 wk ago")
+        XCTAssertEqual(TrendsStrengthLogic.status(e1rm: bench, system: .metric).text, "+5\u{00A0}kg vs 4\u{00A0}wk ago")
 
         // The end week is searched only 3 weeks back (10-05, 09-28, 09-21).
         XCTAssertNil(TrendsStrengthLogic.change(e1rm: series(["2026-09-14": 100])))
@@ -255,11 +255,11 @@ final class TrendsStrengthLogicTests: XCTestCase {
         let summary = WorkoutSummaryResponse(days: 84, exercises: exercises())
         let card = try XCTUnwrap(TrendsStrengthLogic.card(from: summary, system: .metric, today: today))
         let squat = try XCTUnwrap(card.lifts.first)
-        XCTAssertEqual(squat.currentText, "108 kg")
+        XCTAssertEqual(squat.currentText, "108\u{00A0}kg")
         XCTAssertEqual(squat.sparkline.count, 8)
         XCTAssertNil(squat.sparkline[0])
         XCTAssertEqual(squat.sparkline[7], 108)
-        XCTAssertEqual(squat.status.text, "+8 kg vs 4 wk ago")
+        XCTAssertEqual(squat.status.text, "+8\u{00A0}kg vs 4\u{00A0}wk ago")
         XCTAssertEqual(squat.changeKg, 8)
         XCTAssertEqual(squat.status.tone, .good)
         XCTAssertEqual(card.lifts[2].status.text, "New") // deadlift: one week of data
@@ -268,16 +268,16 @@ final class TrendsStrengthLogicTests: XCTestCase {
     func testCardFormatsCurrentValueInPoundsForImperialUsers() throws {
         let summary = WorkoutSummaryResponse(days: 84, exercises: exercises())
         let card = try XCTUnwrap(TrendsStrengthLogic.card(from: summary, system: .imperial, today: today))
-        XCTAssertEqual(card.lifts.first?.currentText, "238 lb") // 108 kg
+        XCTAssertEqual(card.lifts.first?.currentText, "238\u{00A0}lb") // 108 kg
     }
 
     func testCardVolumeLineComparesThisWeekToLastWeek() throws {
         let summary = WorkoutSummaryResponse(days: 84, exercises: exercises())
         let card = try XCTUnwrap(TrendsStrengthLogic.card(from: summary, system: .metric, today: today))
         // This week: squat 3 + bench 3 + deadlift 3 = 9 sets, 1620 + 1000 + 2000 kg.
-        XCTAssertEqual(card.volume.thisWeek, "This week: 9 sets · 4.6 t lifted")
+        XCTAssertEqual(card.volume.thisWeek, "This week: 9 sets · 4.6\u{00A0}t lifted")
         // Last week: squat 3 + bench 3 = 6 sets, 1500 + 900 kg.
-        XCTAssertEqual(card.volume.comparison, "vs 6 sets · 2.4 t last week")
+        XCTAssertEqual(card.volume.comparison, "vs 6 sets · 2.4\u{00A0}t last week")
     }
 
     func testCardVolumeLineHandlesAnEmptyCurrentWeek() throws {
@@ -287,7 +287,7 @@ final class TrendsStrengthLogicTests: XCTestCase {
         ])
         let card = try XCTUnwrap(TrendsStrengthLogic.card(from: summary, system: .metric, today: today))
         XCTAssertEqual(card.volume.thisWeek, "This week: no sets yet")
-        XCTAssertEqual(card.volume.comparison, "vs 3 sets · 1.5 t last week")
+        XCTAssertEqual(card.volume.comparison, "vs 3 sets · 1.5\u{00A0}t last week")
     }
 
     func testCardIsHiddenWhenNothingIsLogged() {
@@ -310,16 +310,47 @@ final class TrendsStrengthLogicTests: XCTestCase {
     // MARK: - tonnage / magnitude formatting
 
     func testTonnageText() {
-        XCTAssertEqual(TrendsStrengthLogic.tonnageText(kg: 5200, system: .metric), "5.2 t")
-        XCTAssertEqual(TrendsStrengthLogic.tonnageText(kg: 5200, system: .imperial), "11.5k lb")
-        XCTAssertEqual(TrendsStrengthLogic.tonnageText(kg: 100, system: .imperial), "220 lb")
+        XCTAssertEqual(TrendsStrengthLogic.tonnageText(kg: 5200, system: .metric), "5.2\u{00A0}t")
+        XCTAssertEqual(TrendsStrengthLogic.tonnageText(kg: 5200, system: .imperial), "11.5k\u{00A0}lb")
+        XCTAssertEqual(TrendsStrengthLogic.tonnageText(kg: 100, system: .imperial), "220\u{00A0}lb")
     }
 
     func testMagnitudeText() {
-        XCTAssertEqual(TrendsStrengthLogic.magnitudeText(kg: 3, system: .metric), "3 kg")
-        XCTAssertEqual(TrendsStrengthLogic.magnitudeText(kg: 2.4, system: .metric), "2 kg")
-        XCTAssertEqual(TrendsStrengthLogic.magnitudeText(kg: -2.5, system: .metric), "3 kg")
-        XCTAssertEqual(TrendsStrengthLogic.magnitudeText(kg: 2.5, system: .imperial), "6 lb")
+        XCTAssertEqual(TrendsStrengthLogic.magnitudeText(kg: 3, system: .metric), "3\u{00A0}kg")
+        XCTAssertEqual(TrendsStrengthLogic.magnitudeText(kg: 2.4, system: .metric), "2\u{00A0}kg")
+        XCTAssertEqual(TrendsStrengthLogic.magnitudeText(kg: -2.5, system: .metric), "3\u{00A0}kg")
+        XCTAssertEqual(TrendsStrengthLogic.magnitudeText(kg: 2.5, system: .imperial), "6\u{00A0}lb")
+    }
+
+    /// Every number+unit pair the card builds is glued with U+00A0, so a narrow
+    /// chip / row wraps BETWEEN tokens ("+8 kg" / "vs 4 wk ago"), never
+    /// "+8" / "kg".
+    func testNoPlainSpaceBetweenADigitAndAUnit() throws {
+        for system in [UnitSystem.metric, .imperial] {
+            let summary = WorkoutSummaryResponse(days: 84, exercises: exercises())
+            let card = try XCTUnwrap(TrendsStrengthLogic.card(from: summary, system: system, today: today))
+            for lift in card.lifts {
+                assertNoBreakableUnitSpace(lift.currentText)
+                assertNoBreakableUnitSpace(lift.status.text)
+                assertNoBreakableUnitSpace(lift.accessibilityLabel)
+            }
+            assertNoBreakableUnitSpace(card.volume.thisWeek)
+            assertNoBreakableUnitSpace(card.volume.comparison ?? "")
+            assertNoBreakableUnitSpace(TrendsStrengthLogic.magnitudeText(kg: 2.5, system: system))
+            assertNoBreakableUnitSpace(TrendsStrengthLogic.tonnageText(kg: 5200, system: system))
+            assertNoBreakableUnitSpace(TrendsStrengthLogic.tonnageText(kg: 100, system: system))
+        }
+        // Gain, loss, flat and stale chips.
+        let series: [[Double?]] = [
+            [nil, nil, nil, 100, nil, nil, nil, 110],
+            [nil, nil, nil, 110, nil, nil, nil, 100],
+            [100, 100, 100, 100, 100, 100, 100, 100],
+            [100, 102, nil, nil, nil, nil, nil, nil],
+        ]
+        for e1rm in series {
+            assertNoBreakableUnitSpace(TrendsStrengthLogic.status(e1rm: e1rm, system: .metric).text)
+            assertNoBreakableUnitSpace(TrendsStrengthLogic.status(e1rm: e1rm, system: .imperial).text)
+        }
     }
 
     // MARK: - goal ordering

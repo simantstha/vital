@@ -24,7 +24,7 @@ final class TrendsWeightCardLogicTests: XCTestCase {
             entries: sevenDayEntries,
             system: .metric
         )
-        XCTAssertEqual(pill?.text, "↓ 0.6 kg/wk")
+        XCTAssertEqual(pill?.text, "↓\u{00A0}0.6\u{00A0}kg/wk")
         XCTAssertEqual(pill?.tone, .positive)
     }
 
@@ -34,7 +34,7 @@ final class TrendsWeightCardLogicTests: XCTestCase {
             entries: sevenDayEntries,
             system: .metric
         )
-        XCTAssertEqual(pill?.text, "↑ 0.3 kg/wk")
+        XCTAssertEqual(pill?.text, "↑\u{00A0}0.3\u{00A0}kg/wk")
         XCTAssertEqual(pill?.tone, .caution)
     }
 
@@ -44,7 +44,7 @@ final class TrendsWeightCardLogicTests: XCTestCase {
             entries: sevenDayEntries,
             system: .metric
         )
-        XCTAssertEqual(pill?.text, "→ 0.0 kg/wk")
+        XCTAssertEqual(pill?.text, "→\u{00A0}0.0\u{00A0}kg/wk")
         XCTAssertEqual(pill?.tone, .neutral)
     }
 
@@ -74,29 +74,54 @@ final class TrendsWeightCardLogicTests: XCTestCase {
             system: .imperial
         )
         // -0.5 kg/wk * 2.2046226218 ≈ -1.1023 lb/wk → rounds to 1.1.
-        XCTAssertEqual(pill?.text, "↓ 1.1 lb/wk")
+        XCTAssertEqual(pill?.text, "↓\u{00A0}1.1\u{00A0}lb/wk")
     }
 
     // MARK: - sublineText
 
     func testSublineTextShowsALossWithASignAndTheStartDate() {
         let text = TrendsWeightCardLogic.sublineText(firstValue: 85.1, lastValue: 82.0, firstDayLabel: "28 Aug", system: .metric)
-        XCTAssertEqual(text, "−3.1 kg since 28 Aug")
+        XCTAssertEqual(text, "−3.1\u{00A0}kg since 28 Aug")
     }
 
     func testSublineTextShowsAGainWithAPlusSign() {
         let text = TrendsWeightCardLogic.sublineText(firstValue: 80.0, lastValue: 81.5, firstDayLabel: "1 Sep", system: .metric)
-        XCTAssertEqual(text, "+1.5 kg since 1 Sep")
+        XCTAssertEqual(text, "+1.5\u{00A0}kg since 1 Sep")
     }
 
     func testSublineTextNormalizesANearZeroDeltaToAPlainZero() {
         let text = TrendsWeightCardLogic.sublineText(firstValue: 80.0, lastValue: 80.0, firstDayLabel: "1 Sep", system: .metric)
-        XCTAssertEqual(text, "0.0 kg since 1 Sep")
+        XCTAssertEqual(text, "0.0\u{00A0}kg since 1 Sep")
     }
 
     func testSublineTextUsesTheImperialUnit() {
         let text = TrendsWeightCardLogic.sublineText(firstValue: 180.0, lastValue: 177.0, firstDayLabel: "28 Aug", system: .imperial)
-        XCTAssertEqual(text, "−3.0 lb since 28 Aug")
+        XCTAssertEqual(text, "−3.0\u{00A0}lb since 28 Aug")
+    }
+
+    // MARK: - non-breaking joins
+
+    /// The pill and the since-line glue every value to its unit (and the pill's
+    /// arrow to its value) with U+00A0, so a narrow header wraps between
+    /// tokens, never "0.6" / "kg/wk".
+    func testNoPlainSpaceBetweenADigitAndAUnit() throws {
+        let days = [WeightTrendDayDTO(day: "2026-09-08", rawKg: 82, trendKg: 82)]
+        for system in [UnitSystem.metric, .imperial] {
+            for delta in [-0.6, 0.3, 0.0] {
+                let pill = try XCTUnwrap(TrendsWeightCardLogic.ratePill(
+                    trend: trend(delta7d: delta, days: days), entries: sevenDayEntries, system: system
+                ))
+                assertNoBreakableUnitSpace(pill.text)
+                XCTAssertFalse(pill.text.contains(" "), "plain space left in \(pill.text.debugDescription)")
+            }
+            for (first, last) in [(85.1, 82.0), (80.0, 81.5), (80.0, 80.0)] {
+                let text = TrendsWeightCardLogic.sublineText(
+                    firstValue: first, lastValue: last, firstDayLabel: "28 Aug", system: system
+                )
+                assertNoBreakableUnitSpace(text)
+                XCTAssertTrue(text.contains("\u{00A0}\(system.weightUnit) since 28 Aug"), text)
+            }
+        }
     }
 
     // MARK: - chartDate

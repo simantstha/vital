@@ -115,20 +115,27 @@ final class CoachOpenerAndComposerTests: XCTestCase {
     func testGoalStatusOpenerStatesAmountAndPaceInKg() {
         XCTAssertEqual(
             CoachViewModel.goalStatusOpener(progress(), system: .metric, now: now, locale: en),
-            "You're 1.7 of 7.7 kg down and about 2 weeks ahead of your Dec 24 target. What would you like to dig into?"
+            "You're 1.7 of 7.7\u{00A0}kg down and about 2\u{00A0}weeks ahead of your Dec 24 target. What would you like to dig into?"
         )
     }
 
     func testGoalStatusOpenerConvertsToPounds() {
         let text = CoachViewModel.goalStatusOpener(progress(), system: .imperial, now: now, locale: en) ?? ""
-        XCTAssertTrue(text.hasPrefix("You're 3.7 of 17 lb down"), text)
+        XCTAssertTrue(text.hasPrefix("You're 3.7 of 17\u{00A0}lb down"), text)
     }
 
     func testGoalStatusOpenerOmitsPaceWithoutEta() {
         XCTAssertEqual(
             CoachViewModel.goalStatusOpener(progress(eta: nil), system: .metric, now: now, locale: en),
-            "You're 1.7 of 7.7 kg down. What would you like to dig into?"
+            "You're 1.7 of 7.7\u{00A0}kg down. What would you like to dig into?"
         )
+    }
+
+    func testGoalStatusOpenerHasNoPlainSpaceBetweenADigitAndAUnit() throws {
+        for system in [UnitSystem.metric, .imperial] {
+            let text = try XCTUnwrap(CoachViewModel.goalStatusOpener(progress(), system: system, now: now, locale: en))
+            assertNoBreakableUnitSpace(text)
+        }
     }
 
     func testGoalStatusOpenerFallsBackToHeadlineForNonWeightGoals() {

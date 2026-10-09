@@ -47,6 +47,8 @@ enum RaceLogic {
     // MARK: - Labels
 
     /// Mirrors the server's `raceLabel`: "Half marathon", "Marathon", "10K", "5K", "<n> km race", or "Race".
+    /// The custom-distance form joins the number to "km" with U+00A0 (the
+    /// server's `withUnit` does too), so a narrow row never strands "km race".
     static func label(forKm km: Double?) -> String {
         guard let km else { return "Race" }
         if abs(km - 21.1) < 0.05 { return "Half marathon" }
@@ -54,7 +56,7 @@ enum RaceLogic {
         if km == 10 { return "10K" }
         if km == 5 { return "5K" }
         let n = km.rounded() == km ? String(Int(km)) : String(format: "%.1f", km)
-        return "\(n) km race"
+        return "\(n)\(UnitFormat.nbsp)km race"
     }
 
     /// The preset matching `km` (within 0.05), or nil for a custom distance.
@@ -84,7 +86,8 @@ enum RaceLogic {
         return line
     }
 
-    /// "long run 14/18 km" (imperial: "long run 8.7/11.2 mi") — the most recent
+    /// "long run 14/18 km" (imperial: "long run 8.7/11.2 mi"; the number and
+    /// unit are joined by `UnitFormat.nbsp`) — the most recent
     /// long run against the peak long run to build to. Falls back to the
     /// 28-day peak when there is no recent long run. `nil` without a target (a
     /// race with no distance has none) or without any long-run distance, so the
@@ -94,7 +97,7 @@ enum RaceLogic {
               let done = longRun.lastKm ?? longRun.peakKm else { return nil }
         let doneText = GoalProgressLogic.distanceAmount(km: done, system)
         let targetText = GoalProgressLogic.distanceAmount(km: target, system)
-        return "long run \(doneText)/\(targetText) \(system.distanceUnit)"
+        return "long run \(doneText)/\(targetText)\(UnitFormat.nbsp)\(system.distanceUnit)"
     }
 
     /// Goal card row: "Half marathon · Dec 30 · 12 wk" (race week: "5 d"; race day: "today").
@@ -113,8 +116,17 @@ enum RaceLogic {
         return parts.joined(separator: " · ")
     }
 
+    /// Separator between the segments of the Profile Goal row ("Half marathon
+    /// · Dec 30 · 30 km/wk"): a normal space BEFORE the middle dot and a
+    /// non-breaking space AFTER it. The dot is bound to the segment that
+    /// FOLLOWS it, so a narrow row can only wrap before a "·" ("Half marathon
+    /// · Dec 30" / "· 30 km/wk") and never leaves one dangling at the end of
+    /// a line. Shared with `ProfileViewModel.goalRowLabel`.
+    static let goalRowSeparator = " \u{00B7}\u{00A0}"
+
     /// Profile Goal row race part: "Half marathon · Dec 30" (the Goal row leads
-    /// with it, so the race name and day are what survives a narrow row). `nil`
+    /// with it, so the race name and day are what survives a narrow row; the
+    /// segments are joined by `goalRowSeparator`). `nil`
     /// without a race date, with one that does not parse, or once the race day
     /// has passed (the server drops a passed race too).
     static func goalRowSuffix(
@@ -123,7 +135,7 @@ enum RaceLogic {
         guard let raceDate,
               let day = GoalTargetLogic.date(fromDay: raceDate, calendar: calendar),
               day >= calendar.startOfDay(for: now) else { return nil }
-        return "\(label(forKm: distanceKm)) \u{00B7} \(monthDay(day, calendar: calendar))"
+        return "\(label(forKm: distanceKm))\(goalRowSeparator)\(monthDay(day, calendar: calendar))"
     }
 
     // MARK: - Long run (goal detail row)

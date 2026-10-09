@@ -483,9 +483,9 @@ final class LiftLoggerViewModelTests: XCTestCase {
         let benchID = try XCTUnwrap(vm.exercises.first { $0.key == "bench press" }?.id)
 
         let squatHint = try XCTUnwrap(vm.progressionHint(for: squatID))
-        XCTAssertEqual(LiftLoggerLogic.progressionText(squatHint, system: .metric), "Last 3×5 @ 140 kg · try 142.5 kg")
+        XCTAssertEqual(LiftLoggerLogic.progressionText(squatHint, system: .metric), "Last 3×5 @ 140\u{00A0}kg · try 142.5\u{00A0}kg")
         let benchHint = try XCTUnwrap(vm.progressionHint(for: benchID))
-        XCTAssertEqual(LiftLoggerLogic.progressionText(benchHint, system: .metric), "Last 3×5 @ 90 kg · try 91.5 kg")
+        XCTAssertEqual(LiftLoggerLogic.progressionText(benchHint, system: .metric), "Last 3×5 @ 90\u{00A0}kg · try 91.5\u{00A0}kg")
         XCTAssertTrue(vm.canApplyProgression(to: squatID))
 
         vm.applyProgression(to: squatID)
@@ -524,7 +524,7 @@ final class LiftLoggerViewModelTests: XCTestCase {
         let id = vm.exercises[0].id
 
         let hint = try XCTUnwrap(vm.progressionHint(for: id))
-        XCTAssertEqual(LiftLoggerLogic.progressionText(hint, system: .metric), "Last 5/5/3 @ 140 kg · repeat 140 kg")
+        XCTAssertEqual(LiftLoggerLogic.progressionText(hint, system: .metric), "Last 5/5/3 @ 140\u{00A0}kg · repeat 140\u{00A0}kg")
         XCTAssertFalse(vm.canApplyProgression(to: id))
         vm.applyProgression(to: id)
         XCTAssertEqual(vm.exercises[0].sets.map { $0.load }, [140, 140, 140])

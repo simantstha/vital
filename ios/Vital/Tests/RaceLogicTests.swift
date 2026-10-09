@@ -21,8 +21,8 @@ final class RaceLogicTests: XCTestCase {
         XCTAssertEqual(RaceLogic.label(forKm: 42.2), "Marathon")
         XCTAssertEqual(RaceLogic.label(forKm: 10), "10K")
         XCTAssertEqual(RaceLogic.label(forKm: 5), "5K")
-        XCTAssertEqual(RaceLogic.label(forKm: 15), "15 km race")
-        XCTAssertEqual(RaceLogic.label(forKm: 12.5), "12.5 km race")
+        XCTAssertEqual(RaceLogic.label(forKm: 15), "15\u{00A0}km race")
+        XCTAssertEqual(RaceLogic.label(forKm: 12.5), "12.5\u{00A0}km race")
         XCTAssertEqual(RaceLogic.label(forKm: nil), "Race")
     }
 
@@ -72,24 +72,24 @@ final class RaceLogicTests: XCTestCase {
         let longRun = GoalProgressDTO.LongRun(lastKm: 14, peakKm: 16, targetPeakKm: 18)
         XCTAssertEqual(
             RaceLogic.heroLine(race(), longRun: longRun, system: .metric),
-            "Half marathon \u{00B7} 12 weeks to go \u{00B7} long run 14/18 km"
+            "Half marathon \u{00B7} 12 weeks to go \u{00B7} long run 14/18\u{00A0}km"
         )
         // Race week reads in days; the long-run tail is unchanged.
         XCTAssertEqual(
             RaceLogic.heroLine(race(weeks: 0, days: 5), longRun: longRun, system: .metric),
-            "Half marathon \u{00B7} 5 days to go \u{00B7} long run 14/18 km"
+            "Half marathon \u{00B7} 5 days to go \u{00B7} long run 14/18\u{00A0}km"
         )
         // Imperial users get miles for both numbers.
         XCTAssertEqual(
             RaceLogic.heroLine(race(), longRun: longRun, system: .imperial),
-            "Half marathon \u{00B7} 12 weeks to go \u{00B7} long run 8.7/11.2 mi"
+            "Half marathon \u{00B7} 12 weeks to go \u{00B7} long run 8.7/11.2\u{00A0}mi"
         )
         // No recent long run: the 28-day peak stands in.
         XCTAssertEqual(
             RaceLogic.heroLine(race(), longRun: GoalProgressDTO.LongRun(lastKm: nil, peakKm: 16, targetPeakKm: 18), system: .metric),
-            "Half marathon \u{00B7} 12 weeks to go \u{00B7} long run 16/18 km"
+            "Half marathon \u{00B7} 12 weeks to go \u{00B7} long run 16/18\u{00A0}km"
         )
-        XCTAssertEqual(RaceLogic.longRunProgressText(longRun, .metric), "long run 14/18 km")
+        XCTAssertEqual(RaceLogic.longRunProgressText(longRun, .metric), "long run 14/18\u{00A0}km")
     }
 
     func testHeroLineLeavesOutTheLongRunWithoutATarget() {
@@ -101,6 +101,19 @@ final class RaceLogicTests: XCTestCase {
         let nothingLogged = GoalProgressDTO.LongRun(lastKm: nil, peakKm: nil, targetPeakKm: 18)
         XCTAssertNil(RaceLogic.longRunProgressText(nothingLogged, .metric))
         XCTAssertNil(RaceLogic.longRunProgressText(.init(lastKm: 14, peakKm: 16, targetPeakKm: 0), .metric))
+    }
+
+    /// A custom-distance label and the long-run tail glue every number to its
+    /// unit with U+00A0, so a narrow hero line never strands "km" / "mi".
+    func testNoPlainSpaceBetweenADigitAndAUnit() throws {
+        assertNoBreakableUnitSpace(RaceLogic.label(forKm: 15))
+        assertNoBreakableUnitSpace(RaceLogic.label(forKm: 12.5))
+        let longRun = GoalProgressDTO.LongRun(lastKm: 14, peakKm: 16, targetPeakKm: 18)
+        for system in [UnitSystem.metric, .imperial] {
+            assertNoBreakableUnitSpace(try XCTUnwrap(RaceLogic.longRunProgressText(longRun, system)))
+            assertNoBreakableUnitSpace(race(km: 15, label: nil).displayLabel)
+            assertNoBreakableUnitSpace(try XCTUnwrap(RaceLogic.longRunRowText(longRun, system)))
+        }
     }
 
     func testMissingLabelFallsBackToDistance() {
@@ -139,9 +152,9 @@ final class RaceLogicTests: XCTestCase {
 
     func testGoalRowSuffixNamesTheRaceAndDay() {
         let now = ISO8601DateFormatter().date(from: "2026-10-06T12:00:00Z")!
-        XCTAssertEqual(RaceLogic.goalRowSuffix(raceDate: "2026-12-30", distanceKm: 21.1, now: now, calendar: utc), "Half marathon \u{00B7} Dec 30")
-        XCTAssertEqual(RaceLogic.goalRowSuffix(raceDate: "2026-12-30", distanceKm: nil, now: now, calendar: utc), "Race \u{00B7} Dec 30")
-        XCTAssertEqual(RaceLogic.goalRowSuffix(raceDate: "2026-10-06", distanceKm: 10, now: now, calendar: utc), "10K \u{00B7} Oct 6", "race day itself still counts")
+        XCTAssertEqual(RaceLogic.goalRowSuffix(raceDate: "2026-12-30", distanceKm: 21.1, now: now, calendar: utc), "Half marathon \u{00B7}\u{00A0}Dec 30")
+        XCTAssertEqual(RaceLogic.goalRowSuffix(raceDate: "2026-12-30", distanceKm: nil, now: now, calendar: utc), "Race \u{00B7}\u{00A0}Dec 30")
+        XCTAssertEqual(RaceLogic.goalRowSuffix(raceDate: "2026-10-06", distanceKm: 10, now: now, calendar: utc), "10K \u{00B7}\u{00A0}Oct 6", "race day itself still counts")
         XCTAssertNil(RaceLogic.goalRowSuffix(raceDate: "2026-10-05", distanceKm: 10, now: now, calendar: utc), "a passed race is dropped")
         XCTAssertNil(RaceLogic.goalRowSuffix(raceDate: nil, distanceKm: 21.1, now: now, calendar: utc))
         XCTAssertNil(RaceLogic.goalRowSuffix(raceDate: "soon", distanceKm: 21.1, now: now, calendar: utc))
