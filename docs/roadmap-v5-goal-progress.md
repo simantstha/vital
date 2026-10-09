@@ -142,8 +142,22 @@ Final persona scores (pass 11): Sam (weight loss) 5/5, Priya (lifter) 5/5, Marcu
 - [x] Sign in with Apple token revocation on account deletion: the app gets a fresh Apple authorization code, the server exchanges and revokes it only when the returned id_token's sub matches the deleted user; gated on APPLE_TEAM_ID / APPLE_KEY_ID / APPLE_CLIENT_ID / APPLE_PRIVATE_KEY Fly secrets (skipped + logged until set); never blocks deletion.
 - [x] Numbers never split from their units anywhere (lift logger, strength/weight cards, distance lines, goal copy); Profile goal row never ends a line in "·".
 
+### Wave 17 (edge-state recce: goal reached, returning user, imperial, Dynamic Type, days 3–13) — shipped (PR #257)
+- [x] 17a Honest verdicts: a `reached` verdict (with date reached) plus a next step; a staleness guard (no "on track" from an old weigh-in or after a long gap since the last session); windows that start at the goal start date so days 3–13 aren't graded as full weeks; the coach opener uses every target, with returning-user and reached copy.
+- [x] 17b No dead ends: a passed target date is editable (unchanged past dates save as a no-op; a new past date is rejected with "Target date must be in the future"); a Goal reached card with "Set your next goal"; returning-user copy; colour signals also spoken for VoiceOver.
+- [x] 17c Dynamic Type: all text scales with the system setting from Apple's published size table (identical at the default size); Today and Goal progress stack at accessibility sizes; CI captures AX-size screenshots (`todayAX`, `goalProgressAX`).
+
+### Wave 18 (race lifecycle) — shipped (PR #257)
+- [x] Optional race date and distance on the goal (migration 0038, additive).
+- [x] One shared rule (`lib/enduranceProgression.ts`) drives build → taper (8–21 days out) → race week (0–7) → recovery (14 days after); verdicts, weekly targets, the weekly review and coach lines all read it, so screens and coach agree.
+- [x] Phase-aware verdicts: in taper, race week and recovery, running less is on plan (never "Behind pace"); the weekly review never says "Build to" outside the build phase.
+- [x] After the race: "Set your next goal".
+
 ### Remaining backlog (non-blocking)
 - [x] HRV hero pill "above your normal" is measured vs the 30-day mean while the chart's normal is a band — align wording.
 - [x] Sign in with Apple token revocation on account deletion. (wave 16) (built; set APPLE_* Fly secrets to activate)
 - [ ] Run prompt evals 10–13 against the real model (needs API key).
 - [ ] Run `npx tsx scripts/backfill-exercise-canonical.ts` (dry run, then `--apply`) on production data.
+- [ ] Finalize docs/privacy-policy.md (the live /privacy page still shows the DRAFT).
+- [ ] Set APPLE_TEAM_ID / APPLE_KEY_ID / APPLE_CLIENT_ID / APPLE_PRIVATE_KEY Fly secrets to activate token revocation.
+- [ ] Real-device pass: HealthKit distance, push delivery, voice, and a throwaway-account deletion that reports `appleRevocation: "revoked"`.
