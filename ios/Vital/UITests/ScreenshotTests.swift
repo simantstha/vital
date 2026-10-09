@@ -658,7 +658,18 @@ final class ScreenshotTests: XCTestCase {
         // see the same collapsed state every run — wait for the fold-out
         // animation to fully finish so `__coach__` doesn't catch a ghost of
         // the detail mid-collapse.
+        // Let the expand animation settle so the pill is hittable before the
+        // collapse tap; a tap landing mid-animation can be absorbed.
+        let pillHittable = NSPredicate(format: "isHittable == true")
+        let pillExp = XCTNSPredicateExpectation(predicate: pillHittable, object: pill)
+        _ = XCTWaiter().wait(for: [pillExp], timeout: 3)
         tapWhenHittable(pill, app: app, description: "Coach receipt pill (collapse) [\(scenario)/\(appearance)]")
+        if !detail.waitForNonExistence(timeout: 5) {
+            // One retry: the collapse tap was absorbed while the expand
+            // animation settled. The detail still exists, so it is still
+            // expanded and a second tap on the pill collapses it.
+            tapWhenHittable(pill, app: app, description: "Coach receipt pill (collapse retry) [\(scenario)/\(appearance)]")
+        }
         XCTAssertTrue(detail.waitForNonExistence(timeout: 5),
                        "Receipt detail should fully collapse before the next capture [\(scenario)/\(appearance)]")
     }
