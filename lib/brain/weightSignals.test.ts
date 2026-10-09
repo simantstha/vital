@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   assessWeightSignals,
+  formatWeightSignalsSection,
+  SIGNAL_MAX_WEIGH_IN_AGE_DAYS,
   TOO_FAST_LOSS_PCT_PER_WEEK,
   TOO_FAST_LOSS_WATCH_PCT_PER_WEEK,
   RATE_RELIABLE_MIN_SPAN_DAYS,
@@ -438,4 +440,70 @@ test('plateau: needs at least 4 weigh-ins inside the 14-day window', () => {
   ];
   const fires = assessWeightSignals({ trend: trendResult(four), dailyIntakeKcal: noIntake(), floorKcal: DEFAULT_FLOOR, goal: 'weight_loss' });
   assert.ok(fires.find(s => s.kind === 'plateau'), '4 weigh-ins in the window should still plateau');
+});
+
+// ── freshness: plateau / too_fast_loss need a weigh-in within the last 4 days ─
+
+const TODAY = '2026-08-30';
+
+/** A flat/steady trend of `spanDays + 1` days ending `ageDays` before TODAY. */
+function trendEndingAgo(ageDays: number, spanDays: number, startKg: number, endKg: number): WeightTrendResult {
+  const end = new Date(`${TODAY}T00:00:00Z`).getTime() - ageDays * 86_400_000;
+  const start = new Date(end - spanDays * 86_400_000).toISOString().slice(0, 10);
+  return trendResult(daysSpanning(start, spanDays, startKg, endKg));
+}
+
+test('plateau: needs a weigh-in within 4 days of TODAY (look back from today, not the last weigh-in)', () => {
+  const kinds = (age: number) => assessWeightSignals({
+    trend: trendEndingAgo(age, 20, 90, 90), dailyIntakeKcal: noIntake(), floorKcal: DEFAULT_FLOOR, goal: 'weight_loss', todayKey: TODAY,
+  }).map(s => s.kind);
+  assert.deepEqual(kinds(0), ['plateau']);
+  assert.deepEqual(kinds(4), ['plateau']);
+  assert.deepEqual(kinds(5), []);
+  assert.deepEqual(kinds(30), []);
+});
+
+test('plateau: the 14-day weigh-in count looks back from today, not from the last weigh-in', () => {
+  // Weigh-ins on 08-06, 08-15, 08-17, 08-20 (all flat). From the last weigh-in (08-20) four of them
+  // sit inside 14 days; from today (08-24, a current 4-day-old weigh-in) the 08-06 one is out.
+  const days = ['2026-08-06', '2026-08-15', '2026-08-17', '2026-08-20'].flatMap(d => daysSpanning(d, 0, 90, 90));
+  const fromLast = assessWeightSignals({ trend: trendResult(days), dailyIntakeKcal: noIntake(), floorKcal: DEFAULT_FLOOR, goal: 'weight_loss' });
+  assert.ok(fromLast.some(s => s.kind === 'plateau'), 'no todayKey: 4 weigh-ins within 14 days of the last one');
+  const fromToday = assessWeightSignals({
+    trend: trendResult(days), dailyIntakeKcal: noIntake(), floorKcal: DEFAULT_FLOOR, goal: 'weight_loss', todayKey: '2026-08-24',
+  });
+  assert.equal(fromToday.find(s => s.kind === 'plateau'), undefined);
+});
+
+test('too_fast_loss: needs a weigh-in within 4 days of TODAY', () => {
+  const run = (age: number) => assessWeightSignals({
+    trend: { ...trendEndingAgo(age, 10, 100, 100), delta7dKgPerWeek: -1.2, delta30dKgPerWeek: -0.5 },
+    dailyIntakeKcal: noIntake(), floorKcal: DEFAULT_FLOOR, goal: 'weight_loss', todayKey: TODAY,
+  }).map(s => s.kind);
+  assert.deepEqual(run(2), ['too_fast_loss']);
+  assert.deepEqual(run(4), ['too_fast_loss']);
+  assert.deepEqual(run(5), []);
+  assert.deepEqual(run(21), []);
+});
+
+test('without todayKey the newest weigh-in stands in for today (no freshness check)', () => {
+  const old = assessWeightSignals({
+    trend: trendEndingAgo(60, 20, 90, 90), dailyIntakeKcal: noIntake(), floorKcal: DEFAULT_FLOOR, goal: 'weight_loss',
+  });
+  assert.ok(old.some(s => s.kind === 'plateau'));
+  assert.equal(SIGNAL_MAX_WEIGH_IN_AGE_DAYS, 4);
+});
+
+// ── prompt rendering: small imperial rates keep a decimal ────────────────────
+
+test('formatWeightSignalsSection: a 0.4 lb/wk rate is not rendered as "0 lb/wk"', () => {
+  const days = daysSpanning('2026-08-01', 20, 80, 79.82); // ~0.06 kg/wk
+  const trend = trendResult(days);
+  const imperial = formatWeightSignalsSection(trend, [], 'imperial').join('\n');
+  assert.match(imperial, /\(0\.\d lb\/wk loss\)/);
+  assert.doesNotMatch(imperial, /\(0 lb\/wk/);
+  // A rate of a pound or more stays whole.
+  const fast = trendResult(daysSpanning('2026-08-01', 20, 80, 78));
+  assert.match(formatWeightSignalsSection(fast, [], 'imperial').join('\n'), /\(\d+ lb\/wk loss\)/);
+  assert.match(formatWeightSignalsSection(trend, [], 'metric').join('\n'), /\(0\.\d kg\/wk loss\)/);
 });

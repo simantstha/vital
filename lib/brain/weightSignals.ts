@@ -31,6 +31,14 @@ export const TOO_FAST_LOSS_WATCH_PCT_PER_WEEK = 1.5;
 /** "Sustained" for too_fast_loss's watch escalation: both the 7d AND 30d rates exceed this %/wk. */
 export const TOO_FAST_LOSS_SUSTAINED_PCT_PER_WEEK = 1.0;
 
+/**
+ * plateau / too_fast_loss describe what the trend is doing NOW, so they need a
+ * weigh-in within this many days of today (measured from today, not from the
+ * last weigh-in): a user who stopped weighing in must not be told their trend
+ * "has flattened" or is "dropping quickly" from weeks-old data.
+ */
+export const SIGNAL_MAX_WEIGH_IN_AGE_DAYS = 4;
+
 /** plateau requires at least this many calendar days of trend span. */
 export const PLATEAU_MIN_SPAN_DAYS = 14;
 /** Weigh-in days needed inside the trailing 14-day window before a plateau is called. */
@@ -93,6 +101,13 @@ export interface AssessWeightSignalsInput {
    * hasn't loaded the wider window.
    */
   weekendPatternIntakeKcal?: DailyIntakeKcalPoint[];
+  /**
+   * The user's current local day (YYYY-MM-DD). plateau and too_fast_loss look
+   * back from THIS day and need a weigh-in within SIGNAL_MAX_WEIGH_IN_AGE_DAYS
+   * of it. Every production caller passes it; when omitted (pure unit tests)
+   * the newest weigh-in stands in for today, i.e. no freshness check.
+   */
+  todayKey?: string;
 }
 
 function round1(n: number): number {
@@ -109,10 +124,28 @@ function pctPerWeek(deltaKgPerWeek: number | null, trendKg: number): number | nu
   return Math.abs(deltaKgPerWeek) / trendKg * 100;
 }
 
+const DAY_MS = 86_400_000;
+
+function dayMs(day: string): number {
+  return Date.parse(`${day}T00:00:00Z`);
+}
+
+/**
+ * Days from the newest weigh-in to `todayKey` (0 when `todayKey` is omitted:
+ * the newest weigh-in stands in for today). Never negative.
+ */
+function weighInAgeDays(trend: WeightTrendResult, todayKey: string | undefined): number {
+  if (trend.days.length === 0) return Infinity;
+  if (!todayKey) return 0;
+  const last = trend.days[trend.days.length - 1].day;
+  return Math.max(0, Math.round((dayMs(todayKey) - dayMs(last)) / DAY_MS));
+}
+
 // ── Rule 1: too_fast_loss ────────────────────────────────────────────────
 
-function assessTooFastLoss(trend: WeightTrendResult): WeightSignal | null {
+function assessTooFastLoss(trend: WeightTrendResult, todayKey: string | undefined): WeightSignal | null {
   if (!trend.established) return null;
+  if (weighInAgeDays(trend, todayKey) > SIGNAL_MAX_WEIGH_IN_AGE_DAYS) return null;
   const span = trendSpanDays(trend.days);
   if (span < RATE_RELIABLE_MIN_SPAN_DAYS) return null;
 
@@ -142,15 +175,18 @@ function assessTooFastLoss(trend: WeightTrendResult): WeightSignal | null {
 
 // ── Rule 2: plateau ──────────────────────────────────────────────────────
 
-function assessPlateau(trend: WeightTrendResult, goal: string): WeightSignal | null {
+function assessPlateau(trend: WeightTrendResult, goal: string, todayKey: string | undefined): WeightSignal | null {
   if (goal !== 'weight_loss') return null;
   if (!trend.established) return null;
+  if (weighInAgeDays(trend, todayKey) > SIGNAL_MAX_WEIGH_IN_AGE_DAYS) return null;
   const span = trendSpanDays(trend.days);
   if (span < PLATEAU_MIN_SPAN_DAYS) return null;
 
   // A flat 14-day line drawn through one or two weigh-ins is not a plateau.
-  const lastMs = Date.parse(`${trend.days[trend.days.length - 1].day}T00:00:00Z`);
-  const inWindow = trend.days.filter(d => (lastMs - Date.parse(`${d.day}T00:00:00Z`)) / 86_400_000 <= 14).length;
+  // The 14-day window looks back from today (the newest weigh-in when no
+  // `todayKey` is given), not from the last weigh-in.
+  const anchorMs = todayKey ? dayMs(todayKey) : dayMs(trend.days[trend.days.length - 1].day);
+  const inWindow = trend.days.filter(d => (anchorMs - dayMs(d.day)) / DAY_MS <= 14).length;
   if (inWindow < PLATEAU_MIN_WEIGH_INS) return null;
 
   const currentTrendKg = trend.days[trend.days.length - 1].trendKg;
@@ -258,13 +294,13 @@ function assessWeekendOvereating(weekendPatternIntakeKcal: DailyIntakeKcalPoint[
  * signal depends on DB access — every input is already-resolved data.
  */
 export function assessWeightSignals(input: AssessWeightSignalsInput): WeightSignal[] {
-  const { trend, dailyIntakeKcal, floorKcal, goal, weekendPatternIntakeKcal } = input;
+  const { trend, dailyIntakeKcal, floorKcal, goal, weekendPatternIntakeKcal, todayKey } = input;
 
   const signals: WeightSignal[] = [];
-  const tooFastLoss = assessTooFastLoss(trend);
+  const tooFastLoss = assessTooFastLoss(trend, todayKey);
   if (tooFastLoss) signals.push(tooFastLoss);
 
-  const plateau = assessPlateau(trend, goal);
+  const plateau = assessPlateau(trend, goal, todayKey);
   if (plateau) signals.push(plateau);
 
   const underEating = assessUnderEating(dailyIntakeKcal, floorKcal);

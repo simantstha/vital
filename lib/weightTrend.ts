@@ -85,20 +85,26 @@ function pickDailyReading(existing: WeightReading, candidate: WeightReading): We
   return candidate.measuredAt < existing.measuredAt ? candidate : existing;
 }
 
+/**
+ * Index of the trend point a `windowDays` rate is measured from: the latest
+ * point (before the last) whose day is <= the target day (closest from below);
+ * falls back to the earliest available point when the whole history is shorter
+ * than the window (partial-window rate, still meaningful).
+ */
+function baselineIndex(dayNumbers: number[], windowDays: number): number {
+  const lastIdx = dayNumbers.length - 1;
+  const targetDayNumber = dayNumbers[lastIdx] - windowDays;
+  for (let i = lastIdx - 1; i >= 0; i--) {
+    if (dayNumbers[i] <= targetDayNumber) return i;
+  }
+  return 0;
+}
+
 /** Rate of change in kg/week from the closest trend point >= `windowDays` back, or null. */
 function weeklyDelta(days: WeightTrendDay[], dayNumbers: number[], windowDays: number): number | null {
   if (days.length < 2) return null;
   const lastIdx = days.length - 1;
-  const targetDayNumber = dayNumbers[lastIdx] - windowDays;
-
-  // Latest index (before the last) whose day is <= target (closest from
-  // below); falls back to the earliest available point when the whole
-  // history is shorter than the window (partial-window rate, still
-  // meaningful).
-  let baselineIdx = 0;
-  for (let i = lastIdx - 1; i >= 0; i--) {
-    if (dayNumbers[i] <= targetDayNumber) { baselineIdx = i; break; }
-  }
+  const baselineIdx = baselineIndex(dayNumbers, windowDays);
 
   const elapsedDays = dayNumbers[lastIdx] - dayNumbers[baselineIdx];
   if (elapsedDays <= 0) return null;
@@ -118,6 +124,19 @@ export function trendDeltaKgPerWeek(days: WeightTrendDay[], windowDays: number):
   if (days.length < 2) return null;
   const dayNumbers = days.map(d => dayNumber(d.day));
   return weeklyDelta(days, dayNumbers, windowDays);
+}
+
+/**
+ * Calendar days the `trendDeltaKgPerWeek(days, windowDays)` rate actually
+ * spans (last day - the baseline point it measures from): under `windowDays`
+ * when the history is shorter than the window, so copy can say "over 9 days"
+ * instead of claiming a full window. Null with fewer than 2 days of data.
+ */
+export function trendDeltaSpanDays(days: WeightTrendDay[], windowDays: number): number | null {
+  if (days.length < 2) return null;
+  const dayNumbers = days.map(d => dayNumber(d.day));
+  const span = dayNumbers[dayNumbers.length - 1] - dayNumbers[baselineIndex(dayNumbers, windowDays)];
+  return span > 0 ? span : null;
 }
 
 /** Calendar days spanned by a trend's `days` array (last day − first day), 0 for an empty/single-day trend. */

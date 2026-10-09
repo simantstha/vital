@@ -597,6 +597,7 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
     // normalizes onboarding's ids at write time) — no need to re-normalize.
     goal: userRow?.goal ?? 'general',
     weekendPatternIntakeKcal,
+    todayKey,
   });
 
   // ── Goal-keyed focus ──────────────────────────────────────────────────────

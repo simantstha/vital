@@ -754,6 +754,7 @@ export async function assembleContext(userId: string, findingId?: string): Promi
     floorKcal,
     goal: dietBudget?.goal ?? 'general',
     weekendPatternIntakeKcal,
+    todayKey: localToday,
   });
 
   // WHOOP context line (Task 7) — daily_metrics is day-keyed to the user's

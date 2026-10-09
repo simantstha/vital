@@ -176,3 +176,23 @@ test('formatGoalProgressLines adds one long-run line (unit-aware) only when long
   assert.match(noTarget, /- Long run \(running only\): last 14\.0 km; 28-day peak 16\.0 km$/m);
   assert.doesNotMatch(formatGoalProgressLines(gp(), 'metric').join('\n'), /Long run/);
 });
+
+test('a reached goal tells the coach the next step is a new target or maintenance', () => {
+  const text = formatGoalProgressLines(
+    gp({
+      verdict: 'reached',
+      headline: 'Goal reached — 76 kg (Sep 20)',
+      eta: null,
+      current: { weightKg: 75.6, startWeightKg: 85, changeKg: -9.4, progressPct: 100 },
+      reasons: [
+        { kind: 'reached', text: 'Trend weight 75.6 kg is at or past your 76 kg target', tone: 'good' },
+        { kind: 'next_step', text: 'Set a new target or switch to maintenance', tone: 'neutral' },
+      ],
+    }),
+    'metric',
+  ).join('\n');
+  assert.match(text, /Verdict: reached — "Goal reached — 76 kg \(Sep 20\)"/);
+  assert.match(text, /Set a new target or switch to maintenance/);
+  assert.match(text, /Target reached — the next step is a new target or maintenance/);
+  assert.doesNotMatch(formatGoalProgressLines(gp(), 'metric').join('\n'), /Target reached/);
+});

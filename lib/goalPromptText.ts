@@ -97,6 +97,9 @@ export function formatGoalProgressLines(gp: GoalProgress, units: UnitSystem): st
   if (gp.verdict === 'needs_target') {
     lines.push('- No target set yet — setting one is the only thing missing for a real progress verdict.');
   }
+  if (gp.verdict === 'reached') {
+    lines.push('- Target reached — the next step is a new target or maintenance; do not encourage further loss/gain toward the old target.');
+  }
   return lines;
 }
 
