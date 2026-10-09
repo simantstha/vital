@@ -23,11 +23,11 @@ final class MemoryLogicTests: XCTestCase {
     func testGoalSummaryMatchesProfileGoalRow() {
         XCTAssertEqual(
             MemoryLogic.goalSummary(goalId: "weight_loss", targetWeightKg: 76, weeklySessions: nil, weeklyDistanceKm: nil, system: .metric),
-            "Lose weight \u{00B7} 76\u{00A0}kg"
+            "Lose weight \u{00B7}\u{00A0}76\u{00A0}kg"
         )
         XCTAssertEqual(
             MemoryLogic.goalSummary(goalId: "muscle", targetWeightKg: nil, weeklySessions: 4, weeklyDistanceKm: nil, system: .metric),
-            "Build muscle \u{00B7} 4\u{00D7}/week"
+            "Build muscle \u{00B7}\u{00A0}4\u{00D7}/week"
         )
         XCTAssertEqual(
             MemoryLogic.goalSummary(goalId: "general", targetWeightKg: nil, weeklySessions: nil, weeklyDistanceKm: nil, system: .metric),
@@ -216,11 +216,11 @@ final class MemoryLogicTests: XCTestCase {
     func testGoalSummaryIncludesTheEnduranceRaceLikeTheProfileRow() {
         XCTAssertEqual(
             MemoryLogic.goalSummary(goalId: "endurance", targetWeightKg: nil, weeklySessions: nil, weeklyDistanceKm: 30, raceDate: "2999-12-30", raceDistanceKm: 21.1, system: .metric),
-            "Half marathon \u{00B7} Dec 30 \u{00B7} 30\u{00A0}km/wk"
+            "Half marathon \u{00B7}\u{00A0}Dec 30 \u{00B7}\u{00A0}30\u{00A0}km/wk"
         )
         XCTAssertEqual(
             MemoryLogic.goalSummary(goalId: "endurance", targetWeightKg: nil, weeklySessions: nil, weeklyDistanceKm: 30, system: .metric),
-            "Endurance \u{00B7} 30\u{00A0}km/week"
+            "Endurance \u{00B7}\u{00A0}30\u{00A0}km/week"
         )
     }
 

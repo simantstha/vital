@@ -67,6 +67,9 @@ final class ProfileViewModel: ObservableObject {
     /// A missing target leaves the bare goal label. An endurance user with an
     /// upcoming race LEADS with it and drops the generic goal word, so the part
     /// that matters survives a narrow row: "Half marathon · Dec 30 · 30 km/wk".
+    /// Segments are joined by `RaceLogic.goalRowSeparator` (normal space before
+    /// the "·", non-breaking space after) so a wrap never leaves a "·" dangling
+    /// at the end of a line.
     /// `now`/`calendar` only decide whether the race is still ahead.
     nonisolated static func goalRowLabel(
         goalLabel: String, goalId: String, targetWeightKg: Double?, weeklySessions: Int?,
@@ -85,13 +88,13 @@ final class ProfileViewModel: ObservableObject {
             if let race = RaceLogic.goalRowSuffix(raceDate: raceDate, distanceKm: raceDistanceKm, now: now, calendar: calendar) {
                 let target = weeklyDistanceKm.map { "\(UnitFormat.distance(km: $0, system))/wk" }
                     ?? weeklySessions.map { "\($0)\u{00D7}/wk" }
-                return [race, target].compactMap { $0 }.joined(separator: " \u{00B7} ")
+                return [race, target].compactMap { $0 }.joined(separator: RaceLogic.goalRowSeparator)
             }
             suffix = distance ?? sessions
         default:            suffix = nil
         }
         guard let suffix else { return goalLabel }
-        return "\(goalLabel) \u{00B7} \(suffix)"
+        return "\(goalLabel)\(RaceLogic.goalRowSeparator)\(suffix)"
     }
 
     /// Re-reads the goal + its targets (after the goal editor closes) so the

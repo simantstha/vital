@@ -163,7 +163,8 @@ enum GoalTargetLogic {
         return f.string(from: date)
     }
 
-    /// "At ~0.5 kg/week that's around Dec 12" (imperial: "~1 lb/week").
+    /// "At ~0.5 kg/week that's around Dec 12" (imperial: "~1 lb/week"); the
+    /// value and unit are joined by `UnitFormat.nbsp`.
     /// Nil when there's nothing sensible to say (not a loss target).
     static func paceHint(
         currentKg: Double?,
@@ -176,8 +177,8 @@ enum GoalTargetLogic {
               let date = paceEstimateDate(currentKg: currentKg, targetKg: targetKg, from: now, calendar: calendar)
         else { return nil }
         let rate = units == .metric
-            ? "0.5 kg"
-            : "\(Int(UnitConvert.kgToLb(healthyKgPerWeek).rounded())) lb"
+            ? "0.5\(UnitFormat.nbsp)kg"
+            : "\(Int(UnitConvert.kgToLb(healthyKgPerWeek).rounded()))\(UnitFormat.nbsp)lb"
         return "At ~\(rate)/week that's around \(dateText(date, calendar: calendar))"
     }
 
@@ -200,8 +201,8 @@ enum GoalTargetLogic {
                let rate = impliedKgPerWeek(currentKg: currentKg, targetKg: target, by: targetDate, from: now),
                rate > aggressiveKgPerWeek {
                 let shown = units == .metric
-                    ? String(format: "%.1f kg", rate)
-                    : String(format: "%.1f lb", UnitConvert.kgToLb(rate))
+                    ? String(format: "%.1f\(UnitFormat.nbsp)kg", rate)
+                    : String(format: "%.1f\(UnitFormat.nbsp)lb", UnitConvert.kgToLb(rate))
                 return "That date needs about \(shown)/week, faster than a healthy pace."
             }
         } else if target <= currentKg {

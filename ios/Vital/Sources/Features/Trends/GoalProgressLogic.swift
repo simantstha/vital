@@ -252,7 +252,8 @@ enum GoalProgressLogic {
     }
 
     /// "24.5 of 30 km this week" (imperial: "15.2 of 18.6 mi this week") — the
-    /// endurance primary progress. Calendar week (Monday–today, user-local).
+    /// endurance primary progress, each value joined to its unit by `nbsp`.
+    /// Calendar week (Monday–today, user-local).
     /// When last week caps this week's safe step below the goal the line says
     /// both, so there is ONE target for the week with the goal beside it:
     /// "22.7 of ~27 km this week · goal 30 km". `nil` without a distance target
@@ -263,9 +264,9 @@ enum GoalProgressLogic {
         let doneText = distanceAmount(km: done, system)
         let goalText = distanceAmount(km: d.targetKm, system)
         if let step = stepTargetKm(progress) {
-            return "\(doneText) of ~\(distanceAmount(km: step, system)) \(unit) this week · goal \(goalText) \(unit)"
+            return "\(doneText) of ~\(distanceAmount(km: step, system))\(nbsp)\(unit) this week · goal \(goalText)\(nbsp)\(unit)"
         }
-        return "\(doneText) of \(goalText) \(unit) this week"
+        return "\(doneText) of \(goalText)\(nbsp)\(unit) this week"
     }
 
     /// The label at the far end of the distance bar: the km the bar runs to
@@ -281,7 +282,7 @@ enum GoalProgressLogic {
     /// confused with this week's total. `nil` without distance data.
     static func distanceAverageLine(_ progress: GoalProgressDTO, system: UnitSystem) -> String? {
         guard let d = progress.distance, let avg = d.avg4wKm else { return nil }
-        return "4-week avg \(distanceAmount(km: avg, system)) \(system.distanceUnit) a week"
+        return "4-week avg \(distanceAmount(km: avg, system))\(nbsp)\(system.distanceUnit) a week"
     }
 
     // MARK: - Dates
@@ -594,10 +595,13 @@ enum GoalProgressLogic {
     /// else the first reason. Never the "X of Y km this week" line itself.
     /// `nil` when nothing other than that line is available.
     static func distanceReasonText(_ progress: GoalProgressDTO, system: UnitSystem) -> String? {
-        let progressLine = distanceLine(progress, system: system)
+        // `distanceLine` is non-breaking (`nbsp`) while server copy may use
+        // plain spaces, so compare with the spaces normalised.
+        func spaced(_ text: String) -> String { text.replacingOccurrences(of: nbsp, with: " ") }
+        let progressLine = distanceLine(progress, system: system).map(spaced)
         let candidates = [headlineWithoutVerdict(progress.headline)]
             + progress.reasons.map { nonEmpty($0.text) }
-        return candidates.compactMap { $0 }.first { $0 != progressLine }
+        return candidates.compactMap { $0 }.first { spaced($0) != progressLine }
     }
 
     // MARK: - Detail sheet copy

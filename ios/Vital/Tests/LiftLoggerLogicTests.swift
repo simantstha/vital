@@ -50,10 +50,32 @@ final class LiftLoggerLogicTests: XCTestCase {
     }
 
     func testLoadText() {
-        XCTAssertEqual(LiftLoggerLogic.loadText(140, system: .metric), "140 kg")
-        XCTAssertEqual(LiftLoggerLogic.loadText(92.5, system: .metric), "92.5 kg")
-        XCTAssertEqual(LiftLoggerLogic.loadText(225, system: .imperial), "225 lb")
+        XCTAssertEqual(LiftLoggerLogic.loadText(140, system: .metric), "140\u{00A0}kg")
+        XCTAssertEqual(LiftLoggerLogic.loadText(92.5, system: .metric), "92.5\u{00A0}kg")
+        XCTAssertEqual(LiftLoggerLogic.loadText(225, system: .imperial), "225\u{00A0}lb")
         XCTAssertEqual(LiftLoggerLogic.loadText(0, system: .metric), "Bodyweight")
+    }
+
+    /// The load/progression/summary strings glue every value to its unit with
+    /// U+00A0, so a narrow set row wraps between tokens, never "140" / "kg".
+    func testNoPlainSpaceBetweenADigitAndAUnit() throws {
+        for system in [UnitSystem.metric, .imperial] {
+            assertNoBreakableUnitSpace(LiftLoggerLogic.loadText(140, system: system))
+            assertNoBreakableUnitSpace(LiftLoggerLogic.loadText(92.5, system: system))
+            let uniform = try XCTUnwrap(
+                LiftLoggerLogic.progressionHint(history: refs([5, 5, 5], at: 140), key: "squat", system: system)
+            )
+            let ragged = try XCTUnwrap(
+                LiftLoggerLogic.progressionHint(history: refs([5, 5, 4], at: 140), key: "squat", system: system)
+            )
+            for hint in [uniform, ragged] {
+                let text = LiftLoggerLogic.progressionText(hint, system: system)
+                assertNoBreakableUnitSpace(text)
+                XCTAssertTrue(text.contains("\(LiftLoggerLogic.numberText(hint.lastLoad))\u{00A0}\(system.weightUnit)"), text)
+            }
+            let exercise = LiftDraftExercise(key: "squat", name: "Squat", sets: [LiftDraftSet(reps: 3, load: 150)])
+            assertNoBreakableUnitSpace(LiftLoggerLogic.summaryLine(for: exercise, system: system))
+        }
     }
 
     func testCanonicalKeyTrimsLowercasesAndCollapsesWhitespace() {
@@ -184,7 +206,7 @@ final class LiftLoggerLogicTests: XCTestCase {
             LiftDraftSet(reps: 5, load: 140),
             LiftDraftSet(reps: 3, load: 150),
         ])
-        XCTAssertEqual(LiftLoggerLogic.summaryLine(for: exercise, system: .metric), "2 sets · top 3 × 150 kg")
+        XCTAssertEqual(LiftLoggerLogic.summaryLine(for: exercise, system: .metric), "2 sets · top 3 × 150\u{00A0}kg")
     }
 
     // MARK: - typed entry
@@ -393,7 +415,7 @@ final class LiftLoggerLogicTests: XCTestCase {
         XCTAssertEqual(hint.lastReps, [5, 5, 5])
         XCTAssertEqual(hint.suggestedLoad, 142.5)
         XCTAssertTrue(hint.isIncrease)
-        XCTAssertEqual(LiftLoggerLogic.progressionText(hint, system: .metric), "Last 3×5 @ 140 kg · try 142.5 kg")
+        XCTAssertEqual(LiftLoggerLogic.progressionText(hint, system: .metric), "Last 3×5 @ 140\u{00A0}kg · try 142.5\u{00A0}kg")
     }
 
     func testHintUsesTheSmallerStepForUpperBodyAndRoundsToHalfKilos() throws {
@@ -420,7 +442,7 @@ final class LiftLoggerLogicTests: XCTestCase {
             LiftLoggerLogic.progressionHint(history: refs([5, 5, 5], at: 225), key: "squat", system: .imperial)
         )
         XCTAssertEqual(squat.suggestedLoad, 230)
-        XCTAssertEqual(LiftLoggerLogic.progressionText(squat, system: .imperial), "Last 3×5 @ 225 lb · try 230 lb")
+        XCTAssertEqual(LiftLoggerLogic.progressionText(squat, system: .imperial), "Last 3×5 @ 225\u{00A0}lb · try 230\u{00A0}lb")
         let bench = try XCTUnwrap(
             LiftLoggerLogic.progressionHint(history: refs([5, 5, 5], at: 135), key: "bench press", system: .imperial)
         )
@@ -433,7 +455,7 @@ final class LiftLoggerLogicTests: XCTestCase {
         )
         XCTAssertEqual(hint.suggestedLoad, 140)
         XCTAssertFalse(hint.isIncrease)
-        XCTAssertEqual(LiftLoggerLogic.progressionText(hint, system: .metric), "Last 5/5/4 @ 140 kg · repeat 140 kg")
+        XCTAssertEqual(LiftLoggerLogic.progressionText(hint, system: .metric), "Last 5/5/4 @ 140\u{00A0}kg · repeat 140\u{00A0}kg")
     }
 
     func testHintTreatsAFirstSetThatOutperformedTheRestAsAMiss() throws {
@@ -453,7 +475,7 @@ final class LiftLoggerLogicTests: XCTestCase {
         XCTAssertEqual(hint.lastLoad, 140)
         XCTAssertEqual(hint.lastReps, [5])
         XCTAssertEqual(hint.suggestedLoad, 142.5)
-        XCTAssertEqual(LiftLoggerLogic.progressionText(hint, system: .metric), "Last 1×5 @ 140 kg · try 142.5 kg")
+        XCTAssertEqual(LiftLoggerLogic.progressionText(hint, system: .metric), "Last 1×5 @ 140\u{00A0}kg · try 142.5\u{00A0}kg")
 
         // A miss at the top load still means repeat, even if the back-off sets were fine.
         let missed = [

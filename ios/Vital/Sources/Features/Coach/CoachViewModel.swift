@@ -109,9 +109,10 @@ struct MealReceiptRow: Identifiable, Equatable {
     var items: [Item] = []
 
     /// "520 kcal · 32P 40C 18F" — compact macro line for `LogReceiptCard`'s
-    /// detail row (the title itself carries "Logged <name>").
+    /// detail row (the title itself carries "Logged <name>"). The number and
+    /// "kcal" are joined by U+00A0 so a narrow row never strands the unit.
     var detail: String {
-        "\(kcal) kcal · \(protein)P \(carbs)C \(fat)F"
+        "\(kcal)\(UnitFormat.nbsp)kcal · \(protein)P \(carbs)C \(fat)F"
     }
 
     var canUndo: Bool {
@@ -974,7 +975,7 @@ final class CoachViewModel: ObservableObject {
             if total > 0, done > 0 {
                 let amount = GoalProgressLogic.weightAmount(kg: done, system)
                 let whole = GoalProgressLogic.weightAmount(kg: total, system)
-                let base = "You're \(amount) of \(whole) \(system.weightUnit) \(losing ? "down" : "up")"
+                let base = "You're \(amount) of \(whole)\(UnitFormat.nbsp)\(system.weightUnit) \(losing ? "down" : "up")"
                 if let pace = paceClause(progress, now: now, locale: locale) {
                     return "\(base) and \(pace). \(invite)"
                 }
@@ -997,9 +998,9 @@ final class CoachViewModel: ObservableObject {
         case .onPace:
             return "right on pace for your \(date) target"
         case .ahead(let weeks):
-            return "about \(weeks) \(weeks == 1 ? "week" : "weeks") ahead of your \(date) target"
+            return "about \(weeks)\(UnitFormat.nbsp)\(weeks == 1 ? "week" : "weeks") ahead of your \(date) target"
         case .behind(let weeks):
-            return "about \(weeks) \(weeks == 1 ? "week" : "weeks") behind your \(date) target"
+            return "about \(weeks)\(UnitFormat.nbsp)\(weeks == 1 ? "week" : "weeks") behind your \(date) target"
         }
     }
 

@@ -479,10 +479,12 @@ enum LiftLoggerLogic {
         return (kg * 100).rounded() / 100
     }
 
-    /// "142.5" / "140" — whole numbers unadorned, otherwise one decimal.
+    /// "142.5 kg" / "140 kg" — whole numbers unadorned, otherwise up to two
+    /// decimals, joined to the unit with a non-breaking space (`UnitFormat.nbsp`)
+    /// so a narrow row can never strand the unit ("140" / "kg") on its own line.
     static func loadText(_ load: Double, system: UnitSystem) -> String {
         guard load > 0 else { return "Bodyweight" }
-        return "\(numberText(load)) \(system.weightUnit)"
+        return "\(numberText(load))\(UnitFormat.nbsp)\(system.weightUnit)"
     }
 
     /// "bench press" -> "Bench Press"; "  Back  Squat " -> "Back Squat".
