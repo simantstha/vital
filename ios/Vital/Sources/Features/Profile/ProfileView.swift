@@ -554,6 +554,8 @@ private extension ProfileView {
     /// Requires the user to have typed DELETE, then calls the API and (on
     /// success) clears local session state via `AuthViewModel.deleteAccount()`,
     /// which flips `isAuthenticated` and returns the app to the auth screen.
+    /// Apple sign-in users are first asked to re-confirm with Apple so their
+    /// Apple tokens can be revoked; cancelling that sheet cancels the deletion.
     func confirmDeleteAccount() {
         let typed = deleteConfirmationText.trimmingCharacters(in: .whitespacesAndNewlines)
         deleteConfirmationText = ""
@@ -566,6 +568,10 @@ private extension ProfileView {
         Task {
             do {
                 try await authViewModel.deleteAccount()
+            } catch let error as AccountDeletionError {
+                // User declined the Apple confirmation: nothing was deleted.
+                isDeletingAccount = false
+                deleteAccountError = error.userMessage
             } catch {
                 isDeletingAccount = false
                 deleteAccountError = UserFacingError.message(for: error, context: .write, tag: "delete-account", includesAction: false)

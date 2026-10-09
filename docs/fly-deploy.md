@@ -79,6 +79,19 @@ fly secrets set \
 Never paste the key into source, `.env` files committed to git, CI logs, or
 support messages. Apple only permits downloading the key once.
 
+Sign in with Apple token revocation on account deletion (App Store guideline
+5.1.1(v)) needs its own **Sign in with Apple** key (a different key from the
+APNs one). Without these secrets deletion still works but revocation is
+skipped with a logged warning. Full steps: `docs/CI-TESTFLIGHT.md`.
+
+```bash
+fly secrets set \
+  APPLE_TEAM_ID="<team-id>" \
+  APPLE_KEY_ID="<siwa-key-id>" \
+  APPLE_CLIENT_ID="com.simantstha.vital" \
+  APPLE_PRIVATE_KEY="$(cat /secure/path/AuthKey_<SIWA_KEY_ID>.p8)"
+```
+
 ```
 fly secrets set \
   DATABASE_URL="<supabase-session-string>" \

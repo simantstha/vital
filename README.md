@@ -226,6 +226,9 @@ it to `.env.local` and fill in real values. Highlights:
   Apple voice on-device.
 - `SESSION_JWT_SECRET`, `APPLE_BUNDLE_ID`, `DEV_AUTH_SECRET` — session JWT + Sign in with Apple
   verification + env-gated dev sign-in bypass.
+- `APPLE_TEAM_ID`, `APPLE_KEY_ID`, `APPLE_CLIENT_ID` (defaults to `APPLE_BUNDLE_ID`),
+  `APPLE_PRIVATE_KEY` — Sign in with Apple token revocation on account deletion
+  (`lib/appleRevocation.ts`); optional, revocation is skipped with a warning if any is missing.
 - `VITAL_DATA_DIR`, `VITAL_MEMORY_TEMPLATE_DIR` — file-backed store root and memory template
   override (see `lib/memory.ts`, `lib/dataDir.ts`).
 - `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_TOPIC`, `APNS_PRIVATE_KEY` — required by the proactive

@@ -1300,15 +1300,32 @@ struct APIClient {
         try validate(response)
     }
 
+    /// JSON body for DELETE /api/account: `{"appleAuthorizationCode": "..."}`,
+    /// or nil (no body) when there is no Apple code to send. The server
+    /// exchanges the code for Apple tokens and revokes them after deleting the
+    /// data (lib/appleRevocation.ts).
+    static func deleteAccountBody(appleAuthorizationCode: String?) -> Data? {
+        guard let code = appleAuthorizationCode, !code.isEmpty else { return nil }
+        struct Body: Encodable { let appleAuthorizationCode: String }
+        return try? JSONEncoder().encode(Body(appleAuthorizationCode: code))
+    }
+
     /// DELETE /api/account — permanently deletes the user's account and all
-    /// server-side data (App Store guideline 5.1.1(v)). 204 on success.
-    func deleteAccount() async throws {
+    /// server-side data (App Store guideline 5.1.1(v)). Success is any 2xx
+    /// (the body reports `appleRevocation` but the client doesn't need it).
+    /// `appleAuthorizationCode` is the fresh Sign in with Apple code the server
+    /// uses to revoke the user's Apple tokens; omit it when there is none.
+    func deleteAccount(appleAuthorizationCode: String? = nil) async throws {
         guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/account") else {
             throw APIError.invalidURL
         }
         var request = authorizedRequest(url)
         request.httpMethod = "DELETE"
         request.timeoutInterval = 30
+        if let body = Self.deleteAccountBody(appleAuthorizationCode: appleAuthorizationCode) {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = body
+        }
         let (_, response) = try await session.data(for: request)
         try validate(response)
     }
