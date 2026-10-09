@@ -7,11 +7,25 @@ import UIKit
 ///
 /// The design is specified in fixed points (`.system(size: 14, weight: …)`),
 /// and SwiftUI's `Font.system(size:)` never scales — so every point size is
-/// scaled here along a text style's Dynamic Type curve (`UIFontMetrics`)
-/// instead. At `.large`, the system default, the result is exactly the
-/// specified size: a migrated call site renders identically at the default
-/// size (the CI screenshot baselines) and grows/shrinks with the user's
-/// text-size setting everywhere else.
+/// scaled here along a text style's Dynamic Type curve instead. The curve is
+/// Apple's published per-style point-size table (Human Interface Guidelines →
+/// Typography → "Dynamic Type sizes", iOS/iPadOS), and a token scales by the
+/// same ratio the system font for that style does:
+///
+///     scaled = base × styleSize(category) ÷ styleSize(.large)
+///
+/// At `.large`, the system default, the result is exactly the specified size:
+/// a migrated call site renders identically at the default size (the CI
+/// screenshot baselines) and grows/shrinks with the user's text-size setting
+/// everywhere else. Below `.large` nothing ever grows — the small sizes of
+/// the footnote/caption styles are flat in Apple's table, so those tokens
+/// simply stay at their base size.
+///
+/// This deliberately does not use `UIFontMetrics.scaledValue(for:)`: it does
+/// not reproduce the preferred-font table (a 17pt body token came out up to
+/// 5pt smaller than `UIFont.preferredFont(forTextStyle: .body)` at the larger
+/// sizes, and sub-body tokens *grew* at `.xSmall`). A static table is exact,
+/// needs no UIKit trait plumbing, and is unit-testable anywhere.
 ///
 /// Prefer the `.scaledFont(...)` view modifiers below over calling this
 /// directly; they read `\.dynamicTypeSize` from the environment, so the view
@@ -27,10 +41,57 @@ enum DynamicTypeScaling {
         at dynamicTypeSize: DynamicTypeSize
     ) -> CGFloat {
         guard dynamicTypeSize != .large else { return base }
-        let metrics = UIFontMetrics(forTextStyle: uiTextStyle(for: textStyle))
-        let traits = UITraitCollection(preferredContentSizeCategory: contentSizeCategory(for: dynamicTypeSize))
-        return metrics.scaledValue(for: base, compatibleWith: traits)
+        let sizes = appleSizes[textStyle] ?? bodySizes
+        return base * sizes[tableIndex(for: dynamicTypeSize)] / sizes[largeIndex]
     }
+
+    // MARK: Apple's Dynamic Type size table
+
+    /// Column of `appleSizes` rows for `.large` (the default size).
+    private static let largeIndex = 3
+
+    /// Column of `appleSizes` rows for `dynamicTypeSize`.
+    private static func tableIndex(for dynamicTypeSize: DynamicTypeSize) -> Int {
+        switch dynamicTypeSize {
+        case .xSmall: return 0
+        case .small: return 1
+        case .medium: return 2
+        case .large: return largeIndex
+        case .xLarge: return 4
+        case .xxLarge: return 5
+        case .xxxLarge: return 6
+        case .accessibility1: return 7
+        case .accessibility2: return 8
+        case .accessibility3: return 9
+        case .accessibility4: return 10
+        case .accessibility5: return 11
+        @unknown default: return largeIndex
+        }
+    }
+
+    /// Body's row — also the fallback for text styles this table doesn't list
+    /// (e.g. visionOS-only extra-large titles).
+    private static let bodySizes: [CGFloat] = [14, 15, 16, 17, 19, 21, 23, 28, 33, 40, 47, 53]
+
+    /// Point size of each text style at every Dynamic Type size, from
+    /// Apple's HIG "Dynamic Type sizes" tables (iOS, iPadOS). Columns:
+    /// xSmall, small, medium, **large**, xLarge, xxLarge, xxxLarge, then
+    /// accessibility1 … accessibility5.
+    private static let appleSizes: [Font.TextStyle: [CGFloat]] = [
+        .largeTitle:  [31, 32, 33, 34, 36, 38, 40, 44, 48, 52, 56, 60],
+        .title:       [25, 26, 27, 28, 30, 32, 34, 38, 43, 48, 53, 58],
+        .title2:      [19, 20, 21, 22, 24, 26, 28, 34, 39, 44, 50, 56],
+        .title3:      [17, 18, 19, 20, 22, 24, 26, 31, 37, 43, 49, 55],
+        .headline:    [14, 15, 16, 17, 19, 21, 23, 28, 33, 40, 47, 53],
+        .body:        bodySizes,
+        .callout:     [13, 14, 15, 16, 18, 20, 22, 26, 32, 38, 44, 51],
+        .subheadline: [12, 13, 14, 15, 17, 19, 21, 25, 30, 36, 42, 49],
+        .footnote:    [12, 12, 12, 13, 15, 17, 19, 23, 27, 33, 38, 44],
+        .caption:     [11, 11, 11, 12, 14, 16, 18, 22, 26, 32, 37, 43],
+        .caption2:    [11, 11, 11, 11, 13, 15, 17, 20, 24, 29, 34, 40],
+    ]
+
+    // MARK: Mapping helpers
 
     /// The text style whose default (`.large`) point size is closest to
     /// `size` — the curve a fixed size follows when the call site doesn't
@@ -52,23 +113,9 @@ enum DynamicTypeScaling {
         }
     }
 
-    static func uiTextStyle(for textStyle: Font.TextStyle) -> UIFont.TextStyle {
-        switch textStyle {
-        case .largeTitle: return .largeTitle
-        case .title: return .title1
-        case .title2: return .title2
-        case .title3: return .title3
-        case .headline: return .headline
-        case .subheadline: return .subheadline
-        case .body: return .body
-        case .callout: return .callout
-        case .footnote: return .footnote
-        case .caption: return .caption1
-        case .caption2: return .caption2
-        default: return .body
-        }
-    }
-
+    /// The `UIContentSizeCategory` equivalent of `dynamicTypeSize` — for
+    /// building a `UITraitCollection` (the screenshot harness, and tests that
+    /// compare against `UIFont.preferredFont(forTextStyle:compatibleWith:)`).
     static func contentSizeCategory(for dynamicTypeSize: DynamicTypeSize) -> UIContentSizeCategory {
         switch dynamicTypeSize {
         case .xSmall: return .extraSmall
