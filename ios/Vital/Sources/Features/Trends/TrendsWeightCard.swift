@@ -36,7 +36,8 @@ enum TrendsWeightCardLogic {
         return chartDayFormatter.date(from: dayString)
     }
 
-    /// "↓ 0.6 kg/wk" tinted `.positive` (weight_loss: a loss is progress
+    /// "↓ 0.6 kg/wk" (arrow, value and unit joined by U+00A0 so the pill never
+    /// wraps mid-token) tinted `.positive` (weight_loss: a loss is progress
     /// toward the goal), "↑ 0.3 kg/wk" tinted `.caution` (a gain is moving
     /// away from it), or "→ 0.0 kg/wk" tinted `.neutral` for a flat week.
     /// `nil` under the exact same gate `WeightHeroLogic.weeklyChangeText`
@@ -54,10 +55,11 @@ enum TrendsWeightCardLogic {
         let magnitude = String(format: "%.1f", abs(rounded))
         let arrow = rounded < 0 ? "↓" : (rounded > 0 ? "↑" : "→")
         let tone: PillTone = rounded < 0 ? .positive : (rounded > 0 ? .caution : .neutral)
-        return RatePill(text: "\(arrow) \(magnitude) \(system.weightUnit)/wk", tone: tone)
+        let nbsp = UnitFormat.nbsp
+        return RatePill(text: "\(arrow)\(nbsp)\(magnitude)\(nbsp)\(system.weightUnit)/wk", tone: tone)
     }
 
-    /// "−3.1 kg since 28 Aug" — the total change between the first and last
+    /// "−3.1 kg since 28 Aug" (value and unit joined by U+00A0) — the total change between the first and last
     /// plotted trend points (the same values the chart draws), dated with
     /// the first plotted day's label. Always shows a sign (including a bare
     /// "+0.0"/"−0.0" normalized to "0.0") so a genuinely flat window reads
@@ -67,7 +69,7 @@ enum TrendsWeightCardLogic {
         let rounded = roundedToOneDecimal(lastValue - firstValue)
         let sign = rounded < 0 ? "\u{2212}" : (rounded > 0 ? "+" : "")
         let magnitude = String(format: "%.1f", abs(rounded))
-        return "\(sign)\(magnitude) \(system.weightUnit) since \(firstDayLabel)"
+        return "\(sign)\(magnitude)\(UnitFormat.nbsp)\(system.weightUnit) since \(firstDayLabel)"
     }
 
     /// Same `-0.0` → `0.0` normalization as `UnitFormat`'s private helper of
@@ -117,11 +119,11 @@ struct TrendsWeightCard: View {
     /// Split from `trendHeadline`'s combined "Trend 82.0 kg" into the two
     /// pieces the big number display needs — reuses `UnitFormat.weight`'s
     /// existing rounding/conversion (never re-derives it) and just parses
-    /// its output apart on the space between number and unit.
+    /// its output apart on the (non-breaking) space between number and unit.
     private var latestWeightParts: (magnitude: String, unit: String)? {
         guard let trend, trend.established, let latest = trend.days.last else { return nil }
         let formatted = UnitFormat.weight(kg: latest.trendKg, system)
-        guard let spaceIndex = formatted.firstIndex(of: " ") else { return (formatted, "") }
+        guard let spaceIndex = formatted.firstIndex(of: "\u{00A0}") else { return (formatted, "") }
         return (String(formatted[formatted.startIndex..<spaceIndex]), String(formatted[formatted.index(after: spaceIndex)...]))
     }
 

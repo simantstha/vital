@@ -155,7 +155,13 @@ final class WeightHeroLogicTests: XCTestCase {
             ],
             delta7dKgPerWeek: -0.4, delta30dKgPerWeek: -0.35, established: true
         )
-        XCTAssertEqual(WeightHeroLogic.trendHeadline(trend: trend, system: .metric), "Trend 82.3 kg")
+        XCTAssertEqual(WeightHeroLogic.trendHeadline(trend: trend, system: .metric), "Trend 82.3\u{00A0}kg")
+        // Hero header drops the duplicate once established; placeholder otherwise.
+        XCTAssertNil(WeightHeroLogic.heroHeaderTrendText(trend: trend, system: .metric))
+        XCTAssertEqual(
+            WeightHeroLogic.heroHeaderTrendText(trend: nil, system: .metric),
+            WeightHeroLogic.trendPlaceholderText
+        )
     }
 
     // MARK: - Weekly-change text: span gate + pace guard (dietitian review)
@@ -194,7 +200,22 @@ final class WeightHeroLogicTests: XCTestCase {
         )
         let entries = [entry(daysAgo: 10), entry(daysAgo: 0)]
         XCTAssertEqual(WeightHeroLogic.weeklyChangeText(trend: trend, entries: entries, system: .metric),
-                        "\u{2212}0.2 kg/wk this week")
+                        "\u{2212}0.2\u{00A0}kg/wk this week")
+    }
+
+    func testWeeklyChangeUsesGoalProgressFourWeekRateWhenProvided() {
+        let trend = WeightTrendDTO(
+            days: [WeightTrendDayDTO(day: day(daysAgo: 0), rawKg: 82, trendKg: 82)],
+            delta7dKgPerWeek: -0.8, delta30dKgPerWeek: -0.4, established: true
+        )
+        let entries = [entry(daysAgo: 10), entry(daysAgo: 0)]
+        XCTAssertEqual(
+            WeightHeroLogic.weeklyChangeText(trend: trend, entries: entries, system: .metric, goalRateKgPerWeek: -0.4),
+            "\u{2212}0.4\u{00A0}kg/wk over 4 weeks"
+        )
+        // Not established: still nothing, even with a goal rate.
+        let young = WeightTrendDTO(days: [], delta7dKgPerWeek: nil, delta30dKgPerWeek: nil, established: false)
+        XCTAssertNil(WeightHeroLogic.weeklyChangeText(trend: young, entries: entries, system: .metric, goalRateKgPerWeek: -0.4))
     }
 
     func testWeeklyChangePositiveRateShowsPlusSign() {
@@ -204,7 +225,7 @@ final class WeightHeroLogicTests: XCTestCase {
         )
         let entries = [entry(daysAgo: 10, weight: 79), entry(daysAgo: 0, weight: 79)]
         XCTAssertEqual(WeightHeroLogic.weeklyChangeText(trend: trend, entries: entries, system: .metric),
-                        "+0.3 kg/wk this week")
+                        "+0.3\u{00A0}kg/wk this week")
     }
 
     func testFastLossAppendsNeutralPaceNote() {
@@ -218,7 +239,7 @@ final class WeightHeroLogicTests: XCTestCase {
         let entries = [entry(daysAgo: 10, weight: 83), entry(daysAgo: 0, weight: 82)]
         XCTAssertEqual(
             WeightHeroLogic.weeklyChangeText(trend: trend, entries: entries, system: .metric),
-            "\u{2212}1.0 kg/wk this week · faster than recommended"
+            "\u{2212}1.0\u{00A0}kg/wk this week · faster than recommended"
         )
     }
 
@@ -276,7 +297,7 @@ final class WeightHeroLogicTests: XCTestCase {
         let entries = [entry(daysAgo: 10), entry(daysAgo: 0, weight: 82.4)]
         XCTAssertEqual(
             WeightHeroLogic.weighInToastMessage(entries: entries, trend: trend, system: .metric),
-            "Logged \u{00b7} trend 82.1 kg (\u{2212}0.4/wk)"
+            "Logged \u{00b7} trend 82.1\u{00A0}kg (\u{2212}0.4/wk)"
         )
     }
 
@@ -340,20 +361,20 @@ final class WeightHeroLogicTests: XCTestCase {
     // MARK: - UnitFormat.weightDelta / weightDeltaCompact (unit formatting of the delta)
 
     func testWeightDeltaMetricRoundsToOneDecimalWithMinusSign() {
-        XCTAssertEqual(UnitFormat.weightDelta(kgPerWeek: -0.6, .metric), "\u{2212}0.6 kg/wk")
+        XCTAssertEqual(UnitFormat.weightDelta(kgPerWeek: -0.6, .metric), "\u{2212}0.6\u{00A0}kg/wk")
     }
 
     func testWeightDeltaImperialConvertsFromKg() {
         // -0.6 kg/wk ≈ -1.3 lb/wk
-        XCTAssertEqual(UnitFormat.weightDelta(kgPerWeek: -0.6, .imperial), "\u{2212}1.3 lb/wk")
+        XCTAssertEqual(UnitFormat.weightDelta(kgPerWeek: -0.6, .imperial), "\u{2212}1.3\u{00A0}lb/wk")
     }
 
     func testWeightDeltaZeroHasNoSign() {
-        XCTAssertEqual(UnitFormat.weightDelta(kgPerWeek: 0, .metric), "0.0 kg/wk")
+        XCTAssertEqual(UnitFormat.weightDelta(kgPerWeek: 0, .metric), "0.0\u{00A0}kg/wk")
     }
 
     func testWeightDeltaPositiveHasPlusSign() {
-        XCTAssertEqual(UnitFormat.weightDelta(kgPerWeek: 0.42, .metric), "+0.4 kg/wk")
+        XCTAssertEqual(UnitFormat.weightDelta(kgPerWeek: 0.42, .metric), "+0.4\u{00A0}kg/wk")
     }
 
     func testWeightDeltaCompactOmitsUnitLetters() {

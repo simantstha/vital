@@ -65,12 +65,17 @@ export function safeEqual(a: string, b: string): boolean {
  * Verifies a Sign in with Apple identity token against Apple's published
  * JWKS. Returns the Apple user id (`sub`) and email, if present in the token.
  *
+ * `audienceOverride` (default: APPLE_BUNDLE_ID) lets lib/appleRevocation.ts
+ * verify the `id_token` Apple returns from /auth/token against the exact
+ * `client_id` it was minted for.
+ *
  * Throws if the token is invalid, expired, or fails issuer/audience checks.
  */
 export async function verifyAppleIdentityToken(
-  identityToken: string
+  identityToken: string,
+  audienceOverride?: string
 ): Promise<{ sub: string; email?: string }> {
-  const audience = process.env.APPLE_BUNDLE_ID;
+  const audience = audienceOverride ?? process.env.APPLE_BUNDLE_ID;
   if (!audience) {
     throw new Error('APPLE_BUNDLE_ID environment variable is not set.');
   }

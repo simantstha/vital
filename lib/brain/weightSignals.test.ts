@@ -418,3 +418,24 @@ test('weekend_overeating: excludes partial/no-data days from both averages', () 
   assert.equal(sig!.facts.weekdayAvgKcal, 2000);
   assert.equal(sig!.facts.weekendAvgKcal, 2800);
 });
+
+test('plateau: needs at least 4 weigh-ins inside the 14-day window', () => {
+  // Spans 20 days but only 3 weigh-in days (two early, one recent) → not a plateau.
+  const sparse: WeightTrendDay[] = [
+    { day: '2026-08-01', rawKg: 90, trendKg: 90 },
+    { day: '2026-08-05', rawKg: 90, trendKg: 90 },
+    { day: '2026-08-21', rawKg: 90, trendKg: 90 },
+  ];
+  const none = assessWeightSignals({ trend: trendResult(sparse), dailyIntakeKcal: noIntake(), floorKcal: DEFAULT_FLOOR, goal: 'weight_loss' });
+  assert.equal(none.find(s => s.kind === 'plateau'), undefined);
+
+  const four: WeightTrendDay[] = [
+    { day: '2026-08-01', rawKg: 90, trendKg: 90 },
+    { day: '2026-08-10', rawKg: 90, trendKg: 90 },
+    { day: '2026-08-14', rawKg: 90, trendKg: 90 },
+    { day: '2026-08-17', rawKg: 90, trendKg: 90 },
+    { day: '2026-08-21', rawKg: 90, trendKg: 90 },
+  ];
+  const fires = assessWeightSignals({ trend: trendResult(four), dailyIntakeKcal: noIntake(), floorKcal: DEFAULT_FLOOR, goal: 'weight_loss' });
+  assert.ok(fires.find(s => s.kind === 'plateau'), '4 weigh-ins in the window should still plateau');
+});

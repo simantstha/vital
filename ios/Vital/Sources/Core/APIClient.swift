@@ -77,8 +77,7 @@ extension Notification.Name {
     /// strip's diet card updates without waiting for pull-to-refresh — the
     /// same foreground-observer pattern it already uses for calendar/app
     /// lifecycle events (see `TodayViewModel.init`).
-    static let vitalCoachMealLogChanged = Notification.Name("vitalCoachMealLogChanged")
-}
+    static let vitalCoachMealLogChanged = Notification.Name("vitalCoachMealLogChanged")}
 
 // MARK: - APIClient
 
@@ -384,6 +383,55 @@ struct APIClient {
         try validate(response)
     }
 
+    /// PATCH /api/profile with the goal targets (incl. the optional endurance race). Unlike `updateProfile`
+    /// (which omits nil fields), every field is always sent and a nil value is
+    /// encoded as an explicit JSON `null`, which the server treats as "clear".
+    func updateGoalTargets(
+        targetWeightKg: Double?,
+        targetDate: String?,
+        weeklySessionsTarget: Int?,
+        weeklyDistanceKmTarget: Double? = nil,
+        raceDate: String? = nil,
+        raceDistanceKm: Double? = nil
+    ) async throws {
+        guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/profile") else {
+            throw APIError.invalidURL
+        }
+        var request = authorizedRequest(url)
+        request.httpMethod = "PATCH"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 15
+        struct Body: Encodable {
+            let targetWeightKg: Double?
+            let targetDate: String?
+            let weeklySessionsTarget: Int?
+            let weeklyDistanceKmTarget: Double?
+            let raceDate: String?
+            let raceDistanceKm: Double?
+            enum CodingKeys: String, CodingKey {
+                case targetWeightKg, targetDate, weeklySessionsTarget, weeklyDistanceKmTarget, raceDate, raceDistanceKm
+            }
+            func encode(to encoder: Encoder) throws {
+                var c = encoder.container(keyedBy: CodingKeys.self)
+                try c.encode(targetWeightKg, forKey: .targetWeightKg)
+                try c.encode(targetDate, forKey: .targetDate)
+                try c.encode(weeklySessionsTarget, forKey: .weeklySessionsTarget)
+                try c.encode(weeklyDistanceKmTarget, forKey: .weeklyDistanceKmTarget)
+                try c.encode(raceDate, forKey: .raceDate)
+                try c.encode(raceDistanceKm, forKey: .raceDistanceKm)
+            }
+        }
+        request.httpBody = try encoder.encode(
+            Body(
+                targetWeightKg: targetWeightKg, targetDate: targetDate,
+                weeklySessionsTarget: weeklySessionsTarget, weeklyDistanceKmTarget: weeklyDistanceKmTarget,
+                raceDate: raceDate, raceDistanceKm: raceDistanceKm
+            )
+        )
+        let (_, response) = try await session.data(for: request)
+        try validate(response)
+    }
+
     // MARK: - Pending facts
 
     func fetchPendingFacts() async throws -> PendingFactsResponse {
@@ -473,6 +521,111 @@ struct APIClient {
         let tz = TimeZone.current.identifier
         let encoded = tz.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? tz
         return try await get("/api/training/summary?tz=\(encoded)")
+    }
+
+    // MARK: - Goal progress (v5 Wave 2 - "am I on track?")
+
+    /// GET /api/goal/progress?tz= — target / current / rate / ETA / verdict /
+    /// reasons for the user's goal. Sends the device's timezone — same
+    /// convention as `fetchToday()` — so the server resolves day math in the
+    /// same local zone. See `GoalProgressDTO`.
+    func fetchGoalProgress() async throws -> GoalProgressDTO {
+        let tz = TimeZone.current.identifier
+        let encoded = tz.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? tz
+        return try await get("/api/goal/progress?tz=\(encoded)")
+    }
+
+    // MARK: - Weekly review (v5 Wave 3)
+
+    /// GET /api/review/weekly?tz= — the review for the last completed local
+    /// week (computed + stored server-side on first request). Sends the
+    /// device's timezone, same convention as `fetchGoalProgress()`.
+    func fetchWeeklyReview() async throws -> WeeklyReviewResponse {
+        let tz = TimeZone.current.identifier
+        let encoded = tz.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? tz
+        return try await get("/api/review/weekly?tz=\(encoded)")
+    }
+
+    /// POST /api/review/weekly/seen — marks the review seen ("Got it").
+    func markWeeklyReviewSeen(id: String) async throws {
+        guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/review/weekly/seen") else {
+            throw APIError.invalidURL
+        }
+        var request = authorizedRequest(url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 10
+        struct Body: Encodable { let id: String }
+        request.httpBody = try encoder.encode(Body(id: id))
+        let (_, response) = try await session.data(for: request)
+        try validate(response)
+    }
+
+    // MARK: - Strength tracking (workout_sets — Trends Strength card + lift logger)
+
+    /// GET /api/workouts/summary?days= — weekly best estimated 1RM and weekly
+    /// volume per exercise, keyed by canonical exercise name. `exercises` is
+    /// `{}` (never an error) for a user with no logged sets.
+    func fetchWorkoutSummary(days: Int = 84) async throws -> WorkoutSummaryResponse {
+        try await get("/api/workouts/summary?days=\(days)")
+    }
+
+    /// GET /api/workouts/last?exercise= — the most recent full session that
+    /// included `exercise` (every set in that session, all exercises, ordered
+    /// by exercise name then set index). `sets` is `[]` when `exercise` has
+    /// never been logged. `exercise` is the canonical (lowercase) key, i.e. a
+    /// key of `WorkoutSummaryResponse.exercises`.
+    func fetchLastWorkoutSession(exercise: String) async throws -> WorkoutLastSessionResponse {
+        let encoded = exercise.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? exercise
+        return try await get("/api/workouts/last?exercise=\(encoded)")
+    }
+
+    /// GET /api/workouts/sessions?limit= — the user's most recent distinct
+    /// strength sessions, newest first (the lift logger's "Repeat: …" menu).
+    /// `sessions` is `[]` when nothing has been logged.
+    func fetchRecentWorkoutSessions(limit: Int = 8) async throws -> WorkoutRecentSessionsResponse {
+        try await get("/api/workouts/sessions?limit=\(limit)")
+    }
+
+    /// POST /api/workouts/sets — logs one session of sets. `sessionId` must be
+    /// a client-generated UUID string (the `session_id` column is a uuid); a
+    /// retried POST with the same id + set indexes upserts rather than
+    /// duplicating. `source` is "manual" | "template" ("coach" is server-side
+    /// only in practice).
+    @discardableResult
+    func logWorkoutSets(
+        sessionId: String,
+        source: String,
+        sets: [WorkoutSetInputDTO],
+        performedAt: Date = Date(),
+        tz: String? = nil
+    ) async throws -> LogWorkoutSetsResponse {
+        guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/workouts/sets") else {
+            throw APIError.invalidURL
+        }
+        var request = authorizedRequest(url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 15
+        struct Body: Encodable {
+            let sessionId: String
+            let performedAt: Date
+            let tz: String
+            let source: String
+            let sets: [WorkoutSetInputDTO]
+        }
+        request.httpBody = try encoder.encode(
+            Body(
+                sessionId: sessionId,
+                performedAt: performedAt,
+                tz: tz ?? TimeZone.current.identifier,
+                source: source,
+                sets: sets
+            )
+        )
+        let (data, response) = try await session.data(for: request)
+        try validate(response)
+        return try decoder.decode(LogWorkoutSetsResponse.self, from: data)
     }
 
     // MARK: - Memory browser
@@ -1147,6 +1300,36 @@ struct APIClient {
         try validate(response)
     }
 
+    /// JSON body for DELETE /api/account: `{"appleAuthorizationCode": "..."}`,
+    /// or nil (no body) when there is no Apple code to send. The server
+    /// exchanges the code for Apple tokens and revokes them after deleting the
+    /// data (lib/appleRevocation.ts).
+    static func deleteAccountBody(appleAuthorizationCode: String?) -> Data? {
+        guard let code = appleAuthorizationCode, !code.isEmpty else { return nil }
+        struct Body: Encodable { let appleAuthorizationCode: String }
+        return try? JSONEncoder().encode(Body(appleAuthorizationCode: code))
+    }
+
+    /// DELETE /api/account — permanently deletes the user's account and all
+    /// server-side data (App Store guideline 5.1.1(v)). Success is any 2xx
+    /// (the body reports `appleRevocation` but the client doesn't need it).
+    /// `appleAuthorizationCode` is the fresh Sign in with Apple code the server
+    /// uses to revoke the user's Apple tokens; omit it when there is none.
+    func deleteAccount(appleAuthorizationCode: String? = nil) async throws {
+        guard let url = URL(string: "\(AppConfig.apiBaseURL)/api/account") else {
+            throw APIError.invalidURL
+        }
+        var request = authorizedRequest(url)
+        request.httpMethod = "DELETE"
+        request.timeoutInterval = 30
+        if let body = Self.deleteAccountBody(appleAuthorizationCode: appleAuthorizationCode) {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = body
+        }
+        let (_, response) = try await session.data(for: request)
+        try validate(response)
+    }
+
     /// GET /api/whoop/connect returns a 302 to the WHOOP authorize URL
     /// (in the `Location` header) rather than a JSON body — the route is
     /// session-authed via a Bearer header, which a browser-driven redirect
@@ -1536,6 +1719,9 @@ struct OnboardingBasics: Encodable {
     let units: String
     let goal: String
     let targetDate: String? // 'YYYY-MM-DD'
+    let targetWeightKg: Double? // optional; server drops invalid values
+    let weeklySessionsTarget: Int? // optional, 1–14
+    let weeklyDistanceKmTarget: Double? // optional, endurance only, 1–300 km (km on the wire)
 }
 
 struct OnboardingTraining: Encodable {
@@ -1767,7 +1953,7 @@ struct TodayMetrics: Decodable {
 /// server raised an auto-calculated target to the floor rather than serve a
 /// deeper deficit; for a pinned/custom target it's always false and the
 /// warning is informational only.
-struct LowEnergyWarning: Decodable {
+struct LowEnergyWarning: Decodable, Equatable {
     let thresholdKcal: Int
     let appliedFloor: Bool
     let message: String
@@ -1903,6 +2089,499 @@ struct TrainingSummaryResponse: Decodable {
     let lastLift: TrainingLastLiftDTO?
 }
 
+// MARK: - Goal progress types (GET /api/goal/progress)
+
+/// `GoalProgress.verdict` on the wire (`lib/goalProgress.ts`). Decoded
+/// tolerantly: any value this build doesn't know (a future server verdict)
+/// maps to `.insufficientData` — never a decode failure, never a fabricated
+/// "on track".
+enum GoalVerdict: String, Equatable, Sendable {
+    case onTrack = "on_track"
+    case ahead
+    case tooFast = "too_fast"
+    case behind
+    case stalled
+    case progressing
+    case building
+    case holding
+    case needsTarget = "needs_target"
+    case insufficientData = "insufficient_data"
+
+    init(wire: String?) {
+        self = wire.flatMap { GoalVerdict(rawValue: $0) } ?? .insufficientData
+    }
+}
+
+/// `GoalProgressReason.tone` — unknown values read as `.neutral`.
+enum GoalReasonTone: String, Equatable, Sendable {
+    case good
+    case watch
+    case neutral
+
+    init(wire: String?) {
+        self = wire.flatMap { GoalReasonTone(rawValue: $0) } ?? .neutral
+    }
+}
+
+struct GoalReasonDTO: Decodable, Equatable {
+    let kind: String
+    let text: String
+    let tone: GoalReasonTone
+
+    private enum CodingKeys: String, CodingKey { case kind, text, tone }
+
+    init(kind: String = "", text: String, tone: GoalReasonTone = .neutral) {
+        self.kind = kind
+        self.text = text
+        self.tone = tone
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        kind = (try? c.decode(String.self, forKey: .kind)) ?? ""
+        text = (try? c.decode(String.self, forKey: .text)) ?? ""
+        tone = GoalReasonTone(wire: try? c.decode(String.self, forKey: .tone))
+    }
+}
+
+/// GET /api/goal/progress's response. Every nullable field may be `null`
+/// (the server's honesty rule — never a guessed number), and every field
+/// here decodes tolerantly (missing/`null`/wrong-typed -> `nil`, `[]` or the
+/// safe default) so a partially-populated or newer payload still renders
+/// rather than hiding the card with a decode error.
+struct GoalProgressDTO: Decodable, Equatable {
+    struct Target: Decodable, Equatable {
+        let weightKg: Double?
+        let date: String?
+        let weeklySessions: Int?
+        /// Endurance weekly distance target, km (users.weekly_distance_km_target).
+        let weeklyDistanceKm: Double?
+
+        private enum CodingKeys: String, CodingKey { case weightKg, date, weeklySessions, weeklyDistanceKm }
+
+        init(weightKg: Double? = nil, date: String? = nil, weeklySessions: Int? = nil, weeklyDistanceKm: Double? = nil) {
+            self.weightKg = weightKg
+            self.date = date
+            self.weeklySessions = weeklySessions
+            self.weeklyDistanceKm = weeklyDistanceKm
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            weightKg = try? c.decode(Double.self, forKey: .weightKg)
+            date = try? c.decode(String.self, forKey: .date)
+            weeklySessions = try? c.decode(Int.self, forKey: .weeklySessions)
+            weeklyDistanceKm = try? c.decode(Double.self, forKey: .weeklyDistanceKm)
+        }
+    }
+
+    /// Endurance + weekly distance target only (`distance` is `null` otherwise):
+    /// this local calendar week's (Mon–today) distance against the target.
+    /// `thisWeekKm` / `avg4wKm` are `nil` when no workout in the last 28 days
+    /// carries a distance (honesty rule — never a guessed 0).
+    struct Distance: Decodable, Equatable {
+        let targetKm: Double
+        let thisWeekKm: Double?
+        let avg4wKm: Double?
+        let weekStart: String?
+        /// This week's safe step toward `targetKm`, from LAST week's running km
+        /// (the same ~10% rule as the weekly review's "Next week"): the target
+        /// the progress bar runs to. Equals `targetKm` when no step applies.
+        /// `nil` from a server that predates it — callers then measure against
+        /// `targetKm` exactly as before.
+        let stepTargetKm: Double?
+
+        private enum CodingKeys: String, CodingKey { case targetKm, thisWeekKm, avg4wKm, weekStart, stepTargetKm }
+
+        init(targetKm: Double, thisWeekKm: Double? = nil, avg4wKm: Double? = nil, weekStart: String? = nil,
+             stepTargetKm: Double? = nil) {
+            self.targetKm = targetKm
+            self.thisWeekKm = thisWeekKm
+            self.avg4wKm = avg4wKm
+            self.weekStart = weekStart
+            self.stepTargetKm = stepTargetKm
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            targetKm = try c.decode(Double.self, forKey: .targetKm)
+            thisWeekKm = try? c.decode(Double.self, forKey: .thisWeekKm)
+            avg4wKm = try? c.decode(Double.self, forKey: .avg4wKm)
+            weekStart = try? c.decode(String.self, forKey: .weekStart)
+            stepTargetKm = try? c.decode(Double.self, forKey: .stepTargetKm)
+        }
+    }
+
+    /// Endurance race countdown; `nil` without a race date or once it has passed.
+    struct Race: Decodable, Equatable {
+        /// 'YYYY-MM-DD'.
+        let date: String
+        let distanceKm: Double?
+        let label: String?
+        /// 0 during race week (fewer than 7 days out).
+        let weeksToGo: Int
+        let daysToGo: Int
+
+        /// Server label, falling back to one derived from the distance.
+        var displayLabel: String {
+            if let label, !label.isEmpty { return label }
+            return RaceLogic.label(forKm: distanceKm)
+        }
+
+        private enum CodingKeys: String, CodingKey { case date, distanceKm, label, weeksToGo, daysToGo }
+
+        init(date: String, distanceKm: Double? = nil, label: String? = nil, weeksToGo: Int, daysToGo: Int) {
+            self.date = date
+            self.distanceKm = distanceKm
+            self.label = label
+            self.weeksToGo = weeksToGo
+            self.daysToGo = daysToGo
+        }
+
+        /// Throws without a date or day count so the enclosing `try?` drops the whole race.
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            date = try c.decode(String.self, forKey: .date)
+            let days = try c.decode(Int.self, forKey: .daysToGo)
+            daysToGo = days
+            distanceKm = try? c.decode(Double.self, forKey: .distanceKm)
+            label = try? c.decode(String.self, forKey: .label)
+            weeksToGo = (try? c.decode(Int.self, forKey: .weeksToGo)) ?? (days < 7 ? 0 : Int((Double(days) / 7).rounded(.up)))
+        }
+    }
+
+    /// Endurance long-run readiness (running only, km): the most recent long
+    /// run, the longest single run of the last 28 days and the peak to build to
+    /// before the taper (by race distance; `nil` without a race distance).
+    struct LongRun: Decodable, Equatable {
+        let lastKm: Double?
+        let peakKm: Double?
+        let targetPeakKm: Double?
+
+        private enum CodingKeys: String, CodingKey { case lastKm, peakKm, targetPeakKm }
+
+        init(lastKm: Double? = nil, peakKm: Double? = nil, targetPeakKm: Double? = nil) {
+            self.lastKm = lastKm
+            self.peakKm = peakKm
+            self.targetPeakKm = targetPeakKm
+        }
+
+        /// Throws when neither distance decodes so the enclosing `try?` drops
+        /// the whole long run (a row with nothing to say is not shown).
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            let last = try? c.decode(Double.self, forKey: .lastKm)
+            let peak = try? c.decode(Double.self, forKey: .peakKm)
+            guard last != nil || peak != nil else {
+                throw DecodingError.dataCorruptedError(forKey: .lastKm, in: c, debugDescription: "long run has no distance")
+            }
+            lastKm = last
+            peakKm = peak
+            targetPeakKm = try? c.decode(Double.self, forKey: .targetPeakKm)
+        }
+    }
+
+    struct Current: Decodable, Equatable {
+        let weightKg: Double?
+        let startWeightKg: Double?
+        let changeKg: Double?
+        /// Nominally 0...100 (the server may exceed on overshoot / go
+        /// negative on regress — `GoalProgressLogic.progressFraction` clamps).
+        let progressPct: Double?
+
+        private enum CodingKeys: String, CodingKey { case weightKg, startWeightKg, changeKg, progressPct }
+
+        init(weightKg: Double? = nil, startWeightKg: Double? = nil, changeKg: Double? = nil, progressPct: Double? = nil) {
+            self.weightKg = weightKg
+            self.startWeightKg = startWeightKg
+            self.changeKg = changeKg
+            self.progressPct = progressPct
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            weightKg = try? c.decode(Double.self, forKey: .weightKg)
+            startWeightKg = try? c.decode(Double.self, forKey: .startWeightKg)
+            changeKg = try? c.decode(Double.self, forKey: .changeKg)
+            progressPct = try? c.decode(Double.self, forKey: .progressPct)
+        }
+    }
+
+    struct Rate: Decodable, Equatable {
+        /// Signed: negative = losing.
+        let kg: Double?
+        let pctBodyweight: Double?
+
+        private enum CodingKeys: String, CodingKey { case kg, pctBodyweight }
+
+        init(kg: Double? = nil, pctBodyweight: Double? = nil) {
+            self.kg = kg
+            self.pctBodyweight = pctBodyweight
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            kg = try? c.decode(Double.self, forKey: .kg)
+            pctBodyweight = try? c.decode(Double.self, forKey: .pctBodyweight)
+        }
+    }
+
+    struct SafeBand: Decodable, Equatable {
+        let minPct: Double
+        let maxPct: Double
+    }
+
+    struct DataSufficiency: Decodable, Equatable {
+        let weighIns: Int
+        let needed: Int
+        let sessionsLast28d: Int
+
+        private enum CodingKeys: String, CodingKey { case weighIns, needed, sessionsLast28d }
+
+        init(weighIns: Int = 0, needed: Int = 3, sessionsLast28d: Int = 0) {
+            self.weighIns = weighIns
+            self.needed = needed
+            self.sessionsLast28d = sessionsLast28d
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            weighIns = (try? c.decode(Int.self, forKey: .weighIns)) ?? 0
+            needed = (try? c.decode(Int.self, forKey: .needed)) ?? 3
+            sessionsLast28d = (try? c.decode(Int.self, forKey: .sessionsLast28d)) ?? 0
+        }
+    }
+
+    /// Muscle + weekly sessions target only (`nil` otherwise / older servers):
+    /// the structured numbers behind the "sessions behind" verdict, so the
+    /// Today line can say WHY and what to aim for without parsing reason copy.
+    /// `planned` = `weeklyTarget` x 4 over the same 28 days as `done`.
+    struct Adherence: Decodable, Equatable {
+        let done: Int
+        let planned: Int
+        let weeklyTarget: Int
+        /// Whole percent, `done / planned`.
+        let pct: Int?
+
+        private enum CodingKeys: String, CodingKey { case done, planned, weeklyTarget, pct }
+
+        init(done: Int, planned: Int, weeklyTarget: Int, pct: Int? = nil) {
+            self.done = done
+            self.planned = planned
+            self.weeklyTarget = weeklyTarget
+            self.pct = pct
+        }
+
+        /// Throws without all three counts so the enclosing `try?` drops the whole block.
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            done = try c.decode(Int.self, forKey: .done)
+            planned = try c.decode(Int.self, forKey: .planned)
+            weeklyTarget = try c.decode(Int.self, forKey: .weeklyTarget)
+            pct = try? c.decode(Int.self, forKey: .pct)
+        }
+    }
+
+    /// "weight_loss" | "muscle" | "endurance" | "general" (kept a raw string
+    /// so a future goal never fails decoding).
+    let goal: String
+    let target: Target
+    /// Endurance weekly-distance progress; `nil` for every other goal / no distance target.
+    let distance: Distance?
+    /// Endurance race countdown; `nil` when no race is set / it has passed / older servers.
+    let race: Race?
+    /// Endurance long-run readiness; `nil` without running distances / older servers.
+    let longRun: LongRun?
+    let current: Current
+    let ratePerWeek: Rate
+    let safeBand: SafeBand?
+    /// "YYYY-MM-DD" — only ever set by the server when it can honestly
+    /// project one (never a fake ETA).
+    let eta: String?
+    let onPaceForTargetDate: Bool?
+    let verdict: GoalVerdict
+    let headline: String
+    let reasons: [GoalReasonDTO]
+    let dataSufficiency: DataSufficiency
+    /// Whole days since the newest weigh-in; optional (older servers omit it).
+    let lastWeighInDaysAgo: Int?
+    /// Muscle session adherence over 28 days; `nil` for other goals / no target / older servers.
+    let adherence: Adherence?
+
+    private enum CodingKeys: String, CodingKey {
+        case goal, target, distance, race, longRun, current, ratePerWeek, safeBand, eta, onPaceForTargetDate
+        case verdict, headline, reasons, dataSufficiency, lastWeighInDaysAgo, adherence
+    }
+
+    init(
+        goal: String,
+        target: Target = Target(),
+        distance: Distance? = nil,
+        race: Race? = nil,
+        longRun: LongRun? = nil,
+        current: Current = Current(),
+        ratePerWeek: Rate = Rate(),
+        safeBand: SafeBand? = nil,
+        eta: String? = nil,
+        onPaceForTargetDate: Bool? = nil,
+        verdict: GoalVerdict,
+        headline: String = "",
+        reasons: [GoalReasonDTO] = [],
+        dataSufficiency: DataSufficiency = DataSufficiency(),
+        lastWeighInDaysAgo: Int? = nil,
+        adherence: Adherence? = nil
+    ) {
+        self.goal = goal
+        self.lastWeighInDaysAgo = lastWeighInDaysAgo
+        self.adherence = adherence
+        self.target = target
+        self.distance = distance
+        self.race = race
+        self.longRun = longRun
+        self.current = current
+        self.ratePerWeek = ratePerWeek
+        self.safeBand = safeBand
+        self.eta = eta
+        self.onPaceForTargetDate = onPaceForTargetDate
+        self.verdict = verdict
+        self.headline = headline
+        self.reasons = reasons
+        self.dataSufficiency = dataSufficiency
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        goal = (try? c.decode(String.self, forKey: .goal)) ?? "general"
+        target = (try? c.decode(Target.self, forKey: .target)) ?? Target()
+        distance = try? c.decode(Distance.self, forKey: .distance)
+        race = try? c.decode(Race.self, forKey: .race)
+        longRun = try? c.decode(LongRun.self, forKey: .longRun)
+        current = (try? c.decode(Current.self, forKey: .current)) ?? Current()
+        ratePerWeek = (try? c.decode(Rate.self, forKey: .ratePerWeek)) ?? Rate()
+        safeBand = try? c.decode(SafeBand.self, forKey: .safeBand)
+        eta = try? c.decode(String.self, forKey: .eta)
+        onPaceForTargetDate = try? c.decode(Bool.self, forKey: .onPaceForTargetDate)
+        verdict = GoalVerdict(wire: try? c.decode(String.self, forKey: .verdict))
+        headline = (try? c.decode(String.self, forKey: .headline)) ?? ""
+        reasons = ((try? c.decode([GoalReasonDTO].self, forKey: .reasons)) ?? []).filter { !$0.text.isEmpty }
+        dataSufficiency = (try? c.decode(DataSufficiency.self, forKey: .dataSufficiency)) ?? DataSufficiency()
+        adherence = try? c.decode(Adherence.self, forKey: .adherence)
+        if let days = try? c.decode(Int.self, forKey: .lastWeighInDaysAgo) {
+            lastWeighInDaysAgo = days
+        } else if let days = try? c.decode(Double.self, forKey: .lastWeighInDaysAgo), days.isFinite {
+            lastWeighInDaysAgo = Int(days)
+        } else {
+            lastWeighInDaysAgo = nil
+        }
+    }
+}
+
+// MARK: - Strength tracking types (mirrors app/api/workouts/{summary,last,sets}/route.ts)
+
+/// One week of one exercise in `GET /api/workouts/summary` — mirrors
+/// `lib/workoutRepository.ts`'s `WeeklyExerciseStat`. `weekStart` is the
+/// UTC Monday as `YYYY-MM-DD`. `bestEstimatedOneRepMaxKg` is `nil` (never 0)
+/// when every set that week was bodyweight.
+struct WorkoutWeeklyStatDTO: Decodable, Equatable {
+    let weekStart: String
+    let bestEstimatedOneRepMaxKg: Double?
+    let volumeKg: Double
+    let totalSets: Int
+    let totalReps: Int
+}
+
+/// GET /api/workouts/summary's response. `exercises` is keyed by canonical
+/// exercise name ("squat", "bench press"); each array is ascending by
+/// `weekStart` and only contains weeks with at least one working set.
+struct WorkoutSummaryResponse: Decodable, Equatable {
+    let days: Int
+    let exercises: [String: [WorkoutWeeklyStatDTO]]
+}
+
+/// One logged set as the server returns it (`toWire` in the sets/last
+/// routes). `loadKg` is `nil` for a bodyweight set.
+struct WorkoutSetDTO: Decodable, Identifiable, Equatable {
+    let id: String
+    let sessionId: String
+    let workoutId: String?
+    let performedAt: String
+    let localDay: String
+    let exercise: String
+    let exerciseDisplay: String
+    let setIndex: Int
+    let reps: Int
+    let loadKg: Double?
+    let rpe: Double?
+    let isWarmup: Bool
+    let source: String
+}
+
+/// GET /api/workouts/last's response — `sets` is `[]` when never logged.
+struct WorkoutLastSessionResponse: Decodable, Equatable {
+    let sets: [WorkoutSetDTO]
+}
+
+/// One working set of a `RecentSessionExerciseDTO` (`setDetails`).
+struct RecentSessionSetDTO: Decodable, Equatable {
+    let reps: Int
+    let loadKg: Double?
+    let rpe: Double?
+}
+
+struct RecentSessionTopSetDTO: Decodable, Equatable {
+    let reps: Int
+    let loadKg: Double?
+}
+
+/// One exercise of a session in `GET /api/workouts/sessions` — `exercise` is
+/// the canonical key, `display` what the user typed, `sets` the working-set
+/// count. `setDetails` is optional so an older backend still decodes.
+struct RecentSessionExerciseDTO: Decodable, Equatable {
+    let exercise: String
+    let display: String
+    let sets: Int
+    let topSet: RecentSessionTopSetDTO
+    let setDetails: [RecentSessionSetDTO]?
+}
+
+struct RecentSessionDTO: Decodable, Identifiable, Equatable {
+    let sessionId: String
+    let performedAt: String
+    let localDay: String
+    let exercises: [RecentSessionExerciseDTO]
+    var id: String { sessionId }
+}
+
+/// GET /api/workouts/sessions' response.
+struct WorkoutRecentSessionsResponse: Decodable, Equatable {
+    let sessions: [RecentSessionDTO]
+}
+
+/// POST /api/workouts/sets' response.
+struct LogWorkoutSetsResponse: Decodable, Equatable {
+    let ok: Bool
+    let sets: [WorkoutSetDTO]
+}
+
+/// One set in a POST /api/workouts/sets body. `loadKg`/`rpe` are omitted from
+/// the JSON when `nil` (synthesized `Encodable` uses `encodeIfPresent`).
+struct WorkoutSetInputDTO: Encodable, Equatable {
+    let exercise: String
+    let exerciseDisplay: String
+    let setIndex: Int
+    let reps: Int
+    let loadKg: Double?
+    let rpe: Double?
+    let isWarmup: Bool
+}
+
+extension Notification.Name {
+    /// Posted by `LiftLoggerViewModel` after a successful POST
+    /// /api/workouts/sets so Trends' Strength card (a different tab with its
+    /// own view model) re-fetches `/api/workouts/summary`.
+    static let vitalWorkoutLogged = Notification.Name("vitalWorkoutLogged")
+}
+
 // MARK: - Diet goal types
 
 struct DietBudgetDTO: Decodable {
@@ -2014,6 +2693,12 @@ struct DriverDTO: Decodable, Equatable {
     let low: DriverBucketDTO?
     let highInputMean: Double?
     let lowInputMean: Double?
+    /// 'association' (plain row) or 'adaptation' — an activity driver that
+    /// worsens a recovery outcome for a non-performance goal; see
+    /// `lib/insights/drivers.ts`'s `DriverFraming`. Optional (and last, so
+    /// the memberwise init keeps its old shape) because older servers omit
+    /// it; `nil` reads as 'association'.
+    var framing: String? = nil
 }
 
 struct TrendsDriversResponse: Decodable, Equatable {
@@ -2176,6 +2861,20 @@ struct ProfileResponse: Decodable {
     /// hasn't been set for this user yet. `UnitPreference.applyServerValue`
     /// treats nil as a no-op rather than forcing metric.
     let unitSystem: String?
+    /// Goal targets (users.target_weight_kg / target_date / weekly_sessions_target);
+    /// null when unset. `goalStart*` anchor "Started at X on <date>".
+    let targetWeightKg: Double?
+    /// 'YYYY-MM-DD'.
+    let targetDate: String?
+    let weeklySessionsTarget: Int?
+    /// users.weekly_distance_km_target (km); null when unset.
+    let weeklyDistanceKmTarget: Double?
+    /// users.race_date ('YYYY-MM-DD') / users.race_distance_km; null when unset.
+    let raceDate: String?
+    let raceDistanceKm: Double?
+    let goalStartWeightKg: Double?
+    /// ISO timestamp.
+    let goalStartedAt: String?
 }
 
 // MARK: - Pending facts types

@@ -29,6 +29,10 @@ struct RootTabView: View {
 
     @State private var selected: Tab = .today
 
+    /// Bumped on each `.vitalOpenGoalEditor`; `ProfileView` opens Profile →
+    /// Goal when it changes (or on first appearance if already non-zero).
+    @State private var goalEditorRequest = 0
+
     /// Owned here (not by `CoachView`) so Today's voice FAB can send a
     /// transcript into the same conversation the Coach tab renders — see
     /// `CoachView.init(vm:)` and `CoachViewModel.sendExternalVoiceTranscript`.
@@ -58,12 +62,17 @@ struct RootTabView: View {
             .tag(Tab.logs)
 
             ProfileView(
-                switchToCoachTab: { withAnimation(Theme.Motion.standard) { selected = .coach } }
+                switchToCoachTab: { withAnimation(Theme.Motion.standard) { selected = .coach } },
+                goalEditorRequest: goalEditorRequest
             )
             .tabItem { Label(Tab.profile.label, systemImage: Tab.profile.icon) }
             .tag(Tab.profile)
         }
         .tint(Theme.Colors.accentContent)
+        .onReceive(NotificationCenter.default.publisher(for: .vitalOpenGoalEditor)) { _ in
+            goalEditorRequest += 1
+            withAnimation(Theme.Motion.standard) { selected = .profile }
+        }
         // Spec §3.2, V5: "app backgrounded > 10 s" ends conversation mode —
         // wired here rather than `CoachView`/`VoiceFABView` since this is
         // always mounted regardless of which tab is active, and a
@@ -102,6 +111,7 @@ struct RootTabView: View {
             case .morningBrief(let id):
                 if let id { MorningBriefView(id: id) }
                 else { Color.clear.onAppear { selected = .today; router.route = nil } }
+            case .weeklyReview(let id): WeeklyReviewPushView(id: id)
             case .coachNudge(let id):
                 NudgeDetailView(id: id, coachVM: coachVM, switchToCoachTab: {
                     withAnimation(Theme.Motion.standard) { selected = .coach }

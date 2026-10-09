@@ -25,6 +25,7 @@ import {
   OUTCOME_METRICS,
 } from './detectors';
 import { applyEvidenceGate } from './evidence';
+import { detectGoalFindings, type GoalInsightInput } from './goalDetectors';
 import type { Finding, MetricSeries } from './types';
 import { buildVoiceRequest, parseNudge, type Nudge } from './voice';
 
@@ -59,6 +60,28 @@ export function withinDeliveryCaps(history: SentNudge[], now: Date, kind: string
   return true;
 }
 
+// Nudges only land during waking hours, user-local: [08:00, 21:00).
+const NUDGE_WINDOW_START_MINUTES = 8 * 60;
+const NUDGE_WINDOW_END_MINUTES = 21 * 60;
+
+/**
+ * True when `now` falls inside the nudge send window in the user's timezone.
+ * An unknown/invalid timezone falls back to UTC, same as the other workers.
+ */
+export function isWithinNudgeSendWindow(now: Date, timezone: string): boolean {
+  let minutes: number;
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+    }).formatToParts(now);
+    const get = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? '0');
+    minutes = get('hour') * 60 + get('minute');
+  } catch {
+    minutes = now.getUTCHours() * 60 + now.getUTCMinutes();
+  }
+  return minutes >= NUDGE_WINDOW_START_MINUTES && minutes < NUDGE_WINDOW_END_MINUTES;
+}
+
 /** What runInsightPass needs about the user beyond series/findings data. */
 export interface VoiceUserContext {
   goal: string | null;
@@ -76,6 +99,12 @@ export interface VoiceUserContext {
 export interface InsightPassRepository {
   loadSeries(userId: string, metrics: string[], endDay: string): Promise<MetricSeries[]>;
   establishedMetrics(userId: string): Promise<Set<string>>;
+  /**
+   * Goal-aware inputs (weight signals, protein days, training days, weekly
+   * verdicts...) for goalDetectors.ts. Optional so a repository without goal
+   * data simply produces no goal findings.
+   */
+  loadGoalInput?(userId: string, localDay: string): Promise<GoalInsightInput | null>;
   /** Records the FULL gate-surviving set for the day — see runInsightPass below. */
   recordFindings(userId: string, localDay: string, findings: Finding[]): Promise<void>;
   previousRunSignatures(userId: string, localDay: string): Promise<Set<string>>;
@@ -98,7 +127,7 @@ export interface InsightPassRepository {
   listDevices(userId: string): Promise<PushDevice[]>;
 }
 
-export interface InsightPassUser { userId: string; timezone: string }
+export interface InsightPassUser { userId: string; timezone: string; coachNudgesEnabled: boolean }
 
 /**
  * The two candidate populations for an insight pass, kept as separate queries
@@ -141,9 +170,18 @@ export interface InsightPassDeps {
   userId: string;
   now: Date;
   localDay: string;
+  /** notification_preferences.coach_nudges_enabled. Defaults to true when omitted. */
+  coachNudgesEnabled?: boolean;
+  /**
+   * The user's IANA timezone. When provided, delivery is gated to the
+   * 08:00-21:00 user-local send window; when omitted the window is not checked.
+   */
+  timezone?: string;
 }
 
 export type InsightSilenceReason =
+  | 'nudges_disabled'
+  | 'outside_send_window'
   | 'no_candidates'
   | 'not_confirmed'
   | 'empty_shortlist'
@@ -200,9 +238,10 @@ export async function runInsightPass(deps: InsightPassDeps): Promise<InsightPass
   const { repository, userId, now, localDay, mode } = deps;
 
   const metrics = Array.from(new Set([...INPUT_METRICS, ...OUTCOME_METRICS]));
-  const [series, established] = await Promise.all([
+  const [series, established, goalInput] = await Promise.all([
     repository.loadSeries(userId, metrics, localDay),
     repository.establishedMetrics(userId),
+    repository.loadGoalInput ? repository.loadGoalInput(userId, localDay) : Promise.resolve(null),
   ]);
 
   const seriesByMetric = new Map(series.map((s) => [s.metric, s] as const));
@@ -220,6 +259,11 @@ export async function runInsightPass(deps: InsightPassDeps): Promise<InsightPass
     const dow = detectDayOfWeek(s); if (dow) candidates.push(dow);
   }
 
+  // Goal findings join the same candidate list and so face the same gates:
+  // evidence gate (rules pass on their own thresholds), two-run confirmation,
+  // arbiter per-kind cooldown, delivery caps and the unique-per-day insert.
+  if (goalInput) candidates.push(...detectGoalFindings(goalInput));
+
   const survivors = applyEvidenceGate(candidates, established);
 
   // Records the FULL gate-surviving set — including findings that never get
@@ -229,6 +273,16 @@ export async function runInsightPass(deps: InsightPassDeps): Promise<InsightPass
   // "confirm only what we already told you," defeating the mechanism while
   // still appearing to work. Must run before any of the early returns below.
   await repository.recordFindings(userId, localDay, survivors);
+
+  // Delivery gates. Findings were recorded above regardless, so cross-run
+  // confirmation keeps learning for a user who opted out or whose pass ran
+  // outside waking hours; only creating/delivering a nudge is blocked. Checked
+  // before the model call so a gated user costs nothing further.
+  const gateStats = { candidates: candidates.length, survivors: survivors.length, confirmed: 0, shortlisted: 0 };
+  if (deps.coachNudgesEnabled === false) return { delivered: false, reason: 'nudges_disabled', stats: gateStats };
+  if (deps.timezone !== undefined && !isWithinNudgeSendWindow(now, deps.timezone)) {
+    return { delivered: false, reason: 'outside_send_window', stats: gateStats };
+  }
 
   if (survivors.length === 0) {
     return { delivered: false, reason: 'no_candidates', stats: { candidates: candidates.length, survivors: 0, confirmed: 0, shortlisted: 0 } };
@@ -256,14 +310,18 @@ export async function runInsightPass(deps: InsightPassDeps): Promise<InsightPass
 
   const request = buildVoiceRequest(shortlisted, { goal: context.goal, facts: context.facts, recentlySaid: context.recentlySaid });
   const raw = await deps.generateNudge(request);
-  const nudge = parseNudge(raw, shortlisted.map((f) => f.signature));
-  if (!nudge) return { delivered: false, reason: 'no_nudge', stats };
+  const picked = parseNudge(raw, shortlisted.map((f) => f.signature));
+  if (!picked) return { delivered: false, reason: 'no_nudge', stats };
 
   // parseNudge already enforced the signature is one we offered; this lookup
   // cannot fail, but a `?? null` chain here would silently paper over a
   // contract break between voice.ts and this function, so fail the same way.
-  const chosen = shortlisted.find((f) => f.signature === nudge.signature);
+  const chosen = shortlisted.find((f) => f.signature === picked.signature);
   if (!chosen) return { delivered: false, reason: 'no_nudge', stats };
+
+  // The model chooses WHICH finding to speak; goal findings carry their own
+  // reviewed, unit-aware wording and coach handoff, which replaces the model's.
+  const nudge: Nudge = chosen.copy ? { signature: chosen.signature, ...chosen.copy } : picked;
 
   if (!withinDeliveryCaps(history, now, chosen.kind)) return { delivered: false, reason: 'caps_exceeded', stats };
 

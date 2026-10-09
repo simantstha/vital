@@ -90,6 +90,21 @@ final class TrendsViewModel: ObservableObject {
     /// doesn't render rather than fabricating a trend.
     @Published private(set) var weightLog: WeightLogResponse? = nil
 
+    // MARK: Strength (workout_sets summary — "Strength" card)
+
+    /// `nil` until `/api/workouts/summary` resolves, and left untouched (not
+    /// zeroed) when a refresh fails — the card only ever renders real data.
+    /// Kept raw (not the derived `TrendsStrengthLogic.Card`) so the view can
+    /// re-derive it with the current unit system and clock each render.
+    @Published private(set) var workoutSummary: WorkoutSummaryResponse? = nil
+
+    // MARK: Goal progress ("Am I on track?" card)
+
+    /// `nil` until `/api/goal/progress` resolves, and left untouched (never
+    /// zeroed) when a refresh fails — `TrendsView` hides the card whenever
+    /// this is `nil`.
+    @Published private(set) var goalProgress: GoalProgressDTO? = nil
+
     private let apiClient: TrendsAPIProviding
     /// `loadSummary()` also needs `fetchProfile()`, which is outside the
     /// minimal `TrendsAPIProviding` seam (that protocol exists solely to let
@@ -181,7 +196,54 @@ final class TrendsViewModel: ObservableObject {
                 return nil
             }
         }
-        headlineStatus = TrendsHeadline.status(verdicts: verdicts, goodCount: goodCount, watchCount: allMoved.count - goodCount, period: period)
+        headlineVerdicts = verdicts
+        headlineGoodCount = goodCount
+        headlineWatchCount = allMoved.count - goodCount
+        weightMetricMoved = allMoved.contains { $0.key == "body_mass_kg" }
+        refreshHeadline()
+    }
+
+    // Inputs `refreshHeadline()` combines, kept so the headline can be
+    // re-derived when the weight log or strength summary arrives after the grid.
+    private var headlineVerdicts: [Verdict] = []
+    private var headlineGoodCount = 0
+    private var headlineWatchCount = 0
+    private var weightMetricMoved = false
+
+    /// Headline = metric-tile moves + goal-relevant moves (weight trend for
+    /// weight_loss, strength lifts), so it never claims "nothing moved" next
+    /// to a visible +kg lift or weight change.
+    private func refreshHeadline() {
+        let strength = workoutSummary.flatMap { TrendsStrengthLogic.card(from: $0, system: .metric, today: Date()) }
+        let goalMoves = TrendsHeadline.GoalMoves.make(
+            goal: goal,
+            weightTrend: weightLog?.trend,
+            strength: strength,
+            weightAlreadyCounted: weightMetricMoved,
+            goalProgress: goalProgress
+        )
+        var status = TrendsHeadline.status(
+            verdicts: headlineVerdicts,
+            goodCount: headlineGoodCount,
+            watchCount: headlineWatchCount,
+            period: period,
+            goalMoves: goalMoves
+        )
+        // Today's calibration card and this ring must show ONE count: when
+        // still learning with days left, use the API's shared calibration
+        // block (`CalibrationProgress`) rather than the verdict-derived guess
+        // (which reads 0 whenever no tile has a verdict yet). `remaining == 0`
+        // is the "needs variety" state and is left as the verdict says.
+        status = Self.applyingSharedCalibration(status, calibration: calibration)
+        headlineStatus = status
+    }
+
+    /// Internal for tests.
+    static func applyingSharedCalibration(_ status: TrendsHeadline.Status, calibration: CalibrationStatus?) -> TrendsHeadline.Status {
+        guard case .learning(let progress) = status, progress.daysRemaining > 0, let calibration else { return status }
+        let remaining = CalibrationProgress.totalDays - CalibrationProgress.daysDone(calibration)
+        guard remaining > 0 else { return status }
+        return .learning(TrendsHeadline.LearningProgress(daysRemaining: remaining))
     }
 
     /// Converts one batch series DTO into a display-ready `MetricSeries`:
@@ -277,6 +339,48 @@ final class TrendsViewModel: ObservableObject {
         let fresh = try? await profileClient.fetchWeightLog()
         withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) {
             weightLog = fresh
+        }
+        refreshHeadline()
+    }
+
+    // MARK: - Load (goal progress — fail-soft)
+
+    /// Fail-soft like `loadStrength()`: a failure leaves `goalProgress` as it
+    /// was (nil on a cold start, so the card simply doesn't render) and never
+    /// touches `errorMessage`.
+    func loadGoalProgress() async {
+        do {
+            let fresh = try await profileClient.fetchGoalProgress()
+            withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) {
+                goalProgress = fresh
+            }
+            // The header counts the goal card's coloured reasons too.
+            refreshHeadline()
+        } catch {
+            if !error.isCancellation {
+                print("[Vital] fetchGoalProgress failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    // MARK: - Load (strength summary — fail-soft)
+
+    /// Fail-soft like `loadGoalContext()`: a failure leaves `workoutSummary`
+    /// as it was (nil on a cold start, so the Strength card simply doesn't
+    /// render) and never touches `errorMessage` — strength is a secondary card,
+    /// not core Trends content. An empty `exercises` map is a valid response
+    /// (no lifts logged) and also hides the card via `TrendsStrengthLogic`.
+    func loadStrength() async {
+        do {
+            let fresh = try await profileClient.fetchWorkoutSummary()
+            withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) {
+                workoutSummary = fresh
+            }
+            refreshHeadline()
+        } catch {
+            if !error.isCancellation {
+                print("[Vital] fetchWorkoutSummary failed: \(error.localizedDescription)")
+            }
         }
     }
 

@@ -21,6 +21,18 @@ enum DevicesLogic {
         }
     }
 
+    /// Title for the device's connection/status row. Apple's data arrives
+    /// through the combined HealthKit integration, so it reads "Apple Health
+    /// (Apple Watch)" - the same "Apple Health" name Profile's Devices row
+    /// and the Connections list use - while the primary-device pickers keep
+    /// the shorter `deviceName`.
+    static func statusRowTitle(_ kind: DeviceKind) -> String {
+        switch kind {
+        case .apple: return "Apple Health (Apple Watch)"
+        case .whoop: return "WHOOP"
+        }
+    }
+
     // MARK: - Metrics
 
     /// The three families a primary device is chosen for — one row each
@@ -138,11 +150,34 @@ enum DevicesLogic {
 
     // MARK: - Sync status
 
+    /// How fresh a connected device's last sync is - drives the status dot's
+    /// colour and the "Pull to sync" hint.
+    enum SyncFreshness: Equatable {
+        case disconnected
+        case fresh      // <= 6 h
+        case stale      // > 6 h
+        case veryStale  // > 48 h
+    }
+
+    static let staleSyncThreshold: TimeInterval = 6 * 3600
+    static let veryStaleSyncThreshold: TimeInterval = 48 * 3600
+
+    /// Pure: green (<= 6 h) -> amber (> 6 h) -> red (> 48 h). Not connected,
+    /// or connected with no known sync time, is `.disconnected`.
+    static func syncFreshness(connected: Bool, lastSyncAt: Date?, now: Date = Date()) -> SyncFreshness {
+        guard connected, let lastSyncAt else { return .disconnected }
+        let age = now.timeIntervalSince(lastSyncAt)
+        if age > veryStaleSyncThreshold { return .veryStale }
+        if age > staleSyncThreshold { return .stale }
+        return .fresh
+    }
+
     /// "Synced 4 min ago" when connected with a known last-sync time,
     /// "Synced just now" when connected but the sync is less than a minute
     /// old (`RelativeDateTimeFormatter` would otherwise print "in 0
     /// seconds"-style noise for a timestamp fractionally after `now`), or
-    /// "Not connected" otherwise. `now`/`formatter` are injected so this is
+    /// "Not connected" otherwise. A stale sync (> 6 h) appends
+    /// " \u{00B7} Pull to sync". `now`/`formatter` are injected so this is
     /// deterministic under test.
     static func syncStatusLabel(
         connected: Bool,
@@ -152,7 +187,11 @@ enum DevicesLogic {
     ) -> String {
         guard connected, let lastSyncAt else { return "Not connected" }
         guard now.timeIntervalSince(lastSyncAt) >= 60 else { return "Synced just now" }
-        return "Synced \(formatter.localizedString(for: lastSyncAt, relativeTo: now))"
+        let base = "Synced \(formatter.localizedString(for: lastSyncAt, relativeTo: now))"
+        switch syncFreshness(connected: connected, lastSyncAt: lastSyncAt, now: now) {
+        case .stale, .veryStale: return "\(base) \u{00B7} Pull to sync"
+        case .fresh, .disconnected: return base
+        }
     }
 
     // MARK: - Duplicates

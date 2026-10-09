@@ -10,12 +10,21 @@
  *  - All storage is metric (load_kg), matching db/schema.ts's convention
  *    (lib/units.ts: DB values are always metric; imperial is a display
  *    concern only). This module converts lb → kg at parse time.
- *  - Deliberately conservative: an input this can't confidently resolve to
- *    exactly one exercise returns `{ ok: false, reason: 'ambiguous', ... }`
- *    with candidate exercises for the caller to ask a follow-up question,
- *    rather than guessing (ux-spec §5.4: "Vital asks one question with 2
- *    chips"). Never invents a set count, rep count, or exercise.
+ *  - Exercise identity lives in lib/exerciseCanonical.ts (shared with the
+ *    HTTP routes). Unknown exercise names are accepted as-is rather than
+ *    rejected; the parser still fails when there is no rep count at all.
+ *  - Deliberately conservative about numbers: never invents a set count or
+ *    rep count, caps sets at MAX_SETS, and an ambiguous bare term ("press")
+ *    asks a follow-up question instead of guessing.
  */
+
+import {
+  EXERCISE_ALIASES,
+  QUALIFIER_TOKENS,
+  canonicalExercise,
+  lookupKnownExercise,
+  tokenizeExercise,
+} from '@/lib/exerciseCanonical';
 
 // ── Units ───────────────────────────────────────────────────────────────────
 
@@ -25,50 +34,17 @@ export function lbToKg(lb: number): number {
   return lb * LB_TO_KG;
 }
 
-// ── Exercise alias map ───────────────────────────────────────────────────────
-// Canonical name -> list of surface forms (already normalized: lowercase,
-// letters only — see normalizeToken below). Distinct movements are kept as
-// distinct canonical entries even when colloquially related (pull-up vs.
-// chin-up: different grip, different exercise — never merged).
+/** Most sets a single phrase may expand to. */
+export const MAX_SETS = 10;
 
-const EXERCISE_ALIASES: Record<string, string[]> = {
-  squat: ['squat', 'squats', 'backsquat', 'backsquats'],
-  'front squat': ['frontsquat', 'frontsquats'],
-  'goblet squat': ['gobletsquat', 'gobletsquats'],
-  'bench press': ['bench', 'benchpress', 'benchpresses'],
-  'incline bench press': ['inclinebench', 'inclinebenchpress'],
-  'overhead press': ['ohp', 'overheadpress', 'militarypress', 'strictpress'],
-  deadlift: ['dl', 'deadlift', 'deadlifts'],
-  'romanian deadlift': ['rdl', 'romaniandeadlift', 'romaniandeadlifts'],
-  'sumo deadlift': ['sumodeadlift', 'sumodeadlifts'],
-  'pull-up': ['pullup', 'pullups'],
-  'chin-up': ['chinup', 'chinups'],
-  'push-up': ['pushup', 'pushups'],
-  row: ['row', 'rows', 'barbellrow', 'barbellrows', 'bentoverrow', 'bentoverrows'],
-  'lat pulldown': ['latpulldown', 'latpulldowns', 'pulldown', 'pulldowns'],
-  'leg press': ['legpress'],
-  'leg curl': ['legcurl', 'legcurls', 'hamstringcurl', 'hamstringcurls'],
-  'leg extension': ['legextension', 'legextensions'],
-  lunge: ['lunge', 'lunges'],
-  'bicep curl': ['bicepcurl', 'bicepcurls', 'curl', 'curls'],
-  'tricep extension': ['tricepextension', 'tricepextensions'],
-  'dumbbell shoulder press': ['dumbbellshoulderpress', 'dbshoulderpress'],
-  plank: ['plank', 'planks'],
-};
+/** In "N x M", N above this is read as a load, not a set count. */
+const LOAD_THRESHOLD = 20;
 
 /** Ambiguous bare terms that could refer to more than one canonical exercise. */
 const AMBIGUOUS_TERMS: Record<string, string[]> = {
   press: ['bench press', 'overhead press', 'leg press'],
-  squat: [], // handled specially below only when qualifier conflicts; kept for documentation
   pulldown: ['lat pulldown'],
 };
-
-// Build the reverse lookup: normalized alias token -> canonical name.
-const ALIAS_LOOKUP: Map<string, string> = new Map();
-for (const [canonical, aliases] of Object.entries(EXERCISE_ALIASES)) {
-  for (const alias of aliases) ALIAS_LOOKUP.set(alias, canonical);
-  ALIAS_LOOKUP.set(normalizeToken(canonical), canonical);
-}
 
 function normalizeToken(s: string): string {
   return s.toLowerCase().replace(/[^a-z]/g, '');
@@ -84,8 +60,8 @@ export interface ParsedSet {
 
 export interface ParsedWorkoutOk {
   ok: true;
-  exercise: string;          // canonical, e.g. "squat"
-  exerciseDisplay: string;   // as the user said it, e.g. "Squats"
+  exercise: string;          // canonical key, e.g. "bench press"
+  exerciseDisplay: string;   // canonical display, e.g. "Bench Press"
   sets: ParsedSet[];
 }
 
@@ -98,7 +74,7 @@ export interface ParsedWorkoutAmbiguous {
 
 export interface ParsedWorkoutUnrecognized {
   ok: false;
-  reason: 'unrecognized_exercise' | 'no_exercise' | 'no_reps';
+  reason: 'unrecognized_exercise' | 'no_exercise' | 'no_reps' | 'too_many_sets';
   message: string;
 }
 
@@ -120,11 +96,21 @@ export interface ParseWorkoutOptions {
 
 const RPE_RE = /\brpe\s*[:=]?\s*(\d+(?:\.\d+)?)\b/i;
 
+const UNIT = '(?:kg|kgs|kilograms?|lb|lbs|pounds?)';
+const NUM = '(\\d+(?:\\.\\d+)?)';
+
 // Keyword-led load: "at 225", "@ 140kg" — unit optional.
 const LOAD_KEYWORD_RE =
   /\b(?:at|@)\s*(\d+(?:\.\d+)?)\s*(kg|kgs|kilograms?|lb|lbs|pounds?)?\b/i;
 // Unit-led load with no keyword: "225 lb", "100kg".
 const LOAD_UNIT_RE = /(\d+(?:\.\d+)?)\s*(kg|kgs|kilograms?|lb|lbs|pounds?)\b/i;
+
+// "<load> x <reps> x <sets>": "225x5x3", "100 kg x 5 x 3"
+const LOAD_REPS_SETS_RE = new RegExp(`(?<![\\d.])${NUM}\\s*(${UNIT})?\\s*[x×]\\s*(\\d+)\\s*[x×]\\s*(\\d+)(?!\\d)`, 'i');
+// "<load> x <reps>": "225x5", "100 kg x 5"  (gated on load-ness below)
+const LOAD_X_REPS_RE = new RegExp(`(?<![\\d.])${NUM}\\s*(${UNIT})?\\s*[x×]\\s*(\\d+)(?!\\d)`, 'i');
+// "<load> for <reps>": "225 for 5", "225 lb for 5 reps"
+const LOAD_FOR_REPS_RE = new RegExp(`(?<![\\d.])${NUM}\\s*(${UNIT})?\\s+for\\s+(\\d+)(?!\\d)`, 'i');
 
 const SETS_OF_RE = /\b(\d+)\s*sets?\s+of\s+(\d+)\b/i;
 const SETS_X_RE = /\b(\d+)\s*[x×]\s*(\d+)\b/i;
@@ -133,7 +119,7 @@ const BARE_REPS_RE = /\b(\d+)\s*reps?\b|\b(\d+)\b/i;
 
 const FILLER_WORDS = new Set([
   'i', 'did', 'just', 'today', 'this', 'morning', 'now', 'and', 'a', 'an',
-  'the', 'for', 'reps', 'rep', 'set', 'sets',
+  'the', 'for', 'reps', 'rep', 'set', 'sets', 'of', 'at', 'with', 'x',
 ]);
 
 function isKgUnit(unit: string | undefined): boolean | null {
@@ -142,6 +128,12 @@ function isKgUnit(unit: string | undefined): boolean | null {
   if (u.startsWith('kg') || u.startsWith('kilogram')) return true;
   if (u.startsWith('lb') || u.startsWith('pound')) return false;
   return null;
+}
+
+function toKg(value: number, unit: string | undefined, defaultUnit: 'kg' | 'lb'): number {
+  const unitIsKg = isKgUnit(unit);
+  const kg = unitIsKg === null ? (defaultUnit === 'kg' ? value : lbToKg(value)) : unitIsKg ? value : lbToKg(value);
+  return Math.round(kg * 100) / 100;
 }
 
 function stripFiller(text: string): string {
@@ -156,39 +148,43 @@ function stripFiller(text: string): string {
 function resolveExercise(
   phraseRaw: string,
 ): { canonical: string; display: string } | { ambiguous: string[] } | null {
-  const display = stripFiller(phraseRaw).trim();
-  if (!display) return null;
-
-  const key = normalizeToken(display);
+  const phrase = stripFiller(phraseRaw).replace(/[^\p{L}\p{N}\s-]/gu, ' ').trim();
+  if (!phrase) return null;
+  const key = normalizeToken(phrase);
   if (!key) return null;
 
   if (Object.prototype.hasOwnProperty.call(AMBIGUOUS_TERMS, key)) {
-    const candidates = AMBIGUOUS_TERMS[key];
-    if (candidates.length > 0) return { ambiguous: candidates };
+    return { ambiguous: AMBIGUOUS_TERMS[key] };
   }
 
-  const canonical = ALIAS_LOOKUP.get(key);
-  if (canonical) return { canonical, display };
+  // Whole phrase is a known lift (qualifiers already respected: exact match only).
+  const exact = lookupKnownExercise(phrase);
+  if (exact) return { canonical: exact, display: canonicalExercise(exact).display };
 
-  // Try matching on individual words (e.g. "back squats today" after filler
-  // strip is "back squats" — full-phrase key "backsquats" already matches
-  // above; this second pass covers extra descriptive words the alias map
-  // doesn't carry, e.g. "heavy bench press" -> "bench press").
-  const words = display.split(/\s+/);
+  // Descriptive extras ("heavy bench press today" -> "bench press"). A window
+  // may only fold when the leftover words carry no qualifier — otherwise
+  // "paused ... bench" style variants would be swallowed by the base lift.
+  const words = phrase.split(/\s+/);
   for (let start = 0; start < words.length; start++) {
     for (let end = words.length; end > start; end--) {
-      const candidateKey = normalizeToken(words.slice(start, end).join(''));
+      const windowWords = words.slice(start, end);
+      const candidateKey = normalizeToken(windowWords.join(''));
       if (!candidateKey) continue;
-      if (Object.prototype.hasOwnProperty.call(AMBIGUOUS_TERMS, candidateKey)) {
-        const candidates = AMBIGUOUS_TERMS[candidateKey];
-        if (candidates.length > 0) return { ambiguous: candidates };
+      const rest = [...words.slice(0, start), ...words.slice(end)];
+      const restHasQualifier = rest.some(w => tokenizeExercise(w).some(t => QUALIFIER_TOKENS.has(t)));
+      if (restHasQualifier) continue;
+      if (windowWords.length < words.length && Object.prototype.hasOwnProperty.call(AMBIGUOUS_TERMS, candidateKey)) {
+        return { ambiguous: AMBIGUOUS_TERMS[candidateKey] };
       }
-      const hit = ALIAS_LOOKUP.get(candidateKey);
-      if (hit) return { canonical: hit, display: words.slice(start, end).join(' ') };
+      const hit = lookupKnownExercise(windowWords.join(' '));
+      if (hit) return { canonical: hit, display: canonicalExercise(hit).display };
     }
   }
 
-  return null;
+  // Unknown movement: accept as-is under its normalized identity.
+  const generic = canonicalExercise(phrase);
+  if (!generic.key || !/[a-z]/.test(generic.key)) return null;
+  return { canonical: generic.key, display: generic.display };
 }
 
 /**
@@ -197,11 +193,11 @@ function resolveExercise(
  */
 export function parseWorkoutPhrase(text: string, options: ParseWorkoutOptions): ParsedWorkout {
   const defaultUnit = options.defaultUnit;
-  let working = ` ${text.trim().toLowerCase()} `;
 
   if (!text || !text.trim()) {
     return { ok: false, reason: 'no_exercise', message: 'No workout description given.' };
   }
+  let working = ` ${text.trim().toLowerCase()} `;
 
   // 1. RPE (must come before load — "rpe 8" would otherwise look like a bare number)
   let rpe: number | null = null;
@@ -211,43 +207,84 @@ export function parseWorkoutPhrase(text: string, options: ParseWorkoutOptions): 
     working = working.replace(rpeMatch[0], ' ');
   }
 
-  // 2. Load (keyword-led first, then unit-led)
   let loadKg: number | null = null;
-  const loadKeywordMatch = working.match(LOAD_KEYWORD_RE);
-  const loadMatch = loadKeywordMatch ?? working.match(LOAD_UNIT_RE);
-  if (loadMatch) {
-    const value = Number(loadMatch[1]);
-    const unitIsKg = isKgUnit(loadMatch[2]);
-    const kg = unitIsKg === null ? (defaultUnit === 'kg' ? value : lbToKg(value)) : unitIsKg ? value : lbToKg(value);
-    loadKg = Math.round(kg * 100) / 100;
-    working = working.replace(loadMatch[0], ' ');
-  }
-
-  // 3. Sets x reps (try the most specific patterns first)
   let setsCount: number | null = null;
   let reps: number | null = null;
-  const setsOfMatch = working.match(SETS_OF_RE);
-  const xMatch = !setsOfMatch ? working.match(SETS_X_RE) : null;
-  const byMatch = !setsOfMatch && !xMatch ? working.match(SETS_BY_RE) : null;
-  const combo = setsOfMatch ?? xMatch ?? byMatch;
-  if (combo) {
-    setsCount = Number(combo[1]);
-    reps = Number(combo[2]);
-    working = working.replace(combo[0], ' ');
-  } else {
-    const bareMatch = working.match(BARE_REPS_RE);
-    if (bareMatch) {
-      reps = Number(bareMatch[1] ?? bareMatch[2]);
+  const hasKeywordLoad = LOAD_KEYWORD_RE.test(working);
+
+  // 2. Load-first phrasings: "225x5x3", "225x5", "225 for 5". The leading
+  // number is a load only if it carries a unit or exceeds LOAD_THRESHOLD;
+  // otherwise "3x5" stays sets x reps.
+  const isLoadLead = (value: number, unit: string | undefined) => unit !== undefined || value > LOAD_THRESHOLD;
+
+  const lrs = working.match(LOAD_REPS_SETS_RE);
+  if (lrs && isLoadLead(Number(lrs[1]), lrs[2])) {
+    loadKg = toKg(Number(lrs[1]), lrs[2], defaultUnit);
+    reps = Number(lrs[3]);
+    setsCount = Number(lrs[4]);
+    working = working.replace(lrs[0], ' ');
+  }
+
+  if (reps === null) {
+    const lxr = hasKeywordLoad ? null : working.match(LOAD_X_REPS_RE);
+    if (lxr && isLoadLead(Number(lxr[1]), lxr[2])) {
+      loadKg = toKg(Number(lxr[1]), lxr[2], defaultUnit);
+      reps = Number(lxr[3]);
       setsCount = 1;
-      working = working.replace(bareMatch[0], ' ');
+      working = working.replace(lxr[0], ' ');
     }
   }
 
-  if (reps === null || setsCount === null || !Number.isFinite(reps) || reps <= 0) {
+  if (reps === null) {
+    const lfr = hasKeywordLoad ? null : working.match(LOAD_FOR_REPS_RE);
+    if (lfr && isLoadLead(Number(lfr[1]), lfr[2])) {
+      loadKg = toKg(Number(lfr[1]), lfr[2], defaultUnit);
+      reps = Number(lfr[3]);
+      setsCount = 1;
+      working = working.replace(lfr[0], ' ');
+    }
+  }
+
+  // 3. Keyword-led / unit-led load, then sets x reps.
+  if (reps === null) {
+    const loadKeywordMatch = working.match(LOAD_KEYWORD_RE);
+    const loadMatch = loadKeywordMatch ?? working.match(LOAD_UNIT_RE);
+    if (loadMatch) {
+      loadKg = toKg(Number(loadMatch[1]), loadMatch[2], defaultUnit);
+      working = working.replace(loadMatch[0], ' ');
+    }
+
+    const setsOfMatch = working.match(SETS_OF_RE);
+    const xMatch = !setsOfMatch ? working.match(SETS_X_RE) : null;
+    const byMatch = !setsOfMatch && !xMatch ? working.match(SETS_BY_RE) : null;
+    const combo = setsOfMatch ?? xMatch ?? byMatch;
+    if (combo) {
+      setsCount = Number(combo[1]);
+      reps = Number(combo[2]);
+      working = working.replace(combo[0], ' ');
+    } else {
+      const bareMatch = working.match(BARE_REPS_RE);
+      if (bareMatch) {
+        reps = Number(bareMatch[1] ?? bareMatch[2]);
+        setsCount = 1;
+        working = working.replace(bareMatch[0], ' ');
+      }
+    }
+  }
+
+  if (reps === null || setsCount === null || !Number.isFinite(reps) || reps <= 0 || setsCount <= 0) {
     return {
       ok: false,
       reason: 'no_reps',
       message: `Couldn't find a rep count in "${text}". Try e.g. "3x5 squat at 225" or "20 pushups".`,
+    };
+  }
+
+  if (setsCount > MAX_SETS) {
+    return {
+      ok: false,
+      reason: 'too_many_sets',
+      message: `That's ${setsCount} sets — I log at most ${MAX_SETS} at a time. If you meant a weight, try "225 for 5" or "squat at 225, 3x5".`,
     };
   }
 

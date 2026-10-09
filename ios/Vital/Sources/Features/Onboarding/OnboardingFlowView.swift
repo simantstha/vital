@@ -265,10 +265,30 @@ private struct BasicsStepView: View {
                 }
 
                 FieldLabel(title: "Date of birth") {
-                    DatePicker("", selection: $vm.dob, displayedComponents: .date)
-                        .datePickerStyle(.compact)
-                        .labelsHidden()
-                        .tint(Theme.Colors.accentContent)
+                    if vm.dob != nil {
+                        DatePicker("", selection: dobBinding, in: ...Date(), displayedComponents: .date)
+                            .datePickerStyle(.compact)
+                            .labelsHidden()
+                            .tint(Theme.Colors.accentContent)
+                    } else {
+                        // No pre-filled default: a silently accepted date
+                        // gave users a wrong age. Choosing is explicit.
+                        Button {
+                            vm.dob = Calendar.current.date(byAdding: .year, value: -25, to: Date()) ?? Date()
+                        } label: {
+                            HStack {
+                                Text("Select your date of birth")
+                                    .font(Theme.Typography.bodyLarge)
+                                    .foregroundStyle(Theme.Colors.textSecondary)
+                                Spacer()
+                                Image(systemName: "calendar")
+                                    .foregroundStyle(Theme.Colors.accentContent)
+                            }
+                            .onboardingFieldSurface()
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Select your date of birth")
+                    }
                 }
 
                 FieldLabel(title: "Sex") {
@@ -298,6 +318,11 @@ private struct BasicsStepView: View {
         .onChange(of: vm.units) { seedHeightDraft(); seedWeightDraft() }
         .onChange(of: vm.heightCm) { reseedHeightIfDraftEmpty() }
         .onChange(of: vm.weightKg) { reseedWeightIfDraftEmpty() }
+    }
+
+    /// Only read once `vm.dob` is non-nil (the picker is hidden before that).
+    private var dobBinding: Binding<Date> {
+        Binding(get: { vm.dob ?? Date() }, set: { vm.dob = $0 })
     }
 
     // MARK: - Height/weight fields (unit-dependent layout)
@@ -419,6 +444,12 @@ private struct BasicsStepView: View {
 private struct GoalStepView: View {
     @ObservedObject var vm: OnboardingViewModel
 
+    /// Display-unit draft for the optional target weight; committed to
+    /// `vm.targetWeightKg` (kg) on every edit, cleared when the goal changes.
+    @State private var targetWeightText = ""
+    /// Same for the optional endurance weekly distance (display unit; committed as km).
+    @State private var weeklyDistanceText = ""
+
     private let goals: [(value: String, label: String)] = [
         ("lose_fat", "Lose fat"),
         ("build_muscle", "Build muscle"),
@@ -439,8 +470,40 @@ private struct GoalStepView: View {
                     ChipPicker(
                         options: goals,
                         isSelected: { vm.goal == $0 },
-                        onTap: { vm.goal = $0 }
+                        onTap: { vm.selectGoal($0) }
                     )
+                }
+
+                if GoalTargetLogic.showsTargetWeight(goal: vm.goal) {
+                    targetWeightSection
+                }
+
+                if GoalTargetLogic.showsWeeklyDistance(goal: vm.goal) {
+                    FieldLabel(title: "Weekly distance (\(vm.units.distanceUnit), optional)") {
+                        TextField(vm.units.distanceUnit, text: $weeklyDistanceText)
+                            .keyboardType(.decimalPad)
+                            .font(Theme.Typography.bodyLarge)
+                            .foregroundStyle(Theme.Colors.textPrimary)
+                            .onboardingFieldSurface()
+                            .accessibilityIdentifier("onboarding.weeklyDistanceField")
+                            .onChange(of: weeklyDistanceText) {
+                                vm.weeklyDistanceKmTarget = weeklyDistanceText.isEmpty
+                                    ? nil
+                                    : UnitFormat.km(fromDistanceEntry: weeklyDistanceText, vm.units)
+                            }
+                    }
+                }
+
+                if GoalTargetLogic.showsWeeklySessions(goal: vm.goal) {
+                    FieldLabel(title: "Workouts per week") {
+                        Stepper(value: $vm.weeklySessionsTarget,
+                                in: GoalTargetLogic.minWeeklySessions...GoalTargetLogic.maxWeeklySessions) {
+                            Text("\(vm.weeklySessionsTarget) \(vm.weeklySessionsTarget == 1 ? "workout" : "workouts")")
+                                .font(Theme.Typography.bodyLarge)
+                                .foregroundStyle(Theme.Colors.textPrimary)
+                        }
+                        .tint(Theme.Colors.accentContent)
+                    }
                 }
 
                 Toggle("I have a target date", isOn: $vm.hasTargetDate)
@@ -450,13 +513,67 @@ private struct GoalStepView: View {
 
                 if vm.hasTargetDate {
                     FieldLabel(title: "Target date") {
-                        DatePicker("", selection: $vm.targetDate, displayedComponents: .date)
+                        DatePicker("", selection: $vm.targetDate, in: GoalTargetLogic.targetDateRange(), displayedComponents: .date)
                             .datePickerStyle(.compact)
                             .labelsHidden()
                             .tint(Theme.Colors.accentContent)
                     }
                 }
             }
+        }
+        .onAppear {
+            // The step is rebuilt when navigating back to it; re-seed the
+            // draft from the canonical kg value.
+            targetWeightText = UnitFormat.weightEntryText(kg: vm.targetWeightKg, vm.units)
+            weeklyDistanceText = UnitFormat.distanceEntryText(km: vm.weeklyDistanceKmTarget, vm.units)
+        }
+        .onChange(of: vm.goal) {
+            targetWeightText = ""
+            weeklyDistanceText = ""
+        }
+        .onChange(of: vm.units) {
+            targetWeightText = UnitFormat.weightEntryText(kg: vm.targetWeightKg, vm.units)
+            weeklyDistanceText = UnitFormat.distanceEntryText(km: vm.weeklyDistanceKmTarget, vm.units)
+        }
+    }
+
+    @ViewBuilder
+    private var targetWeightSection: some View {
+        FieldLabel(title: "Target weight (\(vm.units.weightUnit), optional)") {
+            TextField(vm.units.weightUnit, text: $targetWeightText)
+                .keyboardType(.decimalPad)
+                .font(Theme.Typography.bodyLarge)
+                .foregroundStyle(Theme.Colors.textPrimary)
+                .onboardingFieldSurface()
+                .onChange(of: targetWeightText) {
+                    vm.targetWeightKg = targetWeightText.isEmpty
+                        ? nil
+                        : UnitFormat.kg(fromEntry: targetWeightText, vm.units)
+                }
+        }
+
+        if let warning = GoalTargetLogic.sanityWarning(
+            goal: vm.goal,
+            currentKg: vm.weightKg,
+            targetKg: vm.targetWeightKg,
+            targetDate: vm.hasTargetDate ? vm.targetDate : nil,
+            units: vm.units
+        ) {
+            Text(warning)
+                .font(Theme.Typography.bodySmall)
+                .foregroundStyle(Theme.Colors.caution)
+        } else if GoalTargetLogic.isLossGoal(vm.goal),
+                  let hint = GoalTargetLogic.paceHint(
+                    currentKg: vm.weightKg, targetKg: vm.targetWeightKg, units: vm.units
+                  ) {
+            Text(hint)
+                .font(Theme.Typography.bodySmall)
+                .foregroundStyle(Theme.Colors.textSecondary)
+        } else if let nudge = GoalTargetLogic.missingTargetNudge(goal: vm.goal, targetKg: vm.targetWeightKg) {
+            // Optional, never blocking — just says what a target unlocks.
+            Text(nudge)
+                .font(Theme.Typography.bodySmall)
+                .foregroundStyle(Theme.Colors.textSecondary)
         }
     }
 }
@@ -642,7 +759,7 @@ private struct CoachIntroStepView: View {
                 Text("Meet your coach")
                     .font(Theme.Typography.titleLarge)
                     .foregroundStyle(Theme.Colors.textPrimary)
-                Text("A couple of quick questions, then we'll start importing your health history.")
+                Text("Last step \u{2014} tell Vital anything it should know.")
                     .font(Theme.Typography.bodyMedium)
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
@@ -693,7 +810,7 @@ private struct CalibratingStepView: View {
                         .font(Theme.Typography.titleMedium)
                         .foregroundStyle(Theme.Colors.textPrimary)
                     Text(backfillCoordinator.isComplete
-                         ? "365 days of health history imported."
+                         ? OnboardingCopy.importSummary(daysUploaded: backfillCoordinator.daysUploaded)
                          : "\(Int((backfillCoordinator.progress * 100).rounded()))% — this keeps going in the background, so feel free to continue.")
                         .font(Theme.Typography.bodyMedium)
                         .foregroundStyle(Theme.Colors.textSecondary)

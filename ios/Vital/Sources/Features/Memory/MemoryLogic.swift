@@ -8,13 +8,15 @@ enum MemoryLogic {
 
     // MARK: - Groups
 
-    /// `self.facts[].group` (memory-contract.md §1) — Health, Goals,
-    /// Routines & preferences, Food, Other, in this fixed display order.
+    /// `self.facts[].group` (memory-contract.md §1) — Health, Routines &
+    /// preferences, Food, Notes, in this fixed display order. There is no
+    /// "Goals" fact group any more: the user's goal lives on the profile and
+    /// Memory shows it read-only (see `goalSummary`). A legacy `Goal` fact —
+    /// or an older server's `group: "goals"` — falls through to Notes.
     /// `People` is a separate section the view appends after these, not a
     /// case here (entities never carry a `group`).
     enum Group: String, CaseIterable {
         case health
-        case goals
         case routines
         case food
         case other
@@ -22,10 +24,9 @@ enum MemoryLogic {
         var title: String {
             switch self {
             case .health:   return "Health"
-            case .goals:    return "Goals"
             case .routines: return "Routines & preferences"
             case .food:     return "Food"
-            case .other:    return "Other"
+            case .other:    return "Notes"
             }
         }
     }
@@ -40,7 +41,8 @@ enum MemoryLogic {
         case "Condition", "Medication", "Allergy", "Intolerance", "Injury", "LabMarker", "FamilyHistory":
             return .health
         case "Goal":
-            return .goals
+            // Legacy free-text goal — the profile is the goal's source of truth.
+            return .other
         case "Habit", "Schedule", "Routine":
             return .routines
         case "FoodPreference", "Cuisine", "PantryItem":
@@ -79,6 +81,24 @@ enum MemoryLogic {
             guard let bucket = buckets[group], !bucket.isEmpty else { return nil }
             return Section(group: group, facts: bucket)
         }
+    }
+
+    // MARK: - Goal (read-only, from the profile)
+
+    /// The single goal line Memory's "Goals" card shows — the SAME composition
+    /// Profile's Goal row uses (`ProfileViewModel.goalRowLabel`), so the two
+    /// screens can never disagree. `nil` when the profile has no goal yet.
+    static func goalSummary(
+        goalId: String?, targetWeightKg: Double?, weeklySessions: Int?,
+        weeklyDistanceKm: Double?, raceDate: String? = nil, raceDistanceKm: Double? = nil, system: UnitSystem
+    ) -> String? {
+        guard let goalId, let label = DietBudgetViewModel.goalLabels[goalId] else { return nil }
+        let line = ProfileViewModel.goalRowLabel(
+            goalLabel: label, goalId: goalId, targetWeightKg: targetWeightKg,
+            weeklySessions: weeklySessions, weeklyDistanceKm: weeklyDistanceKm,
+            raceDate: raceDate, raceDistanceKm: raceDistanceKm, system: system
+        )
+        return line.isEmpty ? nil : line
     }
 
     // MARK: - Origin phrase + date line

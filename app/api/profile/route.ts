@@ -29,6 +29,15 @@
  *                                                // nullable so the client can distinguish
  *                                                // "unset" (fall back to device locale)
  *                                                // from an explicit 'metric' choice.
+ *   // Goal target (roadmap v5 — all null when unset)
+ *   targetWeightKg:      number | null,   // users.target_weight_kg
+ *   targetDate:          string | null,   // users.target_date, 'YYYY-MM-DD'
+ *   weeklySessionsTarget: number | null,  // users.weekly_sessions_target
+ *   weeklyDistanceKmTarget: number | null, // users.weekly_distance_km_target (km on the wire)
+ *   raceDate: string | null,               // users.race_date 'YYYY-MM-DD' (endurance race)
+ *   raceDistanceKm: number | null,         // users.race_distance_km
+ *   goalStartWeightKg:   number | null,   // users.goal_start_weight_kg
+ *   goalStartedAt:       string | null,   // ISO timestamp, users.goal_started_at
  * }
  *
  * PATCH /api/profile
@@ -46,6 +55,12 @@
  *     sleepGoalMinutes?: integer,  // 240–720
  *     lightsOutMinutes?: integer,  // 0–1439
  *     unitSystem?: 'metric' | 'imperial',
+ *     targetWeightKg?: number | null,       // 30–300; null clears
+ *     targetDate?: string | null,           // 'YYYY-MM-DD', future and <= 3 years out; null clears
+ *     weeklySessionsTarget?: integer | null, // 1–14; null clears
+ *     weeklyDistanceKmTarget?: number | null, // 1–300 km; null clears
+ *     raceDate?: string | null,               // YYYY-MM-DD, today..+2y; null clears
+ *     raceDistanceKm?: number | null,         // 1–250 km; null clears
  *   }
  *
  * Effects:
@@ -58,6 +73,12 @@
  *     row (if any) is updated in place so Today reflects the change immediately.
  *   - unitSystem          → users.unit_system (strictly validated — 400 on a
  *     present-but-invalid value, unlike onboarding's lenient normalize-on-write).
+ *
+ *   - targetWeightKg / targetDate / weeklySessionsTarget / weeklyDistanceKmTarget →
+ *     users.target_weight_kg / target_date / weekly_sessions_target / weekly_distance_km_target. When targetWeightKg changes to a new
+ *     non-null value, goal progress re-anchors: users.goal_started_at = now and
+ *     users.goal_start_weight_kg = latest trend weight (null if no weigh-ins).
+ *     (A goal-TYPE change re-anchors the same way, in PATCH /api/diet-goal.)
  *
  * Response: { ok: true }
  * 400 on validation failure ({ error }), 401 if unauthenticated.
@@ -74,6 +95,9 @@ import { parseProfileDetails, updateIdentityLines, formatSleepSubtitle } from '@
 import { importLegacyWeightLogIfPresent, logWeightEntry } from '@/lib/weightRepository';
 import { localDayKey, pickTimeZone } from '@/lib/localDay';
 import { parseUnitSystem } from '@/lib/units';
+import { parseTargetDate, parseTargetWeightKg, parseWeeklySessionsTarget, parseWeeklyDistanceKmTarget, parseRaceDate, parseRaceDistanceKm } from '@/lib/goalTarget';
+import { buildGoalRestart, shouldReanchorGoalForTarget } from '@/lib/goalStart';
+import { invalidateGoalProgress } from '@/lib/brain/goalProgressCache';
 
 export const dynamic = 'force-dynamic';
 
@@ -106,6 +130,14 @@ export async function GET(request: Request): Promise<NextResponse> {
         lights_out_minutes: schema.users.lights_out_minutes,
         timezone: schema.users.timezone,
         unit_system: schema.users.unit_system,
+        target_weight_kg: schema.users.target_weight_kg,
+        target_date: schema.users.target_date,
+        weekly_sessions_target: schema.users.weekly_sessions_target,
+        weekly_distance_km_target: schema.users.weekly_distance_km_target,
+        race_date: schema.users.race_date,
+        race_distance_km: schema.users.race_distance_km,
+        goal_start_weight_kg: schema.users.goal_start_weight_kg,
+        goal_started_at: schema.users.goal_started_at,
       })
       .from(schema.users)
       .where(eq(schema.users.id, userId))
@@ -193,6 +225,14 @@ export async function GET(request: Request): Promise<NextResponse> {
     sleepGoalMinutes,
     lightsOutMinutes,
     unitSystem: userRow[0]?.unit_system ?? null,
+    targetWeightKg: userRow[0]?.target_weight_kg ?? null,
+    targetDate: userRow[0]?.target_date ?? null,
+    weeklySessionsTarget: userRow[0]?.weekly_sessions_target ?? null,
+    weeklyDistanceKmTarget: userRow[0]?.weekly_distance_km_target ?? null,
+    raceDate: userRow[0]?.race_date ?? null,
+    raceDistanceKm: userRow[0]?.race_distance_km ?? null,
+    goalStartWeightKg: userRow[0]?.goal_start_weight_kg ?? null,
+    goalStartedAt: userRow[0]?.goal_started_at ? new Date(userRow[0].goal_started_at).toISOString() : null,
   });
 }
 
@@ -221,7 +261,10 @@ export async function PATCH(request: Request): Promise<NextResponse> {
     return NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 });
   }
 
-  const { name, age, heightCm, weightKg, sleepGoalMinutes, lightsOutMinutes, unitSystem } = body;
+  const {
+    name, age, heightCm, weightKg, sleepGoalMinutes, lightsOutMinutes, unitSystem,
+    targetWeightKg, targetDate, weeklySessionsTarget, weeklyDistanceKmTarget, raceDate, raceDistanceKm,
+  } = body;
 
   // ── Validation ───────────────────────────────────────────────────────────
   let trimmedName: string | undefined;
@@ -254,6 +297,82 @@ export async function PATCH(request: Request): Promise<NextResponse> {
       return NextResponse.json({ error: 'unitSystem must be "metric" or "imperial".' }, { status: 400 });
     }
     parsedUnitSystem = parsed;
+  }
+
+  // Goal target fields: undefined → untouched, null → clear, otherwise validated.
+  let parsedTargetWeight: number | null | undefined;
+  if (targetWeightKg !== undefined) {
+    if (targetWeightKg === null) {
+      parsedTargetWeight = null;
+    } else {
+      const r = parseTargetWeightKg(targetWeightKg);
+      if (!r.ok) return NextResponse.json({ error: r.error }, { status: 400 });
+      parsedTargetWeight = r.value;
+    }
+  }
+  let parsedTargetDate: string | null | undefined;
+  if (targetDate !== undefined) {
+    if (targetDate === null) {
+      parsedTargetDate = null;
+    } else {
+      // "Future" is judged on the user's local day.
+      const [tzRow] = await db
+        .select({ timezone: schema.users.timezone })
+        .from(schema.users)
+        .where(eq(schema.users.id, userId))
+        .limit(1);
+      const todayKey = localDayKey(new Date(), pickTimeZone(null, tzRow?.timezone));
+      const r = parseTargetDate(targetDate, todayKey);
+      if (!r.ok) return NextResponse.json({ error: r.error }, { status: 400 });
+      parsedTargetDate = r.value;
+    }
+  }
+  let parsedWeeklySessions: number | null | undefined;
+  if (weeklySessionsTarget !== undefined) {
+    if (weeklySessionsTarget === null) {
+      parsedWeeklySessions = null;
+    } else {
+      const r = parseWeeklySessionsTarget(weeklySessionsTarget);
+      if (!r.ok) return NextResponse.json({ error: r.error }, { status: 400 });
+      parsedWeeklySessions = r.value;
+    }
+  }
+  let parsedWeeklyDistance: number | null | undefined;
+  if (weeklyDistanceKmTarget !== undefined) {
+    if (weeklyDistanceKmTarget === null) {
+      parsedWeeklyDistance = null;
+    } else {
+      const r = parseWeeklyDistanceKmTarget(weeklyDistanceKmTarget);
+      if (!r.ok) return NextResponse.json({ error: r.error }, { status: 400 });
+      parsedWeeklyDistance = r.value;
+    }
+  }
+  let parsedRaceDate: string | null | undefined;
+  if (raceDate !== undefined) {
+    if (raceDate === null) {
+      parsedRaceDate = null;
+    } else {
+      // Race day may be today; judged on the user's local day.
+      const [tzRow] = await db
+        .select({ timezone: schema.users.timezone })
+        .from(schema.users)
+        .where(eq(schema.users.id, userId))
+        .limit(1);
+      const todayKey = localDayKey(new Date(), pickTimeZone(null, tzRow?.timezone));
+      const r = parseRaceDate(raceDate, todayKey);
+      if (!r.ok) return NextResponse.json({ error: r.error }, { status: 400 });
+      parsedRaceDate = r.value;
+    }
+  }
+  let parsedRaceDistance: number | null | undefined;
+  if (raceDistanceKm !== undefined) {
+    if (raceDistanceKm === null) {
+      parsedRaceDistance = null;
+    } else {
+      const r = parseRaceDistanceKm(raceDistanceKm);
+      if (!r.ok) return NextResponse.json({ error: r.error }, { status: 400 });
+      parsedRaceDistance = r.value;
+    }
   }
 
   // ── Effects ──────────────────────────────────────────────────────────────
@@ -325,6 +444,41 @@ export async function PATCH(request: Request): Promise<NextResponse> {
           eq(schema.plan_items.status, 'pending'),
         ));
     }
+  }
+
+  // ── Goal target ───────────────────────────────────────────────────────────
+  // Runs after the weight log above so a same-request weightKg is already part
+  // of the trend used for the re-anchored start weight.
+  if (parsedTargetWeight !== undefined || parsedTargetDate !== undefined || parsedWeeklySessions !== undefined || parsedWeeklyDistance !== undefined || parsedRaceDate !== undefined || parsedRaceDistance !== undefined) {
+    const goalUpdate: Partial<typeof schema.users.$inferInsert> = {};
+    if (parsedTargetDate !== undefined) goalUpdate.target_date = parsedTargetDate;
+    if (parsedWeeklySessions !== undefined) goalUpdate.weekly_sessions_target = parsedWeeklySessions;
+    if (parsedWeeklyDistance !== undefined) goalUpdate.weekly_distance_km_target = parsedWeeklyDistance;
+    if (parsedRaceDate !== undefined) goalUpdate.race_date = parsedRaceDate;
+    if (parsedRaceDistance !== undefined) goalUpdate.race_distance_km = parsedRaceDistance;
+
+    if (parsedTargetWeight !== undefined) {
+      goalUpdate.target_weight_kg = parsedTargetWeight;
+      if (parsedTargetWeight !== null) {
+        const [current] = await db
+          .select({ target_weight_kg: schema.users.target_weight_kg })
+          .from(schema.users)
+          .where(eq(schema.users.id, userId))
+          .limit(1);
+        // Re-anchor only when a goal starts or flips direction (loss <-> gain);
+        // a same-direction edit keeps the start weight/date so progress made
+        // is not wiped.
+        if (
+          current?.target_weight_kg !== parsedTargetWeight &&
+          await shouldReanchorGoalForTarget(userId, current?.target_weight_kg ?? null, parsedTargetWeight)
+        ) {
+          Object.assign(goalUpdate, await buildGoalRestart(userId));
+        }
+      }
+    }
+
+    await db.update(schema.users).set(goalUpdate).where(eq(schema.users.id, userId));
+    invalidateGoalProgress(userId);
   }
 
   return NextResponse.json({ ok: true });

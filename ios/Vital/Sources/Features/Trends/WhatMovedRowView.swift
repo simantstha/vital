@@ -29,16 +29,22 @@ struct WhatMovedRowView: View {
                     .foregroundStyle(Theme.Colors.textPrimary)
                     .lineLimit(1)
                 HStack(alignment: .lastTextBaseline, spacing: 3) {
-                    Text(TrendsDeltaFormat.formattedNumber(row.value, decimals: spec.decimals))
+                    Text(TrendsDeltaFormat.valueText(row.value, spec: spec))
                         .font(Theme.Typography.numericSmall(17))
                         .foregroundStyle(Theme.Colors.textPrimary)
-                    let unit = spec.unit(unitSystem)
+                    let unit = TrendsDeltaFormat.unitLabel(spec: spec, system: unitSystem)
                     if !unit.isEmpty {
                         Text(unit)
                             .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(Theme.Colors.textSecondary)
                     }
                 }
+                // Window label: the pill's delta is latest reading minus the
+                // 30-day mean (`WhatMovedRow.delta`), so say so.
+                Text("vs your 30-day normal")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Theme.Colors.textSecondary)
+                    .lineLimit(1)
             }
 
             Spacer(minLength: Theme.Spacing.sm)

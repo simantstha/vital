@@ -145,17 +145,17 @@ final class LogsPagerTests: XCTestCase {
 
     func testSummaryLineAppendsKcalWhenPresent() {
         let items = [item(id: "a", kcal: 640)]
-        XCTAssertEqual(LogsPagerSummary.summaryLine(items: items, units: .metric), "1 entry · 640 kcal")
+        XCTAssertEqual(LogsPagerSummary.summaryLine(items: items, units: .metric), "1 entry · 640\u{00A0}kcal")
     }
 
     func testSummaryLineAppendsKmWhenPresent() {
         let items = [item(id: "a", type: "workout_completed", km: 2.4)]
-        XCTAssertEqual(LogsPagerSummary.summaryLine(items: items, units: .metric), "1 entry · 2.4 km")
+        XCTAssertEqual(LogsPagerSummary.summaryLine(items: items, units: .metric), "1 entry · 2.4\u{00A0}km")
     }
 
     func testSummaryLineAppendsMilesWhenImperial() {
         let items = [item(id: "a", type: "workout_completed", km: 2.4)]
-        XCTAssertEqual(LogsPagerSummary.summaryLine(items: items, units: .imperial), "1 entry · 1.5 mi")
+        XCTAssertEqual(LogsPagerSummary.summaryLine(items: items, units: .imperial), "1 entry · 1.5\u{00A0}mi")
     }
 
     func testSummaryLineOrdersEntriesThenKcalThenKm() {
@@ -163,7 +163,7 @@ final class LogsPagerTests: XCTestCase {
             item(id: "meal", kcal: 640),
             item(id: "walk", type: "workout_completed", km: 2.4),
         ]
-        XCTAssertEqual(LogsPagerSummary.summaryLine(items: items, units: .metric), "2 entries · 640 kcal · 2.4 km")
+        XCTAssertEqual(LogsPagerSummary.summaryLine(items: items, units: .metric), "2 entries · 640\u{00A0}kcal · 2.4\u{00A0}km")
     }
 
     func testSummaryLineOrdersEntriesThenKcalThenMilesWhenImperial() {
@@ -171,7 +171,27 @@ final class LogsPagerTests: XCTestCase {
             item(id: "meal", kcal: 640),
             item(id: "walk", type: "workout_completed", km: 2.4),
         ]
-        XCTAssertEqual(LogsPagerSummary.summaryLine(items: items, units: .imperial), "2 entries · 640 kcal · 1.5 mi")
+        XCTAssertEqual(LogsPagerSummary.summaryLine(items: items, units: .imperial), "2 entries · 640\u{00A0}kcal · 1.5\u{00A0}mi")
+    }
+
+    /// Today shows "1,850"; the Logs day header must not print "1020 kcal".
+    func testSummaryLineGroupsTheKcalTotalWithThousandsSeparators() {
+        let en = Locale(identifier: "en_US")
+        let items = [item(id: "a", kcal: 640), item(id: "b", kcal: 380)]
+        XCTAssertEqual(
+            LogsPagerSummary.summaryLine(items: items, units: .metric, locale: en),
+            "2 entries · 1,020\u{00A0}kcal"
+        )
+        let big = [item(id: "c", kcal: 1850), item(id: "walk", type: "workout_completed", km: 2.4)]
+        XCTAssertEqual(
+            LogsPagerSummary.summaryLine(items: big, units: .metric, locale: en),
+            "2 entries · 1,850\u{00A0}kcal · 2.4\u{00A0}km"
+        )
+        // Below a thousand there is nothing to group.
+        XCTAssertEqual(
+            LogsPagerSummary.summaryLine(items: [item(id: "d", kcal: 999)], units: .metric, locale: en),
+            "1 entry · 999\u{00A0}kcal"
+        )
     }
 
     func testSummaryLineFallsBackToSleepOnlyWhenNoKcalOrKmPresent() {
@@ -184,7 +204,7 @@ final class LogsPagerTests: XCTestCase {
             item(id: "meal", kcal: 300),
             item(id: "sleep", type: "sleep_session", sleepMs: 6 * 3_600_000),
         ]
-        XCTAssertEqual(LogsPagerSummary.summaryLine(items: items, units: .metric), "2 entries · 300 kcal")
+        XCTAssertEqual(LogsPagerSummary.summaryLine(items: items, units: .metric), "2 entries · 300\u{00A0}kcal")
     }
 
     // MARK: - metaLabel

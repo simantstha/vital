@@ -115,37 +115,56 @@ private extension MetricDetailView {
 
     var heroSection: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-            HStack(alignment: .lastTextBaseline, spacing: 6) {
-                Text(heroValueText)
-                    .font(Theme.Typography.numericHero(44))
-                    .foregroundStyle(Theme.Colors.textPrimary)
-                    .contentTransition(.numericText())
-                    .animation(Theme.Motion.numeric, value: displayedValue)
-                if let unit = spec?.unit(unitPref.current), !unit.isEmpty {
-                    Text(unit)
-                        .font(.system(size: 14))
-                        .foregroundStyle(Theme.Colors.textSecondary)
+            VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                HStack(alignment: .lastTextBaseline, spacing: 6) {
+                    Text(heroValueText)
+                        .font(Theme.Typography.numericHero(44))
+                        .foregroundStyle(Theme.Colors.textPrimary)
+                        .contentTransition(.numericText())
+                        .animation(Theme.Motion.numeric, value: displayedValue)
+                    let unit = TrendsDeltaFormat.unitLabel(spec: spec, system: unitPref.current)
+                    if !unit.isEmpty {
+                        Text(unit)
+                            .font(.system(size: 14))
+                            .foregroundStyle(Theme.Colors.textSecondary)
+                    }
                 }
+                if let deltaPillText {
+                    Text(deltaPillText)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(deltaPillColor)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(Capsule().fill(deltaPillColor.opacity(0.16)))
+                }
+                if let verdictLine = heroVerdictLine {
+                    Text(verdictLine)
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(Theme.Colors.textPrimary)
+                }
+                Text(dateCaptionText)
+                    .font(.system(size: 13))
+                    .foregroundStyle(Theme.Colors.textSecondary)
             }
-            if let deltaPillText {
-                Text(deltaPillText)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(deltaPillColor)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 4)
-                    .background(Capsule().fill(deltaPillColor.opacity(0.16)))
+            .accessibilityElement(children: .combine)
+            if let explanation = MetricExplainer.explanation(for: metricKey) {
+                WhatIsThisButton(title: displayName, text: explanation, showsLabel: true)
             }
-            Text(dateCaptionText)
-                .font(.system(size: 13))
-                .foregroundStyle(Theme.Colors.textSecondary)
         }
         .padding(.top, Theme.Spacing.xs)
-        .accessibilityElement(children: .combine)
+    }
+
+    /// Plain-language verdict under the big number. Skipped when the
+    /// "What it means today" card already says it for this metric
+    /// (`meaningText != nil`) — never two sentences for the same thing.
+    var heroVerdictLine: String? {
+        guard meaningText == nil else { return nil }
+        return MetricExplainer.verdictLine(for: metricKey, verdict: displayedVerdict)
     }
 
     var heroValueText: String {
         guard let value = displayedValue else { return "—" }
-        return TrendsDeltaFormat.formattedNumber(value, decimals: spec?.decimals ?? 0)
+        return TrendsDeltaFormat.valueText(value, spec: spec)
     }
 
     /// The value the hero + delta pill currently show: the scrubbed point's
@@ -154,20 +173,14 @@ private extension MetricDetailView {
     var displayedDate: Date? { snappedPoint?.date ?? rawPoints.last?.date }
     var displayedVerdict: Verdict { evaluate(displayedValue) }
 
-    /// "↑ 7 ms above your normal" / "↓ 3 bpm below your normal" / "In your
-    /// normal range" — `nil` while calibrating or with no data, when there's
-    /// no "normal" yet to compare against.
+    /// "↑ 6 ms above your normal (51 ms)" / "↓ 3 bpm below your normal (60 bpm)" /
+    /// "Within your normal range (49–55)" — distance is to the 30-day normal
+    /// value (the same reference Trends' What-moved rows use). `nil` while calibrating or with no data.
     var deltaPillText: String? {
         switch displayedVerdict {
-        case .above, .below:
-            guard let spec, let value = displayedValue, let mean30 = vm.series?.baseline?.mean30 else { return nil }
-            let delta = value - mean30
-            let arrow = TrendsDeltaFormat.arrow(delta)
-            let magnitude = TrendsDeltaFormat.magnitudeText(delta, spec: spec, system: unitPref.current, includeUnit: true)
-            let direction = delta >= 0 ? "above" : "below"
-            return "\(arrow) \(magnitude) \(direction) your normal"
-        case .normal:
-            return "In your normal range"
+        case .above, .below, .normal:
+            guard let spec, let value = displayedValue, let band = bandBounds else { return nil }
+            return TrendsDeltaFormat.normalPillText(value: value, lower: band.lower, upper: band.upper, spec: spec, system: unitPref.current)
         case .calibrating, .noData:
             return nil
         }
@@ -247,7 +260,7 @@ private extension MetricDetailView {
             HStack(spacing: Theme.Spacing.md) {
                 calibrationRing
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Still learning your normal")
+                    Text(CalibrationCopy.todayTitle)
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(Theme.Colors.textPrimary)
                     Text(stillLearningCopy)
@@ -261,8 +274,10 @@ private extension MetricDetailView {
 
     var stillLearningCopy: String {
         let remaining = calibratingDaysRemaining
-        let noun = remaining == 1 ? "night" : "nights"
-        return "\(remaining) more \(noun) and I'll know what's typical for you."
+        guard remaining > 0 else {
+            return "Your tracking works as usual. Personal insights need a bit more variety in your data."
+        }
+        return "Your numbers show up right away. Insights get personal after \(CalibrationCopy.totalDays) days of data (\(calibratingDaysElapsed) of \(CalibrationCopy.totalDays))."
     }
 
     var calibrationRing: some View {
@@ -467,7 +482,7 @@ private extension MetricDetailView {
                     .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 4]))
                     .foregroundStyle(Theme.Colors.textSecondary.opacity(0.55))
                     .annotation(position: .top, alignment: .trailing, spacing: 2) {
-                        Text("\(formattedAverage(mean30)) avg")
+                        Text("normal \(formattedAverage(bandLower))–\(formattedAverage(bandUpper))")
                             .font(.system(size: 9))
                             .foregroundStyle(Theme.Colors.textTertiary)
                             .padding(.trailing, 6)
@@ -553,10 +568,18 @@ private extension MetricDetailView {
         }
         .chartXSelection(value: $rawSelection)
         .chartXAxis {
-            AxisMarks(values: .automatic(desiredCount: 4)) { _ in
-                AxisValueLabel(format: .dateTime.month(.abbreviated).day())
-                    .font(.system(size: 10))
-                    .foregroundStyle(Theme.Colors.textTertiary)
+            AxisMarks(values: .automatic(desiredCount: 3)) { value in
+                // Fixed "MMM d" that never truncates ("O…"): the label view
+                // is `fixedSize`d so the last tick keeps its full width.
+                AxisValueLabel {
+                    if let date = value.as(Date.self) {
+                        Text(date, format: .dateTime.month(.abbreviated).day())
+                            .font(.system(size: 10))
+                            .foregroundStyle(Theme.Colors.textTertiary)
+                            .lineLimit(1)
+                            .fixedSize()
+                    }
+                }
             }
         }
         .chartYAxis {
@@ -705,9 +728,9 @@ private extension MetricDetailView {
     var statsRow: some View {
         HStack(spacing: Theme.Spacing.sm) {
             statButton(.low, label: "Low", value: formattedStat(rangeLowPoint?.value))
-            statButton(.average, label: "Average", value: formattedStat(rangeAverage))
+            statButton(.average, label: "Avg · \(vm.range.label)", value: formattedStat(rangeAverage))
             statButton(.high, label: "High", value: formattedStat(rangeHighPoint?.value))
-            StatBadge(label: "Normal (range)", value: normalRangeText)
+            StatBadge(label: "Normal range", value: normalRangeText)
         }
     }
 
@@ -796,10 +819,19 @@ private extension MetricDetailView {
                     values: distributionValues,
                     latest: latest,
                     spec: spec,
-                    unitSystem: unitPref.current
+                    unitSystem: unitPref.current,
+                    windowDays: distributionWindowDays
                 )
             }
         }
+    }
+
+    /// Real day span of the fixed distribution fetch — one label for the
+    /// records header and the "Today is your highest in the last N days" line.
+    var distributionWindowDays: Int {
+        let dates = (vm.distributionSeries?.points ?? []).map(\.date)
+        guard let first = dates.min(), let last = dates.max() else { return 90 }
+        return DistributionStats.windowDays(firstDate: first, lastDate: last)
     }
 }
 
@@ -907,7 +939,7 @@ private extension MetricDetailView {
 
     func recordsSection(_ result: MetricRecords.Result) -> some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-            sectionHeader("YOUR RECORDS (90 DAYS)")
+            sectionHeader("YOUR RECORDS (\(distributionWindowDays) DAYS)")
             GlassCard(padding: Theme.Spacing.md, cornerRadius: Theme.Radius.lg) {
                 VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
                     HStack(spacing: Theme.Spacing.md) {

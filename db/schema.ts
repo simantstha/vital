@@ -35,6 +35,23 @@ export const users = p.pgTable('users', {
   carbs_target_g:   p.integer('carbs_target_g'),
   fat_target_g:     p.integer('fat_target_g'),
 
+  // ── Goal target (roadmap v5 — goal progress) ───────────────────────────────
+  // What the user is measuring progress against. All nullable: null → "no
+  // target set" (GET /api/goal/progress answers verdict 'needs_target'
+  // rather than inventing one). Weights are canonically kg, like every other
+  // weight in this schema. goal_started_at / goal_start_weight_kg anchor
+  // "progress so far" and are reset whenever the goal type or target weight
+  // changes (see lib/goalStart.ts); start weight is null when no weigh-in was
+  // known at that moment.
+  target_weight_kg:      p.real('target_weight_kg'),                           // 30–300; null → no weight target
+  target_date:           p.date('target_date'),                                // 'YYYY-MM-DD' local day; null → no deadline
+  goal_start_weight_kg:  p.real('goal_start_weight_kg'),                       // trend weight when the current goal began
+  goal_started_at:       p.timestamp('goal_started_at', { withTimezone: true }), // when the current goal/target began
+  weekly_sessions_target: p.integer('weekly_sessions_target'),                 // 1–14 training sessions/week; null → none set
+  weekly_distance_km_target: p.real('weekly_distance_km_target'),              // 1–300 km/week (endurance); null → none set
+  race_date:             p.date('race_date'),                                  // 'YYYY-MM-DD' endurance race day; null → no race
+  race_distance_km:      p.real('race_distance_km'),                           // 1–250 km (presets 5/10/21.1/42.2); null → unspecified
+
   // Manual "new chat" boundary (lib/brain/conversationWindow.ts). Set to now()
   // when the user taps "New chat"; messages at/before this timestamp are
   // excluded from both coach restore (GET /api/coach) and the LLM prompt
@@ -430,6 +447,8 @@ export const notification_preferences = p.pgTable('notification_preferences', {
   workout_notifications_enabled: p.boolean('workout_notifications_enabled').default(true).notNull(),
   sleep_notifications_enabled:   p.boolean('sleep_notifications_enabled').default(true).notNull(),
   meals_enabled:                 p.boolean('meals_enabled').default(true).notNull(),
+  coach_nudges_enabled:          p.boolean('coach_nudges_enabled').default(true).notNull(),
+  weekly_review_enabled:         p.boolean('weekly_review_enabled').default(true).notNull(),
   meal_breakfast_time_minutes:   p.integer('meal_breakfast_time_minutes').default(480).notNull(),
   meal_lunch_time_minutes:       p.integer('meal_lunch_time_minutes').default(765).notNull(),
   meal_snack_time_minutes:       p.integer('meal_snack_time_minutes').default(960).notNull(),
@@ -622,7 +641,7 @@ export const notification_inbox = p.pgTable('notification_inbox', {
   created_at: p.timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   read_at:    p.timestamp('read_at', { withTimezone: true }),                   // nullable; null = unread
 }, (t) => [
-  p.check('notification_inbox_type_check', sql`${t.type} in ('workout_analysis', 'sleep_analysis', 'morning_brief', 'coach_nudge')`),
+  p.check('notification_inbox_type_check', sql`${t.type} in ('workout_analysis', 'sleep_analysis', 'morning_brief', 'coach_nudge', 'weekly_review')`),
   // Makes recording idempotent across push retries — the same (user, type,
   // target) never produces a second inbox row no matter how many times the
   // worker retries delivery.
@@ -658,6 +677,24 @@ export const daily_briefs = p.pgTable('daily_briefs', {
   updated_at:   p.timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [
   p.uniqueIndex('daily_briefs_user_day_units_idx').on(t.user_id, t.local_day, t.unit_system),
+]);
+
+// ─── weekly_reviews ──────────────────────────────────────────────────────────
+// One persisted "how did your week go toward your goal" review per user per
+// completed local week (lib/weeklyReview.ts). week_start is the local Monday.
+// payload is the computed WeeklyReview JSON; seen_at is set when the user taps
+// "Got it" on the Today card; pushed_at records that the Monday push went out
+// so the worker sends at most one per review.
+export const weekly_reviews = p.pgTable('weekly_reviews', {
+  id:         p.uuid('id').primaryKey().defaultRandom(),
+  user_id:    p.uuid('user_id').notNull().references(() => users.id),
+  week_start: p.date('week_start').notNull(),
+  payload:    p.jsonb('payload').notNull(),
+  created_at: p.timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  seen_at:    p.timestamp('seen_at', { withTimezone: true }),
+  pushed_at:  p.timestamp('pushed_at', { withTimezone: true }),
+}, (t) => [
+  p.uniqueIndex('weekly_reviews_user_week_idx').on(t.user_id, t.week_start),
 ]);
 
 // ─── plan_items ──────────────────────────────────────────────────────────────
@@ -900,6 +937,9 @@ export type NewPlanItemRow = typeof plan_items.$inferInsert;
 
 export type DailyBriefRow    = typeof daily_briefs.$inferSelect;
 export type NewDailyBriefRow = typeof daily_briefs.$inferInsert;
+
+export type WeeklyReviewRow    = typeof weekly_reviews.$inferSelect;
+export type NewWeeklyReviewRow = typeof weekly_reviews.$inferInsert;
 
 export type CalendarBlock    = typeof calendar_blocks.$inferSelect;
 export type NewCalendarBlock = typeof calendar_blocks.$inferInsert;

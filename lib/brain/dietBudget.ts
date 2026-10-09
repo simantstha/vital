@@ -27,6 +27,7 @@ import { readMemoryFile } from '@/lib/memory';
 import { readCoreProfile } from '@/lib/coreProfileStore';
 import { parseProfileDetails } from '@/lib/profileDetails';
 import { getWeightReadings } from '@/lib/weightRepository';
+import { buildGoalRestart } from '@/lib/goalStart';
 import { computeWeightTrend } from '@/lib/weightTrend';
 import { proteinBasisWeightKg, PROTEIN_GRAMS_CAP } from '@/lib/brain/proteinWeight';
 import { resolveDailyIntake } from '@/lib/brain/nutritionIntake';
@@ -601,6 +602,12 @@ export async function applyDietBudgetUpdate(
       throw new Error(`goal must be one of: ${DIET_GOALS.join(', ')}.`);
     }
     update.goal = body.goal as DietGoal;
+    // A goal-TYPE change re-anchors goal progress (roadmap v5): the clock
+    // restarts now, from the latest trend weight. Re-selecting the same goal
+    // is a no-op for progress.
+    if (update.goal !== normalizeGoal(user.goal)) {
+      Object.assign(update, await buildGoalRestart(userId));
+    }
   }
 
   // ── override mode ────────────────────────────────────────────────────────

@@ -10,9 +10,12 @@ import {
   computePaceHistory,
   computeSleepUsual,
   computeUsualWorkout,
+  daysSinceLastHard,
   deviceIdFromSource,
   effortZoneFromPct,
+  isHardEffortZone,
   median,
+  type PriorWorkoutRow,
   recoverySourceFromMetricSource,
   sleepNightFromDailyMetric,
   vsNormal,
@@ -104,6 +107,14 @@ test('computePaceHistory: rank 1 = fastest among previous + this one', () => {
   assert.deepEqual(history, { previous: [6.2, 6.0, 6.5], rank: 1 });
 });
 
+test('computePaceHistory: rank counts strictly faster runs (lower min/km), so rank and a slow-end dot agree', () => {
+  // 5.85 min/km with four faster (lower) earlier runs -> 5th fastest of 8, not 8th.
+  const history = computePaceHistory([5.6, 5.95, 5.7, 6.05, 5.8, 5.9, 5.65], 5.85);
+  assert.equal(history?.rank, 5);
+  // Slower than every previous run -> last place.
+  assert.equal(computePaceHistory([5.0, 5.1, 5.2], 6.0)?.rank, 4);
+});
+
 test('computePaceHistory: ranks a slower run correctly and keeps oldest->newest order', () => {
   const history = computePaceHistory([5.0, 5.2, 5.1], 6.0); // this run is slowest
   assert.deepEqual(history, { previous: [5.0, 5.2, 5.1], rank: 4 });
@@ -157,6 +168,68 @@ test('computeEffort: clamps avgPct when avgHr is below resting or above max (bad
   const above = computeEffort({ restingHr: 50, maxHr: 180, avgHr: 200 });
   assert.equal(above!.avgPct, 1);
   assert.equal(above!.zone, 'max');
+});
+
+// ── days since the last hard session (any type) ──────────────────────────────
+
+test('isHardEffortZone: hard and max count, easy and steady do not', () => {
+  assert.equal(isHardEffortZone('easy'), false);
+  assert.equal(isHardEffortZone('steady'), false);
+  assert.equal(isHardEffortZone('hard'), true);
+  assert.equal(isHardEffortZone('max'), true);
+});
+
+// resting 50 / max 180 => the hard zone starts at avgHr 147.5 (75% of the 130 bpm reserve), max at 167.
+const HARD_REF = { restingHr: 50, maxHr: 180 };
+const current = { id: 'now', workoutDateKey: '2026-10-08', referenceMs: Date.parse('2026-10-08T07:00:00Z') };
+function prior(id: string, date: string, avgHr: number | undefined, extra: Partial<PriorWorkoutRow> = {}): PriorWorkoutRow {
+  return { id, date, avgHr, startedAtMs: Date.parse(`${date}T07:00:00Z`), ...extra };
+}
+
+test('daysSinceLastHard: counts the newest hard session of ANY type, not just the same type', () => {
+  // A hard lift 2 days ago (avg HR 150) beats the easy walk yesterday (avg HR 108).
+  const days = daysSinceLastHard({
+    current, ...HARD_REF,
+    previous: [prior('walk', '2026-10-07', 108), prior('lift', '2026-10-06', 150), prior('run', '2026-10-03', 165)],
+  });
+  assert.equal(days, 2);
+});
+
+test('daysSinceLastHard: max zone counts as hard; steady and easy sessions do not', () => {
+  assert.equal(daysSinceLastHard({ current, ...HARD_REF, previous: [prior('a', '2026-10-05', 172)] }), 3);
+  assert.equal(daysSinceLastHard({ current, ...HARD_REF, previous: [prior('a', '2026-10-05', 146), prior('b', '2026-10-06', 120)] }), undefined);
+  // exactly at the hard boundary (avgPct 0.75) is hard, like effortZoneFromPct
+  assert.equal(daysSinceLastHard({ current, ...HARD_REF, previous: [prior('a', '2026-10-04', 147.5)] }), 4);
+});
+
+test('daysSinceLastHard: a session whose hardness cannot be shown is never counted', () => {
+  // No avg HR on the earlier session.
+  assert.equal(daysSinceLastHard({ current, ...HARD_REF, previous: [prior('a', '2026-10-06', undefined)] }), undefined);
+  // No resting HR / max HR reference, or a max HR too close to resting.
+  assert.equal(daysSinceLastHard({ current, maxHr: 180, previous: [prior('a', '2026-10-06', 160)] }), undefined);
+  assert.equal(daysSinceLastHard({ current, restingHr: 50, previous: [prior('a', '2026-10-06', 160)] }), undefined);
+  assert.equal(daysSinceLastHard({ current, restingHr: 50, maxHr: 60, previous: [prior('a', '2026-10-06', 160)] }), undefined);
+  assert.equal(daysSinceLastHard({ current, ...HARD_REF, previous: [] }), undefined);
+});
+
+test('daysSinceLastHard: skips this analysis, its merge partners and later sessions', () => {
+  const previous = [
+    prior('now', '2026-10-08', 165), // this analysis's own row
+    prior('survivor', '2026-10-08', 165, { startedAtMs: Date.parse('2026-10-08T06:59:58Z') }), // the row this one was merged into
+    prior('loser', '2026-10-08', 165, { mergedIntoId: 'now', startedAtMs: Date.parse('2026-10-08T06:59:58Z') }), // suppressed duplicate
+    prior('later', '2026-10-08', 165, { startedAtMs: Date.parse('2026-10-08T18:00:00Z') }), // evening session, after this one
+    prior('real', '2026-10-05', 165),
+  ];
+  const days = daysSinceLastHard({ current: { ...current, mergedIntoId: 'survivor' }, ...HARD_REF, previous });
+  assert.equal(days, 3);
+});
+
+test('daysSinceLastHard: an earlier hard session the same day is 0 days; without started_at only earlier days count', () => {
+  const sameDay = prior('am', '2026-10-08', 160, { startedAtMs: Date.parse('2026-10-08T05:00:00Z') });
+  assert.equal(daysSinceLastHard({ current, ...HARD_REF, previous: [sameDay] }), 0);
+  const noStart = { ...sameDay, startedAtMs: null };
+  assert.equal(daysSinceLastHard({ current, ...HARD_REF, previous: [noStart] }), undefined);
+  assert.equal(daysSinceLastHard({ current, ...HARD_REF, previous: [{ ...noStart, date: '2026-10-07' }] }), 1);
 });
 
 // ── sleep usual ──────────────────────────────────────────────────────────────

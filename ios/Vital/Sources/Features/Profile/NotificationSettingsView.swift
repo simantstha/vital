@@ -14,6 +14,8 @@ struct NotificationSettingsView: View {
     @AppStorage(NotificationPrefsKeys.briefMinutes) private var briefMinutes = 450
     @AppStorage(NotificationPrefsKeys.workoutEnabled) private var workoutEnabled = true
     @AppStorage(NotificationPrefsKeys.sleepEnabled) private var sleepEnabled = true
+    @AppStorage(NotificationPrefsKeys.coachNudgesEnabled) private var coachNudgesEnabled = true
+    @AppStorage(NotificationPrefsKeys.weeklyReviewEnabled) private var weeklyReviewEnabled = true
 
     @AppStorage(NotificationPrefsKeys.mealsEnabled) private var mealsEnabled = true
     @AppStorage(NotificationPrefsKeys.mealsBreakfastMinutes) private var breakfastMinutes = 480
@@ -40,6 +42,7 @@ struct NotificationSettingsView: View {
                         if pushService.preferencesPending || pushService.preferencesError != nil { syncStatusCard }
                         briefSection
                         analysisSection
+                        coachSection
                         mealsSection
                         weighinSection
                     }
@@ -92,6 +95,27 @@ struct NotificationSettingsView: View {
                 Toggle("Workout analysis", isOn: $workoutEnabled).tint(Theme.Colors.accent).onChange(of: workoutEnabled) { _, _ in syncServer() }
                 Divider().overlay(Theme.Colors.glassBorder)
                 Toggle("Sleep analysis", isOn: $sleepEnabled).tint(Theme.Colors.accent).onChange(of: sleepEnabled) { _, _ in syncServer() }
+            }}
+        }
+    }
+
+    private var coachSection: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+            SectionHeader(title: "Coach")
+            GlassCard { VStack(spacing: Theme.Spacing.md) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Toggle("Coach check-ins", isOn: $coachNudgesEnabled).tint(Theme.Colors.accent).onChange(of: coachNudgesEnabled) { _, _ in syncServer() }
+                    Text("Occasional nudges when Vital spots something about your goal")
+                        .font(Theme.Typography.labelSmall)
+                        .foregroundStyle(Theme.Colors.textSecondary)
+                }
+                Divider().overlay(Theme.Colors.glassBorder)
+                VStack(alignment: .leading, spacing: 2) {
+                    Toggle("Weekly review", isOn: $weeklyReviewEnabled).tint(Theme.Colors.accent).onChange(of: weeklyReviewEnabled) { _, _ in syncServer() }
+                    Text("Monday summary of your week")
+                        .font(Theme.Typography.labelSmall)
+                        .foregroundStyle(Theme.Colors.textSecondary)
+                }
             }}
         }
     }
@@ -241,7 +265,8 @@ struct NotificationSettingsView: View {
             workoutEnabled: workoutEnabled, sleepEnabled: sleepEnabled,
             mealsEnabled: mealsEnabled, breakfastMinutes: breakfastMinutes,
             lunchMinutes: lunchMinutes, snackMinutes: snackMinutes, dinnerMinutes: dinnerMinutes,
-            timezone: TimeZone.current.identifier
+            timezone: TimeZone.current.identifier,
+            coachNudgesEnabled: coachNudgesEnabled, weeklyReviewEnabled: weeklyReviewEnabled
         )
         PushNotificationService.shared.enqueuePreferences(value)
         Task {

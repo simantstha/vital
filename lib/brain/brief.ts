@@ -34,7 +34,10 @@ import type { DailyBrief } from '@/lib/types';
 import { computeWeightTrend } from '@/lib/weightTrend';
 import { getWeightReadingsWithLazyImport } from '@/lib/weightRepository';
 import { assessWeightSignals, WEEKEND_PATTERN_WINDOW_DAYS, type DailyIntakeKcalPoint } from '@/lib/brain/weightSignals';
-import { lowEnergyThresholdKcal } from '@/lib/brain/dietBudget';
+import { lowEnergyThresholdKcal, normalizeGoal } from '@/lib/brain/dietBudget';
+import { loadGoalProgress } from '@/lib/goalProgressLoader';
+import { getProgressionSummary } from '@/lib/workoutRepository';
+import type { BriefGoalFocus, WeeklyVolumeRow } from '@/lib/goalPromptText';
 import { readCoreProfile } from '@/lib/coreProfileStore';
 import { parseProfileDetails } from '@/lib/profileDetails';
 
@@ -548,7 +551,8 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
   // healthConstraints.ts. getWeightReadingsWithLazyImport only pays the
   // (serial, per-entry) legacy-import cost when Postgres has no readings
   // yet — see its doc comment in lib/weightRepository.ts.
-  const [weightReadings, signalIntakeByDay, coreProfileMd] = await Promise.all([
+  const goal = normalizeGoal(userRow?.goal);
+  const [weightReadings, signalIntakeByDay, coreProfileMd, goalProgress, progression] = await Promise.all([
     getWeightReadingsWithLazyImport(userId, WEIGHT_TREND_WINDOW_DAYS, tz).catch((err) => {
       console.error(`[brief] weight trend load failed for user ${userId}:`, err);
       return [];
@@ -558,6 +562,18 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
       console.error(`[brief] core profile load failed for user ${userId}:`, err);
       return null;
     }),
+    // Goal-progress verdict (same one GET /api/goal/progress serves) — non-fatal.
+    loadGoalProgress(userId, { tz }).catch((err) => {
+      console.error(`[brief] goal progress load failed for user ${userId}:`, err);
+      return null;
+    }),
+    // Lift progression only matters for the muscle goal — skip the query otherwise.
+    goal === 'muscle'
+      ? getProgressionSummary(userId, 84).catch((err) => {
+          console.error(`[brief] lift progression load failed for user ${userId}:`, err);
+          return undefined;
+        })
+      : Promise.resolve(undefined),
   ]);
   const weightTrend = computeWeightTrend(weightReadings);
   const toSignalIntakePoint = (day: string): DailyIntakeKcalPoint => {
@@ -582,6 +598,25 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
     goal: userRow?.goal ?? 'general',
     weekendPatternIntakeKcal,
   });
+
+  // ── Goal-keyed focus ──────────────────────────────────────────────────────
+  // Endurance gets all-sport weekly volume (any workout type, not just runs),
+  // newest first, last 4 local weeks — bucketed like weeklyMileage above.
+  let weeklyVolume: WeeklyVolumeRow[] | undefined;
+  if (goal === 'endurance') {
+    const volumeBuckets = new Map<string, WeeklyVolumeRow>();
+    for (const e of events.filter(ev => ev.type === 'workout_completed')) {
+      const key = weekStartKeyFromLocalDay(dayOf(e));
+      const row = volumeBuckets.get(key) ?? { weekStart: key, sessions: 0, minutes: 0 };
+      row.sessions += 1;
+      row.minutes += Math.round((num(pl(e.payload).duration_s) ?? 0) / 60);
+      volumeBuckets.set(key, row);
+    }
+    weeklyVolume = Array.from(volumeBuckets.values())
+      .sort((a, b) => b.weekStart.localeCompare(a.weekStart))
+      .slice(0, 4);
+  }
+  const goalFocus: BriefGoalFocus = { goal, progress: goalProgress, progression, weeklyVolume, todayKey };
 
   // ── Delegate to lib/claude.ts generateDailyBrief ─────────────────────────
   return generateDailyBrief(userId, {
@@ -614,5 +649,6 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
     foodProfile: restrictions.length || preferences.length ? { restrictions, preferences } : undefined,
     calibrating: calibration.status === 'calibrating',
     timeZone: tz,
+    goalFocus,
   });
 }

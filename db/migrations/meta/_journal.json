@@ -239,6 +239,41 @@
       "when": 1790603817286,
       "tag": "0033_smooth_rachel_grey",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1791297499935,
+      "tag": "0034_typical_piledriver",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1791299748151,
+      "tag": "0035_married_barracuda",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1791323113479,
+      "tag": "0036_hot_harry_osborn",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1791332905831,
+      "tag": "0037_woozy_lockheed",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1791407485770,
+      "tag": "0038_fine_madelyne_pryor",
+      "breakpoints": true
     }
   ]
 }

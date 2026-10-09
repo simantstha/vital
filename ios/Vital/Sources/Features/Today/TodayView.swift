@@ -18,6 +18,18 @@ struct TodayView: View {
 
     // Sheet / navigation state
     @State private var showLogSheet = false
+    /// "Log lift" sheet (`LiftLoggerView`) — opened from the muscle hero.
+    @State private var showLiftLogger = false
+    /// Goal-progress detail sheet — opened from the one-line verdict under the hero.
+    @State private var showGoalProgress = false
+    /// Voice FAB shrinks while Today scrolls down (see `VoiceFABScroll`).
+    @State private var fabCompact = false
+    /// True once Today has scrolled off its resting position: fades in a
+    /// blurred status-bar backdrop so content never reads through the clock.
+    @State private var statusBarBackdropVisible = false
+    /// Weekly review detail sheet — opened from the Mon-Wed review card.
+    @State private var showWeeklyReview = false
+    @ObservedObject private var weeklyReviewStore = WeeklyReviewStore.shared
     @State private var showAddItem = false
     @State private var actionsItem: PlanItem? = nil
     @State private var selectedMeal: MealRow? = nil
@@ -45,7 +57,7 @@ struct TodayView: View {
 
     /// The voice FAB must never overlap an open sheet.
     private var isAnySheetOpen: Bool {
-        showLogSheet || showAddItem || actionsItem != nil || selectedMeal != nil
+        showLogSheet || showLiftLogger || showGoalProgress || showWeeklyReview || showAddItem || actionsItem != nil || selectedMeal != nil
             || showNotifications || showFullPlan || vm.showWeighInSheet
     }
 
@@ -67,7 +79,7 @@ struct TodayView: View {
                             .motionTransition(.fade)
 
                     case .failed(let message):
-                        ErrorStateContainer {
+                        ErrorStateContainer(message: message) {
                             ErrorCard(title: "Couldn't load today's data", message: message) {
                                 Task { await vm.loadHealthData() }
                             }
@@ -75,9 +87,32 @@ struct TodayView: View {
 
                     case .loaded:
                         Group {
-                            calibrationCard
-                                .staggeredAppear(index: 0)
-                            pendingFactsBanner
+                            // New-user first-run checklist (§4.2): the clearest
+                            // guidance for an account with no data yet, so it
+                            // sits directly under the greeting, ABOVE the goal
+                            // hero, with the calibration note right after it
+                            // (a new user should see what to do today before
+                            // being told what needs two weeks of data). It
+                            // replaces the three empty biometric tiles.
+                            if vm.showFirstRunChecklist {
+                                FirstRunChecklistView(
+                                    goal: vm.goal,
+                                    mealLogged: vm.diet.kcalConsumed > 0,
+                                    secondItemLogged: vm.showFirstRunChecklistSecondItemDone,
+                                    healthConnected: HealthKitManager.didRequestAuthorization && !vm.showHealthKitRecoveryBanner,
+                                    goalTargetSet: vm.hasGoalTarget,
+                                    onLogMeal: { showLogSheet = true },
+                                    onLogSecondItem: { onChecklistSecondItemTap() },
+                                    onConnectHealth: { _ = HealthKitManager.openHealthApp() },
+                                    onSetGoalTarget: {
+                                        NotificationCenter.default.post(name: .vitalOpenGoalEditor, object: nil)
+                                    }
+                                )
+                                .staggeredAppear(index: 1)
+
+                                calibrationCard
+                                    .staggeredAppear(index: 1)
+                            }
 
                             // Goal hero (§4.1) — weight_loss only for T1; other
                             // goals keep their existing Today content below
@@ -92,6 +127,8 @@ struct TodayView: View {
                                     trend: vm.weightLog?.trend,
                                     entries: vm.weightLog?.entries ?? [],
                                     system: unitPref.current,
+                                    targetKg: vm.goalProgress?.target.weightKg,
+                                    goalRateKgPerWeek: vm.heroGoalRateKgPerWeek,
                                     chip: vm.weighInChip,
                                     onChipTap: { onWeighInChipTap() },
                                     isLogging: vm.isLoggingWeight,
@@ -108,7 +145,8 @@ struct TodayView: View {
                                     lastLiftText: vm.muscleLastLiftText,
                                     sessionsThisWeekText: vm.trainingSessionsThisWeekText,
                                     sessionDots: vm.trainingSessionDots,
-                                    onTapSession: { actionsItem = $0 }
+                                    onTapSession: { actionsItem = $0 },
+                                    onLogLift: { showLiftLogger = true }
                                 )
                                 .staggeredAppear(index: 1)
                             }
@@ -118,56 +156,53 @@ struct TodayView: View {
                                     readinessWord: vm.enduranceReadinessWord,
                                     calibratingText: vm.enduranceCalibratingText,
                                     reasonLine: vm.enduranceReasonLine,
+                                    raceText: vm.enduranceRaceText,
+                                    reserveRaceLine: vm.enduranceRaceLineReserved,
                                     session: vm.todayMoveSession,
                                     sessionDots: vm.trainingSessionDots,
                                     weeklyOverviewText: vm.enduranceWeeklyOverviewText,
+                                    distanceProgress: vm.enduranceDistanceProgress,
+                                    reconciliationText: vm.enduranceReconciliationText,
+                                    onTapReconciliation: {
+                                        // Same hand-off as the analysis screens'
+                                        // "Ask coach" links: RootTabView observes
+                                        // `router.coachContext`, prefills the coach
+                                        // input and switches to the Coach tab.
+                                        if let prompt = vm.enduranceReconciliationCoachPrompt {
+                                            router.coachContext = prompt
+                                        }
+                                    },
                                     onTapSession: { actionsItem = $0 }
                                 )
                                 .staggeredAppear(index: 1)
                             }
 
-                            // "Next up" replaces the full plan list for every
-                            // goal (owner decision, 2026-09-23) — guarded here
-                            // (not just inside the view) so an empty payload
-                            // doesn't leave a floating `Theme.Spacing.xl` gap.
-                            // Shown whenever there's ANY plan item, not only
-                            // when one is upcoming (screenshot-review fix,
-                            // 2026-09-23) — "See full plan" must stay
-                            // reachable even once everything remaining today
-                            // has already passed `vm.nextUpItem`'s grace
-                            // window.
-                            if !vm.planItems.isEmpty {
-                                NextUpRowView(
-                                    item: vm.nextUpItem,
-                                    onTap: { actionsItem = $0 },
-                                    onSeeFullPlan: { showFullPlan = true }
+                            // One-line "am I on track?" verdict (v5 Wave 2) under
+                            // whichever goal hero is showing (the three heroes are
+                            // mutually exclusive) — or on its own for the general
+                            // goal. Hidden until `/api/goal/progress` loads and on
+                            // failure. The negative top padding pulls it up from
+                            // the stack's xl spacing to sit with its hero.
+                            if let progress = vm.goalProgressLine {
+                                GoalProgressLine(
+                                    progress: progress,
+                                    system: unitPref.current,
+                                    heroShowsDistance: vm.goalLineHeroShowsDistance,
+                                    sessionsDoneThisWeek: vm.sessionsDoneThisWeek,
+                                    onTap: { showGoalProgress = true }
                                 )
-                                .staggeredAppear(index: 2)
+                                .padding(.top, -Theme.Spacing.md)
+                                .transition(.opacity)
                             }
 
-                            if !CoachBubble.isEmpty(vm.coachInsight) {
-                                CoachBubble(message: vm.coachInsight)
-                            }
-                            if vm.showHealthKitRecoveryBanner {
-                                healthKitRecoveryBanner
-                            }
-
-                            // New-user first-run checklist (§4.2) replaces the
-                            // three empty biometric tiles until real data exists.
-                            if vm.showFirstRunChecklist {
-                                FirstRunChecklistView(
-                                    goal: vm.goal,
-                                    mealLogged: vm.diet.kcalConsumed > 0,
-                                    secondItemLogged: vm.showFirstRunChecklistSecondItemDone,
-                                    healthConnected: HealthKitManager.didRequestAuthorization && !vm.showHealthKitRecoveryBanner,
-                                    onLogMeal: { showLogSheet = true },
-                                    onLogSecondItem: { onChecklistSecondItemTap() },
-                                    onConnectHealth: { _ = HealthKitManager.openHealthApp() }
+                            // Safety first: the low-energy caution sits directly
+                            // under the hero (and its one-line verdict), above
+                            // everything else.
+                            if let warning = vm.diet.lowEnergyWarning {
+                                CautionBanner(
+                                    title: CautionBanner.lowEnergyTitle(appliedFloor: warning.appliedFloor),
+                                    message: warning.message
                                 )
-                                .staggeredAppear(index: 3)
-                            } else {
-                                metricsGrid
-                                    .staggeredAppear(index: 3)
                             }
 
                             // FuelStripView is hidden for weight_loss — the
@@ -189,11 +224,76 @@ struct TodayView: View {
                                 )
                                 .staggeredAppear(index: 4)
                             }
-                            if let warning = vm.diet.lowEnergyWarning {
-                                CautionBanner(
-                                    title: CautionBanner.lowEnergyTitle(appliedFloor: warning.appliedFloor),
-                                    message: warning.message
+
+                            // "Next up" replaces the full plan list for every
+                            // goal (owner decision, 2026-09-23) — guarded here
+                            // (not just inside the view) so an empty payload
+                            // doesn't leave a floating `Theme.Spacing.xl` gap.
+                            // Shown whenever there's ANY plan item, not only
+                            // when one is upcoming (screenshot-review fix,
+                            // 2026-09-23) — "See full plan" must stay
+                            // reachable even once everything remaining today
+                            // has already passed `vm.nextUpItem`'s grace
+                            // window.
+                            if !vm.planItems.isEmpty {
+                                NextUpRowView(
+                                    item: vm.nextUpItem,
+                                    onTap: { actionsItem = $0 },
+                                    onSeeFullPlan: { showFullPlan = true }
                                 )
+                                .staggeredAppear(index: 2)
+                            }
+
+                            // Weekly review (v5 Wave 3): the "how did your week go"
+                            // moment, Mon-Wed while unseen. Compact card, placed
+                            // below the fuel strip / next-up row so the daily
+                            // essentials stay above the fold; the full report
+                            // lives in the detail sheet.
+                            if WeeklyReviewLogic.shouldShowCard(
+                                weeklyReviewStore.latest,
+                                now: AppClock.now,
+                                ignoreWindow: WeeklyReviewLogic.windowBypassedForFixtures
+                            ), let review = weeklyReviewStore.latest {
+                                WeeklyReviewCard(
+                                    response: review,
+                                    onOpen: { showWeeklyReview = true },
+                                    onGotIt: { weeklyReviewStore.markSeen() }
+                                )
+                                .transition(.opacity)
+                            }
+
+                            pendingFactsBanner
+
+                            if !CoachBubble.isEmpty(vm.coachInsight) {
+                                CoachBubble(message: vm.coachInsight)
+                            }
+                            if vm.showHealthKitRecoveryBanner {
+                                healthKitRecoveryBanner
+                            }
+
+                            // Metrics grid for established users. New users get
+                            // the first-run checklist at the TOP of the screen
+                            // instead (see above the goal hero).
+                            if !vm.showFirstRunChecklist {
+                                // Endurance's hero already prints HRV / Sleep /
+                                // RHR in its readiness line — don't repeat them.
+                                if vm.showMetricTiles {
+                                    metricsGrid
+                                        .staggeredAppear(index: 3)
+                                }
+
+                                // Calibration note for established users sits
+                                // after the recovery tiles.
+                                calibrationCard
+                                    .staggeredAppear(index: 3)
+                            }
+
+                            // Weight hero is weight-loss only; every other
+                            // goal still gets a way to log a weigh-in.
+                            // Hidden while the first-run checklist is up — its
+                            // "Add today's weight" item is the same action.
+                            if !vm.isWeightLossGoal && !vm.showFirstRunChecklist {
+                                weighInRow
                             }
                         }
                         .motionTransition(.fade)
@@ -204,9 +304,26 @@ struct TodayView: View {
                 .padding(.bottom, Theme.Spacing.lg)
             }
             .scrollIndicators(.hidden)
+            .onScrollGeometryChange(for: TodayScrollOffsets.self) { geo in
+                TodayScrollOffsets(
+                    y: geo.contentOffset.y + geo.contentInsets.top,
+                    maxY: max(0, geo.contentSize.height - geo.containerSize.height
+                              + geo.contentInsets.top + geo.contentInsets.bottom)
+                )
+            } action: { old, new in
+                let next = VoiceFABScroll.isCompact(
+                    current: fabCompact, oldOffset: old.y, newOffset: new.y, maxOffset: new.maxY
+                )
+                if next != fabCompact { fabCompact = next }
+                let scrolled = new.y > TodayStatusBarBackdrop.scrolledThreshold
+                if scrolled != statusBarBackdropVisible { statusBarBackdropVisible = scrolled }
+            }
             .safeAreaInset(edge: .bottom) {
                 if !isAnySheetOpen {
-                    Color.clear.frame(height: 60 + 32 + 12)
+                    // Keep in sync with `VoiceFABView`: FAB (60pt) + its bottom
+                    // margin (`Spacing.xxxl`) + 16pt breathing room, plus slack
+                    // for the tab bar, so the last card scrolls fully above the FAB.
+                    Color.clear.frame(height: 60 + Theme.Spacing.xxxl + 16 + 50)
                 }
             }
             .refreshable { await vm.loadHealthData() }
@@ -216,9 +333,14 @@ struct TodayView: View {
             }
             .task { await notificationsVM.refresh() }
 
+            // Content scrolls under the status bar (the ScrollView runs edge to
+            // edge), so once scrolled a thin material covers just that strip.
+            TodayStatusBarBackdrop(isVisible: statusBarBackdropVisible)
+
             if !isAnySheetOpen {
                 VoiceFABView(
                     coachVM: coachVM,
+                    isCompact: fabCompact,
                     onSent: {
                         vm.toastMessage = "Sent to your coach"
                         Task {
@@ -276,6 +398,41 @@ struct TodayView: View {
                 )
             }
         }
+        .sheet(isPresented: $showLiftLogger) {
+            VitalSheet(detents: [.large]) {
+                LiftLoggerView(
+                    // Repeat the exercise the hero's "last time" line names.
+                    preferredExercise: vm.trainingSummary?.lastLift?.exercise,
+                    onSaved: {
+                        vm.toastMessage = "Lift logged"
+                        // Re-fetches `/api/training/summary` (the hero's
+                        // "last time" + "this week" lines) along with the
+                        // rest of Today.
+                        Task { await vm.loadHealthData() }
+                    }
+                )
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .vitalGoalTargetsChanged)) { _ in
+            vm.refreshGoalProgress()
+            Task { await vm.refreshGoalTargetFlag() }
+        }
+        .sheet(isPresented: $showGoalProgress) {
+            if let progress = vm.goalProgress {
+                VitalSheet(detents: [.large]) {
+                    GoalProgressDetailView(progress: progress, system: unitPref.current)
+                }
+            }
+        }
+        .sheet(isPresented: $showWeeklyReview) {
+            if let review = weeklyReviewStore.latest {
+                VitalSheet(detents: [.large]) {
+                    WeeklyReviewDetailView(response: review, onGotIt: { weeklyReviewStore.markSeen() })
+                }
+            }
+        }
+        .task { await weeklyReviewStore.load() }
+        .sensoryFeedback(Theme.Haptics.commit, trigger: weeklyReviewStore.seenTick)
         .onChange(of: showLogSheet) { _, isPresented in
             // Consume the auto-open request only while it drove this
             // presentation; an unrelated close (a manual fuel-strip tap
@@ -355,6 +512,48 @@ struct TodayView: View {
 
 private extension TodayView {
 
+    // ── Weigh-in entry for non-weight-loss goals ────────────────────────────
+
+    /// Small "Weigh in" row — opens the same sheet the weight hero's chip does.
+    var weighInRow: some View {
+        let last = WeightHeroLogic.lastWeightKg(entries: vm.weightLog?.entries ?? [])
+        return Button {
+            onWeighInChipTap()
+        } label: {
+            HStack(spacing: Theme.Spacing.md) {
+                Image(systemName: "scalemass")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(Theme.Colors.accentContent)
+                Text("Weigh in")
+                    .font(Theme.Typography.bodyMedium)
+                    .fontWeight(.medium)
+                    .foregroundStyle(Theme.Colors.textPrimary)
+                Spacer()
+                if let last {
+                    Text("Last \(UnitFormat.weight(kg: last, unitPref.current))")
+                        .font(Theme.Typography.bodySmall)
+                        .foregroundStyle(Theme.Colors.textSecondary)
+                }
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Theme.Colors.textTertiary)
+            }
+            .padding(.horizontal, Theme.Spacing.lg)
+            .padding(.vertical, Theme.Spacing.md)
+            .frame(maxWidth: .infinity)
+            .background(
+                RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
+                    .fill(Theme.Colors.glassFill)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
+                            .strokeBorder(Theme.Colors.glassBorder, lineWidth: 1)
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Weigh in")
+    }
+
     // ── Weigh-in chip (§5.3) ────────────────────────────────────────────────
 
     /// One-tap confirm (HealthKit reading present) logs directly; otherwise
@@ -406,7 +605,7 @@ private extension TodayView {
                         Button {
                             Task { await vm.resolveFact(id: fact.id, action: "confirm") }
                         } label: {
-                            Text("Confirm")
+                            Text("Yes, remember")
                                 .font(.system(size: 13, weight: .semibold))
                                 .foregroundStyle(Theme.Colors.onAccent)
                                 .frame(maxWidth: .infinity)
@@ -419,7 +618,7 @@ private extension TodayView {
                         Button {
                             Task { await vm.resolveFact(id: fact.id, action: "reject") }
                         } label: {
-                            Text("Dismiss")
+                            Text("Not quite")
                                 .font(.system(size: 13, weight: .medium))
                                 .foregroundStyle(Theme.Colors.textSecondary)
                                 .frame(maxWidth: .infinity)
@@ -493,15 +692,19 @@ private extension TodayView {
                     .foregroundStyle(Theme.Colors.textPrimary)
 
                 HStack(spacing: Theme.Spacing.sm) {
-                    // Before any streak fetch has ever succeeded, `streakDays`
-                    // is just its zero default, not a real "0-day streak" —
-                    // showing the chip then would assert something we don't
-                    // actually know. Once we've loaded a real value at least
-                    // once, keep showing it (last known good) even through a
-                    // later failed refresh.
-                    if vm.hasLoadedStreak {
-                        Chip(text: "\(vm.streakDays)-day streak", icon: "flame.fill", isAccent: true)
-                    }
+                    // The chip's slot is ALWAYS reserved (hidden placeholder) so a
+                    // late streak load can't shift content below the header. The
+                    // real chip is overlaid only when the streak is loaded and > 0
+                    // (nil -> nothing is claimed for new users / failed first load).
+                    Chip(text: "0 days in a row", icon: "flame.fill", isAccent: true)
+                        .hidden()
+                        .accessibilityHidden(true)
+                        .overlay(alignment: .leading) {
+                            if let streakText = vm.streakChipText {
+                                Chip(text: streakText, icon: "flame.fill", isAccent: true)
+                                    .fixedSize()
+                            }
+                        }
                     if let hint = vm.planHint {
                         Text(hint)
                             .font(.system(size: 13))
@@ -559,11 +762,11 @@ private extension TodayView {
             GlassCard(padding: Theme.Spacing.lg) {
                 VStack(alignment: .leading, spacing: Theme.Spacing.md) {
                     VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-                        Text("Calibrating your baselines")
+                        Text(CalibrationCopy.todayTitle)
                             .font(Theme.Typography.bodyMedium)
                             .fontWeight(.semibold)
                             .foregroundStyle(Theme.Colors.textPrimary)
-                        Text("\(daysCollected) of 14 days of data collected")
+                        Text(CalibrationCopy.todayBody(daysCollected: daysCollected))
                             .font(Theme.Typography.bodySmall)
                             .foregroundStyle(Theme.Colors.textSecondary)
                     }
@@ -598,21 +801,24 @@ private extension TodayView {
                 value: vm.hrv.displayValue,
                 unit: vm.hrv.displayUnit,
                 trend: vm.hrv.trend,
-                delta: vm.hrv.delta
+                delta: vm.hrv.delta,
+                explanation: MetricExplainer.explanation(for: "hrv_sdnn")
             )
             MetricTile(
                 label: "Sleep",
                 value: vm.sleep.formatted,
                 unit: "",
                 trend: vm.sleep.trend,
-                delta: vm.sleep.delta
+                delta: vm.sleep.delta,
+                explanation: MetricExplainer.explanation(for: "sleep_minutes")
             )
             MetricTile(
                 label: "Resting HR",
                 value: vm.restingHR.displayValue,
                 unit: vm.restingHR.displayUnit,
                 trend: vm.restingHR.trend,
-                delta: vm.restingHR.delta
+                delta: vm.restingHR.delta,
+                explanation: MetricExplainer.explanation(for: "resting_hr")
             )
         }
     }
@@ -641,5 +847,36 @@ struct VitalProgressBar: View {
             }
         }
         .frame(height: height)
+    }
+}
+
+/// Scroll snapshot for the Today ScrollView: normalised offset (0 at rest at
+/// the top) and the furthest offset (bottom).
+private struct TodayScrollOffsets: Equatable {
+    var y: Double
+    var maxY: Double
+}
+
+/// A thin material over the status-bar strip only, shown once Today has
+/// scrolled: the ScrollView runs edge to edge, so without it cards and text
+/// scroll straight under the clock. Zero-height and top-anchored — the
+/// background extends only into the top safe area — so it never changes the
+/// layout, hit-testing or any identifier.
+private struct TodayStatusBarBackdrop: View {
+    /// Scroll offset (pt) past which the content has left its resting place.
+    static let scrolledThreshold: Double = 2
+
+    let isVisible: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        Color.clear
+            .background(.ultraThinMaterial)
+            .ignoresSafeArea(edges: .top)
+            .frame(height: 0)
+            .opacity(isVisible ? 1 : 0)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: isVisible)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 }

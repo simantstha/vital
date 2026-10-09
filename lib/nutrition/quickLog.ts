@@ -43,6 +43,7 @@
  */
 
 import { db, schema } from '@/db';
+import { invalidateGoalProgress } from '@/lib/brain/goalProgressCache';
 import { searchCandidates, pickLoggableCandidate, normalizeName, type Candidate } from '@/lib/nutrition/candidates';
 import { estimateMeal, type GroundedItem } from '@/lib/nutrition/estimator';
 
@@ -140,6 +141,7 @@ async function insertGroundedMeal(
     payload,
     source: options.source,
   }).returning({ id: schema.events.id });
+  invalidateGoalProgress(userId);
 
   return {
     ok: true,
@@ -227,6 +229,7 @@ export async function quickLogMeal(
     payload,
     source: options.source,
   }).returning({ id: schema.events.id });
+  invalidateGoalProgress(userId);
 
   return {
     ok: true,

@@ -5,7 +5,10 @@ node_modules
 .env
 .env.*
 ios
-docs
+# docs/ stays out of the image context except the privacy policy, which
+# app/privacy/page.tsx reads at `next build` to prerender the public /privacy page.
+docs/*
+!docs/privacy-policy.md
 v0-output
 v0-output/**
 .playwright-mcp

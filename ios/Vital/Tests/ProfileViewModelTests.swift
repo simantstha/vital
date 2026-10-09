@@ -72,7 +72,7 @@ final class ProfileViewModelTests: XCTestCase {
         )
 
         XCTAssertEqual(cells.map(\.label), ["Age", "Height", "Current weight", "Biological sex"])
-        XCTAssertEqual(cells.map(\.value), ["34", "168 cm", "62.5 kg", "Female"])
+        XCTAssertEqual(cells.map(\.value), ["34", "168\u{00A0}cm", "62.5\u{00A0}kg", "Female"])
     }
 
     func testActivityCellsExposeExactlyTheActivityStats() {

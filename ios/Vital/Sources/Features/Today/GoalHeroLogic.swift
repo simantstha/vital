@@ -114,11 +114,11 @@ enum MuscleHeroLogic {
             .joined(separator: " ")
     }
 
-    /// "2 of 4 sessions" — `nil` alongside `sessionDots` when there's
+    /// "2 of 4 sessions this week" — `nil` alongside `sessionDots` when there's
     /// nothing planned this week to count.
     static func sessionsThisWeekText(done: Int, total: Int) -> String? {
         guard total > 0 else { return nil }
-        return "\(min(max(done, 0), total)) of \(total) sessions"
+        return "\(min(max(done, 0), total)) of \(total) sessions this week"
     }
 
     /// "N sessions this week" — the no-plan-data fallback for when
@@ -214,7 +214,39 @@ enum EnduranceHeroLogic {
     /// `TodayView.calibrationCard`'s own `Int((progress * 14).rounded())`
     /// derivation so the two surfaces never disagree.
     static func calibratingText(daysCollected: Int) -> String {
-        "Calibrating · day \(min(max(daysCollected, 0), 14)) of 14"
+        "Getting to know your normal · day \(min(max(daysCollected, 0), 14)) of 14"
+    }
+
+    // MARK: - Readiness reason line
+
+    /// One recovery clause in absolute units against the 30-day normal — the
+    /// same reference and rounding as Trends' "6 ms below your normal":
+    /// "HRV −6 ms", "RHR +5 bpm", "HRV at your normal" when it rounds to 0.
+    /// While the baseline isn't known the bare reading stands in ("HRV 51 ms"),
+    /// never a percentage. `nil` without a reading.
+    static func recoveryClause(label: String, value: Double?, normal: Double?, unit: String) -> String? {
+        guard let value else { return nil }
+        guard let normal else { return "\(label) \(Int(value.rounded())) \(unit)" }
+        // Half-to-even, like the NumberFormatter behind Trends' delta text.
+        let gap = Int((value - normal).rounded(.toNearestOrEven))
+        if gap == 0 { return "\(label) at your normal" }
+        return "\(label) \(gap > 0 ? "+" : "\u{2212}")\(abs(gap)) \(unit)"
+    }
+
+    /// "HRV −6 ms · RHR +5 bpm · Sleep 5h 48m" — only the metrics that have a
+    /// value today; `nil` if none do. Recovery deltas are absolute (ms / bpm
+    /// vs the 30-day normal) so the hero agrees with Trends, the metric detail
+    /// and the coach; sleep is the plain duration. Never a raw z-score or σ.
+    static func reasonLine(
+        hrv: Double?, hrvNormal: Double?,
+        restingHR: Double?, restingHRNormal: Double?,
+        sleepText: String?
+    ) -> String? {
+        var parts: [String] = []
+        if let hrvPart = recoveryClause(label: "HRV", value: hrv, normal: hrvNormal, unit: "ms") { parts.append(hrvPart) }
+        if let rhrPart = recoveryClause(label: "RHR", value: restingHR, normal: restingHRNormal, unit: "bpm") { parts.append(rhrPart) }
+        if let sleepText, !sleepText.isEmpty { parts.append("Sleep \(sleepText)") }
+        return parts.isEmpty ? nil : parts.joined(separator: " \u{00B7} ")
     }
 
     // MARK: - Today's session
@@ -270,5 +302,64 @@ enum EnduranceHeroLogic {
             return "\(volumeText) this week"
         }
         return nil
+    }
+
+    // MARK: - Readiness vs. the planned session
+
+    /// Hard-session vocabulary in a plan row's title/subtitle. The plan item
+    /// carries no structured intensity field, so this reads the words the
+    /// coach/user wrote ("10km tempo run", "6 x 800 intervals", "Long run").
+    private static let hardSessionPattern =
+        #"\b(tempo|intervals?|repeats?|threshold|long|race|hills?|fartlek|sprints?|vo2(max)?|speed|hard|z[45]|zone [45])\b"#
+    private static let easySessionPattern = #"\b(easy|recovery|recover|shake[- ]?out|gentle|walk|rest)\b"#
+    private static let highRPEPattern = #"\brpe\s*([789]|10)\b"#
+
+    /// True for a hard planned session (tempo/interval/long/threshold/race/
+    /// hills/speed, zone 4-5, or an explicit RPE 7+). An "easy"/"recovery"
+    /// title wins over a hard word ("easy long walk"). A non-move item is
+    /// never hard.
+    static func isHardSession(_ session: PlanItem) -> Bool {
+        guard session.kind == .move else { return false }
+        let text = "\(session.title) \(session.subtitle)".lowercased()
+        if text.range(of: highRPEPattern, options: .regularExpression) != nil { return true }
+        if text.range(of: easySessionPattern, options: .regularExpression) != nil { return false }
+        return text.range(of: hardSessionPattern, options: .regularExpression) != nil
+    }
+
+    /// The one-line reconciliation under the session when readiness says to
+    /// back off but the plan says to go hard: "Your body says recover — swap
+    /// to an easy 30 min or rest?". `nil` while calibrating (the headline is
+    /// not a readiness call yet), for readiness words that don't ask to back
+    /// off, with no session, a finished session, or a session that is not hard.
+    static func reconciliationText(
+        readinessWord: ReadinessWord?,
+        isCalibrating: Bool,
+        session: PlanItem?
+    ) -> String? {
+        guard !isCalibrating, let readinessWord, let session,
+              session.status != .done, session.status != .skipped,
+              isHardSession(session) else { return nil }
+        switch readinessWord {
+        case .recoverToday:
+            return "Your body says recover \u{2014} swap to an easy 30 min or rest?"
+        case .keepItEasy:
+            return "Your body says take it easy \u{2014} swap to an easy 30 min or rest?"
+        case .readyToPush, .goodToTrain:
+            return nil
+        }
+    }
+
+    /// The message handed to the coach (`router.coachContext`) when the
+    /// reconciliation line is tapped.
+    static func reconciliationCoachPrompt(
+        readinessWord: ReadinessWord?,
+        reasonLine: String?,
+        session: PlanItem
+    ) -> String {
+        let readiness = (readinessWord ?? .goodToTrain).rawValue.lowercased()
+        var text = "My readiness today reads \"\(readiness)\""
+        if let reasonLine, !reasonLine.isEmpty { text += " (\(reasonLine))" }
+        text += " but my plan has \"\(session.title)\". Should I swap it for an easy 30 minutes or rest?"
+        return text
     }
 }

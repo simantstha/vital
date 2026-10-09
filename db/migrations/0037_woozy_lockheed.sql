@@ -1,0 +1,1 @@
+ALTER TABLE "users" ADD COLUMN "weekly_distance_km_target" real;

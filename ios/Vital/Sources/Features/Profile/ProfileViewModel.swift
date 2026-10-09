@@ -37,6 +37,78 @@ final class ProfileViewModel: ObservableObject {
     @Published var budgetKcal: Int?
     @Published var budgetMode: String = "auto"   // "auto" | "custom"
     @Published var budgetGoalLabel: String = ""
+    /// Canonical goal id ("weight_loss" …) behind `budgetGoalLabel`, and the
+    /// targets that make up the Goal row's suffix.
+    @Published var budgetGoalId: String = ""
+    @Published var targetWeightKg: Double? = nil
+    @Published var weeklySessionsTarget: Int? = nil
+    @Published var weeklyDistanceKmTarget: Double? = nil
+    /// Endurance race ('YYYY-MM-DD' / km) — appended to the Goal row.
+    @Published var raceDate: String? = nil
+    @Published var raceDistanceKm: Double? = nil
+
+    /// "Lose weight · 76 kg" / "Build muscle · 4×/week" — the goal plus its
+    /// target when one is set. Reads the live unit preference like
+    /// `profileDetails`.
+    var goalRowLabel: String {
+        Self.goalRowLabel(
+            goalLabel: budgetGoalLabel, goalId: budgetGoalId,
+            targetWeightKg: targetWeightKg, weeklySessions: weeklySessionsTarget,
+            weeklyDistanceKm: weeklyDistanceKmTarget,
+            raceDate: raceDate, raceDistanceKm: raceDistanceKm,
+            system: UnitPreference.shared.current
+        )
+    }
+
+    /// Pure composition of the Goal row label. Weight-loss shows the target
+    /// weight; muscle prefers the weekly session target, falling back to the
+    /// target weight; endurance shows the weekly distance ("30 km/week", unit-
+    /// aware), falling back to the weekly sessions; general just the goal name.
+    /// A missing target leaves the bare goal label. An endurance user with an
+    /// upcoming race LEADS with it and drops the generic goal word, so the part
+    /// that matters survives a narrow row: "Half marathon · Dec 30 · 30 km/wk".
+    /// Segments are joined by `RaceLogic.goalRowSeparator` (normal space before
+    /// the "·", non-breaking space after) so a wrap never leaves a "·" dangling
+    /// at the end of a line.
+    /// `now`/`calendar` only decide whether the race is still ahead.
+    nonisolated static func goalRowLabel(
+        goalLabel: String, goalId: String, targetWeightKg: Double?, weeklySessions: Int?,
+        weeklyDistanceKm: Double? = nil, raceDate: String? = nil, raceDistanceKm: Double? = nil,
+        now: Date = Date(), calendar: Calendar = .current, system: UnitSystem
+    ) -> String {
+        guard !goalLabel.isEmpty else { return goalLabel }
+        let weight = targetWeightKg.map { UnitFormat.weight(kg: $0, system) }
+        let sessions = weeklySessions.map { "\($0)\u{00D7}/week" }
+        let distance = weeklyDistanceKm.map { "\(UnitFormat.distance(km: $0, system))/week" }
+        let suffix: String?
+        switch goalId {
+        case "weight_loss": suffix = weight
+        case "muscle":      suffix = sessions ?? weight
+        case "endurance":
+            if let race = RaceLogic.goalRowSuffix(raceDate: raceDate, distanceKm: raceDistanceKm, now: now, calendar: calendar) {
+                let target = weeklyDistanceKm.map { "\(UnitFormat.distance(km: $0, system))/wk" }
+                    ?? weeklySessions.map { "\($0)\u{00D7}/wk" }
+                return [race, target].compactMap { $0 }.joined(separator: RaceLogic.goalRowSeparator)
+            }
+            suffix = distance ?? sessions
+        default:            suffix = nil
+        }
+        guard let suffix else { return goalLabel }
+        return "\(goalLabel)\(RaceLogic.goalRowSeparator)\(suffix)"
+    }
+
+    /// Re-reads the goal + its targets (after the goal editor closes) so the
+    /// Goal row reflects a just-saved target.
+    func refreshGoalRow() async {
+        await loadBudget()
+        if let r = try? await apiClient.fetchProfile() {
+            targetWeightKg = r.targetWeightKg
+            weeklySessionsTarget = r.weeklySessionsTarget
+            weeklyDistanceKmTarget = r.weeklyDistanceKmTarget
+            raceDate = r.raceDate
+            raceDistanceKm = r.raceDistanceKm
+        }
+    }
 
     /// Calibration status for the Profile banner — decoded straight off the
     /// profile response (the route has always returned it; Phase 9 dropped the
@@ -71,6 +143,11 @@ final class ProfileViewModel: ObservableObject {
             sleepGoalMinutes = response.sleepGoalMinutes ?? 480
             lightsOutMinutes = response.lightsOutMinutes ?? 1350
             calibration = response.calibration
+            targetWeightKg = response.targetWeightKg
+            weeklySessionsTarget = response.weeklySessionsTarget
+            weeklyDistanceKmTarget = response.weeklyDistanceKmTarget
+            raceDate = response.raceDate
+            raceDistanceKm = response.raceDistanceKm
             // Locale-default adoption PATCH: opportunistic housekeeping, not a
             // user-initiated action, so failure is silent and simply retries
             // next launch (see UnitPreference.applyServerValue).
@@ -92,6 +169,7 @@ final class ProfileViewModel: ObservableObject {
             let r = try await apiClient.fetchDietGoal()
             budgetKcal = r.current.targetKcal
             budgetMode = r.current.mode
+            budgetGoalId = r.current.goal
             budgetGoalLabel = DietBudgetViewModel.goalLabels[r.current.goal] ?? r.current.goal
         } catch {
             // Non-fatal — the row just shows a neutral placeholder.
@@ -102,13 +180,7 @@ final class ProfileViewModel: ObservableObject {
     /// `min(1, minimum dataDays across metrics / 14)` — same rule
     /// `TodayViewModel.applyTodayResponse` uses for its calibration progress.
     var calibrationPercent: Int {
-        guard let calibration else { return 0 }
-        let dataDays = [
-            calibration.metrics["hrv_sdnn"]?.dataDays ?? 0,
-            calibration.metrics["resting_hr"]?.dataDays ?? 0,
-            calibration.metrics["sleep_minutes"]?.dataDays ?? 0,
-        ].min() ?? 0
-        return Int((min(1.0, Double(dataDays) / 14.0) * 100).rounded())
+        Int((CalibrationProgress.fraction(calibration) * 100).rounded())
     }
 
     // MARK: - Pure formatting helpers (testable)

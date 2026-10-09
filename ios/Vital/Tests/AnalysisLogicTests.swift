@@ -19,12 +19,12 @@ final class AnalysisLogicTests: XCTestCase {
     func testDistanceChipAboveUsualIsNeutralWithPlusSign() {
         let chip = AnalysisLogic.distanceChip(distanceM: 11_400, usualDistanceM: 10_000, unit: .metric)
         XCTAssertEqual(chip.tone, .neutral)
-        XCTAssertEqual(chip.text, "+1.4 km")
+        XCTAssertEqual(chip.text, "+1.4\u{00A0}km")
     }
 
     func testDistanceChipBelowUsualUsesMinusSign() {
         let chip = AnalysisLogic.distanceChip(distanceM: 8_000, usualDistanceM: 10_000, unit: .metric)
-        XCTAssertEqual(chip.text, "\u{2212}2 km")
+        XCTAssertEqual(chip.text, "\u{2212}2\u{00A0}km")
     }
 
     func testDistanceChipImperial() {
@@ -520,4 +520,104 @@ final class AnalysisLogicTests: XCTestCase {
             AnalysisLogic.sleepDevicesDisagree(minutesA: 370, minutesB: 348)
         )
     }
+
+    // MARK: - Effort bar mapping
+
+    func testEffortZoneIndexFollowsBoundaries() {
+        XCTAssertEqual(AnalysisLogic.effortZoneIndex(avgFraction: 0.58), 0)
+        XCTAssertEqual(AnalysisLogic.effortZoneIndex(avgFraction: 0.60), 1)
+        XCTAssertEqual(AnalysisLogic.effortZoneIndex(avgFraction: 0.74), 1)
+        XCTAssertEqual(AnalysisLogic.effortZoneIndex(avgFraction: 0.75), 2)
+        XCTAssertEqual(AnalysisLogic.effortZoneIndex(avgFraction: 0.90), 3)
+        XCTAssertEqual(AnalysisLogic.effortZoneIndex(avgFraction: 1.4), 3)
+        XCTAssertEqual(AnalysisLogic.effortZoneIndex(avgFraction: -0.2), 0)
+    }
+
+    func testEffortDescriptionUsesPlainLanguageNotPercent() {
+        XCTAssertEqual(AnalysisLogic.effortDescription(avgFraction: 0.58), "Mostly easy effort — conversational pace.")
+        XCTAssertEqual(AnalysisLogic.effortDescription(avgFraction: 0.30), "Light effort — relaxed, easy to chat.")
+        XCTAssertTrue(AnalysisLogic.effortDescription(avgFraction: 0.65).hasPrefix("Steady"))
+        XCTAssertTrue(AnalysisLogic.effortDescription(avgFraction: 0.80).hasPrefix("Hard"))
+        XCTAssertTrue(AnalysisLogic.effortDescription(avgFraction: 0.95).hasPrefix("Max"))
+        for f in [0.1, 0.58, 0.8, 0.95] {
+            XCTAssertFalse(AnalysisLogic.effortDescription(avgFraction: f).contains("%"))
+        }
+    }
+
+    // MARK: - Activity noun (non-run workouts never say "run")
+
+    func testActivityNounFollowsTheWorkoutType() {
+        XCTAssertEqual(AnalysisLogic.activityNoun(type: "Running"), "run")
+        XCTAssertEqual(AnalysisLogic.activityNoun(type: "Trail Running"), "run")
+        XCTAssertEqual(AnalysisLogic.activityNoun(type: "Cycling"), "ride")
+        XCTAssertEqual(AnalysisLogic.activityNoun(type: "Walking"), "walk")
+        XCTAssertEqual(AnalysisLogic.activityNoun(type: "Swimming"), "swim")
+        XCTAssertEqual(AnalysisLogic.activityNoun(type: "Strength Training"), "session")
+        XCTAssertEqual(AnalysisLogic.activityNoun(type: "Hiking"), "session")
+        XCTAssertEqual(AnalysisLogic.activityNoun(type: "Workout"), "session")
+        XCTAssertEqual(AnalysisLogic.activityNoun(type: ""), "session")
+        XCTAssertEqual(AnalysisLogic.activityNoun(type: nil), "session")
+    }
+
+    /// The Going-in row prefers the server's last-hard-session-of-ANY-type count
+    /// and only falls back to the same-type count (with the activity noun) for
+    /// an older server that does not send the new field.
+    func testSinceLastHardPrefersTheAnyTypeCountAndFallsBackToTheSameTypeOne() {
+        // New server: "session", whatever the activity is.
+        XCTAssertEqual(
+            AnalysisLogic.sinceLastHard(daysSinceLastHard: 2, daysSinceLastSameType: 5, noun: "walk"),
+            AnalysisLogic.SinceLastHard(label: "Since your last hard session", days: 2)
+        )
+        XCTAssertEqual(
+            AnalysisLogic.sinceLastHard(daysSinceLastHard: 0, daysSinceLastSameType: nil, noun: "run"),
+            AnalysisLogic.SinceLastHard(label: "Since your last hard session", days: 0)
+        )
+        // Older server: the previous same-type count with the old noun wording.
+        XCTAssertEqual(
+            AnalysisLogic.sinceLastHard(daysSinceLastHard: nil, daysSinceLastSameType: 2, noun: "walk"),
+            AnalysisLogic.SinceLastHard(label: "Since your last hard walk", days: 2)
+        )
+        XCTAssertEqual(
+            AnalysisLogic.sinceLastHard(daysSinceLastHard: nil, daysSinceLastSameType: 3, noun: "session"),
+            AnalysisLogic.SinceLastHard(label: "Since your last hard session", days: 3)
+        )
+        XCTAssertEqual(AnalysisLogic.sinceLastSameTypeLabel(noun: "ride"), "Since your last hard ride")
+        // Neither: no row.
+        XCTAssertNil(AnalysisLogic.sinceLastHard(daysSinceLastHard: nil, daysSinceLastSameType: nil, noun: "run"))
+    }
+
+    /// The effort bar's resting number is the 30-day mean (what the server sends),
+    /// not this morning's reading, so it is labelled "usual".
+    func testRestingLabelSaysUsual() {
+        XCTAssertEqual(AnalysisLogic.usualRestingLabel(64), "usual resting 64")
+        XCTAssertEqual(AnalysisLogic.usualRestingLabel(48.74), "usual resting 49")
+        XCTAssertFalse(AnalysisLogic.usualRestingLabel(64).hasPrefix("resting"))
+    }
+
+    func testWorkoutCopyTakesTheNounInsteadOfHardCodingRun() {
+        // Always "session": a lifter's strength session must never read "Since your last hard walk".
+        XCTAssertEqual(AnalysisLogic.sinceLastHardLabel(), "Since your last hard session")
+        XCTAssertEqual(AnalysisLogic.goingInFootnote(noun: "walk"), "From your data before the walk started.")
+        XCTAssertEqual(AnalysisLogic.maxMarkerLegend(noun: "ride"), "this ride's max")
+        XCTAssertEqual(AnalysisLogic.askCoachLabel(noun: "swim"), "Ask coach about this swim")
+        XCTAssertEqual(AnalysisLogic.paceHistoryTitle(total: 6, noun: "ride"), "Compared to your last 6 rides")
+        XCTAssertEqual(AnalysisLogic.paceRankPhrase(rank: 1, previousCount: 5, noun: "ride"), "Quickest of your last 6 rides.")
+        XCTAssertEqual(AnalysisLogic.paceRankPhrase(rank: 3, previousCount: 5, noun: "walk"), "3rd fastest of your last 6 walks.")
+        // The default noun is unchanged for existing run callers.
+        XCTAssertEqual(AnalysisLogic.paceRankPhrase(rank: 6, previousCount: 5), "Slowest of your last 6 runs.")
+    }
+
+    func testUsualBasisCaptionNamesWhatTheChipsCompareAgainst() {
+        XCTAssertEqual(
+            AnalysisLogic.usualBasisCaption(sessions: 8, noun: "run"),
+            "Changes are vs your usual \u{2014} the median of your last 8 runs."
+        )
+        XCTAssertEqual(
+            AnalysisLogic.usualBasisCaption(sessions: 5, noun: "session"),
+            "Changes are vs your usual \u{2014} the median of your last 5 sessions."
+        )
+        XCTAssertNil(AnalysisLogic.usualBasisCaption(sessions: nil, noun: "run"))
+        XCTAssertNil(AnalysisLogic.usualBasisCaption(sessions: 0, noun: "run"))
+    }
+
 }

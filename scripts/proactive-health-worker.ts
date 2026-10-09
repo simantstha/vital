@@ -1,12 +1,13 @@
 import Anthropic from '@anthropic-ai/sdk';
-import { and, desc, eq, gte, isNotNull, isNull } from 'drizzle-orm';
+import { and, desc, eq, gte, isNotNull, isNull, sql } from 'drizzle-orm';
 import { db, schema } from '../db';
 import { ApnsClient } from '../lib/apnsClient';
 import { generateDailyBriefFromDb } from '../lib/brain/brief';
 import { getDailyBrief, upsertDailyBrief } from '../lib/brain/dailyBriefRepository';
 import { prewarmDailyBrief } from '../lib/dailyBriefPrewarm';
 import { previousRunSignatures, recordFindings } from '../lib/insights/confirmation';
-import { insightPassLogEvent, insightsEnabled, runInsightPass, selectInsightPassUsers, type InsightPassRepository, type InsightPassUserSource } from '../lib/insights/nudgeWorker';
+import { loadGoalInsightInput } from '../lib/insights/goalInputs';
+import { insightPassLogEvent, insightsEnabled, isWithinNudgeSendWindow, runInsightPass, selectInsightPassUsers, type InsightPassRepository, type InsightPassUserSource } from '../lib/insights/nudgeWorker';
 import { establishedMetrics, loadSeries } from '../lib/insights/series';
 import { generateAnalysis, proactiveAnalysisModel, type AnalysisFailureEvent } from '../lib/proactiveAnalysisGeneration';
 import { currentLocalDate, deliverNotification, runClaimedAnalysis, type AnalysisContext, type AnalysisJob, type CoachAnalysis } from '../lib/proactiveHealthWorker';
@@ -17,6 +18,9 @@ import { getUserUnitSystem } from '../lib/units';
 import { createWhoopTokenStore } from '../lib/whoop/client';
 import { createWhoopSyncRepository, runWhoopSync } from '../lib/whoop/sync';
 import { createWhoopWorkerRepository, runWhoopWorkerPass } from '../lib/whoop/workerPass';
+import { createWeeklyReviewPassState, runWeeklyReviewPass, type WeeklyReviewPassDeps } from '../lib/weeklyReviewWorker';
+import { nudgeBlockedByDailyBudget, PUSH_BUDGET_LOOKBACK_MS } from '../lib/dailyPushBudget';
+import { getOrCreateLastWeekReview } from '../lib/weeklyReviewLoader';
 import { buildSubjectLabelMap, resolveSubjectLabel, withSubjectSuffix } from '../lib/brain/factSubject';
 
 const intervalMs = Number(process.env.PROACTIVE_WORKER_INTERVAL_MS ?? 15_000);
@@ -69,6 +73,7 @@ async function generateNudge(request: { system: string; content: string }): Prom
 const insightPassRepository: InsightPassRepository = {
   loadSeries,
   establishedMetrics,
+  loadGoalInput: loadGoalInsightInput,
   recordFindings,
   previousRunSignatures,
   async sentNudgeHistory(userId, now) {
@@ -127,18 +132,18 @@ const insightPassRepository: InsightPassRepository = {
 const insightPassUserSource: InsightPassUserSource = {
   async listAllUsers() {
     const rows = await db
-      .select({ userId: schema.users.id, timezone: schema.notification_preferences.timezone })
+      .select({ userId: schema.users.id, timezone: schema.notification_preferences.timezone, coachNudgesEnabled: schema.notification_preferences.coach_nudges_enabled })
       .from(schema.users)
       .leftJoin(schema.notification_preferences, eq(schema.notification_preferences.user_id, schema.users.id));
-    return rows.map((row) => ({ userId: row.userId, timezone: row.timezone ?? 'UTC' }));
+    return rows.map((row) => ({ userId: row.userId, timezone: row.timezone ?? 'UTC', coachNudgesEnabled: row.coachNudgesEnabled ?? true }));
   },
   async listUsersWithLiveDevice() {
     const rows = await db
-      .selectDistinct({ userId: schema.push_devices.user_id, timezone: schema.notification_preferences.timezone })
+      .selectDistinct({ userId: schema.push_devices.user_id, timezone: schema.notification_preferences.timezone, coachNudgesEnabled: schema.notification_preferences.coach_nudges_enabled })
       .from(schema.push_devices)
       .leftJoin(schema.notification_preferences, eq(schema.notification_preferences.user_id, schema.push_devices.user_id))
       .where(isNull(schema.push_devices.invalidated_at));
-    return rows.map((row) => ({ userId: row.userId, timezone: row.timezone ?? 'UTC' }));
+    return rows.map((row) => ({ userId: row.userId, timezone: row.timezone ?? 'UTC', coachNudgesEnabled: row.coachNudgesEnabled ?? true }));
   },
 };
 
@@ -149,7 +154,11 @@ const insightPassUserSource: InsightPassUserSource = {
 // in memory: a process restart costs at most one extra pass per user that
 // day, never a correctness problem (recordFindings/previousRunSignatures are
 // keyed by day and idempotent), so this doesn't need to survive restarts.
-const insightPassDayByUser = new Map<string, string>();
+//
+// `deferred` marks a pass that ran (recording findings) but could not deliver
+// because the user opted out or the clock was outside their 08:00-21:00 send
+// window; such a user is re-evaluated once delivery becomes possible that day.
+const insightPassDayByUser = new Map<string, { day: string; deferred: boolean }>();
 
 async function runDueInsightPasses(now: Date): Promise<void> {
   const mode = insightsEnabled(process.env);
@@ -158,8 +167,17 @@ async function runDueInsightPasses(now: Date): Promise<void> {
   const users = await selectInsightPassUsers(insightPassUserSource, mode);
   for (const user of users) {
     const localDay = currentLocalDate(now, user.timezone);
-    if (insightPassDayByUser.get(user.userId) === localDay) continue;
-    insightPassDayByUser.set(user.userId, localDay);
+    const deliverable = user.coachNudgesEnabled && isWithinNudgeSendWindow(now, user.timezone);
+    const prior = insightPassDayByUser.get(user.userId);
+    if (prior && prior.day === localDay && (!prior.deferred || !deliverable)) continue;
+    // Daily push budget: weekly review wins its day, otherwise one non-brief
+    // push per local day. A blocked user is finished for the day (no model call).
+    if (deliverable) {
+      let blocked = false;
+      try { blocked = await nudgeBlockedToday(user.userId, user.timezone, now); } catch (error) { console.error(JSON.stringify(workerErrorEvent('insight-pass', error))); }
+      if (blocked) { insightPassDayByUser.set(user.userId, { day: localDay, deferred: false }); continue; }
+    }
+    insightPassDayByUser.set(user.userId, { day: localDay, deferred: !deliverable });
     try {
       const outcome = await runInsightPass({
         repository: insightPassRepository,
@@ -172,12 +190,76 @@ async function runDueInsightPasses(now: Date): Promise<void> {
         userId: user.userId,
         now,
         localDay,
+        coachNudgesEnabled: user.coachNudgesEnabled,
+        timezone: user.timezone,
       });
       console.log(JSON.stringify(insightPassLogEvent({ userId: user.userId, localDay, mode, outcome })));
     } catch (error) {
       console.error(JSON.stringify(workerErrorEvent('insight-pass', error)));
     }
   }
+}
+
+// Weekly review (Monday morning, user-local). Gated by its own
+// weekly_review_enabled preference but still sent at the morning-brief time:
+// only users with the review enabled and a live device are candidates. pushed_at is stamped before sending, so each review is
+// pushed at most once even across ticks, restarts or concurrent workers.
+const weeklyReviewDeps: WeeklyReviewPassDeps = {
+  async listCandidates() {
+    const rows = await db
+      .select({ userId: schema.notification_preferences.user_id, timezone: schema.notification_preferences.timezone, morningMinutes: schema.notification_preferences.morning_brief_time_minutes, weeklyReviewEnabled: schema.notification_preferences.weekly_review_enabled })
+      .from(schema.notification_preferences)
+      .where(and(
+        eq(schema.notification_preferences.weekly_review_enabled, true),
+        sql`exists (select 1 from ${schema.push_devices} d where d.user_id = ${schema.notification_preferences.user_id} and d.invalidated_at is null)`,
+        // Drop users whose current-week review is already pushed. The reviewed
+        // week_start is the local Monday-7, which is always >= UTC date - 8 on a
+        // user's Monday, while the previous week's (Monday-14) never is; so this
+        // is timezone-safe without evaluating each user's timezone in SQL.
+        sql`not exists (select 1 from ${schema.weekly_reviews} wr where wr.user_id = ${schema.notification_preferences.user_id} and wr.pushed_at is not null and wr.week_start >= (now() at time zone 'UTC')::date - 8)`,
+      ));
+    return rows;
+  },
+  async getOrCreate(userId, timezone, now) {
+    const stored = await getOrCreateLastWeekReview(userId, { tz: timezone, now, forceFresh: true });
+    return stored ? { id: stored.id, review: stored.review } : null;
+  },
+  async claimPush(reviewId, now) {
+    const rows = await db
+      .update(schema.weekly_reviews)
+      .set({ pushed_at: now })
+      .where(and(eq(schema.weekly_reviews.id, reviewId), isNull(schema.weekly_reviews.pushed_at)))
+      .returning({ id: schema.weekly_reviews.id });
+    return rows.length === 1;
+  },
+  async releaseClaim(reviewId) {
+    await db.update(schema.weekly_reviews).set({ pushed_at: null }).where(eq(schema.weekly_reviews.id, reviewId));
+  },
+  listDevices: (userId) => workerRepository.listDevices(userId),
+  recordInbox: (userId, alert, route) => recordDelivery(userId, route.type, route.id, alert, route.deepLink),
+  send: (device, alert, route) => apns.send(device, alert, route),
+  retireDevice: (deviceId, now) => workerRepository.retireDevice(deviceId, now),
+  onError: (_userId, error) => console.error(JSON.stringify(workerErrorEvent('weekly-review', error))),
+};
+
+// Per-process progress for the weekly-review pass (done set + error backoff).
+const weeklyReviewState = createWeeklyReviewPassState();
+
+// Shared daily push budget (lib/dailyPushBudget.ts): non-brief pushes already
+// sent to this user recently, from existing tables only.
+async function nudgeBlockedToday(userId: string, tz: string, now: Date): Promise<boolean> {
+  const since = new Date(now.getTime() - PUSH_BUDGET_LOOKBACK_MS);
+  const [prefs] = await db.select({ enabled: schema.notification_preferences.weekly_review_enabled }).from(schema.notification_preferences).where(eq(schema.notification_preferences.user_id, userId)).limit(1);
+  const [nudges, reviews, inbox] = await Promise.all([
+    db.select({ at: schema.pending_nudges.sent_at }).from(schema.pending_nudges).where(and(eq(schema.pending_nudges.user_id, userId), gte(schema.pending_nudges.sent_at, since))),
+    // pushed_at is also stamped for insufficient-data reviews that never push; only count sufficient ones.
+    db.select({ at: schema.weekly_reviews.pushed_at }).from(schema.weekly_reviews).where(and(eq(schema.weekly_reviews.user_id, userId), gte(schema.weekly_reviews.pushed_at, since), sql`${schema.weekly_reviews.payload} #>> '{dataSufficiency,sufficient}' = 'true'`)),
+    db.select({ at: schema.notification_inbox.created_at }).from(schema.notification_inbox).where(and(eq(schema.notification_inbox.user_id, userId), gte(schema.notification_inbox.created_at, since), sql`${schema.notification_inbox.type} <> 'morning_brief'`)),
+  ]);
+  return nudgeBlockedByDailyBudget({
+    now, tz, weeklyReviewEnabled: prefs?.enabled ?? true,
+    nonBriefPushStamps: [...nudges.map(r => r.at), ...reviews.map(r => r.at), ...inbox.map(r => r.at)],
+  });
 }
 
 async function tick(reportStage: (stage: WorkerStage) => void): Promise<void> {
@@ -280,6 +362,9 @@ async function tick(reportStage: (stage: WorkerStage) => void): Promise<void> {
       failed: whoopResult.failed.length,
     }));
   }
+
+  reportStage('weekly-review');
+  await runWeeklyReviewPass(now, weeklyReviewDeps, weeklyReviewState);
 
   if (insightsEnabled(process.env) !== 'off') {
     reportStage('insight-pass');

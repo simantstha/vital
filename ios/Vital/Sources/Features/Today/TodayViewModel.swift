@@ -12,7 +12,7 @@ import SwiftUI
 // a literal `0` (and never a sentinel like `-1` either). See `displayValue`
 // / `formatted` for the "—" placeholder each drives in `TodayView`.
 
-struct HRVMetric {
+struct HRVMetric: Equatable {
     let value: Int?
     let trend: TrendDirection
     let delta: String
@@ -21,7 +21,7 @@ struct HRVMetric {
     var displayUnit: String { value == nil ? "" : "ms" }
 }
 
-struct SleepMetric {
+struct SleepMetric: Equatable {
     let hours: Int?
     let minutes: Int?
     let trend: TrendDirection
@@ -33,7 +33,7 @@ struct SleepMetric {
     }
 }
 
-struct RestingHRMetric {
+struct RestingHRMetric: Equatable {
     let bpm: Int?
     let trend: TrendDirection
     let delta: String
@@ -42,7 +42,39 @@ struct RestingHRMetric {
     var displayUnit: String { bpm == nil ? "" : "bpm" }
 }
 
-struct MacroProgress {
+/// Trend + copy for a recovery tile's "vs your baseline" percentage. A delta
+/// that rounds to 0 reads "at your normal" with a neutral trend (no arrow)
+/// instead of "↗ +0 %".
+enum RecoveryDelta {
+    static let atNormalText = "at your normal"
+
+    static func make(deltaPct: Int, lowerIsBetter: Bool = false) -> (trend: TrendDirection, text: String) {
+        if deltaPct == 0 { return (.neutral, atNormalText) }
+        // Percent vs the 30-day normal value (mean), spelled out so the tile
+        // never reads as a bare "-11 %" next to Trends' "ms below your normal".
+        let sign = deltaPct > 0 ? "+" : "\u{2212}"
+        let up = deltaPct > 0
+        let trend: TrendDirection
+        if lowerIsBetter {
+            trend = up ? .upBad : .downGood
+        } else {
+            trend = up ? .upGood : .downBad
+        }
+        return (trend, "\(sign)\(abs(deltaPct))\(vsNormalSuffix)")
+    }
+
+    /// The tile text's unit + reference ("-11% vs normal"). "Normal" is always the
+    /// 30-day normal VALUE (mean) in ms/bpm/h; the shaded band is called the
+    /// "normal range" wherever it is shown (Trends detail).
+    static let vsNormalSuffix = "% vs normal"
+
+    /// The same delta for a space-tight line ("HRV -11%"): drops " vs normal".
+    static func compact(_ text: String) -> String {
+        text.replacingOccurrences(of: "% vs normal", with: "%")
+    }
+}
+
+struct MacroProgress: Equatable {
     let current: Int
     let target: Int
     var fraction: Double {
@@ -53,7 +85,7 @@ struct MacroProgress {
     var targetLabel: String  { "\(target)g" }
 }
 
-struct DietCard {
+struct DietCard: Equatable {
     let kcalConsumed: Int
     let kcalTarget: Int
     var kcalRemaining: Int { max(0, kcalTarget - kcalConsumed) }
@@ -111,6 +143,16 @@ final class TodayViewModel: ObservableObject {
     /// The chip uses this to avoid asserting "0-day streak" the first time
     /// `refreshStreak()` fails, before any real value has ever landed.
     @Published private(set) var hasLoadedStreak = false
+
+    /// Streak chip copy, or nil when there is nothing true to say (not loaded
+    /// yet, or 0). The server counts a day when the user logged a meal,
+    /// finished a workout, sent a coach message or completed a plan item, so
+    /// the copy says "in a row" rather than claiming everything was "logged".
+    /// TodayView keeps the chip's slot reserved either way (no layout jump).
+    var streakChipText: String? {
+        guard hasLoadedStreak, streakDays > 0 else { return nil }
+        return streakDays == 1 ? "1 day in a row" : "\(streakDays) days in a row"
+    }
 
     // Coach insight — overwritten from /api/today
     @Published var coachInsight: String = ""
@@ -187,10 +229,9 @@ final class TodayViewModel: ObservableObject {
 
     /// Baselines for the endurance readiness word — `nil` until `/api/trends`
     /// resolves (or on a fail-soft failure, same convention as `weightLog`).
-    /// Fetched for every goal alongside the rest of `performLoad`'s
-    /// concurrent calls (like `weightLog`) rather than gated on `goal`,
-    /// since `goal` itself isn't known until `/api/today` resolves in the
-    /// same batch.
+    /// Fetched only for the endurance goal (its sole consumer is the readiness
+    /// word): prefetched alongside `performLoad`'s batch when the goal is
+    /// already known, otherwise right after `/api/today` reveals it.
     @Published private(set) var enduranceTrendsBatch: TrendsBatchResponse? = nil
 
     private static let enduranceReadinessMetricKeys = ["hrv_sdnn", "resting_hr", "sleep_minutes"]
@@ -236,15 +277,44 @@ final class TodayViewModel: ObservableObject {
         return EnduranceHeroLogic.calibratingText(daysCollected: Int((calibrationProgress * 14).rounded()))
     }
 
-    /// "HRV +8 % · Sleep 7h 40m · RHR −2 %" — only the metrics that actually
-    /// have a value today; `nil` if none do. Never a raw z-score or σ (§6 /
-    /// `TrendsVerdict`'s doc comment — those never reach UI copy).
+    /// The metric's 30-day normal (`mean30`) from the endurance trends batch —
+    /// `nil` until that resolves, or when the series has no baseline yet.
+    private func enduranceNormal(key: String) -> Double? {
+        enduranceTrendsBatch?.series[key]?.baseline?.mean30
+    }
+
+    /// "HRV −6 ms · RHR +5 bpm · Sleep 5h 48m" — only the metrics that
+    /// actually have a value today; `nil` if none do. Deltas are absolute
+    /// (ms / bpm vs the 30-day normal), matching Trends, the metric detail and
+    /// the coach. Never a raw z-score or σ (§6 / `TrendsVerdict`'s doc comment
+    /// — those never reach UI copy).
     var enduranceReasonLine: String? {
-        var parts: [String] = []
-        if hrv.value != nil { parts.append("HRV \(hrv.delta)") }
-        if sleep.hours != nil { parts.append("Sleep \(sleep.formatted)") }
-        if restingHR.bpm != nil { parts.append("RHR \(restingHR.delta)") }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+        EnduranceHeroLogic.reasonLine(
+            hrv: hrv.value.map(Double.init), hrvNormal: enduranceNormal(key: "hrv_sdnn"),
+            restingHR: restingHR.bpm.map(Double.init), restingHRNormal: enduranceNormal(key: "resting_hr"),
+            sleepText: sleep.hours != nil && sleep.minutes != nil ? sleep.formatted : nil
+        )
+    }
+
+    /// One-line "swap to an easy 30 min or rest?" under a hard planned
+    /// session when readiness says to back off — see
+    /// `EnduranceHeroLogic.reconciliationText`.
+    var enduranceReconciliationText: String? {
+        EnduranceHeroLogic.reconciliationText(
+            readinessWord: enduranceReadinessWord,
+            isCalibrating: enduranceCalibratingText != nil,
+            session: todayMoveSession
+        )
+    }
+
+    /// The coach prompt behind a tap on the reconciliation line.
+    var enduranceReconciliationCoachPrompt: String? {
+        guard enduranceReconciliationText != nil, let session = todayMoveSession else { return nil }
+        return EnduranceHeroLogic.reconciliationCoachPrompt(
+            readinessWord: enduranceReadinessWord,
+            reasonLine: enduranceReasonLine,
+            session: session
+        )
     }
 
     private func loadEnduranceTrends() async {
@@ -311,6 +381,86 @@ final class TodayViewModel: ObservableObject {
         }
     }
 
+    // MARK: - Goal progress (one-line verdict under each goal hero)
+
+    /// `nil` until `/api/goal/progress` resolves or when it fails (fail-soft:
+    /// the line simply isn't shown — never zeros). Like `trainingSummary`, NOT
+    /// part of `performLoad`'s awaited batch: a secondary line must never add
+    /// to the time-to-`.loaded` critical path.
+    @Published private(set) var goalProgress: GoalProgressDTO? = nil
+
+    /// True once `/api/goal/progress` has answered (success OR failure) at least
+    /// once. Lets the endurance hero reserve the race line's height only while
+    /// the answer is still pending (see `enduranceRaceLineReserved`).
+    @Published private(set) var goalProgressResolved = false
+
+    /// Whether the profile has a race date (`nil` = profile not loaded yet).
+    /// `/api/today` carries no race info, but the profile fetch Today already
+    /// makes does, so a user known to have NO race never reserves the line.
+    @Published private(set) var profileHasRaceDate: Bool? = nil
+
+    /// The endurance hero's race line ("Half marathon · 12 weeks to go") only
+    /// exists once goal progress loads, which used to push the hero's content
+    /// down a line after first paint. While that answer is pending — and the
+    /// profile hasn't ruled a race out — the hero reserves one line of blank
+    /// space; it fills with the race text, or collapses when there is no race.
+    /// Never reserved after the first answer, so refreshes cause no shift.
+    var enduranceRaceLineReserved: Bool {
+        isEnduranceGoal && goalProgress == nil && !goalProgressResolved && profileHasRaceDate != false
+    }
+
+    private var goalProgressTask: Task<Void, Never>?
+    /// Same stale-result guard as `trainingSummaryGeneration`.
+    private var goalProgressGeneration = 0
+
+    func refreshGoalProgress() {
+        goalProgressTask?.cancel()
+        goalProgressGeneration += 1
+        let generation = goalProgressGeneration
+
+        goalProgressTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let result = try await self.apiClient.fetchGoalProgress()
+                guard !Task.isCancelled, generation == self.goalProgressGeneration else { return }
+                withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.appear) {
+                    self.goalProgress = result
+                    self.goalProgressResolved = true
+                }
+            } catch {
+                if !error.isCancellation {
+                    print("[Vital] fetchGoalProgress failed: \(error.localizedDescription)")
+                    // Fail-soft: stop reserving the race line.
+                    if generation == self.goalProgressGeneration { self.goalProgressResolved = true }
+                }
+            }
+        }
+    }
+
+    /// Whether the goal-progress line should render under the hero: needs a
+    /// response, and "set a target" is Trends' job, not a nag on Today.
+    var goalProgressLine: GoalProgressDTO? {
+        guard let goalProgress, goalProgress.verdict != .needsTarget else { return nil }
+        return goalProgress
+    }
+
+    /// The 4-week rate (kg/wk, signed) the weight hero shows so it matches the
+    /// goal card; `nil` without goal progress (the hero then falls back to its
+    /// own 7-day rate).
+    var heroGoalRateKgPerWeek: Double? {
+        guard let kg = goalProgress?.ratePerWeek.kg, kg.isFinite else { return nil }
+        return kg
+    }
+
+    /// The HRV / Sleep / Resting HR tiles. The endurance hero already prints
+    /// those three in its readiness reason line, so the tiles are hidden there
+    /// (only while that line is actually showing: not while calibrating, and
+    /// only when at least one value exists).
+    var showMetricTiles: Bool {
+        guard isEnduranceGoal else { return true }
+        return !(enduranceCalibratingText == nil && enduranceReasonLine != nil)
+    }
+
     /// The muscle hero's "Last (Mon): Deadlift 2×5 @ 150 kg" line — `nil`
     /// whenever there's no logged strength history yet (never fabricated).
     var muscleLastLiftText: String? {
@@ -357,6 +507,15 @@ final class TodayViewModel: ObservableObject {
         return MuscleHeroLogic.sessionsThisWeekFallbackText(completed: week.completedSessions)
     }
 
+    /// Sessions already done this week, the number behind the hero's "2 of 4
+    /// sessions this week" (the dots' done count; the plain completed count
+    /// when nothing is planned). Lets the goal line say "2 more by Sun". `nil`
+    /// before `trainingSummary` loads.
+    var sessionsDoneThisWeek: Int? {
+        if let dots = trainingSessionDots { return dots.done }
+        return trainingSummary?.week.completedSessions
+    }
+
     /// The endurance hero's "X km this week" / "X of Y km" line — `nil`
     /// when `volume.done` is null (no workout this week carries a distance
     /// reading).
@@ -367,12 +526,42 @@ final class TodayViewModel: ObservableObject {
         )
     }
 
+    /// "24.5 of 30 km this week" + bar fraction for the endurance hero — the
+    /// SAME text the goal card/sheet show (`GoalProgressLogic.distanceLine`),
+    /// from `/api/goal/progress`. When last week caps this week's safe step
+    /// below the goal it reads "22.7 of ~27 km this week · goal 30 km" and the
+    /// bar runs to the ~27 km step. Values stay glued to their unit
+    /// (`nonBreaking`) since the line is longer with the goal beside it. `nil`
+    /// without a weekly distance target or a measured distance.
+    var enduranceDistanceProgress: (text: String, fraction: Double)? {
+        guard let goalProgress,
+              let text = GoalProgressLogic.distanceLine(goalProgress, system: UnitPreference.shared.current),
+              let fraction = GoalProgressLogic.distanceFraction(goalProgress) else { return nil }
+        return (GoalProgressLogic.nonBreaking(text), fraction)
+    }
+
+    /// "Half marathon · 12 weeks to go · long run 14/18 km" for the top of the
+    /// endurance hero, from `/api/goal/progress`'s `race` (+ `longRun`, when it
+    /// has a target). `nil` when no (future) race is set.
+    var enduranceRaceText: String? {
+        guard let race = goalProgress?.race else { return nil }
+        return RaceLogic.heroLine(race, longRun: goalProgress?.longRun, system: UnitPreference.shared.current)
+    }
+
+    /// True when the endurance hero already shows the weekly-distance progress
+    /// line + bar, so the goal line below it must not repeat it.
+    var goalLineHeroShowsDistance: Bool {
+        isEnduranceGoal && enduranceDistanceProgress != nil
+    }
+
     /// Combined "3 sessions · 24.5 km this week" line for the endurance hero.
-    /// Returns `nil` when neither sessions nor volume data is available.
+    /// Returns `nil` when neither sessions nor volume data is available. With a
+    /// distance target the km live in `enduranceDistanceProgress`'s
+    /// "24.5 of 30 km this week" line instead, so this drops to sessions only.
     var enduranceWeeklyOverviewText: String? {
         guard let week = trainingSummary?.week else { return nil }
         let sessionsCompleted = week.completedSessions
-        let kmDone = trainingSummary?.volume.done
+        let kmDone = enduranceDistanceProgress == nil ? trainingSummary?.volume.done : nil
         return EnduranceHeroLogic.weeklySessionsAndVolumeText(
             sessionsCompleted: sessionsCompleted,
             kmDone: kmDone,
@@ -423,6 +612,21 @@ final class TodayViewModel: ObservableObject {
             calibrationStatus: calibrationStatus,
             hasAnyBiometric: hrv.value != nil || sleep.hours != nil || restingHR.bpm != nil
         )
+    }
+
+    /// True when the profile has any goal target (target weight or weekly
+    /// sessions) — checks off the checklist's "Set your goal target" row.
+    @Published private(set) var hasGoalTarget = false
+
+    func refreshGoalTargetFlag() async {
+        if let response = try? await apiClient.fetchProfile() {
+            hasGoalTarget = Self.profileHasGoalTarget(response)
+            profileHasRaceDate = response.raceDate != nil
+        }
+    }
+
+    nonisolated static func profileHasGoalTarget(_ r: ProfileResponse) -> Bool {
+        r.targetWeightKg != nil || r.weeklySessionsTarget != nil || r.weeklyDistanceKmTarget != nil
     }
 
     /// The checklist's third row (§4.2: weigh-in for weight_loss/general,
@@ -564,15 +768,33 @@ final class TodayViewModel: ObservableObject {
         async let weightLogTask: () = loadWeightLog()
         async let bodyMassTask: () = loadHealthKitBodyMassToday()
         async let unitPrefTask: () = syncUnitPreference()
-        async let enduranceTrendsTask: () = loadEnduranceTrends()
+        // The trends batch's only consumer is the endurance readiness word,
+        // and the goal isn't known until /api/today resolves. When we already
+        // know the user is on the endurance goal (a refresh), prefetch it
+        // alongside the rest; otherwise it is fetched below only if /api/today
+        // reveals an endurance goal. Every other goal skips it entirely.
+        let trendsPrefetch: Task<Void, Never>? = isEnduranceGoal
+            ? Task { @MainActor [weak self] in await self?.loadEnduranceTrends() }
+            : nil
 
-        let (_, today, _, plan, _, _, _, _) =
-            await (healthTask, todayOutcome, factsTask, planResult, weightLogTask, bodyMassTask, unitPrefTask, enduranceTrendsTask)
+        let (_, today, _, plan, _, _, _) =
+            await (healthTask, todayOutcome, factsTask, planResult, weightLogTask, bodyMassTask, unitPrefTask)
 
         switch today {
         case .success(let response):
             applyTodayResponse(response)
             didLoadToday = true
+            if isEnduranceGoal {
+                if let trendsPrefetch {
+                    await trendsPrefetch.value
+                } else {
+                    // Awaited (endurance only) so the readiness word never
+                    // flashes a verdict computed without its baselines.
+                    await loadEnduranceTrends()
+                }
+            } else {
+                trendsPrefetch?.cancel()
+            }
             applyPlanResult(plan, todayPlan: response.plan)
             withAnimation(Theme.Motion.appear) { loadState = .loaded }
             // `/api/training/summary` only feeds the muscle/endurance heroes
@@ -583,6 +805,8 @@ final class TodayViewModel: ObservableObject {
             // round-trip to the time-to-`.loaded` critical path. See
             // `refreshTrainingSummary`'s doc comment.
             refreshTrainingSummary()
+            refreshGoalProgress()
+            startPostLoadSync()
 
         case .cancelled:
             // A stale in-flight load was superseded (tab switch, interrupted
@@ -604,6 +828,35 @@ final class TodayViewModel: ObservableObject {
             if hasRenderableContent {
                 toastMessage = "Couldn't refresh — showing your last data"
             }
+            startPostLoadSync()
+        }
+    }
+
+    /// In-flight HealthKit upload + streak refresh, so overlapping loads don't stack syncs.
+    private var postLoadSyncTask: Task<Void, Never>?
+
+    /// HealthKit upload and the streak fetch used to be awaited inside
+    /// `performLoad`, so the user stared at a skeleton for the whole upload.
+    /// They now run AFTER Today has rendered (never awaited by the load
+    /// itself, so pull-to-refresh's spinner doesn't wait on them either); when
+    /// the upload finishes, `/api/today` is re-fetched silently so numbers the
+    /// server derives from the fresh data catch up. The silent refresh only
+    /// applies while Today is `.loaded` and a failure is ignored (the screen
+    /// already shows good data).
+    /// It must stay layout-stable: `applyTodayResponse` only publishes fields
+    /// that actually changed, and TodayView reserves the streak chip's row
+    /// height up front so the late `refreshStreak()` result can't push content
+    /// down under a tap (CI endurance/light fuel-strip flake).
+    private func startPostLoadSync() {
+        guard postLoadSyncTask == nil else { return }
+        postLoadSyncTask = Task { @MainActor [weak self] in
+            await HealthSyncCoordinator.shared.syncNow()
+            guard let self else { return }
+            await self.refreshStreak()
+            if self.loadState == .loaded, let response = try? await self.apiClient.fetchToday() {
+                self.applyTodayResponse(response)
+            }
+            self.postLoadSyncTask = nil
         }
     }
 
@@ -706,7 +959,9 @@ final class TodayViewModel: ObservableObject {
                 trend: .upGood,
                 delta: "\(Int(r.valueMs.rounded())) ms"
             )
-            withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) { hrv = newHRV }
+            if hrv != newHRV {
+                withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) { hrv = newHRV }
+            }
         }
 
         if let r = sleepReading {
@@ -716,7 +971,9 @@ final class TodayViewModel: ObservableObject {
                 trend: .upGood,
                 delta: "\(r.totalMinutes / 60)h \(r.totalMinutes % 60)m"
             )
-            withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) { sleep = newSleep }
+            if sleep != newSleep {
+                withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) { sleep = newSleep }
+            }
         }
 
         if let r = restingHRReading {
@@ -725,7 +982,9 @@ final class TodayViewModel: ObservableObject {
                 trend: .downGood,
                 delta: "\(Int(r.bpm.rounded())) bpm"
             )
-            withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) { restingHR = newRestingHR }
+            if restingHR != newRestingHR {
+                withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) { restingHR = newRestingHR }
+            }
         }
 
         // The three reads above already cover three of HealthKit's read
@@ -740,8 +999,8 @@ final class TodayViewModel: ObservableObject {
             hasAnyHealthData: hasAnyData
         )
 
-        await HealthSyncCoordinator.shared.syncNow()
-        await refreshStreak()
+        // HealthKit upload + streak run after Today renders — see
+        // `startPostLoadSync`.
     }
 
     /// Streak is intentionally fail-soft: the rest of Today remains usable,
@@ -795,18 +1054,14 @@ final class TodayViewModel: ObservableObject {
     func applyTodayResponse(_ r: TodayResponse) {
         // Calibration state — extract if present
         if let cal = r.calibration {
-            calibrationStatus = cal.status
-            // Calculate progress as min of the three metrics' dataDays / 14 (target)
-            let dataDays = [
-                cal.metrics["hrv_sdnn"]?.dataDays ?? 0,
-                cal.metrics["resting_hr"]?.dataDays ?? 0,
-                cal.metrics["sleep_minutes"]?.dataDays ?? 0
-            ].min() ?? 0
-            calibrationProgress = min(1.0, Double(dataDays) / 14.0)
+            if calibrationStatus != cal.status { calibrationStatus = cal.status }
+            // One shared rule with Trends/Profile — see `CalibrationProgress`.
+            let newProgress = CalibrationProgress.fraction(cal)
+            if calibrationProgress != newProgress { calibrationProgress = newProgress }
         }
 
         // Coach insight — keep the existing default if the brief isn't ready yet
-        if !r.insight.isEmpty {
+        if !r.insight.isEmpty, coachInsight != r.insight {
             coachInsight = r.insight
         }
 
@@ -818,47 +1073,53 @@ final class TodayViewModel: ObservableObject {
         // HRV
         if let value = m.hrv.value {
             let deltaPct = m.hrv.deltaPct ?? 0
-            let hrvTrend: TrendDirection = deltaPct >= 0 ? .upGood : .downBad
-            let hrvSign = deltaPct >= 0 ? "+" : ""
+            let hrvDelta = RecoveryDelta.make(deltaPct: deltaPct)
             let newHRV = HRVMetric(
                 value: Int(value.rounded()),
-                trend: hrvTrend,
-                delta: "\(hrvSign)\(deltaPct) %"
+                trend: hrvDelta.trend,
+                delta: hrvDelta.text
             )
-            withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) { hrv = newHRV }
+            if hrv != newHRV {
+                withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) { hrv = newHRV }
+            }
         }
 
         // Sleep — value is in hours (e.g. 7.8)
         if let value = m.sleep.value {
             let deltaPct = m.sleep.deltaPct ?? 0
             let totalSleepMins = Int((value * 60).rounded())
-            let sleepTrend: TrendDirection = deltaPct >= 0 ? .upGood : .downBad
-            let sleepSign = deltaPct >= 0 ? "+" : ""
+            let sleepDelta = RecoveryDelta.make(deltaPct: deltaPct)
             let newSleep = SleepMetric(
                 hours: totalSleepMins / 60,
                 minutes: totalSleepMins % 60,
-                trend: sleepTrend,
-                delta: "\(sleepSign)\(deltaPct) %"
+                trend: sleepDelta.trend,
+                delta: sleepDelta.text
             )
-            withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) { sleep = newSleep }
+            if sleep != newSleep {
+                withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) { sleep = newSleep }
+            }
         }
 
         // Resting HR — lower is better
         if let value = m.restingHr.value {
             let deltaPct = m.restingHr.deltaPct ?? 0
-            let hrTrend: TrendDirection = deltaPct <= 0 ? .downGood : .upBad
-            let hrSign = deltaPct >= 0 ? "+" : ""
+            let hrDelta = RecoveryDelta.make(deltaPct: deltaPct, lowerIsBetter: true)
             let newRestingHR = RestingHRMetric(
                 bpm: Int(value.rounded()),
-                trend: hrTrend,
-                delta: "\(hrSign)\(deltaPct) %"
+                trend: hrDelta.trend,
+                delta: hrDelta.text
             )
-            withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) { restingHR = newRestingHR }
+            if restingHR != newRestingHR {
+                withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) { restingHR = newRestingHR }
+            }
         }
 
         // Diet budget
         let db = r.dietBudget
-        goal = db.goal ?? "general"
+        // Assign-if-changed: `@Published` fires on every set, even an equal one,
+        // and `isEnduranceGoal` (hero, metric tiles) derives from `goal`.
+        let newGoal = db.goal ?? "general"
+        if goal != newGoal { goal = newGoal }
         // Macro targets are now server-authoritative (user override or auto-calc
         // from goal). Fall back to a 30/40/30 split only if an older backend
         // doesn't send them yet.
@@ -880,7 +1141,9 @@ final class TodayViewModel: ObservableObject {
         // hero/fuel strip (`.contentTransition(.numericText(value:))` needs
         // an animation context to actually roll rather than jump) — mirrors
         // the hrv/sleep/restingHR `withAnimation` calls just above.
-        withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) { diet = newDiet }
+        if diet != newDiet {
+                withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) { diet = newDiet }
+            }
     }
 
     // MARK: - Plan timeline (Phase 2: server-persisted via /api/plan)
@@ -1276,6 +1539,8 @@ final class TodayViewModel: ObservableObject {
     private func syncUnitPreference() async {
         do {
             let response = try await apiClient.fetchProfile()
+            hasGoalTarget = Self.profileHasGoalTarget(response)
+            profileHasRaceDate = response.raceDate != nil
             if UnitPreference.shared.applyServerValue(response.unitSystem) {
                 try? await apiClient.updateProfile(unitSystem: UnitPreference.shared.current.rawValue)
             }

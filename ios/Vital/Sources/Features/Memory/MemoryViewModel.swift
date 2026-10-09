@@ -25,10 +25,38 @@ final class MemoryViewModel: ObservableObject {
     /// Non-nil while the Forget confirmation dialog is presented.
     @Published var factPendingForget: MemoryFact? = nil
 
-    private let apiClient: MemoryAPIProviding
+    /// The profile's goal line ("Lose weight · 76 kg"), shown read-only in the
+    /// Goals card. `nil` until loaded, or when the profile has no goal.
+    @Published var goalSummary: String? = nil
 
-    init(apiClient: MemoryAPIProviding = APIClient.shared) {
+    private let apiClient: MemoryAPIProviding
+    /// Loads the canonical goal from the profile. Injectable so tests never
+    /// touch the network; failures are non-fatal (the card just hides).
+    private let goalLoader: @MainActor () async -> String?
+
+    init(
+        apiClient: MemoryAPIProviding = APIClient.shared,
+        goalLoader: @escaping @MainActor () async -> String? = MemoryViewModel.loadProfileGoal
+    ) {
         self.apiClient = apiClient
+        self.goalLoader = goalLoader
+    }
+
+    /// Default goal source: `GET /api/diet-goal` (goal id) + `GET /api/profile`
+    /// (targets) — exactly what `ProfileViewModel` composes its Goal row from.
+    static func loadProfileGoal() async -> String? {
+        let api = APIClient.shared
+        guard let diet = try? await api.fetchDietGoal() else { return nil }
+        let profile = try? await api.fetchProfile()
+        return MemoryLogic.goalSummary(
+            goalId: diet.current.goal,
+            targetWeightKg: profile?.targetWeightKg,
+            weeklySessions: profile?.weeklySessionsTarget,
+            weeklyDistanceKm: profile?.weeklyDistanceKmTarget,
+            raceDate: profile?.raceDate,
+            raceDistanceKm: profile?.raceDistanceKm,
+            system: UnitPreference.shared.current
+        )
     }
 
     // MARK: - Derived, search-filtered display state
@@ -59,6 +87,7 @@ final class MemoryViewModel: ObservableObject {
         // Best-effort, same as Today's pending-facts load — a failure here
         // shouldn't block the fact groups / People cards from showing.
         async let factsTask: PendingFactsResponse? = try? await apiClient.fetchPendingFacts()
+        async let goalTask: String? = goalLoader()
 
         do {
             let memory = try await memoryTask
@@ -72,6 +101,7 @@ final class MemoryViewModel: ObservableObject {
         if let response = await factsTask {
             pendingFacts = response.items
         }
+        goalSummary = await goalTask
 
         withAnimation(Theme.Motion.appear) { isLoading = false }
     }

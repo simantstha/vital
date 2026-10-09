@@ -76,6 +76,8 @@ extension MetricSpec {
     /// Formats an already-scaled value to this metric's rounding precision,
     /// with its unit suffix (omitted for unitless counts like steps).
     func format(_ value: Double, _ system: UnitSystem) -> String {
+        // Sleep reads as "5h 48m", not "5.8 h" (see `TrendsDeltaFormat.isDuration`).
+        if TrendsDeltaFormat.isDuration(self) { return TrendsDeltaFormat.durationText(hours: value) }
         let formatted = String(format: "%.\(decimals)f", value)
         let unitLabel = unit(system)
         return unitLabel.isEmpty ? formatted : "\(formatted) \(unitLabel)"
@@ -206,4 +208,143 @@ enum MetricCatalog {
     /// Every catalog key, in catalog (grouped, display) order — the full set
     /// of metrics the grid index requests from the batch API.
     static let indexKeys: [String] = all.map(\.key)
+}
+
+// MARK: - Plain-language explainers
+
+/// Single catalog of one-sentence, plain-English explanations and verdict
+/// lines for every metric — the copy behind the "What is this?" info button
+/// (`WhatIsThisButton`) on Today's recovery tiles, the metric detail screen
+/// and Trends' "What moved" card. Jargon-first labels (HRV, resting HR,
+/// strain) stay as they are; this is the translation layer under them, so
+/// every surface says the same thing about the same metric.
+enum MetricExplainer {
+
+    /// One sentence a non-technical user can act on. `nil` for a key this
+    /// catalog doesn't know — callers simply omit the info button then.
+    static func explanation(for key: String) -> String? {
+        explanations[key]
+    }
+
+    private static let hrvText = "A measure of how recovered your nervous system is. Compare it to your own normal, not to other people — higher than your normal usually means well recovered."
+    private static let restingHRText = "Your heart rate when fully at rest. Lower than your normal usually means you're recovered; a jump above it can mean stress, poor sleep or getting sick."
+    private static let sleepText = "How long you actually slept, not just time in bed. Steady nights matter as much as the total."
+
+    private static let explanations: [String: String] = [
+        "hrv_sdnn": hrvText,
+        "whoop_hrv_rmssd": hrvText,
+        "resting_hr": restingHRText,
+        "whoop_resting_hr": restingHRText,
+        "hr_avg": "Your average heart rate across the day. It rises when you're active or stressed, so it's most useful next to your own usual.",
+        "sleep_minutes": sleepText,
+        "whoop_sleep_min": sleepText,
+        "steps": "How much you moved today. It doesn't count intensity, so a hard workout day can still be a low-step day.",
+        "distance_m": "How far you walked or ran today, from your phone and watch.",
+        "exercise_min": "Minutes of brisk activity today, the kind that gets your heart rate up.",
+        "flights": "Flights of stairs you climbed today. A quick way to see everyday effort.",
+        "active_energy_kcal": "Calories you burned from moving, on top of what your body burns just staying alive.",
+        "basal_energy_kcal": "Calories your body burns just staying alive, before any movement.",
+        "vo2_max": "A fitness score for how well your body uses oxygen when you exercise. Higher is fitter, and it changes slowly.",
+        "body_mass_kg": "Your weight on the scale. Day-to-day swings are mostly water, so look at the trend, not a single weigh-in.",
+        "weight_trend": "A smoothed average that ignores day-to-day water swings.",
+        "whoop_recovery": "WHOOP's score for how ready your body is today. Green means ready to train hard, red means take it easy.",
+        "whoop_day_strain": "How much load your body took on today, on WHOOP's 0-21 scale. Higher means a bigger day, and that's fine when you've recovered.",
+        "whoop_spo2": "The share of oxygen in your blood overnight. It's normally steady, so only a clear drop from your own normal matters.",
+        "whoop_skin_temp": "Your overnight skin temperature. A clear rise above your normal can be an early sign your body is fighting something.",
+    ]
+
+    /// A short, plain verdict to sit directly under a metric's big number,
+    /// e.g. "Above your normal — you're well recovered". `nil` while
+    /// calibrating or with no data (the still-learning card covers those),
+    /// so it never claims a judgment the verdict gates haven't earned.
+    static func verdictLine(for key: String, verdict: Verdict) -> String? {
+        let polarity = MetricCatalog.spec(for: key)?.polarity ?? .neutral
+        switch verdict {
+        case .calibrating, .noData:
+            return nil
+        case .normal:
+            return "Right in your normal range — nothing unusual"
+        case .above:
+            return aboveLine(key: key, polarity: polarity)
+        case .below:
+            return belowLine(key: key, polarity: polarity)
+        }
+    }
+
+    private static func aboveLine(key: String, polarity: MetricPolarity) -> String {
+        switch key {
+        case "hrv_sdnn", "whoop_hrv_rmssd": return "Above your normal — you're well recovered"
+        case "sleep_minutes", "whoop_sleep_min": return "Above your normal — you slept more than usual"
+        case "steps", "distance_m", "exercise_min", "active_energy_kcal": return "Above your normal — a more active day than usual"
+        default: break
+        }
+        switch polarity {
+        case .higherIsBetter: return "Above your normal — a good sign"
+        case .lowerIsBetter: return "Above your normal — your body may be under extra strain"
+        case .neutral: return "Above your normal — higher than usual for you"
+        }
+    }
+
+    private static func belowLine(key: String, polarity: MetricPolarity) -> String {
+        switch key {
+        case "hrv_sdnn", "whoop_hrv_rmssd": return "Below your normal — your body could use extra rest"
+        case "sleep_minutes", "whoop_sleep_min": return "Below your normal — you slept less than usual"
+        case "steps", "distance_m", "exercise_min", "active_energy_kcal": return "Below your normal — a quieter day than usual"
+        default: break
+        }
+        switch polarity {
+        case .higherIsBetter: return "Below your normal — worth keeping an eye on"
+        case .lowerIsBetter: return "Below your normal — a good sign"
+        case .neutral: return "Below your normal — lower than usual for you"
+        }
+    }
+}
+
+// MARK: - New-user calibration copy
+
+/// Shared wording for "baselines are still building" so Today, Profile,
+/// Trends and metric detail all lead with what already works today and put
+/// the 14-day wait in context — never "0 of 14 days" on its own, which new
+/// users read as "the app is useless for two weeks".
+/// The ONE "days collected toward the 14-day baseline" number, shared by
+/// Today's calibration card, Trends' "Getting to know your normal" ring and
+/// Profile's percent. It is the smallest `dataDays` across the three
+/// recovery metrics in the API's `calibration` block, clamped to 0...14 —
+/// the same field `/api/today` and `/api/trends` both send.
+enum CalibrationProgress {
+    static let totalDays = 14
+    static let metricKeys = ["hrv_sdnn", "resting_hr", "sleep_minutes"]
+
+    static func daysDone(_ calibration: CalibrationStatus?) -> Int {
+        guard let calibration else { return 0 }
+        let smallest = metricKeys.map { calibration.metrics[$0]?.dataDays ?? 0 }.min() ?? 0
+        return min(max(smallest, 0), totalDays)
+    }
+
+    static func fraction(_ calibration: CalibrationStatus?) -> Double {
+        Double(daysDone(calibration)) / Double(totalDays)
+    }
+}
+
+enum CalibrationCopy {
+    static let totalDays = 14
+
+    static let todayTitle = "Getting to know your normal"
+
+    /// "Calorie, weight and workout tracking work today. Recovery insights
+    /// get personal after 14 days of data (2 of 14)."
+    static func todayBody(daysCollected: Int) -> String {
+        let done = min(max(daysCollected, 0), totalDays)
+        return "Calorie, weight and workout tracking work today. Recovery insights get personal after \(totalDays) days of data (\(done) of \(totalDays))."
+    }
+
+    /// Trends' "Getting to know your normal" card body. `daysRemaining == 0` means
+    /// enough calendar history but not enough real variation yet.
+    static func trendsBody(daysRemaining: Int) -> String {
+        guard daysRemaining > 0 else {
+            return "Your tracking works as usual. Recovery insights need a bit more variety in your data before they get personal."
+        }
+        let done = min(max(totalDays - daysRemaining, 0), totalDays)
+        return "Calorie, weight and workout tracking work today. Recovery insights get personal after \(totalDays) days of data (\(done) of \(totalDays))."
+    }
 }

@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { NextRequest } from 'next/server';
-import { middleware } from './middleware';
+import { unstable_doesMiddlewareMatch } from 'next/experimental/testing/server';
+import { config, middleware } from './middleware';
 
 /**
  * Proves the WHOOP OAuth-callback and webhook routes are excluded from the
@@ -29,4 +30,10 @@ test('middleware still 401s /api/whoop/status without an Authorization header', 
   const req = new NextRequest('http://local/api/whoop/status');
   const res = await middleware(req);
   assert.equal(res.status, 401);
+});
+
+test('middleware matcher covers /api/* but never the public /privacy page', () => {
+  assert.equal(unstable_doesMiddlewareMatch({ config, url: '/api/whoop/status' }), true);
+  assert.equal(unstable_doesMiddlewareMatch({ config, url: '/privacy' }), false);
+  assert.equal(unstable_doesMiddlewareMatch({ config, url: '/privacy/' }), false);
 });

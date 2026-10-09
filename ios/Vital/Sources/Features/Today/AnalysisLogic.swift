@@ -74,19 +74,34 @@ enum AnalysisLogic {
 
     // MARK: - Pace history strip
 
+    /// 1 = fastest (lowest min/km) among `previous + [current]`; ties share the
+    /// better rank. Same rule as lib/analysisContext.ts `computePaceHistory`.
+    static func paceRank(previous: [Double], current: Double) -> Int {
+        previous.filter { $0 < current }.count + 1
+    }
+
+    /// Horizontal position (0 = left/slowest, 1 = right/fastest) of `pace` on
+    /// the "Compared to your last N runs" strip. Faster (lower min/km) is on
+    /// the right — the SAME direction `paceRank` counts, so rank 1 is always
+    /// the right-most dot. Returns 0.5 when every pace is identical.
+    static func paceStripFraction(pace: Double, minPace: Double, maxPace: Double) -> Double {
+        guard maxPace > minPace else { return 0.5 }
+        return (maxPace - pace) / (maxPace - minPace)
+    }
+
     /// "Compared to your last N runs" caption, from `paceHistory.rank`
     /// (1 = fastest) among `previous.count + 1` total runs (the previous
     /// runs plus this one).
-    static func paceRankPhrase(rank: Int, previousCount: Int) -> String {
+    static func paceRankPhrase(rank: Int, previousCount: Int, noun: String = "run") -> String {
         let total = previousCount + 1
         guard total > 0 else { return "" }
         if rank <= 1 {
-            return "Quickest of your last \(total) runs."
+            return "Quickest of your last \(total) \(noun)s."
         }
         if rank >= total {
-            return "Slowest of your last \(total) runs."
+            return "Slowest of your last \(total) \(noun)s."
         }
-        return "\(ordinal(rank)) fastest of your last \(total) runs."
+        return "\(ordinal(rank)) fastest of your last \(total) \(noun)s."
     }
 
     private static func ordinal(_ n: Int) -> String {
@@ -128,6 +143,26 @@ enum AnalysisLogic {
     /// [0.90, 1.0] — mirrors the effort classification the server already
     /// applied to produce `effort.zone`.
     static let effortZoneBoundaries: [Double] = [0.60, 0.75, 0.90]
+
+    /// Which of the four bands (0 easy ... 3 max) an average-effort fraction
+    /// of the heart-rate range falls in. The effort bar fills ONLY this band
+    /// so an easy run never reads as a hard one.
+    static func effortZoneIndex(avgFraction: Double) -> Int {
+        let clamped = min(max(avgFraction, 0), 1)
+        return effortZoneBoundaries.filter { clamped >= $0 }.count
+    }
+
+    /// Plain-language read of an average effort (fraction of heart-rate
+    /// range), replacing the raw "58% of your heart-rate range".
+    static func effortDescription(avgFraction: Double) -> String {
+        switch min(max(avgFraction, 0), 1) {
+        case ..<0.40: return "Light effort — relaxed, easy to chat."
+        case ..<0.60: return "Mostly easy effort — conversational pace."
+        case ..<0.75: return "Steady effort — comfortably hard, short sentences."
+        case ..<0.90: return "Hard effort — breathing heavy, tough to talk."
+        default: return "Max effort — all out, only sustainable briefly."
+        }
+    }
 
     // MARK: - Recovery readings (HRV / resting HR)
 
@@ -275,6 +310,90 @@ enum AnalysisLogic {
         case "Strength Training": return "STRENGTH"
         default: return type.uppercased()
         }
+    }
+
+    // MARK: - Activity noun
+
+    /// Singular noun for the analysed activity, for copy that must not
+    /// hard-code "run": "run" | "ride" | "walk" | "swim", otherwise the neutral
+    /// "session" (strength, hiking, rowing, an unknown or missing type). Reads
+    /// the app's title-case workout type name (`HealthKitBackfill
+    /// .workoutTypeName`, e.g. "Running", "Cycling").
+    static func activityNoun(type: String?) -> String {
+        let t = (type ?? "").lowercased()
+        if t.contains("run") { return "run" }
+        if t.contains("cycl") { return "ride" }
+        if t.contains("walk") { return "walk" }
+        if t.contains("swim") { return "swim" }
+        return "session"
+    }
+
+    /// "Since your last hard session". Always "session", never the activity
+    /// noun: the server's `daysSinceLastHard` counts the last hard effort of ANY
+    /// type, so a lifter's strength session never says "Since your last hard walk".
+    static func sinceLastHardLabel() -> String {
+        "Since your last hard session"
+    }
+
+    /// "Since your last hard run" / "… hard ride" / "… hard session" — the
+    /// wording for an older server that only sends `daysSinceLastSameType`
+    /// (the gap to the previous workout of the same type).
+    static func sinceLastSameTypeLabel(noun: String) -> String {
+        "Since your last hard \(noun)"
+    }
+
+    /// The "Going in" row: label + day count.
+    struct SinceLastHard: Equatable {
+        let label: String
+        let days: Int
+    }
+
+    /// Prefers the server's `daysSinceLastHard` (last hard session of ANY type,
+    /// "Since your last hard session"); falls back to the older
+    /// `daysSinceLastSameType` with the activity-noun wording ("Since your last
+    /// hard walk") so a server that predates the new field renders as before.
+    /// `nil` when neither is present.
+    static func sinceLastHard(daysSinceLastHard: Int?, daysSinceLastSameType: Int?, noun: String) -> SinceLastHard? {
+        if let days = daysSinceLastHard { return SinceLastHard(label: sinceLastHardLabel(), days: days) }
+        if let days = daysSinceLastSameType { return SinceLastHard(label: sinceLastSameTypeLabel(noun: noun), days: days) }
+        return nil
+    }
+
+    /// "usual resting 64" - the resting-HR end of the effort bar. The number is
+    /// the user's 30-day mean resting HR (what the server supplies), NOT this
+    /// morning's reading (Today's tile may show a different value), so it says
+    /// "usual".
+    static func usualRestingLabel(_ restingHr: Double) -> String {
+        "usual resting \(Int(restingHr.rounded()))"
+    }
+
+    /// Footnote under the "Going in" rows.
+    static func goingInFootnote(noun: String) -> String {
+        "From your data before the \(noun) started."
+    }
+
+    /// Effort-bar legend entry for the recorded max-HR marker.
+    static func maxMarkerLegend(noun: String) -> String {
+        "this \(noun)'s max"
+    }
+
+    /// "Ask coach about this run" / "… this ride".
+    static func askCoachLabel(noun: String) -> String {
+        "Ask coach about this \(noun)"
+    }
+
+    /// "Compared to your last 6 runs" / "… 6 rides".
+    static func paceHistoryTitle(total: Int, noun: String) -> String {
+        "Compared to your last \(total) \(noun)s"
+    }
+
+    /// The basis of the stat chips' deltas ("+1.4 km", "7 s faster"): the
+    /// median of the previous same-type workouts the server compared against
+    /// (`usual.sessions`, lib/analysisContext.ts). `nil` when that count is
+    /// unknown or zero.
+    static func usualBasisCaption(sessions: Int?, noun: String) -> String? {
+        guard let sessions, sessions > 0 else { return nil }
+        return "Changes are vs your usual \u{2014} the median of your last \(sessions) \(noun)\(sessions == 1 ? "" : "s")."
     }
 
     /// "RUN · MON 7:41 AM" (US) / "RUN · LUN 19:41" (a 24-hour locale) —

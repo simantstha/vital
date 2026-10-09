@@ -10,6 +10,10 @@ struct TrendsView: View {
     /// Same idiom, for the header's 7D/30D/90D period switch.
     @State private var periodTapTick = false
     @ObservedObject private var unitPref = UnitPreference.shared
+    /// Goal-progress detail sheet (opened by tapping the card at the top).
+    @State private var showGoalProgressDetail = false
+    @State private var showWeeklyReviewDetail = false
+    @ObservedObject private var weeklyReviewStore = WeeklyReviewStore.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Links each tile's `.matchedTransitionSource` to the destination's
     /// `.navigationTransition(.zoom(...))`. One namespace for the whole grid
@@ -34,6 +38,39 @@ struct TrendsView: View {
                         // nothing while it's showing.
                         if case .learning(let progress) = vm.headlineStatus {
                             learningCard(progress)
+                        }
+
+                        // "Am I on track?" (v5 Wave 2) leads everything —
+                        // above Strength / "What moved". Hidden entirely
+                        // (never zeros) until `/api/goal/progress` loads, and
+                        // whenever that load fails.
+                        if let progress = vm.goalProgress {
+                            GoalProgressCard(
+                                progress: progress,
+                                system: unitPref.current,
+                                onTap: { showGoalProgressDetail = true },
+                                onSetTarget: {
+                                    NotificationCenter.default.post(name: .vitalOpenGoalEditor, object: nil)
+                                }
+                            )
+                            .motionTransition(.fade)
+                        }
+
+                        // Weekly review (v5 Wave 3): reopen the latest review any
+                        // time (the Today card only shows Mon-Wed while unseen).
+                        if let review = weeklyReviewStore.latest {
+                            WeeklyReviewRow(response: review, onTap: { showWeeklyReviewDetail = true })
+                                .motionTransition(.fade)
+                        }
+
+                        // Muscle-goal users: their progress IS the lifts, so
+                        // the Strength card leads the screen. Every other
+                        // goal gets it below the metric sections instead
+                        // (see after `gridBody`). Hidden when there's no
+                        // logged-sets data.
+                        if let card = strengthCard, TrendsGoalOrdering.leadsWithStrength(for: vm.goal) {
+                            TrendsStrengthCard(card: card)
+                                .motionTransition(.fade)
                         }
 
                         // "What moved" (customer-panel finding, Trends
@@ -80,7 +117,7 @@ struct TrendsView: View {
                             // Whole screen failed (gridBody renders EmptyView
                             // below) — center the card(s) instead of pinning
                             // them under the header with a void beneath.
-                            ErrorStateContainer {
+                            ErrorStateContainer(message: errorMessage) {
                                 VStack(spacing: Theme.Spacing.md) {
                                     if let summaryErrorMessage = vm.summaryErrorMessage {
                                         ErrorCard(title: "Couldn't load your summary", message: summaryErrorMessage) {
@@ -101,6 +138,11 @@ struct TrendsView: View {
                         }
 
                         gridBody
+
+                        if let card = strengthCard, !TrendsGoalOrdering.leadsWithStrength(for: vm.goal) {
+                            TrendsStrengthCard(card: card)
+                                .motionTransition(.fade)
+                        }
                     }
                     .padding(.horizontal, Theme.Spacing.xl)
                     .padding(.top, Theme.Spacing.lg)
@@ -111,6 +153,8 @@ struct TrendsView: View {
                     await vm.load()
                     await vm.loadSummary()
                     await vm.loadGoalContext()
+                    await vm.loadStrength()
+                    await vm.loadGoalProgress()
                 }
             }
             .navigationDestination(for: String.self) { metricKey in
@@ -130,6 +174,36 @@ struct TrendsView: View {
             await vm.load()
             await vm.loadSummary()
             await vm.loadGoalContext()
+            await vm.loadStrength()
+            await vm.loadGoalProgress()
+            await weeklyReviewStore.load()
+        }
+        .sheet(isPresented: $showWeeklyReviewDetail) {
+            if let review = weeklyReviewStore.latest {
+                VitalSheet(detents: [.large]) {
+                    WeeklyReviewDetailView(response: review, onGotIt: { weeklyReviewStore.markSeen() })
+                }
+            }
+        }
+        .sheet(isPresented: $showGoalProgressDetail) {
+            if let progress = vm.goalProgress {
+                VitalSheet(detents: [.large]) {
+                    GoalProgressDetailView(progress: progress, system: unitPref.current)
+                }
+            }
+        }
+        // A lift saved from the logger sheet (Today / Logs) — refresh the
+        // Strength card without waiting for pull-to-refresh.
+        .onReceive(NotificationCenter.default.publisher(for: .vitalWorkoutLogged)) { _ in
+            Task {
+                await vm.loadStrength()
+                await vm.loadGoalProgress()
+            }
+        }
+        // Target weight / date edited in Profile -> Goal (declared in
+        // GoalNotifications.swift) — re-measure progress against the new target.
+        .onReceive(NotificationCenter.default.publisher(for: .vitalGoalTargetsChanged)) { _ in
+            Task { await vm.loadGoalProgress() }
         }
         .sensoryFeedback(Theme.Haptics.selection, trigger: tileTapTick)
         .sensoryFeedback(Theme.Haptics.selection, trigger: periodTapTick)
@@ -215,7 +289,7 @@ private extension TrendsView {
             HStack(spacing: Theme.Spacing.md) {
                 learningRing(progress)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Learning your normal")
+                    Text(CalibrationCopy.todayTitle)
                         .font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(Theme.Colors.textPrimary)
                     Text(progress.bodyText)
@@ -327,6 +401,9 @@ private extension TrendsView {
                             Divider().overlay(Theme.Colors.glassBorder)
                         }
                     }
+                    Divider().overlay(Theme.Colors.glassBorder)
+                    WhatMovedExplainer(metricKeys: vm.whatMovedRows.map(\.key))
+                        .padding(.top, Theme.Spacing.sm)
                 }
             }
         }
@@ -343,6 +420,14 @@ private extension TrendsView {
     /// render rather than showing a half-loaded card.
     var showsWeightCard: Bool {
         vm.goal == "weight_loss" && vm.weightLog != nil
+    }
+
+    /// The Strength card for the current unit system — `nil` (section hidden)
+    /// until `/api/workouts/summary` resolves, when it fails, and when the
+    /// summary has no logged sets.
+    var strengthCard: TrendsStrengthLogic.Card? {
+        guard let summary = vm.workoutSummary else { return nil }
+        return TrendsStrengthLogic.card(from: summary, system: unitPref.current, today: Date())
     }
 
     var weightCardView: some View {

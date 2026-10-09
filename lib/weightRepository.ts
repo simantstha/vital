@@ -44,6 +44,7 @@ import { db, schema } from '@/db';
 import { and, eq, gte } from 'drizzle-orm';
 import { readWeightLog } from './weightLog';
 import { localDayKey } from './localDay';
+import { invalidateGoalProgress } from './brain/goalProgressCache';
 import { LB_PER_KG } from './metricFormat';
 import type { WeightReading, WeightSource } from './weightTrend';
 
@@ -102,6 +103,7 @@ export async function logWeightEntry(userId: string, input: LogWeightEntryInput)
     })
     .returning({ id: schema.events.id });
 
+  invalidateGoalProgress(userId);
   return { id: inserted.id, localDay, deduped: false };
 }
 

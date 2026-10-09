@@ -71,7 +71,9 @@ final class FixtureTrendsConsistencyTests: XCTestCase {
 
         // Oldest day (6 days ago): no override yet, essentially the flat
         // baseline (well within noise of it).
-        let restingHRBase = 57.0 // Profile.weightLoss.restingHR
+        // Profile.weightLoss.restingHR (57) is TODAY's reading; the series normal is back-solved so today sits 1.8 sd below it.
+        let restingHRToday = 57.0
+        let restingHRBase = restingHRToday / (1 - 1.8 * 0.06)
         XCTAssertEqual(values[0], restingHRBase, accuracy: restingHRBase * 0.1)
 
         // Monotonically non-increasing toward today (pushed BELOW normal) —
@@ -82,6 +84,7 @@ final class FixtureTrendsConsistencyTests: XCTestCase {
 
         // Today lands at ~1.8 sd below the baseline mean.
         let sd = restingHRBase * 0.06
+        XCTAssertEqual(values.last!, restingHRToday, accuracy: 0.01)
         XCTAssertEqual(values.last!, restingHRBase - 1.8 * sd, accuracy: 0.01)
 
         // The day before today is meaningfully different from 6-days-ago —

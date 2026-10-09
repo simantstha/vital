@@ -45,6 +45,8 @@ import {
 } from './weightSignals';
 import { readCoreProfile } from '../coreProfileStore';
 import { parseProfileDetails } from '../profileDetails';
+import type { GoalProgress } from '../goalProgress';
+import { formatGoalProgressLines } from '../goalPromptText';
 
 /** How many trailing days of weigh-ins assembleContext loads for the smoothed trend (lib/weightTrend.ts). */
 const WEIGHT_TREND_WINDOW_DAYS = 45;
@@ -103,6 +105,7 @@ export interface CoachContext {
   todayIntake?: DailyIntake;        // resolved consumed kcal/macros for `today` — see lib/brain/nutritionIntake.ts
   weightTrend?: WeightTrendResult;  // smoothed EWMA weight trend, last WEIGHT_TREND_WINDOW_DAYS days — see lib/weightTrend.ts
   weightSignals: WeightSignal[];    // plateau/too-fast-loss/under-eating/rate-not-reliable — see lib/brain/weightSignals.ts
+  goalProgress?: GoalProgress;      // deterministic goal verdict (lib/goalProgress.ts) — the same one the Trends/Today goal card shows; absent if the loader failed
   cachedBrief?: CachedBrief;        // today's app-generated insight + meal plan, if warm
   whoopLine?: string;               // compact "WHOOP (today|yesterday): ..." line, if any whoop_* daily_metrics exist
   unitSystem: UnitSystem;           // display-unit preference — render-only, never storage (see lib/units.ts)
@@ -336,6 +339,14 @@ export function buildPromptText(
     lines.push(...formatWeightSignalsSection(ctx.weightTrend, ctx.weightSignals, ctx.unitSystem));
   }
 
+  // ── Goal progress ───────────────────────────────────────────────────────
+  // Same deterministic verdict the app's goal card shows (lib/goalProgress.ts)
+  // — the coach must stay consistent with it (see persona.ts's goalProgressBlock).
+  if (ctx.goalProgress) {
+    lines.push('\n### Goal progress');
+    lines.push(...formatGoalProgressLines(ctx.goalProgress, ctx.unitSystem));
+  }
+
   // ── Schedule (next 48h calendar_blocks, if the user has synced) ────────────
   lines.push('\n### Schedule');
   if (ctx.schedule.length === 0) {
@@ -417,13 +428,18 @@ export function buildPromptText(
   } else {
     lines.push('No hard constraints on file.');
   }
-  if (ctx.softFacts.length > 0) {
+  // The user's goal and targets are canonical on the profile (users.goal +
+  // target columns, rendered above via the diet budget and "Goal progress"). A
+  // legacy free-text Goal fact ("Lose 5 kg by December") can disagree with
+  // that, so the user's own Goal facts are never injected - the profile wins.
+  const promptSoftFacts = ctx.softFacts.filter(n => !(n.type === 'Goal' && n.subject_node_id == null));
+  if (promptSoftFacts.length > 0) {
     lines.push('GOALS & PREFERENCES:');
     // hardConstraints ∪ softFacts is exactly the user's active node set, so
     // this map resolves every subject entity referenced below without an
     // extra query — see lib/brain/factSubject.ts.
     const subjectLabels = buildSubjectLabelMap([...ctx.hardConstraints, ...ctx.softFacts]);
-    for (const n of ctx.softFacts.slice(0, 20)) {
+    for (const n of promptSoftFacts.slice(0, 20)) {
       const subject = resolveSubjectLabel(n.subject_node_id, subjectLabels);
       lines.push(withSubjectSuffix(`- ${n.type}: ${n.label} (weight ${n.weight.toFixed(2)})`, subject));
     }
@@ -685,7 +701,7 @@ export async function assembleContext(userId: string, findingId?: string): Promi
   // no weight signals except under_eating, which doesn't need the trend;
   // no profile -> the lower/safer low-energy floor), logged the same way
   // lib/brain/healthConstraints.ts logs a non-fatal failure.
-  const [dietBudget, cachedBriefRow, intakeByDay, weightReadings, coreProfileMd] = await Promise.all([
+  const [dietBudget, cachedBriefRow, intakeByDay, weightReadings, coreProfileMd, goalProgress] = await Promise.all([
     usersRow ? resolveDietBudget(usersRow, userId) : Promise.resolve(undefined),
     getDailyBrief(userId, localToday, unitSystem),
     resolveDailyIntake(userId, intakeWindowDayKeys, tz),
@@ -697,6 +713,18 @@ export async function assembleContext(userId: string, findingId?: string): Promi
       console.error(`[context] core profile load failed for user ${userId}:`, err);
       return null;
     }),
+    // Goal-progress verdict — non-fatal like the two loads above. Loaded via
+    // dynamic import: the loader pulls in the workout/metric repositories,
+    // and a static import would put them on every coach-context import path.
+    import('./goalProgressCache')
+      .then(c => c.getCachedGoalProgress(userId, tz, localToday, async () => {
+        const m = await import('../goalProgressLoader');
+        return m.loadGoalProgress(userId, { tz });
+      }))
+      .catch((err) => {
+        console.error(`[context] goal progress load failed for user ${userId}:`, err);
+        return null;
+      }),
   ]);
   const cachedBrief = cachedBriefRow ?? undefined;
 
@@ -760,6 +788,7 @@ export async function assembleContext(userId: string, findingId?: string): Promi
     todayIntake,
     weightTrend,
     weightSignals,
+    goalProgress: goalProgress ?? undefined,
     cachedBrief,
     whoopLine,
     unitSystem,

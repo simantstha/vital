@@ -18,6 +18,12 @@ struct WeightHeroView: View {
     /// `WeightHeroLogic`'s >= 7-day span gate on the weekly-rate line.
     let entries: [WeightLogEntryDTO]
     let system: UnitSystem
+    /// Goal target weight (kg) from goal progress, or `nil` — draws a dashed
+    /// target line and a "Target" caption under the sparkline.
+    var targetKg: Double? = nil
+    /// Goal-progress 4-week rate (kg/wk, signed). When present the hero shows it
+    /// ("over 4 weeks") so it agrees with the goal card below.
+    var goalRateKgPerWeek: Double? = nil
     let chip: WeightHeroLogic.WeighInChip
 
     /// One-tap confirm (HealthKit reading present) or opens the manual sheet.
@@ -30,9 +36,11 @@ struct WeightHeroView: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private var trendHeadline: String { WeightHeroLogic.trendHeadline(trend: trend, system: system) }
+    private var trendHeadline: String? { WeightHeroLogic.heroHeaderTrendText(trend: trend, system: system) }
     private var weeklyChange: String? {
-        WeightHeroLogic.weeklyChangeText(trend: trend, entries: entries, system: system)
+        WeightHeroLogic.weeklyChangeText(
+            trend: trend, entries: entries, system: system, goalRateKgPerWeek: goalRateKgPerWeek
+        )
     }
 
     /// Last ~30 days of smoothed trend points, converted to the user's unit.
@@ -53,8 +61,36 @@ struct WeightHeroView: View {
     /// review fix, 2026-09-23: Swift Charts includes 0 in a numeric y-domain
     /// by default, which pins an ~82 kg trend to the very top of the frame
     /// and reads as a flat divider line rather than a chart.
-    private var sparklineDomain: ClosedRange<Double>? {
-        WeightHeroLogic.sparklineDomain(values: sparklinePoints.map(\.value), minSpan: sparklineMinSpan)
+    private var sparklineLayout: WeightHeroLogic.SparklineLayout? {
+        WeightHeroLogic.sparklineLayout(values: sparklinePoints.map(\.value), minSpan: sparklineMinSpan, target: targetDisplayValue)
+    }
+
+    /// Target weight in the user's unit, matching `sparklinePoints`.
+    private var targetDisplayValue: Double? {
+        guard let targetKg else { return nil }
+        return system == .metric ? targetKg : UnitConvert.kgToLb(targetKg)
+    }
+
+    /// Dashed target line's y position — true value when near the trend,
+    /// otherwise a compressed marker near the chart's edge (see
+    /// `WeightHeroLogic.sparklineLayout`).
+    private var drawnTargetValue: Double? { sparklineLayout?.targetLine }
+
+    /// "→" (to scale), "↓"/"↑" (compressed: the goal is far beyond the chart).
+    private var targetArrow: String {
+        WeightHeroLogic.sparklineTargetArrow(
+            layout: sparklineLayout, targetKg: targetKg, lastKg: trend?.days.last?.trendKg
+        )
+    }
+
+    /// "Start 83.7 kg … Now 82 kg → Goal 76 kg" captions (kg-based inputs,
+    /// formatted in the user's unit).
+    private var sparklineCaptions: (start: String, now: String, target: String?)? {
+        guard let trend, trend.established else { return nil }
+        let days = trend.days.suffix(30)
+        return WeightHeroLogic.sparklineCaptions(
+            firstKg: days.first?.trendKg, lastKg: days.last?.trendKg, targetKg: targetKg, system: system
+        )
     }
 
     var body: some View {
@@ -89,16 +125,20 @@ struct WeightHeroView: View {
                             Spacer(minLength: Theme.Spacing.sm)
 
                             VStack(alignment: .trailing, spacing: 2) {
-                                Text(trendHeadline)
-                                    .font(.system(size: 13, weight: .semibold))
-                                    .foregroundStyle(Theme.Colors.textPrimary)
-                                    .multilineTextAlignment(.trailing)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                    .contentTransition(.numericText())
+                                if let trendHeadline {
+                                    Text(trendHeadline)
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .foregroundStyle(Theme.Colors.textPrimary)
+                                        .multilineTextAlignment(.trailing)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                        .contentTransition(.numericText())
+                                }
                                 if let weeklyChange {
                                     Text(weeklyChange)
                                         .font(.system(size: 12))
                                         .foregroundStyle(Theme.Colors.textSecondary)
+                                        .multilineTextAlignment(.trailing)
+                                        .fixedSize(horizontal: false, vertical: true)
                                 }
                             }
                         }
@@ -114,9 +154,27 @@ struct WeightHeroView: View {
                             .monospacedDigit()
                             .contentTransition(.numericText())
 
-                        if let sparklineDomain {
-                            sparkline(domain: sparklineDomain)
+                        if let layout = sparklineLayout {
+                            sparkline(domain: layout.domain)
                                 .frame(height: 36)
+                            if let captions = sparklineCaptions {
+                                HStack(spacing: Theme.Spacing.xs) {
+                                    Text(captions.start)
+                                    Spacer(minLength: 0)
+                                    Text(captions.now)
+                                    // Goal sits at the trailing edge, after "Now", so it
+                                    // reads as where the trend is heading — not a centred
+                                    // orphan under a line with no target marker.
+                                    if let target = captions.target {
+                                        Text("\(targetArrow) \(target)")
+                                            .padding(.leading, Theme.Spacing.md)
+                                    }
+                                }
+                                .font(.system(size: 11))
+                                .foregroundStyle(Theme.Colors.textTertiary)
+                                .monospacedDigit()
+                                .accessibilityIdentifier("today.weightHero.sparklineCaptions")
+                            }
                         }
                     }
                 }
@@ -146,6 +204,11 @@ struct WeightHeroView: View {
                     .foregroundStyle(Theme.Colors.accentContent)
                     .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
                     .interpolationMethod(.catmullRom)
+            }
+            if let target = drawnTargetValue {
+                RuleMark(y: .value("Target", target))
+                    .foregroundStyle(Theme.Colors.textTertiary)
+                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
             }
             if let last = sparklinePoints.last {
                 PointMark(x: .value("Day", last.day), y: .value("Trend", last.value))
@@ -206,8 +269,11 @@ struct WeightHeroView: View {
     private var accessibilityLabel: String {
         var parts = ["\(max(0, kcalRemaining)) kilocalories left of \(kcalTarget)"]
         parts.append("Protein \(proteinHave) of \(proteinGoal) grams")
-        parts.append(trendHeadline)
+        if let trendHeadline { parts.append(trendHeadline) }
         if let weeklyChange { parts.append(weeklyChange) }
+        if let captions = sparklineCaptions {
+            parts.append([captions.start, captions.now, captions.target].compactMap { $0 }.joined(separator: ", "))
+        }
         return parts.joined(separator: ". ")
     }
 }

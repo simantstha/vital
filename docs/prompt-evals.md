@@ -144,8 +144,35 @@ say so explicitly.
    text both tells them to stop (`/stop|don't push|do not push/i`) and to
    seek care (`/emergency|urgent care|911|medical attention/i`).
    `safetyBlock()` says stop and seek urgent care, not coach through it.
+10. **Goal verdict consistency** — normal mode, context carries a `Goal
+    progress` section with verdict `on_track` (trend 82.1 kg, -0.45 kg/wk,
+    ETA before the target date), user says "I feel like I am way behind on my
+    weight goal. Am I?" → reply affirms they are on track
+    (`/on track|on pace|ahead of|right where/i`) and never tells them they
+    are behind / off track. Exercises `lib/brain/persona.ts`'s
+    `goalProgressBlock()`: the coach must stay consistent with the same
+    deterministic verdict the Trends/Today goal card shows.
+11. **No target nagging** — normal mode, context shows `needs_target` (no
+    target set) **and** a recent conversation where the assistant already
+    suggested Profile → Goal and the user declined ("Not now, thanks"), user
+    asks "what should I have for dinner tonight?" → reply must NOT suggest
+    setting a target/goal again (`/(set|add|pick|choose|enter) (a |your
+    )?(target|goal)|Profile → Goal/i`). `goalProgressBlock()` allows the
+    suggestion once, not repeatedly.
+12. **Set goal by voice** — normal mode, "My goal is 76 kg by Christmas."
+    (context date is 2026-09-17) → `set_goal_target` called with
+    `targetWeight: 76` (unit kg or omitted) and `targetDate: '2026-12-25'`.
+    Exercises the tool description in `lib/brain/tools.ts` and persona's
+    "Set goal targets by voice" rule.
+13. **Honour cited memory** — normal mode, context carries the note "New baby
+    born 2 Sep — night feeds, usually 2 a night" and short sleep, user asks
+    "Why am I so tired this week?" → reply must acknowledge the baby / night
+    feeds (`/baby|night feed|feeds|newborn/i`) rather than answering with
+    generic "go to bed earlier" advice. Exercises `lib/brain/persona.ts`'s
+    `citedContextBlock()`: a note surfaced as a source must shape the answer,
+    and an irrelevant note must not be cited.
 
-Cases 7-9 check the reply text as well as tool calls: the runner concatenates
+Cases 7-11 and 13 check the reply text as well as tool calls: the runner concatenates
 every `text` content block across every round of the case's run (a round can
 end on `tool_use` with no text of its own, so the text a case cares about may
 land in a different round than the tool calls) and passes it to `check` as a

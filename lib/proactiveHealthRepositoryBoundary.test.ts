@@ -85,7 +85,7 @@ test('stateful boundary upserts preferences independently per authenticated user
   const preferences = {
     morningBriefEnabled: false, morningBriefTimeMinutes: 510,
     workoutNotificationsEnabled: true, sleepNotificationsEnabled: false,
-    mealsEnabled: true, mealBreakfastTimeMinutes: 480,
+    mealsEnabled: true, coachNudgesEnabled: true, weeklyReviewEnabled: true, mealBreakfastTimeMinutes: 480,
     mealLunchTimeMinutes: 765, mealSnackTimeMinutes: 960, mealDinnerTimeMinutes: 1170,
     timezone: 'America/Chicago',
   };

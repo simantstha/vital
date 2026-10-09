@@ -91,8 +91,24 @@ final class ProactiveNotificationsTests: XCTestCase {
         XCTAssertEqual(context.goingIn?.sleepMinutes, 412)
         XCTAssertEqual(context.goingIn?.hrv?.vsNormal, "normal")
         XCTAssertEqual(context.goingIn?.daysSinceLastSameType, 2)
+        XCTAssertNil(context.goingIn?.daysSinceLastHard, "an older server omits the any-type count")
         XCTAssertEqual(context.nextMorning?.hrv?.vsNormal, "below")
         XCTAssertEqual(context.nextMorning?.restingHr?.value, 54)
+    }
+
+    /// `goingIn.daysSinceLastHard` (last hard session of ANY type) is additive
+    /// next to the older same-type count: both decode, and either may be absent.
+    func testGoingInDecodesTheAnyTypeLastHardCountNextToTheSameTypeOne() throws {
+        func goingIn(_ body: String) throws -> AnalysisContext.GoingIn? {
+            let json = #"{"id":"a","date":"2026-07-12","result":{"headline":"h","shortInsight":"s","narrative":"n","observations":[],"nextSteps":[]},"createdAt":"2026-07-12T15:00:00.000Z","context":{"goingIn":{\#(body)}}}"#
+            return try JSONDecoder.vital.decode(AnalysisResponse.self, from: Data(json.utf8)).context?.goingIn
+        }
+        let both = try XCTUnwrap(goingIn(#""daysSinceLastSameType":2,"daysSinceLastHard":4"#))
+        XCTAssertEqual(both.daysSinceLastSameType, 2)
+        XCTAssertEqual(both.daysSinceLastHard, 4)
+        let newOnly = try XCTUnwrap(goingIn(#""daysSinceLastHard":0"#))
+        XCTAssertNil(newOnly.daysSinceLastSameType)
+        XCTAssertEqual(newOnly.daysSinceLastHard, 0)
     }
 
     /// Same shared-key ambiguity, sleep side — `usual` here is
@@ -301,6 +317,27 @@ final class ProactiveNotificationsTests: XCTestCase {
         XCTAssertEqual(mapped.mealLunchTimeMinutes, 780)
         XCTAssertEqual(mapped.mealSnackTimeMinutes, 950)
         XCTAssertEqual(mapped.mealDinnerTimeMinutes, 1140)
+    }
+
+    func testPreferencesDecodeDefaultsCoachAndWeeklyReviewToTrueWhenMissing() throws {
+        let legacy = """
+        {"morningBriefEnabled":true,"morningBriefTimeMinutes":450,"workoutNotificationsEnabled":true,
+         "sleepNotificationsEnabled":true,"mealsEnabled":true,"mealBreakfastTimeMinutes":480,
+         "mealLunchTimeMinutes":765,"mealSnackTimeMinutes":960,"mealDinnerTimeMinutes":1170,"timezone":"UTC"}
+        """
+        let decoded = try JSONDecoder().decode(NotificationPreferences.self, from: Data(legacy.utf8))
+        XCTAssertTrue(decoded.coachNudgesEnabled)
+        XCTAssertTrue(decoded.weeklyReviewEnabled)
+
+        let off = NotificationPreferences.fromLocal(
+            morningEnabled: true, morningMinutes: 450, workoutEnabled: true, sleepEnabled: true,
+            mealsEnabled: true, breakfastMinutes: 480, lunchMinutes: 765, snackMinutes: 960, dinnerMinutes: 1170,
+            timezone: "UTC", coachNudgesEnabled: false, weeklyReviewEnabled: false
+        )
+        let roundTripped = try JSONDecoder().decode(NotificationPreferences.self, from: JSONEncoder().encode(off))
+        XCTAssertFalse(roundTripped.coachNudgesEnabled)
+        XCTAssertFalse(roundTripped.weeklyReviewEnabled)
+        XCTAssertEqual(roundTripped, off)
     }
 
     func testLocalScheduleContainsNoMorningBrief() {

@@ -10,6 +10,7 @@ import { localDayKey } from '@/lib/localDay';
 import type { WeightTrendResult } from '@/lib/weightTrend';
 import { formatWeightSignalsSection, type WeightSignal } from '@/lib/brain/weightSignals';
 import { CLAUDE_SONNET_MODEL } from '@/lib/aiModels';
+import { buildBriefGoalSection, type BriefGoalFocus } from '@/lib/goalPromptText';
 
 // ── Inline types (formerly imported from lib/whoop + lib/strava) ──────────────
 
@@ -132,6 +133,12 @@ interface BriefContext {
   foodProfile?: { restrictions: Array<{ type: string; label: string }>; preferences: Array<{ type: string; label: string }> };
   /** True while baselines are still calibrating (< 14 days of history) — recovery score is provisional. */
   calibrating?: boolean;
+  /**
+   * Goal-keyed inputs (lib/goalPromptText.ts) — which block the prompt builds
+   * (fat loss / muscle / endurance / general). Omitted by legacy callers, which
+   * keep the old runner-centric lines.
+   */
+  goalFocus?: BriefGoalFocus;
   /** IANA tz for the date label and the returned day key; undefined → UTC. */
   timeZone?: string;
 }
@@ -237,6 +244,21 @@ export async function generateDailyBrief(userId: string, ctx: BriefContext): Pro
         : '')
     : '';
 
+  // Goal-keyed block + the running lines, which only endurance users who
+  // actually run get (everyone else's brief used to open with "Weekly
+  // Distance: 0.0 km / No recent runs logged" — noise for a lifter or a
+  // fat-loss user). With no goalFocus (legacy callers) the old lines stay.
+  const goalSection = ctx.goalFocus ? buildBriefGoalSection(ctx.goalFocus, ctx.unitSystem ?? 'metric') : '';
+  const showRunning = ctx.goalFocus
+    ? ctx.goalFocus.goal === 'endurance' && (ctx.lastRun != null || ctx.weeklyDistance > 0)
+    : true;
+  const runningSection = showRunning
+    ? `\n- Weekly Distance: ${ctx.weeklyDistance.toFixed(1)}${distanceUnit} this week\n` +
+      (ctx.lastRun
+        ? `- Last Run: ${ctx.lastRun.distance}${distanceUnit} at ${ctx.lastRun.pace}/${distanceUnit} (${ctx.lastRun.dayTime}) — "${ctx.lastRun.name}"`
+        : '- No recent runs logged')
+    : '';
+
   const foodSection = ctx.foodProfile && (ctx.foodProfile.restrictions.length || ctx.foodProfile.preferences.length)
     ? `\n## Food Preferences & Restrictions\n` +
       (ctx.foodProfile.restrictions.length
@@ -302,6 +324,7 @@ export async function generateDailyBrief(userId: string, ctx: BriefContext): Pro
 5. Meals MUST NOT contain any food listed under RESTRICTIONS (allergies/intolerances/conditions) — this is a hard rule. Favor PREFERENCES: liked foods and cuisines in, disliked foods out.
 6. If Weight Trend & Energy Signals below shows too_fast_loss, never praise the pace of loss — see the IMPORTANT note in that section for what to say instead. If it shows plateau, don't frame it as a failure. If it shows under_eating, raise it gently, never with judgement. If it shows rate_not_yet_reliable, don't quote a weekly rate.
 7. If you state a weekly weight-change number anywhere in the body text, it MUST be quoted exactly from the "Trend weight" line in the Weight Trend & Energy Signals section below — never compute, estimate, or state a different weekly-change number from any other data (e.g. two raw weigh-ins).
+8. If a Goal Progress section is present, the body text and chips MUST agree with its verdict and numbers (the app's goal card shows the same verdict) — never say they are behind when it says on_track, or vice versa. Weave the goal into today's plan; do not restate the whole card.
 
 ## Long-term User Profile
 ${userProfile}
@@ -314,10 +337,8 @@ ${recoveryLine}${whoopRecoveryLine}
 ${hrvLine}
 ${rhrLine}
 ${sleepLine}
-- Today's Strain so far: ${ctx.strain}
-- Weekly Distance: ${ctx.weeklyDistance.toFixed(1)}${distanceUnit} this week
-${ctx.lastRun ? `- Last Run: ${ctx.lastRun.distance}${distanceUnit} at ${ctx.lastRun.pace}/${distanceUnit} (${ctx.lastRun.dayTime}) — "${ctx.lastRun.name}"` : '- No recent runs logged'}
-${historySection}${activitiesSection}${weeklyLoadSection}${nutritionSection}${weightSignalsSection}${foodSection}
+- Today's Strain so far: ${ctx.strain}${runningSection}
+${goalSection}${historySection}${activitiesSection}${weeklyLoadSection}${nutritionSection}${weightSignalsSection}${foodSection}
 
 Respond ONLY with valid JSON, no markdown, no explanation:
 

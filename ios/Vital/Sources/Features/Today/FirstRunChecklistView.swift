@@ -12,9 +12,12 @@ struct FirstRunChecklistView: View {
     let mealLogged: Bool
     let secondItemLogged: Bool
     let healthConnected: Bool
+    /// True once the profile has a target (weight / weekly sessions).
+    let goalTargetSet: Bool
     var onLogMeal: () -> Void
     var onLogSecondItem: () -> Void
     var onConnectHealth: () -> Void
+    var onSetGoalTarget: () -> Void
 
     private var wantsWorkout: Bool { goal == "muscle" || goal == "endurance" }
     private var secondItemLabel: String { wantsWorkout ? "Log your first workout" : "Add today's weight" }
@@ -47,6 +50,13 @@ struct FirstRunChecklistView: View {
                         done: secondItemLogged,
                         actionTitle: secondItemActionTitle,
                         action: onLogSecondItem,
+                        showsDivider: true
+                    )
+                    row(
+                        title: "Set your goal target",
+                        done: goalTargetSet,
+                        actionTitle: "Set",
+                        action: onSetGoalTarget,
                         showsDivider: true
                     )
                 }

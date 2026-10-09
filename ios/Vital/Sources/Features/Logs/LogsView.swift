@@ -16,6 +16,9 @@ struct LogsView: View {
     @StateObject private var vm = LogsViewModel()
     @ObservedObject private var unitPref = UnitPreference.shared
     @State private var showDietSheet = false
+    /// "Log lift" sheet (`LiftLoggerView`) — opened from the day card's
+    /// "Log a lift" button.
+    @State private var showLiftLogger = false
     @State private var analysisTarget: AnalysisSheetTarget?
     /// A row tapped while the *previous* analysis sheet is still animating
     /// out. `.sheet(item:)` silently drops a presentation requested during
@@ -61,7 +64,7 @@ struct LogsView: View {
                         // Whole tab failed — no day/pager data to fall back
                         // to, so this replaces the screen instead of sitting
                         // pinned above an empty pager.
-                        ErrorStateContainer {
+                        ErrorStateContainer(message: errorMessage) {
                             ErrorCard(title: "Couldn't load your logs", message: errorMessage) {
                                 Task {
                                     vm.errorMessage = nil
@@ -114,6 +117,11 @@ struct LogsView: View {
                     initialTarget: vm.todayTargetKcal,
                     onRefreshToday: { Task { await vm.invalidateTodayMealCache() } }
                 )
+            }
+        }
+        .sheet(isPresented: $showLiftLogger) {
+            VitalSheet(detents: [.large]) {
+                LiftLoggerView(onSaved: { Task { await vm.load() } })
             }
         }
         .sheet(item: $analysisTarget, onDismiss: {
@@ -175,6 +183,8 @@ private extension LogsView {
             pagerButton(systemName: "chevron.left", enabled: vm.selectedIndex < vm.days.count - 1) {
                 vm.selectDay(vm.selectedIndex + 1)
             }
+            .accessibilityLabel("Previous day")
+            .accessibilityIdentifier("logs.pager.previous")
 
             Spacer()
 
@@ -193,6 +203,8 @@ private extension LogsView {
             pagerButton(systemName: "chevron.right", enabled: vm.selectedIndex > 0) {
                 vm.selectDay(vm.selectedIndex - 1)
             }
+            .accessibilityLabel("Next day")
+            .accessibilityIdentifier("logs.pager.next")
         }
         .padding(.horizontal, Theme.Spacing.xl)
         .padding(.bottom, Theme.Spacing.lg)
@@ -259,6 +271,17 @@ private extension LogsView {
                                 // taps these rather than matching on row text,
                                 // which varies per fixture scenario.
                                 .accessibilityIdentifier(item.type == "workout_completed" ? "logs.workoutRow" : "logs.sleepRow")
+                            } else if LogRowFormat.opensDietSheet(type: item.type, isToday: vm.selectedIndex == 0) {
+                                // Logged meals open the diet sheet (where meals are
+                                // viewed/edited). Today only: the sheet is a
+                                // today-scoped surface, so past days stay read-only.
+                                Button {
+                                    showDietSheet = true
+                                } label: {
+                                    LogEntryRow(item: item, isFirst: index == 0, showsChevron: true)
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityIdentifier("logs.mealRow")
                             } else {
                                 LogEntryRow(item: item, isFirst: index == 0)
                             }
@@ -290,6 +313,32 @@ private extension LogsView {
                 }
                 .buttonStyle(.plain)
                 .padding(.top, Theme.Spacing.md)
+
+                // Strength logging entry point (roadmap v5 item B) — the
+                // same "Log lift" sheet Today's muscle hero opens.
+                Button {
+                    showLiftLogger = true
+                } label: {
+                    HStack(spacing: Theme.Spacing.xs) {
+                        Image(systemName: "dumbbell")
+                            .font(.system(size: 13, weight: .semibold))
+                        Text("Log a lift")
+                            .font(.system(size: 14, weight: .semibold))
+                    }
+                    .foregroundStyle(Theme.Colors.textSecondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, Theme.Spacing.md + 2)
+                    .background(
+                        RoundedRectangle(cornerRadius: Theme.Radius.xl, style: .continuous)
+                            .strokeBorder(
+                                Theme.Colors.textTertiary.opacity(0.3),
+                                style: StrokeStyle(lineWidth: 1, dash: [5])
+                            )
+                    )
+                }
+                .buttonStyle(.plain)
+                .padding(.top, Theme.Spacing.sm)
+                .accessibilityIdentifier("logs.logLift")
             }
         }
         .padding(.horizontal, Theme.Spacing.xl)
@@ -299,9 +348,29 @@ private extension LogsView {
 
 // MARK: - Log entry row
 
+/// Pure row-formatting/navigation rules for the Logs feed.
+enum LogRowFormat {
+    /// "Logged · Snacks" + 220 kcal -> "220 kcal · Snacks". Only meal rows
+    /// with a positive kcal are rewritten; a subtitle that already mentions
+    /// kcal is left alone.
+    static func subtitle(type: String, subtitle: String, kcal: Double?) -> String {
+        guard type == "meal_logged", let kcal, kcal > 0, !subtitle.lowercased().contains("kcal") else { return subtitle }
+        let prefix = "Logged · "
+        let slot = subtitle.hasPrefix(prefix) ? String(subtitle.dropFirst(prefix.count)) : subtitle
+        let kcalText = "\(Int(kcal.rounded())) kcal"
+        return slot.isEmpty || slot == "Logged" ? kcalText : "\(kcalText) · \(slot)"
+    }
+
+    /// Tapping a logged-meal row opens the diet sheet, today only.
+    static func opensDietSheet(type: String, isToday: Bool) -> Bool {
+        isToday && type == "meal_logged"
+    }
+}
+
 private struct LogEntryRow: View {
     let item: LogDisplayItem
     let isFirst: Bool
+    var showsChevron: Bool = false
 
     var body: some View {
         HStack(spacing: Theme.Spacing.md) {
@@ -319,8 +388,9 @@ private struct LogEntryRow: View {
                 Text(item.title)
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(Theme.Colors.textPrimary)
-                    .lineLimit(1)
-                Text(item.subtitle)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(LogRowFormat.subtitle(type: item.type, subtitle: item.subtitle, kcal: item.kcal))
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.Colors.textSecondary)
                     .lineLimit(1)
@@ -332,7 +402,7 @@ private struct LogEntryRow: View {
                 .font(.system(size: 12))
                 .foregroundStyle(Theme.Colors.textTertiary)
 
-            if item.analysisId != nil {
+            if item.analysisId != nil || showsChevron {
                 Image(systemName: "chevron.right")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(Theme.Colors.textTertiary)

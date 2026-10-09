@@ -44,6 +44,37 @@ final class ScreenshotTests: XCTestCase {
         // FixtureURLProtocol once did) fails the test instead of quietly
         // producing a wrong-looking screenshot.
         continueAfterFailure = true
+
+        // System alerts (permission prompts, Apple Intelligence sheets, ...)
+        // that appear over the app. Prefer dismiss-style buttons: the harness
+        // never wants to grant or follow anything.
+        addUIInterruptionMonitor(withDescription: "System alert") { alert in
+            for label in ["Not Now", "Don't Allow", "Later", "Close", "Dismiss", "Cancel", "OK"] {
+                let button = alert.buttons[label]
+                if button.exists {
+                    button.tap()
+                    return true
+                }
+            }
+            return false
+        }
+    }
+
+    /// Simulator notification banners (e.g. "Apple Intelligence") draw over
+    /// the app in screenshots and are not UI interruptions XCTest reports.
+    /// Swipe any visible banner up and wait (at most `timeout`) for it to go
+    /// away. Best-effort: never fails the test, no-op without a banner.
+    private func dismissSystemBanners(timeout: TimeInterval = 3) {
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let banner = springboard.otherElements["NotificationShortLookView"].firstMatch
+        let deadline = Date().addingTimeInterval(timeout)
+        while banner.exists && Date() < deadline {
+            // Dragging the banner up off the top edge dismisses it.
+            let start = banner.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            let end = banner.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: -1.5))
+            start.press(forDuration: 0.05, thenDragTo: end)
+            Thread.sleep(forTimeInterval: 0.4)
+        }
     }
 
     // MARK: - One XCTest method per scenario (both appearances)
@@ -66,8 +97,11 @@ final class ScreenshotTests: XCTestCase {
             } else {
                 captureToday(app, scenario: scenario, appearance: appearance)
                 captureDietSheet(app, scenario: scenario, appearance: appearance)
+                captureLiftLogger(app, scenario: scenario, appearance: appearance)
                 captureCoach(app, scenario: scenario, appearance: appearance)
                 captureTrends(app, scenario: scenario, appearance: appearance)
+                captureGoalProgress(app, scenario: scenario, appearance: appearance)
+                captureWeeklyReview(app, scenario: scenario, appearance: appearance)
                 captureLogs(app, scenario: scenario, appearance: appearance)
                 captureProfile(app, scenario: scenario, appearance: appearance)
                 captureMemory(app, scenario: scenario, appearance: appearance)
@@ -99,6 +133,7 @@ final class ScreenshotTests: XCTestCase {
     }
 
     private func capture(_ app: XCUIApplication, name: String) {
+        dismissSystemBanners()
         let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         attachment.name = name
         attachment.lifetime = .keepAlways
@@ -114,23 +149,97 @@ final class ScreenshotTests: XCTestCase {
         return app.staticTexts.matching(predicate).firstMatch.waitForExistence(timeout: timeout)
     }
 
-    /// Waits for `element` to exist, then taps it once it's both
-    /// `isHittable` AND clear of the bottom chrome — never a bare `.tap()`
-    /// on a coordinate that might be off-screen or obscured. `isHittable`
-    /// only means the element's centre point is on screen; on iOS 26 the
-    /// floating Liquid Glass tab bar (and Today's mic FAB) overlay the
-    /// scroll content, so an element sitting just above/under that chrome
-    /// can report `isHittable` while its tap is still absorbed by whatever
-    /// is layered on top. "Clear" means the element's frame sits above the
-    /// tab bar (with an 8pt margin) when one exists, or above 80% of the
-    /// screen height otherwise.
+    /// Top clearance used only for elements inside scrolled main content
+    /// (roughly the status bar height). Sheet / nav-bar buttons never go
+    /// through this check — see `tapWhenHittable`'s direct-tap path.
+    private static let topChromeMargin: CGFloat = 54
+
+    /// Bottom limit for content: just above the tab bar (8pt margin) when one
+    /// exists, else 80% of the screen height.
+    private func bottomChromeLimit(app: XCUIApplication) -> CGFloat {
+        let tabBar = app.tabBars.firstMatch
+        return tabBar.exists ? tabBar.frame.minY - 8 : app.frame.maxY * 0.8
+    }
+
+    /// True when `element`'s frame sits fully between the top margin (status
+    /// bar, 54pt) and the bottom chrome (see `bottomChromeLimit`).
+    private func isClearOfChrome(_ element: XCUIElement, app: XCUIApplication) -> Bool {
+        let frame = element.frame
+        return frame.minY >= app.frame.minY + Self.topChromeMargin
+            && frame.maxY <= bottomChromeLimit(app: app)
+    }
+
+    /// Find-by-scrolling: if `element` is not in the accessibility hierarchy
+    /// (lazy containers don't build rows until they're near the viewport),
+    /// drag the content up in small steps, checking existence after each,
+    /// up to `maxSwipes`. Returns whether the element exists.
+    @discardableResult
+    private func scrollUntilExists(_ element: XCUIElement, app: XCUIApplication, maxSwipes: Int = 6) -> Bool {
+        if element.exists || element.waitForExistence(timeout: 2) { return true }
+        var swipes = 0
+        while swipes < maxSwipes {
+            let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7))
+            let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            start.press(forDuration: 0.05, thenDragTo: end)
+            swipes += 1
+            if element.waitForExistence(timeout: 1) { return true }
+        }
+        return element.exists
+    }
+
+    /// Scrolls just far enough to put `element` mid-screen, correcting in
+    /// either direction (so it never overshoots off the top and stays there),
+    /// until it is hittable and clear of both the top and bottom chrome.
+    /// If the element isn't in the hierarchy yet it is first found by
+    /// scrolling (`scrollUntilExists`). Returns whether it got there within
+    /// `maxSwipes` drags.
+    @discardableResult
+    private func scrollIntoComfortableView(_ element: XCUIElement, app: XCUIApplication, maxSwipes: Int = 5) -> Bool {
+        guard scrollUntilExists(element, app: app) else { return false }
+        var swipes = 0
+        while !(element.isHittable && isClearOfChrome(element, app: app)) && swipes < maxSwipes {
+            let screenHeight = max(app.frame.height, 1)
+            // Move the element's centre toward 45% of the screen height; the
+            // drag distance is capped so a single nudge can't fling it past.
+            let delta = (screenHeight * 0.45 - element.frame.midY) / screenHeight
+            let clamped = min(max(delta, -0.3), 0.3)
+            let sign: CGFloat = clamped < 0 ? -1 : 1
+            // Always drag by at least 0.1 so a near-miss still moves.
+            let move = sign * max(abs(clamped), 0.1)
+            let startY: CGFloat = 0.55
+            let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: startY))
+            let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: startY + move))
+            start.press(forDuration: 0.05, thenDragTo: end)
+            swipes += 1
+        }
+        return element.isHittable && isClearOfChrome(element, app: app)
+    }
+
+    /// True when `element` is hittable, fully inside the app window, and
+    /// clear of the bottom chrome. No extra top margin, so sheet / nav-bar
+    /// buttons (Done / Close, y of roughly 60-110) qualify.
+    private func isDirectlyTappable(_ element: XCUIElement, app: XCUIApplication) -> Bool {
+        guard element.exists, element.isHittable else { return false }
+        let frame = element.frame
+        return app.frame.contains(frame) && frame.maxY <= bottomChromeLimit(app: app)
+    }
+
+    /// Taps `element` once it is safely tappable — never a bare `.tap()` on a
+    /// coordinate that might be off-screen or obscured. `isHittable` only
+    /// means the centre point is on screen; on iOS 26 the floating Liquid
+    /// Glass tab bar (and Today's mic FAB) overlay the scroll content, so an
+    /// element just above/under that chrome can report `isHittable` while the
+    /// tap is absorbed by whatever is layered on top.
     ///
-    /// Nudges the element into view with a bounded number of gentle,
-    /// slow drags (never a full `swipeUp()`, which can overshoot the
-    /// element past the top of the screen) rather than sleeping. Fails
-    /// with a `description`-labeled message (never XCUITest's own less
-    /// legible tap-failure error, and never a dumped element tree) if the
-    /// element never appears or never clears the chrome.
+    /// 1. Direct path: if the element already exists, is hittable, fully
+    ///    inside the app window and above the tab bar (8pt margin), tap it
+    ///    immediately. This is what sheet / nav-bar buttons take.
+    /// 2. Otherwise find it by scrolling (lazy content), then nudge it into
+    ///    comfortable view (top margin 54pt, bottom tab-bar clearance) with
+    ///    bounded, gentle drags (never a full `swipeUp()`, which can
+    ///    overshoot), and tap.
+    /// Fails with a `description`-labeled message if it never appears or
+    /// never becomes tappable.
     private func tapWhenHittable(
         _ element: XCUIElement,
         app: XCUIApplication,
@@ -138,37 +247,40 @@ final class ScreenshotTests: XCTestCase {
         timeout: TimeInterval = 10,
         description: String
     ) {
-        guard element.waitForExistence(timeout: timeout) else {
+        // Sheets animate in, so give the direct path a short grace window.
+        if element.waitForExistence(timeout: 2), isDirectlyTappable(element, app: app) {
+            tapAvoidingFab(element)
+            return
+        }
+
+        guard scrollUntilExists(element, app: app) || element.waitForExistence(timeout: timeout) else {
             XCTFail("\(description) never appeared to tap")
             return
         }
 
-        func isClearOfBottomChrome() -> Bool {
-            let tabBar = app.tabBars.firstMatch
-            if tabBar.exists {
-                return element.frame.maxY <= tabBar.frame.minY - 8
-            }
-            return element.frame.maxY <= app.frame.maxY * 0.8
-        }
-
-        var swipes = 0
-        while (!element.isHittable || !isClearOfBottomChrome()) && swipes < maxSwipes {
-            // A gentle drag from 70% down the screen to 45% — a smaller,
-            // slower nudge than `swipeUp()` so a short scroll distance
-            // doesn't overshoot the element off the top of the screen.
-            let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7))
-            let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45))
-            start.press(forDuration: 0.05, thenDragTo: end)
-            swipes += 1
-        }
-
-        guard element.isHittable, isClearOfBottomChrome() else {
-            XCTFail("\(description) exists but never became hittable and clear of "
-                     + "the bottom chrome after \(maxSwipes) scroll attempts")
+        if isDirectlyTappable(element, app: app) {
+            tapAvoidingFab(element)
             return
         }
 
-        element.tap()
+        guard scrollIntoComfortableView(element, app: app, maxSwipes: maxSwipes), element.isHittable else {
+            XCTFail("\(description) exists but never became hittable and fully on screen "
+                     + "(clear of the tab bar) after \(maxSwipes) scroll attempts")
+            return
+        }
+
+        tapAvoidingFab(element)
+    }
+
+    /// Wide elements (full-width rows) can sit under Today's floating mic FAB
+    /// (bottom-right, ~60pt), which absorbs a centre/right tap. Tap those at
+    /// 25% of their width instead; small elements (sheet buttons) tap direct.
+    private func tapAvoidingFab(_ element: XCUIElement) {
+        if element.frame.width > 200 {
+            element.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.5)).tap()
+        } else {
+            element.tap()
+        }
     }
 
     /// Waits for an element to exist and become hittable with a stable frame
@@ -270,7 +382,7 @@ final class ScreenshotTests: XCTestCase {
             // APIClient's requests (as happened once — real, absent-in-CI
             // networking then produces the "You're offline" error card
             // instead of this).
-            XCTAssertTrue(app.staticTexts[insight(for: scenario)].waitForExistence(timeout: 10),
+            XCTAssertTrue(waitForText(app, containing: insight(for: scenario), timeout: 10),
                            "Today should show the \(scenario) fixture's insight text [\(appearance)] — "
                            + "if this fails, fixtures likely aren't being intercepted")
             XCTAssertFalse(errorCard.exists,
@@ -282,7 +394,7 @@ final class ScreenshotTests: XCTestCase {
                 // and `WeightHeroLogic.weeklyChangeText` computes it, so this
                 // fails loudly the same way the insight assertion above does
                 // if that endpoint's fixture interception ever regresses.
-                XCTAssertTrue(waitForText(app, containing: "0.6 kg/wk this week"),
+                XCTAssertTrue(waitForText(app, containing: "0.6\u{00A0}kg/wk over 4 weeks"),
                                "Today's weight_loss hero should show the established trend's weekly change [\(appearance)]")
                 XCTAssertTrue(app.buttons["today.weighInChip"].waitForExistence(timeout: 10),
                                "Today's weight_loss hero should show the weigh-in chip [\(appearance)]")
@@ -305,11 +417,28 @@ final class ScreenshotTests: XCTestCase {
                 // interception ever regresses.
                 XCTAssertTrue(waitForText(app, containing: "3×5"),
                                "Today's muscle hero should show the last-lift set×rep line [\(appearance)]")
-                XCTAssertTrue(waitForText(app, containing: "140 kg"),
+                XCTAssertTrue(waitForText(app, containing: "140\u{00A0}kg"),
                                "Today's muscle hero should show the last-lift weight [\(appearance)]")
                 // "This week" — 2 of 4 planned sessions (fixture-unique).
-                XCTAssertTrue(waitForText(app, containing: "2 of 4 sessions"),
+                XCTAssertTrue(waitForText(app, containing: "2 of 4 sessions this week"),
                                "Today's muscle hero should show the this-week session count [\(appearance)]")
+                // The goal line under the hero: the fixture's verdict is
+                // `behind` (adherence 9 of 16), so it leads with the cause and
+                // the next step instead of "1 of 4 kg gained · Squat …". The hero
+                // above shows "2 of 4 sessions this week", so the next step is the
+                // concrete remainder: "2 more by Sun" (not the generic "aim for 4").
+                let goalLine = app.descendants(matching: .any).matching(identifier: "goalProgress.todayLine").firstMatch
+                XCTAssertTrue(goalLine.waitForExistence(timeout: 10),
+                               "Today's muscle hero should show the goal-progress line [\(appearance)]")
+                func goalLineLabel() -> String { goalLine.label.replacingOccurrences(of: "\u{00A0}", with: " ") }
+                // The training summary can land a beat after the goal line; poll briefly.
+                let goalLineDeadline = Date().addingTimeInterval(10)
+                while !goalLineLabel().contains("2 more by Sun") && Date() < goalLineDeadline {
+                    Thread.sleep(forTimeInterval: 0.3)
+                }
+                let goalLineText = goalLineLabel()
+                XCTAssertTrue(goalLineText.contains("9 of 16 sessions in 4 wk · 2 more by Sun"),
+                               "Muscle goal line should lead with the sessions-behind cause and the remaining sessions, got \"\(goalLineText)\" [\(appearance)]")
             }
 
             if scenario == "endurance" {
@@ -317,16 +446,34 @@ final class ScreenshotTests: XCTestCase {
                 // from the fixture's flat `trendsBatch` baseline: every
                 // metric lands `.normal`, a net-0 score, which reads as
                 // "Good to train" — see `EnduranceHeroLogic.readinessWord`'s
-                // doc comment) and today's move-kind session title.
-                XCTAssertTrue(waitForText(app, containing: "Good to train"),
-                               "Today's endurance hero should show a readiness word [\(appearance)]")
-                XCTAssertTrue(waitForText(app, containing: "10km tempo run"),
+                // doc comment; the fixture's late hard run can also push HRV
+                // low enough for "Recover today", so every word the app can
+                // produce is accepted) and today's move-kind session title.
+                let readinessWords = ["Ready to push", "Good to train", "Keep it easy", "Recover today"]
+                XCTAssertTrue(readinessWords.contains { waitForText(app, containing: $0, timeout: 3) },
+                               "Today's endurance hero should show a readiness word (one of \(readinessWords)) [\(appearance)]")
+                XCTAssertTrue(waitForText(app, containing: "Intervals 6×800 m"),
                                "Today's endurance hero should show today's session [\(appearance)]")
-                // Combined line showing sessions and weekly volume:
-                // 3 completed sessions, 24.5 km done this week
-                // (no plan data for endurance, so no dots).
-                XCTAssertTrue(waitForText(app, containing: "3 sessions · 24.5 km this week"),
-                               "Today's endurance hero should show sessions and volume combined [\(appearance)]")
+                // Sessions line now shows session count only (e.g., "2 sessions this week"),
+                // while distance appears in a separate progress line. Match the singular
+                // "session" so Monday's "1 session this week" (Monday-start week) passes too.
+                XCTAssertTrue(waitForText(app, containing: "session"),
+                               "Today's endurance hero should show the sessions line [\(appearance)]")
+                // Distance progress line in the format "X.X of ~27 km this week · goal 30 km":
+                // ONE target for the week (the safe ~10% step from last week's 24.5 km, the
+                // same ~27 km the weekly review's Next week names) with the 30 km goal beside it.
+                // (The hero glues each value to its unit with U+00A0, like the goal card,
+                // so the checks stop before the unit.)
+                XCTAssertTrue(waitForText(app, containing: "of ~27"),
+                               "Today's endurance hero should show distance progress against this week's step target [\(appearance)]")
+                XCTAssertTrue(waitForText(app, containing: "goal 30"),
+                               "Today's endurance hero should keep the weekly goal beside the step target [\(appearance)]")
+                // Race countdown line ("Half marathon · 12 weeks to go") from the fixture's race.
+                XCTAssertTrue(waitForText(app, containing: "Half marathon"),
+                               "Today's endurance hero should show the race countdown [\(appearance)]")
+                // ...followed by the long-run build ("· long run 14/18 km", number and unit joined by U+00A0), from the same payload.
+                XCTAssertTrue(waitForText(app, containing: "long run 14/18\u{00A0}km"),
+                               "Today's endurance hero race line should carry the long-run progress [\(appearance)]")
             }
 
             if scenario == "new_user" {
@@ -357,7 +504,21 @@ final class ScreenshotTests: XCTestCase {
         // presented — e.g. something else absorbed the touch) must fail
         // loudly here rather than fall through to capturing Today itself
         // relabeled as the diet sheet.
-        guard app.staticTexts["Diet budget"].waitForExistence(timeout: 10) else {
+        var sheetOpened = app.staticTexts["Diet budget"].waitForExistence(timeout: 10)
+        if !sheetOpened {
+            // One retry: if Today's layout shifted under the first tap (late
+            // content such as the streak chip), re-resolve the strip and tap
+            // it again once it is hittable.
+            let retryStrip = app.buttons["today.fuelStrip"]
+            if retryStrip.waitForExistence(timeout: 5) {
+                let hittable = NSPredicate(format: "isHittable == true")
+                let exp = XCTNSPredicateExpectation(predicate: hittable, object: retryStrip)
+                _ = XCTWaiter().wait(for: [exp], timeout: 5)
+                if retryStrip.isHittable { retryStrip.tap() }
+            }
+            sheetOpened = app.staticTexts["Diet budget"].waitForExistence(timeout: 10)
+        }
+        guard sheetOpened else {
             XCTFail("Diet sheet never opened after tapping today.fuelStrip — "
                      + "the tap likely missed or was absorbed by another view "
                      + "[\(scenario)/\(appearance)]")
@@ -383,6 +544,51 @@ final class ScreenshotTests: XCTestCase {
         }
     }
 
+    /// Opens the "Log lift" sheet from Today's muscle hero (muscle scenario
+    /// only — it's the one goal whose Today carries the "Log lift" button and
+    /// the one fixture with a last session to repeat). Screen name
+    /// `liftLogger`.
+    private func captureLiftLogger(_ app: XCUIApplication, scenario: String, appearance: String) {
+        guard scenario == "muscle" else { return }
+
+        let logLift = app.buttons["today.muscleHero.logLift"]
+        tapWhenHittable(
+            logLift, app: app,
+            description: "today.muscleHero.logLift [\(scenario)/\(appearance)]"
+        )
+
+        // The repeat-last-session note only renders once `/api/workouts/last`
+        // has decoded and pre-filled the form — a fixture-unique signal that
+        // fails loudly if that endpoint's interception ever regresses (the
+        // sheet would otherwise open to its empty "No previous session"
+        // form and still look plausible).
+        guard waitForText(app, containing: "Repeating your last session") else {
+            XCTFail("Lift logger never showed its pre-filled last session after tapping "
+                     + "today.muscleHero.logLift [\(scenario)/\(appearance)]")
+            return
+        }
+        XCTAssertTrue(app.buttons["liftLogger.save"].waitForExistence(timeout: 10),
+                       "Lift logger should show its Save button [\(scenario)/\(appearance)]")
+        capture(app, name: "\(scenario)__liftLogger__\(appearance)")
+
+        let close = app.buttons["Close"]
+        if close.waitForExistence(timeout: 5) {
+            close.tap()
+            // Same dismiss-animation wait as `captureDietSheet`: a following
+            // tab-bar tap can be absorbed by a sheet still animating away.
+            guard waitForTextToDisappear(app, containing: "Repeating your last session") else {
+                XCTFail("Lift logger never finished dismissing after tapping Close [\(scenario)/\(appearance)]")
+                return
+            }
+        }
+    }
+
+    /// Polls until no `staticText` label contains `substring` (or `timeout`).
+    private func waitForTextToDisappear(_ app: XCUIApplication, containing substring: String, timeout: TimeInterval = 5) -> Bool {
+        let predicate = NSPredicate(format: "label CONTAINS[c] %@", substring)
+        return app.staticTexts.matching(predicate).firstMatch.waitForNonExistence(timeout: timeout)
+    }
+
     private func captureCoach(_ app: XCUIApplication, scenario: String, appearance: String) {
         switchToTab("Coach", app: app, scenario: scenario, appearance: appearance)
 
@@ -398,8 +604,10 @@ final class ScreenshotTests: XCTestCase {
         if scenario == "server_error" {
             XCTAssertTrue(waitForText(app, containing: "Ask me anything about your health trends"),
                            "Coach should fall back to its hardcoded opener when every endpoint 500s [\(appearance)]")
+            XCTAssertTrue(waitForText(app, containing: "Coach is offline"),
+                           "Coach should say it is offline when its load failed [\(appearance)]")
         } else if scenario == "new_user" {
-            XCTAssertTrue(waitForText(app, containing: "Tell me your goal"),
+            XCTAssertTrue(waitForText(app, containing: "Your goal is to lose weight"),
                            "Coach should show the new-user opener, not returning-user praise [\(appearance)]")
             XCTAssertFalse(app.staticTexts.matching(
                 NSPredicate(format: "label CONTAINS[c] %@", "Nice work staying consistent")
@@ -450,9 +658,175 @@ final class ScreenshotTests: XCTestCase {
         // see the same collapsed state every run — wait for the fold-out
         // animation to fully finish so `__coach__` doesn't catch a ghost of
         // the detail mid-collapse.
+        // Let the expand animation settle so the pill is hittable before the
+        // collapse tap; a tap landing mid-animation can be absorbed.
+        let pillHittable = NSPredicate(format: "isHittable == true")
+        let pillExp = XCTNSPredicateExpectation(predicate: pillHittable, object: pill)
+        _ = XCTWaiter().wait(for: [pillExp], timeout: 3)
         tapWhenHittable(pill, app: app, description: "Coach receipt pill (collapse) [\(scenario)/\(appearance)]")
+        if !detail.waitForNonExistence(timeout: 5) {
+            // One retry: the collapse tap was absorbed while the expand
+            // animation settled. The detail still exists, so it is still
+            // expanded and a second tap on the pill collapses it.
+            tapWhenHittable(pill, app: app, description: "Coach receipt pill (collapse retry) [\(scenario)/\(appearance)]")
+        }
         XCTAssertTrue(detail.waitForNonExistence(timeout: 5),
                        "Receipt detail should fully collapse before the next capture [\(scenario)/\(appearance)]")
+    }
+
+    /// Opens the goal-progress detail sheet from the "Am I on track?" card at
+    /// the top of Trends (weight_loss: on track toward 76 kg; muscle:
+    /// progressing on squat/bench; endurance: building toward the half marathon,
+    /// with the long-run reason). Screen name `goalProgress`. Only those three
+    /// scenarios — the others either have no card worth opening (new_user's
+    /// prompt, server_error's hidden card) or aren't part of the ask.
+    private func captureGoalProgress(_ app: XCUIApplication, scenario: String, appearance: String) {
+        guard scenario == "weight_loss" || scenario == "muscle" || scenario == "endurance" else { return }
+
+        switchToTab("Trends", app: app, scenario: scenario, appearance: appearance)
+        // Back to the top of Trends, where the card leads.
+        for _ in 0..<4 { app.swipeDown() }
+
+        let card = app.descendants(matching: .any).matching(identifier: "goalProgress.card").firstMatch
+        tapWhenHittable(card, app: app, description: "goalProgress.card [\(scenario)/\(appearance)]")
+
+        let title = app.descendants(matching: .any).matching(identifier: "goalProgress.detail.title").firstMatch
+        guard title.waitForExistence(timeout: 10) else {
+            XCTFail("Goal progress detail sheet never opened after tapping goalProgress.card [\(scenario)/\(appearance)]")
+            return
+        }
+        // Fixture-unique content: the weight_loss primary line is composed from
+        // structured fields (never the server's kg headline); muscle falls
+        // back to the server headline.
+        // (GoalProgressLogic joins value+unit with U+00A0 so lines never wrap mid-value;
+        // the "Why" rows run through `GoalProgressLogic.nonBreaking`, which also binds the
+        // "153 → 163 kg" arrow pair — a narrow sheet must never wrap as "(153 → / 163 kg)".)
+        let expected: String
+        switch scenario {
+        case "weight_loss":
+            expected = "of 7.7\u{00A0}kg lost"
+        case "muscle":
+            expected = "Squat est. 1RM +10\u{00A0}kg vs 4\u{00A0}weeks ago (153\u{00A0}\u{2192}\u{00A0}163\u{00A0}kg)"
+        default:
+            // endurance: the long-run build reason (the race and the volume trend precede it).
+            expected = "Long run 14\u{00A0}km \u{00B7} build to 18\u{00A0}km"
+        }
+        XCTAssertTrue(waitForText(app, containing: expected),
+                       "Goal progress detail should show the \(scenario) fixture's content [\(appearance)]")
+        capture(app, name: "\(scenario)__goalProgress__\(appearance)")
+
+        let close = app.buttons["Close"]
+        if close.waitForExistence(timeout: 5) {
+            close.tap()
+            guard title.waitForNonExistence(timeout: 5) else {
+                XCTFail("Goal progress sheet never finished dismissing after tapping Close [\(scenario)/\(appearance)]")
+                return
+            }
+        }
+    }
+
+    /// Weekly review (v5 Wave 3): the unseen-review card on Today (fixtures
+    /// bypass the Mon-Wed window) and its detail sheet. Screen names
+    /// `weeklyReviewCard` (Today) and `weeklyReview` (detail sheet). Only
+    /// weight_loss and muscle — their fixture reviews carry the scenario's
+    /// numbers (-0.6 kg / 5 of 7 days in budget; sessions / bench 1RM).
+    private func captureWeeklyReview(_ app: XCUIApplication, scenario: String, appearance: String) {
+        // Endurance has its own review fixture (volume / resting HR / sleep stats):
+        // captured by identifier, without pinning its copy.
+        if scenario == "endurance" {
+            captureEnduranceWeeklyReview(app, appearance: appearance)
+            return
+        }
+        guard scenario == "weight_loss" || scenario == "muscle" else { return }
+
+        switchToTab("Today", app: app, scenario: scenario, appearance: appearance)
+        for _ in 0..<4 { app.swipeDown() }
+
+        let card = app.descendants(matching: .any).matching(identifier: "weeklyReview.card").firstMatch
+        guard card.waitForExistence(timeout: 15) else {
+            XCTFail("Weekly review card never appeared on Today [\(scenario)/\(appearance)]")
+            return
+        }
+        // The compact card sits below the fuel strip / next-up row, so scroll
+        // its button fully on screen (clear of top and bottom chrome) before
+        // asserting on / capturing it.
+        let openButton = app.descendants(matching: .any).matching(identifier: "weeklyReview.open").firstMatch
+        // Today's content is lazy, so the button isn't in the hierarchy until
+        // scrolled near: find it by scrolling, then centre it.
+        XCTAssertTrue(scrollUntilExists(openButton, app: app, maxSwipes: 8),
+                       "weeklyReview.open never appeared [\(scenario)/\(appearance)]")
+        scrollIntoComfortableView(openButton, app: app, maxSwipes: 8)
+        // Fixture-unique headline (FixtureData.weeklyReview). The server's copy
+        // (and so the fixture's) joins a number to its unit with U+00A0.
+        let expected = scenario == "weight_loss"
+            ? "Down 0.6\u{00A0}kg, in budget 5 of 7 days"
+            : "3 of 4 sessions, Squat est. 1RM +10\u{00A0}kg over 4\u{00A0}wks"
+        XCTAssertTrue(waitForText(app, containing: expected),
+                       "Weekly review card should show the \(scenario) fixture's headline [\(appearance)]")
+        capture(app, name: "\(scenario)__weeklyReviewCard__\(appearance)")
+
+        let open = app.descendants(matching: .any).matching(identifier: "weeklyReview.open").firstMatch
+        tapWhenHittable(open, app: app, maxSwipes: 8, description: "weeklyReview.open [\(scenario)/\(appearance)]")
+
+        let title = app.descendants(matching: .any).matching(identifier: "weeklyReview.detail.title").firstMatch
+        guard title.waitForExistence(timeout: 10) else {
+            XCTFail("Weekly review detail sheet never opened [\(scenario)/\(appearance)]")
+            return
+        }
+        capture(app, name: "\(scenario)__weeklyReview__\(appearance)")
+
+        let close = app.buttons["Close"]
+        if close.waitForExistence(timeout: 5) {
+            close.tap()
+            guard title.waitForNonExistence(timeout: 5) else {
+                XCTFail("Weekly review sheet never finished dismissing after tapping Close [\(scenario)/\(appearance)]")
+                return
+            }
+        }
+    }
+
+    /// Endurance weekly review: the unseen-review card on Today (fixtures bypass
+    /// the Mon-Wed window) and its detail sheet. Screen names `weeklyReviewCard`
+    /// and `weeklyReview`. Follows the muscle / weight_loss flow above but asserts
+    /// on identifiers (card, non-empty headline, detail title) rather than the
+    /// review's copy, so a copy tweak to the endurance fixture never breaks the harness.
+    private func captureEnduranceWeeklyReview(_ app: XCUIApplication, appearance: String) {
+        let scenario = "endurance"
+        switchToTab("Today", app: app, scenario: scenario, appearance: appearance)
+        for _ in 0..<4 { app.swipeDown() }
+
+        let card = app.descendants(matching: .any).matching(identifier: "weeklyReview.card").firstMatch
+        guard card.waitForExistence(timeout: 15) else {
+            XCTFail("Weekly review card never appeared on Today [\(scenario)/\(appearance)]")
+            return
+        }
+        // Today's content is lazy: find the card's button by scrolling, then centre it.
+        let openButton = app.descendants(matching: .any).matching(identifier: "weeklyReview.open").firstMatch
+        XCTAssertTrue(scrollUntilExists(openButton, app: app, maxSwipes: 8),
+                       "weeklyReview.open never appeared [\(scenario)/\(appearance)]")
+        scrollIntoComfortableView(openButton, app: app, maxSwipes: 8)
+        let headline = app.descendants(matching: .any).matching(identifier: "weeklyReview.headline").firstMatch
+        XCTAssertTrue(headline.waitForExistence(timeout: 10) && !headline.label.isEmpty,
+                       "Weekly review card should show a headline [\(scenario)/\(appearance)]")
+        capture(app, name: "\(scenario)__weeklyReviewCard__\(appearance)")
+
+        tapWhenHittable(openButton, app: app, maxSwipes: 8, description: "weeklyReview.open [\(scenario)/\(appearance)]")
+
+        let title = app.descendants(matching: .any).matching(identifier: "weeklyReview.detail.title").firstMatch
+        guard title.waitForExistence(timeout: 10) else {
+            XCTFail("Weekly review detail sheet never opened [\(scenario)/\(appearance)]")
+            return
+        }
+        capture(app, name: "\(scenario)__weeklyReview__\(appearance)")
+
+        let close = app.buttons["Close"]
+        if close.waitForExistence(timeout: 5) {
+            close.tap()
+            guard title.waitForNonExistence(timeout: 5) else {
+                XCTFail("Weekly review sheet never finished dismissing after tapping Close [\(scenario)/\(appearance)]")
+                return
+            }
+        }
     }
 
     private func captureTrends(_ app: XCUIApplication, scenario: String, appearance: String) {
@@ -486,6 +860,20 @@ final class ScreenshotTests: XCTestCase {
             }
             XCTAssertTrue(recoveryTile.waitForExistence(timeout: 15),
                            "Trends should render its metric tiles [\(scenario)/\(appearance)]")
+
+            if scenario == "muscle" {
+                // The Strength card leads Trends for the muscle goal
+                // (`TrendsGoalOrdering.leadsWithStrength`) — back to the top
+                // so it's both asserted and captured, then check its volume
+                // row (identifier, not text: the rows are combined/ignored
+                // accessibility elements). Only present once
+                // `/api/workouts/summary` decodes, so this fails loudly if
+                // that fixture's interception ever regresses.
+                for _ in 0..<swipesToRecovery { app.swipeDown() }
+                let strengthVolume = app.descendants(matching: .any).matching(identifier: "trends.strengthCard.volume").firstMatch
+                XCTAssertTrue(strengthVolume.waitForExistence(timeout: 15),
+                               "muscle Trends should show the Strength card's weekly volume line [\(appearance)]")
+            }
 
             if scenario == "weight_loss" {
                 // Scroll back to the top before the goal-ordering frame
@@ -634,6 +1022,15 @@ final class ScreenshotTests: XCTestCase {
     }
 
     private func captureWorkoutAnalysis(_ app: XCUIApplication, scenario: String, appearance: String) {
+        // Endurance's workout is last night's late run (20:48 yesterday), so it
+        // lives on the previous day's page, not Today's.
+        let workoutOnPreviousDay = scenario == "endurance"
+        if workoutOnPreviousDay {
+            let previousDay = app.buttons["logs.pager.previous"].firstMatch
+            XCTAssertTrue(previousDay.waitForExistence(timeout: 10),
+                           "Logs should show its previous-day pager button [\(scenario)/\(appearance)]")
+            previousDay.tap()
+        }
         let workoutRow = app.buttons["logs.workoutRow"].firstMatch
         tapWhenHittable(workoutRow, app: app, maxSwipes: 6, description: "Logs' workout row [\(scenario)/\(appearance)]")
         let workoutHeader = app.descendants(matching: .any).matching(identifier: "analysisWorkout.header").firstMatch
@@ -659,6 +1056,13 @@ final class ScreenshotTests: XCTestCase {
                        "Workout AnalysisView should fully dismiss before the next tap [\(scenario)/\(appearance)]")
         XCTAssertTrue(app.staticTexts["LOG ENTRIES"].waitForExistence(timeout: 10),
                        "Dismissing the workout analysis should return to Logs [\(scenario)/\(appearance)]")
+        if workoutOnPreviousDay {
+            // The sleep row (wake time = today) is on Today's page.
+            let nextDay = app.buttons["logs.pager.next"].firstMatch
+            XCTAssertTrue(nextDay.waitForExistence(timeout: 5),
+                           "Logs should show its next-day pager button [\(scenario)/\(appearance)]")
+            nextDay.tap()
+        }
     }
 
     /// `endurance`-only: taps the "The data" device switch's WHOOP segment
@@ -739,6 +1143,8 @@ final class ScreenshotTests: XCTestCase {
                            "\(scenario)'s Memory screen should tag a constraint fact [\(appearance)]")
             XCTAssertTrue(waitForText(app, containing: "Routines & preferences"),
                            "\(scenario)'s Memory screen should group facts into sections [\(appearance)]")
+            XCTAssertTrue(app.buttons["memory.goal.edit"].waitForExistence(timeout: 10),
+                           "\(scenario)'s Memory screen should show the profile goal read-only [\(appearance)]")
         }
         capture(app, name: "\(scenario)__memory__\(appearance)")
 
@@ -814,26 +1220,29 @@ final class ScreenshotTests: XCTestCase {
     private func profileName(for scenario: String) -> String {
         switch scenario {
         case "new_user":    return "Jordan Lee"
-        case "weight_loss": return "Alex Rivera"
-        case "muscle":      return "Sam Okafor"
-        case "endurance":   return "Priya Nandy"
+        case "weight_loss": return "Sam Rivera"
+        case "muscle":      return "Priya Okafor"
+        case "endurance":   return "Marcus Nandy"
         default:            return "Jordan Lee"
         }
     }
 
-    /// Mirrors `FixtureData`'s per-scenario `Profile.insight` verbatim — see
+    /// Mirrors `FixtureData`'s per-scenario `Profile.insight` — see
     /// `profileName(for:)`'s doc comment for why this is hand-duplicated
-    /// rather than shared.
+    /// rather than shared. Verbatim, except the muscle insight: it names the
+    /// weekday of the last lift ("Tuesday's squat"), derived from a relative
+    /// date so it always matches "Last (Tue)", so only the stable tail is
+    /// asserted (matched with `waitForText(containing:)`, not by exact label).
     private func insight(for scenario: String) -> String {
         switch scenario {
         case "new_user":
             return "Keep logging — a few more days and I'll start spotting real patterns."
         case "weight_loss":
-            return "You're down 0.6kg this week and sleep is holding steady — keep the deficit gentle through the weekend."
+            return "You were down 0.6\u{00A0}kg last week, but last night's sleep ran short (6h 50m) — keep the deficit gentle and aim for an earlier night."
         case "muscle":
-            return "Protein's on target four days running and yesterday's lift was a PR on squat volume — stay the course."
+            return "squat was your best in 4 weeks — get the 2 remaining sessions in by Sunday."
         case "endurance":
-            return "This week's long run held goal pace with a lower average HR than last week — aerobic base is building nicely."
+            return "Last week's long run held goal pace with a lower average HR than the week before — aerobic base is building nicely."
         default:
             return ""
         }

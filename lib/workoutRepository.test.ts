@@ -136,6 +136,48 @@ test('summarizeProgression: separate exercises stay separate', async () => {
   assert.equal(Object.keys(summary).sort().join(','), 'deadlift,squat');
 });
 
+test('summarizeProgression: buckets by local_day Monday, not UTC performed_at', async () => {
+  const { summarizeProgression } = await repoPromise;
+  // Sunday 8pm in US Pacific = Monday 03:00 UTC, but local_day is Sunday -> previous week.
+  const sets = [
+    { exercise: 'squat', performed_at: new Date('2026-09-28T03:00:00Z'), local_day: '2026-09-27', reps: 5, load_kg: 100, is_warmup: false },
+    { exercise: 'squat', performed_at: new Date('2026-09-28T17:00:00Z'), local_day: '2026-09-28', reps: 5, load_kg: 100, is_warmup: false },
+  ];
+  const weeks = summarizeProgression(sets).squat;
+  assert.deepEqual(weeks.map(w => [w.weekStart, w.totalSets]), [['2026-09-21', 1], ['2026-09-28', 1]]);
+});
+
+test('estimateOneRepMax: reps above 12 yield no e1RM; RPE adds reps in reserve (capped)', async () => {
+  const { estimateOneRepMax } = await repoPromise;
+  assert.equal(estimateOneRepMax(100, 13), 0);
+  assert.equal(estimateOneRepMax(100, 20), 0);
+  assert.equal(Math.round(estimateOneRepMax(100, 12) * 100) / 100, 140);
+  // 5 reps @ RPE 8 -> 2 RIR -> 7 effective reps
+  assert.equal(Math.round(estimateOneRepMax(100, 5, 8) * 100) / 100, Math.round(100 * (1 + 7 / 30) * 100) / 100);
+  // 10 reps @ RPE 6 -> 14 effective, capped at 12
+  assert.equal(Math.round(estimateOneRepMax(100, 10, 6) * 100) / 100, 140);
+  // RPE 10 changes nothing
+  assert.equal(estimateOneRepMax(100, 5, 10), estimateOneRepMax(100, 5));
+});
+
+test('summarizeProgression: a 20-rep back-off set adds volume but cannot outrank a heavy triple', async () => {
+  const { summarizeProgression } = await repoPromise;
+  const sets = [
+    { exercise: 'squat', performed_at: new Date('2026-09-21T10:00:00Z'), local_day: '2026-09-21', reps: 3, load_kg: 140, is_warmup: false },
+    { exercise: 'squat', performed_at: new Date('2026-09-21T10:10:00Z'), local_day: '2026-09-21', reps: 20, load_kg: 100, is_warmup: false },
+  ];
+  const w = summarizeProgression(sets).squat[0];
+  assert.equal(w.bestEstimatedOneRepMaxKg, 154); // 140 * 1.1
+  assert.equal(w.volumeKg, 3 * 140 + 20 * 100);
+  assert.equal(w.totalSets, 2);
+});
+
+test('summarizeProgression: only high-rep sets -> null e1RM', async () => {
+  const { summarizeProgression } = await repoPromise;
+  const sets = [{ exercise: 'squat', performed_at: new Date('2026-09-21T10:00:00Z'), local_day: '2026-09-21', reps: 20, load_kg: 60, is_warmup: false }];
+  assert.equal(summarizeProgression(sets).squat[0].bestEstimatedOneRepMaxKg, null);
+});
+
 // ── DB-backed (mocked) ───────────────────────────────────────────────────────
 
 test('logWorkoutSession: writes one row per set, keyed by session_id + set_index', async () => {

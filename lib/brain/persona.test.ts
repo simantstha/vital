@@ -140,3 +140,22 @@ test('assemblePersona always includes the same safetyBlock() text verbatim', () 
   const system = assemblePersona([]);
   assert.ok(system.includes(safetyBlock()));
 });
+
+test('the persona keeps the coach consistent with the goal verdict and limits target nagging', () => {
+  const system = assemblePersona([]);
+  assert.match(system, /## Goal progress — stay consistent with the app/);
+  assert.match(system, /never contradict it/);
+  assert.match(system, /ONCE/);
+  assert.match(system, /set_goal_target/);
+});
+
+test('assemblePersona tells the coach to honour any note it reads and not cite irrelevant ones', () => {
+  const system = assemblePersona([]);
+  assert.match(system, /## Use what you read — or don't cite it/);
+  assert.match(system, /MUST take it into account and address the constraint explicitly/);
+  assert.match(system, /do not cite or lean on it/);
+  assert.ok(
+    system.indexOf('## Use what you read') < system.indexOf('## Hard constraints') || !system.includes('## Hard constraints'),
+    'cited-context block must not come after hard constraints',
+  );
+});

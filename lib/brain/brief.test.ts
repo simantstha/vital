@@ -23,13 +23,15 @@ type SleepSummaryFixture = { nights: Array<{ date: string; minutes: number; stag
 type WeightReadingFixture = { measuredAt: string; valueKg: number; source: 'manual' | 'healthkit' | 'coach'; localDay: string };
 
 const state: {
-  userRow: Array<{ timezone: string | null; unit_system?: string | null; sleep_goal_minutes?: number | null }>;
+  userRow: Array<{ timezone: string | null; unit_system?: string | null; sleep_goal_minutes?: number | null; goal?: string | null }>;
   events: Array<{ type: string; timestamp: Date; payload: unknown }>;
   whoopConn: Array<{ status: string }>;
   baselines: Record<string, BaselineFixture | null>;
   metricPoints: Record<string, MetricPointFixture[]>;
   sleepSummaries: Record<string, SleepSummaryFixture>;
   weightReadings: WeightReadingFixture[];
+  goalProgress: unknown;
+  progression: Record<string, unknown>;
 } = {
   userRow: [{ timezone: 'America/Chicago' }],
   events: [],
@@ -38,6 +40,8 @@ const state: {
   metricPoints: {},
   sleepSummaries: {},
   weightReadings: [],
+  goalProgress: null,
+  progression: {},
 };
 
 // The recovery-scoring additions (lib/brain/brief.ts reading whoop_connections
@@ -52,6 +56,8 @@ beforeEach(() => {
   state.metricPoints = {};
   state.sleepSummaries = {};
   state.weightReadings = [];
+  state.goalProgress = null;
+  state.progression = {};
 });
 
 const fakeDb = {
@@ -120,7 +126,17 @@ mock.module('@/lib/brain/dietBudget', {
     // enough for these local-day-bucketing tests, which don't assert on
     // weight-signal content (see weightSignals.test.ts).
     lowEnergyThresholdKcal: (sex: string | null) => (sex === 'male' ? 1500 : 1200),
+    normalizeGoal: (g: string | null | undefined) =>
+      ['weight_loss', 'muscle', 'endurance', 'general'].includes(g ?? '') ? g : 'general',
   },
+});
+// Goal-keyed brief inputs: the loader and lift progression are faked per test
+// via `state.goalProgress` / `state.progression`.
+mock.module('@/lib/goalProgressLoader', {
+  namedExports: { loadGoalProgress: async () => state.goalProgress },
+});
+mock.module('@/lib/workoutRepository', {
+  namedExports: { getProgressionSummary: async () => state.progression },
 });
 
 const briefPromise = import('./brief');
@@ -526,4 +542,68 @@ test('the brief\'s weekly weight-change number matches what the hero (GET /api/w
   const briefTrend = capturedCtx!.weightTrend as { delta7dKgPerWeek: number | null; established: boolean };
   assert.equal(briefTrend.delta7dKgPerWeek, heroTrend.delta7dKgPerWeek);
   assert.equal(briefTrend.established, heroTrend.established);
+});
+
+// ── Goal-keyed inputs ───────────────────────────────────────────────────────
+
+test('goalFocus carries the normalized goal and the loaded goal-progress verdict', async () => {
+  const verdict = { goal: 'weight_loss', verdict: 'on_track', headline: 'On track', reasons: [] };
+  state.userRow = [{ timezone: 'America/Chicago', goal: 'weight_loss' }];
+  state.events = [];
+  state.goalProgress = verdict;
+  capturedCtx = null;
+
+  const { generateDailyBriefFromDb } = await briefPromise;
+  await generateDailyBriefFromDb('user-1');
+
+  const focus = capturedCtx!.goalFocus as { goal: string; progress: unknown; progression?: unknown; weeklyVolume?: unknown };
+  assert.equal(focus.goal, 'weight_loss');
+  assert.deepEqual(focus.progress, verdict);
+  assert.equal(focus.progression, undefined); // lift progression is muscle-only
+  assert.equal(focus.weeklyVolume, undefined); // volume is endurance-only
+});
+
+test('a muscle user gets lift progression in goalFocus', async () => {
+  state.userRow = [{ timezone: 'America/Chicago', goal: 'muscle' }];
+  state.events = [];
+  state.progression = { 'Back Squat': [{ weekStart: '2026-09-27', bestEstimatedOneRepMaxKg: 100, volumeKg: 1, totalSets: 3, totalReps: 15 }] };
+  capturedCtx = null;
+
+  const { generateDailyBriefFromDb } = await briefPromise;
+  await generateDailyBriefFromDb('user-1');
+
+  const focus = capturedCtx!.goalFocus as { goal: string; progression?: Record<string, unknown> };
+  assert.equal(focus.goal, 'muscle');
+  assert.deepEqual(Object.keys(focus.progression ?? {}), ['Back Squat']);
+});
+
+test('an endurance user gets all-sport weekly volume, not just runs', async () => {
+  const now = new Date();
+  state.userRow = [{ timezone: 'America/Chicago', goal: 'endurance' }];
+  state.events = [
+    { type: 'workout_completed', timestamp: now, payload: { type: 'cycling', duration_s: 3600 } },
+    { type: 'workout_completed', timestamp: now, payload: { type: 'swimming', duration_s: 1800 } },
+  ];
+  capturedCtx = null;
+
+  const { generateDailyBriefFromDb } = await briefPromise;
+  await generateDailyBriefFromDb('user-1');
+
+  const focus = capturedCtx!.goalFocus as { weeklyVolume?: Array<{ sessions: number; minutes: number }> };
+  assert.equal(focus.weeklyVolume?.[0].sessions, 2);
+  assert.equal(focus.weeklyVolume?.[0].minutes, 90);
+});
+
+test('a goal-progress load failure is non-fatal: the brief still generates with progress null', async () => {
+  state.userRow = [{ timezone: 'America/Chicago', goal: 'general' }];
+  state.events = [];
+  state.goalProgress = null;
+  capturedCtx = null;
+
+  const { generateDailyBriefFromDb } = await briefPromise;
+  await generateDailyBriefFromDb('user-1');
+
+  const focus = capturedCtx!.goalFocus as { goal: string; progress: unknown };
+  assert.equal(focus.goal, 'general');
+  assert.equal(focus.progress, null);
 });

@@ -3,6 +3,9 @@ import test from 'node:test';
 
 import {
   computeDrivers,
+  hasPracticalEffect,
+  isActivityWorsensOutcome,
+  typicalDailyNoise,
   isStale,
   pairByDateLag,
   selectDrivers,
@@ -237,4 +240,94 @@ test('computeDrivers: end to end, one confirmed driver with a tercile magnitude'
   assert.equal(driver.pairs, 42);
   assert.ok(driver.high);
   assert.ok(driver.low);
+});
+
+// ─── Stricter display gates ─────────────────────────────────────────────────
+
+test('selectDrivers: drops findings under 28 paired days', () => {
+  const row = crossLagFinding({ input: 'steps', outcome: 'hrv_sdnn', lag: 0, rho: 0.5, pairs: 27 });
+  assert.deepEqual(selectDrivers([row], new Set([row.signature]), 'hrv_sdnn'), []);
+  const ok = crossLagFinding({ input: 'steps', outcome: 'hrv_sdnn', lag: 0, rho: 0.5, pairs: 28 });
+  assert.equal(selectDrivers([ok], new Set([ok.signature]), 'hrv_sdnn').length, 1);
+});
+
+test('selectDrivers: drops findings with |rho| under 0.3', () => {
+  const row = crossLagFinding({ input: 'steps', outcome: 'hrv_sdnn', lag: 0, rho: -0.29 });
+  assert.deepEqual(selectDrivers([row], new Set([row.signature]), 'hrv_sdnn'), []);
+});
+
+function daily(metric: string, values: number[]): MetricSeries {
+  return series(metric, values.map((v, i) => [`2026-08-${String(i + 1).padStart(2, '0')}`, v] as [string, number]));
+}
+
+test('typicalDailyNoise: median absolute consecutive-day change; null when too few days', () => {
+  assert.equal(typicalDailyNoise(daily('hrv_sdnn', [50, 52, 50, 52, 50, 52, 50])), 2);
+  assert.equal(typicalDailyNoise(daily('hrv_sdnn', [50, 52, 50])), null);
+});
+
+test('hasPracticalEffect: tercile gap must reach the daily noise', () => {
+  const mag = { high: { mean: 52, n: 5 }, low: { mean: 50, n: 5 }, highInputMean: 1, lowInputMean: 0 };
+  assert.equal(hasPracticalEffect(mag, 2), true);
+  assert.equal(hasPracticalEffect(mag, 2.1), false);
+  assert.equal(hasPracticalEffect(mag, null), false);
+  assert.equal(hasPracticalEffect({ high: null, low: null, highInputMean: null, lowInputMean: null }, 1), false);
+});
+
+test('isActivityWorsensOutcome: steps -> lower HRV and strain -> higher resting HR, not diet', () => {
+  assert.equal(isActivityWorsensOutcome('steps', 'down', 'hrv_sdnn'), true);
+  assert.equal(isActivityWorsensOutcome('steps', 'up', 'hrv_sdnn'), false);
+  assert.equal(isActivityWorsensOutcome('whoop_day_strain', 'up', 'resting_hr'), true);
+  assert.equal(isActivityWorsensOutcome('dietary_carbs_g', 'down', 'hrv_sdnn'), false);
+});
+
+// A noisy outcome (zig-zag +-10) with a weak 2-unit tercile gap: below noise.
+function driverFixture(opts: { input: string; rho: number; outcomeOf: (i: number) => number; goal?: string | null }) {
+  const row = crossLagFinding({ input: opts.input, outcome: 'hrv_sdnn', lag: 0, rho: opts.rho, pairs: 30 });
+  const n = 30;
+  const dayKey = (i: number) => `2026-08-${String(i + 1).padStart(2, '0')}`;
+  const inputSeries = series(opts.input, Array.from({ length: n }, (_, i) => [dayKey(i), (i + 1) * 100] as [string, number]));
+  const outcomeSeries = series('hrv_sdnn', Array.from({ length: n }, (_, i) => [dayKey(i), opts.outcomeOf(i)] as [string, number]));
+  const repository = fakeRepository({
+    findingsForDay: async () => [row],
+    loadSeries: async () => [inputSeries, outcomeSeries],
+  });
+  return computeDrivers(repository, 'user-1', 'hrv_sdnn', '2026-09-27', opts.goal);
+}
+
+test('computeDrivers: drops a driver whose tercile gap is within daily noise', async () => {
+  // Outcome zig-zags by 10 each day (noise 10) on a tiny upward drift (gap << 10).
+  const result = await driverFixture({ input: 'dietary_carbs_g', rho: 0.4, outcomeOf: (i) => 50 + (i % 2 === 0 ? 5 : -5) + i * 0.05 });
+  assert.deepEqual(result.drivers, []);
+});
+
+test('computeDrivers: steps -> lower HRV is framed as adaptation for weight_loss and general, plain for muscle', async () => {
+  const outcomeOf = (i: number) => 80 - i; // clear decline with steps, noise 1
+  for (const goal of ['weight_loss', 'general', null]) {
+    const r = await driverFixture({ input: 'steps', rho: -0.5, outcomeOf, goal });
+    assert.equal(r.drivers.length, 1);
+    assert.equal(r.drivers[0].framing, 'adaptation');
+  }
+  const muscle = await driverFixture({ input: 'steps', rho: -0.5, outcomeOf, goal: 'muscle' });
+  assert.equal(muscle.drivers[0].framing, 'association');
+});
+
+test('computeDrivers: adaptation row sorts last, at most one, cap of 3 applies after filtering', async () => {
+  const inputs = ['steps', 'exercise_min', 'dietary_protein_g', 'dietary_carbs_g', 'dietary_fat_g'];
+  const rhos = [-0.9, -0.8, 0.5, 0.45, 0.4];
+  const rows = inputs.map((input, i) => crossLagFinding({ input, outcome: 'hrv_sdnn', lag: 0, rho: rhos[i], pairs: 30 }));
+  const dayKey = (i: number) => `2026-08-${String(i + 1).padStart(2, '0')}`;
+  const all = inputs.map((m) => series(m, Array.from({ length: 30 }, (_, i) => [dayKey(i), (i + 1) * 10] as [string, number])));
+  const outcome = series('hrv_sdnn', Array.from({ length: 30 }, (_, i) => [dayKey(i), 80 - i] as [string, number]));
+  const repository = fakeRepository({ findingsForDay: async () => rows, loadSeries: async () => [...all, outcome] });
+  const result = await computeDrivers(repository, 'user-1', 'hrv_sdnn', '2026-09-27', 'weight_loss');
+  // 3 plain associations fill the cap, so neither adaptation row is shown.
+  assert.deepEqual(result.drivers.map((d) => d.input), ['dietary_protein_g', 'dietary_carbs_g', 'dietary_fat_g']);
+
+  // With only 2 associations, exactly one adaptation row (the strongest) follows.
+  const two = await computeDrivers(
+    fakeRepository({ findingsForDay: async () => rows.slice(0, 4), loadSeries: async () => [...all, outcome] }),
+    'user-1', 'hrv_sdnn', '2026-09-27', 'weight_loss',
+  );
+  assert.deepEqual(two.drivers.map((d) => d.framing), ['association', 'association', 'adaptation']);
+  assert.deepEqual(two.drivers.map((d) => d.input), ['dietary_protein_g', 'dietary_carbs_g', 'steps']);
 });

@@ -1,6 +1,33 @@
 /** Shared shapes for the insight engine. */
 
-export type FindingKind = 'cadence_break' | 'level_shift' | 'trend' | 'cross_lag' | 'day_of_week';
+export type StatFindingKind = 'cadence_break' | 'level_shift' | 'trend' | 'cross_lag' | 'day_of_week';
+
+/**
+ * Rule-shaped, goal-aware findings (lib/insights/goalDetectors.ts). Like
+ * cadence_break they carry `pValue: null` and `metrics: []` — they are rules
+ * about a known pattern, not hypothesis tests, so they skip the FDR family and
+ * the baseline-establishment filter — but they flow through the same
+ * confirmation / arbiter / cooldown / caps pipeline as every other finding.
+ */
+export const GOAL_FINDING_KINDS = [
+  'weight_plateau',
+  'too_fast_loss',
+  'stalled_lift',
+  'low_protein_streak',
+  'inactivity_streak',
+  'off_pace',
+] as const;
+export type GoalFindingKind = (typeof GOAL_FINDING_KINDS)[number];
+
+export type FindingKind = StatFindingKind | GoalFindingKind;
+
+/** Deterministic, pre-written nudge text (goal findings only — see Finding.copy). */
+export interface NudgeCopy {
+  title: string;
+  body: string;
+  /** Coach handoff: what the coach says first when the user taps the nudge. */
+  openingMessage: string;
+}
 
 /** One local day. `value` is null when the day exists in the window but has
  *  no observation — absence is never coerced to zero. */
@@ -34,6 +61,12 @@ export interface Finding {
   n: number;               // observations behind the claim
   pValue: number | null;
   detail: Record<string, string | number>;  // grounded facts the voice layer may cite
+  /**
+   * Goal findings ship their own unit-aware, safety-reviewed wording. When
+   * present, runInsightPass delivers this text instead of model-written copy
+   * (the model still picks WHICH finding to speak, as for every kind).
+   */
+  copy?: NudgeCopy;
 }
 
 /** A finding that has passed every gate and is allowed to be spoken about. */

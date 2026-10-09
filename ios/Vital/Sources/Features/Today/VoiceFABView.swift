@@ -28,6 +28,12 @@ struct VoiceFABView: View {
     /// switches to the Coach tab.
     var onSent: () -> Void
 
+    /// Today is scrolling down: shrink to a small, dimmed circle so it stops
+    /// covering the trailing edge of cards (e.g. a verdict chip). Still fully
+    /// tappable. Never applied while a voice turn is live.
+    var isCompact = false
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject private var voice: CoachVoiceController
     @State private var myTurnID: UUID? = nil
     @State private var showDeniedAlert = false
@@ -39,8 +45,9 @@ struct VoiceFABView: View {
 
     private let fabSize: CGFloat = 60
 
-    init(coachVM: CoachViewModel, onSent: @escaping () -> Void) {
+    init(coachVM: CoachViewModel, isCompact: Bool = false, onSent: @escaping () -> Void) {
         self.coachVM = coachVM
+        self.isCompact = isCompact
         self.onSent = onSent
         self._voice = ObservedObject(wrappedValue: coachVM.voiceController)
     }
@@ -134,13 +141,24 @@ struct VoiceFABView: View {
         )
         .accessibilityElement()
         .accessibilityLabel(voice.isRecording ? "Stop recording" : "Talk to your coach")
+        .accessibilityIdentifier("today.voiceFab")
         .accessibilityAddTraits(.isButton)
         .accessibilityAction { handleMicPress() }
         .sensoryFeedback(Theme.Haptics.toggle, trigger: voice.isRecording)
         .sensoryFeedback(Theme.Haptics.turnEnd, trigger: voice.turnEndTrigger)
+        // Scale/fade AFTER the accessibility + gesture modifiers so hit testing
+        // follows the visible circle. Reduce Motion: no scaling, just a fade.
+        .scaleEffect(showsCompact && !reduceMotion ? Self.compactScale : 1, anchor: .bottomTrailing)
+        .opacity(showsCompact ? Self.compactOpacity : 1)
+        .animation(reduceMotion ? nil : Theme.Motion.quick, value: showsCompact)
         .padding(.trailing, Theme.Spacing.xl)
         .padding(.bottom, Theme.Spacing.xxxl)
     }
+
+    private static let compactScale: CGFloat = 0.6
+    private static let compactOpacity: Double = 0.75
+
+    private var showsCompact: Bool { isCompact && !voice.isRecording && voice.state != .transcribing }
 
     private var isFabDisabled: Bool {
         voice.state == .transcribing || (coachVM.isStreaming && !voice.isRecording)
@@ -230,5 +248,26 @@ private struct PulseRing: View {
             .opacity(animating ? 0 : 0.7)
             .ambient(Theme.Motion.pulseRing, value: animating)
             .onAppear { animating = true }
+    }
+}
+
+// MARK: - Scroll-driven compact state
+
+/// Pure decision for whether the FAB should be compact while Today scrolls:
+/// shrink on a downward scroll, restore on an upward one, and always restore
+/// near the top and near the bottom (where the bottom inset already scrolls
+/// the last card clear of the FAB). Small deltas keep the current state so
+/// jitter does not flicker it.
+enum VoiceFABScroll {
+    static let edgeSlack: Double = 24
+    static let directionThreshold: Double = 6
+
+    static func isCompact(current: Bool, oldOffset: Double, newOffset: Double, maxOffset: Double) -> Bool {
+        if newOffset <= edgeSlack { return false }
+        if maxOffset > 0, maxOffset - newOffset <= edgeSlack { return false }
+        let delta = newOffset - oldOffset
+        if delta > directionThreshold { return true }
+        if delta < -directionThreshold { return false }
+        return current
     }
 }

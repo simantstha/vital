@@ -92,18 +92,12 @@ enum TrendsHeadline {
         /// "2/14" — the ring's center label.
         var ringLabel: String { "\(daysDone)/14" }
 
-        /// "12 more days and I'll tell you what's unusual. Until then,
-        /// here's what I'm seeing." `daysRemaining == 0` (gate 4/5 of
+        /// "Calorie, weight and workout tracking work today. Recovery
+        /// insights get personal after 14 days of data (2 of 14)." — see
+        /// `CalibrationCopy.trendsBody`. `daysRemaining == 0` (gate 4/5 of
         /// `TrendsVerdict` — enough calendar history but not enough real
-        /// variation yet) has no day count left to name, so it reads as
-        /// "not enough variation yet" instead of the false "Zero more days".
-        var bodyText: String {
-            guard daysRemaining > 0 else {
-                return "I don't have enough variation yet to tell you what's unusual. Here's what I'm seeing."
-            }
-            let dayWord = daysRemaining == 1 ? "day" : "days"
-            return "\(wordForCount(daysRemaining).capitalizedFirstLetter) more \(dayWord) and I'll tell you what's unusual. Until then, here's what I'm seeing."
-        }
+        /// variation yet) has no day count to name, so it says that instead.
+        var bodyText: String { CalibrationCopy.trendsBody(daysRemaining: daysRemaining) }
     }
 
     /// The three mutually-exclusive states the Trends header can be in.
@@ -124,7 +118,85 @@ enum TrendsHeadline {
     /// all) — a tile still `.sparse`/`.dimmed`/hidden contributes nothing,
     /// which is exactly what makes an empty `verdicts` read as "no metric is
     /// established" below.
-    static func status(verdicts: [Verdict], goodCount: Int, watchCount: Int, period: TrendsPeriod) -> Status {
+    /// Goal-relevant moves that are NOT metric tiles with a verdict — the
+    /// weight_loss goal's weight trend and the Strength card's lifts — so the
+    /// header can't say "A steady month. Nothing moved" above a +8 kg squat or
+    /// a falling weight trend. Plain counts only; `TrendsViewModel` builds it.
+    struct GoalMoves: Equatable {
+        /// A weight-trend change (kg, first to last trend point) at least this
+        /// big counts as a move; smaller is scale noise.
+        static let weightThresholdKg = 0.5
+
+        /// First to last smoothed weight-trend point (kg) for the weight_loss
+        /// goal; `nil` for other goals, an unestablished trend, or when the
+        /// weight metric tile already counted it.
+        var weightDeltaKg: Double? = nil
+        /// Lifts whose shared 4-week e1RM change (`TrendsStrengthLogic.change`)
+        /// is up / down by at least 1% of its baseline (`TrendsStrengthLogic.isProgressing`).
+        var liftsUp: Int = 0
+        var liftsDown: Int = 0
+
+        /// Good / watch bullets on the goal card (`GoalProgressDTO.reasons`) that
+        /// no other counter here already covers — so the header counts exactly
+        /// the coloured bullets the user can see ("9 of 16 planned sessions"
+        /// amber) and can never read "both good" above an orange line.
+        var reasonsGood: Int = 0
+        var reasonsWatch: Int = 0
+
+        /// Reason kinds the header already counts another way: lifts (the
+        /// Strength card's `liftsUp`/`liftsDown`), the weight trend, and the
+        /// vitals that are metric tiles (`rate`, `resting_hr`, `hrv`, `sleep`).
+        static let reasonKindsCountedElsewhere: Set<String> = ["lift", "rate", "resting_hr", "hrv", "sleep"]
+
+        static let empty = GoalMoves()
+
+        var goodCount: Int {
+            liftsUp + reasonsGood + ((weightDeltaKg ?? 0) <= -Self.weightThresholdKg ? 1 : 0)
+        }
+        var watchCount: Int {
+            liftsDown + reasonsWatch + ((weightDeltaKg ?? 0) >= Self.weightThresholdKg ? 1 : 0)
+        }
+
+        /// `goal` is the diet-goal string ("weight_loss" ...). Weight only
+        /// counts for weight_loss, where down is good.
+        static func make(
+            goal: String,
+            weightTrend: WeightTrendDTO?,
+            strength: TrendsStrengthLogic.Card?,
+            weightAlreadyCounted: Bool,
+            goalProgress: GoalProgressDTO? = nil
+        ) -> GoalMoves {
+            var moves = GoalMoves()
+            for reason in goalProgress?.reasons ?? [] where !reasonKindsCountedElsewhere.contains(reason.kind.lowercased()) {
+                switch reason.tone {
+                case .good:    moves.reasonsGood += 1
+                case .watch:   moves.reasonsWatch += 1
+                case .neutral: break
+                }
+            }
+            if goal == "weight_loss", !weightAlreadyCounted,
+               let trend = weightTrend, trend.established, trend.days.count >= 2,
+               let first = trend.days.first, let last = trend.days.last {
+                moves.weightDeltaKg = last.trendKg - first.trendKg
+            }
+            for lift in strength?.lifts ?? [] {
+                guard let change = lift.changeKg, let baseline = lift.baselineKg else { continue }
+                if TrendsStrengthLogic.isProgressing(changeKg: change, baselineKg: baseline) { moves.liftsUp += 1 }
+                if TrendsStrengthLogic.isDeclining(changeKg: change, baselineKg: baseline) { moves.liftsDown += 1 }
+            }
+            return moves
+        }
+    }
+
+    static func status(
+        verdicts: [Verdict],
+        goodCount rawGoodCount: Int,
+        watchCount rawWatchCount: Int,
+        period: TrendsPeriod,
+        goalMoves: GoalMoves = .empty
+    ) -> Status {
+        let goodCount = rawGoodCount + goalMoves.goodCount
+        let watchCount = rawWatchCount + goalMoves.watchCount
         // `allSatisfy` on an empty array is vacuously `true` — that's
         // intentional: "no metric shown has a verdict yet" is exactly as
         // much "still learning" as "every verdict shown is calibrating".

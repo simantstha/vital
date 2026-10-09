@@ -17,6 +17,8 @@
  *   delete_meal        — undo a meal the coach itself just logged (safety-scoped:
  *                        this user, source 'coach', within the last 30 minutes)
  *   log_weight         — weigh-in → weight_logged event (lib/weightRepository.ts)
+ *   set_goal_target    — set target weight / date / weekly-session target by voice
+ *                        (same validation + re-anchoring as PATCH /api/profile)
  *   get_metric_trend   — daily_metrics trend + mean/min/max + baseline direction
  *   get_weight_trend   — smoothed (EWMA) weight trend, manual + HealthKit merged
  *                        (lib/weightTrend.ts) — a dedicated tool rather than folded
@@ -60,7 +62,8 @@ import { isUuid } from '@/lib/brain/uuid';
 import { readCoreProfile } from '@/lib/coreProfileStore';
 import { parseProfileDetails } from '@/lib/profileDetails';
 import { randomUUID } from 'node:crypto';
-import { parseWorkoutPhrase } from '@/lib/workoutParse';
+import { parseWorkoutPhrase, MAX_SETS } from '@/lib/workoutParse';
+import { canonicalExercise } from '@/lib/exerciseCanonical';
 import { resolveUnitSystem } from '@/lib/units';
 import {
   getExerciseHistory,
@@ -70,9 +73,12 @@ import {
   type SetInput,
 } from '@/lib/workoutRepository';
 import { getWeightReadings, logWeightEntry } from '@/lib/weightRepository';
+import { parseTargetWeightKg, parseTargetDate, parseWeeklySessionsTarget, parseWeeklyDistanceKmTarget, parseRaceDate, parseRaceDistanceKm } from '@/lib/goalTarget';
+import { localDayKey, pickTimeZone } from '@/lib/localDay';
 import { computeWeightTrend } from '@/lib/weightTrend';
-import { LB_PER_KG } from '@/lib/metricFormat';
+import { KM_PER_MILE, LB_PER_KG } from '@/lib/metricFormat';
 import { metricLabel, EVENT_TYPE_LABELS } from './toolLabels';
+import { invalidateGoalProgress } from './goalProgressCache';
 
 // How recent a coach-logged meal (source = 'coach') must be for delete_meal to
 // reach it — see delete_meal's tool description and executor for the full
@@ -225,7 +231,8 @@ export const BRAIN_TOOLS: Tool[] = [
           type: 'string',
           description:
             'Node type. One of: Condition, Medication, Allergy, Intolerance, Goal, ' +
-            'Habit, FoodPreference, Cuisine, PantryItem, LabMarker, Injury, FamilyHistory.',
+            'Habit, FoodPreference, Cuisine, PantryItem, LabMarker, Injury, FamilyHistory. ' +
+            'Do NOT use Goal for the user\'s weight/fitness goal or its targets - those live on the profile; use set_goal_target.',
         },
         label: {
           type: 'string',
@@ -254,7 +261,8 @@ export const BRAIN_TOOLS: Tool[] = [
           type: 'string',
           description:
             'Node type. One of: Condition, Medication, Allergy, Intolerance, Goal, ' +
-            'Habit, FoodPreference, Cuisine, PantryItem, LabMarker, Injury, FamilyHistory.',
+            'Habit, FoodPreference, Cuisine, PantryItem, LabMarker, Injury, FamilyHistory. ' +
+            'Do NOT use Goal for the user\'s weight/fitness goal or its targets - those live on the profile; use set_goal_target.',
         },
         label: {
           type: 'string',
@@ -407,6 +415,53 @@ export const BRAIN_TOOLS: Tool[] = [
         },
       },
       required: ['value'],
+    },
+  },
+  {
+    name: 'set_goal_target',
+    description:
+      'Set the user\'s goal targets (the same ones as Profile → Goal): target weight, target date, ' +
+      'weekly training-session target, and/or weekly distance target (endurance). Use when the user states a target ("my goal is 76 kg by ' +
+      'Christmas", "I want to train 4 times a week"). Pass ONLY the fields they gave; omitted fields ' +
+      'are left untouched. Resolve relative dates ("by Christmas") to a YYYY-MM-DD in the future using ' +
+      'the current local date from context. Never invent a target the user did not state.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        targetWeight: {
+          type: 'number',
+          description: 'Target body weight, in the unit given by `unit` (30–300 kg).',
+        },
+        unit: {
+          type: 'string',
+          description: 'Unit of targetWeight: "kg" or "lb". Defaults to the user\'s display unit if omitted.',
+        },
+        targetDate: {
+          type: 'string',
+          description: 'Target date, YYYY-MM-DD, in the future and at most 3 years out.',
+        },
+        weeklySessions: {
+          type: 'number',
+          description: 'Training sessions per week, an integer 1–14.',
+        },
+        weeklyDistance: {
+          type: 'number',
+          description: 'Weekly distance target for endurance goals, in the unit given by `distanceUnit` (1–300 km).',
+        },
+        distanceUnit: {
+          type: 'string',
+          description: 'Unit of weeklyDistance: "km" or "mi". Defaults to the user\'s display unit (mi for imperial, km otherwise).',
+        },
+        raceDate: {
+          type: 'string',
+          description: 'Endurance race day, YYYY-MM-DD, today or later and at most 2 years out.',
+        },
+        raceDistanceKm: {
+          type: 'number',
+          description: 'Race distance in km (1–250): 5, 10, 21.1 (half marathon) or 42.2 (marathon).',
+        },
+      },
+      required: [],
     },
   },
   {
@@ -979,6 +1034,8 @@ export function toolCallLabel(name: string, input: Record<string, unknown>): str
       return 'Removing that…';
     case 'log_weight':
       return 'Logging your weigh-in…';
+    case 'set_goal_target':
+      return 'Setting your goal…';
     case 'get_metric_trend':
       return `Checking your ${metricLabel(String(input.metric ?? ''))} trend…`;
     case 'get_weight_trend':
@@ -1726,6 +1783,7 @@ export async function executeToolCall(
         payload:   { kcal, c, p, f, name: barcodeName, description: barcodeName, source: 'barcode' },
         source:    'coach',
       }).returning({ id: schema.events.id });
+      invalidateGoalProgress(userId);
 
       return JSON.stringify({
         ok: true,
@@ -1892,6 +1950,105 @@ export async function executeToolCall(
     });
   }
 
+  // ── set_goal_target ───────────────────────────────────────────────────────
+  // Mirrors PATCH /api/profile's goal-target handling: same validators
+  // (lib/goalTarget.ts) and the same re-anchoring rule (lib/goalStart.ts) —
+  // a CHANGED target weight restarts goal progress from the current trend.
+  if (name === 'set_goal_target') {
+    const hasWeight = input.targetWeight != null;
+    const hasDate = input.targetDate != null;
+    const hasSessions = input.weeklySessions != null;
+    const hasDistance = input.weeklyDistance != null;
+    const hasRaceDate = input.raceDate != null;
+    const hasRaceDistance = input.raceDistanceKm != null;
+    if (!hasWeight && !hasDate && !hasSessions && !hasDistance && !hasRaceDate && !hasRaceDistance) {
+      return 'Error: provide at least one of targetWeight, targetDate, weeklySessions, weeklyDistance, raceDate or raceDistanceKm.';
+    }
+
+    const [row] = await db
+      .select({
+        timezone: schema.users.timezone,
+        unit_system: schema.users.unit_system,
+        target_weight_kg: schema.users.target_weight_kg,
+      })
+      .from(schema.users)
+      .where(eq(schema.users.id, userId))
+      .limit(1);
+    const units = resolveUnitSystem(row?.unit_system);
+
+    const update: Partial<typeof schema.users.$inferInsert> = {};
+
+    if (hasWeight) {
+      const raw = Number(input.targetWeight);
+      if (!Number.isFinite(raw)) return 'Error: targetWeight must be a number.';
+      const rawUnit = input.unit != null ? String(input.unit).toLowerCase() : (units === 'imperial' ? 'lb' : 'kg');
+      if (rawUnit !== 'kg' && rawUnit !== 'lb' && rawUnit !== 'lbs') return 'Error: unit must be "kg" or "lb".';
+      const r = parseTargetWeightKg(rawUnit === 'kg' ? raw : raw / LB_PER_KG);
+      if (!r.ok) return `Error: ${r.error}`;
+      update.target_weight_kg = r.value;
+    }
+    if (hasDate) {
+      // "Future" is judged on the user's local day.
+      const todayKey = localDayKey(new Date(), pickTimeZone(null, row?.timezone));
+      const r = parseTargetDate(input.targetDate, todayKey);
+      if (!r.ok) return `Error: ${r.error}`;
+      update.target_date = r.value;
+    }
+    if (hasSessions) {
+      const r = parseWeeklySessionsTarget(Number(input.weeklySessions));
+      if (!r.ok) return `Error: ${r.error}`;
+      update.weekly_sessions_target = r.value;
+    }
+    if (hasDistance) {
+      const raw = Number(input.weeklyDistance);
+      if (!Number.isFinite(raw)) return 'Error: weeklyDistance must be a number.';
+      const rawUnit = input.distanceUnit != null ? String(input.distanceUnit).toLowerCase() : (units === 'imperial' ? 'mi' : 'km');
+      if (rawUnit !== 'km' && rawUnit !== 'mi' && rawUnit !== 'miles') return 'Error: distanceUnit must be "km" or "mi".';
+      const r = parseWeeklyDistanceKmTarget(rawUnit === 'km' ? raw : raw * KM_PER_MILE);
+      if (!r.ok) return `Error: ${r.error}`;
+      update.weekly_distance_km_target = r.value;
+    }
+    if (hasRaceDate) {
+      // Race day may be today; judged on the user's local day.
+      const todayKey = localDayKey(new Date(), pickTimeZone(null, row?.timezone));
+      const r = parseRaceDate(input.raceDate, todayKey);
+      if (!r.ok) return `Error: ${r.error}`;
+      update.race_date = r.value;
+    }
+    if (hasRaceDistance) {
+      const r = parseRaceDistanceKm(Number(input.raceDistanceKm));
+      if (!r.ok) return `Error: ${r.error}`;
+      update.race_distance_km = r.value;
+    }
+
+    let reanchored = false;
+    if (update.target_weight_kg != null && row?.target_weight_kg !== update.target_weight_kg) {
+      // Dynamic import: lib/goalStart.ts pulls in the weight repository, which
+      // other tools.ts test files mock narrowly.
+      // Re-anchor only when a goal starts or flips direction (same rule as PATCH /api/profile).
+      const { buildGoalRestart, shouldReanchorGoalForTarget } = await import('@/lib/goalStart');
+      if (await shouldReanchorGoalForTarget(userId, row?.target_weight_kg ?? null, update.target_weight_kg)) {
+        Object.assign(update, await buildGoalRestart(userId));
+        reanchored = true;
+      }
+    }
+
+    await db.update(schema.users).set(update).where(eq(schema.users.id, userId));
+    invalidateGoalProgress(userId);
+
+    return JSON.stringify({
+      ok: true,
+      ...(update.target_weight_kg != null ? { targetWeightKg: update.target_weight_kg } : {}),
+      ...(update.target_date != null ? { targetDate: update.target_date } : {}),
+      ...(update.weekly_sessions_target != null ? { weeklySessionsTarget: update.weekly_sessions_target } : {}),
+      ...(update.weekly_distance_km_target != null ? { weeklyDistanceKmTarget: update.weekly_distance_km_target } : {}),
+      ...(update.race_date != null ? { raceDate: update.race_date } : {}),
+      ...(update.race_distance_km != null ? { raceDistanceKm: update.race_distance_km } : {}),
+      unitSystem: units,
+      reanchored,
+    });
+  }
+
   // ── get_metric_trend ──────────────────────────────────────────────────────
   if (name === 'get_metric_trend') {
     const metric = String(input.metric ?? '');
@@ -1988,7 +2145,7 @@ export async function executeToolCall(
 
     // repeatLast: re-log the user's last full session for the named exercise.
     if (input.repeatLast === true) {
-      const exerciseGuess = String(input.phrase ?? '').trim().toLowerCase();
+      const exerciseGuess = canonicalExercise(String(input.phrase ?? '')).key;
       if (!exerciseGuess) return 'Error: phrase (exercise name) is required with repeatLast.';
 
       const lastSession = await getLastSessionForExercise(userId, exerciseGuess);
@@ -2021,15 +2178,16 @@ export async function executeToolCall(
 
     if (Array.isArray(input.sets) && input.sets.length > 0) {
       setsToLog = (input.sets as Array<Record<string, unknown>>).flatMap((s) => {
-        const exercise = String(s.exercise ?? '').trim().toLowerCase();
+        const canon = canonicalExercise(String(s.exercise ?? ''));
+        const exercise = canon.key;
         const reps = Number(s.reps);
         const loadKg = s.loadKg != null ? Number(s.loadKg) : null;
         const rpe = s.rpe != null ? Number(s.rpe) : null;
-        const setCount = Math.max(1, Math.round(Number(s.setCount ?? 1)));
+        const setCount = Math.min(MAX_SETS, Math.max(1, Math.round(Number(s.setCount ?? 1))));
         if (!exercise || !Number.isFinite(reps) || reps <= 0) return [];
         return Array.from({ length: setCount }, () => ({
           exercise,
-          exerciseDisplay: exercise,
+          exerciseDisplay: canon.display,
           setIndex: 0, // reassigned below across the whole flat list
           reps: Math.round(reps),
           loadKg,
@@ -2076,12 +2234,12 @@ export async function executeToolCall(
       sets: setsToLog,
     });
 
-    return JSON.stringify({ ok: true, exercise: setsToLog[0].exercise, sets: rows.map(workoutSetToWire) });
+    return JSON.stringify({ ok: true, exercise: setsToLog[0].exercise, exerciseDisplay: setsToLog[0].exerciseDisplay, sets: rows.map(workoutSetToWire) });
   }
 
   // ── get_training_history ─────────────────────────────────────────────────
   if (name === 'get_training_history') {
-    const exercise = typeof input.exercise === 'string' ? input.exercise.trim().toLowerCase() : null;
+    const exercise = typeof input.exercise === 'string' ? canonicalExercise(input.exercise).key || null : null;
 
     if (exercise) {
       const history = await getExerciseHistory(userId, exercise, 50);

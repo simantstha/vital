@@ -16,11 +16,13 @@ import SwiftUI
 struct ErrorStateContainer<Content: View>: View {
     /// A calm, non-alarming glyph — never `exclamationmark.triangle` (that's
     /// `ErrorCard`'s own icon, reserved for the card itself) and never a
-    /// literal "broken" symbol. `wifi.exclamationmark` reads correctly for
-    /// the overwhelming majority of these failures (a network read), and
-    /// `exclamationmark.icloud` is the other sanctioned choice for a
-    /// specifically sync-flavored failure.
-    var icon: String = "wifi.exclamationmark"
+    /// literal "broken" symbol. When `icon` is nil the glyph follows the error
+    /// copy (`UserFacingError.glyph(forMessage:)`): `wifi.exclamationmark` only
+    /// for offline errors, `exclamationmark.icloud` for server/other failures
+    /// so "Something went wrong on our end" never shows a no-wifi symbol.
+    var icon: String? = nil
+    /// The error message shown in `content`, used to pick the glyph.
+    var message: String? = nil
     @ViewBuilder var content: () -> Content
 
     /// Roughly centers the icon+card(s) group in the screen's upper-middle
@@ -37,7 +39,7 @@ struct ErrorStateContainer<Content: View>: View {
             Spacer(minLength: Theme.Spacing.xxxl)
 
             VStack(spacing: Theme.Spacing.lg) {
-                Image(systemName: icon)
+                Image(systemName: icon ?? UserFacingError.glyph(forMessage: message))
                     .font(.system(size: 44, weight: .regular))
                     .foregroundStyle(Theme.Colors.textSecondary)
 

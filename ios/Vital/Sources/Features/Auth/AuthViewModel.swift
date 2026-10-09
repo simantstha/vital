@@ -29,15 +29,22 @@ final class AuthViewModel: ObservableObject {
 
     private let decoder = JSONDecoder()
 
+    /// Presents the fresh Sign in with Apple authorization used to revoke
+    /// Apple's tokens when the account is deleted. Injected so tests can fake
+    /// it; the optional-with-nil default keeps `AuthViewModel()` call sites
+    /// unchanged and avoids evaluating a main-actor default in the caller.
+    private let appleAuthorizer: any AppleAuthorizing
+
     private enum Keys {
         static let onboarded = "user.onboarded"
     }
 
-    init() {
+    init(appleAuthorizer: (any AppleAuthorizing)? = nil) {
+        self.appleAuthorizer = appleAuthorizer ?? AppleReauthorizer()
         // Screenshot harness (VitalUITests/VitalScreenshots, `-VitalFixture
         // <scenario>`): skip real Sign in with Apple / dev sign-in entirely and
         // land signed-in — onboarded unless the scenario is specifically
-        // exercising the onboarding flow. Mirrors exactly what `send(_:)` below
+        // exercising the onboarding flow. Mirrors exactly what `send(_:method:)` below
         // does on a real sign-in response, so the rest of the app (AppRouter,
         // KeychainStore-backed API auth headers) behaves identically. Compiled
         // out of Release entirely.
@@ -94,7 +101,7 @@ final class AuthViewModel: ObservableObject {
         request.setValue("Bearer \(AppSecrets.apiToken)", forHTTPHeaderField: "Authorization")
         request.timeoutInterval = 15
 
-        await send(request)
+        await send(request, method: .dev)
     }
 
     /// Sign in with Apple: verifies the identity token server-side and
@@ -132,24 +139,75 @@ final class AuthViewModel: ObservableObject {
         struct Body: Encodable { let identityToken: String; let name: String? }
         request.httpBody = try? JSONEncoder().encode(Body(identityToken: identityToken, name: appleDisplayName))
 
-        await send(request)
+        await send(request, method: .apple)
     }
 
     func signOut() {
         let token = KeychainStore.loadSessionToken()
         Task { await PushNotificationService.shared.invalidate(sessionToken: token) }
+        clearLocalSession()
+    }
+
+    /// How the current session was created (see `SignInMethod.resolve`).
+    var signInMethod: SignInMethod {
+        #if DEBUG
+        // Screenshot/fixture runs never sign in for real, so never pop an
+        // Apple sheet there regardless of what an earlier run left behind.
+        if FixtureMode.scenario != nil { return .dev }
+        #endif
+        return SignInMethod.resolve(
+            stored: UserDefaults.standard.string(forKey: SignInMethod.defaultsKey),
+            isDebugBuild: Self.isDebugBuild
+        )
+    }
+
+    private static var isDebugBuild: Bool {
+        #if DEBUG
+        return true
+        #else
+        return false
+        #endif
+    }
+
+    /// Deletes the account server-side (DELETE /api/account), then clears local
+    /// auth state exactly like sign-out so RootView returns to the auth screen.
+    ///
+    /// For users who signed in with Apple, first asks Apple for a fresh
+    /// authorization so the server can revoke their Apple tokens (App Store
+    /// guideline 5.1.1(v)). If the user cancels that sheet, nothing is deleted
+    /// and `AccountDeletionError.needsAppleConfirmation` is thrown; if Apple
+    /// fails for any other reason the deletion proceeds without the code.
+    ///
+    /// Throws on failure, leaving the session untouched so the user can retry.
+    func deleteAccount() async throws {
+        let decision = await AppleDeletionGate.decide(
+            usesAppleSignIn: signInMethod == .apple,
+            authorizer: appleAuthorizer
+        )
+        guard case .proceed(let appleAuthorizationCode) = decision else {
+            throw AccountDeletionError.needsAppleConfirmation
+        }
+        try await APIClient.shared.deleteAccount(appleAuthorizationCode: appleAuthorizationCode)
+        // The server already removed this user's push tokens, so no
+        // `invalidate` call (it would just 401).
+        clearLocalSession()
+    }
+
+    private func clearLocalSession() {
         KeychainStore.deleteSessionToken()
         AppRouter.shared.resetSession()
         PushNotificationService.shared.resetSession()
         isAuthenticated = false
         onboarded = false
         UserDefaults.standard.removeObject(forKey: Keys.onboarded)
+        UserDefaults.standard.removeObject(forKey: SignInMethod.defaultsKey)
         UnitPreference.shared.clear()
+        WeeklyReviewStore.shared.reset()
     }
 
     // MARK: - Shared request handling
 
-    private func send(_ request: URLRequest) async {
+    private func send(_ request: URLRequest, method: SignInMethod) async {
         isLoading = true
         errorMessage = nil
         defer { isLoading = false }
@@ -163,6 +221,7 @@ final class AuthViewModel: ObservableObject {
             KeychainStore.saveSessionToken(auth.token)
             onboarded = auth.onboarded
             UserDefaults.standard.set(auth.onboarded, forKey: Keys.onboarded)
+            UserDefaults.standard.set(method.rawValue, forKey: SignInMethod.defaultsKey)
             isAuthenticated = true
             AppRouter.shared.activateSession(token: auth.token)
             UIApplication.shared.registerForRemoteNotifications()

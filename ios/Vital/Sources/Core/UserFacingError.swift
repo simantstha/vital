@@ -146,6 +146,18 @@ enum UserFacingError {
         }
     }
 
+    /// SF Symbol for a whole-screen error state, chosen from the copy
+    /// `copy(for:)` produced: the wifi glyph only for the offline copy (the
+    /// user can fix that), a server/cloud exclamation for everything else (our
+    /// side failed — a wifi glyph there blames the user's connection).
+    static let offlineGlyph = "wifi.exclamationmark"
+    static let serverGlyph = "exclamationmark.icloud"
+
+    static func glyph(forMessage message: String?) -> String {
+        guard let message, message.hasPrefix("You're offline") else { return serverGlyph }
+        return offlineGlyph
+    }
+
     /// Exposed (not `private`) so a caller that needs to *branch* on
     /// connectivity — not just show copy — can reuse the same classification
     /// rather than re-deriving it. `CoachViewModel.send()`'s voice error

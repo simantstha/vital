@@ -39,6 +39,10 @@ struct MemoryView: View {
                                 pendingFactsSection
                             }
 
+                            if let goal = vm.goalSummary {
+                                goalSection(goal)
+                            }
+
                             ForEach(vm.groupedSections) { section in
                                 factSection(section)
                             }
@@ -211,6 +215,45 @@ private extension MemoryView {
         )
     }
 
+    // ── Goal (read-only, owned by Profile) ───────────────────────────────
+
+    /// The user's goal comes from the profile — the one place it's edited —
+    /// so Memory never carries a second, free-text copy that can disagree.
+    func goalSection(_ goal: String) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            HStack(spacing: Theme.Spacing.sm) {
+                GroupIconBadge(systemName: "target")
+                Text("Goals")
+                    .font(Theme.Typography.bodyLarge)
+                    .fontWeight(.bold)
+                    .foregroundStyle(Theme.Colors.textPrimary)
+            }
+            .padding(.horizontal, Theme.Spacing.xs)
+
+            VitalCard {
+                HStack(spacing: Theme.Spacing.md) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(goal)
+                            .font(Theme.Typography.bodyMedium)
+                            .foregroundStyle(Theme.Colors.textPrimary)
+                        Text("Set in Profile")
+                            .font(Theme.Typography.labelSmall)
+                            .foregroundStyle(Theme.Colors.textSecondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    Button("Edit in Profile") {
+                        NotificationCenter.default.post(name: .vitalOpenGoalEditor, object: nil)
+                    }
+                    .font(Theme.Typography.labelSmall)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(Theme.Colors.accentContent)
+                    .accessibilityIdentifier("memory.goal.edit")
+                }
+            }
+        }
+    }
+
     // ── Fact groups ──────────────────────────────────────────────────────
 
     func factSection(_ section: MemoryLogic.Section) -> some View {
@@ -250,7 +293,6 @@ private extension MemoryView {
     func groupIcon(_ group: MemoryLogic.Group) -> String {
         switch group {
         case .health:   return "heart.fill"
-        case .goals:    return "target"
         case .routines: return "clock"
         case .food:     return "fork.knife"
         case .other:    return "ellipsis.circle"

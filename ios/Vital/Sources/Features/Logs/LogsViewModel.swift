@@ -181,7 +181,10 @@ enum LogsPagerSummary {
     /// `LogDisplayItem.km` stays canonical km throughout — it decodes the
     /// server's wire field directly (see `LogsPagerTests`'s decode tests) —
     /// `units` only controls how this render path formats the summed total.
-    static func summaryLine(items: [LogDisplayItem], units: UnitSystem) -> String {
+    ///
+    /// The kcal total is grouped like Today's budget ("1,020 kcal", not
+    /// "1020 kcal"); `locale` is injectable so tests are not device-dependent.
+    static func summaryLine(items: [LogDisplayItem], units: UnitSystem, locale: Locale = .current) -> String {
         var parts: [String] = []
 
         if items.isEmpty {
@@ -197,7 +200,7 @@ enum LogsPagerSummary {
 
         var addedKcalOrKm = false
         if kcalSum > 0 {
-            parts.append("\(Int(kcalSum)) kcal")
+            parts.append(UnitFormat.kcal(Int(kcalSum), locale: locale))
             addedKcalOrKm = true
         }
         if kmSum > 0 {

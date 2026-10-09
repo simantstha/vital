@@ -21,16 +21,29 @@ struct NotificationPreferences: Codable, Equatable {
     let mealSnackTimeMinutes: Int
     let mealDinnerTimeMinutes: Int
     let timezone: String
+    /// Proactive coach check-ins (insight nudges). Server default true.
+    let coachNudgesEnabled: Bool
+    /// Monday weekly-review push. Server default true.
+    let weeklyReviewEnabled: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case morningBriefEnabled, morningBriefTimeMinutes, workoutNotificationsEnabled
+        case sleepNotificationsEnabled, mealsEnabled, mealBreakfastTimeMinutes
+        case mealLunchTimeMinutes, mealSnackTimeMinutes, mealDinnerTimeMinutes, timezone
+        case coachNudgesEnabled, weeklyReviewEnabled
+    }
 
     static func fromLocal(morningEnabled: Bool, morningMinutes: Int, workoutEnabled: Bool,
                           sleepEnabled: Bool, mealsEnabled: Bool, breakfastMinutes: Int,
                           lunchMinutes: Int, snackMinutes: Int, dinnerMinutes: Int,
-                          timezone: String) -> Self {
+                          timezone: String, coachNudgesEnabled: Bool = true,
+                          weeklyReviewEnabled: Bool = true) -> Self {
         Self(morningBriefEnabled: morningEnabled, morningBriefTimeMinutes: morningMinutes,
              workoutNotificationsEnabled: workoutEnabled, sleepNotificationsEnabled: sleepEnabled,
              mealsEnabled: mealsEnabled, mealBreakfastTimeMinutes: breakfastMinutes,
              mealLunchTimeMinutes: lunchMinutes, mealSnackTimeMinutes: snackMinutes,
-             mealDinnerTimeMinutes: dinnerMinutes, timezone: timezone)
+             mealDinnerTimeMinutes: dinnerMinutes, timezone: timezone,
+             coachNudgesEnabled: coachNudgesEnabled, weeklyReviewEnabled: weeklyReviewEnabled)
     }
 
     static func current(defaults: UserDefaults = .standard, timezone: TimeZone = .current) -> Self {
@@ -43,7 +56,29 @@ struct NotificationPreferences: Codable, Equatable {
                   lunchMinutes: defaults.integer(forKey: NotificationPrefsKeys.mealsLunchMinutes),
                   snackMinutes: defaults.integer(forKey: NotificationPrefsKeys.mealsSnackMinutes),
                   dinnerMinutes: defaults.integer(forKey: NotificationPrefsKeys.mealsDinnerMinutes),
-                  timezone: timezone.identifier)
+                  timezone: timezone.identifier,
+                  coachNudgesEnabled: defaults.bool(forKey: NotificationPrefsKeys.coachNudgesEnabled),
+                  weeklyReviewEnabled: defaults.bool(forKey: NotificationPrefsKeys.weeklyReviewEnabled))
+    }
+}
+
+extension NotificationPreferences {
+    /// Tolerant decode: an older server that predates the coach/weekly-review
+    /// toggles omits those keys, which default to true (the server default).
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        morningBriefEnabled = try c.decode(Bool.self, forKey: .morningBriefEnabled)
+        morningBriefTimeMinutes = try c.decode(Int.self, forKey: .morningBriefTimeMinutes)
+        workoutNotificationsEnabled = try c.decode(Bool.self, forKey: .workoutNotificationsEnabled)
+        sleepNotificationsEnabled = try c.decode(Bool.self, forKey: .sleepNotificationsEnabled)
+        mealsEnabled = try c.decode(Bool.self, forKey: .mealsEnabled)
+        mealBreakfastTimeMinutes = try c.decode(Int.self, forKey: .mealBreakfastTimeMinutes)
+        mealLunchTimeMinutes = try c.decode(Int.self, forKey: .mealLunchTimeMinutes)
+        mealSnackTimeMinutes = try c.decode(Int.self, forKey: .mealSnackTimeMinutes)
+        mealDinnerTimeMinutes = try c.decode(Int.self, forKey: .mealDinnerTimeMinutes)
+        timezone = try c.decode(String.self, forKey: .timezone)
+        coachNudgesEnabled = try c.decodeIfPresent(Bool.self, forKey: .coachNudgesEnabled) ?? true
+        weeklyReviewEnabled = try c.decodeIfPresent(Bool.self, forKey: .weeklyReviewEnabled) ?? true
     }
 }
 
@@ -126,7 +161,13 @@ struct AnalysisContext: Codable, Equatable {
     struct GoingIn: Codable, Equatable {
         let sleepMinutes: Double?
         let hrv: AnalysisRecoveryReading?
+        /// Days since the previous workout of the SAME type (older servers send
+        /// only this one).
         let daysSinceLastSameType: Int?
+        /// Days since the last HARD session of ANY type (additive; absent on
+        /// older servers and when no earlier hard session can be shown).
+        /// Preferred over `daysSinceLastSameType` — see `AnalysisLogic.sinceLastHard`.
+        let daysSinceLastHard: Int?
     }
 
     struct NextMorning: Codable, Equatable {
@@ -407,6 +448,7 @@ enum PushRoute: Equatable, Identifiable {
     case sleepAnalysis(String)
     case morningBrief(String?)   // nil = legacy `vital://today` payload
     case coachNudge(String)      // pending_nudges.id — see lib/insights/nudgeWorker.ts
+    case weeklyReview(String)    // weekly_reviews.id — see lib/weeklyReviewWorker.ts
 
     var id: String {
         switch self {
@@ -414,6 +456,7 @@ enum PushRoute: Equatable, Identifiable {
         case .sleepAnalysis(let id): "sleep:\(id)"
         case .morningBrief(let id): "morning:\(id ?? "legacy")"
         case .coachNudge(let id): "nudge:\(id)"
+        case .weeklyReview(let id): "weekly:\(id)"
         }
     }
 
@@ -432,6 +475,7 @@ enum PushRoute: Equatable, Identifiable {
         case "sleep_analysis" where url.host == "sleep-analysis": self = .sleepAnalysis(id)
         case "morning_brief" where url.host == "morning-brief": self = .morningBrief(id)
         case "coach_nudge" where url.host == "coach-nudge": self = .coachNudge(id)
+        case "weekly_review" where url.host == "weekly-review": self = .weeklyReview(id)
         default: return nil
         }
     }
@@ -560,6 +604,8 @@ final class PushNotificationService: ObservableObject {
             defaults.set(remote.mealLunchTimeMinutes, forKey: NotificationPrefsKeys.mealsLunchMinutes)
             defaults.set(remote.mealSnackTimeMinutes, forKey: NotificationPrefsKeys.mealsSnackMinutes)
             defaults.set(remote.mealDinnerTimeMinutes, forKey: NotificationPrefsKeys.mealsDinnerMinutes)
+            defaults.set(remote.coachNudgesEnabled, forKey: NotificationPrefsKeys.coachNudgesEnabled)
+            defaults.set(remote.weeklyReviewEnabled, forKey: NotificationPrefsKeys.weeklyReviewEnabled)
             preferencesError = nil
             if remote.timezone != timezone.identifier {
                 enqueuePreferences(.fromLocal(morningEnabled: remote.morningBriefEnabled,
@@ -568,7 +614,9 @@ final class PushNotificationService: ObservableObject {
                     sleepEnabled: remote.sleepNotificationsEnabled,
                     mealsEnabled: remote.mealsEnabled, breakfastMinutes: remote.mealBreakfastTimeMinutes,
                     lunchMinutes: remote.mealLunchTimeMinutes, snackMinutes: remote.mealSnackTimeMinutes,
-                    dinnerMinutes: remote.mealDinnerTimeMinutes, timezone: timezone.identifier), defaults: defaults)
+                    dinnerMinutes: remote.mealDinnerTimeMinutes, timezone: timezone.identifier,
+                    coachNudgesEnabled: remote.coachNudgesEnabled,
+                    weeklyReviewEnabled: remote.weeklyReviewEnabled), defaults: defaults)
             }
             // Server-owned meal times feed ReminderScheduler's local
             // notification window directly (unlike brief*, which is

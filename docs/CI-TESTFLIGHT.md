@@ -37,6 +37,34 @@ Before the first real tag, enable Sign in with Apple:
 4. Fly backend → set `APPLE_BUNDLE_ID`:
    `flyctl secrets set APPLE_BUNDLE_ID=com.simantstha.vital`
    (the `/api/auth/apple` route verifies the identity token's audience against it).
+5. Fly backend → set the **Sign in with Apple revocation** secrets (App Store
+   guideline 5.1.1(v): apps offering SIWA must revoke the user's Apple tokens
+   when the account is deleted — `DELETE /api/account`, `lib/appleRevocation.ts`):
+   1. Developer portal → **Certificates, Identifiers & Profiles → Keys → +**,
+      tick **Sign in with Apple**, **Configure** it with the app's primary App
+      ID (`com.simantstha.vital`), register, and download `AuthKey_XXXX.p8`
+      (downloadable once; this is a *different* key from the APNs key and the
+      App Store Connect API key).
+   2. Note its **Key ID** and your **Team ID** (Membership), then:
+      ```bash
+      fly secrets set \
+        APPLE_TEAM_ID=<team-id> \
+        APPLE_KEY_ID=<siwa-key-id> \
+        APPLE_CLIENT_ID=com.simantstha.vital \
+        APPLE_PRIVATE_KEY="$(cat AuthKey_XXXX.p8)"
+      ```
+      `APPLE_CLIENT_ID` is the app bundle id; if unset it falls back to
+      `APPLE_BUNDLE_ID` (step 4). `APPLE_PRIVATE_KEY` accepts the PEM with real
+      newlines or literal `\n` escapes. Never put the `.p8` in the repo.
+   3. If any of the four is missing, account deletion still works but skips
+      revocation and logs `SIWA revocation skipped: APPLE_* secrets not
+      configured`; the API response reports `appleRevocation: "skipped"`.
+      After a test deletion with a throwaway Apple-ID account, check
+      `fly logs` for `SIWA revocation failed: ...` (e.g.
+      `token-http-400:invalid_client` = wrong Team ID / Key ID / Client ID /
+      key; `sub-mismatch` / `id-token-invalid` = Apple's returned `id_token`
+      isn't for the deleted account's `users.apple_sub`, so nothing was
+      revoked, by design).
 
 ---
 
