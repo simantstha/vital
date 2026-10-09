@@ -51,9 +51,9 @@ Also shipped: `set_goal_target` coach tool, coach context + persona stay consist
 the goal verdict, unit-aware goal text, onboarding no longer blocks on invalid optional targets.
 
 Owner follow-ups:
-- Replace `AppLinks.privacyPolicy` placeholder URL; review `docs/privacy-policy.md` (DRAFT).
+- [x] Replace `AppLinks.privacyPolicy` placeholder URL; review `docs/privacy-policy.md` (DRAFT). (wave 16) (URL live after deploy; policy text still DRAFT — owner review)
 - Run `npm run eval:prompts` (cases 10–12) with an API key — not run in cloud session.
-- Sign in with Apple token revocation on delete needs an auth-code exchange + client secret (not built).
+- [x] Sign in with Apple token revocation on delete. (wave 16) (built; set APPLE_* Fly secrets to activate)
 
 Next (wave 4):
 - [x] Goal triggers as proactive nudges (plateau, too fast, stalled lift, low-protein streak, inactivity).
@@ -85,7 +85,7 @@ Next (wave 4):
 - [x] Endurance Today goal line shows the verdict reason (no duplicate km).
 - [x] Mic FAB shrinks/dims while scrolling down, restores on scroll up / top / bottom.
 - [x] Weight sparkline draws a compressed goal line ("↓ Goal 76 kg") when the target is far off.
-- [ ] Sign in with Apple token revocation on account deletion.
+- [x] Sign in with Apple token revocation on account deletion. (wave 16) (built; set APPLE_* Fly secrets to activate)
 
 ### Wave 8 (persona review pass 4: coach, onboarding, logs, profile, analyses) — shipped
 - [x] Coach must address any note it cites (persona rule + eval case 13); opener states goal status in the cards' numbers ("1.7 of 7.7 kg down, ~2 weeks ahead of Dec 30").
@@ -137,8 +137,13 @@ Owner follow-ups added by wave 9:
 
 Final persona scores (pass 11): Sam (weight loss) 5/5, Priya (lifter) 5/5, Marcus (half marathon) 5/5 — "I understand where I stand on my goal, why, and what to do next, without confusion."
 
+### Wave 16 (App Store blockers + polish) — shipped
+- [x] Privacy policy served by the backend at https://vital-coach.fly.dev/privacy (static, no auth; rendered from docs/privacy-policy.md) and linked from the app. Content is still the owner-review DRAFT.
+- [x] Sign in with Apple token revocation on account deletion: the app gets a fresh Apple authorization code, the server exchanges and revokes it only when the returned id_token's sub matches the deleted user; gated on APPLE_TEAM_ID / APPLE_KEY_ID / APPLE_CLIENT_ID / APPLE_PRIVATE_KEY Fly secrets (skipped + logged until set); never blocks deletion.
+- [x] Numbers never split from their units anywhere (lift logger, strength/weight cards, distance lines, goal copy); Profile goal row never ends a line in "·".
+
 ### Remaining backlog (non-blocking)
 - [x] HRV hero pill "above your normal" is measured vs the 30-day mean while the chart's normal is a band — align wording.
-- [ ] Sign in with Apple token revocation on account deletion (needs auth-code exchange + client secret).
+- [x] Sign in with Apple token revocation on account deletion. (wave 16) (built; set APPLE_* Fly secrets to activate)
 - [ ] Run prompt evals 10–13 against the real model (needs API key).
 - [ ] Run `npx tsx scripts/backfill-exercise-canonical.ts` (dry run, then `--apply`) on production data.
