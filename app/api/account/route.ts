@@ -16,9 +16,16 @@
  *
  * Response: 200 { ok: true, appleRevocation: 'revoked' | 'skipped' | 'failed' }
  *   - 'revoked'  Apple confirmed the token revocation
- *   - 'skipped'  no authorization code was sent, or the APPLE_* secrets below
+ *   - 'skipped'  no authorization code was sent, the account has no
+ *                `users.apple_sub` (dev account), or the APPLE_* secrets below
  *                are not configured (a warning is logged in the latter case)
- *   - 'failed'   Apple rejected the exchange/revoke, or it timed out (~5 s)
+ *   - 'failed'   Apple rejected the exchange/revoke, it timed out (~5 s), or
+ *                the id_token Apple returned is missing/unverifiable/belongs
+ *                to a different Apple ID than the deleted account's
+ *                `apple_sub` (then /auth/revoke is never called)
+ *
+ * The deleted user's `apple_sub` is read BEFORE the delete transaction (the
+ * row is gone afterwards) and is what the Apple id_token's `sub` must match.
  *
  * Deletion is NEVER blocked or rolled back by revocation: it runs strictly
  * after the DB transaction, is time-boxed, and cannot throw.
@@ -32,7 +39,8 @@
  * Not done server-side: a WHOOP-side revoke (no documented endpoint; see
  * app/api/whoop/disconnect). The WHOOP tokens are deleted from our DB.
  */
-import { db } from '@/db';
+import { eq } from 'drizzle-orm';
+import { db, schema } from '@/db';
 import { getUserIdFromRequest } from '@/lib/auth';
 import { deleteUserData, removeLegacyMemoryDir } from '@/lib/accountDeletion';
 import {
@@ -68,6 +76,26 @@ export async function DELETE(request: Request): Promise<Response> {
   // Read the body up front; nothing below can fail because of it.
   const appleAuthorizationCode = await readAppleAuthorizationCode(request);
 
+  // The users row (and its apple_sub) is gone after the delete below, so read
+  // it now. Only needed when there is a code to revoke; a lookup failure must
+  // not block deletion, it just means we cannot prove whose tokens Apple would
+  // hand back, so revocation is reported as failed.
+  let appleSub: string | null = null;
+  let appleSubLookupFailed = false;
+  if (appleAuthorizationCode) {
+    try {
+      const rows = await db
+        .select({ apple_sub: schema.users.apple_sub })
+        .from(schema.users)
+        .where(eq(schema.users.id, userId))
+        .limit(1);
+      appleSub = rows[0]?.apple_sub ?? null;
+    } catch (err) {
+      console.error('[account/delete] apple_sub lookup failed:', err);
+      appleSubLookupFailed = true;
+    }
+  }
+
   try {
     await deleteUserData(db as unknown as Parameters<typeof deleteUserData>[0], userId);
   } catch (err) {
@@ -87,12 +115,17 @@ export async function DELETE(request: Request): Promise<Response> {
   // deletion into an error response.
   let appleRevocation: 'revoked' | 'skipped' | 'failed';
   try {
-    const revocation = await revokeAppleTokens({
-      authorizationCode: appleAuthorizationCode,
-      config: loadAppleRevocationConfig(),
-      timeoutMs: DEFAULT_REVOCATION_TIMEOUT_MS,
-    });
-    appleRevocation = revocation.status;
+    if (appleSubLookupFailed) {
+      appleRevocation = 'failed';
+    } else {
+      const revocation = await revokeAppleTokens({
+        authorizationCode: appleAuthorizationCode,
+        expectedAppleSub: appleSub,
+        config: loadAppleRevocationConfig(),
+        timeoutMs: DEFAULT_REVOCATION_TIMEOUT_MS,
+      });
+      appleRevocation = revocation.status;
+    }
   } catch (err) {
     console.error('[account/delete] SIWA revocation threw unexpectedly:', err);
     appleRevocation = 'failed';

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { generateKeyPairSync } from 'node:crypto';
 import test, { mock, type TestContext } from 'node:test';
+import * as realSchema from '../../../db/schema';
 
 /**
  * Drives DELETE /api/account with the DB-deletion layer faked (no Postgres,
@@ -10,23 +11,63 @@ import test, { mock, type TestContext } from 'node:test';
  *
  * Focus: Sign in with Apple revocation is best-effort — data deletion must
  * succeed (200) whether the body is empty/garbage, the APPLE_* secrets are
- * missing, or Apple rejects/hangs.
+ * missing, or Apple rejects/hangs — and it must only ever revoke tokens that
+ * belong to the deleted account (id_token `sub` === users.apple_sub, read
+ * before the delete). `@/lib/auth` is faked so no Apple JWKS is fetched.
  */
 
 const state: {
   deleteCalls: string[];
   deleteBehavior: 'ok' | 'fail';
   memoryDirCalls: string[];
-  /** Ordered log of side effects ('delete', 'apple') to assert sequencing. */
+  /** Ordered log of side effects ('lookup', 'delete', 'apple') to assert sequencing. */
   events: string[];
+  /** users.apple_sub of the account being deleted (null = dev account). */
+  appleSub: string | null;
+  lookupBehavior: 'ok' | 'fail';
+  /** `sub` the faked id_token verifier returns; null makes it throw. */
+  idTokenSub: string | null;
 } = {
   deleteCalls: [],
   deleteBehavior: 'ok',
   memoryDirCalls: [],
   events: [],
+  appleSub: 'apple-sub-1',
+  lookupBehavior: 'ok',
+  idTokenSub: 'apple-sub-1',
 };
 
-mock.module('@/db', { namedExports: { db: {} } });
+const fakeDb = {
+  select: () => ({
+    from: (table: unknown) => {
+      if (table !== realSchema.users) throw new Error('unexpected select().from()');
+      return {
+        where: () => ({
+          limit: async () => {
+            state.events.push('lookup');
+            if (state.lookupBehavior === 'fail') throw new Error('lookup boom');
+            return [{ apple_sub: state.appleSub }];
+          },
+        }),
+      };
+    },
+  }),
+};
+
+mock.module('@/db', { namedExports: { db: fakeDb, schema: realSchema } });
+mock.module('@/lib/auth', {
+  namedExports: {
+    getUserIdFromRequest: (req: Request) => {
+      const userId = req.headers.get('x-user-id');
+      if (!userId) throw new Error('Missing x-user-id header');
+      return userId;
+    },
+    verifyAppleIdentityToken: async () => {
+      if (state.idTokenSub === null) throw new Error('bad id_token');
+      return { sub: state.idTokenSub };
+    },
+  },
+});
 mock.module('@/lib/accountDeletion', {
   namedExports: {
     deleteUserData: async (_db: unknown, userId: string) => {
@@ -91,6 +132,9 @@ test.beforeEach((hookCtx) => {
   state.deleteCalls = [];
   state.memoryDirCalls = [];
   state.events = [];
+  state.appleSub = 'apple-sub-1';
+  state.lookupBehavior = 'ok';
+  state.idTokenSub = 'apple-sub-1';
   state.deleteBehavior = 'ok';
   clearAppleEnv();
   t.mock.method(console, 'warn', () => {});
@@ -140,7 +184,7 @@ test('malformed or wrongly-typed body never blocks deletion', async (t) => {
 test('code + configured secrets: revokes at Apple and reports revoked', async (t) => {
   setAppleEnv();
   const calls = mockAppleFetch(t, {
-    '/auth/token': () => new Response(JSON.stringify({ refresh_token: 'rt-1' }), { status: 200 }),
+    '/auth/token': () => new Response(JSON.stringify({ refresh_token: 'rt-1', id_token: 'idt' }), { status: 200 }),
     '/auth/revoke': () => new Response('', { status: 200 }),
   });
   const { DELETE } = await import('./route');
@@ -159,13 +203,14 @@ test('data is deleted BEFORE Apple is contacted', async (t) => {
   setAppleEnv();
   t.mock.method(globalThis, 'fetch', async () => {
     state.events.push('apple');
-    return new Response(JSON.stringify({ refresh_token: 'rt' }), { status: 200 });
+    return new Response(JSON.stringify({ refresh_token: 'rt', id_token: 'idt' }), { status: 200 });
   });
   const { DELETE } = await import('./route');
 
   await DELETE(deleteRequest(withCode()));
 
-  assert.deepEqual(state.events, ['delete', 'apple', 'apple']);
+  // apple_sub is read before the users row is deleted; Apple is contacted last.
+  assert.deepEqual(state.events, ['lookup', 'delete', 'apple', 'apple']);
 });
 
 test('Apple token endpoint rejecting the code still deletes (200, failed)', async (t) => {
@@ -185,7 +230,7 @@ test('Apple token endpoint rejecting the code still deletes (200, failed)', asyn
 test('Apple revoke endpoint failing still deletes (200, failed)', async (t) => {
   setAppleEnv();
   mockAppleFetch(t, {
-    '/auth/token': () => new Response(JSON.stringify({ refresh_token: 'rt' }), { status: 200 }),
+    '/auth/token': () => new Response(JSON.stringify({ refresh_token: 'rt', id_token: 'idt' }), { status: 200 }),
     '/auth/revoke': () => new Response('oops', { status: 500 }),
   });
   const { DELETE } = await import('./route');
@@ -235,4 +280,87 @@ test('a failing DB deletion returns 500 and never contacts Apple', async (t) => 
 
   assert.equal(res.status, 500);
   assert.equal(calls.length, 0, 'tokens must not be revoked for an account that still exists');
+});
+
+test('id_token for a DIFFERENT Apple ID: deletes, reports failed, never calls /auth/revoke', async (t) => {
+  setAppleEnv();
+  state.idTokenSub = 'someone-elses-sub';
+  const calls = mockAppleFetch(t, {
+    '/auth/token': () => new Response(JSON.stringify({ refresh_token: 'rt', id_token: 'idt' }), { status: 200 }),
+    '/auth/revoke': () => new Response('', { status: 200 }),
+  });
+  const { DELETE } = await import('./route');
+
+  const res = await DELETE(deleteRequest(withCode()));
+
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { ok: true, appleRevocation: 'failed' });
+  assert.deepEqual(state.deleteCalls, ['user-1']);
+  assert.equal(calls.length, 1, 'only the token exchange; revoke must not be called');
+  assert.ok(calls.every((c) => !c.url.includes('/auth/revoke')));
+});
+
+test('unverifiable or missing id_token: deletes, reports failed, never calls /auth/revoke', async (t) => {
+  setAppleEnv();
+  const { DELETE } = await import('./route');
+
+  // Verifier rejects the id_token.
+  state.idTokenSub = null;
+  let calls = mockAppleFetch(t, {
+    '/auth/token': () => new Response(JSON.stringify({ refresh_token: 'rt', id_token: 'forged' }), { status: 200 }),
+  });
+  let res = await DELETE(deleteRequest(withCode()));
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).appleRevocation, 'failed');
+  assert.equal(calls.length, 1);
+
+  // Apple returned no id_token at all.
+  state.idTokenSub = 'apple-sub-1';
+  t.mock.restoreAll();
+  t.mock.method(console, 'error', () => {});
+  calls = mockAppleFetch(t, {
+    '/auth/token': () => new Response(JSON.stringify({ refresh_token: 'rt' }), { status: 200 }),
+  });
+  res = await DELETE(deleteRequest(withCode()));
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).appleRevocation, 'failed');
+  assert.equal(calls.length, 1);
+});
+
+test('dev account without apple_sub: deletes, skips revocation, makes no Apple calls', async (t) => {
+  setAppleEnv();
+  state.appleSub = null;
+  const calls = mockAppleFetch(t, {});
+  const { DELETE } = await import('./route');
+
+  const res = await DELETE(deleteRequest(withCode()));
+
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { ok: true, appleRevocation: 'skipped' });
+  assert.deepEqual(state.deleteCalls, ['user-1']);
+  assert.equal(calls.length, 0);
+});
+
+test('apple_sub lookup failure never blocks deletion; revocation is reported failed', async (t) => {
+  setAppleEnv();
+  state.lookupBehavior = 'fail';
+  const calls = mockAppleFetch(t, {});
+  const { DELETE } = await import('./route');
+
+  const res = await DELETE(deleteRequest(withCode()));
+
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { ok: true, appleRevocation: 'failed' });
+  assert.deepEqual(state.deleteCalls, ['user-1']);
+  assert.equal(calls.length, 0, 'cannot prove whose tokens these are, so do not contact Apple');
+});
+
+test('no authorization code: apple_sub is not even looked up', async (t) => {
+  setAppleEnv();
+  mockAppleFetch(t, {});
+  const { DELETE } = await import('./route');
+
+  await DELETE(deleteRequest());
+
+  assert.deepEqual(state.events, ['delete']);
 });

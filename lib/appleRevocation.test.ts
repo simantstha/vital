@@ -10,6 +10,7 @@ import {
   buildAppleClientSecret,
   loadAppleRevocationConfig,
   revokeAppleTokens,
+  type AppleIdTokenVerifier,
   type AppleRevocationConfig,
 } from './appleRevocation';
 
@@ -25,6 +26,18 @@ const CONFIG: AppleRevocationConfig = {
 };
 
 const NOW = new Date('2026-10-01T12:00:00Z');
+
+/** The deleted account's users.apple_sub. */
+const SUB = 'apple-sub-123';
+
+/** Stand-in for lib/auth.ts verifyAppleIdentityToken: accepts any id_token for SUB. */
+const okVerifier: AppleIdTokenVerifier = async () => ({ sub: SUB });
+
+/** revokeAppleTokens with the matching-account defaults; tests override what they exercise. */
+const revoke = (
+  params: Partial<Parameters<typeof revokeAppleTokens>[0]> &
+    Pick<Parameters<typeof revokeAppleTokens>[0], 'authorizationCode' | 'config'>
+) => revokeAppleTokens({ expectedAppleSub: SUB, verifyIdToken: okVerifier, ...params });
 
 type Call = { url: string; form: URLSearchParams };
 
@@ -144,7 +157,7 @@ test('revokeAppleTokens exchanges the code, then revokes the refresh token', asy
     () => new Response('', { status: 200 }),
   ]);
 
-  const result = await revokeAppleTokens({ authorizationCode: 'code-abc', config: CONFIG, fetchImpl });
+  const result = await revoke({ authorizationCode: 'code-abc', config: CONFIG, fetchImpl });
 
   assert.deepEqual(result, { status: 'revoked' });
   assert.equal(calls.length, 2);
@@ -166,11 +179,11 @@ test('revokeAppleTokens exchanges the code, then revokes the refresh token', asy
 
 test('revokeAppleTokens falls back to the access token when no refresh token is returned', async () => {
   const { calls, fetchImpl } = fakeFetch([
-    () => json({ access_token: 'at-only' }),
+    () => json({ access_token: 'at-only', id_token: 'idt' }),
     () => new Response('', { status: 200 }),
   ]);
 
-  const result = await revokeAppleTokens({ authorizationCode: 'code', config: CONFIG, fetchImpl });
+  const result = await revoke({ authorizationCode: 'code', config: CONFIG, fetchImpl });
 
   assert.equal(result.status, 'revoked');
   assert.equal(calls[1].form.get('token'), 'at-only');
@@ -180,7 +193,7 @@ test('revokeAppleTokens falls back to the access token when no refresh token is 
 test('revokeAppleTokens reports failed (and never revokes) when the token endpoint errors', async () => {
   const { calls, fetchImpl } = fakeFetch([() => json({ error: 'invalid_grant' }, 400)]);
 
-  const result = await revokeAppleTokens({ authorizationCode: 'used-code', config: CONFIG, fetchImpl });
+  const result = await revoke({ authorizationCode: 'used-code', config: CONFIG, fetchImpl });
 
   assert.equal(result.status, 'failed');
   assert.equal(result.reason, 'token-http-400:invalid_grant');
@@ -189,17 +202,17 @@ test('revokeAppleTokens reports failed (and never revokes) when the token endpoi
 
 test('revokeAppleTokens reports failed when the token response has no usable token', async () => {
   const { fetchImpl } = fakeFetch([() => json({ token_type: 'Bearer' })]);
-  const result = await revokeAppleTokens({ authorizationCode: 'code', config: CONFIG, fetchImpl });
+  const result = await revoke({ authorizationCode: 'code', config: CONFIG, fetchImpl });
   assert.deepEqual(result, { status: 'failed', reason: 'token-missing' });
 });
 
 test('revokeAppleTokens reports failed when the revoke endpoint errors', async () => {
   const { calls, fetchImpl } = fakeFetch([
-    () => json({ refresh_token: 'rt' }),
+    () => json({ refresh_token: 'rt', id_token: 'idt' }),
     () => json({ error: 'invalid_client' }, 401),
   ]);
 
-  const result = await revokeAppleTokens({ authorizationCode: 'code', config: CONFIG, fetchImpl });
+  const result = await revoke({ authorizationCode: 'code', config: CONFIG, fetchImpl });
 
   assert.equal(result.status, 'failed');
   assert.equal(result.reason, 'revoke-http-401:invalid_client');
@@ -210,14 +223,14 @@ test('revokeAppleTokens reports failed (not throws) when fetch rejects', async (
   const fetchImpl = async () => {
     throw new TypeError('fetch failed');
   };
-  const result = await revokeAppleTokens({ authorizationCode: 'code', config: CONFIG, fetchImpl });
+  const result = await revoke({ authorizationCode: 'code', config: CONFIG, fetchImpl });
   assert.equal(result.status, 'failed');
   assert.match(result.reason ?? '', /^token-network-error/);
 });
 
 test('revokeAppleTokens reports failed (not throws) when the private key is unusable', async () => {
   const { calls, fetchImpl } = fakeFetch([]);
-  const result = await revokeAppleTokens({
+  const result = await revoke({
     authorizationCode: 'code',
     config: { ...CONFIG, privateKeyPem: 'garbage' },
     fetchImpl,
@@ -230,7 +243,7 @@ test('revokeAppleTokens times out a hung Apple endpoint and reports failed', asy
   const fetchImpl = () => new Promise<Response>(() => {}); // never settles, ignores signal
 
   const started = Date.now();
-  const result = await revokeAppleTokens({
+  const result = await revoke({
     authorizationCode: 'code',
     config: CONFIG,
     fetchImpl,
@@ -247,9 +260,9 @@ test('revokeAppleTokens does not start /auth/revoke after the deadline has passe
     calls.push(url);
     // Token endpoint answers only after the 20ms deadline (ignoring the signal).
     await new Promise((r) => setTimeout(r, 60));
-    return json({ refresh_token: 'rt' });
+    return json({ refresh_token: 'rt', id_token: 'idt' });
   };
-  const result = await revokeAppleTokens({
+  const result = await revoke({
     authorizationCode: 'code',
     config: CONFIG,
     fetchImpl,
@@ -264,7 +277,7 @@ test('revokeAppleTokens skips (with a warning, no network) when config is missin
   const warn = t.mock.method(console, 'warn', () => {});
   const { calls, fetchImpl } = fakeFetch([]);
 
-  const result = await revokeAppleTokens({ authorizationCode: 'code', config: null, fetchImpl });
+  const result = await revoke({ authorizationCode: 'code', config: null, fetchImpl });
 
   assert.deepEqual(result, { status: 'skipped', reason: 'not-configured' });
   assert.equal(calls.length, 0);
@@ -275,7 +288,7 @@ test('revokeAppleTokens skips (with a warning, no network) when config is missin
 test('revokeAppleTokens skips when there is no authorization code', async () => {
   const { calls, fetchImpl } = fakeFetch([]);
   for (const authorizationCode of [undefined, null, '', '   ']) {
-    const result = await revokeAppleTokens({ authorizationCode, config: CONFIG, fetchImpl });
+    const result = await revoke({ authorizationCode, config: CONFIG, fetchImpl });
     assert.deepEqual(result, { status: 'skipped', reason: 'no-authorization-code' });
   }
   assert.equal(calls.length, 0);
@@ -285,12 +298,106 @@ test('revokeAppleTokens never logs the code, tokens, or client secret', async (t
   const errors = t.mock.method(console, 'error', () => {});
   const warns = t.mock.method(console, 'warn', () => {});
   const { fetchImpl } = fakeFetch([
-    () => json({ refresh_token: 'rt-SECRET' }),
+    () => json({ refresh_token: 'rt-SECRET', id_token: 'idt' }),
     () => json({ error: 'invalid_client' }, 401),
   ]);
-  await revokeAppleTokens({ authorizationCode: 'code-SECRET', config: CONFIG, fetchImpl });
+  await revoke({ authorizationCode: 'code-SECRET', config: CONFIG, fetchImpl });
   const logged = JSON.stringify([...errors.mock.calls, ...warns.mock.calls].map((c) => c.arguments));
   assert.ok(!logged.includes('code-SECRET'));
   assert.ok(!logged.includes('rt-SECRET'));
   assert.ok(!logged.includes('PRIVATE KEY'));
+});
+
+// --- wrong-account guard -----------------------------------------------------
+
+test('revokeAppleTokens verifies the id_token against the client id and revokes when sub matches', async () => {
+  const seen: Array<{ idToken: string; audience: string }> = [];
+  const verifyIdToken: AppleIdTokenVerifier = async (idToken, audience) => {
+    seen.push({ idToken, audience });
+    return { sub: SUB };
+  };
+  const { calls, fetchImpl } = fakeFetch([
+    () => json({ refresh_token: 'rt', id_token: 'the-id-token' }),
+    () => new Response('', { status: 200 }),
+  ]);
+
+  const result = await revoke({ authorizationCode: 'code', config: CONFIG, fetchImpl, verifyIdToken });
+
+  assert.deepEqual(result, { status: 'revoked' });
+  assert.deepEqual(seen, [{ idToken: 'the-id-token', audience: CONFIG.clientId }]);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].url, APPLE_REVOKE_URL);
+});
+
+test('revokeAppleTokens does NOT revoke when the id_token sub is a different Apple ID', async (t) => {
+  const errors = t.mock.method(console, 'error', () => {});
+  const { calls, fetchImpl } = fakeFetch([
+    () => json({ refresh_token: 'rt-OTHER', id_token: 'idt-OTHER' }),
+    () => new Response('', { status: 200 }),
+  ]);
+
+  const result = await revoke({
+    authorizationCode: 'code',
+    config: CONFIG,
+    fetchImpl,
+    verifyIdToken: async () => ({ sub: 'someone-elses-sub' }),
+  });
+
+  assert.deepEqual(result, { status: 'failed', reason: 'sub-mismatch' });
+  assert.equal(calls.length, 1, '/auth/revoke must never be called');
+  assert.ok(calls.every((c) => c.url !== APPLE_REVOKE_URL));
+  const logged = JSON.stringify(errors.mock.calls.map((c) => c.arguments));
+  for (const secret of ['rt-OTHER', 'idt-OTHER', 'someone-elses-sub', SUB]) {
+    assert.ok(!logged.includes(secret), `log must not contain ${secret}`);
+  }
+});
+
+test('revokeAppleTokens does NOT revoke when the token response has no id_token', async () => {
+  const { calls, fetchImpl } = fakeFetch([
+    () => json({ refresh_token: 'rt' }),
+    () => new Response('', { status: 200 }),
+  ]);
+  let verifierCalled = false;
+
+  const result = await revoke({
+    authorizationCode: 'code',
+    config: CONFIG,
+    fetchImpl,
+    verifyIdToken: async () => {
+      verifierCalled = true;
+      return { sub: SUB };
+    },
+  });
+
+  assert.deepEqual(result, { status: 'failed', reason: 'id-token-invalid' });
+  assert.equal(verifierCalled, false);
+  assert.equal(calls.length, 1, '/auth/revoke must never be called');
+});
+
+test('revokeAppleTokens does NOT revoke when the id_token fails verification', async () => {
+  const { calls, fetchImpl } = fakeFetch([
+    () => json({ refresh_token: 'rt', id_token: 'forged' }),
+    () => new Response('', { status: 200 }),
+  ]);
+
+  const result = await revoke({
+    authorizationCode: 'code',
+    config: CONFIG,
+    fetchImpl,
+    verifyIdToken: async () => {
+      throw new Error('signature verification failed');
+    },
+  });
+
+  assert.deepEqual(result, { status: 'failed', reason: 'id-token-invalid' });
+  assert.equal(calls.length, 1, '/auth/revoke must never be called');
+});
+
+test('revokeAppleTokens skips a user with no apple_sub (dev account) without touching Apple', async () => {
+  const { calls, fetchImpl } = fakeFetch([]);
+  for (const expectedAppleSub of [null, undefined, '']) {
+    const result = await revoke({ authorizationCode: 'code', config: CONFIG, fetchImpl, expectedAppleSub });
+    assert.deepEqual(result, { status: 'skipped', reason: 'not-apple-user' });
+  }
+  assert.equal(calls.length, 0);
 });

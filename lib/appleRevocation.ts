@@ -11,6 +11,13 @@
  *      refresh token (falling back to the access token), and
  *   3. revokes that token at https://appleid.apple.com/auth/revoke.
  *
+ * Wrong-account guard: the sheet the user sees at deletion time uses whatever
+ * Apple ID is on the device, which may not be the one that created this
+ * account. Apple's /auth/token response carries an `id_token`; we verify it
+ * (Apple's JWKS, audience = client id) and require its `sub` to equal the
+ * deleted user's `users.apple_sub` BEFORE calling /auth/revoke, so we never
+ * revoke a different Apple ID's tokens.
+ *
  * Revocation is strictly best-effort: `revokeAppleTokens` NEVER throws, and
  * callers must never let its outcome block or undo data deletion. It resolves
  * to `{ status: 'revoked' | 'skipped' | 'failed' }`.
@@ -26,6 +33,7 @@
  * No secret, authorization code, or token is ever logged.
  */
 import { SignJWT, importPKCS8 } from 'jose';
+import { verifyAppleIdentityToken } from './auth';
 
 export const APPLE_AUDIENCE = 'https://appleid.apple.com';
 export const APPLE_TOKEN_URL = 'https://appleid.apple.com/auth/token';
@@ -58,6 +66,9 @@ export interface AppleRevocationResult {
 }
 
 export type AppleFetch = (url: string, init: RequestInit) => Promise<Response>;
+
+/** Verifies an Apple-issued id_token for `audience` and returns its `sub`. */
+export type AppleIdTokenVerifier = (idToken: string, audience: string) => Promise<{ sub: string }>;
 
 /** Accepts a PEM pasted with literal "\n" sequences or wrapped in quotes. */
 function normalizePem(raw: string): string {
@@ -153,8 +164,10 @@ async function postForm(
 
 async function exchangeAndRevoke(
   authorizationCode: string,
+  expectedAppleSub: string,
   config: AppleRevocationConfig,
   doFetch: AppleFetch,
+  verifyIdToken: AppleIdTokenVerifier,
   signal: AbortSignal
 ): Promise<void> {
   let clientSecret: string;
@@ -177,7 +190,7 @@ async function exchangeAndRevoke(
     'token'
   );
 
-  let tokens: { refresh_token?: unknown; access_token?: unknown };
+  let tokens: { refresh_token?: unknown; access_token?: unknown; id_token?: unknown };
   try {
     tokens = (await tokenRes.json()) as typeof tokens;
   } catch {
@@ -194,6 +207,21 @@ async function exchangeAndRevoke(
     tokenTypeHint = 'access_token';
   } else {
     throw new RevocationError('token-missing');
+  }
+
+  // Only revoke tokens that belong to the account being deleted. A missing or
+  // unverifiable id_token means we cannot prove that, so we do not revoke.
+  if (typeof tokens.id_token !== 'string' || !tokens.id_token) {
+    throw new RevocationError('id-token-invalid');
+  }
+  let idTokenSub: string;
+  try {
+    ({ sub: idTokenSub } = await verifyIdToken(tokens.id_token, config.clientId));
+  } catch {
+    throw new RevocationError('id-token-invalid');
+  }
+  if (idTokenSub !== expectedAppleSub) {
+    throw new RevocationError('sub-mismatch');
   }
 
   await postForm(
@@ -216,21 +244,34 @@ async function exchangeAndRevoke(
  *
  *  - no code            -> `skipped` (older app build, dev sign-in, or Apple
  *                          sheet failed on device)
+ *  - no expectedAppleSub-> `skipped` ('not-apple-user': the account has no
+ *                          `users.apple_sub`, e.g. a dev account)
  *  - config === null    -> `skipped` + a logged warning
- *  - Apple 2xx on both  -> `revoked`
+ *  - Apple 2xx on both, and the id_token `sub` equals `expectedAppleSub`
+ *                       -> `revoked`
+ *  - id_token missing/unverifiable -> `failed` ('id-token-invalid'), and
+ *    `sub` differs                 -> `failed` ('sub-mismatch'); in both cases
+ *    /auth/revoke is never called
  *  - anything else      -> `failed` (logged without secrets)
  */
 export async function revokeAppleTokens(params: {
   authorizationCode: string | null | undefined;
+  /** The deleted user's `users.apple_sub`; null/undefined for non-Apple users. */
+  expectedAppleSub: string | null | undefined;
   config: AppleRevocationConfig | null;
   fetchImpl?: AppleFetch;
+  /** Defaults to lib/auth.ts verifyAppleIdentityToken (Apple's JWKS). */
+  verifyIdToken?: AppleIdTokenVerifier;
   timeoutMs?: number;
 }): Promise<AppleRevocationResult> {
-  const { authorizationCode, config } = params;
+  const { authorizationCode, config, expectedAppleSub } = params;
 
   const code = typeof authorizationCode === 'string' ? authorizationCode.trim() : '';
   if (!code || code.length > MAX_AUTHORIZATION_CODE_LENGTH) {
     return { status: 'skipped', reason: 'no-authorization-code' };
+  }
+  if (!expectedAppleSub) {
+    return { status: 'skipped', reason: 'not-apple-user' };
   }
   if (!config) {
     console.warn('[account/delete] SIWA revocation skipped: APPLE_* secrets not configured');
@@ -238,6 +279,7 @@ export async function revokeAppleTokens(params: {
   }
 
   const doFetch: AppleFetch = params.fetchImpl ?? ((url, init) => globalThis.fetch(url, init));
+  const verifyIdToken: AppleIdTokenVerifier = params.verifyIdToken ?? verifyAppleIdentityToken;
   const timeoutMs = params.timeoutMs ?? DEFAULT_REVOCATION_TIMEOUT_MS;
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -252,7 +294,10 @@ export async function revokeAppleTokens(params: {
   });
 
   try {
-    await Promise.race([exchangeAndRevoke(code, config, doFetch, controller.signal), deadline]);
+    await Promise.race([
+      exchangeAndRevoke(code, expectedAppleSub, config, doFetch, verifyIdToken, controller.signal),
+      deadline,
+    ]);
     return { status: 'revoked' };
   } catch (err) {
     const reason = err instanceof RevocationError ? err.reason : 'unexpected-error';

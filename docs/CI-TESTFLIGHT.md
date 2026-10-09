@@ -62,7 +62,9 @@ Before the first real tag, enable Sign in with Apple:
       After a test deletion with a throwaway Apple-ID account, check
       `fly logs` for `SIWA revocation failed: ...` (e.g.
       `token-http-400:invalid_client` = wrong Team ID / Key ID / Client ID /
-      key).
+      key; `sub-mismatch` / `id-token-invalid` = Apple's returned `id_token`
+      isn't for the deleted account's `users.apple_sub`, so nothing was
+      revoked, by design).
 
 ---
 
