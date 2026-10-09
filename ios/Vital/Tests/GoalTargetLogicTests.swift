@@ -128,7 +128,7 @@ final class GoalTargetLogicTests: XCTestCase {
     func testSanityWarningLoss() {
         XCTAssertEqual(
             GoalTargetLogic.sanityWarning(goal: "lose_fat", currentKg: 82, targetKg: 85, targetDate: nil, units: .metric, from: now),
-            "Your target should be below your current weight."
+            GoalTargetLogic.reachedTargetMessage
         )
         XCTAssertEqual(
             GoalTargetLogic.sanityWarning(goal: "lose_fat", currentKg: 82, targetKg: 55, targetDate: nil, units: .metric, from: now),
@@ -154,7 +154,7 @@ final class GoalTargetLogicTests: XCTestCase {
     func testSanityWarningMuscleTargetMustBeAbove() {
         XCTAssertEqual(
             GoalTargetLogic.sanityWarning(goal: "build_muscle", currentKg: 80, targetKg: 78, targetDate: nil, units: .metric, from: now),
-            "Your target should be above your current weight."
+            GoalTargetLogic.reachedTargetMessage
         )
         XCTAssertNil(
             GoalTargetLogic.sanityWarning(goal: "build_muscle", currentKg: 80, targetKg: 85, targetDate: nil, units: .metric, from: now)
@@ -267,5 +267,72 @@ final class GoalTargetLogicTests: XCTestCase {
         let r = try JSONDecoder().decode(ProfileResponse.self, from: Data(json.utf8))
         XCTAssertEqual(r.weeklyDistanceKmTarget, 30)
         XCTAssertTrue(TodayViewModel.profileHasGoalTarget(r))
+    }
+
+    // MARK: - Reached target (no "should be below" scolding)
+
+    func testReachedTargetReplacesTheShouldBeBelowWarning() {
+        let expected = "You've reached this target — set a new one or switch to maintenance."
+        XCTAssertEqual(GoalTargetLogic.reachedTargetMessage, expected)
+        // Current weight at or below a loss target: the goal is met.
+        for target in [82.0, 85.0] {
+            XCTAssertEqual(
+                GoalTargetLogic.sanityWarning(goal: "weight_loss", currentKg: 82, targetKg: target, targetDate: nil, units: .metric, from: now),
+                expected
+            )
+        }
+        // A still-open loss target never gets it.
+        XCTAssertNotEqual(
+            GoalTargetLogic.sanityWarning(goal: "weight_loss", currentKg: 82, targetKg: 55, targetDate: nil, units: .metric, from: now),
+            expected
+        )
+        // Same idea for a muscle (gain) target already met.
+        XCTAssertEqual(
+            GoalTargetLogic.sanityWarning(goal: "muscle", currentKg: 84, targetKg: 82, targetDate: nil, units: .metric, from: now),
+            expected
+        )
+        XCTAssertNil(
+            GoalTargetLogic.sanityWarning(goal: "muscle", currentKg: 80, targetKg: 82, targetDate: nil, units: .metric, from: now)
+        )
+        // The old scolding copy is gone for good.
+        XCTAssertFalse(expected.contains("should be"))
+    }
+
+    func testCurrentMeetsTargetByDirection() {
+        XCTAssertTrue(GoalTargetLogic.currentMeetsTarget(goal: "weight_loss", currentKg: 76, targetKg: 76))
+        XCTAssertTrue(GoalTargetLogic.currentMeetsTarget(goal: "lose_fat", currentKg: 75.5, targetKg: 76))
+        XCTAssertFalse(GoalTargetLogic.currentMeetsTarget(goal: "weight_loss", currentKg: 76.1, targetKg: 76))
+        XCTAssertTrue(GoalTargetLogic.currentMeetsTarget(goal: "muscle", currentKg: 82, targetKg: 82))
+        XCTAssertFalse(GoalTargetLogic.currentMeetsTarget(goal: "build_muscle", currentKg: 81.9, targetKg: 82))
+    }
+
+    // MARK: - Passed target date
+
+    func testPassedTargetDayIsTodayOrEarlierOnly() {
+        // `now` is 2026-10-06 12:00 UTC.
+        XCTAssertTrue(GoalTargetLogic.isPassedTargetDay("2026-09-30", now: now, calendar: utc))
+        XCTAssertTrue(GoalTargetLogic.isPassedTargetDay("2026-10-06", now: now, calendar: utc))
+        XCTAssertFalse(GoalTargetLogic.isPassedTargetDay("2026-10-07", now: now, calendar: utc))
+        XCTAssertFalse(GoalTargetLogic.isPassedTargetDay("2027-01-15", now: now, calendar: utc))
+        XCTAssertFalse(GoalTargetLogic.isPassedTargetDay("soon", now: now, calendar: utc))
+    }
+
+    func testPassedTargetDateLabel() {
+        XCTAssertEqual(GoalTargetLogic.passedTargetDateLabel(day: "2026-09-30", now: now, calendar: utc), "Target date passed (Sep 30)")
+        XCTAssertEqual(GoalTargetLogic.passedTargetDateLabel(day: "2026-10-06", now: now, calendar: utc), "Target date is today (Oct 6)")
+        XCTAssertNil(GoalTargetLogic.passedTargetDateLabel(day: "nope", now: now, calendar: utc))
+    }
+
+    func testTargetDateInPastErrorReadsAsPlainCopyAndIsMatchedFromTheServerBody() {
+        XCTAssertEqual(APIError.targetDateInPast.errorDescription, "Pick a date after today")
+        XCTAssertEqual(
+            UserFacingError.copy(for: APIError.targetDateInPast, context: .write),
+            "Pick a date after today"
+        )
+        XCTAssertTrue(APIError.isTargetDateInPastResponse(Data(#"{"error":"Target date must be in the future"}"#.utf8)))
+        XCTAssertTrue(APIError.isTargetDateInPastResponse(Data(#"{"error":"Target date must be in the future."}"#.utf8)))
+        // Other 400s keep their generic handling.
+        XCTAssertFalse(APIError.isTargetDateInPastResponse(Data(#"{"error":"targetDate must be a YYYY-MM-DD date in the future, at most 3 years out."}"#.utf8)))
+        XCTAssertFalse(APIError.isTargetDateInPastResponse(Data("not json".utf8)))
     }
 }

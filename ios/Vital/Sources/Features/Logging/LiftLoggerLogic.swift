@@ -308,6 +308,11 @@ enum LiftLoggerLogic {
     static let restExtension: TimeInterval = 30
     /// How long "Rest done" stays on screen after the countdown hits 0.
     static let restDoneDisplaySeconds: TimeInterval = 4
+    /// What VoiceOver is told when the countdown reaches 0 (the visible "Rest
+    /// done" and the haptic are invisible to a screen-reader user otherwise).
+    static let restDoneAnnouncement = "Rest done"
+    /// Minimum side (pt) of the rest bar's "+30s" / "Skip" tap targets (HIG: 44).
+    static let restButtonMinTapSize: CGFloat = 44
 
     /// Rest length for an exercise key: 2:30 for lower-body compounds, else 2:00.
     static func restDuration(forKey key: String) -> TimeInterval {

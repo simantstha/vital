@@ -64,12 +64,23 @@ enum GoalProgressLogic {
 
     static func tone(for verdict: GoalVerdict) -> Tone {
         switch verdict {
-        case .onTrack, .ahead, .progressing, .building:
+        case .onTrack, .ahead, .progressing, .building, .reached:
             return .good
         case .tooFast, .behind, .stalled:
             return .watch
         case .holding, .needsTarget, .insufficientData:
             return .neutral
+        }
+    }
+
+    /// The spoken form of a colour-only tone dot or tinted value: "good" /
+    /// "watch"; `nil` for neutral. VoiceOver users otherwise get nothing from
+    /// the green / amber that sighted users read.
+    static func accessibilityToneWord(for tone: GoalReasonTone) -> String? {
+        switch tone {
+        case .good:    return "good"
+        case .watch:   return "watch"
+        case .neutral: return nil
         }
     }
 
@@ -101,6 +112,7 @@ enum GoalProgressLogic {
         case .holding:          return "Holding steady"
         case .needsTarget:      return "Set a target"
         case .insufficientData: return "Getting started"
+        case .reached:          return "Goal reached"
         }
     }
 
@@ -109,9 +121,41 @@ enum GoalProgressLogic {
     /// 0...1 from the server's `progressPct` (0...100, clamped again here
     /// defensively), or `nil` when the server couldn't compute one.
     static func progressFraction(_ progress: GoalProgressDTO) -> Double? {
+        // A reached goal is full by definition, whatever percentage the server
+        // computed from a trend weight that may still be a hair short.
+        if progress.verdict == .reached { return 1 }
         guard let pct = progress.current.progressPct, pct.isFinite else { return nil }
         return min(1, max(0, pct / 100))
     }
+
+    // MARK: - Goal reached
+
+    /// The server says the target weight has been met (verdict "reached").
+    static func isReached(_ progress: GoalProgressDTO) -> Bool {
+        progress.verdict == .reached
+    }
+
+    /// "Reached Oct 3" from the payload's `reachedAt` (a "YYYY-MM-DD" date or an
+    /// ISO timestamp — only the day is used); `nil` when absent or unparseable.
+    static func reachedLine(_ progress: GoalProgressDTO, now: Date = Date(), locale: Locale = .current) -> String? {
+        guard progress.verdict == .reached, let raw = progress.reachedAt,
+              let text = dateText(String(raw.prefix(10)), now: now, locale: locale) else { return nil }
+        return "Reached \(text)"
+    }
+
+    /// The Today line / card primary text for a reached goal: the capped weight
+    /// line ("8 of 8 kg lost"), else the server headline minus its verdict
+    /// prefix, else the chip word. Never an ETA or a pace-vs-target phrase.
+    static func reachedText(_ progress: GoalProgressDTO, system: UnitSystem) -> String {
+        if let line = weightLine(progress, system: system) { return line }
+        return headlineWithoutVerdict(progress.headline) ?? label(for: .reached)
+    }
+
+    /// Copy for the two next steps offered once a goal is reached.
+    static let setNewTargetTitle = "Set a new target"
+    static let switchToMaintenanceTitle = "Switch to maintenance"
+    /// Canonical goal id the maintenance CTA switches to.
+    static let maintenanceGoal = "general"
 
     // MARK: - State helpers
 
@@ -174,12 +218,26 @@ enum GoalProgressLogic {
     /// Days without a weigh-in at which the card nudges the user.
     static let staleWeighInDays = 4
 
-    /// "Last weigh-in 6 days ago — step on the scale to update" for a weight
-    /// goal whose newest weigh-in is >= 4 days old; `nil` otherwise (including
-    /// when the server doesn't send `lastWeighInDaysAgo`).
+    /// Days without a weigh-in at which a NON-weight-loss goal that has a target
+    /// weight (muscle, or an endurance / general goal with one) gets the nudge:
+    /// its weight line is only as fresh as the last weigh-in.
+    static let staleWeighInDaysWithTarget = 7
+
+    /// "Last weigh-in 6 days ago — step on the scale to update". Weight loss
+    /// shows it once the newest weigh-in is >= 4 days old; any other goal with a
+    /// target weight, at >= 7 days. `nil` otherwise (including when the server
+    /// doesn't send `lastWeighInDaysAgo`, and once the goal is reached).
     static func staleWeighInText(_ progress: GoalProgressDTO) -> String? {
-        guard progress.goal == "weight_loss",
-              let days = progress.lastWeighInDaysAgo, days >= staleWeighInDays else { return nil }
+        guard progress.verdict != .reached, let days = progress.lastWeighInDaysAgo else { return nil }
+        let threshold: Int
+        if progress.goal == "weight_loss" {
+            threshold = staleWeighInDays
+        } else if progress.target.weightKg != nil {
+            threshold = staleWeighInDaysWithTarget
+        } else {
+            return nil
+        }
+        guard days >= threshold else { return nil }
         return "Last weigh-in \(days) days ago — step on the scale to update"
     }
 
@@ -209,14 +267,16 @@ enum GoalProgressLogic {
 
     /// "1.7 of 8 kg lost" / "3.7 of 17.6 lb lost" / "…gained". Direction comes
     /// from target vs start. Progress is never negative (regressing reads as
-    /// "0 of 8 kg lost" — the verdict chip carries the bad news).
+    /// "0 of 8 kg lost" — the verdict chip carries the bad news) and never
+    /// exceeds the total (overshooting an 8 kg goal by 0.4 reads "8 of 8 kg
+    /// lost", not "8.4 of 8").
     static func weightLine(_ progress: GoalProgressDTO, system: UnitSystem) -> String? {
         guard let target = progress.target.weightKg,
               let start = progress.current.startWeightKg,
               let current = progress.current.weightKg else { return nil }
         let losing = target < start
         let totalKg = abs(start - target)
-        let doneKg = max(0, losing ? start - current : current - start)
+        let doneKg = min(totalKg, max(0, losing ? start - current : current - start))
         guard totalKg > 0 else { return nil }
         let verb = losing ? "lost" : "gained"
         return "\(weightAmount(kg: doneKg, system)) of \(weightAmount(kg: totalKg, system))\(nbsp)\(system.weightUnit) \(verb)"
@@ -395,6 +455,8 @@ enum GoalProgressLogic {
     /// when both dates exist, else the bare ETA, else the target date alone
     /// (e.g. no projection yet).
     static func paceLine(_ progress: GoalProgressDTO, now: Date = Date(), locale: Locale = .current) -> String? {
+        // Pace and ETA are moot once the target is met: say when, or nothing.
+        if progress.verdict == .reached { return reachedLine(progress, now: now, locale: locale) }
         if let line = paceVsTargetLine(progress, now: now, locale: locale) { return line }
         if let eta = etaLine(progress, now: now, locale: locale) { return eta }
         return targetDateLine(progress, now: now, locale: locale)
@@ -402,6 +464,7 @@ enum GoalProgressLogic {
 
     /// Tone of `paceLine`: on pace / ahead good, behind caution, else neutral.
     static func paceTone(_ progress: GoalProgressDTO) -> Tone {
+        if progress.verdict == .reached { return .good }
         switch paceRelation(progress) {
         case .some(.onPace), .some(.ahead): return .good
         case .some(.behind):                return .watch
@@ -443,7 +506,7 @@ enum GoalProgressLogic {
     private static let leadingVerdictPhrases: [String] = [
         "On track", "Ahead of pace", "Ahead", "Losing too fast", "Behind pace", "Behind",
         "Stalled", "Progressing", "Building", "Holding steady", "Holding",
-        "Set a target", "Getting started",
+        "Set a target", "Getting started", "Goal reached", "Reached",
     ]
 
     /// `headline` with a leading verdict phrase + dash ("Building — ", "On track - ",
@@ -487,6 +550,9 @@ enum GoalProgressLogic {
         sessionsDoneThisWeek: Int? = nil,
         now: Date = Date(), locale: Locale = .current
     ) -> String {
+        // A reached goal is terminal: the capped outcome, no stale-weigh-in nudge,
+        // ETA or pace phrase.
+        if progress.verdict == .reached { return reachedText(progress, system: system) }
         // Only when there is a distance line the hero could be duplicating —
         // weight/muscle goals have no distance block and must be unaffected.
         if let stale = staleWeighInText(progress), progress.verdict != .needsTarget { return stale }
@@ -564,7 +630,8 @@ enum GoalProgressLogic {
 
     /// The muscle `behind` verdict means lifts are up but the planned sessions
     /// are not happening, so say that with the numbers and the next step:
-    /// "9 of 16 sessions in 4 wk · 2 more by Sun". From the payload's
+    /// "9 of 16 sessions in 4 wk · 2 more by Sun" ("... in 10 days ..." when the
+    /// server's `adherence.windowDays` is shorter than 28). From the payload's
     /// structured `adherence`; `nil` unless this is a muscle goal with a
     /// `behind` verdict and usable counts (older servers omit `adherence`, and
     /// the caller then keeps the weight/lift line).
@@ -586,7 +653,18 @@ enum GoalProgressLogic {
         } else {
             nextStep = "aim for \(adherence.weeklyTarget) this week"
         }
-        return "\(adherence.done) of \(adherence.planned) sessions in 4\(nbsp)wk · \(nextStep)"
+        return "\(adherence.done) of \(adherence.planned) sessions in \(adherenceWindowText(adherence)) · \(nextStep)"
+    }
+
+    /// The span `adherence.done` / `planned` cover, value and unit joined by
+    /// `nbsp`: "4 wk" for the full 28 days, otherwise the exact days ("10 days",
+    /// "1 day") — a young account's window is shorter than four weeks, and
+    /// "in 4 wk" would overstate it. An older server (no `windowDays`) decodes
+    /// as 28, so its copy is unchanged.
+    static func adherenceWindowText(_ adherence: GoalProgressDTO.Adherence) -> String {
+        let days = GoalProgressDTO.Adherence.validWindowDays(adherence.windowDays)
+        if days >= GoalProgressDTO.Adherence.defaultWindowDays { return "4\(nbsp)wk" }
+        return "\(days)\(nbsp)\(days == 1 ? "day" : "days")"
     }
 
     /// Why the verdict is what it is, in one short phrase, for a surface that

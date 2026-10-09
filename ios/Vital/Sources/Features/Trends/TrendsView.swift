@@ -59,7 +59,10 @@ struct TrendsView: View {
                         // Weekly review (v5 Wave 3): reopen the latest review any
                         // time (the Today card only shows Mon-Wed while unseen).
                         if let review = weeklyReviewStore.latest {
-                            WeeklyReviewRow(response: review, onTap: { showWeeklyReviewDetail = true })
+                            WeeklyReviewRow(
+                                response: review, isNewAccount: weeklyReviewStore.isNewAccount,
+                                onTap: { showWeeklyReviewDetail = true }
+                            )
                                 .motionTransition(.fade)
                         }
 
@@ -181,7 +184,10 @@ struct TrendsView: View {
         .sheet(isPresented: $showWeeklyReviewDetail) {
             if let review = weeklyReviewStore.latest {
                 VitalSheet(detents: [.large]) {
-                    WeeklyReviewDetailView(response: review, onGotIt: { weeklyReviewStore.markSeen() })
+                    WeeklyReviewDetailView(
+                        response: review, isNewAccount: weeklyReviewStore.isNewAccount,
+                        onGotIt: { weeklyReviewStore.markSeen() }
+                    )
                 }
             }
         }
@@ -204,6 +210,14 @@ struct TrendsView: View {
         // GoalNotifications.swift) — re-measure progress against the new target.
         .onReceive(NotificationCenter.default.publisher(for: .vitalGoalTargetsChanged)) { _ in
             Task { await vm.loadGoalProgress() }
+        }
+        // The goal kind changed (reached goal -> maintenance): re-read the goal
+        // (section order) and its progress.
+        .onReceive(NotificationCenter.default.publisher(for: .vitalGoalKindChanged)) { _ in
+            Task {
+                await vm.loadGoalContext()
+                await vm.loadGoalProgress()
+            }
         }
         .sensoryFeedback(Theme.Haptics.selection, trigger: tileTapTick)
         .sensoryFeedback(Theme.Haptics.selection, trigger: periodTapTick)

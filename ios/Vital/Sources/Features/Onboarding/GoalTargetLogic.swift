@@ -90,6 +90,25 @@ enum GoalTargetLogic {
         return f
     }
 
+    /// True when a stored 'YYYY-MM-DD' target date is today or earlier (judged
+    /// on the device's local day). The server only accepts a NEW target date
+    /// strictly after today, so a stored one like this must be neither shown in
+    /// the date picker nor re-sent unless the user changes it.
+    static func isPassedTargetDay(_ day: String, now: Date = Date(), calendar: Calendar = .current) -> Bool {
+        guard date(fromDay: day, calendar: calendar) != nil else { return false }
+        return day <= dayString(from: now, calendar: calendar)
+    }
+
+    /// "Target date passed (Sep 30)" — or "Target date is today (Oct 9)" on the
+    /// day itself. `nil` when `day` doesn't parse.
+    static func passedTargetDateLabel(day: String, now: Date = Date(), calendar: Calendar = .current) -> String? {
+        guard let parsed = date(fromDay: day, calendar: calendar) else { return nil }
+        let when = dateText(parsed, calendar: calendar)
+        return day == dayString(from: now, calendar: calendar)
+            ? "Target date is today (\(when))"
+            : "Target date passed (\(when))"
+    }
+
     /// Tomorrow through three years out — what the server accepts.
     static func targetDateRange(from now: Date = Date(), calendar: Calendar = .current) -> ClosedRange<Date> {
         let start = calendar.date(byAdding: .day, value: 1, to: now) ?? now
@@ -182,6 +201,17 @@ enum GoalTargetLogic {
         return "At ~\(rate)/week that's around \(dateText(date, calendar: calendar))"
     }
 
+    /// Shown instead of a "target should be below/above your weight" warning when
+    /// the current weight already meets the target: not a mistake to fix but a
+    /// goal that's done. Neutral, never alarming.
+    static let reachedTargetMessage = "You've reached this target — set a new one or switch to maintenance."
+
+    /// True when `currentKg` already meets `targetKg` for the goal's direction:
+    /// at or below a loss target, at or above a gain target.
+    static func currentMeetsTarget(goal: String, currentKg: Double, targetKg: Double) -> Bool {
+        isLossGoal(goal) ? currentKg <= targetKg : currentKg >= targetKg
+    }
+
     /// Gentle sanity warnings; nil when the target looks reasonable.
     static func sanityWarning(
         goal: String,
@@ -193,7 +223,7 @@ enum GoalTargetLogic {
     ) -> String? {
         guard let currentKg, let target = validTargetKg(targetKg) else { return nil }
         if isLossGoal(goal) {
-            if target >= currentKg { return "Your target should be below your current weight." }
+            if currentMeetsTarget(goal: goal, currentKg: currentKg, targetKg: target) { return reachedTargetMessage }
             if (currentKg - target) / currentKg > largeLossFraction {
                 return "That's a big change. Consider a closer first target."
             }
@@ -205,8 +235,8 @@ enum GoalTargetLogic {
                     : String(format: "%.1f\(UnitFormat.nbsp)lb", UnitConvert.kgToLb(rate))
                 return "That date needs about \(shown)/week, faster than a healthy pace."
             }
-        } else if target <= currentKg {
-            return "Your target should be above your current weight."
+        } else if currentMeetsTarget(goal: goal, currentKg: currentKg, targetKg: target) {
+            return reachedTargetMessage
         }
         return nil
     }

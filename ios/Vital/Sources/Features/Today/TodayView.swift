@@ -417,6 +417,14 @@ struct TodayView: View {
             vm.refreshGoalProgress()
             Task { await vm.refreshGoalTargetFlag() }
         }
+        // The goal kind itself changed (reached goal -> maintenance): re-read
+        // /api/today so the hero follows the new goal, then its progress.
+        .onReceive(NotificationCenter.default.publisher(for: .vitalGoalKindChanged)) { _ in
+            Task {
+                await vm.loadHealthData()
+                await vm.refreshGoalTargetFlag()
+            }
+        }
         .sheet(isPresented: $showGoalProgress) {
             if let progress = vm.goalProgress {
                 VitalSheet(detents: [.large]) {
@@ -427,7 +435,10 @@ struct TodayView: View {
         .sheet(isPresented: $showWeeklyReview) {
             if let review = weeklyReviewStore.latest {
                 VitalSheet(detents: [.large]) {
-                    WeeklyReviewDetailView(response: review, onGotIt: { weeklyReviewStore.markSeen() })
+                    WeeklyReviewDetailView(
+                        response: review, isNewAccount: weeklyReviewStore.isNewAccount,
+                        onGotIt: { weeklyReviewStore.markSeen() }
+                    )
                 }
             }
         }

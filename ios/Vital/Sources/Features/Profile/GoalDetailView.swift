@@ -232,12 +232,15 @@ struct GoalDetailView: View {
                 goal: vm.goal,
                 currentKg: targets.currentWeightKg,
                 targetKg: targets.targetKg,
-                targetDate: targets.hasTargetDate ? targets.targetDate : nil,
+                targetDate: targets.activeTargetDate,
                 units: units
             ) {
                 Text(warning)
                     .font(Theme.Typography.bodySmall)
-                    .foregroundStyle(Theme.Colors.caution)
+                    // Reaching the target isn't a caution: neutral gray, not amber.
+                    .foregroundStyle(warning == GoalTargetLogic.reachedTargetMessage
+                                     ? Theme.Colors.textSecondary : Theme.Colors.caution)
+                    .accessibilityIdentifier("goal.targetNote")
             } else if GoalTargetLogic.isLossGoal(vm.goal),
                       let hint = GoalTargetLogic.paceHint(
                         currentKg: targets.currentWeightKg, targetKg: targets.targetKg, units: units
@@ -250,6 +253,40 @@ struct GoalDetailView: View {
     }
 
     private var targetDateRow: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            if let passed = targets.passedTargetDateText {
+                passedTargetDateRow(passed)
+            } else {
+                activeTargetDateRow
+            }
+        }
+    }
+
+    /// A stored target date that is today or earlier: say so and offer the two
+    /// ways out. The date isn't resent unless the user picks a new one.
+    private func passedTargetDateRow(_ text: String) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            Text(text)
+                .font(Theme.Typography.bodyMedium)
+                .foregroundStyle(Theme.Colors.textPrimary)
+                .accessibilityIdentifier("goal.targetDatePassed")
+            HStack(spacing: Theme.Spacing.md) {
+                Button("Pick a new date") { targets.pickNewTargetDate() }
+                    .accessibilityIdentifier("goal.targetDatePick")
+                Button("Remove date") { targets.removeTargetDate() }
+                    .accessibilityIdentifier("goal.targetDateRemove")
+                Spacer(minLength: 0)
+            }
+            .font(Theme.Typography.bodySmall)
+            .tint(Theme.Colors.accentContent)
+            .buttonStyle(.bordered)
+            .controlSize(.regular)
+            .frame(minHeight: 44)
+        }
+    }
+
+    @ViewBuilder
+    private var activeTargetDateRow: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
             Toggle("Target date", isOn: $targets.hasTargetDate)
                 .font(Theme.Typography.bodyMedium)
