@@ -11,6 +11,7 @@ import {
   recoveryWeek,
   weekStepTarget,
   weekStepTargetKm,
+  windDownBand,
 } from './enduranceProgression';
 
 test('weekStepTarget: ~10% over last week, at least +1, never past the target', () => {
@@ -147,6 +148,27 @@ test('racePhaseTargetKm: capped at the weekly goal; imperial rounds in whole mil
   const km = target(14, 40, { unitsPerKm: MI_PER_KM })!;
   assert.ok(Math.abs(km * MI_PER_KM - 19) < 0.05, `${km}`);
   assert.equal(target(14, 40, { unitsPerKm: 0 }), null);
+});
+
+test('windDownBand: taper 60%..125% of the target (and 3 km / 2 mi over); race week / recovery are ceilings with 10% slack', () => {
+  // Taper, 30 km target.
+  assert.equal(windDownBand('taper', 17.9, 30), 'under'); // < 18 km
+  assert.equal(windDownBand('taper', 18, 30), 'within');
+  assert.equal(windDownBand('taper', 37.5, 30), 'within'); // exactly 125%
+  assert.equal(windDownBand('taper', 37.6, 30), 'over');
+  assert.equal(windDownBand('taper', 4, 3), 'within'); // 133% but under 3 km over: not over
+  assert.equal(windDownBand('taper', 6.6, 5, { unitsPerKm: 0.621371 }), 'within'); // 1.6 km = ~1 mi over: under the 2 mi minimum
+  // The lower bound is pro-rated for a week still under way; the upper never is.
+  assert.equal(windDownBand('taper', 8, 30, { weekFraction: 0.5 }), 'under'); // < 9 km
+  assert.equal(windDownBand('taper', 9, 30, { weekFraction: 0.5 }), 'within');
+  assert.equal(windDownBand('taper', 0, 30, { weekFraction: 0 }), 'within');
+  assert.equal(windDownBand('taper', 38, 30, { weekFraction: 0.1 }), 'over');
+  // Race week and recovery: a ceiling, never "under".
+  assert.equal(windDownBand('race_week', 0, 16), 'within');
+  assert.equal(windDownBand('race_week', 17.6, 16), 'within');
+  assert.equal(windDownBand('race_week', 17.7, 16), 'over');
+  assert.equal(windDownBand('recovery', 12.2, 12), 'within');
+  assert.equal(windDownBand('recovery', 24, 16), 'over');
 });
 
 test('peakWeekKmBeforeTaper: the biggest 7-day block in the 28 days before the taper began', () => {

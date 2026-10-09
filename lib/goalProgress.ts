@@ -37,7 +37,12 @@
  *    week and recovery swap the growth step for their own weekly target, lead
  *    the reasons with what the week is for, and the race stays in the payload
  *    for the 14 days of recovery ("Race done — Dec 31 · recovery week 1" and a
- *    next-step reason). The verdict is never changed by the phase.
+ *    next-step reason). In those three phases the planned drop in volume must not
+ *    read as 'behind', so the verdict comes from THIS WEEK against the phase
+ *    target (`windDownOutcome`, the same band rule the weekly review rates with):
+ *    'on_track' within the band, 'building' for a taper undershoot, 'on_track' +
+ *    a watch-tone phase line for running over it. No new verdict values; build
+ *    weeks and goals without a weekly distance target are unchanged.
  *  - general — consistency: active days, sleep-goal nights, logging days.
  */
 
@@ -62,8 +67,10 @@ import {
   racePhaseTargetKm,
   recoveryWeek,
   weekStepOrGoalKm,
+  windDownBand,
   type RacePhase,
   type RacePhaseInfo,
+  type WindDownBand,
 } from './enduranceProgression';
 
 // ── Constants ───────────────────────────────────────────────────────────────
@@ -1389,7 +1396,9 @@ function raceReason(race: GoalRaceProgress): GoalProgressReason {
  * is the phase's weekly target (`windDownTargetKm`); without one the copy
  * carries no number. Null in the build phase (the volume trend leads there).
  */
-function racePhaseReason(input: GoalProgressInput, race: GoalRaceProgress, targetKm: number | null): GoalProgressReason | null {
+function racePhaseReason(
+  input: GoalProgressInput, race: GoalRaceProgress, targetKm: number | null, overKm: number | null = null,
+): GoalProgressReason | null {
   let text: string;
   switch (race.phase) {
     case 'taper':
@@ -1410,7 +1419,58 @@ function racePhaseReason(input: GoalProgressInput, race: GoalRaceProgress, targe
     default:
       return null;
   }
+  // Running well over the phase's plan this week: the same line, on watch, saying so.
+  if (overKm != null) return { kind: 'race_phase', text: `${text}; already ${fmtDistance(input, overKm)} — ease off`, tone: 'watch' };
   return { kind: 'race_phase', text, tone: 'neutral' };
+}
+
+/** Where this week's running sits against a taper / race-week / recovery target (the endurance verdict reads it). */
+interface WindDownStatus {
+  phase: 'taper' | 'race_week' | 'recovery';
+  targetKm: number;
+  thisWeekKm: number;
+  band: WindDownBand;
+}
+
+/**
+ * This week's running km against the phase target, by the ONE band rule the
+ * weekly review also rates with (`windDownBand`). Null outside taper / race
+ * week / recovery, without a weekly distance goal (no `distance` block) and
+ * when no run distance was measured — then there is nothing to judge.
+ */
+function windDownStatus(input: GoalProgressInput, dist: GoalDistanceProgress | null, race: GoalRaceProgress | null): WindDownStatus | null {
+  const phase = race?.phase;
+  if (!isWindDownPhase(phase) || dist == null || dist.thisWeekKm == null) return null;
+  // Days of this calendar week already finished: a taper undershoot is only called on the lower bound pro-rated to them.
+  const weekFraction = (dayNumber(input.todayKey) - dayNumber(dist.weekStart)) / 7;
+  const band = windDownBand(phase, dist.thisWeekKm, dist.stepTargetKm, { unitsPerKm: unitsPerKm(input), weekFraction });
+  return { phase, targetKm: dist.stepTargetKm, thisWeekKm: dist.thisWeekKm, band };
+}
+
+/**
+ * The endurance verdict in taper, race week and recovery. The planned drop in
+ * volume must never read as 'behind' off the 4-week average, so the verdict
+ * comes from this week against the phase target instead (no new verdict values):
+ *  - within the band (taper 60%–125% of the target, race week / recovery up to
+ *    the ceiling + 10%): 'on_track';
+ *  - taper undershoot: 'building';
+ *  - over the band (any of the three): 'on_track', with the phase reason on
+ *    watch ("… already 24 km — ease off").
+ * 'insufficient_data' and 'needs_target' stay (there is nothing honest to say).
+ * Taper and race week also get a headline that matches the verdict; recovery's
+ * headline is the race-done copy (see `withRaceLifecycle`).
+ */
+function windDownOutcome(input: GoalProgressInput, outcome: Outcome, status: WindDownStatus): Outcome {
+  if (outcome.verdict === 'insufficient_data' || outcome.verdict === 'needs_target') return outcome;
+  const verdict: GoalVerdict = status.band === 'under' ? 'building' : 'on_track';
+  if (status.phase === 'recovery') return { ...outcome, verdict };
+  const done = distanceNum(input, status.thisWeekKm);
+  const target = fmtDistance(input, status.targetKm);
+  const over = status.band === 'over' ? ', over the plan' : '';
+  const headline = status.phase === 'taper'
+    ? `Taper week — ${done} of ~${target}${over}`
+    : `Race week — ${done} of ~${target} before the race${over}`;
+  return { ...outcome, verdict, headline: clip(headline) };
 }
 
 /** After the race: what comes next. */
@@ -1421,13 +1481,16 @@ const NEXT_GOAL_REASON: GoalProgressReason = {
 };
 
 /**
- * Fold the race lifecycle into an endurance outcome WITHOUT touching its
- * verdict: the race line leads, then (taper / race week) what the week is for,
- * then the outcome's own reasons (cap 3). Once the race is done the headline
- * is the recovery state and the reasons are race done, recovery, next step.
+ * Fold the race lifecycle into an endurance outcome (its verdict is already
+ * phase-aware, see `windDownOutcome`): the race line leads, then (taper / race
+ * week) what the week is for, then the outcome's own reasons (cap 3). Once the
+ * race is done the headline is the recovery state and the reasons are race
+ * done, recovery, next step.
  */
-function withRaceLifecycle(input: GoalProgressInput, outcome: Outcome, race: GoalRaceProgress): Outcome {
-  const phaseReason = racePhaseReason(input, race, windDownTargetKm(input));
+function withRaceLifecycle(input: GoalProgressInput, outcome: Outcome, race: GoalRaceProgress, status: WindDownStatus | null): Outcome {
+  // Going well over the plan is flagged on the phase line — except on race day itself, where "ease off" would be silly.
+  const overKm = status?.band === 'over' && !(race.phase === 'race_week' && race.daysToGo === 0) ? status.thisWeekKm : null;
+  const phaseReason = racePhaseReason(input, race, windDownTargetKm(input), overKm);
   if (race.phase === 'recovery' && phaseReason) {
     return {
       ...outcome,
@@ -1721,10 +1784,16 @@ export function computeGoalProgress(input: GoalProgressInput): GoalProgress {
     default: outcome = generalOutcome(input);
   }
 
-  // Race countdown + phase lead the reasons (cap 3) without touching the verdict;
-  // once the race is done the headline is the recovery state.
+  // Race countdown + phase lead the reasons (cap 3); in taper / race week / recovery the verdict
+  // comes from this week against the phase target (not the 4-week average a taper drags down),
+  // and once the race is done the headline is the recovery state.
   const race = raceProgress(input);
-  if (race) outcome = withRaceLifecycle(input, outcome, race);
+  const dist = input.goal === 'endurance' ? distanceProgress(input) : null;
+  if (race) {
+    const status = windDownStatus(input, dist, race);
+    if (status) outcome = windDownOutcome(input, outcome, status);
+    outcome = withRaceLifecycle(input, outcome, race, status);
+  }
 
   const safeBand =
     input.goal === 'weight_loss' ? { ...FAT_LOSS_BAND }
@@ -1755,7 +1824,7 @@ export function computeGoalProgress(input: GoalProgressInput): GoalProgress {
   return {
     goal: input.goal,
     target: { ...input.target, weeklyDistanceKm: input.target.weeklyDistanceKm ?? null },
-    distance: input.goal === 'endurance' ? distanceProgress(input) : null,
+    distance: dist,
     race,
     longRun: longRunProgress(input, race),
     current: {

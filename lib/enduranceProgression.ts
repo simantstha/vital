@@ -190,6 +190,45 @@ export function peakWeekKmBeforeTaper(runs: ReadonlyArray<{ day: string; km: num
   return peak >= MIN_BASE_WEEK ? peak : null;
 }
 
+/** Taper: running at least this share of the week's target is on plan (less running is no slip in a taper). */
+export const TAPER_GOOD_MIN_FRACTION = 0.6;
+/** Taper: more than this fraction over the target (and by the minimum excess below) is over the plan. */
+export const TAPER_OVER_FRACTION = 0.25;
+/** Taper over-the-plan also needs at least this much excess: 3 km (2 mi for a unit size below 1, i.e. miles). */
+const TAPER_OVER_MIN_EXCESS_KM = 3;
+const TAPER_OVER_MIN_EXCESS_MI = 2;
+/** Race week / recovery: the target is a ceiling, met with this much slack (10%). */
+export const PHASE_CEILING_TOLERANCE = 1.1;
+
+/** Where a wind-down week's running sits against its target. */
+export type WindDownBand = 'under' | 'within' | 'over';
+
+/**
+ * ONE rule for "is this taper / race-week / recovery week on plan?", shared by
+ * the weekly review (rating) and the goal card (verdict):
+ *  - taper: 'within' from 60% of the target up to 25% over it (and under 3 km /
+ *    2 mi over); 'over' beyond that, 'under' below 60%;
+ *  - race week and recovery: the target is a ceiling — 'within' up to 10% over
+ *    it, 'over' beyond; never 'under' (running less is the plan).
+ * `weekFraction` (0..1, default 1) pro-rates the taper's LOWER bound for a week
+ * still under way (the goal card on a Tuesday), so an early-week 6 km is not an
+ * undershoot; the upper bounds are cumulative and never pro-rated.
+ * `unitsPerKm` is the display unit's size (1 for km, below 1 for miles).
+ */
+export function windDownBand(
+  phase: 'taper' | 'race_week' | 'recovery',
+  km: number,
+  targetKm: number,
+  opts: { unitsPerKm?: number; weekFraction?: number } = {},
+): WindDownBand {
+  const units = opts.unitsPerKm ?? 1;
+  if (phase !== 'taper') return km > targetKm * PHASE_CEILING_TOLERANCE ? 'over' : 'within';
+  const minExcess = units < 1 ? TAPER_OVER_MIN_EXCESS_MI : TAPER_OVER_MIN_EXCESS_KM;
+  if (km > targetKm * (1 + TAPER_OVER_FRACTION) && (km - targetKm) * units >= minExcess) return 'over';
+  const fraction = Math.min(1, Math.max(0, opts.weekFraction ?? 1));
+  return km < targetKm * TAPER_GOOD_MIN_FRACTION * fraction ? 'under' : 'within';
+}
+
 /**
  * The weekly running target (km) for taper, race week and recovery; `null` in
  * the build phase (the growth step applies) and without a usable peak week.

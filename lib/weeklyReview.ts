@@ -35,6 +35,7 @@ import {
   racePhaseTargetKm,
   weekStepOrGoalKm,
   weekStepTarget,
+  windDownBand,
   type RacePhaseInfo,
 } from './enduranceProgression';
 import { KM_PER_MILE } from './metricFormat';
@@ -859,13 +860,6 @@ function isSpikeWeek(input: WeeklyReviewInput, km: number, stepKm: number, targe
   return km > stepKm * (1 + SPIKE_OVER_STEP_FRACTION) && excess >= (imperial ? SPIKE_MIN_EXCESS_MI : SPIKE_MIN_EXCESS_KM);
 }
 
-/** Taper: running at least this share of the week's taper target is on plan (less running is no slip in a taper). */
-const TAPER_GOOD_MIN_FRACTION = 0.6;
-/** Taper: more than this fraction over the target (and by the spike minimum excess) is a slip — the taper is for cutting volume. */
-const TAPER_OVER_FRACTION = 0.25;
-/** Race week / recovery: a ceiling, met with this much slack (10%) so a 12.2 km week against 12 km is not a slip. */
-const PHASE_CEILING_TOLERANCE = 1.1;
-
 /**
  * The week's running km as a wind-down week counts it: the race itself is not
  * part of race week's volume (its target excludes the race), so runs on race
@@ -881,7 +875,8 @@ function windDownRunningKm(input: WeeklyReviewInput, week: Week, plan: WindDownP
 
 /**
  * Rate a taper / race-week / recovery week against ITS target (not the growth
- * step, no spike guard — those are build-phase rules):
+ * step, no spike guard — those are build-phase rules), with the ONE band rule
+ * the goal card's verdict also uses (`windDownBand`, lib/enduranceProgression.ts):
  *  - taper: on plan from 60% of the target up to 25% over it (and under 3 km /
  *    2 mi over); far over is a slip, far under a milder one;
  *  - race week and recovery: the target is a ceiling — at or under it (10%
@@ -895,15 +890,8 @@ function windDownWeekAssessment(input: WeeklyReviewInput, week: Week, prevWeek: 
   const km = measured ?? 0;
   const targetKm = plan.targetKm;
   const gap = (over: boolean): WeekGap => ({ kind: 'phase', phase: plan.phase, doneKm: round1(km), targetKm, over });
-  if (plan.phase === 'taper') {
-    const imperial = isImperial(input);
-    const excess = (km - targetKm) * (imperial ? KM_TO_MI : 1);
-    if (km > targetKm * (1 + TAPER_OVER_FRACTION) && excess >= (imperial ? SPIKE_MIN_EXCESS_MI : SPIKE_MIN_EXCESS_KM)) {
-      return rated('mixed', gap(true));
-    }
-    return km >= targetKm * TAPER_GOOD_MIN_FRACTION ? rated('good', null) : rated('mixed', gap(false));
-  }
-  return km > targetKm * PHASE_CEILING_TOLERANCE ? rated('mixed', gap(true)) : rated('good', null);
+  const band = windDownBand(plan.phase, km, targetKm, { unitsPerKm: isImperial(input) ? 1 / KM_PER_MILE : 1 });
+  return band === 'within' ? rated('good', null) : rated('mixed', gap(band === 'over'));
 }
 
 function enduranceWeekAssessment(input: WeeklyReviewInput, week: Week, prevWeek: Week): WeekAssessment {
