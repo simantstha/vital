@@ -179,8 +179,7 @@ struct VoiceFABView: View {
     private var captionOverlay: some View {
         HStack(spacing: Theme.Spacing.sm) {
             Text(voice.state == .transcribing ? "Transcribing…" : "Listening…")
-                .font(Theme.Typography.bodyMedium)
-                .fontWeight(.medium)
+                .scaledFont(Theme.Typography.bodyMedium.weight(.medium))
                 .foregroundStyle(Theme.Colors.onAccent)
             if voice.state != .transcribing {
                 VoiceLevelMeter(level: voice.inputLevel, color: Theme.Colors.onAccent)

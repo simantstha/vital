@@ -10,6 +10,8 @@ struct WhatMovedRowView: View {
     /// See `MetricTileView.animatesIn`'s doc comment — same one-render gate.
     var animatesIn: Bool = false
 
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     var body: some View {
         if let spec = MetricCatalog.spec(for: row.key) {
             content(spec: spec)
@@ -25,45 +27,48 @@ struct WhatMovedRowView: View {
         HStack(spacing: Theme.Spacing.md) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(spec.displayName)
-                    .font(.system(size: 14, weight: .semibold))
+                    .scaledFont(size: 14, weight: .semibold)
                     .foregroundStyle(Theme.Colors.textPrimary)
-                    .lineLimit(1)
+                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
                 HStack(alignment: .lastTextBaseline, spacing: 3) {
                     Text(TrendsDeltaFormat.valueText(row.value, spec: spec))
-                        .font(Theme.Typography.numericSmall(17))
+                        .scaledFont(Theme.Typography.numericSmall(17))
                         .foregroundStyle(Theme.Colors.textPrimary)
                     let unit = TrendsDeltaFormat.unitLabel(spec: spec, system: unitSystem)
                     if !unit.isEmpty {
                         Text(unit)
-                            .font(.system(size: 11, weight: .medium))
+                            .scaledFont(size: 11, weight: .medium)
                             .foregroundStyle(Theme.Colors.textSecondary)
                     }
                 }
                 // Window label: the pill's delta is latest reading minus the
                 // 30-day mean (`WhatMovedRow.delta`), so say so.
                 Text("vs your 30-day normal")
-                    .font(.system(size: 11, weight: .medium))
+                    .scaledFont(size: 11, weight: .medium)
                     .foregroundStyle(Theme.Colors.textSecondary)
-                    .lineLimit(1)
+                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
             }
 
             Spacer(minLength: Theme.Spacing.sm)
 
-            Sparkline(
-                values: row.sparklineValues,
-                // Always a line here, regardless of `spec.sparkline` — a
-                // 96pt-wide bar sparkline (e.g. sleep's tile style) is noise
-                // at this width; tiles keep their own spec style.
-                style: .line,
-                tint: tint,
-                height: 34,
-                bandLower: row.mean30 - row.sd30,
-                bandUpper: row.mean30 + row.sd30,
-                showsLatestDot: true,
-                animatesOnAppear: animatesIn
-            )
-            .frame(width: 96, height: 34)
-            .accessibilityHidden(true)
+            // Decorative at accessibility text sizes: its 96pt go to the text.
+            if !dynamicTypeSize.isAccessibilitySize {
+                Sparkline(
+                    values: row.sparklineValues,
+                    // Always a line here, regardless of `spec.sparkline` — a
+                    // 96pt-wide bar sparkline (e.g. sleep's tile style) is noise
+                    // at this width; tiles keep their own spec style.
+                    style: .line,
+                    tint: tint,
+                    height: 34,
+                    bandLower: row.mean30 - row.sd30,
+                    bandUpper: row.mean30 + row.sd30,
+                    showsLatestDot: true,
+                    animatesOnAppear: animatesIn
+                )
+                .frame(width: 96, height: 34)
+                .accessibilityHidden(true)
+            }
 
             deltaPill(spec: spec)
         }
@@ -74,7 +79,7 @@ struct WhatMovedRowView: View {
 
     private func deltaPill(spec: MetricSpec) -> some View {
         Text("\(TrendsDeltaFormat.arrow(row.delta)) \(TrendsDeltaFormat.magnitudeText(row.delta, spec: spec, system: unitSystem, includeUnit: true))")
-            .font(.system(size: 12, weight: .semibold))
+            .scaledFont(size: 12, weight: .semibold)
             .foregroundStyle(tint)
             .padding(.horizontal, 8)
             .padding(.vertical, 4)

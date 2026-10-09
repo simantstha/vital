@@ -31,7 +31,7 @@ struct DietBudgetEditorView: View {
                             }
                             if let msg = vm.errorMessage {
                                 Text(msg)
-                                    .font(Theme.Typography.bodySmall)
+                                    .scaledFont(Theme.Typography.bodySmall)
                                     .foregroundStyle(Theme.Colors.alert)
                             }
                         }
@@ -71,7 +71,7 @@ struct DietBudgetEditorView: View {
         VitalCard(padding: Theme.Spacing.xl) {
             VStack(spacing: Theme.Spacing.sm) {
                 Text("DAILY TARGET")
-                    .font(Theme.Typography.labelSmall)
+                    .scaledFont(Theme.Typography.labelSmall)
                     .tracking(0.8)
                     .foregroundStyle(Theme.Colors.textSecondary)
 
@@ -84,7 +84,7 @@ struct DietBudgetEditorView: View {
                 } else {
                     kcalNumber
                     Text("Calculated from your goal: \(vm.goalDisplay)")
-                        .font(Theme.Typography.bodySmall)
+                        .scaledFont(Theme.Typography.bodySmall)
                         .foregroundStyle(Theme.Colors.textSecondary)
                         .multilineTextAlignment(.center)
                 }
@@ -96,10 +96,11 @@ struct DietBudgetEditorView: View {
     private var kcalNumber: some View {
         HStack(alignment: .lastTextBaseline, spacing: 4) {
             Text("\(vm.targetKcal)")
-                .font(Theme.Typography.numericHero(48))
+                .scaledFont(Theme.Typography.numericHero(48))
+                .dynamicTypeSize(...DynamicTypeSize.accessibility2) // hero number: capped growth
                 .foregroundStyle(vm.mode == "custom" ? Theme.Colors.accentContent : Theme.Colors.textPrimary)
             Text("kcal")
-                .font(Theme.Typography.numericSmall(18))
+                .scaledFont(Theme.Typography.numericSmall(18))
                 .foregroundStyle(Theme.Colors.textSecondary)
         }
         .contentTransition(.numericText())
@@ -130,8 +131,7 @@ struct DietBudgetEditorView: View {
                     vm.useSafeFloor()
                 } label: {
                     Text("Use \(vm.lowEnergyWarning?.thresholdKcal ?? vm.targetKcal)")
-                        .font(Theme.Typography.bodySmall)
-                        .fontWeight(.medium)
+                        .scaledFont(Theme.Typography.bodySmall.weight(.medium))
                         .foregroundStyle(Theme.Colors.textPrimary)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, Theme.Spacing.sm + 2)
@@ -146,8 +146,7 @@ struct DietBudgetEditorView: View {
                     vm.keepCurrentTarget()
                 } label: {
                     Text("Keep \(vm.targetKcal)")
-                        .font(Theme.Typography.bodySmall)
-                        .fontWeight(.semibold)
+                        .scaledFont(Theme.Typography.bodySmall.weight(.semibold))
                         .foregroundStyle(Theme.Colors.onAccent)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, Theme.Spacing.sm + 2)
@@ -189,8 +188,8 @@ struct DietBudgetEditorView: View {
     private func legendItem(_ label: String, _ value: String, _ color: Color) -> some View {
         HStack(spacing: 5) {
             Circle().fill(color).frame(width: 7, height: 7)
-            Text(label).font(Theme.Typography.labelSmall).foregroundStyle(Theme.Colors.textSecondary)
-            Text(value).font(Theme.Typography.labelSmall).fontWeight(.semibold).foregroundStyle(Theme.Colors.textPrimary)
+            Text(label).scaledFont(Theme.Typography.labelSmall).foregroundStyle(Theme.Colors.textSecondary)
+            Text(value).scaledFont(Theme.Typography.labelSmall.weight(.semibold)).foregroundStyle(Theme.Colors.textPrimary)
         }
     }
 
@@ -208,16 +207,16 @@ struct DietBudgetEditorView: View {
         VitalCard(padding: Theme.Spacing.lg, cornerRadius: Theme.Radius.md) {
             HStack {
                 Circle().fill(color).frame(width: 10, height: 10)
-                Text(label).font(Theme.Typography.bodyMedium).foregroundStyle(Theme.Colors.textPrimary)
+                Text(label).scaledFont(Theme.Typography.bodyMedium).foregroundStyle(Theme.Colors.textPrimary)
                 Spacer()
                 TextField("0", value: value, format: .number)
                     .keyboardType(.numberPad)
                     .multilineTextAlignment(.trailing)
                     .frame(width: 64)
-                    .font(Theme.Typography.numericSmall(17))
+                    .scaledFont(Theme.Typography.numericSmall(17))
                     .foregroundStyle(Theme.Colors.textPrimary)
                     .onSubmit { vm.commit() }
-                Text("g").font(Theme.Typography.bodySmall).foregroundStyle(Theme.Colors.textSecondary)
+                Text("g").scaledFont(Theme.Typography.bodySmall).foregroundStyle(Theme.Colors.textSecondary)
             }
         }
     }
@@ -228,8 +227,7 @@ struct DietBudgetEditorView: View {
                 Image(systemName: "arrow.counterclockwise")
                 Text("Reset to auto")
             }
-            .font(Theme.Typography.bodySmall)
-            .fontWeight(.medium)
+            .scaledFont(Theme.Typography.bodySmall.weight(.medium))
             .foregroundStyle(Theme.Colors.textSecondary)
             .frame(maxWidth: .infinity)
             .padding(.vertical, Theme.Spacing.md)
@@ -242,7 +240,7 @@ struct DietBudgetEditorView: View {
 
     private var autoNote: some View {
         Text("Vital keeps this target updated automatically as your weight and activity change. Switch to Custom to set your own.")
-            .font(Theme.Typography.bodySmall)
+            .scaledFont(Theme.Typography.bodySmall)
             .foregroundStyle(Theme.Colors.textSecondary)
             .multilineTextAlignment(.center)
             .padding(.horizontal, Theme.Spacing.sm)

@@ -12,22 +12,35 @@ struct WeeklyReviewContent: View {
     /// full variant (the detail sheet).
     var compact = false
 
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     /// 2-up rows built by hand (not `LazyVGrid`, which sizes each cell to its
     /// own content): the `fixedSize(vertical:)` HStack gives both tiles in a
-    /// row the taller one's height. An odd last tile keeps half width.
+    /// row the taller one's height. An odd last tile keeps half width. At
+    /// accessibility text sizes the tiles stack one per row instead — half a
+    /// screen is too narrow for an AX-size label and value.
+    @ViewBuilder
     private var statsGrid: some View {
-        let pairs = stride(from: 0, to: review.stats.count, by: 2).map { i in
-            Array(review.stats[i..<min(i + 2, review.stats.count)])
-        }
-        return VStack(spacing: Theme.Spacing.md) {
-            ForEach(Array(pairs.enumerated()), id: \.offset) { _, pair in
-                HStack(alignment: .top, spacing: Theme.Spacing.md) {
-                    ForEach(pair) { stat in
-                        WeeklyReviewStatTile(stat: stat)
-                    }
-                    if pair.count == 1 { Color.clear.frame(maxWidth: .infinity) }
+        if dynamicTypeSize.isAccessibilitySize {
+            VStack(spacing: Theme.Spacing.md) {
+                ForEach(review.stats) { stat in
+                    WeeklyReviewStatTile(stat: stat)
                 }
-                .fixedSize(horizontal: false, vertical: true)
+            }
+        } else {
+            let pairs = stride(from: 0, to: review.stats.count, by: 2).map { i in
+                Array(review.stats[i..<min(i + 2, review.stats.count)])
+            }
+            VStack(spacing: Theme.Spacing.md) {
+                ForEach(Array(pairs.enumerated()), id: \.offset) { _, pair in
+                    HStack(alignment: .top, spacing: Theme.Spacing.md) {
+                        ForEach(pair) { stat in
+                            WeeklyReviewStatTile(stat: stat)
+                        }
+                        if pair.count == 1 { Color.clear.frame(maxWidth: .infinity) }
+                    }
+                    .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
     }
@@ -39,14 +52,14 @@ struct WeeklyReviewContent: View {
             // edge, which is exactly where Today's floating voice FAB (60pt +
             // 20pt margin) rests and covered it.
             VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-                HStack(spacing: Theme.Spacing.sm) {
+                AccessibilityAdaptiveStack(spacing: Theme.Spacing.sm, stackedSpacing: Theme.Spacing.xxs) {
                     Text("YOUR WEEK")
-                        .font(.system(size: 12, weight: .semibold))
+                        .scaledFont(size: 12, weight: .semibold)
                         .tracking(1.2)
                         .foregroundStyle(Theme.Colors.textSecondary)
                     if let range = WeeklyReviewLogic.rangeText(review) {
                         Text(range)
-                            .font(.system(size: 12))
+                            .scaledFont(size: 12)
                             .foregroundStyle(Theme.Colors.textTertiary)
                     }
                     Spacer(minLength: 0)
@@ -60,9 +73,11 @@ struct WeeklyReviewContent: View {
             }
 
             Text(review.headline)
-                .font(.system(size: headlineSize, weight: .bold, design: .rounded))
+                .scaledFont(size: headlineSize, weight: .bold, design: .rounded)
                 .foregroundStyle(Theme.Colors.textPrimary)
-                .lineLimit(compact ? 2 : nil)
+                // The compact card's 2-line cap lifts at accessibility sizes,
+                // where 2 lines hold only a few words.
+                .lineLimit(compact && !dynamicTypeSize.isAccessibilitySize ? 2 : nil)
                 .fixedSize(horizontal: false, vertical: true)
                 .multilineTextAlignment(.leading)
                 // Compact card lives on Today, where the trailing voice FAB
@@ -92,24 +107,30 @@ struct WeeklyReviewContent: View {
 private struct WeeklyReviewStatTile: View {
     let stat: WeeklyReviewStatDTO
 
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     var body: some View {
+        // Standard sizes keep the one-line, shrink-to-fit tile (two tiles per
+        // row); at accessibility sizes the tile is full width (see
+        // `statsGrid`) and wraps instead of shrinking.
+        let isAX = dynamicTypeSize.isAccessibilitySize
         VStack(alignment: .leading, spacing: 2) {
             Text(stat.label)
-                .font(.system(size: 12, weight: .medium))
+                .scaledFont(size: 12, weight: .medium)
                 .foregroundStyle(Theme.Colors.textSecondary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
+                .lineLimit(isAX ? nil : 1)
+                .minimumScaleFactor(isAX ? 1 : 0.8)
             Text(stat.value)
-                .font(.system(size: 20, weight: .bold, design: .rounded))
+                .scaledFont(size: 20, weight: .bold, design: .rounded)
                 .foregroundStyle(stat.tone == .neutral ? Theme.Colors.textPrimary : WeeklyReviewLogic.color(for: stat.tone))
                 .monospacedDigit()
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
+                .lineLimit(isAX ? 2 : 1)
+                .minimumScaleFactor(isAX ? 1 : 0.7)
             if let comparison = stat.comparison, !comparison.isEmpty {
                 Text(comparison)
-                    .font(.system(size: 12))
+                    .scaledFont(size: 12)
                     .foregroundStyle(Theme.Colors.textTertiary)
-                    .lineLimit(2)
+                    .lineLimit(isAX ? nil : 2)
             }
         }
         .padding(Theme.Spacing.md)
@@ -137,10 +158,10 @@ private struct WeeklyReviewRowView: View {
                 .frame(width: 18)
             VStack(alignment: .leading, spacing: 2) {
                 Text(row.title)
-                    .font(.system(size: 12, weight: .semibold))
+                    .scaledFont(size: 12, weight: .semibold)
                     .foregroundStyle(Theme.Colors.textSecondary)
                 Text(row.text)
-                    .font(.system(size: 14))
+                    .scaledFont(size: 14)
                     .foregroundStyle(Theme.Colors.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -167,13 +188,13 @@ struct WeeklyReviewCard: View {
             VStack(alignment: .leading, spacing: Theme.Spacing.md) {
                 WeeklyReviewContent(review: response.review, compact: true)
 
-                HStack(spacing: Theme.Spacing.sm) {
+                AccessibilityAdaptiveStack(spacing: Theme.Spacing.sm) {
                     Button(action: onOpen) {
                         HStack(spacing: Theme.Spacing.xs) {
                             Text("See your week")
-                                .font(.system(size: 14, weight: .semibold))
+                                .scaledFont(size: 14, weight: .semibold)
                             Image(systemName: "chevron.right")
-                                .font(.system(size: 11, weight: .semibold))
+                                .scaledFont(size: 11, weight: .semibold)
                         }
                         .foregroundStyle(Theme.Colors.accentContent)
                         .padding(.horizontal, Theme.Spacing.lg)
@@ -186,7 +207,7 @@ struct WeeklyReviewCard: View {
 
                     Button(action: onGotIt) {
                         Text("Got it")
-                            .font(.system(size: 14, weight: .semibold))
+                            .scaledFont(size: 14, weight: .semibold)
                             .foregroundStyle(Theme.Colors.textSecondary)
                             .padding(.horizontal, Theme.Spacing.lg)
                             .padding(.vertical, Theme.Spacing.sm)
@@ -213,6 +234,8 @@ struct WeeklyReviewRow: View {
     let response: WeeklyReviewResponse
     var onTap: () -> Void
 
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     /// True for reviews with nothing substantive to celebrate (not enough
     /// data, or no target set) — the unseen dot renders grey for those.
     static func unseenDotIsNeutral(_ review: WeeklyReviewDTO) -> Bool {
@@ -229,16 +252,16 @@ struct WeeklyReviewRow: View {
                         .frame(width: 28)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Weekly review")
-                            .font(.system(size: 16, weight: .semibold))
+                            .scaledFont(size: 16, weight: .semibold)
                             .foregroundStyle(Theme.Colors.textPrimary)
                         // Non-breaking so the headline's "+10 kg over 4 wks" never
                         // wraps mid-value on this two-line row.
                         Text(WeeklyReviewLogic.isNotEnoughData(response.review)
                              ? WeeklyReviewLogic.firstReviewText(now: AppClock.now)
                              : GoalProgressLogic.nonBreaking(response.review.headline))
-                            .font(.system(size: 13))
+                            .scaledFont(size: 13)
                             .foregroundStyle(Theme.Colors.textSecondary)
-                            .lineLimit(2)
+                            .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)
                             .multilineTextAlignment(.leading)
                     }
                     Spacer(minLength: Theme.Spacing.sm)
@@ -253,7 +276,7 @@ struct WeeklyReviewRow: View {
                             .accessibilityHidden(true)
                     }
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 13, weight: .semibold))
+                        .scaledFont(size: 13, weight: .semibold)
                         .foregroundStyle(Theme.Colors.textTertiary)
                 }
             }
@@ -280,7 +303,7 @@ struct WeeklyReviewDetailView: View {
             VStack(alignment: .leading, spacing: Theme.Spacing.xl) {
                 HStack {
                     Text("Weekly review")
-                        .font(.system(size: 18, weight: .bold))
+                        .scaledFont(size: 18, weight: .bold)
                         .tracking(-0.2)
                         .foregroundStyle(Theme.Colors.textPrimary)
                         .accessibilityIdentifier("weeklyReview.detail.title")
@@ -307,7 +330,7 @@ struct WeeklyReviewDetailView: View {
                         dismiss()
                     } label: {
                         Text("Got it")
-                            .font(.system(size: 16, weight: .semibold))
+                            .scaledFont(size: 16, weight: .semibold)
                             .foregroundStyle(Theme.Colors.accentContent)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, Theme.Spacing.md)
@@ -345,7 +368,7 @@ struct WeeklyReviewPushView: View {
                 WeeklyReviewDetailView(response: latest, onGotIt: { store.markSeen() })
             } else if didAttemptLoad {
                 Text("Your weekly review isn't available right now.")
-                    .font(.system(size: 15))
+                    .scaledFont(size: 15)
                     .foregroundStyle(Theme.Colors.textSecondary)
                     .padding(Theme.Spacing.xl)
             } else {

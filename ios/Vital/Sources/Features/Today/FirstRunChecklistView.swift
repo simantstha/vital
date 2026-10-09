@@ -27,7 +27,7 @@ struct FirstRunChecklistView: View {
         VitalCard(padding: Theme.Spacing.lg, cornerRadius: Theme.Radius.xl) {
             VStack(alignment: .leading, spacing: Theme.Spacing.md) {
                 Text("Let's get your baseline")
-                    .font(.system(size: 15, weight: .semibold))
+                    .scaledFont(size: 15, weight: .semibold)
                     .foregroundStyle(Theme.Colors.textPrimary)
 
                 VStack(spacing: 0) {
@@ -81,7 +81,7 @@ struct FirstRunChecklistView: View {
                     .foregroundStyle(done ? Theme.Colors.accentContent : Theme.Colors.textTertiary)
 
                 Text(title)
-                    .font(.system(size: 14, weight: .medium))
+                    .scaledFont(size: 14, weight: .medium)
                     .foregroundStyle(done ? Theme.Colors.textSecondary : Theme.Colors.textPrimary)
                     .strikethrough(done)
                     .lineLimit(1)
@@ -93,7 +93,7 @@ struct FirstRunChecklistView: View {
 
             if !done {
                 Button(actionTitle, action: action)
-                    .font(.system(size: 13, weight: .bold))
+                    .scaledFont(size: 13, weight: .bold)
                     .foregroundStyle(Theme.Colors.accentContent)
                     .padding(.horizontal, Theme.Spacing.md)
                     .padding(.vertical, Theme.Spacing.xs + 2)

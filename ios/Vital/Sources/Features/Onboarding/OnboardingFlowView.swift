@@ -85,11 +85,11 @@ private struct StepScaffold<Content: View>: View {
                 VStack(alignment: .leading, spacing: Theme.Spacing.xl) {
                     VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
                         Text(title)
-                            .font(Theme.Typography.titleLarge)
+                            .scaledFont(Theme.Typography.titleLarge)
                             .foregroundStyle(Theme.Colors.textPrimary)
                         if let subtitle {
                             Text(subtitle)
-                                .font(Theme.Typography.bodyMedium)
+                                .scaledFont(Theme.Typography.bodyMedium)
                                 .foregroundStyle(Theme.Colors.textSecondary)
                         }
                     }
@@ -106,7 +106,7 @@ private struct StepScaffold<Content: View>: View {
                             ProgressView().tint(Theme.Colors.onAccent)
                         } else {
                             Text(continueTitle)
-                                .font(.system(size: 16, weight: .semibold))
+                                .scaledFont(size: 16, weight: .semibold)
                         }
                     }
                     .foregroundStyle(Theme.Colors.onAccent)
@@ -124,7 +124,7 @@ private struct StepScaffold<Content: View>: View {
 
                 if let onBack {
                     Button("Back", action: onBack)
-                        .font(Theme.Typography.bodyMedium)
+                        .scaledFont(Theme.Typography.bodyMedium)
                         .foregroundStyle(Theme.Colors.textSecondary)
                 }
             }
@@ -142,7 +142,7 @@ private struct FieldLabel<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
             Text(title.uppercased())
-                .font(Theme.Typography.labelSmall)
+                .scaledFont(Theme.Typography.labelSmall)
                 .foregroundStyle(Theme.Colors.textSecondary)
                 .tracking(0.6)
             content()
@@ -259,7 +259,7 @@ private struct BasicsStepView: View {
             VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
                 FieldLabel(title: "Name") {
                     TextField("Your name", text: $vm.name)
-                        .font(Theme.Typography.bodyLarge)
+                        .scaledFont(Theme.Typography.bodyLarge)
                         .foregroundStyle(Theme.Colors.textPrimary)
                         .onboardingFieldSurface()
                 }
@@ -278,7 +278,7 @@ private struct BasicsStepView: View {
                         } label: {
                             HStack {
                                 Text("Select your date of birth")
-                                    .font(Theme.Typography.bodyLarge)
+                                    .scaledFont(Theme.Typography.bodyLarge)
                                     .foregroundStyle(Theme.Colors.textSecondary)
                                 Spacer()
                                 Image(systemName: "calendar")
@@ -335,7 +335,7 @@ private struct BasicsStepView: View {
                 FieldLabel(title: "Height (cm)") {
                     TextField("cm", text: $heightCmText)
                         .keyboardType(.decimalPad)
-                        .font(Theme.Typography.bodyLarge)
+                        .scaledFont(Theme.Typography.bodyLarge)
                         .foregroundStyle(Theme.Colors.textPrimary)
                         .onboardingFieldSurface()
                         .onChange(of: heightCmText) { commitHeight() }
@@ -343,7 +343,7 @@ private struct BasicsStepView: View {
                 FieldLabel(title: "Weight (kg)") {
                     TextField("kg", text: $weightText)
                         .keyboardType(.decimalPad)
-                        .font(Theme.Typography.bodyLarge)
+                        .scaledFont(Theme.Typography.bodyLarge)
                         .foregroundStyle(Theme.Colors.textPrimary)
                         .onboardingFieldSurface()
                         .onChange(of: weightText) { commitWeight() }
@@ -354,7 +354,7 @@ private struct BasicsStepView: View {
                 FieldLabel(title: "Height (ft)") {
                     TextField("ft", text: $heightFeetText)
                         .keyboardType(.numberPad)
-                        .font(Theme.Typography.bodyLarge)
+                        .scaledFont(Theme.Typography.bodyLarge)
                         .foregroundStyle(Theme.Colors.textPrimary)
                         .onboardingFieldSurface()
                         .onChange(of: heightFeetText) { commitHeight() }
@@ -362,7 +362,7 @@ private struct BasicsStepView: View {
                 FieldLabel(title: "Height (in)") {
                     TextField("in", text: $heightInchesText)
                         .keyboardType(.numberPad)
-                        .font(Theme.Typography.bodyLarge)
+                        .scaledFont(Theme.Typography.bodyLarge)
                         .foregroundStyle(Theme.Colors.textPrimary)
                         .onboardingFieldSurface()
                         .onChange(of: heightInchesText) { commitHeight() }
@@ -370,7 +370,7 @@ private struct BasicsStepView: View {
                 FieldLabel(title: "Weight (lb)") {
                     TextField("lb", text: $weightText)
                         .keyboardType(.numberPad)
-                        .font(Theme.Typography.bodyLarge)
+                        .scaledFont(Theme.Typography.bodyLarge)
                         .foregroundStyle(Theme.Colors.textPrimary)
                         .onboardingFieldSurface()
                         .onChange(of: weightText) { commitWeight() }
@@ -482,7 +482,7 @@ private struct GoalStepView: View {
                     FieldLabel(title: "Weekly distance (\(vm.units.distanceUnit), optional)") {
                         TextField(vm.units.distanceUnit, text: $weeklyDistanceText)
                             .keyboardType(.decimalPad)
-                            .font(Theme.Typography.bodyLarge)
+                            .scaledFont(Theme.Typography.bodyLarge)
                             .foregroundStyle(Theme.Colors.textPrimary)
                             .onboardingFieldSurface()
                             .accessibilityIdentifier("onboarding.weeklyDistanceField")
@@ -499,7 +499,7 @@ private struct GoalStepView: View {
                         Stepper(value: $vm.weeklySessionsTarget,
                                 in: GoalTargetLogic.minWeeklySessions...GoalTargetLogic.maxWeeklySessions) {
                             Text("\(vm.weeklySessionsTarget) \(vm.weeklySessionsTarget == 1 ? "workout" : "workouts")")
-                                .font(Theme.Typography.bodyLarge)
+                                .scaledFont(Theme.Typography.bodyLarge)
                                 .foregroundStyle(Theme.Colors.textPrimary)
                         }
                         .tint(Theme.Colors.accentContent)
@@ -507,7 +507,7 @@ private struct GoalStepView: View {
                 }
 
                 Toggle("I have a target date", isOn: $vm.hasTargetDate)
-                    .font(Theme.Typography.bodyMedium)
+                    .scaledFont(Theme.Typography.bodyMedium)
                     .foregroundStyle(Theme.Colors.textPrimary)
                     .tint(Theme.Colors.accent)
 
@@ -542,7 +542,7 @@ private struct GoalStepView: View {
         FieldLabel(title: "Target weight (\(vm.units.weightUnit), optional)") {
             TextField(vm.units.weightUnit, text: $targetWeightText)
                 .keyboardType(.decimalPad)
-                .font(Theme.Typography.bodyLarge)
+                .scaledFont(Theme.Typography.bodyLarge)
                 .foregroundStyle(Theme.Colors.textPrimary)
                 .onboardingFieldSurface()
                 .onChange(of: targetWeightText) {
@@ -560,19 +560,19 @@ private struct GoalStepView: View {
             units: vm.units
         ) {
             Text(warning)
-                .font(Theme.Typography.bodySmall)
+                .scaledFont(Theme.Typography.bodySmall)
                 .foregroundStyle(Theme.Colors.caution)
         } else if GoalTargetLogic.isLossGoal(vm.goal),
                   let hint = GoalTargetLogic.paceHint(
                     currentKg: vm.weightKg, targetKg: vm.targetWeightKg, units: vm.units
                   ) {
             Text(hint)
-                .font(Theme.Typography.bodySmall)
+                .scaledFont(Theme.Typography.bodySmall)
                 .foregroundStyle(Theme.Colors.textSecondary)
         } else if let nudge = GoalTargetLogic.missingTargetNudge(goal: vm.goal, targetKg: vm.targetWeightKg) {
             // Optional, never blocking — just says what a target unlocks.
             Text(nudge)
-                .font(Theme.Typography.bodySmall)
+                .scaledFont(Theme.Typography.bodySmall)
                 .foregroundStyle(Theme.Colors.textSecondary)
         }
     }
@@ -610,7 +610,7 @@ private struct TrainingStepView: View {
                     HStack {
                         Stepper(value: $vm.frequency, in: 0...7) {
                             Text("\(vm.frequency) \(vm.frequency == 1 ? "day" : "days")")
-                                .font(Theme.Typography.bodyLarge)
+                                .scaledFont(Theme.Typography.bodyLarge)
                                 .foregroundStyle(Theme.Colors.textPrimary)
                         }
                         .tint(Theme.Colors.accentContent)
@@ -642,7 +642,7 @@ private struct TrainingStepView: View {
                 FieldLabel(title: "Anything else? (optional)") {
                     TextField("PRs, current program, injuries in training…", text: $vm.volumeNotes, axis: .vertical)
                         .lineLimit(3...6)
-                        .font(Theme.Typography.bodyMedium)
+                        .scaledFont(Theme.Typography.bodyMedium)
                         .foregroundStyle(Theme.Colors.textPrimary)
                         .onboardingFieldSurface()
                 }
@@ -667,21 +667,21 @@ private struct HealthSafetyStepView: View {
                 FieldLabel(title: "Injuries (optional)") {
                     TextField("Past or current injuries", text: $vm.injuries, axis: .vertical)
                         .lineLimit(2...5)
-                        .font(Theme.Typography.bodyMedium)
+                        .scaledFont(Theme.Typography.bodyMedium)
                         .foregroundStyle(Theme.Colors.textPrimary)
                         .onboardingFieldSurface()
                 }
                 FieldLabel(title: "Conditions (optional)") {
                     TextField("Medical conditions", text: $vm.conditions, axis: .vertical)
                         .lineLimit(2...5)
-                        .font(Theme.Typography.bodyMedium)
+                        .scaledFont(Theme.Typography.bodyMedium)
                         .foregroundStyle(Theme.Colors.textPrimary)
                         .onboardingFieldSurface()
                 }
                 FieldLabel(title: "Medications (optional)") {
                     TextField("Current medications", text: $vm.medications, axis: .vertical)
                         .lineLimit(2...5)
-                        .font(Theme.Typography.bodyMedium)
+                        .scaledFont(Theme.Typography.bodyMedium)
                         .foregroundStyle(Theme.Colors.textPrimary)
                         .onboardingFieldSurface()
                 }
@@ -733,14 +733,14 @@ private struct LifestyleStepView: View {
                 FieldLabel(title: "Diet (optional)") {
                     TextField("Any dietary pattern or restriction", text: $vm.diet, axis: .vertical)
                         .lineLimit(2...5)
-                        .font(Theme.Typography.bodyMedium)
+                        .scaledFont(Theme.Typography.bodyMedium)
                         .foregroundStyle(Theme.Colors.textPrimary)
                         .onboardingFieldSurface()
                 }
 
                 if let error = vm.errorMessage {
                     Text(error)
-                        .font(Theme.Typography.bodySmall)
+                        .scaledFont(Theme.Typography.bodySmall)
                         .foregroundStyle(Theme.Colors.alert)
                 }
             }
@@ -757,10 +757,10 @@ private struct CoachIntroStepView: View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
                 Text("Meet your coach")
-                    .font(Theme.Typography.titleLarge)
+                    .scaledFont(Theme.Typography.titleLarge)
                     .foregroundStyle(Theme.Colors.textPrimary)
                 Text("Last step \u{2014} tell Vital anything it should know.")
-                    .font(Theme.Typography.bodyMedium)
+                    .scaledFont(Theme.Typography.bodyMedium)
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
             .padding(.horizontal, Theme.Spacing.xl)
@@ -771,7 +771,7 @@ private struct CoachIntroStepView: View {
 
             Button(action: vm.advance) {
                 Text("Continue")
-                    .font(.system(size: 16, weight: .semibold))
+                    .scaledFont(size: 16, weight: .semibold)
                     .foregroundStyle(Theme.Colors.onAccent)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 16)
@@ -807,12 +807,12 @@ private struct CalibratingStepView: View {
 
                 VStack(spacing: Theme.Spacing.sm) {
                     Text(backfillCoordinator.isComplete ? "You're all set" : "Importing your health history…")
-                        .font(Theme.Typography.titleMedium)
+                        .scaledFont(Theme.Typography.titleMedium)
                         .foregroundStyle(Theme.Colors.textPrimary)
                     Text(backfillCoordinator.isComplete
                          ? OnboardingCopy.importSummary(daysUploaded: backfillCoordinator.daysUploaded)
                          : "\(Int((backfillCoordinator.progress * 100).rounded()))% — this keeps going in the background, so feel free to continue.")
-                        .font(Theme.Typography.bodyMedium)
+                        .scaledFont(Theme.Typography.bodyMedium)
                         .foregroundStyle(Theme.Colors.textSecondary)
                         .multilineTextAlignment(.center)
                 }
@@ -828,7 +828,7 @@ private struct CalibratingStepView: View {
                 authViewModel.markOnboarded()
             } label: {
                 Text("Continue")
-                    .font(.system(size: 16, weight: .semibold))
+                    .scaledFont(size: 16, weight: .semibold)
                     .foregroundStyle(Theme.Colors.onAccent)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 16)

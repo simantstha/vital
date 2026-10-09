@@ -17,6 +17,8 @@ struct PlanTimelineView: View {
     /// the footer never nags again (Phase 8).
     var onSyncCalendar: (() -> Void)? = nil
 
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     /// `true` when there's nothing to show — e.g. `/api/today` returned an
     /// empty `plan` and no calendar/local items merged in. Exposed so
     /// callers embedding this view in a spaced stack (see `TodayView`) can
@@ -61,21 +63,21 @@ struct PlanTimelineView: View {
     }
 
     private var header: some View {
-        HStack(alignment: .center) {
+        AccessibilityAdaptiveStack(alignment: .center, stackedSpacing: Theme.Spacing.xs) {
             Text("Today's plan")
-                .font(.system(size: 20, weight: .bold))
+                .scaledFont(size: 20, weight: .bold)
                 .tracking(-0.3)
                 .foregroundStyle(Theme.Colors.textPrimary)
 
-            Spacer()
+            Spacer(minLength: dynamicTypeSize.isAccessibilitySize ? 0 : nil)
 
             HStack(spacing: Theme.Spacing.sm) {
                 HStack(spacing: Theme.Spacing.xxs) {
                     Image(systemName: "sparkles")
-                        .font(.system(size: 12, weight: .semibold))
+                        .scaledFont(size: 12, weight: .semibold)
                         .foregroundStyle(Theme.Colors.accentContent)
                     Text("Built for you")
-                        .font(.system(size: 12, weight: .semibold))
+                        .scaledFont(size: 12, weight: .semibold)
                         .foregroundStyle(Theme.Colors.textTertiary)
                 }
 
@@ -98,10 +100,10 @@ struct PlanTimelineView: View {
     private var caption: some View {
         HStack(spacing: Theme.Spacing.xs) {
             Image(systemName: "calendar")
-                .font(.system(size: 11, weight: .semibold))
+                .scaledFont(size: 11, weight: .semibold)
             Text("Synced with your calendar · tap any item to complete, skip or remove")
         }
-        .font(.system(size: 12))
+        .scaledFont(size: 12)
         .foregroundStyle(Theme.Colors.textTertiary)
         .padding(.horizontal, Theme.Spacing.xxs)
     }
@@ -112,9 +114,9 @@ struct PlanTimelineView: View {
         Button(action: action) {
             HStack(spacing: Theme.Spacing.xs) {
                 Image(systemName: "calendar.badge.plus")
-                    .font(.system(size: 11, weight: .semibold))
+                    .scaledFont(size: 11, weight: .semibold)
                 Text("Sync your calendar")
-                    .font(.system(size: 12, weight: .semibold))
+                    .scaledFont(size: 12, weight: .semibold)
             }
             .foregroundStyle(Theme.Colors.accentContent)
             .padding(.horizontal, Theme.Spacing.xxs)
@@ -130,6 +132,7 @@ private struct PlanRowView: View {
     let onLogItem: (PlanItem) -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     /// Flips on every "Log" pill tap — drives the commit haptic below.
     /// `onLogItem` is a caller-owned closure with no observable state of its
@@ -162,31 +165,33 @@ private struct PlanRowView: View {
             IconBadge(systemName: item.sfSymbol, style: badgeStyle)
 
             VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: Theme.Spacing.sm) {
+                // Accessibility sizes: status under the title, and both
+                // lines wrap instead of truncating to one line.
+                AccessibilityAdaptiveStack(spacing: Theme.Spacing.sm, stackedSpacing: 2) {
                     Text(item.title)
-                        .font(.system(size: 15, weight: .semibold))
+                        .scaledFont(size: 15, weight: .semibold)
                         .foregroundStyle(Theme.Colors.textPrimary)
                         .strikethrough(isSkipped)
-                        .lineLimit(1)
+                        .lineLimit(dynamicTypeSize.isAccessibilitySize ? 3 : 1)
 
                     Text(item.status.label.uppercased())
-                        .font(.system(size: 11, weight: .bold))
+                        .scaledFont(size: 11, weight: .bold)
                         .tracking(0.8)
                         .foregroundStyle(statusColor)
                 }
 
-                HStack(spacing: Theme.Spacing.xs) {
+                AccessibilityAdaptiveStack(spacing: Theme.Spacing.xs, stackedSpacing: 2) {
                     Text(item.subtitle.asMarkdown)
-                        .font(.system(size: 13))
+                        .scaledFont(size: 13)
                         .foregroundStyle(Theme.Colors.textSecondary)
-                        .lineLimit(1)
+                        .lineLimit(dynamicTypeSize.isAccessibilitySize ? 3 : 1)
 
                     if item.source == .calendar {
                         HStack(spacing: 3) {
                             Image(systemName: "calendar")
-                                .font(.system(size: 9, weight: .semibold))
+                                .scaledFont(size: 9, weight: .semibold)
                             Text("Calendar")
-                                .font(.system(size: 10, weight: .semibold))
+                                .scaledFont(size: 10, weight: .semibold)
                         }
                         .foregroundStyle(Theme.Colors.textTertiary)
                         .padding(.horizontal, 8)
@@ -226,7 +231,7 @@ private struct PlanRowView: View {
                 onLogItem(item)
             } label: {
                 Text(actionLabel)
-                    .font(.system(size: 13, weight: .bold))
+                    .scaledFont(size: 13, weight: .bold)
                     .foregroundStyle(Theme.Colors.card)
                     .padding(.horizontal, Theme.Spacing.lg)
                     .padding(.vertical, Theme.Spacing.sm)
@@ -236,7 +241,7 @@ private struct PlanRowView: View {
             .sensoryFeedback(Theme.Haptics.commit, trigger: logTapped)
         } else {
             Text(item.timeLabel)
-                .font(.system(size: 12))
+                .scaledFont(size: 12)
                 .foregroundStyle(Theme.Colors.textTertiary)
                 .monospacedDigit()
         }

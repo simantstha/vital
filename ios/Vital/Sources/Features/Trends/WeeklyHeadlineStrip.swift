@@ -10,6 +10,9 @@ import SwiftUI
 /// layout.
 struct WeeklyHeadlineStrip: View {
     @ObservedObject var vm: TrendsViewModel
+    /// `footnoteView` builds a `Text` from `AttributedString` runs, which need
+    /// a concrete scaled `Font` rather than `.scaledFont(...)`.
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     private var sleepGoalHours: Double { Double(vm.sleepGoalMinutes) / 60.0 }
     private var nightsAtGoalText: String? { TrendsSummary.nightsAtGoalText(vm.sleepWindow.values, goalHours: sleepGoalHours) }
@@ -21,7 +24,7 @@ struct WeeklyHeadlineStrip: View {
                 // "Weight" header treatment — replaces the old
                 // uppercase-tracked "THIS WEEK" label.
                 Text("Sleep this week")
-                    .font(.system(size: 17, weight: .semibold))
+                    .scaledFont(size: 17, weight: .semibold)
                     .foregroundStyle(Theme.Colors.textPrimary)
 
                 if let nightsAtGoalText {
@@ -30,7 +33,7 @@ struct WeeklyHeadlineStrip: View {
                     // No synced nights (e.g. Apple Health not connected yet):
                     // say so instead of "0 of 7 nights at goal" / "7h 00m".
                     Text("No sleep data yet. Connect Apple Health to see your week.")
-                        .font(.system(size: 13))
+                        .scaledFont(size: 13)
                         .foregroundStyle(Theme.Colors.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier("trends.sleepEmpty")
@@ -81,7 +84,8 @@ struct WeeklyHeadlineStrip: View {
     }
 
     private func twoUpRow(_ nightsAtGoalText: String) -> some View {
-        HStack(spacing: 0) {
+        // Side by side normally; stacked at accessibility text sizes.
+        AccessibilityAdaptiveStack(spacing: 0, stackedSpacing: Theme.Spacing.sm) {
             headlineStat(value: vm.sleepValueText, label: "average")
             headlineStat(value: nightsAtGoalText, label: "nights at goal")
         }
@@ -91,18 +95,18 @@ struct WeeklyHeadlineStrip: View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(alignment: .firstTextBaseline, spacing: 3) {
                 Text(value)
-                    .font(Theme.Typography.numericLarge(22))
+                    .scaledFont(Theme.Typography.numericLarge(22))
                     .foregroundStyle(Theme.Colors.textPrimary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
                 if let unit {
                     Text(unit)
-                        .font(.system(size: 13, weight: .medium))
+                        .scaledFont(size: 13, weight: .medium)
                         .foregroundStyle(Theme.Colors.textSecondary)
                 }
             }
             Text(label)
-                .font(.system(size: 11))
+                .scaledFont(size: 11)
                 .foregroundStyle(Theme.Colors.textSecondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -124,12 +128,12 @@ struct WeeklyHeadlineStrip: View {
         if let bold = footnote.bold {
             var boldSpan = AttributedString(bold)
             boldSpan.foregroundColor = Theme.Colors.textPrimary
-            boldSpan.font = .system(size: 13, weight: .semibold)
+            boldSpan.font = ScaledFontToken(size: 13, weight: .semibold).font(scaledFor: dynamicTypeSize)
             attributed.append(boldSpan)
             var suffix = AttributedString(footnote.suffix)
             suffix.foregroundColor = Theme.Colors.textSecondary
             attributed.append(suffix)
         }
-        return Text(attributed).font(.system(size: 13))
+        return Text(attributed).font(ScaledFontToken(size: 13).font(scaledFor: dynamicTypeSize))
     }
 }

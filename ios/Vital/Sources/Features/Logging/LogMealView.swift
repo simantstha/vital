@@ -125,7 +125,7 @@ private extension LogMealView {
     var headerBar: some View {
         HStack {
             Text("Log Food")
-                .font(Theme.Typography.titleMedium)
+                .scaledFont(Theme.Typography.titleMedium)
                 .foregroundStyle(Theme.Colors.textPrimary)
             Spacer()
             Button {
@@ -154,7 +154,7 @@ private extension LogMealView {
                         Image(systemName: method.icon)
                             .font(.system(size: 11, weight: .semibold))
                         Text(method.rawValue)
-                            .font(Theme.Typography.labelMedium)
+                            .scaledFont(Theme.Typography.labelMedium)
                     }
                     .foregroundStyle(
                         vm.selectedMethod == method
@@ -236,7 +236,7 @@ private extension LogMealView {
                     Task { await vm.searchByText() }
                 } label: {
                     Text("Search")
-                        .font(.system(size: 16, weight: .semibold))
+                        .scaledFont(size: 16, weight: .semibold)
                         .foregroundStyle(Theme.Colors.onAccent)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 15)
@@ -264,11 +264,11 @@ private extension LogMealView {
                         } label: {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(recent.name)
-                                    .font(Theme.Typography.labelMedium)
+                                    .scaledFont(Theme.Typography.labelMedium)
                                     .foregroundStyle(Theme.Colors.textPrimary)
                                     .lineLimit(1)
                                 Text("\(Int(recent.kcal.rounded())) kcal")
-                                    .font(Theme.Typography.labelSmall)
+                                    .scaledFont(Theme.Typography.labelSmall)
                                     .foregroundStyle(Theme.Colors.textSecondary)
                             }
                             .padding(.horizontal, Theme.Spacing.md)
@@ -311,12 +311,12 @@ private extension LogMealView {
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: Theme.Spacing.xs) {
                         Text(candidate.name)
-                            .font(Theme.Typography.bodyMedium)
+                            .scaledFont(Theme.Typography.bodyMedium)
                             .foregroundStyle(Theme.Colors.textPrimary)
                             .lineLimit(1)
                         if let badge = loggedBadge(candidate.lastLoggedAt) {
                             Text(badge)
-                                .font(Theme.Typography.labelSmall)
+                                .scaledFont(Theme.Typography.labelSmall)
                                 .foregroundStyle(Theme.Colors.accentContent)
                                 .padding(.horizontal, Theme.Spacing.sm)
                                 .padding(.vertical, 2)
@@ -325,14 +325,14 @@ private extension LogMealView {
                     }
                     if let subtitle = candidateSubtitle(candidate) {
                         Text(subtitle)
-                            .font(Theme.Typography.bodySmall)
+                            .scaledFont(Theme.Typography.bodySmall)
                             .foregroundStyle(Theme.Colors.textSecondary)
                             .lineLimit(1)
                     }
                 }
                 Spacer()
                 Text("\(Int(candidate.kcal.rounded())) kcal")
-                    .font(Theme.Typography.numericSmall(15))
+                    .scaledFont(Theme.Typography.numericSmall(15))
                     .foregroundStyle(Theme.Colors.textPrimary)
             }
             .padding(Theme.Spacing.md)
@@ -381,11 +381,10 @@ private extension LogMealView {
                             .font(.system(size: 38))
                             .foregroundStyle(Theme.Colors.accentContent)
                         Text("Choose a photo")
-                            .font(Theme.Typography.bodyMedium)
-                            .fontWeight(.semibold)
+                            .scaledFont(Theme.Typography.bodyMedium.weight(.semibold))
                             .foregroundStyle(Theme.Colors.textPrimary)
                         Text("Pick an image of a meal from your library and Vital will identify the food automatically.")
-                            .font(Theme.Typography.bodySmall)
+                            .scaledFont(Theme.Typography.bodySmall)
                             .foregroundStyle(Theme.Colors.textSecondary)
                             .multilineTextAlignment(.center)
                     }
@@ -399,7 +398,7 @@ private extension LogMealView {
                 HStack(spacing: Theme.Spacing.sm) {
                     ProgressView().tint(Theme.Colors.accentContent)
                     Text("Identifying food…")
-                        .font(Theme.Typography.bodySmall)
+                        .scaledFont(Theme.Typography.bodySmall)
                         .foregroundStyle(Theme.Colors.textSecondary)
                 }
             }
@@ -428,14 +427,14 @@ private extension LogMealView {
                     HStack(spacing: Theme.Spacing.sm) {
                         ProgressView().tint(Theme.Colors.accentContent)
                         Text("Looking up product…")
-                            .font(Theme.Typography.bodySmall)
+                            .scaledFont(Theme.Typography.bodySmall)
                             .foregroundStyle(Theme.Colors.textSecondary)
                     }
                 } else if vm.barcodeNotFound {
                     barcodeNotFoundCard
                 } else if !vm.showConfirmCard {
                     Text("Point the camera at a product barcode")
-                        .font(Theme.Typography.bodySmall)
+                        .scaledFont(Theme.Typography.bodySmall)
                         .foregroundStyle(Theme.Colors.textSecondary)
                         .multilineTextAlignment(.center)
                 }
@@ -448,11 +447,10 @@ private extension LogMealView {
                         .font(.system(size: 40))
                         .foregroundStyle(Theme.Colors.textSecondary)
                     Text("Camera required")
-                        .font(Theme.Typography.bodyMedium)
-                        .fontWeight(.semibold)
+                        .scaledFont(Theme.Typography.bodyMedium.weight(.semibold))
                         .foregroundStyle(Theme.Colors.textPrimary)
                     Text("Barcode scanning uses the device camera and is not available in the simulator. Use Text or Photo on the simulator, or run on a real device.")
-                        .font(Theme.Typography.bodySmall)
+                        .scaledFont(Theme.Typography.bodySmall)
                         .foregroundStyle(Theme.Colors.textSecondary)
                         .multilineTextAlignment(.center)
                 }
@@ -473,11 +471,10 @@ private extension LogMealView {
                     .font(.system(size: 38))
                     .foregroundStyle(Theme.Colors.textSecondary)
                 Text("Couldn't find that product")
-                    .font(Theme.Typography.bodyMedium)
-                    .fontWeight(.semibold)
+                    .scaledFont(Theme.Typography.bodyMedium.weight(.semibold))
                     .foregroundStyle(Theme.Colors.textPrimary)
                 Text("Try searching by name instead.")
-                    .font(Theme.Typography.bodySmall)
+                    .scaledFont(Theme.Typography.bodySmall)
                     .foregroundStyle(Theme.Colors.textSecondary)
                     .multilineTextAlignment(.center)
                 Button {
@@ -486,7 +483,7 @@ private extension LogMealView {
                     searchFieldFocused = true
                 } label: {
                     Text("Search by Name")
-                        .font(.system(size: 14, weight: .semibold))
+                        .scaledFont(size: 14, weight: .semibold)
                         .foregroundStyle(Theme.Colors.onAccent)
                         .padding(.horizontal, Theme.Spacing.xl)
                         .padding(.vertical, Theme.Spacing.sm)
@@ -531,13 +528,13 @@ private extension LogMealView {
                             HStack(spacing: Theme.Spacing.sm) {
                                 ProgressView().tint(Theme.Colors.accentContent)
                                 Text("Transcribing…")
-                                    .font(Theme.Typography.bodyMedium)
+                                    .scaledFont(Theme.Typography.bodyMedium)
                                     .foregroundStyle(Theme.Colors.accentContent)
                             }
                         } else if vm.transcriber.isRecording {
                             VStack(spacing: Theme.Spacing.sm) {
                                 Text("Listening…")
-                                    .font(Theme.Typography.bodyMedium)
+                                    .scaledFont(Theme.Typography.bodyMedium)
                                     .foregroundStyle(Theme.Colors.accentContent)
                                 // No live Apple partial-transcript text here
                                 // (owner decision, spec `voice-cloud-only-stt`
@@ -549,7 +546,7 @@ private extension LogMealView {
                             }
                         } else {
                             Text("Tap to speak a food name")
-                                .font(Theme.Typography.bodyMedium)
+                                .scaledFont(Theme.Typography.bodyMedium)
                                 .foregroundStyle(Theme.Colors.textSecondary)
                         }
                     }
@@ -561,7 +558,7 @@ private extension LogMealView {
                     HStack(spacing: Theme.Spacing.sm) {
                         ProgressView().tint(Theme.Colors.accentContent)
                         Text("Searching…")
-                            .font(Theme.Typography.bodySmall)
+                            .scaledFont(Theme.Typography.bodySmall)
                             .foregroundStyle(Theme.Colors.textSecondary)
                     }
                 }
@@ -574,11 +571,10 @@ private extension LogMealView {
                         .font(.system(size: 38))
                         .foregroundStyle(Theme.Colors.textSecondary)
                     Text("Microphone access needed")
-                        .font(Theme.Typography.bodyMedium)
-                        .fontWeight(.semibold)
+                        .scaledFont(Theme.Typography.bodyMedium.weight(.semibold))
                         .foregroundStyle(Theme.Colors.textPrimary)
                     Text("Allow Microphone and Speech Recognition in Settings to use voice input.")
-                        .font(Theme.Typography.bodySmall)
+                        .scaledFont(Theme.Typography.bodySmall)
                         .foregroundStyle(Theme.Colors.textSecondary)
                         .multilineTextAlignment(.center)
                     Button {
@@ -587,7 +583,7 @@ private extension LogMealView {
                         }
                     } label: {
                         Text("Open Settings")
-                            .font(.system(size: 14, weight: .semibold))
+                            .scaledFont(size: 14, weight: .semibold)
                             .foregroundStyle(Theme.Colors.onAccent)
                             .padding(.horizontal, Theme.Spacing.xl)
                             .padding(.vertical, Theme.Spacing.sm)
@@ -606,18 +602,17 @@ private extension LogMealView {
                         .font(.system(size: 38))
                         .foregroundStyle(Theme.Colors.accentContent)
                     Text("Enable voice input")
-                        .font(Theme.Typography.bodyMedium)
-                        .fontWeight(.semibold)
+                        .scaledFont(Theme.Typography.bodyMedium.weight(.semibold))
                         .foregroundStyle(Theme.Colors.textPrimary)
                     Text("Speak a food name and Vital searches automatically.")
-                        .font(Theme.Typography.bodySmall)
+                        .scaledFont(Theme.Typography.bodySmall)
                         .foregroundStyle(Theme.Colors.textSecondary)
                         .multilineTextAlignment(.center)
                     Button {
                         Task { await vm.requestSpeechPermissions() }
                     } label: {
                         Text("Allow Microphone")
-                            .font(.system(size: 14, weight: .semibold))
+                            .scaledFont(size: 14, weight: .semibold)
                             .foregroundStyle(Theme.Colors.onAccent)
                             .padding(.horizontal, Theme.Spacing.xl)
                             .padding(.vertical, Theme.Spacing.sm)
@@ -668,10 +663,10 @@ private extension LogMealView {
                 // Editable name
                 VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
                     Text("Name")
-                        .font(Theme.Typography.labelSmall)
+                        .scaledFont(Theme.Typography.labelSmall)
                         .foregroundStyle(Theme.Colors.textSecondary)
                     TextField("Food name", text: $vm.editedName)
-                        .font(Theme.Typography.bodyMedium)
+                        .scaledFont(Theme.Typography.bodyMedium)
                         .foregroundStyle(Theme.Colors.textPrimary)
                         .tint(Theme.Colors.accentContent)
                         .padding(Theme.Spacing.md)
@@ -705,7 +700,7 @@ private extension LogMealView {
                             ProgressView().tint(Theme.Colors.onAccent)
                         } else {
                             Text("Log Meal")
-                                .font(.system(size: 16, weight: .semibold))
+                                .scaledFont(size: 16, weight: .semibold)
                         }
                     }
                     .foregroundStyle(Theme.Colors.onAccent)
@@ -739,7 +734,7 @@ private extension LogMealView {
         if let mode = vm.portionMode {
             VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
                 Text("Portion")
-                    .font(Theme.Typography.labelSmall)
+                    .scaledFont(Theme.Typography.labelSmall)
                     .foregroundStyle(Theme.Colors.textSecondary)
 
                 switch mode {
@@ -764,7 +759,7 @@ private extension LogMealView {
                             vm.toggleCustomPortionGrams()
                         } label: {
                             Text(vm.useCustomPortionGrams ? "Use serving stepper" : "Enter grams instead")
-                                .font(Theme.Typography.labelMedium)
+                                .scaledFont(Theme.Typography.labelMedium)
                                 .foregroundStyle(Theme.Colors.accentContent)
                         }
                         .buttonStyle(.plain)
@@ -778,11 +773,11 @@ private extension LogMealView {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(Theme.Typography.bodyMedium)
+                    .scaledFont(Theme.Typography.bodyMedium)
                     .foregroundStyle(Theme.Colors.textPrimary)
                     .lineLimit(1)
                 Text(subtitle)
-                    .font(Theme.Typography.bodySmall)
+                    .scaledFont(Theme.Typography.bodySmall)
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
             Spacer()
@@ -802,7 +797,7 @@ private extension LogMealView {
                 .disabled(vm.portionMultiplier <= 0.5)
 
                 Text(String(format: "%.1f×", vm.portionMultiplier))
-                    .font(Theme.Typography.numericSmall(15))
+                    .scaledFont(Theme.Typography.numericSmall(15))
                     .foregroundStyle(Theme.Colors.textPrimary)
                     .frame(minWidth: 36)
 
@@ -834,11 +829,11 @@ private extension LogMealView {
                 set: { vm.updatePortionGrams($0) }
             ))
             .keyboardType(.decimalPad)
-            .font(Theme.Typography.numericSmall(15))
+            .scaledFont(Theme.Typography.numericSmall(15))
             .foregroundStyle(Theme.Colors.textPrimary)
             .tint(Theme.Colors.accentContent)
             Text("g")
-                .font(Theme.Typography.bodySmall)
+                .scaledFont(Theme.Typography.bodySmall)
                 .foregroundStyle(Theme.Colors.textSecondary)
         }
         .padding(Theme.Spacing.md)
@@ -870,7 +865,7 @@ private extension LogMealView {
                 dismiss()
             } label: {
                 Text("Done")
-                    .font(.system(size: 16, weight: .semibold))
+                    .scaledFont(size: 16, weight: .semibold)
                     .foregroundStyle(Theme.Colors.onAccent)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 15)
@@ -889,7 +884,7 @@ private extension LogMealView {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(Theme.Colors.alert)
             Text(message)
-                .font(Theme.Typography.bodySmall)
+                .scaledFont(Theme.Typography.bodySmall)
                 .foregroundStyle(Theme.Colors.textPrimary)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer()
@@ -922,13 +917,13 @@ private struct MacroEditField: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
             Text("\(label) (\(unit))")
-                .font(Theme.Typography.labelSmall)
+                .scaledFont(Theme.Typography.labelSmall)
                 .foregroundStyle(Theme.Colors.textSecondary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
             TextField("0", text: $text)
                 .keyboardType(.decimalPad)
-                .font(Theme.Typography.numericSmall(15))
+                .scaledFont(Theme.Typography.numericSmall(15))
                 .foregroundStyle(Theme.Colors.textPrimary)
                 .tint(Theme.Colors.accentContent)
                 .multilineTextAlignment(.center)

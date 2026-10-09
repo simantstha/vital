@@ -80,7 +80,7 @@ private struct MarkdownBlockView: View, Equatable {
 
         case .heading(let level):
             Text(block.text.asMarkdown)
-                .font(headingFont(level: level))
+                .scaledFont(headingFont(level: level))
                 .foregroundStyle(Theme.Colors.textPrimary)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, level == 1 ? Theme.Spacing.xs : 0)
@@ -118,7 +118,7 @@ private struct MarkdownBlockView: View, Equatable {
         }
     }
 
-    private func headingFont(level: Int) -> Font {
+    private func headingFont(level: Int) -> ScaledFontToken {
         switch level {
         case 1:
             return Theme.Typography.titleMedium
@@ -149,7 +149,7 @@ private struct TableBlockView: View {
                 GridRow {
                     ForEach(0..<columnCount, id: \.self) { c in
                         Text(header[c].asMarkdown)
-                            .font(Theme.Typography.labelMedium)
+                            .scaledFont(Theme.Typography.labelMedium)
                             .foregroundStyle(Theme.Colors.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -162,7 +162,7 @@ private struct TableBlockView: View {
                     GridRow {
                         ForEach(0..<columnCount, id: \.self) { c in
                             Text((c < rows[r].count ? rows[r][c] : "").asMarkdown)
-                                .font(Theme.Typography.bodySmall)
+                                .scaledFont(Theme.Typography.bodySmall)
                                 .foregroundStyle(Theme.Colors.textPrimary)
                                 .fixedSize(horizontal: false, vertical: true)
                         }

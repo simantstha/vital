@@ -163,10 +163,10 @@ struct CoachView: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text("Coach")
-                    .font(Theme.Typography.titleMedium)
+                    .scaledFont(Theme.Typography.titleMedium)
                     .foregroundStyle(Theme.Colors.textPrimary)
                 Text("Vital AI")
-                    .font(Theme.Typography.labelSmall)
+                    .scaledFont(Theme.Typography.labelSmall)
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
 
@@ -201,7 +201,7 @@ struct CoachView: View {
                 .foregroundStyle(Theme.Colors.caution)
                 .accessibilityHidden(true)
             Text(CoachViewModel.offlineBannerText)
-                .font(Theme.Typography.bodySmall)
+                .scaledFont(Theme.Typography.bodySmall)
                 .foregroundStyle(Theme.Colors.textSecondary)
             Spacer(minLength: 0)
         }
@@ -362,13 +362,13 @@ struct CoachView: View {
         let durations = vm.lastVoiceTurnDurations
         VStack(alignment: .leading, spacing: 2) {
             Text("Voice turn")
-                .font(.system(size: 10, weight: .bold))
+                .scaledFont(size: 10, weight: .bold)
             hudRow("endpoint_wait", durations?.endpointWait)
             hudRow("stt_wait", durations?.sttWait)
             hudRow("time_to_first_token", durations?.timeToFirstToken)
             hudRow("speech_end_to_first_audio", durations?.speechEndToFirstAudio)
         }
-        .font(.system(size: 9, weight: .medium, design: .monospaced))
+        .scaledFont(size: 9, weight: .medium, design: .monospaced)
         .foregroundStyle(.white)
         .padding(6)
         .background(Color.black.opacity(0.7), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -456,7 +456,7 @@ struct CoachView: View {
                 HStack(spacing: Theme.Spacing.sm) {
                     ZStack(alignment: .leading) {
                         TextField("Message your coach…", text: composerText, axis: .vertical)
-                            .font(Theme.Typography.bodyMedium)
+                            .scaledFont(Theme.Typography.bodyMedium)
                             .foregroundStyle(Theme.Colors.textPrimary)
                             .tint(Theme.Colors.accentContent)
                             .lineLimit(1...5)
@@ -623,7 +623,7 @@ struct CoachView: View {
     private var voiceListeningRow: some View {
         HStack(spacing: Theme.Spacing.sm) {
             Text(voice.state == .transcribing ? "Transcribing…" : "Listening…")
-                .font(Theme.Typography.bodyMedium)
+                .scaledFont(Theme.Typography.bodyMedium)
                 .foregroundStyle(Theme.Colors.textSecondary)
             if voice.state == .listening {
                 VoiceLevelMeter(level: voice.inputLevel)
@@ -813,7 +813,7 @@ struct CoachView: View {
                 .font(.system(size: 13))
                 .foregroundStyle(Theme.Colors.textSecondary)
             Text("Allow microphone and speech recognition in Settings to talk to your coach.")
-                .font(Theme.Typography.labelSmall)
+                .scaledFont(Theme.Typography.labelSmall)
                 .foregroundStyle(Theme.Colors.textSecondary)
             Spacer(minLength: Theme.Spacing.sm)
             Button {
@@ -822,7 +822,7 @@ struct CoachView: View {
                 }
             } label: {
                 Text("Settings")
-                    .font(.system(size: 12, weight: .semibold))
+                    .scaledFont(size: 12, weight: .semibold)
                     .foregroundStyle(Theme.Colors.accentContent)
             }
         }
@@ -842,7 +842,7 @@ struct CoachView: View {
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(Theme.Colors.accentContent)
             Text("Speaking…")
-                .font(Theme.Typography.labelSmall)
+                .scaledFont(Theme.Typography.labelSmall)
                 .foregroundStyle(Theme.Colors.textSecondary)
             Spacer()
             Button { vm.speaker.stop() } label: {
@@ -850,7 +850,7 @@ struct CoachView: View {
                     Image(systemName: "stop.fill")
                         .font(.system(size: 10, weight: .semibold))
                     Text("Stop")
-                        .font(.system(size: 12, weight: .semibold))
+                        .scaledFont(size: 12, weight: .semibold)
                 }
                 .foregroundStyle(Theme.Colors.textPrimary)
                 .padding(.horizontal, Theme.Spacing.md)
@@ -1096,7 +1096,7 @@ private struct MessageBubbleView: View {
 
                 VStack(alignment: message.role == .user ? .trailing : .leading, spacing: Theme.Spacing.xs) {
                     bubbleContent
-                        .font(Theme.Typography.bodyMedium)
+                        .scaledFont(Theme.Typography.bodyMedium)
                         .foregroundStyle(Theme.Colors.textPrimary)
                         .padding(.horizontal, Theme.Spacing.lg)
                         .padding(.vertical, Theme.Spacing.md)
@@ -1170,7 +1170,7 @@ private struct SpecialistFooterView: View {
                 .font(.system(size: 10, weight: .semibold))
             Text(footer.text)
         }
-        .font(Theme.Typography.labelSmall)
+        .scaledFont(Theme.Typography.labelSmall)
         .foregroundStyle(Theme.Colors.textTertiary)
         .padding(.horizontal, Theme.Spacing.xs)
         .accessibilityElement(children: .combine)
@@ -1189,7 +1189,7 @@ private struct JoinedSystemRowView: View {
             Image(systemName: "figure.run")
                 .foregroundStyle(Theme.Colors.specialistAccent)
             Text(text)
-                .font(Theme.Typography.labelSmall)
+                .scaledFont(Theme.Typography.labelSmall)
                 .foregroundStyle(Theme.Colors.textSecondary)
                 .lineLimit(CoachViewPresentation.joinedSystemRowLineLimit(for: dynamicTypeSize))
                 .layoutPriority(1)
@@ -1298,12 +1298,12 @@ struct CoachWorkingCard: View {
     private func header(elapsedSeconds: Int) -> some View {
         HStack {
             Text("WORKING ON IT")
-                .font(Theme.Typography.labelSmall)
+                .scaledFont(Theme.Typography.labelSmall)
                 .tracking(0.6)
                 .foregroundStyle(Theme.Colors.textSecondary)
             Spacer()
             Text("\(elapsedSeconds)s")
-                .font(Theme.Typography.labelSmall.monospacedDigit())
+                .scaledFont(Theme.Typography.labelSmall).monospacedDigit()
                 .foregroundStyle(Theme.Colors.textTertiary)
         }
         .padding(.vertical, Theme.Spacing.sm)
@@ -1318,12 +1318,11 @@ struct CoachWorkingCard: View {
             stepIcon(row)
             VStack(alignment: .leading, spacing: 2) {
                 Text(row.label)
-                    .font(Theme.Typography.bodySmall)
-                    .fontWeight(row.isDone ? .regular : .medium)
+                    .scaledFont(Theme.Typography.bodySmall.weight(row.isDone ? .regular : .medium))
                     .foregroundStyle(row.isDone ? Theme.Colors.textSecondary : Theme.Colors.textPrimary)
                 if row.isDone, let summary = row.summary, row.ok != false {
                     Text(summary)
-                        .font(Theme.Typography.labelSmall)
+                        .scaledFont(Theme.Typography.labelSmall)
                         .foregroundStyle(Theme.Colors.textSecondary)
                 }
             }
@@ -1373,8 +1372,7 @@ struct CoachReceiptPill: View {
         Button(action: onTap) {
             HStack(spacing: Theme.Spacing.xs) {
                 Text(summary)
-                    .font(Theme.Typography.labelMedium)
-                    .fontWeight(.semibold)
+                    .scaledFont(Theme.Typography.labelMedium.weight(.semibold))
                     .foregroundStyle(Theme.Colors.textSecondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -1441,11 +1439,11 @@ struct CoachReceiptDetail: View {
             iconBadge(for: row)
             VStack(alignment: .leading, spacing: 2) {
                 Text(row.label)
-                    .font(Theme.Typography.bodySmall)
+                    .scaledFont(Theme.Typography.bodySmall)
                     .foregroundStyle(Theme.Colors.textSecondary)
                 if let summary = row.summary {
                     Text(summary)
-                        .font(Theme.Typography.labelSmall)
+                        .scaledFont(Theme.Typography.labelSmall)
                         .foregroundStyle(Theme.Colors.textSecondary)
                 }
             }
@@ -1477,10 +1475,10 @@ struct CoachReceiptDetail: View {
                 .frame(width: 3)
             VStack(alignment: .leading, spacing: 2) {
                 Text("“\(source.text)”")
-                    .font(Theme.Typography.bodySmall)
+                    .scaledFont(Theme.Typography.bodySmall)
                     .foregroundStyle(Theme.Colors.textPrimary)
                 Text(source.date.map { "You told me · \(CoachActivityLogic.formattedSourceDate($0))" } ?? "You told me")
-                    .font(Theme.Typography.labelSmall)
+                    .scaledFont(Theme.Typography.labelSmall)
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
             .padding(.leading, Theme.Spacing.sm)
@@ -1493,11 +1491,11 @@ struct CoachReceiptDetail: View {
     private var footer: some View {
         HStack {
             Text("From Apple Health & your notes")
-                .font(Theme.Typography.labelSmall)
+                .scaledFont(Theme.Typography.labelSmall)
                 .foregroundStyle(Theme.Colors.textSecondary)
             Spacer()
             Button("Manage memory", action: onManageMemory)
-                .font(.system(size: 12, weight: .semibold))
+                .scaledFont(size: 12, weight: .semibold)
                 .foregroundStyle(Theme.Colors.accentContent)
         }
         .padding(.top, Theme.Spacing.sm)
@@ -1534,15 +1532,14 @@ struct MemorySavedChip: View {
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(Theme.Colors.memory)
             Text("\(verb): \(text)")
-                .font(Theme.Typography.labelMedium)
-                .fontWeight(.semibold)
+                .scaledFont(Theme.Typography.labelMedium.weight(.semibold))
                 .foregroundStyle(Theme.Colors.memory)
                 .lineLimit(2)
             if let onUndo {
                 Text("·")
                     .foregroundStyle(Theme.Colors.textSecondary)
                 Button("Undo", action: onUndo)
-                    .font(.system(size: 13, weight: .semibold))
+                    .scaledFont(size: 13, weight: .semibold)
                     .foregroundStyle(Theme.Colors.memory)
             }
         }
@@ -1573,20 +1570,19 @@ struct MemoryProposalCard: View {
                             .foregroundStyle(Theme.Colors.memory)
                     )
                 Text("SAVE TO MEMORY?")
-                    .font(Theme.Typography.labelSmall)
+                    .scaledFont(Theme.Typography.labelSmall)
                     .tracking(0.6)
                     .foregroundStyle(Theme.Colors.textSecondary)
                 Spacer()
             }
             Text(text)
-                .font(Theme.Typography.bodyMedium)
-                .fontWeight(.semibold)
+                .scaledFont(Theme.Typography.bodyMedium.weight(.semibold))
                 .foregroundStyle(Theme.Colors.textPrimary)
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: Theme.Spacing.sm) {
                 Button(action: onRemember) {
                     Text("Remember")
-                        .font(.system(size: 15, weight: .semibold))
+                        .scaledFont(size: 15, weight: .semibold)
                         .foregroundStyle(Theme.Colors.onAccent)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, Theme.Spacing.sm)
@@ -1595,7 +1591,7 @@ struct MemoryProposalCard: View {
                 }
                 Button(action: onNotNow) {
                     Text("Not now")
-                        .font(.system(size: 15, weight: .semibold))
+                        .scaledFont(size: 15, weight: .semibold)
                         .foregroundStyle(Theme.Colors.textSecondary)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, Theme.Spacing.sm)
@@ -1637,7 +1633,7 @@ private struct CoachEmptyStateAnchor: View {
                 )
 
             Text("Tap the mic and just talk — I'll keep the conversation going.")
-                .font(Theme.Typography.bodySmall)
+                .scaledFont(Theme.Typography.bodySmall)
                 .foregroundStyle(Theme.Colors.textSecondary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)

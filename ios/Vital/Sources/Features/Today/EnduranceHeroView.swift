@@ -42,32 +42,36 @@ struct EnduranceHeroView: View {
 
     var onTapSession: (PlanItem) -> Void
 
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     var body: some View {
         VitalCard(padding: Theme.Spacing.lg, cornerRadius: Theme.Radius.xl) {
             VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
                 if let raceText {
                     Text(raceText)
-                        .font(.system(size: 12, weight: .semibold))
+                        .scaledFont(size: 12, weight: .semibold)
                         .foregroundStyle(Theme.Colors.accentContent)
                         // One line, like the blank line reserved for it: the
                         // long-run tail makes this the longest string in the
                         // hero, so it shrinks a little before it ever truncates.
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.75)
+                        // Accessibility text sizes get a second line instead —
+                        // shrinking 75% of an AX size still truncates.
+                        .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
+                        .minimumScaleFactor(dynamicTypeSize.isAccessibilitySize ? 1 : 0.75)
                         .accessibilityIdentifier("today.raceCountdown")
                 } else if reserveRaceLine {
                     // Same font as the race line, so the blank line is exactly as tall.
                     Text(" ")
-                        .font(.system(size: 12, weight: .semibold))
+                        .scaledFont(size: 12, weight: .semibold)
                         .accessibilityHidden(true)
                 }
                 VStack(alignment: .leading, spacing: 2) {
                     Text(calibratingText ?? readinessWord?.rawValue ?? EnduranceHeroLogic.ReadinessWord.goodToTrain.rawValue)
-                        .font(.system(size: 20, weight: .bold, design: .rounded))
+                        .scaledFont(size: 20, weight: .bold, design: .rounded)
                         .foregroundStyle(Theme.Colors.textPrimary)
                     if calibratingText == nil, let reasonLine {
                         Text(reasonLine)
-                            .font(.system(size: 13))
+                            .scaledFont(size: 13)
                             .foregroundStyle(Theme.Colors.textSecondary)
                     }
                 }
@@ -82,13 +86,13 @@ struct EnduranceHeroView: View {
                     Button(action: onTapReconciliation) {
                         HStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.xs) {
                             Text(reconciliationText)
-                                .font(.system(size: 13))
+                                .scaledFont(size: 13)
                                 .foregroundStyle(Theme.Colors.caution)
                                 .multilineTextAlignment(.leading)
                                 .fixedSize(horizontal: false, vertical: true)
                             Spacer(minLength: 0)
                             Image(systemName: "bubble.left")
-                                .font(.system(size: 12, weight: .semibold))
+                                .scaledFont(size: 12, weight: .semibold)
                                 .foregroundStyle(Theme.Colors.textTertiary)
                         }
                     }
@@ -113,19 +117,19 @@ struct EnduranceHeroView: View {
         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
             if let distanceProgress {
                 Text(distanceProgress.text)
-                    .font(.system(size: 14, weight: .semibold))
+                    .scaledFont(size: 14, weight: .semibold)
                     .foregroundStyle(Theme.Colors.textPrimary)
                     .monospacedDigit()
                     .accessibilityIdentifier("today.enduranceHero.distanceText")
                 VitalProgressBar(fraction: distanceProgress.fraction, tint: Theme.Colors.accent, height: 6)
             }
-            HStack(spacing: Theme.Spacing.sm) {
+            AccessibilityAdaptiveStack(spacing: Theme.Spacing.sm, stackedSpacing: Theme.Spacing.xs) {
                 if let sessionDots {
                     SessionDotsRow(done: sessionDots.done, total: sessionDots.total)
                 }
                 if let weeklyOverviewText {
                     Text(weeklyOverviewText)
-                        .font(.system(size: 12))
+                        .scaledFont(size: 12)
                         .foregroundStyle(Theme.Colors.textTertiary)
                         .monospacedDigit()
                 }
@@ -140,15 +144,15 @@ struct EnduranceHeroView: View {
             Button { onTapSession(session) } label: {
                 HStack(alignment: .center, spacing: Theme.Spacing.sm) {
                     Image(systemName: "figure.run")
-                        .font(.system(size: 15, weight: .semibold))
+                        .scaledFont(size: 15, weight: .semibold)
                         .foregroundStyle(Theme.Colors.accentContent)
                     Text(session.title)
-                        .font(.system(size: 15, weight: .semibold))
+                        .scaledFont(size: 15, weight: .semibold)
                         .foregroundStyle(Theme.Colors.textPrimary)
-                        .lineLimit(2)
+                        .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)
                     Spacer(minLength: Theme.Spacing.sm)
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 13, weight: .semibold))
+                        .scaledFont(size: 13, weight: .semibold)
                         .foregroundStyle(Theme.Colors.textTertiary)
                 }
             }
@@ -156,7 +160,7 @@ struct EnduranceHeroView: View {
             .accessibilityIdentifier("today.enduranceHero.session")
         } else {
             Text(EnduranceHeroLogic.restDayText)
-                .font(.system(size: 15, weight: .semibold))
+                .scaledFont(size: 15, weight: .semibold)
                 .foregroundStyle(Theme.Colors.textPrimary)
         }
     }
