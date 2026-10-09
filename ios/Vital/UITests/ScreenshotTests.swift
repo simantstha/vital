@@ -1227,11 +1227,11 @@ final class ScreenshotTests: XCTestCase {
         case "new_user":
             return "Keep logging — a few more days and I'll start spotting real patterns."
         case "weight_loss":
-            return "You're down 0.6\u{00A0}kg this week, but last night's sleep ran short (6h 50m) — keep the deficit gentle and aim for an earlier night."
+            return "You were down 0.6\u{00A0}kg last week, but last night's sleep ran short (6h 50m) — keep the deficit gentle and aim for an earlier night."
         case "muscle":
             return "squat was your best in 4 weeks — get the 2 remaining sessions in by Sunday."
         case "endurance":
-            return "This week's long run held goal pace with a lower average HR than last week — aerobic base is building nicely."
+            return "Last week's long run held goal pace with a lower average HR than the week before — aerobic base is building nicely."
         default:
             return ""
         }

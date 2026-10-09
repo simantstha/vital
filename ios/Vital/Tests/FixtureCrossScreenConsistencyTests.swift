@@ -370,10 +370,11 @@ final class FixtureCrossScreenConsistencyTests: XCTestCase {
         let weightLoss = try review(.weightLoss)
         XCTAssertEqual(weightLoss.weekRating, .good)
         XCTAssertEqual(WeeklyReviewLogic.verdictLabel(weightLoss), "Good week")
-        // 24.5 km against the 30 km weekly target = 82%: past 60%, short of 90%.
+        // 24.5 km against that week's ~24 km safe step (21.9 km the week before,
+        // +10%) — not the 30 km goal: the step was met, so a good week.
         let endurance = try review(.endurance)
-        XCTAssertEqual(endurance.weekRating, .mixed)
-        XCTAssertEqual(WeeklyReviewLogic.verdictLabel(endurance), "Mixed week")
+        XCTAssertEqual(endurance.weekRating, .good)
+        XCTAssertEqual(WeeklyReviewLogic.verdictLabel(endurance), "Good week")
         // Not enough data: the key is present as null, so no pill and no verdict fallback.
         let thin = try review(.newUser)
         XCTAssertNil(thin.weekRating)
@@ -405,14 +406,22 @@ final class FixtureCrossScreenConsistencyTests: XCTestCase {
         XCTAssertEqual(muscle.nextWeek, "Book 4 sessions \u{2014} put the missed one on Saturday.")
         XCTAssertEqual(WeeklyReviewLogic.rows(muscle).map(\.kind), [.win, .slip, .next])
 
-        // Runner: 24.5 of the 30 km target — the headline, Slip and Next week all say so.
+        // Runner: 24.5 km met the ~24 km step (21.9 km before it, +10%) toward the
+        // 30 km goal — a good week with no distance Slip; the build goes on in Next week.
         let endurance = try review(.endurance)
         let enduranceGoalVerdict = try goalVerdict(.endurance)
         XCTAssertEqual(enduranceGoalVerdict, endurance.verdict)
-        XCTAssertEqual(endurance.weekRating, .mixed)
-        XCTAssertEqual(plain(endurance.headline), "3 sessions, 24.5 of 30 km, +12% vs last week")
-        XCTAssertEqual(plain(endurance.slip), "24.5 of 30 km target \u{2014} 5.5 km short")
-        XCTAssertEqual(plain(endurance.nextWeek), "Build to ~27 km: long run 16 km, the rest as easy runs; 30 km the week after.")
+        XCTAssertEqual(endurance.weekRating, .good)
+        XCTAssertEqual(plain(endurance.headline), "3 sessions, 24.5 of ~24 km \u{2014} on plan \u{00B7} goal 30 km, +12% vs last week")
+        XCTAssertFalse(plain(endurance.slip)?.contains("short") ?? false, "a week that met its step has no distance Slip: \(String(describing: endurance.slip))")
+        XCTAssertFalse(plain(endurance.slip)?.contains("30 km") ?? false)
+        // The first amber stat names the Slip: Resting HR "+N bpm vs your normal" (watch) -> "rose N bpm".
+        let rhrStat = try XCTUnwrap(endurance.stats.first { $0.label == "Resting HR" })
+        XCTAssertEqual(rhrStat.tone, .watch)
+        let rise = try XCTUnwrap(plain(rhrStat.comparison)?.replacingOccurrences(of: "+", with: "").replacingOccurrences(of: " bpm vs your normal", with: ""))
+        XCTAssertEqual(plain(endurance.slip), "Resting heart rate rose \(rise) bpm \u{2014} your body may be carrying fatigue.")
+        XCTAssertEqual(plain(endurance.nextWeek), "Build to ~27 km: long run 16 km, the rest mostly easy runs; 30 km the week after.")
+        XCTAssertFalse(endurance.nextWeek.contains("Repeat this week"))
         XCTAssertEqual(WeeklyReviewLogic.rows(endurance).map(\.kind), [.win, .slip, .next])
 
         // Whatever the scenario: a mixed / tough week has a Slip and never "Repeat this week".
@@ -451,6 +460,36 @@ final class FixtureCrossScreenConsistencyTests: XCTestCase {
         XCTAssertEqual(progress.target.weightKg, 76)
         XCTAssertEqual(progress.reasons.count, 3)
         XCTAssertNotNil(progress.eta)
+    }
+
+    /// The endurance review grades the finished week against ITS safe step — the
+    /// rule in lib/enduranceProgression.ts (`weekStepTarget`: ~10% over the week
+    /// before, at least +1, never past the goal) applied to the fixture's own
+    /// weekly km (21.9 -> 24.5) — and "Next week" applies the same rule to the
+    /// 24.5 km just run. The 24 and 27 in the copy are computed, not typed.
+    func test_enduranceReviewStepAndNextWeekFollowTheSharedProgressionRule() throws {
+        func step(_ last: Double, goal: Double) -> Double {
+            min(goal, max((last * 1.1).rounded(), last.rounded(.down) + 1))
+        }
+        let weekly = FixtureData.enduranceWeeklyKm
+        let reviewed = try XCTUnwrap(weekly.last)
+        let before = weekly[weekly.count - 2]
+        XCTAssertEqual(reviewed, 24.5)
+        XCTAssertEqual(before, 21.9)
+        let goal = 30.0
+        let thisStep = step(before, goal: goal)
+        let nextStep = step(reviewed, goal: goal)
+        XCTAssertEqual(thisStep, 24)
+        XCTAssertEqual(nextStep, 27)
+        XCTAssertGreaterThanOrEqual(reviewed, thisStep, "the reviewed week met its step -> good, no distance Slip")
+        XCTAssertLessThan(thisStep, goal, "the step, not the goal, is the bar only while it is below the goal")
+
+        let review = try JSONDecoder().decode(WeeklyReviewResponse.self, from: FixtureData.response(
+            scenario: .endurance, method: "GET", path: "/api/review/weekly", query: "tz=UTC").1).review
+        XCTAssertTrue(plain(review.headline)?.contains("24.5 of ~\(Int(thisStep)) km") ?? false, review.headline)
+        XCTAssertTrue(plain(review.nextWeek)?.hasPrefix("Build to ~\(Int(nextStep)) km") ?? false, review.nextWeek)
+        // ...and Today's current-week step is that same next-week number.
+        XCTAssertEqual(FixtureData.enduranceStepTargetKm, nextStep)
     }
 
     /// Endurance: Today's this-week totals (Monday-start local week) must agree
@@ -725,11 +764,138 @@ final class FixtureCrossScreenConsistencyTests: XCTestCase {
         )
     }
 
-    /// Sam's insight keeps "0.6 kg" whole, like the rest of the unit copy.
+    /// Sam's insight keeps "0.6 kg" whole, like the rest of the unit copy, and
+    /// speaks of LAST week — the week the weekly review ("Down 0.6 kg") covers.
     func test_weightLossInsightKeepsTheWeightAndUnitTogether() throws {
         let insight = try XCTUnwrap(json(.weightLoss, "/api/today")["insight"] as? String)
-        XCTAssertTrue(insight.hasPrefix("You're down 0.6\u{00A0}kg this week"), insight)
+        XCTAssertTrue(insight.hasPrefix("You were down 0.6\u{00A0}kg last week"), insight)
         XCTAssertFalse(insight.contains("0.6kg"), insight)
+        XCTAssertFalse(insight.contains("this week"), insight)
+        let review = json(.weightLoss, "/api/review/weekly")["review"] as? [String: Any]
+        XCTAssertEqual(review?["headline"] as? String, "Down 0.6\u{00A0}kg, in budget 5 of 7 days")
+    }
+
+    /// Marcus's coach note must not claim a long run THIS week: the demo week
+    /// has no long run yet (its runs are the tempo + earlier sessions), so the
+    /// note is about LAST week's — the one the weekly review covers.
+    func test_enduranceInsightTalksAboutLastWeeksLongRunNotThisWeeks() throws {
+        let insight = try XCTUnwrap(json(.endurance, "/api/today")["insight"] as? String)
+        XCTAssertTrue(insight.hasPrefix("Last week's long run held goal pace"), insight)
+        XCTAssertFalse(insight.contains("This week's"), insight)
+        XCTAssertTrue(insight.contains("than the week before"), insight)
+    }
+
+    // MARK: - Memory facts vs the demo meals, member-since and device sync
+
+    /// Words that put something a memory "Always avoid" fact rules out into a
+    /// meal NAME, plus the markers that make a name a safe alternative ("Lactose-free
+    /// Greek yogurt"). A fact this table doesn't know FAILS the test, so a new
+    /// constraint can't be added to the fixture without being checked.
+    private func avoidedWords(for factLabel: String) -> (words: [String], safeMarkers: [String])? {
+        let label = factLabel.lowercased()
+        if label.contains("peanut") { return (["peanut"], []) }
+        if label.contains("lactose") || label.contains("dairy") {
+            return (["milk", "yogurt", "yoghurt", "cheese", "cream", "whey", "buttermilk"], ["lactose-free", "dairy-free"])
+        }
+        if label.contains("shellfish") { return (["shrimp", "prawn", "crab", "lobster", "shellfish"], []) }
+        if label.contains("gluten") || label.contains("celiac") { return (["bread", "pasta", "toast", "wheat", "barley"], ["gluten-free"]) }
+        return nil
+    }
+
+    /// Every meal NAME the fixture shows for a persona: Today's plan, the logged
+    /// meals and the recents the diet sheet offers.
+    private func mealNames(_ scenario: FixtureMode.Scenario) -> [String] {
+        let plan = ((json(scenario, "/api/plan")["items"] as? [[String: Any]]) ?? [])
+            .filter { ($0["kind"] as? String) == "meal" }
+            .compactMap { $0["title"] as? String }
+        let logged = ((json(scenario, "/api/meals/log")["items"] as? [[String: Any]]) ?? []).compactMap { $0["name"] as? String }
+        let recents = ((json(scenario, "/api/nutrition/recents")["items"] as? [[String: Any]]) ?? []).compactMap { $0["name"] as? String }
+        return plan + logged + recents
+    }
+
+    /// The memory screen tags a constraint fact "Always avoid" — no meal the same
+    /// persona plans, logs or re-logs may contain what it rules out
+    /// ("Peanut allergy" beside "Banana + peanut butter toast", and "Lactose
+    /// intolerant" beside plain "Greek yogurt", were the bugs).
+    func test_noPlannedOrLoggedMealContainsSomethingTheMemoryAlwaysAvoids() throws {
+        for scenario in scenarios {
+            let facts = ((json(scenario, "/api/memory")["self"] as? [String: Any])?["facts"] as? [[String: Any]]) ?? []
+            let avoid = facts.filter { ($0["isConstraint"] as? Bool) == true }.compactMap { $0["label"] as? String }
+            XCTAssertFalse(avoid.isEmpty, "\(scenario): keep an 'Always avoid' fact so this check bites")
+            let names = mealNames(scenario)
+            XCTAssertFalse(names.isEmpty, "\(scenario): no meal names found")
+            for label in avoid {
+                let rule = try XCTUnwrap(avoidedWords(for: label), "\(scenario): teach avoidedWords(for:) the 'Always avoid' fact \(label)")
+                for name in names {
+                    let lower = name.lowercased()
+                    if rule.safeMarkers.contains(where: { lower.contains($0) }) { continue }
+                    for word in rule.words {
+                        XCTAssertFalse(lower.contains(word), "\(scenario): meal \(name) contains \(word), but memory says \(label) (Always avoid)")
+                    }
+                }
+            }
+        }
+    }
+
+    /// Guard the check itself: it must flag the contradictions it was written for.
+    func test_avoidedWordsFlagTheOldContradictionsAndAllowTheSafeAlternative() {
+        let peanut = avoidedWords(for: "Peanut allergy")
+        XCTAssertTrue(peanut?.words.contains { "banana + peanut butter toast".contains($0) } ?? false)
+        XCTAssertFalse(peanut?.words.contains { "banana + almond butter toast".contains($0) } ?? true)
+        let lactose = avoidedWords(for: "Lactose intolerant")
+        XCTAssertTrue(lactose?.words.contains { "greek yogurt + almonds".contains($0) } ?? false)
+        XCTAssertTrue(lactose?.safeMarkers.contains { "lactose-free greek yogurt + almonds".contains($0) } ?? false)
+        XCTAssertNil(avoidedWords(for: "Knee pain since Oct 1"))
+    }
+
+    /// "Member since Jun 2026" (profile `createdAt`) cannot be later than a fact the
+    /// account "told" the coach: every memory fact and every person's fact is dated
+    /// on or after it, and not in the future.
+    func test_memoryFactsAreDatedAfterMemberSince() throws {
+        func day(_ iso: String) -> String { String(iso.prefix(10)) }
+        let today = day(ISO8601DateFormatter().string(from: Date()))
+        for scenario in scenarios {
+            let createdAt = try XCTUnwrap(json(scenario, "/api/profile")["createdAt"] as? String)
+            let memberSince = day(createdAt)
+            let memory = json(scenario, "/api/memory")
+            let facts = ((memory["self"] as? [String: Any])?["facts"] as? [[String: Any]]) ?? []
+            XCTAssertFalse(facts.isEmpty, "\(scenario)")
+            for fact in facts {
+                let label = fact["label"] as? String ?? ""
+                let recorded = try XCTUnwrap(fact["recordedAt"] as? String, "\(scenario) \(label)")
+                XCTAssertGreaterThanOrEqual(recorded, memberSince, "\(scenario): fact \(label) recorded \(recorded), before member-since \(memberSince)")
+                XCTAssertLessThanOrEqual(recorded, today, "\(scenario): fact \(label) recorded in the future")
+            }
+            for entity in (memory["entities"] as? [[String: Any]]) ?? [] {
+                let id = try XCTUnwrap(entity["id"] as? String)
+                for fact in (json(scenario, "/api/memory/entities/\(id)")["facts"] as? [[String: Any]]) ?? [] {
+                    let label = fact["label"] as? String ?? ""
+                    let createdRaw = try XCTUnwrap(fact["createdAt"] as? String, "\(id) \(label)")
+                    let created = day(createdRaw)
+                    XCTAssertGreaterThanOrEqual(created, memberSince, "\(scenario): \(id) fact \(label) created \(created), before member-since \(memberSince)")
+                }
+            }
+        }
+    }
+
+    /// The Devices screen must not open on an amber "Synced 22 hours ago · Pull to
+    /// sync": the fixture's connected devices last synced minutes ago.
+    func test_connectedDevicesInTheFixtureReadFreshNotStale() throws {
+        let formatter = ISO8601DateFormatter()
+        for scenario in scenarios {
+            let devices = (json(scenario, "/api/devices")["devices"] as? [[String: Any]]) ?? []
+            let connected = devices.filter { ($0["connected"] as? Bool) == true }
+            XCTAssertFalse(connected.isEmpty, "\(scenario)")
+            for device in connected {
+                let id = device["id"] as? String ?? "?"
+                let raw = try XCTUnwrap(device["lastSyncAt"] as? String, "\(scenario) \(id)")
+                let at = try XCTUnwrap(formatter.date(from: raw), raw)
+                XCTAssertEqual(DevicesLogic.syncFreshness(connected: true, lastSyncAt: at), .fresh, "\(scenario) \(id)")
+                let label = DevicesLogic.syncStatusLabel(connected: true, lastSyncAt: at)
+                XCTAssertFalse(label.contains("Pull to sync"), "\(scenario) \(id): \(label)")
+                XCTAssertTrue(label.hasPrefix("Synced"), "\(scenario) \(id): \(label)")
+            }
+        }
     }
 
     // MARK: - Squat progression

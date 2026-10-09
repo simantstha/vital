@@ -804,20 +804,31 @@ function priyaWeek(over: Partial<WeeklyReviewInput> = {}): WeeklyReviewInput {
 /** Marcus's long-run progress: last long run 14 km, half-marathon peak target 18 km. */
 const MARCUS_LONG_RUN = { lastKm: 14, peakKm: 14, targetPeakKm: 18 };
 
-/** A runner on 24.5 of a 30 km weekly target (21.9 km the week before), 3 runs a week. */
+/**
+ * The reviewed week's three runs (24.5 km by default) after `prior` km runs the week before.
+ * Default prior is 21.9 km, so that week's safe step is round(21.9 x 1.1) = 24 km, under the 30 km goal.
+ */
+function marcusRuns(prior: number[] = [7, 7, 7.9], cur: number[] = [8, 8, 8.5]) {
+  return [
+    ...cur.map((km, i) => run(WEEK[i * 2], km)),
+    ...prior.map((km, i) => run(PREV[i * 2], km)),
+  ];
+}
+
+/** A runner on 24.5 of a 30 km weekly target (21.9 km the week before → this week's safe step is 24 km), 3 runs a week. */
 function marcusWeek(over: Partial<WeeklyReviewInput> = {}): WeeklyReviewInput {
   return base({
     goal: 'endurance',
     verdict: 'building',
     weeklyDistanceKmTarget: 30,
     trainingDays: [WEEK[0], WEEK[2], WEEK[4], PREV[0], PREV[2], PREV[4]],
-    workouts: [
-      run(WEEK[0], 8), run(WEEK[2], 8), run(WEEK[4], 8.5),
-      run(PREV[0], 7), run(PREV[2], 7), run(PREV[4], 7.9),
-    ],
+    workouts: marcusRuns(),
     ...over,
   });
 }
+
+/** Marcus's week with NO step below the goal: no running the week before (`[]`) or a 28 km week before (the ~10% step reaches the 30 km goal). */
+const marcusAgainstGoal = (prior: number[] = [], over: Partial<WeeklyReviewInput> = {}) => marcusWeek({ workouts: marcusRuns(prior), ...over });
 
 test('mixed lifter (3 of 4 sessions): the Slip names the sessions and Next week closes the gap — no "Repeat"', () => {
   const r = computeWeeklyReview(priyaWeek());
@@ -862,29 +873,92 @@ test('a good week may "Repeat this week" — and only a good week', () => {
   assert.match(weekendHeavy.slip ?? '', /^Weekends ran \+\d+ kcal over your weekdays\.$/);
 });
 
-test('runner short of the distance target: headline has "of 30 km", the Slip names distance, Next week builds safely', () => {
+test('Marcus (24.5 km after 21.9 km, 30 km goal): graded against this week\'s ~24 km step — good week, no distance Slip', () => {
   const r = computeWeeklyReview(marcusWeek());
-  assert.equal(r.weekRating, 'mixed');
-  assert.deepEqual(r.weekGap, { kind: 'distance', doneKm: 24.5, targetKm: 30 });
-  assert.equal(r.headline, '3 sessions, 24.5 of 30 km, +12% vs last week');
+  assert.equal(r.weekRating, 'good');
+  assert.equal(r.weekGap, null);
+  assert.equal(r.headline, '3 sessions, 24.5 of ~24 km — on plan · goal 30 km, +12% vs last week');
   assert.equal(statByLabel(r, 'Volume')!.value, '24.5 km');
-  assert.equal(r.slip, '24.5 of 30 km target — 5.5 km short');
-  // No long-run data: ~10% growth (24.5 -> 27 km), spread over easy runs, then the target — no long-run advice.
-  assert.equal(r.nextWeek, 'Build to ~27 km with easy runs; 30 km the week after.');
+  assert.equal(r.slip, null);
+  // Still under the 30 km goal, so the build goes on: ~10% over this week, then the goal — never "Repeat this week".
+  assert.equal(r.nextWeek, 'Build to ~27 km with mostly easy runs; 30 km the week after.');
   assert.doesNotMatch(r.nextWeek, /Repeat this week/);
   assert.doesNotMatch(r.nextWeek, /long run/i);
 });
 
-test('runner distance copy: miles for imperial users, a bigger shortfall needs another run, a hit target is good', () => {
-  const imperial = computeWeeklyReview(marcusWeek({ unitSystem: 'imperial' }));
-  assert.equal(imperial.headline, '3 sessions, 15.2 of 18.6 mi, +12% vs last week');
-  assert.equal(imperial.slip, '15.2 of 18.6 mi target — 3.4 mi short');
-  assert.equal(imperial.nextWeek, 'Build to ~17 mi with easy runs; 18.6 mi the week after.');
+test('no step below the goal (no running the week before, or a big week before): the full goal is the bar — unchanged', () => {
+  for (const prior of [[], [9.5, 9.5, 9]]) {
+    const r = computeWeeklyReview(marcusAgainstGoal(prior));
+    assert.equal(r.weekRating, 'mixed', `${prior}`);
+    assert.deepEqual(r.weekGap, { kind: 'distance', doneKm: 24.5, targetKm: 30 }, `${prior}`);
+    assert.match(r.headline, /^3 sessions, 24\.5 of 30 km(,|$)/, r.headline);
+    assert.doesNotMatch(r.headline, /~|on plan|goal/);
+    assert.equal(r.slip, '24.5 of 30 km target — 5.5 km short');
+    // 24.5 -> ~27 km (+10%), spread over easy runs, then the goal — no long-run advice without long-run data.
+    assert.equal(r.nextWeek, 'Build to ~27 km with mostly easy runs; 30 km the week after.');
+    assert.doesNotMatch(r.nextWeek, /Repeat this week/);
+    assert.doesNotMatch(r.nextWeek, /long run/i);
+  }
+});
 
-  const far = computeWeeklyReview(marcusWeek({ workouts: [run(WEEK[0], 6), run(WEEK[2], 6), run(WEEK[4], 6), run(PREV[0], 7), run(PREV[2], 7)] }));
-  assert.equal(far.weekRating, 'mixed'); // exactly 60%
+test('below this week\'s step the gap is measured against the step, not the goal', () => {
+  const week = (cur: number[]) => computeWeeklyReview(marcusWeek({ workouts: marcusRuns(undefined, cur) }));
+  // 21 km after 21.9 km (step 24): 87.5% of the step -> mixed.
+  const mixed = week([7, 7, 7]);
+  assert.equal(mixed.weekRating, 'mixed');
+  assert.deepEqual(mixed.weekGap, { kind: 'distance', doneKm: 21, targetKm: 30, stepKm: 24 });
+  assert.equal(mixed.headline, '3 sessions, 21 of ~24 km · goal 30 km, −4% vs last week');
+  assert.equal(mixed.slip, "21 of ~24 km — 3 km short of this week's step");
+  assert.doesNotMatch(mixed.slip ?? '', /30|target/);
+  // "Next week" still comes from the shared helper (~10% over what was actually run).
+  assert.equal(mixed.nextWeek, 'Build to ~23 km with mostly easy runs; then add ~10% a week toward 30 km.');
+  // 12 km is half the step: tough, same step wording.
+  const tough = week([4, 4, 4]);
+  assert.equal(tough.weekRating, 'tough');
+  assert.deepEqual(tough.weekGap, { kind: 'distance', doneKm: 12, targetKm: 30, stepKm: 24 });
+  assert.equal(tough.slip, "12 of ~24 km — 12 km short of this week's step");
+  // Within 10% of the step (22 of 24 km) is still a good week: no gap, no Slip, no "on plan" claim.
+  const near = week([7, 7, 8]);
+  assert.equal(near.weekRating, 'good');
+  assert.equal(near.weekGap, null);
+  assert.equal(near.slip, null);
+  assert.equal(near.headline, '3 sessions, 22 of ~24 km · goal 30 km'); // 22 vs 21.9 km: "same as last week", no % to add
+  // Reaching the step is the bar: 24 km exactly is on plan.
+  const exact = week([8, 8, 8]);
+  assert.equal(exact.weekRating, 'good');
+  assert.equal(exact.headline, '3 sessions, 24 of ~24 km — on plan · goal 30 km, +10% vs last week');
+});
+
+test('graded against the step, a runner who reaches the full goal reads as a plain "30 of 30 km"', () => {
+  const r = computeWeeklyReview(marcusWeek({ workouts: marcusRuns([7], [10, 10, 10]) })); // step 8 km; goal hit
+  assert.equal(r.weekRating, 'good');
+  assert.equal(r.weekGap, null);
+  assert.equal(r.headline, '3 sessions, 30 of 30 km, +329% vs last week');
+  assert.equal(r.nextWeek, 'Repeat this week: same routine, same training days.');
+});
+
+test('runner distance copy: miles for imperial users, a bigger shortfall needs another run, a hit target is good', () => {
+  // On the step: 15.2 mi after 13.6 mi (step 15 mi), goal 18.6 mi.
+  const imperial = computeWeeklyReview(marcusWeek({ unitSystem: 'imperial' }));
+  assert.equal(imperial.weekRating, 'good');
+  assert.equal(imperial.headline, '3 sessions, 15.2 of ~15 mi — on plan · goal 18.6 mi, +12% vs last week');
+  assert.equal(imperial.slip, null);
+  assert.equal(imperial.nextWeek, 'Build to ~17 mi with mostly easy runs; 18.6 mi the week after.');
+  // Below the step, in miles: 13 of ~15 mi.
+  const imperialShort = computeWeeklyReview(marcusWeek({ unitSystem: 'imperial', workouts: marcusRuns(undefined, [7, 7, 7]) }));
+  assert.equal(imperialShort.weekRating, 'mixed');
+  assert.equal(imperialShort.slip, "13 of ~15 mi — 2 mi short of this week's step");
+  assert.equal(imperialShort.headline, '3 sessions, 13 of ~15 mi · goal 18.6 mi, −4% vs last week');
+  // No step below the goal: the plain goal wording, in miles.
+  const imperialGoal = computeWeeklyReview(marcusAgainstGoal([], { unitSystem: 'imperial' }));
+  assert.equal(imperialGoal.headline, '3 sessions, 15.2 of 18.6 mi');
+  assert.equal(imperialGoal.slip, '15.2 of 18.6 mi target — 3.4 mi short');
+  assert.equal(imperialGoal.nextWeek, 'Build to ~17 mi with mostly easy runs; 18.6 mi the week after.');
+
+  const far = computeWeeklyReview(marcusAgainstGoal([14, 14], { workouts: [run(WEEK[0], 6), run(WEEK[2], 6), run(WEEK[4], 6), run(PREV[0], 14), run(PREV[2], 14)] }));
+  assert.equal(far.weekRating, 'mixed'); // exactly 60% of the 30 km goal (the 28 km week before lifts the step to the goal)
   // 18 -> 20 km (+10%) is as far as one week goes; the target is several weeks off, so no "30 km the week after".
-  assert.equal(far.nextWeek, 'Build to ~20 km with easy runs; then add ~10% a week toward 30 km.');
+  assert.equal(far.nextWeek, 'Build to ~20 km with mostly easy runs; then add ~10% a week toward 30 km.');
 
   const hit = computeWeeklyReview(marcusWeek({ workouts: [run(WEEK[0], 10), run(WEEK[2], 10), run(WEEK[4], 10), run(PREV[0], 7)] }));
   assert.equal(hit.weekRating, 'good');
@@ -900,9 +974,15 @@ const kmFigures = (text: string): number[] => [...text.matchAll(/(\d+(?:\.\d+)?)
 
 test('Marcus (24.5 of 30 km, long run 14 km, peak target 18 km): no 30 km jump, long run +2 km, weekly ~27 km', () => {
   const r = computeWeeklyReview(marcusWeek({ longRun: MARCUS_LONG_RUN }));
-  assert.equal(r.weekRating, 'mixed');
-  assert.deepEqual(r.weekGap, { kind: 'distance', doneKm: 24.5, targetKm: 30 });
-  assert.equal(r.nextWeek, 'Build to ~27 km: long run 16 km, the rest as easy runs; 30 km the week after.');
+  assert.equal(r.weekRating, 'good'); // 24.5 km met this week's ~24 km step...
+  assert.equal(r.weekGap, null);
+  // ...and the build toward the goal goes on, from the same shared helper as a short week's.
+  assert.equal(r.nextWeek, 'Build to ~27 km: long run 16 km, the rest mostly easy runs; 30 km the week after.');
+  // The same advice after the same km with no step below the goal (a mixed week).
+  const mixed = computeWeeklyReview(marcusAgainstGoal([], { longRun: MARCUS_LONG_RUN }));
+  assert.equal(mixed.weekRating, 'mixed');
+  assert.deepEqual(mixed.weekGap, { kind: 'distance', doneKm: 24.5, targetKm: 30 });
+  assert.equal(mixed.nextWeek, r.nextWeek);
   assert.doesNotMatch(r.nextWeek, /add ~6 km/);
   assert.doesNotMatch(r.nextWeek, /Aim for 30 km/);
   const [weekly, longRun, after] = kmFigures(r.nextWeek);
@@ -922,7 +1002,7 @@ test('already at the long-run peak target: the long run is held and all the grow
   assert.equal(past.nextWeek, 'Build to ~27 km: hold your long run at 18 km and put the growth into easy runs; 30 km the week after.');
   // One km below the peak: the step is limited to the room left (+1, not +2).
   const near = computeWeeklyReview(marcusWeek({ longRun: { lastKm: 17, peakKm: 17, targetPeakKm: 18 } }));
-  assert.equal(near.nextWeek, 'Build to ~27 km: long run 18 km, the rest as easy runs; 30 km the week after.');
+  assert.equal(near.nextWeek, 'Build to ~27 km: long run 18 km, the rest mostly easy runs; 30 km the week after.');
   for (const r of [atPeak, past, near]) assert.ok(kmFigures(r.nextWeek)[1] <= 18, r.nextWeek);
 });
 
@@ -931,26 +1011,26 @@ test('no long-run data: the long run is not mentioned (absent, null, or a nonsen
   const nulled = computeWeeklyReview(marcusWeek({ longRun: null }));
   const zero = computeWeeklyReview(marcusWeek({ longRun: { lastKm: 0, peakKm: 0, targetPeakKm: 18 } }));
   for (const r of [absent, nulled, zero]) {
-    assert.equal(r.nextWeek, 'Build to ~27 km with easy runs; 30 km the week after.');
+    assert.equal(r.nextWeek, 'Build to ~27 km with mostly easy runs; 30 km the week after.');
     assert.doesNotMatch(r.nextWeek, /long/i);
   }
 });
 
 test('long-run data without a race distance (no peak target): +2 km, uncapped by a peak', () => {
   const r = computeWeeklyReview(marcusWeek({ longRun: { lastKm: 14, peakKm: 14, targetPeakKm: null } }));
-  assert.equal(r.nextWeek, 'Build to ~27 km: long run 16 km, the rest as easy runs; 30 km the week after.');
+  assert.equal(r.nextWeek, 'Build to ~27 km: long run 16 km, the rest mostly easy runs; 30 km the week after.');
 });
 
 test('a small gap (growth cap reaches the target): "Aim for 30 km…" with the long run up 2 km at most', () => {
-  // 26.9 of 30 km (89.7%, still a mixed week): 26.9 x 1.10 = 29.6 -> 30, so no staging.
+  // 26.9 of 30 km (89.7%, still a mixed week — a 28 km week before puts the step at the goal): 26.9 x 1.10 = 29.6 -> 30, so no staging.
   const week = (over: Partial<WeeklyReviewInput>) => computeWeeklyReview(marcusWeek({
-    workouts: [run(WEEK[0], 9), run(WEEK[2], 9), run(WEEK[4], 8.9), run(PREV[0], 7), run(PREV[2], 7), run(PREV[4], 7.9)],
+    workouts: [run(WEEK[0], 9), run(WEEK[2], 9), run(WEEK[4], 8.9), run(PREV[0], 9.5), run(PREV[2], 9.5), run(PREV[4], 9)],
     ...over,
   }));
   const small = week({ longRun: MARCUS_LONG_RUN });
   assert.equal(small.weekRating, 'mixed');
   assert.deepEqual(small.weekGap, { kind: 'distance', doneKm: 26.9, targetKm: 30 });
-  assert.equal(small.nextWeek, 'Aim for 30 km: long run 16 km, the rest as easy runs.');
+  assert.equal(small.nextWeek, 'Aim for 30 km: long run 16 km, the rest mostly easy runs.');
   assert.doesNotMatch(small.nextWeek, /week after/);
   assert.ok(kmFigures(small.nextWeek)[1] - MARCUS_LONG_RUN.lastKm <= 2);
   assert.equal(week({}).nextWeek, 'Aim for 30 km: add the extra on easy runs.');
@@ -959,14 +1039,15 @@ test('a small gap (growth cap reaches the target): "Aim for 30 km…" with the l
 
 test('imperial runner: same rules in miles (weekly ~10%, long run +2 km, never past the peak target)', () => {
   const r = computeWeeklyReview(marcusWeek({ unitSystem: 'imperial', longRun: MARCUS_LONG_RUN }));
-  assert.equal(r.slip, '15.2 of 18.6 mi target — 3.4 mi short');
+  assert.equal(r.weekRating, 'good'); // 15.2 mi met this week's ~15 mi step
+  assert.equal(r.slip, null);
   // 15.2 mi x 1.10 = 16.7 -> 17 mi; long run 14 -> 16 km = 9.9 mi (target peak 18 km = 11.2 mi).
-  assert.equal(r.nextWeek, 'Build to ~17 mi: long run 9.9 mi, the rest as easy runs; 18.6 mi the week after.');
+  assert.equal(r.nextWeek, 'Build to ~17 mi: long run 9.9 mi, the rest mostly easy runs; 18.6 mi the week after.');
   assert.doesNotMatch(r.nextWeek, /\bkm\b/);
   const atPeak = computeWeeklyReview(marcusWeek({ unitSystem: 'imperial', longRun: { lastKm: 18, peakKm: 18, targetPeakKm: 18 } }));
   assert.equal(atPeak.nextWeek, 'Build to ~17 mi: hold your long run at 11.2 mi and put the growth into easy runs; 18.6 mi the week after.');
   const noLongRun = computeWeeklyReview(marcusWeek({ unitSystem: 'imperial' }));
-  assert.equal(noLongRun.nextWeek, 'Build to ~17 mi with easy runs; 18.6 mi the week after.');
+  assert.equal(noLongRun.nextWeek, 'Build to ~17 mi with mostly easy runs; 18.6 mi the week after.');
 });
 
 // ── one target for the week: the review's "Next week" == the goal card's step ──
@@ -1005,7 +1086,6 @@ test('the review\'s "Next week" km and the goal card\'s this-week step are the s
   for (const c of cases) {
     const input = marcusWeek({ workouts: [run(WEEK[0], c.runs[0]), run(WEEK[2], c.runs[1]), run(WEEK[4], c.runs[2]), run(PREV[0], 7)] });
     const review = computeWeeklyReview(input);
-    assert.equal(review.weekGap?.kind, 'distance', `${c.runs}`);
     const reviewKm = Number(review.nextWeek.match(/(?:Build to ~|Aim for )(\d+(?:\.\d+)?)/)![1]);
     const progress = computeGoalProgress(goalInputAfter(input, 12));
     assert.equal(reviewKm, c.stepKm, review.nextWeek);
@@ -1020,6 +1100,29 @@ test('the review\'s "Next week" km and the goal card\'s this-week step are the s
   assert.equal(Math.round((stepKm / 1.609344) * 10) / 10, reviewMi);
 });
 
+test('the step the review grades the finished week against is the step the goal card showed WHILE that week was under way (metric and miles)', () => {
+  // The goal card on the reviewed week's Thursday: its step comes from the week before, exactly like the review's.
+  const duringWeek = (review: WeeklyReviewInput): GoalProgressInput => {
+    const todayKey = WEEK[3];
+    const workouts = review.workouts.filter(w => w.day <= todayKey);
+    return { ...goalInputAfter(review, 0), todayKey, workouts, trainingDays: workouts.map(w => w.day) };
+  };
+  const cases: Array<{ prior: number[]; unit: 'metric' | 'imperial' }> = [
+    { prior: [7, 7, 7.9], unit: 'metric' }, // 21.9 -> 24
+    { prior: [5, 5, 4], unit: 'metric' }, // 14 -> 15
+    { prior: [7, 7, 7.9], unit: 'imperial' }, // 13.6 mi -> 15 mi
+    { prior: [5, 5, 4], unit: 'imperial' },
+  ];
+  for (const c of cases) {
+    const input = marcusWeek({ unitSystem: c.unit, workouts: marcusRuns(c.prior, [4, 4, 4]) }); // short of the step: the gap carries it
+    const review = computeWeeklyReview(input);
+    const stepKm = computeGoalProgress(duringWeek(input)).distance!.stepTargetKm;
+    const shown = Number(review.headline.match(/of ~(\d+(?:\.\d+)?) (?:km|mi)/)![1]);
+    assert.equal(shown, c.unit === 'imperial' ? Math.round(stepKm * 0.621371 * 10) / 10 : stepKm, `${c.prior} ${c.unit}: ${review.headline}`);
+    assert.equal(review.weekGap?.kind === 'distance' ? review.weekGap.stepKm : null, stepKm, `${c.prior} ${c.unit}`);
+  }
+});
+
 test('a long run that would not leave room for easy runs is left out; a week with no running restarts gently', () => {
   // A 12 km week: a 16 km long run would exceed the ~13 km next week, so it is not suggested.
   const short = computeWeeklyReview(marcusWeek({
@@ -1028,14 +1131,15 @@ test('a long run that would not leave room for easy runs is left out; a week wit
     sleepMinutes: WEEK.map(day => ({ day, value: 470 })),
     longRun: MARCUS_LONG_RUN,
   }));
-  assert.equal(short.weekGap?.kind, 'distance');
-  assert.equal(short.nextWeek, 'Build to ~13 km with easy runs; then add ~10% a week toward 30 km.');
+  assert.equal(short.weekRating, 'good'); // 12 of this week's 13 km step (92%)
+  assert.equal(short.nextWeek, 'Build to ~13 km with mostly easy runs; then add ~10% a week toward 30 km.');
   const none = computeWeeklyReview(marcusWeek({
     workouts: [run(WEEK[0], 0), run(PREV[0], 20)],
     trainingDays: [WEEK[0], PREV[0]],
     sleepMinutes: WEEK.map(day => ({ day, value: 470 })),
     longRun: MARCUS_LONG_RUN,
   }));
+  assert.equal(none.weekGap?.kind, 'distance');
   assert.equal(none.nextWeek, 'Restart with a couple of easy runs, then build gradually toward 30 km.');
 });
 
@@ -1045,7 +1149,7 @@ test('two or more poor recovery signals still win over any distance build: "Go l
     sleepMinutes: WEEK.map(day => ({ day, value: 380 })), // averaged short
     restingHr: [...WEEK.map(day => ({ day, value: 56 })), ...PREV.map(day => ({ day, value: 51 }))], // resting HR rose
   }));
-  assert.equal(r.weekRating, 'mixed');
+  assert.equal(r.weekRating, 'good');
   assert.match(r.nextWeek, /^Go lighter next week and put sleep first — sleep averaged short and resting heart rate rose\.$/);
   assert.doesNotMatch(r.nextWeek, /Build to|Aim for/);
   // A single poor signal does not override the build.
@@ -1061,13 +1165,17 @@ test('runner with a distance target counts running km only in Volume and the hea
     workouts: [run(WEEK[0], 8), run(WEEK[2], 8), run(WEEK[4], 8.5), run(WEEK[5], 40, 'Cycling'), run(PREV[0], 7), run(PREV[2], 7), run(PREV[4], 7.9)],
   }));
   assert.equal(statByLabel(r, 'Volume')!.value, '24.5 km');
-  assert.equal(r.headline, '3 sessions, 24.5 of 30 km, +12% vs last week');
+  assert.equal(r.headline, '3 sessions, 24.5 of ~24 km — on plan · goal 30 km, +12% vs last week');
 });
 
 test('endurance with a sessions target says "N of M sessions" in the headline and the Slip names whichever is short', () => {
   const r = computeWeeklyReview(marcusWeek({ weeklySessionsTarget: 4 }));
-  assert.equal(r.headline, '3 of 4 sessions, 24.5 of 30 km, +12% vs last week');
-  assert.equal(r.slip, '24.5 of 30 km target — 5.5 km short'); // distance first
+  assert.equal(r.headline, '3 of 4 sessions, 24.5 of ~24 km — on plan · goal 30 km, +12% vs last week');
+  assert.equal(r.weekRating, 'good'); // 3 of 4 sessions is one short, not tough
+  // With no step below the goal, distance short of the goal comes first in the Slip.
+  const toGoal = computeWeeklyReview(marcusAgainstGoal([], { weeklySessionsTarget: 4 }));
+  assert.equal(toGoal.headline, '3 of 4 sessions, 24.5 of 30 km');
+  assert.equal(toGoal.slip, '24.5 of 30 km target — 5.5 km short'); // distance first
   // Distance fine but sessions tough (1 of 4): the sessions are the gap.
   const fewRuns = computeWeeklyReview(marcusWeek({
     weeklySessionsTarget: 4,
@@ -1198,12 +1306,15 @@ test('coherence: mixed / tough ⇒ the Slip names the gap and Next week never re
       })]);
     }
   }
-  for (const km of [0, 6, 12, 18, 24.5, 27, 30, 36]) {
-    inputs.push([`endurance ${km} km`, marcusWeek({
-      workouts: [run(WEEK[0], km), run(PREV[0], 20)],
-      trainingDays: [WEEK[0], PREV[0]],
-      sleepMinutes: WEEK.map(day => ({ day, value: 470 })), // enough data days for a review
-    })]);
+  // A 20 km week before puts the step at 22 km; a 28 km week before puts it at the 30 km goal; no week before: the goal too.
+  for (const prior of [20, 28, null]) {
+    for (const km of [0, 6, 12, 18, 21, 22, 24.5, 27, 30, 36]) {
+      inputs.push([`endurance ${km} km after ${prior} km`, marcusWeek({
+        workouts: [run(WEEK[0], km), ...(prior == null ? [] : [run(PREV[0], prior)])],
+        trainingDays: [WEEK[0], PREV[0]],
+        sleepMinutes: WEEK.map(day => ({ day, value: 470 })), // enough data days for a review
+      })]);
+    }
   }
   for (const inBudgetDays of [0, 2, 3, 4, 5, 7]) {
     const kcal = Array.from({ length: 7 }, (_, i) => (i < inBudgetDays ? 1900 : 2500));
@@ -1237,13 +1348,18 @@ test('review copy joins numbers to units, "a → b" pairs and "over 4 wks" with 
   assert.equal(lifter.win, `Squat estimated 1RM is up 10${NBSP}kg vs 4 weeks ago.`);
 
   const runner = computeWeeklyReviewRaw(marcusWeek());
-  assert.equal(runner.headline, `3 sessions, 24.5 of 30${NBSP}km, +12% vs last week`);
+  assert.equal(runner.headline, `3 sessions, 24.5 of ~24${NBSP}km — on plan · goal 30${NBSP}km, +12% vs last week`);
   assert.equal(statByLabel(runner, 'Volume')!.value, `24.5${NBSP}km`);
   assert.equal(runner.win, `Training volume is up 12% on last week (21.9${NBSP}km${NBSP}→${NBSP}24.5${NBSP}km).`);
-  assert.equal(runner.slip, `24.5 of 30${NBSP}km target — 5.5${NBSP}km short`);
-  assert.equal(runner.nextWeek, `Build to ~27${NBSP}km with easy runs; 30${NBSP}km the week after.`);
+  assert.equal(runner.nextWeek, `Build to ~27${NBSP}km with mostly easy runs; 30${NBSP}km the week after.`);
   const withLongRun = computeWeeklyReviewRaw(marcusWeek({ longRun: MARCUS_LONG_RUN }));
-  assert.equal(withLongRun.nextWeek, `Build to ~27${NBSP}km: long run 16${NBSP}km, the rest as easy runs; 30${NBSP}km the week after.`);
+  assert.equal(withLongRun.nextWeek, `Build to ~27${NBSP}km: long run 16${NBSP}km, the rest mostly easy runs; 30${NBSP}km the week after.`);
+  // A week graded against its step, and one graded against the goal.
+  const short = computeWeeklyReviewRaw(marcusWeek({ workouts: marcusRuns(undefined, [7, 7, 7]) }));
+  assert.equal(short.headline, `3 sessions, 21 of ~24${NBSP}km · goal 30${NBSP}km, −4% vs last week`);
+  assert.equal(short.slip, `21 of ~24${NBSP}km — 3${NBSP}km short of this week's step`);
+  const toGoal = computeWeeklyReviewRaw(marcusAgainstGoal());
+  assert.equal(toGoal.slip, `24.5 of 30${NBSP}km target — 5.5${NBSP}km short`);
 
   const loss = computeWeeklyReviewRaw(weightLossInput());
   assert.match(loss.headline, new RegExp(`^Down \\d\\.\\d${NBSP}kg, in budget 5 of 7 days$`));
@@ -1267,6 +1383,8 @@ test('no number in the review copy is followed by a breaking space and a unit', 
   const reviews = [
     priyaWeek(), marcusWeek(), marcusWeek({ unitSystem: 'imperial' }), weightLossInput(),
     marcusWeek({ longRun: MARCUS_LONG_RUN }), marcusWeek({ longRun: MARCUS_LONG_RUN, unitSystem: 'imperial' }),
+    marcusWeek({ workouts: marcusRuns(undefined, [7, 7, 7]) }), marcusWeek({ unitSystem: 'imperial', workouts: marcusRuns(undefined, [7, 7, 7]) }),
+    marcusWeek({ workouts: marcusRuns(undefined, [4, 4, 4]) }), marcusAgainstGoal(), marcusAgainstGoal([], { unitSystem: 'imperial' }),
     marcusWeek({ longRun: { lastKm: 18, peakKm: 18, targetPeakKm: 18 } }),
     weightLossInput({ unitSystem: 'imperial' }),
     weightLossInput({ weightReadings: weigh([...PREV, ...WEEK], i => 80 + i * 0.1) }),
