@@ -155,7 +155,8 @@ function existingTargetPhrases(gp: GoalProgress | null | undefined, units: UnitS
   if (weeklySessions != null) parts.push(`${weeklySessions} ${weeklySessions === 1 ? 'session' : 'sessions'} a week`);
   const race = gp.race;
   const raceDay = shortDate(race?.date);
-  if (race && raceDay) parts.push(`the ${lowerFirst(race.label)} on ${raceDay}`);
+  // A race that is already done (recovery) is not a target the user still has.
+  if (race && raceDay && race.phase !== 'recovery') parts.push(`the ${lowerFirst(race.label)} on ${raceDay}`);
   return parts;
 }
 

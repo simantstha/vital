@@ -1467,3 +1467,209 @@ test('no number in the review copy is followed by a breaking space and a unit', 
     for (const text of strings) assert.doesNotMatch(text, breaking, text);
   }
 });
+
+// ── Race lifecycle: taper / race week / recovery weeks ──────────────────────
+// Reviewed week: Mon 2026-09-28 … Sun 2026-10-04; the coming week starts Mon 2026-10-05.
+// Weekly goal 50 km, peak week before the taper 40 km (taper x0.75 / x0.6, race week x0.4, recovery x0.4 / x0.6).
+
+/** An endurance review of three runs (Mon / Wed / Fri) in the reviewed week and a 24 km week before it, around a race on `raceDate`. */
+function raceWeekReview(raceDate: string | null, cur: number[], over: Partial<WeeklyReviewInput> = {}): WeeklyReviewInput {
+  return marcusWeek({
+    weeklyDistanceKmTarget: 50,
+    raceDate,
+    racePeakWeekKm: 40,
+    workouts: marcusRuns([8, 8, 8], cur),
+    ...over,
+  });
+}
+
+test('race phase review: a taper week is graded against the taper target, not the growth step', () => {
+  // Race Thu 2026-10-15: 17 days out on the reviewed Monday -> early taper, round(40 x 0.75) = 30 km.
+  const r = computeWeeklyReview(raceWeekReview('2026-10-15', [10, 10, 10]));
+  assert.equal(r.weekRating, 'good');
+  assert.equal(r.weekGap, null);
+  assert.equal(r.headline, '3 sessions, 30 of ~30 km — taper week');
+  assert.equal(r.win, 'Taper on plan: 30 km against a ~30 km target.');
+  assert.equal(r.slip, null);
+  // Less than the target is no slip in a taper (60% and up is on plan); the old build step (24 km) is irrelevant.
+  assert.equal(computeWeeklyReview(raceWeekReview('2026-10-15', [6, 6, 6])).weekRating, 'good');
+});
+
+test('race phase review: taper far under or far over its target is a slip that never says "build"', () => {
+  const under = computeWeeklyReview(raceWeekReview('2026-10-15', [3, 3, 3]));
+  assert.equal(under.weekRating, 'mixed');
+  assert.deepEqual(under.weekGap, { kind: 'phase', phase: 'taper', doneKm: 9, targetKm: 30, over: false });
+  assert.equal(under.slip, "9 of ~30 km — well under this week's taper target");
+  assert.doesNotMatch(`${under.slip} ${under.nextWeek}`, /Build to/i);
+  const over = computeWeeklyReview(raceWeekReview('2026-10-15', [14, 14, 14]));
+  assert.equal(over.weekRating, 'mixed');
+  assert.deepEqual(over.weekGap, { kind: 'phase', phase: 'taper', doneKm: 42, targetKm: 30, over: true });
+  assert.equal(over.slip, 'Ran 42 km against a ~30 km taper target — the taper is for cutting volume');
+  // A little over (25% / 3 km) is still on plan.
+  assert.equal(computeWeeklyReview(raceWeekReview('2026-10-15', [12, 12, 12])).weekRating, 'good'); // 36 vs 30
+});
+
+test('race phase review: next week follows the coming week\'s phase (taper, race week, recovery, back to building)', () => {
+  // Taper -> taper (coming Monday is 10 days out: x0.6 = 24 km).
+  assert.equal(
+    computeWeeklyReview(raceWeekReview('2026-10-15', [10, 10, 10])).nextWeek,
+    'Taper: ~24 km next week — keep a little intensity, cut volume.',
+  );
+  // Taper -> race week (race Thu Oct 8: the coming Monday is 3 days out; x0.4 = 16 km).
+  const toRaceWeek = computeWeeklyReview(raceWeekReview('2026-10-08', [8, 8, 8]));
+  assert.equal(toRaceWeek.weekRating, 'good'); // reviewed Monday is 10 days out: late taper, 24 km
+  assert.equal(toRaceWeek.nextWeek, 'Race week: short easy runs, ~16 km before the race, then rest 1–2 days before it.');
+  // Race week -> recovery week 1 (race Fri Oct 2; the coming Monday is 3 days after it).
+  assert.equal(
+    computeWeeklyReview(raceWeekReview('2026-10-02', [5, 5, 21.1])).nextWeek,
+    'Recovery: easy only, ≤ 16 km next week.',
+  );
+  // Recovery week 1 -> recovery week 2 (race Thu Sep 24: the coming Monday is 11 days after it; x0.6 = 24 km).
+  assert.equal(
+    computeWeeklyReview(raceWeekReview('2026-09-24', [4, 4, 4])).nextWeek,
+    'Recovery: easy only, ≤ 24 km next week.',
+  );
+  // Recovery week 2 -> the shared ~10% step over what was run (22 km -> ~24 km), the same number the goal card shows.
+  const back = computeWeeklyReview(raceWeekReview('2026-09-20', [8, 8, 6]));
+  assert.equal(back.nextWeek, 'Back to building: ~24 km next week.');
+  // A build week whose NEXT week is the first taper week: taper copy, not the growth step.
+  const buildToTaper = computeWeeklyReview(raceWeekReview('2026-10-22', [8, 8, 8.5]));
+  assert.equal(buildToTaper.nextWeek, 'Taper: ~30 km next week — keep a little intensity, cut volume.');
+});
+
+test('race phase review: race week is graded without the race; a ceiling, not a target', () => {
+  // Race Fri Oct 2 (21.1 km that day): 10 km of other running vs round(40 x 0.4) = 16 km.
+  const r = computeWeeklyReview(raceWeekReview('2026-10-02', [5, 5, 21.1]));
+  assert.equal(r.weekRating, 'good');
+  assert.equal(r.weekGap, null);
+  assert.equal(r.headline, '3 sessions, 10 of ~16 km before the race — race week');
+  assert.equal(r.win, 'Race week stayed light: 10 km before the race.');
+  // Too much running in race week is a slip about easy runs.
+  const heavy = computeWeeklyReview(raceWeekReview('2026-10-04', [8, 8, 8])); // Sun Oct 4 race, none run on race day
+  assert.equal(heavy.weekRating, 'mixed');
+  assert.deepEqual(heavy.weekGap, { kind: 'phase', phase: 'race_week', doneKm: 24, targetKm: 16, over: true });
+  assert.equal(heavy.slip, 'Ran 24 km — race week is for short easy runs (~16 km planned)');
+  // 10% of slack on the ceiling.
+  assert.equal(computeWeeklyReview(raceWeekReview('2026-10-04', [6, 6, 5.5])).weekRating, 'good'); // 17.5 vs 16 (x1.1 = 17.6)
+});
+
+test('race phase review: recovery weeks are easy only — at or under the ceiling is good, over is "recovery weeks are easy"', () => {
+  const easy = computeWeeklyReview(raceWeekReview('2026-09-24', [4, 4, 4])); // week 1: 12 km <= 16 km
+  assert.equal(easy.weekRating, 'good');
+  assert.equal(easy.weekGap, null);
+  assert.equal(easy.headline, '3 sessions, 12 of up to 16 km — recovery week');
+  assert.equal(easy.win, 'Recovery week kept easy: 12 km (ceiling 16 km).');
+  assert.equal(easy.slip, null);
+  const hard = computeWeeklyReview(raceWeekReview('2026-09-24', [8, 8, 8])); // 24 km > 16 km
+  assert.equal(hard.weekRating, 'mixed');
+  assert.deepEqual(hard.weekGap, { kind: 'phase', phase: 'recovery', doneKm: 24, targetKm: 16, over: true });
+  assert.equal(hard.slip, 'Ran 24 km — recovery weeks are easy');
+  assert.equal(hard.nextWeek, 'Recovery: easy only, ≤ 24 km next week.');
+  // Week 2 of recovery allows x0.6 = 24 km.
+  assert.equal(computeWeeklyReview(raceWeekReview('2026-09-20', [8, 8, 8])).weekRating, 'good');
+});
+
+test('race phase review: fewer sessions and less volume are the plan in these weeks, never a slip', () => {
+  // The week before ran 24 km, this recovery week 9 km (-62%) and only 2 of 4 sessions.
+  const r = computeWeeklyReview(raceWeekReview('2026-09-24', [3, 3, 3], {
+    weeklySessionsTarget: 4,
+    trainingDays: [WEEK[0], WEEK[2], PREV[0], PREV[2], PREV[4]],
+  }));
+  assert.equal(r.weekRating, 'good');
+  assert.equal(r.slip, null);
+  assert.equal(statByLabel(r, 'Volume')!.tone, 'neutral');
+  assert.notEqual(statByLabel(r, 'Sessions')!.tone, 'watch');
+  assert.doesNotMatch(r.nextWeek, /Rebuild|Build to|calendar/);
+});
+
+test('race phase review: without a distance target a recovery week is unrated, never a sessions shortfall', () => {
+  const r = computeWeeklyReview(raceWeekReview('2026-09-24', [3, 3, 3], {
+    weeklyDistanceKmTarget: null,
+    weeklySessionsTarget: 4,
+    trainingDays: [WEEK[0], WEEK[2], PREV[0], PREV[2], PREV[4]],
+  }));
+  assert.equal(r.weekRating, null);
+  assert.equal(r.weekGap, null);
+  assert.equal(r.slip, null);
+  assert.equal(r.nextWeek, 'Recovery: easy only, ≤ 24 km next week.'); // the peak week (40 km) still sets the number
+});
+
+test('race phase review: "Build to" never appears in a taper, race or recovery lifecycle week', () => {
+  const dates = ['2026-10-22', '2026-10-15', '2026-10-08', '2026-10-04', '2026-10-02', '2026-09-24', '2026-09-20'];
+  const runsets = [[3, 3, 3], [8, 8, 8], [10, 10, 10], [14, 14, 14], [5, 5, 21.1]];
+  for (const raceDate of dates) {
+    for (const cur of runsets) {
+      for (const unitSystem of ['metric', 'imperial'] as const) {
+        const r = computeWeeklyReview(raceWeekReview(raceDate, cur, { unitSystem, longRun: MARCUS_LONG_RUN }));
+        assert.doesNotMatch(r.nextWeek, /Build to/i, `${raceDate} ${cur} ${unitSystem}: ${r.nextWeek}`);
+        assert.doesNotMatch(r.nextWeek, /Aim for/i, `${raceDate} ${cur} ${unitSystem}: ${r.nextWeek}`);
+        // The reviewed week of the 2026-10-22 race is still a build week (24 days out): it keeps its build-phase slip; only its "Next week" is taper.
+        if (raceDate !== '2026-10-22') {
+          assert.doesNotMatch(r.slip ?? '', /short of this week's step|target — .* short|Jumped/, `${raceDate} ${cur}: ${r.slip}`);
+        }
+        assert.ok(r.headline.length <= REVIEW_HEADLINE_MAX_CHARS, r.headline);
+      }
+    }
+  }
+});
+
+test('race phase review: build weeks keep the growth step, spike guard and "Build to"', () => {
+  // Race far out (2026-12-31) or already over 14 days ago: nothing changes.
+  for (const raceDate of ['2026-12-31', '2026-09-13', null]) {
+    const r = computeWeeklyReview(raceWeekReview(raceDate, [8, 8, 8.5], { weeklyDistanceKmTarget: 30 }));
+    assert.equal(r.nextWeek, 'Build to ~27 km with mostly easy runs; 30 km the week after.', `${raceDate}`);
+  }
+  const spike = computeWeeklyReview(raceWeekReview('2026-12-31', [8, 6, 6], { weeklyDistanceKmTarget: 30, workouts: marcusRuns([7], [8, 6, 6]) }));
+  assert.equal(spike.weekGap?.kind, 'spike');
+  // Other goals ignore the race date.
+  const muscle = computeWeeklyReview(muscleWeek({ raceDate: '2026-10-15', racePeakWeekKm: 40 }));
+  assert.doesNotMatch(muscle.nextWeek, /Taper|Recovery|Race week/);
+});
+
+test('race phase review: imperial copy is whole miles', () => {
+  const r = computeWeeklyReview(raceWeekReview('2026-10-15', [10, 10, 10], { unitSystem: 'imperial' }));
+  // 24 km (late taper) = 14.9 mi -> 15 mi.
+  assert.match(r.nextWeek, /^Taper: ~15 mi next week/);
+  assert.doesNotMatch(`${r.headline} ${r.win} ${r.nextWeek}`, /\bkm\b/);
+});
+
+test('race phase review: no peak data and no weekly goal still gives phase copy (no number)', () => {
+  const r = computeWeeklyReview(raceWeekReview('2026-10-15', [10, 10, 10], { weeklyDistanceKmTarget: null, racePeakWeekKm: null }));
+  assert.equal(r.nextWeek, 'Taper: cut volume next week, keep a little intensity.');
+  assert.notEqual(r.weekRating, 'tough');
+  const done = computeWeeklyReview(raceWeekReview('2026-09-20', [8, 8, 6], { weeklyDistanceKmTarget: null, racePeakWeekKm: null }));
+  assert.equal(done.nextWeek, 'Back to building: ease back in with easy runs and add about 10% a week.');
+});
+
+test('race phase review: the coming week\'s target is the number the goal card then shows (taper, race week, recovery)', () => {
+  const cases: Array<{ raceDate: string; cur: number[]; targetKm: number; text: RegExp }> = [
+    { raceDate: '2026-10-15', cur: [10, 10, 10], targetKm: 24, text: /^Taper: ~24 km next week/ },
+    { raceDate: '2026-10-08', cur: [8, 8, 8], targetKm: 16, text: /~16 km before the race/ },
+    { raceDate: '2026-10-02', cur: [5, 5, 21.1], targetKm: 16, text: /≤ 16 km next week/ },
+    { raceDate: '2026-09-24', cur: [4, 4, 4], targetKm: 24, text: /≤ 24 km next week/ },
+  ];
+  for (const c of cases) {
+    const input = raceWeekReview(c.raceDate, c.cur);
+    const review = computeWeeklyReview(input);
+    assert.match(review.nextWeek, c.text, review.nextWeek);
+    // The goal card on the coming week's Monday, over the same runs and race.
+    const card = computeGoalProgress({
+      ...goalInputAfter(input, 0),
+      todayKey: addDays(WEEK_START, 7),
+      race: { date: c.raceDate, distanceKm: 21.1 },
+      racePeakWeekKm: 40,
+    });
+    assert.equal(card.distance!.stepTargetKm, c.targetKm, `${c.raceDate}: ${review.nextWeek}`);
+  }
+  // After recovery: the review's ~10% step is the card's growth step again.
+  const input = raceWeekReview('2026-09-20', [8, 8, 6]);
+  const card = computeGoalProgress({
+    ...goalInputAfter(input, 0),
+    todayKey: addDays(WEEK_START, 7),
+    race: { date: '2026-09-20', distanceKm: 21.1 },
+    racePeakWeekKm: 40,
+  });
+  assert.equal(card.race, null);
+  assert.equal(card.distance!.stepTargetKm, 24);
+  assert.equal(computeWeeklyReview(input).nextWeek, 'Back to building: ~24 km next week.');
+});

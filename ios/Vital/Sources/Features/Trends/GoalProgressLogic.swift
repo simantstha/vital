@@ -151,6 +151,16 @@ enum GoalProgressLogic {
         return headlineWithoutVerdict(progress.headline) ?? label(for: .reached)
     }
 
+    // MARK: - Race done: next goal
+
+    /// The race is done and its 14-day recovery is under way (the server keeps
+    /// the race in the payload with phase "recovery"): the card leads with the
+    /// recovery state and offers "Set your next goal" (`RaceLogic.nextGoalTitle`),
+    /// which opens the goal editor.
+    static func showsNextGoalPrompt(_ progress: GoalProgressDTO) -> Bool {
+        RaceLogic.isRecovery(progress.race)
+    }
+
     /// Copy for the two next steps offered once a goal is reached.
     static let setNewTargetTitle = "Set a new target"
     static let switchToMaintenanceTitle = "Switch to maintenance"
@@ -489,6 +499,9 @@ enum GoalProgressLogic {
                 : "Set a weekly session goal to see your progress"
         }
         if let text = insufficientDataText(progress) { return text }
+        // Race done: the recovery state ("Race done — Dec 31 · recovery week 1")
+        // leads, not a distance bar against a weekly goal.
+        if showsNextGoalPrompt(progress), let recovery = headlineWithoutVerdict(progress.headline) { return recovery }
         if let line = distanceLine(progress, system: system) { return line }
         switch progress.verdict {
         case .needsTarget, .insufficientData:

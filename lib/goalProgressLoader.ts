@@ -18,6 +18,7 @@ import { resolveDailyIntake } from '@/lib/brain/nutritionIntake';
 import { normalizeGoal, resolveDietBudget, lowEnergyThresholdKcal } from '@/lib/brain/dietBudget';
 import { resolveUnitSystem } from '@/lib/units';
 import { readCoreProfile } from '@/lib/coreProfileStore';
+import { loadRacePeakWeekKm } from '@/lib/racePeakLoader';
 import { parseProfileDetails } from '@/lib/profileDetails';
 import {
   computeGoalProgress,
@@ -62,7 +63,7 @@ export async function loadGoalProgress(
 
   const [
     weightReadings, intakeByDay, budget, profileMd,
-    progressionSets, workoutEntries, restingHr, hrv, sleep,
+    progressionSets, workoutEntries, restingHr, hrv, sleep, racePeakWeekKm,
   ] = await Promise.all([
     getWeightReadings(userId, WEIGHT_LOOKBACK_DAYS, tz),
     resolveDailyIntake(userId, dayKeys, tz),
@@ -73,6 +74,8 @@ export async function loadGoalProgress(
     seriesWithFallback(userId, 'resting_hr', 'whoop_resting_hr'),
     seriesWithFallback(userId, 'hrv_sdnn', 'whoop_hrv_rmssd'),
     queryMetricPoints(userId, 'sleep_minutes', WINDOW_DAYS),
+    // Taper / race-week / recovery targets are shares of the peak week before the taper (older than the 28-day window above).
+    goal === 'endurance' ? loadRacePeakWeekKm(userId, user.race_date, todayKey) : Promise.resolve(null),
   ]);
 
   const profile = parseProfileDetails(profileMd);
@@ -120,6 +123,7 @@ export async function loadGoalProgress(
       weeklyDistanceKm: user.weekly_distance_km_target ?? null,
     },
     race: { date: user.race_date ?? null, distanceKm: user.race_distance_km ?? null },
+    racePeakWeekKm,
     start: {
       weightKg: user.goal_start_weight_kg ?? null,
       startedAt: user.goal_started_at ? user.goal_started_at.toISOString() : null,

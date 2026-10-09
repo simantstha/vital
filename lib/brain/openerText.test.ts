@@ -125,6 +125,12 @@ test('new-user opener states a weekly distance, sessions a week and the race ins
     race: { date: '2027-03-15', distanceKm: null, label: 'Race', weeksToGo: 24, daysToGo: 160 },
   });
   assert.match(newUserGoalOpener('endurance', raceOnly, 'metric') ?? '', /^Your goal: the race on Mar 15\. Once/);
+  // A race that is already done (recovery) is not a target the user still has: it is not quoted back.
+  const raceDone = gp({
+    goal: 'endurance', target: { ...NO_TARGETS, weeklyDistanceKm: 30 }, verdict: 'insufficient_data',
+    race: { date: '2026-10-03', distanceKm: 21.1, label: 'Half marathon', weeksToGo: 0, daysToGo: 0, phase: 'recovery', daysSince: 3 },
+  });
+  assert.equal(newUserGoalOpener('endurance', raceDone, 'metric'), "Your goal: 30 km a week. Once you've logged a few days I'll tell you how it's going.");
   // A target weight still carries its date.
   const dated = gp({ target: { ...NO_TARGETS, weightKg: 71.67, date: '2026-12-30' } });
   assert.match(newUserGoalOpener('weight_loss', dated, 'metric') ?? '', /^Your goal: 71\.7 kg by Dec 30\. Once/);

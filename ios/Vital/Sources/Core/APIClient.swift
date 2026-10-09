@@ -2243,15 +2243,32 @@ struct GoalProgressDTO: Decodable, Equatable {
         }
     }
 
-    /// Endurance race countdown; `nil` without a race date or once it has passed.
+    /// Endurance race countdown and lifecycle phase; `nil` without a race date
+    /// or once the post-race recovery (14 days after race day) is over.
     struct Race: Decodable, Equatable {
+        /// Where the race sits in build -> taper -> race week -> recovery
+        /// (lib/enduranceProgression.ts `racePhase`). Raw values are the wire
+        /// strings; an unknown or missing one decodes to a `nil` phase.
+        enum Phase: String, Equatable {
+            case build
+            case taper
+            case raceWeek = "race_week"
+            case recovery
+        }
+
         /// 'YYYY-MM-DD'.
         let date: String
         let distanceKm: Double?
         let label: String?
-        /// 0 during race week (fewer than 7 days out).
+        /// 0 during race week (fewer than 7 days out) and once the race is done.
         let weeksToGo: Int
+        /// 0 on race day and once the race is done (see `daysSince`).
         let daysToGo: Int
+        /// `nil` from a server that predates the race lifecycle (callers then
+        /// behave as before: a plain countdown).
+        let phase: Phase?
+        /// Recovery only: whole days since race day (1...14); `nil` otherwise.
+        let daysSince: Int?
 
         /// Server label, falling back to one derived from the distance.
         var displayLabel: String {
@@ -2259,17 +2276,23 @@ struct GoalProgressDTO: Decodable, Equatable {
             return RaceLogic.label(forKm: distanceKm)
         }
 
-        private enum CodingKeys: String, CodingKey { case date, distanceKm, label, weeksToGo, daysToGo }
+        private enum CodingKeys: String, CodingKey { case date, distanceKm, label, weeksToGo, daysToGo, phase, daysSince }
 
-        init(date: String, distanceKm: Double? = nil, label: String? = nil, weeksToGo: Int, daysToGo: Int) {
+        init(
+            date: String, distanceKm: Double? = nil, label: String? = nil, weeksToGo: Int, daysToGo: Int,
+            phase: Phase? = nil, daysSince: Int? = nil
+        ) {
             self.date = date
             self.distanceKm = distanceKm
             self.label = label
             self.weeksToGo = weeksToGo
             self.daysToGo = daysToGo
+            self.phase = phase
+            self.daysSince = daysSince
         }
 
         /// Throws without a date or day count so the enclosing `try?` drops the whole race.
+        /// `phase` / `daysSince` are tolerant: a bad or unknown value drops only that field.
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             date = try c.decode(String.self, forKey: .date)
@@ -2278,6 +2301,8 @@ struct GoalProgressDTO: Decodable, Equatable {
             distanceKm = try? c.decode(Double.self, forKey: .distanceKm)
             label = try? c.decode(String.self, forKey: .label)
             weeksToGo = (try? c.decode(Int.self, forKey: .weeksToGo)) ?? (days < 7 ? 0 : Int((Double(days) / 7).rounded(.up)))
+            phase = (try? c.decode(String.self, forKey: .phase)).flatMap(Phase.init(rawValue:))
+            daysSince = try? c.decode(Int.self, forKey: .daysSince)
         }
     }
 
@@ -2440,7 +2465,7 @@ struct GoalProgressDTO: Decodable, Equatable {
     let target: Target
     /// Endurance weekly-distance progress; `nil` for every other goal / no distance target.
     let distance: Distance?
-    /// Endurance race countdown; `nil` when no race is set / it has passed / older servers.
+    /// Endurance race countdown + phase; `nil` when no race is set / its recovery is over / older servers.
     let race: Race?
     /// Endurance long-run readiness; `nil` without running distances / older servers.
     let longRun: LongRun?
