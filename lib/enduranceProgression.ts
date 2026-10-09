@@ -18,6 +18,13 @@
  * Rule: a week may grow ~10% over the previous one (at least +1 unit so a very
  * small week still moves), never past the weekly target; the long run grows by
  * at most 2 km and never past its peak target.
+ *
+ * Race lifecycle (same module, same rule for every surface): with a race date
+ * the calendar decides a RACE PHASE — build (> 21 days out), taper (8–21), race
+ * week (0–7, race day included), recovery (1–14 days after). Taper, race week
+ * and recovery do not grow: they have their own weekly target (a share of the
+ * runner's peak week, see `racePhaseTargetKm`) and the growth step above is not
+ * used in them.
  */
 
 /** Weekly distance may grow by at most this fraction week over week (the ~10% rule). */
@@ -87,4 +94,171 @@ export function longRunStepKm(lastKm: number, targetPeakKm: number | null | unde
 /** True when the last long run is already at or past its peak target (so the long run is held, not grown). */
 export function longRunAtPeak(lastKm: number, targetPeakKm: number | null | undefined): boolean {
   return targetPeakKm != null && lastKm >= targetPeakKm;
+}
+
+// ── Race lifecycle ──────────────────────────────────────────────────────────
+
+/** Where a race date sits relative to today: far out, tapering, race week, or just done. */
+export type RacePhase = 'build' | 'taper' | 'race_week' | 'recovery';
+
+/** More than this many days out is still the build phase; this many and fewer is the taper. */
+export const TAPER_START_DAYS = 21;
+/** 14–21 days out is the early taper (x0.75), 8–13 days out the late taper (x0.6). */
+export const TAPER_LATE_FROM_DAYS = 13;
+/** 0–7 days out (race day included) is race week. */
+export const RACE_WEEK_DAYS = 7;
+/** Recovery is the first 14 days after race day; recovery week 1 is days 1–7, week 2 days 8–14. */
+export const RECOVERY_DAYS = 14;
+
+/** Shares of the peak week: early taper, late taper, race week (the race itself excluded), recovery week 1 and 2. */
+export const TAPER_EARLY_FRACTION = 0.75;
+export const TAPER_LATE_FRACTION = 0.6;
+export const RACE_WEEK_FRACTION = 0.4;
+export const RECOVERY_WEEK1_FRACTION = 0.4;
+export const RECOVERY_WEEK2_FRACTION = 0.6;
+
+/** The peak week is the biggest of this many 7-day blocks ending the day before the taper began. */
+const PEAK_WEEKS = 4;
+
+export interface RacePhaseInfo {
+  phase: RacePhase;
+  /** Days from today to race day: 0 on race day, negative after it. */
+  daysToRace: number;
+}
+
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Whole days since 1970-01-01 for a YYYY-MM-DD key; NaN when malformed. */
+function dayIndex(day: string): number {
+  if (!DAY_RE.test(day)) return Number.NaN;
+  const [y, m, d] = day.split('-').map(Number);
+  return Date.UTC(y, m - 1, d) / 86_400_000;
+}
+
+/**
+ * The race phase for `raceDate` as seen from `today` (both user-local
+ * YYYY-MM-DD): 'build' (> 21 days out), 'taper' (8–21), 'race_week' (0–7,
+ * including race day), 'recovery' (1–14 days after). `null` without a (valid)
+ * race date, and from 15 days after the race on. Also returns the signed day
+ * count so callers need not redo the arithmetic.
+ */
+export function racePhaseInfo(raceDate: string | null | undefined, today: string): RacePhaseInfo | null {
+  if (!raceDate) return null;
+  const daysToRace = dayIndex(raceDate) - dayIndex(today);
+  if (!Number.isFinite(daysToRace)) return null;
+  if (daysToRace > TAPER_START_DAYS) return { phase: 'build', daysToRace };
+  if (daysToRace > RACE_WEEK_DAYS) return { phase: 'taper', daysToRace };
+  if (daysToRace >= 0) return { phase: 'race_week', daysToRace };
+  if (daysToRace >= -RECOVERY_DAYS) return { phase: 'recovery', daysToRace };
+  return null;
+}
+
+/** `racePhaseInfo(...)?.phase`. */
+export function racePhase(raceDate: string | null | undefined, today: string): RacePhase | null {
+  return racePhaseInfo(raceDate, today)?.phase ?? null;
+}
+
+/** True for the phases that carry their own weekly target instead of the growth step. */
+export function isWindDownPhase(phase: RacePhase | null | undefined): phase is 'taper' | 'race_week' | 'recovery' {
+  return phase === 'taper' || phase === 'race_week' || phase === 'recovery';
+}
+
+/** Recovery week (1 or 2) for the days since race day (1–14): days 1–7 are week 1. */
+export function recoveryWeek(daysSince: number): 1 | 2 {
+  return daysSince <= 7 ? 1 : 2;
+}
+
+/**
+ * The peak week (km) the taper and recovery targets are shares of: the biggest
+ * of the four 7-day blocks of running that end the day before the taper began
+ * (21 days before the race). `runs` are running workouts (day + km, any order;
+ * runs outside that 28-day window are ignored). `null` when nothing was run in
+ * the window or the best block is under one km — callers fall back to the
+ * weekly distance goal then.
+ */
+export function peakWeekKmBeforeTaper(runs: ReadonlyArray<{ day: string; km: number }>, raceDate: string): number | null {
+  const taperStart = dayIndex(raceDate) - TAPER_START_DAYS;
+  if (!Number.isFinite(taperStart)) return null;
+  const blocks = new Array<number>(PEAK_WEEKS).fill(0);
+  for (const r of runs) {
+    if (!Number.isFinite(r.km) || r.km <= 0) continue;
+    const before = taperStart - dayIndex(r.day); // 1 = the day before the taper began
+    if (!Number.isFinite(before) || before < 1 || before > PEAK_WEEKS * 7) continue;
+    blocks[Math.floor((before - 1) / 7)] += r.km;
+  }
+  const peak = Math.max(...blocks);
+  return peak >= MIN_BASE_WEEK ? peak : null;
+}
+
+/** Taper: running at least this share of the week's target is on plan (less running is no slip in a taper). */
+export const TAPER_GOOD_MIN_FRACTION = 0.6;
+/** Taper: more than this fraction over the target (and by the minimum excess below) is over the plan. */
+export const TAPER_OVER_FRACTION = 0.25;
+/** Taper over-the-plan also needs at least this much excess: 3 km (2 mi for a unit size below 1, i.e. miles). */
+const TAPER_OVER_MIN_EXCESS_KM = 3;
+const TAPER_OVER_MIN_EXCESS_MI = 2;
+/** Race week / recovery: the target is a ceiling, met with this much slack (10%). */
+export const PHASE_CEILING_TOLERANCE = 1.1;
+
+/** Where a wind-down week's running sits against its target. */
+export type WindDownBand = 'under' | 'within' | 'over';
+
+/**
+ * ONE rule for "is this taper / race-week / recovery week on plan?", shared by
+ * the weekly review (rating) and the goal card (verdict):
+ *  - taper: 'within' from 60% of the target up to 25% over it (and under 3 km /
+ *    2 mi over); 'over' beyond that, 'under' below 60%;
+ *  - race week and recovery: the target is a ceiling — 'within' up to 10% over
+ *    it, 'over' beyond; never 'under' (running less is the plan).
+ * `weekFraction` (0..1, default 1) pro-rates the taper's LOWER bound for a week
+ * still under way (the goal card on a Tuesday), so an early-week 6 km is not an
+ * undershoot; the upper bounds are cumulative and never pro-rated.
+ * `unitsPerKm` is the display unit's size (1 for km, below 1 for miles).
+ */
+export function windDownBand(
+  phase: 'taper' | 'race_week' | 'recovery',
+  km: number,
+  targetKm: number,
+  opts: { unitsPerKm?: number; weekFraction?: number } = {},
+): WindDownBand {
+  const units = opts.unitsPerKm ?? 1;
+  if (phase !== 'taper') return km > targetKm * PHASE_CEILING_TOLERANCE ? 'over' : 'within';
+  const minExcess = units < 1 ? TAPER_OVER_MIN_EXCESS_MI : TAPER_OVER_MIN_EXCESS_KM;
+  if (km > targetKm * (1 + TAPER_OVER_FRACTION) && (km - targetKm) * units >= minExcess) return 'over';
+  const fraction = Math.min(1, Math.max(0, opts.weekFraction ?? 1));
+  return km < targetKm * TAPER_GOOD_MIN_FRACTION * fraction ? 'under' : 'within';
+}
+
+/**
+ * The weekly running target (km) for taper, race week and recovery; `null` in
+ * the build phase (the growth step applies) and without a usable peak week.
+ *
+ *  - taper 14–21 days out: round(peak x 0.75); 8–13 days out: round(peak x 0.6);
+ *  - race week: round(peak x 0.4), NOT counting the race itself;
+ *  - recovery week 1 (days 1–7 after): at most round(peak x 0.4), week 2: at
+ *    most round(peak x 0.6), easy running only.
+ *
+ * Rounding happens in the display unit (`unitsPerKm`: 1 for km, ~0.6214 for
+ * miles) so an imperial runner's target is a whole number of miles, and is at
+ * least 1 unit. A `weeklyGoalKm` caps the result: a wind-down week never asks
+ * for more than the stated weekly goal.
+ */
+export function racePhaseTargetKm(
+  info: RacePhaseInfo,
+  peakWeekKm: number,
+  opts: { weeklyGoalKm?: number | null; unitsPerKm?: number } = {},
+): number | null {
+  const units = opts.unitsPerKm ?? 1;
+  if (!Number.isFinite(peakWeekKm) || peakWeekKm <= 0 || !Number.isFinite(units) || units <= 0) return null;
+  let fraction: number;
+  switch (info.phase) {
+    case 'taper': fraction = info.daysToRace > TAPER_LATE_FROM_DAYS ? TAPER_EARLY_FRACTION : TAPER_LATE_FRACTION; break;
+    case 'race_week': fraction = RACE_WEEK_FRACTION; break;
+    case 'recovery': fraction = recoveryWeek(-info.daysToRace) === 1 ? RECOVERY_WEEK1_FRACTION : RECOVERY_WEEK2_FRACTION; break;
+    default: return null;
+  }
+  const inUnits = Math.max(1, Math.round(peakWeekKm * units * fraction));
+  const km = Math.round((inUnits / units) * 10) / 10;
+  const goal = opts.weeklyGoalKm;
+  return goal != null && Number.isFinite(goal) && goal > 0 ? Math.min(km, goal) : km;
 }

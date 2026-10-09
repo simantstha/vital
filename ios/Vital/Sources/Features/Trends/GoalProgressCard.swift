@@ -221,6 +221,36 @@ struct GoalReachedActionRow: View {
     }
 }
 
+// MARK: - Race done: set your next goal
+
+/// "Set your next goal" — shown on the goal card and the detail sheet only while
+/// the race is done and its 14-day recovery is under way (phase "recovery").
+/// Opens Profile's goal editor through the same `.vitalOpenGoalEditor` hop as
+/// "Set a new target" (`GoalReachedActions.setNewTarget`), where the runner can
+/// add a new race, a weekly distance target, or switch to maintenance.
+/// Full-width, >= 44 pt tall.
+struct GoalNextGoalActionRow: View {
+    @StateObject private var model = GoalReachedActions()
+    /// Called after the editor is requested (the sheet dismisses itself).
+    var onSetNextGoal: () -> Void = {}
+
+    var body: some View {
+        Button {
+            model.setNewTarget()
+            onSetNextGoal()
+        } label: {
+            Text(RaceLogic.nextGoalTitle)
+                .scaledFont(size: 15, weight: .semibold)
+                .foregroundStyle(Theme.Colors.onAccent)
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .background(Capsule().fill(Theme.Colors.accent))
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.vital(scale: 0.97))
+        .accessibilityIdentifier("goalProgress.setNextGoal")
+    }
+}
+
 // MARK: - Trends card
 
 /// Top-of-Trends "Am I on track?" card (v5 Wave 2). Compact: verdict chip,
@@ -240,6 +270,8 @@ struct GoalProgressCard: View {
             promptCard
         } else if GoalProgressLogic.isReached(progress) {
             reachedCard
+        } else if GoalProgressLogic.showsNextGoalPrompt(progress) {
+            raceDoneCard
         } else {
             Button(action: onTap) {
                 summaryCard
@@ -309,6 +341,28 @@ struct GoalProgressCard: View {
                 .accessibilityIdentifier("goalProgress.reachedSummary")
 
                 GoalReachedActionRow()
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("goalProgress.card")
+    }
+
+    /// Race done (recovery): like `reachedCard`, the summary is the button and
+    /// "Set your next goal" sits beneath it inside the same card.
+    private var raceDoneCard: some View {
+        VitalCard(padding: Theme.Spacing.lg, cornerRadius: Theme.Radius.lg) {
+            VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
+                Button(action: onTap) {
+                    summaryContent
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityElement(children: .combine)
+                .accessibilityHint("Opens the details")
+                .accessibilityIdentifier("goalProgress.raceDoneSummary")
+
+                GoalNextGoalActionRow()
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -501,6 +555,11 @@ struct GoalProgressDetailView: View {
                 // Goal reached: the two ways forward, ahead of the numbers.
                 if GoalProgressLogic.isReached(progress) {
                     GoalReachedActionRow(onSetNewTarget: { dismiss() }, onSwitched: { dismiss() })
+                }
+
+                // Race done (recovery): the way forward, ahead of the numbers.
+                if GoalProgressLogic.showsNextGoalPrompt(progress) {
+                    GoalNextGoalActionRow(onSetNextGoal: { dismiss() })
                 }
 
                 if let bar = distanceBar {

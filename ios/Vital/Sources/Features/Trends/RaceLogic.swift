@@ -73,17 +73,59 @@ enum RaceLogic {
         return "\(weeksToGo) \(weeksToGo == 1 ? "week" : "weeks") to go"
     }
 
-    /// Today hero line: "Half marathon · 12 weeks to go", plus the long-run
-    /// progress when the response carries a long run with a target: "Half
-    /// marathon · 12 weeks to go · long run 14/18 km" (`longRunProgressText`).
+    // MARK: - Race lifecycle (phase)
+
+    /// Recovery week (1 or 2) for the days since race day: days 1-7 are week 1,
+    /// 8-14 week 2 (mirrors lib/enduranceProgression.ts `recoveryWeek`). A
+    /// server that sent no `daysSince` reads as week 1.
+    static func recoveryWeek(daysSince: Int?) -> Int {
+        (daysSince ?? 1) <= 7 ? 1 : 2
+    }
+
+    /// True once the race is done and the 14-day recovery is under way.
+    static func isRecovery(_ race: GoalProgressDTO.Race?) -> Bool {
+        race?.phase == .recovery
+    }
+
+    /// The post-race call to action: it opens the goal editor
+    /// (`.vitalOpenGoalEditor`) so the runner can set a new race, a weekly
+    /// distance target, or switch to maintenance.
+    static let nextGoalTitle = "Set your next goal"
+
+    /// "Race done · recovery week 1".
+    static func recoveryText(daysSince: Int?) -> String {
+        "Race done \u{00B7} recovery week \(recoveryWeek(daysSince: daysSince))"
+    }
+
+    /// Today hero line, by race phase:
+    ///  - build (or an older server with no phase): "Half marathon · 12 weeks to go", plus the
+    ///    long-run progress when the response carries a long run with a target:
+    ///    "Half marathon · 12 weeks to go · long run 14/18 km" (`longRunProgressText`);
+    ///  - taper: "Half marathon · taper · 2 weeks to go" (no long-run tail: the build-up is over);
+    ///  - race week: "Race week · Dec 31" ("Race day · Dec 31" on the day);
+    ///  - recovery: "Race done · recovery week 1".
     static func heroLine(
-        _ race: GoalProgressDTO.Race, longRun: GoalProgressDTO.LongRun? = nil, system: UnitSystem = .metric
+        _ race: GoalProgressDTO.Race, longRun: GoalProgressDTO.LongRun? = nil, system: UnitSystem = .metric,
+        calendar: Calendar = .current
     ) -> String {
-        var line = "\(race.displayLabel) · \(countdownText(weeksToGo: race.weeksToGo, daysToGo: race.daysToGo))"
-        if let longRun, let progress = longRunProgressText(longRun, system) {
-            line += " · \(progress)"
+        switch race.phase {
+        case .taper:
+            return "\(race.displayLabel) \u{00B7} taper \u{00B7} \(countdownText(weeksToGo: race.weeksToGo, daysToGo: race.daysToGo))"
+        case .raceWeek:
+            var parts = [race.daysToGo <= 0 ? "Race day" : "Race week"]
+            if let day = GoalTargetLogic.date(fromDay: race.date, calendar: calendar) {
+                parts.append(monthDay(day, calendar: calendar))
+            }
+            return parts.joined(separator: " \u{00B7} ")
+        case .recovery:
+            return recoveryText(daysSince: race.daysSince)
+        case .build, .none:
+            var line = "\(race.displayLabel) · \(countdownText(weeksToGo: race.weeksToGo, daysToGo: race.daysToGo))"
+            if let longRun, let progress = longRunProgressText(longRun, system) {
+                line += " · \(progress)"
+            }
+            return line
         }
-        return line
     }
 
     /// "long run 14/18 km" (imperial: "long run 8.7/11.2 mi"; the number and
@@ -100,18 +142,31 @@ enum RaceLogic {
         return "long run \(doneText)/\(targetText)\(UnitFormat.nbsp)\(system.distanceUnit)"
     }
 
-    /// Goal card row: "Half marathon · Dec 30 · 12 wk" (race week: "5 d"; race day: "today").
+    /// Goal sheet race row, with the phase: "Half marathon · Dec 30 · 12 wk" (build),
+    /// "… · taper · 2 wk", "… · race week · 5 d" (race day: "race week · today"),
+    /// "… · recovery week 1" once the race is done.
     static func rowText(_ race: GoalProgressDTO.Race, calendar: Calendar = .current) -> String {
         var parts = [race.displayLabel]
         if let d = GoalTargetLogic.date(fromDay: race.date, calendar: calendar) {
             parts.append(monthDay(d, calendar: calendar))
         }
-        if race.daysToGo <= 0 {
-            parts.append("today")
-        } else if race.weeksToGo <= 0 {
-            parts.append("\(race.daysToGo) d")
-        } else {
-            parts.append("\(race.weeksToGo) wk")
+        switch race.phase {
+        case .recovery:
+            parts.append("recovery week \(recoveryWeek(daysSince: race.daysSince))")
+        case .taper:
+            parts.append("taper")
+            parts.append(race.weeksToGo <= 0 ? "\(max(race.daysToGo, 0)) d" : "\(race.weeksToGo) wk")
+        case .raceWeek:
+            parts.append("race week")
+            parts.append(race.daysToGo <= 0 ? "today" : "\(race.daysToGo) d")
+        case .build, .none:
+            if race.daysToGo <= 0 {
+                parts.append("today")
+            } else if race.weeksToGo <= 0 {
+                parts.append("\(race.daysToGo) d")
+            } else {
+                parts.append("\(race.weeksToGo) wk")
+            }
         }
         return parts.joined(separator: " · ")
     }
@@ -128,7 +183,8 @@ enum RaceLogic {
     /// with it, so the race name and day are what survives a narrow row; the
     /// segments are joined by `goalRowSeparator`). `nil`
     /// without a race date, with one that does not parse, or once the race day
-    /// has passed (the server drops a passed race too).
+    /// has passed (after it the goal editor and Today carry the recovery state
+    /// and the "Set your next goal" call to action instead).
     static func goalRowSuffix(
         raceDate: String?, distanceKm: Double?, now: Date = Date(), calendar: Calendar = .current
     ) -> String? {
