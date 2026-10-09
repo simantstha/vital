@@ -56,7 +56,7 @@ struct CoachOrb: View {
             .frame(width: diameter + ringInset * 2, height: diameter + ringInset * 2)
 
             Text(captionText)
-                .font(Theme.Typography.bodyMedium)
+                .scaledFont(Theme.Typography.bodyMedium)
                 .foregroundStyle(Theme.Colors.textSecondary)
                 .multilineTextAlignment(.center)
                 .lineLimit(2)
@@ -69,7 +69,7 @@ struct CoachOrb: View {
                     Image(systemName: "xmark")
                         .font(.system(size: 11, weight: .semibold))
                     Text("End")
-                        .font(.system(size: 13, weight: .semibold))
+                        .scaledFont(size: 13, weight: .semibold)
                 }
                 .foregroundStyle(Theme.Colors.textSecondary)
                 .padding(.horizontal, Theme.Spacing.md)

@@ -60,7 +60,7 @@ private struct GoalWeightBar: View {
                 Spacer()
                 Text(targetText)
             }
-            .font(.system(size: 12))
+            .scaledFont(size: 12)
             .foregroundStyle(Theme.Colors.textTertiary)
             .monospacedDigit()
         }
@@ -87,7 +87,7 @@ private struct GoalDistanceBar: View {
                 Spacer()
                 Text(targetText)
             }
-            .font(.system(size: 12))
+            .scaledFont(size: 12)
             .foregroundStyle(Theme.Colors.textTertiary)
             .monospacedDigit()
         }
@@ -109,7 +109,7 @@ private struct GoalReasonRow: View {
                 .alignmentGuide(.firstTextBaseline) { dimensions in dimensions[.bottom] - 1 }
             // Non-breaking so "+10 kg" and "(153 → 163 kg)" never wrap mid-value.
             Text(GoalProgressLogic.nonBreaking(reason.text))
-                .font(.system(size: 14))
+                .scaledFont(size: 14)
                 .foregroundStyle(Theme.Colors.textPrimary)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -196,7 +196,7 @@ struct GoalReachedActionRow: View {
 
             if let message = model.errorMessage {
                 Text(message)
-                    .font(.system(size: 13))
+                    .scaledFont(size: 13)
                     .foregroundStyle(Theme.Colors.alert)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("goalProgress.reachedError")
@@ -210,7 +210,7 @@ struct GoalReachedActionRow: View {
     ) -> some View {
         Button(action: action) {
             Text(title)
-                .font(.system(size: 15, weight: .semibold))
+                .scaledFont(size: 15, weight: .semibold)
                 .foregroundStyle(filled ? Theme.Colors.onAccent : Theme.Colors.accentContent)
                 .frame(maxWidth: .infinity, minHeight: 44)
                 .background(Capsule().fill(filled ? Theme.Colors.accent : Theme.Colors.accentSoft))
@@ -256,7 +256,7 @@ struct GoalProgressCard: View {
             VStack(alignment: .leading, spacing: Theme.Spacing.md) {
                 GoalVerdictChip(verdict: .needsTarget)
                 Text(GoalProgressLogic.primaryLine(progress, system: system))
-                    .font(.system(size: 17, weight: .semibold))
+                    .scaledFont(size: 17, weight: .semibold)
                     .foregroundStyle(Theme.Colors.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)
                 Text(GoalProgressLogic.needsSessionTarget(progress)
@@ -264,12 +264,12 @@ struct GoalProgressCard: View {
                         ? "Pick a weekly distance (or how many workouts a week) you're aiming for and I'll tell you if you're keeping up."
                         : "Pick how many workouts a week you're aiming for and I'll tell you if you're keeping up.")
                      : "Pick where you want to land and I'll tell you if you're on pace.")
-                    .font(.system(size: 14))
+                    .scaledFont(size: 14)
                     .foregroundStyle(Theme.Colors.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
                 Button(action: onSetTarget) {
                     Text("Set target")
-                        .font(.system(size: 14, weight: .semibold))
+                        .scaledFont(size: 14, weight: .semibold)
                         .foregroundStyle(Theme.Colors.accentContent)
                         .padding(.horizontal, Theme.Spacing.lg)
                         .padding(.vertical, Theme.Spacing.sm)
@@ -322,12 +322,12 @@ struct GoalProgressCard: View {
                     GoalVerdictChip(verdict: progress.verdict, goal: progress.goal)
                     Spacer()
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 13, weight: .semibold))
+                        .scaledFont(size: 13, weight: .semibold)
                         .foregroundStyle(Theme.Colors.textTertiary)
                 }
 
                 Text(GoalProgressLogic.nonBreaking(GoalProgressLogic.primaryLine(progress, system: system)))
-                    .font(.system(size: 20, weight: .bold, design: .rounded))
+                    .scaledFont(size: 20, weight: .bold, design: .rounded)
                     .foregroundStyle(Theme.Colors.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)
                     .multilineTextAlignment(.leading)
@@ -346,14 +346,14 @@ struct GoalProgressCard: View {
 
                 if let pace = GoalProgressLogic.paceLine(progress) {
                     Text(pace)
-                        .font(.system(size: 14, weight: .semibold))
+                        .scaledFont(size: 14, weight: .semibold)
                         .foregroundStyle(Theme.Colors.textSecondary)
                         .accessibilityIdentifier("goalProgress.paceLine")
                 }
 
                 if let stale = GoalProgressLogic.staleWeighInText(progress) {
                     Text(stale)
-                        .font(.system(size: 14, weight: .semibold))
+                        .scaledFont(size: 14, weight: .semibold)
                         .foregroundStyle(Theme.Colors.caution)
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier("goalProgress.staleWeighIn")
@@ -413,6 +413,8 @@ struct GoalProgressLine: View {
     var sessionsDoneThisWeek: Int? = nil
     var onTap: () -> Void
 
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     private var text: String {
         GoalProgressLogic.compactText(
             progress, system: system, heroShowsDistance: heroShowsDistance,
@@ -422,18 +424,37 @@ struct GoalProgressLine: View {
 
     var body: some View {
         Button(action: onTap) {
-            HStack(spacing: Theme.Spacing.sm) {
-                GoalVerdictChip(verdict: progress.verdict, goal: progress.goal)
-                Text(text)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Theme.Colors.textSecondary)
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.85)
-                    .multilineTextAlignment(.leading)
-                Spacer(minLength: Theme.Spacing.xs)
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Theme.Colors.textTertiary)
+            Group {
+                if dynamicTypeSize.isAccessibilitySize {
+                    // Accessibility sizes: the pill and the text can't share
+                    // one row without truncating, so the pill sits on its own
+                    // line and the text wraps freely underneath (no line
+                    // limit, no shrink-to-fit).
+                    HStack(alignment: .top, spacing: Theme.Spacing.sm) {
+                        VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                            GoalVerdictChip(verdict: progress.verdict, goal: progress.goal)
+                            Text(text)
+                                .scaledFont(size: 14, weight: .semibold)
+                                .foregroundStyle(Theme.Colors.textSecondary)
+                                .multilineTextAlignment(.leading)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer(minLength: Theme.Spacing.xs)
+                        chevron
+                    }
+                } else {
+                    HStack(spacing: Theme.Spacing.sm) {
+                        GoalVerdictChip(verdict: progress.verdict, goal: progress.goal)
+                        Text(text)
+                            .scaledFont(size: 14, weight: .semibold)
+                            .foregroundStyle(Theme.Colors.textSecondary)
+                            .lineLimit(2)
+                            .minimumScaleFactor(0.85)
+                            .multilineTextAlignment(.leading)
+                        Spacer(minLength: Theme.Spacing.xs)
+                        chevron
+                    }
+                }
             }
             .padding(.horizontal, Theme.Spacing.xs)
             .contentShape(Rectangle())
@@ -443,6 +464,12 @@ struct GoalProgressLine: View {
         .accessibilityLabel("\(GoalProgressLogic.label(for: progress.verdict, goal: progress.goal)). \(text)")
         .accessibilityHint("Opens your goal progress")
         .accessibilityIdentifier("goalProgress.todayLine")
+    }
+
+    private var chevron: some View {
+        Image(systemName: "chevron.right")
+            .scaledFont(size: 12, weight: .semibold)
+            .foregroundStyle(Theme.Colors.textTertiary)
     }
 }
 
@@ -465,7 +492,7 @@ struct GoalProgressDetailView: View {
                 VStack(alignment: .leading, spacing: Theme.Spacing.md) {
                     GoalVerdictChip(verdict: progress.verdict, goal: progress.goal)
                     Text(GoalProgressLogic.nonBreaking(GoalProgressLogic.primaryLine(progress, system: system)))
-                        .font(.system(size: 24, weight: .bold, design: .rounded))
+                        .scaledFont(size: 24, weight: .bold, design: .rounded)
                         .foregroundStyle(Theme.Colors.textPrimary)
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier("goalProgress.detail.primary")
@@ -497,7 +524,7 @@ struct GoalProgressDetailView: View {
                 if let band = GoalProgressLogic.safeBandText(progress, system: system) {
                     section(title: "What's a healthy pace?") {
                         Text(band)
-                            .font(.system(size: 14))
+                            .scaledFont(size: 14)
                             .foregroundStyle(Theme.Colors.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -505,7 +532,7 @@ struct GoalProgressDetailView: View {
 
                 if progress.goal == "weight_loss", progress.dataSufficiency.weighIns > 0 {
                     Text("Based on \(progress.dataSufficiency.weighIns) weigh-ins.")
-                        .font(.system(size: 12))
+                        .scaledFont(size: 12)
                         .foregroundStyle(Theme.Colors.textTertiary)
                 }
             }
@@ -522,7 +549,7 @@ struct GoalProgressDetailView: View {
     private var header: some View {
         HStack {
             Text("Your goal progress")
-                .font(.system(size: 18, weight: .bold))
+                .scaledFont(size: 18, weight: .bold)
                 .tracking(-0.2)
                 .foregroundStyle(Theme.Colors.textPrimary)
                 .accessibilityIdentifier("goalProgress.detail.title")
@@ -583,13 +610,15 @@ struct GoalProgressDetailView: View {
             VitalCard(padding: Theme.Spacing.lg, cornerRadius: Theme.Radius.lg) {
                 VStack(alignment: .leading, spacing: Theme.Spacing.md) {
                     ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                        HStack {
+                        // Label above value at accessibility sizes (see
+                        // `AccessibilityAdaptiveStack`).
+                        AccessibilityAdaptiveStack(stackedSpacing: 0) {
                             Text(row.label)
-                                .font(.system(size: 14))
+                                .scaledFont(size: 14)
                                 .foregroundStyle(Theme.Colors.textSecondary)
                             Spacer()
                             Text(row.value)
-                                .font(.system(size: 15, weight: .semibold))
+                                .scaledFont(size: 15, weight: .semibold)
                                 .foregroundStyle(Theme.Colors.textPrimary)
                                 .monospacedDigit()
                         }
@@ -599,7 +628,7 @@ struct GoalProgressDetailView: View {
                     // two unrelated dates.
                     if let pace {
                         Text(pace)
-                            .font(.system(size: 14, weight: .semibold))
+                            .scaledFont(size: 14, weight: .semibold)
                             .foregroundStyle(paceColor)
                             .accessibilityIdentifier("goalProgress.detail.paceLine")
                     }
@@ -617,7 +646,7 @@ struct GoalProgressDetailView: View {
     private func section<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
             Text(title)
-                .font(.system(size: 17, weight: .bold))
+                .scaledFont(size: 17, weight: .bold)
                 .foregroundStyle(Theme.Colors.textPrimary)
             content()
         }

@@ -4,6 +4,7 @@ struct ProfileView: View {
     @StateObject private var vm = ProfileViewModel()
     @EnvironmentObject private var authViewModel: AuthViewModel
     @EnvironmentObject private var backfillCoordinator: BackfillCoordinator
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @ObservedObject private var notificationManager = NotificationManager.shared
     @ObservedObject private var unitPref = UnitPreference.shared
     @State private var showSignOutConfirm = false
@@ -139,7 +140,7 @@ struct ProfileView: View {
                     VStack(spacing: Theme.Spacing.md) {
                         ProgressView()
                         Text("Deleting account…")
-                            .font(Theme.Typography.bodySmall)
+                            .scaledFont(Theme.Typography.bodySmall)
                             .foregroundStyle(Theme.Colors.textPrimary)
                     }
                     .padding(Theme.Spacing.xl)
@@ -196,6 +197,7 @@ private extension ProfileView {
                         .fill(Theme.Colors.accent)
                         .frame(width: 88, height: 88)
                         .overlay(
+                            // Glyph in a fixed 88pt avatar circle: fixed size.
                             Text(vm.avatarInitial)
                                 .font(.system(size: 38, weight: .bold, design: .rounded))
                                 .foregroundStyle(Theme.Colors.onAccent)
@@ -203,12 +205,12 @@ private extension ProfileView {
 
                     VStack(spacing: 2) {
                         Text(vm.name)
-                            .font(.system(size: 22, weight: .semibold))
+                            .scaledFont(size: 22, weight: .semibold)
                             .foregroundStyle(Theme.Colors.textPrimary)
 
                         if let memberSince = vm.memberSince {
                             Text(memberSince)
-                                .font(Theme.Typography.bodySmall)
+                                .scaledFont(Theme.Typography.bodySmall)
                                 .foregroundStyle(Theme.Colors.textSecondary)
                         }
                     }
@@ -228,13 +230,11 @@ private extension ProfileView {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
             HStack {
                 Text(CalibrationCopy.todayTitle)
-                    .font(Theme.Typography.bodySmall)
-                    .fontWeight(.semibold)
+                    .scaledFont(Theme.Typography.bodySmall.weight(.semibold))
                     .foregroundStyle(Theme.Colors.textPrimary)
                 Spacer()
                 Text("\(vm.calibrationPercent)%")
-                    .font(Theme.Typography.bodySmall)
-                    .fontWeight(.semibold)
+                    .scaledFont(Theme.Typography.bodySmall.weight(.semibold))
                     .monospacedDigit()
                     .foregroundStyle(Theme.Colors.accentContent)
             }
@@ -333,25 +333,40 @@ private extension ProfileView {
         HStack(spacing: Theme.Spacing.md) {
             IconBadge(systemName: icon, style: .neutral, size: 36, cornerRadius: 12)
 
-            Text(title)
-                .font(Theme.Typography.bodyMedium)
-                .fontWeight(.medium)
-                .foregroundStyle(Theme.Colors.textPrimary)
+            if dynamicTypeSize.isAccessibilitySize {
+                // Accessibility sizes: value under the title (wrapping
+                // freely) instead of squeezed beside it.
+                VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
+                    Text(title)
+                        .scaledFont(Theme.Typography.bodyMedium.weight(.medium))
+                        .foregroundStyle(Theme.Colors.textPrimary)
+                    Text(value)
+                        .scaledFont(size: 13)
+                        .foregroundStyle(Theme.Colors.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
 
-            Spacer(minLength: Theme.Spacing.sm)
+                Spacer(minLength: Theme.Spacing.sm)
+            } else {
+                Text(title)
+                    .scaledFont(Theme.Typography.bodyMedium.weight(.medium))
+                    .foregroundStyle(Theme.Colors.textPrimary)
 
-            Text(value)
-                .font(.system(size: 13))
-                .foregroundStyle(Theme.Colors.textSecondary)
-                // The endurance Goal row can carry race + target ("Half
-                // marathon · Dec 30 · 30 km/wk"): wrap onto a second line
-                // (trailing-aligned, next to the chevron) rather than shrink
-                // or truncate it.
-                .lineLimit(2)
-                .multilineTextAlignment(.trailing)
+                Spacer(minLength: Theme.Spacing.sm)
+
+                Text(value)
+                    .scaledFont(size: 13)
+                    .foregroundStyle(Theme.Colors.textSecondary)
+                    // The endurance Goal row can carry race + target ("Half
+                    // marathon · Dec 30 · 30 km/wk"): wrap onto a second line
+                    // (trailing-aligned, next to the chevron) rather than shrink
+                    // or truncate it.
+                    .lineLimit(2)
+                    .multilineTextAlignment(.trailing)
+            }
 
             Image(systemName: "chevron.right")
-                .font(.system(size: 13, weight: .semibold))
+                .scaledFont(size: 13, weight: .semibold)
                 .foregroundStyle(Theme.Colors.textTertiary)
         }
         .padding(.horizontal, Theme.Spacing.lg)
@@ -403,8 +418,12 @@ private extension ProfileView {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
             SectionHeader(title: title)
 
-            let columns = [GridItem(.flexible(), spacing: Theme.Spacing.sm),
-                           GridItem(.flexible(), spacing: Theme.Spacing.sm)]
+            // One column at accessibility text sizes: half a screen is too
+            // narrow for an AX-size figure.
+            let columns = dynamicTypeSize.isAccessibilitySize
+                ? [GridItem(.flexible(), spacing: Theme.Spacing.sm)]
+                : [GridItem(.flexible(), spacing: Theme.Spacing.sm),
+                   GridItem(.flexible(), spacing: Theme.Spacing.sm)]
 
             LazyVGrid(columns: columns, spacing: Theme.Spacing.sm) {
                 ForEach(cells) { cell in
@@ -417,10 +436,10 @@ private extension ProfileView {
                                 Spacer()
                             }
                             Text(cell.value)
-                                .font(Theme.Typography.numericLarge(24))
+                                .scaledFont(Theme.Typography.numericLarge(24))
                                 .foregroundStyle(Theme.Colors.textPrimary)
                             Text(cell.label)
-                                .font(Theme.Typography.labelSmall)
+                                .scaledFont(Theme.Typography.labelSmall)
                                 .foregroundStyle(Theme.Colors.textSecondary)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -534,15 +553,14 @@ private extension ProfileView {
             }
 
             Text(title)
-                .font(Theme.Typography.bodySmall)
-                .fontWeight(.medium)
+                .scaledFont(Theme.Typography.bodySmall.weight(.medium))
                 .foregroundStyle(tint)
 
             Spacer()
 
             if showsExternalArrow {
                 Image(systemName: "arrow.up.right")
-                    .font(.system(size: 13, weight: .semibold))
+                    .scaledFont(size: 13, weight: .semibold)
                     .foregroundStyle(Theme.Colors.textTertiary)
             }
         }
@@ -584,7 +602,7 @@ private extension ProfileView {
     var versionFooter: some View {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"
         return Text("Vital · v\(version)")
-            .font(.system(size: 12))
+            .scaledFont(size: 12)
             .foregroundStyle(Theme.Colors.textTertiary)
             .frame(maxWidth: .infinity, alignment: .center)
     }

@@ -9,7 +9,7 @@ struct SectionHeader: View {
     var body: some View {
         HStack {
             Text(title.uppercased())
-                .font(.system(size: 13, weight: .semibold))
+                .scaledFont(size: 13, weight: .semibold)
                 .foregroundStyle(Theme.Colors.textSecondary)
                 .tracking(1.3)
 
@@ -18,7 +18,7 @@ struct SectionHeader: View {
             if let actionLabel, let onAction {
                 Button(action: onAction) {
                     Text(actionLabel)
-                        .font(Theme.Typography.labelMedium)
+                        .scaledFont(Theme.Typography.labelMedium)
                         .foregroundStyle(Theme.Colors.accentContent)
                         // Widen the *tap target* to ~44pt without widening
                         // the row itself — a `.frame(minHeight: 44)` here

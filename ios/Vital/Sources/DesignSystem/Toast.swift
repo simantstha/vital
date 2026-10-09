@@ -9,9 +9,9 @@ private struct ToastView: View {
     var body: some View {
         HStack(spacing: Theme.Spacing.xs) {
             Image(systemName: "checkmark")
-                .font(.system(size: 13, weight: .bold))
+                .scaledFont(size: 13, weight: .bold)
             Text(message)
-                .font(.system(size: 13, weight: .semibold))
+                .scaledFont(size: 13, weight: .semibold)
         }
         .foregroundStyle(.white)
         .padding(.horizontal, Theme.Spacing.lg)

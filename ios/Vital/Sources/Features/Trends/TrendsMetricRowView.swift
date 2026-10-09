@@ -20,6 +20,7 @@ struct TrendsMetricRowView: View {
     /// load) — see `Sparkline.animatesOnAppear`'s doc comment.
     var animatesIn: Bool = false
     @ObservedObject private var unitPref = UnitPreference.shared
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     private var spec: MetricSpec? { MetricCatalog.spec(for: tile.key) }
 
@@ -30,22 +31,26 @@ struct TrendsMetricRowView: View {
                 // by `app.staticTexts["HRV"]`, the same query it used
                 // against `MetricTileView`'s identical name `Text`.
                 Text(spec?.displayName ?? tile.key)
-                    .font(.system(size: 15, weight: .medium))
+                    .scaledFont(size: 15, weight: .medium)
                     .foregroundStyle(Theme.Colors.textPrimary)
-                    .lineLimit(1)
+                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
                 secondaryLine
             }
 
             Spacer(minLength: Theme.Spacing.sm)
 
-            sparklineView
-                .frame(width: 64, height: 28)
+            // The decorative sparkline gives its width to the name and value
+            // at accessibility text sizes (the detail screen has the chart).
+            if !dynamicTypeSize.isAccessibilitySize {
+                sparklineView
+                    .frame(width: 64, height: 28)
+            }
 
             valueView
                 .frame(minWidth: 44, alignment: .trailing)
 
             Image(systemName: "chevron.right")
-                .font(.system(size: 12, weight: .semibold))
+                .scaledFont(size: 12, weight: .semibold)
                 .foregroundStyle(Theme.Colors.textTertiary)
         }
         .padding(.vertical, Theme.Spacing.sm)
@@ -73,11 +78,11 @@ struct TrendsMetricRowView: View {
         switch tile.content {
         case .dimmed(let lastDate):
             Text(Self.lastSyncedText(lastDate))
-                .font(.system(size: 12, weight: .medium))
+                .scaledFont(size: 12, weight: .medium)
                 .foregroundStyle(Theme.Colors.textTertiary)
         case .sparse(_, let count):
             Text(count == 1 ? "1 reading" : "\(count) readings")
-                .font(.system(size: 12, weight: .medium))
+                .scaledFont(size: 12, weight: .medium)
                 .foregroundStyle(Theme.Colors.textTertiary)
         case .chart(let value, _, let verdict):
             chartSecondary(value: value, verdict: verdict)
@@ -93,7 +98,7 @@ struct TrendsMetricRowView: View {
                 let rising = delta >= 0
                 let moved = TrendsMetricRowLogic.movedSecondary(value: value, mean30: mean30, spec: spec, rising: rising, unitSystem: unitPref.current)
                 Text(moved.text)
-                    .font(.system(size: 12, weight: .semibold))
+                    .scaledFont(size: 12, weight: .semibold)
                     .foregroundStyle(moved.isGood ? Theme.Colors.positive : Theme.Colors.caution)
             } else {
                 // Verdict math already requires a baseline to reach
@@ -106,7 +111,7 @@ struct TrendsMetricRowView: View {
                     return false
                 }()
                 Text(isAbove ? "above normal" : "below normal")
-                    .font(.system(size: 12, weight: .semibold))
+                    .scaledFont(size: 12, weight: .semibold)
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
         case .calibrating(let daysRemaining):
@@ -130,7 +135,7 @@ struct TrendsMetricRowView: View {
                     .frame(width: 46 * CGFloat(progress.fraction), height: 4)
             }
             Text(progress.text)
-                .font(.system(size: 12, weight: .medium))
+                .scaledFont(size: 12, weight: .medium)
                 .foregroundStyle(Theme.Colors.textTertiary)
         }
     }
@@ -181,7 +186,7 @@ struct TrendsMetricRowView: View {
         switch tile.content {
         case .dimmed:
             Text("—")
-                .font(Theme.Typography.numericSmall(17))
+                .scaledFont(Theme.Typography.numericSmall(17))
                 .foregroundStyle(Theme.Colors.textTertiary)
         case .sparse(let value, _):
             valueText(value)
@@ -193,7 +198,7 @@ struct TrendsMetricRowView: View {
     private func valueText(_ value: Double) -> some View {
         HStack(alignment: .lastTextBaseline, spacing: 3) {
             Text(TrendsDeltaFormat.valueText(value, spec: spec))
-                .font(Theme.Typography.numericSmall(17))
+                .scaledFont(Theme.Typography.numericSmall(17))
                 .foregroundStyle(Theme.Colors.textPrimary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
@@ -204,7 +209,7 @@ struct TrendsMetricRowView: View {
             let unit = TrendsDeltaFormat.unitLabel(spec: spec, system: unitPref.current)
             if !unit.isEmpty {
                 Text(unit)
-                    .font(.system(size: 11, weight: .medium))
+                    .scaledFont(size: 11, weight: .medium)
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
         }

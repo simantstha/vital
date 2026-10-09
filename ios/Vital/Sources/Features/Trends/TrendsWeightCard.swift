@@ -202,19 +202,22 @@ struct TrendsWeightCard: View {
         VitalCard(padding: Theme.Spacing.lg, cornerRadius: Theme.Radius.lg) {
             VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
                 Text("Weight")
-                    .font(.system(size: 17, weight: .semibold))
+                    .scaledFont(size: 17, weight: .semibold)
                     .foregroundStyle(Theme.Colors.textPrimary)
 
                 if let parts = latestWeightParts {
-                    HStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.sm) {
+                    // The rate pill drops under the weight at accessibility sizes.
+                    AccessibilityAdaptiveStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.sm, stackedSpacing: Theme.Spacing.xs) {
                         HStack(alignment: .firstTextBaseline, spacing: 4) {
                             Text(parts.magnitude)
-                                .font(.system(size: 34, weight: .bold, design: .rounded))
+                                .scaledFont(size: 34, weight: .bold, design: .rounded)
                                 .foregroundStyle(Theme.Colors.textPrimary)
                                 .contentTransition(.numericText())
+                                // Hero number: cap its growth (see WeightHeroView).
+                                .dynamicTypeSize(...DynamicTypeSize.accessibility2)
                             if !parts.unit.isEmpty {
                                 Text(parts.unit)
-                                    .font(.system(size: 15))
+                                    .scaledFont(size: 15)
                                     .foregroundStyle(Theme.Colors.textSecondary)
                             }
                         }
@@ -225,13 +228,13 @@ struct TrendsWeightCard: View {
                     }
                 } else {
                     Text(trendHeadline)
-                        .font(.system(size: 20, weight: .bold, design: .rounded))
+                        .scaledFont(size: 20, weight: .bold, design: .rounded)
                         .foregroundStyle(Theme.Colors.textPrimary)
                 }
 
                 if let sublineText {
                     Text(sublineText)
-                        .font(.system(size: 13))
+                        .scaledFont(size: 13)
                         .foregroundStyle(Theme.Colors.textSecondary)
                 }
 
@@ -246,7 +249,7 @@ struct TrendsWeightCard: View {
 
     private func pillView(_ pill: TrendsWeightCardLogic.RatePill) -> some View {
         Text(pill.text)
-            .font(.system(size: 13, weight: .bold))
+            .scaledFont(size: 13, weight: .bold)
             .foregroundStyle(pillColor(pill.tone))
             .padding(.horizontal, 9)
             .padding(.vertical, 4)
@@ -355,8 +358,11 @@ struct TrendsWeightCard: View {
                 Spacer()
                 Text("Today")
             }
-            .font(.system(size: 10))
+            .scaledFont(size: 10)
             .foregroundStyle(Theme.Colors.textTertiary)
+            // Positioned by a fixed offset under the plot, so it stops
+            // growing past the largest standard size.
+            .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
             .offset(y: 14)
         }
     }

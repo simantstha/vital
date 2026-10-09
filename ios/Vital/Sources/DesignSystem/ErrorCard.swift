@@ -44,17 +44,16 @@ struct ErrorCard: View {
         VitalCard(padding: Theme.Spacing.lg, cornerRadius: Theme.Radius.md) {
             HStack(alignment: .center, spacing: Theme.Spacing.md) {
                 Image(systemName: "exclamationmark.triangle")
-                    .font(.system(size: 16, weight: .semibold))
+                    .scaledFont(size: 16, weight: .semibold)
                     .foregroundStyle(Theme.Colors.alert)
 
                 VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
                     Text(title)
-                        .font(Theme.Typography.bodySmall)
-                        .fontWeight(.medium)
+                        .scaledFont(Theme.Typography.bodySmall.weight(.medium))
                         .foregroundStyle(Theme.Colors.textPrimary)
                         .fixedSize(horizontal: false, vertical: true)
                     Text(message)
-                        .font(Theme.Typography.labelSmall)
+                        .scaledFont(Theme.Typography.labelSmall)
                         .foregroundStyle(Theme.Colors.textSecondary)
                         .lineLimit(2)
                 }
@@ -64,7 +63,7 @@ struct ErrorCard: View {
 
                 Button(action: onAction) {
                     Label(actionLabel, systemImage: actionIcon)
-                        .font(Theme.Typography.labelMedium)
+                        .scaledFont(Theme.Typography.labelMedium)
                         .foregroundStyle(Theme.Colors.accentContent)
                         // Extend the tap target toward ~44pt without growing
                         // the card — `expandedTapTarget` enlarges the

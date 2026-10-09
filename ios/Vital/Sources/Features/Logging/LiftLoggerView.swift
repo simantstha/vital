@@ -13,6 +13,7 @@ import UIKit
 struct LiftLoggerView: View {
     @StateObject private var vm: LiftLoggerViewModel
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @FocusState private var nameFieldFocused: Bool
     /// Sets whose "More" (RPE) disclosure is open. A set with an RPE is
     /// always shown open.
@@ -42,7 +43,7 @@ struct LiftLoggerView: View {
                 if let errorMessage = vm.errorMessage {
                     Section {
                         Text(errorMessage)
-                            .font(.system(size: 14))
+                            .scaledFont(size: 14)
                             .foregroundStyle(Theme.Colors.alert)
                             .accessibilityIdentifier("liftLogger.error")
                     }
@@ -84,7 +85,7 @@ private extension LiftLoggerView {
     var header: some View {
         HStack {
             Text("Log lift")
-                .font(.system(size: 18, weight: .bold))
+                .scaledFont(size: 18, weight: .bold)
                 .tracking(-0.2)
                 .foregroundStyle(Theme.Colors.textPrimary)
             Spacer()
@@ -112,7 +113,7 @@ private extension LiftLoggerView {
                 HStack(spacing: Theme.Spacing.sm) {
                     ProgressView()
                     Text("Loading your last session…")
-                        .font(.system(size: 14))
+                        .scaledFont(size: 14)
                         .foregroundStyle(Theme.Colors.textSecondary)
                 }
             }
@@ -122,14 +123,14 @@ private extension LiftLoggerView {
                     sessionMenu
                 }
                 Text(repeatNote)
-                    .font(.system(size: 14))
+                    .scaledFont(size: 14)
                     .foregroundStyle(Theme.Colors.textSecondary)
                     .accessibilityIdentifier("liftLogger.repeatNote")
             }
         } else if vm.exercises.isEmpty {
             Section {
                 Text("No previous session to repeat — add an exercise to start.")
-                    .font(.system(size: 14))
+                    .scaledFont(size: 14)
                     .foregroundStyle(Theme.Colors.textSecondary)
                     .accessibilityIdentifier("liftLogger.emptyNote")
             }
@@ -157,13 +158,13 @@ private extension LiftLoggerView {
         } label: {
             HStack(spacing: Theme.Spacing.sm) {
                 Text("Repeat: \(vm.repeatedSession.map { LiftLoggerLogic.sessionTitle($0) } ?? "pick a session")")
-                    .font(.system(size: 15, weight: .semibold))
+                    .scaledFont(size: 15, weight: .semibold)
                     .foregroundStyle(Theme.Colors.textPrimary)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
                 Spacer(minLength: Theme.Spacing.sm)
                 Image(systemName: "chevron.up.chevron.down")
-                    .font(.system(size: 12, weight: .semibold))
+                    .scaledFont(size: 12, weight: .semibold)
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
         }
@@ -177,7 +178,7 @@ private extension LiftLoggerView {
             Section {
                 HStack {
                     Text("Logging for: \(LiftLoggerLogic.dateLabel(vm.performedDate))")
-                        .font(.system(size: 15))
+                        .scaledFont(size: 15)
                         .foregroundStyle(Theme.Colors.textPrimary)
                     Spacer()
                     DatePicker(
@@ -208,13 +209,13 @@ private extension LiftLoggerView {
                     vm.addSet(to: exercise.id)
                 } label: {
                     Label("Add set", systemImage: "plus")
-                        .font(.system(size: 15, weight: .semibold))
+                        .scaledFont(size: 15, weight: .semibold)
                 }
                 .accessibilityIdentifier("liftLogger.addSet")
             } header: {
                 VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
                     Text(exercise.name)
-                        .font(.system(size: 15, weight: .bold))
+                        .scaledFont(size: 15, weight: .bold)
                         .foregroundStyle(Theme.Colors.textPrimary)
                     progressionHint(for: exercise)
                 }
@@ -231,30 +232,28 @@ private extension LiftLoggerView {
         let id = set.wrappedValue.id
         let showRPE = expandedSets.contains(id) || set.wrappedValue.rpe != nil
         return VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-            HStack(spacing: Theme.Spacing.sm) {
-                doneToggle(exerciseID: exercise.id, number: number, set: set)
-                Text("Set \(number)")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Theme.Colors.textSecondary)
-                warmupToggle(number: number, set: set)
-                Spacer()
-                Button {
-                    if showRPE && set.wrappedValue.rpe == nil {
-                        expandedSets.remove(id)
-                    } else {
-                        expandedSets.insert(id)
-                    }
-                } label: {
-                    Text(showRPE ? "Less" : "More")
-                        .font(.system(size: 13, weight: .semibold))
+            if dynamicTypeSize.isAccessibilitySize {
+                // Accessibility sizes: the warm-up chip drops to its own line
+                // so "Set N" and "More" keep the row's width.
+                HStack(spacing: Theme.Spacing.sm) {
+                    doneToggle(exerciseID: exercise.id, number: number, set: set)
+                    Text("Set \(number)")
+                        .scaledFont(size: 14, weight: .semibold)
                         .foregroundStyle(Theme.Colors.textSecondary)
+                    Spacer()
+                    moreButton(number: number, set: set, showRPE: showRPE)
                 }
-                .buttonStyle(.borderless)
-                .opacity(set.wrappedValue.rpe != nil ? 0 : 1)
-                .disabled(set.wrappedValue.rpe != nil)
-                .accessibilityLabel(showRPE ? "Hide RPE for set \(number)" : "More options for set \(number)")
-                .accessibilityHidden(set.wrappedValue.rpe != nil)
-                .accessibilityIdentifier("liftLogger.more")
+                warmupToggle(number: number, set: set)
+            } else {
+                HStack(spacing: Theme.Spacing.sm) {
+                    doneToggle(exerciseID: exercise.id, number: number, set: set)
+                    Text("Set \(number)")
+                        .scaledFont(size: 14, weight: .semibold)
+                        .foregroundStyle(Theme.Colors.textSecondary)
+                    warmupToggle(number: number, set: set)
+                    Spacer()
+                    moreButton(number: number, set: set, showRPE: showRPE)
+                }
             }
             LiftStepperLine(
                 title: "Reps",
@@ -305,7 +304,7 @@ private extension LiftLoggerView {
             )
             if let last = set.wrappedValue.last {
                 Text(LiftLoggerLogic.hintText(last))
-                    .font(.system(size: 12))
+                    .scaledFont(size: 12)
                     .foregroundStyle(Theme.Colors.textTertiary)
                     .monospacedDigit()
                     .accessibilityIdentifier("liftLogger.lastHint")
@@ -315,6 +314,29 @@ private extension LiftLoggerView {
             }
         }
         .padding(.vertical, Theme.Spacing.xs)
+    }
+
+    /// "More"/"Less" — opens the set's RPE line. Hidden (but kept for layout)
+    /// once the set has an RPE, which always shows.
+    func moreButton(number: Int, set: Binding<LiftDraftSet>, showRPE: Bool) -> some View {
+        let id = set.wrappedValue.id
+        return Button {
+            if showRPE && set.wrappedValue.rpe == nil {
+                expandedSets.remove(id)
+            } else {
+                expandedSets.insert(id)
+            }
+        } label: {
+            Text(showRPE ? "Less" : "More")
+                .scaledFont(size: 13, weight: .semibold)
+                .foregroundStyle(Theme.Colors.textSecondary)
+        }
+        .buttonStyle(.borderless)
+        .opacity(set.wrappedValue.rpe != nil ? 0 : 1)
+        .disabled(set.wrappedValue.rpe != nil)
+        .accessibilityLabel(showRPE ? "Hide RPE for set \(number)" : "More options for set \(number)")
+        .accessibilityHidden(set.wrappedValue.rpe != nil)
+        .accessibilityIdentifier("liftLogger.more")
     }
 
     /// "Last 3×5 @ 140 kg · try 142.5 kg" under the exercise name. Tappable
@@ -334,7 +356,7 @@ private extension LiftLoggerView {
                         Image(systemName: "arrow.up.circle.fill")
                             .accessibilityHidden(true)
                     }
-                    .font(.system(size: 13, weight: .semibold))
+                    .scaledFont(size: 13, weight: .semibold)
                     .foregroundStyle(Theme.Colors.accentContent)
                     .fixedSize(horizontal: false, vertical: true)
                 }
@@ -344,7 +366,7 @@ private extension LiftLoggerView {
                 .accessibilityIdentifier("liftLogger.progressionHint")
             } else {
                 Text(text)
-                    .font(.system(size: 13, weight: .medium))
+                    .scaledFont(size: 13, weight: .medium)
                     .foregroundStyle(Theme.Colors.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("liftLogger.progressionHint")
@@ -389,7 +411,7 @@ private extension LiftLoggerView {
             set.wrappedValue.isWarmup.toggle()
         } label: {
             Text(on ? "Warm-up" : "+ Warm-up")
-                .font(.system(size: 12, weight: on ? .bold : .medium))
+                .scaledFont(size: 12, weight: on ? .bold : .medium)
                 .foregroundStyle(on ? Theme.Colors.onAccent : Theme.Colors.textSecondary)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 3)
@@ -414,15 +436,15 @@ private extension LiftLoggerView {
         } label: {
             HStack(spacing: Theme.Spacing.sm) {
                 Text("RPE")
-                    .font(.system(size: 15))
+                    .scaledFont(size: 15)
                     .foregroundStyle(Theme.Colors.textSecondary)
                 Spacer()
                 Text(LiftLoggerLogic.rpeText(set.wrappedValue.rpe))
-                    .font(.system(size: 16, weight: .semibold))
+                    .scaledFont(size: 16, weight: .semibold)
                     .monospacedDigit()
                     .foregroundStyle(Theme.Colors.textPrimary)
                 Image(systemName: "chevron.up.chevron.down")
-                    .font(.system(size: 12, weight: .semibold))
+                    .scaledFont(size: 12, weight: .semibold)
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
         }
@@ -501,11 +523,11 @@ private extension LiftLoggerView {
         case .running(let seconds):
             HStack(spacing: Theme.Spacing.sm) {
                 Image(systemName: "timer")
-                    .font(.system(size: 14, weight: .semibold))
+                    .scaledFont(size: 14, weight: .semibold)
                     .foregroundStyle(Theme.Colors.textSecondary)
                     .accessibilityHidden(true)
                 Text("Rest \(LiftLoggerLogic.restLabel(seconds: seconds))")
-                    .font(.system(size: 15, weight: .semibold))
+                    .scaledFont(size: 15, weight: .semibold)
                     .monospacedDigit()
                     .foregroundStyle(Theme.Colors.textPrimary)
                     .accessibilityIdentifier("liftLogger.rest.time")
@@ -523,11 +545,11 @@ private extension LiftLoggerView {
         case .done:
             HStack(spacing: Theme.Spacing.sm) {
                 Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 14, weight: .semibold))
+                    .scaledFont(size: 14, weight: .semibold)
                     .foregroundStyle(Theme.Colors.accentContent)
                     .accessibilityHidden(true)
                 Text("Rest done")
-                    .font(.system(size: 15, weight: .semibold))
+                    .scaledFont(size: 15, weight: .semibold)
                     .foregroundStyle(Theme.Colors.textPrimary)
                     .accessibilityIdentifier("liftLogger.rest.time")
                 Spacer(minLength: 0)
@@ -544,7 +566,7 @@ private extension LiftLoggerView {
     ) -> some View {
         Button(action: action) {
             Text(title)
-                .font(.system(size: 14, weight: .semibold))
+                .scaledFont(size: 14, weight: .semibold)
                 .foregroundStyle(tint)
                 .padding(.horizontal, Theme.Spacing.md)
                 // HIG minimum tap target (the glyph stays small; the hit area doesn't).
@@ -565,7 +587,7 @@ private extension LiftLoggerView {
                     ProgressView().tint(Theme.Colors.onAccent)
                 }
                 Text(vm.isSaving ? "Saving…" : vm.saveLabel)
-                    .font(.system(size: 16, weight: .bold))
+                    .scaledFont(size: 16, weight: .bold)
             }
             .foregroundStyle(Theme.Colors.onAccent)
             .frame(maxWidth: .infinity)
@@ -608,19 +630,38 @@ private struct LiftStepperLine: View {
     @State private var isEditing = false
     @State private var draft = ""
     @FocusState private var fieldFocused: Bool
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
-        HStack(spacing: Theme.Spacing.sm) {
-            Text(title)
-                .font(.system(size: 15))
-                .foregroundStyle(Theme.Colors.textSecondary)
-                .accessibilityHidden(true)
-            Spacer(minLength: Theme.Spacing.sm)
-            stepButton(systemName: "minus", enabled: canDecrement, action: onDecrement)
-            valueView
-                .frame(minWidth: 84)
-            stepButton(systemName: "plus", enabled: canIncrement, action: onIncrement)
+        if dynamicTypeSize.isAccessibilitySize {
+            // Accessibility sizes: the label sits above a full-width
+            // [−] value [+] row, so the value never squeezes against it.
+            VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                titleText
+                HStack(spacing: Theme.Spacing.sm) {
+                    stepButton(systemName: "minus", enabled: canDecrement, action: onDecrement)
+                    valueView
+                        .frame(minWidth: 84, maxWidth: .infinity)
+                    stepButton(systemName: "plus", enabled: canIncrement, action: onIncrement)
+                }
+            }
+        } else {
+            HStack(spacing: Theme.Spacing.sm) {
+                titleText
+                Spacer(minLength: Theme.Spacing.sm)
+                stepButton(systemName: "minus", enabled: canDecrement, action: onDecrement)
+                valueView
+                    .frame(minWidth: 84)
+                stepButton(systemName: "plus", enabled: canIncrement, action: onIncrement)
+            }
         }
+    }
+
+    private var titleText: some View {
+        Text(title)
+            .scaledFont(size: 15)
+            .foregroundStyle(Theme.Colors.textSecondary)
+            .accessibilityHidden(true)
     }
 
     @ViewBuilder
@@ -630,7 +671,7 @@ private struct LiftStepperLine: View {
                 .keyboardType(keyboard)
                 .focused($fieldFocused)
                 .multilineTextAlignment(.center)
-                .font(.system(size: 16, weight: .semibold))
+                .scaledFont(size: 16, weight: .semibold)
                 .monospacedDigit()
                 .foregroundStyle(Theme.Colors.textPrimary)
                 .onSubmit { finishEditing() }
@@ -642,7 +683,7 @@ private struct LiftStepperLine: View {
                 .accessibilityIdentifier(identifier)
         } else {
             Text(valueText)
-                .font(.system(size: 16, weight: .semibold))
+                .scaledFont(size: 16, weight: .semibold)
                 .monospacedDigit()
                 .foregroundStyle(Theme.Colors.textPrimary)
                 .multilineTextAlignment(.center)

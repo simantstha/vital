@@ -16,7 +16,7 @@ struct EmptyStateView: View {
                     .font(.system(size: 28))
                     .foregroundStyle(Theme.Colors.textSecondary)
                 Text(message)
-                    .font(Theme.Typography.bodySmall)
+                    .scaledFont(Theme.Typography.bodySmall)
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
             Spacer()

@@ -15,6 +15,9 @@ struct TrendsView: View {
     @State private var showWeeklyReviewDetail = false
     @ObservedObject private var weeklyReviewStore = WeeklyReviewStore.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Read by the header's `Text` concatenation / `AttributedString` runs,
+    /// which need a concrete scaled `Font` rather than `.scaledFont(...)`.
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     /// Links each tile's `.matchedTransitionSource` to the destination's
     /// `.navigationTransition(.zoom(...))`. One namespace for the whole grid
     /// is correct here — the metric key (already unique per tile) is what
@@ -252,7 +255,7 @@ private extension TrendsView {
     var subtitleText: some View {
         if vm.errorMessage != nil {
             Text("Last \(vm.period.days) days")
-                .font(.system(size: 15))
+                .scaledFont(size: 15)
                 .foregroundStyle(Theme.Colors.textSecondary)
         } else {
             switch vm.headlineStatus {
@@ -261,11 +264,13 @@ private extension TrendsView {
             case .steady(let period):
                 steadyHeadline(period: period)
             case .moved(let summary):
+                // `Text` + `Text` needs `Text`-level fonts, so these take a
+                // concrete scaled `Font` instead of `.scaledFont(...)`.
                 let bold = Text(summary.boldText)
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(ScaledFontToken(size: 15, weight: .semibold).font(scaledFor: dynamicTypeSize))
                     .foregroundStyle(Theme.Colors.textPrimary)
                 let rest = Text(summary.trailingText)
-                    .font(.system(size: 15))
+                    .font(ScaledFontToken(size: 15).font(scaledFor: dynamicTypeSize))
                     .foregroundStyle(Theme.Colors.textSecondary)
                 (bold + rest)
             }
@@ -280,15 +285,15 @@ private extension TrendsView {
     func steadyHeadline(period: TrendsPeriod) -> some View {
         var text = AttributedString(TrendsHeadline.steadyHeadlineText(period: period))
         text.foregroundColor = Theme.Colors.textPrimary
-        text.font = .system(size: 15, weight: .semibold)
+        text.font = ScaledFontToken(size: 15, weight: .semibold).font(scaledFor: dynamicTypeSize)
         var subline = AttributedString(" " + TrendsHeadline.steadySubline)
         subline.foregroundColor = Theme.Colors.textSecondary
-        subline.font = .system(size: 15)
+        subline.font = ScaledFontToken(size: 15).font(scaledFor: dynamicTypeSize)
         text.append(subline)
 
         return HStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.xs) {
             Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 14, weight: .semibold))
+                .scaledFont(size: 14, weight: .semibold)
                 .foregroundStyle(Theme.Colors.positive)
             Text(text)
         }
@@ -304,10 +309,10 @@ private extension TrendsView {
                 learningRing(progress)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(CalibrationCopy.todayTitle)
-                        .font(.system(size: 17, weight: .semibold))
+                        .scaledFont(size: 17, weight: .semibold)
                         .foregroundStyle(Theme.Colors.textPrimary)
                     Text(progress.bodyText)
-                        .font(.system(size: 14))
+                        .scaledFont(size: 14)
                         .foregroundStyle(Theme.Colors.textSecondary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -329,7 +334,7 @@ private extension TrendsView {
                 .rotationEffect(.degrees(-90))
                 .animation(Theme.Motion.settle, value: progress.daysDone)
             Text(progress.ringLabel)
-                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .scaledFont(size: 11, weight: .bold, design: .rounded)
                 .foregroundStyle(Theme.Colors.textPrimary)
         }
         .frame(width: 48, height: 48)
@@ -351,7 +356,7 @@ private struct PeriodSwitcher: View {
             ForEach(TrendsPeriod.allCases) { option in
                 let isOn = option == period
                 Text(option.label)
-                    .font(.system(size: 12, weight: .semibold))
+                    .scaledFont(size: 12, weight: .semibold)
                     .foregroundStyle(isOn ? Theme.Colors.textPrimary : Theme.Colors.textSecondary)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
@@ -391,11 +396,11 @@ private extension TrendsView {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
             HStack(alignment: .firstTextBaseline) {
                 Text("What moved")
-                    .font(.system(size: 20, weight: .bold))
+                    .scaledFont(size: 20, weight: .bold)
                     .foregroundStyle(Theme.Colors.textPrimary)
                 Spacer()
                 Text("vs your normal")
-                    .font(.system(size: 13))
+                    .scaledFont(size: 13)
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
 
@@ -523,7 +528,7 @@ private extension TrendsView {
     func sectionHeaderView(_ group: MetricGroup) -> some View {
         HStack(spacing: Theme.Spacing.sm) {
             Text(sectionTitle(group))
-                .font(.system(size: 20, weight: .bold))
+                .scaledFont(size: 20, weight: .bold)
                 .foregroundStyle(Theme.Colors.textPrimary)
             // WHOOP metrics get their own source badge — hrv_sdnn/whoop_hrv_rmssd
             // are different measurements on different scales from different

@@ -26,10 +26,10 @@ struct Chip: View {
         HStack(spacing: Theme.Spacing.xs) {
             if let icon {
                 Image(systemName: icon)
-                    .font(.system(size: 12, weight: .semibold))
+                    .scaledFont(size: 12, weight: .semibold)
             }
             Text(text)
-                .font(.system(size: 13, weight: .semibold))
+                .scaledFont(size: 13, weight: .semibold)
         }
         .foregroundStyle(foreground)
         .padding(.horizontal, 12)

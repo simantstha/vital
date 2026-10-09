@@ -63,11 +63,11 @@ private extension MealDetailView {
 
             VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
                 Text(vm.name)
-                    .font(Theme.Typography.titleMedium)
+                    .scaledFont(Theme.Typography.titleMedium)
                     .foregroundStyle(Theme.Colors.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)
                 Text("From today's plan")
-                    .font(Theme.Typography.labelSmall)
+                    .scaledFont(Theme.Typography.labelSmall)
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
 
@@ -75,11 +75,11 @@ private extension MealDetailView {
 
             VStack(alignment: .trailing, spacing: 0) {
                 Text("\(vm.kcal)")
-                    .font(Theme.Typography.numericSmall(21))
+                    .scaledFont(Theme.Typography.numericSmall(21))
                     .foregroundStyle(Theme.Colors.textPrimary)
                     .monospacedDigit()
                 Text("KCAL")
-                    .font(Theme.Typography.labelSmall)
+                    .scaledFont(Theme.Typography.labelSmall)
                     .tracking(0.6)
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
@@ -100,7 +100,7 @@ private extension MealDetailView {
                 .fill(Theme.Colors.accentContent.opacity(0.5))
                 .frame(width: 2)
             Text(vm.reason.asMarkdown)
-                .font(Theme.Typography.bodySmall)
+                .scaledFont(Theme.Typography.bodySmall)
                 .foregroundStyle(Theme.Colors.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -110,13 +110,13 @@ private extension MealDetailView {
     var modifyField: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
             Text("MAKE IT YOURS")
-                .font(Theme.Typography.labelSmall)
+                .scaledFont(Theme.Typography.labelSmall)
                 .tracking(0.8)
                 .foregroundStyle(Theme.Colors.textSecondary)
 
             HStack(spacing: Theme.Spacing.sm) {
                 TextField("Replace an ingredient, change portion…", text: $vm.instruction)
-                    .font(Theme.Typography.bodyMedium)
+                    .scaledFont(Theme.Typography.bodyMedium)
                     .foregroundStyle(Theme.Colors.textPrimary)
                     .submitLabel(.send)
                     .onSubmit { Task { await vm.applyModification() } }
@@ -163,7 +163,7 @@ private extension MealDetailView {
                         .font(.system(size: 17))
                         .foregroundStyle(Theme.Colors.accentContent)
                     Text("How to make it")
-                        .font(.system(size: 15, weight: .medium))
+                        .scaledFont(size: 15, weight: .medium)
                         .foregroundStyle(Theme.Colors.textPrimary)
                     Spacer()
                     if vm.isLoadingRecipe {
@@ -190,7 +190,7 @@ private extension MealDetailView {
 
             if vm.recipeExpanded && !vm.recipe.isEmpty {
                 MarkdownText(markdown: vm.recipe)
-                    .font(Theme.Typography.bodySmall)
+                    .scaledFont(Theme.Typography.bodySmall)
                     .foregroundStyle(Theme.Colors.textPrimary)
                     .padding(Theme.Spacing.lg)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -215,7 +215,7 @@ private extension MealDetailView {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundStyle(Theme.Colors.accentContent)
                     Text(reaction)
-                        .font(Theme.Typography.bodySmall)
+                        .scaledFont(Theme.Typography.bodySmall)
                         .foregroundStyle(Theme.Colors.textPrimary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -278,12 +278,12 @@ private struct MacroChip: View {
             HStack(spacing: 5) {
                 Circle().fill(color).frame(width: 7, height: 7)
                 Text(label.uppercased())
-                    .font(.system(size: 10, weight: .medium))
+                    .scaledFont(size: 10, weight: .medium)
                     .tracking(0.4)
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
             Text(ready ? "\(grams)g" : "00g")
-                .font(.system(size: 16, weight: .semibold))
+                .scaledFont(size: 16, weight: .semibold)
                 .foregroundStyle(Theme.Colors.textPrimary)
                 .monospacedDigit()
                 .redacted(reason: ready ? [] : .placeholder)
@@ -306,7 +306,7 @@ private extension View {
     /// Shared lime primary-button label styling used by the modal footer.
     func primaryActionLabel() -> some View {
         self
-            .font(.system(size: 16, weight: .semibold))
+            .scaledFont(size: 16, weight: .semibold)
             .foregroundStyle(Theme.Colors.onAccent)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 16)

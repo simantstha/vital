@@ -16,11 +16,13 @@ struct NextUpRowView: View {
     var onTap: (PlanItem) -> Void
     var onSeeFullPlan: () -> Void
 
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
             if let item {
                 Text("Next up")
-                    .font(.system(size: 15, weight: .semibold))
+                    .scaledFont(size: 15, weight: .semibold)
                     .foregroundStyle(Theme.Colors.textSecondary)
                     .padding(.horizontal, Theme.Spacing.xxs)
 
@@ -36,14 +38,14 @@ struct NextUpRowView: View {
                             // rows, which are single-line since there are
                             // several at once.
                             Text(item.title)
-                                .font(.system(size: 15, weight: .semibold))
+                                .scaledFont(size: 15, weight: .semibold)
                                 .foregroundStyle(Theme.Colors.textPrimary)
-                                .lineLimit(2)
+                                .lineLimit(dynamicTypeSize.isAccessibilitySize ? 4 : 2)
                             if !item.subtitle.isEmpty {
                                 Text(item.subtitle.asMarkdown)
-                                    .font(.system(size: 13))
+                                    .scaledFont(size: 13)
                                     .foregroundStyle(Theme.Colors.textSecondary)
-                                    .lineLimit(2)
+                                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? 4 : 2)
                             }
                         }
 
@@ -55,7 +57,7 @@ struct NextUpRowView: View {
                         // (screenshot-review fix, 2026-09-23).
                         if !item.subtitle.contains(item.timeLabel) {
                             Text(item.timeLabel)
-                                .font(.system(size: 12))
+                                .scaledFont(size: 12)
                                 .foregroundStyle(Theme.Colors.textTertiary)
                                 .monospacedDigit()
                         }
@@ -75,9 +77,9 @@ struct NextUpRowView: View {
                 HStack(spacing: Theme.Spacing.xs) {
                     Text("See full plan")
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 10, weight: .semibold))
+                        .scaledFont(size: 10, weight: .semibold)
                 }
-                .font(.system(size: 12, weight: .semibold))
+                .scaledFont(size: 12, weight: .semibold)
                 .foregroundStyle(Theme.Colors.accentContent)
                 .padding(.horizontal, Theme.Spacing.xxs)
             }

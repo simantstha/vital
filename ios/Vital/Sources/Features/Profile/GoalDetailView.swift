@@ -11,6 +11,7 @@ struct GoalDetailView: View {
     @StateObject private var vm = DietBudgetViewModel()
     @StateObject private var targets = GoalTargetsViewModel()
     @FocusState private var weightFieldFocused: Bool
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     /// Radio-list rows in fixed display order, with the mock's subtitles.
     private static let goalSubtitles: [(id: String, subtitle: String)] = [
@@ -65,7 +66,7 @@ struct GoalDetailView: View {
 
                         if let msg = vm.errorMessage {
                             Text(msg)
-                                .font(Theme.Typography.bodySmall)
+                                .scaledFont(Theme.Typography.bodySmall)
                                 .foregroundStyle(Theme.Colors.alert)
                         }
                     }
@@ -116,11 +117,10 @@ struct GoalDetailView: View {
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(DietBudgetViewModel.goalLabels[id] ?? id)
-                        .font(Theme.Typography.bodyMedium)
-                        .fontWeight(.medium)
+                        .scaledFont(Theme.Typography.bodyMedium.weight(.medium))
                         .foregroundStyle(Theme.Colors.textPrimary)
                     Text(subtitle)
-                        .font(Theme.Typography.labelSmall)
+                        .scaledFont(Theme.Typography.labelSmall)
                         .foregroundStyle(Theme.Colors.textSecondary)
                 }
 
@@ -151,13 +151,13 @@ struct GoalDetailView: View {
             VitalCard(padding: Theme.Spacing.lg, cornerRadius: Theme.Radius.md) {
                 VStack(alignment: .leading, spacing: Theme.Spacing.md) {
                     Text("TARGETS")
-                        .font(.system(size: 11, weight: .bold))
+                        .scaledFont(size: 11, weight: .bold)
                         .tracking(1.0)
                         .foregroundStyle(Theme.Colors.textSecondary)
 
                     if let started = targets.startedLine {
                         Text(started)
-                            .font(Theme.Typography.bodySmall)
+                            .scaledFont(Theme.Typography.bodySmall)
                             .foregroundStyle(Theme.Colors.textSecondary)
                     }
 
@@ -175,7 +175,7 @@ struct GoalDetailView: View {
 
                     if let msg = targets.errorMessage {
                         Text(msg)
-                            .font(Theme.Typography.bodySmall)
+                            .scaledFont(Theme.Typography.bodySmall)
                             .foregroundStyle(Theme.Colors.alert)
                     }
 
@@ -188,7 +188,7 @@ struct GoalDetailView: View {
                                 ProgressView().tint(Theme.Colors.onAccent)
                             } else {
                                 Text("Save targets")
-                                    .font(.system(size: 16, weight: .semibold))
+                                    .scaledFont(size: 16, weight: .semibold)
                             }
                         }
                         .foregroundStyle(Theme.Colors.onAccent)
@@ -208,25 +208,21 @@ struct GoalDetailView: View {
     private var targetWeightRow: some View {
         let units = UnitPreference.shared.current
         return VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-            HStack {
-                Text("Target weight")
-                    .font(Theme.Typography.bodyMedium)
-                    .foregroundStyle(Theme.Colors.textPrimary)
-                Spacer()
+            fieldRow(label: "Target weight") {
                 TextField("None", text: $targets.targetWeightText)
                     .keyboardType(.decimalPad)
                     .multilineTextAlignment(.trailing)
                     .focused($weightFieldFocused)
-                    .font(Theme.Typography.bodyMedium)
+                    .scaledFont(Theme.Typography.bodyMedium)
                     .foregroundStyle(Theme.Colors.textPrimary)
-                    .frame(width: 90)
+            } unit: {
                 Text(units.weightUnit)
-                    .font(Theme.Typography.bodySmall)
+                    .scaledFont(Theme.Typography.bodySmall)
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
             if let error = targets.weightError {
                 Text(error)
-                    .font(Theme.Typography.bodySmall)
+                    .scaledFont(Theme.Typography.bodySmall)
                     .foregroundStyle(Theme.Colors.alert)
             } else if let warning = GoalTargetLogic.sanityWarning(
                 goal: vm.goal,
@@ -237,7 +233,7 @@ struct GoalDetailView: View {
                 storedTargetKg: targets.storedTargetKg
             ) {
                 Text(warning)
-                    .font(Theme.Typography.bodySmall)
+                    .scaledFont(Theme.Typography.bodySmall)
                     // Reaching the target isn't a caution: neutral gray, not amber.
                     .foregroundStyle(warning == GoalTargetLogic.reachedTargetMessage
                                      ? Theme.Colors.textSecondary : Theme.Colors.caution)
@@ -247,7 +243,7 @@ struct GoalDetailView: View {
                         currentKg: targets.currentWeightKg, targetKg: targets.targetKg, units: units
                       ) {
                 Text(hint)
-                    .font(Theme.Typography.bodySmall)
+                    .scaledFont(Theme.Typography.bodySmall)
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
         }
@@ -268,7 +264,7 @@ struct GoalDetailView: View {
     private func passedTargetDateRow(_ text: String) -> some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
             Text(text)
-                .font(Theme.Typography.bodyMedium)
+                .scaledFont(Theme.Typography.bodyMedium)
                 .foregroundStyle(Theme.Colors.textPrimary)
                 .accessibilityIdentifier("goal.targetDatePassed")
             HStack(spacing: Theme.Spacing.md) {
@@ -278,7 +274,7 @@ struct GoalDetailView: View {
                     .accessibilityIdentifier("goal.targetDateRemove")
                 Spacer(minLength: 0)
             }
-            .font(Theme.Typography.bodySmall)
+            .scaledFont(Theme.Typography.bodySmall)
             .tint(Theme.Colors.accentContent)
             .buttonStyle(.bordered)
             .controlSize(.regular)
@@ -290,7 +286,7 @@ struct GoalDetailView: View {
     private var activeTargetDateRow: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
             Toggle("Target date", isOn: $targets.hasTargetDate)
-                .font(Theme.Typography.bodyMedium)
+                .scaledFont(Theme.Typography.bodyMedium)
                 .foregroundStyle(Theme.Colors.textPrimary)
                 .tint(Theme.Colors.accent)
             if targets.hasTargetDate {
@@ -310,27 +306,57 @@ struct GoalDetailView: View {
     private var weeklyDistanceRow: some View {
         let units = UnitPreference.shared.current
         return VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-            HStack {
-                Text("Weekly distance")
-                    .font(Theme.Typography.bodyMedium)
-                    .foregroundStyle(Theme.Colors.textPrimary)
-                Spacer()
+            fieldRow(label: "Weekly distance") {
                 TextField("None", text: $targets.weeklyDistanceText)
                     .keyboardType(.decimalPad)
                     .multilineTextAlignment(.trailing)
                     .focused($weightFieldFocused)
-                    .font(Theme.Typography.bodyMedium)
+                    .scaledFont(Theme.Typography.bodyMedium)
                     .foregroundStyle(Theme.Colors.textPrimary)
-                    .frame(width: 90)
                     .accessibilityIdentifier("goal.weeklyDistanceField")
+            } unit: {
                 Text("\(units.distanceUnit)/week")
-                    .font(Theme.Typography.bodySmall)
+                    .scaledFont(Theme.Typography.bodySmall)
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
             if let error = targets.distanceError {
                 Text(error)
-                    .font(Theme.Typography.bodySmall)
+                    .scaledFont(Theme.Typography.bodySmall)
                     .foregroundStyle(Theme.Colors.alert)
+            }
+        }
+    }
+
+    /// "Label ........ [field] unit" — the field is a fixed 90pt at standard
+    /// text sizes. At accessibility sizes the label gets its own line and the
+    /// field takes the full width beside its unit, so an AX-size number never
+    /// clips inside 90pt.
+    @ViewBuilder
+    private func fieldRow<Field: View, Unit: View>(
+        label: String,
+        @ViewBuilder field: () -> Field,
+        @ViewBuilder unit: () -> Unit
+    ) -> some View {
+        if dynamicTypeSize.isAccessibilitySize {
+            VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                Text(label)
+                    .scaledFont(Theme.Typography.bodyMedium)
+                    .foregroundStyle(Theme.Colors.textPrimary)
+                HStack {
+                    field()
+                        .frame(minWidth: 90, maxWidth: .infinity)
+                    unit()
+                }
+            }
+        } else {
+            HStack {
+                Text(label)
+                    .scaledFont(Theme.Typography.bodyMedium)
+                    .foregroundStyle(Theme.Colors.textPrimary)
+                Spacer()
+                field()
+                    .frame(width: 90)
+                unit()
             }
         }
     }
@@ -340,17 +366,17 @@ struct GoalDetailView: View {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
             HStack {
                 Text("Race")
-                    .font(Theme.Typography.bodyMedium)
+                    .scaledFont(Theme.Typography.bodyMedium)
                     .foregroundStyle(Theme.Colors.textPrimary)
                 Spacer()
                 if targets.hasRaceDate {
                     Button("Clear") { targets.clearRace() }
-                        .font(Theme.Typography.bodySmall)
+                        .scaledFont(Theme.Typography.bodySmall)
                         .tint(Theme.Colors.accentContent)
                         .accessibilityIdentifier("goal.raceClear")
                 } else {
                     Button("Add race date") { targets.hasRaceDate = true }
-                        .font(Theme.Typography.bodySmall)
+                        .scaledFont(Theme.Typography.bodySmall)
                         .tint(Theme.Colors.accentContent)
                         .accessibilityIdentifier("goal.raceAdd")
                 }
@@ -361,7 +387,7 @@ struct GoalDetailView: View {
                     in: RaceLogic.dateRange(), displayedComponents: .date
                 )
                 .datePickerStyle(.compact)
-                .font(Theme.Typography.bodyMedium)
+                .scaledFont(Theme.Typography.bodyMedium)
                 .tint(Theme.Colors.accentContent)
                 .accessibilityIdentifier("goal.raceDate")
                 Picker("Race distance", selection: $targets.raceDistanceKm) {
@@ -378,14 +404,14 @@ struct GoalDetailView: View {
     private var weeklySessionsRow: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
             Toggle("Weekly workout goal", isOn: $targets.hasWeeklySessions)
-                .font(Theme.Typography.bodyMedium)
+                .scaledFont(Theme.Typography.bodyMedium)
                 .foregroundStyle(Theme.Colors.textPrimary)
                 .tint(Theme.Colors.accent)
             if targets.hasWeeklySessions {
                 Stepper(value: $targets.weeklySessions,
                         in: GoalTargetLogic.minWeeklySessions...GoalTargetLogic.maxWeeklySessions) {
                     Text("\(targets.weeklySessions) \(targets.weeklySessions == 1 ? "workout" : "workouts") per week")
-                        .font(Theme.Typography.bodyMedium)
+                        .scaledFont(Theme.Typography.bodyMedium)
                         .foregroundStyle(Theme.Colors.textPrimary)
                 }
                 .tint(Theme.Colors.accentContent)
@@ -399,18 +425,18 @@ struct GoalDetailView: View {
         VitalCard(padding: Theme.Spacing.lg, cornerRadius: Theme.Radius.md) {
             VStack(alignment: .leading, spacing: Theme.Spacing.md) {
                 Text("WHAT THIS MEANS")
-                    .font(.system(size: 11, weight: .bold))
+                    .scaledFont(size: 11, weight: .bold)
                     .tracking(1.0)
                     .foregroundStyle(Theme.Colors.textSecondary)
 
                 ForEach(Self.goalFacts[vm.goal] ?? [], id: \.self) { fact in
                     HStack(alignment: .top, spacing: Theme.Spacing.sm) {
                         Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: 13))
+                            .scaledFont(size: 13)
                             .foregroundStyle(Theme.Colors.accentContent)
                             .padding(.top, 2)
                         Text(fact)
-                            .font(Theme.Typography.bodySmall)
+                            .scaledFont(Theme.Typography.bodySmall)
                             .foregroundStyle(Theme.Colors.textPrimary)
                     }
                 }
@@ -430,14 +456,13 @@ struct GoalDetailView: View {
                     IconBadge(systemName: "message", style: .soft)
 
                     Text("Talk it through with your coach")
-                        .font(Theme.Typography.bodyMedium)
-                        .fontWeight(.medium)
+                        .scaledFont(Theme.Typography.bodyMedium.weight(.medium))
                         .foregroundStyle(Theme.Colors.textPrimary)
 
                     Spacer()
 
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 13, weight: .semibold))
+                        .scaledFont(size: 13, weight: .semibold)
                         .foregroundStyle(Theme.Colors.textTertiary)
                 }
             }

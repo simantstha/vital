@@ -61,7 +61,7 @@ struct MetricDetailView: View {
                             }
                             if let insightText {
                                 Text(insightText)
-                                    .font(.system(size: 13, weight: .medium))
+                                    .scaledFont(size: 13, weight: .medium)
                                     .foregroundStyle(Theme.Colors.textSecondary)
                             }
                             DetailRangeSwitcher(range: vm.range) { newRange in
@@ -118,20 +118,21 @@ private extension MetricDetailView {
             VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
                 HStack(alignment: .lastTextBaseline, spacing: 6) {
                     Text(heroValueText)
-                        .font(Theme.Typography.numericHero(44))
+                        .scaledFont(Theme.Typography.numericHero(44))
+                        .dynamicTypeSize(...DynamicTypeSize.accessibility2) // hero number: capped growth
                         .foregroundStyle(Theme.Colors.textPrimary)
                         .contentTransition(.numericText())
                         .animation(Theme.Motion.numeric, value: displayedValue)
                     let unit = TrendsDeltaFormat.unitLabel(spec: spec, system: unitPref.current)
                     if !unit.isEmpty {
                         Text(unit)
-                            .font(.system(size: 14))
+                            .scaledFont(size: 14)
                             .foregroundStyle(Theme.Colors.textSecondary)
                     }
                 }
                 if let deltaPillText {
                     Text(deltaPillText)
-                        .font(.system(size: 13, weight: .semibold))
+                        .scaledFont(size: 13, weight: .semibold)
                         .foregroundStyle(deltaPillColor)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 4)
@@ -139,11 +140,11 @@ private extension MetricDetailView {
                 }
                 if let verdictLine = heroVerdictLine {
                     Text(verdictLine)
-                        .font(.system(size: 14, weight: .medium))
+                        .scaledFont(size: 14, weight: .medium)
                         .foregroundStyle(Theme.Colors.textPrimary)
                 }
                 Text(dateCaptionText)
-                    .font(.system(size: 13))
+                    .scaledFont(size: 13)
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
             .accessibilityElement(children: .combine)
@@ -220,11 +221,11 @@ private extension MetricDetailView {
     func meaningCard(_ text: String) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("WHAT IT MEANS TODAY")
-                .font(.system(size: 11, weight: .semibold))
+                .scaledFont(size: 11, weight: .semibold)
                 .tracking(1.2)
                 .foregroundStyle(Color.white.opacity(0.6))
             Text(text)
-                .font(.system(size: 15, weight: .medium))
+                .scaledFont(size: 15, weight: .medium)
                 .foregroundStyle(Color.white)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -261,10 +262,10 @@ private extension MetricDetailView {
                 calibrationRing
                 VStack(alignment: .leading, spacing: 4) {
                     Text(CalibrationCopy.todayTitle)
-                        .font(.system(size: 14, weight: .semibold))
+                        .scaledFont(size: 14, weight: .semibold)
                         .foregroundStyle(Theme.Colors.textPrimary)
                     Text(stillLearningCopy)
-                        .font(.system(size: 12.5))
+                        .scaledFont(size: 12.5)
                         .foregroundStyle(Theme.Colors.textSecondary)
                 }
             }
@@ -290,7 +291,7 @@ private extension MetricDetailView {
                 .rotationEffect(.degrees(-90))
                 .animation(Theme.Motion.settle, value: calibratingDaysElapsed)
             Text("\(calibratingDaysElapsed)/14")
-                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .scaledFont(size: 11, weight: .bold, design: .rounded)
                 .foregroundStyle(Theme.Colors.textPrimary)
         }
         .frame(width: 48, height: 48)
@@ -424,13 +425,13 @@ private extension MetricDetailView {
 
                     if isCalibrating {
                         Text("Readings so far — no range yet, so no judgement yet.")
-                            .font(.system(size: 11.5))
+                            .scaledFont(size: 11.5)
                             .foregroundStyle(Theme.Colors.textTertiary)
                     } else if showsBand {
                         legend
                     } else {
                         Text("your normal range appears after 14 days")
-                            .font(.system(size: 11.5))
+                            .scaledFont(size: 11.5)
                             .foregroundStyle(Theme.Colors.textTertiary)
                     }
 
@@ -440,7 +441,7 @@ private extension MetricDetailView {
                     // downsampling actually occurred.
                     if isDownsampled {
                         Text("WEEKLY AVERAGE")
-                            .font(.system(size: 10, weight: .semibold))
+                            .scaledFont(size: 10, weight: .semibold)
                             .tracking(0.8)
                             .foregroundStyle(Theme.Colors.textTertiary)
                     }
@@ -483,7 +484,7 @@ private extension MetricDetailView {
                     .foregroundStyle(Theme.Colors.textSecondary.opacity(0.55))
                     .annotation(position: .top, alignment: .trailing, spacing: 2) {
                         Text("normal \(formattedAverage(bandLower))–\(formattedAverage(bandUpper))")
-                            .font(.system(size: 9))
+                            .scaledFont(size: 9)
                             .foregroundStyle(Theme.Colors.textTertiary)
                             .padding(.trailing, 6)
                     }
@@ -574,7 +575,7 @@ private extension MetricDetailView {
                 AxisValueLabel {
                     if let date = value.as(Date.self) {
                         Text(date, format: .dateTime.month(.abbreviated).day())
-                            .font(.system(size: 10))
+                            .scaledFont(size: 10)
                             .foregroundStyle(Theme.Colors.textTertiary)
                             .lineLimit(1)
                             .fixedSize()
@@ -589,7 +590,7 @@ private extension MetricDetailView {
                 AxisValueLabel {
                     if let doubleValue = value.as(Double.self) {
                         Text(TrendsDeltaFormat.formattedNumber(doubleValue, decimals: spec?.decimals ?? 0))
-                            .font(.system(size: 9))
+                            .scaledFont(size: 9)
                             .foregroundStyle(Theme.Colors.textTertiary)
                     }
                 }
@@ -623,6 +624,9 @@ private extension MetricDetailView {
         )
         .accessibilityLabel(chartAccessibilityLabel)
         .accessibilityValue(chartAccessibilityValue ?? "")
+        // Axis / annotation labels scale with Dynamic Type but stop at the
+        // largest standard size — AX sizes would crowd the plot itself.
+        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
     }
 
     /// Isolated so the `if`/`else if`/`else` in `chart` above stays a single
@@ -685,7 +689,7 @@ private extension MetricDetailView {
                     .fill(Theme.Colors.accentContent.opacity(0.45))
                     .frame(width: 11, height: 8)
                 Text("your normal range")
-                    .font(.system(size: 10.5))
+                    .scaledFont(size: 10.5)
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
             HStack(spacing: 4) {
@@ -693,7 +697,7 @@ private extension MetricDetailView {
                     .fill(Theme.Colors.textSecondary.opacity(0.6))
                     .frame(width: 11, height: 2)
                 Text("30-day average")
-                    .font(.system(size: 10.5))
+                    .scaledFont(size: 10.5)
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
             if !workoutMarkerPoints.isEmpty {
@@ -702,7 +706,7 @@ private extension MetricDetailView {
                         .fill(Theme.Colors.textSecondary.opacity(0.55))
                         .frame(width: 6, height: 6)
                     Text("workout")
-                        .font(.system(size: 10.5))
+                        .scaledFont(size: 10.5)
                         .foregroundStyle(Theme.Colors.textSecondary)
                 }
             }
@@ -742,11 +746,11 @@ private extension MetricDetailView {
         } label: {
             VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
                 Text(label.uppercased())
-                    .font(Theme.Typography.labelSmall)
+                    .scaledFont(Theme.Typography.labelSmall)
                     .foregroundStyle(isOn ? Theme.Colors.accentContent : Theme.Colors.textSecondary)
                     .tracking(0.5)
                 Text(value)
-                    .font(Theme.Typography.numericSmall(13))
+                    .scaledFont(Theme.Typography.numericSmall(13))
                     .foregroundStyle(Theme.Colors.textPrimary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
@@ -812,7 +816,7 @@ private extension MetricDetailView {
         if let spec, let latest = latestRawValue, let distributionValues = vm.distributionSeries?.points.map(\.value) {
             VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
                 Text("DISTRIBUTION")
-                    .font(.system(size: 12, weight: .semibold))
+                    .scaledFont(size: 12, weight: .semibold)
                     .foregroundStyle(Theme.Colors.textSecondary)
                     .tracking(1.3)
                 MetricDistributionView(
@@ -848,7 +852,7 @@ private extension MetricDetailView {
                 }
             }
             Text(MetricDriverCopy.footer)
-                .font(.system(size: 11.5))
+                .scaledFont(size: 11.5)
                 .foregroundStyle(Theme.Colors.textTertiary)
         }
     }
@@ -861,10 +865,10 @@ private extension MetricDetailView {
         return GlassCard(padding: Theme.Spacing.md, cornerRadius: Theme.Radius.md) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(sentence)
-                    .font(.system(size: 13.5, weight: .medium))
+                    .scaledFont(size: 13.5, weight: .medium)
                     .foregroundStyle(Theme.Colors.textPrimary)
                 Text(sampleLine)
-                    .font(.system(size: 11.5))
+                    .scaledFont(size: 11.5)
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -903,10 +907,10 @@ private extension MetricDetailView {
             HStack(spacing: Theme.Spacing.md) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(name)
-                        .font(.system(size: 13, weight: .semibold))
+                        .scaledFont(size: 13, weight: .semibold)
                         .foregroundStyle(Theme.Colors.textPrimary)
                     Text(valueText)
-                        .font(Theme.Typography.numericSmall(15))
+                        .scaledFont(Theme.Typography.numericSmall(15))
                         .foregroundStyle(Theme.Colors.textSecondary)
                 }
                 Spacer()
@@ -948,7 +952,7 @@ private extension MetricDetailView {
                     }
                     if let streakText = result.streakText {
                         Text(streakText)
-                            .font(.system(size: 12.5, weight: .medium))
+                            .scaledFont(size: 12.5, weight: .medium)
                             .foregroundStyle(Theme.Colors.textSecondary)
                     }
                 }
@@ -959,14 +963,14 @@ private extension MetricDetailView {
     func recordCell(label: String, record: MetricRecords.Record) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(label.uppercased())
-                .font(Theme.Typography.labelSmall)
+                .scaledFont(Theme.Typography.labelSmall)
                 .foregroundStyle(Theme.Colors.textSecondary)
                 .tracking(0.5)
             Text(formattedStat(record.value))
-                .font(Theme.Typography.numericSmall(15))
+                .scaledFont(Theme.Typography.numericSmall(15))
                 .foregroundStyle(Theme.Colors.textPrimary)
             Text(Self.dayFormatter.string(from: record.date))
-                .font(.system(size: 11))
+                .scaledFont(size: 11)
                 .foregroundStyle(Theme.Colors.textTertiary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -983,15 +987,15 @@ private extension MetricDetailView {
             GlassCard(padding: Theme.Spacing.md, cornerRadius: Theme.Radius.lg) {
                 VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
                     Text(copy.body)
-                        .font(.system(size: 13.5))
+                        .scaledFont(size: 13.5)
                         .foregroundStyle(Theme.Colors.textSecondary)
                     DisclosureGroup("How it's measured") {
                         Text(copy.measurement)
-                            .font(.system(size: 12.5))
+                            .scaledFont(size: 12.5)
                             .foregroundStyle(Theme.Colors.textTertiary)
                             .padding(.top, Theme.Spacing.xs)
                     }
-                    .font(.system(size: 13, weight: .semibold))
+                    .scaledFont(size: 13, weight: .semibold)
                     .tint(Theme.Colors.textPrimary)
                 }
             }
@@ -1026,7 +1030,7 @@ private extension MetricDetailView {
                             AppRouter.shared.coachContext = question
                         } label: {
                             Text(question)
-                                .font(.system(size: 13, weight: .medium))
+                                .scaledFont(size: 13, weight: .medium)
                                 .foregroundStyle(Theme.Colors.textPrimary)
                                 .padding(.horizontal, Theme.Spacing.md)
                                 .padding(.vertical, Theme.Spacing.sm)
@@ -1048,7 +1052,7 @@ private extension MetricDetailView {
 private extension MetricDetailView {
     func sectionHeader(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: 12, weight: .semibold))
+            .scaledFont(size: 12, weight: .semibold)
             .foregroundStyle(Theme.Colors.textSecondary)
             .tracking(1.3)
     }

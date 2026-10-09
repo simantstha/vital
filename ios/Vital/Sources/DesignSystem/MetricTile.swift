@@ -18,7 +18,7 @@ struct MetricTile: View {
 
                 HStack(spacing: 2) {
                     Text(label)
-                        .font(.system(size: 13, weight: .regular))
+                        .scaledFont(size: 13, weight: .regular)
                         .foregroundStyle(Theme.Colors.textSecondary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.75)
@@ -37,7 +37,7 @@ struct MetricTile: View {
 
                 HStack(alignment: .lastTextBaseline, spacing: 2) {
                     Text(value)
-                        .font(.system(size: 26, weight: .bold, design: .rounded))
+                        .scaledFont(size: 26, weight: .bold, design: .rounded)
                         .foregroundStyle(Theme.Colors.textPrimary)
                         .minimumScaleFactor(0.7)
                         .lineLimit(1)
@@ -45,7 +45,7 @@ struct MetricTile: View {
 
                     if !unit.isEmpty {
                         Text(unit)
-                            .font(Theme.Typography.labelSmall)
+                            .scaledFont(Theme.Typography.labelSmall)
                             .foregroundStyle(Theme.Colors.textSecondary)
                     }
                 }
@@ -54,11 +54,11 @@ struct MetricTile: View {
                     // No arrow for a neutral reading ("at your normal").
                     if trend != .neutral {
                         Image(systemName: trend.arrowSystemImage)
-                            .font(.system(size: 10, weight: .bold))
+                            .scaledFont(size: 10, weight: .bold)
                             .foregroundStyle(trend.color)
                     }
                     Text(delta)
-                        .font(Theme.Typography.labelSmall)
+                        .scaledFont(Theme.Typography.labelSmall)
                         .foregroundStyle(trend.color)
                         .lineLimit(1)
                         .minimumScaleFactor(0.75)

@@ -86,6 +86,25 @@ final class ScreenshotTests: XCTestCase {
     func test_serverError() { runScreenshots(scenario: "server_error") }
     func test_onboarding() { runScreenshots(scenario: "onboarding") }
 
+    /// Dynamic Type at an accessibility size (AX2, "Larger Accessibility
+    /// Sizes" -> `UICTContentSizeCategoryAccessibilityL`) for ONE scenario,
+    /// light only: weight_loss Today and its goal-progress sheet. A smoke
+    /// check that the core screens still load and lay out at AX sizes (their
+    /// pill/text rows stack instead of truncating — see
+    /// `AccessibilityAdaptiveStack`); XCUITest can't assert "no truncation",
+    /// so this asserts the key texts exist and the screenshots are for eyes.
+    /// Screen segments carry an `AX` suffix (`todayAX`, `goalProgressAX`) —
+    /// letters only, to match CI's export regex.
+    func test_weightLossAccessibilitySize() {
+        let scenario = "weight_loss"
+        let appearance = "light"
+        let app = launch(scenario: scenario, dark: false,
+                         contentSizeCategory: "UICTContentSizeCategoryAccessibilityL")
+        captureTodayAccessibilitySize(app, scenario: scenario, appearance: appearance)
+        captureGoalProgressAccessibilitySize(app, scenario: scenario, appearance: appearance)
+        app.terminate()
+    }
+
     // MARK: - Driver
 
     private func runScreenshots(scenario: String) {
@@ -112,7 +131,12 @@ final class ScreenshotTests: XCTestCase {
         }
     }
 
-    private func launch(scenario: String, dark: Bool) -> XCUIApplication {
+    /// `contentSizeCategory` (a `UIContentSizeCategory` raw value, e.g.
+    /// `UICTContentSizeCategoryAccessibilityL`) launches the app at that
+    /// Dynamic Type size via `-UIPreferredContentSizeCategoryName` — scoped
+    /// to this launch, so it never leaks into the simulator's own setting or
+    /// the default-size captures.
+    private func launch(scenario: String, dark: Bool, contentSizeCategory: String? = nil) -> XCUIApplication {
         let app = XCUIApplication()
         // `-AppleInterfaceStyle Dark` is the standard simulator/XCUITest
         // trick (also used by fastlane `snapshot`) for forcing dark mode
@@ -126,6 +150,9 @@ final class ScreenshotTests: XCTestCase {
         var args = ["-VitalFixture", scenario, "-VitalAppearance", dark ? "dark" : "light"]
         if dark {
             args += ["-AppleInterfaceStyle", "Dark"]
+        }
+        if let contentSizeCategory {
+            args += ["-UIPreferredContentSizeCategoryName", contentSizeCategory]
         }
         app.launchArguments = args
         app.launch()
@@ -484,6 +511,53 @@ final class ScreenshotTests: XCTestCase {
             }
         }
         capture(app, name: "\(scenario)__today__\(appearance)")
+    }
+
+    // MARK: - Accessibility text size (weight_loss only)
+
+    /// Today at an accessibility text size: the same "fixtures really loaded"
+    /// signals as `captureToday` (hero, insight, the hero's weekly-change
+    /// text, weigh-in chip) plus the goal line, then a capture of the top.
+    private func captureTodayAccessibilitySize(_ app: XCUIApplication, scenario: String, appearance: String) {
+        XCTAssertTrue(app.buttons["today.fuelStrip"].waitForExistence(timeout: 15),
+                       "Today should finish loading at an accessibility text size [\(scenario)/\(appearance)]")
+        XCTAssertTrue(waitForText(app, containing: insight(for: scenario), timeout: 10),
+                       "Today should show the \(scenario) fixture's insight text at an accessibility text size [\(appearance)]")
+        XCTAssertTrue(waitForText(app, containing: "0.6\u{00A0}kg/wk over 4 weeks"),
+                       "Today's weight_loss hero should show the weekly change at an accessibility text size [\(appearance)]")
+        XCTAssertTrue(app.buttons["today.weighInChip"].waitForExistence(timeout: 10),
+                       "Today's weight_loss hero should show the weigh-in chip at an accessibility text size [\(appearance)]")
+        let goalLine = app.descendants(matching: .any).matching(identifier: "goalProgress.todayLine").firstMatch
+        XCTAssertTrue(goalLine.waitForExistence(timeout: 10),
+                       "Today should show the goal-progress line at an accessibility text size [\(appearance)]")
+        XCTAssertFalse(app.staticTexts["Couldn't load today's data"].exists,
+                        "Today should not show its error card at an accessibility text size [\(appearance)]")
+        capture(app, name: "\(scenario)__todayAX__\(appearance)")
+    }
+
+    /// The goal-progress sheet at an accessibility text size, opened from
+    /// Today's goal line (which stacks its pill above the text at AX sizes).
+    private func captureGoalProgressAccessibilitySize(_ app: XCUIApplication, scenario: String, appearance: String) {
+        let goalLine = app.descendants(matching: .any).matching(identifier: "goalProgress.todayLine").firstMatch
+        tapWhenHittable(goalLine, app: app, maxSwipes: 6,
+                        description: "goalProgress.todayLine at an accessibility text size [\(scenario)/\(appearance)]")
+
+        let title = app.descendants(matching: .any).matching(identifier: "goalProgress.detail.title").firstMatch
+        guard title.waitForExistence(timeout: 10) else {
+            XCTFail("Goal progress sheet never opened from Today's goal line at an accessibility text size [\(scenario)/\(appearance)]")
+            return
+        }
+        // The same fixture-unique primary line `captureGoalProgress` checks.
+        XCTAssertTrue(waitForText(app, containing: "of 7.7\u{00A0}kg lost"),
+                       "Goal progress sheet should show the \(scenario) fixture's content at an accessibility text size [\(appearance)]")
+        capture(app, name: "\(scenario)__goalProgressAX__\(appearance)")
+
+        let close = app.buttons["Close"]
+        if close.waitForExistence(timeout: 5) {
+            close.tap()
+            XCTAssertTrue(title.waitForNonExistence(timeout: 5),
+                           "Goal progress sheet never finished dismissing at an accessibility text size [\(scenario)/\(appearance)]")
+        }
     }
 
     /// Opens the diet logging sheet from Today's fuel strip. Not attempted

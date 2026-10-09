@@ -56,15 +56,15 @@ struct NudgeDetailView: View {
                 Chip(text: "COACH NUDGE", icon: "bubble.left.fill", isAccent: true)
 
                 Text(Self.formattedTimestamp(value.createdAt))
-                    .font(.system(size: 13))
+                    .scaledFont(size: 13)
                     .foregroundStyle(Theme.Colors.textTertiary)
 
                 Text(value.title)
-                    .font(Theme.Typography.titleLarge)
+                    .scaledFont(Theme.Typography.titleLarge)
                     .foregroundStyle(Theme.Colors.textPrimary)
 
                 Text(value.body)
-                    .font(.system(size: 15.5))
+                    .scaledFont(size: 15.5)
                     .lineSpacing(4)
                     .foregroundStyle(Theme.Colors.textPrimary.opacity(0.9))
 

@@ -533,20 +533,19 @@ private extension TodayView {
         } label: {
             HStack(spacing: Theme.Spacing.md) {
                 Image(systemName: "scalemass")
-                    .font(.system(size: 15, weight: .medium))
+                    .scaledFont(size: 15, weight: .medium)
                     .foregroundStyle(Theme.Colors.accentContent)
                 Text("Weigh in")
-                    .font(Theme.Typography.bodyMedium)
-                    .fontWeight(.medium)
+                    .scaledFont(Theme.Typography.bodyMedium.weight(.medium))
                     .foregroundStyle(Theme.Colors.textPrimary)
                 Spacer()
                 if let last {
                     Text("Last \(UnitFormat.weight(kg: last, unitPref.current))")
-                        .font(Theme.Typography.bodySmall)
+                        .scaledFont(Theme.Typography.bodySmall)
                         .foregroundStyle(Theme.Colors.textSecondary)
                 }
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 12, weight: .semibold))
+                    .scaledFont(size: 12, weight: .semibold)
                     .foregroundStyle(Theme.Colors.textTertiary)
             }
             .padding(.horizontal, Theme.Spacing.lg)
@@ -597,18 +596,17 @@ private extension TodayView {
                 VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
                     HStack(spacing: Theme.Spacing.sm) {
                         Image(systemName: "sparkles")
-                            .font(.system(size: 14, weight: .semibold))
+                            .scaledFont(size: 14, weight: .semibold)
                             .foregroundStyle(Theme.Colors.accentContent)
                         Text("Vital noticed")
-                            .font(Theme.Typography.labelSmall)
+                            .scaledFont(Theme.Typography.labelSmall)
                             .foregroundStyle(Theme.Colors.accentContent)
                             .tracking(0.6)
                         Spacer()
                     }
 
                     Text(fact.proposedNode.label)
-                        .font(Theme.Typography.bodyMedium)
-                        .fontWeight(.medium)
+                        .scaledFont(Theme.Typography.bodyMedium.weight(.medium))
                         .foregroundStyle(Theme.Colors.textPrimary)
                         .fixedSize(horizontal: false, vertical: true)
 
@@ -617,7 +615,7 @@ private extension TodayView {
                             Task { await vm.resolveFact(id: fact.id, action: "confirm") }
                         } label: {
                             Text("Yes, remember")
-                                .font(.system(size: 13, weight: .semibold))
+                                .scaledFont(size: 13, weight: .semibold)
                                 .foregroundStyle(Theme.Colors.onAccent)
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 8)
@@ -630,7 +628,7 @@ private extension TodayView {
                             Task { await vm.resolveFact(id: fact.id, action: "reject") }
                         } label: {
                             Text("Not quite")
-                                .font(.system(size: 13, weight: .medium))
+                                .scaledFont(size: 13, weight: .medium)
                                 .foregroundStyle(Theme.Colors.textSecondary)
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 8)
@@ -673,8 +671,7 @@ private extension TodayView {
                     HealthKitManager.openHealthApp()
                 } label: {
                     Text("Open Health")
-                        .font(Theme.Typography.bodySmall)
-                        .fontWeight(.semibold)
+                        .scaledFont(Theme.Typography.bodySmall.weight(.semibold))
                         .foregroundStyle(Theme.Colors.onAccent)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, Theme.Spacing.sm + 2)
@@ -694,15 +691,15 @@ private extension TodayView {
         HStack(alignment: .top, spacing: Theme.Spacing.sm) {
             VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
                 Text(vm.dateSubtitle)
-                    .font(.system(size: 13, weight: .semibold))
+                    .scaledFont(size: 13, weight: .semibold)
                     .foregroundStyle(Theme.Colors.textSecondary)
 
                 Text(vm.greeting)
-                    .font(.system(size: 30, weight: .bold))
+                    .scaledFont(size: 30, weight: .bold)
                     .tracking(-0.4)
                     .foregroundStyle(Theme.Colors.textPrimary)
 
-                HStack(spacing: Theme.Spacing.sm) {
+                AccessibilityAdaptiveStack(spacing: Theme.Spacing.sm, stackedSpacing: Theme.Spacing.xs) {
                     // The chip's slot is ALWAYS reserved (hidden placeholder) so a
                     // late streak load can't shift content below the header. The
                     // real chip is overlaid only when the streak is loaded and > 0
@@ -718,7 +715,7 @@ private extension TodayView {
                         }
                     if let hint = vm.planHint {
                         Text(hint)
-                            .font(.system(size: 13))
+                            .scaledFont(size: 13)
                             .foregroundStyle(Theme.Colors.textSecondary)
                     }
                 }
@@ -747,6 +744,7 @@ private extension TodayView {
                     .frame(width: 40, height: 40)
 
                 if notificationsVM.unreadCount > 0 {
+                    // Badge on a fixed 40pt bell: stays fixed-size like the bell.
                     Text(notificationsVM.unreadCount > 9 ? "9+" : "\(notificationsVM.unreadCount)")
                         .font(.system(size: 10.5, weight: .bold))
                         .foregroundStyle(Theme.Colors.onAccent)
@@ -774,11 +772,10 @@ private extension TodayView {
                 VStack(alignment: .leading, spacing: Theme.Spacing.md) {
                     VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
                         Text(CalibrationCopy.todayTitle)
-                            .font(Theme.Typography.bodyMedium)
-                            .fontWeight(.semibold)
+                            .scaledFont(Theme.Typography.bodyMedium.weight(.semibold))
                             .foregroundStyle(Theme.Colors.textPrimary)
                         Text(CalibrationCopy.todayBody(daysCollected: daysCollected))
-                            .font(Theme.Typography.bodySmall)
+                            .scaledFont(Theme.Typography.bodySmall)
                             .foregroundStyle(Theme.Colors.textSecondary)
                     }
                     VitalProgressBar(fraction: vm.calibrationProgress, tint: Theme.Colors.accent, height: 4)
