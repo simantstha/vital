@@ -79,15 +79,21 @@ export function formatGoalProgressLines(gp: GoalProgress, units: UnitSystem): st
   lines.push(`- Goal: ${GOAL_LABELS[gp.goal]}; ${hasTarget ? targetBits.join(', ') : 'no target set'}`);
 
   const nowBits: string[] = [];
+  const read = gp.weightRead;
   if (gp.current.weightKg != null) {
-    nowBits.push(`trend ${wt(gp.current.weightKg, units)}`);
+    // The trend is smoothed (it lags the scale by about ten days); the scale and weekly average are what the user sees.
+    nowBits.push(`trend ${wt(gp.current.weightKg, units)}${read?.scaleKg != null ? ' (smoothed)' : ''}`);
     if (gp.current.startWeightKg != null && gp.current.changeKg != null) {
       nowBits.push(`${signedWt(gp.current.changeKg, units)} since start at ${wt(gp.current.startWeightKg, units)}`);
     }
   }
+  if (read?.scaleKg != null) {
+    nowBits.push(`scale ${wt(read.scaleKg, units)}${read.weekMeanKg != null ? `, weekly average ${wt(read.weekMeanKg, units)}` : ''}`);
+  }
   if (gp.ratePerWeek.kg != null) {
     const pct = gp.ratePerWeek.pctBodyweight != null ? ` (${gp.ratePerWeek.pctBodyweight}% bw)` : '';
-    nowBits.push(`rate ${signedWt(gp.ratePerWeek.kg, units, 2)}/wk${pct}`);
+    // The pace is a line through the raw weigh-ins of the last 3 weeks (lib/weightPace.ts) for a weight-loss goal.
+    nowBits.push(`rate ${signedWt(gp.ratePerWeek.kg, units, 2)}/wk${pct}${gp.goal === 'weight_loss' ? ' over the last 3 weeks of weigh-ins' : ''}`);
   }
   if (gp.distance?.thisWeekKm != null) nowBits.push(plainSpaces(gp.distance.text));
   if (gp.eta) nowBits.push(`ETA ${gp.eta}`);
@@ -124,6 +130,15 @@ export function formatGoalProgressLines(gp: GoalProgress, units: UnitSystem): st
   lines.push(`- Verdict: ${gp.verdict} — "${plainSpaces(gp.headline)}"`);
   for (const r of gp.reasons.slice(0, MAX_REASONS)) {
     lines.push(`  - ${plainSpaces(r.text)}${r.tone === 'watch' ? ' (watch)' : ''}`);
+  }
+  if (read?.state === 'early') {
+    lines.push('- Early read: the pace is not settled yet — quote the scale against the start, but no weekly rate, no projected date and no "weeks ahead/behind". Daily swings of ±1 kg are normal.');
+  }
+  if (read?.state === 'returning') {
+    lines.push('- The user is back after a gap in weigh-ins: welcome them back and keep weighing in; do not call the pace too fast or behind until 3 weigh-ins are back.');
+  }
+  if (read?.state === 'plateau') {
+    lines.push('- Plateau on the raw weekly averages (flat for 3 weeks): often water — not a failure. Keep the plan; only if still flat in 2 weeks suggest ~150 kcal less a day or two 30-minute walks.');
   }
   if (gp.verdict === 'needs_target') {
     lines.push('- No target set yet — setting one is the only thing missing for a real progress verdict.');

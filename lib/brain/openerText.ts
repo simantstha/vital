@@ -11,10 +11,14 @@
 
 import type { GoalKind, GoalProgress } from '../goalProgress';
 import { KM_PER_MILE, LB_PER_KG } from '../metricFormat';
+import { relationForDays, weeksForDays } from '../weightPace';
 import type { UnitSystem } from '../units';
 
-/** Same tolerance as iOS GoalProgressLogic.onPaceToleranceDays. */
-const ON_PACE_TOLERANCE_DAYS = 7;
+/**
+ * The one on-pace margin (lib/weightPace.ts ON_PACE_MARGIN_DAYS, 7 days): the goal
+ * card's verdict, iOS GoalProgressLogic.onPaceToleranceDays and this opener all
+ * call an ETA within it "on pace", so the three can never word one date differently.
+ */
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const DAY_MS = 86_400_000;
 export const OPENER_INVITE = 'What would you like to dig into?';
@@ -28,6 +32,11 @@ function trimmed(n: number): string {
 
 function weightAmount(kg: number, units: UnitSystem): string {
   return trimmed(Math.abs(units === 'imperial' ? kg * LB_PER_KG : kg));
+}
+
+/** One fixed decimal ("84.0"), for the weight a reached goal holds at. */
+function weightFixed(kg: number, units: UnitSystem): string {
+  return Math.abs(units === 'imperial' ? kg * LB_PER_KG : kg).toFixed(1);
 }
 
 function ymdToUtc(ymd: string | null | undefined): number | null {
@@ -44,18 +53,49 @@ export function shortDate(ymd: string | null | undefined): string | null {
   return `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}`;
 }
 
+/** Reached goals ask about a new target or maintenance only this many days after `reachedAt`; later the opener just reports the holding weight. */
+export const REACHED_ASK_DAYS = 3;
+/** A reached weight inside this many kg of the target is "inside your target range" (goalProgress HOLDING_NEAR_TARGET_KG). */
+const HOLDING_RANGE_KG = 1;
+
+/**
+ * "right on pace for your Dec 30 target" / "about 2 weeks ahead of ..." / "... behind ...".
+ * Read off the card's stated ETA with the card's own margin (ON_PACE_MARGIN_DAYS, via
+ * relationForDays) and the same whole-week rounding iOS prints, so the opener and the
+ * card say the same thing. A weight-loss card that made no ahead/behind call (early read,
+ * too fast, stalled, pace not yet confirmed...) states no ETA, so no clause.
+ */
 function paceClause(gp: GoalProgress): string | null {
   const target = shortDate(gp.target.date);
   const eta = ymdToUtc(gp.eta);
   const tdate = ymdToUtc(gp.target.date);
   if (!target || eta == null || tdate == null) return null;
+  // Only the verdicts that are a pace call may carry one.
+  if (gp.goal === 'weight_loss' && gp.verdict !== 'on_track' && gp.verdict !== 'ahead' && gp.verdict !== 'behind') return null;
   const days = Math.round((tdate - eta) / DAY_MS); // positive = ETA earlier than target
-  if (Math.abs(days) <= ON_PACE_TOLERANCE_DAYS) return `right on pace for your ${target} target`;
-  const weeks = Math.max(1, Math.round(Math.abs(days) / 7));
+  const relation = relationForDays(days);
+  if (relation === 'on_pace') return `right on pace for your ${target} target`;
+  const weeks = weeksForDays(days);
   const w = weeks === 1 ? 'week' : 'weeks';
-  return days > 0
+  return relation === 'ahead'
     ? `about ${weeks} ${w} ahead of your ${target} target`
     : `about ${weeks} ${w} behind your ${target} target`;
+}
+
+/** The weight the "X of Y kg down" figure is measured from: the scale for an early read, else the weekly average, else the smoothed trend. */
+function progressKg(gp: GoalProgress): number | null {
+  const read = gp.weightRead;
+  if (read?.state === 'early' || read?.state === 'returning') return read.scaleKg ?? gp.current.weightKg;
+  return read?.weekMeanKg ?? read?.scaleKg ?? gp.current.weightKg;
+}
+
+/** True when the reached opener still asks about a new target or maintenance (so it ends in its own question). */
+function reachedAsks(gp: GoalProgress | null | undefined): boolean {
+  if (!gp || gp.verdict !== 'reached' || gp.target.weightKg == null) return false;
+  // Payloads from before `weightRead` always ask; with it, only in the first days after the target was reached.
+  if (gp.weightRead == null) return true;
+  const daysAgo = gp.weightRead.reachedDaysAgo;
+  return daysAgo != null && daysAgo <= REACHED_ASK_DAYS;
 }
 
 /**
@@ -63,25 +103,55 @@ function paceClause(gp: GoalProgress): string | null {
  * to state (needs_target / insufficient_data / nothing usable). Weight goals
  * with start, current and target compose "You're 1.7 of 7.7 kg down and about
  * 2 weeks ahead of your Dec 30 target."; every other state falls back to the
- * card's headline.
+ * card's headline. Early reads, a return after a gap and a plateau say so
+ * instead of naming a pace; a reached goal asks about a new target or
+ * maintenance for its first days only, then reports where the weight holds.
  */
 export function goalOpenerLine(gp: GoalProgress | null | undefined, units: UnitSystem): string | null {
   if (!gp || gp.verdict === 'needs_target' || gp.verdict === 'insufficient_data') return null;
   const target = gp.target.weightKg;
   const start = gp.current.startWeightKg;
-  const current = gp.current.weightKg;
+  const unit = units === 'imperial' ? 'lb' : 'kg';
   // Goal reached: congratulate and move on — never "0 of 0 down" or a pace clause.
   if (gp.verdict === 'reached' && target != null) {
-    const unit = units === 'imperial' ? 'lb' : 'kg';
-    return `You've reached ${weightAmount(target, units)} ${unit} — want to set a new target or switch to maintenance?`;
+    if (reachedAsks(gp)) {
+      return `You've reached ${weightAmount(target, units)} ${unit} — want to set a new target or switch to maintenance?`;
+    }
+    const holdKg = gp.weightRead?.weekMeanKg ?? gp.weightRead?.scaleKg ?? gp.current.weightKg;
+    if (holdKg != null) {
+      const diff = holdKg - target;
+      if (Math.abs(diff) <= HOLDING_RANGE_KG) return `Holding at ${weightFixed(holdKg, units)} ${unit}, inside your target range.`;
+      return `At ${weightFixed(holdKg, units)} ${unit}, ${weightAmount(Math.abs(diff), units)} ${unit} ${diff < 0 ? 'under' : 'over'} your ${weightAmount(target, units)} ${unit} target.`;
+    }
   }
+  const read = gp.weightRead;
+  // Back after 7+ days without a weigh-in: lead with what the scale says since.
+  if (gp.goal === 'weight_loss' && read?.state === 'returning' && read.returned && read.returned.weighInsSince === 1 && read.scaleKg != null) {
+    const since = shortDate(read.returned.sinceDay);
+    const delta = read.returned.sinceKg - read.scaleKg;
+    if (since) {
+      const change = Math.abs(delta) < 0.1
+        ? `the scale is about the same as ${since}`
+        : `the scale is ${delta > 0 ? 'down' : 'up'} ${weightAmount(Math.abs(delta), units)} ${unit} since ${since}`;
+      return `Welcome back — ${change}; keep weighing in so your trend catches up.`;
+    }
+  }
+  const current = progressKg(gp);
   if (target != null && start != null && current != null) {
     const losing = target < start;
     const total = Math.abs(start - target);
     const done = Math.max(0, losing ? start - current : current - start);
     if (total > 0 && done > 0) {
-      const unit = units === 'imperial' ? 'lb' : 'kg';
       const base = `You're ${weightAmount(done, units)} of ${weightAmount(total, units)} ${unit} ${losing ? 'down' : 'up'}`;
+      if (gp.goal === 'weight_loss') {
+        if (read?.state === 'early' || read?.state === 'returning') return `${base} on the scale; your pace settles after 3 weeks.`;
+        if (read?.state === 'plateau') return `${base}, though the scale has been flat for 3 weeks.`;
+        if (gp.verdict === 'too_fast') return `${base}, but losing faster than is easy to keep.`;
+        if (gp.verdict === 'stalled') return `${base}, but your weight has been flat lately.`;
+        if (gp.verdict === 'progressing' && gp.ratePerWeek.kg != null && gp.ratePerWeek.kg < 0) {
+          return `${base} and losing about ${weightAmount(gp.ratePerWeek.kg, units)} ${unit} a week.`;
+        }
+      }
       const pace = paceClause(gp);
       return pace ? `${base} and ${pace}.` : `${base}.`;
     }
@@ -204,8 +274,8 @@ export function requiredOpenerLine(gp: GoalProgress | null | undefined, goal: un
 
 /** Deterministic opener used when the model call fails. Null means the caller keeps its generic fallback. */
 export function goalFallbackOpener(gp: GoalProgress | null | undefined, goal: unknown, units: UnitSystem): string | null {
-  // These two already end in their own question; no second invitation.
-  const own = returningUserOpener(gp) ?? (gp?.verdict === 'reached' ? goalOpenerLine(gp, units) : null);
+  // These two already end in their own question (a reached goal's only while it still asks); no second invitation.
+  const own = returningUserOpener(gp) ?? (reachedAsks(gp) ? goalOpenerLine(gp, units) : null);
   if (own) return own;
   const line = goalOpenerLine(gp, units);
   if (line) return `${line} ${OPENER_INVITE}`;
