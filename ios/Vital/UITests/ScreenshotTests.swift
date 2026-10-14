@@ -245,11 +245,12 @@ final class ScreenshotTests: XCTestCase {
     /// `isHittable` records a test failure ("Activation point invalid") instead of
     /// returning false when the element's frame is empty or entirely off-screen —
     /// e.g. mid expand/collapse animation. Check the frame first, then ask.
+    /// The frame must at least partly overlap the screen, because XCUITest can then pick a hit point inside the visible part.
     private func isSafelyHittable(_ element: XCUIElement, app: XCUIApplication) -> Bool {
         guard element.exists else { return false }
         let frame = element.frame
-        guard !frame.isEmpty, frame.width > 0, frame.height > 0,
-              app.frame.contains(CGPoint(x: frame.midX, y: frame.midY)) else { return false }
+        let visible = frame.intersection(app.frame)
+        guard !frame.isEmpty, !visible.isNull, visible.width > 0, visible.height > 0 else { return false }
         return element.isHittable
     }
 
