@@ -148,7 +148,7 @@ Final persona scores (pass 11): Sam (weight loss) 5/5, Priya (lifter) 5/5, Marcu
 - [x] 17c Dynamic Type: all text scales with the system setting from Apple's published size table (identical at the default size); Today and Goal progress stack at accessibility sizes; CI captures AX-size screenshots (`todayAX`, `goalProgressAX`).
 
 ### Wave 18 (race lifecycle) — shipped (PR #257)
-- [x] Optional race date and distance on the goal (migration 0038, additive).
+- [x] Builds on the race date and distance already on the goal (migration 0038, shipped in #256); no new migration.
 - [x] One shared rule (`lib/enduranceProgression.ts`) drives build → taper (8–21 days out) → race week (0–7) → recovery (14 days after); verdicts, weekly targets, the weekly review and coach lines all read it, so screens and coach agree.
 - [x] Phase-aware verdicts: in taper, race week and recovery, running less is on plan (never "Behind pace"); the weekly review never says "Build to" outside the build phase.
 - [x] After the race: "Set your next goal".
