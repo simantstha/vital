@@ -370,6 +370,14 @@ export interface WeeklyExerciseStat {
   volumeKg: number;          // sum(reps * load_kg) across loaded sets that week
   totalSets: number;
   totalReps: number;
+  /**
+   * Additive (optional so older fixtures / stored payloads stay valid): distinct
+   * local days that week with a working set of this exercise ("sessions that
+   * contain the lift" — the headline-lift ranking in lib/liftChange.ts).
+   */
+  sessions?: number;
+  /** Additive: heaviest loaded working set that week (kg); null when every set was bodyweight. */
+  topLoadKg?: number | null;
 }
 
 export interface ProgressionSummary {
@@ -396,6 +404,7 @@ interface SetLike {
  */
 export function summarizeProgression(sets: SetLike[]): ProgressionSummary {
   const byExercise = new Map<string, Map<string, WeeklyExerciseStat>>();
+  const sessionDaysByWeek = new Map<string, Set<string>>();
 
   for (const set of sets) {
     if (set.is_warmup) continue;
@@ -407,12 +416,17 @@ export function summarizeProgression(sets: SetLike[]): ProgressionSummary {
     }
     let stat = weeks.get(week);
     if (!stat) {
-      stat = { weekStart: week, bestEstimatedOneRepMaxKg: null, volumeKg: 0, totalSets: 0, totalReps: 0 };
+      stat = { weekStart: week, bestEstimatedOneRepMaxKg: null, volumeKg: 0, totalSets: 0, totalReps: 0, topLoadKg: null };
       weeks.set(week, stat);
     }
     stat.totalSets += 1;
     stat.totalReps += set.reps;
+    const sessionKey = `${set.exercise}|${week}`;
+    const sessionDays = sessionDaysByWeek.get(sessionKey) ?? new Set<string>();
+    sessionDays.add(set.local_day ?? set.performed_at.toISOString().slice(0, 10));
+    sessionDaysByWeek.set(sessionKey, sessionDays);
     if (set.load_kg != null) {
+      stat.topLoadKg = Math.max(stat.topLoadKg ?? 0, set.load_kg);
       stat.volumeKg += set.reps * set.load_kg;
       const e1rm = estimateOneRepMax(set.load_kg, set.reps, set.rpe);
       if (e1rm > 0) stat.bestEstimatedOneRepMaxKg = Math.max(stat.bestEstimatedOneRepMaxKg ?? 0, e1rm);
@@ -422,7 +436,13 @@ export function summarizeProgression(sets: SetLike[]): ProgressionSummary {
   const result: ProgressionSummary = {};
   for (const [exercise, weeks] of byExercise) {
     result[exercise] = Array.from(weeks.values())
-      .map(stat => ({ ...stat, volumeKg: Math.round(stat.volumeKg * 100) / 100, bestEstimatedOneRepMaxKg: stat.bestEstimatedOneRepMaxKg != null ? Math.round(stat.bestEstimatedOneRepMaxKg * 100) / 100 : null }))
+      .map(stat => ({
+        ...stat,
+        volumeKg: Math.round(stat.volumeKg * 100) / 100,
+        bestEstimatedOneRepMaxKg: stat.bestEstimatedOneRepMaxKg != null ? Math.round(stat.bestEstimatedOneRepMaxKg * 100) / 100 : null,
+        sessions: sessionDaysByWeek.get(`${exercise}|${stat.weekStart}`)?.size ?? 0,
+        topLoadKg: stat.topLoadKg != null ? Math.round(stat.topLoadKg * 100) / 100 : null,
+      }))
       .sort((a, b) => a.weekStart.localeCompare(b.weekStart));
   }
   return result;

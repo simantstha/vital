@@ -176,3 +176,17 @@ test('reached goal: the opener congratulates and asks for a new target or mainte
   // Muscle goals reach a weight target the same way.
   assert.match(goalOpenerLine({ ...reached, goal: 'muscle' }, 'metric') ?? '', /^You've reached 76 kg/);
 });
+
+// ── Wave 19b: a lifter who has already logged sessions is not "yet to log a few days" ──
+
+test('muscle opener after the first sessions: says how many are in and when the first lift comparison lands', () => {
+  const gp = {
+    goal: 'muscle', verdict: 'insufficient_data', headline: 'First lift comparison on Mar 30 · 4 of 4 sessions so far',
+    target: { weightKg: null, date: null, weeklySessions: 4, weeklyDistanceKm: null },
+    dataSufficiency: { weighIns: 3, needed: 3, sessionsLast28d: 4 },
+  } as unknown as Parameters<typeof newUserGoalOpener>[1];
+  assert.equal(newUserGoalOpener('muscle', gp, 'metric'), "Your goal: 4 sessions a week. You've logged 4 sessions so far — your first lift comparison is on Mar 30.");
+  // Not enough yet (one session): the original line stands.
+  const one = { ...(gp as object), dataSufficiency: { weighIns: 1, needed: 3, sessionsLast28d: 1 } } as unknown as Parameters<typeof newUserGoalOpener>[1];
+  assert.match(newUserGoalOpener('muscle', one, 'metric') ?? '', /Once you've logged a few days/);
+});

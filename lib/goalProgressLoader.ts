@@ -104,6 +104,9 @@ export async function loadGoalProgress(
     ...completedLocalDays(sets),
     ...healthKitWorkoutDays(workoutEntries),
   ]);
+  // Longer strength history (the ~84 days of sets already loaded for the lift
+  // progression) so a break of 10+ days and the return from it can be found.
+  const strengthHistoryDays = new Set<string>([...completedLocalDays(progressionSets), ...strengthDays]);
   const workouts = workoutEntries
     .filter(w => daySet.has(w.date))
     .map(w => ({
@@ -139,6 +142,7 @@ export async function loadGoalProgress(
     progression,
     trainingDays: [...trainingDays].filter(d => daySet.has(d)),
     strengthDays: [...strengthDays].filter(d => daySet.has(d)),
+    strengthHistoryDays: [...strengthHistoryDays],
     exerciseDisplay,
     workouts,
     restingHr,

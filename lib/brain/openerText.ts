@@ -161,6 +161,21 @@ function existingTargetPhrases(gp: GoalProgress | null | undefined, units: UnitS
 }
 
 /**
+ * The closing clause of the new-user opener. A lifter who has already logged
+ * sessions is no longer "yet to log a few days": the muscle card is waiting on
+ * its first 4-week lift comparison, so say how many sessions are in and when
+ * the comparison lands (the date is the one in the card's own headline).
+ */
+function newUserTail(kind: GoalKind, gp?: GoalProgress | null): string {
+  const generic = "Once you've logged a few days I'll tell you how it's going";
+  const sessions = gp?.dataSufficiency?.sessionsLast28d ?? 0;
+  if (kind !== 'muscle' || gp?.goal !== 'muscle' || sessions < 2) return generic;
+  const date = /^First lift comparison on ([^·]+?)\s*(?:·|$)/.exec(gp.headline)?.[1] ?? null;
+  const logged = `You've logged ${sessions} sessions so far`;
+  return date ? `${logged} — your first lift comparison is on ${date}` : `${logged}, so I'll have a read on how it's going soon`;
+}
+
+/**
  * Opener for a user with no progress to report yet but a known goal (collected
  * in onboarding): states the goal and every target already set (weight, weekly
  * distance, sessions a week, race) instead of asking for them. It only asks for
@@ -172,7 +187,7 @@ export function newUserGoalOpener(goal: unknown, gp?: GoalProgress | null, units
   if (!kind) return null;
   const g = NEW_USER_GOAL[kind];
   const targets = existingTargetPhrases(gp, units);
-  const tail = "Once you've logged a few days I'll tell you how it's going";
+  const tail = newUserTail(kind, gp);
   if (targets.length > 0) {
     // Only a weight-loss goal without a target weight still needs asking; any
     // other goal with a target set has what it needs.

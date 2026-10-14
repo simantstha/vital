@@ -238,3 +238,45 @@ test('a reached goal tells the coach the next step is a new target or maintenanc
   assert.match(text, /Target reached — the next step is a new target or maintenance/);
   assert.doesNotMatch(formatGoalProgressLines(gp(), 'metric').join('\n'), /Target reached/);
 });
+
+// ── Wave 19b: returning from a break, and the same lift as the card ─────────
+
+test('returning from a break: the coach is told the lifts are rebuilding — no stall, no deload', () => {
+  const lines = formatGoalProgressLines(gp({
+    goal: 'muscle',
+    verdict: 'building',
+    headline: 'Building back — Squat at 95% of your pre-break 142 kg',
+    reasons: [{ kind: 'lift', text: 'Squat est. 1RM 136 kg, 95% of your pre-break 142 kg', tone: 'neutral' }],
+    liftReturn: { exercise: 'squat', name: 'Squat', breakDays: 15, endedOn: '2026-05-10', preBreakKg: 142, recentKg: 136, pct: 95, regained: false },
+  }), 'metric');
+  assert.ok(lines.includes('- Returning from a 15-day break (ended 2026-05-10): lifts are rebuilding — do not call this a stall or suggest a deload.'), lines.join('\n'));
+  // Right before the verdict, so the verdict is read in that light.
+  assert.ok(lines.findIndex(l => l.startsWith('- Returning from')) < lines.findIndex(l => l.startsWith('- Verdict:')));
+  // Once the pre-break best is regained the lifts are no longer "rebuilding".
+  const back = formatGoalProgressLines(gp({
+    goal: 'muscle',
+    liftReturn: { exercise: 'squat', name: 'Squat', breakDays: 15, endedOn: '2026-05-10', preBreakKg: 142, recentKg: 145, pct: 102, regained: true },
+  }), 'metric').join('\n');
+  assert.doesNotMatch(back, /Returning from/);
+  assert.doesNotMatch(formatGoalProgressLines(gp({ goal: 'muscle' }), 'metric').join('\n'), /Returning from/);
+});
+
+test('brief goal section: the lift lines lead with the card\'s headline lift (most-trained), the same number', () => {
+  const wk = (weekStart: string, e: number, sessions: number, sets: number) => ({ weekStart, bestEstimatedOneRepMaxKg: e, volumeKg: 1, totalSets: sets, totalReps: sets * 5, sessions });
+  const text = buildBriefGoalSection(
+    {
+      goal: 'muscle',
+      progress: gp({ goal: 'muscle' }),
+      todayKey: '2026-10-07',
+      progression: {
+        // Bench has far more SETS and the bigger drop; squat is trained in as many sessions and wins the tie by the fixed order.
+        'bench press': [wk('2026-08-31', 100, 2, 20), wk('2026-09-14', 100, 2, 20), wk('2026-09-28', 94, 2, 20)],
+        squat: [wk('2026-08-31', 120, 2, 5), wk('2026-09-14', 120, 2, 5), wk('2026-09-28', 118, 2, 5)],
+      },
+    },
+    'metric',
+  );
+  const lines = text.split('\n').filter(l => /est\. 1RM/.test(l));
+  assert.match(lines[0], /^- squat: est\. 1RM -2\.0 kg vs 4 weeks ago \(120 kg -> 118 kg\)$/);
+  assert.match(lines[1], /^- bench press: est\. 1RM -6\.0 kg vs 4 weeks ago/);
+});

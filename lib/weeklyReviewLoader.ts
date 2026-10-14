@@ -143,6 +143,8 @@ export async function computeLastWeekReview(
     weeklyDistanceKmTarget: user.weekly_distance_km_target ?? null,
     // Long-run progress as of the reviewed week's end (same object the goal card uses), so "Next week" can cap long-run growth.
     longRun: progress?.longRun ?? null,
+    // Muscle: the "building back after a break" state as of the reviewed week's end (same object the goal card shows).
+    liftReturn: progress?.liftReturn ?? null,
     // Race lifecycle: the race day decides the reviewed / coming week's phase; the peak week sets its targets.
     raceDate: goal === 'endurance' ? user.race_date ?? null : null,
     racePeakWeekKm,
