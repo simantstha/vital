@@ -24,6 +24,13 @@ struct WeightHeroView: View {
     /// Goal-progress 4-week rate (kg/wk, signed). When present the hero shows it
     /// ("over 4 weeks") so it agrees with the goal card below.
     var goalRateKgPerWeek: Double? = nil
+    /// The server is reading the scale itself (early read / welcome back /
+    /// plateau — `GoalProgressLogic.usesServerWeightRead`) and withholds a pace:
+    /// the hero must not compute a 7-day rate of its own.
+    var withholdsLocalRate: Bool = false
+    /// The server's read to show in the rate's place while `withholdsLocalRate`
+    /// ("Early read — down 0.7 kg on the scale in 7 days"); `nil` shows nothing.
+    var serverWeightRead: String? = nil
     let chip: WeightHeroLogic.WeighInChip
 
     /// One-tap confirm (HealthKit reading present) or opens the manual sheet.
@@ -40,7 +47,8 @@ struct WeightHeroView: View {
     private var trendHeadline: String? { WeightHeroLogic.heroHeaderTrendText(trend: trend, system: system) }
     private var weeklyChange: String? {
         WeightHeroLogic.weeklyChangeText(
-            trend: trend, entries: entries, system: system, goalRateKgPerWeek: goalRateKgPerWeek
+            trend: trend, entries: entries, system: system, goalRateKgPerWeek: goalRateKgPerWeek,
+            withholdsLocalRate: withholdsLocalRate, serverRead: serverWeightRead
         )
     }
 

@@ -44,7 +44,16 @@ enum TrendsWeightCardLogic {
     /// uses (established trend + >= 7-day entry span) — this card only ever
     /// renders for the weight_loss goal (see `TrendsView.showsWeightCard`),
     /// so "down is good" is a safe, non-configurable assumption here.
-    static func ratePill(trend: WeightTrendDTO?, entries: [WeightLogEntryDTO], system: UnitSystem) -> RatePill? {
+    ///
+    /// `withholdsLocalRate`: the server is reading the scale itself (early read /
+    /// welcome back / plateau — `GoalProgressLogic.usesServerWeightRead`) and has
+    /// withheld a pace on purpose, so no pill of this card's own 7-day rate may
+    /// contradict the goal card above it. Defaults to `false` (older server).
+    static func ratePill(
+        trend: WeightTrendDTO?, entries: [WeightLogEntryDTO], system: UnitSystem,
+        withholdsLocalRate: Bool = false
+    ) -> RatePill? {
+        guard !withholdsLocalRate else { return nil }
         guard let trend, trend.established else { return nil }
         guard let span = WeightHeroLogic.daySpan(entries: entries),
               span >= WeightHeroLogic.minimumSpanDaysForWeeklyRate else { return nil }
@@ -108,12 +117,15 @@ struct TrendsWeightCard: View {
     /// `TrendsViewModel.hasAnimatedIn` is still `false` — see
     /// `Sparkline.animatesOnAppear`'s doc comment for the same one-shot gate.
     var animatesIn: Bool = false
+    /// The server is reading the scale itself (`GoalProgressLogic.usesServerWeightRead`):
+    /// the rate pill is dropped rather than quote a 7-day rate the goal card withholds.
+    var withholdsLocalRate: Bool = false
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var trendHeadline: String { WeightHeroLogic.trendHeadline(trend: trend, system: system) }
     private var ratePill: TrendsWeightCardLogic.RatePill? {
-        TrendsWeightCardLogic.ratePill(trend: trend, entries: entries, system: system)
+        TrendsWeightCardLogic.ratePill(trend: trend, entries: entries, system: system, withholdsLocalRate: withholdsLocalRate)
     }
 
     /// Split from `trendHeadline`'s combined "Trend 82.0 kg" into the two

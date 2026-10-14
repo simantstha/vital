@@ -446,7 +446,9 @@ private extension TrendsView {
     /// summary has no logged sets.
     var strengthCard: TrendsStrengthLogic.Card? {
         guard let summary = vm.workoutSummary else { return nil }
-        return TrendsStrengthLogic.card(from: summary, system: unitPref.current, today: Date())
+        return TrendsStrengthLogic.card(
+            from: summary, system: unitPref.current, today: Date(), liftReturn: vm.goalProgress?.liftReturn
+        )
     }
 
     var weightCardView: some View {
@@ -470,7 +472,10 @@ private extension TrendsView {
             // exactly once data first arrives, so its own `@State`
             // (`TrendsWeightCard`'s `onAppear`) already plays the entrance
             // exactly once per session without needing a shared flag.
-            animatesIn: true
+            animatesIn: true,
+            // While the server is reading the scale (early read / welcome back /
+            // plateau) it withholds a pace; the pill must not quote its own.
+            withholdsLocalRate: vm.goalProgress.map(GoalProgressLogic.usesServerWeightRead) ?? false
         )
     }
 

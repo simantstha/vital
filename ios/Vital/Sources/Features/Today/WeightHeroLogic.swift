@@ -110,11 +110,25 @@ enum WeightHeroLogic {
     /// `goalRateKgPerWeek`: when the goal-progress card has a 4-week rate, the
     /// hero shows that SAME number ("−0.9 lb/wk over 4 weeks") so the hero and
     /// the card never disagree; without it the 7-day rate above is used.
+    ///
+    /// `withholdsLocalRate` / `serverRead`: while the server is reading the scale
+    /// itself (`GoalProgressLogic.usesServerWeightRead` — an early read, a
+    /// return after a gap, a plateau) it sends no weekly pace on purpose, so the
+    /// 7-day fallback must NOT fill the gap with a jumpier number of its own.
+    /// The hero then shows the server's read (`GoalProgressLogic.serverWeightRead`,
+    /// its headline minus the verdict prefix — it wraps, the hero's rate line has
+    /// no line limit) or nothing when the server sent none. Both default to "no
+    /// server read", so an older server keeps today's behaviour exactly.
     static func weeklyChangeText(
         trend: WeightTrendDTO?, entries: [WeightLogEntryDTO], system: UnitSystem,
-        goalRateKgPerWeek: Double? = nil
+        goalRateKgPerWeek: Double? = nil,
+        withholdsLocalRate: Bool = false, serverRead: String? = nil
     ) -> String? {
         guard let trend, trend.established else { return nil }
+        if withholdsLocalRate {
+            guard let serverRead, !serverRead.isEmpty else { return nil }
+            return GoalProgressLogic.nonBreaking(serverRead)
+        }
         if let goalRate = goalRateKgPerWeek, goalRate.isFinite {
             var text = "\(UnitFormat.weightDelta(kgPerWeek: goalRate, system)) over 4 weeks"
             if isFasterThanRecommended(deltaPerWeek: goalRate, currentTrendKg: trend.days.last?.trendKg) {

@@ -146,6 +146,27 @@ final class CoachOpenerAndComposerTests: XCTestCase {
         )
     }
 
+    /// A headline that already ends a sentence ("Congratulations!") used to get a
+    /// period on top of it ("Congratulations!."); only text that does not end in
+    /// ".", "!" or "?" gets one.
+    func testGoalStatusOpenerNeverDoublesTheHeadlinePunctuation() {
+        func opener(_ headline: String) -> String? {
+            let p = progress(goal: "endurance", verdict: .building, targetKg: nil, headline: headline)
+            return CoachViewModel.goalStatusOpener(p, system: .metric, now: now, locale: en)
+        }
+        let invite = "What would you like to dig into?"
+        XCTAssertEqual(opener("Half marathon done — 21.1 km in 2:01. Congratulations!"),
+                       "Goal check-in: Half marathon done — 21.1 km in 2:01. Congratulations! \(invite)")
+        XCTAssertEqual(opener("Congratulations!"), "Goal check-in: Congratulations! \(invite)")
+        XCTAssertEqual(opener("Ready for race week?"), "Goal check-in: Ready for race week? \(invite)")
+        XCTAssertEqual(opener("Building — keep it up."), "Goal check-in: Building — keep it up. \(invite)")
+        XCTAssertEqual(opener("Building — a long clipped head…"), "Goal check-in: Building — a long clipped head… \(invite)")
+        // Text without sentence punctuation still gets exactly one period.
+        XCTAssertEqual(opener("Building — 24.5 km last week (+12%), on plan"),
+                       "Goal check-in: Building — 24.5 km last week (+12%), on plan. \(invite)")
+        XCTAssertEqual(opener("Building — distance up 12%..."), "Goal check-in: Building — distance up 12%. \(invite)")
+    }
+
     func testGoalStatusOpenerIsNilWithoutRealProgress() {
         XCTAssertNil(CoachViewModel.goalStatusOpener(progress(verdict: .needsTarget), system: .metric, now: now, locale: en))
         XCTAssertNil(CoachViewModel.goalStatusOpener(progress(verdict: .insufficientData), system: .metric, now: now, locale: en))

@@ -129,6 +129,8 @@ struct TodayView: View {
                                     system: unitPref.current,
                                     targetKg: vm.goalProgress?.target.weightKg,
                                     goalRateKgPerWeek: vm.heroGoalRateKgPerWeek,
+                                    withholdsLocalRate: vm.heroWithholdsLocalRate,
+                                    serverWeightRead: vm.heroServerWeightRead,
                                     chip: vm.weighInChip,
                                     onChipTap: { onWeighInChipTap() },
                                     isLogging: vm.isLoggingWeight,

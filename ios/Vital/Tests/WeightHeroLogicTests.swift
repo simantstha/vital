@@ -381,4 +381,86 @@ final class WeightHeroLogicTests: XCTestCase {
         XCTAssertEqual(UnitFormat.weightDeltaCompact(kgPerWeek: -0.4, .metric), "\u{2212}0.4/wk")
         XCTAssertEqual(UnitFormat.weightDeltaCompact(kgPerWeek: 0.42, .metric), "+0.4/wk")
     }
+
+    // MARK: - Server weight read (wave 19): no local rate while the server withholds a pace
+
+    /// An established trend whose 7-day rate WOULD print "−0.8 kg/wk this week" — the
+    /// jumpy number the server deliberately withholds during an early read.
+    private func hero() -> (trend: WeightTrendDTO, entries: [WeightLogEntryDTO]) {
+        let trend = WeightTrendDTO(
+            days: [WeightTrendDayDTO(day: day(daysAgo: 0), rawKg: 82, trendKg: 82)],
+            delta7dKgPerWeek: -0.8, delta30dKgPerWeek: -0.4, established: true
+        )
+        return (trend, [entry(daysAgo: 10), entry(daysAgo: 0)])
+    }
+
+    private func progress(
+        _ state: GoalProgressDTO.WeightRead.State?, headline: String, rateKg: Double? = nil
+    ) -> GoalProgressDTO {
+        GoalProgressDTO(
+            goal: "weight_loss",
+            target: .init(weightKg: 76),
+            current: .init(weightKg: 83.5, startWeightKg: 83.7),
+            ratePerWeek: .init(kg: rateKg),
+            verdict: .progressing,
+            headline: headline,
+            weightRead: state.map { GoalProgressDTO.WeightRead(state: $0) }
+        )
+    }
+
+    /// What `TodayViewModel.heroWithholdsLocalRate` / `heroServerWeightRead` feed the hero.
+    private func heroText(_ goal: GoalProgressDTO?, goalRate: Double? = nil) -> String? {
+        let (trend, entries) = hero()
+        return WeightHeroLogic.weeklyChangeText(
+            trend: trend, entries: entries, system: .metric, goalRateKgPerWeek: goalRate,
+            withholdsLocalRate: goal.map(GoalProgressLogic.usesServerWeightRead) ?? false,
+            serverRead: goal.flatMap(GoalProgressLogic.serverWeightRead)
+        )
+    }
+
+    func testHeroShowsTheServerReadAndNoLocalRateDuringEarlyReturningAndPlateauReads() {
+        let reads: [(GoalProgressDTO.WeightRead.State, String)] = [
+            (.early, "Early read — down 0.7 kg on the scale in 7 days"),
+            (.returning, "Welcome back — the scale is down 1.1 kg since May 10"),
+            (.plateau, "Plateau — weekly average ~89.4 kg for 3 weeks"),
+        ]
+        for (state, headline) in reads {
+            let text = heroText(progress(state, headline: headline))
+            XCTAssertEqual(text, GoalProgressLogic.nonBreaking(headline), "\(state)")
+            XCTAssertFalse(text?.contains("/wk") ?? false, "\(state): no weekly rate of its own")
+            // Not even the goal rate the card would show may sneak back in.
+            XCTAssertEqual(heroText(progress(state, headline: headline, rateKg: -0.4), goalRate: -0.4), text, "\(state)")
+        }
+        // Units stay glued to their numbers.
+        XCTAssertEqual(
+            heroText(progress(.early, headline: "Early read — down 0.7 kg on the scale in 7 days")),
+            "Early read — down 0.7\u{00A0}kg on the scale in 7 days"
+        )
+    }
+
+    func testHeroShowsNothingRatherThanALocalRateWhenTheServerSentNoReadText() {
+        XCTAssertNil(heroText(progress(.early, headline: "")))
+        XCTAssertNil(heroText(progress(.plateau, headline: "   ")))
+    }
+
+    func testHeroKeepsItsOwnFallbackWithoutAWeightReadOrDuringAPace() {
+        let local = "\u{2212}0.8\u{00A0}kg/wk this week"
+        XCTAssertEqual(heroText(nil), local, "no goal progress yet")
+        XCTAssertEqual(heroText(progress(nil, headline: "Early read — down 0.7 kg")), local, "older server: no weightRead")
+        XCTAssertEqual(heroText(progress(.pace, headline: "On track — 6 kg to go")), local)
+        XCTAssertEqual(heroText(progress(.reached, headline: "Goal reached")), local)
+        // The 4-week goal rate still wins over the local one, as before.
+        XCTAssertEqual(
+            heroText(progress(.pace, headline: "On track", rateKg: -0.4), goalRate: -0.4),
+            "\u{2212}0.4\u{00A0}kg/wk over 4 weeks"
+        )
+    }
+
+    func testHeroStaysSilentForANonEstablishedTrendEvenWithAServerRead() {
+        let young = WeightTrendDTO(days: [], delta7dKgPerWeek: nil, delta30dKgPerWeek: nil, established: false)
+        XCTAssertNil(WeightHeroLogic.weeklyChangeText(
+            trend: young, entries: [entry(daysAgo: 10), entry(daysAgo: 0)], system: .metric,
+            withholdsLocalRate: true, serverRead: "Early read — down 0.7 kg on the scale in 7 days"
+        ))
+    }
 }
