@@ -87,7 +87,10 @@ export function goalOpenerLine(gp: GoalProgress | null | undefined, units: UnitS
     }
   }
   const headline = gp.headline?.trim().replace(/[.\s]+$/, '');
-  return headline ? `Goal check-in: ${headline}.` : null;
+  if (!headline) return null;
+  // A headline that ends in its own "!" ("... Congratulations!") keeps it; no "!." after it.
+  const endsLoud = gp.headline.trim().endsWith('!');
+  return endsLoud ? `Goal check-in: ${gp.headline.trim()}` : `Goal check-in: ${headline}.`;
 }
 
 const NEW_USER_GOAL: Record<GoalKind, { lead: string; ask: string }> = {

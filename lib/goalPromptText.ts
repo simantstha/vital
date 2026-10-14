@@ -8,7 +8,7 @@
  */
 
 import type { GoalKind, GoalProgress } from './goalProgress';
-import { isWindDownPhase, recoveryWeek } from './enduranceProgression';
+import { formatRaceTime, formatTargetLongRun, isWindDownPhase, recoveryWeek } from './enduranceProgression';
 import type { ProgressionSummary } from './workoutRepository';
 import { plainSpaces } from './displayText';
 import { liftChange4w } from './liftChange';
@@ -38,23 +38,81 @@ function signedWt(kg: number, units: UnitSystem, digits = 1): string {
   return `${kg > 0 ? '+' : ''}${wt(kg, units, digits)}`;
 }
 
+/** A planned distance (the long run) in the coach's plain spaces: imperial rounded to the nearest half mile. */
+function longRunText(km: number, units: UnitSystem): string {
+  return plainSpaces(formatTargetLongRun(km, units === 'imperial' ? 1 / KM_PER_MILE : 1));
+}
+
+/** "21.1 km in 2:01" for the race the runner just ran (the time only when known). */
+function racedText(completed: { km: number; durationMin: number | null }, units: UnitSystem): string {
+  const time = formatRaceTime(completed.durationMin);
+  return `${distKm(completed.km, units)}${time ? ` in ${plainSpaces(time)}` : ''}`;
+}
+
 /**
  * One line for the race lifecycle so the coach never pushes volume in a taper,
  * race week or recovery: the phase and this week's target (the same number as
- * `distance.stepTargetKm`, which carries the phase target in these weeks).
+ * `distance.stepTargetKm`, which carries the phase target in these weeks). Race
+ * day and the day after have their own variants: before a race-length run is
+ * logged, "start relaxed"; once it is, "the race is done — congratulate them".
  * Null in the build phase and without a race.
  */
 function racePhaseLine(gp: GoalProgress, units: UnitSystem): string | null {
   const race = gp.race;
   if (!race || !isWindDownPhase(race.phase)) return null;
   const target = gp.distance != null ? distKm(gp.distance.stepTargetKm, units) : null;
+  const longRun = gp.distance?.plan?.longRunKm;
+  const rep = units === 'imperial' ? '3×0.5 mi' : '3×1 km';
   switch (race.phase) {
     case 'taper':
-      return `- Race phase: taper${target ? ` — this week's target ~${target}` : ''}; cut volume, keep a little intensity — do not push volume or build the long run`;
+      return `- Race phase: taper${target ? ` — this week's target ~${target}` : ''}; cut volume, ${longRun != null ? `long run ${longRunText(longRun, units)} easy, ` : 'keep the long run easy, '}plus ${rep} at race pace midweek — do not push volume or build the long run`;
     case 'race_week':
+      if (race.daysToGo === 0) {
+        return race.completed
+          ? `- Race phase: race day, and the race is DONE (${racedText(race.completed, units)}) — congratulate them; recovery starts now, no training advice`
+          : '- Race phase: race day — warm up easy and start relaxed; no training advice, no volume talk';
+      }
       return `- Race phase: race week${target ? ` — ~${target} before the race at most` : ''}; short easy runs, rest 1–2 days before race day — no new volume or hard sessions`;
-    case 'recovery':
-      return `- Race phase: recovery week ${recoveryWeek(race.daysSince ?? 1)} after the race${target ? ` — easy only, up to ${target}` : ' — easy only'}; do not push volume or intensity — the next step is a new goal (a new race, a weekly distance target, or maintenance)`;
+    case 'recovery': {
+      const done = race.completed && (race.daysSince ?? 99) <= 1 ? `just raced (${racedText(race.completed, units)}) — congratulate them; ` : '';
+      return `- Race phase: ${done}recovery week ${recoveryWeek(race.daysSince ?? 1)} after the race${target ? ` — easy only, up to ${target}` : ' — easy only'}; do not push volume or intensity — the next step is a new goal (a new race, a weekly distance target, or maintenance)`;
+    }
+  }
+}
+
+/**
+ * "This week's target" for the build weeks, from the same week plan the goal card
+ * and the weekly review read — one number, and what to do with it. Not in
+ * taper / race week / recovery (the race phase line owns those).
+ */
+function weekTargetLine(gp: GoalProgress, units: UnitSystem): string | null {
+  const d = gp.distance;
+  if (!d || isWindDownPhase(gp.race?.phase)) return null;
+  const plan = d.plan;
+  const goal = distKm(d.targetKm, units);
+  if (!plan) {
+    // No plan (nothing measured yet): the safe step over last week when it is below the goal.
+    return d.stepTargetKm < d.targetKm
+      ? `- This week's target: build to ~${distKm(d.stepTargetKm, units)} (a safe ~10% step over last week); the ${goal}/week goal comes after — do not push past the step this week`
+      : null;
+  }
+  const t = plan.targetKm != null ? distKm(plan.targetKm, units) : null;
+  const lr = plan.longRunKm != null ? `long run ${longRunText(plan.longRunKm, units)}` : null;
+  switch (plan.kind) {
+    case 'baseline':
+      return "- This week's target: none yet — a baseline week; next week's step is built from this week's total";
+    case 'build':
+      return `- This week's target: build to ~${t} (a safe ~10% step over last week${lr ? `; ${lr}` : ''}); the ${goal}/week goal comes after — do not push past the step this week`;
+    case 'maintain':
+      return `- This week's target: hold the ${goal}/week goal${lr ? `; ${lr} (the long run keeps growing ~2 km a week toward its peak)` : ''}, the rest easy — the runner is at the goal, do not add volume`;
+    case 'hold':
+      return `- This week's target: hold ~${t} — last week was over the safe step; do not push higher or step up from the jump`;
+    case 'restart':
+      return `- This week's target: restart at ~${t} with easy runs${lr ? `; ${lr}` : ''} — the runner is coming back from a break; do not push toward the ${goal}/week goal yet`;
+    case 'rebuild':
+      return `- This week's target: rebuilding after the race, ~${t}, easy runs; add about 10% a week`;
+    default:
+      return null;
   }
 }
 
@@ -104,16 +162,14 @@ export function formatGoalProgressLines(gp: GoalProgress, units: UnitSystem): st
   }
   if (gp.longRun) {
     const dist = (km: number) => distKm(km, units);
-    const target = gp.longRun.targetPeakKm != null ? `; peak target ${dist(gp.longRun.targetPeakKm)} before the taper` : '';
-    lines.push(`- Long run (running only): last ${dist(gp.longRun.lastKm)}; 28-day peak ${dist(gp.longRun.peakKm)}${target}`);
+    const target = gp.longRun.targetPeakKm != null ? `; peak target ${longRunText(gp.longRun.targetPeakKm, units)} before the taper` : '';
+    const next = gp.longRun.nextKm != null ? `; next long run ~${longRunText(gp.longRun.nextKm, units)}` : '';
+    lines.push(`- Long run (running only): longest run in the last 14 days ${dist(gp.longRun.lastKm)}${next}; 28-day peak ${dist(gp.longRun.peakKm)}${target}`);
   }
-  // The ONE target for this week: the safe ~10% step over last week (the same
-  // number the app's bar and the weekly review's "Next week" use). The weekly
-  // goal comes after it, so the coach must not push straight to the goal.
-  // (Not in taper / race week / recovery: those have their own target, in the race phase line above.)
-  if (gp.distance && gp.distance.stepTargetKm < gp.distance.targetKm && !isWindDownPhase(gp.race?.phase)) {
-    lines.push(`- This week's target: build to ~${distKm(gp.distance.stepTargetKm, units)} (a safe ~10% step over last week); the ${distKm(gp.distance.targetKm, units)}/week goal comes after — do not push past the step this week`);
-  }
+  // The ONE target for this week, from the same week plan the app's bar and the weekly review's "Next week" use.
+  // The weekly goal comes after it, so the coach must not push straight to the goal.
+  const weekTarget = weekTargetLine(gp, units);
+  if (weekTarget) lines.push(weekTarget);
   if (nowBits.length) lines.push(`- Now: ${nowBits.join('; ')}`);
 
   lines.push(`- Verdict: ${gp.verdict} — "${plainSpaces(gp.headline)}"`);

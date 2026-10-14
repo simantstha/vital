@@ -25,24 +25,27 @@
  *    with >= 3 weigh-ins over >= 7 days and a rate in the right direction.
  *  - muscle — lift e1RM progression (top 3 lifts), weight gain band
  *    0.1–0.5 %bw/wk, sessions/week vs target, protein-target days.
- *  - endurance — with a weekly distance target: this week's distance vs target
- *    (primary progress), 4-week average vs target for the verdict
- *    (building/holding/behind), no ETA. Otherwise training-volume trend,
- *    sessions/week vs target, resting HR / HRV direction (building/holding).
- *    Volume change is ONE definition everywhere: last 2 weeks vs the 2 before
- *    (ENDURANCE_VOLUME_WINDOW_LABEL), always labelled. With a race, the long-run
- *    build (last long run / 28-day peak vs a distance-based peak target) is a
- *    reason right behind the race countdown. The race also has a PHASE (build /
- *    taper / race week / recovery, lib/enduranceProgression.ts): taper, race
- *    week and recovery swap the growth step for their own weekly target, lead
- *    the reasons with what the week is for, and the race stays in the payload
- *    for the 14 days of recovery ("Race done — Dec 31 · recovery week 1" and a
- *    next-step reason). In those three phases the planned drop in volume must not
- *    read as 'behind', so the verdict comes from THIS WEEK against the phase
- *    target (`windDownOutcome`, the same band rule the weekly review rates with):
- *    'on_track' within the band, 'building' for a taper undershoot, 'on_track' +
- *    a watch-tone phase line for running over it. No new verdict values; build
- *    weeks and goals without a weekly distance target are unchanged.
+ *  - endurance — with a weekly distance target and measured running, ONE week plan
+ *    (lib/enduranceProgression.ts `enduranceWeekPlan`, the same plan the weekly
+ *    review, the coach lines and the coach opener read) decides everything: the
+ *    week's kind (baseline, build, hold, restart, maintain, taper, race week,
+ *    recovery, rebuild), its km target (`distance.stepTargetKm`), the long run,
+ *    the verdict and the headline. The race phase and every target are read on the
+ *    MONDAY of the calendar week, whatever day it is. The verdict rests on the last
+ *    FINISHED week against its own plan, never on a rolling 14-day comparison or on
+ *    how much of the current week has been run: 'building' on a build / baseline /
+ *    restart / rebuild week, 'on_track' at the weekly goal and in a taper / race
+ *    week / recovery week within its band, 'holding' on a jump over the safe step
+ *    (this week so far, or last week's: the hold week), 'behind' only when last
+ *    week was far short of its own step (never on a break, restart or rebuild).
+ *    Growth is ONE number — the finished week against the one before, "21 km last
+ *    week (+11%), on plan" — the same one the review quotes. Race day says "start
+ *    relaxed", a race-length run on race day says "done". Goals without a weekly
+ *    distance target (or without any measured run) keep the training-volume trend
+ *    (ENDURANCE_VOLUME_WINDOW_LABEL), sessions/week, resting HR / HRV direction.
+ *    With a race, the long-run build (the longest run of the last 14 days vs a
+ *    distance-based peak target) is a reason right behind the race countdown, and
+ *    in taper / race week it says the peak long run is done. No new verdict values.
  *  - general — consistency: active days, sleep-goal nights, logging days.
  */
 
@@ -62,15 +65,27 @@ import { isLiftProgressing, liftChange4w, liftDisplayChange, liftDisplayName, pi
 import { weekStartKeyForDay } from './localDay';
 import { KM_PER_MILE } from './metricFormat';
 import {
+  enduranceWeekPlan,
+  findRaceRun,
+  formatRaceTime,
+  formatTargetLongRun,
+  gradeEnduranceWeek,
   isWindDownPhase,
+  longRunStats,
+  longRunTargetKm as longRunTargetKmFor,
+  longRunWord,
+  mondayOfDay,
+  planWeekKm,
   racePhaseInfo,
   racePhaseTargetKm,
+  raceRules,
   recoveryWeek,
   weekStepOrGoalKm,
-  windDownBand,
+  type EnduranceWeekKind,
+  type EnduranceWeekPlan,
+  type PlanRun,
   type RacePhase,
   type RacePhaseInfo,
-  type WindDownBand,
 } from './enduranceProgression';
 
 // ── Constants ───────────────────────────────────────────────────────────────
@@ -171,9 +186,27 @@ export interface GoalDistanceProgress {
   /**
    * e.g. "22.7 of ~27 km running this week · goal 30 km" when the step is below
    * the goal, "24.5 of 30 km running this week" when it is the goal (mi for
-   * imperial users).
+   * imperial users); "15 km so far · baseline week" in the first week of running.
    */
   text: string;
+  /**
+   * The week plan behind `stepTargetKm` and the headline (lib/enduranceProgression.ts
+   * `enduranceWeekPlan`), additive: absent on payloads from before it and
+   * without any measured running.
+   */
+  plan?: GoalWeekPlan;
+}
+
+/** What this calendar week is for: the plan the card, the weekly review and the coach all read. */
+export interface GoalWeekPlan {
+  /** baseline | build | hold | restart | maintain | taper | race_week | recovery | rebuild. */
+  kind: EnduranceWeekKind;
+  /** The week's running target, km; null in a baseline week (no earlier week to take a step from). */
+  targetKm: number | null;
+  /** The next long run, km; null when there is none to plan (baseline, race week, recovery, nothing run lately). */
+  longRunKm: number | null;
+  /** One line: what the week is for ("~27 km this week: long run 15 km, the rest easy runs"). */
+  purpose: string;
 }
 
 export interface GoalRaceProgress {
@@ -194,15 +227,23 @@ export interface GoalRaceProgress {
   phase?: RacePhase;
   /** Recovery only: whole days since race day (1–14). Absent before and on race day. */
   daysSince?: number;
+  /**
+   * The race itself, once a run of at least 90% of the race distance is logged on
+   * race day (or the day before / after): its km and, when known, its minutes.
+   * Additive: absent before the race is run.
+   */
+  completed?: { km: number; durationMin: number | null } | null;
 }
 
 export interface GoalLongRunProgress {
-  /** Distance of the most recent long run (a run >= LONG_RUN_PEAK_FRACTION of the 28-day peak), km. */
+  /** The longest run of the last 14 days (the race itself excluded), km. */
   lastKm: number;
   /** Longest single run in the last 28 days, km. */
   peakKm: number;
   /** Peak long-run distance to build to before the taper (by race distance); null without a race distance. */
   targetPeakKm: number | null;
+  /** The next long run from the week plan: min(lastKm + 2 km, the peak target); additive, absent when there is none to plan. */
+  nextKm?: number | null;
 }
 
 export interface GoalProgressReason {
@@ -306,6 +347,13 @@ export interface GoalProgressInput {
   target: { weightKg: number | null; date: string | null; weeklySessions: number | null; weeklyDistanceKm?: number | null };
   /** Endurance only: optional race (see GoalProgress.race). Does not affect the verdict. */
   race?: { date: string | null; distanceKm: number | null } | null;
+  /**
+   * Endurance: running workouts with a distance over a longer history than
+   * `workouts` (~10 weeks, the loader supplies it) — the week plan needs the
+   * weeks before last week (restart median, spike → hold, baseline). Absent
+   * (tests, old callers): the running `workouts` stand in.
+   */
+  runHistory?: Array<{ day: string; km: number; durationMin?: number | null }>;
   /**
    * Endurance with a race: the biggest weekly running km (km) in the 4 weeks
    * before the taper began (`peakWeekKmBeforeTaper`, from a longer history than
@@ -701,11 +749,11 @@ function sessionsReason(input: GoalProgressInput): GoalProgressReason | null {
     return { kind: 'sessions', text: `No training sessions logged in the last ${span}`, tone: 'watch' };
   }
   if (target == null) {
-    return { kind: 'sessions', text: `Averaging ${perWeek} sessions a week over the last ${span}`, tone: 'neutral' };
+    return { kind: 'sessions', text: `Averaging ${perWeek} ${plural(perWeek, 'session')} a week over the last ${span}`, tone: 'neutral' };
   }
   return {
     kind: 'sessions',
-    text: `Averaging ${perWeek} sessions a week vs your target of ${target}`,
+    text: `Averaging ${perWeek} ${plural(perWeek, 'session')} a week vs your target of ${target}`,
     tone: perWeek >= target ? 'good' : perWeek >= target * 0.75 ? 'neutral' : 'watch',
   };
 }
@@ -879,6 +927,8 @@ interface Outcome {
   verdict: GoalVerdict;
   headline: string;
   reasons: GoalProgressReason[];
+  /** Endurance week-plan outcomes already carry the race lifecycle (race line, phase line, race-done copy). */
+  raceHandled?: boolean;
 }
 
 function insufficientWeightOutcome(w: WeightBlock): Outcome {
@@ -1202,15 +1252,13 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock): Outcome {
 }
 
 /**
- * The ONE endurance volume-change definition used by goal reasons, the goal
- * headline and the Today hero: mean weekly volume over the last 2 weeks vs the
- * 2 weeks before. (The weekly review answers a different, explicitly labelled
- * question — "vs last week" — for its one-week window.)
+ * The endurance volume-change definition for goals WITHOUT a weekly distance
+ * target (time or session counts): mean weekly volume over the last 2 weeks vs
+ * the 2 weeks before. With a weekly distance target the card speaks in finished
+ * calendar weeks instead ("21 km last week (+11%), on plan" — the same
+ * "vs last week" number the weekly review quotes), see `planOutcome`.
  */
 export const ENDURANCE_VOLUME_WINDOW_LABEL = 'last 2 weeks vs the 2 before';
-
-/** 4-week average distance vs target below this fraction reads as 'behind'. */
-const DISTANCE_BEHIND_FRACTION = 0.8;
 
 function distanceNum(input: GoalProgressInput, km: number): number {
   return input.unitSystem === 'imperial' ? round1(km / KM_PER_MILE) : round1(km);
@@ -1241,45 +1289,86 @@ function distanceInWeek(input: GoalProgressInput, offset: number): { km: number;
   return { km, readings };
 }
 
-/** Running km (finite distances only) on local days `from`..`to` inclusive; null when no run in the range carries a distance. */
-function runningKmBetween(input: GoalProgressInput, from: string, to: string): number | null {
-  let km = 0;
-  let readings = 0;
-  for (const w of runWorkouts(input)) {
-    if (w.distanceKm == null || !Number.isFinite(w.distanceKm)) continue;
-    if (w.day < from || w.day > to) continue;
-    km += w.distanceKm;
-    readings += 1;
-  }
-  return readings === 0 ? null : km;
-}
-
 /** The display unit's size in km for the shared progression rule (1 for km, 1 / KM_PER_MILE for miles). */
 function unitsPerKm(input: GoalProgressInput): number {
   return input.unitSystem === 'imperial' ? 1 / KM_PER_MILE : 1;
 }
 
+// ── Endurance week plan (ONE plan per calendar week, lib/enduranceProgression.ts) ──
+
+interface EnduranceCtx {
+  /** Running workouts with a distance: the loader's longer history when supplied, else the 28-day workouts. */
+  runs: PlanRun[];
+  /** Monday of this calendar week — the race phase and every target are read on it, whatever day it is. */
+  weekStart: string;
+  /** This week's running (Mon–today) as the plan counts it: a run on race day is the race, not training. */
+  thisWeek: { km: number; days: number };
+  /** The week plan; null without a weekly distance goal or any measured run. */
+  plan: EnduranceWeekPlan | null;
+  /** The race run (>= 90% of the race distance, on race day or a day either side), once logged. */
+  raceRun: PlanRun | null;
+}
+
+function planRunsOf(input: GoalProgressInput): PlanRun[] {
+  const out: PlanRun[] = [];
+  if (input.runHistory) {
+    for (const r of input.runHistory) {
+      if (Number.isFinite(r.km) && r.km > 0) out.push({ day: r.day, km: r.km, durationMin: r.durationMin ?? null });
+    }
+    return out;
+  }
+  for (const w of runWorkouts(input)) {
+    if (w.distanceKm == null || !Number.isFinite(w.distanceKm) || w.distanceKm <= 0) continue;
+    out.push({ day: w.day, km: w.distanceKm, durationMin: w.durationMin });
+  }
+  return out;
+}
+
+const enduranceCtxCache = new WeakMap<GoalProgressInput, EnduranceCtx>();
+
+function enduranceCtx(input: GoalProgressInput): EnduranceCtx {
+  const hit = enduranceCtxCache.get(input);
+  if (hit) return hit;
+  const weekStartDay = mondayOfDay(input.todayKey);
+  const runs = planRunsOf(input).filter(r => r.day <= input.todayKey);
+  const goalKm = input.target.weeklyDistanceKm;
+  const plan = input.goal === 'endurance' && goalKm != null && goalKm > 0 && runs.length > 0
+    ? enduranceWeekPlan({
+        runs,
+        weekStart: weekStartDay,
+        goalKm,
+        race: input.race ?? null,
+        today: input.todayKey,
+        racePeakWeekKm: input.racePeakWeekKm ?? null,
+        unitsPerKm: unitsPerKm(input),
+        goalStartDay: goalStartDay(input),
+      })
+    : null;
+  const ctx: EnduranceCtx = {
+    runs,
+    weekStart: weekStartDay,
+    thisWeek: planWeekKm(runs, weekStartDay, input.race?.date ?? null),
+    plan,
+    raceRun: findRaceRun(runs, input.race ?? null),
+  };
+  enduranceCtxCache.set(input, ctx);
+  return ctx;
+}
+
 /**
- * This week's safe step (km) toward the weekly target, from LAST calendar
- * week's (Mon–Sun) running km: the one shared progression rule (~10% over last
- * week, never past the target). The target itself when last week has no
- * measured running or was already within 10% of it.
+ * The race phase for THIS WEEK (read on its Monday, like the week plan) with the
+ * signed day count to race day from today (endurance + a race date only).
  */
-function stepTargetKm(input: GoalProgressInput, targetKm: number, thisWeekStart: string): number {
-  const lastWeekKm = runningKmBetween(input, addDays(thisWeekStart, -7), addDays(thisWeekStart, -1));
-  return weekStepOrGoalKm(lastWeekKm, targetKm, unitsPerKm(input));
-}
-
-/** The race phase for today with its signed day count (endurance + a race date only). */
 function raceInfo(input: GoalProgressInput): RacePhaseInfo | null {
-  return input.goal === 'endurance' ? racePhaseInfo(input.race?.date, input.todayKey) : null;
+  if (input.goal !== 'endurance' || !input.race?.date) return null;
+  return racePhaseInfo(input.race.date, mondayOfDay(input.todayKey), input.race.distanceKm);
 }
 
 /**
- * The weekly running target (km) of the current taper / race-week / recovery
- * phase (the shared rule in lib/enduranceProgression.ts: shares of the peak
- * week, capped at the weekly goal). Null in the build phase, without a race and
- * without any peak (no running before the taper and no weekly goal).
+ * The weekly running target (km) of this week's taper / race-week / recovery
+ * phase for a goal WITHOUT a weekly distance target or any measured run (the
+ * shared rule in lib/enduranceProgression.ts: shares of the peak week). Null in
+ * the build phase, without a race and without any peak.
  */
 function windDownTargetKm(input: GoalProgressInput): number | null {
   const info = raceInfo(input);
@@ -1290,48 +1379,37 @@ function windDownTargetKm(input: GoalProgressInput): number | null {
   return racePhaseTargetKm(info, peakKm, { weeklyGoalKm: goalKm, unitsPerKm: unitsPerKm(input) });
 }
 
-/** This calendar week's (Mon–today, user-local) distance; null when no workout in the window carries a distance. */
+/**
+ * This calendar week's distance (Mon–today, user-local) against ITS target: the
+ * plan's (the safe step, a hold or restart number, the phase target...), or the
+ * goal when there is no plan (nothing measured yet, or the first week of
+ * running). `thisWeekKm` is null only when nothing was ever run with a distance.
+ */
 function distanceProgress(input: GoalProgressInput): GoalDistanceProgress | null {
   const targetKm = input.target.weeklyDistanceKm;
   if (targetKm == null) return null;
-  const start = weekStart(input.todayKey);
-  // Around a race the week's running is measured without the race: race week
-  // leaves race day's runs out (its target excludes the race), and recovery
-  // counts only the days after race day.
-  const phase = raceInfo(input)?.phase ?? null;
-  const raceDay = input.race?.date ?? null;
-  const from = phase === 'recovery' && raceDay != null && addDays(raceDay, 1) > start ? addDays(raceDay, 1) : start;
-  let weekKm = 0;
-  let total28 = 0;
-  let readings = 0;
-  for (const w of runWorkouts(input)) {
-    if (w.distanceKm == null || !Number.isFinite(w.distanceKm)) continue;
-    const age = dayNumber(input.todayKey) - dayNumber(w.day);
-    if (age < 0 || age >= 28) continue;
-    readings += 1;
-    total28 += w.distanceKm;
-    if (phase === 'race_week' && w.day === raceDay) continue;
-    if (w.day >= from && w.day <= input.todayKey) weekKm += w.distanceKm;
-  }
-  const hasData = readings > 0;
-  // Taper, race week and recovery have their own weekly target instead of the growth step.
-  const stepKm = windDownTargetKm(input) ?? stepTargetKm(input, targetKm, start);
-  const done = hasData ? distanceNum(input, weekKm) : 0;
-  // One target for the week: when last week (or the race phase) caps it below
-  // the goal, say both ("22.7 of ~27 km ... · goal 30 km"); otherwise the goal
-  // alone. Recovery's number is a ceiling ("up to").
-  const text = phase === 'recovery'
-    ? `${done} of up to ${fmtDistance(input, stepKm)} running this week (recovery)`
-    : stepKm < targetKm
-      ? `${done} of ~${fmtDistance(input, stepKm)} running this week · goal ${fmtDistance(input, targetKm)}`
-      : `${done} of ${fmtDistance(input, targetKm)} running this week`;
+  const ec = enduranceCtx(input);
+  const plan = ec.plan;
+  const hasData = ec.runs.length > 0;
+  const stepKm = plan?.targetKm ?? targetKm;
+  const doneKm = ec.thisWeek.km;
+  const done = hasData ? distanceNum(input, doneKm) : 0;
+  // One target for the week: when the plan caps it below the goal, say both
+  // ("22.7 of ~27 km ... · goal 30 km"); otherwise the goal alone. Recovery's
+  // number is a ceiling ("up to"); the first week of running has no target yet.
+  let text: string;
+  if (plan?.kind === 'baseline') text = `${fmtDistance(input, doneKm)} so far · baseline week`;
+  else if (plan?.kind === 'recovery') text = `${done} of up to ${fmtDistance(input, stepKm)} running this week (recovery)`;
+  else if (stepKm < targetKm) text = `${done} of ~${fmtDistance(input, stepKm)} running this week · goal ${fmtDistance(input, targetKm)}`;
+  else text = `${done} of ${fmtDistance(input, targetKm)} running this week`;
   return {
     targetKm,
-    thisWeekKm: hasData ? round1(weekKm) : null,
-    avg4wKm: hasData ? round1(total28 / 4) : null,
-    weekStart: start,
+    thisWeekKm: hasData ? round1(doneKm) : null,
+    avg4wKm: plan?.avg4wKm ?? null,
+    weekStart: ec.weekStart,
     stepTargetKm: stepKm,
     text,
+    ...(plan ? { plan: { kind: plan.kind, targetKm: plan.targetKm, longRunKm: plan.longRunKm, purpose: plan.purpose } } : {}),
   };
 }
 
@@ -1353,23 +1431,40 @@ export function raceLabel(distanceKm: number | null, unitSystem?: 'metric' | 'im
   return `${withUnit(n, imperial ? 'mi' : 'km')} race`;
 }
 
+/** "half", "marathon", "10K", "5K" or "race" — the race as one word in running talk ("on track for the half"). */
+function raceWord(label: string): string {
+  if (label === 'Half marathon') return 'half';
+  if (label === 'Marathon') return 'marathon';
+  if (label === '10K' || label === '5K') return label;
+  return 'race';
+}
+
 /**
- * Endurance race countdown and phase (build / taper / race week); once race day
- * has passed the race stays for the 14 days of recovery (phase 'recovery' with
- * `daysSince`), then null. Null without a date too.
+ * Endurance race countdown and phase. The PHASE (build / taper / race week) is
+ * the one this calendar week's Monday has — the same one the week plan and the
+ * weekly review use, so a Sunday seven days out is still "taper", never "race
+ * week" a day before the review calls it taper; `daysToGo` / `weeksToGo` are the
+ * real countdown from today. Once race day has passed the race stays for the
+ * recovery weeks (phase 'recovery' with `daysSince`), then null (the rebuild
+ * weeks carry no race block). Null without a date too.
  */
 function raceProgress(input: GoalProgressInput): GoalRaceProgress | null {
   const date = input.race?.date;
   if (input.goal !== 'endurance' || !date) return null;
-  const info = racePhaseInfo(date, input.todayKey);
-  if (info == null) return null;
+  const week = raceInfo(input);
+  if (week == null) return null;
   const distanceKm = input.race?.distanceKm ?? null;
   const base = { date, distanceKm, label: raceLabel(distanceKm, input.unitSystem) };
-  if (info.phase === 'recovery') {
-    return { ...base, weeksToGo: 0, daysToGo: 0, phase: 'recovery', daysSince: -info.daysToRace };
+  const daysToRace = dayNumber(date) - dayNumber(input.todayKey);
+  if (!Number.isFinite(daysToRace)) return null;
+  const completed = enduranceCtx(input).raceRun;
+  const done = completed ? { completed: { km: round1(completed.km), durationMin: completed.durationMin ?? null } } : {};
+  if (daysToRace < 0) {
+    // Recovery follows the calendar week of the race day too (a Wednesday race: Thursday on is recovery).
+    if (week.phase !== 'recovery' && week.phase !== 'race_week') return null;
+    return { ...base, weeksToGo: 0, daysToGo: 0, phase: 'recovery', daysSince: -daysToRace, ...done };
   }
-  const daysToGo = info.daysToRace;
-  return { ...base, weeksToGo: daysToGo < 7 ? 0 : Math.ceil(daysToGo / 7), daysToGo, phase: info.phase };
+  return { ...base, weeksToGo: daysToRace < 7 ? 0 : Math.ceil(daysToRace / 7), daysToGo: daysToRace, phase: week.phase, ...done };
 }
 
 /** "Dec 31" for a race day (YYYY-MM-DD). */
@@ -1391,20 +1486,23 @@ function raceReason(race: GoalRaceProgress): GoalProgressReason {
 }
 
 /**
- * What this week is for, by race phase, right behind the race line: taper cuts
- * volume, race week keeps runs short and easy, recovery is easy only. `targetKm`
- * is the phase's weekly target (`windDownTargetKm`); without one the copy
- * carries no number. Null in the build phase (the volume trend leads there).
+ * What this week is for, by race phase, right behind the race line — for an
+ * endurance goal WITHOUT a weekly distance target (the week plan owns this line
+ * when there is one): taper cuts volume and spells out the intensity, race week
+ * keeps runs short and easy, recovery is easy only. `targetKm` is the phase's
+ * weekly target (`windDownTargetKm`); without one the copy carries no number.
+ * Null in the build phase.
  */
 function racePhaseReason(
-  input: GoalProgressInput, race: GoalRaceProgress, targetKm: number | null, overKm: number | null = null,
+  input: GoalProgressInput, race: GoalRaceProgress, targetKm: number | null,
 ): GoalProgressReason | null {
+  const rep = input.unitSystem === 'imperial' ? '3×0.5 mi' : '3×1 km';
   let text: string;
   switch (race.phase) {
     case 'taper':
       text = targetKm != null
-        ? `Taper: ~${fmtDistance(input, targetKm)} this week — keep a little intensity, cut volume`
-        : 'Taper: cut volume this week — keep a little intensity';
+        ? `Taper: ~${fmtDistance(input, targetKm)} this week — cut volume; keep the long run easy, plus ${rep} at race pace midweek`
+        : `Taper: cut volume this week — keep the long run easy, plus ${rep} at race pace midweek`;
       break;
     case 'race_week':
       text = race.daysToGo === 0
@@ -1419,58 +1517,7 @@ function racePhaseReason(
     default:
       return null;
   }
-  // Running well over the phase's plan this week: the same line, on watch, saying so.
-  if (overKm != null) return { kind: 'race_phase', text: `${text}; already ${fmtDistance(input, overKm)} — ease off`, tone: 'watch' };
   return { kind: 'race_phase', text, tone: 'neutral' };
-}
-
-/** Where this week's running sits against a taper / race-week / recovery target (the endurance verdict reads it). */
-interface WindDownStatus {
-  phase: 'taper' | 'race_week' | 'recovery';
-  targetKm: number;
-  thisWeekKm: number;
-  band: WindDownBand;
-}
-
-/**
- * This week's running km against the phase target, by the ONE band rule the
- * weekly review also rates with (`windDownBand`). Null outside taper / race
- * week / recovery, without a weekly distance goal (no `distance` block) and
- * when no run distance was measured — then there is nothing to judge.
- */
-function windDownStatus(input: GoalProgressInput, dist: GoalDistanceProgress | null, race: GoalRaceProgress | null): WindDownStatus | null {
-  const phase = race?.phase;
-  if (!isWindDownPhase(phase) || dist == null || dist.thisWeekKm == null) return null;
-  // Days of this calendar week already finished: a taper undershoot is only called on the lower bound pro-rated to them.
-  const weekFraction = (dayNumber(input.todayKey) - dayNumber(dist.weekStart)) / 7;
-  const band = windDownBand(phase, dist.thisWeekKm, dist.stepTargetKm, { unitsPerKm: unitsPerKm(input), weekFraction });
-  return { phase, targetKm: dist.stepTargetKm, thisWeekKm: dist.thisWeekKm, band };
-}
-
-/**
- * The endurance verdict in taper, race week and recovery. The planned drop in
- * volume must never read as 'behind' off the 4-week average, so the verdict
- * comes from this week against the phase target instead (no new verdict values):
- *  - within the band (taper 60%–125% of the target, race week / recovery up to
- *    the ceiling + 10%): 'on_track';
- *  - taper undershoot: 'building';
- *  - over the band (any of the three): 'on_track', with the phase reason on
- *    watch ("… already 24 km — ease off").
- * 'insufficient_data' and 'needs_target' stay (there is nothing honest to say).
- * Taper and race week also get a headline that matches the verdict; recovery's
- * headline is the race-done copy (see `withRaceLifecycle`).
- */
-function windDownOutcome(input: GoalProgressInput, outcome: Outcome, status: WindDownStatus): Outcome {
-  if (outcome.verdict === 'insufficient_data' || outcome.verdict === 'needs_target') return outcome;
-  const verdict: GoalVerdict = status.band === 'under' ? 'building' : 'on_track';
-  if (status.phase === 'recovery') return { ...outcome, verdict };
-  const done = distanceNum(input, status.thisWeekKm);
-  const target = fmtDistance(input, status.targetKm);
-  const over = status.band === 'over' ? ', over the plan' : '';
-  const headline = status.phase === 'taper'
-    ? `Taper week — ${done} of ~${target}${over}`
-    : `Race week — ${done} of ~${target} before the race${over}`;
-  return { ...outcome, verdict, headline: clip(headline) };
 }
 
 /** After the race: what comes next. */
@@ -1481,16 +1528,14 @@ const NEXT_GOAL_REASON: GoalProgressReason = {
 };
 
 /**
- * Fold the race lifecycle into an endurance outcome (its verdict is already
- * phase-aware, see `windDownOutcome`): the race line leads, then (taper / race
- * week) what the week is for, then the outcome's own reasons (cap 3). Once the
- * race is done the headline is the recovery state and the reasons are race
+ * Fold the race lifecycle into an endurance outcome that has no week plan (a
+ * goal without a weekly distance target): the race line leads, then (taper /
+ * race week) what the week is for, then the outcome's own reasons (cap 3). Once
+ * the race is done the headline is the recovery state and the reasons are race
  * done, recovery, next step.
  */
-function withRaceLifecycle(input: GoalProgressInput, outcome: Outcome, race: GoalRaceProgress, status: WindDownStatus | null): Outcome {
-  // Going well over the plan is flagged on the phase line — except on race day itself, where "ease off" would be silly.
-  const overKm = status?.band === 'over' && !(race.phase === 'race_week' && race.daysToGo === 0) ? status.thisWeekKm : null;
-  const phaseReason = racePhaseReason(input, race, windDownTargetKm(input), overKm);
+function withRaceLifecycle(input: GoalProgressInput, outcome: Outcome, race: GoalRaceProgress): Outcome {
+  const phaseReason = racePhaseReason(input, race, windDownTargetKm(input));
   if (race.phase === 'recovery' && phaseReason) {
     return {
       ...outcome,
@@ -1501,50 +1546,33 @@ function withRaceLifecycle(input: GoalProgressInput, outcome: Outcome, race: Goa
   return { ...outcome, reasons: [raceReason(race), ...(phaseReason ? [phaseReason] : []), ...outcome.reasons].slice(0, 3) };
 }
 
-/** A run counts as a "long run" when it is at least this fraction of the 28-day peak. */
-const LONG_RUN_PEAK_FRACTION = 0.7;
-/** The peak long run is planned this many days before the race (then taper). */
-const LONG_RUN_PEAK_LEAD_DAYS = 21;
-
 /**
  * Peak long-run distance (km) a runner should reach before the taper, by race
  * distance: 5K 8, 10K 14, half 18, marathon 32, otherwise 85% of the race.
  * Null without a race distance.
  */
 export function longRunTargetKm(raceDistanceKm: number | null): number | null {
-  if (raceDistanceKm == null || !Number.isFinite(raceDistanceKm) || raceDistanceKm <= 0) return null;
-  if (Math.abs(raceDistanceKm - 5) < 0.05) return 8;
-  if (Math.abs(raceDistanceKm - 10) < 0.05) return 14;
-  if (Math.abs(raceDistanceKm - 21.1) < 0.05) return 18;
-  if (Math.abs(raceDistanceKm - 42.2) < 0.05) return 32;
-  return Math.round(raceDistanceKm * 0.85);
+  return longRunTargetKmFor(raceDistanceKm);
 }
 
 /**
- * Long-run progress from RUNNING workouts with a distance in the last 28 days
- * (the same running-only filter as the weekly distance). Null for non-endurance
- * goals and when no such run exists. `lastKm` is the most recent run that is
- * itself "long" (>= 70% of the 28-day peak), so an easy 5 km after Sunday's
- * 14 km does not replace it.
+ * Long-run progress from RUNNING workouts with a distance: `lastKm` is the
+ * longest run of the last 14 days (what the next long run grows from, so a
+ * pre-illness long run weeks back no longer makes the next one unsafe), `peakKm`
+ * the longest of the last 28. The race itself is not a training long run. Null
+ * for non-endurance goals and when there was no run in the last 14 days.
  */
 function longRunProgress(input: GoalProgressInput, race: GoalRaceProgress | null): GoalLongRunProgress | null {
   if (input.goal !== 'endurance') return null;
-  const runs: Array<{ day: string; km: number }> = [];
-  for (const w of runWorkouts(input)) {
-    if (w.distanceKm == null || !Number.isFinite(w.distanceKm) || w.distanceKm <= 0) continue;
-    if (!inLastDays(w.day, input.todayKey, 28)) continue;
-    runs.push({ day: w.day, km: w.distanceKm });
-  }
-  if (runs.length === 0) return null;
-  const peak = Math.max(...runs.map(r => r.km));
-  const long = runs
-    .filter(r => r.km >= peak * LONG_RUN_PEAK_FRACTION)
-    .sort((a, b) => (a.day === b.day ? b.km - a.km : a.day < b.day ? 1 : -1));
+  const ec = enduranceCtx(input);
+  const { lastKm, peakKm } = longRunStats(ec.runs, input.todayKey, input.race?.date ?? null);
+  if (lastKm == null || peakKm == null) return null;
   return {
-    lastKm: round1(long[0].km),
-    peakKm: round1(peak),
+    lastKm,
+    peakKm,
     // Once the race is done there is no peak left to build to.
-    targetPeakKm: race && race.phase !== 'recovery' ? longRunTargetKm(race.distanceKm) : null,
+    targetPeakKm: race && race.phase !== 'recovery' ? longRunTargetKmFor(race.distanceKm) : null,
+    nextKm: ec.plan?.longRunKm ?? null,
   };
 }
 
@@ -1556,39 +1584,243 @@ function looseMonthPosition(day: string): string {
 }
 
 /**
- * "Long run 14 km · build to 18 km by mid-Dec" below the target,
- * "Long run peak 18 km — on target" once the 28-day peak reaches it. Only with a
- * race distance (that is what sets the target). The build-up is over once the
- * taper starts, so in taper / race week it never says "build to" (just the
- * peak target), and after the race it says nothing.
+ * The long-run status line behind the race countdown. Build phase: "Long run
+ * 14 km · build to 18 km by mid-Dec" below the peak target, "Long run peak 18 km
+ * — on target" once the 28-day peak reaches it ("Longest run" below 5 km / 3 mi:
+ * a 3 km jog is no long run). The build-up is over once the taper starts: taper
+ * and race week say the peak is done instead of "build to". After the race it
+ * says nothing. Imperial targets are rounded to the nearest half mile.
  */
 function longRunReason(input: GoalProgressInput, lr: GoalLongRunProgress | null, race: GoalRaceProgress | null): GoalProgressReason | null {
   if (lr == null || race == null || lr.targetPeakKm == null) return null;
   if (race.phase === 'recovery') return null;
+  if (isWindDownPhase(race.phase)) {
+    return { kind: 'long_run', text: `Peak long run ${fmtDistance(input, lr.peakKm)} — done`, tone: 'good' };
+  }
   if (lr.peakKm >= lr.targetPeakKm) {
     return { kind: 'long_run', text: `Long run peak ${fmtDistance(input, lr.peakKm)} — on target`, tone: 'good' };
   }
-  const peakBy = addDays(race.date, -LONG_RUN_PEAK_LEAD_DAYS);
-  const goal = peakBy >= input.todayKey && !isWindDownPhase(race.phase)
-    ? `build to ${fmtDistance(input, lr.targetPeakKm)} by ${looseMonthPosition(peakBy)}`
-    : `peak target ${fmtDistance(input, lr.targetPeakKm)}`;
-  return { kind: 'long_run', text: `Long run ${fmtDistance(input, lr.lastKm)} · ${goal}`, tone: 'neutral' };
+  const word = longRunWord(lr.lastKm, unitsPerKm(input));
+  const lead = `${word.charAt(0).toUpperCase()}${word.slice(1)} ${fmtDistance(input, lr.lastKm)}`;
+  const peakBy = addDays(race.date, -raceRules(race.distanceKm).peakLongRunLeadDays);
+  const goal = peakBy >= input.todayKey
+    ? `build to ${formatTargetLongRun(lr.targetPeakKm, unitsPerKm(input))} by ${looseMonthPosition(peakBy)}`
+    : `peak target ${formatTargetLongRun(lr.targetPeakKm, unitsPerKm(input))}`;
+  return { kind: 'long_run', text: `${lead} · ${goal}`, tone: 'neutral' };
 }
 
 /**
- * Which endurance reasons make the "Why" (cap 3; computeGoalProgress then puts
- * the race countdown in front, so with a race that is race + 2 of these):
- *   1. the volume trend — it is what the verdict and headline ("Building —
- *      distance up 6%") rest on, so it is always kept;
+ * Which endurance reasons make the "Why" (cap 3; with a race the race countdown
+ * goes in front, so that is race + 2 of these):
+ *   1. `lead` — the line the verdict rests on (the week plan's "what this week
+ *      is for", or for goals without a distance target the volume trend);
  *   2. anything on watch (resting HR trending up, HRV trending down): a
  *      recovery warning must never be cut;
  *   3. then the rest in fixed priority: long run, sessions, resting HR, HRV.
  * This week's distance is deliberately not a reason: `distance.text` ("24.5 of
  * 30 km running this week") already states it as the card's primary stat.
  */
-function enduranceReasons(volume: GoalProgressReason | null, rest: Array<GoalProgressReason | null>): GoalProgressReason[] {
+function enduranceReasons(lead: GoalProgressReason | null, rest: Array<GoalProgressReason | null>): GoalProgressReason[] {
   const others = rest.filter((r): r is GoalProgressReason => r != null);
-  return capReasons([volume, ...others.filter(r => r.tone === 'watch'), ...others.filter(r => r.tone !== 'watch')]);
+  return capReasons([lead, ...others.filter(r => r.tone === 'watch'), ...others.filter(r => r.tone !== 'watch')]);
+}
+
+// ── The endurance verdict from the week plan ────────────────────────────────
+
+/** "+11%" / "−5%" / "steady" — never "up 0%"; null when the earlier week was too small to compare with. */
+function changeClause(changePct: number | null): string {
+  if (changePct == null) return '';
+  if (changePct === 0) return ' (steady)';
+  return ` (${changePct > 0 ? '+' : '−'}${Math.abs(changePct)}%)`;
+}
+
+/** Last week more than this share over its step is "above the step" (still under the spike line), not "on plan". */
+const ABOVE_STEP_FRACTION = 1.15;
+
+/** Day of the week for a YYYY-MM-DD day (0 = Sunday ... 6 = Saturday). */
+function weekdayOf(day: string): number {
+  return new Date(dayNumber(day) * 86_400_000).getUTCDay();
+}
+
+/**
+ * The phase line of a taper / race week / recovery week. Within the plan it is
+ * what the week is for; once most of the week's budget is spent it says what is
+ * left ("keep Sunday's run ≤ 4 km"); over the band it is a watch line.
+ */
+function windDownLine(
+  input: GoalProgressInput, plan: EnduranceWeekPlan, doneKm: number, over: boolean, raceDoneToday: boolean, postRace: boolean,
+): GoalProgressReason {
+  const phase = (plan.wind as NonNullable<EnduranceWeekPlan['wind']>).phase;
+  const target = plan.targetKm ?? plan.goalKm;
+  // The days of the race's own calendar week after race day are recovery days, whatever the week's Monday said.
+  const label = postRace || phase === 'recovery' ? 'Recovery' : phase === 'taper' ? 'Taper' : 'Race week';
+  const progress = `${distanceNum(input, doneKm)} of ~${fmtDistance(input, target)}`;
+  if (over) {
+    return { kind: 'race_phase', text: `${label}: ${progress} — over the plan; rest or a very easy jog from here`, tone: 'watch' };
+  }
+  if (raceDoneToday) {
+    return { kind: 'race_phase', text: 'Walk it off, eat and rest; easy running only from here', tone: 'neutral' };
+  }
+  const left = target - doneKm;
+  // Not on the week's last day: nothing is left of "the rest of the week" then.
+  if (doneKm > 0 && doneKm >= target * 0.5 && left >= 1 / unitsPerKm(input) && weekdayOf(input.todayKey) !== 0) {
+    const when = weekdayOf(input.todayKey) === 6 ? "Sunday's run" : 'the rest of the week';
+    return { kind: 'race_phase', text: `${label}: ${progress} — keep ${when} ≤ ${fmtDistance(input, left)}`, tone: 'neutral' };
+  }
+  if (postRace && phase !== 'recovery') return { kind: 'race_phase', text: `Recovery: easy only this week (~${fmtDistance(input, target)} max)`, tone: 'neutral' };
+  return { kind: 'race_phase', text: plan.purpose, tone: 'neutral' };
+}
+
+/** Taper, race week and recovery: the verdict is this week against the phase target — within or under is on track. */
+function windDownPlanOutcome(input: GoalProgressInput, ec: EnduranceCtx, plan: EnduranceWeekPlan, race: GoalRaceProgress): Outcome {
+  const wind = plan.wind as NonNullable<EnduranceWeekPlan['wind']>;
+  const doneKm = ec.thisWeek.km;
+  const target = plan.targetKm ?? plan.goalKm;
+  const grade = gradeEnduranceWeek(plan, doneKm, { unitsPerKm: unitsPerKm(input) });
+  const raceRun = ec.raceRun;
+  const raceDoneNow = raceRun != null && ((race.phase !== 'recovery' && race.daysToGo === 0) || (race.phase === 'recovery' && (race.daysSince ?? 99) <= 1));
+  // Having just raced is never "over the plan" for the week; the plan's ceiling is for the runs around it.
+  const over = grade.gap === 'over' && !(raceDoneNow && race.phase !== 'recovery');
+  const raceDay = race.phase !== 'recovery' && race.daysToGo === 0;
+  const postRace = race.phase === 'recovery';
+  const done = distanceNum(input, doneKm);
+  const tgt = fmtDistance(input, target);
+  let headline: string;
+  if (raceDoneNow && raceRun) {
+    const time = formatRaceTime(raceRun.durationMin);
+    headline = `${race.label} done — ${fmtDistance(input, raceRun.km)}${time ? ` in ${time}` : ''}. Congratulations!`;
+  } else if (raceDay) {
+    headline = 'Race day — start relaxed';
+  } else if (postRace) {
+    const days = race.daysSince ?? 1;
+    const week = wind.phase === 'recovery' ? recoveryWeek(-wind.info.daysToRace) : 1;
+    headline = `Recovery week ${week} — day ${days} after your ${raceWord(race.label)}: easy only`;
+  } else if (wind.phase === 'taper') {
+    headline = `Taper week — ${done} of ~${tgt}${over ? ', over the plan' : doneKm > 0 ? ', on plan' : ''}`;
+  } else {
+    headline = `Race week — ${done} of ~${tgt} before the race${over ? ', over the plan' : ''}`;
+  }
+  const phaseLine = windDownLine(input, plan, doneKm, over, raceDoneNow && raceDay, postRace);
+  const longRun = longRunReason(input, longRunProgress(input, race), race);
+  const reasons = postRace
+    ? [raceReason(race), phaseLine, NEXT_GOAL_REASON]
+    : [raceReason(race), phaseLine, ...(longRun ? [longRun] : [])].slice(0, 3);
+  return { verdict: over ? 'holding' : 'on_track', headline: clip(headline), reasons, raceHandled: true };
+}
+
+/**
+ * The endurance verdict for a runner with a weekly distance goal and measured
+ * running, from the ONE week plan the weekly review also reads. It rests on
+ * FINISHED weeks and on the week's own band, never on a rolling 14-day
+ * comparison or on how much of the week has been run so far, so it does not flip
+ * between rest days and run days:
+ *  - taper / race week / recovery: this week against the phase target — within
+ *    or under is 'on_track', over the band 'holding' with a watch line; race day
+ *    says "start relaxed", and a race-length run on race day says "done";
+ *  - on a break (no run for 5+ days), restart: 'building' ("Building back");
+ *  - a jump over the week's safe step (this week so far, or last week's — then
+ *    this is the hold week): 'holding', "Over the safe step — 40 of ~25 km. Hold
+ *    ~28 km next week", no "distance up X%" praise;
+ *  - baseline (first week of running): 'building', nothing to be behind yet;
+ *  - rebuild (after the recovery weeks): 'building', never 'behind';
+ *  - build: last week's grade — 'building' on plan, 'behind' only when last week
+ *    was far short of its step; maintain (at the weekly goal): 'on_track'.
+ */
+function planOutcome(input: GoalProgressInput, ec: EnduranceCtx, race: GoalRaceProgress | null): Outcome {
+  const plan = ec.plan as EnduranceWeekPlan;
+  if (plan.wind && race) return windDownPlanOutcome(input, ec, plan, race);
+
+  const u = unitsPerKm(input);
+  const fmt = (km: number): string => fmtDistance(input, km);
+  const doneKm = ec.thisWeek.km;
+  const done = distanceNum(input, doneKm);
+  const target = plan.targetKm ?? plan.goalKm;
+  const goalText = fmt(plan.goalKm);
+  const last = plan.last;
+  const raceLine = race ? raceReason(race) : null;
+  const lrProgress = longRunProgress(input, race);
+  const lrReason = longRunReason(input, lrProgress, race);
+  const sessions = weekSessionsReason(input) ?? sessionsReason(input);
+  const vitals = [restingHrReason(input), hrvReason(input)];
+  const planLine: GoalProgressReason = { kind: 'plan', text: plan.purpose, tone: 'neutral' };
+  const withRace = (reasons: GoalProgressReason[]): GoalProgressReason[] => (raceLine ? [raceLine, ...reasons] : reasons).slice(0, 3);
+  const body = (lead: GoalProgressReason | null, extra: Array<GoalProgressReason | null> = []): GoalProgressReason[] =>
+    withRace(enduranceReasons(lead, [...extra, lrReason, sessions, ...vitals]));
+  const finish = (verdict: GoalVerdict, headline: string, reasons: GoalProgressReason[]): Outcome =>
+    ({ verdict, headline: clip(headline), reasons, raceHandled: true });
+  const nextHold = weekStepOrGoalKm(target, plan.goalKm, u);
+
+  // A runner who has been off for 5+ days: say so, and where to restart.
+  if (plan.onBreak && plan.kind !== 'baseline') {
+    const days = plan.daysSinceRun as number;
+    return finish('building', `On a break — ${days} days since your last run. Restart at ~${fmt(plan.restartKm)}.`, body(
+      { kind: 'plan', text: `Restart at ~${fmt(plan.restartKm)} with easy runs, then build about 10% a week`, tone: 'neutral' },
+    ));
+  }
+
+  // A jump over this week's safe step: the headline is the warning, and no "distance up X%" praise is given for it.
+  const current = plan.kind === 'baseline' ? null : gradeEnduranceWeek(plan, doneKm, { unitsPerKm: u });
+  if (current?.gap === 'spike') {
+    return finish('holding', `Over the safe step — ${done} of ~${fmt(target)}. Hold ~${fmt(nextHold)} next week`, body(
+      { kind: 'volume', text: `${fmt(doneKm)} is ${fmt(doneKm - target)} over this week's safe step; big jumps raise injury risk — keep the rest of the week easy`, tone: 'watch' },
+    ));
+  }
+
+  const short = raceWord(input.race?.date ? raceLabel(input.race.distanceKm ?? null, input.unitSystem) : '');
+  switch (plan.kind) {
+    case 'baseline': {
+      const long = `Baseline week — ${fmt(doneKm)} so far; next week's step is built from this week`;
+      return finish('building', long.length <= HEADLINE_MAX_CHARS ? long : `Baseline week — ${fmt(doneKm)} so far`, body(planLine));
+    }
+    case 'restart':
+      return finish('building', `Building back — restart at ~${fmt(target)} this week`, body(planLine));
+    case 'hold': {
+      const hold = plan.hold as NonNullable<EnduranceWeekPlan['hold']>;
+      return finish('holding', `Over the safe step last week — hold ~${fmt(target)} this week`, body(
+        { kind: 'volume', text: `Last week's ${fmt(hold.spikeKm)} was over the safe step of ~${fmt(hold.spikeStepKm)}`, tone: 'watch' },
+        [planLine],
+      ));
+    }
+    case 'rebuild':
+      return finish('building', `Rebuilding after your ${short} — ${done} of ~${fmt(target)}`, body(planLine, [NEXT_GOAL_REASON]));
+    case 'build':
+    case 'maintain':
+    default:
+      break;
+  }
+
+  // Build and maintain: the verdict is how last week went against its own plan.
+  const level = last?.grade?.level ?? 'good';
+  const lastKm = last?.km ?? 0;
+  const lastPlanKm = last?.targetKm ?? null;
+  if (plan.kind === 'maintain') {
+    if (level === 'good') {
+      const peakTarget = lrProgress?.targetPeakKm ?? null;
+      const long = race != null && lrProgress != null && peakTarget != null && race.phase === 'build'
+        ? (lrProgress.peakKm >= peakTarget
+            ? `long run peak ${fmt(lrProgress.peakKm)} reached`
+            : `${longRunWord(lrProgress.lastKm, u)} ${distanceNum(input, lrProgress.lastKm)} of ${formatTargetLongRun(peakTarget, u)}`)
+        : null;
+      const headline = race != null
+        ? `On track for the ${raceWord(race.label)} — ${long ?? `${goalText} a week`}`
+        : `On track — ${goalText} a week`;
+      return finish('on_track', headline, withRace(enduranceReasons(planLine, [long ? null : lrReason, sessions, ...vitals])));
+    }
+    if (level === 'tough') return finish('behind', `Behind — ${fmt(lastKm)} last week of ${goalText}`, body(planLine));
+    return finish('holding', `Holding steady — ${fmt(lastKm)} last week of ${goalText}`, body(planLine));
+  }
+  // build
+  if (level === 'tough') {
+    return finish('behind', `Behind — ${fmt(lastKm)} last week${lastPlanKm != null ? `, ~${fmt(lastPlanKm)} was the step` : ''}`, body(planLine));
+  }
+  const above = level === 'good' && lastPlanKm != null && lastKm > lastPlanKm * ABOVE_STEP_FRACTION;
+  const how = last?.kind === 'baseline' ? ', your baseline'
+    : last?.kind === 'restart' || last?.kind === 'rebuild' && plan.restart != null ? ', back after your break'
+    : above ? `, above the ~${fmt(lastPlanKm as number)} step`
+    : level === 'good' ? ', on plan'
+    : level === 'mixed' ? `, a bit under the ~${fmt(lastPlanKm ?? target)} step`
+    : ', a lighter week';
+  return finish('building', `Building — ${fmt(lastKm)} last week${changeClause(last?.changePct ?? null)}${how}`, body(planLine));
 }
 
 function enduranceOutcome(input: GoalProgressInput): Outcome {
@@ -1597,8 +1829,11 @@ function enduranceOutcome(input: GoalProgressInput): Outcome {
     return { verdict: 'needs_target', headline: 'Set a weekly distance or session goal to track your training', reasons: [] };
   }
 
+  // A weekly distance goal with measured running: the ONE week plan decides (see planOutcome).
+  const ec = enduranceCtx(input);
+  if (ec.plan != null) return planOutcome(input, ec, raceProgress(input));
+
   const { count, perWeek } = sessionsPerWeek(input);
-  const dist = distanceProgress(input);
   const sessions = weekSessionsReason(input) ?? sessionsReason(input);
   const race = raceProgress(input);
   const longRun = longRunReason(input, longRunProgress(input, race), race);
@@ -1633,17 +1868,18 @@ function enduranceOutcome(input: GoalProgressInput): Outcome {
   const prior = metric(weeks[2]) + metric(weeks[3]);
   const changePct = prior > 0 ? ((recent - prior) / prior) * 100 : null;
   const noun = useKm ? 'distance' : useMinutes ? 'time' : 'sessions';
-  const perWeekText = (v: number): string => (useKm ? fmtDistance(input, v) : (useMinutes ? withUnit(round1(v), 'min') : `${round1(v)} sessions`));
+  const perWeekText = (v: number): string => (useKm ? fmtDistance(input, v) : (useMinutes ? withUnit(round1(v), 'min') : `${round1(v)} ${plural(round1(v), 'session')}`));
   // No training before the last 2 weeks (a new runner, or one starting over):
   // the average is over the weeks that exist, and the copy says "base", not
   // "restarted" / "back to regular training".
   const baseWindowDays = statWindowDays(input);
   const baseWeeks = Math.min(2, Math.max(1, baseWindowDays / 7));
+  const steady = changePct != null && Math.round(Math.abs(changePct)) === 0;
   const volumeReason: GoalProgressReason | null = prior > 0 || recent > 0
     ? {
         kind: 'volume',
         text: changePct != null
-          ? `Weekly training ${noun} ${changePct >= 0 ? 'up' : 'down'} ${Math.round(Math.abs(changePct))}% (${arrowPair(perWeekText(prior / 2), perWeekText(recent / 2))} a week, ${ENDURANCE_VOLUME_WINDOW_LABEL})`
+          ? `Weekly training ${noun} ${steady ? 'steady' : `${changePct >= 0 ? 'up' : 'down'} ${Math.round(Math.abs(changePct))}%`} (${arrowPair(perWeekText(prior / 2), perWeekText(recent / 2))} a week, ${ENDURANCE_VOLUME_WINDOW_LABEL})`
           : `Building your base: ${perWeekText(recent / baseWeeks)} a week${baseWindowDays < 14 ? ' so far' : ' over the last 2 weeks'}`,
         tone: changePct == null || changePct >= ENDURANCE_BUILDING_PCT ? 'good' : changePct <= -15 ? 'watch' : 'neutral',
       }
@@ -1655,21 +1891,11 @@ function enduranceOutcome(input: GoalProgressInput): Outcome {
     ? clip(`Building — ${useKm ? 'distance' : useMinutes ? 'time' : 'sessions'} up ${Math.round(changePct)}% (${ENDURANCE_VOLUME_WINDOW_LABEL})`)
     : 'Building your base';
 
-  // Distance target: judge the 4-week average against it.
-  if (dist != null && dist.avg4wKm != null) {
-    if (building) return { verdict: 'building', headline: buildingHeadline, reasons };
-    const avgText = `averaging ${distanceNum(input, dist.avg4wKm)} of ${fmtDistance(input, dist.targetKm)} a week`;
-    if (dist.avg4wKm < dist.targetKm * DISTANCE_BEHIND_FRACTION) {
-      return { verdict: 'behind', headline: clip(`Behind — ${avgText} (4-week avg)`), reasons };
-    }
-    return { verdict: 'holding', headline: clip(`Holding steady — ${avgText} (4-week avg)`), reasons };
-  }
-
   if (building) return { verdict: 'building', headline: buildingHeadline, reasons };
   const target = input.target.weeklySessions;
   return {
     verdict: 'holding',
-    headline: clip(`Holding steady — ${perWeek} sessions a week${target != null ? ` vs a target of ${target}` : ''}`),
+    headline: clip(`Holding steady — ${perWeek} ${plural(perWeek, 'session')} a week${target != null ? ` vs a target of ${target}` : ''}`),
     reasons,
   };
 }
@@ -1784,16 +2010,12 @@ export function computeGoalProgress(input: GoalProgressInput): GoalProgress {
     default: outcome = generalOutcome(input);
   }
 
-  // Race countdown + phase lead the reasons (cap 3); in taper / race week / recovery the verdict
-  // comes from this week against the phase target (not the 4-week average a taper drags down),
-  // and once the race is done the headline is the recovery state.
+  // Race countdown + phase lead the reasons (cap 3). A week-plan outcome (a weekly distance goal with
+  // measured running) already carries the whole race lifecycle; any other endurance goal gets the race
+  // line, the phase line and, once the race is done, the recovery headline folded in here.
   const race = raceProgress(input);
   const dist = input.goal === 'endurance' ? distanceProgress(input) : null;
-  if (race) {
-    const status = windDownStatus(input, dist, race);
-    if (status) outcome = windDownOutcome(input, outcome, status);
-    outcome = withRaceLifecycle(input, outcome, race, status);
-  }
+  if (race && !outcome.raceHandled) outcome = withRaceLifecycle(input, outcome, race);
 
   const safeBand =
     input.goal === 'weight_loss' ? { ...FAT_LOSS_BAND }

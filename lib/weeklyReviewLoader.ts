@@ -20,6 +20,7 @@ import { normalizeGoal, resolveDietBudget } from '@/lib/brain/dietBudget';
 import { resolveUnitSystem } from '@/lib/units';
 import { loadGoalProgress } from '@/lib/goalProgressLoader';
 import { loadRacePeakWeekKm } from '@/lib/racePeakLoader';
+import { loadRunHistory } from '@/lib/runHistoryLoader';
 import { isStrengthWorkoutType, type DayValue, type GoalProgressBudget } from '@/lib/goalProgress';
 import { endOfLocalWeek, shouldRecomputeReview } from '@/lib/weeklyReviewFreshness';
 import { buildExerciseDisplay, computeWeeklyReview, lastCompletedWeekStart, signupLocalDay, type WeeklyReview } from '@/lib/weeklyReview';
@@ -73,7 +74,7 @@ export async function computeLastWeekReview(
   const daySet = new Set(dayKeys);
 
   const goal = normalizeGoal(user.goal);
-  const [progress, weightReadings, intakeByDay, budget, progression, sets, workoutEntries, restingHr, hrv, sleep, displayRows, racePeakWeekKm] =
+  const [progress, weightReadings, intakeByDay, budget, progression, sets, workoutEntries, restingHr, hrv, sleep, displayRows, racePeakWeekKm, runHistory] =
     await Promise.all([
       loadGoalProgress(userId, { tz, now: endOfLocalWeek(weekStart, tz) }),
       getWeightReadings(userId, WEIGHT_LOOKBACK_DAYS, tz),
@@ -92,7 +93,11 @@ export async function computeLastWeekReview(
         .where(and(eq(schema.workout_sets.user_id, userId), gte(schema.workout_sets.performed_at, new Date(now.getTime() - 84 * 24 * 60 * 60 * 1000)))),
       // Race lifecycle: the peak week before the taper (older than the 30-day windows above), read only when the
       // reviewed or the coming week is a taper / race / recovery week.
-      goal === 'endurance' ? loadRacePeakWeekKm(userId, user.race_date, [weekStart, addDays(weekStart, 7)]) : Promise.resolve(null),
+      goal === 'endurance'
+        ? loadRacePeakWeekKm(userId, user.race_date, [weekStart, addDays(weekStart, 7)], user.race_distance_km)
+        : Promise.resolve(null),
+      // The week plan's longer running history (restart median, spike -> hold, baseline), through the reviewed Sunday.
+      goal === 'endurance' ? loadRunHistory(userId, addDays(weekStart, 6)) : Promise.resolve(undefined),
     ]);
 
   const budgetInput: GoalProgressBudget = {
@@ -145,7 +150,9 @@ export async function computeLastWeekReview(
     longRun: progress?.longRun ?? null,
     // Race lifecycle: the race day decides the reviewed / coming week's phase; the peak week sets its targets.
     raceDate: goal === 'endurance' ? user.race_date ?? null : null,
+    raceDistanceKm: goal === 'endurance' ? user.race_distance_km ?? null : null,
     racePeakWeekKm,
+    runHistory,
     unitSystem: resolveUnitSystem(user.unit_system),
     exerciseDisplay: buildExerciseDisplay(displayRows),
     signupDay: signupLocalDay(user.created_at, tz),
