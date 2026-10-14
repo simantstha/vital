@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  FALLBACK_NARRATIVE,
   classifyApnsResponse,
   fallbackAnalysis,
   nextRetryAt,
@@ -154,12 +155,23 @@ test('fallbackAnalysis narrative and shortInsight use the expected copy', () => 
   const workout = fallbackAnalysis('workout', { type: 'Run' });
   assert.equal(workout.headline, 'Run logged');
   assert.equal(workout.shortInsight, "We've saved this workout to your history.");
-  assert.equal(workout.narrative, "We've saved this workout and it counts toward your trends. I couldn't put together a proper read on it this time.");
+  assert.equal(workout.narrative, 'Your numbers for this session are above and count toward your trends. Tap Ask coach below for a read on how it went.');
 
   const sleep = fallbackAnalysis('sleep', {});
   assert.equal(sleep.headline, 'Sleep logged');
   assert.equal(sleep.shortInsight, "We've saved last night's sleep to your history.");
-  assert.equal(sleep.narrative, "We've saved last night's sleep and it counts toward your trends. I couldn't put together a proper read on it this time.");
+  assert.equal(sleep.narrative, "Last night's numbers are above and count toward your trends. Tap Ask coach below for a read on how you slept.");
+});
+
+test('fallbackAnalysis narrative points at the screen and the Ask coach button, without apologising or using digits', () => {
+  for (const kind of ['workout', 'sleep'] as const) {
+    const { narrative } = fallbackAnalysis(kind, { type: 'Run' });
+    assert.equal(narrative, FALLBACK_NARRATIVE[kind]);
+    assert.match(narrative, /Ask coach/);
+    assert.match(narrative, /above/);
+    assert.doesNotMatch(narrative, /\p{N}/u);
+    assert.doesNotMatch(narrative, /couldn't|sorry|apolog|unable|proper read/i);
+  }
 });
 
 test('a non-content error still retries instead of falling back', async () => {

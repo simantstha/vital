@@ -10,6 +10,7 @@ import { loadGoalInsightInput } from '../lib/insights/goalInputs';
 import { insightPassLogEvent, insightsEnabled, isWithinNudgeSendWindow, runInsightPass, selectInsightPassUsers, type InsightPassRepository, type InsightPassUserSource } from '../lib/insights/nudgeWorker';
 import { establishedMetrics, loadSeries } from '../lib/insights/series';
 import { generateAnalysis, proactiveAnalysisModel, type AnalysisFailureEvent } from '../lib/proactiveAnalysisGeneration';
+import { buildAnalysisRequest, buildNudgeRequest, textFromResponse } from '../lib/proactiveModelCall';
 import { currentLocalDate, deliverNotification, runClaimedAnalysis, type AnalysisContext, type AnalysisJob, type CoachAnalysis } from '../lib/proactiveHealthWorker';
 import { claimAnalysisJobs, claimDueMorningBriefs, completeMorningBrief, ensureDefaultPreferencesForRegisteredUsers, failMorningBrief, listReadyNotificationCandidates, workerRepository } from '../lib/proactiveHealthWorkerRepository';
 import { analysisAlert, workerErrorEvent, type WorkerStage } from '../lib/proactiveHealthWorkerSupport';
@@ -39,30 +40,16 @@ async function analyze(job: AnalysisJob, context: AnalysisContext): Promise<Coac
     source: { kind: job.kind, date: job.localDate, input: job.input, availableContext: context },
     units: context.unitSystem,
     generate: async (request) => {
-      const response = await anthropic.messages.create({
-        model: proactiveAnalysisModel(process.env),
-        max_tokens: 1500,
-        system: request.system,
-        messages: [{ role: 'user', content: request.content }],
-      });
-      const textBlocks = response.content.filter((item) => item.type === 'text');
-      if (textBlocks.length !== 1) throw new Error('analysis model returned no text');
-      return textBlocks[0].text;
+      const response = await anthropic.messages.create(buildAnalysisRequest(proactiveAnalysisModel(process.env), request));
+      return textFromResponse(response, 'analysis');
     },
     report: reportAnalysisFailure,
   });
 }
 
 async function generateNudge(request: { system: string; content: string }): Promise<string> {
-  const response = await anthropic.messages.create({
-    model: proactiveAnalysisModel(process.env),
-    max_tokens: 500,
-    system: request.system,
-    messages: [{ role: 'user', content: request.content }],
-  });
-  const textBlocks = response.content.filter((item) => item.type === 'text');
-  if (textBlocks.length !== 1) throw new Error('insight nudge model returned no text');
-  return textBlocks[0].text;
+  const response = await anthropic.messages.create(buildNudgeRequest(proactiveAnalysisModel(process.env), request));
+  return textFromResponse(response, 'insight nudge');
 }
 
 // Drizzle-backed InsightPassRepository. loadSeries/establishedMetrics/

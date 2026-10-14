@@ -13,6 +13,7 @@ import {
 } from './proactiveAnalysisGeneration';
 import { type ProactiveAnalysisSource } from './proactiveAnalysisGrounding';
 import { formatAnalysisSource } from './proactiveAnalysisFormatting';
+import { buildAnalysisRequest, textFromResponse } from './proactiveModelCall';
 
 const source: ProactiveAnalysisSource = {
   kind: 'workout',
@@ -146,15 +147,9 @@ test('synthetic live proactive analysis returns typed digit-free output', {
   const resolved = await generateAnalysis({
     source,
     generate: async (request) => {
-      const response = await anthropic.messages.create({
-        model: proactiveAnalysisModel(process.env),
-        max_tokens: 700,
-        system: request.system,
-        messages: [{ role: 'user', content: request.content }],
-      });
-      const textBlocks = response.content.filter((item) => item.type === 'text');
-      assert.equal(textBlocks.length, 1);
-      return textBlocks[0].text;
+      // The worker's exact request (thinking disabled, same max_tokens), so this live check can't pass on a call the worker never makes.
+      const response = await anthropic.messages.create(buildAnalysisRequest(proactiveAnalysisModel(process.env), request));
+      return textFromResponse(response, 'analysis');
     },
     report: () => {},
   });
