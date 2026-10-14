@@ -11,7 +11,7 @@ import type { GoalKind, GoalProgress } from './goalProgress';
 import { isWindDownPhase, recoveryWeek } from './enduranceProgression';
 import type { ProgressionSummary } from './workoutRepository';
 import { plainSpaces } from './displayText';
-import { liftChange4w } from './liftChange';
+import { liftChange4w, pickHeadlineLift, rankLifts } from './liftChange';
 import { weekStartKeyForDay } from './localDay';
 import { KM_PER_MILE, LB_PER_KG } from './metricFormat';
 import type { UnitSystem } from './units';
@@ -116,6 +116,11 @@ export function formatGoalProgressLines(gp: GoalProgress, units: UnitSystem): st
   }
   if (nowBits.length) lines.push(`- Now: ${nowBits.join('; ')}`);
 
+  // Returning from a break: the lifts are rebuilding, never a stall or a reason to deload.
+  if (gp.liftReturn && !gp.liftReturn.regained) {
+    lines.push(`- Returning from a ${gp.liftReturn.breakDays}-day break (ended ${gp.liftReturn.endedOn}): lifts are rebuilding — do not call this a stall or suggest a deload.`);
+  }
+
   lines.push(`- Verdict: ${gp.verdict} — "${plainSpaces(gp.headline)}"`);
   for (const r of gp.reasons.slice(0, MAX_REASONS)) {
     lines.push(`  - ${plainSpaces(r.text)}${r.tone === 'watch' ? ' (watch)' : ''}`);
@@ -159,9 +164,17 @@ function topLiftLines(progression: ProgressionSummary, units: UnitSystem, todayK
       sets: weeks.reduce((s, w) => s + w.totalSets, 0),
     }))
     .filter(r => r.withE1rm.length > 0)
-    .sort((a, b) => b.sets - a.sets)
-    .slice(0, 3);
-  return rows.map(r => {
+    .sort((a, b) => b.sets - a.sets);
+  // With a date the lifts follow the card's order: the shared headline lift first
+  // (lib/liftChange.ts pickHeadlineLift), then the most-trained lifts by the same
+  // ranking, so the coach names the same lift and number the app does.
+  if (anchor) {
+    const order = rankLifts(progression, anchor);
+    const headline = pickHeadlineLift(progression, anchor)?.exercise ?? null;
+    const rank = (key: string): number => (key === headline ? -1 : order.indexOf(key) === -1 ? order.length : order.indexOf(key));
+    rows.sort((a, b) => rank(a.exercise) - rank(b.exercise));
+  }
+  return rows.slice(0, 3).map(r => {
     // The ONE lift-change definition (lib/liftChange.ts) — the same
     // "vs 4 weeks ago" number the Trends card, weekly review and goal reasons
     // quote, so the coach never says a different figure for the same lift.

@@ -18,10 +18,17 @@
  *              (end-35d and end-28d)
  *   change   = recent - baseline, rounded to 0.1 kg
  * "Progressing" = change >= +1% of baseline (LIFT_PROGRESS_MIN_FRACTION); a
- * smaller change is a stall. Deload weeks (volume < 60% of the 4-week average)
- * are never a stall or a slip (isDeload).
+ * smaller change is a stall — unless the lift is coming back from a break or is
+ * in a deload (isLiftStalled, the ONE stall rule for the goal card, the weekly
+ * review and the stalled-lift nudge).
  * Both windows need at least one week with an e1RM, otherwise there is no
  * change to report (never invented). Display wording: "+5.8 kg vs 4 weeks ago".
+ *
+ * Which lift speaks for the user (the "headline lift") is a separate, STABLE
+ * rule (rankLifts / pickHeadlineLift): the lift trained in the most sessions
+ * over the last 8 weeks that has a comparison; ties follow a fixed order
+ * (squat, bench press, deadlift, overhead press, then A-Z). It never depends on
+ * which lift moved the most, so the same lift leads from one day to the next.
  *
  * Keep in lockstep with TrendsStrengthLogic.change(...) — parity tests pin
  * identical fixtures to identical numbers in both languages.
@@ -41,6 +48,10 @@ export interface LiftWeekPoint {
   bestEstimatedOneRepMaxKg: number | null;
   volumeKg?: number;
   totalSets?: number;
+  /** Distinct local days that week with a working set of this lift (absent on older fixtures: 1 per trained week). */
+  sessions?: number;
+  /** Heaviest loaded working set that week, kg (absent / null: unknown). */
+  topLoadKg?: number | null;
 }
 
 export interface LiftChange4w {
@@ -86,6 +97,61 @@ export function liftChange4w(weeks: LiftWeekPoint[], anchorWeekStart: string): L
 /** kg -> lb, same factor as lib/goalProgress.ts (KG_TO_LB); duplicated to keep this file import-free. */
 const LB_PER_KG = 2.20462;
 
+/** Completed weeks the "most-trained lift" ranking looks back over. */
+export const LIFT_RANK_WINDOW_WEEKS = 8;
+/** Tie-break order for equally-trained lifts; any other lift follows, A-Z. */
+export const MAIN_LIFT_ORDER = ['squat', 'bench press', 'deadlift', 'overhead press'] as const;
+
+function normalizeLiftKey(key: string): string {
+  return key.toLowerCase().replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function mainLiftRank(key: string): number {
+  const i = (MAIN_LIFT_ORDER as readonly string[]).indexOf(normalizeLiftKey(key));
+  return i === -1 ? MAIN_LIFT_ORDER.length : i;
+}
+
+/** Sessions that week (days with a working set); weeks from older callers count 1 when anything was trained. */
+function weekSessions(w: LiftWeekPoint): number {
+  if (w.sessions != null) return w.sessions;
+  return (w.totalSets ?? 0) > 0 || w.bestEstimatedOneRepMaxKg != null ? 1 : 0;
+}
+
+/**
+ * Sessions containing this lift in the 8 COMPLETED weeks before the anchor week
+ * (the anchor week itself is still being trained and would make the ranking
+ * swing from day to day), or in the 8 weeks ending at it when
+ * `includeAnchor`.
+ */
+export function liftSessionsLast8Weeks(weeks: LiftWeekPoint[], anchorWeekStart: string, includeAnchor = false): number {
+  const newest = includeAnchor ? anchorWeekStart : shiftDay(anchorWeekStart, -7);
+  const oldest = shiftDay(newest, -7 * (LIFT_RANK_WINDOW_WEEKS - 1));
+  let n = 0;
+  for (const w of weeks) if (w.weekStart >= oldest && w.weekStart <= newest) n += weekSessions(w);
+  return n;
+}
+
+/**
+ * Lifts in rotation (an e1RM in the last 8 weeks), most-trained first: sessions
+ * containing the lift over the 8 completed weeks before the anchor week, ties by
+ * the fixed order (squat, bench press, deadlift, overhead press, then A-Z).
+ * Before any week has completed (a brand-new lifter) the anchor week counts.
+ * Callers anchor on the Monday of the week being described, so the card (this
+ * week) and the weekly review (the Monday after the reviewed week) rank alike.
+ */
+export function rankLifts(progression: Record<string, LiftWeekPoint[]>, anchorWeekStart: string): string[] {
+  const oldest = shiftDay(anchorWeekStart, -7 * (LIFT_RANK_WINDOW_WEEKS - 1));
+  const inRotation = Object.entries(progression).filter(([, weeks]) =>
+    weeks.some(w => w.bestEstimatedOneRepMaxKg != null && w.weekStart >= oldest && w.weekStart <= anchorWeekStart));
+  const score = (includeAnchor: boolean) =>
+    inRotation.map(([key, weeks]) => ({ key, sessions: liftSessionsLast8Weeks(weeks, anchorWeekStart, includeAnchor) }));
+  let scored = score(false);
+  if (scored.every(r => r.sessions === 0)) scored = score(true);
+  return scored
+    .sort((a, b) => b.sessions - a.sessions || mainLiftRank(a.key) - mainLiftRank(b.key) || a.key.localeCompare(b.key))
+    .map(r => r.key);
+}
+
 export interface HeadlineLift {
   /** Canonical exercise key ("squat"). */
   exercise: string;
@@ -93,33 +159,21 @@ export interface HeadlineLift {
 }
 
 /**
- * THE headline-lift rule, shared by the Trends goal card / Today line and the
- * weekly review (mirrored by TrendsStrengthLogic.headlineLift on iOS): of
- * every lift with a 4-week change (`liftChange4w`), the one with the largest
- * e1RM change in kg. Gains are preferred; only when no lift is up is the
- * largest drop chosen, so one regressing lift never hides a progressing one.
- * Ties break on the exercise key (ascending). Null when no lift has a
- * comparable change.
+ * THE headline-lift rule, shared by the Trends goal card / Today line, the
+ * weekly review and the coach's lift lines: the most-trained lift (rankLifts)
+ * that has a 4-week change (`liftChange4w`). Never the lift with the biggest
+ * gain or drop, so the headline does not jump between lifts as numbers move.
+ * Null when no lift has a comparable change.
  */
 export function pickHeadlineLift(
   progression: Record<string, LiftWeekPoint[]>,
   anchorWeekStart: string,
 ): HeadlineLift | null {
-  let best: HeadlineLift | null = null;
-  for (const [exercise, weeks] of Object.entries(progression)) {
-    const change = liftChange4w(weeks, anchorWeekStart);
-    if (!change) continue;
-    if (best == null || headlineBeats(change.changeKg, exercise, best.change.changeKg, best.exercise)) {
-      best = { exercise, change };
-    }
+  for (const exercise of rankLifts(progression, anchorWeekStart)) {
+    const change = liftChange4w(progression[exercise], anchorWeekStart);
+    if (change) return { exercise, change };
   }
-  return best;
-}
-
-function headlineBeats(a: number, aKey: string, b: number, bKey: string): boolean {
-  if (a > 0 || b > 0) return a > b || (a === b && aKey < bKey);
-  // Nothing is up: the biggest drop (most negative) leads.
-  return a < b || (a === b && aKey < bKey);
+  return null;
 }
 
 export interface LiftDisplayChange {
@@ -171,19 +225,31 @@ export function liftVolumeByWeek(weeks: LiftWeekPoint[]): Record<string, number>
 }
 
 /**
+ * True when the lift was missing for two weeks in a row somewhere between the
+ * baseline window and the recent one (end-35d .. end-7d): a break or a return
+ * from one, not a plateau. Both the lift's own weeks and any gap count.
+ */
+function hadLiftBreak(weeks: LiftWeekPoint[], end: string): boolean {
+  const had = (key: string): boolean => weeks.some(w => w.weekStart === key && ((w.totalSets ?? 0) > 0 || w.bestEstimatedOneRepMaxKg != null));
+  for (let o = 7; o <= 28; o += 7) {
+    if (!had(shiftDay(end, -o)) && !had(shiftDay(end, -(o + 7)))) return true;
+  }
+  return false;
+}
+
+/**
  * Stall = this lift's change vs 4 weeks ago is below +1% — the ONE stall
- * definition shared by the goal card and the stalled-lift nudge. Not a stall
- * when there is nothing to compare, when the lift was absent for the 2+ weeks
- * before the recent window (a break / return), or when the recent window is a
- * deload.
+ * definition shared by the goal card, the weekly review and the stalled-lift
+ * nudge. Not a stall when there is nothing to compare, when the lift was absent
+ * for two weeks in a row before or inside the comparison (a break / return,
+ * `hadLiftBreak`), or when the recent window is a deload.
  */
 export function isLiftStalled(weeks: LiftWeekPoint[], anchorWeekStart: string): boolean {
   const c = liftChange4w(weeks, anchorWeekStart);
   const end = liftRecentEndWeek(weeks, anchorWeekStart);
   if (!c || end == null) return false;
   if (isLiftProgressing(c)) return false;
-  const hadSets = (key: string): boolean => weeks.some(w => w.weekStart === key && ((w.totalSets ?? 0) > 0 || w.bestEstimatedOneRepMaxKg != null));
-  if (!hadSets(shiftDay(end, -14)) && !hadSets(shiftDay(end, -21))) return false;
+  if (hadLiftBreak(weeks, end)) return false;
   return !isDeload(liftVolumeByWeek(weeks), end, 2);
 }
 
@@ -192,4 +258,246 @@ export function liftDisplayName(key: string, display?: Record<string, string> | 
   const given = display?.[key];
   if (given) return given;
   return key.replace(/\b([a-z])/g, (_, c: string) => c.toUpperCase());
+}
+
+// ── Returning from a break ──────────────────────────────────────────────────
+
+/** Consecutive days without a strength session that count as a break (not just a rest week). */
+export const LIFT_BREAK_MIN_DAYS = 10;
+/** The "building back" state lasts until this many days after the break ended. */
+export const LIFT_RETURN_WINDOW_DAYS = 35;
+/** Weeks before the break whose best e1RM is "your pre-break best". */
+export const LIFT_PRE_BREAK_WEEKS = 4;
+
+function dayDiff(from: string, to: string): number {
+  const f = (d: string): number => {
+    const [y, m, dd] = d.split('-').map(Number);
+    return Date.UTC(y, m - 1, dd) / 86_400_000;
+  };
+  return Math.round(f(to) - f(from));
+}
+
+/** Monday (UTC calendar) of the week containing `day`. */
+function mondayOf(day: string): string {
+  const [y, m, d] = day.split('-').map(Number);
+  const dow = (new Date(Date.UTC(y, m - 1, d)).getUTCDay() + 6) % 7;
+  return shiftDay(day, -dow);
+}
+
+export interface LiftBreak {
+  /** Days in a row without a strength session. */
+  breakDays: number;
+  /** Last day without a session. */
+  breakEnd: string;
+  /** First session back. */
+  returnDay: string;
+  /** Last session before the break. */
+  lastBeforeDay: string;
+}
+
+/**
+ * The most recent run of >= LIFT_BREAK_MIN_DAYS days without a strength session
+ * that is OVER (a session followed it) and ended within the last
+ * LIFT_RETURN_WINDOW_DAYS days of `todayKey`. Null otherwise — including while
+ * the break is still going on.
+ */
+export function findRecentBreak(sessionDays: readonly string[], todayKey: string): LiftBreak | null {
+  const days = [...new Set(sessionDays.filter(d => d <= todayKey))].sort();
+  for (let i = days.length - 1; i >= 1; i -= 1) {
+    const gap = dayDiff(days[i - 1], days[i]) - 1;
+    if (gap < LIFT_BREAK_MIN_DAYS) continue;
+    const breakEnd = shiftDay(days[i], -1);
+    if (dayDiff(breakEnd, todayKey) > LIFT_RETURN_WINDOW_DAYS) return null;
+    return { breakDays: gap, breakEnd, returnDay: days[i], lastBeforeDay: days[i - 1] };
+  }
+  return null;
+}
+
+export interface LiftReturnState {
+  /** The lift the state is about (the most-trained lift that has a pre-break best and a session since). */
+  exercise: string;
+  breakDays: number;
+  /** Last day of the break (YYYY-MM-DD). */
+  breakEnd: string;
+  returnDay: string;
+  /** Best e1RM in the 4 weeks before the break (kg). */
+  preBreakKg: number;
+  /** Best e1RM since the return (kg). */
+  recentKg: number;
+  /** Whole percent of the pre-break best: rounded down (max 99) while rebuilding so "100%" never appears early. */
+  pct: number;
+  /** True once the lift's best e1RM since the break matches or beats the pre-break best. */
+  regained: boolean;
+}
+
+/**
+ * "Building back": the user took a break (findRecentBreak) and the headline
+ * lift's best e1RM since the return is still under its pre-break best. When it
+ * has been regained `regained` is true (the state ends; the card says so until
+ * the window closes). Null with no recent break, or no lift that has both a
+ * pre-break best and a session since.
+ */
+export function liftReturnState(
+  progression: Record<string, LiftWeekPoint[]>,
+  sessionDays: readonly string[],
+  todayKey: string,
+): LiftReturnState | null {
+  const brk = findRecentBreak(sessionDays, todayKey);
+  if (!brk) return null;
+  const anchor = mondayOf(todayKey);
+  const lastWeek = mondayOf(brk.lastBeforeDay);
+  const returnWeek = mondayOf(brk.returnDay);
+  const preKeys = new Set(Array.from({ length: LIFT_PRE_BREAK_WEEKS }, (_, i) => shiftDay(lastWeek, -7 * i)));
+  for (const exercise of rankLifts(progression, anchor)) {
+    const weeks = progression[exercise];
+    let pre: number | null = null;
+    let since: number | null = null;
+    for (const w of weeks) {
+      const e = w.bestEstimatedOneRepMaxKg;
+      if (e == null) continue;
+      if (preKeys.has(w.weekStart) && (pre == null || e > pre)) pre = e;
+      if (w.weekStart >= returnWeek && w.weekStart <= anchor && (since == null || e > since)) since = e;
+    }
+    if (pre == null || since == null) continue;
+    const regained = since >= pre - 1e-9;
+    const ratio = (since / pre) * 100;
+    return {
+      exercise,
+      breakDays: brk.breakDays,
+      breakEnd: brk.breakEnd,
+      returnDay: brk.returnDay,
+      preBreakKg: pre,
+      recentKg: since,
+      pct: regained ? Math.round(ratio) : Math.min(99, Math.floor(ratio)),
+      regained,
+    };
+  }
+  return null;
+}
+
+// ── Deload ──────────────────────────────────────────────────────────────────
+
+/** A week whose volume is under this fraction of the prior 3 weeks' average is a deload. */
+export const DELOAD_WEEK_VOLUME_FRACTION = 0.75;
+/** ... or whose top sets are all at or under this fraction of the lifts' 4-week best. */
+export const DELOAD_WEEK_LOAD_FRACTION = 0.9;
+
+/** weekStart -> total training volume across every lift (set count when nothing was loaded). */
+export function totalLiftVolumeByWeek(progression: Record<string, LiftWeekPoint[]>): Record<string, number> {
+  const kg: Record<string, number> = {};
+  const sets: Record<string, number> = {};
+  for (const weeks of Object.values(progression)) {
+    for (const w of weeks) {
+      kg[w.weekStart] = (kg[w.weekStart] ?? 0) + (w.volumeKg ?? 0);
+      sets[w.weekStart] = (sets[w.weekStart] ?? 0) + (w.totalSets ?? 0);
+    }
+  }
+  return Object.values(kg).some(v => v > 0) ? kg : sets;
+}
+
+/**
+ * THE deload-week rule (the weekly review's "Deload week done"): the user
+ * trained that week (at least one logged set) AND either
+ *  - total volume is under 75% of the prior 3 weeks' average, or
+ *  - every lift trained that week (with a 4-week history) peaked at or under
+ *    90% of its best top-set load in the 4 weeks before.
+ * Needs prior weeks to compare with; never true for a first week.
+ */
+export function isDeloadWeek(progression: Record<string, LiftWeekPoint[]>, weekStart: string): boolean {
+  const trained = Object.values(progression).some(weeks => weeks.some(w => w.weekStart === weekStart && weekSessions(w) > 0));
+  if (!trained) return false;
+
+  const volume = totalLiftVolumeByWeek(progression);
+  let prior = 0;
+  for (let i = 1; i <= 3; i += 1) prior += volume[shiftDay(weekStart, -7 * i)] ?? 0;
+  prior /= 3;
+  if (prior > 0 && (volume[weekStart] ?? 0) < prior * DELOAD_WEEK_VOLUME_FRACTION) return true;
+
+  let judged = 0;
+  for (const weeks of Object.values(progression)) {
+    const cur = weeks.find(w => w.weekStart === weekStart);
+    if (!cur || weekSessions(cur) === 0) continue;
+    // Top load when both sides have it, else the best e1RM (older payloads carry no top load).
+    const earlier = weeks.filter(w => w.weekStart < weekStart && w.weekStart >= shiftDay(weekStart, -28));
+    const byLoad = cur.topLoadKg != null && earlier.some(w => w.topLoadKg != null);
+    const proxy = (w: LiftWeekPoint): number | null => (byLoad ? (w.topLoadKg ?? null) : w.bestEstimatedOneRepMaxKg);
+    const now = proxy(cur);
+    let best: number | null = null;
+    for (const w of earlier) {
+      const v = proxy(w);
+      if (v != null && (best == null || v > best)) best = v;
+    }
+    if (now == null || best == null || best <= 0) continue;
+    judged += 1;
+    if (now > best * DELOAD_WEEK_LOAD_FRACTION + 1e-9) return false;
+  }
+  return judged > 0;
+}
+
+// ── Working loads and the next load ─────────────────────────────────────────
+
+/** Best top-set load (kg) in the `weeks` weeks before `weekStart` (exclusive); null when none is known. */
+export function priorTopLoadKg(weeksOfLift: LiftWeekPoint[], weekStart: string, weeks = 4): number | null {
+  const oldest = shiftDay(weekStart, -7 * weeks);
+  let best: number | null = null;
+  for (const w of weeksOfLift) {
+    if (w.weekStart >= weekStart || w.weekStart < oldest || w.topLoadKg == null) continue;
+    if (best == null || w.topLoadKg > best) best = w.topLoadKg;
+  }
+  return best;
+}
+
+/** Top-set load (kg) of the newest week at or before `weekStart` that has one; null when none is known. */
+export function latestTopLoadKg(weeksOfLift: LiftWeekPoint[], weekStart: string): number | null {
+  let latest: LiftWeekPoint | null = null;
+  for (const w of weeksOfLift) {
+    if (w.weekStart > weekStart || w.topLoadKg == null || w.topLoadKg <= 0) continue;
+    if (latest == null || w.weekStart > latest.weekStart) latest = w;
+  }
+  return latest?.topLoadKg ?? null;
+}
+
+const LOWER_BODY_COMPOUND_STEMS = ['squat', 'deadlift', 'leg press', 'hip thrust'];
+
+/** Mirrors LiftLoggerLogic.isLowerBodyCompound (iOS): squat, deadlift, RDL, leg press, hip thrust and variants. */
+export function isLowerBodyCompound(exerciseKey: string): boolean {
+  const key = normalizeLiftKey(exerciseKey);
+  if (!key) return false;
+  if (key.split(' ').includes('rdl')) return true;
+  return LOWER_BODY_COMPOUND_STEMS.some(stem => key.includes(stem));
+}
+
+export interface NextLoad {
+  /** Today's working load in display units (rounded to the plate step). */
+  from: number;
+  /** The load to try next. */
+  to: number;
+  unit: 'kg' | 'lb';
+}
+
+const MAX_LOAD_KG = 1000;
+const MAX_LOAD_LB = 2200;
+
+/**
+ * The lift logger's next-weight rule (LiftLoggerLogic.progressionHint on iOS,
+ * the "try …" hint after a clean session): top load + 2.5 kg / 5 lb for
+ * lower-body compounds, + 1.25 kg / 2.5 lb for everything else, rounded to
+ * 0.5 kg / 1 lb and capped at the logger's maximum. `topLoadKg` is the lift's
+ * top working set.
+ */
+export function nextWorkingLoad(topLoadKg: number, exerciseKey: string, imperial: boolean): NextLoad {
+  const unit = imperial ? 'lb' : 'kg';
+  const step = isLowerBodyCompound(exerciseKey) ? (imperial ? 5 : 2.5) : (imperial ? 2.5 : 1.25);
+  const plate = imperial ? 1 : 0.5;
+  const round = (v: number): number => Math.round(v / plate) * plate;
+  const from = round(imperial ? topLoadKg * LB_PER_KG : topLoadKg);
+  const to = Math.min(round(from + step), imperial ? MAX_LOAD_LB : MAX_LOAD_KG);
+  return { from, to: Math.max(to, from), unit };
+}
+
+/** A fraction of a working load (kg) in display units, rounded to 2.5 kg / 5 lb ("~105 kg"). */
+export function easedLoad(topLoadKg: number, fraction: number, imperial: boolean): { value: number; unit: 'kg' | 'lb' } {
+  const plate = imperial ? 5 : 2.5;
+  const v = (imperial ? topLoadKg * LB_PER_KG : topLoadKg) * fraction;
+  return { value: Math.round(v / plate) * plate, unit: imperial ? 'lb' : 'kg' };
 }
