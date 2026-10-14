@@ -19,6 +19,8 @@ import { normalizeGoal, resolveDietBudget, lowEnergyThresholdKcal } from '@/lib/
 import { resolveUnitSystem } from '@/lib/units';
 import { readCoreProfile } from '@/lib/coreProfileStore';
 import { loadRacePeakWeekKm } from '@/lib/racePeakLoader';
+import { loadRunHistory } from '@/lib/runHistoryLoader';
+import { mondayOfDay } from '@/lib/enduranceProgression';
 import { parseProfileDetails } from '@/lib/profileDetails';
 import {
   computeGoalProgress,
@@ -63,7 +65,7 @@ export async function loadGoalProgress(
 
   const [
     weightReadings, intakeByDay, budget, profileMd,
-    progressionSets, workoutEntries, restingHr, hrv, sleep, racePeakWeekKm,
+    progressionSets, workoutEntries, restingHr, hrv, sleep, racePeakWeekKm, runHistory,
   ] = await Promise.all([
     getWeightReadings(userId, WEIGHT_LOOKBACK_DAYS, tz),
     resolveDailyIntake(userId, dayKeys, tz),
@@ -75,7 +77,12 @@ export async function loadGoalProgress(
     seriesWithFallback(userId, 'hrv_sdnn', 'whoop_hrv_rmssd'),
     queryMetricPoints(userId, 'sleep_minutes', WINDOW_DAYS),
     // Taper / race-week / recovery targets are shares of the peak week before the taper (older than the 28-day window above).
-    goal === 'endurance' ? loadRacePeakWeekKm(userId, user.race_date, todayKey) : Promise.resolve(null),
+    // The race phase is read on this week's Monday (the week plan), so the gate looks at both days.
+    goal === 'endurance'
+      ? loadRacePeakWeekKm(userId, user.race_date, [todayKey, mondayOfDay(todayKey)], user.race_distance_km)
+      : Promise.resolve(null),
+    // The week plan looks back further than the 28-day window above (restart median, spike -> hold, baseline).
+    goal === 'endurance' ? loadRunHistory(userId, todayKey) : Promise.resolve(undefined),
   ]);
 
   const profile = parseProfileDetails(profileMd);
@@ -127,6 +134,7 @@ export async function loadGoalProgress(
     },
     race: { date: user.race_date ?? null, distanceKm: user.race_distance_km ?? null },
     racePeakWeekKm,
+    runHistory,
     start: {
       weightKg: user.goal_start_weight_kg ?? null,
       startedAt: user.goal_started_at ? user.goal_started_at.toISOString() : null,

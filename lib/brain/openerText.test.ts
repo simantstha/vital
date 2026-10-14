@@ -60,6 +60,23 @@ test('non-weight goals fall back to the card headline', () => {
   assert.equal(line, 'Goal check-in: Building — distance up 12%.');
 });
 
+test('a headline that ends in its own "!" keeps it: no "!." after Congratulations', () => {
+  const done = gp({
+    goal: 'endurance', target: { weightKg: null, date: null, weeklySessions: null, weeklyDistanceKm: 30 },
+    current: { weightKg: 70, startWeightKg: null, changeKg: null, progressPct: null },
+    verdict: 'on_track', headline: 'Half marathon done — 21.1 km in 2:01. Congratulations!',
+  });
+  assert.equal(goalOpenerLine(done, 'metric'), 'Goal check-in: Half marathon done — 21.1 km in 2:01. Congratulations!');
+  assert.equal(goalFallbackOpener(done, 'endurance', 'metric'), 'Goal check-in: Half marathon done — 21.1 km in 2:01. Congratulations! What would you like to dig into?');
+  // A headline that ends in a full stop (the break line) gets exactly one.
+  const brk = gp({
+    goal: 'endurance', target: { weightKg: null, date: null, weeklySessions: null, weeklyDistanceKm: 30 },
+    current: { weightKg: 70, startWeightKg: null, changeKg: null, progressPct: null },
+    verdict: 'building', headline: 'On a break — 7 days since your last run. Restart at ~15 km.',
+  });
+  assert.equal(goalOpenerLine(brk, 'metric'), 'Goal check-in: On a break — 7 days since your last run. Restart at ~15 km.');
+});
+
 test('needs_target / insufficient_data / missing progress yield no progress line', () => {
   assert.equal(goalOpenerLine(gp({ verdict: 'needs_target' }), 'metric'), null);
   assert.equal(goalOpenerLine(gp({ verdict: 'insufficient_data' }), 'metric'), null);

@@ -12,7 +12,7 @@
 
 import { and, eq, gte, lte } from 'drizzle-orm';
 import { db, schema } from '@/db';
-import { isWindDownPhase, peakWeekKmBeforeTaper, racePhase, TAPER_START_DAYS } from '@/lib/enduranceProgression';
+import { isWindDownPhase, peakWeekKmBeforeTaper, racePhase, raceRules } from '@/lib/enduranceProgression';
 import { isRunningWorkoutType } from '@/lib/goalProgress';
 
 /** Days of running history before the taper that the peak week is taken from. */
@@ -25,19 +25,22 @@ function addDays(day: string, n: number): string {
 
 /**
  * Peak week (km) for the race on `raceDate`, as of the local day(s) `onDays`
- * (the weekly review passes the reviewed and the coming Monday). Null without a
- * race, when none of those days is in taper / race week / recovery (nothing
- * needs it then), and when no running with a distance was logged in the window
- * — the callers fall back to the weekly distance goal.
+ * (the weekly review passes the reviewed and the coming Monday; the goal card
+ * passes today and this week's Monday). The taper starts earlier or later by race
+ * distance (`raceRules`), so the window moves with it. Null without a race, when
+ * none of those days is in taper / race week / recovery (nothing needs it then),
+ * and when no running with a distance was logged in the window — the callers fall
+ * back to the weekly distance goal.
  */
 export async function loadRacePeakWeekKm(
   userId: string,
   raceDate: string | null | undefined,
   onDays: string | string[],
+  raceDistanceKm?: number | null,
 ): Promise<number | null> {
   const days = Array.isArray(onDays) ? onDays : [onDays];
-  if (!raceDate || !days.some(day => isWindDownPhase(racePhase(raceDate, day)))) return null;
-  const taperStart = addDays(raceDate, -TAPER_START_DAYS);
+  if (!raceDate || !days.some(day => isWindDownPhase(racePhase(raceDate, day, raceDistanceKm)))) return null;
+  const taperStart = addDays(raceDate, -raceRules(raceDistanceKm).taperStartDays);
   const from = addDays(taperStart, -PEAK_WINDOW_DAYS);
   const to = addDays(taperStart, -1);
 
@@ -63,5 +66,5 @@ export async function loadRacePeakWeekKm(
       runs.push({ day: row.date, km: w.distanceM / 1000 });
     }
   }
-  return peakWeekKmBeforeTaper(runs, raceDate);
+  return peakWeekKmBeforeTaper(runs, raceDate, raceDistanceKm);
 }
