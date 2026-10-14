@@ -15,7 +15,17 @@
  */
 
 import type { WeightTrendResult, WeightTrendDay } from '../weightTrend';
-import { trendDeltaKgPerWeek, trendSpanDays } from '../weightTrend';
+import { trendSpanDays } from '../weightTrend';
+import {
+  PACE_RECHECK_DAYS,
+  PACE_SETTLE_DAYS,
+  addDays,
+  dayNumber,
+  isReturning,
+  rawPlateau,
+  weighInReturn,
+  weightPace,
+} from '../weightPace';
 import { formatWeight } from '../metricFormat';
 import type { UnitSystem } from '../units';
 
@@ -39,11 +49,17 @@ export const TOO_FAST_LOSS_SUSTAINED_PCT_PER_WEEK = 1.0;
  */
 export const SIGNAL_MAX_WEIGH_IN_AGE_DAYS = 4;
 
-/** plateau requires at least this many calendar days of trend span. */
+/** The coach prompt's weight-trend line never quotes a weekly rate when the newest weigh-in is older than this. */
+export const RATE_QUOTE_MAX_WEIGH_IN_AGE_DAYS = 7;
+
+/**
+ * plateau (lib/weightPace.ts rawPlateau): three flat weeks of RAW weekly means —
+ * the last two within 0.2 kg of the week before them, 3+ weigh-ins in each week,
+ * a goal at least 28 days old. The lagging smoothed trend no longer decides it.
+ */
 export const PLATEAU_MIN_SPAN_DAYS = 14;
-/** Weigh-in days needed inside the trailing 14-day window before a plateau is called. */
 export const PLATEAU_MIN_WEIGH_INS = 4;
-/** plateau fires when the 14-day trend change is at/under this % of trend weight, per week. */
+/** A pace at/under this % of bodyweight per week is flat (the goal card's "stalled" and the floor for projecting a date). */
 export const PLATEAU_MAX_PCT_PER_WEEK = 0.1;
 
 /** under_eating requires at least this many of the trailing 7 days to have non-'none' intake. */
@@ -108,6 +124,13 @@ export interface AssessWeightSignalsInput {
    * the newest weigh-in stands in for today, i.e. no freshness check.
    */
   todayKey?: string;
+  /**
+   * The local day the user's goal began (YYYY-MM-DD). With it, a goal under
+   * 3 weeks old gets no too_fast_loss (its pace is still an early read) and a
+   * plateau needs a goal at least 28 days old. Omitted: only the weigh-in
+   * minimums apply.
+   */
+  goalStartDay?: string | null;
 }
 
 function round1(n: number): number {
@@ -116,12 +139,6 @@ function round1(n: number): number {
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
-}
-
-/** Absolute value of `deltaKgPerWeek` as a percentage of `trendKg` per week, or null if trendKg is 0/invalid. */
-function pctPerWeek(deltaKgPerWeek: number | null, trendKg: number): number | null {
-  if (deltaKgPerWeek == null || !Number.isFinite(trendKg) || trendKg <= 0) return null;
-  return Math.abs(deltaKgPerWeek) / trendKg * 100;
 }
 
 const DAY_MS = 86_400_000;
@@ -141,63 +158,88 @@ function weighInAgeDays(trend: WeightTrendResult, todayKey: string | undefined):
   return Math.max(0, Math.round((dayMs(todayKey) - dayMs(last)) / DAY_MS));
 }
 
-// ── Rule 1: too_fast_loss ────────────────────────────────────────────────
+/** Calendar days a goal has run, counting the start day and today; null when the start is unknown. */
+function goalAgeDays(todayKey: string | undefined, trend: WeightTrendResult, goalStartDay: string | null | undefined): number | null {
+  if (!goalStartDay || !/^\d{4}-\d{2}-\d{2}$/.test(goalStartDay)) return null;
+  const today = todayKey ?? trend.days[trend.days.length - 1]?.day;
+  if (!today) return null;
+  return Math.max(1, dayNumber(today) - dayNumber(goalStartDay) + 1);
+}
 
-function assessTooFastLoss(trend: WeightTrendResult, todayKey: string | undefined): WeightSignal | null {
+// ── Rule 1: too_fast_loss ────────────────────────────────────────────────
+// Called off the PACE (lib/weightPace.ts: a least-squares line through the raw
+// weigh-ins of the last 21 days), the same rate the goal card quotes — never the
+// lagging smoothed trend, whose 7-day slope across a gap of missed weigh-ins
+// is a different, wrong number.
+
+function assessTooFastLoss(
+  trend: WeightTrendResult,
+  todayKey: string | undefined,
+  goalStartDay: string | null | undefined,
+): WeightSignal | null {
   if (!trend.established) return null;
   if (weighInAgeDays(trend, todayKey) > SIGNAL_MAX_WEIGH_IN_AGE_DAYS) return null;
-  const span = trendSpanDays(trend.days);
-  if (span < RATE_RELIABLE_MIN_SPAN_DAYS) return null;
+  const age = goalAgeDays(todayKey, trend, goalStartDay);
+  if (age != null && age < PACE_SETTLE_DAYS) return null;
+  // Just back after 7+ days without a weigh-in: a few readings do not make a pace yet.
+  if (isReturning(weighInReturn(trend.days, goalStartDay ?? null))) return null;
 
-  const currentTrendKg = trend.days[trend.days.length - 1].trendKg;
-  const rate7d = trend.delta7dKgPerWeek;
-  if (rate7d == null || rate7d >= 0) return null; // not losing
+  const anchor = trend.days[trend.days.length - 1].day;
+  const pace = weightPace(trend.days, anchor);
+  if (pace == null || pace.kgPerWeek >= 0) return null; // no pace, or not losing
 
-  const pct7d = pctPerWeek(rate7d, currentTrendKg);
-  if (pct7d == null || pct7d <= TOO_FAST_LOSS_PCT_PER_WEEK) return null;
+  // Judged on the figure that is printed (2 decimals), so "too fast — 1%" can never appear.
+  const pct = Math.abs(pace.pctPerWeek);
+  if (round2(pct) <= TOO_FAST_LOSS_PCT_PER_WEEK) return null;
 
-  const rate30d = trend.delta30dKgPerWeek;
-  const pct30d = rate30d != null && rate30d < 0 ? pctPerWeek(rate30d, currentTrendKg) : null;
-  const sustained = pct30d != null && pct30d > TOO_FAST_LOSS_SUSTAINED_PCT_PER_WEEK;
+  // Sustained: the pace one week earlier, from the same readings, was also past the ceiling.
+  const earlier = weightPace(trend.days, addDays(anchor, -PACE_RECHECK_DAYS));
+  const sustained = earlier != null && earlier.kgPerWeek < 0 && Math.abs(earlier.pctPerWeek) > TOO_FAST_LOSS_SUSTAINED_PCT_PER_WEEK;
 
   const severity: WeightSignalSeverity =
-    pct7d > TOO_FAST_LOSS_WATCH_PCT_PER_WEEK || sustained ? 'watch' : 'info';
+    pct > TOO_FAST_LOSS_WATCH_PCT_PER_WEEK || sustained ? 'watch' : 'info';
 
-  const facts: Record<string, number | string> = {
-    rateKgPerWeek: round2(rate7d),
-    pctPerWeek: round1(pct7d),
-    sustained: sustained ? 'yes' : 'no',
+  return {
+    kind: 'too_fast_loss',
+    severity,
+    facts: {
+      rateKgPerWeek: round2(pace.kgPerWeek),
+      pctPerWeek: round1(pct),
+      sustained: sustained ? 'yes' : 'no',
+    },
   };
-  if (pct30d != null) facts.pct30dPerWeek = round1(pct30d);
-
-  return { kind: 'too_fast_loss', severity, facts };
 }
 
 // ── Rule 2: plateau ──────────────────────────────────────────────────────
+// Three flat weeks of RAW weekly means (see rawPlateau). A trend-based test
+// bottomed out at 0.101%/wk against a 0.10 threshold and never fired.
 
-function assessPlateau(trend: WeightTrendResult, goal: string, todayKey: string | undefined): WeightSignal | null {
+function assessPlateau(
+  trend: WeightTrendResult,
+  goal: string,
+  todayKey: string | undefined,
+  goalStartDay: string | null | undefined,
+): WeightSignal | null {
   if (goal !== 'weight_loss') return null;
   if (!trend.established) return null;
   if (weighInAgeDays(trend, todayKey) > SIGNAL_MAX_WEIGH_IN_AGE_DAYS) return null;
-  const span = trendSpanDays(trend.days);
-  if (span < PLATEAU_MIN_SPAN_DAYS) return null;
 
-  // A flat 14-day line drawn through one or two weigh-ins is not a plateau.
-  // The 14-day window looks back from today (the newest weigh-in when no
-  // `todayKey` is given), not from the last weigh-in.
-  const anchorMs = todayKey ? dayMs(todayKey) : dayMs(trend.days[trend.days.length - 1].day);
-  const inWindow = trend.days.filter(d => (anchorMs - dayMs(d.day)) / DAY_MS <= 14).length;
-  if (inWindow < PLATEAU_MIN_WEIGH_INS) return null;
+  const anchor = trend.days[trend.days.length - 1].day;
+  const plateau = rawPlateau(trend.days, anchor, goalAgeDays(todayKey, trend, goalStartDay));
+  if (plateau == null) return null;
 
   const currentTrendKg = trend.days[trend.days.length - 1].trendKg;
-  const delta14d = trendDeltaKgPerWeek(trend.days, 14);
-  const pct14d = pctPerWeek(delta14d, currentTrendKg);
-  if (pct14d == null || pct14d > PLATEAU_MAX_PCT_PER_WEEK) return null;
-
   return {
     kind: 'plateau',
     severity: 'info',
-    facts: { pctPerWeek: round2(pct14d), trendKg: round1(currentTrendKg) },
+    // trendKg: the weekly average, kept under the old key for readers of the facts
+    // (lib/insights/goalDetectors.ts); the smoothed trend itself is `smoothedTrendKg`.
+    facts: {
+      weeklyMeanKg: round1(plateau.weeklyMeanKg),
+      trendKg: round1(plateau.weeklyMeanKg),
+      smoothedTrendKg: round1(currentTrendKg),
+      weeks: 3,
+    },
   };
 }
 
@@ -294,13 +336,13 @@ function assessWeekendOvereating(weekendPatternIntakeKcal: DailyIntakeKcalPoint[
  * signal depends on DB access — every input is already-resolved data.
  */
 export function assessWeightSignals(input: AssessWeightSignalsInput): WeightSignal[] {
-  const { trend, dailyIntakeKcal, floorKcal, goal, weekendPatternIntakeKcal, todayKey } = input;
+  const { trend, dailyIntakeKcal, floorKcal, goal, weekendPatternIntakeKcal, todayKey, goalStartDay } = input;
 
   const signals: WeightSignal[] = [];
-  const tooFastLoss = assessTooFastLoss(trend, todayKey);
+  const tooFastLoss = assessTooFastLoss(trend, todayKey, goalStartDay);
   if (tooFastLoss) signals.push(tooFastLoss);
 
-  const plateau = assessPlateau(trend, goal, todayKey);
+  const plateau = assessPlateau(trend, goal, todayKey, goalStartDay);
   if (plateau) signals.push(plateau);
 
   const underEating = assessUnderEating(dailyIntakeKcal, floorKcal);
@@ -340,6 +382,8 @@ export function formatWeightSignalsSection(
   trend: Pick<WeightTrendResult, 'days' | 'established'>,
   signals: WeightSignal[],
   unitSystem: UnitSystem,
+  /** The user's current local day. With it, a rate is never quoted off a weigh-in older than RATE_QUOTE_MAX_WEIGH_IN_AGE_DAYS. */
+  todayKey?: string,
 ): string[] {
   const lines: string[] = [];
   const span = trendSpanDays(trend.days as WeightTrendDay[]);
@@ -347,12 +391,18 @@ export function formatWeightSignalsSection(
   if (trend.established && span >= RATE_RELIABLE_MIN_SPAN_DAYS) {
     const last = trend.days[trend.days.length - 1];
     const trendStr = formatWeight(last.trendKg, unitSystem);
-    const rate7d = trendDeltaKgPerWeek(trend.days as WeightTrendDay[], 7);
-    let rateStr = 'rate not available';
-    if (rate7d != null) {
-      const magnitude = formatWeight(Math.abs(rate7d), unitSystem);
-      const direction = rate7d < 0 ? 'loss' : rate7d > 0 ? 'gain' : 'flat';
-      rateStr = magnitude ? `${magnitude}/wk ${direction}` : rateStr;
+    const age = weighInAgeDays(trend as WeightTrendResult, todayKey);
+    // The rate is the shared pace (a line through 3 weeks of raw weigh-ins), and only while the newest one is recent.
+    const pace = age <= RATE_QUOTE_MAX_WEIGH_IN_AGE_DAYS ? weightPace(trend.days as WeightTrendDay[], last.day) : null;
+    let rateStr: string;
+    if (age > RATE_QUOTE_MAX_WEIGH_IN_AGE_DAYS) {
+      rateStr = `last weigh-in ${age} days ago — do not quote a weekly rate`;
+    } else if (pace == null) {
+      rateStr = 'weekly rate not available yet — do not quote one';
+    } else {
+      const magnitude = formatWeight(Math.abs(pace.kgPerWeek), unitSystem);
+      const direction = pace.kgPerWeek < 0 ? 'loss' : pace.kgPerWeek > 0 ? 'gain' : 'flat';
+      rateStr = magnitude ? `${magnitude}/wk ${direction}` : 'weekly rate not available yet — do not quote one';
     }
     lines.push(`- Trend weight: ${trendStr ?? 'n/a'} (${rateStr})`);
   } else {

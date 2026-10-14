@@ -128,6 +128,8 @@ interface BriefContext {
   weightKg?: number;
   /** Smoothed EWMA weight trend (lib/weightTrend.ts) — lib/brain/brief.ts loads this the same way lib/brain/context.ts does. */
   weightTrend?: WeightTrendResult;
+  /** The user's local day (YYYY-MM-DD): the trend line quotes no weekly rate off a weigh-in older than a week. */
+  todayKey?: string;
   /** plateau/too_fast_loss/under_eating/rate_not_yet_reliable — see lib/brain/weightSignals.ts. */
   weightSignals?: WeightSignal[];
   foodProfile?: { restrictions: Array<{ type: string; label: string }>; preferences: Array<{ type: string; label: string }> };
@@ -237,7 +239,7 @@ export async function generateDailyBrief(userId: string, ctx: BriefContext): Pro
   const hasTooFastLoss = (ctx.weightSignals ?? []).some(s => s.kind === 'too_fast_loss');
   const weightSignalsSection = ctx.weightTrend
     ? `\n## Weight Trend & Energy Signals\n` +
-      formatWeightSignalsSection(ctx.weightTrend, ctx.weightSignals ?? [], ctx.unitSystem ?? 'metric').join('\n') +
+      formatWeightSignalsSection(ctx.weightTrend, ctx.weightSignals ?? [], ctx.unitSystem ?? 'metric', ctx.todayKey).join('\n') +
       (hasTooFastLoss
         ? '\nIMPORTANT: a too_fast_loss signal is present above — do NOT praise or celebrate this pace of loss in the body text. ' +
           'Suggest adding ~200 kcal back, weighted toward protein, and if it is marked WATCH, gently check in on how they are eating and feeling.'

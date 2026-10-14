@@ -176,3 +176,86 @@ test('reached goal: the opener congratulates and asks for a new target or mainte
   // Muscle goals reach a weight target the same way.
   assert.match(goalOpenerLine({ ...reached, goal: 'muscle' }, 'metric') ?? '', /^You've reached 76 kg/);
 });
+
+// ── wave 19c: the opener says what the card says ─────────────────────────────
+
+const READ = { state: 'pace' as const, scaleKg: 82, scaleDay: '2026-10-06', weekMeanKg: 82.2, weeksVsTarget: null, returned: null, reachedDaysAgo: null };
+
+test('opener pace phrase comes from the card: one 7-day margin, so an ETA 10 days early is "about 1 week ahead", 6 days is on pace', () => {
+  assert.match(goalOpenerLine(gp({ verdict: 'ahead', eta: '2026-12-20' }), 'metric') ?? '', /about 1 week ahead of your Dec 30 target\.$/);
+  assert.match(goalOpenerLine(gp({ verdict: 'on_track', eta: '2026-12-24' }), 'metric') ?? '', /right on pace for your Dec 30 target\.$/);
+  assert.match(goalOpenerLine(gp({ verdict: 'on_track', eta: '2027-01-05' }), 'metric') ?? '', /right on pace/);
+  assert.match(goalOpenerLine(gp({ verdict: 'behind', eta: '2027-01-12' }), 'metric') ?? '', /about 2 weeks behind your Dec 30 target\.$/);
+});
+
+test('a weight-loss card that made no pace call gets no pace phrase: too fast, stalled, progressing and early reads', () => {
+  for (const verdict of ['too_fast', 'stalled', 'progressing', 'holding'] as const) {
+    const line = goalOpenerLine(gp({ verdict, eta: '2026-12-01' }), 'metric') ?? '';
+    assert.doesNotMatch(line, /ahead|behind|on pace/, `${verdict}: ${line}`);
+  }
+  assert.equal(goalOpenerLine(gp({ verdict: 'too_fast', eta: null }), 'metric'), "You're 1.7 of 7.7 kg down, but losing faster than is easy to keep.");
+  assert.equal(goalOpenerLine(gp({ verdict: 'stalled', eta: null }), 'metric'), "You're 1.7 of 7.7 kg down, but your weight has been flat lately.");
+  assert.equal(
+    goalOpenerLine(gp({ verdict: 'progressing', eta: null, ratePerWeek: { kg: -0.58, pctBodyweight: -0.7 } }), 'metric'),
+    "You're 1.7 of 7.7 kg down and losing about 0.6 kg a week.",
+  );
+});
+
+test('early read: the amount down is the scale, not the lagging trend, and says the pace is not read yet', () => {
+  const early = gp({
+    verdict: 'progressing', eta: null, current: { weightKg: 83.5, startWeightKg: 83.7, changeKg: -0.2, progressPct: 3 },
+    weightRead: { ...READ, state: 'early', scaleKg: 83.0, weekMeanKg: 83.4 },
+  });
+  assert.equal(goalOpenerLine(early, 'metric'), "You're 0.7 of 7.7 kg down on the scale; your pace settles after 3 weeks.");
+  assert.equal(goalOpenerLine(early, 'imperial'), "You're 1.5 of 17 lb down on the scale; your pace settles after 3 weeks.");
+});
+
+test('a plateau and a weekly average: "down" is measured from the weekly average', () => {
+  const plateau = gp({ verdict: 'holding', eta: null, weightRead: { ...READ, state: 'plateau', weekMeanKg: 81.4 } });
+  assert.equal(goalOpenerLine(plateau, 'metric'), "You're 2.3 of 7.7 kg down, though the scale has been flat for 3 weeks.");
+});
+
+test('welcome back after a gap: leads with the change on the scale since the last weigh-in, on the first weigh-in back only', () => {
+  const back = (weighInsSince: number) => gp({
+    verdict: 'progressing', eta: null,
+    weightRead: { ...READ, state: 'returning', scaleKg: 85.4, returned: { gapDays: 12, sinceDay: '2026-05-10', sinceKg: 86.5, weighInsSince } },
+  });
+  assert.equal(
+    goalOpenerLine(back(1), 'metric'),
+    'Welcome back — the scale is down 1.1 kg since May 10; keep weighing in so your trend catches up.',
+  );
+  assert.equal(requiredOpenerLine(back(1), 'weight_loss', 'metric'), goalOpenerLine(back(1), 'metric'));
+  assert.equal(
+    goalFallbackOpener(back(1), 'weight_loss', 'metric'),
+    'Welcome back — the scale is down 1.1 kg since May 10; keep weighing in so your trend catches up. What would you like to dig into?',
+  );
+  assert.equal(
+    goalOpenerLine({ ...back(1), weightRead: { ...back(1).weightRead!, returned: { gapDays: 12, sinceDay: '2026-05-10', sinceKg: 85.0, weighInsSince: 1 } } }, 'metric'),
+    'Welcome back — the scale is up 0.4 kg since May 10; keep weighing in so your trend catches up.',
+  );
+  assert.equal(
+    goalOpenerLine({ ...back(1), weightRead: { ...back(1).weightRead!, returned: { gapDays: 12, sinceDay: '2026-05-10', sinceKg: 86.5, weighInsSince: 1 } } }, 'imperial'),
+    'Welcome back — the scale is down 2.4 lb since May 10; keep weighing in so your trend catches up.',
+  );
+  assert.doesNotMatch(goalOpenerLine(back(2), 'metric') ?? '', /Welcome back/, 'the second weigh-in back reads like any early read');
+});
+
+test('reached: asks about a new target or maintenance in the first 3 days after reachedAt only, then reports where the weight holds', () => {
+  const reached = (reachedDaysAgo: number | null) => gp({
+    verdict: 'reached', headline: 'Goal reached — 76 kg', eta: null,
+    current: { weightKg: 76.4, startWeightKg: 83.7, changeKg: -7.3, progressPct: 100 },
+    weightRead: { ...READ, state: 'reached', weekMeanKg: 76.1, scaleKg: 76.3, reachedDaysAgo },
+  });
+  const ask = "You've reached 76 kg — want to set a new target or switch to maintenance?";
+  assert.equal(goalOpenerLine(reached(0), 'metric'), ask);
+  assert.equal(goalOpenerLine(reached(3), 'metric'), ask);
+  assert.equal(goalFallbackOpener(reached(3), 'weight_loss', 'metric'), ask, 'it ends in its own question: no second invitation');
+  assert.equal(goalOpenerLine(reached(4), 'metric'), 'Holding at 76.1 kg, inside your target range.');
+  assert.equal(goalOpenerLine(reached(10), 'imperial'), 'Holding at 167.8 lb, inside your target range.');
+  assert.equal(goalFallbackOpener(reached(10), 'weight_loss', 'metric'), 'Holding at 76.1 kg, inside your target range. What would you like to dig into?');
+  // Unknown crossing: no daily nag either.
+  assert.equal(goalOpenerLine(reached(null), 'metric'), 'Holding at 76.1 kg, inside your target range.');
+  // Drifting well under the target says so instead.
+  const under = gp({ ...reached(10), weightRead: { ...READ, state: 'reached', weekMeanKg: 74.2, reachedDaysAgo: 10 } });
+  assert.equal(goalOpenerLine(under, 'metric'), 'At 74.2 kg, 1.8 kg under your 76 kg target.');
+});

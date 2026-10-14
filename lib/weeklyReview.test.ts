@@ -247,11 +247,17 @@ test('insufficient data: returns a gentle not-enough-data review with no stats a
     assert.deepEqual(r.stats, []);
     assert.equal(r.win, null);
     assert.equal(r.slip, null);
-    assert.match(r.nextWeek, /Log meals, weigh-ins or workouts/);
+    // It names what the week actually had and what it still needs, and never asks for what was already done.
+    assert.match(r.nextWeek, /^You logged 1 workout; /);
+    assert.doesNotMatch(r.nextWeek, /Log meals, weigh-ins or workouts/);
     assert.equal(r.dataSufficiency.sufficient, false);
     assert.equal(r.verdict, 'insufficient_data');
-    assert.doesNotMatch(r.nextWeek, /\d/);
+    assert.doesNotMatch(r.nextWeek, /log 3 more workouts|log \d+ workouts?/i, 'the one workout is not asked for again');
   }
+  // A week with nothing logged keeps the plain invitation (no numbers to name).
+  const empty = computeWeeklyReview(base({ goal: 'weight_loss', verdict: 'insufficient_data' }));
+  assert.match(empty.nextWeek, /^Log meals, weigh-ins or workouts on a few days/);
+  assert.doesNotMatch(empty.nextWeek, /\d/);
 });
 
 test('insufficient data: three data days but fewer than two stats is still not enough', () => {
@@ -1302,6 +1308,19 @@ test('a deliberately lighter week has no Slip and Next week returns to full volu
   assert.equal(r.nextWeek, 'Back to full volume next week: your usual sessions and loads.');
 });
 
+/** The tips an over-budget weight-loss week rotates through (the weekend plan alternates with the others when the weekend ran high). */
+const WEEKEND_TIPS = [
+  "Plan Saturday's dinner ahead so the weekend lands closer to your weekday average.",
+  'Pick the weekend meal most likely to run over and decide it ahead of time.',
+  'Keep weekend breakfast and lunch close to your weekday routine, and let one dinner out be the flexible meal.',
+  'Log weekend meals as you go — it is the easiest way to watch the gap close.',
+];
+const BUDGET_TIPS = [
+  'Pick the two days most likely to run over and plan those meals ahead.',
+  'Log your meals before you eat them on your two busiest days — a plan on paper is easier to follow.',
+  'Keep one go-to dinner that fits your 2,000 kcal day and use it on your busiest night.',
+];
+
 test('weight loss: days out of budget are the gap — Slip names them, Next week plans the days', () => {
   const r = computeWeeklyReview(weightLossInput({
     intakeDays: intake([...PREV, ...WEEK], [2300, 2250, 2400, 2300, 2350, 2500, 2450, 1900, 1950, 2000, 2400, 2450, 2500, 2450]),
@@ -1309,21 +1328,29 @@ test('weight loss: days out of budget are the gap — Slip names them, Next week
   assert.equal(r.weekRating, 'mixed'); // 3 of 7
   assert.deepEqual(r.weekGap, { kind: 'budget', inBudget: 3, logged: 7 });
   assert.equal(r.slip, 'In budget 3 of 7 logged days (2,000 kcal target)');
-  // A heavy weekend is the sharpest way to close a budget gap.
-  assert.equal(r.nextWeek, "Plan Saturday's dinner ahead so the weekend lands closer to your weekday average.");
+  // A heavy weekend is the sharpest way to close a budget gap — the weekend plan leads the rotation, alternating with other weekend tips.
+  assert.ok(WEEKEND_TIPS.includes(r.nextWeek), r.nextWeek);
+  // ...and never last week's tip when the loader passes it in.
+  const again = computeWeeklyReview(weightLossInput({
+    previousNextWeek: r.nextWeek,
+    intakeDays: intake([...PREV, ...WEEK], [2300, 2250, 2400, 2300, 2350, 2500, 2450, 1900, 1950, 2000, 2400, 2450, 2500, 2450]),
+  }));
+  assert.notEqual(again.nextWeek, r.nextWeek);
   const flatWeekend = computeWeeklyReview(weightLossInput({
     intakeDays: intake([...PREV, ...WEEK], [2300, 2250, 2400, 2300, 2350, 2500, 2450, 1900, 1950, 2000, 2200, 2200, 2200, 2200]),
   }));
   assert.equal(flatWeekend.slip, 'In budget 3 of 7 logged days (2,000 kcal target)');
-  assert.equal(flatWeekend.nextWeek, 'Pick the two days most likely to run over and plan those meals ahead.');
+  assert.ok(BUDGET_TIPS.includes(flatWeekend.nextWeek), flatWeekend.nextWeek);
 });
 
 test('weight loss: a good budget week dragged down by the weight trend names the weight', () => {
   const r = computeWeeklyReview(weightLossInput({ weightReadings: weigh([...PREV, ...WEEK], i => 80 + i * 0.1) }));
   assert.equal(r.weekRating, 'mixed');
   assert.equal(r.weekGap?.kind, 'weight');
-  assert.match(r.slip ?? '', /^Your weight trend moved up [\d.]+ kg, away from your goal\.$/);
-  assert.match(r.nextWeek, /weigh in at least 3 mornings/);
+  assert.match(r.slip ?? '', /^Your weekly average weight moved up [\d.]+ kg, away from your goal\.$/);
+  // Seven weigh-ins this week: it never asks for "at least 3 mornings" again.
+  assert.match(r.nextWeek, /^Hold to your calorie target each day/);
+  assert.doesNotMatch(r.nextWeek, /weigh in at least 3 mornings/);
 });
 
 test('general: active days short of 3 are the gap', () => {
@@ -1434,7 +1461,7 @@ test('review copy joins numbers to units, "a → b" pairs and "over 4 wks" with 
 
   const loss = computeWeeklyReviewRaw(weightLossInput());
   assert.match(loss.headline, new RegExp(`^Down \\d\\.\\d${NBSP}kg, in budget 5 of 7 days$`));
-  assert.match(loss.win ?? '', new RegExp(`^Your weight trend is down \\d\\.\\d${NBSP}kg\\.$`));
+  assert.match(loss.win ?? '', new RegExp(`^Your weekly average weight is down \\d\\.\\d${NBSP}kg\\.$`));
   assert.match(statByLabel(loss, 'Avg calories')!.value, new RegExp(`^[\\d,]+${NBSP}kcal$`));
   assert.match(loss.slip ?? '', new RegExp(`^Weekends ran \\+\\d+${NBSP}kcal over your weekdays\\.$`));
 
@@ -1672,4 +1699,229 @@ test('race phase review: the coming week\'s target is the number the goal card t
   assert.equal(card.race, null);
   assert.equal(card.distance!.stepTargetKm, 24);
   assert.equal(computeWeeklyReview(input).nextWeek, 'Back to building: ~24 km next week.');
+});
+
+// ── wave 19c: raw weekly mean, weigh-in-only weeks, plateau, reached, rotating tips ──
+
+const PREV2 = Array.from({ length: 7 }, (_, i) => addDays(PREV_START, i - 7));
+const TOO_FAST_TIPS = [
+  'Eat up to your full 2,000 kcal target each day — a slower loss is easier to keep.',
+  'Add one more protein-rich meal or snack a day and eat up to your 2,000 kcal target — a slower loss protects muscle.',
+];
+
+test('E. the weight stat is the change in the RAW weekly mean (not the smoothed trend), labelled as such', () => {
+  // 82.0 all of last week, 81.5 all of this week: the weekly means differ by exactly 0.5 kg.
+  const r = computeWeeklyReview(base({ weightReadings: [...weigh(PREV, () => 82), ...weigh(WEEK, () => 81.5)] }));
+  const stat = statByLabel(r, 'Weekly avg weight')!;
+  assert.equal(stat.value, '−0.5 kg');
+  assert.equal(stat.comparison, 'vs the week before');
+  assert.equal(stat.tone, 'good');
+  assert.equal(r.win, 'Your weekly average weight is down 0.5 kg.');
+  // The smoothed trend moved by far less over the same week; the stat is not it.
+  assert.equal(statByLabel(r, 'Trend change'), undefined);
+});
+
+test('E. a week short of weigh-ins for a weekly mean falls back to the trend change, labelled "Trend change"', () => {
+  const r = computeWeeklyReview(base({
+    weightReadings: [...weigh([PREV[6]], () => 82), ...weigh(WEEK.slice(0, 4), i => 81.4 - i * 0.05)],
+    intakeDays: intake(WEEK, [1900, 1950, 2000, 1850, 2050, 1900, 1950]),
+  }));
+  assert.equal(statByLabel(r, 'Weekly avg weight'), undefined);
+  const stat = statByLabel(r, 'Trend change')!;
+  assert.ok(stat);
+  assert.equal(stat.comparison, 'smoothed trend, vs the week before');
+  assert.match(r.win ?? '', /^Your weight trend is down/);
+});
+
+test('E. a too-fast week names the weight as the gap, and Next week says to eat up to the full calorie target — never a weekend tip', () => {
+  const input = (previousNextWeek: string | null) => weightLossInput({
+    // Down 1.0 kg on the weekly mean (1.2%), calories over budget on most days with a heavy weekend.
+    weightReadings: [...weigh(PREV, () => 83), ...weigh(WEEK, () => 82)],
+    intakeDays: intake([...PREV, ...WEEK], [2300, 2250, 2400, 2300, 2350, 2500, 2450, 2400, 2450, 2500, 2400, 2450, 2500, 2450]),
+    previousNextWeek,
+  });
+  const first = computeWeeklyReview(input(null));
+  assert.equal(statByLabel(first, 'Weekly avg weight')!.tone, 'watch');
+  assert.equal(first.weekGap?.kind, 'weight');
+  assert.equal(first.weekRating, 'tough');
+  assert.match(first.slip ?? '', /^Your weekly average dropped 1 kg — faster than is comfortable to sustain\.$/);
+  assert.ok(TOO_FAST_TIPS.includes(first.nextWeek), first.nextWeek);
+  assert.doesNotMatch(first.nextWeek, /Saturday/);
+  // Two weeks running never gives the same tip.
+  const second = computeWeeklyReview(input(first.nextWeek));
+  assert.ok(TOO_FAST_TIPS.includes(second.nextWeek));
+  assert.notEqual(second.nextWeek, first.nextWeek);
+  // Without a known budget it still reads, without a number.
+  const noBudget = computeWeeklyReview({ ...input(null), budget: null });
+  assert.ok(
+    ['Eat up to your full calorie target each day — a slower loss is easier to keep.',
+      'Add one more protein-rich meal or snack a day and eat up to your calorie target — a slower loss protects muscle.'].includes(noBudget.nextWeek),
+    noBudget.nextWeek,
+  );
+});
+
+test('E. the weight stat alone is a review when there were 3+ weigh-ins: "Down 0.5 kg this week (5 weigh-ins)"', () => {
+  const r = computeWeeklyReview(base({
+    weightReadings: [...weigh(PREV.slice(0, 5), () => 82), ...weigh(WEEK.slice(0, 5), () => 81.5)],
+  }));
+  assert.equal(r.dataSufficiency.sufficient, true);
+  assert.equal(r.dataSufficiency.statCount, 1);
+  assert.equal(r.headline, 'Down 0.5 kg this week (5 weigh-ins)');
+  assert.equal(r.weekRating, 'good');
+  assert.equal(r.stats.length, 1);
+  // Two weigh-ins are not enough to carry a review alone.
+  const two = computeWeeklyReview(base({ weightReadings: [...weigh(PREV.slice(0, 5), () => 82), ...weigh(WEEK.slice(0, 2), () => 81.5)] }));
+  assert.equal(two.dataSufficiency.sufficient, false);
+  // Imperial.
+  const lb = computeWeeklyReviewRaw(base({ unitSystem: 'imperial', weightReadings: [...weigh(PREV.slice(0, 5), () => 82), ...weigh(WEEK.slice(0, 5), () => 81.5)] }));
+  assert.equal(lb.headline, `Down 1.1${NBSP}lb this week (5 weigh-ins)`);
+});
+
+test('E. the empty review names what is actually missing and never asks for what was done', () => {
+  const weighedOnly = computeWeeklyReview(base({ weightReadings: weigh(WEEK.slice(0, 5), () => 82) }));
+  assert.equal(weighedOnly.dataSufficiency.sufficient, false);
+  assert.equal(
+    weighedOnly.nextWeek,
+    'You weighed in 5 days; log meals on 3 days to add calories. Your weight change shows once last week has weigh-ins to compare against.',
+  );
+  const mealsOnly = computeWeeklyReview(base({ weightReadings: weigh([WEEK[0]], () => 82), intakeDays: intake(WEEK.slice(0, 2), [1900, 2000]) }));
+  assert.equal(mealsOnly.dataSufficiency.sufficient, false);
+  assert.match(mealsOnly.nextWeek, /^You weighed in 1 day and logged meals on 2 days; weigh in on 2 more mornings to see your weight change and log meals on 1 more day to add calories\.$/);
+  // Someone who weighed in 5 days is never told to weigh in again.
+  assert.doesNotMatch(weighedOnly.nextWeek, /weigh in/i);
+  // A lifter's gap is workouts, not weigh-ins.
+  const lifter = computeWeeklyReview(base({ goal: 'muscle', trainingDays: [WEEK[0]] }));
+  assert.match(lifter.nextWeek, /^You logged 1 workout; log 2 more workouts to add your sessions and log meals on 3 days to add calories\.$/);
+});
+
+/** Three weeks of flat weigh-ins (about 89.5 kg), full logging inside the budget. */
+function plateauWeek(over: Partial<WeeklyReviewInput> = {}): WeeklyReviewInput {
+  const flat = (days: string[]) => weigh(days, i => 89.5 + (i % 2 === 0 ? 0.05 : -0.05));
+  return base({
+    verdict: 'holding',
+    weightReadings: [...flat(PREV2), ...flat(PREV), ...flat(WEEK)],
+    intakeDays: intake([...PREV, ...WEEK], [1900, 1950, 2000, 1850, 2050, 1900, 1950, 1900, 1950, 2000, 1850, 2050, 1900, 1950]),
+    trainingDays: [WEEK[1], WEEK[3], WEEK[5]],
+    weeklySessionsTarget: 3,
+    ...over,
+  });
+}
+
+test('D. a plateau week is not a weight "win": neutral stat, no win line, named in the headline, a real next step', () => {
+  const r = computeWeeklyReview(plateauWeek());
+  const stat = statByLabel(r, 'Weekly avg weight')!;
+  assert.equal(stat.tone, 'neutral');
+  assert.ok(!/weight|average/i.test(r.win ?? ''), `win: ${r.win}`);
+  assert.match(r.headline, /^Weight flat for 3 weeks, in budget 7 of 7 days$/);
+  assert.equal(r.weekRating, 'good');
+  assert.equal(
+    r.nextWeek,
+    'Plateaus are common and often water: keep 2,000 kcal and 3 sessions; if the scale is still flat in 2 weeks, trim ~150 kcal a day or add two 30-minute walks.',
+  );
+  // Only two flat weeks (the third still falling) is just a good week.
+  const falling = computeWeeklyReview(plateauWeek({ weightReadings: [...weigh(PREV2, () => 90.3), ...weigh(PREV, () => 89.5), ...weigh(WEEK, () => 89.0)] }));
+  assert.equal(statByLabel(falling, 'Weekly avg weight')!.tone, 'good');
+});
+
+const reachedWeekInput = (over: Partial<WeeklyReviewInput> = {}) => base({
+  verdict: 'reached',
+  targetWeightKg: 84,
+  reachedAt: WEEK[2],
+  weightReadings: [...weigh(PREV, i => 85.2 - i * 0.1), ...weigh(WEEK, i => (i < 3 ? 84.4 - i * 0.2 : 84 + (i % 2 === 0 ? 0.05 : -0.05)))],
+  intakeDays: intake([...PREV, ...WEEK], [1900, 1950, 2000, 1850, 2050, 1900, 1950, 1900, 1950, 2000, 1850, 2050, 2450, 2500]),
+  trainingDays: [WEEK[1], WEEK[3], WEEK[5]],
+  weeklySessionsTarget: 3,
+  ...over,
+});
+
+test('F. the week the target is reached: "You reached 84 kg this week", a good week, a win, "Switch to maintenance in Goals", no deficit tips', () => {
+  const r = computeWeeklyReview(reachedWeekInput());
+  assert.equal(r.headline, 'You reached 84 kg this week');
+  assert.equal(r.weekRating, 'good');
+  assert.equal(r.weekGap, null);
+  assert.match(r.win ?? '', /^You reached your 84 kg target — weekly average 84\.\d kg\.$/);
+  assert.equal(r.slip, null, 'a heavy weekend is not scolded once the deficit is over');
+  assert.equal(r.nextWeek, 'Switch to maintenance in Goals so your calorie target stops pushing you lower.');
+  assert.ok(!r.stats.some(s => s.label === 'Days in budget'), 'budget days no longer rate a reached goal');
+  assert.equal(statByLabel(r, 'Weekly avg weight')!.tone, 'neutral');
+  assert.doesNotMatch(JSON.stringify(r), /Saturday|in budget/);
+  assertWellFormed(r);
+});
+
+test('F. afterwards a steady weight rates good and is a win; Next week never repeats and never reverts to deficit tips', () => {
+  const holding = (previousNextWeek: string | null) => computeWeeklyReview(reachedWeekInput({
+    reachedAt: PREV[2],
+    weightReadings: [...weigh(PREV, i => 84 + (i % 2 === 0 ? 0.1 : 0)), ...weigh(WEEK, i => 84.1 + (i % 2 === 0 ? 0.05 : -0.05))],
+    previousNextWeek,
+  }));
+  const r = holding(null);
+  assert.match(r.headline, /^Holding at 84\.1 kg, 3 workouts$/);
+  assert.equal(r.weekRating, 'good');
+  assert.equal(r.win, 'Holding at 84.1 kg, inside your target range.');
+  assert.equal(r.slip, null);
+  assert.doesNotMatch(r.nextWeek, /Saturday|budget|trim/);
+  const again = holding(r.nextWeek);
+  assert.notEqual(again.nextWeek, r.nextWeek);
+  assert.doesNotMatch(again.nextWeek, /Saturday|budget|trim/);
+  // Imperial.
+  const lb = computeWeeklyReviewRaw(reachedWeekInput({ reachedAt: PREV[2], unitSystem: 'imperial', weightReadings: [...weigh(PREV, () => 84), ...weigh(WEEK, () => 84.1)] }));
+  assert.equal(lb.win, `Holding at 185.4${NBSP}lb, inside your target range.`);
+  const reachedLb = computeWeeklyReviewRaw(reachedWeekInput({ unitSystem: 'imperial' }));
+  assert.equal(reachedLb.headline, `You reached 185.2${NBSP}lb this week`);
+});
+
+test('F. drifting well under the target is the one reached-week gap: it is named and no longer a win', () => {
+  const r = computeWeeklyReview(reachedWeekInput({
+    reachedAt: PREV[2],
+    weightReadings: [...weigh(PREV, () => 83.4), ...weigh(WEEK, () => 82.5)],
+  }));
+  assert.equal(r.weekRating, 'mixed');
+  assert.equal(r.slip, 'At 82.5 kg, 1.5 kg under your 84 kg target.');
+  assert.doesNotMatch(r.win ?? '', /Holding/, 'no "holding inside your range" win');
+});
+
+test('E. the tip rotates: never the same Next week two weeks running, with or without the stored previous text', () => {
+  const week = (k: number, previousNextWeek: string | null) => {
+    const start = addDays(WEEK_START, 7 * k);
+    const days = Array.from({ length: 14 }, (_, i) => addDays(start, i - 7));
+    return computeWeeklyReview(weightLossInput({
+      weekStart: start,
+      weightReadings: weigh(days, i => 82 - i * 0.05),
+      intakeDays: intake(days, [2300, 2250, 2400, 2300, 2350, 2500, 2450, 1900, 1950, 2000, 2400, 2450, 2500, 2450]),
+      trainingDays: [days[8], days[10], days[12]],
+      previousNextWeek,
+    }));
+  };
+  // Deterministic rotation by week number alone.
+  const alone = Array.from({ length: 8 }, (_, k) => week(k, null).nextWeek);
+  for (let i = 1; i < alone.length; i++) assert.notEqual(alone[i], alone[i - 1], `weeks ${i - 1} and ${i}: ${alone[i]}`);
+  assert.ok(new Set(alone).size >= 3, 'more than two different tips over eight weeks');
+  // And with the loader handing the previous text in.
+  let prev: string | null = null;
+  const chained: string[] = [];
+  for (let k = 0; k < 8; k++) {
+    const next: string = week(k, prev).nextWeek;
+    chained.push(next);
+    prev = next;
+  }
+  for (let i = 1; i < chained.length; i++) assert.notEqual(chained[i], chained[i - 1]);
+  assert.ok(chained.filter(t => t.startsWith("Plan Saturday's dinner")).length <= 4, '"Plan Saturday\'s dinner" no longer fills every week');
+});
+
+test('E. the fallback tip is built from what was logged: six weigh-ins are never told to "weigh in at least 3 mornings"', () => {
+  const sixWeighIns = computeWeeklyReview(base({
+    verdict: 'stalled',
+    weightReadings: [...weigh(PREV, () => 82), ...weigh(WEEK.slice(0, 6), () => 82)],
+    intakeDays: intake(WEEK, [1900, 1950, 2000, 1850, 2050, 1900, 1950]),
+    trainingDays: [WEEK[1], WEEK[3]],
+  }));
+  assert.doesNotMatch(sixWeighIns.nextWeek, /weigh in at least 3/i);
+  const noMeals = computeWeeklyReview(base({
+    verdict: 'stalled',
+    weightReadings: [...weigh(PREV, () => 82), ...weigh(WEEK.slice(0, 6), () => 81.7)],
+    trainingDays: [WEEK[1], WEEK[3], WEEK[5]],
+    weeklySessionsTarget: 3,
+  }));
+  assert.match(noMeals.nextWeek, /^You weighed in 6 days — log dinner on 3 days to see how your calories line up\.$|^Repeat this week|^Nothing to change/);
+  assert.doesNotMatch(noMeals.nextWeek, /meals, weigh-in/);
 });

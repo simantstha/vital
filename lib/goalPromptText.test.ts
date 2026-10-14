@@ -238,3 +238,27 @@ test('a reached goal tells the coach the next step is a new target or maintenanc
   assert.match(text, /Target reached — the next step is a new target or maintenance/);
   assert.doesNotMatch(formatGoalProgressLines(gp(), 'metric').join('\n'), /Target reached/);
 });
+
+// ── wave 19c: the coach reads the same pace and the same reads as the card ───
+
+const WEIGHT_READ = { state: 'pace' as const, scaleKg: 81.6, scaleDay: '2026-10-06', weekMeanKg: 81.9, weeksVsTarget: null, returned: null, reachedDaysAgo: null };
+
+test('coach lines label the trend as smoothed, add the scale and weekly average, and say what the rate is', () => {
+  const text = formatGoalProgressLines(gp({ weightRead: WEIGHT_READ }), 'metric').join('\n');
+  assert.match(text, /trend 82\.1 kg \(smoothed\)/);
+  assert.match(text, /scale 81\.6 kg, weekly average 81\.9 kg/);
+  assert.match(text, /rate -0\.45 kg\/wk \(-0\.55% bw\) over the last 3 weeks of weigh-ins/);
+  const imperial = formatGoalProgressLines(gp({ weightRead: WEIGHT_READ }), 'imperial').join('\n');
+  assert.match(imperial, /scale 179\.9 lb, weekly average 180\.6 lb/);
+});
+
+test('coach lines tell the coach not to quote a rate or a weeks-ahead call during an early read, and welcome a returning user', () => {
+  const early = formatGoalProgressLines(gp({ eta: null, ratePerWeek: { kg: null, pctBodyweight: null }, verdict: 'progressing', headline: 'Early read — down 0.7 kg on the scale in 9 days', weightRead: { ...WEIGHT_READ, state: 'early' } }), 'metric').join('\n');
+  assert.match(early, /Early read: the pace is not settled yet — quote the scale against the start, but no weekly rate, no projected date and no "weeks ahead\/behind"/);
+  assert.doesNotMatch(early, /rate -/);
+  assert.doesNotMatch(early, /ETA/);
+  const back = formatGoalProgressLines(gp({ eta: null, weightRead: { ...WEIGHT_READ, state: 'returning' } }), 'metric').join('\n');
+  assert.match(back, /back after a gap in weigh-ins: welcome them back/);
+  const plateau = formatGoalProgressLines(gp({ eta: null, weightRead: { ...WEIGHT_READ, state: 'plateau' } }), 'metric').join('\n');
+  assert.match(plateau, /Plateau on the raw weekly averages \(flat for 3 weeks\): often water/);
+});
