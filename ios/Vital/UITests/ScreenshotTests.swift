@@ -224,7 +224,7 @@ final class ScreenshotTests: XCTestCase {
     private func scrollIntoComfortableView(_ element: XCUIElement, app: XCUIApplication, maxSwipes: Int = 5) -> Bool {
         guard scrollUntilExists(element, app: app) else { return false }
         var swipes = 0
-        while !(element.isHittable && isClearOfChrome(element, app: app)) && swipes < maxSwipes {
+        while !(isSafelyHittable(element, app: app) && isClearOfChrome(element, app: app)) && swipes < maxSwipes {
             let screenHeight = max(app.frame.height, 1)
             // Move the element's centre toward 45% of the screen height; the
             // drag distance is capped so a single nudge can't fling it past.
@@ -239,14 +239,25 @@ final class ScreenshotTests: XCTestCase {
             start.press(forDuration: 0.05, thenDragTo: end)
             swipes += 1
         }
-        return element.isHittable && isClearOfChrome(element, app: app)
+        return isSafelyHittable(element, app: app) && isClearOfChrome(element, app: app)
+    }
+
+    /// `isHittable` records a test failure ("Activation point invalid") instead of
+    /// returning false when the element's frame is empty or entirely off-screen —
+    /// e.g. mid expand/collapse animation. Check the frame first, then ask.
+    private func isSafelyHittable(_ element: XCUIElement, app: XCUIApplication) -> Bool {
+        guard element.exists else { return false }
+        let frame = element.frame
+        guard !frame.isEmpty, frame.width > 0, frame.height > 0,
+              app.frame.contains(CGPoint(x: frame.midX, y: frame.midY)) else { return false }
+        return element.isHittable
     }
 
     /// True when `element` is hittable, fully inside the app window, and
     /// clear of the bottom chrome. No extra top margin, so sheet / nav-bar
     /// buttons (Done / Close, y of roughly 60-110) qualify.
     private func isDirectlyTappable(_ element: XCUIElement, app: XCUIApplication) -> Bool {
-        guard element.exists, element.isHittable else { return false }
+        guard element.exists, isSafelyHittable(element, app: app) else { return false }
         let frame = element.frame
         return app.frame.contains(frame) && frame.maxY <= bottomChromeLimit(app: app)
     }
@@ -290,7 +301,7 @@ final class ScreenshotTests: XCTestCase {
             return
         }
 
-        guard scrollIntoComfortableView(element, app: app, maxSwipes: maxSwipes), element.isHittable else {
+        guard scrollIntoComfortableView(element, app: app, maxSwipes: maxSwipes), isSafelyHittable(element, app: app) else {
             XCTFail("\(description) exists but never became hittable and fully on screen "
                      + "(clear of the tab bar) after \(maxSwipes) scroll attempts")
             return
@@ -323,6 +334,7 @@ final class ScreenshotTests: XCTestCase {
     /// within the timeout.
     private func waitForSettled(
         _ element: XCUIElement,
+        app: XCUIApplication,
         timeout: TimeInterval = 5.0,
         description: String
     ) {
@@ -336,7 +348,7 @@ final class ScreenshotTests: XCTestCase {
         let pollInterval: TimeInterval = 0.5
 
         while Date.now < deadline {
-            guard element.isHittable else {
+            guard isSafelyHittable(element, app: app) else {
                 RunLoop.current.run(until: Date(timeIntervalSinceNow: pollInterval))
                 continue
             }
@@ -585,10 +597,13 @@ final class ScreenshotTests: XCTestCase {
             // it again once it is hittable.
             let retryStrip = app.buttons["today.fuelStrip"]
             if retryStrip.waitForExistence(timeout: 5) {
-                let hittable = NSPredicate(format: "isHittable == true")
-                let exp = XCTNSPredicateExpectation(predicate: hittable, object: retryStrip)
-                _ = XCTWaiter().wait(for: [exp], timeout: 5)
-                if retryStrip.isHittable { retryStrip.tap() }
+                // Poll instead of an `isHittable == true` predicate expectation:
+                // that predicate re-reads `isHittable` on an invalid frame mid-animation.
+                let deadline = Date().addingTimeInterval(5)
+                while !isSafelyHittable(retryStrip, app: app) && Date() < deadline {
+                    RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+                }
+                if isSafelyHittable(retryStrip, app: app) { retryStrip.tap() }
             }
             sheetOpened = app.staticTexts["Diet budget"].waitForExistence(timeout: 10)
         }
@@ -734,9 +749,12 @@ final class ScreenshotTests: XCTestCase {
         // the detail mid-collapse.
         // Let the expand animation settle so the pill is hittable before the
         // collapse tap; a tap landing mid-animation can be absorbed.
-        let pillHittable = NSPredicate(format: "isHittable == true")
-        let pillExp = XCTNSPredicateExpectation(predicate: pillHittable, object: pill)
-        _ = XCTWaiter().wait(for: [pillExp], timeout: 3)
+        // Polled rather than an `isHittable == true` predicate expectation, which
+        // re-reads `isHittable` on an invalid frame while the fold-out animates.
+        let deadline = Date().addingTimeInterval(3)
+        while !isSafelyHittable(pill, app: app) && Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
         tapWhenHittable(pill, app: app, description: "Coach receipt pill (collapse) [\(scenario)/\(appearance)]")
         if !detail.waitForNonExistence(timeout: 5) {
             // One retry: the collapse tap was absorbed while the expand
@@ -1110,7 +1128,7 @@ final class ScreenshotTests: XCTestCase {
         let workoutHeader = app.descendants(matching: .any).matching(identifier: "analysisWorkout.header").firstMatch
         XCTAssertTrue(workoutHeader.waitForExistence(timeout: 15),
                        "Tapping the workout row should open the workout AnalysisView [\(scenario)/\(appearance)]")
-        waitForSettled(workoutHeader, timeout: 5.0, description: "Workout AnalysisView header [\(scenario)/\(appearance)]")
+        waitForSettled(workoutHeader, app: app, timeout: 5.0, description: "Workout AnalysisView header [\(scenario)/\(appearance)]")
         capture(app, name: "\(scenario)__workoutAnalysis__\(appearance)")
 
         if scenario == "endurance" {
@@ -1155,7 +1173,7 @@ final class ScreenshotTests: XCTestCase {
         // `swipeUp()` that could overshoot it back off the top of the screen.
         tapWhenHittable(whoopSwitch, app: app, maxSwipes: 6, description: "Workout AnalysisView's WHOOP device switch [\(scenario)/\(appearance)]")
         let workoutHeader = app.descendants(matching: .any).matching(identifier: "analysisWorkout.header").firstMatch
-        waitForSettled(workoutHeader, timeout: 5.0, description: "Workout AnalysisView header (WHOOP tab) [\(scenario)/\(appearance)]")
+        waitForSettled(workoutHeader, app: app, timeout: 5.0, description: "Workout AnalysisView header (WHOOP tab) [\(scenario)/\(appearance)]")
         capture(app, name: "\(scenario)__workoutAnalysisWhoop__\(appearance)")
     }
 
@@ -1165,7 +1183,7 @@ final class ScreenshotTests: XCTestCase {
         let sleepHeader = app.descendants(matching: .any).matching(identifier: "analysisSleep.header").firstMatch
         XCTAssertTrue(sleepHeader.waitForExistence(timeout: 15),
                        "Tapping the sleep row should open the sleep AnalysisView [\(scenario)/\(appearance)]")
-        waitForSettled(sleepHeader, timeout: 5.0, description: "Sleep AnalysisView header [\(scenario)/\(appearance)]")
+        waitForSettled(sleepHeader, app: app, timeout: 5.0, description: "Sleep AnalysisView header [\(scenario)/\(appearance)]")
         capture(app, name: "\(scenario)__sleepAnalysis__\(appearance)")
         let sleepDone = app.buttons["analysis.done"].firstMatch
         tapWhenHittable(sleepDone, app: app, description: "Sleep AnalysisView Done button [\(scenario)/\(appearance)]")
@@ -1265,7 +1283,7 @@ final class ScreenshotTests: XCTestCase {
         let primaryDeviceText = app.staticTexts.matching(
             NSPredicate(format: "label CONTAINS[c] %@", "Primary device for")
         ).firstMatch
-        waitForSettled(primaryDeviceText, timeout: 5.0, description: "Devices screen content [\(scenario)/\(appearance)]")
+        waitForSettled(primaryDeviceText, app: app, timeout: 5.0, description: "Devices screen content [\(scenario)/\(appearance)]")
         capture(app, name: "\(scenario)__devices__\(appearance)")
 
         // Navigate back to Profile — same tidy-up `captureMemory` does.
