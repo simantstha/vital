@@ -59,6 +59,19 @@ export function morningKey(userId: string, date: string): string { return `morni
 export function currentLocalDate(now: Date, timezone: string): string { return localDayKey(now, timezone); }
 
 /**
+ * The narrative stored when no analysis could be generated. It sends the reader to what the
+ * screen already shows (the metrics card above "Coach's take") and to the "Ask coach about …"
+ * button at the bottom of every analysis screen (ios AnalysisView), instead of apologising and
+ * stopping there. No digits: the analysis grounding rule forbids them, and this copy sits next to
+ * real analyses. Exported so scripts/requeue-fallback-analyses.ts can recognise rows that still
+ * carry it.
+ */
+export const FALLBACK_NARRATIVE: Record<AnalysisKind, string> = {
+  workout: 'Your numbers for this session are above and count toward your trends. Tap Ask coach below for a read on how it went.',
+  sleep: "Last night's numbers are above and count toward your trends. Tap Ask coach below for a read on how you slept.",
+};
+
+/**
  * A model output that still fails validation after the one repair attempt (unparseable JSON,
  * a schema mismatch, or a stray digit in the prose) must never black out a notification: the
  * push copy is static (see analysisAlert), so we still have something true and schema-valid to
@@ -72,7 +85,7 @@ export function fallbackAnalysis(kind: AnalysisKind, input: unknown): CoachAnaly
   return {
     headline: `${label} logged`,
     shortInsight: `We've saved ${subject} to your history.`,
-    narrative: `We've saved ${subject} and it counts toward your trends. I couldn't put together a proper read on it this time.`,
+    narrative: FALLBACK_NARRATIVE[kind],
     observations: [],
     nextSteps: [],
   };
