@@ -344,3 +344,30 @@ test('coach lines tell the coach not to quote a rate or a weeks-ahead call durin
   const plateau = formatGoalProgressLines(gp({ eta: null, weightRead: { ...WEIGHT_READ, state: 'plateau' } }), 'metric').join('\n');
   assert.match(plateau, /Plateau on the raw weekly averages \(flat for 3 weeks\): often water/);
 });
+
+// ── wave 20c: the coach plateau note leads with the logs, "since start" is the one progress weight, the pace window is honest ──
+
+test('coach plateau note: with logged days over target it leads with the logs and does not blame water', () => {
+  const intake = { avgKcal: 2157, targetKcal: 2000, loggedDays: 4, daysWithinTarget: 1, low: true };
+  const over = formatGoalProgressLines(gp({ eta: null, weightRead: { ...WEIGHT_READ, state: 'plateau', intake } }), 'metric').join('\n');
+  assert.match(over, /Plateau on the raw weekly averages \(flat for 3 weeks\) while the logged days ran over target \(averaging ~2160 vs 2000 kcal\): lead with the logs — getting back to target is the first lever, do not blame water\./);
+  assert.doesNotMatch(over, /often water/);
+  // On target (or no logs): the existing note, unchanged.
+  const fine = formatGoalProgressLines(gp({ eta: null, weightRead: { ...WEIGHT_READ, state: 'plateau', intake: { ...intake, avgKcal: 1950, daysWithinTarget: 4, low: false } } }), 'metric').join('\n');
+  assert.match(fine, /Plateau on the raw weekly averages \(flat for 3 weeks\): often water — not a failure/);
+  assert.match(formatGoalProgressLines(gp({ eta: null, weightRead: { ...WEIGHT_READ, state: 'plateau', intake: null } }), 'metric').join('\n'), /often water/);
+});
+
+test('coach lines: "since start" for a fat-loss goal names its basis (the weekly average, else the latest scale reading)', () => {
+  const withMean = formatGoalProgressLines(gp({ weightRead: WEIGHT_READ }), 'metric').join('\n');
+  assert.match(withMean, /since start at [\d.]+ kg \(weekly average\)/);
+  const noMean = formatGoalProgressLines(gp({ weightRead: { ...WEIGHT_READ, weekMeanKg: null } }), 'metric').join('\n');
+  assert.match(noMean, /since start at [\d.]+ kg \(latest scale reading\)/);
+  // Other goals are untouched.
+  assert.doesNotMatch(formatGoalProgressLines(gp({ goal: 'muscle', weightRead: WEIGHT_READ }), 'metric').join('\n'), /weekly average\)/);
+});
+
+test('coach lines: the pace window is 3 weeks, or 4 while a gap in weigh-ins is bridged', () => {
+  assert.match(formatGoalProgressLines(gp({ weightRead: { ...WEIGHT_READ, paceWindowDays: 21 } }), 'metric').join('\n'), /over the last 3 weeks of weigh-ins/);
+  assert.match(formatGoalProgressLines(gp({ weightRead: { ...WEIGHT_READ, paceWindowDays: 28 } }), 'metric').join('\n'), /over the last 4 weeks of weigh-ins/);
+});

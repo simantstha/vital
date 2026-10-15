@@ -11,7 +11,7 @@
 
 import type { GoalKind, GoalProgress } from '../goalProgress';
 import { KM_PER_MILE, LB_PER_KG } from '../metricFormat';
-import { relationForDays, weeksForDays } from '../weightPace';
+import { PACE_SETTLE_DAYS, relationForDays, weeksForDays } from '../weightPace';
 import type { UnitSystem } from '../units';
 
 /**
@@ -55,7 +55,7 @@ export function shortDate(ymd: string | null | undefined): string | null {
 
 /** Reached goals ask about a new target or maintenance only this many days after `reachedAt`; later the opener just reports the holding weight. */
 export const REACHED_ASK_DAYS = 3;
-/** A reached weight inside this many kg of the target is "inside your target range" (goalProgress HOLDING_NEAR_TARGET_KG). */
+/** A reached weight inside this many kg of the target is "within 1 kg of 84 kg" (goalProgress HOLDING_NEAR_TARGET_KG). */
 const HOLDING_RANGE_KG = 1;
 
 /**
@@ -82,11 +82,16 @@ function paceClause(gp: GoalProgress): string | null {
     : `about ${weeks} ${w} behind your ${target} target`;
 }
 
-/** The weight the "X of Y kg down" figure is measured from: the scale for an early read, else the weekly average, else the smoothed trend. */
+/** The ONE progress weight (the card's, the coach's): the 7-day average, else the latest scale reading, else the smoothed trend of an older payload. */
 function progressKg(gp: GoalProgress): number | null {
   const read = gp.weightRead;
-  if (read?.state === 'early' || read?.state === 'returning') return read.scaleKg ?? gp.current.weightKg;
   return read?.weekMeanKg ?? read?.scaleKg ?? gp.current.weightKg;
+}
+
+/** What comes next while the pace is not read: a young goal's pace settles after 3 weeks, an older one is a few weigh-ins away. */
+function paceWaitClause(gp: GoalProgress): string {
+  const age = gp.weightRead?.goalAgeDays;
+  return age != null && age >= PACE_SETTLE_DAYS ? 'a few more weigh-ins and your pace is back' : 'your pace settles after 3 weeks';
 }
 
 /** True when the reached opener still asks about a new target or maintenance (so it ends in its own question). */
@@ -120,13 +125,16 @@ export function goalOpenerLine(gp: GoalProgress | null | undefined, units: UnitS
     const holdKg = gp.weightRead?.weekMeanKg ?? gp.weightRead?.scaleKg ?? gp.current.weightKg;
     if (holdKg != null) {
       const diff = holdKg - target;
-      if (Math.abs(diff) <= HOLDING_RANGE_KG) return `Holding at ${weightFixed(holdKg, units)} ${unit}, inside your target range.`;
+      if (Math.abs(diff) <= HOLDING_RANGE_KG) {
+        return `Holding at ${weightFixed(holdKg, units)} ${unit}, within ${weightAmount(HOLDING_RANGE_KG, units)} ${unit} of ${weightAmount(target, units)} ${unit}.`;
+      }
       return `At ${weightFixed(holdKg, units)} ${unit}, ${weightAmount(Math.abs(diff), units)} ${unit} ${diff < 0 ? 'under' : 'over'} your ${weightAmount(target, units)} ${unit} target.`;
     }
   }
   const read = gp.weightRead;
   // Back after 7+ days without a weigh-in: lead with what the scale says since.
-  if (gp.goal === 'weight_loss' && read?.state === 'returning' && read.returned && read.returned.weighInsSince === 1 && read.scaleKg != null) {
+  // (Until 3 weigh-ins are back — the card's "returning" state — not only on the very first one.)
+  if (gp.goal === 'weight_loss' && read?.state === 'returning' && read.returned && read.scaleKg != null) {
     const since = shortDate(read.returned.sinceDay);
     const delta = read.returned.sinceKg - read.scaleKg;
     if (since) {
@@ -144,7 +152,7 @@ export function goalOpenerLine(gp: GoalProgress | null | undefined, units: UnitS
     if (total > 0 && done > 0) {
       const base = `You're ${weightAmount(done, units)} of ${weightAmount(total, units)} ${unit} ${losing ? 'down' : 'up'}`;
       if (gp.goal === 'weight_loss') {
-        if (read?.state === 'early' || read?.state === 'returning') return `${base} on the scale; your pace settles after 3 weeks.`;
+        if (read?.state === 'early' || read?.state === 'returning') return `${base} on the scale; ${paceWaitClause(gp)}.`;
         if (read?.state === 'plateau') return `${base}, though the scale has been flat for 3 weeks.`;
         if (gp.verdict === 'too_fast') return `${base}, but losing faster than is easy to keep.`;
         if (gp.verdict === 'stalled') return `${base}, but your weight has been flat lately.`;

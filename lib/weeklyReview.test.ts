@@ -628,13 +628,18 @@ test('weekRating weight_loss: scales to partial logging (3 of 3 logged days in b
   assert.equal(r.weekRating, 'good');
 });
 
-test('weekRating weight_loss: weight moving the wrong way pulls the week down one level', () => {
+test('weekRating weight_loss: the scale going the wrong way, when the goal card says behind, pulls the week down one level', () => {
   const r = computeWeeklyReview(weightLossInput({
+    verdict: 'behind',
     weightReadings: weigh([...PREV, ...WEEK], i => 80 + i * 0.1),
   }));
   assert.equal(statByLabel(r, 'Days in budget')!.value, '5/7');
   assert.equal(statByLabel(r, 'Weekly avg weight')!.tone, 'watch');
   assert.equal(r.weekRating, 'mixed'); // 5/7 in budget would be good
+  // A week-to-week rise in the mean is a neutral stat while the card (the 21-day pace) says the loss is fine.
+  const fine = computeWeeklyReview(weightLossInput({ verdict: 'on_track', weightReadings: weigh([...PREV, ...WEEK], i => 80 + i * 0.1) }));
+  assert.equal(statByLabel(fine, 'Weekly avg weight')!.tone, 'neutral');
+  assert.equal(fine.weekRating, 'good');
 });
 
 test('weekRating weight_loss: without usable budget days the weight direction alone rates the week', () => {
@@ -646,7 +651,15 @@ test('weekRating weight_loss: without usable budget days the weight direction al
   assert.equal(statByLabel(down, 'Days in budget'), undefined);
   assert.equal(down.weekRating, 'good');
   assert.equal(lossOnly(() => 82).weekRating, 'mixed'); // flat
-  assert.equal(lossOnly(i => 80 + i * 0.1).weekRating, 'tough'); // up
+  // Up: mixed, never tough — the weight alone does not make a tough week (the card's own call, behind, changes the wording only).
+  assert.equal(lossOnly(i => 80 + i * 0.1).weekRating, 'mixed');
+  const behindUp = computeWeeklyReview(base({
+    verdict: 'behind',
+    weightReadings: weigh([...PREV, ...WEEK], i => 80 + i * 0.1),
+    trainingDays: [WEEK[1], WEEK[3]],
+  }));
+  assert.equal(statByLabel(behindUp, 'Weekly avg weight')!.tone, 'watch');
+  assert.equal(behindUp.weekRating, 'mixed');
 });
 
 /** A steady 30 km week before the reviewed one (3 runs): the reviewed week's bar is then the 30 km goal itself. */
@@ -1377,7 +1390,7 @@ test('weight loss: days out of budget are the gap — Slip names them, Next week
 });
 
 test('weight loss: a good budget week dragged down by the weight trend names the weight', () => {
-  const r = computeWeeklyReview(weightLossInput({ weightReadings: weigh([...PREV, ...WEEK], i => 80 + i * 0.1) }));
+  const r = computeWeeklyReview(weightLossInput({ verdict: 'behind', weightReadings: weigh([...PREV, ...WEEK], i => 80 + i * 0.1) }));
   assert.equal(r.weekRating, 'mixed');
   assert.equal(r.weekGap?.kind, 'weight');
   assert.match(r.slip ?? '', /^Your weekly average weight moved up [\d.]+ kg, away from your goal\.$/);
@@ -1935,8 +1948,9 @@ test('E. a week short of weigh-ins for a weekly mean falls back to the trend cha
   assert.match(r.win ?? '', /^Your weight trend is down/);
 });
 
-test('E. a too-fast week names the weight as the gap, and Next week says to eat up to the full calorie target — never a weekend tip', () => {
+test('E. a too-fast week (the card says so) names the weight as the gap, and Next week says to eat up to the full calorie target — never a weekend tip', () => {
   const input = (previousNextWeek: string | null) => weightLossInput({
+    verdict: 'too_fast',
     // Down 1.0 kg on the weekly mean (1.2%), calories over budget on most days with a heavy weekend.
     weightReadings: [...weigh(PREV, () => 83), ...weigh(WEEK, () => 82)],
     intakeDays: intake([...PREV, ...WEEK], [2300, 2250, 2400, 2300, 2350, 2500, 2450, 2400, 2450, 2500, 2400, 2450, 2500, 2450]),
@@ -1946,7 +1960,7 @@ test('E. a too-fast week names the weight as the gap, and Next week says to eat 
   assert.equal(statByLabel(first, 'Weekly avg weight')!.tone, 'watch');
   assert.equal(first.weekGap?.kind, 'weight');
   assert.equal(first.weekRating, 'tough');
-  assert.match(first.slip ?? '', /^Your weekly average dropped 1 kg — faster than is comfortable to sustain\.$/);
+  assert.match(first.slip ?? '', /^Your 3-week loss pace is faster than is comfortable to sustain\.$/);
   assert.ok(TOO_FAST_TIPS.includes(first.nextWeek), first.nextWeek);
   assert.doesNotMatch(first.nextWeek, /Saturday/);
   // Two weeks running never gives the same tip.
@@ -2059,7 +2073,7 @@ test('F. afterwards a steady weight rates good and is a win; Next week never rep
   const r = holding(null);
   assert.match(r.headline, /^Holding at 84\.1 kg, 3 workouts$/);
   assert.equal(r.weekRating, 'good');
-  assert.equal(r.win, 'Holding at 84.1 kg, inside your target range.');
+  assert.equal(r.win, 'Holding at 84.1 kg, within 1 kg of 84 kg.');
   assert.equal(r.slip, null);
   assert.doesNotMatch(r.nextWeek, /Saturday|budget|trim/);
   const again = holding(r.nextWeek);
@@ -2067,7 +2081,7 @@ test('F. afterwards a steady weight rates good and is a win; Next week never rep
   assert.doesNotMatch(again.nextWeek, /Saturday|budget|trim/);
   // Imperial.
   const lb = computeWeeklyReviewRaw(reachedWeekInput({ reachedAt: PREV[2], unitSystem: 'imperial', weightReadings: [...weigh(PREV, () => 84), ...weigh(WEEK, () => 84.1)] }));
-  assert.equal(lb.win, `Holding at 185.4${NBSP}lb, inside your target range.`);
+  assert.equal(lb.win, `Holding at 185.4${NBSP}lb, within 2.2${NBSP}lb of 185.2${NBSP}lb.`);
   const reachedLb = computeWeeklyReviewRaw(reachedWeekInput({ unitSystem: 'imperial' }));
   assert.equal(reachedLb.headline, `You reached 185.2${NBSP}lb this week`);
 });
@@ -2292,4 +2306,66 @@ test('a runner with distance data is never told to "wear your watch so volume an
     sleepMinutes: WEEK.map(day => ({ day, value: 470 })),
   }));
   assert.equal(sessionsOnly.weekGap?.kind, 'sessions');
+});
+
+// ── wave 20c: the review's too-fast / too-slow call is the goal card's, reached copy depends on the budget ──
+
+test('B1. a week is not called too fast off one week-to-week drop in the mean: the card (the 21-day pace) decides', () => {
+  // The weekly mean falls 1 kg (about 1.2% of bodyweight); 4 of the 6 logged days are in budget.
+  const input = (verdict: WeeklyReviewInput['verdict']) => weightLossInput({
+    verdict,
+    weightReadings: [...weigh(PREV, () => 83), ...weigh(WEEK, () => 82)],
+    intakeDays: intake([...PREV, ...WEEK.slice(0, 6)], [2300, 2250, 2400, 2300, 2350, 2500, 2450, 1900, 1950, 2000, 2050, 2450, 2500]),
+  });
+  // The card says progressing (inside the safe band): the drop is a neutral-to-good stat, not "faster than is comfortable".
+  const fine = computeWeeklyReview(input('progressing'));
+  assert.equal(statByLabel(fine, 'Weekly avg weight')!.value, '−1 kg');
+  assert.equal(statByLabel(fine, 'Weekly avg weight')!.tone, 'good');
+  assert.equal(fine.weekRating, 'mixed'); // 4 of 6 logged days in budget — rated on the budget, not the weight
+  assert.equal(fine.weekGap?.kind, 'budget');
+  assert.doesNotMatch(`${fine.win} ${fine.slip} ${fine.nextWeek}`, /faster than|too fast|slower loss/);
+  assert.ok(!TOO_FAST_TIPS.includes(fine.nextWeek), fine.nextWeek);
+  // The card says too fast: the same week is flagged, and a flag from the weight never makes the week tough.
+  const fast = computeWeeklyReview(input('too_fast'));
+  assert.equal(statByLabel(fast, 'Weekly avg weight')!.tone, 'watch');
+  assert.equal(fast.weekRating, 'mixed');
+  assert.equal(fast.weekGap?.kind, 'weight');
+  assert.match(fast.slip ?? '', /faster than is comfortable to sustain/);
+  assert.ok(TOO_FAST_TIPS.includes(fast.nextWeek), fast.nextWeek);
+});
+
+test('B1. a good budget week with a drop in the mean is good unless the card says too fast; then mixed, never tough', () => {
+  const week = (verdict: WeeklyReviewInput['verdict']) => computeWeeklyReview(weightLossInput({
+    verdict,
+    weightReadings: [...weigh(PREV, () => 83), ...weigh(WEEK, () => 82)],
+  }));
+  assert.equal(week('on_track').weekRating, 'good');
+  assert.equal(week('on_track').weekGap, null);
+  assert.equal(week('too_fast').weekRating, 'mixed');
+});
+
+test('B8. a reached goal says "switch to maintenance" until the calorie target already is maintenance, then "stay on maintenance"', () => {
+  const tips = (budget: WeeklyReviewInput['budget']) => Array.from({ length: 6 }, (_, k) => {
+    const start = addDays(WEEK_START, 7 * k);
+    const days = Array.from({ length: 14 }, (_, i) => addDays(start, i - 7));
+    return computeWeeklyReview(reachedWeekInput({
+      weekStart: start,
+      reachedAt: days[2],
+      budget,
+      weightReadings: weigh(days, i => 84 + (i % 2 === 0 ? 0.05 : -0.05)),
+      intakeDays: intake(days, Array.from({ length: 14 }, () => 2000)),
+      trainingDays: [days[8], days[10], days[12]],
+    })).nextWeek;
+  });
+  const deficit = tips({ targetKcal: 2000, proteinG: 150, floorKcal: 1500, formulaTdee: 2500, learnedTdee: null, tdeeConfidence: null });
+  const unknown = tips({ targetKcal: 2000, proteinG: 150, floorKcal: 1500, formulaTdee: null, learnedTdee: null, tdeeConfidence: null });
+  for (const list of [deficit, unknown]) {
+    assert.ok(list.some(t => /^Switch to maintenance in Goals/.test(t)), list.join(' | '));
+    assert.ok(list.some(t => /switch to maintenance and enjoy holding here/.test(t)), list.join(' | '));
+    assert.ok(!list.some(t => /stay on maintenance|already at maintenance/.test(t)), 'a fat-loss goal that is reached but not switched is not on maintenance');
+  }
+  const atMaintenance = tips({ targetKcal: 2000, proteinG: 150, floorKcal: 1500, formulaTdee: 2050, learnedTdee: null, tdeeConfidence: null });
+  assert.ok(atMaintenance.some(t => /already at maintenance/.test(t)), atMaintenance.join(' | '));
+  assert.ok(atMaintenance.some(t => /stay on maintenance and enjoy holding here/.test(t)), atMaintenance.join(' | '));
+  assert.ok(!atMaintenance.some(t => /^Switch to maintenance|switch to maintenance and enjoy/.test(t)), atMaintenance.join(' | '));
 });
