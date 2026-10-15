@@ -11,9 +11,10 @@ import type { GoalKind, GoalProgress } from './goalProgress';
 import { formatRaceTime, formatTargetLongRun, isWindDownPhase, recoveryWeek } from './enduranceProgression';
 import type { ProgressionSummary } from './workoutRepository';
 import { plainSpaces } from './displayText';
-import { liftChange4w, pickHeadlineLift, rankLifts } from './liftChange';
+import { LIFT_LAPSE_MIN_DAYS, liftChange4w, pickHeadlineLift, rankLifts } from './liftChange';
 import { weekStartKeyForDay } from './localDay';
 import { KM_PER_MILE, LB_PER_KG } from './metricFormat';
+import { shortDate } from './brain/openerText';
 import type { UnitSystem } from './units';
 
 const GOAL_LABELS: Record<GoalKind, string> = {
@@ -181,6 +182,14 @@ export function formatGoalProgressLines(gp: GoalProgress, units: UnitSystem): st
   // Returning from a break: the lifts are rebuilding, never a stall or a reason to deload.
   if (gp.liftReturn && !gp.liftReturn.regained) {
     lines.push(`- Returning from a ${gp.liftReturn.breakDays}-day break (ended ${gp.liftReturn.endedOn}): lifts are rebuilding — do not call this a stall or suggest a deload.`);
+  }
+
+  // When the lifter last trained. A week or more ago, the lift numbers describe a window that ended before the lapse.
+  const sinceLast = gp.goal === 'muscle' ? gp.lastSessionDaysAgo : null;
+  if (sinceLast != null) {
+    const when = sinceLast === 0 ? 'today' : sinceLast === 1 ? 'yesterday' : `${sinceLast} days ago`;
+    const on = sinceLast >= 1 ? shortDate(gp.lastSessionOn) : null;
+    lines.push(`- Last strength session ${when}${on ? ` (${on})` : ''}${sinceLast >= LIFT_LAPSE_MIN_DAYS ? ' — do not praise lift progress; ask about getting back in' : ''}`);
   }
 
   lines.push(`- Verdict: ${gp.verdict} — "${plainSpaces(gp.headline)}"`);

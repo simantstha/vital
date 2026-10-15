@@ -147,7 +147,8 @@ export async function computeLastWeekReview(
     }),
     budget: budgetInput,
     trainingDays: [...trainingDays].filter(d => daySet.has(d)),
-    strengthDays: [...strengthDays].filter(d => daySet.has(d)),
+    // Muscle: the whole ~30 days read above (not just the two weeks), so the review can tell a run of on-target or empty weeks.
+    strengthDays: [...strengthDays],
     workouts: workoutEntries
       .filter(w => daySet.has(w.date))
       .map(w => ({

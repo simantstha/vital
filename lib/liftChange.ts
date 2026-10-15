@@ -501,3 +501,216 @@ export function easedLoad(topLoadKg: number, fraction: number, imperial: boolean
   const v = (imperial ? topLoadKg * LB_PER_KG : topLoadKg) * fraction;
   return { value: Math.round(v / plate) * plate, unit: imperial ? 'lb' : 'kg' };
 }
+
+// ── Week over week (before the first 4-week comparison) ─────────────────────
+
+export interface LiftWeekChange {
+  /** The newest week before `endWeekStart` with an e1RM ("last trained week"). */
+  previousWeekStart: string;
+  previousKg: number;
+  currentKg: number;
+  /** current - previous, rounded to 0.1 kg. */
+  changeKg: number;
+}
+
+/**
+ * The ONE week-over-week definition ("vs last trained week"), for the weeks
+ * before a lift has a 4-week comparison: the best e1RM of `endWeekStart`
+ * against the best e1RM of the newest earlier week that has one. The goal card
+ * (end = the recent window's end week) and the weekly review (end = the
+ * reviewed week) both read it, and show it through `liftDisplayChange` so the
+ * same pair of weeks prints the same whole-kg number in both. Null when either
+ * week has no e1RM.
+ */
+export function liftWeekOverWeek(weeks: LiftWeekPoint[], endWeekStart: string): LiftWeekChange | null {
+  const cur = weeks.find(w => w.weekStart === endWeekStart);
+  if (!cur || cur.bestEstimatedOneRepMaxKg == null) return null;
+  let prev: LiftWeekPoint | null = null;
+  for (const w of weeks) {
+    if (w.weekStart >= endWeekStart || w.bestEstimatedOneRepMaxKg == null) continue;
+    if (prev == null || w.weekStart > prev.weekStart) prev = w;
+  }
+  if (!prev) return null;
+  const previousKg = prev.bestEstimatedOneRepMaxKg as number;
+  return {
+    previousWeekStart: prev.weekStart,
+    previousKg,
+    currentKg: cur.bestEstimatedOneRepMaxKg,
+    changeKg: Math.round((cur.bestEstimatedOneRepMaxKg - previousKg) * 10) / 10,
+  };
+}
+
+export interface PickedWeekChange {
+  /** Canonical exercise key ("squat"). */
+  exercise: string;
+  /** The week the change ends on (Monday). */
+  end: string;
+  change: LiftWeekChange;
+}
+
+/**
+ * Which lift speaks for the week-over-week line: the most-trained lift
+ * (`rankLifts` on `anchorWeekStart`) that has a change ending on the first of
+ * `ends` it can use. The weekly review passes just the reviewed week; the goal
+ * card passes the last completed week first, then the week in progress, so the
+ * card quotes the same pair of weeks the review does for the whole week after
+ * it (a half-trained week never drives the number).
+ */
+export function pickWeekOverWeek(
+  progression: Record<string, LiftWeekPoint[]>,
+  anchorWeekStart: string,
+  ends: readonly string[],
+): PickedWeekChange | null {
+  const ranked = rankLifts(progression, anchorWeekStart);
+  for (const end of ends) {
+    for (const exercise of ranked) {
+      const change = liftWeekOverWeek(progression[exercise], end);
+      if (change) return { exercise, end, change };
+    }
+  }
+  return null;
+}
+
+// ── A lapse (no session for a week or more) ─────────────────────────────────
+
+/**
+ * Days without a strength session from which the goal card stops praising the
+ * lifts ("No sessions for 8 days — Squat was est. 1RM 142 kg"), and the coach
+ * is told not to. The 4-week lift change looks back two weeks (above), so
+ * without this a lifter who missed a whole week still read "Progressing".
+ */
+export const LIFT_LAPSE_MIN_DAYS = 7;
+
+/**
+ * The lift's recent best e1RM and the Monday of the week it was set — what the
+ * card said before the lapse (the same `recent` window as liftChange4w: the end
+ * week and the week before it; the newest week with an e1RM when the lift has
+ * been out of the 3-week look-back). Ties go to the newer week. Null when the
+ * lift has no e1RM at all.
+ */
+export function liftLastBest(weeks: LiftWeekPoint[], anchorWeekStart: string): { kg: number; weekStart: string } | null {
+  let end = liftRecentEndWeek(weeks, anchorWeekStart);
+  if (end == null) {
+    for (const w of weeks) if (w.bestEstimatedOneRepMaxKg != null && (end == null || w.weekStart > end)) end = w.weekStart;
+  }
+  if (end == null) return null;
+  let best: { kg: number; weekStart: string } | null = null;
+  for (const offset of LIFT_RECENT_OFFSETS_DAYS) {
+    const key = shiftDay(end, -offset);
+    const w = weeks.find(x => x.weekStart === key && x.bestEstimatedOneRepMaxKg != null);
+    const kg = w?.bestEstimatedOneRepMaxKg;
+    if (kg != null && (best == null || kg > best.kg + 1e-9)) best = { kg, weekStart: key };
+  }
+  return best;
+}
+
+// ── Return numbers as shown ─────────────────────────────────────────────────
+
+export interface LiftReturnDisplay {
+  /** Whole kg / lb, the numbers the copy prints. */
+  pre: number;
+  recent: number;
+  /** Whole percent of the SHOWN pre-break number (rounded down, max 99, while rebuilding). */
+  pct: number;
+  unit: 'kg' | 'lb';
+}
+
+/**
+ * The return numbers exactly as printed — whole kg (lb), with the percentage
+ * computed from those shown numbers, never from the unrounded e1RMs behind them
+ * ("136 of 142 kg" is 95%, whatever 136.4 / 142.2 would say). While still
+ * rebuilding, a recent number that rounds up to the pre-break one is shown one
+ * unit under it so the copy never claims "142 of 142" before it is regained.
+ */
+export function liftReturnDisplay(
+  r: { preBreakKg: number; recentKg: number; regained: boolean },
+  imperial: boolean,
+): LiftReturnDisplay {
+  const f = imperial ? LB_PER_KG : 1;
+  const pre = Math.round(r.preBreakKg * f);
+  let recent = Math.round(r.recentKg * f);
+  if (!r.regained && recent >= pre) recent = pre - 1;
+  const ratio = pre > 0 ? (recent / pre) * 100 : 0;
+  return { pre, recent, pct: r.regained ? Math.round(ratio) : Math.min(99, Math.floor(ratio)), unit: imperial ? 'lb' : 'kg' };
+}
+
+// ── Next session's loads, every main lift ───────────────────────────────────
+
+/** Lifts a "next session" cue names at most. */
+export const MAX_CUED_LIFTS = 3;
+
+export function isMainLift(key: string): boolean {
+  return (MAIN_LIFT_ORDER as readonly string[]).includes(normalizeLiftKey(key));
+}
+
+/** Short spoken name for a cue after the first lift ("bench press" -> "bench", "Overhead Press" -> "overhead press"). */
+export function liftShortName(key: string, display?: Record<string, string> | null): string {
+  const k = normalizeLiftKey(key);
+  if (k === 'bench press') return 'bench';
+  return liftDisplayName(key, display).toLowerCase();
+}
+
+/**
+ * The lifts a "next session" cue talks about: the lead lift (the headline lift,
+ * when it was trained in the reviewed week), then the other main lifts (squat,
+ * bench press, deadlift, overhead press) trained that week, most-trained first,
+ * at most MAX_CUED_LIFTS. A lift not trained in the reviewed week has no
+ * current load to cue; accessories are left out.
+ */
+export function cuedLifts(progression: Record<string, LiftWeekPoint[]>, weekStart: string, leadKey: string | null): string[] {
+  const trained = (key: string): boolean =>
+    (progression[key] ?? []).some(w => w.weekStart === weekStart && weekSessions(w) > 0 && w.topLoadKg != null && w.topLoadKg > 0);
+  const out: string[] = [];
+  if (leadKey != null && trained(leadKey)) out.push(leadKey);
+  for (const key of rankLifts(progression, shiftDay(weekStart, 7))) {
+    if (out.length >= MAX_CUED_LIFTS) break;
+    if (out.includes(key) || !isMainLift(key) || !trained(key)) continue;
+    out.push(key);
+  }
+  return out;
+}
+
+/**
+ * The reviewed week's best e1RM fell more than 1% under the lift's previous
+ * trained week: the top sets did not land as they did before, so the load is
+ * held rather than raised. (The review has no per-set reps, only the weekly
+ * best, so this is its read of "did not hit its reps".) False with nothing to
+ * compare.
+ */
+export function liftRegressed(weeks: LiftWeekPoint[], weekStart: string): boolean {
+  const cur = weeks.find(w => w.weekStart === weekStart)?.bestEstimatedOneRepMaxKg;
+  if (cur == null) return false;
+  let prev: LiftWeekPoint | null = null;
+  for (const w of weeks) {
+    if (w.weekStart >= weekStart || w.bestEstimatedOneRepMaxKg == null) continue;
+    if (prev == null || w.weekStart > prev.weekStart) prev = w;
+  }
+  const prevKg = prev?.bestEstimatedOneRepMaxKg;
+  return prevKg != null && cur < prevKg * (1 - LIFT_PROGRESS_MIN_FRACTION) - 1e-9;
+}
+
+export interface LiftLoadCue {
+  key: string;
+  /** Today's working load and the next one by the lift logger's rule (`nextWorkingLoad`); `from` is the load to hold. */
+  load: NextLoad;
+  /** True when the load stays (the lift's e1RM fell last week). */
+  hold: boolean;
+}
+
+/**
+ * Next-session load for every cued lift (`cuedLifts`): the same next-load rule
+ * for each — top load + the lift logger's step — or a hold when that lift went
+ * backwards last week. `rebuilding` (returning from a break) never holds: last
+ * week's lower number is the rebuild, not a miss.
+ */
+export function nextLoadCues(
+  progression: Record<string, LiftWeekPoint[]>,
+  weekStart: string,
+  opts: { imperial: boolean; leadKey: string | null; rebuilding: boolean },
+): LiftLoadCue[] {
+  return cuedLifts(progression, weekStart, opts.leadKey).map(key => {
+    const weeks = progression[key];
+    const top = latestTopLoadKg(weeks, weekStart) as number;
+    return { key, load: nextWorkingLoad(top, key, opts.imperial), hold: !opts.rebuilding && liftRegressed(weeks, weekStart) };
+  });
+}
