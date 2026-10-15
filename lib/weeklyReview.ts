@@ -1879,7 +1879,7 @@ function windDownNextWeek(input: WeeklyReviewInput, week: Week): string | null {
     : `Back to building: ~${withUnit(next, isImperial(input) ? 'mi' : 'km')} next week.`;
 }
 
-/** The win line of a deload week: the lighter loads were the plan. */
+/** The win line of a deload week (muscle goal; a runner's 'light' week is a rest week, not a deload): the lighter loads were the plan. */
 const DELOAD_WIN = 'Deload week done — lighter loads, as planned.';
 
 /** The lift every load cue names, with its weekly buckets; null when no lift is in rotation. */
@@ -1999,7 +1999,8 @@ function buildNextWeekRaw(input: WeeklyReviewInput, cands: Candidate[], week: We
     // A budget gap with a heavy weekend is closed by planning the weekend.
     if (gap?.kind === 'budget' && weekendHigh) return weekendTip(input, week);
     if (lighter) return lighter;
-    if (rating === 'light') return afterDeloadNextWeek(input, week) ?? 'Back to full volume next week: your usual sessions and loads.';
+    // 'light' is a deload for a lifter, a rest / sick week for a runner: only the lifter's has loads to go back to.
+    if (rating === 'light') return (input.goal === 'muscle' ? afterDeloadNextWeek(input, week) : null) ?? 'Back to full volume next week: your usual sessions and loads.';
     if (gap) return gapNextWeek(input, gap, week, prevWeek);
     return fallbackNextWeek(input, week);
   }
@@ -2123,7 +2124,7 @@ export function computeWeeklyReview(input: WeeklyReviewInput): WeeklyReview {
     weekGap: assessment.gap,
     headline: buildHeadline(input, cands, week),
     stats: cands.map(x => x.stat),
-    win: reachedWin(input, week) ?? enduranceWin(input, assessment) ?? windDownWin(input, week, assessment) ?? (assessment.rating === 'light' ? DELOAD_WIN : null) ?? cands.find(x => x.win)?.win ?? null,
+    win: reachedWin(input, week) ?? enduranceWin(input, assessment) ?? windDownWin(input, week, assessment) ?? (assessment.rating === 'light' && input.goal === 'muscle' ? DELOAD_WIN : null) ?? cands.find(x => x.win)?.win ?? null,
     slip,
     nextWeek: buildNextWeek(input, cands, week, prevWeek, assessment, slip),
     dataSufficiency: { daysWithData, statCount: cands.length, sufficient: true },

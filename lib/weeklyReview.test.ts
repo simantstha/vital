@@ -2188,6 +2188,8 @@ test('illness: a sick week that ended in a break is "light" with a real review, 
   assert.equal(sickWeek.dataSufficiency.sufficient, true); // not "Not enough data"
   assert.equal(sickWeek.weekRating, 'light');
   assert.equal(sickWeek.weekGap, null);
+  // 'light' for a runner is a rest week, not a lifter's deload: no "Deload week done" win.
+  assert.equal(sickWeek.win, null);
   assert.equal(sickWeek.headline, '1.2 km this week, then 5 days off');
   assert.equal(sickWeek.slip, null);
   assert.match(sickWeek.nextWeek, /^Restart at ~\d+ km next week with easy runs/);
@@ -2203,6 +2205,7 @@ test('illness: a sick week that ended in a break is "light" with a real review, 
 test('a 2-week gap: the 0-run weeks get a real review ("rest is fine"), then a gentle restart — never "tough, 18 km short"', () => {
   const zero = computeWeeklyReview(planReview([15, 17, 19, 21, 23, 25, 0]));
   assert.equal(zero.weekRating, 'light');
+  assert.equal(zero.win, null);
   assert.equal(zero.headline, 'No runs this week — rest is fine');
   assert.equal(zero.dataSufficiency.sufficient, true);
   assert.equal(zero.slip, null);
