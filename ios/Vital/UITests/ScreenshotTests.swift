@@ -1052,6 +1052,9 @@ final class ScreenshotTests: XCTestCase {
             swipes += 1
         }
 
+        // The tile may already exist (so the loop above never scrolls) while the list is still
+        // decelerating from earlier swipes. Bring it into comfortable view before tapping.
+        _ = scrollIntoComfortableView(hrvTile, app: app)
         tapWhenHittable(
             hrvTile, app: app,
             description: "HRV metric tile [\(scenario)/\(appearance)]"
@@ -1061,8 +1064,18 @@ final class ScreenshotTests: XCTestCase {
         // button as the stable signal. This button always renders once the screen has loaded,
         // regardless of data availability (unlike section headers like "DISTRIBUTION" which only
         // appear with sufficient data). Assert the detail screen loaded before capturing.
-        XCTAssertTrue(app.buttons["3 months"].waitForExistence(timeout: 10),
-                       "HRV detail should load [\(scenario)/\(appearance)]")
+        var detailLoaded = app.buttons["3 months"].waitForExistence(timeout: 5)
+        if !detailLoaded {
+            // One retry: the first tap can be absorbed while the list is still settling
+            // (the tile sits just above the floating tab bar on taller goal cards).
+            _ = scrollIntoComfortableView(hrvTile, app: app)
+            tapWhenHittable(
+                hrvTile, app: app,
+                description: "HRV metric tile (retry) [\(scenario)/\(appearance)]"
+            )
+            detailLoaded = app.buttons["3 months"].waitForExistence(timeout: 10)
+        }
+        XCTAssertTrue(detailLoaded, "HRV detail should load [\(scenario)/\(appearance)]")
 
         // Screen segment must be letters only to match CI export regex: ^[a-z_]+__[A-Za-z]+__(light|dark)\.png$
         capture(app, name: "\(scenario)__hrvDetail__\(appearance)")
