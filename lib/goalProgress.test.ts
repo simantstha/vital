@@ -788,16 +788,16 @@ test('endurance distance step: last week already within 10% of the goal -> the s
   assert.equal(over.distance!.text, '6 of 30 km running this week');
 });
 
-test('endurance distance step: a week with no running restarts at ~60% of the recent median, not at the goal', () => {
-  // Weeks of 20, 20, 20 km, then nothing last week: restart at 60% of 20 km = 12 km.
+test('endurance distance step: a week with no running restarts at ~75% of the recent median (an 8-14 day gap), not at the goal', () => {
+  // Weeks of 20, 20, 20 km, then nothing last week (an 8 day gap): restart at 75% of 20 km = 15 km (wave 20: the cut scales with the gap).
   const none = computeGoalProgress(weekInput([[[0, 8]], [], wkOf(20), wkOf(20), wkOf(20)]));
   assert.equal(none.distance!.plan?.kind, 'restart');
-  assert.equal(none.distance!.stepTargetKm, 12);
-  assert.equal(none.distance!.text, '8 of ~12 km running this week · goal 30 km');
+  assert.equal(none.distance!.stepTargetKm, 15);
+  assert.equal(none.distance!.text, '8 of ~15 km running this week · goal 30 km');
   // A near-zero last week (0.6 km) has no base to take 10% of: the same restart.
   const tiny = computeGoalProgress(weekInput([[[0, 5]], [[4, 0.6]], wkOf(20), wkOf(20), wkOf(20)]));
   assert.equal(tiny.distance!.plan?.kind, 'restart');
-  assert.equal(tiny.distance!.stepTargetKm, 12);
+  assert.equal(tiny.distance!.stepTargetKm, 15);
   // Distance data nowhere at all: the goal, no plan.
   const noData = computeGoalProgress(enduranceInput([3, 3, 3, 3], {
     target: { weightKg: null, date: null, weeklySessions: 3, weeklyDistanceKm: 30 },
@@ -1175,9 +1175,10 @@ test('race phase: after the race the race stays for the recovery weeks with days
   // 8.5 of the ~16 km are run: the line says what is left; the plan's own line is the one for the week.
   assert.equal(p.reasons[1].text, 'Recovery: 8.5 of ~16 km — keep the rest of the week ≤ 7.5 km');
   assert.equal(p.distance!.plan?.purpose, 'Recovery: easy only this week (~16 km max)');
+  // The runner already has a weekly distance target: it is not offered as a next goal (wave 20).
   assert.deepEqual(p.reasons[2], {
     kind: 'next_step',
-    text: 'Set your next goal: a new race, a weekly distance target, or maintenance',
+    text: 'Set your next goal: a new race or maintenance',
     tone: 'neutral',
   });
   assert.equal(p.distance!.stepTargetKm, 16); // week 1: x0.4 of the 40 km peak
@@ -1226,7 +1227,8 @@ test('rebuild: from the week after recovery until 42 days after the race — gra
   assert.equal(rebuilt.verdict, 'building');
   assert.equal(rebuilt.headline, 'Rebuilding after your half — 5 of ~22 km');
   assert.equal(rebuilt.distance!.stepTargetKm, 22);
-  assert.ok(rebuilt.reasons.some(r => r.kind === 'next_step'));
+  // "Set your next goal" is for recovery week 1 only (wave 20): the rebuild weeks do not nag.
+  assert.equal(rebuilt.reasons.some(r => r.kind === 'next_step'), false);
   // The race week and the recovery weeks are not in the average (it is the 4 weeks before the taper).
   assert.equal(rebuilt.distance!.avg4wKm, 30);
   assertWellFormed(rebuilt);
@@ -1336,7 +1338,8 @@ test('phase verdict: a recovery week is on_track (never "behind"); overshooting 
     assert.equal(p.race?.phase, 'recovery');
     assert.equal(p.verdict, 'on_track', `${daysSince} days after`);
     assert.match(p.headline, /^Recovery week [12] — day \d+ after your half: easy only$/);
-    assert.deepEqual(p.reasons.map(r => r.kind), ['race', 'race_phase', 'next_step']);
+    // The next-goal nudge is for recovery week 1 only (wave 20).
+    assert.deepEqual(p.reasons.map(r => r.kind), daysSince <= 7 ? ['race', 'race_phase', 'next_step'] : ['race', 'race_phase'], `${daysSince} days after`);
   }
   // 24 km in recovery week 1 against a 16 km ceiling.
   const over = computeGoalProgress(distanceInput({ 0: 14, 1: 10, 3: 4 }, {
@@ -1375,7 +1378,7 @@ test('race phase: the long run line is the status in taper / race week ("Peak lo
   assert.equal(recovery.reasons.some(r => r.kind === 'long_run'), false);
   assert.equal(recovery.longRun?.targetPeakKm, null);
   // Build still builds.
-  const build = computeGoalProgress(distanceInput({ 3: 14, 10: 12 }, { race: { date: addDays(TODAY, 84), distanceKm: 21.1 } }));
+  const build = computeGoalProgress(distanceInput({ 3: 14, 10: 12 }, { target: { weightKg: null, date: null, weeklySessions: null, weeklyDistanceKm: 40 }, race: { date: addDays(TODAY, 84), distanceKm: 21.1 } }));
   assert.match(reasonOf(build, 'long_run')!, /build to 18 km by/);
 });
 
@@ -1393,12 +1396,12 @@ test('race phase: without a measured peak week the weekly goal stands in, still 
   assert.equal(over.distance!.stepTargetKm, 30);
 });
 
-test('race phase: imperial targets are whole miles in the copy, km in the structured fields', () => {
+test('race phase: imperial targets are half miles in the copy, km in the structured fields', () => {
   const p = computeGoalProgress(phaseInput(12, { unitSystem: 'imperial' }));
   assert.equal(p.race?.phase, 'taper');
-  // 40 km = 24.85 mi; x0.75 = 18.64 -> 19 mi.
-  assert.match(reasonOf(p, 'race_phase')!, /^Taper: ~19 mi this week/);
-  assert.ok(Math.abs(p.distance!.stepTargetKm / 1.609344 - 19) < 0.05, `${p.distance!.stepTargetKm}`);
+  // 40 km = 24.85 mi; x0.75 = 18.64 -> 18.5 mi (imperial targets round to the nearest half mile, wave 20).
+  assert.match(reasonOf(p, 'race_phase')!, /^Taper: ~18\.5 mi this week/);
+  assert.ok(Math.abs(p.distance!.stepTargetKm / 1.609344 - 18.5) < 0.05, `${p.distance!.stepTargetKm}`);
   // The long run in the taper copy is rounded to the nearest half mile.
   assert.match(reasonOf(p, 'race_phase')!, /long run 5 mi easy, plus 3×0\.5 mi at race pace midweek$/);
 });
@@ -1433,7 +1436,8 @@ function longRunInput(longKm: number[], over: Partial<GoalProgressInput> = {}): 
     kmByDaysAgo[1 + i * 7] = 5;
   });
   kmByDaysAgo[1 + longKm.length * 7] = 5;
-  return distanceInput(kmByDaysAgo, over);
+  // A 40 km weekly goal: big enough to carry the half marathon's 18 km peak (a long run is at most half of a week).
+  return distanceInput(kmByDaysAgo, { target: { weightKg: null, date: null, weeklySessions: null, weeklyDistanceKm: 40 }, ...over });
 }
 
 test('longRunTargetKm: 5K 8, 10K 14, half 18, marathon 32, other 85%, null without a distance', () => {
@@ -1507,16 +1511,21 @@ test('long run: once the peak date has passed inside the build phase it reads "p
   const p = computeGoalProgress(longRunInput([14, 12, 16, 10], { todayKey: '2026-10-11', race: { date: '2026-10-22', distanceKm: 21.1 } }));
   assert.equal(p.race?.phase, 'build');
   assert.equal(p.reasons.find(r => r.kind === 'long_run')?.text, 'Long run 14 km · peak target 18 km');
-  const m = computeGoalProgress(longRunInput([14, 12, 16, 10], { race: { date: addDays(TODAY, 120), distanceKm: 42.2 } }));
+  const m = computeGoalProgress(longRunInput([14, 12, 16, 10], { target: { weightKg: null, date: null, weeklySessions: null, weeklyDistanceKm: 70 }, race: { date: addDays(TODAY, 120), distanceKm: 42.2 } }));
   assert.equal(m.longRun?.targetPeakKm, 32);
   assert.match(m.reasons.find(r => r.kind === 'long_run')!.text, /^Long run 14 km · build to 32 km by (early|mid-|late )/);
+  // A 40 km week carries a 20 km long run at most: the peak is what fits, said once, with what would carry 32 km (wave 20).
+  const capped = computeGoalProgress(longRunInput([14, 12, 16, 10], { race: { date: addDays(TODAY, 120), distanceKm: 42.2 } }));
+  assert.equal(capped.longRun?.targetPeakKm, 20);
+  assert.equal(capped.longRun?.raceTargetKm, 32);
+  assert.match(capped.reasons.find(r => r.kind === 'long_run')!.text.replace(/\u00a0/g, ' '), /^Long run 14 km · build to 20 km by (early|mid-|late )[A-Za-z]{3}\. Your 40 km weeks fit a 20 km long run; for a 32 km peak, raise the goal to ~64 km$/);
 });
 
 test('long run: a run under 5 km (3 mi) is the "longest run", not a "long run"', () => {
-  const p = computeGoalProgress(weekInput([[[0, 3]], [[1, 2.5], [3, 3], [5, 3]]], { race: { date: addDays(TODAY, 84), distanceKm: 21.1 } }));
+  const p = computeGoalProgress(weekInput([[[0, 3]], [[1, 2.5], [3, 3], [5, 3]]], { target: { weightKg: null, date: null, weeklySessions: null, weeklyDistanceKm: 40 }, race: { date: addDays(TODAY, 84), distanceKm: 21.1 } }));
   assert.match(p.reasons.find(r => r.kind === 'long_run')!.text, /^Longest run 3 km · build to 18 km by /);
-  // The next one, 3 + 2 km, is a long run again.
-  assert.equal(p.distance!.plan!.purpose, '~9 km this week: long run 5 km, the rest easy runs');
+  // The next one would be 3 + 2 km, but a long run is at most half of the week (wave 20: 4.5 of ~9 km), so it is still the "longest run".
+  assert.equal(p.distance!.plan!.purpose, '~9 km this week: longest run 4.5 km, the rest easy runs');
 });
 
 test('long run: text is unit-aware (miles) while structured km stay metric', () => {
@@ -1549,7 +1558,8 @@ test('endurance Why: race, then what the week is for, then the long run — neve
   assert.deepEqual(p.reasons.map(r => r.kind), ['race', 'plan', 'long_run']);
   // The plan line is the week's one target and its long run; the volume growth lives in the headline, once.
   assert.equal(p.reasons[1].text, '~23 km this week: long run 10.5 km, the rest easy runs');
-  assert.match(p.reasons[2].text, /^Long run 8\.4 km · build to 18 km by /);
+  // The half marathon's 18 km peak does not fit a 30 km goal (a long run is at most half of a week): the peak is 15 km (wave 20).
+  assert.match(p.reasons[2].text, /^Long run 8\.4 km · build to 15 km by /);
   assert.equal(p.reasons.some(r => r.kind === 'week_distance' || r.kind === 'volume'), false);
   assert.match(p.distance!.text, /of ~23 km running this week · goal 30 km$/);
   assertWellFormed(p);
@@ -1652,7 +1662,8 @@ test('maintain: at the weekly goal in the build phase the card is on_track with 
   const weeks = [[[0, 3]] as Array<[number, number]>, wkOf(30), wkOf(30), wkOf(30), wkOf(30)];
   const p = computeGoalProgress(weekInput(weeks, race));
   assert.equal(p.verdict, 'on_track');
-  assert.equal(p.headline, 'On track for the half — long run 12 of 18 km');
+  // A 30 km week carries a 15 km long run at most (half of the week), not the half marathon's 18 km peak (wave 20).
+  assert.equal(p.headline, 'On track for the half — long run 12 of 15 km');
   assert.equal(p.distance!.plan?.kind, 'maintain');
   assert.equal(p.distance!.plan?.longRunKm, 14);
   assert.equal(p.longRun?.nextKm, 14);

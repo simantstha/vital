@@ -68,13 +68,35 @@ test('a headline that ends in its own "!" keeps it: no "!." after Congratulation
   });
   assert.equal(goalOpenerLine(done, 'metric'), 'Goal check-in: Half marathon done — 21.1 km in 2:01. Congratulations!');
   assert.equal(goalFallbackOpener(done, 'endurance', 'metric'), 'Goal check-in: Half marathon done — 21.1 km in 2:01. Congratulations! What would you like to dig into?');
-  // A headline that ends in a full stop (the break line) gets exactly one.
-  const brk = gp({
+  // A headline that ends in a full stop gets exactly one.
+  const stop = gp({
     goal: 'endurance', target: { weightKg: null, date: null, weeklySessions: null, weeklyDistanceKm: 30 },
     current: { weightKg: 70, startWeightKg: null, changeKg: null, progressPct: null },
-    verdict: 'building', headline: 'On a break — 7 days since your last run. Restart at ~15 km.',
+    verdict: 'holding', headline: 'Holding steady — 4 sessions a week.',
   });
-  assert.equal(goalOpenerLine(brk, 'metric'), 'Goal check-in: On a break — 7 days since your last run. Restart at ~15 km.');
+  assert.equal(goalOpenerLine(stop, 'metric'), 'Goal check-in: Holding steady — 4 sessions a week.');
+});
+
+test('a runner on a break: the opener says "On a break" once, never counts the days, and "Welcome back" waits for the first run back', () => {
+  const brk = (headline: string, thisWeekKm: number | null = 0, plan: 'restart' | 'build' = 'restart') => gp({
+    goal: 'endurance', target: { weightKg: null, date: null, weeklySessions: null, weeklyDistanceKm: 30 },
+    current: { weightKg: 70, startWeightKg: null, changeKg: null, progressPct: null },
+    verdict: 'building', headline, lastSessionDaysAgo: 15,
+    distance: { targetKm: 30, thisWeekKm, avg4wKm: 12, weekStart: '2026-10-05', stepTargetKm: 15, text: 'x', plan: { kind: plan, targetKm: 15, longRunKm: null, purpose: 'x' } },
+  });
+  const days = [7, 8, 11, 15].map(n => goalOpenerLine(brk(`On a break — ${n} days since your last run. Restart at ~15 km.`), 'metric'));
+  assert.deepEqual([...new Set(days)], ['Goal check-in: On a break — restart at ~15 km.']);
+  // The card already shows a restart plan: no second "quick reset plan" offer, whatever the days since the last session.
+  assert.equal(returningUserOpener(brk('On a break — 15 days since your last run. Restart at ~15 km.')), null);
+  assert.equal(returningUserOpener(brk('Building back — restart at ~15 km this week', 3.5)), null);
+  assert.equal(requiredOpenerLine(brk('On a break — 15 days since your last run. Restart at ~15 km.'), 'endurance', 'metric'), 'Goal check-in: On a break — restart at ~15 km.');
+  // Welcome back only once a run is in; before it the restart week is the plain check-in.
+  assert.equal(goalOpenerLine(brk('Building back — restart at ~15 km this week', 3.5), 'metric'), 'Welcome back — restart at ~15 km this week.');
+  assert.equal(goalOpenerLine(brk('Building back — restart at ~15 km this week', 0), 'metric'), 'Goal check-in: Building back — restart at ~15 km this week.');
+  assert.equal(goalFallbackOpener(brk('Building back — restart at ~15 km this week', 3.5), 'endurance', 'metric'), 'Welcome back — restart at ~15 km this week. What would you like to dig into?');
+  // A runner with a gap and no plan (no weekly distance goal) still gets the reset offer.
+  const noPlan = gp({ goal: 'endurance', verdict: 'holding', headline: 'Holding steady', lastSessionDaysAgo: 20 });
+  assert.match(returningUserOpener(noPlan) ?? '', /quick reset plan/);
 });
 
 test('needs_target / insufficient_data / missing progress yield no progress line', () => {

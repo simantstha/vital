@@ -182,9 +182,30 @@ export function goalOpenerLine(gp: GoalProgress | null | undefined, units: UnitS
   if (!headline) return null;
   // A week or more without a session: the check-in is the lapse, and it asks about getting back in.
   if (lapseAsks(gp)) return `Goal check-in: ${headline}. ${LAPSE_ASK}`;
+  // A runner on a break: say "On a break" once and where to restart — the card counts the days, the opener does not.
+  const breakLine = onBreakOpener(gp, headline);
+  if (breakLine) return breakLine;
   // A headline that ends in its own "!" ("... Congratulations!") keeps it; no "!." after it.
   const endsLoud = gp.headline.trim().endsWith('!');
   return endsLoud ? `Goal check-in: ${gp.headline.trim()}` : `Goal check-in: ${headline}.`;
+}
+
+/**
+ * The opener for an endurance runner on a break or in the restart week after one. The card's headline counts the
+ * break up day by day ("On a break — 8 days since your last run. Restart at ~13 km."); the opener says it once, with
+ * no count, and welcomes the runner back only after the first run back ("Building back — restart at ~13 km this week").
+ */
+function onBreakOpener(gp: GoalProgress, headline: string): string | null {
+  if (gp.goal !== 'endurance') return null;
+  const onBreak = /^On a break — \d+ days? since your last run\.\s*(Restart at .+)$/.exec(headline);
+  if (onBreak) return `Goal check-in: On a break — ${lowerFirst(onBreak[1])}.`;
+  const back = /^Building back — (restart at .+)$/.exec(headline);
+  if (back) {
+    // Welcome back means a run is back; before the week's first run it is still the plain restart line.
+    const ran = (gp.distance?.thisWeekKm ?? 0) > 0;
+    return ran ? `Welcome back — ${back[1]}.` : `Goal check-in: Building back — ${back[1]}.`;
+  }
+  return null;
 }
 
 const NEW_USER_GOAL: Record<GoalKind, { lead: string; ask: string }> = {
@@ -214,6 +235,8 @@ export function returningUserOpener(gp: GoalProgress | null | undefined): string
     }
     return null;
   }
+  // A runner whose card already shows the restart plan (on a break, or in the restart week) is not offered another one.
+  if (gp.goal === 'endurance' && (gp.distance?.plan?.kind === 'restart' || /^(On a break|Building back)\b/.test(gp.headline ?? ''))) return null;
   const days = gp.lastSessionDaysAgo;
   if (days != null && days > RETURNING_AFTER_DAYS) {
     return `Welcome back — your last session was ${days} days ago. Want a quick reset plan?`;
