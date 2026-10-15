@@ -460,11 +460,13 @@ final class TodayViewModel: ObservableObject {
         goalProgress.map(GoalProgressLogic.usesServerWeightRead) ?? false
     }
 
-    /// The server's read shown in the hero's rate slot while
-    /// `heroWithholdsLocalRate` ("Early read — down 0.7 kg on the scale in 7
-    /// days"); `nil` otherwise.
+    /// What the hero's rate slot says while `heroWithholdsLocalRate`: a short
+    /// complement ("Pace settles after 3 weeks") when the goal line below already
+    /// says the server's read in full, the full read ("Early read — down 0.7 kg on
+    /// the scale in 7 days") when that line is showing something else (the stale
+    /// weigh-in nudge) — see `WeightHeroLogic.serverReadSlotText`; `nil` otherwise.
     var heroServerWeightRead: String? {
-        goalProgress.flatMap(GoalProgressLogic.serverWeightRead)
+        goalProgress.flatMap(WeightHeroLogic.serverReadSlotText)
     }
 
     /// The HRV / Sleep / Resting HR tiles. The endurance hero already prints
@@ -1608,10 +1610,13 @@ final class TodayViewModel: ObservableObject {
             // Dietitian review (2026-09-23): the toast leads with the
             // refreshed TREND, never the raw number just typed/confirmed —
             // see `WeightHeroLogic.weighInToastMessage`.
+            // While the server reads the scale itself (early / returning /
+            // plateau) it withholds a pace, so the toast quotes no rate either.
             actionToast.show(message: WeightHeroLogic.weighInToastMessage(
                 entries: weightLog?.entries ?? [],
                 trend: weightLog?.trend,
-                system: system
+                system: system,
+                withholdsLocalRate: heroWithholdsLocalRate
             ))
         } catch {
             toastMessage = "Couldn't save — try again"

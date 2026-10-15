@@ -301,6 +301,39 @@ final class WeightHeroLogicTests: XCTestCase {
         )
     }
 
+    /// While the server reads the scale itself (early / returning / plateau) it
+    /// withholds a pace, so the toast quotes none either; an older server is unchanged.
+    func testWeighInToastQuotesNoRateWhileTheServerReadsTheScale() {
+        let trend = WeightTrendDTO(
+            days: [WeightTrendDayDTO(day: day(daysAgo: 0), rawKg: 82.4, trendKg: 82.1)],
+            delta7dKgPerWeek: -0.4, delta30dKgPerWeek: -0.35, established: true
+        )
+        let entries = [entry(daysAgo: 10), entry(daysAgo: 0, weight: 82.4)]
+        XCTAssertEqual(
+            WeightHeroLogic.weighInToastMessage(entries: entries, trend: trend, system: .metric, withholdsLocalRate: true),
+            "Logged \u{00b7} trend 82.1\u{00A0}kg"
+        )
+        XCTAssertEqual(
+            WeightHeroLogic.weighInToastMessage(entries: entries, trend: trend, system: .imperial, withholdsLocalRate: true),
+            "Logged \u{00b7} trend \(UnitFormat.weight(kg: 82.1, .imperial))"
+        )
+        // Older server (the default): the rate stays.
+        XCTAssertEqual(
+            WeightHeroLogic.weighInToastMessage(entries: entries, trend: trend, system: .metric, withholdsLocalRate: false),
+            "Logged \u{00b7} trend 82.1\u{00A0}kg (\u{2212}0.4/wk)"
+        )
+        XCTAssertEqual(
+            WeightHeroLogic.weighInToastMessage(entries: entries, trend: trend, system: .metric),
+            "Logged \u{00b7} trend 82.1\u{00A0}kg (\u{2212}0.4/wk)"
+        )
+        // Not established: the honest count, with or without a server read.
+        let young = WeightTrendDTO(days: [], delta7dKgPerWeek: nil, delta30dKgPerWeek: nil, established: false)
+        XCTAssertEqual(
+            WeightHeroLogic.weighInToastMessage(entries: entries, trend: young, system: .metric, withholdsLocalRate: true),
+            "Logged \u{2014} trend appears after 3 weigh-ins (2 of 3)"
+        )
+    }
+
     func testWeighInToastShowsRealCountWhenNotEstablished() {
         let trend = WeightTrendDTO(days: [], delta7dKgPerWeek: nil, delta30dKgPerWeek: nil, established: false)
         let entries = [entry(daysAgo: 3), entry(daysAgo: 0)]
@@ -395,7 +428,8 @@ final class WeightHeroLogicTests: XCTestCase {
     }
 
     private func progress(
-        _ state: GoalProgressDTO.WeightRead.State?, headline: String, rateKg: Double? = nil
+        _ state: GoalProgressDTO.WeightRead.State?, headline: String, rateKg: Double? = nil,
+        lastWeighInDaysAgo: Int? = nil
     ) -> GoalProgressDTO {
         GoalProgressDTO(
             goal: "weight_loss",
@@ -404,6 +438,7 @@ final class WeightHeroLogicTests: XCTestCase {
             ratePerWeek: .init(kg: rateKg),
             verdict: .progressing,
             headline: headline,
+            lastWeighInDaysAgo: lastWeighInDaysAgo,
             weightRead: state.map { GoalProgressDTO.WeightRead(state: $0) }
         )
     }
@@ -414,28 +449,66 @@ final class WeightHeroLogicTests: XCTestCase {
         return WeightHeroLogic.weeklyChangeText(
             trend: trend, entries: entries, system: .metric, goalRateKgPerWeek: goalRate,
             withholdsLocalRate: goal.map(GoalProgressLogic.usesServerWeightRead) ?? false,
-            serverRead: goal.flatMap(GoalProgressLogic.serverWeightRead)
+            serverRead: goal.flatMap(WeightHeroLogic.serverReadSlotText)
         )
     }
 
-    func testHeroShowsTheServerReadAndNoLocalRateDuringEarlyReturningAndPlateauReads() {
-        let reads: [(GoalProgressDTO.WeightRead.State, String)] = [
-            (.early, "Early read — down 0.7 kg on the scale in 7 days"),
-            (.returning, "Welcome back — the scale is down 1.1 kg since May 10"),
-            (.plateau, "Plateau — weekly average ~89.4 kg for 3 weeks"),
+    private let earlyHeadline = "Early read — down 0.7 kg on the scale in 7 days"
+    private let returningHeadline = "Welcome back — the scale is down 1.1 kg since May 10"
+    private let plateauHeadline = "Plateau — weekly average ~89.4 kg for 3 weeks"
+
+    /// The goal line under the hero already says the server's read in full, so the
+    /// hero's rate slot carries a short complement — and still no local rate.
+    func testHeroShowsAShortComplementAndNoLocalRateWhileTheGoalLineSaysTheRead() {
+        let reads: [(GoalProgressDTO.WeightRead.State, String, String)] = [
+            (.early, earlyHeadline, "Pace settles after 3\u{00A0}weeks"),
+            (.returning, returningHeadline, "Welcome back — weigh in a few more days"),
+            (.plateau, plateauHeadline, "Flat for 3\u{00A0}weeks"),
         ]
-        for (state, headline) in reads {
-            let text = heroText(progress(state, headline: headline))
-            XCTAssertEqual(text, GoalProgressLogic.nonBreaking(headline), "\(state)")
+        for (state, headline, expected) in reads {
+            let goal = progress(state, headline: headline)
+            XCTAssertTrue(GoalProgressLogic.goalLineShowsServerRead(goal), "\(state)")
+            let text = heroText(goal)
+            XCTAssertEqual(text, expected, "\(state)")
             XCTAssertFalse(text?.contains("/wk") ?? false, "\(state): no weekly rate of its own")
             // Not even the goal rate the card would show may sneak back in.
             XCTAssertEqual(heroText(progress(state, headline: headline, rateKg: -0.4), goalRate: -0.4), text, "\(state)")
         }
-        // Units stay glued to their numbers.
+        XCTAssertEqual(WeightHeroLogic.earlyReadHeroText, "Pace settles after 3 weeks")
+        XCTAssertEqual(WeightHeroLogic.returningReadHeroText, "Welcome back — weigh in a few more days")
+        XCTAssertEqual(WeightHeroLogic.plateauReadHeroText, "Flat for 3 weeks")
+    }
+
+    /// When the goal line is showing the stale-weigh-in nudge instead, nothing else
+    /// says the read — the hero carries it in full.
+    func testHeroCarriesTheFullReadWhileTheGoalLineShowsTheStaleWeighInNudge() {
+        let stale = progress(.early, headline: earlyHeadline, lastWeighInDaysAgo: 6)
+        XCTAssertFalse(GoalProgressLogic.goalLineShowsServerRead(stale))
         XCTAssertEqual(
-            heroText(progress(.early, headline: "Early read — down 0.7 kg on the scale in 7 days")),
-            "Early read — down 0.7\u{00A0}kg on the scale in 7 days"
+            GoalProgressLogic.compactText(stale, system: .metric),
+            "Last weigh-in 6 days ago — step on the scale to update"
         )
+        // Units stay glued to their numbers.
+        XCTAssertEqual(heroText(stale), "Early read — down 0.7\u{00A0}kg on the scale in 7 days")
+        // A weigh-in 3 days old is not stale yet: the goal line is the read again.
+        XCTAssertEqual(heroText(progress(.early, headline: earlyHeadline, lastWeighInDaysAgo: 3)), "Pace settles after 3\u{00A0}weeks")
+    }
+
+    /// One place says the full read; nothing is said twice.
+    func testTheFullReadIsSaidInExactlyOnePlace() {
+        let reads: [(GoalProgressDTO.WeightRead.State, String)] = [
+            (.early, earlyHeadline), (.returning, returningHeadline), (.plateau, plateauHeadline),
+        ]
+        for (state, headline) in reads {
+            for age in [nil, 0, 3, 4, 6] as [Int?] {
+                let goal = progress(state, headline: headline, lastWeighInDaysAgo: age)
+                let goalLine = GoalProgressLogic.compactText(goal, system: .metric)
+                let hero = heroText(goal)
+                let sayings = [goalLine == headline, hero == GoalProgressLogic.nonBreaking(headline)]
+                XCTAssertEqual(sayings.filter { $0 }.count, 1, "\(state) age \(String(describing: age)): goal line \(goalLine) / hero \(String(describing: hero))")
+                XCTAssertNotNil(hero, "\(state) age \(String(describing: age)): the hero still has a line")
+            }
+        }
     }
 
     func testHeroShowsNothingRatherThanALocalRateWhenTheServerSentNoReadText() {
@@ -454,6 +527,18 @@ final class WeightHeroLogicTests: XCTestCase {
             heroText(progress(.pace, headline: "On track", rateKg: -0.4), goalRate: -0.4),
             "\u{2212}0.4\u{00A0}kg/wk over 4 weeks"
         )
+    }
+
+    func testServerReadSlotTextIsNilOutsideAServerRead() {
+        XCTAssertNil(WeightHeroLogic.serverReadSlotText(progress(.pace, headline: "On track")))
+        XCTAssertNil(WeightHeroLogic.serverReadSlotText(progress(.reached, headline: "Goal reached")))
+        XCTAssertNil(WeightHeroLogic.serverReadSlotText(progress(nil, headline: earlyHeadline)), "older server")
+        let muscle = GoalProgressDTO(
+            goal: "muscle", verdict: .progressing, headline: "Progressing", weightRead: .init(state: .early)
+        )
+        XCTAssertNil(WeightHeroLogic.serverReadSlotText(muscle))
+        // The server sent a read state but no text and the goal line is not the read: nothing, not a rate.
+        XCTAssertNil(WeightHeroLogic.serverReadSlotText(progress(.early, headline: "")))
     }
 
     func testHeroStaysSilentForANonEstablishedTrendEvenWithAServerRead() {

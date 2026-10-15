@@ -582,6 +582,14 @@ enum GoalProgressLogic {
         return headlineWithoutVerdict(progress.headline)
     }
 
+    /// True when Today's goal line (`compactText`) is the server's read itself —
+    /// not the stale-weigh-in nudge or anything else — so the weight hero above
+    /// it must not say the same thing again.
+    static func goalLineShowsServerRead(_ progress: GoalProgressDTO) -> Bool {
+        guard let read = serverWeightRead(progress) else { return false }
+        return compactText(progress, system: .metric) == read
+    }
+
     /// Verdict phrases the server prefixes its headlines with ("Building — weekly
     /// distance up 12%"). Surfaces that already show the verdict chip must not
     /// repeat it.

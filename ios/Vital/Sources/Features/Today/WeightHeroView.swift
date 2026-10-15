@@ -28,8 +28,9 @@ struct WeightHeroView: View {
     /// plateau — `GoalProgressLogic.usesServerWeightRead`) and withholds a pace:
     /// the hero must not compute a 7-day rate of its own.
     var withholdsLocalRate: Bool = false
-    /// The server's read to show in the rate's place while `withholdsLocalRate`
-    /// ("Early read — down 0.7 kg on the scale in 7 days"); `nil` shows nothing.
+    /// What the rate's place says while `withholdsLocalRate` — a short complement
+    /// ("Pace settles after 3 weeks") when the goal line below says the server's
+    /// read in full, so nothing is said twice; `nil` shows nothing.
     var serverWeightRead: String? = nil
     let chip: WeightHeroLogic.WeighInChip
 

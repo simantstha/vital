@@ -115,10 +115,11 @@ enum WeightHeroLogic {
     /// itself (`GoalProgressLogic.usesServerWeightRead` — an early read, a
     /// return after a gap, a plateau) it sends no weekly pace on purpose, so the
     /// 7-day fallback must NOT fill the gap with a jumpier number of its own.
-    /// The hero then shows the server's read (`GoalProgressLogic.serverWeightRead`,
-    /// its headline minus the verdict prefix — it wraps, the hero's rate line has
-    /// no line limit) or nothing when the server sent none. Both default to "no
-    /// server read", so an older server keeps today's behaviour exactly.
+    /// The hero then shows `serverRead` — the slot text from `serverReadSlotText`
+    /// (a short complement while the goal line says the read, the full read
+    /// otherwise; it wraps, the hero's rate line has no line limit) — or nothing
+    /// when there is none. Both default to "no server read", so an older server
+    /// keeps today's behaviour exactly.
     static func weeklyChangeText(
         trend: WeightTrendDTO?, entries: [WeightLogEntryDTO], system: UnitSystem,
         goalRateKgPerWeek: Double? = nil,
@@ -161,7 +162,19 @@ enum WeightHeroLogic {
     /// established, else the honest "Logged — trend appears after 3
     /// weigh-ins (<n> of 3)" with the real distinct-day count — never a
     /// raw scale reading leading the message.
-    static func weighInToastMessage(entries: [WeightLogEntryDTO], trend: WeightTrendDTO?, system: UnitSystem) -> String {
+    ///
+    /// `withholdsLocalRate`: while the server is reading the scale itself
+    /// (`GoalProgressLogic.usesServerWeightRead` — an early read, a return after
+    /// a gap, a plateau) it withholds a pace on purpose, so the toast says
+    /// "Logged · trend 82.1 kg" with no rate of its own. Defaults to `false`
+    /// (older server): the message is exactly as before.
+    static func weighInToastMessage(
+        entries: [WeightLogEntryDTO], trend: WeightTrendDTO?, system: UnitSystem,
+        withholdsLocalRate: Bool = false
+    ) -> String {
+        if withholdsLocalRate, let trend, trend.established, let latest = trend.days.last {
+            return "Logged · trend \(UnitFormat.weight(kg: latest.trendKg, system))"
+        }
         if let trend, trend.established, let latest = trend.days.last,
            let deltaPerWeek = trend.delta7dKgPerWeek ?? trend.delta30dKgPerWeek {
             let weight = UnitFormat.weight(kg: latest.trendKg, system)
@@ -170,6 +183,36 @@ enum WeightHeroLogic {
         }
         let distinctDays = min(3, Set(entries.map(\.date)).count)
         return "Logged — trend appears after 3 weigh-ins (\(distinctDays) of 3)"
+    }
+
+    // MARK: - The server's weight read: one place says it in full
+
+    /// While the server reads the scale itself (early / returning / plateau) the
+    /// FULL read ("Early read — down 0.7 kg on the scale in 7 days") is said in
+    /// exactly one place on Today. Its goal line under the hero already says it
+    /// (`GoalProgressLogic.goalLineShowsServerRead`), so the hero's rate slot
+    /// carries a short complementary line instead of repeating it.
+    static let earlyReadHeroText = "Pace settles after 3 weeks"
+    static let returningReadHeroText = "Welcome back — weigh in a few more days"
+    static let plateauReadHeroText = "Flat for 3 weeks"
+
+    /// The text for the hero's rate slot during a server weight read, `nil` when
+    /// the server is not reading the scale (the hero then keeps its own rate
+    /// logic) or has nothing to say:
+    ///  - the goal line below carries the read -> the short complement above;
+    ///  - the goal line carries something else (the stale-weigh-in nudge) -> the
+    ///    hero carries the full read, so it is still said once.
+    static func serverReadSlotText(_ progress: GoalProgressDTO) -> String? {
+        guard GoalProgressLogic.usesServerWeightRead(progress), let state = progress.weightRead?.state else { return nil }
+        guard GoalProgressLogic.goalLineShowsServerRead(progress) else {
+            return GoalProgressLogic.serverWeightRead(progress)
+        }
+        switch state {
+        case .early:     return earlyReadHeroText
+        case .returning: return returningReadHeroText
+        case .plateau:   return plateauReadHeroText
+        case .pace, .reached: return nil
+        }
     }
 
     // MARK: - Sparkline Y-domain (screenshot-review fix, 2026-09-23)
