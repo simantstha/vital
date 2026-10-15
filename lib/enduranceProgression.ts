@@ -1033,7 +1033,10 @@ function purposeLine(plan: Omit<EnduranceWeekPlan, 'purpose'>): string {
     case 'baseline':
       return "Baseline week: run as you normally would; next week's step is built from this week";
     case 'build': {
-      const back = plan.comeback != null ? `; back toward your usual ~${formatKm(plan.comeback.medianKm, u)}` : '';
+      // Still climbing back toward the pre-break level (not once the target has reached it).
+      const back = plan.comeback != null && t != null && t < plan.comeback.medianKm - 0.5
+        ? `; back toward your usual ~${formatKm(plan.comeback.medianKm, u)}`
+        : '';
       return lrPart && t != null
         ? `~${formatKm(t, u)} this week: ${lrPart}, the rest easy runs${back}`
         : `~${formatKm(t ?? plan.goalKm, u)} this week, mostly easy runs${back}`;

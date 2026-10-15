@@ -163,7 +163,9 @@ test('week plan: the coach is told the week\'s ONE target for every plan kind', 
   // The step is the ACTUAL step the plan asks for, not a fixed "~10%" (wave 20): +13% reads +13%.
   assert.match(lines(d({ kind: 'build', targetKm: 27, longRunKm: 14, stepPct: 13 }, 27)), /- This week's target: build to ~27\.0 km \(a \+13% step on last week; long run 14 km\); the 30\.0 km\/week goal comes after — do not push past the step this week/);
   assert.match(lines(d({ kind: 'build', targetKm: 27, longRunKm: 14 }, 27)), /build to ~27\.0 km \(the next step over last week; long run 14 km\)/);
-  assert.match(lines(d({ kind: 'build', targetKm: 22, longRunKm: 9, stepPct: 57, comebackKm: 22 }, 22)), /\(a \+57% step on last week, climbing back toward the ~22\.0 km week from before the break; long run 9 km\)/);
+  assert.match(lines(d({ kind: 'build', targetKm: 18, longRunKm: 9, stepPct: 50, comebackKm: 22 }, 18)), /\(a \+50% step on last week, climbing back toward the ~22\.0 km week from before the break; long run 9 km\)/);
+  // Back at the pre-break level there is nothing left to climb toward.
+  assert.doesNotMatch(lines(d({ kind: 'build', targetKm: 22, longRunKm: 9, stepPct: 22, comebackKm: 22 }, 22)), /climbing back/);
   assert.doesNotMatch(lines(d({ kind: 'build', targetKm: 27, longRunKm: 14, stepPct: 13 }, 27)), /safe ~10%/);
   // At the goal: no growth clause unless the long run is still climbing to a peak it has not reached; unit-aware, gone at the peak.
   assert.match(lines(d({ kind: 'maintain', targetKm: 30, longRunKm: 15 }, 30)), /- This week's target: hold the 30\.0 km\/week goal; long run 15 km, the rest easy — the runner is at the goal, do not add volume/);

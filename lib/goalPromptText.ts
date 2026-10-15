@@ -117,7 +117,9 @@ function weekTargetLine(gp: GoalProgress, units: UnitSystem): string | null {
       const step = plan.stepPct != null
         ? `a ${plan.stepPct > 0 ? '+' : plan.stepPct < 0 ? '−' : ''}${Math.abs(plan.stepPct)}% step on last week`
         : 'the next step over last week';
-      const climb = back != null ? `, climbing back toward the ~${back} week from before the break` : '';
+      const climb = back != null && plan.targetKm != null && plan.comebackKm != null && plan.targetKm < plan.comebackKm - 0.5
+        ? `, climbing back toward the ~${back} week from before the break`
+        : '';
       return `- This week's target: build to ~${t} (${step}${climb}${lr ? `; ${lr}` : ''}); the ${goal}/week goal comes after — do not push past the step this week`;
     }
     case 'maintain': {
