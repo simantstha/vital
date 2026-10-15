@@ -849,4 +849,300 @@ final class GoalProgressLogicTests: XCTestCase {
         )
         XCTAssertEqual(GoalProgressLogic.compactReason("Resting heart rate down"), "Resting heart rate down")
     }
+
+    // MARK: - Server weight read (wave 19: early / returning / plateau)
+
+    private let earlyHeadline = "Early read — down 0.7 kg on the scale in 7 days"
+    private let returningHeadline = "Welcome back — the scale is down 1.1 kg since May 10"
+    private let plateauHeadline = "Plateau — weekly average ~89.4 kg for 3 weeks"
+
+    /// A weight-loss payload shaped like the server's during a withheld-pace read:
+    /// no rate and no ETA, while the smoothed trend is a hair under the start (so
+    /// the trend-composed line would read "0.2 of 7.7 kg lost").
+    private func readProgress(
+        _ state: GoalProgressDTO.WeightRead.State?, headline: String, goal: String = "weight_loss",
+        verdict: GoalVerdict = .progressing, eta: String? = nil, rateKg: Double? = nil
+    ) -> GoalProgressDTO {
+        GoalProgressDTO(
+            goal: goal,
+            target: .init(weightKg: 76, date: "2027-01-15"),
+            current: .init(weightKg: 83.5, startWeightKg: 83.7, changeKg: -0.2, progressPct: 3),
+            ratePerWeek: .init(kg: rateKg),
+            eta: eta,
+            verdict: verdict,
+            headline: headline,
+            weightRead: state.map { GoalProgressDTO.WeightRead(state: $0) }
+        )
+    }
+
+    func testPrimaryLineIsTheServerReadDuringAnEarlyReturningOrPlateauRead() {
+        let reads: [(GoalProgressDTO.WeightRead.State, String)] = [
+            (.early, earlyHeadline), (.returning, returningHeadline), (.plateau, plateauHeadline),
+        ]
+        for (state, headline) in reads {
+            let progress = readProgress(state, headline: headline)
+            XCTAssertTrue(GoalProgressLogic.usesServerWeightRead(progress), "\(state)")
+            XCTAssertEqual(GoalProgressLogic.serverWeightRead(progress), headline, "\(state)")
+            XCTAssertEqual(GoalProgressLogic.primaryLine(progress, system: .metric), headline, "\(state)")
+            // The server headline already speaks in the user's unit: no kg -> lb rewrite here.
+            XCTAssertEqual(GoalProgressLogic.primaryLine(progress, system: .imperial), headline, "\(state)")
+            XCTAssertFalse(GoalProgressLogic.primaryLine(progress, system: .metric).contains("of 7.7"), "\(state)")
+        }
+    }
+
+    func testServerReadDropsALeadingVerdictPhrase() {
+        let progress = readProgress(.early, headline: "Progressing — down 0.7 kg on the scale in 7 days")
+        XCTAssertEqual(GoalProgressLogic.primaryLine(progress, system: .metric), "down 0.7 kg on the scale in 7 days")
+    }
+
+    func testPrimaryLineKeepsTheTrendLineForPaceReachedAndAnOlderServer() {
+        let composed = "0.2 of 7.7 kg lost"
+        for state in [GoalProgressDTO.WeightRead.State.pace, .reached] {
+            let progress = readProgress(state, headline: "On track — about 6 kg to go")
+            XCTAssertFalse(GoalProgressLogic.usesServerWeightRead(progress), "\(state)")
+            XCTAssertNil(GoalProgressLogic.serverWeightRead(progress), "\(state)")
+            XCTAssertEqual(plain(GoalProgressLogic.primaryLine(progress, system: .metric)), composed, "\(state)")
+        }
+        // An older server sends no weightRead at all — even with an early-sounding headline.
+        let older = readProgress(nil, headline: earlyHeadline)
+        XCTAssertNil(older.weightRead)
+        XCTAssertFalse(GoalProgressLogic.usesServerWeightRead(older))
+        XCTAssertNil(GoalProgressLogic.serverWeightRead(older))
+        XCTAssertEqual(plain(GoalProgressLogic.primaryLine(older, system: .metric)), composed)
+        XCTAssertEqual(plain(GoalProgressLogic.primaryLine(older, system: .imperial)), "0.4 of 17 lb lost")
+    }
+
+    func testAnUnknownWeightReadStateBehavesLikeNoWeightRead() throws {
+        let json = """
+        {"goal":"weight_loss","verdict":"progressing","headline":"\(earlyHeadline)",
+         "target":{"weightKg":76},"current":{"weightKg":83.5,"startWeightKg":83.7},
+         "weightRead":{"state":"some_future_state","scaleKg":83.4}}
+        """
+        let progress = try JSONDecoder().decode(GoalProgressDTO.self, from: Data(json.utf8))
+        XCTAssertNotNil(progress.weightRead)
+        XCTAssertNil(progress.weightRead?.state)
+        XCTAssertEqual(progress.weightRead?.scaleKg, 83.4)
+        XCTAssertFalse(GoalProgressLogic.usesServerWeightRead(progress))
+        XCTAssertEqual(plain(GoalProgressLogic.primaryLine(progress, system: .metric)), "0.2 of 7.7 kg lost")
+    }
+
+    /// The server read replaces the weight-loss line only; a muscle goal's weight
+    /// story (and its lift-led headline) is untouched even though the server also
+    /// sends `weightRead` for it.
+    func testServerReadNeverReplacesAMuscleGoalLine() {
+        let muscle = readProgress(.early, headline: "Progressing — Squat est. 1RM +10 kg", goal: "muscle")
+        XCTAssertFalse(GoalProgressLogic.usesServerWeightRead(muscle))
+        XCTAssertNil(GoalProgressLogic.serverWeightRead(muscle))
+        let without = readProgress(nil, headline: "Progressing — Squat est. 1RM +10 kg", goal: "muscle")
+        XCTAssertEqual(GoalProgressLogic.primaryLine(muscle, system: .metric), GoalProgressLogic.primaryLine(without, system: .metric))
+    }
+
+    func testServerReadIsNeverShownForAReachedGoalOrWithoutAHeadline() {
+        XCTAssertNil(GoalProgressLogic.serverWeightRead(readProgress(.plateau, headline: plateauHeadline, verdict: .reached)))
+        XCTAssertNil(GoalProgressLogic.serverWeightRead(readProgress(.early, headline: "  ")))
+        // Without text the card falls back to the composed line rather than going blank.
+        XCTAssertEqual(plain(GoalProgressLogic.primaryLine(readProgress(.early, headline: ""), system: .metric)), "0.2 of 7.7 kg lost")
+    }
+
+    /// Today's goal line: the read leads, and a projected date never contradicts
+    /// it — even if one were sent alongside the read.
+    func testCompactTextShowsTheServerReadAndNoEtaDuringAWithheldPace() {
+        let early = readProgress(.early, headline: earlyHeadline, eta: "2026-12-10")
+        XCTAssertEqual(GoalProgressLogic.compactText(early, system: .metric, now: now, locale: en), earlyHeadline)
+        let plateau = readProgress(.plateau, headline: plateauHeadline)
+        XCTAssertEqual(GoalProgressLogic.compactText(plateau, system: .metric, now: now, locale: en), plateauHeadline)
+        // Pace and an older server keep the ETA-vs-target phrase.
+        let pace = readProgress(.pace, headline: "On track", eta: "2026-12-10")
+        XCTAssertEqual(plain(GoalProgressLogic.compactText(pace, system: .metric, now: now, locale: en)), "5 wk ahead of Jan 15, 2027")
+        let older = readProgress(nil, headline: "On track", eta: "2026-12-10")
+        XCTAssertEqual(plain(GoalProgressLogic.compactText(older, system: .metric, now: now, locale: en)), "5 wk ahead of Jan 15, 2027")
+    }
+
+    func testWeightReadDecodesTolerantly() throws {
+        func decode(_ extra: String) throws -> GoalProgressDTO {
+            let json = "{\"goal\":\"weight_loss\",\"verdict\":\"progressing\",\"headline\":\"x\",\"reasons\":[]\(extra)}"
+            return try JSONDecoder().decode(GoalProgressDTO.self, from: Data(json.utf8))
+        }
+        let full = try decode("""
+        ,"weightRead":{"state":"returning","scaleKg":82.3,"scaleDay":"2026-10-05","weekMeanKg":82.5,"weeksVsTarget":-2,
+         "returned":{"gapDays":12,"sinceDay":"2026-05-10","sinceKg":83.4,"weighInsSince":1},"reachedDaysAgo":null}
+        """)
+        XCTAssertEqual(full.weightRead, GoalProgressDTO.WeightRead(
+            state: .returning, scaleKg: 82.3, scaleDay: "2026-10-05", weekMeanKg: 82.5, weeksVsTarget: -2,
+            returned: .init(gapDays: 12, sinceDay: "2026-05-10", sinceKg: 83.4, weighInsSince: 1), reachedDaysAgo: nil
+        ))
+
+        // Every state the server sends.
+        let states: [(String, GoalProgressDTO.WeightRead.State)] = [
+            ("early", .early), ("returning", .returning), ("plateau", .plateau), ("pace", .pace), ("reached", .reached),
+        ]
+        for (wire, state) in states {
+            XCTAssertEqual(try decode(",\"weightRead\":{\"state\":\"\(wire)\"}").weightRead?.state, state, wire)
+        }
+        // A null state (no usable weigh-in) is a read without a state.
+        XCTAssertNotNil(try decode(",\"weightRead\":{\"state\":null,\"scaleKg\":null}").weightRead)
+        XCTAssertNil(try decode(",\"weightRead\":{\"state\":null}").weightRead?.state)
+
+        // Older payloads decode exactly as before.
+        let older = try decode("")
+        XCTAssertNil(older.weightRead)
+        XCTAssertNil(older.liftReturn)
+        XCTAssertEqual(older.verdict, .progressing)
+        XCTAssertNil(try decode(",\"weightRead\":null").weightRead)
+        XCTAssertNil(try decode(",\"weightRead\":\"nope\"").weightRead)
+
+        // Unknown or wrong-typed pieces drop only themselves.
+        let unknown = try decode(",\"weightRead\":{\"state\":\"mystery\",\"scaleKg\":82.3}")
+        XCTAssertNil(unknown.weightRead?.state)
+        XCTAssertEqual(unknown.weightRead?.scaleKg, 82.3)
+        XCTAssertNil(try decode(",\"weightRead\":{\"state\":5}").weightRead?.state)
+        XCTAssertEqual(try decode(",\"weightRead\":{\"weeksVsTarget\":2.0}").weightRead?.weeksVsTarget, 2)
+        XCTAssertNil(try decode(",\"weightRead\":{\"weeksVsTarget\":\"soon\"}").weightRead?.weeksVsTarget)
+        XCTAssertEqual(try decode(",\"weightRead\":{\"reachedDaysAgo\":3}").weightRead?.reachedDaysAgo, 3)
+        let partial = try decode(",\"weightRead\":{\"state\":\"returning\",\"returned\":{\"gapDays\":12}}")
+        XCTAssertEqual(partial.weightRead?.state, .returning)
+        XCTAssertNil(partial.weightRead?.returned, "a partial return block is dropped, never half-used")
+    }
+
+    func testLiftReturnDecodesTolerantly() throws {
+        func decode(_ extra: String) throws -> GoalProgressDTO {
+            let json = "{\"goal\":\"muscle\",\"verdict\":\"building\",\"headline\":\"x\",\"reasons\":[]\(extra)}"
+            return try JSONDecoder().decode(GoalProgressDTO.self, from: Data(json.utf8))
+        }
+        let full = try decode("""
+        ,"liftReturn":{"exercise":"squat","name":"Squat","breakDays":14,"endedOn":"2026-09-20",
+         "preBreakKg":142,"recentKg":136.3,"pct":96,"regained":false}
+        """)
+        XCTAssertEqual(full.liftReturn, GoalProgressDTO.LiftReturn(
+            exercise: "squat", name: "Squat", breakDays: 14, endedOn: "2026-09-20",
+            preBreakKg: 142, recentKg: 136.3, pct: 96, regained: false
+        ))
+        XCTAssertNil(try decode("").liftReturn, "older servers omit it")
+        XCTAssertNil(try decode(",\"liftReturn\":null").liftReturn)
+        XCTAssertNil(try decode(",\"liftReturn\":\"nope\"").liftReturn)
+        // The claim needs the lift, its pre-break best, the percentage and the flag.
+        XCTAssertNil(try decode(",\"liftReturn\":{\"preBreakKg\":142,\"pct\":96,\"regained\":false}").liftReturn)
+        XCTAssertNil(try decode(",\"liftReturn\":{\"exercise\":\"squat\",\"pct\":96,\"regained\":false}").liftReturn)
+        XCTAssertNil(try decode(",\"liftReturn\":{\"exercise\":\"squat\",\"preBreakKg\":142,\"regained\":false}").liftReturn)
+        XCTAssertNil(try decode(",\"liftReturn\":{\"exercise\":\"squat\",\"preBreakKg\":142,\"pct\":96}").liftReturn)
+        // The rest is optional: the name falls back to the capitalised key, a fractional pct truncates.
+        let sparse = try decode(",\"liftReturn\":{\"exercise\":\"bench press\",\"preBreakKg\":100,\"pct\":96.4,\"regained\":true}")
+        XCTAssertEqual(sparse.liftReturn?.name, "Bench Press")
+        XCTAssertEqual(sparse.liftReturn?.pct, 96)
+        XCTAssertEqual(sparse.liftReturn?.regained, true)
+        XCTAssertNil(sparse.liftReturn?.breakDays)
+        XCTAssertNil(sparse.liftReturn?.recentKg)
+    }
+
+    // MARK: - Week plan (distance.plan: baseline / build / hold / restart / taper / recovery ...)
+
+    /// An endurance payload with a week plan: 30 km goal, `done` km run so far.
+    /// `step` stands for the payload's `stepTargetKm` (the server sets it to the
+    /// plan's target, or to the goal when the plan has none).
+    private func planned(
+        kind: String?, planTarget: Double?, step: Double? = 30, done: Double? = 15, text: String? = nil
+    ) -> GoalProgressDTO {
+        GoalProgressDTO(
+            goal: "endurance",
+            target: .init(weeklyDistanceKm: 30),
+            distance: .init(
+                targetKm: 30, thisWeekKm: done, avg4wKm: nil, weekStart: "2026-10-05", stepTargetKm: step,
+                text: text, plan: kind.map { GoalProgressDTO.Distance.Plan(kind: $0, targetKm: planTarget) }
+            ),
+            verdict: .building,
+            headline: "Baseline week — 15 km so far"
+        )
+    }
+
+    /// The first week of running: the server's step equals the goal, which used to
+    /// print "15 of 30 km this week" beside "Baseline week — 15 km so far…".
+    func testBaselineWeekHasNoTargetToMeasureAgainst() {
+        let baseline = planned(kind: "baseline", planTarget: nil)
+        XCTAssertTrue(GoalProgressLogic.isBaselineWeek(baseline))
+        XCTAssertNil(GoalProgressLogic.stepTargetKm(baseline))
+        XCTAssertEqual(GoalProgressLogic.distanceLine(baseline, system: .metric), "15\u{00A0}km so far this week")
+        XCTAssertEqual(GoalProgressLogic.primaryLine(baseline, system: .metric), "15\u{00A0}km so far this week")
+        XCTAssertEqual(GoalProgressLogic.distanceLine(baseline, system: .imperial), "9.3\u{00A0}mi so far this week")
+        assertNoBreakableUnitSpace(GoalProgressLogic.distanceLine(baseline, system: .imperial) ?? "")
+    }
+
+    func testServerDistanceTextIsPreferredWhenItComesWithAPlan() {
+        let served = planned(kind: "baseline", planTarget: nil, text: "15\u{00A0}km so far · baseline week")
+        XCTAssertEqual(GoalProgressLogic.distanceLine(served, system: .metric), "15\u{00A0}km so far · baseline week")
+        let build = planned(kind: "build", planTarget: 27, step: 27, done: 22.7,
+                            text: "22.7 of ~27\u{00A0}km running this week · goal 30\u{00A0}km")
+        XCTAssertEqual(GoalProgressLogic.distanceLine(build, system: .metric), "22.7 of ~27\u{00A0}km running this week · goal 30\u{00A0}km")
+
+        // No plan (an older server): the composed wording, text or not.
+        let older = planned(kind: nil, planTarget: nil, text: "15\u{00A0}km so far · baseline week")
+        XCTAssertEqual(GoalProgressLogic.distanceLine(older, system: .metric), "15 of 30\u{00A0}km this week")
+    }
+
+    /// The server words its text in the unit it has on file: a km line never reaches a miles user.
+    func testServerDistanceTextIsNeverShownInTheWrongUnit() {
+        let kmText = planned(kind: "baseline", planTarget: nil, text: "15\u{00A0}km so far · baseline week")
+        XCTAssertEqual(GoalProgressLogic.distanceLine(kmText, system: .imperial), "9.3\u{00A0}mi so far this week")
+        let miText = planned(kind: "baseline", planTarget: nil, text: "9.3\u{00A0}mi so far · baseline week")
+        XCTAssertEqual(GoalProgressLogic.distanceLine(miText, system: .imperial), "9.3\u{00A0}mi so far · baseline week")
+        XCTAssertEqual(GoalProgressLogic.distanceLine(miText, system: .metric), "15\u{00A0}km so far this week")
+    }
+
+    func testThePlansTargetIsThisWeeksNumberForEveryKindBesidesBaseline() {
+        for kind in ["build", "hold", "restart", "taper", "race_week", "rebuild"] {
+            // `stepTargetKm` absent: the plan's own target still names the week.
+            let progress = planned(kind: kind, planTarget: 24, step: nil, done: 10.2)
+            XCTAssertEqual(GoalProgressLogic.stepTargetKm(progress), 24, kind)
+            XCTAssertEqual(GoalProgressLogic.distanceLine(progress, system: .metric),
+                           "10.2 of ~24\u{00A0}km this week · goal 30\u{00A0}km", kind)
+            XCTAssertEqual(GoalProgressLogic.distanceFraction(progress) ?? .nan, 10.2 / 24, accuracy: 0.0001, kind)
+            XCTAssertEqual(plain(GoalProgressLogic.distanceBarEndText(progress, system: .metric)), "~24 km", kind)
+        }
+        // A plan that asks for the goal itself (maintain at the weekly goal) is just "of 30".
+        let maintain = planned(kind: "maintain", planTarget: 30, done: 10.2)
+        XCTAssertNil(GoalProgressLogic.stepTargetKm(maintain))
+        XCTAssertEqual(GoalProgressLogic.distanceLine(maintain, system: .metric), "10.2 of 30\u{00A0}km this week")
+    }
+
+    func testRecoveryWeekNumberIsACeiling() {
+        let recovery = planned(kind: "recovery", planTarget: 12, step: 12, done: 4.2)
+        XCTAssertEqual(GoalProgressLogic.distanceLine(recovery, system: .metric), "4.2 of up to 12\u{00A0}km this week (recovery)")
+        XCTAssertEqual(GoalProgressLogic.distanceLine(recovery, system: .imperial), "2.6 of up to 7.5\u{00A0}mi this week (recovery)")
+    }
+
+    func testWithoutAPlanTheDistanceLineIsExactlyAsBefore() {
+        XCTAssertEqual(GoalProgressLogic.distanceLine(distanceProgress(thisWeek: 22.7, step: 27), system: .metric),
+                       "22.7 of ~27\u{00A0}km this week · goal 30\u{00A0}km")
+        XCTAssertEqual(GoalProgressLogic.distanceLine(distanceProgress(), system: .metric), "24.5 of 30\u{00A0}km this week")
+        XCTAssertFalse(GoalProgressLogic.isBaselineWeek(distanceProgress()))
+    }
+
+    func testDistancePlanDecodesTolerantly() throws {
+        func decode(_ distance: String) throws -> GoalProgressDTO.Distance? {
+            let json = "{\"goal\":\"endurance\",\"verdict\":\"building\",\"headline\":\"x\",\"distance\":\(distance)}"
+            return try JSONDecoder().decode(GoalProgressDTO.self, from: Data(json.utf8)).distance
+        }
+        let full = try decode("""
+        {"targetKm":30,"thisWeekKm":15,"avg4wKm":null,"weekStart":"2026-10-05","stepTargetKm":30,
+         "text":"15 km so far · baseline week",
+         "plan":{"kind":"baseline","targetKm":null,"longRunKm":null,"purpose":"Baseline week: run as you normally would"}}
+        """)
+        XCTAssertEqual(full?.text, "15 km so far · baseline week")
+        XCTAssertEqual(full?.plan, GoalProgressDTO.Distance.Plan(kind: "baseline", targetKm: nil, longRunKm: nil, purpose: "Baseline week: run as you normally would"))
+
+        // Older payloads decode exactly as before.
+        let older = try decode(#"{"targetKm":30,"thisWeekKm":15,"stepTargetKm":27}"#)
+        XCTAssertNil(older?.text)
+        XCTAssertNil(older?.plan)
+        XCTAssertEqual(older?.stepTargetKm, 27)
+        XCTAssertNil(try decode(#"{"targetKm":30,"plan":null}"#)?.plan)
+        XCTAssertNil(try decode(#"{"targetKm":30,"plan":"nope"}"#)?.plan)
+        // A plan without a kind is dropped; an unknown kind survives as a string; odd pieces drop alone.
+        XCTAssertNil(try decode(#"{"targetKm":30,"plan":{"targetKm":24}}"#)?.plan)
+        XCTAssertEqual(try decode(#"{"targetKm":30,"plan":{"kind":"future_kind","targetKm":24}}"#)?.plan?.kind, "future_kind")
+        let odd = try decode(#"{"targetKm":30,"text":5,"plan":{"kind":"build","targetKm":"soon","longRunKm":16}}"#)
+        XCTAssertNil(odd?.text)
+        XCTAssertEqual(odd?.plan?.kind, "build")
+        XCTAssertNil(odd?.plan?.targetKm)
+        XCTAssertEqual(odd?.plan?.longRunKm, 16)
+    }
 }

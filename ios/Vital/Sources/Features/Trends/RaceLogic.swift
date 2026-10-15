@@ -82,6 +82,41 @@ enum RaceLogic {
         (daysSince ?? 1) <= 7 ? 1 : 2
     }
 
+    /// The recovery week the server's headline names for `race`.
+    ///
+    /// Without a week plan the server counts from today: `recoveryWeek(daysSince)`
+    /// (the "Race done — Dec 31 · recovery week 1" headline). With one
+    /// (`weekPlanned`: the payload carries `distance.plan`) recovery runs in
+    /// CALENDAR weeks, read on this week's Monday like the week plan itself
+    /// (`windDownPlanOutcome`: "Recovery week 1 — day 9 after your half"): the
+    /// days from race day to this week's Monday pick the week, and the race's own
+    /// calendar week after race day is week 1. So after a Wednesday race the
+    /// Thursday eight days on is still week 1 (day 8 would say 2), and
+    /// `daysSince` reaches ~20 before recovery ends. `daysSince` plus the race
+    /// date give the server's own "today", so no device clock is involved.
+    static func recoveryWeek(_ race: GoalProgressDTO.Race, weekPlanned: Bool) -> Int {
+        guard let daysSince = race.daysSince else { return 1 }
+        guard weekPlanned, let weekday = mondayIndex(ofDay: race.date, plusDays: daysSince) else {
+            return recoveryWeek(daysSince: daysSince)
+        }
+        let sinceMonday = daysSince - weekday
+        return sinceMonday >= 1 ? recoveryWeek(daysSince: sinceMonday) : 1
+    }
+
+    /// Weekday of `day` (YYYY-MM-DD, or an ISO timestamp) plus `days` days, Monday
+    /// = 0 ... Sunday = 6; `nil` when the date does not parse. Pure UTC calendar
+    /// arithmetic, so the device zone never shifts the weekday.
+    private static func mondayIndex(ofDay day: String, plusDays days: Int) -> Int? {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC") ?? .gmt
+        let parts = day.prefix(10).split(separator: "-").compactMap { Int($0) }
+        guard parts.count == 3,
+              let start = calendar.date(from: DateComponents(year: parts[0], month: parts[1], day: parts[2])),
+              let date = calendar.date(byAdding: .day, value: days, to: start) else { return nil }
+        // Calendar weekday: 1 = Sunday ... 7 = Saturday.
+        return (calendar.component(.weekday, from: date) + 5) % 7
+    }
+
     /// True once the race is done and the 14-day recovery is under way.
     static func isRecovery(_ race: GoalProgressDTO.Race?) -> Bool {
         race?.phase == .recovery
@@ -97,6 +132,12 @@ enum RaceLogic {
         "Race done \u{00B7} recovery week \(recoveryWeek(daysSince: daysSince))"
     }
 
+    /// "Race done · recovery week 1" with the week the server's headline names
+    /// (`recoveryWeek(_:weekPlanned:)`).
+    static func recoveryText(_ race: GoalProgressDTO.Race, weekPlanned: Bool) -> String {
+        "Race done \u{00B7} recovery week \(recoveryWeek(race, weekPlanned: weekPlanned))"
+    }
+
     /// Today hero line, by race phase:
     ///  - build (or an older server with no phase): "Half marathon · 12 weeks to go", plus the
     ///    long-run progress when the response carries a long run with a target:
@@ -104,9 +145,11 @@ enum RaceLogic {
     ///  - taper: "Half marathon · taper · 2 weeks to go" (no long-run tail: the build-up is over);
     ///  - race week: "Race week · Dec 31" ("Race day · Dec 31" on the day);
     ///  - recovery: "Race done · recovery week 1".
+    /// `weekPlanned`: the payload carries the server's week plan (`distance.plan`),
+    /// which counts recovery in calendar weeks (see `recoveryWeek(_:weekPlanned:)`).
     static func heroLine(
         _ race: GoalProgressDTO.Race, longRun: GoalProgressDTO.LongRun? = nil, system: UnitSystem = .metric,
-        calendar: Calendar = .current
+        calendar: Calendar = .current, weekPlanned: Bool = false
     ) -> String {
         switch race.phase {
         case .taper:
@@ -118,7 +161,7 @@ enum RaceLogic {
             }
             return parts.joined(separator: " \u{00B7} ")
         case .recovery:
-            return recoveryText(daysSince: race.daysSince)
+            return recoveryText(race, weekPlanned: weekPlanned)
         case .build, .none:
             var line = "\(race.displayLabel) · \(countdownText(weeksToGo: race.weeksToGo, daysToGo: race.daysToGo))"
             if let longRun, let progress = longRunProgressText(longRun, system) {
@@ -145,14 +188,14 @@ enum RaceLogic {
     /// Goal sheet race row, with the phase: "Half marathon · Dec 30 · 12 wk" (build),
     /// "… · taper · 2 wk", "… · race week · 5 d" (race day: "race week · today"),
     /// "… · recovery week 1" once the race is done.
-    static func rowText(_ race: GoalProgressDTO.Race, calendar: Calendar = .current) -> String {
+    static func rowText(_ race: GoalProgressDTO.Race, calendar: Calendar = .current, weekPlanned: Bool = false) -> String {
         var parts = [race.displayLabel]
         if let d = GoalTargetLogic.date(fromDay: race.date, calendar: calendar) {
             parts.append(monthDay(d, calendar: calendar))
         }
         switch race.phase {
         case .recovery:
-            parts.append("recovery week \(recoveryWeek(daysSince: race.daysSince))")
+            parts.append("recovery week \(recoveryWeek(race, weekPlanned: weekPlanned))")
         case .taper:
             parts.append("taper")
             parts.append(race.weeksToGo <= 0 ? "\(max(race.daysToGo, 0)) d" : "\(race.weeksToGo) wk")

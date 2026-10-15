@@ -351,4 +351,60 @@ final class RaceLogicTests: XCTestCase {
         XCTAssertEqual(recorder.posted, [.vitalOpenGoalEditor])
     }
 
+    /// The server reads recovery in CALENDAR weeks once the goal has a week plan:
+    /// the days from race day to THIS WEEK'S Monday pick the week ("Recovery week 1
+    /// — day 9 after your half"), so after a mid-week race a day-count rule says
+    /// week 2 where the server's headline still says week 1, and `daysSince` runs
+    /// to ~20 before recovery ends. Without a plan the server counts from today.
+    func testRecoveryWeekFollowsTheCalendarWeekWithAWeekPlan() {
+        func week(_ daysSince: Int?, date: String, planned: Bool = true) -> Int {
+            RaceLogic.recoveryWeek(
+                lifecycle(date: date, weeks: 0, days: 0, phase: .recovery, daysSince: daysSince), weekPlanned: planned
+            )
+        }
+        // Race on a Wednesday (2026-12-30): Thu 12-31 ... Sun 01-03 are the race week's own recovery days.
+        XCTAssertEqual((1...4).map { week($0, date: "2026-12-30") }, [1, 1, 1, 1])
+        // Next Monday (day 5) to its Sunday (day 11): still week 1 — the day-count rule says 2 from day 8.
+        XCTAssertEqual((5...11).map { week($0, date: "2026-12-30") }, [1, 1, 1, 1, 1, 1, 1])
+        XCTAssertEqual((5...11).map { RaceLogic.recoveryWeek(daysSince: $0) }, [1, 1, 1, 2, 2, 2, 2])
+        // Monday 01-11 (day 12) to the end of recovery, Sunday 01-17 (day 18): week 2.
+        XCTAssertEqual((12...18).map { week($0, date: "2026-12-30") }, [2, 2, 2, 2, 2, 2, 2])
+
+        // Race on a Monday (2026-12-28): week 1 through the following Sunday+6, week 2 up to day 20.
+        XCTAssertEqual((1...13).map { week($0, date: "2026-12-28") }, Array(repeating: 1, count: 13))
+        XCTAssertEqual((14...20).map { week($0, date: "2026-12-28") }, Array(repeating: 2, count: 7))
+
+        // Race on a Sunday (2026-12-27): the same as the plain day count.
+        XCTAssertEqual((1...7).map { week($0, date: "2026-12-27") }, Array(repeating: 1, count: 7))
+        XCTAssertEqual((8...14).map { week($0, date: "2026-12-27") }, Array(repeating: 2, count: 7))
+
+        // Without a week plan the server counts days from today, and a missing count reads as week 1.
+        XCTAssertEqual((8...11).map { week($0, date: "2026-12-30", planned: false) }, [2, 2, 2, 2])
+        XCTAssertEqual(week(nil, date: "2026-12-30"), 1)
+        XCTAssertEqual(week(nil, date: "2026-12-30", planned: false), 1)
+        // An unreadable race date falls back to the day count rather than guessing a weekday.
+        XCTAssertEqual(week(9, date: "soon"), 2)
+    }
+
+    func testRecoveryLabelsUseTheServersWeekWhenThereIsAPlan() {
+        let midWeek = lifecycle(weeks: 0, days: 0, phase: .recovery, daysSince: 9) // race Wed 12-30, today Fri 01-08
+        XCTAssertEqual(RaceLogic.heroLine(midWeek, calendar: utc, weekPlanned: true), "Race done · recovery week 1")
+        XCTAssertEqual(RaceLogic.heroLine(midWeek, calendar: utc), "Race done · recovery week 2")
+        XCTAssertEqual(RaceLogic.recoveryText(midWeek, weekPlanned: true), "Race done · recovery week 1")
+        XCTAssertEqual(RaceLogic.rowText(midWeek, calendar: utc, weekPlanned: true), "Half marathon · Dec 30 · recovery week 1")
+        XCTAssertEqual(RaceLogic.rowText(midWeek, calendar: utc), "Half marathon · Dec 30 · recovery week 2")
+        // The goal sheet's Race row reads the plan off the payload.
+        let progress = GoalProgressDTO(
+            goal: "endurance",
+            target: .init(weeklyDistanceKm: 30),
+            distance: GoalProgressDTO.Distance(
+                targetKm: 30, thisWeekKm: 4, stepTargetKm: 12, plan: .init(kind: "recovery", targetKm: 12)
+            ),
+            race: midWeek,
+            verdict: .building
+        )
+        let row = GoalProgressLogic.statRows(progress, system: .metric).first { $0.label == "Race" }?.value
+        XCTAssertEqual(row, RaceLogic.rowText(midWeek, weekPlanned: true))
+        XCTAssertTrue(row?.hasSuffix("recovery week 1") ?? false, row ?? "nil")
+    }
 }

@@ -161,4 +161,19 @@ final class TrendsWeightCardLogicTests: XCTestCase {
         XCTAssertNotNil(laterDate)
         XCTAssertLessThan(earlierDate!, laterDate!)
     }
+
+    // MARK: - ratePill while the server reads the scale (wave 19)
+
+    func testRatePillIsDroppedWhileTheServerWithholdsAPace() {
+        let days = [WeightTrendDayDTO(day: "2026-09-08", rawKg: 82, trendKg: 82)]
+        XCTAssertNotNil(TrendsWeightCardLogic.ratePill(trend: trend(days: days), entries: sevenDayEntries, system: .metric))
+        XCTAssertNil(TrendsWeightCardLogic.ratePill(
+            trend: trend(days: days), entries: sevenDayEntries, system: .metric, withholdsLocalRate: true
+        ))
+        // Defaulted: an older server (no weightRead) keeps the pill exactly as before.
+        XCTAssertEqual(
+            TrendsWeightCardLogic.ratePill(trend: trend(days: days), entries: sevenDayEntries, system: .metric, withholdsLocalRate: false),
+            TrendsWeightCardLogic.ratePill(trend: trend(days: days), entries: sevenDayEntries, system: .metric)
+        )
+    }
 }

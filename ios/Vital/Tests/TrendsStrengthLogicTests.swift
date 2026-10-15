@@ -361,4 +361,238 @@ final class TrendsStrengthLogicTests: XCTestCase {
         XCTAssertFalse(TrendsGoalOrdering.leadsWithStrength(for: "endurance"))
         XCTAssertFalse(TrendsGoalOrdering.leadsWithStrength(for: "general"))
     }
+
+    // MARK: - Headline lift (the server's rule, lib/liftChange.ts rankLifts / pickHeadlineLift)
+
+    /// 9 consecutive Mondays ending at the current week: indices 0...7 are the 8
+    /// COMPLETED weeks the server ranks over (2026-08-10 ... 2026-09-28), index 8
+    /// is the current week (2026-10-05, the server's anchor).
+    private var rankKeys: [String] { TrendsStrengthLogic.weekKeys(endingAt: today, count: 9) }
+
+    private func counted(_ week: String, e1rm: Double? = 100, sessions: Int?, sets: Int = 3) -> WorkoutWeeklyStatDTO {
+        WorkoutWeeklyStatDTO(
+            weekStart: week, bestEstimatedOneRepMaxKg: e1rm, volumeKg: 0,
+            totalSets: sets, totalReps: sets * 5, sessions: sessions, topLoadKg: nil
+        )
+    }
+
+    /// One stat per index of `rankKeys`, each with `sessions` sessions.
+    private func trained(_ weeks: [Int], sessions: Int?, e1rm: Double = 100, sets: Int = 3) -> [WorkoutWeeklyStatDTO] {
+        weeks.map { counted(rankKeys[$0], e1rm: e1rm, sessions: sessions, sets: sets) }
+    }
+
+    private func rank(_ exercises: [String: [WorkoutWeeklyStatDTO]]) -> [String] {
+        TrendsStrengthLogic.rankedLiftKeys(in: WorkoutSummaryResponse(days: 84, exercises: exercises), today: today)
+    }
+
+    func testRankOrdersByCompletedWeekSessionsNotBySetsOrChange() {
+        XCTAssertEqual(rank([
+            "squat": trained([1, 2, 3, 4, 5, 6, 7], sessions: 1, sets: 12), // 7 sessions, lots of sets
+            "bench press": trained([3, 4, 5, 6, 7], sessions: 2, sets: 2),   // 10 sessions
+            "deadlift": trained([7, 8], sessions: 3),                         // 3 completed + 3 this week (not counted)
+        ]), ["bench press", "squat", "deadlift"])
+    }
+
+    func testRankBreaksTiesByTheFixedMainLiftOrderThenAlphabetically() {
+        var exercises: [String: [WorkoutWeeklyStatDTO]] = [:]
+        for key in ["row", "overhead press", "pull up", "deadlift", "bench press", "squat", "curl"] {
+            exercises[key] = trained([6, 7], sessions: 1)
+        }
+        XCTAssertEqual(rank(exercises), ["squat", "bench press", "deadlift", "overhead press", "curl", "pull up", "row"])
+    }
+
+    /// The week being trained would make the ranking swing day to day, so only the
+    /// completed weeks count — until none has completed (a brand-new lifter).
+    func testRankIgnoresTheCurrentWeekUnlessNothingHasCompleted() {
+        XCTAssertEqual(rank([
+            "a lift": trained([5], sessions: 1) + trained([8], sessions: 9),
+            "b lift": trained([6, 7], sessions: 1),
+        ]), ["b lift", "a lift"])
+        XCTAssertEqual(rank([
+            "a lift": trained([8], sessions: 1),
+            "b lift": trained([8], sessions: 3),
+        ]), ["b lift", "a lift"])
+    }
+
+    func testRankCountsAWeekWithoutASessionCountAsOneAndDropsLiftsOutOfRotation() {
+        XCTAssertEqual(rank([
+            "squat": trained([5, 6, 7], sessions: nil),       // no counts: one per trained week = 3
+            "bench press": trained([6, 7], sessions: 2),       // 4
+            "old lift": trained([0], sessions: 9),             // last e1RM 9 weeks back: out of rotation
+        ]), ["bench press", "squat"])
+    }
+
+    func testHeadlineLiftIsTheMostTrainedLiftThatHasAFourWeekChange() {
+        let k = rankKeys
+        // Bench is the most trained (6 completed sessions) but started 3 weeks ago: no
+        // baseline 4 weeks back, so no change — the server skips it for squat.
+        let summary = WorkoutSummaryResponse(days: 84, exercises: [
+            "bench press": [6, 7, 8].map { counted(k[$0], sessions: 3) },
+            "squat": [3, 4, 7, 8].map { counted(k[$0], sessions: 1) },
+        ])
+        XCTAssertEqual(TrendsStrengthLogic.rankedLiftKeys(in: summary, today: today), ["bench press", "squat"])
+        XCTAssertEqual(TrendsStrengthLogic.headlineLift(in: summary, today: today), "squat")
+
+        let single = WorkoutSummaryResponse(days: 84, exercises: ["squat": [counted(k[8], sessions: 1)]])
+        XCTAssertNil(TrendsStrengthLogic.headlineLift(in: single, today: today), "no lift has a comparable change")
+    }
+
+    func testHeadlineLiftIsNeverPickedByTheBiggestChange() {
+        let k = rankKeys
+        let summary = WorkoutSummaryResponse(days: 84, exercises: [
+            "squat": [3, 4, 5, 6, 7, 8].map { counted(k[$0], e1rm: $0 >= 7 ? 102 : 100, sessions: 1) },  // +2 kg, 5 completed sessions
+            "bench press": [3, 4, 7, 8].map { counted(k[$0], e1rm: $0 >= 7 ? 130 : 100, sessions: 1) },   // +30 kg, 3 completed sessions
+        ])
+        XCTAssertEqual(TrendsStrengthLogic.headlineLift(in: summary, today: today), "squat")
+    }
+
+    func testCardFollowsTheServerRuleOnlyWhenTheStatsCarrySessions() throws {
+        let k = rankKeys
+        // Bench: one heavy-volume session a week (the old recent-sets rule puts it first).
+        // Squat: two lighter sessions a week (the server's most-trained-lift rule puts it first).
+        func exercises(withSessions: Bool) -> [String: [WorkoutWeeklyStatDTO]] {
+            [
+                "bench press": [3, 4, 5, 6, 7, 8].map { counted(k[$0], e1rm: 100 + Double($0), sessions: withSessions ? 1 : nil, sets: 9) },
+                "squat": [3, 4, 5, 6, 7, 8].map { counted(k[$0], e1rm: 100 + Double($0), sessions: withSessions ? 2 : nil, sets: 4) },
+            ]
+        }
+        let served = try XCTUnwrap(TrendsStrengthLogic.card(
+            from: WorkoutSummaryResponse(days: 84, exercises: exercises(withSessions: true)), system: .metric, today: today
+        ))
+        XCTAssertEqual(served.lifts.map(\.key), ["squat", "bench press"])
+        let older = try XCTUnwrap(TrendsStrengthLogic.card(
+            from: WorkoutSummaryResponse(days: 84, exercises: exercises(withSessions: false)), system: .metric, today: today
+        ))
+        XCTAssertEqual(older.lifts.map(\.key), ["bench press", "squat"], "an older server keeps the recent-sets order")
+    }
+
+    func testCardLeadsWithTheHeadlineLiftEvenWhenAMoreTrainedLiftHasNoChangeYet() throws {
+        let k = rankKeys
+        let summary = WorkoutSummaryResponse(days: 84, exercises: [
+            "bench press": [6, 7, 8].map { counted(k[$0], sessions: 3) },
+            "squat": [3, 4, 7, 8].map { counted(k[$0], sessions: 1) },
+        ])
+        let card = try XCTUnwrap(TrendsStrengthLogic.card(from: summary, system: .metric, today: today))
+        XCTAssertEqual(card.lifts.map(\.key), ["squat", "bench press"])
+        XCTAssertEqual(card.lifts.last?.status.text, "New")
+    }
+
+    // MARK: - Building back after a break (GoalProgressDTO.liftReturn)
+
+    private func liftReturn(
+        _ exercise: String = "squat", preBreakKg: Double = 142, pct: Int = 96, regained: Bool = false
+    ) -> GoalProgressDTO.LiftReturn {
+        GoalProgressDTO.LiftReturn(
+            exercise: exercise, name: exercise.capitalized, breakDays: 14, endedOn: "2026-09-20",
+            preBreakKg: preBreakKg, recentKg: 136.3, pct: pct, regained: regained
+        )
+    }
+
+    func testBuildingBackStatusIsNeutralAndNamesThePreBreakBest() {
+        XCTAssertEqual(
+            TrendsStrengthLogic.buildingBackStatus(liftReturn: liftReturn(), forLift: "squat", system: .metric),
+            TrendsStrengthLogic.Status(text: "Building back — 96% of pre-break 142\u{00A0}kg", tone: .neutral)
+        )
+        // 142 kg = 313 lb.
+        XCTAssertEqual(
+            TrendsStrengthLogic.buildingBackStatus(liftReturn: liftReturn(), forLift: "squat", system: .imperial)?.text,
+            "Building back — 96% of pre-break 313\u{00A0}lb"
+        )
+        // The key is matched the way the server normalises it.
+        XCTAssertNotNil(TrendsStrengthLogic.buildingBackStatus(liftReturn: liftReturn("Bench-Press"), forLift: "bench press", system: .metric))
+    }
+
+    func testBuildingBackStatusOnlyForTheRebuildingLiftAndOnlyUntilRegained() {
+        XCTAssertNil(TrendsStrengthLogic.buildingBackStatus(liftReturn: liftReturn(), forLift: "bench press", system: .metric))
+        XCTAssertNil(TrendsStrengthLogic.buildingBackStatus(liftReturn: liftReturn(regained: true), forLift: "squat", system: .metric))
+        XCTAssertNil(TrendsStrengthLogic.buildingBackStatus(liftReturn: nil, forLift: "squat", system: .metric))
+    }
+
+    /// A lift whose e1RM is 10 kg under four weeks ago would read "−10 kg" (amber) and
+    /// count as a header "to watch"; while the server says the user is rebuilding it
+    /// after a break, the card is neutral and the header does not count it.
+    func testCardShowsBuildingBackInsteadOfADeclineForTheReturningLift() throws {
+        let k = keys
+        let summary = WorkoutSummaryResponse(days: 84, exercises: [
+            "squat": [stat(k[2], e1rm: 110), stat(k[3], e1rm: 110), stat(k[6], e1rm: 100), stat(k[7], e1rm: 100)],
+            "bench press": [stat(k[2], e1rm: 80), stat(k[3], e1rm: 80), stat(k[6], e1rm: 90), stat(k[7], e1rm: 90)],
+        ])
+        func lifts(_ liftReturn: GoalProgressDTO.LiftReturn?) throws -> (squat: TrendsStrengthLogic.Lift, bench: TrendsStrengthLogic.Lift, moves: TrendsHeadline.GoalMoves) {
+            let card = try XCTUnwrap(TrendsStrengthLogic.card(from: summary, system: .metric, today: today, liftReturn: liftReturn))
+            let moves = TrendsHeadline.GoalMoves.make(goal: "muscle", weightTrend: nil, strength: card, weightAlreadyCounted: false)
+            return (
+                try XCTUnwrap(card.lifts.first { $0.key == "squat" }),
+                try XCTUnwrap(card.lifts.first { $0.key == "bench press" }),
+                moves
+            )
+        }
+
+        let without = try lifts(nil)
+        XCTAssertEqual(without.squat.status.text, "\u{2212}10\u{00A0}kg vs 4\u{00A0}wk ago")
+        XCTAssertEqual(without.squat.status.tone, .watch)
+        XCTAssertEqual(without.moves.liftsDown, 1)
+
+        let rebuilding = try lifts(liftReturn(preBreakKg: 110, pct: 91))
+        XCTAssertEqual(rebuilding.squat.status, TrendsStrengthLogic.Status(text: "Building back — 91% of pre-break 110\u{00A0}kg", tone: .neutral))
+        XCTAssertNil(rebuilding.squat.changeKg)
+        XCTAssertNil(rebuilding.squat.baselineKg)
+        XCTAssertEqual(rebuilding.squat.accessibilityLabel, "Squat, estimated one-rep max 100\u{00A0}kg, Building back — 91% of pre-break 110\u{00A0}kg")
+        XCTAssertEqual(rebuilding.moves.liftsDown, 0)
+        // The other lift is untouched, and so is everything once the pre-break best is regained.
+        XCTAssertEqual(rebuilding.bench, without.bench)
+        XCTAssertEqual(rebuilding.moves.liftsUp, 1)
+        let regained = try lifts(liftReturn(preBreakKg: 110, pct: 100, regained: true))
+        XCTAssertEqual(regained.squat, without.squat)
+        // A return about a lift not on the card changes nothing.
+        XCTAssertEqual(try lifts(liftReturn("deadlift")).squat, without.squat)
+    }
+
+    // MARK: - Weekly stat decoding (sessions / topLoadKg)
+
+    func testWeeklyStatDecodesSessionsAndTopLoadTolerantly() throws {
+        func decode(_ extra: String) throws -> WorkoutWeeklyStatDTO {
+            let json = "{\"weekStart\":\"2026-10-05\",\"bestEstimatedOneRepMaxKg\":163.3,\"volumeKg\":2100,\"totalSets\":3,\"totalReps\":15\(extra)}"
+            return try JSONDecoder().decode(WorkoutWeeklyStatDTO.self, from: Data(json.utf8))
+        }
+        let full = try decode(",\"sessions\":2,\"topLoadKg\":140")
+        XCTAssertEqual(full.sessions, 2)
+        XCTAssertEqual(full.topLoadKg, 140)
+        XCTAssertEqual(full.weekStart, "2026-10-05")
+        XCTAssertEqual(full.bestEstimatedOneRepMaxKg, 163.3)
+        XCTAssertEqual(full.totalReps, 15)
+
+        // Older payloads decode exactly as before.
+        let older = try decode("")
+        XCTAssertNil(older.sessions)
+        XCTAssertNil(older.topLoadKg)
+        XCTAssertEqual(older, WorkoutWeeklyStatDTO(weekStart: "2026-10-05", bestEstimatedOneRepMaxKg: 163.3, volumeKg: 2100, totalSets: 3, totalReps: 15))
+        let nulls = try decode(",\"sessions\":null,\"topLoadKg\":null")
+        XCTAssertNil(nulls.sessions)
+        XCTAssertNil(nulls.topLoadKg)
+
+        // Wrong-typed or nonsensical additive values drop only themselves.
+        let wrong = try decode(",\"sessions\":\"two\",\"topLoadKg\":\"heavy\"")
+        XCTAssertNil(wrong.sessions)
+        XCTAssertNil(wrong.topLoadKg)
+        XCTAssertEqual(wrong.totalSets, 3)
+        XCTAssertEqual(try decode(",\"sessions\":2.0").sessions, 2)
+        XCTAssertNil(try decode(",\"sessions\":-1").sessions)
+
+        // A bodyweight-only week has no e1RM; the original required fields stay required.
+        XCTAssertNil(try JSONDecoder().decode(
+            WorkoutWeeklyStatDTO.self,
+            from: Data(#"{"weekStart":"2026-10-05","bestEstimatedOneRepMaxKg":null,"volumeKg":0,"totalSets":2,"totalReps":20}"#.utf8)
+        ).bestEstimatedOneRepMaxKg)
+        XCTAssertThrowsError(try JSONDecoder().decode(
+            WorkoutWeeklyStatDTO.self, from: Data(#"{"weekStart":"2026-10-05","sessions":2}"#.utf8)
+        ))
+    }
+
+    func testSummaryResponseCarriesSessionCountsPerWeek() throws {
+        let json = #"{"days":84,"exercises":{"squat":[{"weekStart":"2026-10-05","bestEstimatedOneRepMaxKg":163.3,"volumeKg":2100,"totalSets":3,"totalReps":15,"sessions":2,"topLoadKg":140}]}}"#
+        let summary = try JSONDecoder().decode(WorkoutSummaryResponse.self, from: Data(json.utf8))
+        XCTAssertEqual(summary.exercises["squat"]?.first?.sessions, 2)
+        XCTAssertTrue(TrendsStrengthLogic.carriesSessionCounts(summary))
+        XCTAssertFalse(TrendsStrengthLogic.carriesSessionCounts(WorkoutSummaryResponse(days: 84, exercises: exercises())))
+    }
 }

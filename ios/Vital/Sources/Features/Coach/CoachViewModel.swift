@@ -986,7 +986,12 @@ final class CoachViewModel: ObservableObject {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingCharacters(in: CharacterSet(charactersIn: "."))
         guard !headline.isEmpty else { return nil }
-        return "Goal check-in: \(headline). \(invite)"
+        // A headline that already ends a sentence ("Congratulations!", a clipped
+        // "…") must not get a period on top of it ("Congratulations!.").
+        let endsSentence = headline.last.map { ".!?…".contains($0) } ?? false
+        return endsSentence
+            ? "Goal check-in: \(headline) \(invite)"
+            : "Goal check-in: \(headline). \(invite)"
     }
 
     /// "about 2 weeks ahead of your Dec 30 target" / "right on pace for your
