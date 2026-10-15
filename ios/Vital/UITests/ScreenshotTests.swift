@@ -33,6 +33,11 @@ import CoreGraphics
 /// `Vital` scheme's fast unit-test pass (`xcodebuild test -scheme Vital`).
 final class ScreenshotTests: XCTestCase {
 
+    /// The app's frame, read once per launch (see `launch`). Each XCUI property
+    /// read is a snapshot query, so helpers use `screen(app)` rather than
+    /// re-reading `app.frame` inside their polling and scroll loops.
+    private var screenFrame: CGRect = .zero
+
     override func setUpWithError() throws {
         // Keep going past an assertion failure — a missed screen shouldn't
         // abort the rest of the scenario, and the screenshot right after a
@@ -156,7 +161,14 @@ final class ScreenshotTests: XCTestCase {
         }
         app.launchArguments = args
         app.launch()
+        screenFrame = app.frame
         return app
+    }
+
+    /// The frame cached by `launch`, or a live `app.frame` read when the cache
+    /// is empty (the frame was still zero at launch).
+    private func screen(_ app: XCUIApplication) -> CGRect {
+        screenFrame.isEmpty ? app.frame : screenFrame
     }
 
     private func capture(_ app: XCUIApplication, name: String) {
@@ -185,14 +197,14 @@ final class ScreenshotTests: XCTestCase {
     /// exists, else 80% of the screen height.
     private func bottomChromeLimit(app: XCUIApplication) -> CGFloat {
         let tabBar = app.tabBars.firstMatch
-        return tabBar.exists ? tabBar.frame.minY - 8 : app.frame.maxY * 0.8
+        return tabBar.exists ? tabBar.frame.minY - 8 : screen(app).maxY * 0.8
     }
 
     /// True when `element`'s frame sits fully between the top margin (status
     /// bar, 54pt) and the bottom chrome (see `bottomChromeLimit`).
     private func isClearOfChrome(_ element: XCUIElement, app: XCUIApplication) -> Bool {
         let frame = element.frame
-        return frame.minY >= app.frame.minY + Self.topChromeMargin
+        return frame.minY >= screen(app).minY + Self.topChromeMargin
             && frame.maxY <= bottomChromeLimit(app: app)
     }
 
@@ -242,25 +254,29 @@ final class ScreenshotTests: XCTestCase {
         return isSafelyHittable(element, app: app) && isClearOfChrome(element, app: app)
     }
 
-    /// `isHittable` records a test failure ("Activation point invalid") instead of
-    /// returning false when the element's frame is empty or entirely off-screen —
-    /// e.g. mid expand/collapse animation. Check the frame first, then ask.
-    /// The frame must at least partly overlap the screen, because XCUITest can then pick a hit point inside the visible part.
-    private func isSafelyHittable(_ element: XCUIElement, app: XCUIApplication) -> Bool {
-        guard element.exists else { return false }
+    /// The element's frame when it is safely hittable, else nil. `isHittable` records a test
+    /// failure ("Activation point invalid") instead of returning false when the frame is empty
+    /// or entirely off-screen, so the frame is checked first. The frame must at least partly
+    /// overlap the screen, because XCUITest can then pick a hit point inside the visible part.
+    /// Each XCUI property read is a snapshot query, so each is read once.
+    private func safeHittableFrame(_ element: XCUIElement, app: XCUIApplication) -> CGRect? {
+        guard element.exists else { return nil }
         let frame = element.frame
-        let visible = frame.intersection(app.frame)
-        guard !frame.isEmpty, !visible.isNull, visible.width > 0, visible.height > 0 else { return false }
-        return element.isHittable
+        let visible = frame.intersection(screen(app))
+        guard !frame.isEmpty, !visible.isNull, visible.width > 0, visible.height > 0, element.isHittable else { return nil }
+        return frame
+    }
+
+    private func isSafelyHittable(_ element: XCUIElement, app: XCUIApplication) -> Bool {
+        safeHittableFrame(element, app: app) != nil
     }
 
     /// True when `element` is hittable, fully inside the app window, and
     /// clear of the bottom chrome. No extra top margin, so sheet / nav-bar
     /// buttons (Done / Close, y of roughly 60-110) qualify.
     private func isDirectlyTappable(_ element: XCUIElement, app: XCUIApplication) -> Bool {
-        guard element.exists, isSafelyHittable(element, app: app) else { return false }
-        let frame = element.frame
-        return app.frame.contains(frame) && frame.maxY <= bottomChromeLimit(app: app)
+        guard let frame = safeHittableFrame(element, app: app) else { return false }
+        return screen(app).contains(frame) && frame.maxY <= bottomChromeLimit(app: app)
     }
 
     /// Taps `element` once it is safely tappable — never a bare `.tap()` on a
