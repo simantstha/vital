@@ -13,6 +13,11 @@
  *
  *  - weightPace — ordinary least-squares slope over the raw weigh-ins of the
  *    last 21 days; needs 6 weigh-ins spanning 14 days, else there is no pace.
+ *  - bridgedPace — weightPace, except that for up to 7 days after a valid pace
+ *    the window widens to 28 days, so a gap in weigh-ins that slides the old
+ *    ones out of the 21 days does not drop a settled pace back to an early read.
+ *  - tooFastLoss — the "losing too fast" call, with hysteresis: entered only when
+ *    the pace now AND the pace a week ago are over 1%/wk, left only below 0.9%.
  *  - weighInReturn — a gap of 7+ days without a weigh-in, and how many
  *    weigh-ins have come back since.
  *  - rawPlateau — three flat weeks of raw weekly means.
@@ -36,6 +41,16 @@ export const PACE_MIN_SPAN_DAYS = 14;
 export const PACE_SETTLE_DAYS = 21;
 /** The pace is checked again as of this many days ago, from the same readings; ahead/behind needs both to agree. */
 export const PACE_RECHECK_DAYS = 7;
+/** A valid pace within this many days back keeps a pace alive after a gap in weigh-ins (see bridgedPace)... */
+export const PACE_BRIDGE_LOOKBACK_DAYS = 7;
+/** ...by fitting the line over this many days instead of PACE_WINDOW_DAYS. */
+export const PACE_BRIDGE_WINDOW_DAYS = 28;
+/** Losing too fast: enter only when the pace now and the pace PACE_RECHECK_DAYS ago are both over this % of bodyweight per week... */
+export const TOO_FAST_ENTER_PCT = 1.0;
+/** ...and, once in, stay in until the pace falls below this (a pace between the two keeps the call, so it cannot flip day to day). */
+export const TOO_FAST_EXIT_PCT = 0.9;
+/** tooFastLoss walks the weigh-ins of this many days up to the day asked: a call older than that is re-made from the pace anyway. */
+export const TOO_FAST_WALK_DAYS = 56;
 /** An ETA within this many days of the target date reads as on pace — the one margin the card, the opener and iOS share. */
 export const ON_PACE_MARGIN_DAYS = 7;
 
@@ -83,19 +98,27 @@ export interface WeightPace {
   spanDays: number;
   oldestDay: string;
   newestDay: string;
+  /** Days the line was fitted over: PACE_WINDOW_DAYS, or PACE_BRIDGE_WINDOW_DAYS while bridging a gap. */
+  windowDays: number;
 }
 
 /**
  * Least-squares pace over the raw weigh-ins in the 21 days up to and including
- * `asOfDay`. Null — "not enough data for a pace" — below 6 weigh-ins or under
- * 14 days of span. `days` is one raw reading per day (computeWeightTrend's
- * `days`), any order.
+ * `asOfDay` (`windowDays` widens it; bridgedPace is the one caller that does).
+ * Null — "not enough data for a pace" — below 6 weigh-ins or under 14 days of
+ * span. `days` is one raw reading per day (computeWeightTrend's `days`), any order.
  */
-export function weightPace(days: ReadonlyArray<RawWeightDay>, asOfDay: string): WeightPace | null {
+export function weightPace(
+  days: ReadonlyArray<RawWeightDay>,
+  asOfDay: string,
+  windowDays = PACE_WINDOW_DAYS,
+): WeightPace | null {
   const asOf = dayNumber(asOfDay);
+  // ISO day strings sort as dates: the window is cut on them first so only its handful of readings are converted.
+  const oldest = addDays(asOfDay, -(windowDays - 1));
   const pts = days
+    .filter(d => d.day <= asOfDay && d.day >= oldest && Number.isFinite(d.rawKg))
     .map(d => ({ day: d.day, x: dayNumber(d.day) - asOf, y: d.rawKg }))
-    .filter(p => p.x <= 0 && p.x > -PACE_WINDOW_DAYS && Number.isFinite(p.y))
     .sort((a, b) => a.x - b.x);
   if (pts.length < PACE_MIN_WEIGH_INS) return null;
   const first = pts[0];
@@ -124,7 +147,69 @@ export function weightPace(days: ReadonlyArray<RawWeightDay>, asOfDay: string): 
     spanDays,
     oldestDay: first.day,
     newestDay: last.day,
+    windowDays,
   };
+}
+
+/**
+ * The pace the card states. It is weightPace over 21 days — except right after a
+ * gap in weigh-ins: when the 21 days no longer hold a pace but one existed on one
+ * of the last PACE_BRIDGE_LOOKBACK_DAYS days, the line is fitted over 28 days
+ * instead, so the weigh-ins from before the gap keep carrying a pace while the
+ * new ones build up. Without it the pace dropped to "not enough weigh-ins" for a
+ * few days a week after every gap, and back again.
+ */
+export function bridgedPace(days: ReadonlyArray<RawWeightDay>, asOfDay: string): WeightPace | null {
+  const direct = weightPace(days, asOfDay);
+  if (direct != null) return direct;
+  for (let back = 1; back <= PACE_BRIDGE_LOOKBACK_DAYS; back++) {
+    if (weightPace(days, addDays(asOfDay, -back)) != null) return weightPace(days, asOfDay, PACE_BRIDGE_WINDOW_DAYS);
+  }
+  return null;
+}
+
+/** The loss a pace shows, as the % of bodyweight per week it prints (2 decimals); 0 when the scale is not falling. */
+export function paceLossPct(pace: WeightPace): number {
+  return pace.kgPerWeek < 0 ? Math.round(Math.abs(pace.pctPerWeek) * 100) / 100 : 0;
+}
+
+/**
+ * Whether the loss is "too fast" as of `asOfDay`, computed statelessly by walking
+ * the weigh-in days oldest to newest (like weightReachedRead). It is entered only
+ * when the pace on a day AND the pace a week earlier both exceed TOO_FAST_ENTER_PCT,
+ * and once in it ends only when the pace falls below TOO_FAST_EXIT_PCT, so a pace
+ * that wobbles around 1.0% a week reads as one steady call instead of a flip every
+ * few days. A gap of WEIGH_IN_GAP_DAYS+ without a weigh-in starts over, and
+ * `settledFrom` (the goal's first day with a settled pace) keeps the early weeks'
+ * water loss from starting the call.
+ */
+export function tooFastLoss(
+  days: ReadonlyArray<RawWeightDay>,
+  asOfDay: string,
+  opts: { settledFrom?: string | null } = {},
+): boolean {
+  const sorted = days
+    .filter(d => d.day <= asOfDay && Number.isFinite(d.rawKg))
+    .sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0));
+  const walkFrom = addDays(asOfDay, -(TOO_FAST_WALK_DAYS - 1));
+  let on = false;
+  let prevDay: string | null = null;
+  for (const d of sorted) {
+    if (d.day < walkFrom) continue;
+    if (prevDay != null && dayNumber(d.day) - dayNumber(prevDay) - 1 >= WEIGH_IN_GAP_DAYS) on = false;
+    prevDay = d.day;
+    if (opts.settledFrom != null && d.day < opts.settledFrom) continue;
+    const now = bridgedPace(sorted, d.day);
+    if (now == null) continue;
+    const nowPct = paceLossPct(now);
+    if (on) {
+      if (nowPct < TOO_FAST_EXIT_PCT) on = false;
+    } else if (nowPct > TOO_FAST_ENTER_PCT) {
+      const then = bridgedPace(sorted, addDays(d.day, -PACE_RECHECK_DAYS));
+      if (then != null && paceLossPct(then) > TOO_FAST_ENTER_PCT) on = true;
+    }
+  }
+  return on;
 }
 
 /** Mean of the raw weigh-ins in the `windowDays` days up to and including `endDay`; null with none. */
@@ -133,11 +218,8 @@ export function meanOver(
   endDay: string,
   windowDays = 7,
 ): { meanKg: number; n: number } | null {
-  const end = dayNumber(endDay);
-  const inWindow = days.filter(d => {
-    const x = dayNumber(d.day) - end;
-    return x <= 0 && x > -windowDays;
-  });
+  const oldest = addDays(endDay, -(windowDays - 1));
+  const inWindow = days.filter(d => d.day <= endDay && d.day >= oldest);
   if (inWindow.length === 0) return null;
   return { meanKg: inWindow.reduce((s, d) => s + d.rawKg, 0) / inWindow.length, n: inWindow.length };
 }

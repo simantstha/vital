@@ -19,12 +19,14 @@ import { trendSpanDays } from '../weightTrend';
 import {
   PACE_RECHECK_DAYS,
   PACE_SETTLE_DAYS,
+  TOO_FAST_ENTER_PCT,
   addDays,
+  bridgedPace,
   dayNumber,
   isReturning,
   rawPlateau,
+  tooFastLoss,
   weighInReturn,
-  weightPace,
 } from '../weightPace';
 import { formatWeight } from '../metricFormat';
 import type { UnitSystem } from '../units';
@@ -34,8 +36,11 @@ import type { UnitSystem } from '../units';
 /** A weekly trend rate needs at least this many calendar days of trend span before it's quoted at all. */
 export const RATE_RELIABLE_MIN_SPAN_DAYS = 7;
 
-/** too_fast_loss fires once the 7-day rate exceeds this % of current trend weight, per week. */
-export const TOO_FAST_LOSS_PCT_PER_WEEK = 1.0;
+/**
+ * too_fast_loss fires once the pace (and the pace a week earlier) exceeds this % of bodyweight per week, and
+ * stays on until it falls below 0.9% (lib/weightPace.ts tooFastLoss) — the same call the goal card makes.
+ */
+export const TOO_FAST_LOSS_PCT_PER_WEEK = TOO_FAST_ENTER_PCT;
 /** Above this %/wk (or sustained — see below), too_fast_loss escalates to 'watch'. */
 export const TOO_FAST_LOSS_WATCH_PCT_PER_WEEK = 1.5;
 /** "Sustained" for too_fast_loss's watch escalation: both the 7d AND 30d rates exceed this %/wk. */
@@ -170,7 +175,9 @@ function goalAgeDays(todayKey: string | undefined, trend: WeightTrendResult, goa
 // Called off the PACE (lib/weightPace.ts: a least-squares line through the raw
 // weigh-ins of the last 21 days), the same rate the goal card quotes — never the
 // lagging smoothed trend, whose 7-day slope across a gap of missed weigh-ins
-// is a different, wrong number.
+// is a different, wrong number. And with the card's hysteresis (tooFastLoss):
+// entered only when the pace now and a week ago are both over 1%/wk, left only
+// below 0.9%, so the coach and the card never disagree about a pace near 1%.
 
 function assessTooFastLoss(
   trend: WeightTrendResult,
@@ -185,16 +192,17 @@ function assessTooFastLoss(
   if (isReturning(weighInReturn(trend.days, goalStartDay ?? null))) return null;
 
   const anchor = trend.days[trend.days.length - 1].day;
-  const pace = weightPace(trend.days, anchor);
+  const settledFrom = goalStartDay && /^\d{4}-\d{2}-\d{2}$/.test(goalStartDay) ? addDays(goalStartDay, PACE_SETTLE_DAYS - 1) : null;
+  if (!tooFastLoss(trend.days, anchor, { settledFrom })) return null;
+  const pace = bridgedPace(trend.days, anchor);
   if (pace == null || pace.kgPerWeek >= 0) return null; // no pace, or not losing
 
   // Judged on the figure that is printed (2 decimals), so "too fast — 1%" can never appear.
   const pct = Math.abs(pace.pctPerWeek);
-  if (round2(pct) <= TOO_FAST_LOSS_PCT_PER_WEEK) return null;
 
   // Sustained: the pace one week earlier, from the same readings, was also past the ceiling.
-  const earlier = weightPace(trend.days, addDays(anchor, -PACE_RECHECK_DAYS));
-  const sustained = earlier != null && earlier.kgPerWeek < 0 && Math.abs(earlier.pctPerWeek) > TOO_FAST_LOSS_SUSTAINED_PCT_PER_WEEK;
+  const earlier = bridgedPace(trend.days, addDays(anchor, -PACE_RECHECK_DAYS));
+  const sustained = earlier != null && earlier.kgPerWeek < 0 && round2(Math.abs(earlier.pctPerWeek)) > TOO_FAST_LOSS_SUSTAINED_PCT_PER_WEEK;
 
   const severity: WeightSignalSeverity =
     pct > TOO_FAST_LOSS_WATCH_PCT_PER_WEEK || sustained ? 'watch' : 'info';
@@ -393,7 +401,7 @@ export function formatWeightSignalsSection(
     const trendStr = formatWeight(last.trendKg, unitSystem);
     const age = weighInAgeDays(trend as WeightTrendResult, todayKey);
     // The rate is the shared pace (a line through 3 weeks of raw weigh-ins), and only while the newest one is recent.
-    const pace = age <= RATE_QUOTE_MAX_WEIGH_IN_AGE_DAYS ? weightPace(trend.days as WeightTrendDay[], last.day) : null;
+    const pace = age <= RATE_QUOTE_MAX_WEIGH_IN_AGE_DAYS ? bridgedPace(trend.days as WeightTrendDay[], last.day) : null;
     let rateStr: string;
     if (age > RATE_QUOTE_MAX_WEIGH_IN_AGE_DAYS) {
       rateStr = `last weigh-in ${age} days ago — do not quote a weekly rate`;

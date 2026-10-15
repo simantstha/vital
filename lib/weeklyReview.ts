@@ -20,7 +20,7 @@
 
 import type { GoalKind, GoalLiftReturn, GoalLongRunProgress, GoalProgressBudget, GoalProgressIntakeDay, GoalVerdict, DayValue } from './goalProgress';
 import { KG_TO_LB, isRunningWorkoutType, raceLabel } from './goalProgress';
-import { PARTIAL_LOG_KCAL_THRESHOLD, TOO_FAST_LOSS_PCT_PER_WEEK } from './brain/weightSignals';
+import { PARTIAL_LOG_KCAL_THRESHOLD } from './brain/weightSignals';
 import { computeWeightTrend, type WeightReading } from './weightTrend';
 import { dayNumber, rawPlateau } from './weightPace';
 import { localDayKey, weekDayKeys, weekStartKeyForDay } from './localDay';
@@ -100,7 +100,7 @@ export const WEIGHT_TREND_STAT_LABEL = 'Trend change';
 const MIN_WEIGH_INS_FOR_MEAN = 2;
 /** A review may rest on the weight stat alone when the reviewed week had at least this many weigh-ins. */
 const MIN_WEIGH_INS_WEIGHT_ONLY = 3;
-/** A reached goal: the weekly average within this many kg of the target is "inside your target range" (goalProgress HOLDING_NEAR_TARGET_KG). */
+/** A reached goal: the weekly average within this many kg of the target is "within 1 kg of 84 kg" (goalProgress HOLDING_NEAR_TARGET_KG). */
 const HOLDING_RANGE_KG = 1;
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -450,6 +450,16 @@ function isUnderTarget(r: ReachedWeek): boolean {
   return r.targetKg != null && r.meanKg != null && r.targetKg - r.meanKg > HOLDING_RANGE_KG;
 }
 
+/** Weight loss: the goal card's verdict says the loss pace (21-day line, with the card's hysteresis) is past the ceiling. */
+function isTooFastWeek(input: WeeklyReviewInput): boolean {
+  return input.goal === 'weight_loss' && input.verdict === 'too_fast';
+}
+
+/** Weight loss: the goal card's verdict says the scale is not moving toward the target (behind pace or stalled). */
+function isTooSlowWeek(input: WeeklyReviewInput): boolean {
+  return input.goal === 'weight_loss' && (input.verdict === 'behind' || input.verdict === 'stalled');
+}
+
 function weightCandidate(input: WeeklyReviewInput, week: Week, prevWeek: Week): Candidate | null {
   const change = weightChange(input, week, prevWeek);
   if (!change) return null;
@@ -460,12 +470,12 @@ function weightCandidate(input: WeeklyReviewInput, week: Week, prevWeek: Week): 
   const isMean = change.basis === 'mean';
 
   let tone: ReviewTone = 'neutral';
-  const pct = change.endKg > 0 ? (deltaKg / change.endKg) * 100 : 0;
   if (input.goal === 'weight_loss') {
-    // A held target and a flat plateau are not a "win" on the scale.
+    // The weekly change is a neutral stat: one week-to-week move in the mean is noise, not a pace. "Too fast" and
+    // "too slow" are the goal card's calls (the 21-day pace, input.verdict) and nothing else.
     if (reachedWeek(input, week) != null || isPlateauWeek(input, week)) tone = 'neutral';
-    else if (deltaKg <= -0.05) tone = -pct > TOO_FAST_LOSS_PCT_PER_WEEK ? 'watch' : 'good';
-    else if (deltaKg >= 0.2) tone = 'watch';
+    else if (deltaKg <= -0.05) tone = isTooFastWeek(input) ? 'watch' : 'good';
+    else if (deltaKg >= 0.2) tone = isTooSlowWeek(input) ? 'watch' : 'neutral';
   } else if (input.goal === 'muscle') {
     // Weight gain is a win for a lifter who trained that week; in a week without a session it is only a number.
     if (deltaKg > 0.05) tone = weekSessionCount(input, week) > 0 ? 'good' : 'neutral';
@@ -484,7 +494,7 @@ function weightCandidate(input: WeeklyReviewInput, week: Week, prevWeek: Week): 
   if (tone === 'good') cand.win = `${subject} is ${input.goal === 'muscle' ? 'up' : 'down'} ${weightText(input, Math.abs(deltaKg))}.`;
   if (tone === 'watch') {
     cand.slip = input.goal === 'weight_loss' && deltaKg < 0
-      ? `${isMean ? 'Your weekly average dropped' : 'Weight dropped'} ${weightText(input, Math.abs(deltaKg))} — faster than is comfortable to sustain.`
+      ? 'Your 3-week loss pace is faster than is comfortable to sustain.'
       : `${subject} moved ${rounded > 0 ? 'up' : 'down'} ${weightText(input, Math.abs(deltaKg))}, away from your goal.`;
   }
   return cand;
@@ -1061,8 +1071,10 @@ function weekendGap(input: WeeklyReviewInput, week: Week): number | null {
  *                 else tough; needs 3+ logged days). The weight-trend stat
  *                 moving the wrong way (or losing too fast) pulls it down a
  *                 level. With no usable budget days the weight direction
- *                 alone rates it (down at a sane pace good, flat mixed, wrong
- *                 way / too fast tough).
+ *                 alone rates it (down at a sane pace good, otherwise mixed).
+ *                 "Too fast" and "wrong way" are the goal card's calls (its
+ *                 verdict: the 21-day pace), never one week-to-week move in the
+ *                 weekly mean, and the weight alone never makes a week tough.
  *  - endurance:   the week against ITS plan (lib/enduranceProgression.ts
  *                 `enduranceWeekPlan`, the same plan the goal card shows while
  *                 the week is under way; the race phase is read on the week's
@@ -1188,10 +1200,13 @@ function weightLossWeekAssessment(input: WeeklyReviewInput, week: Week, prevWeek
     // Budget days are the gap while they fall short — unless the weight flag (losing too fast) is what pulled the week
     // down, and the weight trend when it alone pulled a good budget week down.
     const gap: WeekGap | null = level !== 'good' && !tooFast ? { kind: 'budget', inBudget: days.hit, logged: days.logged } : weightGap(input, week, prevWeek);
-    return rated(weightTone === 'watch' ? levelDown(level) : level, gap);
+    // A too-fast loss (the card's call) lowers a good week to mixed, never further: the budget days already rate the rest.
+    const lowered = weightTone !== 'watch' ? level : tooFast && level !== 'good' ? level : levelDown(level);
+    return rated(lowered, gap);
   }
   if (weightTone == null) return UNRATED;
-  return rated(weightTone === 'good' ? 'good' : weightTone === 'watch' ? 'tough' : 'mixed', weightGap(input, week, prevWeek));
+  // The weight alone never makes a week tough: a flag from the card is a mixed week, a loss at a sane pace a good one.
+  return rated(weightTone === 'good' ? 'good' : 'mixed', weightGap(input, week, prevWeek));
 }
 
 /**
@@ -1361,7 +1376,10 @@ function reachedWin(input: WeeklyReviewInput, week: Week): string | null {
       ? `You reached your ${weightText(input, r.targetKg)} target — weekly average ${weightTextFixed(input, r.meanKg)}.`
       : `You reached your target — weekly average ${weightTextFixed(input, r.meanKg)}.`;
   }
-  return isUnderTarget(r) ? null : `Holding at ${weightTextFixed(input, r.meanKg)}, inside your target range.`;
+  if (isUnderTarget(r)) return null;
+  return r.targetKg != null
+    ? `Holding at ${weightTextFixed(input, r.meanKg)}, within ${weightText(input, HOLDING_RANGE_KG)} of ${weightText(input, r.targetKg)}.`
+    : `Holding at ${weightTextFixed(input, r.meanKg)}.`;
 }
 
 /** The Win line of a taper / race / recovery week that stayed on its plan; null otherwise. */
@@ -1759,12 +1777,31 @@ function plateauTip(input: WeeklyReviewInput): string {
   return `Plateaus are common and often water: keep ${keep.length > 0 ? keep.join(' and ') : 'your routine'}; if the scale is still flat in 2 weeks, trim ~${withUnit(150, 'kcal')} a day or add two 30-minute walks.`;
 }
 
-/** A weight-loss week with the target met: switch to maintenance first, then keep the weight honest. */
+/** A calorie target within this many kcal of the formula maintenance estimate (or above it) is already a maintenance budget. */
+const MAINTENANCE_BUDGET_MARGIN_KCAL = 100;
+
+/**
+ * True when the calorie target is already at maintenance (within a hair of the formula TDEE or above it), so "switch to
+ * maintenance" would be advice already taken. False when it is still a deficit budget or the formula estimate is unknown:
+ * a fat-loss goal that is reached but not switched is the normal case, and it must not be told it is on maintenance.
+ */
+function onMaintenanceBudget(input: WeeklyReviewInput): boolean {
+  const target = input.budget?.targetKcal;
+  const tdee = input.budget?.formulaTdee;
+  return target != null && tdee != null && target >= tdee - MAINTENANCE_BUDGET_MARGIN_KCAL;
+}
+
+/** A weight-loss week with the target met: switch to maintenance first (unless the budget already is), then keep the weight honest. */
 function reachedTips(input: WeeklyReviewInput): string[] {
+  const maintenance = onMaintenanceBudget(input);
   return [
-    'Switch to maintenance in Goals so your calorie target stops pushing you lower.',
+    maintenance
+      ? 'Your calorie target is already at maintenance — keep it there and the weight should hold.'
+      : 'Switch to maintenance in Goals so your calorie target stops pushing you lower.',
     `Keep weighing in a few mornings a week; if your average drifts ${weightText(input, HOLDING_RANGE_KG)} above your target, that is your cue to act.`,
-    'Ready for more? Set a new target in Goals, or stay on maintenance and enjoy holding here.',
+    maintenance
+      ? 'Ready for more? Set a new target in Goals, or stay on maintenance and enjoy holding here.'
+      : 'Ready for more? Set a new target in Goals, or switch to maintenance and enjoy holding here.',
   ];
 }
 

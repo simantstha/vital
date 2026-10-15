@@ -143,7 +143,11 @@ export function formatGoalProgressLines(gp: GoalProgress, units: UnitSystem): st
     // The trend is smoothed (it lags the scale by about ten days); the scale and weekly average are what the user sees.
     nowBits.push(`trend ${wt(gp.current.weightKg, units)}${read?.scaleKg != null ? ' (smoothed)' : ''}`);
     if (gp.current.startWeightKg != null && gp.current.changeKg != null) {
-      nowBits.push(`${signedWt(gp.current.changeKg, units)} since start at ${wt(gp.current.startWeightKg, units)}`);
+      // A fat-loss goal measures progress from ONE weight (the weekly average, else the latest scale reading), not the trend.
+      const basis = gp.goal === 'weight_loss' && read?.scaleKg != null
+        ? ` (${read.weekMeanKg != null ? 'weekly average' : 'latest scale reading'})`
+        : '';
+      nowBits.push(`${signedWt(gp.current.changeKg, units)} since start at ${wt(gp.current.startWeightKg, units)}${basis}`);
     }
   }
   if (read?.scaleKg != null) {
@@ -152,7 +156,8 @@ export function formatGoalProgressLines(gp: GoalProgress, units: UnitSystem): st
   if (gp.ratePerWeek.kg != null) {
     const pct = gp.ratePerWeek.pctBodyweight != null ? ` (${gp.ratePerWeek.pctBodyweight}% bw)` : '';
     // The pace is a line through the raw weigh-ins of the last 3 weeks (lib/weightPace.ts) for a weight-loss goal.
-    nowBits.push(`rate ${signedWt(gp.ratePerWeek.kg, units, 2)}/wk${pct}${gp.goal === 'weight_loss' ? ' over the last 3 weeks of weigh-ins' : ''}`);
+    const weeks = Math.round((read?.paceWindowDays ?? 21) / 7);
+    nowBits.push(`rate ${signedWt(gp.ratePerWeek.kg, units, 2)}/wk${pct}${gp.goal === 'weight_loss' ? ` over the last ${weeks} weeks of weigh-ins` : ''}`);
   }
   if (gp.distance?.thisWeekKm != null) nowBits.push(plainSpaces(gp.distance.text));
   if (gp.eta) nowBits.push(`ETA ${gp.eta}`);
@@ -203,7 +208,13 @@ export function formatGoalProgressLines(gp: GoalProgress, units: UnitSystem): st
     lines.push('- The user is back after a gap in weigh-ins: welcome them back and keep weighing in; do not call the pace too fast or behind until 3 weigh-ins are back.');
   }
   if (read?.state === 'plateau') {
-    lines.push('- Plateau on the raw weekly averages (flat for 3 weeks): often water — not a failure. Keep the plan; only if still flat in 2 weeks suggest ~150 kcal less a day or two 30-minute walks.');
+    if (read.intake?.low) {
+      // The logs say the calories ran over target: that, not water, is what to lead with.
+      const avg = Math.round(read.intake.avgKcal / 10) * 10;
+      lines.push(`- Plateau on the raw weekly averages (flat for 3 weeks) while the logged days ran over target (averaging ~${avg} vs ${read.intake.targetKcal} kcal): lead with the logs — getting back to target is the first lever, do not blame water. Only if still flat 2 weeks after that suggest ~150 kcal less a day.`);
+    } else {
+      lines.push('- Plateau on the raw weekly averages (flat for 3 weeks): often water — not a failure. Keep the plan; only if still flat in 2 weeks suggest ~150 kcal less a day or two 30-minute walks.');
+    }
   }
   if (gp.verdict === 'needs_target') {
     lines.push('- No target set yet — setting one is the only thing missing for a real progress verdict.');
