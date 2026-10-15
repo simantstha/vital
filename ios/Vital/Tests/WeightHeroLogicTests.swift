@@ -548,4 +548,67 @@ final class WeightHeroLogicTests: XCTestCase {
             withholdsLocalRate: true, serverRead: "Early read — down 0.7 kg on the scale in 7 days"
         ))
     }
+
+    // MARK: - Wave 20: the early read for an older goal
+
+    /// An early-read payload whose `weightRead` carries the goal's age (`goalAgeDays`, absent from an older server).
+    private func earlyRead(goalAgeDays: Int?, state: GoalProgressDTO.WeightRead.State = .early) -> GoalProgressDTO {
+        GoalProgressDTO(
+            goal: "weight_loss",
+            target: .init(weightKg: 76),
+            current: .init(weightKg: 83.5, startWeightKg: 83.7),
+            verdict: .progressing,
+            headline: earlyHeadline,
+            weightRead: GoalProgressDTO.WeightRead(state: state, goalAgeDays: goalAgeDays)
+        )
+    }
+
+    /// "Pace settles after 3 weeks" is true only for a goal under 21 days old. Past that the server
+    /// (`paceWaitClause` in `lib/brain/openerText.ts`) says the pace is a few weigh-ins away, and so does the hero.
+    func testHeroEarlyReadSaysFewMoreWeighInsOnceTheGoalIsThreeWeeksOld() {
+        XCTAssertEqual(WeightHeroLogic.paceSettleDays, 21)
+        XCTAssertEqual(WeightHeroLogic.olderGoalEarlyReadHeroText, "A few more weigh-ins and your pace is back")
+        for age in [1, 10, 20] {
+            XCTAssertEqual(WeightHeroLogic.serverReadSlotText(earlyRead(goalAgeDays: age)), "Pace settles after 3 weeks", "age \(age)")
+        }
+        for age in [21, 22, 40, 400] {
+            XCTAssertEqual(
+                WeightHeroLogic.serverReadSlotText(earlyRead(goalAgeDays: age)), "A few more weigh-ins and your pace is back", "age \(age)"
+            )
+        }
+        XCTAssertEqual(WeightHeroLogic.earlyReadSlotText(goalAgeDays: 21), WeightHeroLogic.olderGoalEarlyReadHeroText)
+        XCTAssertEqual(WeightHeroLogic.earlyReadSlotText(goalAgeDays: 20), WeightHeroLogic.earlyReadHeroText)
+    }
+
+    /// An older server sends no age: the hero keeps today's text, whatever the goal's real age.
+    func testHeroEarlyReadKeepsTodaysTextWithoutAGoalAge() {
+        XCTAssertEqual(WeightHeroLogic.serverReadSlotText(earlyRead(goalAgeDays: nil)), "Pace settles after 3 weeks")
+        XCTAssertEqual(WeightHeroLogic.earlyReadSlotText(goalAgeDays: nil), WeightHeroLogic.earlyReadHeroText)
+        XCTAssertNil(progress(.early, headline: earlyHeadline).weightRead?.goalAgeDays)
+        XCTAssertEqual(heroText(progress(.early, headline: earlyHeadline)), "Pace settles after 3\u{00A0}weeks")
+    }
+
+    /// The age only touches the early read: a return after a gap and a plateau say what they said.
+    func testGoalAgeOnlyChangesTheEarlyRead() {
+        XCTAssertEqual(
+            WeightHeroLogic.serverReadSlotText(earlyRead(goalAgeDays: 60, state: .returning)),
+            "Welcome back — weigh in a few more days"
+        )
+        XCTAssertEqual(WeightHeroLogic.serverReadSlotText(earlyRead(goalAgeDays: 60, state: .plateau)), "Flat for 3 weeks")
+        XCTAssertNil(WeightHeroLogic.serverReadSlotText(earlyRead(goalAgeDays: 60, state: .pace)))
+        XCTAssertNil(WeightHeroLogic.serverReadSlotText(earlyRead(goalAgeDays: 60, state: .reached)))
+    }
+
+    /// What the hero's rate slot shows for an older goal: the new line, still no rate of its own.
+    func testHeroShowsTheOlderGoalLineAndNoLocalRate() {
+        let (trend, entries) = hero()
+        let goal = earlyRead(goalAgeDays: 30)
+        let text = WeightHeroLogic.weeklyChangeText(
+            trend: trend, entries: entries, system: .metric,
+            withholdsLocalRate: GoalProgressLogic.usesServerWeightRead(goal),
+            serverRead: WeightHeroLogic.serverReadSlotText(goal)
+        )
+        XCTAssertEqual(text, "A few more weigh-ins and your pace is back")
+        XCTAssertFalse(text?.contains("/wk") ?? true)
+    }
 }

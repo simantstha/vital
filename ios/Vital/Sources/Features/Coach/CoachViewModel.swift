@@ -971,7 +971,10 @@ final class CoachViewModel: ObservableObject {
            let current = progress.current.weightKg {
             let losing = target < start
             let total = abs(start - target)
-            let done = min(total, max(0, losing ? start - current : current - start))
+            // The same weight the goal card's "X of Y kg lost" and the bar measure from
+            // (`GoalProgressLogic.weightMovedKg`), so the opener never disagrees with them.
+            let moved = GoalProgressLogic.weightMovedKg(progress, startKg: start, currentKg: current)
+            let done = min(total, max(0, losing ? -moved : moved))
             if total > 0, done > 0 {
                 let amount = GoalProgressLogic.weightAmount(kg: done, system)
                 let whole = GoalProgressLogic.weightAmount(kg: total, system)

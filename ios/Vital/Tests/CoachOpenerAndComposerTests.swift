@@ -124,6 +124,38 @@ final class CoachOpenerAndComposerTests: XCTestCase {
         XCTAssertTrue(text.hasPrefix("You're 3.7 of 17\u{00A0}lb down"), text)
     }
 
+    /// "You're X of Y kg down" is measured from the same weight as the goal card's "X of Y kg lost" and its
+    /// bar (`current.changeKg`: the 7-day mean of the scale on a wave-20 server), not the lagging trend.
+    func testGoalStatusOpenerUsesTheWeightTheCardAndBarUse() {
+        let weeklyMean = GoalProgressDTO(
+            goal: "weight_loss",
+            target: .init(weightKg: 76),
+            current: .init(weightKg: 82.0, startWeightKg: 83.7, changeKg: -1.4, progressPct: 18),
+            verdict: .onTrack,
+            headline: "On track for Jan 15 \u{2014} about 6.3 kg to go",
+            weightRead: .init(state: .pace, scaleKg: 82.0, weekMeanKg: 82.3)
+        )
+        XCTAssertEqual(
+            CoachViewModel.goalStatusOpener(weeklyMean, system: .metric, now: now, locale: en),
+            "You're 1.4 of 7.7\u{00A0}kg down. What would you like to dig into?"
+        )
+        // Same number as the card's line, in both units.
+        XCTAssertEqual(GoalProgressLogic.weightLine(weeklyMean, system: .metric), "1.4 of 7.7\u{00A0}kg lost")
+        let imperial = CoachViewModel.goalStatusOpener(weeklyMean, system: .imperial, now: now, locale: en) ?? ""
+        XCTAssertTrue(imperial.hasPrefix("You're 3.1 of 17\u{00A0}lb down"), imperial)
+        // Without a change (an older payload) it is the trend against the start, as before.
+        let older = GoalProgressDTO(
+            goal: "weight_loss",
+            target: .init(weightKg: 76),
+            current: .init(weightKg: 82.0, startWeightKg: 83.7),
+            verdict: .onTrack
+        )
+        XCTAssertEqual(
+            CoachViewModel.goalStatusOpener(older, system: .metric, now: now, locale: en),
+            "You're 1.7 of 7.7\u{00A0}kg down. What would you like to dig into?"
+        )
+    }
+
     func testGoalStatusOpenerOmitsPaceWithoutEta() {
         XCTAssertEqual(
             CoachViewModel.goalStatusOpener(progress(eta: nil), system: .metric, now: now, locale: en),

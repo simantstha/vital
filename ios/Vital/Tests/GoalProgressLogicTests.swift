@@ -1145,4 +1145,210 @@ final class GoalProgressLogicTests: XCTestCase {
         XCTAssertNil(odd?.plan?.targetKm)
         XCTAssertEqual(odd?.plan?.longRunKm, 16)
     }
+
+    // MARK: - Wave 20: one weight basis for the line and the bar
+
+    /// A weight-loss payload as the server sends it from wave 20: `changeKg` / `progressPct` are measured
+    /// from the 7-day mean of the scale (82.3), while `weightKg` is still the smoothed trend (82.0) that lags it.
+    private func weeklyMeanProgress(changeKg: Double? = -1.4, progressPct: Double? = 18) -> GoalProgressDTO {
+        GoalProgressDTO(
+            goal: "weight_loss",
+            target: .init(weightKg: 76),
+            current: .init(weightKg: 82.0, startWeightKg: 83.7, changeKg: changeKg, progressPct: progressPct),
+            ratePerWeek: .init(kg: -0.6),
+            verdict: .onTrack,
+            headline: "On track for Jan 15 \u{2014} about 6.3 kg to go",
+            weightRead: .init(state: .pace, scaleKg: 82.0, weekMeanKg: 82.3)
+        )
+    }
+
+    /// "X of Y kg lost" is built from `current.changeKg`, the weight the bar's `progressPct` (and the
+    /// server's "to go", opener and coach) use — not from the trend, which would say 1.7 beside an 18% bar.
+    func testWeightLossLineIsBuiltFromTheSameWeightAsTheBar() throws {
+        let progress = weeklyMeanProgress()
+        XCTAssertEqual(GoalProgressLogic.weightLine(progress, system: .metric), "1.4 of 7.7\u{00A0}kg lost")
+        XCTAssertEqual(GoalProgressLogic.primaryLine(progress, system: .metric), "1.4 of 7.7\u{00A0}kg lost")
+        XCTAssertEqual(plain(GoalProgressLogic.compactText(progress, system: .metric, now: now, locale: en)), "1.4 of 7.7 kg lost")
+        XCTAssertEqual(plain(GoalProgressLogic.weightLine(progress, system: .imperial)), "3.1 of 17 lb lost")
+        // Text and bar agree: 18% of the way is 1.4 of 7.7 kg.
+        let fraction = try XCTUnwrap(GoalProgressLogic.progressFraction(progress))
+        XCTAssertEqual(fraction, 1.4 / 7.7, accuracy: 0.005)
+    }
+
+    /// Without a usable `changeKg` the line is the trend against the start, exactly as before.
+    func testWeightLossLineFallsBackToTheTrendWithoutChangeKg() {
+        for change in [nil, Double.nan, Double.infinity] as [Double?] {
+            let progress = weeklyMeanProgress(changeKg: change, progressPct: nil)
+            XCTAssertEqual(plain(GoalProgressLogic.weightLine(progress, system: .metric)), "1.7 of 7.7 kg lost", "\(String(describing: change))")
+            XCTAssertEqual(plain(GoalProgressLogic.weightLine(progress, system: .imperial)), "3.7 of 17 lb lost", "\(String(describing: change))")
+        }
+    }
+
+    func testWeightLineKeepsItsCapAndFloorOnTheServersChange() {
+        // Past the target: capped at the total, never "9 of 7.7".
+        XCTAssertEqual(plain(GoalProgressLogic.weightLine(weeklyMeanProgress(changeKg: -9, progressPct: 100), system: .metric)), "7.7 of 7.7 kg lost")
+        // The scale going the wrong way reads 0, never negative.
+        XCTAssertEqual(plain(GoalProgressLogic.weightLine(weeklyMeanProgress(changeKg: 0.6, progressPct: 0), system: .metric)), "0 of 7.7 kg lost")
+        // Nothing moved yet.
+        XCTAssertEqual(plain(GoalProgressLogic.weightLine(weeklyMeanProgress(changeKg: 0, progressPct: 0), system: .metric)), "0 of 7.7 kg lost")
+    }
+
+    /// Only a weight-loss goal changed basis: a muscle goal's `changeKg` is still the trend's, so its
+    /// line stays the trend against the start whatever `changeKg` says.
+    func testOnlyWeightLossReadsTheServersChangeForItsLine() {
+        let muscle = GoalProgressDTO(
+            goal: "muscle", target: .init(weightKg: 82),
+            current: .init(weightKg: 80, startWeightKg: 78, changeKg: 5, progressPct: 50), verdict: .progressing
+        )
+        XCTAssertEqual(plain(GoalProgressLogic.weightLine(muscle, system: .metric)), "2 of 4 kg gained")
+        XCTAssertEqual(GoalProgressLogic.weightMovedKg(muscle, startKg: 78, currentKg: 80), 2)
+        XCTAssertEqual(GoalProgressLogic.weightMovedKg(weeklyMeanProgress(), startKg: 83.7, currentKg: 82.0), -1.4)
+        XCTAssertEqual(GoalProgressLogic.weightMovedKg(weeklyMeanProgress(changeKg: nil), startKg: 83.7, currentKg: 82.0), 82.0 - 83.7, accuracy: 1e-9)
+    }
+
+    /// The goal reached card/line still caps at the target whatever the basis.
+    func testReachedTextStillCapsOnTheServersChange() {
+        let reached = GoalProgressDTO(
+            goal: "weight_loss", target: .init(weightKg: 76),
+            current: .init(weightKg: 75.9, startWeightKg: 83.7, changeKg: -8.2, progressPct: 100), verdict: .reached,
+            weightRead: .init(state: .reached, scaleKg: 75.5, weekMeanKg: 75.5)
+        )
+        XCTAssertEqual(plain(GoalProgressLogic.reachedText(reached, system: .metric)), "7.7 of 7.7 kg lost")
+    }
+
+    // MARK: - Wave 20: headlines the server now writes
+
+    /// The new fat-loss headlines (lib/goalProgress.ts `fatLossOutcome`). A phrase the verdict chip already says
+    /// is stripped — only as a whole phrase directly followed by its dash. "On track for Jul 6" is not the
+    /// "On track" verdict: stripping two words would leave "for Jul 6 — about 6.5 kg to go".
+    func testHeadlineWithoutVerdictHandlesTheWave20FatLossHeadlines() {
+        // On track for a date: the date belongs to the phrase, so the headline stays whole.
+        XCTAssertEqual(
+            GoalProgressLogic.headlineWithoutVerdict("On track for Jul 6 \u{2014} about 6.5 kg to go"),
+            "On track for Jul 6 \u{2014} about 6.5 kg to go"
+        )
+        XCTAssertEqual(
+            GoalProgressLogic.headlineWithoutVerdict("On track for Jul 6, 2027 \u{2014} about 6.5 kg to go"),
+            "On track for Jul 6, 2027 \u{2014} about 6.5 kg to go"
+        )
+        // ...and without a date it is the plain verdict again.
+        XCTAssertEqual(GoalProgressLogic.headlineWithoutVerdict("On track \u{2014} about 6.5 kg to go"), "about 6.5 kg to go")
+        XCTAssertEqual(GoalProgressLogic.headlineWithoutVerdict("On track \u{2014} about 6.5 kg to go, any day now"), "about 6.5 kg to go, any day now")
+        // "Still losing fast" is the too-fast verdict, held between 0.9% and 1% a week: stripped like "Losing too fast".
+        XCTAssertEqual(
+            GoalProgressLogic.headlineWithoutVerdict("Still losing fast \u{2014} 1.1% of bodyweight a week"),
+            "1.1% of bodyweight a week"
+        )
+        XCTAssertEqual(
+            GoalProgressLogic.headlineWithoutVerdict("Losing too fast \u{2014} 1.2% of bodyweight a week"),
+            "1.2% of bodyweight a week"
+        )
+        XCTAssertEqual(GoalProgressLogic.headlineWithoutVerdict("still losing fast - 1.1% of bodyweight a week"), "1.1% of bodyweight a week")
+        // "Nearly there" is no verdict (no chip says it) and its sentence is the news: left in the text.
+        XCTAssertEqual(
+            GoalProgressLogic.headlineWithoutVerdict("Nearly there \u{2014} start easing calories toward maintenance"),
+            "Nearly there \u{2014} start easing calories toward maintenance"
+        )
+        // Behind pace: the verdict is stripped, the date after the numbers stays.
+        XCTAssertEqual(
+            GoalProgressLogic.headlineWithoutVerdict("Behind pace \u{2014} about 4.7 kg to go, around Jul 26"),
+            "about 4.7 kg to go, around Jul 26"
+        )
+        XCTAssertEqual(
+            GoalProgressLogic.headlineWithoutVerdict("Behind \u{2014} 4.7 kg to go, pace is under the 0.25% a week floor"),
+            "4.7 kg to go, pace is under the 0.25% a week floor"
+        )
+        // A verdict word inside a longer phrase, or mid-sentence, is never cut.
+        XCTAssertEqual(GoalProgressLogic.headlineWithoutVerdict("Still losing, slowly \u{2014} 0.4 kg a week"), "Still losing, slowly \u{2014} 0.4 kg a week")
+        XCTAssertEqual(
+            GoalProgressLogic.headlineWithoutVerdict("On track for the half marathon \u{2014} long run 14 of 15 km"),
+            "On track for the half marathon \u{2014} long run 14 of 15 km"
+        )
+    }
+
+    /// The same headlines as they reach the card's primary line when no weight line is composed
+    /// (a general goal with the weight verdicts, the fallback `primaryLine` ends in).
+    func testPrimaryLineShowsTheWave20HeadlinesWithoutADanglingFragment() {
+        func line(_ verdict: GoalVerdict, _ headline: String) -> String {
+            GoalProgressLogic.primaryLine(GoalProgressDTO(goal: "general", verdict: verdict, headline: headline), system: .metric)
+        }
+        XCTAssertEqual(line(.onTrack, "On track for Jul 6 \u{2014} about 6.5 kg to go"), "On track for Jul 6 \u{2014} about 6.5 kg to go")
+        XCTAssertEqual(line(.tooFast, "Still losing fast \u{2014} 1.1% of bodyweight a week"), "1.1% of bodyweight a week")
+        XCTAssertEqual(line(.progressing, "Nearly there \u{2014} start easing calories toward maintenance"), "Nearly there \u{2014} start easing calories toward maintenance")
+        XCTAssertEqual(line(.behind, "Behind pace \u{2014} about 4.7 kg to go, around Jul 26"), "about 4.7 kg to go, around Jul 26")
+        XCTAssertFalse(line(.onTrack, "On track for Jul 6 \u{2014} about 6.5 kg to go").hasPrefix("for "))
+    }
+
+    // MARK: - Wave 20: weightRead.goalAgeDays
+
+    func testWeightReadGoalAgeDaysDecodesTolerantly() throws {
+        func read(_ extra: String) throws -> GoalProgressDTO.WeightRead? {
+            let json = "{\"goal\":\"weight_loss\",\"verdict\":\"progressing\",\"headline\":\"x\",\"reasons\":[],\"weightRead\":{\"state\":\"early\"\(extra)}}"
+            return try JSONDecoder().decode(GoalProgressDTO.self, from: Data(json.utf8)).weightRead
+        }
+        XCTAssertEqual(try read(",\"goalAgeDays\":24")?.goalAgeDays, 24)
+        XCTAssertEqual(try read(",\"goalAgeDays\":24.0")?.goalAgeDays, 24)
+        // Absent (an older server), null, or the wrong type: no age, and the rest of the read survives.
+        XCTAssertNil(try read("")?.goalAgeDays)
+        XCTAssertNil(try read(",\"goalAgeDays\":null")?.goalAgeDays)
+        XCTAssertNil(try read(",\"goalAgeDays\":\"old\"")?.goalAgeDays)
+        XCTAssertEqual(try read(",\"goalAgeDays\":\"old\"")?.state, .early)
+        // A full wave-20 read still equals the one built from its parts.
+        let full = try read(",\"scaleKg\":82.3,\"weekMeanKg\":82.5,\"goalAgeDays\":30,\"paceWindowDays\":21,\"intake\":null")
+        XCTAssertEqual(full, GoalProgressDTO.WeightRead(state: .early, scaleKg: 82.3, weekMeanKg: 82.5, goalAgeDays: 30))
+    }
+
+    // MARK: - Wave 20: endurance fields the app does not read
+
+    /// `distance.plan.{stepPct, comebackKm, goalReachedBefore}` and `longRun.raceTargetKm` are additive and
+    /// no screen needs them: a payload carrying them decodes to exactly what the older payload did, and
+    /// the capped `targetPeakKm` is just the peak target, in every text built from it.
+    func testWave20EnduranceFieldsDoNotChangeWhatIsDecodedOrShown() throws {
+        let planFields = #""kind":"build","targetKm":27,"longRunKm":14,"purpose":"~27 km this week: long run 14 km, the rest easy runs""#
+        let withNew = try decode("""
+        {"goal":"endurance","verdict":"building","headline":"x",
+         "distance":{"targetKm":30,"thisWeekKm":10.2,"stepTargetKm":27,
+                     "plan":{\(planFields),"stepPct":10,"comebackKm":null,"goalReachedBefore":false}},
+         "longRun":{"lastKm":14,"peakKm":16,"targetPeakKm":15,"raceTargetKm":18}}
+        """)
+        let older = try decode("""
+        {"goal":"endurance","verdict":"building","headline":"x",
+         "distance":{"targetKm":30,"thisWeekKm":10.2,"stepTargetKm":27,"plan":{\(planFields)}},
+         "longRun":{"lastKm":14,"peakKm":16,"targetPeakKm":15}}
+        """)
+        XCTAssertEqual(withNew.distance, older.distance)
+        XCTAssertEqual(withNew.longRun, older.longRun)
+        XCTAssertEqual(withNew.longRun, GoalProgressDTO.LongRun(lastKm: 14, peakKm: 16, targetPeakKm: 15))
+        XCTAssertEqual(withNew.distance?.plan?.longRunKm, 14)
+        // The capped peak reads right where it is shown: the goal sheet's row and the Today hero's race tail.
+        let longRun = try XCTUnwrap(withNew.longRun)
+        XCTAssertEqual(RaceLogic.longRunRowText(longRun, .metric), "14\u{00A0}km \u{00B7} peak target 15\u{00A0}km")
+        XCTAssertEqual(RaceLogic.longRunProgressText(longRun, .metric), "long run 14/15\u{00A0}km")
+        XCTAssertEqual(RaceLogic.longRunRowText(longRun, .imperial), "8.7\u{00A0}mi \u{00B7} peak target 9.3\u{00A0}mi")
+        XCTAssertEqual(
+            GoalProgressLogic.statRows(withNew, system: .metric).first { $0.label == "Long run" }?.value,
+            "14\u{00A0}km \u{00B7} peak target 15\u{00A0}km"
+        )
+    }
+
+    /// The server's cap explanation arrives as an ordinary long-run reason: the card lists it as sent
+    /// (units glued), so no iOS text needs to know about the cap.
+    func testTheCapExplanationReasonIsListedAsSent() {
+        let note = "Long run peak 16 km \u{2014} on target. Your 30 km weeks fit a 15 km long run; for an 18 km peak, raise the goal to ~36 km"
+        let progress = GoalProgressDTO(
+            goal: "endurance", verdict: .building, headline: "x",
+            reasons: [
+                GoalReasonDTO(kind: "race", text: "Half marathon in 12 weeks (Dec 30)"),
+                GoalReasonDTO(kind: "plan", text: "~27 km this week: long run 14 km, the rest easy runs"),
+                GoalReasonDTO(kind: "long_run", text: note, tone: .good),
+            ]
+        )
+        let shown = GoalProgressLogic.visibleReasons(progress)
+        XCTAssertEqual(shown.map(\.kind), ["race", "plan", "long_run"])
+        XCTAssertEqual(shown.last?.text, note)
+        XCTAssertEqual(GoalProgressLogic.displayReasons(progress).last?.text, note)
+        let wrapped = GoalProgressLogic.nonBreaking(note)
+        XCTAssertEqual(plain(wrapped), note)
+        assertNoBreakableUnitSpace(wrapped)
+    }
 }

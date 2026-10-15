@@ -223,9 +223,10 @@ struct GoalReachedActionRow: View {
 
 // MARK: - Race done: set your next goal
 
-/// "Set your next goal" — shown on the goal card and the detail sheet only while
-/// the race is done and its 14-day recovery is under way (phase "recovery").
-/// Opens Profile's goal editor through the same `.vitalOpenGoalEditor` hop as
+/// "Set your next goal" — shown on the goal card and the detail sheet only in
+/// recovery week 1 after the race (days 1-7: `GoalProgressLogic.showsNextGoalPrompt`
+/// gates every place this row is used; the server's own next-goal reason is for
+/// that week alone). Opens Profile's goal editor through the same `.vitalOpenGoalEditor` hop as
 /// "Set a new target" (`GoalReachedActions.setNewTarget`), where the runner can
 /// add a new race, a weekly distance target, or switch to maintenance.
 /// Full-width, >= 44 pt tall.
@@ -348,8 +349,9 @@ struct GoalProgressCard: View {
         .accessibilityIdentifier("goalProgress.card")
     }
 
-    /// Race done (recovery): like `reachedCard`, the summary is the button and
-    /// "Set your next goal" sits beneath it inside the same card.
+    /// Race done (recovery week 1): like `reachedCard`, the summary is the button and
+    /// "Set your next goal" sits beneath it inside the same card. From recovery
+    /// week 2 the card is the plain summary card (it still leads with the recovery headline).
     private var raceDoneCard: some View {
         VitalCard(padding: Theme.Spacing.lg, cornerRadius: Theme.Radius.lg) {
             VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
@@ -557,7 +559,7 @@ struct GoalProgressDetailView: View {
                     GoalReachedActionRow(onSetNewTarget: { dismiss() }, onSwitched: { dismiss() })
                 }
 
-                // Race done (recovery): the way forward, ahead of the numbers.
+                // Race done (recovery week 1): the way forward, ahead of the numbers.
                 if GoalProgressLogic.showsNextGoalPrompt(progress) {
                     GoalNextGoalActionRow(onSetNextGoal: { dismiss() })
                 }

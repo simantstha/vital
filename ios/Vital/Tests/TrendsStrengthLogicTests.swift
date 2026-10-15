@@ -480,23 +480,24 @@ final class TrendsStrengthLogicTests: XCTestCase {
     // MARK: - Building back after a break (GoalProgressDTO.liftReturn)
 
     private func liftReturn(
-        _ exercise: String = "squat", preBreakKg: Double = 142, pct: Int = 96, regained: Bool = false
+        _ exercise: String = "squat", preBreakKg: Double = 142, pct: Int = 96, regained: Bool = false,
+        recentKg: Double? = 136.3
     ) -> GoalProgressDTO.LiftReturn {
         GoalProgressDTO.LiftReturn(
             exercise: exercise, name: exercise.capitalized, breakDays: 14, endedOn: "2026-09-20",
-            preBreakKg: preBreakKg, recentKg: 136.3, pct: pct, regained: regained
+            preBreakKg: preBreakKg, recentKg: recentKg, pct: pct, regained: regained
         )
     }
 
     func testBuildingBackStatusIsNeutralAndNamesThePreBreakBest() {
         XCTAssertEqual(
             TrendsStrengthLogic.buildingBackStatus(liftReturn: liftReturn(), forLift: "squat", system: .metric),
-            TrendsStrengthLogic.Status(text: "Building back — 96% of pre-break 142\u{00A0}kg", tone: .neutral)
+            TrendsStrengthLogic.Status(text: "Building back — est. 1RM 136 of 142\u{00A0}kg pre-break", tone: .neutral)
         )
-        // 142 kg = 313 lb.
+        // 142 kg = 313 lb, 136.3 kg = 300 lb.
         XCTAssertEqual(
             TrendsStrengthLogic.buildingBackStatus(liftReturn: liftReturn(), forLift: "squat", system: .imperial)?.text,
-            "Building back — 96% of pre-break 313\u{00A0}lb"
+            "Building back — est. 1RM 300 of 313\u{00A0}lb pre-break"
         )
         // The key is matched the way the server normalises it.
         XCTAssertNotNil(TrendsStrengthLogic.buildingBackStatus(liftReturn: liftReturn("Bench-Press"), forLift: "bench press", system: .metric))
@@ -506,6 +507,70 @@ final class TrendsStrengthLogicTests: XCTestCase {
         XCTAssertNil(TrendsStrengthLogic.buildingBackStatus(liftReturn: liftReturn(), forLift: "bench press", system: .metric))
         XCTAssertNil(TrendsStrengthLogic.buildingBackStatus(liftReturn: liftReturn(regained: true), forLift: "squat", system: .metric))
         XCTAssertNil(TrendsStrengthLogic.buildingBackStatus(liftReturn: nil, forLift: "squat", system: .metric))
+    }
+
+    /// The server's headline is "Building back — Squat est. 1RM 136 of 142 kg pre-break"
+    /// (`liftReturnOutcome`): the row names the lift itself, so the chip is that same
+    /// sentence without the name — never "96% of pre-break", which the server no longer says.
+    func testBuildingBackStatusIsTheServersSentenceWithoutTheLiftName() throws {
+        let serverHeadline = "Building back — Squat est. 1RM 136 of 142\u{00A0}kg pre-break"
+        let status = try XCTUnwrap(
+            TrendsStrengthLogic.buildingBackStatus(liftReturn: liftReturn(), forLift: "squat", system: .metric)
+        )
+        XCTAssertEqual(status.text, serverHeadline.replacingOccurrences(of: "Squat ", with: ""))
+        XCTAssertEqual(status.tone, .neutral)
+        XCTAssertFalse(status.text.contains("%"))
+    }
+
+    /// Each number is rounded to the nearest whole kg (lb) on its own, exactly as the
+    /// server prints it (`liftReturnDisplay` in `lib/liftChange.ts`), and the chip never
+    /// claims "142 of 142" before the pre-break best is regained.
+    func testBuildingBackStatusRoundsTheNumbersLikeTheServer() {
+        func text(_ pre: Double, _ recent: Double?, _ system: UnitSystem = .metric) -> String? {
+            TrendsStrengthLogic.buildingBackStatus(
+                liftReturn: liftReturn(preBreakKg: pre, recentKg: recent), forLift: "squat", system: system
+            )?.text
+        }
+        XCTAssertEqual(text(142.2, 136.4), "Building back — est. 1RM 136 of 142\u{00A0}kg pre-break")
+        // Nearest, not down: 141.6 -> 142 and 135.5 -> 136.
+        XCTAssertEqual(text(141.6, 135.5), "Building back — est. 1RM 136 of 142\u{00A0}kg pre-break")
+        // A recent number that rounds up to the pre-break one is shown one unit under it.
+        XCTAssertEqual(text(142.4, 141.6), "Building back — est. 1RM 141 of 142\u{00A0}kg pre-break")
+        XCTAssertEqual(text(142, 141.5), "Building back — est. 1RM 141 of 142\u{00A0}kg pre-break")
+        // Pounds are converted with the app's one formatter, then rounded: 140 kg = 309 lb, 132.5 kg = 292 lb.
+        XCTAssertEqual(text(140, 132.5, .imperial), "Building back — est. 1RM 292 of 309\u{00A0}lb pre-break")
+        // The unit is glued to the pre-break number with U+00A0, so a narrow chip never strands it.
+        XCTAssertFalse((text(142, 136.3) ?? "").contains(" kg"))
+    }
+
+    /// Without `recentKg` (it is optional on the wire) there are no numbers to print, so
+    /// the chip keeps the percentage wording it had.
+    func testBuildingBackStatusKeepsThePercentageWithoutARecentWeight() {
+        func text(_ recent: Double?, _ system: UnitSystem = .metric) -> String? {
+            TrendsStrengthLogic.buildingBackStatus(
+                liftReturn: liftReturn(recentKg: recent), forLift: "squat", system: system
+            )?.text
+        }
+        XCTAssertEqual(text(nil), "Building back — 96% of pre-break 142\u{00A0}kg")
+        XCTAssertEqual(text(nil, .imperial), "Building back — 96% of pre-break 313\u{00A0}lb")
+        // A recent weight that is not a real weight is no weight.
+        XCTAssertEqual(text(0), "Building back — 96% of pre-break 142\u{00A0}kg")
+        XCTAssertEqual(text(-5), "Building back — 96% of pre-break 142\u{00A0}kg")
+        XCTAssertEqual(text(Double.nan), "Building back — 96% of pre-break 142\u{00A0}kg")
+    }
+
+    func testLiftReturnShownMirrorsTheServersDisplayNumbers() throws {
+        let metric = try XCTUnwrap(TrendsStrengthLogic.liftReturnShown(preBreakKg: 142.2, recentKg: 136.4, system: .metric))
+        XCTAssertEqual(metric.pre, 142)
+        XCTAssertEqual(metric.recent, 136)
+        let imperial = try XCTUnwrap(TrendsStrengthLogic.liftReturnShown(preBreakKg: 142, recentKg: 136.3, system: .imperial))
+        XCTAssertEqual(imperial.pre, 313)
+        XCTAssertEqual(imperial.recent, 300)
+        let clamped = try XCTUnwrap(TrendsStrengthLogic.liftReturnShown(preBreakKg: 142, recentKg: 142.2, system: .metric))
+        XCTAssertEqual(clamped.recent, 141, "still rebuilding: never equal to, or above, the pre-break number")
+        XCTAssertNil(TrendsStrengthLogic.liftReturnShown(preBreakKg: 0, recentKg: 100, system: .metric))
+        XCTAssertNil(TrendsStrengthLogic.liftReturnShown(preBreakKg: 142, recentKg: 0, system: .metric))
+        XCTAssertNil(TrendsStrengthLogic.liftReturnShown(preBreakKg: .infinity, recentKg: 100, system: .metric))
     }
 
     /// A lift whose e1RM is 10 kg under four weeks ago would read "−10 kg" (amber) and
@@ -532,11 +597,11 @@ final class TrendsStrengthLogicTests: XCTestCase {
         XCTAssertEqual(without.squat.status.tone, .watch)
         XCTAssertEqual(without.moves.liftsDown, 1)
 
-        let rebuilding = try lifts(liftReturn(preBreakKg: 110, pct: 91))
-        XCTAssertEqual(rebuilding.squat.status, TrendsStrengthLogic.Status(text: "Building back — 91% of pre-break 110\u{00A0}kg", tone: .neutral))
+        let rebuilding = try lifts(liftReturn(preBreakKg: 110, pct: 91, recentKg: 100))
+        XCTAssertEqual(rebuilding.squat.status, TrendsStrengthLogic.Status(text: "Building back — est. 1RM 100 of 110\u{00A0}kg pre-break", tone: .neutral))
         XCTAssertNil(rebuilding.squat.changeKg)
         XCTAssertNil(rebuilding.squat.baselineKg)
-        XCTAssertEqual(rebuilding.squat.accessibilityLabel, "Squat, estimated one-rep max 100\u{00A0}kg, Building back — 91% of pre-break 110\u{00A0}kg")
+        XCTAssertEqual(rebuilding.squat.accessibilityLabel, "Squat, estimated one-rep max 100\u{00A0}kg, Building back — est. 1RM 100 of 110\u{00A0}kg pre-break")
         XCTAssertEqual(rebuilding.moves.liftsDown, 0)
         // The other lift is untouched, and so is everything once the pre-break best is regained.
         XCTAssertEqual(rebuilding.bench, without.bench)
