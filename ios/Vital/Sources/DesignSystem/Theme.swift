@@ -360,8 +360,17 @@ private struct AmbientAnimation<V: Equatable>: ViewModifier {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let animation: Animation
     let value: V
+    /// Screenshot harness (`-VitalFixture`): no ambient loops, so the app goes idle and
+    /// XCUITest queries never time out waiting for a forever-animation. DEBUG-only.
+    private var isFixtureStill: Bool {
+        #if DEBUG
+        return FixtureMode.isActive
+        #else
+        return false
+        #endif
+    }
     func body(content: Content) -> some View {
-        content.animation(reduceMotion ? nil : animation, value: value)
+        content.animation((reduceMotion || isFixtureStill) ? nil : animation, value: value)
     }
 }
 
