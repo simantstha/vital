@@ -87,14 +87,19 @@ import {
 } from './brain/weightSignals';
 import type { ProgressionSummary } from './workoutRepository';
 import {
+  isDeloadWeek,
   isLiftProgressing,
   isLiftStalled,
+  LIFT_LAPSE_MIN_DAYS,
   liftChange4w,
   liftDisplayChange,
   liftDisplayName,
+  liftLastBest,
   liftRecentEndWeek,
+  liftReturnDisplay,
   liftReturnState,
   pickHeadlineLift,
+  pickWeekOverWeek,
   rankLifts,
   type LiftReturnState,
 } from './liftChange';
@@ -360,6 +365,12 @@ export interface GoalProgress {
    * for a muscle goal); null when there was none in that window.
    */
   lastSessionDaysAgo?: number | null;
+  /**
+   * Additive: the local day (YYYY-MM-DD) of that newest session — the date behind
+   * `lastSessionDaysAgo` (same 28-day window, null when there was none), so the
+   * coach can say "Last strength session 8 days ago (Apr 25)" without a clock.
+   */
+  lastSessionOn?: string | null;
   /**
    * Weight goals (weight_loss / muscle) whose weight target is currently
    * reached: the local day (YYYY-MM-DD) of the first trend point that crossed
@@ -1008,13 +1019,50 @@ function sessionAdherence(input: GoalProgressInput): GoalSessionAdherence | null
   return { done, planned, weeklyTarget: target, pct: Math.round((done / planned) * 100), windowDays };
 }
 
-/** "9 of 16 planned sessions in 4 weeks (56%)" (or "in 10 days" for a new goal) — watch under 75%. */
+/** The goal is in its first 28 days: its sessions are counted in calendar weeks (see adherenceReason). False when its start is unknown. */
+function isYoungGoal(input: GoalProgressInput): boolean {
+  const age = goalAgeDays(input);
+  return age != null && age < STAT_WINDOW_DAYS;
+}
+
+/** The goal's first full week (7 days) has not been completed yet: nothing is judged against the plan, so no watch tone and no "behind". */
+function firstWeekOpen(input: GoalProgressInput): boolean {
+  const age = goalAgeDays(input);
+  return age != null && age < MIN_SESSION_WINDOW_DAYS;
+}
+
+/**
+ * The sessions line, for every goal that has a weekly sessions target.
+ *
+ *  - Established goal (28+ days): "9 of 16 planned sessions in 4 weeks (56%)"
+ *    — watch under 75%. Past the plan it reads "17 sessions in 4 weeks, past
+ *    your 16 planned (106%)": a count is never shown against a smaller plan.
+ *  - First 28 days: calendar weeks, not a plan prorated to a part-week
+ *    ("6 of 5 planned in 9 days" jumped around daily): "This week 2 of 4 · 6
+ *    sessions so far". It is judged (the usual 75% / 90% tones, on the same
+ *    numbers as the verdict) only once the first full week is done; before that
+ *    it is never amber.
+ */
 function adherenceReason(input: GoalProgressInput): GoalProgressReason | null {
   const a = sessionAdherence(input);
   if (!a) return null;
+  if (isYoungGoal(input)) {
+    const start = weekStart(input.todayKey);
+    const thisWeek = new Set(sessionDays(input).filter(d => d >= start && d <= input.todayKey)).size;
+    const shown = Math.min(thisWeek, a.weeklyTarget);
+    const open = firstWeekOpen(input);
+    return {
+      kind: 'adherence',
+      text: `This week ${shown} of ${a.weeklyTarget} · ${a.done} ${plural(a.done, 'session')} so far`,
+      tone: open ? (thisWeek >= a.weeklyTarget ? 'good' : 'neutral') : a.pct >= 90 ? 'good' : a.pct >= ADHERENCE_WATCH_PCT ? 'neutral' : 'watch',
+    };
+  }
+  const span = windowSpanText(a.windowDays);
   return {
     kind: 'adherence',
-    text: `${a.done} of ${a.planned} planned ${plural(a.planned, 'session')} in ${windowSpanText(a.windowDays)} (${a.pct}%)`,
+    text: a.done > a.planned
+      ? `${a.done} ${plural(a.done, 'session')} in ${span}, past your ${a.planned} planned (${a.pct}%)`
+      : `${a.done} of ${a.planned} planned ${plural(a.planned, 'session')} in ${span} (${a.pct}%)`,
     tone: a.pct >= 90 ? 'good' : a.pct >= ADHERENCE_WATCH_PCT ? 'neutral' : 'watch',
   };
 }
@@ -1033,7 +1081,8 @@ function weekSessionsReason(input: GoalProgressInput): GoalProgressReason | null
   const done = new Set(sessionDays(input).filter(d => d >= start && d <= input.todayKey)).size;
   return {
     kind: 'week_sessions',
-    text: `${done} of ${target} ${plural(target, 'session')} this week`,
+    // Never "5 of 4": a session past the plan is still a hit of the plan.
+    text: `${Math.min(done, target)} of ${target} ${plural(target, 'session')} this week`,
     tone: done >= target ? 'good' : 'neutral',
   };
 }
@@ -1575,11 +1624,13 @@ function liftComparisonOutlook(input: GoalProgressInput): { kind: 'first' | 'nex
   return next ? { kind: 'next', day: next } : null;
 }
 
-/** "8 of 8 sessions so far" (planned sessions when a target is set and the goal's age is known), else "8 sessions so far"; null before the first session. */
+/**
+ * "8 sessions so far": the plain count, so the headline only changes when a
+ * session is logged (an "N of M" against a plan prorated to a part-week flipped
+ * between "8 of 8" and "9 sessions" from one day to the next). Null before the
+ * first session.
+ */
 function sessionsSoFarText(input: GoalProgressInput): string | null {
-  const adh = goalAgeDays(input) != null ? sessionAdherence(input) : null;
-  // "6 of 5" would read as a mistake: past the plan it is just the count.
-  if (adh && adh.done > 0 && adh.done <= adh.planned) return `${adh.done} of ${adh.planned} ${plural(adh.planned, 'session')} so far`;
   const n = sessionCount(input, sessionWindowDays(input));
   return n > 0 ? `${n} ${plural(n, 'session')} so far` : null;
 }
@@ -1622,18 +1673,17 @@ function liftReturnOf(input: GoalProgressInput): GoalLiftReturn | null {
   };
 }
 
-/** Whole-unit pre-break / recent e1RM in the display unit. */
-function returnNumbers(r: GoalLiftReturn, input: GoalProgressInput): { pre: number; recent: number; unit: string } {
-  const imperial = input.unitSystem === 'imperial';
-  const f = imperial ? KG_TO_LB : 1;
-  return { pre: Math.round(r.preBreakKg * f), recent: Math.round(r.recentKg * f), unit: imperial ? 'lb' : 'kg' };
+/** Whole-unit pre-break / recent e1RM in the display unit, and the percentage of those SHOWN numbers (lib/liftChange.ts liftReturnDisplay). */
+function returnNumbers(r: GoalLiftReturn, input: GoalProgressInput): { pre: number; recent: number; pct: number; unit: string } {
+  return liftReturnDisplay(r, input.unitSystem === 'imperial');
 }
 
 /** Verdict + headline while building back (verdict 'building') or once the pre-break best is regained ('progressing'). */
 function liftReturnOutcome(r: GoalLiftReturn, input: GoalProgressInput): { verdict: GoalVerdict; headline: string } {
   const { pre, recent, unit } = returnNumbers(r, input);
   if (!r.regained) {
-    return { verdict: 'building', headline: clip(`Building back — ${r.name} at ${r.pct}% of your pre-break ${withUnit(pre, unit)}`) };
+    // The 142 is an estimated 1RM, not a bodyweight or a load: say so ("Squat est. 1RM 136 of 142 kg pre-break").
+    return { verdict: 'building', headline: clip(`Building back — ${r.name} est. 1RM ${recent} of ${withUnit(pre, unit)} pre-break`) };
   }
   if (recent <= pre) {
     return { verdict: 'progressing', headline: clip(`Back at your pre-break best — ${r.name} est. 1RM ${withUnit(recent, unit)}`) };
@@ -1644,9 +1694,9 @@ function liftReturnOutcome(r: GoalLiftReturn, input: GoalProgressInput): { verdi
 }
 
 function liftReturnReason(r: GoalLiftReturn, input: GoalProgressInput): GoalProgressReason {
-  const { pre, recent, unit } = returnNumbers(r, input);
+  const { pre, recent, pct, unit } = returnNumbers(r, input);
   if (!r.regained) {
-    return { kind: 'lift', text: `${r.name} est. 1RM ${withUnit(recent, unit)}, ${r.pct}% of your pre-break ${withUnit(pre, unit)}`, tone: 'neutral' };
+    return { kind: 'lift', text: `${r.name} est. 1RM ${withUnit(recent, unit)}, ${pct}% of your ${withUnit(pre, unit)} pre-break best`, tone: 'neutral' };
   }
   return {
     kind: 'lift',
@@ -1659,6 +1709,66 @@ function liftReturnReason(r: GoalLiftReturn, input: GoalProgressInput): GoalProg
 
 function liftReturnBreakReason(r: GoalLiftReturn, input: GoalProgressInput): GoalProgressReason {
   return { kind: 'return', text: `Back after a ${r.breakDays}-day break (ended ${fmtDate(r.endedOn, input.todayKey)})`, tone: 'neutral' };
+}
+
+/** A lift's e1RM as the copy prints it: whole kg (lb), unit glued on. */
+function fmtLiftKg(input: GoalProgressInput, kg: number): string {
+  const imperial = input.unitSystem === 'imperial';
+  return withUnit(Math.round(kg * (imperial ? KG_TO_LB : 1)), imperial ? 'lb' : 'kg');
+}
+
+/** The lift a lapse talks about: what it was before the sessions stopped, and the week it was set. */
+interface LapseLift { name: string; kg: number; weekStart: string }
+
+function lapseLiftOf(input: GoalProgressInput, key: string | null): LapseLift | null {
+  const weeks = key != null ? input.progression[key] : undefined;
+  const best = key != null && weeks ? liftLastBest(weeks, weekStartKeyForDay(input.todayKey)) : null;
+  return key != null && best ? { name: liftDisplayName(key, input.exerciseDisplay), kg: best.kg, weekStart: best.weekStart } : null;
+}
+
+/**
+ * "No sessions for 8 days — Squat was est. 1RM 142 kg, week of Apr 20". The
+ * date is the Monday of the week the best was set: the data is weekly, so a
+ * day would claim more than is known. Shortens ("wk of", then no date) to fit.
+ */
+function lapseHeadline(input: GoalProgressInput, days: number, lift: LapseLift): string {
+  const lead = `No sessions for ${days} days`;
+  const was = `${lift.name} was est. 1RM ${fmtLiftKg(input, lift.kg)}`;
+  const date = fmtDate(lift.weekStart, input.todayKey);
+  for (const text of [`${lead} — ${was}, week of ${date}`, `${lead} — ${was}, wk of ${date}`, `${lead} — ${was}`]) {
+    if (text.length <= HEADLINE_MAX_CHARS) return text;
+  }
+  return clip(`${lead} — ${was}`);
+}
+
+/** The lift line during a lapse: dated, no "+9 kg vs 4 weeks ago". */
+function lapseReason(input: GoalProgressInput, lift: LapseLift): GoalProgressReason {
+  return {
+    kind: 'lift',
+    text: `${lift.name} was est. 1RM ${fmtLiftKg(input, lift.kg)} in the week of ${fmtDate(lift.weekStart, input.todayKey)}`,
+    tone: 'neutral',
+  };
+}
+
+/**
+ * Weeks 2-4, before any lift has a 4-week comparison: the weekly review's own
+ * line ("Squat est. 1RM +3 kg vs last trained week"), the same pair of weeks
+ * (lib/liftChange.ts pickWeekOverWeek: the last completed week, which is the
+ * week the review read) and the same whole-kg rounding. Only the week in
+ * progress never turns it amber: half a week's best is not a drop.
+ */
+function weekOverWeekReason(input: GoalProgressInput): GoalProgressReason | null {
+  const anchor = weekStartKeyForDay(input.todayKey);
+  const pick = pickWeekOverWeek(input.progression, anchor, [addDays(anchor, -7), anchor]);
+  if (!pick) return null;
+  const imperial = input.unitSystem === 'imperial';
+  const d = liftDisplayChange({ baselineKg: pick.change.previousKg, recentKg: pick.change.currentKg, changeKg: pick.change.changeKg }, imperial);
+  const delta = d.change === 0 ? 'unchanged' : liftDeltaText({ ...d, unit: imperial ? 'lb' : 'kg' });
+  return {
+    kind: 'lift',
+    text: `${liftDisplayName(pick.exercise, input.exerciseDisplay)} est. 1RM ${delta} vs last trained week`,
+    tone: d.change > 0 ? 'good' : d.change < 0 && pick.end < anchor && !isDeloadWeek(input.progression, pick.end) ? 'watch' : 'neutral',
+  };
 }
 
 function muscleOutcome(input: GoalProgressInput, w: WeightBlock, ret: GoalLiftReturn | null): Outcome {
@@ -1681,30 +1791,43 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock, ret: GoalLiftRe
   // The 28-day window cannot judge a lifter whose last 4 weeks hold a break
   // (building back) or who has just hit the weekly target two weeks running:
   // there it never leads in amber and never makes the verdict "sessions behind".
-  const windowStale = ret != null || recentWeeksOnTarget(input);
+  // The plan is not judged before the goal's first full week is done either.
+  const windowStale = ret != null || recentWeeksOnTarget(input) || firstWeekOpen(input);
   const adherenceLow = !windowStale && (adh?.pct ?? 100) < ADHERENCE_LOW_PCT;
   const sessionsBehind = !windowStale && (adh?.pct ?? 100) < ADHERENCE_BEHIND_PCT;
   const sessions = adherence ?? sessionsReason(input);
-  const weekSessions = weekSessionsReason(input);
+  // The first 28 days' sessions line already says "This week 2 of 4": no second week count beside it.
+  const young = isYoungGoal(input);
+  const weekSessions = young ? null : weekSessionsReason(input);
   const adherenceDemoted = adherence && adherence.tone === 'watch' ? { ...adherence, tone: 'neutral' as const } : adherence;
   const protein = proteinReason(input);
-  const liftReasons = lifts.map(l => liftReason(l, input)).filter((r): r is GoalProgressReason => r != null);
-  const leadLift = ret ? liftReturnReason(ret, input) : liftReasons[0] ?? null;
+  // A week or more without a session: the lifts are dated, never praised ("+9 kg vs 4 weeks ago" is about a window
+  // that ended before the lapse began).
+  const daysOff = lastSessionDaysAgo(input);
+  const lapseLift = daysOff != null && daysOff >= LIFT_LAPSE_MIN_DAYS ? lapseLiftOf(input, ret?.exercise ?? lifts[0]?.exercise ?? null) : null;
+  const lapse = lapseLift != null && daysOff != null ? { days: daysOff, lift: lapseLift } : null;
+  const liftReasons = lapse ? [] : lifts.map(l => liftReason(l, input)).filter((r): r is GoalProgressReason => r != null);
+  const leadLift = lapse
+    ? lapseReason(input, lapse.lift)
+    : ret ? liftReturnReason(ret, input) : liftReasons[0] ?? weekOverWeekReason(input);
+  // "Back after a 15-day break" explains a rebuild; once the pre-break best is regained it is no longer news.
+  const returnBreak = ret && !ret.regained ? liftReturnBreakReason(ret, input) : null;
   // Rate at/above the top of the healthy band is a flag worth surfacing early.
   const rateTop = rate?.tone === 'watch' && w.rateKg != null && w.rateKg > 0;
   const reachLead = weightReached ? reachedLeadReason(input, w, targetKg as number) : null;
   // Low adherence leads (amber) without overriding the lift-based verdict.
+  // The second lift outranks the in-band weight rate (a rate inside the band is the quietest line on the card).
   const reasons = windowStale
     ? capReasons([
         leadLift,
         weekSessions ?? sessions,
-        ret ? liftReturnBreakReason(ret, input) : adherenceDemoted,
+        ret ? returnBreak : young ? null : adherenceDemoted,
         reachLead,
         rateTop ? rate : null,
         protein,
+        ret ? null : liftReasons[1] ?? null,
         rateTop ? null : rate,
         rate ? agingReason(w) : null,
-        ret ? null : liftReasons[1] ?? null,
       ])
     : capReasons([
         adherenceLow ? adherence : null,
@@ -1713,9 +1836,9 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock, ret: GoalLiftRe
         reachLead,
         rateTop ? rate : null,
         protein,
+        liftReasons[1] ?? null,
         rateTop ? null : rate,
         rate ? agingReason(w) : null,
-        liftReasons[1] ?? null,
       ]);
 
   // The headline lift is the shared pick (the most-trained lift that has a
@@ -1723,7 +1846,7 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock, ret: GoalLiftRe
   // headline and the lead lift reason all name the same lift.
   const head = lifts[0]?.change4wKg != null ? lifts[0] : null;
   const headDisplay = head ? displayLift(head, input) : null;
-  const liftsUp = head && headDisplay ? head.up : null;
+  const liftsUp = head && headDisplay && !lapse ? head.up : null;
   const otherUp = lifts.find(l => l !== head && l.up) ?? null;
   const otherUpDisplay = otherUp ? displayLift(otherUp, input) : null;
   const sessionsBehindHeadline = adh ? clip(`Sessions behind — ${adh.done} of ${adh.planned} planned`) : 'Sessions behind';
@@ -1733,7 +1856,9 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock, ret: GoalLiftRe
   // is never "stalled". "No lift is up" is only said when EVERY lift in the
   // list has a comparison; otherwise the lift that does is named.
   let liftState: { verdict: GoalVerdict; headline: string } | null = null;
-  if (ret) {
+  if (lapse) {
+    liftState = { verdict: 'holding', headline: lapseHeadline(input, lapse.days, lapse.lift) };
+  } else if (ret) {
     liftState = liftReturnOutcome(ret, input);
   } else if (head && headDisplay) {
     // Not up 1%: never print a "+1 kg" next to "stalled" (a gain under 1% reads "up under 1%").
@@ -2598,6 +2723,16 @@ function weightReadOf(input: GoalProgressInput, w: WeightBlock, verdict: GoalVer
   };
 }
 
+/** The local day of the newest session within the trailing 28 days (the day behind lastSessionDaysAgo); null when there was none. */
+function lastSessionDay(input: GoalProgressInput): string | null {
+  let newest: string | null = null;
+  for (const d of sessionDays(input)) {
+    if (!inLastDays(d, input.todayKey, STAT_WINDOW_DAYS)) continue;
+    if (newest == null || d > newest) newest = d;
+  }
+  return newest;
+}
+
 /** Days since the newest session within the trailing 28 days; null when there was none. */
 function lastSessionDaysAgo(input: GoalProgressInput): number | null {
   let newest: string | null = null;
@@ -2686,6 +2821,7 @@ export function computeGoalProgress(input: GoalProgressInput): GoalProgress {
     weightRead: usesWeight ? weightReadOf(input, w, outcome.verdict) : null,
     adherence: input.goal === 'muscle' ? sessionAdherence(input) : null,
     liftReturn,
+    lastSessionOn: lastSessionDay(input),
     dataSufficiency: { weighIns: w.weighIns, needed: WEIGH_INS_NEEDED, sessionsLast28d },
   };
 }

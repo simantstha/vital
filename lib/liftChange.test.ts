@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  easedLoad, findRecentBreak, isDeload, isDeloadWeek, isLiftProgressing, isLiftStalled, isLowerBodyCompound, latestTopLoadKg, liftChange4w,
-  liftDisplayChange, liftDisplayName, liftRecentEndWeek, liftReturnState, nextWorkingLoad, pickHeadlineLift, priorTopLoadKg, rankLifts,
+  cuedLifts, easedLoad, findRecentBreak, isDeload, isDeloadWeek, isLiftProgressing, isLiftStalled, isLowerBodyCompound, latestTopLoadKg, liftChange4w,
+  liftDisplayChange, liftDisplayName, liftLastBest, liftRecentEndWeek, liftRegressed, liftReturnDisplay, liftReturnState, liftShortName, liftWeekOverWeek,
+  nextLoadCues, nextWorkingLoad, pickHeadlineLift, pickWeekOverWeek, priorTopLoadKg, rankLifts,
   type LiftWeekPoint,
 } from './liftChange';
 
@@ -278,4 +279,98 @@ test('liftDisplayChange: whole units; the change is computed from the rounded en
   assert.deepEqual(liftDisplayChange({ baselineKg: 99.2, recentKg: 107.9, changeKg: 8.7 }, false), { baseline: 99, recent: 108, change: 9 });
   // 100 kg = 220.46 lb -> 220; 105 kg = 231.5 lb -> 231
   assert.deepEqual(liftDisplayChange({ baselineKg: 100, recentKg: 105, changeKg: 5 }, true), { baseline: 220, recent: 231, change: 11 });
+});
+
+// ── Wave 20b: week over week, a lapse, the return as shown, every main lift's next load ──
+
+const lt = (weekStart: string, e: number | null, top: number | null = null, sessions = 2): LiftWeekPoint => ({
+  weekStart, bestEstimatedOneRepMaxKg: e, topLoadKg: top, sessions, totalSets: sessions * 3, volumeKg: 3000,
+});
+
+test('liftWeekOverWeek: the end week against the newest earlier week with an e1RM (a gap week in between is skipped)', () => {
+  const weeks = [lt('2026-09-07', 130), lt('2026-09-14', null), lt('2026-09-28', 133.4)];
+  assert.deepEqual(liftWeekOverWeek(weeks, '2026-09-28'), { previousWeekStart: '2026-09-07', previousKg: 130, currentKg: 133.4, changeKg: 3.4 });
+  assert.equal(liftWeekOverWeek(weeks, '2026-09-21'), null, 'no e1RM in the end week');
+  assert.equal(liftWeekOverWeek([lt('2026-09-28', 133.4)], '2026-09-28'), null, 'nothing earlier');
+});
+
+test('pickWeekOverWeek: the most-trained lift that can use the first end week; the card falls through to the week in progress', () => {
+  const squat = [lt('2026-09-14', 100, 80, 3), lt('2026-09-21', 103, 82.5, 3)];
+  const bench = [lt('2026-09-14', 80, 60, 1), lt('2026-09-21', 82, 62.5, 1)];
+  const anchor = '2026-09-28';
+  assert.equal(pickWeekOverWeek({ squat, bench }, anchor, ['2026-09-21'])!.exercise, 'squat');
+  // The review passes only the reviewed week; the card passes the last completed week first, then the one in progress.
+  assert.equal(pickWeekOverWeek({ squat }, anchor, ['2026-09-21'])!.end, '2026-09-21');
+  const early = { squat: [lt('2026-09-21', 100, 80, 3), lt('2026-09-28', 104, 82.5, 1)] };
+  assert.equal(pickWeekOverWeek(early, anchor, ['2026-09-21']), null, 'week 1 has nothing before it');
+  assert.equal(pickWeekOverWeek(early, anchor, ['2026-09-21', anchor])!.end, anchor);
+});
+
+test('liftLastBest: the recent-window best before a lapse and the Monday it was set; the newest e1RM when the lift is out of the look-back', () => {
+  const weeks = [lt('2026-08-31', 133), lt('2026-09-07', 139), lt('2026-09-14', 136)];
+  // anchor 09-21 looks back to 09-14 (end): recent = best(09-14: 136, 09-07: 139) = 139 from the week of 09-07.
+  assert.deepEqual(liftLastBest(weeks, '2026-09-21'), { kg: 139, weekStart: '2026-09-07' });
+  // Ties go to the newer week.
+  assert.deepEqual(liftLastBest([lt('2026-09-07', 139), lt('2026-09-14', 139)], '2026-09-21'), { kg: 139, weekStart: '2026-09-14' });
+  // Anchor far past the last week: the newest week with an e1RM stands in.
+  assert.deepEqual(liftLastBest(weeks, '2026-11-02'), { kg: 139, weekStart: '2026-09-07' });
+  assert.equal(liftLastBest([lt('2026-09-07', null)], '2026-09-21'), null);
+});
+
+test('liftReturnDisplay: whole numbers as shown, the percentage from those numbers, never "142 of 142" before it is regained', () => {
+  // 136.5 -> 137 shown, 142.4 -> 142: 137/142 = 96%, where the unrounded 136.5/142.4 would say 95%.
+  assert.deepEqual(liftReturnDisplay({ preBreakKg: 142.4, recentKg: 136.5, regained: false }, false), { pre: 142, recent: 137, pct: 96, unit: 'kg' });
+  // Rounds up to the pre-break number while still under it: shown one under.
+  assert.deepEqual(liftReturnDisplay({ preBreakKg: 142.4, recentKg: 141.6, regained: false }, false), { pre: 142, recent: 141, pct: 99, unit: 'kg' });
+  // Regained: rounded to the nearest percent, may reach 100+.
+  assert.deepEqual(liftReturnDisplay({ preBreakKg: 142, recentKg: 145, regained: true }, false), { pre: 142, recent: 145, pct: 102, unit: 'kg' });
+  // Pounds: the shown lb numbers drive the percentage (130 kg = 287 lb, 140 kg = 309 lb).
+  assert.deepEqual(liftReturnDisplay({ preBreakKg: 140, recentKg: 130, regained: false }, true), { pre: 309, recent: 287, pct: 92, unit: 'lb' });
+});
+
+test('liftRegressed: more than 1% under the previous trained week; nothing to compare is not a regression', () => {
+  const w = (e: number) => [lt('2026-09-07', 100), lt('2026-09-14', e)];
+  assert.equal(liftRegressed(w(98), '2026-09-14'), true);
+  assert.equal(liftRegressed(w(99.5), '2026-09-14'), false, 'within 1%');
+  assert.equal(liftRegressed(w(104), '2026-09-14'), false);
+  assert.equal(liftRegressed([lt('2026-09-14', 90)], '2026-09-14'), false);
+});
+
+test('cuedLifts: the lead lift first, then the main lifts trained that week (most-trained first); accessories and untrained lifts are left out', () => {
+  const wkStart = '2026-09-28';
+  const prog = {
+    squat: [lt(wkStart, 140, 110, 2)],
+    'bench press': [lt(wkStart, 100, 80, 3)],
+    deadlift: [lt('2026-09-21', 160, 130, 2)], // not trained in the reviewed week
+    'leg extension': [lt(wkStart, 90, 60, 5)], // an accessory, however much it was trained
+    'overhead press': [lt(wkStart, 70, 50, 1)],
+  };
+  assert.deepEqual(cuedLifts(prog, wkStart, 'squat'), ['squat', 'bench press', 'overhead press']);
+  assert.deepEqual(cuedLifts(prog, wkStart, null), ['bench press', 'squat', 'overhead press']);
+  // A non-main headline lift still leads when it was trained; at most three lifts.
+  assert.deepEqual(cuedLifts(prog, wkStart, 'leg extension'), ['leg extension', 'bench press', 'squat']);
+  assert.deepEqual(cuedLifts({ deadlift: prog.deadlift }, wkStart, 'deadlift'), []);
+});
+
+test('nextLoadCues: the same next-load rule per lift; a lift that went backwards holds; a rebuild never holds', () => {
+  const wkStart = '2026-09-28';
+  const prog = {
+    squat: [lt('2026-09-21', 140, 107.5), lt(wkStart, 142, 110)],
+    'bench press': [lt('2026-09-21', 100, 87.5), lt(wkStart, 100.4, 87.5)],
+    deadlift: [lt('2026-09-21', 160, 132.5), lt(wkStart, 150, 130)],
+  };
+  const cues = nextLoadCues(prog, wkStart, { imperial: false, leadKey: 'squat', rebuilding: false });
+  assert.deepEqual(cues.map(c => [c.key, c.load.from, c.load.to, c.hold]), [
+    ['squat', 110, 112.5, false],
+    ['bench press', 87.5, 89, false], // +1.25 rounded to 0.5, as the logger does
+    ['deadlift', 130, 132.5, true], // e1RM fell 6%: hold at 130
+  ]);
+  assert.equal(nextLoadCues(prog, wkStart, { imperial: false, leadKey: 'squat', rebuilding: true }).some(c => c.hold), false);
+});
+
+test('liftShortName: bench press is "bench"; others are the display name, lower-cased', () => {
+  assert.equal(liftShortName('bench press'), 'bench');
+  assert.equal(liftShortName('deadlift'), 'deadlift');
+  assert.equal(liftShortName('overhead press', { 'overhead press': 'Overhead Press' }), 'overhead press');
+  assert.equal(liftDisplayName('squat'), 'Squat');
 });

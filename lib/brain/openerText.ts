@@ -10,6 +10,7 @@
  */
 
 import type { GoalKind, GoalProgress } from '../goalProgress';
+import { LIFT_LAPSE_MIN_DAYS } from '../liftChange';
 import { KM_PER_MILE, LB_PER_KG } from '../metricFormat';
 import { relationForDays, weeksForDays } from '../weightPace';
 import type { UnitSystem } from '../units';
@@ -98,6 +99,19 @@ function reachedAsks(gp: GoalProgress | null | undefined): boolean {
   return daysAgo != null && daysAgo <= REACHED_ASK_DAYS;
 }
 
+/** The question a lapse check-in ends in. */
+const LAPSE_ASK = 'Want to plan how to get back in?';
+
+/**
+ * A lifter a week or more past their last session (the card's "No sessions for 8
+ * days", verdict holding) until the returning-user opener takes over at
+ * RETURNING_AFTER_DAYS: the opener ends in its own question.
+ */
+function lapseAsks(gp: GoalProgress | null | undefined): boolean {
+  const days = gp?.lastSessionDaysAgo;
+  return gp?.goal === 'muscle' && gp.verdict === 'holding' && days != null && days >= LIFT_LAPSE_MIN_DAYS && days <= RETURNING_AFTER_DAYS;
+}
+
 /**
  * One line stating the goal status, or null when there is no real progress
  * to state (needs_target / insufficient_data / nothing usable). Weight goals
@@ -158,6 +172,8 @@ export function goalOpenerLine(gp: GoalProgress | null | undefined, units: UnitS
   }
   const headline = gp.headline?.trim().replace(/[.\s]+$/, '');
   if (!headline) return null;
+  // A week or more without a session: the check-in is the lapse, and it asks about getting back in.
+  if (lapseAsks(gp)) return `Goal check-in: ${headline}. ${LAPSE_ASK}`;
   // A headline that ends in its own "!" ("... Congratulations!") keeps it; no "!." after it.
   const endsLoud = gp.headline.trim().endsWith('!');
   return endsLoud ? `Goal check-in: ${gp.headline.trim()}` : `Goal check-in: ${headline}.`;
@@ -278,7 +294,7 @@ export function requiredOpenerLine(gp: GoalProgress | null | undefined, goal: un
 /** Deterministic opener used when the model call fails. Null means the caller keeps its generic fallback. */
 export function goalFallbackOpener(gp: GoalProgress | null | undefined, goal: unknown, units: UnitSystem): string | null {
   // These two already end in their own question (a reached goal's only while it still asks); no second invitation.
-  const own = returningUserOpener(gp) ?? (reachedAsks(gp) ? goalOpenerLine(gp, units) : null);
+  const own = returningUserOpener(gp) ?? (reachedAsks(gp) || lapseAsks(gp) ? goalOpenerLine(gp, units) : null);
   if (own) return own;
   const line = goalOpenerLine(gp, units);
   if (line) return `${line} ${OPENER_INVITE}`;

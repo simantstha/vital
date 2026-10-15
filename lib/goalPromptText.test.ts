@@ -285,8 +285,8 @@ test('returning from a break: the coach is told the lifts are rebuilding — no 
   const lines = formatGoalProgressLines(gp({
     goal: 'muscle',
     verdict: 'building',
-    headline: 'Building back — Squat at 95% of your pre-break 142 kg',
-    reasons: [{ kind: 'lift', text: 'Squat est. 1RM 136 kg, 95% of your pre-break 142 kg', tone: 'neutral' }],
+    headline: 'Building back — Squat est. 1RM 136 of 142 kg pre-break',
+    reasons: [{ kind: 'lift', text: 'Squat est. 1RM 136 kg, 95% of your 142 kg pre-break best', tone: 'neutral' }],
     liftReturn: { exercise: 'squat', name: 'Squat', breakDays: 15, endedOn: '2026-05-10', preBreakKg: 142, recentKg: 136, pct: 95, regained: false },
   }), 'metric');
   assert.ok(lines.includes('- Returning from a 15-day break (ended 2026-05-10): lifts are rebuilding — do not call this a stall or suggest a deload.'), lines.join('\n'));
@@ -343,4 +343,24 @@ test('coach lines tell the coach not to quote a rate or a weeks-ahead call durin
   assert.match(back, /back after a gap in weigh-ins: welcome them back/);
   const plateau = formatGoalProgressLines(gp({ eta: null, weightRead: { ...WEIGHT_READ, state: 'plateau' } }), 'metric').join('\n');
   assert.match(plateau, /Plateau on the raw weekly averages \(flat for 3 weeks\): often water/);
+});
+
+// ── Wave 20b: when the lifter last trained ──────────────────────────────────
+
+test('muscle: the coach is told when the last strength session was; a week or more ago it must not praise lift progress', () => {
+  const muscle = (over: Partial<GoalProgress>) => gp({ goal: 'muscle', verdict: 'holding', headline: 'No sessions for 8 days — Squat was est. 1RM 142 kg, week of Apr 20', ...over });
+  const lapsed = formatGoalProgressLines(muscle({ lastSessionDaysAgo: 8, lastSessionOn: '2026-04-25' }), 'metric');
+  assert.ok(lapsed.includes('- Last strength session 8 days ago (Apr 25) — do not praise lift progress; ask about getting back in'), lapsed.join('\n'));
+  // Right before the verdict, so the verdict is read in that light.
+  assert.ok(lapsed.findIndex(l => l.startsWith('- Last strength session')) < lapsed.findIndex(l => l.startsWith('- Verdict:')));
+  // 7 days is the first lapsed day; 6 is just the date.
+  assert.match(formatGoalProgressLines(muscle({ lastSessionDaysAgo: 7, lastSessionOn: '2026-04-26' }), 'metric').join('\n'), /Last strength session 7 days ago \(Apr 26\) — do not praise lift progress/);
+  const recent = formatGoalProgressLines(muscle({ lastSessionDaysAgo: 6, lastSessionOn: '2026-04-27' }), 'metric').join('\n');
+  assert.match(recent, /^- Last strength session 6 days ago \(Apr 27\)$/m);
+  assert.doesNotMatch(recent, /do not praise/);
+  assert.match(formatGoalProgressLines(muscle({ lastSessionDaysAgo: 0, lastSessionOn: '2026-05-03' }), 'metric').join('\n'), /^- Last strength session today$/m);
+  assert.match(formatGoalProgressLines(muscle({ lastSessionDaysAgo: 1, lastSessionOn: '2026-05-02' }), 'metric').join('\n'), /^- Last strength session yesterday \(May 2\)$/m);
+  // No session in the last 28 days, or another goal: no line.
+  assert.doesNotMatch(formatGoalProgressLines(muscle({ lastSessionDaysAgo: null }), 'metric').join('\n'), /Last strength session/);
+  assert.doesNotMatch(formatGoalProgressLines(gp({ lastSessionDaysAgo: 9, lastSessionOn: '2026-04-25' }), 'metric').join('\n'), /Last strength session/);
 });

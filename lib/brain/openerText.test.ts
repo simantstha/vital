@@ -198,7 +198,7 @@ test('reached goal: the opener congratulates and asks for a new target or mainte
 
 test('muscle opener after the first sessions: says how many are in and when the first lift comparison lands', () => {
   const gp = {
-    goal: 'muscle', verdict: 'insufficient_data', headline: 'First lift comparison on Mar 30 · 4 of 4 sessions so far',
+    goal: 'muscle', verdict: 'insufficient_data', headline: 'First lift comparison on Mar 30 · 4 sessions so far',
     target: { weightKg: null, date: null, weeklySessions: 4, weeklyDistanceKm: null },
     dataSufficiency: { weighIns: 3, needed: 3, sessionsLast28d: 4 },
   } as unknown as Parameters<typeof newUserGoalOpener>[1];
@@ -289,4 +289,22 @@ test('reached: asks about a new target or maintenance in the first 3 days after 
   // Drifting well under the target says so instead.
   const under = gp({ ...reached(10), weightRead: { ...READ, state: 'reached', weekMeanKg: 74.2, reachedDaysAgo: 10 } });
   assert.equal(goalOpenerLine(under, 'metric'), 'At 74.2 kg, 1.8 kg under your 76 kg target.');
+});
+
+// ── Wave 20b: a lifter a week or more past the last session ─────────────────
+
+test('muscle opener after 7+ days without a session: states the lapse (no praise) and asks about getting back in, once', () => {
+  const lapsed = gp({
+    goal: 'muscle', target: { weightKg: null, date: null, weeklySessions: 4, weeklyDistanceKm: null },
+    verdict: 'holding', headline: 'No sessions for 8 days — Squat was est. 1RM 142 kg, week of Apr 20', lastSessionDaysAgo: 8,
+  });
+  const line = 'Goal check-in: No sessions for 8 days — Squat was est. 1RM 142 kg, week of Apr 20. Want to plan how to get back in?';
+  assert.equal(goalOpenerLine(lapsed, 'metric'), line);
+  assert.equal(requiredOpenerLine(lapsed, 'muscle', 'metric'), line);
+  assert.equal(goalFallbackOpener(lapsed, 'muscle', 'metric'), line, 'no second invitation after its own question');
+  // 15 days: the returning-user reset offer takes over, as before.
+  assert.equal(requiredOpenerLine({ ...lapsed, lastSessionDaysAgo: 15 }, 'muscle', 'metric'), 'Welcome back — your last session was 15 days ago. Want a quick reset plan?');
+  // 6 days (or any other verdict): the plain check-in.
+  assert.doesNotMatch(goalOpenerLine({ ...lapsed, lastSessionDaysAgo: 6 }, 'metric') ?? '', /get back in/);
+  assert.doesNotMatch(goalOpenerLine({ ...lapsed, verdict: 'progressing', lastSessionDaysAgo: 8 }, 'metric') ?? '', /get back in/);
 });
