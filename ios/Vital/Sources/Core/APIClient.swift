@@ -2574,14 +2574,21 @@ struct GoalProgressDTO: Decodable, Equatable {
         let returned: Returned?
         /// Days from `reachedAt` to the newest day; `nil` when not reached or unknown.
         let reachedDaysAgo: Int?
+        /// Calendar days the goal has run (start day and today counted); `nil` when
+        /// the server doesn't send it (an older server) or doesn't know the start.
+        /// Tells a young goal ("your pace settles after 3 weeks") from an older one
+        /// still short of a pace ("a few more weigh-ins and your pace is back"):
+        /// `WeightHeroLogic.earlyReadSlotText(goalAgeDays:)`.
+        let goalAgeDays: Int?
 
         private enum CodingKeys: String, CodingKey {
-            case state, scaleKg, scaleDay, weekMeanKg, weeksVsTarget, returned, reachedDaysAgo
+            case state, scaleKg, scaleDay, weekMeanKg, weeksVsTarget, returned, reachedDaysAgo, goalAgeDays
         }
 
         init(
             state: State? = nil, scaleKg: Double? = nil, scaleDay: String? = nil, weekMeanKg: Double? = nil,
-            weeksVsTarget: Int? = nil, returned: Returned? = nil, reachedDaysAgo: Int? = nil
+            weeksVsTarget: Int? = nil, returned: Returned? = nil, reachedDaysAgo: Int? = nil,
+            goalAgeDays: Int? = nil
         ) {
             self.state = state
             self.scaleKg = scaleKg
@@ -2590,6 +2597,7 @@ struct GoalProgressDTO: Decodable, Equatable {
             self.weeksVsTarget = weeksVsTarget
             self.returned = returned
             self.reachedDaysAgo = reachedDaysAgo
+            self.goalAgeDays = goalAgeDays
         }
 
         /// Every field is tolerant: a missing, null or wrong-typed value drops only that field.
@@ -2602,6 +2610,7 @@ struct GoalProgressDTO: Decodable, Equatable {
             weeksVsTarget = tolerantWholeNumber(c, .weeksVsTarget)
             returned = try? c.decode(Returned.self, forKey: .returned)
             reachedDaysAgo = tolerantWholeNumber(c, .reachedDaysAgo)
+            goalAgeDays = tolerantWholeNumber(c, .goalAgeDays)
         }
     }
 

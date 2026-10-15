@@ -407,4 +407,65 @@ final class RaceLogicTests: XCTestCase {
         XCTAssertEqual(row, RaceLogic.rowText(midWeek, weekPlanned: true))
         XCTAssertTrue(row?.hasSuffix("recovery week 1") ?? false, row ?? "nil")
     }
+
+    // MARK: - "Set your next goal": recovery week 1 only (wave 20)
+
+    /// A recovery payload `daysSince` days after the race, with the headline the server writes for it.
+    private func recoveryProgress(daysSince: Int?, phase: GoalProgressDTO.Race.Phase? = .recovery) -> GoalProgressDTO {
+        let week = (daysSince ?? 1) <= 7 ? 1 : 2
+        return GoalProgressDTO(
+            goal: "endurance",
+            distance: GoalProgressDTO.Distance(targetKm: 50, thisWeekKm: 4, stepTargetKm: 16),
+            race: lifecycle(weeks: 0, days: 0, phase: phase, daysSince: daysSince),
+            verdict: .holding,
+            headline: "Race done \u{2014} Dec 30 \u{00B7} recovery week \(week)"
+        )
+    }
+
+    /// The server shows its "Set your next goal" reason in recovery week 1 only (`nextGoalReason`, days 1-7);
+    /// a month of it is nagging. The button follows the sentence, on the card and in the sheet alike
+    /// (both gate on `showsNextGoalPrompt`).
+    func testTheNextGoalButtonIsForRecoveryWeekOneOnly() {
+        for day in 1...7 {
+            XCTAssertTrue(GoalProgressLogic.showsNextGoalPrompt(recoveryProgress(daysSince: day)), "day \(day)")
+            XCTAssertTrue(RaceLogic.offersNextGoal(lifecycle(weeks: 0, days: 0, phase: .recovery, daysSince: day)), "day \(day)")
+        }
+        for day in 8...14 {
+            XCTAssertFalse(GoalProgressLogic.showsNextGoalPrompt(recoveryProgress(daysSince: day)), "day \(day)")
+            XCTAssertFalse(RaceLogic.offersNextGoal(lifecycle(weeks: 0, days: 0, phase: .recovery, daysSince: day)), "day \(day)")
+        }
+        // A server that sends no day count reads as week 1: the button, exactly as before.
+        XCTAssertTrue(GoalProgressLogic.showsNextGoalPrompt(recoveryProgress(daysSince: nil)))
+        // Outside recovery there is never a button, whatever the day count.
+        XCTAssertFalse(GoalProgressLogic.showsNextGoalPrompt(recoveryProgress(daysSince: 3, phase: .taper)))
+        XCTAssertFalse(GoalProgressLogic.showsNextGoalPrompt(recoveryProgress(daysSince: 3, phase: .raceWeek)))
+        XCTAssertFalse(GoalProgressLogic.showsNextGoalPrompt(recoveryProgress(daysSince: 3, phase: .build)))
+        XCTAssertFalse(GoalProgressLogic.showsNextGoalPrompt(recoveryProgress(daysSince: 3, phase: nil)))
+        XCTAssertFalse(RaceLogic.offersNextGoal(nil))
+        XCTAssertFalse(RaceLogic.offersNextGoal(race()))
+    }
+
+    /// The recovery headline keeps leading for the whole 14 days — only the button goes after week 1.
+    func testTheRecoveryHeadlineLeadsForAllFourteenDays() {
+        for day in 1...14 {
+            let progress = recoveryProgress(daysSince: day)
+            XCTAssertTrue(RaceLogic.isRecovery(progress.race), "day \(day)")
+            XCTAssertEqual(
+                GoalProgressLogic.primaryLine(progress, system: .metric),
+                "Race done \u{2014} Dec 30 \u{00B7} recovery week \(day <= 7 ? 1 : 2)", "day \(day)"
+            )
+        }
+        // With the week plan the server writes "Recovery week 2 — day 9 after your half": still the lead, still no button.
+        let planned = GoalProgressDTO(
+            goal: "endurance",
+            distance: GoalProgressDTO.Distance(
+                targetKm: 50, thisWeekKm: 4, stepTargetKm: 16, plan: GoalProgressDTO.Distance.Plan(kind: "recovery", targetKm: 16)
+            ),
+            race: lifecycle(weeks: 0, days: 0, phase: .recovery, daysSince: 9),
+            verdict: .holding,
+            headline: "Recovery week 2 \u{2014} day 9 after your half"
+        )
+        XCTAssertEqual(GoalProgressLogic.primaryLine(planned, system: .metric), "Recovery week 2 \u{2014} day 9 after your half")
+        XCTAssertFalse(GoalProgressLogic.showsNextGoalPrompt(planned))
+    }
 }

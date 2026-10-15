@@ -420,7 +420,7 @@ final class FixtureCrossScreenConsistencyTests: XCTestCase {
         XCTAssertEqual(rhrStat.tone, .watch)
         let rise = try XCTUnwrap(plain(rhrStat.comparison)?.replacingOccurrences(of: "+", with: "").replacingOccurrences(of: " bpm vs your normal", with: ""))
         XCTAssertEqual(plain(endurance.slip), "Resting heart rate rose \(rise) bpm \u{2014} your body may be carrying fatigue.")
-        XCTAssertEqual(plain(endurance.nextWeek), "Build to ~27 km: long run 16 km, the rest mostly easy runs; 30 km the week after.")
+        XCTAssertEqual(plain(endurance.nextWeek), "Build to ~27 km: long run 14 km, the rest mostly easy runs; 30 km the week after.")
         XCTAssertFalse(endurance.nextWeek.contains("Repeat this week"))
         XCTAssertEqual(WeeklyReviewLogic.rows(endurance).map(\.kind), [.win, .slip, .next])
 
@@ -531,11 +531,13 @@ final class FixtureCrossScreenConsistencyTests: XCTestCase {
             "\(GoalProgressLogic.trimmedNumber(week.km)) of ~27 km running this week · goal 30 km"
         )
         let reviewNext = plain((json(.endurance, "/api/review/weekly")["review"] as? [String: Any])?["nextWeek"] as? String) ?? ""
-        XCTAssertTrue(reviewNext.hasPrefix("Build to ~27 km: long run 16 km"), reviewNext)
-        // The plan adds up: what is done this week plus the 16 km long run still
-        // ahead lands on the ~27 km step (it used to be 22.7 + 16 ≈ 39 km).
-        XCTAssertEqual(week.km + 16, 27, accuracy: 1.0)
-        XCTAssertLessThan(week.km + 16, 30, "following the plan never overshoots the goal this week")
+        XCTAssertTrue(reviewNext.hasPrefix("Build to ~27 km: long run 14 km"), reviewNext)
+        // The plan adds up: what is done this week plus the 14 km long run still
+        // ahead leaves a few easy km to the ~27 km step (it used to be 22.7 + 16 ≈ 39 km).
+        let longRunAhead = FixtureData.enduranceNextLongRunKm
+        XCTAssertEqual(longRunAhead, 14)
+        XCTAssertEqual(week.km + longRunAhead, 27, accuracy: 3.0)
+        XCTAssertLessThanOrEqual(week.km + longRunAhead, 27, "following the plan never overshoots the week's step")
 
         XCTAssertEqual(progress.headline, FixtureData.enduranceGoalHeadline)
         XCTAssertFalse(progress.headline.contains("over 4 weeks"))
@@ -610,15 +612,30 @@ final class FixtureCrossScreenConsistencyTests: XCTestCase {
     func test_enduranceLongRunAndRaceShowOnGoalCardAndProfileRow() throws {
         let (_, data) = FixtureData.response(scenario: .endurance, method: "GET", path: "/api/goal/progress", query: "")
         let progress = try JSONDecoder().decode(GoalProgressDTO.self, from: data)
-        XCTAssertEqual(progress.longRun, GoalProgressDTO.LongRun(lastKm: 14, peakKm: 16, targetPeakKm: 18))
+        // The half marathon's own peak is 18 km, but a long run is at most half of the 30 km week:
+        // the payload's peak target is the 15 km that fits (`longRunPeakTarget`), the 18 km riding along.
+        XCTAssertEqual(progress.longRun, GoalProgressDTO.LongRun(lastKm: 14, peakKm: 16, targetPeakKm: 15))
+        let rawLongRun = json(.endurance, "/api/goal/progress")["longRun"] as? [String: Any]
+        XCTAssertEqual(rawLongRun?["raceTargetKm"] as? Double, 18)
         XCTAssertEqual(progress.reasons.map(\.kind), ["race", "plan", "long_run"])
         // What this week is for (the server's week-plan `purpose`): the step and the long run.
-        XCTAssertEqual(plain(progress.reasons[1].text), "~27 km this week: long run 16 km, the rest easy runs")
+        XCTAssertEqual(plain(progress.reasons[1].text), "~27 km this week: long run 14 km, the rest easy runs")
         XCTAssertEqual(progress.reasons[1].text, progress.distance?.plan?.purpose)
-        XCTAssertEqual(progress.distance?.plan?.longRunKm, 16)
-        let longRun = progress.reasons[2].text
-        XCTAssertTrue(longRun.hasPrefix("Long run 14 km \u{00B7} build to 18 km by "), longRun)
-        XCTAssertEqual(RaceLogic.longRunRowText(progress.longRun!, .metric), "14\u{00A0}km \u{00B7} peak target 18\u{00A0}km")
+        XCTAssertEqual(progress.distance?.plan?.longRunKm, 14)
+        // The 16 km peak has reached the 15 km target, so the reason says so — and, once, why the
+        // target is not the half's 18 km (`longRunCapNote`), with the goal that would carry it.
+        let longRun = progress.reasons[2]
+        XCTAssertEqual(longRun.tone, .good)
+        XCTAssertEqual(
+            longRun.text,
+            "Long run peak 16 km \u{2014} on target. Your 30 km weeks fit a 15 km long run; for an 18 km peak, raise the goal to ~36 km"
+        )
+        XCTAssertEqual(GoalProgressLogic.visibleReasons(progress).map(\.text).last, longRun.text, "the goal card shows it as it is")
+        XCTAssertEqual(RaceLogic.longRunRowText(progress.longRun!, .metric), "14\u{00A0}km \u{00B7} peak target 15\u{00A0}km")
+        // ...and the numbers in it are the fixture's own.
+        XCTAssertEqual(FixtureData.enduranceLongRunTargetKm, 15)
+        XCTAssertEqual(FixtureData.enduranceRaceLongRunKm, 18)
+        XCTAssertGreaterThanOrEqual(FixtureData.endurancePeakLongRunKm, FixtureData.enduranceLongRunTargetKm)
 
         // The other scenarios never carry a long run.
         for scenario in [FixtureMode.Scenario.weightLoss, .muscle] {
@@ -639,14 +656,14 @@ final class FixtureCrossScreenConsistencyTests: XCTestCase {
     }
 
     /// The endurance Today hero's race line also carries the long-run build
-    /// ("long run 14/18 km") from the same goal-progress payload the goal card reads.
+    /// ("long run 14/15 km") from the same goal-progress payload the goal card reads.
     func test_enduranceHeroRaceLineCarriesTheLongRunProgress() throws {
         let (_, data) = FixtureData.response(scenario: .endurance, method: "GET", path: "/api/goal/progress", query: "")
         let progress = try JSONDecoder().decode(GoalProgressDTO.self, from: data)
         let race = try XCTUnwrap(progress.race)
         XCTAssertEqual(
             RaceLogic.heroLine(race, longRun: progress.longRun, system: .metric),
-            "Half marathon \u{00B7} 12 weeks to go \u{00B7} long run 14/18\u{00A0}km"
+            "Half marathon \u{00B7} 12 weeks to go \u{00B7} long run 14/15\u{00A0}km"
         )
         // The other scenarios have no race or long run to quote.
         for scenario in [FixtureMode.Scenario.weightLoss, .muscle] {

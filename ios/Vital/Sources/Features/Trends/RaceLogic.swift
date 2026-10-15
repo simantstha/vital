@@ -122,6 +122,18 @@ enum RaceLogic {
         race?.phase == .recovery
     }
 
+    /// True when the post-race "Set your next goal" button is offered: recovery
+    /// week 1 only (`daysSince` 1...7, as `recoveryWeek(daysSince:)` counts it). The
+    /// server shows its next-goal reason in that week alone (`nextGoalReason` in
+    /// `lib/goalProgress.ts`), so the button must not outlive the sentence it
+    /// belongs to; week 2 still leads with the recovery headline. A server that
+    /// sends no `daysSince` reads as week 1 (the button, as before). False outside
+    /// recovery.
+    static func offersNextGoal(_ race: GoalProgressDTO.Race?) -> Bool {
+        guard let race, isRecovery(race) else { return false }
+        return recoveryWeek(daysSince: race.daysSince) == 1
+    }
+
     /// The post-race call to action: it opens the goal editor
     /// (`.vitalOpenGoalEditor`) so the runner can set a new race, a weekly
     /// distance target, or switch to maintenance.

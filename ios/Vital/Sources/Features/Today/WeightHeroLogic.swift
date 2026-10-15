@@ -196,6 +196,23 @@ enum WeightHeroLogic {
     static let returningReadHeroText = "Welcome back — weigh in a few more days"
     static let plateauReadHeroText = "Flat for 3 weeks"
 
+    /// Goal age (calendar days) from which an early read is no longer "the pace
+    /// settles after 3 weeks": the goal is past that point and only short of
+    /// weigh-ins (`PACE_SETTLE_DAYS` in `lib/weightPace.ts`).
+    static let paceSettleDays = 21
+    /// The same slot for a goal that is 21+ days old — the server's own wording for
+    /// it (`paceWaitClause` in `lib/brain/openerText.ts`), capitalised for the slot.
+    static let olderGoalEarlyReadHeroText = "A few more weigh-ins and your pace is back"
+
+    /// The early read's short complement: "Pace settles after 3 weeks" for a young
+    /// goal, the older-goal wording once `weightRead.goalAgeDays` says the goal has
+    /// run `paceSettleDays` or more. A server that doesn't send the age (`nil`)
+    /// keeps `earlyReadHeroText`, exactly as before.
+    static func earlyReadSlotText(goalAgeDays: Int?) -> String {
+        guard let goalAgeDays, goalAgeDays >= paceSettleDays else { return earlyReadHeroText }
+        return olderGoalEarlyReadHeroText
+    }
+
     /// The text for the hero's rate slot during a server weight read, `nil` when
     /// the server is not reading the scale (the hero then keeps its own rate
     /// logic) or has nothing to say:
@@ -208,7 +225,7 @@ enum WeightHeroLogic {
             return GoalProgressLogic.serverWeightRead(progress)
         }
         switch state {
-        case .early:     return earlyReadHeroText
+        case .early:     return earlyReadSlotText(goalAgeDays: progress.weightRead?.goalAgeDays)
         case .returning: return returningReadHeroText
         case .plateau:   return plateauReadHeroText
         case .pace, .reached: return nil

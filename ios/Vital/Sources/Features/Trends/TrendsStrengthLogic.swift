@@ -308,18 +308,40 @@ enum TrendsStrengthLogic {
 
     // MARK: - Building back after a break
 
-    /// "Building back — 96% of pre-break 142 kg" (neutral): the server's
+    /// "Building back — est. 1RM 136 of 142 kg pre-break" (neutral): the server's
     /// `liftReturn` says the user is rebuilding this lift after a break of 10+
     /// days and has not yet regained its pre-break best, so a negative change
-    /// against 4 weeks ago is expected, not a decline. `nil` for any other lift,
-    /// once the pre-break best is regained, and without a `liftReturn`.
+    /// against 4 weeks ago is expected, not a decline. The lift's name is the row's
+    /// own, so the server's headline ("Building back — Squat est. 1RM 136 of 142 kg
+    /// pre-break") loses it here and nothing else; the numbers are the ones the
+    /// server prints (`liftReturnShown`). A payload without `recentKg` keeps the
+    /// percentage wording ("Building back — 96% of pre-break 142 kg"). `nil` for any
+    /// other lift, once the pre-break best is regained, and without a `liftReturn`.
     static func buildingBackStatus(
         liftReturn: GoalProgressDTO.LiftReturn?, forLift key: String, system: UnitSystem
     ) -> Status? {
         guard let liftReturn, !liftReturn.regained,
               normalizedLiftKey(liftReturn.exercise) == normalizedLiftKey(key) else { return nil }
         let preBreak = wholeWeightText(kg: liftReturn.preBreakKg, system: system)
+        if let recentKg = liftReturn.recentKg,
+           let shown = liftReturnShown(preBreakKg: liftReturn.preBreakKg, recentKg: recentKg, system: system) {
+            return Status(text: "Building back — est. 1RM \(shown.recent) of \(preBreak) pre-break", tone: .neutral)
+        }
         return Status(text: "Building back — \(liftReturn.pct)% of pre-break \(preBreak)", tone: .neutral)
+    }
+
+    /// The whole-unit numbers of a rebuild line exactly as the server rounds and
+    /// prints them (`liftReturnDisplay` in `lib/liftChange.ts`, `!regained`): both
+    /// to the nearest whole kg (lb), and a recent number that rounds up to the
+    /// pre-break one is shown one unit under it, so the copy never claims "142 of
+    /// 142" before the best is regained. `nil` when either weight is not a real
+    /// positive number (the caller then keeps the percentage wording).
+    static func liftReturnShown(preBreakKg: Double, recentKg: Double, system: UnitSystem) -> (pre: Int, recent: Int)? {
+        guard preBreakKg.isFinite, preBreakKg > 0, recentKg.isFinite, recentKg > 0 else { return nil }
+        func whole(_ kg: Double) -> Int { Int((system == .metric ? kg : UnitConvert.kgToLb(kg)).rounded()) }
+        let pre = whole(preBreakKg)
+        let recent = whole(recentKg)
+        return (pre: pre, recent: recent >= pre ? pre - 1 : recent)
     }
 
     // MARK: - Status chip

@@ -157,12 +157,14 @@ enum GoalProgressLogic {
 
     // MARK: - Race done: next goal
 
-    /// The race is done and its 14-day recovery is under way (the server keeps
-    /// the race in the payload with phase "recovery"): the card leads with the
-    /// recovery state and offers "Set your next goal" (`RaceLogic.nextGoalTitle`),
-    /// which opens the goal editor.
+    /// The race is done and recovery week 1 (days 1-7 after race day) is under way:
+    /// the card offers "Set your next goal" (`RaceLogic.nextGoalTitle`), which opens
+    /// the goal editor. The server says the same thing in its reasons for week 1
+    /// only (a month of "Set your next goal" is nagging), so recovery week 2 keeps
+    /// the recovery headline (`primaryLine`) but not the button. A server that sends
+    /// no `daysSince` reads as week 1, as before. See `RaceLogic.offersNextGoal`.
     static func showsNextGoalPrompt(_ progress: GoalProgressDTO) -> Bool {
-        RaceLogic.isRecovery(progress.race)
+        RaceLogic.offersNextGoal(progress.race)
     }
 
     /// Copy for the two next steps offered once a goal is reached.
@@ -279,18 +281,34 @@ enum GoalProgressLogic {
         return trimmedNumber(abs(value))
     }
 
+    /// How far the weight has moved since the start (kg, signed: negative = lighter).
+    /// A weight-loss goal measures it from the server's `current.changeKg`: the same
+    /// weight (the 7-day mean of the scale, else the latest reading) that sets the
+    /// bar's `progressPct`, the headline's "to go", and the opener and coach lines —
+    /// not from `current.weightKg`, the smoothed trend that lags the scale by days
+    /// and would make the text and the bar disagree. Without `changeKg`, and for
+    /// every other goal (whose `changeKg` is still the trend's), it is the trend
+    /// against the start, as before.
+    static func weightMovedKg(_ progress: GoalProgressDTO, startKg: Double, currentKg: Double) -> Double {
+        if progress.goal == "weight_loss", let change = progress.current.changeKg, change.isFinite {
+            return change
+        }
+        return currentKg - startKg
+    }
+
     /// "1.7 of 8 kg lost" / "3.7 of 17.6 lb lost" / "…gained". Direction comes
     /// from target vs start. Progress is never negative (regressing reads as
     /// "0 of 8 kg lost" — the verdict chip carries the bad news) and never
     /// exceeds the total (overshooting an 8 kg goal by 0.4 reads "8 of 8 kg
-    /// lost", not "8.4 of 8").
+    /// lost", not "8.4 of 8"). What "lost" is measured from: `weightMovedKg`.
     static func weightLine(_ progress: GoalProgressDTO, system: UnitSystem) -> String? {
         guard let target = progress.target.weightKg,
               let start = progress.current.startWeightKg,
               let current = progress.current.weightKg else { return nil }
         let losing = target < start
         let totalKg = abs(start - target)
-        let doneKg = min(totalKg, max(0, losing ? start - current : current - start))
+        let movedKg = weightMovedKg(progress, startKg: start, currentKg: current)
+        let doneKg = min(totalKg, max(0, losing ? -movedKg : movedKg))
         guard totalKg > 0 else { return nil }
         let verb = losing ? "lost" : "gained"
         return "\(weightAmount(kg: doneKg, system)) of \(weightAmount(kg: totalKg, system))\(nbsp)\(system.weightUnit) \(verb)"
@@ -536,8 +554,9 @@ enum GoalProgressLogic {
         }
         if let text = insufficientDataText(progress) { return text }
         // Race done: the recovery state ("Race done — Dec 31 · recovery week 1")
-        // leads, not a distance bar against a weekly goal.
-        if showsNextGoalPrompt(progress), let recovery = headlineWithoutVerdict(progress.headline) { return recovery }
+        // leads for the whole 14 days, not a distance bar against a weekly goal
+        // (the next-goal button is for week 1 only: `showsNextGoalPrompt`).
+        if RaceLogic.isRecovery(progress.race), let recovery = headlineWithoutVerdict(progress.headline) { return recovery }
         if let line = distanceLine(progress, system: system) { return line }
         switch progress.verdict {
         case .needsTarget, .insufficientData:
@@ -593,8 +612,16 @@ enum GoalProgressLogic {
     /// Verdict phrases the server prefixes its headlines with ("Building — weekly
     /// distance up 12%"). Surfaces that already show the verdict chip must not
     /// repeat it.
+    ///
+    /// Only the verdict itself is listed: "Still losing fast" is the too-fast
+    /// verdict while the pace is held between 0.9% and 1% a week. Phrases that say
+    /// more than the verdict are left in the text — "Nearly there — start easing
+    /// calories toward maintenance" (no chip says "Nearly there"; the headline is
+    /// the news) and "On track for Jul 6 — about 6.5 kg to go" (the date belongs to
+    /// the phrase, and `headlineWithoutVerdict` only strips a phrase that is
+    /// directly followed by its dash).
     private static let leadingVerdictPhrases: [String] = [
-        "On track", "Ahead of pace", "Ahead", "Losing too fast", "Behind pace", "Behind",
+        "On track", "Ahead of pace", "Ahead", "Losing too fast", "Still losing fast", "Behind pace", "Behind",
         "Stalled", "Progressing", "Building", "Holding steady", "Holding",
         "Set a target", "Getting started", "Goal reached", "Reached",
     ]
