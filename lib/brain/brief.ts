@@ -145,6 +145,7 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
       unit_system:        schema.users.unit_system,
       sleep_goal_minutes: schema.users.sleep_goal_minutes,
       goal:               schema.users.goal,
+      goal_started_at:    schema.users.goal_started_at,
     }).from(schema.users).where(eq(schema.users.id, userId)).limit(1),
     queryBaseline(userId, 'whoop_hrv_rmssd'),
     queryMetricPoints(userId, 'whoop_hrv_rmssd', 14),
@@ -598,6 +599,7 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
     goal: userRow?.goal ?? 'general',
     weekendPatternIntakeKcal,
     todayKey,
+    goalStartDay: userRow?.goal_started_at ? localDayKey(userRow.goal_started_at, tz) : null,
   });
 
   // ── Goal-keyed focus ──────────────────────────────────────────────────────
@@ -646,6 +648,7 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
     recentNutrition,
     weightKg,
     weightTrend,
+    todayKey,
     weightSignals,
     foodProfile: restrictions.length || preferences.length ? { restrictions, preferences } : undefined,
     calibrating: calibration.status === 'calibrating',

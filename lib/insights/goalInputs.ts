@@ -51,7 +51,14 @@ export async function loadGoalInsightInput(userId: string, localDay: string): Pr
     // so no intake is passed and they cannot fire.
     // todayKey: plateau / too_fast_loss need a weigh-in within the last few
     // days, so users who stopped weighing in get no "trend has flattened" push.
-    weightSignals = assessWeightSignals({ trend: computeWeightTrend(readings), dailyIntakeKcal: [], floorKcal: 0, goal, todayKey: localDay });
+    weightSignals = assessWeightSignals({
+      trend: computeWeightTrend(readings),
+      dailyIntakeKcal: [],
+      floorKcal: 0,
+      goal,
+      todayKey: localDay,
+      goalStartDay: user.goal_started_at ? localDayKey(user.goal_started_at, tz) : null,
+    });
   }
 
   // Protein adherence inputs (muscle + fat loss).

@@ -153,6 +153,42 @@ test('endurance step below the goal: the coach is told this week\'s target, unit
   assert.doesNotMatch(atGoal, /This week's target/);
 });
 
+test('week plan: the coach is told the week\'s ONE target for every plan kind', () => {
+  const d = (plan: { kind: 'baseline' | 'build' | 'hold' | 'restart' | 'maintain' | 'rebuild'; targetKm: number | null; longRunKm: number | null }, stepTargetKm: number) => ({
+    targetKm: 30, thisWeekKm: 8, avg4wKm: 24, weekStart: '2026-10-05', stepTargetKm, text: 'x', plan: { ...plan, purpose: 'x' },
+  });
+  const lines = (distance: ReturnType<typeof d>, units: 'metric' | 'imperial' = 'metric') =>
+    formatGoalProgressLines(gp({ goal: 'endurance', distance }), units).join('\n');
+  assert.match(lines(d({ kind: 'baseline', targetKm: null, longRunKm: null }, 30)), /- This week's target: none yet — a baseline week; next week's step is built from this week's total/);
+  assert.match(lines(d({ kind: 'build', targetKm: 27, longRunKm: 14 }, 27)), /- This week's target: build to ~27\.0 km \(a safe ~10% step over last week; long run 14 km\); the 30\.0 km\/week goal comes after — do not push past the step this week/);
+  assert.match(lines(d({ kind: 'maintain', targetKm: 30, longRunKm: 15 }, 30)), /- This week's target: hold the 30\.0 km\/week goal; long run 15 km \(the long run keeps growing ~2 km a week toward its peak\), the rest easy — the runner is at the goal, do not add volume/);
+  assert.match(lines(d({ kind: 'hold', targetKm: 28, longRunKm: 12 }, 28)), /- This week's target: hold ~28\.0 km — last week was over the safe step; do not push higher or step up from the jump/);
+  assert.match(lines(d({ kind: 'restart', targetKm: 15, longRunKm: 7 }, 15)), /- This week's target: restart at ~15\.0 km with easy runs; long run 7 km — the runner is coming back from a break; do not push toward the 30\.0 km\/week goal yet/);
+  assert.match(lines(d({ kind: 'rebuild', targetKm: 14, longRunKm: null }, 14)), /- This week's target: rebuilding after the race, ~14\.0 km, easy runs; add about 10% a week/);
+  // Imperial long runs are rounded to the nearest half mile.
+  assert.match(lines(d({ kind: 'build', targetKm: 27, longRunKm: 17.7 }, 27), 'imperial'), /long run 11 mi/);
+});
+
+test('race day and race done: the coach is told to let them start relaxed, then to congratulate', () => {
+  const distance = { targetKm: 30, thisWeekKm: 8, avg4wKm: 24, weekStart: '2026-10-05', stepTargetKm: 15, text: 'x' };
+  const day = formatGoalProgressLines(gp({
+    goal: 'endurance', distance,
+    race: { date: '2026-10-11', distanceKm: 21.1, label: 'Half marathon', weeksToGo: 0, daysToGo: 0, phase: 'race_week' },
+  }), 'metric').join('\n');
+  assert.match(day, /- Race phase: race day — warm up easy and start relaxed; no training advice, no volume talk/);
+  const done = formatGoalProgressLines(gp({
+    goal: 'endurance', distance,
+    race: { date: '2026-10-11', distanceKm: 21.1, label: 'Half marathon', weeksToGo: 0, daysToGo: 0, phase: 'race_week', completed: { km: 21.1, durationMin: 121 } },
+  }), 'metric').join('\n');
+  assert.match(done, /- Race phase: race day, and the race is DONE \(21\.1 km in 2:01\) — congratulate them; recovery starts now, no training advice/);
+  const after = formatGoalProgressLines(gp({
+    goal: 'endurance', distance,
+    race: { date: '2026-10-11', distanceKm: 21.1, label: 'Half marathon', weeksToGo: 0, daysToGo: 0, phase: 'recovery', daysSince: 1, completed: { km: 21.1, durationMin: null } },
+  }), 'metric').join('\n');
+  assert.match(after, /- Race phase: just raced \(21\.1 km\) — congratulate them; recovery week 1 after the race/);
+  assert.doesNotMatch(after, /in null|NaN/);
+});
+
 test('formatGoalProgressLines includes the race countdown when present', () => {
   const text = formatGoalProgressLines(
     gp({ goal: 'endurance', race: { date: '2026-12-30', distanceKm: 21.1, label: 'Half marathon', weeksToGo: 12, daysToGo: 84 } }),
@@ -176,7 +212,7 @@ test('race lifecycle: taper / race week / recovery each get ONE phase line with 
     race: { date: '2026-10-22', distanceKm: 21.1, label: 'Half marathon', weeksToGo: 3, daysToGo: 17, phase: 'taper' },
   }), 'metric');
   assert.equal(taper.filter(l => l.startsWith('- Race phase')).length, 1);
-  assert.ok(taper.includes('- Race phase: taper — this week\'s target ~30.0 km; cut volume, keep a little intensity — do not push volume or build the long run'), taper.join('\n'));
+  assert.ok(taper.includes('- Race phase: taper — this week\'s target ~30.0 km; cut volume, keep the long run easy, plus 3×1 km at race pace midweek — do not push volume or build the long run'), taper.join('\n'));
   assert.doesNotMatch(taper.join('\n'), /build to|This week's target/);
 
   const raceWeek = formatGoalProgressLines(gp({
@@ -211,11 +247,15 @@ test('formatGoalProgressLines adds one long-run line (unit-aware) only when long
   });
   const metric = formatGoalProgressLines(g, 'metric');
   assert.equal(metric.filter(l => l.startsWith('- Long run')).length, 1);
-  assert.match(metric.join('\n'), /- Long run \(running only\): last 14\.0 km; 28-day peak 16\.0 km; peak target 18\.0 km before the taper/);
-  assert.match(formatGoalProgressLines(g, 'imperial').join('\n'), /last 8\.7 mi; 28-day peak 9\.9 mi; peak target 11\.2 mi/);
+  assert.match(metric.join('\n'), /- Long run \(running only\): longest run in the last 14 days 14\.0 km; 28-day peak 16\.0 km; peak target 18 km before the taper/);
+  // The target is rounded to the nearest half mile ("11 mi", not "11.2 mi"); a measured run keeps its decimal.
+  assert.match(formatGoalProgressLines(g, 'imperial').join('\n'), /last 14 days 8\.7 mi; 28-day peak 9\.9 mi; peak target 11 mi/);
+  // The plan's next long run is quoted when there is one.
+  const next = formatGoalProgressLines(gp({ goal: 'endurance', longRun: { lastKm: 14, peakKm: 16, targetPeakKm: 18, nextKm: 16 } }), 'metric').join('\n');
+  assert.match(next, /longest run in the last 14 days 14\.0 km; next long run ~16 km; 28-day peak 16\.0 km/);
   // No race distance → no target clause.
   const noTarget = formatGoalProgressLines(gp({ goal: 'endurance', longRun: { lastKm: 14, peakKm: 16, targetPeakKm: null } }), 'metric').join('\n');
-  assert.match(noTarget, /- Long run \(running only\): last 14\.0 km; 28-day peak 16\.0 km$/m);
+  assert.match(noTarget, /- Long run \(running only\): longest run in the last 14 days 14\.0 km; 28-day peak 16\.0 km$/m);
   assert.doesNotMatch(formatGoalProgressLines(gp(), 'metric').join('\n'), /Long run/);
 });
 
@@ -237,4 +277,70 @@ test('a reached goal tells the coach the next step is a new target or maintenanc
   assert.match(text, /Set a new target or switch to maintenance/);
   assert.match(text, /Target reached — the next step is a new target or maintenance/);
   assert.doesNotMatch(formatGoalProgressLines(gp(), 'metric').join('\n'), /Target reached/);
+});
+
+// ── Wave 19b: returning from a break, and the same lift as the card ─────────
+
+test('returning from a break: the coach is told the lifts are rebuilding — no stall, no deload', () => {
+  const lines = formatGoalProgressLines(gp({
+    goal: 'muscle',
+    verdict: 'building',
+    headline: 'Building back — Squat at 95% of your pre-break 142 kg',
+    reasons: [{ kind: 'lift', text: 'Squat est. 1RM 136 kg, 95% of your pre-break 142 kg', tone: 'neutral' }],
+    liftReturn: { exercise: 'squat', name: 'Squat', breakDays: 15, endedOn: '2026-05-10', preBreakKg: 142, recentKg: 136, pct: 95, regained: false },
+  }), 'metric');
+  assert.ok(lines.includes('- Returning from a 15-day break (ended 2026-05-10): lifts are rebuilding — do not call this a stall or suggest a deload.'), lines.join('\n'));
+  // Right before the verdict, so the verdict is read in that light.
+  assert.ok(lines.findIndex(l => l.startsWith('- Returning from')) < lines.findIndex(l => l.startsWith('- Verdict:')));
+  // Once the pre-break best is regained the lifts are no longer "rebuilding".
+  const back = formatGoalProgressLines(gp({
+    goal: 'muscle',
+    liftReturn: { exercise: 'squat', name: 'Squat', breakDays: 15, endedOn: '2026-05-10', preBreakKg: 142, recentKg: 145, pct: 102, regained: true },
+  }), 'metric').join('\n');
+  assert.doesNotMatch(back, /Returning from/);
+  assert.doesNotMatch(formatGoalProgressLines(gp({ goal: 'muscle' }), 'metric').join('\n'), /Returning from/);
+});
+
+test('brief goal section: the lift lines lead with the card\'s headline lift (most-trained), the same number', () => {
+  const wk = (weekStart: string, e: number, sessions: number, sets: number) => ({ weekStart, bestEstimatedOneRepMaxKg: e, volumeKg: 1, totalSets: sets, totalReps: sets * 5, sessions });
+  const text = buildBriefGoalSection(
+    {
+      goal: 'muscle',
+      progress: gp({ goal: 'muscle' }),
+      todayKey: '2026-10-07',
+      progression: {
+        // Bench has far more SETS and the bigger drop; squat is trained in as many sessions and wins the tie by the fixed order.
+        'bench press': [wk('2026-08-31', 100, 2, 20), wk('2026-09-14', 100, 2, 20), wk('2026-09-28', 94, 2, 20)],
+        squat: [wk('2026-08-31', 120, 2, 5), wk('2026-09-14', 120, 2, 5), wk('2026-09-28', 118, 2, 5)],
+      },
+    },
+    'metric',
+  );
+  const lines = text.split('\n').filter(l => /est\. 1RM/.test(l));
+  assert.match(lines[0], /^- squat: est\. 1RM -2\.0 kg vs 4 weeks ago \(120 kg -> 118 kg\)$/);
+  assert.match(lines[1], /^- bench press: est\. 1RM -6\.0 kg vs 4 weeks ago/);
+});
+
+// ── wave 19c: the coach reads the same pace and the same reads as the card ───
+
+const WEIGHT_READ = { state: 'pace' as const, scaleKg: 81.6, scaleDay: '2026-10-06', weekMeanKg: 81.9, weeksVsTarget: null, returned: null, reachedDaysAgo: null };
+
+test('coach lines label the trend as smoothed, add the scale and weekly average, and say what the rate is', () => {
+  const text = formatGoalProgressLines(gp({ weightRead: WEIGHT_READ }), 'metric').join('\n');
+  assert.match(text, /trend 82\.1 kg \(smoothed\)/);
+  assert.match(text, /scale 81\.6 kg, weekly average 81\.9 kg/);
+  assert.match(text, /rate -0\.45 kg\/wk \(-0\.55% bw\) over the last 3 weeks of weigh-ins/);
+  const imperial = formatGoalProgressLines(gp({ weightRead: WEIGHT_READ }), 'imperial').join('\n');
+  assert.match(imperial, /scale 179\.9 lb, weekly average 180\.6 lb/);
+});
+
+test('coach lines tell the coach not to quote a rate or a weeks-ahead call during an early read, and welcome a returning user', () => {
+  const early = formatGoalProgressLines(gp({ eta: null, ratePerWeek: { kg: null, pctBodyweight: null }, verdict: 'progressing', headline: 'Early read — down 0.7 kg on the scale in 9 days', weightRead: { ...WEIGHT_READ, state: 'early' } }), 'metric').join('\n');
+  assert.match(early, /Early read: the pace is not settled yet — quote the scale against the start, but no weekly rate, no projected date and no "weeks ahead\/behind"/);
+  assert.doesNotMatch(early, /rate -/);
+  assert.doesNotMatch(early, /ETA/);
+  const back = formatGoalProgressLines(gp({ eta: null, weightRead: { ...WEIGHT_READ, state: 'returning' } }), 'metric').join('\n');
+  assert.match(back, /back after a gap in weigh-ins: welcome them back/);
+  const plateau = formatGoalProgressLines(gp({ eta: null, weightRead: { ...WEIGHT_READ, state: 'plateau' } }), 'metric').join('\n');
+  assert.match(plateau, /Plateau on the raw weekly averages \(flat for 3 weeks\): often water/);
 });

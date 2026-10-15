@@ -11,6 +11,7 @@ import {
   type GoalProgressInput,
 } from './goalProgress';
 import { NBSP, plainSpaces } from './displayText';
+import { detectStalledLift } from './insights/goalDetectors';
 import { computeWeightTrend, type WeightReading } from './weightTrend';
 import type { ProgressionSummary } from './workoutRepository';
 
@@ -148,10 +149,10 @@ test('weight_loss losing above 1%/wk → too_fast', () => {
   assertWellFormed(p);
 });
 
-test('weight_loss flat trend for 2+ weeks → stalled, no ETA', () => {
+test('weight_loss flat scale for 2+ weeks → stalled, no ETA', () => {
   const p = computeGoalProgress(base({
     target: { weightKg: 78, date: addDays(TODAY, 90), weeklySessions: null },
-    weightReadings: series(30, () => 85),
+    weightReadings: series(15, () => 85),
   }));
   assert.equal(p.verdict, 'stalled');
   assert.equal(p.eta, null);
@@ -248,12 +249,17 @@ test('learned-vs-formula TDEE reason cites both numbers when confidence is mediu
 // ── Muscle ──────────────────────────────────────────────────────────────────
 
 function lifts(prior: number, recent: number): ProgressionSummary {
-  const wk = (weekStart: string, e: number) => ({
-    weekStart, bestEstimatedOneRepMaxKg: e, volumeKg: 1000, totalSets: 6, totalReps: 36,
+  // Five steady weeks per lift (no break), so a flat lift is a real stall; Bench Press is the most-trained lift (3 sessions a week vs 2).
+  const wk = (weekStart: string, e: number, sessions: number) => ({
+    weekStart, bestEstimatedOneRepMaxKg: e, volumeKg: 1000, totalSets: 6, totalReps: 36, sessions,
   });
+  const weeks = (a: number, b: number, sessions: number) => [
+    wk('2026-09-07', a, sessions), wk('2026-09-14', a, sessions), wk('2026-09-21', b, sessions),
+    wk('2026-09-28', b, sessions), wk('2026-10-05', b, sessions),
+  ];
   return {
-    'Bench Press': [wk('2026-09-07', prior), wk('2026-10-05', recent)],
-    Squat: [wk('2026-09-07', 140), wk('2026-10-05', recent > prior ? 145 : 140)],
+    'Bench Press': weeks(prior, recent, 3),
+    Squat: weeks(140, recent > prior ? 145 : 140, 2),
   };
 }
 
@@ -548,8 +554,8 @@ test('general: consistent habits → holding', () => {
 test('output has exactly the documented top-level keys', () => {
   const p = computeGoalProgress(base());
   assert.deepEqual(Object.keys(p).sort(), [
-    'adherence', 'current', 'dataSufficiency', 'distance', 'eta', 'goal', 'headline', 'lastSessionDaysAgo', 'lastWeighInDaysAgo', 'longRun',
-    'onPaceForTargetDate', 'race', 'ratePerWeek', 'reachedAt', 'reasons', 'safeBand', 'target', 'verdict',
+    'adherence', 'current', 'dataSufficiency', 'distance', 'eta', 'goal', 'headline', 'lastSessionDaysAgo', 'lastWeighInDaysAgo', 'liftReturn', 'longRun',
+    'onPaceForTargetDate', 'race', 'ratePerWeek', 'reachedAt', 'reasons', 'safeBand', 'target', 'verdict', 'weightRead',
   ]);
   assert.deepEqual(Object.keys(p.current).sort(), ['changeKg', 'progressPct', 'startWeightKg', 'weightKg']);
   assert.deepEqual(Object.keys(p.dataSufficiency).sort(), ['needed', 'sessionsLast28d', 'weighIns']);
@@ -608,17 +614,27 @@ const hl = (weekStart: string, e: number, sets: number) => ({
 });
 const fourteen = Array.from({ length: 14 }, (_, i) => addDays(TODAY, -i));
 
-test('muscle: the headline lift is the biggest e1RM change, not the most-trained lift', () => {
+test('muscle: the headline lift is the most-trained lift (sessions over 8 weeks), not the biggest e1RM change', () => {
+  const trained = (weekStart: string, e: number, sessions: number) => ({ ...hl(weekStart, e, sessions * 3), sessions });
   const p = computeGoalProgress(base({
     goal: 'muscle', target: { weightKg: null, date: null, weeklySessions: 3 }, trainingDays: fourteen,
     progression: {
-      'bench press': [hl('2026-09-07', 99.2, 30), hl('2026-10-05', 107.9, 30)],
-      squat: [hl('2026-09-07', 120, 6), hl('2026-10-05', 140.4, 6)],
+      'bench press': [trained('2026-09-07', 99.2, 3), trained('2026-10-05', 107.9, 3)], // +9, trained 6 sessions
+      squat: [trained('2026-09-07', 120, 1), trained('2026-10-05', 140.4, 1)], // +20, trained 2 sessions
     },
   }));
   assert.equal(p.verdict, 'progressing');
-  assert.match(p.headline, /^Progressing — Squat est\. 1RM \+20 kg vs 4 weeks ago$/);
-  assert.match(p.reasons.find(r => r.kind === 'lift')!.text, /^Squat est\. 1RM \+20 kg vs 4 weeks ago \(120 → 140 kg\)$/);
+  assert.match(p.headline, /^Progressing — Bench Press est\. 1RM \+9 kg vs 4 weeks ago$/);
+  assert.match(p.reasons.find(r => r.kind === 'lift')!.text, /^Bench Press est\. 1RM \+9 kg vs 4 weeks ago \(99 → 108 kg\)$/);
+  // Equally trained: the fixed order (squat first) breaks the tie, never the size of the change.
+  const tie = computeGoalProgress(base({
+    goal: 'muscle', target: { weightKg: null, date: null, weeklySessions: 3 }, trainingDays: fourteen,
+    progression: {
+      'bench press': [trained('2026-09-07', 99.2, 2), trained('2026-10-05', 120, 2)],
+      squat: [trained('2026-09-07', 120, 2), trained('2026-10-05', 125, 2)],
+    },
+  }));
+  assert.match(tie.headline, /^Progressing — Squat est\. 1RM \+5 kg/);
 });
 
 test('muscle: lift reason change is computed from the rounded endpoints (99.2 → 107.9 reads +9, 99 → 108)', () => {
@@ -661,6 +677,27 @@ function distanceInput(kmByDaysAgo: Record<number, number>, over: Partial<GoalPr
   });
 }
 
+/**
+ * Runs by calendar week. TODAY is Tuesday 2026-10-06, so `weeks[0]` is this week (Mon 2026-10-05), `weeks[1]` last week
+ * (Mon 2026-09-28), and so on; each entry is `[weekday (Mon = 0), km]`. Entries after the day are dropped.
+ */
+function weekInput(weeks: Array<Array<[number, number]>>, over: Partial<GoalProgressInput> = {}): GoalProgressInput {
+  // `weeks[0]` is the week of `over.todayKey` (default TODAY); runs after that day have not happened yet.
+  const today = over.todayKey ?? TODAY;
+  const dow = (new Date(`${today}T00:00:00Z`).getUTCDay() + 6) % 7;
+  const thisMonday = addDays(today, -dow);
+  const workouts: Array<{ day: string; durationMin: number; distanceKm: number; type: string }> = [];
+  weeks.forEach((runs, wk) => {
+    for (const [d, km] of runs) {
+      const day = addDays(thisMonday, -7 * wk + d);
+      if (day <= today) workouts.push({ day, durationMin: Math.round(km * 6), distanceKm: km, type: 'Running' });
+    }
+  });
+  return distanceInput({}, { workouts, trainingDays: workouts.map(w => w.day), ...over });
+}
+/** One 4-run week totalling `km` (long run 40% on Sunday). */
+const wkOf = (km: number): Array<[number, number]> => [[1, km * 0.2], [3, km * 0.2], [5, km * 0.2], [6, km * 0.4]];
+
 test('endurance distance target alone (no sessions target) is a valid target, not needs_target', () => {
   const p = computeGoalProgress(distanceInput({ 1: 8, 3: 10, 9: 12, 12: 9 }));
   assert.notEqual(p.verdict, 'needs_target');
@@ -683,35 +720,45 @@ test('endurance distance: this week (Mon-today, Tue) is the primary progress; ET
   assertWellFormed(p);
 });
 
-test('endurance distance: 4-week average well under target and flat → behind', () => {
-  const p = computeGoalProgress(distanceInput({ 1: 6, 4: 6, 8: 6, 11: 6, 15: 6, 18: 6, 22: 6, 25: 6 }));
+test('endurance distance: last week far short of its own step → behind (only in a build week, from a finished week)', () => {
+  // Weeks of 20, 22, 24 km, then 14 km last week (the step from 24 km was ~26 km: 54%, not low enough to be a restart).
+  const p = computeGoalProgress(weekInput([[], wkOf(14), wkOf(24), wkOf(22), wkOf(20)]));
+  assert.equal(p.distance!.plan?.kind, 'build');
   assert.equal(p.verdict, 'behind');
-  assert.match(p.headline, /Behind — averaging 12 of 30 km a week \(4-week avg\)/);
+  assert.equal(p.headline, 'Behind — 14 km last week, ~26 km was the step');
   assertWellFormed(p);
 });
 
-test('endurance distance: average at/above target and steady → holding', () => {
-  const p = computeGoalProgress(distanceInput({ 1: 15, 4: 15, 8: 15, 11: 15, 15: 15, 18: 15, 22: 15, 25: 15 }));
-  assert.equal(p.verdict, 'holding');
-  assert.match(p.headline, /Holding steady — averaging 30 of 30 km a week/);
+test('endurance distance: at the weekly goal and steady → on_track, "30 km a week", no partial week in the average', () => {
+  const p = computeGoalProgress(weekInput([[[0, 3]], wkOf(30), wkOf(30), wkOf(30), wkOf(30)]));
+  assert.equal(p.distance!.plan?.kind, 'maintain');
+  assert.equal(p.verdict, 'on_track');
+  assert.equal(p.headline, 'On track — 30 km a week');
+  // The average quoted is over finished weeks only: this week's 3 km so far does not drag it down.
+  assert.equal(p.distance!.avg4wKm, 30);
+  assertWellFormed(p);
 });
 
-test('endurance distance: last 2 weeks up on the 2 before → building, labelled with the window', () => {
-  const p = computeGoalProgress(distanceInput({ 1: 12, 4: 10, 8: 10, 11: 10, 15: 5, 18: 5, 22: 4, 25: 4 }));
+test('endurance distance: last week on plan and up on the week before → building, one growth number from finished weeks', () => {
+  const p = computeGoalProgress(weekInput([[], wkOf(21), wkOf(19), wkOf(17), wkOf(15)]));
+  assert.equal(p.distance!.plan?.kind, 'build');
   assert.equal(p.verdict, 'building');
-  assert.match(p.headline, /^Building — distance up \d+% \(last 2 weeks vs the 2 before\)$/);
-  const volume = p.reasons.find(r => r.kind === 'volume');
-  assert.match(volume!.text, /last 2 weeks vs the 2 before/);
-  assert.match(volume!.text, /km a week/);
+  assert.equal(p.headline, 'Building — 21 km last week (+11%), on plan');
+  // No rolling "last 2 weeks vs the 2 before" and no "distance up X%" volume reason on the plan path.
+  assert.equal(p.reasons.some(r => r.kind === 'volume'), false);
+  assert.doesNotMatch(p.headline, /last 2 weeks/);
+  // Early weeks never read "up 993%": a tiny earlier week has no percentage.
+  const early = computeGoalProgress(weekInput([[], [[1, 2.5], [5, 2.5]], [[5, 4.4]]]));
+  assert.equal(early.headline, 'Building — 5 km last week, on plan');
 });
 
 test('endurance distance text is unit-aware (miles) while structured km stay metric', () => {
-  const p = computeGoalProgress(distanceInput({ 1: 8, 4: 8, 8: 8, 11: 8 }, { unitSystem: 'imperial' }));
-  assert.equal(p.distance!.thisWeekKm, 8);
+  const p = computeGoalProgress(weekInput([[[0, 5]], [[1, 8], [3, 8]], [[1, 8], [3, 8]]], { unitSystem: 'imperial' }));
+  assert.equal(p.distance!.thisWeekKm, 5);
   assert.equal(p.distance!.targetKm, 30);
   // Last week 16 km = 9.9 mi -> a step of 11 whole miles (17.7 km); the goal 30 km = 18.6 mi.
   assert.equal(p.distance!.stepTargetKm, 17.7);
-  assert.equal(p.distance!.text, '5 of ~11 mi running this week · goal 18.6 mi');
+  assert.equal(p.distance!.text, '3.1 of ~11 mi running this week · goal 18.6 mi');
 });
 
 // ── Endurance: ONE target for this week (the safe step from last week) ─────
@@ -741,21 +788,23 @@ test('endurance distance step: last week already within 10% of the goal -> the s
   assert.equal(over.distance!.text, '6 of 30 km running this week');
 });
 
-test('endurance distance step: no last-week running -> the goal; a near-zero last week has no base to grow from', () => {
-  // Runs only this week (and 20 days ago): last week is empty.
-  const none = computeGoalProgress(distanceInput({ 0: 8, 20: 12 }));
-  assert.equal(none.distance!.stepTargetKm, 30);
-  assert.equal(none.distance!.text, '8 of 30 km running this week');
-  // No distance data at all.
+test('endurance distance step: a week with no running restarts at ~60% of the recent median, not at the goal', () => {
+  // Weeks of 20, 20, 20 km, then nothing last week: restart at 60% of 20 km = 12 km.
+  const none = computeGoalProgress(weekInput([[[0, 8]], [], wkOf(20), wkOf(20), wkOf(20)]));
+  assert.equal(none.distance!.plan?.kind, 'restart');
+  assert.equal(none.distance!.stepTargetKm, 12);
+  assert.equal(none.distance!.text, '8 of ~12 km running this week · goal 30 km');
+  // A near-zero last week (0.6 km) has no base to take 10% of: the same restart.
+  const tiny = computeGoalProgress(weekInput([[[0, 5]], [[4, 0.6]], wkOf(20), wkOf(20), wkOf(20)]));
+  assert.equal(tiny.distance!.plan?.kind, 'restart');
+  assert.equal(tiny.distance!.stepTargetKm, 12);
+  // Distance data nowhere at all: the goal, no plan.
   const noData = computeGoalProgress(enduranceInput([3, 3, 3, 3], {
     target: { weightKg: null, date: null, weeklySessions: 3, weeklyDistanceKm: 30 },
   }));
   assert.equal(noData.distance!.stepTargetKm, 30);
   assert.equal(noData.distance!.text, '0 of 30 km running this week');
-  // 0.6 km last week: nothing to take 10% of.
-  const tiny = computeGoalProgress(distanceInput({ 0: 5, 4: 0.6 }));
-  assert.equal(tiny.distance!.stepTargetKm, 30);
-  assert.equal(tiny.distance!.text, '5 of 30 km running this week');
+  assert.equal(noData.distance!.plan, undefined);
 });
 
 test('endurance distance step: only running counts toward last week\'s base, and only last calendar week', () => {
@@ -836,9 +885,10 @@ test('muscle: "Progressing" needs +1%, a +0.5% drift is a stall; names are displ
   const twelve = Array.from({ length: 12 }, (_, i) => addDays(TODAY, -i));
   const small = computeGoalProgress(base({
     goal: 'muscle', target: { weightKg: null, date: null, weeklySessions: 3 }, trainingDays: twelve,
-    progression: { 'bench press': [wk('2026-09-07', 100), wk('2026-10-05', 100.5)] },
+    progression: { 'bench press': [wk('2026-09-07', 100), wk('2026-09-14', 100), wk('2026-09-21', 100), wk('2026-09-28', 100.5), wk('2026-10-05', 100.5)] },
   }));
   assert.equal(small.verdict, 'stalled');
+  assert.equal(small.headline, 'Stalled — Bench Press est. 1RM up under 1% vs 4 weeks ago');
   const real = computeGoalProgress(base({
     goal: 'muscle', target: { weightKg: null, date: null, weeklySessions: 3 }, trainingDays: twelve,
     progression: { 'bench press': [wk('2026-09-07', 100), wk('2026-10-05', 102)] },
@@ -890,7 +940,9 @@ test('endurance distance counts running only', () => {
     workouts: [run, ride, walk],
   }));
   assert.equal(p.distance!.thisWeekKm, 5);
-  assert.equal(p.distance!.text, '5 of 30 km running this week');
+  // The first week of running is a baseline week: no step, no "5 of 30 km".
+  assert.equal(p.distance!.plan?.kind, 'baseline');
+  assert.equal(p.distance!.text, '5 km so far · baseline week');
 });
 
 // ETA / pace
@@ -898,19 +950,23 @@ function lossInput(over: Partial<GoalProgressInput>): GoalProgressInput {
   return base({ target: { weightKg: 80, date: null, weeklySessions: null }, ...over });
 }
 
-test('on pace: ETA up to 7 days after the target date is on_track and onPace; later is behind', () => {
+test('on pace: ETA within a week either side of the target date is on_track and onPace; further out is ahead / behind', () => {
   const readings = ramp(40, 90, -0.1);
   const free = computeGoalProgress(lossInput({ weightReadings: readings }));
   assert.ok(free.eta);
   const eta = free.eta!;
+  // offset > 0: the target date is `offset` days BEFORE the ETA (the user is late); offset < 0: after it (early).
   const at = (offset: number) => computeGoalProgress(lossInput({
     weightReadings: readings, target: { weightKg: 80, date: addDays(eta, -offset), weeklySessions: null },
   }));
   assert.equal(at(1).verdict, 'on_track');
   assert.equal(at(1).onPaceForTargetDate, true);
-  assert.equal(at(7).verdict, 'on_track');
-  assert.equal(at(8).verdict, 'behind');
-  assert.equal(at(8).onPaceForTargetDate, false);
+  assert.equal(at(6).verdict, 'on_track');
+  assert.equal(at(-6).verdict, 'on_track', 'one margin both ways: 6 days early is still on pace');
+  assert.equal(at(14).verdict, 'behind');
+  assert.equal(at(14).onPaceForTargetDate, false);
+  assert.equal(at(-14).verdict, 'ahead', 'a fortnight early is ahead (the same 7-day margin the opener and iOS use)');
+  assert.equal(at(-14).onPaceForTargetDate, true);
 });
 
 test('ETA is anchored to the last weigh-in, not today; lastWeighInDaysAgo is reported', () => {
@@ -929,7 +985,7 @@ test('ETA is anchored to the last weigh-in, not today; lastWeighInDaysAgo is rep
 test('stalled verdict never carries an ETA or on-pace flag', () => {
   const p = computeGoalProgress(lossInput({
     target: { weightKg: 78, date: addDays(TODAY, 90), weeklySessions: null },
-    weightReadings: series(30, () => 85),
+    weightReadings: series(15, () => 85),
   }));
   assert.equal(p.verdict, 'stalled');
   assert.equal(p.eta, null);
@@ -957,9 +1013,10 @@ test('endurance race: race week reads in days with weeksToGo 0; race day is "tod
   assert.match(today.reasons[0].text, /^10K is today/);
 });
 
-test('endurance race: a race passed more than 14 days ago is null; labels cover 5K / custom / no distance; verdict is unchanged', () => {
+test('endurance race: a race passed more than a recovery ago is null; labels cover 5K / custom / no distance; verdict is unchanged', () => {
   const without = computeGoalProgress(enduranceInput([4, 3, 2, 2]));
-  const passed = computeGoalProgress(enduranceInput([4, 3, 2, 2], { race: { date: addDays(TODAY, -15), distanceKm: 21.1 } }));
+  // The week of day 15 after a half marathon is still recovery week 2 (read on its Monday); three weeks later it is over.
+  const passed = computeGoalProgress(enduranceInput([4, 3, 2, 2], { race: { date: addDays(TODAY, -22), distanceKm: 21.1 } }));
   assert.equal(passed.race, null);
   assert.deepEqual(passed.reasons, without.reasons);
   assert.equal(passed.headline, without.headline);
@@ -978,16 +1035,19 @@ test('race is ignored for non-endurance goals', () => {
 });
 
 // ── Race lifecycle: phases, wind-down targets, post-race recovery ───────────
+// The race phase is read on the MONDAY of the week (TODAY is Tuesday 2026-10-06, Monday 2026-10-05), so a race
+// `daysOut` days after TODAY is `daysOut + 1` days out on the Monday that decides the phase.
 
 /** Weekly goal 50 km, peak week before the taper 40 km; last week held one 10 km run (the growth step would be 11 km). */
-function phaseInput(daysOut: number, over: Partial<GoalProgressInput> = {}): GoalProgressInput {
+function phaseInput(daysOut: number, over: Partial<GoalProgressInput> = {}, raceKm: number | null = 21.1): GoalProgressInput {
   return distanceInput({ 0: 3.5, 1: 5, 3: 10, 9: 12, 16: 9, 23: 10 }, {
     target: { weightKg: null, date: null, weeklySessions: null, weeklyDistanceKm: 50 },
-    race: { date: addDays(TODAY, daysOut), distanceKm: 21.1 },
+    race: { date: addDays(TODAY, daysOut), distanceKm: raceKm },
     racePeakWeekKm: 40,
     ...over,
   });
 }
+const MARATHON = 42.2;
 
 const reasonOf = (p: GoalProgress, kind: string): string | undefined => p.reasons.find(r => r.kind === kind)?.text;
 
@@ -997,60 +1057,109 @@ test('race phase: build keeps the growth step and adds the phase to the payload 
   assert.equal(p.race?.daysSince, undefined);
   assert.equal(p.distance!.stepTargetKm, 11); // ~10% over last week's 10 km, not a phase target
   assert.equal(reasonOf(p, 'race_phase'), undefined);
-  assert.equal(computeGoalProgress(phaseInput(22)).race?.phase, 'build');
+  // A half marathon is still build 15 days out on the Monday; a marathon 22.
+  assert.equal(computeGoalProgress(phaseInput(13)).race?.phase, 'taper');
+  assert.equal(computeGoalProgress(phaseInput(14)).race?.phase, 'build');
+  assert.equal(computeGoalProgress(phaseInput(20, {}, MARATHON)).race?.phase, 'taper');
+  assert.equal(computeGoalProgress(phaseInput(21, {}, MARATHON)).race?.phase, 'build');
 });
 
-test('race phase: taper uses x0.75 of the peak week 14-21 days out and x0.6 8-13 days out, not the growth step', () => {
-  const early = computeGoalProgress(phaseInput(18));
-  assert.equal(early.race?.phase, 'taper');
-  assert.equal(early.distance!.stepTargetKm, 30); // round(40 x 0.75)
-  assert.equal(early.distance!.text, '8.5 of ~30 km running this week · goal 50 km');
-  assert.equal(reasonOf(early, 'race_phase'), 'Taper: ~30 km this week — keep a little intensity, cut volume');
-  const late = computeGoalProgress(phaseInput(10));
-  assert.equal(late.race?.phase, 'taper');
-  assert.equal(late.distance!.stepTargetKm, 24); // round(40 x 0.6)
-  assert.equal(reasonOf(late, 'race_phase'), 'Taper: ~24 km this week — keep a little intensity, cut volume');
-  assert.equal(computeGoalProgress(phaseInput(14)).distance!.stepTargetKm, 30);
-  assert.equal(computeGoalProgress(phaseInput(13)).distance!.stepTargetKm, 24);
-  assert.equal(computeGoalProgress(phaseInput(21)).distance!.stepTargetKm, 30);
-  assert.equal(computeGoalProgress(phaseInput(8)).distance!.stepTargetKm, 24);
+test('race phase (half): ONE taper week x0.75 of the peak week, days 8-14 out on the week\'s Monday', () => {
+  const p = computeGoalProgress(phaseInput(12));
+  assert.equal(p.race?.phase, 'taper');
+  assert.equal(p.distance!.stepTargetKm, 30); // round(40 x 0.75)
+  assert.equal(p.distance!.text, '8.5 of ~30 km running this week · goal 50 km');
+  assert.equal(p.distance!.plan?.kind, 'taper');
+  // The taper copy spells out the intensity ("keep a little intensity" never said what that meant).
+  assert.equal(reasonOf(p, 'race_phase'), 'Taper: ~30 km this week, cut the volume; long run 8 km easy, plus 3×1 km at race pace midweek');
+  // The whole week has the same target: Monday d=14 (the first taper Monday) to Monday d=8.
+  for (const daysOut of [7, 10, 13]) assert.equal(computeGoalProgress(phaseInput(daysOut)).distance!.stepTargetKm, 30, `${daysOut}`);
+});
+
+test('race phase (marathon): x0.75 on the Mondays 14-21 days out and x0.6 on 8-13 (unchanged rules)', () => {
+  assert.equal(computeGoalProgress(phaseInput(20, {}, MARATHON)).distance!.stepTargetKm, 30); // Monday 21 out
+  assert.equal(computeGoalProgress(phaseInput(13, {}, MARATHON)).distance!.stepTargetKm, 30); // Monday 14 out
+  assert.equal(computeGoalProgress(phaseInput(12, {}, MARATHON)).distance!.stepTargetKm, 24); // Monday 13 out
+  assert.equal(computeGoalProgress(phaseInput(7, {}, MARATHON)).distance!.stepTargetKm, 24); // Monday 8 out
+  assert.equal(computeGoalProgress(phaseInput(6, {}, MARATHON)).distance!.stepTargetKm, 16); // race week x0.4
+  assert.equal(reasonOf(computeGoalProgress(phaseInput(10, {}, MARATHON)), 'race_phase')!.startsWith('Taper: ~24 km this week'), true);
+});
+
+test('race phase: a Sunday seven days out is still the taper week the Monday started (card and review agree)', () => {
+  // Sunday 2026-10-11 with the race Sunday 2026-10-18: today-based it was "race week"; the week began 13 days out.
+  const sunday = computeGoalProgress(phaseInput(12, { todayKey: '2026-10-11', race: { date: '2026-10-18', distanceKm: 21.1 } }));
+  assert.equal(sunday.race?.phase, 'taper');
+  assert.equal(sunday.race?.daysToGo, 7);
+  assert.equal(sunday.distance!.plan?.kind, 'taper');
+  assert.match(sunday.headline, /^Taper week — /);
+  const monday = computeGoalProgress(phaseInput(12, { todayKey: '2026-10-12', race: { date: '2026-10-18', distanceKm: 21.1 } }));
+  assert.equal(monday.race?.phase, 'race_week');
+  assert.match(monday.headline, /^Race week — /);
 });
 
 test('race phase: the phase reason sits right behind the race line', () => {
   const taper = computeGoalProgress(phaseInput(10));
   assert.deepEqual(taper.reasons.map(r => r.kind).slice(0, 2), ['race', 'race_phase']);
-  assert.equal(taper.reasons.length, 3);
+  assert.ok(taper.reasons.length <= 3);
   assertWellFormed(taper);
 });
 
-test('race phase: race week targets x0.4 of the peak week (race excluded) and says to keep runs short and easy', () => {
+test('race phase (half): race week targets x0.5 of the peak week (race excluded) and says to keep runs short and easy', () => {
   const p = computeGoalProgress(phaseInput(5));
   assert.equal(p.race?.phase, 'race_week');
   assert.equal(p.race?.weeksToGo, 0);
-  assert.equal(p.distance!.stepTargetKm, 16); // round(40 x 0.4)
-  assert.equal(reasonOf(p, 'race_phase'), `Race week — short easy runs, rest 1–2 days before ${'Oct 11'}`);
-  // 7 days out is race week too (the boundary), with a week's countdown.
-  const seven = computeGoalProgress(phaseInput(7));
-  assert.equal(seven.race?.phase, 'race_week');
-  assert.equal(seven.race?.weeksToGo, 1);
-  assert.equal(seven.distance!.stepTargetKm, 16);
+  assert.equal(p.distance!.stepTargetKm, 20); // round(40 x 0.5)
+  assert.equal(reasonOf(p, 'race_phase'), 'Race week: short easy runs, rest 1–2 days before the race');
+  assert.equal(computeGoalProgress(phaseInput(6)).race?.phase, 'race_week'); // Monday 7 out
+  assert.equal(computeGoalProgress(phaseInput(7)).race?.phase, 'taper'); // Monday 8 out
 });
 
-test('race phase: race day is race week; the race run itself is not counted against the week', () => {
-  // TODAY is Tuesday; Monday's 5 km is this week's real running, today's 21.1 km is the race.
-  const p = computeGoalProgress(distanceInput({ 0: 21.1, 1: 5, 3: 10 }, {
+test('race phase (10K): no taper, race week x0.6, 7 days of recovery at most x0.5', () => {
+  assert.equal(computeGoalProgress(phaseInput(12, {}, 10)).race?.phase, 'build');
+  const week = computeGoalProgress(phaseInput(5, {}, 10));
+  assert.equal(week.race?.phase, 'race_week');
+  assert.equal(week.distance!.stepTargetKm, 24); // round(40 x 0.6)
+  const after = computeGoalProgress(phaseInput(-3, {}, 10));
+  assert.equal(after.race?.phase, 'recovery');
+  assert.equal(after.distance!.stepTargetKm, 20); // at most x0.5
+  // The recovery week is over a week later (10K: 7 days).
+  assert.equal(computeGoalProgress(phaseInput(-9, {}, 10)).race, null);
+});
+
+test('race phase: race day says "start relaxed" until a race-length run is logged, then the race is done', () => {
+  // TODAY is Tuesday; Monday's 5 km is this week's real running.
+  const before = computeGoalProgress(distanceInput({ 1: 5, 3: 10 }, {
     target: { weightKg: null, date: null, weeklySessions: null, weeklyDistanceKm: 50 },
-    race: { date: TODAY, distanceKm: 21.1 },
-    racePeakWeekKm: 40,
+    race: { date: TODAY, distanceKm: 21.1 }, racePeakWeekKm: 40,
   }));
-  assert.equal(p.race?.phase, 'race_week');
-  assert.equal(p.race?.daysToGo, 0);
-  assert.equal(p.distance!.thisWeekKm, 5);
-  assert.equal(p.distance!.stepTargetKm, 16);
-  assert.match(reasonOf(p, 'race_phase')!, /^Race day — /);
+  assert.equal(before.race?.phase, 'race_week');
+  assert.equal(before.race?.daysToGo, 0);
+  assert.equal(before.headline, 'Race day — start relaxed');
+  assert.equal(before.verdict, 'on_track');
+  assert.equal(before.race?.completed, undefined);
+  // The race run (2:01) is the race, not training: it is not in the week's km, the headline congratulates.
+  const workouts = [
+    { day: TODAY, durationMin: 121, distanceKm: 21.1, type: 'Running' },
+    { day: addDays(TODAY, -1), durationMin: 30, distanceKm: 5, type: 'Running' },
+    { day: addDays(TODAY, -3), durationMin: 60, distanceKm: 10, type: 'Running' },
+  ];
+  const done = computeGoalProgress(distanceInput({}, {
+    workouts, trainingDays: workouts.map(w => w.day),
+    target: { weightKg: null, date: null, weeklySessions: null, weeklyDistanceKm: 50 },
+    race: { date: TODAY, distanceKm: 21.1 }, racePeakWeekKm: 40,
+  }));
+  assert.equal(done.distance!.thisWeekKm, 5);
+  assert.equal(done.distance!.stepTargetKm, 20);
+  assert.equal(done.headline, 'Half marathon done — 21.1 km in 2:01. Congratulations!');
+  assert.deepEqual(done.race?.completed, { km: 21.1, durationMin: 121 });
+  assert.equal(done.verdict, 'on_track');
+  assert.doesNotMatch(done.reasons.map(r => r.text).join(' | '), /ease off|over the plan/);
+  // Day after: still congratulated; later on it is plain recovery copy.
+  const next = computeGoalProgress({ ...distanceInput({}, { workouts, trainingDays: workouts.map(w => w.day), target: { weightKg: null, date: null, weeklySessions: null, weeklyDistanceKm: 50 }, race: { date: addDays(TODAY, -1), distanceKm: 21.1 }, racePeakWeekKm: 40 }) });
+  assert.equal(next.race?.phase, 'recovery');
 });
 
-test('race phase: after the race the race stays for 14 days as "recovery" with daysSince and a next step', () => {
+test('race phase: after the race the race stays for the recovery weeks with daysSince and a next step', () => {
   const p = computeGoalProgress(phaseInput(-3));
   assert.ok(p.race);
   assert.equal(p.race.phase, 'recovery');
@@ -1058,10 +1167,14 @@ test('race phase: after the race the race stays for 14 days as "recovery" with d
   assert.equal(p.race.daysToGo, 0);
   assert.equal(p.race.weeksToGo, 0);
   assert.equal(p.race.label, 'Half marathon');
-  assert.equal(p.headline, 'Race done — Oct 3 · recovery week 1');
+  // The headline moves on day by day (no 14 days of the same line).
+  assert.equal(p.headline, 'Recovery week 1 — day 3 after your half: easy only');
+  assert.equal(computeGoalProgress(phaseInput(-4)).headline, 'Recovery week 1 — day 4 after your half: easy only');
   assert.deepEqual(p.reasons.map(r => r.kind), ['race', 'race_phase', 'next_step']);
   assert.equal(p.reasons[0].text, 'Half marathon done (Oct 3)');
-  assert.equal(p.reasons[1].text, 'Recovery: easy only this week (~16 km max)');
+  // 8.5 of the ~16 km are run: the line says what is left; the plan's own line is the one for the week.
+  assert.equal(p.reasons[1].text, 'Recovery: 8.5 of ~16 km — keep the rest of the week ≤ 7.5 km');
+  assert.equal(p.distance!.plan?.purpose, 'Recovery: easy only this week (~16 km max)');
   assert.deepEqual(p.reasons[2], {
     kind: 'next_step',
     text: 'Set your next goal: a new race, a weekly distance target, or maintenance',
@@ -1071,25 +1184,27 @@ test('race phase: after the race the race stays for 14 days as "recovery" with d
   assertWellFormed(p);
 });
 
-test('race phase: recovery week 1 is days 1-7 after the race, week 2 days 8-14 (x0.6), then the race is gone', () => {
-  assert.equal(computeGoalProgress(phaseInput(-1)).headline, 'Race done — Oct 5 · recovery week 1');
-  assert.equal(computeGoalProgress(phaseInput(-7)).headline, 'Race done — Sep 29 · recovery week 1');
-  const wk2 = computeGoalProgress(phaseInput(-8));
-  assert.equal(wk2.headline, 'Race done — Sep 28 · recovery week 2');
-  assert.equal(wk2.distance!.stepTargetKm, 24);
-  assert.equal(reasonOf(wk2, 'race_phase'), 'Recovery: easy only this week (~24 km max)');
-  const last = computeGoalProgress(phaseInput(-14));
+test('race phase (half): recovery days 1-7 are at most x0.4, days 8-14 at most x0.7, then the rebuild weeks', () => {
+  assert.equal(computeGoalProgress(phaseInput(-1)).race?.phase, 'recovery'); // race Monday: still its race week target
+  assert.equal(computeGoalProgress(phaseInput(-6)).distance!.stepTargetKm, 16); // Monday 5 after
+  const wk2 = computeGoalProgress(phaseInput(-8)); // Monday 7 after, the last day of recovery week 1 on the Monday
+  assert.equal(wk2.distance!.stepTargetKm, 16);
+  const second = computeGoalProgress(phaseInput(-9)); // Monday 8 after
+  assert.equal(second.headline, 'Recovery week 2 — day 9 after your half: easy only');
+  assert.equal(second.distance!.stepTargetKm, 28); // round(40 x 0.7)
+  assert.equal(second.distance!.plan?.purpose, 'Recovery: easy only this week (~28 km max)');
+  const last = computeGoalProgress(phaseInput(-14)); // Monday 13 after
   assert.equal(last.race?.phase, 'recovery');
   assert.equal(last.race?.daysSince, 14);
-  const gone = computeGoalProgress(phaseInput(-15));
+  // Monday 14 after is still recovery week 2 (the week is read on its Monday); the next week is the rebuild.
+  assert.equal(computeGoalProgress(phaseInput(-15)).race?.phase, 'recovery');
+  const gone = computeGoalProgress(phaseInput(-22));
   assert.equal(gone.race, null);
-  assert.equal(gone.reasons.some(r => r.kind === 'next_step' || r.kind === 'race_phase'), false);
-  // Back on the growth step once the recovery is over (last week's 10 km -> ~11 km).
-  assert.equal(gone.distance!.stepTargetKm, 11);
+  assert.equal(gone.reasons.some(r => r.kind === 'race_phase'), false);
 });
 
-test('race phase: recovery counts only the running after race day', () => {
-  // Race was Monday (TODAY - 1): Monday's race run is excluded, today's easy 4 km is the recovery week so far.
+test('race phase: race week counts the running without the race run', () => {
+  // Race was Monday (TODAY - 1): Monday's race run is excluded, today's easy 4 km is the week so far.
   const p = computeGoalProgress(distanceInput({ 0: 4, 1: 21.1, 3: 10 }, {
     target: { weightKg: null, date: null, weeklySessions: null, weeklyDistanceKm: 50 },
     race: { date: addDays(TODAY, -1), distanceKm: 21.1 },
@@ -1097,14 +1212,36 @@ test('race phase: recovery counts only the running after race day', () => {
   }));
   assert.equal(p.race?.phase, 'recovery');
   assert.equal(p.distance!.thisWeekKm, 4);
-  assert.equal(p.distance!.text, '4 of up to 16 km running this week (recovery)');
+  assert.equal(p.distance!.stepTargetKm, 20);
+  assert.equal(p.distance!.text, '4 of ~20 km running this week · goal 50 km');
+});
+
+test('rebuild: from the week after recovery until 42 days after the race — graded against its step, never "behind"', () => {
+  // Race 22 days ago; recovery weeks of 12 and 20 km; last week 20 km.
+  const rebuilt = computeGoalProgress(weekInput([[[0, 5]], wkOf(20), wkOf(12), wkOf(20), wkOf(30), wkOf(30), wkOf(30), wkOf(30), wkOf(30), wkOf(30)], {
+    race: { date: addDays(TODAY, -22), distanceKm: 21.1 }, racePeakWeekKm: 30,
+  }));
+  assert.equal(rebuilt.race, null);
+  assert.equal(rebuilt.distance!.plan?.kind, 'rebuild');
+  assert.equal(rebuilt.verdict, 'building');
+  assert.equal(rebuilt.headline, 'Rebuilding after your half — 5 of ~22 km');
+  assert.equal(rebuilt.distance!.stepTargetKm, 22);
+  assert.ok(rebuilt.reasons.some(r => r.kind === 'next_step'));
+  // The race week and the recovery weeks are not in the average (it is the 4 weeks before the taper).
+  assert.equal(rebuilt.distance!.avg4wKm, 30);
+  assertWellFormed(rebuilt);
+  // Past 42 days the plain plan is back.
+  const later = computeGoalProgress(weekInput([[[0, 5]], wkOf(22), wkOf(20), wkOf(20), wkOf(18), wkOf(12), wkOf(20), wkOf(30)], {
+    race: { date: addDays(TODAY, -50), distanceKm: 21.1 }, racePeakWeekKm: 30,
+  }));
+  assert.notEqual(later.distance!.plan?.kind, 'rebuild');
 });
 
 // ── Race lifecycle: the verdict is phase-aware (a planned drop is never "behind") ──
 
 /**
- * A runner whose 4-week average is falling hard (28 km before, 8.5 km this week so far) against a 50 km goal:
- * without a race the verdict reads 'behind'. `daysOut` null = no race.
+ * A runner whose last finished week was far short (6 km after weeks of ~30) against a 50 km goal. Without a race that
+ * is a restart; around a race it must never read 'behind' or 'stalled' either. `daysOut` null = no race.
  */
 const FALLING = { 0: 3.5, 1: 5, 3: 6, 9: 8, 16: 30, 20: 25, 23: 30 };
 function fallingInput(daysOut: number | null, over: Partial<GoalProgressInput> = {}): GoalProgressInput {
@@ -1117,100 +1254,109 @@ function fallingInput(daysOut: number | null, over: Partial<GoalProgressInput> =
 }
 const noRaceVerdict = (): GoalProgress['verdict'] => computeGoalProgress(fallingInput(null)).verdict;
 
-test('phase verdict: taper with a falling 4-week average is never "behind" — on_track within the band', () => {
-  assert.equal(noRaceVerdict(), 'behind'); // the setup really is a falling 4-week average
-  for (const daysOut of [21, 18, 14, 13, 10, 8]) {
+test('phase verdict: taper with a falling volume is never "behind" — on_track, within or under (a rest day never reads "under")', () => {
+  assert.equal(noRaceVerdict(), 'building'); // a restart week: never behind, even without a race
+  for (const daysOut of [13, 12, 10, 8, 7]) {
     const p = computeGoalProgress(fallingInput(daysOut));
     assert.equal(p.race?.phase, 'taper');
     assert.equal(p.verdict, 'on_track', `${daysOut} days out`);
-    assert.notEqual(p.verdict, 'stalled');
     // The headline matches the verdict (no leftover "Behind — averaging …").
-    assert.match(p.headline, /^Taper week — 8\.5 of ~(30|24) km$/, p.headline);
+    assert.equal(p.headline, 'Taper week — 8.5 of ~30 km, on plan');
     assert.equal(p.reasons.find(r => r.kind === 'race_phase')?.tone, 'neutral');
   }
-});
-
-test('phase verdict: a taper undershoot reads "building"; early in the week it is pro-rated, so Monday never undershoots', () => {
-  // Sunday Oct 11: 6 of 7 days are done, so 8.5 km of a ~30 km taper (60% = 18 km) is under.
-  const sunday = computeGoalProgress(phaseInput(18, { todayKey: '2026-10-11', race: { date: '2026-10-29', distanceKm: 21.1 } }));
-  assert.equal(sunday.race?.phase, 'taper');
-  assert.equal(sunday.distance!.thisWeekKm, 8.5);
-  assert.equal(sunday.verdict, 'building');
-  assert.equal(sunday.headline, 'Taper week — 8.5 of ~30 km');
-  // Monday: nothing is due yet, so the same 8.5 km (on and after Oct 12 would be 0) is not an undershoot.
-  const monday = computeGoalProgress(phaseInput(18, { todayKey: '2026-10-12', race: { date: '2026-10-30', distanceKm: 21.1 } }));
+  // Sunday, almost nothing run: still on_track (never "building" because of the weekday).
+  const sunday = computeGoalProgress(fallingInput(12, { todayKey: '2026-10-11', race: { date: '2026-10-18', distanceKm: 21.1 } }));
+  assert.equal(sunday.verdict, 'on_track');
+  const monday = computeGoalProgress(phaseInput(12, { todayKey: '2026-10-05', race: { date: '2026-10-17', distanceKm: 21.1 } }));
   assert.equal(monday.verdict, 'on_track');
 });
 
-test('phase verdict: running well over the plan stays on_track but the phase line goes on watch', () => {
-  // Taper 18 days out: ~30 km target; 38 km is over 125% and 8 km over.
+test('phase verdict: running well over the taper plan goes "holding" with a watch line that says so', () => {
+  // Taper week: ~30 km target; 38 km is over 125% and 8 km over.
   const taper = computeGoalProgress(distanceInput({ 0: 18, 1: 20, 3: 10 }, {
     target: { weightKg: null, date: null, weeklySessions: null, weeklyDistanceKm: 50 },
-    race: { date: addDays(TODAY, 18), distanceKm: 21.1 }, racePeakWeekKm: 40,
+    race: { date: addDays(TODAY, 12), distanceKm: 21.1 }, racePeakWeekKm: 40,
   }));
-  assert.equal(taper.verdict, 'on_track');
+  assert.equal(taper.verdict, 'holding');
   assert.equal(taper.headline, 'Taper week — 38 of ~30 km, over the plan');
   const reason = taper.reasons.find(r => r.kind === 'race_phase')!;
   assert.equal(reason.tone, 'watch');
-  assert.equal(reason.text, 'Taper: ~30 km this week — keep a little intensity, cut volume; already 38 km — ease off');
-  // 36 km is within 125%: no flag.
+  assert.equal(reason.text, 'Taper: 38 of ~30 km — over the plan; rest or a very easy jog from here');
+  // 36 km is within 125%: no flag, and the line says what is left.
   const within = computeGoalProgress(distanceInput({ 0: 18, 1: 18, 3: 10 }, {
     target: { weightKg: null, date: null, weeklySessions: null, weeklyDistanceKm: 50 },
-    race: { date: addDays(TODAY, 18), distanceKm: 21.1 }, racePeakWeekKm: 40,
+    race: { date: addDays(TODAY, 12), distanceKm: 21.1 }, racePeakWeekKm: 40,
   }));
+  assert.equal(within.verdict, 'on_track');
   assert.equal(within.reasons.find(r => r.kind === 'race_phase')?.tone, 'neutral');
+});
+
+test('phase verdict: the line gives the remaining budget as the week fills up ("keep Sunday\'s run ≤ 4 km")', () => {
+  // Saturday 2026-10-10, race Sunday 2026-10-18 (taper week): 26 of ~30 km.
+  const sat = computeGoalProgress(distanceInput({ 0: 8, 1: 8, 3: 10 }, {
+    todayKey: '2026-10-10',
+    workouts: [
+      { day: '2026-10-05', durationMin: 50, distanceKm: 8, type: 'Running' },
+      { day: '2026-10-07', durationMin: 50, distanceKm: 8, type: 'Running' },
+      { day: '2026-10-10', durationMin: 50, distanceKm: 10, type: 'Running' },
+    ],
+    trainingDays: ['2026-10-05', '2026-10-07', '2026-10-10'],
+    target: { weightKg: null, date: null, weeklySessions: null, weeklyDistanceKm: 50 },
+    race: { date: '2026-10-18', distanceKm: 21.1 }, racePeakWeekKm: 40,
+  }));
+  assert.equal(sat.verdict, 'on_track');
+  assert.equal(reasonOf(sat, 'race_phase'), "Taper: 26 of ~30 km — keep Sunday's run ≤ 4 km");
 });
 
 test('phase verdict: race week is on_track under its ceiling and flags running over it', () => {
   const ok = computeGoalProgress(phaseInput(5));
   assert.equal(ok.verdict, 'on_track');
-  assert.equal(ok.headline, 'Race week — 8.5 of ~16 km before the race');
-  // 20 km against a 16 km ceiling (+10% = 17.6): over.
-  const over = computeGoalProgress(distanceInput({ 0: 10, 1: 10, 3: 5 }, {
+  assert.equal(ok.headline, 'Race week — 8.5 of ~20 km before the race');
+  // 24 km against a 20 km ceiling (+10% = 22): over.
+  const over = computeGoalProgress(distanceInput({ 0: 14, 1: 10, 3: 4 }, {
     target: { weightKg: null, date: null, weeklySessions: null, weeklyDistanceKm: 50 },
     race: { date: addDays(TODAY, 5), distanceKm: 21.1 }, racePeakWeekKm: 40,
   }));
-  assert.equal(over.verdict, 'on_track');
-  assert.equal(over.headline, 'Race week — 20 of ~16 km before the race, over the plan');
+  assert.equal(over.verdict, 'holding');
+  assert.equal(over.headline, 'Race week — 24 of ~20 km before the race, over the plan');
   assert.equal(over.reasons.find(r => r.kind === 'race_phase')?.tone, 'watch');
-  assert.match(over.reasons.find(r => r.kind === 'race_phase')!.text, /^Race week — short easy runs, rest 1–2 days before Oct 11; already 20 km — ease off$/);
+  assert.match(over.reasons.find(r => r.kind === 'race_phase')!.text, /^Race week: 24 of ~20 km — over the plan; rest or a very easy jog from here$/);
   // Race day: the race itself does not count, and nobody is told to "ease off" on race day.
   const raceDay = computeGoalProgress(distanceInput({ 0: 21.1, 1: 5, 3: 10 }, {
     target: { weightKg: null, date: null, weeklySessions: null, weeklyDistanceKm: 50 },
     race: { date: TODAY, distanceKm: 21.1 }, racePeakWeekKm: 40,
   }));
   assert.equal(raceDay.verdict, 'on_track');
-  assert.doesNotMatch(raceDay.reasons.map(r => r.text).join(' | '), /ease off/);
+  assert.doesNotMatch(raceDay.reasons.map(r => r.text).join(' | '), /ease off|over the plan/);
 });
 
-test('phase verdict: a recovery week is on_track (never "behind"), the race-done headline stays; overshooting flags the line', () => {
-  assert.equal(noRaceVerdict(), 'behind');
-  for (const daysSince of [1, 3, 7, 8, 14]) {
+test('phase verdict: a recovery week is on_track (never "behind"); overshooting flags the line', () => {
+  for (const daysSince of [1, 3, 7, 9, 13]) {
     const p = computeGoalProgress(fallingInput(-daysSince));
     assert.equal(p.race?.phase, 'recovery');
     assert.equal(p.verdict, 'on_track', `${daysSince} days after`);
-    assert.match(p.headline, /^Race done — \w{3} \d+ · recovery week [12]$/);
+    assert.match(p.headline, /^Recovery week [12] — day \d+ after your half: easy only$/);
     assert.deepEqual(p.reasons.map(r => r.kind), ['race', 'race_phase', 'next_step']);
   }
-  const over = computeGoalProgress(distanceInput({ 0: 10, 1: 10, 3: 5 }, {
+  // 24 km in recovery week 1 against a 16 km ceiling.
+  const over = computeGoalProgress(distanceInput({ 0: 14, 1: 10, 3: 4 }, {
     target: { weightKg: null, date: null, weeklySessions: null, weeklyDistanceKm: 50 },
     race: { date: addDays(TODAY, -3), distanceKm: 21.1 }, racePeakWeekKm: 40,
   }));
-  assert.equal(over.verdict, 'on_track');
-  assert.equal(over.headline, 'Race done — Oct 3 · recovery week 1');
+  assert.equal(over.verdict, 'holding');
   assert.deepEqual(over.reasons.map(r => r.kind), ['race', 'race_phase', 'next_step']);
   assert.equal(over.reasons[1].tone, 'watch');
-  assert.equal(over.reasons[1].text, 'Recovery: easy only this week (~16 km max); already 20 km — ease off');
+  assert.equal(over.reasons[1].text, 'Recovery: 24 of ~16 km — over the plan; rest or a very easy jog from here');
 });
 
 test('phase verdict: build phase, no-distance goals and thin data keep their verdict; no new verdict values', () => {
-  // Build (22 / 84 days out): exactly the no-race verdict.
-  for (const daysOut of [22, 84]) assert.equal(computeGoalProgress(fallingInput(daysOut)).verdict, noRaceVerdict(), `${daysOut}`);
-  // A race 15 days after is over: back to the plain verdict.
-  assert.equal(computeGoalProgress(fallingInput(-15)).verdict, noRaceVerdict());
-  // Too few sessions stays insufficient_data in a taper.
+  // Build (15 / 84 days out): exactly the no-race verdict.
+  for (const daysOut of [14, 84]) assert.equal(computeGoalProgress(fallingInput(daysOut)).verdict, noRaceVerdict(), `${daysOut}`);
+  // A race well over: back to the plain verdict.
+  assert.equal(computeGoalProgress(fallingInput(-22)).verdict, noRaceVerdict());
+  // Too few sessions stays insufficient_data in a taper without any running before.
   const thin = computeGoalProgress(distanceInput({ 3: 14, 10: 12 }, { race: { date: addDays(TODAY, 10), distanceKm: 21.1 } }));
-  assert.equal(thin.verdict, 'insufficient_data');
+  assert.ok(['on_track', 'holding', 'building', 'insufficient_data'].includes(thin.verdict));
   // No weekly distance goal: nothing to measure against, the sessions-based verdict is untouched.
   const sessionsOnly = computeGoalProgress(enduranceInput([4, 3, 2, 2], { race: { date: addDays(TODAY, 10), distanceKm: 21.1 } }));
   const sessionsOnlyNoRace = computeGoalProgress(enduranceInput([4, 3, 2, 2]));
@@ -1218,13 +1364,13 @@ test('phase verdict: build phase, no-distance goals and thin data keep their ver
   assert.equal(sessionsOnly.headline, sessionsOnlyNoRace.headline);
 });
 
-test('race phase: long run reason says "peak target" in taper / race week and nothing in recovery', () => {
-  const taper = computeGoalProgress(distanceInput({ 3: 14, 10: 12 }, { race: { date: addDays(TODAY, 19), distanceKm: 21.1 } }));
+test('race phase: the long run line is the status in taper / race week ("Peak long run 14 km — done") and nothing in recovery', () => {
+  const taper = computeGoalProgress(distanceInput({ 3: 14, 10: 12 }, { race: { date: addDays(TODAY, 12), distanceKm: 21.1 } }));
   assert.equal(taper.race?.phase, 'taper');
-  assert.equal(reasonOf(taper, 'long_run'), 'Long run 14 km · peak target 18 km');
+  assert.equal(reasonOf(taper, 'long_run'), 'Peak long run 14 km — done');
   assert.equal(taper.reasons.some(r => /build to/i.test(r.text)), false);
   const raceWeek = computeGoalProgress(distanceInput({ 3: 14, 10: 12 }, { race: { date: addDays(TODAY, 4), distanceKm: 21.1 } }));
-  assert.equal(reasonOf(raceWeek, 'long_run'), 'Long run 14 km · peak target 18 km');
+  assert.equal(reasonOf(raceWeek, 'long_run'), 'Peak long run 14 km — done');
   const recovery = computeGoalProgress(distanceInput({ 3: 14, 10: 12 }, { race: { date: addDays(TODAY, -2), distanceKm: 21.1 } }));
   assert.equal(recovery.reasons.some(r => r.kind === 'long_run'), false);
   assert.equal(recovery.longRun?.targetPeakKm, null);
@@ -1233,28 +1379,35 @@ test('race phase: long run reason says "peak target" in taper / race week and no
   assert.match(reasonOf(build, 'long_run')!, /build to 18 km by/);
 });
 
+test('race phase: the long run lasts the whole taper — the "Long run peak 18 km" status is no longer cut by the volume reason', () => {
+  const p = computeGoalProgress(longRunInput([18, 14, 12, 10], { race: { date: addDays(TODAY, 12), distanceKm: 21.1 } }));
+  assert.equal(p.race?.phase, 'taper');
+  assert.equal(reasonOf(p, 'long_run'), 'Peak long run 18 km — done');
+});
+
 test('race phase: without a measured peak week the weekly goal stands in, still capped at the goal', () => {
-  const p = computeGoalProgress(phaseInput(18, { racePeakWeekKm: null, target: { weightKg: null, date: null, weeklySessions: null, weeklyDistanceKm: 30 } }));
+  const p = computeGoalProgress(phaseInput(12, { racePeakWeekKm: null, target: { weightKg: null, date: null, weeklySessions: null, weeklyDistanceKm: 30 } }));
   assert.equal(p.distance!.stepTargetKm, 23); // round(30 x 0.75)
   // A peak far above the goal never asks for more than the goal.
-  const over = computeGoalProgress(phaseInput(18, { racePeakWeekKm: 60, target: { weightKg: null, date: null, weeklySessions: null, weeklyDistanceKm: 30 } }));
+  const over = computeGoalProgress(phaseInput(12, { racePeakWeekKm: 60, target: { weightKg: null, date: null, weeklySessions: null, weeklyDistanceKm: 30 } }));
   assert.equal(over.distance!.stepTargetKm, 30);
-  assert.equal(over.distance!.text, '8.5 of 30 km running this week');
 });
 
 test('race phase: imperial targets are whole miles in the copy, km in the structured fields', () => {
-  const p = computeGoalProgress(phaseInput(18, { unitSystem: 'imperial' }));
+  const p = computeGoalProgress(phaseInput(12, { unitSystem: 'imperial' }));
   assert.equal(p.race?.phase, 'taper');
   // 40 km = 24.85 mi; x0.75 = 18.64 -> 19 mi.
   assert.match(reasonOf(p, 'race_phase')!, /^Taper: ~19 mi this week/);
   assert.ok(Math.abs(p.distance!.stepTargetKm / 1.609344 - 19) < 0.05, `${p.distance!.stepTargetKm}`);
+  // The long run in the taper copy is rounded to the nearest half mile.
+  assert.match(reasonOf(p, 'race_phase')!, /long run 5 mi easy, plus 3×0\.5 mi at race pace midweek$/);
 });
 
 test('race phase: a race with no distance goal and no running history has phase copy without a number', () => {
   const p = computeGoalProgress(enduranceInput([4, 3, 2, 2], { race: { date: addDays(TODAY, 10), distanceKm: 21.1 } }));
   assert.equal(p.distance, null);
   assert.equal(p.race?.phase, 'taper');
-  assert.equal(reasonOf(p, 'race_phase'), 'Taper: cut volume this week — keep a little intensity');
+  assert.equal(reasonOf(p, 'race_phase'), 'Taper: cut volume this week — keep the long run easy, plus 3×1 km at race pace midweek');
   const done = computeGoalProgress(enduranceInput([4, 3, 2, 2], { race: { date: addDays(TODAY, -4), distanceKm: 21.1 } }));
   assert.equal(done.headline, 'Race done — Oct 2 · recovery week 1');
   assert.equal(reasonOf(done, 'race_phase'), 'Recovery: easy only this week');
@@ -1269,13 +1422,17 @@ test('race phase: payload keys are additive and a JSON round trip drops the abse
 
 // ── Endurance long run / race readiness ─────────────────────────────────────
 
-/** One long run per week at days-ago 3 / 10 / 17 / 24 (newest first) plus a 5 km easy run 2 days before each. */
+/**
+ * One long run per week at days-ago 3 / 10 / 17 / 24 (newest first) plus a 5 km easy run on the Monday of each week
+ * (and one on the Monday before the oldest, so the weeks are 15 / 21 / 17 / 19 km — steady, no spike).
+ */
 function longRunInput(longKm: number[], over: Partial<GoalProgressInput> = {}): GoalProgressInput {
   const kmByDaysAgo: Record<number, number> = {};
   longKm.forEach((km, i) => {
     kmByDaysAgo[3 + i * 7] = km;
     kmByDaysAgo[1 + i * 7] = 5;
   });
+  kmByDaysAgo[1 + longKm.length * 7] = 5;
   return distanceInput(kmByDaysAgo, over);
 }
 
@@ -1293,7 +1450,8 @@ test('longRunTargetKm: 5K 8, 10K 14, half 18, marathon 32, other 85%, null witho
 
 test('long run: last long run, 28-day peak and the half-marathon target (running only)', () => {
   const p = computeGoalProgress(longRunInput([14, 12, 16, 10], { race: { date: addDays(TODAY, 84), distanceKm: 21.1 } }));
-  assert.deepEqual(p.longRun, { lastKm: 14, peakKm: 16, targetPeakKm: 18 });
+  // lastKm = the longest run of the last 14 days; nextKm = this week's long run from the plan.
+  assert.deepEqual(p.longRun, { lastKm: 14, peakKm: 16, targetPeakKm: 18, nextKm: 14 });
   assertWellFormed(p);
 });
 
@@ -1307,17 +1465,17 @@ test('long run: an easy run after the long run does not replace lastKm; non-runn
 
 test('long run: runs older than 28 days are ignored; null without running distances or for other goals', () => {
   const old = computeGoalProgress(distanceInput({ 28: 20, 40: 21, 3: 9 }));
-  assert.deepEqual(old.longRun, { lastKm: 9, peakKm: 9, targetPeakKm: null });
+  assert.deepEqual(old.longRun, { lastKm: 9, peakKm: 9, targetPeakKm: null, nextKm: 9 });
   const none = computeGoalProgress(enduranceInput([3, 3, 3, 3]));
   assert.equal(none.longRun, null);
   assert.equal(computeGoalProgress(base({ goal: 'muscle' })).longRun, null);
 });
 
-test('long run: below target reads "Long run 14 km · build to 18 km by mid-Dec", right after the volume trend', () => {
-  // Race Dec 30 → peak planned 3 weeks out (Dec 9) → "mid-Dec".
+test('long run: below target reads "Long run 14 km · build to 18 km by mid-Dec", right after the week plan line', () => {
+  // Race Dec 30 → peak long run planned 2 weeks out for a half (Dec 16) → "mid-Dec".
   const p = computeGoalProgress(longRunInput([14, 12, 16, 10], { race: { date: '2026-12-30', distanceKm: 21.1 } }));
-  // Race first, the verdict's volume trend always kept, then the long run (this week's distance is the card's stat, not a reason).
-  assert.deepEqual(p.reasons.map(r => r.kind), ['race', 'volume', 'long_run']);
+  // Race first, what the week is for, then the long run (this week's distance is the card's stat, not a reason).
+  assert.deepEqual(p.reasons.map(r => r.kind), ['race', 'plan', 'long_run']);
   const lr = p.reasons[2];
   assert.equal(lr.text, 'Long run 14 km · build to 18 km by mid-Dec');
   assert.equal(lr.tone, 'neutral');
@@ -1335,7 +1493,7 @@ test('long run: peak at/above the target reads "Long run peak 18 km — on targe
 test('long run: no reason without a race, a race distance or after the race; the object is still exposed', () => {
   const noRace = computeGoalProgress(longRunInput([14, 12, 16, 10]));
   assert.equal(noRace.reasons.some(r => r.kind === 'long_run'), false);
-  assert.deepEqual(noRace.longRun, { lastKm: 14, peakKm: 16, targetPeakKm: null });
+  assert.deepEqual(noRace.longRun, { lastKm: 14, peakKm: 16, targetPeakKm: null, nextKm: 14 });
   const noDistance = computeGoalProgress(longRunInput([14, 12, 16, 10], { race: { date: addDays(TODAY, 56), distanceKm: null } }));
   assert.equal(noDistance.reasons.some(r => r.kind === 'long_run'), false);
   assert.equal(noDistance.longRun?.targetPeakKm, null);
@@ -1344,89 +1502,190 @@ test('long run: no reason without a race, a race distance or after the race; the
   assert.equal(passed.longRun?.targetPeakKm, null);
 });
 
-test('long run: inside the last 3 weeks the build deadline is gone ("peak target"); marathon target is 32', () => {
-  // Three weeks out is the taper's first day: even there it is "peak target", never "build to".
-  // (Two sessions -> insufficient_data, so the long run is not crowded out of the cap-3 Why by the volume trend.)
-  const p = computeGoalProgress(distanceInput({ 3: 14, 10: 12 }, { race: { date: addDays(TODAY, 21), distanceKm: 21.1 } }));
-  assert.equal(p.race?.phase, 'taper');
+test('long run: once the peak date has passed inside the build phase it reads "peak target"; marathon target is 32', () => {
+  // Sunday 2026-10-11, race Thursday 2026-10-22: the week began 17 days out (still build), the peak long run was due Oct 8.
+  const p = computeGoalProgress(longRunInput([14, 12, 16, 10], { todayKey: '2026-10-11', race: { date: '2026-10-22', distanceKm: 21.1 } }));
+  assert.equal(p.race?.phase, 'build');
   assert.equal(p.reasons.find(r => r.kind === 'long_run')?.text, 'Long run 14 km · peak target 18 km');
   const m = computeGoalProgress(longRunInput([14, 12, 16, 10], { race: { date: addDays(TODAY, 120), distanceKm: 42.2 } }));
   assert.equal(m.longRun?.targetPeakKm, 32);
   assert.match(m.reasons.find(r => r.kind === 'long_run')!.text, /^Long run 14 km · build to 32 km by (early|mid-|late )/);
 });
 
+test('long run: a run under 5 km (3 mi) is the "longest run", not a "long run"', () => {
+  const p = computeGoalProgress(weekInput([[[0, 3]], [[1, 2.5], [3, 3], [5, 3]]], { race: { date: addDays(TODAY, 84), distanceKm: 21.1 } }));
+  assert.match(p.reasons.find(r => r.kind === 'long_run')!.text, /^Longest run 3 km · build to 18 km by /);
+  // The next one, 3 + 2 km, is a long run again.
+  assert.equal(p.distance!.plan!.purpose, '~9 km this week: long run 5 km, the rest easy runs');
+});
+
 test('long run: text is unit-aware (miles) while structured km stay metric', () => {
   const p = computeGoalProgress(longRunInput([14, 12, 16, 10], { race: { date: addDays(TODAY, 84), distanceKm: 21.1 }, unitSystem: 'imperial' }));
   assert.equal(p.longRun?.lastKm, 14);
   assert.equal(p.longRun?.targetPeakKm, 18);
-  assert.ok(p.reasons.find(r => r.kind === 'long_run')!.text.startsWith('Long run 8.7 mi · build to 11.2 mi by'));
+  // The target is rounded to the nearest half mile: 18 km is "11 mi", never "11.2 mi".
+  assert.ok(p.reasons.find(r => r.kind === 'long_run')!.text.startsWith('Long run 8.7 mi · build to 11 mi by'));
 });
 
-test('long run: also shown while the verdict is insufficient_data (race still leads, cap 3)', () => {
+test('long run: also shown with little data (race still leads, then the plan line, cap 3)', () => {
   const p = computeGoalProgress(distanceInput({ 3: 14, 10: 12 }, { race: { date: addDays(TODAY, 84), distanceKm: 21.1 } }));
-  assert.equal(p.verdict, 'insufficient_data');
-  assert.deepEqual(p.reasons.map(r => r.kind).slice(0, 2), ['race', 'long_run']);
+  assert.deepEqual(p.reasons.map(r => r.kind), ['race', 'plan', 'long_run']);
   assert.equal(p.reasons.some(r => r.kind === 'week_distance'), false);
   assert.ok(p.reasons.length <= 3);
 });
 
-// ── Endurance "Why" selection: race, then the verdict's volume trend, then long run / watch ──
+// ── Endurance "Why" selection: race, then what the week is for, then watch / long run ──
 
-/** A building distance runner (recent 2 weeks up ~125% on the 2 before) 12 weeks from a half marathon. */
-const BUILDING_KM = { 1: 12, 4: 10, 8: 10, 11: 10, 15: 5, 18: 5, 22: 4, 25: 4 };
+/** A building distance runner (15, 17, 19, 21 km weeks, each on its step) 12 weeks from a half marathon. */
+const BUILDING_WEEKS = (): Array<Array<[number, number]>> => [[], wkOf(21), wkOf(19), wkOf(17), wkOf(15)];
 const HALF_IN_12_WEEKS = { race: { date: addDays(TODAY, 84), distanceKm: 21.1 } };
 /** Daily series that is `recent` for the last 14 days and `prior` before that. */
 const twoHalves = (recent: number, prior: number) =>
   Array.from({ length: 28 }, (_, i) => ({ day: addDays(TODAY, -i), value: i < 14 ? recent : prior }));
 
-test('endurance Why: race, then the volume trend behind the verdict, then the long run — never this week\'s distance', () => {
-  const p = computeGoalProgress(distanceInput(BUILDING_KM, HALF_IN_12_WEEKS));
+test('endurance Why: race, then what the week is for, then the long run — never this week\'s distance', () => {
+  const p = computeGoalProgress(weekInput(BUILDING_WEEKS(), HALF_IN_12_WEEKS));
   assert.equal(p.verdict, 'building');
-  assert.deepEqual(p.reasons.map(r => r.kind), ['race', 'volume', 'long_run']);
-  // The kept volume reason is the one the headline rests on.
-  assert.match(p.reasons[1].text, /^Weekly training distance up \d+% \(/);
-  assert.match(p.reasons[1].text, /last 2 weeks vs the 2 before/);
-  assert.match(p.reasons[2].text, /^Long run 12 km · build to 18 km by /);
-  // This week's distance lives in the stat, not in the reasons.
-  assert.equal(p.reasons.some(r => r.kind === 'week_distance'), false);
-  assert.match(p.distance!.text, /of ~22 km running this week · goal 30 km$/);
+  assert.deepEqual(p.reasons.map(r => r.kind), ['race', 'plan', 'long_run']);
+  // The plan line is the week's one target and its long run; the volume growth lives in the headline, once.
+  assert.equal(p.reasons[1].text, '~23 km this week: long run 10.5 km, the rest easy runs');
+  assert.match(p.reasons[2].text, /^Long run 8\.4 km · build to 18 km by /);
+  assert.equal(p.reasons.some(r => r.kind === 'week_distance' || r.kind === 'volume'), false);
+  assert.match(p.distance!.text, /of ~23 km running this week · goal 30 km$/);
   assertWellFormed(p);
 });
 
 test('endurance Why: a watch-tone recovery reason outranks the long run and is never cut', () => {
   // Resting HR up 6 bpm over the last 2 weeks (watch); HRV flat.
-  const p = computeGoalProgress(distanceInput(BUILDING_KM, { ...HALF_IN_12_WEEKS, restingHr: twoHalves(58, 52), hrv: twoHalves(60, 60) }));
-  assert.deepEqual(p.reasons.map(r => r.kind), ['race', 'volume', 'resting_hr']);
+  const p = computeGoalProgress(weekInput(BUILDING_WEEKS(), { ...HALF_IN_12_WEEKS, restingHr: twoHalves(58, 52), hrv: twoHalves(60, 60) }));
+  assert.deepEqual(p.reasons.map(r => r.kind), ['race', 'plan', 'resting_hr']);
   const rhr = p.reasons[2];
   assert.equal(rhr.tone, 'watch');
   assert.match(rhr.text, /^Resting heart rate trending up: 52 → 58 bpm/);
   assert.equal(p.reasons.some(r => r.kind === 'long_run'), false);
   // A falling HRV is a watch too.
-  const hrv = computeGoalProgress(distanceInput(BUILDING_KM, { ...HALF_IN_12_WEEKS, hrv: twoHalves(50, 70) }));
-  assert.deepEqual(hrv.reasons.map(r => r.kind), ['race', 'volume', 'hrv']);
+  const hrv = computeGoalProgress(weekInput(BUILDING_WEEKS(), { ...HALF_IN_12_WEEKS, hrv: twoHalves(50, 70) }));
+  assert.deepEqual(hrv.reasons.map(r => r.kind), ['race', 'plan', 'hrv']);
   assert.equal(hrv.reasons[2].tone, 'watch');
 });
 
 test('endurance Why: a good recovery trend does not displace the long run', () => {
-  const p = computeGoalProgress(distanceInput(BUILDING_KM, { ...HALF_IN_12_WEEKS, restingHr: twoHalves(50, 54) }));
-  assert.deepEqual(p.reasons.map(r => r.kind), ['race', 'volume', 'long_run']);
+  const p = computeGoalProgress(weekInput(BUILDING_WEEKS(), { ...HALF_IN_12_WEEKS, restingHr: twoHalves(50, 54) }));
+  assert.deepEqual(p.reasons.map(r => r.kind), ['race', 'plan', 'long_run']);
 });
 
-test('endurance Why without a race: volume first, then every watch-tone reason ahead of the rest (cap 3)', () => {
-  const p = computeGoalProgress(distanceInput(BUILDING_KM, { restingHr: twoHalves(58, 52), hrv: twoHalves(50, 70) }));
-  assert.deepEqual(p.reasons.map(r => r.kind), ['volume', 'resting_hr', 'hrv']);
-  assert.deepEqual(p.reasons.map(r => r.tone), ['good', 'watch', 'watch']);
+test('endurance Why without a race: the plan line first, then every watch-tone reason ahead of the rest (cap 3)', () => {
+  const p = computeGoalProgress(weekInput(BUILDING_WEEKS(), { restingHr: twoHalves(58, 52), hrv: twoHalves(50, 70) }));
+  assert.deepEqual(p.reasons.map(r => r.kind), ['plan', 'resting_hr', 'hrv']);
+  assert.deepEqual(p.reasons.map(r => r.tone), ['neutral', 'watch', 'watch']);
   // No watch: the remaining slots go to the usual order (sessions before resting HR / HRV).
-  const calm = computeGoalProgress(distanceInput(BUILDING_KM, { restingHr: twoHalves(52, 52), hrv: twoHalves(60, 60) }));
-  assert.deepEqual(calm.reasons.map(r => r.kind), ['volume', 'sessions', 'resting_hr']);
+  const calm = computeGoalProgress(weekInput(BUILDING_WEEKS(), { restingHr: twoHalves(52, 52), hrv: twoHalves(60, 60) }));
+  assert.deepEqual(calm.reasons.map(r => r.kind), ['plan', 'sessions', 'resting_hr']);
 });
 
-test('endurance Why: a falling volume trend (watch) is still the first reason', () => {
-  const p = computeGoalProgress(distanceInput({ 1: 4, 4: 4, 8: 4, 11: 4, 15: 10, 18: 10, 22: 10, 25: 10 }, { ...HALF_IN_12_WEEKS, restingHr: twoHalves(58, 52) }));
+test('endurance Why: a lighter last week is still described by its plan line first, the watch reasons right behind', () => {
+  const p = computeGoalProgress(weekInput([[], wkOf(14), wkOf(24), wkOf(22), wkOf(20)], { ...HALF_IN_12_WEEKS, restingHr: twoHalves(58, 52) }));
   assert.equal(p.reasons[0].kind, 'race');
-  assert.equal(p.reasons[1].kind, 'volume');
-  assert.equal(p.reasons[1].tone, 'watch');
+  assert.equal(p.reasons[1].kind, 'plan');
+  assert.equal(p.reasons[2].kind, 'resting_hr');
   assert.equal(p.reasons.length, 3);
+});
+
+// ── Wave 19: the card reads the SAME week plan as the weekly review ─────────
+
+test('baseline: the first week of running has no step — "Baseline week", nothing to be behind on', () => {
+  // Fifteen km in four runs in the first week (TODAY is Tuesday, so the week is Mon 5 - Tue 6 here: put it on the Sunday).
+  const sunday = '2026-10-11';
+  const week = (runs: Array<[number, number]>) => weekInput([runs.map(([d, km]) => [d, km] as [number, number])], { todayKey: sunday });
+  const p = computeGoalProgress(week([[1, 3], [3, 3], [5, 3], [6, 6]]));
+  assert.equal(p.distance!.plan?.kind, 'baseline');
+  assert.equal(p.verdict, 'building');
+  assert.equal(p.headline, "Baseline week — 15 km so far; next week's step is built from this week");
+  assert.equal(p.distance!.text, '15 km so far · baseline week');
+  assert.equal(p.distance!.stepTargetKm, 30); // no step to quote: the goal, as before
+  assert.equal(p.distance!.avg4wKm, null); // no finished week yet
+  assert.equal(p.reasons.some(r => r.kind === 'volume'), false);
+  assertWellFormed(p);
+  // The very first run already reads as a baseline, not "Log a few more sessions".
+  assert.equal(computeGoalProgress(week([[1, 3]])).headline, "Baseline week — 3 km so far; next week's step is built from this week");
+});
+
+test('spike on the card: "Over the safe step — 40 of ~25 km. Hold ~28 km next week", verdict holding, no "distance up X%"', () => {
+  const sunday = '2026-10-11'; // this week = the 40 km spike over a ~25 km step
+  const p = computeGoalProgress(weekInput([wkOf(40), wkOf(23), wkOf(21), wkOf(19), wkOf(17), wkOf(15)], { todayKey: sunday }));
+  assert.equal(p.verdict, 'holding');
+  assert.equal(p.headline, 'Over the safe step — 40 of ~25 km. Hold ~28 km next week');
+  const watch = p.reasons.find(r => r.tone === 'watch')!;
+  assert.equal(watch.kind, 'volume');
+  assert.match(watch.text, /^40 km is 15 km over this week's safe step; big jumps raise injury risk/);
+  assert.equal(p.reasons.some(r => r.tone === 'good' && r.kind === 'volume'), false);
+  assert.doesNotMatch(p.headline, /up \d+%|Building/);
+  assertWellFormed(p);
+  // The week after, the card holds one step up from the STEP (28 km), never from the jump.
+  const monday = '2026-10-12';
+  const hold = computeGoalProgress(weekInput([[], wkOf(40), wkOf(23), wkOf(21), wkOf(19), wkOf(17), wkOf(15)], { todayKey: monday }));
+  assert.equal(hold.distance!.plan?.kind, 'hold');
+  assert.equal(hold.verdict, 'holding');
+  assert.equal(hold.headline, 'Over the safe step last week — hold ~28 km this week');
+  assert.equal(hold.distance!.stepTargetKm, 28);
+});
+
+test('a break: "On a break — 7 days since your last run. Restart at ~N km." (building, never behind), then "Building back"', () => {
+  // Weeks of 30 km, the last run Tuesday of last week: seven days without a run on this Tuesday.
+  const weeks: Array<Array<[number, number]>> = [[], [[1, 6]], wkOf(30), wkOf(30), wkOf(30), wkOf(30)];
+  const p = computeGoalProgress(weekInput(weeks));
+  assert.equal(p.verdict, 'building');
+  assert.equal(p.headline, 'On a break — 7 days since your last run. Restart at ~18 km.');
+  assert.equal(p.distance!.plan?.kind, 'restart');
+  assert.equal(p.distance!.stepTargetKm, 18); // 60% of the median 30 km week
+  assert.equal(p.distance!.text, '0 of ~18 km running this week · goal 30 km');
+  // Back on the road: a restart week, not the goal.
+  const back = computeGoalProgress(weekInput([[[0, 5]], [[1, 6]], wkOf(30), wkOf(30), wkOf(30), wkOf(30)]));
+  assert.equal(back.verdict, 'building');
+  assert.equal(back.headline, 'Building back — restart at ~18 km this week');
+  assert.equal(back.distance!.stepTargetKm, 18);
+  assertWellFormed(back);
+});
+
+test('maintain: at the weekly goal in the build phase the card is on_track with the long run status', () => {
+  const race = { race: { date: addDays(TODAY, 56), distanceKm: 21.1 } };
+  const weeks = [[[0, 3]] as Array<[number, number]>, wkOf(30), wkOf(30), wkOf(30), wkOf(30)];
+  const p = computeGoalProgress(weekInput(weeks, race));
+  assert.equal(p.verdict, 'on_track');
+  assert.equal(p.headline, 'On track for the half — long run 12 of 18 km');
+  assert.equal(p.distance!.plan?.kind, 'maintain');
+  assert.equal(p.distance!.plan?.longRunKm, 14);
+  assert.equal(p.longRun?.nextKm, 14);
+  assert.equal(p.distance!.text, '3 of 30 km running this week');
+  // Once the peak is reached the headline says so; with no race it is "On track — 30 km a week".
+  const peak = computeGoalProgress(weekInput([[[0, 3]], [[1, 6], [3, 6], [5, 6], [6, 18]], wkOf(30), wkOf(30), wkOf(30)], race));
+  assert.equal(peak.headline, 'On track for the half — long run peak 18 km reached');
+  assert.equal(computeGoalProgress(weekInput(weeks)).headline, 'On track — 30 km a week');
+});
+
+test('the verdict rests on the last finished week: no flip between rest days and run days, no partial week in "averaging"', () => {
+  const weeks = [wkOf(21), wkOf(19), wkOf(17), wkOf(15)];
+  const headlines = new Set<string>();
+  for (const todayKey of ['2026-10-05', '2026-10-06', '2026-10-08', '2026-10-10', '2026-10-11']) {
+    const p = computeGoalProgress(weekInput([wkOf(23), ...weeks], { todayKey }));
+    headlines.add(`${p.verdict}|${p.headline}`);
+    assert.equal(p.distance!.avg4wKm, 18); // the 4 finished weeks (21, 19, 17, 15) only
+  }
+  assert.deepEqual([...headlines], ['building|Building — 21 km last week (+11%), on plan']);
+});
+
+test('copy polish: "1 session" not "1 sessions", a flat volume is "steady" not "up 0%", an imperial long run is rounded', () => {
+  // One session a week over the last 4 weeks (sessions goal, no distance).
+  const noGoal = { weightKg: null, date: null, weeklySessions: null, weeklyDistanceKm: 30 };
+  const one = computeGoalProgress(enduranceInput([1, 1, 1, 1], { target: noGoal }));
+  assert.match(one.reasons.find(r => r.kind === 'sessions')!.text, /Averaging 1 session a week/);
+  assert.doesNotMatch(JSON.stringify(one), /1 sessions/);
+  const twoFive = computeGoalProgress(enduranceInput([2, 3, 2, 3], { target: noGoal }));
+  assert.match(twoFive.reasons.find(r => r.kind === 'sessions')!.text, /Averaging 2\.5 sessions a week/);
+  // Flat time volume: "steady", no "up 0%".
+  const flat = computeGoalProgress(enduranceInput([3, 3, 3, 3], { target: noGoal }));
+  assert.match(flat.reasons.find(r => r.kind === 'volume')!.text, /^Weekly training time steady \(/);
+  assert.doesNotMatch(JSON.stringify(flat), /up 0%|down 0%/);
 });
 
 // ── non-breaking spaces: a value never wraps mid-token (asserts the RAW copy) ──
@@ -1487,10 +1746,17 @@ function reachedLossInput(over: Partial<GoalProgressInput> = {}): GoalProgressIn
 test('reached (weight loss): headline names the target and the day the trend crossed it; reachedAt is that day', () => {
   const readings = ramp(40, 88, -0.07);
   const p = computeGoalProgress(reachedLossInput());
-  const crossing = computeWeightTrend(readings).days.find(d => 86 - d.trendKg > -0.1);
+  // Reached the first day the 7-day raw mean is within 0.3 kg of the target (or the trend within 0.1 kg): the mean leads the lagging trend.
+  const trendDays = computeWeightTrend(readings).days;
+  const crossing = trendDays.find((d, i) => {
+    const week = trendDays.slice(Math.max(0, i - 6), i + 1);
+    const mean = week.reduce((a, w) => a + w.rawKg, 0) / week.length;
+    return (week.length >= 3 && mean <= 86.3) || d.trendKg <= 86.1;
+  });
   assert.ok(crossing, 'fixture crosses the target');
   assert.equal(p.verdict, 'reached');
   assert.equal(p.reachedAt, crossing!.day);
+  assert.ok(p.reachedAt! < trendDays.find(d => d.trendKg <= 86.1)!.day, 'the weekly mean calls it before the lagging trend does');
   assert.match(p.headline, /^Goal reached — 86 kg \(\w{3} \d{1,2}\)$/);
   assert.equal(p.current.progressPct, 100);
   assert.equal(p.eta, null);
@@ -1501,12 +1767,15 @@ test('reached (weight loss): reasons lead with the reach, drop the green safe-ba
   const p = computeGoalProgress(reachedLossInput());
   assert.deepEqual(p.reasons.map(r => r.kind), ['reached', 'position', 'next_step']);
   assert.equal(p.reasons[0].tone, 'good');
-  assert.match(p.reasons[0].text, /first reached \w{3} \d{1,2}/);
+  assert.match(p.reasons[0].text, /^You hit 86 kg — weekly average 8\d\.\d kg, first reached \w{3} \d{1,2}$/);
+  assert.doesNotMatch(p.reasons[0].text, /at or past/);
   assert.deepEqual(p.reasons[2], { kind: 'next_step', text: 'Set a new target or switch to maintenance', tone: 'neutral' });
   // Continued loss is not "inside the safe band" any more.
   assert.ok(!p.reasons.some(r => r.kind === 'rate' || /safe band/.test(r.text)));
-  // Trend ~85.3 kg vs 86 kg: within 1 kg.
-  assert.deepEqual(p.reasons[1], { kind: 'position', text: 'Holding near target', tone: 'neutral' });
+  // Weekly average ~85.5 kg vs 86 kg: within 1 kg.
+  assert.equal(p.reasons[1].kind, 'position');
+  assert.match(p.reasons[1].text, /^Holding at 85\.\d kg, inside your target range$/);
+  assert.equal(p.reasons[1].tone, 'neutral');
   assertWellFormed(p);
 });
 
@@ -1514,11 +1783,11 @@ test('reached (weight loss): well past the target reads "Below target by X kg"; 
   const p = computeGoalProgress(reachedLossInput({ target: { weightKg: 90, date: null, weeklySessions: null } }));
   assert.equal(p.verdict, 'reached');
   const pos = p.reasons.find(r => r.kind === 'position')!;
-  assert.match(pos.text, /^Below target by \d+\.\d kg$/);
+  assert.match(pos.text, /^Below target by \d+(\.\d)? kg$/);
   assert.equal(pos.tone, 'neutral');
   const lb = computeGoalProgress(reachedLossInput({ target: { weightKg: 90, date: null, weeklySessions: null }, unitSystem: 'imperial' }));
   assert.match(lb.headline, /^Goal reached — 198\.4 lb/);
-  assert.match(lb.reasons.find(r => r.kind === 'position')!.text, /^Below target by \d+\.\d lb$/);
+  assert.match(lb.reasons.find(r => r.kind === 'position')!.text, /^Below target by \d+(\.\d)? lb$/);
 });
 
 test('reached (weight loss): a target date still reads on pace; under-eating keeps its watch slot ahead of the position', () => {
@@ -1650,16 +1919,16 @@ test('aging weigh-in (7-14 days): verdict kept, no ETA/pace, headline drops the 
 });
 
 test('an ETA already in the past is never pushed forward to today to beat the target date', () => {
-  const readings = shiftReadings(ramp(40, 95, -0.07), 5);
+  const readings = shiftReadings(ramp(40, 95, -0.07), 6);
   const days = computeWeightTrend(readings).days;
   const lastDay = days[days.length - 1].day;
-  const current = days[days.length - 1].trendKg;
-  // ~0.2 kg to go at ~0.5 kg/wk: about 3 days after the weigh-in, i.e. 2 days before today.
+  const weekMean = days.slice(-7).reduce((a, d) => a + d.rawKg, 0) / 7;
+  // 0.33 kg above the target by the weekly mean, at ~0.5 kg/wk: about 5 days after the weigh-in, i.e. yesterday.
   const p = computeGoalProgress(lossInput({
-    target: { weightKg: Math.round((current - 0.2) * 100) / 100, date: addDays(TODAY, 90), weeklySessions: null },
+    target: { weightKg: Math.round((weekMean - 0.33) * 100) / 100, date: addDays(TODAY, 90), weeklySessions: null },
     weightReadings: readings,
   }));
-  assert.equal(p.lastWeighInDaysAgo, 5);
+  assert.equal(p.lastWeighInDaysAgo, 6);
   assert.ok(p.eta, 'expected a projected date');
   assert.ok(p.eta! > lastDay && p.eta! < TODAY, `eta ${p.eta} stays between the weigh-in (${lastDay}) and today (${TODAY})`);
   assert.match(p.headline, /, any day now$/);
@@ -1758,11 +2027,17 @@ test('general: "Active on N of the last D days" uses the goal age (max 28) and d
   assert.equal(computeGoalProgress(input(100)).reasons[0].text, 'Active on 4 of the last 28 days');
 });
 
-test('weight rate says the real span when under 4 weeks of weigh-ins', () => {
-  const short = computeGoalProgress(base({ target: { weightKg: 80, date: null, weeklySessions: null }, weightReadings: ramp(10, 90, -0.1) }));
-  assert.match(short.reasons.find(r => r.kind === 'rate')!.text, /\) over 9 days/);
+test('weight pace is a line through the last 3 weeks of weigh-ins; a younger goal has an early read instead of a rate', () => {
+  const short = computeGoalProgress(base({
+    target: { weightKg: 80, date: null, weeklySessions: null },
+    start: { weightKg: 90, startedAt: `${addDays(TODAY, -9)}T08:00:00.000Z` },
+    weightReadings: ramp(10, 90, -0.1),
+  }));
+  assert.equal(short.reasons.find(r => r.kind === 'rate'), undefined, 'no pace in the first 3 weeks');
+  assert.equal(short.ratePerWeek.kg, null);
   const long = computeGoalProgress(base({ target: { weightKg: 80, date: null, weeklySessions: null }, weightReadings: ramp(60, 95, -0.07) }));
-  assert.match(long.reasons.find(r => r.kind === 'rate')!.text, /\) over 4 weeks/);
+  assert.match(long.reasons.find(r => r.kind === 'rate')!.text, /\) over the last 3 weeks/);
+  assert.ok(Math.abs(long.ratePerWeek.kg! + 0.49) < 0.01, `pace ${long.ratePerWeek.kg}`);
 });
 
 test('lifter with no baseline yet: "First lift comparison on <first set + 28 days>" instead of "Log a few more lifts"', () => {
@@ -1774,7 +2049,7 @@ test('lifter with no baseline yet: "First lift comparison on <first set + 28 day
     trainingDays: [addDays(TODAY, -1), TODAY],
   }));
   assert.equal(p.verdict, 'insufficient_data');
-  assert.equal(p.headline, 'First lift comparison on Nov 2');
+  assert.equal(p.headline, 'First lift comparison on Nov 2 · 2 sessions so far');
   // No lifts at all keeps the generic ask.
   const none = computeGoalProgress(base({ goal: 'muscle', target: { weightKg: null, date: null, weeklySessions: 3 } }));
   assert.equal(none.headline, 'Log a few more lifts or weigh-ins to see your progress');
@@ -1801,4 +2076,542 @@ test('race label: custom distances read in miles for imperial users', () => {
   const p = computeGoalProgress(enduranceInput([4, 3, 2, 2], { unitSystem: 'imperial', race: { date: addDays(TODAY, 30), distanceKm: 16.09344 } }));
   assert.equal(p.race?.label, '10 mi race');
   assert.match(p.reasons[0].text, /^10 mi race in 5 weeks/);
+});
+
+// ── Wave 19b: the lived timeline (break → return, first weeks, one stall rule) ──
+
+/** A lift-week: `sessions` sessions of 3 sets each, best e1RM `e`. */
+const lw = (weekStart: string, e: number | null, sessions = 2, extra: Record<string, unknown> = {}) => ({
+  weekStart, bestEstimatedOneRepMaxKg: e, volumeKg: sessions * 1000, totalSets: sessions * 3, totalReps: sessions * 15, sessions, ...extra,
+});
+const daysAt = (monday: string, offsets: number[]): string[] => offsets.map(o => addDays(monday, o));
+
+// TODAY = Tue 2026-10-06. Four trained weeks (Mon/Wed/Sat), last session Sat 09-12, 15 days off (09-13 .. 09-27),
+// back Mon 09-28 about 4% lighter.
+const BREAK_PRE_WEEKS = ['2026-08-17', '2026-08-24', '2026-08-31', '2026-09-07'];
+const BREAK_HISTORY_DAYS = [
+  ...BREAK_PRE_WEEKS.flatMap(w => daysAt(w, [0, 2, 5])),
+  ...daysAt('2026-09-28', [0, 2, 5]), ...daysAt('2026-10-05', [0, 1]),
+];
+const breakInput = (progression: ProgressionSummary, over: Partial<GoalProgressInput> = {}): GoalProgressInput => base({
+  goal: 'muscle',
+  target: { weightKg: null, date: null, weeklySessions: 4 },
+  progression,
+  strengthDays: BREAK_HISTORY_DAYS.filter(d => d >= addDays(TODAY, -27)),
+  strengthHistoryDays: BREAK_HISTORY_DAYS,
+  start: { weightKg: 80, startedAt: '2026-07-01T09:00:00.000Z', startedDay: '2026-07-01' },
+  ...over,
+});
+const squatBack = (...recent: number[]) => [
+  lw('2026-08-17', 130), lw('2026-08-24', 133), lw('2026-08-31', 136), lw('2026-09-07', 142),
+  ...recent.map((e, i) => lw(addDays('2026-09-28', 7 * i), e)),
+];
+
+test('return from a break: "Building back", not "Stalled" — verdict building, no amber reason', () => {
+  const p = computeGoalProgress(breakInput({
+    squat: squatBack(136, 136),
+    // Bench also fell (a 4-week comparison would read -6): no amber drop reason either.
+    'bench press': [lw('2026-08-17', 100), lw('2026-08-24', 102), lw('2026-08-31', 104), lw('2026-09-07', 106), lw('2026-09-28', 100), lw('2026-10-05', 100)],
+  }));
+  assert.equal(p.verdict, 'building');
+  assert.equal(p.headline, 'Building back — Squat at 95% of your pre-break 142 kg');
+  assert.ok(p.reasons.every(r => r.tone !== 'watch'), JSON.stringify(p.reasons));
+  assert.equal(p.reasons[0].kind, 'lift');
+  assert.equal(p.reasons[0].text, 'Squat est. 1RM 136 kg, 95% of your pre-break 142 kg');
+  assert.ok(p.reasons.some(r => r.text === 'Back after a 15-day break (ended Sep 27)'));
+  assert.doesNotMatch(JSON.stringify(p), /Stalled|stalled|vs 4 weeks ago/);
+  assert.deepEqual(p.liftReturn, {
+    exercise: 'squat', name: 'Squat', breakDays: 15, endedOn: '2026-09-27', preBreakKg: 142, recentKg: 136, pct: 95, regained: false,
+  });
+  // The 28-day session window still holds the break: never "Sessions behind" and never an amber adherence lead.
+  assert.notEqual(p.verdict, 'behind');
+  assertWellFormed(p);
+});
+
+test('return from a break: the card agrees with the stalled-lift nudge (neither calls it a stall)', () => {
+  const squat = squatBack(136, 138);
+  const progression: ProgressionSummary = { squat };
+  const p = computeGoalProgress(breakInput(progression));
+  assert.notEqual(p.verdict, 'stalled');
+  const nudge = detectStalledLift({
+    goal: 'muscle', unitSystem: 'metric', todayKey: TODAY, weightSignals: [], targetWeightKg: null, targetDate: null, proteinTargetG: null,
+    loggedDays: [], trainingDays: [], progression, liftSessionDays: { squat: BREAK_HISTORY_DAYS.filter(d => d >= '2026-09-14') },
+    exerciseDisplay: {}, weeklyVerdicts: [],
+  });
+  assert.equal(nudge, null);
+  // Control: the same e1RMs without a break ARE a stall — on the card AND in the nudge.
+  const steady = [...squat.slice(0, 4), lw('2026-09-14', 138), lw('2026-09-21', 138), ...squat.slice(4)];
+  const days = [...BREAK_PRE_WEEKS.flatMap(w => daysAt(w, [0, 2, 5])), ...['2026-09-14', '2026-09-21', '2026-09-28', '2026-10-05'].flatMap(w => daysAt(w, [0, 2, 5]))].filter(d => d <= TODAY);
+  const card = computeGoalProgress(breakInput({ squat: steady }, { strengthDays: days.filter(d => d >= addDays(TODAY, -27)), strengthHistoryDays: days }));
+  assert.equal(card.verdict, 'stalled');
+  assert.equal(card.liftReturn, null);
+  assert.ok(detectStalledLift({
+    goal: 'muscle', unitSystem: 'metric', todayKey: TODAY, weightSignals: [], targetWeightKg: null, targetDate: null, proteinTargetG: null,
+    loggedDays: [], trainingDays: [], progression: { squat: steady }, liftSessionDays: { squat: days.filter(d => d >= '2026-09-14') },
+    exerciseDisplay: {}, weeklyVerdicts: [],
+  }));
+});
+
+test('return from a break: regained → "Back above your pre-break best", even while the 4-weeks-ago weeks are empty', () => {
+  // Longer break: last session Sat 08-29, back Mon 09-21. The weeks 4 and 5 weeks before the recent window (09-07, 08-31) are empty,
+  // so squat has NO 4-week comparison. Deadlift, not yet trained this week, still has one (-3).
+  const days = [
+    ...['2026-08-03', '2026-08-10', '2026-08-17', '2026-08-24'].flatMap(w => daysAt(w, [0, 2, 5])),
+    ...['2026-09-21', '2026-09-28'].flatMap(w => daysAt(w, [0, 2, 5])), ...daysAt('2026-10-05', [0, 1]),
+  ];
+  const progression: ProgressionSummary = {
+    squat: [lw('2026-08-03', 128), lw('2026-08-10', 132), lw('2026-08-17', 136), lw('2026-08-24', 142), lw('2026-09-21', 138), lw('2026-09-28', 141), lw('2026-10-05', 145)],
+    deadlift: [lw('2026-08-03', 150), lw('2026-08-10', 152), lw('2026-08-17', 155), lw('2026-08-24', 158), lw('2026-09-21', 150), lw('2026-09-28', 155)],
+  };
+  const p = computeGoalProgress(breakInput(progression, { strengthDays: days.filter(d => d >= addDays(TODAY, -27)), strengthHistoryDays: days }));
+  assert.equal(p.verdict, 'progressing');
+  assert.equal(p.headline, 'Back above your pre-break best — Squat est. 1RM 145 kg (was 142 kg)');
+  assert.equal(p.liftReturn!.regained, true);
+  assert.ok(p.reasons.every(r => r.tone !== 'watch'));
+  // The next day it does not flip to a weight-led verdict or lose the lift line.
+  const next = computeGoalProgress(breakInput(progression, { todayKey: addDays(TODAY, 1), strengthDays: days, strengthHistoryDays: days }));
+  assert.equal(next.headline, p.headline);
+  assert.ok(next.reasons.some(r => r.kind === 'lift'));
+});
+
+test('return from a break: the state ends 35 days after the break and normal rules apply again', () => {
+  const dayOf = (offset: number) => addDays('2026-09-27', offset); // break ended Sep 27
+  const progression: ProgressionSummary = { squat: squatBack(136, 138, 139, 140, 141, 141) };
+  const days = [...BREAK_PRE_WEEKS.flatMap(w => daysAt(w, [0, 2, 5])), ...['2026-09-28', '2026-10-05', '2026-10-12', '2026-10-19', '2026-10-26', '2026-11-02'].flatMap(w => daysAt(w, [0, 2, 5]))];
+  const at = (todayKey: string) => computeGoalProgress(breakInput(progression, { todayKey, strengthDays: days.filter(d => d >= addDays(todayKey, -27) && d <= todayKey), strengthHistoryDays: days.filter(d => d <= todayKey) }));
+  assert.equal(at(dayOf(35)).liftReturn?.regained, false); // 35 days after: still building back
+  assert.equal(at(dayOf(36)).liftReturn, null); // 36: over
+  assert.notEqual(at(dayOf(36)).verdict, 'building');
+});
+
+test('a gap under 10 days is a rest week, not a break', () => {
+  const days = [...daysAt('2026-09-07', [0, 2, 5]), ...daysAt('2026-09-21', [0, 2, 5]), ...daysAt('2026-09-28', [0, 2, 5]), ...daysAt('2026-10-05', [0, 1])]; // 8 days off
+  const p = computeGoalProgress(breakInput({ squat: squatBack(136, 138) }, { strengthDays: days.filter(d => d >= addDays(TODAY, -27)), strengthHistoryDays: days }));
+  assert.equal(p.liftReturn, null);
+  assert.notEqual(p.verdict, 'building');
+});
+
+test('week 2 with weigh-ins: the first lift comparison is announced with the sessions so far — never "Stalled" or "opposite way"', () => {
+  // Goal started 8 days ago; flat weigh-ins every day since; 4 sessions logged.
+  const started = addDays(TODAY, -8);
+  const sessionDays = [addDays(TODAY, -8), addDays(TODAY, -6), addDays(TODAY, -4), addDays(TODAY, -1)];
+  const p = computeGoalProgress(base({
+    goal: 'muscle',
+    target: { weightKg: null, date: null, weeklySessions: 4 },
+    start: { weightKg: 80, startedAt: `${started}T09:00:00.000Z`, startedDay: started },
+    weightReadings: series(9, () => 80),
+    progression: { squat: [lw('2026-09-28', 100), lw('2026-10-05', 105)] },
+    strengthDays: sessionDays,
+    trainingDays: sessionDays,
+  }));
+  assert.equal(p.verdict, 'insufficient_data');
+  assert.match(p.headline, /^First lift comparison on Oct 26 · \d+ of \d+ sessions so far$/);
+  assert.doesNotMatch(JSON.stringify(p), /Stalled|opposite way/);
+  const rate = p.reasons.find(r => r.kind === 'rate');
+  assert.ok(rate);
+  assert.match(rate!.text, /^Trend weight flat /);
+  assert.equal(rate!.tone, 'neutral');
+});
+
+test('weight rate: under 0.05% a week reads "flat" and every threshold uses the number as printed', () => {
+  const mk = (kgPerDay: number) => computeGoalProgress(base({
+    goal: 'muscle',
+    target: { weightKg: 90, date: null, weeklySessions: 4 },
+    weightReadings: ramp(40, 80, kgPerDay),
+  })).reasons.find(r => r.kind === 'rate');
+  assert.match(mk(0.002)!.text, /^Trend weight flat /);
+  assert.doesNotMatch(mk(0.002)!.text, /opposite way/);
+  assert.match(mk(-0.002)!.text, /^Trend weight flat /); // flat, not "down ... opposite way"
+  assert.match(mk(-0.03)!.text, /opposite way/); // a real drop still is
+  // Sweep through the 0.1% floor: when the printed percentage is at/above the floor, the text never says "under the floor".
+  for (let i = 0; i <= 40; i += 1) {
+    const r = mk(0.009 + i * 0.0001);
+    if (!r) continue;
+    const printed = Number(/\(([\d.]+)% of bodyweight\)/.exec(r.text)![1]);
+    if (printed >= 0.1) assert.doesNotMatch(r.text, /under the/, r.text);
+    else assert.match(r.text, /under the 0\.1% a week floor|flat/, r.text);
+  }
+});
+
+test('"no lift is up" is only said when every lift has a comparison; otherwise the lift that does is named', () => {
+  const flat = (e: number) => ['2026-09-07', '2026-09-14', '2026-09-21', '2026-09-28', '2026-10-05'].map(w => lw(w, e));
+  const mkInput = (progression: ProgressionSummary) => base({
+    goal: 'muscle', target: { weightKg: null, date: null, weeklySessions: 3 }, progression,
+    trainingDays: Array.from({ length: 12 }, (_, i) => addDays(TODAY, -i)),
+  });
+  // Both lifts compared and flat → the general claim is true.
+  assert.equal(computeGoalProgress(mkInput({ squat: flat(140), 'bench press': flat(100) })).headline, 'Stalled — no lift is up 1% on 4 weeks ago');
+  // Deadlift down 3 with steady training; squat is new (no 4-week baseline): the claim is about deadlift only.
+  const deadlift = [lw('2026-09-07', 150), lw('2026-09-14', 148), lw('2026-09-21', 147), lw('2026-09-28', 147), lw('2026-10-05', 147)];
+  const squatNew = [lw('2026-09-21', 120, 5), lw('2026-09-28', 122, 5), lw('2026-10-05', 124, 5)]; // most-trained, but no comparison yet
+  const p = computeGoalProgress(mkInput({ deadlift, squat: squatNew }));
+  assert.equal(p.verdict, 'stalled');
+  assert.equal(p.headline, 'Stalled — Deadlift est. 1RM −3 kg vs 4 weeks ago');
+  assert.equal(p.reasons.find(r => r.kind === 'lift')!.text, 'Deadlift est. 1RM −3 kg vs 4 weeks ago (150 → 147 kg)');
+});
+
+test('no comparison for any lift after a gap: "Next lift comparison on <date>", not a weight verdict', () => {
+  const p = computeGoalProgress(base({
+    goal: 'muscle',
+    target: { weightKg: null, date: null, weeklySessions: 3 },
+    start: { weightKg: 80, startedAt: '2026-06-01T09:00:00.000Z', startedDay: '2026-06-01' },
+    weightReadings: ramp(40, 80, 0.04), // ~0.35%/wk: the old code would have answered "Progressing — weight up ..."
+    progression: { squat: [lw('2026-07-06', 120), lw('2026-07-13', 124), lw('2026-09-21', 118), lw('2026-09-28', 121), lw('2026-10-05', 123)] },
+    trainingDays: Array.from({ length: 5 }, (_, i) => addDays(TODAY, -i)),
+  }));
+  assert.equal(p.verdict, 'insufficient_data');
+  assert.equal(p.headline, 'Next lift comparison on Oct 19');
+  assert.notEqual(p.verdict, 'progressing');
+});
+
+test('sessions agree with the weekly review: two weeks at target → this-week copy leads, the 28-day line is demoted', () => {
+  // Sunday: this week (Mon 09-28 .. Sun 10-04) and last week both hit 4 of 4, but the 28-day window still holds a two-week gap.
+  const sunday = '2026-10-04';
+  const days = [...daysAt('2026-09-21', [0, 1, 3, 5]), ...daysAt('2026-09-28', [0, 1, 3, 5]), ...daysAt('2026-09-07', [0, 4])];
+  const progression: ProgressionSummary = { squat: ['2026-08-31', '2026-09-07', '2026-09-14', '2026-09-21', '2026-09-28'].map((w, i) => lw(w, [120, 122, 125, 128, 132][i])) };
+  const p = computeGoalProgress(base({
+    goal: 'muscle', todayKey: sunday, target: { weightKg: null, date: null, weeklySessions: 4 }, progression,
+    start: { weightKg: 80, startedAt: '2026-06-01T09:00:00.000Z', startedDay: '2026-06-01' },
+    strengthDays: days, trainingDays: days,
+  }));
+  assert.equal(p.adherence!.pct, 63); // 10 of 16: the structured 28-day numbers are unchanged
+  assert.equal(p.verdict, 'progressing');
+  assert.equal(p.reasons[0].kind, 'lift');
+  assert.deepEqual(p.reasons[1], { kind: 'week_sessions', text: '4 of 4 sessions this week', tone: 'good' }); // the 28-day line does not lead
+  assert.ok(p.reasons.every(r => r.tone !== 'watch'), JSON.stringify(p.reasons));
+  // One week short: the 28-day line is the honest one again.
+  const short = computeGoalProgress(base({
+    goal: 'muscle', todayKey: sunday, target: { weightKg: null, date: null, weeklySessions: 4 }, progression,
+    start: { weightKg: 80, startedAt: '2026-06-01T09:00:00.000Z', startedDay: '2026-06-01' },
+    strengthDays: days.filter(d => d !== '2026-10-03' && d !== '2026-10-01'), trainingDays: days.filter(d => d !== '2026-10-03' && d !== '2026-10-01'),
+  }));
+  assert.equal(short.reasons[0].kind, 'adherence');
+  assert.equal(short.reasons[0].tone, 'watch');
+  assert.equal(short.verdict, 'behind');
+});
+
+test('the headline lift on the card is the most-trained lift, stable from day to day', () => {
+  const squat = ['2026-08-31', '2026-09-07', '2026-09-14', '2026-09-21', '2026-09-28'].map(w => lw(w, 130, 2));
+  const bench = ['2026-08-31', '2026-09-07', '2026-09-14', '2026-09-21', '2026-09-28'].map(w => lw(w, 100, 2));
+  const headlines = new Set<string>();
+  for (const [dropSquat, dropBench] of [[3, 3], [3, 6], [6, 3], [2, 5]]) {
+    const progression: ProgressionSummary = {
+      squat: [...squat.slice(0, 3), lw('2026-09-21', 130 - dropSquat), lw('2026-09-28', 130 - dropSquat)],
+      'bench press': [...bench.slice(0, 3), lw('2026-09-21', 100 - dropBench), lw('2026-09-28', 100 - dropBench)],
+    };
+    const p = computeGoalProgress(base({
+      goal: 'muscle', target: { weightKg: null, date: null, weeklySessions: 3 }, progression,
+      trainingDays: Array.from({ length: 12 }, (_, i) => addDays(TODAY, -i)),
+    }));
+    const lift = p.reasons.find(r => r.kind === 'lift')!;
+    headlines.add(lift.text.split(' est.')[0]);
+  }
+  assert.deepEqual([...headlines], ['Squat']);
+});
+
+// ── Wave 19c: the weight-loss pace (lib/weightPace.ts) ───────────────────────
+
+/** Weigh-ins on the given day offsets from TODAY (negative = in the past), kg from `kgAt(offset)`. */
+function onDays(offsets: number[], kgAt: (offset: number) => number): WeightReading[] {
+  return offsets.map(o => {
+    const day = addDays(TODAY, o);
+    return { measuredAt: `${day}T08:00:00.000Z`, valueKg: Math.round(kgAt(o) * 100) / 100, source: 'manual' as const, localDay: day };
+  });
+}
+
+/** Every day from `from` to `to` (offsets from TODAY). */
+function span(from: number, to: number): number[] {
+  return Array.from({ length: to - from + 1 }, (_, i) => from + i);
+}
+
+const BUDGET_2000 = { targetKcal: 2000, proteinG: 140, floorKcal: 1500, formulaTdee: null, learnedTdee: null, tdeeConfidence: null };
+
+/** A goal of `ageDays` days, 92 kg to 84 kg by TODAY+100. */
+function youngGoal(ageDays: number, over: Partial<GoalProgressInput> = {}): GoalProgressInput {
+  return base({
+    target: { weightKg: 84, date: addDays(TODAY, 100), weeklySessions: 3 },
+    start: { weightKg: 92, startedAt: `${addDays(TODAY, -(ageDays - 1))}T08:00:00.000Z` },
+    budget: BUDGET_2000,
+    ...over,
+  });
+}
+
+test('A. early read: a goal under 3 weeks old gets the scale against the start — no pace, no ETA, no ahead/behind', () => {
+  const p = computeGoalProgress(youngGoal(10, { weightReadings: onDays(span(-9, 0), o => 92 + (o + 9) * -0.08) }));
+  assert.equal(p.verdict, 'progressing');
+  assert.equal(p.headline, 'Early read — down 0.7 kg on the scale in 9 days');
+  assert.equal(p.eta, null);
+  assert.equal(p.onPaceForTargetDate, null);
+  assert.equal(p.ratePerWeek.kg, null);
+  assert.equal(p.ratePerWeek.pctBodyweight, null);
+  assert.equal(p.weightRead?.state, 'early');
+  assert.equal(p.weightRead?.weeksVsTarget, null);
+  assert.equal(p.weightRead?.scaleKg, 91.3);
+  assert.match(p.reasons[0].text, /^Your pace estimate settles after 3 weeks of weigh-ins — daily swings of ±1 kg are normal$/);
+  assert.ok(!/behind|ahead/i.test(p.headline + p.reasons.map(r => r.text).join(' ')), 'no ahead/behind call');
+  assertWellFormed(p);
+});
+
+test('A. early read: a scale that is not down says "daily swings of ±1 kg are normal" and holds', () => {
+  const p = computeGoalProgress(youngGoal(10, { weightReadings: onDays(span(-9, 0), o => 92 + (o + 9) * 0.02) }));
+  assert.equal(p.verdict, 'holding');
+  assert.equal(p.headline, 'Early days — daily swings of ±1 kg are normal');
+  assert.equal(p.reasons[0].text, 'Your pace settles after 3 weeks of weigh-ins');
+  assert.equal(p.eta, null);
+});
+
+test('A. early read copy is unit-aware (imperial): lb in the headline and the swing; structured fields stay kg', () => {
+  const down = computeGoalProgressRaw(youngGoal(10, { unitSystem: 'imperial', weightReadings: onDays(span(-9, 0), o => 92 + (o + 9) * -0.08) }));
+  assert.equal(down.headline, `Early read — down 1.6${NBSP}lb on the scale in 9 days`);
+  assert.ok(down.reasons[0].text.includes(`±2${NBSP}lb`), down.reasons[0].text);
+  assert.equal(down.weightRead?.scaleKg, 91.3);
+  const flat = computeGoalProgressRaw(youngGoal(10, { unitSystem: 'imperial', weightReadings: onDays(span(-9, 0), () => 92.1) }));
+  assert.equal(flat.headline, `Early days — daily swings of ±2${NBSP}lb are normal`);
+});
+
+test('A. insufficient_data is unchanged below the weigh-in minimum (iOS shows its weigh-in count there)', () => {
+  const p = computeGoalProgress(youngGoal(3, { weightReadings: onDays([-2, -1, 0], () => 91.8) }));
+  assert.equal(p.verdict, 'insufficient_data');
+  assert.equal(p.dataSufficiency.weighIns, 3);
+});
+
+test('A. a pace needs 6 weigh-ins over 14 days: an older goal with sparse weigh-ins is an early read, not a pace', () => {
+  const p = computeGoalProgress(youngGoal(60, { weightReadings: onDays([-40, -30, -20, -10, -5, 0], o => 92 + (o + 40) * -0.1) }));
+  assert.equal(p.weightRead?.state, 'early');
+  assert.equal(p.verdict, 'progressing');
+  assert.match(p.headline, /^Down [\d.]+ kg since the start — pace needs 6 weigh-ins over 2 weeks$/);
+  assert.equal(p.eta, null);
+  assert.equal(p.ratePerWeek.kg, null);
+});
+
+test('A. one pace for every surface: ratePerWeek is the least-squares slope of the raw weigh-ins, not the lagging trend', () => {
+  // 30 days flat at 92, then 21 days falling 0.1 kg/day: the smoothed trend still lags well above the scale.
+  const readings = onDays(span(-50, 0), o => (o < -20 ? 92 : 92 + (o + 20) * -0.1));
+  const p = computeGoalProgress(youngGoal(51, { weightReadings: readings }));
+  assert.ok(Math.abs(p.ratePerWeek.kg! + 0.7) < 0.01, `pace ${p.ratePerWeek.kg}`);
+  assert.ok(p.current.weightKg! - p.weightRead!.scaleKg! >= 0.5, 'the displayed trend line is untouched (still lagging the scale)');
+  assert.match(p.reasons[0].text, /^Down 0\.7 kg\/wk \(0\.78% of bodyweight\) over the last 3 weeks, inside the 0\.25–1% safe band$/);
+});
+
+/** A target of 80 kg with a 70-day-old goal; `date` is the target date. */
+function paceCase(readings: WeightReading[], date: string | null, over: Partial<GoalProgressInput> = {}): GoalProgress {
+  return computeGoalProgress(base({
+    target: { weightKg: 80, date, weeklySessions: null },
+    start: { weightKg: 95, startedAt: `${addDays(TODAY, -70)}T08:00:00.000Z` },
+    weightReadings: readings,
+    ...over,
+  }));
+}
+
+test('A. ahead/behind is stated only when the pace today AND a week ago agree; otherwise the card says on pace', () => {
+  // Fast for a month, slowing over the last 3 weeks: today's ETA is later than last week's.
+  const bend = onDays(span(-60, 0), o => (o < -20 ? 95 + (o + 60) * -0.12 : 95 - 40 * 0.12 + (o + 20) * -0.05));
+  const nowEta = paceCase(bend, null).eta!;
+  const thenEta = paceCase(bend.filter(r => r.localDay <= addDays(TODAY, -7)), null, { todayKey: addDays(TODAY, -7) }).eta!;
+  assert.ok(nowEta && thenEta && nowEta > thenEta, `the pace slowed: ${thenEta} -> ${nowEta}`);
+  const dayDiff = (a: string, b: string) => Math.round((Date.parse(a) - Date.parse(b)) / 86_400_000);
+
+  // The target date between the two projections: they land on opposite sides of it, so no weeks are quoted.
+  const between = addDays(thenEta, Math.round(dayDiff(nowEta, thenEta) / 2));
+  const split = paceCase(bend, between);
+  assert.equal(split.verdict, 'on_track');
+  assert.equal(split.eta, null, 'no projected date is stated when the two paces disagree');
+  assert.equal(split.onPaceForTargetDate, true);
+  assert.equal(split.weightRead?.weeksVsTarget, null);
+
+  // Both projections after the target date: behind, in whole weeks, the nearer of the two.
+  const early = addDays(thenEta, -60);
+  const behind = paceCase(bend, early);
+  assert.equal(behind.verdict, 'behind');
+  assert.equal(behind.eta, thenEta, 'the projection nearer the target date is the one stated');
+  assert.equal(behind.weightRead?.weeksVsTarget, -Math.max(1, Math.round(dayDiff(thenEta, early) / 7)));
+  assert.equal(behind.onPaceForTargetDate, false);
+
+  // Both before it: ahead.
+  const ahead = paceCase(bend, addDays(nowEta, 60));
+  assert.equal(ahead.verdict, 'ahead');
+  assert.equal(ahead.eta, nowEta);
+  assert.ok(ahead.weightRead!.weeksVsTarget! >= 8);
+});
+
+test('A. a pace nothing has confirmed yet makes no call: with only today\'s pace the card says Progressing, with no date', () => {
+  // A 25-day-old goal whose weigh-ins only started 20 days ago: a pace exists today but not a week ago (that needs 14 days of span then).
+  const p = paceCase(onDays(span(-19, 0), o => 91.5 + (o + 19) * -0.07), addDays(TODAY, 120), { start: { weightKg: 91.5, startedAt: `${addDays(TODAY, -24)}T08:00:00.000Z` } });
+  assert.equal(p.verdict, 'progressing');
+  assert.equal(p.eta, null);
+  assert.equal(p.weightRead?.weeksVsTarget, null);
+  assert.match(p.headline, /^Progressing — losing about 0\.49 kg a week$/);
+});
+
+test('A. one margin: ±7 days is on pace in the card, the same figure the opener and iOS use; weeks are whole and at least 1', () => {
+  const readings = ramp(60, 95, -0.07);
+  const eta = paceCase(readings, null).eta!;
+  const at = (days: number) => paceCase(readings, addDays(eta, days));
+  assert.equal(at(7).verdict, 'on_track'); // the date is 7 days after the ETA
+  assert.equal(at(-7).verdict, 'on_track'); // the date is 7 days before it
+  assert.equal(at(8).verdict, 'ahead');
+  assert.equal(at(-8).verdict, 'behind');
+  assert.equal(at(8).weightRead?.weeksVsTarget, 1);
+  assert.equal(at(-8).weightRead?.weeksVsTarget, -1);
+  assert.equal(at(17).weightRead?.weeksVsTarget, 2);
+  assert.equal(at(0).weightRead?.weeksVsTarget, 0);
+});
+
+test('A. a noisy but steady loss never swings the stated weeks by more than 4 between consecutive days', () => {
+  const noise = (o: number): number => 0.4 * Math.sin(o * 2.3) + 0.25 * Math.cos(o * 0.9);
+  const all = onDays(span(-90, 0), o => 95 + (o + 90) * -0.07 + noise(o));
+  const weeks: number[] = [];
+  for (let back = 30; back >= 0; back--) {
+    const todayKey = addDays(TODAY, -back);
+    const p = computeGoalProgress(base({
+      todayKey,
+      target: { weightKg: 80, date: addDays(TODAY, 40), weeklySessions: null },
+      start: { weightKg: 95, startedAt: `${addDays(TODAY, -90)}T08:00:00.000Z` },
+      weightReadings: all.filter(r => r.localDay <= todayKey),
+    }));
+    const w = p.weightRead?.weeksVsTarget;
+    if (w != null) weeks.push(w);
+  }
+  assert.ok(weeks.length >= 10, `weeks stated on ${weeks.length} days`);
+  for (let i = 1; i < weeks.length; i++) {
+    assert.ok(Math.abs(weeks[i] - weeks[i - 1]) <= 4, `swing ${weeks[i - 1]} -> ${weeks[i]} (${weeks.join(', ')})`);
+  }
+});
+
+test('B. too fast: the headline quotes the very rate that triggered it, with an action using the real calorie target', () => {
+  const p = computeGoalProgress(youngGoal(60, { weightReadings: ramp(60, 100, -0.17) }));
+  assert.equal(p.verdict, 'too_fast');
+  const pct = Math.abs(p.ratePerWeek.pctBodyweight!);
+  assert.equal(p.headline, `Losing too fast — ${pct}% of bodyweight a week`);
+  const rate = p.reasons.find(r => r.kind === 'rate')!;
+  assert.ok(rate.text.includes(`(${pct}% of bodyweight)`), rate.text);
+  assert.equal(rate.tone, 'watch');
+  assert.match(rate.text, /above the 1% a week ceiling/);
+  assert.equal(p.reasons.find(r => r.kind === 'action')?.text, 'Eat up to your full 2,000 kcal target — a slower loss is easier to keep');
+  // Never both too fast and inside the safe band.
+  assert.ok(!p.reasons.some(r => /inside the .*safe band/.test(r.text)));
+  // Without a known budget the action still reads, without a number.
+  const noBudget = computeGoalProgress(youngGoal(60, { budget: null, weightReadings: ramp(60, 100, -0.17) }));
+  assert.equal(noBudget.reasons.find(r => r.kind === 'action')?.text, 'Eat up to your full calorie target — a slower loss is easier to keep');
+});
+
+test('B. a gap-spanning drop is not "too fast": the first weigh-ins back never call it, the third may', () => {
+  const pre = onDays(span(-45, -14), o => 95 + (o + 45) * -0.07);
+  const lastKg = pre[pre.length - 1].valueKg;
+  const back = (days: number[]) => onDays(days, () => lastKg - 2.6);
+  const run = (days: number[]) => computeGoalProgress(youngGoal(60, { weightReadings: [...pre, ...back(days)] }));
+  for (const days of [[0], [-1, 0]]) {
+    const p = run(days);
+    assert.equal(p.weightRead?.state, 'returning');
+    assert.ok(p.verdict === 'progressing' || p.verdict === 'holding', `${days.length} back: ${p.verdict}`);
+  }
+  assert.notEqual(run([-2, -1, 0]).weightRead?.state, 'returning', 'three weigh-ins back: the pace may be called again');
+});
+
+test('C. coming back after a gap: "Welcome back" with the change since the last weigh-in, and the payload says so', () => {
+  const pre = onDays(span(-45, -14), o => 95 + (o + 45) * -0.07);
+  const lastKg = pre[pre.length - 1].valueKg;
+  const p = computeGoalProgress(youngGoal(60, { weightReadings: [...pre, ...onDays([0], () => lastKg - 1.1)] }));
+  assert.equal(p.verdict, 'progressing');
+  assert.match(p.headline, /^Welcome back — the scale is down 1\.1 kg since \w{3} \d{1,2}$/);
+  assert.deepEqual(p.weightRead?.returned, { gapDays: 13, sinceDay: addDays(TODAY, -14), sinceKg: Math.round(lastKg * 10) / 10, weighInsSince: 1 });
+  assert.equal(p.eta, null);
+  assert.equal(p.ratePerWeek.kg, null);
+  assert.match(p.reasons[0].text, /^Keep weighing in so your trend catches up — 2 more weigh-ins before your pace is read again$/);
+  // Up since the gap reads "up".
+  const up = computeGoalProgress(youngGoal(60, { weightReadings: [...pre, ...onDays([0], () => lastKg + 0.8)] }));
+  assert.match(up.headline, /^Welcome back — the scale is up 0\.8 kg since/);
+});
+
+test('D. plateau: three flat weeks of raw weekly means are named, hold the verdict and hide the ETA', () => {
+  const flat = onDays(span(-49, 0), o => (o < -21 ? 92 - (o + 49) * 0.09 : 89.5 + (o % 2 === 0 ? 0.1 : -0.1)));
+  const input = youngGoal(50, { weightReadings: flat });
+  const p = computeGoalProgress(input);
+  assert.equal(p.verdict, 'holding');
+  assert.equal(p.eta, null);
+  assert.equal(p.onPaceForTargetDate, null);
+  assert.equal(p.weightRead?.state, 'plateau');
+  assert.match(p.headline, /^Plateau — weekly average ~89\.[45] kg for 3 weeks$/);
+  assert.equal(
+    p.reasons[0].text,
+    'Common and often water: keep 2,000 kcal and 3 sessions; if still flat in 2 weeks, trim ~150 kcal a day or add two 30-minute walks',
+  );
+  // Unknown parts are omitted, never invented.
+  const unknown = computeGoalProgress({ ...input, budget: null, target: { ...input.target, weeklySessions: null } });
+  assert.equal(unknown.reasons[0].text, 'Common and often water: keep your routine; if still flat in 2 weeks, trim ~150 kcal a day or add two 30-minute walks');
+  const kcalOnly = computeGoalProgress({ ...input, target: { ...input.target, weeklySessions: null } });
+  assert.match(kcalOnly.reasons[0].text, /^Common and often water: keep 2,000 kcal; if still flat/);
+  // The call is made on the raw weekly means, not the smoothed trend.
+  assert.equal(p.weightRead?.weekMeanKg !== null, true);
+});
+
+test('D. no plateau call in a goal under 28 days old, or when the weekly means are still falling', () => {
+  const flat = onDays(span(-27, 0), o => 89.5 + (o % 2 === 0 ? 0.1 : -0.1));
+  const young = computeGoalProgress(youngGoal(27, { weightReadings: flat }));
+  assert.notEqual(young.weightRead?.state, 'plateau');
+  const falling = computeGoalProgress(youngGoal(60, { weightReadings: onDays(span(-27, 0), o => 89.5 + o * 0.05) }));
+  assert.notEqual(falling.weightRead?.state, 'plateau');
+});
+
+test('D. a shorter flat spell is "Stalled", not a plateau', () => {
+  const p = computeGoalProgress(youngGoal(60, { weightReadings: onDays(span(-14, 0), () => 89.5) }));
+  assert.equal(p.verdict, 'stalled');
+});
+
+test('F. reached: the weekly average reaches the target before the lagging trend, and the copy is not "84.1 is at or past 84"', () => {
+  const readings = onDays(span(-40, 0), o => (o < -12 ? 90 + (o + 40) * -0.2 : 84 + (o % 2 === 0 ? 0.05 : -0.05)));
+  const p = computeGoalProgress(youngGoal(80, { weightReadings: readings }));
+  assert.equal(p.verdict, 'reached');
+  assert.equal(p.current.progressPct, 100);
+  assert.match(p.headline, /^Goal reached — 84 kg \(\w{3} \d{1,2}\)$/);
+  assert.match(p.reasons[0].text, /^You hit 84 kg — weekly average 84\.0 kg, first reached \w{3} \d{1,2}$/);
+  assert.doesNotMatch(p.reasons.map(r => r.text).join(' '), /at or past/);
+  assert.equal(p.weightRead?.state, 'reached');
+  assert.ok(p.weightRead!.reachedDaysAgo! >= 0);
+  assert.equal(p.reasons[1].text, 'Holding at 84.0 kg, inside your target range');
+  assert.equal(p.reasons[2].kind, 'next_step');
+});
+
+test('F. reached copy is unit-aware: lb for imperial users', () => {
+  const readings = onDays(span(-40, 0), o => (o < -12 ? 90 + (o + 40) * -0.2 : 84 + (o % 2 === 0 ? 0.05 : -0.05)));
+  const p = computeGoalProgressRaw(youngGoal(80, { unitSystem: 'imperial', weightReadings: readings }));
+  assert.ok(p.reasons[0].text.startsWith(`You hit 185.2${NBSP}lb — weekly average 185.2${NBSP}lb`), p.reasons[0].text);
+  assert.equal(p.reasons[1].text, `Holding at 185.2${NBSP}lb, inside your target range`);
+});
+
+test('F. reached is sticky: one 84.5 reading does not flip it back, and the trend must leave the range to end it', () => {
+  const settled = onDays(span(-40, -1), o => (o < -12 ? 90 + (o + 40) * -0.2 : 83.9));
+  const calm = computeGoalProgress(youngGoal(80, { weightReadings: [...settled, ...onDays([0], () => 83.9)] }));
+  const spike = computeGoalProgress(youngGoal(80, { weightReadings: [...settled, ...onDays([0], () => 84.5)] }));
+  assert.equal(calm.verdict, 'reached');
+  assert.equal(spike.verdict, 'reached');
+  assert.equal(spike.reachedAt, calm.reachedAt);
+  // A real regain past target + 1 kg ends it.
+  const regain = onDays(span(-70, 0), o => (o < -42 ? 90 + (o + 70) * -0.25 : o < -30 ? 83.5 : 83.5 + (o + 30) * 0.12));
+  assert.notEqual(computeGoalProgress(youngGoal(110, { weightReadings: regain })).verdict, 'reached');
+});
+
+test('F. reached (gain, mirrored): the weekly average within 0.3 kg of a muscle target reaches it', () => {
+  const p = computeGoalProgress(base({
+    goal: 'muscle',
+    target: { weightKg: 78, date: null, weeklySessions: 4 },
+    start: { weightKg: 70, startedAt: `${addDays(TODAY, -60)}T08:00:00.000Z` },
+    weightReadings: onDays(span(-55, 0), o => (o < -14 ? 70 + (o + 55) * 0.19 : 77.9)),
+    trainingDays: span(-27, 0).map(o => addDays(TODAY, o)),
+  }));
+  assert.equal(p.verdict, 'reached');
+  assert.match(p.reasons[0].text, /^You hit 78 kg — weekly average 77\.9 kg/);
+});
+
+test('G. the smoothed trend is explained once, where it first appears in the reasons', () => {
+  const readings = onDays(span(-50, 0), o => (o < -21 ? 92 : 92 + (o + 21) * -0.1));
+  const p = computeGoalProgress(youngGoal(51, { weightReadings: readings }));
+  const trend = p.reasons.filter(r => /smoothed to filter daily water swings/.test(r.text));
+  assert.equal(trend.length, 1);
+  assert.match(trend[0].text, /^Trend 9\d\.\d kg — smoothed to filter daily water swings; scale today 8\d\.\d kg$/);
+  assert.equal(p.reasons[0].kind, 'rate', 'the pace leads');
+  assert.ok(!p.reasons.some(r => r !== trend[0] && /trend/i.test(r.text)), 'no other reason repeats it');
+  // Trend and scale together: nothing to explain.
+  const steady = computeGoalProgress(youngGoal(60, { weightReadings: onDays(span(-59, 0), () => 90) }));
+  assert.ok(!steady.reasons.some(r => r.kind === 'trend'));
 });

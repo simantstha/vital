@@ -11,9 +11,16 @@
  * {
  *   goal: 'weight_loss' | 'muscle' | 'endurance' | 'general',
  *   target:  { weightKg, date, weeklySessions, weeklyDistanceKm },
- *   distance: { targetKm, thisWeekKm, avg4wKm, weekStart, stepTargetKm, text } | null,   // endurance + distance target only; stepTargetKm = this week's safe step from last week's km (== targetKm when no step applies)
- *   race: { date, distanceKm, label, weeksToGo, daysToGo } | null,          // endurance + upcoming race only
- *   longRun: { lastKm, peakKm, targetPeakKm | null } | null,                // endurance + running distances in the last 28 days; km
+ *   distance: { targetKm, thisWeekKm, avg4wKm, weekStart, stepTargetKm, text, plan? } | null,   // endurance + distance target only; stepTargetKm = THIS WEEK's target from the one week plan
+ *                                                //   (lib/enduranceProgression.ts): the safe step, a hold / restart number, or a taper / race-week / recovery
+ *                                                //   target (== targetKm when no step applies, and in a baseline week); avg4wKm = mean of the last 4 FINISHED
+ *                                                //   training weeks (race and recovery weeks left out); plan? (additive) = { kind: baseline | build | hold |
+ *                                                //   restart | maintain | taper | race_week | recovery | rebuild, targetKm | null, longRunKm | null, purpose }
+ *   race: { date, distanceKm, label, weeksToGo, daysToGo, phase?, daysSince?, completed? } | null,   // endurance + upcoming race, or within the recovery weeks;
+ *                                                //   phase is read on the Monday of this calendar week (a Sunday 7 days out is still the taper week);
+ *                                                //   completed? (additive) = { km, durationMin | null } once a race-length run is logged
+ *   longRun: { lastKm, peakKm, targetPeakKm | null, nextKm? } | null,       // endurance; km; lastKm = longest run of the last 14 days, peakKm of the last 28;
+ *                                                //   nextKm? (additive) = this week's long run from the plan
  *   current: { weightKg, startWeightKg, changeKg, progressPct },
  *   ratePerWeek: { kg, pctBodyweight },          // signed: negative = losing
  *   safeBand: { minPct, maxPct } | null,
