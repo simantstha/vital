@@ -117,13 +117,16 @@ export async function computeLastWeekReview(
       goal === 'endurance' ? loadRunHistory(userId, addDays(weekStart, 6)) : Promise.resolve(undefined),
     ]);
 
+  // The formula TDEE comes from the same auto-budget expenditure summary the goal card reads (lib/goalProgressLoader.ts),
+  // so a reached fat-loss goal whose calorie target already is maintenance is told so ("stay on maintenance") instead of
+  // "switch to maintenance". A custom (pinned) budget carries no expenditure: those fields stay null.
   const budgetInput: GoalProgressBudget = {
     targetKcal: budget.targetKcal,
     proteinG: budget.protein,
     floorKcal: 0,
-    formulaTdee: null,
-    learnedTdee: null,
-    tdeeConfidence: null,
+    formulaTdee: budget.expenditure?.formulaTdee ?? null,
+    learnedTdee: budget.expenditure?.learnedTdee ?? null,
+    tdeeConfidence: budget.expenditure?.confidence ?? null,
   };
 
   const trainingDays = new Set<string>([...completedLocalDays(sets), ...healthKitWorkoutDays(workoutEntries)]);
@@ -147,7 +150,8 @@ export async function computeLastWeekReview(
     }),
     budget: budgetInput,
     trainingDays: [...trainingDays].filter(d => daySet.has(d)),
-    strengthDays: [...strengthDays].filter(d => daySet.has(d)),
+    // Muscle: the whole ~30 days read above (not just the two weeks), so the review can tell a run of on-target or empty weeks.
+    strengthDays: [...strengthDays],
     workouts: workoutEntries
       .filter(w => daySet.has(w.date))
       .map(w => ({

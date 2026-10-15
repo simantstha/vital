@@ -2,12 +2,15 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   addDays,
+  bridgedPace,
   etaDaysAhead,
   isReturning,
   meanOver,
   paceEta,
+  paceLossPct,
   rawPlateau,
   relationForDays,
+  tooFastLoss,
   weeksForDays,
   weighInReturn,
   weightPace,
@@ -211,4 +214,66 @@ test('weightReachedRead mirrors for a weight-gain target', () => {
   // Lapses when the trend falls more than 1 kg under the target.
   const fell = trendOf(daily(80, i => (i < 40 ? 70 + 0.2 * i : 77.8 - 0.4 * (i - 39))));
   assert.equal(weightReachedRead(fell, gain).reached, false);
+});
+
+// ── wave 20c: a pace that survives a gap, and a too-fast call that does not flicker ──
+
+test('bridgedPace: for 7 days after the last valid 21-day pace the line is fitted over 28 days, so a gap does not drop the pace', () => {
+  // 15 daily readings (a 14-day span) from 30 to 16 days before END, then nothing.
+  const pre = Array.from({ length: 15 }, (_, i) => ({ day: addDays(END, -30 + i), rawKg: 90 - 0.1 * i }));
+  assert.ok(weightPace(pre, addDays(END, -10)), 'valid while the first reading is still inside the 21 days');
+  assert.equal(weightPace(pre, addDays(END, -9)), null, 'the oldest reading slid out: 13 days of span');
+  const bridged = bridgedPace(pre, addDays(END, -9))!;
+  assert.ok(bridged, 'a valid pace existed the day before');
+  assert.equal(bridged.windowDays, 28);
+  assert.ok(Math.abs(bridged.kgPerWeek + 0.7) < 1e-9, `the same line: ${bridged.kgPerWeek}`);
+  assert.ok(bridgedPace(pre, addDays(END, -3)), '7 days after the last valid pace is still bridged');
+  assert.equal(bridgedPace(pre, addDays(END, -2)), null, 'an 8th day with no pace is no pace');
+  // While the pace is directly valid nothing changes.
+  const direct = bridgedPace(pre, addDays(END, -10))!;
+  assert.equal(direct.windowDays, 21);
+  assert.deepEqual(direct, weightPace(pre, addDays(END, -10)));
+});
+
+test('paceLossPct: the printed % of bodyweight per week lost; 0 when the scale is not falling', () => {
+  assert.equal(paceLossPct(weightPace(daily(21, i => 90 - 0.1 * i), END)!), 0.8);
+  assert.equal(paceLossPct(weightPace(daily(21, i => 90 + 0.1 * i), END)!), 0);
+});
+
+/** 100 kg falling `fast` kg/wk for the first `fastDays` days, then `slow` kg/wk, for `n` days ending END. */
+function twoSpeeds(n: number, fastDays: number, fast: number, slow: number): RawWeightDay[] {
+  let kg = 100;
+  return Array.from({ length: n }, (_, i) => {
+    const row = { day: addDays(END, -(n - 1 - i)), rawKg: Math.round(kg * 1000) / 1000 };
+    kg -= (i < fastDays ? fast : slow) / 7;
+    return row;
+  });
+}
+
+test('tooFastLoss: entered only when the pace now AND a week ago are above 1%/wk', () => {
+  // A week flat, then 1.6 kg/wk: 22 days in the pace is -1.4%/wk but the pace a week earlier was under 1%.
+  const flatThenFast = (n: number) => daily(n, i => 100 - (1.6 / 7) * Math.max(0, i - 6));
+  assert.equal(tooFastLoss(flatThenFast(22), END), false);
+  assert.equal(tooFastLoss(flatThenFast(30), END), true);
+  // A steady 0.9 kg/wk (about 0.95%) never is.
+  assert.equal(tooFastLoss(daily(40, i => 100 - (0.9 / 7) * i), END), false);
+});
+
+test('tooFastLoss: once in, only a pace below 0.9%/wk ends it — 0.9 to 1.0 keeps the call', () => {
+  const at = (n: number) => twoSpeeds(n, 28, 1.3, 0.62).slice(0, n);
+  // The days are re-anchored by twoSpeeds, so ask as of each series' last day.
+  const call = (n: number) => { const d = at(n); return tooFastLoss(d, d[d.length - 1].day); };
+  const pctAt = (n: number) => { const d = at(n); return paceLossPct(bridgedPace(d, d[d.length - 1].day)!); };
+  assert.equal(call(30), true);
+  assert.ok(pctAt(40) <= 1.0 && pctAt(40) >= 0.9, `the pace eased into the 0.9-1.0 band: ${pctAt(40)}`);
+  assert.equal(call(40), true, 'held between 0.9 and 1.0');
+  assert.ok(pctAt(42) < 0.9, `${pctAt(42)}`);
+  assert.equal(call(42), false);
+});
+
+test('tooFastLoss: a goal\'s early weeks (before settledFrom) never start the call', () => {
+  const d = daily(22, i => 100 - (1.2 / 7) * i);
+  assert.equal(tooFastLoss(d, END), true);
+  assert.equal(tooFastLoss(d, END, { settledFrom: addDays(END, 1) }), false);
+  assert.equal(tooFastLoss(d, END, { settledFrom: addDays(END, -1) }), true);
 });

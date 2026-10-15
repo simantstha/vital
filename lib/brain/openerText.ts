@@ -10,8 +10,9 @@
  */
 
 import type { GoalKind, GoalProgress } from '../goalProgress';
+import { LIFT_LAPSE_MIN_DAYS } from '../liftChange';
 import { KM_PER_MILE, LB_PER_KG } from '../metricFormat';
-import { relationForDays, weeksForDays } from '../weightPace';
+import { PACE_SETTLE_DAYS, relationForDays, weeksForDays } from '../weightPace';
 import type { UnitSystem } from '../units';
 
 /**
@@ -55,7 +56,7 @@ export function shortDate(ymd: string | null | undefined): string | null {
 
 /** Reached goals ask about a new target or maintenance only this many days after `reachedAt`; later the opener just reports the holding weight. */
 export const REACHED_ASK_DAYS = 3;
-/** A reached weight inside this many kg of the target is "inside your target range" (goalProgress HOLDING_NEAR_TARGET_KG). */
+/** A reached weight inside this many kg of the target is "within 1 kg of 84 kg" (goalProgress HOLDING_NEAR_TARGET_KG). */
 const HOLDING_RANGE_KG = 1;
 
 /**
@@ -82,11 +83,16 @@ function paceClause(gp: GoalProgress): string | null {
     : `about ${weeks} ${w} behind your ${target} target`;
 }
 
-/** The weight the "X of Y kg down" figure is measured from: the scale for an early read, else the weekly average, else the smoothed trend. */
+/** The ONE progress weight (the card's, the coach's): the 7-day average, else the latest scale reading, else the smoothed trend of an older payload. */
 function progressKg(gp: GoalProgress): number | null {
   const read = gp.weightRead;
-  if (read?.state === 'early' || read?.state === 'returning') return read.scaleKg ?? gp.current.weightKg;
   return read?.weekMeanKg ?? read?.scaleKg ?? gp.current.weightKg;
+}
+
+/** What comes next while the pace is not read: a young goal's pace settles after 3 weeks, an older one is a few weigh-ins away. */
+function paceWaitClause(gp: GoalProgress): string {
+  const age = gp.weightRead?.goalAgeDays;
+  return age != null && age >= PACE_SETTLE_DAYS ? 'a few more weigh-ins and your pace is back' : 'your pace settles after 3 weeks';
 }
 
 /** True when the reached opener still asks about a new target or maintenance (so it ends in its own question). */
@@ -96,6 +102,19 @@ function reachedAsks(gp: GoalProgress | null | undefined): boolean {
   if (gp.weightRead == null) return true;
   const daysAgo = gp.weightRead.reachedDaysAgo;
   return daysAgo != null && daysAgo <= REACHED_ASK_DAYS;
+}
+
+/** The question a lapse check-in ends in. */
+const LAPSE_ASK = 'Want to plan how to get back in?';
+
+/**
+ * A lifter a week or more past their last session (the card's "No sessions for 8
+ * days", verdict holding) until the returning-user opener takes over at
+ * RETURNING_AFTER_DAYS: the opener ends in its own question.
+ */
+function lapseAsks(gp: GoalProgress | null | undefined): boolean {
+  const days = gp?.lastSessionDaysAgo;
+  return gp?.goal === 'muscle' && gp.verdict === 'holding' && days != null && days >= LIFT_LAPSE_MIN_DAYS && days <= RETURNING_AFTER_DAYS;
 }
 
 /**
@@ -120,13 +139,16 @@ export function goalOpenerLine(gp: GoalProgress | null | undefined, units: UnitS
     const holdKg = gp.weightRead?.weekMeanKg ?? gp.weightRead?.scaleKg ?? gp.current.weightKg;
     if (holdKg != null) {
       const diff = holdKg - target;
-      if (Math.abs(diff) <= HOLDING_RANGE_KG) return `Holding at ${weightFixed(holdKg, units)} ${unit}, inside your target range.`;
+      if (Math.abs(diff) <= HOLDING_RANGE_KG) {
+        return `Holding at ${weightFixed(holdKg, units)} ${unit}, within ${weightAmount(HOLDING_RANGE_KG, units)} ${unit} of ${weightAmount(target, units)} ${unit}.`;
+      }
       return `At ${weightFixed(holdKg, units)} ${unit}, ${weightAmount(Math.abs(diff), units)} ${unit} ${diff < 0 ? 'under' : 'over'} your ${weightAmount(target, units)} ${unit} target.`;
     }
   }
   const read = gp.weightRead;
   // Back after 7+ days without a weigh-in: lead with what the scale says since.
-  if (gp.goal === 'weight_loss' && read?.state === 'returning' && read.returned && read.returned.weighInsSince === 1 && read.scaleKg != null) {
+  // (Until 3 weigh-ins are back — the card's "returning" state — not only on the very first one.)
+  if (gp.goal === 'weight_loss' && read?.state === 'returning' && read.returned && read.scaleKg != null) {
     const since = shortDate(read.returned.sinceDay);
     const delta = read.returned.sinceKg - read.scaleKg;
     if (since) {
@@ -144,7 +166,7 @@ export function goalOpenerLine(gp: GoalProgress | null | undefined, units: UnitS
     if (total > 0 && done > 0) {
       const base = `You're ${weightAmount(done, units)} of ${weightAmount(total, units)} ${unit} ${losing ? 'down' : 'up'}`;
       if (gp.goal === 'weight_loss') {
-        if (read?.state === 'early' || read?.state === 'returning') return `${base} on the scale; your pace settles after 3 weeks.`;
+        if (read?.state === 'early' || read?.state === 'returning') return `${base} on the scale; ${paceWaitClause(gp)}.`;
         if (read?.state === 'plateau') return `${base}, though the scale has been flat for 3 weeks.`;
         if (gp.verdict === 'too_fast') return `${base}, but losing faster than is easy to keep.`;
         if (gp.verdict === 'stalled') return `${base}, but your weight has been flat lately.`;
@@ -158,9 +180,32 @@ export function goalOpenerLine(gp: GoalProgress | null | undefined, units: UnitS
   }
   const headline = gp.headline?.trim().replace(/[.\s]+$/, '');
   if (!headline) return null;
+  // A week or more without a session: the check-in is the lapse, and it asks about getting back in.
+  if (lapseAsks(gp)) return `Goal check-in: ${headline}. ${LAPSE_ASK}`;
+  // A runner on a break: say "On a break" once and where to restart — the card counts the days, the opener does not.
+  const breakLine = onBreakOpener(gp, headline);
+  if (breakLine) return breakLine;
   // A headline that ends in its own "!" ("... Congratulations!") keeps it; no "!." after it.
   const endsLoud = gp.headline.trim().endsWith('!');
   return endsLoud ? `Goal check-in: ${gp.headline.trim()}` : `Goal check-in: ${headline}.`;
+}
+
+/**
+ * The opener for an endurance runner on a break or in the restart week after one. The card's headline counts the
+ * break up day by day ("On a break — 8 days since your last run. Restart at ~13 km."); the opener says it once, with
+ * no count, and welcomes the runner back only after the first run back ("Building back — restart at ~13 km this week").
+ */
+function onBreakOpener(gp: GoalProgress, headline: string): string | null {
+  if (gp.goal !== 'endurance') return null;
+  const onBreak = /^On a break — \d+ days? since your last run\.\s*(Restart at .+)$/.exec(headline);
+  if (onBreak) return `Goal check-in: On a break — ${lowerFirst(onBreak[1])}.`;
+  const back = /^Building back — (restart at .+)$/.exec(headline);
+  if (back) {
+    // Welcome back means a run is back; before the week's first run it is still the plain restart line.
+    const ran = (gp.distance?.thisWeekKm ?? 0) > 0;
+    return ran ? `Welcome back — ${back[1]}.` : `Goal check-in: Building back — ${back[1]}.`;
+  }
+  return null;
 }
 
 const NEW_USER_GOAL: Record<GoalKind, { lead: string; ask: string }> = {
@@ -190,6 +235,8 @@ export function returningUserOpener(gp: GoalProgress | null | undefined): string
     }
     return null;
   }
+  // A runner whose card already shows the restart plan (on a break, or in the restart week) is not offered another one.
+  if (gp.goal === 'endurance' && (gp.distance?.plan?.kind === 'restart' || /^(On a break|Building back)\b/.test(gp.headline ?? ''))) return null;
   const days = gp.lastSessionDaysAgo;
   if (days != null && days > RETURNING_AFTER_DAYS) {
     return `Welcome back — your last session was ${days} days ago. Want a quick reset plan?`;
@@ -278,7 +325,7 @@ export function requiredOpenerLine(gp: GoalProgress | null | undefined, goal: un
 /** Deterministic opener used when the model call fails. Null means the caller keeps its generic fallback. */
 export function goalFallbackOpener(gp: GoalProgress | null | undefined, goal: unknown, units: UnitSystem): string | null {
   // These two already end in their own question (a reached goal's only while it still asks); no second invitation.
-  const own = returningUserOpener(gp) ?? (reachedAsks(gp) ? goalOpenerLine(gp, units) : null);
+  const own = returningUserOpener(gp) ?? (reachedAsks(gp) || lapseAsks(gp) ? goalOpenerLine(gp, units) : null);
   if (own) return own;
   const line = goalOpenerLine(gp, units);
   if (line) return `${line} ${OPENER_INVITE}`;

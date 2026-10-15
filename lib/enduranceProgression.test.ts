@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  RACE_EVE_LINE,
   addDayKey,
   breakThreshold,
   enduranceWeekPlan,
@@ -12,6 +13,8 @@ import {
   isSpikeWeek,
   isWindDownPhase,
   longRunAtPeak,
+  longRunCapNote,
+  longRunPeakTarget,
   longRunStepKm,
   mondayOfDay,
   peakWeekKmBeforeTaper,
@@ -23,6 +26,7 @@ import {
   raceRules,
   recoveryWeek,
   roundLongRunKm,
+  roundWeekTargetKm,
   type EnduranceWeekPlanInput,
   type PlanRun,
   weekStepTarget,
@@ -156,15 +160,17 @@ test('racePhaseTargetKm: none in build or after recovery; unusable peaks are nul
   assert.equal(target(0, 1), 1); // round(0.4) = 0 -> at least 1 km
 });
 
-test('racePhaseTargetKm: capped at the weekly goal; imperial rounds in whole miles', () => {
+test('racePhaseTargetKm: capped at the weekly goal; imperial rounds to the nearest half mile', () => {
   assert.equal(target(14, 60, { weeklyGoalKm: 30 }), 30); // 45 km capped at the 30 km goal
   assert.equal(target(14, 40, { weeklyGoalKm: 30 }), 30);
   assert.equal(target(14, 40, { weeklyGoalKm: 50 }), 30);
   assert.equal(target(14, 40, { weeklyGoalKm: null }), 30);
-  // 40 km = 24.85 mi; x0.75 = 18.64 -> 19 mi = 30.6 km (one decimal).
+  // 40 km = 24.85 mi; x0.75 = 18.64 -> 18.5 mi = 29.8 km (wave 20: imperial ceilings and targets are multiples of 0.5 mi).
   const MI_PER_KM = 1 / 1.609344;
   const km = target(14, 40, { unitsPerKm: MI_PER_KM })!;
-  assert.ok(Math.abs(km * MI_PER_KM - 19) < 0.05, `${km}`);
+  assert.ok(Math.abs(km * MI_PER_KM - 18.5) < 0.05, `${km}`);
+  // A recovery ceiling of 11.6 km (7.2 mi) is 7 mi, never "7.2".
+  assert.ok(Math.abs(target(-3, 29, { unitsPerKm: MI_PER_KM })! * MI_PER_KM - 7) < 0.05);
   assert.equal(target(14, 40, { unitsPerKm: 0 }), null);
 });
 
@@ -384,13 +390,15 @@ test('illness restart: a week under half the median of the 4 before it restarts 
   assert.equal(gradeEnduranceWeek(plan, 8).level, 'mixed');
   // The long run restarts from the recent longest run, never past 60% of the restart week.
   assert.ok((plan.longRunKm as number) <= 9.5, `${plan.longRunKm}`);
-  // The week after, the build goes on from the comeback week (no spike against the sick week).
+  // The week after a good comeback week climbs back toward the pre-break median (wave 20: restart -> 80% -> 100% of the
+  // median, never less than the 10% step): 80% of 26.5 = 21 km, not the 17 km step over the 15 km comeback.
   const next = planFor(runsFor([15, 17, 19, 21, 23, 25, 28, 30, 6, 15]), 11);
   assert.equal(next.kind, 'build');
-  assert.equal(next.targetKm, 17);
+  assert.equal(next.targetKm, 21);
+  assert.deepEqual(next.comeback, { medianKm: 26.5, fraction: 0.8, weeksSince: 1 });
 });
 
-test('a 2-week gap (0 km weeks) restarts at ~60% of the median that counts the zero weeks; a 0-run week is "light"', () => {
+test('a 2-week gap (0 km weeks) restarts at ~55% of the median that counts the zero weeks (a gap over 14 days); a 0-run week is "light"', () => {
   const runs = runsFor([15, 17, 19, 21, 23, 25]); // weeks 1-6, then nothing in weeks 7-8
   const w7 = planFor(runs, 7);
   assert.equal(w7.kind, 'build'); // week 7 itself was planned before anyone knew
@@ -399,22 +407,98 @@ test('a 2-week gap (0 km weeks) restarts at ~60% of the median that counts the z
   assert.equal(w9.kind, 'restart');
   assert.equal(w9.restart?.reason, 'no_runs');
   assert.equal(w9.restart?.medianKm, 22); // the 4 weeks before the empty one: 0, 25, 23, 21 -> the median counts the zero week
-  assert.equal(w9.targetKm, 13); // 60% of 22
+  assert.equal(w9.targetKm, 12); // 55% of 22 (wave 20: a gap of more than 14 days; 8-14 days is 75%)
   assert.ok((w9.targetKm as number) < 22);
-  // On a break: 5+ days without a run (more for a runner who runs less often).
-  const midGap = enduranceWeekPlan({ runs, weekStart: weekOf(7), goalKm: 30, today: addDayKey(weekOf(7), 4) });
-  // The fifth day without a run is when a 5+ day gap reaches into the week: it becomes a restart week (the card says "on a break").
+  // On a break: 7+ days without a run (more for a runner who runs less often) — wave 20, it was 5.
+  const atDay = (offset: number) => enduranceWeekPlan({ runs, weekStart: weekOf(7), goalKm: 30, today: addDayKey(weekOf(7), offset) });
+  // Five days without a run (the Friday) is no break: the week's target does not drop mid-week.
+  assert.equal(atDay(4).kind, 'build');
+  assert.equal(atDay(4).targetKm, 28);
+  assert.equal(atDay(4).onBreak, false);
+  assert.equal(atDay(5).kind, 'build'); // six days
+  // The seventh day without a run is when the gap reaches into the week; up to 7 days is one skipped step: last week's
+  // target (25 km) stands, no cut to a share of the median.
+  const midGap = atDay(6);
   assert.equal(midGap.kind, 'restart');
-  assert.equal(enduranceWeekPlan({ runs, weekStart: weekOf(7), goalKm: 30, today: addDayKey(weekOf(7), 3) }).kind, 'build');
-  assert.equal(midGap.daysSinceRun, 5);
+  assert.equal(midGap.daysSinceRun, 7);
   assert.equal(midGap.onBreak, true);
-  assert.equal(enduranceWeekPlan({ runs, weekStart: weekOf(7), goalKm: 30, today: addDayKey(weekOf(7), 3) }).onBreak, false);
+  assert.equal(midGap.targetKm, 25);
+  assert.equal(midGap.restart?.gapDays, 7);
+  // The week still ENDED with 5+ days off a day earlier: a short week like that is a lighter week, not a failure.
+  assert.equal(atDay(4).endedOff, true);
+  assert.equal(gradeEnduranceWeek(atDay(4), 6).level, 'light');
+});
+
+test('the restart cut scales with the gap: up to 7 days holds last week\'s target, 8-14 days ~75% of the median, over 14 days ~55%', () => {
+  // Median of the 4 weeks before the break: 22 km (weeks 3-6 of 19..25).
+  const runs = runsFor([15, 17, 19, 21, 23, 25]);
+  const at = (days: number) => enduranceWeekPlan({ runs, weekStart: weekOf(7), goalKm: 30, today: addDayKey(weekOf(7), days - 1) }); // days without a run, counted from the Sunday of week 6
+  assert.equal(at(7).targetKm, 25);
+  const mid = enduranceWeekPlan({ runs, weekStart: weekOf(8), goalKm: 30, today: weekOf(8) }); // 8 days off
+  assert.equal(mid.restart?.reason, 'no_runs');
+  assert.equal(mid.restart?.gapDays, 8);
+  assert.equal(mid.restart?.fraction, 0.75);
+  assert.equal(mid.targetKm, 17); // 75% of 22 = 16.5
+  const long = enduranceWeekPlan({ runs, weekStart: weekOf(9), goalKm: 30, today: weekOf(9) }); // 15 days off
+  assert.equal(long.restart?.fraction, 0.55);
+  assert.equal(long.targetKm, 12);
+  // A very light week without a long gap in it keeps the plain 60% (the illness restart).
+  const light = planFor(runsFor([15, 17, 19, 21, 23, 25, 28, 30, 6]), 10);
+  assert.equal(light.restart?.fraction, 0.6);
+  assert.equal(light.restart?.gapDays, null);
+  // The restart week's long run is at most 40% of it.
+  assert.ok((mid.longRunKm ?? 0) <= 17 * 0.4 + 0.25, `${mid.longRunKm}`);
+  // Imperial restart targets are halves of a mile.
+  const MI = 1 / 1.609344;
+  const mi = enduranceWeekPlan({ runs, weekStart: weekOf(8), goalKm: 30, today: weekOf(8), unitsPerKm: MI });
+  assert.ok(Math.abs((mi.targetKm as number) * MI * 2 - Math.round((mi.targetKm as number) * MI * 2)) < 0.05, `${mi.targetKm}`);
+});
+
+test('a break noticed mid-week never shrinks the week\'s target below what the week has already run', () => {
+  // Last run Sunday of week 6; the first run back is a 14 km long run on the Sunday of week 7: a 7 day gap, restart share 13 km.
+  const runs = [...runsFor([15, 17, 19, 21, 23, 25]), { day: addDayKey(weekOf(7), 6), km: 14 }];
+  const plan = enduranceWeekPlan({ runs, weekStart: weekOf(7), goalKm: 30, today: addDayKey(weekOf(7), 6) });
+  assert.equal(plan.kind, 'restart');
+  assert.ok((plan.targetKm as number) >= 14, `${plan.targetKm}`);
+});
+
+test('comeback: for up to three weeks after a restart the target climbs restart -> 80% -> 100% of the pre-break median, a rung only after a good week', () => {
+  // Weeks 1-6 build (15..25), nothing in weeks 7-8, week 9 restarts (55% of 22 = 12 km), then weeks of 12, 18, 22, 25.
+  const base = runsFor([15, 17, 19, 21, 23, 25, 0, 0]);
+  const withWeeks = (kms: number[]) => [...base, ...runsFor(kms, 9)];
+  const restart = planFor(withWeeks([12]), 9);
+  assert.equal(restart.kind, 'restart');
+  assert.equal(restart.targetKm, 12);
+  const w10 = planFor(withWeeks([12]), 10);
+  assert.equal(w10.kind, 'build');
+  assert.equal(w10.targetKm, 18); // 80% of 22 = 17.6, not the 13 km step over 12
+  assert.deepEqual(w10.comeback, { medianKm: 22, fraction: 0.8, weeksSince: 1 });
+  const w11 = planFor(withWeeks([12, 18]), 11);
+  assert.equal(w11.targetKm, 22); // 100% of the median
+  assert.equal(w11.comeback?.fraction, 1);
+  const w12 = planFor(withWeeks([12, 18, 22]), 12);
+  assert.equal(w12.targetKm, 24); // 10% over 22 once the median is regained
+  assert.equal(w12.comeback?.weeksSince, 3);
+  // A week that did not grade good repeats the rung instead of climbing: 18 km target, only 10 km run.
+  const repeat = planFor(withWeeks([12, 10]), 11);
+  assert.equal(repeat.targetKm, 18);
+  assert.equal(repeat.comeback?.fraction, 0.8);
+  // The climb is over after three weeks: the plain step again.
+  const w13 = planFor(withWeeks([12, 18, 22, 25]), 13);
+  assert.equal(w13.comeback, null);
+  assert.equal(w13.targetKm, 28); // 25 x 1.10
+  // Comeback (and rebuild) weeks are graded gentler: 80% is good, not 90%.
+  assert.equal(gradeEnduranceWeek(w10, 14.4).level, 'good'); // 80% of 18
+  assert.equal(gradeEnduranceWeek(w10, 14.3).level, 'mixed');
+  // Regaining the pre-break level is no spike; a real jump beyond it still is.
+  assert.equal(gradeEnduranceWeek(w10, 22).gap, null);
+  assert.equal(gradeEnduranceWeek(w10, 26).gap, 'spike');
 });
 
 test('the break rule follows the runner\'s own rhythm: a once-a-week runner is not "on a break" every Friday', () => {
   const weekly: PlanRun[] = [0, 1, 2, 3, 4].map(i => ({ day: addDayKey(addDayKey(MON, 5), 7 * i), km: 12 })); // every Saturday
   assert.equal(breakThreshold(weekly, addDayKey(MON, 35)), 11); // ceil(1.5 x 7)
-  assert.equal(breakThreshold(runsFor([20, 20, 20, 20]), weekOf(5)), 5);
+  assert.equal(breakThreshold(runsFor([20, 20, 20, 20]), weekOf(5)), 7); // wave 20: it was 5
   const friday = enduranceWeekPlan({ runs: weekly, weekStart: weekOf(5), goalKm: 30, today: addDayKey(weekOf(5), 4) });
   assert.equal(friday.onBreak, false);
   assert.notEqual(friday.kind, 'restart');
@@ -426,21 +510,23 @@ test('maintain: at the weekly goal the plan holds it and the long run keeps step
   const plan = planFor(runs, 5, { race });
   assert.equal(plan.kind, 'maintain');
   assert.equal(plan.targetKm, 30);
-  assert.equal(plan.longRun.targetPeakKm, 18);
+  // The half's 18 km peak does not fit a 30 km week (a long run is at most half of it): the peak is what fits (wave 20).
+  assert.equal(plan.longRun.targetPeakKm, 15);
+  assert.equal(plan.longRun.raceTargetKm, 18);
   assert.equal(plan.longRun.lastKm, 12); // 40% of 30
   assert.equal(plan.longRunKm, 14);
   assert.equal(plan.purpose.replace(/\u00a0/g, ' '), 'Hold 30 km this week: long run 14 km, the rest easy');
   assert.equal(plan.band.overKm, null); // at the goal, going past it is just a hit target
-  // The peak target caps the long run; "no race" has no peak but is capped at 60% of the week.
+  // The peak target caps the long run; "no race" has no peak but is capped at half of the week (a longer one already run is held).
   // Week 4: a 17 km long run in an otherwise ordinary 30 km week.
   const week4: PlanRun[] = [{ day: addDayKey(weekOf(4), 1), km: 4 }, { day: addDayKey(weekOf(4), 3), km: 4 }, { day: addDayKey(weekOf(4), 5), km: 5 }, { day: addDayKey(weekOf(4), 6), km: 17 }];
   const peak = enduranceWeekPlan({
     runs: [...runsFor([30, 30, 30]), ...week4],
     weekStart: weekOf(5), goalKm: 30, today: weekOf(5), race,
   });
-  assert.equal(peak.longRunKm, 18);
+  assert.equal(peak.longRunKm, 15); // back to the 15 km peak that fits
   const noRace = planFor([...runsFor([30, 30, 30]), ...week4], 5);
-  assert.equal(noRace.longRunKm, 18); // min(19, 60% of 30)
+  assert.equal(noRace.longRunKm, 17); // min(19, max(50% of 30, the 17 km already run))
 });
 
 test('race phases on the Mondays of a SUNDAY race: build, taper, race week, recovery 1, recovery 2, rebuild — per distance', () => {
@@ -547,4 +633,109 @@ test('long runs: only 5 km (3 mi) and up are a "long run"; imperial targets roun
   assert.equal(formatTargetLongRun(10.5, MI), `6.5${String.fromCharCode(160)}mi`);
   assert.equal(roundLongRunKm(18, MI), 17.7); // back in km: exactly 11 mi
   assert.equal(mondayOfDay('2026-06-21'), '2026-06-15');
+});
+
+// ── Wave 20a ────────────────────────────────────────────────────────────────
+
+test('long run cap: half of the week (40% in a restart week); the race peak that does not fit is "what fits", said once', () => {
+  assert.deepEqual(longRunPeakTarget(21.1, 30), { peakKm: 15, raceTargetKm: 18 });
+  assert.deepEqual(longRunPeakTarget(21.1, 36), { peakKm: 18, raceTargetKm: null });
+  assert.deepEqual(longRunPeakTarget(21.1, 50), { peakKm: 18, raceTargetKm: null });
+  assert.deepEqual(longRunPeakTarget(21.1, null), { peakKm: 18, raceTargetKm: null });
+  assert.equal(longRunPeakTarget(null, 30), null);
+  assert.equal(
+    longRunCapNote(longRunPeakTarget(21.1, 30), 30)?.replace(/ /g, ' '),
+    'Your 30 km weeks fit a 15 km long run; for an 18 km peak, raise the goal to ~36 km',
+  );
+  assert.equal(longRunCapNote(longRunPeakTarget(21.1, 40), 40), null);
+  // Miles: 30 km = 18.6 mi fits 9 mi; the 18 km peak is 11 mi and needs a ~22.5 mi week.
+  const MI = 1 / 1.609344;
+  assert.equal(
+    longRunCapNote(longRunPeakTarget(21.1, 30, MI), 30, MI)?.replace(/ /g, ' '),
+    'Your 18.6 mi weeks fit a 9 mi long run; for an 11 mi peak, raise the goal to ~22.5 mi',
+  );
+  // The plan: a normal week's long run is at most half of it, a restart week's at most 40%.
+  const runs = runsFor([20, 22, 24, 26, 28, 30, 30, 30]);
+  const race = { date: addDayKey(MON, 7 * 20), distanceKm: 21.1 };
+  const maintain = planFor(runs, 9, { race });
+  assert.equal(maintain.kind, 'maintain');
+  assert.equal(maintain.longRun.targetPeakKm, 15);
+  assert.ok((maintain.longRunKm as number) <= 15, `${maintain.longRunKm}`);
+  const restart = planFor(runsFor([20, 22, 24, 26, 28, 30, 6]), 8, { race });
+  assert.equal(restart.kind, 'restart');
+  assert.ok((restart.longRunKm as number) <= (restart.targetKm as number) * 0.4 + 0.25, `${restart.longRunKm} of ${restart.targetKm}`);
+});
+
+test('a long run that jumped 2+ km over its plan (and 2+ km over the one before) is held, not grown', () => {
+  // Weeks 1-5 on plan, week 5 carries a 14 km long run where 12 was planned (the one before was 10).
+  const week = (n: number, longKm: number, total: number): PlanRun[] => {
+    const w = weekOf(n);
+    const rest = (total - longKm) / 3;
+    return [
+      { day: addDayKey(w, 1), km: rest }, { day: addDayKey(w, 3), km: rest }, { day: addDayKey(w, 5), km: rest }, { day: addDayKey(w, 6), km: longKm },
+    ];
+  };
+  const runs = [...week(1, 6, 15), ...week(2, 7, 17), ...week(3, 8, 19), ...week(4, 10, 23), ...week(5, 14, 27)];
+  const plan = planFor(runs, 6);
+  assert.equal(plan.longRunJump?.actualKm, 14);
+  assert.equal(plan.longRunJump?.plannedKm, 12);
+  assert.equal(plan.longRunKm, 14); // held at 14, not 16
+  assert.match(plan.purpose.replace(/ /g, ' '), /long run 14 km \(held after last week's jump\)/);
+  // A +1 km creep is no jump; neither is a long run on plan.
+  const creep = planFor([...week(1, 6, 15), ...week(2, 7, 17), ...week(3, 8, 19), ...week(4, 10, 23), ...week(5, 12, 25)], 6);
+  assert.equal(creep.longRunJump, null);
+});
+
+test('race eve and race day: the purpose follows TODAY\'s distance to the race, not Monday\'s', () => {
+  const race = { date: '2026-06-21', distanceKm: 21.1 };
+  const monday = '2026-06-15';
+  const runs: PlanRun[] = [{ day: '2026-06-02', km: 12 }, { day: '2026-06-04', km: 12 }, { day: '2026-06-06', km: 12 }, { day: '2026-06-09', km: 10 }, { day: '2026-06-11', km: 10 }];
+  const at = (today: string) => enduranceWeekPlan({ runs, weekStart: monday, goalKm: 30, today, race, racePeakWeekKm: 30 });
+  assert.equal(at('2026-06-17').purpose, 'Race week: short easy runs, rest 1–2 days before the race');
+  assert.equal(at('2026-06-20').purpose, RACE_EVE_LINE);
+  assert.equal(at('2026-06-20').raceDaysToGo, 1);
+  assert.equal(at('2026-06-21').purpose, 'Race day: warm up easy and start relaxed');
+  assert.equal(RACE_EVE_LINE, 'Race tomorrow — rest or a 15-min shakeout; lay out your kit');
+  // The Monday read is not race day (the old branch tested the Monday's distance).
+  assert.equal(at(monday).raceDaysToGo, 6);
+});
+
+test('maintain is "Build to" until the weekly goal has been run once; no "then add about 10%" at the goal; the actual step is on the plan', () => {
+  // 28 km last week, never 30: the step reaches the goal, but he has not run it yet.
+  const first = planFor(runsFor([22, 24, 26, 28]), 5);
+  assert.equal(first.kind, 'maintain');
+  assert.equal(first.goalReachedBefore, false);
+  assert.match(first.purpose.replace(/ /g, ' '), /^Build to 30 km this week/);
+  const again = planFor(runsFor([22, 24, 30, 30]), 5);
+  assert.equal(again.goalReachedBefore, true);
+  assert.match(again.purpose.replace(/ /g, ' '), /^Hold 30 km this week/);
+  // The step is read off the plan: 17 -> 19 is +12%... and a week at the goal has none of the "10%" copy.
+  const build = planFor(runsFor([15, 17, 19]), 4);
+  assert.equal(build.stepPct, Math.round(((build.targetKm as number) - 19) / 19 * 100));
+  assert.equal(planFor(runsFor([4, 4]), 3).stepPct, null); // under 5 km there is no percentage
+  const rebuilt = planFor(runsFor([30, 30, 30, 30, 30, 30, 30, 30, 20, 30, 30, 30]), 12, { race: { date: addDayKey(weekOf(9), 6), distanceKm: 21.1 }, racePeakWeekKm: 40 });
+  assert.equal(rebuilt.kind, 'rebuild');
+  assert.doesNotMatch(rebuilt.purpose, /add about 10%/);
+});
+
+test('rebuild weeks are graded gentler than a normal build: 80% of the step is good, 50% mixed', () => {
+  const sunday = addDayKey(weekOf(9), 6);
+  const race = { date: sunday, distanceKm: 21.1 };
+  const runs = [...runsFor([30, 30, 30, 30, 30, 30, 30, 30]), ...runsFor([12], 10), ...runsFor([20], 11)];
+  const first = planFor(runs, 12, { race, racePeakWeekKm: 40 });
+  assert.equal(first.kind, 'rebuild');
+  assert.equal(first.targetKm, 22);
+  assert.equal(gradeEnduranceWeek(first, 17.6).level, 'good'); // 80% (a normal build needs 90%): "15 of ~17 km — 2 km short" is good now
+  assert.equal(gradeEnduranceWeek(first, 17.5).level, 'mixed');
+  assert.equal(gradeEnduranceWeek(first, 11).level, 'mixed'); // 50%
+  assert.equal(gradeEnduranceWeek(first, 10.9).level, 'tough');
+});
+
+test('roundWeekTargetKm: whole km, or the nearest half mile', () => {
+  const MI = 1 / 1.609344;
+  assert.equal(roundWeekTargetKm(11.6), 12);
+  assert.equal(roundWeekTargetKm(0.2), 1);
+  assert.ok(Math.abs(roundWeekTargetKm(11.6, MI) * MI - 7) < 0.05); // 7.2 mi -> 7 mi
+  assert.ok(Math.abs(roundWeekTargetKm(12.2, MI) * MI - 7.5) < 0.05); // 7.58 mi -> 7.5 mi
+  assert.ok(Math.abs(roundWeekTargetKm(0.5, MI) * MI - 1) < 0.05); // at least one unit
 });

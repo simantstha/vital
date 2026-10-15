@@ -20,25 +20,34 @@
 
 import type { GoalKind, GoalLiftReturn, GoalLongRunProgress, GoalProgressBudget, GoalProgressIntakeDay, GoalVerdict, DayValue } from './goalProgress';
 import { KG_TO_LB, isRunningWorkoutType, raceLabel } from './goalProgress';
-import { PARTIAL_LOG_KCAL_THRESHOLD, TOO_FAST_LOSS_PCT_PER_WEEK } from './brain/weightSignals';
+import { PARTIAL_LOG_KCAL_THRESHOLD } from './brain/weightSignals';
 import { computeWeightTrend, type WeightReading } from './weightTrend';
 import { dayNumber, rawPlateau } from './weightPace';
 import { localDayKey, weekDayKeys, weekStartKeyForDay } from './localDay';
 import { arrowPair, withUnit } from './displayText';
 import type { ProgressionSummary } from './workoutRepository';
 import {
+  cuedLifts,
   easedLoad,
   isDeloadWeek,
   isLiftStalled,
+  isMainLift,
   latestTopLoadKg,
   liftDisplayChange,
   liftDisplayName,
+  liftReturnDisplay,
+  liftShortName,
+  MAX_CUED_LIFTS,
+  nextLoadCues,
   nextWorkingLoad,
   pickHeadlineLift,
+  pickWeekOverWeek,
   priorTopLoadKg,
   rankLifts,
+  type NextLoad,
 } from './liftChange';
 import {
+  PHASE_CEILING_TOLERANCE,
   WEEKLY_DISTANCE_GROWTH,
   enduranceWeekPlan,
   findRaceRun,
@@ -47,10 +56,13 @@ import {
   isWindDownKind,
   isSpikeWeek,
   isWindDownPhase,
+  longRunCapNote,
   longRunWord,
   planWeekKm,
+  raceClass,
   racePhaseInfo,
   racePhaseTargetKm,
+  roundWeekTargetKm,
   weekStepTarget,
   type EnduranceWeekPlan,
   type PlanRun,
@@ -92,7 +104,7 @@ export const WEIGHT_TREND_STAT_LABEL = 'Trend change';
 const MIN_WEIGH_INS_FOR_MEAN = 2;
 /** A review may rest on the weight stat alone when the reviewed week had at least this many weigh-ins. */
 const MIN_WEIGH_INS_WEIGHT_ONLY = 3;
-/** A reached goal: the weekly average within this many kg of the target is "inside your target range" (goalProgress HOLDING_NEAR_TARGET_KG). */
+/** A reached goal: the weekly average within this many kg of the target is "within 1 kg of 84 kg" (goalProgress HOLDING_NEAR_TARGET_KG). */
 const HOLDING_RANGE_KG = 1;
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -201,7 +213,8 @@ export interface WeeklyReviewInput {
   /**
    * Muscle goal only: distinct local days with a STRENGTH session (logged sets
    * or a HealthKit workout whose type matches /strength/i), covering both
-   * weeks — the same definition lib/goalProgress.ts uses. When present, the
+   * weeks (and, from the loader, the ~2 weeks before them: a run of on-target
+   * or empty weeks is read from them) — the same definition lib/goalProgress.ts uses. When present, the
    * muscle review counts these instead of every training day (a run is not a
    * lifting session). Other goals ignore it.
    */
@@ -441,6 +454,16 @@ function isUnderTarget(r: ReachedWeek): boolean {
   return r.targetKg != null && r.meanKg != null && r.targetKg - r.meanKg > HOLDING_RANGE_KG;
 }
 
+/** Weight loss: the goal card's verdict says the loss pace (21-day line, with the card's hysteresis) is past the ceiling. */
+function isTooFastWeek(input: WeeklyReviewInput): boolean {
+  return input.goal === 'weight_loss' && input.verdict === 'too_fast';
+}
+
+/** Weight loss: the goal card's verdict says the scale is not moving toward the target (behind pace or stalled). */
+function isTooSlowWeek(input: WeeklyReviewInput): boolean {
+  return input.goal === 'weight_loss' && (input.verdict === 'behind' || input.verdict === 'stalled');
+}
+
 function weightCandidate(input: WeeklyReviewInput, week: Week, prevWeek: Week): Candidate | null {
   const change = weightChange(input, week, prevWeek);
   if (!change) return null;
@@ -451,14 +474,15 @@ function weightCandidate(input: WeeklyReviewInput, week: Week, prevWeek: Week): 
   const isMean = change.basis === 'mean';
 
   let tone: ReviewTone = 'neutral';
-  const pct = change.endKg > 0 ? (deltaKg / change.endKg) * 100 : 0;
   if (input.goal === 'weight_loss') {
-    // A held target and a flat plateau are not a "win" on the scale.
+    // The weekly change is a neutral stat: one week-to-week move in the mean is noise, not a pace. "Too fast" and
+    // "too slow" are the goal card's calls (the 21-day pace, input.verdict) and nothing else.
     if (reachedWeek(input, week) != null || isPlateauWeek(input, week)) tone = 'neutral';
-    else if (deltaKg <= -0.05) tone = -pct > TOO_FAST_LOSS_PCT_PER_WEEK ? 'watch' : 'good';
-    else if (deltaKg >= 0.2) tone = 'watch';
+    else if (deltaKg <= -0.05) tone = isTooFastWeek(input) ? 'watch' : 'good';
+    else if (deltaKg >= 0.2) tone = isTooSlowWeek(input) ? 'watch' : 'neutral';
   } else if (input.goal === 'muscle') {
-    if (deltaKg > 0.05) tone = 'good';
+    // Weight gain is a win for a lifter who trained that week; in a week without a session it is only a number.
+    if (deltaKg > 0.05) tone = weekSessionCount(input, week) > 0 ? 'good' : 'neutral';
     else if (deltaKg <= -0.2) tone = 'watch';
   }
   const cand: Candidate = {
@@ -469,11 +493,12 @@ function weightCandidate(input: WeeklyReviewInput, week: Week, prevWeek: Week): 
       tone,
     },
   };
+  if (input.goal === 'muscle' && rounded === 0) cand.stat.value = 'no change';
   const subject = isMean ? 'Your weekly average weight' : 'Your weight trend';
   if (tone === 'good') cand.win = `${subject} is ${input.goal === 'muscle' ? 'up' : 'down'} ${weightText(input, Math.abs(deltaKg))}.`;
   if (tone === 'watch') {
     cand.slip = input.goal === 'weight_loss' && deltaKg < 0
-      ? `${isMean ? 'Your weekly average dropped' : 'Weight dropped'} ${weightText(input, Math.abs(deltaKg))} — faster than is comfortable to sustain.`
+      ? 'Your 3-week loss pace is faster than is comfortable to sustain.'
       : `${subject} moved ${rounded > 0 ? 'up' : 'down'} ${weightText(input, Math.abs(deltaKg))}, away from your goal.`;
   }
   return cand;
@@ -536,6 +561,70 @@ function weekSessionCount(input: WeeklyReviewInput, week: Week): number {
   return week.days.filter(d => train.has(d)).length;
 }
 
+/** Weeks looked back for a run of on-target weeks; a longer run reads "a month running". */
+const ON_TARGET_LOOKBACK_WEEKS = 4;
+/** Weeks looked back for a run of weeks without a session. */
+const OFF_LOOKBACK_WEEKS = 12;
+
+/** "2nd", "3rd", "11th". */
+function ordinal(n: number): string {
+  const v = n % 100;
+  if (v >= 11 && v <= 13) return `${n}th`;
+  return `${n}${['th', 'st', 'nd', 'rd'][n % 10] ?? 'th'}`;
+}
+
+/** Weeks in a row, the reviewed one included, that reached `target` sessions (at most ON_TARGET_LOOKBACK_WEEKS; weeks before signup end the run). */
+function weeksOnTargetRunning(input: WeeklyReviewInput, week: Week, target: number): number {
+  const train = new Set(sessionDays(input));
+  let n = 1;
+  for (let k = 1; k < ON_TARGET_LOOKBACK_WEEKS; k += 1) {
+    const days = weekDayKeys(addDays(week.days[0], -7 * k));
+    if (input.signupDay && days[6] < input.signupDay) break;
+    if (days.filter(d => train.has(d)).length < target) break;
+    n += 1;
+  }
+  return n;
+}
+
+/**
+ * The win for a week that reached the sessions target. It varies with the run
+ * of on-target weeks, so two good weeks never read word for word the same:
+ * "You hit all 4 planned sessions." -> "4 of 4 again — 2 weeks running." -> ...
+ * -> (a month in) alternating "a month running" and "Another full week".
+ */
+function muscleTargetWin(input: WeeklyReviewInput, week: Week, target: number): string {
+  const n = weeksOnTargetRunning(input, week, target);
+  if (n <= 1) return target === 1 ? 'You hit your planned session.' : `You hit all ${target} planned sessions.`;
+  if (n < ON_TARGET_LOOKBACK_WEEKS) return `${target} of ${target} again — ${n} weeks running.`;
+  return weekIndex(week) % 2 === 0
+    ? `${target} of ${target} again — a month running.`
+    : `Another full week: all ${target} planned ${plural(target, 'session')} done.`;
+}
+
+/**
+ * Weeks in a row, the reviewed one included, without a strength session (1 when
+ * only this week was empty; 0 when it had one). A week counts as trained when it
+ * has a session day or any logged lift set. The run reaches back only as far as
+ * the user's known history — signup, else the earliest session or lift week — so
+ * weeks nobody was around for are never "weeks off".
+ */
+function weeksOffRunning(input: WeeklyReviewInput, week: Week): number {
+  if (weekSessionCount(input, week) > 0) return 0;
+  const train = new Set(sessionDays(input));
+  const setWeeks = new Set<string>();
+  for (const weeks of Object.values(input.progression)) for (const w of weeks) if ((w.totalSets ?? 0) > 0) setWeeks.add(w.weekStart);
+  const known = input.signupDay ?? [...train, ...setWeeks].sort()[0];
+  if (known == null) return 1;
+  let n = 1;
+  for (let k = 1; k < OFF_LOOKBACK_WEEKS; k += 1) {
+    const start = addDays(week.days[0], -7 * k);
+    const days = weekDayKeys(start);
+    if (days[6] < known || setWeeks.has(start) || days.some(d => train.has(d))) break;
+    n += 1;
+  }
+  return n;
+}
+
 function sessionsCandidate(input: WeeklyReviewInput, week: Week, prevWeek: Week): Candidate | null {
   const count = weekSessionCount(input, week);
   const prev = weekSessionCount(input, prevWeek);
@@ -548,7 +637,7 @@ function sessionsCandidate(input: WeeklyReviewInput, week: Week, prevWeek: Week)
   if (target != null && input.goal !== 'general') {
     comparison = `target ${target} for the week`;
     tone = count >= target ? 'good' : count >= target * 0.75 ? 'neutral' : 'watch';
-    if (tone === 'good') cand.win = `You hit your ${target}-${plural(target, 'session')} target with ${count}.`;
+    if (tone === 'good') cand.win = input.goal === 'muscle' ? muscleTargetWin(input, week, target) : `You hit your ${target}-${plural(target, 'session')} target with ${count}.`;
     if (tone === 'watch') {
       cand.slip = `${count} of ${target} planned ${plural(target, 'session')} done.`;
       cand.fix = `Put ${target} sessions on the calendar now, before the week fills up.`;
@@ -621,15 +710,12 @@ function reviewLiftKey(input: WeeklyReviewInput, week: Week): string | null {
 
 /** The "building back" lift stat: no drop, no slip; once the pre-break best is regained, a win. */
 function returnLiftCandidate(input: WeeklyReviewInput, ret: GoalLiftReturn): Candidate {
-  const imperial = isImperial(input);
-  const unit = imperial ? 'lb' : 'kg';
-  const f = imperial ? KG_TO_LB : 1;
-  const pre = Math.round(ret.preBreakKg * f);
-  const recent = Math.round(ret.recentKg * f);
+  // The numbers as printed, and the percentage from those shown numbers (not from the unrounded e1RMs).
+  const { pre, recent, pct, unit } = liftReturnDisplay(ret, isImperial(input));
   const name = liftDisplayName(ret.exercise, input.exerciseDisplay);
   const label = `${name} est. 1RM`;
   if (!ret.regained) {
-    return { stat: { label, value: withUnit(recent, unit), comparison: `${ret.pct}% of your pre-break ${withUnit(pre, unit)}`, tone: 'neutral' } };
+    return { stat: { label, value: withUnit(recent, unit), comparison: `${pct}% of your ${withUnit(pre, unit)} pre-break best`, tone: 'neutral' } };
   }
   const above = recent > pre;
   return {
@@ -672,21 +758,16 @@ function liftCandidate(input: WeeklyReviewInput, week: Week): Candidate | null {
       stalled: isLiftStalled(input.progression[picked.exercise], liftAnchor(week)),
     };
   } else {
-    // No lift has 4-weeks-ago data: clearly-labelled "vs last trained week" for the most-trained lift.
-    for (const exercise of rankLifts(input.progression, liftAnchor(week))) {
-      const weeks = input.progression[exercise];
-      const cur = weeks.find(w => w.weekStart === week.days[0]);
-      if (!cur || cur.bestEstimatedOneRepMaxKg == null) continue;
-      const earlier = weeks.filter(w => w.weekStart < week.days[0] && w.bestEstimatedOneRepMaxKg != null);
-      if (earlier.length === 0) continue;
-      const deltaKg = cur.bestEstimatedOneRepMaxKg - (earlier[earlier.length - 1].bestEstimatedOneRepMaxKg as number);
+    // No lift has 4-weeks-ago data: clearly-labelled "vs last trained week" for the most-trained lift — the ONE
+    // week-over-week definition the goal card quotes too (lib/liftChange.ts pickWeekOverWeek, whole-kg endpoints).
+    const wow = pickWeekOverWeek(input.progression, liftAnchor(week), [week.days[0]]);
+    if (wow) {
       best = {
-        name: liftDisplayName(exercise, input.exerciseDisplay),
-        shown: Math.round(deltaKg * (imperial ? KG_TO_LB : 1)),
+        name: liftDisplayName(wow.exercise, input.exerciseDisplay),
+        shown: liftDisplayChange({ baselineKg: wow.change.previousKg, recentKg: wow.change.currentKg, changeKg: wow.change.changeKg }, imperial).change,
         windowLabel: 'vs last trained week',
         stalled: true,
       };
-      break;
     }
   }
   if (!best) return null;
@@ -828,7 +909,10 @@ function planVolumeCandidate(input: WeeklyReviewInput, rp: ReviewPlans): Candida
   const grade = gradeEnduranceWeek(plan, km, { runDays: rp.week.days, unitsPerKm: u });
   const compareMin = u < 1 ? MIN_COMPARE_MI / u : MIN_COMPARE_KM;
   let comparison: string;
-  if (rp.raceRun != null) comparison = 'excl. the race';
+  if (rp.raceRun != null) {
+    const ceiling = plan.targetKm != null ? plan.targetKm * PHASE_CEILING_TOLERANCE : null;
+    comparison = ceiling != null && km > ceiling ? `excl. the race · plan was ~${distanceText(input, plan.targetKm as number)}` : 'excl. the race';
+  }
   else if (km <= 0 && prevKm <= 0) comparison = plan.daysSinceRun != null ? `${plan.daysSinceRun} days since your last run` : 'none logged';
   else if (km <= 0) comparison = `none logged · ${distanceText(input, prevKm)} last week`;
   // After a hold week or a restart the % against the jump / the sick week is not growth: say what it follows.
@@ -994,17 +1078,21 @@ function weekendGap(input: WeeklyReviewInput, week: Week): number | null {
  *                 else tough; needs 3+ logged days). The weight-trend stat
  *                 moving the wrong way (or losing too fast) pulls it down a
  *                 level. With no usable budget days the weight direction
- *                 alone rates it (down at a sane pace good, flat mixed, wrong
- *                 way / too fast tough).
+ *                 alone rates it (down at a sane pace good, otherwise mixed).
+ *                 "Too fast" and "wrong way" are the goal card's calls (its
+ *                 verdict: the 21-day pace), never one week-to-week move in the
+ *                 weekly mean, and the weight alone never makes a week tough.
  *  - endurance:   the week against ITS plan (lib/enduranceProgression.ts
  *                 `enduranceWeekPlan`, the same plan the goal card shows while
  *                 the week is under way; the race phase is read on the week's
  *                 Monday). Build / maintain / hold / restart / rebuild weeks:
  *                 >= 90% of the week's target good, >= 60% mixed, else tough
- *                 (restart: 60% / 30%). The target is the week's safe step (~10%
+ *                 (restart: 60% / 30%; rebuild and the comeback weeks after a
+ *                 restart: 80% / 50%). The target is the week's safe step (~10%
  *                 over the week before, never past the goal), one step up from
- *                 the step after a jump (hold), ~60% of the recent median week
- *                 after a break (restart). A SPIKE — km more than 30% AND at
+ *                 the step after a jump (hold), a share of the pre-break median
+ *                 week after a break (restart: ~75% after 8-14 days, ~55% after
+ *                 more, last week's target after 7), then the climb back. A SPIKE — km more than 30% AND at
  *                 least 3 km (2 mi) above the target — is never "on plan": it
  *                 rates mixed (safety, not praise) with its own gap. The first
  *                 week of running (baseline) has no target and is rated on
@@ -1121,10 +1209,13 @@ function weightLossWeekAssessment(input: WeeklyReviewInput, week: Week, prevWeek
     // Budget days are the gap while they fall short — unless the weight flag (losing too fast) is what pulled the week
     // down, and the weight trend when it alone pulled a good budget week down.
     const gap: WeekGap | null = level !== 'good' && !tooFast ? { kind: 'budget', inBudget: days.hit, logged: days.logged } : weightGap(input, week, prevWeek);
-    return rated(weightTone === 'watch' ? levelDown(level) : level, gap);
+    // A too-fast loss (the card's call) lowers a good week to mixed, never further: the budget days already rate the rest.
+    const lowered = weightTone !== 'watch' ? level : tooFast && level !== 'good' ? level : levelDown(level);
+    return rated(lowered, gap);
   }
   if (weightTone == null) return UNRATED;
-  return rated(weightTone === 'good' ? 'good' : weightTone === 'watch' ? 'tough' : 'mixed', weightGap(input, week, prevWeek));
+  // The weight alone never makes a week tough: a flag from the card is a mixed week, a loss at a sane pace a good one.
+  return rated(weightTone === 'good' ? 'good' : 'mixed', weightGap(input, week, prevWeek));
 }
 
 /**
@@ -1140,6 +1231,37 @@ function windDownRunningKm(input: WeeklyReviewInput, week: Week, plan: WindDownP
   return vals.length === 0 ? null : vals.reduce((a, b) => a + b, 0);
 }
 
+/** A half marathon is tapered from 14 days out; runners often start a week early. */
+const EARLY_TAPER_DAYS = 21;
+/** Early tapering is only "fine" when the week still held at least this share of its target. */
+const EARLY_TAPER_MIN_SHARE = 0.5;
+
+/**
+ * True for a short build / maintain week inside the 21 days before a half marathon, before the formal taper: the
+ * runner started easing off early — fine, not a miss. Needs the week to have run at least half its target.
+ */
+function startedTaperingEarly(input: WeeklyReviewInput, rp: ReviewPlans): boolean {
+  const plan = rp.plan;
+  if (plan == null || input.raceDate == null || raceClass(input.raceDistanceKm) !== 'half') return false;
+  if (plan.kind !== 'build' && plan.kind !== 'maintain') return false;
+  const toRace = Math.round((Date.parse(`${input.raceDate}T00:00:00Z`) - Date.parse(`${input.weekStart}T00:00:00Z`)) / 86_400_000);
+  if (!(toRace > 14 && toRace <= EARLY_TAPER_DAYS)) return false;
+  const target = plan.targetKm as number;
+  const grade = gradeEnduranceWeek(plan, rp.week.km, { runDays: rp.week.days, unitsPerKm: unitsPerKmOf(input) });
+  return grade.gap === 'short' && rp.week.km >= target * EARLY_TAPER_MIN_SHARE;
+}
+
+/**
+ * The ceiling (km) a recovery / race week that ran a little over its target may be called "right at": the target
+ * plus the shared 10% slack, rounded in the display unit. Null when the week is not over the target as the reader
+ * sees it, or is over by more than the slack.
+ */
+function ceilingSlack(input: WeeklyReviewInput, km: number, targetKm: number): number | null {
+  if (distanceNumber(input, km) <= distanceNumber(input, targetKm)) return null;
+  if (km > targetKm * PHASE_CEILING_TOLERANCE) return null;
+  return Math.max(targetKm, roundWeekTargetKm(targetKm * PHASE_CEILING_TOLERANCE, unitsPerKmOf(input)));
+}
+
 /**
  * Endurance with a weekly distance target and measured running: the week is
  * graded against ITS plan (lib/enduranceProgression.ts `enduranceWeekPlan`, the
@@ -1148,8 +1270,8 @@ function windDownRunningKm(input: WeeklyReviewInput, week: Week, plan: WindDownP
  *  - baseline (first week of running): rated on consistency, 3+ run days is
  *    good, never tough — there is no step to measure against yet;
  *  - build / maintain / hold / restart / rebuild: the week's safe step (or the
- *    hold / restart number): >= 90% good (restart: 60%), >= 60% mixed (restart:
- *    30%), else tough; a jump (30% and 3 km / 2 mi over the step) is mixed, with
+ *    hold / restart number): >= 90% good (restart: 60%, rebuild / comeback: 80%),
+ *    >= 60% mixed (restart: 30%, rebuild / comeback: 50%), else tough; a jump (30% and 3 km / 2 mi over the step) is mixed, with
  *    its own gap — safety, not praise; a tough sessions count pulls a build-type
  *    week down a level;
  *  - taper / race week / recovery: the phase's own target with the shared
@@ -1162,6 +1284,10 @@ function planWeekAssessment(input: WeeklyReviewInput, week: Week, rp: ReviewPlan
   const km = rp.week.km;
   const grade = gradeEnduranceWeek(plan, km, { runDays: rp.week.days, unitsPerKm: unitsPerKmOf(input) });
   if (grade.level === 'light') return { rating: 'light', gap: null };
+  // The week the race was run is never rated down for the km around it: the race is the week.
+  if (rp.raceRun != null && plan.kind === 'race_week') return { rating: 'good', gap: null };
+  // A short week in the 21 days before a half is the taper starting early: fine, not a miss.
+  if (startedTaperingEarly(input, rp)) return { rating: 'good', gap: null };
   const goal = plan.goalKm;
   const stepped = plan.targetKm != null && plan.targetKm < goal;
   let gap: WeekGap | null = null;
@@ -1281,7 +1407,13 @@ function windDownHeadline(input: WeeklyReviewInput, phase: WindDownPlan['phase']
   switch (phase) {
     case 'taper': return `${done} of ~${target} — taper week`;
     case 'race_week': return `${done} of ~${target} before the race — race week`;
-    case 'recovery': return `${done} of up to ${target} — recovery week`;
+    case 'recovery': {
+      // A little over the ceiling, inside its 10% slack: "right at" it, not "7.5 of up to 7 mi".
+      const slack = ceilingSlack(input, km, targetKm);
+      return slack != null
+        ? `${distanceText(input, km)}, right at your ~${distanceText(input, slack)} ceiling — recovery week`
+        : `${done} of up to ${target} — recovery week`;
+    }
   }
 }
 
@@ -1294,7 +1426,10 @@ function reachedWin(input: WeeklyReviewInput, week: Week): string | null {
       ? `You reached your ${weightText(input, r.targetKg)} target — weekly average ${weightTextFixed(input, r.meanKg)}.`
       : `You reached your target — weekly average ${weightTextFixed(input, r.meanKg)}.`;
   }
-  return isUnderTarget(r) ? null : `Holding at ${weightTextFixed(input, r.meanKg)}, inside your target range.`;
+  if (isUnderTarget(r)) return null;
+  return r.targetKg != null
+    ? `Holding at ${weightTextFixed(input, r.meanKg)}, within ${weightText(input, HOLDING_RANGE_KG)} of ${weightText(input, r.targetKg)}.`
+    : `Holding at ${weightTextFixed(input, r.meanKg)}.`;
 }
 
 /** The Win line of a taper / race / recovery week that stayed on its plan; null otherwise. */
@@ -1307,7 +1442,13 @@ function windDownWin(input: WeeklyReviewInput, week: Week, assessment: WeekAsses
   switch (plan.phase) {
     case 'taper': return `Taper on plan: ${km} against a ~${target} target.`;
     case 'race_week': return `Race week stayed light: ${km} before the race.`;
-    case 'recovery': return `Recovery week kept easy: ${km} (ceiling ${target}).`;
+    case 'recovery': {
+      const ran = windDownRunningKm(input, week, plan) ?? 0;
+      const slack = ceilingSlack(input, ran, plan.targetKm);
+      return slack != null
+        ? `Recovery week kept easy: ${km}, right at your ~${distanceText(input, slack)} ceiling.`
+        : `Recovery week kept easy: ${km} (ceiling ${target}).`;
+    }
   }
 }
 
@@ -1329,7 +1470,10 @@ function standaloneEnduranceHeadline(input: WeeklyReviewInput): string | null {
   const raceRun = rp.raceRun;
   if (raceRun != null) {
     const label = raceLabel(input.raceDistanceKm ?? null, input.unitSystem);
-    const before = rp.week.km > 0 ? `, after ${distanceText(input, rp.week.km)} in race week` : '';
+    // The race leads. Race-week volume is a footnote and only when it was a plain fact (inside the plan), never a dig.
+    const planKm = plan.targetKm;
+    const insidePlan = planKm == null || rp.week.km <= planKm * PHASE_CEILING_TOLERANCE;
+    const before = rp.week.km > 0 && insidePlan ? `, after ${distanceText(input, rp.week.km)} in race week` : '';
     return `Raced ${raceNounPhrase(label)} — ${distanceText(input, raceRun.km)}${before}`;
   }
   if (plan.kind === 'baseline') {
@@ -1339,7 +1483,7 @@ function standaloneEnduranceHeadline(input: WeeklyReviewInput): string | null {
     return plan.kind === 'recovery' ? 'No runs in your recovery week — rest is fine' : 'No runs this week — rest is fine';
   }
   // A short week that ended in a break (illness, travel) is a lighter week: say what happened, not "6 of 30 km".
-  if (plan.onBreak && !isWindDownKind(plan.kind) && gradeEnduranceWeek(plan, rp.week.km, { runDays: rp.week.days, unitsPerKm: unitsPerKmOf(input) }).level === 'light') {
+  if (plan.endedOff && !isWindDownKind(plan.kind) && gradeEnduranceWeek(plan, rp.week.km, { runDays: rp.week.days, unitsPerKm: unitsPerKmOf(input) }).level === 'light') {
     return `${distanceText(input, rp.week.km)} this week, then ${plan.daysSinceRun} days off`;
   }
   return null;
@@ -1360,6 +1504,8 @@ function enduranceWin(input: WeeklyReviewInput, assessment: WeekAssessment): str
     return `You ran ${raceNounPhrase(raceLabel(input.raceDistanceKm ?? null, input.unitSystem))} — ${distanceText(input, rp.raceRun.km)}.`;
   }
   if (assessment.rating !== 'good' || isWindDownKind(plan.kind)) return null;
+  // Easing off early before a half is not a win to praise (the slip line says it is fine).
+  if (startedTaperingEarly(input, rp)) return null;
   const km = distanceText(input, rp.week.km);
   const u = unitsPerKmOf(input);
   const compareMin = u < 1 ? MIN_COMPARE_MI / u : MIN_COMPARE_KM;
@@ -1368,14 +1514,42 @@ function enduranceWin(input: WeeklyReviewInput, assessment: WeekAssessment): str
     case 'hold': return "Held back after last week's jump — exactly right.";
     case 'baseline': return `Baseline set: ${km} in ${rp.week.days} ${plural(rp.week.days, 'run')} — next week's step builds from it.`;
     case 'restart': return `Back out there: ${km} after the break.`;
-    case 'maintain': return `You held your weekly goal: ${distanceNumber(input, rp.week.km)} of ${distanceText(input, plan.goalKm)}.`;
-    default:
+    case 'maintain': {
+      // "Held" only when the goal was run; a week short of it at its rounded reading is close, not held.
+      const ran = distanceNumber(input, rp.week.km);
+      const goal = distanceNumber(input, plan.goalKm);
+      if (ran < goal) {
+        // "Again" only when next week asks for the same number.
+        const again = rp.next?.targetKm != null && distanceNumber(input, rp.next.targetKm) === goal ? ` — aim for ${goal} again` : '';
+        return `Close to your weekly goal: ${ran} of ${distanceText(input, plan.goalKm)}${again}.`;
+      }
+      return plan.goalReachedBefore
+        ? `You held your weekly goal: ${ran} of ${distanceText(input, plan.goalKm)}.`
+        : `You reached your weekly goal: ${ran} of ${distanceText(input, plan.goalKm)}.`;
+    }
+    default: {
       // Reaching the weekly goal itself is the win, even when the step was lower.
       if (rp.week.km >= plan.goalKm) return `You reached your weekly goal: ${distanceNumber(input, rp.week.km)} of ${distanceText(input, plan.goalKm)}.`;
       // A week well above its step is not praised for the extra.
       if (plan.targetKm != null && rp.week.km > plan.targetKm * ABOVE_STEP_FRACTION) return null;
-      return `You hit this week's step: ${distanceNumber(input, rp.week.km)} of ~${distanceText(input, plan.targetKm as number)}${pct != null && pct !== 0 ? ` (${signed(pct, `${Math.abs(pct)}%`)} on last week)` : ''}.`;
+      const target = plan.targetKm as number;
+      // "Hit" is the rounded reading reaching the step; 20 of ~22 km is close, and says what to aim for.
+      if (distanceNumber(input, rp.week.km) < distanceNumber(input, target)) {
+        // "Again" only when next week asks for the same step; a climb back after a break asks for more.
+        const again = rp.next?.targetKm != null && distanceNumber(input, rp.next.targetKm) === distanceNumber(input, target) ? ` — aim for ~${distanceNumber(input, target)} again` : '';
+        return `Close to your step: ${distanceNumber(input, rp.week.km)} of ~${distanceText(input, target)}${again}.`;
+      }
+      return `You hit this week's step: ${distanceNumber(input, rp.week.km)} of ~${distanceText(input, target)}${pct != null && pct !== 0 ? ` (${signed(pct, `${Math.abs(pct)}%`)} on last week)` : ''}.`;
+    }
   }
+}
+
+/** The building-back / back-above part of the headline: the 142 is an estimated 1RM, and it is said so. */
+function returnHeadlinePart(input: WeeklyReviewInput, ret: GoalLiftReturn): string {
+  const { pre, recent, unit } = liftReturnDisplay(ret, isImperial(input));
+  const name = liftDisplayName(ret.exercise, input.exerciseDisplay);
+  if (!ret.regained) return `${name} est. 1RM ${recent} of ${withUnit(pre, unit)} pre-break`;
+  return recent > pre ? `${name} est. 1RM back above pre-break ${withUnit(pre, unit)}` : `${name} est. 1RM back at pre-break best`;
 }
 
 function buildHeadline(input: WeeklyReviewInput, cands: Candidate[], week: Week): string {
@@ -1416,6 +1590,11 @@ function buildHeadline(input: WeeklyReviewInput, cands: Candidate[], week: Week)
       parts[0] = `${parts[0]}${isPlateauWeek(input, week) ? '' : ' this week'} (${n} ${plural(n, 'weigh-in')})`;
     }
   } else if (input.goal === 'muscle') {
+    // A week without a session says so, and how long it has been: no praise for the scale or an old lift in its place.
+    if (sessions && weekSessionCount(input, week) === 0) {
+      const off = weeksOffRunning(input, week);
+      return clipHeadline(off >= 2 ? `No sessions this week (${ordinal(off)} week off)` : 'No sessions this week');
+    }
     if (sessions) {
       parts.push(sessions.comparison?.startsWith('target ')
         ? `${sessions.value} of ${sessions.comparison.split(' ')[1]} sessions`
@@ -1423,16 +1602,16 @@ function buildHeadline(input: WeeklyReviewInput, cands: Candidate[], week: Week)
     }
     const lift = cands.find(x => x.stat.label.endsWith('est. 1RM'))?.stat;
     const protein = by('Protein days hit');
-    if (lift && lift.tone === 'good' && lift.comparison?.includes('pre-break')) {
-      // Regained the pre-break best: "Squat back above your pre-break 142 kg".
-      parts.push(`${lift.label.replace(/ est\. 1RM$/, '')} ${lift.comparison}`);
+    if (lift && input.liftReturn) {
+      // Returning from a break: the rebuild leads ("Squat est. 1RM 136 of 142 kg pre-break"), regained or not.
+      parts.push(returnHeadlinePart(input, input.liftReturn));
     } else if (lift && lift.tone === 'good') {
       // The lift change is a 4-week number inside a one-week sentence: say so.
       const window = lift.comparison?.includes('4 weeks') ? `over ${withUnit(4, 'wks')}` : 'vs last trained wk';
       parts.push(`${lift.label} ${lift.value} ${window}`);
     }
     else if (protein) parts.push(`protein ${protein.value.replace('/', ' of ')} ${loggedWord(protein)}days`);
-    else if (weight) parts.push(`weight ${weight.value}`);
+    else if (weight) parts.push(weight.value === 'no change' ? 'weight steady' : `weight ${weight.value}`);
   } else if (input.goal === 'endurance') {
     if (sessions) {
       parts.push(sessions.comparison?.startsWith('target ')
@@ -1500,7 +1679,13 @@ function countSlip(done: number, target: number, noun: string): string {
  */
 function gapSlip(input: WeeklyReviewInput, gap: WeekGap, week: Week, prevWeek: Week): string {
   switch (gap.kind) {
-    case 'sessions': return countSlip(gap.done, gap.target, plural(gap.target, 'session'));
+    case 'sessions': {
+      // A second week without a single session is not the first one over again.
+      const off = input.goal === 'muscle' && gap.done === 0 ? weeksOffRunning(input, week) : 0;
+      return off >= 2
+        ? `0 of ${gap.target} ${plural(gap.target, 'session')} — ${ordinal(off)} week in a row`
+        : countSlip(gap.done, gap.target, plural(gap.target, 'session'));
+    }
     case 'activeDays': return countSlip(gap.done, gap.target, `active ${plural(gap.target, 'day')}`);
     case 'distance':
       // A week graded against its safe step names the step ("21 of ~24 km — 3 km short of this week's step"), not the goal it was never asked to reach.
@@ -1545,6 +1730,16 @@ function buildSlip(input: WeeklyReviewInput, cands: Candidate[], week: Week, pre
   }
   if ((assessment.rating === 'mixed' || assessment.rating === 'tough') && assessment.gap) {
     return gapSlip(input, assessment.gap, week, prevWeek);
+  }
+  if (input.goal === 'endurance') {
+    const rp = reviewPlans(input);
+    if (rp.plan != null && startedTaperingEarly(input, rp)) return 'Started tapering early — fine.';
+    const jump = rp.next?.longRunJump;
+    if (jump != null && rp.next != null && !isWindDownKind(rp.next.kind)) {
+      const u = unitsPerKmOf(input);
+      const held = formatTargetLongRun(jump.heldKm, u).replace(/\u00a0\D+$/, '');
+      return `Long run jumped to ${formatTargetLongRun(jump.actualKm, u)} — hold ${held} next week.`;
+    }
   }
   return cands.find(x => x.slip)?.slip ?? weekendSlip(input, week);
 }
@@ -1673,12 +1868,31 @@ function plateauTip(input: WeeklyReviewInput): string {
   return `Plateaus are common and often water: keep ${keep.length > 0 ? keep.join(' and ') : 'your routine'}; if the scale is still flat in 2 weeks, trim ~${withUnit(150, 'kcal')} a day or add two 30-minute walks.`;
 }
 
-/** A weight-loss week with the target met: switch to maintenance first, then keep the weight honest. */
+/** A calorie target within this many kcal of the formula maintenance estimate (or above it) is already a maintenance budget. */
+const MAINTENANCE_BUDGET_MARGIN_KCAL = 100;
+
+/**
+ * True when the calorie target is already at maintenance (within a hair of the formula TDEE or above it), so "switch to
+ * maintenance" would be advice already taken. False when it is still a deficit budget or the formula estimate is unknown:
+ * a fat-loss goal that is reached but not switched is the normal case, and it must not be told it is on maintenance.
+ */
+function onMaintenanceBudget(input: WeeklyReviewInput): boolean {
+  const target = input.budget?.targetKcal;
+  const tdee = input.budget?.formulaTdee;
+  return target != null && tdee != null && target >= tdee - MAINTENANCE_BUDGET_MARGIN_KCAL;
+}
+
+/** A weight-loss week with the target met: switch to maintenance first (unless the budget already is), then keep the weight honest. */
 function reachedTips(input: WeeklyReviewInput): string[] {
+  const maintenance = onMaintenanceBudget(input);
   return [
-    'Switch to maintenance in Goals so your calorie target stops pushing you lower.',
+    maintenance
+      ? 'Your calorie target is already at maintenance — keep it there and the weight should hold.'
+      : 'Switch to maintenance in Goals so your calorie target stops pushing you lower.',
     `Keep weighing in a few mornings a week; if your average drifts ${weightText(input, HOLDING_RANGE_KG)} above your target, that is your cue to act.`,
-    'Ready for more? Set a new target in Goals, or stay on maintenance and enjoy holding here.',
+    maintenance
+      ? 'Ready for more? Set a new target in Goals, or stay on maintenance and enjoy holding here.'
+      : 'Ready for more? Set a new target in Goals, or switch to maintenance and enjoy holding here.',
   ];
 }
 
@@ -1764,10 +1978,15 @@ function buildNextWeekText(input: WeeklyReviewInput, next: EnduranceWeekPlan): s
   const lr = next.longRun;
   if (next.longRunKm != null) {
     const atPeak = lr.targetPeakKm != null && lr.lastKm != null && lr.lastKm >= lr.targetPeakKm;
-    if (!atPeak) {
+    if (next.longRunJump != null) {
+      // Last week's long run jumped over its plan: hold it, do not grow it.
+      longRunPart = `${longRunWord(next.longRunKm, perKm)} ${formatTargetLongRun(next.longRunKm, perKm)} (hold it after last week's jump), the rest mostly easy runs`;
+    } else if (!atPeak) {
       if (next.longRunKm < nextKm) longRunPart = `${longRunWord(next.longRunKm, perKm)} ${formatTargetLongRun(next.longRunKm, perKm)}, the rest mostly easy runs`;
     } else if (lr.targetPeakKm != null && lr.targetPeakKm < nextKm) {
-      longRunPart = `hold your long run at ${formatTargetLongRun(lr.targetPeakKm, perKm)} and put the growth into easy runs`;
+      // At the peak the goal can carry: say once when the race's own peak does not fit under the weekly goal.
+      const capNote = longRunCapNote(lr.raceTargetKm != null ? { peakKm: lr.targetPeakKm, raceTargetKm: lr.raceTargetKm } : null, next.goalKm, perKm);
+      longRunPart = `hold your long run at ${formatTargetLongRun(lr.targetPeakKm, perKm)}${capNote ? ` (${capNote.charAt(0).toLowerCase()}${capNote.slice(1)})` : ''} and put the growth into easy runs`;
     }
   }
 
@@ -1784,7 +2003,8 @@ function buildNextWeekText(input: WeeklyReviewInput, next: EnduranceWeekPlan): s
  *  - rebuild: "Back to building" once recovery is over;
  *  - hold (after a spike): one step up from the step it should have been, never
  *    from the jump — "Hold around ~28 km next week";
- *  - restart (after a break or a very light week): ~60% of the median week, easy;
+ *  - restart (after a break or a very light week): a share of the median week by the
+ *    gap, easy; the weeks after climb back toward that median;
  *  - build: ~10% up, long run +2 km; maintain: hold the weekly goal, the long
  *    run keeps stepping toward its peak.
  * Null without a plan (no distance target, or nothing run yet).
@@ -1796,7 +2016,9 @@ function plannedNextWeek(input: WeeklyReviewInput): { kind: EnduranceWeekPlan['k
   const u = unitsPerKmOf(input);
   const t = next.targetKm != null ? distanceText(input, next.targetKm) : null;
   const goalText = distanceText(input, next.goalKm);
-  const lr = next.longRunKm != null ? `${longRunWord(next.longRunKm, u)} ${formatTargetLongRun(next.longRunKm, u)}` : null;
+  const lr = next.longRunKm != null
+    ? `${longRunWord(next.longRunKm, u)} ${formatTargetLongRun(next.longRunKm, u)}${next.longRunJump != null ? " (hold it after last week's jump)" : ''}`
+    : null;
   const growth = `${Math.round(WEEKLY_DISTANCE_GROWTH * 100)}%`;
   const rep = isImperial(input) ? '3×0.5 mi' : '3×1 km';
   let text: string;
@@ -1813,8 +2035,10 @@ function plannedNextWeek(input: WeeklyReviewInput): { kind: EnduranceWeekPlan['k
     case 'rebuild': {
       // "Back to building" is the step out of recovery; later rebuild weeks keep rebuilding.
       const lead = rp.plan != null && rp.plan.kind === 'recovery' ? 'Back to building' : 'Keep rebuilding';
+      // At the weekly goal there is nothing left to add 10% toward.
+      const atGoal = next.targetKm != null && next.targetKm >= next.goalKm - 1e-9;
       text = next.restart != null
-        ? `${lead}: start with a couple of easy runs (~${t}), then add ~${growth} a week toward ${goalText}.`
+        ? `${lead}: start with a couple of easy runs (~${t})${atGoal ? '' : `, then add ~${growth} a week toward ${goalText}`}.`
         : `${lead}: ~${t} next week${lr && lead === 'Keep rebuilding' ? `, ${lr}` : ''}.`;
       break;
     }
@@ -1827,7 +2051,8 @@ function plannedNextWeek(input: WeeklyReviewInput): { kind: EnduranceWeekPlan['k
       text = `Restart at ~${t} next week with easy runs${lr ? `; ${lr}` : ''}.`;
       break;
     case 'maintain':
-      text = `Hold ${goalText}; ${lr ? `${lr}, ` : ''}the rest easy.`;
+      // A runner who has not yet run the weekly goal is building to it, not holding it.
+      text = `${next.goalReachedBefore ? 'Hold' : 'Build to'} ${goalText}; ${lr ? `${lr}, ` : ''}the rest easy.`;
       break;
     case 'build':
     default:
@@ -1882,42 +2107,86 @@ function windDownNextWeek(input: WeeklyReviewInput, week: Week): string | null {
 /** The win line of a deload week (muscle goal; a runner's 'light' week is a rest week, not a deload): the lighter loads were the plan. */
 const DELOAD_WIN = 'Deload week done — lighter loads, as planned.';
 
-/** The lift every load cue names, with its weekly buckets; null when no lift is in rotation. */
-function cueLift(input: WeeklyReviewInput, week: Week): { key: string; name: string; weeks: ProgressionSummary[string] } | null {
-  const key = reviewLiftKey(input, week);
-  const weeks = key != null ? input.progression[key] : undefined;
-  return key != null && weeks ? { key, name: liftDisplayName(key, input.exerciseDisplay), weeks } : null;
+/** "110 → 112.5 kg": a load and the next one (the unit once, on the target). */
+function loadPairText(next: NextLoad): string {
+  return arrowPair(String(next.from), withUnit(next.to, next.unit));
 }
 
-/** "Squat 110 → 112.5 kg": the lift and its next load by the lift logger's next-weight rule (lib/liftChange.ts nextWorkingLoad). */
-function nextLoadText(input: WeeklyReviewInput, name: string, key: string, topLoadKg: number): string {
-  const next = nextWorkingLoad(topLoadKg, key, isImperial(input));
-  return `${name} ${arrowPair(String(next.from), withUnit(next.to, next.unit))}`;
+/**
+ * Joins one entry per lift: the first by its display name ("Squat"), the rest by
+ * the short spoken one ("bench", "deadlift"), so a cue reads "Squat 110 → 112.5 kg,
+ * bench 87.5 → 90 kg" and not a row of capitalised names.
+ */
+function liftNames(input: WeeklyReviewInput, keys: string[]): string[] {
+  return keys.map((key, i) => (i === 0 ? liftDisplayName(key, input.exerciseDisplay) : liftShortName(key, input.exerciseDisplay)));
 }
 
-/** After a deload week: back to the pre-deload working weight, plus the usual step ("Back to full loads: Squat 107.5 → 110 kg."). Null without a known load. */
+/** After a deload week: back to the pre-deload working weights, plus the usual step, for every main lift trained ("Back to full loads: Squat 107.5 → 110 kg, bench 85 → 86.5 kg."). Null without a known load. */
 function afterDeloadNextWeek(input: WeeklyReviewInput, week: Week): string | null {
-  const lift = cueLift(input, week);
-  const pre = lift ? priorTopLoadKg(lift.weeks, week.days[0], 4) : null;
-  return lift && pre != null ? `Back to full loads: ${nextLoadText(input, lift.name, lift.key, pre)}.` : null;
+  const keys = cuedLifts(input.progression, week.days[0], reviewLiftKey(input, week))
+    .filter(key => priorTopLoadKg(input.progression[key], week.days[0], 4) != null);
+  if (keys.length === 0) return null;
+  const names = liftNames(input, keys);
+  const parts = keys.map((key, i) => {
+    const pre = priorTopLoadKg(input.progression[key], week.days[0], 4) as number;
+    return `${names[i]} ${loadPairText(nextWorkingLoad(pre, key, isImperial(input)))}`;
+  });
+  return `Back to full loads: ${parts.join(', ')}.`;
 }
 
-/** A good week's progression cue for the headline lift ("Squat 110 → 112.5 kg next session; keep the rest."). Null without a known load. */
+/**
+ * A good week's progression cue, for EVERY main lift trained that week (the
+ * headline lift first), by the lift logger's next-load rule. A lift whose e1RM
+ * fell last week holds its load ("deadlift hold at 130 kg") instead of going up.
+ * One lift alone says the others follow when their reps land. Null without a
+ * known load, or when no lift is ready to go up.
+ */
 function progressionCue(input: WeeklyReviewInput, week: Week): string | null {
-  const lift = cueLift(input, week);
-  const top = lift ? latestTopLoadKg(lift.weeks, week.days[0]) : null;
-  if (!lift || top == null) return null;
   const rebuilding = input.liftReturn != null && !input.liftReturn.regained;
-  return `${rebuilding ? 'Keep rebuilding: ' : ''}${nextLoadText(input, lift.name, lift.key, top)} next session; keep the rest.`;
+  const cues = nextLoadCues(input.progression, week.days[0], { imperial: isImperial(input), leadKey: reviewLiftKey(input, week), rebuilding });
+  const up = cues.filter(c => !c.hold);
+  if (up.length === 0) return null;
+  const held = cues.filter(c => c.hold);
+  const ordered = [...up, ...held];
+  const names = liftNames(input, ordered.map(c => c.key));
+  const raise = up.map((c, i) => `${names[i]} ${loadPairText(c.load)}`);
+  const hold = held.map((c, i) => `${names[up.length + i]} hold at ${withUnit(c.load.from, c.load.unit)}`);
+  let text = raise.join(', ');
+  if (hold.length > 0) text += `; ${hold.join(', ')}`;
+  else if (cues.length === 1) text += '; progress the others as they hit their reps';
+  return `${rebuilding ? 'Keep rebuilding: ' : ''}${text}.`;
 }
 
-/** A week without a single session: ease in at ~90% of the last working weights, starting Monday — never "lock in the missed ones". */
+/** "Squat ~102.5 kg, bench ~80 kg": ~90% of the last working weight of each main lift in rotation (the headline lift first). Null when none is known. */
+function easedLoadsText(input: WeeklyReviewInput, week: Week): string | null {
+  const lead = reviewLiftKey(input, week);
+  const keys: string[] = [];
+  for (const key of [...(lead ? [lead] : []), ...rankLifts(input.progression, liftAnchor(week)).filter(isMainLift)]) {
+    if (keys.length >= MAX_CUED_LIFTS) break;
+    if (!keys.includes(key) && latestTopLoadKg(input.progression[key] ?? [], week.days[0]) != null) keys.push(key);
+  }
+  const names = liftNames(input, keys);
+  const parts = keys.map((key, i) => {
+    const eased = easedLoad(latestTopLoadKg(input.progression[key], week.days[0]) as number, 0.9, isImperial(input));
+    return `${names[i]} ~${withUnit(eased.value, eased.unit)}`;
+  });
+  return parts.length > 0 ? parts.join(', ') : null;
+}
+
+/**
+ * A week without a single session: ease in at ~90% of the last working weights
+ * (every main lift), starting today — the review is read on Monday, so it is
+ * never "starting Monday" — and never "lock in the missed ones". A second week
+ * off asks for one easy session first.
+ */
 function easeBackInNextWeek(input: WeeklyReviewInput, week: Week, target: number): string {
-  const lift = cueLift(input, week);
-  const top = lift ? latestTopLoadKg(lift.weeks, week.days[0]) : null;
-  const eased = top != null ? easedLoad(top, 0.9, isImperial(input)) : null;
-  const weights = lift && eased ? ` (${lift.name} ~${withUnit(eased.value, eased.unit)})` : '';
-  return `Ease back in: ${target} ${plural(target, 'session')} at ~90% of your last working weights${weights}, starting Monday.`;
+  const loads = easedLoadsText(input, week);
+  const weights = loads ? ` (${loads})` : '';
+  const off = weeksOffRunning(input, week);
+  if (off >= 2) {
+    return `${ordinal(off)} week off — book one easy session today at ~90% of your last working weights${weights}, then build back toward ${target} a week.`;
+  }
+  return `Ease back in: ${target} ${plural(target, 'session')} at ~90% of your last working weights${weights}, starting today.`;
 }
 
 /** "Next week" for a mixed / tough week: the concrete action that closes the gap the Slip names. */
@@ -2079,6 +2348,19 @@ function emptyReviewNextWeek(input: WeeklyReviewInput, week: Week, prevWeek: Wee
   return `${head}; ${missing.join(' and ')}.${baseline}`;
 }
 
+/**
+ * A lifter whose week has a sessions target and the sessions to speak of (the
+ * target, or three of them) but no second stat yet — the first week, before there
+ * is a week to compare weight or lifts with — gets a sessions-only review, not
+ * "Not enough data… log meals on 3 days".
+ */
+function muscleSessionsOnly(input: WeeklyReviewInput, week: Week, cands: Candidate[]): boolean {
+  const target = input.weeklySessionsTarget;
+  if (input.goal !== 'muscle' || target == null || target <= 0) return false;
+  if (cands.length !== 1 || cands[0].stat.label !== 'Sessions') return false;
+  return weekSessionCount(input, week) >= Math.min(target, MIN_DATA_DAYS);
+}
+
 function emptyReview(input: WeeklyReviewInput, week: Week, prevWeek: Week, daysWithData: number, statCount: number): WeeklyReview {
   return {
     weekStart: week.days[0],
@@ -2108,7 +2390,7 @@ export function computeWeeklyReview(input: WeeklyReviewInput): WeeklyReview {
     && weekWeighIns(input, week).length >= MIN_WEIGH_INS_WEIGHT_ONLY;
   // An endurance runner with a plan and a full week since signup always gets a real review: a rest or sick week is not "no data".
   const planned = input.goal === 'endurance' && reviewPlans(input).plan != null && reviewPlans(input).plan?.kind !== 'baseline' && week.eligible.size === 7;
-  if (!planned && (daysWithData < MIN_DATA_DAYS || (cands.length < MIN_STATS && !weightOnly))) {
+  if (!planned && !muscleSessionsOnly(input, week, cands) && (daysWithData < MIN_DATA_DAYS || (cands.length < MIN_STATS && !weightOnly))) {
     return emptyReview(input, week, prevWeek, daysWithData, cands.length);
   }
 

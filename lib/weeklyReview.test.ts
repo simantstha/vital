@@ -628,13 +628,18 @@ test('weekRating weight_loss: scales to partial logging (3 of 3 logged days in b
   assert.equal(r.weekRating, 'good');
 });
 
-test('weekRating weight_loss: weight moving the wrong way pulls the week down one level', () => {
+test('weekRating weight_loss: the scale going the wrong way, when the goal card says behind, pulls the week down one level', () => {
   const r = computeWeeklyReview(weightLossInput({
+    verdict: 'behind',
     weightReadings: weigh([...PREV, ...WEEK], i => 80 + i * 0.1),
   }));
   assert.equal(statByLabel(r, 'Days in budget')!.value, '5/7');
   assert.equal(statByLabel(r, 'Weekly avg weight')!.tone, 'watch');
   assert.equal(r.weekRating, 'mixed'); // 5/7 in budget would be good
+  // A week-to-week rise in the mean is a neutral stat while the card (the 21-day pace) says the loss is fine.
+  const fine = computeWeeklyReview(weightLossInput({ verdict: 'on_track', weightReadings: weigh([...PREV, ...WEEK], i => 80 + i * 0.1) }));
+  assert.equal(statByLabel(fine, 'Weekly avg weight')!.tone, 'neutral');
+  assert.equal(fine.weekRating, 'good');
 });
 
 test('weekRating weight_loss: without usable budget days the weight direction alone rates the week', () => {
@@ -646,7 +651,15 @@ test('weekRating weight_loss: without usable budget days the weight direction al
   assert.equal(statByLabel(down, 'Days in budget'), undefined);
   assert.equal(down.weekRating, 'good');
   assert.equal(lossOnly(() => 82).weekRating, 'mixed'); // flat
-  assert.equal(lossOnly(i => 80 + i * 0.1).weekRating, 'tough'); // up
+  // Up: mixed, never tough — the weight alone does not make a tough week (the card's own call, behind, changes the wording only).
+  assert.equal(lossOnly(i => 80 + i * 0.1).weekRating, 'mixed');
+  const behindUp = computeWeeklyReview(base({
+    verdict: 'behind',
+    weightReadings: weigh([...PREV, ...WEEK], i => 80 + i * 0.1),
+    trainingDays: [WEEK[1], WEEK[3]],
+  }));
+  assert.equal(statByLabel(behindUp, 'Weekly avg weight')!.tone, 'watch');
+  assert.equal(behindUp.weekRating, 'mixed');
 });
 
 /** A steady 30 km week before the reviewed one (3 runs): the reviewed week's bar is then the 30 km goal itself. */
@@ -697,7 +710,8 @@ test('weekRating endurance: a week with no run is a rest week ("light") when the
   assert.equal(rest.dataSufficiency.sufficient, true);
   assert.equal(rest.headline, 'No runs this week — rest is fine');
   assert.equal(rest.slip, null);
-  assert.equal(rest.nextWeek, 'Restart at ~12 km next week with easy runs; long run 7 km.');
+  // 8+ days without a run restarts at ~75% of the median (wave 20), and the restart week's long run is at most 40% of it.
+  assert.equal(rest.nextWeek, 'Restart at ~15 km next week with easy runs; long run 6 km.');
   assert.equal(noRunThisWeek(null).weekRating, null); // nothing measured, no sessions target
 });
 
@@ -764,7 +778,8 @@ test('muscle: a run is not a session — Sessions stat, headline and weekRating 
 test('muscle: a week with only a run has 0 sessions and is tough', () => {
   const r = computeWeeklyReview(muscleWeek({ trainingDays: [WEEK[3]], strengthDays: [] }));
   assert.equal(statByLabel(r, 'Sessions')!.value, '0');
-  assert.match(r.headline, /^0 of 4 sessions/);
+  // A week without a session says so (wave 20b: not "0 of 4 sessions, weight +0.3 kg").
+  assert.equal(r.headline, 'No sessions this week');
   assert.equal(r.weekRating, 'tough');
   assert.equal(r.slip, '0 of 4 sessions — none done');
 });
@@ -988,7 +1003,8 @@ test('runner distance copy: miles for imperial users, a bigger shortfall needs a
   const far = computeWeeklyReview(marcusWeek({ workouts: marcusRuns([10, 9, 9], [6, 6, 6]) }));
   assert.equal(far.weekRating, 'mixed'); // exactly 60% of the 30 km goal (the 28 km week before lifts the step to the goal)
   // 18 -> 20 km (+10%) is as far as one week goes; the target is several weeks off, so no "30 km the week after".
-  assert.equal(far.nextWeek, 'Build to ~20 km: long run 12 km, the rest mostly easy runs; then add ~10% a week toward 30 km.');
+  // The long run is at most half of the week (wave 20): 10 of ~20 km.
+  assert.equal(far.nextWeek, 'Build to ~20 km: long run 10 km, the rest mostly easy runs; then add ~10% a week toward 30 km.');
 
   const hit = computeWeeklyReview(marcusWeek({ workouts: marcusRuns([8, 8, 8], [10, 10, 10]) }));
   assert.equal(hit.weekRating, 'good');
@@ -1006,8 +1022,9 @@ test('Marcus (24.5 of 30 km, long run 14 km, peak target 18 km): no 30 km jump, 
   const r = computeWeeklyReview(marcusWeek({ longRun: MARCUS_LONG_RUN }));
   assert.equal(r.weekRating, 'good'); // 24.5 km met this week's ~24 km step...
   assert.equal(r.weekGap, null);
-  // ...and the build toward the goal goes on, from the same shared helper as a short week's.
-  assert.equal(r.nextWeek, 'Build to ~27 km: long run 16 km, the rest mostly easy runs; 30 km the week after.');
+  // ...and the build toward the goal goes on, from the same shared helper as a short week's. The long run is at most half
+  // of the 27 km week (wave 20), and one already run past that is held, so 14 km, not 16.
+  assert.equal(r.nextWeek, 'Build to ~27 km: long run 14 km, the rest mostly easy runs; 30 km the week after.');
   // The same advice after the same km with no step below the goal (a mixed week).
   const mixed = computeWeeklyReview(marcusAgainstGoal([9.5, 9.5, 9], { longRun: MARCUS_LONG_RUN }));
   assert.equal(mixed.weekRating, 'mixed');
@@ -1016,7 +1033,7 @@ test('Marcus (24.5 of 30 km, long run 14 km, peak target 18 km): no 30 km jump, 
   assert.doesNotMatch(r.nextWeek, /add ~6 km/);
   assert.doesNotMatch(r.nextWeek, /Aim for 30 km/);
   const [weekly, longRun, after] = kmFigures(r.nextWeek);
-  assert.ok(longRun <= 16, `long run ${longRun}`);
+  assert.ok(longRun <= 14, `long run ${longRun}`);
   assert.ok(longRun - MARCUS_LONG_RUN.lastKm <= 2);
   assert.ok(longRun <= MARCUS_LONG_RUN.targetPeakKm);
   assert.ok(weekly >= 26.5 && weekly <= 27.5, `weekly ${weekly}`); // ≈ 24.5 x 1.10
@@ -1032,8 +1049,8 @@ test('already at the long-run peak target: the long run is held and all the grow
   assert.equal(past.nextWeek, 'Build to ~27 km: hold your long run at 18 km and put the growth into easy runs; 30 km the week after.');
   // One km below the peak: the step is limited to the room left (+1, not +2).
   const near = computeWeeklyReview(marcusWeek({ longRun: { lastKm: 15, peakKm: 15, targetPeakKm: 16 } }));
-  assert.equal(near.nextWeek, 'Build to ~27 km: long run 16 km, the rest mostly easy runs; 30 km the week after.');
-  // The long run never grows past 60% of the week it sits in (a 27 km week holds a 17 km long run, no longer one).
+  assert.equal(near.nextWeek, 'Build to ~27 km: long run 15 km, the rest mostly easy runs; 30 km the week after.'); // wave 20: held at the 15 km already run, half of the week is 13.5
+  // The long run never grows past half of the week it sits in (a 27 km week holds a 17 km long run that was already run, no longer one).
   const capped = computeWeeklyReview(marcusWeek({ longRun: { lastKm: 17, peakKm: 17, targetPeakKm: 18 } }));
   assert.equal(capped.nextWeek, 'Build to ~27 km: long run 17 km, the rest mostly easy runs; 30 km the week after.');
   for (const r of [atPeak, past, near]) assert.ok(kmFigures(r.nextWeek)[1] <= 18, r.nextWeek);
@@ -1048,12 +1065,12 @@ test('no explicit long-run reading: the long run grows from the longest recent r
     assert.equal(r.nextWeek, 'Build to ~27 km: long run 10.5 km, the rest mostly easy runs; 30 km the week after.');
   }
   const tiny = computeWeeklyReview(marcusWeek({ workouts: [run(WEEK[0], 2), run(WEEK[2], 2), run(WEEK[4], 2), run(PREV[0], 2), run(PREV[2], 2), run(PREV[4], 2)] }));
-  assert.match(tiny.nextWeek, /^Build to ~7 km: longest run 4 km, the rest mostly easy runs/);
+  assert.match(tiny.nextWeek, /^Build to ~7 km: longest run 3\.5 km, the rest mostly easy runs/); // half of a 7 km week
 });
 
 test('long-run data without a race distance (no peak target): +2 km, uncapped by a peak', () => {
   const r = computeWeeklyReview(marcusWeek({ longRun: { lastKm: 14, peakKm: 14, targetPeakKm: null } }));
-  assert.equal(r.nextWeek, 'Build to ~27 km: long run 16 km, the rest mostly easy runs; 30 km the week after.');
+  assert.equal(r.nextWeek, 'Build to ~27 km: long run 14 km, the rest mostly easy runs; 30 km the week after.'); // +2 km would be 16, but half of the week is 13.5 (wave 20)
 });
 
 test('a small gap (growth cap reaches the target): "Hold 30 km…" with the long run up 2 km at most', () => {
@@ -1065,19 +1082,20 @@ test('a small gap (growth cap reaches the target): "Hold 30 km…" with the long
   const small = week({ longRun: MARCUS_LONG_RUN });
   assert.equal(small.weekRating, 'mixed');
   assert.deepEqual(small.weekGap, { kind: 'distance', doneKm: 26.9, targetKm: 30 });
-  // The growth step reaches the goal: next week IS the goal week — hold it, the long run keeps stepping.
-  assert.equal(small.nextWeek, 'Hold 30 km; long run 16 km, the rest easy.');
+  // The growth step reaches the goal: next week IS the goal week. He has never run 30 km, so it is "Build to", not "Hold"
+  // (wave 20); the long run is at most half of the week: 15 km, not 16.
+  assert.equal(small.nextWeek, 'Build to 30 km; long run 15 km, the rest easy.');
   assert.ok(kmFigures(small.nextWeek)[1] - MARCUS_LONG_RUN.lastKm <= 2);
-  assert.equal(week({}).nextWeek, 'Hold 30 km; long run 11.5 km, the rest easy.');
-  assert.equal(week({ longRun: { lastKm: 18, peakKm: 18, targetPeakKm: 18 } }).nextWeek, 'Hold 30 km; long run 18 km, the rest easy.');
+  assert.equal(week({}).nextWeek, 'Build to 30 km; long run 11.5 km, the rest easy.');
+  assert.equal(week({ longRun: { lastKm: 18, peakKm: 18, targetPeakKm: 18 } }).nextWeek, 'Build to 30 km; long run 18 km, the rest easy.');
 });
 
 test('imperial runner: same rules in miles (weekly ~10%, long run +2 km, never past the peak target)', () => {
   const r = computeWeeklyReview(marcusWeek({ unitSystem: 'imperial', longRun: MARCUS_LONG_RUN }));
   assert.equal(r.weekRating, 'good'); // 15.2 mi met this week's ~15 mi step
   assert.equal(r.slip, null);
-  // 15.2 mi x 1.10 = 16.7 -> 17 mi; long run 14 -> 16 km = 9.9 mi (target peak 18 km = 11.2 mi).
-  assert.equal(r.nextWeek, 'Build to ~17 mi: long run 10 mi, the rest mostly easy runs; 18.6 mi the week after.');
+  // 15.2 mi x 1.10 = 16.7 -> 17 mi; long run 14 -> 16 km = 9.9 mi, but half of the week is 8.5 mi and the 14 km (8.7 mi) already run is held (wave 20).
+  assert.equal(r.nextWeek, 'Build to ~17 mi: long run 8.5 mi, the rest mostly easy runs; 18.6 mi the week after.');
   assert.doesNotMatch(r.nextWeek, /\bkm\b/);
   const atPeak = computeWeeklyReview(marcusWeek({ unitSystem: 'imperial', longRun: { lastKm: 18, peakKm: 18, targetPeakKm: 18 } }));
   assert.equal(atPeak.nextWeek, 'Build to ~17 mi: hold your long run at 11 mi and put the growth into easy runs; 18.6 mi the week after.');
@@ -1121,7 +1139,7 @@ test('the review\'s "Next week" km and the goal card\'s this-week step are the s
   for (const c of cases) {
     const input = marcusWeek({ workouts: marcusRuns(undefined, c.runs) });
     const review = computeWeeklyReview(input);
-    const reviewKm = Number(review.nextWeek.match(/(?:Build to ~|Hold )(\d+(?:\.\d+)?)/)![1]);
+    const reviewKm = Number(review.nextWeek.match(/(?:Build to ~|Build to |Hold )(\d+(?:\.\d+)?)/)![1]);
     const progress = computeGoalProgress(goalInputAfter(input, 12));
     assert.equal(reviewKm, c.stepKm, review.nextWeek);
     assert.equal(progress.distance!.stepTargetKm, c.stepKm, `${c.runs}`);
@@ -1245,7 +1263,7 @@ test('a long run that would not leave room for easy runs is left out; a week wit
   assert.equal(none.weekRating, 'light');
   assert.equal(none.weekGap, null);
   assert.equal(none.slip, null);
-  assert.match(none.nextWeek, /^Restart at ~12 km next week with easy runs/);
+  assert.match(none.nextWeek, /^Restart at ~15 km next week with easy runs/); // 8+ days off: ~75% of the median (wave 20)
 });
 
 test('two or more poor recovery signals still win over any distance build: "Go lighter"', () => {
@@ -1377,7 +1395,7 @@ test('weight loss: days out of budget are the gap — Slip names them, Next week
 });
 
 test('weight loss: a good budget week dragged down by the weight trend names the weight', () => {
-  const r = computeWeeklyReview(weightLossInput({ weightReadings: weigh([...PREV, ...WEEK], i => 80 + i * 0.1) }));
+  const r = computeWeeklyReview(weightLossInput({ verdict: 'behind', weightReadings: weigh([...PREV, ...WEEK], i => 80 + i * 0.1) }));
   assert.equal(r.weekRating, 'mixed');
   assert.equal(r.weekGap?.kind, 'weight');
   assert.match(r.slip ?? '', /^Your weekly average weight moved up [\d.]+ kg, away from your goal\.$/);
@@ -1480,7 +1498,7 @@ test('review copy joins numbers to units, "a → b" pairs and "over 4 wks" with 
   assert.equal(runner.win, `You hit this week's step: 24.5 of ~24${NBSP}km (+12% on last week).`);
   assert.equal(runner.nextWeek, `Build to ~27${NBSP}km: long run 10.5${NBSP}km, the rest mostly easy runs; 30${NBSP}km the week after.`);
   const withLongRun = computeWeeklyReviewRaw(marcusWeek({ longRun: MARCUS_LONG_RUN }));
-  assert.equal(withLongRun.nextWeek, `Build to ~27${NBSP}km: long run 16${NBSP}km, the rest mostly easy runs; 30${NBSP}km the week after.`);
+  assert.equal(withLongRun.nextWeek, `Build to ~27${NBSP}km: long run 14${NBSP}km, the rest mostly easy runs; 30${NBSP}km the week after.`);
   // A week graded against its step, and one graded against the goal.
   const short = computeWeeklyReviewRaw(marcusWeek({ workouts: marcusRuns(undefined, [7, 7, 7]) }));
   assert.equal(short.headline, `3 sessions, 21 of ~24${NBSP}km · goal 30${NBSP}km, −4% vs last week`);
@@ -1777,8 +1795,8 @@ test('a deload by loads alone (every top set at 85-90% of its 4-week best, norma
   assert.notEqual(restart.weekRating, 'light');
 });
 
-test('a week with no sessions: no lift win, "Ease back in" at ~90% of the last working weights starting Monday, never "lock in the missed ones"', () => {
-  const squat = ['2026-08-24', '2026-08-31', '2026-09-07', '2026-09-14'].map(w => lwk(w, 141.8, 115)); // last trained week: 09-14; the two weeks after are empty
+test('a week with no sessions: no lift win, "Ease back in" at ~90% of the last working weights starting today, never "lock in the missed ones"', () => {
+  const squat = ['2026-08-24', '2026-08-31', '2026-09-07', '2026-09-14', '2026-09-21'].map(w => lwk(w, 141.8, 115)); // last trained week: 09-21; only the reviewed week is empty
   const r = computeWeeklyReview(liftReview({
     trainingDays: [], strengthDays: [], progression: { squat },
   }));
@@ -1788,11 +1806,11 @@ test('a week with no sessions: no lift win, "Ease back in" at ~90% of the last w
   assert.doesNotMatch(r.win ?? '', /1RM/);
   assert.doesNotMatch(r.slip ?? '', /1RM/);
   assert.equal(r.slip, '0 of 4 sessions — none done');
-  assert.equal(r.nextWeek, 'Ease back in: 4 sessions at ~90% of your last working weights (Squat ~102.5 kg), starting Monday.');
+  assert.equal(r.nextWeek, 'Ease back in: 4 sessions at ~90% of your last working weights (Squat ~102.5 kg), starting today.');
   assert.doesNotMatch(r.nextWeek, /lock in the missed|Book /);
   // Without a known working load the sentence still stands.
   const noLoad = computeWeeklyReview(liftReview({ trainingDays: [], strengthDays: [], progression: { squat: squat.map(w => ({ ...w, topLoadKg: null })) } }));
-  assert.equal(noLoad.nextWeek, 'Ease back in: 4 sessions at ~90% of your last working weights, starting Monday.');
+  assert.equal(noLoad.nextWeek, 'Ease back in: 4 sessions at ~90% of your last working weights, starting today.');
 });
 
 test('missed sessions: the catch-up starts Monday or Tuesday (never a day that is already behind), the single missed one avoids Sunday', () => {
@@ -1816,11 +1834,13 @@ test('building back after a break: no slip for a lower e1RM, no "make up" — Wi
   assert.equal(r.weekRating, 'good');
   const lift = statByLabel(r, 'Squat est. 1RM')!;
   assert.equal(lift.value, '136 kg');
-  assert.equal(lift.comparison, '95% of your pre-break 142 kg');
+  assert.equal(lift.comparison, '95% of your 142 kg pre-break best');
   assert.equal(lift.tone, 'neutral');
   assert.equal(r.slip, null);
-  assert.equal(r.win, 'You hit your 4-sessions target with 4.');
-  assert.equal(r.nextWeek, 'Keep rebuilding: Squat 110 → 112.5 kg next session; keep the rest.');
+  assert.equal(r.win, '4 of 4 again — 2 weeks running.');
+  assert.equal(r.nextWeek, 'Keep rebuilding: Squat 110 → 112.5 kg; progress the others as they hit their reps.');
+  // The rebuild is in the headline: est. 1RM, the shown numbers, pre-break.
+  assert.equal(r.headline, '4 of 4 sessions, Squat est. 1RM 136 of 142 kg pre-break');
   assert.doesNotMatch(JSON.stringify(r), /estimated 1RM is down|vs 4 weeks ago/);
   // Short of the target while rebuilding: the Slip is a fact, Next week is not a catch-up.
   const short = computeWeeklyReview(liftReview({ verdict: 'building', liftReturn: RETURN, trainingDays: [WEEK[0], WEEK[3], PREV[0], PREV[3]], progression: { squat: squatReturn } }));
@@ -1840,7 +1860,7 @@ test('regained the pre-break best: the stat is good and the headline says so', (
   assert.equal(lift.value, '145 kg');
   assert.equal(lift.comparison, 'back above your pre-break 142 kg');
   assert.equal(lift.tone, 'good');
-  assert.equal(r.headline, '4 of 4 sessions, Squat back above your pre-break 142 kg');
+  assert.equal(r.headline, '4 of 4 sessions, Squat est. 1RM back above pre-break 142 kg');
 });
 
 test('a good week names the next load for the headline lift (the lift logger\'s next-weight rule)', () => {
@@ -1850,14 +1870,15 @@ test('a good week names the next load for the headline lift (the lift logger\'s 
   };
   const r = computeWeeklyReview(liftReview({ progression }));
   assert.equal(r.weekRating, 'good');
-  assert.equal(r.nextWeek, 'Squat 110 → 112.5 kg next session; keep the rest.');
-  assert.doesNotMatch(r.nextWeek, /Repeat this week/);
-  // A lift outside the lower body steps by 1.25 kg (rounded to 0.5): 80 → 81.5.
+  // Every main lift that was trained is named (wave 20b: not just "Squat ... keep the rest"), by the same next-load rule.
+  assert.equal(r.nextWeek, 'Squat 110 → 112.5 kg, bench 80 → 81.5 kg.');
+  assert.doesNotMatch(r.nextWeek, /Repeat this week|keep the rest/);
+  // A lift outside the lower body steps by 1.25 kg (rounded to 0.5): 80 → 81.5. One lift alone says the others follow.
   const bench = computeWeeklyReview(liftReview({ progression: { 'bench press': progression['bench press'] } }));
-  assert.equal(bench.nextWeek, 'Bench Press 80 → 81.5 kg next session; keep the rest.');
+  assert.equal(bench.nextWeek, 'Bench Press 80 → 81.5 kg; progress the others as they hit their reps.');
   // Pounds.
   const lb = computeWeeklyReview(liftReview({ unitSystem: 'imperial', progression }));
-  assert.equal(lb.nextWeek, 'Squat 243 → 248 lb next session; keep the rest.');
+  assert.equal(lb.nextWeek, 'Squat 243 → 248 lb, bench 176 → 179 lb.');
   // No known load (older payloads): the old sentence still applies.
   const old = computeWeeklyReview(liftReview({ progression: { squat: progression.squat.map(w => ({ ...w, topLoadKg: null })) } }));
   assert.equal(old.nextWeek, 'Repeat this week: same routine, same training days.');
@@ -1896,7 +1917,7 @@ test('the review says the target was hit exactly when the card does (two weeks o
     weightReadings: [], intakeDays: [], budget: null, progression, trainingDays: days, strengthDays: days, workouts: [], restingHr: [], hrv: [], sleepMinutes: [], sleepGoalMinutes: 480,
   });
   const review = computeWeeklyReview(liftReview({ progression, trainingDays: days }));
-  assert.match(review.win ?? '', /You hit your 4-sessions target with 4\./);
+  assert.equal(review.win, '4 of 4 again — 2 weeks running.'); // wave 20b: not "You hit your 4-sessions target with 4."
   assert.equal(statByLabel(review, 'Sessions')!.tone, 'good');
   assert.ok(!card.reasons.some(r => r.kind === 'adherence' && r.tone === 'watch'), JSON.stringify(card.reasons));
   assert.equal(card.reasons.find(r => r.kind === 'week_sessions')!.text, plainSpaces('4 of 4 sessions this week'));
@@ -1935,8 +1956,9 @@ test('E. a week short of weigh-ins for a weekly mean falls back to the trend cha
   assert.match(r.win ?? '', /^Your weight trend is down/);
 });
 
-test('E. a too-fast week names the weight as the gap, and Next week says to eat up to the full calorie target — never a weekend tip', () => {
+test('E. a too-fast week (the card says so) names the weight as the gap, and Next week says to eat up to the full calorie target — never a weekend tip', () => {
   const input = (previousNextWeek: string | null) => weightLossInput({
+    verdict: 'too_fast',
     // Down 1.0 kg on the weekly mean (1.2%), calories over budget on most days with a heavy weekend.
     weightReadings: [...weigh(PREV, () => 83), ...weigh(WEEK, () => 82)],
     intakeDays: intake([...PREV, ...WEEK], [2300, 2250, 2400, 2300, 2350, 2500, 2450, 2400, 2450, 2500, 2400, 2450, 2500, 2450]),
@@ -1946,7 +1968,7 @@ test('E. a too-fast week names the weight as the gap, and Next week says to eat 
   assert.equal(statByLabel(first, 'Weekly avg weight')!.tone, 'watch');
   assert.equal(first.weekGap?.kind, 'weight');
   assert.equal(first.weekRating, 'tough');
-  assert.match(first.slip ?? '', /^Your weekly average dropped 1 kg — faster than is comfortable to sustain\.$/);
+  assert.match(first.slip ?? '', /^Your 3-week loss pace is faster than is comfortable to sustain\.$/);
   assert.ok(TOO_FAST_TIPS.includes(first.nextWeek), first.nextWeek);
   assert.doesNotMatch(first.nextWeek, /Saturday/);
   // Two weeks running never gives the same tip.
@@ -2059,7 +2081,7 @@ test('F. afterwards a steady weight rates good and is a win; Next week never rep
   const r = holding(null);
   assert.match(r.headline, /^Holding at 84\.1 kg, 3 workouts$/);
   assert.equal(r.weekRating, 'good');
-  assert.equal(r.win, 'Holding at 84.1 kg, inside your target range.');
+  assert.equal(r.win, 'Holding at 84.1 kg, within 1 kg of 84 kg.');
   assert.equal(r.slip, null);
   assert.doesNotMatch(r.nextWeek, /Saturday|budget|trim/);
   const again = holding(r.nextWeek);
@@ -2067,7 +2089,7 @@ test('F. afterwards a steady weight rates good and is a win; Next week never rep
   assert.doesNotMatch(again.nextWeek, /Saturday|budget|trim/);
   // Imperial.
   const lb = computeWeeklyReviewRaw(reachedWeekInput({ reachedAt: PREV[2], unitSystem: 'imperial', weightReadings: [...weigh(PREV, () => 84), ...weigh(WEEK, () => 84.1)] }));
-  assert.equal(lb.win, `Holding at 185.4${NBSP}lb, inside your target range.`);
+  assert.equal(lb.win, `Holding at 185.4${NBSP}lb, within 2.2${NBSP}lb of 185.2${NBSP}lb.`);
   const reachedLb = computeWeeklyReviewRaw(reachedWeekInput({ unitSystem: 'imperial' }));
   assert.equal(reachedLb.headline, `You reached 185.2${NBSP}lb this week`);
 });
@@ -2172,8 +2194,8 @@ test('the week after a spike, holding as advised is good: win says so, no "fell 
   assert.equal(statByLabel(r, 'Volume')!.tone, 'good');
   assert.doesNotMatch(`${r.headline} ${r.win} ${r.slip} ${r.nextWeek}`, /fell|Rebuild|−30%/);
   // Next the step reaches the goal: hold it, long run stepping +2 km.
-  // (the 40 km week's 16 km long run is still inside the 14 days the long run grows from)
-  assert.equal(r.nextWeek, 'Hold 30 km; long run 18 km, the rest easy.');
+  // (the 40 km week's 16 km long run is still inside the 14 days the long run grows from; half of the week is 15 km, so it is held at 16)
+  assert.equal(r.nextWeek, 'Hold 30 km; long run 16 km, the rest easy.');
   // Not holding (another 40 km) is the same mistake again, not praise.
   const again = computeWeeklyReview(planReview([15, 17, 19, 21, 23, 40, 40]));
   assert.equal(again.weekRating, 'mixed');
@@ -2199,7 +2221,8 @@ test('illness: a sick week that ended in a break is "light" with a real review, 
   assert.equal(back.win, 'Back out there: 15 km after the break.');
   assert.doesNotMatch(back.headline, /well above|safe step/);
   assert.equal(statByLabel(back, 'Volume')!.comparison, 'back after 6 km last week');
-  assert.equal(back.nextWeek.startsWith('Build to ~17 km'), true);
+  // The comeback climbs back toward the pre-break median in rungs (wave 20): the week after a good restart is 80% of ~26.5 km.
+  assert.equal(back.nextWeek.startsWith('Build to ~21 km'), true);
 });
 
 test('a 2-week gap: the 0-run weeks get a real review ("rest is fine"), then a gentle restart — never "tough, 18 km short"', () => {
@@ -2292,4 +2315,222 @@ test('a runner with distance data is never told to "wear your watch so volume an
     sleepMinutes: WEEK.map(day => ({ day, value: 470 })),
   }));
   assert.equal(sessionsOnly.weekGap?.kind, 'sessions');
+});
+
+// ── Wave 20b: wins that vary, weeks off, every main lift's next load, week over week, the rebuild, first-week sessions ──
+
+const onTarget = (w: string[]) => [w[0], w[1], w[3], w[5]];
+
+test('weeks on target read differently: "You hit all 4 planned sessions." → "4 of 4 again — 2 weeks running." → …, never the same line two weeks in a row', () => {
+  const win = (weeks: string[][]) => computeWeeklyReview(liftReview({ trainingDays: weeks.flatMap(onTarget), signupDay: '2026-06-01' })).win;
+  assert.equal(win([WEEK]), 'You hit all 4 planned sessions.');
+  assert.equal(win([WEEK, PREV]), '4 of 4 again — 2 weeks running.');
+  assert.equal(win([WEEK, PREV, PREV2]), '4 of 4 again — 3 weeks running.');
+  assert.equal(win([WEEK, PREV2]), 'You hit all 4 planned sessions.', 'a missed week in between ends the run');
+  // A month in: the run is capped at the weeks the review can see, and the wording alternates week to week.
+  const allDays = Array.from({ length: 14 }, (_, k) => onTarget(Array.from({ length: 7 }, (_, i) => addDays(WEEK_START, i + 7 * (k - 8))))).flat();
+  const wins = Array.from({ length: 6 }, (_, k) => computeWeeklyReview(liftReview({ weekStart: addDays(WEEK_START, 7 * k), trainingDays: allDays, weightReadings: [], signupDay: '2026-06-01' })).win);
+  for (let k = 1; k < wins.length; k += 1) assert.notEqual(wins[k], wins[k - 1], `weeks ${k - 1} and ${k}: ${wins[k]}`);
+  assert.ok(wins.every(w => w === '4 of 4 again — a month running.' || w === 'Another full week: all 4 planned sessions done.'), wins.join(' | '));
+  // One planned session a week.
+  const one = computeWeeklyReview(liftReview({ weeklySessionsTarget: 1, trainingDays: [WEEK[2]], progression: {} }));
+  assert.equal(one.win, 'You hit your planned session.');
+});
+
+test('a week with no session: the headline says so (2nd, 3rd week off), weight gain is not the win, and the weeks never repeat word for word', () => {
+  const lifts = (through: string) => ({ squat: ['2026-08-24', '2026-08-31', '2026-09-07', '2026-09-14', '2026-09-21'].filter(w => w <= through).map(w => lwk(w, 141.8, 115)) });
+  const first = computeWeeklyReview(liftReview({ trainingDays: [], strengthDays: [], progression: lifts('2026-09-21'), signupDay: '2026-06-01' }));
+  const second = computeWeeklyReview(liftReview({ trainingDays: [], strengthDays: [], progression: lifts('2026-09-14'), signupDay: '2026-06-01' }));
+  const third = computeWeeklyReview(liftReview({ trainingDays: [], strengthDays: [], progression: lifts('2026-09-07'), signupDay: '2026-06-01' }));
+  assert.equal(first.headline, 'No sessions this week');
+  assert.equal(second.headline, 'No sessions this week (2nd week off)');
+  assert.equal(third.headline, 'No sessions this week (3rd week off)');
+  // The scale went up 0.2 kg: still on the card as a number, but not the win, and the push is not "0 of 4 sessions, weight +0.2 kg".
+  for (const r of [first, second, third]) {
+    assert.equal(r.win, null);
+    assert.equal(statByLabel(r, 'Weekly avg weight')!.tone, 'neutral');
+    assert.doesNotMatch(JSON.stringify(r), /weekly average weight is up/);
+    assert.doesNotMatch(r.nextWeek, /starting Monday/);
+  }
+  assert.equal(first.slip, '0 of 4 sessions — none done');
+  assert.equal(second.slip, '0 of 4 sessions — 2nd week in a row');
+  assert.equal(third.slip, '0 of 4 sessions — 3rd week in a row');
+  assert.equal(first.nextWeek, 'Ease back in: 4 sessions at ~90% of your last working weights (Squat ~102.5 kg), starting today.');
+  assert.equal(second.nextWeek, '2nd week off — book one easy session today at ~90% of your last working weights (Squat ~102.5 kg), then build back toward 4 a week.');
+  assert.equal(new Set([first, second, third].map(r => `${r.headline}|${r.slip}|${r.nextWeek}`)).size, 3);
+  // Weeks before the user signed up are not weeks off.
+  const fresh = computeWeeklyReview(liftReview({ trainingDays: [], strengthDays: [], progression: {}, signupDay: WEEK_START }));
+  assert.equal(fresh.headline, 'No sessions this week', 'one week since signup is not a second week');
+});
+
+test('muscle weight gain is the win in a week with a session, not in a week without one', () => {
+  // Two of four sessions: the sessions stat is not a win, so the up-0.2 kg weekly average is.
+  const trained = computeWeeklyReview(liftReview({ trainingDays: [WEEK[0], WEEK[3]] }));
+  assert.equal(statByLabel(trained, 'Weekly avg weight')!.tone, 'good');
+  assert.match(trained.win ?? '', /^Your weekly average weight is up 0\.\d kg\.$/);
+  const none = computeWeeklyReview(liftReview({ trainingDays: [], strengthDays: [] }));
+  assert.equal(statByLabel(none, 'Weekly avg weight')!.tone, 'neutral');
+  assert.equal(none.win, null);
+});
+
+test('a flat weekly average reads "no change", not "0 kg"', () => {
+  const r = computeWeeklyReview(liftReview({ weightReadings: weigh([...PREV, ...WEEK], () => 80), progression: {} }));
+  const weight = statByLabel(r, 'Weekly avg weight')!;
+  assert.equal(weight.value, 'no change');
+  assert.equal(weight.comparison, 'vs the week before');
+  assert.equal(r.headline, '4 of 4 sessions, weight steady');
+  // Weight loss keeps its own wording (not this change's concern).
+  assert.equal(statByLabel(computeWeeklyReview(weightLossInput({ weightReadings: weigh([...PREV, ...WEEK], () => 82) })), 'Weekly avg weight')!.value, '0 kg');
+});
+
+test('the first week after 4 of 4 sessions is a sessions-only review, not "Not enough data"', () => {
+  const r = computeWeeklyReview(liftReview({ weightReadings: [], progression: {}, trainingDays: onTarget(WEEK), strengthDays: onTarget(WEEK), signupDay: WEEK_START }));
+  assert.equal(r.dataSufficiency.sufficient, true);
+  assert.equal(r.dataSufficiency.statCount, 1);
+  assert.equal(r.headline, '4 of 4 sessions');
+  assert.equal(r.win, 'You hit all 4 planned sessions.');
+  assert.equal(r.weekRating, 'good');
+  assert.doesNotMatch(r.nextWeek, /log meals|Log meals/);
+  // Three of four is still a review (one short); two of four, or no target, is still "not enough data".
+  const three = computeWeeklyReview(liftReview({ weightReadings: [], progression: {}, trainingDays: [WEEK[0], WEEK[2], WEEK[4]], signupDay: WEEK_START }));
+  assert.equal(three.dataSufficiency.sufficient, true);
+  assert.equal(three.slip, '3 of 4 sessions — one short');
+  assert.equal(computeWeeklyReview(liftReview({ weightReadings: [], progression: {}, trainingDays: [WEEK[0], WEEK[2]], signupDay: WEEK_START })).dataSufficiency.sufficient, false);
+  assert.equal(computeWeeklyReview(liftReview({ weeklySessionsTarget: null, weightReadings: [], progression: {}, trainingDays: onTarget(WEEK), signupDay: WEEK_START })).dataSufficiency.sufficient, false);
+});
+
+const triple = (lastWeek: { squat: number; bench: number; deadlift: number }, deadliftPrev = 160) => {
+  const weeks = ['2026-08-24', '2026-08-31', '2026-09-07', '2026-09-14', '2026-09-21'];
+  return {
+    squat: [...weeks.map(w => lwk(w, 135, 107.5)), lwk(WEEK_START, 138, lastWeek.squat)],
+    'bench press': [...weeks.map(w => lwk(w, 100, 80)), lwk(WEEK_START, 101, lastWeek.bench)],
+    deadlift: [...weeks.map(w => lwk(w, deadliftPrev, 132.5)), lwk(WEEK_START, 160, lastWeek.deadlift)],
+  } as ProgressionSummary;
+};
+
+test('a good week cues every main lift trained: "Squat 110 → 112.5 kg, bench 80 → 81.5 kg, deadlift 130 → 132.5 kg"; a lift that went backwards holds', () => {
+  const all = computeWeeklyReview(liftReview({ progression: triple({ squat: 110, bench: 80, deadlift: 130 }) }));
+  assert.equal(all.nextWeek, 'Squat 110 → 112.5 kg, bench 80 → 81.5 kg, deadlift 130 → 132.5 kg.');
+  // Deadlift's e1RM fell 6% (170 -> 160): hold it.
+  const hold = computeWeeklyReview(liftReview({ progression: triple({ squat: 110, bench: 80, deadlift: 130 }, 170) }));
+  assert.equal(hold.nextWeek, 'Squat 110 → 112.5 kg, bench 80 → 81.5 kg; deadlift hold at 130 kg.');
+  assert.doesNotMatch(hold.nextWeek, /keep the rest/);
+  // Only one lift ready: the others follow when their reps land.
+  const only = computeWeeklyReview(liftReview({ progression: { squat: triple({ squat: 110, bench: 80, deadlift: 130 }).squat } }));
+  assert.equal(only.nextWeek, 'Squat 110 → 112.5 kg; progress the others as they hit their reps.');
+  // A main lift not trained in the reviewed week is not cued; an accessory never is.
+  const p = triple({ squat: 110, bench: 80, deadlift: 130 });
+  const partial = computeWeeklyReview(liftReview({ progression: { squat: p.squat, 'lat pulldown': p['bench press'] } }));
+  assert.equal(partial.nextWeek, 'Squat 110 → 112.5 kg; progress the others as they hit their reps.');
+  // Pounds.
+  assert.equal(computeWeeklyReview(liftReview({ unitSystem: 'imperial', progression: triple({ squat: 110, bench: 80, deadlift: 130 }) })).nextWeek, 'Squat 243 → 248 lb, bench 176 → 179 lb, deadlift 287 → 292 lb.');
+});
+
+test('after a deload every main lift goes back to full loads; a week off eases every one in', () => {
+  const weeks = ['2026-08-24', '2026-08-31', '2026-09-07', '2026-09-14', '2026-09-21'];
+  const progression: ProgressionSummary = {
+    squat: [...weeks.map(w => lwk(w, 132.6, 107.5)), lwk(WEEK_START, 114.1, 92.5, 2, 1920)],
+    'bench press': [...weeks.map(w => lwk(w, 100, 80)), lwk(WEEK_START, 86, 70, 2, 1500)],
+  };
+  const deload = computeWeeklyReview(liftReview({ progression }));
+  assert.equal(deload.weekRating, 'light');
+  assert.equal(deload.nextWeek, 'Back to full loads: Squat 107.5 → 110 kg, bench 80 → 81.5 kg.');
+  const off = computeWeeklyReview(liftReview({ trainingDays: [], strengthDays: [], progression: { squat: weeks.map(w => lwk(w, 141.8, 115)), 'bench press': weeks.map(w => lwk(w, 110, 90)) }, signupDay: '2026-06-01' }));
+  assert.equal(off.nextWeek, 'Ease back in: 4 sessions at ~90% of your last working weights (Squat ~102.5 kg, bench ~80 kg), starting today.');
+});
+
+test('before the first 4-week comparison the review and the goal card quote the same week over week, rounded from the same shown numbers', () => {
+  // 100.4 -> 102.6 kg: the shown endpoints are 100 -> 103, so +3 (rounding the 2.2 kg difference would say +2).
+  const progression: ProgressionSummary = { squat: [lwk('2026-09-21', 100.4, 80), lwk(WEEK_START, 102.6, 82.5)] };
+  const review = computeWeeklyReview(liftReview({ progression, signupDay: '2026-09-14' }));
+  const stat = statByLabel(review, 'Squat est. 1RM')!;
+  assert.equal(stat.value, '+3 kg');
+  assert.equal(stat.comparison, 'vs last trained week');
+  assert.match(review.headline, /Squat est\. 1RM \+3 kg vs last trained wk$/);
+  const monday = '2026-10-05'; // the card, read the morning the review is (this week has no sets yet)
+  const days = [...onTarget(PREV), ...onTarget(WEEK)];
+  const card = computeGoalProgress({
+    goal: 'muscle', todayKey: monday, target: { weightKg: null, date: null, weeklySessions: 4 }, start: { weightKg: 80, startedAt: '2026-09-14T09:00:00.000Z', startedDay: '2026-09-14' },
+    weightReadings: [], intakeDays: [], budget: null, progression, trainingDays: days, strengthDays: days, workouts: [], restingHr: [], hrv: [], sleepMinutes: [], sleepGoalMinutes: 480,
+  });
+  assert.equal(plainSpaces(card.reasons.find(r => r.kind === 'lift')!.text), 'Squat est. 1RM +3 kg vs last trained week');
+});
+
+test('rebuilding: the headline carries the rebuild with the shown numbers, and the percentage is computed from them', () => {
+  // 136.5 -> 137 shown, 142.4 -> 142 shown: 96%, not the 95% the unrounded numbers give.
+  const r = computeWeeklyReview(liftReview({
+    verdict: 'building', liftReturn: { ...RETURN, preBreakKg: 142.4, recentKg: 136.5 }, progression: { squat: squatReturn },
+  }));
+  assert.equal(r.headline, '4 of 4 sessions, Squat est. 1RM 137 of 142 kg pre-break');
+  assert.equal(statByLabel(r, 'Squat est. 1RM')!.value, '137 kg');
+  assert.equal(statByLabel(r, 'Squat est. 1RM')!.comparison, '96% of your 142 kg pre-break best');
+  // Regained exactly: the stat and headline say "back at".
+  const at = computeWeeklyReview(liftReview({ liftReturn: { ...RETURN, recentKg: 142, pct: 100, regained: true }, progression: { squat: [...squatReturn.slice(0, 4), lwk(WEEK_START, 142, 115)] } }));
+  assert.equal(at.headline, '4 of 4 sessions, Squat est. 1RM back at pre-break best');
+  // A week off while returning is a week off, not a rebuild headline.
+  const off = computeWeeklyReview(liftReview({ liftReturn: RETURN, trainingDays: [], strengthDays: [], progression: { squat: squatReturn.slice(0, 4) } }));
+  assert.match(off.headline, /^No sessions this week/);
+  assert.doesNotMatch(off.headline, /pre-break/);
+});
+
+// ── wave 20c: the review's too-fast / too-slow call is the goal card's, reached copy depends on the budget ──
+
+test('B1. a week is not called too fast off one week-to-week drop in the mean: the card (the 21-day pace) decides', () => {
+  // The weekly mean falls 1 kg (about 1.2% of bodyweight); 4 of the 6 logged days are in budget.
+  const input = (verdict: WeeklyReviewInput['verdict']) => weightLossInput({
+    verdict,
+    weightReadings: [...weigh(PREV, () => 83), ...weigh(WEEK, () => 82)],
+    intakeDays: intake([...PREV, ...WEEK.slice(0, 6)], [2300, 2250, 2400, 2300, 2350, 2500, 2450, 1900, 1950, 2000, 2050, 2450, 2500]),
+  });
+  // The card says progressing (inside the safe band): the drop is a neutral-to-good stat, not "faster than is comfortable".
+  const fine = computeWeeklyReview(input('progressing'));
+  assert.equal(statByLabel(fine, 'Weekly avg weight')!.value, '−1 kg');
+  assert.equal(statByLabel(fine, 'Weekly avg weight')!.tone, 'good');
+  assert.equal(fine.weekRating, 'mixed'); // 4 of 6 logged days in budget — rated on the budget, not the weight
+  assert.equal(fine.weekGap?.kind, 'budget');
+  assert.doesNotMatch(`${fine.win} ${fine.slip} ${fine.nextWeek}`, /faster than|too fast|slower loss/);
+  assert.ok(!TOO_FAST_TIPS.includes(fine.nextWeek), fine.nextWeek);
+  // The card says too fast: the same week is flagged, and a flag from the weight never makes the week tough.
+  const fast = computeWeeklyReview(input('too_fast'));
+  assert.equal(statByLabel(fast, 'Weekly avg weight')!.tone, 'watch');
+  assert.equal(fast.weekRating, 'mixed');
+  assert.equal(fast.weekGap?.kind, 'weight');
+  assert.match(fast.slip ?? '', /faster than is comfortable to sustain/);
+  assert.ok(TOO_FAST_TIPS.includes(fast.nextWeek), fast.nextWeek);
+});
+
+test('B1. a good budget week with a drop in the mean is good unless the card says too fast; then mixed, never tough', () => {
+  const week = (verdict: WeeklyReviewInput['verdict']) => computeWeeklyReview(weightLossInput({
+    verdict,
+    weightReadings: [...weigh(PREV, () => 83), ...weigh(WEEK, () => 82)],
+  }));
+  assert.equal(week('on_track').weekRating, 'good');
+  assert.equal(week('on_track').weekGap, null);
+  assert.equal(week('too_fast').weekRating, 'mixed');
+});
+
+test('B8. a reached goal says "switch to maintenance" until the calorie target already is maintenance, then "stay on maintenance"', () => {
+  const tips = (budget: WeeklyReviewInput['budget']) => Array.from({ length: 6 }, (_, k) => {
+    const start = addDays(WEEK_START, 7 * k);
+    const days = Array.from({ length: 14 }, (_, i) => addDays(start, i - 7));
+    return computeWeeklyReview(reachedWeekInput({
+      weekStart: start,
+      reachedAt: days[2],
+      budget,
+      weightReadings: weigh(days, i => 84 + (i % 2 === 0 ? 0.05 : -0.05)),
+      intakeDays: intake(days, Array.from({ length: 14 }, () => 2000)),
+      trainingDays: [days[8], days[10], days[12]],
+    })).nextWeek;
+  });
+  const deficit = tips({ targetKcal: 2000, proteinG: 150, floorKcal: 1500, formulaTdee: 2500, learnedTdee: null, tdeeConfidence: null });
+  const unknown = tips({ targetKcal: 2000, proteinG: 150, floorKcal: 1500, formulaTdee: null, learnedTdee: null, tdeeConfidence: null });
+  for (const list of [deficit, unknown]) {
+    assert.ok(list.some(t => /^Switch to maintenance in Goals/.test(t)), list.join(' | '));
+    assert.ok(list.some(t => /switch to maintenance and enjoy holding here/.test(t)), list.join(' | '));
+    assert.ok(!list.some(t => /stay on maintenance|already at maintenance/.test(t)), 'a fat-loss goal that is reached but not switched is not on maintenance');
+  }
+  const atMaintenance = tips({ targetKcal: 2000, proteinG: 150, floorKcal: 1500, formulaTdee: 2050, learnedTdee: null, tdeeConfidence: null });
+  assert.ok(atMaintenance.some(t => /already at maintenance/.test(t)), atMaintenance.join(' | '));
+  assert.ok(atMaintenance.some(t => /stay on maintenance and enjoy holding here/.test(t)), atMaintenance.join(' | '));
+  assert.ok(!atMaintenance.some(t => /^Switch to maintenance|switch to maintenance and enjoy/.test(t)), atMaintenance.join(' | '));
 });
