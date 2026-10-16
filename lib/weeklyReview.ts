@@ -468,7 +468,8 @@ function reachedWeek(input: WeeklyReviewInput, week: Week): ReachedWeek | null {
   return {
     targetKg: input.targetWeightKg ?? null,
     thisWeek: input.reachedAt != null && week.set.has(input.reachedAt),
-    meanKg: cur.length > 0 ? (mean(cur.map(d => d.rawKg)) as number) : null,
+    // Rounded once to the 0.1 kg the card prints its weekly average at, so "Holding at 84.1 kg" is the same number on both.
+    meanKg: cur.length > 0 ? round1(mean(cur.map(d => d.rawKg)) as number) : null,
   };
 }
 

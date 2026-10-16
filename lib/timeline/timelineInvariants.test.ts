@@ -509,3 +509,53 @@ invariant(WEIGHT, 'trim advice is at most 200 kcal a day in one step and never g
   assert.ok(trims > 0, `${name}: no trim advice appeared, so this invariant checked nothing`);
   return out;
 });
+
+// One progress weight (wave 21b): the card's "down X kg" (early read, "since the start"), the opener's "X of Y kg down" and the coach's
+// "-X kg since start" are the same number as `current.changeKg`, and `progressPct` is that number against the goal's span. A change
+// computed from the unrounded weekly mean next to a display of the rounded one reads "down 1 kg" over "0.9 of 8 kg".
+const EARLY_DOWN = /\bdown ([\d.]+) kg(?: on the scale)? in \d+ days?\b/i;
+const DOWN_SINCE_START = /\bDown ([\d.]+) kg since the start\b/;
+const OPENER_PROGRESS = /You're ([\d.]+) of ([\d.]+) kg (down|up)\b/;
+const COACH_SINCE_START = /([+\-−]?[\d.]+) kg since start at ([\d.]+) kg/;
+const SAME_DISPLAYED_KG = 0.05;
+
+invariant(WEIGHT, 'every "down X kg" / "X of Y kg" figure agrees with current.changeKg (one rounded progress weight)', (snaps, name) => {
+  const out: Violation[] = [];
+  let compared = 0;
+  const signed = (s: string): number => Number(s.replace('−', '-'));
+  for (const snap of snaps) {
+    const cur = snap.card?.current;
+    if (!snap.card || cur?.changeKg == null || cur.startWeightKg == null) continue;
+    const change = cur.changeKg;
+    const lost = -change;
+    const check = (where: string, text: string, said: number, expected: number, what: string): void => {
+      compared++;
+      if (Math.abs(said - expected) >= SAME_DISPLAYED_KG) out.push({ snap, detail: `${where}: "${visible(text)}" says ${what} ${said} kg, current.changeKg is ${change} (${expected})` });
+    };
+    for (const t of [...cardTexts(snap), ...coachTexts(snap)]) {
+      const text = plain(t.text);
+      const early = EARLY_DOWN.exec(text) ?? DOWN_SINCE_START.exec(text);
+      if (early) check(t.where, text, Number(early[1]), lost, 'down');
+      const opener = OPENER_PROGRESS.exec(text);
+      if (opener) {
+        check(t.where, text, Number(opener[1]), opener[3] === 'down' ? lost : change, opener[3]);
+        const span = snap.card.target.weightKg != null ? Math.abs(cur.startWeightKg - snap.card.target.weightKg) : null;
+        if (span != null) check(t.where, text, Number(opener[2]), span, 'of');
+      }
+      const coach = COACH_SINCE_START.exec(text);
+      if (coach) {
+        check(t.where, text, signed(coach[1]), change, 'since start');
+        check(t.where, text, Number(coach[2]), cur.startWeightKg, 'start at');
+      }
+    }
+    // progressPct is the same rounded change against the goal's span (a reached goal is 100 by rule).
+    const target = snap.card.target.weightKg;
+    if (cur.progressPct != null && target != null && snap.card.verdict !== 'reached' && cur.startWeightKg !== target) {
+      const exact = Math.min(100, Math.max(0, (lost / (cur.startWeightKg - target)) * 100));
+      compared++;
+      if (Math.abs(cur.progressPct - exact) > 0.5 + 1e-6) out.push({ snap, detail: `progressPct ${cur.progressPct} but changeKg ${change} of a ${cur.startWeightKg} -> ${target} kg goal is ${Math.round(exact * 100) / 100}%` });
+    }
+  }
+  assert.ok(compared > 0, `${name}: no since-start figure was compared, so this invariant checked nothing`);
+  return out;
+});

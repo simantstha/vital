@@ -846,9 +846,12 @@ function buildWeightBlock(input: GoalProgressInput): WeightBlock {
     }
   }
 
-  const scaleKg = days.length > 0 ? days[days.length - 1].rawKg : null;
+  // The progress weight is rounded ONCE, here, to the 0.1 kg every surface prints it at: `changeKg`, `progressPct`, "to go", the
+  // headline's "down X", the coach lines, the opener (which reads `weightRead.weekMeanKg`, the same number) and the review all
+  // derive from it. Rounding only at display time put "down 1 kg" (off 91.05) next to "0.9 of 8 kg" (off the printed 91.1).
+  const scaleKg = days.length > 0 ? round1(days[days.length - 1].rawKg) : null;
   const week = lastWeighInDay != null ? meanOver(days, lastWeighInDay, 7) : null;
-  const weekMeanKg = week != null && week.n >= WEEK_MEAN_MIN_WEIGH_INS ? week.meanKg : null;
+  const weekMeanKg = week != null && week.n >= WEEK_MEAN_MIN_WEIGH_INS ? round1(week.meanKg) : null;
   const progressKg = weekMeanKg ?? scaleKg;
 
   // ETA only with a reliable rate pointing toward the target, a meaningful

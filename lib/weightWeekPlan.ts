@@ -213,7 +213,7 @@ export interface WeightWeekPlan {
   farBehind: boolean;
   /** The month the projection lands in (far behind only, and only when it can be projected). */
   projectedEta: string | null;
-  /** Plateau / moving again: the weekly average the plateau held at. */
+  /** Plateau / moving again: the weekly average the plateau held at (rounded to 0.1 kg once, here, as every surface prints it). */
   plateauMeanKg: number | null;
   /** Maintenance: the weekly average it held at. */
   heldKg: number | null;
@@ -818,7 +818,7 @@ export function weightWeekPlan(input: WeightPlanInput): WeightWeekPlan | null {
       action: plateauAction(c, cause),
       plateauCause: cause,
       pace: paceOf(read),
-      plateauMeanKg: read.plateau.weeklyMeanKg,
+      plateauMeanKg: round1(read.plateau.weeklyMeanKg),
     };
   }
 
@@ -835,7 +835,7 @@ export function weightWeekPlan(input: WeightPlanInput): WeightWeekPlan | null {
         state: 'moving_again',
         verdict: 'progressing',
         action: { kind: 'keep_what_worked', text: 'Keep doing what restarted it' },
-        plateauMeanKg: was.weeklyMeanKg,
+        plateauMeanKg: round1(was.weeklyMeanKg),
       };
     }
     break; // the most recent plateau day decides; a weekly average that is not falling is an ordinary pace
