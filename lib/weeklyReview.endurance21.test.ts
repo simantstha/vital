@@ -145,3 +145,20 @@ test('a jump in a cutback week is read against the cutback number the card showe
   assert.equal(r.slip, "Jumped 20 km over this week's step — big jumps raise injury risk");
   assert.equal(r.nextWeek, 'Hold around ~28 km next week, then build ~10% a week toward 30 km.');
 });
+
+test('a comeback week more than 10% over its "up to" cap is "over the cap" in the review - no "on plan", no praise, a neutral Volume - and Next week holds at what was run', () => {
+  // Weeks 1-6 build (15..25 km), two weeks off, a restart week of 12 km, then the comeback week "up to ~15 km" ran 18 km.
+  const history = [15, 17, 19, 21, 23, 25, 0, 0, 12];
+  const r = computeWeeklyReview(planReview([...history, 18]));
+  assert.equal(r.headline, '4 sessions, 18 of up to ~15 km — a little over the cap · goal 30 km');
+  assert.equal(r.stats.find(st => st.label === 'Volume')!.tone, 'neutral');
+  assert.equal(r.win, null);
+  assert.equal(r.slip, null);
+  assert.equal(r.nextWeek, 'Hold here, up to ~18 km: long run 9 km, the rest mostly easy runs; then add ~10% a week toward 30 km.');
+  assert.equal(computeWeeklyReview(planReview([...history, 20])).headline, '4 sessions, 20 of up to ~15 km — well over the cap · goal 30 km');
+  // Exactly 10% over the ceiling is inside its slack: on plan, praised for the climb, and the ladder goes on.
+  const within = computeWeeklyReview(planReview([...history, 16.5]));
+  assert.match(within.headline, /^4 sessions, 16\.5 of up to ~15 km — on plan · goal 30 km/);
+  assert.equal(within.win, 'Back on the way up: 16.5 km, up from 12 km last week.');
+  assert.match(within.nextWeek, /^Build up to ~20 km: /);
+});

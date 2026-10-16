@@ -158,6 +158,7 @@ import {
   longRunTargetKm as longRunTargetKmFor,
   longRunWord,
   mondayOfDay,
+  overCapPhrase,
   planWeekKm,
   racePhaseInfo,
   racePhaseTargetKm,
@@ -316,6 +317,8 @@ export interface GoalWeekPlan {
   longRunHeld?: boolean;
   /** Additive: the target is a careful comeback's ceiling, worded "up to ~18 km". */
   upTo?: boolean;
+  /** Additive: last week ran more than 10% over its "up to" ceiling, so this week holds at what was run ("hold here") instead of stepping up. */
+  overCap?: boolean;
 }
 
 export interface GoalRaceProgress {
@@ -2429,6 +2432,7 @@ function distanceProgress(input: GoalProgressInput): GoalDistanceProgress | null
             ...(plan.strides ? { strides: true } : {}),
             ...(plan.longRun.held ? { longRunHeld: true } : {}),
             ...(plan.upTo ? { upTo: true } : {}),
+            ...(plan.last?.overCap ? { overCap: true } : {}),
           },
         }
       : {}),
@@ -2989,7 +2993,7 @@ function planOutcome(input: GoalProgressInput, ec: EnduranceCtx, race: GoalRaceP
     const stepped = target < plan.goalKm - 1e-9;
     stepDone = {
       kind: 'volume',
-      text: `${done} of ${stepped ? '~' : ''}${fmt(target)} — the week's ${plan.kind === 'maintain' ? 'goal' : 'step'} is done; keep ${when} easy and short`,
+      text: `${done} of ${plan.upTo ? 'up to ~' : stepped ? '~' : ''}${fmt(target)} — the week's ${plan.kind === 'maintain' ? 'goal' : 'step'} is done; keep ${when} easy and short`,
       tone: 'watch',
     };
   }
@@ -3044,6 +3048,11 @@ function planOutcome(input: GoalProgressInput, ec: EnduranceCtx, race: GoalRaceP
     return finish('behind', `Behind — ${fmt(lastKm)} last week${lastPlanKm != null ? `, ~${fmt(lastPlanKm)} was the step` : ''}`, planBody());
   }
   const above = level === 'good' && lastPlanKm != null && lastKm > lastPlanKm * ABOVE_STEP_FRACTION;
+  // A comeback week's "up to ~18 km" is a ceiling: more than 10% over it is "a little over the cap" - said neutrally, never
+  // "on plan" (the review words it the same; the week after climbs from the cap, not from the overshoot).
+  if (level === 'good' && last?.overCap === true && lastPlanKm != null) {
+    return finish('building', `Building — ${distanceNum(input, lastKm)} of up to ~${fmt(lastPlanKm)} last week, ${overCapPhrase(lastPlanKm, lastKm)}`, planBody());
+  }
   const how = last?.kind === 'baseline' ? ', your baseline'
     : last?.kind === 'restart' || last?.kind === 'rebuild' && plan.restart != null ? ', back after your break'
     : last?.cutback && !above && level === 'good' ? ', your cutback week'

@@ -134,6 +134,10 @@ function weekTargetLine(gp: GoalProgress, units: UnitSystem): string | null {
         : '';
       // A comeback target lifted above the plain step is a ceiling for a careful comeback ("up to"), not a bar to clear.
       if (plan.upTo) {
+        // Last week went over its ceiling: this week holds at what was run, no step up from the overshoot.
+        if (plan.overCap) {
+          return `- This week's target: hold here, up to ~${t} (last week went over its ceiling; no step up from the overshoot${lr ? `; ${lr}` : ''}); the ${goal}/week goal comes after — do not push past it this week${strides}`;
+        }
         return `- This week's target: build up to ~${t} (a ceiling for a careful comeback${climb}${lr ? `; ${lr}` : ''}); the ${goal}/week goal comes after — do not push past it this week${strides}`;
       }
       return `- This week's target: build to ~${t} (${step}${climb}${lr ? `; ${lr}` : ''}); the ${goal}/week goal comes after — do not push past the step this week${strides}`;

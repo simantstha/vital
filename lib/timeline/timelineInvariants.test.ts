@@ -599,7 +599,7 @@ invariant(WEIGHT, 'no card or review string calls the progress weight a "trend" 
 // "40 of ~20 km", "5 km of ~20 km", "20 of up to ~18 km": a figure of the week against ITS target. The tilde number is the week's one
 // target (`distance.stepTargetKm`, display unit) on every surface of the day - the headline, the distance line, the reasons, the coach
 // lines and the opener. (Day 41 of runner_messy, a cutback week, said "of ~25 km" in the headline and "of ~20 km" on the distance line.)
-const OF_WEEK_TARGET = /(\d+(?:\.\d+)?)(?:\s?(?:km|mi))?\s+of\s+(?:up to\s+)?~(\d+(?:\.\d+)?)\s?(km|mi)\b/g;
+const OF_WEEK_TARGET = /(\d+(?:\.\d+)?)(?:\s?(?:km|mi))?\s+of\s+(?:up to\s+)?~(\d+(?:\.\d+)?)\s?(km|mi)\b(?! last week)/g;
 
 const inDisplayUnit = (km: number, unit: string): number => Math.round((unit === 'mi' ? km / KM_PER_MILE : km) * 10) / 10;
 
@@ -669,7 +669,7 @@ invariant(RUNNERS, "the review's graded target for the past week equals the targ
     }
   }
   // ... and the hold week's card quotes last week's step the same way: "Last week's 40 km was over the safe step of ~20 km".
-  const LAST_WEEK_STEP = /Last week's [\d.]+\s?(?:km|mi) was over the safe step of ~(\d+(?:\.\d+)?)\s?(km|mi)\b/;
+  const LAST_WEEK_STEP = /Last week's [\d.]+\s?(?:km|mi) was over the safe step of ~(\d+(?:\.\d+)?)\s?(km|mi)\b|[\d.]+\s+of up to ~(\d+(?:\.\d+)?)\s?(km|mi) last week\b/;
   for (const snap of snaps) {
     const weekStart = snap.card?.distance?.weekStart;
     if (weekStart == null) continue;
@@ -680,7 +680,9 @@ invariant(RUNNERS, "the review's graded target for the past week equals the targ
       const m = LAST_WEEK_STEP.exec(plain(t.text));
       if (!m) continue;
       compared++;
-      if (Math.abs(Number(m[1]) - inDisplayUnit(shown, m[2])) > 0.05 + 1e-9) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" but last week's last card (${lastSunday?.date}) showed ~${inDisplayUnit(shown, m[2])} ${m[2]}` });
+      const said = Number(m[1] ?? m[3]);
+      const unit = m[2] ?? m[4];
+      if (Math.abs(said - inDisplayUnit(shown, unit)) > 0.05 + 1e-9) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" but last week's last card (${lastSunday?.date}) showed ~${inDisplayUnit(shown, unit)} ${unit}` });
     }
   }
   assert.ok(compared > 0, `${name}: no review stated a graded target, so this invariant checked nothing`);
@@ -707,5 +709,49 @@ invariant(['runner_messy'], 'a "Hold ~N next week" headline is the target of the
     }
   }
   assert.ok(compared > 0, `${name}: no "Hold ~N next week" headline met a following Monday, so this invariant checked nothing`);
+  return out;
+});
+
+// A careful comeback week's "up to ~18 km" is a ceiling. Running more than the shared 10% ceiling slack over it is "a little over the cap" -
+// never "on plan" / "on track", never a green Volume stat or a "Back on the way up" win, on the Monday card or in the review - and the
+// week after is not lifted by the overshoot: it holds at what was run ("hold here") - never a step or a 1.25x rung up from it
+// (runner_messy week of 2026-05-11: 20 of up to ~18 km, then "Up to ~25 km").
+const COMEBACK_CAP_SLACK = 1.1;
+
+invariant(RUNNERS, 'a comeback week more than 10% over its "up to" cap reads "over the cap" (not "on plan") on the card and in the review, and next week holds at what was run', (snaps, name) => {
+  const out: Violation[] = [];
+  const byDate = new Map(snaps.map(s => [s.date, s]));
+  let overWeeks = 0;
+  for (const sunday of snaps) {
+    if (weekdayOf(sunday.date) !== 'Sun') continue;
+    const d = sunday.card?.distance;
+    if (!d?.plan?.upTo || d.thisWeekKm == null || !(d.thisWeekKm > d.stepTargetKm * COMEBACK_CAP_SLACK + 1e-9)) continue;
+    overWeeks++;
+    const week = mondayOfDate(sunday.date);
+    const nextMonday = addDays(week, 7);
+    // The review of that week.
+    const reviewSnap = byDate.get(nextMonday);
+    const rv = reviewSnap?.review;
+    if (reviewSnap && rv && rv.weekStart === week) {
+      for (const t of reviewTexts(reviewSnap)) {
+        if (ON_TRACK_WORDS.test(plain(t.text)) || /on the way up/i.test(t.text)) out.push({ snap: reviewSnap, detail: `${t.where}: "${visible(t.text)}" for ${d.thisWeekKm} of up to ~${d.stepTargetKm} km` });
+      }
+      if (!/over the cap/i.test(rv.review.headline)) out.push({ snap: reviewSnap, detail: `review.headline "${visible(rv.review.headline)}" does not say the week went over its cap (${d.thisWeekKm} of up to ~${d.stepTargetKm} km)` });
+      const volume = rv.review.stats.find(st => st.label === 'Volume');
+      if (volume?.tone === 'good') out.push({ snap: reviewSnap, detail: `review stat Volume "${visible(volume.value)}" is good-toned for ${d.thisWeekKm} of up to ~${d.stepTargetKm} km` });
+    }
+    // The card of the week after: about last week until the next one is run.
+    for (let i = 0; i < 7; i++) {
+      const next = byDate.get(addDays(nextMonday, i));
+      const nd = next?.card?.distance;
+      if (!next || !nd || nd.plan?.kind !== 'build') continue;
+      if (ON_TRACK_WORDS.test(plain(next.card?.headline ?? ''))) out.push({ snap: next, detail: `card.headline "${visible(next.card?.headline ?? '')}" after a week of ${d.thisWeekKm} of up to ~${d.stepTargetKm} km` });
+      else if (!/over the cap/i.test(next.card?.headline ?? '')) out.push({ snap: next, detail: `card.headline "${visible(next.card?.headline ?? '')}" does not say last week went over its cap (${d.thisWeekKm} of up to ~${d.stepTargetKm} km)` });
+      if (nd.stepTargetKm > d.thisWeekKm + 0.5 + 1e-9) {
+        out.push({ snap: next, detail: `target ~${nd.stepTargetKm} km steps up from the overshoot: last week ran ${d.thisWeekKm} of up to ~${d.stepTargetKm} km and this week should hold there` });
+      }
+    }
+  }
+  if (name === 'runner_messy') assert.ok(overWeeks > 0, `${name}: no comeback week went over its "up to" cap, so this invariant checked nothing`);
   return out;
 });

@@ -12,6 +12,7 @@ import {
   formatRaceTime,
   formatTargetLongRun,
   gradeEnduranceWeek,
+  overUpToCap,
   isLongRun,
   isSpikeWeek,
   isWindDownPhase,
@@ -486,20 +487,40 @@ test('comeback: for up to three weeks after a restart the target climbs restart 
   assert.equal(w10.targetKm, 15); // 80% of 22 = 17.6, capped at 1.25 x the 12 km just run (wave 21e); not the 13 km step over 12
   assert.equal(w10.upTo, true); // "up to ~15 km" - a ceiling for a careful comeback
   assert.deepEqual(w10.comeback, { medianKm: 22, fraction: 0.8, weeksSince: 1 });
-  const w11 = planFor(withWeeks([12, 18]), 11);
-  assert.equal(w11.targetKm, 22); // 100% of the median
+  const w11 = planFor(withWeeks([12, 15]), 11); // the 15 km ceiling, run
+  assert.equal(w11.targetKm, 18); // 100% of the median is 22, capped at 1.25 x the 15 km just run
   assert.equal(w11.comeback?.fraction, 1);
-  const w12 = planFor(withWeeks([12, 18, 22]), 12);
-  assert.equal(w12.targetKm, 24); // 10% over 22 once the median is regained
+  const w12 = planFor(withWeeks([12, 15, 18]), 12);
+  assert.equal(w12.targetKm, 22); // 100% of the median
   assert.equal(w12.comeback?.weeksSince, 3);
   // A week that did not grade good (it shrank: 12 -> 10 km) repeats the rung instead of climbing; the ceiling is 1.25 x 10.
   const repeat = planFor(withWeeks([12, 10]), 11);
   assert.equal(repeat.targetKm, 12);
   assert.equal(repeat.comeback?.fraction, 0.8);
   // The climb is over after three weeks: the plain step again.
-  const w13 = planFor(withWeeks([12, 18, 22, 25]), 13);
+  const w13 = planFor(withWeeks([12, 15, 18, 22]), 13);
   assert.equal(w13.comeback, null);
-  assert.equal(w13.targetKm, 28); // 25 x 1.10
+  assert.equal(w13.targetKm, 24); // 22 x 1.10
+  // A week more than 10% over its "up to" ceiling is "a little over the cap" (wave 21b): the rung is repeated, and the week after
+  // holds at what was run - never a step, or a 1.25x rung, up from the overshoot ("20 of up to ~18 km" used to lift the next week to ~25).
+  assert.equal(overUpToCap(w10, 16.5), false); // exactly 10% over: within the ceiling's slack
+  assert.equal(overUpToCap(w10, 16.6), true);
+  assert.equal(overUpToCap(w11, 19.8), false); // the 18 km ceiling
+  assert.equal(overUpToCap(w11, 20), true); // "20 of up to ~18 km"
+  assert.equal(overUpToCap(planFor(withWeeks([12, 15, 18, 22]), 13), 30), false); // a plain week has no ceiling
+  const within = planFor(withWeeks([12, 16.5]), 11);
+  assert.equal(within.last?.overCap, false);
+  assert.equal(within.targetKm, 20); // the ladder climbs: 1.25 x 16.5, floored
+  const over = planFor(withWeeks([12, 18]), 11); // ran 18 of up to ~15
+  assert.equal(over.last?.overCap, true);
+  assert.equal(over.targetKm, 18); // hold at what was run; not the 22 km rung
+  assert.equal(over.upTo, true);
+  assert.deepEqual(over.comeback, { medianKm: 22, fraction: 0.8, weeksSince: 2 }); // the rung repeated, not climbed
+  assert.equal(nbsp(over.purpose).split(':')[0], 'Hold here, up to ~18~km this week');
+  assert.equal(planFor(withWeeks([12, 18, 22]), 12).targetKm, 22);
+  const overLast = planFor(withWeeks([12, 18, 22, 25]), 13); // the ladder is over, but an overshoot is still not stepped up from
+  assert.equal(overLast.comeback, null);
+  assert.equal(overLast.targetKm, 25);
   // A careful comeback week is graded against the week before it, not against its ceiling (wave 21e): good when it grew
   // (or held) and was not a spike, mixed only when it shrank - never "5 km short of this week's step".
   assert.equal(gradeEnduranceWeek(w10, 12).level, 'good'); // the 12 km just run

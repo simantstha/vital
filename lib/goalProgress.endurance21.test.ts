@@ -252,3 +252,25 @@ test('a jump in a cutback week is a jump over the cutback number: the headline, 
   assert.notEqual(normal.verdict, 'holding');
   assert.doesNotMatch(normal.headline, /Over the safe step/);
 });
+
+test('a comeback week more than 10% over its "up to" cap is "over the cap" on the card - never "on plan" - and the next week holds at what was run', () => {
+  const monday = '2026-10-26';
+  // Weeks 1-6 build (15..25 km), two weeks off, a restart week of 12 km, then the comeback week "up to ~15 km" ran at `lastKm`.
+  const hist = (lastKm: number) => [[], wk(lastKm), wk(12), [], [], wk(25), wk(23), wk(21), wk(19), wk(17), wk(15)];
+  const card = (lastKm: number) => computeGoalProgress(input(weeks(monday, hist(lastKm)), { todayKey: monday }));
+  const over = card(18);
+  assert.equal(over.headline, 'Building — 18 of up to ~15 km last week, a little over the cap');
+  assert.equal(over.verdict, 'building');
+  assert.equal(over.distance!.stepTargetKm, 18, 'hold at what was run, not the 22 km rung or 1.25x the overshoot');
+  assert.equal(over.distance!.text, '0 of up to ~18 km running this week · goal 30 km');
+  assert.equal(over.distance!.plan?.overCap, true);
+  assert.match(over.reasons.find(r => r.kind === 'plan')!.text, /^Hold here, up to ~18 km this week: /);
+  assert.doesNotMatch(over.headline, /on plan|on track/);
+  // Well past the ceiling it says so.
+  assert.equal(card(20).headline, 'Building — 20 of up to ~15 km last week, well over the cap');
+  // Exactly 10% over the ceiling is inside its slack: on plan, and the ladder climbs (1.25 x 16.5 km).
+  const within = card(16.5);
+  assert.match(within.headline, /on plan$/);
+  assert.equal(within.distance!.plan?.overCap, undefined);
+  assert.equal(within.distance!.stepTargetKm, 20);
+});

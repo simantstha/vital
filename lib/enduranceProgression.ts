@@ -546,6 +546,20 @@ export function isSpikeWeek(km: number, stepKm: number, goalKm: number, unitsPer
   return km > stepKm * (1 + SPIKE_OVER_STEP_FRACTION) && excess >= (imperial ? SPIKE_MIN_EXCESS_MI : SPIKE_MIN_EXCESS_KM);
 }
 
+/**
+ * A careful comeback's "up to ~18 km" target is a ceiling, and running more than the shared ceiling slack
+ * (`PHASE_CEILING_TOLERANCE`, 10%) over it is "a little over the cap" - not "on plan", not praised, and not credited:
+ * the week after climbs from the cap, never from the overshoot. Takes the plan of the week that was run and its km.
+ */
+export function overUpToCap(plan: Pick<EnduranceWeekPlan, 'upTo' | 'targetKm'>, km: number): boolean {
+  return plan.upTo && plan.targetKm != null && km > plan.targetKm * PHASE_CEILING_TOLERANCE + 1e-9;
+}
+
+/** The wording of an over-the-cap week, ONE phrase for the goal card and the weekly review: "a little over the cap" up to 25% over, else "well over". */
+export function overCapPhrase(ceilingKm: number, km: number): 'a little over the cap' | 'well over the cap' {
+  return km > ceilingKm * COMEBACK_MAX_GROWTH + 1e-9 ? 'well over the cap' : 'a little over the cap';
+}
+
 /** The km above which `isSpikeWeek` is true for a step (informational: the band's upper edge). */
 function spikeEdgeKm(stepKm: number, unitsPerKm: number): number {
   const minExcessKm = (unitsPerKm < 1 ? SPIKE_MIN_EXCESS_MI : SPIKE_MIN_EXCESS_KM) / unitsPerKm;
@@ -601,6 +615,8 @@ export interface PlanLastWeek {
   targetKm: number | null;
   /** That week was a cutback week (its `targetKm` is the lowered number). */
   cutback: boolean;
+  /** That week's target was an "up to" comeback ceiling and the week ran more than 10% over it (`overUpToCap`). */
+  overCap: boolean;
   /** Null at the edge of the history the plan looks back over. */
   grade: WeekGrade | null;
   /** Whole-percent change vs the week before it; null when that week was under 5 km (3 mi) or has no runs. */
@@ -1176,8 +1192,9 @@ function purposeLine(plan: Omit<EnduranceWeekPlan, 'purpose'>): string {
       const back = plan.comeback != null && t != null && t < plan.comeback.medianKm - 0.5
         ? `; back toward your usual ~${formatKm(plan.comeback.medianKm, u)}`
         : '';
-      // A comeback target lifted above the plain 10% step is a ceiling, not a bar: "up to ~18 km".
-      const lead = plan.upTo ? 'Up to ' : '';
+      // A comeback target lifted above the plain 10% step is a ceiling, not a bar: "up to ~18 km". After a week that ran
+      // over its ceiling it holds at what was run: "hold here".
+      const lead = plan.last?.overCap ? 'Hold here, up to ' : plan.upTo ? 'Up to ' : '';
       return lrPart && t != null
         ? `${lead}~${formatKm(t, u)} this week: ${lrPart}, the rest easy runs${back}${strides}`
         : `${lead}~${formatKm(t ?? plan.goalKm, u)} this week, mostly easy runs${back}${strides}`;
@@ -1369,6 +1386,7 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
         kind: prevPlan?.kind ?? 'build',
         targetKm: prevPlan?.targetKm ?? null,
         cutback: prevPlan?.cutback != null,
+        overCap: prevPlan != null && overUpToCap(prevPlan, prev.km),
         grade: prevGrade,
         // No % against a very small week, nor for the week that restarted after a break (that +150% is not growth).
         changePct: prevPrev.km >= compareMin && prevPlan?.restart == null && prevGrade?.level !== 'light'
@@ -1481,8 +1499,11 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
       const step = weekStepOrGoalKm(stepBaseKm, ctx.goalKm, ctx.units);
       let target = step;
       const from = prevPlan != null && prevIsTraining ? (prevPlan.restart != null ? { ...prevPlan.restart, weeksSince: 0 } : prevPlan.comeback) : null;
+      // A comeback week that ran more than 10% over its "up to" ceiling: the rung is repeated, not climbed, and the week after holds
+      // at what was run (below).
+      const overCap = prevPlan != null && prevIsTraining && overUpToCap(prevPlan, prev.km);
       if (from != null && from.weeksSince + 1 <= COMEBACK_WEEKS) {
-        const rung = prevGrade?.level === 'good' ? nextRung(from.fraction) : from.fraction;
+        const rung = prevGrade?.level === 'good' && !overCap ? nextRung(from.fraction) : from.fraction;
         const rungKm = roundWeekTargetKm(from.medianKm * rung, ctx.units);
         // A rung never asks for more than 1.25x the week just run (it still climbs by at least the normal 10% step).
         const capKm = floorWeekTargetKm(prev.km * COMEBACK_MAX_GROWTH, ctx.units);
@@ -1491,6 +1512,12 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
         upTo = target > step + 1e-9;
         comeback = { medianKm: from.medianKm, fraction: rung, weeksSince: from.weeksSince + 1 };
         medianKm = from.medianKm;
+      }
+      // "20 of up to ~18 km" is a little over the cap: hold here next week. The ceiling is what was run, never a step (or a
+      // 1.25x rung) up from the overshoot - without this the next week read "up to ~25 km", 1.25x the 20 km that overshot.
+      if (overCap) {
+        target = Math.min(ctx.goalKm, roundWeekTargetKm(prev.km, ctx.units));
+        upTo = true;
       }
       if (rebuild || comeback != null) mode = 'gentle';
       targetKm = target;
