@@ -11,7 +11,7 @@ import type { GoalKind, GoalProgress } from './goalProgress';
 import { RACE_EVE_LINE, formatRaceTime, formatTargetLongRun, isWindDownPhase, longRunCapNote, recoveryWeek, roundLongRunKm } from './enduranceProgression';
 import type { ProgressionSummary } from './workoutRepository';
 import { plainSpaces } from './displayText';
-import { LIFT_LAPSE_MIN_DAYS, liftChange4w, pickHeadlineLift, rankLifts } from './liftChange';
+import { liftChange4w, liftLapseMinDays, pickHeadlineLift, rankLifts } from './liftChange';
 import { weekStartKeyForDay } from './localDay';
 import { KM_PER_MILE, LB_PER_KG } from './metricFormat';
 import { shortDate } from './brain/openerText';
@@ -218,17 +218,23 @@ export function formatGoalProgressLines(gp: GoalProgress, units: UnitSystem): st
   if (weekTarget) lines.push(weekTarget);
   if (nowBits.length) lines.push(`- Now: ${nowBits.join('; ')}`);
 
-  // Returning from a break: the lifts are rebuilding, never a stall or a reason to deload.
-  if (gp.liftReturn && !gp.liftReturn.regained) {
-    lines.push(`- Returning from a ${gp.liftReturn.breakDays}-day break (ended ${gp.liftReturn.endedOn}): lifts are rebuilding — do not call this a stall or suggest a deload.`);
+  // Returning from a break: the lifts are rebuilding, never a stall or a reason to deload. While ANY main lift is
+  // still under its pre-break best (not only the headline lift) it is a rebuild — and "back" is not said of all of them.
+  const returns = gp.liftReturns && gp.liftReturns.length > 0 ? gp.liftReturns : gp.liftReturn ? [gp.liftReturn] : [];
+  const rebuilding = returns.filter(r => !r.regained);
+  if (rebuilding.length > 0) {
+    const back = returns.filter(r => r.regained);
+    const behind = rebuilding.length < returns.length ? ` (${rebuilding.map(r => `${r.name.toLowerCase()} ${r.pct}% of its pre-break best`).join(', ')}${back.length > 0 ? `; ${back.map(r => r.name.toLowerCase()).join(', ')} back` : ''})` : '';
+    lines.push(`- Returning from a ${returns[0].breakDays}-day break (ended ${returns[0].endedOn}): lifts are rebuilding${behind} — do not call this a stall or suggest a deload${back.length > 0 ? ', and do not say every lift is back' : ''}.`);
   }
 
-  // When the lifter last trained. A week or more ago, the lift numbers describe a window that ended before the lapse.
+  // When the lifter last trained. A day count past the lapse threshold (scaled to the weekly sessions target) means the
+  // lift numbers describe a window that ended before the lapse.
   const sinceLast = gp.goal === 'muscle' ? gp.lastSessionDaysAgo : null;
   if (sinceLast != null) {
     const when = sinceLast === 0 ? 'today' : sinceLast === 1 ? 'yesterday' : `${sinceLast} days ago`;
     const on = sinceLast >= 1 ? shortDate(gp.lastSessionOn) : null;
-    lines.push(`- Last strength session ${when}${on ? ` (${on})` : ''}${sinceLast >= LIFT_LAPSE_MIN_DAYS ? ' — do not praise lift progress; ask about getting back in' : ''}`);
+    lines.push(`- Last strength session ${when}${on ? ` (${on})` : ''}${sinceLast >= liftLapseMinDays(gp.target.weeklySessions) ? ' — do not praise lift progress; ask about getting back in' : ''}`);
   }
 
   lines.push(`- Verdict: ${gp.verdict} — "${plainSpaces(gp.headline)}"`);
