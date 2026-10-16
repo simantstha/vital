@@ -187,14 +187,17 @@ enum WeightHeroLogic {
 
     // MARK: - The server's weight read: one place says it in full
 
-    /// While the server reads the scale itself (early / returning / plateau) the
-    /// FULL read ("Early read — down 0.7 kg on the scale in 7 days") is said in
+    /// While the server reads the scale itself (early / returning / plateau / moving
+    /// again) the FULL read ("Early read — down 0.7 kg on the scale in 7 days") is said in
     /// exactly one place on Today. Its goal line under the hero already says it
     /// (`GoalProgressLogic.goalLineShowsServerRead`), so the hero's rate slot
     /// carries a short complementary line instead of repeating it.
     static let earlyReadHeroText = "Pace settles after 3 weeks"
     static let returningReadHeroText = "Welcome back — weigh in a few more days"
     static let plateauReadHeroText = "Flat for 3 weeks"
+    /// Moving again (wave 21): the 14 days after a plateau ends. Never `plateauReadHeroText`
+    /// — the plateau is over. The fallback when the payload carries no week plan.
+    static let movingAgainReadHeroText = "Moving again after a plateau"
 
     /// Goal age (calendar days) from which an early read is no longer "the pace
     /// settles after 3 weeks": the goal is past that point and only short of
@@ -225,11 +228,23 @@ enum WeightHeroLogic {
             return GoalProgressLogic.serverWeightRead(progress)
         }
         switch state {
-        case .early:     return earlyReadSlotText(goalAgeDays: progress.weightRead?.goalAgeDays)
-        case .returning: return returningReadHeroText
-        case .plateau:   return plateauReadHeroText
+        case .early:       return earlyReadSlotText(goalAgeDays: progress.weightRead?.goalAgeDays)
+        case .returning:   return returningReadHeroText
+        case .plateau:     return plateauReadHeroText
+        case .movingAgain: return movingAgainSlotText(plan: progress.weightRead?.plan)
         case .pace, .reached: return nil
         }
+    }
+
+    /// The moving-again complement: the week plan's own one action ("Keep doing what
+    /// restarted it" — decided once a week, the same line the goal card's reasons end
+    /// on) while the plan says moving again, so the goal line's "Moving again — weekly
+    /// average down 0.5 kg from the plateau" is not said twice; `movingAgainReadHeroText`
+    /// for a payload with no plan (or one whose state or text is missing).
+    static func movingAgainSlotText(plan: GoalProgressDTO.WeightRead.Plan?) -> String {
+        guard let plan, plan.state == .movingAgain, let action = plan.action else { return movingAgainReadHeroText }
+        let text = action.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? movingAgainReadHeroText : text
     }
 
     // MARK: - Sparkline Y-domain (screenshot-review fix, 2026-09-23)
@@ -336,13 +351,28 @@ enum WeightHeroLogic {
     /// Captions under the sparkline: "Start 83.7 kg" (first point of the
     /// window), "Now 82 kg" (latest trend point) and, when a target weight
     /// exists, "Goal 76 kg" — all in the user's unit. `nil` without points.
+    ///
+    /// `progressWeight` (wave 21, weight loss): the weight the goal card measures from
+    /// (`GoalProgressLogic.progressWeight`), with its label. The line itself is still the
+    /// smoothed trend, but the number a weight-loss goal quotes everywhere else (the headline's
+    /// "to go", the goal sheet's stat row, the Trends weight card) is the progress weight, so
+    /// the middle caption says "This week 82.3 kg" / "Weekly avg 82.3 kg" / "Latest 82.3 kg"
+    /// (whichever it truly is) instead of the trend's "Now 82 kg". `nil` (an older server,
+    /// other goals) keeps "Now" and the trend, exactly as before.
     static func sparklineCaptions(
-        firstKg: Double?, lastKg: Double?, targetKg: Double?, system: UnitSystem
+        firstKg: Double?, lastKg: Double?, targetKg: Double?, system: UnitSystem,
+        progressWeight: GoalProgressLogic.ProgressWeight? = nil
     ) -> (start: String, now: String, target: String?)? {
         guard let firstKg, let lastKg else { return nil }
+        let now: String
+        if let progressWeight {
+            now = "\(progressWeight.label) \(UnitFormat.weight(kg: progressWeight.kg, system))"
+        } else {
+            now = "Now \(UnitFormat.weight(kg: lastKg, system))"
+        }
         return (
             "Start \(UnitFormat.weight(kg: firstKg, system))",
-            "Now \(UnitFormat.weight(kg: lastKg, system))",
+            now,
             targetKg.map { "Goal \(UnitFormat.weight(kg: $0, system))" }
         )
     }

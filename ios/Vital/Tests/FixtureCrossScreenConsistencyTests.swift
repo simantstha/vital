@@ -243,7 +243,8 @@ final class FixtureCrossScreenConsistencyTests: XCTestCase {
 
     func test_coachOpenersLeadWithTheGoalStatus() {
         let weightLoss = json(.weightLoss, "/api/coach/opener")["text"] as? String ?? ""
-        XCTAssertTrue(weightLoss.hasPrefix("You're 1.7 of 7.7 kg down and about 2 weeks ahead of your "), weightLoss)
+        // 83.7 kg at the start, 82.3 kg weekly average now (wave 21: the one weight the goal card measures from).
+        XCTAssertTrue(weightLoss.hasPrefix("You're 1.4 of 7.7 kg down and about 2 weeks ahead of your "), weightLoss)
         XCTAssertTrue(weightLoss.hasSuffix("What would you like to dig into?"), weightLoss)
         let newUser = json(.newUser, "/api/coach/opener")["text"] as? String ?? ""
         XCTAssertTrue(newUser.hasPrefix("Your goal is to lose weight."), newUser)
@@ -420,7 +421,8 @@ final class FixtureCrossScreenConsistencyTests: XCTestCase {
         XCTAssertEqual(rhrStat.tone, .watch)
         let rise = try XCTUnwrap(plain(rhrStat.comparison)?.replacingOccurrences(of: "+", with: "").replacingOccurrences(of: " bpm vs your normal", with: ""))
         XCTAssertEqual(plain(endurance.slip), "Resting heart rate rose \(rise) bpm \u{2014} your body may be carrying fatigue.")
-        XCTAssertEqual(plain(endurance.nextWeek), "Build to ~27 km: long run 14 km, the rest mostly easy runs; 30 km the week after.")
+        // Long run 13.5 km: half of the 27 km step (12 km + 2 would pass it) — the fixture's long runs are at most half of their week.
+        XCTAssertEqual(plain(endurance.nextWeek), "Build to ~27 km: long run 13.5 km, the rest mostly easy runs; 30 km the week after.")
         XCTAssertFalse(endurance.nextWeek.contains("Repeat this week"))
         XCTAssertEqual(WeeklyReviewLogic.rows(endurance).map(\.kind), [.win, .slip, .next])
 
@@ -456,7 +458,11 @@ final class FixtureCrossScreenConsistencyTests: XCTestCase {
     func test_weightLossGoalProgressAgreesWithWeightFixture() throws {
         let (_, data) = FixtureData.response(scenario: .weightLoss, method: "GET", path: "/api/goal/progress", query: "")
         let progress = try JSONDecoder().decode(GoalProgressDTO.self, from: data)
-        XCTAssertEqual(progress.current.weightKg ?? .nan, 82, accuracy: 0.001)
+        // Wave 21: a weight-loss goal measures from ONE weight, the weekly average (the mean of the weight
+        // log's last four weigh-ins, 82.3), not the chart's smoothed trend (82), which is `trendKg`. This test
+        // used to pin `weightKg` to the trend; that was the old server's semantics.
+        XCTAssertEqual(progress.current.weightKg ?? .nan, 82.3, accuracy: 0.001)
+        XCTAssertEqual(progress.current.trendKg ?? .nan, 82, accuracy: 0.001)
         XCTAssertEqual(progress.target.weightKg, 76)
         XCTAssertEqual(progress.reasons.count, 3)
         XCTAssertNotNil(progress.eta)
@@ -531,12 +537,14 @@ final class FixtureCrossScreenConsistencyTests: XCTestCase {
             "\(GoalProgressLogic.trimmedNumber(week.km)) of ~27 km running this week · goal 30 km"
         )
         let reviewNext = plain((json(.endurance, "/api/review/weekly")["review"] as? [String: Any])?["nextWeek"] as? String) ?? ""
-        XCTAssertTrue(reviewNext.hasPrefix("Build to ~27 km: long run 14 km"), reviewNext)
-        // The plan adds up: what is done this week plus the 14 km long run still
+        XCTAssertTrue(reviewNext.hasPrefix("Build to ~27 km: long run 13.5 km"), reviewNext)
+        // The plan adds up: what is done this week plus the 13.5 km long run still
         // ahead leaves a few easy km to the ~27 km step (it used to be 22.7 + 16 ≈ 39 km).
+        // (The long run was 14 km before the fixture's long runs were capped at half of their week:
+        // 10.2 + 14 was within 3 km of the step, 10.2 + 13.5 is within 4.)
         let longRunAhead = FixtureData.enduranceNextLongRunKm
-        XCTAssertEqual(longRunAhead, 14)
-        XCTAssertEqual(week.km + longRunAhead, 27, accuracy: 3.0)
+        XCTAssertEqual(longRunAhead, 13.5)
+        XCTAssertEqual(week.km + longRunAhead, 27, accuracy: 4.0)
         XCTAssertLessThanOrEqual(week.km + longRunAhead, 27, "following the plan never overshoots the week's step")
 
         XCTAssertEqual(progress.headline, FixtureData.enduranceGoalHeadline)
@@ -614,28 +622,39 @@ final class FixtureCrossScreenConsistencyTests: XCTestCase {
         let progress = try JSONDecoder().decode(GoalProgressDTO.self, from: data)
         // The half marathon's own peak is 18 km, but a long run is at most half of the 30 km week:
         // the payload's peak target is the 15 km that fits (`longRunPeakTarget`), the 18 km riding along.
-        XCTAssertEqual(progress.longRun, GoalProgressDTO.LongRun(lastKm: 14, peakKm: 16, targetPeakKm: 15))
+        // `capNoteDue` (wave 21e): the reason below carries the cap note, which the server says only in a week it flags.
+        // The runner's long runs are at most half of their own week (12 km of last week's 24.5 km): over 55% the server
+        // flags the peak `oversized` and never praises it, and wave 20 capped the fixture at 50%.
+        XCTAssertEqual(progress.longRun, GoalProgressDTO.LongRun(lastKm: 12, peakKm: 12, targetPeakKm: 15, capNoteDue: true))
+        XCTAssertNil(progress.longRun?.oversized)
+        XCTAssertLessThanOrEqual(FixtureData.enduranceLastLongRunKm, FixtureData.enduranceWeeklyKm.last! * 0.5)
+        XCTAssertLessThanOrEqual(FixtureData.endurancePeakLongRunKm, FixtureData.enduranceWeeklyKm.last! * 0.5)
         let rawLongRun = json(.endurance, "/api/goal/progress")["longRun"] as? [String: Any]
         XCTAssertEqual(rawLongRun?["raceTargetKm"] as? Double, 18)
         XCTAssertEqual(progress.reasons.map(\.kind), ["race", "plan", "long_run"])
         // What this week is for (the server's week-plan `purpose`): the step and the long run.
-        XCTAssertEqual(plain(progress.reasons[1].text), "~27 km this week: long run 14 km, the rest easy runs")
+        XCTAssertEqual(plain(progress.reasons[1].text), "~27 km this week: long run 13.5 km, the rest easy runs")
         XCTAssertEqual(progress.reasons[1].text, progress.distance?.plan?.purpose)
-        XCTAssertEqual(progress.distance?.plan?.longRunKm, 14)
-        // The 16 km peak has reached the 15 km target, so the reason says so — and, once, why the
-        // target is not the half's 18 km (`longRunCapNote`), with the goal that would carry it.
+        XCTAssertEqual(progress.distance?.plan?.longRunKm, 13.5)
+        // The 12 km peak is still short of the 15 km target, so the reason says "build to" it (neutral, by the
+        // peak-long-run lead of 14 days before the race, "late Dec"-style) — and, once, why the target is not the
+        // half's 18 km (`longRunCapNote`), with the goal that would carry it. (It used to read "Long run peak
+        // 16 km — on target", good: a 16 km run in a 24.5 km week is over the 55% the server never praises.)
         let longRun = progress.reasons[2]
-        XCTAssertEqual(longRun.tone, .good)
+        XCTAssertEqual(longRun.tone, .neutral)
+        let buildTo = try XCTUnwrap(
+            longRun.text.range(of: #"^Long run 12 km · build to 15 km by (early|mid-|late )?[A-Z][a-z]{2}\. "#, options: .regularExpression)
+        )
         XCTAssertEqual(
-            longRun.text,
-            "Long run peak 16 km \u{2014} on target. Your 30 km weeks fit a 15 km long run; for an 18 km peak, raise the goal to ~36 km"
+            String(longRun.text[buildTo.upperBound...]),
+            "Your 30 km weeks fit a 15 km long run; for an 18 km peak, raise the goal to ~36 km"
         )
         XCTAssertEqual(GoalProgressLogic.visibleReasons(progress).map(\.text).last, longRun.text, "the goal card shows it as it is")
-        XCTAssertEqual(RaceLogic.longRunRowText(progress.longRun!, .metric), "14\u{00A0}km \u{00B7} peak target 15\u{00A0}km")
+        XCTAssertEqual(RaceLogic.longRunRowText(progress.longRun!, .metric), "12\u{00A0}km \u{00B7} peak target 15\u{00A0}km")
         // ...and the numbers in it are the fixture's own.
         XCTAssertEqual(FixtureData.enduranceLongRunTargetKm, 15)
         XCTAssertEqual(FixtureData.enduranceRaceLongRunKm, 18)
-        XCTAssertGreaterThanOrEqual(FixtureData.endurancePeakLongRunKm, FixtureData.enduranceLongRunTargetKm)
+        XCTAssertLessThan(FixtureData.endurancePeakLongRunKm, FixtureData.enduranceLongRunTargetKm, "still building to the target")
 
         // The other scenarios never carry a long run.
         for scenario in [FixtureMode.Scenario.weightLoss, .muscle] {
@@ -656,14 +675,14 @@ final class FixtureCrossScreenConsistencyTests: XCTestCase {
     }
 
     /// The endurance Today hero's race line also carries the long-run build
-    /// ("long run 14/15 km") from the same goal-progress payload the goal card reads.
+    /// ("long run 12/15 km") from the same goal-progress payload the goal card reads.
     func test_enduranceHeroRaceLineCarriesTheLongRunProgress() throws {
         let (_, data) = FixtureData.response(scenario: .endurance, method: "GET", path: "/api/goal/progress", query: "")
         let progress = try JSONDecoder().decode(GoalProgressDTO.self, from: data)
         let race = try XCTUnwrap(progress.race)
         XCTAssertEqual(
             RaceLogic.heroLine(race, longRun: progress.longRun, system: .metric),
-            "Half marathon \u{00B7} 12 weeks to go \u{00B7} long run 14/15\u{00A0}km"
+            "Half marathon \u{00B7} 12 weeks to go \u{00B7} long run 12/15\u{00A0}km"
         )
         // The other scenarios have no race or long run to quote.
         for scenario in [FixtureMode.Scenario.weightLoss, .muscle] {
@@ -966,6 +985,53 @@ final class FixtureCrossScreenConsistencyTests: XCTestCase {
 
     // MARK: - Wave 19: additive server fields in the fixtures
 
+    /// Wave 21, one displayed weight: the weight-loss goal payload measures from the WEEKLY AVERAGE (`current.weightKg`,
+    /// `changeKg`, `progressPct`, the headline's "to go"), carries the chart's smoothed trend as `trendKg` and this week's
+    /// plan in the weight read. Today's hero caption and the goal sheet's stat row quote that same number.
+    func test_weightLossFixtureMeasuresFromTheWeeklyAverageAndCarriesThePlan() throws {
+        let (_, data) = FixtureData.response(scenario: .weightLoss, method: "GET", path: "/api/goal/progress", query: "")
+        let progress = try JSONDecoder().decode(GoalProgressDTO.self, from: data)
+        let read = try XCTUnwrap(progress.weightRead)
+        XCTAssertEqual(progress.current.weightKg, read.weekMeanKg, "the weekly average is the one weight")
+        XCTAssertEqual(progress.current.weightKg ?? .nan, 82.3, accuracy: 0.001)
+        XCTAssertEqual(progress.current.trendKg ?? .nan, 82, accuracy: 0.001)
+        XCTAssertEqual(progress.current.changeKg ?? .nan, -1.4, accuracy: 0.001, "83.7 at the start -> 82.3")
+        XCTAssertEqual(progress.current.progressPct ?? .nan, 18, accuracy: 0.001)
+        XCTAssertTrue(progress.headline.contains("about 6.3 kg to go"), progress.headline)
+
+        // This week's plan: a confirmed pace on track, one action.
+        let plan = try XCTUnwrap(read.plan)
+        XCTAssertEqual(plan.state, .pace)
+        XCTAssertEqual(plan.action?.kind, "keep_going")
+        XCTAssertNotNil(plan.weekStart)
+
+        // Today's hero and the goal sheet say the same number; the line itself is still the trend.
+        XCTAssertTrue(GoalProgressLogic.usesProgressWeight(progress))
+        // The newest weigh-in is today's and the weekly average is there, so the label is "This week".
+        XCTAssertEqual(progress.lastWeighInDaysAgo, 0)
+        XCTAssertEqual(GoalProgressLogic.currentWeightLabel(progress), "This week")
+        let (_, logData) = FixtureData.response(scenario: .weightLoss, method: "GET", path: "/api/weight-log", query: "")
+        let log = try JSONDecoder().decode(WeightLogResponse.self, from: logData)
+        let trendLast = try XCTUnwrap(log.trend.days.last?.trendKg)
+        XCTAssertEqual(trendLast, progress.current.trendKg ?? .nan, accuracy: 0.001, "the chart's last point is trendKg")
+        let captions = WeightHeroLogic.sparklineCaptions(
+            firstKg: log.trend.days.first?.trendKg, lastKg: trendLast, targetKg: progress.target.weightKg,
+            system: .metric, progressWeight: GoalProgressLogic.progressWeight(progress)
+        )
+        XCTAssertEqual(captions?.now, "This week 82.3\u{00A0}kg")
+        let row = GoalProgressLogic.statRows(progress, system: .metric).first { $0.label == "This week" }
+        XCTAssertEqual(row?.value, "82.3\u{00A0}kg")
+        XCTAssertNil(GoalProgressLogic.statRows(progress, system: .metric).first { $0.label == "Now" })
+
+        // The other scenarios stay as they were: no separate trend, so the old "Now" wording.
+        for scenario in [FixtureMode.Scenario.muscle, .endurance] {
+            let (_, other) = FixtureData.response(scenario: scenario, method: "GET", path: "/api/goal/progress", query: "")
+            let decoded = try JSONDecoder().decode(GoalProgressDTO.self, from: other)
+            XCTAssertNil(decoded.current.trendKg, "\(scenario)")
+            XCTAssertNil(GoalProgressLogic.progressWeight(decoded), "\(scenario)")
+        }
+    }
+
     /// The weight-loss goal-progress fixture carries a `pace` weight read: it
     /// leaves every weight surface exactly as before (no early / returning /
     /// plateau handling), and its numbers are the weight-log fixture's own.
@@ -978,7 +1044,8 @@ final class FixtureCrossScreenConsistencyTests: XCTestCase {
         XCTAssertNil(read.reachedDaysAgo)
         XCTAssertFalse(GoalProgressLogic.usesServerWeightRead(progress))
         XCTAssertNil(GoalProgressLogic.serverWeightRead(progress))
-        XCTAssertEqual(plain(GoalProgressLogic.primaryLine(progress, system: .metric)), "1.7 of 7.7 kg lost")
+        // Measured from the weekly average (82.3 kg, wave 21), not the 82 kg trend: 83.7 - 82.3 = 1.4.
+        XCTAssertEqual(plain(GoalProgressLogic.primaryLine(progress, system: .metric)), "1.4 of 7.7 kg lost")
         // ETA 70 days out against a target date 84 days out: 2 weeks ahead, which is what the read says.
         XCTAssertEqual(GoalProgressLogic.paceRelation(progress), GoalProgressLogic.PaceRelation.ahead(weeks: 2))
         XCTAssertEqual(read.weeksVsTarget, 2)
@@ -999,6 +1066,7 @@ final class FixtureCrossScreenConsistencyTests: XCTestCase {
             let decoded = try JSONDecoder().decode(GoalProgressDTO.self, from: other)
             XCTAssertNil(decoded.weightRead, "\(scenario)")
             XCTAssertNil(decoded.liftReturn, "\(scenario)")
+            XCTAssertNil(decoded.liftReturns, "\(scenario)")
         }
     }
 

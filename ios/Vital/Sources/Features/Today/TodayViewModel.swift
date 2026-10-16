@@ -453,7 +453,7 @@ final class TodayViewModel: ObservableObject {
     }
 
     /// True while the server is reading the scale itself (early read, welcome
-    /// back, plateau) and withholds a pace: the weight hero then never computes
+    /// back, plateau, moving again) and withholds a pace: the weight hero then never computes
     /// its own 7-day rate. `false` without goal progress or from an older server
     /// (no `weightRead`), where the hero keeps its own fallback.
     var heroWithholdsLocalRate: Bool {
@@ -467,6 +467,14 @@ final class TodayViewModel: ObservableObject {
     /// weigh-in nudge) — see `WeightHeroLogic.serverReadSlotText`; `nil` otherwise.
     var heroServerWeightRead: String? {
         goalProgress.flatMap(WeightHeroLogic.serverReadSlotText)
+    }
+
+    /// The goal card's progress weight (kg) and its label for the weight hero's "This week
+    /// 82.3 kg" caption: only on a wave 21 server, where `current.weightKg` is that weight
+    /// and the payload carries `current.trendKg`; `nil` from an older server, for other goals
+    /// and without goal progress — the hero then keeps the trend's "Now 82 kg".
+    var heroProgressWeight: GoalProgressLogic.ProgressWeight? {
+        GoalProgressLogic.progressWeight(goalProgress)
     }
 
     /// The HRV / Sleep / Resting HR tiles. The endurance hero already prints
@@ -581,7 +589,10 @@ final class TodayViewModel: ObservableObject {
     var enduranceWeeklyOverviewText: String? {
         guard let week = trainingSummary?.week else { return nil }
         let sessionsCompleted = week.completedSessions
-        let kmDone = enduranceDistanceProgress == nil ? trainingSummary?.volume.done : nil
+        // The race eve carries no km of the week at all (the server's `distance.thisWeekKm` is
+        // null): the hero must not bring them back from the training summary.
+        let raceEve = goalProgress.map(GoalProgressLogic.isRaceEve) ?? false
+        let kmDone = enduranceDistanceProgress == nil && !raceEve ? trainingSummary?.volume.done : nil
         return EnduranceHeroLogic.weeklySessionsAndVolumeText(
             sessionsCompleted: sessionsCompleted,
             kmDone: kmDone,
@@ -1535,7 +1546,7 @@ final class TodayViewModel: ObservableObject {
     private func loadWeightLog() async {
         do {
             let fresh = try await apiClient.fetchWeightLog()
-            // Drives the hero's "Trend 82 kg" numeric roll and the
+            // Drives the hero's "Now 82 kg" / "This week 82.3 kg" caption roll and the
             // sparkline's new-point animation (both `contentTransition`/
             // `.animation(value:)` need an animation context to roll/extend
             // rather than jump) — fires after every weigh-in refresh.

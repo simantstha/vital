@@ -8,10 +8,10 @@ import SwiftUI
 /// `UnitSystem` — never from the server `headline`, which is always in kg.
 /// `headline` is only the fallback for goals/states that have no weight
 /// numbers to compose from (muscle lifts, endurance sessions, general habits).
-/// The one exception is the weight-loss early read / welcome back / plateau
-/// (`weightRead.state`, `serverWeightRead`): there the server's headline IS the
-/// read — it already speaks in the user's unit — and a line composed from the
-/// smoothed trend would contradict it.
+/// The one exception is the weight-loss early read / welcome back / plateau /
+/// moving again (`weightRead.state`, `serverWeightRead`): there the server's
+/// headline IS the read — it already speaks in the user's unit — and a line
+/// composed from the smoothed trend would contradict it.
 enum GoalProgressLogic {
 
     // MARK: - Non-breaking text
@@ -285,10 +285,11 @@ enum GoalProgressLogic {
     /// A weight-loss goal measures it from the server's `current.changeKg`: the same
     /// weight (the 7-day mean of the scale, else the latest reading) that sets the
     /// bar's `progressPct`, the headline's "to go", and the opener and coach lines —
-    /// not from `current.weightKg`, the smoothed trend that lags the scale by days
-    /// and would make the text and the bar disagree. Without `changeKg`, and for
-    /// every other goal (whose `changeKg` is still the trend's), it is the trend
-    /// against the start, as before.
+    /// on a server that predates wave 21 not `current.weightKg`, the smoothed trend
+    /// that lags the scale by days and would make the text and the bar disagree (a
+    /// wave 21 server sends that same progress weight as `weightKg`, the trend as
+    /// `trendKg`). Without `changeKg`, and for every other goal (whose `changeKg` is
+    /// still the trend's), it is `weightKg` against the start, as before.
     static func weightMovedKg(_ progress: GoalProgressDTO, startKg: Double, currentKg: Double) -> Double {
         if progress.goal == "weight_loss", let change = progress.current.changeKg, change.isFinite {
             return change
@@ -573,11 +574,14 @@ enum GoalProgressLogic {
         return headlineWithoutVerdict(progress.headline) ?? label(for: progress.verdict)
     }
 
-    // MARK: - Server weight read (early / returning / plateau)
+    // MARK: - Server weight read (early / returning / plateau / moving again)
 
     /// True for a weight-loss goal whose `weightRead.state` is `early`,
-    /// `returning` or `plateau`: the server then sends no weekly pace
-    /// (`ratePerWeek.kg` is null) and no ETA, and its headline is the read.
+    /// `returning`, `plateau` or `movingAgain`: the server then sends no weekly
+    /// pace (`ratePerWeek.kg` is null) and no ETA, and its headline is the read.
+    /// (`movingAgain`, wave 21: the 14 days after a plateau — the week plan carries
+    /// no pace and no date, `lib/weightWeekPlan.ts`; the 21-day line still covers
+    /// the flat weeks, so it would call the goal "behind".)
     /// Surfaces that would otherwise compute a pace of their own (the Today hero,
     /// the Trends weight card's rate pill) must stay silent about one. `false`
     /// for `pace`, `reached`, an unknown state, other goals and an older server
@@ -585,8 +589,8 @@ enum GoalProgressLogic {
     static func usesServerWeightRead(_ progress: GoalProgressDTO) -> Bool {
         guard progress.goal == "weight_loss", let state = progress.weightRead?.state else { return false }
         switch state {
-        case .early, .returning, .plateau: return true
-        case .pace, .reached:              return false
+        case .early, .returning, .plateau, .movingAgain: return true
+        case .pace, .reached:                            return false
         }
     }
 
@@ -594,7 +598,8 @@ enum GoalProgressLogic {
     /// composed weight line or rate: its headline minus a leading verdict
     /// phrase ("Early read — down 0.7 kg on the scale in 7 days", "Welcome back
     /// — the scale is down 1.1 kg since May 10", "Plateau — weekly average
-    /// ~89.4 kg for 3 weeks"). `nil` outside `usesServerWeightRead`, once the
+    /// ~89.4 kg for 3 weeks", "Moving again — weekly average down 0.5 kg from
+    /// the plateau"). `nil` outside `usesServerWeightRead`, once the
     /// goal is reached, and when the server sent no headline.
     static func serverWeightRead(_ progress: GoalProgressDTO) -> String? {
         guard usesServerWeightRead(progress), progress.verdict != .reached else { return nil }
@@ -832,6 +837,75 @@ enum GoalProgressLogic {
         return UnitFormat.weightDelta(kgPerWeek: kg, system)
     }
 
+    // MARK: - One displayed weight (weight loss, wave 21)
+
+    /// True for a weight-loss goal on a wave 21 server — the payload carries
+    /// `current.trendKg` — where `current.weightKg` is the PROGRESS weight: the 7-day raw
+    /// mean when the newest weigh-in has 3+ weigh-ins in the 7 days up to it
+    /// (`weightRead.weekMeanKg`), else the latest scale reading (`progressKg =
+    /// weekMeanKg ?? scaleKg` in `lib/goalProgress.ts`). The smoothed trend the chart
+    /// draws is `trendKg`. An older server (no `trendKg`) sent the trend as `weightKg`,
+    /// so it keeps the old "Now" wording and never mislabels it.
+    static func usesProgressWeight(_ progress: GoalProgressDTO) -> Bool {
+        progress.goal == "weight_loss" && progress.current.trendKg != nil
+    }
+
+    /// A weekly average counts as "this week's" while the newest weigh-in is at most this
+    /// many days old; past that it is the average of an earlier week.
+    static let thisWeekMaxWeighInAgeDays = 6
+
+    /// What the progress weight is called, so the number never claims more than it is
+    /// (`usesProgressWeight`):
+    ///  - the weekly average (`weightRead.weekMeanKg`) of a newest weigh-in at most
+    ///    `thisWeekMaxWeighInAgeDays` old: "This week";
+    ///  - the weekly average, but of an older weigh-in (or of an unknown age): "Weekly avg";
+    ///  - no weekly average (fewer than 3 weigh-ins in the 7 days up to the newest, so it is
+    ///    one scale reading): "Latest";
+    ///  - an older server, other goals, or a payload with no `weightRead` to tell which it
+    ///    is: "Now", as before.
+    static func currentWeightLabel(_ progress: GoalProgressDTO) -> String {
+        guard usesProgressWeight(progress), let read = progress.weightRead else { return "Now" }
+        guard let mean = read.weekMeanKg, mean.isFinite, mean > 0 else { return "Latest" }
+        guard let age = progress.lastWeighInDaysAgo, age <= thisWeekMaxWeighInAgeDays else { return "Weekly avg" }
+        return "This week"
+    }
+
+    /// The progress weight with its label, as the goal sheet, Today's weight hero and the Trends
+    /// weight card say it together.
+    struct ProgressWeight: Equatable {
+        let kg: Double
+        /// `currentWeightLabel`: "This week" / "Weekly avg" / "Latest" / "Now".
+        let label: String
+    }
+
+    /// The weight (kg) the server's headline, "to go" and bar measure from, with its label, when
+    /// `current.weightKg` is that weight (`usesProgressWeight`); `nil` otherwise, so a caller
+    /// keeps the trend it already shows. Today's weight hero quotes it as "This week 82.3 kg".
+    static func progressWeight(_ progress: GoalProgressDTO?) -> ProgressWeight? {
+        guard let progress, usesProgressWeight(progress),
+              let kg = progress.current.weightKg, kg.isFinite, kg > 0 else { return nil }
+        return ProgressWeight(kg: kg, label: currentWeightLabel(progress))
+    }
+
+    // MARK: - Race eve (endurance, wave 21e)
+
+    /// The day before the race: the server drops the week's km from the card on
+    /// purpose ("the day before the race is for rest") — `distance.thisWeekKm` is
+    /// null and `distance.text` is "Race tomorrow", while the headline carries the
+    /// advice ("Race tomorrow — rest or a 15-min shakeout; lay out your kit"). The
+    /// card then has no distance line and no bar (`distanceLine` / `distanceFraction`
+    /// are `nil` without `thisWeekKm`) and shows that headline (`primaryLine`); Today's
+    /// endurance hero must not bring the week's km back from another endpoint either.
+    /// True when the payload has a weekly distance block without km, a race one day
+    /// out and not in recovery; false for an older server (no race phase) and every
+    /// other day.
+    static func isRaceEve(_ progress: GoalProgressDTO) -> Bool {
+        guard progress.goal == "endurance", let distance = progress.distance, distance.thisWeekKm == nil,
+              let race = progress.race, race.daysToGo == 1,
+              let phase = race.phase, phase != .recovery else { return false }
+        return true
+    }
+
     // MARK: - Detail sheet stats table
 
     /// One label/value row of the detail sheet's stats card.
@@ -863,7 +937,7 @@ enum GoalProgressLogic {
                 rows.append(StatRow(label: "Start", value: UnitFormat.weight(kg: start, system)))
             }
             if let current = progress.current.weightKg {
-                rows.append(StatRow(label: "Now", value: UnitFormat.weight(kg: current, system)))
+                rows.append(StatRow(label: currentWeightLabel(progress), value: UnitFormat.weight(kg: current, system)))
             }
             if let target = progress.target.weightKg {
                 rows.append(StatRow(label: "Target", value: UnitFormat.weight(kg: target, system)))

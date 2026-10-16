@@ -2220,7 +2220,10 @@ struct GoalProgressDTO: Decodable, Equatable {
     /// Endurance + weekly distance target only (`distance` is `null` otherwise):
     /// this local calendar week's (Mon–today) distance against the target.
     /// `thisWeekKm` / `avg4wKm` are `nil` when no workout in the last 28 days
-    /// carries a distance (honesty rule — never a guessed 0).
+    /// carries a distance (honesty rule — never a guessed 0). `thisWeekKm` is
+    /// also `nil` on the race eve (wave 21e: the day before the race is for rest,
+    /// the week's km are not on the card at all) — there `text` is "Race tomorrow"
+    /// and the headline carries the advice; see `GoalProgressLogic.isRaceEve`.
     struct Distance: Decodable, Equatable {
         let targetKm: Double
         let thisWeekKm: Double?
@@ -2252,14 +2255,40 @@ struct GoalProgressDTO: Decodable, Equatable {
             let longRunKm: Double?
             /// One line: what the week is for.
             let purpose: String?
+            /// Wave 21e flags, each present only when true (`nil` otherwise and from an
+            /// older server). The server words them in `purpose` / `distance.text` /
+            /// the headline, and the app shows that copy as sent, so none of them
+            /// composes anything here; they are decoded so a surface that ever needs
+            /// to tell a light week or a cutback apart can, without a payload change.
+            /// A cutback week (every 4th build / maintain week): ~80% of the week it replaces.
+            let cutback: Bool?
+            /// A light week (4+ days without a run, or well behind the week's pace from Friday): don't make it up.
+            let lightWeek: Bool?
+            /// One of the last 2 build weeks before the taper: a few strides after one easy run.
+            let strides: Bool?
+            /// The week's long run is held, not grown (a cutback week, or after a long-run jump).
+            let longRunHeld: Bool?
+            /// The target is a careful comeback's ceiling, worded "up to ~18 km".
+            let upTo: Bool?
 
-            private enum CodingKeys: String, CodingKey { case kind, targetKm, longRunKm, purpose }
+            private enum CodingKeys: String, CodingKey {
+                case kind, targetKm, longRunKm, purpose, cutback, lightWeek, strides, longRunHeld, upTo
+            }
 
-            init(kind: String, targetKm: Double? = nil, longRunKm: Double? = nil, purpose: String? = nil) {
+            init(
+                kind: String, targetKm: Double? = nil, longRunKm: Double? = nil, purpose: String? = nil,
+                cutback: Bool? = nil, lightWeek: Bool? = nil, strides: Bool? = nil, longRunHeld: Bool? = nil,
+                upTo: Bool? = nil
+            ) {
                 self.kind = kind
                 self.targetKm = targetKm
                 self.longRunKm = longRunKm
                 self.purpose = purpose
+                self.cutback = cutback
+                self.lightWeek = lightWeek
+                self.strides = strides
+                self.longRunHeld = longRunHeld
+                self.upTo = upTo
             }
 
             /// Throws without a kind so the enclosing `try?` drops the whole plan;
@@ -2270,6 +2299,11 @@ struct GoalProgressDTO: Decodable, Equatable {
                 targetKm = try? c.decode(Double.self, forKey: .targetKm)
                 longRunKm = try? c.decode(Double.self, forKey: .longRunKm)
                 purpose = try? c.decode(String.self, forKey: .purpose)
+                cutback = try? c.decode(Bool.self, forKey: .cutback)
+                lightWeek = try? c.decode(Bool.self, forKey: .lightWeek)
+                strides = try? c.decode(Bool.self, forKey: .strides)
+                longRunHeld = try? c.decode(Bool.self, forKey: .longRunHeld)
+                upTo = try? c.decode(Bool.self, forKey: .upTo)
             }
         }
 
@@ -2368,13 +2402,25 @@ struct GoalProgressDTO: Decodable, Equatable {
         let lastKm: Double?
         let peakKm: Double?
         let targetPeakKm: Double?
+        /// Wave 21e, present only when true (`nil` otherwise and from an older
+        /// server): the long-run cap note ("Your 30 km weeks fit a 15 km long
+        /// run...") is due this week. The server words it in the long-run reason.
+        let capNoteDue: Bool?
+        /// Wave 21e, present only when true: the 28-day peak long run was over 55%
+        /// of its own week, so the server never praises it as a good peak.
+        let oversized: Bool?
 
-        private enum CodingKeys: String, CodingKey { case lastKm, peakKm, targetPeakKm }
+        private enum CodingKeys: String, CodingKey { case lastKm, peakKm, targetPeakKm, capNoteDue, oversized }
 
-        init(lastKm: Double? = nil, peakKm: Double? = nil, targetPeakKm: Double? = nil) {
+        init(
+            lastKm: Double? = nil, peakKm: Double? = nil, targetPeakKm: Double? = nil,
+            capNoteDue: Bool? = nil, oversized: Bool? = nil
+        ) {
             self.lastKm = lastKm
             self.peakKm = peakKm
             self.targetPeakKm = targetPeakKm
+            self.capNoteDue = capNoteDue
+            self.oversized = oversized
         }
 
         /// Throws when neither distance decodes so the enclosing `try?` drops
@@ -2389,24 +2435,40 @@ struct GoalProgressDTO: Decodable, Equatable {
             lastKm = last
             peakKm = peak
             targetPeakKm = try? c.decode(Double.self, forKey: .targetPeakKm)
+            capNoteDue = try? c.decode(Bool.self, forKey: .capNoteDue)
+            oversized = try? c.decode(Bool.self, forKey: .oversized)
         }
     }
 
     struct Current: Decodable, Equatable {
+        /// The weight the card measures from. Weight loss on a wave 21 server (the
+        /// payload then carries `trendKg`): the progress weight — the 7-day raw mean of
+        /// 3+ weigh-ins (`weightRead.weekMeanKg`), else the latest scale reading — the one
+        /// weight `changeKg`, `progressPct` and the headline's "to go" use. Every other
+        /// goal, and a weight-loss server that predates `trendKg`: the smoothed trend.
         let weightKg: Double?
         let startWeightKg: Double?
         let changeKg: Double?
         /// Nominally 0...100 (the server may exceed on overshoot / go
         /// negative on regress — `GoalProgressLogic.progressFraction` clamps).
         let progressPct: Double?
+        /// Weight loss only, wave 21: the smoothed trend the chart draws (it lags the
+        /// scale by about ten days). `nil` for other goals and from an older server —
+        /// which is also how the app knows `weightKg` is NOT yet the progress weight
+        /// (`GoalProgressLogic.usesProgressWeight`).
+        let trendKg: Double?
 
-        private enum CodingKeys: String, CodingKey { case weightKg, startWeightKg, changeKg, progressPct }
+        private enum CodingKeys: String, CodingKey { case weightKg, startWeightKg, changeKg, progressPct, trendKg }
 
-        init(weightKg: Double? = nil, startWeightKg: Double? = nil, changeKg: Double? = nil, progressPct: Double? = nil) {
+        init(
+            weightKg: Double? = nil, startWeightKg: Double? = nil, changeKg: Double? = nil, progressPct: Double? = nil,
+            trendKg: Double? = nil
+        ) {
             self.weightKg = weightKg
             self.startWeightKg = startWeightKg
             self.changeKg = changeKg
             self.progressPct = progressPct
+            self.trendKg = trendKg
         }
 
         init(from decoder: Decoder) throws {
@@ -2415,6 +2477,7 @@ struct GoalProgressDTO: Decodable, Equatable {
             startWeightKg = try? c.decode(Double.self, forKey: .startWeightKg)
             changeKg = try? c.decode(Double.self, forKey: .changeKg)
             progressPct = try? c.decode(Double.self, forKey: .progressPct)
+            trendKg = try? c.decode(Double.self, forKey: .trendKg)
         }
     }
 
@@ -2517,9 +2580,9 @@ struct GoalProgressDTO: Decodable, Equatable {
     /// How the server read the scale (`lib/goalProgress.ts` `GoalWeightRead`);
     /// `nil` for a goal without a weight read and from a server that predates
     /// it (callers then behave exactly as before). While `state` is `early`,
-    /// `returning` or `plateau` the server withholds the weekly pace and the
-    /// ETA (`ratePerWeek.kg` / `eta` are null) and its headline carries the
-    /// user-facing read; see `GoalProgressLogic.serverWeightRead`.
+    /// `returning`, `plateau` or `movingAgain` the server withholds the weekly
+    /// pace and the ETA (`ratePerWeek.kg` / `eta` are null) and its headline
+    /// carries the user-facing read; see `GoalProgressLogic.serverWeightRead`.
     struct WeightRead: Decodable, Equatable {
         /// What kind of read the verdict is. Raw values are the wire strings;
         /// an unknown or missing one decodes to a `nil` state (never a throw).
@@ -2527,8 +2590,59 @@ struct GoalProgressDTO: Decodable, Equatable {
             case early
             case returning
             case plateau
+            /// Wave 21: the 14 days after a plateau ends, the weekly average falling
+            /// again — no date, no pace, no "behind".
+            case movingAgain = "moving_again"
             case pace
             case reached
+        }
+
+        /// This week's plan (`lib/weightWeekPlan.ts`, weight loss only; wave 21): decided
+        /// once a week and read by every surface, so none can disagree inside a week. Only
+        /// what the app reads is decoded; every field is tolerant, and a plan that is not
+        /// an object decodes to `nil`.
+        struct Plan: Decodable, Equatable {
+            /// The ONE thing to do this week ("Keep doing what restarted it").
+            struct Action: Decodable, Equatable {
+                /// `keep_going`, `keep_what_worked`, `trim`... — kept a raw string so a future kind never fails decoding.
+                let kind: String?
+                let text: String
+
+                private enum CodingKeys: String, CodingKey { case kind, text }
+
+                init(kind: String? = nil, text: String) {
+                    self.kind = kind
+                    self.text = text
+                }
+
+                /// Throws without the text so the enclosing `try?` drops the whole action.
+                init(from decoder: Decoder) throws {
+                    let c = try decoder.container(keyedBy: CodingKeys.self)
+                    kind = try? c.decode(String.self, forKey: .kind)
+                    text = try c.decode(String.self, forKey: .text)
+                }
+            }
+
+            /// Monday ('YYYY-MM-DD') of the week the plan covers.
+            let weekStart: String?
+            /// The plan's state (`maintenance`, which `State` has no case for, reads as `nil`).
+            let state: State?
+            let action: Action?
+
+            private enum CodingKeys: String, CodingKey { case weekStart, state, action }
+
+            init(weekStart: String? = nil, state: State? = nil, action: Action? = nil) {
+                self.weekStart = weekStart
+                self.state = state
+                self.action = action
+            }
+
+            init(from decoder: Decoder) throws {
+                let c = try decoder.container(keyedBy: CodingKeys.self)
+                weekStart = try? c.decode(String.self, forKey: .weekStart)
+                state = (try? c.decode(String.self, forKey: .state)).flatMap(State.init(rawValue:))
+                action = try? c.decode(Action.self, forKey: .action)
+            }
         }
 
         /// After 7+ days without a weigh-in, until 3 weigh-ins are back.
@@ -2580,15 +2694,17 @@ struct GoalProgressDTO: Decodable, Equatable {
         /// still short of a pace ("a few more weigh-ins and your pace is back"):
         /// `WeightHeroLogic.earlyReadSlotText(goalAgeDays:)`.
         let goalAgeDays: Int?
+        /// This week's plan (weight loss, wave 21); `nil` from an older server.
+        let plan: Plan?
 
         private enum CodingKeys: String, CodingKey {
-            case state, scaleKg, scaleDay, weekMeanKg, weeksVsTarget, returned, reachedDaysAgo, goalAgeDays
+            case state, scaleKg, scaleDay, weekMeanKg, weeksVsTarget, returned, reachedDaysAgo, goalAgeDays, plan
         }
 
         init(
             state: State? = nil, scaleKg: Double? = nil, scaleDay: String? = nil, weekMeanKg: Double? = nil,
             weeksVsTarget: Int? = nil, returned: Returned? = nil, reachedDaysAgo: Int? = nil,
-            goalAgeDays: Int? = nil
+            goalAgeDays: Int? = nil, plan: Plan? = nil
         ) {
             self.state = state
             self.scaleKg = scaleKg
@@ -2598,6 +2714,7 @@ struct GoalProgressDTO: Decodable, Equatable {
             self.returned = returned
             self.reachedDaysAgo = reachedDaysAgo
             self.goalAgeDays = goalAgeDays
+            self.plan = plan
         }
 
         /// Every field is tolerant: a missing, null or wrong-typed value drops only that field.
@@ -2611,6 +2728,7 @@ struct GoalProgressDTO: Decodable, Equatable {
             returned = try? c.decode(Returned.self, forKey: .returned)
             reachedDaysAgo = tolerantWholeNumber(c, .reachedDaysAgo)
             goalAgeDays = tolerantWholeNumber(c, .goalAgeDays)
+            plan = try? c.decode(Plan.self, forKey: .plan)
         }
     }
 
@@ -2712,11 +2830,18 @@ struct GoalProgressDTO: Decodable, Equatable {
     /// Muscle goal "building back" state after a break; `nil` when absent and
     /// for older servers.
     let liftReturn: LiftReturn?
+    /// Muscle goal, wave 21: the same break lift by lift. The headline lift comes
+    /// first (identical to `liftReturn`), then the other main lifts trained before
+    /// the break and since; a lift still under its pre-break best has
+    /// `regained == false`. `nil` when absent (older servers, other goals) or
+    /// when any entry fails to decode, in which case readers fall back to
+    /// `liftReturn`.
+    let liftReturns: [LiftReturn]?
 
     private enum CodingKeys: String, CodingKey {
         case goal, target, distance, race, longRun, current, ratePerWeek, safeBand, eta, onPaceForTargetDate
         case verdict, headline, reasons, dataSufficiency, lastWeighInDaysAgo, adherence, reachedAt
-        case lastSessionDaysAgo, weightRead, liftReturn
+        case lastSessionDaysAgo, weightRead, liftReturn, liftReturns
     }
 
     init(
@@ -2739,7 +2864,8 @@ struct GoalProgressDTO: Decodable, Equatable {
         reachedAt: String? = nil,
         lastSessionDaysAgo: Int? = nil,
         weightRead: WeightRead? = nil,
-        liftReturn: LiftReturn? = nil
+        liftReturn: LiftReturn? = nil,
+        liftReturns: [LiftReturn]? = nil
     ) {
         self.goal = goal
         self.lastWeighInDaysAgo = lastWeighInDaysAgo
@@ -2748,6 +2874,7 @@ struct GoalProgressDTO: Decodable, Equatable {
         self.lastSessionDaysAgo = lastSessionDaysAgo
         self.weightRead = weightRead
         self.liftReturn = liftReturn
+        self.liftReturns = liftReturns
         self.target = target
         self.distance = distance
         self.race = race
@@ -2785,6 +2912,7 @@ struct GoalProgressDTO: Decodable, Equatable {
         lastSessionDaysAgo = Self.daysAgo(c, .lastSessionDaysAgo)
         weightRead = try? c.decode(WeightRead.self, forKey: .weightRead)
         liftReturn = try? c.decode(LiftReturn.self, forKey: .liftReturn)
+        liftReturns = try? c.decode([LiftReturn].self, forKey: .liftReturns)
     }
 
     /// A whole-day count sent as `5` or `5.0`; `nil` for null, missing or

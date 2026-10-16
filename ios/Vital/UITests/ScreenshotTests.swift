@@ -527,9 +527,10 @@ final class ScreenshotTests: XCTestCase {
                 // Race countdown line ("Half marathon · 12 weeks to go") from the fixture's race.
                 XCTAssertTrue(waitForText(app, containing: "Half marathon"),
                                "Today's endurance hero should show the race countdown [\(appearance)]")
-                // ...followed by the long-run build ("· long run 14/15 km", number and unit joined by U+00A0), from the same payload.
-                // (15 km is the peak a 30 km week can carry: half of the weekly goal, under the half marathon's own 18 km.)
-                XCTAssertTrue(waitForText(app, containing: "long run 14/15\u{00A0}km"),
+                // ...followed by the long-run build ("· long run 12/15 km", number and unit joined by U+00A0), from the same payload.
+                // (15 km is the peak a 30 km week can carry: half of the weekly goal, under the half marathon's own 18 km;
+                // 12 km is last week's long run, half of that 24.5 km week.)
+                XCTAssertTrue(waitForText(app, containing: "long run 12/15\u{00A0}km"),
                                "Today's endurance hero race line should carry the long-run progress [\(appearance)]")
             }
 
@@ -818,9 +819,9 @@ final class ScreenshotTests: XCTestCase {
         case "muscle":
             expected = "Squat est. 1RM +10\u{00A0}kg vs 4\u{00A0}weeks ago (153\u{00A0}\u{2192}\u{00A0}163\u{00A0}kg)"
         default:
-            // endurance: the long-run reason (the race and the week's plan precede it): the 16 km peak
-            // is on target for the 15 km a 30 km week can carry.
-            expected = "Long run peak 16\u{00A0}km \u{2014} on target"
+            // endurance: the long-run reason (the race and the week's plan precede it): the 12 km peak
+            // is still building to the 15 km a 30 km week can carry ("Long run 12 km · build to 15 km by …").
+            expected = "Long run 12\u{00A0}km"
         }
         XCTAssertTrue(waitForText(app, containing: expected),
                        "Goal progress detail should show the \(scenario) fixture's content [\(appearance)]")

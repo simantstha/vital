@@ -447,7 +447,8 @@ private extension TrendsView {
     var strengthCard: TrendsStrengthLogic.Card? {
         guard let summary = vm.workoutSummary else { return nil }
         return TrendsStrengthLogic.card(
-            from: summary, system: unitPref.current, today: Date(), liftReturn: vm.goalProgress?.liftReturn
+            from: summary, system: unitPref.current, today: Date(),
+            liftReturn: vm.goalProgress?.liftReturn, liftReturns: vm.goalProgress?.liftReturns
         )
     }
 
@@ -475,7 +476,10 @@ private extension TrendsView {
             animatesIn: true,
             // While the server is reading the scale (early read / welcome back /
             // plateau) it withholds a pace; the pill must not quote its own.
-            withholdsLocalRate: vm.goalProgress.map(GoalProgressLogic.usesServerWeightRead) ?? false
+            withholdsLocalRate: vm.goalProgress.map(GoalProgressLogic.usesServerWeightRead) ?? false,
+            // A wave 21 weight-loss server: the big number is the goal's progress weight, labelled
+            // ("This week 82.3 kg"), the number the goal card says; the chart stays the trend.
+            progressWeight: GoalProgressLogic.progressWeight(vm.goalProgress)
         )
     }
 
