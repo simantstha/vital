@@ -2442,10 +2442,10 @@ struct GoalProgressDTO: Decodable, Equatable {
 
     struct Current: Decodable, Equatable {
         /// The weight the card measures from. Weight loss on a wave 21 server (the
-        /// payload then carries `trendKg`): the WEEKLY AVERAGE (the 7-day raw mean of
-        /// 3+ weigh-ins, else the latest scale reading) — the one weight `changeKg`,
-        /// `progressPct` and the headline's "to go" use. Every other goal, and a
-        /// weight-loss server that predates `trendKg`: the smoothed trend.
+        /// payload then carries `trendKg`): the progress weight — the 7-day raw mean of
+        /// 3+ weigh-ins (`weightRead.weekMeanKg`), else the latest scale reading — the one
+        /// weight `changeKg`, `progressPct` and the headline's "to go" use. Every other
+        /// goal, and a weight-loss server that predates `trendKg`: the smoothed trend.
         let weightKg: Double?
         let startWeightKg: Double?
         let changeKg: Double?
@@ -2454,8 +2454,8 @@ struct GoalProgressDTO: Decodable, Equatable {
         let progressPct: Double?
         /// Weight loss only, wave 21: the smoothed trend the chart draws (it lags the
         /// scale by about ten days). `nil` for other goals and from an older server —
-        /// which is also how the app knows `weightKg` is NOT yet the weekly average
-        /// (`GoalProgressLogic.usesWeeklyAverageWeight`).
+        /// which is also how the app knows `weightKg` is NOT yet the progress weight
+        /// (`GoalProgressLogic.usesProgressWeight`).
         let trendKg: Double?
 
         private enum CodingKeys: String, CodingKey { case weightKg, startWeightKg, changeKg, progressPct, trendKg }

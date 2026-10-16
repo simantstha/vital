@@ -679,44 +679,103 @@ final class WeightHeroLogicTests: XCTestCase {
         XCTAssertEqual(heroText(stale), "Moving again — weekly average down 0.5\u{00A0}kg from the plateau")
     }
 
-    /// The hero's middle caption quotes the weekly average ("This week") only on a wave 21 server, where
-    /// `current.weightKg` is that average and `trendKg` is present; an older server keeps the trend's "Now".
-    func testSparklineCaptionSaysThisWeekOnlyForTheWeeklyAverage() {
-        let weekly = WeightHeroLogic.sparklineCaptions(
-            firstKg: 83.7, lastKg: 82, targetKg: 76, system: .metric, weekAverageKg: 82.3
-        )
-        XCTAssertEqual(weekly?.now, "This week 82.3\u{00A0}kg")
-        XCTAssertEqual(weekly?.start, "Start 83.7\u{00A0}kg", "the line is still the trend: only the caption changes")
-        XCTAssertEqual(weekly?.target, "Goal 76\u{00A0}kg")
+    /// The hero's middle caption quotes the goal's progress weight with the label that is true for it, only on a
+    /// wave 21 server (`current.trendKg` present); an older server keeps the trend's "Now".
+    func testSparklineCaptionNamesTheProgressWeightTruthfully() {
+        for label in ["This week", "Weekly avg", "Latest"] {
+            let weight = GoalProgressLogic.ProgressWeight(kg: 82.3, label: label)
+            let captions = WeightHeroLogic.sparklineCaptions(
+                firstKg: 83.7, lastKg: 82, targetKg: 76, system: .metric, progressWeight: weight
+            )
+            XCTAssertEqual(captions?.now, "\(label) 82.3\u{00A0}kg")
+            XCTAssertEqual(captions?.start, "Start 83.7\u{00A0}kg", "the line is still the trend: only the caption changes")
+            XCTAssertEqual(captions?.target, "Goal 76\u{00A0}kg")
+        }
         XCTAssertEqual(
-            WeightHeroLogic.sparklineCaptions(firstKg: 83.7, lastKg: 82, targetKg: nil, system: .imperial, weekAverageKg: 82.3)?.now,
+            WeightHeroLogic.sparklineCaptions(
+                firstKg: 83.7, lastKg: 82, targetKg: nil, system: .imperial,
+                progressWeight: GoalProgressLogic.ProgressWeight(kg: 82.3, label: "This week")
+            )?.now,
             "This week 181\u{00A0}lb"
         )
-        // No weekly average (an older server, other goals), or one that is not a weight: the trend's "Now".
-        for average in [nil, 0, -1, Double.nan, Double.infinity] as [Double?] {
-            XCTAssertEqual(
-                WeightHeroLogic.sparklineCaptions(firstKg: 83.7, lastKg: 82, targetKg: 76, system: .metric, weekAverageKg: average)?.now,
-                "Now 82\u{00A0}kg", "\(String(describing: average))"
-            )
-        }
+        // No progress weight (an older server, other goals): the trend's "Now", exactly as before.
         XCTAssertEqual(WeightHeroLogic.sparklineCaptions(firstKg: 83.7, lastKg: 82, targetKg: 76, system: .metric)?.now, "Now 82\u{00A0}kg")
-        // Still nil without points, whatever the average.
-        XCTAssertNil(WeightHeroLogic.sparklineCaptions(firstKg: nil, lastKg: 82, targetKg: 76, system: .metric, weekAverageKg: 82.3))
+        XCTAssertEqual(
+            WeightHeroLogic.sparklineCaptions(firstKg: 83.7, lastKg: 82, targetKg: 76, system: .metric, progressWeight: nil)?.now,
+            "Now 82\u{00A0}kg"
+        )
+        // Still nil without points, whatever the weight.
+        XCTAssertNil(WeightHeroLogic.sparklineCaptions(
+            firstKg: nil, lastKg: 82, targetKg: 76, system: .metric,
+            progressWeight: GoalProgressLogic.ProgressWeight(kg: 82.3, label: "This week")
+        ))
     }
 
-    /// `GoalProgressLogic.weeklyAverageKg` is what Today feeds the caption: `trendKg` present is how a wave 21
-    /// weight-loss payload says `weightKg` is the weekly average.
-    func testWeeklyAverageIsOnlyOfferedWhenTheServerSendsTheTrendSeparately() {
-        func payload(_ goal: String, trendKg: Double?, weightKg: Double? = 82.3) -> GoalProgressDTO {
-            GoalProgressDTO(
-                goal: goal, current: .init(weightKg: weightKg, startWeightKg: 83.7, trendKg: trendKg), verdict: .onTrack
-            )
+    /// A weight-loss payload as a wave 21 server sends it: `weightKg` is the progress weight, `trendKg` the trend, the
+    /// weekly average (`weightRead.weekMeanKg`) present only with 3+ weigh-ins in the 7 days up to the newest.
+    private func payload(
+        goal: String = "weight_loss", trendKg: Double? = 82, weightKg: Double? = 82.3,
+        weekMeanKg: Double? = 82.3, lastWeighInDaysAgo: Int? = 0, hasWeightRead: Bool = true
+    ) -> GoalProgressDTO {
+        GoalProgressDTO(
+            goal: goal, current: .init(weightKg: weightKg, startWeightKg: 83.7, trendKg: trendKg), verdict: .onTrack,
+            lastWeighInDaysAgo: lastWeighInDaysAgo,
+            weightRead: hasWeightRead ? GoalProgressDTO.WeightRead(state: .pace, weekMeanKg: weekMeanKg) : nil
+        )
+    }
+
+    /// All four labels: "This week" (a weekly average of a weigh-in at most 6 days old), "Weekly avg" (an average of an
+    /// older weigh-in), "Latest" (one scale reading: fewer than 3 weigh-ins in the week), "Now" (an older server).
+    func testProgressWeightLabelFollowsTheAverageAndTheAgeOfTheWeighIn() {
+        func label(_ progress: GoalProgressDTO) -> String? { GoalProgressLogic.progressWeight(progress)?.label }
+        // This week: the average, and the newest weigh-in is at most 6 days old.
+        XCTAssertEqual(label(payload(lastWeighInDaysAgo: 0)), "This week")
+        XCTAssertEqual(label(payload(lastWeighInDaysAgo: 3)), "This week")
+        XCTAssertEqual(label(payload(lastWeighInDaysAgo: GoalProgressLogic.thisWeekMaxWeighInAgeDays)), "This week")
+        XCTAssertEqual(GoalProgressLogic.thisWeekMaxWeighInAgeDays, 6)
+        // Weekly avg: still an average, but of an older week (or of an unknown age: no claim about "this week").
+        XCTAssertEqual(label(payload(lastWeighInDaysAgo: 7)), "Weekly avg")
+        XCTAssertEqual(label(payload(lastWeighInDaysAgo: 11)), "Weekly avg")
+        XCTAssertEqual(label(payload(lastWeighInDaysAgo: nil)), "Weekly avg")
+        // Latest: no weekly average, so it is one scale reading, however old.
+        XCTAssertEqual(label(payload(weekMeanKg: nil, lastWeighInDaysAgo: 0)), "Latest")
+        XCTAssertEqual(label(payload(weekMeanKg: nil, lastWeighInDaysAgo: 10)), "Latest")
+        XCTAssertEqual(label(payload(weekMeanKg: nil, lastWeighInDaysAgo: nil)), "Latest")
+        // Now: an older server (no trendKg) sends no progress weight at all; the trend stays "Now".
+        XCTAssertNil(GoalProgressLogic.progressWeight(payload(trendKg: nil)))
+        XCTAssertEqual(GoalProgressLogic.currentWeightLabel(payload(trendKg: nil)), "Now")
+        XCTAssertEqual(GoalProgressLogic.currentWeightLabel(payload(trendKg: nil, weekMeanKg: nil)), "Now")
+        // ...as do other goals, and a payload with no weight read to say which it is (no claim either way).
+        XCTAssertNil(GoalProgressLogic.progressWeight(payload(goal: "muscle")))
+        XCTAssertEqual(GoalProgressLogic.currentWeightLabel(payload(goal: "muscle")), "Now")
+        XCTAssertEqual(GoalProgressLogic.progressWeight(payload(hasWeightRead: false))?.label, "Now")
+        // The weight itself is `current.weightKg`; nothing without one.
+        XCTAssertEqual(GoalProgressLogic.progressWeight(payload())?.kg, 82.3)
+        XCTAssertNil(GoalProgressLogic.progressWeight(payload(weightKg: nil)))
+        XCTAssertNil(GoalProgressLogic.progressWeight(payload(weightKg: 0)))
+        XCTAssertNil(GoalProgressLogic.progressWeight(nil))
+        // A weekly average that is not a real number is no average.
+        XCTAssertEqual(label(payload(weekMeanKg: 0)), "Latest")
+        XCTAssertEqual(label(payload(weekMeanKg: Double.nan)), "Latest")
+    }
+
+    /// What Today feeds the hero: the same label the goal sheet's stat row uses.
+    func testTheGoalSheetRowAndTheHeroCaptionSayTheSameThing() {
+        for (progress, expected) in [
+            (payload(lastWeighInDaysAgo: 2), "This week"),
+            (payload(lastWeighInDaysAgo: 9), "Weekly avg"),
+            (payload(weekMeanKg: nil), "Latest"),
+            (payload(trendKg: nil), "Now"),
+        ] {
+            let row = GoalProgressLogic.statRows(progress, system: .metric).first { $0.label == expected }
+            XCTAssertEqual(row?.value, "82.3\u{00A0}kg", expected)
+            if expected != "Now" {
+                let caption = WeightHeroLogic.sparklineCaptions(
+                    firstKg: 83.7, lastKg: 82, targetKg: nil, system: .metric,
+                    progressWeight: GoalProgressLogic.progressWeight(progress)
+                )
+                XCTAssertEqual(caption?.now, "\(expected) 82.3\u{00A0}kg")
+            }
         }
-        XCTAssertEqual(GoalProgressLogic.weeklyAverageKg(payload("weight_loss", trendKg: 82)), 82.3)
-        XCTAssertNil(GoalProgressLogic.weeklyAverageKg(payload("weight_loss", trendKg: nil)), "older server: weightKg is the trend")
-        XCTAssertNil(GoalProgressLogic.weeklyAverageKg(payload("muscle", trendKg: 82)), "weight loss only")
-        XCTAssertNil(GoalProgressLogic.weeklyAverageKg(payload("weight_loss", trendKg: 82, weightKg: nil)))
-        XCTAssertNil(GoalProgressLogic.weeklyAverageKg(payload("weight_loss", trendKg: 82, weightKg: 0)))
-        XCTAssertNil(GoalProgressLogic.weeklyAverageKg(nil))
     }
 }

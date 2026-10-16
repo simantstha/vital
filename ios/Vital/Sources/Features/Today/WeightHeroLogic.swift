@@ -352,20 +352,21 @@ enum WeightHeroLogic {
     /// window), "Now 82 kg" (latest trend point) and, when a target weight
     /// exists, "Goal 76 kg" — all in the user's unit. `nil` without points.
     ///
-    /// `weekAverageKg` (wave 21, weight loss): the goal card's weekly average
-    /// (`GoalProgressLogic.weeklyAverageKg`). The line itself is still the smoothed
-    /// trend, but the number a weight-loss goal quotes everywhere else (the headline's
-    /// "to go", the goal sheet's stat row) is the weekly average, so the middle caption
-    /// says "This week 82.3 kg" instead of the trend's "Now 82 kg". `nil` (an older
-    /// server, other goals) keeps "Now" and the trend, exactly as before.
+    /// `progressWeight` (wave 21, weight loss): the weight the goal card measures from
+    /// (`GoalProgressLogic.progressWeight`), with its label. The line itself is still the
+    /// smoothed trend, but the number a weight-loss goal quotes everywhere else (the headline's
+    /// "to go", the goal sheet's stat row, the Trends weight card) is the progress weight, so
+    /// the middle caption says "This week 82.3 kg" / "Weekly avg 82.3 kg" / "Latest 82.3 kg"
+    /// (whichever it truly is) instead of the trend's "Now 82 kg". `nil` (an older server,
+    /// other goals) keeps "Now" and the trend, exactly as before.
     static func sparklineCaptions(
         firstKg: Double?, lastKg: Double?, targetKg: Double?, system: UnitSystem,
-        weekAverageKg: Double? = nil
+        progressWeight: GoalProgressLogic.ProgressWeight? = nil
     ) -> (start: String, now: String, target: String?)? {
         guard let firstKg, let lastKg else { return nil }
         let now: String
-        if let weekAverageKg, weekAverageKg.isFinite, weekAverageKg > 0 {
-            now = "This week \(UnitFormat.weight(kg: weekAverageKg, system))"
+        if let progressWeight {
+            now = "\(progressWeight.label) \(UnitFormat.weight(kg: progressWeight.kg, system))"
         } else {
             now = "Now \(UnitFormat.weight(kg: lastKg, system))"
         }

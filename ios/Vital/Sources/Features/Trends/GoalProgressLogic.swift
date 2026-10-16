@@ -287,7 +287,7 @@ enum GoalProgressLogic {
     /// bar's `progressPct`, the headline's "to go", and the opener and coach lines —
     /// on a server that predates wave 21 not `current.weightKg`, the smoothed trend
     /// that lags the scale by days and would make the text and the bar disagree (a
-    /// wave 21 server sends that same weekly average as `weightKg`, the trend as
+    /// wave 21 server sends that same progress weight as `weightKg`, the trend as
     /// `trendKg`). Without `changeKg`, and for every other goal (whose `changeKg` is
     /// still the trend's), it is `weightKg` against the start, as before.
     static func weightMovedKg(_ progress: GoalProgressDTO, startKg: Double, currentKg: Double) -> Double {
@@ -840,26 +840,51 @@ enum GoalProgressLogic {
     // MARK: - One displayed weight (weight loss, wave 21)
 
     /// True for a weight-loss goal on a wave 21 server — the payload carries
-    /// `current.trendKg` — where `current.weightKg` is the WEEKLY AVERAGE (the 7-day
-    /// raw mean, else the latest scale reading) and the smoothed trend the chart
-    /// draws is `trendKg`. An older server (no `trendKg`) sent the trend as
-    /// `weightKg`, so it keeps the old "Now" wording and never mislabels it.
-    static func usesWeeklyAverageWeight(_ progress: GoalProgressDTO) -> Bool {
+    /// `current.trendKg` — where `current.weightKg` is the PROGRESS weight: the 7-day raw
+    /// mean when the newest weigh-in has 3+ weigh-ins in the 7 days up to it
+    /// (`weightRead.weekMeanKg`), else the latest scale reading (`progressKg =
+    /// weekMeanKg ?? scaleKg` in `lib/goalProgress.ts`). The smoothed trend the chart
+    /// draws is `trendKg`. An older server (no `trendKg`) sent the trend as `weightKg`,
+    /// so it keeps the old "Now" wording and never mislabels it.
+    static func usesProgressWeight(_ progress: GoalProgressDTO) -> Bool {
         progress.goal == "weight_loss" && progress.current.trendKg != nil
     }
 
-    /// "This week" for the weekly average (`usesWeeklyAverageWeight`), else "Now".
+    /// A weekly average counts as "this week's" while the newest weigh-in is at most this
+    /// many days old; past that it is the average of an earlier week.
+    static let thisWeekMaxWeighInAgeDays = 6
+
+    /// What the progress weight is called, so the number never claims more than it is
+    /// (`usesProgressWeight`):
+    ///  - the weekly average (`weightRead.weekMeanKg`) of a newest weigh-in at most
+    ///    `thisWeekMaxWeighInAgeDays` old: "This week";
+    ///  - the weekly average, but of an older weigh-in (or of an unknown age): "Weekly avg";
+    ///  - no weekly average (fewer than 3 weigh-ins in the 7 days up to the newest, so it is
+    ///    one scale reading): "Latest";
+    ///  - an older server, other goals, or a payload with no `weightRead` to tell which it
+    ///    is: "Now", as before.
     static func currentWeightLabel(_ progress: GoalProgressDTO) -> String {
-        usesWeeklyAverageWeight(progress) ? "This week" : "Now"
+        guard usesProgressWeight(progress), let read = progress.weightRead else { return "Now" }
+        guard let mean = read.weekMeanKg, mean.isFinite, mean > 0 else { return "Latest" }
+        guard let age = progress.lastWeighInDaysAgo, age <= thisWeekMaxWeighInAgeDays else { return "Weekly avg" }
+        return "This week"
     }
 
-    /// The weekly average (kg) the server's headline, "to go" and bar measure from, when
-    /// `current.weightKg` is one (`usesWeeklyAverageWeight`); `nil` otherwise, so a caller
+    /// The progress weight with its label, as the goal sheet, Today's weight hero and the Trends
+    /// weight card say it together.
+    struct ProgressWeight: Equatable {
+        let kg: Double
+        /// `currentWeightLabel`: "This week" / "Weekly avg" / "Latest" / "Now".
+        let label: String
+    }
+
+    /// The weight (kg) the server's headline, "to go" and bar measure from, with its label, when
+    /// `current.weightKg` is that weight (`usesProgressWeight`); `nil` otherwise, so a caller
     /// keeps the trend it already shows. Today's weight hero quotes it as "This week 82.3 kg".
-    static func weeklyAverageKg(_ progress: GoalProgressDTO?) -> Double? {
-        guard let progress, usesWeeklyAverageWeight(progress),
+    static func progressWeight(_ progress: GoalProgressDTO?) -> ProgressWeight? {
+        guard let progress, usesProgressWeight(progress),
               let kg = progress.current.weightKg, kg.isFinite, kg > 0 else { return nil }
-        return kg
+        return ProgressWeight(kg: kg, label: currentWeightLabel(progress))
     }
 
     // MARK: - Race eve (endurance, wave 21e)

@@ -1171,26 +1171,32 @@ final class GoalProgressLogicTests: XCTestCase {
         XCTAssertEqual(try decodeWeightLoss(",\"current\":{\"weightKg\":82,\"trendKg\":\"heavy\"}").current.weightKg, 82)
     }
 
-    /// The goal sheet's stat row names the number it shows: "This week" for the weekly average (a payload that
-    /// carries `trendKg`), "Now" for an older server's trend. Other goals keep "Now".
-    func testStatRowLabelsTheWeeklyAverageOnlyWhenTheServerSendsTheTrendSeparately() {
-        func labels(goal: String, trendKg: Double?) -> [String] {
+    /// The goal sheet's stat row names the number it shows: "This week" for a weekly average of a recent weigh-in
+    /// (a payload that carries `trendKg`), "Weekly avg" / "Latest" when it is not, "Now" for an older server's trend.
+    /// Other goals keep "Now". (The label rules in full: `WeightHeroLogicTests`.)
+    func testStatRowLabelsTheProgressWeightOnlyWhenTheServerSendsTheTrendSeparately() {
+        func labels(goal: String, trendKg: Double?, weekMeanKg: Double? = 82.3, daysAgo: Int? = 0) -> [String] {
             GoalProgressLogic.statRows(
                 GoalProgressDTO(
                     goal: goal, target: .init(weightKg: 76),
-                    current: .init(weightKg: 82.3, startWeightKg: 83.7, trendKg: trendKg), verdict: .onTrack
+                    current: .init(weightKg: 82.3, startWeightKg: 83.7, trendKg: trendKg), verdict: .onTrack,
+                    lastWeighInDaysAgo: daysAgo,
+                    weightRead: GoalProgressDTO.WeightRead(state: .pace, weekMeanKg: weekMeanKg)
                 ),
                 system: .metric
             ).map(\.label)
         }
         XCTAssertEqual(labels(goal: "weight_loss", trendKg: 82), ["Start", "This week", "Target"])
+        XCTAssertEqual(labels(goal: "weight_loss", trendKg: 82, daysAgo: 8), ["Start", "Weekly avg", "Target"])
+        XCTAssertEqual(labels(goal: "weight_loss", trendKg: 82, weekMeanKg: nil), ["Start", "Latest", "Target"])
         XCTAssertEqual(labels(goal: "weight_loss", trendKg: nil), ["Start", "Now", "Target"], "an older server keeps Now")
         XCTAssertEqual(labels(goal: "muscle", trendKg: 82), ["Start", "Now", "Target"], "weight loss only")
         let weekly = GoalProgressDTO(
-            goal: "weight_loss", current: .init(weightKg: 82.3, startWeightKg: 83.7, trendKg: 82), verdict: .onTrack
+            goal: "weight_loss", current: .init(weightKg: 82.3, startWeightKg: 83.7, trendKg: 82), verdict: .onTrack,
+            lastWeighInDaysAgo: 0, weightRead: GoalProgressDTO.WeightRead(state: .pace, weekMeanKg: 82.3)
         )
         XCTAssertEqual(GoalProgressLogic.statRows(weekly, system: .metric).first { $0.label == "This week" }?.value, "82.3\u{00A0}kg")
-        XCTAssertTrue(GoalProgressLogic.usesWeeklyAverageWeight(weekly))
+        XCTAssertTrue(GoalProgressLogic.usesProgressWeight(weekly))
         XCTAssertEqual(GoalProgressLogic.currentWeightLabel(weekly), "This week")
         XCTAssertEqual(GoalProgressLogic.currentWeightLabel(GoalProgressDTO(goal: "weight_loss", verdict: .onTrack)), "Now")
     }

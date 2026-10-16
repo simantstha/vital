@@ -469,12 +469,12 @@ final class TodayViewModel: ObservableObject {
         goalProgress.flatMap(WeightHeroLogic.serverReadSlotText)
     }
 
-    /// The goal card's weekly average (kg) for the weight hero's "This week 82.3 kg"
-    /// caption: only on a wave 21 server, where `current.weightKg` is that average and
-    /// the payload carries `current.trendKg`; `nil` from an older server, for other goals
+    /// The goal card's progress weight (kg) and its label for the weight hero's "This week
+    /// 82.3 kg" caption: only on a wave 21 server, where `current.weightKg` is that weight
+    /// and the payload carries `current.trendKg`; `nil` from an older server, for other goals
     /// and without goal progress — the hero then keeps the trend's "Now 82 kg".
-    var heroWeekAverageKg: Double? {
-        GoalProgressLogic.weeklyAverageKg(goalProgress)
+    var heroProgressWeight: GoalProgressLogic.ProgressWeight? {
+        GoalProgressLogic.progressWeight(goalProgress)
     }
 
     /// The HRV / Sleep / Resting HR tiles. The endurance hero already prints

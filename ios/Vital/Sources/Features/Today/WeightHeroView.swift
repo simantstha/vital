@@ -32,11 +32,12 @@ struct WeightHeroView: View {
     /// ("Pace settles after 3 weeks") when the goal line below says the server's
     /// read in full, so nothing is said twice; `nil` shows nothing.
     var serverWeightRead: String? = nil
-    /// The goal card's weekly average (kg) on a wave 21 server
-    /// (`GoalProgressLogic.weeklyAverageKg`): the middle caption then reads
-    /// "This week 82.3 kg" — the number the goal headline and sheet quote — while the
-    /// line stays the smoothed trend. `nil` keeps the trend's "Now 82 kg".
-    var weekAverageKg: Double? = nil
+    /// The goal card's progress weight on a wave 21 server
+    /// (`GoalProgressLogic.progressWeight`): the middle caption then reads
+    /// "This week 82.3 kg" (or "Weekly avg" / "Latest", whichever it truly is) — the
+    /// number the goal headline and sheet quote — while the line stays the smoothed
+    /// trend. `nil` keeps the trend's "Now 82 kg".
+    var progressWeight: GoalProgressLogic.ProgressWeight? = nil
     let chip: WeightHeroLogic.WeighInChip
 
     /// One-tap confirm (HealthKit reading present) or opens the manual sheet.
@@ -108,14 +109,14 @@ struct WeightHeroView: View {
     }
 
     /// "Start 83.7 kg … Now 82 kg → Goal 76 kg" captions (kg-based inputs,
-    /// formatted in the user's unit); "This week 82.3 kg" in the middle when
-    /// `weekAverageKg` is set.
+    /// formatted in the user's unit); "This week 82.3 kg" (label per
+    /// `GoalProgressLogic.currentWeightLabel`) in the middle when `progressWeight` is set.
     private var sparklineCaptions: (start: String, now: String, target: String?)? {
         guard let trend, trend.established else { return nil }
         let days = trend.days.suffix(30)
         return WeightHeroLogic.sparklineCaptions(
             firstKg: days.first?.trendKg, lastKg: days.last?.trendKg, targetKg: targetKg, system: system,
-            weekAverageKg: weekAverageKg
+            progressWeight: progressWeight
         )
     }
 
