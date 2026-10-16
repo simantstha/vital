@@ -1508,7 +1508,10 @@ test('long run: no reason without a race, a race distance or after the race; the
 
 test('long run: once the peak date has passed inside the build phase it reads "peak target"; marathon target is 32', () => {
   // Sunday 2026-10-11, race Thursday 2026-10-22: the week began 17 days out (still build), the peak long run was due Oct 8.
-  const p = computeGoalProgress(longRunInput([14, 12, 16, 10], { todayKey: '2026-10-11', race: { date: '2026-10-22', distanceKm: 21.1 } }));
+  // (This week has its runs: a Sunday with four days off and the week barely started is a light week, which has its own test.)
+  const thisWeekRuns = [{ day: '2026-10-08', durationMin: 25, distanceKm: 4, type: 'Running' }, { day: '2026-10-10', durationMin: 25, distanceKm: 4, type: 'Running' }];
+  const sundayBase = longRunInput([14, 12, 16, 10], { todayKey: '2026-10-11', race: { date: '2026-10-22', distanceKm: 21.1 } });
+  const p = computeGoalProgress({ ...sundayBase, workouts: [...sundayBase.workouts, ...thisWeekRuns], trainingDays: [...sundayBase.trainingDays, ...thisWeekRuns.map(w => w.day)] });
   assert.equal(p.race?.phase, 'build');
   assert.equal(p.reasons.find(r => r.kind === 'long_run')?.text, 'Long run 14 km · peak target 18 km');
   const m = computeGoalProgress(longRunInput([14, 12, 16, 10], { target: { weightKg: null, date: null, weeklySessions: null, weeklyDistanceKm: 70 }, race: { date: addDays(TODAY, 120), distanceKm: 42.2 } }));
@@ -1689,10 +1692,11 @@ test('copy polish: "1 session" not "1 sessions", a flat volume is "steady" not "
   // One session a week over the last 4 weeks (sessions goal, no distance).
   const noGoal = { weightKg: null, date: null, weeklySessions: null, weeklyDistanceKm: 30 };
   const one = computeGoalProgress(enduranceInput([1, 1, 1, 1], { target: noGoal }));
-  assert.match(one.reasons.find(r => r.kind === 'sessions')!.text, /Averaging 1 session a week/);
+  // Wave 21e: whole calendar weeks ("1 session a week over the last 3 weeks"), never an average over a moving part-week window.
+  assert.match(one.reasons.find(r => r.kind === 'sessions')!.text, /^1 session a week over the last 3 weeks$/);
   assert.doesNotMatch(JSON.stringify(one), /1 sessions/);
   const twoFive = computeGoalProgress(enduranceInput([2, 3, 2, 3], { target: noGoal }));
-  assert.match(twoFive.reasons.find(r => r.kind === 'sessions')!.text, /Averaging 2\.5 sessions a week/);
+  assert.match(twoFive.reasons.find(r => r.kind === 'sessions')!.text, /^2 or 3 sessions a week over the last 3 weeks$/);
   // Flat time volume: "steady", no "up 0%".
   const flat = computeGoalProgress(enduranceInput([3, 3, 3, 3], { target: noGoal }));
   assert.match(flat.reasons.find(r => r.kind === 'volume')!.text, /^Weekly training time steady \(/);

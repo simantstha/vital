@@ -2260,8 +2260,9 @@ test('illness: a sick week that ended in a break is "light" with a real review, 
   assert.equal(back.win, 'Back out there: 15 km after the break.');
   assert.doesNotMatch(back.headline, /well above|safe step/);
   assert.equal(statByLabel(back, 'Volume')!.comparison, 'back after 6 km last week');
-  // The comeback climbs back toward the pre-break median in rungs (wave 20): the week after a good restart is 80% of ~26.5 km.
-  assert.equal(back.nextWeek.startsWith('Build to ~21 km'), true);
+  // The comeback climbs back toward the pre-break median in rungs (wave 20): the week after a good restart is 80% of ~26.5 km,
+  // capped (wave 21e) at 1.25x the 15 km just run and worded as a ceiling: "Build up to ~18 km", then ~10% a week.
+  assert.equal(back.nextWeek.startsWith('Build up to ~18 km'), true);
 });
 
 test('a 2-week gap: the 0-run weeks get a real review ("rest is fine"), then a gentle restart — never "tough, 18 km short"', () => {

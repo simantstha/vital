@@ -44,9 +44,16 @@ test('recovery: the next-goal nudge is week 1 only and never offers a weekly dis
 test('the long-run line names the cap once: what fits and what would carry the race peak', () => {
   const text = lines(gp({
     race: { date: '2026-12-30', distanceKm: 21.1, label: 'Half marathon', weeksToGo: 12, daysToGo: 84, phase: 'build' },
-    longRun: { lastKm: 12, peakKm: 12, targetPeakKm: 15, raceTargetKm: 18, nextKm: 14 },
+    longRun: { lastKm: 12, peakKm: 12, targetPeakKm: 15, raceTargetKm: 18, nextKm: 14, capNoteDue: true },
   }));
   assert.match(text, /peak target 15 km before the taper \(your 30 km weeks fit a 15 km long run; for an 18 km peak, raise the goal to ~36 km\)/);
+  // Wave 21e: only in the weeks the plan says it is due (the first build week, then every 4th) - not every day.
+  const quiet = lines(gp({
+    race: { date: '2026-12-30', distanceKm: 21.1, label: 'Half marathon', weeksToGo: 12, daysToGo: 84, phase: 'build' },
+    longRun: { lastKm: 12, peakKm: 12, targetPeakKm: 15, raceTargetKm: 18, nextKm: 14 },
+  }));
+  assert.match(quiet, /peak target 15 km before the taper/);
+  assert.doesNotMatch(quiet, /raise the goal/);
   const fits = lines(gp({
     race: { date: '2026-12-30', distanceKm: 21.1, label: 'Half marathon', weeksToGo: 12, daysToGo: 84, phase: 'build' },
     longRun: { lastKm: 12, peakKm: 12, targetPeakKm: 18, nextKm: 14 },

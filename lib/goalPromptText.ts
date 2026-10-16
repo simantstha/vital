@@ -8,7 +8,7 @@
  */
 
 import type { GoalKind, GoalProgress } from './goalProgress';
-import { RACE_EVE_LINE, formatRaceTime, formatTargetLongRun, isWindDownPhase, longRunCapNote, recoveryWeek, roundLongRunKm } from './enduranceProgression';
+import { RACE_EVE_LINE, STRIDES_COPY, formatRaceTime, formatTargetLongRun, isWindDownPhase, lightWeekLine, longRunCapNote, racePaceReps, recoveryWeek, roundLongRunKm } from './enduranceProgression';
 import type { ProgressionSummary } from './workoutRepository';
 import { plainSpaces } from './displayText';
 import { liftChange4w, liftLapseMinDays, pickHeadlineLift, rankLifts } from './liftChange';
@@ -63,7 +63,7 @@ function racePhaseLine(gp: GoalProgress, units: UnitSystem): string | null {
   if (!race || !isWindDownPhase(race.phase)) return null;
   const target = gp.distance != null ? distKm(gp.distance.stepTargetKm, units) : null;
   const longRun = gp.distance?.plan?.longRunKm;
-  const rep = units === 'imperial' ? '3×0.5 mi' : '3×1 km';
+  const rep = plainSpaces(racePaceReps(units === 'imperial' ? 1 / KM_PER_MILE : 1));
   switch (race.phase) {
     case 'taper':
       return `- Race phase: taper${target ? ` — this week's target ~${target}` : ''}; cut volume, ${longRun != null ? `long run ${longRunText(longRun, units)} easy, ` : 'keep the long run easy, '}plus ${rep} at race pace midweek — do not push volume or build the long run`;
@@ -110,6 +110,16 @@ function weekTargetLine(gp: GoalProgress, units: UnitSystem): string | null {
   const t = plan.targetKm != null ? distKm(plan.targetKm, units) : null;
   const lr = plan.longRunKm != null ? `long run ${longRunText(plan.longRunKm, units)}` : null;
   const back = plan.comebackKm != null ? distKm(plan.comebackKm, units) : null;
+  const strides = plan.strides ? `; ${STRIDES_COPY}` : '';
+  // Days off in the week (or well behind its pace from Friday): the same line the card shows, as an instruction.
+  if (plan.lightWeek) {
+    const line = plainSpaces(lightWeekLine({ reason: 'days_off', daysOff: 0, longRunCapKm: plan.longRunKm }, units === 'imperial' ? 1 / KM_PER_MILE : 1));
+    return `- This week's target: ${line.charAt(0).toLowerCase()}${line.slice(1)}; no catch-up volume, and do not call the week behind`;
+  }
+  // Every 4th plain build / maintain week: ~80% of the week it replaces, the long run held.
+  if (plan.cutback) {
+    return `- This week's target: a cutback week, ~${t}${lr ? `; ${lr} held` : ''} — absorb the last three weeks; do not push past it${strides}`;
+  }
   switch (plan.kind) {
     case 'baseline':
       return "- This week's target: none yet — a baseline week; next week's step is built from this week's total";
@@ -121,20 +131,25 @@ function weekTargetLine(gp: GoalProgress, units: UnitSystem): string | null {
       const climb = back != null && plan.targetKm != null && plan.comebackKm != null && plan.targetKm < plan.comebackKm - 0.5
         ? `, climbing back toward the ~${back} week from before the break`
         : '';
-      return `- This week's target: build to ~${t} (${step}${climb}${lr ? `; ${lr}` : ''}); the ${goal}/week goal comes after — do not push past the step this week`;
+      // A comeback target lifted above the plain step is a ceiling for a careful comeback ("up to"), not a bar to clear.
+      if (plan.upTo) {
+        return `- This week's target: build up to ~${t} (a ceiling for a careful comeback${climb}${lr ? `; ${lr}` : ''}); the ${goal}/week goal comes after — do not push past it this week${strides}`;
+      }
+      return `- This week's target: build to ~${t} (${step}${climb}${lr ? `; ${lr}` : ''}); the ${goal}/week goal comes after — do not push past the step this week${strides}`;
     }
     case 'maintain': {
       // The long run keeps growing only toward a peak it has not reached yet, in the runner's unit.
       const lrc = gp.longRun;
-      const growing = lrc != null && lrc.targetPeakKm != null
+      // A held long run (after last week's jump) is not growing, whatever the peak says.
+      const growing = plan.longRunHeld !== true && lrc != null && lrc.targetPeakKm != null
         && roundLongRunKm(lrc.peakKm, units === 'imperial' ? 1 / KM_PER_MILE : 1) < roundLongRunKm(lrc.targetPeakKm, units === 'imperial' ? 1 / KM_PER_MILE : 1);
       const grow = growing ? ` (the long run keeps growing ~${units === 'imperial' ? '1 mi' : '2 km'} a week toward its peak)` : '';
       return plan.goalReachedBefore === false
-        ? `- This week's target: build to the ${goal}/week goal${lr ? `; ${lr}${grow}` : ''}, the rest easy — the first week at the goal, do not go past it`
-        : `- This week's target: hold the ${goal}/week goal${lr ? `; ${lr}${grow}` : ''}, the rest easy — the runner is at the goal, do not add volume`;
+        ? `- This week's target: build to the ${goal}/week goal${lr ? `; ${lr}${plan.longRunHeld ? ' (held)' : grow}` : ''}, the rest easy — the first week at the goal, do not go past it${strides}`
+        : `- This week's target: hold the ${goal}/week goal${lr ? `; ${lr}${plan.longRunHeld ? ' (held)' : grow}` : ''}, the rest easy — the runner is at the goal, do not add volume${strides}`;
     }
     case 'hold':
-      return `- This week's target: hold ~${t} — last week was over the safe step; do not push higher or step up from the jump`;
+      return `- This week's target: hold ~${t} — last week was over the safe step; do not push higher or step up from the jump${strides}`;
     case 'restart':
       return `- This week's target: restart at ~${t} with easy runs${lr ? `; ${lr}` : ''} — the runner is coming back from a break${back ? ` (the weeks after climb back toward ~${back})` : ''}; do not push toward the ${goal}/week goal yet`;
     case 'rebuild': {
@@ -203,7 +218,8 @@ export function formatGoalProgressLines(gp: GoalProgress, units: UnitSystem): st
   }
   if (gp.longRun) {
     const dist = (km: number) => distKm(km, units);
-    const capNote = gp.longRun.targetPeakKm != null && gp.longRun.raceTargetKm != null && gp.target.weeklyDistanceKm != null
+    // The cap note is said in the first build week and then at most every 4th - never in a taper, race or recovery week.
+    const capNote = gp.longRun.capNoteDue === true && gp.longRun.targetPeakKm != null && gp.longRun.raceTargetKm != null && gp.target.weeklyDistanceKm != null
       ? longRunCapNote({ peakKm: gp.longRun.targetPeakKm, raceTargetKm: gp.longRun.raceTargetKm }, gp.target.weeklyDistanceKm, units === 'imperial' ? 1 / KM_PER_MILE : 1)
       : null;
     const target = gp.longRun.targetPeakKm != null

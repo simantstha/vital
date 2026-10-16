@@ -62,9 +62,10 @@ test('"hit" only when the rounded km reach the step: 20 of ~22 km is "Close to y
   assert.equal(close.win, 'Close to your step: 20 of ~22 km — aim for ~22 again.');
   const hit = computeWeeklyReview(planReview([15, 17, 19, 21]));
   assert.equal(hit.win, "You hit this week's step: 21 of ~21 km (+11% on last week).");
-  // A climb back after a break asks for more next week, so it does not say "again".
+  // A climb back after a break asks for more next week, so it does not say "again". Wave 21e: a careful comeback week is
+  // good when it grew on the one before, and says so - its target is a ceiling, not a step it "closed on".
   const climb = computeWeeklyReview(planReview([15, 17, 19, 21, 23, 25, 0, 0, 12, 14.5]));
-  assert.match(climb.win ?? '', /^Close to your step: 14\.5 of ~18 km\.$/);
+  assert.equal(climb.win, 'Back on the way up: 14.5 km, up from 12 km last week.');
   // At the goal: 28 of 30 is close, 30 of 30 is held.
   assert.match(computeWeeklyReview(planReview([22, 24, 26, 28, 30, 28])).win ?? '', /^Close to your weekly goal: 28 of 30 km — aim for 30 again\.$/);
   assert.equal(computeWeeklyReview(planReview([22, 24, 26, 28, 30, 30])).win, 'You held your weekly goal: 30 of 30 km.');
@@ -83,17 +84,20 @@ test('a short build week 15-21 days before a half is the taper starting early: f
   const early = computeWeeklyReview(planReview([22, 24, 26, 28, 30, 30, 22], race));
   assert.equal(early.weekRating, 'good');
   assert.equal(early.weekGap, null);
-  assert.equal(early.slip, 'Started tapering early — fine.');
-  assert.equal(early.win, null);
+  // Wave 21e: easing off early is fine, so it is a (neutral) win - never a slip.
+  assert.equal(early.slip, null);
+  assert.equal(early.win, 'Started tapering early — fine.');
   assert.doesNotMatch(`${early.headline} ${early.slip}`, /short/);
   // Further out (30 days) it is a genuine short week; a marathon taper is not this rule either.
   const far = computeWeeklyReview(planReview([22, 24, 26, 28, 30, 30, 22], { raceDate: '2026-10-28', raceDistanceKm: 21.1 }));
   assert.equal(far.weekRating, 'mixed');
   assert.match(far.slip ?? '', /short/);
   const marathon = computeWeeklyReview(planReview([22, 24, 26, 28, 30, 30, 22], { raceDate: '2026-10-18', raceDistanceKm: 42.2 }));
+  assert.notEqual(marathon.win, 'Started tapering early — fine.');
   assert.notEqual(marathon.slip, 'Started tapering early — fine.');
   // Far under half the target is not "tapering early".
   const tiny = computeWeeklyReview(planReview([22, 24, 26, 28, 30, 30, 10], race));
+  assert.notEqual(tiny.win, 'Started tapering early — fine.');
   assert.notEqual(tiny.slip, 'Started tapering early — fine.');
 });
 
@@ -145,18 +149,19 @@ test('a long run that jumped 2+ km over its plan: the slip says so and next week
 
 test('imperial recovery: a week a little over the ceiling is "right at" it, never "7.5 mi (ceiling 7 mi)"', () => {
   const raceDate = addDays(WEEK_START, -1); // the Sunday before: recovery week 1 is the reviewed week
-  const builds = planReview([20, 22, 24, 26, 28, 29], { weekStart: addDays(WEEK_START, -7) }).workouts;
+  const builds = planReview([20, 22, 24, 26, 28, 28], { weekStart: addDays(WEEK_START, -7) }).workouts;
   const recovery = [run(addDays(WEEK_START, 1), 4), run(addDays(WEEK_START, 3), 4), run(addDays(WEEK_START, 4), 4)]; // 12 km = 7.46 mi
+  // Wave 21e: a 28 km peak -> 11.2 km = 6.96 mi, rounded UP to a 7 mi ceiling; the recap keeps the stated ceiling ("~7 mi"), not a new 7.5.
   const r = computeWeeklyReview(base({
-    unitSystem: 'imperial', raceDate, raceDistanceKm: 21.1, racePeakWeekKm: 29,
+    unitSystem: 'imperial', raceDate, raceDistanceKm: 21.1, racePeakWeekKm: 28,
     workouts: [...builds, run(raceDate, 21.1, 121), ...recovery], trainingDays: [...builds, ...recovery].map(w => w.day),
   }));
-  assert.equal(r.headline, '3 sessions, 7.5 mi, right at your ~7.5 mi ceiling — recovery week');
-  assert.equal(r.win, 'Recovery week kept easy: 7.5 mi, right at your ~7.5 mi ceiling.');
-  assert.doesNotMatch(`${r.headline} ${r.win}`, /up to 7 mi|ceiling 7 mi/);
+  assert.equal(r.headline, '3 sessions, 7.5 mi, right at your ~7 mi ceiling — recovery week');
+  assert.equal(r.win, 'Recovery week kept easy: 7.5 mi, right at your ~7 mi ceiling.');
+  assert.doesNotMatch(`${r.headline} ${r.win}`, /up to 7 mi|ceiling 7 mi|7\.5 mi ceiling/);
   // A week well inside the ceiling keeps the plain wording.
   const calm = computeWeeklyReview(base({
-    unitSystem: 'imperial', raceDate, raceDistanceKm: 21.1, racePeakWeekKm: 29,
+    unitSystem: 'imperial', raceDate, raceDistanceKm: 21.1, racePeakWeekKm: 28,
     workouts: [...builds, run(raceDate, 21.1, 121), run(addDays(WEEK_START, 2), 5)], trainingDays: [...builds.map(w => w.day), addDays(WEEK_START, 2)],
   }));
   assert.match(calm.win ?? '', /^Recovery week kept easy: 3\.1 mi \(ceiling 7 mi\)\.$/);
