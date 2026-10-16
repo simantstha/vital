@@ -559,3 +559,27 @@ invariant(WEIGHT, 'every "down X kg" / "X of Y kg" figure agrees with current.ch
   assert.ok(compared > 0, `${name}: no since-start figure was compared, so this invariant checked nothing`);
   return out;
 });
+
+// A reached goal asks "set a new target or switch to maintenance" for a window that the week plan owns (REACHED_ASK_DAYS). The card, the
+// coach lines and the opener all read it: on the same day either all three ask or none does (the opener used to stop after 3 days
+// while the card asked for 7 - "Holding at 84.0 kg" over "Set a new target or switch to maintenance").
+const NEXT_TARGET_ASK = /set a new target or switch to maintenance|next step is a new target or maintenance/i;
+
+invariant(WEIGHT, 'a reached goal asks for a next step on the card if and only if the coach lines and the opener do', (snaps, name) => {
+  const out: Violation[] = [];
+  let askDays = 0;
+  let reachedDays = 0;
+  for (const snap of snaps) {
+    if (snap.card?.verdict !== 'reached') continue;
+    reachedDays++;
+    const card = cardTexts(snap).some(t => t.where.startsWith('card.reasons') && NEXT_TARGET_ASK.test(plain(t.text)));
+    const opener = NEXT_TARGET_ASK.test(plain(snap.opener?.required ?? ''));
+    const coach = (snap.coach ?? []).some(t => NEXT_TARGET_ASK.test(plain(t)));
+    if (card) askDays++;
+    if (card !== opener || card !== coach) {
+      out.push({ snap, detail: `card ${card ? 'asks' : 'does not ask'} ("${visible(snap.card.reasons.map(r => r.text).join(' | '))}"), coach ${coach ? 'asks' : 'does not ask'}, opener ${opener ? 'asks' : 'does not ask'}: "${visible(snap.opener?.required ?? '')}"` });
+    }
+  }
+  if (name === 'weight_loss_logged') assert.ok(askDays > 0 && reachedDays > askDays, `${name}: the reached stretch never both asked and stopped asking, so this invariant checked nothing`);
+  return out;
+});

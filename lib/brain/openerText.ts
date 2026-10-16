@@ -13,6 +13,7 @@ import type { GoalKind, GoalProgress } from '../goalProgress';
 import { liftLapseMinDays } from '../liftChange';
 import { KM_PER_MILE, LB_PER_KG } from '../metricFormat';
 import { PACE_SETTLE_DAYS, relationForDays, weeksForDays } from '../weightPace';
+import { REACHED_ASK_DAYS } from '../weightWeekPlan';
 import type { UnitSystem } from '../units';
 
 /**
@@ -54,8 +55,6 @@ export function shortDate(ymd: string | null | undefined): string | null {
   return `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}`;
 }
 
-/** Reached goals ask about a new target or maintenance only this many days after `reachedAt`; later the opener just reports the holding weight. */
-export const REACHED_ASK_DAYS = 3;
 /** A reached weight inside this many kg of the target is "within 1 kg of 84 kg" (goalProgress HOLDING_NEAR_TARGET_KG). */
 const HOLDING_RANGE_KG = 1;
 
@@ -105,11 +104,18 @@ function paceWaitClause(gp: GoalProgress): string {
   return age != null && age >= PACE_SETTLE_DAYS ? 'a few more weigh-ins and your pace is back' : 'your pace settles after 3 weeks';
 }
 
-/** True when the reached opener still asks about a new target or maintenance (so it ends in its own question). */
+/**
+ * True when the reached opener still asks about a new target or maintenance (so it ends in its own question). The week's plan
+ * (lib/weightWeekPlan.ts) owns that window - REACHED_ASK_DAYS after the reach - and the card, the coach lines and the weekly review
+ * read it from there: the opener asks exactly when the plan's action is the new-target one, never on a window of its own.
+ */
 function reachedAsks(gp: GoalProgress | null | undefined): boolean {
   if (!gp || gp.verdict !== 'reached' || gp.target.weightKg == null) return false;
-  // Payloads from before `weightRead` always ask; with it, only in the first days after the target was reached.
+  // Payloads from before `weightRead` always ask.
   if (gp.weightRead == null) return true;
+  const plan = gp.weightRead.plan;
+  if (plan != null) return plan.action.kind === 'next_target';
+  // A payload with `weightRead` but no plan: the same window, from the same constant.
   const daysAgo = gp.weightRead.reachedDaysAgo;
   return daysAgo != null && daysAgo <= REACHED_ASK_DAYS;
 }
@@ -162,9 +168,12 @@ export function goalOpenerLine(gp: GoalProgress | null | undefined, units: UnitS
     if (reachedAsks(gp)) {
       return `You've reached ${weightAmount(target, units)} ${unit} — want to set a new target or switch to maintenance?`;
     }
-    // Held the weight on real intake: the plan names that intake as the maintenance target (lib/weightWeekPlan.ts).
+    // The plan has a calorie instruction for a reached goal (a held weight on real intake made the maintenance target, or the
+    // target already is maintenance): say it in the plan's words, as the card's last reason does (lib/weightWeekPlan.ts).
     const plan = gp.weightRead?.plan;
-    if (plan?.action.kind === 'maintenance_target') return `${plan.action.text}.`;
+    if (plan != null && (plan.action.kind === 'maintenance_target' || (plan.action.kind === 'hold' && plan.action.kcalTarget != null))) {
+      return `${plan.action.text.replace(/[.\s]+$/, '')}.`;
+    }
     const holdKg = gp.weightRead?.weekMeanKg ?? gp.weightRead?.scaleKg ?? gp.current.weightKg;
     if (holdKg != null) {
       const diff = holdKg - target;

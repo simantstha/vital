@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { goalFallbackOpener, goalOpenerLine, newUserGoalOpener, requiredOpenerLine, returningUserOpener } from './openerText';
+import { REACHED_ASK_DAYS } from '../weightWeekPlan';
 import type { GoalProgress } from '../goalProgress';
 
 function gp(over: Partial<GoalProgress> = {}): GoalProgress {
@@ -312,17 +313,18 @@ test('welcome back after a gap: leads with the change on the scale since the las
   );
 });
 
-test('reached: asks about a new target or maintenance in the first 3 days after reachedAt only, then reports where the weight holds', () => {
+test('reached: asks about a new target or maintenance in the first 7 days after reachedAt only (the week plan\'s window), then reports where the weight holds', () => {
   const reached = (reachedDaysAgo: number | null) => gp({
     verdict: 'reached', headline: 'Goal reached — 76 kg', eta: null,
     current: { weightKg: 76.4, startWeightKg: 83.7, changeKg: -7.3, progressPct: 100 },
     weightRead: { ...READ, state: 'reached', weekMeanKg: 76.1, scaleKg: 76.3, reachedDaysAgo },
   });
   const ask = "You've reached 76 kg — want to set a new target or switch to maintenance?";
+  assert.equal(REACHED_ASK_DAYS, 7, 'the plan asks for 7 days after the reach; the opener has no window of its own');
   assert.equal(goalOpenerLine(reached(0), 'metric'), ask);
-  assert.equal(goalOpenerLine(reached(3), 'metric'), ask);
-  assert.equal(goalFallbackOpener(reached(3), 'weight_loss', 'metric'), ask, 'it ends in its own question: no second invitation');
-  assert.equal(goalOpenerLine(reached(4), 'metric'), 'Holding at 76.1 kg, within 1 kg of 76 kg.');
+  assert.equal(goalOpenerLine(reached(REACHED_ASK_DAYS), 'metric'), ask);
+  assert.equal(goalFallbackOpener(reached(REACHED_ASK_DAYS), 'weight_loss', 'metric'), ask, 'it ends in its own question: no second invitation');
+  assert.equal(goalOpenerLine(reached(REACHED_ASK_DAYS + 1), 'metric'), 'Holding at 76.1 kg, within 1 kg of 76 kg.');
   assert.equal(goalOpenerLine(reached(10), 'imperial'), 'Holding at 167.8 lb, within 2.2 lb of 167.6 lb.');
   assert.equal(goalFallbackOpener(reached(10), 'weight_loss', 'metric'), 'Holding at 76.1 kg, within 1 kg of 76 kg. What would you like to dig into?');
   // Unknown crossing: no daily nag either.
@@ -330,6 +332,27 @@ test('reached: asks about a new target or maintenance in the first 3 days after 
   // Drifting well under the target says so instead.
   const under = gp({ ...reached(10), weightRead: { ...READ, state: 'reached', weekMeanKg: 74.2, reachedDaysAgo: 10 } });
   assert.equal(goalOpenerLine(under, 'metric'), 'At 74.2 kg, 1.8 kg under your 76 kg target.');
+});
+
+test('reached: with a week plan the opener asks exactly when the plan\'s action is the new-target one, and repeats a calorie instruction in the plan\'s words', () => {
+  const planOf = (action: Record<string, unknown>) => ({ state: 'reached', action }) as unknown as NonNullable<GoalProgress['weightRead']>['plan'];
+  const reached = (action: Record<string, unknown>, reachedDaysAgo: number) => gp({
+    verdict: 'reached', headline: 'Goal reached — 76 kg', eta: null,
+    current: { weightKg: 76.4, startWeightKg: 83.7, changeKg: -7.3, progressPct: 100 },
+    weightRead: { ...READ, state: 'reached', weekMeanKg: 76.1, scaleKg: 76.3, reachedDaysAgo, plan: planOf(action) },
+  });
+  const ask = "You've reached 76 kg — want to set a new target or switch to maintenance?";
+  // The plan decides, whatever the day count says (the card and the coach lines read the same plan).
+  assert.equal(goalOpenerLine(reached({ kind: 'next_target', text: 'Set a new target or switch to maintenance' }, 9), 'metric'), ask);
+  assert.equal(goalOpenerLine(reached({ kind: 'keep_weighing', text: 'x' }, 2), 'metric'), 'Holding at 76.1 kg, within 1 kg of 76 kg.');
+  assert.equal(
+    goalOpenerLine(reached({ kind: 'maintenance_target', text: "You've held 76 kg on ~2,050 kcal — make that your maintenance target", kcalTarget: 2050 }, 12), 'metric'),
+    "You've held 76 kg on ~2,050 kcal — make that your maintenance target.",
+  );
+  // A calorie target that already is maintenance is not asked to "switch": the opener says what the card says.
+  const atMaintenance = reached({ kind: 'hold', text: 'Your calorie target is already at maintenance — keep it there and the weight should hold.', kcalTarget: 2200 }, 2);
+  assert.equal(goalOpenerLine(atMaintenance, 'metric'), 'Your calorie target is already at maintenance — keep it there and the weight should hold.');
+  assert.equal(goalFallbackOpener(atMaintenance, 'weight_loss', 'metric'), 'Your calorie target is already at maintenance — keep it there and the weight should hold. What would you like to dig into?');
 });
 
 // ── Wave 20b: a lifter a week or more past the last session ─────────────────
