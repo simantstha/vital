@@ -39,6 +39,7 @@ import { getWeightReadingsWithLazyImport } from '../weightRepository';
 import {
   assessWeightSignals,
   formatWeightSignalsSection,
+  weeklyWeightRead,
   WEEKEND_PATTERN_WINDOW_DAYS,
   type WeightSignal,
   type DailyIntakeKcalPoint,
@@ -337,7 +338,8 @@ export function buildPromptText(
   // ── Weight trend & energy signals ───────────────────────────────────────
   if (ctx.weightTrend) {
     lines.push('\n### Weight trend & energy signals');
-    lines.push(...formatWeightSignalsSection(ctx.weightTrend, ctx.weightSignals, ctx.unitSystem, ctx.localToday));
+    // A weight-loss goal quotes the card's weekly average and the week's pace, not the smoothed trend (one displayed weight).
+    lines.push(...formatWeightSignalsSection(ctx.weightTrend, ctx.weightSignals, ctx.unitSystem, ctx.localToday, weeklyWeightRead(ctx.goalProgress)));
   }
 
   // ── Goal progress ───────────────────────────────────────────────────────
@@ -757,6 +759,8 @@ export async function assembleContext(userId: string, findingId?: string): Promi
     weekendPatternIntakeKcal,
     todayKey: localToday,
     goalStartDay: usersRow?.goal_started_at ? localDayKey(usersRow.goal_started_at, tz) : null,
+    // The weight-loss week plan the goal card shows: plateau / too-fast follow it, not today's scale.
+    weekPlan: goalProgress?.weightRead?.plan ?? null,
   });
 
   // WHOOP context line (Task 7) — daily_metrics is day-keyed to the user's

@@ -746,11 +746,9 @@ final class ScreenshotTests: XCTestCase {
     /// no separating punctuation.
     private func captureCoachReceipt(_ app: XCUIApplication, pill: XCUIElement, scenario: String, appearance: String) {
         tapWhenHittable(pill, app: app, description: "Coach receipt pill [\(scenario)/\(appearance)]")
-        // `CoachReceiptDetail`'s own identifier is found first, and the
-        // "Manage memory" link is queried inside it. A whole-screen
-        // `app.buttons["Manage memory"]` snapshots every button in the coach
-        // transcript, which is large, and under CI load that snapshot timed out.
-        // The same `detail` is reused by the collapse wait below.
+        // An identifier on a SwiftUI stack doesn't make it an accessibility container,
+        // so the "Manage memory" link is queried app-wide (the app is idle under the
+        // harness now that ambient loops are off).
         let detail = app.descendants(matching: .any).matching(identifier: "coach.receiptDetail").firstMatch
         XCTAssertTrue(detail.waitForExistence(timeout: 10),
                        "Receipt detail should exist once expanded [\(scenario)/\(appearance)]")
@@ -758,7 +756,7 @@ final class ScreenshotTests: XCTestCase {
         // `waitForText` only searches static text, so check the button
         // directly; its own text label is a reliable proxy for
         // `CoachReceiptDetail` having actually expanded.
-        let manageMemoryLink = detail.buttons["Manage memory"]
+        let manageMemoryLink = app.buttons["Manage memory"]
         XCTAssertTrue(manageMemoryLink.waitForExistence(timeout: 10),
                        "Tapping the receipt pill should expand the detail with its Manage memory link [\(scenario)/\(appearance)]")
         capture(app, name: "\(scenario)__coachReceipt__\(appearance)")

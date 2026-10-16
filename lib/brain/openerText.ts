@@ -89,9 +89,19 @@ function progressKg(gp: GoalProgress): number | null {
   return read?.weekMeanKg ?? read?.scaleKg ?? gp.current.weightKg;
 }
 
+/**
+ * What the amount "down" is measured on, in words: the 7-day average once it exists (3+ weigh-ins in the week), else
+ * the single latest reading. "On the scale" is only ever a single reading; the average is the average.
+ */
+function downBasis(gp: GoalProgress): string {
+  return gp.weightRead?.weekMeanKg != null ? 'on your weekly average' : 'on the scale';
+}
+
 /** What comes next while the pace is not read: a young goal's pace settles after 3 weeks, an older one is a few weigh-ins away. */
 function paceWaitClause(gp: GoalProgress): string {
   const age = gp.weightRead?.goalAgeDays;
+  // The week's plan is made on the Monday: a goal that turned 3 weeks old since reads its pace on the next one.
+  if (gp.weightRead?.plan?.young && age != null && age >= PACE_SETTLE_DAYS) return 'your pace is read on Monday';
   return age != null && age >= PACE_SETTLE_DAYS ? 'a few more weigh-ins and your pace is back' : 'your pace settles after 3 weeks';
 }
 
@@ -152,6 +162,9 @@ export function goalOpenerLine(gp: GoalProgress | null | undefined, units: UnitS
     if (reachedAsks(gp)) {
       return `You've reached ${weightAmount(target, units)} ${unit} — want to set a new target or switch to maintenance?`;
     }
+    // Held the weight on real intake: the plan names that intake as the maintenance target (lib/weightWeekPlan.ts).
+    const plan = gp.weightRead?.plan;
+    if (plan?.action.kind === 'maintenance_target') return `${plan.action.text}.`;
     const holdKg = gp.weightRead?.weekMeanKg ?? gp.weightRead?.scaleKg ?? gp.current.weightKg;
     if (holdKg != null) {
       const diff = holdKg - target;
@@ -182,8 +195,14 @@ export function goalOpenerLine(gp: GoalProgress | null | undefined, units: UnitS
     if (total > 0 && done > 0) {
       const base = `You're ${weightAmount(done, units)} of ${weightAmount(total, units)} ${unit} ${losing ? 'down' : 'up'}`;
       if (gp.goal === 'weight_loss') {
-        if (read?.state === 'early' || read?.state === 'returning') return `${base} on the scale; ${paceWaitClause(gp)}.`;
+        if (read?.state === 'early' || read?.state === 'returning') return `${base} ${downBasis(gp)}; ${paceWaitClause(gp)}.`;
         if (read?.state === 'plateau') return `${base}, though the scale has been flat for 3 weeks.`;
+        // The week's plan (lib/weightWeekPlan.ts) says what the scale is doing; the opener only repeats it.
+        if (read?.state === 'moving_again') return `${base}, and your weekly average is moving down again.`;
+        if (read?.plan?.farBehind && target != null) {
+          const date = shortDate(gp.target.date);
+          if (date) return `${base}, but at this rate your ${date} date won't hold.`;
+        }
         if (gp.verdict === 'too_fast') return `${base}, but losing faster than is easy to keep.`;
         if (gp.verdict === 'stalled') return `${base}, but your weight has been flat lately.`;
         if (gp.verdict === 'progressing' && gp.ratePerWeek.kg != null && gp.ratePerWeek.kg < 0) {

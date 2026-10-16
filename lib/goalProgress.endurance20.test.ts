@@ -64,22 +64,29 @@ const NOT_HUNDRED_PERCENT = (p: GoalProgress): string => p.reasons.map(r => r.te
 const RACE_GOAL = { weightKg: null, date: null, weeklySessions: null, weeklyDistanceKm: 50 };
 const history = [run(addDays(TODAY, -3), 10), run(addDays(TODAY, -9), 12), run(addDays(TODAY, -16), 9), run(addDays(TODAY, -23), 10)];
 
-test('race eve: the headline is rest or a shakeout whatever the km; an over-plan note is neutral, never the headline', () => {
+test('race eve: the card is rest or a shakeout and carries no km of the week at all (wave 21e); a week at 1.5x the plan adds a neutral "start conservatively"', () => {
   const race = { date: addDays(TODAY, 1), distanceKm: 21.1 };
-  // 24 km Monday + Tuesday against a 20 km race-week target.
+  // 24 km Monday + Tuesday against a 20 km race-week target: 1.2x, not heavy.
   const over = computeGoalProgress(input([run(TODAY, 14), run(addDays(TODAY, -1), 10), ...history], { target: RACE_GOAL, race, racePeakWeekKm: 40 }));
   assert.equal(over.race?.daysToGo, 1);
   assert.equal(over.headline, 'Race tomorrow — rest or a 15-min shakeout; lay out your kit');
   assert.equal(over.verdict, 'on_track');
   assert.doesNotMatch(over.headline, /over the plan/);
-  const note = over.reasons.find(r => r.kind === 'race_phase')!;
-  assert.equal(note.tone, 'neutral');
-  assert.match(note.text, /^Race week: 24 of ~20 km — a bit more than planned, which is fine; rest now and let it settle$/);
-  assert.doesNotMatch(NOT_HUNDRED_PERCENT(over), /over the plan|keep Sunday|rest of the week|≤/);
-  // Under the plan it is the same headline and a calm line.
+  assert.deepEqual(over.reasons.map(r => r.kind), ['race']);
+  assert.doesNotMatch(NOT_HUNDRED_PERCENT(over), /\d+ of ~|over the plan|more than planned|keep Sunday|rest of the week|≤/);
+  // The week's km are not on the card: no km in the stat, no bar to fill.
+  assert.equal(over.distance!.thisWeekKm, null);
+  assert.equal(over.distance!.text, 'Race tomorrow');
+  // Under the plan it is the same headline and nothing else.
   const under = computeGoalProgress(input([run(addDays(TODAY, -1), 5), ...history], { target: RACE_GOAL, race, racePeakWeekKm: 40 }));
   assert.equal(under.headline, 'Race tomorrow — rest or a 15-min shakeout; lay out your kit');
-  assert.equal(under.reasons.find(r => r.kind === 'race_phase')!.text, 'Race week: 5 of ~20 km — keep tomorrow simple, nothing new');
+  assert.deepEqual(under.reasons.map(r => r.kind), ['race']);
+  // A week of 1.5x the plan or more (30 of 20 km): the neutral reason, never a scolding.
+  const heavy = computeGoalProgress(input([run(TODAY, 14), run(addDays(TODAY, -1), 16), ...history], { target: RACE_GOAL, race, racePeakWeekKm: 40 }));
+  assert.equal(heavy.headline, 'Race tomorrow — rest or a 15-min shakeout; lay out your kit');
+  const note = heavy.reasons.find(r => r.kind === 'race_phase')!;
+  assert.deepEqual({ text: note.text, tone: note.tone }, { text: 'Start conservatively — the first few km easy', tone: 'neutral' });
+  assert.doesNotMatch(NOT_HUNDRED_PERCENT(heavy), /\d+ of ~|over the plan/);
 });
 
 test('race week: only the days BEFORE the race share what is left of the budget; tomorrow is a shakeout at most', () => {
@@ -163,7 +170,9 @@ test('a break is 7 days, not 5: the target does not drop mid-week, and the card 
   const friday = at('2026-10-09');
   assert.equal(friday.distance!.plan?.kind, 'build');
   assert.equal(friday.distance!.stepTargetKm, 25);
-  assert.match(friday.headline, /^Building — /);
+  // Wave 21e: five days with no run in the week is a light week - holding, never "Building" toward the step (the target itself stands).
+  assert.equal(friday.headline, 'Light week — 0 of ~25 km so far');
+  assert.equal(friday.verdict, 'holding');
   const sunday = at('2026-10-11');
   assert.match(sunday.headline, /^On a break — 7 days since your last run\. Restart at ~\d+ km\.$/);
   assert.equal(sunday.verdict, 'building');
@@ -183,23 +192,32 @@ test('comeback: the weeks after a restart climb toward the pre-break median (car
   const plan = weeks(monday, [[], [[1, 3], [3, 3], [5, 5]], [], [], ...lastWeeks]);
   const p = computeGoalProgress(input(plan, { todayKey: monday }));
   assert.equal(p.distance!.plan?.kind, 'build');
-  // 80% of the 20 km pre-break median (the zero weeks count), not the 12 km step over 11.
-  assert.equal(p.distance!.stepTargetKm, 16);
+  // 80% of the 20 km pre-break median (the zero weeks count) is 16 km, capped (wave 21e) at 1.25x the 11 km just run: 13 km,
+  // worded as a ceiling ("up to ~13 km"); not the 12 km plain step over 11.
+  assert.equal(p.distance!.stepTargetKm, 13);
+  assert.equal(p.distance!.plan?.upTo, true);
+  assert.match(p.distance!.text, /^0 of up to ~13 km running this week · goal 30 km$/);
   assert.equal(p.distance!.plan?.comebackKm, 20);
   assert.match(p.distance!.plan!.purpose, /back toward your usual ~20 km$/);
 });
 
 test('imperial: a recovery week just over its ceiling reads "right at" it, never "7.5 of up to 7 mi"', () => {
-  // Race Sunday 2026-10-04; recovery week 1 is Mon 10-05 .. Sun 10-11; peak week 29 km -> ceiling 11.6 km = 7 mi (a half mile step).
+  // Race Sunday 2026-10-04; recovery week 1 is Mon 10-05 .. Sun 10-11; peak week 28 km -> ceiling 11.2 km = 6.96 mi, rounded UP to 7 mi
+  // (wave 21e: km and mi ceilings agree, and the ceiling stated on Monday is the one said on Saturday).
   const todayKey = '2026-10-10';
   const p = computeGoalProgressRaw(input([run('2026-10-06', 4), run('2026-10-08', 4), run('2026-10-09', 4), run('2026-10-04', 21.1, 121), ...history], {
-    todayKey, unitSystem: 'imperial', race: { date: '2026-10-04', distanceKm: 21.1 }, racePeakWeekKm: 29,
+    todayKey, unitSystem: 'imperial', race: { date: '2026-10-04', distanceKm: 21.1 }, racePeakWeekKm: 28,
   }));
   assert.equal(p.race?.phase, 'recovery');
   const text = plainSpaces(p.distance!.text);
-  assert.equal(text, '7.5 mi so far · right at your ~7.5 mi ceiling (recovery)');
+  assert.equal(text, '7.5 mi so far · right at your ~7 mi ceiling (recovery)');
   assert.ok(!/7\.5 of up to 7 mi/.test(text));
-  assert.equal(plainSpaces(p.reasons.find(r => r.kind === 'race_phase')!.text), 'Recovery: 7.5 mi — right at your ~7.5 mi ceiling; easy from here');
+  assert.equal(plainSpaces(p.reasons.find(r => r.kind === 'race_phase')!.text), 'Recovery: 7.5 mi — right at your ~7 mi ceiling; easy from here');
+  // Earlier in the week the same ceiling was stated: "up to 7 mi".
+  const monday = computeGoalProgressRaw(input([run('2026-10-04', 21.1, 121), ...history], {
+    todayKey: '2026-10-05', unitSystem: 'imperial', race: { date: '2026-10-04', distanceKm: 21.1 }, racePeakWeekKm: 28,
+  }));
+  assert.equal(plainSpaces(monday.distance!.text), '0 of up to 7 mi running this week (recovery)');
   // The ceiling itself is a multiple of half a mile.
   const miles = p.distance!.stepTargetKm / 1.609344;
   assert.ok(Math.abs(miles * 2 - Math.round(miles * 2)) < 0.05, `${miles}`);
@@ -219,7 +237,8 @@ test('long run: a peak the weekly goal cannot carry is "what fits", the race pea
   assert.equal(big.longRun?.targetPeakKm, 18);
   assert.equal(big.longRun?.raceTargetKm, undefined);
   // Imperial: the peak reached and the peak target are the same 11 mi (18 km is 11.18 mi: never "11.2" beside "11").
-  const reached = computeGoalProgress(input(weeks(TODAY, [[[0, 5]], [[1, 3], [3, 3], [5, 3], [6, 17.9]], wk(26), wk(24), wk(22)]), {
+  // (Last week's 17.9 km long run is 54% of a 32.9 km week; in a smaller week it would be its own watch note, see the wave 21e tests.)
+  const reached = computeGoalProgress(input(weeks(TODAY, [[[0, 5]], [[1, 5], [3, 5], [5, 5], [6, 17.9]], wk(26), wk(24), wk(22)]), {
     race, unitSystem: 'imperial', target: { weightKg: null, date: null, weeklySessions: null, weeklyDistanceKm: 40 },
   }));
   assert.equal(reached.distance!.plan?.kind, 'build');

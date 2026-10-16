@@ -15,12 +15,15 @@
  *                                                //   (lib/enduranceProgression.ts): the safe step, a hold / restart number, or a taper / race-week / recovery
  *                                                //   target (== targetKm when no step applies, and in a baseline week); avg4wKm = mean of the last 4 FINISHED
  *                                                //   training weeks (race and recovery weeks left out); plan? (additive) = { kind: baseline | build | hold |
- *                                                //   restart | maintain | taper | race_week | recovery | rebuild, targetKm | null, longRunKm | null, purpose }
+ *                                                //   restart | maintain | taper | race_week | recovery | rebuild, targetKm | null, longRunKm | null, purpose,
+ *                                                //   and, only when true (additive): cutback, lightWeek, strides, longRunHeld, upTo }; on the race eve
+ *                                                //   thisWeekKm is null and text is "Race tomorrow" (the week's km are not on the card)
  *   race: { date, distanceKm, label, weeksToGo, daysToGo, phase?, daysSince?, completed? } | null,   // endurance + upcoming race, or within the recovery weeks;
  *                                                //   phase is read on the Monday of this calendar week (a Sunday 7 days out is still the taper week);
  *                                                //   completed? (additive) = { km, durationMin | null } once a race-length run is logged
  *   longRun: { lastKm, peakKm, targetPeakKm | null, nextKm? } | null,       // endurance; km; lastKm = longest run of the last 14 days, peakKm of the last 28;
- *                                                //   nextKm? (additive) = this week's long run from the plan
+ *                                                //   nextKm? (additive) = this week's long run from the plan; capNoteDue? / oversized? (additive, only when
+ *                                                //   true) = the long-run cap note is due this week / the peak was over 55% of its week
  *   current: { weightKg, startWeightKg, changeKg, progressPct },
  *   ratePerWeek: { kg, pctBodyweight },          // signed: negative = losing
  *   safeBand: { minPct, maxPct } | null,
