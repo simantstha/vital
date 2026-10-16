@@ -673,6 +673,38 @@ test('muscle: lifts up but <70% of planned sessions → "Lifts up, sessions behi
   assert.equal(noTarget.verdict, 'progressing');
 });
 
+test('muscle: the 28-day "sessions behind" call is made as of the last Monday / last session, so a session aging out of the window is no news (wave 21b)', () => {
+  // TODAY is a Tuesday (Monday 2026-10-05). 12 sessions, the oldest on 09-08: the 28-day window ending Monday holds all 12 (75%), the one
+  // ending today lost it (11 of 16, 69%) - with nothing logged since Saturday the verdict must not turn over on a Tuesday.
+  const days = ['2026-09-08', '2026-09-10', '2026-09-12', '2026-09-15', '2026-09-17', '2026-09-19', '2026-09-22', '2026-09-24', '2026-09-26', '2026-09-29', '2026-10-01', '2026-10-03'];
+  const at = (todayKey: string, sessions: string[]) => computeGoalProgress(base({
+    goal: 'muscle', todayKey, target: { weightKg: null, date: null, weeklySessions: 4 },
+    trainingDays: sessions.filter(d => d >= addDays(todayKey, -27)),
+    strengthDays: sessions.filter(d => d >= addDays(todayKey, -27)),
+    strengthHistoryDays: sessions,
+    progression: { squat: [hl('2026-09-07', 120, 6), hl('2026-10-05', 130, 6)] },
+  }));
+  const monday = at('2026-10-05', days);
+  assert.equal(monday.verdict, 'progressing');
+  assert.equal(monday.adherence?.pct, 75);
+  const tuesday = at('2026-10-06', days);
+  assert.equal(tuesday.adherence?.pct, 69, 'the live count and its line still slide');
+  assert.equal(tuesday.verdict, 'progressing', 'the call was made on Monday');
+  assert.match(tuesday.headline, /^Progressing/);
+  // The next Monday is a new call: after a Saturday session the window slid to 10 of 16 (63%).
+  assert.equal(at('2026-10-12', [...days, '2026-10-10']).verdict, 'behind');
+  // ... and the lapse (9 days without a session) still outranks it.
+  assert.equal(at('2026-10-12', days).verdict, 'holding');
+  // A session logged on the Tuesday re-makes the call as of that day: 11 + today = 12 of 16.
+  const trained = at('2026-10-06', [...days, '2026-10-06']);
+  assert.equal(trained.adherence?.pct, 75);
+  assert.equal(trained.verdict, 'progressing');
+  // Behind on the Monday stays behind through the week (the live count can only fall), until a session lifts it.
+  const behindDays = days.slice(2);
+  assert.equal(at('2026-10-05', behindDays).verdict, 'behind'); // 10 of 16
+  assert.equal(at('2026-10-06', behindDays).verdict, 'behind');
+});
+
 // ── Endurance with a weekly distance target ─────────────────────────────────
 
 /** Workouts with distances: `kmByDaysAgo` maps days-ago → km. */

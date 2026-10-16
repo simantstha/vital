@@ -755,3 +755,31 @@ invariant(RUNNERS, 'a comeback week more than 10% over its "up to" cap reads "ov
   if (name === 'runner_messy') assert.ok(overWeeks > 0, `${name}: no comeback week went over its "up to" cap, so this invariant checked nothing`);
   return out;
 });
+
+// ── verdict churn (wave 21b) ────────────────────────────────────────────────
+
+// Nothing new happened and the verdict still turned over on two days running: noise, not news. A lifter's verdict may change on the day
+// a strength session is logged or on the Monday a calendar week begins; otherwise it moves at most once at a time (the lapse starting,
+// the week no longer able to reach its target). lifter_short_week days 56-58 went progressing -> "sessions behind" (the 28-day count
+// slid under 70% as an old session aged out) -> holding (4 days without a session) with nothing logged.
+invariant(LIFTERS, 'the verdict does not change on two consecutive days unless a strength session was logged or a calendar week began', (snaps, name) => {
+  const scn = buildScenario(name);
+  const trained = new Set(scn.sets.filter(x => !x.isWarmup).map(x => x.day));
+  const eventDay = (s: DaySnapshot): boolean => trained.has(s.date) || weekdayOf(s.date) === 'Mon';
+  const out: Violation[] = [];
+  const days = snaps.filter(s => s.card != null);
+  let changes = 0;
+  for (let i = 2; i < days.length; i++) {
+    const [a, b, c] = [days[i - 2], days[i - 1], days[i]];
+    // Only truly consecutive calendar days (the imperial scenario skips days).
+    if (dayDiff(b.date, a.date) !== 1 || dayDiff(c.date, b.date) !== 1) continue;
+    const changedB = b.card?.verdict !== a.card?.verdict;
+    const changedC = c.card?.verdict !== b.card?.verdict;
+    if (changedB) changes++;
+    if (changedB && changedC && !eventDay(b) && !eventDay(c)) {
+      out.push({ snap: c, detail: `${a.card?.verdict} (${a.date}) -> ${b.card?.verdict} (${b.date}) -> ${c.card?.verdict}, no session logged and no new week: "${visible(b.card?.headline ?? '')}" then "${visible(c.card?.headline ?? '')}"` });
+    }
+  }
+  assert.ok(changes > 0, `${name}: the verdict never changed, so this invariant checked nothing`);
+  return out;
+});

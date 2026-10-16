@@ -486,7 +486,8 @@ export interface GoalProgress {
   /**
    * Muscle goal with a weekly sessions target only; null/absent otherwise.
    * The structured numbers behind the `adherence` reason and the muscle
-   * `behind` verdict (pct < ADHERENCE_BEHIND_PCT), so a client can say WHY the
+   * `behind` verdict (pct < ADHERENCE_BEHIND_PCT; the verdict's call is made as of the last Monday or session,
+   * `sessionsBehindPct`, so on a day with nothing new this live count can sit under the line a day before the verdict follows), so a client can say WHY the
    * goal is behind and what to aim for ("9 of 16 sessions in 4 wk · aim for 4
    * this week") without parsing reason copy. `planned` = weeklyTarget x the
    * window in weeks (4 for an established goal, fewer while the goal is new).
@@ -1086,6 +1087,28 @@ function sessionAdherence(input: GoalProgressInput): GoalSessionAdherence | null
   const done = sessionCount(input, windowDays);
   const planned = Math.max(1, Math.round((target * windowDays) / 7));
   return { done, planned, weeklyTarget: target, pct: Math.round((done / planned) * 100), windowDays };
+}
+
+/**
+ * The 28-day count slides: a session ages out of it every day the lifter does not train, so "11 of 16 (69%)" can undercut the
+ * 70% line on a Tuesday that brought no news at all - and the verdict, which was "Progressing" on Monday, turned over a day before
+ * the lapse turned it again. The "sessions behind" CALL is therefore made as of the last day the window learned something: this
+ * week's Monday (a calendar week began) or the last session logged, whichever is later. The same window, the same 70% line - it
+ * just does not move on days with nothing new in them. (The adherence line and `adherence` payload keep the live count; a call
+ * of "behind" always has that count under 70% too, since between those days the live count can only fall.)
+ */
+function sessionsBehindPct(input: GoalProgressInput): number | null {
+  const target = input.target.weeklySessions;
+  if (target == null || target <= 0) return null;
+  const monday = weekStart(input.todayKey);
+  const last = lastSessionDay(input);
+  const asOf = last != null && last > monday ? last : monday;
+  const windowDays = sessionWindowDays(input);
+  // The sessions of the ~84 days of history the loader already holds (the trailing 28 days alone cannot see a window that ended days ago).
+  const days = new Set([...(input.strengthHistoryDays ?? []), ...sessionDays(input)]);
+  const done = [...days].filter(d => inLastDays(d, asOf, windowDays)).length;
+  const planned = Math.max(1, Math.round((target * windowDays) / 7));
+  return Math.round((done / planned) * 100);
 }
 
 /** The goal is in its first 28 days: its sessions are counted in calendar weeks (see adherenceReason). False when its start is unknown. */
@@ -2065,7 +2088,7 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock, ret: GoalLiftRe
   // The plan is not judged before the goal's first full week is done either.
   const windowStale = ret != null || recentWeeksOnTarget(input) || firstWeekOpen(input);
   const adherenceLow = !windowStale && (adh?.pct ?? 100) < ADHERENCE_LOW_PCT;
-  const sessionsBehind = !windowStale && (adh?.pct ?? 100) < ADHERENCE_BEHIND_PCT;
+  const sessionsBehind = !windowStale && (sessionsBehindPct(input) ?? 100) < ADHERENCE_BEHIND_PCT;
   const sessions = adherence ?? sessionsReason(input);
   // The first 28 days' sessions line already says "This week 2 of 4": no second week count beside it.
   const young = isYoungGoal(input);
