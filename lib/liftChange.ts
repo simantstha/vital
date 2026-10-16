@@ -331,48 +331,97 @@ export interface LiftReturnState {
 }
 
 /**
+ * The return state of ONE lift after `brk`: its best e1RM in the 4 weeks before
+ * the break against its best since the return. Null when the lift has no
+ * pre-break best or no session since.
+ */
+function returnStateOf(
+  exercise: string,
+  weeks: LiftWeekPoint[],
+  brk: LiftBreak,
+  anchor: string,
+): LiftReturnState | null {
+  const lastWeek = mondayOf(brk.lastBeforeDay);
+  const returnWeek = mondayOf(brk.returnDay);
+  const preKeys = new Set(Array.from({ length: LIFT_PRE_BREAK_WEEKS }, (_, i) => shiftDay(lastWeek, -7 * i)));
+  let pre: number | null = null;
+  let since: number | null = null;
+  for (const w of weeks) {
+    const e = w.bestEstimatedOneRepMaxKg;
+    if (e == null) continue;
+    if (preKeys.has(w.weekStart) && (pre == null || e > pre)) pre = e;
+    if (w.weekStart >= returnWeek && w.weekStart <= anchor && (since == null || e > since)) since = e;
+  }
+  if (pre == null || since == null) return null;
+  const regained = since >= pre - 1e-9;
+  const ratio = (since / pre) * 100;
+  return {
+    exercise,
+    breakDays: brk.breakDays,
+    breakEnd: brk.breakEnd,
+    returnDay: brk.returnDay,
+    preBreakKg: pre,
+    recentKg: since,
+    pct: regained ? Math.round(ratio) : Math.min(99, Math.floor(ratio)),
+    regained,
+  };
+}
+
+/**
+ * "Building back", lift by lift: the user took a break (findRecentBreak) and
+ * every lift that has both a pre-break best (the 4 weeks before the break) and
+ * a session since the return gets a state, regained or not. The first entry is
+ * the headline lift of the return (the most-trained such lift, the one the
+ * single `liftReturnState` and the payload's `liftReturn` speak for); after it
+ * come the other MAIN lifts (squat, bench press, deadlift, overhead press) in
+ * the same most-trained order — so "back above your pre-break best" can be
+ * claimed only when every one of them is. Accessories never hold the claim back.
+ * Empty with no recent break, or no lift that has both numbers.
+ */
+export function liftReturnStates(
+  progression: Record<string, LiftWeekPoint[]>,
+  sessionDays: readonly string[],
+  todayKey: string,
+): LiftReturnState[] {
+  const brk = findRecentBreak(sessionDays, todayKey);
+  if (!brk) return [];
+  const anchor = mondayOf(todayKey);
+  const states: LiftReturnState[] = [];
+  for (const exercise of rankLifts(progression, anchor)) {
+    const state = returnStateOf(exercise, progression[exercise], brk, anchor);
+    if (state && (states.length === 0 || isMainLift(exercise))) states.push(state);
+  }
+  return states;
+}
+
+/**
  * "Building back": the user took a break (findRecentBreak) and the headline
  * lift's best e1RM since the return is still under its pre-break best. When it
  * has been regained `regained` is true (the state ends; the card says so until
  * the window closes). Null with no recent break, or no lift that has both a
- * pre-break best and a session since.
+ * pre-break best and a session since. This is the headline lift only — see
+ * `liftReturnStates` for every main lift.
  */
 export function liftReturnState(
   progression: Record<string, LiftWeekPoint[]>,
   sessionDays: readonly string[],
   todayKey: string,
 ): LiftReturnState | null {
-  const brk = findRecentBreak(sessionDays, todayKey);
-  if (!brk) return null;
-  const anchor = mondayOf(todayKey);
-  const lastWeek = mondayOf(brk.lastBeforeDay);
-  const returnWeek = mondayOf(brk.returnDay);
-  const preKeys = new Set(Array.from({ length: LIFT_PRE_BREAK_WEEKS }, (_, i) => shiftDay(lastWeek, -7 * i)));
-  for (const exercise of rankLifts(progression, anchor)) {
-    const weeks = progression[exercise];
-    let pre: number | null = null;
-    let since: number | null = null;
-    for (const w of weeks) {
-      const e = w.bestEstimatedOneRepMaxKg;
-      if (e == null) continue;
-      if (preKeys.has(w.weekStart) && (pre == null || e > pre)) pre = e;
-      if (w.weekStart >= returnWeek && w.weekStart <= anchor && (since == null || e > since)) since = e;
-    }
-    if (pre == null || since == null) continue;
-    const regained = since >= pre - 1e-9;
-    const ratio = (since / pre) * 100;
-    return {
-      exercise,
-      breakDays: brk.breakDays,
-      breakEnd: brk.breakEnd,
-      returnDay: brk.returnDay,
-      preBreakKg: pre,
-      recentKg: since,
-      pct: regained ? Math.round(ratio) : Math.min(99, Math.floor(ratio)),
-      regained,
-    };
+  return liftReturnStates(progression, sessionDays, todayKey)[0] ?? null;
+}
+
+/**
+ * The lift furthest under its pre-break best (the lowest share of it) among the
+ * ones not yet regained; ties keep the order given (the headline lift first).
+ * Null when every lift is back.
+ */
+export function furthestBehindReturn<T extends { preBreakKg: number; recentKg: number; regained: boolean }>(returns: readonly T[]): T | null {
+  let worst: T | null = null;
+  for (const r of returns) {
+    if (r.regained || r.preBreakKg <= 0) continue;
+    if (worst == null || r.recentKg / r.preBreakKg < worst.recentKg / worst.preBreakKg - 1e-9) worst = r;
   }
-  return null;
+  return worst;
 }
 
 // ── Deload ──────────────────────────────────────────────────────────────────
@@ -479,19 +528,20 @@ const MAX_LOAD_KG = 1000;
 const MAX_LOAD_LB = 2200;
 
 /**
- * The lift logger's next-weight rule (LiftLoggerLogic.progressionHint on iOS,
- * the "try …" hint after a clean session): top load + 2.5 kg / 5 lb for
- * lower-body compounds, + 1.25 kg / 2.5 lb for everything else, rounded to
- * 0.5 kg / 1 lb and capped at the logger's maximum. `topLoadKg` is the lift's
- * top working set.
+ * The next-weight rule behind the review's "Squat 110 → 112.5 kg" and the
+ * "try …" hint after a clean session: top load + 2.5 kg / 5 lb for EVERY lift,
+ * rounded to a multiple of 2.5 kg / 5 lb, so every step is loadable with
+ * standard plates (a 1.25 kg step is 0.625 kg a side — "bench 80 → 81.5 kg"
+ * needs 0.75 kg plates nobody has). `from` is today's working load as logged
+ * (to 0.5 kg / 1 lb); `to` is always on the 2.5 kg / 5 lb grid, above `from`,
+ * capped at the logger's maximum. `topLoadKg` is the lift's top working set.
  */
-export function nextWorkingLoad(topLoadKg: number, exerciseKey: string, imperial: boolean): NextLoad {
+export function nextWorkingLoad(topLoadKg: number, _exerciseKey: string, imperial: boolean): NextLoad {
   const unit = imperial ? 'lb' : 'kg';
-  const step = isLowerBodyCompound(exerciseKey) ? (imperial ? 5 : 2.5) : (imperial ? 2.5 : 1.25);
+  const step = imperial ? 5 : 2.5;
   const plate = imperial ? 1 : 0.5;
-  const round = (v: number): number => Math.round(v / plate) * plate;
-  const from = round(imperial ? topLoadKg * LB_PER_KG : topLoadKg);
-  const to = Math.min(round(from + step), imperial ? MAX_LOAD_LB : MAX_LOAD_KG);
+  const from = Math.round((imperial ? topLoadKg * LB_PER_KG : topLoadKg) / plate) * plate;
+  const to = Math.min(Math.round((from + step) / step) * step, imperial ? MAX_LOAD_LB : MAX_LOAD_KG);
   return { from, to: Math.max(to, from), unit };
 }
 
@@ -571,15 +621,53 @@ export function pickWeekOverWeek(
   return null;
 }
 
+export interface WeekOverWeekWording {
+  /** The week the change is about, against the anchor Monday: "Last week" (the week before it), "This week" (the week in progress); null for any other. */
+  window: 'Last week' | 'This week' | null;
+  /** What it is measured against: "vs the week before", "vs last week" (this week's), or "vs last trained week" when training skipped a week. */
+  vs: string;
+}
+
+/**
+ * The ONE wording of a week-over-week change, so the goal card and the weekly
+ * review label the same pair of weeks the same way. A bare "vs last trained
+ * week" read as the week just trained: on the Sunday the card quoted the week
+ * BEFORE the current one (+4 kg), and Monday's review of the week just finished
+ * said +3 kg. Now the card says "Last week: Squat est. 1RM +4 kg vs the week
+ * before" and the review, which reads the same pair on that Monday, "vs the week
+ * before" too. `anchorWeekStart` is the Monday the card / review is anchored on.
+ */
+export function weekOverWeekWording(change: LiftWeekChange, endWeekStart: string, anchorWeekStart: string): WeekOverWeekWording {
+  const window = endWeekStart === shiftDay(anchorWeekStart, -7) ? 'Last week' : endWeekStart === anchorWeekStart ? 'This week' : null;
+  const adjacent = change.previousWeekStart === shiftDay(endWeekStart, -7);
+  return { window, vs: !adjacent ? 'vs last trained week' : window === 'This week' ? 'vs last week' : 'vs the week before' };
+}
+
 // ── A lapse (no session for a week or more) ─────────────────────────────────
 
 /**
- * Days without a strength session from which the goal card stops praising the
- * lifts ("No sessions for 8 days — Squat was est. 1RM 142 kg"), and the coach
- * is told not to. The 4-week lift change looks back two weeks (above), so
- * without this a lifter who missed a whole week still read "Progressing".
+ * The longest a lapse threshold gets: with no weekly target (or a 1-2 a week
+ * one) a week without a strength session is where the goal card stops praising
+ * the lifts ("No sessions for 8 days — Squat was est. 1RM 142 kg") and the
+ * coach is told not to. The 4-week lift change looks back two weeks (above), so
+ * without a lapse a lifter who missed a whole week still read "Progressing".
  */
 export const LIFT_LAPSE_MIN_DAYS = 7;
+/** The shortest a lapse threshold gets: a 4+ a week lifter is lapsing after 4 days off. */
+export const LIFT_LAPSE_FLOOR_DAYS = 4;
+/** A lapse is this many days' worth of the weekly plan missed: two weeks of sessions spread over the target. */
+const LIFT_LAPSE_PLAN_DAYS = 14;
+
+/**
+ * Days without a strength session from which the card calls a lapse, scaled to
+ * the weekly target: clamp(ceil(14 / target), 4, 7) — 4 days for 4 a week, 5 for
+ * 3, 7 for 2 or fewer or with no target. A fixed week let a 4 a week lifter miss
+ * four sessions in a row and still read "Progressing".
+ */
+export function liftLapseMinDays(weeklyTarget: number | null | undefined): number {
+  if (weeklyTarget == null || !Number.isFinite(weeklyTarget) || weeklyTarget < 1) return LIFT_LAPSE_MIN_DAYS;
+  return Math.min(LIFT_LAPSE_MIN_DAYS, Math.max(LIFT_LAPSE_FLOOR_DAYS, Math.ceil(LIFT_LAPSE_PLAN_DAYS / weeklyTarget)));
+}
 
 /**
  * The lift's recent best e1RM and the Monday of the week it was set — what the
@@ -610,7 +698,7 @@ export interface LiftReturnDisplay {
   /** Whole kg / lb, the numbers the copy prints. */
   pre: number;
   recent: number;
-  /** Whole percent of the SHOWN pre-break number (rounded down, max 99, while rebuilding). */
+  /** Whole percent of the SHOWN pre-break number, rounded normally; at most 99 while rebuilding. */
   pct: number;
   unit: 'kg' | 'lb';
 }
@@ -618,9 +706,11 @@ export interface LiftReturnDisplay {
 /**
  * The return numbers exactly as printed — whole kg (lb), with the percentage
  * computed from those shown numbers, never from the unrounded e1RMs behind them
- * ("136 of 142 kg" is 95%, whatever 136.4 / 142.2 would say). While still
+ * ("136 of 142 kg" is 96%, whatever 136.4 / 142.2 would say), and rounded the
+ * normal way ("139 of 142 kg" is 98%, not the 97% a floor gives). While still
  * rebuilding, a recent number that rounds up to the pre-break one is shown one
- * unit under it so the copy never claims "142 of 142" before it is regained.
+ * unit under it and the percentage is capped at 99, so the copy never claims
+ * "142 of 142" or "100%" before it is regained.
  */
 export function liftReturnDisplay(
   r: { preBreakKg: number; recentKg: number; regained: boolean },
@@ -631,7 +721,7 @@ export function liftReturnDisplay(
   let recent = Math.round(r.recentKg * f);
   if (!r.regained && recent >= pre) recent = pre - 1;
   const ratio = pre > 0 ? (recent / pre) * 100 : 0;
-  return { pre, recent, pct: r.regained ? Math.round(ratio) : Math.min(99, Math.floor(ratio)), unit: imperial ? 'lb' : 'kg' };
+  return { pre, recent, pct: r.regained ? Math.round(ratio) : Math.min(99, Math.round(ratio)), unit: imperial ? 'lb' : 'kg' };
 }
 
 // ── Next session's loads, every main lift ───────────────────────────────────

@@ -600,6 +600,8 @@ export async function generateDailyBriefFromDb(userId: string): Promise<DailyBri
     weekendPatternIntakeKcal,
     todayKey,
     goalStartDay: userRow?.goal_started_at ? localDayKey(userRow.goal_started_at, tz) : null,
+    // The weight-loss week plan the goal card shows: plateau / too-fast follow it, not today's scale.
+    weekPlan: goalProgress?.weightRead?.plan ?? null,
   });
 
   // ── Goal-keyed focus ──────────────────────────────────────────────────────

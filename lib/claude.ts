@@ -8,7 +8,7 @@ import type { UnitSystem } from '@/lib/units';
 import type { RecoveryConfidence, RecoveryGap, RecoveryHistoryDay } from '@/lib/brain/recovery';
 import { localDayKey } from '@/lib/localDay';
 import type { WeightTrendResult } from '@/lib/weightTrend';
-import { formatWeightSignalsSection, type WeightSignal } from '@/lib/brain/weightSignals';
+import { formatWeightSignalsSection, weeklyWeightRead, type WeightSignal } from '@/lib/brain/weightSignals';
 import { CLAUDE_SONNET_MODEL } from '@/lib/aiModels';
 import { buildBriefGoalSection, type BriefGoalFocus } from '@/lib/goalPromptText';
 
@@ -239,7 +239,7 @@ export async function generateDailyBrief(userId: string, ctx: BriefContext): Pro
   const hasTooFastLoss = (ctx.weightSignals ?? []).some(s => s.kind === 'too_fast_loss');
   const weightSignalsSection = ctx.weightTrend
     ? `\n## Weight Trend & Energy Signals\n` +
-      formatWeightSignalsSection(ctx.weightTrend, ctx.weightSignals ?? [], ctx.unitSystem ?? 'metric', ctx.todayKey).join('\n') +
+      formatWeightSignalsSection(ctx.weightTrend, ctx.weightSignals ?? [], ctx.unitSystem ?? 'metric', ctx.todayKey, weeklyWeightRead(ctx.goalFocus?.progress)).join('\n') +
       (hasTooFastLoss
         ? '\nIMPORTANT: a too_fast_loss signal is present above — do NOT praise or celebrate this pace of loss in the body text. ' +
           'Suggest adding ~200 kcal back, weighted toward protein, and if it is marked WATCH, gently check in on how they are eating and feeling.'
@@ -325,7 +325,7 @@ export async function generateDailyBrief(userId: string, ctx: BriefContext): Pro
 4. Keep meals specific and tied to actual training data — not generic advice
 5. Meals MUST NOT contain any food listed under RESTRICTIONS (allergies/intolerances/conditions) — this is a hard rule. Favor PREFERENCES: liked foods and cuisines in, disliked foods out.
 6. If Weight Trend & Energy Signals below shows too_fast_loss, never praise the pace of loss — see the IMPORTANT note in that section for what to say instead. If it shows plateau, don't frame it as a failure. If it shows under_eating, raise it gently, never with judgement. If it shows rate_not_yet_reliable, don't quote a weekly rate.
-7. If you state a weekly weight-change number anywhere in the body text, it MUST be quoted exactly from the "Trend weight" line in the Weight Trend & Energy Signals section below — never compute, estimate, or state a different weekly-change number from any other data (e.g. two raw weigh-ins).
+7. If you state a weekly weight-change number anywhere in the body text, it MUST be quoted exactly from the "Weekly average weight" line (fat-loss goals) or the "Trend weight" line (every other goal) in the Weight Trend & Energy Signals section below — never compute, estimate, or state a different weekly-change number from any other data (e.g. two raw weigh-ins).
 8. If a Goal Progress section is present, the body text and chips MUST agree with its verdict and numbers (the app's goal card shows the same verdict) — never say they are behind when it says on_track, or vice versa. Weave the goal into today's plan; do not restate the whole card.
 
 ## Long-term User Profile

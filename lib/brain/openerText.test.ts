@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { goalFallbackOpener, goalOpenerLine, newUserGoalOpener, requiredOpenerLine, returningUserOpener } from './openerText';
+import { REACHED_ASK_DAYS } from '../weightWeekPlan';
 import type { GoalProgress } from '../goalProgress';
 
 function gp(over: Partial<GoalProgress> = {}): GoalProgress {
@@ -218,13 +219,13 @@ test('reached goal: the opener congratulates and asks for a new target or mainte
 
 // ── Wave 19b: a lifter who has already logged sessions is not "yet to log a few days" ──
 
-test('muscle opener after the first sessions: says how many are in and when the first lift comparison lands', () => {
+test('muscle opener after the first sessions: says how many are in and when the 4-week lift trend starts', () => {
   const gp = {
-    goal: 'muscle', verdict: 'insufficient_data', headline: 'First lift comparison on Mar 30 · 4 sessions so far',
+    goal: 'muscle', verdict: 'insufficient_data', headline: '4-week lift trend from Mar 30',
     target: { weightKg: null, date: null, weeklySessions: 4, weeklyDistanceKm: null },
     dataSufficiency: { weighIns: 3, needed: 3, sessionsLast28d: 4 },
   } as unknown as Parameters<typeof newUserGoalOpener>[1];
-  assert.equal(newUserGoalOpener('muscle', gp, 'metric'), "Your goal: 4 sessions a week. You've logged 4 sessions so far — your first lift comparison is on Mar 30.");
+  assert.equal(newUserGoalOpener('muscle', gp, 'metric'), "Your goal: 4 sessions a week. You've logged 4 sessions so far — your 4-week lift trend starts Mar 30.");
   // Not enough yet (one session): the original line stands.
   const one = { ...(gp as object), dataSufficiency: { weighIns: 1, needed: 3, sessionsLast28d: 1 } } as unknown as Parameters<typeof newUserGoalOpener>[1];
   assert.match(newUserGoalOpener('muscle', one, 'metric') ?? '', /Once you've logged a few days/);
@@ -259,8 +260,9 @@ test('early read: the amount down is the card\'s one progress weight (the weekly
     verdict: 'progressing', eta: null, current: { weightKg: 83.5, startWeightKg: 83.7, changeKg: -0.3, progressPct: 4 },
     weightRead: { ...READ, state: 'early', scaleKg: 83.0, weekMeanKg: 83.4 },
   });
-  assert.equal(goalOpenerLine(early, 'metric'), "You're 0.3 of 7.7 kg down on the scale; your pace settles after 3 weeks.");
-  assert.equal(goalOpenerLine(early, 'imperial'), "You're 0.7 of 17 lb down on the scale; your pace settles after 3 weeks.");
+  // Wave 21w (finding 4): the number is the 7-day average, so the line says "weekly average" — "on the scale" is a single reading only.
+  assert.equal(goalOpenerLine(early, 'metric'), "You're 0.3 of 7.7 kg down on your weekly average; your pace settles after 3 weeks.");
+  assert.equal(goalOpenerLine(early, 'imperial'), "You're 0.7 of 17 lb down on your weekly average; your pace settles after 3 weeks.");
   // Without a weekly average (fewer than 3 weigh-ins that week) the latest scale reading is the progress weight.
   const sparse = gp({ ...early, weightRead: { ...READ, state: 'early', scaleKg: 83.0, weekMeanKg: null } });
   assert.equal(goalOpenerLine(sparse, 'metric'), "You're 0.7 of 7.7 kg down on the scale; your pace settles after 3 weeks.");
@@ -271,10 +273,10 @@ test('an older goal without a pace says a few more weigh-ins bring it back, not 
     verdict: 'progressing', eta: null, current: { weightKg: 83.5, startWeightKg: 83.7, changeKg: -0.3, progressPct: 4 },
     weightRead: { ...READ, state: 'early', scaleKg: 83.0, weekMeanKg: 83.4, goalAgeDays },
   });
-  assert.equal(goalOpenerLine(old(84), 'metric'), "You're 0.3 of 7.7 kg down on the scale; a few more weigh-ins and your pace is back.");
-  assert.equal(goalOpenerLine(old(21), 'metric'), "You're 0.3 of 7.7 kg down on the scale; a few more weigh-ins and your pace is back.");
-  assert.equal(goalOpenerLine(old(20), 'metric'), "You're 0.3 of 7.7 kg down on the scale; your pace settles after 3 weeks.");
-  assert.equal(goalOpenerLine(old(null), 'metric'), "You're 0.3 of 7.7 kg down on the scale; your pace settles after 3 weeks.");
+  assert.equal(goalOpenerLine(old(84), 'metric'), "You're 0.3 of 7.7 kg down on your weekly average; a few more weigh-ins and your pace is back.");
+  assert.equal(goalOpenerLine(old(21), 'metric'), "You're 0.3 of 7.7 kg down on your weekly average; a few more weigh-ins and your pace is back.");
+  assert.equal(goalOpenerLine(old(20), 'metric'), "You're 0.3 of 7.7 kg down on your weekly average; your pace settles after 3 weeks.");
+  assert.equal(goalOpenerLine(old(null), 'metric'), "You're 0.3 of 7.7 kg down on your weekly average; your pace settles after 3 weeks.");
 });
 
 test('a plateau and a weekly average: "down" is measured from the weekly average', () => {
@@ -311,17 +313,18 @@ test('welcome back after a gap: leads with the change on the scale since the las
   );
 });
 
-test('reached: asks about a new target or maintenance in the first 3 days after reachedAt only, then reports where the weight holds', () => {
+test('reached: asks about a new target or maintenance in the first 7 days after reachedAt only (the week plan\'s window), then reports where the weight holds', () => {
   const reached = (reachedDaysAgo: number | null) => gp({
     verdict: 'reached', headline: 'Goal reached — 76 kg', eta: null,
     current: { weightKg: 76.4, startWeightKg: 83.7, changeKg: -7.3, progressPct: 100 },
     weightRead: { ...READ, state: 'reached', weekMeanKg: 76.1, scaleKg: 76.3, reachedDaysAgo },
   });
   const ask = "You've reached 76 kg — want to set a new target or switch to maintenance?";
+  assert.equal(REACHED_ASK_DAYS, 7, 'the plan asks for 7 days after the reach; the opener has no window of its own');
   assert.equal(goalOpenerLine(reached(0), 'metric'), ask);
-  assert.equal(goalOpenerLine(reached(3), 'metric'), ask);
-  assert.equal(goalFallbackOpener(reached(3), 'weight_loss', 'metric'), ask, 'it ends in its own question: no second invitation');
-  assert.equal(goalOpenerLine(reached(4), 'metric'), 'Holding at 76.1 kg, within 1 kg of 76 kg.');
+  assert.equal(goalOpenerLine(reached(REACHED_ASK_DAYS), 'metric'), ask);
+  assert.equal(goalFallbackOpener(reached(REACHED_ASK_DAYS), 'weight_loss', 'metric'), ask, 'it ends in its own question: no second invitation');
+  assert.equal(goalOpenerLine(reached(REACHED_ASK_DAYS + 1), 'metric'), 'Holding at 76.1 kg, within 1 kg of 76 kg.');
   assert.equal(goalOpenerLine(reached(10), 'imperial'), 'Holding at 167.8 lb, within 2.2 lb of 167.6 lb.');
   assert.equal(goalFallbackOpener(reached(10), 'weight_loss', 'metric'), 'Holding at 76.1 kg, within 1 kg of 76 kg. What would you like to dig into?');
   // Unknown crossing: no daily nag either.
@@ -331,9 +334,30 @@ test('reached: asks about a new target or maintenance in the first 3 days after 
   assert.equal(goalOpenerLine(under, 'metric'), 'At 74.2 kg, 1.8 kg under your 76 kg target.');
 });
 
+test('reached: with a week plan the opener asks exactly when the plan\'s action is the new-target one, and repeats a calorie instruction in the plan\'s words', () => {
+  const planOf = (action: Record<string, unknown>) => ({ state: 'reached', action }) as unknown as NonNullable<GoalProgress['weightRead']>['plan'];
+  const reached = (action: Record<string, unknown>, reachedDaysAgo: number) => gp({
+    verdict: 'reached', headline: 'Goal reached — 76 kg', eta: null,
+    current: { weightKg: 76.4, startWeightKg: 83.7, changeKg: -7.3, progressPct: 100 },
+    weightRead: { ...READ, state: 'reached', weekMeanKg: 76.1, scaleKg: 76.3, reachedDaysAgo, plan: planOf(action) },
+  });
+  const ask = "You've reached 76 kg — want to set a new target or switch to maintenance?";
+  // The plan decides, whatever the day count says (the card and the coach lines read the same plan).
+  assert.equal(goalOpenerLine(reached({ kind: 'next_target', text: 'Set a new target or switch to maintenance' }, 9), 'metric'), ask);
+  assert.equal(goalOpenerLine(reached({ kind: 'keep_weighing', text: 'x' }, 2), 'metric'), 'Holding at 76.1 kg, within 1 kg of 76 kg.');
+  assert.equal(
+    goalOpenerLine(reached({ kind: 'maintenance_target', text: "You've held 76 kg on ~2,050 kcal — make that your maintenance target", kcalTarget: 2050 }, 12), 'metric'),
+    "You've held 76 kg on ~2,050 kcal — make that your maintenance target.",
+  );
+  // A calorie target that already is maintenance is not asked to "switch": the opener says what the card says.
+  const atMaintenance = reached({ kind: 'hold', text: 'Your calorie target is already at maintenance — keep it there and the weight should hold.', kcalTarget: 2200 }, 2);
+  assert.equal(goalOpenerLine(atMaintenance, 'metric'), 'Your calorie target is already at maintenance — keep it there and the weight should hold.');
+  assert.equal(goalFallbackOpener(atMaintenance, 'weight_loss', 'metric'), 'Your calorie target is already at maintenance — keep it there and the weight should hold. What would you like to dig into?');
+});
+
 // ── Wave 20b: a lifter a week or more past the last session ─────────────────
 
-test('muscle opener after 7+ days without a session: states the lapse (no praise) and asks about getting back in, once', () => {
+test('muscle opener past the lapse threshold: states the lapse (no praise) and asks about getting back in, once', () => {
   const lapsed = gp({
     goal: 'muscle', target: { weightKg: null, date: null, weeklySessions: 4, weeklyDistanceKm: null },
     verdict: 'holding', headline: 'No sessions for 8 days — Squat was est. 1RM 142 kg, week of Apr 20', lastSessionDaysAgo: 8,
@@ -342,9 +366,40 @@ test('muscle opener after 7+ days without a session: states the lapse (no praise
   assert.equal(goalOpenerLine(lapsed, 'metric'), line);
   assert.equal(requiredOpenerLine(lapsed, 'muscle', 'metric'), line);
   assert.equal(goalFallbackOpener(lapsed, 'muscle', 'metric'), line, 'no second invitation after its own question');
-  // 15 days: the returning-user reset offer takes over, as before.
-  assert.equal(requiredOpenerLine({ ...lapsed, lastSessionDaysAgo: 15 }, 'muscle', 'metric'), 'Welcome back — your last session was 15 days ago. Want a quick reset plan?');
-  // 6 days (or any other verdict): the plain check-in.
-  assert.doesNotMatch(goalOpenerLine({ ...lapsed, lastSessionDaysAgo: 6 }, 'metric') ?? '', /get back in/);
+  // Still away at 15 days: the lapse check-in stays — "Welcome back" is for the first session back (wave 21).
+  const away = { ...lapsed, headline: 'No sessions for 15 days — Squat was est. 1RM 142 kg, week of Apr 20', lastSessionDaysAgo: 15 };
+  const awayLine = 'Goal check-in: No sessions for 15 days — Squat was est. 1RM 142 kg, week of Apr 20. Want to plan how to get back in?';
+  assert.equal(requiredOpenerLine(away, 'muscle', 'metric'), awayLine);
+  assert.equal(goalFallbackOpener(away, 'muscle', 'metric'), awayLine);
+  assert.equal(returningUserOpener(away), null);
+  assert.doesNotMatch(requiredOpenerLine({ ...away, lastSessionDaysAgo: 27 }, 'muscle', 'metric') ?? '', /Welcome back/);
+  // 3 days (or any other verdict): the plain check-in. The threshold is 4 days for 4 a week, a week for 2 (wave 21).
+  assert.doesNotMatch(goalOpenerLine({ ...lapsed, lastSessionDaysAgo: 3 }, 'metric') ?? '', /get back in/);
+  assert.match(goalOpenerLine({ ...lapsed, lastSessionDaysAgo: 4 }, 'metric') ?? '', /get back in/);
   assert.doesNotMatch(goalOpenerLine({ ...lapsed, verdict: 'progressing', lastSessionDaysAgo: 8 }, 'metric') ?? '', /get back in/);
+  const two = { ...lapsed, target: { weightKg: null, date: null, weeklySessions: 2, weeklyDistanceKm: null } };
+  assert.doesNotMatch(goalOpenerLine({ ...two, lastSessionDaysAgo: 6 }, 'metric') ?? '', /get back in/);
+  assert.match(goalOpenerLine({ ...two, lastSessionDaysAgo: 7 }, 'metric') ?? '', /get back in/);
+  // A lapse the card has no lift to date (no 'holding' lapse headline): no "Welcome back" either, a plain reset offer.
+  const undated = gp({ goal: 'muscle', target: { weightKg: null, date: null, weeklySessions: 4, weeklyDistanceKm: null }, verdict: 'behind', headline: 'Sessions behind — 3 of 16 planned', lastSessionDaysAgo: 20 });
+  assert.equal(requiredOpenerLine(undated, 'muscle', 'metric'), "It's been 20 days since your last session. Want a quick reset plan?");
+});
+
+test('muscle opener: "Welcome back" is for the first session after a break, and only then (wave 21)', () => {
+  const back = (over: Partial<GoalProgress> = {}) => gp({
+    goal: 'muscle', target: { weightKg: null, date: null, weeklySessions: 4, weeklyDistanceKm: null },
+    verdict: 'building', headline: 'Building back — Squat est. 1RM 136 of 142 kg pre-break',
+    lastSessionDaysAgo: 0, lastSessionOn: '2026-05-11',
+    liftReturn: { exercise: 'squat', name: 'Squat', breakDays: 15, endedOn: '2026-05-10', preBreakKg: 141.8, recentKg: 135.7, pct: 95, regained: false },
+    ...over,
+  });
+  const welcome = 'Welcome back — your first session after 15 days off. Want a quick plan to build back up?';
+  assert.equal(requiredOpenerLine(back(), 'muscle', 'metric'), welcome);
+  assert.equal(goalFallbackOpener(back(), 'muscle', 'metric'), welcome, 'ends in its own question: no second invitation');
+  assert.equal(requiredOpenerLine(back({ lastSessionDaysAgo: 1 }), 'muscle', 'metric'), welcome); // the morning after, before a second session
+  // The second session back, or two days on: the normal check-in.
+  assert.equal(requiredOpenerLine(back({ lastSessionOn: '2026-05-12' }), 'muscle', 'metric'), 'Goal check-in: Building back — Squat est. 1RM 136 of 142 kg pre-break.');
+  assert.doesNotMatch(requiredOpenerLine(back({ lastSessionDaysAgo: 2 }), 'muscle', 'metric') ?? '', /Welcome back/);
+  // No break on record: no welcome.
+  assert.doesNotMatch(requiredOpenerLine(back({ liftReturn: null }), 'muscle', 'metric') ?? '', /Welcome back/);
 });
