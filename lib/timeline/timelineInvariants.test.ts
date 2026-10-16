@@ -583,3 +583,13 @@ invariant(WEIGHT, 'a reached goal asks for a next step on the card if and only i
   if (name === 'weight_loss_logged') assert.ok(askDays > 0 && reachedDays > askDays, `${name}: the reached stretch never both asked and stopped asking, so this invariant checked nothing`);
   return out;
 });
+
+// A weight-loss goal has ONE weight: the weekly average (the chart's smoothed line is a drawing, never a number the card or the review
+// quotes). When a week lacks the weigh-ins for a weekly mean the review still compares the smoothed line, but says "weight change",
+// never "weight trend" / "trend weight" / "Trend change" (day 91 said "Your weight trend is down 0.7 kg" where every other week
+// said "Your weekly average weight is down ..."). The coach lines are left out: they explain to the model that the smoothed trend
+// is not the weight to quote.
+const WEIGHT_AS_TREND = /weight trend|trend weight|trend change|smoothed trend/i;
+
+invariant(WEIGHT, 'no card or review string calls the progress weight a "trend" (weight trend, trend weight, trend change)', snaps =>
+  textMatches(snaps, s => [...cardTexts(s), ...reviewTexts(s)], WEIGHT_AS_TREND));

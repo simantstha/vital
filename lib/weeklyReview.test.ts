@@ -1983,16 +1983,31 @@ test('E. the weight stat is the change in the RAW weekly mean (not the smoothed 
   assert.equal(statByLabel(r, 'Trend change'), undefined);
 });
 
-test('E. a week short of weigh-ins for a weekly mean falls back to the trend change, labelled "Trend change"', () => {
+test('E. a weight-loss week short of weigh-ins for a weekly mean falls back to the smoothed change, labelled "Weight change" - never a "trend"', () => {
   const r = computeWeeklyReview(base({
     weightReadings: [...weigh([PREV[6]], () => 82), ...weigh(WEEK.slice(0, 4), i => 81.4 - i * 0.05)],
     intakeDays: intake(WEEK, [1900, 1950, 2000, 1850, 2050, 1900, 1950]),
   }));
   assert.equal(statByLabel(r, 'Weekly avg weight'), undefined);
+  assert.equal(statByLabel(r, 'Trend change'), undefined, 'a weight-loss goal\'s one weight is the weekly average; "trend" is the chart\'s line');
+  const stat = statByLabel(r, 'Weight change')!;
+  assert.ok(stat);
+  assert.equal(stat.comparison, 'smoothed, vs the week before');
+  assert.match(r.win ?? '', /^Your weight is down/);
+  assert.doesNotMatch(JSON.stringify(r), /trend/i);
+});
+
+test('E. a muscle week short of weigh-ins keeps the trend wording (its card quotes a trend weight)', () => {
+  const r = computeWeeklyReview(base({
+    goal: 'muscle',
+    weeklySessionsTarget: 3,
+    trainingDays: [WEEK[0], WEEK[2], WEEK[4]],
+    weightReadings: [...weigh([PREV[6]], () => 80), ...weigh(WEEK.slice(0, 4), i => 80.6 + i * 0.05)],
+  }));
   const stat = statByLabel(r, 'Trend change')!;
   assert.ok(stat);
   assert.equal(stat.comparison, 'smoothed trend, vs the week before');
-  assert.match(r.win ?? '', /^Your weight trend is down/);
+  assert.equal(statByLabel(r, 'Weight change'), undefined);
 });
 
 test('E. a too-fast week (the card says so) names the weight as the gap, and Next week says to eat up to the full calorie target — never a weekend tip', () => {

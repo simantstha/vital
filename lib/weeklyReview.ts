@@ -104,6 +104,11 @@ export const WEIGHT_STAT_LABEL = 'Weekly avg weight';
  * to the change in the smoothed trend. Never called a weekly average.
  */
 export const WEIGHT_TREND_STAT_LABEL = 'Trend change';
+/**
+ * The same fallback for a weight-loss goal, worded without "trend": its one weight is the weekly average, and the smoothed line is
+ * the chart's drawing, never a weight the card or the review quotes. (Muscle keeps "Trend change": its card quotes a trend weight.)
+ */
+export const WEIGHT_CHANGE_STAT_LABEL = 'Weight change';
 /** Weigh-ins a week needs (each of the two weeks) for the weekly-mean change. */
 const MIN_WEIGH_INS_FOR_MEAN = 2;
 /** A review may rest on the weight stat alone when the reviewed week had at least this many weigh-ins. */
@@ -488,6 +493,21 @@ function isTooSlowWeek(input: WeeklyReviewInput): boolean {
   return input.goal === 'weight_loss' && (input.verdict === 'behind' || input.verdict === 'stalled');
 }
 
+/** True for any of the review's weight-change stat labels (weekly mean, or the smoothed fallback under either wording). */
+function isWeightStatLabel(label: string): boolean {
+  return label === WEIGHT_STAT_LABEL || label === WEIGHT_TREND_STAT_LABEL || label === WEIGHT_CHANGE_STAT_LABEL;
+}
+
+/**
+ * How the weight stat names what it compared: ONE place for the stat label, its comparison and the win / slip subject, so the
+ * weight-loss path can never call the progress weight a "trend" in one string and the weekly average in the next.
+ */
+function weightWords(input: WeeklyReviewInput, basis: WeightChange['basis']): { label: string; comparison: string; subject: string } {
+  if (basis === 'mean') return { label: WEIGHT_STAT_LABEL, comparison: 'vs the week before', subject: 'Your weekly average weight' };
+  if (input.goal === 'weight_loss') return { label: WEIGHT_CHANGE_STAT_LABEL, comparison: 'smoothed, vs the week before', subject: 'Your weight' };
+  return { label: WEIGHT_TREND_STAT_LABEL, comparison: 'smoothed trend, vs the week before', subject: 'Your weight trend' };
+}
+
 function weightCandidate(input: WeeklyReviewInput, week: Week, prevWeek: Week): Candidate | null {
   const change = weightChange(input, week, prevWeek);
   if (!change) return null;
@@ -495,7 +515,7 @@ function weightCandidate(input: WeeklyReviewInput, week: Week, prevWeek: Week): 
   const rounded = round1(isImperial(input) ? deltaKg * KG_TO_LB : deltaKg);
   const text = rounded === 0 ? weightText(input, 0) : weightText(input, Math.abs(deltaKg));
   const value = rounded === 0 ? text : signed(rounded, text);
-  const isMean = change.basis === 'mean';
+  const words = weightWords(input, change.basis);
 
   let tone: ReviewTone = 'neutral';
   if (input.goal === 'weight_loss') {
@@ -511,14 +531,14 @@ function weightCandidate(input: WeeklyReviewInput, week: Week, prevWeek: Week): 
   }
   const cand: Candidate = {
     stat: {
-      label: isMean ? WEIGHT_STAT_LABEL : WEIGHT_TREND_STAT_LABEL,
+      label: words.label,
       value,
-      comparison: isMean ? 'vs the week before' : 'smoothed trend, vs the week before',
+      comparison: words.comparison,
       tone,
     },
   };
   if (input.goal === 'muscle' && rounded === 0) cand.stat.value = 'no change';
-  const subject = isMean ? 'Your weekly average weight' : 'Your weight trend';
+  const subject = words.subject;
   if (tone === 'good') cand.win = `${subject} is ${input.goal === 'muscle' ? 'up' : 'down'} ${weightText(input, Math.abs(deltaKg))}.`;
   if (tone === 'watch') {
     cand.slip = input.goal === 'weight_loss' && deltaKg < 0
@@ -1648,7 +1668,7 @@ function buildHeadline(input: WeeklyReviewInput, cands: Candidate[], week: Week)
   if (standalone != null) return clipHeadline(standalone);
   const by = (label: string): WeeklyReviewStat | undefined => cands.find(x => x.stat.label === label)?.stat;
   const parts: string[] = [];
-  const weight = by(WEIGHT_STAT_LABEL) ?? by(WEIGHT_TREND_STAT_LABEL);
+  const weight = cands.find(x => isWeightStatLabel(x.stat.label))?.stat;
   const sessions = cands.find(x => ['Workouts', 'Sessions', 'Active days'].includes(x.stat.label))?.stat;
   const sessionCount = (s: WeeklyReviewStat) => `${s.value} ${plural(Number(s.value), 'workout')}`;
 
@@ -1814,7 +1834,7 @@ function gapSlip(input: WeeklyReviewInput, gap: WeekGap, week: Week, prevWeek: W
       return weightCandidate(input, week, prevWeek)?.slip
         ?? (isPlateauWeek(input, week)
           ? 'Your weekly average has been flat for 3 weeks — common, and often water.'
-          : `Your ${weightChange(input, week, prevWeek)?.basis === 'trend' ? 'weight trend' : 'weekly average'} barely moved this week.`);
+          : `${weightChange(input, week, prevWeek)?.basis === 'trend' ? weightWords(input, 'trend').subject : 'Your weekly average'} barely moved this week.`);
   }
 }
 
@@ -2509,7 +2529,7 @@ export function computeWeeklyReview(input: WeeklyReviewInput): WeeklyReview {
 
   // The weight stat alone is enough when the week had 3+ weigh-ins ("Down 0.5 kg this week (5 weigh-ins)").
   const weightOnly = input.goal === 'weight_loss' && cands.length === 1
-    && (cands[0].stat.label === WEIGHT_STAT_LABEL || cands[0].stat.label === WEIGHT_TREND_STAT_LABEL)
+    && isWeightStatLabel(cands[0].stat.label)
     && weekWeighIns(input, week).length >= MIN_WEIGH_INS_WEIGHT_ONLY;
   // An endurance runner with a plan and a full week since signup always gets a real review: a rest or sick week is not "no data".
   const planned = input.goal === 'endurance' && reviewPlans(input).plan != null && reviewPlans(input).plan?.kind !== 'baseline' && week.eligible.size === 7;
