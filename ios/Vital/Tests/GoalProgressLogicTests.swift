@@ -1086,6 +1086,232 @@ final class GoalProgressLogicTests: XCTestCase {
         XCTAssertEqual(GoalProgressDTO(goal: "muscle", verdict: .building, liftReturns: [squat, deadlift]).liftReturns, [squat, deadlift])
     }
 
+    // MARK: - Wave 21: weight (moving again, one displayed weight)
+
+    private func decodeWeightLoss(_ extra: String, headline: String = "x") throws -> GoalProgressDTO {
+        let json = "{\"goal\":\"weight_loss\",\"verdict\":\"progressing\",\"headline\":\"\(headline)\",\"reasons\":[]\(extra)}"
+        return try JSONDecoder().decode(GoalProgressDTO.self, from: Data(json.utf8))
+    }
+
+    /// `moving_again` is a state of its own: the 14 days after a plateau, with no pace and no date. An unknown state
+    /// still decodes to a nil state, never a throw.
+    func testMovingAgainDecodesAndAnUnknownStateStillDecodesToNil() throws {
+        let moving = try decodeWeightLoss("""
+        ,"weightRead":{"state":"moving_again","scaleKg":88.7,"scaleDay":"2026-10-12","weekMeanKg":89.1,
+         "weeksVsTarget":null,"returned":null,"reachedDaysAgo":null,
+         "plan":{"weekStart":"2026-10-12","asOf":"2026-10-11","state":"moving_again","call":"none","verdict":"progressing",
+                 "etaDate":null,"weeksVsTarget":null,"action":{"kind":"keep_what_worked","text":"Keep doing what restarted it"},
+                 "plateauCause":null,"pace":null,"confirmed":false}}
+        ,"ratePerWeek":{"kg":null,"pctBodyweight":null},"eta":null
+        """, headline: "Moving again — weekly average down 0.5 kg from the plateau")
+        XCTAssertEqual(moving.weightRead?.state, .movingAgain)
+        XCTAssertEqual(moving.weightRead?.plan?.state, .movingAgain)
+        XCTAssertEqual(moving.weightRead?.plan?.weekStart, "2026-10-12")
+        XCTAssertEqual(moving.weightRead?.plan?.action?.kind, "keep_what_worked")
+        XCTAssertEqual(moving.weightRead?.plan?.action?.text, "Keep doing what restarted it")
+        // The server withholds a pace and a date in this state, so no surface may compute its own.
+        XCTAssertNil(moving.ratePerWeek.kg)
+        XCTAssertNil(moving.eta)
+        XCTAssertTrue(GoalProgressLogic.usesServerWeightRead(moving))
+        XCTAssertEqual(
+            GoalProgressLogic.primaryLine(moving, system: .metric),
+            "Moving again — weekly average down 0.5 kg from the plateau"
+        )
+
+        // An unknown state: a nil state (never a throw) and not a server read.
+        let mystery = try decodeWeightLoss(",\"weightRead\":{\"state\":\"mystery\",\"plan\":{\"state\":\"mystery\"}}")
+        XCTAssertNil(mystery.weightRead?.state)
+        XCTAssertNotNil(mystery.weightRead?.plan, "an unknown plan state drops only itself")
+        XCTAssertNil(mystery.weightRead?.plan?.state)
+        XCTAssertFalse(GoalProgressLogic.usesServerWeightRead(mystery))
+        // The plan's maintenance state is not a read state the app has: nil, the plan survives.
+        let maintenance = try decodeWeightLoss(
+            ",\"weightRead\":{\"state\":\"reached\",\"plan\":{\"state\":\"maintenance\",\"action\":{\"kind\":\"hold\",\"text\":\"Hold\"}}}"
+        )
+        XCTAssertEqual(maintenance.weightRead?.state, .reached)
+        XCTAssertNil(maintenance.weightRead?.plan?.state)
+        XCTAssertEqual(maintenance.weightRead?.plan?.action?.text, "Hold")
+    }
+
+    func testWeightReadPlanDecodesTolerantly() throws {
+        // Older servers, other goals and malformed values: nil, never a decode failure.
+        XCTAssertNil(try decodeWeightLoss(",\"weightRead\":{\"state\":\"pace\"}").weightRead?.plan, "older server")
+        XCTAssertNil(try decodeWeightLoss(",\"weightRead\":{\"state\":\"pace\",\"plan\":null}").weightRead?.plan)
+        XCTAssertNil(try decodeWeightLoss(",\"weightRead\":{\"state\":\"pace\",\"plan\":\"nope\"}").weightRead?.plan)
+        // A pace read keeps working beside it.
+        let pace = try decodeWeightLoss(
+            ",\"weightRead\":{\"state\":\"pace\",\"plan\":{\"weekStart\":\"2026-10-12\",\"state\":\"pace\",\"action\":{\"kind\":\"keep_going\",\"text\":\"Keep your routine\"}}}"
+        )
+        XCTAssertEqual(pace.weightRead?.state, .pace)
+        XCTAssertEqual(pace.weightRead?.plan?.state, .pace)
+        XCTAssertFalse(GoalProgressLogic.usesServerWeightRead(pace))
+        // Wrong-typed pieces drop only themselves; an action needs its text.
+        let partial = try decodeWeightLoss(
+            ",\"weightRead\":{\"state\":\"plateau\",\"plan\":{\"weekStart\":5,\"state\":7,\"action\":{\"kind\":\"plateau_water\"}}}"
+        )
+        XCTAssertEqual(partial.weightRead?.state, .plateau)
+        XCTAssertNotNil(partial.weightRead?.plan)
+        XCTAssertNil(partial.weightRead?.plan?.weekStart)
+        XCTAssertNil(partial.weightRead?.plan?.state)
+        XCTAssertNil(partial.weightRead?.plan?.action, "an action without text is no action")
+        // The memberwise initialisers default the new parameters, so older call sites are untouched.
+        XCTAssertNil(GoalProgressDTO.WeightRead(state: .pace).plan)
+        XCTAssertNil(GoalProgressDTO.Current(weightKg: 82).trendKg)
+    }
+
+    /// Weight loss on a wave 21 server: `current.weightKg` is the weekly average and `trendKg` the smoothed trend.
+    func testCurrentDecodesTheTrendSeparately() throws {
+        let wave21 = try decodeWeightLoss(",\"current\":{\"weightKg\":82.3,\"startWeightKg\":83.7,\"changeKg\":-1.4,\"progressPct\":18,\"trendKg\":82}")
+        XCTAssertEqual(wave21.current.weightKg, 82.3)
+        XCTAssertEqual(wave21.current.trendKg, 82)
+        let older = try decodeWeightLoss(",\"current\":{\"weightKg\":82,\"startWeightKg\":83.7,\"changeKg\":-1.7,\"progressPct\":22}")
+        XCTAssertNil(older.current.trendKg)
+        XCTAssertNil(try decodeWeightLoss(",\"current\":{\"weightKg\":82,\"trendKg\":null}").current.trendKg)
+        XCTAssertNil(try decodeWeightLoss(",\"current\":{\"weightKg\":82,\"trendKg\":\"heavy\"}").current.trendKg)
+        XCTAssertEqual(try decodeWeightLoss(",\"current\":{\"weightKg\":82,\"trendKg\":\"heavy\"}").current.weightKg, 82)
+    }
+
+    /// The goal sheet's stat row names the number it shows: "This week" for the weekly average (a payload that
+    /// carries `trendKg`), "Now" for an older server's trend. Other goals keep "Now".
+    func testStatRowLabelsTheWeeklyAverageOnlyWhenTheServerSendsTheTrendSeparately() {
+        func labels(goal: String, trendKg: Double?) -> [String] {
+            GoalProgressLogic.statRows(
+                GoalProgressDTO(
+                    goal: goal, target: .init(weightKg: 76),
+                    current: .init(weightKg: 82.3, startWeightKg: 83.7, trendKg: trendKg), verdict: .onTrack
+                ),
+                system: .metric
+            ).map(\.label)
+        }
+        XCTAssertEqual(labels(goal: "weight_loss", trendKg: 82), ["Start", "This week", "Target"])
+        XCTAssertEqual(labels(goal: "weight_loss", trendKg: nil), ["Start", "Now", "Target"], "an older server keeps Now")
+        XCTAssertEqual(labels(goal: "muscle", trendKg: 82), ["Start", "Now", "Target"], "weight loss only")
+        let weekly = GoalProgressDTO(
+            goal: "weight_loss", current: .init(weightKg: 82.3, startWeightKg: 83.7, trendKg: 82), verdict: .onTrack
+        )
+        XCTAssertEqual(GoalProgressLogic.statRows(weekly, system: .metric).first { $0.label == "This week" }?.value, "82.3\u{00A0}kg")
+        XCTAssertTrue(GoalProgressLogic.usesWeeklyAverageWeight(weekly))
+        XCTAssertEqual(GoalProgressLogic.currentWeightLabel(weekly), "This week")
+        XCTAssertEqual(GoalProgressLogic.currentWeightLabel(GoalProgressDTO(goal: "weight_loss", verdict: .onTrack)), "Now")
+    }
+
+    // MARK: - Wave 21: endurance (race eve, plan flags)
+
+    private func decodeEndurance(_ json: String) throws -> GoalProgressDTO {
+        try JSONDecoder().decode(GoalProgressDTO.self, from: Data(json.utf8))
+    }
+
+    /// The race eve payload (`distance.thisWeekKm` null, `distance.text` "Race tomorrow", the advice in the headline).
+    private let raceEveJSON = """
+    {"goal":"endurance","verdict":"on_track",
+     "headline":"Race tomorrow — rest or a 15-min shakeout; lay out your kit",
+     "target":{"weightKg":null,"date":null,"weeklySessions":null,"weeklyDistanceKm":30},
+     "distance":{"targetKm":30,"thisWeekKm":null,"avg4wKm":30,"weekStart":"2026-06-15","stepTargetKm":15,
+                 "text":"Race tomorrow",
+                 "plan":{"kind":"race_week","targetKm":15,"longRunKm":null,"purpose":"Race week","stepPct":null}},
+     "race":{"date":"2026-06-21","distanceKm":21.1,"label":"Half marathon","weeksToGo":0,"daysToGo":1,"phase":"race_week"},
+     "longRun":{"lastKm":18,"peakKm":18,"targetPeakKm":15},
+     "reasons":[{"kind":"race","text":"Half marathon in 1 day (Jun 21)","tone":"neutral"}]}
+    """
+
+    /// Race eve: no km bar, no "0 of 15 km", no "This week" row, no empty line; the server's headline is the card.
+    func testRaceEveShowsTheServersHeadlineAndNoDistanceBar() throws {
+        let eve = try decodeEndurance(raceEveJSON)
+        XCTAssertNil(eve.distance?.thisWeekKm)
+        XCTAssertEqual(eve.distance?.text, "Race tomorrow")
+        XCTAssertTrue(GoalProgressLogic.isRaceEve(eve))
+
+        let headline = "Race tomorrow — rest or a 15-min shakeout; lay out your kit"
+        XCTAssertNil(GoalProgressLogic.distanceFraction(eve), "no bar")
+        XCTAssertNil(GoalProgressLogic.distanceLine(eve, system: .metric), "no \"0 of 15 km\" line")
+        XCTAssertEqual(GoalProgressLogic.primaryLine(eve, system: .metric), headline)
+        XCTAssertEqual(GoalProgressLogic.compactText(eve, system: .metric), headline)
+        // Even when the Today hero would have shown the distance line (it cannot: it has none).
+        XCTAssertEqual(GoalProgressLogic.compactText(eve, system: .metric, heroShowsDistance: true), headline)
+        XCTAssertFalse(GoalProgressLogic.primaryLine(eve, system: .metric).contains(" of "))
+        XCTAssertNil(GoalProgressLogic.paceLine(eve))
+
+        let rows = GoalProgressLogic.statRows(eve, system: .metric)
+        XCTAssertNil(rows.first { $0.label == "This week" }, "the week's km are not shown the day before")
+        XCTAssertEqual(rows.first { $0.label == "Weekly distance goal" }?.value, "30\u{00A0}km")
+        XCTAssertFalse(rows.contains { $0.value.isEmpty }, "no empty row")
+        XCTAssertEqual(GoalProgressLogic.visibleReasons(eve).map(\.kind), ["race"])
+    }
+
+    func testRaceEveIsOnlyTheDayBeforeTheRaceFromAServerThatSendsNoKm() throws {
+        // The day before the race: eve. Two days out, with km: not.
+        XCTAssertTrue(GoalProgressLogic.isRaceEve(try decodeEndurance(raceEveJSON)))
+        let twoDays = raceEveJSON
+            .replacingOccurrences(of: "\"daysToGo\":1", with: "\"daysToGo\":2")
+            .replacingOccurrences(of: "\"thisWeekKm\":null", with: "\"thisWeekKm\":12.5")
+        XCTAssertFalse(GoalProgressLogic.isRaceEve(try decodeEndurance(twoDays)))
+        // km present on the eve (an older server that still sends them): not an eve, the distance line stays.
+        let withKm = raceEveJSON.replacingOccurrences(of: "\"thisWeekKm\":null", with: "\"thisWeekKm\":12.5")
+        XCTAssertFalse(GoalProgressLogic.isRaceEve(try decodeEndurance(withKm)))
+        // Race day and recovery are not the eve.
+        let raceDay = raceEveJSON.replacingOccurrences(of: "\"daysToGo\":1", with: "\"daysToGo\":0")
+        XCTAssertFalse(GoalProgressLogic.isRaceEve(try decodeEndurance(raceDay)))
+        let recovery = raceEveJSON.replacingOccurrences(of: "\"phase\":\"race_week\"", with: "\"phase\":\"recovery\"")
+        XCTAssertFalse(GoalProgressLogic.isRaceEve(try decodeEndurance(recovery)))
+        // No phase (a server that predates the race lifecycle) and no race at all.
+        let noPhase = raceEveJSON.replacingOccurrences(of: ",\"phase\":\"race_week\"", with: "")
+        XCTAssertFalse(GoalProgressLogic.isRaceEve(try decodeEndurance(noPhase)))
+        XCTAssertFalse(GoalProgressLogic.isRaceEve(GoalProgressDTO(goal: "endurance", verdict: .onTrack)))
+        // Other goals never.
+        XCTAssertFalse(GoalProgressLogic.isRaceEve(GoalProgressDTO(goal: "weight_loss", verdict: .onTrack)))
+    }
+
+    /// The same day as the eve, but with the km: the usual distance line and bar are untouched.
+    func testADayWithKmStillShowsTheDistanceLineAndBar() throws {
+        let withKm = try decodeEndurance(
+            raceEveJSON
+                .replacingOccurrences(of: "\"thisWeekKm\":null", with: "\"thisWeekKm\":6.5")
+                .replacingOccurrences(of: "\"text\":\"Race tomorrow\"", with: "\"text\":\"6.5 of 15 km running this week\"")
+        )
+        XCTAssertEqual(GoalProgressLogic.distanceFraction(withKm) ?? .nan, 6.5 / 15, accuracy: 0.001)
+        XCTAssertNotNil(GoalProgressLogic.distanceLine(withKm, system: .metric))
+    }
+
+    /// Wave 21e flags, each only present when true; an older server sends none.
+    func testWeekPlanAndLongRunFlagsDecodeTolerantly() throws {
+        let flagged = try decodeEndurance("""
+        {"goal":"endurance","verdict":"holding","headline":"x","reasons":[],
+         "distance":{"targetKm":30,"thisWeekKm":8,"text":"8 of ~18 km running this week · goal 30 km",
+          "plan":{"kind":"build","targetKm":18,"longRunKm":9,"purpose":"p","cutback":true,"lightWeek":true,"strides":true,
+                  "longRunHeld":true,"upTo":true}},
+         "longRun":{"lastKm":14,"peakKm":16,"targetPeakKm":15,"capNoteDue":true,"oversized":true}}
+        """)
+        let plan = try XCTUnwrap(flagged.distance?.plan)
+        XCTAssertEqual(plan.cutback, true)
+        XCTAssertEqual(plan.lightWeek, true)
+        XCTAssertEqual(plan.strides, true)
+        XCTAssertEqual(plan.longRunHeld, true)
+        XCTAssertEqual(plan.upTo, true)
+        XCTAssertEqual(flagged.longRun?.capNoteDue, true)
+        XCTAssertEqual(flagged.longRun?.oversized, true)
+
+        // Absent (older server, or false-by-omission) and wrong-typed: nil, the rest of the plan intact.
+        let unflagged = try decodeEndurance("""
+        {"goal":"endurance","verdict":"building","headline":"x","reasons":[],
+         "distance":{"targetKm":30,"thisWeekKm":8,"plan":{"kind":"build","targetKm":18,"cutback":"yes","lightWeek":null}},
+         "longRun":{"lastKm":14,"peakKm":16,"capNoteDue":1}}
+        """)
+        let basic = try XCTUnwrap(unflagged.distance?.plan)
+        XCTAssertEqual(basic.kind, "build")
+        XCTAssertEqual(basic.targetKm, 18)
+        XCTAssertNil(basic.cutback)
+        XCTAssertNil(basic.lightWeek)
+        XCTAssertNil(basic.strides)
+        XCTAssertNil(basic.longRunHeld)
+        XCTAssertNil(basic.upTo)
+        XCTAssertNil(unflagged.longRun?.capNoteDue)
+        XCTAssertNil(unflagged.longRun?.oversized)
+        XCTAssertEqual(unflagged.longRun?.lastKm, 14)
+        // The memberwise initialisers default the flags.
+        XCTAssertNil(GoalProgressDTO.Distance.Plan(kind: "build").lightWeek)
+        XCTAssertNil(GoalProgressDTO.LongRun(lastKm: 14).oversized)
+    }
+
     // MARK: - Week plan (distance.plan: baseline / build / hold / restart / taper / recovery ...)
 
     /// An endurance payload with a week plan: 30 km goal, `done` km run so far.

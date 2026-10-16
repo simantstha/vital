@@ -25,13 +25,18 @@ struct WeightHeroView: View {
     /// ("over 4 weeks") so it agrees with the goal card below.
     var goalRateKgPerWeek: Double? = nil
     /// The server is reading the scale itself (early read / welcome back /
-    /// plateau — `GoalProgressLogic.usesServerWeightRead`) and withholds a pace:
+    /// plateau / moving again — `GoalProgressLogic.usesServerWeightRead`) and withholds a pace:
     /// the hero must not compute a 7-day rate of its own.
     var withholdsLocalRate: Bool = false
     /// What the rate's place says while `withholdsLocalRate` — a short complement
     /// ("Pace settles after 3 weeks") when the goal line below says the server's
     /// read in full, so nothing is said twice; `nil` shows nothing.
     var serverWeightRead: String? = nil
+    /// The goal card's weekly average (kg) on a wave 21 server
+    /// (`GoalProgressLogic.weeklyAverageKg`): the middle caption then reads
+    /// "This week 82.3 kg" — the number the goal headline and sheet quote — while the
+    /// line stays the smoothed trend. `nil` keeps the trend's "Now 82 kg".
+    var weekAverageKg: Double? = nil
     let chip: WeightHeroLogic.WeighInChip
 
     /// One-tap confirm (HealthKit reading present) or opens the manual sheet.
@@ -103,12 +108,14 @@ struct WeightHeroView: View {
     }
 
     /// "Start 83.7 kg … Now 82 kg → Goal 76 kg" captions (kg-based inputs,
-    /// formatted in the user's unit).
+    /// formatted in the user's unit); "This week 82.3 kg" in the middle when
+    /// `weekAverageKg` is set.
     private var sparklineCaptions: (start: String, now: String, target: String?)? {
         guard let trend, trend.established else { return nil }
         let days = trend.days.suffix(30)
         return WeightHeroLogic.sparklineCaptions(
-            firstKg: days.first?.trendKg, lastKg: days.last?.trendKg, targetKg: targetKg, system: system
+            firstKg: days.first?.trendKg, lastKg: days.last?.trendKg, targetKg: targetKg, system: system,
+            weekAverageKg: weekAverageKg
         )
     }
 

@@ -456,6 +456,7 @@ final class WeightHeroLogicTests: XCTestCase {
     private let earlyHeadline = "Early read — down 0.7 kg on the scale in 7 days"
     private let returningHeadline = "Welcome back — the scale is down 1.1 kg since May 10"
     private let plateauHeadline = "Plateau — weekly average ~89.4 kg for 3 weeks"
+    private let movingAgainHeadline = "Moving again — weekly average down 0.5 kg from the plateau"
 
     /// The goal line under the hero already says the server's read in full, so the
     /// hero's rate slot carries a short complement — and still no local rate.
@@ -464,6 +465,7 @@ final class WeightHeroLogicTests: XCTestCase {
             (.early, earlyHeadline, "Pace settles after 3\u{00A0}weeks"),
             (.returning, returningHeadline, "Welcome back — weigh in a few more days"),
             (.plateau, plateauHeadline, "Flat for 3\u{00A0}weeks"),
+            (.movingAgain, movingAgainHeadline, "Moving again after a plateau"),
         ]
         for (state, headline, expected) in reads {
             let goal = progress(state, headline: headline)
@@ -477,6 +479,7 @@ final class WeightHeroLogicTests: XCTestCase {
         XCTAssertEqual(WeightHeroLogic.earlyReadHeroText, "Pace settles after 3 weeks")
         XCTAssertEqual(WeightHeroLogic.returningReadHeroText, "Welcome back — weigh in a few more days")
         XCTAssertEqual(WeightHeroLogic.plateauReadHeroText, "Flat for 3 weeks")
+        XCTAssertEqual(WeightHeroLogic.movingAgainReadHeroText, "Moving again after a plateau")
     }
 
     /// When the goal line is showing the stale-weigh-in nudge instead, nothing else
@@ -498,6 +501,7 @@ final class WeightHeroLogicTests: XCTestCase {
     func testTheFullReadIsSaidInExactlyOnePlace() {
         let reads: [(GoalProgressDTO.WeightRead.State, String)] = [
             (.early, earlyHeadline), (.returning, returningHeadline), (.plateau, plateauHeadline),
+            (.movingAgain, movingAgainHeadline),
         ]
         for (state, headline) in reads {
             for age in [nil, 0, 3, 4, 6] as [Int?] {
@@ -610,5 +614,109 @@ final class WeightHeroLogicTests: XCTestCase {
         )
         XCTAssertEqual(text, "A few more weigh-ins and your pace is back")
         XCTAssertFalse(text?.contains("/wk") ?? true)
+    }
+
+    // MARK: - Wave 21: moving again, and one displayed weight
+
+    /// A moving-again payload; `plan` is the week plan the server sends with it (`nil` = none).
+    private func movingAgain(plan: GoalProgressDTO.WeightRead.Plan?) -> GoalProgressDTO {
+        GoalProgressDTO(
+            goal: "weight_loss",
+            target: .init(weightKg: 76),
+            current: .init(weightKg: 83.5, startWeightKg: 83.7),
+            verdict: .progressing,
+            headline: movingAgainHeadline,
+            weightRead: GoalProgressDTO.WeightRead(state: .movingAgain, plan: plan)
+        )
+    }
+
+    /// The 14 days after a plateau: no pace, no date. The hero must not compute a rate of its own, and must not
+    /// say the plateau's "Flat for 3 weeks" — the plateau is over.
+    func testMovingAgainHasItsOwnHeroTextAndNoLocalRate() {
+        let goal = movingAgain(plan: nil)
+        XCTAssertTrue(GoalProgressLogic.usesServerWeightRead(goal))
+        XCTAssertEqual(GoalProgressLogic.serverWeightRead(goal), movingAgainHeadline)
+        XCTAssertEqual(WeightHeroLogic.serverReadSlotText(goal), "Moving again after a plateau")
+        XCTAssertNotEqual(WeightHeroLogic.serverReadSlotText(goal), WeightHeroLogic.plateauReadHeroText)
+        let text = heroText(goal)
+        XCTAssertEqual(text, "Moving again after a plateau")
+        XCTAssertFalse(text?.contains("/wk") ?? true, "no weekly rate of its own")
+        // The 4-week goal rate does not sneak back in either.
+        XCTAssertEqual(heroText(goal, goalRate: -0.4), text)
+    }
+
+    /// With the week plan the slot carries the plan's one action (the same line the card's reasons end on), so the
+    /// goal line's "Moving again — ..." is not said twice; a plan that is not about moving again, or has no text, falls back.
+    func testMovingAgainSlotCarriesThePlansActionWhenThereIsOne() {
+        let action = GoalProgressDTO.WeightRead.Plan.Action(kind: "keep_what_worked", text: "Keep doing what restarted it")
+        let plan = GoalProgressDTO.WeightRead.Plan(weekStart: "2026-10-12", state: .movingAgain, action: action)
+        XCTAssertEqual(WeightHeroLogic.serverReadSlotText(movingAgain(plan: plan)), "Keep doing what restarted it")
+        XCTAssertEqual(WeightHeroLogic.movingAgainSlotText(plan: plan), "Keep doing what restarted it")
+        XCTAssertEqual(heroText(movingAgain(plan: plan)), "Keep doing what restarted it")
+
+        let paceAction = GoalProgressDTO.WeightRead.Plan.Action(kind: "keep_going", text: "Keep your routine — it is working")
+        let other = GoalProgressDTO.WeightRead.Plan(weekStart: "2026-10-12", state: .pace, action: paceAction)
+        XCTAssertEqual(WeightHeroLogic.movingAgainSlotText(plan: other), "Moving again after a plateau")
+        let blank = GoalProgressDTO.WeightRead.Plan(
+            state: .movingAgain, action: GoalProgressDTO.WeightRead.Plan.Action(text: "   ")
+        )
+        XCTAssertEqual(WeightHeroLogic.movingAgainSlotText(plan: blank), "Moving again after a plateau")
+        XCTAssertEqual(
+            WeightHeroLogic.movingAgainSlotText(plan: GoalProgressDTO.WeightRead.Plan(state: .movingAgain)),
+            "Moving again after a plateau"
+        )
+        XCTAssertEqual(WeightHeroLogic.movingAgainSlotText(plan: nil), "Moving again after a plateau")
+    }
+
+    /// While the goal line shows the stale-weigh-in nudge instead, the hero carries the full read, as for every server read.
+    func testMovingAgainHeroCarriesTheFullReadWhileTheGoalLineShowsTheStaleNudge() {
+        let stale = GoalProgressDTO(
+            goal: "weight_loss", target: .init(weightKg: 76), current: .init(weightKg: 83.5, startWeightKg: 83.7),
+            verdict: .progressing, headline: movingAgainHeadline, lastWeighInDaysAgo: 6,
+            weightRead: GoalProgressDTO.WeightRead(state: .movingAgain)
+        )
+        XCTAssertFalse(GoalProgressLogic.goalLineShowsServerRead(stale))
+        XCTAssertEqual(heroText(stale), "Moving again — weekly average down 0.5\u{00A0}kg from the plateau")
+    }
+
+    /// The hero's middle caption quotes the weekly average ("This week") only on a wave 21 server, where
+    /// `current.weightKg` is that average and `trendKg` is present; an older server keeps the trend's "Now".
+    func testSparklineCaptionSaysThisWeekOnlyForTheWeeklyAverage() {
+        let weekly = WeightHeroLogic.sparklineCaptions(
+            firstKg: 83.7, lastKg: 82, targetKg: 76, system: .metric, weekAverageKg: 82.3
+        )
+        XCTAssertEqual(weekly?.now, "This week 82.3\u{00A0}kg")
+        XCTAssertEqual(weekly?.start, "Start 83.7\u{00A0}kg", "the line is still the trend: only the caption changes")
+        XCTAssertEqual(weekly?.target, "Goal 76\u{00A0}kg")
+        XCTAssertEqual(
+            WeightHeroLogic.sparklineCaptions(firstKg: 83.7, lastKg: 82, targetKg: nil, system: .imperial, weekAverageKg: 82.3)?.now,
+            "This week 181\u{00A0}lb"
+        )
+        // No weekly average (an older server, other goals), or one that is not a weight: the trend's "Now".
+        for average in [nil, 0, -1, Double.nan, Double.infinity] as [Double?] {
+            XCTAssertEqual(
+                WeightHeroLogic.sparklineCaptions(firstKg: 83.7, lastKg: 82, targetKg: 76, system: .metric, weekAverageKg: average)?.now,
+                "Now 82\u{00A0}kg", "\(String(describing: average))"
+            )
+        }
+        XCTAssertEqual(WeightHeroLogic.sparklineCaptions(firstKg: 83.7, lastKg: 82, targetKg: 76, system: .metric)?.now, "Now 82\u{00A0}kg")
+        // Still nil without points, whatever the average.
+        XCTAssertNil(WeightHeroLogic.sparklineCaptions(firstKg: nil, lastKg: 82, targetKg: 76, system: .metric, weekAverageKg: 82.3))
+    }
+
+    /// `GoalProgressLogic.weeklyAverageKg` is what Today feeds the caption: `trendKg` present is how a wave 21
+    /// weight-loss payload says `weightKg` is the weekly average.
+    func testWeeklyAverageIsOnlyOfferedWhenTheServerSendsTheTrendSeparately() {
+        func payload(_ goal: String, trendKg: Double?, weightKg: Double? = 82.3) -> GoalProgressDTO {
+            GoalProgressDTO(
+                goal: goal, current: .init(weightKg: weightKg, startWeightKg: 83.7, trendKg: trendKg), verdict: .onTrack
+            )
+        }
+        XCTAssertEqual(GoalProgressLogic.weeklyAverageKg(payload("weight_loss", trendKg: 82)), 82.3)
+        XCTAssertNil(GoalProgressLogic.weeklyAverageKg(payload("weight_loss", trendKg: nil)), "older server: weightKg is the trend")
+        XCTAssertNil(GoalProgressLogic.weeklyAverageKg(payload("muscle", trendKg: 82)), "weight loss only")
+        XCTAssertNil(GoalProgressLogic.weeklyAverageKg(payload("weight_loss", trendKg: 82, weightKg: nil)))
+        XCTAssertNil(GoalProgressLogic.weeklyAverageKg(payload("weight_loss", trendKg: 82, weightKg: 0)))
+        XCTAssertNil(GoalProgressLogic.weeklyAverageKg(nil))
     }
 }

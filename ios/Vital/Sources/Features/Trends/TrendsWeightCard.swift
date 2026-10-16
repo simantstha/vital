@@ -46,7 +46,7 @@ enum TrendsWeightCardLogic {
     /// so "down is good" is a safe, non-configurable assumption here.
     ///
     /// `withholdsLocalRate`: the server is reading the scale itself (early read /
-    /// welcome back / plateau — `GoalProgressLogic.usesServerWeightRead`) and has
+    /// welcome back / plateau / moving again — `GoalProgressLogic.usesServerWeightRead`) and has
     /// withheld a pace on purpose, so no pill of this card's own 7-day rate may
     /// contradict the goal card above it. Defaults to `false` (older server).
     static func ratePill(

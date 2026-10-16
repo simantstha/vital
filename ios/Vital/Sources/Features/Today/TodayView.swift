@@ -131,6 +131,7 @@ struct TodayView: View {
                                     goalRateKgPerWeek: vm.heroGoalRateKgPerWeek,
                                     withholdsLocalRate: vm.heroWithholdsLocalRate,
                                     serverWeightRead: vm.heroServerWeightRead,
+                                    weekAverageKg: vm.heroWeekAverageKg,
                                     chip: vm.weighInChip,
                                     onChipTap: { onWeighInChipTap() },
                                     isLogging: vm.isLoggingWeight,
