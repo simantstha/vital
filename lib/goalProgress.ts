@@ -145,6 +145,7 @@ import {
   enduranceWeekPlan,
   RACE_EVE_CONSERVATIVE_LINE,
   RACE_EVE_HEAVY_WEEK,
+  TAPER_GOOD_MIN_FRACTION,
   LONG_RUN_MAX_WEEK_SHARE,
   racePaceReps,
   findRaceRun,
@@ -2848,6 +2849,15 @@ function windDownPlanOutcome(input: GoalProgressInput, ec: EnduranceCtx, plan: E
   const over = overBand;
   const done = distanceNum(input, doneKm);
   const tgt = fmtDistance(input, target);
+  // A taper week's low volume is safe (the light-week rule is for build weeks), but ", on plan" is a claim the week can still
+  // make: it fails only at the weekend, when what is run plus the taper's long run still to come sits under the taper band
+  // (60% of the target - lib/enduranceProgression.ts windDownBand). Before that the long run is still ahead ("5.4 of ~22 km" on a
+  // Friday is on plan: 5.4 + the 11.5 km long run lands the week at 17 km), so the claim stands.
+  const weekend = weekdayOf(input.todayKey) === 6 || weekdayOf(input.todayKey) === 0;
+  const longestSoFar = Math.max(0, ...ec.runs.filter(r => r.day >= ec.weekStart && r.day <= input.todayKey && r.day !== race.date).map(r => r.km));
+  const longRunPlanned = plan.longRunKm ?? 0;
+  const longRunAhead = longestSoFar < longRunPlanned * 0.6 ? longRunPlanned : 0;
+  const underBand = wind.phase === 'taper' && !postRace && weekend && doneKm + longRunAhead < target * TAPER_GOOD_MIN_FRACTION;
   let headline: string;
   if (raceDoneNow && raceRun) {
     const time = formatRaceTime(raceRun.durationMin);
@@ -2859,7 +2869,7 @@ function windDownPlanOutcome(input: GoalProgressInput, ec: EnduranceCtx, plan: E
     const week = wind.phase === 'recovery' ? recoveryWeek(-wind.info.daysToRace) : 1;
     headline = `Recovery week ${week} — day ${days} after your ${raceWord(race.label)}: easy only`;
   } else if (wind.phase === 'taper') {
-    headline = `Taper week — ${done} of ~${tgt}${over ? ', over the plan' : doneKm > 0 ? ', on plan' : ''}`;
+    headline = `Taper week — ${done} of ~${tgt}${over ? ', over the plan' : underBand ? '; easy runs are enough' : doneKm > 0 ? ', on plan' : ''}`;
   } else {
     headline = `Race week — ${done} of ~${tgt} before the race${over ? ', over the plan' : ''}`;
   }

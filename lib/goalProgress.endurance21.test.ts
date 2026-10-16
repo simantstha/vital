@@ -274,3 +274,22 @@ test('a comeback week more than 10% over its "up to" cap is "over the cap" on th
   assert.equal(within.distance!.plan?.overCap, undefined);
   assert.equal(within.distance!.stepTargetKm, 20);
 });
+
+test('a taper week says "on plan" only while the week can still land in the taper band: the long run ahead counts, at the weekend a short week is "easy runs are enough"', () => {
+  const race = { date: '2026-06-21', distanceKm: 21.1 };
+  const card = (todayKey: string, thisWeek: Array<[number, number]>) =>
+    computeGoalProgress(input(weeks(todayKey, [thisWeek, wk(30), wk(30), wk(30), wk(28)]), { todayKey, race }));
+  // Friday, 5.4 km in: the taper's 8 km long run is still ahead (5.4 + 8 is over 60% of ~23 km), so the claim stands.
+  const friday = card('2026-06-12', [[1, 2.8], [3, 2.6]]);
+  assert.equal(friday.distance!.plan?.kind, 'taper');
+  assert.equal(friday.headline, 'Taper week — 5.4 of ~23 km, on plan');
+  // Saturday with 2 km all week: even the long run would not bring it to the band - missing taper volume is safe, but it is not "on plan".
+  const saturday = card('2026-06-13', [[1, 2]]);
+  assert.equal(saturday.headline, 'Taper week — 2 of ~23 km; easy runs are enough');
+  assert.equal(saturday.verdict, 'on_track', 'never a "behind" in a taper');
+  assert.equal(card('2026-06-14', [[1, 2]]).headline, 'Taper week — 2 of ~23 km; easy runs are enough');
+  // The long run still to come on Saturday keeps it on plan; a long run done on Sunday lands it; a Sunday with only short runs and no long run does not.
+  assert.equal(card('2026-06-13', [[1, 2.8], [3, 2.8], [4, 2.8]]).headline, 'Taper week — 8.4 of ~23 km, on plan');
+  assert.equal(card('2026-06-14', [[1, 2.8], [3, 2.8], [6, 9]]).headline, 'Taper week — 14.6 of ~23 km, on plan');
+  assert.equal(card('2026-06-14', [[1, 2.8], [3, 2.8]]).headline, 'Taper week — 5.6 of ~23 km; easy runs are enough');
+});

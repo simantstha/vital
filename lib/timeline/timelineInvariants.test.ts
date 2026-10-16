@@ -6,6 +6,7 @@
  */
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { TAPER_GOOD_MIN_FRACTION } from '../enduranceProgression';
 import { liftLapseMinDays } from '../liftChange';
 import { KM_PER_MILE } from '../metricFormat';
 import { calorieFloorKcal, isInstruction, TRIM_MAX_KCAL_PER_STEP } from '../weightWeekPlan';
@@ -781,5 +782,35 @@ invariant(LIFTERS, 'the verdict does not change on two consecutive days unless a
     }
   }
   assert.ok(changes > 0, `${name}: the verdict never changed, so this invariant checked nothing`);
+  return out;
+});
+
+// ── taper honesty (wave 21b) ────────────────────────────────────────────────
+
+// A taper week's volume is meant to be cut, so a low week is safe - the light-week rule (don't make it up) is for build weeks and does
+// not apply. But ", on plan" is a claim the week must still be able to make: at the weekend, what is run plus the taper's long run still
+// to come must reach the shared taper band (60% of the target, windDownBand), else the card says "easy runs are enough". Earlier in
+// the week the long run is ahead, so the claim stands - runner_on_plan day 102, "5.4 of ~22 km, on plan" on a Friday, is honest:
+// 5.4 + the 11.5 km Sunday long run lands the week at 17 km.
+invariant(['runner_on_plan', 'runner_on_plan_half', 'runner_on_plan_imperial', 'runner_messy'], 'a weekend taper card says "on plan" only when the week can land in the taper band (run so far + the long run still to come)', (snaps, name) => {
+  const scn = buildScenario(name);
+  const out: Violation[] = [];
+  let weekendDays = 0;
+  for (const snap of snaps) {
+    const d = snap.card?.distance;
+    if (d?.plan?.kind !== 'taper' || d.thisWeekKm == null) continue;
+    const weekday = weekdayOf(snap.date);
+    if (weekday !== 'Sat' && weekday !== 'Sun') continue;
+    weekendDays++;
+    const monday = mondayOfDate(snap.date);
+    const longest = Math.max(0, ...scn.workouts.filter(w => w.type === 'Running' && w.distanceM && w.day >= monday && w.day <= snap.date).map(w => (w.distanceM as number) / 1000));
+    const planned = d.plan.longRunKm ?? 0;
+    const ahead = longest < planned * 0.6 ? planned : 0;
+    if (d.thisWeekKm + ahead >= d.stepTargetKm * TAPER_GOOD_MIN_FRACTION) continue;
+    for (const t of [...cardTexts(snap), ...coachTexts(snap)]) {
+      if (/\bon plan\b/i.test(plain(t.text))) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" with ${d.thisWeekKm} km run and ${ahead} km of long run ahead, under the band's ${Math.round(d.stepTargetKm * TAPER_GOOD_MIN_FRACTION * 10) / 10} km` });
+    }
+  }
+  assert.ok(weekendDays > 0, `${name}: no taper weekend was stepped, so this invariant checked nothing`);
   return out;
 });
