@@ -31,6 +31,9 @@ import {
 } from '@/lib/goalProgress';
 
 const WINDOW_DAYS = 28;
+// A fat-loss plateau's cause is judged over its own weeks and kept while it lasts (lib/weightWeekPlan.ts), which needs the
+// logs from when it began: the weight_loss goal reads this many days of intake (the card's own stats still use the 28).
+const INTAKE_HISTORY_DAYS = 70;
 const WEIGHT_LOOKBACK_DAYS = 120; // EWMA run-in beyond the 28-day rate window
 const DEFAULT_SLEEP_GOAL_MIN = 480; // kept in sync with app/api/profile/route.ts
 
@@ -68,7 +71,7 @@ export async function loadGoalProgress(
     progressionSets, workoutEntries, restingHr, hrv, sleep, racePeakWeekKm, runHistory,
   ] = await Promise.all([
     getWeightReadings(userId, WEIGHT_LOOKBACK_DAYS, tz),
-    resolveDailyIntake(userId, dayKeys, tz),
+    resolveDailyIntake(userId, goal === 'weight_loss' ? trailingDayKeys(todayKey, INTAKE_HISTORY_DAYS) : dayKeys, tz),
     resolveDietBudget(user, userId),
     readCoreProfile(userId),
     getSetsSince(userId, 84),
@@ -123,6 +126,12 @@ export async function loadGoalProgress(
       type: typeof w.type === 'string' ? w.type : null,
     }));
 
+  const intakeRow = (day: string) => {
+    const i = intakeByDay.get(day);
+    const has = i != null && i.source !== 'none';
+    return { day, kcal: has ? i.kcal : null, proteinG: has ? i.protein : null, source: i?.source ?? 'none' } as const;
+  };
+
   return computeGoalProgress({
     goal,
     todayKey,
@@ -141,11 +150,8 @@ export async function loadGoalProgress(
       startedDay: user.goal_started_at ? localDayKey(user.goal_started_at, tz) : null,
     },
     weightReadings,
-    intakeDays: dayKeys.map(day => {
-      const i = intakeByDay.get(day);
-      const has = i != null && i.source !== 'none';
-      return { day, kcal: has ? i.kcal : null, proteinG: has ? i.protein : null, source: i?.source ?? 'none' };
-    }),
+    intakeDays: dayKeys.map(intakeRow),
+    intakeHistoryDays: goal === 'weight_loss' ? trailingDayKeys(todayKey, INTAKE_HISTORY_DAYS).map(intakeRow) : undefined,
     budget: budgetInput,
     progression,
     trainingDays: [...trainingDays].filter(d => daySet.has(d)),

@@ -757,6 +757,8 @@ export async function assembleContext(userId: string, findingId?: string): Promi
     weekendPatternIntakeKcal,
     todayKey: localToday,
     goalStartDay: usersRow?.goal_started_at ? localDayKey(usersRow.goal_started_at, tz) : null,
+    // The weight-loss week plan the goal card shows: plateau / too-fast follow it, not today's scale.
+    weekPlan: goalProgress?.weightRead?.plan ?? null,
   });
 
   // WHOOP context line (Task 7) — daily_metrics is day-keyed to the user's

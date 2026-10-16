@@ -259,8 +259,9 @@ test('early read: the amount down is the card\'s one progress weight (the weekly
     verdict: 'progressing', eta: null, current: { weightKg: 83.5, startWeightKg: 83.7, changeKg: -0.3, progressPct: 4 },
     weightRead: { ...READ, state: 'early', scaleKg: 83.0, weekMeanKg: 83.4 },
   });
-  assert.equal(goalOpenerLine(early, 'metric'), "You're 0.3 of 7.7 kg down on the scale; your pace settles after 3 weeks.");
-  assert.equal(goalOpenerLine(early, 'imperial'), "You're 0.7 of 17 lb down on the scale; your pace settles after 3 weeks.");
+  // Wave 21w (finding 4): the number is the 7-day average, so the line says "weekly average" — "on the scale" is a single reading only.
+  assert.equal(goalOpenerLine(early, 'metric'), "You're 0.3 of 7.7 kg down on your weekly average; your pace settles after 3 weeks.");
+  assert.equal(goalOpenerLine(early, 'imperial'), "You're 0.7 of 17 lb down on your weekly average; your pace settles after 3 weeks.");
   // Without a weekly average (fewer than 3 weigh-ins that week) the latest scale reading is the progress weight.
   const sparse = gp({ ...early, weightRead: { ...READ, state: 'early', scaleKg: 83.0, weekMeanKg: null } });
   assert.equal(goalOpenerLine(sparse, 'metric'), "You're 0.7 of 7.7 kg down on the scale; your pace settles after 3 weeks.");
@@ -271,10 +272,10 @@ test('an older goal without a pace says a few more weigh-ins bring it back, not 
     verdict: 'progressing', eta: null, current: { weightKg: 83.5, startWeightKg: 83.7, changeKg: -0.3, progressPct: 4 },
     weightRead: { ...READ, state: 'early', scaleKg: 83.0, weekMeanKg: 83.4, goalAgeDays },
   });
-  assert.equal(goalOpenerLine(old(84), 'metric'), "You're 0.3 of 7.7 kg down on the scale; a few more weigh-ins and your pace is back.");
-  assert.equal(goalOpenerLine(old(21), 'metric'), "You're 0.3 of 7.7 kg down on the scale; a few more weigh-ins and your pace is back.");
-  assert.equal(goalOpenerLine(old(20), 'metric'), "You're 0.3 of 7.7 kg down on the scale; your pace settles after 3 weeks.");
-  assert.equal(goalOpenerLine(old(null), 'metric'), "You're 0.3 of 7.7 kg down on the scale; your pace settles after 3 weeks.");
+  assert.equal(goalOpenerLine(old(84), 'metric'), "You're 0.3 of 7.7 kg down on your weekly average; a few more weigh-ins and your pace is back.");
+  assert.equal(goalOpenerLine(old(21), 'metric'), "You're 0.3 of 7.7 kg down on your weekly average; a few more weigh-ins and your pace is back.");
+  assert.equal(goalOpenerLine(old(20), 'metric'), "You're 0.3 of 7.7 kg down on your weekly average; your pace settles after 3 weeks.");
+  assert.equal(goalOpenerLine(old(null), 'metric'), "You're 0.3 of 7.7 kg down on your weekly average; your pace settles after 3 weeks.");
 });
 
 test('a plateau and a weekly average: "down" is measured from the weekly average', () => {

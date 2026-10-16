@@ -136,6 +136,13 @@ export interface AssessWeightSignalsInput {
    * minimums apply.
    */
   goalStartDay?: string | null;
+  /**
+   * The weight-loss week plan the goal card shows (GoalProgress.weightRead.plan, lib/weightWeekPlan.ts). With it the
+   * two signals that restate the scale's call follow the plan instead of re-reading the scale today: `plateau` only in
+   * a plateau week, `too_fast_loss` only while the plan's "too fast" call is on, so the coach never says "plateau" or
+   * "losing fast" on a day the card says otherwise. Absent (no card): the signals read the scale as before.
+   */
+  weekPlan?: { state: string; tooFast: boolean } | null;
 }
 
 function round1(n: number): number {
@@ -344,13 +351,13 @@ function assessWeekendOvereating(weekendPatternIntakeKcal: DailyIntakeKcalPoint[
  * signal depends on DB access — every input is already-resolved data.
  */
 export function assessWeightSignals(input: AssessWeightSignalsInput): WeightSignal[] {
-  const { trend, dailyIntakeKcal, floorKcal, goal, weekendPatternIntakeKcal, todayKey, goalStartDay } = input;
+  const { trend, dailyIntakeKcal, floorKcal, goal, weekendPatternIntakeKcal, todayKey, goalStartDay, weekPlan } = input;
 
   const signals: WeightSignal[] = [];
-  const tooFastLoss = assessTooFastLoss(trend, todayKey, goalStartDay);
+  const tooFastLoss = weekPlan != null && !weekPlan.tooFast ? null : assessTooFastLoss(trend, todayKey, goalStartDay);
   if (tooFastLoss) signals.push(tooFastLoss);
 
-  const plateau = assessPlateau(trend, goal, todayKey, goalStartDay);
+  const plateau = weekPlan != null && weekPlan.state !== 'plateau' ? null : assessPlateau(trend, goal, todayKey, goalStartDay);
   if (plateau) signals.push(plateau);
 
   const underEating = assessUnderEating(dailyIntakeKcal, floorKcal);

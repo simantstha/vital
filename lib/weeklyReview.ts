@@ -23,6 +23,7 @@ import { KG_TO_LB, isRunningWorkoutType, mixedReturnLead, raceLabel } from './go
 import { PARTIAL_LOG_KCAL_THRESHOLD } from './brain/weightSignals';
 import { computeWeightTrend, type WeightReading } from './weightTrend';
 import { dayNumber, rawPlateau } from './weightPace';
+import { isInstruction, type WeightWeekPlan } from './weightWeekPlan';
 import { localDayKey, weekDayKeys, weekStartKeyForDay } from './localDay';
 import { arrowPair, withUnit } from './displayText';
 import type { ProgressionSummary } from './workoutRepository';
@@ -170,7 +171,11 @@ export interface WeeklyReview {
   /** Sunday, YYYY-MM-DD (user-local). */
   weekEnd: string;
   goal: GoalKind;
-  /** The 4-week goal verdict as of this week (shared with the goal card) — NOT a rating of the week; use `weekRating` for that. */
+  /**
+   * The 4-week goal verdict as of this week (shared with the goal card) — NOT a rating of the week; use `weekRating` for that.
+   * Weight loss with a week plan: the verdict of the coming week's plan (what the goal card shows on that Monday), so the
+   * review and the card cannot disagree.
+   */
   verdict: GoalVerdict;
   /**
    * Rating of the reviewed week alone (see assessWeek). `null` when the
@@ -286,6 +291,12 @@ export interface WeeklyReviewInput {
   unitSystem?: 'metric' | 'imperial' | null;
   /** exercise key -> display name; falls back to Title Case ("bench press" -> "Bench Press"). */
   exerciseDisplay?: Record<string, string>;
+  /**
+   * Weight loss: the COMING week's plan (lib/weightWeekPlan.ts) — the very plan the goal card shows from that Monday. Its
+   * action is "Next week" and its verdict is the review's verdict, so the review never gives an instruction the card
+   * contradicts. Absent / null (tests, old callers): the review's own tips and `verdict` stand.
+   */
+  weightPlan?: WeightWeekPlan | null;
   /** Weight loss: the goal's target weight (kg) — names the target when the review is of the week it was reached. */
   targetWeightKg?: number | null;
   /** Weight loss: the local day the target was first reached (goal progress `reachedAt`); null / absent when unknown. */
@@ -1982,6 +1993,19 @@ function reachedTips(input: WeeklyReviewInput): string[] {
   ];
 }
 
+/**
+ * "Next week" from the coming week's weight plan: the plan's one action, word for word, when it is an instruction (move
+ * the date or trim a step, eat up to the target, the plateau's cause, keep doing what restarted it, a new target,
+ * the maintenance target), or the hold line of a reached goal (keep the maintenance budget / keep weighing in). Null otherwise:
+ * the review's own tips apply.
+ */
+function weightPlanNextWeek(input: WeeklyReviewInput): string | null {
+  const plan = input.weightPlan;
+  if (input.goal !== 'weight_loss' || plan == null) return null;
+  if (isInstruction(plan.action) || ((plan.state === 'maintenance' || plan.state === 'reached') && plan.action.kind === 'hold')) return plan.action.text;
+  return null;
+}
+
 /** Weight loss with nothing else to fix: a tip built from what was actually logged, never asking for what is already done. */
 function weightLossFallback(input: WeeklyReviewInput, week: Week): string {
   const weighed = weekWeighIns(input, week).length;
@@ -2345,6 +2369,9 @@ function buildNextWeekRaw(input: WeeklyReviewInput, cands: Candidate[], week: We
   // The race lifecycle (taper / race week / recovery, and the step back to building) owns "Next week" in its weeks.
   const windDown = windDownNextWeek(input, week);
   if (windDown != null) return windDown;
+  // The coming week's plan owns "Next week" for weight loss: the card shows the same action from that Monday.
+  const weightPlanned = weightPlanNextWeek(input);
+  if (weightPlanned != null) return weightPlanned;
   // The target is met: no deficit tips. The week it was reached says "switch to maintenance" first.
   const reached = reachedWeek(input, week);
   if (reached) return reached.thisWeek ? reachedTips(input)[0] : rotateTip(input, week, reachedTips(input));
@@ -2461,7 +2488,7 @@ function emptyReview(input: WeeklyReviewInput, week: Week, prevWeek: Week, daysW
     weekStart: week.days[0],
     weekEnd: week.days[6],
     goal: input.goal,
-    verdict: input.verdict,
+    verdict: input.weightPlan?.verdict ?? input.verdict,
     weekRating: null,
     weekGap: null,
     headline: 'Not enough data for a weekly review yet',
@@ -2496,7 +2523,7 @@ export function computeWeeklyReview(input: WeeklyReviewInput): WeeklyReview {
     weekStart: week.days[0],
     weekEnd: week.days[6],
     goal: input.goal,
-    verdict: input.verdict,
+    verdict: input.weightPlan?.verdict ?? input.verdict,
     weekRating: assessment.rating,
     weekGap: assessment.gap,
     headline: buildHeadline(input, cands, week),
