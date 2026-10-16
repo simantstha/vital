@@ -354,7 +354,8 @@ test('coach lines label the trend as smoothed, add the scale and weekly average,
 
 test('coach lines tell the coach not to quote a rate or a weeks-ahead call during an early read, and welcome a returning user', () => {
   const early = formatGoalProgressLines(gp({ eta: null, ratePerWeek: { kg: null, pctBodyweight: null }, verdict: 'progressing', headline: 'Early read — down 0.7 kg on the scale in 9 days', weightRead: { ...WEIGHT_READ, state: 'early' } }), 'metric').join('\n');
-  assert.match(early, /Early read: the pace is not settled yet — quote the scale against the start, but no weekly rate, no projected date and no "weeks ahead\/behind"/);
+  // Wave 21w (finding 4): the number is the weekly average, so the coach is told to say that, and "on the scale" only for one reading.
+  assert.match(early, /Early read: the pace is not settled yet — quote the weekly average against the start \(say "on the scale" only for a single latest reading\), but no weekly rate, no projected date and no "weeks ahead\/behind"/);
   assert.doesNotMatch(early, /rate -/);
   assert.doesNotMatch(early, /ETA/);
   const back = formatGoalProgressLines(gp({ eta: null, weightRead: { ...WEIGHT_READ, state: 'returning' } }), 'metric').join('\n');

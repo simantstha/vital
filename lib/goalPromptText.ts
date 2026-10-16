@@ -15,6 +15,7 @@ import { LIFT_LAPSE_MIN_DAYS, liftChange4w, pickHeadlineLift, rankLifts } from '
 import { weekStartKeyForDay } from './localDay';
 import { KM_PER_MILE, LB_PER_KG } from './metricFormat';
 import { shortDate } from './brain/openerText';
+import { isInstruction } from './weightWeekPlan';
 import type { UnitSystem } from './units';
 
 const GOAL_LABELS: Record<GoalKind, string> = {
@@ -168,7 +169,17 @@ export function formatGoalProgressLines(gp: GoalProgress, units: UnitSystem): st
 
   const nowBits: string[] = [];
   const read = gp.weightRead;
-  if (gp.current.weightKg != null) {
+  const plan = read?.plan ?? null;
+  // A fat-loss payload that carries `current.trendKg` has ONE displayed weight: `current.weightKg` is the weekly average
+  // (else the latest scale reading) and the smoothed trend is the chart's alone, so the coach quotes the average.
+  const oneWeight = gp.goal === 'weight_loss' && gp.current.trendKg !== undefined;
+  if (gp.current.weightKg != null && oneWeight) {
+    nowBits.push(read?.weekMeanKg != null ? `weekly average ${wt(read.weekMeanKg, units)} (the one weight to quote; the chart's smoothed trend is not)` : `latest scale reading ${wt(gp.current.weightKg, units)} (the one weight to quote)`);
+    if (gp.current.startWeightKg != null && gp.current.changeKg != null) {
+      nowBits.push(`${signedWt(gp.current.changeKg, units)} since start at ${wt(gp.current.startWeightKg, units)}`);
+    }
+    if (read?.scaleKg != null && read.weekMeanKg != null) nowBits.push(`latest scale reading ${wt(read.scaleKg, units)}`);
+  } else if (gp.current.weightKg != null) {
     // The trend is smoothed (it lags the scale by about ten days); the scale and weekly average are what the user sees.
     nowBits.push(`trend ${wt(gp.current.weightKg, units)}${read?.scaleKg != null ? ' (smoothed)' : ''}`);
     if (gp.current.startWeightKg != null && gp.current.changeKg != null) {
@@ -179,7 +190,7 @@ export function formatGoalProgressLines(gp: GoalProgress, units: UnitSystem): st
       nowBits.push(`${signedWt(gp.current.changeKg, units)} since start at ${wt(gp.current.startWeightKg, units)}${basis}`);
     }
   }
-  if (read?.scaleKg != null) {
+  if (read?.scaleKg != null && !oneWeight) {
     nowBits.push(`scale ${wt(read.scaleKg, units)}${read.weekMeanKg != null ? `, weekly average ${wt(read.weekMeanKg, units)}` : ''}`);
   }
   if (gp.ratePerWeek.kg != null) {
@@ -217,6 +228,14 @@ export function formatGoalProgressLines(gp: GoalProgress, units: UnitSystem): st
   const weekTarget = weekTargetLine(gp, units);
   if (weekTarget) lines.push(weekTarget);
   if (nowBits.length) lines.push(`- Now: ${nowBits.join('; ')}`);
+  // The week's ONE instruction (lib/weightWeekPlan.ts), the same one the goal card and the weekly review state: decided on the
+  // Monday from the weigh-ins through Sunday, so it does not change until the next Monday.
+  if (plan && gp.verdict !== 'insufficient_data' && gp.verdict !== 'needs_target') {
+    const rule = isInstruction(plan.action)
+      ? 'give this one instruction; do not suggest a different calorie change before next Monday'
+      : 'no calorie change is asked this week';
+    lines.push(`- This week's plan (set ${shortDate(plan.weekStart) ?? plan.weekStart}, the same all week): ${plainSpaces(plan.action.text)} — ${rule}`);
+  }
 
   // Returning from a break: the lifts are rebuilding, never a stall or a reason to deload.
   if (gp.liftReturn && !gp.liftReturn.regained) {
@@ -236,25 +255,41 @@ export function formatGoalProgressLines(gp: GoalProgress, units: UnitSystem): st
     lines.push(`  - ${plainSpaces(r.text)}${r.tone === 'watch' ? ' (watch)' : ''}`);
   }
   if (read?.state === 'early') {
-    lines.push('- Early read: the pace is not settled yet — quote the scale against the start, but no weekly rate, no projected date and no "weeks ahead/behind". Daily swings of ±1 kg are normal.');
+    lines.push('- Early read: the pace is not settled yet — quote the weekly average against the start (say "on the scale" only for a single latest reading), but no weekly rate, no projected date and no "weeks ahead/behind". Daily swings of ±1 kg are normal.');
   }
   if (read?.state === 'returning') {
     lines.push('- The user is back after a gap in weigh-ins: welcome them back and keep weighing in; do not call the pace too fast or behind until 3 weigh-ins are back.');
   }
   if (read?.state === 'plateau') {
-    if (read.intake?.low) {
+    const cause = plan?.plateauCause ?? null;
+    if (cause?.kind === 'weekends' && cause.weekendAvgKcal != null && cause.weekdayAvgKcal != null) {
+      // The logs of the plateau's own weeks name the weekends, and the cause is kept for the whole plateau.
+      lines.push(`- Plateau on the raw weekly averages (flat for 3 weeks); the logged weeks name the weekends (weekends averaged ~${Math.round(cause.weekendAvgKcal / 50) * 50} vs ${Math.round(cause.weekdayAvgKcal / 50) * 50} kcal on weekdays): lead with the weekends, do not blame water, and keep that cause for as long as the plateau lasts. Only if still flat 2 weeks after that suggest ~150 kcal less a day.`);
+    } else if (cause ? cause.kind === 'intake' : read.intake?.low) {
       // The logs say the calories ran over target: that, not water, is what to lead with.
-      const avg = Math.round(read.intake.avgKcal / 10) * 10;
-      lines.push(`- Plateau on the raw weekly averages (flat for 3 weeks) while the logged days ran over target (averaging ~${avg} vs ${read.intake.targetKcal} kcal): lead with the logs — getting back to target is the first lever, do not blame water. Only if still flat 2 weeks after that suggest ~150 kcal less a day.`);
+      const avg = Math.round((cause?.avgKcal ?? read.intake?.avgKcal ?? 0) / 10) * 10;
+      const target = cause?.targetKcal ?? read.intake?.targetKcal ?? 0;
+      lines.push(`- Plateau on the raw weekly averages (flat for 3 weeks) while the logged days ran over target (averaging ~${avg} vs ${target} kcal): lead with the logs — getting back to target is the first lever, do not blame water. Only if still flat 2 weeks after that suggest ~150 kcal less a day.`);
     } else {
       lines.push('- Plateau on the raw weekly averages (flat for 3 weeks): often water — not a failure. Keep the plan; only if still flat in 2 weeks suggest ~150 kcal less a day or two 30-minute walks.');
     }
+  }
+  if (read?.state === 'moving_again') {
+    lines.push('- The scale is moving again after a plateau: no projected date, never "behind", no calorie cut — say to keep doing what restarted it.');
+  }
+  if (plan?.farBehind) {
+    lines.push("- The projection is more than 8 weeks past the target date: do not quote a projected date or \"weeks behind\" — say the date won't hold, and give the week's one action (move the date or the small trim).");
   }
   if (gp.verdict === 'needs_target') {
     lines.push('- No target set yet — setting one is the only thing missing for a real progress verdict.');
   }
   if (gp.verdict === 'reached') {
-    lines.push('- Target reached — the next step is a new target or maintenance; do not encourage further loss/gain toward the old target.');
+    if (plan?.state === 'maintenance') {
+      // Past the first week: the new-target / maintenance question has been asked; do not keep asking it.
+      lines.push('- Target reached and holding — do not ask again about a new target or maintenance, and do not encourage further loss toward the old target.');
+    } else {
+      lines.push('- Target reached — the next step is a new target or maintenance; do not encourage further loss/gain toward the old target.');
+    }
   }
   return lines;
 }

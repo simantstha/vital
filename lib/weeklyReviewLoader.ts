@@ -89,7 +89,7 @@ export async function computeLastWeekReview(
   const daySet = new Set(dayKeys);
 
   const goal = normalizeGoal(user.goal);
-  const [progress, weightReadings, intakeByDay, budget, progression, sets, workoutEntries, restingHr, hrv, sleep, displayRows, racePeakWeekKm, previousNextWeek, runHistory] =
+  const [progress, weightReadings, intakeByDay, budget, progression, sets, workoutEntries, restingHr, hrv, sleep, displayRows, racePeakWeekKm, previousNextWeek, runHistory, comingWeekProgress] =
     await Promise.all([
       loadGoalProgress(userId, { tz, now: endOfLocalWeek(weekStart, tz) }),
       getWeightReadings(userId, WEIGHT_LOOKBACK_DAYS, tz),
@@ -115,7 +115,12 @@ export async function computeLastWeekReview(
       loadPreviousNextWeek(userId, addDays(weekStart, -7)),
       // The week plan's longer running history (restart median, spike -> hold, baseline), through the reviewed Sunday.
       goal === 'endurance' ? loadRunHistory(userId, addDays(weekStart, 6)) : Promise.resolve(undefined),
+      // Weight loss: the card as it reads NOW, in the week after the reviewed one — its week plan is the review's "Next week"
+      // and its verdict (lib/weightWeekPlan.ts), so the review and the card give the same instruction.
+      goal === 'weight_loss' ? loadGoalProgress(userId, { tz, now }) : Promise.resolve(null),
     ]);
+  const comingWeekPlan = comingWeekProgress?.weightRead?.plan;
+  const weightPlan = comingWeekPlan != null && comingWeekPlan.weekStart === addDays(weekStart, 7) ? comingWeekPlan : null;
 
   // The formula TDEE comes from the same auto-budget expenditure summary the goal card reads (lib/goalProgressLoader.ts),
   // so a reached fat-loss goal whose calorie target already is maintenance is told so ("stay on maintenance") instead of
@@ -170,6 +175,7 @@ export async function computeLastWeekReview(
     targetWeightKg: progress?.target.weightKg ?? user.target_weight_kg ?? null,
     reachedAt: progress?.reachedAt ?? null,
     previousNextWeek,
+    weightPlan,
     weeklyDistanceKmTarget: user.weekly_distance_km_target ?? null,
     // Long-run progress as of the reviewed week's end (same object the goal card uses), so "Next week" can cap long-run growth.
     longRun: progress?.longRun ?? null,
