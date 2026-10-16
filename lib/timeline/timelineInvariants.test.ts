@@ -6,14 +6,16 @@
  */
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { liftLapseMinDays } from '../liftChange';
 import { KM_PER_MILE } from '../metricFormat';
+import { calorieFloorKcal, isInstruction, TRIM_MAX_KCAL_PER_STEP } from '../weightWeekPlan';
 import { runTimeline } from './engine';
-import { SCENARIO_NAMES, type ScenarioName } from './scenarios';
-import type { DaySnapshot } from './types';
+import { SCENARIO_NAMES, buildScenario, type ScenarioName } from './scenarios';
+import { addDays, dayDiff, weekdayOf, type DaySnapshot } from './types';
 
 const ALL: readonly ScenarioName[] = SCENARIO_NAMES;
 const RUNNERS = ALL.filter(n => n.startsWith('runner_'));
-const LIFTERS: readonly ScenarioName[] = ['lifter'];
+const LIFTERS = ALL.filter(n => n.startsWith('lifter'));
 const WEIGHT: readonly ScenarioName[] = ['weight_loss', 'weight_loss_logged'];
 
 // ── plumbing ────────────────────────────────────────────────────────────────
@@ -154,9 +156,8 @@ invariant(ALL, 'every weekly review has a non-empty next week', snaps =>
 // A digit, an ASCII space, then a unit. The app glues them with U+00A0 so a number never wraps away from its unit.
 const ASCII_SPACE_BEFORE_UNIT = /\d (?:kg|km|mi|lb|kcal)\b/;
 
-// Not yet listed: runner_on_plan, runner_on_plan_half, runner_on_plan_imperial, runner_messy. The taper line's race-pace
-// reps ("3×1 km", "3×0.5 mi") still use an ASCII space; add those scenarios here once that is fixed.
-invariant(['runner_no_race', ...LIFTERS, ...WEIGHT], 'numbers and units in card and review text are joined by U+00A0 (no ASCII space before kg, km, mi, lb, kcal)', snaps => {
+// Every scenario, taper and race weeks included: the taper line's race-pace reps are "3×1 km" / "3×0.5 mi" with U+00A0 (wave 21e).
+invariant(ALL, 'numbers and units in card and review text are joined by U+00A0 (no ASCII space before kg, km, mi, lb, kcal)', snaps => {
   const out: Violation[] = [];
   for (const snap of snaps) {
     for (const t of [...cardTexts(snap), ...reviewTexts(snap)]) {
@@ -209,6 +210,43 @@ invariant(RUNNERS, "the plan's long run is at most 50% of the week target (40% i
   return out;
 });
 
+const ON_TRACK_WORDS = /\bon (?:track|plan)\b/i;
+
+// A light week (4+ days off, or well behind its own pace from Friday) is "don't make it up": never "On track" / "on plan".
+invariant(['runner_messy', 'runner_no_race'], 'a light week is never "On track" or "on plan" on the card', (snaps, name) => {
+  const out: Violation[] = [];
+  let lightDays = 0;
+  for (const snap of snaps) {
+    if (snap.card?.distance?.plan?.lightWeek == null) continue;
+    lightDays++;
+    if (snap.card.verdict === 'on_track') out.push({ snap, detail: `verdict on_track in a light week: "${visible(snap.card.headline)}"` });
+    for (const t of cardTexts(snap)) if (ON_TRACK_WORDS.test(plain(t.text))) out.push({ snap, detail: `${t.where}: "${visible(t.text)}"` });
+  }
+  assert.ok(lightDays > 0, `${name}: no day was a light week, so this invariant checked nothing`);
+  return out;
+});
+
+// Race eve: the day before the race is for rest, so no figure of the week's km (a target, "x of y km so far", "this week") appears.
+// The standing weekly goal ("Goal: endurance; 30.0 km/week") and the long-run history line are not figures of this week.
+const WEEK_KM_FIGURE = /\d(?:\.\d+)?\s?(?:km|mi)\b[^\n]*\b(?:so far|this week|week's|a week|\/week|target)\b|\b(?:so far|this week|week's target|target)\b[^\n]*\d(?:\.\d+)?\s?(?:km|mi)\b/i;
+const isRaceEve = (s: DaySnapshot): boolean => s.race?.daysToRace === 1 && s.race.phase !== 'recovery';
+
+invariant(['runner_on_plan', 'runner_on_plan_half', 'runner_on_plan_imperial', 'runner_messy'], 'race eve shows no km-of-the-week figure (card, coach lines, opener)', (snaps, name) => {
+  const out: Violation[] = [];
+  let eves = 0;
+  for (const snap of snaps) {
+    if (!isRaceEve(snap)) continue;
+    eves++;
+    const texts = [...cardTexts(snap), ...coachTexts(snap).filter(t => !/^- (?:Goal|Long run)\b/.test(t.text))];
+    for (const t of texts) if (WEEK_KM_FIGURE.test(plain(t.text))) out.push({ snap, detail: `${t.where}: "${visible(t.text)}"` });
+    for (const t of cardTexts(snap)) {
+      if (t.where === 'card.distance.text' && /\d/.test(t.text)) out.push({ snap, detail: `${t.where} carries a figure: "${visible(t.text)}"` });
+    }
+  }
+  assert.ok(eves > 0, `${name}: no race-eve day was stepped, so this invariant checked nothing`);
+  return out;
+});
+
 const NEVER_BEHIND = new Set(['taper', 'race_week', 'recovery', 'rebuild', 'restart']);
 
 invariant(RUNNERS, 'never a "behind" verdict in a taper, race, recovery, rebuild or restart week', snaps =>
@@ -236,10 +274,10 @@ invariant(['runner_no_race'], 'never mentions a race or a phase', snaps => textM
 
 // ── lifter ──────────────────────────────────────────────────────────────────
 
-const LIFT_LAPSE_DAYS = 7;
-const inLapse = (s: DaySnapshot): boolean => (s.card?.lastSessionDaysAgo ?? 0) >= LIFT_LAPSE_DAYS;
+// A lapse starts after liftLapseMinDays(weekly sessions target) days without a strength session: 4 days for 4 a week (wave 21s).
+const inLapse = (s: DaySnapshot): boolean => (s.card?.lastSessionDaysAgo ?? 0) >= liftLapseMinDays(s.card?.target.weeklySessions);
 
-invariant(LIFTERS, 'never "Progressing" on a day with no strength session for 7+ days', snaps => {
+invariant(LIFTERS, 'never "Progressing" on a day past the lapse threshold (4 days without a strength session at 4 a week)', snaps => {
   const out = textMatches(snaps, s => [...cardTexts(s), ...coachTexts(s)], /\bprogressing\b/i, inLapse);
   for (const snap of snaps) {
     if (inLapse(snap) && snap.card?.verdict === 'progressing') out.push({ snap, detail: `verdict progressing, last session ${snap.card.lastSessionDaysAgo} days ago` });
@@ -247,7 +285,7 @@ invariant(LIFTERS, 'never "Progressing" on a day with no strength session for 7+
   return out;
 });
 
-invariant(LIFTERS, 'never a positive lift change on a day with no strength session for 7+ days', snaps => {
+invariant(LIFTERS, 'never a positive lift change on a day past the lapse threshold', snaps => {
   const liftTexts = (s: DaySnapshot): Text[] => [
     ...cardTexts(s).filter(t => t.where === 'card.headline' || t.where.endsWith('(lift)')),
     ...coachTexts(s).filter(t => /1RM/.test(t.text)),
@@ -255,7 +293,7 @@ invariant(LIFTERS, 'never a positive lift change on a day with no strength sessi
   return textMatches(snaps, liftTexts, /\+\s?\d/, inLapse);
 });
 
-invariant(LIFTERS, 'never a lift "win" on a day with no strength session for 7+ days', snaps => {
+invariant(LIFTERS, 'never a lift "win" on a day past the lapse threshold', snaps => {
   const out: Violation[] = [];
   for (const snap of snaps) {
     if (!inLapse(snap)) continue;
@@ -272,6 +310,80 @@ invariant(LIFTERS, 'never "Stalled" while a lift return is in progress', snaps =
   for (const snap of snaps) {
     if (returning(snap) && snap.card?.verdict === 'stalled') out.push({ snap, detail: `verdict stalled while returning to ${snap.card.liftReturn?.name}` });
   }
+  return out;
+});
+
+const mondayOfDate = (day: string): string => addDays(day, -['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].indexOf(weekdayOf(day)));
+
+// The week can no longer reach its sessions target when the sessions so far plus the days left (today included) are under
+// it. Counted from the scenario's own rows, not from the card, so a card that miscounts cannot excuse itself.
+invariant(LIFTERS, 'a week that can no longer reach its session target is never verdict "progressing"', (snaps, name) => {
+  const scn = buildScenario(name);
+  const target = scn.user.weeklySessions;
+  const trained = new Set(scn.sets.filter(x => !x.isWarmup).map(x => x.day));
+  const out: Violation[] = [];
+  let shortOutsideLapse = 0;
+  for (const snap of snaps) {
+    if (target == null || snap.card?.goal !== 'muscle') continue;
+    const monday = mondayOfDate(snap.date);
+    const done = [...trained].filter(d => d >= monday && d <= snap.date).length;
+    const daysLeft = 7 - dayDiff(snap.date, monday);
+    if (done >= target || done + daysLeft >= target) continue;
+    if (!inLapse(snap)) shortOutsideLapse++;
+    if (snap.card.verdict === 'progressing') {
+      out.push({ snap, detail: `${done} of ${target} sessions with ${daysLeft} day(s) left, verdict progressing: "${visible(snap.card.headline)}"` });
+    }
+  }
+  if (name === 'lifter_short_week') assert.ok(shortOutsideLapse > 0, `${name}: no short-week day outside a lapse, so this invariant checked nothing`);
+  return out;
+});
+
+const BACK_ABOVE_ALL = /back above your pre-break best/i;
+
+invariant(LIFTERS, '"Back above your pre-break best" appears only when every lift return is regained', (snaps, name) => {
+  const out: Violation[] = [];
+  const allBack = (rets: Array<{ regained: boolean }> | null | undefined): boolean => rets != null && rets.length > 0 && rets.every(r => r.regained);
+  const claim = (snap: DaySnapshot, texts: Text[], rets: Array<{ name?: string; pct?: number; regained: boolean }> | null | undefined): void => {
+    if (allBack(rets)) return;
+    for (const t of texts) {
+      if (BACK_ABOVE_ALL.test(plain(t.text))) {
+        const state = rets == null ? 'no liftReturns' : rets.map(r => `${r.name ?? '?'} ${r.regained ? 'regained' : `${r.pct}%`}`).join(', ');
+        out.push({ snap, detail: `${t.where}: "${visible(t.text)}" while liftReturns = [${state}]` });
+      }
+    }
+  };
+  let mixedDays = 0;
+  for (const snap of snaps) {
+    const rets = snap.card?.liftReturns;
+    if (rets && rets.some(r => r.regained) && rets.some(r => !r.regained)) mixedDays++;
+    claim(snap, [...cardTexts(snap), ...coachTexts(snap)], rets);
+    // The review reads the return as of the reviewed Sunday (the card it was built from).
+    claim(snap, reviewTexts(snap), snap.review?.progress.liftReturns);
+  }
+  if (name === 'lifter') assert.ok(mixedDays > 0, `${name}: no day had some lifts back and some not, so the mixed-return case was never exercised`);
+  return out;
+});
+
+// The review's "Next week" cues the next load of each lift: "Squat 110 → 112.5 kg, bench 87.5 → 90 kg" (the unit once, on the target).
+// (The card's "(123 → 133 kg)" is an estimated 1RM over 4 weeks, a measurement and not a load to lift.)
+const NEXT_LOAD_CUE = /(\d+(?:\.\d+)?)\s?→\s?(\d+(?:\.\d+)?)\s?(kg|lb)\b/g;
+
+invariant(LIFTERS, 'every next-load cue in the weekly review ("Squat 110 → 112.5 kg") lands on a multiple of 2.5 kg / 5 lb, above the load it starts from', (snaps, name) => {
+  const out: Violation[] = [];
+  let cues = 0;
+  for (const snap of snaps) {
+    for (const t of reviewTexts(snap).filter(x => x.where === 'review.nextWeek')) {
+      for (const m of plain(t.text).matchAll(NEXT_LOAD_CUE)) {
+        cues++;
+        const from = Number(m[1]);
+        const to = Number(m[2]);
+        const step = m[3] === 'kg' ? 2.5 : 5;
+        const onGrid = Math.abs(to / step - Math.round(to / step)) < 1e-9;
+        if (!onGrid || to <= from) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" (${m[0]} is ${onGrid ? 'not above the start' : `not a multiple of ${step} ${m[3]}`})` });
+      }
+    }
+  }
+  assert.ok(cues > 0, `${name}: no next-load cue appeared, so this invariant checked nothing`);
   return out;
 });
 
@@ -311,5 +423,89 @@ invariant(WEIGHT, `at most ${MAX_VERDICT_CHANGES} card verdict changes in any ${
       out.push({ snap: window[0], detail: `${changes.length} verdict changes in days ${window[0].idx}-${window[window.length - 1].idx}: ${changes.join('; ')}` });
     }
   }
+  return out;
+});
+
+// A Monday's card and weekly review are built from ONE week plan (lib/weightWeekPlan.ts): the same verdict and the same action.
+// An instruction (move the date, trim, eat to target, a plateau's cause, a new target...) is the review's "Next week" word for word;
+// a non-instruction ("Keep your routine") leaves the review its own tip, which must not be a different instruction.
+const OTHER_INSTRUCTION = /\btrim ~|move the date|new target|maintenance target|easing calories|eat up to|get(?:ting)? back to target|bring the weekends|often water|restarted it/i;
+
+invariant(WEIGHT, "on every Monday the card's verdict and action match the weekly review's", (snaps, name) => {
+  const out: Violation[] = [];
+  let compared = 0;
+  for (const snap of snaps) {
+    if (!snap.review || !snap.card) continue;
+    compared++;
+    const review = snap.review.review;
+    if (snap.card.verdict !== review.verdict) {
+      out.push({ snap, detail: `card verdict ${snap.card.verdict} ("${visible(snap.card.headline)}") vs review verdict ${review.verdict} ("${visible(review.headline)}")` });
+    }
+    const plan = snap.card.weightRead?.plan;
+    if (!plan) continue;
+    const action = plan.action;
+    const stated = isInstruction(action) || ((plan.state === 'maintenance' || plan.state === 'reached') && action.kind === 'hold');
+    if (stated && review.nextWeek !== action.text) {
+      out.push({ snap, detail: `card action [${action.kind}] "${visible(action.text)}" vs review next week "${visible(review.nextWeek)}"` });
+    } else if (!stated && OTHER_INSTRUCTION.test(plain(review.nextWeek))) {
+      out.push({ snap, detail: `card action [${action.kind}] "${visible(action.text)}" asks nothing, review next week asks "${visible(review.nextWeek)}"` });
+    }
+  }
+  assert.ok(compared > 0, `${name}: no Monday had both a card and a review, so this invariant checked nothing`);
+  return out;
+});
+
+// The week's one action is decided on the Monday: inside a calendar week it changes at most once (an event: welcome back, too fast...),
+// never day by day. The one change that never counts is the target being reached - it is news the same day, even in a week that
+// already changed once (Tuesday "start easing toward maintenance", Friday "set a new target or switch to maintenance").
+invariant(WEIGHT, "the card's action text changes at most once per calendar week (reaching the target aside)", snaps => {
+  const out: Violation[] = [];
+  const byWeek = new Map<string, Array<{ snap: DaySnapshot; text: string; reached: boolean }>>();
+  for (const snap of snaps) {
+    const plan = snap.card?.weightRead?.plan;
+    if (plan == null) continue;
+    const week = mondayOfDate(snap.date);
+    byWeek.set(week, [...(byWeek.get(week) ?? []), { snap, text: plan.action.text, reached: plan.state === 'reached' }]);
+  }
+  for (const [week, days] of byWeek) {
+    const changes: string[] = [];
+    for (let i = 1; i < days.length; i++) {
+      if (days[i].text !== days[i - 1].text && !days[i].reached) {
+        changes.push(`${days[i].snap.weekday} ${days[i].snap.date}: "${visible(days[i - 1].text)}" -> "${visible(days[i].text)}"`);
+      }
+    }
+    if (changes.length > 1) out.push({ snap: days[0].snap, detail: `${changes.length} action changes in the week of ${week}: ${changes.join(' ; ')}` });
+  }
+  return out;
+});
+
+// "3 weeks behind" is a date claim off a single noisy pace; a weight-loss surface says the date moves, never how many weeks behind.
+// (The coach's own prohibition quotes the phrase - `do not quote ... "weeks behind"` - and is not a claim.)
+const WEEKS_BEHIND = /(?<!["“])\bweeks behind\b/i;
+
+invariant(WEIGHT, 'no card, review, coach line or opener says "weeks behind"', snaps => textMatches(snaps, allTexts, WEEKS_BEHIND));
+
+// Trim advice: "trim ~200 kcal a day (to ~1,800 kcal)". One weekly step is never over 200 kcal and never lands under the floor.
+const TRIM_ADVICE = /trim ~([\d,]+) kcal a day(?: \(to ~([\d,]+) kcal\))?/gi;
+
+invariant(WEIGHT, 'trim advice is at most 200 kcal a day in one step and never goes below the calorie floor', (snaps, name) => {
+  const scn = buildScenario(name);
+  const floor = calorieFloorKcal(scn.profile.sex === 'male' ? 1500 : 1200);
+  const out: Violation[] = [];
+  let trims = 0;
+  for (const snap of snaps) {
+    for (const t of allTexts(snap)) {
+      for (const m of plain(t.text).matchAll(TRIM_ADVICE)) {
+        trims++;
+        const step = Number(m[1].replace(/,/g, ''));
+        const landing = m[2] != null ? Number(m[2].replace(/,/g, '')) : null;
+        if (step > TRIM_MAX_KCAL_PER_STEP) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" (a ${step} kcal step, max ${TRIM_MAX_KCAL_PER_STEP})` });
+        if (landing != null && landing < floor) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" (lands on ${landing} kcal, under the ${floor} kcal floor)` });
+      }
+    }
+    const target = snap.card?.weightRead?.plan?.action.kcalTarget;
+    if (target != null && target < floor) out.push({ snap, detail: `plan action kcalTarget ${target} is under the ${floor} kcal floor: "${visible(snap.card?.weightRead?.plan?.action.text ?? '')}"` });
+  }
+  assert.ok(trims > 0, `${name}: no trim advice appeared, so this invariant checked nothing`);
   return out;
 });

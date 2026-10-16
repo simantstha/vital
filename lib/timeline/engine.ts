@@ -48,6 +48,9 @@ import { addDays, weekdayOf, type DaySnapshot, type ReviewResult, type Scenario,
 
 const TZ = 'UTC'; // EMULATION: every scenario user is in UTC (no DST / tz edge cases exercised)
 
+/** MIRRORS lib/goalProgressLoader.ts INTAKE_HISTORY_DAYS (wave 21w; the loader module imports @/db so it is copied): weight_loss reads 70 days of intake for the plateau cause. */
+const INTAKE_HISTORY_DAYS = 70;
+
 function trailingDayKeys(todayKey: string, n: number): string[] {
   // verbatim from lib/goalProgressLoader.ts
   const keys = [todayKey];
@@ -202,6 +205,8 @@ export function computeProgressFor(scn: Scenario, todayKey: string): GoalProgres
     },
     weightReadings: weightReadingsAsOf(scn, todayKey, 120),
     intakeDays: intakeDaysFor(scn, dayKeys),
+    // MIRRORS lib/goalProgressLoader.ts (wave 21w): weight loss reads 70 days of intake (the card's own stats still use the 28).
+    intakeHistoryDays: scn.goal === 'weight_loss' ? intakeDaysFor(scn, trailingDayKeys(todayKey, INTAKE_HISTORY_DAYS)) : undefined,
     budget: budgetInput,
     progression,
     trainingDays: [...trainingDays].filter(d => daySet.has(d)),
@@ -272,6 +277,15 @@ function computeReviewForUncached(scn: Scenario, runDay: string): ReviewResult {
 
   const racePeakWeekKm = scn.goal === 'endurance' ? racePeakWeekKmAsOf(scn, asOf, [weekStart, addDays(weekStart, 7)]) : null;
 
+  // MIRRORS lib/weeklyReviewLoader.ts (wave 21w): weight loss makes a SECOND goal-progress read, the card as it reads NOW (the
+  // Monday the job runs on). Its week plan is the review's "Next week" and verdict; it is used only when it is the plan of the
+  // week after the reviewed one. EMULATION: it sees the same rows as that Monday's daily card (end-of-day view): production
+  // recomputes an unseen, young review when it is opened (getOrCreateLastWeekReview), so the review and the card read one
+  // database state, and the suite compares the review's use of the plan rather than the 06:30 job clock against a 07:30 weigh-in.
+  const comingWeekProgress = scn.goal === 'weight_loss' ? computeProgressFor(scn, localDayKey(now, TZ)) : null;
+  const comingWeekPlan = comingWeekProgress?.weightRead?.plan;
+  const weightPlan = comingWeekPlan != null && comingWeekPlan.weekStart === addDays(weekStart, 7) ? comingWeekPlan : null;
+
   const input: WeeklyReviewInput = {
     goal: scn.goal,
     weekStart,
@@ -301,10 +315,13 @@ function computeReviewForUncached(scn: Scenario, runDay: string): ReviewResult {
     targetWeightKg: progress?.target.weightKg ?? scn.user.targetWeightKg ?? null,
     reachedAt: progress?.reachedAt ?? null,
     previousNextWeek: previousNextWeekFor(scn, weekStart),
+    weightPlan,
     weeklyDistanceKmTarget: scn.user.weeklyDistanceKm,
     longRun: progress?.longRun ?? null,
     // EMULATION (mirrors lib/weeklyReviewLoader.ts, wave 19b): the building-back state as of the reviewed week's end.
     liftReturn: progress?.liftReturn ?? null,
+    // MIRRORS lib/weeklyReviewLoader.ts (wave 21s): every lift's return, so the review claims "back above" only when all are.
+    liftReturns: progress?.liftReturns ?? null,
     raceDate: scn.goal === 'endurance' ? scn.user.raceDate : null,
     raceDistanceKm: scn.goal === 'endurance' ? scn.user.raceDistanceKm : null,
     runHistory: scn.goal === 'endurance' ? runHistoryAsOf(scn, addDays(weekStart, 6)) : undefined,

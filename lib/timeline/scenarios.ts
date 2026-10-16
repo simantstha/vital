@@ -446,6 +446,51 @@ export function lifter(): Scenario {
   };
 }
 
+// ── 5b. lifter variants (wave 21 integration) ───────────────────────────────
+
+/**
+ * The lifter in pounds: identical rows (loads are stored in kg), only the display units differ. Locks the 5 lb next-load
+ * step and the lb copy of the lift lines, which the metric lifter cannot reach.
+ */
+export function lifterImperial(): Scenario {
+  const base = lifter();
+  return {
+    ...base,
+    name: 'lifter_imperial',
+    title: 'Lifter (muscle goal), IMPERIAL display units',
+    profile: { ...base.profile, units: 'imperial' },
+    inputNotes: [
+      'IDENTICAL rows and targets to lifter; only unitSystem differs (imperial: display lb). Loads are stored in kg and shown in lb; the next-load step is 5 lb.',
+      ...base.inputNotes.slice(1),
+    ],
+  };
+}
+
+/** The week (1-based) in which the lifter below only gets to the gym once. */
+const SHORT_WEEK = 7;
+
+/**
+ * The lifter with ONE bad week: in week 7 (days 42-48) only the Thursday session happens. From Saturday the week can no
+ * longer reach its 4 sessions while the last session is under the 4-day lapse threshold, which is the one state where
+ * "Progressing" has to be held back by the week alone (the lapse covers Mon-Wed, which run 4+ days after last Saturday).
+ */
+export function lifterShortWeek(): Scenario {
+  const base = lifter();
+  const from = (SHORT_WEEK - 1) * 7;
+  const thursday = addDays(DAY0, from + 3);
+  const inWeek = (day: string): boolean => day >= addDays(DAY0, from) && day <= addDays(DAY0, from + 6);
+  return {
+    ...base,
+    name: 'lifter_short_week',
+    title: `Lifter (muscle goal) with one short week: only Thursday trained in week ${SHORT_WEEK}`,
+    sets: base.sets.filter(set => !inWeek(set.day) || set.day === thursday),
+    inputNotes: [
+      `Same history as lifter except week ${SHORT_WEEK} (days ${from}-${from + 6}): only the Thursday bench session happens (the Monday, Tuesday and Saturday sessions are dropped).`,
+      ...base.inputNotes.slice(1),
+    ],
+  };
+}
+
 // ── imperial variant of runner_on_plan, only around phase transitions ──────
 
 export function runnerOnPlanImperial(phaseKey: (date: string) => string): Scenario {
@@ -474,6 +519,8 @@ export function runnerOnPlanImperial(phaseKey: (date: string) => string): Scenar
 
 export const SCENARIO_NAMES = [
   'lifter',
+  'lifter_imperial',
+  'lifter_short_week',
   'weight_loss',
   'weight_loss_logged',
   'runner_on_plan',
@@ -499,6 +546,8 @@ function phaseKey(raceDate: string, raceDistanceKm: number | null, date: string)
 export function buildScenario(name: ScenarioName): Scenario {
   switch (name) {
     case 'lifter': return lifter();
+    case 'lifter_imperial': return lifterImperial();
+    case 'lifter_short_week': return lifterShortWeek();
     case 'weight_loss': return weightLoss();
     case 'weight_loss_logged': return weightLossLogged();
     case 'runner_on_plan': return runnerOnPlan();
