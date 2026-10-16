@@ -683,7 +683,8 @@ test('long run cap: half of the week (40% in a restart week); the race peak that
 });
 
 test('a long run that jumped 2+ km over its plan (and 2+ km over the one before) is held, not grown', () => {
-  // Weeks 1-5 on plan, week 5 carries a 14 km long run where 12 was planned (the one before was 10).
+  // Weeks 0-4 on plan (shifted one week so the planned week 5 is not the calendar's cutback week, which caps the long run
+  // at half of its lowered week), week 4 carries a 14 km long run where 12 was planned (the one before was 10).
   const week = (n: number, longKm: number, total: number): PlanRun[] => {
     const w = weekOf(n);
     const rest = (total - longKm) / 3;
@@ -691,14 +692,15 @@ test('a long run that jumped 2+ km over its plan (and 2+ km over the one before)
       { day: addDayKey(w, 1), km: rest }, { day: addDayKey(w, 3), km: rest }, { day: addDayKey(w, 5), km: rest }, { day: addDayKey(w, 6), km: longKm },
     ];
   };
-  const runs = [...week(1, 6, 15), ...week(2, 7, 17), ...week(3, 8, 19), ...week(4, 10, 23), ...week(5, 14, 27)];
-  const plan = planFor(runs, 6);
+  const runs = [...week(0, 6, 15), ...week(1, 7, 17), ...week(2, 8, 19), ...week(3, 10, 23), ...week(4, 14, 27)];
+  const plan = planFor(runs, 5);
+  assert.equal(plan.cutback, null);
   assert.equal(plan.longRunJump?.actualKm, 14);
   assert.equal(plan.longRunJump?.plannedKm, 12);
   assert.equal(plan.longRunKm, 14); // held at 14, not 16
   assert.match(plan.purpose.replace(/ /g, ' '), /long run 14 km \(held after last week's jump\)/);
   // A +1 km creep is no jump; neither is a long run on plan.
-  const creep = planFor([...week(1, 6, 15), ...week(2, 7, 17), ...week(3, 8, 19), ...week(4, 10, 23), ...week(5, 12, 25)], 6);
+  const creep = planFor([...week(0, 6, 15), ...week(1, 7, 17), ...week(2, 8, 19), ...week(3, 10, 23), ...week(4, 12, 25)], 5);
   assert.equal(creep.longRunJump, null);
 });
 
@@ -806,9 +808,10 @@ test('cutback at the weekly goal: ~24 km of 30, long run held at what it was (ne
   assert.equal(atGoal.targetKm, 24);
   assert.deepEqual(atGoal.cutback, { normalKm: 30 });
   assert.equal(atGoal.longRunKm, 12);
-  // A long run already past the peak target is held at the target, not at the oversized one.
+  // A long run already past the peak target is held at the target, not at the oversized one - and a cutback never
+  // carries a long run past half of its lowered week (15 km of a 24 km week would be 62%): 12 km, the half.
   const big: PlanRun[] = [...runsFor([30, 30, 30, 30]), { day: addDayKey(weekOf(5), 1), km: 4 }, { day: addDayKey(weekOf(5), 3), km: 4 }, { day: addDayKey(weekOf(5), 5), km: 4 }, { day: addDayKey(weekOf(5), 6), km: 18 }];
-  assert.equal(planFor(big, 6, { race }).longRunKm, 15); // peak target 15 km at a 30 km goal
+  assert.equal(planFor(big, 6, { race }).longRunKm, 12); // peak target 15 km at a 30 km goal, capped at 50% of the 24 km cutback
   // Three plain weeks must precede it: a restart in week 4 pushes the cutback out (week 6 is a rung of the comeback).
   const afterBreak = planFor(runsFor([15, 17, 19, 0, 0, 14]), 6);
   assert.equal(afterBreak.cutback, null);

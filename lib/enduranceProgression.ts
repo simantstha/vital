@@ -30,7 +30,7 @@
  * see `racePhaseTargetKm`) and the growth step above is not used in them.
  *
  * Wave 21e additions to the same plan (so the card, the review and the coach never disagree): every 4th calendar week
- * of plain building is a CUTBACK (~80% of the week it replaces, long run held, graded as its own target and never
+ * of plain building is a CUTBACK (~80% of the week it replaces, long run held but never past half of the lowered week, graded as its own target and never
  * "short"); the last 2 build weeks before a taper add a few strides; a week read DURING the week with 4+ days off (or,
  * from Friday, well behind its own pace) is a LIGHT week (don't make it up, capped long run); a careful comeback's
  * target is a ceiling ("up to", capped at 1.25x the week just run) graded against the week before it; a restart "hold"
@@ -1119,8 +1119,13 @@ function nextLongRun(
       return lr.lastKm == null ? null : roundLongRunKm(lr.lastKm, ctx.units);
     default: {
       if (lr.lastKm == null || targetKm == null) return null;
-      // A cutback week keeps the long run where it is (it is the week's volume that comes down), never past the peak target.
-      if (cutback) return roundLongRunKm(lr.targetPeakKm != null ? Math.min(lr.lastKm, lr.targetPeakKm) : lr.lastKm, ctx.units);
+      // A cutback week keeps the long run where it is (it is the week's volume that comes down), never past the peak
+      // target and never past half of the LOWERED week: a long run held at 14 km in a 24 km cutback would be 58% of it.
+      if (cutback) {
+        const held = roundLongRunKm(lr.targetPeakKm != null ? Math.min(lr.lastKm, lr.targetPeakKm) : lr.lastKm, ctx.units);
+        const cutCap = targetKm * LONG_RUN_MAX_WEEK_SHARE;
+        return held > cutCap + 1e-9 ? floorLongRunKm(cutCap, ctx.units) : held;
+      }
       if (heldKm != null && !restarting) return roundLongRunKm(heldKm, ctx.units);
       const next = longRunStepKm(lr.lastKm, lr.targetPeakKm);
       // A restart week starts the long run again from the recent longest, but never past 40% of the (gentle) restart week.
