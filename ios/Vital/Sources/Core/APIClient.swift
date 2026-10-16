@@ -2712,11 +2712,18 @@ struct GoalProgressDTO: Decodable, Equatable {
     /// Muscle goal "building back" state after a break; `nil` when absent and
     /// for older servers.
     let liftReturn: LiftReturn?
+    /// Muscle goal, wave 21: the same break lift by lift. The headline lift comes
+    /// first (identical to `liftReturn`), then the other main lifts trained before
+    /// the break and since; a lift still under its pre-break best has
+    /// `regained == false`. `nil` when absent (older servers, other goals) or
+    /// when any entry fails to decode, in which case readers fall back to
+    /// `liftReturn`.
+    let liftReturns: [LiftReturn]?
 
     private enum CodingKeys: String, CodingKey {
         case goal, target, distance, race, longRun, current, ratePerWeek, safeBand, eta, onPaceForTargetDate
         case verdict, headline, reasons, dataSufficiency, lastWeighInDaysAgo, adherence, reachedAt
-        case lastSessionDaysAgo, weightRead, liftReturn
+        case lastSessionDaysAgo, weightRead, liftReturn, liftReturns
     }
 
     init(
@@ -2739,7 +2746,8 @@ struct GoalProgressDTO: Decodable, Equatable {
         reachedAt: String? = nil,
         lastSessionDaysAgo: Int? = nil,
         weightRead: WeightRead? = nil,
-        liftReturn: LiftReturn? = nil
+        liftReturn: LiftReturn? = nil,
+        liftReturns: [LiftReturn]? = nil
     ) {
         self.goal = goal
         self.lastWeighInDaysAgo = lastWeighInDaysAgo
@@ -2748,6 +2756,7 @@ struct GoalProgressDTO: Decodable, Equatable {
         self.lastSessionDaysAgo = lastSessionDaysAgo
         self.weightRead = weightRead
         self.liftReturn = liftReturn
+        self.liftReturns = liftReturns
         self.target = target
         self.distance = distance
         self.race = race
@@ -2785,6 +2794,7 @@ struct GoalProgressDTO: Decodable, Equatable {
         lastSessionDaysAgo = Self.daysAgo(c, .lastSessionDaysAgo)
         weightRead = try? c.decode(WeightRead.self, forKey: .weightRead)
         liftReturn = try? c.decode(LiftReturn.self, forKey: .liftReturn)
+        liftReturns = try? c.decode([LiftReturn].self, forKey: .liftReturns)
     }
 
     /// A whole-day count sent as `5` or `5.0`; `nil` for null, missing or

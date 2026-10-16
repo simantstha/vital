@@ -999,6 +999,7 @@ final class FixtureCrossScreenConsistencyTests: XCTestCase {
             let decoded = try JSONDecoder().decode(GoalProgressDTO.self, from: other)
             XCTAssertNil(decoded.weightRead, "\(scenario)")
             XCTAssertNil(decoded.liftReturn, "\(scenario)")
+            XCTAssertNil(decoded.liftReturns, "\(scenario)")
         }
     }
 

@@ -1034,6 +1034,58 @@ final class GoalProgressLogicTests: XCTestCase {
         XCTAssertNil(sparse.liftReturn?.recentKg)
     }
 
+    /// Wave 21: `liftReturns` is the same break lift by lift, the headline lift first
+    /// (identical to `liftReturn`). Absent, null or malformed reads as `nil`, so the card
+    /// falls back to the single `liftReturn`.
+    func testLiftReturnsDecodesTolerantly() throws {
+        func decode(_ extra: String) throws -> GoalProgressDTO {
+            let json = "{\"goal\":\"muscle\",\"verdict\":\"building\",\"headline\":\"x\",\"reasons\":[]\(extra)}"
+            return try JSONDecoder().decode(GoalProgressDTO.self, from: Data(json.utf8))
+        }
+        let full = try decode("""
+        ,"liftReturn":{"exercise":"squat","name":"Squat","breakDays":14,"endedOn":"2026-09-20",
+         "preBreakKg":142,"recentKg":145.2,"pct":102,"regained":true}
+        ,"liftReturns":[
+         {"exercise":"squat","name":"Squat","breakDays":14,"endedOn":"2026-09-20",
+          "preBreakKg":142,"recentKg":145.2,"pct":102,"regained":true},
+         {"exercise":"deadlift","name":"Deadlift","breakDays":14,"endedOn":"2026-09-20",
+          "preBreakKg":158,"recentKg":155.1,"pct":98,"regained":false}]
+        """)
+        let squat = GoalProgressDTO.LiftReturn(
+            exercise: "squat", name: "Squat", breakDays: 14, endedOn: "2026-09-20",
+            preBreakKg: 142, recentKg: 145.2, pct: 102, regained: true
+        )
+        let deadlift = GoalProgressDTO.LiftReturn(
+            exercise: "deadlift", name: "Deadlift", breakDays: 14, endedOn: "2026-09-20",
+            preBreakKg: 158, recentKg: 155.1, pct: 98, regained: false
+        )
+        XCTAssertEqual(full.liftReturns, [squat, deadlift])
+        XCTAssertEqual(full.liftReturns?.first, full.liftReturn, "the headline lift comes first and is identical to liftReturn")
+
+        // Older servers, other goals and malformed values: nil, never a decode failure.
+        XCTAssertNil(try decode("").liftReturns, "older servers omit it")
+        XCTAssertNil(try decode(",\"liftReturns\":null").liftReturns)
+        XCTAssertNil(try decode(",\"liftReturns\":\"nope\"").liftReturns)
+        XCTAssertNil(try decode(",\"liftReturns\":{}").liftReturns)
+        // An entry without the claim's essentials drops the whole list (a "building back" claim is never guessed);
+        // the single liftReturn beside it still decodes.
+        let broken = try decode("""
+        ,"liftReturn":{"exercise":"squat","preBreakKg":142,"pct":96,"regained":false}
+        ,"liftReturns":[{"exercise":"squat","preBreakKg":142,"pct":96,"regained":false},{"exercise":"deadlift","pct":98,"regained":false}]
+        """)
+        XCTAssertNil(broken.liftReturns)
+        XCTAssertEqual(broken.liftReturn?.exercise, "squat")
+        // The rest of an entry is optional, as for liftReturn.
+        let sparse = try decode(",\"liftReturns\":[{\"exercise\":\"bench press\",\"preBreakKg\":100,\"pct\":96.4,\"regained\":true}]")
+        XCTAssertEqual(sparse.liftReturns?.count, 1)
+        XCTAssertEqual(sparse.liftReturns?.first?.name, "Bench Press")
+        XCTAssertEqual(sparse.liftReturns?.first?.pct, 96)
+        XCTAssertNil(sparse.liftReturns?.first?.recentKg)
+        // The memberwise initialiser defaults it to nil, so older call sites are untouched.
+        XCTAssertNil(GoalProgressDTO(goal: "muscle", verdict: .building).liftReturns)
+        XCTAssertEqual(GoalProgressDTO(goal: "muscle", verdict: .building, liftReturns: [squat, deadlift]).liftReturns, [squat, deadlift])
+    }
+
     // MARK: - Week plan (distance.plan: baseline / build / hold / restart / taper / recovery ...)
 
     /// An endurance payload with a week plan: 30 km goal, `done` km run so far.

@@ -84,7 +84,7 @@ enum TrendsStrengthLogic {
         let sparkline: [Double?]
         let status: Status
         /// The shared 4-week change in kg (`change(e1rm:)`), `nil` when either
-        /// window has no data — and for the lift being rebuilt after a break
+        /// window has no data — and for any lift being rebuilt after a break
         /// (`buildingBackStatus`), whose dip is not a decline to count.
         /// Raw kg — unit formatting happens in `status`.
         let changeKg: Double?
@@ -123,13 +123,18 @@ enum TrendsStrengthLogic {
     /// then `rankedLiftKeys`), so the first row is the lift the goal card names;
     /// without them (older server) the original recent-sets order is kept.
     ///
-    /// `liftReturn` (`GoalProgressDTO.liftReturn`): the lift the server says the
-    /// user is rebuilding after a break reads a neutral "Building back" status
-    /// instead of a decline (`buildingBackStatus`) and is left out of the
-    /// header's lifts-up / lifts-down counts.
+    /// `liftReturns` (`GoalProgressDTO.liftReturns`, wave 21) / `liftReturn`
+    /// (`GoalProgressDTO.liftReturn`, the headline lift): every lift the server
+    /// says the user is rebuilding after a break reads a neutral "Building back"
+    /// status instead of a decline (`buildingBackStatus`) — the headline lift or
+    /// not, so a deadlift still under its pre-break best says so beside a squat
+    /// that is back — and is left out of the header's lifts-up / lifts-down
+    /// counts. Without `liftReturns` (an older server) the single `liftReturn`
+    /// decides, exactly as before.
     static func card(
         from summary: WorkoutSummaryResponse, system: UnitSystem, today: Date,
-        liftReturn: GoalProgressDTO.LiftReturn? = nil
+        liftReturn: GoalProgressDTO.LiftReturn? = nil,
+        liftReturns: [GoalProgressDTO.LiftReturn]? = nil
     ) -> Card? {
         let hasAnySets = summary.exercises.values.contains { stats in
             stats.contains { $0.totalSets > 0 }
@@ -188,7 +193,9 @@ enum TrendsStrengthLogic {
         let lifts = candidates.prefix(maxLifts).compactMap { candidate -> Lift? in
             let e1rm: [Double?] = candidate.series.map { $0?.bestEstimatedOneRepMaxKg }
             guard let latest = e1rm.compactMap({ $0 }).last else { return nil }
-            let building = buildingBackStatus(liftReturn: liftReturn, forLift: candidate.key, system: system)
+            let building = buildingBackStatus(
+                liftReturn: liftReturn, liftReturns: liftReturns, forLift: candidate.key, system: system
+            )
             let liftChange = building == nil ? change(e1rm: e1rm) : nil
             return Lift(
                 key: candidate.key,
@@ -309,25 +316,46 @@ enum TrendsStrengthLogic {
     // MARK: - Building back after a break
 
     /// "Building back — est. 1RM 136 of 142 kg pre-break" (neutral): the server's
-    /// `liftReturn` says the user is rebuilding this lift after a break of 10+
-    /// days and has not yet regained its pre-break best, so a negative change
-    /// against 4 weeks ago is expected, not a decline. The lift's name is the row's
-    /// own, so the server's headline ("Building back — Squat est. 1RM 136 of 142 kg
-    /// pre-break") loses it here and nothing else; the numbers are the ones the
-    /// server prints (`liftReturnShown`). A payload without `recentKg` keeps the
-    /// percentage wording ("Building back — 96% of pre-break 142 kg"). `nil` for any
-    /// other lift, once the pre-break best is regained, and without a `liftReturn`.
+    /// return entry for this lift (`liftReturns`, else the single `liftReturn`)
+    /// says the user is rebuilding it after a break of 10+ days and has not yet
+    /// regained its pre-break best, so a negative change against 4 weeks ago is
+    /// expected, not a decline. The lift's name is the row's own, so the server's
+    /// headline ("Building back — Squat est. 1RM 136 of 142 kg pre-break") loses
+    /// it here and nothing else; the numbers are the ones the server prints
+    /// (`liftReturnShown`). A payload without `recentKg` keeps the percentage
+    /// wording ("Building back — 96% of pre-break 142 kg"). `nil` for a lift with
+    /// no entry, once its pre-break best is regained, and without any return.
     static func buildingBackStatus(
-        liftReturn: GoalProgressDTO.LiftReturn?, forLift key: String, system: UnitSystem
+        liftReturn: GoalProgressDTO.LiftReturn?,
+        liftReturns: [GoalProgressDTO.LiftReturn]? = nil,
+        forLift key: String, system: UnitSystem
     ) -> Status? {
-        guard let liftReturn, !liftReturn.regained,
-              normalizedLiftKey(liftReturn.exercise) == normalizedLiftKey(key) else { return nil }
-        let preBreak = wholeWeightText(kg: liftReturn.preBreakKg, system: system)
-        if let recentKg = liftReturn.recentKg,
-           let shown = liftReturnShown(preBreakKg: liftReturn.preBreakKg, recentKg: recentKg, system: system) {
+        guard let entry = returnEntry(liftReturn: liftReturn, liftReturns: liftReturns, forLift: key),
+              !entry.regained else { return nil }
+        let preBreak = wholeWeightText(kg: entry.preBreakKg, system: system)
+        if let recentKg = entry.recentKg,
+           let shown = liftReturnShown(preBreakKg: entry.preBreakKg, recentKg: recentKg, system: system) {
             return Status(text: "Building back — est. 1RM \(shown.recent) of \(preBreak) pre-break", tone: .neutral)
         }
-        return Status(text: "Building back — \(liftReturn.pct)% of pre-break \(preBreak)", tone: .neutral)
+        return Status(text: "Building back — \(entry.pct)% of pre-break \(preBreak)", tone: .neutral)
+    }
+
+    /// The server's return entry for a lift, matched on `normalizedLiftKey`. The
+    /// per-lift list (`liftReturns`: the headline lift first, then the other main
+    /// lifts) decides when the server sent one; otherwise (an older server, or an
+    /// empty list, which the server never sends) the single headline `liftReturn`
+    /// does, so the card reads exactly as it did before the list existed.
+    static func returnEntry(
+        liftReturn: GoalProgressDTO.LiftReturn?,
+        liftReturns: [GoalProgressDTO.LiftReturn]?,
+        forLift key: String
+    ) -> GoalProgressDTO.LiftReturn? {
+        let wanted = normalizedLiftKey(key)
+        if let liftReturns, !liftReturns.isEmpty {
+            return liftReturns.first { normalizedLiftKey($0.exercise) == wanted }
+        }
+        guard let liftReturn, normalizedLiftKey(liftReturn.exercise) == wanted else { return nil }
+        return liftReturn
     }
 
     /// The whole-unit numbers of a rebuild line exactly as the server rounds and

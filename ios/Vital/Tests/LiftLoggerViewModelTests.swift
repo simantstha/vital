@@ -487,7 +487,7 @@ final class LiftLoggerViewModelTests: XCTestCase {
         let squatHint = try XCTUnwrap(vm.progressionHint(for: squatID))
         XCTAssertEqual(LiftLoggerLogic.progressionText(squatHint, system: .metric), "Last 3×5 @ 140\u{00A0}kg · try 142.5\u{00A0}kg")
         let benchHint = try XCTUnwrap(vm.progressionHint(for: benchID))
-        XCTAssertEqual(LiftLoggerLogic.progressionText(benchHint, system: .metric), "Last 3×5 @ 90\u{00A0}kg · try 91.5\u{00A0}kg")
+        XCTAssertEqual(LiftLoggerLogic.progressionText(benchHint, system: .metric), "Last 3×5 @ 90\u{00A0}kg · try 92.5\u{00A0}kg")
         XCTAssertTrue(vm.canApplyProgression(to: squatID))
 
         vm.applyProgression(to: squatID)
@@ -553,9 +553,9 @@ final class LiftLoggerViewModelTests: XCTestCase {
 
         await vm.seedFromHistory(exerciseID: id)
 
-        XCTAssertEqual(vm.progressionHint(for: id)?.suggestedLoad, 91.5)
+        XCTAssertEqual(vm.progressionHint(for: id)?.suggestedLoad, 92.5)
         vm.applyProgression(to: id)
-        XCTAssertEqual(vm.exercises[0].sets.map { $0.load }, [91.5, 91.5])
+        XCTAssertEqual(vm.exercises[0].sets.map { $0.load }, [92.5, 92.5])
     }
 
     func testPoundUsersGetPoundSteps() async throws {
