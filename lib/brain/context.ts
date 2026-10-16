@@ -39,6 +39,7 @@ import { getWeightReadingsWithLazyImport } from '../weightRepository';
 import {
   assessWeightSignals,
   formatWeightSignalsSection,
+  weeklyWeightRead,
   WEEKEND_PATTERN_WINDOW_DAYS,
   type WeightSignal,
   type DailyIntakeKcalPoint,
@@ -337,7 +338,8 @@ export function buildPromptText(
   // ── Weight trend & energy signals ───────────────────────────────────────
   if (ctx.weightTrend) {
     lines.push('\n### Weight trend & energy signals');
-    lines.push(...formatWeightSignalsSection(ctx.weightTrend, ctx.weightSignals, ctx.unitSystem, ctx.localToday));
+    // A weight-loss goal quotes the card's weekly average and the week's pace, not the smoothed trend (one displayed weight).
+    lines.push(...formatWeightSignalsSection(ctx.weightTrend, ctx.weightSignals, ctx.unitSystem, ctx.localToday, weeklyWeightRead(ctx.goalProgress)));
   }
 
   // ── Goal progress ───────────────────────────────────────────────────────

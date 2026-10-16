@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   assessWeightSignals,
   formatWeightSignalsSection,
+  weeklyWeightRead,
   SIGNAL_MAX_WEIGH_IN_AGE_DAYS,
   TOO_FAST_LOSS_PCT_PER_WEEK,
   TOO_FAST_LOSS_WATCH_PCT_PER_WEEK,
@@ -635,4 +636,61 @@ test('formatWeightSignalsSection: no pace yet (under 6 weigh-ins over 14 days) s
   const lines = formatWeightSignalsSection(trendResult(rawLine('2026-08-01', 10, 85, -0.9)), [], 'metric', '2026-08-10').join('\n');
   assert.doesNotMatch(lines, /kg\/wk/);
   assert.match(lines, /weekly rate not available yet — do not quote one/);
+});
+
+// ── a fat-loss goal's coach line is the card's weekly average and the week's pace (wave 21 integration) ──
+
+const weekly = (over: Partial<NonNullable<ReturnType<typeof weeklyWeightRead>>> = {}) => ({ weightKg: 84.3, basis: 'average' as const, paceKgPerWeek: -0.47, ...over });
+
+test('formatWeightSignalsSection with the card\'s weekly read: "Weekly average weight" and the week\'s pace, never the smoothed trend', () => {
+  // The smoothed trend (80.0) and the freshly fitted pace (0.9 kg/wk) are NOT what the card says.
+  const days = rawLine('2026-08-01', 22, 85, -0.9).map(d => ({ ...d, trendKg: 80 }));
+  const lines = formatWeightSignalsSection(trendResult(days), [], 'metric', '2026-08-22', weekly()).join('\n');
+  assert.match(lines, /^- Weekly average weight: 84\.3 kg \(0\.47 kg\/wk loss\)$/m);
+  assert.doesNotMatch(lines, /Trend weight|80\.0 kg|0\.9 kg\/wk/);
+});
+
+test('formatWeightSignalsSection with the card\'s weekly read: a single scale reading is not called an average, and a week without a pace quotes none', () => {
+  const trend = trendResult(rawLine('2026-08-01', 22, 85, -0.9));
+  const single = formatWeightSignalsSection(trend, [], 'metric', '2026-08-22', weekly({ basis: 'scale', paceKgPerWeek: null })).join('\n');
+  assert.match(single, /^- Latest weigh-in: 84\.3 kg \(no weekly rate this week — do not quote one\)$/m);
+  assert.doesNotMatch(single, /Weekly average|kg\/wk/);
+});
+
+test('formatWeightSignalsSection with the card\'s weekly read: imperial pace keeps the card\'s two decimals; a rate is never quoted off an old weigh-in', () => {
+  const trend = trendResult(rawLine('2026-08-01', 22, 85, -0.9));
+  const imperial = formatWeightSignalsSection(trend, [], 'imperial', '2026-08-22', weekly({ weightKg: 84.3, paceKgPerWeek: -0.47 })).join('\n');
+  assert.match(imperial, /^- Weekly average weight: 186 lb \(1\.04 lb\/wk loss\)$/m);
+  const stale = formatWeightSignalsSection(trend, [], 'metric', '2026-08-30', weekly()).join('\n'); // newest weigh-in 8 days ago
+  assert.doesNotMatch(stale, /kg\/wk/);
+  assert.match(stale, /^- Weekly average weight: 84\.3 kg \(last weigh-in 8 days ago — do not quote a weekly rate\)$/m);
+});
+
+test('formatWeightSignalsSection without a weekly read is unchanged: the smoothed "Trend weight" line, signals after it', () => {
+  const trend = trendResult(rawLine('2026-08-01', 22, 85, -0.9));
+  const lines = formatWeightSignalsSection(trend, [{ kind: 'plateau', severity: 'info', facts: { spanDays: 21 } }], 'metric', '2026-08-22', null);
+  assert.match(lines[0], /^- Trend weight: 82\.3 kg \(0\.9 kg\/wk loss\)$/);
+  assert.match(lines[1], /^- \[INFO\] Weight plateau: spanDays=21$/);
+});
+
+test('weeklyWeightRead: only a fat-loss payload that carries the one-weight rule, with the pace of a pace week only', () => {
+  const gp = (over: Record<string, unknown> = {}) => ({
+    goal: 'weight_loss',
+    current: { weightKg: 84.3, trendKg: 83.6 },
+    weightRead: { weekMeanKg: 84.3, plan: { state: 'pace', pace: { kgPerWeek: -0.47 } } },
+    ...over,
+  });
+  assert.deepEqual(weeklyWeightRead(gp()), { weightKg: 84.3, basis: 'average', paceKgPerWeek: -0.47 });
+  // Another goal, a payload from before the one-weight rule (its weightKg is still the smoothed trend), no weight, no card: nothing.
+  assert.equal(weeklyWeightRead(gp({ goal: 'muscle' })), null);
+  assert.equal(weeklyWeightRead(gp({ current: { weightKg: 83.6 } })), null);
+  assert.equal(weeklyWeightRead(gp({ current: { weightKg: null, trendKg: null } })), null);
+  assert.equal(weeklyWeightRead(null), null);
+  assert.equal(weeklyWeightRead(undefined), null);
+  // A single scale reading (no 7-day mean) is labelled as one; a plateau, an early read, a return and "moving again" state no rate.
+  assert.equal(weeklyWeightRead(gp({ weightRead: { weekMeanKg: null, plan: { state: 'pace', pace: { kgPerWeek: -0.3 } } } }))?.basis, 'scale');
+  for (const state of ['plateau', 'early', 'returning', 'moving_again', 'reached', 'maintenance']) {
+    assert.equal(weeklyWeightRead(gp({ weightRead: { weekMeanKg: 84.3, plan: { state, pace: { kgPerWeek: -0.05 } } } }))?.paceKgPerWeek, null, state);
+  }
+  assert.equal(weeklyWeightRead(gp({ weightRead: null }))?.paceKgPerWeek, null);
 });

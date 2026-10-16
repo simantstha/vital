@@ -28,7 +28,7 @@ import {
   tooFastLoss,
   weighInReturn,
 } from '../weightPace';
-import { formatWeight } from '../metricFormat';
+import { LB_PER_KG, formatWeight } from '../metricFormat';
 import type { UnitSystem } from '../units';
 
 // ── Thresholds (named constants — see the module's spec for the evidence) ──
@@ -387,11 +387,58 @@ function formatFacts(facts: Record<string, number | string>): string {
 }
 
 /**
+ * The numbers a weight-loss goal card measures from, for the coach's weight line: the ONE displayed weight (the 7-day
+ * average of 3+ weigh-ins, else the latest scale reading) and the pace the week's plan states
+ * (lib/weightWeekPlan.ts), so the coach quotes exactly what the card does and never the chart's smoothed trend or
+ * a pace re-fitted today.
+ */
+export interface WeeklyWeightRead {
+  /** `GoalProgress.current.weightKg` of a weight-loss payload. */
+  weightKg: number;
+  /** 'average': the 7-day mean of 3+ weigh-ins; 'scale': the single latest reading. */
+  basis: 'average' | 'scale';
+  /** The week plan's pace in kg/wk (negative = losing); null when the card quotes no rate this week. */
+  paceKgPerWeek: number | null;
+}
+
+/** The slice of a GoalProgress `weeklyWeightRead` needs (structural, so this module stays free of the goalProgress import cycle). */
+export interface WeeklyWeightSource {
+  goal: string;
+  current: { weightKg: number | null; trendKg?: number | null };
+  weightRead?: { weekMeanKg?: number | null; plan?: { state: string; pace: { kgPerWeek: number } | null } | null } | null;
+}
+
+/**
+ * The weight-loss card's weight and weekly pace, or null for any other goal, a payload from before the one-weight
+ * rule (no `current.trendKg`: its `weightKg` is still the smoothed trend) or one without a weight. The card quotes a
+ * rate only in a pace week - a plateau, a return, "moving again" and an early read state none - so the coach does not
+ * either.
+ */
+export function weeklyWeightRead(gp: WeeklyWeightSource | null | undefined): WeeklyWeightRead | null {
+  if (gp == null || gp.goal !== 'weight_loss' || gp.current.trendKg === undefined || gp.current.weightKg == null) return null;
+  const plan = gp.weightRead?.plan ?? null;
+  return {
+    weightKg: gp.current.weightKg,
+    basis: gp.weightRead?.weekMeanKg != null ? 'average' : 'scale',
+    paceKgPerWeek: plan != null && plan.state === 'pace' && plan.pace != null ? plan.pace.kgPerWeek : null,
+  };
+}
+
+/** A weekly pace as the goal card prints it: two decimals, trailing zeros dropped ("0.47 kg", "1 lb"). */
+function paceText(kgPerWeek: number, unitSystem: UnitSystem): string {
+  const v = Math.abs(unitSystem === 'imperial' ? kgPerWeek * LB_PER_KG : kgPerWeek);
+  return `${Math.round(v * 100) / 100} ${unitSystem === 'imperial' ? 'lb' : 'kg'}`;
+}
+
+/**
  * Renders the "Weight trend & energy signals" prompt lines shared by
  * assembleContext's buildPromptText (lib/brain/context.ts) and the daily
  * brief prompt (lib/claude.ts) so both surfaces describe the trend and
  * react to signals identically — a too_fast_loss signal must never be
  * praised by either.
+ *
+ * `weekly` (a weight-loss card's own numbers, `weeklyWeightRead`) swaps the smoothed "Trend weight" and its freshly
+ * fitted pace for the "Weekly average weight" and the week's pace the card quotes: the user sees one weight.
  */
 export function formatWeightSignalsSection(
   trend: Pick<WeightTrendResult, 'days' | 'established'>,
@@ -399,11 +446,23 @@ export function formatWeightSignalsSection(
   unitSystem: UnitSystem,
   /** The user's current local day. With it, a rate is never quoted off a weigh-in older than RATE_QUOTE_MAX_WEIGH_IN_AGE_DAYS. */
   todayKey?: string,
+  weekly?: WeeklyWeightRead | null,
 ): string[] {
   const lines: string[] = [];
   const span = trendSpanDays(trend.days as WeightTrendDay[]);
 
-  if (trend.established && span >= RATE_RELIABLE_MIN_SPAN_DAYS) {
+  if (weekly != null) {
+    const age = weighInAgeDays(trend as WeightTrendResult, todayKey);
+    let rateStr: string;
+    if (Number.isFinite(age) && age > RATE_QUOTE_MAX_WEIGH_IN_AGE_DAYS) {
+      rateStr = `last weigh-in ${age} days ago — do not quote a weekly rate`;
+    } else if (weekly.paceKgPerWeek == null) {
+      rateStr = 'no weekly rate this week — do not quote one';
+    } else {
+      rateStr = `${paceText(weekly.paceKgPerWeek, unitSystem)}/wk ${weekly.paceKgPerWeek < 0 ? 'loss' : weekly.paceKgPerWeek > 0 ? 'gain' : 'flat'}`;
+    }
+    lines.push(`- ${weekly.basis === 'average' ? 'Weekly average weight' : 'Latest weigh-in'}: ${formatWeight(weekly.weightKg, unitSystem) ?? 'n/a'} (${rateStr})`);
+  } else if (trend.established && span >= RATE_RELIABLE_MIN_SPAN_DAYS) {
     const last = trend.days[trend.days.length - 1];
     const trendStr = formatWeight(last.trendKg, unitSystem);
     const age = weighInAgeDays(trend as WeightTrendResult, todayKey);
