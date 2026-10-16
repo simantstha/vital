@@ -110,11 +110,26 @@ enum WeightHeroLogic {
     /// `goalRateKgPerWeek`: when the goal-progress card has a 4-week rate, the
     /// hero shows that SAME number ("−0.9 lb/wk over 4 weeks") so the hero and
     /// the card never disagree; without it the 7-day rate above is used.
+    ///
+    /// `withholdsLocalRate` / `serverRead`: while the server is reading the scale
+    /// itself (`GoalProgressLogic.usesServerWeightRead` — an early read, a
+    /// return after a gap, a plateau) it sends no weekly pace on purpose, so the
+    /// 7-day fallback must NOT fill the gap with a jumpier number of its own.
+    /// The hero then shows `serverRead` — the slot text from `serverReadSlotText`
+    /// (a short complement while the goal line says the read, the full read
+    /// otherwise; it wraps, the hero's rate line has no line limit) — or nothing
+    /// when there is none. Both default to "no server read", so an older server
+    /// keeps today's behaviour exactly.
     static func weeklyChangeText(
         trend: WeightTrendDTO?, entries: [WeightLogEntryDTO], system: UnitSystem,
-        goalRateKgPerWeek: Double? = nil
+        goalRateKgPerWeek: Double? = nil,
+        withholdsLocalRate: Bool = false, serverRead: String? = nil
     ) -> String? {
         guard let trend, trend.established else { return nil }
+        if withholdsLocalRate {
+            guard let serverRead, !serverRead.isEmpty else { return nil }
+            return GoalProgressLogic.nonBreaking(serverRead)
+        }
         if let goalRate = goalRateKgPerWeek, goalRate.isFinite {
             var text = "\(UnitFormat.weightDelta(kgPerWeek: goalRate, system)) over 4 weeks"
             if isFasterThanRecommended(deltaPerWeek: goalRate, currentTrendKg: trend.days.last?.trendKg) {
@@ -147,7 +162,19 @@ enum WeightHeroLogic {
     /// established, else the honest "Logged — trend appears after 3
     /// weigh-ins (<n> of 3)" with the real distinct-day count — never a
     /// raw scale reading leading the message.
-    static func weighInToastMessage(entries: [WeightLogEntryDTO], trend: WeightTrendDTO?, system: UnitSystem) -> String {
+    ///
+    /// `withholdsLocalRate`: while the server is reading the scale itself
+    /// (`GoalProgressLogic.usesServerWeightRead` — an early read, a return after
+    /// a gap, a plateau) it withholds a pace on purpose, so the toast says
+    /// "Logged · trend 82.1 kg" with no rate of its own. Defaults to `false`
+    /// (older server): the message is exactly as before.
+    static func weighInToastMessage(
+        entries: [WeightLogEntryDTO], trend: WeightTrendDTO?, system: UnitSystem,
+        withholdsLocalRate: Bool = false
+    ) -> String {
+        if withholdsLocalRate, let trend, trend.established, let latest = trend.days.last {
+            return "Logged · trend \(UnitFormat.weight(kg: latest.trendKg, system))"
+        }
         if let trend, trend.established, let latest = trend.days.last,
            let deltaPerWeek = trend.delta7dKgPerWeek ?? trend.delta30dKgPerWeek {
             let weight = UnitFormat.weight(kg: latest.trendKg, system)
@@ -156,6 +183,68 @@ enum WeightHeroLogic {
         }
         let distinctDays = min(3, Set(entries.map(\.date)).count)
         return "Logged — trend appears after 3 weigh-ins (\(distinctDays) of 3)"
+    }
+
+    // MARK: - The server's weight read: one place says it in full
+
+    /// While the server reads the scale itself (early / returning / plateau / moving
+    /// again) the FULL read ("Early read — down 0.7 kg on the scale in 7 days") is said in
+    /// exactly one place on Today. Its goal line under the hero already says it
+    /// (`GoalProgressLogic.goalLineShowsServerRead`), so the hero's rate slot
+    /// carries a short complementary line instead of repeating it.
+    static let earlyReadHeroText = "Pace settles after 3 weeks"
+    static let returningReadHeroText = "Welcome back — weigh in a few more days"
+    static let plateauReadHeroText = "Flat for 3 weeks"
+    /// Moving again (wave 21): the 14 days after a plateau ends. Never `plateauReadHeroText`
+    /// — the plateau is over. The fallback when the payload carries no week plan.
+    static let movingAgainReadHeroText = "Moving again after a plateau"
+
+    /// Goal age (calendar days) from which an early read is no longer "the pace
+    /// settles after 3 weeks": the goal is past that point and only short of
+    /// weigh-ins (`PACE_SETTLE_DAYS` in `lib/weightPace.ts`).
+    static let paceSettleDays = 21
+    /// The same slot for a goal that is 21+ days old — the server's own wording for
+    /// it (`paceWaitClause` in `lib/brain/openerText.ts`), capitalised for the slot.
+    static let olderGoalEarlyReadHeroText = "A few more weigh-ins and your pace is back"
+
+    /// The early read's short complement: "Pace settles after 3 weeks" for a young
+    /// goal, the older-goal wording once `weightRead.goalAgeDays` says the goal has
+    /// run `paceSettleDays` or more. A server that doesn't send the age (`nil`)
+    /// keeps `earlyReadHeroText`, exactly as before.
+    static func earlyReadSlotText(goalAgeDays: Int?) -> String {
+        guard let goalAgeDays, goalAgeDays >= paceSettleDays else { return earlyReadHeroText }
+        return olderGoalEarlyReadHeroText
+    }
+
+    /// The text for the hero's rate slot during a server weight read, `nil` when
+    /// the server is not reading the scale (the hero then keeps its own rate
+    /// logic) or has nothing to say:
+    ///  - the goal line below carries the read -> the short complement above;
+    ///  - the goal line carries something else (the stale-weigh-in nudge) -> the
+    ///    hero carries the full read, so it is still said once.
+    static func serverReadSlotText(_ progress: GoalProgressDTO) -> String? {
+        guard GoalProgressLogic.usesServerWeightRead(progress), let state = progress.weightRead?.state else { return nil }
+        guard GoalProgressLogic.goalLineShowsServerRead(progress) else {
+            return GoalProgressLogic.serverWeightRead(progress)
+        }
+        switch state {
+        case .early:       return earlyReadSlotText(goalAgeDays: progress.weightRead?.goalAgeDays)
+        case .returning:   return returningReadHeroText
+        case .plateau:     return plateauReadHeroText
+        case .movingAgain: return movingAgainSlotText(plan: progress.weightRead?.plan)
+        case .pace, .reached: return nil
+        }
+    }
+
+    /// The moving-again complement: the week plan's own one action ("Keep doing what
+    /// restarted it" — decided once a week, the same line the goal card's reasons end
+    /// on) while the plan says moving again, so the goal line's "Moving again — weekly
+    /// average down 0.5 kg from the plateau" is not said twice; `movingAgainReadHeroText`
+    /// for a payload with no plan (or one whose state or text is missing).
+    static func movingAgainSlotText(plan: GoalProgressDTO.WeightRead.Plan?) -> String {
+        guard let plan, plan.state == .movingAgain, let action = plan.action else { return movingAgainReadHeroText }
+        let text = action.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? movingAgainReadHeroText : text
     }
 
     // MARK: - Sparkline Y-domain (screenshot-review fix, 2026-09-23)
@@ -262,13 +351,28 @@ enum WeightHeroLogic {
     /// Captions under the sparkline: "Start 83.7 kg" (first point of the
     /// window), "Now 82 kg" (latest trend point) and, when a target weight
     /// exists, "Goal 76 kg" — all in the user's unit. `nil` without points.
+    ///
+    /// `progressWeight` (wave 21, weight loss): the weight the goal card measures from
+    /// (`GoalProgressLogic.progressWeight`), with its label. The line itself is still the
+    /// smoothed trend, but the number a weight-loss goal quotes everywhere else (the headline's
+    /// "to go", the goal sheet's stat row, the Trends weight card) is the progress weight, so
+    /// the middle caption says "This week 82.3 kg" / "Weekly avg 82.3 kg" / "Latest 82.3 kg"
+    /// (whichever it truly is) instead of the trend's "Now 82 kg". `nil` (an older server,
+    /// other goals) keeps "Now" and the trend, exactly as before.
     static func sparklineCaptions(
-        firstKg: Double?, lastKg: Double?, targetKg: Double?, system: UnitSystem
+        firstKg: Double?, lastKg: Double?, targetKg: Double?, system: UnitSystem,
+        progressWeight: GoalProgressLogic.ProgressWeight? = nil
     ) -> (start: String, now: String, target: String?)? {
         guard let firstKg, let lastKg else { return nil }
+        let now: String
+        if let progressWeight {
+            now = "\(progressWeight.label) \(UnitFormat.weight(kg: progressWeight.kg, system))"
+        } else {
+            now = "Now \(UnitFormat.weight(kg: lastKg, system))"
+        }
         return (
             "Start \(UnitFormat.weight(kg: firstKg, system))",
-            "Now \(UnitFormat.weight(kg: lastKg, system))",
+            now,
             targetKg.map { "Goal \(UnitFormat.weight(kg: $0, system))" }
         )
     }

@@ -9,15 +9,17 @@ import SwiftUI
 struct TrendsStrengthCard: View {
     let card: TrendsStrengthLogic.Card
 
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
             HStack(alignment: .firstTextBaseline) {
                 Text("Strength")
-                    .font(.system(size: 20, weight: .bold))
+                    .scaledFont(size: 20, weight: .bold)
                     .foregroundStyle(Theme.Colors.textPrimary)
                 Spacer()
                 Text("est. 1RM")
-                    .font(.system(size: 13))
+                    .scaledFont(size: 13)
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
 
@@ -39,19 +41,23 @@ struct TrendsStrengthCard: View {
     }
 
     private func liftRow(_ lift: TrendsStrengthLogic.Lift) -> some View {
-        HStack(alignment: .center, spacing: Theme.Spacing.md) {
+        // Accessibility sizes: sparkline + chip move under the lift's name
+        // and 1RM instead of sharing its row.
+        AccessibilityAdaptiveStack(alignment: .center, spacing: Theme.Spacing.md, stackedSpacing: Theme.Spacing.sm) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(lift.name)
-                    .font(.system(size: 16, weight: .semibold))
+                    .scaledFont(size: 16, weight: .semibold)
                     .foregroundStyle(Theme.Colors.textPrimary)
-                    .lineLimit(1)
+                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
                 Text(lift.currentText)
-                    .font(.system(size: 20, weight: .bold, design: .rounded))
+                    .scaledFont(size: 20, weight: .bold, design: .rounded)
                     .foregroundStyle(Theme.Colors.textPrimary)
                     .monospacedDigit()
             }
-            Spacer(minLength: Theme.Spacing.sm)
-            VStack(alignment: .trailing, spacing: Theme.Spacing.xs) {
+            if !dynamicTypeSize.isAccessibilitySize {
+                Spacer(minLength: Theme.Spacing.sm)
+            }
+            VStack(alignment: dynamicTypeSize.isAccessibilitySize ? .leading : .trailing, spacing: Theme.Spacing.xs) {
                 Sparkline(values: lift.sparkline, style: .line, tint: tint(for: lift.status.tone), height: 28, showsLatestDot: true)
                     .frame(width: 96)
                 Chip(text: GoalProgressLogic.nonBreaking(lift.status.text), tint: tint(for: lift.status.tone))
@@ -65,12 +71,12 @@ struct TrendsStrengthCard: View {
     private var volumeRow: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(card.volume.thisWeek)
-                .font(.system(size: 14, weight: .semibold))
+                .scaledFont(size: 14, weight: .semibold)
                 .foregroundStyle(Theme.Colors.textPrimary)
                 .monospacedDigit()
             if let comparison = card.volume.comparison {
                 Text(comparison)
-                    .font(.system(size: 13))
+                    .scaledFont(size: 13)
                     .foregroundStyle(Theme.Colors.textSecondary)
                     .monospacedDigit()
             }

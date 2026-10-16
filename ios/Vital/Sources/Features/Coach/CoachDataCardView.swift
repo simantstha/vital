@@ -44,7 +44,7 @@ struct CoachDataCardView: View {
             }
             if let base = viz.baseline {
                 Text("30-day baseline \(Int(base))\(unitSuffix) · range \(Int(minV))–\(Int(maxV))")
-                    .font(Theme.Typography.labelSmall)
+                    .scaledFont(Theme.Typography.labelSmall)
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
 
@@ -89,11 +89,11 @@ struct CoachDataCardView: View {
     private func compareSide(label: String, value: Double?) -> some View {
         VStack(spacing: 2) {
             Text(label.uppercased())
-                .font(Theme.Typography.labelSmall)
+                .scaledFont(Theme.Typography.labelSmall)
                 .tracking(0.5)
                 .foregroundStyle(Theme.Colors.textSecondary)
             Text(value.map { formatValue($0) } ?? "—")
-                .font(Theme.Typography.numericLarge(22))
+                .scaledFont(Theme.Typography.numericLarge(22))
                 .foregroundStyle(Theme.Colors.textPrimary)
         }
         .frame(maxWidth: .infinity)
@@ -109,7 +109,7 @@ struct CoachDataCardView: View {
     private func header(title: String, pill: AnyView?) -> some View {
         HStack(alignment: .firstTextBaseline) {
             Text(title.uppercased())
-                .font(Theme.Typography.labelSmall)
+                .scaledFont(Theme.Typography.labelSmall)
                 .tracking(0.6)
                 .foregroundStyle(Theme.Colors.textSecondary)
             Spacer()
@@ -120,10 +120,10 @@ struct CoachDataCardView: View {
     private func bigNumber(_ value: String, unit: String) -> some View {
         HStack(alignment: .lastTextBaseline, spacing: 4) {
             Text(value)
-                .font(Theme.Typography.numericLarge(26))
+                .scaledFont(Theme.Typography.numericLarge(26))
                 .foregroundStyle(Theme.Colors.textPrimary)
             Text(unit)
-                .font(Theme.Typography.labelSmall)
+                .scaledFont(Theme.Typography.labelSmall)
                 .foregroundStyle(Theme.Colors.textSecondary)
         }
     }
@@ -157,8 +157,7 @@ struct CoachDataCardView: View {
     private func pillLabel(_ text: String, positive: Bool) -> some View {
         let color = positive ? Theme.Colors.accentContent : Theme.Colors.alert
         return Text(text)
-            .font(Theme.Typography.labelSmall)
-            .fontWeight(.semibold)
+            .scaledFont(Theme.Typography.labelSmall.weight(.semibold))
             .foregroundStyle(color)
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
@@ -210,7 +209,7 @@ private struct BarChart: View {
                                 .fill(color)
                                 .frame(height: max(3, barsHeight * CGFloat(pt.value / maxV)))
                             Text(pt.label)
-                                .font(.system(size: 9))
+                                .scaledFont(size: 9)
                                 .foregroundStyle(Theme.Colors.textSecondary)
                         }
                         .frame(maxWidth: .infinity)

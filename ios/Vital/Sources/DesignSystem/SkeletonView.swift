@@ -11,10 +11,10 @@ struct SkeletonView: View {
         VitalCard(padding: Theme.Spacing.lg, cornerRadius: Theme.Radius.lg) {
             VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
                 Text("Metric")
-                    .font(Theme.Typography.labelSmall)
+                    .scaledFont(Theme.Typography.labelSmall)
                     .foregroundStyle(Theme.Colors.textSecondary)
                 Text("00")
-                    .font(Theme.Typography.numericLarge(24))
+                    .scaledFont(Theme.Typography.numericLarge(24))
                     .foregroundStyle(Theme.Colors.textPrimary)
                 RoundedRectangle(cornerRadius: 4, style: .continuous)
                     .fill(Theme.Colors.chartMuted)

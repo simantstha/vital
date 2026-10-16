@@ -85,7 +85,7 @@ struct WeighInSheet: View {
             HStack {
                 Spacer()
                 Text("Weigh in")
-                    .font(Theme.Typography.titleMedium)
+                    .scaledFont(Theme.Typography.titleMedium)
                     .foregroundStyle(Theme.Colors.textPrimary)
                 Spacer()
             }
@@ -108,14 +108,15 @@ struct WeighInSheet: View {
                 TextField("0", text: $text)
                     .keyboardType(.decimalPad)
                     .focused($fieldFocused)
-                    .font(.system(size: 56, weight: .bold, design: .rounded))
+                    .scaledFont(size: 56, weight: .bold, design: .rounded)
+                    .dynamicTypeSize(...DynamicTypeSize.accessibility2) // hero number: capped growth
                     .foregroundStyle(Theme.Colors.textPrimary)
                     .multilineTextAlignment(.center)
                     .fixedSize()
                     .accessibilityIdentifier("weighIn.field")
 
                 Text(system.weightUnit)
-                    .font(.system(size: 20, weight: .semibold))
+                    .scaledFont(size: 20, weight: .semibold)
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
             .frame(maxWidth: .infinity)
@@ -124,7 +125,7 @@ struct WeighInSheet: View {
 
             if let boundsErrorText {
                 Text(boundsErrorText)
-                    .font(.system(size: 13, weight: .medium))
+                    .scaledFont(size: 13, weight: .medium)
                     .foregroundStyle(Theme.Colors.alert)
                     .multilineTextAlignment(.center)
                     .accessibilityIdentifier("weighIn.boundsError")
@@ -132,7 +133,7 @@ struct WeighInSheet: View {
                 // Neutral styling (dietitian review, 2026-09-23) — this is an
                 // honest "does that look right?" prompt, not a warning.
                 Text(deltaConfirmText)
-                    .font(.system(size: 13, weight: .medium))
+                    .scaledFont(size: 13, weight: .medium)
                     .foregroundStyle(Theme.Colors.textSecondary)
                     .multilineTextAlignment(.center)
                     .accessibilityIdentifier("weighIn.deltaConfirm")
@@ -160,7 +161,7 @@ struct WeighInSheet: View {
                         ProgressView().tint(Theme.Colors.onAccent)
                     }
                     Text(saveButtonTitle)
-                        .font(.system(size: 16, weight: .bold))
+                        .scaledFont(size: 16, weight: .bold)
                 }
                 .foregroundStyle(Theme.Colors.onAccent)
                 .frame(maxWidth: .infinity)

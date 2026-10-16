@@ -16,7 +16,7 @@
  * `completedSessions`/`days[].completed` are a UNION of two signals, deduped
  * by local day: a logged (non-warmup) `workout_sets` row (strength), or a
  * HealthKit workout entry that's real training, not a trivial auto-detected
- * blip (see MIN_HEALTHKIT_WORKOUT_MINUTES below) — an endurance user's runs/
+ * blip (see MIN_HEALTHKIT_WORKOUT_MINUTES in lib/workoutDays.ts) — an endurance user's runs/
  * rides/swims never touch `workout_sets`, so counting strength sets alone
  * would report `completedSessions: 0` for a marathoner who trained all week,
  * which is exactly the honesty rule's failure mode in the other direction. A
@@ -44,16 +44,10 @@ import {
   getSetsForLocalDays,
   type LastLift,
 } from '@/lib/workoutRepository';
+import { healthKitWorkoutDays } from '@/lib/workoutDays';
 
-// A HealthKit workout always carries a duration (`DailyIngestWorkout.durationMin`
-// in ios/Vital/Sources/Health/HealthKitBackfill.swift is non-optional), so a
-// day only counts as "completed" from HealthKit data when at least one
-// workout that day is >= this long — a 2-minute walk HealthKit auto-detected
-// shouldn't light up a training dot. If an entry is ever missing the field
-// (e.g. an older/foreign payload shape), it's counted rather than dropped —
-// the honesty rule cuts toward not hiding real activity, not toward stricter
-// filtering than the data can support.
-const MIN_HEALTHKIT_WORKOUT_MINUTES = 10;
+// `healthKitWorkoutDays` lives in lib/workoutDays.ts (importable without a database); re-exported so existing imports keep working.
+export { healthKitWorkoutDays } from '@/lib/workoutDays';
 
 export interface WeekDay {
   date:      string;  // YYYY-MM-DD
@@ -105,23 +99,6 @@ async function fetchWeekWorkouts(userId: string, dayKeys: string[]): Promise<Wor
   const lookbackDays = Math.min(30, dayKeys.length + 1);
   const workouts = await queryWorkouts(userId, lookbackDays);
   return workouts.filter(w => dayKeys.includes(w.date));
-}
-
-/**
- * Distinct local days with >= 1 HealthKit workout that's real training, not
- * a trivial auto-detected blip — see MIN_HEALTHKIT_WORKOUT_MINUTES above.
- * Pure/unit-testable: takes entries already scoped to the week.
- */
-export function healthKitWorkoutDays(entries: WorkoutEntry[]): Set<string> {
-  const days = new Set<string>();
-  for (const w of entries) {
-    const duration = w.durationMin;
-    if (typeof duration === 'number' && Number.isFinite(duration) && duration < MIN_HEALTHKIT_WORKOUT_MINUTES) {
-      continue; // has a duration field and it's below the floor
-    }
-    days.add(w.date);
-  }
-  return days;
 }
 
 function resolveVolume(weekWorkouts: WorkoutEntry[]): VolumeSummary {

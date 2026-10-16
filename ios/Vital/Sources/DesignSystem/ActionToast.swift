@@ -97,11 +97,11 @@ private struct ActionToastView: View {
         HStack(spacing: Theme.Spacing.md) {
             HStack(spacing: Theme.Spacing.xs) {
                 Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 16, weight: .semibold))
+                    .scaledFont(size: 16, weight: .semibold)
                     .foregroundStyle(Theme.Colors.accentContent)
 
                 Text(item.message)
-                    .font(.system(size: 14, weight: .semibold))
+                    .scaledFont(size: 14, weight: .semibold)
                     .foregroundStyle(.white)
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
@@ -117,7 +117,7 @@ private struct ActionToastView: View {
                     action()
                     onDismiss()
                 }
-                .font(.system(size: 14, weight: .bold))
+                .scaledFont(size: 14, weight: .bold)
                 .foregroundStyle(Theme.Colors.accentContent)
                 .buttonStyle(.vital(scale: 1.0))
             }

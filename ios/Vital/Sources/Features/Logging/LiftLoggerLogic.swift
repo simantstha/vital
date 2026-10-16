@@ -211,8 +211,8 @@ enum LiftLoggerLogic {
     private static let lowerBodyCompoundStems = ["squat", "deadlift", "leg press", "hip thrust"]
 
     /// `true` for squat / deadlift / romanian deadlift / leg press / hip thrust
-    /// (and variants such as "front squat" or "sumo deadlift"). Drives both the
-    /// bigger progression step and the longer default rest.
+    /// (and variants such as "front squat" or "sumo deadlift"). Drives the longer
+    /// default rest (the progression step is the same for every lift).
     static func isLowerBodyCompound(key: String) -> Bool {
         let normalized = canonicalKey(from: key.replacingOccurrences(of: "-", with: " "))
         guard !normalized.isEmpty else { return false }
@@ -220,20 +220,35 @@ enum LiftLoggerLogic {
         return lowerBodyCompoundStems.contains { normalized.contains($0) }
     }
 
-    /// Suggested load jump after a clean session: +2.5 kg / +5 lb for
-    /// lower-body compounds, +1.25 kg / +2.5 lb for everything else.
+    /// Suggested load jump after a clean session: +2.5 kg / +5 lb for EVERY lift
+    /// (`nextWorkingLoad` in `lib/liftChange.ts`). A smaller upper-body step
+    /// landed between plates ("bench 80 → 81.5 kg" needs 0.75 kg plates nobody
+    /// has), so every step is loadable with standard plates. `key` stays in the
+    /// signature so call sites read per lift; the step no longer depends on it.
     static func progressionStep(forKey key: String, system: UnitSystem) -> Double {
-        let lower = isLowerBodyCompound(key: key)
         switch system {
-        case .metric: return lower ? 2.5 : 1.25
-        case .imperial: return lower ? 5 : 2.5
+        case .metric: return 2.5
+        case .imperial: return 5
         }
     }
 
-    /// Display rounding for suggested loads: nearest 0.5 kg / 1 lb.
+    /// Display rounding for loads: nearest 0.5 kg / 1 lb.
     static func roundToPlate(_ load: Double, system: UnitSystem) -> Double {
         let unit = system == .metric ? 0.5 : 1.0
         return (load / unit).rounded() * unit
+    }
+
+    /// The load to try after a clean session, exactly as the server computes the
+    /// review's "Squat 110 → 112.5 kg" (`nextWorkingLoad` in `lib/liftChange.ts`):
+    /// the last load rounded to 0.5 kg / 1 lb, plus the step (+2.5 kg / +5 lb),
+    /// rounded to a multiple of the step so it lands on the 2.5 kg / 5 lb grid
+    /// (80 → 82.5, 81 → 82.5, 101 → 102.5; 185 lb → 190, 187 lb → 190), capped at
+    /// the logger's maximum and never below the rounded last load.
+    static func nextLoad(after lastLoad: Double, key: String, system: UnitSystem) -> Double {
+        let step = progressionStep(forKey: key, system: system)
+        let from = roundToPlate(lastLoad, system: system)
+        let stepped = ((from + step) / step).rounded() * step
+        return max(min(stepped, maxLoad(for: system)), from)
     }
 
     /// Whether two display-unit loads are the same weight (guards float noise).
@@ -245,8 +260,8 @@ enum LiftLoggerLogic {
     /// without history (or for a bodyweight-only exercise — there is no load
     /// to progress). Only the sets at the TOP load are judged: the first one
     /// sets the rep target, and if every one of them reached it the hint is
-    /// "try" (top load + step, rounded to the plate step), otherwise "repeat"
-    /// the top load.
+    /// "try" (`nextLoad`: top load + 2.5 kg / 5 lb on the 2.5 kg / 5 lb grid),
+    /// otherwise "repeat" the top load.
     static func progressionHint(history: [LiftLastRef], key: String, system: UnitSystem) -> LiftProgressionHint? {
         let working = history.filter { $0.reps >= minReps }
         guard let topLoad = working.map({ $0.load }).max(), topLoad > 0 else { return nil }
@@ -255,8 +270,7 @@ enum LiftLoggerLogic {
         let hitAll = reps.allSatisfy { $0 >= target }
         var suggested = topLoad
         if hitAll {
-            let stepped = roundToPlate(topLoad + progressionStep(forKey: key, system: system), system: system)
-            suggested = min(stepped, maxLoad(for: system))
+            suggested = nextLoad(after: topLoad, key: key, system: system)
         }
         return LiftProgressionHint(lastLoad: topLoad, lastReps: reps, suggestedLoad: max(suggested, topLoad))
     }
@@ -308,6 +322,11 @@ enum LiftLoggerLogic {
     static let restExtension: TimeInterval = 30
     /// How long "Rest done" stays on screen after the countdown hits 0.
     static let restDoneDisplaySeconds: TimeInterval = 4
+    /// What VoiceOver is told when the countdown reaches 0 (the visible "Rest
+    /// done" and the haptic are invisible to a screen-reader user otherwise).
+    static let restDoneAnnouncement = "Rest done"
+    /// Minimum side (pt) of the rest bar's "+30s" / "Skip" tap targets (HIG: 44).
+    static let restButtonMinTapSize: CGFloat = 44
 
     /// Rest length for an exercise key: 2:30 for lower-body compounds, else 2:00.
     static func restDuration(forKey key: String) -> TimeInterval {

@@ -28,7 +28,9 @@ enum TrendsStrengthLogic {
     static let windowWeeks = 8
     /// How many lifts the card shows.
     static let maxLifts = 3
-    /// "Recent frequency" window used for ranking lifts.
+    /// "Recent frequency" window used for ranking lifts when the server sends no
+    /// per-week session counts (an older server). With counts, the server's own
+    /// rule ranks them instead (`rankedLiftKeys`).
     static let lookbackWeeks = 4
     /// THE one definition of lift progress — mirrors `lib/liftChange.ts`
     /// (`liftChange4w`), which the Trends goal card and the weekly review use,
@@ -82,7 +84,9 @@ enum TrendsStrengthLogic {
         let sparkline: [Double?]
         let status: Status
         /// The shared 4-week change in kg (`change(e1rm:)`), `nil` when either
-        /// window has no data. Raw kg — unit formatting happens in `status`.
+        /// window has no data — and for any lift being rebuilt after a break
+        /// (`buildingBackStatus`), whose dip is not a decline to count.
+        /// Raw kg — unit formatting happens in `status`.
         let changeKg: Double?
         /// The baseline e1RM (kg) that `changeKg` is measured against; `nil`
         /// exactly when `changeKg` is. The progress bar is 1% of this.
@@ -113,7 +117,25 @@ enum TrendsStrengthLogic {
     /// Never fabricates zeros: a lift with only bodyweight sets has no e1RM
     /// and is skipped; if that leaves no lifts the card still shows the
     /// volume line (sets are real) but no lift rows.
-    static func card(from summary: WorkoutSummaryResponse, system: UnitSystem, today: Date) -> Card? {
+    ///
+    /// Order: when the weekly stats carry the server's `sessions` counts the
+    /// lifts follow the server's headline-lift rule exactly (`headlineLift` leads,
+    /// then `rankedLiftKeys`), so the first row is the lift the goal card names;
+    /// without them (older server) the original recent-sets order is kept.
+    ///
+    /// `liftReturns` (`GoalProgressDTO.liftReturns`, wave 21) / `liftReturn`
+    /// (`GoalProgressDTO.liftReturn`, the headline lift): every lift the server
+    /// says the user is rebuilding after a break reads a neutral "Building back"
+    /// status instead of a decline (`buildingBackStatus`) — the headline lift or
+    /// not, so a deadlift still under its pre-break best says so beside a squat
+    /// that is back — and is left out of the header's lifts-up / lifts-down
+    /// counts. Without `liftReturns` (an older server) the single `liftReturn`
+    /// decides, exactly as before.
+    static func card(
+        from summary: WorkoutSummaryResponse, system: UnitSystem, today: Date,
+        liftReturn: GoalProgressDTO.LiftReturn? = nil,
+        liftReturns: [GoalProgressDTO.LiftReturn]? = nil
+    ) -> Card? {
         let hasAnySets = summary.exercises.values.contains { stats in
             stats.contains { $0.totalSets > 0 }
         }
@@ -144,23 +166,45 @@ enum TrendsStrengthLogic {
             candidates.append(Candidate(key: key, recentSets: recentSets, totalSets: totalSets, series: series))
         }
 
-        candidates.sort { lhs, rhs in
-            if lhs.recentSets != rhs.recentSets { return lhs.recentSets > rhs.recentSets }
-            if lhs.totalSets != rhs.totalSets { return lhs.totalSets > rhs.totalSets }
-            return lhs.key < rhs.key
+        if carriesSessionCounts(summary) {
+            // The server's rule: the headline lift first, then the rest as ranked.
+            var order = rankedLiftKeys(in: summary, today: today)
+            if let headline = headlineLift(in: summary, today: today),
+               let index = order.firstIndex(of: headline) {
+                order.remove(at: index)
+                order.insert(headline, at: 0)
+            }
+            var position: [String: Int] = [:]
+            for (index, key) in order.enumerated() { position[key] = index }
+            candidates.sort { lhs, rhs in
+                let lhsPosition = position[lhs.key] ?? Int.max
+                let rhsPosition = position[rhs.key] ?? Int.max
+                if lhsPosition != rhsPosition { return lhsPosition < rhsPosition }
+                return lhs.key < rhs.key
+            }
+        } else {
+            candidates.sort { lhs, rhs in
+                if lhs.recentSets != rhs.recentSets { return lhs.recentSets > rhs.recentSets }
+                if lhs.totalSets != rhs.totalSets { return lhs.totalSets > rhs.totalSets }
+                return lhs.key < rhs.key
+            }
         }
 
         let lifts = candidates.prefix(maxLifts).compactMap { candidate -> Lift? in
             let e1rm: [Double?] = candidate.series.map { $0?.bestEstimatedOneRepMaxKg }
             guard let latest = e1rm.compactMap({ $0 }).last else { return nil }
+            let building = buildingBackStatus(
+                liftReturn: liftReturn, liftReturns: liftReturns, forLift: candidate.key, system: system
+            )
+            let liftChange = building == nil ? change(e1rm: e1rm) : nil
             return Lift(
                 key: candidate.key,
                 name: displayName(for: candidate.key),
                 currentText: wholeWeightText(kg: latest, system: system),
                 sparkline: e1rm,
-                status: status(e1rm: e1rm, system: system),
-                changeKg: change(e1rm: e1rm)?.changeKg,
-                baselineKg: change(e1rm: e1rm)?.baselineKg
+                status: building ?? status(e1rm: e1rm, system: system),
+                changeKg: liftChange?.changeKg,
+                baselineKg: liftChange?.baselineKg
             )
         }
 
@@ -168,6 +212,164 @@ enum TrendsStrengthLogic {
             lifts: Array(lifts),
             volume: volumeLine(summary: summary, keys: keys, system: system)
         )
+    }
+
+    // MARK: - Headline lift (the server's rule)
+
+    /// Completed weeks the "most-trained lift" ranking looks back over
+    /// (`LIFT_RANK_WINDOW_WEEKS` in `lib/liftChange.ts`).
+    static let rankWindowWeeks = 8
+    /// Tie-break order for equally-trained lifts; any other lift follows, A-Z
+    /// (`MAIN_LIFT_ORDER` in `lib/liftChange.ts`).
+    static let mainLiftOrder = ["squat", "bench press", "deadlift", "overhead press"]
+
+    /// `"Bench-Press"` / `"bench_press"` -> `"bench press"` (`normalizeLiftKey`).
+    static func normalizedLiftKey(_ key: String) -> String {
+        key.lowercased()
+            .replacingOccurrences(of: "[-_]+", with: " ", options: .regularExpression)
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func mainLiftRank(_ key: String) -> Int {
+        mainLiftOrder.firstIndex(of: normalizedLiftKey(key)) ?? mainLiftOrder.count
+    }
+
+    /// True when the summary carries the server's per-week `sessions` counts.
+    /// Only then does the card use the server's ranking (`rankedLiftKeys`); an
+    /// older server keeps the card's own recent-sets order.
+    static func carriesSessionCounts(_ summary: WorkoutSummaryResponse) -> Bool {
+        summary.exercises.values.contains { stats in
+            stats.contains { $0.sessions != nil }
+        }
+    }
+
+    /// Sessions that week (days with a working set of the lift); a week without
+    /// a count counts 1 when anything was trained (`weekSessions` in the server rule).
+    private static func weekSessions(_ stat: WorkoutWeeklyStatDTO) -> Int {
+        if let sessions = stat.sessions { return sessions }
+        return (stat.totalSets > 0 || stat.bestEstimatedOneRepMaxKg != nil) ? 1 : 0
+    }
+
+    /// Lifts in rotation (an e1RM in the last 8 weeks including the current one),
+    /// most-trained first. Mirrors `rankLifts` in `lib/liftChange.ts`: sessions
+    /// containing the lift over the 8 COMPLETED weeks before the current week,
+    /// ties by the fixed order (squat, bench press, deadlift, overhead press,
+    /// then A-Z). Before any week has completed (a brand-new lifter) the
+    /// current week counts.
+    static func rankedLiftKeys(in summary: WorkoutSummaryResponse, today: Date) -> [String] {
+        // keys[0...7] are the 8 completed weeks before the current one (the
+        // server's anchor); keys[8] is the anchor itself.
+        let keys = weekKeys(endingAt: today, count: rankWindowWeeks + 1)
+        guard keys.count == rankWindowWeeks + 1, let anchor = keys.last else { return [] }
+        let oldestCompleted = keys[0]
+        let newestCompleted = keys[rankWindowWeeks - 1]
+        let oldestWithAnchor = keys[1]
+
+        var inRotation: [(key: String, stats: [WorkoutWeeklyStatDTO])] = []
+        for (key, stats) in summary.exercises {
+            let hasRecentLoad = stats.contains {
+                $0.bestEstimatedOneRepMaxKg != nil && $0.weekStart >= oldestWithAnchor && $0.weekStart <= anchor
+            }
+            if hasRecentLoad { inRotation.append((key: key, stats: stats)) }
+        }
+
+        func sessions(_ stats: [WorkoutWeeklyStatDTO], from oldest: String, through newest: String) -> Int {
+            var total = 0
+            for stat in stats where stat.weekStart >= oldest && stat.weekStart <= newest {
+                total += weekSessions(stat)
+            }
+            return total
+        }
+
+        var scored: [(key: String, sessions: Int)] = inRotation.map {
+            (key: $0.key, sessions: sessions($0.stats, from: oldestCompleted, through: newestCompleted))
+        }
+        if scored.allSatisfy({ $0.sessions == 0 }) {
+            scored = inRotation.map {
+                (key: $0.key, sessions: sessions($0.stats, from: oldestWithAnchor, through: anchor))
+            }
+        }
+        scored.sort { lhs, rhs in
+            if lhs.sessions != rhs.sessions { return lhs.sessions > rhs.sessions }
+            let lhsRank = mainLiftRank(lhs.key)
+            let rhsRank = mainLiftRank(rhs.key)
+            if lhsRank != rhsRank { return lhsRank < rhsRank }
+            return lhs.key < rhs.key
+        }
+        return scored.map { $0.key }
+    }
+
+    /// THE headline lift, as the server picks it (`pickHeadlineLift` in
+    /// `lib/liftChange.ts`, the lift the goal card and Today line name): the
+    /// first lift of `rankedLiftKeys` that has a 4-week change. Never the lift
+    /// that moved the most. `nil` when no lift has a comparable change.
+    static func headlineLift(in summary: WorkoutSummaryResponse, today: Date) -> String? {
+        let keys = weekKeys(endingAt: today, count: windowWeeks)
+        for key in rankedLiftKeys(in: summary, today: today) {
+            let e1rm: [Double?] = weeklySeries(summary.exercises[key] ?? [], keys: keys).map { $0?.bestEstimatedOneRepMaxKg }
+            if change(e1rm: e1rm) != nil { return key }
+        }
+        return nil
+    }
+
+    // MARK: - Building back after a break
+
+    /// "Building back — est. 1RM 136 of 142 kg pre-break" (neutral): the server's
+    /// return entry for this lift (`liftReturns`, else the single `liftReturn`)
+    /// says the user is rebuilding it after a break of 10+ days and has not yet
+    /// regained its pre-break best, so a negative change against 4 weeks ago is
+    /// expected, not a decline. The lift's name is the row's own, so the server's
+    /// headline ("Building back — Squat est. 1RM 136 of 142 kg pre-break") loses
+    /// it here and nothing else; the numbers are the ones the server prints
+    /// (`liftReturnShown`). A payload without `recentKg` keeps the percentage
+    /// wording ("Building back — 96% of pre-break 142 kg"). `nil` for a lift with
+    /// no entry, once its pre-break best is regained, and without any return.
+    static func buildingBackStatus(
+        liftReturn: GoalProgressDTO.LiftReturn?,
+        liftReturns: [GoalProgressDTO.LiftReturn]? = nil,
+        forLift key: String, system: UnitSystem
+    ) -> Status? {
+        guard let entry = returnEntry(liftReturn: liftReturn, liftReturns: liftReturns, forLift: key),
+              !entry.regained else { return nil }
+        let preBreak = wholeWeightText(kg: entry.preBreakKg, system: system)
+        if let recentKg = entry.recentKg,
+           let shown = liftReturnShown(preBreakKg: entry.preBreakKg, recentKg: recentKg, system: system) {
+            return Status(text: "Building back — est. 1RM \(shown.recent) of \(preBreak) pre-break", tone: .neutral)
+        }
+        return Status(text: "Building back — \(entry.pct)% of pre-break \(preBreak)", tone: .neutral)
+    }
+
+    /// The server's return entry for a lift, matched on `normalizedLiftKey`. The
+    /// per-lift list (`liftReturns`: the headline lift first, then the other main
+    /// lifts) decides when the server sent one; otherwise (an older server, or an
+    /// empty list, which the server never sends) the single headline `liftReturn`
+    /// does, so the card reads exactly as it did before the list existed.
+    static func returnEntry(
+        liftReturn: GoalProgressDTO.LiftReturn?,
+        liftReturns: [GoalProgressDTO.LiftReturn]?,
+        forLift key: String
+    ) -> GoalProgressDTO.LiftReturn? {
+        let wanted = normalizedLiftKey(key)
+        if let liftReturns, !liftReturns.isEmpty {
+            return liftReturns.first { normalizedLiftKey($0.exercise) == wanted }
+        }
+        guard let liftReturn, normalizedLiftKey(liftReturn.exercise) == wanted else { return nil }
+        return liftReturn
+    }
+
+    /// The whole-unit numbers of a rebuild line exactly as the server rounds and
+    /// prints them (`liftReturnDisplay` in `lib/liftChange.ts`, `!regained`): both
+    /// to the nearest whole kg (lb), and a recent number that rounds up to the
+    /// pre-break one is shown one unit under it, so the copy never claims "142 of
+    /// 142" before the best is regained. `nil` when either weight is not a real
+    /// positive number (the caller then keeps the percentage wording).
+    static func liftReturnShown(preBreakKg: Double, recentKg: Double, system: UnitSystem) -> (pre: Int, recent: Int)? {
+        guard preBreakKg.isFinite, preBreakKg > 0, recentKg.isFinite, recentKg > 0 else { return nil }
+        func whole(_ kg: Double) -> Int { Int((system == .metric ? kg : UnitConvert.kgToLb(kg)).rounded()) }
+        let pre = whole(preBreakKg)
+        let recent = whole(recentKg)
+        return (pre: pre, recent: recent >= pre ? pre - 1 : recent)
     }
 
     // MARK: - Status chip

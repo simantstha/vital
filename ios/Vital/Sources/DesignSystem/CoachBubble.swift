@@ -19,7 +19,7 @@ struct CoachBubble: View {
             EmptyView()
         } else {
             Text(message.asMarkdown)
-                .font(.system(size: 16, weight: .regular))
+                .scaledFont(size: 16, weight: .regular)
                 .foregroundStyle(Theme.Colors.textPrimary)
                 .lineSpacing(6.4) // ~1.4x line height at 16pt
                 .fixedSize(horizontal: false, vertical: true)

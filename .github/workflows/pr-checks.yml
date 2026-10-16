@@ -325,7 +325,8 @@ jobs:
     # `git fetch` and view them. Deliberately its own job (not folded into
     # `ios` above) so a slow/flaky screenshot run never blocks the fast
     # build-and-unit-test signal.
-    timeout-minutes: 40
+    # ~27–38 min as of Oct 2026 (6 scenarios × light/dark + AX captures); keep headroom.
+    timeout-minutes: 50
     permissions:
       contents: write
     defaults:

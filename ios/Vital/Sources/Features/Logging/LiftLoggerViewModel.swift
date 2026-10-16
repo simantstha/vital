@@ -32,9 +32,20 @@ enum LiftLoggerHaptics {
         UINotificationFeedbackGenerator().notificationOccurred(.success)
     }
 
-    private static var isRunningUnderTest: Bool {
+    fileprivate static var isRunningUnderTest: Bool {
         ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
             || NSClassFromString("XCTestCase") != nil
+    }
+}
+
+/// VoiceOver cues the lift logger fires itself.
+enum LiftLoggerAccessibility {
+    /// Posts a VoiceOver announcement ("Rest done"). A no-op under XCTest so unit
+    /// tests never touch the accessibility layer.
+    @MainActor
+    static func announce(_ message: String) {
+        guard !LiftLoggerHaptics.isRunningUnderTest else { return }
+        UIAccessibility.post(notification: .announcement, argument: message)
     }
 }
 
@@ -87,6 +98,8 @@ final class LiftLoggerViewModel: ObservableObject {
     /// Injected so tests can drive the rest timer without sleeping.
     private let clock: () -> Date
     private let restHaptic: @MainActor () -> Void
+    /// Tells VoiceOver "Rest done" when the countdown reaches 0.
+    private let restAnnouncement: @MainActor (String) -> Void
     /// `false` in tests that step `advanceRest(now:)` by hand.
     private let runsRestTimer: Bool
     private var restTask: Task<Void, Never>? = nil
@@ -102,6 +115,7 @@ final class LiftLoggerViewModel: ObservableObject {
         api: LiftLoggerAPIProviding = APIClient.shared,
         clock: @escaping () -> Date = { Date() },
         restHaptic: @escaping @MainActor () -> Void = { LiftLoggerHaptics.restFinished() },
+        restAnnouncement: @escaping @MainActor (String) -> Void = { LiftLoggerAccessibility.announce($0) },
         runsRestTimer: Bool = true
     ) {
         self.preferredExercise = preferredExercise
@@ -110,6 +124,7 @@ final class LiftLoggerViewModel: ObservableObject {
         self.api = api
         self.clock = clock
         self.restHaptic = restHaptic
+        self.restAnnouncement = restAnnouncement
         self.runsRestTimer = runsRestTimer
     }
 
@@ -419,6 +434,7 @@ final class LiftLoggerViewModel: ObservableObject {
                 state.announced = true
                 rest = state
                 restHaptic()
+                restAnnouncement(LiftLoggerLogic.restDoneAnnouncement)
             }
             return state.end
                 .addingTimeInterval(LiftLoggerLogic.restDoneDisplaySeconds)

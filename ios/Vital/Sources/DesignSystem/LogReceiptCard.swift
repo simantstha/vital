@@ -77,18 +77,18 @@ struct LogReceiptCard: View {
 
                     VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
                         Text(title)
-                            .font(.system(size: 15, weight: .semibold))
+                            .scaledFont(size: 15, weight: .semibold)
                             .foregroundStyle(Theme.Colors.textPrimary)
                             .strikethrough(state == .undone)
                             .lineLimit(1)
 
                         Text(detailText)
-                            .font(Theme.Typography.bodySmall)
+                            .scaledFont(Theme.Typography.bodySmall)
                             .foregroundStyle(isUndoError ? Theme.Colors.alert : Theme.Colors.textSecondary)
                             .lineLimit(1)
 
                         Text(timestamp)
-                            .font(Theme.Typography.labelSmall)
+                            .scaledFont(Theme.Typography.labelSmall)
                             .foregroundStyle(Theme.Colors.textTertiary)
                     }
 
@@ -135,12 +135,12 @@ struct LogReceiptCard: View {
                 } label: {
                     HStack(spacing: Theme.Spacing.xs) {
                         Text(Self.itemLine(item))
-                            .font(Theme.Typography.bodySmall)
+                            .scaledFont(Theme.Typography.bodySmall)
                             .foregroundStyle(Theme.Colors.textSecondary)
                             .lineLimit(1)
                         if item.food == biggestGuessFood {
                             Text("biggest guess")
-                                .font(Theme.Typography.labelSmall)
+                                .scaledFont(Theme.Typography.labelSmall)
                                 .foregroundStyle(Theme.Colors.textTertiary)
                         }
                         Spacer(minLength: Theme.Spacing.xs)
@@ -158,7 +158,7 @@ struct LogReceiptCard: View {
             }
             if hiddenCount > 0 {
                 Text("+\(hiddenCount) more")
-                    .font(Theme.Typography.labelSmall)
+                    .scaledFont(Theme.Typography.labelSmall)
                     .foregroundStyle(Theme.Colors.textTertiary)
             }
         }
@@ -199,7 +199,7 @@ struct LogReceiptCard: View {
                     onScale(factor)
                 } label: {
                     Text(Self.scaleLabel(factor))
-                        .font(.system(size: 12, weight: .semibold))
+                        .scaledFont(size: 12, weight: .semibold)
                         .foregroundStyle(factor == 1.0 ? Theme.Colors.textTertiary : Theme.Colors.textSecondary)
                         .padding(.horizontal, Theme.Spacing.sm)
                         .padding(.vertical, Theme.Spacing.xxs)
@@ -244,7 +244,7 @@ struct LogReceiptCard: View {
 
         case .undone:
             Text("Removed")
-                .font(Theme.Typography.labelSmall)
+                .scaledFont(Theme.Typography.labelSmall)
                 .foregroundStyle(Theme.Colors.textTertiary)
 
         case .undoing:
@@ -255,7 +255,7 @@ struct LogReceiptCard: View {
             HStack(spacing: Theme.Spacing.sm) {
                 if let onEdit {
                     Button("Edit", action: onEdit)
-                        .font(.system(size: 13, weight: .semibold))
+                        .scaledFont(size: 13, weight: .semibold)
                         .foregroundStyle(Theme.Colors.textSecondary)
                         // The row's own height is set by the icon/text
                         // column beside it (~40pt), so this vertical growth
@@ -266,7 +266,7 @@ struct LogReceiptCard: View {
                 }
                 if let onUndo {
                     Button("Undo", action: onUndo)
-                        .font(.system(size: 13, weight: .semibold))
+                        .scaledFont(size: 13, weight: .semibold)
                         .foregroundStyle(state == .normal ? Theme.Colors.accentContent : Theme.Colors.alert)
                         .expandedTapTarget(dx: 3, dy: 13)
                 }
@@ -309,7 +309,7 @@ private struct MealItemStepperSheet: View {
     var body: some View {
         VStack(spacing: Theme.Spacing.lg) {
             Text(item.food.prefix(1).uppercased() + item.food.dropFirst())
-                .font(.system(size: 17, weight: .semibold))
+                .scaledFont(size: 17, weight: .semibold)
                 .foregroundStyle(Theme.Colors.textPrimary)
                 .multilineTextAlignment(.center)
                 .padding(.top, Theme.Spacing.lg)
@@ -319,7 +319,8 @@ private struct MealItemStepperSheet: View {
                     grams = max(Self.step, grams - Self.step)
                 }
                 Text("\(grams) g")
-                    .font(.system(size: 30, weight: .bold, design: .rounded))
+                    .scaledFont(size: 30, weight: .bold, design: .rounded)
+                    .dynamicTypeSize(...DynamicTypeSize.accessibility2) // hero number: capped growth
                     .monospacedDigit()
                     .frame(minWidth: 110)
                     .accessibilityLabel("\(grams) grams")
@@ -333,7 +334,7 @@ private struct MealItemStepperSheet: View {
                     Button(preset.label) {
                         grams = max(Self.step, Int((Double(item.grams) * preset.factor).rounded()))
                     }
-                    .font(.system(size: 13, weight: .semibold))
+                    .scaledFont(size: 13, weight: .semibold)
                     .foregroundStyle(Theme.Colors.textSecondary)
                     .padding(.horizontal, Theme.Spacing.md)
                     .padding(.vertical, Theme.Spacing.xs)

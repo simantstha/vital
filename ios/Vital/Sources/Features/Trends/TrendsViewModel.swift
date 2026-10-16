@@ -214,7 +214,13 @@ final class TrendsViewModel: ObservableObject {
     /// weight_loss, strength lifts), so it never claims "nothing moved" next
     /// to a visible +kg lift or weight change.
     private func refreshHeadline() {
-        let strength = workoutSummary.flatMap { TrendsStrengthLogic.card(from: $0, system: .metric, today: Date()) }
+        let liftReturn = goalProgress?.liftReturn
+        let liftReturns = goalProgress?.liftReturns
+        let strength = workoutSummary.flatMap {
+            TrendsStrengthLogic.card(
+                from: $0, system: .metric, today: Date(), liftReturn: liftReturn, liftReturns: liftReturns
+            )
+        }
         let goalMoves = TrendsHeadline.GoalMoves.make(
             goal: goal,
             weightTrend: weightLog?.trend,

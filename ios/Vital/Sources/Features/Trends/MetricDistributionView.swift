@@ -199,7 +199,7 @@ struct MetricDistributionView: View {
                     .frame(height: 84)
 
                     Text(DistributionStats.todaySentence(result: result, latest: latest, values: values, windowDays: windowDays))
-                        .font(Theme.Typography.bodySmall)
+                        .scaledFont(Theme.Typography.bodySmall)
                         .foregroundStyle(Theme.Colors.textTertiary)
                 }
             }

@@ -22,7 +22,7 @@ struct DetailRangeSwitcher: View {
             ForEach(TrendsDetailRange.allCases) { option in
                 let isOn = option == range
                 Text(option.label)
-                    .font(.system(size: 13, weight: .semibold))
+                    .scaledFont(size: 13, weight: .semibold)
                     .foregroundStyle(isOn ? Theme.Colors.textPrimary : Theme.Colors.textSecondary)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 7)

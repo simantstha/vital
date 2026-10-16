@@ -170,7 +170,7 @@ private extension LogsView {
                 .screenTitleStyle()
                 .foregroundStyle(Theme.Colors.textPrimary)
             Text("Everything you and your devices record")
-                .font(.system(size: 15))
+                .scaledFont(size: 15)
                 .foregroundStyle(Theme.Colors.textSecondary)
         }
         .padding(.horizontal, Theme.Spacing.xl)
@@ -190,10 +190,10 @@ private extension LogsView {
 
             VStack(spacing: 2) {
                 Text(day.label)
-                    .font(.system(size: 17, weight: .bold))
+                    .scaledFont(size: 17, weight: .bold)
                     .foregroundStyle(Theme.Colors.textPrimary)
                 Text("\(day.dateLabel) · \(LogsPagerSummary.summaryLine(items: day.items, units: unitPref.current))")
-                    .font(.system(size: 12))
+                    .scaledFont(size: 12)
                     .foregroundStyle(Theme.Colors.textTertiary)
                     .lineLimit(1)
             }
@@ -234,12 +234,12 @@ private extension LogsView {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
             HStack(alignment: .firstTextBaseline) {
                 Text("LOG ENTRIES")
-                    .font(.system(size: 13, weight: .semibold))
+                    .scaledFont(size: 13, weight: .semibold)
                     .tracking(1.3)
                     .foregroundStyle(Theme.Colors.textSecondary)
                 Spacer()
                 Text("\(day.items.count) \(day.items.count == 1 ? "entry" : "entries")")
-                    .font(.system(size: 12))
+                    .scaledFont(size: 12)
                     .foregroundStyle(Theme.Colors.textTertiary)
             }
             .padding(.horizontal, Theme.Spacing.xs)
@@ -247,7 +247,7 @@ private extension LogsView {
             VitalCard(padding: 0) {
                 if day.items.isEmpty {
                     Text("Nothing logged this day.")
-                        .font(.system(size: 13))
+                        .scaledFont(size: 13)
                         .foregroundStyle(Theme.Colors.textSecondary)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, Theme.Spacing.xxl)
@@ -298,7 +298,7 @@ private extension LogsView {
                         Image(systemName: "plus")
                             .font(.system(size: 13, weight: .semibold))
                         Text("Add to today's log")
-                            .font(.system(size: 14, weight: .semibold))
+                            .scaledFont(size: 14, weight: .semibold)
                     }
                     .foregroundStyle(Theme.Colors.textSecondary)
                     .frame(maxWidth: .infinity)
@@ -323,7 +323,7 @@ private extension LogsView {
                         Image(systemName: "dumbbell")
                             .font(.system(size: 13, weight: .semibold))
                         Text("Log a lift")
-                            .font(.system(size: 14, weight: .semibold))
+                            .scaledFont(size: 14, weight: .semibold)
                     }
                     .foregroundStyle(Theme.Colors.textSecondary)
                     .frame(maxWidth: .infinity)
@@ -386,12 +386,12 @@ private struct LogEntryRow: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(item.title)
-                    .font(.system(size: 15, weight: .semibold))
+                    .scaledFont(size: 15, weight: .semibold)
                     .foregroundStyle(Theme.Colors.textPrimary)
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
                 Text(LogRowFormat.subtitle(type: item.type, subtitle: item.subtitle, kcal: item.kcal))
-                    .font(.system(size: 13))
+                    .scaledFont(size: 13)
                     .foregroundStyle(Theme.Colors.textSecondary)
                     .lineLimit(1)
             }
@@ -399,7 +399,7 @@ private struct LogEntryRow: View {
             Spacer(minLength: Theme.Spacing.sm)
 
             Text(item.meta)
-                .font(.system(size: 12))
+                .scaledFont(size: 12)
                 .foregroundStyle(Theme.Colors.textTertiary)
 
             if item.analysisId != nil || showsChevron {

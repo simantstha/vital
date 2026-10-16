@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { computeWeightTrend, type WeightReading } from './weightTrend';
+import { computeWeightTrend, trendDeltaKgPerWeek, trendDeltaSpanDays, type WeightReading } from './weightTrend';
 
 /**
  * Unit tests for lib/weightTrend.ts — pure, no DATABASE_URL required.
@@ -145,4 +145,19 @@ test('a custom alpha changes how fast the trend reacts', () => {
   const fast = computeWeightTrend(readings, { alpha: 0.5 });
   // A larger alpha should pull the trend further toward the new raw value.
   assert.ok(fast.days[1].trendKg < slow.days[1].trendKg);
+});
+
+test('trendDeltaSpanDays reports the days the rate really spans (short history) and caps at the window', () => {
+  const dayN = (n: number) => `2026-08-${String(n).padStart(2, '0')}`;
+  const days = (count: number) => computeWeightTrend(
+    Array.from({ length: count }, (_, i) => reading({ localDay: dayN(1 + i), measuredAt: `${dayN(1 + i)}T07:00:00.000Z`, valueKg: 90 - i * 0.1 })),
+  ).days;
+  assert.equal(trendDeltaSpanDays(days(1), 28), null);
+  assert.equal(trendDeltaSpanDays(days(10), 28), 9);
+  // Whole history shorter than the window → the whole history; longer → the closest point at/before the window.
+  assert.equal(trendDeltaSpanDays(days(28), 28), 27);
+  assert.equal(trendDeltaSpanDays(days(30), 28), 28);
+  assert.equal(trendDeltaSpanDays(days(30), 7), 7);
+  // Agrees with the rate: a null rate has no span.
+  assert.equal(trendDeltaKgPerWeek(days(1), 28), null);
 });

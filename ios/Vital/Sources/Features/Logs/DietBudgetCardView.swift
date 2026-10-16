@@ -28,7 +28,7 @@ struct DietBudgetCardView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text("DIET BUDGET")
-                    .font(.system(size: 13, weight: .semibold))
+                    .scaledFont(size: 13, weight: .semibold)
                     .tracking(1.3)
                     .foregroundStyle(Theme.Colors.textSecondary)
 
@@ -36,7 +36,7 @@ struct DietBudgetCardView: View {
 
                 if readOnly {
                     Text("Past day")
-                        .font(.system(size: 12, weight: .semibold))
+                        .scaledFont(size: 12, weight: .semibold)
                         .foregroundStyle(Theme.Colors.textTertiary)
                 } else {
                     HStack(spacing: 2) {
@@ -44,7 +44,7 @@ struct DietBudgetCardView: View {
                         Image(systemName: "chevron.right")
                             .font(.system(size: 10, weight: .semibold))
                     }
-                    .font(.system(size: 12, weight: .semibold))
+                    .scaledFont(size: 12, weight: .semibold)
                     .foregroundStyle(Theme.Colors.accentContent)
                 }
             }
@@ -52,24 +52,25 @@ struct DietBudgetCardView: View {
             HStack(alignment: .firstTextBaseline) {
                 HStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.xs) {
                     Text("\(data.remaining)")
-                        .font(.system(size: 48, weight: .bold))
+                        .scaledFont(size: 48, weight: .bold)
+                        .dynamicTypeSize(...DynamicTypeSize.accessibility2) // hero number: capped growth
                         .monospacedDigit()
                         .foregroundStyle(Theme.Colors.textPrimary)
                         .contentTransition(.numericText(value: Double(data.remaining)))
                     Text("kcal left")
-                        .font(.system(size: 15))
+                        .scaledFont(size: 15)
                         .foregroundStyle(Theme.Colors.textSecondary)
                 }
                 Spacer()
                 Text("\(data.targetKcal)")
-                    .font(.system(size: 15))
+                    .scaledFont(size: 15)
                     .foregroundStyle(Theme.Colors.textTertiary)
             }
             .padding(.top, Theme.Spacing.sm)
 
             if data.consumedSource == "healthkit" {
                 Text(HealthAttributionLabel.text(sourceName: data.consumedSourceName))
-                    .font(.system(size: 11))
+                    .scaledFont(size: 11)
                     .foregroundStyle(Theme.Colors.textTertiary)
                     .padding(.top, 2)
             }
@@ -108,14 +109,14 @@ struct DietBudgetCardView: View {
         VStack(alignment: .leading, spacing: Theme.Spacing.xs + 2) {
             HStack {
                 Text(label)
-                    .font(.system(size: 12))
+                    .scaledFont(size: 12)
                     .foregroundStyle(Theme.Colors.textSecondary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
                 Spacer()
                 (Text("\(macro.current)").foregroundStyle(Theme.Colors.textPrimary)
                  + Text("/\(macro.target)g").foregroundStyle(Theme.Colors.textTertiary))
-                    .font(.system(size: 12, weight: .semibold))
+                    .scaledFont(size: 12, weight: .semibold)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
                     .layoutPriority(1)

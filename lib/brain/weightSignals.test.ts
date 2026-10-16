@@ -2,6 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   assessWeightSignals,
+  formatWeightSignalsSection,
+  weeklyWeightRead,
+  SIGNAL_MAX_WEIGH_IN_AGE_DAYS,
   TOO_FAST_LOSS_PCT_PER_WEEK,
   TOO_FAST_LOSS_WATCH_PCT_PER_WEEK,
   RATE_RELIABLE_MIN_SPAN_DAYS,
@@ -27,6 +30,16 @@ function daysSpanning(startDate: string, spanDays: number, startTrendKg: number,
   return days;
 }
 
+/** `n` consecutive daily readings from `startDate` on a straight line of `kgPerWeek` (negative = losing); raw == trend. */
+function rawLine(startDate: string, n: number, startKg: number, kgPerWeek: number): WeightTrendDay[] {
+  const start = new Date(`${startDate}T00:00:00Z`);
+  return Array.from({ length: n }, (_, i) => {
+    const day = new Date(start.getTime() + i * 86_400_000).toISOString().slice(0, 10);
+    const kg = Math.round((startKg + (kgPerWeek / 7) * i) * 1000) / 1000;
+    return { day, rawKg: kg, trendKg: kg };
+  });
+}
+
 function trendResult(days: WeightTrendDay[], opts: {
   delta7dKgPerWeek?: number | null;
   delta30dKgPerWeek?: number | null;
@@ -48,29 +61,75 @@ const DEFAULT_FLOOR = 1200;
 
 // ── too_fast_loss ────────────────────────────────────────────────────────
 
-test('too_fast_loss: fires (info) just above the 1.0%/wk threshold, established + span >= 7', () => {
-  const days = daysSpanning('2026-08-01', 10, 100, 100); // trendKg=100 throughout, span=10
-  const trend = trendResult(days, { delta7dKgPerWeek: -1.2, delta30dKgPerWeek: -0.5 });
-  const signals = assessWeightSignals({ trend, dailyIntakeKcal: noIntake(), floorKcal: DEFAULT_FLOOR, goal: 'weight_loss' });
+test('too_fast_loss: fires (watch) only when the pace now AND a week ago are both above 1.0%/wk, off the raw weigh-ins', () => {
+  // A week flat, then falling 1.6 kg/wk. 22 days in, the 21-day least-squares pace is about -1.4%/wk but the pace a week
+  // earlier was under 1%: one fast pace is not a call (it entered on a single noisy reading before wave 20c).
+  const line = (n: number) => rawLine('2026-08-01', n, 100, 0).map((d, i) => {
+    const kg = Math.round((100 - (1.6 / 7) * Math.max(0, i - 6)) * 1000) / 1000;
+    return { ...d, rawKg: kg, trendKg: kg };
+  });
+  const signalAt = (n: number) => assessWeightSignals({
+    trend: trendResult(line(n)), dailyIntakeKcal: noIntake(), floorKcal: DEFAULT_FLOOR, goal: 'weight_loss',
+  }).find(s => s.kind === 'too_fast_loss');
+  assert.equal(signalAt(22), undefined, 'the pace a week earlier was under 1%: not called yet');
 
-  const sig = signals.find(s => s.kind === 'too_fast_loss');
+  // A week later both paces are past the ceiling.
+  const sig = signalAt(30);
   assert.ok(sig, 'too_fast_loss should fire');
-  assert.equal(sig!.severity, 'info');
+  assert.equal(sig!.severity, 'watch');
+  assert.equal(sig!.facts.sustained, 'yes');
+  assert.ok((sig!.facts.pctPerWeek as number) > 1 && (sig!.facts.pctPerWeek as number) < 2);
+  assert.ok((sig!.facts.rateKgPerWeek as number) < -1);
+});
+
+test('too_fast_loss: once on it stays on until the pace is below 0.9%/wk (hysteresis)', () => {
+  // 4 weeks at -1.3 kg/wk (1.3%), then easing to -0.62 kg/wk.
+  const line = (n: number): WeightTrendDay[] => {
+    let kg = 100;
+    const out: WeightTrendDay[] = [];
+    for (let i = 0; i < n; i++) {
+      const day = new Date(Date.parse('2026-08-01T00:00:00Z') + i * 86_400_000).toISOString().slice(0, 10);
+      out.push({ day, rawKg: Math.round(kg * 1000) / 1000, trendKg: Math.round(kg * 1000) / 1000 });
+      kg -= (i < 28 ? 1.3 : 0.62) / 7;
+    }
+    return out;
+  };
+  const signalAt = (n: number) => assessWeightSignals({
+    trend: trendResult(line(n)), dailyIntakeKcal: noIntake(), floorKcal: DEFAULT_FLOOR, goal: 'weight_loss',
+  }).find(s => s.kind === 'too_fast_loss');
+  assert.ok(signalAt(30), 'fast: on');
+  // Day 40: the pace has eased to about 0.97%/wk — under the 1% ceiling, but still on.
+  const held = signalAt(40);
+  assert.ok(held, 'between 0.9% and 1.0% the call is kept');
+  assert.ok((held!.facts.pctPerWeek as number) <= 1.0);
+  // Day 42: below 0.9%, off.
+  assert.equal(signalAt(42), undefined);
+  // A steady line at about 0.95%/wk never turned it on in the first place.
+  const slow = assessWeightSignals({
+    trend: trendResult(rawLine('2026-08-01', 40, 100, -0.9)), dailyIntakeKcal: noIntake(), floorKcal: DEFAULT_FLOOR, goal: 'weight_loss',
+  }).find(s => s.kind === 'too_fast_loss');
+  assert.equal(slow, undefined);
+});
+
+test('too_fast_loss: the quoted rate IS the pace of the raw weigh-ins (a straight 1.2 kg/wk line reads -1.2)', () => {
+  const signals = assessWeightSignals({
+    trend: trendResult(rawLine('2026-08-01', 22, 100, -1.2)), dailyIntakeKcal: noIntake(), floorKcal: DEFAULT_FLOOR, goal: 'weight_loss',
+  });
+  const sig = signals.find(s => s.kind === 'too_fast_loss');
+  assert.ok(sig);
   assert.equal(sig!.facts.rateKgPerWeek, -1.2);
   assert.equal(sig!.facts.pctPerWeek, 1.2);
 });
 
-test('too_fast_loss: exactly 1.0%/wk does NOT fire (strictly greater-than)', () => {
-  const days = daysSpanning('2026-08-01', 10, 100, 100);
-  const trend = trendResult(days, { delta7dKgPerWeek: -1.0, delta30dKgPerWeek: null });
+test('too_fast_loss: a pace under 1.0%/wk does NOT fire', () => {
+  const trend = trendResult(rawLine('2026-08-01', 22, 100, -0.9));
   const signals = assessWeightSignals({ trend, dailyIntakeKcal: noIntake(), floorKcal: DEFAULT_FLOOR, goal: 'weight_loss' });
 
   assert.equal(signals.find(s => s.kind === 'too_fast_loss'), undefined);
 });
 
 test('too_fast_loss: escalates to watch above 1.5%/wk', () => {
-  const days = daysSpanning('2026-08-01', 10, 100, 100);
-  const trend = trendResult(days, { delta7dKgPerWeek: -1.6, delta30dKgPerWeek: -0.5 });
+  const trend = trendResult(rawLine('2026-08-01', 22, 100, -1.6));
   const signals = assessWeightSignals({ trend, dailyIntakeKcal: noIntake(), floorKcal: DEFAULT_FLOOR, goal: 'weight_loss' });
 
   const sig = signals.find(s => s.kind === 'too_fast_loss');
@@ -79,9 +138,8 @@ test('too_fast_loss: escalates to watch above 1.5%/wk', () => {
   assert.ok(sig!.facts.pctPerWeek as number > TOO_FAST_LOSS_WATCH_PCT_PER_WEEK);
 });
 
-test('too_fast_loss: escalates to watch when sustained (both 7d and 30d rates > 1.0%/wk) even under 1.5%/wk', () => {
-  const days = daysSpanning('2026-08-01', 35, 100, 100);
-  const trend = trendResult(days, { delta7dKgPerWeek: -1.2, delta30dKgPerWeek: -1.1 });
+test('too_fast_loss: escalates to watch when sustained (the pace a week earlier was also over 1.0%/wk) even under 1.5%/wk', () => {
+  const trend = trendResult(rawLine('2026-08-01', 36, 100, -1.2));
   const signals = assessWeightSignals({ trend, dailyIntakeKcal: noIntake(), floorKcal: DEFAULT_FLOOR, goal: 'weight_loss' });
 
   const sig = signals.find(s => s.kind === 'too_fast_loss');
@@ -90,9 +148,39 @@ test('too_fast_loss: escalates to watch when sustained (both 7d and 30d rates > 
   assert.equal(sig!.facts.sustained, 'yes');
 });
 
-test('too_fast_loss: never fires on a gain (positive delta)', () => {
-  const days = daysSpanning('2026-08-01', 10, 100, 100);
-  const trend = trendResult(days, { delta7dKgPerWeek: 1.6, delta30dKgPerWeek: 1.6 });
+test('too_fast_loss: a pace needs 6 weigh-ins over 14 days of the last 21 — a steep week of 5 readings is not a pace', () => {
+  const week = trendResult(rawLine('2026-08-01', 5, 100, -4));
+  assert.equal(assessWeightSignals({ trend: week, dailyIntakeKcal: noIntake(), floorKcal: DEFAULT_FLOOR, goal: 'weight_loss' }).find(s => s.kind === 'too_fast_loss'), undefined);
+  // 8 readings, but they only span 7 days.
+  const short = trendResult(rawLine('2026-08-01', 8, 100, -4));
+  assert.equal(assessWeightSignals({ trend: short, dailyIntakeKcal: noIntake(), floorKcal: DEFAULT_FLOOR, goal: 'weight_loss' }).find(s => s.kind === 'too_fast_loss'), undefined);
+});
+
+test('too_fast_loss: a drop across a 12-day gap in weigh-ins is not called while fewer than 3 weigh-ins are back', () => {
+  // 15 daily weigh-ins losing 1.2 kg/wk, 12 days with no weigh-in, then the scale reads where that line would have got to.
+  const before = rawLine('2026-08-01', 15, 100, -1.2);
+  const lastBefore = before[before.length - 1].rawKg;
+  const back = (n: number): WeightTrendDay[] => rawLine('2026-08-28', n, lastBefore - (1.2 / 7) * 13, -1.2);
+  const run = (n: number) => assessWeightSignals({
+    trend: trendResult([...before, ...back(n)]), dailyIntakeKcal: noIntake(), floorKcal: DEFAULT_FLOOR, goal: 'weight_loss',
+  }).find(s => s.kind === 'too_fast_loss');
+  assert.equal(run(1), undefined, 'first weigh-in back');
+  assert.equal(run(2), undefined, 'second weigh-in back');
+  assert.ok(run(3), 'three weigh-ins back: the pace may be called again');
+});
+
+test('too_fast_loss: a goal under 3 weeks old is an early read — no too_fast_loss; its start day is the gate', () => {
+  // 22 days at 1.2 kg/wk: the pace now and the pace a week ago are both past the ceiling.
+  const trend = trendResult(rawLine('2026-08-01', 22, 100, -1.2));
+  const base = { trend, dailyIntakeKcal: noIntake(), floorKcal: DEFAULT_FLOOR, goal: 'weight_loss', todayKey: '2026-08-22' };
+  assert.ok(assessWeightSignals(base).find(s => s.kind === 'too_fast_loss'), 'no goal start: only the data minimums apply');
+  assert.equal(assessWeightSignals({ ...base, goalStartDay: '2026-08-10' }).find(s => s.kind === 'too_fast_loss'), undefined);
+  assert.ok(assessWeightSignals({ ...base, goalStartDay: '2026-08-01' }).find(s => s.kind === 'too_fast_loss'));
+  assert.ok(assessWeightSignals({ ...base, goalStartDay: '2026-07-01' }).find(s => s.kind === 'too_fast_loss'));
+});
+
+test('too_fast_loss: never fires on a gain (positive pace)', () => {
+  const trend = trendResult(rawLine('2026-08-01', 22, 100, 1.6));
   const signals = assessWeightSignals({ trend, dailyIntakeKcal: noIntake(), floorKcal: DEFAULT_FLOOR, goal: 'weight_loss' });
 
   assert.equal(signals.find(s => s.kind === 'too_fast_loss'), undefined);
@@ -419,23 +507,190 @@ test('weekend_overeating: excludes partial/no-data days from both averages', () 
   assert.equal(sig!.facts.weekendAvgKcal, 2800);
 });
 
-test('plateau: needs at least 4 weigh-ins inside the 14-day window', () => {
-  // Spans 20 days but only 3 weigh-in days (two early, one recent) → not a plateau.
-  const sparse: WeightTrendDay[] = [
-    { day: '2026-08-01', rawKg: 90, trendKg: 90 },
-    { day: '2026-08-05', rawKg: 90, trendKg: 90 },
-    { day: '2026-08-21', rawKg: 90, trendKg: 90 },
-  ];
-  const none = assessWeightSignals({ trend: trendResult(sparse), dailyIntakeKcal: noIntake(), floorKcal: DEFAULT_FLOOR, goal: 'weight_loss' });
-  assert.equal(none.find(s => s.kind === 'plateau'), undefined);
+/** Flat raw weigh-ins around `kg`: `perWeek` of them in each of `weeks` weeks ending on `endDay` (a Sunday). */
+function flatWeeks(endDay: string, weeks: number, perWeek: number, kg: number, drift = 0): WeightTrendDay[] {
+  const end = new Date(`${endDay}T00:00:00Z`).getTime();
+  const out: WeightTrendDay[] = [];
+  for (let w = weeks - 1; w >= 0; w--) {
+    for (let i = 0; i < perWeek; i++) {
+      const day = new Date(end - (w * 7 + (6 - i)) * 86_400_000).toISOString().slice(0, 10);
+      const v = Math.round((kg + drift * (weeks - 1 - w)) * 100) / 100;
+      out.push({ day, rawKg: v, trendKg: v });
+    }
+  }
+  return out;
+}
 
-  const four: WeightTrendDay[] = [
-    { day: '2026-08-01', rawKg: 90, trendKg: 90 },
-    { day: '2026-08-10', rawKg: 90, trendKg: 90 },
-    { day: '2026-08-14', rawKg: 90, trendKg: 90 },
-    { day: '2026-08-17', rawKg: 90, trendKg: 90 },
-    { day: '2026-08-21', rawKg: 90, trendKg: 90 },
-  ];
-  const fires = assessWeightSignals({ trend: trendResult(four), dailyIntakeKcal: noIntake(), floorKcal: DEFAULT_FLOOR, goal: 'weight_loss' });
-  assert.ok(fires.find(s => s.kind === 'plateau'), '4 weigh-ins in the window should still plateau');
+test('plateau: three flat weeks of RAW weekly means fire, with the weekly mean in the facts', () => {
+  const trend = trendResult(flatWeeks('2026-08-30', 3, 4, 89.5));
+  const sig = assessWeightSignals({ trend, dailyIntakeKcal: noIntake(), floorKcal: DEFAULT_FLOOR, goal: 'weight_loss', todayKey: '2026-08-30' })
+    .find(s => s.kind === 'plateau');
+  assert.ok(sig, 'plateau should fire');
+  assert.equal(sig!.facts.weeklyMeanKg, 89.5);
+  assert.equal(sig!.facts.weeks, 3);
+});
+
+test('plateau: needs 3+ weigh-ins in each of the three weeks', () => {
+  const sparse = trendResult(flatWeeks('2026-08-30', 3, 2, 89.5));
+  assert.equal(assessWeightSignals({ trend: sparse, dailyIntakeKcal: noIntake(), floorKcal: DEFAULT_FLOOR, goal: 'weight_loss' }).find(s => s.kind === 'plateau'), undefined);
+  const enough = trendResult(flatWeeks('2026-08-30', 3, 3, 89.5));
+  assert.ok(assessWeightSignals({ trend: enough, dailyIntakeKcal: noIntake(), floorKcal: DEFAULT_FLOOR, goal: 'weight_loss' }).find(s => s.kind === 'plateau'));
+});
+
+test('plateau: weekly means more than 0.2 kg apart are not a plateau; 0.2 kg is', () => {
+  const drifting = trendResult(flatWeeks('2026-08-30', 3, 4, 89.5, -0.25));
+  assert.equal(assessWeightSignals({ trend: drifting, dailyIntakeKcal: noIntake(), floorKcal: DEFAULT_FLOOR, goal: 'weight_loss' }).find(s => s.kind === 'plateau'), undefined);
+  const edge = trendResult(flatWeeks('2026-08-30', 3, 4, 89.5, -0.1));
+  assert.ok(assessWeightSignals({ trend: edge, dailyIntakeKcal: noIntake(), floorKcal: DEFAULT_FLOOR, goal: 'weight_loss' }).find(s => s.kind === 'plateau'));
+});
+
+test('plateau: the lagging trend no longer decides it — a flat raw scale fires even while the smoothed trend still slopes', () => {
+  // Trend still falling at 0.3%/wk (the old 14-day test bottomed out above 0.1%/wk and never fired), raw weekly means flat.
+  const days = flatWeeks('2026-08-30', 3, 4, 89.5).map((d, i, all) => ({ ...d, trendKg: Math.round((90.2 - (0.7 * i) / (all.length - 1)) * 100) / 100 }));
+  const sig = assessWeightSignals({ trend: trendResult(days), dailyIntakeKcal: noIntake(), floorKcal: DEFAULT_FLOOR, goal: 'weight_loss' })
+    .find(s => s.kind === 'plateau');
+  assert.ok(sig);
+  assert.equal(sig!.facts.weeklyMeanKg, 89.5);
+});
+
+test('plateau: needs a goal at least 28 days old when the goal start is known', () => {
+  const trend = trendResult(flatWeeks('2026-08-30', 3, 4, 89.5));
+  const base = { trend, dailyIntakeKcal: noIntake(), floorKcal: DEFAULT_FLOOR, goal: 'weight_loss', todayKey: '2026-08-30' };
+  assert.equal(assessWeightSignals({ ...base, goalStartDay: '2026-08-10' }).find(s => s.kind === 'plateau'), undefined, 'goal is 21 days old');
+  assert.ok(assessWeightSignals({ ...base, goalStartDay: '2026-08-02' }).find(s => s.kind === 'plateau'), 'goal is 29 days old');
+});
+
+// ── freshness: plateau / too_fast_loss need a weigh-in within the last 4 days ─
+
+const TODAY = '2026-08-30';
+
+/** A flat/steady trend of `spanDays + 1` days ending `ageDays` before TODAY. */
+function trendEndingAgo(ageDays: number, spanDays: number, startKg: number, endKg: number): WeightTrendResult {
+  const end = new Date(`${TODAY}T00:00:00Z`).getTime() - ageDays * 86_400_000;
+  const start = new Date(end - spanDays * 86_400_000).toISOString().slice(0, 10);
+  return trendResult(daysSpanning(start, spanDays, startKg, endKg));
+}
+
+test('plateau: needs a weigh-in within 4 days of TODAY (look back from today, not the last weigh-in)', () => {
+  const kinds = (age: number) => assessWeightSignals({
+    trend: trendEndingAgo(age, 20, 90, 90), dailyIntakeKcal: noIntake(), floorKcal: DEFAULT_FLOOR, goal: 'weight_loss', todayKey: TODAY,
+  }).map(s => s.kind);
+  assert.deepEqual(kinds(0), ['plateau']);
+  assert.deepEqual(kinds(4), ['plateau']);
+  assert.deepEqual(kinds(5), []);
+  assert.deepEqual(kinds(30), []);
+});
+
+test('too_fast_loss: needs a weigh-in within 4 days of TODAY', () => {
+  const run = (age: number) => assessWeightSignals({
+    trend: trendEndingAgo(age, 21, 106, 100),
+    dailyIntakeKcal: noIntake(), floorKcal: DEFAULT_FLOOR, goal: 'weight_loss', todayKey: TODAY,
+  }).map(s => s.kind);
+  assert.deepEqual(run(2), ['too_fast_loss']);
+  assert.deepEqual(run(4), ['too_fast_loss']);
+  assert.deepEqual(run(5), []);
+  assert.deepEqual(run(21), []);
+});
+
+test('without todayKey the newest weigh-in stands in for today (no freshness check)', () => {
+  const old = assessWeightSignals({
+    trend: trendEndingAgo(60, 20, 90, 90), dailyIntakeKcal: noIntake(), floorKcal: DEFAULT_FLOOR, goal: 'weight_loss',
+  });
+  assert.ok(old.some(s => s.kind === 'plateau'));
+  assert.equal(SIGNAL_MAX_WEIGH_IN_AGE_DAYS, 4);
+});
+
+// ── prompt rendering: small imperial rates keep a decimal ────────────────────
+
+test('formatWeightSignalsSection: a 0.4 lb/wk rate is not rendered as "0 lb/wk"', () => {
+  const days = daysSpanning('2026-08-01', 20, 80, 79.82); // ~0.06 kg/wk
+  const trend = trendResult(days);
+  const imperial = formatWeightSignalsSection(trend, [], 'imperial').join('\n');
+  assert.match(imperial, /\(0\.\d lb\/wk loss\)/);
+  assert.doesNotMatch(imperial, /\(0 lb\/wk/);
+  // A rate of a pound or more stays whole.
+  const fast = trendResult(daysSpanning('2026-08-01', 20, 80, 78));
+  assert.match(formatWeightSignalsSection(fast, [], 'imperial').join('\n'), /\(\d+ lb\/wk loss\)/);
+  assert.match(formatWeightSignalsSection(trend, [], 'metric').join('\n'), /\(0\.\d kg\/wk loss\)/);
+});
+
+// ── the coach's weight-trend line quotes the shared pace, and never a stale one ──
+
+test('formatWeightSignalsSection: the quoted rate is the pace of the raw weigh-ins, not a lagging trend slope', () => {
+  // The smoothed trend still reads flat (80.0 throughout) while the scale has been falling 0.9 kg/wk.
+  const days = rawLine('2026-08-01', 22, 85, -0.9).map(d => ({ ...d, trendKg: 80 }));
+  const lines = formatWeightSignalsSection(trendResult(days), [], 'metric', '2026-08-22');
+  assert.match(lines.join('\n'), /- Trend weight: 80\.0 kg \(0\.9 kg\/wk loss\)/);
+});
+
+test('formatWeightSignalsSection: never quotes a rate when the newest weigh-in is more than 7 days old', () => {
+  const trend = trendResult(rawLine('2026-08-01', 22, 85, -0.9));
+  const fresh = formatWeightSignalsSection(trend, [], 'metric', '2026-08-29'); // newest weigh-in 7 days ago
+  assert.match(fresh.join('\n'), /kg\/wk loss\)/);
+  const stale = formatWeightSignalsSection(trend, [], 'metric', '2026-08-30').join('\n'); // 8 days ago
+  assert.doesNotMatch(stale, /kg\/wk/);
+  assert.match(stale, /last weigh-in 8 days ago — do not quote a weekly rate/);
+});
+
+test('formatWeightSignalsSection: no pace yet (under 6 weigh-ins over 14 days) says so instead of inventing a rate', () => {
+  const lines = formatWeightSignalsSection(trendResult(rawLine('2026-08-01', 10, 85, -0.9)), [], 'metric', '2026-08-10').join('\n');
+  assert.doesNotMatch(lines, /kg\/wk/);
+  assert.match(lines, /weekly rate not available yet — do not quote one/);
+});
+
+// ── a fat-loss goal's coach line is the card's weekly average and the week's pace (wave 21 integration) ──
+
+const weekly = (over: Partial<NonNullable<ReturnType<typeof weeklyWeightRead>>> = {}) => ({ weightKg: 84.3, basis: 'average' as const, paceKgPerWeek: -0.47, ...over });
+
+test('formatWeightSignalsSection with the card\'s weekly read: "Weekly average weight" and the week\'s pace, never the smoothed trend', () => {
+  // The smoothed trend (80.0) and the freshly fitted pace (0.9 kg/wk) are NOT what the card says.
+  const days = rawLine('2026-08-01', 22, 85, -0.9).map(d => ({ ...d, trendKg: 80 }));
+  const lines = formatWeightSignalsSection(trendResult(days), [], 'metric', '2026-08-22', weekly()).join('\n');
+  assert.match(lines, /^- Weekly average weight: 84\.3 kg \(0\.47 kg\/wk loss\)$/m);
+  assert.doesNotMatch(lines, /Trend weight|80\.0 kg|0\.9 kg\/wk/);
+});
+
+test('formatWeightSignalsSection with the card\'s weekly read: a single scale reading is not called an average, and a week without a pace quotes none', () => {
+  const trend = trendResult(rawLine('2026-08-01', 22, 85, -0.9));
+  const single = formatWeightSignalsSection(trend, [], 'metric', '2026-08-22', weekly({ basis: 'scale', paceKgPerWeek: null })).join('\n');
+  assert.match(single, /^- Latest weigh-in: 84\.3 kg \(no weekly rate this week — do not quote one\)$/m);
+  assert.doesNotMatch(single, /Weekly average|kg\/wk/);
+});
+
+test('formatWeightSignalsSection with the card\'s weekly read: imperial pace keeps the card\'s two decimals; a rate is never quoted off an old weigh-in', () => {
+  const trend = trendResult(rawLine('2026-08-01', 22, 85, -0.9));
+  const imperial = formatWeightSignalsSection(trend, [], 'imperial', '2026-08-22', weekly({ weightKg: 84.3, paceKgPerWeek: -0.47 })).join('\n');
+  assert.match(imperial, /^- Weekly average weight: 186 lb \(1\.04 lb\/wk loss\)$/m);
+  const stale = formatWeightSignalsSection(trend, [], 'metric', '2026-08-30', weekly()).join('\n'); // newest weigh-in 8 days ago
+  assert.doesNotMatch(stale, /kg\/wk/);
+  assert.match(stale, /^- Weekly average weight: 84\.3 kg \(last weigh-in 8 days ago — do not quote a weekly rate\)$/m);
+});
+
+test('formatWeightSignalsSection without a weekly read is unchanged: the smoothed "Trend weight" line, signals after it', () => {
+  const trend = trendResult(rawLine('2026-08-01', 22, 85, -0.9));
+  const lines = formatWeightSignalsSection(trend, [{ kind: 'plateau', severity: 'info', facts: { spanDays: 21 } }], 'metric', '2026-08-22', null);
+  assert.match(lines[0], /^- Trend weight: 82\.3 kg \(0\.9 kg\/wk loss\)$/);
+  assert.match(lines[1], /^- \[INFO\] Weight plateau: spanDays=21$/);
+});
+
+test('weeklyWeightRead: only a fat-loss payload that carries the one-weight rule, with the pace of a pace week only', () => {
+  const gp = (over: Record<string, unknown> = {}) => ({
+    goal: 'weight_loss',
+    current: { weightKg: 84.3, trendKg: 83.6 },
+    weightRead: { weekMeanKg: 84.3, plan: { state: 'pace', pace: { kgPerWeek: -0.47 } } },
+    ...over,
+  });
+  assert.deepEqual(weeklyWeightRead(gp()), { weightKg: 84.3, basis: 'average', paceKgPerWeek: -0.47 });
+  // Another goal, a payload from before the one-weight rule (its weightKg is still the smoothed trend), no weight, no card: nothing.
+  assert.equal(weeklyWeightRead(gp({ goal: 'muscle' })), null);
+  assert.equal(weeklyWeightRead(gp({ current: { weightKg: 83.6 } })), null);
+  assert.equal(weeklyWeightRead(gp({ current: { weightKg: null, trendKg: null } })), null);
+  assert.equal(weeklyWeightRead(null), null);
+  assert.equal(weeklyWeightRead(undefined), null);
+  // A single scale reading (no 7-day mean) is labelled as one; a plateau, an early read, a return and "moving again" state no rate.
+  assert.equal(weeklyWeightRead(gp({ weightRead: { weekMeanKg: null, plan: { state: 'pace', pace: { kgPerWeek: -0.3 } } } }))?.basis, 'scale');
+  for (const state of ['plateau', 'early', 'returning', 'moving_again', 'reached', 'maintenance']) {
+    assert.equal(weeklyWeightRead(gp({ weightRead: { weekMeanKg: 84.3, plan: { state, pace: { kgPerWeek: -0.05 } } } }))?.paceKgPerWeek, null, state);
+  }
+  assert.equal(weeklyWeightRead(gp({ weightRead: null }))?.paceKgPerWeek, null);
 });

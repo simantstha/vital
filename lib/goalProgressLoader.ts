@@ -18,6 +18,9 @@ import { resolveDailyIntake } from '@/lib/brain/nutritionIntake';
 import { normalizeGoal, resolveDietBudget, lowEnergyThresholdKcal } from '@/lib/brain/dietBudget';
 import { resolveUnitSystem } from '@/lib/units';
 import { readCoreProfile } from '@/lib/coreProfileStore';
+import { loadRacePeakWeekKm } from '@/lib/racePeakLoader';
+import { loadRunHistory } from '@/lib/runHistoryLoader';
+import { mondayOfDay } from '@/lib/enduranceProgression';
 import { parseProfileDetails } from '@/lib/profileDetails';
 import {
   computeGoalProgress,
@@ -28,6 +31,9 @@ import {
 } from '@/lib/goalProgress';
 
 const WINDOW_DAYS = 28;
+// A fat-loss plateau's cause is judged over its own weeks and kept while it lasts (lib/weightWeekPlan.ts), which needs the
+// logs from when it began: the weight_loss goal reads this many days of intake (the card's own stats still use the 28).
+const INTAKE_HISTORY_DAYS = 70;
 const WEIGHT_LOOKBACK_DAYS = 120; // EWMA run-in beyond the 28-day rate window
 const DEFAULT_SLEEP_GOAL_MIN = 480; // kept in sync with app/api/profile/route.ts
 
@@ -62,10 +68,10 @@ export async function loadGoalProgress(
 
   const [
     weightReadings, intakeByDay, budget, profileMd,
-    progressionSets, workoutEntries, restingHr, hrv, sleep,
+    progressionSets, workoutEntries, restingHr, hrv, sleep, racePeakWeekKm, runHistory,
   ] = await Promise.all([
     getWeightReadings(userId, WEIGHT_LOOKBACK_DAYS, tz),
-    resolveDailyIntake(userId, dayKeys, tz),
+    resolveDailyIntake(userId, goal === 'weight_loss' ? trailingDayKeys(todayKey, INTAKE_HISTORY_DAYS) : dayKeys, tz),
     resolveDietBudget(user, userId),
     readCoreProfile(userId),
     getSetsSince(userId, 84),
@@ -73,6 +79,13 @@ export async function loadGoalProgress(
     seriesWithFallback(userId, 'resting_hr', 'whoop_resting_hr'),
     seriesWithFallback(userId, 'hrv_sdnn', 'whoop_hrv_rmssd'),
     queryMetricPoints(userId, 'sleep_minutes', WINDOW_DAYS),
+    // Taper / race-week / recovery targets are shares of the peak week before the taper (older than the 28-day window above).
+    // The race phase is read on this week's Monday (the week plan), so the gate looks at both days.
+    goal === 'endurance'
+      ? loadRacePeakWeekKm(userId, user.race_date, [todayKey, mondayOfDay(todayKey)], user.race_distance_km)
+      : Promise.resolve(null),
+    // The week plan looks back further than the 28-day window above (restart median, spike -> hold, baseline).
+    goal === 'endurance' ? loadRunHistory(userId, todayKey) : Promise.resolve(undefined),
   ]);
 
   const profile = parseProfileDetails(profileMd);
@@ -101,6 +114,9 @@ export async function loadGoalProgress(
     ...completedLocalDays(sets),
     ...healthKitWorkoutDays(workoutEntries),
   ]);
+  // Longer strength history (the ~84 days of sets already loaded for the lift
+  // progression) so a break of 10+ days and the return from it can be found.
+  const strengthHistoryDays = new Set<string>([...completedLocalDays(progressionSets), ...strengthDays]);
   const workouts = workoutEntries
     .filter(w => daySet.has(w.date))
     .map(w => ({
@@ -109,6 +125,12 @@ export async function loadGoalProgress(
       distanceKm: typeof w.distanceM === 'number' && Number.isFinite(w.distanceM) ? w.distanceM / 1000 : null,
       type: typeof w.type === 'string' ? w.type : null,
     }));
+
+  const intakeRow = (day: string) => {
+    const i = intakeByDay.get(day);
+    const has = i != null && i.source !== 'none';
+    return { day, kcal: has ? i.kcal : null, proteinG: has ? i.protein : null, source: i?.source ?? 'none' } as const;
+  };
 
   return computeGoalProgress({
     goal,
@@ -120,21 +142,21 @@ export async function loadGoalProgress(
       weeklyDistanceKm: user.weekly_distance_km_target ?? null,
     },
     race: { date: user.race_date ?? null, distanceKm: user.race_distance_km ?? null },
+    racePeakWeekKm,
+    runHistory,
     start: {
       weightKg: user.goal_start_weight_kg ?? null,
       startedAt: user.goal_started_at ? user.goal_started_at.toISOString() : null,
       startedDay: user.goal_started_at ? localDayKey(user.goal_started_at, tz) : null,
     },
     weightReadings,
-    intakeDays: dayKeys.map(day => {
-      const i = intakeByDay.get(day);
-      const has = i != null && i.source !== 'none';
-      return { day, kcal: has ? i.kcal : null, proteinG: has ? i.protein : null, source: i?.source ?? 'none' };
-    }),
+    intakeDays: dayKeys.map(intakeRow),
+    intakeHistoryDays: goal === 'weight_loss' ? trailingDayKeys(todayKey, INTAKE_HISTORY_DAYS).map(intakeRow) : undefined,
     budget: budgetInput,
     progression,
     trainingDays: [...trainingDays].filter(d => daySet.has(d)),
     strengthDays: [...strengthDays].filter(d => daySet.has(d)),
+    strengthHistoryDays: [...strengthHistoryDays],
     exerciseDisplay,
     workouts,
     restingHr,

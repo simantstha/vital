@@ -33,6 +33,11 @@ import CoreGraphics
 /// `Vital` scheme's fast unit-test pass (`xcodebuild test -scheme Vital`).
 final class ScreenshotTests: XCTestCase {
 
+    /// The app's frame, read once per launch (see `launch`). Each XCUI property
+    /// read is a snapshot query, so helpers use `screen(app)` rather than
+    /// re-reading `app.frame` inside their polling and scroll loops.
+    private var screenFrame: CGRect = .zero
+
     override func setUpWithError() throws {
         // Keep going past an assertion failure — a missed screen shouldn't
         // abort the rest of the scenario, and the screenshot right after a
@@ -86,6 +91,25 @@ final class ScreenshotTests: XCTestCase {
     func test_serverError() { runScreenshots(scenario: "server_error") }
     func test_onboarding() { runScreenshots(scenario: "onboarding") }
 
+    /// Dynamic Type at an accessibility size (AX2, "Larger Accessibility
+    /// Sizes" -> `UICTContentSizeCategoryAccessibilityL`) for ONE scenario,
+    /// light only: weight_loss Today and its goal-progress sheet. A smoke
+    /// check that the core screens still load and lay out at AX sizes (their
+    /// pill/text rows stack instead of truncating — see
+    /// `AccessibilityAdaptiveStack`); XCUITest can't assert "no truncation",
+    /// so this asserts the key texts exist and the screenshots are for eyes.
+    /// Screen segments carry an `AX` suffix (`todayAX`, `goalProgressAX`) —
+    /// letters only, to match CI's export regex.
+    func test_weightLossAccessibilitySize() {
+        let scenario = "weight_loss"
+        let appearance = "light"
+        let app = launch(scenario: scenario, dark: false,
+                         contentSizeCategory: "UICTContentSizeCategoryAccessibilityL")
+        captureTodayAccessibilitySize(app, scenario: scenario, appearance: appearance)
+        captureGoalProgressAccessibilitySize(app, scenario: scenario, appearance: appearance)
+        app.terminate()
+    }
+
     // MARK: - Driver
 
     private func runScreenshots(scenario: String) {
@@ -112,7 +136,12 @@ final class ScreenshotTests: XCTestCase {
         }
     }
 
-    private func launch(scenario: String, dark: Bool) -> XCUIApplication {
+    /// `contentSizeCategory` (a `UIContentSizeCategory` raw value, e.g.
+    /// `UICTContentSizeCategoryAccessibilityL`) launches the app at that
+    /// Dynamic Type size via `-UIPreferredContentSizeCategoryName` — scoped
+    /// to this launch, so it never leaks into the simulator's own setting or
+    /// the default-size captures.
+    private func launch(scenario: String, dark: Bool, contentSizeCategory: String? = nil) -> XCUIApplication {
         let app = XCUIApplication()
         // `-AppleInterfaceStyle Dark` is the standard simulator/XCUITest
         // trick (also used by fastlane `snapshot`) for forcing dark mode
@@ -127,9 +156,19 @@ final class ScreenshotTests: XCTestCase {
         if dark {
             args += ["-AppleInterfaceStyle", "Dark"]
         }
+        if let contentSizeCategory {
+            args += ["-UIPreferredContentSizeCategoryName", contentSizeCategory]
+        }
         app.launchArguments = args
         app.launch()
+        screenFrame = app.frame
         return app
+    }
+
+    /// The frame cached by `launch`, or a live `app.frame` read when the cache
+    /// is empty (the frame was still zero at launch).
+    private func screen(_ app: XCUIApplication) -> CGRect {
+        screenFrame.isEmpty ? app.frame : screenFrame
     }
 
     private func capture(_ app: XCUIApplication, name: String) {
@@ -158,14 +197,14 @@ final class ScreenshotTests: XCTestCase {
     /// exists, else 80% of the screen height.
     private func bottomChromeLimit(app: XCUIApplication) -> CGFloat {
         let tabBar = app.tabBars.firstMatch
-        return tabBar.exists ? tabBar.frame.minY - 8 : app.frame.maxY * 0.8
+        return tabBar.exists ? tabBar.frame.minY - 8 : screen(app).maxY * 0.8
     }
 
     /// True when `element`'s frame sits fully between the top margin (status
     /// bar, 54pt) and the bottom chrome (see `bottomChromeLimit`).
     private func isClearOfChrome(_ element: XCUIElement, app: XCUIApplication) -> Bool {
         let frame = element.frame
-        return frame.minY >= app.frame.minY + Self.topChromeMargin
+        return frame.minY >= screen(app).minY + Self.topChromeMargin
             && frame.maxY <= bottomChromeLimit(app: app)
     }
 
@@ -197,7 +236,7 @@ final class ScreenshotTests: XCTestCase {
     private func scrollIntoComfortableView(_ element: XCUIElement, app: XCUIApplication, maxSwipes: Int = 5) -> Bool {
         guard scrollUntilExists(element, app: app) else { return false }
         var swipes = 0
-        while !(element.isHittable && isClearOfChrome(element, app: app)) && swipes < maxSwipes {
+        while !(isSafelyHittable(element, app: app) && isClearOfChrome(element, app: app)) && swipes < maxSwipes {
             let screenHeight = max(app.frame.height, 1)
             // Move the element's centre toward 45% of the screen height; the
             // drag distance is capped so a single nudge can't fling it past.
@@ -212,16 +251,32 @@ final class ScreenshotTests: XCTestCase {
             start.press(forDuration: 0.05, thenDragTo: end)
             swipes += 1
         }
-        return element.isHittable && isClearOfChrome(element, app: app)
+        return isSafelyHittable(element, app: app) && isClearOfChrome(element, app: app)
+    }
+
+    /// The element's frame when it is safely hittable, else nil. `isHittable` records a test
+    /// failure ("Activation point invalid") instead of returning false when the frame is empty
+    /// or entirely off-screen, so the frame is checked first. The frame must at least partly
+    /// overlap the screen, because XCUITest can then pick a hit point inside the visible part.
+    /// Each XCUI property read is a snapshot query, so each is read once.
+    private func safeHittableFrame(_ element: XCUIElement, app: XCUIApplication) -> CGRect? {
+        guard element.exists else { return nil }
+        let frame = element.frame
+        let visible = frame.intersection(screen(app))
+        guard !frame.isEmpty, !visible.isNull, visible.width > 0, visible.height > 0, element.isHittable else { return nil }
+        return frame
+    }
+
+    private func isSafelyHittable(_ element: XCUIElement, app: XCUIApplication) -> Bool {
+        safeHittableFrame(element, app: app) != nil
     }
 
     /// True when `element` is hittable, fully inside the app window, and
     /// clear of the bottom chrome. No extra top margin, so sheet / nav-bar
     /// buttons (Done / Close, y of roughly 60-110) qualify.
     private func isDirectlyTappable(_ element: XCUIElement, app: XCUIApplication) -> Bool {
-        guard element.exists, element.isHittable else { return false }
-        let frame = element.frame
-        return app.frame.contains(frame) && frame.maxY <= bottomChromeLimit(app: app)
+        guard let frame = safeHittableFrame(element, app: app) else { return false }
+        return screen(app).contains(frame) && frame.maxY <= bottomChromeLimit(app: app)
     }
 
     /// Taps `element` once it is safely tappable — never a bare `.tap()` on a
@@ -263,7 +318,7 @@ final class ScreenshotTests: XCTestCase {
             return
         }
 
-        guard scrollIntoComfortableView(element, app: app, maxSwipes: maxSwipes), element.isHittable else {
+        guard scrollIntoComfortableView(element, app: app, maxSwipes: maxSwipes), isSafelyHittable(element, app: app) else {
             XCTFail("\(description) exists but never became hittable and fully on screen "
                      + "(clear of the tab bar) after \(maxSwipes) scroll attempts")
             return
@@ -296,6 +351,7 @@ final class ScreenshotTests: XCTestCase {
     /// within the timeout.
     private func waitForSettled(
         _ element: XCUIElement,
+        app: XCUIApplication,
         timeout: TimeInterval = 5.0,
         description: String
     ) {
@@ -309,7 +365,7 @@ final class ScreenshotTests: XCTestCase {
         let pollInterval: TimeInterval = 0.5
 
         while Date.now < deadline {
-            guard element.isHittable else {
+            guard isSafelyHittable(element, app: app) else {
                 RunLoop.current.run(until: Date(timeIntervalSinceNow: pollInterval))
                 continue
             }
@@ -471,8 +527,10 @@ final class ScreenshotTests: XCTestCase {
                 // Race countdown line ("Half marathon · 12 weeks to go") from the fixture's race.
                 XCTAssertTrue(waitForText(app, containing: "Half marathon"),
                                "Today's endurance hero should show the race countdown [\(appearance)]")
-                // ...followed by the long-run build ("· long run 14/18 km", number and unit joined by U+00A0), from the same payload.
-                XCTAssertTrue(waitForText(app, containing: "long run 14/18\u{00A0}km"),
+                // ...followed by the long-run build ("· long run 12/15 km", number and unit joined by U+00A0), from the same payload.
+                // (15 km is the peak a 30 km week can carry: half of the weekly goal, under the half marathon's own 18 km;
+                // 12 km is last week's long run, half of that 24.5 km week.)
+                XCTAssertTrue(waitForText(app, containing: "long run 12/15\u{00A0}km"),
                                "Today's endurance hero race line should carry the long-run progress [\(appearance)]")
             }
 
@@ -484,6 +542,53 @@ final class ScreenshotTests: XCTestCase {
             }
         }
         capture(app, name: "\(scenario)__today__\(appearance)")
+    }
+
+    // MARK: - Accessibility text size (weight_loss only)
+
+    /// Today at an accessibility text size: the same "fixtures really loaded"
+    /// signals as `captureToday` (hero, insight, the hero's weekly-change
+    /// text, weigh-in chip) plus the goal line, then a capture of the top.
+    private func captureTodayAccessibilitySize(_ app: XCUIApplication, scenario: String, appearance: String) {
+        XCTAssertTrue(app.buttons["today.fuelStrip"].waitForExistence(timeout: 15),
+                       "Today should finish loading at an accessibility text size [\(scenario)/\(appearance)]")
+        XCTAssertTrue(waitForText(app, containing: insight(for: scenario), timeout: 10),
+                       "Today should show the \(scenario) fixture's insight text at an accessibility text size [\(appearance)]")
+        XCTAssertTrue(waitForText(app, containing: "0.6\u{00A0}kg/wk over 4 weeks"),
+                       "Today's weight_loss hero should show the weekly change at an accessibility text size [\(appearance)]")
+        XCTAssertTrue(app.buttons["today.weighInChip"].waitForExistence(timeout: 10),
+                       "Today's weight_loss hero should show the weigh-in chip at an accessibility text size [\(appearance)]")
+        let goalLine = app.descendants(matching: .any).matching(identifier: "goalProgress.todayLine").firstMatch
+        XCTAssertTrue(goalLine.waitForExistence(timeout: 10),
+                       "Today should show the goal-progress line at an accessibility text size [\(appearance)]")
+        XCTAssertFalse(app.staticTexts["Couldn't load today's data"].exists,
+                        "Today should not show its error card at an accessibility text size [\(appearance)]")
+        capture(app, name: "\(scenario)__todayAX__\(appearance)")
+    }
+
+    /// The goal-progress sheet at an accessibility text size, opened from
+    /// Today's goal line (which stacks its pill above the text at AX sizes).
+    private func captureGoalProgressAccessibilitySize(_ app: XCUIApplication, scenario: String, appearance: String) {
+        let goalLine = app.descendants(matching: .any).matching(identifier: "goalProgress.todayLine").firstMatch
+        tapWhenHittable(goalLine, app: app, maxSwipes: 6,
+                        description: "goalProgress.todayLine at an accessibility text size [\(scenario)/\(appearance)]")
+
+        let title = app.descendants(matching: .any).matching(identifier: "goalProgress.detail.title").firstMatch
+        guard title.waitForExistence(timeout: 10) else {
+            XCTFail("Goal progress sheet never opened from Today's goal line at an accessibility text size [\(scenario)/\(appearance)]")
+            return
+        }
+        // The same fixture-unique primary line `captureGoalProgress` checks.
+        XCTAssertTrue(waitForText(app, containing: "of 7.7\u{00A0}kg lost"),
+                       "Goal progress sheet should show the \(scenario) fixture's content at an accessibility text size [\(appearance)]")
+        capture(app, name: "\(scenario)__goalProgressAX__\(appearance)")
+
+        let close = app.buttons["Close"]
+        if close.waitForExistence(timeout: 5) {
+            close.tap()
+            XCTAssertTrue(title.waitForNonExistence(timeout: 5),
+                           "Goal progress sheet never finished dismissing at an accessibility text size [\(scenario)/\(appearance)]")
+        }
     }
 
     /// Opens the diet logging sheet from Today's fuel strip. Not attempted
@@ -511,10 +616,13 @@ final class ScreenshotTests: XCTestCase {
             // it again once it is hittable.
             let retryStrip = app.buttons["today.fuelStrip"]
             if retryStrip.waitForExistence(timeout: 5) {
-                let hittable = NSPredicate(format: "isHittable == true")
-                let exp = XCTNSPredicateExpectation(predicate: hittable, object: retryStrip)
-                _ = XCTWaiter().wait(for: [exp], timeout: 5)
-                if retryStrip.isHittable { retryStrip.tap() }
+                // Poll instead of an `isHittable == true` predicate expectation:
+                // that predicate re-reads `isHittable` on an invalid frame mid-animation.
+                let deadline = Date().addingTimeInterval(5)
+                while !isSafelyHittable(retryStrip, app: app) && Date() < deadline {
+                    RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+                }
+                if isSafelyHittable(retryStrip, app: app) { retryStrip.tap() }
             }
             sheetOpened = app.staticTexts["Diet budget"].waitForExistence(timeout: 10)
         }
@@ -639,6 +747,12 @@ final class ScreenshotTests: XCTestCase {
     /// no separating punctuation.
     private func captureCoachReceipt(_ app: XCUIApplication, pill: XCUIElement, scenario: String, appearance: String) {
         tapWhenHittable(pill, app: app, description: "Coach receipt pill [\(scenario)/\(appearance)]")
+        // An identifier on a SwiftUI stack doesn't make it an accessibility container,
+        // so the "Manage memory" link is queried app-wide (the app is idle under the
+        // harness now that ambient loops are off).
+        let detail = app.descendants(matching: .any).matching(identifier: "coach.receiptDetail").firstMatch
+        XCTAssertTrue(detail.waitForExistence(timeout: 10),
+                       "Receipt detail should exist once expanded [\(scenario)/\(appearance)]")
         // "Manage memory" renders as a `Button`, not a `staticText` —
         // `waitForText` only searches static text, so check the button
         // directly; its own text label is a reliable proxy for
@@ -646,12 +760,6 @@ final class ScreenshotTests: XCTestCase {
         let manageMemoryLink = app.buttons["Manage memory"]
         XCTAssertTrue(manageMemoryLink.waitForExistence(timeout: 10),
                        "Tapping the receipt pill should expand the detail with its Manage memory link [\(scenario)/\(appearance)]")
-        // `CoachReceiptDetail`'s own identifier — waited on directly (rather
-        // than relying on "Manage memory" alone) so the detail wait below,
-        // after collapsing, checks the same element.
-        let detail = app.descendants(matching: .any).matching(identifier: "coach.receiptDetail").firstMatch
-        XCTAssertTrue(detail.waitForExistence(timeout: 10),
-                       "Receipt detail should exist once expanded [\(scenario)/\(appearance)]")
         capture(app, name: "\(scenario)__coachReceipt__\(appearance)")
         // Collapse it again so the rest of this scenario's Coach assertions
         // (and the plain `__coach__` capture right after this call returns)
@@ -660,9 +768,12 @@ final class ScreenshotTests: XCTestCase {
         // the detail mid-collapse.
         // Let the expand animation settle so the pill is hittable before the
         // collapse tap; a tap landing mid-animation can be absorbed.
-        let pillHittable = NSPredicate(format: "isHittable == true")
-        let pillExp = XCTNSPredicateExpectation(predicate: pillHittable, object: pill)
-        _ = XCTWaiter().wait(for: [pillExp], timeout: 3)
+        // Polled rather than an `isHittable == true` predicate expectation, which
+        // re-reads `isHittable` on an invalid frame while the fold-out animates.
+        let deadline = Date().addingTimeInterval(3)
+        while !isSafelyHittable(pill, app: app) && Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
         tapWhenHittable(pill, app: app, description: "Coach receipt pill (collapse) [\(scenario)/\(appearance)]")
         if !detail.waitForNonExistence(timeout: 5) {
             // One retry: the collapse tap was absorbed while the expand
@@ -708,8 +819,9 @@ final class ScreenshotTests: XCTestCase {
         case "muscle":
             expected = "Squat est. 1RM +10\u{00A0}kg vs 4\u{00A0}weeks ago (153\u{00A0}\u{2192}\u{00A0}163\u{00A0}kg)"
         default:
-            // endurance: the long-run build reason (the race and the volume trend precede it).
-            expected = "Long run 14\u{00A0}km \u{00B7} build to 18\u{00A0}km"
+            // endurance: the long-run reason (the race and the week's plan precede it): the 12 km peak
+            // is still building to the 15 km a 30 km week can carry ("Long run 12 km · build to 15 km by …").
+            expected = "Long run 12\u{00A0}km"
         }
         XCTAssertTrue(waitForText(app, containing: expected),
                        "Goal progress detail should show the \(scenario) fixture's content [\(appearance)]")
@@ -943,6 +1055,9 @@ final class ScreenshotTests: XCTestCase {
             swipes += 1
         }
 
+        // The tile may already exist (so the loop above never scrolls) while the list is still
+        // decelerating from earlier swipes. Bring it into comfortable view before tapping.
+        _ = scrollIntoComfortableView(hrvTile, app: app)
         tapWhenHittable(
             hrvTile, app: app,
             description: "HRV metric tile [\(scenario)/\(appearance)]"
@@ -952,8 +1067,18 @@ final class ScreenshotTests: XCTestCase {
         // button as the stable signal. This button always renders once the screen has loaded,
         // regardless of data availability (unlike section headers like "DISTRIBUTION" which only
         // appear with sufficient data). Assert the detail screen loaded before capturing.
-        XCTAssertTrue(app.buttons["3 months"].waitForExistence(timeout: 10),
-                       "HRV detail should load [\(scenario)/\(appearance)]")
+        var detailLoaded = app.buttons["3 months"].waitForExistence(timeout: 5)
+        if !detailLoaded {
+            // One retry: the first tap can be absorbed while the list is still settling
+            // (the tile sits just above the floating tab bar on taller goal cards).
+            _ = scrollIntoComfortableView(hrvTile, app: app)
+            tapWhenHittable(
+                hrvTile, app: app,
+                description: "HRV metric tile (retry) [\(scenario)/\(appearance)]"
+            )
+            detailLoaded = app.buttons["3 months"].waitForExistence(timeout: 10)
+        }
+        XCTAssertTrue(detailLoaded, "HRV detail should load [\(scenario)/\(appearance)]")
 
         // Screen segment must be letters only to match CI export regex: ^[a-z_]+__[A-Za-z]+__(light|dark)\.png$
         capture(app, name: "\(scenario)__hrvDetail__\(appearance)")
@@ -1036,7 +1161,7 @@ final class ScreenshotTests: XCTestCase {
         let workoutHeader = app.descendants(matching: .any).matching(identifier: "analysisWorkout.header").firstMatch
         XCTAssertTrue(workoutHeader.waitForExistence(timeout: 15),
                        "Tapping the workout row should open the workout AnalysisView [\(scenario)/\(appearance)]")
-        waitForSettled(workoutHeader, timeout: 5.0, description: "Workout AnalysisView header [\(scenario)/\(appearance)]")
+        waitForSettled(workoutHeader, app: app, timeout: 5.0, description: "Workout AnalysisView header [\(scenario)/\(appearance)]")
         capture(app, name: "\(scenario)__workoutAnalysis__\(appearance)")
 
         if scenario == "endurance" {
@@ -1081,7 +1206,7 @@ final class ScreenshotTests: XCTestCase {
         // `swipeUp()` that could overshoot it back off the top of the screen.
         tapWhenHittable(whoopSwitch, app: app, maxSwipes: 6, description: "Workout AnalysisView's WHOOP device switch [\(scenario)/\(appearance)]")
         let workoutHeader = app.descendants(matching: .any).matching(identifier: "analysisWorkout.header").firstMatch
-        waitForSettled(workoutHeader, timeout: 5.0, description: "Workout AnalysisView header (WHOOP tab) [\(scenario)/\(appearance)]")
+        waitForSettled(workoutHeader, app: app, timeout: 5.0, description: "Workout AnalysisView header (WHOOP tab) [\(scenario)/\(appearance)]")
         capture(app, name: "\(scenario)__workoutAnalysisWhoop__\(appearance)")
     }
 
@@ -1091,7 +1216,7 @@ final class ScreenshotTests: XCTestCase {
         let sleepHeader = app.descendants(matching: .any).matching(identifier: "analysisSleep.header").firstMatch
         XCTAssertTrue(sleepHeader.waitForExistence(timeout: 15),
                        "Tapping the sleep row should open the sleep AnalysisView [\(scenario)/\(appearance)]")
-        waitForSettled(sleepHeader, timeout: 5.0, description: "Sleep AnalysisView header [\(scenario)/\(appearance)]")
+        waitForSettled(sleepHeader, app: app, timeout: 5.0, description: "Sleep AnalysisView header [\(scenario)/\(appearance)]")
         capture(app, name: "\(scenario)__sleepAnalysis__\(appearance)")
         let sleepDone = app.buttons["analysis.done"].firstMatch
         tapWhenHittable(sleepDone, app: app, description: "Sleep AnalysisView Done button [\(scenario)/\(appearance)]")
@@ -1191,7 +1316,7 @@ final class ScreenshotTests: XCTestCase {
         let primaryDeviceText = app.staticTexts.matching(
             NSPredicate(format: "label CONTAINS[c] %@", "Primary device for")
         ).firstMatch
-        waitForSettled(primaryDeviceText, timeout: 5.0, description: "Devices screen content [\(scenario)/\(appearance)]")
+        waitForSettled(primaryDeviceText, app: app, timeout: 5.0, description: "Devices screen content [\(scenario)/\(appearance)]")
         capture(app, name: "\(scenario)__devices__\(appearance)")
 
         // Navigate back to Profile — same tidy-up `captureMemory` does.
