@@ -137,11 +137,11 @@ test('the cap note in "Next week" follows the plan\'s cadence, not every Monday'
   assert.deepEqual(texts, [false, false, false, true, false]);
 });
 
-test('a jump in a cutback week is read against the week it replaced (the review quotes the 25 km step, not the cutback 20)', () => {
+test('a jump in a cutback week is read against the cutback number the card showed that week (~20 km), and the hold next week still steps up from the 25 km week it replaced', () => {
   const r = computeWeeklyReview(planReview([15, 17, 19, 21, 23, 40], { weekStart: '2026-10-19' }));
   assert.equal(r.weekRating, 'mixed');
-  assert.deepEqual(r.weekGap, { kind: 'spike', doneKm: 40, stepKm: 25, targetKm: 30 });
-  assert.equal(r.headline, '4 sessions, 40 of ~25 km — well above the safe step · goal 30 km');
-  assert.equal(r.slip, "Jumped 15 km over this week's step — big jumps raise injury risk");
+  assert.deepEqual(r.weekGap, { kind: 'spike', doneKm: 40, stepKm: 20, targetKm: 30 });
+  assert.equal(r.headline, '4 sessions, 40 of ~20 km — well above the safe step · goal 30 km');
+  assert.equal(r.slip, "Jumped 20 km over this week's step — big jumps raise injury risk");
   assert.equal(r.nextWeek, 'Hold around ~28 km next week, then build ~10% a week toward 30 km.');
 });

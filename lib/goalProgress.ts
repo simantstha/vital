@@ -2946,9 +2946,10 @@ function planOutcome(input: GoalProgressInput, ec: EnduranceCtx, race: GoalRaceP
     withRace(enduranceReasons(lead, [...extra, shareNote, lrReason, sessions, ...vitals]));
   const finish = (verdict: GoalVerdict, headline: string, reasons: GoalProgressReason[]): Outcome =>
     ({ verdict, headline: clip(headline), reasons, raceHandled: true });
-  // A cutback week is measured against the week it replaced when it comes to jumps: that is the "safe step" quoted.
-  const stepRef = plan.cutback?.normalKm ?? target;
-  const nextHold = weekStepOrGoalKm(stepRef, plan.goalKm, u);
+  // The week's target is the one number the headline, the distance line, the reasons and the jump check all use - a cutback week's
+  // is the cutback number. Only the hold NEXT week steps up from the progression's own step (after a cutback, the week it replaced),
+  // the number the coming Monday's plan uses (lib/enduranceProgression.ts, hold).
+  const nextHold = weekStepOrGoalKm(plan.cutback?.normalKm ?? target, plan.goalKm, u);
 
   // A runner who has been off for 7+ days: say so, and where to restart.
   if (plan.onBreak && plan.kind !== 'baseline') {
@@ -2967,8 +2968,8 @@ function planOutcome(input: GoalProgressInput, ec: EnduranceCtx, race: GoalRaceP
   if (current?.gap === 'spike') {
     // On Sunday the week is over: the advice is about the days after it.
     const advice = weekdayOf(input.todayKey) === 0 ? "keep tomorrow's run easy and hold next week's step" : 'keep the rest of the week easy';
-    return finish('holding', `Over the safe step — ${done} of ~${fmt(stepRef)}. Hold ~${fmt(nextHold)} next week`, body(
-      { kind: 'volume', text: `${fmt(doneKm)} is ${fmt(doneKm - stepRef)} over this week's safe step; big jumps raise injury risk — ${advice}`, tone: 'watch' },
+    return finish('holding', `Over the safe step — ${done} of ~${fmt(target)}. Hold ~${fmt(nextHold)} next week`, body(
+      { kind: 'volume', text: `${fmt(doneKm)} is ${fmt(doneKm - target)} over this week's safe step; big jumps raise injury risk — ${advice}`, tone: 'watch' },
     ));
   }
 

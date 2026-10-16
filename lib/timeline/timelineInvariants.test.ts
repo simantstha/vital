@@ -593,3 +593,119 @@ const WEIGHT_AS_TREND = /weight trend|trend weight|trend change|smoothed trend/i
 
 invariant(WEIGHT, 'no card or review string calls the progress weight a "trend" (weight trend, trend weight, trend change)', snaps =>
   textMatches(snaps, s => [...cardTexts(s), ...reviewTexts(s)], WEIGHT_AS_TREND));
+
+// ── one target per week (wave 21b) ──────────────────────────────────────────
+
+// "40 of ~20 km", "5 km of ~20 km", "20 of up to ~18 km": a figure of the week against ITS target. The tilde number is the week's one
+// target (`distance.stepTargetKm`, display unit) on every surface of the day - the headline, the distance line, the reasons, the coach
+// lines and the opener. (Day 41 of runner_messy, a cutback week, said "of ~25 km" in the headline and "of ~20 km" on the distance line.)
+const OF_WEEK_TARGET = /(\d+(?:\.\d+)?)(?:\s?(?:km|mi))?\s+of\s+(?:up to\s+)?~(\d+(?:\.\d+)?)\s?(km|mi)\b/g;
+
+const inDisplayUnit = (km: number, unit: string): number => Math.round((unit === 'mi' ? km / KM_PER_MILE : km) * 10) / 10;
+
+invariant(RUNNERS, 'every "N of ~M km|mi" figure of the week on the card, coach lines and opener has M = distance.stepTargetKm', (snaps, name) => {
+  const out: Violation[] = [];
+  let compared = 0;
+  for (const snap of snaps) {
+    const distance = snap.card?.distance;
+    if (!distance || distance.thisWeekKm == null) continue;
+    for (const t of [...cardTexts(snap), ...coachTexts(snap)]) {
+      for (const m of plain(t.text).matchAll(OF_WEEK_TARGET)) {
+        compared++;
+        const said = Number(m[2]);
+        const target = inDisplayUnit(distance.stepTargetKm, m[3]);
+        if (Math.abs(said - target) > 0.05 + 1e-9) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" says ~${said} ${m[3]}, distance.stepTargetKm is ${distance.stepTargetKm} km (${target} ${m[3]})` });
+      }
+    }
+  }
+  assert.ok(compared > 0, `${name}: no "N of ~M" figure appeared, so this invariant checked nothing`);
+  return out;
+});
+
+const OVER_THE_STEP = /(\d+(?:\.\d+)?)\s?(km|mi) is (\d+(?:\.\d+)?)\s?(?:km|mi) over this week's safe step/;
+
+invariant(RUNNERS, 'the "N km is X km over this week\'s safe step" reason measures the week against distance.stepTargetKm', snaps => {
+  const out: Violation[] = [];
+  for (const snap of snaps) {
+    const distance = snap.card?.distance;
+    if (!distance) continue;
+    for (const t of cardTexts(snap)) {
+      const m = OVER_THE_STEP.exec(plain(t.text));
+      if (!m) continue;
+      const done = Number(m[1]);
+      const over = Number(m[3]);
+      const target = inDisplayUnit(distance.stepTargetKm, m[2]);
+      if (Math.abs(done - over - target) > 0.15 + 1e-9) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" implies a step of ${Math.round((done - over) * 10) / 10} ${m[2]}, distance.stepTargetKm is ${distance.stepTargetKm} km (${target} ${m[2]})` });
+    }
+  }
+  return out;
+});
+
+// The review grades the finished week against the target the card showed that week (its last day's card, the plan's target stands all
+// week): "40 of ~20 km" in the review is the "~20 km" on Sunday's distance line, whether that week was a cutback, a hold or a build.
+invariant(RUNNERS, "the review's graded target for the past week equals the target that week's last card showed", (snaps, name) => {
+  const out: Violation[] = [];
+  const byDate = new Map(snaps.map(s => [s.date, s]));
+  let compared = 0;
+  for (const snap of snaps) {
+    const rv = snap.review;
+    if (!rv) continue;
+    const sunday = byDate.get(addDays(rv.weekStart, 6));
+    const shown = sunday?.card?.distance?.stepTargetKm;
+    if (shown == null) continue;
+    const gap = rv.review.weekGap;
+    const stated: Array<{ where: string; km: number }> = [];
+    if (gap != null && (gap.kind === 'spike' || (gap.kind === 'distance' && gap.stepKm != null))) stated.push({ where: `weekGap.${gap.kind}.stepKm`, km: gap.stepKm as number });
+    for (const t of reviewTexts(snap).filter(x => x.where === 'review.headline')) {
+      for (const m of plain(t.text).matchAll(OF_WEEK_TARGET)) stated.push({ where: `${t.where} "${visible(t.text)}"`, km: Number(m[2]) * (m[3] === 'mi' ? KM_PER_MILE : 1) });
+    }
+    for (const s of stated) {
+      compared++;
+      // The headline prints the target in the display unit (1 decimal): compare there.
+      const unit = sunday?.card?.distance && /\bmi\b/.test(plain(sunday.card.distance.text)) ? 'mi' : 'km';
+      if (Math.abs(inDisplayUnit(s.km, unit) - inDisplayUnit(shown, unit)) > 0.05 + 1e-9) {
+        out.push({ snap, detail: `review ${s.where} grades the week against ${inDisplayUnit(s.km, unit)} ${unit}, the last card of that week (${sunday?.date}) showed ~${inDisplayUnit(shown, unit)} ${unit}: "${visible(sunday?.card?.distance?.text ?? '')}"` });
+      }
+    }
+  }
+  // ... and the hold week's card quotes last week's step the same way: "Last week's 40 km was over the safe step of ~20 km".
+  const LAST_WEEK_STEP = /Last week's [\d.]+\s?(?:km|mi) was over the safe step of ~(\d+(?:\.\d+)?)\s?(km|mi)\b/;
+  for (const snap of snaps) {
+    const weekStart = snap.card?.distance?.weekStart;
+    if (weekStart == null) continue;
+    const lastSunday = byDate.get(addDays(weekStart, -1));
+    const shown = lastSunday?.card?.distance?.stepTargetKm;
+    if (shown == null) continue;
+    for (const t of cardTexts(snap)) {
+      const m = LAST_WEEK_STEP.exec(plain(t.text));
+      if (!m) continue;
+      compared++;
+      if (Math.abs(Number(m[1]) - inDisplayUnit(shown, m[2])) > 0.05 + 1e-9) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" but last week's last card (${lastSunday?.date}) showed ~${inDisplayUnit(shown, m[2])} ${m[2]}` });
+    }
+  }
+  assert.ok(compared > 0, `${name}: no review stated a graded target, so this invariant checked nothing`);
+  return out;
+});
+
+// "Over the safe step — 40 of ~20 km. Hold ~28 km next week": the number is the one the coming Monday's card (and, through the
+// weekly-review invariant above, its review) actually uses.
+const HOLD_NEXT_WEEK = /Hold ~(\d+(?:\.\d+)?)\s?(km|mi) next week/;
+
+invariant(['runner_messy'], 'a "Hold ~N next week" headline is the target of the coming Monday\'s card', (snaps, name) => {
+  const out: Violation[] = [];
+  let compared = 0;
+  for (const snap of snaps) {
+    const m = HOLD_NEXT_WEEK.exec(plain(snap.card?.headline ?? ''));
+    if (!m) continue;
+    const nextMonday = addDays(mondayOfDate(snap.date), 7);
+    const monday = snaps.find(s => s.date === nextMonday);
+    const target = monday?.card?.distance?.stepTargetKm;
+    if (target == null) continue;
+    compared++;
+    if (Math.abs(inDisplayUnit(target, m[2]) - Number(m[1])) > 0.05 + 1e-9) {
+      out.push({ snap, detail: `"${visible(snap.card?.headline ?? '')}" but the card on Monday ${nextMonday} targets ${inDisplayUnit(target, m[2])} ${m[2]}: "${visible(monday?.card?.headline ?? '')}"` });
+    }
+  }
+  assert.ok(compared > 0, `${name}: no "Hold ~N next week" headline met a following Monday, so this invariant checked nothing`);
+  return out;
+});

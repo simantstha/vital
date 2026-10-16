@@ -1378,7 +1378,7 @@ function planWeekAssessment(input: WeeklyReviewInput, week: Week, rp: ReviewPlan
   const goal = plan.goalKm;
   const stepped = plan.targetKm != null && plan.targetKm < goal;
   let gap: WeekGap | null = null;
-  if (grade.gap === 'spike') gap = { kind: 'spike', doneKm: round1(km), stepKm: (plan.cutback?.normalKm ?? plan.targetKm) as number, targetKm: goal };
+  if (grade.gap === 'spike') gap = { kind: 'spike', doneKm: round1(km), stepKm: plan.targetKm as number, targetKm: goal };
   else if (grade.gap === 'short') {
     gap = plan.kind === 'baseline'
       ? { kind: 'sessions', done: rp.week.days, target: BASELINE_GOOD_RUN_DAYS }
@@ -1480,9 +1480,9 @@ function loggedWord(stat: WeeklyReviewStat, word = 'logged '): string {
  * above the safe step · goal 30 km"). "On plan" compares the numbers as the
  * reader sees them.
  */
-function distanceHeadline(input: WeeklyReviewInput, km: number, targetKm: number, stepKm: number, jumpKm = stepKm, cutback = false): string {
-  if (isSpikeWeek(km, jumpKm, targetKm, unitsPerKmOf(input))) {
-    return `${distanceNumber(input, km)} of ~${distanceText(input, jumpKm)} — well above the safe step · goal ${distanceText(input, targetKm)}`;
+function distanceHeadline(input: WeeklyReviewInput, km: number, targetKm: number, stepKm: number, cutback = false): string {
+  if (isSpikeWeek(km, stepKm, targetKm, unitsPerKmOf(input))) {
+    return `${distanceNumber(input, km)} of ~${distanceText(input, stepKm)} — well above the safe step · goal ${distanceText(input, targetKm)}`;
   }
   if (stepKm >= targetKm || km >= targetKm) return `${distanceNumber(input, km)} of ${distanceText(input, targetKm)}`;
   const onPlan = distanceNumber(input, km) >= distanceNumber(input, stepKm);
@@ -1744,14 +1744,13 @@ function buildHeadline(input: WeeklyReviewInput, cands: Candidate[], week: Week)
         parts.push(windDownHeadline(input, plan.phase, windDownKm, plan.targetKm));
       } else {
         const reviewed = reviewPlans(input).plan;
+        // The week's one target (a cutback week's is the cutback number): the jump check, the figure and the slip all use it.
         const stepKm = reviewed?.targetKm ?? target;
-        // A cutback week is measured against the week it replaced when it comes to jumps.
-        const jumpKm = reviewed?.cutback?.normalKm ?? stepKm;
         const value = hasDistanceTarget(input) && kmBased && km != null
-          ? distanceHeadline(input, km, target, stepKm, jumpKm, reviewed?.cutback != null)
+          ? distanceHeadline(input, km, target, stepKm, reviewed?.cutback != null)
           : volume.value;
         // A spike's headline already says it is a jump: no "+186% vs last week" on top (and it would overrun the headline limit).
-        const spike = hasDistanceTarget(input) && kmBased && km != null && isSpikeWeek(km, jumpKm, target, unitsPerKmOf(input));
+        const spike = hasDistanceTarget(input) && kmBased && km != null && isSpikeWeek(km, stepKm, target, unitsPerKmOf(input));
         parts.push(!spike && volume.comparison && volume.comparison.includes('%') ? `${value}, ${volume.comparison}` : value);
       }
     }

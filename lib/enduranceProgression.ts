@@ -714,7 +714,7 @@ export interface EnduranceWeekPlan {
   raceDaysToGo: number | null;
   /** The actual step over last week in whole percent (this week's target against last week's km); null when last week was too small to compare or there is no target. */
   stepPct: number | null;
-  /** Hold week: last week's jump and the step it was graded against. */
+  /** Hold week: last week's jump and the target it was graded against (the target its cards showed: a cutback week's is the cutback number). */
   hold: { spikeKm: number; spikeStepKm: number } | null;
   /** Taper / race week / recovery: the race phase read on this week's Monday and the peak week its target is a share of. */
   wind: { phase: 'taper' | 'race_week' | 'recovery'; info: RacePhaseInfo; peakKm: number } | null;
@@ -1072,11 +1072,11 @@ function bandFor(
     }
     return { goodFromKm: 0, mixedFromKm: 0, overKm: round1(targetKm * PHASE_CEILING_TOLERANCE) };
   }
-  // A cutback is graded as its own target and never "short": any running is a good cutback week. The jump guard stays
-  // that of the week it replaces, so running the normal week instead is not a spike.
+  // A cutback is graded as its own target and never "short": any running is a good cutback week. Its target is the week's one
+  // target, so the jump guard is measured against it too (the 30% margin keeps the normal week it replaced, 25% above it, from
+  // being a spike) - the card, the distance line and the review never quote two "safe steps" for the same week.
   if (opts.cutbackNormalKm != null) {
-    const normal = opts.cutbackNormalKm;
-    return { goodFromKm: 0, mixedFromKm: 0, overKm: normal < ctx.goalKm ? spikeEdgeKm(normal, ctx.units) : null };
+    return { goodFromKm: 0, mixedFromKm: 0, overKm: targetKm < ctx.goalKm ? spikeEdgeKm(targetKm, ctx.units) : null };
   }
   const good = mode === 'restart' ? RESTART_GOOD_FRACTION : mode === 'gentle' ? REBUILD_GOOD_FRACTION : GOOD_FRACTION;
   const mixed = mode === 'restart' ? RESTART_MIXED_FRACTION : mode === 'gentle' ? REBUILD_MIXED_FRACTION : MIXED_FRACTION;
@@ -1466,11 +1466,13 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
       targetKm = restartKm;
       mode = 'restart';
     } else if (prevPlan != null && prevIsTraining && prevPlan.targetKm != null && prevGrade?.gap === 'spike') {
-      // A spike in a cutback week is a jump over the week the cutback replaced, so the hold steps up from that one.
-      const spikeStepKm = prevPlan.cutback?.normalKm ?? prevPlan.targetKm;
+      // `spikeStepKm` is the target last week was graded against (a cutback week's is the cutback number, what its cards and its
+      // review quoted). The hold itself steps up from the step the progression had planned: after a cutback that is the week it
+      // replaced (the cutback was a pause, not a new base), otherwise the same target.
+      const spikeStepKm = prevPlan.targetKm;
       hold = { spikeKm: round1(prev.km), spikeStepKm };
       kind = 'hold';
-      targetKm = stepFromShownTarget(spikeStepKm, ctx.goalKm, ctx.units);
+      targetKm = stepFromShownTarget(prevPlan.cutback?.normalKm ?? spikeStepKm, ctx.goalKm, ctx.units);
     } else {
       // Build: ~10% over last week — and, for up to three weeks after a restart, at least the next rung of the climb
       // back to the pre-break median (restart -> 80% -> 100%), a rung only when the week before graded good.
@@ -1701,9 +1703,8 @@ export function gradeEnduranceWeek(
   const target = plan.targetKm as number;
   // Regaining the pre-break level (a restart, or a comeback week the ladder has capped lower) is never a spike.
   const medianGuard = Math.max(plan.restart?.medianKm ?? 0, plan.comeback?.medianKm ?? 0);
-  // A cutback week is measured against the week it replaced when it comes to jumps.
-  const jumpRef = plan.cutback?.normalKm ?? target;
-  if (plan.band.overKm != null && isSpikeWeek(km, jumpRef, plan.goalKm, units) && km > medianGuard) {
+  // A cutback week's target is the cutback number: it is the step a jump is measured against, like any other week's.
+  if (plan.band.overKm != null && isSpikeWeek(km, target, plan.goalKm, units) && km > medianGuard) {
     return { level: 'mixed', gap: 'spike' };
   }
   // A cutback week that ended in days off before it reached even its (lowered) number is a rest week, not a good cutback.

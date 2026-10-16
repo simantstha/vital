@@ -781,12 +781,20 @@ test('cutback: every 4th calendar week, after 3 plain build weeks, is ~80% of th
   assert.equal(cut.longRun.held, true);
   assert.equal(nbsp(cut.purpose), 'Cutback week: ~20~km, long run 9~km — absorb the last three weeks');
   assert.equal(cut.buildWeeks, 0);
-  // Graded as its own target and never "short": any running is a good cutback, a normal week is no spike,
-  // a real jump over the week it replaced still is; a week with no run is a rest week.
+  // Graded as its own target and never "short": any running is a good cutback. The week's target is the cutback number, so a jump is
+  // measured against it (30% and 3 km over ~20 km); the normal 25 km week it replaced is 25% over it, no spike. A week with no run is a rest week.
   assert.deepEqual(gradeEnduranceWeek(cut, 8), { level: 'good', gap: null });
   assert.deepEqual(gradeEnduranceWeek(cut, 25), { level: 'good', gap: null });
+  assert.deepEqual(gradeEnduranceWeek(cut, 26), { level: 'good', gap: null });
+  assert.deepEqual(gradeEnduranceWeek(cut, 27), { level: 'mixed', gap: 'spike' });
   assert.deepEqual(gradeEnduranceWeek(cut, 40), { level: 'mixed', gap: 'spike' });
   assert.equal(gradeEnduranceWeek(cut, 0).level, 'light');
+  // The hold after a jump in a cutback week: the target that week's cards showed (~20 km) is what it was graded against, and the
+  // hold steps up from the 25 km week the cutback replaced (28 km), not from the cutback's own low or the jump.
+  const spiked = planFor(runsFor([15, 17, 19, 21, 23, 40]), 7);
+  assert.equal(spiked.kind, 'hold');
+  assert.deepEqual(spiked.hold, { spikeKm: 40, spikeStepKm: 20 });
+  assert.equal(spiked.targetKm, 28);
   // A cutback week that ended in days off short of its lowered number is a rest week, not a good cutback.
   assert.equal(gradeEnduranceWeek({ ...cut, endedOff: true }, 5).level, 'light');
   // The week after returns to the progression: ~10% over the bigger of the two weeks before the cutback, never over the cutback's own low.

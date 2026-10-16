@@ -231,14 +231,24 @@ test('taper copy on the card joins "3×1 km" / "3×0.5 mi" (and every new line) 
   for (const l of lines) assert.equal(breaking.test(l), false, l);
 });
 
-test('a jump in a cutback week is a jump over the week it replaced: the card quotes that safe step, not the lowered number', () => {
+test('a jump in a cutback week is a jump over the cutback number: the headline, the distance line and the reason all quote that one target', () => {
   const sunday = '2026-10-25'; // the cutback week 10-19, ended with a 40 km week instead of ~20 km
   const p = computeGoalProgress(input(weeks(sunday, [[[1, 9], [3, 9], [5, 10], [6, 12]], wk(23), wk(21), wk(19), wk(17), wk(15)]), { todayKey: sunday }));
   assert.equal(p.distance!.plan?.cutback, true);
+  assert.equal(p.distance!.stepTargetKm, 20);
   assert.equal(p.verdict, 'holding');
-  assert.equal(p.headline, 'Over the safe step — 40 of ~25 km. Hold ~28 km next week');
-  // ... and the Monday after holds one step up from the 25 km step, not from the 40 km jump.
+  assert.equal(p.headline, 'Over the safe step — 40 of ~20 km. Hold ~28 km next week');
+  assert.equal(p.distance!.text, '40 of ~20 km running this week · goal 30 km');
+  assert.equal(p.reasons.find(r => r.kind === 'volume')!.text, "40 km is 20 km over this week's safe step; big jumps raise injury risk — keep tomorrow's run easy and hold next week's step");
+  // ... the Monday after holds one step up from the 25 km week the cutback replaced (not from the 40 km jump, nor from the cutback's
+  // own low), and names last week's step as the target its cards showed.
   const monday = computeGoalProgress(input(weeks('2026-10-26', [[], [[1, 9], [3, 9], [5, 10], [6, 12]], wk(23), wk(21), wk(19), wk(17), wk(15)]), { todayKey: '2026-10-26' }));
   assert.equal(monday.distance!.plan?.kind, 'hold');
   assert.equal(monday.distance!.stepTargetKm, 28);
+  assert.equal(monday.reasons.find(r => r.kind === 'volume')!.text, "Last week's 40 km was over the safe step of ~20 km");
+  // The normal week instead of the cutback (25 km, 25% over its 20 km) is no jump.
+  const normal = computeGoalProgress(input(weeks(sunday, [[[1, 8], [3, 8], [5, 9]], wk(23), wk(21), wk(19), wk(17), wk(15)]), { todayKey: sunday }));
+  assert.equal(normal.distance!.thisWeekKm, 25);
+  assert.notEqual(normal.verdict, 'holding');
+  assert.doesNotMatch(normal.headline, /Over the safe step/);
 });
