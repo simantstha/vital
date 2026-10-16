@@ -19,7 +19,7 @@
  */
 
 import type { GoalKind, GoalLiftReturn, GoalLongRunProgress, GoalProgressBudget, GoalProgressIntakeDay, GoalVerdict, DayValue } from './goalProgress';
-import { KG_TO_LB, isRunningWorkoutType, raceLabel } from './goalProgress';
+import { KG_TO_LB, isRunningWorkoutType, mixedReturnLead, raceLabel } from './goalProgress';
 import { PARTIAL_LOG_KCAL_THRESHOLD } from './brain/weightSignals';
 import { computeWeightTrend, type WeightReading } from './weightTrend';
 import { dayNumber, rawPlateau } from './weightPace';
@@ -29,6 +29,7 @@ import type { ProgressionSummary } from './workoutRepository';
 import {
   cuedLifts,
   easedLoad,
+  furthestBehindReturn,
   isDeloadWeek,
   isLiftStalled,
   isMainLift,
@@ -44,6 +45,7 @@ import {
   pickWeekOverWeek,
   priorTopLoadKg,
   rankLifts,
+  weekOverWeekWording,
   type NextLoad,
 } from './liftChange';
 import {
@@ -242,6 +244,13 @@ export interface WeeklyReviewInput {
    * asks to make up missed sessions; absent / null -> normal rules.
    */
   liftReturn?: GoalLiftReturn | null;
+  /**
+   * Muscle, additive: the same return lift by lift (the goal card's
+   * `liftReturns`, the headline lift first). With it the review claims "back
+   * above pre-break" only when every lift is, and names the lift furthest behind
+   * otherwise; absent / null: `liftReturn` alone speaks for the return.
+   */
+  liftReturns?: GoalLiftReturn[] | null;
   /**
    * Endurance race day (YYYY-MM-DD, user-local). With it the reviewed week and
    * the coming week each get a race phase (build / taper / race week /
@@ -708,16 +717,50 @@ function reviewLiftKey(input: WeeklyReviewInput, week: Week): string | null {
   return pickHeadlineLift(input.progression, anchor)?.exercise ?? rankLifts(input.progression, anchor)[0] ?? null;
 }
 
-/** The "building back" lift stat: no drop, no slip; once the pre-break best is regained, a win. */
-function returnLiftCandidate(input: WeeklyReviewInput, ret: GoalLiftReturn): Candidate {
+/** Every lift's return, the headline lift first (the card's `liftReturns`; just `liftReturn` for callers without it). */
+function returnsOf(input: WeeklyReviewInput): GoalLiftReturn[] {
+  if (input.liftReturns && input.liftReturns.length > 0) return input.liftReturns;
+  return input.liftReturn ? [input.liftReturn] : [];
+}
+
+/** Some lift is still under its pre-break best: the week is a rebuild (no drop is a slip, no session is "made up"). */
+function stillRebuilding(input: WeeklyReviewInput): boolean {
+  return furthestBehindReturn(returnsOf(input)) != null;
+}
+
+/** "Squat estimated 1RM is back above your pre-break best: 145 kg (was 142 kg)." */
+function returnWinText(input: WeeklyReviewInput, r: GoalLiftReturn): string {
+  const { pre, recent, unit } = liftReturnDisplay(r, isImperial(input));
+  const name = liftDisplayName(r.exercise, input.exerciseDisplay);
+  return recent > pre
+    ? `${name} estimated 1RM is back above your pre-break best: ${withUnit(recent, unit)} (was ${withUnit(pre, unit)}).`
+    : `${name} estimated 1RM is back at your pre-break best of ${withUnit(recent, unit)}.`;
+}
+
+/**
+ * The "building back" lift stat: no drop, no slip. The headline lift speaks for
+ * it; when some lifts are back and one is not, the lift furthest behind does
+ * ("Deadlift est. 1RM 157 kg — 98% of your 160 kg pre-break best", with a win
+ * for a lift that is back). Once every pre-break best is regained, the headline
+ * lift's stat is a win.
+ */
+function returnLiftCandidate(input: WeeklyReviewInput): Candidate {
+  const rets = returnsOf(input);
+  const behind = furthestBehindReturn(rets);
+  const mixed = behind != null && rets.some(r => r.regained);
+  const ret = mixed && behind ? behind : rets[0];
   // The numbers as printed, and the percentage from those shown numbers (not from the unrounded e1RMs).
   const { pre, recent, pct, unit } = liftReturnDisplay(ret, isImperial(input));
   const name = liftDisplayName(ret.exercise, input.exerciseDisplay);
   const label = `${name} est. 1RM`;
-  if (!ret.regained) {
-    return { stat: { label, value: withUnit(recent, unit), comparison: `${pct}% of your ${withUnit(pre, unit)} pre-break best`, tone: 'neutral' } };
+  if (behind) {
+    const back = rets.find(r => r.regained);
+    return {
+      stat: { label, value: withUnit(recent, unit), comparison: `${pct}% of your ${withUnit(pre, unit)} pre-break best`, tone: 'neutral' },
+      ...(back ? { win: returnWinText(input, back) } : {}),
+    };
   }
-  const above = recent > pre;
+  const above = rets.every(r => { const n = liftReturnDisplay(r, isImperial(input)); return n.recent > n.pre; });
   return {
     stat: {
       label,
@@ -725,9 +768,7 @@ function returnLiftCandidate(input: WeeklyReviewInput, ret: GoalLiftReturn): Can
       comparison: above ? `back above your pre-break ${withUnit(pre, unit)}` : 'back at your pre-break best',
       tone: 'good',
     },
-    win: above
-      ? `${name} estimated 1RM is back above your pre-break best: ${withUnit(recent, unit)} (was ${withUnit(pre, unit)}).`
-      : `${name} estimated 1RM is back at your pre-break best of ${withUnit(recent, unit)}.`,
+    win: returnWinText(input, ret),
   };
 }
 
@@ -735,7 +776,7 @@ function returnLiftCandidate(input: WeeklyReviewInput, ret: GoalLiftReturn): Can
  * Headline lift stat of the review: the shared pick from lib/liftChange.ts
  * (`pickHeadlineLift`) with the shared 4-week number ("vs 4 weeks ago"), shown
  * in whole kg/lb. When no lift has 4-weeks-ago data the stat falls back to the
- * most-trained lift's clearly-labelled "vs last trained week" change instead
+ * most-trained lift's clearly-labelled week-over-week change instead
  * of inventing one. No stat for a week without sessions (an old e1RM is not
  * that week's win) and a "building back" stat while returning from a break.
  * A drop is a slip only when it is a real stall (the ONE stall rule,
@@ -743,7 +784,7 @@ function returnLiftCandidate(input: WeeklyReviewInput, ret: GoalLiftReturn): Can
  */
 function liftCandidate(input: WeeklyReviewInput, week: Week): Candidate | null {
   if (weekSessionCount(input, week) === 0) return null;
-  if (input.liftReturn) return returnLiftCandidate(input, input.liftReturn);
+  if (input.liftReturn) return returnLiftCandidate(input);
   const imperial = isImperial(input);
   const unit = imperial ? 'lb' : 'kg';
   let best: { name: string; shown: number; windowLabel: string; stalled: boolean } | null = null;
@@ -758,14 +799,15 @@ function liftCandidate(input: WeeklyReviewInput, week: Week): Candidate | null {
       stalled: isLiftStalled(input.progression[picked.exercise], liftAnchor(week)),
     };
   } else {
-    // No lift has 4-weeks-ago data: clearly-labelled "vs last trained week" for the most-trained lift — the ONE
-    // week-over-week definition the goal card quotes too (lib/liftChange.ts pickWeekOverWeek, whole-kg endpoints).
+    // No lift has 4-weeks-ago data: a clearly-labelled week-over-week change ("vs the week before") for the most-trained
+    // lift — the ONE week-over-week definition the goal card quotes too (lib/liftChange.ts pickWeekOverWeek, whole-kg endpoints).
     const wow = pickWeekOverWeek(input.progression, liftAnchor(week), [week.days[0]]);
     if (wow) {
       best = {
         name: liftDisplayName(wow.exercise, input.exerciseDisplay),
         shown: liftDisplayChange({ baselineKg: wow.change.previousKg, recentKg: wow.change.currentKg, changeKg: wow.change.changeKg }, imperial).change,
-        windowLabel: 'vs last trained week',
+        // The window the card labels the same pair with ("Last week: … vs the week before"; lib/liftChange.ts weekOverWeekWording).
+        windowLabel: weekOverWeekWording(wow.change, wow.end, liftAnchor(week)).vs,
         stalled: true,
       };
     }
@@ -1544,12 +1586,22 @@ function enduranceWin(input: WeeklyReviewInput, assessment: WeekAssessment): str
   }
 }
 
-/** The building-back / back-above part of the headline: the 142 is an estimated 1RM, and it is said so. */
-function returnHeadlinePart(input: WeeklyReviewInput, ret: GoalLiftReturn): string {
+/**
+ * The building-back / back-above part of the headline: the 142 is an estimated
+ * 1RM, and it is said so. With some lifts back and one not it names both
+ * ("Squat back above pre-break; deadlift at 98%"); "back above" is said of the
+ * headline lift alone only when every lift is.
+ */
+function returnHeadlinePart(input: WeeklyReviewInput): string {
+  const rets = returnsOf(input);
+  const mixed = mixedReturnLead(rets, input.exerciseDisplay, isImperial(input));
+  if (mixed) return mixed.text;
+  const ret = rets[0];
   const { pre, recent, unit } = liftReturnDisplay(ret, isImperial(input));
   const name = liftDisplayName(ret.exercise, input.exerciseDisplay);
-  if (!ret.regained) return `${name} est. 1RM ${recent} of ${withUnit(pre, unit)} pre-break`;
-  return recent > pre ? `${name} est. 1RM back above pre-break ${withUnit(pre, unit)}` : `${name} est. 1RM back at pre-break best`;
+  if (furthestBehindReturn(rets) != null) return `${name} est. 1RM ${recent} of ${withUnit(pre, unit)} pre-break`;
+  const above = rets.every(r => { const n = liftReturnDisplay(r, isImperial(input)); return n.recent > n.pre; });
+  return above ? `${name} est. 1RM back above pre-break ${withUnit(pre, unit)}` : `${name} est. 1RM back at pre-break best`;
 }
 
 function buildHeadline(input: WeeklyReviewInput, cands: Candidate[], week: Week): string {
@@ -1604,10 +1656,11 @@ function buildHeadline(input: WeeklyReviewInput, cands: Candidate[], week: Week)
     const protein = by('Protein days hit');
     if (lift && input.liftReturn) {
       // Returning from a break: the rebuild leads ("Squat est. 1RM 136 of 142 kg pre-break"), regained or not.
-      parts.push(returnHeadlinePart(input, input.liftReturn));
+      parts.push(returnHeadlinePart(input));
     } else if (lift && lift.tone === 'good') {
       // The lift change is a 4-week number inside a one-week sentence: say so.
-      const window = lift.comparison?.includes('4 weeks') ? `over ${withUnit(4, 'wks')}` : 'vs last trained wk';
+      const cmp = lift.comparison ?? '';
+      const window = cmp.includes('4 weeks') ? `over ${withUnit(4, 'wks')}` : cmp.replace('last trained week', 'last trained wk');
       parts.push(`${lift.label} ${lift.value} ${window}`);
     }
     else if (protein) parts.push(`protein ${protein.value.replace('/', ' of ')} ${loggedWord(protein)}days`);
@@ -2142,7 +2195,7 @@ function afterDeloadNextWeek(input: WeeklyReviewInput, week: Week): string | nul
  * known load, or when no lift is ready to go up.
  */
 function progressionCue(input: WeeklyReviewInput, week: Week): string | null {
-  const rebuilding = input.liftReturn != null && !input.liftReturn.regained;
+  const rebuilding = stillRebuilding(input);
   const cues = nextLoadCues(input.progression, week.days[0], { imperial: isImperial(input), leadKey: reviewLiftKey(input, week), rebuilding });
   const up = cues.filter(c => !c.hold);
   if (up.length === 0) return null;
@@ -2198,7 +2251,7 @@ function gapNextWeek(input: WeeklyReviewInput, gap: WeekGap, week: Week, prevWee
       if (sessions && input.goal === 'muscle') {
         // A week off: ease in at lighter weights. Returning from a break: rebuild at today's weights. Never "make up" what was missed.
         if (gap.done === 0) return easeBackInNextWeek(input, week, gap.target);
-        if (input.liftReturn && !input.liftReturn.regained) {
+        if (stillRebuilding(input)) {
           return `Keep rebuilding: aim for ${gap.target} ${plural(gap.target, 'session')} at your current weights and add load only when every set feels solid.`;
         }
       }

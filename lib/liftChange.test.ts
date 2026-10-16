@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   cuedLifts, easedLoad, findRecentBreak, isDeload, isDeloadWeek, isLiftProgressing, isLiftStalled, isLowerBodyCompound, latestTopLoadKg, liftChange4w,
-  liftDisplayChange, liftDisplayName, liftLastBest, liftRecentEndWeek, liftRegressed, liftReturnDisplay, liftReturnState, liftShortName, liftWeekOverWeek,
-  nextLoadCues, nextWorkingLoad, pickHeadlineLift, pickWeekOverWeek, priorTopLoadKg, rankLifts,
+  furthestBehindReturn, liftDisplayChange, liftDisplayName, liftLapseMinDays, liftLastBest, liftRecentEndWeek, liftRegressed, liftReturnDisplay, liftReturnState,
+  liftReturnStates, liftShortName, liftWeekOverWeek, nextLoadCues, nextWorkingLoad, pickHeadlineLift, pickWeekOverWeek, priorTopLoadKg, rankLifts, weekOverWeekWording,
   type LiftWeekPoint,
 } from './liftChange';
 
@@ -248,12 +248,28 @@ test('isDeloadWeek: needs a session that week and earlier weeks to compare with'
 
 // ── Working loads and the next load (the lift logger's next-weight rule) ────
 
-test('nextWorkingLoad: +2.5 kg / +5 lb for lower-body compounds, +1.25 kg / +2.5 lb otherwise, rounded to 0.5 kg / 1 lb', () => {
+test('nextWorkingLoad: +2.5 kg / +5 lb for EVERY lift, rounded to a multiple of 2.5 kg / 5 lb — a step standard plates can make (wave 21)', () => {
   assert.deepEqual(nextWorkingLoad(107.5, 'squat', false), { from: 107.5, to: 110, unit: 'kg' });
   assert.deepEqual(nextWorkingLoad(125, 'romanian deadlift', false), { from: 125, to: 127.5, unit: 'kg' });
-  assert.deepEqual(nextWorkingLoad(82.5, 'bench press', false), { from: 82.5, to: 84, unit: 'kg' }); // 83.75 -> 84
+  // Upper body used to step +1.25 (rounded to 0.5): "bench 80 -> 81.5 kg" needs 0.75 kg a side.
+  assert.deepEqual(nextWorkingLoad(80, 'bench press', false), { from: 80, to: 82.5, unit: 'kg' });
+  assert.deepEqual(nextWorkingLoad(82.5, 'bench press', false), { from: 82.5, to: 85, unit: 'kg' });
+  assert.deepEqual(nextWorkingLoad(57.5, 'overhead press', false), { from: 57.5, to: 60, unit: 'kg' });
   assert.deepEqual(nextWorkingLoad(100, 'squat', true), { from: 220, to: 225, unit: 'lb' });
-  assert.deepEqual(nextWorkingLoad(100, 'bench press', true), { from: 220, to: 223, unit: 'lb' }); // 222.5 -> 223
+  assert.deepEqual(nextWorkingLoad(100, 'bench press', true), { from: 220, to: 225, unit: 'lb' }); // was 223: not a plate
+  // A load logged off the grid (81 kg) lands on the next one: 82.5, never 83.5.
+  assert.deepEqual(nextWorkingLoad(81, 'bench press', false), { from: 81, to: 82.5, unit: 'kg' });
+  // Every target is on the grid and above today's load, whatever the lift and the load.
+  for (let kg = 20; kg <= 250; kg += 0.5) {
+    for (const key of ['squat', 'bench press', 'overhead press', 'deadlift']) {
+      const m = nextWorkingLoad(kg, key, false);
+      assert.equal(m.to % 2.5, 0, `${key} ${kg} kg -> ${m.to}`);
+      assert.ok(m.to > m.from && m.to - m.from <= 3.75, `${key} ${kg} kg -> ${m.to}`);
+      const lb = nextWorkingLoad(kg, key, true);
+      assert.equal(lb.to % 5, 0, `${key} ${kg} kg -> ${lb.to} lb`);
+      assert.ok(lb.to > lb.from && lb.to - lb.from <= 7.5, `${key} ${kg} kg -> ${lb.to} lb`);
+    }
+  }
   assert.equal(nextWorkingLoad(999.5, 'squat', false).to, 1000); // the logger's maximum
   assert.equal(isLowerBodyCompound('Hip-Thrust'), true);
   assert.equal(isLowerBodyCompound('overhead press'), false);
@@ -279,6 +295,57 @@ test('liftDisplayChange: whole units; the change is computed from the rounded en
   assert.deepEqual(liftDisplayChange({ baselineKg: 99.2, recentKg: 107.9, changeKg: 8.7 }, false), { baseline: 99, recent: 108, change: 9 });
   // 100 kg = 220.46 lb -> 220; 105 kg = 231.5 lb -> 231
   assert.deepEqual(liftDisplayChange({ baselineKg: 100, recentKg: 105, changeKg: 5 }, true), { baseline: 220, recent: 231, change: 11 });
+});
+
+test('liftReturnStates: every lift with a pre-break best and a session since, the headline lift first, then the other MAIN lifts (wave 21)', () => {
+  const squat = [...preBreak, ...afterBreak]; // 142 pre-break, 138 since
+  const deadlift = [ls('2026-08-24', 158, 2), ls('2026-09-07', 160, 2), ls('2026-09-28', 150, 2), ls('2026-10-05', 157, 2)]; // 157 of 160
+  const bench = [ls('2026-08-31', 100, 2), ls('2026-09-07', 106, 2), ls('2026-10-05', 106, 2)]; // back at 106
+  const latPulldown = [ls('2026-09-07', 90, 2), ls('2026-10-05', 70, 2)]; // an accessory, 78%
+  const states = liftReturnStates({ squat, deadlift, 'bench press': bench, 'lat pulldown': latPulldown }, DAYS_WITH_BREAK, '2026-10-06');
+  // Most-trained first (squat 6 weeks, deadlift 4, bench 3); the accessory never joins.
+  assert.deepEqual(states.map(r => [r.exercise, r.preBreakKg, r.recentKg, r.regained]), [
+    ['squat', 142, 138, false], ['deadlift', 160, 157, false], ['bench press', 106, 106, true],
+  ]);
+  // The first entry IS what `liftReturnState` returns (the payload's `liftReturn`).
+  assert.deepEqual(states[0], liftReturnState({ squat, deadlift, 'bench press': bench, 'lat pulldown': latPulldown }, DAYS_WITH_BREAK, '2026-10-06'));
+  // An accessory can be the headline lift (the most-trained lift with both numbers) but then it is alone with the main lifts.
+  const busy = [...trainedWeeks.map(w => ls(w, 90, 4)), ls('2026-09-28', 70, 4), ls('2026-10-05', 70, 4)];
+  const withAccessory = liftReturnStates({ squat, 'lat pulldown': busy }, DAYS_WITH_BREAK, '2026-10-06');
+  assert.deepEqual(withAccessory.map(r => r.exercise), ['lat pulldown', 'squat']);
+  // A main lift with no pre-break best, or no session since, has no state; no break, no states.
+  assert.deepEqual(liftReturnStates({ squat, deadlift: afterBreak }, DAYS_WITH_BREAK, '2026-10-06').map(r => r.exercise), ['squat']);
+  assert.deepEqual(liftReturnStates({ squat, deadlift: preBreak }, DAYS_WITH_BREAK, '2026-10-06').map(r => r.exercise), ['squat']);
+  assert.deepEqual(liftReturnStates({ squat }, ['2026-10-05'], '2026-10-06'), []);
+});
+
+test('furthestBehindReturn: the lowest share of the pre-break best among the lifts not back; null when every lift is', () => {
+  const r = (exercise: string, preBreakKg: number, recentKg: number, regained = false) => ({ exercise, preBreakKg, recentKg, regained });
+  assert.equal(furthestBehindReturn([r('squat', 142, 138), r('deadlift', 160, 150), r('bench press', 100, 99)])!.exercise, 'deadlift');
+  assert.equal(furthestBehindReturn([r('squat', 142, 145, true), r('deadlift', 160, 157)])!.exercise, 'deadlift');
+  assert.equal(furthestBehindReturn([r('squat', 142, 145, true), r('deadlift', 160, 160, true)]), null);
+  assert.equal(furthestBehindReturn([]), null);
+  // A tie keeps the order given (the headline lift first).
+  assert.equal(furthestBehindReturn([r('squat', 100, 90), r('deadlift', 200, 180)])!.exercise, 'squat');
+});
+
+test('liftLapseMinDays: clamp(ceil(14 / weekly target), 4, 7) — 4 days for 4 a week, a week for 2 or no target (wave 21)', () => {
+  assert.deepEqual([1, 2, 3, 4, 5, 6, 7].map(liftLapseMinDays), [7, 7, 5, 4, 4, 4, 4]);
+  assert.equal(liftLapseMinDays(null), 7);
+  assert.equal(liftLapseMinDays(undefined), 7);
+  assert.equal(liftLapseMinDays(0), 7);
+});
+
+test('weekOverWeekWording: the window it is about and what it is measured against (wave 21)', () => {
+  const change = (previousWeekStart: string) => ({ previousWeekStart, previousKg: 100, currentKg: 104, changeKg: 4 });
+  // Anchor Monday 09-28: 09-21 is last week, 09-28 this week.
+  assert.deepEqual(weekOverWeekWording(change('2026-09-14'), '2026-09-21', '2026-09-28'), { window: 'Last week', vs: 'vs the week before' });
+  assert.deepEqual(weekOverWeekWording(change('2026-09-21'), '2026-09-28', '2026-09-28'), { window: 'This week', vs: 'vs last week' });
+  // A skipped week in between: it is the last TRAINED week, not the week before.
+  assert.deepEqual(weekOverWeekWording(change('2026-09-07'), '2026-09-21', '2026-09-28'), { window: 'Last week', vs: 'vs last trained week' });
+  assert.deepEqual(weekOverWeekWording(change('2026-09-07'), '2026-09-28', '2026-09-28'), { window: 'This week', vs: 'vs last trained week' });
+  // Any other end week has no window.
+  assert.equal(weekOverWeekWording(change('2026-08-31'), '2026-09-07', '2026-09-28').window, null);
 });
 
 // ── Wave 20b: week over week, a lapse, the return as shown, every main lift's next load ──
@@ -324,8 +391,14 @@ test('liftReturnDisplay: whole numbers as shown, the percentage from those numbe
   assert.deepEqual(liftReturnDisplay({ preBreakKg: 142.4, recentKg: 141.6, regained: false }, false), { pre: 142, recent: 141, pct: 99, unit: 'kg' });
   // Regained: rounded to the nearest percent, may reach 100+.
   assert.deepEqual(liftReturnDisplay({ preBreakKg: 142, recentKg: 145, regained: true }, false), { pre: 142, recent: 145, pct: 102, unit: 'kg' });
-  // Pounds: the shown lb numbers drive the percentage (130 kg = 287 lb, 140 kg = 309 lb).
-  assert.deepEqual(liftReturnDisplay({ preBreakKg: 140, recentKg: 130, regained: false }, true), { pre: 309, recent: 287, pct: 92, unit: 'lb' });
+  // Pounds: the shown lb numbers drive the percentage (130 kg = 287 lb, 140 kg = 309 lb): 287 / 309 = 92.9%.
+  assert.deepEqual(liftReturnDisplay({ preBreakKg: 140, recentKg: 130, regained: false }, true), { pre: 309, recent: 287, pct: 93, unit: 'lb' });
+  // Rounded the normal way (wave 21): 139 of 142 is 97.9% -> 98, where it was floored to "97%".
+  assert.equal(liftReturnDisplay({ preBreakKg: 142, recentKg: 139, regained: false }, false).pct, 98);
+  assert.equal(liftReturnDisplay({ preBreakKg: 142, recentKg: 136, regained: false }, false).pct, 96); // 95.8
+  assert.equal(liftReturnDisplay({ preBreakKg: 142, recentKg: 135, regained: false }, false).pct, 95); // 95.07
+  // ... but 99.67% still never reads 100% while under the best.
+  assert.deepEqual(liftReturnDisplay({ preBreakKg: 300, recentKg: 299.4, regained: false }, false), { pre: 300, recent: 299, pct: 99, unit: 'kg' });
 });
 
 test('liftRegressed: more than 1% under the previous trained week; nothing to compare is not a regression', () => {
@@ -362,7 +435,7 @@ test('nextLoadCues: the same next-load rule per lift; a lift that went backwards
   const cues = nextLoadCues(prog, wkStart, { imperial: false, leadKey: 'squat', rebuilding: false });
   assert.deepEqual(cues.map(c => [c.key, c.load.from, c.load.to, c.hold]), [
     ['squat', 110, 112.5, false],
-    ['bench press', 87.5, 89, false], // +1.25 rounded to 0.5, as the logger does
+    ['bench press', 87.5, 90, false], // +2.5 for every lift: 88.75 is not a plate load
     ['deadlift', 130, 132.5, true], // e1RM fell 6%: hold at 130
   ]);
   assert.equal(nextLoadCues(prog, wkStart, { imperial: false, leadKey: 'squat', rebuilding: true }).some(c => c.hold), false);

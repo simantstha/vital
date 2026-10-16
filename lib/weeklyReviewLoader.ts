@@ -175,6 +175,7 @@ export async function computeLastWeekReview(
     longRun: progress?.longRun ?? null,
     // Muscle: the "building back after a break" state as of the reviewed week's end (same object the goal card shows).
     liftReturn: progress?.liftReturn ?? null,
+    liftReturns: progress?.liftReturns ?? null,
     // Race lifecycle: the race day decides the reviewed / coming week's phase; the peak week sets its targets.
     raceDate: goal === 'endurance' ? user.race_date ?? null : null,
     raceDistanceKm: goal === 'endurance' ? user.race_distance_km ?? null : null,

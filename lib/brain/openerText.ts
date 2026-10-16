@@ -10,7 +10,7 @@
  */
 
 import type { GoalKind, GoalProgress } from '../goalProgress';
-import { LIFT_LAPSE_MIN_DAYS } from '../liftChange';
+import { liftLapseMinDays } from '../liftChange';
 import { KM_PER_MILE, LB_PER_KG } from '../metricFormat';
 import { PACE_SETTLE_DAYS, relationForDays, weeksForDays } from '../weightPace';
 import type { UnitSystem } from '../units';
@@ -108,13 +108,29 @@ function reachedAsks(gp: GoalProgress | null | undefined): boolean {
 const LAPSE_ASK = 'Want to plan how to get back in?';
 
 /**
- * A lifter a week or more past their last session (the card's "No sessions for 8
- * days", verdict holding) until the returning-user opener takes over at
- * RETURNING_AFTER_DAYS: the opener ends in its own question.
+ * A lifter past the lapse threshold (the card's "No sessions for 4 days",
+ * verdict holding; the threshold scales to the weekly target, 4 days for 4 a
+ * week, a week for 2 or none): the opener states the lapse and ends in its own
+ * question, for as long as the lifter is away — "Welcome back" waits for the
+ * first session back (`firstSessionBack`).
  */
 function lapseAsks(gp: GoalProgress | null | undefined): boolean {
   const days = gp?.lastSessionDaysAgo;
-  return gp?.goal === 'muscle' && gp.verdict === 'holding' && days != null && days >= LIFT_LAPSE_MIN_DAYS && days <= RETURNING_AFTER_DAYS;
+  return gp?.goal === 'muscle' && gp.verdict === 'holding' && days != null && days >= liftLapseMinDays(gp.target.weeklySessions);
+}
+
+/**
+ * The lifter's first session back after a break (the payload's `liftReturn`:
+ * 10+ days off, ended yesterday relative to that session): the only moment a
+ * muscle opener says "Welcome back". It lasts until the second session, and at
+ * most through the next day.
+ */
+function firstSessionBack(gp: GoalProgress): number | null {
+  const ret = gp.liftReturn;
+  const last = ymdToUtc(gp.lastSessionOn);
+  const ended = ymdToUtc(ret?.endedOn);
+  if (!ret || last == null || ended == null || gp.lastSessionDaysAgo == null || gp.lastSessionDaysAgo > 1) return null;
+  return Math.round((last - ended) / DAY_MS) === 1 ? ret.breakDays : null;
 }
 
 /**
@@ -223,8 +239,11 @@ export function parseGoalKind(raw: unknown): GoalKind | null {
 /**
  * Returning-user opener: the last weigh-in (weight-loss goals) or session (every
  * other goal) is more than RETURNING_AFTER_DAYS ago, so the useful move is a
- * quick reset, not a status line about a trend that has gone cold. Null for
- * everyone else. Ends in a question.
+ * quick reset, not a status line about a trend that has gone cold. A lifter
+ * (muscle goal) is welcomed back only on the first session after a break; while
+ * still away the opener is the lapse check-in, or a plain "it's been N days"
+ * offer when the card has no lift to date. Null for everyone else. Ends in a
+ * question.
  */
 export function returningUserOpener(gp: GoalProgress | null | undefined): string | null {
   if (!gp) return null;
@@ -237,6 +256,16 @@ export function returningUserOpener(gp: GoalProgress | null | undefined): string
   }
   // A runner whose card already shows the restart plan (on a break, or in the restart week) is not offered another one.
   if (gp.goal === 'endurance' && (gp.distance?.plan?.kind === 'restart' || /^(On a break|Building back)\b/.test(gp.headline ?? ''))) return null;
+  if (gp.goal === 'muscle') {
+    // "Welcome back" is for the first session back, never for a lifter still away: a lapse keeps the lapse check-in
+    // ("No sessions for 15 days — Squat was … Want to plan how to get back in?", goalOpenerLine), and a lapse the card
+    // has no lift to date (no e1RM yet) gets the plain "it has been N days" reset offer.
+    const away = gp.lastSessionDaysAgo;
+    const brokeDays = firstSessionBack(gp);
+    if (brokeDays != null) return `Welcome back — your first session after ${brokeDays} days off. Want a quick plan to build back up?`;
+    if (away != null && away > RETURNING_AFTER_DAYS && !lapseAsks(gp)) return `It's been ${away} days since your last session. Want a quick reset plan?`;
+    return null;
+  }
   const days = gp.lastSessionDaysAgo;
   if (days != null && days > RETURNING_AFTER_DAYS) {
     return `Welcome back — your last session was ${days} days ago. Want a quick reset plan?`;
@@ -283,16 +312,17 @@ function existingTargetPhrases(gp: GoalProgress | null | undefined, units: UnitS
 /**
  * The closing clause of the new-user opener. A lifter who has already logged
  * sessions is no longer "yet to log a few days": the muscle card is waiting on
- * its first 4-week lift comparison, so say how many sessions are in and when
- * the comparison lands (the date is the one in the card's own headline).
+ * its first 4-week lift trend, so say how many sessions are in and when the
+ * trend starts (the date is the one in the card's own headline, "4-week lift
+ * trend from Mar 30").
  */
 function newUserTail(kind: GoalKind, gp?: GoalProgress | null): string {
   const generic = "Once you've logged a few days I'll tell you how it's going";
   const sessions = gp?.dataSufficiency?.sessionsLast28d ?? 0;
   if (kind !== 'muscle' || gp?.goal !== 'muscle' || sessions < 2) return generic;
-  const date = /^First lift comparison on ([^·]+?)\s*(?:·|$)/.exec(gp.headline)?.[1] ?? null;
+  const date = /^4-week lift trend from (.+?)\s*$/.exec(gp.headline)?.[1] ?? null;
   const logged = `You've logged ${sessions} sessions so far`;
-  return date ? `${logged} — your first lift comparison is on ${date}` : `${logged}, so I'll have a read on how it's going soon`;
+  return date ? `${logged} — your 4-week lift trend starts ${date}` : `${logged}, so I'll have a read on how it's going soon`;
 }
 
 /**
