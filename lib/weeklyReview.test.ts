@@ -789,7 +789,7 @@ test('muscle: a week with only a run has 0 sessions and is tough', () => {
   const r = computeWeeklyReview(muscleWeek({ trainingDays: [WEEK[3]], strengthDays: [] }));
   assert.equal(statByLabel(r, 'Sessions')!.value, '0');
   // A week without a session says so (wave 20b: not "0 of 4 sessions, weight +0.3 kg").
-  assert.equal(r.headline, 'No sessions this week');
+  assert.equal(r.headline, 'No sessions last week');
   assert.equal(r.weekRating, 'tough');
   assert.equal(r.slip, '0 of 4 sessions — none done');
 });
@@ -2436,9 +2436,9 @@ test('a week with no session: the headline says so (2nd, 3rd week off), weight g
   const first = computeWeeklyReview(liftReview({ trainingDays: [], strengthDays: [], progression: lifts('2026-09-21'), signupDay: '2026-06-01' }));
   const second = computeWeeklyReview(liftReview({ trainingDays: [], strengthDays: [], progression: lifts('2026-09-14'), signupDay: '2026-06-01' }));
   const third = computeWeeklyReview(liftReview({ trainingDays: [], strengthDays: [], progression: lifts('2026-09-07'), signupDay: '2026-06-01' }));
-  assert.equal(first.headline, 'No sessions this week');
-  assert.equal(second.headline, 'No sessions this week (2nd week off)');
-  assert.equal(third.headline, 'No sessions this week (3rd week off)');
+  assert.equal(first.headline, 'No sessions last week');
+  assert.equal(second.headline, 'No sessions last week (2nd week off)');
+  assert.equal(third.headline, 'No sessions last week (3rd week off)');
   // The scale went up 0.2 kg: still on the card as a number, but not the win, and the push is not "0 of 4 sessions, weight +0.2 kg".
   for (const r of [first, second, third]) {
     assert.equal(r.win, null);
@@ -2454,7 +2454,7 @@ test('a week with no session: the headline says so (2nd, 3rd week off), weight g
   assert.equal(new Set([first, second, third].map(r => `${r.headline}|${r.slip}|${r.nextWeek}`)).size, 3);
   // Weeks before the user signed up are not weeks off.
   const fresh = computeWeeklyReview(liftReview({ trainingDays: [], strengthDays: [], progression: {}, signupDay: WEEK_START }));
-  assert.equal(fresh.headline, 'No sessions this week', 'one week since signup is not a second week');
+  assert.equal(fresh.headline, 'No sessions last week', 'one week since signup is not a second week');
 });
 
 test('muscle weight gain is the win in a week with a session, not in a week without one', () => {
@@ -2564,7 +2564,7 @@ test('rebuilding: the headline carries the rebuild with the shown numbers, and t
   assert.equal(at.headline, '4 of 4 sessions, Squat est. 1RM back at pre-break best');
   // A week off while returning is a week off, not a rebuild headline.
   const off = computeWeeklyReview(liftReview({ liftReturn: RETURN, trainingDays: [], strengthDays: [], progression: { squat: squatReturn.slice(0, 4) } }));
-  assert.match(off.headline, /^No sessions this week/);
+  assert.match(off.headline, /^No sessions last week/);
   assert.doesNotMatch(off.headline, /pre-break/);
 });
 

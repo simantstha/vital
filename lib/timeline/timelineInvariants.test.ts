@@ -928,3 +928,18 @@ invariant(LIFTERS, `at most ${LIFTER_MAX_CHANGES} card verdict changes in any ${
   }
   return out;
 });
+
+// On the Monday the review is read, "this week" is the week that just began (the card says "1 of 4 sessions this week", the opener
+// "Welcome back"). The review is about the week before, so its headline, stats, win, slip and push say "last week" and never
+// "this week": "No sessions this week (2nd week off)" sat beside a card counting this week's first session (days 63 and 70).
+// ("Next week" is about the coming week and may say it.)
+invariant(LIFTERS, 'no Monday review string (headline, stats, win, slip, push) calls the reviewed week "this week"', snaps => {
+  const out: Violation[] = [];
+  for (const snap of snaps) {
+    const review = snap.review;
+    if (!review) continue;
+    const texts = [...reviewTexts(snap).filter(t => t.where !== 'review.nextWeek'), { where: 'alert.title', text: review.alert.title }, { where: 'alert.body', text: review.alert.body }];
+    for (const t of texts) if (/\bthis week\b/i.test(plain(t.text))) out.push({ snap, detail: `${t.where}: "${visible(t.text)}"` });
+  }
+  return out;
+});

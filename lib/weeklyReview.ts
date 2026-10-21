@@ -1071,7 +1071,7 @@ function restingHrCandidate(input: WeeklyReviewInput, week: Week, prevWeek: Week
     const diff = Math.round(avg - (mean(prev) as number));
     comparison = diff === 0 ? 'same as last week' : `${signed(diff, withUnit(Math.abs(diff), 'bpm'))} vs last week`;
     if (diff <= -1) { tone = 'good'; cand.win = `Resting heart rate dropped ${withUnit(Math.abs(diff), 'bpm')} — a sign recovery is keeping up.`; }
-    else if (diff >= 3) { tone = 'watch'; cand.slip = `Resting heart rate rose ${withUnit(diff, 'bpm')} — your body may be carrying fatigue.`; cand.fix = 'Make one session an easy one — resting heart rate rose this week.'; }
+    else if (diff >= 3) { tone = 'watch'; cand.slip = `Resting heart rate rose ${withUnit(diff, 'bpm')} — your body may be carrying fatigue.`; cand.fix = 'Make one session an easy one — resting heart rate rose last week.'; }
   }
   cand.stat.comparison = comparison ?? 'week avg';
   cand.stat.tone = tone;
@@ -1717,7 +1717,7 @@ function buildHeadline(input: WeeklyReviewInput, cands: Candidate[], week: Week)
     // A week without a session says so, and how long it has been: no praise for the scale or an old lift in its place.
     if (sessions && weekSessionCount(input, week) === 0) {
       const off = weeksOffRunning(input, week);
-      return clipHeadline(off >= 2 ? `No sessions this week (${ordinal(off)} week off)` : 'No sessions this week');
+      return clipHeadline(off >= 2 ? `No sessions last week (${ordinal(off)} week off)` : 'No sessions last week');
     }
     if (sessions) {
       parts.push(sessions.comparison?.startsWith('target ')
