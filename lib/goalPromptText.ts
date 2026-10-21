@@ -8,7 +8,7 @@
  */
 
 import type { GoalKind, GoalProgress } from './goalProgress';
-import { RACE_EVE_LINE, STRIDES_COPY, easingOffLine, formatRaceTime, formatTargetLongRun, isWindDownPhase, lightWeekLine, longRunCapNote, racePaceReps, recoveryWeek, roundLongRunKm } from './enduranceProgression';
+import { RACE_EVE_LINE, STRIDES_COPY, formatRaceTime, formatTargetLongRun, isWindDownPhase, lightWeekLine, longRunCapNote, racePaceReps, recoveryWeek, roundLongRunKm } from './enduranceProgression';
 import type { ProgressionSummary } from './workoutRepository';
 import { plainSpaces } from './displayText';
 import { liftChange4w, liftLapseMinDays, pickHeadlineLift, rankLifts } from './liftChange';
@@ -117,13 +117,9 @@ function weekTargetLine(gp: GoalProgress, units: UnitSystem): string | null {
     const line = plainSpaces(lightWeekLine({ reason: 'days_off', daysOff: 0, longRunCapKm: plan.longRunKm }, units === 'imperial' ? 1 / KM_PER_MILE : 1));
     return `- This week's target: ${line.charAt(0).toLowerCase()}${line.slice(1)}; no catch-up volume, and do not call the week behind`;
   }
-  // The week before a taper whose target is out of reach: easing off is fine; the same line the card shows.
+  // The week before a taper whose target is out of reach (or done short): easing off is fine - the card's own plan line, as an instruction.
   if (plan.easingOff) {
-    const line = plainSpaces(easingOffLine(
-      { reason: 'late_week', daysOff: 0, longRunKm: plan.longRunKm, taperLongRunKm: plan.taperLongRunKm ?? null },
-      plan.preTaper ?? 'taper',
-      units === 'imperial' ? 1 / KM_PER_MILE : 1,
-    ));
+    const line = plainSpaces(plan.purpose);
     return `- This week's target: ${line.charAt(0).toLowerCase()}${line.slice(1)}; no catch-up volume, and do not call the week behind`;
   }
   // Every 4th plain build / maintain week: ~80% of the week it replaces, the long run held.

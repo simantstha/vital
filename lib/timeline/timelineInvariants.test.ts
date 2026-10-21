@@ -1396,20 +1396,20 @@ invariant(RUNNERS, 'the long-run watch note names the goal\'s own weekly distanc
 
 // ── wave 22e / P2.9: the last day of a week judges THIS week ────────────────
 
-invariant(RUNNERS, 'on the Sunday of a build or maintain week the card headline judges this week (its km), not "N km last week"', (snaps, name) => {
+invariant(RUNNERS, 'on the Sunday of a build, hold or maintain week the card headline judges this week (its km), not "N km last week"', (snaps, name) => {
   const out: Violation[] = [];
   let sundays = 0;
   for (const snap of snaps) {
     const d = snap.card?.distance;
     if (weekdayOf(snap.date) !== 'Sun' || !d?.plan || d.thisWeekKm == null || d.thisWeekKm <= 0) continue;
-    if (d.plan.kind !== 'build' && d.plan.kind !== 'maintain') continue;
-    if (d.plan.lightWeek || d.plan.easingOff || /^Over the safe step|^Well over|^Light week|^Eased off|^On a break/.test(plain(snap.card?.headline ?? ''))) continue;
+    if (d.plan.kind !== 'build' && d.plan.kind !== 'maintain' && d.plan.kind !== 'hold') continue;
+    if (d.plan.lightWeek || d.plan.easingOff || /^Over the safe step —|^Well over the ceiling —|^Light week|^Eased off|^On a break/.test(plain(snap.card?.headline ?? ''))) continue;
     sundays++;
     const unit = /\bmi\b/.test(plain(d.text)) ? 'mi' : 'km';
     const done = inDisplayUnit(d.thisWeekKm, unit);
     const headline = plain(snap.card?.headline ?? '');
     if (/\blast week\b/.test(headline)) out.push({ snap, detail: `headline "${visible(snap.card?.headline ?? '')}" is about last week on the last day of a week that ran ${done} ${unit}` });
-    else if (d.plan.kind === 'build' && !new RegExp(`(?:^|[^\\d.])${String(done).replace('.', '\\.')}(?:\\s?${unit})?(?:\\s|,|;|$)`).test(headline)) out.push({ snap, detail: `headline "${visible(snap.card?.headline ?? '')}" does not carry this week's ${done} ${unit}` });
+    else if (d.plan.kind !== 'maintain' && !new RegExp(`(?:^|[^\\d.])${String(done).replace('.', '\\.')}(?:\\s?${unit})?(?:\\s|,|;|$)`).test(headline)) out.push({ snap, detail: `headline "${visible(snap.card?.headline ?? '')}" does not carry this week's ${done} ${unit}` });
   }
   assert.ok(sundays > 0 || name === 'runner_on_plan_imperial', `${name}: no build or maintain Sunday was stepped, so this invariant checked nothing`);
   return out;
@@ -1475,5 +1475,87 @@ invariant(RUNNERS, 'the coach never says a long run is "held" when it is lower t
       if (m && inDisplayUnit(last, /\bmi\b/.test(plain(snap.card?.distance?.text ?? '')) ? 'mi' : 'km') - Number(m[1]) > 0.55) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" but the last long run was ${last} km` });
     }
   }
+  return out;
+});
+
+// ═══ wave 22e follow-up: no two lines of one day disagree ═════════════════════════════════════════════
+
+// 1. Whether this week's target still applies is ONE answer on a day: the headline, the plan line and the coach's target line all say the target is
+//    waived ("Eased off early", "Easing off", "Light week", "no need to make up") or none of them does.
+const TARGET_WAIVED = /eased off early|easing off|taper starts tomorrow|race week starts tomorrow|light week|don't make it up|no need to make up/i;
+
+invariant(RUNNERS, "the card headline, the plan line and the coach's target line agree on whether this week's target still applies", (snaps) => {
+  const out: Violation[] = [];
+  for (const snap of snaps) {
+    const card = snap.card;
+    if (!card?.distance?.plan) continue;
+    const coachLine = (snap.coach ?? []).find(l => l.startsWith("- This week's target"));
+    const reads = [
+      { where: 'headline', text: card.headline },
+      { where: 'plan purpose', text: card.distance.plan.purpose },
+      ...(coachLine ? [{ where: 'coach target line', text: coachLine }] : []),
+    ].map(r => ({ ...r, waived: TARGET_WAIVED.test(plain(r.text)) }));
+    if (reads.some(r => r.waived) && reads.some(r => !r.waived)) {
+      out.push({ snap, detail: reads.map(r => `${r.where} (${r.waived ? 'waived' : 'applies'}): "${visible(r.text)}"`).join(' | ') });
+    }
+  }
+  return out;
+});
+
+// 3. On a break the week's own target is not quoted (it is stale): the distance line says so, and the restart number is the one number.
+invariant(RUNNERS, 'on a break no "N of ~M km" week figure is quoted, and the coach restarts at the headline\'s number', (snaps, name) => {
+  const out: Violation[] = [];
+  let days = 0;
+  for (const snap of snaps) {
+    if (!/^On a break/.test(plain(snap.card?.headline ?? ''))) continue;
+    days++;
+    const headlineRestart = RESTART_NUMBER.exec(plain(snap.card?.headline ?? ''));
+    for (const t of [...cardTexts(snap), ...coachTexts(snap)]) {
+      const of = /\d(?:\.\d+)?(?:\s?(?:km|mi))? of (?:up to )?~\d/.exec(plain(t.text));
+      if (of) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" quotes the stale week target on a break` });
+      const coachRestart = /^- This week's target: restart at ~(\d+(?:\.\d+)?)/.exec(plain(t.text));
+      if (coachRestart && headlineRestart && Number(coachRestart[1]) !== Number(headlineRestart[1])) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" restarts at a different number than the headline "${visible(snap.card?.headline ?? '')}"` });
+    }
+  }
+  if (name === 'runner_no_race' || name === 'runner_messy') assert.ok(days > 0, `${name}: no break day was stepped, so this invariant checked nothing`);
+  return out;
+});
+
+// 4. The sessions line: a range whose low end is at most half its high end is a break in the window, said as "N runs a week before your break".
+invariant(RUNNERS, 'the sessions line never reads a range like "1–4 runs a week" (a break inside the window)', (snaps) => {
+  const out: Violation[] = [];
+  for (const snap of snaps) {
+    for (const t of cardTexts(snap)) {
+      const m = /^(\d+)(?:–| or )(\d+) runs? a week/.exec(plain(t.text));
+      if (m && Number(m[1]) * 2 <= Number(m[2])) out.push({ snap, detail: `${t.where}: "${visible(t.text)}"` });
+    }
+  }
+  return out;
+});
+
+// 5. A planned cutback is not a drop: the card and the review say "as planned" next to the negative change.
+invariant(RUNNERS, 'a cutback week\'s negative change is said "as planned" on the card and in the review (never a bare "−13%")', (snaps, name) => {
+  const out: Violation[] = [];
+  let seen = 0;
+  const byDate = new Map(snaps.map(s => [s.date, s]));
+  for (const snap of snaps) {
+    if (/your cutback week/.test(plain(snap.card?.headline ?? '')) && /[−-]\d+%/.test(plain(snap.card?.headline ?? ''))) {
+      seen++;
+      if (!/as planned/.test(plain(snap.card?.headline ?? ''))) out.push({ snap, detail: `card headline "${visible(snap.card?.headline ?? '')}"` });
+    }
+  }
+  for (const w of cutbackWeeks(snaps)) {
+    const review = byDate.get(addDays(w.monday, 7));
+    const rv = review?.review?.weekStart === w.monday ? review.review.review : null;
+    if (!review || !rv || w.ranKm > w.targetKm * 1.1) continue;
+    const volume = rv.stats.find(st => st.label === 'Volume');
+    if (volume && /[−-]\d+%/.test(plain(volume.comparison ?? ''))) {
+      seen++;
+      if (!/as planned \(cutback\)/.test(plain(volume.comparison ?? ''))) out.push({ snap: review, detail: `Volume "${visible(volume.value)}" — "${visible(volume.comparison ?? '')}"` });
+      if (volume.tone === 'watch') out.push({ snap: review, detail: `Volume tone ${volume.tone} for a planned cutback` });
+      if (/[−-]\d+%/.test(plain(rv.headline)) && !/as planned/.test(plain(rv.headline))) out.push({ snap: review, detail: `review headline "${visible(rv.headline)}"` });
+    }
+  }
+  if (name === 'runner_on_plan_obedient') assert.ok(seen > 0, `${name}: no cutback week showed a negative change, so this invariant checked nothing`);
   return out;
 });

@@ -86,3 +86,22 @@ test('cutback coach line (22e): a long run the lowered week cannot carry is "eas
   assert.match(eased, /^- This week's target: a cutback week, ~24\.0 km; long run eased to 12 km \(half the week\)/);
   assert.doesNotMatch(eased, /held/);
 });
+
+test('last day of a pre-taper week that ended short (22e follow-up): the coach target line is the card\'s plan line, not "hold the 30 km goal"', () => {
+  const sun = '2026-10-11';
+  const gp = computeGoalProgress(input(weeks(sun, [[[1, 3.4], [3, 3.3], [5, 3.3], [6, 12]], wk(30), wk(30), wk(30), wk(30)]), { todayKey: sun, race: { date: '2026-10-25', distanceKm: 21.1 }, racePeakWeekKm: 30 }));
+  const line = targetLine(coach(gp));
+  assert.equal(line, "- This week's target: taper starts tomorrow — no need to make up this week's km; no catch-up volume, and do not call the week behind");
+  assert.doesNotMatch(coach(gp), /Hold 30|hold the 30|do not add volume/i);
+  const gpMi = computeGoalProgress(input(weeks(sun, [[[1, 3.4], [3, 3.3], [5, 3.3], [6, 12]], wk(30), wk(30), wk(30), wk(30)]), { todayKey: sun, race: { date: '2026-10-25', distanceKm: 21.1 }, racePeakWeekKm: 30, unitSystem: 'imperial' }));
+  const imperial = targetLine(coach(gpMi, 'imperial'));
+  assert.match(imperial, /no need to make up this week's miles/);
+});
+
+test('on a break the coach\'s "Now" line is not the stale week target (22e follow-up)', () => {
+  const sun = '2026-10-25';
+  const gp = computeGoalProgress(input(weeks(sun, [[], [], wk(25), wk(23), wk(21), wk(19), wk(17), wk(15)]), { todayKey: sun }));
+  const lines = coach(gp).split('\n');
+  assert.equal(lines.find(l => l.startsWith('- Now:')), '- Now: 0 km this week · on a break');
+  assert.match(targetLine(coach(gp)), /^- This week's target: restart at ~\d+(\.\d)? km/);
+});

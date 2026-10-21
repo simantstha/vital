@@ -23,7 +23,8 @@
  *                                                //   its "up to" comeback ceiling - 'well' is a hold AT that ceiling }; on the race eve
  *                                                //   thisWeekKm is null and text is "Race tomorrow" (the week's km are not on the card); on race day thisWeekKm is
  *                                                //   null too (wave 22e) and text is "Race done — 21.1 km" once the race is logged, else "Race day" (iOS decodes
- *                                                //   thisWeekKm as optional)
+ *                                                //   thisWeekKm as optional); on a break (22e follow-up) text is "0 km this week · on a break" - never the stale
+ *                                                //   "0 of ~17 km" (the headline quotes the restart number; plan.restartKm carries it when it differs from targetKm)
  *   race: { date, distanceKm, label, weeksToGo, daysToGo, phase?, daysSince?, completed? } | null,   // endurance + upcoming race, or within the recovery weeks;
  *                                                //   phase is read on the Monday of this calendar week (a Sunday 7 days out is still the taper week);
  *                                                //   completed? (additive) = { km, durationMin | null } once a race-length run is logged

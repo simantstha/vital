@@ -95,3 +95,17 @@ test('recovery week 1\'s Volume stat says the week before held the race (22e)', 
   // (The 12 km race-week fixture's Sunday run is the race day itself: 7.2 km of it is training.)
   assert.equal(r.stats.find(st => st.label === 'Volume')!.comparison, '7.2 km last week, excl. the race');
 });
+
+// ── wave 22e follow-up: a planned cutback is not a drop ─────────────────────
+
+test('a cutback week kept as planned says "as planned (cutback)" next to its negative change, in the Volume stat and the headline', () => {
+  // 15 17 19 21 23 then the calendar's cutback week 2026-10-19 (~20 km): 20 km is -13% on 23, as planned.
+  const r = computeWeeklyReview(planReview([15, 17, 19, 21, 23, 20], { weekStart: '2026-10-19' }));
+  const volume = r.stats.find(s => s.label === 'Volume')!;
+  assert.equal(volume.comparison, '−13% vs last week, as planned (cutback)');
+  assert.notEqual(volume.tone, 'watch');
+  assert.match(r.headline, /20 of ~20 km — on plan · goal 30 km, −13%, as planned \(cutback\)$/);
+  // The same drop in a plain build week is not "as planned".
+  const plain = computeWeeklyReview(planReview([15, 17, 19, 21, 25, 20], { weekStart: '2026-10-12' }));
+  assert.doesNotMatch(JSON.stringify(plain), /as planned/);
+});

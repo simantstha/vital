@@ -1698,7 +1698,7 @@ test('a break: "On a break — 7 days since your last run. Restart at ~N km." (b
   assert.equal(p.headline, 'On a break — 7 days since your last run. Restart at ~18 km.');
   assert.equal(p.distance!.plan?.kind, 'restart');
   assert.equal(p.distance!.stepTargetKm, 18); // 60% of the median 30 km week
-  assert.equal(p.distance!.text, '0 of ~18 km running this week · goal 30 km');
+  assert.equal(p.distance!.text, '0 km this week · on a break'); // not the stale week target ("0 of ~18 km"): the headline quotes the restart
   // Back on the road: a restart week, not the goal.
   const back = computeGoalProgress(weekInput([[[0, 5]], [[1, 6]], wkOf(30), wkOf(30), wkOf(30), wkOf(30)]));
   assert.equal(back.verdict, 'building');

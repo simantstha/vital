@@ -800,9 +800,10 @@ export interface EnduranceWeekPlan {
   /**
    * A pre-taper week whose target no longer fits in the runs the runner usually has left (or with 4+ days off): "Easing off
    * before your taper - fine". `longRunKm` is the week's planned long run, `taperLongRunKm` the taper's (what a long run
-   * eased to would be); the card keeps the planned one as the upper end.
+   * eased to would be); the card keeps the planned one as the upper end. `lastDay` (wave 22e): read on the week's last day, when the week is
+   * done and short - the plan line is then "Taper starts tomorrow - no need to make up this week's km", the same as the headline and the coach.
    */
-  easingOff: { reason: 'days_off' | 'late_week'; daysOff: number; longRunKm: number | null; taperLongRunKm: number | null } | null;
+  easingOff: { reason: 'days_off' | 'late_week'; daysOff: number; longRunKm: number | null; taperLongRunKm: number | null; lastDay?: boolean } | null;
   /** A comeback target lifted above the plain 10% step is a ceiling: say "up to ~18 km". */
   upTo: boolean;
   unitsPerKm: number;
@@ -1271,6 +1272,11 @@ export function easingOffLine(
   return `${lead}; keep Sunday's ${longRunWord(hi, unitsPerKm)} ~${range} easy${ill}`;
 }
 
+/** The last day of a pre-taper week that ended short: the week is done and nothing is to be made up. */
+export function easedOffLine(nextPhase: 'taper' | 'race_week' = 'taper', unitsPerKm = 1): string {
+  return `${nextPhase === 'taper' ? 'Taper' : 'Race week'} starts tomorrow — no need to make up this week's ${distanceUnit(unitsPerKm) === 'km' ? 'km' : 'miles'}`;
+}
+
 /** One line of "what this week is for" (units-aware, U+00A0 between a number and its unit). */
 function purposeLine(plan: Omit<EnduranceWeekPlan, 'purpose'>): string {
   const u = plan.unitsPerKm;
@@ -1281,7 +1287,7 @@ function purposeLine(plan: Omit<EnduranceWeekPlan, 'purpose'>): string {
   const lrPart = lr != null ? `${lrWord} ${formatTargetLongRun(lr, u)}${held}` : null;
   const strides = plan.strides ? `; ${STRIDES_COPY}` : '';
   if (plan.lightWeek != null) return lightWeekLine(plan.lightWeek, u);
-  if (plan.easingOff != null) return easingOffLine(plan.easingOff, plan.preTaper?.nextPhase ?? 'taper', u);
+  if (plan.easingOff != null) return plan.easingOff.lastDay ? easedOffLine(plan.preTaper?.nextPhase ?? 'taper', u) : easingOffLine(plan.easingOff, plan.preTaper?.nextPhase ?? 'taper', u);
   switch (plan.kind) {
     case 'baseline':
       return "Baseline week: run as you normally would; next week's step is built from this week";
@@ -1810,6 +1816,15 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
   };
   const windInfo: EnduranceWeekPlan['wind'] = wind ? { phase: wind.phase as 'taper' | 'race_week' | 'recovery', info: wind, peakKm: ctx.peakKm ?? ctx.goalKm } : null;
   const band = bandFor(targetKm, ctx, medianKm, windInfo, mode, { comebackFromKm: comeback != null ? prev.km : null, cutbackNormalKm: cutback?.normalKm ?? null });
+  // The last day of a pre-taper week that is done and short: it is "easing off" too (not a target still to hit), so the headline, the plan line
+  // and the coach all say the same thing ("Taper starts tomorrow - no need to make up this week's km").
+  if (depth === 0 && preTaper != null && wind == null && lightWeek == null && targetKm != null && ctx.today === weekEnd) {
+    const done = weekRuns(ctx, w).km;
+    if (easingOff != null) easingOff = { ...easingOff, lastDay: true };
+    else if (done > 0 && gradeEnduranceWeek({ kind, targetKm, band, endedOff, restart, goalKm: ctx.goalKm, cutback, comeback, upTo }, done, { unitsPerKm: ctx.units }).gap === 'short') {
+      easingOff = { reason: 'late_week', daysOff: 0, longRunKm: null, taperLongRunKm: null, lastDay: true };
+    }
+  }
   const stepPct = targetKm != null && hasPrior && stepBaseKm >= compareMin && !wind && cutback == null && hold?.ceiling !== true
     ? Math.round(((targetKm - stepBaseKm) / stepBaseKm) * 100)
     : null;

@@ -1007,6 +1007,8 @@ function planVolumeCandidate(input: WeeklyReviewInput, rp: ReviewPlans): Candida
   else if (prevKm >= compareMin) {
     const pct = Math.round(((km - prevKm) / prevKm) * 100);
     comparison = pct === 0 ? 'same as last week' : `${signed(pct, `${Math.abs(pct)}%`)} vs last week`;
+    // A cutback week is a planned drop (wave 22e): said so, next to the number.
+    if (plan.cutback != null && pct < 0) comparison = `${comparison}, as planned (cutback)`;
   } else if (prevKm > 0) comparison = `vs ${distanceText(input, prevKm)} last week`;
   else comparison = 'for the week';
   // A comeback week more than 10% over its "up to" ceiling is neither a win nor a spike: neutral.
@@ -1782,7 +1784,9 @@ function buildHeadline(input: WeeklyReviewInput, cands: Candidate[], week: Week)
           ? distanceHeadline(input, km, target, stepKm, { spike, cutback: reviewed?.cutback != null, upTo: reviewed?.upTo === true, overCap })
           : volume.value;
         // A spike's (or an over-the-cap week's) headline already says it is a jump: no "+186% vs last week" on top (and it would overrun the headline limit).
-        parts.push(!(spike || overCap) && volume.comparison && volume.comparison.includes('%') ? `${value}, ${volume.comparison}` : value);
+        // (A planned cutback drop is short: "-13%, as planned (cutback)".)
+        const comparison = volume.comparison?.replace(/ vs last week(, as planned \(cutback\))$/, '$1');
+        parts.push(!(spike || overCap) && comparison && comparison.includes('%') ? `${value}, ${comparison}` : value);
       }
     }
   } else {

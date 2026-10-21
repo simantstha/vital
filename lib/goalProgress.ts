@@ -2455,6 +2455,8 @@ function distanceProgress(input: GoalProgressInput): GoalDistanceProgress | null
   let text: string;
   if (eve) text = 'Race tomorrow';
   else if (raceDay) text = raceNow?.completed ? `Race done — ${fmtDistance(input, raceNow.completed.km)}` : 'Race day';
+  // On a break the week's own target is stale (the headline quotes the restart number): no "0 of ~17 km", just where the week stands.
+  else if (plan?.onBreak === true && plan.kind !== 'baseline') text = `${fmtDistance(input, doneKm)} this week · on a break`;
   else if (plan?.kind === 'baseline' || !hasData) text = `${fmtDistance(input, doneKm)} so far · baseline week`;
   else if (plan?.kind === 'recovery') {
     // Just over the ceiling but inside its 10% slack is "right at" it, never "7.5 of up to 7".
@@ -2777,10 +2779,11 @@ function enduranceReasons(lead: GoalProgressReason | null, rest: Array<GoalProgr
 // ── The endurance verdict from the week plan ────────────────────────────────
 
 /** "+11%" / "−5%" / "steady" — never "up 0%"; null when the earlier week was too small to compare with. */
-function changeClause(changePct: number | null): string {
+function changeClause(changePct: number | null, asPlanned = false): string {
   if (changePct == null) return '';
   if (changePct === 0) return ' (steady)';
-  return ` (${changePct > 0 ? '+' : '−'}${Math.abs(changePct)}%)`;
+  // A cutback week is a planned drop, not a lapse.
+  return ` (${changePct > 0 ? '+' : '−'}${Math.abs(changePct)}%${asPlanned && changePct < 0 ? ', as planned' : ''})`;
 }
 
 /** On a break: if the break was an illness, the restart waits for the body. */
@@ -2978,8 +2981,18 @@ function wholeWeeksSessionsReason(input: GoalProgressInput): GoalProgressReason 
       ? { kind: 'sessions', text: `${thisWeek} ${plural(thisWeek, noun)} so far this week`, tone: 'neutral' }
       : null;
   }
-  // A week or more with no run at all in the window is a break: "0–4 runs a week" averages it into nonsense, so say what the usual was.
-  if (lo === 0 && hi > 0) return { kind: 'sessions', text: `${hi} ${plural(hi, noun)} a week before your break`, tone: 'neutral' };
+  // A break inside the window ("0-4 runs a week", "1-4 runs a week" with a sick week in it) averages into nonsense: say what the usual was. A week
+  // with no run at all is one; a week at half the usual or less is one when the plan knows the runner is on / coming back from a break.
+  const endurancePlan = useRuns ? enduranceCtx(input).plan : null;
+  let lastRunIdx = -1;
+  let longGap = false; // a run-free stretch of 6+ days between two runs inside the window: an illness / a break, not a quiet week
+  for (let i = 0; i < 7 * counts.length; i++) {
+    if (!days.has(addDays(addDays(thisMonday, -7 * counts.length), i))) continue;
+    if (lastRunIdx >= 0 && i - lastRunIdx >= 7) longGap = true;
+    lastRunIdx = i;
+  }
+  const breakContext = longGap || (endurancePlan != null && (endurancePlan.restart != null || endurancePlan.comeback != null || endurancePlan.onBreak));
+  if (hi > 0 && lo * 2 <= hi && (lo === 0 || breakContext)) return { kind: 'sessions', text: `${hi} ${plural(hi, noun)} a week before your break`, tone: 'neutral' };
   const rate = lo === hi ? `${hi}` : hi - lo === 1 ? `${lo} or ${hi}` : `${lo}–${hi}`;
   const span = counts.length >= 3 ? `over the last ${counts.length} weeks` : 'so far';
   return { kind: 'sessions', text: `${rate} ${plural(hi, noun)} a week ${span}`, tone: 'neutral' };
@@ -3167,6 +3180,11 @@ function planOutcome(input: GoalProgressInput, ec: EnduranceCtx, race: GoalRaceP
       return finish('building', `Building back — restart at ~${fmt(target)} this week`, body(planLine));
     case 'hold': {
       const hold = plan.hold as NonNullable<EnduranceWeekPlan['hold']>;
+      // The last day of a hold week: the week is done, so the headline judges THIS week (not the jump two weeks back), as in a build week.
+      if (weekdayOf(input.todayKey) === 0 && doneKm > 0 && current != null && current.level !== 'light') {
+        const thisWeek = thisWeekDoneOutcome(input, plan, current, doneKm, target, finish, planBody);
+        if (thisWeek != null) return thisWeek;
+      }
       // A cutback week that ran more than 10% over its lowered number: no +10% build on the skip - hold at the week it replaced.
       if (hold.skippedCutback === true) {
         const skippedInfo: GoalProgressReason = { kind: 'volume', text: `Last week's ${fmt(hold.spikeKm)} was above the ~${fmt(hold.spikeStepKm)} cutback — the week it replaced stays the bar`, tone: 'watch' };
@@ -3246,7 +3264,7 @@ function planOutcome(input: GoalProgressInput, ec: EnduranceCtx, race: GoalRaceP
     : level === 'good' ? ', on plan'
     : level === 'mixed' ? `, a bit under the ~${fmt(lastPlanKm ?? target)} step`
     : ', a lighter week';
-  return finish('building', `Building — ${fmt(lastKm)} last week${changeClause(last?.changePct ?? null)}${how}`, planBody());
+  return finish('building', `Building — ${fmt(lastKm)} last week${changeClause(last?.changePct ?? null, last?.cutback === true)}${how}`, planBody());
 }
 
 function enduranceOutcome(input: GoalProgressInput): Outcome {

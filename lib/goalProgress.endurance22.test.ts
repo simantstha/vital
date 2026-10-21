@@ -274,3 +274,54 @@ test('a race-week day with most of the budget used says to rest tomorrow and sha
   const line = card.reasons.find(r => r.kind === 'race_phase')!.text;
   assert.equal(line, 'Race week: 12 of ~15 km — rest tomorrow, then a 15-min shakeout the day before the race');
 });
+
+// ── wave 22e follow-up: no two lines of one day disagree ───────────────────
+
+test('the last day of a pre-taper week that ended short: headline, plan line and coach all say "taper starts tomorrow - no need to make up this week\'s km" (22e follow-up)', () => {
+  const sun = '2026-10-11';
+  const card = computeGoalProgress(input(weeks(sun, [[[1, 3.4], [3, 3.3], [5, 3.3], [6, 12]], wk(30), wk(30), wk(30), wk(30)]), { todayKey: sun, race: HALF, racePeakWeekKm: 30 }));
+  assert.equal(card.headline, 'Eased off early — 22 of 30 km; taper starts tomorrow');
+  assert.equal(card.reasons.find(r => r.kind === 'plan')!.text, "Taper starts tomorrow — no need to make up this week's km");
+  assert.equal(card.distance!.plan?.purpose, "Taper starts tomorrow — no need to make up this week's km");
+  assert.equal(card.distance!.plan?.easingOff, true);
+  // The runner's own unit.
+  const imperial = computeGoalProgress(input(weeks(sun, [[[1, 3.4], [3, 3.3], [5, 3.3], [6, 12]], wk(30), wk(30), wk(30), wk(30)]), { todayKey: sun, race: HALF, racePeakWeekKm: 30, unitSystem: 'imperial' }));
+  assert.equal(imperial.reasons.find(r => r.kind === 'plan')!.text, "Taper starts tomorrow — no need to make up this week's miles");
+  // A week that reached its target keeps its plan line (the goal still applied, and was met).
+  const full = computeGoalProgress(input(weeks(sun, [wk(30), wk(30), wk(30), wk(30), wk(30)]), { todayKey: sun, race: HALF, racePeakWeekKm: 30 }));
+  assert.doesNotMatch(full.reasons.find(r => r.kind === 'plan')!.text, /no need to make up/);
+  // The day before (Saturday) is still "easing off", with the long run to keep.
+  const sat = computeGoalProgress(input(weeks('2026-10-10', [[[1, 3], [3, 3]], wk(30), wk(30), wk(30), wk(30)]), { todayKey: '2026-10-10', race: HALF, racePeakWeekKm: 30 }));
+  assert.match(sat.reasons.find(r => r.kind === 'plan')!.text, /^Easing off before your taper — fine; keep Sunday's long run/);
+});
+
+test('the Sunday of a hold week judges THIS week - "Week done - N of ~M km", not the jump two weeks back (22e follow-up)', () => {
+  // The skipped cutback (25 km in a ~20 km week) makes 2026-10-26 a hold at 25; on its Sunday the week is read, not last week.
+  const sun = '2026-11-01';
+  const card = (km: number) => computeGoalProgress(input(weeks(sun, [wk(km), wk(25), wk(23), wk(21), wk(19), wk(17), wk(15)]), { todayKey: sun }));
+  assert.equal(card(25).distance!.plan?.kind, 'hold');
+  assert.equal(card(25).headline, 'Week done — 25 of ~25 km, on plan');
+  assert.match(card(19).headline, /^Week done — 19 of ~25 km/);
+  // Monday still speaks of last week's skip.
+  const monday = computeGoalProgress(input(weeks('2026-10-26', [[], wk(25), wk(23), wk(21), wk(19), wk(17), wk(15)]), { todayKey: '2026-10-26' }));
+  assert.equal(monday.headline, 'You skipped the cutback — hold ~25 km this week');
+});
+
+test('on a break the distance text does not quote the stale week target: "0 km this week · on a break" (22e follow-up)', () => {
+  const sun = '2026-10-25';
+  const card = computeGoalProgress(input(weeks(sun, [[], [], wk(25), wk(23), wk(21), wk(19), wk(17), wk(15)]), { todayKey: sun }));
+  assert.match(card.headline, /^On a break/);
+  assert.equal(card.distance!.text, '0 km this week · on a break');
+  assert.doesNotMatch(card.distance!.text, / of ~/);
+  const imperial = computeGoalProgress(input(weeks(sun, [[], [], wk(25), wk(23), wk(21), wk(19), wk(17), wk(15)]), { todayKey: sun, unitSystem: 'imperial' }));
+  assert.equal(imperial.distance!.text, '0 mi this week · on a break');
+});
+
+test('the sessions line names the usual run count whenever the window held a break, not a range like "1–4 runs a week" (22e follow-up)', () => {
+  // This Tuesday: last week back with 3 runs, the week before ill (one Tuesday run, then nothing until Thursday of the next week), two full weeks.
+  const back = computeGoalProgress(input(weeks(TODAY, [[], [[3, 4], [5, 4], [6, 7]], [[1, 6]], wk(30), wk(30)]), {}));
+  assert.equal(back.reasons.find(r => r.kind === 'sessions')!.text, '4 runs a week before your break');
+  // A plain quiet-ish stretch with no run-free week keeps its range.
+  const steady = computeGoalProgress(input(weeks(TODAY, [[], [[1, 5], [3, 5], [5, 5], [6, 10]], [[1, 8], [5, 8]], wk(25), wk(25)]), {}));
+  assert.match(steady.reasons.find(r => r.kind === 'sessions')!.text, /^2–4 runs a week|^2 or 4 runs a week/);
+});
