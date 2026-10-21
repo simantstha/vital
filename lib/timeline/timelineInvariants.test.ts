@@ -1029,3 +1029,22 @@ invariant(ALL, 'headlineLift is sent for the muscle goal only, and is the lift t
   if (LIFTERS.includes(name)) assert.ok(checked > 0, `${name}: no lead lift line was compared, so this invariant checked nothing`);
   return out;
 });
+
+// A slack week (half the planned sessions or fewer, but not none) has no lift-progress win: "Bench Press estimated 1RM is up 6 kg vs 4
+// weeks ago" on a 1-of-4 week quotes a number whose "now" side was set the week before. The win may only cite what was done that week
+// ("You still got Thursday's bench session in.", or the week's weight / protein win), or there is none. lifter_short_week day 49.
+// (A week with no session at all has no lift win already.)
+const LIFT_PROGRESS_WIN = /1RM|\bvs \d+ weeks?\b|\bvs the week before\b|\bover \d+ wks\b/i;
+
+invariant(LIFTERS, 'a review of a week with at most half its planned sessions has no 4-week lift win (what was done that week, or none)', (snaps, name) => {
+  const out: Violation[] = [];
+  let slack = 0;
+  for (const snap of snaps) {
+    const r = snap.review?.review;
+    if (!r || r.weekGap?.kind !== 'sessions' || r.weekGap.done === 0 || r.weekGap.done * 2 > r.weekGap.target) continue;
+    slack++;
+    if (r.win != null && LIFT_PROGRESS_WIN.test(plain(r.win))) out.push({ snap, detail: `${r.weekGap.done} of ${r.weekGap.target} sessions, review.win: "${visible(r.win)}"` });
+  }
+  if (name === 'lifter_short_week') assert.ok(slack > 0, `${name}: no slack week was reviewed, so this invariant checked nothing`);
+  return out;
+});

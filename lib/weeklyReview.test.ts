@@ -2473,6 +2473,27 @@ test('muscle weight gain is the win in a week with a session, not in a week with
   assert.equal(none.win, null);
 });
 
+test('a slack week (1-2 of 4 sessions) has no 4-week lift win: the session itself is the win, named by day and lift (wave 22s)', () => {
+  const flat = weigh([...PREV, ...WEEK], () => 80);
+  const lifts = { squat: steadyAt(110), 'bench press': [...steadyAt(87.5), lwk(WEEK_START, 100, 75, 1, 1800)] };
+  // 1 of 4: the squat is the headline lift (+ vs 4 weeks ago would be its win) but only a bench volume day happened.
+  const one = computeWeeklyReview(liftReview({ trainingDays: [WEEK[3]], strengthDays: [WEEK[3]], weightReadings: flat, progression: lifts }));
+  assert.deepEqual(one.weekGap, { kind: 'sessions', done: 1, target: 4 });
+  assert.equal(one.win, "You still got Thursday's bench session in.");
+  // The lift stat itself is unchanged (a labelled comparison); only the WIN is not claimed.
+  assert.ok(one.stats.some(st => st.label.endsWith('est. 1RM')), JSON.stringify(one.stats));
+  // 2 of 4 is still half: two days named. No lift in the week's data, or more than two: just the day.
+  const two = computeWeeklyReview(liftReview({ trainingDays: [WEEK[0], WEEK[3]], strengthDays: [WEEK[0], WEEK[3]], weightReadings: flat, progression: lifts }));
+  assert.equal(two.win, 'You still got 2 sessions in — Monday and Thursday.');
+  const noLifts = computeWeeklyReview(liftReview({ trainingDays: [WEEK[3]], strengthDays: [WEEK[3]], weightReadings: flat, progression: {} }));
+  assert.equal(noLifts.win, "You still got Thursday's session in.");
+  // The week's weight win stands (it is that week's own number); 3 of 4 is not slack and keeps the lift win.
+  const rising = computeWeeklyReview(liftReview({ trainingDays: [WEEK[3]], strengthDays: [WEEK[3]], progression: lifts }));
+  assert.match(rising.win ?? '', /^Your weekly average weight is up /);
+  const three = computeWeeklyReview(liftReview({ trainingDays: [WEEK[0], WEEK[2], WEEK[4]], strengthDays: [WEEK[0], WEEK[2], WEEK[4]], weightReadings: flat, progression: { squat: [...steadySquat, lwk(WEEK_START, 138, 110, 3)] } }));
+  assert.match(three.win ?? '', /^Squat estimated 1RM is up 5\skg vs 4 weeks ago\.$/);
+});
+
 test('a flat weekly average reads "no change", not "0 kg"', () => {
   const r = computeWeeklyReview(liftReview({ weightReadings: weigh([...PREV, ...WEEK], () => 80), progression: {} }));
   const weight = statByLabel(r, 'Weekly avg weight')!;

@@ -2262,6 +2262,36 @@ function windDownNextWeek(input: WeeklyReviewInput, week: Week): string | null {
     : `Back to building: ~${withUnit(next, isImperial(input) ? 'mi' : 'km')} next week.`;
 }
 
+/** A muscle week with a session or more but no more than half the planned ones (1 or 2 of 4): too thin a week for a lift-progress win. */
+function slackMuscleWeek(input: WeeklyReviewInput, week: Week): boolean {
+  const target = input.weeklySessionsTarget;
+  if (input.goal !== 'muscle' || target == null || target <= 0) return false;
+  const done = weekSessionCount(input, week);
+  return done > 0 && done * 2 <= target;
+}
+
+/**
+ * The win of a slack week may only cite something done that week. The lift stat's win ("Bench Press estimated 1RM is up 6 kg vs 4
+ * weeks ago") quotes a number whose "now" side was set the week before, so it is left out (a return from a break keeps its own win);
+ * the week's other wins (weight, protein) stand, else the session itself is the win: "You still got Thursday's bench session in." /
+ * "You still got 2 sessions in — Monday and Thursday."
+ */
+function slackWeekWin(input: WeeklyReviewInput, week: Week, cands: Candidate[]): string {
+  const other = cands.find(x => x.win && (input.liftReturn != null || !x.stat.label.endsWith('est. 1RM')))?.win;
+  if (other) return other;
+  const train = new Set(sessionDays(input));
+  const names = week.days.flatMap((d, i) => (train.has(d) ? [WEEKDAY_NAMES[i] as string] : []));
+  if (names.length !== 1) {
+    const list = names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : '';
+    return `You still got ${names.length} ${plural(names.length, 'session')} in${list ? ` — ${list}` : ''}.`;
+  }
+  // One session: name the main lifts of that week (at most two), else just the day.
+  const trained = rankLifts(input.progression, liftAnchor(week)).filter(key =>
+    isMainLift(key) && (input.progression[key] ?? []).some(w => w.weekStart === week.days[0] && (w.sessions ?? w.totalSets) > 0));
+  const lifts = trained.length > 0 && trained.length <= 2 ? `${trained.map(key => liftShortName(key, input.exerciseDisplay)).join(' and ')} ` : '';
+  return `You still got ${names[0]}'s ${lifts}session in.`;
+}
+
 /** The win line of a deload week (muscle goal; a runner's 'light' week is a rest week, not a deload): the lighter loads were the plan. */
 const DELOAD_WIN = 'Deload week done — lighter loads, as planned.';
 
@@ -2596,7 +2626,7 @@ export function computeWeeklyReview(input: WeeklyReviewInput): WeeklyReview {
     weekGap: assessment.gap,
     headline: buildHeadline(input, cands, week),
     stats: cands.map(x => x.stat),
-    win: reachedWin(input, week) ?? enduranceWin(input, assessment) ?? windDownWin(input, week, assessment) ?? (assessment.rating === 'light' && input.goal === 'muscle' ? DELOAD_WIN : null) ?? cands.find(x => x.win)?.win ?? null,
+    win: reachedWin(input, week) ?? enduranceWin(input, assessment) ?? windDownWin(input, week, assessment) ?? (assessment.rating === 'light' && input.goal === 'muscle' ? DELOAD_WIN : null) ?? (slackMuscleWeek(input, week) ? slackWeekWin(input, week, cands) : (cands.find(x => x.win)?.win ?? null)),
     slip,
     nextWeek: buildNextWeek(input, cands, week, prevWeek, assessment, slip),
     dataSufficiency: { daysWithData, statCount: cands.length, sufficient: true },
