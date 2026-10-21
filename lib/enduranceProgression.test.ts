@@ -8,6 +8,7 @@ import {
   addDayKey,
   breakThreshold,
   enduranceWeekPlan,
+  comebackCapRead,
   findRaceRun,
   formatRaceTime,
   formatTargetLongRun,
@@ -22,6 +23,7 @@ import {
   longRunPeakTarget,
   longRunStepKm,
   mondayOfDay,
+  overCapPhrase,
   peakWeekKmBeforeTaper,
   planWeekKm,
   raceClass,
@@ -501,34 +503,67 @@ test('comeback: for up to three weeks after a restart the target climbs restart 
   const w13 = planFor(withWeeks([12, 15, 18, 22]), 13);
   assert.equal(w13.comeback, null);
   assert.equal(w13.targetKm, 24); // 22 x 1.10
-  // A week more than 10% over its "up to" ceiling is "a little over the cap" (wave 21b): the rung is repeated, and the week after
-  // holds at what was run - never a step, or a 1.25x rung, up from the overshoot ("20 of up to ~18 km" used to lift the next week to ~25).
+  // A week more than 10% over its "up to" ceiling (wave 22e): "a touch over" (fine, said once) up to 25% over it, "well over" (a spike) past
+  // that or past the pre-break median. Either way the next ceiling climbs from the CEILING, never from the overshoot.
   assert.equal(overUpToCap(w10, 16.5), false); // exactly 10% over: within the ceiling's slack
   assert.equal(overUpToCap(w10, 16.6), true);
   assert.equal(overUpToCap(w11, 19.8), false); // the 18 km ceiling
   assert.equal(overUpToCap(w11, 20), true); // "20 of up to ~18 km"
   assert.equal(overUpToCap(planFor(withWeeks([12, 15, 18, 22]), 13), 30), false); // a plain week has no ceiling
+  assert.equal(comebackCapRead(w10, 16.5), 'within');
+  assert.equal(comebackCapRead(w10, 17), 'touch'); // 13% over, 2 km: a touch
+  assert.equal(comebackCapRead(w11, 20), 'touch'); // 20 of up to ~18: 11% over, still under the 22 km median
+  assert.equal(comebackCapRead(w11, 21.9), 'touch'); // 21.7% over, under the 22 km median
+  assert.equal(comebackCapRead(w11, 22.1), 'well'); // past the 22 km pre-break median
+  assert.equal(comebackCapRead({ ...w10, targetKm: 8 }, 10.5), 'touch'); // +31% but only 2.5 km over (a spike needs 3 km)
+  assert.equal(comebackCapRead(w11, 23), 'well'); // past the 22 km pre-break median as well
+  assert.equal(comebackCapRead({ ...w11, comeback: { medianKm: 25 } }, 22.6), 'well'); // more than 25% over: well, below the median too
+  assert.equal(overCapPhrase('touch'), 'a touch over, fine');
+  assert.equal(overCapPhrase('well'), 'well over the ceiling');
   const within = planFor(withWeeks([12, 16.5]), 11);
   assert.equal(within.last?.overCap, false);
+  assert.equal(within.last?.capRead, null);
   assert.equal(within.targetKm, 20); // the ladder climbs: 1.25 x 16.5, floored
-  const over = planFor(withWeeks([12, 18]), 11); // ran 18 of up to ~15
+  const over = planFor(withWeeks([12, 18]), 11); // ran 18 of up to ~15: a touch over
   assert.equal(over.last?.overCap, true);
-  assert.equal(over.targetKm, 18); // hold at what was run; not the 22 km rung
+  assert.equal(over.last?.capRead, 'touch');
+  assert.equal(over.targetKm, 18); // 1.25 x the 15 km CEILING (18.75, floored), and never below the 18 km run
   assert.equal(over.upTo, true);
-  assert.deepEqual(over.comeback, { medianKm: 22, fraction: 0.8, weeksSince: 2 }); // the rung repeated, not climbed
-  assert.equal(nbsp(over.purpose).split(':')[0], 'Hold here, up to ~18~km this week');
-  assert.equal(planFor(withWeeks([12, 18, 22]), 12).targetKm, 22);
-  const overLast = planFor(withWeeks([12, 18, 22, 25]), 13); // the ladder is over, but an overshoot is still not stepped up from
-  assert.equal(overLast.comeback, null);
-  assert.equal(overLast.targetKm, 25);
+  assert.deepEqual(over.comeback, { medianKm: 22, fraction: 1, weeksSince: 2 }); // a touch over still grades good: the rung climbs
+  assert.equal(nbsp(over.purpose).split(':')[0], 'Up to ~18~km this week'); // no "Hold here"
+  // Rule 2 never steps the ceiling up from the overshoot: 20 of up to ~18 km (messy week 11) -> 22, not 1.25 x 20.
+  const messy = enduranceWeekPlan({ runs: [...runsFor([15, 17, 19, 21, 23, 25, 28, 30, 6]), ...runsFor([15, 20], 10)], weekStart: weekOf(12), goalKm: 30, today: weekOf(12) });
+  assert.equal(messy.last?.capRead, 'touch');
+  assert.ok(messy.targetKm != null && messy.targetKm <= 1.25 * (messy.last?.targetKm ?? 0) + 1e-9, `ceiling ${messy.targetKm} after ${messy.last?.km} of ${messy.last?.targetKm}`);
+  assert.equal(planFor(withWeeks([12, 18, 22]), 12).targetKm, 22); // the next ceiling, from the 18 km ceiling (22.5 floored)
+  // Rule 3: far past the ceiling (a 15 -> 29 km style jump) is a spike even below the pre-break median; next week stays AT the ceiling.
+  const far = planFor(withWeeks([12, 21]), 11); // 21 of up to ~15: 40% over, 6 km over
+  assert.equal(far.last?.capRead, 'well');
+  assert.equal(far.kind, 'hold');
+  assert.equal(far.targetKm, 15); // the ceiling, not the 21 km run and not a step from it
+  assert.equal(far.hold?.ceiling, true);
+  assert.deepEqual(far.hold?.ladder, { medianKm: 22, fraction: 0.8, weeksSince: 1 }); // the climb back is kept alive
+  assert.deepEqual(gradeEnduranceWeek(w10, 21), { level: 'mixed', gap: 'spike' });
+  assert.ok(far.longRunKm != null && far.longRunKm <= 7.5 + 1e-9, `the hold's long run ${far.longRunKm} km is at most half of 15 km`);
+  // ... and the week after the hold resumes the ladder from the ceiling (rule 1), not from the 21 km jump.
+  const resumed = planFor(withWeeks([12, 21, 15]), 12);
+  assert.equal(resumed.kind, 'build');
+  assert.equal(resumed.comeback?.weeksSince, 2);
+  assert.ok((resumed.targetKm ?? 99) <= 1.25 * 15 + 1e-9, `${resumed.targetKm}`);
+  const overLast = planFor(withWeeks([12, 18, 22, 25]), 13); // 25 of up to ~22 (past the 22 km median): well over
+  assert.equal(overLast.kind, 'hold');
+  assert.equal(overLast.targetKm, 22);
   // A careful comeback week is graded against the week before it, not against its ceiling (wave 21e): good when it grew
   // (or held) and was not a spike, mixed only when it shrank - never "5 km short of this week's step".
   assert.equal(gradeEnduranceWeek(w10, 12).level, 'good'); // the 12 km just run
   assert.equal(gradeEnduranceWeek(w10, 13).level, 'good'); // +8%, well under the 15 km ceiling
   assert.deepEqual(gradeEnduranceWeek(w10, 11.9), { level: 'mixed', gap: 'short' }); // it shrank
   assert.equal(gradeEnduranceWeek(w10, 3).level, 'mixed'); // never tough
-  // Regaining the pre-break level is no spike; a real jump beyond it still is.
-  assert.equal(gradeEnduranceWeek(w10, 22).gap, null);
+  // Regaining the pre-break level is no spike in a RESTART week (wave 22e: not in a comeback week - 22 of up to ~15 km is well over its
+  // ceiling even though 22 km is the pre-break median); a real jump beyond it is one everywhere.
+  assert.equal(gradeEnduranceWeek(restart, 12).gap, null);
+  assert.equal(gradeEnduranceWeek(restart, 22).gap, null);
+  assert.equal(gradeEnduranceWeek(w10, 22).gap, 'spike');
   assert.equal(gradeEnduranceWeek(w10, 26).gap, 'spike');
 });
 

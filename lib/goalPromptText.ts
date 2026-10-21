@@ -143,9 +143,9 @@ function weekTargetLine(gp: GoalProgress, units: UnitSystem): string | null {
         : '';
       // A comeback target lifted above the plain step is a ceiling for a careful comeback ("up to"), not a bar to clear.
       if (plan.upTo) {
-        // Last week went over its ceiling: this week holds at what was run, no step up from the overshoot.
+        // Last week ran a touch over its ceiling: that is fine, and the ceiling climbs from the ceiling (never from the overshoot).
         if (plan.overCap) {
-          return `- This week's target: hold here, up to ~${t} (last week went over its ceiling; no step up from the overshoot${lr ? `; ${lr}` : ''}); the ${goal}/week goal comes after — do not push past it this week${strides}`;
+          return `- This week's target: build up to ~${t} (last week ran a touch over its ceiling — fine, said once; the new ceiling climbs from the old one, not from the overshoot${climb}${lr ? `; ${lr}` : ''}); the ${goal}/week goal comes after — do not push past it this week${strides}`;
         }
         return `- This week's target: build up to ~${t} (a ceiling for a careful comeback${climb}${lr ? `; ${lr}` : ''}); the ${goal}/week goal comes after — do not push past it this week${strides}`;
       }
@@ -163,6 +163,10 @@ function weekTargetLine(gp: GoalProgress, units: UnitSystem): string | null {
         : `- This week's target: hold the ${goal}/week goal${lr ? `; ${lr}${plan.longRunHeld ? ' (held)' : grow}` : ''}, the rest easy — the runner is at the goal, do not add volume${strides}`;
     }
     case 'hold':
+      // A comeback week far past its "up to" ceiling: stay at that ceiling.
+      if (plan.overCapRead === 'well') {
+        return `- This week's target: stay at ~${t} — last week was well over its comeback ceiling (a spike); do not build on the jump, and do not praise the extra km${strides}`;
+      }
       return `- This week's target: hold ~${t} — last week was over the safe step; do not push higher or step up from the jump${strides}`;
     case 'restart':
       return `- This week's target: restart at ~${t} with easy runs${lr ? `; ${lr}` : ''} — the runner is coming back from a break${back ? ` (the weeks after climb back toward ~${back})` : ''}; do not push toward the ${goal}/week goal yet`;

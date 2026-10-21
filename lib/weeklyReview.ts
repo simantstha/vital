@@ -62,6 +62,7 @@ import {
   isWindDownPhase,
   longRunCapNote,
   longRunWord,
+  comebackCapRead,
   overCapPhrase,
   overUpToCap,
   planWeekKm,
@@ -157,7 +158,7 @@ export type WeekGap =
    * Endurance: running km far ABOVE that week's safe step (a jump, not a
    * shortfall — see `isSpikeWeek`). Only when a step below the goal applies.
    */
-  | { kind: 'spike'; doneKm: number; stepKm: number; targetKm: number }
+  | { kind: 'spike'; doneKm: number; stepKm: number; targetKm: number; ceiling?: boolean }
   /**
    * Endurance, race lifecycle: a taper / race-week / recovery week whose running
    * km sat off that phase's target (lib/enduranceProgression.ts). `over` is true
@@ -1002,7 +1003,7 @@ function planVolumeCandidate(input: WeeklyReviewInput, rp: ReviewPlans): Candida
   } else if (prevKm > 0) comparison = `vs ${distanceText(input, prevKm)} last week`;
   else comparison = 'for the week';
   // A comeback week more than 10% over its "up to" ceiling is neither a win nor a spike: neutral.
-  const tone: ReviewTone = isWindDownKind(plan.kind) || rp.raceRun != null || grade.level === 'light' || overUpToCap(plan, km) ? 'neutral'
+  const tone: ReviewTone = isWindDownKind(plan.kind) || rp.raceRun != null || grade.level === 'light' || overUpToCap(plan, km, u) ? 'neutral'
     : grade.gap === 'spike' || grade.level === 'tough' ? 'watch'
     : grade.level === 'good' ? 'good'
     : 'neutral';
@@ -1376,7 +1377,7 @@ function planWeekAssessment(input: WeeklyReviewInput, week: Week, rp: ReviewPlan
   const goal = plan.goalKm;
   const stepped = plan.targetKm != null && plan.targetKm < goal;
   let gap: WeekGap | null = null;
-  if (grade.gap === 'spike') gap = { kind: 'spike', doneKm: round1(km), stepKm: plan.targetKm as number, targetKm: goal };
+  if (grade.gap === 'spike') gap = { kind: 'spike', doneKm: round1(km), stepKm: plan.targetKm as number, targetKm: goal, ...(plan.upTo ? { ceiling: true } : {}) };
   else if (grade.gap === 'short') {
     gap = plan.kind === 'baseline'
       ? { kind: 'sessions', done: rp.week.days, target: BASELINE_GOOD_RUN_DAYS }
@@ -1482,14 +1483,18 @@ function distanceHeadline(
   input: WeeklyReviewInput, km: number, targetKm: number, stepKm: number,
   opts: { spike: boolean; cutback?: boolean; upTo?: boolean; overCap?: boolean },
 ): string {
+  // A comeback week far past its "up to" ceiling: a spike, said in the ceiling's words (the card says the same).
+  if (opts.spike && opts.upTo) {
+    return `${distanceNumber(input, km)} of up to ~${distanceText(input, stepKm)} — ${overCapPhrase('well')} · goal ${distanceText(input, targetKm)}`;
+  }
   if (opts.spike) {
     return `${distanceNumber(input, km)} of ~${distanceText(input, stepKm)} — well above the safe step · goal ${distanceText(input, targetKm)}`;
   }
   if (stepKm >= targetKm || km >= targetKm) return `${distanceNumber(input, km)} of ${distanceText(input, targetKm)}`;
   // A comeback's target is a ceiling ("up to ~18 km"), worded so on the goal card too.
   const target = `${opts.upTo ? 'up to ' : ''}~${distanceText(input, stepKm)}`;
-  // ... and passed by more than 10% it is said neutrally, as the card says it (never "on plan").
-  if (opts.overCap) return `${distanceNumber(input, km)} of ${target} — ${overCapPhrase(stepKm, km)} · goal ${distanceText(input, targetKm)}`;
+  // ... and passed by more than 10% (not far) it is said neutrally, as the card says it (never "on plan").
+  if (opts.overCap) return `${distanceNumber(input, km)} of ${target} — ${overCapPhrase('touch')} · goal ${distanceText(input, targetKm)}`;
   const onPlan = distanceNumber(input, km) >= distanceNumber(input, stepKm);
   // Over the step but under the spike line is above the step, not "on plan" (a +33% week is not on a 10% plan).
   const note = onPlan ? (km > stepKm * ABOVE_STEP_FRACTION ? (opts.cutback ? ' — above the cutback' : ' — above the step') : ' — on plan') : '';
@@ -1613,7 +1618,7 @@ function enduranceWin(input: WeeklyReviewInput, assessment: WeekAssessment): str
       : null;
   }
   // A comeback week that went more than 10% over its "up to" ceiling is not praised for the extra (the headline says it).
-  if (overUpToCap(plan, rp.week.km)) return null;
+  if (overUpToCap(plan, rp.week.km, unitsPerKmOf(input))) return null;
   // A careful comeback week is good when it grew on the one before; its target is a ceiling, not a bar it missed.
   if (plan.comeback != null && rp.prevWeek.km > 0 && rp.week.km >= rp.prevWeek.km && rp.week.km < plan.goalKm) {
     return `Back on the way up: ${km}, up from ${distanceText(input, rp.prevWeek.km)} last week.`;
@@ -1753,7 +1758,7 @@ function buildHeadline(input: WeeklyReviewInput, cands: Candidate[], week: Week)
         const reviewed = reviewPlans(input).plan;
         // The week's one target (a cutback week's is the cutback number): the jump check, the figure and the slip all use it.
         const stepKm = reviewed?.targetKm ?? target;
-        const overCap = reviewed != null && km != null && stepKm < target && overUpToCap(reviewed, km);
+        const overCap = reviewed != null && km != null && stepKm < target && comebackCapRead(reviewed, km, unitsPerKmOf(input)) === 'touch';
         const runDays = reviewPlans(input).week.days;
         // The jump is the plan's grade (so a comeback regaining its pre-break level is no spike here either, as on the goal card).
         const spike = hasDistanceTarget(input) && kmBased && km != null && (reviewed != null
@@ -1823,6 +1828,10 @@ function gapSlip(input: WeeklyReviewInput, gap: WeekGap, week: Week, prevWeek: W
         ? `${distanceNumber(input, gap.doneKm)} of ~${distanceText(input, gap.stepKm)} — ${withUnit(round1(distanceNumber(input, gap.stepKm) - distanceNumber(input, gap.doneKm)), isImperial(input) ? 'mi' : 'km')} short of this week's step`
         : `${distanceNumber(input, gap.doneKm)} of ${distanceText(input, gap.targetKm)} target — ${distanceText(input, gap.targetKm - gap.doneKm)} short`;
     case 'spike':
+      // A comeback week far past its "up to" ceiling.
+      if (gap.ceiling === true) {
+        return `Ran ${distanceText(input, gap.doneKm)} against an up-to-${distanceText(input, gap.stepKm)} ceiling — big jumps raise injury risk`;
+      }
       return `Jumped ${withUnit(round1(distanceNumber(input, gap.doneKm) - distanceNumber(input, gap.stepKm)), isImperial(input) ? 'mi' : 'km')} over this week's step — big jumps raise injury risk`;
     case 'phase': {
       const done = distanceText(input, gap.doneKm);
@@ -2139,8 +2148,7 @@ function buildNextWeekText(input: WeeklyReviewInput, next: EnduranceWeekPlan): s
   const reachesTarget = Math.round(nextUnits * (1 + WEEKLY_DISTANCE_GROWTH)) >= goalUnits;
   const after = reachesTarget ? `${targetText} the week after` : `then add ~${Math.round(WEEKLY_DISTANCE_GROWTH * 100)}% a week toward ${targetText}`;
   // A careful comeback's target is a ceiling ("up to ~16 km"), not a step to hit.
-  // ... and after a week that went over its ceiling it holds at what was run.
-  const lead = next.last?.overCap ? 'Hold here, up to' : next.upTo ? 'Build up to' : 'Build to';
+  const lead = next.upTo ? 'Build up to' : 'Build to';
   const strides = next.strides ? `, ${STRIDES_COPY}` : '';
   return `${lead} ${nextText}${longRunPart ? `: ${longRunPart}` : ' with mostly easy runs'}${strides}; ${after}.`;
 }
@@ -2194,9 +2202,12 @@ function plannedNextWeek(input: WeeklyReviewInput): { kind: EnduranceWeekPlan['k
       break;
     }
     case 'hold':
-      text = (next.targetKm as number) >= next.goalKm
-        ? `Hold at ${goalText} next week rather than going higher.`
-        : `Hold around ~${t} next week, then build ~${growth} a week toward ${goalText}.`;
+      text = next.hold?.ceiling === true
+        // A comeback week far past its ceiling: next week stays AT that ceiling.
+        ? `Stay at ~${t} next week — don't build on last week's jump; then build ~${growth} a week toward ${goalText}.`
+        : (next.targetKm as number) >= next.goalKm
+          ? `Hold at ${goalText} next week rather than going higher.`
+          : `Hold around ~${t} next week, then build ~${growth} a week toward ${goalText}.`;
       if (next.strides) text = `${text.slice(0, -1)}; ${STRIDES_COPY}.`;
       break;
     case 'restart':

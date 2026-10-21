@@ -326,8 +326,12 @@ export interface GoalWeekPlan {
   longRunHeld?: boolean;
   /** Additive: the target is a careful comeback's ceiling, worded "up to ~18 km". */
   upTo?: boolean;
-  /** Additive: last week ran more than 10% over its "up to" ceiling, so this week holds at what was run ("hold here") instead of stepping up. */
+  /**
+   * Additive: last week ran more than 10% over its "up to" comeback ceiling. `overCapRead` says how far: 'touch' (fine, said once; the
+   * ceiling climbs from the ceiling, never from the overshoot) or 'well' (a spike: this week is a hold AT that ceiling).
+   */
   overCap?: boolean;
+  overCapRead?: 'touch' | 'well';
 }
 
 export interface GoalRaceProgress {
@@ -2466,7 +2470,7 @@ function distanceProgress(input: GoalProgressInput): GoalDistanceProgress | null
             ...(plan.strides ? { strides: true } : {}),
             ...(plan.longRun.held ? { longRunHeld: true } : {}),
             ...(plan.upTo ? { upTo: true } : {}),
-            ...(plan.last?.overCap ? { overCap: true } : {}),
+            ...(plan.last?.overCap ? { overCap: true, ...(plan.last.capRead != null ? { overCapRead: plan.last.capRead } : {}) } : {}),
           },
         }
       : {}),
@@ -3015,6 +3019,13 @@ function planOutcome(input: GoalProgressInput, ec: EnduranceCtx, race: GoalRaceP
   if (current?.gap === 'spike') {
     // On Sunday the week is over: the advice is about the days after it.
     const advice = weekdayOf(input.todayKey) === 0 ? "keep tomorrow's run easy and hold next week's step" : 'keep the rest of the week easy';
+    // A comeback week far past its "up to" ceiling (wave 22e): the same read as the Monday card and the review - next week stays AT the ceiling.
+    if (plan.upTo) {
+      const ceilingAdvice = weekdayOf(input.todayKey) === 0 ? "keep tomorrow's run easy and stay at the ceiling next week" : 'keep the rest of the week easy';
+      return finish('holding', `Well over the ceiling — ${done} of up to ~${fmt(target)}. Stay at ~${fmt(target)} next week`, body(
+        { kind: 'volume', text: `${fmt(doneKm)} is ${fmt(doneKm - target)} over this week's ceiling; big jumps raise injury risk — ${ceilingAdvice}`, tone: 'watch' },
+      ));
+    }
     return finish('holding', `Over the safe step — ${done} of ~${fmt(target)}. Hold ~${fmt(nextHold)} next week`, body(
       { kind: 'volume', text: `${fmt(doneKm)} is ${fmt(doneKm - target)} over this week's safe step; big jumps raise injury risk — ${advice}`, tone: 'watch' },
     ));
@@ -3063,6 +3074,13 @@ function planOutcome(input: GoalProgressInput, ec: EnduranceCtx, race: GoalRaceP
       return finish('building', `Building back — restart at ~${fmt(target)} this week`, body(planLine));
     case 'hold': {
       const hold = plan.hold as NonNullable<EnduranceWeekPlan['hold']>;
+      // A comeback week far past its "up to" ceiling: this week stays AT that ceiling and does not build on the jump.
+      if (hold.ceiling === true) {
+        const ceilingInfo: GoalProgressReason = { kind: 'volume', text: `Last week's ${fmt(hold.spikeKm)} was well over its ~${fmt(hold.spikeStepKm)} ceiling — don't build on the jump`, tone: 'watch' };
+        return finish('holding', `Well over the ceiling last week — stay at ~${fmt(target)} this week`, stepDone != null
+          ? body(stepDone, [ceilingInfo, planLine])
+          : body(ceilingInfo, [planLine]));
+      }
       const jumpInfo: GoalProgressReason = { kind: 'volume', text: `Last week's ${fmt(hold.spikeKm)} was over the safe step of ~${fmt(hold.spikeStepKm)}`, tone: 'watch' };
       return finish('holding', `Over the safe step last week — hold ~${fmt(target)} this week`, stepDone != null
         ? body(stepDone, [jumpInfo, planLine])
@@ -3101,10 +3119,11 @@ function planOutcome(input: GoalProgressInput, ec: EnduranceCtx, race: GoalRaceP
     return finish('behind', `Behind — ${fmt(lastKm)} last week${lastPlanKm != null ? `, ~${fmt(lastPlanKm)} was the step` : ''}`, planBody());
   }
   const above = level === 'good' && lastPlanKm != null && lastKm > lastPlanKm * ABOVE_STEP_FRACTION;
-  // A comeback week's "up to ~18 km" is a ceiling: more than 10% over it is "a little over the cap" - said neutrally, never
-  // "on plan" (the review words it the same; the week after climbs from the cap, not from the overshoot).
-  if (level === 'good' && last?.overCap === true && lastPlanKm != null) {
-    return finish('building', `Building — ${distanceNum(input, lastKm)} of up to ~${fmt(lastPlanKm)} last week, ${overCapPhrase(lastPlanKm, lastKm)}`, planBody());
+  // A comeback week's "up to ~18 km" is a ceiling: more than 10% over it (but not far) is "a touch over, fine" - said neutrally and once,
+  // never "on plan" (the review words it the same; the ceiling then climbs from the ceiling, not from the overshoot). Far over it is a
+  // spike: the hold branch above says so.
+  if (level === 'good' && last?.capRead === 'touch' && lastPlanKm != null) {
+    return finish('building', `Building — ${distanceNum(input, lastKm)} of up to ~${fmt(lastPlanKm)} last week, ${overCapPhrase('touch')}`, planBody());
   }
   const how = last?.kind === 'baseline' ? ', your baseline'
     : last?.kind === 'restart' || last?.kind === 'rebuild' && plan.restart != null ? ', back after your break'
