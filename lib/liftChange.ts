@@ -30,8 +30,11 @@
  * (squat, bench press, deadlift, overhead press, then A-Z). It never depends on
  * which lift moved the most, so the same lift leads from one day to the next.
  * It is also STICKY (headlineLeader): one short week must not hand the lead to
- * another lift for good, so the lead changes only when another lift has
- * out-trained it by 2+ sessions at two weekly anchors in a row.
+ * another lift for 8 weeks, so lifts within a session of the most-trained are
+ * level with it (the fixed order decides) and the lead moves only when another
+ * lift is 2+ sessions ahead at two weekly anchors in a row. The iOS ranking
+ * (TrendsStrengthLogic.rankedLiftKeys) mirrors the plain order below the lead;
+ * the server SENDS its lead (GoalProgress.headlineLift) and iOS prefers it.
  *
  * Keep in lockstep with TrendsStrengthLogic.change(...) — parity tests pin
  * identical fixtures to identical numbers in both languages.
@@ -141,71 +144,61 @@ interface LiftScore { key: string; sessions: number }
  * session counts, most-trained first: sessions containing the lift over the 8
  * COMPLETED weeks before the anchor week, ties by the fixed order (squat, bench
  * press, deadlift, overhead press, then A-Z). Before any week has completed (a
- * brand-new lifter) the anchor week counts.
+ * brand-new lifter) the anchor week counts (`anchorCounted`).
  */
-function scoreLifts(progression: Record<string, LiftWeekPoint[]>, anchorWeekStart: string): LiftScore[] {
+function scoreLifts(progression: Record<string, LiftWeekPoint[]>, anchorWeekStart: string): { rows: LiftScore[]; anchorCounted: boolean } {
   const oldest = shiftDay(anchorWeekStart, -7 * (LIFT_RANK_WINDOW_WEEKS - 1));
   const inRotation = Object.entries(progression).filter(([, weeks]) =>
     weeks.some(w => w.bestEstimatedOneRepMaxKg != null && w.weekStart >= oldest && w.weekStart <= anchorWeekStart));
   const score = (includeAnchor: boolean) =>
     inRotation.map(([key, weeks]) => ({ key, sessions: liftSessionsLast8Weeks(weeks, anchorWeekStart, includeAnchor) }));
   let scored = score(false);
-  if (scored.every(r => r.sessions === 0)) scored = score(true);
-  return scored.sort((a, b) => b.sessions - a.sessions || mainLiftRank(a.key) - mainLiftRank(b.key) || a.key.localeCompare(b.key));
+  let anchorCounted = false;
+  if (scored.every(r => r.sessions === 0)) {
+    scored = score(true);
+    anchorCounted = true;
+  }
+  const rows = scored.sort((a, b) => b.sessions - a.sessions || mainLiftRank(a.key) - mainLiftRank(b.key) || a.key.localeCompare(b.key));
+  return { rows, anchorCounted };
 }
 
-/** A lift takes the lead from the current one only when it has out-trained it by at least this many sessions (over the ranking's 8 weeks)... */
+/** A lift takes the lead from the one before it in the fixed order only by out-training it by at least this many sessions (over the ranking's 8 weeks)... */
 export const LIFT_HEADLINE_SWITCH_MARGIN = 2;
-/** ... at this many weekly anchors in a row, the current one included. */
+/** ... at this many weekly anchors in a row: the anchor week's count and the week before's (a one-week blip never moves the lead). */
 export const LIFT_HEADLINE_SWITCH_WEEKS = 2;
-/** Weeks of history the lead is replayed over; older history cannot change it. */
-const LIFT_HEADLINE_REPLAY_WEEKS = 6;
+
+/** Lifts within LIFT_HEADLINE_SWITCH_MARGIN - 1 sessions of the most-trained one: level with it, for the lead. */
+function levelWithTop(rows: LiftScore[]): string[] {
+  if (rows.length === 0) return [];
+  const top = rows[0].sessions;
+  return rows.filter(r => top - r.sessions < LIFT_HEADLINE_SWITCH_MARGIN).map(r => r.key);
+}
 
 /**
- * The lift that leads the ranking at `anchorWeekStart`, with hysteresis: the lead
- * is replayed week by week over the last LIFT_HEADLINE_REPLAY_WEEKS anchors (a
- * pure function of the weekly history, nothing is stored), starting from the
- * most-trained lift, and moves to another lift only when that lift out-trained
- * it by LIFT_HEADLINE_SWITCH_MARGIN+ sessions at LIFT_HEADLINE_SWITCH_WEEKS
- * anchors in a row — or at once when the lead has left the rotation (no e1RM in
- * the last 8 weeks). One short week used to hand the lead to another lift by a
- * single session and never give it back (lifter_short_week: squat -> bench from
- * day 49 to the end). Null when no lift is in rotation.
+ * The lift that leads the ranking at `anchorWeekStart`, kept steady against a short
+ * week. The plain rule (the most-trained lift) let one short week hand the lead to
+ * another lift by a single session for the 8 weeks it stays in the window
+ * (lifter_short_week: squat -> bench from day 49 to the end). So a lift only
+ * out-trains the others when it is LIFT_HEADLINE_SWITCH_MARGIN+ sessions ahead:
+ * the lifts within one session of the most-trained are level with it, and the
+ * fixed order (squat, bench press, deadlift, overhead press, then A-Z) decides
+ * among them. The margin has to hold at LIFT_HEADLINE_SWITCH_WEEKS anchors in a
+ * row (this one and the week before): a lift level at either of them is still
+ * level now, so the lead moves one Monday after a lift really falls behind, never
+ * on a blip. A pure function of the weekly history (nothing is stored, and the
+ * counts of both anchors lie inside the 84 days the loaders read). A brand-new
+ * lifter (no completed week yet) ranks on the week so far, plainly. Null when no
+ * lift is in rotation.
  */
 export function headlineLeader(progression: Record<string, LiftWeekPoint[]>, anchorWeekStart: string): string | null {
-  let leader: string | null = null;
-  let challenger: string | null = null;
-  let streak = 0;
-  for (let back = LIFT_HEADLINE_REPLAY_WEEKS; back >= 0; back -= 1) {
-    const scored = scoreLifts(progression, shiftDay(anchorWeekStart, -7 * back));
-    if (scored.length === 0) {
-      leader = null;
-      challenger = null;
-      streak = 0;
-      continue;
-    }
-    const current: LiftScore | undefined = leader == null ? undefined : scored.find(r => r.key === leader);
-    if (!current) {
-      leader = scored[0].key;
-      challenger = null;
-      streak = 0;
-      continue;
-    }
-    const top = scored[0];
-    if (top.key !== current.key && top.sessions - current.sessions >= LIFT_HEADLINE_SWITCH_MARGIN) {
-      streak = challenger === top.key ? streak + 1 : 1;
-      challenger = top.key;
-      if (streak >= LIFT_HEADLINE_SWITCH_WEEKS) {
-        leader = top.key;
-        challenger = null;
-        streak = 0;
-      }
-    } else {
-      challenger = null;
-      streak = 0;
-    }
-  }
-  return leader;
+  const now = scoreLifts(progression, anchorWeekStart);
+  if (now.rows.length === 0) return null;
+  if (now.anchorCounted) return now.rows[0].key;
+  const level = new Set(levelWithTop(now.rows));
+  const before = scoreLifts(progression, shiftDay(anchorWeekStart, -7));
+  if (!before.anchorCounted) for (const key of levelWithTop(before.rows)) if (now.rows.some(r => r.key === key)) level.add(key);
+  const eligible = now.rows.filter(r => level.has(r.key)).map(r => r.key);
+  return eligible.sort((a, b) => mainLiftRank(a) - mainLiftRank(b) || a.localeCompare(b))[0];
 }
 
 /**
@@ -219,7 +212,7 @@ export function headlineLeader(progression: Record<string, LiftWeekPoint[]>, anc
  * Monday after the reviewed week) rank alike.
  */
 export function rankLifts(progression: Record<string, LiftWeekPoint[]>, anchorWeekStart: string): string[] {
-  const ranked = scoreLifts(progression, anchorWeekStart).map(r => r.key);
+  const ranked = scoreLifts(progression, anchorWeekStart).rows.map(r => r.key);
   const leader = headlineLeader(progression, anchorWeekStart);
   return leader == null ? ranked : [leader, ...ranked.filter(key => key !== leader)];
 }

@@ -1075,3 +1075,52 @@ invariant(LIFTERS, 'while every lift is rebuilding, the card reasons and the coa
   if (name === 'lifter') assert.ok(days > 0, `${name}: no day had two or more lifts all rebuilding, so this invariant checked nothing`);
   return out;
 });
+
+// The headline lift only changes with news: on a day nothing was logged and no new week began, the lift the server sends as the headline
+// lift (and so the Strength card's first row, and the comeback's lead lift) is the same as the day before. The sticky ranking was replayed
+// over weeks the 84-day loader window only half holds, so the oldest week lost a day's sets every day and the lead flipped Tue -> Wed
+// (lifter_short_week days 85-86, 94-95, 96-97).
+invariant(LIFTERS, 'headlineLift does not change on a day with no strength session logged and no new calendar week', (snaps, name) => {
+  const scn = buildScenario(name);
+  const trained = new Set(scn.sets.filter(x => !x.isWarmup).map(x => x.day));
+  const out: Violation[] = [];
+  let prev: DaySnapshot | null = null;
+  for (const snap of snaps) {
+    if (snap.card?.goal !== 'muscle') continue;
+    if (prev && dayDiff(snap.date, prev.date) === 1 && prev.card?.headlineLift !== snap.card.headlineLift && !trained.has(snap.date) && weekdayOf(snap.date) !== 'Mon') {
+      out.push({ snap, detail: `headlineLift ${prev.card?.headlineLift} (${prev.date}) -> ${snap.card.headlineLift} with nothing logged and no new week` });
+    }
+    prev = snap;
+  }
+  return out;
+});
+
+// A comeback sentence that names the lifts already back ("Squat and bench back at pre-break; deadlift at 98%") says "above" only when every
+// named lift is above its pre-break number as printed, "at" only when every one is exactly at it, and "at or above" for a mix - the card
+// said "Squat back above pre-break" on Friday and "...back at pre-break" on Sunday for the same squat (145 vs 142 kg) - and writes the names
+// in sentence case: "Bench and squat", not "Bench Press and squat". Checked on the card headline and on the review headline.
+invariant(LIFTERS, 'a "back at / above / at or above pre-break" sentence matches the printed numbers of the lifts it names, in sentence case', (snaps, name) => {
+  const imperial = buildScenario(name).profile.units === 'imperial';
+  const shown = (r: { preBreakKg: number; recentKg: number }): { pre: number; recent: number } => {
+    const f = imperial ? 2.20462 : 1;
+    return { pre: Math.round(r.preBreakKg * f), recent: Math.round(r.recentKg * f) };
+  };
+  const out: Violation[] = [];
+  let sentences = 0;
+  const check = (snap: DaySnapshot, where: string, text: string, rets: Array<{ exercise: string; name: string; preBreakKg: number; recentKg: number; regained: boolean }> | null | undefined): void => {
+    const m = /(?:^|, )([A-Z][^;]*?) back (at or above|above|at) pre-break;/.exec(plain(text));
+    if (!m || !rets) return;
+    sentences++;
+    const named = rets.filter(r => r.regained && m[1].toLowerCase().split(/, | and /).some(n => r.name.toLowerCase() === n || (r.exercise === 'bench press' && n === 'bench')));
+    if (named.length === 0) return;
+    const rel = named.every(r => shown(r).recent > shown(r).pre) ? 'above' : named.every(r => shown(r).recent <= shown(r).pre) ? 'at' : 'at or above';
+    if (m[2] !== rel) out.push({ snap, detail: `${where}: "${visible(text)}" says "${m[2]}" but ${named.map(r => `${r.name} ${shown(r).recent} vs ${shown(r).pre}`).join(', ')}` });
+    if (!/^[A-Z][^A-Z]*$/.test(m[1])) out.push({ snap, detail: `${where}: "${visible(text)}" names the lifts "${m[1]}" (not sentence case)` });
+  };
+  for (const snap of snaps) {
+    if (snap.card) check(snap, 'card.headline', snap.card.headline, snap.card.liftReturns);
+    if (snap.review) check(snap, 'review.headline', snap.review.review.headline, snap.review.progress.liftReturns);
+  }
+  if (name === 'lifter') assert.ok(sentences > 0, `${name}: no comeback sentence naming lifts that are back appeared, so this invariant checked nothing`);
+  return out;
+});

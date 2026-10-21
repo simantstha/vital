@@ -6,6 +6,7 @@ import {
   isRunningWorkoutType,
   isStrengthWorkoutType,
   longRunTargetKm,
+  mixedReturnLead,
   raceLabel,
   weekFitsSessionTarget,
   type GoalProgress,
@@ -2315,6 +2316,22 @@ test('return from a break, lift by lift: several lifts back and one behind, and 
   // An accessory never holds the claim back: lat pulldown at 90% does not stop "Back above".
   const accessory = computeGoalProgress(longBreakInput({ squat: LONG_BREAK_SQUAT, 'lat pulldown': [lw('2026-08-17', 80), lw('2026-08-24', 85), lw('2026-09-21', 70)] }));
   assert.equal(accessory.headline, 'Back above your pre-break best — Squat est. 1RM 145 kg (was 142 kg)');
+});
+
+test('the comeback sentence: "above" only when every named lift is above its printed number, "at or above" for a mix, sentence case (wave 22s)', () => {
+  const ret = (exercise: string, name: string, pre: number, recent: number, regained: boolean) =>
+    ({ exercise, name, breakDays: 15, endedOn: '2026-05-10', preBreakKg: pre, recentKg: recent, pct: Math.floor((recent / pre) * 100), regained });
+  const squatAbove = ret('squat', 'Squat', 142, 145.2, true);
+  const benchAt = ret('bench press', 'Bench Press', 111, 111.2, true);
+  const benchAbove = ret('bench press', 'Bench Press', 111, 114, true);
+  const deadlift = ret('deadlift', 'Deadlift', 160, 157, false);
+  assert.equal(mixedReturnLead([squatAbove, deadlift], undefined, false)?.text, 'Squat back above pre-break; deadlift at 98%');
+  assert.equal(mixedReturnLead([squatAbove, benchAbove, deadlift], undefined, false)?.text, 'Squat and bench back above pre-break; deadlift at 98%');
+  assert.equal(mixedReturnLead([benchAt, deadlift], undefined, false)?.text, 'Bench back at pre-break; deadlift at 98%');
+  // A mix of one above and one exactly at: neither "above" (bench is not) nor "at" (squat is above).
+  assert.equal(mixedReturnLead([benchAt, squatAbove, deadlift], undefined, false)?.text, 'Bench and squat back at or above pre-break; deadlift at 98%');
+  // The numbers are as printed: 111.2 kg shows as 111, so it is "at", not above 111.
+  assert.equal(mixedReturnLead([benchAt, deadlift], undefined, false)?.text.includes(' at pre-break'), true);
 });
 
 test('return from a break: the state ends 35 days after the break and normal rules apply again', () => {

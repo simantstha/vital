@@ -1915,18 +1915,22 @@ function returnNumbers(r: GoalLiftReturn, input: GoalProgressInput): { pre: numb
   return liftReturnDisplay(r, input.unitSystem === 'imperial');
 }
 
-/** "Squat", "Squat and bench", "Squat, bench and deadlift": the first lift by its display name, the rest by the short spoken one. */
+/** "Squat", "Squat and bench", "Bench and squat", "Squat, bench and deadlift": sentence case, each lift by its short spoken name ("bench press" -> "bench"). */
 function returnLiftNames(rets: GoalLiftReturn[], exerciseDisplay: Record<string, string> | undefined): string {
-  const names = rets.map((r, i) => (i === 0 ? r.name : liftShortName(r.exercise, exerciseDisplay)));
+  const names = rets.map((r, i) => {
+    const short = liftShortName(r.exercise, exerciseDisplay);
+    return i === 0 ? `${short.charAt(0).toUpperCase()}${short.slice(1)}` : short;
+  });
   return names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
 }
 
 /**
  * The comeback sentence when SOME main lifts are back at their pre-break best
  * and one is not: "Squat back above pre-break; deadlift at 98%" — the lifts that
- * are back first ("at or above" unless every one is strictly above), then the
+ * are back first ("at", "at or above" or "above" by their printed numbers), then the
  * lift furthest behind with its percentage of the SHOWN numbers
- * (lib/liftChange.ts liftReturnDisplay). Shared by the goal card and the weekly
+ * (lib/liftChange.ts liftReturnDisplay); "above" only when every named lift is
+ * above its printed pre-break number, "at or above" for a mix. Shared by the goal card and the weekly
  * review. `maxAhead` limits how many of the lifts that are back are named (the
  * card's headline drops to one to fit the numbers). Null unless the returns are
  * mixed (some back, some not).
@@ -1941,7 +1945,9 @@ export function mixedReturnLead(
   const ahead = rets.filter(r => r.regained).slice(0, maxAhead);
   if (behind == null || ahead.length === 0) return null;
   const shown = liftReturnDisplay(behind, imperial);
-  const rel = ahead.every(r => { const n = liftReturnDisplay(r, imperial); return n.recent > n.pre; }) ? 'above' : 'at';
+  // "above" only when every named lift is above its pre-break number as printed, "at" only when every one is exactly there.
+  const aboveCount = ahead.filter(r => { const n = liftReturnDisplay(r, imperial); return n.recent > n.pre; }).length;
+  const rel = aboveCount === ahead.length ? 'above' : aboveCount === 0 ? 'at' : 'at or above';
   return {
     text: `${returnLiftNames(ahead, exerciseDisplay)} back ${rel} pre-break; ${liftShortName(behind.exercise, exerciseDisplay)} at ${shown.pct}%`,
     behind,
