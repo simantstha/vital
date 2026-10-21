@@ -40,6 +40,7 @@ import {
   liftDisplayName,
   liftReturnDisplay,
   liftShortName,
+  liftTrainedAtWorkingWeight,
   MAX_CUED_LIFTS,
   nextLoadCues,
   nextWorkingLoad,
@@ -828,12 +829,13 @@ function liftCandidate(input: WeeklyReviewInput, week: Week): Candidate | null {
   if (input.liftReturn) return returnLiftCandidate(input);
   const imperial = isImperial(input);
   const unit = imperial ? 'lb' : 'kg';
-  let best: { name: string; shown: number; windowLabel: string; stalled: boolean } | null = null;
+  let best: { key: string; name: string; shown: number; windowLabel: string; stalled: boolean } | null = null;
   // ONE headline-lift rule (lib/liftChange.ts pickHeadlineLift): the most-trained
   // lift with a 4-week comparison — the same lift the Trends goal card names.
   const picked = pickHeadlineLift(input.progression, liftAnchor(week));
   if (picked) {
     best = {
+      key: picked.exercise,
       name: liftDisplayName(picked.exercise, input.exerciseDisplay),
       shown: liftDisplayChange(picked.change, imperial).change,
       windowLabel: 'vs 4 weeks ago',
@@ -845,6 +847,7 @@ function liftCandidate(input: WeeklyReviewInput, week: Week): Candidate | null {
     const wow = pickWeekOverWeek(input.progression, liftAnchor(week), [week.days[0]]);
     if (wow) {
       best = {
+        key: wow.exercise,
         name: liftDisplayName(wow.exercise, input.exerciseDisplay),
         shown: liftWeekChangeDisplay(wow.change, imperial),
         // The window the card labels the same pair with ("Last week: … vs the week before"; lib/liftChange.ts weekOverWeekWording).
@@ -858,7 +861,10 @@ function liftCandidate(input: WeeklyReviewInput, week: Week): Candidate | null {
   // A deload week lowers e1RM on purpose, and a drop that is not a stall (a
   // break, a return) is no slip either: both stay neutral.
   const deload = best.shown < 0 && isDeloadWeek(input.progression, week.days[0]);
-  const tone: ReviewTone = best.shown > 0 ? 'good' : best.shown < 0 && !deload && best.stalled ? 'watch' : 'neutral';
+  // A slack week (half the planned sessions or fewer) colours no lift gain the week did not produce: the numbers stay, as a neutral stat,
+  // unless that lift was trained at working weight in the reviewed week.
+  const unproduced = slackMuscleWeek(input, week) && !liftTrainedAtWorkingWeight(input.progression[best.key] ?? [], week.days[0]);
+  const tone: ReviewTone = best.shown > 0 ? (unproduced ? 'neutral' : 'good') : best.shown < 0 && !deload && best.stalled ? 'watch' : 'neutral';
   const cand: Candidate = {
     stat: { label: `${best.name} est. 1RM`, value, comparison: deload ? `Lighter week · ${best.windowLabel}` : best.windowLabel, tone },
   };
@@ -1729,6 +1735,8 @@ function buildHeadline(input: WeeklyReviewInput, cands: Candidate[], week: Week)
     }
     const lift = cands.find(x => x.stat.label.endsWith('est. 1RM'))?.stat;
     const protein = by('Protein days hit');
+    // A slack week leads with the week: no lift gain it did not produce, no weight or protein filler after the count.
+    if (slackMuscleWeek(input, week) && !input.liftReturn && !(lift && lift.tone === 'good') && parts.length === 1) return clipHeadline(`${parts[0]} — a short week`);
     if (lift && input.liftReturn) {
       // Returning from a break: the rebuild leads ("Squat est. 1RM 136 of 142 kg pre-break"), regained or not.
       parts.push(returnHeadlinePart(input));

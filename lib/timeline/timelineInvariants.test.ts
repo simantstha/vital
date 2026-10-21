@@ -1212,3 +1212,39 @@ invariant(LIFTERS, 'a constant +2.5 kg step on the squat reads the same week-ove
   assert.ok([...seen.values()].flat().length >= 2, `${name}: fewer than two +2.5 kg squat weeks were compared, so this invariant checked nothing`);
   return out;
 });
+
+// A slack week (half the planned sessions or fewer, but not none) must not lead with, or colour, a lift gain the week did not produce:
+// lifter_short_week day 49 read "1 of 4 sessions, Squat est. 1RM +10 kg over 4 wks" with a green squat stat, for a squat she did not train
+// that week (the Thursday bench was a light 3x8 volume day). A lift gain may appear only for a lift trained at working weight that week -
+// a top set at 90% or more of its best in the 4 weeks before. Counted from the scenario's own rows. The push body is the headline.
+invariant(LIFTERS, 'a review of a week with at most half its planned sessions rates no lift green and leads with no lift gain unless that lift was trained at working weight that week', (snaps, name) => {
+  const scn = buildScenario(name);
+  const exerciseOf = new Map<string, string>(scn.sets.map(s => [`${s.display} est. 1RM`, s.exercise]));
+  const topLoad = (exercise: string, from: string, to: string): number | null => {
+    const loads = scn.sets.filter(s => s.exercise === exercise && !s.isWarmup && s.day >= from && s.day <= to && s.loadKg != null && s.loadKg > 0).map(s => s.loadKg as number);
+    return loads.length > 0 ? Math.max(...loads) : null;
+  };
+  const out: Violation[] = [];
+  let checked = 0;
+  for (const snap of snaps) {
+    const r = snap.review?.review;
+    if (!r || r.weekGap?.kind !== 'sessions' || r.weekGap.done === 0 || r.weekGap.done * 2 > r.weekGap.target) continue;
+    checked++;
+    const weekEnd = addDays(r.weekStart, 6);
+    let gainShown = false;
+    for (const st of r.stats) {
+      const exercise = exerciseOf.get(st.label);
+      if (exercise == null) continue;
+      const now = topLoad(exercise, r.weekStart, weekEnd);
+      const best = topLoad(exercise, addDays(r.weekStart, -28), addDays(r.weekStart, -1));
+      const working = now != null && (best == null || now >= best * 0.9 - 1e-9);
+      if (working) { gainShown = gainShown || st.tone === 'good'; continue; }
+      const texts = [{ where: 'review.headline', text: r.headline }, { where: 'alert.body', text: snap.review?.alert.body ?? '' }];
+      if (st.tone === 'good') out.push({ snap, detail: `${r.weekGap.done} of ${r.weekGap.target} sessions: stat "${st.label}" ${st.value} is rated good, but the lift had no working-weight set in the reviewed week (top ${now ?? 'none'} kg vs ${best ?? 'none'} kg before)` });
+      for (const t of texts) if (plain(t.text).includes(`${st.label} +`)) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" leads with a ${st.label} gain, but the lift had no working-weight set in the reviewed week` });
+    }
+    if (!gainShown && !/^\d+ of \d+ sessions — a short week$/.test(plain(r.headline))) out.push({ snap, detail: `review.headline: "${visible(r.headline)}" (a slack week with no lift gain to show leads with the week: "N of M sessions — a short week")` });
+  }
+  if (name === 'lifter_short_week') assert.ok(checked > 0, `${name}: no slack week was reviewed, so this invariant checked nothing`);
+  return out;
+});

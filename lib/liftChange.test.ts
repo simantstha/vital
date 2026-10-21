@@ -4,7 +4,7 @@ import {
   shiftDay,
   cuedLifts, easedLoad, findRecentBreak, headlineLeader, isDeload, isDeloadWeek, isLiftProgressing, isLiftStalled, isLowerBodyCompound, latestTopLoadKg, liftChange4w,
   furthestBehindReturn, liftDisplayChange, liftDisplayName, liftLapseMinDays, liftLastBest, liftRecentEndWeek, liftRegressed, liftReturnDisplay, liftReturnState,
-  liftReturnStates, liftShortName, liftWeekChangeDisplay, liftWeekOverWeek, nextLoadCues, nextWorkingLoad, pickHeadlineLift, pickWeekOverWeek, priorTopLoadKg, rankLifts, shortWeekLoadCues, weekOverWeekWording,
+  liftReturnStates, liftShortName, liftTrainedAtWorkingWeight, liftWeekChangeDisplay, liftWeekOverWeek, nextLoadCues, nextWorkingLoad, pickHeadlineLift, pickWeekOverWeek, priorTopLoadKg, rankLifts, shortWeekLoadCues, weekOverWeekWording,
   type LiftWeekPoint,
 } from './liftChange';
 
@@ -144,6 +144,17 @@ test('liftWeekChangeDisplay: whole kg / lb rounded from the change itself, so on
   // Pounds round the lb change: 3.1 kg = 6.8 lb -> 7; -0.2 kg = -0.4 lb -> 0.
   assert.equal(liftWeekChangeDisplay(step(130.4, 133.5), true), 7);
   assert.equal(liftWeekChangeDisplay(step(133.5, 133.3), true), 0);
+});
+
+test('liftTrainedAtWorkingWeight: a top set at 90%+ of the 4-week best, not a light day or an absent lift', () => {
+  const top = (weekStart: string, kg: number | null, sessions = 1): LiftWeekPoint => ls(weekStart, 130, sessions, { topLoadKg: kg });
+  const before = [top('2026-09-07', 100, 2), top('2026-09-14', 100, 2), top('2026-09-21', 100, 2)];
+  assert.equal(liftTrainedAtWorkingWeight([...before, top('2026-09-28', 100)], '2026-09-28'), true);
+  assert.equal(liftTrainedAtWorkingWeight([...before, top('2026-09-28', 90)], '2026-09-28'), true); // exactly 90%
+  assert.equal(liftTrainedAtWorkingWeight([...before, top('2026-09-28', 85)], '2026-09-28'), false); // a light volume day
+  assert.equal(liftTrainedAtWorkingWeight(before, '2026-09-28'), false); // not trained that week
+  assert.equal(liftTrainedAtWorkingWeight([...before, top('2026-09-28', null)], '2026-09-28'), false); // bodyweight only
+  assert.equal(liftTrainedAtWorkingWeight([top('2026-09-28', 60)], '2026-09-28'), true); // nothing before to compare with
 });
 
 // ── Next week's loads after a short week (wave 22s) ─────────────────────────

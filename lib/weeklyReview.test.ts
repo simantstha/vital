@@ -2495,8 +2495,18 @@ test('a slack week (1-2 of 4 sessions) has no 4-week lift win: the session itsel
   const one = computeWeeklyReview(liftReview({ trainingDays: [WEEK[3]], strengthDays: [WEEK[3]], weightReadings: flat, progression: lifts }));
   assert.deepEqual(one.weekGap, { kind: 'sessions', done: 1, target: 4 });
   assert.equal(one.win, "You still got Thursday's bench session in.");
-  // The lift stat itself is unchanged (a labelled comparison); only the WIN is not claimed.
+  // The lift stat keeps its numbers but is not green, and the headline leads with the week, not a gain it did not produce (wave 22s).
   assert.ok(one.stats.some(st => st.label.endsWith('est. 1RM')), JSON.stringify(one.stats));
+  assert.ok(one.stats.filter(st => st.label.endsWith('est. 1RM')).every(st => st.tone !== 'good'), JSON.stringify(one.stats));
+  assert.equal(one.headline, '1 of 4 sessions — a short week');
+  // A lift trained at working weight that week may still show its gain: green stat, in the headline "over 4 wks".
+  const trainedSquat = computeWeeklyReview(liftReview({ trainingDays: [WEEK[0]], strengthDays: [WEEK[0]], weightReadings: flat, progression: { squat: [...steadySquat, lwk(WEEK_START, 138, 110, 1)] } }));
+  assert.equal(statByLabel(trainedSquat, 'Squat est. 1RM')!.tone, 'good');
+  assert.match(trainedSquat.headline, /^1 of 4 sessions, Squat est\. 1RM \+5\skg over 4\swks$/);
+  // ... but not when that week's squat was a light day (a top set under 90% of its best): neutral again.
+  const lightSquat = computeWeeklyReview(liftReview({ trainingDays: [WEEK[0]], strengthDays: [WEEK[0]], weightReadings: flat, progression: { squat: [...steadySquat, lwk(WEEK_START, 138, 90, 1)] } }));
+  assert.equal(statByLabel(lightSquat, 'Squat est. 1RM')!.tone, 'neutral');
+  assert.equal(lightSquat.headline, '1 of 4 sessions — a short week');
   // 2 of 4 is still half: two days named. No lift in the week's data, or more than two: just the day.
   const two = computeWeeklyReview(liftReview({ trainingDays: [WEEK[0], WEEK[3]], strengthDays: [WEEK[0], WEEK[3]], weightReadings: flat, progression: lifts }));
   assert.equal(two.win, 'You still got 2 sessions in — Monday and Thursday.');

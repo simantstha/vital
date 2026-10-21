@@ -863,6 +863,18 @@ export function liftRegressed(weeks: LiftWeekPoint[], weekStart: string): boolea
   return prevKg != null && cur < prevKg * (1 - LIFT_PROGRESS_MIN_FRACTION) - 1e-9;
 }
 
+/**
+ * True when the lift was trained at working weight in the week starting `weekStart`: a loaded working set whose top load is at least
+ * DELOAD_WEEK_LOAD_FRACTION (90%) of its best top load in the 4 weeks before (or nothing before to compare with). A light volume day,
+ * or no session of the lift at all, is not — a gain "over 4 weeks" is then not something that week produced.
+ */
+export function liftTrainedAtWorkingWeight(weeks: LiftWeekPoint[], weekStart: string): boolean {
+  const current = weeks.find(w => w.weekStart === weekStart && weekSessions(w) > 0 && w.topLoadKg != null && w.topLoadKg > 0);
+  if (current == null) return false;
+  const best = priorTopLoadKg(weeks, weekStart, 4);
+  return best == null || (current.topLoadKg as number) >= best * DELOAD_WEEK_LOAD_FRACTION - 1e-9;
+}
+
 export interface LiftLoadCue {
   key: string;
   /** Today's working load and the next one by the lift logger's rule (`nextWorkingLoad`); `from` is the load to hold. */
