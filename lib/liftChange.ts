@@ -804,3 +804,54 @@ export function nextLoadCues(
     return { key, load: nextWorkingLoad(top, key, opts.imperial), hold: !opts.rebuilding && liftRegressed(weeks, weekStart) };
   });
 }
+
+// ── Next week's loads after a short week ────────────────────────────────────
+
+export interface ShortWeekLoadCue {
+  key: string;
+  /**
+   * 'skipped': not trained that week, so its planned step repeats ("Squat 112.5 kg").
+   * 'light': trained, but only as a light / volume day (top set under 90% of its 4-week best): the planned step repeats too.
+   * 'trained': trained at its working load, so the normal next-load rule applies.
+   * 'hold': trained, but its e1RM fell last week: the load stays.
+   */
+  kind: 'skipped' | 'light' | 'trained' | 'hold';
+  /** `from` is the load the step starts at (the lift's last working load), `to` the one to try. */
+  load: NextLoad;
+}
+
+/**
+ * Loads for the coming week after a week that fell short of its session target
+ * (the review's "Back to 4 this week — don't make up the missed ones. Squat
+ * 112.5 kg …"): every main lift in rotation, the lead lift first, at most
+ * MAX_CUED_LIFTS. A lift that was not trained that week (or only as a light
+ * volume day, under 90% of its 4-week best top set) repeats the step it was
+ * already cued — the missed session is not made up and the step is not skipped
+ * either; a lift trained at its working load follows the normal rule
+ * (`nextWorkingLoad`, or a hold when its e1RM fell). A lift with no known load
+ * in the last 4 weeks has no step to repeat and is left out.
+ */
+export function shortWeekLoadCues(
+  progression: Record<string, LiftWeekPoint[]>,
+  weekStart: string,
+  opts: { imperial: boolean; leadKey: string | null; rebuilding: boolean },
+): ShortWeekLoadCue[] {
+  const ranked = rankLifts(progression, shiftDay(weekStart, 7)).filter(isMainLift);
+  const lead = opts.leadKey != null && ranked.includes(opts.leadKey) ? [opts.leadKey] : [];
+  const keys = [...lead, ...ranked.filter(key => !lead.includes(key))];
+  const out: ShortWeekLoadCue[] = [];
+  for (const key of keys) {
+    if (out.length >= MAX_CUED_LIFTS) break;
+    const weeks = progression[key] ?? [];
+    const current = weeks.find(w => w.weekStart === weekStart && weekSessions(w) > 0 && w.topLoadKg != null && w.topLoadKg > 0);
+    const best = priorTopLoadKg(weeks, weekStart, 4);
+    const top = current?.topLoadKg ?? null;
+    if (top != null && (best == null || top >= best * DELOAD_WEEK_LOAD_FRACTION - 1e-9)) {
+      const hold = !opts.rebuilding && liftRegressed(weeks, weekStart);
+      out.push({ key, kind: hold ? 'hold' : 'trained', load: nextWorkingLoad(top, key, opts.imperial) });
+    } else if (best != null && best > 0) {
+      out.push({ key, kind: current ? 'light' : 'skipped', load: nextWorkingLoad(best, key, opts.imperial) });
+    }
+  }
+  return out;
+}

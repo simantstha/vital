@@ -814,3 +814,57 @@ invariant(['runner_on_plan', 'runner_on_plan_half', 'runner_on_plan_imperial', '
   assert.ok(weekendDays > 0, `${name}: no taper weekend was stepped, so this invariant checked nothing`);
   return out;
 });
+
+// ── strength round 4 (wave 22s) ─────────────────────────────────────────────
+
+// A week 1-3 sessions short is not made up: the review's "Next week" says to go back to the target, with the loads, and never asks
+// for the missed sessions again. lifter_short_week day 49 read "Book 4 sessions — lock in the missed ones now, starting with Monday."
+// (Priya read it as "make up the 3 missed sessions"; the no-makeup rule had been written for 0-session weeks and comebacks only).
+const MAKE_UP_PHRASES = /missed ones|the missed one\b|make up|catch up|lock in the missed/i;
+// "don't make up the missed ones" is the instruction itself, not a request to make them up.
+const NEGATED_MAKE_UP = /\b(?:don[’']t|do not|never) (?:make up|catch up on) the missed ones/gi;
+
+invariant(LIFTERS, 'a muscle review never asks to make up, catch up or lock in the missed sessions', snaps => {
+  const out: Violation[] = [];
+  for (const snap of snaps) {
+    const next = snap.review?.review.nextWeek;
+    if (next == null) continue;
+    const text = plain(next).replace(NEGATED_MAKE_UP, '');
+    if (MAKE_UP_PHRASES.test(text)) out.push({ snap, detail: `review.nextWeek: "${visible(next)}"` });
+  }
+  return out;
+});
+
+// The same week, the other way round: a muscle week with 1..target-1 sessions says "Back to N this week" + "don't make up", ends with
+// "starting today" (the review is read on its Monday) and cues the planned load of every main lift she did NOT train that week: the
+// step the previous week's cue already gave ("Squat 112.5 kg"), taken from the scenario's own rows so a wrong load cannot excuse itself.
+invariant(['lifter_short_week'], 'a short muscle week says "Back to N this week", not to make up the missed ones, and repeats the planned load of each lift skipped', (snaps, name) => {
+  const scn = buildScenario(name);
+  const target = scn.user.weeklySessions as number;
+  const out: Violation[] = [];
+  let checked = 0;
+  const topLoad = (ex: string, from: string, to: string): number | null => {
+    const loads = scn.sets.filter(s => s.exercise === ex && !s.isWarmup && s.day >= from && s.day <= to && s.loadKg != null).map(s => s.loadKg as number);
+    return loads.length > 0 ? Math.max(...loads) : null;
+  };
+  for (const snap of snaps) {
+    const r = snap.review?.review;
+    if (!r || r.weekGap?.kind !== 'sessions' || r.weekGap.done === 0 || r.weekGap.done >= target) continue;
+    checked++;
+    const text = plain(r.nextWeek);
+    if (!new RegExp(`^Back to ${target} this week — don't make up the missed ones\\.`).test(text)) out.push({ snap, detail: `review.nextWeek does not open with the no-makeup line: "${visible(r.nextWeek)}"` });
+    if (!/, starting today\.$/.test(text)) out.push({ snap, detail: `review.nextWeek does not end "starting today.": "${visible(r.nextWeek)}"` });
+    const weekStart = r.weekStart;
+    const prevStart = addDays(weekStart, -7);
+    for (const ex of ['squat', 'deadlift']) {
+      if (topLoad(ex, weekStart, addDays(weekStart, 6)) != null) continue; // trained that week: the normal next-load rule
+      const prev = topLoad(ex, prevStart, addDays(prevStart, 6));
+      if (prev == null) continue;
+      const planned = prev + 2.5;
+      const named = new RegExp(`\\b${ex}\\b[^,.;]*?(\\d+(?:\\.\\d+)?)\\s?kg`, 'i').exec(text);
+      if (!named || Number(named[1]) !== planned) out.push({ snap, detail: `${ex} was not trained and its planned step is ${planned} kg, but review.nextWeek says: "${visible(r.nextWeek)}"` });
+    }
+  }
+  assert.ok(checked > 0, `${name}: no short muscle week was reviewed, so this invariant checked nothing`);
+  return out;
+});

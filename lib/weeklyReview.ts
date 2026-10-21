@@ -46,6 +46,7 @@ import {
   pickWeekOverWeek,
   priorTopLoadKg,
   rankLifts,
+  shortWeekLoadCues,
   weekOverWeekWording,
   type NextLoad,
 } from './liftChange';
@@ -2346,6 +2347,33 @@ function easeBackInNextWeek(input: WeeklyReviewInput, week: Week, target: number
   return `Ease back in: ${target} ${plural(target, 'session')} at ~90% of your last working weights${weights}, starting today.`;
 }
 
+/**
+ * A muscle week with some sessions but under the target (1..target-1): back to the target, NOT the missed ones made up, with the
+ * loads. A lift not trained that week repeats its planned step ("Squat 112.5 kg (the step you skipped)"); a lift that was trained
+ * follows the normal next-load rule ("bench 87.5 → 90 kg"). Starting today: the review is read on its Monday. Without a known
+ * load the sentence still stands.
+ */
+function shortWeekNextWeek(input: WeeklyReviewInput, week: Week, target: number): string {
+  const head = `Back to ${target} this week — don't make up the missed ones`;
+  const cues = shortWeekLoadCues(input.progression, week.days[0], { imperial: isImperial(input), leadKey: reviewLiftKey(input, week), rebuilding: stillRebuilding(input) });
+  if (cues.length === 0) return `${head}, starting today.`;
+  // The lifts that repeat their planned step come first, with the one note; the rest follow in the usual "110 → 112.5 kg" form.
+  const repeat = cues.filter(c => c.kind === 'skipped');
+  const rest = cues.filter(c => c.kind !== 'skipped');
+  const names = liftNames(input, [...repeat, ...rest].map(c => c.key));
+  const repeatParts = repeat.map((c, i) => `${names[i]} ${withUnit(c.load.to, c.load.unit)}`);
+  const parts: string[] = [];
+  if (repeatParts.length > 0) {
+    const list = repeatParts.length === 1 ? repeatParts[0] : `${repeatParts.slice(0, -1).join(', ')} and ${repeatParts[repeatParts.length - 1]}`;
+    parts.push(`${list} (${repeat.length === 1 ? 'the step' : 'the steps'} you skipped)`);
+  }
+  rest.forEach((c, i) => {
+    const name = names[repeat.length + i];
+    parts.push(c.kind === 'hold' ? `${name} hold at ${withUnit(c.load.from, c.load.unit)}` : `${name} ${loadPairText(c.load)}`);
+  });
+  return `${head}. ${parts.join(', ')}, starting today.`;
+}
+
 /** "Next week" for a mixed / tough week: the concrete action that closes the gap the Slip names. */
 function gapNextWeek(input: WeeklyReviewInput, gap: WeekGap, week: Week, prevWeek: Week): string {
   switch (gap.kind) {
@@ -2358,6 +2386,8 @@ function gapNextWeek(input: WeeklyReviewInput, gap: WeekGap, week: Week, prevWee
         if (stillRebuilding(input)) {
           return `Keep rebuilding: aim for ${gap.target} ${plural(gap.target, 'session')} at your current weights and add load only when every set feels solid.`;
         }
+        // Some sessions, not all: back to the target with the loads, the missed ones are not made up.
+        return shortWeekNextWeek(input, week, gap.target);
       }
       const missing = gap.target - gap.done;
       const day = freestWeekday(input, week, prevWeek);
