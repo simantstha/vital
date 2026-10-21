@@ -216,9 +216,11 @@ final class TrendsViewModel: ObservableObject {
     private func refreshHeadline() {
         let liftReturn = goalProgress?.liftReturn
         let liftReturns = goalProgress?.liftReturns
+        let headlineLift = goalProgress?.headlineLift
         let strength = workoutSummary.flatMap {
             TrendsStrengthLogic.card(
-                from: $0, system: .metric, today: Date(), liftReturn: liftReturn, liftReturns: liftReturns
+                from: $0, system: .metric, today: Date(), liftReturn: liftReturn, liftReturns: liftReturns,
+                headlineLift: headlineLift
             )
         }
         let goalMoves = TrendsHeadline.GoalMoves.make(

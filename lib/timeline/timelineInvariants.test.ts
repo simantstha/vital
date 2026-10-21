@@ -814,3 +814,437 @@ invariant(['runner_on_plan', 'runner_on_plan_half', 'runner_on_plan_imperial', '
   assert.ok(weekendDays > 0, `${name}: no taper weekend was stepped, so this invariant checked nothing`);
   return out;
 });
+
+// ── strength round 4 (wave 22s) ─────────────────────────────────────────────
+
+// A week 1-3 sessions short is not made up: the review's "Next week" says to go back to the target, with the loads, and never asks
+// for the missed sessions again. lifter_short_week day 49 read "Book 4 sessions — lock in the missed ones now, starting with Monday."
+// (Priya read it as "make up the 3 missed sessions"; the no-makeup rule had been written for 0-session weeks and comebacks only).
+const MAKE_UP_PHRASES = /missed ones|the missed one\b|make up|catch up|lock in the missed/i;
+// "don't make up the missed ones" is the instruction itself, not a request to make them up.
+const NEGATED_MAKE_UP = /\b(?:don[’']t|do not|never) (?:make up|catch up on) the missed ones/gi;
+
+invariant(LIFTERS, 'a muscle review never asks to make up, catch up or lock in the missed sessions', snaps => {
+  const out: Violation[] = [];
+  for (const snap of snaps) {
+    const next = snap.review?.review.nextWeek;
+    if (next == null) continue;
+    const text = plain(next).replace(NEGATED_MAKE_UP, '');
+    if (MAKE_UP_PHRASES.test(text)) out.push({ snap, detail: `review.nextWeek: "${visible(next)}"` });
+  }
+  return out;
+});
+
+// The same week, the other way round: a muscle week with 1..target-1 sessions says "Back to N this week" + "don't make up", ends with
+// "starting today" (the review is read on its Monday) and cues the planned load of every main lift she did NOT train that week: the
+// step the previous week's cue already gave ("Squat 112.5 kg"), taken from the scenario's own rows so a wrong load cannot excuse itself.
+invariant(['lifter_short_week'], 'a short muscle week says "Back to N this week", not to make up the missed ones, and repeats the planned load of each lift skipped', (snaps, name) => {
+  const scn = buildScenario(name);
+  const target = scn.user.weeklySessions as number;
+  const out: Violation[] = [];
+  let checked = 0;
+  const topLoad = (ex: string, from: string, to: string): number | null => {
+    const loads = scn.sets.filter(s => s.exercise === ex && !s.isWarmup && s.day >= from && s.day <= to && s.loadKg != null).map(s => s.loadKg as number);
+    return loads.length > 0 ? Math.max(...loads) : null;
+  };
+  for (const snap of snaps) {
+    const r = snap.review?.review;
+    if (!r || r.weekGap?.kind !== 'sessions' || r.weekGap.done === 0 || r.weekGap.done >= target) continue;
+    checked++;
+    const text = plain(r.nextWeek);
+    if (!new RegExp(`^Back to ${target} this week — don't make up the missed ones\\.`).test(text)) out.push({ snap, detail: `review.nextWeek does not open with the no-makeup line: "${visible(r.nextWeek)}"` });
+    if (!/, starting today\.$/.test(text)) out.push({ snap, detail: `review.nextWeek does not end "starting today.": "${visible(r.nextWeek)}"` });
+    const weekStart = r.weekStart;
+    const prevStart = addDays(weekStart, -7);
+    for (const ex of ['squat', 'deadlift']) {
+      if (topLoad(ex, weekStart, addDays(weekStart, 6)) != null) continue; // trained that week: the normal next-load rule
+      const prev = topLoad(ex, prevStart, addDays(prevStart, 6));
+      if (prev == null) continue;
+      const planned = prev + 2.5;
+      const named = new RegExp(`\\b${ex}\\b[^,.;]*?(\\d+(?:\\.\\d+)?)\\s?kg`, 'i').exec(text);
+      if (!named || Number(named[1]) !== planned) out.push({ snap, detail: `${ex} was not trained and its planned step is ${planned} kg, but review.nextWeek says: "${visible(r.nextWeek)}"` });
+    }
+  }
+  assert.ok(checked > 0, `${name}: no short muscle week was reviewed, so this invariant checked nothing`);
+  return out;
+});
+
+// A week is short when the sessions it still needs cannot be done with a rest day in between: more missing sessions than days left
+// (today counts only while no session is logged on it - a session today is already in the count), or three days back to back
+// (a plan's own back-to-back days aside: 6 a week already has runs of 3). lifter_short_week: Thursday's bench was session 1 of 4
+// with Fri-Sat-Sun left, and the card read "Progressing" on Thu-Fri, "Lifts up, week short" on Sat-Sun - a different answer each day.
+const weekFitsTarget = (done: number, target: number, daysLeft: number, trainedToday: boolean): boolean => {
+  const missing = target - done;
+  if (missing <= 0) return true;
+  const available = daysLeft - (trainedToday ? 1 : 0);
+  if (missing > available) return false;
+  if (target >= 7) return true;
+  const longestRun = Math.ceil(missing / (available - missing + 1));
+  return longestRun < Math.max(3, Math.ceil(target / (8 - target)) + 1);
+};
+
+invariant(LIFTERS, 'a week whose missing sessions no longer fit (too few days left, or three or more in a row) says "week short" on the card, not "Progressing"', (snaps, name) => {
+  const scn = buildScenario(name);
+  const target = scn.user.weeklySessions as number;
+  const trained = new Set(scn.sets.filter(x => !x.isWarmup).map(x => x.day));
+  const out: Violation[] = [];
+  let flagged = 0;
+  for (const snap of snaps) {
+    if (snap.card?.goal !== 'muscle') continue;
+    const monday = mondayOfDate(snap.date);
+    const done = [...trained].filter(d => d >= monday && d <= snap.date).length;
+    const daysLeft = 7 - dayDiff(snap.date, monday);
+    if (weekFitsTarget(done, target, daysLeft, trained.has(snap.date))) continue;
+    flagged++;
+    const wk = snap.card.reasons.find(r => r.kind === 'week_sessions');
+    if (snap.card.verdict === 'progressing' || wk?.tone !== 'watch') {
+      out.push({ snap, detail: `${done} of ${target} sessions, ${daysLeft} day(s) left${trained.has(snap.date) ? ' (one trained today)' : ''}, the missing ones no longer fit, but verdict ${snap.card.verdict}, week line "${visible(wk?.text ?? '(none)')}" (${wk?.tone}): "${visible(snap.card.headline)}"` });
+    }
+  }
+  if (name === 'lifter_short_week') assert.ok(flagged > 0, `${name}: no day had a week that no longer fits, so this invariant checked nothing`);
+  return out;
+});
+
+// Fewer changes, each with a reason: in any 8 days the verdict turns over at most 3 times. lifter_short_week days 42-49 changed 4 times
+// (progressing, holding "No sessions for 4 days", progressing, "Lifts up, week short", progressing) with one real event in the week.
+const LIFTER_CHANGE_WINDOW_DAYS = 8;
+const LIFTER_MAX_CHANGES = 3;
+
+invariant(LIFTERS, `at most ${LIFTER_MAX_CHANGES} card verdict changes in any ${LIFTER_CHANGE_WINDOW_DAYS} consecutive days`, snaps => {
+  const out: Violation[] = [];
+  const days = snaps.filter(s => s.card != null);
+  for (let i = 0; i + LIFTER_CHANGE_WINDOW_DAYS <= days.length; i++) {
+    const window = days.slice(i, i + LIFTER_CHANGE_WINDOW_DAYS);
+    if (dayDiff(window[window.length - 1].date, window[0].date) !== LIFTER_CHANGE_WINDOW_DAYS - 1) continue; // a skipped day
+    const changes: string[] = [];
+    for (let j = 1; j < window.length; j++) {
+      const prev = window[j - 1].card?.verdict;
+      const cur = window[j].card?.verdict;
+      if (prev !== cur) changes.push(`day ${window[j].idx} ${prev} -> ${cur}`);
+    }
+    if (changes.length > LIFTER_MAX_CHANGES) {
+      out.push({ snap: window[0], detail: `${changes.length} verdict changes in days ${window[0].idx}-${window[window.length - 1].idx}: ${changes.join('; ')}` });
+    }
+  }
+  return out;
+});
+
+// On the Monday the review is read, "this week" is the week that just began (the card says "1 of 4 sessions this week", the opener
+// "Welcome back"). The review is about the week before, so its headline, stats, win, slip and push say "last week" and never
+// "this week": "No sessions this week (2nd week off)" sat beside a card counting this week's first session (days 63 and 70).
+// ("Next week" is about the coming week and may say it.)
+invariant(LIFTERS, 'no Monday review string (headline, stats, win, slip, push) calls the reviewed week "this week"', snaps => {
+  const out: Violation[] = [];
+  for (const snap of snaps) {
+    const review = snap.review;
+    if (!review) continue;
+    const texts = [...reviewTexts(snap).filter(t => t.where !== 'review.nextWeek'), { where: 'alert.title', text: review.alert.title }, { where: 'alert.body', text: review.alert.body }];
+    for (const t of texts) if (/\bthis week\b/i.test(plain(t.text))) out.push({ snap, detail: `${t.where}: "${visible(t.text)}"` });
+  }
+  return out;
+});
+
+// A next-load cue is one loadable step: it starts on the 2.5 kg / 5 lb grid and adds exactly one step, and it says "~" when the load
+// she logged is not on the grid ("bench ~195 → 200 lb"). lifter_imperial read "bench 176 → 180 lb", "182 → 185" (+3), "Squat 243 → 250,
+// bench 193 → 200" (+7): the lb start was rounded to 1 lb and only the target to the 5 lb grid. (The kg rows are already on the grid.)
+invariant(LIFTERS, 'every next-load cue ("Squat 110 → 112.5 kg", "bench ~195 → 200 lb") starts on the grid and adds exactly one step (2.5 kg / 5 lb)', (snaps, name) => {
+  const out: Violation[] = [];
+  let cues = 0;
+  const onGrid = (v: number, step: number): boolean => Math.abs(v / step - Math.round(v / step)) < 1e-9;
+  for (const snap of snaps) {
+    const text = snap.review?.review.nextWeek;
+    if (text == null) continue;
+    for (const m of plain(text).matchAll(/(~?)(\d+(?:\.\d+)?)\s?→\s?(\d+(?:\.\d+)?)\s?(kg|lb)\b/g)) {
+      cues++;
+      const step = m[4] === 'kg' ? 2.5 : 5;
+      const from = Number(m[2]);
+      const to = Number(m[3]);
+      if (!onGrid(from, step) || !onGrid(to, step) || Math.abs(to - from - step) > 1e-9) {
+        out.push({ snap, detail: `review.nextWeek: "${visible(text)}" (${m[0]} starts off the ${step} ${m[4]} grid or is not one step of ${step} ${m[4]})` });
+      }
+    }
+  }
+  assert.ok(cues > 0, `${name}: no next-load cue appeared, so this invariant checked nothing`);
+  return out;
+});
+
+// The lift the card leads with is sticky: it changes to another lift only when that lift has out-trained it by 2+ sessions (over the 8
+// completed weeks the ranking looks at) at two Mondays in a row. lifter_short_week: one short week (the squat and deadlift sessions
+// dropped) made bench the most-trained lift by ONE session, and from day 49 to the end the card led with "Bench Press" instead of "Squat".
+// Counted from the scenario's own rows. Days with a lapse or a return in progress lead with a different lift on purpose and are skipped.
+invariant(LIFTERS, 'the lift the card leads with changes only when another lift has out-trained it by 2+ sessions at two Mondays in a row', (snaps, name) => {
+  const scn = buildScenario(name);
+  const keyOf = new Map<string, string>(scn.sets.map(s => [s.display, s.exercise]));
+  const sessionsOf = (exercise: string, anchor: string): number => {
+    const days = new Set(scn.sets.filter(s => s.exercise === exercise && !s.isWarmup && s.day >= addDays(anchor, -56) && s.day < anchor).map(s => s.day));
+    return days.size;
+  };
+  const out: Violation[] = [];
+  let prev: { exercise: string; snap: DaySnapshot } | null = null;
+  for (const snap of snaps) {
+    const card = snap.card;
+    if (!card || card.liftReturn != null || inLapse(snap)) continue;
+    const lead = card.reasons.find(r => r.kind === 'lift');
+    const named = lead ? /^(?:(?:This|Last) week: )?(.+?) est\. 1RM [+−]/.exec(plain(lead.text))?.[1] : undefined;
+    const exercise = named != null ? keyOf.get(named) : undefined;
+    if (exercise == null) continue;
+    if (prev && prev.exercise !== exercise) {
+      const anchor = mondayOfDate(snap.date);
+      const margin = (at: string): number => sessionsOf(exercise, at) - sessionsOf(prev!.exercise, at);
+      if (margin(anchor) < 2 || margin(addDays(anchor, -7)) < 2) {
+        out.push({ snap, detail: `the card led with ${prev.exercise} on ${prev.snap.date} and leads with ${exercise} now, but ${exercise} out-trained it by ${margin(anchor)} session(s) this Monday and ${margin(addDays(anchor, -7))} the Monday before (8 completed weeks each): "${visible(lead?.text ?? '')}"` });
+      }
+    }
+    prev = { exercise, snap };
+  }
+  return out;
+});
+
+// The server SENDS the headline lift (GoalProgress.headlineLift) so the iOS Trends Strength card leads with the same lift as the goal card
+// instead of ranking the lifts itself: it is the lift the card's lead lift line names, and it exists for the muscle goal only.
+invariant(ALL, 'headlineLift is sent for the muscle goal only, and is the lift the card\'s lead lift line names', (snaps, name) => {
+  const scn = buildScenario(name);
+  const keyOf = new Map<string, string>(scn.sets.map(s => [s.display, s.exercise]));
+  const out: Violation[] = [];
+  let checked = 0;
+  for (const snap of snaps) {
+    const card = snap.card;
+    if (!card) continue;
+    if (card.goal !== 'muscle') {
+      if ('headlineLift' in card) out.push({ snap, detail: `a ${card.goal} card carries headlineLift ${JSON.stringify(card.headlineLift)}` });
+      continue;
+    }
+    const sent = card.headlineLift;
+    if (typeof sent !== 'string' || sent === '') {
+      if (card.reasons.some(r => r.kind === 'lift')) out.push({ snap, detail: `a lift line is shown but headlineLift is ${JSON.stringify(sent)}` });
+      continue;
+    }
+    if (card.liftReturn != null || inLapse(snap)) continue; // those lines name the lift furthest behind / the last one trained, not the headline lift
+    const lead = card.reasons.find(r => r.kind === 'lift');
+    const named = lead ? /^(?:(?:This|Last) week: )?(.+?) est\. 1RM [+−]/.exec(plain(lead.text))?.[1] : undefined;
+    if (named == null) continue;
+    checked++;
+    if (keyOf.get(named) !== sent) out.push({ snap, detail: `headlineLift "${sent}" but the lead lift line names ${named}: "${visible(lead?.text ?? '')}"` });
+  }
+  if (LIFTERS.includes(name)) assert.ok(checked > 0, `${name}: no lead lift line was compared, so this invariant checked nothing`);
+  return out;
+});
+
+// A slack week (half the planned sessions or fewer, but not none) has no lift-progress win: "Bench Press estimated 1RM is up 6 kg vs 4
+// weeks ago" on a 1-of-4 week quotes a number whose "now" side was set the week before. The win may only cite what was done that week
+// ("You still got Thursday's bench session in.", or the week's weight / protein win), or there is none. lifter_short_week day 49.
+// (A week with no session at all has no lift win already.)
+const LIFT_PROGRESS_WIN = /1RM|\bvs \d+ weeks?\b|\bvs the week before\b|\bover \d+ wks\b/i;
+
+invariant(LIFTERS, 'a review of a week with at most half its planned sessions has no 4-week lift win (what was done that week, or none)', (snaps, name) => {
+  const out: Violation[] = [];
+  let slack = 0;
+  for (const snap of snaps) {
+    const r = snap.review?.review;
+    if (!r || r.weekGap?.kind !== 'sessions' || r.weekGap.done === 0 || r.weekGap.done * 2 > r.weekGap.target) continue;
+    slack++;
+    if (r.win != null && LIFT_PROGRESS_WIN.test(plain(r.win))) out.push({ snap, detail: `${r.weekGap.done} of ${r.weekGap.target} sessions, review.win: "${visible(r.win)}"` });
+  }
+  if (name === 'lifter_short_week') assert.ok(slack > 0, `${name}: no slack week was reviewed, so this invariant checked nothing`);
+  return out;
+});
+
+// While EVERY lift is still rebuilding after a break, the card and the coach line say where each one stands. The card named only the
+// headline squat ("Building back — Squat est. 1RM 136 of 142 kg") while the deadlift sat at 94%, and the deadlift line came and went
+// (days 71-76 hidden, day 77 shown, day 78 hidden after she deadlifted: a 3-point hide rule). The percentages are the displayed ones.
+invariant(LIFTERS, 'while every lift is rebuilding, the card reasons and the coach line give each lift\'s percentage of its pre-break best', (snaps, name) => {
+  const out: Violation[] = [];
+  let days = 0;
+  for (const snap of snaps) {
+    const rets = snap.card?.liftReturns;
+    if (!rets || rets.length < 2 || rets.some(r => r.regained)) continue;
+    days++;
+    const imperial = buildScenario(name).profile.units === 'imperial';
+    const card = plain(snap.card?.reasons.map(r => r.text).join(' | ') ?? '');
+    const coach = plain((snap.coach ?? []).join(' | '));
+    for (const r of rets) {
+      const f = imperial ? 2.20462 : 1;
+      const pre = Math.round(r.preBreakKg * f);
+      const recent = Math.min(Math.round(r.recentKg * f), pre - 1);
+      const pct = Math.min(99, Math.round((recent / pre) * 100));
+      const label = r.name.toLowerCase();
+      if (!new RegExp(`${label}[^|]*\\b${pct}%`, 'i').test(card)) out.push({ snap, detail: `card reasons do not give ${r.name} at ${pct}%: "${visible(card)}"` });
+      if (!new RegExp(`${label} ${pct}% of its pre-break best`, 'i').test(coach)) out.push({ snap, detail: `coach lines do not give ${r.name} at ${pct}%: "${visible(coach)}"` });
+    }
+  }
+  if (name === 'lifter') assert.ok(days > 0, `${name}: no day had two or more lifts all rebuilding, so this invariant checked nothing`);
+  return out;
+});
+
+// The headline lift only changes with news: on a day nothing was logged and no new week began, the lift the server sends as the headline
+// lift (and so the Strength card's first row, and the comeback's lead lift) is the same as the day before. The sticky ranking was replayed
+// over weeks the 84-day loader window only half holds, so the oldest week lost a day's sets every day and the lead flipped Tue -> Wed
+// (lifter_short_week days 85-86, 94-95, 96-97).
+invariant(LIFTERS, 'headlineLift does not change on a day with no strength session logged and no new calendar week', (snaps, name) => {
+  const scn = buildScenario(name);
+  const trained = new Set(scn.sets.filter(x => !x.isWarmup).map(x => x.day));
+  const out: Violation[] = [];
+  let prev: DaySnapshot | null = null;
+  for (const snap of snaps) {
+    if (snap.card?.goal !== 'muscle') continue;
+    if (prev && dayDiff(snap.date, prev.date) === 1 && prev.card?.headlineLift !== snap.card.headlineLift && !trained.has(snap.date) && weekdayOf(snap.date) !== 'Mon') {
+      out.push({ snap, detail: `headlineLift ${prev.card?.headlineLift} (${prev.date}) -> ${snap.card.headlineLift} with nothing logged and no new week` });
+    }
+    prev = snap;
+  }
+  return out;
+});
+
+// A comeback sentence that names the lifts already back ("Squat and bench back at pre-break; deadlift at 98%") says "above" only when every
+// named lift is above its pre-break number as printed, "at" only when every one is exactly at it, and "at or above" for a mix - the card
+// said "Squat back above pre-break" on Friday and "...back at pre-break" on Sunday for the same squat (145 vs 142 kg) - and writes the names
+// in sentence case: "Bench and squat", not "Bench Press and squat". Checked on the card headline and on the review headline.
+invariant(LIFTERS, 'a "back at / above / at or above pre-break" sentence matches the printed numbers of the lifts it names, in sentence case', (snaps, name) => {
+  const imperial = buildScenario(name).profile.units === 'imperial';
+  const shown = (r: { preBreakKg: number; recentKg: number }): { pre: number; recent: number } => {
+    const f = imperial ? 2.20462 : 1;
+    return { pre: Math.round(r.preBreakKg * f), recent: Math.round(r.recentKg * f) };
+  };
+  const out: Violation[] = [];
+  let sentences = 0;
+  const check = (snap: DaySnapshot, where: string, text: string, rets: Array<{ exercise: string; name: string; preBreakKg: number; recentKg: number; regained: boolean }> | null | undefined): void => {
+    const m = /(?:^|, )([A-Z][^;]*?) back (at or above|above|at) pre-break;/.exec(plain(text));
+    if (!m || !rets) return;
+    sentences++;
+    const named = rets.filter(r => r.regained && m[1].toLowerCase().split(/, | and /).some(n => r.name.toLowerCase() === n || (r.exercise === 'bench press' && n === 'bench')));
+    if (named.length === 0) return;
+    const rel = named.every(r => shown(r).recent > shown(r).pre) ? 'above' : named.every(r => shown(r).recent <= shown(r).pre) ? 'at' : 'at or above';
+    if (m[2] !== rel) out.push({ snap, detail: `${where}: "${visible(text)}" says "${m[2]}" but ${named.map(r => `${r.name} ${shown(r).recent} vs ${shown(r).pre}`).join(', ')}` });
+    if (!/^[A-Z][^A-Z]*$/.test(m[1])) out.push({ snap, detail: `${where}: "${visible(text)}" names the lifts "${m[1]}" (not sentence case)` });
+  };
+  for (const snap of snaps) {
+    if (snap.card) check(snap, 'card.headline', snap.card.headline, snap.card.liftReturns);
+    if (snap.review) check(snap, 'review.headline', snap.review.review.headline, snap.review.progress.liftReturns);
+  }
+  if (name === 'lifter') assert.ok(sentences > 0, `${name}: no comeback sentence naming lifts that are back appeared, so this invariant checked nothing`);
+  return out;
+});
+
+// "Lifts up, week short — Squat +10 kg" read like a load added to the bar: the number is the estimated 1RM, so the headline says so.
+invariant(LIFTERS, 'a "Lifts up, ..." headline says the number is the est. 1RM', (snaps, name) => {
+  const out: Violation[] = [];
+  let seen = 0;
+  for (const snap of snaps) {
+    const h = snap.card?.headline;
+    if (h == null || !/^Lifts up\b/.test(plain(h))) continue;
+    seen++;
+    if (!/est\. 1RM/.test(plain(h))) out.push({ snap, detail: `card.headline: "${visible(h)}"` });
+  }
+  if (name === 'lifter_short_week') assert.ok(seen > 0, `${name}: no "Lifts up" headline appeared, so this invariant checked nothing`);
+  return out;
+});
+
+// "Deload week done — lighter loads, as planned." is only true if the week before planned it. lifter day 35: the day-28 review had asked for
+// "Squat 107.5 → 110 kg", so the lighter week was the lifter's own call, and the win now names the timing instead.
+invariant(LIFTERS, 'a deload win says "as planned" only when the previous review asked for a lighter week', (snaps, name) => {
+  const out: Violation[] = [];
+  const reviewOn = (date: string): DaySnapshot | undefined => snaps.find(s => s.date === date && s.review != null);
+  let deloads = 0;
+  for (const snap of snaps) {
+    const win = snap.review?.review.win;
+    if (win == null || !/^Deload week done/.test(plain(win))) continue;
+    deloads++;
+    const prev = reviewOn(addDays(snap.date, -7))?.review?.review.nextWeek ?? '';
+    if (/as planned/.test(plain(win)) && !/lighter|deload|ease back/i.test(plain(prev))) out.push({ snap, detail: `review.win: "${visible(win)}" after a previous "Next week" of "${visible(prev)}"` });
+  }
+  if (name === 'lifter') assert.ok(deloads > 0, `${name}: no deload week was reviewed, so this invariant checked nothing`);
+  return out;
+});
+
+// "Trend weight up 0.17 kg/wk with no training" reads as blame, and the rate is a 28-day one: in the first two weeks of a lapse most of it
+// was earned before the break. Until the lapse covers half the window the line says so; "with no training" is for a longer one.
+invariant(LIFTERS, 'in the first 14 days of a lapse the weight-rate line never says "with no training" (most of its 28 days is from before the break)', snaps => {
+  const out: Violation[] = [];
+  for (const snap of snaps) {
+    const ago = snap.card?.lastSessionDaysAgo;
+    if (ago == null || ago >= 14 || !inLapse(snap)) continue;
+    for (const t of cardTexts(snap)) if (/with no training/.test(plain(t.text))) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" (last session ${ago} days ago)` });
+  }
+  return out;
+});
+
+// The same weigh-ins read the same in both units: a weekly average that moved 0.04 kg is "no change" in kg and in lb (it was "+0.1 lb" in
+// lifter_imperial on days 14 and 35, where lifter says "no change"). The noise threshold is the metric one, 0.05 kg, in both.
+test('lifter_imperial: the weekly weight stat says "no change" on exactly the Mondays lifter does', () => {
+  const noChange = (snaps: DaySnapshot[]): string[] =>
+    snaps.filter(s => s.review?.review.stats.some(st => st.label === 'Weekly avg weight' && st.value === 'no change')).map(s => s.date);
+  const metric = noChange(runTimeline('lifter'));
+  const imperial = noChange(runTimeline('lifter_imperial'));
+  assert.ok(metric.length > 0, 'lifter has no "no change" week, so this test checked nothing');
+  assert.deepEqual(imperial, metric);
+});
+
+// "inside the 0.1–0.5% safe band" / "under the 0.1% a week floor" is jargon to a lifter. The muscle card says what the range is for.
+invariant(LIFTERS, 'no card, coach line or opener calls the weight range a "safe band", "floor" or "ceiling"', snaps =>
+  textMatches(snaps, s => [...cardTexts(s), ...coachTexts(s)], /safe band|a week floor|a week ceiling/i));
+
+// The same +2.5 kg on the bar reads the same change every week: the week-over-week change was the difference of two ROUNDED e1RMs, so one
+// step read "+3", then "+4", then "+3" (lifter days 14, 21, 28). Computed from the unrounded change (the 4-week number keeps its printed
+// endpoints, "126 → 136 kg", which must add up). The squat is stepped +2.5 kg at the same reps and RPE, so its e1RM moves by one amount.
+invariant(LIFTERS, 'a constant +2.5 kg step on the squat reads the same week-over-week change in every review', (snaps, name) => {
+  const scn = buildScenario(name);
+  const topSquat = (monday: string): number | null => {
+    const loads = scn.sets.filter(s => s.exercise === 'squat' && !s.isWarmup && s.day >= monday && s.day <= addDays(monday, 6) && s.loadKg != null).map(s => s.loadKg as number);
+    return loads.length > 0 ? Math.max(...loads) : null;
+  };
+  const seen = new Map<string, string[]>();
+  for (const snap of snaps) {
+    const r = snap.review?.review;
+    if (!r) continue;
+    const stat = r.stats.find(st => st.label === 'Squat est. 1RM' && st.comparison === 'vs the week before');
+    if (!stat) continue;
+    const now = topSquat(r.weekStart);
+    const before = topSquat(addDays(r.weekStart, -7));
+    if (now == null || before == null || now - before !== 2.5) continue;
+    seen.set(stat.value, [...(seen.get(stat.value) ?? []), snap.date]);
+  }
+  const out: Violation[] = [];
+  if (seen.size > 1) {
+    const detail = [...seen.entries()].map(([value, days]) => `${plain(value)} on ${days.join(', ')}`).join(' vs ');
+    const first = snaps.find(s => s.review && s.date === [...seen.values()][1][0]) as DaySnapshot;
+    out.push({ snap: first, detail: `the same +2.5 kg step reads differently: ${detail}` });
+  }
+  assert.ok([...seen.values()].flat().length >= 2, `${name}: fewer than two +2.5 kg squat weeks were compared, so this invariant checked nothing`);
+  return out;
+});
+
+// A slack week (half the planned sessions or fewer, but not none) must not lead with, or colour, a lift gain the week did not produce:
+// lifter_short_week day 49 read "1 of 4 sessions, Squat est. 1RM +10 kg over 4 wks" with a green squat stat, for a squat she did not train
+// that week (the Thursday bench was a light 3x8 volume day). A lift gain may appear only for a lift trained at working weight that week -
+// a top set at 90% or more of its best in the 4 weeks before. Counted from the scenario's own rows. The push body is the headline.
+invariant(LIFTERS, 'a review of a week with at most half its planned sessions rates no lift green and leads with no lift gain unless that lift was trained at working weight that week', (snaps, name) => {
+  const scn = buildScenario(name);
+  const exerciseOf = new Map<string, string>(scn.sets.map(s => [`${s.display} est. 1RM`, s.exercise]));
+  const topLoad = (exercise: string, from: string, to: string): number | null => {
+    const loads = scn.sets.filter(s => s.exercise === exercise && !s.isWarmup && s.day >= from && s.day <= to && s.loadKg != null && s.loadKg > 0).map(s => s.loadKg as number);
+    return loads.length > 0 ? Math.max(...loads) : null;
+  };
+  const out: Violation[] = [];
+  let checked = 0;
+  for (const snap of snaps) {
+    const r = snap.review?.review;
+    if (!r || r.weekGap?.kind !== 'sessions' || r.weekGap.done === 0 || r.weekGap.done * 2 > r.weekGap.target) continue;
+    checked++;
+    const weekEnd = addDays(r.weekStart, 6);
+    let gainShown = false;
+    for (const st of r.stats) {
+      const exercise = exerciseOf.get(st.label);
+      if (exercise == null) continue;
+      const now = topLoad(exercise, r.weekStart, weekEnd);
+      const best = topLoad(exercise, addDays(r.weekStart, -28), addDays(r.weekStart, -1));
+      const working = now != null && (best == null || now >= best * 0.9 - 1e-9);
+      if (working) { gainShown = gainShown || st.tone === 'good'; continue; }
+      const texts = [{ where: 'review.headline', text: r.headline }, { where: 'alert.body', text: snap.review?.alert.body ?? '' }];
+      if (st.tone === 'good') out.push({ snap, detail: `${r.weekGap.done} of ${r.weekGap.target} sessions: stat "${st.label}" ${st.value} is rated good, but the lift had no working-weight set in the reviewed week (top ${now ?? 'none'} kg vs ${best ?? 'none'} kg before)` });
+      for (const t of texts) if (plain(t.text).includes(`${st.label} +`)) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" leads with a ${st.label} gain, but the lift had no working-weight set in the reviewed week` });
+    }
+    if (!gainShown && !/^\d+ of \d+ sessions — a short week$/.test(plain(r.headline))) out.push({ snap, detail: `review.headline: "${visible(r.headline)}" (a slack week with no lift gain to show leads with the week: "N of M sessions — a short week")` });
+  }
+  if (name === 'lifter_short_week') assert.ok(checked > 0, `${name}: no slack week was reviewed, so this invariant checked nothing`);
+  return out;
+});

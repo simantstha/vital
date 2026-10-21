@@ -172,7 +172,8 @@ test('muscle: missed session target becomes the slip and drives nextWeek', () =>
   // The week's one gap drives the Slip and Next week: two sessions short, put them back on the calendar.
   assert.deepEqual(r.weekGap, { kind: 'sessions', done: 2, target: 4 });
   assert.equal(r.slip, '2 of 4 sessions — two short');
-  assert.equal(r.nextWeek, 'Book 4 sessions — lock in the missed ones now, starting with Tuesday.');
+  // Back to the target; the missed sessions are not made up (no loads are known in this fixture).
+  assert.equal(r.nextWeek, "Back to 4 this week — don't make up the missed ones, starting today.");
   assert.notEqual(r.nextWeek, r.slip);
 });
 
@@ -788,7 +789,7 @@ test('muscle: a week with only a run has 0 sessions and is tough', () => {
   const r = computeWeeklyReview(muscleWeek({ trainingDays: [WEEK[3]], strengthDays: [] }));
   assert.equal(statByLabel(r, 'Sessions')!.value, '0');
   // A week without a session says so (wave 20b: not "0 of 4 sessions, weight +0.3 kg").
-  assert.equal(r.headline, 'No sessions this week');
+  assert.equal(r.headline, 'No sessions last week');
   assert.equal(r.weekRating, 'tough');
   assert.equal(r.slip, '0 of 4 sessions — none done');
 });
@@ -876,19 +877,25 @@ test('mixed lifter (3 of 4 sessions): the Slip names the sessions and Next week 
   assert.deepEqual(r.weekGap, { kind: 'sessions', done: 3, target: 4 });
   assert.equal(r.headline, '3 of 4 sessions, Squat est. 1RM +10 kg over 4 wks');
   assert.equal(r.slip, '3 of 4 sessions — one short');
-  // Mon / Wed / Fri trained: Saturday is the free day (ties prefer Saturday).
-  assert.equal(r.nextWeek, 'Book 4 sessions — put the missed one on Saturday.');
-  assert.doesNotMatch(r.nextWeek, /Repeat this week/);
+  // One session short: back to 4, the missed one is not put back on the calendar (a muscle week is never made up).
+  assert.equal(r.nextWeek, "Back to 4 this week — don't make up the missed ones, starting today.");
+  assert.doesNotMatch(r.nextWeek, /Repeat this week|put the missed one|Book 4/);
 });
 
-test('the day suggested for the missed session is the weekday with the fewest sessions over the two weeks', () => {
-  const day = (strengthDays: string[]) => computeWeeklyReview(priyaWeek({ trainingDays: strengthDays, strengthDays })).nextWeek;
+test('the day suggested for the missed active day is the weekday with the fewest sessions over the two weeks (general goal)', () => {
+  const day = (trainingDays: string[]) => computeWeeklyReview(base({
+    goal: 'general',
+    verdict: 'holding',
+    trainingDays,
+    sleepMinutes: WEEK.map(d => ({ day: d, value: 470 })),
+    intakeDays: intake(WEEK.slice(0, 6), [2100, 2200, 2000, 2100, 2300, 2000]),
+  })).nextWeek;
   // Saturday and Sunday were both used last week; Thursday is the only empty day over the two weeks.
-  assert.match(day([WEEK[0], WEEK[1], WEEK[2], PREV[5], PREV[6], PREV[0], PREV[1], PREV[2], PREV[4]]), /put the missed one on Thursday\.$/);
+  assert.match(day([WEEK[0], WEEK[1], PREV[5], PREV[6], PREV[0], PREV[1], PREV[2], PREV[4]]), /put the missed one on Thursday\.$/);
   // Everything equally used: the Saturday-first tie-break.
-  assert.match(day([WEEK[0], WEEK[1], WEEK[2]]), /put the missed one on Saturday\.$/);
+  assert.match(day([WEEK[0], WEEK[1]]), /put the missed one on Saturday\.$/);
   // Saturday already used this week: the next preference, Thursday.
-  assert.match(day([WEEK[0], WEEK[1], WEEK[5]]), /put the missed one on Thursday\.$/);
+  assert.match(day([WEEK[0], WEEK[5]]), /put the missed one on Thursday\.$/);
 });
 
 test('a good week may "Repeat this week" — and only a good week', () => {
@@ -1785,13 +1792,28 @@ test('a textbook deload (85% loads, 64% of the volume) is recognised: Win names 
     progression: { squat: [...steadySquat, lwk(WEEK_START, 114.1, 92.5, 2, 1920)] },
   }));
   assert.equal(r.weekRating, 'light');
-  assert.equal(r.win, 'Deload week done — lighter loads, as planned.');
+  // Not "as planned": nothing asked for a lighter week (and the loads were flat, not climbing).
+  assert.equal(r.win, 'Deload week done — lighter loads.');
   assert.equal(r.slip, null);
   assert.equal(r.nextWeek, 'Back to full loads: Squat 107.5 → 110 kg.');
   assert.doesNotMatch(r.nextWeek, /Repeat this week/);
-  // Pounds: 107.5 kg = 237 lb; the step is 5 lb, onto a multiple of 5 (240).
+  // Pounds: 107.5 kg = 237 lb, 2 lb off the 5 lb grid: the step starts from the grid ("~235") and adds exactly 5 lb (240).
   const lb = computeWeeklyReview(liftReview({ unitSystem: 'imperial', progression: { squat: [...steadySquat, lwk(WEEK_START, 114.1, 92.5, 2, 1920)] } }));
-  assert.equal(lb.nextWeek, 'Back to full loads: Squat 237 → 240 lb.');
+  assert.equal(lb.nextWeek, 'Back to full loads: Squat ~235 → 240 lb.');
+});
+
+test('a deload win says "as planned" only when last week asked for a lighter week, else it names the timing (wave 22s)', () => {
+  const deload = lwk(WEEK_START, 114.1, 92.5, 2, 1920);
+  // Last week's Next week asked for a lighter week: as planned.
+  const planned = computeWeeklyReview(liftReview({ progression: { squat: [...steadySquat, deload] }, previousNextWeek: 'Go lighter next week and put sleep first — poor sleep and a high resting heart rate.' }));
+  assert.equal(planned.win, 'Deload week done — lighter loads, as planned.');
+  // The previous review said "Squat 110 → 112.5 kg" after 4 weeks of heavier loads (102.5, 105, 107.5, 110 kg): the lifter's own call, and good timing.
+  const climbing = ['2026-08-24', '2026-08-31', '2026-09-07', '2026-09-14', '2026-09-21'].map((w, i) => lwk(w, 128 + i * 2.5, [100, 102.5, 105, 107.5, 110][i]));
+  const timing = computeWeeklyReview(liftReview({ progression: { squat: [...climbing, deload] }, previousNextWeek: 'Squat 110 → 112.5 kg.' }));
+  assert.equal(timing.win, 'Deload week done — lighter loads, good timing after 4 straight weeks of heavier loads.');
+  // Two weeks of climbing is not a run.
+  const short = ['2026-08-24', '2026-08-31', '2026-09-07', '2026-09-14', '2026-09-21'].map((w, i) => lwk(w, 128 + i, [100, 100, 100, 102.5, 105][i]));
+  assert.equal(computeWeeklyReview(liftReview({ progression: { squat: [...short, deload] } })).win, 'Deload week done — lighter loads.');
 });
 
 test('a deload by loads alone (every top set at 85-90% of its 4-week best, normal volume) is also a deload', () => {
@@ -1822,16 +1844,54 @@ test('a week with no sessions: no lift win, "Ease back in" at ~90% of the last w
   assert.equal(noLoad.nextWeek, 'Ease back in: 4 sessions at ~90% of your last working weights, starting today.');
 });
 
-test('missed sessions: the catch-up starts Monday or Tuesday (never a day that is already behind), the single missed one avoids Sunday', () => {
-  // Trained Mon + Thu in both weeks: Tuesday is the freer start.
-  const r = computeWeeklyReview(liftReview({ trainingDays: [WEEK[0], WEEK[3], PREV[0], PREV[3]], progression: {} }));
-  assert.equal(r.nextWeek, 'Book 4 sessions — lock in the missed ones now, starting with Tuesday.');
-  // Tuesdays are taken, Mondays free → Monday.
-  const mon = computeWeeklyReview(liftReview({ trainingDays: [WEEK[1], WEEK[3], PREV[1], PREV[3]], progression: {} }));
-  assert.equal(mon.nextWeek, 'Book 4 sessions — lock in the missed ones now, starting with Monday.');
-  // One missed: Tue/Thu/Sat trained → Friday, not Sunday.
-  const one = computeWeeklyReview(liftReview({ trainingDays: [WEEK[1], WEEK[3], WEEK[5], PREV[1], PREV[3], PREV[5]], progression: {} }));
-  assert.equal(one.nextWeek, 'Book 4 sessions — put the missed one on Friday.');
+test('a muscle week 1-3 sessions short is never made up: "Back to 4 this week — don\'t make up the missed ones", starting today, whatever the weekdays trained', () => {
+  const back = "Back to 4 this week — don't make up the missed ones, starting today.";
+  // Two sessions short (trained Mon + Thu in both weeks), one short (Tue/Thu/Sat): no weekday suggested, no "Book", no "lock in".
+  for (const days of [[WEEK[0], WEEK[3], PREV[0], PREV[3]], [WEEK[1], WEEK[3], PREV[1], PREV[3]], [WEEK[1], WEEK[3], WEEK[5], PREV[1], PREV[3], PREV[5]]]) {
+    const r = computeWeeklyReview(liftReview({ trainingDays: days, progression: {} }));
+    assert.equal(r.nextWeek, back);
+    assert.doesNotMatch(r.nextWeek, /Book |lock in the missed|put the missed one|catch up/);
+  }
+});
+
+/** Three steady weeks (09-07 .. 09-21) of one lift at `top` kg, 2 sessions a week. */
+const steadyAt = (top: number): Array<ReturnType<typeof lwk>> => ['2026-09-07', '2026-09-14', '2026-09-21'].map(w => lwk(w, top * 1.2, top));
+
+test('a short muscle week cues the loads: a lift not trained repeats its planned step, a light volume day does too, a trained lift follows the normal rule', () => {
+  // 1 of 4 sessions: only a light bench volume day (75 kg against an 87.5 kg best). Squat and deadlift were skipped.
+  const skipped = computeWeeklyReview(liftReview({
+    trainingDays: [WEEK[3]], strengthDays: [WEEK[3]],
+    progression: { squat: steadyAt(110), 'bench press': [...steadyAt(87.5), lwk(WEEK_START, 100, 75, 1, 1800)], deadlift: steadyAt(125) },
+  }));
+  assert.deepEqual(skipped.weekGap, { kind: 'sessions', done: 1, target: 4 });
+  assert.equal(
+    skipped.nextWeek,
+    "Back to 4 this week — don't make up the missed ones. Squat 112.5 kg and deadlift 127.5 kg (the steps you skipped), bench 87.5 → 90 kg, starting today.",
+  );
+  // Pounds: the skipped targets and the arrow pair are on the 5 lb grid (110 kg -> 250 lb, 125 kg -> 280 lb, 87.5 kg -> "~195 -> 200").
+  const lb = computeWeeklyReview(liftReview({
+    unitSystem: 'imperial', trainingDays: [WEEK[3]], strengthDays: [WEEK[3]],
+    progression: { squat: steadyAt(110), 'bench press': [...steadyAt(87.5), lwk(WEEK_START, 100, 75, 1, 1800)], deadlift: steadyAt(125) },
+  }));
+  assert.equal(lb.nextWeek, "Back to 4 this week — don't make up the missed ones. Squat 250 lb and deadlift 280 lb (the steps you skipped), bench ~195 → 200 lb, starting today.");
+  // The squat WAS trained at its working load (115 kg, above last week's 110): the normal rule, 115 → 117.5; the deadlift alone is skipped.
+  const trained = computeWeeklyReview(liftReview({
+    trainingDays: [WEEK[0], WEEK[3]], strengthDays: [WEEK[0], WEEK[3]],
+    progression: { squat: [...steadyAt(110), lwk(WEEK_START, 138, 115, 2)], deadlift: steadyAt(125) },
+  }));
+  assert.equal(trained.nextWeek, "Back to 4 this week — don't make up the missed ones. Deadlift 127.5 kg (the step you skipped), squat 115 → 117.5 kg, starting today.");
+  // A lift whose e1RM fell more than 1% holds its load instead of going up.
+  const held = computeWeeklyReview(liftReview({
+    trainingDays: [WEEK[0], WEEK[3]], strengthDays: [WEEK[0], WEEK[3]],
+    progression: { squat: [...steadyAt(110), lwk(WEEK_START, 126, 110, 2)] },
+  }));
+  assert.equal(held.nextWeek, "Back to 4 this week — don't make up the missed ones. Squat hold at 110 kg, starting today.");
+  // No known load in the last 4 weeks: nothing to repeat, the sentence still stands.
+  const stale = computeWeeklyReview(liftReview({
+    trainingDays: [WEEK[3]], strengthDays: [WEEK[3]],
+    progression: { squat: [lwk('2026-07-20', 130, 108)] },
+  }));
+  assert.equal(stale.nextWeek, "Back to 4 this week — don't make up the missed ones, starting today.");
 });
 
 const RETURN = { exercise: 'squat', name: 'Squat', breakDays: 15, endedOn: '2026-09-20', preBreakKg: 142, recentKg: 136, pct: 95, regained: false };
@@ -1915,9 +1975,9 @@ test('a good week names the next load for the headline lift (the lift logger\'s 
   // One lift alone says the others follow.
   const bench = computeWeeklyReview(liftReview({ progression: { 'bench press': progression['bench press'] } }));
   assert.equal(bench.nextWeek, 'Bench Press 80 → 82.5 kg; progress the others as they hit their reps.');
-  // Pounds: 5 lb, onto a multiple of 5.
+  // Pounds (wave 22s): 5 lb exactly, from the 5 lb grid - 110 kg is 243 lb logged, so "~245 → 250" (was "243 → 250", +7); 80 kg is 176 lb, 1 lb off the grid: "175 → 180" (was "176 → 180", +4).
   const lb = computeWeeklyReview(liftReview({ unitSystem: 'imperial', progression }));
-  assert.equal(lb.nextWeek, 'Squat 243 → 250 lb, bench 176 → 180 lb.');
+  assert.equal(lb.nextWeek, 'Squat ~245 → 250 lb, bench 175 → 180 lb.');
   // No known load (older payloads): the old sentence still applies.
   const old = computeWeeklyReview(liftReview({ progression: { squat: progression.squat.map(w => ({ ...w, topLoadKg: null })) } }));
   assert.equal(old.nextWeek, 'Repeat this week: same routine, same training days.');
@@ -2397,9 +2457,9 @@ test('a week with no session: the headline says so (2nd, 3rd week off), weight g
   const first = computeWeeklyReview(liftReview({ trainingDays: [], strengthDays: [], progression: lifts('2026-09-21'), signupDay: '2026-06-01' }));
   const second = computeWeeklyReview(liftReview({ trainingDays: [], strengthDays: [], progression: lifts('2026-09-14'), signupDay: '2026-06-01' }));
   const third = computeWeeklyReview(liftReview({ trainingDays: [], strengthDays: [], progression: lifts('2026-09-07'), signupDay: '2026-06-01' }));
-  assert.equal(first.headline, 'No sessions this week');
-  assert.equal(second.headline, 'No sessions this week (2nd week off)');
-  assert.equal(third.headline, 'No sessions this week (3rd week off)');
+  assert.equal(first.headline, 'No sessions last week');
+  assert.equal(second.headline, 'No sessions last week (2nd week off)');
+  assert.equal(third.headline, 'No sessions last week (3rd week off)');
   // The scale went up 0.2 kg: still on the card as a number, but not the win, and the push is not "0 of 4 sessions, weight +0.2 kg".
   for (const r of [first, second, third]) {
     assert.equal(r.win, null);
@@ -2415,7 +2475,7 @@ test('a week with no session: the headline says so (2nd, 3rd week off), weight g
   assert.equal(new Set([first, second, third].map(r => `${r.headline}|${r.slip}|${r.nextWeek}`)).size, 3);
   // Weeks before the user signed up are not weeks off.
   const fresh = computeWeeklyReview(liftReview({ trainingDays: [], strengthDays: [], progression: {}, signupDay: WEEK_START }));
-  assert.equal(fresh.headline, 'No sessions this week', 'one week since signup is not a second week');
+  assert.equal(fresh.headline, 'No sessions last week', 'one week since signup is not a second week');
 });
 
 test('muscle weight gain is the win in a week with a session, not in a week without one', () => {
@@ -2426,6 +2486,37 @@ test('muscle weight gain is the win in a week with a session, not in a week with
   const none = computeWeeklyReview(liftReview({ trainingDays: [], strengthDays: [] }));
   assert.equal(statByLabel(none, 'Weekly avg weight')!.tone, 'neutral');
   assert.equal(none.win, null);
+});
+
+test('a slack week (1-2 of 4 sessions) has no 4-week lift win: the session itself is the win, named by day and lift (wave 22s)', () => {
+  const flat = weigh([...PREV, ...WEEK], () => 80);
+  const lifts = { squat: steadyAt(110), 'bench press': [...steadyAt(87.5), lwk(WEEK_START, 100, 75, 1, 1800)] };
+  // 1 of 4: the squat is the headline lift (+ vs 4 weeks ago would be its win) but only a bench volume day happened.
+  const one = computeWeeklyReview(liftReview({ trainingDays: [WEEK[3]], strengthDays: [WEEK[3]], weightReadings: flat, progression: lifts }));
+  assert.deepEqual(one.weekGap, { kind: 'sessions', done: 1, target: 4 });
+  assert.equal(one.win, "You still got Thursday's bench session in.");
+  // The lift stat keeps its numbers but is not green, and the headline leads with the week, not a gain it did not produce (wave 22s).
+  assert.ok(one.stats.some(st => st.label.endsWith('est. 1RM')), JSON.stringify(one.stats));
+  assert.ok(one.stats.filter(st => st.label.endsWith('est. 1RM')).every(st => st.tone !== 'good'), JSON.stringify(one.stats));
+  assert.equal(one.headline, '1 of 4 sessions — a short week');
+  // A lift trained at working weight that week may still show its gain: green stat, in the headline "over 4 wks".
+  const trainedSquat = computeWeeklyReview(liftReview({ trainingDays: [WEEK[0]], strengthDays: [WEEK[0]], weightReadings: flat, progression: { squat: [...steadySquat, lwk(WEEK_START, 138, 110, 1)] } }));
+  assert.equal(statByLabel(trainedSquat, 'Squat est. 1RM')!.tone, 'good');
+  assert.match(trainedSquat.headline, /^1 of 4 sessions, Squat est\. 1RM \+5\skg over 4\swks$/);
+  // ... but not when that week's squat was a light day (a top set under 90% of its best): neutral again.
+  const lightSquat = computeWeeklyReview(liftReview({ trainingDays: [WEEK[0]], strengthDays: [WEEK[0]], weightReadings: flat, progression: { squat: [...steadySquat, lwk(WEEK_START, 138, 90, 1)] } }));
+  assert.equal(statByLabel(lightSquat, 'Squat est. 1RM')!.tone, 'neutral');
+  assert.equal(lightSquat.headline, '1 of 4 sessions — a short week');
+  // 2 of 4 is still half: two days named. No lift in the week's data, or more than two: just the day.
+  const two = computeWeeklyReview(liftReview({ trainingDays: [WEEK[0], WEEK[3]], strengthDays: [WEEK[0], WEEK[3]], weightReadings: flat, progression: lifts }));
+  assert.equal(two.win, 'You still got 2 sessions in — Monday and Thursday.');
+  const noLifts = computeWeeklyReview(liftReview({ trainingDays: [WEEK[3]], strengthDays: [WEEK[3]], weightReadings: flat, progression: {} }));
+  assert.equal(noLifts.win, "You still got Thursday's session in.");
+  // The week's weight win stands (it is that week's own number); 3 of 4 is not slack and keeps the lift win.
+  const rising = computeWeeklyReview(liftReview({ trainingDays: [WEEK[3]], strengthDays: [WEEK[3]], progression: lifts }));
+  assert.match(rising.win ?? '', /^Your weekly average weight is up /);
+  const three = computeWeeklyReview(liftReview({ trainingDays: [WEEK[0], WEEK[2], WEEK[4]], strengthDays: [WEEK[0], WEEK[2], WEEK[4]], weightReadings: flat, progression: { squat: [...steadySquat, lwk(WEEK_START, 138, 110, 3)] } }));
+  assert.match(three.win ?? '', /^Squat estimated 1RM is up 5\skg vs 4 weeks ago\.$/);
 });
 
 test('a flat weekly average reads "no change", not "0 kg"', () => {
@@ -2478,7 +2569,7 @@ test('a good week cues every main lift trained: "Squat 110 → 112.5 kg, bench 8
   const partial = computeWeeklyReview(liftReview({ progression: { squat: p.squat, 'lat pulldown': p['bench press'] } }));
   assert.equal(partial.nextWeek, 'Squat 110 → 112.5 kg; progress the others as they hit their reps.');
   // Pounds.
-  assert.equal(computeWeeklyReview(liftReview({ unitSystem: 'imperial', progression: triple({ squat: 110, bench: 80, deadlift: 130 }) })).nextWeek, 'Squat 243 → 250 lb, bench 176 → 180 lb, deadlift 287 → 290 lb.');
+  assert.equal(computeWeeklyReview(liftReview({ unitSystem: 'imperial', progression: triple({ squat: 110, bench: 80, deadlift: 130 }) })).nextWeek, 'Squat ~245 → 250 lb, bench 175 → 180 lb, deadlift ~285 → 290 lb.');
 });
 
 test('after a deload every main lift goes back to full loads; a week off eases every one in', () => {
@@ -2494,14 +2585,15 @@ test('after a deload every main lift goes back to full loads; a week off eases e
   assert.equal(off.nextWeek, 'Ease back in: 4 sessions at ~90% of your last working weights (Squat ~102.5 kg, bench ~80 kg), starting today.');
 });
 
-test('before the first 4-week comparison the review and the goal card quote the same week over week, rounded from the same shown numbers', () => {
-  // 100.4 -> 102.6 kg: the shown endpoints are 100 -> 103, so +3 (rounding the 2.2 kg difference would say +2).
+test('before the first 4-week comparison the review and the goal card quote the same week over week, rounded from the change itself', () => {
+  // 100.4 -> 102.6 kg: a 2.2 kg change is "+2" on both surfaces. It is not the difference of two rounded endpoints (100 -> 103 would say +3):
+  // a constant +2.5 kg step read +3, +4, +3 week to week (wave 22s), and the text prints no endpoints for them to add up to.
   const progression: ProgressionSummary = { squat: [lwk('2026-09-21', 100.4, 80), lwk(WEEK_START, 102.6, 82.5)] };
   const review = computeWeeklyReview(liftReview({ progression, signupDay: '2026-09-14' }));
   const stat = statByLabel(review, 'Squat est. 1RM')!;
-  assert.equal(stat.value, '+3 kg');
+  assert.equal(stat.value, '+2 kg');
   assert.equal(stat.comparison, 'vs the week before');
-  assert.match(review.headline, /Squat est\. 1RM \+3 kg vs the week before$/);
+  assert.match(review.headline, /Squat est\. 1RM \+2 kg vs the week before$/);
   const monday = '2026-10-05'; // the card, read the morning the review is (this week has no sets yet)
   const days = [...onTarget(PREV), ...onTarget(WEEK)];
   const card = computeGoalProgress({
@@ -2509,7 +2601,7 @@ test('before the first 4-week comparison the review and the goal card quote the 
     weightReadings: [], intakeDays: [], budget: null, progression, trainingDays: days, strengthDays: days, workouts: [], restingHr: [], hrv: [], sleepMinutes: [], sleepGoalMinutes: 480,
   });
   // The card, read that Monday, says the same pair, labelled with its window: the review's week is "last week" by then.
-  assert.equal(plainSpaces(card.reasons.find(r => r.kind === 'lift')!.text), 'Last week: Squat est. 1RM +3 kg vs the week before');
+  assert.equal(plainSpaces(card.reasons.find(r => r.kind === 'lift')!.text), 'Last week: Squat est. 1RM +2 kg vs the week before');
 });
 
 test('rebuilding: the headline carries the rebuild with the shown numbers, and the percentage is computed from them', () => {
@@ -2525,7 +2617,7 @@ test('rebuilding: the headline carries the rebuild with the shown numbers, and t
   assert.equal(at.headline, '4 of 4 sessions, Squat est. 1RM back at pre-break best');
   // A week off while returning is a week off, not a rebuild headline.
   const off = computeWeeklyReview(liftReview({ liftReturn: RETURN, trainingDays: [], strengthDays: [], progression: { squat: squatReturn.slice(0, 4) } }));
-  assert.match(off.headline, /^No sessions this week/);
+  assert.match(off.headline, /^No sessions last week/);
   assert.doesNotMatch(off.headline, /pre-break/);
 });
 

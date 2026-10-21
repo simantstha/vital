@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  cuedLifts, easedLoad, findRecentBreak, isDeload, isDeloadWeek, isLiftProgressing, isLiftStalled, isLowerBodyCompound, latestTopLoadKg, liftChange4w,
+  shiftDay,
+  cuedLifts, easedLoad, findRecentBreak, headlineLeader, isDeload, isDeloadWeek, isLiftProgressing, isLiftStalled, isLowerBodyCompound, latestTopLoadKg, liftChange4w,
   furthestBehindReturn, liftDisplayChange, liftDisplayName, liftLapseMinDays, liftLastBest, liftRecentEndWeek, liftRegressed, liftReturnDisplay, liftReturnState,
-  liftReturnStates, liftShortName, liftWeekOverWeek, nextLoadCues, nextWorkingLoad, pickHeadlineLift, pickWeekOverWeek, priorTopLoadKg, rankLifts, weekOverWeekWording,
+  liftReturnStates, liftShortName, liftTrainedAtWorkingWeight, liftWeekChangeDisplay, liftWeekOverWeek, nextLoadCues, nextWorkingLoad, pickHeadlineLift, pickWeekOverWeek, priorTopLoadKg, rankLifts, shortWeekLoadCues, weekOverWeekWording,
   type LiftWeekPoint,
 } from './liftChange';
 
@@ -133,6 +134,102 @@ test('rankLifts: the week being trained does not swing the ranking (only complet
   assert.deepEqual(rankLifts({ squat: [ls('2026-10-05', 100, 1)], 'bench press': [ls('2026-10-05', 80, 2)] }, ANCHOR), ['bench press', 'squat']);
 });
 
+test('liftWeekChangeDisplay: whole kg / lb rounded from the change itself, so one +2.5 kg step reads the same every week (wave 22s)', () => {
+  // The squat e1RM climbs 3.1 kg a step: 130.4 -> 133.5 -> 136.6. Subtracting the rounded endpoints says +4 (130 -> 134) then +3 (134 -> 137).
+  const step = (a: number, b: number) => liftWeekOverWeek([wk('2026-09-14', a), wk('2026-09-21', b)], '2026-09-21')!;
+  assert.equal(liftDisplayChange({ baselineKg: 130.4, recentKg: 133.5, changeKg: 3.1 }, false).change, 4);
+  assert.equal(liftDisplayChange({ baselineKg: 133.5, recentKg: 136.6, changeKg: 3.1 }, false).change, 3);
+  assert.equal(liftWeekChangeDisplay(step(130.4, 133.5), false), 3);
+  assert.equal(liftWeekChangeDisplay(step(133.5, 136.6), false), 3);
+  // Pounds round the lb change: 3.1 kg = 6.8 lb -> 7; -0.2 kg = -0.4 lb -> 0.
+  assert.equal(liftWeekChangeDisplay(step(130.4, 133.5), true), 7);
+  assert.equal(liftWeekChangeDisplay(step(133.5, 133.3), true), 0);
+});
+
+test('liftTrainedAtWorkingWeight: a top set at 90%+ of the 4-week best, not a light day or an absent lift', () => {
+  const top = (weekStart: string, kg: number | null, sessions = 1): LiftWeekPoint => ls(weekStart, 130, sessions, { topLoadKg: kg });
+  const before = [top('2026-09-07', 100, 2), top('2026-09-14', 100, 2), top('2026-09-21', 100, 2)];
+  assert.equal(liftTrainedAtWorkingWeight([...before, top('2026-09-28', 100)], '2026-09-28'), true);
+  assert.equal(liftTrainedAtWorkingWeight([...before, top('2026-09-28', 90)], '2026-09-28'), true); // exactly 90%
+  assert.equal(liftTrainedAtWorkingWeight([...before, top('2026-09-28', 85)], '2026-09-28'), false); // a light volume day
+  assert.equal(liftTrainedAtWorkingWeight(before, '2026-09-28'), false); // not trained that week
+  assert.equal(liftTrainedAtWorkingWeight([...before, top('2026-09-28', null)], '2026-09-28'), false); // bodyweight only
+  assert.equal(liftTrainedAtWorkingWeight([top('2026-09-28', 60)], '2026-09-28'), true); // nothing before to compare with
+});
+
+// ── Next week's loads after a short week (wave 22s) ─────────────────────────
+
+test('shortWeekLoadCues: a lift not trained (or only a light day) repeats its planned step; a trained one follows the normal rule; the lead is first', () => {
+  const top = (weekStart: string, kg: number, sessions = 2): LiftWeekPoint => ls(weekStart, kg * 1.2, sessions, { topLoadKg: kg });
+  const steady = (kg: number): LiftWeekPoint[] => [top('2026-09-07', kg), top('2026-09-14', kg), top('2026-09-21', kg)];
+  const prog = {
+    squat: steady(110), // not trained in the reviewed week 09-28
+    'bench press': [...steady(87.5), top('2026-09-28', 75, 1)], // one light volume day: 75 < 90% of 87.5
+    deadlift: [...steady(125), top('2026-09-28', 130, 1)], // trained above its best
+    'lat pulldown': [top('2026-09-21', 60)], // an accessory is never cued
+  };
+  const cues = shortWeekLoadCues(prog, '2026-09-28', { imperial: false, leadKey: 'bench press', rebuilding: false });
+  assert.deepEqual(cues.map(c => [c.key, c.kind, c.load.start, c.load.to]), [
+    ['bench press', 'light', 87.5, 90], // the lead first; the planned step from the last working load
+    ['squat', 'skipped', 110, 112.5],
+    ['deadlift', 'trained', 130, 132.5],
+  ]);
+  // Pounds: the planned step is the same 5 lb grid step as everywhere ("~195 -> 200").
+  assert.deepEqual(shortWeekLoadCues(prog, '2026-09-28', { imperial: true, leadKey: null, rebuilding: false }).map(c => [c.key, c.load.start, c.load.to]), [
+    ['squat', 245, 250], ['bench press', 195, 200], ['deadlift', 285, 290],
+  ]);
+  // A lift whose e1RM fell more than 1% holds, except while rebuilding after a break.
+  const fell = { squat: [...steady(110), top('2026-09-28', 110, 2)].map(w => (w.weekStart === '2026-09-28' ? { ...w, bestEstimatedOneRepMaxKg: 120 } : w)) };
+  assert.equal(shortWeekLoadCues(fell, '2026-09-28', { imperial: false, leadKey: null, rebuilding: false })[0].kind, 'hold');
+  assert.equal(shortWeekLoadCues(fell, '2026-09-28', { imperial: false, leadKey: null, rebuilding: true })[0].kind, 'trained');
+  // No load known in the 4 weeks before: nothing to repeat.
+  assert.deepEqual(shortWeekLoadCues({ squat: [top('2026-07-20', 100)] }, '2026-09-28', { imperial: false, leadKey: null, rebuilding: false }), []);
+});
+
+// ── The headline lift is sticky (wave 22s) ──────────────────────────────────
+
+/** Mondays from `from` for `count` weeks. */
+const mondays = (from: string, count: number): string[] => Array.from({ length: count }, (_, i) => shiftDay(from, 7 * i));
+/** One lift, one entry per Monday: `sessionsOf(i)` sessions in the i-th week (0 -> no entry). */
+const series = (from: string, count: number, sessionsOf: (i: number) => number, e = 100): LiftWeekPoint[] =>
+  mondays(from, count).flatMap((w, i) => (sessionsOf(i) > 0 ? [ls(w, e, sessionsOf(i))] : []));
+
+test('rankLifts / headlineLeader: one short week does not hand the lead to another lift (lifter_short_week: squat -> bench by one session)', () => {
+  // 12 weeks from 2026-07-27 to 2026-10-12: squat and bench two sessions a week; in week 8 (09-14) only one bench session happens.
+  const prog = (anchor: string) => ({
+    squat: series('2026-07-27', 12, i => (i === 7 ? 0 : 2)).filter(w => w.weekStart < anchor),
+    'bench press': series('2026-07-27', 12, i => (i === 7 ? 1 : 2)).filter(w => w.weekStart < anchor),
+  });
+  // The anchor after the short week (week 8 = 09-14, anchor 09-21): bench has 1 session more, the squat keeps the lead.
+  assert.deepEqual(rankLifts(prog('2026-09-21'), '2026-09-21'), ['squat', 'bench press']);
+  // ... and for every Monday after it (the plain ranking said bench from then on, for good).
+  for (const anchor of ['2026-09-28', '2026-10-05', '2026-10-12']) assert.equal(rankLifts(prog(anchor), anchor)[0], 'squat', anchor);
+  assert.equal(headlineLeader(prog('2026-10-05'), '2026-10-05'), 'squat');
+});
+
+test('headlineLeader: the lead changes hands only at 2+ sessions ahead, and at two Mondays in a row', () => {
+  // Bench two a week throughout; the squat is trained twice a week until week 6, then once a week.
+  const squat = (anchor: string) => series('2026-07-27', 14, i => (i < 6 ? 2 : 1)).filter(w => w.weekStart < anchor);
+  const bench = (anchor: string) => series('2026-07-27', 14, () => 2).filter(w => w.weekStart < anchor);
+  const lead = (anchor: string) => rankLifts({ squat: squat(anchor), 'bench press': bench(anchor) }, anchor)[0];
+  // Anchor 09-14: the weeks so far hold 13 squat sessions against 14 bench: one ahead - not enough.
+  assert.equal(lead('2026-09-14'), 'squat');
+  // 09-21: squat 14, bench 16 -> 2 ahead, the first Monday; 09-28: squat 13, bench 16 -> 3 ahead, the second in a row -> bench takes the lead.
+  assert.equal(lead('2026-09-21'), 'squat');
+  assert.equal(lead('2026-09-28'), 'bench press');
+  // ... and keeps it while the squat stays behind.
+  assert.equal(lead('2026-10-12'), 'bench press');
+});
+
+test('headlineLeader: a lead that left the rotation is replaced at once; a new lifter ranks on the week so far; nothing in rotation -> null', () => {
+  const squat = [ls('2026-07-27', 120, 2), ls('2026-08-03', 120, 2)]; // no e1RM in the last 8 weeks at 2026-10-05: out of rotation
+  const bench = [ls('2026-09-14', 100, 2), ls('2026-09-21', 100, 2), ls('2026-09-28', 100, 2)];
+  assert.deepEqual(rankLifts({ squat, 'bench press': bench }, '2026-10-05'), ['bench press']);
+  assert.equal(headlineLeader({ squat }, '2026-10-05'), null);
+  assert.equal(headlineLeader({}, '2026-10-05'), null);
+  assert.deepEqual(rankLifts({ squat: [ls('2026-10-05', 100, 1)], 'bench press': [ls('2026-10-05', 80, 2)] }, '2026-10-05'), ['bench press', 'squat']);
+});
+
 test('pickHeadlineLift: a most-trained lift without a comparison is skipped; none comparable → null', () => {
   const prog = {
     squat: [ls('2026-09-14', 130, 3), ls('2026-09-21', 130, 3), ls('2026-10-05', 135, 3)], // no 4-weeks-ago week
@@ -248,26 +345,37 @@ test('isDeloadWeek: needs a session that week and earlier weeks to compare with'
 
 // ── Working loads and the next load (the lift logger's next-weight rule) ────
 
-test('nextWorkingLoad: +2.5 kg / +5 lb for EVERY lift, rounded to a multiple of 2.5 kg / 5 lb — a step standard plates can make (wave 21)', () => {
-  assert.deepEqual(nextWorkingLoad(107.5, 'squat', false), { from: 107.5, to: 110, unit: 'kg' });
-  assert.deepEqual(nextWorkingLoad(125, 'romanian deadlift', false), { from: 125, to: 127.5, unit: 'kg' });
+test('nextWorkingLoad: +2.5 kg / +5 lb for EVERY lift, from a start snapped to the 2.5 kg / 5 lb grid — a step standard plates can make (wave 21, 22s)', () => {
+  assert.deepEqual(nextWorkingLoad(107.5, 'squat', false), { from: 107.5, start: 107.5, to: 110, unit: 'kg', approx: false });
+  assert.deepEqual(nextWorkingLoad(125, 'romanian deadlift', false), { from: 125, start: 125, to: 127.5, unit: 'kg', approx: false });
   // Upper body used to step +1.25 (rounded to 0.5): "bench 80 -> 81.5 kg" needs 0.75 kg a side.
-  assert.deepEqual(nextWorkingLoad(80, 'bench press', false), { from: 80, to: 82.5, unit: 'kg' });
-  assert.deepEqual(nextWorkingLoad(82.5, 'bench press', false), { from: 82.5, to: 85, unit: 'kg' });
-  assert.deepEqual(nextWorkingLoad(57.5, 'overhead press', false), { from: 57.5, to: 60, unit: 'kg' });
-  assert.deepEqual(nextWorkingLoad(100, 'squat', true), { from: 220, to: 225, unit: 'lb' });
-  assert.deepEqual(nextWorkingLoad(100, 'bench press', true), { from: 220, to: 225, unit: 'lb' }); // was 223: not a plate
-  // A load logged off the grid (81 kg) lands on the next one: 82.5, never 83.5.
-  assert.deepEqual(nextWorkingLoad(81, 'bench press', false), { from: 81, to: 82.5, unit: 'kg' });
-  // Every target is on the grid and above today's load, whatever the lift and the load.
+  assert.deepEqual(nextWorkingLoad(80, 'bench press', false), { from: 80, start: 80, to: 82.5, unit: 'kg', approx: false });
+  assert.deepEqual(nextWorkingLoad(82.5, 'bench press', false), { from: 82.5, start: 82.5, to: 85, unit: 'kg', approx: false });
+  assert.deepEqual(nextWorkingLoad(57.5, 'overhead press', false), { from: 57.5, start: 57.5, to: 60, unit: 'kg', approx: false });
+  assert.deepEqual(nextWorkingLoad(100, 'squat', true), { from: 220, start: 220, to: 225, unit: 'lb', approx: false });
+  assert.deepEqual(nextWorkingLoad(100, 'bench press', true), { from: 220, start: 220, to: 225, unit: 'lb', approx: false }); // was 223: not a plate
+  // A load logged off the grid starts the step from the grid: 81 kg -> "80 -> 82.5" (1 kg is more than the 0.5 kg logging resolution, so "~"); 80.5 kg is not.
+  assert.deepEqual(nextWorkingLoad(81, 'bench press', false), { from: 81, start: 80, to: 82.5, unit: 'kg', approx: true });
+  assert.deepEqual(nextWorkingLoad(80.5, 'bench press', false), { from: 80.5, start: 80, to: 82.5, unit: 'kg', approx: false });
+  assert.deepEqual(nextWorkingLoad(81.5, 'bench press', false), { from: 81.5, start: 82.5, to: 85, unit: 'kg', approx: true });
+  // Pounds (wave 22s): "bench 176 -> 180" (+4), "182 -> 185" (+3), "Squat 243 -> 250" (+7) were no step. 87.5 kg = 192.9 lb -> logged 193 -> "~195 -> 200".
+  assert.deepEqual(nextWorkingLoad(87.5, 'bench press', true), { from: 193, start: 195, to: 200, unit: 'lb', approx: true });
+  assert.deepEqual(nextWorkingLoad(110, 'squat', true), { from: 243, start: 245, to: 250, unit: 'lb', approx: true }); // 242.5 lb logged as 243
+  assert.deepEqual(nextWorkingLoad(80, 'bench press', true), { from: 176, start: 175, to: 180, unit: 'lb', approx: false }); // 1 lb off the grid is the logging resolution
+  assert.deepEqual(nextWorkingLoad(82.5, 'bench press', true), { from: 182, start: 180, to: 185, unit: 'lb', approx: true });
+  // Every start is on the grid and every target is exactly one step above it (below the cap), whatever the lift and the load; the target is above today's load.
   for (let kg = 20; kg <= 250; kg += 0.5) {
     for (const key of ['squat', 'bench press', 'overhead press', 'deadlift']) {
       const m = nextWorkingLoad(kg, key, false);
-      assert.equal(m.to % 2.5, 0, `${key} ${kg} kg -> ${m.to}`);
+      assert.equal(m.start % 2.5, 0, `${key} ${kg} kg -> start ${m.start}`);
+      assert.equal(m.to - m.start, 2.5, `${key} ${kg} kg -> ${m.start} -> ${m.to}`);
       assert.ok(m.to > m.from && m.to - m.from <= 3.75, `${key} ${kg} kg -> ${m.to}`);
+      assert.equal(m.approx, Math.abs(m.start - m.from) > 0.5, `${key} ${kg} kg approx`);
       const lb = nextWorkingLoad(kg, key, true);
-      assert.equal(lb.to % 5, 0, `${key} ${kg} kg -> ${lb.to} lb`);
+      assert.equal(lb.start % 5, 0, `${key} ${kg} kg -> start ${lb.start} lb`);
+      assert.equal(lb.to - lb.start, 5, `${key} ${kg} kg -> ${lb.start} -> ${lb.to} lb`);
       assert.ok(lb.to > lb.from && lb.to - lb.from <= 7.5, `${key} ${kg} kg -> ${lb.to} lb`);
+      assert.equal(lb.approx, Math.abs(lb.start - lb.from) > 1, `${key} ${kg} kg approx lb`);
     }
   }
   assert.equal(nextWorkingLoad(999.5, 'squat', false).to, 1000); // the logger's maximum

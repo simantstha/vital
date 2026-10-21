@@ -29,6 +29,12 @@
  * over the last 8 weeks that has a comparison; ties follow a fixed order
  * (squat, bench press, deadlift, overhead press, then A-Z). It never depends on
  * which lift moved the most, so the same lift leads from one day to the next.
+ * It is also STICKY (headlineLeader): one short week must not hand the lead to
+ * another lift for 8 weeks, so lifts within a session of the most-trained are
+ * level with it (the fixed order decides) and the lead moves only when another
+ * lift is 2+ sessions ahead at two weekly anchors in a row. The iOS ranking
+ * (TrendsStrengthLogic.rankedLiftKeys) mirrors the plain order below the lead;
+ * the server SENDS its lead (GoalProgress.headlineLift) and iOS prefers it.
  *
  * Keep in lockstep with TrendsStrengthLogic.change(...) — parity tests pin
  * identical fixtures to identical numbers in both languages.
@@ -131,25 +137,84 @@ export function liftSessionsLast8Weeks(weeks: LiftWeekPoint[], anchorWeekStart: 
   return n;
 }
 
+interface LiftScore { key: string; sessions: number }
+
 /**
- * Lifts in rotation (an e1RM in the last 8 weeks), most-trained first: sessions
- * containing the lift over the 8 completed weeks before the anchor week, ties by
- * the fixed order (squat, bench press, deadlift, overhead press, then A-Z).
- * Before any week has completed (a brand-new lifter) the anchor week counts.
- * Callers anchor on the Monday of the week being described, so the card (this
- * week) and the weekly review (the Monday after the reviewed week) rank alike.
+ * Lifts in rotation at `anchorWeekStart` (an e1RM in the last 8 weeks) with their
+ * session counts, most-trained first: sessions containing the lift over the 8
+ * COMPLETED weeks before the anchor week, ties by the fixed order (squat, bench
+ * press, deadlift, overhead press, then A-Z). Before any week has completed (a
+ * brand-new lifter) the anchor week counts (`anchorCounted`).
  */
-export function rankLifts(progression: Record<string, LiftWeekPoint[]>, anchorWeekStart: string): string[] {
+function scoreLifts(progression: Record<string, LiftWeekPoint[]>, anchorWeekStart: string): { rows: LiftScore[]; anchorCounted: boolean } {
   const oldest = shiftDay(anchorWeekStart, -7 * (LIFT_RANK_WINDOW_WEEKS - 1));
   const inRotation = Object.entries(progression).filter(([, weeks]) =>
     weeks.some(w => w.bestEstimatedOneRepMaxKg != null && w.weekStart >= oldest && w.weekStart <= anchorWeekStart));
   const score = (includeAnchor: boolean) =>
     inRotation.map(([key, weeks]) => ({ key, sessions: liftSessionsLast8Weeks(weeks, anchorWeekStart, includeAnchor) }));
   let scored = score(false);
-  if (scored.every(r => r.sessions === 0)) scored = score(true);
-  return scored
-    .sort((a, b) => b.sessions - a.sessions || mainLiftRank(a.key) - mainLiftRank(b.key) || a.key.localeCompare(b.key))
-    .map(r => r.key);
+  let anchorCounted = false;
+  if (scored.every(r => r.sessions === 0)) {
+    scored = score(true);
+    anchorCounted = true;
+  }
+  const rows = scored.sort((a, b) => b.sessions - a.sessions || mainLiftRank(a.key) - mainLiftRank(b.key) || a.key.localeCompare(b.key));
+  return { rows, anchorCounted };
+}
+
+/** A lift takes the lead from the one before it in the fixed order only by out-training it by at least this many sessions (over the ranking's 8 weeks)... */
+export const LIFT_HEADLINE_SWITCH_MARGIN = 2;
+/** ... at this many weekly anchors in a row: the anchor week's count and the week before's (a one-week blip never moves the lead). */
+export const LIFT_HEADLINE_SWITCH_WEEKS = 2;
+
+/** Lifts within LIFT_HEADLINE_SWITCH_MARGIN - 1 sessions of the most-trained one: level with it, for the lead. */
+function levelWithTop(rows: LiftScore[]): string[] {
+  if (rows.length === 0) return [];
+  const top = rows[0].sessions;
+  return rows.filter(r => top - r.sessions < LIFT_HEADLINE_SWITCH_MARGIN).map(r => r.key);
+}
+
+/**
+ * The lift that leads the ranking at `anchorWeekStart`, kept steady against a short
+ * week. The plain rule (the most-trained lift) let one short week hand the lead to
+ * another lift by a single session for the 8 weeks it stays in the window
+ * (lifter_short_week: squat -> bench from day 49 to the end). So a lift only
+ * out-trains the others when it is LIFT_HEADLINE_SWITCH_MARGIN+ sessions ahead:
+ * the lifts within one session of the most-trained are level with it, and the
+ * fixed order (squat, bench press, deadlift, overhead press, then A-Z) decides
+ * among them. The margin has to hold at LIFT_HEADLINE_SWITCH_WEEKS anchors in a
+ * row (this one and the week before): a lift level at either of them is still
+ * level now, so the lead moves one Monday after a lift really falls behind, never
+ * on a blip. A pure function of the weekly history (nothing is stored, and the
+ * counts of both anchors lie inside the 84 days the loaders read). A brand-new
+ * lifter (no completed week yet) ranks on the week so far, plainly. Null when no
+ * lift is in rotation.
+ */
+export function headlineLeader(progression: Record<string, LiftWeekPoint[]>, anchorWeekStart: string): string | null {
+  const now = scoreLifts(progression, anchorWeekStart);
+  if (now.rows.length === 0) return null;
+  if (now.anchorCounted) return now.rows[0].key;
+  const level = new Set(levelWithTop(now.rows));
+  const before = scoreLifts(progression, shiftDay(anchorWeekStart, -7));
+  if (!before.anchorCounted) for (const key of levelWithTop(before.rows)) if (now.rows.some(r => r.key === key)) level.add(key);
+  const eligible = now.rows.filter(r => level.has(r.key)).map(r => r.key);
+  return eligible.sort((a, b) => mainLiftRank(a) - mainLiftRank(b) || a.localeCompare(b))[0];
+}
+
+/**
+ * Lifts in rotation (an e1RM in the last 8 weeks), the headline lift first
+ * (`headlineLeader`: the most-trained lift, kept in front through a short week),
+ * then the rest most-trained first: sessions containing the lift over the 8
+ * completed weeks before the anchor week, ties by the fixed order (squat, bench
+ * press, deadlift, overhead press, then A-Z). Before any week has completed (a
+ * brand-new lifter) the anchor week counts. Callers anchor on the Monday of the
+ * week being described, so the card (this week) and the weekly review (the
+ * Monday after the reviewed week) rank alike.
+ */
+export function rankLifts(progression: Record<string, LiftWeekPoint[]>, anchorWeekStart: string): string[] {
+  const ranked = scoreLifts(progression, anchorWeekStart).rows.map(r => r.key);
+  const leader = headlineLeader(progression, anchorWeekStart);
+  return leader == null ? ranked : [leader, ...ranked.filter(key => key !== leader)];
 }
 
 export interface HeadlineLift {
@@ -517,11 +582,15 @@ export function isLowerBodyCompound(exerciseKey: string): boolean {
 }
 
 export interface NextLoad {
-  /** Today's working load in display units (rounded to the plate step). */
+  /** The working load as logged, in display units (rounded to 0.5 kg / 1 lb): what a "hold" keeps. */
   from: number;
-  /** The load to try next. */
+  /** The load the step starts from: `from` snapped to the 2.5 kg / 5 lb grid, so the step is exactly one plate step. */
+  start: number;
+  /** The load to try next: `start` plus one step, always on the grid (capped at the logger's maximum). */
   to: number;
   unit: 'kg' | 'lb';
+  /** True when `start` is more than the logged rounding (0.5 kg / 1 lb) away from `from`: shown with a "~" ("bench ~195 → 200 lb"). */
+  approx: boolean;
 }
 
 const MAX_LOAD_KG = 1000;
@@ -530,19 +599,24 @@ const MAX_LOAD_LB = 2200;
 /**
  * The next-weight rule behind the review's "Squat 110 → 112.5 kg" and the
  * "try …" hint after a clean session: top load + 2.5 kg / 5 lb for EVERY lift,
- * rounded to a multiple of 2.5 kg / 5 lb, so every step is loadable with
- * standard plates (a 1.25 kg step is 0.625 kg a side — "bench 80 → 81.5 kg"
- * needs 0.75 kg plates nobody has). `from` is today's working load as logged
- * (to 0.5 kg / 1 lb); `to` is always on the 2.5 kg / 5 lb grid, above `from`,
- * capped at the logger's maximum. `topLoadKg` is the lift's top working set.
+ * on the 2.5 kg / 5 lb grid, so every step is loadable with standard plates (a
+ * 1.25 kg step is 0.625 kg a side — "bench 80 → 81.5 kg" needs 0.75 kg plates
+ * nobody has). The load is first read as logged (`from`, to 0.5 kg / 1 lb), then
+ * snapped to the grid (`start`) and stepped exactly once (`to` = `start` + step):
+ * "bench ~195 → 200 lb" for a bench logged at 193 lb, never "193 → 200" (a +7
+ * that is no step) or "176 → 180" (a +4). `approx` marks the snap when it moved
+ * the load by more than the logging resolution. `to` is capped at the logger's
+ * maximum and never below `from`. `topLoadKg` is the lift's top working set.
+ * Mirrors LiftLoggerLogic.nextLoad (iOS), which returns `to`.
  */
 export function nextWorkingLoad(topLoadKg: number, _exerciseKey: string, imperial: boolean): NextLoad {
   const unit = imperial ? 'lb' : 'kg';
   const step = imperial ? 5 : 2.5;
   const plate = imperial ? 1 : 0.5;
   const from = Math.round((imperial ? topLoadKg * LB_PER_KG : topLoadKg) / plate) * plate;
-  const to = Math.min(Math.round((from + step) / step) * step, imperial ? MAX_LOAD_LB : MAX_LOAD_KG);
-  return { from, to: Math.max(to, from), unit };
+  const start = Math.round(from / step) * step;
+  const to = Math.min(start + step, imperial ? MAX_LOAD_LB : MAX_LOAD_KG);
+  return { from, start, to: Math.max(to, from), unit, approx: Math.abs(start - from) > plate + 1e-9 };
 }
 
 /** A fraction of a working load (kg) in display units, rounded to 2.5 kg / 5 lb ("~105 kg"). */
@@ -588,6 +662,16 @@ export function liftWeekOverWeek(weeks: LiftWeekPoint[], endWeekStart: string): 
     currentKg: cur.bestEstimatedOneRepMaxKg,
     changeKg: Math.round((cur.bestEstimatedOneRepMaxKg - previousKg) * 10) / 10,
   };
+}
+
+/**
+ * The week-over-week change as printed: whole kg (lb), rounded from the change itself, not subtracted from two rounded endpoints. A
+ * constant +2.5 kg step on the bar moves the e1RM by one amount, and rounding both ends first read it "+3", "+4", "+3" week to week. The
+ * week-over-week text prints no endpoints ("Squat est. 1RM +3 kg vs the week before"), so nothing has to add up; the 4-week change, which
+ * does print them ("126 → 136 kg"), keeps `liftDisplayChange`.
+ */
+export function liftWeekChangeDisplay(c: LiftWeekChange, imperial: boolean): number {
+  return Math.round(c.changeKg * (imperial ? LB_PER_KG : 1)) || 0; // never -0
 }
 
 export interface PickedWeekChange {
@@ -779,6 +863,18 @@ export function liftRegressed(weeks: LiftWeekPoint[], weekStart: string): boolea
   return prevKg != null && cur < prevKg * (1 - LIFT_PROGRESS_MIN_FRACTION) - 1e-9;
 }
 
+/**
+ * True when the lift was trained at working weight in the week starting `weekStart`: a loaded working set whose top load is at least
+ * DELOAD_WEEK_LOAD_FRACTION (90%) of its best top load in the 4 weeks before (or nothing before to compare with). A light volume day,
+ * or no session of the lift at all, is not — a gain "over 4 weeks" is then not something that week produced.
+ */
+export function liftTrainedAtWorkingWeight(weeks: LiftWeekPoint[], weekStart: string): boolean {
+  const current = weeks.find(w => w.weekStart === weekStart && weekSessions(w) > 0 && w.topLoadKg != null && w.topLoadKg > 0);
+  if (current == null) return false;
+  const best = priorTopLoadKg(weeks, weekStart, 4);
+  return best == null || (current.topLoadKg as number) >= best * DELOAD_WEEK_LOAD_FRACTION - 1e-9;
+}
+
 export interface LiftLoadCue {
   key: string;
   /** Today's working load and the next one by the lift logger's rule (`nextWorkingLoad`); `from` is the load to hold. */
@@ -803,4 +899,55 @@ export function nextLoadCues(
     const top = latestTopLoadKg(weeks, weekStart) as number;
     return { key, load: nextWorkingLoad(top, key, opts.imperial), hold: !opts.rebuilding && liftRegressed(weeks, weekStart) };
   });
+}
+
+// ── Next week's loads after a short week ────────────────────────────────────
+
+export interface ShortWeekLoadCue {
+  key: string;
+  /**
+   * 'skipped': not trained that week, so its planned step repeats ("Squat 112.5 kg").
+   * 'light': trained, but only as a light / volume day (top set under 90% of its 4-week best): the planned step repeats too.
+   * 'trained': trained at its working load, so the normal next-load rule applies.
+   * 'hold': trained, but its e1RM fell last week: the load stays.
+   */
+  kind: 'skipped' | 'light' | 'trained' | 'hold';
+  /** `from` is the load the step starts at (the lift's last working load), `to` the one to try. */
+  load: NextLoad;
+}
+
+/**
+ * Loads for the coming week after a week that fell short of its session target
+ * (the review's "Back to 4 this week — don't make up the missed ones. Squat
+ * 112.5 kg …"): every main lift in rotation, the lead lift first, at most
+ * MAX_CUED_LIFTS. A lift that was not trained that week (or only as a light
+ * volume day, under 90% of its 4-week best top set) repeats the step it was
+ * already cued — the missed session is not made up and the step is not skipped
+ * either; a lift trained at its working load follows the normal rule
+ * (`nextWorkingLoad`, or a hold when its e1RM fell). A lift with no known load
+ * in the last 4 weeks has no step to repeat and is left out.
+ */
+export function shortWeekLoadCues(
+  progression: Record<string, LiftWeekPoint[]>,
+  weekStart: string,
+  opts: { imperial: boolean; leadKey: string | null; rebuilding: boolean },
+): ShortWeekLoadCue[] {
+  const ranked = rankLifts(progression, shiftDay(weekStart, 7)).filter(isMainLift);
+  const lead = opts.leadKey != null && ranked.includes(opts.leadKey) ? [opts.leadKey] : [];
+  const keys = [...lead, ...ranked.filter(key => !lead.includes(key))];
+  const out: ShortWeekLoadCue[] = [];
+  for (const key of keys) {
+    if (out.length >= MAX_CUED_LIFTS) break;
+    const weeks = progression[key] ?? [];
+    const current = weeks.find(w => w.weekStart === weekStart && weekSessions(w) > 0 && w.topLoadKg != null && w.topLoadKg > 0);
+    const best = priorTopLoadKg(weeks, weekStart, 4);
+    const top = current?.topLoadKg ?? null;
+    if (top != null && (best == null || top >= best * DELOAD_WEEK_LOAD_FRACTION - 1e-9)) {
+      const hold = !opts.rebuilding && liftRegressed(weeks, weekStart);
+      out.push({ key, kind: hold ? 'hold' : 'trained', load: nextWorkingLoad(top, key, opts.imperial) });
+    } else if (best != null && best > 0) {
+      out.push({ key, kind: current ? 'light' : 'skipped', load: nextWorkingLoad(best, key, opts.imperial) });
+    }
+  }
+  return out;
 }

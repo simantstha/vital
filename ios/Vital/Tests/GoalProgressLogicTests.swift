@@ -1086,6 +1086,24 @@ final class GoalProgressLogicTests: XCTestCase {
         XCTAssertEqual(GoalProgressDTO(goal: "muscle", verdict: .building, liftReturns: [squat, deadlift]).liftReturns, [squat, deadlift])
     }
 
+    /// Wave 22: `headlineLift` is the key of the server's sticky headline lift. Absent, null, empty or
+    /// not a string reads as `nil`, never a decode failure, and the memberwise initialiser defaults it.
+    func testHeadlineLiftDecodesTolerantly() throws {
+        func decode(_ extra: String) throws -> GoalProgressDTO {
+            let json = "{\"goal\":\"muscle\",\"verdict\":\"progressing\",\"headline\":\"x\",\"reasons\":[]\(extra)}"
+            return try JSONDecoder().decode(GoalProgressDTO.self, from: Data(json.utf8))
+        }
+        XCTAssertEqual(try decode(",\"headlineLift\":\"squat\"").headlineLift, "squat")
+        XCTAssertEqual(try decode(",\"headlineLift\":\"bench press\"").headlineLift, "bench press")
+        XCTAssertNil(try decode("").headlineLift, "older servers and other goals omit it")
+        XCTAssertNil(try decode(",\"headlineLift\":null").headlineLift)
+        XCTAssertNil(try decode(",\"headlineLift\":\"\"").headlineLift)
+        XCTAssertNil(try decode(",\"headlineLift\":7").headlineLift)
+        XCTAssertNil(try decode(",\"headlineLift\":{}").headlineLift)
+        XCTAssertNil(GoalProgressDTO(goal: "muscle", verdict: .building).headlineLift)
+        XCTAssertEqual(GoalProgressDTO(goal: "muscle", verdict: .progressing, headlineLift: "squat").headlineLift, "squat")
+    }
+
     // MARK: - Wave 21: weight (moving again, one displayed weight)
 
     private func decodeWeightLoss(_ extra: String, headline: String = "x") throws -> GoalProgressDTO {

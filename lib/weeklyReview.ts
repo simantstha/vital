@@ -36,9 +36,11 @@ import {
   isMainLift,
   latestTopLoadKg,
   liftDisplayChange,
+  liftWeekChangeDisplay,
   liftDisplayName,
   liftReturnDisplay,
   liftShortName,
+  liftTrainedAtWorkingWeight,
   MAX_CUED_LIFTS,
   nextLoadCues,
   nextWorkingLoad,
@@ -46,6 +48,7 @@ import {
   pickWeekOverWeek,
   priorTopLoadKg,
   rankLifts,
+  shortWeekLoadCues,
   weekOverWeekWording,
   type NextLoad,
 } from './liftChange';
@@ -517,6 +520,8 @@ function weightCandidate(input: WeeklyReviewInput, week: Week, prevWeek: Week): 
   const rounded = round1(isImperial(input) ? deltaKg * KG_TO_LB : deltaKg);
   const text = rounded === 0 ? weightText(input, 0) : weightText(input, Math.abs(deltaKg));
   const value = rounded === 0 ? text : signed(rounded, text);
+  // A lifter's "no change" is decided in kg, whatever the display unit: 0.04 kg is noise in pounds too (it read "+0.1 lb" beside "no change").
+  const flatMuscle = input.goal === 'muscle' && round1(deltaKg) === 0;
   const words = weightWords(input, change.basis);
 
   let tone: ReviewTone = 'neutral';
@@ -539,7 +544,7 @@ function weightCandidate(input: WeeklyReviewInput, week: Week, prevWeek: Week): 
       tone,
     },
   };
-  if (input.goal === 'muscle' && rounded === 0) cand.stat.value = 'no change';
+  if (input.goal === 'muscle' && (rounded === 0 || flatMuscle)) cand.stat.value = 'no change';
   const subject = words.subject;
   if (tone === 'good') cand.win = `${subject} is ${input.goal === 'muscle' ? 'up' : 'down'} ${weightText(input, Math.abs(deltaKg))}.`;
   if (tone === 'watch') {
@@ -824,12 +829,13 @@ function liftCandidate(input: WeeklyReviewInput, week: Week): Candidate | null {
   if (input.liftReturn) return returnLiftCandidate(input);
   const imperial = isImperial(input);
   const unit = imperial ? 'lb' : 'kg';
-  let best: { name: string; shown: number; windowLabel: string; stalled: boolean } | null = null;
+  let best: { key: string; name: string; shown: number; windowLabel: string; stalled: boolean } | null = null;
   // ONE headline-lift rule (lib/liftChange.ts pickHeadlineLift): the most-trained
   // lift with a 4-week comparison — the same lift the Trends goal card names.
   const picked = pickHeadlineLift(input.progression, liftAnchor(week));
   if (picked) {
     best = {
+      key: picked.exercise,
       name: liftDisplayName(picked.exercise, input.exerciseDisplay),
       shown: liftDisplayChange(picked.change, imperial).change,
       windowLabel: 'vs 4 weeks ago',
@@ -841,8 +847,9 @@ function liftCandidate(input: WeeklyReviewInput, week: Week): Candidate | null {
     const wow = pickWeekOverWeek(input.progression, liftAnchor(week), [week.days[0]]);
     if (wow) {
       best = {
+        key: wow.exercise,
         name: liftDisplayName(wow.exercise, input.exerciseDisplay),
-        shown: liftDisplayChange({ baselineKg: wow.change.previousKg, recentKg: wow.change.currentKg, changeKg: wow.change.changeKg }, imperial).change,
+        shown: liftWeekChangeDisplay(wow.change, imperial),
         // The window the card labels the same pair with ("Last week: … vs the week before"; lib/liftChange.ts weekOverWeekWording).
         windowLabel: weekOverWeekWording(wow.change, wow.end, liftAnchor(week)).vs,
         stalled: true,
@@ -854,7 +861,10 @@ function liftCandidate(input: WeeklyReviewInput, week: Week): Candidate | null {
   // A deload week lowers e1RM on purpose, and a drop that is not a stall (a
   // break, a return) is no slip either: both stay neutral.
   const deload = best.shown < 0 && isDeloadWeek(input.progression, week.days[0]);
-  const tone: ReviewTone = best.shown > 0 ? 'good' : best.shown < 0 && !deload && best.stalled ? 'watch' : 'neutral';
+  // A slack week (half the planned sessions or fewer) colours no lift gain the week did not produce: the numbers stay, as a neutral stat,
+  // unless that lift was trained at working weight in the reviewed week.
+  const unproduced = slackMuscleWeek(input, week) && !liftTrainedAtWorkingWeight(input.progression[best.key] ?? [], week.days[0]);
+  const tone: ReviewTone = best.shown > 0 ? (unproduced ? 'neutral' : 'good') : best.shown < 0 && !deload && best.stalled ? 'watch' : 'neutral';
   const cand: Candidate = {
     stat: { label: `${best.name} est. 1RM`, value, comparison: deload ? `Lighter week · ${best.windowLabel}` : best.windowLabel, tone },
   };
@@ -1070,7 +1080,7 @@ function restingHrCandidate(input: WeeklyReviewInput, week: Week, prevWeek: Week
     const diff = Math.round(avg - (mean(prev) as number));
     comparison = diff === 0 ? 'same as last week' : `${signed(diff, withUnit(Math.abs(diff), 'bpm'))} vs last week`;
     if (diff <= -1) { tone = 'good'; cand.win = `Resting heart rate dropped ${withUnit(Math.abs(diff), 'bpm')} — a sign recovery is keeping up.`; }
-    else if (diff >= 3) { tone = 'watch'; cand.slip = `Resting heart rate rose ${withUnit(diff, 'bpm')} — your body may be carrying fatigue.`; cand.fix = 'Make one session an easy one — resting heart rate rose this week.'; }
+    else if (diff >= 3) { tone = 'watch'; cand.slip = `Resting heart rate rose ${withUnit(diff, 'bpm')} — your body may be carrying fatigue.`; cand.fix = 'Make one session an easy one — resting heart rate rose last week.'; }
   }
   cand.stat.comparison = comparison ?? 'week avg';
   cand.stat.tone = tone;
@@ -1716,7 +1726,7 @@ function buildHeadline(input: WeeklyReviewInput, cands: Candidate[], week: Week)
     // A week without a session says so, and how long it has been: no praise for the scale or an old lift in its place.
     if (sessions && weekSessionCount(input, week) === 0) {
       const off = weeksOffRunning(input, week);
-      return clipHeadline(off >= 2 ? `No sessions this week (${ordinal(off)} week off)` : 'No sessions this week');
+      return clipHeadline(off >= 2 ? `No sessions last week (${ordinal(off)} week off)` : 'No sessions last week');
     }
     if (sessions) {
       parts.push(sessions.comparison?.startsWith('target ')
@@ -1725,6 +1735,8 @@ function buildHeadline(input: WeeklyReviewInput, cands: Candidate[], week: Week)
     }
     const lift = cands.find(x => x.stat.label.endsWith('est. 1RM'))?.stat;
     const protein = by('Protein days hit');
+    // A slack week leads with the week: no lift gain it did not produce, no weight or protein filler after the count.
+    if (slackMuscleWeek(input, week) && !input.liftReturn && !(lift && lift.tone === 'good') && parts.length === 1) return clipHeadline(`${parts[0]} — a short week`);
     if (lift && input.liftReturn) {
       // Returning from a break: the rebuild leads ("Squat est. 1RM 136 of 142 kg pre-break"), regained or not.
       parts.push(returnHeadlinePart(input));
@@ -2261,12 +2273,74 @@ function windDownNextWeek(input: WeeklyReviewInput, week: Week): string | null {
     : `Back to building: ~${withUnit(next, isImperial(input) ? 'mi' : 'km')} next week.`;
 }
 
-/** The win line of a deload week (muscle goal; a runner's 'light' week is a rest week, not a deload): the lighter loads were the plan. */
-const DELOAD_WIN = 'Deload week done — lighter loads, as planned.';
+/** A muscle week with a session or more but no more than half the planned ones (1 or 2 of 4): too thin a week for a lift-progress win. */
+function slackMuscleWeek(input: WeeklyReviewInput, week: Week): boolean {
+  const target = input.weeklySessionsTarget;
+  if (input.goal !== 'muscle' || target == null || target <= 0) return false;
+  const done = weekSessionCount(input, week);
+  return done > 0 && done * 2 <= target;
+}
 
-/** "110 → 112.5 kg": a load and the next one (the unit once, on the target). */
+/**
+ * The win of a slack week may only cite something done that week. The lift stat's win ("Bench Press estimated 1RM is up 6 kg vs 4
+ * weeks ago") quotes a number whose "now" side was set the week before, so it is left out (a return from a break keeps its own win);
+ * the week's other wins (weight, protein) stand, else the session itself is the win: "You still got Thursday's bench session in." /
+ * "You still got 2 sessions in — Monday and Thursday."
+ */
+function slackWeekWin(input: WeeklyReviewInput, week: Week, cands: Candidate[]): string {
+  const other = cands.find(x => x.win && (input.liftReturn != null || !x.stat.label.endsWith('est. 1RM')))?.win;
+  if (other) return other;
+  const train = new Set(sessionDays(input));
+  const names = week.days.flatMap((d, i) => (train.has(d) ? [WEEKDAY_NAMES[i] as string] : []));
+  if (names.length !== 1) {
+    const list = names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : '';
+    return `You still got ${names.length} ${plural(names.length, 'session')} in${list ? ` — ${list}` : ''}.`;
+  }
+  // One session: name the main lifts of that week (at most two), else just the day.
+  const trained = rankLifts(input.progression, liftAnchor(week)).filter(key =>
+    isMainLift(key) && (input.progression[key] ?? []).some(w => w.weekStart === week.days[0] && (w.sessions ?? w.totalSets) > 0));
+  const lifts = trained.length > 0 && trained.length <= 2 ? `${trained.map(key => liftShortName(key, input.exerciseDisplay)).join(' and ')} ` : '';
+  return `You still got ${names[0]}'s ${lifts}session in.`;
+}
+
+/**
+ * The win line of a deload week (muscle goal; a runner's 'light' week is a rest week, not a deload). "As planned" only when the week before
+ * asked for a lighter week; after 3+ straight weeks of heavier loads it names the timing; otherwise it just says the lighter week is done.
+ */
+function deloadWin(input: WeeklyReviewInput, week: Week): string {
+  // "As planned" only when last week's "Next week" asked for a lighter week; else the timing: after weeks of heavier loads it was a good call.
+  if (input.previousNextWeek && /lighter|deload|ease back/i.test(input.previousNextWeek)) return 'Deload week done — lighter loads, as planned.';
+  const climbing = weeksOfHeavierLoads(input, week);
+  return climbing >= DELOAD_TIMING_MIN_WEEKS
+    ? `Deload week done — lighter loads, good timing after ${climbing} straight weeks of heavier loads.`
+    : 'Deload week done — lighter loads.';
+}
+
+/** Straight weeks of heavier loads before a deload that earn the "good timing" note. */
+const DELOAD_TIMING_MIN_WEEKS = 3;
+
+/** Consecutive weeks just before the reviewed one in which some main lift's top load was above its load the week before (0 when the last one was not). */
+function weeksOfHeavierLoads(input: WeeklyReviewInput, week: Week): number {
+  const topAt = (key: string, weekStart: string): number | null => (input.progression[key] ?? []).find(w => w.weekStart === weekStart)?.topLoadKg ?? null;
+  const keys = Object.keys(input.progression).filter(isMainLift);
+  let n = 0;
+  for (let k = 1; k <= 8; k += 1) {
+    const cur = addDays(week.days[0], -7 * k);
+    const before = addDays(cur, -7);
+    const up = keys.some(key => {
+      const a = topAt(key, cur);
+      const b = topAt(key, before);
+      return a != null && b != null && a > b;
+    });
+    if (!up) break;
+    n += 1;
+  }
+  return n;
+}
+
+/** "110 → 112.5 kg": the grid load the step starts from and the next one (the unit once, on the target); "~" when the logged load was off the grid ("~195 → 200 lb"). */
 function loadPairText(next: NextLoad): string {
-  return arrowPair(String(next.from), withUnit(next.to, next.unit));
+  return arrowPair(`${next.approx ? '~' : ''}${next.start}`, withUnit(next.to, next.unit));
 }
 
 /**
@@ -2346,6 +2420,33 @@ function easeBackInNextWeek(input: WeeklyReviewInput, week: Week, target: number
   return `Ease back in: ${target} ${plural(target, 'session')} at ~90% of your last working weights${weights}, starting today.`;
 }
 
+/**
+ * A muscle week with some sessions but under the target (1..target-1): back to the target, NOT the missed ones made up, with the
+ * loads. A lift not trained that week repeats its planned step ("Squat 112.5 kg (the step you skipped)"); a lift that was trained
+ * follows the normal next-load rule ("bench 87.5 → 90 kg"). Starting today: the review is read on its Monday. Without a known
+ * load the sentence still stands.
+ */
+function shortWeekNextWeek(input: WeeklyReviewInput, week: Week, target: number): string {
+  const head = `Back to ${target} this week — don't make up the missed ones`;
+  const cues = shortWeekLoadCues(input.progression, week.days[0], { imperial: isImperial(input), leadKey: reviewLiftKey(input, week), rebuilding: stillRebuilding(input) });
+  if (cues.length === 0) return `${head}, starting today.`;
+  // The lifts that repeat their planned step come first, with the one note; the rest follow in the usual "110 → 112.5 kg" form.
+  const repeat = cues.filter(c => c.kind === 'skipped');
+  const rest = cues.filter(c => c.kind !== 'skipped');
+  const names = liftNames(input, [...repeat, ...rest].map(c => c.key));
+  const repeatParts = repeat.map((c, i) => `${names[i]} ${withUnit(c.load.to, c.load.unit)}`);
+  const parts: string[] = [];
+  if (repeatParts.length > 0) {
+    const list = repeatParts.length === 1 ? repeatParts[0] : `${repeatParts.slice(0, -1).join(', ')} and ${repeatParts[repeatParts.length - 1]}`;
+    parts.push(`${list} (${repeat.length === 1 ? 'the step' : 'the steps'} you skipped)`);
+  }
+  rest.forEach((c, i) => {
+    const name = names[repeat.length + i];
+    parts.push(c.kind === 'hold' ? `${name} hold at ${withUnit(c.load.from, c.load.unit)}` : `${name} ${loadPairText(c.load)}`);
+  });
+  return `${head}. ${parts.join(', ')}, starting today.`;
+}
+
 /** "Next week" for a mixed / tough week: the concrete action that closes the gap the Slip names. */
 function gapNextWeek(input: WeeklyReviewInput, gap: WeekGap, week: Week, prevWeek: Week): string {
   switch (gap.kind) {
@@ -2358,6 +2459,8 @@ function gapNextWeek(input: WeeklyReviewInput, gap: WeekGap, week: Week, prevWee
         if (stillRebuilding(input)) {
           return `Keep rebuilding: aim for ${gap.target} ${plural(gap.target, 'session')} at your current weights and add load only when every set feels solid.`;
         }
+        // Some sessions, not all: back to the target with the loads, the missed ones are not made up.
+        return shortWeekNextWeek(input, week, gap.target);
       }
       const missing = gap.target - gap.done;
       const day = freestWeekday(input, week, prevWeek);
@@ -2566,7 +2669,7 @@ export function computeWeeklyReview(input: WeeklyReviewInput): WeeklyReview {
     weekGap: assessment.gap,
     headline: buildHeadline(input, cands, week),
     stats: cands.map(x => x.stat),
-    win: reachedWin(input, week) ?? enduranceWin(input, assessment) ?? windDownWin(input, week, assessment) ?? (assessment.rating === 'light' && input.goal === 'muscle' ? DELOAD_WIN : null) ?? cands.find(x => x.win)?.win ?? null,
+    win: reachedWin(input, week) ?? enduranceWin(input, assessment) ?? windDownWin(input, week, assessment) ?? (assessment.rating === 'light' && input.goal === 'muscle' ? deloadWin(input, week) : null) ?? (slackMuscleWeek(input, week) ? slackWeekWin(input, week, cands) : (cands.find(x => x.win)?.win ?? null)),
     slip,
     nextWeek: buildNextWeek(input, cands, week, prevWeek, assessment, slip),
     dataSufficiency: { daysWithData, statCount: cands.length, sufficient: true },

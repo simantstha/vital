@@ -123,6 +123,7 @@ import {
   isLiftStalled,
   liftChange4w,
   liftDisplayChange,
+  liftWeekChangeDisplay,
   liftDisplayName,
   liftLapseMinDays,
   liftLastBest,
@@ -513,6 +514,14 @@ export interface GoalProgress {
    * `liftReturn` is; absent for every other goal.
    */
   liftReturns?: GoalLiftReturn[] | null;
+  /**
+   * Muscle goal only, additive: the canonical key ("squat", "bench press") of the headline lift — the lift the card's
+   * headline and lead lift line name, and the one the Trends Strength card must lead with. It is the sticky lead
+   * (lib/liftChange.ts `headlineLeader`: another lift takes it only by out-training it by 2+ sessions for 2 weeks running)
+   * that has a 4-week comparison, else the lead itself. A client prefers this key over ranking the lifts itself. Null when no
+   * lift is in rotation; absent for every other goal.
+   */
+  headlineLift?: string | null;
   dataSufficiency: { weighIns: number; needed: number; sessionsLast28d: number };
 }
 
@@ -947,16 +956,18 @@ function rateReason(input: GoalProgressInput, w: WeightBlock, band: { minPct: nu
   let tone: ReasonTone = 'neutral';
   if (band) {
     const wantedDir = input.goal === 'weight_loss' ? w.rateKg < 0 : w.rateKg > 0;
+    // A lifter is told what the range is for ("on pace for lean gain"), not that it is a "safe band" with a "floor" and a "ceiling".
+    const lean = input.goal === 'muscle';
     if (!flat && wantedDir && abs >= band.minPct && abs < band.maxPct) {
       tone = 'good';
-      text += `, inside the ${band.minPct}–${band.maxPct}% safe band`;
+      text += lean ? `, on pace for lean gain (${band.minPct}–${band.maxPct}% of bodyweight a week)` : `, inside the ${band.minPct}–${band.maxPct}% safe band`;
     } else if (!flat && wantedDir && abs >= band.maxPct) {
       // At (not just above) the top of the band is already worth a flag.
       tone = 'watch';
-      text += `, at or above the ${band.maxPct}% a week ceiling`;
+      text += lean ? `, above the ${band.maxPct}% of bodyweight a week that keeps gain lean` : `, at or above the ${band.maxPct}% a week ceiling`;
     } else if (flat || wantedDir) {
       tone = 'neutral';
-      text += `, under the ${band.minPct}% a week floor`;
+      text += lean ? `, slower than lean gain (${band.minPct}–${band.maxPct}% of bodyweight a week)` : `, under the ${band.minPct}% a week floor`;
     } else {
       tone = 'watch';
       text += ', the opposite way from your goal';
@@ -1187,20 +1198,47 @@ function weekSessionsReason(input: GoalProgressInput): GoalProgressReason | null
 }
 
 /**
+ * Whether the sessions a week still needs fit in the days it has left, with a rest day in between.
+ *
+ * Not when more sessions are missing than days are available, where today is available only while no session is logged on it (a
+ * session today is already in `done`; counting the day twice let "1 of 4" on a Thursday read as reachable). Not when the missing
+ * sessions would need three days in a row (Fri-Sat-Sun for a 4 a week lifter); a plan's own back-to-back days are not a warning,
+ * so 6 a week allows runs of 3. `daysLeft` includes today.
+ */
+export function weekFitsSessionTarget(done: number, target: number, daysLeft: number, trainedToday: boolean): boolean {
+  const missing = target - done;
+  if (missing <= 0) return true;
+  const available = daysLeft - (trainedToday ? 1 : 0);
+  if (missing > available) return false;
+  // 7 a week is every day: no rest day to ask for.
+  if (target >= 7) return true;
+  // Spreading the missing sessions over the available days with the most rest days between them, the longest back-to-back run.
+  const longestRun = Math.ceil(missing / (available - missing + 1));
+  const plannedRun = Math.ceil(target / (8 - target));
+  return longestRun < Math.max(WEEK_SHORT_MIN_RUN, plannedRun + 1);
+}
+
+/** Back-to-back training days the rest of a week would need before the card calls the week short (3 in a row). */
+const WEEK_SHORT_MIN_RUN = 3;
+
+/**
  * The muscle goal's "2 of 4 sessions this week": the shared line, amber once the
- * week can no longer reach the target — sessions so far plus the days left in
- * the week (today included) are under it ("0 of 4 sessions this week (last: Apr
- * 25)"). The 28-day line stays neutral through a missed week ("13 of 16 planned
- * sessions", 81%), so without this a Friday with no session read "Progressing".
+ * week can no longer reach the target (`weekFitsSessionTarget`: too few days
+ * left, or the rest would need three in a row) ("0 of 4 sessions this week (last:
+ * Apr 25)"). The 28-day line stays neutral through a missed week ("13 of 16
+ * planned sessions", 81%), so without this a Friday with no session read
+ * "Progressing", and from the Thursday of a one-session week the card flipped
+ * every other day.
  */
 function muscleWeekSessionsReason(input: GoalProgressInput): GoalProgressReason | null {
   const reason = weekSessionsReason(input);
   const target = input.target.weeklySessions;
   if (!reason || target == null) return reason;
   const start = weekStart(input.todayKey);
-  const done = new Set(sessionDays(input).filter(d => d >= start && d <= input.todayKey)).size;
+  const days = sessionDays(input);
+  const done = new Set(days.filter(d => d >= start && d <= input.todayKey)).size;
   const daysLeft = 7 - (dayNumber(input.todayKey) - dayNumber(start));
-  if (done >= target || done + daysLeft >= target) return reason;
+  if (weekFitsSessionTarget(done, target, daysLeft, days.includes(input.todayKey))) return reason;
   const last = lastSessionDay(input);
   return { ...reason, text: `${reason.text}${last ? ` (last: ${fmtDate(last, input.todayKey)})` : ''}`, tone: 'watch' };
 }
@@ -1263,6 +1301,12 @@ function liftChanges(progression: ProgressionSummary, todayKey: string, display?
   const head = out.find(l => l.exercise === headlineKey);
   const rest = out.filter(l => l !== head);
   return (head ? [head, ...rest] : rest).slice(0, 3);
+}
+
+/** The headline lift's canonical key: what the card leads with (`liftChanges`' first entry), sent so a client need not rank the lifts itself. */
+function headlineLiftKey(progression: ProgressionSummary, todayKey: string): string | null {
+  const anchor = weekStartKeyForDay(todayKey);
+  return pickHeadlineLift(progression, anchor)?.exercise ?? rankLifts(progression, anchor)[0] ?? null;
 }
 
 function liftReason(l: LiftChange, input: GoalProgressInput): GoalProgressReason | null {
@@ -1874,18 +1918,22 @@ function returnNumbers(r: GoalLiftReturn, input: GoalProgressInput): { pre: numb
   return liftReturnDisplay(r, input.unitSystem === 'imperial');
 }
 
-/** "Squat", "Squat and bench", "Squat, bench and deadlift": the first lift by its display name, the rest by the short spoken one. */
+/** "Squat", "Squat and bench", "Bench and squat", "Squat, bench and deadlift": sentence case, each lift by its short spoken name ("bench press" -> "bench"). */
 function returnLiftNames(rets: GoalLiftReturn[], exerciseDisplay: Record<string, string> | undefined): string {
-  const names = rets.map((r, i) => (i === 0 ? r.name : liftShortName(r.exercise, exerciseDisplay)));
+  const names = rets.map((r, i) => {
+    const short = liftShortName(r.exercise, exerciseDisplay);
+    return i === 0 ? `${short.charAt(0).toUpperCase()}${short.slice(1)}` : short;
+  });
   return names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
 }
 
 /**
  * The comeback sentence when SOME main lifts are back at their pre-break best
  * and one is not: "Squat back above pre-break; deadlift at 98%" — the lifts that
- * are back first ("at or above" unless every one is strictly above), then the
+ * are back first ("at", "at or above" or "above" by their printed numbers), then the
  * lift furthest behind with its percentage of the SHOWN numbers
- * (lib/liftChange.ts liftReturnDisplay). Shared by the goal card and the weekly
+ * (lib/liftChange.ts liftReturnDisplay); "above" only when every named lift is
+ * above its printed pre-break number, "at or above" for a mix. Shared by the goal card and the weekly
  * review. `maxAhead` limits how many of the lifts that are back are named (the
  * card's headline drops to one to fit the numbers). Null unless the returns are
  * mixed (some back, some not).
@@ -1900,7 +1948,9 @@ export function mixedReturnLead(
   const ahead = rets.filter(r => r.regained).slice(0, maxAhead);
   if (behind == null || ahead.length === 0) return null;
   const shown = liftReturnDisplay(behind, imperial);
-  const rel = ahead.every(r => { const n = liftReturnDisplay(r, imperial); return n.recent > n.pre; }) ? 'above' : 'at';
+  // "above" only when every named lift is above its pre-break number as printed, "at" only when every one is exactly there.
+  const aboveCount = ahead.filter(r => { const n = liftReturnDisplay(r, imperial); return n.recent > n.pre; }).length;
+  const rel = aboveCount === ahead.length ? 'above' : aboveCount === 0 ? 'at' : 'at or above';
   return {
     text: `${returnLiftNames(ahead, exerciseDisplay)} back ${rel} pre-break; ${liftShortName(behind.exercise, exerciseDisplay)} at ${shown.pct}%`,
     behind,
@@ -1952,20 +2002,23 @@ function liftReturnOutcome(rets: GoalLiftReturn[], input: GoalProgressInput): { 
 /**
  * The lift reasons of a return, at most two:
  *  - some lifts back and one not: the lift furthest behind first, then one that is back;
- *  - none back yet: the headline lift's own line, plus the lift furthest behind
- *    when it is 3+ points under it (so a lagging lift is not hidden behind a
- *    better one) — otherwise just the headline lift, leaving room for the break line;
+ *  - none back yet: the headline lift's own line, then ONE line with where each other lift stands ("Deadlift 94% of its
+ *    pre-break best" / "Bench Press 95%, Deadlift 94% of their pre-break bests"). It used to appear only when the
+ *    lagging lift was 3+ points under the headline lift, so it came and went with one session (days 71-78: hidden, shown, hidden);
  *  - every lift back: the first two.
  */
 function liftReturnReasons(rets: GoalLiftReturn[], input: GoalProgressInput): GoalProgressReason[] {
   const behind = furthestBehindReturn(rets);
   const back = rets.find(r => r.regained);
+  if (behind != null && back == null && rets.length > 1) {
+    const others = rets.slice(1);
+    const standing = others.map(r => `${r.name} ${returnNumbers(r, input).pct}%`).join(', ');
+    return [liftReturnReason(rets[0], input), { kind: 'lift', text: `${standing} of ${others.length === 1 ? 'its pre-break best' : 'their pre-break bests'}`, tone: 'neutral' }];
+  }
   let picked: GoalLiftReturn[];
   if (behind != null && back != null) picked = [behind, back];
-  else if (behind != null) {
-    const lead = returnNumbers(rets[0], input);
-    picked = behind !== rets[0] && returnNumbers(behind, input).pct <= lead.pct - 3 ? [rets[0], behind] : [rets[0]];
-  } else picked = rets.slice(0, 2);
+  else if (behind != null) picked = [rets[0]];
+  else picked = rets.slice(0, 2);
   return picked.map(r => liftReturnReason(r, input));
 }
 
@@ -2041,28 +2094,32 @@ function weekOverWeekReason(input: GoalProgressInput): GoalProgressReason | null
   const pick = pickWeekOverWeek(input.progression, anchor, [addDays(anchor, -7), anchor]);
   if (!pick) return null;
   const imperial = input.unitSystem === 'imperial';
-  const d = liftDisplayChange({ baselineKg: pick.change.previousKg, recentKg: pick.change.currentKg, changeKg: pick.change.changeKg }, imperial);
-  const delta = d.change === 0 ? 'unchanged' : liftDeltaText({ ...d, unit: imperial ? 'lb' : 'kg' });
+  const change = liftWeekChangeDisplay(pick.change, imperial);
+  const delta = change === 0 ? 'unchanged' : liftDeltaText({ baseline: 0, recent: 0, change, unit: imperial ? 'lb' : 'kg' });
   const wording = weekOverWeekWording(pick.change, pick.end, anchor);
   return {
     kind: 'lift',
     text: `${wording.window ? `${wording.window}: ` : ''}${liftDisplayName(pick.exercise, input.exerciseDisplay)} est. 1RM ${delta} ${wording.vs}`,
-    tone: d.change > 0 ? 'good' : d.change < 0 && pick.end < anchor && !isDeloadWeek(input.progression, pick.end) ? 'watch' : 'neutral',
+    tone: change > 0 ? 'good' : change < 0 && pick.end < anchor && !isDeloadWeek(input.progression, pick.end) ? 'watch' : 'neutral',
   };
 }
 
 /**
- * The weight-rate line during a lapse: neutral, and about the lapse ("Trend
- * weight up 0.2 kg/wk with no training"), not the usual "inside the 0.1–0.5%
- * safe band" in green next to "No sessions for 14 days". A rate that is already
- * a warning (gaining too fast, the wrong way) keeps its watch line.
+ * The weight-rate line during a lapse: neutral, and about the lapse, not the usual
+ * "inside the 0.1–0.5% safe band" in green next to "No sessions for 14 days". The
+ * rate is a 28-day one, so in the first half of that window ("lapseDays" under 14)
+ * most of it was earned before the break: "Trend weight up 0.2 kg/wk, mostly from
+ * before the break" — "with no training" would read as blame for a gain the
+ * training made. A longer lapse is "with no training". A rate that is already a
+ * warning (gaining too fast, the wrong way) keeps its watch line.
  */
-function lapseRateReason(input: GoalProgressInput, w: WeightBlock, rate: GoalProgressReason | null): GoalProgressReason | null {
+function lapseRateReason(input: GoalProgressInput, w: WeightBlock, rate: GoalProgressReason | null, lapseDays: number): GoalProgressReason | null {
   if (rate == null || rate.tone === 'watch' || w.rateKg == null || w.pctBw == null) return rate;
   const flat = round2(Math.abs(w.pctBw)) < RATE_FLAT_PCT;
+  const tail = lapseDays < RATE_WINDOW_DAYS / 2 ? ', mostly from before the break' : ' with no training';
   const text = flat
-    ? 'Trend weight flat with no training'
-    : `Trend weight ${w.rateKg < 0 ? 'down' : 'up'} ${fmtWeight(input, Math.abs(w.rateKg), 2)}/wk with no training`;
+    ? `Trend weight flat${tail}`
+    : `Trend weight ${w.rateKg < 0 ? 'down' : 'up'} ${fmtWeight(input, Math.abs(w.rateKg), 2)}/wk${tail}`;
   return { kind: 'rate', text, tone: 'neutral' };
 }
 
@@ -2112,7 +2169,7 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock, ret: GoalLiftRe
   // "Back after a 15-day break" explains a rebuild; once every pre-break best is regained it is no longer news.
   const returnBreak = ret && furthestBehindReturn(rets.length > 0 ? rets : [ret]) != null ? liftReturnBreakReason(ret, input) : null;
   // A lapse is not a time to praise the scale either: the weight line is neutral and says so.
-  const rateShown = lapse ? lapseRateReason(input, w, rate) : rate;
+  const rateShown = lapse ? lapseRateReason(input, w, rate, lapse.days) : rate;
   // Rate at/above the top of the healthy band is a flag worth surfacing early.
   const rateTop = rate?.tone === 'watch' && w.rateKg != null && w.rateKg > 0;
   const reachLead = weightReached ? reachedLeadReason(input, w, targetKg as number) : null;
@@ -2168,9 +2225,9 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock, ret: GoalLiftRe
     if (liftsUp) {
       // A week that can no longer reach its target is never "Progressing" (the 28-day line alone stays neutral through it).
       liftState = sessionsBehind
-        ? { verdict: 'behind', headline: clip(`Lifts up, sessions behind — ${head.name} ${liftDeltaText(headDisplay)}`) }
+        ? { verdict: 'behind', headline: clip(`Lifts up, sessions behind — ${head.name} est. 1RM ${liftDeltaText(headDisplay)}`) }
         : weekShort
-          ? { verdict: 'holding', headline: clip(`Lifts up, week short — ${head.name} ${liftDeltaText(headDisplay)}`) }
+          ? { verdict: 'holding', headline: clip(`Lifts up, week short — ${head.name} est. 1RM ${liftDeltaText(headDisplay)}`) }
           : { verdict: 'progressing', headline: clip(`Progressing — ${head.name} est. 1RM ${liftDeltaText(headDisplay)} vs 4 weeks ago`) };
     } else if (otherUp && otherUpDisplay) {
       liftState = {
@@ -2197,7 +2254,7 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock, ret: GoalLiftRe
       return {
         verdict: 'behind',
         headline: liftsUp && head && headDisplay
-          ? clip(`Lifts up, sessions behind — ${head.name} ${liftDeltaText(headDisplay)}`)
+          ? clip(`Lifts up, sessions behind — ${head.name} est. 1RM ${liftDeltaText(headDisplay)}`)
           : sessionsBehindHeadline,
         reasons,
       };
@@ -3416,7 +3473,7 @@ export function computeGoalProgress(input: GoalProgressInput): GoalProgress {
     adherence: input.goal === 'muscle' ? sessionAdherence(input) : null,
     liftReturn,
     // Muscle only (absent for every other goal, so their payloads are byte-identical to before).
-    ...(input.goal === 'muscle' ? { liftReturns: liftReturns.length > 0 ? liftReturns : null } : {}),
+    ...(input.goal === 'muscle' ? { liftReturns: liftReturns.length > 0 ? liftReturns : null, headlineLift: headlineLiftKey(input.progression, input.todayKey) } : {}),
     lastSessionOn: lastSessionDay(input),
     dataSufficiency: { weighIns: w.weighIns, needed: WEIGH_INS_NEEDED, sessionsLast28d },
   };

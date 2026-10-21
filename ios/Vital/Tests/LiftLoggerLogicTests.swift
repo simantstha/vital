@@ -423,6 +423,46 @@ final class LiftLoggerLogicTests: XCTestCase {
         XCTAssertEqual(LiftLoggerLogic.nextLoad(after: 2200, key: "deadlift", system: .imperial), 2200)
     }
 
+    /// The step starts on the 2.5 kg / 5 lb grid and adds exactly one step, as the
+    /// server's `nextWorkingLoad` (`start`, `to`, `approx`): "bench ~195 → 200 lb".
+    /// Server fixtures: 87.5 kg = 193 lb -> ~195 -> 200; 110 kg = 243 lb -> ~245 -> 250;
+    /// 80 kg = 176 lb -> 175 -> 180 (1 lb off the grid is the logging resolution).
+    func testNextLoadStartsOnTheGridAndStepsExactlyOnce() {
+        // (last load, start, next, "~")
+        let pounds: [(Double, Double, Double, Bool)] = [
+            (193, 195, 200, true), (243, 245, 250, true), (287, 285, 290, true), (182, 180, 185, true),
+            (176, 175, 180, false), (185, 185, 190, false), (225, 225, 230, false),
+        ]
+        for (last, start, next, approximate) in pounds {
+            XCTAssertEqual(LiftLoggerLogic.nextLoadStart(after: last, key: "bench press", system: .imperial), start, "\(last) lb")
+            XCTAssertEqual(LiftLoggerLogic.nextLoad(after: last, key: "bench press", system: .imperial), next, "\(last) lb")
+            XCTAssertEqual(LiftLoggerLogic.isNextLoadStartApproximate(after: last, key: "bench press", system: .imperial), approximate, "\(last) lb")
+        }
+        let kilos: [(Double, Double, Double, Bool)] = [
+            (110, 110, 112.5, false), (80.5, 80, 82.5, false), (81, 80, 82.5, true), (81.5, 82.5, 85, true), (101, 100, 102.5, true),
+        ]
+        for (last, start, next, approximate) in kilos {
+            XCTAssertEqual(LiftLoggerLogic.nextLoadStart(after: last, key: "squat", system: .metric), start, "\(last) kg")
+            XCTAssertEqual(LiftLoggerLogic.nextLoad(after: last, key: "squat", system: .metric), next, "\(last) kg")
+            XCTAssertEqual(LiftLoggerLogic.isNextLoadStartApproximate(after: last, key: "squat", system: .metric), approximate, "\(last) kg")
+        }
+        // Every load on the logging grid: the start is on the step grid and the next load is one step above it.
+        for halfKilos in 40...500 {
+            let kg = Double(halfKilos) / 2
+            let start = LiftLoggerLogic.nextLoadStart(after: kg, key: "deadlift", system: .metric)
+            XCTAssertEqual(start.truncatingRemainder(dividingBy: 2.5), 0, accuracy: 0.0001, "\(kg) kg")
+            XCTAssertEqual(LiftLoggerLogic.nextLoad(after: kg, key: "deadlift", system: .metric) - start, 2.5, accuracy: 0.0001, "\(kg) kg")
+        }
+        for lb in 40...600 {
+            let start = LiftLoggerLogic.nextLoadStart(after: Double(lb), key: "deadlift", system: .imperial)
+            XCTAssertEqual(start.truncatingRemainder(dividingBy: 5), 0, accuracy: 0.0001, "\(lb) lb")
+            XCTAssertEqual(LiftLoggerLogic.nextLoad(after: Double(lb), key: "deadlift", system: .imperial) - start, 5, accuracy: 0.0001, "\(lb) lb")
+        }
+        // At the logger's maximum the step is capped, never below the last load.
+        XCTAssertEqual(LiftLoggerLogic.nextLoadStart(after: 1000, key: "deadlift", system: .metric), 1000)
+        XCTAssertEqual(LiftLoggerLogic.nextLoadStart(after: 2200, key: "deadlift", system: .imperial), 2200)
+    }
+
     // MARK: - progression hint
 
     private func refs(_ reps: [Int], at load: Double) -> [LiftLastRef] {
@@ -492,6 +532,13 @@ final class LiftLoggerLogicTests: XCTestCase {
             )
             XCTAssertEqual(hint.suggestedLoad, 190, "bench \(last) lb")
         }
+        // A load logged off the 5 lb grid: the caption keeps what was logged, the try is one step from the grid (193 -> 200, as "bench ~195 → 200 lb").
+        let offGrid = try XCTUnwrap(
+            LiftLoggerLogic.progressionHint(history: refs([5, 5, 5], at: 193), key: "bench press", system: .imperial)
+        )
+        XCTAssertEqual(offGrid.lastLoad, 193)
+        XCTAssertEqual(offGrid.suggestedLoad, 200)
+        XCTAssertEqual(LiftLoggerLogic.progressionText(offGrid, system: .imperial), "Last 3×5 @ 193\u{00A0}lb · try 200\u{00A0}lb")
     }
 
     func testHintSaysRepeatWhenAnySetMissedItsReps() throws {

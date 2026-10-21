@@ -11,7 +11,7 @@ import type { GoalKind, GoalProgress } from './goalProgress';
 import { RACE_EVE_LINE, STRIDES_COPY, formatRaceTime, formatTargetLongRun, isWindDownPhase, lightWeekLine, longRunCapNote, racePaceReps, recoveryWeek, roundLongRunKm } from './enduranceProgression';
 import type { ProgressionSummary } from './workoutRepository';
 import { plainSpaces } from './displayText';
-import { liftChange4w, liftLapseMinDays, pickHeadlineLift, rankLifts } from './liftChange';
+import { liftChange4w, liftLapseMinDays, liftReturnDisplay, pickHeadlineLift, rankLifts } from './liftChange';
 import { weekStartKeyForDay } from './localDay';
 import { KM_PER_MILE, LB_PER_KG } from './metricFormat';
 import { shortDate } from './brain/openerText';
@@ -263,7 +263,10 @@ export function formatGoalProgressLines(gp: GoalProgress, units: UnitSystem): st
   const rebuilding = returns.filter(r => !r.regained);
   if (rebuilding.length > 0) {
     const back = returns.filter(r => r.regained);
-    const behind = rebuilding.length < returns.length ? ` (${rebuilding.map(r => `${r.name.toLowerCase()} ${r.pct}% of its pre-break best`).join(', ')}${back.length > 0 ? `; ${back.map(r => r.name.toLowerCase()).join(', ')} back` : ''})` : '';
+    // Where each rebuilding lift stands whenever there is more than one lift to say it of (some back, or several still rebuilding):
+    // the percentage as the card prints it (of the shown numbers), not the payload's rounded-down one.
+    const imperial = units === 'imperial';
+    const behind = rebuilding.length < returns.length || rebuilding.length > 1 ? ` (${rebuilding.map(r => `${r.name.toLowerCase()} ${liftReturnDisplay(r, imperial).pct}% of its pre-break best`).join(', ')}${back.length > 0 ? `; ${back.map(r => r.name.toLowerCase()).join(', ')} back` : ''})` : '';
     lines.push(`- Returning from a ${returns[0].breakDays}-day break (ended ${returns[0].endedOn}): lifts are rebuilding${behind} — do not call this a stall or suggest a deload${back.length > 0 ? ', and do not say every lift is back' : ''}.`);
   }
 

@@ -448,7 +448,8 @@ private extension TrendsView {
         guard let summary = vm.workoutSummary else { return nil }
         return TrendsStrengthLogic.card(
             from: summary, system: unitPref.current, today: Date(),
-            liftReturn: vm.goalProgress?.liftReturn, liftReturns: vm.goalProgress?.liftReturns
+            liftReturn: vm.goalProgress?.liftReturn, liftReturns: vm.goalProgress?.liftReturns,
+            headlineLift: vm.goalProgress?.headlineLift
         )
     }
 

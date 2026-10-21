@@ -332,6 +332,20 @@ test('returning from a break, lift by lift: while ANY main lift is under its pre
   assert.doesNotMatch(allBack, /Returning from/);
 });
 
+test('returning from a break, every lift still rebuilding: the coach hears each lift\'s percentage, as the card prints it (wave 22s)', () => {
+  const squat = { exercise: 'squat', name: 'Squat', breakDays: 15, endedOn: '2026-05-10', preBreakKg: 142, recentKg: 136.4, pct: 96, regained: false };
+  const bench = { exercise: 'bench press', name: 'Bench Press', breakDays: 15, endedOn: '2026-05-10', preBreakKg: 111, recentKg: 108, pct: 97, regained: false };
+  const deadlift = { exercise: 'deadlift', name: 'Deadlift', breakDays: 15, endedOn: '2026-05-10', preBreakKg: 160, recentKg: 150.8, pct: 94, regained: false };
+  const lines = formatGoalProgressLines(gp({ goal: 'muscle', verdict: 'building', liftReturn: squat, liftReturns: [squat, bench, deadlift] }), 'metric');
+  assert.ok(lines.includes('- Returning from a 15-day break (ended 2026-05-10): lifts are rebuilding (squat 96% of its pre-break best, bench press 97% of its pre-break best, deadlift 94% of its pre-break best) — do not call this a stall or suggest a deload.'), lines.join('\n'));
+  // One lift alone: nothing to compare it with.
+  const alone = formatGoalProgressLines(gp({ goal: 'muscle', verdict: 'building', liftReturn: squat, liftReturns: [squat] }), 'metric').join('\n');
+  assert.match(alone, /lifts are rebuilding — do not call this a stall/);
+  // The payload's pct is rounded down (99 for 99.6%); the coach hears the card's: 142 of 143 kg is 99%, 141.6 shows as 142 -> 141 of 143.
+  const floor = { ...squat, preBreakKg: 143, recentKg: 141.6, pct: 99 };
+  assert.match(formatGoalProgressLines(gp({ goal: 'muscle', verdict: 'building', liftReturn: floor, liftReturns: [floor, bench] }), 'metric').join('\n'), /squat 99% of its pre-break best/);
+});
+
 test('brief goal section: the lift lines lead with the card\'s headline lift (most-trained), the same number', () => {
   const wk = (weekStart: string, e: number, sessions: number, sets: number) => ({ weekStart, bestEstimatedOneRepMaxKg: e, volumeKg: 1, totalSets: sets, totalReps: sets * 5, sessions });
   const text = buildBriefGoalSection(

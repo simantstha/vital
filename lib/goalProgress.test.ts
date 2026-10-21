@@ -6,7 +6,9 @@ import {
   isRunningWorkoutType,
   isStrengthWorkoutType,
   longRunTargetKm,
+  mixedReturnLead,
   raceLabel,
+  weekFitsSessionTarget,
   type GoalProgress,
   type GoalProgressInput,
 } from './goalProgress';
@@ -416,7 +418,7 @@ test('muscle: weight gain at/above the top of the band is a watch reason', () =>
   const rate = p.reasons.find(r => r.kind === 'rate');
   assert.ok(rate, 'rate reason surfaced');
   assert.equal(rate!.tone, 'watch');
-  assert.match(rate!.text, /ceiling/);
+  assert.match(rate!.text, /above the 0\.5% of bodyweight a week that keeps gain lean/);
 });
 
 test('muscle: ETA toward the target weight when gaining inside the band', () => {
@@ -663,7 +665,7 @@ test('muscle: lifts up but <70% of planned sessions → "Lifts up, sessions behi
   }));
   const low = mk(10); // 10/16 = 63%
   assert.equal(low.verdict, 'behind');
-  assert.equal(low.headline, 'Lifts up, sessions behind — Squat +10 kg');
+  assert.equal(low.headline, 'Lifts up, sessions behind — Squat est. 1RM +10 kg');
   assert.equal(mk(12).verdict, 'progressing'); // 75%
   // No weekly target: nothing to be behind on.
   const noTarget = computeGoalProgress(base({
@@ -2198,11 +2200,15 @@ test('return from a break: "Building back", not "Stalled" — verdict building, 
   assert.ok(p.reasons.every(r => r.tone !== 'watch'), JSON.stringify(p.reasons));
   assert.equal(p.reasons[0].kind, 'lift');
   assert.equal(p.reasons[0].text, 'Squat est. 1RM 136 kg, 96% of your 142 kg pre-break best'); // 136 / 142 rounds to 96 (wave 21: not floored)
-  assert.ok(p.reasons.some(r => r.text === 'Back after a 15-day break (ended Sep 27)'));
+  // Bench is rebuilding too (wave 22s): its standing is its own line, always (no 3-point hide rule), and takes the break line's room.
+  assert.equal(p.reasons[1].text, 'Bench Press 94% of its pre-break best');
   assert.doesNotMatch(JSON.stringify(p), /Stalled|stalled|vs 4 weeks ago/);
   assert.deepEqual(p.liftReturn, {
     exercise: 'squat', name: 'Squat', breakDays: 15, endedOn: '2026-09-27', preBreakKg: 142, recentKg: 136, pct: 95, regained: false,
   });
+  // With only the headline lift rebuilding there is room for the break line.
+  const alone = computeGoalProgress(breakInput({ squat: squatBack(136, 136) }));
+  assert.ok(alone.reasons.some(r => r.text === 'Back after a 15-day break (ended Sep 27)'), JSON.stringify(alone.reasons));
   // The 28-day session window still holds the break: never "Sessions behind" and never an amber adherence lead.
   assert.notEqual(p.verdict, 'behind');
   assertWellFormed(p);
@@ -2298,15 +2304,34 @@ test('return from a break, lift by lift: several lifts back and one behind, and 
   assert.equal(two.verdict, 'building');
   assert.equal(two.headline, 'Squat back above pre-break; deadlift at 98% (155 of 158 kg est. 1RM)');
   assert.deepEqual(two.liftReturns!.map(r => r.exercise).sort(), ['bench press', 'deadlift', 'squat']);
-  // Nothing back yet: the headline lift's own "Building back" line; a lift 3+ points further behind gets its own reason.
+  // Nothing back yet: the headline lift's own "Building back" line, then where every other rebuilding lift stands (wave 22s: whatever the gap).
   const none = computeGoalProgress(longBreakInput({ squat: [...LONG_BREAK_SQUAT.slice(0, 4), lw('2026-09-21', 134), lw('2026-09-28', 136)], deadlift: longBreakDeadlift(140, 142) }));
   assert.equal(none.verdict, 'building');
   assert.equal(none.headline, 'Building back — Squat est. 1RM 136 of 142 kg pre-break');
   assert.equal(none.reasons[0].text, 'Squat est. 1RM 136 kg, 96% of your 142 kg pre-break best');
-  assert.equal(none.reasons[1].text, 'Deadlift est. 1RM 142 kg, 90% of your 158 kg pre-break best');
+  assert.equal(none.reasons[1].text, 'Deadlift 90% of its pre-break best');
+  // Only 2 points apart (96% / 94%) it is still there: the line no longer comes and goes with a session (days 71-78).
+  const close = computeGoalProgress(longBreakInput({ squat: [...LONG_BREAK_SQUAT.slice(0, 4), lw('2026-09-21', 134), lw('2026-09-28', 136)], deadlift: longBreakDeadlift(147, 149) }));
+  assert.equal(close.reasons[1].text, 'Deadlift 94% of its pre-break best');
   // An accessory never holds the claim back: lat pulldown at 90% does not stop "Back above".
   const accessory = computeGoalProgress(longBreakInput({ squat: LONG_BREAK_SQUAT, 'lat pulldown': [lw('2026-08-17', 80), lw('2026-08-24', 85), lw('2026-09-21', 70)] }));
   assert.equal(accessory.headline, 'Back above your pre-break best — Squat est. 1RM 145 kg (was 142 kg)');
+});
+
+test('the comeback sentence: "above" only when every named lift is above its printed number, "at or above" for a mix, sentence case (wave 22s)', () => {
+  const ret = (exercise: string, name: string, pre: number, recent: number, regained: boolean) =>
+    ({ exercise, name, breakDays: 15, endedOn: '2026-05-10', preBreakKg: pre, recentKg: recent, pct: Math.floor((recent / pre) * 100), regained });
+  const squatAbove = ret('squat', 'Squat', 142, 145.2, true);
+  const benchAt = ret('bench press', 'Bench Press', 111, 111.2, true);
+  const benchAbove = ret('bench press', 'Bench Press', 111, 114, true);
+  const deadlift = ret('deadlift', 'Deadlift', 160, 157, false);
+  assert.equal(mixedReturnLead([squatAbove, deadlift], undefined, false)?.text, 'Squat back above pre-break; deadlift at 98%');
+  assert.equal(mixedReturnLead([squatAbove, benchAbove, deadlift], undefined, false)?.text, 'Squat and bench back above pre-break; deadlift at 98%');
+  assert.equal(mixedReturnLead([benchAt, deadlift], undefined, false)?.text, 'Bench back at pre-break; deadlift at 98%');
+  // A mix of one above and one exactly at: neither "above" (bench is not) nor "at" (squat is above).
+  assert.equal(mixedReturnLead([benchAt, squatAbove, deadlift], undefined, false)?.text, 'Bench and squat back at or above pre-break; deadlift at 98%');
+  // The numbers are as printed: 111.2 kg shows as 111, so it is "at", not above 111.
+  assert.equal(mixedReturnLead([benchAt, deadlift], undefined, false)?.text.includes(' at pre-break'), true);
 });
 
 test('return from a break: the state ends 35 days after the break and normal rules apply again', () => {
@@ -2363,8 +2388,8 @@ test('weight rate: under 0.05% a week reads "flat" and every threshold uses the 
     const r = mk(0.009 + i * 0.0001);
     if (!r) continue;
     const printed = Number(/\(([\d.]+)% of bodyweight\)/.exec(r.text)![1]);
-    if (printed >= 0.1) assert.doesNotMatch(r.text, /under the/, r.text);
-    else assert.match(r.text, /under the 0\.1% a week floor|flat/, r.text);
+    if (printed >= 0.1) assert.doesNotMatch(r.text, /under the|slower than lean gain/, r.text);
+    else assert.match(r.text, /slower than lean gain \(0\.1–0\.5% of bodyweight a week\)|flat/, r.text);
   }
 });
 
@@ -2855,7 +2880,7 @@ test('a week that cannot reach its target: "0 of 4 sessions this week (last: Oct
   const sun = computeGoalProgress(lapseInput(0, { todayKey: sunday, strengthDays: sunDays, trainingDays: sunDays }));
   assert.deepEqual(sun.reasons[0], { kind: 'week_sessions', text: '2 of 4 sessions this week (last: Oct 2)', tone: 'watch' });
   assert.equal(sun.verdict, 'holding');
-  assert.equal(sun.headline, 'Lifts up, week short — Squat +12 kg');
+  assert.equal(sun.headline, 'Lifts up, week short — Squat est. 1RM +12 kg');
   assert.doesNotMatch(JSON.stringify(sun), /Progressing/);
   assertWellFormed(sun);
   // The day before it can still be hit (2 + Sat + Sun = 4): the normal read, no amber.
@@ -2882,18 +2907,79 @@ test('a week that cannot reach its target: "0 of 4 sessions this week (last: Oct
   assert.doesNotMatch(weightLed.headline, /Progressing/);
 });
 
+test('weekFitsSessionTarget: missing sessions must fit the days left (today only while untrained) and not need three in a row (wave 22s)', () => {
+  // 4 a week. Monday / Tuesday / Wednesday with nothing yet: 4 sessions in 7 / 6 / 5 days left (today included) fit with rest days between.
+  assert.equal(weekFitsSessionTarget(0, 4, 7, false), true);
+  assert.equal(weekFitsSessionTarget(0, 4, 6, false), true);
+  assert.equal(weekFitsSessionTarget(0, 4, 5, false), true);
+  // Thursday with nothing yet: 4 in Thu-Sun is four in a row. A session today leaves Fri-Sun for 3 more: three in a row.
+  assert.equal(weekFitsSessionTarget(0, 4, 4, false), false);
+  assert.equal(weekFitsSessionTarget(1, 4, 4, true), false);
+  // ... but one session on Wednesday (not today) and Thursday still open: 3 in Thu-Sun fits (Thu, Fri, Sun / Thu, Sat, Sun).
+  assert.equal(weekFitsSessionTarget(1, 4, 4, false), true);
+  // Friday 2 of 4, Saturday 2 of 4 (Sat + Sun back to back is fine), Sunday 2 of 4 (one day for two sessions).
+  assert.equal(weekFitsSessionTarget(2, 4, 3, false), true);
+  assert.equal(weekFitsSessionTarget(2, 4, 2, false), true);
+  assert.equal(weekFitsSessionTarget(2, 4, 1, false), false);
+  // The target met, or passed, always fits.
+  assert.equal(weekFitsSessionTarget(4, 4, 1, true), true);
+  assert.equal(weekFitsSessionTarget(5, 4, 3, false), true);
+  // 5 a week: Monday morning with nothing yet fits; 6 a week tolerates its own runs of 3; 7 a week is every day.
+  assert.equal(weekFitsSessionTarget(0, 5, 7, false), true);
+  assert.equal(weekFitsSessionTarget(1, 6, 6, false), true);
+  assert.equal(weekFitsSessionTarget(0, 7, 7, false), true);
+  assert.equal(weekFitsSessionTarget(0, 7, 6, false), false);
+});
+
+test('Thursday of a one-session week is already "week short": the card does not say Progressing on Thu-Fri and short on Sat-Sun (wave 22s)', () => {
+  // Daily sessions to Sunday 09-27, then nothing until Thursday 10-01 (1 of 4 this week). Wednesday: 3 days off, 4 sessions still fit in Wed-Sun.
+  const upTo = (day: string, sessions: string[]) => [...Array.from({ length: 80 }, (_, i) => addDays('2026-08-31', i)).filter(d => d <= '2026-09-27'), ...sessions].filter(d => d <= day);
+  const at = (day: string, sessions: string[]) => computeGoalProgress(lapseInput(0, { todayKey: day, strengthDays: upTo(day, sessions), trainingDays: upTo(day, sessions) }));
+  const wed = at('2026-09-30', ['2026-10-01']);
+  assert.equal(wed.verdict, 'progressing');
+  const thu = at('2026-10-01', ['2026-10-01']);
+  assert.equal(thu.verdict, 'holding');
+  assert.equal(thu.headline, 'Lifts up, week short — Squat est. 1RM +12 kg');
+  assert.deepEqual(thu.reasons[0], { kind: 'week_sessions', text: '1 of 4 sessions this week (last: Oct 1)', tone: 'watch' });
+  // Friday and the weekend say the same thing.
+  for (const day of ['2026-10-02', '2026-10-03', '2026-10-04']) {
+    const p = at(day, ['2026-10-01']);
+    assert.equal(p.verdict, 'holding', day);
+    assert.equal(p.headline, 'Lifts up, week short — Squat est. 1RM +12 kg', day);
+  }
+  // Monday of the next week starts clean: no amber week line (it is the lapse, 4 days off, that holds the card then).
+  assert.ok(at('2026-10-05', ['2026-10-01']).reasons.every(r => r.kind !== 'week_sessions' || r.tone !== 'watch'));
+});
+
+test('headlineLift: the muscle card sends the key of the lift it leads with (sticky), and no other goal carries it (wave 22s)', () => {
+  const squat = computeGoalProgress(lapseInput(3));
+  assert.equal(squat.headlineLift, 'squat');
+  assert.match(squat.headline, /^Progressing — Squat est\. 1RM/);
+  // The most-trained lift that has a 4-week comparison, like the headline: bench has none here, so the squat leads.
+  const bench = [lw('2026-09-21', 100)];
+  assert.equal(computeGoalProgress(lapseInput(3, { progression: { squat: LAPSE_SQUAT, 'bench press': bench } })).headlineLift, 'squat');
+  // No lift in rotation: null, never undefined, for a muscle goal.
+  assert.equal(computeGoalProgress(lapseInput(3, { progression: {} })).headlineLift, null);
+  // Other goals: the key is absent (their payloads are byte-identical to before).
+  assert.equal('headlineLift' in computeGoalProgress(base({ goal: 'weight_loss', target: { weightKg: 80, date: null, weeklySessions: null } })), false);
+});
+
 test('a lapse is not a time to praise the scale: the weight line is neutral and about the lapse (wave 21)', () => {
   const weightReadings = ramp(30, 80, 0.03); // ~0.21 kg a week, 0.26% of bodyweight: inside the gain band
   const normal = computeGoalProgress(lapseInput(3, { weightReadings }));
   const praised = normal.reasons.find(r => r.kind === 'rate')!;
   assert.equal(praised.tone, 'good');
-  assert.match(praised.text, /inside the 0\.1–0\.5% safe band/);
+  assert.match(praised.text, /on pace for lean gain \(0\.1–0\.5% of bodyweight a week\)/);
+  // The first two weeks of a lapse: most of the 28-day rate is from before the break, so the line says so (wave 22s) - no blame.
+  const early = computeGoalProgress(lapseInput(8, { weightReadings }));
+  assert.match(early.reasons.find(r => r.kind === 'rate')!.text, /^Trend weight up 0\.\d+\skg\/wk, mostly from before the break$/);
+  assert.doesNotMatch(JSON.stringify(early), /with no training/);
   const lapsed = computeGoalProgress(lapseInput(14, { weightReadings }));
   assert.equal(lapsed.verdict, 'holding');
   const rate = lapsed.reasons.find(r => r.kind === 'rate')!;
   assert.match(rate.text, /^Trend weight up 0\.\d+ kg\/wk with no training$/);
   assert.equal(rate.tone, 'neutral');
-  assert.doesNotMatch(JSON.stringify(lapsed), /safe band/);
+  assert.doesNotMatch(JSON.stringify(lapsed), /safe band|lean gain/);
   // Pounds.
   assert.match(computeGoalProgress(lapseInput(14, { weightReadings, unitSystem: 'imperial' })).reasons.find(r => r.kind === 'rate')!.text, /^Trend weight up 0\.\d+ lb\/wk with no training$/);
   // A rate that is already a warning keeps its amber line.

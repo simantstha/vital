@@ -131,10 +131,19 @@ enum TrendsStrengthLogic {
     /// that is back — and is left out of the header's lifts-up / lifts-down
     /// counts. Without `liftReturns` (an older server) the single `liftReturn`
     /// decides, exactly as before.
+    ///
+    /// `headlineLift` (`GoalProgressDTO.headlineLift`, wave 22): the lift the server's
+    /// goal card leads with. The server's headline lift is STICKY (another lift takes
+    /// the lead only by out-training it by 2+ sessions for 2 weeks running), which this
+    /// file's local ranking (`rankedLiftKeys`) does not replay, so when the server sends
+    /// its key the first row is that lift — matched on `normalizedLiftKey` — and the
+    /// local `headlineLift(in:today:)` is only the fallback (no key: an older server, or
+    /// a goal that has none).
     static func card(
         from summary: WorkoutSummaryResponse, system: UnitSystem, today: Date,
         liftReturn: GoalProgressDTO.LiftReturn? = nil,
-        liftReturns: [GoalProgressDTO.LiftReturn]? = nil
+        liftReturns: [GoalProgressDTO.LiftReturn]? = nil,
+        headlineLift serverHeadlineLift: String? = nil
     ) -> Card? {
         let hasAnySets = summary.exercises.values.contains { stats in
             stats.contains { $0.totalSets > 0 }
@@ -169,7 +178,11 @@ enum TrendsStrengthLogic {
         if carriesSessionCounts(summary) {
             // The server's rule: the headline lift first, then the rest as ranked.
             var order = rankedLiftKeys(in: summary, today: today)
-            if let headline = headlineLift(in: summary, today: today),
+            let served = serverHeadlineLift.flatMap { key -> String? in
+                let wanted = normalizedLiftKey(key)
+                return order.first { normalizedLiftKey($0) == wanted }
+            }
+            if let headline = served ?? headlineLift(in: summary, today: today),
                let index = order.firstIndex(of: headline) {
                 order.remove(at: index)
                 order.insert(headline, at: 0)

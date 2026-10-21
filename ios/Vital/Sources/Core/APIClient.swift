@@ -2837,11 +2837,17 @@ struct GoalProgressDTO: Decodable, Equatable {
     /// when any entry fails to decode, in which case readers fall back to
     /// `liftReturn`.
     let liftReturns: [LiftReturn]?
+    /// Muscle goal, wave 22: the canonical key ("squat", "bench press") of the lift
+    /// the server's goal card leads with — its sticky headline lift (`headlineLift`
+    /// in `lib/goalProgress.ts`), which the Trends Strength card prefers to ranking
+    /// the lifts itself. `nil` when absent (older servers, other goals), empty or
+    /// not a string.
+    let headlineLift: String?
 
     private enum CodingKeys: String, CodingKey {
         case goal, target, distance, race, longRun, current, ratePerWeek, safeBand, eta, onPaceForTargetDate
         case verdict, headline, reasons, dataSufficiency, lastWeighInDaysAgo, adherence, reachedAt
-        case lastSessionDaysAgo, weightRead, liftReturn, liftReturns
+        case lastSessionDaysAgo, weightRead, liftReturn, liftReturns, headlineLift
     }
 
     init(
@@ -2865,7 +2871,8 @@ struct GoalProgressDTO: Decodable, Equatable {
         lastSessionDaysAgo: Int? = nil,
         weightRead: WeightRead? = nil,
         liftReturn: LiftReturn? = nil,
-        liftReturns: [LiftReturn]? = nil
+        liftReturns: [LiftReturn]? = nil,
+        headlineLift: String? = nil
     ) {
         self.goal = goal
         self.lastWeighInDaysAgo = lastWeighInDaysAgo
@@ -2875,6 +2882,7 @@ struct GoalProgressDTO: Decodable, Equatable {
         self.weightRead = weightRead
         self.liftReturn = liftReturn
         self.liftReturns = liftReturns
+        self.headlineLift = headlineLift
         self.target = target
         self.distance = distance
         self.race = race
@@ -2913,6 +2921,7 @@ struct GoalProgressDTO: Decodable, Equatable {
         weightRead = try? c.decode(WeightRead.self, forKey: .weightRead)
         liftReturn = try? c.decode(LiftReturn.self, forKey: .liftReturn)
         liftReturns = try? c.decode([LiftReturn].self, forKey: .liftReturns)
+        headlineLift = (try? c.decode(String.self, forKey: .headlineLift)).flatMap { $0.isEmpty ? nil : $0 }
     }
 
     /// A whole-day count sent as `5` or `5.0`; `nil` for null, missing or
