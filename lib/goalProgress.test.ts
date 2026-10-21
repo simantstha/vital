@@ -1733,7 +1733,9 @@ test('the verdict rests on the last finished week: no flip between rest days and
   const headlines = new Set<string>();
   for (const todayKey of ['2026-10-05', '2026-10-06', '2026-10-08', '2026-10-10', '2026-10-11']) {
     const p = computeGoalProgress(weekInput([wkOf(23), ...weeks], { todayKey }));
-    headlines.add(`${p.verdict}|${p.headline}`);
+    // Monday to Saturday it is last week's read; the last day (Sunday) judges the week that is done (wave 22e).
+    if (todayKey !== '2026-10-11') headlines.add(`${p.verdict}|${p.headline}`);
+    else assert.equal(p.headline, 'Week done — 23 of ~23 km, on plan');
     assert.equal(p.distance!.avg4wKm, 18); // the 4 finished weeks (21, 19, 17, 15) only
   }
   assert.deepEqual([...headlines], ['building|Building — 21 km last week (+11%), on plan']);

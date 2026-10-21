@@ -237,3 +237,19 @@ test('the race-eve conservative-start line speaks the runner\'s unit (22e)', () 
   assert.ok(metric.reasons.some(r => r.text === 'Start conservatively — the first few km easy'), texts(metric));
   assert.ok(imperial.reasons.some(r => r.text === 'Start conservatively — the first few miles easy'), texts(imperial));
 });
+
+// ── P2.9: the last day judges this week ────────────────────────────────────
+
+test('the Sunday headline judges the week that is done, in the words the Monday review will use (22e)', () => {
+  const sun = '2026-10-11'; // a build week, ~25 km (the step over 23)
+  const history = (thisWeek: number) => weeks(sun, [wk(thisWeek), wk(23), wk(21), wk(19), wk(17), wk(15)]);
+  const card = (km: number) => computeGoalProgress(input(history(km), { todayKey: sun }));
+  assert.equal(card(25).headline, 'Week done — 25 of ~25 km, on plan');
+  assert.equal(card(21).headline, 'Week done — 21 of ~25 km, a bit under the step');
+  assert.equal(card(13).headline, 'Behind — 13 of ~25 km this week');
+  assert.equal(card(13).verdict, 'behind');
+  assert.equal(card(29).headline, 'Week done — 29 of ~25 km, above the step');
+  // Saturday is still last week's read.
+  const sat = computeGoalProgress(input(weeks('2026-10-10', [[[1, 5], [3, 5], [5, 5]], wk(23), wk(21), wk(19), wk(17), wk(15)]), { todayKey: '2026-10-10' }));
+  assert.match(sat.headline, /last week/);
+});

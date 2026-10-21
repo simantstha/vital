@@ -741,8 +741,8 @@ invariant(RUNNERS, 'a comeback week more than 10% over its "up to" cap is never 
       const volume = rv.review.stats.find(st => st.label === 'Volume');
       if (volume?.tone === 'good') out.push({ snap: reviewSnap, detail: `review stat Volume "${visible(volume.value)}" is good-toned for ${d.thisWeekKm} of up to ~${d.stepTargetKm} km` });
     }
-    // The card of the week after: about last week until the next one is run.
-    for (let i = 0; i < 7; i++) {
+    // The card of the week after: about last week until the next one is run (its last day, Sunday, judges that week itself - wave 22e).
+    for (let i = 0; i < 6; i++) {
       const next = byDate.get(addDays(nextMonday, i));
       const nd = next?.card?.distance;
       if (!next || !nd || (nd.plan?.kind !== 'build' && nd.plan?.kind !== 'hold')) continue;
@@ -1377,7 +1377,7 @@ invariant(['runner_on_plan_imperial'], 'no card, coach line, opener or review st
 // every other line says), and the long run it keeps is at most half of them (the plan's peak target at that goal).
 const SHARE_NOTE_NUMBERS = /keep long runs ~(\d+(?:\.\d+)?)\s?(km|mi) on (\d+(?:\.\d+)?)\s?(?:km|mi) weeks/;
 
-invariant(RUNNERS, 'the long-run watch note names the goal\'s own weekly distance and a long run of at most half of it', (snaps, name) => {
+invariant(RUNNERS, 'the long-run watch note names the goal\'s own weekly distance and a long run of at most half of it', snaps => {
   const out: Violation[] = [];
   for (const snap of snaps) {
     const d = snap.card?.distance;
@@ -1391,5 +1391,26 @@ invariant(RUNNERS, 'the long-run watch note names the goal\'s own weekly distanc
       if (m[2] === 'mi' && /add easy km/.test(plain(t.text))) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" says km to a runner in miles` });
     }
   }
+  return out;
+});
+
+// ── wave 22e / P2.9: the last day of a week judges THIS week ────────────────
+
+invariant(RUNNERS, 'on the Sunday of a build or maintain week the card headline judges this week (its km), not "N km last week"', (snaps, name) => {
+  const out: Violation[] = [];
+  let sundays = 0;
+  for (const snap of snaps) {
+    const d = snap.card?.distance;
+    if (weekdayOf(snap.date) !== 'Sun' || !d?.plan || d.thisWeekKm == null || d.thisWeekKm <= 0) continue;
+    if (d.plan.kind !== 'build' && d.plan.kind !== 'maintain') continue;
+    if (d.plan.lightWeek || d.plan.easingOff || /^Over the safe step|^Well over|^Light week|^Eased off|^On a break/.test(plain(snap.card?.headline ?? ''))) continue;
+    sundays++;
+    const unit = /\bmi\b/.test(plain(d.text)) ? 'mi' : 'km';
+    const done = inDisplayUnit(d.thisWeekKm, unit);
+    const headline = plain(snap.card?.headline ?? '');
+    if (/\blast week\b/.test(headline)) out.push({ snap, detail: `headline "${visible(snap.card?.headline ?? '')}" is about last week on the last day of a week that ran ${done} ${unit}` });
+    else if (d.plan.kind === 'build' && !new RegExp(`(?:^|[^\\d.])${String(done).replace('.', '\\.')}(?:\\s?${unit})?(?:\\s|,|;|$)`).test(headline)) out.push({ snap, detail: `headline "${visible(snap.card?.headline ?? '')}" does not carry this week's ${done} ${unit}` });
+  }
+  assert.ok(sundays > 0 || name === 'runner_on_plan_imperial', `${name}: no build or maintain Sunday was stepped, so this invariant checked nothing`);
   return out;
 });

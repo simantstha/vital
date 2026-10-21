@@ -153,6 +153,7 @@ import {
   formatRaceTime,
   floorLongRunKm,
   formatTargetLongRun,
+  comebackCapRead,
   gradeEnduranceWeek,
   isWindDownPhase,
   longRunCapNote,
@@ -176,6 +177,7 @@ import {
   type PlanRun,
   type RacePhase,
   type RacePhaseInfo,
+  type WeekGrade,
 } from './enduranceProgression';
 
 // ── Constants ───────────────────────────────────────────────────────────────
@@ -2988,6 +2990,37 @@ function enduranceSessionsReason(input: GoalProgressInput): GoalProgressReason |
 }
 
 /**
+ * The last day of a build / maintain week: the week is done, so the headline is about THIS week against its own target - the grade the Monday
+ * review gives it, in the same words ("24 of up to ~22 km, on plan", "a touch over, fine", "above the step", "a bit under the step"). Null when
+ * the week is fine and the usual headline (the goal, the long run) says it better: a maintain week that was good.
+ */
+function thisWeekDoneOutcome(
+  input: GoalProgressInput, plan: EnduranceWeekPlan, grade: WeekGrade, doneKm: number, target: number,
+  finish: (verdict: GoalVerdict, headline: string, reasons: GoalProgressReason[]) => Outcome,
+  planBody: () => GoalProgressReason[],
+): Outcome | null {
+  const fmt = (km: number): string => fmtDistance(input, km);
+  const done = distanceNum(input, doneKm);
+  const stepped = target < plan.goalKm - 1e-9;
+  const ceiling = plan.upTo ? 'up to ~' : stepped ? '~' : '';
+  // A cutback that was skipped has its own headline ("Cutback week - 25 of ~20 km, above the cutback"), said on any day.
+  if (plan.cutback != null && doneKm > target * CUTBACK_SKIPPED_FRACTION) return null;
+  if (plan.kind === 'maintain') {
+    if (grade.level === 'good') return null;
+    return grade.level === 'tough'
+      ? finish('behind', `Behind — ${done} of ${fmt(plan.goalKm)} this week`, planBody())
+      : finish('holding', `Holding steady — ${done} of ${fmt(plan.goalKm)} this week`, planBody());
+  }
+  if (grade.level === 'tough') return finish('behind', `Behind — ${done} of ~${fmt(target)} this week`, planBody());
+  const read = plan.upTo ? comebackCapRead(plan, doneKm, unitsPerKm(input)) : 'within';
+  const note = read !== 'within' ? overCapPhrase(read)
+    : grade.level === 'mixed' ? 'a bit under the step'
+    : doneKm > target * ABOVE_STEP_FRACTION ? (plan.cutback != null ? 'above the cutback' : 'above the step')
+    : 'on plan';
+  return finish('building', `Week done — ${done} of ${ceiling}${fmt(target)}, ${note}`, planBody());
+}
+
+/**
  * The endurance verdict for a runner with a weekly distance goal and measured
  * running, from the ONE week plan the weekly review also reads. It rests on
  * FINISHED weeks and on the week's own band, never on a rolling 14-day
@@ -3153,7 +3186,12 @@ function planOutcome(input: GoalProgressInput, ec: EnduranceCtx, race: GoalRaceP
       break;
   }
 
-  // Build and maintain: the verdict is how last week went against its own plan.
+  // Build and maintain: the verdict is how last week went against its own plan - except on the week's LAST day (wave 22e), when the week is
+  // done and the headline judges THIS week, the one the Monday review will grade (the same words, the same grade).
+  if (weekdayOf(input.todayKey) === 0 && (plan.kind === 'build' || plan.kind === 'maintain') && doneKm > 0 && current != null && current.level !== 'light') {
+    const thisWeek = thisWeekDoneOutcome(input, plan, current, doneKm, target, finish, planBody);
+    if (thisWeek != null) return thisWeek;
+  }
   const level = last?.grade?.level ?? 'good';
   const lastKm = last?.km ?? 0;
   const lastPlanKm = last?.targetKm ?? null;
