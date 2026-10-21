@@ -1414,3 +1414,66 @@ invariant(RUNNERS, 'on the Sunday of a build or maintain week the card headline 
   assert.ok(sundays > 0 || name === 'runner_on_plan_imperial', `${name}: no build or maintain Sunday was stepped, so this invariant checked nothing`);
   return out;
 });
+
+// ═══ wave 22e / P3: small copy honesty ═══════════════════════════════════════
+
+invariant(RUNNERS, 'day 0 (nothing run yet) reads "baseline week", not "0 of 30 km running this week"', (snaps, name) => {
+  const day0 = snaps.find(s => s.idx === 0);
+  if (!day0) return []; // the imperial scenario only steps the days around phase changes
+  const text = plain(day0.card?.distance?.text ?? '');
+  assert.ok(text !== '', `${name}: day 0 has no distance line`);
+  return /baseline week/.test(text) ? [] : [{ snap: day0, detail: `distance.text "${visible(day0.card?.distance?.text ?? '')}"` }];
+});
+
+invariant(RUNNERS, 'every "On a break" card says what to do if the break was an illness', (snaps) => {
+  const out: Violation[] = [];
+  for (const snap of snaps) {
+    if (!/^On a break/.test(plain(snap.card?.headline ?? ''))) continue;
+    if (!cardTexts(snap).some(t => /if you were ill, wait until you've been symptom-free for 24–48 h/i.test(plain(t.text)))) out.push({ snap, detail: `"${visible(snap.card?.headline ?? '')}" has no illness guard` });
+  }
+  return out;
+});
+
+invariant(RUNNERS, 'a rebuild week names its long run on the card (the coach and the review already do)', (snaps) => {
+  const out: Violation[] = [];
+  for (const snap of snaps) {
+    const plan = snap.card?.distance?.plan;
+    if (plan?.kind !== 'rebuild' || plan.longRunKm == null) continue;
+    if (!/long run/i.test(plain(plan.purpose))) out.push({ snap, detail: `rebuild purpose "${visible(plan.purpose)}" with a ${plan.longRunKm} km long run planned` });
+  }
+  return out;
+});
+
+invariant(RUNNERS, 'the sessions line never reads "0–4 runs a week" - after a break it is "N runs a week before your break"', (snaps) =>
+  textMatches(snaps, cardTexts, /^0(?:–| or )\d+ runs? a week/));
+
+invariant(RUNNERS, 'race week never says "keep the days before the race ≤ N km" next to "rest 1-2 days": it says to rest tomorrow and shake out the day before', (snaps) =>
+  textMatches(snaps, s => [...cardTexts(s), ...coachTexts(s)], /keep the days before the race ≤/));
+
+invariant(['runner_on_plan', 'runner_on_plan_half', 'runner_on_plan_obedient', 'runner_messy'], "recovery week 1's Volume stat says the week before it held the race (\"excl. the race\"), not \"same as last week\"", (snaps, name) => {
+  const scn = buildScenario(name);
+  const out: Violation[] = [];
+  let checked = 0;
+  for (const snap of snaps) {
+    const rv = snap.review;
+    if (!rv || scn.user.raceDate == null || rv.weekStart !== addDays(scn.user.raceDate, 1)) continue;
+    checked++;
+    const volume = rv.review.stats.find(st => st.label === 'Volume');
+    if (volume && !/race/i.test(plain(volume.comparison ?? ''))) out.push({ snap, detail: `Volume "${visible(volume.value)}" — "${visible(volume.comparison ?? '')}"` });
+  }
+  assert.ok(checked > 0, `${name}: no recovery-week-1 review was stepped, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(RUNNERS, 'the coach never says a long run is "held" when it is lower than the last one (it "eased to ... (half the week)")', (snaps) => {
+  const out: Violation[] = [];
+  for (const snap of snaps) {
+    const last = snap.card?.longRun?.lastKm;
+    if (last == null) continue;
+    for (const t of coachTexts(snap)) {
+      const m = /long run (\d+(?:\.\d+)?) (?:km|mi) held/.exec(plain(t.text));
+      if (m && inDisplayUnit(last, /\bmi\b/.test(plain(snap.card?.distance?.text ?? '')) ? 'mi' : 'km') - Number(m[1]) > 0.55) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" but the last long run was ${last} km` });
+    }
+  }
+  return out;
+});

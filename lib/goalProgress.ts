@@ -2455,7 +2455,7 @@ function distanceProgress(input: GoalProgressInput): GoalDistanceProgress | null
   let text: string;
   if (eve) text = 'Race tomorrow';
   else if (raceDay) text = raceNow?.completed ? `Race done — ${fmtDistance(input, raceNow.completed.km)}` : 'Race day';
-  else if (plan?.kind === 'baseline') text = `${fmtDistance(input, doneKm)} so far · baseline week`;
+  else if (plan?.kind === 'baseline' || !hasData) text = `${fmtDistance(input, doneKm)} so far · baseline week`;
   else if (plan?.kind === 'recovery') {
     // Just over the ceiling but inside its 10% slack is "right at" it, never "7.5 of up to 7".
     const slack = withinCeilingSlack(input, doneKm, stepKm);
@@ -2783,6 +2783,9 @@ function changeClause(changePct: number | null): string {
   return ` (${changePct > 0 ? '+' : '−'}${Math.abs(changePct)}%)`;
 }
 
+/** On a break: if the break was an illness, the restart waits for the body. */
+const ILLNESS_GUARD = "If you were ill, wait until you've been symptom-free for 24–48 h first";
+
 /** From this share of the week's target (not yet run) the card says what is left: "keep the rest to one short easy run". */
 const STEP_NEAR_FRACTION = 0.7;
 
@@ -2832,9 +2835,11 @@ function windDownLine(
   // Race week with the race still ahead: the budget is for the days before it (tomorrow's run is a short shakeout at most).
   if (phase === 'race_week' && toGo != null && toGo >= 2) {
     if (doneKm > 0 && doneKm >= target * 0.5 && left >= 1 / u) {
-      const when = toGo === 2 ? "tomorrow's run" : 'the days before the race';
-      const cap = toGo === 2 ? Math.min(left, (u < 1 ? 2 : 3) / u) : left;
-      return { kind: 'race_phase', text: `${label}: ${progress} — keep ${when} ≤ ${fmtDistance(input, cap)}`, tone: 'neutral' };
+      // Two days out the leftover is tomorrow's short run; further out the days before the race are for rest, then a shakeout the day before
+      // (never "keep the days before the race <= 7 km" next to "rest 1-2 days" and a 3 km Friday).
+      if (toGo !== 2) return { kind: 'race_phase', text: `${label}: ${progress} — rest tomorrow, then a 15-min shakeout the day before the race`, tone: 'neutral' };
+      const cap = Math.min(left, (u < 1 ? 2 : 3) / u);
+      return { kind: 'race_phase', text: `${label}: ${progress} — keep tomorrow's run ≤ ${fmtDistance(input, cap)}`, tone: 'neutral' };
     }
     return { kind: 'race_phase', text: plan.purpose, tone: 'neutral' };
   }
@@ -2973,6 +2978,8 @@ function wholeWeeksSessionsReason(input: GoalProgressInput): GoalProgressReason 
       ? { kind: 'sessions', text: `${thisWeek} ${plural(thisWeek, noun)} so far this week`, tone: 'neutral' }
       : null;
   }
+  // A week or more with no run at all in the window is a break: "0–4 runs a week" averages it into nonsense, so say what the usual was.
+  if (lo === 0 && hi > 0) return { kind: 'sessions', text: `${hi} ${plural(hi, noun)} a week before your break`, tone: 'neutral' };
   const rate = lo === hi ? `${hi}` : hi - lo === 1 ? `${lo} or ${hi}` : `${lo}–${hi}`;
   const span = counts.length >= 3 ? `over the last ${counts.length} weeks` : 'so far';
   return { kind: 'sessions', text: `${rate} ${plural(hi, noun)} a week ${span}`, tone: 'neutral' };
@@ -3081,9 +3088,10 @@ function planOutcome(input: GoalProgressInput, ec: EnduranceCtx, race: GoalRaceP
       ? `, then build back toward your usual ~${fmt(usual)}`
       : plan.restartKm >= plan.goalKm - 1e-9 ? '' : ', then build about 10% a week';
     // The number is "if you restart tomorrow": past two weeks off it drops a band, and the card says why instead of changing silently.
-    const restartText = plan.restartLong
+    // (A break can be an illness: the same line says when it is safe to start again.)
+    const restartText = `${plan.restartLong
       ? `Two weeks off now — restart a bit lower, ~${fmt(plan.restartKm)}, with easy runs${after}`
-      : `Restart at ~${fmt(plan.restartKm)} with easy runs${after}`;
+      : `Restart at ~${fmt(plan.restartKm)} with easy runs${after}`}. ${ILLNESS_GUARD}`;
     return finish('building', `On a break — ${days} days since your last run. Restart at ~${fmt(plan.restartKm)}.`, body(
       { kind: 'plan', text: restartText, tone: 'neutral' },
     ));

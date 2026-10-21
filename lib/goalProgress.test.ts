@@ -845,7 +845,7 @@ test('endurance distance step: a week with no running restarts at ~75% of the re
     target: { weightKg: null, date: null, weeklySessions: 3, weeklyDistanceKm: 30 },
   }));
   assert.equal(noData.distance!.stepTargetKm, 30);
-  assert.equal(noData.distance!.text, '0 of 30 km running this week');
+  assert.equal(noData.distance!.text, '0 km so far · baseline week'); // wave 22e: nothing run yet is the baseline, not "0 of 30 km"
   assert.equal(noData.distance!.plan, undefined);
 });
 

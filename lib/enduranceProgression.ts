@@ -1317,7 +1317,7 @@ function purposeLine(plan: Omit<EnduranceWeekPlan, 'purpose'>): string {
       return `Restart at ~${formatKm(t ?? plan.restartKm, u)} this week with easy runs${lrPart ? `; ${lrPart}` : ''}`;
     case 'rebuild': {
       const atGoal = t != null && t >= plan.goalKm - 1e-9;
-      return `Rebuilding: ~${formatKm(t ?? plan.goalKm, u)} this week, easy runs${atGoal ? '' : ', then add about 10% a week'}`;
+      return `Rebuilding: ~${formatKm(t ?? plan.goalKm, u)} this week, easy runs${lrPart ? `, ${lrPart}` : ''}${atGoal ? '' : ', then add about 10% a week'}`;
     }
     case 'taper': {
       const reps = racePaceReps(u);

@@ -128,7 +128,12 @@ function weekTargetLine(gp: GoalProgress, units: UnitSystem): string | null {
   }
   // Every 4th plain build / maintain week: ~80% of the week it replaces, the long run held.
   if (plan.cutback) {
-    return `- This week's target: a cutback week, ~${t}${lr ? `; ${lr} held` : ''} — absorb the last three weeks; do not push past it${strides}`;
+    // The long run is held where it was - unless the lowered week cannot carry it (never more than half of it): then it is "eased".
+    const last = gp.longRun?.lastKm;
+    const unitsPerKm = units === 'imperial' ? 1 / KM_PER_MILE : 1;
+    const eased = plan.longRunKm != null && last != null && (last - plan.longRunKm) * unitsPerKm >= 0.5 - 1e-9;
+    const longPart = plan.longRunKm == null ? '' : eased ? `; long run eased to ${longRunText(plan.longRunKm, units)} (half the week)` : `; ${lr} held`;
+    return `- This week's target: a cutback week, ~${t}${longPart} — absorb the last three weeks; do not push past it${strides}`;
   }
   switch (plan.kind) {
     case 'baseline':

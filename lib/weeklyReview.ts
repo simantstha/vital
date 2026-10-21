@@ -995,6 +995,10 @@ function planVolumeCandidate(input: WeeklyReviewInput, rp: ReviewPlans): Candida
     const ceiling = plan.targetKm != null ? plan.targetKm * PHASE_CEILING_TOLERANCE : null;
     comparison = ceiling != null && km > ceiling ? `excl. the race · plan was ~${distanceText(input, plan.targetKm as number)}` : 'excl. the race';
   }
+  // The week after the race (recovery week 1): the week before it held the race, which is not in its km - say so, not "same as last week".
+  else if (input.raceDate != null && input.raceDate >= addDays(input.weekStart, -7) && input.raceDate < input.weekStart && prevKm > 0) {
+    comparison = `${distanceText(input, prevKm)} last week, excl. the race`;
+  }
   else if (km <= 0 && prevKm <= 0) comparison = plan.daysSinceRun != null ? `${plan.daysSinceRun} days since your last run` : 'none logged';
   else if (km <= 0) comparison = `none logged · ${distanceText(input, prevKm)} last week`;
   // After a hold week or a restart the % against the jump / the sick week is not growth: say what it follows.

@@ -253,3 +253,24 @@ test('the Sunday headline judges the week that is done, in the words the Monday 
   const sat = computeGoalProgress(input(weeks('2026-10-10', [[[1, 5], [3, 5], [5, 5]], wk(23), wk(21), wk(19), wk(17), wk(15)]), { todayKey: '2026-10-10' }));
   assert.match(sat.headline, /last week/);
 });
+
+// ── P3: small copy honesty ─────────────────────────────────────────────────
+
+test('day 0 reads "baseline week"; a break card carries the illness guard; the sessions line says "before your break" (22e)', () => {
+  const day0 = computeGoalProgress(input([], { todayKey: '2026-10-05', start: { weightKg: null, startedAt: null, startedDay: '2026-10-05' } }));
+  assert.equal(day0.distance!.text, '0 km so far · baseline week');
+  // Two empty weeks after a run of 4-run weeks: on a break, with the guard, and the usual run count named.
+  const sun = '2026-10-25';
+  const card = computeGoalProgress(input(weeks(sun, [[], [], wk(25), wk(23), wk(21), wk(19), wk(17), wk(15)]), { todayKey: sun }));
+  assert.match(card.headline, /^On a break/);
+  assert.match(card.reasons.find(r => r.kind === 'plan')!.text, /If you were ill, wait until you've been symptom-free for 24–48 h first$/);
+  assert.equal(card.reasons.find(r => r.kind === 'sessions')!.text, '4 runs a week before your break');
+});
+
+test('a race-week day with most of the budget used says to rest tomorrow and shake out the day before - not "keep the days before the race <= N km" (22e)', () => {
+  const race = { date: '2026-10-11', distanceKm: 21.1 };
+  const thu = '2026-10-08'; // 3 days out
+  const card = computeGoalProgress(input(weeks(thu, [[[1, 6], [3, 6]], wk(30), wk(30), wk(30)]), { todayKey: thu, race, racePeakWeekKm: 30 }));
+  const line = card.reasons.find(r => r.kind === 'race_phase')!.text;
+  assert.equal(line, 'Race week: 12 of ~15 km — rest tomorrow, then a 15-min shakeout the day before the race');
+});

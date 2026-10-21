@@ -86,3 +86,12 @@ test('a comeback week\'s "Next week" climbs "back toward your usual ~N km", as t
   const r = computeWeeklyReview(planReview(history));
   assert.match(r.nextWeek, /^Build up to ~\d+ km: long run [\d.]+ km, the rest mostly easy runs; then add ~10% a week, back toward your usual ~22 km\.$/);
 });
+
+test('recovery week 1\'s Volume stat says the week before held the race (22e)', () => {
+  // A half on Sun 2026-10-11; reviewing recovery week 1 (10-12 -> 10-18) after race week (12 km without the race).
+  const race = { raceDate: '2026-10-11', raceDistanceKm: 21.1 };
+  const base = planReview([15, 17, 19, 21, 23, 25, 12, 8], { weekStart: '2026-10-12', ...race });
+  const r = computeWeeklyReview(base);
+  // (The 12 km race-week fixture's Sunday run is the race day itself: 7.2 km of it is training.)
+  assert.equal(r.stats.find(st => st.label === 'Volume')!.comparison, '7.2 km last week, excl. the race');
+});

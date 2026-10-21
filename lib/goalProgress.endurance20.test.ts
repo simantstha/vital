@@ -96,7 +96,8 @@ test('race week: only the days BEFORE the race share what is left of the budget;
   ));
   // Race Sunday 2026-10-11: 5 days out, 12 of 20 km run.
   const early = day(5, [6, 6]);
-  assert.equal(early.reasons.find(r => r.kind === 'race_phase')!.text, 'Race week: 12 of ~20 km — keep the days before the race ≤ 8 km');
+  // (Wave 22e: not "keep the days before the race <= 8 km" next to "rest 1-2 days" - rest tomorrow, a shakeout the day before.)
+  assert.equal(early.reasons.find(r => r.kind === 'race_phase')!.text, 'Race week: 12 of ~20 km — rest tomorrow, then a 15-min shakeout the day before the race');
   // The day before the eve: tomorrow's run is a short shakeout, never the whole leftover.
   const friday = computeGoalProgress(input(
     [run('2026-10-09', 3), run('2026-10-08', 5), run('2026-10-07', 5), ...history],
@@ -180,7 +181,7 @@ test('a break is 7 days, not 5: the target does not drop mid-week, and the card 
   const week2 = computeGoalProgress(input(weeks('2026-10-12', [[], [], ...lastWeeks]), { todayKey: '2026-10-12' }));
   assert.equal(week2.distance!.plan?.kind, 'restart');
   assert.equal(week2.distance!.stepTargetKm, 15);
-  assert.match(week2.reasons.find(r => r.kind === 'plan')!.text, /^Restart at ~15 km with easy runs, then build back toward your usual ~20 km$/);
+  assert.match(week2.reasons.find(r => r.kind === 'plan')!.text, /^Restart at ~15 km with easy runs, then build back toward your usual ~20 km\. If you were ill, wait until you've been symptom-free for 24–48 h first$/);
   const week3 = computeGoalProgress(input(weeks('2026-10-19', [[], [], [], ...lastWeeks]), { todayKey: '2026-10-19' }));
   assert.equal(week3.distance!.stepTargetKm, 11);
 });
