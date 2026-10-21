@@ -1993,20 +1993,23 @@ function liftReturnOutcome(rets: GoalLiftReturn[], input: GoalProgressInput): { 
 /**
  * The lift reasons of a return, at most two:
  *  - some lifts back and one not: the lift furthest behind first, then one that is back;
- *  - none back yet: the headline lift's own line, plus the lift furthest behind
- *    when it is 3+ points under it (so a lagging lift is not hidden behind a
- *    better one) — otherwise just the headline lift, leaving room for the break line;
+ *  - none back yet: the headline lift's own line, then ONE line with where each other lift stands ("Deadlift 94% of its
+ *    pre-break best" / "Bench Press 95%, Deadlift 94% of their pre-break bests"). It used to appear only when the
+ *    lagging lift was 3+ points under the headline lift, so it came and went with one session (days 71-78: hidden, shown, hidden);
  *  - every lift back: the first two.
  */
 function liftReturnReasons(rets: GoalLiftReturn[], input: GoalProgressInput): GoalProgressReason[] {
   const behind = furthestBehindReturn(rets);
   const back = rets.find(r => r.regained);
+  if (behind != null && back == null && rets.length > 1) {
+    const others = rets.slice(1);
+    const standing = others.map(r => `${r.name} ${returnNumbers(r, input).pct}%`).join(', ');
+    return [liftReturnReason(rets[0], input), { kind: 'lift', text: `${standing} of ${others.length === 1 ? 'its pre-break best' : 'their pre-break bests'}`, tone: 'neutral' }];
+  }
   let picked: GoalLiftReturn[];
   if (behind != null && back != null) picked = [behind, back];
-  else if (behind != null) {
-    const lead = returnNumbers(rets[0], input);
-    picked = behind !== rets[0] && returnNumbers(behind, input).pct <= lead.pct - 3 ? [rets[0], behind] : [rets[0]];
-  } else picked = rets.slice(0, 2);
+  else if (behind != null) picked = [rets[0]];
+  else picked = rets.slice(0, 2);
   return picked.map(r => liftReturnReason(r, input));
 }
 

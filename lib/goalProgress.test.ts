@@ -2199,11 +2199,15 @@ test('return from a break: "Building back", not "Stalled" — verdict building, 
   assert.ok(p.reasons.every(r => r.tone !== 'watch'), JSON.stringify(p.reasons));
   assert.equal(p.reasons[0].kind, 'lift');
   assert.equal(p.reasons[0].text, 'Squat est. 1RM 136 kg, 96% of your 142 kg pre-break best'); // 136 / 142 rounds to 96 (wave 21: not floored)
-  assert.ok(p.reasons.some(r => r.text === 'Back after a 15-day break (ended Sep 27)'));
+  // Bench is rebuilding too (wave 22s): its standing is its own line, always (no 3-point hide rule), and takes the break line's room.
+  assert.equal(p.reasons[1].text, 'Bench Press 94% of its pre-break best');
   assert.doesNotMatch(JSON.stringify(p), /Stalled|stalled|vs 4 weeks ago/);
   assert.deepEqual(p.liftReturn, {
     exercise: 'squat', name: 'Squat', breakDays: 15, endedOn: '2026-09-27', preBreakKg: 142, recentKg: 136, pct: 95, regained: false,
   });
+  // With only the headline lift rebuilding there is room for the break line.
+  const alone = computeGoalProgress(breakInput({ squat: squatBack(136, 136) }));
+  assert.ok(alone.reasons.some(r => r.text === 'Back after a 15-day break (ended Sep 27)'), JSON.stringify(alone.reasons));
   // The 28-day session window still holds the break: never "Sessions behind" and never an amber adherence lead.
   assert.notEqual(p.verdict, 'behind');
   assertWellFormed(p);
@@ -2299,12 +2303,15 @@ test('return from a break, lift by lift: several lifts back and one behind, and 
   assert.equal(two.verdict, 'building');
   assert.equal(two.headline, 'Squat back above pre-break; deadlift at 98% (155 of 158 kg est. 1RM)');
   assert.deepEqual(two.liftReturns!.map(r => r.exercise).sort(), ['bench press', 'deadlift', 'squat']);
-  // Nothing back yet: the headline lift's own "Building back" line; a lift 3+ points further behind gets its own reason.
+  // Nothing back yet: the headline lift's own "Building back" line, then where every other rebuilding lift stands (wave 22s: whatever the gap).
   const none = computeGoalProgress(longBreakInput({ squat: [...LONG_BREAK_SQUAT.slice(0, 4), lw('2026-09-21', 134), lw('2026-09-28', 136)], deadlift: longBreakDeadlift(140, 142) }));
   assert.equal(none.verdict, 'building');
   assert.equal(none.headline, 'Building back — Squat est. 1RM 136 of 142 kg pre-break');
   assert.equal(none.reasons[0].text, 'Squat est. 1RM 136 kg, 96% of your 142 kg pre-break best');
-  assert.equal(none.reasons[1].text, 'Deadlift est. 1RM 142 kg, 90% of your 158 kg pre-break best');
+  assert.equal(none.reasons[1].text, 'Deadlift 90% of its pre-break best');
+  // Only 2 points apart (96% / 94%) it is still there: the line no longer comes and goes with a session (days 71-78).
+  const close = computeGoalProgress(longBreakInput({ squat: [...LONG_BREAK_SQUAT.slice(0, 4), lw('2026-09-21', 134), lw('2026-09-28', 136)], deadlift: longBreakDeadlift(147, 149) }));
+  assert.equal(close.reasons[1].text, 'Deadlift 94% of its pre-break best');
   // An accessory never holds the claim back: lat pulldown at 90% does not stop "Back above".
   const accessory = computeGoalProgress(longBreakInput({ squat: LONG_BREAK_SQUAT, 'lat pulldown': [lw('2026-08-17', 80), lw('2026-08-24', 85), lw('2026-09-21', 70)] }));
   assert.equal(accessory.headline, 'Back above your pre-break best — Squat est. 1RM 145 kg (was 142 kg)');

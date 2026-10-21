@@ -1048,3 +1048,30 @@ invariant(LIFTERS, 'a review of a week with at most half its planned sessions ha
   if (name === 'lifter_short_week') assert.ok(slack > 0, `${name}: no slack week was reviewed, so this invariant checked nothing`);
   return out;
 });
+
+// While EVERY lift is still rebuilding after a break, the card and the coach line say where each one stands. The card named only the
+// headline squat ("Building back — Squat est. 1RM 136 of 142 kg") while the deadlift sat at 94%, and the deadlift line came and went
+// (days 71-76 hidden, day 77 shown, day 78 hidden after she deadlifted: a 3-point hide rule). The percentages are the displayed ones.
+invariant(LIFTERS, 'while every lift is rebuilding, the card reasons and the coach line give each lift\'s percentage of its pre-break best', (snaps, name) => {
+  const out: Violation[] = [];
+  let days = 0;
+  for (const snap of snaps) {
+    const rets = snap.card?.liftReturns;
+    if (!rets || rets.length < 2 || rets.some(r => r.regained)) continue;
+    days++;
+    const imperial = buildScenario(name).profile.units === 'imperial';
+    const card = plain(snap.card?.reasons.map(r => r.text).join(' | ') ?? '');
+    const coach = plain((snap.coach ?? []).join(' | '));
+    for (const r of rets) {
+      const f = imperial ? 2.20462 : 1;
+      const pre = Math.round(r.preBreakKg * f);
+      const recent = Math.min(Math.round(r.recentKg * f), pre - 1);
+      const pct = Math.min(99, Math.round((recent / pre) * 100));
+      const label = r.name.toLowerCase();
+      if (!new RegExp(`${label}[^|]*\\b${pct}%`, 'i').test(card)) out.push({ snap, detail: `card reasons do not give ${r.name} at ${pct}%: "${visible(card)}"` });
+      if (!new RegExp(`${label} ${pct}% of its pre-break best`, 'i').test(coach)) out.push({ snap, detail: `coach lines do not give ${r.name} at ${pct}%: "${visible(coach)}"` });
+    }
+  }
+  if (name === 'lifter') assert.ok(days > 0, `${name}: no day had two or more lifts all rebuilding, so this invariant checked nothing`);
+  return out;
+});
