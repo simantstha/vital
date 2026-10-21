@@ -955,16 +955,18 @@ function rateReason(input: GoalProgressInput, w: WeightBlock, band: { minPct: nu
   let tone: ReasonTone = 'neutral';
   if (band) {
     const wantedDir = input.goal === 'weight_loss' ? w.rateKg < 0 : w.rateKg > 0;
+    // A lifter is told what the range is for ("on pace for lean gain"), not that it is a "safe band" with a "floor" and a "ceiling".
+    const lean = input.goal === 'muscle';
     if (!flat && wantedDir && abs >= band.minPct && abs < band.maxPct) {
       tone = 'good';
-      text += `, inside the ${band.minPct}–${band.maxPct}% safe band`;
+      text += lean ? `, on pace for lean gain (${band.minPct}–${band.maxPct}% of bodyweight a week)` : `, inside the ${band.minPct}–${band.maxPct}% safe band`;
     } else if (!flat && wantedDir && abs >= band.maxPct) {
       // At (not just above) the top of the band is already worth a flag.
       tone = 'watch';
-      text += `, at or above the ${band.maxPct}% a week ceiling`;
+      text += lean ? `, above the ${band.maxPct}% of bodyweight a week that keeps gain lean` : `, at or above the ${band.maxPct}% a week ceiling`;
     } else if (flat || wantedDir) {
       tone = 'neutral';
-      text += `, under the ${band.minPct}% a week floor`;
+      text += lean ? `, slower than lean gain (${band.minPct}–${band.maxPct}% of bodyweight a week)` : `, under the ${band.minPct}% a week floor`;
     } else {
       tone = 'watch';
       text += ', the opposite way from your goal';

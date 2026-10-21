@@ -1178,3 +1178,7 @@ test('lifter_imperial: the weekly weight stat says "no change" on exactly the Mo
   assert.ok(metric.length > 0, 'lifter has no "no change" week, so this test checked nothing');
   assert.deepEqual(imperial, metric);
 });
+
+// "inside the 0.1–0.5% safe band" / "under the 0.1% a week floor" is jargon to a lifter. The muscle card says what the range is for.
+invariant(LIFTERS, 'no card, coach line or opener calls the weight range a "safe band", "floor" or "ceiling"', snaps =>
+  textMatches(snaps, s => [...cardTexts(s), ...coachTexts(s)], /safe band|a week floor|a week ceiling/i));

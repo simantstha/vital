@@ -418,7 +418,7 @@ test('muscle: weight gain at/above the top of the band is a watch reason', () =>
   const rate = p.reasons.find(r => r.kind === 'rate');
   assert.ok(rate, 'rate reason surfaced');
   assert.equal(rate!.tone, 'watch');
-  assert.match(rate!.text, /ceiling/);
+  assert.match(rate!.text, /above the 0\.5% of bodyweight a week that keeps gain lean/);
 });
 
 test('muscle: ETA toward the target weight when gaining inside the band', () => {
@@ -2388,8 +2388,8 @@ test('weight rate: under 0.05% a week reads "flat" and every threshold uses the 
     const r = mk(0.009 + i * 0.0001);
     if (!r) continue;
     const printed = Number(/\(([\d.]+)% of bodyweight\)/.exec(r.text)![1]);
-    if (printed >= 0.1) assert.doesNotMatch(r.text, /under the/, r.text);
-    else assert.match(r.text, /under the 0\.1% a week floor|flat/, r.text);
+    if (printed >= 0.1) assert.doesNotMatch(r.text, /under the|slower than lean gain/, r.text);
+    else assert.match(r.text, /slower than lean gain \(0\.1–0\.5% of bodyweight a week\)|flat/, r.text);
   }
 });
 
@@ -2969,7 +2969,7 @@ test('a lapse is not a time to praise the scale: the weight line is neutral and 
   const normal = computeGoalProgress(lapseInput(3, { weightReadings }));
   const praised = normal.reasons.find(r => r.kind === 'rate')!;
   assert.equal(praised.tone, 'good');
-  assert.match(praised.text, /inside the 0\.1–0\.5% safe band/);
+  assert.match(praised.text, /on pace for lean gain \(0\.1–0\.5% of bodyweight a week\)/);
   // The first two weeks of a lapse: most of the 28-day rate is from before the break, so the line says so (wave 22s) - no blame.
   const early = computeGoalProgress(lapseInput(8, { weightReadings }));
   assert.match(early.reasons.find(r => r.kind === 'rate')!.text, /^Trend weight up 0\.\d+\skg\/wk, mostly from before the break$/);
@@ -2979,7 +2979,7 @@ test('a lapse is not a time to praise the scale: the weight line is neutral and 
   const rate = lapsed.reasons.find(r => r.kind === 'rate')!;
   assert.match(rate.text, /^Trend weight up 0\.\d+ kg\/wk with no training$/);
   assert.equal(rate.tone, 'neutral');
-  assert.doesNotMatch(JSON.stringify(lapsed), /safe band/);
+  assert.doesNotMatch(JSON.stringify(lapsed), /safe band|lean gain/);
   // Pounds.
   assert.match(computeGoalProgress(lapseInput(14, { weightReadings, unitSystem: 'imperial' })).reasons.find(r => r.kind === 'rate')!.text, /^Trend weight up 0\.\d+ lb\/wk with no training$/);
   // A rate that is already a warning keeps its amber line.
