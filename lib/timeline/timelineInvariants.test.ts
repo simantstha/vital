@@ -861,6 +861,31 @@ invariant(WEIGHT, 'the reached question never ends in the middle of a calendar w
   return out;
 });
 
+// P2-4: when the plan's call is ahead / too fast / nearly there, or there is a kilo or less to go, the review's "Next week" never pushes
+// restriction (a weekend tip, "decide the meal ahead"): it is the plan's own instruction, else "Keep your routine - no need to tighten anything".
+const NO_NEED_TO_TIGHTEN = 'Keep your routine — no need to tighten anything';
+
+invariant(WEIGHT, "the review's next week does not tighten anything while the plan says ahead, too fast, nearly there or a kilo to go (P2-4)", (snaps, name) => {
+  const out: Violation[] = [];
+  let checked = 0;
+  for (const snap of snaps) {
+    const plan = snap.card?.weightRead?.plan;
+    const read = snap.card?.weightRead;
+    if (snap.review == null || plan == null || snap.card?.verdict === 'reached' || plan.state === 'reached' || plan.state === 'maintenance') continue;
+    const target = snap.card?.target.weightKg;
+    const toGo = target != null && read?.weekMeanKg != null ? read.weekMeanKg - target : null;
+    const easy = plan.call === 'ahead' || plan.call === 'too_fast' || plan.nearlyThere || (toGo != null && toGo >= 0 && toGo <= 1);
+    if (!easy) continue;
+    checked++;
+    const next = snap.review.review.nextWeek;
+    if (next !== plan.action.text && plain(next) !== NO_NEED_TO_TIGHTEN) {
+      out.push({ snap, detail: `plan call ${plan.call}${plan.nearlyThere ? ' (nearly there)' : ''}, ${toGo?.toFixed(1)} kg to go, action [${plan.action.kind}] but the review's next week is "${visible(next)}"` });
+    }
+  }
+  assert.ok(checked > 0, `${name}: no Monday review had an easy plan, so this invariant checked nothing`);
+  return out;
+});
+
 // P2-1: coming back after a gap carries the colour from before it: a welcome back never downgrades on_track / ahead to progressing.
 // Compared on each return day with the verdict of the last day before the gap.
 invariant(WEIGHT, 'a welcome back keeps the verdict the card had before the gap (P2-1)', snaps_ => {

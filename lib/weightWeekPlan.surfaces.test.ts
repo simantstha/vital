@@ -280,3 +280,17 @@ test('a reached goal whose calorie target already is maintenance is told to keep
   const deficit = cardAt(reached, [], reachedDay + 1, { budget: { ...BUDGET, formulaTdee: 2350 } });
   assert.match(plainSpaces(deficit.reasons.find(r => r.kind === 'next_step')?.text ?? ''), /^Set a new target or switch to maintenance — add ~150–200 kcal a day \(to ~2,150–2,200 kcal\)/);
 });
+
+test('P2-4: while the plan is ahead (or a kilo from the target) the review does not tell a heavy-weekend user to tighten anything', () => {
+  // 0.7 kg/wk against a date 18 weeks out is well ahead; MEALS run 330 kcal over on weekends, which the review would otherwise coach.
+  const ahead = readings(range(0, 130), n => 92 - 0.1 * n + wobble(n));
+  const { card, review } = reviewOn(ahead, MEALS, 56);
+  assert.equal(card.weightRead?.plan?.call, 'ahead');
+  assert.equal(card.weightRead?.plan?.action.kind, 'keep_going');
+  assert.equal(review.nextWeek, 'Keep your routine — no need to tighten anything');
+  assert.doesNotMatch(review.nextWeek, /weekend|dinner|trim/i);
+  // A plan that does ask something (behind: move the date or trim) keeps saying that, word for word.
+  const slow = readings(range(0, 130), n => 92 - 0.035 * n + wobble(n));
+  const behind = reviewOn(slow, MEALS, 49);
+  assert.equal(behind.review.nextWeek, behind.card.weightRead?.plan?.action.text);
+});

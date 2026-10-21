@@ -2027,7 +2027,7 @@ function reachedTips(input: WeeklyReviewInput): string[] {
     maintenance
       ? 'Your calorie target is already at maintenance — keep it there and the weight should hold.'
       : 'Switch to maintenance in Goals so your calorie target stops pushing you lower.',
-    `Keep weighing in a few mornings a week; if your average drifts ${weightText(input, HOLDING_RANGE_KG)} above your target, that is your cue to act.`,
+    `Keep weighing in a few mornings a week; if your average drifts ${weightText(input, HOLDING_RANGE_KG)} above or below your target, that is your cue to act.`,
     maintenance
       ? 'Ready for more? Set a new target in Goals, or stay on maintenance and enjoy holding here.'
       : 'Ready for more? Set a new target in Goals, or switch to maintenance and enjoy holding here.',
@@ -2044,7 +2044,26 @@ function weightPlanNextWeek(input: WeeklyReviewInput): string | null {
   const plan = input.weightPlan;
   if (input.goal !== 'weight_loss' || plan == null) return null;
   if (isInstruction(plan.action) || ((plan.state === 'maintenance' || plan.state === 'reached') && plan.action.kind === 'hold')) return plan.action.text;
+  // Ahead, nearly there or a kilo from the target (wave 22w): the plan asks for nothing, so the review's own food tips (a weekend to plan,
+  // a meal to decide ahead) would be restriction the plan does not want. Nothing to tighten.
+  if (plan.state !== 'reached' && plan.state !== 'maintenance' && (plan.call === 'ahead' || plan.nearlyThere || plan.call === 'too_fast' || withinAKiloOfTarget(input))) {
+    return NO_NEED_TO_TIGHTEN_NEXT_WEEK;
+  }
   return null;
+}
+
+export const NO_NEED_TO_TIGHTEN_NEXT_WEEK = 'Keep your routine — no need to tighten anything';
+
+/** The goal's weekly average (the card's own: 7 days up to the newest weigh-in, 3+ weigh-ins, else the newest reading) is above the target by at most a kilo. */
+function withinAKiloOfTarget(input: WeeklyReviewInput): boolean {
+  if (input.targetWeightKg == null) return false;
+  const days = computeWeightTrend(input.weightReadings).days;
+  if (days.length === 0) return false;
+  const newest = days[days.length - 1];
+  const week = meanOver(days, newest.day, 7);
+  const kg = week != null && week.n >= WEEK_MEAN_MIN_WEIGH_INS ? week.meanKg : newest.rawKg;
+  const toGo = kg - input.targetWeightKg;
+  return toGo >= 0 && toGo <= HOLDING_RANGE_KG;
 }
 
 /** Weight loss with nothing else to fix: a tip built from what was actually logged, never asking for what is already done. */
