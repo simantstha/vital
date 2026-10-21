@@ -1138,3 +1138,20 @@ invariant(LIFTERS, 'a "Lifts up, ..." headline says the number is the est. 1RM',
   if (name === 'lifter_short_week') assert.ok(seen > 0, `${name}: no "Lifts up" headline appeared, so this invariant checked nothing`);
   return out;
 });
+
+// "Deload week done — lighter loads, as planned." is only true if the week before planned it. lifter day 35: the day-28 review had asked for
+// "Squat 107.5 → 110 kg", so the lighter week was the lifter's own call, and the win now names the timing instead.
+invariant(LIFTERS, 'a deload win says "as planned" only when the previous review asked for a lighter week', (snaps, name) => {
+  const out: Violation[] = [];
+  const reviewOn = (date: string): DaySnapshot | undefined => snaps.find(s => s.date === date && s.review != null);
+  let deloads = 0;
+  for (const snap of snaps) {
+    const win = snap.review?.review.win;
+    if (win == null || !/^Deload week done/.test(plain(win))) continue;
+    deloads++;
+    const prev = reviewOn(addDays(snap.date, -7))?.review?.review.nextWeek ?? '';
+    if (/as planned/.test(plain(win)) && !/lighter|deload|ease back/i.test(plain(prev))) out.push({ snap, detail: `review.win: "${visible(win)}" after a previous "Next week" of "${visible(prev)}"` });
+  }
+  if (name === 'lifter') assert.ok(deloads > 0, `${name}: no deload week was reviewed, so this invariant checked nothing`);
+  return out;
+});

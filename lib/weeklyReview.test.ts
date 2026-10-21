@@ -1792,13 +1792,28 @@ test('a textbook deload (85% loads, 64% of the volume) is recognised: Win names 
     progression: { squat: [...steadySquat, lwk(WEEK_START, 114.1, 92.5, 2, 1920)] },
   }));
   assert.equal(r.weekRating, 'light');
-  assert.equal(r.win, 'Deload week done — lighter loads, as planned.');
+  // Not "as planned": nothing asked for a lighter week (and the loads were flat, not climbing).
+  assert.equal(r.win, 'Deload week done — lighter loads.');
   assert.equal(r.slip, null);
   assert.equal(r.nextWeek, 'Back to full loads: Squat 107.5 → 110 kg.');
   assert.doesNotMatch(r.nextWeek, /Repeat this week/);
   // Pounds: 107.5 kg = 237 lb, 2 lb off the 5 lb grid: the step starts from the grid ("~235") and adds exactly 5 lb (240).
   const lb = computeWeeklyReview(liftReview({ unitSystem: 'imperial', progression: { squat: [...steadySquat, lwk(WEEK_START, 114.1, 92.5, 2, 1920)] } }));
   assert.equal(lb.nextWeek, 'Back to full loads: Squat ~235 → 240 lb.');
+});
+
+test('a deload win says "as planned" only when last week asked for a lighter week, else it names the timing (wave 22s)', () => {
+  const deload = lwk(WEEK_START, 114.1, 92.5, 2, 1920);
+  // Last week's Next week asked for a lighter week: as planned.
+  const planned = computeWeeklyReview(liftReview({ progression: { squat: [...steadySquat, deload] }, previousNextWeek: 'Go lighter next week and put sleep first — poor sleep and a high resting heart rate.' }));
+  assert.equal(planned.win, 'Deload week done — lighter loads, as planned.');
+  // The previous review said "Squat 110 → 112.5 kg" after 4 weeks of heavier loads (102.5, 105, 107.5, 110 kg): the lifter's own call, and good timing.
+  const climbing = ['2026-08-24', '2026-08-31', '2026-09-07', '2026-09-14', '2026-09-21'].map((w, i) => lwk(w, 128 + i * 2.5, [100, 102.5, 105, 107.5, 110][i]));
+  const timing = computeWeeklyReview(liftReview({ progression: { squat: [...climbing, deload] }, previousNextWeek: 'Squat 110 → 112.5 kg.' }));
+  assert.equal(timing.win, 'Deload week done — lighter loads, good timing after 4 straight weeks of heavier loads.');
+  // Two weeks of climbing is not a run.
+  const short = ['2026-08-24', '2026-08-31', '2026-09-07', '2026-09-14', '2026-09-21'].map((w, i) => lwk(w, 128 + i, [100, 100, 100, 102.5, 105][i]));
+  assert.equal(computeWeeklyReview(liftReview({ progression: { squat: [...short, deload] } })).win, 'Deload week done — lighter loads.');
 });
 
 test('a deload by loads alone (every top set at 85-90% of its 4-week best, normal volume) is also a deload', () => {

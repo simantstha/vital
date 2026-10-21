@@ -2292,8 +2292,40 @@ function slackWeekWin(input: WeeklyReviewInput, week: Week, cands: Candidate[]):
   return `You still got ${names[0]}'s ${lifts}session in.`;
 }
 
-/** The win line of a deload week (muscle goal; a runner's 'light' week is a rest week, not a deload): the lighter loads were the plan. */
-const DELOAD_WIN = 'Deload week done — lighter loads, as planned.';
+/**
+ * The win line of a deload week (muscle goal; a runner's 'light' week is a rest week, not a deload). "As planned" only when the week before
+ * asked for a lighter week; after 3+ straight weeks of heavier loads it names the timing; otherwise it just says the lighter week is done.
+ */
+function deloadWin(input: WeeklyReviewInput, week: Week): string {
+  // "As planned" only when last week's "Next week" asked for a lighter week; else the timing: after weeks of heavier loads it was a good call.
+  if (input.previousNextWeek && /lighter|deload|ease back/i.test(input.previousNextWeek)) return 'Deload week done — lighter loads, as planned.';
+  const climbing = weeksOfHeavierLoads(input, week);
+  return climbing >= DELOAD_TIMING_MIN_WEEKS
+    ? `Deload week done — lighter loads, good timing after ${climbing} straight weeks of heavier loads.`
+    : 'Deload week done — lighter loads.';
+}
+
+/** Straight weeks of heavier loads before a deload that earn the "good timing" note. */
+const DELOAD_TIMING_MIN_WEEKS = 3;
+
+/** Consecutive weeks just before the reviewed one in which some main lift's top load was above its load the week before (0 when the last one was not). */
+function weeksOfHeavierLoads(input: WeeklyReviewInput, week: Week): number {
+  const topAt = (key: string, weekStart: string): number | null => (input.progression[key] ?? []).find(w => w.weekStart === weekStart)?.topLoadKg ?? null;
+  const keys = Object.keys(input.progression).filter(isMainLift);
+  let n = 0;
+  for (let k = 1; k <= 8; k += 1) {
+    const cur = addDays(week.days[0], -7 * k);
+    const before = addDays(cur, -7);
+    const up = keys.some(key => {
+      const a = topAt(key, cur);
+      const b = topAt(key, before);
+      return a != null && b != null && a > b;
+    });
+    if (!up) break;
+    n += 1;
+  }
+  return n;
+}
 
 /** "110 → 112.5 kg": the grid load the step starts from and the next one (the unit once, on the target); "~" when the logged load was off the grid ("~195 → 200 lb"). */
 function loadPairText(next: NextLoad): string {
@@ -2626,7 +2658,7 @@ export function computeWeeklyReview(input: WeeklyReviewInput): WeeklyReview {
     weekGap: assessment.gap,
     headline: buildHeadline(input, cands, week),
     stats: cands.map(x => x.stat),
-    win: reachedWin(input, week) ?? enduranceWin(input, assessment) ?? windDownWin(input, week, assessment) ?? (assessment.rating === 'light' && input.goal === 'muscle' ? DELOAD_WIN : null) ?? (slackMuscleWeek(input, week) ? slackWeekWin(input, week, cands) : (cands.find(x => x.win)?.win ?? null)),
+    win: reachedWin(input, week) ?? enduranceWin(input, assessment) ?? windDownWin(input, week, assessment) ?? (assessment.rating === 'light' && input.goal === 'muscle' ? deloadWin(input, week) : null) ?? (slackMuscleWeek(input, week) ? slackWeekWin(input, week, cands) : (cands.find(x => x.win)?.win ?? null)),
     slip,
     nextWeek: buildNextWeek(input, cands, week, prevWeek, assessment, slip),
     dataSufficiency: { daysWithData, statCount: cands.length, sufficient: true },
