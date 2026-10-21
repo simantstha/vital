@@ -2265,9 +2265,9 @@ function windDownNextWeek(input: WeeklyReviewInput, week: Week): string | null {
 /** The win line of a deload week (muscle goal; a runner's 'light' week is a rest week, not a deload): the lighter loads were the plan. */
 const DELOAD_WIN = 'Deload week done — lighter loads, as planned.';
 
-/** "110 → 112.5 kg": a load and the next one (the unit once, on the target). */
+/** "110 → 112.5 kg": the grid load the step starts from and the next one (the unit once, on the target); "~" when the logged load was off the grid ("~195 → 200 lb"). */
 function loadPairText(next: NextLoad): string {
-  return arrowPair(String(next.from), withUnit(next.to, next.unit));
+  return arrowPair(`${next.approx ? '~' : ''}${next.start}`, withUnit(next.to, next.unit));
 }
 
 /**

@@ -943,3 +943,27 @@ invariant(LIFTERS, 'no Monday review string (headline, stats, win, slip, push) c
   }
   return out;
 });
+
+// A next-load cue is one loadable step: it starts on the 2.5 kg / 5 lb grid and adds exactly one step, and it says "~" when the load
+// she logged is not on the grid ("bench ~195 → 200 lb"). lifter_imperial read "bench 176 → 180 lb", "182 → 185" (+3), "Squat 243 → 250,
+// bench 193 → 200" (+7): the lb start was rounded to 1 lb and only the target to the 5 lb grid. (The kg rows are already on the grid.)
+invariant(LIFTERS, 'every next-load cue ("Squat 110 → 112.5 kg", "bench ~195 → 200 lb") starts on the grid and adds exactly one step (2.5 kg / 5 lb)', (snaps, name) => {
+  const out: Violation[] = [];
+  let cues = 0;
+  const onGrid = (v: number, step: number): boolean => Math.abs(v / step - Math.round(v / step)) < 1e-9;
+  for (const snap of snaps) {
+    const text = snap.review?.review.nextWeek;
+    if (text == null) continue;
+    for (const m of plain(text).matchAll(/(~?)(\d+(?:\.\d+)?)\s?→\s?(\d+(?:\.\d+)?)\s?(kg|lb)\b/g)) {
+      cues++;
+      const step = m[4] === 'kg' ? 2.5 : 5;
+      const from = Number(m[2]);
+      const to = Number(m[3]);
+      if (!onGrid(from, step) || !onGrid(to, step) || Math.abs(to - from - step) > 1e-9) {
+        out.push({ snap, detail: `review.nextWeek: "${visible(text)}" (${m[0]} starts off the ${step} ${m[4]} grid or is not one step of ${step} ${m[4]})` });
+      }
+    }
+  }
+  assert.ok(cues > 0, `${name}: no next-load cue appeared, so this invariant checked nothing`);
+  return out;
+});

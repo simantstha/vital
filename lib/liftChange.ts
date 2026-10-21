@@ -517,11 +517,15 @@ export function isLowerBodyCompound(exerciseKey: string): boolean {
 }
 
 export interface NextLoad {
-  /** Today's working load in display units (rounded to the plate step). */
+  /** The working load as logged, in display units (rounded to 0.5 kg / 1 lb): what a "hold" keeps. */
   from: number;
-  /** The load to try next. */
+  /** The load the step starts from: `from` snapped to the 2.5 kg / 5 lb grid, so the step is exactly one plate step. */
+  start: number;
+  /** The load to try next: `start` plus one step, always on the grid (capped at the logger's maximum). */
   to: number;
   unit: 'kg' | 'lb';
+  /** True when `start` is more than the logged rounding (0.5 kg / 1 lb) away from `from`: shown with a "~" ("bench ~195 → 200 lb"). */
+  approx: boolean;
 }
 
 const MAX_LOAD_KG = 1000;
@@ -530,19 +534,24 @@ const MAX_LOAD_LB = 2200;
 /**
  * The next-weight rule behind the review's "Squat 110 → 112.5 kg" and the
  * "try …" hint after a clean session: top load + 2.5 kg / 5 lb for EVERY lift,
- * rounded to a multiple of 2.5 kg / 5 lb, so every step is loadable with
- * standard plates (a 1.25 kg step is 0.625 kg a side — "bench 80 → 81.5 kg"
- * needs 0.75 kg plates nobody has). `from` is today's working load as logged
- * (to 0.5 kg / 1 lb); `to` is always on the 2.5 kg / 5 lb grid, above `from`,
- * capped at the logger's maximum. `topLoadKg` is the lift's top working set.
+ * on the 2.5 kg / 5 lb grid, so every step is loadable with standard plates (a
+ * 1.25 kg step is 0.625 kg a side — "bench 80 → 81.5 kg" needs 0.75 kg plates
+ * nobody has). The load is first read as logged (`from`, to 0.5 kg / 1 lb), then
+ * snapped to the grid (`start`) and stepped exactly once (`to` = `start` + step):
+ * "bench ~195 → 200 lb" for a bench logged at 193 lb, never "193 → 200" (a +7
+ * that is no step) or "176 → 180" (a +4). `approx` marks the snap when it moved
+ * the load by more than the logging resolution. `to` is capped at the logger's
+ * maximum and never below `from`. `topLoadKg` is the lift's top working set.
+ * Mirrors LiftLoggerLogic.nextLoad (iOS), which returns `to`.
  */
 export function nextWorkingLoad(topLoadKg: number, _exerciseKey: string, imperial: boolean): NextLoad {
   const unit = imperial ? 'lb' : 'kg';
   const step = imperial ? 5 : 2.5;
   const plate = imperial ? 1 : 0.5;
   const from = Math.round((imperial ? topLoadKg * LB_PER_KG : topLoadKg) / plate) * plate;
-  const to = Math.min(Math.round((from + step) / step) * step, imperial ? MAX_LOAD_LB : MAX_LOAD_KG);
-  return { from, to: Math.max(to, from), unit };
+  const start = Math.round(from / step) * step;
+  const to = Math.min(start + step, imperial ? MAX_LOAD_LB : MAX_LOAD_KG);
+  return { from, start, to: Math.max(to, from), unit, approx: Math.abs(start - from) > plate + 1e-9 };
 }
 
 /** A fraction of a working load (kg) in display units, rounded to 2.5 kg / 5 lb ("~105 kg"). */

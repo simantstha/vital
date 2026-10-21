@@ -248,26 +248,37 @@ test('isDeloadWeek: needs a session that week and earlier weeks to compare with'
 
 // ── Working loads and the next load (the lift logger's next-weight rule) ────
 
-test('nextWorkingLoad: +2.5 kg / +5 lb for EVERY lift, rounded to a multiple of 2.5 kg / 5 lb — a step standard plates can make (wave 21)', () => {
-  assert.deepEqual(nextWorkingLoad(107.5, 'squat', false), { from: 107.5, to: 110, unit: 'kg' });
-  assert.deepEqual(nextWorkingLoad(125, 'romanian deadlift', false), { from: 125, to: 127.5, unit: 'kg' });
+test('nextWorkingLoad: +2.5 kg / +5 lb for EVERY lift, from a start snapped to the 2.5 kg / 5 lb grid — a step standard plates can make (wave 21, 22s)', () => {
+  assert.deepEqual(nextWorkingLoad(107.5, 'squat', false), { from: 107.5, start: 107.5, to: 110, unit: 'kg', approx: false });
+  assert.deepEqual(nextWorkingLoad(125, 'romanian deadlift', false), { from: 125, start: 125, to: 127.5, unit: 'kg', approx: false });
   // Upper body used to step +1.25 (rounded to 0.5): "bench 80 -> 81.5 kg" needs 0.75 kg a side.
-  assert.deepEqual(nextWorkingLoad(80, 'bench press', false), { from: 80, to: 82.5, unit: 'kg' });
-  assert.deepEqual(nextWorkingLoad(82.5, 'bench press', false), { from: 82.5, to: 85, unit: 'kg' });
-  assert.deepEqual(nextWorkingLoad(57.5, 'overhead press', false), { from: 57.5, to: 60, unit: 'kg' });
-  assert.deepEqual(nextWorkingLoad(100, 'squat', true), { from: 220, to: 225, unit: 'lb' });
-  assert.deepEqual(nextWorkingLoad(100, 'bench press', true), { from: 220, to: 225, unit: 'lb' }); // was 223: not a plate
-  // A load logged off the grid (81 kg) lands on the next one: 82.5, never 83.5.
-  assert.deepEqual(nextWorkingLoad(81, 'bench press', false), { from: 81, to: 82.5, unit: 'kg' });
-  // Every target is on the grid and above today's load, whatever the lift and the load.
+  assert.deepEqual(nextWorkingLoad(80, 'bench press', false), { from: 80, start: 80, to: 82.5, unit: 'kg', approx: false });
+  assert.deepEqual(nextWorkingLoad(82.5, 'bench press', false), { from: 82.5, start: 82.5, to: 85, unit: 'kg', approx: false });
+  assert.deepEqual(nextWorkingLoad(57.5, 'overhead press', false), { from: 57.5, start: 57.5, to: 60, unit: 'kg', approx: false });
+  assert.deepEqual(nextWorkingLoad(100, 'squat', true), { from: 220, start: 220, to: 225, unit: 'lb', approx: false });
+  assert.deepEqual(nextWorkingLoad(100, 'bench press', true), { from: 220, start: 220, to: 225, unit: 'lb', approx: false }); // was 223: not a plate
+  // A load logged off the grid starts the step from the grid: 81 kg -> "80 -> 82.5" (1 kg is more than the 0.5 kg logging resolution, so "~"); 80.5 kg is not.
+  assert.deepEqual(nextWorkingLoad(81, 'bench press', false), { from: 81, start: 80, to: 82.5, unit: 'kg', approx: true });
+  assert.deepEqual(nextWorkingLoad(80.5, 'bench press', false), { from: 80.5, start: 80, to: 82.5, unit: 'kg', approx: false });
+  assert.deepEqual(nextWorkingLoad(81.5, 'bench press', false), { from: 81.5, start: 82.5, to: 85, unit: 'kg', approx: true });
+  // Pounds (wave 22s): "bench 176 -> 180" (+4), "182 -> 185" (+3), "Squat 243 -> 250" (+7) were no step. 87.5 kg = 192.9 lb -> logged 193 -> "~195 -> 200".
+  assert.deepEqual(nextWorkingLoad(87.5, 'bench press', true), { from: 193, start: 195, to: 200, unit: 'lb', approx: true });
+  assert.deepEqual(nextWorkingLoad(110, 'squat', true), { from: 243, start: 245, to: 250, unit: 'lb', approx: true }); // 242.5 lb logged as 243
+  assert.deepEqual(nextWorkingLoad(80, 'bench press', true), { from: 176, start: 175, to: 180, unit: 'lb', approx: false }); // 1 lb off the grid is the logging resolution
+  assert.deepEqual(nextWorkingLoad(82.5, 'bench press', true), { from: 182, start: 180, to: 185, unit: 'lb', approx: true });
+  // Every start is on the grid and every target is exactly one step above it (below the cap), whatever the lift and the load; the target is above today's load.
   for (let kg = 20; kg <= 250; kg += 0.5) {
     for (const key of ['squat', 'bench press', 'overhead press', 'deadlift']) {
       const m = nextWorkingLoad(kg, key, false);
-      assert.equal(m.to % 2.5, 0, `${key} ${kg} kg -> ${m.to}`);
+      assert.equal(m.start % 2.5, 0, `${key} ${kg} kg -> start ${m.start}`);
+      assert.equal(m.to - m.start, 2.5, `${key} ${kg} kg -> ${m.start} -> ${m.to}`);
       assert.ok(m.to > m.from && m.to - m.from <= 3.75, `${key} ${kg} kg -> ${m.to}`);
+      assert.equal(m.approx, Math.abs(m.start - m.from) > 0.5, `${key} ${kg} kg approx`);
       const lb = nextWorkingLoad(kg, key, true);
-      assert.equal(lb.to % 5, 0, `${key} ${kg} kg -> ${lb.to} lb`);
+      assert.equal(lb.start % 5, 0, `${key} ${kg} kg -> start ${lb.start} lb`);
+      assert.equal(lb.to - lb.start, 5, `${key} ${kg} kg -> ${lb.start} -> ${lb.to} lb`);
       assert.ok(lb.to > lb.from && lb.to - lb.from <= 7.5, `${key} ${kg} kg -> ${lb.to} lb`);
+      assert.equal(lb.approx, Math.abs(lb.start - lb.from) > 1, `${key} ${kg} kg approx lb`);
     }
   }
   assert.equal(nextWorkingLoad(999.5, 'squat', false).to, 1000); // the logger's maximum
