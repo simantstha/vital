@@ -232,7 +232,7 @@ invariant(['runner_messy', 'runner_no_race'], 'a light week is never "On track" 
 const WEEK_KM_FIGURE = /\d(?:\.\d+)?\s?(?:km|mi)\b[^\n]*\b(?:so far|this week|week's|a week|\/week|target)\b|\b(?:so far|this week|week's target|target)\b[^\n]*\d(?:\.\d+)?\s?(?:km|mi)\b/i;
 const isRaceEve = (s: DaySnapshot): boolean => s.race?.daysToRace === 1 && s.race.phase !== 'recovery';
 
-invariant(['runner_on_plan', 'runner_on_plan_half', 'runner_on_plan_imperial', 'runner_messy'], 'race eve shows no km-of-the-week figure (card, coach lines, opener)', (snaps, name) => {
+invariant(['runner_on_plan', 'runner_on_plan_half', 'runner_on_plan_imperial', 'runner_on_plan_obedient', 'runner_messy'], 'race eve shows no km-of-the-week figure (card, coach lines, opener)', (snaps, name) => {
   const out: Violation[] = [];
   let eves = 0;
   for (const snap of snaps) {
@@ -792,7 +792,7 @@ invariant(LIFTERS, 'the verdict does not change on two consecutive days unless a
 // to come must reach the shared taper band (60% of the target, windDownBand), else the card says "easy runs are enough". Earlier in
 // the week the long run is ahead, so the claim stands - runner_on_plan day 102, "5.4 of ~22 km, on plan" on a Friday, is honest:
 // 5.4 + the 11.5 km Sunday long run lands the week at 17 km.
-invariant(['runner_on_plan', 'runner_on_plan_half', 'runner_on_plan_imperial', 'runner_messy'], 'a weekend taper card says "on plan" only when the week can land in the taper band (run so far + the long run still to come)', (snaps, name) => {
+invariant(['runner_on_plan', 'runner_on_plan_half', 'runner_on_plan_imperial', 'runner_on_plan_obedient', 'runner_messy'], 'a weekend taper card says "on plan" only when the week can land in the taper band (run so far + the long run still to come)', (snaps, name) => {
   const scn = buildScenario(name);
   const out: Violation[] = [];
   let weekendDays = 0;
