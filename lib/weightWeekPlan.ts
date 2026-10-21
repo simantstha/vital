@@ -80,8 +80,13 @@ export const FAR_BEHIND_DAYS = 56;
 export const MOVING_AGAIN_DAYS = 14;
 /** A reached weight within this many kg of the target is "holding" (goalProgress HOLDING_NEAR_TARGET_KG). */
 export const HOLDING_NEAR_TARGET_KG = 1;
-/** "Set a new target or switch to maintenance" is offered only this many days after the target was reached. */
+/**
+ * "Set a new target or switch to maintenance" is asked in every plan week whose Monday is less than this many days after the target was
+ * reached (the week it was reached in included): it ends on a Sunday night, never on a day in the middle of a week (wave 22w).
+ */
 export const REACHED_ASK_DAYS = 7;
+/** "Nearly there" is called on the week's Monday, not only once "too fast" enters: within a kilo of the target while losing this % of bodyweight a week or more. */
+export const NEARLY_THERE_MIN_PCT_PER_WEEK = 0.75;
 
 /** A suggested trim is rounded to this many kcal a day (and never under it)... */
 const TRIM_ROUND_KCAL = 50;
@@ -220,7 +225,7 @@ export interface WeightWeekPlan {
   /** On pace for the target date (false: behind or the wrong way); null without a target date. */
   onPace: boolean | null;
   tooFast: boolean;
-  /** Too fast, and within a kilo of the target. */
+  /** Within a kilo of the target while losing fast (too fast, or 0.75%+ a week): start easing toward maintenance. Called on the Monday. */
   nearlyThere: boolean;
   /** No target date: both paces are under the safe band's floor. */
   slow: boolean;
@@ -241,6 +246,12 @@ export interface WeightWeekPlan {
   heldKg: number | null;
   /** The first week a pace is read: the one place the smoothed trend gets its one-line explanation. */
   firstPaceWeek: boolean;
+  /**
+   * Additive (wave 22w). The plan was re-made INSIDE its calendar week by an event (target reached, welcome back, "too fast" entering,
+   * the first pace, the plateau ending, closing in on the target): the day it happened and why, in a few words ("losing over 1%/wk").
+   * The coach lines say "updated Tue Jun 9: ..." instead of "the same all week". Null for a plan decided on its Monday.
+   */
+  updated: { day: string; why: string } | null;
   /**
    * Additive (wave 22w). The week began with no weigh-in for 7+ days: the plan is the one from the day of that last weigh-in (its call
    * and colour kept - a plan is never remade from stale data), with the neutral "no weigh-in since..." action. The last weigh-in's day;
@@ -847,7 +858,27 @@ function verdictBeforeGap(input: WeightPlanInput, ret: WeighInReturn | null): Go
   return v === 'on_track' || v === 'ahead' || v === 'progressing' ? v : null;
 }
 
+/** Where the plan's core notes the event that re-made it inside its week (see WeightWeekPlan.updated). */
+interface UpdateNote { day: string | null; why: string | null }
+
 function makeWeekPlan(input: WeightPlanInput): WeightWeekPlan | null {
+  const note: UpdateNote = { day: null, why: null };
+  const plan = planCore(input, note);
+  if (plan == null || plan.staleSince != null || note.day == null || note.why == null || note.day <= plan.weekStart) return plan;
+  // The goal being reached is its own news; every other event only counts when it changed what the week asks (an event that re-makes the
+  // plan into the same call and action - "too fast" entering on a week that already said "nearly there" - is not an update).
+  if (plan.verdict === 'reached' && note.why !== 'target reached') return plan;
+  // (The Monday's plan is made without a reach that happened after it.)
+  const reachedByMonday = input.reached && input.reachedAt != null && input.reachedAt <= plan.weekStart;
+  const monday = planCore(
+    { ...input, todayKey: plan.weekStart, reached: reachedByMonday, reachedAt: reachedByMonday ? input.reachedAt : null },
+    { day: null, why: null },
+  );
+  if (monday != null && monday.state === plan.state && monday.verdict === plan.verdict && monday.action.text === plan.action.text) return plan;
+  return { ...plan, updated: { day: note.day, why: note.why } };
+}
+
+function planCore(input: WeightPlanInput, note: UpdateNote): WeightWeekPlan | null {
   const days = [...input.days].sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0));
   if (days.length === 0) return null;
   const { todayKey, startDay, targetKg, targetDate } = input;
@@ -901,13 +932,19 @@ function makeWeekPlan(input: WeightPlanInput): WeightWeekPlan | null {
   let asOf = base;
   let prevDay = base;
   let plateauEndedFrom: number | null = null; // the plateau mean the plan as of `asOf` moved away from (set only by that event)
+  const remade = (d: string, why: string): void => {
+    asOf = d;
+    plateauEndedFrom = null;
+    note.day = d;
+    note.why = why;
+  };
   for (const d of scan) {
     const moved = movedFrom(asOf, d);
-    if ((returningAt(prevDay) && !returningAt(d)) || (lacksPace(asOf) && !lacksPace(d)) || (!tooFastAt(asOf) && tooFastAt(d))) {
-      asOf = d;
-      plateauEndedFrom = null;
-    } else if (moved != null && movedFrom(asOf, prevDay) == null) {
-      asOf = d;
+    if (returningAt(prevDay) && !returningAt(d)) remade(d, 'your third weigh-in is back');
+    else if (lacksPace(asOf) && !lacksPace(d)) remade(d, 'a first pace can be read');
+    else if (!tooFastAt(asOf) && tooFastAt(d)) remade(d, 'losing over 1%/wk');
+    else if (!input.reached && moved != null && movedFrom(asOf, prevDay) == null) {
+      remade(d, 'the weekly average is falling again');
       plateauEndedFrom = moved;
     }
     prevDay = d;
@@ -927,11 +964,15 @@ function makeWeekPlan(input: WeightPlanInput): WeightWeekPlan | null {
     etaDate: null, weeksVsTarget: null,
     action: { kind: 'keep_weighing', text: 'Keep weighing in — your pace settles after 3 weeks of weigh-ins' },
     plateauCause: null, pace: null, confirmed: false, young: false, onPace: null, tooFast: false, nearlyThere: false, slow: false,
-    away: false, farBehind: false, projectedEta: null, plateauMeanKg: null, flatWeeks: null, heldKg: null, firstPaceWeek: false, staleSince: null,
+    away: false, farBehind: false, projectedEta: null, plateauMeanKg: null, flatWeeks: null, heldKg: null, firstPaceWeek: false, updated: null, staleSince: null,
   };
 
   // The target is reached (any day: the crossing is an event): a CTA for the first week, then maintenance.
   if (input.reached && targetKg != null) {
+    if (input.reachedAt != null && input.reachedAt > weekStart && input.reachedAt <= todayKey) {
+      note.day = input.reachedAt;
+      note.why = 'target reached';
+    }
     return reachedPlan(c, blank, asOf);
   }
   // Stale data (wave 22w): the week began with the newest weigh-in 7+ days old and none since. A plan made now would be made from the same
@@ -957,10 +998,15 @@ function makeWeekPlan(input: WeightPlanInput): WeightWeekPlan | null {
   if (anchor == null) return { ...blank, young: (ageAt(startDay, asOf) ?? PACE_SETTLE_DAYS) < PACE_SETTLE_DAYS };
 
   if (returning) {
+    const ret = weighInReturn(through(days, todayKey), startDay);
+    if (ret != null) {
+      note.day = ret.firstBackDay;
+      note.why = `weighed in again after ${ret.gapDays} days`;
+    }
     return {
       ...blank,
       state: 'returning',
-      verdict: verdictBeforeGap(input, weighInReturn(through(days, todayKey), startDay)) ?? blank.verdict,
+      verdict: verdictBeforeGap(input, ret) ?? blank.verdict,
       action: {
         kind: 'keep_weighing',
         text: 'Keep weighing in so your trend catches up — your pace is read again once 3 weigh-ins are back',
@@ -1071,7 +1117,21 @@ function makeWeekPlan(input: WeightPlanInput): WeightWeekPlan | null {
       if (pk != null) closestKg = Math.min(closestKg, Math.abs(targetKg - pk));
     }
   }
-  const nearlyThere = tooFast && closestKg <= HOLDING_NEAR_TARGET_KG;
+  // Decided on the Monday from closeness (within a kilo of the target while losing 0.75%+ a week), not only once "too fast" enters.
+  const losingFast = tooFast || (pace.kgPerWeek < 0 && absPct >= NEARLY_THERE_MIN_PCT_PER_WEEK);
+  const nearlyThere = losingFast && closestKg <= HOLDING_NEAR_TARGET_KG;
+  if (nearlyThere && toGoKg > HOLDING_NEAR_TARGET_KG) {
+    // The weekly average closed in on the target inside the week: an event, noted with the first day it was within a kilo.
+    for (const d of days) {
+      if (d.day <= asOf || d.day > todayKey) continue;
+      const pk = progressAt(days, d.day);
+      if (pk != null && targetKg != null && Math.abs(targetKg - pk) <= HOLDING_NEAR_TARGET_KG) {
+        note.day = d.day;
+        note.why = 'within a kilo of the target';
+        break;
+      }
+    }
+  }
   const wrongWay = pace.kgPerWeek >= 0 && absPct > PLATEAU_MAX_PCT_PER_WEEK;
   const flat = pace.kgPerWeek >= 0 || absPct <= PLATEAU_MAX_PCT_PER_WEEK;
 
@@ -1201,8 +1261,9 @@ function reachedPlan(c: Ctx, blank: WeightWeekPlan, asOf: string): WeightWeekPla
   const { input, days } = c;
   const targetKg = input.targetKg as number;
   const since = input.reachedAt ?? input.startDay;
-  const daysSince = since != null ? dayNumber(input.todayKey) - dayNumber(since) : null;
-  const asking = daysSince == null || daysSince <= REACHED_ASK_DAYS;
+  // The question runs to the end of a calendar week: every week whose Monday is under REACHED_ASK_DAYS after the reach asks it (wave 22w).
+  const mondaysAfter = since != null ? dayNumber(c.weekStart) - dayNumber(since) : null;
+  const asking = mondaysAfter == null || mondaysAfter < REACHED_ASK_DAYS;
 
   // Still losing past the ceiling after the target: the card's one safety watch (only while the "too fast" call is on).
   // Reaching the target is an event that re-makes the plan, so that call reads the newest weigh-ins, not last Sunday's.

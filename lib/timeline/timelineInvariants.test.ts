@@ -797,6 +797,70 @@ invariant(WEIGHT, "a plateau is not announced once this week's average is a tole
   return out;
 });
 
+// P2-3: "the same all week" is true or not said. A plan that changed inside its calendar week says so in the coach lines
+// ("set Jun 8, updated Tue Jun 9: ..."), never "the same all week"; "nearly there" is decided on the Monday from closeness (within a kilo of the
+// target while losing 0.75% a week or more), not on the day the loss tips over 1%; and the reached question runs to the end of a calendar week,
+// so the card, the coach lines and the opener never drop it on a Saturday.
+const PLAN_LINE = /This week's plan \(set ([^,)]+)(?:, ([^)]*))?\)/;
+
+invariant(WEIGHT, "a coach line says the week's plan is \"the same all week\" only when it is, and labels a mid-week update (P2-3)", (snaps, name) => {
+  const out: Violation[] = [];
+  const firstOfWeek = new Map<string, string>();
+  let updatedDays = 0;
+  for (const snap of snaps) {
+    const plan = snap.card?.weightRead?.plan;
+    if (plan == null) continue;
+    const week = mondayOfDate(snap.date);
+    if (!firstOfWeek.has(week)) firstOfWeek.set(week, plan.action.text);
+    const line = (snap.coach ?? []).map(plain).find(t => PLAN_LINE.test(t));
+    if (line == null) continue;
+    const label = PLAN_LINE.exec(line)?.[2] ?? '';
+    const changed = plan.action.text !== firstOfWeek.get(week);
+    if (changed) updatedDays++;
+    if (changed && (/the same all week/.test(label) || !/updated/.test(label))) {
+      out.push({ snap, detail: `the plan changed inside the week ("${visible(firstOfWeek.get(week) ?? '')}" -> "${visible(plan.action.text)}") but the coach line says: "${visible(line.slice(0, 120))}"` });
+    }
+    if (!changed && /updated/.test(label)) out.push({ snap, detail: `the coach line says the plan was updated but its action is the week's first: "${visible(line.slice(0, 120))}"` });
+  }
+  assert.ok(updatedDays > 0 || name !== 'weight_loss', `${name}: no plan changed inside a week, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(WEIGHT, '"nearly there" is decided on the Monday: within a kilo of the target and losing 0.75%+ a week is the easing step from day one (P2-3)', (snaps, name) => {
+  const out: Violation[] = [];
+  let checked = 0;
+  for (const snap of snaps) {
+    const plan = snap.card?.weightRead?.plan;
+    const read = snap.card?.weightRead;
+    if (snap.weekday !== 'Mon' || plan == null || read?.state !== 'pace' || snap.card?.verdict === 'reached') continue;
+    const target = snap.card?.target.weightKg;
+    const pct = plan.pace?.pctPerWeek;
+    if (target == null || read.weekMeanKg == null || pct == null || pct > -0.75) continue;
+    if (read.weekMeanKg - target > 1 || read.weekMeanKg - target < 0) continue;
+    checked++;
+    if (plan.action.kind !== 'ease_to_maintenance') {
+      out.push({ snap, detail: `${(read.weekMeanKg - target).toFixed(1)} kg to go at ${pct}%/wk but the Monday plan is [${plan.action.kind}] "${visible(plan.action.text)}"` });
+    }
+  }
+  assert.ok(checked > 0, `${name}: no Monday was within a kilo of the target while losing 0.75%+ a week, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(WEIGHT, 'the reached question never ends in the middle of a calendar week (P2-3)', snaps => {
+  const out: Violation[] = [];
+  const asks = new Map<string, boolean>();
+  for (const snap of snaps) {
+    const plan = snap.card?.weightRead?.plan;
+    if (snap.card?.verdict !== 'reached' || plan == null) continue;
+    const week = mondayOfDate(snap.date);
+    const asking = plan.action.kind === 'next_target';
+    const before = asks.get(week);
+    if (before === true && !asking) out.push({ snap, detail: `the "set a new target or switch to maintenance" question was asked earlier this week and is gone on ${snap.weekday}: "${visible(plan.action.text)}"` });
+    if (before === undefined) asks.set(week, asking);
+  }
+  return out;
+});
+
 // P2-1: coming back after a gap carries the colour from before it: a welcome back never downgrades on_track / ahead to progressing.
 // Compared on each return day with the verdict of the last day before the gap.
 invariant(WEIGHT, 'a welcome back keeps the verdict the card had before the gap (P2-1)', snaps_ => {

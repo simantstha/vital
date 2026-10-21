@@ -166,6 +166,8 @@ function weekTargetLine(gp: GoalProgress, units: UnitSystem): string | null {
   }
 }
 
+const WEEKDAY_ABBR = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
 /**
  * Compact (<= ~12 lines) "Goal progress" lines for the coach context.
  * Always includes the verdict + headline so the coach quotes the same call
@@ -254,7 +256,11 @@ export function formatGoalProgressLines(gp: GoalProgress, units: UnitSystem): st
     const rule = isInstruction(plan.action)
       ? 'give this one instruction; do not suggest a different calorie change before next Monday'
       : 'no calorie change is asked this week';
-    lines.push(`- This week's plan (set ${shortDate(plan.weekStart) ?? plan.weekStart}, the same all week): ${plainSpaces(plan.action.text)} — ${rule}`);
+    // A plan an event re-made inside its week says so (wave 22w); only a plan decided on its Monday is "the same all week".
+    const set = plan.updated
+      ? `set ${shortDate(plan.weekStart) ?? plan.weekStart}, updated ${WEEKDAY_ABBR[new Date(`${plan.updated.day}T00:00:00Z`).getUTCDay()]} ${shortDate(plan.updated.day) ?? plan.updated.day}: ${plan.updated.why}`
+      : `set ${shortDate(plan.weekStart) ?? plan.weekStart}, the same all week`;
+    lines.push(`- This week's plan (${set}): ${plainSpaces(plan.action.text)} — ${rule}`);
     if (plan.staleSince) {
       // The week began with no weigh-in for 7+ days (wave 22w): the numbers above are from that last weigh-in.
       lines.push(`- No weigh-in since ${shortDate(plan.staleSince) ?? plan.staleSince}: say so and ask for a weigh-in; do not read a new pace, date or trend into the old readings.`);

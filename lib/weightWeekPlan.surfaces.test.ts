@@ -198,8 +198,11 @@ test('reached: "Set a new target or switch to maintenance" for 7 days after the 
   assert.equal(first.verdict, 'reached');
   assert.ok(first.reachedAt != null);
   const reachedDay = range(40, 80).find(n => D(n) === first.reachedAt) as number;
-  for (const n of range(reachedDay, reachedDay + 7)) assert.equal(shows(n), true, `day +${n - reachedDay}`);
-  for (const n of range(reachedDay + 8, reachedDay + 30)) assert.equal(shows(n), false, `day +${n - reachedDay}`);
+  // Wave 22w: the question runs to the END of a calendar week - every week whose Monday is under 7 days after the reach asks it - so it
+  // is never dropped on a Saturday (it used to expire on a 7-day timer, mid-week).
+  const lastAskingMonday = Math.floor((reachedDay + 6) / 7) * 7; // days are numbered from a Monday: multiples of 7 are Mondays
+  for (const n of range(reachedDay, lastAskingMonday + 6)) assert.equal(shows(n), true, `day +${n - reachedDay}`);
+  for (const n of range(lastAskingMonday + 7, reachedDay + 30)) assert.equal(shows(n), false, `day +${n - reachedDay}`);
 });
 
 test('held for two weeks on logged intake: the maintenance target is that intake — card and review', () => {

@@ -533,3 +533,69 @@ test('P2-2: "moving again" is an event inside the week - the plateau message doe
   // A scale that only wobbles inside the tolerance never ends the plateau mid-week.
   assert.equal(planAt(PLATEAU, 62).state, 'plateau');
 });
+
+test('P2-3: "nearly there" is called on the Monday from closeness - within a kilo while losing 0.75%+ a week - not only once "too fast" enters', () => {
+  // 0.85 kg/wk (about 1%/wk, ahead of a far date), 0.8 kg to go by the Sunday.
+  const closing = readings(range(0, 100), n => 92 - 0.12 * n + wobble(n));
+  const target = 92 - 0.12 * 59 - 0.8; // 0.8 kg under the weekly average of Sunday 62 (the mean of days 56-62 sits at day 59)
+  const monday = planAt(closing, 63, { targetKg: target, targetDate: D(126) });
+  assert.equal(monday.nearlyThere, true);
+  assert.equal(monday.action.kind, 'ease_to_maintenance');
+  assert.match(plainSpaces(monday.action.text), /^Start easing calories toward maintenance as you close in on [\d.]+ kg — add ~150–200 kcal a day \(to ~2,150–2,200 kcal\)/);
+  assert.equal(monday.asOf, D(62), 'decided from Sunday, not from a mid-week event');
+  assert.equal(monday.updated, null);
+  // The same call all week.
+  for (const n of range(64, 69)) assert.equal(decision(planAt(closing, n, { targetKg: target, targetDate: D(126) })), decision(monday), `day ${n}`);
+  // More than a kilo out, or a slow pace, is an ordinary week.
+  assert.equal(planAt(closing, 63, { targetKg: target - 2, targetDate: D(126) }).nearlyThere, false);
+  assert.equal(planAt(STEADY, 56, { targetKg: 92 - 0.08 * 55 - 0.8, targetDate: D(126) }).nearlyThere, false);
+});
+
+test('P2-3: a plan an event re-made inside its week says so (updated day and why); a Monday plan has no label', () => {
+  const monday = planAt(STALL, 49);
+  assert.equal(monday.updated, null);
+  // The welcome back is an event inside the week, labelled with the first weigh-in back.
+  const pre = readings(range(0, 59), n => 92 - 0.08 * n + wobble(n));
+  const back = [...pre, ...readings([72, 73], n => 92 - 0.08 * n)];
+  const stale = planAt(back, 70);
+  assert.equal(stale.staleSince, D(59));
+  assert.equal(stale.updated, null, 'a stale week is the last plan carried, not an update');
+  const returning = planAt(back, 72);
+  assert.equal(returning.state, 'returning');
+  assert.deepEqual(returning.updated, { day: D(72), why: 'weighed in again after 12 days' });
+  // The plateau ending inside the week.
+  const fallsMidWeek = readings(range(0, 100), n => (n < 35 ? 92 - 0.1 * n : n < 59 ? 88.5 : 88.5 - 0.2 * (n - 58)) + wobble(n));
+  assert.deepEqual(planAt(fallsMidWeek, 62).updated, { day: D(62), why: 'the weekly average is falling again' });
+  assert.equal(planAt(fallsMidWeek, 61).updated, null);
+  // The target being reached mid-week.
+  const calm = readings(range(0, 100), n => (n < 62 ? 92 - 0.13 * n : 84 + wobble(n)));
+  const reachedOn = planAt(calm, 64, { reached: true, reachedAt: D(62) }); // reached Sunday 62; Monday 63 starts the next week
+  assert.equal(reachedOn.updated, null, 'the reach was before this week');
+  const sameWeek = planAt(calm, 60, { reached: true, reachedAt: D(58) }); // reached Thursday 58, week of Monday 56
+  assert.deepEqual(sameWeek.updated, { day: D(58), why: 'target reached' });
+  // An event that leaves the call and the action as the Monday had them is not an update.
+  const closing = readings(range(0, 100), n => 92 - 0.14 * n);
+  const nearly = [63, 64, 65, 66].map(n => planAt(closing, n, { targetKg: 92 - 0.14 * 59 - 0.8, targetDate: D(126) }));
+  for (const [i, p] of nearly.entries()) {
+    assert.equal(p.nearlyThere, true, `day ${63 + i}`);
+    assert.equal(p.updated, null, `day ${63 + i}`);
+  }
+  // Closing in on the target INSIDE the week (1.2 kg out on the Sunday, within a kilo by Tuesday) is the event that re-makes the plan.
+  const inWeek = planAt(closing, 65, { targetKg: 92 - 0.14 * 59 - 1.2, targetDate: D(126) });
+  assert.equal(inWeek.nearlyThere, true);
+  assert.deepEqual(inWeek.updated, { day: D(64), why: 'within a kilo of the target' });
+  assert.equal(planAt(closing, 63, { targetKg: 92 - 0.14 * 59 - 1.2, targetDate: D(126) }).nearlyThere, false);
+});
+
+test('P2-3: the reached question runs to the end of a calendar week - it never ends on a Saturday', () => {
+  const calm = readings(range(0, 120), n => (n < 62 ? 92 - 0.13 * n : 84 + wobble(n)));
+  // Reached on a Friday (day 65): the week of Monday 63 and the next one (Monday 70, 5 days later) both ask; Monday 77 does not.
+  const planOn = (n: number) => planAt(calm, n, { reached: true, reachedAt: D(65) });
+  for (const n of range(65, 76)) assert.equal(planOn(n).action.kind, 'next_target', `day ${n}`);
+  assert.notEqual(planOn(77).action.kind, 'next_target');
+  assert.equal(planOn(76).action.text, planOn(70).action.text, 'one question for the whole week');
+  // Reached on a Monday: that week asks, the next Monday (7 days later) does not.
+  const mondayReach = (n: number) => planAt(calm, n, { reached: true, reachedAt: D(63) });
+  for (const n of range(63, 69)) assert.equal(mondayReach(n).action.kind, 'next_target', `day ${n}`);
+  assert.notEqual(mondayReach(70).action.kind, 'next_target');
+});
