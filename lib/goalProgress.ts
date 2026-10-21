@@ -1187,20 +1187,47 @@ function weekSessionsReason(input: GoalProgressInput): GoalProgressReason | null
 }
 
 /**
+ * Whether the sessions a week still needs fit in the days it has left, with a rest day in between.
+ *
+ * Not when more sessions are missing than days are available, where today is available only while no session is logged on it (a
+ * session today is already in `done`; counting the day twice let "1 of 4" on a Thursday read as reachable). Not when the missing
+ * sessions would need three days in a row (Fri-Sat-Sun for a 4 a week lifter); a plan's own back-to-back days are not a warning,
+ * so 6 a week allows runs of 3. `daysLeft` includes today.
+ */
+export function weekFitsSessionTarget(done: number, target: number, daysLeft: number, trainedToday: boolean): boolean {
+  const missing = target - done;
+  if (missing <= 0) return true;
+  const available = daysLeft - (trainedToday ? 1 : 0);
+  if (missing > available) return false;
+  // 7 a week is every day: no rest day to ask for.
+  if (target >= 7) return true;
+  // Spreading the missing sessions over the available days with the most rest days between them, the longest back-to-back run.
+  const longestRun = Math.ceil(missing / (available - missing + 1));
+  const plannedRun = Math.ceil(target / (8 - target));
+  return longestRun < Math.max(WEEK_SHORT_MIN_RUN, plannedRun + 1);
+}
+
+/** Back-to-back training days the rest of a week would need before the card calls the week short (3 in a row). */
+const WEEK_SHORT_MIN_RUN = 3;
+
+/**
  * The muscle goal's "2 of 4 sessions this week": the shared line, amber once the
- * week can no longer reach the target — sessions so far plus the days left in
- * the week (today included) are under it ("0 of 4 sessions this week (last: Apr
- * 25)"). The 28-day line stays neutral through a missed week ("13 of 16 planned
- * sessions", 81%), so without this a Friday with no session read "Progressing".
+ * week can no longer reach the target (`weekFitsSessionTarget`: too few days
+ * left, or the rest would need three in a row) ("0 of 4 sessions this week (last:
+ * Apr 25)"). The 28-day line stays neutral through a missed week ("13 of 16
+ * planned sessions", 81%), so without this a Friday with no session read
+ * "Progressing", and from the Thursday of a one-session week the card flipped
+ * every other day.
  */
 function muscleWeekSessionsReason(input: GoalProgressInput): GoalProgressReason | null {
   const reason = weekSessionsReason(input);
   const target = input.target.weeklySessions;
   if (!reason || target == null) return reason;
   const start = weekStart(input.todayKey);
-  const done = new Set(sessionDays(input).filter(d => d >= start && d <= input.todayKey)).size;
+  const days = sessionDays(input);
+  const done = new Set(days.filter(d => d >= start && d <= input.todayKey)).size;
   const daysLeft = 7 - (dayNumber(input.todayKey) - dayNumber(start));
-  if (done >= target || done + daysLeft >= target) return reason;
+  if (weekFitsSessionTarget(done, target, daysLeft, days.includes(input.todayKey))) return reason;
   const last = lastSessionDay(input);
   return { ...reason, text: `${reason.text}${last ? ` (last: ${fmtDate(last, input.todayKey)})` : ''}`, tone: 'watch' };
 }

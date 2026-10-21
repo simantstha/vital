@@ -7,6 +7,7 @@ import {
   isStrengthWorkoutType,
   longRunTargetKm,
   raceLabel,
+  weekFitsSessionTarget,
   type GoalProgress,
   type GoalProgressInput,
 } from './goalProgress';
@@ -2880,6 +2881,50 @@ test('a week that cannot reach its target: "0 of 4 sessions this week (last: Oct
     strengthDays: weightDays, trainingDays: weightDays,
   }));
   assert.doesNotMatch(weightLed.headline, /Progressing/);
+});
+
+test('weekFitsSessionTarget: missing sessions must fit the days left (today only while untrained) and not need three in a row (wave 22s)', () => {
+  // 4 a week. Monday / Tuesday / Wednesday with nothing yet: 4 sessions in 7 / 6 / 5 days left (today included) fit with rest days between.
+  assert.equal(weekFitsSessionTarget(0, 4, 7, false), true);
+  assert.equal(weekFitsSessionTarget(0, 4, 6, false), true);
+  assert.equal(weekFitsSessionTarget(0, 4, 5, false), true);
+  // Thursday with nothing yet: 4 in Thu-Sun is four in a row. A session today leaves Fri-Sun for 3 more: three in a row.
+  assert.equal(weekFitsSessionTarget(0, 4, 4, false), false);
+  assert.equal(weekFitsSessionTarget(1, 4, 4, true), false);
+  // ... but one session on Wednesday (not today) and Thursday still open: 3 in Thu-Sun fits (Thu, Fri, Sun / Thu, Sat, Sun).
+  assert.equal(weekFitsSessionTarget(1, 4, 4, false), true);
+  // Friday 2 of 4, Saturday 2 of 4 (Sat + Sun back to back is fine), Sunday 2 of 4 (one day for two sessions).
+  assert.equal(weekFitsSessionTarget(2, 4, 3, false), true);
+  assert.equal(weekFitsSessionTarget(2, 4, 2, false), true);
+  assert.equal(weekFitsSessionTarget(2, 4, 1, false), false);
+  // The target met, or passed, always fits.
+  assert.equal(weekFitsSessionTarget(4, 4, 1, true), true);
+  assert.equal(weekFitsSessionTarget(5, 4, 3, false), true);
+  // 5 a week: Monday morning with nothing yet fits; 6 a week tolerates its own runs of 3; 7 a week is every day.
+  assert.equal(weekFitsSessionTarget(0, 5, 7, false), true);
+  assert.equal(weekFitsSessionTarget(1, 6, 6, false), true);
+  assert.equal(weekFitsSessionTarget(0, 7, 7, false), true);
+  assert.equal(weekFitsSessionTarget(0, 7, 6, false), false);
+});
+
+test('Thursday of a one-session week is already "week short": the card does not say Progressing on Thu-Fri and short on Sat-Sun (wave 22s)', () => {
+  // Daily sessions to Sunday 09-27, then nothing until Thursday 10-01 (1 of 4 this week). Wednesday: 3 days off, 4 sessions still fit in Wed-Sun.
+  const upTo = (day: string, sessions: string[]) => [...Array.from({ length: 80 }, (_, i) => addDays('2026-08-31', i)).filter(d => d <= '2026-09-27'), ...sessions].filter(d => d <= day);
+  const at = (day: string, sessions: string[]) => computeGoalProgress(lapseInput(0, { todayKey: day, strengthDays: upTo(day, sessions), trainingDays: upTo(day, sessions) }));
+  const wed = at('2026-09-30', ['2026-10-01']);
+  assert.equal(wed.verdict, 'progressing');
+  const thu = at('2026-10-01', ['2026-10-01']);
+  assert.equal(thu.verdict, 'holding');
+  assert.equal(thu.headline, 'Lifts up, week short — Squat +12 kg');
+  assert.deepEqual(thu.reasons[0], { kind: 'week_sessions', text: '1 of 4 sessions this week (last: Oct 1)', tone: 'watch' });
+  // Friday and the weekend say the same thing.
+  for (const day of ['2026-10-02', '2026-10-03', '2026-10-04']) {
+    const p = at(day, ['2026-10-01']);
+    assert.equal(p.verdict, 'holding', day);
+    assert.equal(p.headline, 'Lifts up, week short — Squat +12 kg', day);
+  }
+  // Monday of the next week starts clean: no amber week line (it is the lapse, 4 days off, that holds the card then).
+  assert.ok(at('2026-10-05', ['2026-10-01']).reasons.every(r => r.kind !== 'week_sessions' || r.tone !== 'watch'));
 });
 
 test('a lapse is not a time to praise the scale: the weight line is neutral and about the lapse (wave 21)', () => {

@@ -868,3 +868,63 @@ invariant(['lifter_short_week'], 'a short muscle week says "Back to N this week"
   assert.ok(checked > 0, `${name}: no short muscle week was reviewed, so this invariant checked nothing`);
   return out;
 });
+
+// A week is short when the sessions it still needs cannot be done with a rest day in between: more missing sessions than days left
+// (today counts only while no session is logged on it - a session today is already in the count), or three days back to back
+// (a plan's own back-to-back days aside: 6 a week already has runs of 3). lifter_short_week: Thursday's bench was session 1 of 4
+// with Fri-Sat-Sun left, and the card read "Progressing" on Thu-Fri, "Lifts up, week short" on Sat-Sun - a different answer each day.
+const weekFitsTarget = (done: number, target: number, daysLeft: number, trainedToday: boolean): boolean => {
+  const missing = target - done;
+  if (missing <= 0) return true;
+  const available = daysLeft - (trainedToday ? 1 : 0);
+  if (missing > available) return false;
+  if (target >= 7) return true;
+  const longestRun = Math.ceil(missing / (available - missing + 1));
+  return longestRun < Math.max(3, Math.ceil(target / (8 - target)) + 1);
+};
+
+invariant(LIFTERS, 'a week whose missing sessions no longer fit (too few days left, or three or more in a row) says "week short" on the card, not "Progressing"', (snaps, name) => {
+  const scn = buildScenario(name);
+  const target = scn.user.weeklySessions as number;
+  const trained = new Set(scn.sets.filter(x => !x.isWarmup).map(x => x.day));
+  const out: Violation[] = [];
+  let flagged = 0;
+  for (const snap of snaps) {
+    if (snap.card?.goal !== 'muscle') continue;
+    const monday = mondayOfDate(snap.date);
+    const done = [...trained].filter(d => d >= monday && d <= snap.date).length;
+    const daysLeft = 7 - dayDiff(snap.date, monday);
+    if (weekFitsTarget(done, target, daysLeft, trained.has(snap.date))) continue;
+    flagged++;
+    const wk = snap.card.reasons.find(r => r.kind === 'week_sessions');
+    if (snap.card.verdict === 'progressing' || wk?.tone !== 'watch') {
+      out.push({ snap, detail: `${done} of ${target} sessions, ${daysLeft} day(s) left${trained.has(snap.date) ? ' (one trained today)' : ''}, the missing ones no longer fit, but verdict ${snap.card.verdict}, week line "${visible(wk?.text ?? '(none)')}" (${wk?.tone}): "${visible(snap.card.headline)}"` });
+    }
+  }
+  if (name === 'lifter_short_week') assert.ok(flagged > 0, `${name}: no day had a week that no longer fits, so this invariant checked nothing`);
+  return out;
+});
+
+// Fewer changes, each with a reason: in any 8 days the verdict turns over at most 3 times. lifter_short_week days 42-49 changed 4 times
+// (progressing, holding "No sessions for 4 days", progressing, "Lifts up, week short", progressing) with one real event in the week.
+const LIFTER_CHANGE_WINDOW_DAYS = 8;
+const LIFTER_MAX_CHANGES = 3;
+
+invariant(LIFTERS, `at most ${LIFTER_MAX_CHANGES} card verdict changes in any ${LIFTER_CHANGE_WINDOW_DAYS} consecutive days`, snaps => {
+  const out: Violation[] = [];
+  const days = snaps.filter(s => s.card != null);
+  for (let i = 0; i + LIFTER_CHANGE_WINDOW_DAYS <= days.length; i++) {
+    const window = days.slice(i, i + LIFTER_CHANGE_WINDOW_DAYS);
+    if (dayDiff(window[window.length - 1].date, window[0].date) !== LIFTER_CHANGE_WINDOW_DAYS - 1) continue; // a skipped day
+    const changes: string[] = [];
+    for (let j = 1; j < window.length; j++) {
+      const prev = window[j - 1].card?.verdict;
+      const cur = window[j].card?.verdict;
+      if (prev !== cur) changes.push(`day ${window[j].idx} ${prev} -> ${cur}`);
+    }
+    if (changes.length > LIFTER_MAX_CHANGES) {
+      out.push({ snap: window[0], detail: `${changes.length} verdict changes in days ${window[0].idx}-${window[window.length - 1].idx}: ${changes.join('; ')}` });
+    }
+  }
+  return out;
+});
