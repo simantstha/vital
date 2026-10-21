@@ -675,6 +675,12 @@ export interface PlanLongRun {
   shareDue: boolean;
   /** The 28-day peak long run was over 55% of its own week: never praised as a good peak. */
   peakOversized: boolean;
+  /**
+   * The 28-day peak run against the plan (wave 22e): `plannedKm` is the long run its week planned, `sharePct` the share of its week, and
+   * `within` is true only when it was at most the plan + 0.5 km (and the peak target + 0.5 km) and at most half of its week - the only
+   * peak that is praised ("peak reached"). Null without a run in the last 28 days.
+   */
+  peakPlan: { plannedKm: number | null; sharePct: number; within: boolean; brokenKm: number | null } | null;
 }
 
 /** A week whose long run was most of it. */
@@ -884,6 +890,8 @@ export const LIGHT_WEEK_FIT_SLACK = 1.2;
 /** A week that lost that many days is realistically ~70% of its target at best; its long run is ~40% of that. */
 export const LIGHT_WEEK_REALISTIC_FRACTION = 0.7;
 export const LIGHT_WEEK_LONG_RUN_SHARE = 0.4;
+/** A peak long run is within the plan when it is at most this many km over what its week planned (and over the peak target). */
+export const PEAK_PLAN_SLACK_KM = 0.5;
 /** A long run over this share of its week gets one watch note (a long run is the week's biggest run, not most of it). */
 export const OVERSIZED_LONG_RUN_SHARE = 0.55;
 /** ... in a week with at least this many run days (with two runs a week the long one is most of it by nature). */
@@ -1750,6 +1758,7 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
   // A long run that was most of its week: one watch note (the most recent such week) and no praise for the peak.
   let share: LongRunShare | null = null;
   let peakOversized = false;
+  let peakPlan: PlanLongRun['peakPlan'] = null;
   if (depth === 0) {
     const inProgress = asOf < weekEnd;
     const floorFor = (wk: string): number => (wk === w && inProgress && wind == null && targetKm != null ? targetKm : 0);
@@ -1767,6 +1776,20 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
       const pw = mondayOfDay(peakRun.day);
       const s = weekLongRunShare(ctx, pw, floorFor(pw));
       peakOversized = s != null && Math.abs(s.longKm - round1(peakRun.km)) < 1e-6;
+      // Wave 22e: was the peak the long run the plan asked for? At most that week's planned long run (and the peak target) + 0.5 km, and at
+      // most half of its week. "Peak reached" is praise only for a run that kept to the plan.
+      const peakWeekPlan = pw === w || depth >= MAX_PLAN_DEPTH ? null : planWeek(ctx, pw, depth + 1);
+      const plannedKm = peakWeekPlan?.longRunKm ?? (pw === w ? plannedNextKm : null);
+      const weekKm = Math.max(weekRuns(ctx, pw).km, floorFor(pw));
+      const sharePct = weekKm > 0 ? Math.round((peakRun.km / weekKm) * 100) : 0;
+      // (A week with under 3 run days has no rhythm to hold a plan or a share against: the long run is most of it by nature, as for the watch note.)
+      const rhythm = weekRuns(ctx, pw).days >= LONG_RUN_SHARE_MIN_RUN_DAYS;
+      const longerThanWeek = rhythm && plannedKm != null && peakRun.km > plannedKm + PEAK_PLAN_SLACK_KM + 1e-9;
+      const longerThanTarget = lr0.targetPeakKm != null && peakRun.km > lr0.targetPeakKm + PEAK_PLAN_SLACK_KM + 1e-9;
+      const tooBig = rhythm && weekKm > 0 && peakRun.km > weekKm * LONG_RUN_MAX_WEEK_SHARE + 1e-9;
+      // The plan number it broke: the long run its week planned, else the peak target; null when only the share is to blame.
+      const brokenKm = longerThanWeek ? plannedKm : longerThanTarget ? lr0.targetPeakKm : null;
+      peakPlan = { plannedKm, sharePct, within: !longerThanWeek && !longerThanTarget && !tooBig, brokenKm };
     }
   }
 
@@ -1779,6 +1802,7 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
     share,
     shareDue: share != null && share.weekStart === prevStart && ctx.today === w,
     peakOversized,
+    peakPlan,
   };
   const windInfo: EnduranceWeekPlan['wind'] = wind ? { phase: wind.phase as 'taper' | 'race_week' | 'recovery', info: wind, peakKm: ctx.peakKm ?? ctx.goalKm } : null;
   const band = bandFor(targetKm, ctx, medianKm, windInfo, mode, { comebackFromKm: comeback != null ? prev.km : null, cutbackNormalKm: cutback?.normalKm ?? null });

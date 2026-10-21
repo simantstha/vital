@@ -1719,8 +1719,12 @@ test('maintain: at the weekly goal in the build phase the card is on_track with 
   assert.equal(p.longRun?.nextKm, 14);
   assert.equal(p.distance!.text, '3 of 30 km running this week');
   // Once the peak is reached the headline says so; with no race it is "On track — 30 km a week".
-  const peak = computeGoalProgress(weekInput([[[0, 3]], [[1, 6], [3, 6], [5, 6], [6, 18]], wkOf(30), wkOf(30), wkOf(30)], race));
-  assert.equal(peak.headline, 'On track for the half — long run peak 18 km reached');
+  // (A peak that kept to the plan: 13.5 km, then 15 km - the step of 2 km capped at the 15 km a 30 km week can carry.)
+  const peak = computeGoalProgress(weekInput([[[0, 3]], [[1, 5], [3, 5], [5, 5], [6, 15]], [[1, 5.5], [3, 5.5], [5, 5.5], [6, 13.5]], wkOf(30), wkOf(30)], race));
+  assert.equal(peak.headline, 'On track for the half — long run peak 15 km reached');
+  // ... and one that broke it (18 km after 12) is not praised (wave 22e).
+  const broke = computeGoalProgress(weekInput([[[0, 3]], [[1, 6], [3, 6], [5, 6], [6, 18]], wkOf(30), wkOf(30), wkOf(30)], race));
+  assert.equal(broke.headline, 'On track for the half — 30 km a week');
   assert.equal(computeGoalProgress(weekInput(weeks)).headline, 'On track — 30 km a week');
 });
 

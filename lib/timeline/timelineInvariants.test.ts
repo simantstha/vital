@@ -1322,3 +1322,39 @@ invariant(RUNNERS, 'a build, cutback or hold week at 70% of its target or more (
   if (name === 'runner_messy' || name === 'runner_no_race') assert.ok(near > 0, `${name}: no build day sat at 70-99% of its target, so this invariant checked nothing`);
   return out;
 });
+
+// ── wave 22e / P2.7: "peak reached" is not praise for a long run that broke the plan ─────────────────
+
+// "Long run peak 15 km — on target", "On track for the half — long run peak 15 km reached", "Peak long run 18 km — done": the card praises the peak.
+const PEAK_PRAISE = /long run peak [\d.]+\s?(?:km|mi)\b(?: — on target| reached)|\bpeak long run [\d.]+\s?(?:km|mi) — done/i;
+
+invariant(['runner_on_plan', 'runner_on_plan_half', 'runner_on_plan_imperial', 'runner_on_plan_obedient', 'runner_messy'], 'a peak long run is praised ("peak reached", "on target", "Peak long run - done") only when it was at most the plan + 0.5 km and at most half of its week', (snaps, name) => {
+  const runKm = scenarioRunKm(name);
+  const scn = buildScenario(name);
+  const byDate = new Map(snaps.map(s => [s.date, s]));
+  const out: Violation[] = [];
+  let praised = 0;
+  for (const snap of snaps) {
+    const praise = [...cardTexts(snap)].find(t => PEAK_PRAISE.test(plain(t.text)));
+    if (!praise) continue;
+    praised++;
+    // The 28-day peak run: the longest run strictly inside the last 28 days (the race itself excluded), the latest on a tie.
+    let peakDay: string | null = null;
+    let peakKm = 0;
+    for (let i = 0; i < 28; i++) {
+      const day = addDays(snap.date, -i);
+      const km = runKm.get(day) ?? 0;
+      if (km > peakKm + 1e-9 || (km === peakKm && km > 0 && peakDay == null)) { peakKm = km; peakDay = day; }
+    }
+    if (peakDay == null) continue;
+    const monday = mondayOfDate(peakDay);
+    const planKm = byDate.get(addDays(monday, 6))?.card?.distance?.plan?.longRunKm ?? byDate.get(monday)?.card?.distance?.plan?.longRunKm ?? null;
+    const stepTarget = byDate.get(monday)?.card?.distance?.stepTargetKm ?? 0;
+    const weekKm = Math.max(kmThrough(runKm, monday, addDays(monday, 6)), addDays(monday, 6) > snap.date ? stepTarget : 0);
+    const tol = 0.5;
+    if (planKm != null && peakKm > planKm + tol + 1e-9) out.push({ snap, detail: `${praise.where}: "${visible(praise.text)}" but the ${Math.round(peakKm * 10) / 10} km peak run (${peakDay}) was longer than that week's planned ${planKm} km` });
+    else if (peakKm > weekKm * 0.5 + 1e-9) out.push({ snap, detail: `${praise.where}: "${visible(praise.text)}" but the ${Math.round(peakKm * 10) / 10} km peak run (${peakDay}) was ${Math.round((peakKm / weekKm) * 100)}% of its ${Math.round(weekKm * 10) / 10} km week` });
+  }
+  assert.ok(praised > 0 || scn.user.raceDate == null || name === 'runner_on_plan_imperial', `${name}: the peak was never praised, so this invariant checked nothing`);
+  return out;
+});

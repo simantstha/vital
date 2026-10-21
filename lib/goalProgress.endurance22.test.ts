@@ -199,3 +199,19 @@ test('from 70% of the week\'s target, not yet run, the card says "keep the rest 
   const done = computeGoalProgress(input(weeks(thu, [[[1, 10], [3, 10.5]], wk(23), wk(21), wk(19), wk(17), wk(15)]), { todayKey: thu }));
   assert.match(done.reasons[0].text, /the week's step is done/);
 });
+
+// ── P2.7: "peak reached" is not praise for a long run that broke the plan ──
+
+test('a peak long run that broke the plan is not praised: neutral "longer than the 15 km plan", in the taper too (22e)', () => {
+  const race = { date: '2026-10-25', distanceKm: 21.1 }; // Monday 10-12 is the taper (13 days out)
+  const big = [[1, 4], [3, 4], [5, 4], [6, 18]] as Array<[number, number]>; // 18 km of 30: 60%, the plan said 15 km
+  const taper = computeGoalProgress(input(weeks('2026-10-13', [[[1, 5]], big, wk(30), wk(30), wk(30)]), { todayKey: '2026-10-13', race, racePeakWeekKm: 30 }));
+  const lr = taper.reasons.find(r => r.kind === 'long_run')!;
+  assert.equal(lr.text, 'Long-run peak done — 18 km, longer than the 15 km plan');
+  assert.equal(lr.tone, 'neutral');
+  assert.equal(taper.longRun?.overPlan, true);
+  // A peak that kept to the plan is still praised.
+  const fine = computeGoalProgress(input(weeks('2026-10-13', [[[1, 5]], [[1, 5], [3, 5], [5, 5], [6, 14]], wk(30), wk(30), wk(30)]), { todayKey: '2026-10-13', race, racePeakWeekKm: 30 }));
+  assert.equal(fine.reasons.find(r => r.kind === 'long_run')!.text, 'Peak long run 14 km — done');
+  assert.equal(fine.longRun?.overPlan, undefined);
+});

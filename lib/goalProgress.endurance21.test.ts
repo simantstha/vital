@@ -146,12 +146,12 @@ test('a long run that was most of its week: one watch note, the peak is never pr
   // An ordinary 14 km long run in a 30 km week (47%) says nothing of the kind.
   const ordinary = computeGoalProgress(input(weeks(monday, [[], [[1, 5], [3, 5], [5, 6], [6, 14]], wk(30), wk(30), wk(30)]), { todayKey: monday, race }));
   assert.ok(ordinary.reasons.every(r => !/of your week/.test(r.text)));
-  // In the taper the "peak long run - done" line stays, but is neutral, not [good].
+  // In the taper the "peak long run - done" line stays, but is neutral, not [good] (wave 22e: and says it was longer than the 15 km plan).
   const taperDay = '2026-11-10'; // 12 days out: the half's taper week
   const taper = computeGoalProgress(input(weeks(taperDay, [[], bigLong, wk(30), wk(30), wk(30)]), { todayKey: taperDay, race, racePeakWeekKm: 30 }));
   assert.equal(taper.race?.phase, 'taper');
   const done = taper.reasons.find(r => r.kind === 'long_run')!;
-  assert.deepEqual({ text: done.text, tone: done.tone }, { text: 'Peak long run 18 km — done', tone: 'neutral' });
+  assert.deepEqual({ text: done.text, tone: done.tone }, { text: 'Long-run peak done — 18 km, longer than the 15 km plan', tone: 'neutral' });
   // A normal peak is still praised.
   const fine = computeGoalProgress(input(weeks(taperDay, [[], [[1, 5], [3, 5], [5, 6], [6, 14]], wk(30), wk(30), wk(30)]), { todayKey: taperDay, race, racePeakWeekKm: 30 }));
   assert.equal(fine.reasons.find(r => r.kind === 'long_run')!.tone, 'good');

@@ -140,6 +140,7 @@ import {
 import { weekStartKeyForDay } from './localDay';
 import { KM_PER_MILE } from './metricFormat';
 import {
+  PEAK_PLAN_SLACK_KM,
   PHASE_CEILING_TOLERANCE,
   RACE_EVE_LINE,
   enduranceWeekPlan,
@@ -383,6 +384,13 @@ export interface GoalLongRunProgress {
   capNoteDue?: boolean;
   /** Additive: the 28-day peak long run was over 55% of its own week - never praised as a good peak. */
   oversized?: boolean;
+  /**
+   * Additive (wave 22e): the 28-day peak long run broke the plan - more than 0.5 km over the long run its week planned or the peak target
+   * (`peakPlanKm` is that number), or over half of its week (`peakPlanKm` null) - so it is not praised as "peak reached" / "on target";
+   * absent when it kept to it.
+   */
+  overPlan?: boolean;
+  peakPlanKm?: number | null;
 }
 
 export interface GoalProgressReason {
@@ -2676,6 +2684,9 @@ function longRunProgress(input: GoalProgressInput, race: GoalRaceProgress | null
     nextKm: ec.plan?.longRunKm ?? null,
     ...(ec.plan?.longRun.capNoteDue ? { capNoteDue: true } : {}),
     ...(ec.plan?.longRun.peakOversized ? { oversized: true } : {}),
+    ...(ec.plan?.longRun.peakPlan != null && !ec.plan.longRun.peakPlan.within
+      ? { overPlan: true, peakPlanKm: ec.plan.longRun.peakPlan.brokenKm }
+      : {}),
   };
 }
 
@@ -2710,10 +2721,19 @@ function looseMonthPosition(day: string): string {
 function longRunReason(input: GoalProgressInput, lr: GoalLongRunProgress | null, race: GoalRaceProgress | null): GoalProgressReason | null {
   if (lr == null || race == null || lr.targetPeakKm == null) return null;
   if (race.phase === 'recovery') return null;
-  // A peak that was most of its own week (over 55%) is never praised: neutral, the watch note says why.
-  const praise: ReasonTone = lr.oversized === true ? 'neutral' : 'good';
+  // A peak that was most of its own week (over 55%), or that broke the plan, is never praised: neutral, and it says what the plan was.
+  const praise: ReasonTone = lr.oversized === true || lr.overPlan === true ? 'neutral' : 'good';
+  // What a peak that broke the plan says: the plan number it passed ("longer than the 15 km plan"), or that it was most of its week.
+  // Once the taper has started the plan the coach quotes is the peak target.
+  const overTarget = lr.targetPeakKm != null && lr.peakKm > lr.targetPeakKm + PEAK_PLAN_SLACK_KM + 1e-9;
+  const planKm = lr.peakPlanKm != null && isWindDownPhase(race.phase) && overTarget ? lr.targetPeakKm : lr.peakPlanKm;
+  const brokePlan = lr.overPlan === true
+    ? (planKm != null ? `longer than the ${fmtLongRunPeak(input, planKm)} plan` : 'over half of your week')
+    : null;
   if (isWindDownPhase(race.phase)) {
-    return { kind: 'long_run', text: `Peak long run ${fmtLongRunPeak(input, lr.peakKm)} — done`, tone: praise };
+    return brokePlan != null
+      ? { kind: 'long_run', text: `Long-run peak done — ${fmtLongRunPeak(input, lr.peakKm)}, ${brokePlan}`, tone: 'neutral' }
+      : { kind: 'long_run', text: `Peak long run ${fmtLongRunPeak(input, lr.peakKm)} — done`, tone: praise };
   }
   // When the weekly goal cannot carry the race's peak long run, say so - in the first build week, then at most every 4th.
   const goalKm = input.target.weeklyDistanceKm ?? null;
@@ -2722,7 +2742,9 @@ function longRunReason(input: GoalProgressInput, lr: GoalLongRunProgress | null,
     : null;
   const note = capNote != null ? `. ${capNote}` : '';
   if (longRunPeakReached(input, lr, lr.targetPeakKm)) {
-    return { kind: 'long_run', text: `Long run peak ${fmtLongRunPeak(input, lr.peakKm)} — on target${note}`, tone: praise };
+    return brokePlan != null
+      ? { kind: 'long_run', text: `Long run peak ${fmtLongRunPeak(input, lr.peakKm)} — ${brokePlan}${note}`, tone: 'neutral' }
+      : { kind: 'long_run', text: `Long run peak ${fmtLongRunPeak(input, lr.peakKm)} — on target${note}`, tone: praise };
   }
   const word = longRunWord(lr.lastKm, unitsPerKm(input));
   const lead = `${word.charAt(0).toUpperCase()}${word.slice(1)} ${fmtDistance(input, lr.lastKm)}`;
@@ -3136,6 +3158,7 @@ function planOutcome(input: GoalProgressInput, ec: EnduranceCtx, race: GoalRaceP
     if (level === 'good') {
       const peakTarget = lrProgress?.targetPeakKm ?? null;
       const long = race != null && lrProgress != null && peakTarget != null && race.phase === 'build' && lrProgress.oversized !== true
+        && !(lrProgress.overPlan === true && longRunPeakReached(input, lrProgress, peakTarget))
         ? (longRunPeakReached(input, lrProgress, peakTarget)
             ? `long run peak ${fmtLongRunPeak(input, lrProgress.peakKm)} reached`
             : `${longRunWord(lrProgress.lastKm, u)} ${distanceNum(input, lrProgress.lastKm)} of ${formatTargetLongRun(peakTarget, u)}`)

@@ -238,8 +238,10 @@ test('long run: a peak the weekly goal cannot carry is "what fits", the race pea
   assert.equal(big.longRun?.raceTargetKm, undefined);
   // Imperial: the peak reached and the peak target are the same 11 mi (18 km is 11.18 mi: never "11.2" beside "11").
   // (Last week's 17.9 km long run is 54% of a 32.9 km week; in a smaller week it would be its own watch note, see the wave 21e tests.)
-  const reached = computeGoalProgress(input(weeks(TODAY, [[[0, 5]], [[1, 5], [3, 5], [5, 5], [6, 17.9]], wk(26), wk(24), wk(22)]), {
-    race, unitSystem: 'imperial', target: { weightKg: null, date: null, weeklySessions: null, weeklyDistanceKm: 40 },
+  // (A peak that kept to the plan - long runs 13, 15, 16.5, then 17.9 km, each week under half of its week - is praised; wave 22e.)
+  const wkLong = (long: number): Array<[number, number]> => [[1, 7], [3, 7], [5, 7], [6, long]];
+  const reached = computeGoalProgress(input(weeks(TODAY, [[[0, 5]], wkLong(17.9), wkLong(16.5), wkLong(15), wkLong(13)]), {
+    race, unitSystem: 'imperial', target: { weightKg: null, date: null, weeklySessions: null, weeklyDistanceKm: 50 },
   }));
   assert.equal(reached.distance!.plan?.kind, 'build');
   assert.equal(reached.reasons.find(r => r.kind === 'long_run')?.text, 'Long run peak 11 mi — on target');
