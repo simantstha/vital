@@ -441,7 +441,10 @@ function weightChange(input: WeeklyReviewInput, week: Week, prevWeek: Week): Wei
   const trend = computeWeightTrend(input.weightReadings).days;
   const cur = trend.filter(d => week.set.has(d.day));
   const prev = trend.filter(d => prevWeek.set.has(d.day));
-  if (cur.length >= MIN_WEIGH_INS_FOR_MEAN && prev.length >= MIN_WEIGH_INS_FOR_MEAN) {
+  // A weight-loss goal has one weight, the weekly average (the card never quotes the smoothed trend): a week after a thin one (a single
+  // weigh-in, as after a gap) is still compared with it, not with the smoothed line (wave 22w).
+  const prevNeeded = input.goal === 'weight_loss' ? 1 : MIN_WEIGH_INS_FOR_MEAN;
+  if (cur.length >= MIN_WEIGH_INS_FOR_MEAN && prev.length >= prevNeeded) {
     const curMean = mean(cur.map(d => d.rawKg)) as number;
     const prevMean = mean(prev.map(d => d.rawKg)) as number;
     return { deltaKg: curMean - prevMean, endKg: curMean, basis: 'mean' };
@@ -482,6 +485,11 @@ function reachedWeek(input: WeeklyReviewInput, week: Week): ReachedWeek | null {
     thisWeek: input.reachedAt != null && week.set.has(input.reachedAt),
     meanKg: newest == null ? null : round1(week7 != null && week7.n >= WEEK_MEAN_MIN_WEIGH_INS ? week7.meanKg : newest.rawKg),
   };
+}
+
+/** The reviewed week's average is exactly the target at the 0.1 kg it prints: "Holding at your 84 kg target". */
+function onTarget(r: ReachedWeek): boolean {
+  return r.targetKg != null && r.meanKg != null && Math.round(r.meanKg * 10) === Math.round(r.targetKg * 10);
 }
 
 /** Holding more than HOLDING_RANGE_KG under the target: the goal is met, the loss should stop. */
@@ -1527,11 +1535,16 @@ function reachedWin(input: WeeklyReviewInput, week: Week): string | null {
   const r = reachedWeek(input, week);
   if (r == null || r.meanKg == null) return null;
   if (r.thisWeek) {
+    // The average, as the card says it: its distance from the target when it is not on it ("weekly average within 0.3 kg of it").
+    const off = r.targetKg != null ? round1(Math.abs(r.meanKg - r.targetKg)) : 0;
+    const avg = off >= 0.1 ? `weekly average within ${weightText(input, off)} of it` : `weekly average ${weightTextFixed(input, r.meanKg)}`;
     return r.targetKg != null
-      ? `You reached your ${weightText(input, r.targetKg)} target — weekly average ${weightTextFixed(input, r.meanKg)}.`
+      ? `You reached your ${weightText(input, r.targetKg)} target — ${avg}.`
       : `You reached your target — weekly average ${weightTextFixed(input, r.meanKg)}.`;
   }
   if (isUnderTarget(r)) return null;
+  // Exactly on the target "Holding at 84.0 kg, within 1 kg of 84 kg" says it twice.
+  if (onTarget(r)) return `Holding at your ${weightText(input, r.targetKg as number)} target.`;
   return r.targetKg != null
     ? `Holding at ${weightTextFixed(input, r.meanKg)}, within ${weightText(input, HOLDING_RANGE_KG)} of ${weightText(input, r.targetKg)}.`
     : `Holding at ${weightTextFixed(input, r.meanKg)}.`;
@@ -1694,7 +1707,9 @@ function buildHeadline(input: WeeklyReviewInput, cands: Candidate[], week: Week)
     if (reached.thisWeek) {
       return clipHeadline(`You reached ${reached.targetKg != null ? weightText(input, reached.targetKg) : 'your target'} this week`);
     }
-    const holding = reached.meanKg != null ? `Holding at ${weightTextFixed(input, reached.meanKg)}` : 'Holding your target weight';
+    const holding = reached.meanKg != null
+      ? (onTarget(reached) ? `Holding at your ${weightText(input, reached.targetKg as number)} target` : `Holding at ${weightTextFixed(input, reached.meanKg)}`)
+      : 'Holding your target weight';
     return clipHeadline(sessions ? `${holding}, ${sessionCount(sessions)}` : holding);
   }
 

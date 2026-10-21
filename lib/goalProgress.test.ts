@@ -1843,7 +1843,8 @@ test('reached (weight loss): reasons lead with the reach, drop the green safe-ba
   const p = computeGoalProgress(justReachedInput());
   assert.deepEqual(p.reasons.map(r => r.kind), ['reached', 'position', 'next_step']);
   assert.equal(p.reasons[0].tone, 'good');
-  assert.match(p.reasons[0].text, /^You hit 85\.6 kg — weekly average 8\d\.\d kg, first reached \w{3} \d{1,2}$/);
+  // Wave 22w: an average that is not exactly the target is not printed as the reach - it says how close it is.
+  assert.match(p.reasons[0].text, /^You hit 85\.6 kg — weekly average within 0\.\d kg of your target, first reached \w{3} \d{1,2}$/);
   assert.doesNotMatch(p.reasons[0].text, /at or past/);
   // Wave 22w: switching to maintenance is a number - the step from the budget (no budget here: only the amounts).
   assert.deepEqual(p.reasons[2], {
@@ -2740,7 +2741,7 @@ test('F. reached: the weekly average reaches the target before the lagging trend
   assert.doesNotMatch(p.reasons.map(r => r.text).join(' '), /at or past/);
   assert.equal(p.weightRead?.state, 'reached');
   assert.ok(p.weightRead!.reachedDaysAgo! >= 0);
-  assert.equal(p.reasons[1].text, 'Holding at 84.0 kg, within 1 kg of 84 kg');
+  assert.equal(p.reasons[1].text, 'Holding at your 84 kg target');
   // Wave 21w: reached 12 days ago — past the first week, "Set a new target or switch to maintenance" is not asked again; wave 22w: the
   // first 3 weeks of maintenance carry the step toward it as a number instead.
   assert.deepEqual(p.reasons.map(r => r.kind), ['reached', 'position', 'next_step']);
@@ -2752,7 +2753,7 @@ test('F. reached copy is unit-aware: lb for imperial users', () => {
   const readings = onDays(span(-40, 0), o => (o < -12 ? 90 + (o + 40) * -0.2 : 84 + (o % 2 === 0 ? 0.05 : -0.05)));
   const p = computeGoalProgressRaw(youngGoal(80, { unitSystem: 'imperial', weightReadings: readings }));
   assert.ok(p.reasons[0].text.startsWith(`You hit 185.2${NBSP}lb — weekly average 185.2${NBSP}lb`), p.reasons[0].text);
-  assert.equal(p.reasons[1].text, `Holding at 185.2${NBSP}lb, within 2.2${NBSP}lb of 185.2${NBSP}lb`);
+  assert.equal(p.reasons[1].text, `Holding at your 185.2${NBSP}lb target`);
 });
 
 test('F. reached is sticky: one 84.5 reading does not flip it back, and the trend must leave the range to end it', () => {

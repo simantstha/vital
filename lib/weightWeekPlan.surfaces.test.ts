@@ -152,7 +152,7 @@ test('the opener says "weekly average" for the 7-day mean and "on the scale" onl
   const early = cardAt(readings(range(0, 7), n => 92 - 0.1 * n), [], 7);
   assert.equal(early.weightRead?.state, 'early');
   assert.match(plainSpaces(early.headline), /^Early read — weekly average down \d(\.\d)? kg in 7 days$/);
-  assert.match(goalOpenerLine(early, 'metric') ?? '', /down on your weekly average; your pace settles after 3 weeks\.$/);
+  assert.match(goalOpenerLine(early, 'metric') ?? '', /^Your weekly average is \d(\.\d)? kg below your start; your pace settles after 3 weeks\.$/);
   // Two weigh-ins in the week: no weekly average yet, so the latest reading is the number and the words say so.
   const sparse = cardAt(readings([0, 1, 3, 8], n => 92 - 0.1 * n), [], 8);
   assert.equal(sparse.weightRead?.weekMeanKg, null);
@@ -313,4 +313,21 @@ test('P2-5: an on-pace call that rests on two paces either side of the date show
   const steady = cardAt(readings(range(0, 130), n => 92 - 0.08 * n + wobble(n)), [], 35, { target: { weightKg: 84, date: D(126), weeklySessions: 3 } });
   assert.equal(steady.weightRead?.plan?.earlierPace ?? null, null);
   assert.doesNotMatch(steady.reasons.find(r => r.kind === 'rate')?.text ?? '', /–\d\.\d\d/);
+});
+
+test('P3: with the newest weigh-in a week old the rate names the window it was read over, and the coach says so', () => {
+  const pre = readings(range(0, 59), n => 92 - 0.08 * n + wobble(n)); // last weigh-in Thu Apr 30 (day 59)
+  const card = cardAt(pre, [], 70); // Monday 70: 11 days without a weigh-in
+  assert.equal(card.lastWeighInDaysAgo, 11);
+  assert.ok(card.weightRead?.plan?.staleSince != null);
+  const rate = card.reasons.find(r => r.kind === 'rate')?.text ?? '';
+  assert.match(plainSpaces(rate), /over the 3 weeks to Apr 30\b/);
+  assert.doesNotMatch(rate, /over the last 3 weeks/);
+  const coach = formatGoalProgressLines(card, 'metric').join('\n');
+  assert.match(coach, /over the 3 weeks of weigh-ins up to Apr 30/);
+  assert.doesNotMatch(coach, /over the last 3 weeks of weigh-ins/);
+  assert.match(coach, /No weigh-in since Apr 30: say so and ask for a weigh-in/);
+  // A fresh weigh-in is "the last 3 weeks" again.
+  const fresh = cardAt(pre, [], 62);
+  assert.match(plainSpaces(fresh.reasons.find(r => r.kind === 'rate')?.text ?? ''), /over the last 3 weeks/);
 });

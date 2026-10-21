@@ -220,7 +220,11 @@ export function formatGoalProgressLines(gp: GoalProgress, units: UnitSystem): st
     const weeks = Math.round((read?.paceWindowDays ?? 21) / 7);
     // "On pace" resting on two paces that straddle the date (wave 22w): the range, so the rate does not argue with the call.
     const earlierKg = plan?.earlierPace != null && plan.earlierPace.kgPerWeek < 0 && gp.ratePerWeek.kg < 0 ? plan.earlierPace.kgPerWeek : null;
-    const overWeeks = gp.goal === 'weight_loss' ? ` over the last ${weeks} weeks of weigh-ins` : '';
+    // With the newest weigh-in a week old or more the window ended then (wave 22w): "over the 3 weeks of weigh-ins up to May 10".
+    const upTo = gp.goal === 'weight_loss' && (gp.lastWeighInDaysAgo ?? 0) >= 7 ? shortDate(read?.scaleDay) : null;
+    const overWeeks = gp.goal === 'weight_loss'
+      ? (upTo != null ? ` over the ${weeks} weeks of weigh-ins up to ${upTo}` : ` over the last ${weeks} weeks of weigh-ins`)
+      : '';
     if (earlierKg != null) {
       const slow = signedWt(Math.max(gp.ratePerWeek.kg, earlierKg), units, 2).replace(/ (kg|lb)$/, '');
       nowBits.push(`rate ${slow} to ${signedWt(Math.min(gp.ratePerWeek.kg, earlierKg), units, 2)}/wk${overWeeks} (two weekly reads either side of the target date)`);

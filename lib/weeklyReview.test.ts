@@ -1983,9 +1983,22 @@ test('E. the weight stat is the change in the RAW weekly mean (not the smoothed 
   assert.equal(statByLabel(r, 'Trend change'), undefined);
 });
 
-test('E. a weight-loss week short of weigh-ins for a weekly mean falls back to the smoothed change, labelled "Weight change" - never a "trend"', () => {
+test('E. a weight-loss week after a thin one (one weigh-in) is still compared on the weekly average (wave 22w)', () => {
   const r = computeWeeklyReview(base({
     weightReadings: [...weigh([PREV[6]], () => 82), ...weigh(WEEK.slice(0, 4), i => 81.4 - i * 0.05)],
+    intakeDays: intake(WEEK, [1900, 1950, 2000, 1850, 2050, 1900, 1950]),
+  }));
+  const mean = statByLabel(r, 'Weekly avg weight')!;
+  assert.ok(mean);
+  assert.equal(mean.comparison, 'vs the week before');
+  assert.equal(statByLabel(r, 'Weight change'), undefined, 'no smoothed fallback: the card never quotes the smoothed trend');
+  assert.doesNotMatch(JSON.stringify(r), /smoothed|trend/i);
+});
+
+test('E. a weight-loss week short of weigh-ins for a weekly mean falls back to the smoothed change, labelled "Weight change" - never a "trend"', () => {
+  // (This week's own weigh-ins are what is short: one reading cannot make a weekly average.)
+  const r = computeWeeklyReview(base({
+    weightReadings: [...weigh([PREV[5], PREV[6]], () => 82), ...weigh(WEEK.slice(0, 1), () => 81.4)],
     intakeDays: intake(WEEK, [1900, 1950, 2000, 1850, 2050, 1900, 1950]),
   }));
   assert.equal(statByLabel(r, 'Weekly avg weight'), undefined);
@@ -2117,7 +2130,8 @@ test('F. the week the target is reached: "You reached 84 kg this week", a good w
   assert.equal(r.headline, 'You reached 84 kg this week');
   assert.equal(r.weekRating, 'good');
   assert.equal(r.weekGap, null);
-  assert.match(r.win ?? '', /^You reached your 84 kg target — weekly average 84\.\d kg\.$/);
+  // Wave 22w: an average that is not exactly the target says how close it is (the card does the same).
+  assert.match(r.win ?? '', /^You reached your 84 kg target — (weekly average 84\.0 kg|weekly average within 0\.\d kg of it)\.$/);
   assert.equal(r.slip, null, 'a heavy weekend is not scolded once the deficit is over');
   assert.equal(r.nextWeek, 'Switch to maintenance in Goals so your calorie target stops pushing you lower.');
   assert.ok(!r.stats.some(s => s.label === 'Days in budget'), 'budget days no longer rate a reached goal');

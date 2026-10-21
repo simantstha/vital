@@ -983,11 +983,13 @@ function calorieAdherenceStats(input: GoalProgressInput): { target: number; hit:
 function calorieAdherenceReason(input: GoalProgressInput): GoalProgressReason | null {
   const stats = calorieAdherenceStats(input);
   if (stats == null) return null;
-  const { target, hit, logged, frac } = stats;
+  const { target, hit, logged } = stats;
+  // The count is a rolling 7 days (not the calendar week), so it says so; and it is a fact, not a verdict: a rolling count that moves a day at
+  // a time would flip a good / neutral / watch tone daily, so the tone stays neutral (the week's verdict is the plan's).
   return {
     kind: 'calorie_adherence',
-    text: `Stayed within your ${withUnit(fmtKcal(target), 'kcal')} target on ${hit} of ${logged} logged ${plural(logged, 'day')} this week`,
-    tone: frac >= 0.7 ? 'good' : frac < 0.5 ? 'watch' : 'neutral',
+    text: `Stayed within your ${withUnit(fmtKcal(target), 'kcal')} target on ${hit} of ${logged} logged ${plural(logged, 'day')} in the last 7 days`,
+    tone: 'neutral',
   };
 }
 
@@ -1386,8 +1388,11 @@ function fmtWeightFixed(input: GoalProgressInput, kg: number): string {
 /** The reach itself, first in the reasons: the weekly average (the scale's honest average), never "trend ... is at or past". */
 function reachedLeadReason(input: GoalProgressInput, w: WeightBlock, targetKg: number): GoalProgressReason {
   const since = w.reachedAt ? `, first reached ${fmtDate(w.reachedAt, input.todayKey)}` : '';
+  // A weekly average that is not exactly the target is not printed as if it were the reach ("You hit 84 kg - weekly average 84.2 kg"):
+  // it says how close the average is.
+  const offBy = input.goal === 'weight_loss' && w.weekMeanKg != null ? round1(Math.abs(w.weekMeanKg - targetKg)) : 0;
   const avg = w.weekMeanKg != null
-    ? `weekly average ${fmtWeightFixed(input, w.weekMeanKg)}`
+    ? (offBy >= 0.1 ? `weekly average within ${fmtWeight(input, offBy)} of your target` : `weekly average ${fmtWeightFixed(input, w.weekMeanKg)}`)
     : w.scaleKg != null
       ? `latest weigh-in ${fmtWeightFixed(input, w.scaleKg)}`
       : `trend ${fmtWeightFixed(input, w.currentKg as number)}`;
@@ -1403,6 +1408,8 @@ function targetPositionReason(input: GoalProgressInput, w: WeightBlock, targetKg
   const holdKg = w.progressKg ?? (w.currentKg as number);
   const diff = holdKg - targetKg;
   if (Math.abs(diff) <= HOLDING_NEAR_TARGET_KG) {
+    // Exactly on the target, "Holding at 84.0 kg, within 1 kg of 84 kg" says it twice: "Holding at your 84 kg target".
+    if (input.goal === 'weight_loss' && round1(holdKg) === round1(targetKg)) return { kind: 'position', text: `Holding at your ${fmtWeight(input, targetKg)} target`, tone: 'neutral' };
     return {
       kind: 'position',
       text: `Holding at ${fmtWeightFixed(input, holdKg)}, within ${fmtWeight(input, HOLDING_NEAR_TARGET_KG)} of ${fmtWeight(input, targetKg)}`,
@@ -1445,15 +1452,15 @@ function aroundText(input: GoalProgressInput, w: WeightBlock, eta: string): stri
 function paceReason(
   input: GoalProgressInput,
   pace: Pick<WeightPace, 'kgPerWeek' | 'pctPerWeek' | 'windowDays'>,
-  opts: { tooFast?: boolean; easeToMaintenance?: boolean; other?: Pick<WeightPace, 'kgPerWeek' | 'pctPerWeek'> | null } = {},
+  opts: { tooFast?: boolean; easeToMaintenance?: boolean; other?: Pick<WeightPace, 'kgPerWeek' | 'pctPerWeek'> | null; endedOn?: string | null } = {},
 ): GoalProgressReason {
-  if (opts.other != null && pace.kgPerWeek < 0 && opts.other.kgPerWeek < 0) return paceRangeReason(input, pace, opts.other);
+  if (opts.other != null && pace.kgPerWeek < 0 && opts.other.kgPerWeek < 0) return paceRangeReason(input, pace, opts.other, opts.endedOn);
   const dir = pace.kgPerWeek < 0 ? 'Down' : 'Up';
   // The shown figure decides the band: a rate printed as "1%" is never called "above the 1% ceiling".
   const abs = round2(Math.abs(pace.pctPerWeek));
   const band = FAT_LOSS_BAND;
   const weeks = Math.round(pace.windowDays / 7);
-  let text = `${dir} ${fmtWeight(input, Math.abs(pace.kgPerWeek), 2)}/wk (${abs}% of bodyweight) over the last ${weeks} weeks`;
+  let text = `${dir} ${fmtWeight(input, Math.abs(pace.kgPerWeek), 2)}/wk (${abs}% of bodyweight) ${paceWindowText(input, weeks, opts.endedOn)}`;
   let tone: ReasonTone = 'neutral';
   if (pace.kgPerWeek < 0) {
     if (opts.tooFast && abs > band.maxPct) {
@@ -1478,17 +1485,23 @@ function paceReason(
   return { kind: 'rate', text, tone };
 }
 
+/** "over the last 3 weeks", or - when the newest weigh-in is a week old or more - "over the 3 weeks to May 10": the window is the one that really ends then. */
+function paceWindowText(input: GoalProgressInput, weeks: number, endedOn?: string | null): string {
+  return endedOn != null ? `over the ${weeks} weeks to ${fmtDate(endedOn, input.todayKey)}` : `over the last ${weeks} weeks`;
+}
+
 /** "Down 0.37–0.58 kg/wk (0.41–0.64% of bodyweight) over the last 3 weeks": the two paces an on-pace call rests on. */
 function paceRangeReason(
   input: GoalProgressInput,
   pace: Pick<WeightPace, 'kgPerWeek' | 'pctPerWeek' | 'windowDays'>,
   other: Pick<WeightPace, 'kgPerWeek' | 'pctPerWeek'>,
+  endedOn?: string | null,
 ): GoalProgressReason {
   const band = FAT_LOSS_BAND;
   const kgs = [Math.abs(pace.kgPerWeek), Math.abs(other.kgPerWeek)].sort((a, b) => a - b);
   const pcts = [round2(Math.abs(pace.pctPerWeek)), round2(Math.abs(other.pctPerWeek))].sort((a, b) => a - b);
   const weeks = Math.round(pace.windowDays / 7);
-  let text = `Down ${weightNum(input, kgs[0], 2)}–${fmtWeight(input, kgs[1], 2)}/wk (${pcts[0]}–${pcts[1]}% of bodyweight) over the last ${weeks} weeks`;
+  let text = `Down ${weightNum(input, kgs[0], 2)}–${fmtWeight(input, kgs[1], 2)}/wk (${pcts[0]}–${pcts[1]}% of bodyweight) ${paceWindowText(input, weeks, endedOn)}`;
   let tone: ReasonTone = 'neutral';
   if (pcts[0] >= band.minPct && pcts[1] <= band.maxPct) {
     tone = 'good';
@@ -1737,7 +1750,7 @@ function fatLossOutcome(input: GoalProgressInput, w: WeightBlock): Outcome {
   // Too fast is the week's call (lib/weightPace.ts tooFastLoss, hysteresis) — the very rate the headline quotes, never a
   // different window's — and a pace still between 0.9% and the ceiling keeps it, without calling that "safe".
   const held = plan.tooFast && round2(absPct) <= FAT_LOSS_BAND.maxPct;
-  const rate = paceReason(input, p, { tooFast: plan.tooFast, other: plan.earlierPace });
+  const rate = paceReason(input, p, { tooFast: plan.tooFast, other: plan.earlierPace, endedOn: w.aging ? w.lastWeighInDay : null });
   const action = planActionReason(plan);
 
   if (plan.tooFast && !plan.nearlyThere) {

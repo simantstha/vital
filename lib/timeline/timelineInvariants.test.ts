@@ -945,6 +945,86 @@ invariant(WEIGHT, 'the opener quotes the rate the headline printed, not the same
   return out;
 });
 
+// ── wave 22w, P3: wording ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+invariant(WEIGHT, 'the early read says where the weekly average is against the start, not "X of Y kg down on your weekly average" (P3)', (snaps, name) => {
+  const out = textMatches(snaps, s => [...coachTexts(s), ...cardTexts(s)], /of [\d.]+ kg down on your weekly average/);
+  assert.ok(snaps.some(s => /weekly average is [\d.]+ kg below your start/.test(plain(s.opener?.required ?? ''))), `${name}: the early read never used the new wording, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(['weight_loss_logged'], 'the calorie adherence line counts "in the last 7 days" (it is a rolling week) and its tone does not flip day to day (P3)', (snaps, name) => {
+  const out: Violation[] = [];
+  let seen = 0;
+  for (const snap of snaps) {
+    for (const r of snap.card?.reasons ?? []) {
+      if (r.kind !== 'calorie_adherence') continue;
+      seen++;
+      if (/this week/.test(r.text) || !/in the last 7 days/.test(plain(r.text)) || r.tone !== 'neutral') out.push({ snap, detail: `[${r.tone}] "${visible(r.text)}"` });
+    }
+  }
+  assert.ok(seen > 0, `${name}: no adherence line appeared, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(WEIGHT, 'a reached card does not print "weekly average 84.2 kg" as the reach; it says how close the average is to the target (P3)', (snaps, name) => {
+  const out: Violation[] = [];
+  let seen = 0;
+  for (const snap of snaps) {
+    const target = snap.card?.target.weightKg;
+    const lead = snap.card?.verdict === 'reached' ? snap.card.reasons.find(r => r.kind === 'reached') : undefined;
+    const avg = snap.card?.weightRead?.weekMeanKg;
+    if (lead == null || target == null || avg == null || Math.abs(avg - target) < 0.05) continue;
+    seen++;
+    if (!/weekly average within [\d.]+ kg of your target/.test(plain(lead.text))) out.push({ snap, detail: `weekly average ${avg} vs target ${target}: "${visible(lead.text)}"` });
+  }
+  assert.ok(seen > 0, `${name}: no reached card had an average off the target, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(WEIGHT, '"Holding at 84.0 kg, within 1 kg of 84 kg" is never said when the average is exactly on the target (P3)', snaps => {
+  const out: Violation[] = [];
+  for (const snap of snaps) {
+    const all: Text[] = [...allTexts(snap), ...(snap.review ? [{ where: 'push.body', text: snap.review.alert.body }] : [])];
+    for (const t of all) {
+      const m = /Holding at ([\d.]+) kg, within 1 kg of ([\d.]+) kg/.exec(plain(t.text));
+      if (m && Math.abs(Number(m[1]) - Number(m[2])) < 0.05) out.push({ snap, detail: `${t.where}: "${visible(t.text)}"` });
+    }
+  }
+  return out;
+});
+
+invariant(WEIGHT, 'the opener that asks about a new target celebrates the reach (P3)', (snaps, name) => {
+  const out: Violation[] = [];
+  let seen = 0;
+  for (const snap of snaps) {
+    const line = snap.opener?.required ?? '';
+    if (!/set a new target or switch to maintenance/i.test(line) || snap.card?.verdict !== 'reached') continue;
+    seen++;
+    if (!/Congratulations/.test(line)) out.push({ snap, detail: `"${visible(line)}"` });
+  }
+  assert.ok(seen > 0, `${name}: the reached opener never asked, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(WEIGHT, 'a rate "over the last 3 weeks" is never quoted when the newest weigh-in is a week old or more (P3)', snaps => {
+  const out: Violation[] = [];
+  for (const snap of snaps) {
+    const age = snap.card?.lastWeighInDaysAgo;
+    if (age == null || age < 7) continue;
+    for (const t of [...cardTexts(snap), ...coachTexts(snap)]) {
+      if (/over the last \d+ weeks/.test(plain(t.text))) out.push({ snap, detail: `newest weigh-in ${age} days old, ${t.where}: "${visible(t.text.slice(0, 200))}"` });
+    }
+  }
+  return out;
+});
+
+invariant(WEIGHT, 'a weight-loss review never labels its weight change "smoothed" (the card does not quote the smoothed trend) (P3)', (snaps, name) => {
+  const out = textMatches(snaps, reviewTexts, /smoothed/i);
+  assert.ok(snaps.filter(s => s.review != null).length > 0, `${name}: no review, so this invariant checked nothing`);
+  return out;
+});
+
 // P2-1: coming back after a gap carries the colour from before it: a welcome back never downgrades on_track / ahead to progressing.
 // Compared on each return day with the verdict of the last day before the gap.
 invariant(WEIGHT, 'a welcome back keeps the verdict the card had before the gap (P2-1)', snaps_ => {
