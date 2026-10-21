@@ -927,6 +927,24 @@ invariant(WEIGHT, 'the coach lines never call the target date an "ETA" (P2-5)', 
   return out;
 });
 
+// P2-8: one formatted rate. The headline's "losing about 0.58 kg a week" and the opener's "losing about 0.6 kg a week" are the same rate rounded
+// twice, to different places; every surface quotes the one the card printed.
+const LOSING_ABOUT = /losing about ([\d.]+) (?:kg|lb) a week/;
+
+invariant(WEIGHT, 'the opener quotes the rate the headline printed, not the same rate rounded again (P2-8)', (snaps, name) => {
+  const out: Violation[] = [];
+  let compared = 0;
+  for (const snap of snaps) {
+    const head = LOSING_ABOUT.exec(plain(snap.card?.headline ?? ''));
+    const open = LOSING_ABOUT.exec(plain(snap.opener?.required ?? ''));
+    if (head == null || open == null) continue;
+    compared++;
+    if (head[1] !== open[1]) out.push({ snap, detail: `headline "${visible(snap.card?.headline ?? '')}" vs opener "${visible(snap.opener?.required ?? '')}"` });
+  }
+  assert.ok(compared > 0, `${name}: no day quoted a rate in both headline and opener, so this invariant checked nothing`);
+  return out;
+});
+
 // P2-1: coming back after a gap carries the colour from before it: a welcome back never downgrades on_track / ahead to progressing.
 // Compared on each return day with the verdict of the last day before the gap.
 invariant(WEIGHT, 'a welcome back keeps the verdict the card had before the gap (P2-1)', snaps_ => {

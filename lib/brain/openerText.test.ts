@@ -251,7 +251,8 @@ test('a weight-loss card that made no pace call gets no pace phrase: too fast, s
   assert.equal(goalOpenerLine(gp({ verdict: 'stalled', eta: null }), 'metric'), "You're 1.7 of 7.7 kg down, but your weight has been flat lately.");
   assert.equal(
     goalOpenerLine(gp({ verdict: 'progressing', eta: null, ratePerWeek: { kg: -0.58, pctBodyweight: -0.7 } }), 'metric'),
-    "You're 1.7 of 7.7 kg down and losing about 0.6 kg a week.",
+    // Wave 22w: the opener quotes the card headline's two-decimal rate ("losing about 0.58 kg a week"), not the same rate rounded again.
+    "You're 1.7 of 7.7 kg down and losing about 0.58 kg a week.",
   );
 });
 

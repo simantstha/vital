@@ -36,6 +36,11 @@ function weightAmount(kg: number, units: UnitSystem): string {
   return trimmed(Math.abs(units === 'imperial' ? kg * LB_PER_KG : kg));
 }
 
+/** A weekly rate to two decimals, trailing zeros dropped ("0.58", "0.6") - the very figure the card's headline prints, so it is never rounded twice. */
+function rateAmount(kgPerWeek: number, units: UnitSystem): string {
+  return String(Math.round(Math.abs(units === 'imperial' ? kgPerWeek * LB_PER_KG : kgPerWeek) * 100) / 100);
+}
+
 /** One fixed decimal ("84.0"), for the weight a reached goal holds at. */
 function weightFixed(kg: number, units: UnitSystem): string {
   return Math.abs(units === 'imperial' ? kg * LB_PER_KG : kg).toFixed(1);
@@ -223,7 +228,7 @@ export function goalOpenerLine(gp: GoalProgress | null | undefined, units: UnitS
         if (gp.verdict === 'too_fast') return `${base}, but losing faster than is easy to keep.`;
         if (gp.verdict === 'stalled') return `${base}, but your weight has been flat lately.`;
         if (gp.verdict === 'progressing' && gp.ratePerWeek.kg != null && gp.ratePerWeek.kg < 0) {
-          return `${base} and losing about ${weightAmount(gp.ratePerWeek.kg, units)} ${unit} a week.`;
+          return `${base} and losing about ${rateAmount(gp.ratePerWeek.kg, units)} ${unit} a week.`;
         }
       }
       const pace = paceClause(gp);
