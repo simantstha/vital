@@ -215,3 +215,25 @@ test('a peak long run that broke the plan is not praised: neutral "longer than t
   assert.equal(fine.reasons.find(r => r.kind === 'long_run')!.text, 'Peak long run 14 km — done');
   assert.equal(fine.longRun?.overPlan, undefined);
 });
+
+// ── P2.8: an imperial runner reads one set of numbers ──────────────────────
+
+test('the long-run watch note speaks the goal\'s own numbers and the runner\'s unit: "keep long runs ~9 mi on 18.6 mi weeks, or add easy miles" (22e)', () => {
+  const monday = '2026-10-12'; // the Monday after the oversized week: the one day the note is said
+  const bigLong: Array<[number, number]> = [[1, 4], [3, 4], [5, 4], [6, 18]]; // 18 km (11.2 mi) in a 30 km week: 60%
+  const history = [[], bigLong, wk(30), wk(30), wk(30)];
+  const metric = computeGoalProgress(input(weeks(monday, history), { todayKey: monday, race: { date: '2026-11-22', distanceKm: 21.1 } }));
+  assert.equal(metric.reasons.find(r => r.kind === 'long_run')!.text, '18 km was 60% of your week — keep long runs ~15 km on 30 km weeks, or add easy km');
+  const imperial = computeGoalProgress(input(weeks(monday, history), { todayKey: monday, unitSystem: 'imperial', race: { date: '2026-11-22', distanceKm: 21.1 } }));
+  assert.equal(imperial.reasons.find(r => r.kind === 'long_run')!.text, '11.2 mi was 60% of your week — keep long runs ~9 mi on 18.6 mi weeks, or add easy miles');
+});
+
+test('the race-eve conservative-start line speaks the runner\'s unit (22e)', () => {
+  const race = { date: '2026-10-11', distanceKm: 21.1 };
+  const eve = '2026-10-10'; // Saturday: a week 1.5x the plan or more adds "Start conservatively"
+  const heavy = [[[1, 15], [3, 15], [5, 15]], wk(30), wk(30), wk(30)] as Array<Array<[number, number]>>;
+  const metric = computeGoalProgress(input(weeks(eve, heavy), { todayKey: eve, race, racePeakWeekKm: 30 }));
+  const imperial = computeGoalProgress(input(weeks(eve, heavy), { todayKey: eve, race, racePeakWeekKm: 30, unitSystem: 'imperial' }));
+  assert.ok(metric.reasons.some(r => r.text === 'Start conservatively — the first few km easy'), texts(metric));
+  assert.ok(imperial.reasons.some(r => r.text === 'Start conservatively — the first few miles easy'), texts(imperial));
+});

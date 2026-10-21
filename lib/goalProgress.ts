@@ -144,13 +144,14 @@ import {
   PHASE_CEILING_TOLERANCE,
   RACE_EVE_LINE,
   enduranceWeekPlan,
-  RACE_EVE_CONSERVATIVE_LINE,
+  raceEveConservativeLine,
   RACE_EVE_HEAVY_WEEK,
   TAPER_GOOD_MIN_FRACTION,
   LONG_RUN_MAX_WEEK_SHARE,
   racePaceReps,
   findRaceRun,
   formatRaceTime,
+  floorLongRunKm,
   formatTargetLongRun,
   gradeEnduranceWeek,
   isWindDownPhase,
@@ -2857,13 +2858,15 @@ function windDownLine(
  * "18 km was 60% of your week — keep long runs ~15 km on 30 km weeks, or add easy km": a long run is the week's biggest
  * run, not most of it (at most half). A watch note, said once for the most recent week that did it.
  */
-function longRunShareReason(input: GoalProgressInput, share: LongRunShare): GoalProgressReason {
+function longRunShareReason(input: GoalProgressInput, share: LongRunShare, plan: EnduranceWeekPlan): GoalProgressReason {
   const u = unitsPerKm(input);
-  const weeks = withUnit(Math.round(share.weekKm * u), input.unitSystem === 'imperial' ? 'mi' : 'km');
-  const keep = formatTargetLongRun(share.weekKm * LONG_RUN_MAX_WEEK_SHARE, u);
+  // The weeks it names are the GOAL's (the number every other line says, "18.6 mi"), and the long run it keeps is the plan's own peak target at
+  // that goal (at most half of it) - not a second number derived from the one oversized week. The unit word follows the runner's unit.
+  const keepKm = plan.longRun.targetPeakKm ?? floorLongRunKm(plan.goalKm * LONG_RUN_MAX_WEEK_SHARE, u);
+  const easy = input.unitSystem === 'imperial' ? 'miles' : 'km';
   return {
     kind: 'long_run',
-    text: `${fmtDistance(input, share.longKm)} was ${share.sharePct}% of your week — keep long runs ~${keep} on ${weeks} weeks, or add easy km`,
+    text: `${fmtDistance(input, share.longKm)} was ${share.sharePct}% of your week — keep long runs ~${formatTargetLongRun(keepKm, u)} on ${fmtDistance(input, plan.goalKm)} weeks, or add easy ${easy}`,
     tone: 'watch',
   };
 }
@@ -2888,7 +2891,7 @@ function windDownPlanOutcome(input: GoalProgressInput, ec: EnduranceCtx, plan: E
       headline: RACE_EVE_LINE,
       reasons: [
         raceReason(race),
-        ...(heavy ? [{ kind: 'race_phase', text: RACE_EVE_CONSERVATIVE_LINE, tone: 'neutral' as const }] : []),
+        ...(heavy ? [{ kind: 'race_phase', text: raceEveConservativeLine(unitsPerKm(input)), tone: 'neutral' as const }] : []),
       ],
       raceHandled: true,
     };
@@ -3026,7 +3029,7 @@ function planOutcome(input: GoalProgressInput, ec: EnduranceCtx, race: GoalRaceP
   const planLine: GoalProgressReason = { kind: 'plan', text: plan.purpose, tone: 'neutral' };
   // A long run that was most of its week (over 55%): one watch note for the most recent such week, in the build weeks.
   const buildLike = plan.kind === 'build' || plan.kind === 'maintain' || plan.kind === 'hold';
-  const shareNote = buildLike && plan.longRun.share != null && plan.longRun.shareDue ? longRunShareReason(input, plan.longRun.share) : null;
+  const shareNote = buildLike && plan.longRun.share != null && plan.longRun.shareDue ? longRunShareReason(input, plan.longRun.share, plan) : null;
   const withRace = (reasons: GoalProgressReason[]): GoalProgressReason[] => (raceLine ? [raceLine, ...reasons] : reasons).slice(0, 3);
   const body = (lead: GoalProgressReason | null, extra: Array<GoalProgressReason | null> = []): GoalProgressReason[] =>
     withRace(enduranceReasons(lead, [...extra, shareNote, lrReason, sessions, ...vitals]));

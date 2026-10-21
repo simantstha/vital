@@ -901,6 +901,10 @@ export const CAP_NOTE_EVERY_WEEKS = 4;
 /** Race eve after a week at least this many times the plan: add the "start conservatively" note. */
 export const RACE_EVE_HEAVY_WEEK = 1.5;
 export const RACE_EVE_CONSERVATIVE_LINE = 'Start conservatively — the first few km easy';
+/** `RACE_EVE_CONSERVATIVE_LINE` in the runner's unit ("the first few miles easy" for miles). */
+export function raceEveConservativeLine(unitsPerKm = 1): string {
+  return unitsPerKm < 1 ? RACE_EVE_CONSERVATIVE_LINE.replace(/km easy$/, 'miles easy') : RACE_EVE_CONSERVATIVE_LINE;
+}
 /** A run this share of the race distance, within a day of race day, is the race. */
 export const RACE_RUN_MIN_FRACTION = 0.9;
 

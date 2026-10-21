@@ -126,7 +126,7 @@ test('race eve: the coach line carries no km of the week, only the rest and the 
   const history = [run(addDays(TODAY, -3), 10), run(addDays(TODAY, -9), 12), run(addDays(TODAY, -16), 9), run(addDays(TODAY, -23), 10)];
   const heavy = computeGoalProgress(input([run(TODAY, 14), run(addDays(TODAY, -1), 16), ...history], { target: { weightKg: null, date: null, weeklySessions: null, weeklyDistanceKm: 50 }, race, racePeakWeekKm: 40 }));
   const text = coach(heavy);
-  assert.match(text, /Race phase: race tomorrow — rest or a 15-min shakeout; lay out your kit; no training advice, no volume talk, no remarks about this week's km/);
+  assert.match(text, /Race phase: race tomorrow — rest or a 15-min shakeout; lay out your kit; no training advice, no volume talk, no remarks about this week's distance/);
   assert.doesNotMatch(text, /- Now: .*\d+ of/);
   assert.doesNotMatch(text, /\d+ of ~?\d+/);
   assert.match(text, /Start conservatively — the first few km easy/);

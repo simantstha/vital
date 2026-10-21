@@ -75,7 +75,7 @@ function racePhaseLine(gp: GoalProgress, units: UnitSystem): string | null {
           : '- Race phase: race day — warm up easy and start relaxed; no training advice, no volume talk';
       }
       if (race.daysToGo === 1) {
-        return `- Race phase: race tomorrow — ${plainSpaces(RACE_EVE_LINE.replace(/^Race tomorrow — /, ''))}; no training advice, no volume talk, no remarks about this week's km`;
+        return `- Race phase: race tomorrow — ${plainSpaces(RACE_EVE_LINE.replace(/^Race tomorrow — /, ''))}; no training advice, no volume talk, no remarks about this week's distance`;
       }
       return `- Race phase: race week${target ? ` — ~${target} before the race at most` : ''}; short easy runs, rest 1–2 days before race day — no new volume or hard sessions`;
     case 'recovery': {
@@ -169,7 +169,7 @@ function weekTargetLine(gp: GoalProgress, units: UnitSystem): string | null {
       }
       // A comeback week far past its "up to" ceiling: stay at that ceiling.
       if (plan.overCapRead === 'well') {
-        return `- This week's target: stay at ~${t} — last week was well over its comeback ceiling (a spike); do not build on the jump, and do not praise the extra km${strides}`;
+        return `- This week's target: stay at ~${t} — last week was well over its comeback ceiling (a spike); do not build on the jump, and do not praise the extra distance${strides}`;
       }
       return `- This week's target: hold ~${t} — last week was over the safe step; do not push higher or step up from the jump${strides}`;
     case 'restart':

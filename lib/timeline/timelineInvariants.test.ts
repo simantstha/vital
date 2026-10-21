@@ -1358,3 +1358,38 @@ invariant(['runner_on_plan', 'runner_on_plan_half', 'runner_on_plan_imperial', '
   assert.ok(praised > 0 || scn.user.raceDate == null || name === 'runner_on_plan_imperial', `${name}: the peak was never praised, so this invariant checked nothing`);
   return out;
 });
+
+// ── wave 22e / P2.8: an imperial runner never reads a kilometre, nor two numbers for one thing ───────────
+
+invariant(['runner_on_plan_imperial'], 'no card, coach line, opener or review string says "km" to an imperial runner', (snaps, name) => {
+  const out: Violation[] = [];
+  for (const snap of snaps) {
+    for (const t of [...cardTexts(snap), ...coachTexts(snap), ...reviewTexts(snap)]) {
+      // The standing goal line of the coach is metric-free too ("Goal: endurance; 18.6 mi/week"), so there is no exemption.
+      if (/\bkm\b/i.test(plain(t.text))) out.push({ snap, detail: `${t.where}: "${visible(t.text)}"` });
+    }
+  }
+  assert.ok(snaps.length > 0, `${name}: nothing stepped`);
+  return out;
+});
+
+// "11.2 mi was 60% of your week - keep long runs ~9 mi on 18.6 mi weeks, or add easy miles": the weeks it names are the GOAL's (the number
+// every other line says), and the long run it keeps is at most half of them (the plan's peak target at that goal).
+const SHARE_NOTE_NUMBERS = /keep long runs ~(\d+(?:\.\d+)?)\s?(km|mi) on (\d+(?:\.\d+)?)\s?(?:km|mi) weeks/;
+
+invariant(RUNNERS, 'the long-run watch note names the goal\'s own weekly distance and a long run of at most half of it', (snaps, name) => {
+  const out: Violation[] = [];
+  for (const snap of snaps) {
+    const d = snap.card?.distance;
+    if (!d) continue;
+    for (const t of cardTexts(snap)) {
+      const m = SHARE_NOTE_NUMBERS.exec(plain(t.text));
+      if (!m) continue;
+      const goal = inDisplayUnit(d.targetKm, m[2]);
+      if (Math.abs(Number(m[3]) - goal) > 0.05 + 1e-9) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" names ${m[3]} ${m[2]} weeks, the goal is ${goal} ${m[2]}` });
+      if (Number(m[1]) > goal / 2 + 1e-9) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" keeps long runs at ~${m[1]} ${m[2]}, over half of the ${goal} ${m[2]} goal` });
+      if (m[2] === 'mi' && /add easy km/.test(plain(t.text))) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" says km to a runner in miles` });
+    }
+  }
+  return out;
+});
