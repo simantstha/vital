@@ -1227,3 +1227,23 @@ invariant(RUNNERS, "a comeback week's review Next week names the same usual km a
   if (name === 'runner_messy' || name === 'runner_comeback_spike') assert.ok(compared > 0, `${name}: no comeback Monday had a card and a review, so this invariant checked nothing`);
   return out;
 });
+
+// ── wave 22e / P2.4: race day shows the race, not the week's km ─────────────
+
+const isRaceDay = (s: DaySnapshot): boolean => s.race?.daysToRace === 0 && s.race.phase !== 'recovery';
+
+invariant(['runner_on_plan', 'runner_on_plan_half', 'runner_on_plan_imperial', 'runner_on_plan_obedient', 'runner_messy'], 'race day carries no km-of-the-week figure (card, coach lines, opener): "Race done - 21.1 km", not "28 of ~14 km running this week"', (snaps, name) => {
+  const out: Violation[] = [];
+  let days = 0;
+  for (const snap of snaps) {
+    if (!isRaceDay(snap)) continue;
+    days++;
+    const d = snap.card?.distance;
+    if (d?.thisWeekKm != null) out.push({ snap, detail: `distance.thisWeekKm ${d.thisWeekKm} is set on race day: "${visible(d.text)}"` });
+    const texts = [...cardTexts(snap), ...coachTexts(snap).filter(t => !/^- (?:Goal|Long run)\b/.test(t.text))];
+    for (const t of texts) if (WEEK_KM_FIGURE.test(plain(t.text))) out.push({ snap, detail: `${t.where}: "${visible(t.text)}"` });
+    if (snap.card?.race?.completed != null && !/^Race done — [\d.]+\s?(?:km|mi)$/.test(plain(d?.text ?? ''))) out.push({ snap, detail: `distance.text "${visible(d?.text ?? '')}" is not "Race done — N km" once the race is logged` });
+  }
+  assert.ok(days > 0, `${name}: no race day was stepped, so this invariant checked nothing`);
+  return out;
+});

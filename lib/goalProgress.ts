@@ -2436,11 +2436,14 @@ function distanceProgress(input: GoalProgressInput): GoalDistanceProgress | null
   // The day before the race is for rest: the week's km are not on the card at all.
   const raceNow = raceProgress(input);
   const eve = raceNow != null && raceNow.phase !== 'recovery' && raceNow.daysToGo === 1;
+  // Race day is for the race, not the week's km (wave 22e): "Race done - 21.1 km" once it is logged, "Race day" before; no figure of the week.
+  const raceDay = raceNow != null && raceNow.phase !== 'recovery' && raceNow.daysToGo === 0;
   // One target for the week: when the plan caps it below the goal, say both
   // ("22.7 of ~27 km ... · goal 30 km"); otherwise the goal alone. Recovery's
   // number is a ceiling ("up to"); the first week of running has no target yet.
   let text: string;
   if (eve) text = 'Race tomorrow';
+  else if (raceDay) text = raceNow?.completed ? `Race done — ${fmtDistance(input, raceNow.completed.km)}` : 'Race day';
   else if (plan?.kind === 'baseline') text = `${fmtDistance(input, doneKm)} so far · baseline week`;
   else if (plan?.kind === 'recovery') {
     // Just over the ceiling but inside its 10% slack is "right at" it, never "7.5 of up to 7".
@@ -2453,7 +2456,7 @@ function distanceProgress(input: GoalProgressInput): GoalDistanceProgress | null
   else text = `${done} of ${fmtDistance(input, targetKm)} running this week`;
   return {
     targetKm,
-    thisWeekKm: hasData && !eve ? round1(doneKm) : null,
+    thisWeekKm: hasData && !eve && !raceDay ? round1(doneKm) : null,
     avg4wKm: plan?.avg4wKm ?? null,
     weekStart: ec.weekStart,
     stepTargetKm: stepKm,

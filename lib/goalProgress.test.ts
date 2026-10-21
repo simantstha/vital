@@ -1180,6 +1180,9 @@ test('race phase: race day says "start relaxed" until a race-length run is logge
   assert.equal(before.headline, 'Race day — start relaxed');
   assert.equal(before.verdict, 'on_track');
   assert.equal(before.race?.completed, undefined);
+  // Race day is for the race, not the week's km (wave 22e): no figure of the week on the card.
+  assert.equal(before.distance!.thisWeekKm, null);
+  assert.equal(before.distance!.text, 'Race day');
   // The race run (2:01) is the race, not training: it is not in the week's km, the headline congratulates.
   const workouts = [
     { day: TODAY, durationMin: 121, distanceKm: 21.1, type: 'Running' },
@@ -1191,7 +1194,8 @@ test('race phase: race day says "start relaxed" until a race-length run is logge
     target: { weightKg: null, date: null, weeklySessions: null, weeklyDistanceKm: 50 },
     race: { date: TODAY, distanceKm: 21.1 }, racePeakWeekKm: 40,
   }));
-  assert.equal(done.distance!.thisWeekKm, 5);
+  assert.equal(done.distance!.thisWeekKm, null); // wave 22e: race day shows the race, not "5 of ~20 km running this week"
+  assert.equal(done.distance!.text, 'Race done — 21.1 km');
   assert.equal(done.distance!.stepTargetKm, 20);
   assert.equal(done.headline, 'Half marathon done — 21.1 km in 2:01. Congratulations!');
   assert.deepEqual(done.race?.completed, { km: 21.1, durationMin: 121 });

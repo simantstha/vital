@@ -165,3 +165,20 @@ test('on a break the restart number is "if you restart tomorrow": Sunday quotes 
   assert.ok(Number(number(saturday.headline)) > Number(number(sunday.headline)), `${saturday.headline} / ${sunday.headline}`);
   assert.doesNotMatch(saturday.reasons.find(r => r.kind === 'plan')!.text, /Two weeks off/);
 });
+
+// ── P2.4: race day ──────────────────────────────────────────────────────────
+
+test('race day shows the race, not the week: "Race done — 21.1 km", no "N of ~M km running this week" (22e)', () => {
+  const race = { date: '2026-10-11', distanceKm: 21.1 }; // Sunday; Monday 10-05 is 6 days out (race week)
+  const sunday = '2026-10-11';
+  const runs = [...weeks(sunday, [[[1, 4], [3, 4], [5, 4]], wk(30), wk(30), wk(30)]), run(sunday, 21.1)];
+  const card = computeGoalProgress(input(runs, { todayKey: sunday, race, racePeakWeekKm: 30 }));
+  assert.equal(card.race?.daysToGo, 0);
+  assert.equal(card.distance!.thisWeekKm, null);
+  assert.equal(card.distance!.text, 'Race done — 21.1 km');
+  assert.match(card.headline, /^Half marathon done — 21\.1 km/);
+  // The morning of the race, before it is logged: no week figure either.
+  const morning = computeGoalProgress(input(weeks(sunday, [[[1, 4], [3, 4], [5, 4]], wk(30), wk(30), wk(30)]), { todayKey: sunday, race, racePeakWeekKm: 30 }));
+  assert.equal(morning.distance!.text, 'Race day');
+  assert.equal(morning.distance!.thisWeekKm, null);
+});

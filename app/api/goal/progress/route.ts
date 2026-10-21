@@ -17,7 +17,9 @@
  *                                                //   training weeks (race and recovery weeks left out); plan? (additive) = { kind: baseline | build | hold |
  *                                                //   restart | maintain | taper | race_week | recovery | rebuild, targetKm | null, longRunKm | null, purpose,
  *                                                //   and, only when true (additive): cutback, lightWeek, strides, longRunHeld, upTo }; on the race eve
- *                                                //   thisWeekKm is null and text is "Race tomorrow" (the week's km are not on the card)
+ *                                                //   thisWeekKm is null and text is "Race tomorrow" (the week's km are not on the card); on race day thisWeekKm is
+ *                                                //   null too (wave 22e) and text is "Race done — 21.1 km" once the race is logged, else "Race day" (iOS decodes
+ *                                                //   thisWeekKm as optional)
  *   race: { date, distanceKm, label, weeksToGo, daysToGo, phase?, daysSince?, completed? } | null,   // endurance + upcoming race, or within the recovery weeks;
  *                                                //   phase is read on the Monday of this calendar week (a Sunday 7 days out is still the taper week);
  *                                                //   completed? (additive) = { km, durationMin | null } once a race-length run is logged
