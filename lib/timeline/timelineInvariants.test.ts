@@ -1167,3 +1167,14 @@ invariant(LIFTERS, 'in the first 14 days of a lapse the weight-rate line never s
   }
   return out;
 });
+
+// The same weigh-ins read the same in both units: a weekly average that moved 0.04 kg is "no change" in kg and in lb (it was "+0.1 lb" in
+// lifter_imperial on days 14 and 35, where lifter says "no change"). The noise threshold is the metric one, 0.05 kg, in both.
+test('lifter_imperial: the weekly weight stat says "no change" on exactly the Mondays lifter does', () => {
+  const noChange = (snaps: DaySnapshot[]): string[] =>
+    snaps.filter(s => s.review?.review.stats.some(st => st.label === 'Weekly avg weight' && st.value === 'no change')).map(s => s.date);
+  const metric = noChange(runTimeline('lifter'));
+  const imperial = noChange(runTimeline('lifter_imperial'));
+  assert.ok(metric.length > 0, 'lifter has no "no change" week, so this test checked nothing');
+  assert.deepEqual(imperial, metric);
+});

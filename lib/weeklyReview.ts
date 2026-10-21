@@ -518,6 +518,8 @@ function weightCandidate(input: WeeklyReviewInput, week: Week, prevWeek: Week): 
   const rounded = round1(isImperial(input) ? deltaKg * KG_TO_LB : deltaKg);
   const text = rounded === 0 ? weightText(input, 0) : weightText(input, Math.abs(deltaKg));
   const value = rounded === 0 ? text : signed(rounded, text);
+  // A lifter's "no change" is decided in kg, whatever the display unit: 0.04 kg is noise in pounds too (it read "+0.1 lb" beside "no change").
+  const flatMuscle = input.goal === 'muscle' && round1(deltaKg) === 0;
   const words = weightWords(input, change.basis);
 
   let tone: ReviewTone = 'neutral';
@@ -540,7 +542,7 @@ function weightCandidate(input: WeeklyReviewInput, week: Week, prevWeek: Week): 
       tone,
     },
   };
-  if (input.goal === 'muscle' && rounded === 0) cand.stat.value = 'no change';
+  if (input.goal === 'muscle' && (rounded === 0 || flatMuscle)) cand.stat.value = 'no change';
   const subject = words.subject;
   if (tone === 'good') cand.win = `${subject} is ${input.goal === 'muscle' ? 'up' : 'down'} ${weightText(input, Math.abs(deltaKg))}.`;
   if (tone === 'watch') {
