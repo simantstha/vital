@@ -26,7 +26,7 @@ const lines = (g: GoalProgress, units: 'metric' | 'imperial' = 'metric'): string
 
 test('race eve: the coach is told rest or a shakeout, and not to talk about the week\'s km', () => {
   const text = lines(gp({ race: { date: '2026-10-11', distanceKm: 21.1, label: 'Half marathon', weeksToGo: 0, daysToGo: 1, phase: 'race_week' } }));
-  assert.match(text, /- Race phase: race tomorrow — rest or a 15-min shakeout; lay out your kit; no training advice, no volume talk, no remarks about this week's km/);
+  assert.match(text, /- Race phase: race tomorrow — rest or a 15-min shakeout; lay out your kit; no training advice, no volume talk, no remarks about this week's distance/);
   assert.doesNotMatch(text, /before the race at most/);
 });
 

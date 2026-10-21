@@ -546,18 +546,40 @@ export function isSpikeWeek(km: number, stepKm: number, goalKm: number, unitsPer
   return km > stepKm * (1 + SPIKE_OVER_STEP_FRACTION) && excess >= (imperial ? SPIKE_MIN_EXCESS_MI : SPIKE_MIN_EXCESS_KM);
 }
 
+/** How a comeback week's km sat against its "up to" ceiling (C): inside the 10% slack, "a touch over" (fine), or "well over" (a spike). */
+export type CapRead = 'within' | 'touch' | 'well';
+
 /**
- * A careful comeback's "up to ~18 km" target is a ceiling, and running more than the shared ceiling slack
- * (`PHASE_CEILING_TOLERANCE`, 10%) over it is "a little over the cap" - not "on plan", not praised, and not credited:
- * the week after climbs from the cap, never from the overshoot. Takes the plan of the week that was run and its km.
+ * A careful comeback's "up to ~18 km" target is a ceiling (C), and the km run (A) are read against it (wave 22e):
+ *  - A <= 1.10 x C is within it (on plan);
+ *  - over that, and still at most 1.25 x C (or under 3 km / 2 mi over it) and not past the pre-break median (B): "a touch over" -
+ *    said once, neutral, "fine";
+ *  - A > 1.25 x C (and 3 km / 2 mi over it), or past B: "well over" - a spike, even below the pre-break median.
+ * Takes the plan of the week that was run and its km. A plan without a ceiling (`upTo`), or one whose ceiling is the weekly goal
+ * itself (going past the goal is just a hit target), is always `within`.
  */
-export function overUpToCap(plan: Pick<EnduranceWeekPlan, 'upTo' | 'targetKm'>, km: number): boolean {
-  return plan.upTo && plan.targetKm != null && km > plan.targetKm * PHASE_CEILING_TOLERANCE + 1e-9;
+export function comebackCapRead(
+  plan: Pick<EnduranceWeekPlan, 'upTo' | 'targetKm' | 'goalKm'> & { comeback?: { medianKm: number } | null },
+  km: number,
+  unitsPerKm = 1,
+): CapRead {
+  if (!plan.upTo || plan.targetKm == null || plan.targetKm >= plan.goalKm - 1e-9) return 'within';
+  const ceiling = plan.targetKm;
+  if (km <= ceiling * PHASE_CEILING_TOLERANCE + 1e-9) return 'within';
+  const minExcessKm = (unitsPerKm < 1 ? SPIKE_MIN_EXCESS_MI : SPIKE_MIN_EXCESS_KM) / unitsPerKm;
+  const big = km > ceiling * COMEBACK_MAX_GROWTH + 1e-9 && km - ceiling >= minExcessKm - 1e-9;
+  const median = plan.comeback?.medianKm ?? null;
+  return big || (median != null && km > median + 1e-9) ? 'well' : 'touch';
 }
 
-/** The wording of an over-the-cap week, ONE phrase for the goal card and the weekly review: "a little over the cap" up to 25% over, else "well over". */
-export function overCapPhrase(ceilingKm: number, km: number): 'a little over the cap' | 'well over the cap' {
-  return km > ceilingKm * COMEBACK_MAX_GROWTH + 1e-9 ? 'well over the cap' : 'a little over the cap';
+/** True when a comeback week went more than 10% over its "up to" ceiling (`comebackCapRead` is not `within`). */
+export function overUpToCap(plan: Pick<EnduranceWeekPlan, 'upTo' | 'targetKm' | 'goalKm'> & { comeback?: { medianKm: number } | null }, km: number, unitsPerKm = 1): boolean {
+  return comebackCapRead(plan, km, unitsPerKm) !== 'within';
+}
+
+/** The wording of an over-the-ceiling week, ONE phrase for the goal card, the weekly review and the coach: "a touch over, fine" or "well over the ceiling". */
+export function overCapPhrase(read: Exclude<CapRead, 'within'>): 'a touch over, fine' | 'well over the ceiling' {
+  return read === 'well' ? 'well over the ceiling' : 'a touch over, fine';
 }
 
 /** The km above which `isSpikeWeek` is true for a step (informational: the band's upper edge). */
@@ -617,6 +639,8 @@ export interface PlanLastWeek {
   cutback: boolean;
   /** That week's target was an "up to" comeback ceiling and the week ran more than 10% over it (`overUpToCap`). */
   overCap: boolean;
+  /** ... how far over: 'touch' (fine, said once) or 'well' (a spike; this week holds at that ceiling). Null when within it or it had none. */
+  capRead: 'touch' | 'well' | null;
   /** Null at the edge of the history the plan looks back over. */
   grade: WeekGrade | null;
   /** Whole-percent change vs the week before it; null when that week was under 5 km (3 mi) or has no runs. */
@@ -647,8 +671,16 @@ export interface PlanLongRun {
   held: boolean;
   /** The most recent week whose long run was over 55% of its week (build weeks only): one watch note, not one per day. */
   share: LongRunShare | null;
+  /** The watch note for `share` is said today: on the Monday after the oversized week only (wave 22e), never on the other days. */
+  shareDue: boolean;
   /** The 28-day peak long run was over 55% of its own week: never praised as a good peak. */
   peakOversized: boolean;
+  /**
+   * The 28-day peak run against the plan (wave 22e): `plannedKm` is the long run its week planned, `sharePct` the share of its week, and
+   * `within` is true only when it was at most the plan + 0.5 km (and the peak target + 0.5 km) and at most half of its week - the only
+   * peak that is praised ("peak reached"). Null without a run in the last 28 days.
+   */
+  peakPlan: { plannedKm: number | null; sharePct: number; within: boolean; brokenKm: number | null } | null;
 }
 
 /** A week whose long run was most of it. */
@@ -722,6 +754,8 @@ export interface EnduranceWeekPlan {
   comeback: { medianKm: number; fraction: number; weeksSince: number } | null;
   /** The restart target (km) the card quotes while the runner is on a break; equals `targetKm` in a restart week. */
   restartKm: number;
+  /** The restart number is the lower band for a gap of more than two weeks (55% of the pre-break median): the copy says why it is lower. */
+  restartLong: boolean;
   /** Last week's long run ran 2 km or more over its plan: this week's long run is held there. */
   longRunJump: { actualKm: number; plannedKm: number; heldKm: number } | null;
   /** True when a training week before this one reached the weekly goal (else a maintain week is still "build to"). */
@@ -730,8 +764,13 @@ export interface EnduranceWeekPlan {
   raceDaysToGo: number | null;
   /** The actual step over last week in whole percent (this week's target against last week's km); null when last week was too small to compare or there is no target. */
   stepPct: number | null;
-  /** Hold week: last week's jump and the target it was graded against (the target its cards showed: a cutback week's is the cutback number). */
-  hold: { spikeKm: number; spikeStepKm: number } | null;
+  /**
+   * Hold week: last week's jump and the target it was graded against (the target its cards showed: a cutback week's is the cutback number).
+   * `ceiling` (wave 22e): the jump was a comeback week well over its "up to" ceiling - this week stays AT that ceiling, and `ladder` keeps
+   * the climb back to the pre-break median alive for the week after. `skippedCutback` (wave 22e): the jump was a cutback week that ran
+   * more than 10% over its lowered number - this week holds at the week the cutback replaced instead of building 10% on the skip.
+   */
+  hold: { spikeKm: number; spikeStepKm: number; ceiling?: boolean; skippedCutback?: boolean; ladder?: { medianKm: number; fraction: number; weeksSince: number } } | null;
   /** Taper / race week / recovery: the race phase read on this week's Monday and the peak week its target is a share of. */
   wind: { phase: 'taper' | 'race_week' | 'recovery'; info: RacePhaseInfo; peakKm: number } | null;
   /** Rebuild: whole days since race day on this week's Monday. */
@@ -748,10 +787,23 @@ export interface EnduranceWeekPlan {
   /** One of the last 2 build weeks before a taper: the plan copy adds `STRIDES_COPY` so race-pace work is not new in the taper. */
   strides: boolean;
   /**
-   * A week read DURING the week with 4+ days without a run (or, from Friday, under half its target): don't make it
-   * up. `longRunCapKm` is the most the week's long run should be (~40% of a realistic week, or the last long run).
+   * A week read DURING the week with 4+ days without a run (or, from Thursday, well behind the runner's own pace with the
+   * rest of the target out of reach of the runs still to come): don't make it up. `longRunCapKm` is the most the week's long
+   * run should be (~40% of a realistic week, or the last long run). Never in the week before a taper (`preTaper`).
    */
   lightWeek: { reason: 'days_off' | 'late_week'; daysOff: number; longRunCapKm: number | null } | null;
+  /**
+   * The week BEFORE a taper (or race week): the next Monday's phase is taper / race week. Easing off is fine there, so the
+   * light-week rule does not apply; `nextPhase` says what starts tomorrow-ish.
+   */
+  preTaper: { nextPhase: 'taper' | 'race_week' } | null;
+  /**
+   * A pre-taper week whose target no longer fits in the runs the runner usually has left (or with 4+ days off): "Easing off
+   * before your taper - fine". `longRunKm` is the week's planned long run, `taperLongRunKm` the taper's (what a long run
+   * eased to would be); the card keeps the planned one as the upper end. `lastDay` (wave 22e): read on the week's last day, when the week is
+   * done and short - the plan line is then "Taper starts tomorrow - no need to make up this week's km", the same as the headline and the coach.
+   */
+  easingOff: { reason: 'days_off' | 'late_week'; daysOff: number; longRunKm: number | null; taperLongRunKm: number | null; lastDay?: boolean } | null;
   /** A comeback target lifted above the plain 10% step is a ceiling: say "up to ~18 km". */
   upTo: boolean;
   unitsPerKm: number;
@@ -820,17 +872,27 @@ const TAPER_LONG_RUN_SHARE = 0.65;
 /** Every 4th plain build / maintain week is a cutback at ~80% of the week it replaces (long run held). */
 export const CUTBACK_EVERY_WEEKS = 4;
 export const CUTBACK_FRACTION = 0.8;
+/** A cutback week that ran more than this multiple of its lowered number skipped the cutback (the shared 10% ceiling slack). */
+export const CUTBACK_SKIPPED_FRACTION = PHASE_CEILING_TOLERANCE;
 /** The last 2 build weeks before a taper carry a few strides, so race-pace work is not brand new in the taper. */
 export const STRIDES_COPY = 'plus 4–6 strides after one easy run';
 export const STRIDES_WEEKS_BEFORE_TAPER = 2;
 /** A comeback rung never asks for more than this multiple of the week just run (and still at least the normal 10% step). */
 export const COMEBACK_MAX_GROWTH = 1.25;
-/** Light week: this many days without a run in the current week, or Friday and later with under half the target. */
+/** Light week: this many days without a run in the current week, or Thursday and later with under half the target and no way to fit the rest. */
 export const LIGHT_WEEK_DAYS_OFF = 4;
 export const LIGHT_WEEK_LATE_SHARE = 0.5;
+/** ... the late-week read starts on Thursday (0 = Monday). */
+export const LIGHT_WEEK_LATE_FROM_DOW = 3;
+/** ... and needs the week to be under this share of what the runner's last weeks had run by the same weekday. */
+export const LIGHT_WEEK_PACE_FRACTION = 0.75;
+/** ... and the rest of the target not to fit in the runs the runner usually still has left (with this much room for a slightly bigger run). */
+export const LIGHT_WEEK_FIT_SLACK = 1.2;
 /** A week that lost that many days is realistically ~70% of its target at best; its long run is ~40% of that. */
 export const LIGHT_WEEK_REALISTIC_FRACTION = 0.7;
 export const LIGHT_WEEK_LONG_RUN_SHARE = 0.4;
+/** A peak long run is within the plan when it is at most this many km over what its week planned (and over the peak target). */
+export const PEAK_PLAN_SLACK_KM = 0.5;
 /** A long run over this share of its week gets one watch note (a long run is the week's biggest run, not most of it). */
 export const OVERSIZED_LONG_RUN_SHARE = 0.55;
 /** ... in a week with at least this many run days (with two runs a week the long one is most of it by nature). */
@@ -840,6 +902,10 @@ export const CAP_NOTE_EVERY_WEEKS = 4;
 /** Race eve after a week at least this many times the plan: add the "start conservatively" note. */
 export const RACE_EVE_HEAVY_WEEK = 1.5;
 export const RACE_EVE_CONSERVATIVE_LINE = 'Start conservatively — the first few km easy';
+/** `RACE_EVE_CONSERVATIVE_LINE` in the runner's unit ("the first few miles easy" for miles). */
+export function raceEveConservativeLine(unitsPerKm = 1): string {
+  return unitsPerKm < 1 ? RACE_EVE_CONSERVATIVE_LINE.replace(/km easy$/, 'miles easy') : RACE_EVE_CONSERVATIVE_LINE;
+}
 /** A run this share of the race distance, within a day of race day, is the race. */
 export const RACE_RUN_MIN_FRACTION = 0.9;
 
@@ -1097,8 +1163,9 @@ function bandFor(
   const good = mode === 'restart' ? RESTART_GOOD_FRACTION : mode === 'gentle' ? REBUILD_GOOD_FRACTION : GOOD_FRACTION;
   const mixed = mode === 'restart' ? RESTART_MIXED_FRACTION : mode === 'gentle' ? REBUILD_MIXED_FRACTION : MIXED_FRACTION;
   let over: number | null = targetKm < ctx.goalKm ? spikeEdgeKm(targetKm, ctx.units) : null;
-  // Regaining volume up to the median of the weeks before the break is never a spike.
-  if (over != null && medianKm != null) over = Math.max(over, round1(medianKm));
+  // Regaining volume up to the median of the weeks before the break is never a spike - in a RESTART week. A comeback week is judged
+  // against its own ceiling (`comebackCapRead`): running far past it is a spike even below the pre-break median (wave 22e).
+  if (over != null && medianKm != null && opts.comebackFromKm == null) over = Math.max(over, round1(medianKm));
   // A careful comeback's target is a ceiling (the ladder), not a bar: the week is good when it grew on the last one and
   // was not a spike; it is mixed only when it shrank. Never tough. (A rebuild after the race keeps its 80% bar.)
   if (opts.comebackFromKm != null && opts.comebackFromKm > 0) {
@@ -1123,6 +1190,7 @@ function nextLongRun(
   restarting: boolean,
   heldKm: number | null,
   cutback = false,
+  keepLastLong = true,
 ): number | null {
   switch (kind) {
     case 'baseline':
@@ -1131,8 +1199,13 @@ function nextLongRun(
       return null;
     case 'taper':
       return lr.peakKm == null ? null : roundLongRunKm(lr.peakKm * TAPER_LONG_RUN_SHARE, ctx.units);
-    case 'hold':
-      return lr.lastKm == null ? null : roundLongRunKm(lr.lastKm, ctx.units);
+    case 'hold': {
+      if (lr.lastKm == null) return null;
+      // Held where it was - except a hold AT a comeback ceiling (`keepLastLong` false), which cannot carry a 12 km long run in an 18 km week.
+      const held = roundLongRunKm(lr.lastKm, ctx.units);
+      const halfWeek = !keepLastLong && targetKm != null ? targetKm * LONG_RUN_MAX_WEEK_SHARE : null;
+      return halfWeek != null && held > halfWeek + 1e-9 ? floorLongRunKm(halfWeek, ctx.units) : held;
+    }
     default: {
       if (lr.lastKm == null || targetKm == null) return null;
       // A cutback week keeps the long run where it is (it is the week's volume that comes down), never past the peak
@@ -1145,7 +1218,8 @@ function nextLongRun(
       if (heldKm != null && !restarting) return roundLongRunKm(heldKm, ctx.units);
       const next = longRunStepKm(lr.lastKm, lr.targetPeakKm);
       // A restart week starts the long run again from the recent longest, but never past 40% of the (gentle) restart week.
-      const cap = restarting ? targetKm * LONG_RUN_RESTART_WEEK_SHARE : Math.max(targetKm * LONG_RUN_MAX_WEEK_SHARE, lr.lastKm);
+      // (The hold AT a comeback ceiling, and the week after it, keep no such exception: the week is lowered below the spike's long run.)
+      const cap = restarting ? targetKm * LONG_RUN_RESTART_WEEK_SHARE : keepLastLong ? Math.max(targetKm * LONG_RUN_MAX_WEEK_SHARE, lr.lastKm) : targetKm * LONG_RUN_MAX_WEEK_SHARE;
       // A long run held down by the cap rounds down to the half unit, so it never ends up above its share of the week.
       return next > cap ? floorLongRunKm(cap, ctx.units) : roundLongRunKm(next, ctx.units);
     }
@@ -1171,6 +1245,38 @@ export function lightWeekLine(lightWeek: NonNullable<EnduranceWeekPlan['lightWee
     : "Light week — don't make it up; keep the runs short and easy, or skip them if you were ill";
 }
 
+/** "11.5" / "15": a long-run distance as a bare number in the display unit (the unit goes once, after a range). */
+function longRunNumber(km: number, unitsPerKm: number): number {
+  return Math.round(km * unitsPerKm * 2) / 2;
+}
+
+/**
+ * The pre-taper week's line when the target is out of reach: "Easing off before your taper — fine; keep Sunday's long run
+ * ~11.5–15 km easy" (the taper's own long run to this week's planned one; one number when they meet). A runner with days off
+ * is also told they may skip it if they were ill.
+ */
+export function easingOffLine(
+  easing: NonNullable<EnduranceWeekPlan['easingOff']>,
+  nextPhase: 'taper' | 'race_week' = 'taper',
+  unitsPerKm = 1,
+): string {
+  const lead = `Easing off before ${nextPhase === 'taper' ? 'your taper' : 'race week'} — fine`;
+  const hi = easing.longRunKm;
+  if (hi == null) return `${lead}; keep the runs short and easy`;
+  const lo = easing.taperLongRunKm;
+  const unit = distanceUnit(unitsPerKm);
+  const range = lo != null && longRunNumber(lo, unitsPerKm) < longRunNumber(hi, unitsPerKm)
+    ? withUnit(`${longRunNumber(lo, unitsPerKm)}–${longRunNumber(hi, unitsPerKm)}`, unit)
+    : formatTargetLongRun(hi, unitsPerKm);
+  const ill = easing.reason === 'days_off' ? ', or skip it if you were ill' : '';
+  return `${lead}; keep Sunday's ${longRunWord(hi, unitsPerKm)} ~${range} easy${ill}`;
+}
+
+/** The last day of a pre-taper week that ended short: the week is done and nothing is to be made up. */
+export function easedOffLine(nextPhase: 'taper' | 'race_week' = 'taper', unitsPerKm = 1): string {
+  return `${nextPhase === 'taper' ? 'Taper' : 'Race week'} starts tomorrow — no need to make up this week's ${distanceUnit(unitsPerKm) === 'km' ? 'km' : 'miles'}`;
+}
+
 /** One line of "what this week is for" (units-aware, U+00A0 between a number and its unit). */
 function purposeLine(plan: Omit<EnduranceWeekPlan, 'purpose'>): string {
   const u = plan.unitsPerKm;
@@ -1181,6 +1287,7 @@ function purposeLine(plan: Omit<EnduranceWeekPlan, 'purpose'>): string {
   const lrPart = lr != null ? `${lrWord} ${formatTargetLongRun(lr, u)}${held}` : null;
   const strides = plan.strides ? `; ${STRIDES_COPY}` : '';
   if (plan.lightWeek != null) return lightWeekLine(plan.lightWeek, u);
+  if (plan.easingOff != null) return plan.easingOff.lastDay ? easedOffLine(plan.preTaper?.nextPhase ?? 'taper', u) : easingOffLine(plan.easingOff, plan.preTaper?.nextPhase ?? 'taper', u);
   switch (plan.kind) {
     case 'baseline':
       return "Baseline week: run as you normally would; next week's step is built from this week";
@@ -1192,9 +1299,8 @@ function purposeLine(plan: Omit<EnduranceWeekPlan, 'purpose'>): string {
       const back = plan.comeback != null && t != null && t < plan.comeback.medianKm - 0.5
         ? `; back toward your usual ~${formatKm(plan.comeback.medianKm, u)}`
         : '';
-      // A comeback target lifted above the plain 10% step is a ceiling, not a bar: "up to ~18 km". After a week that ran
-      // over its ceiling it holds at what was run: "hold here".
-      const lead = plan.last?.overCap ? 'Hold here, up to ' : plan.upTo ? 'Up to ' : '';
+      // A comeback target lifted above the plain 10% step is a ceiling, not a bar: "up to ~18 km".
+      const lead = plan.upTo ? 'Up to ' : '';
       return lrPart && t != null
         ? `${lead}~${formatKm(t, u)} this week: ${lrPart}, the rest easy runs${back}${strides}`
         : `${lead}~${formatKm(t ?? plan.goalKm, u)} this week, mostly easy runs${back}${strides}`;
@@ -1210,12 +1316,14 @@ function purposeLine(plan: Omit<EnduranceWeekPlan, 'purpose'>): string {
         : `${verb} ${formatKm(plan.goalKm, u)} this week, the rest of the runs easy${strides}`;
     }
     case 'hold':
+      if (plan.hold?.skippedCutback) return `You skipped the cutback — hold ~${formatKm(t ?? plan.goalKm, u)} this week${lrPart ? `; keep the ${lrPart}` : ''}${strides}`;
       return `Hold ~${formatKm(t ?? plan.goalKm, u)} this week, no step up after last week's jump${lrPart ? `; keep the ${lrPart}` : ''}${strides}`;
     case 'restart':
+      if (plan.restartLong) return `Two weeks off — restart a bit lower, ~${formatKm(t ?? plan.restartKm, u)} this week with easy runs${lrPart ? `; ${lrPart}` : ''}`;
       return `Restart at ~${formatKm(t ?? plan.restartKm, u)} this week with easy runs${lrPart ? `; ${lrPart}` : ''}`;
     case 'rebuild': {
       const atGoal = t != null && t >= plan.goalKm - 1e-9;
-      return `Rebuilding: ~${formatKm(t ?? plan.goalKm, u)} this week, easy runs${atGoal ? '' : ', then add about 10% a week'}`;
+      return `Rebuilding: ~${formatKm(t ?? plan.goalKm, u)} this week, easy runs${lrPart ? `, ${lrPart}` : ''}${atGoal ? '' : ', then add about 10% a week'}`;
     }
     case 'taper': {
       const reps = racePaceReps(u);
@@ -1327,16 +1435,26 @@ function typicalOffStreak(ctx: PlanCtx, w: string): number {
   return median(streaks) ?? 0;
 }
 
-/** Running km of the Mon-Sun week at `wk` up to and including weekday `dow` (0 = Monday); the race itself left out. */
-function weekKmThrough(ctx: PlanCtx, wk: string, dow: number): number {
-  const end = addDayKey(wk, dow);
-  let km = 0;
-  for (const r of ctx.runs) {
-    if (r.day < wk || r.day > end) continue;
-    if (ctx.raceDate != null && r.day === ctx.raceDate) continue;
-    km += r.km;
+/**
+ * Running km per weekday (Monday = index 0) of up to 4 TRAINING weeks before `w` (wind-down weeks left out), from the first
+ * week with a run on, newest first; the race itself is not training. The runner's own week shape: what they usually have run
+ * by a weekday and what they usually still have left after it.
+ */
+function priorWeekProfiles(ctx: PlanCtx, w: string): number[][] {
+  const out: number[][] = [];
+  for (let k = 1; k <= MEDIAN_WEEKS; k++) {
+    const wk = addDayKey(w, -7 * k);
+    if (ctx.firstRunWeek == null || wk < ctx.firstRunWeek) break;
+    if (isWindWeek(ctx, wk)) continue;
+    const profile = [0, 0, 0, 0, 0, 0, 0];
+    for (const r of ctx.runs) {
+      const i = dayIndex(r.day) - dayIndex(wk);
+      if (i < 0 || i > 6 || (ctx.raceDate != null && r.day === ctx.raceDate)) continue;
+      profile[i] += r.km;
+    }
+    out.push(profile);
   }
-  return km;
+  return out;
 }
 
 function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekPlan {
@@ -1386,10 +1504,11 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
         kind: prevPlan?.kind ?? 'build',
         targetKm: prevPlan?.targetKm ?? null,
         cutback: prevPlan?.cutback != null,
-        overCap: prevPlan != null && overUpToCap(prevPlan, prev.km),
+        overCap: prevPlan != null && overUpToCap(prevPlan, prev.km, ctx.units),
+        capRead: prevPlan != null && prevPlan.upTo ? (comebackCapRead(prevPlan, prev.km, ctx.units) === 'within' ? null : (comebackCapRead(prevPlan, prev.km, ctx.units) as 'touch' | 'well')) : null,
         grade: prevGrade,
         // No % against a very small week, nor for the week that restarted after a break (that +150% is not growth).
-        changePct: prevPrev.km >= compareMin && prevPlan?.restart == null && prevGrade?.level !== 'light'
+        changePct: prevPrev.km >= compareMin && prevPlan?.restart == null && prevGrade?.level !== 'light' && prevPlan?.last?.grade?.gap !== 'spike'
           ? Math.round(((prev.km - prevPrev.km) / prevPrev.km) * 100)
           : null,
       }
@@ -1397,11 +1516,10 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
 
   // The restart target quoted to a runner who is on a break: by the length of the gap so far.
   const holdKm = prevPlan?.targetKm ?? null;
-  // Read on the week's last day, a 7-day gap is tomorrow's 8-day gap: the card quotes NEXT week's restart number, so
-  // Sunday's "~25 km" never turns into Monday's "~17 km". Only a gap still open today (no run in the week yet) moves.
-  const lastDay = asOf === weekEnd;
-  const gapOnDay = (gap: number | null, open: boolean): number | null =>
-    gap != null && open && lastDay && gap <= RESTART_HOLD_GAP_DAYS ? gap + 1 : gap;
+  // The restart number a break quotes is "if you restart tomorrow": a gap still open today (no run in the week yet) is tomorrow's gap + 1,
+  // every day of the break (wave 22e: it used to be only a 7-day gap on the last day). Sunday's "~17 km" is then never Monday's "~12 km" -
+  // the band drops on the day the gap becomes 15 days, and the card says why (`restartLong`).
+  const gapOnDay = (gap: number | null, open: boolean): number | null => (gap != null && open ? gap + 1 : gap);
   const restartFor = (windowKm: number[], gapDays: number | null): { km: number; medianKm: number; fraction: number } => {
     const f = restartFractionFor(gapDays);
     if (f === 'hold' && holdKm != null) {
@@ -1415,7 +1533,8 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
     return { ...restartTargetKm(ctx, windowKm, fraction), fraction };
   };
   const trailingGap = daysSinceRun;
-  const breakRestart = restartFor(breakWindow, onBreak ? gapOnDay(trailingGap, true) : null);
+  const breakGapShown = onBreak ? gapOnDay(trailingGap, true) : null;
+  const breakRestart = restartFor(breakWindow, breakGapShown);
 
   let kind: EnduranceWeekKind;
   let targetKm: number | null;
@@ -1425,6 +1544,8 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
   let rebuild: EnduranceWeekPlan['rebuild'] = null;
   let cutback: EnduranceWeekPlan['cutback'] = null;
   let upTo = false;
+  // The window the restart number is read from (an empty week: the weeks before it; a break noticed mid-week: the weeks before this one).
+  let restartWindow: number[] = breakWindow;
   let medianKm: number | null = null;
   let mode: BandMode = 'normal';
   // The base the week's ~10% step is taken from: last week, or after a cutback the larger of the two weeks before it.
@@ -1449,6 +1570,7 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
   } else {
     if (inRebuild) rebuild = { daysSince: daysAfterRace as number };
     let triggered: { reason: 'break' | 'low_week' | 'no_runs'; target: { km: number; medianKm: number; fraction: number }; gapDays: number | null } | null = null;
+    restartWindow = prev.km < MIN_BASE_WEEK ? beforeWindow : breakWindow;
     if (prev.km < MIN_BASE_WEEK) {
       // An empty week: the gap runs from the last run before it (an almost-empty week still counts as 8+ days).
       const before = lastRunBefore(ctx, w);
@@ -1488,9 +1610,21 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
       // review quoted). The hold itself steps up from the step the progression had planned: after a cutback that is the week it
       // replaced (the cutback was a pause, not a new base), otherwise the same target.
       const spikeStepKm = prevPlan.targetKm;
-      hold = { spikeKm: round1(prev.km), spikeStepKm };
+      // A comeback week well over its "up to" ceiling: stay AT that ceiling (no step up, none from the jump), and keep the climb back alive.
+      const ceilingBroken = prevPlan.upTo && comebackCapRead(prevPlan, prev.km, ctx.units) === 'well';
+      hold = {
+        spikeKm: round1(prev.km),
+        spikeStepKm,
+        ...(ceilingBroken ? { ceiling: true, ...(prevPlan.comeback != null ? { ladder: { ...prevPlan.comeback } } : {}) } : {}),
+      };
       kind = 'hold';
-      targetKm = stepFromShownTarget(prevPlan.cutback?.normalKm ?? spikeStepKm, ctx.goalKm, ctx.units);
+      targetKm = ceilingBroken ? spikeStepKm : stepFromShownTarget(prevPlan.cutback?.normalKm ?? spikeStepKm, ctx.goalKm, ctx.units);
+    } else if (prevPlan != null && prevIsTraining && prevPlan.cutback != null && prevPlan.targetKm != null && prevGrade?.gap === 'over') {
+      // A cutback week that ran more than 10% over its lowered number skipped the cutback: no +10% build on the skip - this week holds at the
+      // week the cutback replaced ("You skipped the cutback - hold ~25 km"), and the week after builds on from there.
+      hold = { spikeKm: round1(prev.km), spikeStepKm: prevPlan.targetKm, skippedCutback: true };
+      kind = 'hold';
+      targetKm = Math.min(ctx.goalKm, prevPlan.cutback.normalKm);
     } else {
       // Build: ~10% over last week — and, for up to three weeks after a restart, at least the next rung of the climb
       // back to the pre-break median (restart -> 80% -> 100%), a rung only when the week before graded good.
@@ -1498,26 +1632,28 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
       if (prevPlan?.cutback != null) stepBaseKm = Math.max(prev.km, prevPrev.km);
       const step = weekStepOrGoalKm(stepBaseKm, ctx.goalKm, ctx.units);
       let target = step;
-      const from = prevPlan != null && prevIsTraining ? (prevPlan.restart != null ? { ...prevPlan.restart, weeksSince: 0 } : prevPlan.comeback) : null;
-      // A comeback week that ran more than 10% over its "up to" ceiling: the rung is repeated, not climbed, and the week after holds
-      // at what was run (below).
-      const overCap = prevPlan != null && prevIsTraining && overUpToCap(prevPlan, prev.km);
+      const from = prevPlan != null && prevIsTraining
+        ? (prevPlan.restart != null ? { ...prevPlan.restart, weeksSince: 0 } : prevPlan.comeback ?? prevPlan.hold?.ladder ?? null)
+        : null;
+      // A comeback week read against its "up to" ceiling C (km run A): within it, "a touch over" (rule 2), or "well over" (rule 3 -
+      // that one is a spike and became the hold branch above).
+      const capRead = prevPlan != null && prevIsTraining ? comebackCapRead(prevPlan, prev.km, ctx.units) : 'within';
       if (from != null && from.weeksSince + 1 <= COMEBACK_WEEKS) {
-        const rung = prevGrade?.level === 'good' && !overCap ? nextRung(from.fraction) : from.fraction;
+        // A rung is climbed only when the week before graded good (a touch over its ceiling still does); otherwise it is repeated.
+        const rung = prevGrade?.level === 'good' ? nextRung(from.fraction) : from.fraction;
         const rungKm = roundWeekTargetKm(from.medianKm * rung, ctx.units);
-        // A rung never asks for more than 1.25x the week just run (it still climbs by at least the normal 10% step).
-        const capKm = floorWeekTargetKm(prev.km * COMEBACK_MAX_GROWTH, ctx.units);
-        target = Math.min(ctx.goalKm, Math.max(step, Math.min(rungKm, capKm)));
-        // A target lifted above the plain step is a ceiling for a careful comeback, not a bar to clear.
-        upTo = target > step + 1e-9;
+        // Rule 1 (A within 1.10 x C): a rung never asks for more than 1.25x the week just run, and still climbs by the normal 10% step.
+        // Rule 2 (A a touch over): the ceiling climbs from the CEILING, never from the overshoot - at most 1.25x C - and never below what was run.
+        const ceilingKm = prevPlan?.targetKm ?? null;
+        target = capRead === 'touch' && ceilingKm != null
+          ? Math.max(ceilWeekTargetKm(prev.km, ctx.units), Math.min(rungKm, floorWeekTargetKm(ceilingKm * COMEBACK_MAX_GROWTH, ctx.units)))
+          : Math.max(step, Math.min(rungKm, floorWeekTargetKm(prev.km * COMEBACK_MAX_GROWTH, ctx.units)));
+        // Never past the weekly goal, nor past the pre-break median the climb is back to (unless more than that was already run).
+        target = Math.min(ctx.goalKm, target, Math.max(ceilWeekTargetKm(from.medianKm, ctx.units), ceilWeekTargetKm(prev.km, ctx.units)));
+        // A target lifted above the plain step is a ceiling for a careful comeback, not a bar to clear; so is the one after a touch over.
+        upTo = target > step + 1e-9 || capRead === 'touch';
         comeback = { medianKm: from.medianKm, fraction: rung, weeksSince: from.weeksSince + 1 };
         medianKm = from.medianKm;
-      }
-      // "20 of up to ~18 km" is a little over the cap: hold here next week. The ceiling is what was run, never a step (or a
-      // 1.25x rung) up from the overshoot - without this the next week read "up to ~25 km", 1.25x the 20 km that overshot.
-      if (overCap) {
-        target = Math.min(ctx.goalKm, roundWeekTargetKm(prev.km, ctx.units));
-        upTo = true;
       }
       if (rebuild || comeback != null) mode = 'gentle';
       targetKm = target;
@@ -1560,29 +1696,49 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
   const strides = buildLike && comeback == null && info != null && info.phase === 'build' && raceClass(ctx.raceKm) !== 'short'
     && [7, 14].some(d => isWindDownPhase(phaseAt(ctx, addDayKey(w, d))?.phase));
 
-  // Light week: read DURING the week, with days off (or, from Friday, well short of the week's pace): don't make it up.
+  // The long run the week would plan without a light-week cap (the light-week read and the easing-off read both quote it).
+  const heldLongRun = longRunJump?.heldKm ?? null;
+  const plannedNextKm = nextLongRun(ctx, kind, targetKm, lr0, restart != null, heldLongRun, cutback != null, hold?.ceiling !== true && prevPlan?.hold?.ceiling !== true);
+
+  // The week before a taper (or race week): the next Monday's phase is wind-down. Easing off is the plan's own next step.
+  const nextWindPhase = buildLike && info != null && info.phase === 'build' ? phaseAt(ctx, addDayKey(w, 7))?.phase : undefined;
+  const preTaper: EnduranceWeekPlan['preTaper'] = nextWindPhase === 'taper' || nextWindPhase === 'race_week' ? { nextPhase: nextWindPhase } : null;
+
+  // Light week: read DURING the week, with days off (or, from Thursday, behind the runner's own pace with the rest of the
+  // target out of reach): don't make it up. In a pre-taper week the same reads are "easing off" instead - fine, not light.
+  // (The card is read at any hour: a runner whose Thursday run is still to come is judged on the Thursday run they have not
+  // logged yet, like the Friday read before it.)
   let lightWeek: EnduranceWeekPlan['lightWeek'] = null;
+  let easingOff: EnduranceWeekPlan['easingOff'] = null;
   if (depth === 0 && ctx.today >= w && ctx.today <= weekEnd && wind == null && buildLike && targetKm != null && daysSinceRun != null) {
     const dow = dayIndex(ctx.today) - dayIndex(w); // 0 = Monday
     const daysOff = Math.min(daysSinceRun, dow + 1);
     const offThreshold = Math.max(LIGHT_WEEK_DAYS_OFF, typicalOffStreak(ctx, w) + 2);
     const doneKm = weekRuns(ctx, w).km;
+    // Does the rest of the target fit in the runs the runner usually still has left after today (their own weekday shape, with
+    // room for a slightly bigger run)? The long run still to come is the Sunday run they usually have: a runner whose long run is
+    // Sunday sits under half of the week on a Friday, on pace.
+    const profiles = priorWeekProfiles(ctx, w);
+    const longestSoFar = Math.max(0, ...ctx.runs.filter(r => r.day >= w && r.day <= ctx.today && r.day !== ctx.raceDate).map(r => r.km));
+    const longRunAhead = plannedNextKm != null && longestSoFar < plannedNextKm * 0.6;
     let reason: 'days_off' | 'late_week' | null = null;
     if (daysOff >= offThreshold) reason = 'days_off';
-    else if (dow >= 4 && doneKm < targetKm * LIGHT_WEEK_LATE_SHARE) {
-      // Under half the target from Friday on - and well behind the runner's own pace to date (a plan-perfect runner whose
-      // long run is still to come sits under half on a Friday too). Without 2 finished weeks to compare with: under half is enough.
-      const usual: number[] = [];
-      for (let k = 1; k <= MEDIAN_WEEKS; k++) {
-        const wk = addDayKey(w, -7 * k);
-        if (ctx.firstRunWeek == null || wk < ctx.firstRunWeek) break;
-        if (isWindWeek(ctx, wk)) continue;
-        usual.push(weekKmThrough(ctx, wk, dow));
-      }
-      const usualKm = usual.length >= 2 ? median(usual) : null;
-      if (usualKm == null || doneKm < usualKm * 0.75) reason = 'late_week';
+    else if (dow >= LIGHT_WEEK_LATE_FROM_DOW && doneKm < targetKm * LIGHT_WEEK_LATE_SHARE && profiles.length > 0) {
+      // Behind the runner's own weeks by the same weekday, behind the target without the long run still to come, AND the rest of
+      // the target out of reach of the runs they usually have left.
+      const usualKm = median(profiles.map(p => p.slice(0, dow + 1).reduce((a, b) => a + b, 0))) as number;
+      const usualLeft = profiles.reduce((a, p) => a + p.slice(dow + 1).reduce((x, y) => x + y, 0), 0) / profiles.length;
+      const behindUsual = doneKm < usualKm * LIGHT_WEEK_PACE_FRACTION;
+      const behindTarget = doneKm < LIGHT_WEEK_LATE_SHARE * (targetKm - (longRunAhead && plannedNextKm != null ? plannedNextKm : 0));
+      const fits = targetKm - doneKm <= usualLeft * LIGHT_WEEK_FIT_SLACK + 1e-9;
+      if (behindUsual && behindTarget && !fits) reason = 'late_week';
     }
-    if (reason != null) {
+    if (reason != null && preTaper != null) {
+      const taperLong = plannedNextKm != null || lr0.peakKm != null
+        ? roundLongRunKm(Math.max(lr0.peakKm ?? 0, plannedNextKm ?? 0) * TAPER_LONG_RUN_SHARE, ctx.units)
+        : null;
+      easingOff = { reason, daysOff, longRunKm: plannedNextKm, taperLongRunKm: taperLong };
+    } else if (reason != null) {
       const realistic = targetKm * LIGHT_WEEK_REALISTIC_FRACTION;
       let cap = floorLongRunKm(realistic * LIGHT_WEEK_LONG_RUN_SHARE, ctx.units);
       if (lr0.lastKm != null) cap = Math.min(cap, roundLongRunKm(lr0.lastKm, ctx.units));
@@ -1590,10 +1746,7 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
     }
   }
 
-  const heldLongRun = longRunJump?.heldKm ?? null;
-  const nextKm = lightWeek != null && lightWeek.longRunCapKm != null
-    ? lightWeek.longRunCapKm
-    : nextLongRun(ctx, kind, targetKm, lr0, restart != null, heldLongRun, cutback != null);
+  const nextKm = lightWeek != null && lightWeek.longRunCapKm != null ? lightWeek.longRunCapKm : plannedNextKm;
   const raceTargetKm = lr0.targetPeakKm != null && peakInfo != null && lr0.targetPeakKm === peakInfo.peakKm ? peakInfo.raceTargetKm : null;
   // The cap note: the goal's first week, then at most every 4th, in build weeks only.
   let capNoteDue = false;
@@ -1601,11 +1754,21 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
     const anchor = ctx.capNoteAnchor;
     const idx = anchor == null ? 0 : Math.round((dayIndex(w) - dayIndex(anchor)) / 7);
     capNoteDue = idx <= 0 || idx % CAP_NOTE_EVERY_WEEKS === 0;
+    // Wave 22e: never in a light, restart or comeback week (the runner is coming back, not raising a goal) ...
+    if (lightWeek != null || easingOff != null || restart != null || comeback != null) capNoteDue = false;
+    // ... and only when the raised goal (twice the race peak long run) can be reached at +10% a week before the taper starts.
+    if (capNoteDue && hasPrior && ctx.raceDate != null) {
+      const taperStart = dayIndex(ctx.raceDate) - raceRules(ctx.raceKm).taperStartDays;
+      const stepsLeft = Math.max(0, Math.ceil((taperStart - dayIndex(w)) / 7));
+      const raisedGoalKm = raceTargetKm / LONG_RUN_MAX_WEEK_SHARE;
+      if (prev.km * (1 + WEEKLY_DISTANCE_GROWTH) ** stepsLeft < raisedGoalKm - 0.5) capNoteDue = false;
+    }
   }
 
   // A long run that was most of its week: one watch note (the most recent such week) and no praise for the peak.
   let share: LongRunShare | null = null;
   let peakOversized = false;
+  let peakPlan: PlanLongRun['peakPlan'] = null;
   if (depth === 0) {
     const inProgress = asOf < weekEnd;
     const floorFor = (wk: string): number => (wk === w && inProgress && wind == null && targetKm != null ? targetKm : 0);
@@ -1623,6 +1786,20 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
       const pw = mondayOfDay(peakRun.day);
       const s = weekLongRunShare(ctx, pw, floorFor(pw));
       peakOversized = s != null && Math.abs(s.longKm - round1(peakRun.km)) < 1e-6;
+      // Wave 22e: was the peak the long run the plan asked for? At most that week's planned long run (and the peak target) + 0.5 km, and at
+      // most half of its week. "Peak reached" is praise only for a run that kept to the plan.
+      const peakWeekPlan = pw === w || depth >= MAX_PLAN_DEPTH ? null : planWeek(ctx, pw, depth + 1);
+      const plannedKm = peakWeekPlan?.longRunKm ?? (pw === w ? plannedNextKm : null);
+      const weekKm = Math.max(weekRuns(ctx, pw).km, floorFor(pw));
+      const sharePct = weekKm > 0 ? Math.round((peakRun.km / weekKm) * 100) : 0;
+      // (A week with under 3 run days has no rhythm to hold a plan or a share against: the long run is most of it by nature, as for the watch note.)
+      const rhythm = weekRuns(ctx, pw).days >= LONG_RUN_SHARE_MIN_RUN_DAYS;
+      const longerThanWeek = rhythm && plannedKm != null && peakRun.km > plannedKm + PEAK_PLAN_SLACK_KM + 1e-9;
+      const longerThanTarget = lr0.targetPeakKm != null && peakRun.km > lr0.targetPeakKm + PEAK_PLAN_SLACK_KM + 1e-9;
+      const tooBig = rhythm && weekKm > 0 && peakRun.km > weekKm * LONG_RUN_MAX_WEEK_SHARE + 1e-9;
+      // The plan number it broke: the long run its week planned, else the peak target; null when only the share is to blame.
+      const brokenKm = longerThanWeek ? plannedKm : longerThanTarget ? lr0.targetPeakKm : null;
+      peakPlan = { plannedKm, sharePct, within: !longerThanWeek && !longerThanTarget && !tooBig, brokenKm };
     }
   }
 
@@ -1633,11 +1810,22 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
     capNoteDue,
     held: buildLike && (cutback != null || longRunJump != null || (nextKm != null && lr0.lastKm != null && nextKm <= lr0.lastKm + 1e-9)),
     share,
+    shareDue: share != null && share.weekStart === prevStart && ctx.today === w,
     peakOversized,
+    peakPlan,
   };
   const windInfo: EnduranceWeekPlan['wind'] = wind ? { phase: wind.phase as 'taper' | 'race_week' | 'recovery', info: wind, peakKm: ctx.peakKm ?? ctx.goalKm } : null;
   const band = bandFor(targetKm, ctx, medianKm, windInfo, mode, { comebackFromKm: comeback != null ? prev.km : null, cutbackNormalKm: cutback?.normalKm ?? null });
-  const stepPct = targetKm != null && hasPrior && stepBaseKm >= compareMin && !wind && cutback == null
+  // The last day of a pre-taper week that is done and short: it is "easing off" too (not a target still to hit), so the headline, the plan line
+  // and the coach all say the same thing ("Taper starts tomorrow - no need to make up this week's km").
+  if (depth === 0 && preTaper != null && wind == null && lightWeek == null && targetKm != null && ctx.today === weekEnd) {
+    const done = weekRuns(ctx, w).km;
+    if (easingOff != null) easingOff = { ...easingOff, lastDay: true };
+    else if (done > 0 && gradeEnduranceWeek({ kind, targetKm, band, endedOff, restart, goalKm: ctx.goalKm, cutback, comeback, upTo }, done, { unitsPerKm: ctx.units }).gap === 'short') {
+      easingOff = { reason: 'late_week', daysOff: 0, longRunKm: null, taperLongRunKm: null, lastDay: true };
+    }
+  }
+  const stepPct = targetKm != null && hasPrior && stepBaseKm >= compareMin && !wind && cutback == null && hold?.ceiling !== true
     ? Math.round(((targetKm - stepBaseKm) / stepBaseKm) * 100)
     : null;
   const base: Omit<EnduranceWeekPlan, 'purpose'> = {
@@ -1655,7 +1843,14 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
     endedOff,
     restart,
     comeback,
-    restartKm: kind === 'restart' && targetKm != null ? targetKm : breakRestart.km,
+    // On a break a gap-based restart week quotes "if you restart tomorrow" (the same window, the gap + 1); the week's own number once back.
+    restartKm: kind === 'restart' && targetKm != null
+      ? (onBreak && breakGapShown != null && restart != null && restart.reason !== 'low_week' ? restartFor(restartWindow, breakGapShown).km : targetKm)
+      : breakRestart.km,
+    restartLong: (() => {
+      const gap = onBreak ? breakGapShown : kind === 'restart' ? restart?.gapDays ?? null : null;
+      return gap != null && restartFractionFor(gap) === RESTART_LONG_FRACTION;
+    })(),
     longRunJump,
     goalReachedBefore: goalReachedBefore(ctx, w),
     raceDaysToGo,
@@ -1667,6 +1862,8 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
     buildWeeks,
     strides,
     lightWeek,
+    preTaper,
+    easingOff,
     upTo,
     unitsPerKm: ctx.units,
   };
@@ -1712,7 +1909,7 @@ export function enduranceWeekPlan(input: EnduranceWeekPlanInput): EnduranceWeekP
  * Wind-down weeks use the shared `windDownBand`.
  */
 export function gradeEnduranceWeek(
-  plan: Pick<EnduranceWeekPlan, 'kind' | 'targetKm' | 'band' | 'endedOff' | 'restart' | 'goalKm'> & Partial<Pick<EnduranceWeekPlan, 'cutback' | 'comeback'>>,
+  plan: Pick<EnduranceWeekPlan, 'kind' | 'targetKm' | 'band' | 'endedOff' | 'restart' | 'goalKm'> & Partial<Pick<EnduranceWeekPlan, 'cutback' | 'comeback' | 'upTo'>>,
   km: number,
   opts: { runDays?: number; unitsPerKm?: number } = {},
 ): WeekGrade {
@@ -1728,12 +1925,18 @@ export function gradeEnduranceWeek(
     return (opts.runDays ?? 0) >= 3 ? { level: 'good', gap: null } : { level: 'mixed', gap: 'short' };
   }
   const target = plan.targetKm as number;
-  // Regaining the pre-break level (a restart, or a comeback week the ladder has capped lower) is never a spike.
-  const medianGuard = Math.max(plan.restart?.medianKm ?? 0, plan.comeback?.medianKm ?? 0);
+  // Regaining the pre-break level in a RESTART week is never a spike. A comeback week has no such exemption (wave 22e): it is read
+  // against its own "up to" ceiling - well over it is a spike even below the pre-break median - and otherwise like any build week.
+  const medianGuard = plan.restart?.medianKm ?? 0;
+  if (plan.upTo === true && plan.comeback != null && comebackCapRead({ upTo: true, targetKm: target, goalKm: plan.goalKm, comeback: plan.comeback }, km, units) === 'well') {
+    return { level: 'mixed', gap: 'spike' };
+  }
   // A cutback week's target is the cutback number: it is the step a jump is measured against, like any other week's.
   if (plan.band.overKm != null && isSpikeWeek(km, target, plan.goalKm, units) && km > medianGuard) {
     return { level: 'mixed', gap: 'spike' };
   }
+  // A cutback week that ran more than 10% over its lowered number skipped the cutback (wave 22e): not a good week, and not a spike either.
+  if (plan.cutback != null && km > target * CUTBACK_SKIPPED_FRACTION + 1e-9) return { level: 'mixed', gap: 'over' };
   // A cutback week that ended in days off before it reached even its (lowered) number is a rest week, not a good cutback.
   if (plan.cutback != null && plan.endedOff && km < target) return { level: 'light', gap: null };
   if (km >= plan.band.goodFromKm - 1e-9) return { level: 'good', gap: null };

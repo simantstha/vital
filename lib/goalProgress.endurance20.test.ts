@@ -96,7 +96,8 @@ test('race week: only the days BEFORE the race share what is left of the budget;
   ));
   // Race Sunday 2026-10-11: 5 days out, 12 of 20 km run.
   const early = day(5, [6, 6]);
-  assert.equal(early.reasons.find(r => r.kind === 'race_phase')!.text, 'Race week: 12 of ~20 km — keep the days before the race ≤ 8 km');
+  // (Wave 22e: not "keep the days before the race <= 8 km" next to "rest 1-2 days" - rest tomorrow, a shakeout the day before.)
+  assert.equal(early.reasons.find(r => r.kind === 'race_phase')!.text, 'Race week: 12 of ~20 km — rest tomorrow, then a 15-min shakeout the day before the race');
   // The day before the eve: tomorrow's run is a short shakeout, never the whole leftover.
   const friday = computeGoalProgress(input(
     [run('2026-10-09', 3), run('2026-10-08', 5), run('2026-10-07', 5), ...history],
@@ -180,7 +181,7 @@ test('a break is 7 days, not 5: the target does not drop mid-week, and the card 
   const week2 = computeGoalProgress(input(weeks('2026-10-12', [[], [], ...lastWeeks]), { todayKey: '2026-10-12' }));
   assert.equal(week2.distance!.plan?.kind, 'restart');
   assert.equal(week2.distance!.stepTargetKm, 15);
-  assert.match(week2.reasons.find(r => r.kind === 'plan')!.text, /^Restart at ~15 km with easy runs, then build back toward your usual ~20 km$/);
+  assert.match(week2.reasons.find(r => r.kind === 'plan')!.text, /^Restart at ~15 km with easy runs, then build back toward your usual ~20 km\. If you were ill, wait until you've been symptom-free for 24–48 h first$/);
   const week3 = computeGoalProgress(input(weeks('2026-10-19', [[], [], [], ...lastWeeks]), { todayKey: '2026-10-19' }));
   assert.equal(week3.distance!.stepTargetKm, 11);
 });
@@ -238,8 +239,10 @@ test('long run: a peak the weekly goal cannot carry is "what fits", the race pea
   assert.equal(big.longRun?.raceTargetKm, undefined);
   // Imperial: the peak reached and the peak target are the same 11 mi (18 km is 11.18 mi: never "11.2" beside "11").
   // (Last week's 17.9 km long run is 54% of a 32.9 km week; in a smaller week it would be its own watch note, see the wave 21e tests.)
-  const reached = computeGoalProgress(input(weeks(TODAY, [[[0, 5]], [[1, 5], [3, 5], [5, 5], [6, 17.9]], wk(26), wk(24), wk(22)]), {
-    race, unitSystem: 'imperial', target: { weightKg: null, date: null, weeklySessions: null, weeklyDistanceKm: 40 },
+  // (A peak that kept to the plan - long runs 13, 15, 16.5, then 17.9 km, each week under half of its week - is praised; wave 22e.)
+  const wkLong = (long: number): Array<[number, number]> => [[1, 7], [3, 7], [5, 7], [6, long]];
+  const reached = computeGoalProgress(input(weeks(TODAY, [[[0, 5]], wkLong(17.9), wkLong(16.5), wkLong(15), wkLong(13)]), {
+    race, unitSystem: 'imperial', target: { weightKg: null, date: null, weeklySessions: null, weeklyDistanceKm: 50 },
   }));
   assert.equal(reached.distance!.plan?.kind, 'build');
   assert.equal(reached.reasons.find(r => r.kind === 'long_run')?.text, 'Long run peak 11 mi — on target');

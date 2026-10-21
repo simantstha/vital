@@ -8,6 +8,7 @@
  */
 import {
   TAPER_LATE_FROM_DAYS,
+  enduranceWeekPlan,
   peakWeekKmBeforeTaper,
   racePhaseInfo,
   recoveryWeek,
@@ -515,6 +516,111 @@ export function runnerOnPlanImperial(phaseKey: (date: string) => string): Scenar
   };
 }
 
+
+// ── wave 22e: an obedient runner and a comeback spike (endurance) ──────────────────────────────────────
+
+/** One scripted week of an otherwise obedient runner: `runs` are the week's [dow, km] pairs (Mon = 0). */
+type ScriptedWeek = Array<[number, number]>;
+
+/**
+ * Builds the rows of a runner who DOES what the app says: each Monday it reads the real week plan (target, long run) from
+ * the runs so far and runs exactly that - the cutback week's lowered km and held long run, the taper, race week and the
+ * recovery ceilings included. `scripted` replaces chosen weeks (week index from 0) with fixed runs (an illness, an overshoot);
+ * the weeks after them are obedient again. Deterministic: the plan is a pure function of the runs so far.
+ */
+function obedientRuns(opts: {
+  weeks: number;
+  baselineKm: number;
+  race: { date: string; distanceKm: number } | null;
+  scripted?: Record<number, ScriptedWeek>;
+}): { workouts: WorkoutRow[]; kinds: string[] } {
+  const workouts: WorkoutRow[] = [];
+  const kinds: string[] = [];
+  const toPlanRuns = (): Array<{ day: string; km: number }> =>
+    workouts.filter(w => w.type === 'Running' && w.distanceM != null).map(w => ({ day: w.day, km: (w.distanceM as number) / 1000 }));
+  for (let w = 0; w < opts.weeks; w++) {
+    const monday = addDays(DAY0, w * 7);
+    const scripted = opts.scripted?.[w];
+    const runs = toPlanRuns();
+    const plan = enduranceWeekPlan({
+      runs,
+      weekStart: monday,
+      goalKm: TARGET_KM,
+      race: opts.race,
+      today: monday,
+      racePeakWeekKm: opts.race ? peakWeekKmBeforeTaper(runs, opts.race.date, opts.race.distanceKm) : null,
+      unitsPerKm: 1,
+      goalStartDay: DAY0,
+    });
+    kinds.push(`${plan.kind}${plan.cutback ? '/cutback' : ''}${scripted ? '/scripted' : ''}`);
+    if (scripted) {
+      for (const [dow, km] of scripted) workouts.push(runRow(addDays(monday, dow), km, dow === 6 ? 6.8 : 6.2));
+      continue;
+    }
+    const isRaceOrRecovery = plan.kind === 'race_week' || plan.kind === 'recovery';
+    const total = plan.targetKm ?? opts.baselineKm;
+    const long = isRaceOrRecovery ? 0 : plan.longRunKm ?? (plan.kind === 'baseline' ? 6 : 0);
+    addWeekRuns(workouts, w, splitWeek(total, long, isRaceOrRecovery ? [1, 3, 5] : [1, 3, 5, 6]));
+    if (opts.race && addDays(monday, 6) === opts.race.date) {
+      workouts.push({ day: opts.race.date, type: 'Running', durationMin: 121, distanceM: Math.round(opts.race.distanceKm * 1000) });
+    }
+  }
+  return { workouts, kinds };
+}
+
+/**
+ * S1: the same half-marathon goal as runner_on_plan, but the runner follows the APP: the cutback weeks run their lowered km with
+ * the long run held, long runs stay at the plan's number, the taper is the planned one. (runner_on_plan builds with the plain
+ * 10% step and so skips every cutback; this one walks the "Cutback week done" path.)
+ */
+export function runnerOnPlanObedient(): Scenario {
+  const base = runnerOnPlan();
+  const race = { date: base.user.raceDate as string, distanceKm: HALF };
+  const { workouts, kinds } = obedientRuns({ weeks: 21, baselineKm: 15, race });
+  return {
+    ...base,
+    name: 'runner_on_plan_obedient',
+    title: 'Runner who does exactly what the app says (half marathon, cutback weeks run, taper as planned)',
+    workouts,
+    inputNotes: [
+      'Same goal/race as runner_on_plan (30 km/wk, half marathon day 111). Every Monday the runner reads the real week plan and runs its target km and long run on Tue/Thu/Sat/Sun (race week and recovery: Tue/Thu/Sat).',
+      `Week kinds the plan gave, week 1 first: ${kinds.join(', ')}.`,
+    ],
+  };
+}
+
+/**
+ * S2: a runner with no race who comes back from an illness and overshoots. Obedient to the plan, then: week 9 one 6 km run and
+ * ill (8 days without a run), week 10 back with 15 km, week 11 (the first comeback week, "up to ~18 km") 29 km - a big overshoot
+ * that is still below the pre-break median of 30 km. Obedient again afterwards.
+ */
+export function runnerComebackSpike(): Scenario {
+  const noRace = runnerNoRace();
+  const SICK_WEEK = 8;
+  const { workouts, kinds } = obedientRuns({
+    weeks: 14,
+    baselineKm: 24,
+    race: null,
+    scripted: {
+      [SICK_WEEK]: [[1, 6.0]],
+      [SICK_WEEK + 1]: [[3, 4.0], [5, 4.0], [6, 7.0]],
+      [SICK_WEEK + 2]: [[1, 7.0], [3, 5.0], [5, 5.0], [6, 12.0]],
+    },
+  });
+  return {
+    ...noRace,
+    name: 'runner_comeback_spike',
+    title: 'Runner who comes back from an illness and overshoots the first comeback week (15 km, then 29 km; no race)',
+    lastDay: 14 * 7,
+    workouts,
+    inputNotes: [
+      'Goal: endurance, weekly distance target 30 km, no race. Starts at 24 km and does what the app says (cutback week included) up to week 8 (30 km weeks).',
+      'Week 9: one 6 km run on Tuesday, then ILL: no run for 8 days. Week 10: back on Thursday, Thu 4 + Sat 4 + Sun 7 = 15 km. Week 11 (the first comeback week): 29 km (7/5/5/12), well over the ceiling the app gave and still under the pre-break median of 30 km. Weeks 12-14: obedient again.',
+      `Week kinds the plan gave, week 1 first: ${kinds.join(', ')}.`,
+    ],
+  };
+}
+
 // ── registry ────────────────────────────────────────────────────────────────
 
 export const SCENARIO_NAMES = [
@@ -528,6 +634,8 @@ export const SCENARIO_NAMES = [
   'runner_on_plan_imperial',
   'runner_messy',
   'runner_no_race',
+  'runner_on_plan_obedient',
+  'runner_comeback_spike',
 ] as const;
 
 export type ScenarioName = (typeof SCENARIO_NAMES)[number];
@@ -558,5 +666,7 @@ export function buildScenario(name: ScenarioName): Scenario {
     }
     case 'runner_messy': return runnerMessy();
     case 'runner_no_race': return runnerNoRace();
+    case 'runner_on_plan_obedient': return runnerOnPlanObedient();
+    case 'runner_comeback_spike': return runnerComebackSpike();
   }
 }

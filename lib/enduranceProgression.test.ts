@@ -8,6 +8,7 @@ import {
   addDayKey,
   breakThreshold,
   enduranceWeekPlan,
+  comebackCapRead,
   findRaceRun,
   formatRaceTime,
   formatTargetLongRun,
@@ -22,6 +23,7 @@ import {
   longRunPeakTarget,
   longRunStepKm,
   mondayOfDay,
+  overCapPhrase,
   peakWeekKmBeforeTaper,
   planWeekKm,
   raceClass,
@@ -357,23 +359,24 @@ test('the growth number is only quoted against a real week: under 5 km (3 mi) th
 });
 
 test('spike -> hold -> held: a jump is graded mixed, the next week holds one step up from the STEP, then it builds again', () => {
-  // Weeks 1-5 on plan (15..23), week 6 a 40 km spike over a ~25 km step, week 7 held at 28, week 8 back on the build.
-  // (Read one calendar week later, 2-9 -> 7-9: week 6 is a cutback week of the calendar, see the cutback tests.)
-  const runs = runsFor([15, 17, 19, 21, 23, 40, 28, 30], 2);
+  // Weeks 2-5 on plan (15..21), week 6 the calendar's cutback week run as planned (18 km), week 7 a 40 km spike over a ~23 km step, week 8
+  // held at 25, week 9 back on the build. (Week 6 is a cutback week of the calendar, see the cutback tests: running it at 23 km would be a
+  // skipped cutback, wave 22e.)
+  const runs = runsFor([15, 17, 19, 21, 18, 40, 28, 28], 2);
   const spikeWeek = planFor(runs, 7);
   assert.equal(spikeWeek.kind, 'build');
-  assert.equal(spikeWeek.targetKm, 25);
+  assert.equal(spikeWeek.targetKm, 23); // from the 21 km week before the cutback
   assert.deepEqual(gradeEnduranceWeek(spikeWeek, 40), { level: 'mixed', gap: 'spike' });
   assert.deepEqual(gradeEnduranceWeek(spikeWeek, 27), { level: 'good', gap: null });
   const hold = planFor(runs, 8);
   assert.equal(hold.kind, 'hold');
-  assert.equal(hold.targetKm, 28); // one step up from the 25 km step, never from the 40 km jump
-  assert.deepEqual(hold.hold, { spikeKm: 40, spikeStepKm: 25 });
+  assert.equal(hold.targetKm, 25); // one step up from the 23 km step, never from the 40 km jump
+  assert.deepEqual(hold.hold, { spikeKm: 40, spikeStepKm: 23 });
   assert.equal(hold.longRunKm, 16); // the hold week keeps the long run it had
   assert.deepEqual(gradeEnduranceWeek(hold, 28), { level: 'good', gap: null }); // holding as advised is good
   assert.deepEqual(gradeEnduranceWeek(hold, 40), { level: 'mixed', gap: 'spike' }); // not holding is the same mistake again
   const back = planFor(runs, 9);
-  assert.equal(back.kind, 'maintain'); // 28 x 1.10 reaches the 30 km goal
+  assert.equal(back.kind, 'maintain'); // 28 x 1.10 reaches the 30 km goal (the hold week ran 28)
   assert.equal(back.targetKm, 30);
   assert.equal(back.last?.km, 28);
   // The spike rule itself: >30% over the step AND at least 3 km (2 mi), only below the goal.
@@ -412,7 +415,8 @@ test('illness restart: a week under half the median of the 4 before it restarts 
 test('a 2-week gap (0 km weeks) restarts at ~55% of the median that counts the zero weeks (a gap over 14 days); a 0-run week is "light"', () => {
   const runs = runsFor([15, 17, 19, 21, 23, 25]); // weeks 1-6, then nothing in weeks 7-8
   const w7 = planFor(runs, 7);
-  assert.equal(w7.kind, 'build'); // week 7 itself was planned before anyone knew
+  assert.equal(w7.kind, 'hold'); // week 7 itself was planned before anyone knew (week 6 was a skipped cutback: 25 km against ~20, so week 7 holds at 25)
+  assert.equal(w7.targetKm, 25);
   assert.equal(gradeEnduranceWeek(w7, 0).level, 'light');
   const w9 = planFor(runs, 9);
   assert.equal(w9.kind, 'restart');
@@ -423,10 +427,10 @@ test('a 2-week gap (0 km weeks) restarts at ~55% of the median that counts the z
   // On a break: 7+ days without a run (more for a runner who runs less often) — wave 20, it was 5.
   const atDay = (offset: number) => enduranceWeekPlan({ runs, weekStart: weekOf(7), goalKm: 30, today: addDayKey(weekOf(7), offset) });
   // Five days without a run (the Friday) is no break: the week's target does not drop mid-week.
-  assert.equal(atDay(4).kind, 'build');
-  assert.equal(atDay(4).targetKm, 28);
+  assert.equal(atDay(4).kind, 'hold');
+  assert.equal(atDay(4).targetKm, 25);
   assert.equal(atDay(4).onBreak, false);
-  assert.equal(atDay(5).kind, 'build'); // six days
+  assert.equal(atDay(5).kind, 'hold'); // six days
   // The seventh day without a run is when the gap reaches into the week; up to 7 days is one skipped step: last week's
   // target (25 km) stands - wave 21e: but never above 0.75 x the pre-break median (22 -> 17 km), and on the week's last
   // day (this Sunday) the number is NEXT week's restart number, the 8-day gap Monday will read.
@@ -501,34 +505,67 @@ test('comeback: for up to three weeks after a restart the target climbs restart 
   const w13 = planFor(withWeeks([12, 15, 18, 22]), 13);
   assert.equal(w13.comeback, null);
   assert.equal(w13.targetKm, 24); // 22 x 1.10
-  // A week more than 10% over its "up to" ceiling is "a little over the cap" (wave 21b): the rung is repeated, and the week after
-  // holds at what was run - never a step, or a 1.25x rung, up from the overshoot ("20 of up to ~18 km" used to lift the next week to ~25).
+  // A week more than 10% over its "up to" ceiling (wave 22e): "a touch over" (fine, said once) up to 25% over it, "well over" (a spike) past
+  // that or past the pre-break median. Either way the next ceiling climbs from the CEILING, never from the overshoot.
   assert.equal(overUpToCap(w10, 16.5), false); // exactly 10% over: within the ceiling's slack
   assert.equal(overUpToCap(w10, 16.6), true);
   assert.equal(overUpToCap(w11, 19.8), false); // the 18 km ceiling
   assert.equal(overUpToCap(w11, 20), true); // "20 of up to ~18 km"
   assert.equal(overUpToCap(planFor(withWeeks([12, 15, 18, 22]), 13), 30), false); // a plain week has no ceiling
+  assert.equal(comebackCapRead(w10, 16.5), 'within');
+  assert.equal(comebackCapRead(w10, 17), 'touch'); // 13% over, 2 km: a touch
+  assert.equal(comebackCapRead(w11, 20), 'touch'); // 20 of up to ~18: 11% over, still under the 22 km median
+  assert.equal(comebackCapRead(w11, 21.9), 'touch'); // 21.7% over, under the 22 km median
+  assert.equal(comebackCapRead(w11, 22.1), 'well'); // past the 22 km pre-break median
+  assert.equal(comebackCapRead({ ...w10, targetKm: 8 }, 10.5), 'touch'); // +31% but only 2.5 km over (a spike needs 3 km)
+  assert.equal(comebackCapRead(w11, 23), 'well'); // past the 22 km pre-break median as well
+  assert.equal(comebackCapRead({ ...w11, comeback: { medianKm: 25 } }, 22.6), 'well'); // more than 25% over: well, below the median too
+  assert.equal(overCapPhrase('touch'), 'a touch over, fine');
+  assert.equal(overCapPhrase('well'), 'well over the ceiling');
   const within = planFor(withWeeks([12, 16.5]), 11);
   assert.equal(within.last?.overCap, false);
+  assert.equal(within.last?.capRead, null);
   assert.equal(within.targetKm, 20); // the ladder climbs: 1.25 x 16.5, floored
-  const over = planFor(withWeeks([12, 18]), 11); // ran 18 of up to ~15
+  const over = planFor(withWeeks([12, 18]), 11); // ran 18 of up to ~15: a touch over
   assert.equal(over.last?.overCap, true);
-  assert.equal(over.targetKm, 18); // hold at what was run; not the 22 km rung
+  assert.equal(over.last?.capRead, 'touch');
+  assert.equal(over.targetKm, 18); // 1.25 x the 15 km CEILING (18.75, floored), and never below the 18 km run
   assert.equal(over.upTo, true);
-  assert.deepEqual(over.comeback, { medianKm: 22, fraction: 0.8, weeksSince: 2 }); // the rung repeated, not climbed
-  assert.equal(nbsp(over.purpose).split(':')[0], 'Hold here, up to ~18~km this week');
-  assert.equal(planFor(withWeeks([12, 18, 22]), 12).targetKm, 22);
-  const overLast = planFor(withWeeks([12, 18, 22, 25]), 13); // the ladder is over, but an overshoot is still not stepped up from
-  assert.equal(overLast.comeback, null);
-  assert.equal(overLast.targetKm, 25);
+  assert.deepEqual(over.comeback, { medianKm: 22, fraction: 1, weeksSince: 2 }); // a touch over still grades good: the rung climbs
+  assert.equal(nbsp(over.purpose).split(':')[0], 'Up to ~18~km this week'); // no "Hold here"
+  // Rule 2 never steps the ceiling up from the overshoot: 20 of up to ~18 km (messy week 11) -> 22, not 1.25 x 20.
+  const messy = enduranceWeekPlan({ runs: [...runsFor([15, 17, 19, 21, 23, 25, 28, 30, 6]), ...runsFor([15, 20], 10)], weekStart: weekOf(12), goalKm: 30, today: weekOf(12) });
+  assert.equal(messy.last?.capRead, 'touch');
+  assert.ok(messy.targetKm != null && messy.targetKm <= 1.25 * (messy.last?.targetKm ?? 0) + 1e-9, `ceiling ${messy.targetKm} after ${messy.last?.km} of ${messy.last?.targetKm}`);
+  assert.equal(planFor(withWeeks([12, 18, 22]), 12).targetKm, 22); // the next ceiling, from the 18 km ceiling (22.5 floored)
+  // Rule 3: far past the ceiling (a 15 -> 29 km style jump) is a spike even below the pre-break median; next week stays AT the ceiling.
+  const far = planFor(withWeeks([12, 21]), 11); // 21 of up to ~15: 40% over, 6 km over
+  assert.equal(far.last?.capRead, 'well');
+  assert.equal(far.kind, 'hold');
+  assert.equal(far.targetKm, 15); // the ceiling, not the 21 km run and not a step from it
+  assert.equal(far.hold?.ceiling, true);
+  assert.deepEqual(far.hold?.ladder, { medianKm: 22, fraction: 0.8, weeksSince: 1 }); // the climb back is kept alive
+  assert.deepEqual(gradeEnduranceWeek(w10, 21), { level: 'mixed', gap: 'spike' });
+  assert.ok(far.longRunKm != null && far.longRunKm <= 7.5 + 1e-9, `the hold's long run ${far.longRunKm} km is at most half of 15 km`);
+  // ... and the week after the hold resumes the ladder from the ceiling (rule 1), not from the 21 km jump.
+  const resumed = planFor(withWeeks([12, 21, 15]), 12);
+  assert.equal(resumed.kind, 'build');
+  assert.equal(resumed.comeback?.weeksSince, 2);
+  assert.ok((resumed.targetKm ?? 99) <= 1.25 * 15 + 1e-9, `${resumed.targetKm}`);
+  const overLast = planFor(withWeeks([12, 18, 22, 25]), 13); // 25 of up to ~22 (past the 22 km median): well over
+  assert.equal(overLast.kind, 'hold');
+  assert.equal(overLast.targetKm, 22);
   // A careful comeback week is graded against the week before it, not against its ceiling (wave 21e): good when it grew
   // (or held) and was not a spike, mixed only when it shrank - never "5 km short of this week's step".
   assert.equal(gradeEnduranceWeek(w10, 12).level, 'good'); // the 12 km just run
   assert.equal(gradeEnduranceWeek(w10, 13).level, 'good'); // +8%, well under the 15 km ceiling
   assert.deepEqual(gradeEnduranceWeek(w10, 11.9), { level: 'mixed', gap: 'short' }); // it shrank
   assert.equal(gradeEnduranceWeek(w10, 3).level, 'mixed'); // never tough
-  // Regaining the pre-break level is no spike; a real jump beyond it still is.
-  assert.equal(gradeEnduranceWeek(w10, 22).gap, null);
+  // Regaining the pre-break level is no spike in a RESTART week (wave 22e: not in a comeback week - 22 of up to ~15 km is well over its
+  // ceiling even though 22 km is the pre-break median); a real jump beyond it is one everywhere.
+  assert.equal(gradeEnduranceWeek(restart, 12).gap, null);
+  assert.equal(gradeEnduranceWeek(restart, 22).gap, null);
+  assert.equal(gradeEnduranceWeek(w10, 22).gap, 'spike');
   assert.equal(gradeEnduranceWeek(w10, 26).gap, 'spike');
 });
 
@@ -579,7 +616,8 @@ test('race phases on the Mondays of a SUNDAY race: build, taper, race week, reco
   assert.deepEqual(kinds(21.1), ['maintain', 'maintain', 'taper', 'race_week', 'recovery', 'recovery', 'rebuild', 'rebuild', 'maintain']);
   assert.deepEqual(kinds(42.2), ['maintain', 'taper', 'taper', 'race_week', 'recovery', 'recovery', 'rebuild', 'rebuild', 'maintain']);
   // 10K: no taper, one recovery week.
-  assert.deepEqual(kinds(10), ['maintain', 'maintain', 'maintain', 'race_week', 'recovery', 'rebuild', 'rebuild', 'rebuild', 'maintain']);
+  // (The third Monday of the 10K is the week after a cutback week this 30-km-every-week runner skipped: a hold at the week it replaced, wave 22e.)
+  assert.deepEqual(kinds(10), ['maintain', 'maintain', 'hold', 'race_week', 'recovery', 'rebuild', 'rebuild', 'rebuild', 'maintain']);
 });
 
 test('taper, race week and recovery targets come from the peak week; a half taper week spells out the intensity', () => {
@@ -805,8 +843,11 @@ test('cutback: every 4th calendar week, after 3 plain build weeks, is ~80% of th
   // Graded as its own target and never "short": any running is a good cutback. The week's target is the cutback number, so a jump is
   // measured against it (30% and 3 km over ~20 km); the normal 25 km week it replaced is 25% over it, no spike. A week with no run is a rest week.
   assert.deepEqual(gradeEnduranceWeek(cut, 8), { level: 'good', gap: null });
-  assert.deepEqual(gradeEnduranceWeek(cut, 25), { level: 'good', gap: null });
-  assert.deepEqual(gradeEnduranceWeek(cut, 26), { level: 'good', gap: null });
+  assert.deepEqual(gradeEnduranceWeek(cut, 22), { level: 'good', gap: null }); // inside the 10% ceiling slack
+  // More than 10% over the lowered number is a SKIPPED cutback (wave 22e): mixed, not good - the normal 25 km week it replaced is no cutback.
+  assert.deepEqual(gradeEnduranceWeek(cut, 22.1), { level: 'mixed', gap: 'over' });
+  assert.deepEqual(gradeEnduranceWeek(cut, 25), { level: 'mixed', gap: 'over' });
+  assert.deepEqual(gradeEnduranceWeek(cut, 26), { level: 'mixed', gap: 'over' });
   assert.deepEqual(gradeEnduranceWeek(cut, 27), { level: 'mixed', gap: 'spike' });
   assert.deepEqual(gradeEnduranceWeek(cut, 40), { level: 'mixed', gap: 'spike' });
   assert.equal(gradeEnduranceWeek(cut, 0).level, 'light');
@@ -816,6 +857,16 @@ test('cutback: every 4th calendar week, after 3 plain build weeks, is ~80% of th
   assert.equal(spiked.kind, 'hold');
   assert.deepEqual(spiked.hold, { spikeKm: 40, spikeStepKm: 20 });
   assert.equal(spiked.targetKm, 28);
+  // A skipped cutback (25 km run against ~20): no +10% build on the skip - the next week holds at the 25 km week the cutback replaced.
+  const skipped = planFor(runsFor([15, 17, 19, 21, 23, 25]), 7);
+  assert.equal(skipped.kind, 'hold');
+  assert.equal(skipped.targetKm, 25);
+  assert.deepEqual(skipped.hold, { spikeKm: 25, spikeStepKm: 20, skippedCutback: true });
+  assert.equal(nbsp(skipped.purpose).split(';')[0], 'You skipped the cutback — hold ~25~km this week');
+  assert.equal(skipped.last?.cutback, true);
+  assert.equal(skipped.last?.grade?.gap, 'over');
+  // ... and the week after the hold builds on the held week (25 -> 28), as any hold.
+  assert.equal(planFor(runsFor([15, 17, 19, 21, 23, 25, 25]), 8).targetKm, 28);
   // A cutback week that ended in days off short of its lowered number is a rest week, not a good cutback.
   assert.equal(gradeEnduranceWeek({ ...cut, endedOff: true }, 5).level, 'light');
   // The week after returns to the progression: ~10% over the bigger of the two weeks before the cutback, never over the cutback's own low.
@@ -869,12 +920,14 @@ test('strides: the last 2 build weeks before a taper carry "plus 4–6 strides a
   assert.equal(planFor(runs.filter(r => r.day < weekOf(7)), 7).strides, false);
 });
 
-test('light week: 4+ days without a run in the week (or, from Friday, well behind the runner\'s own pace) says "don\'t make it up", with a capped long run', () => {
+test('light week: 4+ days without a run in the week (or, from Thursday, well behind the runner\'s own pace with the rest out of reach) says "don\'t make it up", with a capped long run', () => {
   const runs = runsFor([15, 17, 19, 21, 23, 25, 28, 30], 1);
   // Week 9 (Mon weekOf(9)): one 6 km run on Tuesday, then nothing.
   const week9 = [...runs, { day: addDayKey(weekOf(9), 1), km: 6 }];
   const at = (offset: number) => enduranceWeekPlan({ runs: week9.filter(r => r.day <= addDayKey(weekOf(9), offset)), weekStart: weekOf(9), goalKm: 30, today: addDayKey(weekOf(9), offset) });
-  assert.equal(at(3).lightWeek, null); // Thursday: Wed / Thu are two days off
+  assert.equal(at(2).lightWeek, null); // Wednesday: too early to say
+  // Thursday (wave 22e): 6 km against ~10.8 km by this weekday in the weeks before, and the ~24 km left cannot fit in Saturday and Sunday.
+  assert.equal(at(3).lightWeek?.reason, 'late_week');
   const fri = at(4);
   assert.equal(fri.lightWeek?.reason, 'late_week'); // Friday, 6 km of ~33... well behind the usual pace
   const sat = at(5);
@@ -917,9 +970,45 @@ test('light week: a plan-perfect runner is never "light" on a Friday (the long r
   assert.equal(planFor(runs, 9).lightWeek, null);
 });
 
+test('light week (wave 22e): with one finished week the pace is that week by the same weekday; the long run still to come is not "behind"', () => {
+  // Week 1: 15 km, Tue 3 / Thu 3 / Sat 3 / Sun 6. Week 2 by Friday: Tue 3.4 + Thu 3.3 = 6.7 km of ~17 - exactly on pace, the long run is Sunday.
+  const week1 = runsFor([15]);
+  const week2 = [{ day: addDayKey(weekOf(2), 1), km: 3.4 }, { day: addDayKey(weekOf(2), 3), km: 3.3 }];
+  const fri = enduranceWeekPlan({ runs: [...week1, ...week2], weekStart: weekOf(2), goalKm: 30, today: addDayKey(weekOf(2), 4) });
+  assert.equal(fri.kind, 'build');
+  assert.equal(fri.lightWeek, null);
+  assert.equal(fri.easingOff, null);
+  // The same runner who only ran 2 km in week 2 by Friday IS behind: under 75% of week 1's 6 km by then, and 15 km cannot fit in Sat + Sun.
+  const slow = enduranceWeekPlan({ runs: [...week1, { day: addDayKey(weekOf(2), 1), km: 2 }], weekStart: weekOf(2), goalKm: 30, today: addDayKey(weekOf(2), 4) });
+  assert.equal(slow.lightWeek?.reason, 'late_week');
+});
+
+test('pre-taper week (wave 22e): the light-week rule does not apply - it reads "easing off before your taper", with the long run range', () => {
+  // A half on weekOf(10)'s Sunday: week 8 is the last build week (week 9 is the taper). Weeks 1-7 plan-perfect, week 8 Tue 3 + Thu 3 only.
+  const race = { date: addDayKey(weekOf(10), 6), distanceKm: 21.1 };
+  const runs = [...runsFor([15, 17, 19, 21, 23, 25, 28]), { day: addDayKey(weekOf(8), 1), km: 3 }, { day: addDayKey(weekOf(8), 3), km: 3 }];
+  const sat = enduranceWeekPlan({ runs: runs.filter(r => r.day <= addDayKey(weekOf(8), 5)), weekStart: weekOf(8), goalKm: 30, today: addDayKey(weekOf(8), 5), race, racePeakWeekKm: 28 });
+  assert.deepEqual(sat.preTaper, { nextPhase: 'taper' });
+  assert.equal(sat.lightWeek, null);
+  assert.equal(sat.easingOff?.reason, 'late_week');
+  assert.ok(sat.easingOff?.longRunKm != null && sat.easingOff.taperLongRunKm != null && sat.easingOff.taperLongRunKm < sat.easingOff.longRunKm);
+  assert.match(nbsp(sat.purpose), /^Easing off before your taper — fine; keep Sunday's long run ~\d+(\.5)?–\d+(\.5)?~km easy$/);
+  // The cap is never lower than the taper's own long run: the planned long run is kept as the upper end.
+  assert.equal(sat.longRunKm, sat.easingOff?.longRunKm);
+  // A week before race week of a 10K says so; the week before that is plain building.
+  const tenK = { date: addDayKey(weekOf(10), 6), distanceKm: 10 };
+  const full = runsFor([15, 17, 19, 21, 23, 25, 28, 30]);
+  const tenKWeek = enduranceWeekPlan({ runs: full, weekStart: weekOf(9), goalKm: 30, today: addDayKey(weekOf(9), 3), race: tenK });
+  assert.deepEqual(tenKWeek.preTaper, { nextPhase: 'race_week' });
+  assert.equal(enduranceWeekPlan({ runs: full.filter(r => r.day < weekOf(8)), weekStart: weekOf(8), goalKm: 30, today: addDayKey(weekOf(8), 2), race: tenK }).preTaper, null);
+  // Not in the taper itself.
+  assert.equal(planFor(runs, 9, { race }).preTaper, null);
+});
+
 test('the week\'s plan does not change from day to day, nor as the oldest weeks of the 77-day history window slide away', () => {
-  // 14 plan-perfect weeks. The loader hands over the last 77 days: the partial first week at the window's edge must never reach today's plan.
-  const runs = runsFor([15, 17, 19, 21, 23, 25, 28, 30, 30, 30, 30, 30, 30, 30]);
+  // 14 plan-perfect weeks (the cutback weeks 6 and 10 run as planned). The loader hands over the last 77 days: the partial first week at the
+  // window's edge must never reach today's plan.
+  const runs = runsFor([15, 17, 19, 21, 23, 20, 25, 28, 30, 24, 30, 30, 30, 30]);
   for (const week of [12, 13, 14]) {
     const monday = weekOf(week);
     const monPlan = enduranceWeekPlan({ runs: runs.filter(r => r.day <= monday && r.day >= addDayKey(monday, -77)), weekStart: monday, goalKm: 30, today: monday });
@@ -954,6 +1043,20 @@ test('cap note cadence: the goal\'s first week, then every 4th build week; never
   assert.equal(rebuild.longRun.capNoteDue, false);
 });
 
+test('cap note (wave 22e): not in a comeback, restart or light week, and only when the raised goal is reachable at +10% a week before the taper', () => {
+  const race = { date: addDayKey(MON, 7 * 20), distanceKm: 21.1 }; // a half: the 18 km peak needs a 36 km goal; the taper starts in week 19
+  const steady = (kms: number) => runsFor(new Array<number>(16).fill(kms));
+  // A runner at 30 km in week 9 (due: the goal's first week, then every 4th) can raise the goal: 30 x 1.1^10 is far past 36 km.
+  assert.equal(planFor(steady(30).filter(r => r.day < weekOf(9)), 9, { race, goalStartDay: MON }).longRun.capNoteDue, true);
+  // The same due week at 20 km with 2 build weeks left (week 17): 20 x 1.1^2 = 24 km cannot reach 36 km, so the note stays quiet.
+  assert.equal(planFor(steady(20).filter(r => r.day < weekOf(17)), 17, { race, goalStartDay: MON }).longRun.capNoteDue, false);
+  // A comeback week after a break never carries it, even in its due week (week 13).
+  const afterBreak = planFor(runsFor([30, 30, 30, 30, 30, 30, 30, 30, 0, 0, 12, 15]), 13, { race, goalStartDay: MON });
+  assert.notEqual(afterBreak.comeback, null);
+  assert.equal(afterBreak.longRun.capNoteDue, false);
+  assert.equal(planFor(steady(30).filter(r => r.day < weekOf(13)), 13, { race, goalStartDay: MON }).longRun.capNoteDue, true);
+});
+
 test('a long run that was most of its week: one note for the most recent such week, and its peak is never a good peak', () => {
   const week = (n: number, longKm: number, total: number): PlanRun[] => {
     const w = weekOf(n);
@@ -966,6 +1069,11 @@ test('a long run that was most of its week: one note for the most recent such we
   const next = planFor(runs, 6, { race });
   assert.deepEqual(next.longRun.share, { weekStart: weekOf(5), longKm: 18, weekKm: 30, sharePct: 60 });
   assert.equal(next.longRun.peakOversized, true);
+  // The watch note is said once (wave 22e): on the Monday after the oversized week, not on the days after it.
+  assert.equal(next.longRun.shareDue, true);
+  const wednesday = enduranceWeekPlan({ runs, weekStart: weekOf(6), goalKm: 30, today: addDayKey(weekOf(6), 2), race });
+  assert.equal(wednesday.longRun.share?.weekStart, weekOf(5)); // still known (the peak is not praised) ...
+  assert.equal(wednesday.longRun.shareDue, false); // ... but not said again
   // Read on the Sunday of the week itself the same week is named (the long run is done).
   const sunday = enduranceWeekPlan({ runs, weekStart: weekOf(5), goalKm: 30, today: addDayKey(weekOf(5), 6), race });
   assert.equal(sunday.longRun.share?.weekStart, weekOf(5));

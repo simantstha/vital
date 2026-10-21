@@ -6,7 +6,7 @@
  */
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { TAPER_GOOD_MIN_FRACTION } from '../enduranceProgression';
+import { TAPER_GOOD_MIN_FRACTION, racePhaseInfo } from '../enduranceProgression';
 import { liftLapseMinDays } from '../liftChange';
 import { KM_PER_MILE } from '../metricFormat';
 import { calorieFloorKcal, isInstruction, TRIM_MAX_KCAL_PER_STEP } from '../weightWeekPlan';
@@ -232,7 +232,7 @@ invariant(['runner_messy', 'runner_no_race'], 'a light week is never "On track" 
 const WEEK_KM_FIGURE = /\d(?:\.\d+)?\s?(?:km|mi)\b[^\n]*\b(?:so far|this week|week's|a week|\/week|target)\b|\b(?:so far|this week|week's target|target)\b[^\n]*\d(?:\.\d+)?\s?(?:km|mi)\b/i;
 const isRaceEve = (s: DaySnapshot): boolean => s.race?.daysToRace === 1 && s.race.phase !== 'recovery';
 
-invariant(['runner_on_plan', 'runner_on_plan_half', 'runner_on_plan_imperial', 'runner_messy'], 'race eve shows no km-of-the-week figure (card, coach lines, opener)', (snaps, name) => {
+invariant(['runner_on_plan', 'runner_on_plan_half', 'runner_on_plan_imperial', 'runner_on_plan_obedient', 'runner_messy'], 'race eve shows no km-of-the-week figure (card, coach lines, opener)', (snaps, name) => {
   const out: Violation[] = [];
   let eves = 0;
   for (const snap of snaps) {
@@ -1181,13 +1181,13 @@ invariant(['runner_messy'], 'a "Hold ~N next week" headline is the target of the
   return out;
 });
 
-// A careful comeback week's "up to ~18 km" is a ceiling. Running more than the shared 10% ceiling slack over it is "a little over the cap" -
-// never "on plan" / "on track", never a green Volume stat or a "Back on the way up" win, on the Monday card or in the review - and the
-// week after is not lifted by the overshoot: it holds at what was run ("hold here") - never a step or a 1.25x rung up from it
-// (runner_messy week of 2026-05-11: 20 of up to ~18 km, then "Up to ~25 km").
+// A careful comeback week's "up to ~18 km" is a ceiling. Running more than the shared 10% ceiling slack over it is never "on plan" /
+// "on track", never a green Volume stat or a "Back on the way up" win, on the Monday card or in the review. Wave 22e replaced the wave-21 rule
+// "the week after holds at what was run" (it climbed 18 -> 20 -> 24 -> 28 for 21 days of "a little over the cap"): a touch over is said ONCE
+// ("a touch over, fine") and the ceiling climbs from the CEILING; far over is a spike and the next week stays AT the ceiling (see below).
 const COMEBACK_CAP_SLACK = 1.1;
 
-invariant(RUNNERS, 'a comeback week more than 10% over its "up to" cap reads "over the cap" (not "on plan") on the card and in the review, and next week holds at what was run', (snaps, name) => {
+invariant(RUNNERS, 'a comeback week more than 10% over its "up to" cap is never "on plan" / praised, on the card and in the review, and names the overshoot', (snaps, name) => {
   const out: Violation[] = [];
   const byDate = new Map(snaps.map(s => [s.date, s]));
   let overWeeks = 0;
@@ -1205,20 +1205,17 @@ invariant(RUNNERS, 'a comeback week more than 10% over its "up to" cap reads "ov
       for (const t of reviewTexts(reviewSnap)) {
         if (ON_TRACK_WORDS.test(plain(t.text)) || /on the way up/i.test(t.text)) out.push({ snap: reviewSnap, detail: `${t.where}: "${visible(t.text)}" for ${d.thisWeekKm} of up to ~${d.stepTargetKm} km` });
       }
-      if (!/over the cap/i.test(rv.review.headline)) out.push({ snap: reviewSnap, detail: `review.headline "${visible(rv.review.headline)}" does not say the week went over its cap (${d.thisWeekKm} of up to ~${d.stepTargetKm} km)` });
+      if (!/a touch over|well over the ceiling/i.test(plain(rv.review.headline))) out.push({ snap: reviewSnap, detail: `review.headline "${visible(rv.review.headline)}" does not say the week went over its ceiling (${d.thisWeekKm} of up to ~${d.stepTargetKm} km)` });
       const volume = rv.review.stats.find(st => st.label === 'Volume');
       if (volume?.tone === 'good') out.push({ snap: reviewSnap, detail: `review stat Volume "${visible(volume.value)}" is good-toned for ${d.thisWeekKm} of up to ~${d.stepTargetKm} km` });
     }
-    // The card of the week after: about last week until the next one is run.
-    for (let i = 0; i < 7; i++) {
+    // The card of the week after: about last week until the next one is run (its last day, Sunday, judges that week itself - wave 22e).
+    for (let i = 0; i < 6; i++) {
       const next = byDate.get(addDays(nextMonday, i));
       const nd = next?.card?.distance;
-      if (!next || !nd || nd.plan?.kind !== 'build') continue;
+      if (!next || !nd || (nd.plan?.kind !== 'build' && nd.plan?.kind !== 'hold')) continue;
       if (ON_TRACK_WORDS.test(plain(next.card?.headline ?? ''))) out.push({ snap: next, detail: `card.headline "${visible(next.card?.headline ?? '')}" after a week of ${d.thisWeekKm} of up to ~${d.stepTargetKm} km` });
-      else if (!/over the cap/i.test(next.card?.headline ?? '')) out.push({ snap: next, detail: `card.headline "${visible(next.card?.headline ?? '')}" does not say last week went over its cap (${d.thisWeekKm} of up to ~${d.stepTargetKm} km)` });
-      if (nd.stepTargetKm > d.thisWeekKm + 0.5 + 1e-9) {
-        out.push({ snap: next, detail: `target ~${nd.stepTargetKm} km steps up from the overshoot: last week ran ${d.thisWeekKm} of up to ~${d.stepTargetKm} km and this week should hold there` });
-      }
+      else if (!/a touch over|well over the ceiling/i.test(next.card?.headline ?? '')) out.push({ snap: next, detail: `card.headline "${visible(next.card?.headline ?? '')}" does not say last week went over its ceiling (${d.thisWeekKm} of up to ~${d.stepTargetKm} km)` });
     }
   }
   if (name === 'runner_messy') assert.ok(overWeeks > 0, `${name}: no comeback week went over its "up to" cap, so this invariant checked nothing`);
@@ -1260,7 +1257,7 @@ invariant(LIFTERS, 'the verdict does not change on two consecutive days unless a
 // to come must reach the shared taper band (60% of the target, windDownBand), else the card says "easy runs are enough". Earlier in
 // the week the long run is ahead, so the claim stands - runner_on_plan day 102, "5.4 of ~22 km, on plan" on a Friday, is honest:
 // 5.4 + the 11.5 km Sunday long run lands the week at 17 km.
-invariant(['runner_on_plan', 'runner_on_plan_half', 'runner_on_plan_imperial', 'runner_messy'], 'a weekend taper card says "on plan" only when the week can land in the taper band (run so far + the long run still to come)', (snaps, name) => {
+invariant(['runner_on_plan', 'runner_on_plan_half', 'runner_on_plan_imperial', 'runner_on_plan_obedient', 'runner_messy'], 'a weekend taper card says "on plan" only when the week can land in the taper band (run so far + the long run still to come)', (snaps, name) => {
   const scn = buildScenario(name);
   const out: Violation[] = [];
   let weekendDays = 0;
@@ -1714,5 +1711,753 @@ invariant(LIFTERS, 'a review of a week with at most half its planned sessions ra
     if (!gainShown && !/^\d+ of \d+ sessions — a short week$/.test(plain(r.headline))) out.push({ snap, detail: `review.headline: "${visible(r.headline)}" (a slack week with no lift gain to show leads with the week: "N of M sessions — a short week")` });
   }
   if (name === 'lifter_short_week') assert.ok(checked > 0, `${name}: no slack week was reviewed, so this invariant checked nothing`);
+  return out;
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════
+// wave 22e: endurance round 4 (running coach + 4 runner personas). Every invariant here was written BEFORE the rule it locks in.
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════
+
+/** Running km per local day from a scenario's own rows (the race run is not training volume, as the plan counts it). */
+function scenarioRunKm(name: ScenarioName): Map<string, number> {
+  const scn = buildScenario(name);
+  const out = new Map<string, number>();
+  for (const w of scn.workouts) {
+    if (w.type !== 'Running' || !w.distanceM || w.day === scn.user.raceDate) continue;
+    out.set(w.day, (out.get(w.day) ?? 0) + w.distanceM / 1000);
+  }
+  return out;
+}
+
+/** Running km of the Mon-Sun week at `monday` from its Monday through `through` (inclusive). */
+function kmThrough(runKm: Map<string, number>, monday: string, through: string): number {
+  let km = 0;
+  for (let d = monday; d <= through; d = addDays(d, 1)) km += runKm.get(d) ?? 0;
+  return km;
+}
+
+const isLightWeekRead = (s: DaySnapshot): boolean => s.card?.distance?.plan?.lightWeek === true || /^Light week\b/.test(plain(s.card?.headline ?? ''));
+
+// P1-B. "Light week — 6.7 of ~17 km so far" on a Friday of a runner who was exactly on pace (the long run is Sunday).
+invariant(RUNNERS, 'no light-week read on a day where the week so far is at least last week\'s km through the same weekday', (snaps, name) => {
+  const runKm = scenarioRunKm(name);
+  const out: Violation[] = [];
+  for (const snap of snaps) {
+    if (!isLightWeekRead(snap)) continue;
+    const monday = mondayOfDate(snap.date);
+    const prevMonday = addDays(monday, -7);
+    const prevSame = kmThrough(runKm, prevMonday, addDays(prevMonday, dayDiff(snap.date, monday)));
+    const prevTotal = kmThrough(runKm, prevMonday, addDays(prevMonday, 6));
+    const done = kmThrough(runKm, monday, snap.date);
+    if (prevTotal > 0 && done >= prevSame - 1e-9) out.push({ snap, detail: `"${visible(snap.card?.headline ?? '')}": ${Math.round(done * 10) / 10} km so far, last week had ${Math.round(prevSame * 10) / 10} km by the same weekday` });
+  }
+  return out;
+});
+
+invariant(RUNNERS, 'a light-week read appears only in a week that really came in under 90% of its target (counted from the rows)', (snaps, name) => {
+  const runKm = scenarioRunKm(name);
+  const out: Violation[] = [];
+  for (const snap of snaps) {
+    if (!isLightWeekRead(snap)) continue;
+    const monday = mondayOfDate(snap.date);
+    const total = kmThrough(runKm, monday, addDays(monday, 6));
+    const target = snap.card?.distance?.stepTargetKm ?? 0;
+    if (total >= target * 0.9 - 1e-9) out.push({ snap, detail: `"${visible(snap.card?.headline ?? '')}" but the week then ran ${Math.round(total * 10) / 10} km of ~${target} km` });
+  }
+  return out;
+});
+
+const nextMondayPhase = (name: ScenarioName, snap: DaySnapshot): string | null => {
+  const scn = buildScenario(name);
+  return racePhaseInfo(scn.user.raceDate, addDays(mondayOfDate(snap.date), 7), scn.user.raceDistanceKm)?.phase ?? null;
+};
+const isPreTaperWeek = (name: ScenarioName, snap: DaySnapshot): boolean => {
+  const next = nextMondayPhase(name, snap);
+  const thisPhase = buildScenario(name).user.raceDate == null ? null : racePhaseInfo(buildScenario(name).user.raceDate, mondayOfDate(snap.date), buildScenario(name).user.raceDistanceKm)?.phase;
+  return thisPhase === 'build' && (next === 'taper' || next === 'race_week');
+};
+
+invariant(RUNNERS, 'no light-week read in a pre-taper week (the week before the taper or race week): easing off there is fine', (snaps, name) => {
+  const out: Violation[] = [];
+  for (const snap of snaps) {
+    if (!isPreTaperWeek(name, snap)) continue;
+    for (const t of [...cardTexts(snap), ...coachTexts(snap)]) {
+      if (/\blight week\b/i.test(plain(t.text))) out.push({ snap, detail: `${t.where}: "${visible(t.text)}"` });
+    }
+    if (snap.card?.distance?.plan?.lightWeek === true) out.push({ snap, detail: 'distance.plan.lightWeek is set in a pre-taper week' });
+  }
+  return out;
+});
+
+// A "long run ≤ N" cap in the days before a taper must never sit under the taper's own planned long run (the next Monday's card).
+const LONG_RUN_CAP = /\b(?:long|longest) run ≤ ~?(\d+(?:\.\d+)?)/i;
+
+invariant(RUNNERS.filter(n => n !== 'runner_no_race'), 'a "long run ≤ N" cap is never below the planned taper long run', (snaps, name) => {
+  const byDate = new Map(snaps.map(s => [s.date, s]));
+  const out: Violation[] = [];
+  for (const snap of snaps) {
+    if (!isPreTaperWeek(name, snap)) continue;
+    const taperLong = byDate.get(addDays(mondayOfDate(snap.date), 7))?.card?.distance?.plan?.longRunKm;
+    if (taperLong == null) continue;
+    for (const t of [...cardTexts(snap), ...coachTexts(snap)]) {
+      const m = LONG_RUN_CAP.exec(plain(t.text));
+      if (m && Number(m[1]) < taperLong - 0.5 - 1e-9) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" is under the taper's planned long run of ${taperLong} km` });
+    }
+  }
+  return out;
+});
+
+// The residual: an ill runner (one 6 km run on Tuesday, then nothing) is a light week from Thursday, when the remaining km cannot fit.
+invariant(['runner_messy', 'runner_comeback_spike'], 'the week of an illness reads as a light week from the Thursday (6 km run, the rest cannot fit)', (snaps, name) => {
+  const thursday = snaps.find(s => s.idx === 59);
+  assert.ok(thursday != null && weekdayOf(thursday.date) === 'Thu', `${name}: day 59 is not a stepped Thursday`);
+  const out: Violation[] = [];
+  if (!isLightWeekRead(thursday)) out.push({ snap: thursday, detail: `Thursday after one 6 km run reads "${visible(thursday.card?.headline ?? '')}" (verdict ${thursday.card?.verdict})` });
+  return out;
+});
+
+// ── wave 22e / P1-A: the comeback over-cap loop ─────────────────────────────
+
+/** The week's "up to" read from a Sunday card: the ceiling C (stepTargetKm) and the km run A, or null when the week had no ceiling. */
+function sundayCeiling(s: DaySnapshot): { ceiling: number; ran: number } | null {
+  const d = s.card?.distance;
+  if (weekdayOf(s.date) !== 'Sun' || !d?.plan?.upTo || d.thisWeekKm == null) return null;
+  return { ceiling: d.stepTargetKm, ran: d.thisWeekKm };
+}
+
+invariant(RUNNERS, '"Hold here" never appears in a week whose target is higher than last week\'s target', (snaps) => {
+  const byDate = new Map(snaps.map(s => [s.date, s]));
+  const out: Violation[] = [];
+  for (const snap of snaps) {
+    const d = snap.card?.distance;
+    if (!d) continue;
+    const lastSunday = byDate.get(addDays(d.weekStart, -1));
+    const lastTarget = lastSunday?.card?.distance?.stepTargetKm;
+    if (lastTarget == null || d.stepTargetKm <= lastTarget + 1e-9) continue;
+    for (const t of [...cardTexts(snap), ...coachTexts(snap)]) {
+      if (/\bhold here\b/i.test(plain(t.text))) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" in a week targeting ${d.stepTargetKm} km after a week that targeted ${lastTarget} km` });
+    }
+  }
+  return out;
+});
+
+invariant(RUNNERS, 'a week more than 10% over its comeback ceiling is not followed by another one unless it was "well over" (more than 25% over)', (snaps, name) => {
+  const out: Violation[] = [];
+  const sundays = snaps.filter(s => weekdayOf(s.date) === 'Sun');
+  let over = 0;
+  for (let i = 1; i < sundays.length; i++) {
+    const a = sundayCeiling(sundays[i - 1]);
+    const b = sundayCeiling(sundays[i]);
+    if (a && a.ran > a.ceiling * 1.1 + 1e-9) over++;
+    if (a && b && dayDiff(sundays[i].date, sundays[i - 1].date) === 7 && a.ran > a.ceiling * 1.1 + 1e-9 && a.ran <= a.ceiling * 1.25 + 1e-9 && b.ran > b.ceiling * 1.1 + 1e-9) {
+      out.push({ snap: sundays[i], detail: `${a.ran} of up to ~${a.ceiling} km (${sundays[i - 1].date}), then ${b.ran} of up to ~${b.ceiling} km again: the ceiling followed the overshoot` });
+    }
+  }
+  if (name === 'runner_messy') assert.ok(over > 0, `${name}: no comeback week went over its ceiling, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(RUNNERS, "a comeback ceiling never climbs more than 1.25x the previous ceiling when that week ran over it (and never more than 1.25x the km run when it did not)", (snaps) => {
+  const out: Violation[] = [];
+  const sundays = snaps.filter(s => weekdayOf(s.date) === 'Sun');
+  for (let i = 1; i < sundays.length; i++) {
+    const a = sundayCeiling(sundays[i - 1]);
+    const next = sundays[i].card?.distance;
+    if (!a || !next || dayDiff(sundays[i].date, sundays[i - 1].date) !== 7) continue;
+    const limit = a.ran > a.ceiling * 1.1 + 1e-9 ? a.ceiling * 1.25 : Math.max(a.ceiling, a.ran) * 1.25;
+    if (next.stepTargetKm > limit + 0.5 + 1e-9) {
+      out.push({ snap: sundays[i], detail: `${a.ran} of up to ~${a.ceiling} km, then the week targets ${next.stepTargetKm} km (limit ${Math.round(limit * 10) / 10} km): "${visible(next.text)}"` });
+    }
+  }
+  return out;
+});
+
+invariant(['runner_comeback_spike'], 'S2: a big overshoot of the first comeback week reads as a spike and the ceiling is held', (snaps, name) => {
+  const out: Violation[] = [];
+  const byDate = new Map(snaps.map(s => [s.date, s]));
+  const sunday = snaps.find(s => s.idx === 76);
+  assert.ok(sunday != null && sundayCeiling(sunday) != null, `${name}: day 76 is not a Sunday with an "up to" ceiling`);
+  const { ceiling, ran } = sundayCeiling(sunday) as { ceiling: number; ran: number };
+  assert.ok(ran > ceiling * 1.25, `${name}: the scripted week did not overshoot (${ran} of up to ~${ceiling} km)`);
+  const monday = byDate.get(addDays(sunday.date, 1)) as DaySnapshot;
+  const plan = monday.card?.distance?.plan;
+  if (plan?.kind !== 'hold') out.push({ snap: monday, detail: `plan kind ${plan?.kind}, not a hold, after ${ran} of up to ~${ceiling} km: "${visible(monday.card?.headline ?? '')}"` });
+  if (monday.card?.distance?.stepTargetKm !== ceiling) out.push({ snap: monday, detail: `target ${monday.card?.distance?.stepTargetKm} km, the ceiling to hold was ${ceiling} km` });
+  if (monday.card?.verdict !== 'holding') out.push({ snap: monday, detail: `verdict ${monday.card?.verdict}: "${visible(monday.card?.headline ?? '')}"` });
+  const review = monday.review?.review;
+  if (review?.weekRating !== 'mixed' || review.weekGap?.kind !== 'spike') out.push({ snap: monday, detail: `review rated ${review?.weekRating} with gap ${JSON.stringify(review?.weekGap)}: "${visible(review?.headline ?? '')}"` });
+  if (!/well over the ceiling/i.test(plain(review?.headline ?? ''))) out.push({ snap: monday, detail: `review headline "${visible(review?.headline ?? '')}" does not say well over the ceiling` });
+  return out;
+});
+
+// The card, the review and the coach read ONE grade for the week that was run against its ceiling.
+const OVER_GRADE = (text: string): 'well' | 'touch' | null => (/well over/i.test(text) ? 'well' : /a touch over|a little over|over the cap/i.test(text) ? 'touch' : null);
+
+invariant(RUNNERS, 'the review and the Monday card read the same over-the-ceiling grade, and a good review never carries an over-the-cap headline', (snaps) => {
+  const out: Violation[] = [];
+  for (const snap of snaps) {
+    const rv = snap.review?.review;
+    if (!rv) continue;
+    const reviewGrade = OVER_GRADE(plain(rv.headline));
+    const cardGrade = OVER_GRADE(plain(snap.card?.headline ?? ''));
+    if (reviewGrade !== cardGrade) out.push({ snap, detail: `review headline "${visible(rv.headline)}" (${reviewGrade}) vs card headline "${visible(snap.card?.headline ?? '')}" (${cardGrade})` });
+    if (rv.weekRating === 'good' && reviewGrade === 'well') out.push({ snap, detail: `a good week with a well-over headline: "${visible(rv.headline)}"` });
+    if (rv.weekRating === 'good' && /over the cap/i.test(plain(rv.headline))) out.push({ snap, detail: `a good week with an over-the-cap headline: "${visible(rv.headline)}"` });
+    if (reviewGrade === 'well' && rv.weekGap?.kind !== 'spike') out.push({ snap, detail: `well over the ceiling but weekGap ${JSON.stringify(rv.weekGap)}: "${visible(rv.headline)}"` });
+  }
+  return out;
+});
+
+invariant(['runner_messy'], 'messy comeback: week 11 is "a touch over, fine" (next ceiling 22 km), week 12 is on plan (next 29 km), week 13 is on plan', (snaps) => {
+  const out: Violation[] = [];
+  const at = (idx: number): DaySnapshot => snaps.find(s => s.idx === idx) as DaySnapshot;
+  const check = (idx: number, target: number, headline: RegExp, review?: RegExp): void => {
+    const s = at(idx);
+    if (s.card?.distance?.stepTargetKm !== target) out.push({ snap: s, detail: `target ${s.card?.distance?.stepTargetKm} km, expected ${target} km` });
+    if (!headline.test(plain(s.card?.headline ?? ''))) out.push({ snap: s, detail: `card headline "${visible(s.card?.headline ?? '')}" does not match ${headline}` });
+    if (review && !review.test(plain(s.review?.review.headline ?? ''))) out.push({ snap: s, detail: `review headline "${visible(s.review?.review.headline ?? '')}" does not match ${review}` });
+  };
+  check(77, 22, /^Building — 20 of up to ~18 km last week, a touch over, fine$/, /^4 sessions, 20 of up to ~18 km — a touch over, fine · goal 30 km$/);
+  check(84, 29, /, on plan$/, /24 of up to ~22 km — on plan/);
+  // Week 13 ran 28 of up to ~29 km: inside its ceiling, no over-the-ceiling grade on either surface (the ladder is over; the step is the goal).
+  check(91, 30, /^(?!.*\b(?:touch over|well over)\b)/, /^4 sessions, 28 of up to ~29 km · goal 30 km/);
+  return out;
+});
+
+// "Well over the ceiling — 29 of up to ~18 km. Stay at ~18 km next week" (Sunday) is the target of the coming Monday's card (wave 22e: the
+// Sunday headline used to say "Hold ~20 km next week" over a Monday that stayed at 18).
+const STAY_NEXT_WEEK = /Stay at ~(\d+(?:\.\d+)?)\s?(km|mi) next week/;
+
+invariant(['runner_comeback_spike'], 'a "Stay at ~N next week" headline is the target of the coming Monday\'s card', (snaps, name) => {
+  const out: Violation[] = [];
+  let compared = 0;
+  for (const snap of snaps) {
+    const m = STAY_NEXT_WEEK.exec(plain(snap.card?.headline ?? ''));
+    if (!m) continue;
+    const monday = snaps.find(s => s.date === addDays(mondayOfDate(snap.date), 7));
+    const target = monday?.card?.distance?.stepTargetKm;
+    if (target == null) continue;
+    compared++;
+    if (Math.abs(inDisplayUnit(target, m[2]) - Number(m[1])) > 0.05 + 1e-9) out.push({ snap, detail: `"${visible(snap.card?.headline ?? '')}" but the card on Monday ${monday?.date} targets ${inDisplayUnit(target, m[2])} ${m[2]}: "${visible(monday?.card?.headline ?? '')}"` });
+  }
+  assert.ok(compared > 0, `${name}: no "Stay at ~N next week" headline met a following Monday, so this invariant checked nothing`);
+  return out;
+});
+
+// ── wave 22e / P1-C: a skipped cutback is not "30 of 30 km" ─────────────────
+
+const ANY_OF_FIGURE = /(\d+(?:\.\d+)?)(?:\s?(?:km|mi))?\s+of\s+(?:up to\s+)?~?(\d+(?:\.\d+)?)\s?(km|mi)\b/g;
+
+/** Mondays of the weeks whose Sunday card says "cutback", with that week's lowered target (km) and the km run. */
+function cutbackWeeks(snaps: DaySnapshot[]): Array<{ monday: string; targetKm: number; ranKm: number; sunday: DaySnapshot }> {
+  const out: Array<{ monday: string; targetKm: number; ranKm: number; sunday: DaySnapshot }> = [];
+  for (const s of snaps) {
+    const d = s.card?.distance;
+    if (weekdayOf(s.date) !== 'Sun' || !d?.plan?.cutback || d.thisWeekKm == null) continue;
+    out.push({ monday: mondayOfDate(s.date), targetKm: d.stepTargetKm, ranKm: d.thisWeekKm, sunday: s });
+  }
+  return out;
+}
+
+invariant(RUNNERS, 'in a cutback week every card, coach and review distance figure of the week uses the cutback target (never "30 of 30 km")', (snaps, name) => {
+  const out: Violation[] = [];
+  let weeks = 0;
+  for (const w of cutbackWeeks(snaps)) {
+    weeks++;
+    const unit = /\bmi\b/.test(plain(w.sunday.card?.distance?.text ?? '')) ? 'mi' : 'km';
+    const expected = inDisplayUnit(w.targetKm, unit);
+    const check = (snap: DaySnapshot, texts: Text[]): void => {
+      for (const t of texts) {
+        for (const m of plain(t.text).matchAll(ANY_OF_FIGURE)) {
+          // "long run 14 of 15 km" is the long-run build, not the week's distance.
+          if (/\brun\s*$/i.test(plain(t.text).slice(Math.max(0, (m.index ?? 0) - 12), m.index))) continue;
+          if (Math.abs(Number(m[2]) - expected) > 0.05 + 1e-9) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" says "${m[0]}" in a cutback week of ~${expected} ${unit}` });
+        }
+      }
+    };
+    for (let i = 0; i < 7; i++) {
+      const snap = snaps.find(s => s.date === addDays(w.monday, i));
+      if (snap) check(snap, [...cardTexts(snap), ...coachTexts(snap)]);
+    }
+    const review = snaps.find(s => s.date === addDays(w.monday, 7));
+    if (review?.review?.weekStart === w.monday) check(review, reviewTexts(review).filter(t => t.where === 'review.headline'));
+  }
+  assert.ok(weeks > 0 || name === 'runner_messy' || name === 'runner_comeback_spike' || name === 'runner_no_race' || name === 'runner_on_plan_imperial', `${name}: no cutback week was stepped, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(RUNNERS, 'a cutback week that ran more than 15% over its lowered target says "above the cutback" on the Sunday card and in the review headline', (snaps) => {
+  const out: Violation[] = [];
+  for (const w of cutbackWeeks(snaps)) {
+    if (!(w.ranKm > w.targetKm * 1.15 + 1e-9) || /Over the safe step/i.test(plain(w.sunday.card?.headline ?? ''))) continue;
+    if (!/cutback/i.test(plain(w.sunday.card?.headline ?? ''))) out.push({ snap: w.sunday, detail: `Sunday card headline "${visible(w.sunday.card?.headline ?? '')}" after ${w.ranKm} of ~${w.targetKm} km does not name the cutback` });
+    const review = snaps.find(s => s.date === addDays(w.monday, 7));
+    const headline = review?.review?.weekStart === w.monday ? review.review.review.headline : null;
+    if (review && headline != null && !/above the cutback/i.test(plain(headline))) out.push({ snap: review, detail: `review headline "${visible(headline)}" after ${w.ranKm} of ~${w.targetKm} km does not say it was above the cutback` });
+  }
+  return out;
+});
+
+// ── wave 22e / P2.1: a skipped cutback is not rewarded ──────────────────────
+
+/** A cutback week more than 10% over its lowered target that is not a spike (a spike has its own read): the cutback was skipped. */
+function skippedCutbacks(snaps: DaySnapshot[]): Array<{ monday: string; targetKm: number; ranKm: number; sunday: DaySnapshot }> {
+  return cutbackWeeks(snaps).filter(w => w.ranKm > w.targetKm * 1.1 + 1e-9 && !/Over the safe step/i.test(plain(w.sunday.card?.headline ?? '')));
+}
+
+invariant(RUNNERS, 'a skipped cutback (more than 10% over its lowered number) is a hold at the week it replaced, graded mixed with a "Cutback skipped" slip - never a +12% build rewarded as good', (snaps, name) => {
+  const out: Violation[] = [];
+  const byDate = new Map(snaps.map(s => [s.date, s]));
+  let skipped = 0;
+  for (const w of skippedCutbacks(snaps)) {
+    skipped++;
+    const nextMonday = byDate.get(addDays(w.monday, 7));
+    const plan = nextMonday?.card?.distance?.plan;
+    const normalKm = w.targetKm / 0.8;
+    if (nextMonday && plan?.kind !== 'hold') out.push({ snap: nextMonday, detail: `plan kind ${plan?.kind} after ${w.ranKm} of ~${w.targetKm} km (a skipped cutback): "${visible(nextMonday.card?.headline ?? '')}"` });
+    if (nextMonday?.card?.distance && nextMonday.card.distance.stepTargetKm > Math.ceil(normalKm) + 1 + 1e-9) out.push({ snap: nextMonday, detail: `target ${nextMonday.card.distance.stepTargetKm} km steps up after a skipped cutback (the week it replaced was ~${Math.round(normalKm)} km)` });
+    if (nextMonday && !/skipped the cutback/i.test(plain(nextMonday.card?.headline ?? ''))) out.push({ snap: nextMonday, detail: `card headline "${visible(nextMonday.card?.headline ?? '')}" does not say the cutback was skipped` });
+    const review = nextMonday?.review;
+    if (review && review.weekStart === w.monday) {
+      const rv = review.review;
+      if (rv.weekRating !== 'mixed') out.push({ snap: nextMonday as DaySnapshot, detail: `review rated ${rv.weekRating} for ${w.ranKm} of ~${w.targetKm} km: "${visible(rv.headline)}"` });
+      if (!/Cutback skipped: [\d.]+ (?:km|mi) vs ~[\d.]+ (?:km|mi) planned/.test(plain(rv.slip ?? ''))) out.push({ snap: nextMonday as DaySnapshot, detail: `review slip "${visible(rv.slip ?? '')}" does not say "Cutback skipped: N km vs ~M km planned"` });
+      if (rv.stats.find(st => st.label === 'Volume')?.tone === 'good') out.push({ snap: nextMonday as DaySnapshot, detail: `Volume stat is good-toned for a skipped cutback: "${visible(rv.stats.find(st => st.label === 'Volume')?.value ?? '')}"` });
+      if (!/skipped the cutback/i.test(plain(rv.nextWeek))) out.push({ snap: nextMonday as DaySnapshot, detail: `next week "${visible(rv.nextWeek)}" does not say the cutback was skipped` });
+    }
+  }
+  if (name === 'runner_on_plan' || name === 'runner_no_race') assert.ok(skipped > 0, `${name}: no cutback was skipped, so this invariant checked nothing`);
+  return out;
+});
+
+// S1 walks the other path: a cutback that is run as planned is "Cutback week done", a good week, and the week after builds on the week before it.
+invariant(['runner_on_plan_obedient'], 'a cutback run as planned is a good week with "Cutback week done" and is never called skipped', (snaps, name) => {
+  const out: Violation[] = [];
+  let done = 0;
+  for (const w of cutbackWeeks(snaps)) {
+    const review = snaps.find(s => s.date === addDays(w.monday, 7))?.review;
+    if (!review || review.weekStart !== w.monday) continue;
+    done++;
+    const rv = review.review;
+    if (rv.weekRating !== 'good' || !/^Cutback week done: /.test(plain(rv.win ?? ''))) out.push({ snap: snaps.find(s => s.date === addDays(w.monday, 7)) as DaySnapshot, detail: `rating ${rv.weekRating}, win "${visible(rv.win ?? '')}" for ${w.ranKm} of ~${w.targetKm} km` });
+    for (const t of [rv.headline, rv.slip ?? '', rv.nextWeek]) if (/skipped|above the cutback/i.test(plain(t))) out.push({ snap: snaps.find(s => s.date === addDays(w.monday, 7)) as DaySnapshot, detail: `"${visible(t)}"` });
+  }
+  assert.ok(done > 0, `${name}: no reviewed cutback week, so this invariant checked nothing`);
+  return out;
+});
+
+// ── wave 22e / P2.2: the restart number does not change overnight ───────────
+
+const RESTART_NUMBER = /\b[Rr]estart(?: at)? ~(\d+(?:\.\d+)?)\s?(km|mi)\b/;
+
+invariant(RUNNERS, "the restart number a Sunday shows is the number Monday's card and Monday's review show (the card quotes 'if you restart tomorrow')", (snaps, name) => {
+  const out: Violation[] = [];
+  let compared = 0;
+  for (const sunday of snaps) {
+    if (weekdayOf(sunday.date) !== 'Sun') continue;
+    const sundayText = [...cardTexts(sunday)].map(t => RESTART_NUMBER.exec(plain(t.text))).find(m => m != null);
+    if (!sundayText) continue;
+    const monday = snaps.find(s => s.date === addDays(sunday.date, 1));
+    if (!monday) continue;
+    const shown = Number(sundayText[1]);
+    const mondayCard = [...cardTexts(monday)].map(t => RESTART_NUMBER.exec(plain(t.text))).find(m => m != null);
+    const mondayReview = RESTART_NUMBER.exec(plain(monday.review?.review.nextWeek ?? ''));
+    for (const [where, m] of [['Monday card', mondayCard], ['Monday review next week', mondayReview]] as const) {
+      if (!m) continue;
+      compared++;
+      if (Number(m[1]) !== shown) out.push({ snap: monday, detail: `${where} says restart at ~${m[1]} ${m[2]}, Sunday ${sunday.date} said ~${shown}: "${visible(sunday.card?.headline ?? '')}" then "${visible(monday.card?.headline ?? '')}"` });
+    }
+  }
+  if (name === 'runner_no_race') assert.ok(compared > 0, `${name}: no Sunday restart number met a Monday, so this invariant checked nothing`);
+  return out;
+});
+
+// When the number drops during a break the card says why ("Two weeks off now - restart a bit lower, ~12 km"), never a silent change.
+invariant(RUNNERS, 'when the restart number shown during a break drops from one day to the next, the card says why', (snaps, name) => {
+  const out: Violation[] = [];
+  let drops = 0;
+  const onBreak = (s: DaySnapshot): number | null => {
+    if (!/^On a break/.test(plain(s.card?.headline ?? ''))) return null;
+    const m = RESTART_NUMBER.exec(plain(s.card?.headline ?? ''));
+    return m ? Number(m[1]) : null;
+  };
+  for (let i = 1; i < snaps.length; i++) {
+    const a = onBreak(snaps[i - 1]);
+    const b = onBreak(snaps[i]);
+    if (a == null || b == null || b >= a) continue;
+    drops++;
+    const texts = cardTexts(snaps[i]).map(t => plain(t.text)).join(' | ');
+    if (!/weeks? off now — restart a bit lower/i.test(texts)) out.push({ snap: snaps[i], detail: `restart ~${a} -> ~${b} with no reason on the card: "${visible(snaps[i].card?.headline ?? '')}"` });
+  }
+  if (name === 'runner_no_race') assert.ok(drops > 0, `${name}: the restart number never dropped during a break, so this invariant checked nothing`);
+  return out;
+});
+
+// ── wave 22e / P2.3: "Next week" follows the plan ahead ─────────────────────
+
+invariant(RUNNERS, '"Next week" never sends a runner "toward 30 km" / "30 km the week after" when the week after is a taper, race or recovery week', (snaps, name) => {
+  const scn = buildScenario(name);
+  const out: Violation[] = [];
+  for (const snap of snaps) {
+    const rv = snap.review;
+    if (!rv || scn.user.raceDate == null) continue;
+    const afterNext = addDays(rv.weekStart, 14);
+    const phase = racePhaseInfo(scn.user.raceDate, afterNext, scn.user.raceDistanceKm)?.phase;
+    if (phase !== 'taper' && phase !== 'race_week') continue;
+    if (/the week after|a week toward/i.test(plain(rv.review.nextWeek)) && !/taper|race week/i.test(plain(rv.review.nextWeek))) {
+      out.push({ snap, detail: `week after next (${afterNext}) is ${phase}: "${visible(rv.review.nextWeek)}"` });
+    }
+  }
+  return out;
+});
+
+// A comeback week's "Next week" and the same Monday's card say the SAME place the climb goes: "back toward your usual ~29 km", not "toward 30 km".
+const BACK_TOWARD_USUAL = /back toward your usual ~(\d+(?:\.\d+)?)\s?(km|mi)\b/;
+
+invariant(RUNNERS, "a comeback week's review Next week names the same usual km as the Monday card (\"back toward your usual ~29 km\")", (snaps, name) => {
+  const out: Violation[] = [];
+  let compared = 0;
+  for (const snap of snaps) {
+    const rv = snap.review;
+    if (!rv) continue;
+    const cardUsual = BACK_TOWARD_USUAL.exec(plain(snap.card?.distance?.plan?.purpose ?? ''));
+    if (!cardUsual) continue;
+    compared++;
+    const said = BACK_TOWARD_USUAL.exec(plain(rv.review.nextWeek));
+    if (!said || said[1] !== cardUsual[1]) out.push({ snap, detail: `card: "${visible(snap.card?.distance?.plan?.purpose ?? '')}" but review next week: "${visible(rv.review.nextWeek)}"` });
+  }
+  if (name === 'runner_messy' || name === 'runner_comeback_spike') assert.ok(compared > 0, `${name}: no comeback Monday had a card and a review, so this invariant checked nothing`);
+  return out;
+});
+
+// ── wave 22e / P2.4: race day shows the race, not the week's km ─────────────
+
+const isRaceDay = (s: DaySnapshot): boolean => s.race?.daysToRace === 0 && s.race.phase !== 'recovery';
+
+invariant(['runner_on_plan', 'runner_on_plan_half', 'runner_on_plan_imperial', 'runner_on_plan_obedient', 'runner_messy'], 'race day carries no km-of-the-week figure (card, coach lines, opener): "Race done - 21.1 km", not "28 of ~14 km running this week"', (snaps, name) => {
+  const out: Violation[] = [];
+  let days = 0;
+  for (const snap of snaps) {
+    if (!isRaceDay(snap)) continue;
+    days++;
+    const d = snap.card?.distance;
+    if (d?.thisWeekKm != null) out.push({ snap, detail: `distance.thisWeekKm ${d.thisWeekKm} is set on race day: "${visible(d.text)}"` });
+    const texts = [...cardTexts(snap), ...coachTexts(snap).filter(t => !/^- (?:Goal|Long run)\b/.test(t.text))];
+    for (const t of texts) if (WEEK_KM_FIGURE.test(plain(t.text))) out.push({ snap, detail: `${t.where}: "${visible(t.text)}"` });
+    if (snap.card?.race?.completed != null && !/^Race done — [\d.]+\s?(?:km|mi)$/.test(plain(d?.text ?? ''))) out.push({ snap, detail: `distance.text "${visible(d?.text ?? '')}" is not "Race done — N km" once the race is logged` });
+  }
+  assert.ok(days > 0, `${name}: no race day was stepped, so this invariant checked nothing`);
+  return out;
+});
+
+// ── wave 22e / P2.5: the cap note and the watch note are said once, in the right weeks ─────────────────
+
+const SHARE_NOTE = /was \d+% of your week/;
+const CAP_RAISE_NOTE = /raise the goal to ~/;
+
+invariant(RUNNERS, 'the "N km was 60% of your week" watch note is said once per week (the Monday it applies), not on every day', (snaps, name) => {
+  const out: Violation[] = [];
+  const byWeek = new Map<string, DaySnapshot[]>();
+  let notes = 0;
+  for (const snap of snaps) {
+    if (!cardTexts(snap).some(t => t.where.startsWith('card.reasons') && SHARE_NOTE.test(plain(t.text)))) continue;
+    notes++;
+    const monday = mondayOfDate(snap.date);
+    byWeek.set(monday, [...(byWeek.get(monday) ?? []), snap]);
+  }
+  for (const [monday, days] of byWeek) {
+    if (days.length > 1 || days.some(s => weekdayOf(s.date) !== 'Mon')) {
+      out.push({ snap: days[0], detail: `the watch note was shown on ${days.length} day(s) of the week of ${monday} (${days.map(s => weekdayOf(s.date)).join(', ')}): "${visible(days[0].card?.reasons.find(r => SHARE_NOTE.test(plain(r.text)))?.text ?? '')}"` });
+    }
+  }
+  if (name === 'runner_on_plan') assert.ok(notes > 0, `${name}: the watch note never appeared, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(RUNNERS, 'the "raise the goal to ~36 km" cap note is never shown in a light, restart, comeback or rebuild week, nor when the raised goal cannot be reached by +10% a week before the taper', (snaps, name) => {
+  const scn = buildScenario(name);
+  const out: Violation[] = [];
+  let shown = 0;
+  for (const snap of snaps) {
+    const hit = [...cardTexts(snap), ...coachTexts(snap)].filter(t => CAP_RAISE_NOTE.test(plain(t.text)));
+    if (hit.length === 0) continue;
+    shown++;
+    const plan = snap.card?.distance?.plan;
+    const why: string[] = [];
+    if (plan?.lightWeek) why.push('light week');
+    if (plan?.kind === 'restart' || plan?.kind === 'rebuild') why.push(`${plan.kind} week`);
+    if (plan?.comebackKm != null && plan.kind === 'build') why.push('comeback week');
+    // Reachable: last week's km grown 10% a week for the build weeks left before the taper must reach the raised goal (twice the peak long run).
+    const d = snap.card?.distance;
+    const raceDate = scn.user.raceDate;
+    if (d && raceDate) {
+      const taperStart = addDays(raceDate, -(scn.user.raceDistanceKm != null && scn.user.raceDistanceKm <= 21.15 ? 14 : 21));
+      const stepsLeft = Math.max(0, Math.ceil(dayDiff(taperStart, d.weekStart) / 7));
+      const lastKm = snaps.find(s => s.date === addDays(d.weekStart, -1))?.card?.distance?.thisWeekKm ?? null;
+      const raised = (snap.card?.longRun?.raceTargetKm ?? 18) * 2;
+      if (lastKm != null && lastKm * 1.1 ** stepsLeft < raised - 0.5) why.push(`${lastKm} km grown 10% for ${stepsLeft} weeks (${Math.round(lastKm * 1.1 ** stepsLeft)} km) cannot reach the raised ${raised} km goal`);
+    }
+    for (const w of why) out.push({ snap, detail: `${hit[0].where}: "${visible(hit[0].text)}" in a ${w}` });
+  }
+  assert.ok(shown > 0 || name === 'runner_no_race' || name === 'runner_comeback_spike' || name === 'runner_on_plan_imperial', `${name}: the cap note never appeared, so this invariant checked nothing`);
+  return out;
+});
+
+// ── wave 22e / P2.6: a warning before the spike ─────────────────────────────
+
+const BUILD_KINDS = new Set(['build', 'maintain', 'hold', 'rebuild']);
+
+invariant(RUNNERS, 'a build, cutback or hold week at 70% of its target or more (and not yet at it) says "keep the rest to one short easy run" before the spike, not "on plan"', (snaps, name) => {
+  const out: Violation[] = [];
+  let near = 0;
+  for (const snap of snaps) {
+    const d = snap.card?.distance;
+    if (!d?.plan || d.thisWeekKm == null || !BUILD_KINDS.has(d.plan.kind) || weekdayOf(snap.date) === 'Sun') continue;
+    const unit = /\bmi\b/.test(plain(d.text)) ? 'mi' : 'km';
+    const done = inDisplayUnit(d.thisWeekKm, unit);
+    const target = inDisplayUnit(d.stepTargetKm, unit);
+    if (!(done >= 0.7 * target && done < target)) continue;
+    near++;
+    const said = cardTexts(snap).some(t => t.where.startsWith('card.reasons') && /keep the rest to one short easy run/.test(plain(t.text)));
+    if (!said) out.push({ snap, detail: `${done} of ~${target} ${unit} (${Math.round((done / target) * 100)}%) with no remaining-budget line: "${visible(snap.card?.headline ?? '')}"` });
+  }
+  if (name === 'runner_messy' || name === 'runner_no_race') assert.ok(near > 0, `${name}: no build day sat at 70-99% of its target, so this invariant checked nothing`);
+  return out;
+});
+
+// ── wave 22e / P2.7: "peak reached" is not praise for a long run that broke the plan ─────────────────
+
+// "Long run peak 15 km — on target", "On track for the half — long run peak 15 km reached", "Peak long run 18 km — done": the card praises the peak.
+const PEAK_PRAISE = /long run peak [\d.]+\s?(?:km|mi)\b(?: — on target| reached)|\bpeak long run [\d.]+\s?(?:km|mi) — done/i;
+
+invariant(['runner_on_plan', 'runner_on_plan_half', 'runner_on_plan_imperial', 'runner_on_plan_obedient', 'runner_messy'], 'a peak long run is praised ("peak reached", "on target", "Peak long run - done") only when it was at most the plan + 0.5 km and at most half of its week', (snaps, name) => {
+  const runKm = scenarioRunKm(name);
+  const scn = buildScenario(name);
+  const byDate = new Map(snaps.map(s => [s.date, s]));
+  const out: Violation[] = [];
+  let praised = 0;
+  for (const snap of snaps) {
+    const praise = [...cardTexts(snap)].find(t => PEAK_PRAISE.test(plain(t.text)));
+    if (!praise) continue;
+    praised++;
+    // The 28-day peak run: the longest run strictly inside the last 28 days (the race itself excluded), the latest on a tie.
+    let peakDay: string | null = null;
+    let peakKm = 0;
+    for (let i = 0; i < 28; i++) {
+      const day = addDays(snap.date, -i);
+      const km = runKm.get(day) ?? 0;
+      if (km > peakKm + 1e-9 || (km === peakKm && km > 0 && peakDay == null)) { peakKm = km; peakDay = day; }
+    }
+    if (peakDay == null) continue;
+    const monday = mondayOfDate(peakDay);
+    const planKm = byDate.get(addDays(monday, 6))?.card?.distance?.plan?.longRunKm ?? byDate.get(monday)?.card?.distance?.plan?.longRunKm ?? null;
+    const stepTarget = byDate.get(monday)?.card?.distance?.stepTargetKm ?? 0;
+    const weekKm = Math.max(kmThrough(runKm, monday, addDays(monday, 6)), addDays(monday, 6) > snap.date ? stepTarget : 0);
+    const tol = 0.5;
+    if (planKm != null && peakKm > planKm + tol + 1e-9) out.push({ snap, detail: `${praise.where}: "${visible(praise.text)}" but the ${Math.round(peakKm * 10) / 10} km peak run (${peakDay}) was longer than that week's planned ${planKm} km` });
+    else if (peakKm > weekKm * 0.5 + 1e-9) out.push({ snap, detail: `${praise.where}: "${visible(praise.text)}" but the ${Math.round(peakKm * 10) / 10} km peak run (${peakDay}) was ${Math.round((peakKm / weekKm) * 100)}% of its ${Math.round(weekKm * 10) / 10} km week` });
+  }
+  assert.ok(praised > 0 || scn.user.raceDate == null || name === 'runner_on_plan_imperial', `${name}: the peak was never praised, so this invariant checked nothing`);
+  return out;
+});
+
+// ── wave 22e / P2.8: an imperial runner never reads a kilometre, nor two numbers for one thing ───────────
+
+invariant(['runner_on_plan_imperial'], 'no card, coach line, opener or review string says "km" to an imperial runner', (snaps, name) => {
+  const out: Violation[] = [];
+  for (const snap of snaps) {
+    for (const t of [...cardTexts(snap), ...coachTexts(snap), ...reviewTexts(snap)]) {
+      // The standing goal line of the coach is metric-free too ("Goal: endurance; 18.6 mi/week"), so there is no exemption.
+      if (/\bkm\b/i.test(plain(t.text))) out.push({ snap, detail: `${t.where}: "${visible(t.text)}"` });
+    }
+  }
+  assert.ok(snaps.length > 0, `${name}: nothing stepped`);
+  return out;
+});
+
+// "11.2 mi was 60% of your week - keep long runs ~9 mi on 18.6 mi weeks, or add easy miles": the weeks it names are the GOAL's (the number
+// every other line says), and the long run it keeps is at most half of them (the plan's peak target at that goal).
+const SHARE_NOTE_NUMBERS = /keep long runs ~(\d+(?:\.\d+)?)\s?(km|mi) on (\d+(?:\.\d+)?)\s?(?:km|mi) weeks/;
+
+invariant(RUNNERS, 'the long-run watch note names the goal\'s own weekly distance and a long run of at most half of it', snaps => {
+  const out: Violation[] = [];
+  for (const snap of snaps) {
+    const d = snap.card?.distance;
+    if (!d) continue;
+    for (const t of cardTexts(snap)) {
+      const m = SHARE_NOTE_NUMBERS.exec(plain(t.text));
+      if (!m) continue;
+      const goal = inDisplayUnit(d.targetKm, m[2]);
+      if (Math.abs(Number(m[3]) - goal) > 0.05 + 1e-9) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" names ${m[3]} ${m[2]} weeks, the goal is ${goal} ${m[2]}` });
+      if (Number(m[1]) > goal / 2 + 1e-9) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" keeps long runs at ~${m[1]} ${m[2]}, over half of the ${goal} ${m[2]} goal` });
+      if (m[2] === 'mi' && /add easy km/.test(plain(t.text))) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" says km to a runner in miles` });
+    }
+  }
+  return out;
+});
+
+// ── wave 22e / P2.9: the last day of a week judges THIS week ────────────────
+
+invariant(RUNNERS, 'on the Sunday of a build, hold or maintain week the card headline judges this week (its km), not "N km last week"', (snaps, name) => {
+  const out: Violation[] = [];
+  let sundays = 0;
+  for (const snap of snaps) {
+    const d = snap.card?.distance;
+    if (weekdayOf(snap.date) !== 'Sun' || !d?.plan || d.thisWeekKm == null || d.thisWeekKm <= 0) continue;
+    if (d.plan.kind !== 'build' && d.plan.kind !== 'maintain' && d.plan.kind !== 'hold') continue;
+    if (d.plan.lightWeek || d.plan.easingOff || /^Over the safe step —|^Well over the ceiling —|^Light week|^Eased off|^On a break/.test(plain(snap.card?.headline ?? ''))) continue;
+    sundays++;
+    const unit = /\bmi\b/.test(plain(d.text)) ? 'mi' : 'km';
+    const done = inDisplayUnit(d.thisWeekKm, unit);
+    const headline = plain(snap.card?.headline ?? '');
+    if (/\blast week\b/.test(headline)) out.push({ snap, detail: `headline "${visible(snap.card?.headline ?? '')}" is about last week on the last day of a week that ran ${done} ${unit}` });
+    else if (d.plan.kind !== 'maintain' && !new RegExp(`(?:^|[^\\d.])${String(done).replace('.', '\\.')}(?:\\s?${unit})?(?:\\s|,|;|$)`).test(headline)) out.push({ snap, detail: `headline "${visible(snap.card?.headline ?? '')}" does not carry this week's ${done} ${unit}` });
+  }
+  assert.ok(sundays > 0 || name === 'runner_on_plan_imperial', `${name}: no build or maintain Sunday was stepped, so this invariant checked nothing`);
+  return out;
+});
+
+// ═══ wave 22e / P3: small copy honesty ═══════════════════════════════════════
+
+invariant(RUNNERS, 'day 0 (nothing run yet) reads "baseline week", not "0 of 30 km running this week"', (snaps, name) => {
+  const day0 = snaps.find(s => s.idx === 0);
+  if (!day0) return []; // the imperial scenario only steps the days around phase changes
+  const text = plain(day0.card?.distance?.text ?? '');
+  assert.ok(text !== '', `${name}: day 0 has no distance line`);
+  return /baseline week/.test(text) ? [] : [{ snap: day0, detail: `distance.text "${visible(day0.card?.distance?.text ?? '')}"` }];
+});
+
+invariant(RUNNERS, 'every "On a break" card says what to do if the break was an illness', (snaps) => {
+  const out: Violation[] = [];
+  for (const snap of snaps) {
+    if (!/^On a break/.test(plain(snap.card?.headline ?? ''))) continue;
+    if (!cardTexts(snap).some(t => /if you were ill, wait until you've been symptom-free for 24–48 h/i.test(plain(t.text)))) out.push({ snap, detail: `"${visible(snap.card?.headline ?? '')}" has no illness guard` });
+  }
+  return out;
+});
+
+invariant(RUNNERS, 'a rebuild week names its long run on the card (the coach and the review already do)', (snaps) => {
+  const out: Violation[] = [];
+  for (const snap of snaps) {
+    const plan = snap.card?.distance?.plan;
+    if (plan?.kind !== 'rebuild' || plan.longRunKm == null) continue;
+    if (!/long run/i.test(plain(plan.purpose))) out.push({ snap, detail: `rebuild purpose "${visible(plan.purpose)}" with a ${plan.longRunKm} km long run planned` });
+  }
+  return out;
+});
+
+invariant(RUNNERS, 'the sessions line never reads "0–4 runs a week" - after a break it is "N runs a week before your break"', (snaps) =>
+  textMatches(snaps, cardTexts, /^0(?:–| or )\d+ runs? a week/));
+
+invariant(RUNNERS, 'race week never says "keep the days before the race ≤ N km" next to "rest 1-2 days": it says to rest tomorrow and shake out the day before', (snaps) =>
+  textMatches(snaps, s => [...cardTexts(s), ...coachTexts(s)], /keep the days before the race ≤/));
+
+invariant(['runner_on_plan', 'runner_on_plan_half', 'runner_on_plan_obedient', 'runner_messy'], "recovery week 1's Volume stat says the week before it held the race (\"excl. the race\"), not \"same as last week\"", (snaps, name) => {
+  const scn = buildScenario(name);
+  const out: Violation[] = [];
+  let checked = 0;
+  for (const snap of snaps) {
+    const rv = snap.review;
+    if (!rv || scn.user.raceDate == null || rv.weekStart !== addDays(scn.user.raceDate, 1)) continue;
+    checked++;
+    const volume = rv.review.stats.find(st => st.label === 'Volume');
+    if (volume && !/race/i.test(plain(volume.comparison ?? ''))) out.push({ snap, detail: `Volume "${visible(volume.value)}" — "${visible(volume.comparison ?? '')}"` });
+  }
+  assert.ok(checked > 0, `${name}: no recovery-week-1 review was stepped, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(RUNNERS, 'the coach never says a long run is "held" when it is lower than the last one (it "eased to ... (half the week)")', (snaps) => {
+  const out: Violation[] = [];
+  for (const snap of snaps) {
+    const last = snap.card?.longRun?.lastKm;
+    if (last == null) continue;
+    for (const t of coachTexts(snap)) {
+      const m = /long run (\d+(?:\.\d+)?) (?:km|mi) held/.exec(plain(t.text));
+      if (m && inDisplayUnit(last, /\bmi\b/.test(plain(snap.card?.distance?.text ?? '')) ? 'mi' : 'km') - Number(m[1]) > 0.55) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" but the last long run was ${last} km` });
+    }
+  }
+  return out;
+});
+
+// ═══ wave 22e follow-up: no two lines of one day disagree ═════════════════════════════════════════════
+
+// 1. Whether this week's target still applies is ONE answer on a day: the headline, the plan line and the coach's target line all say the target is
+//    waived ("Eased off early", "Easing off", "Light week", "no need to make up") or none of them does.
+const TARGET_WAIVED = /eased off early|easing off|taper starts tomorrow|race week starts tomorrow|light week|don't make it up|no need to make up/i;
+
+invariant(RUNNERS, "the card headline, the plan line and the coach's target line agree on whether this week's target still applies", (snaps) => {
+  const out: Violation[] = [];
+  for (const snap of snaps) {
+    const card = snap.card;
+    if (!card?.distance?.plan) continue;
+    const coachLine = (snap.coach ?? []).find(l => l.startsWith("- This week's target"));
+    const reads = [
+      { where: 'headline', text: card.headline },
+      { where: 'plan purpose', text: card.distance.plan.purpose },
+      ...(coachLine ? [{ where: 'coach target line', text: coachLine }] : []),
+    ].map(r => ({ ...r, waived: TARGET_WAIVED.test(plain(r.text)) }));
+    if (reads.some(r => r.waived) && reads.some(r => !r.waived)) {
+      out.push({ snap, detail: reads.map(r => `${r.where} (${r.waived ? 'waived' : 'applies'}): "${visible(r.text)}"`).join(' | ') });
+    }
+  }
+  return out;
+});
+
+// 3. On a break the week's own target is not quoted (it is stale): the distance line says so, and the restart number is the one number.
+invariant(RUNNERS, 'on a break no "N of ~M km" week figure is quoted, and the coach restarts at the headline\'s number', (snaps, name) => {
+  const out: Violation[] = [];
+  let days = 0;
+  for (const snap of snaps) {
+    if (!/^On a break/.test(plain(snap.card?.headline ?? ''))) continue;
+    days++;
+    const headlineRestart = RESTART_NUMBER.exec(plain(snap.card?.headline ?? ''));
+    for (const t of [...cardTexts(snap), ...coachTexts(snap)]) {
+      const of = /\d(?:\.\d+)?(?:\s?(?:km|mi))? of (?:up to )?~\d/.exec(plain(t.text));
+      if (of) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" quotes the stale week target on a break` });
+      const coachRestart = /^- This week's target: restart at ~(\d+(?:\.\d+)?)/.exec(plain(t.text));
+      if (coachRestart && headlineRestart && Number(coachRestart[1]) !== Number(headlineRestart[1])) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" restarts at a different number than the headline "${visible(snap.card?.headline ?? '')}"` });
+    }
+  }
+  if (name === 'runner_no_race' || name === 'runner_messy') assert.ok(days > 0, `${name}: no break day was stepped, so this invariant checked nothing`);
+  return out;
+});
+
+// 4. The sessions line: a range whose low end is at most half its high end is a break in the window, said as "N runs a week before your break".
+invariant(RUNNERS, 'the sessions line never reads a range like "1–4 runs a week" (a break inside the window)', (snaps) => {
+  const out: Violation[] = [];
+  for (const snap of snaps) {
+    for (const t of cardTexts(snap)) {
+      const m = /^(\d+)(?:–| or )(\d+) runs? a week/.exec(plain(t.text));
+      if (m && Number(m[1]) * 2 <= Number(m[2])) out.push({ snap, detail: `${t.where}: "${visible(t.text)}"` });
+    }
+  }
+  return out;
+});
+
+// 5. A planned cutback is not a drop: the card and the review say "as planned" next to the negative change.
+invariant(RUNNERS, 'a cutback week\'s negative change is said "as planned" on the card and in the review (never a bare "−13%")', (snaps, name) => {
+  const out: Violation[] = [];
+  let seen = 0;
+  const byDate = new Map(snaps.map(s => [s.date, s]));
+  for (const snap of snaps) {
+    if (/your cutback week/.test(plain(snap.card?.headline ?? '')) && /[−-]\d+%/.test(plain(snap.card?.headline ?? ''))) {
+      seen++;
+      if (!/as planned/.test(plain(snap.card?.headline ?? ''))) out.push({ snap, detail: `card headline "${visible(snap.card?.headline ?? '')}"` });
+    }
+  }
+  for (const w of cutbackWeeks(snaps)) {
+    const review = byDate.get(addDays(w.monday, 7));
+    const rv = review?.review?.weekStart === w.monday ? review.review.review : null;
+    if (!review || !rv || w.ranKm > w.targetKm * 1.1) continue;
+    const volume = rv.stats.find(st => st.label === 'Volume');
+    if (volume && /[−-]\d+%/.test(plain(volume.comparison ?? ''))) {
+      seen++;
+      if (!/as planned \(cutback\)/.test(plain(volume.comparison ?? ''))) out.push({ snap: review, detail: `Volume "${visible(volume.value)}" — "${visible(volume.comparison ?? '')}"` });
+      if (volume.tone === 'watch') out.push({ snap: review, detail: `Volume tone ${volume.tone} for a planned cutback` });
+      if (/[−-]\d+%/.test(plain(rv.headline)) && !/as planned/.test(plain(rv.headline))) out.push({ snap: review, detail: `review headline "${visible(rv.headline)}"` });
+    }
+  }
+  if (name === 'runner_on_plan_obedient') assert.ok(seen > 0, `${name}: no cutback week showed a negative change, so this invariant checked nothing`);
   return out;
 });

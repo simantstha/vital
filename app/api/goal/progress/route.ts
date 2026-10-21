@@ -16,14 +16,24 @@
  *                                                //   target (== targetKm when no step applies, and in a baseline week); avg4wKm = mean of the last 4 FINISHED
  *                                                //   training weeks (race and recovery weeks left out); plan? (additive) = { kind: baseline | build | hold |
  *                                                //   restart | maintain | taper | race_week | recovery | rebuild, targetKm | null, longRunKm | null, purpose,
- *                                                //   and, only when true (additive): cutback, lightWeek, strides, longRunHeld, upTo }; on the race eve
- *                                                //   thisWeekKm is null and text is "Race tomorrow" (the week's km are not on the card)
+ *                                                //   and, only when true (additive): cutback, lightWeek, strides, longRunHeld, upTo; wave 22e: easingOff + taperLongRunKm
+ *                                                //   (the week before a taper is behind its target: "Easing off before your taper"), preTaper ('taper' | 'race_week'),
+ *                                                //   skippedCutback (a cutback ran >10% over: this week holds at the week it replaced), restartKm (on a break: the number
+ *                                                //   "if you restart tomorrow", when it differs from targetKm), overCap + overCapRead ('touch' | 'well'): last week ran over
+ *                                                //   its "up to" comeback ceiling - 'well' is a hold AT that ceiling }; on the race eve
+ *                                                //   thisWeekKm is null and text is "Race tomorrow" (the week's km are not on the card); on race day thisWeekKm is
+ *                                                //   null too (wave 22e) and text is "Race done — 21.1 km" once the race is logged, else "Race day" (iOS decodes
+ *                                                //   thisWeekKm as optional); on a break (22e follow-up) text is "0 km this week · on a break" - never the stale
+ *                                                //   "0 of ~17 km" (the headline quotes the restart number; plan.restartKm carries it when it differs from targetKm)
  *   race: { date, distanceKm, label, weeksToGo, daysToGo, phase?, daysSince?, completed? } | null,   // endurance + upcoming race, or within the recovery weeks;
  *                                                //   phase is read on the Monday of this calendar week (a Sunday 7 days out is still the taper week);
  *                                                //   completed? (additive) = { km, durationMin | null } once a race-length run is logged
  *   longRun: { lastKm, peakKm, targetPeakKm | null, nextKm? } | null,       // endurance; km; lastKm = longest run of the last 14 days, peakKm of the last 28;
  *                                                //   nextKm? (additive) = this week's long run from the plan; capNoteDue? / oversized? (additive, only when
- *                                                //   true) = the long-run cap note is due this week / the peak was over 55% of its week
+ *                                                //   true) = the long-run cap note is due this week (wave 22e: never in a light / restart / comeback / rebuild week, nor when the
+ *                                                //   raised goal is out of reach) / the peak was over 55% of its week; overPlan? + peakPlanKm? (wave 22e, only when true) = the
+ *                                                //   peak run broke the plan (over its week's planned long run or the peak target + 0.5 km, or over half of its week), so it
+ *                                                //   is not praised as "peak reached" 
  *   current: { weightKg, startWeightKg, changeKg, progressPct },
  *   ratePerWeek: { kg, pctBodyweight },          // signed: negative = losing
  *   safeBand: { minPct, maxPct } | null,

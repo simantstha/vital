@@ -75,7 +75,7 @@ function racePhaseLine(gp: GoalProgress, units: UnitSystem): string | null {
           : '- Race phase: race day — warm up easy and start relaxed; no training advice, no volume talk';
       }
       if (race.daysToGo === 1) {
-        return `- Race phase: race tomorrow — ${plainSpaces(RACE_EVE_LINE.replace(/^Race tomorrow — /, ''))}; no training advice, no volume talk, no remarks about this week's km`;
+        return `- Race phase: race tomorrow — ${plainSpaces(RACE_EVE_LINE.replace(/^Race tomorrow — /, ''))}; no training advice, no volume talk, no remarks about this week's distance`;
       }
       return `- Race phase: race week${target ? ` — ~${target} before the race at most` : ''}; short easy runs, rest 1–2 days before race day — no new volume or hard sessions`;
     case 'recovery': {
@@ -117,9 +117,19 @@ function weekTargetLine(gp: GoalProgress, units: UnitSystem): string | null {
     const line = plainSpaces(lightWeekLine({ reason: 'days_off', daysOff: 0, longRunCapKm: plan.longRunKm }, units === 'imperial' ? 1 / KM_PER_MILE : 1));
     return `- This week's target: ${line.charAt(0).toLowerCase()}${line.slice(1)}; no catch-up volume, and do not call the week behind`;
   }
+  // The week before a taper whose target is out of reach (or done short): easing off is fine - the card's own plan line, as an instruction.
+  if (plan.easingOff) {
+    const line = plainSpaces(plan.purpose);
+    return `- This week's target: ${line.charAt(0).toLowerCase()}${line.slice(1)}; no catch-up volume, and do not call the week behind`;
+  }
   // Every 4th plain build / maintain week: ~80% of the week it replaces, the long run held.
   if (plan.cutback) {
-    return `- This week's target: a cutback week, ~${t}${lr ? `; ${lr} held` : ''} — absorb the last three weeks; do not push past it${strides}`;
+    // The long run is held where it was - unless the lowered week cannot carry it (never more than half of it): then it is "eased".
+    const last = gp.longRun?.lastKm;
+    const unitsPerKm = units === 'imperial' ? 1 / KM_PER_MILE : 1;
+    const eased = plan.longRunKm != null && last != null && (last - plan.longRunKm) * unitsPerKm >= 0.5 - 1e-9;
+    const longPart = plan.longRunKm == null ? '' : eased ? `; long run eased to ${longRunText(plan.longRunKm, units)} (half the week)` : `; ${lr} held`;
+    return `- This week's target: a cutback week, ~${t}${longPart} — absorb the last three weeks; do not push past it${strides}`;
   }
   switch (plan.kind) {
     case 'baseline':
@@ -134,9 +144,9 @@ function weekTargetLine(gp: GoalProgress, units: UnitSystem): string | null {
         : '';
       // A comeback target lifted above the plain step is a ceiling for a careful comeback ("up to"), not a bar to clear.
       if (plan.upTo) {
-        // Last week went over its ceiling: this week holds at what was run, no step up from the overshoot.
+        // Last week ran a touch over its ceiling: that is fine, and the ceiling climbs from the ceiling (never from the overshoot).
         if (plan.overCap) {
-          return `- This week's target: hold here, up to ~${t} (last week went over its ceiling; no step up from the overshoot${lr ? `; ${lr}` : ''}); the ${goal}/week goal comes after — do not push past it this week${strides}`;
+          return `- This week's target: build up to ~${t} (last week ran a touch over its ceiling — fine, said once; the new ceiling climbs from the old one, not from the overshoot${climb}${lr ? `; ${lr}` : ''}); the ${goal}/week goal comes after — do not push past it this week${strides}`;
         }
         return `- This week's target: build up to ~${t} (a ceiling for a careful comeback${climb}${lr ? `; ${lr}` : ''}); the ${goal}/week goal comes after — do not push past it this week${strides}`;
       }
@@ -154,9 +164,17 @@ function weekTargetLine(gp: GoalProgress, units: UnitSystem): string | null {
         : `- This week's target: hold the ${goal}/week goal${lr ? `; ${lr}${plan.longRunHeld ? ' (held)' : grow}` : ''}, the rest easy — the runner is at the goal, do not add volume${strides}`;
     }
     case 'hold':
+      // A cutback week that ran more than 10% over its lowered number: hold at the week it replaced.
+      if (plan.skippedCutback) {
+        return `- This week's target: hold ~${t} — last week skipped the cutback (ran well over its lowered number); do not build 10% on the skip, and do not praise it${strides}`;
+      }
+      // A comeback week far past its "up to" ceiling: stay at that ceiling.
+      if (plan.overCapRead === 'well') {
+        return `- This week's target: stay at ~${t} — last week was well over its comeback ceiling (a spike); do not build on the jump, and do not praise the extra distance${strides}`;
+      }
       return `- This week's target: hold ~${t} — last week was over the safe step; do not push higher or step up from the jump${strides}`;
     case 'restart':
-      return `- This week's target: restart at ~${t} with easy runs${lr ? `; ${lr}` : ''} — the runner is coming back from a break${back ? ` (the weeks after climb back toward ~${back})` : ''}; do not push toward the ${goal}/week goal yet`;
+      return `- This week's target: restart at ~${plan.restartKm != null ? distKm(plan.restartKm, units) : t} with easy runs${lr ? `; ${lr}` : ''} — the runner is coming back from a break${back ? ` (the weeks after climb back toward ~${back})` : ''}; do not push toward the ${goal}/week goal yet`;
     case 'rebuild': {
       const atGoal = plan.targetKm != null && plan.targetKm >= d.targetKm - 1e-9;
       return `- This week's target: rebuilding after the race, ~${t}, easy runs${atGoal ? '' : '; add about 10% a week'}`;

@@ -10,7 +10,7 @@ records what the REAL pure server functions return: goal card, coach goal lines,
 
 **Scenarios:** `lifter` (+ `lifter_imperial`: lb copy and the 5 lb step; `lifter_short_week`: one bad week where the week alone, not a
 lapse, must hold "Progressing" back), `weight_loss` (+ `_logged`: plateau, a 12-day gap, trims), `runner_on_plan` (+ `_half`, `_imperial`),
-`runner_messy` (spike, illness = light week, ignored taper) and `runner_no_race`.
+`runner_messy` (spike, illness = light week, ignored taper), `runner_no_race`, `runner_on_plan_obedient` (does exactly what the app says: the cutback weeks, the taper) and `runner_comeback_spike` (an illness, then a comeback week that overshoots its ceiling: 15 km, then 29 km).
 
 **Add a scenario:** write a builder returning a `Scenario` (rows only, never inputs) in `scenarios.ts`, add its name to `SCENARIO_NAMES`
 and a case to `buildScenario`, then add it to the scenario groups in the test file (`ALL` picks it up automatically).

@@ -847,7 +847,7 @@ test('endurance distance step: a week with no running restarts at ~75% of the re
     target: { weightKg: null, date: null, weeklySessions: 3, weeklyDistanceKm: 30 },
   }));
   assert.equal(noData.distance!.stepTargetKm, 30);
-  assert.equal(noData.distance!.text, '0 of 30 km running this week');
+  assert.equal(noData.distance!.text, '0 km so far · baseline week'); // wave 22e: nothing run yet is the baseline, not "0 of 30 km"
   assert.equal(noData.distance!.plan, undefined);
 });
 
@@ -1182,6 +1182,9 @@ test('race phase: race day says "start relaxed" until a race-length run is logge
   assert.equal(before.headline, 'Race day — start relaxed');
   assert.equal(before.verdict, 'on_track');
   assert.equal(before.race?.completed, undefined);
+  // Race day is for the race, not the week's km (wave 22e): no figure of the week on the card.
+  assert.equal(before.distance!.thisWeekKm, null);
+  assert.equal(before.distance!.text, 'Race day');
   // The race run (2:01) is the race, not training: it is not in the week's km, the headline congratulates.
   const workouts = [
     { day: TODAY, durationMin: 121, distanceKm: 21.1, type: 'Running' },
@@ -1193,7 +1196,8 @@ test('race phase: race day says "start relaxed" until a race-length run is logge
     target: { weightKg: null, date: null, weeklySessions: null, weeklyDistanceKm: 50 },
     race: { date: TODAY, distanceKm: 21.1 }, racePeakWeekKm: 40,
   }));
-  assert.equal(done.distance!.thisWeekKm, 5);
+  assert.equal(done.distance!.thisWeekKm, null); // wave 22e: race day shows the race, not "5 of ~20 km running this week"
+  assert.equal(done.distance!.text, 'Race done — 21.1 km');
   assert.equal(done.distance!.stepTargetKm, 20);
   assert.equal(done.headline, 'Half marathon done — 21.1 km in 2:01. Congratulations!');
   assert.deepEqual(done.race?.completed, { km: 21.1, durationMin: 121 });
@@ -1696,7 +1700,7 @@ test('a break: "On a break — 7 days since your last run. Restart at ~N km." (b
   assert.equal(p.headline, 'On a break — 7 days since your last run. Restart at ~18 km.');
   assert.equal(p.distance!.plan?.kind, 'restart');
   assert.equal(p.distance!.stepTargetKm, 18); // 60% of the median 30 km week
-  assert.equal(p.distance!.text, '0 of ~18 km running this week · goal 30 km');
+  assert.equal(p.distance!.text, '0 km this week · on a break'); // not the stale week target ("0 of ~18 km"): the headline quotes the restart
   // Back on the road: a restart week, not the goal.
   const back = computeGoalProgress(weekInput([[[0, 5]], [[1, 6]], wkOf(30), wkOf(30), wkOf(30), wkOf(30)]));
   assert.equal(back.verdict, 'building');
@@ -1717,8 +1721,12 @@ test('maintain: at the weekly goal in the build phase the card is on_track with 
   assert.equal(p.longRun?.nextKm, 14);
   assert.equal(p.distance!.text, '3 of 30 km running this week');
   // Once the peak is reached the headline says so; with no race it is "On track — 30 km a week".
-  const peak = computeGoalProgress(weekInput([[[0, 3]], [[1, 6], [3, 6], [5, 6], [6, 18]], wkOf(30), wkOf(30), wkOf(30)], race));
-  assert.equal(peak.headline, 'On track for the half — long run peak 18 km reached');
+  // (A peak that kept to the plan: 13.5 km, then 15 km - the step of 2 km capped at the 15 km a 30 km week can carry.)
+  const peak = computeGoalProgress(weekInput([[[0, 3]], [[1, 5], [3, 5], [5, 5], [6, 15]], [[1, 5.5], [3, 5.5], [5, 5.5], [6, 13.5]], wkOf(30), wkOf(30)], race));
+  assert.equal(peak.headline, 'On track for the half — long run peak 15 km reached');
+  // ... and one that broke it (18 km after 12) is not praised (wave 22e).
+  const broke = computeGoalProgress(weekInput([[[0, 3]], [[1, 6], [3, 6], [5, 6], [6, 18]], wkOf(30), wkOf(30), wkOf(30)], race));
+  assert.equal(broke.headline, 'On track for the half — 30 km a week');
   assert.equal(computeGoalProgress(weekInput(weeks)).headline, 'On track — 30 km a week');
 });
 
@@ -1727,7 +1735,9 @@ test('the verdict rests on the last finished week: no flip between rest days and
   const headlines = new Set<string>();
   for (const todayKey of ['2026-10-05', '2026-10-06', '2026-10-08', '2026-10-10', '2026-10-11']) {
     const p = computeGoalProgress(weekInput([wkOf(23), ...weeks], { todayKey }));
-    headlines.add(`${p.verdict}|${p.headline}`);
+    // Monday to Saturday it is last week's read; the last day (Sunday) judges the week that is done (wave 22e).
+    if (todayKey !== '2026-10-11') headlines.add(`${p.verdict}|${p.headline}`);
+    else assert.equal(p.headline, 'Week done — 23 of ~23 km, on plan');
     assert.equal(p.distance!.avg4wKm, 18); // the 4 finished weeks (21, 19, 17, 15) only
   }
   assert.deepEqual([...headlines], ['building|Building — 21 km last week (+11%), on plan']);

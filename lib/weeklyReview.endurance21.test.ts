@@ -73,11 +73,16 @@ test('cutback: "Next week" names it, the cutback week itself is graded as its ow
   assert.equal(easy.weekRating, 'good');
   assert.equal(easy.weekGap, null);
   assert.equal(easy.slip, null);
-  // The full normal week instead of the cutback is no "jump": 25 km is the week it replaced.
+  // The full normal week instead of the cutback is no "jump" (25 km is the week it replaced) - but it is not a good cutback either (wave 22e):
+  // the cutback was skipped, so the week is mixed with its own gap and slip, nothing is praised, and next week holds at the week it replaced.
   const normal = computeWeeklyReview(planReview([15, 17, 19, 21, 23, 25], { weekStart: '2026-10-19' }));
-  assert.equal(normal.weekGap, null);
-  assert.notEqual(normal.weekRating, 'mixed');
+  assert.deepEqual(normal.weekGap, { kind: 'cutback', doneKm: 25, targetKm: 20, normalKm: 25 });
+  assert.equal(normal.weekRating, 'mixed');
   assert.equal(normal.win, null); // no praise for skipping the cutback
+  assert.equal(normal.slip, 'Cutback skipped: 25 km vs ~20 km planned');
+  assert.match(normal.headline, /^4 sessions, 25 of ~20 km — above the cutback · goal 30 km/);
+  assert.equal(normal.stats.find(st => st.label === 'Volume')!.tone, 'neutral');
+  assert.equal(normal.nextWeek, 'You skipped the cutback — hold ~25 km next week; long run 10 km, then build ~10% a week toward 30 km.');
 });
 
 test('strides: the last 2 build weeks before the taper say "plus 4–6 strides after one easy run" in "Next week"', () => {
@@ -126,7 +131,8 @@ test('the taper plan copy joins "3×1 km" / "3×0.5 mi" with U+00A0 in the card-
 
 test('the cap note in "Next week" follows the plan\'s cadence, not every Monday', () => {
   // At the 15 km peak a 30 km goal can carry (the half's own peak is 18): the cap note is part of "Next week" only in the weeks it is due.
-  const race = { raceDate: '2026-12-20', raceDistanceKm: 21.1 };
+  // (A race far enough out that the raised 36 km goal is reachable at +10% a week: wave 22e keeps the note quiet when it is not.)
+  const race = { raceDate: '2027-01-31', raceDistanceKm: 21.1 };
   const lr = { lastKm: 15, peakKm: 15, targetPeakKm: 15, raceTargetKm: 18 };
   const texts: boolean[] = [];
   for (const weekStart of ['2026-10-05', '2026-10-12', '2026-10-19', '2026-10-26', '2026-11-02']) {
@@ -146,16 +152,23 @@ test('a jump in a cutback week is read against the cutback number the card showe
   assert.equal(r.nextWeek, 'Hold around ~28 km next week, then build ~10% a week toward 30 km.');
 });
 
-test('a comeback week more than 10% over its "up to" cap is "over the cap" in the review - no "on plan", no praise, a neutral Volume - and Next week holds at what was run', () => {
+test('a comeback week more than 10% over its "up to" cap is "a touch over, fine" in the review - no "on plan", no praise, a neutral Volume - and the next ceiling climbs from the ceiling (wave 22e)', () => {
   // Weeks 1-6 build (15..25 km), two weeks off, a restart week of 12 km, then the comeback week "up to ~15 km" ran 18 km.
   const history = [15, 17, 19, 21, 23, 25, 0, 0, 12];
   const r = computeWeeklyReview(planReview([...history, 18]));
-  assert.equal(r.headline, '4 sessions, 18 of up to ~15 km — a little over the cap · goal 30 km');
+  assert.equal(r.headline, '4 sessions, 18 of up to ~15 km — a touch over, fine · goal 30 km');
+  assert.equal(r.weekRating, 'good');
   assert.equal(r.stats.find(st => st.label === 'Volume')!.tone, 'neutral');
   assert.equal(r.win, null);
   assert.equal(r.slip, null);
-  assert.equal(r.nextWeek, 'Hold here, up to ~18 km: long run 9 km, the rest mostly easy runs; then add ~10% a week toward 30 km.');
-  assert.equal(computeWeeklyReview(planReview([...history, 20])).headline, '4 sessions, 20 of up to ~15 km — well over the cap · goal 30 km');
+  assert.equal(r.nextWeek, 'Build up to ~18 km: long run 9 km, the rest mostly easy runs; then add ~10% a week, back toward your usual ~22 km.'); // the card: "back toward your usual ~22 km"
+  // Far past the ceiling it is a spike (a mixed week, with its gap), said in the ceiling's words, and next week stays AT the ceiling.
+  const well = computeWeeklyReview(planReview([...history, 21]));
+  assert.equal(well.headline, '4 sessions, 21 of up to ~15 km — well over the ceiling · goal 30 km');
+  assert.equal(well.weekRating, 'mixed');
+  assert.deepEqual(well.weekGap, { kind: 'spike', doneKm: 21, stepKm: 15, targetKm: 30, ceiling: true });
+  assert.equal(well.slip, 'Ran 21 km against an up-to-15 km ceiling — big jumps raise injury risk');
+  assert.equal(well.nextWeek, "Stay at ~15 km next week — don't build on last week's jump; then build ~10% a week toward 30 km.");
   // Exactly 10% over the ceiling is inside its slack: on plan, praised for the climb, and the ladder goes on.
   const within = computeWeeklyReview(planReview([...history, 16.5]));
   assert.match(within.headline, /^4 sessions, 16\.5 of up to ~15 km — on plan · goal 30 km/);
