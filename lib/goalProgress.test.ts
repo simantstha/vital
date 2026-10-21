@@ -2970,6 +2970,10 @@ test('a lapse is not a time to praise the scale: the weight line is neutral and 
   const praised = normal.reasons.find(r => r.kind === 'rate')!;
   assert.equal(praised.tone, 'good');
   assert.match(praised.text, /inside the 0\.1–0\.5% safe band/);
+  // The first two weeks of a lapse: most of the 28-day rate is from before the break, so the line says so (wave 22s) - no blame.
+  const early = computeGoalProgress(lapseInput(8, { weightReadings }));
+  assert.match(early.reasons.find(r => r.kind === 'rate')!.text, /^Trend weight up 0\.\d+\skg\/wk, mostly from before the break$/);
+  assert.doesNotMatch(JSON.stringify(early), /with no training/);
   const lapsed = computeGoalProgress(lapseInput(14, { weightReadings }));
   assert.equal(lapsed.verdict, 'holding');
   const rate = lapsed.reasons.find(r => r.kind === 'rate')!;

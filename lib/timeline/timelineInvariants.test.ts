@@ -1155,3 +1155,15 @@ invariant(LIFTERS, 'a deload win says "as planned" only when the previous review
   if (name === 'lifter') assert.ok(deloads > 0, `${name}: no deload week was reviewed, so this invariant checked nothing`);
   return out;
 });
+
+// "Trend weight up 0.17 kg/wk with no training" reads as blame, and the rate is a 28-day one: in the first two weeks of a lapse most of it
+// was earned before the break. Until the lapse covers half the window the line says so; "with no training" is for a longer one.
+invariant(LIFTERS, 'in the first 14 days of a lapse the weight-rate line never says "with no training" (most of its 28 days is from before the break)', snaps => {
+  const out: Violation[] = [];
+  for (const snap of snaps) {
+    const ago = snap.card?.lastSessionDaysAgo;
+    if (ago == null || ago >= 14 || !inLapse(snap)) continue;
+    for (const t of cardTexts(snap)) if (/with no training/.test(plain(t.text))) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" (last session ${ago} days ago)` });
+  }
+  return out;
+});

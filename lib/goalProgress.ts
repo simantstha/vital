@@ -2102,17 +2102,21 @@ function weekOverWeekReason(input: GoalProgressInput): GoalProgressReason | null
 }
 
 /**
- * The weight-rate line during a lapse: neutral, and about the lapse ("Trend
- * weight up 0.2 kg/wk with no training"), not the usual "inside the 0.1–0.5%
- * safe band" in green next to "No sessions for 14 days". A rate that is already
- * a warning (gaining too fast, the wrong way) keeps its watch line.
+ * The weight-rate line during a lapse: neutral, and about the lapse, not the usual
+ * "inside the 0.1–0.5% safe band" in green next to "No sessions for 14 days". The
+ * rate is a 28-day one, so in the first half of that window ("lapseDays" under 14)
+ * most of it was earned before the break: "Trend weight up 0.2 kg/wk, mostly from
+ * before the break" — "with no training" would read as blame for a gain the
+ * training made. A longer lapse is "with no training". A rate that is already a
+ * warning (gaining too fast, the wrong way) keeps its watch line.
  */
-function lapseRateReason(input: GoalProgressInput, w: WeightBlock, rate: GoalProgressReason | null): GoalProgressReason | null {
+function lapseRateReason(input: GoalProgressInput, w: WeightBlock, rate: GoalProgressReason | null, lapseDays: number): GoalProgressReason | null {
   if (rate == null || rate.tone === 'watch' || w.rateKg == null || w.pctBw == null) return rate;
   const flat = round2(Math.abs(w.pctBw)) < RATE_FLAT_PCT;
+  const tail = lapseDays < RATE_WINDOW_DAYS / 2 ? ', mostly from before the break' : ' with no training';
   const text = flat
-    ? 'Trend weight flat with no training'
-    : `Trend weight ${w.rateKg < 0 ? 'down' : 'up'} ${fmtWeight(input, Math.abs(w.rateKg), 2)}/wk with no training`;
+    ? `Trend weight flat${tail}`
+    : `Trend weight ${w.rateKg < 0 ? 'down' : 'up'} ${fmtWeight(input, Math.abs(w.rateKg), 2)}/wk${tail}`;
   return { kind: 'rate', text, tone: 'neutral' };
 }
 
@@ -2162,7 +2166,7 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock, ret: GoalLiftRe
   // "Back after a 15-day break" explains a rebuild; once every pre-break best is regained it is no longer news.
   const returnBreak = ret && furthestBehindReturn(rets.length > 0 ? rets : [ret]) != null ? liftReturnBreakReason(ret, input) : null;
   // A lapse is not a time to praise the scale either: the weight line is neutral and says so.
-  const rateShown = lapse ? lapseRateReason(input, w, rate) : rate;
+  const rateShown = lapse ? lapseRateReason(input, w, rate, lapse.days) : rate;
   // Rate at/above the top of the healthy band is a flag worth surfacing early.
   const rateTop = rate?.tone === 'watch' && w.rateKg != null && w.rateKg > 0;
   const reachLead = weightReached ? reachedLeadReason(input, w, targetKg as number) : null;
