@@ -43,6 +43,7 @@ import {
   PACE_SETTLE_DAYS,
   PLATEAU_MIN_WEIGH_INS_PER_WEEK,
   PLATEAU_TOLERANCE_KG,
+  WEIGH_IN_GAP_DAYS,
   addDays,
   bridgedPace,
   dayNumber,
@@ -235,6 +236,12 @@ export interface WeightWeekPlan {
   heldKg: number | null;
   /** The first week a pace is read: the one place the smoothed trend gets its one-line explanation. */
   firstPaceWeek: boolean;
+  /**
+   * Additive (wave 22w). The week began with no weigh-in for 7+ days: the plan is the one from the day of that last weigh-in (its call
+   * and colour kept - a plan is never remade from stale data), with the neutral "no weigh-in since..." action. The last weigh-in's day;
+   * null when the week began with fresh data.
+   */
+  staleSince: string | null;
 }
 
 export interface WeightPlanIntakeDay {
@@ -813,6 +820,16 @@ function saidBackFromTrim(input: WeightPlanInput, plan: WeightWeekPlan): WeightW
   return { ...plan, action: { ...a, text: `Go back to ${kcalText(a.kcalTarget)} — last week's trim isn't needed. ${a.text}` } };
 }
 
+/**
+ * The verdict the card had on the last weigh-in day before a gap, when it was a good one (on track, ahead, progressing): a welcome back
+ * keeps its colour instead of downgrading it. Never "behind" or "too fast" - those are not called again until 3 weigh-ins are back.
+ */
+function verdictBeforeGap(input: WeightPlanInput, ret: WeighInReturn | null): GoalVerdict | null {
+  if (ret == null) return null;
+  const v = makeWeekPlan({ ...input, todayKey: ret.lastBeforeDay })?.verdict;
+  return v === 'on_track' || v === 'ahead' || v === 'progressing' ? v : null;
+}
+
 function makeWeekPlan(input: WeightPlanInput): WeightWeekPlan | null {
   const days = [...input.days].sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0));
   if (days.length === 0) return null;
@@ -875,19 +892,40 @@ function makeWeekPlan(input: WeightPlanInput): WeightWeekPlan | null {
     etaDate: null, weeksVsTarget: null,
     action: { kind: 'keep_weighing', text: 'Keep weighing in — your pace settles after 3 weeks of weigh-ins' },
     plateauCause: null, pace: null, confirmed: false, young: false, onPace: null, tooFast: false, nearlyThere: false, slow: false,
-    away: false, farBehind: false, projectedEta: null, plateauMeanKg: null, flatWeeks: null, heldKg: null, firstPaceWeek: false,
+    away: false, farBehind: false, projectedEta: null, plateauMeanKg: null, flatWeeks: null, heldKg: null, firstPaceWeek: false, staleSince: null,
   };
 
   // The target is reached (any day: the crossing is an event): a CTA for the first week, then maintenance.
   if (input.reached && targetKg != null) {
     return reachedPlan(c, blank, asOf);
   }
+  // Stale data (wave 22w): the week began with the newest weigh-in 7+ days old and none since. A plan made now would be made from the same
+  // readings the last plan saw, only older - and its pace, bridged over the gap, can flip "moving again" to "on track" on a day nothing
+  // happened. So the plan is the one the day of that last weigh-in made, call and colour kept, with a neutral action. The first weigh-in
+  // back is the welcome-back event below; three of them make the new pace call.
+  const newest = lastDayThrough(todayKey);
+  if (newest != null && newest < weekStart && dayNumber(weekStart) - dayNumber(newest) >= WEIGH_IN_GAP_DAYS) {
+    const last = makeWeekPlan({ ...input, todayKey: newest });
+    if (last != null) {
+      return {
+        ...last,
+        weekStart,
+        staleSince: newest,
+        action: {
+          kind: 'keep_weighing',
+          text: `No weigh-in since ${fmtDate(newest, todayKey)} — step on the scale when you can; your plan picks up from there`,
+        },
+      };
+    }
+  }
+
   if (anchor == null) return { ...blank, young: (ageAt(startDay, asOf) ?? PACE_SETTLE_DAYS) < PACE_SETTLE_DAYS };
 
   if (returning) {
     return {
       ...blank,
       state: 'returning',
+      verdict: verdictBeforeGap(input, weighInReturn(through(days, todayKey), startDay)) ?? blank.verdict,
       action: {
         kind: 'keep_weighing',
         text: 'Keep weighing in so your trend catches up — your pace is read again once 3 weigh-ins are back',
@@ -905,6 +943,7 @@ function makeWeekPlan(input: WeightPlanInput): WeightWeekPlan | null {
     return {
       ...blank,
       state: 'returning',
+      verdict: verdictBeforeGap(input, read.ret) ?? blank.verdict,
       action: {
         kind: 'keep_weighing',
         text: 'Keep weighing in so your trend catches up — your pace is read again once 3 weigh-ins are back',
@@ -1121,8 +1160,9 @@ function reachedPlan(c: Ctx, blank: WeightWeekPlan, asOf: string): WeightWeekPla
     }
   }
   if (held != null) {
-    // "Held 84 kg": whole units — the card's own line carries the weekly average to a decimal, this is the level it held at.
-    const heldText = withUnit(Math.round(isImperial(input) ? held.kg * KG_TO_LB : held.kg), isImperial(input) ? 'lb' : 'kg');
+    // "Held about 84 kg": whole units, said as approximate - the card's own lines carry the weekly average to a decimal ("Holding at 83.7 kg"),
+    // and a bare "84 kg" next to it read as a second, different number.
+    const heldText = `about ${withUnit(Math.round(isImperial(input) ? held.kg * KG_TO_LB : held.kg), isImperial(input) ? 'lb' : 'kg')}`;
     const already = input.targetKcal != null && Math.abs(input.targetKcal - held.kcal) <= MAINTENANCE_ALREADY_KCAL;
     return {
       ...base,

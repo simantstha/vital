@@ -204,6 +204,9 @@ export function goalOpenerLine(gp: GoalProgress | null | undefined, units: UnitS
     if (total > 0 && done > 0) {
       const base = `You're ${weightAmount(done, units)} of ${weightAmount(total, units)} ${unit} ${losing ? 'down' : 'up'}`;
       if (gp.goal === 'weight_loss') {
+        // The week began with no weigh-in for 7+ days (wave 22w): say so, whatever the plan carried from before.
+        const staleSince = shortDate(read?.plan?.staleSince);
+        if (staleSince) return `${base} ${downBasis(gp)} as of ${staleSince}; step on the scale when you can.`;
         if (read?.state === 'early' || read?.state === 'returning') return `${base} ${downBasis(gp)}; ${paceWaitClause(gp)}.`;
         if (read?.state === 'plateau') {
           // Two flat weeks after a confirmed loss (wave 22w) are common and not yet a plateau.

@@ -1592,7 +1592,11 @@ function returningOutcome(input: GoalProgressInput, w: WeightBlock, plan: Weight
     ? `Keep weighing in so your trend catches up — ${left} more ${plural(left, 'weigh-in')} before your pace is read again`
     : `Keep weighing in — your pace is read again on ${fmtWeekday(addDays(plan.weekStart, 7), input.todayKey)}`;
   return {
-    verdict: down != null && down >= EARLY_DOWN_MIN_KG ? 'progressing' : 'holding',
+    // The colour the card had before the gap is kept (the plan carries it): a welcome back never downgrades on track / ahead.
+    // Otherwise it is progressing while the scale is down on the start, else holding.
+    verdict: plan.verdict === 'on_track' || plan.verdict === 'ahead'
+      ? plan.verdict
+      : (down != null && down >= EARLY_DOWN_MIN_KG ? 'progressing' : 'holding'),
     headline: clip(`Welcome back — ${change}`),
     reasons: build({ kind: 'pace_note', text, tone: 'neutral' }),
   };

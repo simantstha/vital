@@ -696,6 +696,74 @@ invariant(WEIGHT, 'a stated calorie target never moves back up on the next Monda
 invariant(['weight_loss'], 'a user with no food logs is never told to trim calories (P1-2)', snaps =>
   textMatches(snaps, allTexts, /trim ~[\d,]+ kcal/i));
 
+// P2-1: a plan is never remade from stale data. On a day with nothing new (no weigh-in, food log or workout) the verdict cannot change,
+// unless a calendar week began AND the newest weigh-in is under 7 days old. (The 14-day "last weigh-in N days ago" nudge, verdict
+// insufficient_data, is the one honest exception: it is the data going stale, not a re-made plan.)
+invariant(WEIGHT, 'the verdict never changes on a day with no new data, unless a calendar week began and the newest weigh-in is under 7 days old (P2-1)', snaps_ => {
+  const out: Violation[] = [];
+  const scn = buildScenario(snaps_[0].scenario as ScenarioName);
+  const logged = new Set<string>([
+    ...scn.weighIns.map(w => w.day), ...scn.intake.map(i => i.day), ...scn.workouts.map(w => w.day), ...scn.sets.map(x => x.day),
+  ]);
+  for (let i = 1; i < snaps_.length; i++) {
+    const prev = snaps_[i - 1];
+    const cur = snaps_[i];
+    if (logged.has(cur.date) || prev.card == null || cur.card == null) continue;
+    const before = prev.card.verdict;
+    const after = cur.card.verdict;
+    if (before === after || before === 'insufficient_data' || after === 'insufficient_data') continue;
+    const fresh = cur.card.lastWeighInDaysAgo != null && cur.card.lastWeighInDaysAgo < 7;
+    if (cur.weekday === 'Mon' && fresh) continue;
+    out.push({
+      snap: cur,
+      detail: `verdict ${before} -> ${after} with nothing new logged (${cur.weekday}, newest weigh-in ${cur.card.lastWeighInDaysAgo} days old): "${visible(prev.card.headline)}" -> "${visible(cur.card.headline)}"`,
+    });
+  }
+  return out;
+});
+
+// P2-7: on a Monday, every "Holding at X" - the card, the coach lines, the opener, the review's headline / win and the push - is one
+// number. (Mondays on which the user already weighed in are left out: the card's weekly average then includes that reading and the review,
+// which is for last week, cannot.)
+const HOLDING_AT = /Holding at ([\d.]+)/g;
+
+invariant(WEIGHT, 'on a Monday every "Holding at X" across card, opener, review and push is one X (P2-7)', (snaps, name) => {
+  const weighInDays = new Set(buildScenario(name).weighIns.map(w => w.day));
+  const out: Violation[] = [];
+  let compared = 0;
+  for (const snap of snaps) {
+    if (snap.review == null || snap.card == null || weighInDays.has(snap.date)) continue;
+    const texts: Text[] = [...allTexts(snap), { where: 'push.title', text: snap.review.alert.title }, { where: 'push.body', text: snap.review.alert.body }];
+    const said = new Map<string, string>();
+    for (const t of texts) for (const m of plain(t.text).matchAll(HOLDING_AT)) said.set(m[1], said.has(m[1]) ? `${said.get(m[1])}, ${t.where}` : t.where);
+    if (said.size > 0) compared++;
+    if (said.size > 1) out.push({ snap, detail: `"Holding at" says ${[...said].map(([x, where]) => `${x} (${where})`).join(' vs ')}` });
+  }
+  if (name === 'weight_loss_logged') assert.ok(compared > 0, `${name}: no Monday said "Holding at", so this invariant checked nothing`);
+  return out;
+});
+
+// P2-1: coming back after a gap carries the colour from before it: a welcome back never downgrades on_track / ahead to progressing.
+// Compared on each return day with the verdict of the last day before the gap.
+invariant(WEIGHT, 'a welcome back keeps the verdict the card had before the gap (P2-1)', snaps_ => {
+  const out: Violation[] = [];
+  let checked = 0;
+  for (let i = 1; i < snaps_.length; i++) {
+    const read = snaps_[i].card?.weightRead;
+    if (read?.state !== 'returning' || read.returned == null) continue;
+    const before = snaps_.find(s => s.date === read.returned?.sinceDay);
+    if (before?.card == null) continue;
+    checked++;
+    const was = before.card.verdict;
+    const now = snaps_[i].card?.verdict;
+    if (['on_track', 'ahead', 'progressing'].includes(was) && now !== was) {
+      out.push({ snap: snaps_[i], detail: `before the gap (${before.date}) the card was ${was} ("${visible(before.card.headline)}"), the welcome back is ${now} ("${visible(snaps_[i].card?.headline ?? '')}")` });
+    }
+  }
+  assert.ok(checked > 0, 'no welcome back with a known pre-gap day appeared, so this invariant checked nothing');
+  return out;
+});
+
 // ── one target per week (wave 21b) ──────────────────────────────────────────
 
 // "40 of ~20 km", "5 km of ~20 km", "20 of up to ~18 km": a figure of the week against ITS target. The tilde number is the week's one

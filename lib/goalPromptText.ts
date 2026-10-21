@@ -255,6 +255,10 @@ export function formatGoalProgressLines(gp: GoalProgress, units: UnitSystem): st
       ? 'give this one instruction; do not suggest a different calorie change before next Monday'
       : 'no calorie change is asked this week';
     lines.push(`- This week's plan (set ${shortDate(plan.weekStart) ?? plan.weekStart}, the same all week): ${plainSpaces(plan.action.text)} — ${rule}`);
+    if (plan.staleSince) {
+      // The week began with no weigh-in for 7+ days (wave 22w): the numbers above are from that last weigh-in.
+      lines.push(`- No weigh-in since ${shortDate(plan.staleSince) ?? plan.staleSince}: say so and ask for a weigh-in; do not read a new pace, date or trend into the old readings.`);
+    }
   }
 
   // Returning from a break: the lifts are rebuilding, never a stall or a reason to deload. While ANY main lift is

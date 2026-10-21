@@ -208,10 +208,10 @@ test('held for two weeks on logged intake: the maintenance target is that intake
   const { card, review } = reviewOn(reached, meals, 84);
   assert.equal(card.verdict, 'reached');
   assert.equal(card.weightRead?.plan?.state, 'maintenance');
-  assert.equal(plainSpaces(card.reasons.find(r => r.kind === 'next_step')?.text ?? ''), "You've held 84 kg on ~2,050 kcal — make that your maintenance target");
+  assert.equal(plainSpaces(card.reasons.find(r => r.kind === 'next_step')?.text ?? ''), "You've held about 84 kg on ~2,050 kcal — make that your maintenance target");
   assert.equal(review.nextWeek, card.weightRead?.plan?.action.text);
   assert.doesNotMatch(review.nextWeek, /Switch to maintenance in Goals/);
-  assert.equal(plainSpaces(goalOpenerLine(card, 'metric') ?? ''), "You've held 84 kg on ~2,050 kcal — make that your maintenance target.");
+  assert.equal(plainSpaces(goalOpenerLine(card, 'metric') ?? ''), "You've held about 84 kg on ~2,050 kcal — make that your maintenance target.");
   assert.equal(requiredOpenerLine(card, 'weight_loss', 'metric'), goalOpenerLine(card, 'metric'));
   assert.equal(goalFallbackOpener(card, 'weight_loss', 'metric')?.startsWith("You've held"), true);
   // NBSP between the number and its unit, in the card's own copy.

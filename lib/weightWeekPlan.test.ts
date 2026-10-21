@@ -246,7 +246,8 @@ test('welcome back: a gap of 7+ days is an event that can enter mid-week, and en
   assert.equal(first.state, 'returning');
   assert.equal(first.pace, null);
   assert.equal(first.etaDate, null);
-  assert.ok(first.verdict === 'progressing' || first.verdict === 'holding');
+  // The colour from before the gap is kept (wave 22w); never behind or too fast.
+  assert.ok(['progressing', 'holding', 'on_track', 'ahead'].includes(first.verdict), first.verdict);
   assert.equal(planAt(gap([72, 73]), 73).state, 'returning');
   // The third weigh-in back ends it, and the plan is made as of that day.
   const third = planAt(gap([72, 73, 74]), 74);
@@ -303,7 +304,7 @@ test('held for 2+ weeks on logged intake, the weight names its own maintenance t
   const p = at(77);
   assert.equal(p.state, 'maintenance');
   assert.equal(p.action.kind, 'maintenance_target');
-  assert.equal(plainSpaces(p.action.text), "You've held 84 kg on ~2,050 kcal — make that your maintenance target");
+  assert.equal(plainSpaces(p.action.text), "You've held about 84 kg on ~2,050 kcal — make that your maintenance target");
   assert.equal(p.action.kcalTarget, 2050);
   assert.equal(isInstruction(p.action), true);
   // Not before two weeks have been held...
@@ -315,7 +316,7 @@ test('held for 2+ weeks on logged intake, the weight names its own maintenance t
   assert.equal(same.action.kind, 'hold');
   assert.match(plainSpaces(same.action.text), /keep your calorie target where it is$/);
   // Imperial users read lb.
-  assert.match(plainSpaces(at(77, { unitSystem: 'imperial' }).action.text), /^You've held 185 lb on ~2,050 kcal/);
+  assert.match(plainSpaces(at(77, { unitSystem: 'imperial' }).action.text), /^You've held about 185 lb on ~2,050 kcal/);
 });
 
 test('plan text joins numbers to units with U+00A0, in kg and in lb', () => {
@@ -437,4 +438,46 @@ test('P1-2: one trim step for a behind pace and a plateau alike, and no trim for
   assert.doesNotMatch(noLogs.action.text, /trim/);
   // Two or fewer logged days is still "no food log".
   assert.doesNotMatch(planAt(PLATEAU, 56, { intakeDays: intake([50, 52], () => 2000) }).action.text, /trim/);
+});
+
+test('P2-1: a week that begins with the newest weigh-in 7+ days old keeps the last plan\'s call and colour, with a neutral action', () => {
+  const pre = readings(range(0, 59), n => 92 - 0.08 * n + wobble(n));
+  const gapAfter = (back: number[]) => [...pre, ...readings(back, n => 92 - 0.08 * n)];
+  const last = planAt(gapAfter([]), 59); // the plan in force the day of the last weigh-in
+  assert.ok(last.verdict === 'ahead' || last.verdict === 'on_track', last.verdict);
+  // Monday 70 (asOf Sunday 69) has 11 days without a weigh-in: nothing is remade from the old readings.
+  const week = range(70, 76).map(n => planAt(gapAfter([]), n));
+  for (const p of week) {
+    assert.equal(p.staleSince, D(59));
+    assert.equal(p.weekStart, D(70));
+    assert.equal(p.verdict, last.verdict, 'the colour from before the gap');
+    assert.equal(p.state, last.state);
+    assert.equal(p.action.kind, 'keep_weighing');
+    assert.equal(plainSpaces(p.action.text), 'No weigh-in since Apr 30 — step on the scale when you can; your plan picks up from there');
+    assert.equal(isInstruction(p.action), false);
+    assert.equal(decision(p), decision(week[0]), 'the same all week');
+  }
+  // A week that begins with a weigh-in 6 days old is not stale.
+  assert.equal(planAt(gapAfter([]), 63).staleSince, null);
+  assert.equal(planAt(gapAfter([]), 64).staleSince, null);
+});
+
+test('P2-1: the first weigh-in back is a welcome back that keeps the colour from before the gap; three of them make the new pace call', () => {
+  const pre = readings(range(0, 59), n => 92 - 0.08 * n + wobble(n));
+  const gapAfter = (back: number[]) => [...pre, ...readings(back, n => 92 - 0.08 * n - 0.4)];
+  const before = planAt(gapAfter([]), 59);
+  assert.ok(before.verdict === 'ahead' || before.verdict === 'on_track', before.verdict);
+  const first = planAt(gapAfter([72]), 72);
+  assert.equal(first.state, 'returning');
+  assert.equal(first.staleSince, null, 'the weigh-in ends the stale week');
+  assert.equal(first.verdict, before.verdict, 'never downgraded to progressing');
+  assert.equal(planAt(gapAfter([72, 73]), 73).verdict, before.verdict);
+  const third = planAt(gapAfter([72, 73, 74]), 74);
+  assert.notEqual(third.state, 'returning');
+  assert.equal(third.asOf, D(74));
+  // Behind or too fast before the gap is not carried: those calls wait for 3 weigh-ins.
+  const slow = [...readings(range(0, 59), n => 92 - 0.035 * n + wobble(n)), ...readings([72], () => 89.9)];
+  const slowReturn = planAt(slow, 72, { intakeDays: LOGGER });
+  assert.equal(slowReturn.state, 'returning');
+  assert.ok(slowReturn.verdict === 'progressing' || slowReturn.verdict === 'holding', slowReturn.verdict);
 });

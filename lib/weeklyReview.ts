@@ -22,8 +22,8 @@ import type { GoalKind, GoalLiftReturn, GoalLongRunProgress, GoalProgressBudget,
 import { KG_TO_LB, isRunningWorkoutType, mixedReturnLead, raceLabel } from './goalProgress';
 import { PARTIAL_LOG_KCAL_THRESHOLD } from './brain/weightSignals';
 import { computeWeightTrend, type WeightReading } from './weightTrend';
-import { dayNumber, rawPlateau } from './weightPace';
-import { isInstruction, type WeightWeekPlan } from './weightWeekPlan';
+import { dayNumber, meanOver, rawPlateau } from './weightPace';
+import { isInstruction, WEEK_MEAN_MIN_WEIGH_INS, type WeightWeekPlan } from './weightWeekPlan';
 import { localDayKey, weekDayKeys, weekStartKeyForDay } from './localDay';
 import { arrowPair, withUnit } from './displayText';
 import type { ProgressionSummary } from './workoutRepository';
@@ -472,11 +472,15 @@ interface ReachedWeek {
 function reachedWeek(input: WeeklyReviewInput, week: Week): ReachedWeek | null {
   if (input.goal !== 'weight_loss' || input.verdict !== 'reached') return null;
   const cur = weekWeighIns(input, week);
+  // The goal card's own weekly average (lib/goalProgress.ts buildWeightBlock): the raw mean of the 7 days up to the newest weigh-in
+  // (3+ weigh-ins), else that newest reading - rounded once to the 0.1 kg it prints, so "Holding at 83.8 kg" is the same number on the
+  // Monday card, the opener, the review and the push (the reviewed Mon-Sun mean differed when the week's last weigh-in was not Sunday).
+  const newest = cur.length > 0 ? cur[cur.length - 1] : null;
+  const week7 = newest != null ? meanOver(computeWeightTrend(input.weightReadings).days.filter(d => d.day <= newest.day), newest.day, 7) : null;
   return {
     targetKg: input.targetWeightKg ?? null,
     thisWeek: input.reachedAt != null && week.set.has(input.reachedAt),
-    // Rounded once to the 0.1 kg the card prints its weekly average at, so "Holding at 84.1 kg" is the same number on both.
-    meanKg: cur.length > 0 ? round1(mean(cur.map(d => d.rawKg)) as number) : null,
+    meanKg: newest == null ? null : round1(week7 != null && week7.n >= WEEK_MEAN_MIN_WEIGH_INS ? week7.meanKg : newest.rawKg),
   };
 }
 
