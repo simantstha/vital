@@ -1190,3 +1190,40 @@ invariant(RUNNERS, 'when the restart number shown during a break drops from one 
   if (name === 'runner_no_race') assert.ok(drops > 0, `${name}: the restart number never dropped during a break, so this invariant checked nothing`);
   return out;
 });
+
+// ── wave 22e / P2.3: "Next week" follows the plan ahead ─────────────────────
+
+invariant(RUNNERS, '"Next week" never sends a runner "toward 30 km" / "30 km the week after" when the week after is a taper, race or recovery week', (snaps, name) => {
+  const scn = buildScenario(name);
+  const out: Violation[] = [];
+  for (const snap of snaps) {
+    const rv = snap.review;
+    if (!rv || scn.user.raceDate == null) continue;
+    const afterNext = addDays(rv.weekStart, 14);
+    const phase = racePhaseInfo(scn.user.raceDate, afterNext, scn.user.raceDistanceKm)?.phase;
+    if (phase !== 'taper' && phase !== 'race_week') continue;
+    if (/the week after|a week toward/i.test(plain(rv.review.nextWeek)) && !/taper|race week/i.test(plain(rv.review.nextWeek))) {
+      out.push({ snap, detail: `week after next (${afterNext}) is ${phase}: "${visible(rv.review.nextWeek)}"` });
+    }
+  }
+  return out;
+});
+
+// A comeback week's "Next week" and the same Monday's card say the SAME place the climb goes: "back toward your usual ~29 km", not "toward 30 km".
+const BACK_TOWARD_USUAL = /back toward your usual ~(\d+(?:\.\d+)?)\s?(km|mi)\b/;
+
+invariant(RUNNERS, "a comeback week's review Next week names the same usual km as the Monday card (\"back toward your usual ~29 km\")", (snaps, name) => {
+  const out: Violation[] = [];
+  let compared = 0;
+  for (const snap of snaps) {
+    const rv = snap.review;
+    if (!rv) continue;
+    const cardUsual = BACK_TOWARD_USUAL.exec(plain(snap.card?.distance?.plan?.purpose ?? ''));
+    if (!cardUsual) continue;
+    compared++;
+    const said = BACK_TOWARD_USUAL.exec(plain(rv.review.nextWeek));
+    if (!said || said[1] !== cardUsual[1]) out.push({ snap, detail: `card: "${visible(snap.card?.distance?.plan?.purpose ?? '')}" but review next week: "${visible(rv.review.nextWeek)}"` });
+  }
+  if (name === 'runner_messy' || name === 'runner_comeback_spike') assert.ok(compared > 0, `${name}: no comeback Monday had a card and a review, so this invariant checked nothing`);
+  return out;
+});

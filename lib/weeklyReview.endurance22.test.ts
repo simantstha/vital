@@ -66,3 +66,23 @@ test('a cutback week that ran far past its lowered number reads "above the cutba
   const kept = computeWeeklyReview(planReview([15, 17, 19, 21, 23, 20], { weekStart: '2026-10-19' }));
   assert.match(kept.headline, /20 of ~20 km — on plan · goal 30 km/);
 });
+
+// ── P2.3: "30 km the week after" when the week after is the taper ──────────
+
+test('"Next week" never promises the goal for a week that is the taper: "then the taper"', () => {
+  // A half on Sun 2026-11-29: Monday 11-16 is 13 days out (the taper). Reviewing 11-02: next week 11-09 builds to ~28 km.
+  const race = { raceDate: '2026-11-29', raceDistanceKm: 21.1 };
+  const r = computeWeeklyReview(planReview([15, 17, 19, 21, 23, 25], { weekStart: '2026-11-02', ...race }));
+  assert.equal(r.nextWeek, 'Build to ~28 km: long run 12 km, the rest mostly easy runs, plus 4–6 strides after one easy run; then the taper.');
+  assert.doesNotMatch(r.nextWeek, /the week after|toward 30/);
+  // A race further out keeps the arithmetic.
+  const far = computeWeeklyReview(planReview([15, 17, 19, 21, 23, 25], { weekStart: '2026-11-02', raceDate: '2026-12-27', raceDistanceKm: 21.1 }));
+  assert.equal(far.nextWeek, 'Build to ~28 km: long run 12 km, the rest mostly easy runs; 30 km the week after.');
+});
+
+test('a comeback week\'s "Next week" climbs "back toward your usual ~N km", as the card says - not toward the weekly goal (22e)', () => {
+  // Weeks 1-6 build (15..25 km), two weeks off, a restart week of 12 km, then the comeback week ran 14.5 km.
+  const history = [15, 17, 19, 21, 23, 25, 0, 0, 12, 14.5];
+  const r = computeWeeklyReview(planReview(history));
+  assert.match(r.nextWeek, /^Build up to ~\d+ km: long run [\d.]+ km, the rest mostly easy runs; then add ~10% a week, back toward your usual ~22 km\.$/);
+});

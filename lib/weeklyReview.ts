@@ -2121,6 +2121,21 @@ function startWeekday(input: WeeklyReviewInput, week: Week, prevWeek: Week): str
 }
 
 /**
+ * The race phase of the week AFTER the coming one ("next week" is the Monday after the reviewed week): 'taper' or 'race_week' when that
+ * week is a wind-down week, so "Next week" never promises the weekly goal or +10% for a week that is the taper. Null otherwise.
+ */
+function weekAfterNextWindDown(input: WeeklyReviewInput): 'taper' | 'race_week' | null {
+  if (!input.raceDate) return null;
+  const phase = racePhaseInfo(input.raceDate, addDays(input.weekStart, 14), input.raceDistanceKm ?? null)?.phase;
+  return phase === 'taper' || phase === 'race_week' ? phase : null;
+}
+
+/** "then the taper" / "then race week": what follows the coming week when that is not another build week. */
+function thenWindDown(phase: 'taper' | 'race_week'): string {
+  return phase === 'taper' ? 'then the taper' : 'then race week';
+}
+
+/**
  * "Next week" for a build week: build toward the weekly target without a jump.
  * Next week's distance is the plan's step (~10% over this week, in the user's
  * unit — the same `stepTargetKm` the goal card shows for the week then under
@@ -2158,7 +2173,15 @@ function buildNextWeekText(input: WeeklyReviewInput, next: EnduranceWeekPlan): s
 
   const nextText = `~${withUnit(nextUnits, imperial ? 'mi' : 'km')}`;
   const reachesTarget = Math.round(nextUnits * (1 + WEEKLY_DISTANCE_GROWTH)) >= goalUnits;
-  const after = reachesTarget ? `${targetText} the week after` : `then add ~${Math.round(WEEKLY_DISTANCE_GROWTH * 100)}% a week toward ${targetText}`;
+  // The climb back after a break goes to the pre-break level, worded as the card words it ("back toward your usual ~29 km"); the week after
+  // the coming one may be the taper, which no 10% step or weekly goal applies to.
+  const windAfter = weekAfterNextWindDown(input);
+  const usual = next.comeback != null && next.comeback.medianKm > nextKm + 0.5 ? next.comeback.medianKm : null;
+  const growthText = `then add ~${Math.round(WEEKLY_DISTANCE_GROWTH * 100)}% a week`;
+  const after = windAfter != null ? thenWindDown(windAfter)
+    : usual != null ? `${growthText}, back toward your usual ~${distanceText(input, usual)}`
+    : reachesTarget ? `${targetText} the week after`
+    : `${growthText} toward ${targetText}`;
   // A careful comeback's target is a ceiling ("up to ~16 km"), not a step to hit.
   const lead = next.upTo ? 'Build up to' : 'Build to';
   const strides = next.strides ? `, ${STRIDES_COPY}` : '';
@@ -2213,18 +2236,22 @@ function plannedNextWeek(input: WeeklyReviewInput): { kind: EnduranceWeekPlan['k
         : `${lead}: ~${t} next week${lr && lead === 'Keep rebuilding' ? `, ${lr}` : ''}.`;
       break;
     }
-    case 'hold':
+    case 'hold': {
+      // After the hold: build again toward the goal - or the taper, when that is what the week after is.
+      const windAfter = weekAfterNextWindDown(input);
+      const thenBuild = windAfter != null ? thenWindDown(windAfter) : `then build ~${growth} a week toward ${goalText}`;
       text = next.hold?.skippedCutback === true
         // A cutback week that ran more than 10% over its lowered number: no +10% on the skip.
-        ? `You skipped the cutback — hold ~${t} next week${lr ? `; ${lr}` : ''}, then build ~${growth} a week toward ${goalText}.`
+        ? `You skipped the cutback — hold ~${t} next week${lr ? `; ${lr}` : ''}, ${thenBuild}.`
         : next.hold?.ceiling === true
         // A comeback week far past its ceiling: next week stays AT that ceiling.
-        ? `Stay at ~${t} next week — don't build on last week's jump; then build ~${growth} a week toward ${goalText}.`
+        ? `Stay at ~${t} next week — don't build on last week's jump; ${thenBuild}.`
         : (next.targetKm as number) >= next.goalKm
           ? `Hold at ${goalText} next week rather than going higher.`
-          : `Hold around ~${t} next week, then build ~${growth} a week toward ${goalText}.`;
+          : `Hold around ~${t} next week, ${thenBuild}.`;
       if (next.strides) text = `${text.slice(0, -1)}; ${STRIDES_COPY}.`;
       break;
+    }
     case 'restart':
       text = `Restart at ~${t} next week with easy runs${lr ? `; ${lr}` : ''}.`;
       break;
